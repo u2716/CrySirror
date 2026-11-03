@@ -1,0 +1,24 @@
+{
+  "purpose": "Original outer printmovie policy using CrySirror Media; not a legacy executable, decoder, or renderer host",
+  "reference": {
+    "repository": "https://github.com/tinyan/SystemNNN",
+    "commit": "78a05053c78b3b80065a9a209c6685a7c60a2e83",
+    "files": ["nnnLib/commonPrintMovie.cpp (complete)", "nnnLib/commonGeneral.cpp (complete)", "nnnLib/gameCallBack.cpp (complete callback and bootstrap functions)", "nnnUtilLib/commonButton.cpp (complete)"],
+    "licence": "No licence grant found. Behavior facts are independently expressed, with no linked or copied original engine implementation."
+  },
+  "actual_module": {
+    "sha256": "e85e92ec538d50eae08d27286177149972d443a96d1415277c1ae1f9ee108bdb",
+    "constructor": "0x4fe2a0: selectByVarFlag0, missing selector=-1, lastWait5, noSKipFlag0, fillExitScreenFlag1; paired fixed-size and movie-acquisition hooks of newer source are absent in this reviewed legacy constructor",
+    "init": "0x4fe5b0: StopMusic(-1), stop script audio, then select. selectByVarFlag=-1 and existing selector0 suppress playback. Missing selector retains default. Positive values request original movielist pair, falling back to default if unavailable. Legacy Init does not contain the later source's FillScreen calls.",
+    "calcu": "0x4fe010: pointer0/1 can stop unless noSkip; shared completion also stops; the configured lastWait native frames follow. A zero lastWait still transitions on the next native Calcu, not the stopping call. FillExitScreen changes an original saved exit buffer, not an immediate screen clear.",
+    "static_only": true
+  },
+  "engine_boundary": {
+    "file": "crates/crysirror-system-nnn/src/native_movie.rs",
+    "resources": "MediaRequest::Play/Remove, MediaInfo and ordinary image Layers; shared Media owns decoder, frame and PCM resources",
+    "lookup": "Startup scoped worker reads optional spt/movielist.xtx. Native parameter/name/selector/pair-index/fallback policy remains in adapter.",
+    "audio": "Existing NativeAudioPolicy computes original default music fade; AudioBridge submits shared Audio requests for the eight sound and eight voice slots. No fabricated SPT receipt.",
+    "state": "Original completed Opening Machine/Bridge/configuration/scoped script-loader state remains owner-held; no NewGame initialization is applied. Native exit-buffer colour policy is retained for the still-missing outer Title continuation rather than painted onto the live screen."
+  },
+  "not_claimed": ["Original game Title, Start or full Movie route success", "Native Title button integration", "Original codec numeric status emulation", "Complete original VM saves", "Live video capture reconstructed as a native save"]
+}

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MPL-2.0
-"""Fetch pinned upstream worktrees and audit Cargo dependency boundaries.
+"""Fetch reference source trees and audit Cargo dependency boundaries.
 
 Never builds or executes fetched code, never modifies the original repositories,
 never replaces an existing checkout, and never claims that fetching wires a VM.
@@ -9,7 +9,6 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
-import os
 from pathlib import Path
 import re
 import shutil
@@ -61,40 +60,28 @@ def fetch(config: dict[str, Any], source_root: Path | None = None) -> dict[str, 
     if target_root.is_symlink():
         raise AuditError("upstream directory must not be a symlink")
     target_root.mkdir(parents=True, exist_ok=True)
-    lock_path = ROOT / "upstream-lock.json"
-    old = json.loads(lock_path.read_text()) if lock_path.exists() else {"sources": {}}
-    result: dict[str, Any] = {"schema": 1, "fetched_at": dt.datetime.now(dt.timezone.utc).isoformat(), "sources": dict(old.get("sources", {}))}
+    result: dict[str, Any] = {"schema": 1, "fetched_at": dt.datetime.now(dt.timezone.utc).isoformat(), "sources": {}}
     for name, source in config["sources"].items():
         target = target_root / name
-        previous = old.get("sources", {}).get(name)
         if target.exists() or target.is_symlink():
-            if target.is_symlink() or not previous:
-                raise AuditError(f"refusing to replace untracked checkout: {target}")
-            sha = run(["git", "rev-parse", "HEAD"], cwd=target)
+            if target.is_symlink() or not target.is_dir():
+                raise AuditError(f"refusing to replace source path: {target}")
             origin = run(["git", "remote", "get-url", "origin"], cwd=target)
-            if sha != previous.get("commit") or origin != source["url"] or run(["git", "status", "--porcelain"], cwd=target):
-                raise AuditError(f"checkout differs from lock or is dirty: {target}")
+            if origin != source["url"]:
+                raise AuditError(f"checkout has a different origin: {target}")
         else:
-            ref = previous["commit"] if previous else source["ref"]
+            ref = source["ref"]
             staging = Path(tempfile.mkdtemp(prefix=f".{name}-", dir=target_root))
             try:
                 run(["git", "init", "-q", str(staging)])
                 run(["git", "remote", "add", "origin", source["url"]], cwd=staging)
                 run(["git", "-c", "protocol.file.allow=never", "fetch", "--depth=1", "--no-tags", "origin", ref], cwd=staging)
                 run(["git", "-c", "core.hooksPath=/dev/null", "checkout", "--detach", "FETCH_HEAD"], cwd=staging)
-                sha = run(["git", "rev-parse", "HEAD"], cwd=staging)
-                if not re.fullmatch(r"[a-f0-9]{40,64}", sha):
-                    raise AuditError("unexpected commit ID")
                 staging.rename(target)
             finally:
                 if staging.exists():
                     shutil.rmtree(staging)
-        result["sources"][name] = {"url": source["url"], "commit": sha, "requested_ref": source["ref"]}
-        # Persist after each successful source, so a later network failure can
-        # resume without treating an already-fetched checkout as untracked.
-        temporary = lock_path.with_suffix(".json.tmp")
-        temporary.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
-        os.replace(temporary, lock_path)
+        result["sources"][name] = {"url": source["url"], "requested_ref": source["ref"], "path": str(target)}
     return result
 
 def read_toml(path: Path) -> dict[str, Any]:

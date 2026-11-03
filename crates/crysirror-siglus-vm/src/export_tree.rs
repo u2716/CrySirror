@@ -13,6 +13,40 @@ pub(super) struct Output<'a> {
     pub next: u32,
     pub movies: Option<&'a crate::adapter::object_movie::Pictures>,
     pub path: Vec<usize>,
+    pub strings: Option<&'a crate::adapter::object_string::ObjectStrings>,
+    /// Effective visual state of the enclosing parents (tnm_add_parent_trp).
+    pub inherit: Vec<crate::runtime::globals::ObjectBaseState>,
+}
+/// Original tnm_add_parent_trp visual rules, as in siglus_rs
+/// compose_parent_render_state: filters combine, a Normal child takes the parent blend.
+fn inherit_visual(
+    parent: &crate::runtime::globals::ObjectBaseState,
+    b: &mut crate::runtime::globals::ObjectBaseState,
+) {
+    let lerp = |base: i64, parent: i64| {
+        let (base, parent) = (base.clamp(0, 255), parent.clamp(0, 255));
+        255 - (255 - base) * (255 - parent) / 255
+    };
+    let add = |base: i64, parent: i64| (base + parent).clamp(0, 255);
+    b.mono = lerp(b.mono, parent.mono);
+    b.reverse = lerp(b.reverse, parent.reverse);
+    b.bright = lerp(b.bright, parent.bright);
+    b.dark = lerp(b.dark, parent.dark);
+    if b.color_rate + parent.color_rate > 0 {
+        let (cur, par) = (b.color_rate.clamp(0, 255), parent.color_rate.clamp(0, 255));
+        let rate = (par * 255 * 255) / (255 * 255 - (255 - cur) * (255 - par)).max(1);
+        let mix = |base: i64, parent: i64| (base.clamp(0, 255) * (255 - rate) + parent.clamp(0, 255) * rate) / 255;
+        b.color_r = mix(b.color_r, parent.color_r);
+        b.color_g = mix(b.color_g, parent.color_g);
+        b.color_b = mix(b.color_b, parent.color_b);
+    }
+    b.color_rate = lerp(b.color_rate, parent.color_rate);
+    b.color_add_r = add(b.color_add_r, parent.color_add_r);
+    b.color_add_g = add(b.color_add_g, parent.color_add_g);
+    b.color_add_b = add(b.color_add_b, parent.color_add_b);
+    if b.blend == 0 {
+        b.blend = parent.blend;
+    }
 }
 impl Output<'_> {
     fn push(&mut self, mut layer: LayerSpec, image: Option<usize>) -> Result<u32> {
@@ -38,7 +72,8 @@ impl Output<'_> {
         order: [i32; 2],
     ) -> Result<u32> {
         self.push(
-            LayerSpec {
+            LayerSpec { source_crop: None,
+                viewport_clip: None,
                 id: 0,
                 parent: None,
                 rect,
@@ -72,11 +107,13 @@ impl Output<'_> {
             !object.button.enabled,
             "native button requires shared UI interaction mapping"
         );
-        let b = &effective_base(object)?;
+        let mut merged = effective_base(object)?;
+        if let Some(parent) = self.inherit.last() {
+            inherit_visual(parent, &mut merged);
+        }
+        let b = &merged;
         ensure!(
             b.world == -1
-                && b.clip_use == 0
-                && b.src_clip_use == 0
                 && b.mask_no == -1
                 && b.tonecurve_no == -1
                 && b.light_no == -1
@@ -108,10 +145,8 @@ impl Output<'_> {
                     && b.rotate_y == 0
                     && b.z == 0
                     && b.center_rep_z == 0
-                    && b.scale_z == 1000
-                    && b.blend == 0
-                    && object_filter(b).is_none(),
-                "native nested parent requires a shared inherited 3D/filter/blend profile"
+                    && b.scale_z == 1000,
+                "native nested parent requires a shared inherited 3D profile"
             );
             ensure!(
                 (0..=1).contains(&b.child_sort_type)
@@ -125,7 +160,8 @@ impl Output<'_> {
         // the parent's image-center/payload pivot. The transparent group keeps
         // those distinct while CrySirror composes the matrices and opacity.
         let group = self.push(
-            LayerSpec {
+            LayerSpec { source_crop: None,
+                viewport_clip: None,
                 id: 0,
                 parent,
                 rect: [
@@ -194,6 +230,47 @@ impl Output<'_> {
                     Some(image),
                 ))
             }
+            3 => {
+                let generation = object
+                    .runtime
+                    .native_text
+                    .as_ref()
+                    .context("native STRING render intent")?
+                    .generation;
+                let frame = self
+                    .strings
+                    .and_then(|s| s.frame(generation))
+                    .context("native STRING engine glyph receipt missing")?;
+                let layers = frame.layers(
+                    &mut self.next,
+                    Some(group),
+                    order,
+                    b.alpha.clamp(0, 255) as u8,
+                    true,
+                    [
+                        Blend::Normal,
+                        Blend::Add,
+                        Blend::Subtract,
+                        Blend::Multiply,
+                        Blend::Screen,
+                    ][b.blend as usize],
+                    object_filter(b),
+                    super::object_source_crop(b,[0.,0.]),
+                )?;
+                ensure!(
+                    self.layers.len() + layers.len() <= 1900,
+                    "native STRING retained layer budget"
+                );
+                for mut layer in layers {
+                    layer.viewport_clip = super::object_viewport_clip(b);
+                    layer.rect[0] = -(b.center_x as f32);
+                    layer.rect[1] = -(b.center_y as f32);
+                    self.ids.insert(layer.id);
+                    self.layers.push(layer);
+                    self.images.push(None);
+                }
+                None
+            }
             9 => {
                 let picture = self
                     .movies
@@ -223,7 +300,8 @@ impl Output<'_> {
         };
         if let Some((paint, w, h, cx, cy, image)) = payload {
             self.push(
-                LayerSpec {
+                LayerSpec { source_crop: super::object_source_crop(b,[cx as f32,cy as f32]),
+                    viewport_clip: super::object_viewport_clip(b),
                     id: 0,
                     parent: Some(group),
                     rect: [
@@ -258,12 +336,17 @@ impl Output<'_> {
                 image,
             )?;
         }
+        self.inherit.push(merged.clone());
         for (index, child) in children.iter().enumerate() {
             self.path.push(index);
             let result = self.object(images, child, Some(group), order, depth + 1);
             self.path.pop();
+            if result.is_err() {
+                self.inherit.pop();
+            }
             result?;
         }
+        self.inherit.pop();
         Ok(())
     }
 }
@@ -305,6 +388,8 @@ mod tests {
             ids: &mut ids,
             next: 0x81000000,
             movies: None,
+            strings: None,
+            inherit: Vec::new(),
             path: Vec::new(),
         }
         .object(&mut ImageManager::default(), &parent, None, [0, 0], 0)

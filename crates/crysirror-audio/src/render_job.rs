@@ -149,6 +149,7 @@ impl MixJob {
         let failed = result.error;
         for ((slot, &id), mut state) in mixers.iter_mut().zip(&self.leases).zip(result.mixers) {
             if failed.is_some() {
+                slot.reject_render_seeks();
                 state.clear();
             }
             ensure!(

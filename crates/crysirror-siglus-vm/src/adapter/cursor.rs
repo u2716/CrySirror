@@ -40,6 +40,43 @@ impl Cursors {
         client: ClientId,
         host: &mut dyn HostServices,
     ) -> Result<()> {
+        // Policy adopted from the complete original standalone presenter's
+        // apply_syscom_window_config cursor section. Reusable deadline state is
+        // engine-owned; the host publishes actual movement/entry tokens.
+        let activity = host.pointer_activity(client).map_err(err)?;
+        let now = crate::platform_time::Instant::now().0;
+        let cfg = &ctx.globals.syscom;
+        let (default_on, default_time) = crate::runtime::forms::syscom::cursor_defaults(ctx);
+        let enabled = match ctx.globals.script.mouse_cursor_hide_onoff {
+            0 => false,
+            1 => true,
+            _ => {
+                cfg.config_int
+                    .get(&crate::runtime::forms::codes::syscom_op::GET_MOUSE_CURSOR_HIDE_ONOFF)
+                    .copied()
+                    .unwrap_or(default_on)
+                    != 0
+            }
+        };
+        let delay = if ctx.globals.script.mouse_cursor_hide_time >= 0 {
+            ctx.globals.script.mouse_cursor_hide_time
+        } else {
+            cfg.config_int
+                .get(&crate::runtime::forms::codes::syscom_op::GET_MOUSE_CURSOR_HIDE_TIME)
+                .copied()
+                .unwrap_or(default_time)
+        };
+        ensure!(
+            !enabled || delay <= 0 || activity.is_some(),
+            "native cursor idle policy requires backend pointer activity observations"
+        );
+        let idle = ctx
+            .ui
+            .cursor_idle
+            .get_or_insert_with(|| crysirror_scene::activity::ActivityTimer::new(now, activity));
+        idle.observe(now, activity);
+        ctx.globals.script.cursor_runtime_visible = !ctx.globals.script.cursor_disp_off
+            && !(enabled && delay > 0 && idle.inactive_for(now, delay as u64));
         let no = ctx.globals.script.cursor_no;
         let visible =
             ctx.globals.script.cursor_runtime_visible && !ctx.globals.script.cursor_disp_off;

@@ -28,17 +28,17 @@ Layer system. Images, glyph runs, UI and media remain engine-owned state that
 can be inspected or changed while the VM waits. The adapter does not submit a
 precomposed native screen through `present_surface`.
 
-Canvas copies currently reject isolated opacity and partial replacement cases
-that require a genuine shared render-target composition API. Unsupported cases
-must not be approximated by reviving a private native renderer.
+Canvas copies, isolated subtree transitions and image materialization use shared
+engine services. Profile-specific unsupported composition still fails visibly;
+no private native renderer may be used as a fallback. See
+[ADR 0094](adr/0094-isolated-layer-subtree-crossfades.md) and the
+[bitmap guide](BITMAPS.md) for shared composition boundaries.
 
 ## VM boundary and source
 
-The source pin is `xmoezzz/siglus_rs` commit
-`5f358ef1360b0439e92aed2b749e8f25d8721954`, MPL-2.0. The retained source list,
-upstream hashes, excluded modules and seam changes are recorded in
-[`SOURCE.json`](../crates/crysirror-reallive/src/vm/SOURCE.json). See also
-[the source/routing audit](reallive-source-audit.json).
+RealLive is xmoezzz's interpreter implementation, maintained in the
+`crysirror-reallive` workspace crate. Its native VM and semantic adapter use
+shared CrySirror Canvas, Layer, Text, UI, Audio and Media services.
 
 Original bytecode parsing, NLS, expression/bank values, call/return and the
 pure memory/string builtins remain in the VM. Engine operations are returned
@@ -47,14 +47,10 @@ after the adapter successfully submits the corresponding CrySirror calls.
 Unknown native operations fail visibly; the caller's instruction budget is
 not replaced by the original player's convenience frame budget.
 
-The complete reference inventory contains 90 Rust source files. Hashing that
-inventory establishes provenance, not coverage of every native engine module
-or a claim that all 90 files have been mapped into shared APIs.
 
 ## Private project setup
 
-The desktop default features include `reallive`; minimal hosts can enable it
-explicitly with `--features reallive`. The default
+The desktop binary always links `reallive`. The bare
 Runtime registry remains host controlled; it does not instantiate every native
 VM merely because its source is present. A host can also call
 `crysirror_reallive::register` explicitly.
@@ -91,8 +87,8 @@ disc. Diagnostics retain `authentication_performed: false` and
 `verification_result: null`. Strict mode fails at that native call.
 
 ```sh
-cargo run -p crysirror-desktop --features reallive -- inspect /absolute/project.json
-cargo run -p crysirror-desktop --features reallive -- run /absolute/project.json \
+cargo run -p crysirror-desktop -- inspect /absolute/project.json
+cargo run -p crysirror-desktop -- run /absolute/project.json \
   --data-dir /absolute/private-state
 ```
 
@@ -156,7 +152,7 @@ environment variables. These assets and fonts remain ignored. The documented
 profile is a compatibility checkpoint, not a complete playthrough or pixel-perfect
 layout claim. The clean explicit test log is
 `target/verification/reallive-api-acceptance.log`. The original 975 game files
-were rehashed with no content, size, mtime or inventory changes.
+were unchanged during that validation run.
 
 ## Current limits
 

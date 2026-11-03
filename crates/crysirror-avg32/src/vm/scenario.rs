@@ -530,7 +530,7 @@ impl Scenario {
             sys.mouse.disable_popup();
             return true;
         }
-        let bytes = match sys.game.read_seen(seen) {
+        let bytes = match sys.read_seen(seen) {
             Ok(bytes) => bytes,
             Err(error) => {
                 sys.warn(format!("SEEN{seen:03}.TXT: {error:#}"));
@@ -1243,7 +1243,7 @@ impl Scenario {
                     let cancellable = matches!(self.sound_wait, 0x53 | 0x55);
                     let now = sys.now();
                     if let Some((movie, _)) = self.movie.as_mut() {
-                        if let Err(error) = movie.tick(&mut sys.gfx) {
+                        if let Err(error) = movie.tick(&mut sys.gfx, now) {
                             sys.warn(format!("movie: {error:#}"));
                             movie.stop();
                         }
@@ -1384,7 +1384,8 @@ impl Scenario {
                 &audio.pcm,
             );
         }
-        match MoviePlayer::start(&movie, looped, rect, &mut sys.gfx) {
+        let now = sys.now();
+        match MoviePlayer::start(&movie, looped, rect, &mut sys.gfx, now) {
             Ok(Some(player)) => self.movie = Some((player, looped)),
             Ok(None) => {}
             Err(error) => sys.warn(format!("movie {name}: {error:#}")),
@@ -1394,8 +1395,9 @@ impl Scenario {
     /// Non-blocking movies keep playing underneath the scenario.
     pub fn tick_background(&mut self, sys: &mut System) {
         if self.sound_wait == 0 {
+            let now = sys.now();
             if let Some((movie, _)) = self.movie.as_mut() {
-                if movie.tick(&mut sys.gfx).is_err() || !movie.active() {
+                if movie.tick(&mut sys.gfx, now).is_err() || !movie.active() {
                     self.movie = None;
                     sys.sound.movie_stop();
                 }

@@ -31,13 +31,60 @@ pub struct XmlDocument {
     string_bytes: usize,
     attribute_count: usize,
 }
+/// The non-UTF-8 encoding named by an ASCII-compatible XML declaration, if any.
+fn declared_encoding(bytes: &[u8]) -> Option<&'static encoding_rs::Encoding> {
+    let head = bytes.strip_prefix(b"<?xml")?;
+    let end = head.windows(2).take(256).position(|pair| pair == b"?>")?;
+    let head = &head[..end];
+    let at = head.windows(8).position(|word| word.eq_ignore_ascii_case(b"encoding"))? + 8;
+    let rest = &head[at..];
+    let open = rest.iter().position(|b| matches!(b, b'"' | b'\''))?;
+    let quote = rest[open];
+    let rest = &rest[open + 1..];
+    let label = &rest[..rest.iter().position(|b| *b == quote)?];
+    encoding_rs::Encoding::for_label(label).filter(|encoding| *encoding != encoding_rs::UTF_8)
+}
 impl XmlDocument {
-    /// Parse UTF-8 XML with bounded nodes/depth/attributes/cumulative strings.
+    /// Parse UTF-8 or declared-legacy-encoding XML with bounded nodes/depth/attributes/cumulative strings.
     pub fn parse(bytes: &[u8]) -> Result<Self> {
+        Self::parse_encoded(bytes, None)
+    }
+    /// Like `parse`, for formats whose undeclared files may be in a legacy code page:
+    /// bytes that are not UTF-8 and declare nothing are read as `fallback`.
+    pub fn parse_with_fallback(
+        bytes: &[u8],
+        fallback: &'static encoding_rs::Encoding,
+    ) -> Result<Self> {
+        Self::parse_encoded(bytes, Some(fallback))
+    }
+    fn parse_encoded(
+        bytes: &[u8],
+        fallback: Option<&'static encoding_rs::Encoding>,
+    ) -> Result<Self> {
         ensure!(bytes.len() <= MAX_XML_BYTES, "XML source byte budget");
-        let source = std::str::from_utf8(bytes).context("XML resource UTF-8 encoding")?;
+        // A declared legacy encoding (Shift_JIS in CatSystem2's startup.xml) is
+        // transcoded strictly up front; everything below parses UTF-8.
+        let transcoded = declared_encoding(bytes)
+            .or_else(|| fallback.filter(|_| std::str::from_utf8(bytes).is_err()))
+            .map(|encoding| {
+                // Fallback formats come from byte-oriented native parsers, which never
+                // reject a stray byte; its text is only ever compared by key.
+                if fallback.is_some() {
+                    return Ok(encoding.decode_without_bom_handling(bytes).0);
+                }
+                encoding
+                    .decode_without_bom_handling_and_without_replacement(bytes)
+                    .context("XML resource does not match its declared encoding")
+            })
+            .transpose()?;
+        let source = match &transcoded {
+            Some(text) => text.as_ref(),
+            None => std::str::from_utf8(bytes).context("XML resource UTF-8 encoding")?,
+        };
         let mut reader = Reader::from_str(source.strip_prefix('\u{feff}').unwrap_or(source));
-        reader.config_mut().check_comments = true;
+        // Legacy-encoded files come from hand-edited game configs whose comments
+        // contain `--`; the original parsers accept them.
+        reader.config_mut().check_comments = transcoded.is_none();
         let mut declared = false;
         let mut document = Self {
             nodes: Vec::new(),
@@ -107,9 +154,10 @@ impl XmlDocument {
                         "unsupported XML declaration version"
                     );
                     if let Some(encoding) = e.encoding() {
+                        // Anything else was transcoded by `declared_encoding` above.
                         ensure!(
-                            encoding?.eq_ignore_ascii_case(b"utf-8"),
-                            "XML declaration is not UTF-8"
+                            transcoded.is_some() || encoding?.eq_ignore_ascii_case(b"utf-8"),
+                            "XML declaration names an encoding this build cannot decode"
                         );
                     }
                 }
@@ -296,4 +344,20 @@ fn valid_name(name: &str) -> bool {
         name_start(c)
             || matches!(c,'-'|'.'|'0'..='9'|'\u{b7}'|'\u{300}'..='\u{36f}'|'\u{203f}'..='\u{2040}')
     })
+}
+#[cfg(test)]
+mod encoding_tests {
+    use super::XmlDocument;
+    #[test]
+    fn a_declared_shift_jis_document_is_transcoded_and_a_lying_one_fails() {
+        let mut source = b"<?xml version=\"1.0\" encoding=\"Shift_JIS\"?><document><a>".to_vec();
+        source.extend_from_slice(&[0x83, 0x65, 0x83, 0x58, 0x83, 0x67]);
+        source.extend_from_slice(b"</a></document>");
+        assert!(XmlDocument::parse(&source).is_ok());
+        let undecodable = b"<?xml version=\"1.0\" encoding=\"Shift_JIS\"?><document><a>\x83</a></document>";
+        assert!(XmlDocument::parse(undecodable).is_err());
+        let unlabelled = [b"<document>".as_slice(), &[0x83, 0x65], b"</document>"].concat();
+        assert!(XmlDocument::parse(&unlabelled).is_err());
+        assert!(XmlDocument::parse_with_fallback(&unlabelled, encoding_rs::SHIFT_JIS).is_ok());
+    }
 }

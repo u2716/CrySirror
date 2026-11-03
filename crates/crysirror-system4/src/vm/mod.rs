@@ -4,11 +4,21 @@
 //! Bounded, resumable AIN v5 interpreter. External calls leave the PC, arguments
 //! and heap untouched until a thin host adapter explicitly commits completion.
 //! Cloning captures native execution state; this is not an original-save codec.
+mod array_find;
+mod array_sort;
+mod arrays;
+mod control;
+mod delegates;
 pub mod external;
+mod functions;
 pub mod heap;
+mod primitives;
+mod shorthand;
+#[cfg(feature = "native-text")]
+mod strings;
 use crate::ain::{InitialValue, Program, Variable};
-use anyhow::{Context, Result, bail, ensure};
-use heap::{Heap, Object, Page, PageKind, element_kind, is_array, is_reference, owns_heap};
+use anyhow::{bail, ensure, Context, Result};
+use heap::{element_kind, is_array, is_reference, owns_heap, Heap, Object, Page, PageKind};
 use std::sync::Arc;
 const MAX_STACK: usize = 65536;
 const MAX_CALLS: usize = 4096;
@@ -57,11 +67,58 @@ enum Action {
         member: usize,
         call_destructors: bool,
     },
+    AssignStructure {
+        destination: i32,
+        source: i32,
+        return_source: bool,
+    },
+    ClearPage(i32),
+    SetPage {
+        slot: i32,
+        page: Option<Page>,
+    },
+    Consume(usize),
+    TruncatePage {
+        slot: i32,
+        len: usize,
+    },
+    SetVariable {
+        page: i32,
+        index: i32,
+        value: i32,
+    },
+    Push(i32),
     Array(ArrayBuild),
+    ArrayFill {
+        slot: i32,
+        index: i32,
+        remaining: i32,
+        value: i32,
+        kind: i32,
+        count: i32,
+    },
+    ArrayCopy {
+        destination: i32,
+        destination_index: i32,
+        source: i32,
+        source_index: i32,
+        remaining: i32,
+        kind: i32,
+        count: i32,
+    },
+    ArrayFind(array_find::Find),
+    ArrayFindAfter(array_find::Find),
+    ArraySort(array_sort::Sort),
+    ArraySortAfter(array_sort::Sort),
     Release(i32),
     ExitRelease(i32),
     Free(i32),
     Return,
+    ScenarioUnwind {
+        destination: functions::ScenarioDestination,
+        call_pc: u32,
+    },
+    ScenarioDropFrame,
     Resume(u32),
     Finish,
 }
@@ -87,6 +144,8 @@ pub struct Machine {
     running_actions: bool,
     halted: bool,
     pending: Option<ExternalCall>,
+    random: crate::math_random::Random,
+    peek_lock: i32,
 }
 impl Machine {
     pub fn new(program: Arc<Program>) -> Result<Self> {
@@ -103,6 +162,8 @@ impl Machine {
             running_actions: true,
             halted: false,
             pending: None,
+            random: crate::math_random::Random::default(),
+            peek_lock: 0,
         };
         // All storage exists before any constructor runs (cross-global references).
         for i in 0..m.program.globals.len() {
@@ -218,6 +279,7 @@ impl Machine {
             PageKind::Global => self.program.globals.get(i),
             PageKind::Local(f) => self.program.functions[f].variables.get(i),
             PageKind::Structure(s) => self.program.structures[s].members.get(i),
+            PageKind::Delegate => return Ok(Variable {name:Vec::new(),kind:0,structure:-1,rank:0,group:None}),
             PageKind::Array {
                 kind,
                 structure,
@@ -260,48 +322,33 @@ impl Machine {
         Ok(())
     }
     fn call(&mut self, function: usize, structure: i32, return_to: Return) -> Result<()> {
-        ensure!(self.frames.len() < MAX_CALLS, "System4 call stack budget");
-        let f = self
-            .program
-            .functions
-            .get(function)
-            .context("System4 function index")?
-            .clone();
+        let f = self.program.functions.get(function).context("System4 function index")?.clone();
         let argc = f.arguments as usize;
-        ensure!(
-            argc <= f.variables.len() && argc <= self.stack.len(),
-            "System4 native argument count"
-        );
-        if structure != -1 {
-            self.heap.page(structure)?;
-        }
-        // The original allocates the local heap slot before its string/array locals.
-        let slot = self.heap.alloc(Object::Page(Some(Page {
-            kind: PageKind::Local(function),
-            values: vec![0; f.variables.len()],
-        })))?;
-        for (i, v) in f.variables.iter().enumerate().skip(argc) {
-            let x = self.initial(v.kind)?;
-            self.heap.set(slot, i as i32, x)?;
-        }
+        ensure!(argc <= f.variables.len() && argc <= self.stack.len(), "System4 native argument count");
+        let slot = self.call_frame(function, structure, return_to)?;
         for i in 0..argc {
             let x = self.stack[self.stack.len() - argc + i];
-            if is_reference(f.variables[i].kind) {
-                self.heap.reference(x)?;
-            }
+            if is_reference(f.variables[i].kind) {self.heap.reference(x)?;}
             self.heap.set(slot, i as i32, x)?;
         }
         self.consume(argc)?;
-        self.frames.push(Frame {
-            function,
-            local_page: slot,
-            structure_page: structure,
-            call_pc: self.pc,
-            return_to,
-        });
-        self.pc = f.address;
-        self.entered_main |= function == self.program.main as usize;
         Ok(())
+    }
+    // Shared original _function_call allocation/entry order. DG_CALL retains
+    // caller arguments and deep-copies into this frame instead of consuming them.
+    fn call_frame(&mut self, function: usize, structure: i32, return_to: Return) -> Result<i32> {
+        ensure!(self.frames.len() < MAX_CALLS, "System4 call stack budget");
+        let f = self.program.functions.get(function).context("System4 function index")?.clone();
+        let argc = f.arguments as usize;
+        ensure!(argc <= f.variables.len(), "System4 function local/argument metadata");
+        if structure != -1 {self.heap.page(structure)?;}
+        let slot = self.heap.alloc(Object::Page(Some(Page {kind: PageKind::Local(function),values: vec![0; f.variables.len()]})))?;
+        for (i, v) in f.variables.iter().enumerate().skip(argc) {
+            let x = self.initial(v.kind)?;self.heap.set(slot, i as i32, x)?;
+        }
+        self.frames.push(Frame {function,local_page: slot,structure_page: structure,call_pc: self.pc,return_to});
+        self.pc = f.address;self.entered_main |= function == self.program.main as usize;
+        Ok(slot)
     }
     fn schedule(&mut self, mut ordered: Vec<Action>, next: u32) {
         ordered.push(Action::Resume(next));
@@ -324,6 +371,16 @@ impl Machine {
                 self.running_actions = false;
             }
             Action::Free(slot) => self.heap.free(slot)?,
+            Action::ClearPage(slot) => self.heap.set_page(slot, None)?,
+            Action::SetPage { slot, page } => self.heap.set_page(slot, page)?,
+            Action::Consume(words) => self.consume(words)?,
+            Action::TruncatePage { slot, len } => {
+                let mut page = self.heap.page(slot)?.clone();
+                page.values.truncate(len);
+                self.heap.set_page(slot, Some(page))?;
+            }
+            Action::SetVariable { page, index, value } => self.heap.set(page, index, value)?,
+            Action::Push(value) => self.push(value)?,
             Action::Release(slot) => self.release(slot, true)?,
             Action::ExitRelease(slot) => self.release(slot, false)?,
             Action::DeleteMembers {
@@ -346,6 +403,19 @@ impl Machine {
                             Action::ExitRelease(value)
                         });
                     }
+                }
+            }
+            Action::AssignStructure {
+                destination,
+                source,
+                return_source,
+            } => {
+                // heap_struct_assign frees the old page, not its heap slot.
+                // Copy after destructors: they can legitimately change source.
+                self.heap.set_page(destination, None)?;
+                self.copy_page_into(source, destination, 0)?;
+                if return_source {
+                    self.push(source)?;
                 }
             }
             Action::InitGlobal(i) => {
@@ -392,6 +462,74 @@ impl Machine {
                 }
             }
             Action::Array(build) => self.array_step(build)?,
+            Action::ArrayFill {
+                slot,
+                index,
+                remaining,
+                value,
+                kind,
+                count,
+            } => {
+                if remaining > 0 {
+                    let copy = self.copy_native_value(value, kind)?;
+                    let old = self.heap.get(slot, index)?;
+                    self.actions.push(Action::ArrayFill {
+                        slot,
+                        index: index + 1,
+                        remaining: remaining - 1,
+                        value,
+                        kind,
+                        count,
+                    });
+                    self.actions.push(Action::SetVariable {
+                        page: slot,
+                        index,
+                        value: copy,
+                    });
+                    if owns_heap(kind) {
+                        self.actions.push(Action::Release(old));
+                    }
+                } else {
+                    self.actions.push(Action::Push(count));
+                    if owns_heap(kind) {
+                        self.actions.push(Action::Release(value));
+                    }
+                }
+            }
+            Action::ArrayCopy {
+                destination,
+                destination_index,
+                source,
+                source_index,
+                remaining,
+                kind,
+                count,
+            } => {
+                if remaining > 0 {
+                    let value = self.heap.get(source, source_index)?;
+                    let copy = self.copy_native_value(value, kind)?;
+                    let old = self.heap.get(destination, destination_index)?;
+                    self.actions.push(Action::ArrayCopy {
+                        destination,
+                        destination_index: destination_index + 1,
+                        source,
+                        source_index: source_index + 1,
+                        remaining: remaining - 1,
+                        kind,
+                        count,
+                    });
+                    self.actions.push(Action::SetVariable {
+                        page: destination,
+                        index: destination_index,
+                        value: copy,
+                    });
+                    if owns_heap(kind) {
+                        self.actions.push(Action::Release(old));
+                    }
+                } else {
+                    self.actions.push(Action::Push(count));
+                }
+            }
             Action::Return => {
                 let f = self.frames.pop().context("System4 return without frame")?;
                 match f.return_to {
@@ -402,6 +540,19 @@ impl Machine {
                     Return::Actions => {}
                 }
             }
+            Action::ScenarioUnwind {
+                destination,
+                call_pc,
+            } => self.scenario_unwind(destination, call_pc)?,
+            Action::ScenarioDropFrame => {
+                self.frames
+                    .pop()
+                    .context("System4 scenario frame underflow")?;
+            }
+            Action::ArrayFind(find) => self.array_find_step(find)?,
+            Action::ArrayFindAfter(find) => self.array_find_after(find)?,
+            Action::ArraySort(sort) => self.array_sort_step(sort)?,
+            Action::ArraySortAfter(sort) => self.array_sort_after(sort)?,
         }
         Ok(())
     }
@@ -434,6 +585,12 @@ impl Machine {
         Ok(())
     }
     pub fn step(&mut self) -> Result<Step> {
+        self.step_with_check(&|| Ok(()))
+    }
+    /// One bounded native instruction/continuation with cooperative worker
+    /// cancellation. The callback is never retained in logical VM state.
+    pub fn step_with_check(&mut self, check: &(dyn Fn() -> Result<()> + Sync)) -> Result<Step> {
+        check()?;
         if self.halted {
             return Ok(Step::Halted);
         }
@@ -451,16 +608,105 @@ impl Machine {
         let instruction = self.program.instruction(self.pc)?;
         let pc = self.pc;
         let result = self
-            .execute(&instruction)
+            .execute(&instruction, check)
             .with_context(|| format!("System4 {} pc={pc:#x}", instruction.name))?;
         if let Some(call) = result {
             self.pending = Some(call.clone());
+            // Pure original HLL scalar/heap semantics stay with the worker-
+            // owned Machine. Host-dependent calls retain the same external
+            // receipt; no large random-table loop runs on the owner thread.
+            if self
+                .complete_pure_math(&call, check)
+                .with_context(|| format!("System4 native Math pc={:#x}", call.pc))?
+                || self
+                    .complete_pure_control(&call)
+                    .with_context(|| format!("System4 native control pc={:#x}", call.pc))?
+            {
+                return Ok(Step::Advanced);
+            }
             return Ok(Step::External(call));
         }
         self.instructions += 1;
         Ok(Step::Advanced)
     }
-    fn execute(&mut self, i: &crate::instruction::Instruction) -> Result<Option<ExternalCall>> {
+    fn complete_pure_math(
+        &mut self,
+        call: &ExternalCall,
+        check: &(dyn Fn() -> Result<()> + Sync),
+    ) -> Result<bool> {
+        let ExternalTarget::Hll { library, function } = call.target else {
+            return Ok(false);
+        };
+        let program = self.program.clone();
+        let library = &program.libraries[library];
+        if library.name != b"Math" {
+            return Ok(false);
+        }
+        let function = &library.functions[function];
+        let args = self.hll_arguments(call)?;
+        // Scalar Math has no owned resource arguments or allocating return.
+        // Preflight the post-call stack before any reference/RNG state commits.
+        let words: usize = args
+            .iter()
+            .map(|a| {
+                if matches!(a, external::Argument::Reference { .. }) {
+                    2
+                } else {
+                    1
+                }
+            })
+            .sum();
+        let produced = usize::from(function.return_kind != 0);
+        ensure!(
+            self.stack
+                .len()
+                .checked_sub(words)
+                .and_then(|n| n.checked_add(produced))
+                .is_some_and(|n| n <= MAX_STACK),
+            "System4 native Math completion stack budget"
+        );
+        if let Some(value) = crate::math::scalar(self, &function.name, function.return_kind, &args)?
+        {
+            self.complete_hll(call, value)?;
+            return Ok(true);
+        }
+        if let Some(value) =
+            self.random
+                .dispatch_checked(&function.name, function.return_kind, &args, check)?
+        {
+            self.complete_hll(call, value)?;
+            return Ok(true);
+        }
+        Ok(false)
+    }
+    pub(crate) fn complete_math_civil_seed(
+        &mut self,
+        call: &ExternalCall,
+        unix_ms: i64,
+    ) -> Result<()> {
+        let ExternalTarget::Hll { library, function } = call.target else {
+            bail!("System4 civil seed is not an HLL")
+        };
+        let library = &self.program.libraries[library];
+        let function = &library.functions[function];
+        ensure!(
+            library.name == b"Math"
+                && function.name == b"SetSeedByCurrentTime"
+                && function.return_kind == 0
+                && self.hll_arguments(call)?.is_empty(),
+            "System4 civil seed completion ABI"
+        );
+        self.complete_hll(call, external::HllReturn::Void)?;
+        self.random.set_seed(unix_ms.div_euclid(1000) as u32 as i32);
+        Ok(())
+    }
+    fn execute(
+        &mut self,
+        i: &crate::instruction::Instruction,
+        check: &(dyn Fn() -> Result<()> + Sync),
+    ) -> Result<Option<ExternalCall>> {
+        #[cfg(not(feature = "native-text"))]
+        let _ = check;
         let a = &i.arguments;
         let mut next = i.next;
         match i.name {
@@ -533,23 +779,89 @@ impl Machine {
                 self.consume(2)?;
                 self.push(r)?;
             }
-            "S_MOD" => {
-                use crysirror_text::format::{format_one_bytes,ByteFormatValue};
-                let kind=self.peek(0)?;let value=self.peek(1)?;let fmt=self.peek(2)?;
-                let template=self.heap.string(fmt)?;
-                let string=if kind==4 {Some(self.heap.string(value)?)}else{None};
-                let argument=match kind {
-                    2|48|56=>ByteFormatValue::Integer(value),
-                    4=>ByteFormatValue::Bytes(string.as_ref().unwrap().as_slice()),
-                    _=>bail!("System4 S_MOD format value type {kind} unsupported"),
+            "SR_ASSIGN" | "SH_SR_ASSIGN" => {
+                let (destination, source) = if i.name == "SR_ASSIGN" {
+                    // AINv5's final type word is compiler metadata only.
+                    (self.peek(2)?, self.peek(1)?)
+                } else {
+                    let (page, index) = self.reference(0)?;
+                    (self.peek(2)?, self.heap.get(page, index)?)
                 };
-                let output=format_one_bytes(template.as_slice(),argument)?;
-                let release_string=kind==4&&output.matched;
-                let slot=self.heap.alloc(Object::String(Arc::new(output.bytes)))?;
-                self.consume(3)?;self.push(slot)?;
-                let mut release=vec![Action::Release(fmt)];
-                if release_string {release.push(Action::Release(value));}
-                self.schedule(release,next);return Ok(None);
+                ensure!(
+                    destination != -1,
+                    "System4 struct assignment to null pointer"
+                );
+                let old = self.heap.page_opt(destination)?.cloned();
+                let source_page = self.heap.page_opt(source)?;
+                for page in old.iter().chain(source_page) {
+                    ensure!(
+                        matches!(page.kind, PageKind::Structure(_)),
+                        "System4 struct assignment page kind"
+                    );
+                }
+                if let (Some(old), Some(source_page)) = (&old, source_page) {
+                    ensure!(
+                        old.kind == source_page.kind,
+                        "System4 struct assignment type mismatch"
+                    );
+                }
+                self.consume(3)?;
+                if destination == source {
+                    if i.name == "SR_ASSIGN" {
+                        self.push(source)?;
+                    }
+                } else {
+                    let mut actions = Vec::new();
+                    if let Some(page) = old {
+                        let PageKind::Structure(index) = page.kind else {
+                            unreachable!()
+                        };
+                        let destructor = self.program.structures[index].destructor;
+                        if destructor > 0 {
+                            actions.push(Action::Call(destructor as usize, destination));
+                        }
+                        actions.push(Action::DeleteMembers {
+                            slot: destination,
+                            member: page.values.len(),
+                            call_destructors: true,
+                        });
+                    }
+                    actions.push(Action::AssignStructure {
+                        destination,
+                        source,
+                        return_source: i.name == "SR_ASSIGN",
+                    });
+                    self.schedule(actions, next);
+                    return Ok(None);
+                }
+            }
+            "S_MOD" => {
+                use crysirror_text::format::{format_one_bytes, ByteFormatValue};
+                let kind = self.peek(0)?;
+                let value = self.peek(1)?;
+                let fmt = self.peek(2)?;
+                let template = self.heap.string(fmt)?;
+                let string = if kind == 4 {
+                    Some(self.heap.string(value)?)
+                } else {
+                    None
+                };
+                let argument = match kind {
+                    2 | 48 | 56 => ByteFormatValue::Integer(value),
+                    4 => ByteFormatValue::Bytes(string.as_ref().unwrap().as_slice()),
+                    _ => bail!("System4 S_MOD format value type {kind} unsupported"),
+                };
+                let output = format_one_bytes(template.as_slice(), argument)?;
+                let release_string = kind == 4 && output.matched;
+                let slot = self.heap.alloc(Object::String(Arc::new(output.bytes)))?;
+                self.consume(3)?;
+                self.push(slot)?;
+                let mut release = vec![Action::Release(fmt)];
+                if release_string {
+                    release.push(Action::Release(value));
+                }
+                self.schedule(release, next);
+                return Ok(None);
             }
             "S_ADD" => {
                 let r = self.peek(0)?;
@@ -655,6 +967,27 @@ impl Machine {
                     next,
                     target: ExternalTarget::System(a[0]),
                 }));
+            }
+            "ASSERT" => {
+                let line = self.peek(0)?;
+                let file = self.peek(1)?;
+                let expression = self.peek(2)?;
+                let condition = self.peek(3)?;
+                let filename = self.heap.string(file)?;
+                let text = self.heap.string(expression)?;
+                if condition == 0 {
+                    let filename = encoding_rs::SHIFT_JIS
+                        .decode_without_bom_handling(&filename)
+                        .0;
+                    let text = encoding_rs::SHIFT_JIS.decode_without_bom_handling(&text).0;
+                    bail!("System4 assertion failed {filename}:{line}: {text}");
+                }
+                self.consume(4)?;
+                self.schedule(
+                    vec![Action::Release(file), Action::Release(expression)],
+                    next,
+                );
+                return Ok(None);
             }
             "JUMP" => next = u32::try_from(a[0])?,
             "IFZ" | "IFNZ" => {
@@ -795,41 +1128,8 @@ impl Machine {
                 self.heap
                     .set(self.structure()?, a[0], self.heap.get(self.local()?, a[1])?)?
             }
-            "A_ALLOC" => {
-                let rank = usize::try_from(self.peek(0)?)?;
-                ensure!((1..=32).contains(&rank), "System4 array rank budget");
-                let (p, v) = self.reference(rank + 1)?;
-                let array = self.heap.get(p, v)?;
-                let var = self.variable(p, v)?;
-                ensure!(is_array(var.kind), "System4 A_ALLOC variable not array");
-                ensure!(
-                    self.heap.page_opt(array)?.is_none(),
-                    "System4 replacing allocated array not yet supported"
-                );
-                let mut dims = Vec::new();
-                for n in (1..=rank).rev() {
-                    dims.push(self.peek(n)?);
-                }
-                // Rank is popped before alloc_array. The remaining reference/dimensions
-                // stay below constructor calls until the entire root has completed.
-                self.consume(1)?;
-                let page = Page {
-                    kind: PageKind::Array {
-                        kind: var.kind,
-                        structure: var.structure,
-                        rank,
-                    },
-                    values: Vec::new(),
-                };
-                self.actions.push(Action::Array(ArrayBuild {
-                    dimensions: dims,
-                    kind: var.kind,
-                    structure: var.structure,
-                    destination: array,
-                    next,
-                    levels: vec![page],
-                }));
-                self.running_actions = true;
+            "A_ALLOC" | "A_REALLOC" => {
+                self.execute_array_allocation(i)?;
                 return Ok(None);
             }
             "A_NUMOF" => {
@@ -856,11 +1156,27 @@ impl Machine {
                 self.consume(1)?;
                 self.push(copy)?;
             }
-            _ => bail!(
-                "unsupported original instruction {} opcode={:#x}",
-                i.name,
-                i.opcode
-            ),
+            _ => {
+                #[cfg(feature = "native-text")]
+                if self.execute_strings(i, check)? {
+                    return Ok(None);
+                }
+                if self.execute_array_values(i)?
+                    || self.execute_array_find(i)?
+                    || self.execute_array_sort(i)?
+                    || self.execute_shorthand(i)?
+                    || self.execute_primitives(i)?
+                    || self.execute_functions(i)?
+                    || self.execute_delegates(i, check)?
+                {
+                    return Ok(None);
+                }
+                bail!(
+                    "unsupported original instruction {} opcode={:#x}",
+                    i.name,
+                    i.opcode
+                );
+            }
         }
         self.pc = next;
         Ok(None)
@@ -880,7 +1196,8 @@ impl Machine {
                 self.heap.set_page(b.destination, Some(page))?;
                 self.consume(b.dimensions.len() + 2)?;
                 self.pc = b.next;
-                self.running_actions = false;
+                // The owning allocation continuation commits Resume only after
+                // the complete root (including native constructors) is ready.
             }
             return Ok(());
         }
@@ -944,33 +1261,59 @@ impl Machine {
             rank - 1,
         )
     }
+    fn copy_native_value(&mut self, value: i32, kind: i32) -> Result<i32> {
+        if matches!(kind, 12 | 13 | 63) || is_array(kind) {
+            self.copy_object(value, 0)
+        } else {
+            if is_reference(kind) {
+                self.heap.reference(value)?;
+            }
+            Ok(value)
+        }
+    }
     fn copy_object(&mut self, slot: i32, depth: usize) -> Result<i32> {
         ensure!(depth < 64, "System4 copy nesting");
         let object = self.heap.slot(slot)?.object.clone();
         match object {
             Object::String(s) => self.heap.alloc(Object::String(s)),
             Object::Page(None) => self.heap.alloc(Object::Page(None)),
-            Object::Page(Some(page)) => {
+            Object::Page(Some(_)) => {
                 // vm_copy_page reserves identity before recursive member copies.
-                let target = self.heap.alloc(Object::Page(Some(Page {
-                    kind: page.kind.clone(),
-                    values: vec![0; page.values.len()],
-                })))?;
-                for (j, value) in page.values.into_iter().enumerate() {
-                    let k = self.variable(slot, j as i32)?.kind;
-                    let x = if matches!(k, 12 | 13 | 63) || is_array(k) {
-                        self.copy_object(value, depth + 1)?
-                    } else {
-                        if is_reference(k) {
-                            self.heap.reference(value)?;
-                        }
-                        value
-                    };
-                    self.heap.set(target, j as i32, x)?;
-                }
+                let target = self.heap.alloc(Object::Page(None))?;
+                self.copy_page_into(slot, target, depth)?;
                 Ok(target)
             }
         }
+    }
+    fn copy_page_into(&mut self, slot: i32, destination: i32, depth: usize) -> Result<()> {
+        ensure!(depth < 64, "System4 copy nesting");
+        let Some(page) = self.heap.page_opt(slot)?.cloned() else {
+            self.heap.set_page(destination, None)?;
+            return Ok(());
+        };
+        // Native copy_page has no root heap allocation; SR_ASSIGN must retain
+        // the destination's identity/refcount/sequence. Owned children do get
+        // fresh slots, in original member order. Reference members stay aliases.
+        self.heap.set_page(
+            destination,
+            Some(Page {
+                kind: page.kind.clone(),
+                values: vec![0; page.values.len()],
+            }),
+        )?;
+        for (index, value) in page.values.iter().copied().enumerate() {
+            let kind = self.variable(slot, index as i32)?.kind;
+            let copied = if matches!(kind, 12 | 13 | 63) || is_array(kind) {
+                self.copy_object(value, depth + 1)?
+            } else {
+                if is_reference(kind) {
+                    self.heap.reference(value)?;
+                }
+                value
+            };
+            self.heap.set(destination, index as i32, copied)?;
+        }
+        Ok(())
     }
     /// Human-readable native location; strings remain byte data in the VM.
     pub fn location(&self) -> String {
@@ -1003,14 +1346,22 @@ fn calculate(op: &str, x: i32, y: i32) -> Result<i32> {
                 !(x == i32::MIN && y == -1),
                 "System4 native signed division overflow"
             );
-            if y == 0 { 0 } else { x.wrapping_div(y) }
+            if y == 0 {
+                0
+            } else {
+                x.wrapping_div(y)
+            }
         }
         "MOD" => {
             ensure!(
                 !(x == i32::MIN && y == -1),
                 "System4 native signed remainder overflow"
             );
-            if y == 0 { 0 } else { x.wrapping_rem(y) }
+            if y == 0 {
+                0
+            } else {
+                x.wrapping_rem(y)
+            }
         }
         "AND" => x & y,
         "OR" => x | y,

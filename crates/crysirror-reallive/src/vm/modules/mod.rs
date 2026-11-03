@@ -3,8 +3,10 @@
 pub mod jmp;
 pub mod mem;
 pub mod obj;
+pub mod sel;
 pub mod str;
 pub mod sys;
+pub mod sys_max;
 use super::{
     bytecode::Command,
     machine::{Machine, Next},
@@ -12,6 +14,7 @@ use super::{
 pub fn dispatch(machine: &mut Machine, command: &Command) -> anyhow::Result<Next> {
     match (command.op.modtype, command.op.module) {
         (0, 1 | 5 | 6) => jmp::dispatch(machine, command),
+        (0, 2) if !matches!(command.kind, super::bytecode::CommandKind::Select(_)) => sel::dispatch(machine, command),
         (1, 10) if command.op.opcode != 100 => str::dispatch(machine, command),
         (1, 11) if !(300..=307).contains(&command.op.opcode) => mem::dispatch(machine, command),
         (1 | 2, 60..=62) => obj::management(machine, command),
@@ -21,6 +24,13 @@ pub fn dispatch(machine: &mut Machine, command: &Command) -> anyhow::Result<Next
         (1 | 2, 81 | 82 | 87 | 88 | 90 | 91 | 93 | 94) => obj::properties(machine, command),
         (1 | 2, 84 | 85) => obj::getters(machine, command),
         (1, 4) => match sys::dispatch(machine, command)? {
+            Some(next) => Ok(next),
+            None => match sys_max::dispatch(machine, command)? {
+                Some(next) => Ok(next),
+                None => machine.request_command(command),
+            },
+        },
+        (0, 4) => match sys_max::event_loop(machine, command)? {
             Some(next) => Ok(next),
             None => machine.request_command(command),
         },

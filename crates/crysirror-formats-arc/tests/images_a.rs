@@ -273,7 +273,8 @@ fn qnt_odd_padding_and_pms_palette() {
     let alpha = z(&[77, 0]);
     let mut b = b"QNT\0".to_vec();
     b.extend(2u32.to_le_bytes());
-    b.extend([0; 12]);
+    b.extend(68u32.to_le_bytes());
+    b.extend([0; 8]);
     for v in [1u32, 1, 24, 0, colors.len() as u32, alpha.len() as u32] {
         b.extend(v.to_le_bytes());
     }

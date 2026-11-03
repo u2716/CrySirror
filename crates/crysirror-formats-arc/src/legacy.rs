@@ -259,6 +259,14 @@ pub(crate) fn has_ext(path: &str, ext: &str) -> bool {
 pub(crate) fn decode(
     f: impl Fn(&[u8], &ArchiveEntry) -> Result<Vec<u8>> + Send + Sync + 'static,
 ) -> Plan {
+    Plan::Decode(Arc::new(move |data, entry, _| f(data, entry)))
+}
+///Context-aware decoder for cooperatively cancellable multi-step CPU formats.
+///The active entry-open context is forwarded; no stale index-worker token or
+///resolver is captured and retained inside the archive.
+pub(crate) fn decode_context(
+    f: impl Fn(&[u8], &ArchiveEntry, &DecodeContext) -> Result<Vec<u8>> + Send + Sync + 'static,
+) -> Plan {
     Plan::Decode(Arc::new(f))
 }
 pub(crate) fn le32(b: &[u8], at: usize) -> Result<u32> {

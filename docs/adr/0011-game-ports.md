@@ -5,9 +5,9 @@ selected. Implementation has not started.
 
 ## Requirement
 
-The owner asked to take open-source implementations of real games (Zelda,
-Tomb Raider, ...) and implement them completely on CrySirror. Doing the
-work exposes what the engine must implement and optimize.
+Real-game workloads such as Zelda and Tomb Raider expose requirements for
+rendering, simulation, resource processing and performance. Their source and
+formats can inform reusable CrySirror capabilities and native semantic adapters.
 
 ## Findings (checked 2026-10-24)
 

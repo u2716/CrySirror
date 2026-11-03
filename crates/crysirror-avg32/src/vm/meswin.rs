@@ -152,8 +152,8 @@ impl System {
 
     /// Draws one character into `buffer` with its baseline at `baseline`.
     /// CrySirror: buffer 0 keeps it as a retained engine glyph (removed when
-    /// that region of buffer 0 is next overwritten); other buffers would need
-    /// glyph pixels inside a PDT buffer, which is reported, not approximated.
+    /// that region of buffer 0 is next overwritten); other buffers receive
+    /// engine-rasterised coverage before the scenario continues.
     pub(crate) fn draw_char(
         &mut self,
         buffer: usize,
@@ -167,9 +167,20 @@ impl System {
             return;
         }
         if buffer != 0 {
-            self.warn(format!(
-                "AVG32 text into PDT buffer {buffer} has no retained-glyph mapping"
-            ));
+            // CrySirror: work-buffer text becomes buffer pixels through the
+            // engine glyph-image service (see `text::BufferGlyph`).
+            if self.buffer_glyphs.len() >= crate::vm::text::MAX_BUFFER_GLYPHS {
+                self.warn(format!("AVG32 text into PDT buffer {buffer}: glyph queue full"));
+                return;
+            }
+            self.buffer_glyphs.push(crate::vm::text::BufferGlyph {
+                buffer,
+                character,
+                x,
+                baseline,
+                size: size.max(1),
+                colour,
+            });
             return;
         }
         let damage = self.gfx.take_damage();

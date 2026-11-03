@@ -8,13 +8,16 @@ extern crate std;
 
 pub mod binary;
 pub mod graphics;
+pub mod image_blend;
 pub mod input_buffer;
+pub mod integer_fields;
 pub mod path;
 pub mod save;
 pub mod service;
 pub mod state;
 pub mod vfs;
 pub mod vm;
+pub mod native_restore;
 
 use core::fmt;
 
@@ -54,3 +57,4 @@ pub mod deferred_dispatch;
 pub mod region_map;
 
 pub mod image_processing;
+pub mod image_encoding;

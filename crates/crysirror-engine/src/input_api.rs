@@ -569,6 +569,7 @@ impl ActionMap {
                 match key.as_str() {
                     "mouse_left" => "LMB".into(),
                     "mouse_right" => "RMB".into(),
+                    "mouse_middle" => "MMB".into(),
                     _ => key.to_uppercase(),
                 },
             ),
@@ -690,6 +691,8 @@ fn info() -> &'static ClassInfo {
     I.get_or_init(||ClassInfo{name:"Input",doc:"Session-scoped keyboard/mouse/gamepad actions with runtime rebinding and semantic prompt tokens.",properties:vec![
         PropertyInfo{name:"pointer",ty:T::List(Box::new(T::Int)),writable:false,doc:"Canvas pointer position."},PropertyInfo{name:"pointerDelta",ty:T::List(Box::new(T::Int)),writable:false,doc:"Pointer delta this frame."},PropertyInfo{name:"keys",ty:T::List(Box::new(T::String)),writable:false,doc:"Supported physical key names."},PropertyInfo{name:"lastDevice",ty:T::String,writable:false,doc:"keyboard_mouse or gamepad, based on meaningful activity."},PropertyInfo{name:"pendingRebind",ty:T::Optional(Box::new(T::String)),writable:false,doc:"Action waiting for a new physical binding."},
     ],methods:vec![
+        method("pointerActivity",vec![],T::Optional(Box::new(T::String)),"Read the live backend pointer-motion token as an exact decimal string; null when unavailable. Actual movement/entry changes it even when rounded canvas coordinates stay the same. This is independent of input-frame revisions and snapshot state."),
+        method("observation",vec![],T::Optional(Box::new(T::Map)),"Last owner-admitted input sample with exact revision/time/button strings and optional pointer/inside/focus metadata. Null before admission or after restore. Querying does not consume events or infer a default pointer."),
         method("keyboardLocks",vec![],T::Map,"This client's logical Caps/Num/Scroll lock state and revision. Physical state is null unless imported; logical control never toggles the OS keyboard. Session state resets only on successful Runtime restore."),
         method("setKeyboardLocks",vec![("state",T::Map)],T::Map,"Patch this client's logical caps_lock/num_lock/scroll_lock. mode must be logical; physical requests fail explicitly. Returns owner-committed state/revision, not device success."),
         method("enableEvents",vec![("capacity",T::Int)],T::Void,"Enable/replace this client's opt-in logical input journal (1..4096 samples). Accepted App frames feed it once. Disabled by default; action queries remain independent. Overflow is visible, with no silent edge drop."),
@@ -751,6 +754,24 @@ impl Class for InputClass {
         method: &str,
         args: &[Value],
     ) -> Result<Value> {
+        if method == "pointerActivity" {
+            use crysirror_core::service::HostServices;
+            let state=cx.state()?;
+            return Ok(state.runtime.host.pointer_activity(state.client)?.map_or(Value::Null,|token|Value::Str(token.to_string())));
+        }
+        if method == "observation" {
+            use crysirror_core::service::HostServices;
+            let s = cx.state()?;
+            return match s.runtime.host.input_observation(s.client) {
+                Ok(o) => Ok(Value::from_json(serde_json::json!({
+                    "client":o.client.0,"revision":o.revision.to_string(),"time_ms":o.time_ms.to_string(),
+                    "buttons_down":o.buttons_down.to_string(),"buttons_pressed":o.buttons_pressed.to_string(),
+                    "pointer":o.pointer,"pointer_inside":o.pointer_inside,"focused":o.focused,
+                }))),
+                Err(crysirror_core::Error::NotFound) => Ok(Value::Null),
+                Err(error) => Err(error.into()),
+            };
+        }
         if let Some(value)=crate::input_events_api::call(cx,method,args)? {return Ok(value);}
         if let Some(value)=crate::input_locks_api::call(cx,method,args)? {return Ok(value);}
         let actions = &mut cx.state()?.actions;

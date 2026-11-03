@@ -3,6 +3,14 @@
 Date: 2026-10-27. Status: implemented bounded profile; validation in STATUS.md.
 Follows ADR 0050 and 0069–0071.
 
+## Follow-up implementation (updated 2026-11-03)
+
+Final DSP and device output subsequently acquired worker ownership. Full-track movie PCM and independent device-clock/teardown limitations remain separate concerns.
+
+Follow-ups: [ADR 0079](0079-worker-final-audio-frames.md), [ADR 0080](0080-async-output-worker-and-bounded-pcm-transfer.md).
+The original checkpoint evidence and remaining-boundary paragraphs below retain
+their dated scope. They must not be read as an engine-wide current missing list.
+
 ## Decision and ownership
 
 Media decoders previously converted their i16 audio to a WAVE byte buffer on a
@@ -69,7 +77,7 @@ PTS alignment, late-start frame skipping, pause, EOF and loop clocks retain thei
 existing policy. `audio_started` denotes an emitted playback update, not measured
 audio-device latency. Existing media snapshots remain unsupported.
 
-## Validation and remaining boundaries
+## Validation and initial checkpoint boundaries (follow-ups above)
 
 Standalone PCM tests validate conversion, rejection without partial mutation,
 long-track seek, sample-level controls, client Stop isolation and lease lifetime.

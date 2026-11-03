@@ -226,6 +226,10 @@ struct Cell {
     separator: bool,
 }
 impl MenuSystem {
+    /// Context/native bars also retain their authored font for future display.
+    pub fn visit_font_dependencies(&self,visitor:&mut dyn FnMut(u32,&str)) {
+        for (owner,bars) in &self.clients {for menu in bars.values(){visitor(*owner,&menu.spec.font);}}
+    }
     pub fn is_empty(&self) -> bool {
         self.clients.values().all(BTreeMap::is_empty)
     }
@@ -359,6 +363,13 @@ impl MenuSystem {
                 menu.position = None;
             }
         }
+    }
+    pub fn reset_client_input_after_restore(&mut self,owner:u32) {
+        if self.pressed.is_some_and(|value|value.0==owner){self.pressed=None;}
+        if self.focus.is_some_and(|value|value.0==owner){self.focus=None;}
+        if let Some(bars)=self.clients.get_mut(&owner) {for menu in bars.values_mut(){menu.open.clear();menu.position=None;}}
+        // `down` observes the live global pointer. Preserve it so another
+        // client's held pointer does not become a fresh press.
     }
     fn layout(&self, canvas: [u32; 2]) -> Vec<Cell> {
         let mut cells = vec![];

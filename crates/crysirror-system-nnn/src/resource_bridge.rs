@@ -34,6 +34,9 @@ pub struct NativeResources {
     files: Arc<FileRegistry>,
 }
 impl NativeResources {
+    pub(crate) fn client(&self) -> ClientId {
+        self.client
+    }
     pub fn blackcyc(client: ClientId, open: SourceOpener) -> Result<Self> {
         ensure!(client.0 != 0, "NNN resource client identity");
         let mut archives = FormatRegistry::default();
@@ -96,8 +99,10 @@ impl NativeResources {
             let cx = self.context(&member.archive, cancel);
             let table = read_all(table.as_ref(), cx.limits.max_index_size)
                 .with_context(|| format!("NNN image directory read {}", member.table))?;
-            let directory = crysirror_formats_blackcyc::GpkIndex::parse(&table, &cx)
-                .with_context(|| format!("NNN image directory {} bytes={}", member.table, table.len()))?;
+            let directory =
+                crysirror_formats_blackcyc::GpkIndex::parse(&table, &cx).with_context(|| {
+                    format!("NNN image directory {} bytes={}", member.table, table.len())
+                })?;
             if directory.find(&member.member).is_none() {
                 continue;
             }

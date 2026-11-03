@@ -156,7 +156,14 @@ pub fn configured_variables(
             vars.write_stored(id, 2000);
         }
     }
-    let layers = if profile==VariableProfile::Legacy1000{16}else{setup.integer(b"layerExpand")?.unwrap_or(16)};
+    vars.configure_native_calendar(crate::native_calendar::NativeCalendar::configured(
+        names, setup, profile,
+    )?);
+    let layers = if profile == VariableProfile::Legacy1000 {
+        16
+    } else {
+        setup.integer(b"layerExpand")?.unwrap_or(16)
+    };
     ensure!(
         (1..=32).contains(&layers),
         "unsupported System-NNN native layer count {layers}"

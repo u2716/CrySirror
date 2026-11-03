@@ -1,7 +1,14 @@
 # Upstream source inventory and evidence limits
 
-Complete Git checkouts were fetched on 2026-10-24 and their actual revisions are
-saved in upstream-lock.json:
+> Historical acquisition/source audit (2026-10-24). Statements below about absent
+> VM hooks and unrun games apply to that investigation. They are not current
+> integration status. Current ownership and profiles are in
+> [NATIVE_ADAPTERS.md](NATIVE_ADAPTERS.md); later source pins belong to each crate
+> SOURCE.json and dated [STATUS.md](../STATUS.md) entries. Hashes and receipts below
+> are retained as evidence of the original investigation.
+
+Complete Git checkouts were fetched on 2026-10-24. Their revisions at the time
+are recorded below; the former repository-wide revision lock has been removed:
 
 | Source | Commit |
 |---|---|
@@ -29,8 +36,9 @@ python3 tools/upstreams.py audit --source-root ../CrySirror-references
 The actual checkouts for this run are in
 `/Users/xmoe/.cache/crysirror/upstream-20261024`. Neither checkout nor its fonts,
 fixtures, keys or SDK files was copied into CrySirror crates or packages.
-`--source-root` now applies to both fetch and audit. Fetch uses the real lock
-commits on subsequent machines; no branch-tip substitution is needed.
+`--source-root` applies to both fetch and audit. Fetch now uses the configured
+reference for a new checkout and reuses an existing checkout without changing
+it. It does not create a repository lock file or enforce historical revisions.
 
 `docs/upstream-manifest-audit.json` records the successful static inventory. It
 conservatively includes optional, target and dev dependency edges. It is not a

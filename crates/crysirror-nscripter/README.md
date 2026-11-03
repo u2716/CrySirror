@@ -1,57 +1,51 @@
 # NScripter native adapter
 
-`crysirror-nscripter` is a first-class Rust native text-script interpreter. It
-never invokes or embeds ONScripter, SDL, an original renderer or a screen host.
-The pinned reference, notices and boundaries are in SOURCE.json and LICENSE.
-No game data or fonts are included.
+`crysirror-nscripter` is a first-class Rust native text-script interpreter. Native
+commands call CrySirror Layer, Canvas, Text/GlyphRun, UI, Image, Media, Audio and
+storage services. ONScripter, SDL and an original engine renderer are not hosted.
+Pinned reference provenance and licenses are recorded in SOURCE.json and LICENSE.
 
-Configuration requires capability-relative `script` (`0.txt` or XOR-encoded
-`nscript.dat`) and a licensed project `font` alias. `encoding` is `sjis`
-(default) or `utf8`; `canvas` defaults to 640×480. `text` supplies initial plain
-message bounds/size/color; native `setwindow` can replace those declarations.
-Optional `archives` contains engine mount prefixes in priority order. Loose
-files are searched first, then those prefixes, with scoped case-insensitive
-native filename resolution. The desktop `play` bootstrap mounts original
-archives in memory through the shared resource API; no extraction is required.
-Numbered 00..99.txt concatenation and other script protection remain unmapped.
+## Launch and configuration
 
-Native labels, numeric/string variables and aliases, expressions, conditionals,
-loops, subroutines, physical-line `skip`, multiline selections and backtick
-English strings execute directly. Inline click/page/speed/wait controls are
-native policy; shared glyph layout/reveal, Layer/UI, Image and Audio services
-own their implementations. Source read/decode/parse and resource processing have
-bounded worker/completion/cancellation boundaries. Metadata lookup is currently
-synchronous and full engine-wide async resource staging is still open.
+Use `crysirror play /path/to/game` for desktop detection and resource bootstrap.
+Original archives are mounted through shared resource services without bulk
+extraction. Explicit adapter configuration supplies a capability-relative
+`script`, licensed project `font` alias, optional `archives` mount prefixes,
+`encoding` (`sjis` or `utf8`), canvas and text defaults. Loose resources precede
+configured archives with scoped case-insensitive resolution. Numbered source
+concatenation and other protection variants are not established by detection.
 
-Native backgrounds, sprites and left/center/right characters use ordinary engine
-image layers. Resource transparency calls shared `ImageEffect::SpriteAlpha`
-(opaque, exact color key, decoded PNG alpha, paired color/mask sheets). `effect`
-definitions prepare reusable stripe/stagger mask images on shared workers;
-crossfade, directional slide and rule transitions call engine services. The
-8-bit rule-map path has not been proven pixel-identical to ONS integer stripe
-edges. Complex animated sprites and arbitrary transparency tags remain explicit
-failures. Native animated text-wait icons use shared `SheetSequence` clock/UV
-selection; these are separate from the OS pointer cursor.
+## Implemented source and limits
 
-`setwindow` supports square horizontal fixed-cell layout, spacing, bold, shadow
-and a color multiplication backing. Text color is retained per glyph. Native
-selection and atlas buttons use scoped retained UI hit/focus/activation state.
-`play "*N"` resolves local `CD/trackNN.ogg`; wave/BGM operations use shared
-worker-backed channel audio admission. Date/timers and skippable delay preserve
-native logical control. Window-effect declarations and menu/save metadata are
-retained, but full window enter/leave animation, right-click system menus,
-backlog/skip modes, rich markup, plugins, original save/load and original global
-file interchange remain unfinished. They are not compatibility claims.
+The original control-flow and resource adapter is extended by `src/commands.rs`.
+Implemented command families include numeric/string/array operations, labels and
+subroutines, jumps/loops, selections/buttons/dialogs, text expansion and ruby,
+sprite2 transforms and sheet animation, menus/lookback/skip/auto modes, audio and
+movie requests, effects, drawing and screen-copy requests. Presence in this list
+means source exists; it is not a claim of full ONScripter semantic equivalence or
+coverage of every command/argument profile.
 
-`globalon` and `filelog` use engine Save capabilities for bounded, worker-written
-`nscripter-state.json` metadata (global indices ≥200 and accessed resource names).
-This private engine format does not overwrite or claim to import original game
-saves. Framework snapshots have schema 2 and reject pending jobs and prepared
-image reconstruction, which is not implemented. Original `savegame`, `loadgame`
-and unsupported native commands fail at their native PC.
+Shared image workers prepare alpha/key/mask products; ordinary engine layers,
+glyphs and widgets own presentation and interaction. Text-wait cursor animation
+uses shared SheetSequence state and is distinct from an OS pointer. Screen-copy
+operations request a presenter frame capture. The 2026-11-02 validation entry did
+not execute those screen-copy paths. Metadata admission and remaining owner-thread
+operations still need migration under the engine-wide async requirement.
 
-Validation separates syntax/semantic tests, shared engine capability tests and
-the ignored `owner_game` test using `CRYSIRROR_NSCRIPT_GAME`. The latter reads the
-owner's installed Tsukihime and its font at runtime; it does not ship their
-bytes. Actual compilation and game milestones are recorded in STATUS.md. A
-registered factory or a self-authored screenshot is not a completed game port.
+`savegame`/`loadgame` now have a private engine slot format. These files and
+`nscripter-state.json` global/file-log metadata do not interchange with original
+NScripter `.dat`, global or log formats. Framework snapshots remain separate and
+reject pending work or prepared-image reconstruction that cannot yet be restored.
+`drawsp3`, native DLL execution and Lua execution fail visibly; other unsupported
+commands/profiles also retain explicit errors. Window/transition pixel parity
+and whole-game compatibility require separate validation.
+
+## Validation evidence
+
+The 2026-11-02 release entry records 13 passing authored tests and one ignored
+owner-media test. Earlier 2026-10-30 owner Tsukihime runs reached the title and
+hospital opening dialogue through shared services; they predate the command
+expansion and do not validate it. See [STATUS.md](../../STATUS.md) for dated
+commands, failures and actual scope. Tests read owner fonts/game data at runtime;
+none are distributed. A command count or factory registration is not full engine
+or game acceptance.

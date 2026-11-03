@@ -4,6 +4,130 @@ Newest first. Each entry is keyed by the API fingerprint printed in
 [REFERENCE.md](REFERENCE.md). `tests/api_docs.rs` fails until the current
 fingerprint appears here. Mark breaking changes with **Breaking**.
 
+## `c47c9352e8db80c9` (2026-11-03): native presentation boundary and workspace regeneration
+
+- The live host can query `Runtime::presentation_pending`, backed by the
+  default-false `VmAdapter::presentation_pending` contract, to keep a completed
+  frame visible during resource-suspended drawing. Modal UI remains presentable.
+  These Rust methods add no reflective JS/TS member.
+- This workspace regeneration also records the shared physical window request
+  commands `set_window_size`, `set_window_position`, `set_window_visible` and
+  `set_window_minimized`, and the explicit stored-byte bitmap arithmetic of
+  `ImageCompositeMath::IntegerStored`, added by concurrent engine work.
+
+## `336786cebccc73ce` (2026-11-03): current workspace regeneration and copy-history pruning
+
+- Regenerated the current shared workspace while validating the RiddleJoker
+  performance repair. The reference includes accumulated audio channel seek
+  and exchange APIs, voice gain/loop controls, `Canvas.applyBatch`, input
+  observations and layer source-crop/viewport-clip declarations. These are
+  existing implementation changes, not all additions from this repair.
+- The new Rust `ImageInput::with_composite_layer` helper discards overwritten
+  destination history only for a complete, full-opacity four-channel copy.
+  Partial and channel-only operations retain their prior inputs. Callers may
+  replace manual Composite appends with this helper; its source mapping and
+  pixel arithmetic are unchanged. It adds no reflective JS/TS method.
+
+## `de52270e1e820320` (2026-11-02): frame capture and image export services
+
+- Regeneration after the 2026-11-02 native-adapter work, which added the Rust
+  `HostServices::begin_frame_capture`/`Runtime::prepare_frame_captures` frame
+  capture path, canvas image export and the `crysirror_image::bmp_encode` module.
+- `crysirror_resource::xml::XmlDocument::parse` now also accepts documents that
+  declare a legacy encoding such as Shift_JIS. Callers need no migration.
+- The field-level delta from `0154abd7b61f34df` was not diffed separately, because
+  the earlier generated files were not retained. Check `docs/api/REFERENCE.md`
+  for the current signatures.
+
+## `0154abd7b61f34df` (2026-11-01): source crops, explicit blend arithmetic and session seed material
+
+- Registered the actual CropRect shared geometry result, LayerSpec.source_crop,
+  PositionedGlyph.crop and scoped Layers.setSourceCrop/sourceCrop. Local source
+  geometry crops preserve UV/perspective mapping without inheriting or reflowing.
+- Registered the full Rust ImageCompositeMath enum and six normalized/fixed
+  blend types, including independent /255 product rounding and source gates.
+  Bitmap.beginFixedBlend uses existing immutable source snapshots and destination
+  revision/epoch/cancellation rules; no reflected Rust capability class is added.
+- Registered bounded SessionSeedSource/Material/State. The optional Rust query
+  samples explicit fixed words or authorized OS worker material; it never falls
+  back to a simulation clock. Cat Config.random_seeds is the real optional u32 pair.
+- Actual combined regeneration changed verified `531a48a7ce30ee00` to this value.
+  Tuple payloads retain their declared Rust paths, including the qualified
+  ImageCompositeMath::Normalized(crate::image_blend::RgbaBlendState) declaration.
+
+## `531a48a7ce30ee00` (2026-11-01): viewport clipping and retained voice transport
+
+- LayerSpec retains optional viewport_clip separately from local clip.
+  SetViewportClip and Layers.setViewportClip/viewportClip share scoped state;
+  empty extents are empty, snapshots preserve viewport coordinates, and
+  unsupported capture inverse transforms fail explicitly.
+- VoiceSpec/AudioParameters expose retain_on_finish and transport_active with
+  compatible defaults; AudioPlaybackInfo reports both. SetTransportActive and
+  Mixer controls retain source/fader state independently of ordinary Pause.
+  Existing Audio.setVoice/playSfx maps expose actual options without a new class.
+- Retained EOF/gain-stop voices remain non-stealable; explicit stop/retirement
+  and prepared per-client replacement release them while preserving peer DSP.
+- Actual combined regeneration changed verified `1bea1d048c6dd276` to this hash.
+  The first coverage attempt correctly found the missing command-to-facade map;
+  the real map was added before generation, without weakening coverage.
+
+## `1bea1d048c6dd276` (2026-11-01): atomic prepared-layer batches and glyph images
+
+- Canvases.applyBatch accepts the real six-section ServiceBatch. Its new
+  default-empty prepare_layers stage runs before Canvas operations inside the
+  same engine transaction; old layers/apply order remains compatible. New
+  parents and external motion producers no longer require intermediate publish
+  and private compensating rollback.
+- Registered the actual ServiceBatch Rust/JSON data contract and GlyphImageSpec
+  scoped worker contract. The facade keeps aggregate command/serialized-byte
+  budgets and host resource/font preparation; the glyph path freezes an
+  authorized face and shares existing cancellable rasterization/ImageJob state.
+- The observed Glyph-only `081fcf5a46b10d77` generation was interrupted by this
+  concurrent public batch before no-bless verification; it was not reported as
+  a passing complete reference. This final generation records the combined
+  frozen shape; `a7e4bc50985744b6` remains the prior verified reference.
+
+## `081fcf5a46b10d77` (2026-11-01): scoped glyph rasterization into immutable images
+
+- Registered the real Rust GlyphImageSpec data contract for the optional
+  ImageMetadata.begin_glyph_image capability. Runtime freezes an authorized
+  face and uses the existing bounded cancellable TextSystem coverage kernel
+  and ImageJob resource/publication path; no new reflective class is invented.
+- Resident results compose through the existing image graph, including
+  CopyAlpha, while retaining font/resource accounting through completion.
+  This does not mark any native HLL or STRING lifecycle complete.
+- Actual regeneration changed `a7e4bc50985744b6` to the fingerprint above.
+
+## `a7e4bc50985744b6` (2026-11-01): prepared audio restore, unit flow and retained glyph bounds
+
+- OriginalRestoreCommit accepts an opaque prepared audio replacement. The
+  client-scoped Core preparation status preserves typed failures; Audio's
+  worker job/prepared value/exclusive install token expose no decoder payload.
+  Final owner validation installs target audio and image/scene state together;
+  sequential requests and unsupported host producers remain explicit failures.
+- Text.layoutUnitFlow documents bounded logical cell layout with four shared
+  Rust data types. Text.beginGlyphBounds/glyphBoundsStatus/releaseGlyphBounds
+  document four typed metadata contracts and retained font/budget ownership.
+  These do not imply completed native STRING rendering or native save imports.
+- Documented static-font dependency visitors, target-only input reset and
+  opt-in checked resident pixel reads. Dynamic is_loaded checks do not become
+  an atomic font lease. HG3 native pixel-profile metadata remains a Rust
+  resource/decoder contract without a new script class or decoder ID.
+- Actual single regeneration changed `f52fcaec3a9ab322` to the fingerprint above;
+  Rust traits and opaque resources are not fabricated as reflective classes.
+
+## `f52fcaec3a9ab322` (2026-11-01): scoped font metrics and retained channel seeks
+
+- Text.resolveFontAlias/fontMetrics expose the authorized drawing alias and
+  immutable one-scalar font metrics. The existing Rust FontMetrics DTO is now
+  registered; static family aliases do not manufacture dynamic font handles.
+- Audio.beginSeekChannel/channelSeekStatus/cancelChannelSeek expose real source
+  cursor completion independently of later EOF and frame-worker publication.
+  Rust SourceSeekReceipt stays opaque and SourceSeekState preserves its exact
+  Ready frame / Failed String payloads; these are not serialized script classes.
+- FontLibrary's new methods retain Unsupported defaults. Static family metadata
+  lookup and bounded seek/receipt ownership remain common engine capabilities.
+
 ## `d22690a23af1bf9f` (2026-11-01): explicit retained-canvas resource destruction
 
 - CanvasCommand.destroy is mapped to Canvases.apply. It releases an existing
@@ -1309,3 +1433,221 @@ first reference build was queued. Its Rust array spelling changed from
 is `66c74a7ee0a69bf1` (previous `6c31b5c44d887345`). Field names, wire values,
 method signatures, defaults and behavior are unchanged. The generator currently
 includes that source type spelling in its fingerprint.
+
+## 2026-11-01 — bounded raw-byte grouped token buffers
+
+Fingerprint: `c4f0841c769d7a18` (previous `66c74a7ee0a69bf1`).
+
+- Added shared Rust `crysirror_text::byte_groups::split_grouped_bytes`,
+  `ByteGroupSplitLimits` and `ByteGroupSplitOutput` to the public reference.
+- The raw-byte profile preserves nested-parenthesis grouping, quote NUL/copy
+  tails, logical length and visible output spans. It is distinct from the
+  delimiter-only / explicit Shift-JIS-boundary `byte_split` profile.
+- Full output extent/overflow/depth checks precede allocation; both passes
+  support cancellation without publishing a partial output buffer. No engine
+  reflective Class method or Unicode/escape behavior is implied.
+
+## 2026-11-01 — immutable three-input mask blending, CG catalogues and paged images
+
+Fingerprint: `1171d6b86d446b00` (previous `c4f0841c769d7a18`).
+
+- Added `MaskedPairBlend`/`ImageEffect::MaskedPairBlend`, root-only
+  `ImageInput::Ternary` and `Bitmap.beginMaskedPair(slot, first, second, options)`.
+  Inputs are frozen; independently quantized14bit mask contributions and RGB
+  products preserve destination alpha. Weights sum to at most256. Existing
+  owner/epoch/revision, cancellation, graph/output/shared-memory bounds apply.
+- Added shared `CgCatalog`/`CgCatalogEntry`, bounded CGTABLE/CGTABLE2 decoding and
+  Resources format `siglus/cgm`. Metadata lookups do not own native progress.
+- Added Rust-only `PagedImageLayout`, `PagedImageRegion`, `PagedImage` and
+  `PagedClearPlan`, with4096tile/512MiB layout constants, cancellable intersection,
+  existing image-request clear planning and validated immutable completion.
+  Undefined partial pages, stale/foreign completions and incomplete batches fail.
+  No reflective class or private image renderer is introduced.
+- The intermediate masked-pair/catalogue-only reference was `dc94c5e89e5e6072`;
+  paged-image source was included before final verification of this batch.
+
+## 2026-11-01 — scoped in-place solid paint colour changes
+
+Fingerprint: `c8c180ba4ff65706` (previous `1171d6b86d446b00`).
+
+- Added `LayerCommand::SetSolidColor { id, color }` / wire `set_solid_color`
+  and the public `Layers.setSolidColor(id, rgba)` facade.
+- The target must already be an owned Solid layer. Only its four stored colour
+  bytes change; transform, motion, opacity, order, clipping and all other layer
+  fields remain intact. Foreign, absent and non-Solid targets fail, preserving
+  the normal command-batch rollback contract. This avoids replacement Put calls
+  that accidentally reset retained state and is usable without CatSystem2.
+
+2026-11-01 Rust-only integer-fields follow-up: documented and registered the
+source of `crysirror_core::integer_fields::{logical_size,get,set,fill_clipped}`.
+There is no new reflective method, command or DTO. The generated signature
+fingerprint remains `c8c180ba4ff65706`; bounded slice ownership, signed32-bit
+whole words, unsigned narrow fields and clipped inclusive fills are described
+in README. Source registration/regen passed before no-bless verification.
+
+2026-11-01 intermediate Input/Platform reference: generation observed signature
+`112d043e04e6dba1` (previous `c8c180ba4ff65706`) for Input.observation,
+Platform.integration, read-only Rust input/platform records and shared C/L/Z/
+middle-button mapping. README records exact numeric strings, unknown pointer
+metadata, partial VK mapping and unavailable SDK-backend semantics. This is an
+intermediate batch signature; the final combined source catalogue also includes
+ReadingWait and shared ALD types and will be verified after the owner-scheduled
+combined release run.
+
+## 2026-11-01 — retained input observations and prepared platform metadata
+
+Fingerprint: `bef9ef5b2845175f` (previous verified `c8c180ba4ff65706`).
+
+- Added `Input.observation()` with client/revision/time, held/pressed masks and
+  optional pointer/inside/focus metadata. Exact integer fields are decimal
+  strings at the script boundary; unknown observations remain absent, including
+  before owner admission and after restore. C/L/Z/middle-button constants and
+  the partial shared Windows virtual-key mapper are documented without claiming
+  arbitrary key or physical-device support.
+- Added read-only `Platform.integration("steam")` over a prepared optional host
+  provider. An absent backend reports unavailable; metadata does not initialize
+  an SDK or claim entitlement, authentication or achievement support.
+- Registered the Rust-only shared `ReadingWait` retained deadline, with pure
+  saturating elapsed-time/character-delay evaluation and no clock/input access.
+- Registered `AldVolume` and `AldCatalog` as Rust capability-reader/archive
+  contracts, preserving sparse original ALD IDs, holes and cross-volume links.
+  They have no invented serialized reader representation or reflective class.
+- The earlier `112d043e04e6dba1` was an intermediate Input/Platform-only generation.
+  This final batch was generated from the actual combined source catalogue.
+
+## 2026-11-01 — Native System4 Rust contracts and shared ALK (`cbe5a4c32a15c8b9`)
+
+- Register the actual optional `system4` native adapter configuration, matching
+  the desktop factory/detector and original INI/ALD bootstrap policy.
+- Document native bootstrap values, entries, mixers, assets, input and sprite
+  state with System4-prefixed documentation aliases; original Rust names and
+  serde field names are unchanged. These are native Rust contracts, not new
+  reflective engine classes or claims of complete SACT/VM/game support.
+- Register shared GPL `AlkCatalog` and its original numbered sparse entry
+  capability. Legacy filename extraction and the native ID view delegate one
+  shared parser; no duplicate format registration or private decoder is added.
+- Previous generated fingerprint: `bef9ef5b2845175f`. This fingerprint was
+  obtained from actual source registration by local release generation.
+
+## 2026-11-01 — Encoded image queries, visual motion and legacy CPU profiles (`1cae8f9410b1b5b9`)
+
+- Registered the actual Core ImageEncodingInfo/receipt/state Rust contracts.
+  ImageMetadata's asynchronous scoped query reports original header/plane
+  properties and a byte fingerprint; Ready does not promise pixel checksum
+  validation. Failures retain their engine error class, including NotFound.
+- Layer motion now covers all13 existing transform/opacity properties through
+  shared scalar tracks. Rotation is in radians; opacity and status use the same
+  truncated byte value. UI motion still supports only X/Y.
+- Registered the optional GPL text-legacy byte-string/numeric profiles and
+  Resource's caller-owned Mt19937_1998 state as Rust APIs. No reflective script
+  classes, VM heap or rendering ownership was introduced for these kernels.
+- CivilTime::weekday/service::civil_weekday provide a pure validated Gregorian
+  Sunday0 query from retained local date fields, without another clock sample.
+- Previous verified fingerprint: `cbe5a4c32a15c8b9`. Regeneration printed the
+  fingerprint above; independent no-bless verification is recorded separately.
+
+## 2026-11-01 — Shared split-word MT stream and explicit native text decoding (`9dac24fecb3e8275`)
+
+- Registered Resource Mt19937Split as an opaque Rust stream with new,
+  next_u32 and fast first_u32. The split-word69069+1 seed profile remains
+  distinct from Mt19937_1998 while sharing tested twist/temper machinery.
+- Documented bounded text_stream::decode_shift_jis for explicit native CP932
+  input, including malformed-input errors and bytes also valid as UTF8.
+  Encoding selection is explicit; no reflective class or VM renderer was added.
+- Previous verified fingerprint: `1cae8f9410b1b5b9`. The new value above was
+  printed by actual regeneration; independent no-bless verification follows.
+
+## 2026-11-01 — External motion producers, affine layer matrices and alpha-only copy (`42a8c3604407b796`)
+
+- Layers now offers beginExternalMotion, commitExternalMotion,
+  requestExternalMotionSkip and removeExternalMotion with scoped driver
+  generations/revisions, plus setRect. MotionStatus includes actual driver
+  completion; a skip request alone never completes a producer.
+- Registered ExternalMotionPose/Stamp/Status. Stamp words are exact decimal
+  strings. Optional rect/transform/opacity pose updates and completion commit
+  atomically. Active producers must retire before scene snapshots.
+- SpriteTransform.local_matrix adds an optional column-major affine transform;
+  existing scalar transform defaults remain valid. Unsupported projection,
+  singular matrices and 3D parent layouts fail rather than flattening poses.
+- ImageCompositeMath/PixelMath CopyAlpha exposes alpha-only image composition
+  while preserving RGB, with the existing rounded opacity and clipping rules.
+- Previous verified fingerprint: `9dac24fecb3e8275`. Actual regeneration printed
+  the new fingerprint above; independent no-bless validation follows.
+
+## 2026-11-01 — Shared byte-span replacement and safe C32 formatting (`ceb843236c48cb69`)
+
+- Registered Rust-only Printf32Argument/Printf32Output from shared Text source,
+  preserving the actual Word(u32) and borrowed Bytes tuple payloads in the
+  generated reference. No reflective class or pointer-varargs interface added.
+- Documented byte_replace::replace_spans_bytes as a bounded cancellable,
+  encoding-independent ordered-range operation. Replacement bytes are not
+  rescanned and repeated empty-range insertions keep their declared order.
+- Documented printf32::format_printf32_bytes and its explicit C32 word/byte
+  model, limits and unsupported-format failures. Existing format_one_bytes
+  retains its first-compatible-placeholder contract without migration.
+- Previous verified fingerprint: `42a8c3604407b796`. The new fingerprint above
+  comes from actual regeneration; independent no-bless verification follows.
+
+## 2026-11-01 — Shared audio dB units (fingerprint remains `ceb843236c48cb69`)
+
+- Audio.setVoice's existing options Map now accepts gain_db100 in hundredths
+  of a dB (-16000..1204), mutually exclusive with linear gain. Ordinary -10000
+  is finite attenuation; gain:0 requests silence. Fades remain linear amplitude.
+- Documented the four Rust audio::levels conversion functions, including the
+  explicit legacy -10000 silence sentinel and bounded reverse conversion.
+  The existing release/capture paths reuse that common implementation.
+- Actual regeneration kept `ceb843236c48cb69`: reflected parameter/return types
+  still use the same Map contract and these new Rust free functions introduce
+  no DTO/class signature. Prose/options documentation changed; no signature
+  fingerprint change is claimed. Previous typed-shape history remains intact.
+
+## 2026-11-01 — Live isolated Canvas presentation (`7139e6a8e9650eac`)
+
+- CanvasCommand adds present_isolated(id,layer,order,parent,position), reachable
+  through the existing Canvases.apply API. Original present semantics remain
+  available; the new command composes the source as one immutable snapshot draw
+  and refreshes it automatically after edits. Parent transform/opacity applies
+  to the result of composition.
+- Isolated presentation state is retained in scene state; absent map fields
+  default to ordinary presentation. Snapshot inlining now requires the complete
+  identity SpriteTransform so local_matrix, depth and other properties cannot
+  disappear during optimization. Existing renderer/resource limits still apply.
+- Actual regeneration changed `ceb843236c48cb69` to the fingerprint above for
+  the typed CanvasCommand variant and its command mapping. CPU/shared-public
+  behavior evidence is separate from GPU visual acceptance.
+
+## 2026-11-01 — Independent stereo voice gains and typed audio requests (`5ba5be1c88e5f542`)
+
+- Registered the complete existing Rust AudioRequest enum as a capability
+  contract, including new SetStereoGain {channel,gains:[f32;2],fade_ms}. Resource
+  payloads remain Rust capabilities, not JSON commands or a reflected class.
+- Audio.setVoice's existing options Map accepts stereo_gain:[left,right] with
+  each finite multiplier in0..4, independent of equal-power pan/spatial DSP.
+  The whole options set validates before mutation; output gains precede Master
+  and reverb sends. Rendered voice-frame ramps hold while paused or waiting.
+- Documented Rust Mixer.set_stereo_gain/stereo_gain and the shared level
+  validator. Worker-owned controls reject mutation; immutable observations and
+  completed PCM/control state publish together.
+- Actual regeneration changed `7139e6a8e9650eac` to the fingerprint above for
+  the newly documented typed request enum. The reflected setVoice Map signature
+  itself is unchanged. Native/audio-device acceptance is separate evidence.
+
+## 2026-11-01 — Staged native restore, audio transport and activity/media controls (`feb2ec9be29523ba`)
+
+- Registered Rust original-save ticket/status/progress/batch/owner-only commit
+  contracts, with retained typed failure payloads. Preparation is scoped and
+  read-only; worker-validated immutable resources and scene install together.
+  Audio/World/external-producer replacement remains an explicit unsupported
+  profile. The boxed VM plan has no Serialize/project/JSON command interface.
+- Media adds setGain/gain without decoder/clock restart. Input.pointerActivity
+  exposes an optional exact backend motion token; shared ActivityTimer and the
+  full-domain integer-line sampler support owner-clock policies independently
+  of frame/input revisions.
+- Audio adds counted decoded-frame loop schedules, channel exchange and own
+  gain-target/finish/stop-after controls and public playback-info fields. These
+  remain distinct from transport pause/stop clocks and stereo output gains.
+- Registered five Rust Alice audio metadata version/catalogue/entry types;
+  they do not create decoder IDs or native HLL/gameplay completion claims.
+- Actual regeneration changed `5ba5be1c88e5f542` to the fingerprint above.
+  Source/API behavior and independent no-bless verification are recorded in
+  STATUS; no device/game/GPU result is implied by generated declarations.

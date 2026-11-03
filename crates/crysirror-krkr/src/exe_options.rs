@@ -34,6 +34,21 @@ pub fn parse(exe: &[u8]) -> Result<Vec<(String, String)>> {
     Ok(out)
 }
 
+/// `System.exeBits` of the original process: krkrz reports the pointer width of
+/// the running executable, so it follows the PE machine and never the host. Yuzusoft
+/// and other scripts branch on it to select plugins and the motion title path.
+pub fn pe_bits(exe: &[u8]) -> Option<i64> {
+    let lfanew = u32::from_le_bytes(exe.get(0x3c..0x40)?.try_into().ok()?) as usize;
+    if exe.get(..2)? != b"MZ" || exe.get(lfanew..lfanew.checked_add(4)?)? != b"PE\0\0" {
+        return None;
+    }
+    match u16::from_le_bytes(exe.get(lfanew + 4..lfanew + 6)?.try_into().ok()?) {
+        0x014c => Some(32),
+        0x8664 | 0xaa64 => Some(64),
+        _ => None,
+    }
+}
+
 /// A TJS string literal (`"..."` or `'...'` with backslash escapes), or a
 /// bare value as written.
 fn unquote(v: &str) -> Result<String> {
@@ -84,6 +99,22 @@ mod tests {
             parse(&exe).unwrap(),
             [("debugwin".into(), "no".into()), ("hkupdaterect".into(), String::new())]
         );
+    }
+
+    #[test]
+    fn exe_bits_follow_the_pe_machine() {
+        let pe = |machine: u16| {
+            let mut exe = vec![0; 0x80];
+            exe[..2].copy_from_slice(b"MZ");
+            exe[0x3c] = 0x40;
+            exe[0x40..0x44].copy_from_slice(b"PE\0\0");
+            exe[0x44..0x46].copy_from_slice(&machine.to_le_bytes());
+            exe
+        };
+        assert_eq!(pe_bits(&pe(0x014c)), Some(32));
+        assert_eq!(pe_bits(&pe(0x8664)), Some(64));
+        assert_eq!(pe_bits(&pe(0x01c0)), None);
+        assert_eq!(pe_bits(b"MZ truncated"), None);
     }
 
     #[test]

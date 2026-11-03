@@ -1,0 +1,10 @@
+[package]
+name = "crysirror-text-legacy"
+version.workspace = true
+edition.workspace = true
+license = "GPL-2.0-or-later"
+rust-version.workspace = true
+description = "Shared bounded native byte-character and numeric string profiles"
+
+[dependencies]
+anyhow.workspace = true

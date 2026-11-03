@@ -2,7 +2,7 @@
 // Distributed under the GNU Affero General Public License, version 3 or
 // (at your option) any later version, https://www.gnu.org/licenses/agpl-3.0.html.
 //! Native parameter/value mapping only. Pixels and algorithms belong to shared
-//! engine resources; composed Canvas/text image mutation is still unsupported.
+//! engine resources; alpha clips prepare composed inputs through shared Canvases.
 use crate::natives::*;
 use crysirror_core::{
     image_processing::{ImageInput, ImageProcessState},
@@ -77,8 +77,78 @@ pub(crate) fn begin_chain(
     queue_chain(rt, h, source, effects)
 }
 
+/// A Photoshop-mode operateRect waiting for canvas captures of its layers.
+pub(crate) struct PendingComposite {
+    target: ObjectHandle,
+    source: ObjectHandle,
+    rect: [i64; 4],
+    at: [i64; 2],
+    opacity: u8,
+    math: crysirror_core::image_processing::ImageCompositeMath,
+    capture: Option<(ObjectHandle, crysirror_core::image_processing::ImageJob)>,
+}
+impl PendingComposite {
+    pub(crate) fn new(
+        target: ObjectHandle,
+        source: ObjectHandle,
+        rect: [i64; 4],
+        at: [i64; 2],
+        opacity: u8,
+        math: crysirror_core::image_processing::ImageCompositeMath,
+    ) -> Self {
+        Self { target, source, rect, at, opacity, math, capture: None }
+    }
+    pub(crate) fn layers(&self) -> [ObjectHandle; 2] {
+        [self.target, self.source]
+    }
+}
+
+fn poll_composite(rt: &mut Rt, host: &mut dyn HostServices, client: ClientId) -> anyhow::Result<bool> {
+    let e = |e: TjsError| anyhow::anyhow!("{e}");
+    if rt.host().composite_pending.is_empty() { return Ok(true); }
+    let mut pending = rt.host_mut().composite_pending.remove(0);
+    // A script may invalidate a temporary layer while the operation is queued.
+    if pending.layers().iter().any(|l| rt.host().layer(*l).is_err()) {
+        return Ok(false);
+    }
+    if let Some((layer, mut job)) = pending.capture.take() {
+        match job.poll()? {
+            ImageProcessState::Pending => {
+                pending.capture = Some((layer, job));
+                rt.host_mut().composite_pending.insert(0, pending);
+                return Ok(false);
+            }
+            ImageProcessState::Failed(error) => anyhow::bail!("native layer capture failed: {error}"),
+            ImageProcessState::Ready(image) => {
+                anyhow::ensure!(image.client() == client, "foreign image result");
+                rt.host_mut().layer_mut(layer).map_err(e)?.image_source = Some(ImageInput::Resource(image));
+            }
+        }
+    }
+    for layer in [pending.target, pending.source] {
+        if input(rt, layer).is_err() {
+            let slot = rt.host().layer(layer).map_err(e)?.slot;
+            pending.capture = Some((layer, host.begin_canvas_image(client, slot)?));
+            rt.host_mut().composite_pending.insert(0, pending);
+            return Ok(false);
+        }
+    }
+    let dest = rt.host().layer(pending.target).map_err(e)?.clone();
+    let source = rt.host().layer(pending.source).map_err(e)?.clone();
+    let composite = crate::natives::composite_with(
+        rt, pending.target, pending.source, &dest, &source,
+        pending.rect, pending.at, pending.opacity, pending.math,
+    ).ok_or_else(|| anyhow::anyhow!("native layer composite has no CPU source after capture"))?;
+    let job = rt.host().images.as_ref().ok_or_else(|| anyhow::anyhow!("image service absent"))?
+        .begin_process(composite, std::sync::Arc::from(&b"[]"[..]))?;
+    rt.host_mut().image_job = Some((pending.target.0, job, [false; 2], true));
+    Ok(false)
+}
+
 pub fn poll(rt: &mut Rt, host: &mut dyn HostServices, client: ClientId) -> anyhow::Result<bool> {
+    if !poll_save(rt,host,client)?{return Ok(false);}
     if !poll_pair(rt,host,client)?{return Ok(false);}
+    if rt.host().image_job.is_none() && !poll_composite(rt,host,client)?{return Ok(false);}
     let Some((id, mut job, flip, publish_surface)) = rt.host_mut().image_job.take() else {
         return Ok(true);
     };
@@ -115,6 +185,93 @@ pub fn poll(rt: &mut Rt, host: &mut dyn HostServices, client: ClientId) -> anyho
             rt.host_mut().api_calls += 1;
             Ok(true)
         }
+    }
+}
+
+/// `Layer.saveLayerImage` (krkrz TVPSaveImage): a loaded image goes through a
+/// shared job, a composed one through the Canvas capture presenter; encoding
+/// and the atomic write then use shared image and storage services.
+pub(crate) struct LayerImageSave{
+    pub layer:usize,
+    name:String,
+    format:SaveFormat,
+    input:Option<ImageInput>,
+    job:Option<crysirror_core::image_processing::ImageJob>,
+}
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+enum SaveFormat{Bmp(crysirror_image::bmp_encode::BmpDepth),Png}
+/// The save handlers' mode acceptance (GraphicsLoaderIntf.cpp TVPSaveAsBMP):
+/// "bmp" and "bmp32" are 32-bit. TLG and JPEG need encoders the engine lacks.
+fn save_format(mode:&str)->Option<SaveFormat>{
+    use crysirror_image::bmp_encode::BmpDepth as D;
+    match mode.to_ascii_lowercase().trim_start_matches('.'){
+        "bmp"|"bmp32"|"dib"=>Some(SaveFormat::Bmp(D::Bgra32)),
+        "bmp24"=>Some(SaveFormat::Bmp(D::Bgr24)),
+        "bmp8"=>Some(SaveFormat::Bmp(D::Dither252)),
+        "png"=>Some(SaveFormat::Png),
+        _=>None,
+    }
+}
+pub(crate) fn save_layer_image(rt:&mut Rt,t:Option<ObjectHandle>,args:Vec<Variant>)->Result<Variant>{
+    const M:&str="Layer.saveLayerImage";
+    if args.is_empty(){return Err(TjsError::bad_param_count());}
+    if !rt.host().can_suspend{return Err(unsupported(M,"a resumable native boundary"));}
+    if rt.host().image_save.is_some(){return Err(TjsError::runtime("native layer image save already pending"));}
+    let h=this_of(rt,t,M)?;
+    let name=crate::natives::string(&args,0,M)?;
+    let mode=if matches!(args.get(1),None|Some(Variant::Void)){"bmp".to_owned()}else{crate::natives::string(&args,1,M)?};
+    let Some(format)=save_format(&mode) else{
+        return Err(if matches!(mode.to_ascii_lowercase().trim_start_matches('.'),"jpg"|"jpeg"|"tlg"|"tlg5"|"tlg6"){
+            unsupported(&format!("{M} type {mode:?}"),"a shared encoder for this format")
+        }else{
+            TjsError::runtime(format!("unknown graphic format {mode:?}"))
+        });
+    };
+    let layer=rt.host().layer(h)?.clone();
+    if !layer.has_image{return Err(TjsError::runtime("not a drawable layer type"));}
+    if crate::storage::save_path(&name).map_err(|e|TjsError::runtime(e.to_string()))?.is_none(){
+        return Err(TjsError::runtime(format!("{M}: {name:?} is outside the save capability root")));
+    }
+    rt.host_mut().image_save=Some(LayerImageSave{layer:h.0,name,format,input:layer.image_source,job:None});
+    rt.request_suspend();Ok(Variant::Void)
+}
+fn poll_save(rt:&mut Rt,host:&mut dyn HostServices,client:ClientId)->anyhow::Result<bool>{
+    let Some(mut save)=rt.host_mut().image_save.take() else{return Ok(true)};
+    if save.job.is_none(){
+        save.job=Some(match save.input.take(){
+            Some(input)=>rt.host().images.as_ref().ok_or_else(||anyhow::anyhow!("image service absent"))?.begin_process(input,std::sync::Arc::from(&b"[]"[..]))?,
+            None=>{
+                let layer=rt.host().layer(ObjectHandle(save.layer)).map_err(|e|anyhow::anyhow!("{e}"))?;
+                host.begin_canvas_image(client,layer.slot)?
+            }
+        });
+    }
+    match save.job.as_mut().unwrap().poll()?{
+        ImageProcessState::Pending=>{rt.host_mut().image_save=Some(save);Ok(false)}
+        ImageProcessState::Failed(e)=>anyhow::bail!("Layer.saveLayerImage capture failed: {e}"),
+        ImageProcessState::Ready(image)=>{
+            let [width,height]=image.size();
+            let bytes=match save.format{
+                SaveFormat::Bmp(depth)=>crysirror_image::bmp_encode::encode_bmp(width,height,&image.rgba(),depth)?,
+                SaveFormat::Png=>crysirror_image::encode_png(&crysirror_image::ImageSurface{width,height,rgba:image.rgba().to_vec()})?,
+            };
+            let job=rt.host().storage().map_err(|e|anyhow::anyhow!("{e}"))?.begin_write(&save.name,bytes.into()).map_err(|e|anyhow::anyhow!("{e}"))?;
+            rt.host_mut().writes.push_back(job);
+            Ok(true)
+        }
+    }
+}
+#[cfg(test)]
+mod save_format_tests{
+    use super::*;
+    use crysirror_image::bmp_encode::BmpDepth as D;
+    #[test]
+    fn modes_follow_the_original_handlers(){
+        assert_eq!(save_format("bmp"),Some(SaveFormat::Bmp(D::Bgra32)));
+        assert_eq!(save_format("bmp24"),Some(SaveFormat::Bmp(D::Bgr24)));
+        assert_eq!(save_format("bmp8"),Some(SaveFormat::Bmp(D::Dither252)));
+        assert_eq!(save_format(".PNG"),Some(SaveFormat::Png));
+        assert_eq!(save_format("gif"),None);
     }
 }
 
@@ -172,7 +329,7 @@ pub fn clip_alpha(rt:&mut Rt,t:Option<ObjectHandle>,args:Vec<Variant>)->Result<V
 /// Prepare native mask coverage before consuming an input receipt. The same
 /// shared ImageJob evaluates immutable copy/fill/resize graphs; no Canvas paint
 /// is retargeted, and no pointer callback or TJS continuation is replayed.
-pub(crate) fn prepare_hit_images(rt: &mut Rt, frame: crysirror_core::service::InputFrame) -> anyhow::Result<bool> {
+pub(crate) fn prepare_hit_images(rt: &mut Rt, host: &mut dyn HostServices, client: ClientId, frame: crysirror_core::service::InputFrame) -> anyhow::Result<bool> {
     anyhow::ensure!(rt.host().image_job.is_none(), "hit preparation overlaps native image job");
     let candidates = rt.host().hits(frame.pointer_x.into(), frame.pointer_y.into());
     for (id, x, y) in candidates {
@@ -186,7 +343,14 @@ pub(crate) fn prepare_hit_images(rt: &mut Rt, frame: crysirror_core::service::In
             || px<0 || py<0 || px>=layer.image_width || py>=layer.image_height {
             continue;
         }
-        let Some(source)=layer.image_source.as_ref() else { continue; };
+        // A layer composed by retained canvas drawing has no CPU source: its
+        // coverage comes from the same shared capture Layer.saveLayerImage uses.
+        let Some(source)=layer.image_source.as_ref() else {
+            let slot=layer.slot;
+            let job=host.begin_canvas_image(client,slot)?;
+            rt.host_mut().image_job=Some((id,job,[false;2],false));
+            return Ok(false);
+        };
         if matches!(source,ImageInput::Resource(_)) { continue; }
         let source=source.clone();
         let job=rt.host().images.as_ref().ok_or_else(||anyhow::anyhow!("image service absent"))?

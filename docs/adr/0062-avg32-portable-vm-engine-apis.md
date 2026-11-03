@@ -1,6 +1,12 @@
 # 0062: Original AVG32 VM library with engine service commands
 
-Date: 2026-10-26. Status: implemented, bounded `plain-adv-v1` profile.
+Date: 2026-10-26. Status: runtime integration superseded by
+[ADR 0095](0095-avg32-installed-games-shared-raster.md).
+
+The portable Git-dependency adapter described below is historical and is no
+longer the integration boundary. The current AVG32 VM is a first-class workspace
+crate. The shared associated-RGB mechanism and original investigation retain
+their recorded scope; do not restore the portable-only runtime or its dependency.
 
 ## Decision
 

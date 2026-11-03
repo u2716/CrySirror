@@ -39,6 +39,13 @@ pub struct FontLoadSpec {
     /// Selected zero-based face index in a TTC/OTC source.
     pub face_index: u32,
 }
+/// Actual outline face style prepared from its OS/2 metadata. Missing metadata
+/// and precomputed-only faces return None, never a guessed regular weight.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FontFaceStyle {
+    pub weight: u16,
+    pub italic: bool,
+}
 /// Published font metadata. The canonical alias pins immutable content.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FontInfo {
@@ -71,11 +78,74 @@ pub enum FontLoadState {
     /// Terminal worker or publication error. Release the ticket to reclaim it.
     Failed(String),
 }
+/// One glyph outline request, independent of shaping or native text syntax.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GlyphBoundsRequest {
+    pub character: char,
+    pub size: f32,
+    pub baseline: [f32; 2],
+}
+#[derive(Clone, Debug)]
+pub struct GlyphBoundsSpec {
+    pub font: String,
+    pub glyphs: Vec<GlyphBoundsRequest>,
+}
+/// Bounds of the same coverage cell used by the engine glyph rasterizer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GlyphBounds {
+    pub glyph_id: u32,
+    pub origin: [i32; 2],
+    pub size: [u32; 2],
+}
+/// Immutable scoped worker result. Keeping this resource retains accounting
+/// and the admitted font snapshot; it is not a project or device pointer.
+pub trait GlyphBoundsResource: Send + Sync {
+    fn client(&self) -> ClientId;
+    fn font(&self) -> &str;
+    fn digest(&self) -> &str;
+    fn glyphs(&self) -> &[GlyphBounds];
+}
+#[derive(Clone)]
+pub enum GlyphBoundsProgress {
+    Pending,
+    Ready(Arc<dyn GlyphBoundsResource>),
+    Failed(crate::Error),
+    Cancelled,
+}
+/// Owner-polled completion; cancel/drop never joins a font worker.
+pub trait GlyphBoundsQuery: Send {
+    fn poll(&mut self) -> Result<GlyphBoundsProgress>;
+    fn cancel(&mut self) -> Result<()>;
+}
 /// Bounded font registration capability. Handles cannot cross clients.
 pub trait FontLibrary: Send + Sync {
     fn begin(&self, spec: FontLoadSpec) -> Result<FontJob>;
     fn status(&self, job: FontJob) -> Result<FontLoadState>;
     fn resolve(&self, name: &str) -> Result<Option<FontInfo>>;
+    /// Resolve a client-local binding, canonical alias or installed family to
+    /// the exact engine alias used for retained drawing. Static faces have no
+    /// dynamic lease and are therefore not fabricated as FontInfo handles.
+    fn resolve_alias(&self, _name: &str) -> Result<Option<String>> {
+        Err(crate::Error::Unsupported("scoped font alias resolution"))
+    }
+    /// Bounded immutable character-to-glyph lookup in the authorized face.
+    fn glyph_id(&self, _alias: &str, _character: char) -> Result<u32> {
+        Err(crate::Error::Unsupported("scoped glyph identifier"))
+    }
+    /// Cached actual style; this performs no font parsing or I/O on the owner.
+    fn face_style(&self, _alias: &str) -> Result<Option<FontFaceStyle>> {
+        Err(crate::Error::Unsupported("scoped font style metadata"))
+    }
+    /// Synchronous immutable metrics using this client's authorized font view.
+    fn metrics(&self, _alias: &str, _size: f32, _character: char) -> Result<super::FontMetrics> {
+        Err(crate::Error::Unsupported("scoped font metrics"))
+    }
+    fn begin_glyph_bounds(
+        &self,
+        _spec: GlyphBoundsSpec,
+    ) -> Result<alloc::boxed::Box<dyn GlyphBoundsQuery>> {
+        Err(crate::Error::Unsupported("scoped glyph bounds worker"))
+    }
     fn is_loaded(&self, alias: &str) -> Result<bool>;
     fn release_job(&self, job: FontJob) -> Result<()>;
     fn release_font(&self, handle: FontHandle) -> Result<()>;

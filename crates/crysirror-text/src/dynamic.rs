@@ -5,7 +5,7 @@ use anyhow::{ensure, Context, Result};
 use crysirror_core::state::ClientId;
 use std::{
     collections::BTreeMap,
-    sync::{Arc, RwLock},
+    sync::{Arc, RwLock, Weak},
 };
 /// Maximum encoded size of one font face source.
 pub const MAX_FONT_BYTES: usize = 32 * 1024 * 1024;
@@ -22,6 +22,7 @@ pub struct PreparedFontFace {
     pub digest: String,
     /// Unicode family/full/PostScript names from the validated face.
     pub families: Vec<String>,
+    pub(crate) style:Option<crysirror_core::service::FontFaceStyle>,
     retention: Option<Arc<dyn Send + Sync>>,
 }
 impl PreparedFontFace {
@@ -33,26 +34,8 @@ impl PreparedFontFace {
         );
         let face = rustybuzz::Face::from_slice(&bytes, face_index)
             .context("invalid shaping font face/index")?;
-        let mut families = Vec::new();
-        for name in face.names() {
-            if matches!(name.name_id, 1 | 4 | 6 | 16) {
-                if let Some(value) = name.to_string() {
-                    if !value.is_empty()
-                        && value.len() <= 256
-                        && !value.chars().any(char::is_control)
-                        && !families.contains(&value)
-                    {
-                        ensure!(
-                            families.len() < 128
-                                && families.iter().map(String::len).sum::<usize>() + value.len()
-                                    <= 16384,
-                            "font family metadata limit"
-                        );
-                        families.push(value);
-                    }
-                }
-            }
-        }
+        let families = family_names(&face)?;
+        let style=face_style(&face);
         let font: FontArc = ab_glyph::FontVec::try_from_vec_and_index(bytes.to_vec(), face_index)
             .map_err(|e| anyhow::anyhow!("font outline: {e}"))?
             .into();
@@ -72,6 +55,7 @@ impl PreparedFontFace {
             collection_faces: rustybuzz::ttf_parser::fonts_in_collection(&bytes).unwrap_or(1),
             digest,
             families,
+            style,
             retention: None,
         })
     }
@@ -95,6 +79,7 @@ impl PreparedFontFace {
             collection_faces: 1,
             digest: hash.finalize().to_hex().to_string(),
             families: Vec::new(),
+            style:None,
             retention: None,
         })
     }
@@ -114,9 +99,73 @@ impl PreparedFontFace {
         self.bytes.len()
     }
 }
+pub(crate) fn face_style(face:&rustybuzz::Face<'_>)->Option<crysirror_core::service::FontFaceStyle> {
+    face.tables().os2.as_ref()?;
+    Some(crysirror_core::service::FontFaceStyle{weight:face.weight().to_number(),italic:face.is_italic()})
+}
+pub(crate) fn family_names(face:&rustybuzz::Face<'_>)->Result<Vec<String>> {
+        let mut families = Vec::new();
+        for name in face.names() {
+            if matches!(name.name_id, 1 | 4 | 6 | 16) {
+                if let Some(value) = name.to_string() {
+                    if !value.is_empty()
+                        && value.len() <= 256
+                        && !value.chars().any(char::is_control)
+                        && !families.contains(&value)
+                    {
+                        ensure!(
+                            families.len() < 128
+                                && families.iter().map(String::len).sum::<usize>() + value.len()
+                                    <= 16384,
+                            "font family metadata limit"
+                        );
+                        families.push(value);
+                    }
+                }
+            }
+        }
+    Ok(families)
+}
+struct Registration { owner:ClientId, face:Arc<PreparedFontFace> }
+#[derive(Default)]
+struct CatalogState {
+    active:BTreeMap<String,Arc<Registration>>,
+    // Does not own the face. Only actual admitted snapshots/resources keep a
+    // released canonical render identity valid. Friendly aliases/handles are
+    // removed independently by the resource owner.
+    retired:BTreeMap<String,Weak<Registration>>,
+}
+impl CatalogState {
+    fn prune(&mut self) {self.retired.retain(|_,entry|entry.strong_count()!=0);}
+    fn frozen(&self)->Self {
+        let mut active=self.active.clone();
+        for (alias,entry) in &self.retired {
+            if let Some(entry)=entry.upgrade() {active.insert(alias.clone(),entry);}
+        }
+        Self{active,retired:BTreeMap::new()}
+    }
+}
 #[derive(Clone, Default)]
-pub(crate) struct Catalog(Arc<RwLock<BTreeMap<String, (ClientId, Arc<PreparedFontFace>)>>>);
+pub(crate) struct Catalog(Arc<RwLock<CatalogState>>);
 impl TextSystem {
+    /// Freeze only one authorized canonical font. A metadata job must not keep
+    /// unrelated client faces alive merely because they share the catalog.
+    pub fn frozen_font(&self,alias:&str)->Result<Self> {
+        self.font_digest(alias)?;
+        let mut frozen=self.clone();
+        if let Some(face)=self.fonts.get(alias) {
+            frozen.fonts=Arc::new(BTreeMap::from([(alias.to_owned(),face.clone())]));
+            frozen.font_sources=Arc::new(self.font_sources.get(alias).map(|v|BTreeMap::from([(alias.to_owned(),v.clone())])).unwrap_or_default());
+            frozen.font_families=Arc::new(self.font_families.get(alias).map(|v|BTreeMap::from([(alias.to_owned(),v.clone())])).unwrap_or_default());
+            frozen.font_styles=Arc::new(self.font_styles.get(alias).map(|v|BTreeMap::from([(alias.to_owned(),*v)])).unwrap_or_default());
+            frozen.dynamic=Catalog::default();
+        }else{
+            let entry=self.dynamic_registration(alias)?;
+            frozen.fonts=Default::default();frozen.font_sources=Default::default();frozen.font_families=Default::default();frozen.font_styles=Default::default();
+            frozen.dynamic=Catalog(Arc::new(RwLock::new(CatalogState{active:BTreeMap::from([(alias.to_owned(),entry)]),retired:BTreeMap::new()})));
+        }
+        Ok(frozen)
+    }
     /// Freeze catalog membership while sharing immutable prepared font faces.
     /// Later publication/release cannot change an admitted render job's fonts.
     pub fn frozen(&self) -> Result<Self> {
@@ -125,7 +174,7 @@ impl TextSystem {
             .0
             .read()
             .map_err(|_| anyhow::anyhow!("font catalog poisoned"))?
-            .clone();
+            .frozen();
         let mut frozen = self.clone();
         frozen.dynamic = Catalog(Arc::new(RwLock::new(entries)));
         Ok(frozen)
@@ -140,20 +189,17 @@ impl TextSystem {
         view.scope = Some(owner);
         view
     }
-    pub(crate) fn dynamic_face(&self, alias: &str) -> Result<Arc<PreparedFontFace>> {
-        let map = self
-            .dynamic
-            .0
-            .read()
-            .map_err(|_| anyhow::anyhow!("font catalog poisoned"))?;
-        let (owner, face) = map
-            .get(alias)
-            .with_context(|| format!("font alias '{alias}' is not loaded"))?;
-        ensure!(
-            self.scope == Some(*owner),
-            "font alias belongs to another client"
-        );
-        Ok(face.clone())
+    fn dynamic_registration(&self,alias:&str)->Result<Arc<Registration>> {
+        let map=self.dynamic.0.read().map_err(|_|anyhow::anyhow!("font catalog poisoned"))?;
+        let entry=match map.active.get(alias) {
+            Some(entry)=>entry.clone(),
+            None=>map.retired.get(alias).and_then(Weak::upgrade).with_context(||format!("font alias '{alias}' is not loaded or retained"))?,
+        };
+        ensure!(self.scope==Some(entry.owner),"font alias belongs to another client");
+        Ok(entry)
+    }
+    pub(crate) fn dynamic_face(&self,alias:&str)->Result<Arc<PreparedFontFace>> {
+        Ok(self.dynamic_registration(alias)?.face.clone())
     }
     /// Publish an immutable client-owned face. Repeated identical publication is idempotent.
     pub fn publish_font(
@@ -171,18 +217,28 @@ impl TextSystem {
             .0
             .write()
             .map_err(|_| anyhow::anyhow!("font catalog poisoned"))?;
-        if let Some((old_owner, old)) = map.get(alias) {
+        if let Some(old) = map.active.get(alias) {
             ensure!(
-                *old_owner == owner && old.digest == face.digest,
+                old.owner == owner && old.face.digest == face.digest,
                 "font alias content collision"
             );
             return Ok(());
         }
-        ensure!(map.len() < 128, "dynamic font catalog limit");
-        map.insert(alias.into(), (owner, face));
+        map.prune();
+        if let Some(old)=map.retired.get(alias).and_then(Weak::upgrade) {
+                ensure!(old.owner==owner && old.face.digest==face.digest,"retained font alias content collision");
+                map.retired.remove(alias);
+                map.active.insert(alias.into(),old);
+                return Ok(());
+        }
+        ensure!(map.active.len()+map.retired.len() < 128, "dynamic font catalog limit");
+        map.active.insert(alias.into(),Arc::new(Registration{owner,face}));
         Ok(())
     }
-    /// Release the catalog reference. Existing worker clones remain valid until dropped.
+    /// Release the live catalog reference. A canonical rendering lookup can
+    /// still upgrade the face while an admitted immutable snapshot/resource
+    /// holds it. Last-snapshot release invalidates that lookup; weak entries
+    /// retain no font bytes and are collected before the next publication.
     pub fn unpublish_font(&self, owner: ClientId, alias: &str) -> Result<()> {
         let mut map = self
             .dynamic
@@ -190,10 +246,11 @@ impl TextSystem {
             .write()
             .map_err(|_| anyhow::anyhow!("font catalog poisoned"))?;
         ensure!(
-            map.get(alias).is_some_and(|(o, _)| *o == owner),
+            map.active.get(alias).is_some_and(|entry|entry.owner == owner),
             "unknown/foreign font alias"
         );
-        map.remove(alias);
+        let entry=map.active.remove(alias).expect("validated active font");
+        map.retired.insert(alias.to_owned(),Arc::downgrade(&entry));
         Ok(())
     }
 }

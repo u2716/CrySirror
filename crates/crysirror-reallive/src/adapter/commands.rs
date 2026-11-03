@@ -14,7 +14,12 @@ impl RealLiveVm {
         }
         match (c.op.modtype, c.op.module) {
             (1 | 2,71 | 72) => return self.object_creation(m,h,c),
-            (1, 4) => self.system(m, h, input, c)?,
+            (1, 4) => {
+                if let Some(next) = self.system_extended(m, h, c)? {
+                    return Ok(next);
+                }
+                self.system(m, h, input, c)?
+            }
             (1, 5) if c.op.opcode == 114 && c.op.overload == 0 => {
                 // Exact original DUMMYCHECK_DISC(string,int,string) ABI.
                 // Native-host policy disables this Windows disc step. The
@@ -30,10 +35,12 @@ impl RealLiveVm {
                 self.optical_disc_checks += 1;
                 m.store = 1;
             }
-            (0, 4) => match c.op.opcode {
-                303 => m.yield_frame = true,
-                _ => bail!("unsupported native event-loop operation"),
-            },
+            (0, 4) => return self.event_loop_extended(m, h, c),
+            (1, 41) => self.flash(m, h, c)?,
+            (1, 12 | 13) => self.shake(m, h, c)?,
+            (1, 14) => self.g00_buffers(m, c)?,
+            (1, 255) => self.debug(m, c)?,
+            (1, 5) if c.op.opcode != 114 => self.os(m, h, c)?,
             (1, 30) => match c.op.opcode {
                 0 => self.draw_stack.clear(),
                 3 => m.store = self.draw_stack.len() as i32,
@@ -591,7 +598,11 @@ impl RealLiveVm {
                     });
                 }
             }
-            _ => bail!("unsupported native graphics operation {}", c.op),
+            _ => {
+                if !self.graphics_extended(m, h, c, op, rec)? {
+                    bail!("unsupported native graphics operation {}", c.op)
+                }
+            }
         }
         self.draw_stack.push(c.op.to_string());
         if self.draw_stack.len() > 256 {
@@ -658,6 +669,10 @@ impl RealLiveVm {
             23 => 1,
             _ => unreachable!(),
         };
+        if self.sound_extended(m, h, c)? {
+            self.api_calls += 1;
+            return Ok(());
+        }
         match (module, op) {
             (20, 0..=2) | (21, 0..=2) => {
                 let mut name = m.str_param(c, 0)?;
@@ -789,77 +804,20 @@ impl RealLiveVm {
                 let muted = settings.koe_mode == 2
                     || !settings.enabled[crate::vm::settings::channel::KOE]
                     || (honour && character.is_some_and(|ch| settings.use_koe.get(&ch) == Some(&false)));
+                // Original `koe_play`: remembered for replay and the backlog.
+                m.sys.sound.last_koe = (id, character.unwrap_or(0));
                 h.submit_audio(self.client, AudioRequest::Stop { channel, fade_ms: 0. }).map_err(err)?;
-                if muted {
+                if muted || m.sys.should_fast_forward() {
                     return Ok(());
                 }
-                let (file, sample) = (id / 100_000, id % 100_000);
-                let archive = self.resources.as_ref().context("RealLive resources")?.borrow_mut().find(&m.gameexe, "koe", &format!("z{file:04}")).ok();
-                let asset = match archive {
-                    // A voice archive (KOEPAC/OVK/NWK) is an engine container:
-                    // the project mounts it (`real-live/koepac` etc.) and its
-                    // samples are ordinary audio assets.
-                    Some(archive) => {
-                        let storage = self.resources.as_ref().context("RealLive resources")?.borrow().storage.clone();
-                        let point = storage.container_mount(&archive).map_err(err)?.with_context(|| {
-                            format!("reallive: voice archive {archive} is not mounted (mount it with format real-live/koepac, ovk or nwk)")
-                        })?;
-                        let names = storage.list(Mount::Asset, &point).map_err(err)?;
-                        let stem = format!("sample{sample:05}");
-                        let name = names
-                            .iter()
-                            .find(|n| n.split('.').next() == Some(stem.as_str()))
-                            .with_context(|| format!("reallive: voice {id} is not in {archive}"))?;
-                        format!("{point}/{name}")
-                    }
-                    None => {
-                        let loose = format!("z{file:04}{sample:05}");
-                        self.resource(m, "koe", &loose)
-                            .or_else(|_| self.resource(m, "koe", &format!("{file:04}/{loose}")))
-                            .with_context(|| format!("reallive: voice {id} not found"))?
-                    }
-                };
-                let volume = settings_volume(&m.sys.settings, crate::vm::settings::channel::KOE);
-                let ticket = h
-                    .begin_audio(
-                        self.client,
-                        AudioRequest::PlayAsset {
-                            channel,
-                            source: AudioAsset { path: VfsPath::new(Mount::Asset, &asset).map_err(err)?, frame_limit: None },
-                            intro: None,
-                            parameters: AudioParameters { gain: volume, bus: PcmBus::Voice, ..Default::default() },
-                        },
-                    )
-                    .map_err(err)?;
-                self.pending_audio = Some((ticket, matches!(op, 1 | 7 | 9 | 10).then_some(channel)));
-                self.poll_audio(h)?;
+                self.play_koe(m, h, id, matches!(op, 1 | 7 | 9 | 10))?;
                 return Ok(());
             }
             // se(number): `#SE.number` = file, played once over other SEs
             // (upstream `Sound::se_play`; none while fast-forwarding).
             (22, 0) => {
                 let number = m.int_param(c, 0)?;
-                let file = m.gameexe.get(&format!("SE.{number:03}")).and_then(|e| e.str(0).map(str::to_owned)).unwrap_or_default();
-                if file.is_empty() || m.sys.should_fast_forward() {
-                    return Ok(());
-                }
-                let asset = self.resource(m, "wav", &file)?;
-                let slot = 32 + (self.se_serial % 16);
-                self.se_serial = self.se_serial.wrapping_add(1);
-                let gain = settings_volume(&m.sys.settings, crate::vm::settings::channel::SE);
-                let ticket = h
-                    .begin_audio(
-                        self.client,
-                        AudioRequest::PlayAsset {
-                            channel: slot,
-                            source: AudioAsset { path: VfsPath::new(Mount::Asset, &asset).map_err(err)?, frame_limit: None },
-                            intro: None,
-                            parameters: AudioParameters { gain, bus: PcmBus::Sfx, ..Default::default() },
-                        },
-                    )
-                    .map_err(err)?;
-                self.pending_audio = Some((ticket, None));
-                self.poll_audio(h)?;
+                self.play_numbered_se(m, h, number)?;
                 return Ok(());
             }
             (23, 3 | 6) => self.wait = Some(Wait::Audio { channel }),
@@ -892,6 +850,53 @@ impl RealLiveVm {
             _ => bail!("unsupported native audio operation {}", c.op),
         }
         self.api_calls += 1;
+        Ok(())
+    }
+    /// Starts voice `id` (sample id % 100000 of archive id / 100000) on the
+    /// voice channel; `wait` holds the script until it ends.
+    pub(super) fn play_koe(&mut self, m: &mut Machine, h: &mut dyn HostServices, id: i32, wait: bool) -> Result<()> {
+        let channel = 1;
+        let (file, sample) = (id / 100_000, id % 100_000);
+        let archive = self.resources.as_ref().context("RealLive resources")?.borrow_mut().find(&m.gameexe, "koe", &format!("z{file:04}")).ok();
+        let asset = match archive {
+            // A voice archive (KOEPAC/OVK/NWK) is an engine container:
+            // the project mounts it (`real-live/koepac` etc.) and its
+            // samples are ordinary audio assets.
+            Some(archive) => {
+                let storage = self.resources.as_ref().context("RealLive resources")?.borrow().storage.clone();
+                let point = storage.container_mount(&archive).map_err(err)?.with_context(|| {
+                    format!("reallive: voice archive {archive} is not mounted (mount it with format real-live/koepac, ovk or nwk)")
+                })?;
+                let names = storage.list(Mount::Asset, &point).map_err(err)?;
+                let stem = format!("sample{sample:05}");
+                let name = names
+                    .iter()
+                    .find(|n| n.split('.').next() == Some(stem.as_str()))
+                    .with_context(|| format!("reallive: voice {id} is not in {archive}"))?;
+                format!("{point}/{name}")
+            }
+            None => {
+                let loose = format!("z{file:04}{sample:05}");
+                self.resource(m, "koe", &loose)
+                    .or_else(|_| self.resource(m, "koe", &format!("{file:04}/{loose}")))
+                    .with_context(|| format!("reallive: voice {id} not found"))?
+            }
+        };
+        let volume = settings_volume(&m.sys.settings, crate::vm::settings::channel::KOE)
+            * m.sys.sound.koe_volume.value(m.sys.now()) as f32 / 255.;
+        let ticket = h
+            .begin_audio(
+                self.client,
+                AudioRequest::PlayAsset {
+                    channel,
+                    source: AudioAsset { path: VfsPath::new(Mount::Asset, &asset).map_err(err)?, frame_limit: None },
+                    intro: None,
+                    parameters: AudioParameters { gain: volume, bus: PcmBus::Voice, ..Default::default() },
+                },
+            )
+            .map_err(err)?;
+        self.pending_audio = Some((ticket, wait.then_some(channel)));
+        self.poll_audio(h)?;
         Ok(())
     }
     fn message(&mut self, m: &mut Machine, h: &mut dyn HostServices, c: &Command) -> Result<()> {
@@ -952,11 +957,15 @@ impl RealLiveVm {
                     pen[1] += line;
                 }
             }
-            _ => bail!("unsupported native message operation {}", c.op),
+            _ => {
+                if !self.message_extended(m, h, c)? {
+                    bail!("unsupported native message operation {}", c.op)
+                }
+            }
         }
         Ok(())
     }
-    fn hide_text(&mut self, h: &mut dyn HostServices) -> Result<()> {
+    pub(super) fn hide_text(&mut self, h: &mut dyn HostServices) -> Result<()> {
         let mut ops = vec![];
         for w in 0..64 {
             for i in 0..3 {
@@ -988,16 +997,43 @@ impl RealLiveVm {
         Ok(())
     }
     /// Close one window: its text and its frame (upstream `close_window`).
+    /// `#SE.number`: played once over other SEs, none while fast-forwarding
+    /// (upstream `Sound::se_play`).
+    pub(super) fn play_numbered_se(&mut self, m: &mut Machine, h: &mut dyn HostServices, number: i32) -> Result<()> {
+        let file = m.gameexe.get(&format!("SE.{number:03}")).and_then(|e| e.str(0).map(str::to_owned)).unwrap_or_default();
+                if file.is_empty() || m.sys.should_fast_forward() {
+                    return Ok(());
+                }
+                let asset = self.resource(m, "wav", &file)?;
+                let slot = 32 + (self.se_serial % 16);
+                self.se_serial = self.se_serial.wrapping_add(1);
+                let gain = settings_volume(&m.sys.settings, crate::vm::settings::channel::SE);
+                let ticket = h
+                    .begin_audio(
+                        self.client,
+                        AudioRequest::PlayAsset {
+                            channel: slot,
+                            source: AudioAsset { path: VfsPath::new(Mount::Asset, &asset).map_err(err)?, frame_limit: None },
+                            intro: None,
+                            parameters: AudioParameters { gain, bus: PcmBus::Sfx, ..Default::default() },
+                        },
+                    )
+                    .map_err(err)?;
+                self.pending_audio = Some((ticket, None));
+                self.poll_audio(h)?;
+        Ok(())
+    }
     pub(super) fn close_window(&mut self, h: &mut dyn HostServices, window: u32) -> Result<()> {
         self.clear_window(h, window)?;
         let frame = 20000 + window * 8..20000 + window * 8 + 8;
+        let nine = selection::NINE_SLICE_BASE + window * 16..selection::NINE_SLICE_BASE + window * 16 + 16;
         let ops: Vec<Value> = self
             .waku_ids
             .iter()
-            .filter(|id| frame.contains(id))
+            .filter(|id| frame.contains(id) || nine.contains(id))
             .map(|id| json!({"op":"remove","id":id}))
             .collect();
-        self.waku_ids.retain(|id| !frame.contains(id));
+        self.waku_ids.retain(|id| !frame.contains(id) && !nine.contains(id));
         if !ops.is_empty() {
             self.submit(h, json!({ "layers": ops }))?;
         }
@@ -1195,7 +1231,13 @@ impl RealLiveVm {
             ensure!(!(page_was_empty && at == 0), "RealLive text window too small for one line");
             self.page_rest = Some(text[at..].to_owned());
         }
-        let mut backing = self.waku_layers(m, &prefix, [bx, y])?;
+        let window_geometry = self.frame_geometry(m, self.window, None)?;
+        let mut backing = if window_geometry.nine_slice {
+            let window = self.window;
+            self.nine_slice_layers(m, window, &window_geometry)
+        } else {
+            self.waku_layers(m, &prefix, [bx, y])?
+        };
         if m.gameexe.int(&(prefix.clone() + "WAKU_SETNO")) == Some(-1) {
             let attr = m.gameexe.ints(&(prefix.clone() + "ATTR"));
             if attr.len() >= 4 {
@@ -1207,7 +1249,9 @@ impl RealLiveVm {
         } else {
             m.gameexe.int("INIT_MESSAGE_SPEED").unwrap_or(30).max(0)
         };
-        let paint = json!({"kind":"glyph_run","font":self.config.font_alias,"size":size,"color":color,"glyphs":glyphs,"reveal":{"unit":"unicode_scalar","interval_ms":speed,"initial_visible":old+1}});
+        // An empty continuation (only line breaks) adds no glyph to reveal.
+        let total = glyphs.len();
+        let paint = json!({"kind":"glyph_run","font":self.config.font_alias,"size":size,"color":color,"glyphs":glyphs,"reveal":{"unit":"unicode_scalar","interval_ms":speed,"initial_visible":(old+1).min(total)}});
         backing.push(json!({"op":"put","layer":{"id":id,"parent":SCENE_ROOT,"rect":[0,0,self.width,self.height],"order":[1000,1],"paint":paint}}));
         if m.gameexe.int(&(prefix + "MOJI_SHADOW")).unwrap_or(1) != 0 {
             let mut shadow = backing.last().unwrap()["layer"].clone();
@@ -1221,96 +1265,6 @@ impl RealLiveVm {
         m.message_page_empty = false;
         self.wait = Some(Wait::Reveal { layer: id });
         Ok(())
-    }
-    fn selection(
-        &mut self,
-        m: &mut Machine,
-        h: &mut dyn HostServices,
-        c: &Command,
-    ) -> Result<Next> {
-        let CommandKind::Select(select) = &c.kind else {
-            bail!("selection without native choice data")
-        };
-        let window = select
-            .window
-            .as_ref()
-            .map(|v| m.eval_int(v))
-            .transpose()?
-            .unwrap_or(self.window as i32);
-        let size = m
-            .gameexe
-            .int(&format!("WINDOW.{window:03}.MOJI_SIZE"))
-            .unwrap_or(24)
-            .clamp(1, 512);
-        // Choices are lines of a text window (upstream `lay_out_in_window`):
-        // below the text already shown, or on a cleared page if they do not
-        // fit; `SELCOM_USE` adds the `SELCOM_MOJIPOS` indent.
-        let g = self.window_geometry(m, window as u32);
-        let visible = select.options.len() as i32;
-        let pen = self.pen.get(&(window as u32)).copied().unwrap_or([0, 0]);
-        let mut first_row = if pen == [0, 0] { 0 } else { pen[1] / g.line.max(1) + i32::from(pen[0] > 0) };
-        let prefix = format!("WINDOW.{window:03}.");
-        if first_row + visible > g.rows.max(1) {
-            self.clear_window(h, window as u32)?;
-            // More choices than rows: grow upward so all stay on screen.
-            first_row = (g.rows.max(1) - visible).min(0);
-        }
-        let frame = self.waku_layers(m, &prefix, [g.window_x, g.window_y])?;
-        if !frame.is_empty() {
-            self.submit(h, json!({ "layers": frame }))?;
-        }
-        let indent = if m.gameexe.int(&(prefix.clone() + "SELCOM_USE")).unwrap_or(0) != 0 {
-            m.gameexe.int(&(prefix + "SELCOM_MOJIPOS")).unwrap_or(0).max(0)
-        } else {
-            0
-        };
-        let mut indices = Vec::new();
-        let mut ids = Vec::new();
-        let mut enabled_choices = Vec::new();
-        let mut ops = Vec::new();
-        for (index, option) in select.options.iter().enumerate() {
-            let mut enabled = true;
-            let mut hidden = false;
-            for condition in &option.conditions {
-                let applies = condition
-                    .condition
-                    .as_ref()
-                    .map(|v| m.eval_int(v))
-                    .transpose()?
-                    .unwrap_or(1)
-                    != 0;
-                if applies {
-                    match condition.effect {
-                        b'0' | b'4' => {}
-                        b'1' | b'3' => enabled = false,
-                        b'2' => hidden = true,
-                        _ => bail!("unknown native choice condition"),
-                    }
-                }
-            }
-            if hidden {
-                continue;
-            }
-            let text = m.eval_str(&option.text)?;
-            let id = 600000 + indices.len() as u32;
-            let row = indices.len() as i32;
-            // `SELCOM_USE=1`: the choices are lines of the text window
-            // (upstream `select::draw_window_items`); otherwise a plain list.
-            let rect = [g.x + indent, g.y + g.luby + (first_row + row) * g.line - g.rep_y / 2, g.width - indent, g.line];
-            indices.push(index);
-            ids.push(id);
-            enabled_choices.push(enabled);
-            let color = [0, 0, 0, 0];
-            ops.push(json!({"op":"put","widget":{"id":id,"kind":"button","rect":rect,"text":text,"font":self.config.font_alias,"text_size":size,"enabled":enabled,"color":color,"z":1000}}));
-        }
-        ensure!(!indices.is_empty(), "empty native selection");
-        self.submit(h, json!({"ui":ops}))?;
-        self.wait = Some(Wait::Choice {
-            indices,
-            ids,
-            enabled: enabled_choices,
-        });
-        Ok(Next::Advance)
     }
 }
 fn write_pixel_targets(m: &mut Machine, targets: [IntTarget;3], rgba: [u8;4]) -> Result<()> {
@@ -1348,7 +1302,7 @@ fn rgb(m: &mut Machine, c: &Command, at: usize) -> Result<[u8; 4]> {
         255,
     ])
 }
-fn colour(exe: &Gameexe, n: i32) -> [u8; 4] {
+pub(super) fn colour(exe: &Gameexe, n: i32) -> [u8; 4] {
     let v = exe.ints(&format!("COLOR_TABLE.{n:03}"));
     [
         v.first().copied().unwrap_or(255).clamp(0, 255) as u8,
@@ -1663,7 +1617,7 @@ impl RealLiveVm {
     }
 
     /// Text-area geometry of a window, as `text` lays glyphs out.
-    fn window_geometry(&self, m: &Machine, window: u32) -> WindowGeometry {
+    pub(super) fn window_geometry(&self, m: &Machine, window: u32) -> WindowGeometry {
         let prefix = format!("WINDOW.{window:03}.");
         let exe = &m.gameexe;
         let size = exe.int(&(prefix.clone() + "MOJI_SIZE")).unwrap_or(24).clamp(1, 512);
@@ -1688,7 +1642,7 @@ impl RealLiveVm {
     /// The window frame (`#WAKU.set.pattern`, upstream `textout::waku` and
     /// `draw_window` for non-nine-slice types): BACK tinted by the window
     /// attribute (subtractive for filter 0), NAME drawn over it.
-    fn waku_layers(&mut self, m: &Machine, prefix: &str, at: [i32; 2]) -> Result<Vec<Value>> {
+    pub(super) fn waku_layers(&mut self, m: &Machine, prefix: &str, at: [i32; 2]) -> Result<Vec<Value>> {
         let exe = &m.gameexe;
         let set = exe.int(&format!("{prefix}WAKU_SETNO")).unwrap_or(0);
         if set < 0 {
@@ -1702,7 +1656,7 @@ impl RealLiveVm {
         };
         let key = |part: &str| format!("WAKU.{set:03}.{pattern:03}.{part}");
         let kind = exe.int(&key("TYPE")).or_else(|| exe.int(&format!("WAKU.{set:03}.TYPE")));
-        ensure!(!matches!(kind, Some(3 | 4)), "RealLive nine-slice window frames (WAKU type 3/4) need an engine nine-slice paint");
+        ensure!(!matches!(kind, Some(3 | 4)), "RealLive nine-slice frame reached the plain frame path");
         let attr = if exe.int(&format!("{prefix}ATTR_MOD")).unwrap_or(0) != 0 {
             crate::vm::settings::WindowAttr::from_slice(&exe.ints(&format!("{prefix}ATTR"))).unwrap_or_default()
         } else {
@@ -1917,16 +1871,16 @@ fn settings_volume(s: &crate::vm::settings::Settings, index: usize) -> f32 {
 }
 
 /// Where a text window and its text area are on screen.
-struct WindowGeometry {
-    window_x: i32,
-    window_y: i32,
-    x: i32,
-    y: i32,
-    width: i32,
-    line: i32,
-    rows: i32,
-    rep_y: i32,
-    luby: i32,
+pub(super) struct WindowGeometry {
+    pub(super) window_x: i32,
+    pub(super) window_y: i32,
+    pub(super) x: i32,
+    pub(super) y: i32,
+    pub(super) width: i32,
+    pub(super) line: i32,
+    pub(super) rows: i32,
+    pub(super) rep_y: i32,
+    pub(super) luby: i32,
 }
 
 /// UI id of the name-entry OK button.

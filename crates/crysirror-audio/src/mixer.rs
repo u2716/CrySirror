@@ -4,6 +4,7 @@
 //! Deterministic, device-free stereo mixer. All controls are client scoped;
 //! decoded PCM and decoder handles are derived playback resources, never saves.
 mod release;
+mod retained;
 use crate::decoder::{AudioSource, Clip, SourceBufferStatus, SourceRead, StereoFrame};
 use crate::doppler::{DopplerInfo, DopplerSettings};
 use crate::envelope::Ramp;
@@ -231,12 +232,23 @@ pub struct VoiceSpec {
     pub priority: i32,
     /// Repeat source input; default false.
     pub looping: bool,
+    /// Pass count including the initial pass; None preserves unbounded loops.
+    /// Some must be positive and requires looping=true.
+    pub loop_passes: Option<u32>,
+    /// Exchange decoded channels before pan/spatial DSP; default false.
+    pub swap_channels: bool,
     /// Optional decoded-source frame range for looping.
     pub loop_points: Option<LoopPoints>,
     /// Optional point-source spatial parameters; absent retains stereo input.
     pub spatial: Option<Spatial>,
     /// Initial transport fade in output milliseconds; default 0.
     pub fade_in_ms: f32,
+    /// Hold this canonical source after EOF/own-gain stop, protected against
+    /// stealing. Retained admission needs a free slot; default false.
+    pub retain_on_finish: bool,
+    /// Inactive input/DSP keeps its cursor while own controls continue on the
+    /// output clock. Full Pause still freezes them; default true.
+    pub transport_active: bool,
     /// Publish with frozen source input; default false.
     pub paused: bool,
 }
@@ -250,10 +262,14 @@ impl Default for VoiceSpec {
             pitch_semitones: 0.,
             priority: 0,
             looping: false,
+            loop_passes: None,
+            swap_channels: false,
             loop_points: None,
             spatial: None,
             fade_in_ms: 0.,
             paused: false,
+            retain_on_finish: false,
+            transport_active: true,
         }
     }
 }
@@ -281,6 +297,10 @@ impl VoiceSpec {
         if let Some(s) = &self.spatial {
             s.validate()?
         }
+        ensure!(
+            self.loop_passes.is_none_or(|n| n > 0 && self.looping),
+            "counted loop passes require looping and a positive count"
+        );
         if let Some(p) = self.loop_points {
             ensure!(
                 self.looping && p.start < p.end,
@@ -417,14 +437,19 @@ struct Voice {
     mix_group: Option<usize>,
     handle: VoiceHandle,
     spec: VoiceSpec,
+    remaining_loop_passes: Option<u32>,
     cursor: Cursor,
     position: f64,
     seek: Option<SeekProgress>,
     seek_sequence: u64,
+    seek_receipt: Option<crate::seek_receipt::SourceSeekReceipt>,
+    seek_sender: Option<crate::seek_receipt::SeekSender>,
     sequence: u64,
     envelope: Ramp,
     gain: Ramp,
+    gain_stop_after_fade: bool,
     pan: Ramp,
+    stereo_gain: [Ramp; 2],
     stop_after_fade: bool,
     stop_remaining: u64,
     pause_after_fade: bool,
@@ -451,6 +476,7 @@ fn resume_now(v: &mut Voice, fade: u64, settings: AudioResumeSettings) {
     v.spec.paused = false;
     v.resume_after = None;
     if settings.reset_gain {
+        v.gain_stop_after_fade = false;
         v.gain = Ramp::new(if fade == 0 { v.spec.gain } else { 0. });
         v.gain.to(v.spec.gain, fade);
         v.envelope = Ramp::new(1.);
@@ -483,6 +509,53 @@ fn silent_transport_tick(v: &mut Voice) {
         v.pause_after_fade = false;
     }
 }
+fn finish_source(v: &mut Voice) {
+    v.resume_after = None;
+    v.source_ended = true;
+    v.tail_left = v
+        .binaural
+        .as_ref()
+        .map_or(0, |b| b.tail_frames())
+        .max(v.reflections.as_ref().map_or(0, |r| r.tail_frames()));
+    v.tail_elapsed = 0;
+}
+// Count all crossed ranges even when one resampled output step skips several
+// short loops. The current pass is included; the final boundary is held, never
+// interpolated back to loop-start. Existing unbounded transport stays unchanged.
+pub(crate) fn validate_loop_schedule(
+    start: u64,
+    end: Option<u64>,
+    passes: Option<u32>,
+) -> Result<()> {
+    ensure!(
+        passes.is_none_or(|n| n > 0),
+        "loop pass count must be positive"
+    );
+    ensure!(
+        end.is_none_or(|e| start < e),
+        "loop range must have start < end"
+    );
+    Ok(())
+}
+fn counted_boundary(v: &mut Voice, range: LoopPoints) {
+    let Some(remaining) = v.remaining_loop_passes else {
+        return;
+    };
+    if v.source_ended || v.position < range.end as f64 {
+        return;
+    }
+    let extent = (range.end - range.start) as f64;
+    let crossed = ((v.position - range.end as f64) / extent).floor() + 1.;
+    if crossed >= f64::from(remaining) {
+        v.remaining_loop_passes = Some(1);
+        v.position = range.end as f64;
+        finish_source(v);
+    } else {
+        let crossed = crossed as u32;
+        v.remaining_loop_passes = Some(remaining - crossed);
+        v.position = range.start as f64 + (v.position - range.end as f64) % extent;
+    }
+}
 fn constrain_tail(v: &mut Voice) {
     if v.source_ended {
         let total = v
@@ -494,6 +567,9 @@ fn constrain_tail(v: &mut Voice) {
     }
 }
 fn publish_seek(v: &mut Voice, frame: u64) {
+    if let Some(sender) = &v.seek_sender {
+        sender.complete(crate::seek_receipt::SourceSeekState::Ready { frame });
+    }
     v.cursor.count = 0;
     v.cursor.edge = None;
     v.cursor.next = frame;
@@ -557,13 +633,16 @@ struct VoiceObservation {
     info: crysirror_core::service::AudioPlaybackInfo,
     source: Option<SourceBufferStatus>,
     position: f64,
+    stereo_gain: [f32; 2],
 }
 struct PublishedMix {
+    pending_seeks: Vec<crate::seek_receipt::SourceSeekReceipt>,
     voices: BTreeMap<VoiceHandle, VoiceObservation>,
     reverbs: BTreeMap<u32, crate::reverb::ReverbSettings>,
     stats: MixStats,
 }
 pub struct Mixer {
+    instance_id: u64,
     lease: Option<u64>,
     published: Option<PublishedMix>,
     deferred_stop: std::collections::BTreeSet<u32>,
@@ -591,6 +670,7 @@ impl Mixer {
         );
         let count = config.max_voices;
         Ok(Self {
+            instance_id: crysirror_tasks::table::next_operation_id()?,
             lease: None,
             published: None,
             deferred_stop: Default::default(),
@@ -623,7 +703,16 @@ impl Mixer {
     pub(crate) fn lease_render(&mut self, id: u64) -> Result<Mixer> {
         self.idle()?;
         let mut observations = BTreeMap::new();
+        let mut pending_seeks = Vec::new();
         for v in self.voices.iter().flatten() {
+            if let Some(receipt) = &v.seek_receipt {
+                if matches!(
+                    receipt.read(self.instance_id, v.handle.client)?,
+                    crate::seek_receipt::SourceSeekState::Pending
+                ) {
+                    pending_seeks.push(receipt.clone());
+                }
+            }
             let h = v.handle;
             observations.insert(
                 h,
@@ -633,10 +722,12 @@ impl Mixer {
                     info: self.playback_info(h.client, h)?,
                     source: v.cursor.source.buffer_status(),
                     position: self.position(h.client, h)?,
+                    stereo_gain: v.stereo_gain.map(|ramp| ramp.value),
                 },
             );
         }
         let mut placeholder = Mixer::new(self.config.clone())?;
+        placeholder.instance_id = self.instance_id;
         placeholder.generations = self.generations.clone();
         placeholder.sequence = self.sequence;
         placeholder.groups = self.groups.clone();
@@ -658,6 +749,7 @@ impl Mixer {
         placeholder.stats = self.stats;
         placeholder.lease = Some(id);
         placeholder.published = Some(PublishedMix {
+            pending_seeks,
             voices: observations,
             reverbs,
             stats: self.stats(),
@@ -676,6 +768,13 @@ impl Mixer {
         }
         *self = mixer;
         true
+    }
+    pub(crate) fn reject_render_seeks(&self) {
+        if let Some(published) = &self.published {
+            for receipt in &published.pending_seeks {
+                receipt.reject_unpublished();
+            }
+        }
     }
     pub(crate) fn abort_render(&mut self, id: u64) {
         if self.lease == Some(id) {
@@ -928,11 +1027,16 @@ impl Mixer {
         {
             i
         } else {
+            if spec.retain_on_finish {
+                self.stats.rejected+=1;
+                bail!("retained audio voice requires free pool capacity");
+            }
             let (i, v) = self
                 .voices
                 .iter()
                 .enumerate()
                 .filter_map(|(i, v)| v.as_ref().map(|v| (i, v)))
+                .filter(|(_, v)| !v.spec.retain_on_finish)
                 .filter(|(_, v)| !client_full || v.handle.client == client)
                 .min_by_key(|(_, v)| (v.spec.priority, v.sequence))
                 .context("audio pool")?;
@@ -955,38 +1059,14 @@ impl Mixer {
             slot: slot as u32,
             generation,
         };
-        let mut envelope = Ramp::new(if spec.fade_in_ms > 0. { 0. } else { 1. });
-        envelope.to(1., frames(spec.fade_in_ms, self.config.sample_rate));
-        self.voices[slot] = Some(Voice {
-            doppler: Ramp::new(1.),
-            doppler_settings: None,
-            age_frames: 0,
-            transport_frames: 0,
-            mix_group,
+        self.voices[slot] = Some(new_voice(
             handle,
-            gain: Ramp::new(spec.gain),
-            pan: Ramp::new(0.5),
+            source,
             spec,
-            cursor: Cursor::new(source),
-            position: 0.,
-            seek: None,
-            seek_sequence: 0,
+            mix_group,
             sequence,
-            envelope,
-            stop_after_fade: false,
-            stop_remaining: 0,
-            pause_after_fade: false,
-            resume_after: None,
-            lowpass: [0.; 2],
-            acoustic: None,
-            binaural: None,
-            binaural_pending: false,
-            reflections: None,
-            reflection_pending: false,
-            source_ended: false,
-            tail_left: 0,
-            tail_elapsed: 0,
-        });
+            self.config.sample_rate,
+        ));
         self.generations[slot] = generation;
         self.sequence = sequence;
         Ok(handle)
@@ -1113,6 +1193,7 @@ impl Mixer {
         }
     }
     pub fn clear(&mut self) {
+        self.reject_render_seeks();
         self.lease = None;
         self.published = None;
         self.deferred_pause.clear();
@@ -1138,6 +1219,7 @@ impl Mixer {
         let voice = self.voice(client, h)?;
         voice.spec.gain = gain;
         voice.gain.to(gain, 0);
+        voice.gain_stop_after_fade = false;
         Ok(())
     }
     /// Linear gain ramp in output samples; native timed controls and the
@@ -1158,6 +1240,41 @@ impl Mixer {
         let voice = self.voice(client, h)?;
         voice.spec.gain = gain;
         voice.gain.to(gain, count);
+        voice.gain_stop_after_fade = false;
+        Ok(())
+    }
+    /// An own-amplitude ramp with optional retirement at its actual completion.
+    /// No extra transport fade to zero is introduced. Pause/decoder starvation
+    /// freeze this ramp; existing independent stop deadlines remain separate.
+    pub fn fade_gain_with_stop(
+        &mut self,
+        client: u32,
+        h: VoiceHandle,
+        gain: f32,
+        duration_ms: f32,
+        stop_after: bool,
+    ) -> Result<()> {
+        self.fade_gain(client, h, gain, duration_ms)?;
+        if stop_after {
+            let voice = self.voice(client, h)?;
+            if voice.gain.left == 0 {
+                if !retained::gain_finished(voice) {self.voices[h.slot as usize] = None;}
+            } else {
+                voice.gain_stop_after_fade = true;
+            }
+        }
+        Ok(())
+    }
+    /// Complete the current gain ramp at its stored target. Repeated calls on
+    /// an active voice are idempotent; foreign/stale handles remain errors.
+    pub fn finish_gain_fade(&mut self, client: u32, h: VoiceHandle) -> Result<()> {
+        let voice = self.voice(client, h)?;
+        let stop = voice.gain_stop_after_fade;
+        voice.gain.to(voice.gain.target, 0);
+        voice.gain_stop_after_fade = false;
+        if stop && !retained::gain_finished(voice) {
+            self.voices[h.slot as usize] = None;
+        }
         Ok(())
     }
     /// Stereo balance: 0 left, 0.5 unchanged, 1 right. The equal-power law
@@ -1174,6 +1291,44 @@ impl Mixer {
         let count = frames(duration_ms, self.config.sample_rate);
         self.voice(client, h)?.pan.to(pan, count);
         Ok(())
+    }
+    /// Independent0..4 output-channel amplitudes after spatial DSP/pan and
+    /// before Master/reverb sends. Ramps follow the same rendered voice-frame
+    /// clock as pan; paused/dependency-held voices retain their ramps. Shared
+    /// render workers own both controls; publication observations are read-only.
+    pub fn set_stereo_gain(
+        &mut self,
+        client: u32,
+        h: VoiceHandle,
+        gains: [f32; 2],
+        duration_ms: f32,
+    ) -> Result<()> {
+        crate::levels::validate_stereo_gains(gains)?;
+        duration(duration_ms)?;
+        let count = frames(duration_ms, self.config.sample_rate);
+        let voice = self.voice(client, h)?;
+        for (ramp, gain) in voice.stereo_gain.iter_mut().zip(gains) {
+            ramp.to(gain, count);
+        }
+        Ok(())
+    }
+    /// Current channel amplitudes, including an immutable observation while a
+    /// render worker owns the mixer. Foreign/stale handles fail as for spec().
+    pub fn stereo_gain(&self, client: u32, h: VoiceHandle) -> Result<[f32; 2]> {
+        if let Some(p) = &self.published {
+            ensure!(client == h.client, "foreign audio handle");
+            return p
+                .voices
+                .get(&h)
+                .map(|v| v.stereo_gain)
+                .context("audio voice ended or stale");
+        }
+        self.spec(client, h)?;
+        Ok(self.voices[h.slot as usize]
+            .as_ref()
+            .unwrap()
+            .stereo_gain
+            .map(|ramp| ramp.value))
     }
     /// Keep the decoder cursor, fractional source position and gain. None
     /// preserves loop points; Some updates their start without a seek.
@@ -1201,6 +1356,46 @@ impl Mixer {
             voice.spec.loop_points = Some(LoopPoints { start, end });
         }
         voice.spec.looping = looping;
+        voice.spec.loop_passes = None;
+        voice.remaining_loop_passes = None;
+        Ok(())
+    }
+    /// Replace a live range/pass schedule without restarting or seeking the
+    /// source. Foreign/stale handles and invalid ranges leave all state intact.
+    pub fn set_loop_schedule(
+        &mut self,
+        client: u32,
+        h: VoiceHandle,
+        start: u64,
+        end: Option<u64>,
+        passes: Option<u32>,
+    ) -> Result<()> {
+        validate_loop_schedule(start, end, passes)?;
+        let voice = self.voice(client, h)?;
+        let length = voice.cursor.source.frame_count();
+        let boundary = end.or(length);
+        ensure!(length != Some(0), "cannot loop empty audio");
+        ensure!(
+            boundary.is_none_or(|e| start < e),
+            "loop range must have start < end"
+        );
+        ensure!(
+            end.zip(length).is_none_or(|(end, length)| end <= length),
+            "loop endpoint outside source"
+        );
+        ensure!(
+            start == 0 || boundary.is_some(),
+            "nonzero loop start needs known range end"
+        );
+        voice.spec.looping = true;
+        voice.spec.loop_points = boundary.map(|end| LoopPoints { start, end });
+        voice.spec.loop_passes = passes;
+        voice.remaining_loop_passes = passes;
+        Ok(())
+    }
+    /// Decoded-channel exchange before pan/spatial processing, with no seek.
+    pub fn set_channel_swap(&mut self, client: u32, h: VoiceHandle, swapped: bool) -> Result<()> {
+        self.voice(client, h)?.spec.swap_channels = swapped;
         Ok(())
     }
     pub fn set_rate(&mut self, client: u32, h: VoiceHandle, rate: f32, pitch: f32) -> Result<()> {
@@ -1440,6 +1635,23 @@ impl Mixer {
         constrain_tail(v);
         Ok(())
     }
+    /// Validate a retained/parked transition without changing source or controls.
+    pub fn validate_transport_active(&self,client:u32,h:VoiceHandle,active:bool)->Result<()> {
+        self.idle()?;self.spec(client,h)?;
+        let v=self.voices[h.slot as usize].as_ref().unwrap();
+        if active&&!v.spec.transport_active {
+            ensure!(!v.source_ended||v.tail_left>0,"ended audio source needs a completed seek before activation");
+            ensure!(v.source_ended||v.spec.looping||v.cursor.source.frame_count().is_none_or(|n|v.position<n as f64),"ended audio source needs a completed seek before activation");
+        }
+        Ok(())
+    }
+    /// Park source/per-voice DSP while independent gain/pan clocks continue.
+    /// Full Pause remains independent. EOF requires a completed seek; no source
+    /// is reopened, no ramp is reset, and no seek/deadline is cancelled.
+    pub fn set_transport_active(&mut self,client:u32,h:VoiceHandle,active:bool)->Result<()> {
+        self.validate_transport_active(client,h,active)?;
+        self.voice(client,h)?.spec.transport_active=active;Ok(())
+    }
     pub fn pause(&mut self, client: u32, h: VoiceHandle, paused: bool) -> Result<()> {
         let voice = self.voice(client, h)?;
         voice.resume_after = None;
@@ -1608,11 +1820,19 @@ impl Mixer {
         Ok(crysirror_core::service::AudioPlaybackInfo {
             age_frames: voice.age_frames,
             transport_frames: voice.transport_frames,
-            stopping: voice.stop_after_fade,
+            stopping: voice.stop_after_fade || voice.gain_stop_after_fade,
             pausing: voice.pause_after_fade,
             source_playing: self.source_is_playing(client, h),
             paused: voice.spec.paused,
+            retain_on_finish: voice.spec.retain_on_finish,
+            transport_active: voice.spec.transport_active,
             looping: voice.spec.looping,
+            loop_passes: voice.remaining_loop_passes,
+            swap_channels: voice.spec.swap_channels,
+            gain: voice.gain.value,
+            gain_target: voice.gain.target,
+            gain_fade_frames: voice.gain.left,
+            gain_stop_after_fade: voice.gain_stop_after_fade,
             position_frames: voice.position.max(0.).floor() as u64,
             source_rate: voice.cursor.source.sample_rate(),
             source_frames: voice.cursor.source.frame_count(),
@@ -1643,12 +1863,24 @@ impl Mixer {
     pub fn seek(&mut self, client: u32, h: VoiceHandle, source_frame: u64) -> Result<()> {
         let v = self.voice(client, h)?;
         v.cursor.source.seek(source_frame)?;
+        if let Some(sender) = v.seek_sender.take() {
+            sender.complete(crate::seek_receipt::SourceSeekState::Cancelled);
+        }
+        v.seek_receipt = None;
         v.seek = None;
         publish_seek(v, source_frame);
         Ok(())
     }
+    pub(crate) fn source_seek_is_nonblocking(
+        &mut self,
+        client: u32,
+        h: VoiceHandle,
+    ) -> Result<bool> {
+        Ok(self.voice(client, h)?.cursor.source.is_nonblocking())
+    }
     /// Nonblocking sources only. A new sequence supersedes an older seek.
     pub fn begin_seek(&mut self, client: u32, h: VoiceHandle, frame: u64) -> Result<u64> {
+        let mixer_id = self.instance_id;
         let v = self.voice(client, h)?;
         ensure!(
             v.cursor.source.is_nonblocking(),
@@ -1663,6 +1895,13 @@ impl Mixer {
             .checked_add(1)
             .context("seek sequence exhausted")?;
         let ready = v.cursor.source.poll_seek(frame)?;
+        // Completing/dropping the old producer cancels only an unresolved
+        // previous seek. Ready results remain retained and immutable.
+        v.seek_sender = None;
+        let (receipt, sender) =
+            crate::seek_receipt::SourceSeekReceipt::pair(mixer_id, client, sequence);
+        v.seek_receipt = Some(receipt);
+        v.seek_sender = Some(sender);
         v.seek_sequence = sequence;
         v.seek = Some(SeekProgress {
             sequence,
@@ -1674,6 +1913,35 @@ impl Mixer {
             publish_seek(v, frame);
         }
         Ok(sequence)
+    }
+    /// Obtain the immutable completion capability for this exact seek. The
+    /// receipt remains queryable after source EOF, but belongs to this mixer.
+    pub fn source_seek_receipt(
+        &mut self,
+        client: u32,
+        h: VoiceHandle,
+        sequence: u64,
+    ) -> Result<crate::seek_receipt::SourceSeekReceipt> {
+        let voice = self.voice(client, h)?;
+        voice
+            .seek_receipt
+            .as_ref()
+            .filter(|r| r.sequence == sequence)
+            .cloned()
+            .context("source seek superseded or absent")
+    }
+    /// Worker writes become observable only after the mixer frame is published.
+    pub fn source_seek_state(
+        &self,
+        client: u32,
+        receipt: &crate::seek_receipt::SourceSeekReceipt,
+    ) -> Result<crate::seek_receipt::SourceSeekState> {
+        let state = receipt.read(self.instance_id, client)?;
+        if self.is_rendering() {
+            Ok(crate::seek_receipt::SourceSeekState::Pending)
+        } else {
+            Ok(state)
+        }
     }
     pub fn seek_progress(
         &mut self,
@@ -1695,6 +1963,9 @@ impl Mixer {
             .is_none_or(|s| s.sequence != sequence || !s.pending)
         {
             return Ok(());
+        }
+        if let Some(sender) = v.seek_sender.take() {
+            sender.complete(crate::seek_receipt::SourceSeekState::Cancelled);
         }
         let frame = v.position.floor() as u64;
         let ready = v.cursor.source.poll_seek(frame)?;
@@ -1806,7 +2077,14 @@ impl Mixer {
     pub fn service_sources(&mut self) -> Result<()> {
         self.idle()?;
         for v in self.voices.iter_mut().flatten() {
-            v.cursor.source.service()?;
+            if let Err(error) = v.cursor.source.service() {
+                if let Some(sender) = &v.seek_sender {
+                    sender.complete(crate::seek_receipt::SourceSeekState::Failed(format!(
+                        "{error:#}"
+                    )));
+                }
+                return Err(error);
+            }
             if let Some(seek) = v.seek.as_mut().filter(|s| s.pending) {
                 match v.cursor.source.poll_seek(seek.frame) {
                     Ok(false) => {}
@@ -1820,7 +2098,13 @@ impl Mixer {
                     }
                     Err(error) => {
                         seek.pending = false;
-                        seek.error = Some(format!("{error:#}"));
+                        let error = format!("{error:#}");
+                        if let Some(sender) = &v.seek_sender {
+                            sender.complete(crate::seek_receipt::SourceSeekState::Failed(
+                                error.clone(),
+                            ));
+                        }
+                        seek.error = Some(error);
                     }
                 }
             }
@@ -1921,6 +2205,7 @@ impl Mixer {
                     .get_mut(&v.handle.client)
                     .expect("registered voice client");
                 if v.spec.bus == Bus::Voice
+                    && v.spec.transport_active
                     && !v.spec.paused
                     && !v.binaural_pending
                     && !v.reflection_pending
@@ -1963,7 +2248,8 @@ impl Mixer {
                 {
                     continue;
                 }
-                if !v.spec.paused
+                if v.spec.transport_active
+                    && !v.spec.paused
                     && !v.source_ended
                     && (v.spec.looping
                         || v.cursor
@@ -1973,8 +2259,15 @@ impl Mixer {
                 {
                     v.transport_frames = v.transport_frames.saturating_add(1);
                 }
-                if v.spec.paused
-                    || v.binaural_pending
+                if v.spec.paused {
+                    silent_transport_tick(v);
+                    continue;
+                }
+                if !v.spec.transport_active {
+                    if retained::tick_inactive(v) {*slot=None;}
+                    continue;
+                }
+                if v.binaural_pending
                     || v.reflection_pending
                     || v.seek
                         .as_ref()
@@ -1983,8 +2276,12 @@ impl Mixer {
                     silent_transport_tick(v);
                     continue;
                 }
-                if v.source_ended && v.tail_left == 0 && !v.stop_after_fade {
-                    *slot = None;
+                if v.source_ended
+                    && v.tail_left == 0
+                    && !v.stop_after_fade
+                    && !v.gain_stop_after_fade
+                {
+                    if retained::source_finished(v) {retained::tick_inactive(v);}else{*slot=None;}
                     continue;
                 }
                 let loop_range = if v.spec.looping {
@@ -1999,9 +2296,19 @@ impl Mixer {
                 };
                 if let Some(p) = loop_range {
                     ensure!(p.start < p.end, "cannot loop empty audio");
-                    if v.position >= p.end as f64 {
+                    if v.remaining_loop_passes.is_some() {
+                        counted_boundary(v, p);
+                        if v.source_ended
+                            && v.tail_left == 0
+                            && !v.stop_after_fade
+                            && !v.gain_stop_after_fade
+                        {
+                            if retained::source_finished(v) {retained::tick_inactive(v);}else{*slot=None;}
+                            continue;
+                        }
+                    } else if v.position >= p.end as f64 {
                         v.position =
-                            p.start as f64 + (v.position - p.end as f64) % (p.end - p.start) as f64
+                            p.start as f64 + (v.position - p.end as f64) % (p.end - p.start) as f64;
                     }
                 }
                 let mut index = v.position.floor() as u64;
@@ -2017,19 +2324,33 @@ impl Mixer {
                             continue;
                         }
                         SampleRead::End if v.spec.looping => {
-                            v.position = 0.;
-                            index = 0;
-                            match v.cursor.sample(0)? {
-                                SampleRead::Frame(a) => a,
-                                SampleRead::Pending => {
-                                    self.stats.underrun_frames =
-                                        self.stats.underrun_frames.saturating_add(1);
-                                    silent_transport_tick(v);
+                            if v.remaining_loop_passes == Some(1) {
+                                finish_source(v);
+                                if v.tail_left == 0 && !v.stop_after_fade && !v.gain_stop_after_fade
+                                {
+                                    if retained::source_finished(v) {retained::tick_inactive(v);}else{*slot=None;}
                                     continue;
                                 }
-                                SampleRead::End => {
-                                    *slot = None;
-                                    continue;
+                                [0.; 2]
+                            } else {
+                                if let Some(count) = &mut v.remaining_loop_passes {
+                                    *count -= 1;
+                                }
+                                let restart = loop_range.map_or(0, |p| p.start);
+                                v.position = restart as f64;
+                                index = restart;
+                                match v.cursor.sample(restart)? {
+                                    SampleRead::Frame(a) => a,
+                                    SampleRead::Pending => {
+                                        self.stats.underrun_frames =
+                                            self.stats.underrun_frames.saturating_add(1);
+                                        silent_transport_tick(v);
+                                        continue;
+                                    }
+                                    SampleRead::End => {
+                                        if retained::source_finished(v) {retained::tick_inactive(v);}else{*slot=None;}
+                                        continue;
+                                    }
                                 }
                             }
                         }
@@ -2040,12 +2361,12 @@ impl Mixer {
                                 .as_ref()
                                 .map_or(0, |b| b.tail_frames())
                                 .max(v.reflections.as_ref().map_or(0, |r| r.tail_frames()));
-                            if tail > 0 || v.stop_after_fade {
+                            if tail > 0 || v.stop_after_fade || v.gain_stop_after_fade {
                                 v.source_ended = true;
                                 v.tail_left = tail;
                                 [0.; 2]
                             } else {
-                                *slot = None;
+                                if retained::source_finished(v) {retained::tick_inactive(v);}else{*slot=None;}
                                 continue;
                             }
                         }
@@ -2053,7 +2374,11 @@ impl Mixer {
                 };
                 let next = if let Some(p) = loop_range {
                     if index + 1 >= p.end {
-                        p.start
+                        if v.remaining_loop_passes == Some(1) {
+                            index
+                        } else {
+                            p.start
+                        }
                     } else {
                         index + 1
                     }
@@ -2076,6 +2401,9 @@ impl Mixer {
                     }
                 };
                 let mut s = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+                if v.spec.swap_channels {
+                    s.swap(0, 1);
+                }
                 let echo = if let Some(effect) = &mut v.reflections {
                     effect.process_frame((s[0] + s[1]) * 0.5)?
                 } else {
@@ -2121,9 +2449,10 @@ impl Mixer {
                     s[0] *= (1. - pan).sqrt() * std::f32::consts::SQRT_2;
                     s[1] *= pan.sqrt() * std::f32::consts::SQRT_2;
                 }
+                let stereo_gain = v.stereo_gain.each_mut().map(|ramp| ramp.step());
                 let mixed = [
-                    s[0] * gain + echo[0] * source_gain,
-                    s[1] * gain + echo[1] * source_gain,
+                    (s[0] * gain + echo[0] * source_gain) * stereo_gain[0],
+                    (s[1] * gain + echo[1] * source_gain) * stereo_gain[1],
                 ];
                 sample[0] += mixed[0] * master_gain;
                 sample[1] += mixed[1] * master_gain;
@@ -2140,6 +2469,17 @@ impl Mixer {
                     v.tail_elapsed = v.tail_elapsed.saturating_add(1);
                 } else {
                     v.position += step * f64::from(doppler);
+                    if let Some(range) = loop_range.filter(|_| v.remaining_loop_passes.is_some()) {
+                        counted_boundary(v, range);
+                        if v.source_ended
+                            && v.tail_left == 0
+                            && !v.stop_after_fade
+                            && !v.gain_stop_after_fade
+                        {
+                            if !retained::source_finished(v) {*slot=None;}
+                            continue;
+                        }
+                    }
                 }
                 if !v.spec.looping
                     && v.cursor
@@ -2153,7 +2493,12 @@ impl Mixer {
                     v.spec.paused = true;
                     v.pause_after_fade = false;
                 }
+                if v.gain_stop_after_fade && v.gain.left == 0 {
+                    if !retained::gain_finished(v) {*slot=None;}
+                    continue;
+                }
                 if !v.stop_after_fade
+                    && !v.gain_stop_after_fade
                     && v.binaural.is_none()
                     && v.reflections.as_ref().is_none_or(|r| r.tail_frames() == 0)
                     && !v.spec.looping
@@ -2162,7 +2507,7 @@ impl Mixer {
                         .frame_count()
                         .is_some_and(|n| v.position >= n as f64)
                 {
-                    *slot = None
+                    if !retained::source_finished(v) {*slot=None;}
                 }
             }
             // Apply deadlines after this output frame. Preserve mode consumes
@@ -2289,4 +2634,200 @@ fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
         a[2] * b[0] - a[0] * b[2],
         a[0] * b[1] - a[1] * b[0],
     ]
+}
+
+// Private common constructor reused by ordinary play and detached restoration.
+fn new_voice(
+    handle: VoiceHandle,
+    source: Box<dyn AudioSource>,
+    spec: VoiceSpec,
+    mix_group: Option<usize>,
+    sequence: u64,
+    rate: u32,
+) -> Voice {
+    let mut envelope = Ramp::new(if spec.fade_in_ms > 0. { 0. } else { 1. });
+    envelope.to(1., frames(spec.fade_in_ms, rate));
+    Voice {
+        doppler: Ramp::new(1.),
+        doppler_settings: None,
+        age_frames: 0,
+        transport_frames: 0,
+        mix_group,
+        handle,
+        gain: Ramp::new(spec.gain),
+        gain_stop_after_fade: false,
+        pan: Ramp::new(0.5),
+        stereo_gain: [Ramp::new(1.); 2],
+        remaining_loop_passes: spec.loop_passes,
+        spec,
+        cursor: Cursor::new(source),
+        position: 0.,
+        seek: None,
+        seek_sequence: 0,
+        seek_receipt: None,
+        seek_sender: None,
+        sequence,
+        envelope,
+        stop_after_fade: false,
+        stop_remaining: 0,
+        pause_after_fade: false,
+        resume_after: None,
+        lowpass: [0.; 2],
+        acoustic: None,
+        binaural: None,
+        binaural_pending: false,
+        reflections: None,
+        reflection_pending: false,
+        source_ended: false,
+        tail_left: 0,
+        tail_elapsed: 0,
+    }
+}
+
+// No current voice/decoder/history is copied to construct this value.
+pub(crate) struct ClientVoiceReplacement {
+    owner: u32,
+    voices: Vec<(usize, Voice)>,
+    sequence: u64,
+    new_client: Option<Client>,
+}
+impl ClientVoiceReplacement {
+    pub(crate) fn handles(&self) -> impl Iterator<Item = VoiceHandle> + '_ {
+        self.voices.iter().map(|(_, voice)| voice.handle)
+    }
+    pub(crate) fn install(self, mixer: &mut Mixer) {
+        for old in &mut mixer.voices {
+            if old.as_ref().is_some_and(|v| v.handle.client == self.owner) {
+                *old = None;
+            }
+        }
+        if let Some(client) = self.new_client {
+            mixer.clients.insert(self.owner, client);
+        }
+        for (slot, voice) in self.voices {
+            mixer.generations[slot] = voice.handle.generation;
+            mixer.voices[slot] = Some(voice);
+        }
+        mixer.sequence = self.sequence;
+    }
+}
+impl Mixer {
+    pub(crate) fn identity(&self) -> u64 {
+        self.instance_id
+    }
+    pub(crate) fn prepare_client_replacement(
+        &self,
+        owner: u32,
+        channels: Vec<crate::channels::PreparedChannel>,
+    ) -> Result<ClientVoiceReplacement> {
+        self.idle()?;
+        ensure!(owner > 0, "audio replacement owner");
+        ensure!(
+            self.clients.contains_key(&owner) || self.clients.len() < 64,
+            "audio replacement client capacity"
+        );
+        if let Some(client) = self.clients.get(&owner) {
+            ensure!(
+                client.reverb.is_none(),
+                "audio replacement needs a prepared client reverb history"
+            );
+            ensure!(
+                client
+                    .voice_limit
+                    .is_none_or(|limit| channels.len() <= limit),
+                "audio replacement client voice limit"
+            );
+        }
+        let slots = self
+            .voices
+            .iter()
+            .enumerate()
+            .filter_map(|(slot, v)| {
+                if v.as_ref().is_none_or(|v| v.handle.client == owner) {
+                    Some(slot)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        ensure!(
+            channels.len() <= slots.len(),
+            "audio replacement cannot steal peer voices"
+        );
+        let count = channels.len();
+        let sequence = self
+            .sequence
+            .checked_add(count as u64)
+            .context("audio replacement sequence exhausted")?;
+        let mut voices = Vec::with_capacity(count);
+        for (offset, (slot, channel)) in slots.into_iter().zip(channels).enumerate() {
+            channel.spec.validate()?;
+            ensure!(
+                (8000..=192000).contains(&channel.source.sample_rate()),
+                "replacement source sample rate"
+            );
+            ensure!(
+                channel
+                    .source
+                    .frame_count()
+                    .is_none_or(|n| channel.start <= n),
+                "replacement cursor outside source"
+            );
+            if let Some(points) = channel.spec.loop_points {
+                ensure!(
+                    channel.source.frame_count().is_none_or(|n| points.end <= n),
+                    "replacement loop outside source"
+                );
+            }
+            ensure!(
+                channel.replace_fade_ms == 0.,
+                "replacement cannot crossfade old live voices"
+            );
+            ensure!(
+                channel.pan.is_finite() && (0. ..=1.).contains(&channel.pan),
+                "replacement source pan"
+            );
+            let mix_group = self
+                .groups
+                .resolve(owner, channel.spec.mix_group.as_deref())?;
+            let generation = self.generations[slot]
+                .checked_add(1)
+                .context("audio replacement generation exhausted")?;
+            let handle = VoiceHandle {
+                client: owner,
+                slot: slot as u32,
+                generation,
+            };
+            let mut voice = new_voice(
+                handle,
+                channel.source,
+                channel.spec,
+                mix_group,
+                self.sequence + offset as u64 + 1,
+                self.config.sample_rate,
+            );
+            voice.position = channel.start as f64;
+            voice.cursor.start = channel.start;
+            voice.cursor.next = channel.start;
+            voice.pan = Ramp::new(channel.pan);
+            voices.push((slot, voice));
+        }
+        let new_client = if self.clients.contains_key(&owner) {
+            None
+        } else {
+            let mut client =
+                Client::new(self.config.seed ^ (owner as u64).wrapping_mul(0x9e3779b97f4a7c15));
+            client.ducking = Ducking {
+                gain: 1.,
+                ..Default::default()
+            };
+            Some(client)
+        };
+        Ok(ClientVoiceReplacement {
+            owner,
+            voices,
+            sequence,
+            new_client,
+        })
+    }
 }

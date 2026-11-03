@@ -8,23 +8,29 @@ publish = false
 description = "First-class CatSystem2 KCS bytecode and native semantic adapter"
 
 [dependencies]
+encoding_rs = "0.8"
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+glam.workspace = true
 crysirror-core.workspace = true
 crysirror-tasks.workspace = true
 crysirror-resource.workspace = true
 crysirror-scene.workspace = true
 crysirror-text.workspace = true
+crysirror-image.workspace = true
+crysirror-audio.workspace = true
 crysirror-runtime = { workspace = true, optional = true }
+crysirror-formats-arc = { workspace = true, optional = true }
+crysirror-puppet = { workspace = true, optional = true }
+crysirror-puppet-eluna = { workspace = true, optional = true }
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 
 [features]
-runtime = ["dep:crysirror-runtime"]
+runtime = ["dep:crysirror-runtime", "dep:crysirror-formats-arc", "dep:crysirror-puppet", "dep:crysirror-puppet-eluna"]
 
 [dev-dependencies]
 crysirror-runtime.workspace = true
 tempfile = "3.12"
-crysirror-audio.workspace = true
 crysirror-formats-arc.workspace = true
 

@@ -1,7 +1,14 @@
 # ADR 0090: Shared worker image resources and native effect facades
 
 Date: 2026-10-27
-Status: Accepted for the bounded CPU-resource profile below
+Status: implemented bounded CPU-resource/effect profile; complete native plugin coverage remains partial
+
+## Follow-up capture boundary
+
+The initial CPU-resource decision did not implement general composed-frame capture.
+Runtime/presenter frame-capture work was subsequently added; see the 2026-11-02
+entry in [STATUS.md](../../STATUS.md). That is a separate capability and does not
+complete every native plugin or callback/composition profile.
 
 ## Decision
 

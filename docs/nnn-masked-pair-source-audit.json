@@ -1,0 +1,37 @@
+{
+  "purpose": "Engine-owned three-input bitmap capability needed by original animated native buttons; not a hosted renderer or native-only pixel loop",
+  "reference": {
+    "repository": "https://github.com/tinyan/SystemNNN",
+    "commit": "78a05053c78b3b80065a9a209c6685a7c60a2e83",
+    "files": [
+      "nyanPictureLib/changeTransLucentBlt.cpp (complete x86 and Win64 branches inspected; x86 arithmetic profile selected)",
+      "nnnUtilLib/commonButton.cpp (complete animation and Print contract inspected)",
+      "nnnUtilLib/superButtonSetup.cpp (complete original animation parameters inspected)"
+    ],
+    "licence": "No licence grant found. Source is used for behavior facts; no original implementation is copied or linked."
+  },
+  "arithmetic": {
+    "weights": "two independent weights0..256 with sum<=256",
+    "full_mask": "q14 = weight256 << 6",
+    "partial_mask": "q14 = weight256 * mask8 >> 2",
+    "rgb": "floor(srcA*qA/16384)+floor(srcB*qB/16384)+floor(destination*(16384-qA-qB)/16384)",
+    "alpha": "destination retained",
+    "clipping": "two equally sized source regions retain their coordinate phase under source/destination/clip intersection",
+    "aliasing": "engine profile reads all three immutable admission-time inputs; this is distinct from forward self-source alpha clipping"
+  },
+  "shared": {
+    "kernel": "crates/crysirror-image/src/masked_pair.rs",
+    "effect": "ImageEffect::MaskedPairBlend",
+    "graph": "Core ImageInput::Ternary {destination,first,second}, root-only with matching first effect",
+    "worker": "Runtime shared image pool, bounded graph and decoded/encoded ownership, precommit cancellation",
+    "facade": "Bitmap.beginMaskedPair(slot,first,second,options); common effectStatus/cancelEffect and owner/epoch/revision checks",
+    "limits": "existing4MP effect target,128MiB graph and512MiB image-processing reservation; no quota increase"
+  },
+  "native_boundary": "Native button frame indices, animation counters, layout, trigger/wait/save policy remain in System-NNN. Current game title connection is not yet completed.",
+  "validation": {
+    "kernel": "masked-pair-kernel-tests.log:3passed",
+    "runtime": "masked-pair-service-tests2.log:ternary2, existing composite3 and separate-mask1passed",
+    "facade": "masked-pair-public-tests2.log:shared effects5passed, including new three-input source-generation/owner/revision/cancel coverage and existing restore-epoch coverage",
+    "not_claimed": "No original Title rendering or playable-game result; no standalone GPU claim for this new arithmetic. Earlier real Metal capture verification is a separate capability."
+  }
+}

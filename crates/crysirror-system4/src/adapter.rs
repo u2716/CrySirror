@@ -4,10 +4,10 @@
 //! The optional Windows debug-log interface is explicitly absent; this does not
 //! implement or pretend to buffer, persist, or connect a generic log service.
 use crate::vm::{
-    ExternalCall, ExternalTarget, Machine,
     external::{Argument, HllReturn},
+    ExternalCall, ExternalTarget, Machine,
 };
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{bail, ensure, Context, Result};
 use crysirror_core::service::HostServices;
 use sha2::{Digest, Sha256};
 /// Verified original OutputLog.dll (2004-03-10), never loaded or executed.
@@ -37,11 +37,15 @@ pub struct Bridge {
     pub clock_calls: u64,
     pub log_calls: u64,
     pub sact: Option<crate::sact::Sact>,
+    pub input: crate::input::Input,
+    pub assets: Option<std::sync::Arc<crate::assets::Assets>>,
+    pub(crate) buffered_input: bool,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Dispatch {
     Completed,
     WaitUntil(u64),
+    Presented,
 }
 impl Bridge {
     pub fn dispatch(
@@ -50,35 +54,183 @@ impl Bridge {
         call: &ExternalCall,
         host: &mut dyn HostServices,
     ) -> Result<Dispatch> {
-        self.dispatch_scoped(m,call,host,None)
+        self.dispatch_scoped(m, call, host, None)
     }
-    pub fn dispatch_for(&mut self,client:crysirror_core::state::ClientId,m:&mut Machine,call:&ExternalCall,host:&mut dyn HostServices)->Result<Dispatch> {
-        self.dispatch_scoped(m,call,host,Some(client))
+    pub fn dispatch_for(
+        &mut self,
+        client: crysirror_core::state::ClientId,
+        m: &mut Machine,
+        call: &ExternalCall,
+        host: &mut dyn HostServices,
+    ) -> Result<Dispatch> {
+        self.dispatch_scoped(m, call, host, Some(client))
     }
-    fn dispatch_scoped(&mut self,m:&mut Machine,call:&ExternalCall,host:&mut dyn HostServices,client:Option<crysirror_core::state::ClientId>)->Result<Dispatch> {
+    fn dispatch_scoped(
+        &mut self,
+        m: &mut Machine,
+        call: &ExternalCall,
+        host: &mut dyn HostServices,
+        client: Option<crysirror_core::state::ClientId>,
+    ) -> Result<Dispatch> {
         match call.target {
             ExternalTarget::Hll { library, function } => {
-                let l = &m.program.libraries[library];
+                let program = m.program.clone();
+                let l = &program.libraries[library];
                 let f = &l.functions[function];
                 let args = m.hll_arguments(call)?;
-                if l.name == b"SACT2" && args.is_empty() && f.return_kind==10 {
-                    let value=match f.name.as_slice() {
-                        b"GetScreenWidth"=>Some(self.sact.as_ref().context("SACT2 native canvas absent")?.canvas[0] as i32),
-                        b"GetScreenHeight"=>Some(self.sact.as_ref().context("SACT2 native canvas absent")?.canvas[1] as i32),
-                        b"GetMainSurfaceNumber"=>Some(-1),
-                        b"GAME_MSG_GetNumof"=>Some(i32::try_from(m.program.messages.len())?),
-                        b"Timer_Get"=>{self.clock_calls+=1;Some(host.now_ms() as u32 as i32)},
-                        _=>None,
+                if l.name == b"SACT2" && args.is_empty() && f.return_kind == 10 {
+                    let value = match f.name.as_slice() {
+                        b"GetScreenWidth" => Some(
+                            self.sact
+                                .as_ref()
+                                .context("SACT2 native canvas absent")?
+                                .canvas[0] as i32,
+                        ),
+                        b"GetScreenHeight" => Some(
+                            self.sact
+                                .as_ref()
+                                .context("SACT2 native canvas absent")?
+                                .canvas[1] as i32,
+                        ),
+                        b"GetMainSurfaceNumber" => Some(-1),
+                        b"GAME_MSG_GetNumof" => Some(i32::try_from(m.program.messages.len())?),
+                        b"Timer_Get" => {
+                            self.clock_calls += 1;
+                            Some(host.now_ms() as u32 as i32)
+                        }
+                        _ => None,
                     };
-                    if let Some(value)=value {m.complete_hll(call,HllReturn::Scalar(value))?;return Ok(Dispatch::Completed);}
+                    if let Some(value) = value {
+                        m.complete_hll(call, HllReturn::Scalar(value))?;
+                        return Ok(Dispatch::Completed);
+                    }
                 }
                 if l.name == b"SACT2" && f.name == b"Init" {
-                    ensure!(f.return_kind==10 && args.len()==2 && matches!(args[1],Argument::Scalar{kind:10,..}),"SACT2.Init ABI");
-                    let client=client.context("SACT2.Init requires explicit client scope")?;
-                    let sact=self.sact.as_mut().context("SACT2.Init requires native logical canvas metadata")?;
-                    let result=sact.init(client,host)?;
-                    m.complete_hll(call,HllReturn::Scalar(result))?;
+                    ensure!(
+                        f.return_kind == 10
+                            && args.len() == 2
+                            && matches!(args[1], Argument::Scalar { kind: 10, .. }),
+                        "SACT2.Init ABI"
+                    );
+                    let client = client.context("SACT2.Init requires explicit client scope")?;
+                    let sact = self
+                        .sact
+                        .as_mut()
+                        .context("SACT2.Init requires native logical canvas metadata")?;
+                    let result = sact.init(client, host)?;
+                    m.complete_hll(call, HllReturn::Scalar(result))?;
                     return Ok(Dispatch::Completed);
+                }
+                if l.name == b"SACT2" {
+                    let client = client.context("SACT2 requires explicit client scope")?;
+                    if f.return_kind == 10 {
+                        let scalars = args
+                            .iter()
+                            .map(|a| match a {
+                                Argument::Scalar { kind: 10, bits } => Some(*bits),
+                                _ => None,
+                            })
+                            .collect::<Option<Vec<_>>>();
+                        if let Some(scalars) = scalars {
+                            if f.name == b"Update" && scalars.is_empty() {
+                                ensure!(
+                                    self.sact.as_ref().is_some_and(|s| s.initialized),
+                                    "SACT2 Update before native initialization"
+                                );
+                                m.complete_hll(call, HllReturn::Scalar(1))?;
+                                return Ok(Dispatch::Presented);
+                            }
+                            if let Some(sprites) =
+                                self.sact.as_mut().and_then(|s| s.sprites.as_mut())
+                            {
+                                if let Some(value) =
+                                    sprites.scalar(client, &f.name, &scalars, host)?
+                                {
+                                    m.complete_hll(call, HllReturn::Scalar(value))?;
+                                    return Ok(Dispatch::Completed);
+                                }
+                            }
+                        }
+                    }
+                    if matches!(
+                        f.name.as_slice(),
+                        b"Key_IsDown"
+                            | b"Key_ClearFlag"
+                            | b"Key_ClearFlagNoCtrl"
+                            | b"Mouse_GetPos"
+                            | b"Mouse_GetWheel"
+                            | b"Mouse_ClearWheel"
+                    ) {
+                        let observation = if !self.buffered_input || f.name == b"Mouse_GetPos" {
+                            let observation = host.input_observation(client)?;
+                            crate::input::Input::validate_scope(observation, client)?;
+                            Some(observation)
+                        } else {
+                            None
+                        };
+                        let mut input = self.input.clone();
+                        if !self.buffered_input {
+                            input.observe(observation.unwrap());
+                        }
+                        let returned = match (f.name.as_slice(), f.return_kind, args.as_slice()) {
+                            (b"Key_IsDown", 10, [Argument::Scalar { kind: 10, bits }]) => {
+                                HllReturn::Scalar(input.key(*bits)?)
+                            }
+                            (b"Key_ClearFlag", 10, []) => {
+                                input.clear(false);
+                                HllReturn::Scalar(1)
+                            }
+                            (b"Key_ClearFlagNoCtrl", 0, []) => {
+                                input.clear(true);
+                                HllReturn::Void
+                            }
+                            (b"Mouse_ClearWheel", 0, []) => {
+                                input.clear_wheel();
+                                HllReturn::Void
+                            }
+                            (
+                                b"Mouse_GetPos",
+                                10,
+                                [Argument::Reference {
+                                    kind: 18,
+                                    page: xp,
+                                    index: xi,
+                                }, Argument::Reference {
+                                    kind: 18,
+                                    page: yp,
+                                    index: yi,
+                                }],
+                            ) => {
+                                let (pos, focused) =
+                                    crate::input::Input::pointer(observation.unwrap())?;
+                                m.heap.set(*xp, *xi, pos[0])?;
+                                m.heap.set(*yp, *yi, pos[1])?;
+                                HllReturn::Scalar(focused)
+                            }
+                            (
+                                b"Mouse_GetWheel",
+                                0,
+                                [Argument::Reference {
+                                    kind: 18,
+                                    page: xp,
+                                    index: xi,
+                                }, Argument::Reference {
+                                    kind: 18,
+                                    page: yp,
+                                    index: yi,
+                                }],
+                            ) => {
+                                let [forward, back] = input.wheel();
+                                m.heap.set(*xp, *xi, forward)?;
+                                m.heap.set(*yp, *yi, back)?;
+                                HllReturn::Void
+                            }
+                            _ => bail!("unsupported native SACT2 input ABI"),
+                        };
+                        m.complete_hll(call, returned)?;
+                        self.input = input;
+                        return Ok(Dispatch::Completed);
+                    }
                 }
                 if l.name == b"OutputLog" && self.debug_log.is_some() {
                     // Original DLL Create RVA1000 tries GetModuleHandleA(DPLogViewer.ade),
@@ -120,15 +272,17 @@ impl Bridge {
                 )
             }
             ExternalTarget::System(6) => {
-                let client=client.context("System4 output requires explicit client scope")?;
+                let client = client.context("System4 output requires explicit client scope")?;
                 m.validate_system(call)?;
-                let bytes=m.heap.string(m.stack_value(0)?)?;
-                let text=encoding_rs::SHIFT_JIS.decode_without_bom_handling_and_without_replacement(bytes.as_slice()).context("System4 system.Output encoding")?;
-                host.append_log(client,&text)?;
+                let bytes = m.heap.string(m.stack_value(0)?)?;
+                let text = encoding_rs::SHIFT_JIS
+                    .decode_without_bom_handling_and_without_replacement(bytes.as_slice())
+                    .context("System4 system.Output encoding")?;
+                host.append_log(client, &text)?;
                 // system.Output returns the same native string: the caller's
                 // following S_POP remains responsible for releasing it.
-                m.complete_system(call,0,None)?;
-                self.log_calls+=1;
+                m.complete_system(call, 0, None)?;
+                self.log_calls += 1;
                 Ok(Dispatch::Completed)
             }
             ExternalTarget::System(0x0d) => {

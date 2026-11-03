@@ -53,7 +53,11 @@ pub fn cd_text_current_mwnd(
     text: &str,
     read_flag: i64,
 ) -> anyhow::Result<bool> {
-    crate::message::append(ctx, text, read_flag)
+    let accepted = crate::message::append(ctx, text, read_flag)?;
+    if accepted && !text.is_empty() {
+        ctx.set_current_read_flag_for_skip(ctx.current_scene_no.unwrap_or(-1), read_flag);
+    }
+    Ok(accepted)
 }
 pub fn cd_name_current_mwnd(ctx: &mut CommandContext, name: &str) -> anyhow::Result<bool> {
     crate::message::name(ctx, name)
@@ -93,8 +97,14 @@ pub fn dispatch(ctx: &mut CommandContext, args: &[crate::runtime::Value]) -> any
         "native stage index unsupported"
     );
     let family = stage_storage_form_id(ctx, root);
+    let text_environment=crate::native_string::Environment::new(ctx);
     let op = *chain.get(p).context("native stage operation missing")?;
     if op == codes::ELM_STAGE_MWND {
+        ensure!(family==normal_stage_form_id(ctx),"native EXCALL message-window identity requires an independent shared UI mapping");
+        if chain.len() == p + 4 && chain[p + 1] == ctx.ids.elm_array
+            && crate::message::voice::global_operation(chain[p + 3]).is_some() {
+            return crate::message::voice::dispatch(ctx, chain[p + 3], args);
+        }
         ensure!(stage_idx == 1, "native MWND bridge supports FRONT only");
         if chain.get(p + 3) == Some(&codes::ELM_MWND_BUTTON) {
             ensure!(
@@ -145,14 +155,20 @@ pub fn dispatch(ctx: &mut CommandContext, args: &[crate::runtime::Value]) -> any
                 return Ok(true);
             }
             crate::message::initialize_profile(ctx)?;
-            let o = ctx
-                .globals
+            let globals = &mut *ctx.globals;
+            let state = globals
                 .stage_forms
                 .get_mut(&family)
-                .and_then(|stage| stage.mwnd_lists.get_mut(&stage_idx))
+                .context("native WAKU stage missing")?;
+
+            let state = &mut **state;
+            let next_slot = state.next_nested_object_slot.entry(stage_idx)
+                .or_insert(state.backend_slot_base + 100_000);
+            let o = state.mwnd_lists.get_mut(&stage_idx)
                 .and_then(|list| list.get_mut(window))
                 .and_then(|w| w.button_list.get_mut(index))
                 .context("native WAKU button missing")?;
+            let slot = o.ensure_runtime_slot(next_slot);
             let value = super::passive_object::dispatch(
                 o,
                 &ctx.ids,
@@ -163,6 +179,13 @@ pub fn dispatch(ctx: &mut CommandContext, args: &[crate::runtime::Value]) -> any
                 call.al_id,
                 0,
                 0,
+                &mut super::passive_object::ObjectWait {
+                    object_index:index,
+                    text:&text_environment,
+                    state: &mut ctx.wait, form: family, stage: stage_idx, slot, next_slot,
+                    chain, scene: ctx.current_scene_name.as_deref().unwrap_or_default(),
+                    finishes: &mut globals.pending_frame_action_finishes,
+                },
             )?;
             if let Some(value) = value {
                 ctx.push(value);
@@ -191,17 +214,22 @@ pub fn dispatch(ctx: &mut CommandContext, args: &[crate::runtime::Value]) -> any
                 .map_or(0, |w| w.object_list.len());
             let growth = (child + 1).saturating_sub(old);
             ensure!(total + growth <= 4096, "native MWND object tree budget");
-            let windows = ctx
-                .globals
+            let globals = &mut *ctx.globals;
+            let state = globals
                 .stage_forms
                 .entry(family)
-                .or_default()
-                .mwnd_lists
+                .or_default();
+
+            let state = &mut **state;
+            let next_slot = state.next_nested_object_slot.entry(stage_idx)
+                .or_insert(state.backend_slot_base + 100_000);
+            let windows = state.mwnd_lists
                 .entry(stage_idx)
                 .or_default();
             windows.resize_with(windows.len().max(window + 1), Default::default);
             let objects = &mut windows[window].object_list;
             objects.resize_with(objects.len().max(child + 1), Default::default);
+            let slot = objects[child].ensure_runtime_slot(next_slot);
             let value = super::passive_object::dispatch(
                 &mut objects[child],
                 &ctx.ids,
@@ -212,6 +240,13 @@ pub fn dispatch(ctx: &mut CommandContext, args: &[crate::runtime::Value]) -> any
                 call.al_id,
                 4096 - total - growth,
                 0,
+                &mut super::passive_object::ObjectWait {
+                    object_index:child,
+                    text:&text_environment,
+                    state: &mut ctx.wait, form: family, stage: stage_idx, slot, next_slot,
+                    chain, scene: ctx.current_scene_name.as_deref().unwrap_or_default(),
+                    finishes: &mut globals.pending_frame_action_finishes,
+                },
             )?;
             if let Some(value) = value {
                 ctx.push(value);
@@ -236,16 +271,28 @@ pub fn dispatch(ctx: &mut CommandContext, args: &[crate::runtime::Value]) -> any
         return crate::message::dispatch(ctx, chain[p + 3], args);
     }
     if op == codes::ELM_STAGE_CREATE_OBJECT {
+        ensure!(chain.len()==p+1 && call.al_id==0 && args.len()==1,"native CREATE_OBJECT chain/arguments");
         let count = args
             .first()
             .and_then(Value::as_i64)
             .context("CREATE_OBJECT count")?;
         ensure!((0..=4096).contains(&count), "native object count");
+        let total=super::passive_object::count(ctx)?;
+        let old=ctx.globals.stage_forms.get(&family).and_then(|s|s.object_lists.get(&stage_idx)).map_or(0,|v|v.len());
+        ensure!(total.saturating_add((count as usize).saturating_sub(old))<=4096,"native CREATE_OBJECT tree budget");
         ctx.globals
             .stage_forms
             .entry(family)
             .or_default()
             .ensure_object_list(stage_idx, count as usize);
+        if let Some(state)=ctx.globals.stage_forms.get_mut(&family) {
+            let state=&mut **state;
+            if state.backend_slot_base!=0 {
+                if let Some(objects)=state.object_lists.get_mut(&stage_idx) {
+                    for (index,object) in objects.iter_mut().enumerate() { object.backend_runtime_slot=Some(state.backend_slot_base+index); }
+                }
+            }
+        }
         if call.ret_form != 0 {
             ctx.push(Value::Int(0));
         }
@@ -263,7 +310,6 @@ pub fn dispatch(ctx: &mut CommandContext, args: &[crate::runtime::Value]) -> any
     let index = *chain.get(p + 1).context("native object index")?;
     ensure!(index >= 0, "negative native object index");
     p += 2;
-    ensure!(stage_idx == 1, "native object bridge supports FRONT only");
     let index = index as usize;
     ensure!(index < 4096, "native object slot budget");
     let total = super::passive_object::count(ctx)?;
@@ -272,18 +318,24 @@ pub fn dispatch(ctx: &mut CommandContext, args: &[crate::runtime::Value]) -> any
         .stage_forms
         .get(&family)
         .and_then(|s| s.object_lists.get(&stage_idx))
-        .map_or(0, Vec::len);
+        .map_or(0, |v| v.len());
     let growth = (index + 1).saturating_sub(old);
     ensure!(total + growth <= 4096, "native object tree budget");
-    let list = ctx
-        .globals
+    let globals = &mut *ctx.globals;
+    let state = globals
         .stage_forms
         .entry(family)
-        .or_default()
-        .object_lists
+        .or_default();
+
+    let state = &mut **state;
+    let next_slot = state.next_nested_object_slot.entry(stage_idx)
+        .or_insert(state.backend_slot_base + 100_000);
+    let list = &mut **state.object_lists
         .entry(stage_idx)
         .or_default();
     list.resize_with(list.len().max(index + 1), Default::default);
+    if state.backend_slot_base!=0 { list[index].backend_runtime_slot=Some(state.backend_slot_base+index); }
+    let slot = list[index].runtime_slot_or(index);
     let value = super::passive_object::dispatch(
         &mut list[index],
         &ctx.ids,
@@ -294,6 +346,13 @@ pub fn dispatch(ctx: &mut CommandContext, args: &[crate::runtime::Value]) -> any
         call.al_id,
         4096 - total - growth,
         0,
+        &mut super::passive_object::ObjectWait {
+            object_index:index,
+                    text:&text_environment,
+            state: &mut ctx.wait, form: family, stage: stage_idx, slot, next_slot,
+                    chain, scene: ctx.current_scene_name.as_deref().unwrap_or_default(),
+                    finishes: &mut globals.pending_frame_action_finishes,
+        },
     )?;
     if let Some(value) = value {
         ctx.push(value);
@@ -302,3 +361,5 @@ pub fn dispatch(ctx: &mut CommandContext, args: &[crate::runtime::Value]) -> any
     }
     Ok(true)
 }
+
+pub(crate) use super::stage_lifecycle::{ensure_stage_form_allocated, validate_stage_form_allocation, queue_stage_form_finishes, free_stage_form};

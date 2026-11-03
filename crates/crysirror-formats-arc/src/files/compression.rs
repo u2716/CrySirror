@@ -368,61 +368,9 @@ pub fn bse(d: &[u8]) -> Result<Vec<u8>> {
     o.extend_from_slice(&d[80..]);
     Ok(o)
 }
-fn update(key: &mut u32) -> u8 {
-    let a = 0x4e35u32.wrapping_mul(*key & 0xffff);
-    let b = 0x4e35u32.wrapping_mul(*key >> 16);
-    let t = 0x15au32
-        .wrapping_mul(*key)
-        .wrapping_add(b)
-        .wrapping_add(a >> 16);
-    *key = (t << 16).wrapping_add(a & 0xffff).wrapping_add(1);
-    t as u8
-}
 pub fn dsc(d: &[u8], cx: &crysirror_resource::DecodeContext) -> Result<(Vec<u8>, &'static str)> {
-    let mut key = u32at(d, 16)?;
-    let n = u32at(d, 20)? as usize;
-    super::checked_size(n, cx)?;
-    let lengths = at(d, 32, 512)?;
-    let mut symbols = Vec::new();
-    for (i, &v) in lengths.iter().enumerate() {
-        let l = v.wrapping_sub(update(&mut key));
-        if l > 0 {
-            ensure!(l <= 32, "DSC Huffman code width");
-            symbols.push((l, i));
-        }
-    }
-    symbols.sort();
-    ensure!(!symbols.is_empty() || n == 0, "DSC empty Huffman tree");
-    let mut codes = Vec::new();
-    let mut code = 0u64;
-    let mut old = 0;
-    for (l, s) in symbols {
-        code <<= l - old;
-        ensure!(code < (1u64 << l), "DSC oversubscribed Huffman tree");
-        codes.push((l, code, s));
-        code += 1;
-        old = l;
-    }
-    let mut bits = Bits::new(at(d, 544, d.len().saturating_sub(544))?);
-    let mut o = Vec::with_capacity(n);
-    while o.len() < n {
-        let mut value = 0u64;
-        let mut found = None;
-        for l in 1..=32 {
-            value = (value << 1) | bits.get(1)? as u64;
-            if let Some((_, _, s)) = codes.iter().find(|(len, c, _)| *len == l && *c == value) {
-                found = Some(*s);
-                break;
-            }
-        }
-        let s = found.context("DSC invalid Huffman code")?;
-        if s & 256 != 0 {
-            let dist = bits.get(12)? as usize + 2;
-            copy(&mut o, dist, (s & 255) + 2, n)?;
-        } else {
-            o.push(s as u8);
-        }
-    }
+    let limit = usize::try_from(cx.limits.max_entry_size).unwrap_or(usize::MAX);
+    let o = crysirror_resource::dsc::decode_with_limit(d, limit)?;
     if o.len() >= 16
         && u16at(&o, 0)? > 0
         && u16at(&o, 2)? > 0

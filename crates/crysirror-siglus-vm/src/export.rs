@@ -16,6 +16,7 @@ pub fn publish(
     old: &mut BTreeSet<u32>,
     old_widgets: &mut BTreeSet<u32>,
     movie_pictures: &crate::adapter::object_movie::Pictures,
+    strings: &crate::adapter::object_string::ObjectStrings,
     host: &mut dyn HostServices,
 ) -> Result<()> {
     ensure!(
@@ -26,20 +27,54 @@ pub fn publish(
         ctx.ui.window.is_some() || (ctx.ui.message.is_none() && ctx.ui.name.is_none()),
         "native message layout must be implemented before CD_TEXT/CD_NAME can render"
     );
-    ensure!(
-        ctx.globals.stage_forms.len() <= 1,
-        "native multi-stage namespace composition unsupported"
+    let normal = crate::runtime::forms::stage::stage_storage_form_id(
+        ctx,
+        crate::runtime::forms::codes::FORM_GLOBAL_STAGE as i32,
     );
+    let private = normal ^ 0x4000;
+    ensure!(
+        ctx.globals
+            .stage_forms
+            .keys()
+            .all(|id| *id == normal || (*id == private && ctx.excall_state.ready)),
+        "unknown native stage owner"
+    );
+    let excall_order = ctx
+        .tables
+        .gameexe
+        .as_ref()
+        .and_then(|cfg| cfg.get_i64("EXCALL.ORDER"))
+        .unwrap_or(20_000);
+    let excall_order = i32::try_from(excall_order).context("native EXCALL order overflow")?;
     let mut layers = Vec::new();
     let mut needed = Vec::new();
     let mut ids = BTreeSet::new();
-    for stage in ctx.globals.stage_forms.values() {
+    // Stable owner order also fixes equal-order sort behavior across snapshots.
+    for form in [normal, private] {
+        let Some(stage) = ctx.globals.stage_forms.get(&form) else {
+            continue;
+        };
+        let namespace = if form == private { 0x4000_0000 } else { 0 };
+        let parent_order = if form == private { excall_order } else { 0 };
+        if form == private {
+            ensure!(
+                stage.mwnd_lists.values().flatten().all(|w| !w.open
+                    && w.object_list
+                        .iter()
+                        .chain(&w.face_list)
+                        .chain(&w.button_list)
+                        .all(|o| o.object_type == 0 && o.runtime.child_objects.is_empty())),
+                "native EXCALL message-window projection is not mapped"
+            );
+        }
         let mut out = tree::Output {
             layers: &mut layers,
             images: &mut needed,
             ids: &mut ids,
-            next: 0x8100_0000,
+            next: 0x8100_0000 + namespace,
             movies: None,
+            strings: Some(strings),
+            inherit: Vec::new(),
             path: Vec::new(),
         };
         if let Some(windows) = stage.mwnd_lists.get(&1) {
@@ -93,19 +128,29 @@ pub fn publish(
         }
         if let Some(objects) = stage.object_lists.get(&1) {
             for (index, obj) in objects.iter().enumerate() {
-                if (!obj.used || obj.object_type == 0) && obj.runtime.child_objects.is_empty() {
+                if !stage.object_slot_is_used(1, index)
+                    || ((!obj.used || obj.object_type == 0) && obj.runtime.child_objects.is_empty())
+                {
                     continue;
                 }
-                if !obj.runtime.child_objects.is_empty() || obj.object_type == 9 {
+                if !obj.runtime.child_objects.is_empty() || matches!(obj.object_type, 3 | 9) {
                     tree::Output {
                         layers: &mut layers,
                         images: &mut needed,
                         ids: &mut ids,
-                        next: 0x8200_0000 + (index as u32) * 4096,
+                        next: 0x8200_0000 + namespace + (index as u32) * 4096,
                         movies: Some(movie_pictures),
+                        strings: Some(strings),
+                        inherit: Vec::new(),
                         path: vec![index],
                     }
-                    .object(&mut ctx.images, obj, None, [0, 0], 0)?;
+                    .object(
+                        &mut ctx.images,
+                        obj,
+                        None,
+                        [parent_order, 0],
+                        0,
+                    )?;
                     continue;
                 }
                 let b = &effective_base(obj)?;
@@ -115,8 +160,6 @@ pub fn publish(
                 );
                 ensure!(
                     b.world == -1
-                        && b.clip_use == 0
-                        && b.src_clip_use == 0
                         && b.mask_no == -1
                         && b.tonecurve_no == -1
                         && b.light_no == -1
@@ -125,7 +168,7 @@ pub fn publish(
                         && b.alpha_blend == 1,
                     "unsupported native object visual state at slot {index}"
                 );
-                let id = 0x8000_0000u32 + index as u32;
+                let id = 0x8000_0000u32 + namespace + index as u32;
                 ids.insert(id);
                 let (paint, width, height, cx, cy, image) = match obj.object_type {
                     1 => {
@@ -185,7 +228,8 @@ pub fn publish(
                     ..Default::default()
                 };
                 needed.push(image);
-                layers.push(LayerSpec {
+                layers.push(LayerSpec { source_crop: object_source_crop(b,[cx as f32,cy as f32]),
+                    viewport_clip: object_viewport_clip(b),
                     id,
                     parent: None,
                     rect: [
@@ -197,7 +241,10 @@ pub fn publish(
                     paint,
                     transform,
                     order: [
-                        i32::try_from(b.order).context("native order overflow")?,
+                        i32::try_from(b.order)
+                            .context("native order overflow")?
+                            .checked_add(parent_order)
+                            .context("native EXCALL order overflow")?,
                         i32::try_from(b.layer).context("native layer overflow")?,
                     ],
                     clip: None,
@@ -218,7 +265,7 @@ pub fn publish(
         }
     }
     // Shared text layout/metrics validate before any visible scene mutation.
-    let mut message_layers = crate::message::project(ctx, host)?;
+    let mut message_layers = crate::message::project(ctx, client, host)?;
     message_layers.extend(crate::message::project_frame(ctx, client, host)?);
     ids.extend(message_layers.iter().map(|layer| layer.id));
     // Complete decoding/validation before any visible scene mutation.
@@ -248,7 +295,8 @@ pub fn publish(
         const MOV_LAYER: u32 = 0xA000_0000;
         let mov = &ctx.globals.mov;
         ids.insert(MOV_LAYER);
-        layers.push(LayerSpec {
+        layers.push(LayerSpec { source_crop: None,
+            viewport_clip: None,
             id: MOV_LAYER,
             parent: None,
             rect: [
@@ -309,6 +357,25 @@ pub fn publish(
 
 /// Native additive/multiplicative offset-list policy; values/timing are owned
 /// by the shared IntEvent implementation, matrices by the shared layer service.
+fn object_viewport_clip(b: &crate::runtime::globals::ObjectBaseState) -> Option<[f32; 4]> {
+    if b.clip_use == 0 {
+        return None;
+    }
+    // Original scissor clamps each signed edge at zero before viewport
+    // scaling. Reversed/empty edges are empty clips, not malformed resources.
+    let l = b.clip_left.max(0) as f32;
+    let t = b.clip_top.max(0) as f32;
+    let r = b.clip_right.max(0) as f32;
+    let d = b.clip_bottom.max(0) as f32;
+    Some([l, t, (r - l).max(0.), (d - t).max(0.)])
+}
+/// Native source edges are relative to the combined object/texture center.
+/// Keep signed edges: unlike target scissors, these are never clamped at zero.
+fn object_source_crop(b:&crate::runtime::globals::ObjectBaseState,texture_center:[f32;2])->Option<[f32;4]> {
+    if b.src_clip_use==0 {return None;}
+    let center=[(b.center_x+b.center_rep_x) as f32+texture_center[0],(b.center_y+b.center_rep_y) as f32+texture_center[1]];
+    Some([b.src_clip_left as f32+center[0],b.src_clip_top as f32+center[1],(b.src_clip_right as f32-b.src_clip_left as f32).max(0.),(b.src_clip_bottom as f32-b.src_clip_top as f32).max(0.)])
+}
 fn effective_base(
     object: &crate::runtime::globals::ObjectState,
 ) -> Result<crate::runtime::globals::ObjectBaseState> {
@@ -416,6 +483,19 @@ pub(crate) fn object_filter(
 mod filter_tests {
     use super::object_filter;
     use crate::runtime::globals::ObjectBaseState;
+    #[test]
+    fn native_source_crop_adds_image_center_and_center_rep_but_keeps_signed_edges() {
+        let mut b=ObjectBaseState::default();b.src_clip_use=1;
+        b.center_x=10;b.center_y=20;b.center_rep_x=-3;b.center_rep_y=4;
+        b.src_clip_left=-8;b.src_clip_top=-15;b.src_clip_right=5;b.src_clip_bottom=2;
+        assert_eq!(super::object_source_crop(&b,[30.,40.]),Some([29.,49.,13.,17.]));
+        // Sum original signed centers before converting to f32, exactly as
+        // the native collector. Separate casts lose cancellation at 2^24.
+        b.center_x=16_777_217;b.center_rep_x=-16_777_216;
+        assert_eq!(super::object_source_crop(&b,[30.,40.]).unwrap()[0],23.);
+        b.src_clip_right=-10;assert_eq!(super::object_source_crop(&b,[30.,40.]).unwrap()[2],0.);
+        b.src_clip_use=0;assert_eq!(super::object_source_crop(&b,[30.,40.]),None);
+    }
     #[test]
     fn siglus_object_effects_map_to_layer_filter_units() {
         let mut b = ObjectBaseState::default();

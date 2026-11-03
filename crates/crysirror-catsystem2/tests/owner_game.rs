@@ -127,6 +127,7 @@ struct GameStorage {
     kcs: crysirror_resource::ArchiveMount,
     config: crysirror_resource::ArchiveMount,
     bgm: crysirror_resource::ArchiveMount,
+    fes: crysirror_resource::ArchiveMount,
 }
 impl crysirror_core::service::ClientStorage for GameStorage {
     fn read(&self, path: &crysirror_core::path::VfsPath) -> crysirror_core::Result<Vec<u8>> {
@@ -154,6 +155,7 @@ impl crysirror_core::service::ClientStorage for GameStorage {
             return self.kcs.open(member);
         }
         if let Some(member) = path.relative().strip_prefix("bgm.int/") { return self.bgm.open(member); }
+        if let Some(member) = path.relative().strip_prefix("fes.int/") { return self.fes.open(member); }
         if let Some(member) = path.relative().strip_prefix("config.int/") {
             return self.config.open(member);
         }
@@ -314,6 +316,7 @@ fn owner_original_adapter_publishes_shared_menu_before_next_native_call() -> Res
     config_cx.source_name = Some("config.int".into());
     let config_archive = format.open(resolver.open("config.int")?, &config_cx)?;
     let mut bgm_cx=cx.clone();bgm_cx.source_name=Some("bgm.int".into());let bgm_archive=format.open(resolver.open("bgm.int")?,&bgm_cx)?;
+    let mut fes_cx=cx.clone();fes_cx.source_name=Some("fes.int".into());let fes_archive=format.open(resolver.open("fes.int")?,&fes_cx)?;
     let startup = parse_startup(&std::fs::read(root.join("config/startup.xml"))?)?;
     let config = crysirror_catsystem2::Config {
         script: startup.script,
@@ -321,6 +324,7 @@ fn owner_original_adapter_publishes_shared_menu_before_next_native_call() -> Res
         heap_bytes: startup.heap_bytes,
         executable: Some("cs2.exe".into()),
         canvas: startup.canvas,
+        random_seeds:None,
     };
     let mut vm = crysirror_catsystem2::CatSystem2Vm::new(ClientId(1), config)?;
     let save=tempfile::tempdir()?;
@@ -336,6 +340,7 @@ fn owner_original_adapter_publishes_shared_menu_before_next_native_call() -> Res
             kcs: crysirror_resource::ArchiveMount::new(archive, cx)?,
             config: crysirror_resource::ArchiveMount::new(config_archive, config_cx)?,
             bgm: crysirror_resource::ArchiveMount::new(bgm_archive,bgm_cx)?,
+            fes: crysirror_resource::ArchiveMount::new(fes_archive,fes_cx)?,
         }),
         ui: Default::default(),
         loops: Default::default(),
@@ -391,7 +396,7 @@ fn owner_original_adapter_publishes_shared_menu_before_next_native_call() -> Res
     ensure!(loop_point.range.start_frame==1911584&&loop_point.range.end_frame==Some(3819008),"original loop coordinates changed");
 
     ensure!(
-        error.contains("unsupported native gcall") || error.contains("unsupported KCS opcode"),
+        error.contains("unsupported native gcall") || error.contains("unsupported KCS opcode") || error.contains("input observation"),
         "unexpected native frontier: {error}"
     );
     let menu = host
@@ -460,6 +465,87 @@ fn owner_original_adapter_publishes_shared_menu_before_next_native_call() -> Res
 #[cfg(feature = "runtime")]
 #[test]
 #[ignore = "requires explicitly authorized CRYSIRROR_CATSYSTEM2_GAME; no game data shipped"]
+fn owner_actual_fes_forced_tick_uses_shared_input_and_resource_observations() -> Result<()> {
+    use crysirror_core::service::{HostServices,InputFrame,PointerObservation};
+    use crysirror_runtime::{AdapterRegistry,Project,Runtime};
+    let root=PathBuf::from(std::env::var_os("CRYSIRROR_CATSYSTEM2_GAME").context("game data directory")?);
+    let startup=parse_startup(&std::fs::read(root.join("config/startup.xml"))?)?;
+    let project:Project=serde_json::from_value(json!({"schema":2,"name":"authorized Cat FES execution","content_revision":"1","assets":"game","canvas":startup.canvas,"clients":[{"name":"native","adapter":"catsystem2","game":"native","config":{"script":startup.script,"font":"default","heap_bytes":startup.heap_bytes,"executable":"cs2.exe","canvas":startup.canvas}}]}))?;
+    let mut registry=AdapterRegistry::default();crysirror_catsystem2::register(&mut registry)?;
+    let state=tempfile::tempdir()?;
+    let mut rt=Runtime::with_asset_root(project,&root,state.path(),registry)?;
+    let resolver=Arc::new(Root(root.clone()));
+    let mut cx=DecodeContext::new(ClientId(1));cx.resolver=Some(resolver.clone());cx.limits.max_entry_size=1024*1024*1024;
+    cx.parameters.insert("cat-system/int".into(),json!({"executable":"cs2.exe"}));
+    let format=crysirror_formats_arc::legacy_archive("cat-system/int").unwrap();
+    let mut names=std::fs::read_dir(&root)?.collect::<std::io::Result<Vec<_>>>()?.into_iter().map(|e|e.file_name().to_string_lossy().into_owned()).filter(|n|n.to_ascii_lowercase().ends_with(".int")).collect::<Vec<_>>();names.sort();
+    for name in &names {
+        cx.source_name=Some(name.clone());let archive=format.open(resolver.open(name)?,&cx)?;
+        rt.mount_provider(ClientId(1),name,Arc::new(crysirror_resource::ArchiveMount::new(archive,cx.clone())?))?;
+    }
+    rt.host.engine.ui.menus.set_native_bars(true);
+    // This test host explicitly defines its virtual pointer, rather than
+    // inheriting a fabricated coordinate from a legacy VM constructor.
+    rt.host.pointer_observation=PointerObservation {position:Some([0,0]),inside:Some(true)};
+    let started=std::time::Instant::now();
+    while rt.poll_vm_preparations()? {
+        ensure!(started.elapsed()<std::time::Duration::from_secs(30),"Cat owner source preparation timeout");
+        std::thread::yield_now();
+    }
+    ensure!(rt.inspect()["frame"]==0&&rt.inspect()["time_ms"]==0,"preparation advanced native input/time");
+    let mut error=None;
+    loop {
+        match rt.tick(16,InputFrame::default()) {
+            Ok(())=>std::thread::sleep(std::time::Duration::from_millis(1)),
+            Err(e)=>{error=Some(format!("{e:#}"));break;}
+        }
+        if started.elapsed()>=std::time::Duration::from_secs(30) {break;}
+    }
+    let inspect=rt.inspect();let native=&inspect["sessions"][0]["native"];
+    println!("actual FES execution error={error:?}");println!("{native}");
+    ensure!(native["native_calls"]["447"]==1,"original FES source was not loaded");
+    let fes=&native["tasks"]["fes_tasks"][0];
+    ensure!(fes["player"]["executed"].as_u64().unwrap_or(0)>47,"original FES commands did not execute beyond the former configuration frontier");
+    let object_root=u32::try_from(fes["object_root"].as_u64().context("original FES BASE root was not published")?)?;
+    let layer=rt.host.engine.layers.get(ClientId(1),object_root).context("FES BASE is not a real engine Layer")?;
+    ensure!(matches!(layer.paint,crysirror_scene::layer::Paint::Solid{color:[0,0,0,0]}),"FES BASE owns fabricated pixels instead of a transparent engine group");
+    let motion:crysirror_scene::layer::MotionStatus=serde_json::from_slice(&rt.host.query_engine(ClientId(1),crysirror_core::service::EngineQuery::LayerMotion(object_root))?)?;
+    ensure!(motion.complete&&motion.tracks.is_empty(),"unexecuted original motion program was fabricated");
+    ensure!(rt.host.query_engine(ClientId(999),crysirror_core::service::EngineQuery::LayerMotion(object_root)).is_err(),"FES object motion leaked to a foreign client");
+    ensure!(native["settings_source"]["stillread"]==0&&native["settings_source"]["dirty"]==true,"original setconf did not mutate its actual native record");
+    let audio=rt.host.audio_mix_group(ClientId(1),"catsystem2/sound/part/4")?.context("original bgvoice volume did not publish a shared audio control")?;
+    ensure!((audio.settings.gain-0.8).abs()<f32::EPSILON&&audio.settings.parent.as_deref()==Some("catsystem2/sound/master"),"original bgvoice volume was not represented by actual shared mixer state");
+    ensure!(rt.host.audio_mix_group(ClientId(999),"catsystem2/sound/part/4").is_err(),"Cat sound control leaked to a foreign client");
+    ensure!(native["input_observation"]["available"]==true&&native["input_observation"]["position"]==json!([0,0]),"FES did not use the admitted shared virtual pointer");
+    ensure!(native["steam_manager"]["created"]==false,"unexecuted native Steam initialization was fabricated");
+    let typed=native["tasks"]["fes_tasks"].as_array().context("actual FES tasks missing")?.iter()
+        .find(|task|task["class_objects"].as_array().is_some_and(|objects|objects.len()>1))
+        .context("original typed child was not admitted; metadata gate is not a resource receipt")?;
+    let leases=typed["class_image_leases"].as_array().context("original class image publication missing")?;
+    ensure!(leases.len()>=2,"original IMAGE and CIMAGE did not both obtain engine image leases");
+    let image_list=u32::try_from(typed["image_list"].as_u64().context("typed task missing actual ImageList binding")?)?;
+    let canvas=rt.host.engine.canvases.surface(ClientId(1),0x58000000+image_list).context("original typed ImageList has no shared Canvas")?;
+    ensure!(canvas.nodes.len()>=2,"original bitmap declarations were not published as shared Canvas draws");
+    let mut planes=0;
+    for object in typed["class_objects"].as_array().unwrap(){
+        if object["type"]==4 {
+            let id=u32::try_from(object["id"].as_u64().context("class native ID missing")?)?;
+            ensure!(rt.host.engine.canvases.surface(ClientId(1),0x5c000000+id).is_some(),"original PLANE has no real shared Canvas view");
+            ensure!(rt.host.engine.layers.get(ClientId(1),0x4d000000+id).is_some(),"original PLANE has no real shared Layer");
+            planes+=1;
+        }
+    }
+    ensure!(planes>=6,"original typed Plane bank was not fully admitted");
+    println!("actual original typed resources: IMAGE/CIMAGE leases={}, Canvas draws={}, real Plane views={planes}",leases.len(),canvas.nodes.len());
+    if let Some(error)=error {
+        ensure!(error.contains("CatSystem2"),"unexpected original-game failure: {error}");
+        ensure!(native["pending_native"].is_object()||native["native_event_wait"].is_object()||native["fes_owner_tick"].is_object(),"native failure consumed the original pending task continuation");
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires explicitly authorized CRYSIRROR_CATSYSTEM2_GAME; no game data shipped"]
 fn owner_actual_runtime_keeps_native_frontier_and_shared_input_receipts() -> Result<()> {
     use crysirror_core::{service::{buttons, EngineQuery, HostServices, InputFrame}, state::ClientId};
     use crysirror_runtime::{AdapterRegistry, Project, Runtime};
@@ -498,10 +584,23 @@ fn owner_actual_runtime_keeps_native_frontier_and_shared_input_receipts() -> Res
     let inspect=rt.inspect();let native=&inspect["sessions"][0]["native"];
     println!("actual canonical Runtime archives={} frontier={error}",names.len());
     println!("{native}");
-    ensure!(native["pending_native"]["id"]==447&&native["pending_native"]["arguments"]==json!([8,406])&&native["pc"]==0x1926,"original Runtime frontier changed");
+    ensure!(native["native_calls"]["117"]==1&&native["native_calls"]["100"]==1&&native["instructions"].as_u64().unwrap_or(0)>20285,"original Runtime frontier changed");
+    let top=native["tasks"]["planes"].as_array().context("native planes missing")?.iter().find(|p|p["id"]==4).context("original top plane missing")?;
+    ensure!(top["solid_vertex_argb"].is_u64()&&top["diffuse_enable"]==1&&top["diffuse_argb"]==4278190080u64,"original uniform vertex diffuse state was not preserved");
+    let top_payload=rt.host.engine.layers.get(ClientId(1),0x43000000+4*2+1).context("original shared top-plane payload missing")?;
+    ensure!(matches!(top_payload.paint,crysirror_scene::layer::Paint::Solid{color:[0,0,0,255]})&&top_payload.parent==Some(0x43000000+4*2),"native100 did not reach common Solid paint/group state");
+    let cache=&native["texture_cache"];
+    ensure!(cache["logical_size"]==json!([3072,6656])&&cache["allocated_pages"]==292&&cache["defined_pages"]==292&&cache["published_pages"]==292&&cache["allocated_rgba_bytes"]==76546048u64&&cache["generation"]==1,"original global cache was not genuinely cleared/published through shared paged ImageJobs");
+    for (_,path) in cache["published_paths"].as_object().context("shared page publication paths missing")? {
+        let path=path.as_str().context("shared page path type")?;
+        let page=rt.assets.surface(ClientId(1),path).context("shared page did not resolve in canonical assets")?;
+        ensure!(page.width==256&&page.height==256&&page.rgba.iter().all(|b|*b==0),"actual shared native117 page pixels differ");
+        ensure!(rt.assets.surface(ClientId(2),path).is_none(),"native117 page leaked to foreign client");
+    }
     let fes=&native["tasks"]["fes_tasks"][0];
     ensure!(fes["id"]==8&&fes["image_list"]==6&&fes["native_rect"]==json!([0,0,3072,4096])&&fes["upload_position"]==json!([0,0]),"canonical native FES binding did not preserve actual manager geometry/position");
-    ensure!(fes["string_bank_owner"]==3&&fes["first_tick"]==true&&fes["low_button"].is_null()&&fes["saved_cursor"].is_null()&&fes["player_loaded"]==false,"canonical native FES constructor/tick/unknown cursor state changed");
+    ensure!(fes["string_bank_owner"]==3&&fes["first_tick"]==false&&fes["low_button"].is_number()&&fes["saved_cursor"].is_null()&&fes["player_loaded"]==true,"canonical native FES constructor/tick/unknown cursor state changed");
+    ensure!(native["native_calls"]["447"]==1&&fes["script_name"]==json!(b"fes.int/flow.fes".as_slice())&&fes["interpreter_owner"]==3&&fes["input_task"]==1&&fes["sound_task"]==2&&fes["player"]["executed"].as_u64().unwrap_or(0)>4&&fes["running"]==true&&fes["player"]["sections"]==25,"canonical original FES load did not retain its actual program/local owner");
     ensure!(native["tasks"]["buttons"][0]["result"]==0,"native child tick did not reset existing controller result");
     let pending=native["pending_native"].clone();let instructions=native["instructions"].clone();
     let list=&native["tasks"]["image_lists"][0];let path=list["manager"]["path"].as_str().context("canonical engine atlas missing")?;
@@ -520,12 +619,170 @@ fn owner_actual_runtime_keeps_native_frontier_and_shared_input_receipts() -> Res
     ] {
         let e=rt.tick(16,input).unwrap_err();ensure!(format!("{e:#}").contains("unsupported native input callback"),"actual Runtime did not reach original callback boundary");
         let delivery:Option<InputDelivery>=serde_json::from_slice(&rt.host.query_engine(ClientId(1),EngineQuery::InputRouteDelivery)?)?;
-        let delivery=delivery.context("actual Runtime callback lost delivery")?;ensure!(delivery.event.phase==phase,"actual Runtime edge phase changed");
+        let delivery=delivery.context("actual Runtime callback lost delivery")?;
+        if delivery.event.phase==InputRoutePhase::HoverEnter&&delivery.receiver==9 {
+            let stats:crysirror_scene::input_routes::InputRouteStats=serde_json::from_slice(&rt.host.query_engine(ClientId(1),EngineQuery::InputRouteStats)?)?;
+            ensure!(stats.leased&&stats.queued_samples>0,"FES hover lost the queued physical input sample");
+            println!("actual canonical input admission {name}: expected physical {phase:?} is queued behind unsupported FES hover; no physical callback completion claimed");
+        }else{ensure!(delivery.event.phase==phase,"actual Runtime edge phase changed");}
         let again:Option<InputDelivery>=serde_json::from_slice(&rt.host.query_engine(ClientId(1),EngineQuery::InputRouteDelivery)?)?;
         ensure!(again.as_ref().map(|d|d.receipt)==Some(delivery.receipt),"actual Runtime repeated poll redelivered an edge");
         let current=rt.inspect();ensure!(current["sessions"][0]["native"]["pending_native"]==pending&&current["sessions"][0]["native"]["instructions"]==instructions,"actual Runtime callback changed original continuation");
         println!("actual canonical Runtime input {name}: {delivery:?}");
         rt.host.submit_engine(ClientId(1),1,&serde_json::to_vec(&json!({"input_routes":[{"op":"cancel"}]}))?)?;
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires explicitly authorized CRYSIRROR_CATSYSTEM2_GAME; no game data shipped"]
+fn owner_fes_class_census() -> Result<()> {
+    let root = PathBuf::from(std::env::var_os("CRYSIRROR_CATSYSTEM2_GAME").context("game data directory")?);
+    let resolver = Arc::new(Root(root.clone()));
+    let mut cx = DecodeContext::new(ClientId(1));
+    cx.limits.max_entry_size = 1024 * 1024 * 1024;
+    cx.resolver = Some(resolver.clone());
+    cx.parameters.insert("cat-system/int".into(), json!({"executable":"cs2.exe"}));
+    cx.source_name = Some("fes.int".into());
+    let format = crysirror_formats_arc::legacy_archive("cat-system/int").unwrap();
+    let archive = format.open(resolver.open("fes.int")?, &cx)?;
+    let mounted = crysirror_resource::ArchiveMount::new(archive, cx.clone())?;
+    const TYPES: &[&str] = &["BASE","CIMAGE","IMAGE","CPLANE","PLANE","VIEW","BUTTON","DRAW","WIPE","SOUND","SNDTABLE","PANEL","SAVEPANEL","SCROLL","SCROLL2","SLIDER","BGTABLE","BGTABLE2","CHTABLE","CHTABLE2","CHTABLE3","STRING","IMGWND","PARTICLE","LOGSTRING","DIFIMAGE","RDRAW","RWIPE","NUMIMG","NVSTRING","WBREAK","RWMOS","RFMOS","STRTABLE","FILELIST","M2PLANE"];
+    let mut files: std::collections::BTreeMap<&str, std::collections::BTreeSet<String>> = Default::default();
+    let mut lines: std::collections::BTreeMap<&str, usize> = Default::default();
+    let mut total = 0;
+    for entry in mounted.entries() {
+        if !entry.path.to_ascii_lowercase().ends_with(".fes") {
+            continue;
+        }
+        total += 1;
+        let bytes = crysirror_resource::read_all(mounted.open_entry(&entry.path)?.as_ref(), 16 * 1024 * 1024)?;
+        // FES container: magic, packed length, text length, reserved, zlib stream.
+        anyhow::ensure!(bytes.starts_with(b"FES\0") && bytes.len() >= 16, "FES container {}", entry.path);
+        let mut text = Vec::new();
+        flate2::read::ZlibDecoder::new(&bytes[16..]).read_to_end(&mut text)?;
+        let bytes = text;
+        for line in bytes.split(|b| *b == b'\n') {
+            let text = String::from_utf8_lossy(line);
+            let Some(word) = text.split_ascii_whitespace().next() else { continue };
+            if let Some(kind) = TYPES.iter().find(|t| t.eq_ignore_ascii_case(word)) {
+                *lines.entry(kind).or_default() += 1;
+                files.entry(kind).or_default().insert(entry.path.clone());
+            }
+        }
+    }
+    println!("fes files={total}");
+    let mut rows: Vec<_> = files.iter().map(|(k, v)| (v.len(), lines[k], *k, v.iter().take(4).cloned().collect::<Vec<_>>())).collect();
+    rows.sort();
+    rows.reverse();
+    for row in rows {
+        println!("{:>4} files {:>6} lines {} e.g. {:?}", row.0, row.1, row.2, row.3);
+    }
+    Ok(())
+}
+
+/// Print the FES source of one script for local review; never stored in the repo.
+#[test]
+#[ignore = "requires explicitly authorized CRYSIRROR_CATSYSTEM2_GAME and CRYSIRROR_CATSYSTEM2_DUMP_DIR"]
+fn owner_fes_dump_for_review() -> Result<()> {
+    let root = PathBuf::from(std::env::var_os("CRYSIRROR_CATSYSTEM2_GAME").context("game data directory")?);
+    let out = PathBuf::from(std::env::var_os("CRYSIRROR_CATSYSTEM2_DUMP_DIR").context("dump directory")?);
+    let resolver = Arc::new(Root(root));
+    let mut cx = DecodeContext::new(ClientId(1));
+    cx.limits.max_entry_size = 1024 * 1024 * 1024;
+    cx.resolver = Some(resolver.clone());
+    cx.parameters.insert("cat-system/int".into(), json!({"executable":"cs2.exe"}));
+    cx.source_name = Some("fes.int".into());
+    let format = crysirror_formats_arc::legacy_archive("cat-system/int").unwrap();
+    let mut systems = cx.clone();
+    systems.source_name = Some("image_sys.int".into());
+    let list = crysirror_resource::ArchiveMount::new(format.open(resolver.open("image_sys.int")?, &systems)?, systems.clone())?;
+    let names: Vec<String> = list.entries().iter().map(|e| e.path.clone()).collect();
+    std::fs::write(out.join("image_sys.txt"), names.join("\n"))?;
+    let mut config = cx.clone();
+    config.source_name = Some("config.int".into());
+    let settings = crysirror_resource::ArchiveMount::new(format.open(resolver.open("config.int")?, &config)?, config.clone())?;
+    for entry in settings.entries() {
+        let bytes = crysirror_resource::read_all(settings.open_entry(&entry.path)?.as_ref(), 16 * 1024 * 1024)?;
+        std::fs::write(out.join(&entry.path), bytes)?;
+    }
+    let mounted = crysirror_resource::ArchiveMount::new(format.open(resolver.open("fes.int")?, &cx)?, cx.clone())?;
+    for entry in mounted.entries() {
+        let bytes = crysirror_resource::read_all(mounted.open_entry(&entry.path)?.as_ref(), 16 * 1024 * 1024)?;
+        if bytes.starts_with(b"FES\0") {
+            let mut text = Vec::new();
+            flate2::read::ZlibDecoder::new(&bytes[16..]).read_to_end(&mut text)?;
+            std::fs::write(out.join(&entry.path), text)?;
+        }
+    }
+    Ok(())
+}
+
+/// Count KCS gcall ids per script so missing natives can be reviewed in one pass.
+#[test]
+#[ignore = "requires explicitly authorized CRYSIRROR_CATSYSTEM2_GAME"]
+fn owner_kcs_native_census() -> Result<()> {
+    let root = PathBuf::from(std::env::var_os("CRYSIRROR_CATSYSTEM2_GAME").context("game data directory")?);
+    let resolver = Arc::new(Root(root));
+    let mut cx = DecodeContext::new(ClientId(1));
+    cx.limits.max_entry_size = 1024 * 1024 * 1024;
+    cx.resolver = Some(resolver.clone());
+    cx.parameters.insert("cat-system/int".into(), json!({"executable":"cs2.exe"}));
+    cx.source_name = Some("kcs.int".into());
+    let format = crysirror_formats_arc::legacy_archive("cat-system/int").unwrap();
+    let mounted = crysirror_resource::ArchiveMount::new(format.open(resolver.open("kcs.int")?, &cx)?, cx.clone())?;
+    let mut totals: std::collections::BTreeMap<u32, usize> = Default::default();
+    for entry in mounted.entries() {
+        let bytes = crysirror_resource::read_all(mounted.open_entry(&entry.path)?.as_ref(), 64 * 1024 * 1024)?;
+        let program = crysirror_catsystem2::kcs::Program::parse(&bytes)?;
+        let code = &program.code;
+        if let Some(out) = std::env::var_os("CRYSIRROR_CATSYSTEM2_DUMP_DIR") {
+            std::fs::write(PathBuf::from(out).join(format!("{}.code", entry.path)), code)?;
+        }
+        let mut hits: std::collections::BTreeMap<u32, usize> = Default::default();
+        for at in 0..code.len().saturating_sub(11) {
+            if code[at] != 0x2b || code[at + 1] != code[at + 6] {
+                continue;
+            }
+            let id = u32::from_le_bytes(code[at + 2..at + 6].try_into()?);
+            let size = u32::from_le_bytes(code[at + 7..at + 11].try_into()?);
+            if id < 1100 && size % 4 == 0 && size <= 128 {
+                *hits.entry(id).or_default() += 1;
+                *totals.entry(id).or_default() += 1;
+            }
+        }
+        println!("{} code={} natives={:?}", entry.path, code.len(), hits);
+    }
+    println!("TOTAL {totals:?}");
+    Ok(())
+}
+
+#[test]
+#[ignore]
+fn owner_archive_dump() -> Result<()> {
+    let root = PathBuf::from(std::env::var_os("CRYSIRROR_CATSYSTEM2_GAME").context("game data directory")?);
+    let out = PathBuf::from(std::env::var_os("CRYSIRROR_CATSYSTEM2_DUMP_DIR").context("dump directory")?);
+    let resolver = Arc::new(Root(root));
+    let mut cx = DecodeContext::new(ClientId(1));
+    cx.limits.max_entry_size = 1024 * 1024 * 1024;
+    cx.resolver = Some(resolver.clone());
+    cx.parameters.insert("cat-system/int".into(), json!({"executable":"cs2.exe"}));
+    let format = crysirror_formats_arc::legacy_archive("cat-system/int").unwrap();
+    for name in ["psz.int", "m2config.int"] {
+        cx.source_name = Some(name.into());
+        let mounted = crysirror_resource::ArchiveMount::new(format.open(resolver.open(name)?, &cx)?, cx.clone())?;
+        let mut listing = String::new();
+        for entry in mounted.entries() {
+            listing.push_str(&format!("{}\n", entry.path));
+            if name == "m2config.int" {
+                let bytes = crysirror_resource::read_all(mounted.open_entry(&entry.path)?.as_ref(), 64 * 1024 * 1024)?;
+                std::fs::write(out.join(entry.path.replace('/', "_")), bytes)?;
+            } else if entry.path == "ca01_m_body_1.psz" {
+                let bytes = crysirror_resource::read_all(mounted.open_entry(&entry.path)?.as_ref(), 512 * 1024 * 1024)?;
+                std::fs::write(out.join(&entry.path), bytes)?;
+            }
+        }
+        std::fs::write(out.join(format!("{name}.list")), listing)?;
     }
     Ok(())
 }

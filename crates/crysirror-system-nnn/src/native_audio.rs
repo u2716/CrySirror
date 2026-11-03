@@ -70,6 +70,7 @@ impl AudioSettings {
 pub enum SourceKind {
     Music,
     Sound,
+    SystemSound,
     Voice,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -99,6 +100,9 @@ impl NativeSource {
             SourceKind::Music => NativeAudioLookup::Music(names.music_lookup(&self.name)?),
             SourceKind::Sound => NativeAudioLookup::Sound {
                 loose: names.system_wave(Some(b"se"), &self.name)?,
+            },
+            SourceKind::SystemSound => NativeAudioLookup::Sound {
+                loose: names.system_wave(Some(b"sys"), &self.name)?,
             },
             SourceKind::Voice => NativeAudioLookup::Voice {
                 packed: names.packed_voice(&self.name)?,
@@ -155,8 +159,11 @@ pub struct NativeAudioPolicy {
     pub last_music_number: Option<i32>,
     pub music_repeat_count: i32,
     pub music_percent: i32,
-    pub sound_work: [[i32; 12]; 8],
-    pub voice_work: [[i32; 12]; 8],
+    /// Original loop-work record: loop, number, delta, startXYZ, move,
+    /// endXYZ, doppler, then five retained native words. This is deliberately
+    /// not the twelve-word Sound/Voice callback argument layout.
+    pub sound_work: [[i32; 16]; 8],
+    pub voice_work: [[i32; 16]; 8],
     pub voice_names: [Vec<u8>; 8],
     pub default_music_fade_in: u32,
     pub default_music_fade_out: u32,
@@ -239,8 +246,8 @@ impl NativeAudioPolicy {
             last_music_number: None,
             music_repeat_count: 0,
             music_percent: settings.music_volume,
-            sound_work: [[0; 12]; 8],
-            voice_work: [[0; 12]; 8],
+            sound_work: [[0; 16]; 8],
+            voice_work: [[0; 16]; 8],
             voice_names: std::array::from_fn(|_| Vec::new()),
             default_music_fade_in: 0,
             default_music_fade_out: 5,
@@ -308,8 +315,11 @@ impl NativeAudioPolicy {
             };
         } else if number == -2 {
             if let Some(delta) = words.get(1) {
-                next.music_percent = (i64::from(self.settings.music_volume) + i64::from(*delta))
-                    .clamp(1, 100) as i32;
+                next.music_percent = self
+                    .settings
+                    .music_volume
+                    .wrapping_add(*delta)
+                    .clamp(1, 100);
                 plan.operation = AudioOperation::Gain {
                     channel: self.bindings.music,
                     percent: next.music_percent,
@@ -325,7 +335,7 @@ impl NativeAudioPolicy {
             let percent = if delta == -9999 {
                 self.settings.music_volume
             } else {
-                (i64::from(self.settings.music_volume) + i64::from(delta)).clamp(1, 100) as i32
+                self.settings.music_volume.wrapping_add(delta).clamp(1, 100)
             };
             next.music_number = Some(number - 1);
             next.last_music_number = Some(number - 1);
@@ -341,7 +351,8 @@ impl NativeAudioPolicy {
                     channel: self.bindings.music,
                     parameters: AudioParameters {
                         gain: legacy_gain(percent)?,
-                        looping: repeat == 0,
+                        looping: repeat != 1,
+                        loop_passes: (repeat > 1).then_some(repeat as u32),
                         bus: PcmBus::Music,
                         ..AudioParameters::default()
                     },
@@ -369,12 +380,58 @@ impl NativeAudioPolicy {
         plan.next = next;
         Ok(plan)
     }
+    /// Restore replay reads the original loop-work layout. Only the existing
+    /// plain spatial profile is admitted; don't reinterpret saved signed
+    /// coordinates as byte-encoded callback coordinates or invent a receipt.
+    pub(crate) fn saved_plain_loop(
+        &self,
+        channel: usize,
+        voice: bool,
+        names: &Names,
+    ) -> Result<NativeAudioPlan> {
+        ensure!(channel < 8, "NNN saved audio channel bounds");
+        let row = if voice {
+            &self.voice_work[channel]
+        } else {
+            &self.sound_work[channel]
+        };
+        ensure!(row[0] != 0, "NNN saved replay requires original loop flag");
+        ensure!(
+            row[3..=10].iter().all(|value| *value == 0),
+            "NNN saved spatial loop requires its native signed-coordinate/motion consumer"
+        );
+        let words = [row[1], channel as i32, row[2], row[0]];
+        if voice {
+            ensure!(
+                self.voice_names[channel].len() <= 63,
+                "NNN saved voice C-string extent"
+            );
+        }
+        self.clip_with_name_policy(
+            &words,
+            voice.then_some(self.voice_names[channel].as_slice()),
+            names,
+            voice,
+            false,
+        )
+    }
+
     fn clip(
         &self,
         words: &[i32],
         voice_name: Option<&[u8]>,
         names: &Names,
         voice: bool,
+    ) -> Result<NativeAudioPlan> {
+        self.clip_with_name_policy(words, voice_name, names, voice, true)
+    }
+    fn clip_with_name_policy(
+        &self,
+        words: &[i32],
+        voice_name: Option<&[u8]>,
+        names: &Names,
+        voice: bool,
+        bound_received_name: bool,
     ) -> Result<NativeAudioPlan> {
         ensure!((2..=12).contains(&words.len()), "NNN clip parameter count");
         let channel = usize::try_from(words[1]).context("NNN negative native audio channel")?;
@@ -393,9 +450,9 @@ impl NativeAudioPolicy {
         if words[0] == -1 {
             if voice {
                 ensure!(voice_name.is_none(), "NNN stopped voice has filename");
-                next.voice_work[channel][3] = 0;
+                next.voice_work[channel][0] = 0;
             } else {
-                next.sound_work[channel][3] = 0;
+                next.sound_work[channel][0] = 0;
             }
             plan.operation = AudioOperation::Stop {
                 channel: logical,
@@ -403,15 +460,31 @@ impl NativeAudioPolicy {
             };
         } else {
             ensure!(words[0] >= 0, "NNN negative clip index");
-            let mut work = [0; 12];
-            work[..words.len()].copy_from_slice(words);
+            // SetLoopWorkParam writes exactly0..10. Words11..15 belong to
+            // the original native record and survive another playback call.
+            let mut work = if voice {
+                self.voice_work[channel]
+            } else {
+                self.sound_work[channel]
+            };
             let s = spatial(words)?;
-            work[4..7].copy_from_slice(&s.start);
-            work[8..11].copy_from_slice(&s.end);
+            work[0] = words.get(3).copied().unwrap_or(0);
+            work[1] = words[0];
+            work[2] = words.get(2).copied().unwrap_or(0);
+            work[3..6].copy_from_slice(&s.start);
+            work[6] = s.move_time;
+            work[7..10].copy_from_slice(&s.end);
+            work[10] = s.doppler;
             let (enabled, volume, bus, name, kind) = if voice {
                 let name = voice_name.context("NNN voice lacks pre-received filename")?;
                 decoded_name(name)?;
-                let stored = name[..name.len().min(62)].to_vec();
+                // New callbacks perform native62-byte receipt truncation;
+                // direct saved replay must not cut a valid final CP932 pair.
+                let stored = if bound_received_name {
+                    name[..name.len().min(62)].to_vec()
+                } else {
+                    name.to_vec()
+                };
                 next.voice_names[channel] = stored.clone();
                 next.voice_work[channel] = work;
                 (
@@ -440,8 +513,11 @@ impl NativeAudioPolicy {
                 )
             };
             let filename = decoded_name(&name)?;
-            let percent = (i64::from(volume) + i64::from(words.get(2).copied().unwrap_or(0)))
-                .clamp(0, 100) as i32;
+            // Legacy531dc0 clamps directly. The later public source's
+            // delta=-101 special case is absent from this reviewed module.
+            let percent = volume
+                .wrapping_add(words.get(2).copied().unwrap_or(0))
+                .clamp(0, 100);
             if enabled {
                 let candidates = if voice {
                     // Packed VPK precedence belongs to the resource mount. A
@@ -504,10 +580,7 @@ impl NativeAudioPlan {
             spatial.is_plain(),
             "NNN native spatial audio requires shared signed-coordinate/motion profile"
         );
-        ensure!(
-            *repeat_count <= 1,
-            "NNN finite music repeats require shared source sequence completion"
-        );
+        ensure!(*repeat_count >= 0, "NNN negative native music repeat count");
         ensure!(
             fade_in.is_none() && fade_out.is_none(),
             "NNN native100ms stepped decibel envelope requires shared audio capability"
@@ -528,9 +601,17 @@ impl NativeAudioPlan {
             parameters,
         })
     }
-    pub fn encoded_request(&self,source:crysirror_core::service::EncodedAudio)->Result<AudioRequest>{
-        let (channel,parameters)=self.playback()?;
-        Ok(AudioRequest::Play{channel,source,intro:None,parameters})
+    pub fn encoded_request(
+        &self,
+        source: crysirror_core::service::EncodedAudio,
+    ) -> Result<AudioRequest> {
+        let (channel, parameters) = self.playback()?;
+        Ok(AudioRequest::Play {
+            channel,
+            source,
+            intro: None,
+            parameters,
+        })
     }
     /// An existing client-scoped shared audio resource already owns its bytes.
     pub fn resource_request(&self, resource: AudioResourceHandle) -> Result<AudioRequest> {

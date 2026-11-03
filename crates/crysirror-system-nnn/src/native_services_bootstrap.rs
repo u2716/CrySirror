@@ -25,9 +25,9 @@ pub struct NativePreferences {
     pub auto_mode: i32,
     pub window_number: i32,
     pub window_transparency: i32,
-    pub movie_volume:i32,
-    pub movie_enabled:bool,
-    pub launch_count:i32,
+    pub movie_volume: i32,
+    pub movie_enabled: bool,
+    pub launch_count: i32,
     pub audio: AudioSettings,
     /// Untouched original system-file bytes, not a reconstructed save claim.
     pub original: Option<Arc<[u8]>>,
@@ -43,7 +43,9 @@ impl NativePreferences {
             auto_mode: 0,
             window_number: 0,
             window_transparency: 0,
-            movie_volume:90,movie_enabled:true,launch_count:0,
+            movie_volume: 90,
+            movie_enabled: true,
+            launch_count: 0,
             audio: AudioSettings {
                 music_volume: 90,
                 sound_volume: 90,
@@ -91,8 +93,13 @@ impl NativePreferences {
             out.audio.voice_volume = field(180)?;
             out.audio.sound_volume = field(184)?;
             out.audio.sound_voice_volume = field(212)?;
-            out.movie_volume=field(188)?;out.movie_enabled=field(204)?!=0;out.launch_count=field(208)?;
-            ensure!((0..=100).contains(&out.movie_volume)&&out.launch_count>=0,"NNN movie volume/launch counter profile");
+            out.movie_volume = field(188)?;
+            out.movie_enabled = field(204)? != 0;
+            out.launch_count = field(208)?;
+            ensure!(
+                (0..=100).contains(&out.movie_volume) && out.launch_count >= 0,
+                "NNN movie volume/launch counter profile"
+            );
             out.audio.music_enabled = field(192)? != 0;
             out.audio.voice_enabled = field(196)? != 0;
             out.audio.sound_enabled = field(200)? != 0;
@@ -123,6 +130,8 @@ pub struct NativeWindowSource {
     pub picture: ImageLookup,
     pub rect: [i32; 4],
     pub percent: u16,
+    /// Original notTransWindowUse low bits, selecting stacked source planes.
+    pub stacked_planes: u8,
 }
 #[derive(Clone, Debug)]
 pub struct NativeWindows {
@@ -419,6 +428,7 @@ impl PreparedNativeServices {
             self.resources.picture(&path, pack_levels)
         };
         let body = NativeWindowSource {
+            stacked_planes: (n("notTransWindowUse", 0)? as u32 & 3) as u8,
             percent: (100 - self.preferences.window_transparency).clamp(0, 100) as u16,
             picture: picture("filenameWindow", b"ta_meswin")?,
             rect: [
@@ -430,6 +440,7 @@ impl PreparedNativeServices {
         };
         let name = if n("nameWindowFlag", 0)? != 0 {
             Some(NativeWindowSource {
+                stacked_planes: (n("notTransNameWindowUse", 0)? as u32 & 3) as u8,
                 percent: (100 - self.preferences.window_transparency).clamp(0, 100) as u16,
                 picture: picture("filenameNameWindow", b"ta_namewin")?,
                 rect: [
@@ -534,6 +545,7 @@ pub fn resolved_window(
         rect: source.rect,
         source_size,
         percent: source.percent,
+        stacked_planes: source.stacked_planes,
         resource: None,
     })
 }

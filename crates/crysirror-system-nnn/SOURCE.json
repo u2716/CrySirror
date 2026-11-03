@@ -28,7 +28,22 @@
         "nyanGraphicsLib/transLucentBlt3.cpp (complete mask-piecewise window Q8 arithmetic)",
         "nyanEffectLib/commoneffect.cpp (complete default CheckNeedPicPrint and GeneralPrint/Calcu contracts)",
         "nyanPictureLib/maskBlt.cpp (complete x86 independent-floor mask blit; Win64 combined-floor branch intentionally not substituted)",
-        "nyanEffectScreenLIB/effectFadeout.cpp (complete six-argument defaults, Q15 Print direction and CountIsMax command54 transition)"
+        "nyanEffectScreenLIB/effectFadeout.cpp (complete six-argument defaults, Q15 Print direction and CountIsMax command54 transition)",
+        "nnnLib/backExecClass.cpp (complete218-line driver: ExecScript returns, Calcu/Print/CountUp, restart and original NEXT mode completion)",
+        "nnnLib/commonGeneral.cpp (complete2221-line mode lifecycle read before future Opening/Movie/Title continuation hooks)",
+        "nnnLib/gamecallback.cpp (complete SystemFunctionSetFilm, LoadBackScript and CalcuBackScript helpers; backScriptSetCGOkFlag initialization)",
+        "nnnLib/maincontrol.cpp (complete2084-line host startup/config/time/SystemFile/exit contract)",
+        "nnnUtilLib/commonSystemFile.h (complete441-line layout and API)",
+        "nnnUtilLib/commonSystemFile.cpp (complete1136-line load/default/flags/save/limits contract)",
+        "nnnLib/gamecallback.cpp (complete GetGameStatusForSave/SetGameStatusByLoad/SetVarByLoad routines, compared with original legacy53ad20/53b630)",
+        "nnnLib/execscript.cpp (complete ChangeIDToAddr/AdjustScriptCall/AdjustCommandCall native saved-continuation contract)",
+        "nyanEffectLib/effectstruct.h (complete1024-byte native EFFECT field layout)",
+        "nnnLib/gamecallback.cpp (complete GetEffectForSave/GetEffectFileNameForSave/SetEffectByLoad/SetEffectFileNameByLoad; original534390/5342f0/534640/541220 static comparison)",
+        "nnnUtilLib/musicControl.cpp (audio saved-work/count contract; complete relevant routines reviewed)",
+        "nnnUtilLib/waveMusic.cpp (audio saved-work/count contract; complete relevant routines reviewed)",
+        "nnnUtilLib/scriptSoundControl.cpp (audio saved-work/count contract; complete relevant routines reviewed)",
+        "nnnUtilLib/scriptVoiceControl.cpp (audio saved-work/count contract; complete relevant routines reviewed)",
+        "nnnLib/commondatafile.h (audio saved-work/count contract; complete relevant routines reviewed)"
       ],
       "scope": "format/behaviour facts only: complete execscript and name/variable lookup routines reviewed; original word PCs, tables, postfix value/reference and operator contracts, structured control offsets, byte-name tables, native variable initialization, pending callback boundaries and 62-byte metadata limits",
       "licence_note": "No license grant found for source; no original implementation copied or linked."
@@ -90,7 +105,15 @@
       "0x567a34": "CEffectFadeout11 vtable confirmed from original RTTI; actual SetParam/CountIsMax/Print inspected independently of the later public source",
       "0x4aab70": "Complete original FadeOut SetParam: native11, six defaults and count/countMax; trailing source fields are not invented",
       "0x4aab10": "FadeOut CountIsMax changes command to Fill54 without resetting count/max/colour parameters",
-      "0x4aac80": "FadeOut Print passes100-progress source weight and progress colour weight to original x86 Q15 Fade0x4d8850"
+      "0x4aac80": "FadeOut Print passes100-progress source weight and progress colour weight to original x86 Q15 Fade0x4d8850",
+      "0x5324b0": "Complete SETFILM native callback: if back-script mode and field2054/backScriptSetCGOkFlag is0, no SystemFile mark is written; otherwise script-file index and film-minus1 are passed to SystemFile. Normal persistent-write policy is not implemented.",
+      "0x543061": "Original CGameCallBack initialization stores0 at this+0x2018/field2054 before backScriptSetCGOkFlag lookup0x543083; matches complete public source default0.",
+      "0x534b00": "Complete actual Game/Callback vtable+240: PostMessageA(WM_CLOSE), not EndGame itself. Title button4 enters native host-close/drain/two-SystemFile-write protocol.",
+      "0x4f2640": "Complete General fade setup: ordinary/special selection; special create flag is read only for nonzero special fade. Zero-fade profile preserves this condition; other effects are explicit.",
+      "0x52f5f0": "Actual LaunchCountUp is once per game-callback process guard, saturating at0x7ffffffe; updates original SystemFile RAM without fabricating a disk save.",
+      "0x52f4c0": "Actual StopScriptSoundAndVoice stops8sound/4voice slots, unlike later8voice behavior.",
+      "0x53fa30": "Actual ClearWork clears mode/default controls and first enable word of8sound+8voice work rows; no later public variable-clearing loops copied.",
+      "0x535360": "Actual vtable+116 StopVoice body is empty; reviewed version policy is not a generic unknown-callback fallback."
     }
   },
   "shared_extraction": {
@@ -116,5 +139,30 @@
     "shared_operation": "Existing public RgbLookup::weighted_color_fixed; no new pixel kernel, Core variant or renderer.",
     "native_transition": "Before CountIsMax: Q15 weighted colours with native g/b -1 inheritance and packed colour. At max: command54 exact fill bytes independently wrap the original parameters; next DRAW0 keeps that terminal fill and does not age counters.",
     "validation": "Release native-fadeout-final-tests.log passed lib9/9 and bridge17/17, including negative-channel inheritance -> raw Fill54 byte transition and persistent exact255 endpoint after DRAW0. Actual player continuation remains pending."
-  }
+  },
+  "actual_player26": {
+    "sha256": "c67df6c247e15f6b4ec72a222d3c4d9c87b33828bfbbca2f7d6ad8d531166897",
+    "instructions": 211,
+    "pc": "0x8a7",
+    "pending_native": "0x3333001a SETFILM1",
+    "limits": "No final capture/title/Start/long-story/native save completion claim."
+  },
+  "background_execution_profile": {
+    "setfilm": "Original disabled CBackExec policy and skipNextCommand+mustSetFilmFlag0 independently suppress SETFILM. Enabled/foreground writes use prepared original SystemFile/current project script index. No per-command disk write; installed host close waits for two retained original SystemFile writes. Unknown native receipts remain pending and fail.",
+    "controls": "CBackExec ENDFILM/ENDKOMA/ENDIF receipts wait for one actual shared FrameWork/ImageJob/Layer publication, CountUp and native frame duration. Foreground Yoyaku preserves its immediate ENDIF/ENDKOMA resume behavior. No synthetic DRAW receipt is substituted.",
+    "validation": "native-background-frame-tests.log: lib9/bridge18/machine3/native_control6/native_shell5 all passed; native-background-frame-final-check.log passed6.37s. Original player continuation requires next unique artifact."
+  },
+  "shared_masked_pair": "Independent engine capability/source audit is docs/nnn-masked-pair-source-audit.json. Native Title frame/state integration remains pending; current public Bitmap and ImageMetadata paths are independently usable without this VM.",
+  "native_movie": "docs/nnn-native-movie-source-audit.json: original native selection/transport/wait over shared Media; HeaderReady is not full video/audio decode. Native Title resources/widgets are mapped; complete outer continuation families remain incomplete.",
+  "native_title": "docs/nnn-native-title-source-audit.json: installed original mode4/resource/widget/image/audio policy; authored selected Title4passed. Immutable32 reached2568 shared Title frames then explicit unimplemented autoRestart→Opening; no final screenshot/visual Title, Start/story or full engine claim.",
+  "native_system_file": "docs/nnn-native-system-file-source-audit.json: native10-record58432-byte SystemFile with opaque/padding preservation, worker bootstrap defaults/limits/name initialization and200..299 variables. Native host close drains admitted work then awaits Game-loop+End writes. Shared bitfields/calendar/storage/audio own reusable mechanisms. Final selected release57passed/1ignored, owner module metadata separately1passed. All progress consumers/dataN saves/full native modes remain incomplete.",
+  "native_game_save_contexts": "docs/nnn-native-game-save-source-audit.json: private worker-only native four-context/status restore preparation, typed continuation IDs and original variable-load ranges. Final selected release45passed/5ignored; does not enable live original-save import/export or substitute framework state.",
+  "native_game_save_images": "docs/nnn-native-effect-save-source-audit.json: exact16-slot EFFECT/name records and retained shared-image preparation without fake VM receipts. Normal LOADDWQ reuses the same workflow. Selected release52passed/1ignored; live original-slot restore still not enabled.",
+  "native_function_and_foreground_controls": "docs/nnn-native-system-file-source-audit.json: complete native builtin dispatch/SaveSystemFile and foreground Yoyaku control policy reviewed. Shared CivilTime/atomic storage/Layer/Canvas operations are real, not hosted engine calls. Selected foreground release67passed/1ignored, final builtin lib39passed/1ignored; ResultData/resource-write-argument owner plans and scene-replay transitions remain explicit gaps. No post-source Desktop/game acceptance.",
+  "native_script_calendar": "docs/nnn-native-calendar-source-audit.json: full week/holiday read family uses shared Core civil_weekday and worker-prepared original exact holiday tuples. Actual5335e0/534210/5335a0/452730/4528f0 static evidence; final release lib42passed/1ignored, no new player. Remaining host-time/input/progress groups remain explicit.",
+  "native_calculated_preferences": "docs/nnn-native-calendar-source-audit.json: complete actual GetSystemParam534b30/constructor matching first5 expmode and expcheck bindings, original stored16-array offsets1792/1856. Owner-held preferences consumed by real existing VM worker; finalrelease lib43passed/1ignored, no Scene/clock operations, no new Desktop/Game claim.",
+  "native_return_family": "docs/nnn-native-title-source-audit.json: Title restart/script-END/button precedence wait for completed engine frame; Opening click/END drains admitted work and returns original next; shared immutable covers/terminal Logo fill and native Title launch/audio-work reset. Zero General fade profile remains bounded; full modes/dataN are incomplete.",
+  "shared_original_restore": "Core/native_restore + Runtime/native_restore provide scoped resource preparation/worker validation/infallible VM+scene+prepared channel install. Independent9/9release passed(native-restore-audio-tests2.log), static-font/input14pass1ignored plus explicit system-font1passed. Public docs no-bless8+coverage1 passed actuala7e4bc50985744b6. Does not enable NNN dataN by itself.",
+  "native_audio_save": "docs/nnn-native-audio-save-source-audit.json: actual16-word loop-work/64-byte names, direct8sound/4voice restore replay and detached shared AudioReplacement preparation; finite single-source repeats use shared schedules. Whole dataN/native restore remains incomplete.",
+  "native_saved_waits": "docs/nnn-native-game-save-source-audit.json native_wait_consumers_2026_11_01 and native_load_initialization_2026_11_01; direct fixed records/shared GlyphRun/UI, native saved CASE resume without replay. Current native original dataN Core transaction is connected through NativeAdapter and InstalledAdapter; frozen binary ordinary release70passed/2ignored, explicit Runtime+licensed runtime-font test1passed covering both wrappers. Original slot UI/export and active-effect wait consumers remain incomplete."
 }

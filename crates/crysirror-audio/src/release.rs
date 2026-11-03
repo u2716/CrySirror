@@ -24,6 +24,15 @@ struct Entry {
     step: f32,
     source_extent: Option<u64>,
 }
+impl Releases {
+    pub(super) fn exchange_reserved(&self,client:u32,left:u32,right:u32)->bool{
+        self.entries.values().any(|entry|entry.owner==client&&matches!(entry.info.phase,Phase::Pending|Phase::Active)
+            &&[entry.spec.source_channel,entry.spec.tail_channel].iter().any(|channel|*channel==left||*channel==right))
+    }
+    pub(super) fn clear_owner(&mut self, owner: u32) {
+        self.entries.retain(|_, entry| entry.owner != owner);
+    }
+}
 impl Entry {
     fn advance(&mut self, mixer: &mut crate::mixer::Mixer) -> Result<()> {
         if matches!(self.info.phase, Phase::Complete | Phase::Cancelled) {

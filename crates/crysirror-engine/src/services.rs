@@ -68,7 +68,10 @@ pub const COMMAND_API: &[(&str, &str, &str)] = &[
     ("layer", "set_opacity", "Layers.setOpacity"),
     ("layer", "set_order", "Layers.setOrder"),
     ("layer", "set_depth", "Layers.setDepth"),
+    ("layer", "set_solid_color", "Layers.setSolidColor"),
     ("layer", "set_clip", "Layers.setClip"),
+    ("layer", "set_viewport_clip", "Layers.setViewportClip"),
+    ("layer", "set_source_crop", "Layers.setSourceCrop"),
     ("layer", "set_filter", "Layers.setFilter"),
     ("layer", "transition", "Layers.transition"),
     ("layer", "end_transition", "Layers.endTransition"),
@@ -77,6 +80,11 @@ pub const COMMAND_API: &[(&str, &str, &str)] = &[
     ("layer", "end_crossfade", "Layers.endCrossfade"),
     ("layer", "set_crossfade_elapsed", "Layers.setCrossfadeElapsed"),
     ("layer", "begin_motion", "Layers.beginMotion"),
+    ("layer", "begin_external_motion", "Layers.beginExternalMotion"),
+    ("layer", "commit_external_motion", "Layers.commitExternalMotion"),
+    ("layer", "request_external_motion_skip", "Layers.requestExternalMotionSkip"),
+    ("layer", "remove_external_motion", "Layers.removeExternalMotion"),
+    ("layer", "set_rect", "Layers.setRect"),
     ("layer", "set_motion_elapsed", "Layers.setMotionElapsed"),
     ("layer", "end_motion", "Layers.endMotion"),
     ("layer", "puppet", "Puppets.setParameter"),
@@ -93,6 +101,7 @@ pub const COMMAND_API: &[(&str, &str, &str)] = &[
     ("canvas", "filter", "Canvases.apply"),
     ("canvas", "restore", "Canvases.apply"),
     ("canvas", "present", "Canvases.apply"),
+    ("canvas", "present_isolated", "Canvases.apply"),
     ("canvas", "hide", "Canvases.apply"),
     ("canvas", "destroy", "Canvases.apply"),
     ("ui", "set_menu", "Ui.setMenu"),
@@ -142,6 +151,7 @@ pub fn register(r: &mut ClassRegistry) -> Result<()> {
     r.register(Arc::new(crate::audio_api::AudioClass))?;
     r.register(Arc::new(SaveClass))?;
     r.register(Arc::new(crate::input_api::InputClass))?;
+    r.register(Arc::new(crate::platform_api::PlatformClass))?;
     r.register(Arc::new(crate::localization::LocalizationClass))?;
     r.register(Arc::new(crate::text_api::TextClass))?;
     r.register(Arc::new(crate::bitmap_api::BitmapClass))?;
@@ -193,14 +203,19 @@ fn layers_info() -> &'static ClassInfo {
         methods: vec![
             m("put", vec![("layer", T::Map)], T::Void, "Insert/replace {id, parent?, rect, paint, transform?, order?, clip?, opacity?, visible?, blend?, uv?}."),
             m("remove", vec![("id", T::Int)], T::Void, "Remove a layer and its descendants."),
-            m("setTransform", vec![("id", T::Int), ("transform", T::Map)], T::Void, "Pivot/anchor/rotation/scale/z transform."),
+            m("setTransform", vec![("id", T::Int), ("transform", T::Map)], T::Void, "Pivot/anchor/rotation/scale/z and optional column-major affine local_matrix, applied after local scale/YPR before the anchor. Shear is preserved; perspective, singular matrices and matrix billboards fail."),
             m("setVisible", vec![("id", T::Int), ("visible", T::Bool)], T::Void, "Inherited visibility."),
             m("revealStatus", vec![("id", T::Int)], T::Optional(Box::new(T::Map)), "Engine-owned glyph reveal {visible,total,complete}, or null for an absent/non-glyph layer."),
             m("completeReveal", vec![("id", T::Int)], T::Void, "Show the complete positioned text run without a VM-private reveal clock."),
             m("setOpacity", vec![("id", T::Int), ("opacity", T::Int)], T::Void, "Inherited opacity 0..255."),
+            m("setSolidColor",vec![("id",T::Int),("rgba",T::List(Box::new(T::Int)))],T::Void,"Change existing Solid paint RGBA bytes while preserving unrelated motion, transform, opacity, order and clip. Other paint kinds fail."),
             m("setDepth",vec![("id",T::Int),("depth",T::Optional(Box::new(T::Number)))],T::Void,"Opt this subtree into stable floating-depth painter order within its major bucket. Equal depths preserve the last committed frame order; ordinary layers draw before depth scopes. Null restores ordinary order. This does not change geometric position."),
             m("setOrder", vec![("id", T::Int), ("order", T::List(Box::new(T::Int)))], T::Void, "Explicit [major, minor] draw order."),
             m("setClip", vec![("id", T::Int), ("clip", T::Optional(Box::new(T::List(Box::new(T::Number)))))], T::Void, "Clip rectangle [x,y,w,h] or null."),
+            m("setViewportClip",vec![("id",T::Int),("clip",T::Optional(Box::new(T::List(Box::new(T::Number)))))],T::Void,"Inherited clip [x,y,w,h] in logical render-target coordinates, unaffected by layer or parent transforms. Zero width/height hides the subtree; null removes this clip. Local clip remains independent."),
+            m("setSourceCrop",vec![("id",T::Int),("crop",T::Optional(Box::new(T::List(Box::new(T::Number)))))],T::Void,"Crop this layer's own geometry and source UVs in local [x,y,w,h] coordinates before projection, without changing content layout or children. Null removes; zero extent hides its payload."),
+            m("sourceCrop",vec![("id",T::Int)],T::Optional(Box::new(T::List(Box::new(T::Number)))),"Read this owned layer's source crop; a missing target fails, null means none."),
+            m("viewportClip",vec![("id",T::Int)],T::Optional(Box::new(T::List(Box::new(T::Number)))),"Read this owned layer's explicit render-target clip; a missing target fails, null means none."),
             m("setFilter", vec![("id", T::Int), ("filter", T::Optional(Box::new(T::Map)))], T::Void,
                 "Siglus-style 2D filter {mono, invert, bright, dark, color_rate, color, add, tone_curve?:{asset,row,saturation}, mask?:{asset,gray_alpha}, alpha_test, distortion?:{kind:'mosaic'|'raster'|'radial_blur'|'threshold_fade',...}} or null."),
             m("transition", vec![("transition", T::Map)], T::Void,
@@ -211,10 +226,15 @@ fn layers_info() -> &'static ClassInfo {
             m("endCrossfade", vec![("id", T::Int)], T::Void, "Release a subtree crossfade; leaves original nodes intact."),
             m("setCrossfadeElapsed", vec![("id", T::Int), ("elapsedMs", T::Int)], T::Void, "Set an externally clocked crossfade's progress (clamped to its duration)."),
             m("endTransition", vec![], T::Void, "Finish this client's transition now (skip)."),
-            m("beginMotion", vec![("id", T::Int), ("track", T::Map)], T::Void, "Animate x/y/scale_x/scale_y with a shared MotionTrackSpec; engine duration uses milliseconds, external duration uses caller units."),
+            m("beginMotion", vec![("id", T::Int), ("track", T::Map)], T::Void, "Animate layer position, scale, rotation (radians), pivot or opacity with shared MotionTrackSpec; opacity samples truncate to0..255 bytes, engine duration uses milliseconds, external duration uses caller units."),
+            m("beginExternalMotion",vec![("id",T::Int),("driver",T::Int)],T::Void,"Register an external procedural animation producer. Query motionStatus for its fresh generation; engine stores no executable callback. Retire producers before scene snapshots."),
+            m("commitExternalMotion",vec![("id",T::Int),("driver",T::Int),("stamp",T::Map),("complete",T::Bool),("pose",T::Optional(Box::new(T::Map)))],T::Void,"Atomically publish an optional {rect,transform,opacity} pose with a consecutive animation revision using {generation,revision} decimal u64 strings. Completion reflects the real producer; stale/invalid samples roll back both pose and revision."),
+            m("requestExternalMotionSkip",vec![("id",T::Int),("driver",T::Int),("generation",T::String)],T::Void,"Request the actual external producer's skip branch. The request alone never completes or samples an endpoint."),
+            m("removeExternalMotion",vec![("id",T::Int),("driver",T::Int),("generation",T::String)],T::Void,"Retire a scoped external producer; old asynchronous results remain invalid after node/driver reuse."),
+            m("setRect",vec![("id",T::Int),("rect",T::List(Box::new(T::Number)))],T::Void,"Change finite positive rectangle geometry while preserving scalar/external animation and unrelated Layer state."),
             m("setMotionElapsed", vec![("id", T::Int), ("property", T::String), ("elapsed", T::Int)], T::Void, "Sample an externally clocked motion track at caller elapsed units."),
             m("endMotion", vec![("id", T::Int), ("property", T::Optional(Box::new(T::String))), ("finish", T::Bool)], T::Void, "Cancel one track or all tracks; finish optionally applies the target before removal."),
-            m("motionStatus", vec![("id", T::Int)], T::Map, "Current owned motion tracks and completion; a missing target fails."),
+            m("motionStatus", vec![("id", T::Int)], T::Map, "Owned scalar tracks, external drivers with exact generation/revision stamps, and combined completion; a missing target fails."),
         ],
     })
 }
@@ -253,6 +273,16 @@ impl Class for LayersClass {
         method: &str,
         args: &[Value],
     ) -> Result<Value> {
+        if method=="sourceCrop" {
+            let id=id(args)?;let state=cx.state()?;
+            let layer=state.runtime.host.engine.layers.get(state.client,id).context("source crop layer missing")?;
+            return Ok(Value::from_json(serde_json::to_value(layer.source_crop)?));
+        }
+        if method=="viewportClip" {
+            let id=id(args)?;let state=cx.state()?;
+            let layer=state.runtime.host.engine.layers.get(state.client,id).context("viewport clip layer missing")?;
+            return Ok(Value::from_json(serde_json::to_value(layer.viewport_clip)?));
+        }
         if method == "motionStatus" {
             let target = id(args)?;
             let state = cx.state()?;
@@ -303,11 +333,14 @@ impl Class for LayersClass {
                 id: id(args)?,
                 order: json(arg(args, 1, "order")?, "order")?,
             },
+            "setSolidColor"=>LayerCommand::SetSolidColor{id:id(args)?,color:json(arg(args,1,"rgba")?,"solid color RGBA")?},
             "setDepth"=>LayerCommand::SetDepth{id:id(args)?,depth:match args.get(1){None|Some(Value::Null)=>None,Some(value)=>Some(value.as_f32()?)}},
             "setClip" => LayerCommand::SetClip {
                 id: id(args)?,
                 clip: json(args.get(1).unwrap_or(&Value::Null), "clip")?,
             },
+            "setSourceCrop"=>LayerCommand::SetSourceCrop{id:id(args)?,crop:json(args.get(1).unwrap_or(&Value::Null),"source crop")?},
+            "setViewportClip"=>LayerCommand::SetViewportClip{id:id(args)?,clip:json(args.get(1).unwrap_or(&Value::Null),"viewport clip")?},
             "setFilter" => LayerCommand::SetFilter {
                 id: id(args)?,
                 filter: json(args.get(1).unwrap_or(&Value::Null), "filter")?,
@@ -317,6 +350,11 @@ impl Class for LayersClass {
             },
             "endTransition" => LayerCommand::EndTransition,
             "beginMotion" => LayerCommand::BeginMotion { id: id(args)?, track: json(arg(args,1,"track")?,"motion track")? },
+            "beginExternalMotion"=>LayerCommand::BeginExternalMotion{id:id(args)?,driver:u32::try_from(arg(args,1,"driver")?.as_i64()?)?},
+            "commitExternalMotion"=>LayerCommand::CommitExternalMotion{id:id(args)?,driver:u32::try_from(arg(args,1,"driver")?.as_i64()?)?,stamp:json(arg(args,2,"stamp")?,"external motion stamp")?,complete:arg(args,3,"complete")?.as_bool()?,pose:json(args.get(4).unwrap_or(&Value::Null),"external motion pose")?},
+            "requestExternalMotionSkip"=>LayerCommand::RequestExternalMotionSkip{id:id(args)?,driver:u32::try_from(arg(args,1,"driver")?.as_i64()?)?,generation:arg(args,2,"generation")?.as_str()?.parse()?},
+            "removeExternalMotion"=>LayerCommand::RemoveExternalMotion{id:id(args)?,driver:u32::try_from(arg(args,1,"driver")?.as_i64()?)?,generation:arg(args,2,"generation")?.as_str()?.parse()?},
+            "setRect"=>LayerCommand::SetRect{id:id(args)?,rect:json(arg(args,1,"rect")?,"layer rectangle")?},
             "setMotionElapsed" => LayerCommand::SetMotionElapsed { id:id(args)?, property:json(arg(args,1,"property")?,"motion property")?, elapsed:u64::try_from(arg(args,2,"elapsed")?.as_i64()?)? },
             "endMotion" => LayerCommand::EndMotion { id:id(args)?, property:json(args.get(1).unwrap_or(&Value::Null),"motion property")?, finish:arg(args,2,"finish")?.as_bool()? },
             "beginCrossfade" => LayerCommand::BeginCrossfade { id: id(args)?, source: u32::try_from(arg(args, 1, "source")?.as_i64()?)?, duration_ms: u64::try_from(arg(args, 2, "durationMs")?.as_i64()?)?, rule: None, external: false },

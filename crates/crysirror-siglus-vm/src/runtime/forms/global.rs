@@ -20,6 +20,54 @@ pub fn prepare_saved_stage_btnselitems(
 
 /// Native current-window/scene-title references are VM/save policy; actual
 /// message rendering and window presentation remain shared service operations.
+/// GLOBAL.CAPTURE family, adopted from siglus_rs forms/global.rs. These prepare the
+/// buffers save thumbnails and CREATE_CAPTURE objects read; each pushes an int result.
+pub fn dispatch_capture(
+    ctx: &mut CommandContext,
+    form: u32,
+    args: &[crate::runtime::Value],
+) -> anyhow::Result<bool> {
+    use crate::runtime::{Value, forms::{codes, syscom_original as syscom}};
+    let number = |index: usize| args.get(index).and_then(|v| v.as_i64());
+    let result = match form as i32 {
+        codes::ELM_GLOBAL_CAPTURE => {
+            syscom::prepare_runtime_save_thumb_capture_with_priority(ctx, syscom::CAPTURE_PRIOR_CAPTURE);
+            0
+        }
+        codes::ELM_GLOBAL_CAPTURE_FREE => {
+            syscom::free_runtime_save_thumb_capture(ctx, syscom::CAPTURE_PRIOR_CAPTURE);
+            0
+        }
+        codes::ELM_GLOBAL_CAPTURE_FOR_OBJECT => {
+            // The whole frame stands in for a layer-limited capture. A pending capture
+            // rolls this frame back and replays it once the host delivers the image.
+            let Ok(image) = ctx.capture_frame_rgba() else {
+                ctx.push(Value::Int(0));
+                return Ok(true);
+            };
+            ctx.globals.capture_for_object_image = Some(image);
+            0
+        }
+        codes::ELM_GLOBAL_CAPTURE_FOR_OBJECT_FREE => {
+            ctx.globals.capture_for_object_image = None;
+            0
+        }
+        codes::ELM_GLOBAL_CAPTURE_FOR_LOCAL_SAVE => {
+            let width = number(3).unwrap_or(ctx.screen_w as i64).max(1) as u32;
+            let height = number(4).unwrap_or(ctx.screen_h as i64).max(1) as u32;
+            match ctx.capture_frame_rgba() {
+                Ok(image) => syscom::capture_for_local_save(ctx, &image, width, height),
+                Err(_) => 0,
+            }
+        }
+        // Tweet capture has no consumer: the original raises a flag read by the optional
+        // Twitter dialog, which this host does not offer.
+        codes::ELM_GLOBAL_CAPTURE_FOR_TWEET | codes::ELM_GLOBAL_CAPTURE_FREE_FOR_TWEET => 0,
+        _ => return Ok(false),
+    };
+    ctx.push(Value::Int(result as _));
+    Ok(true)
+}
 pub fn dispatch_metadata(
     ctx: &mut CommandContext,
     form: u32,

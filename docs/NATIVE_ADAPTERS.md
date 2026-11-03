@@ -1,5 +1,10 @@
 # Native adapters: engine capability extraction
 
+The launch/registry sections describe the current desktop boundary. Dated sections
+record bounded implementation checkpoints, not an exhaustive current command
+inventory. Use adapter crate documentation and dated [STATUS.md](../STATUS.md)
+entries for later source changes and behavior evidence.
+
 ## Installed-game launch
 
 Use `crysirror play <game-directory-or-file>`. The program detects the native
@@ -25,6 +30,14 @@ belongs at the top of the screen, on Windows it belongs to the HWND, and Linux
 currently retains the visible engine menu fallback. Windowed games keep their
 OS title bar unless `--allow-borderless` is explicit; fullscreen is independent.
 
+The desktop player initially sizes the content area in physical pixels to the
+project's original canvas dimensions. A Retina scale factor does not double
+that requested size. The player permits dragging the window edges to resize
+the presentation, including when the native script requests a fixed window
+style; that request remains retained VM state. Rendering keeps the canvas
+aspect ratio, and pointer input maps back to the original canvas coordinates.
+Display dimensions reported to native VMs use physical pixels as well.
+
 NScripter launch reads the original source and mounts SAR/NSA containers on
 engine resource workers under private `__nscript/` prefixes. Native lookup
 checks loose files first, then configured containers. The mixed SAR/NSA profile
@@ -43,9 +56,9 @@ their empty default. This does not implement or acknowledge unsupported
 WIN32Dialog modeless windows. Startup arguments do not relocate the automatic
 player's existing save directory; snapshot configuration still includes them.
 
-Owner requirement, 2026-10-26: reference engines are capability requirements
-and test inputs. The goal is a reusable CrySirror engine on which different
-VMs can run through thin semantic/syscall adapters.
+Reference engines provide native semantic requirements and test inputs.
+Reusable capabilities belong in CrySirror; native VMs call them through thin
+semantic/syscall adapters.
 
 ## Removed hosting paths
 
@@ -57,15 +70,15 @@ No fallback aliases to the data VM are provided.
 
 ## Current registry
 
-The desktop default registers `crysirror-script-v1`, `siglus`, `reallive` and
-`avg32`.
-The non-default desktop feature `krkr` also registers the AGPL KiriKiri
-adapter (ADR 0053).
+The desktop binary always registers `crysirror-script-v1`, `siglus`, `reallive`,
+`avg32`, `krkr`, `rfvp`, `nscripter`, `bgi`, `circus`, `catsystem2`, `majiro`,
+`system-nnn` and `system4`; there is no per-engine build feature. Linking `krkr`
+(ADR 0053) makes a distributed binary AGPL; see NOTICE.md.
 The bare Runtime registers the first two; hosts explicitly register other VMs.
 `siglus` is the independent subset in crysirror-siglus-vm; it is not a full
 Siglus integration. Explicit `message_window` configuration enables the plain
 TEXT/NAME profile described below. Unconfigured or unmapped text fails visibly.
-`avg32` runs an installed AVG32 game with the vendored original interpreter
+`avg32` runs installed AVG32 data through xmoezzz's workspace interpreter
 (ADR 0095); raster work is the shared `crysirror_image::avg32` device.
 
 ## Acceptance
@@ -95,9 +108,8 @@ Pinned upstream source is reference material; it is not a product host.
 ## RealLive replacement API bridge (2026-10-26)
 
 `crysirror-reallive` is a new pure-VM/semantic adapter after removal of the old
-hosted implementation. The desktop includes its `reallive` feature by default;
-minimal builds can enable that feature alone or
-register its factory explicitly; the default Runtime registry remains data VM
+hosted implementation. The desktop links and registers it unconditionally.
+Other hosts can register its factory explicitly; the default Runtime registry remains data VM
 plus the Siglus subset. This does not reinstate RFVP/BGI hosting.
 
 Original parser/bank/control flow remains in the VM, whose external Command/Text
@@ -108,8 +120,8 @@ Canvas presentations expand logical draws into shared retained Layer nodes;
 media textures represent only the relevant movie resource. Shared services are
 also directly available to Rust/JS/TS clients without this VM.
 
-The source/routing audit verifies the selected upstream hashes and 90-file
-reference inventory, not blanket mapping of those source files. Native opening
+The RealLive VM is xmoezzz's implementation. Native command coverage is
+separate from the shared service boundary. Native opening
 profile evidence is recorded separately by the integration run; the independent
 full RUSUR media-service test does not establish native script/game completion.
 Native save-file import/export, whole-adapter snapshots, DLL emulation and all
@@ -121,7 +133,7 @@ See [REALLIVE.md](REALLIVE.md),
 
 ## KiriKiri TJS2 adapter (2026-10-26)
 
-`crysirror-krkr` runs original TJS2 scripts on the vendored Kirakira VM and
+`crysirror-krkr` runs original TJS2 scripts through `crysirror-tjs2` and
 translates `Layer`, `Window`, `Timer`, `System`, `Storages` and `Scripts` onto
 engine Layer/Canvas services, the engine clock and capability storage. It
 added two shared capabilities first: canvas presentations attached inside a
@@ -183,8 +195,8 @@ claimed complete. See [ADR 0062](adr/0062-avg32-portable-vm-engine-apis.md).
 
 ## AVG32 installed games (2026-10-30)
 
-Superseding the runtime above: `crysirror-avg32` vendors the original
-interpreter from siglus_rs 5f358ef (`src/vm`, `SOURCE.json`) and runs an
+Superseding the runtime above: `crysirror-avg32` maintains xmoezzz's AVG32
+interpreter directly in `src/vm` and runs an
 installed game given `{root, font, encoding?}`. PDT buffers, copies and all
 transitions are `crysirror_image::avg32`; the presented screen is one engine
 surface layer; text that the original rasterised onto buffer 0 is a retained
@@ -479,9 +491,8 @@ The profile does not claim arbitrary KAG games, full native save stacks or VM
 snapshots, XP3 auto-path mounting, nonuniform pixel-mask queries, focus/modal
 input, video playback, nonidentity gamma, grayscale/blur/flips or every blend/
 copy operation. Unloaded VideoOverlay declarations and identity gamma admission
-are explicitly not completed media/effect integrations. See the source review
-pins/hashes in [kag3-source-audit.json](kag3-source-audit.json) and separate actual
-compilation/behavior records in STATUS.md.
+are explicitly not completed media/effect integrations. Compilation and behavior
+records are in STATUS.md.
 
 ## Shared plugin graphics and UK2-derived audio capabilities (2026-10-27)
 
@@ -567,14 +578,14 @@ whole-game/save coverage remain unsupported or unproven. Native legacy picker,
 menu-shell, cached-title and exit-dialog UI have no backend and fail explicitly. RFVP text,
 scenario/image admission and native audio preparation do not yet provide the full
 ADR 0050 async dependency boundary. Source provenance/patches are recorded in the
-first-class VM SOURCE.json and shared-native-capability-sources.json.
+first-class VM and shared engine modules.
 
 Siglus config can name a private capability-relative `key_file` containing
 caller-owned executable/scene/Gameexe decode material. Gameexe.dat is decoded
 through the shared bounded LZSS/cyclic-mask kernels; START_SCENE/label and screen
 metadata choose boot behavior. No user key tables or game bytes are shipped.
 The original Windows `system.check_dummy_file_once` has a void three-argument
-ABI. On the owner-selected CrySirror native host it is explicitly inapplicable,
+ABI. On the portable CrySirror native host it is explicitly inapplicable,
 as described below: no DVD is required and no successful authentication result
 is fabricated. Current Rewrite probes continue into `sys10_ginit00`; subsequent
 unmapped native operations remain real failures, not completed game support.
@@ -589,13 +600,12 @@ crates. The transition shader belongs to the shared wgpu transition compositor.
 The five pure codec libraries are first-class `crysirror-codec-*` crates;
 standalone players and device dependencies are excluded. This extraction does
 not imply that Siglus's still-missing movie, E-mote, wipe, complex MWND or
-system-form adapters are implemented. Origin hashes remain recorded in
-`shared-native-capability-sources.json` and each codec's `SOURCE.json`.
+system-form adapters are implemented in the native VM and shared codec crates.
 
 
 ## Native Media and additional first-class profiles (2026-10-30)
 
-Optional desktop features `rfvp`, `bgi`, `nscripter` register first-class native
+The desktop binary registers the first-class native `rfvp`, `bgi` and `nscripter`
 adapters. They have no hosted legacy renderer. Their registration and config
 metadata are not claims of full native-game support.
 
@@ -640,16 +650,18 @@ original saves and numerous native calls are unsupported. No real BGI game
 has been verified in this batch; its independent authored BP fixture is
 separate evidence. See the two crate SOURCE.json files and adapter README.
 
-NScripter plain-nscript-v1 interprets original text scripts and nscript.dat
-through a first-class Rust semantic layer. Control flow, variables, input,
-plain text/reveal, basic image/sprite drawing, immediate print, selection,
-caption and audio call engine services. Source files are decoded/parsed on
-shared workers; XOR uses the common Resource transform. Unknown commands
-fail at the original PC. Complex windows/markup/transitions, archive mounting,
-numbered script concatenation, skippable delay and original saves remain
-unsupported. Framework snapshots are explicitly separate. The reference is
-ONScripter `848a60892e4d721459e8d1051e1b8fe45164c3e9`, GPL-2.0-or-later.
-No real NScripter game has been verified in this batch.
+NScripter uses a first-class Rust text VM over shared engine services, referenced
+against ONScripter `848a60892e4d721459e8d1051e1b8fe45164c3e9`, GPL-2.0-or-later.
+Desktop bootstrap mounts original SAR/NSA resources; source parsing and image/audio
+preparation use shared workers. The 2026-11-02 command expansion adds arrays,
+strings/math, sprite2/animation, menus/lookback, dialogs, ruby, audio/video and
+private-format save slots. These are implemented source families, not complete
+semantic or real-game acceptance. Original save-file interchange remains absent;
+framework snapshots have separate reconstruction limits. DLL/Lua execution and
+unsupported drawing profiles fail visibly. See the
+[current adapter guide](../crates/crysirror-nscripter/README.md) for boundaries.
+Earlier Tsukihime title/opening runs predate that command expansion; the later
+13-pass authored suite does not validate a complete game or every new command.
 
 ## Circus bounded native execution (2026-10-31)
 
@@ -658,7 +670,7 @@ sound/music resources. `crysirror-circus::Program` validates the native header,
 operand widths, signed words, Shift-JIS/shifted strings and 0x77 argument
 continuations. It preserves instruction boundaries and label metadata, with
 strict byte/string/instruction budgets. The first-class native interpreter is
-registered by desktop feature `circus` for ABI0xabb6; ABI0xaab6 remains parse-only
+registered by the desktop binary for ABI0xabb6; ABI0xaab6 remains parse-only
 and fails explicitly at execution. Detection mounts the original game directory
 and selects its native1280x720 profile without unpacking or bootstrap files.
 
@@ -685,18 +697,48 @@ runs do not establish full game compatibility.
 
 ## Siglus portable-host policy and shared text coverage (2026-10-30)
 
-The owner explicitly selected `disabled-for-native-host` for the original
+The portable-host policy is `disabled-for-native-host` for the original
 Windows optical-disc environment check. Native SYSTEM form 92.2 still consumes
 and validates filename/key/code, records its once identity, and has no return
 value. CrySirror does not run SiglusEngine.exe, create dummy/env files or report
 a successful DVD authentication. Diagnostics expose `optical_disc_check` with
 `applicability: not-applicable` and `authentication_performed: false`. Framework
-snapshot schema 11 stores and validates this host policy, its native once
-state and suspended EXCALL caller waits. It preserves wait ownership across
+snapshot schema16 stores and validates this host policy (introduced in11) and the shared reading deadline, its
+native once state, suspended EXCALL caller waits and prepared CG catalogue/flags. It preserves wait ownership across
 async preparation/rollback; the active native continuation belongs to the VM.
 Earlier STATUS failures document the superseded host policy and must not
 be interpreted as a current DVD requirement. Original native-save compatibility
 is a separate feature.
+
+
+Shared Resource now provides the CGTABLE/CGTABLE2 decoder `siglus/cgm`; it is
+usable without a Siglus VM. The adapter selects its native filename/defaults
+and prepares it through scoped storage workers before the first instruction.
+Its11 CGTABLE operations preserve signed flags and count a viewed entry only
+when its flag equals1. Original global/config save reconstruction remains
+unsupported. ALL_EVE END/CHECK/WAIT delegates event timing to shared Scene
+IntEvent, with independent nested-object wait identity; image size queries
+honor their optional pattern argument and original dimensions.
+
+Native OBJECT.STRING now admits CREATE_STRING, SET_STRING, GET_STRING and both
+original SET_STRING_PARAM overloads. The VM retains native escapes, colours,
+defaults and captured font policy; shared scoped FontLibrary workers prepare
+glyph bounds, and ordinary engine GlyphRun layers draw per-character shadow,
+edge and body passes. Pending preparation rolls back the command or inline
+frame callback, preserving its original frame moment and input boundary across
+pumps and framework snapshots. Schema16 stores logical recipes and their
+monotonic resource counter, never font tasks or leases. The original-save format
+remains unchanged and rebuilds these recipes after import. Pinned SceneVm's
+GET_SIZE excludes String backends and still returns zero; rendering bounds are
+separate. Vertical glyph orientation and callback-bearing destructive resource
+profiles remain explicit gaps. These four commands do not establish complete
+Siglus compatibility or a successful installed-game run.
+
+SYSTEM.DEBUG_WRITE_LOG supports both integer and string overloads. Disabled
+debugging preserves the original no-write branch. Enabled records retain native
+scene/line context and commit to the canonical client-scoped engine LogBook
+through HostServices.append_log after native resource retries succeed; there is
+no ambient Windows debug directory or separate VM log sink.
 
 Real unchanged Rewrite HF/Plus scripts now pass `sys10_ginit00` and enter
 `sys10_tt01` / the `$FaMain` callback. Their native
@@ -784,3 +826,79 @@ This is partial implementation. Parsing all original containers/scripts and
 reaching a native frontier does not validate a title screen, text/image/audio
 playback, CST/FES execution, original saves or complete game compatibility.
 Observed behavior and compilation results are separately logged in STATUS.md.
+
+The current reviewed FES runtime profile constructs original metadata before
+executing script, then publishes real engine-owned IMAGE/CIMAGE leases, Canvas
+draws and PLANE views at the retained post-script resource boundary. The sealed
+owner class-frame receipt asserts2 image leases/draws and6 Plane views; it is
+CPU resource acceptance, not a title or GPU result. Native baseimg bitmap/Plane
+copies and visibility use shared Canvas operations and preserve the original
+native payload/motion producer. Other classes, full motion/SOUND/CST/save and
+unsupported transform/input profiles remain separate unfinished source families.
+Optional native `random_seeds: [float_seed, integer_seed]` supplies exact u32
+words; omission/null requests the shared scoped async seed capability without a
+clock fallback. Rust Config, the Python desktop-project validator and
+`schemas/catsystem2-config.schema.json` share this strict optional pair contract;
+ordinary detection omits it and uses the same native default.
+
+## Siglus font and EXCALL source families (2026-11-01)
+
+The first-class original EXCALL selector/allocation/finish policy now forwards
+F/counters/frame actions and BACK/FRONT/NEXT object stores. Main and allocated
+EXCALL FRONT objects declare separate client-scoped shared Layer identities;
+the original EXCALL.ORDER offsets top-level object order. Original VM finish
+callbacks drain before declarations retire. Private EXCALL message-window and
+movie scopes remain explicit errors; forwarding them onto ordinary message or
+movie state is not an accepted fallback. Wipes, the complete system-menu UI
+and full Siglus operation coverage remain incomplete.
+
+## Shared target clipping and Siglus SET_CLIP (2026-11-01)
+
+LayerSpec.viewport_clip and Layers.setViewportClip/viewportClip expose an
+inherited logical render-target rectangle, independent of layer/parent
+transforms. The existing local clip remains separate. Empty target rectangles
+hide pixels; malformed or foreign mutations fail transactionally. Frozen
+Canvas captures convert these clips into their root space where that inverse
+preserves axes; rotated/sheared roots require polygon clipping and fail
+explicitly. Snapshot inlining retains the original clip target instead of
+discarding its coordinate space.
+
+Siglus SET_CLIP and its scalar/IntEvent properties now publish this engine
+state on each native payload. Native child objects retain their own clip
+policy. Signed native edges are clamped as in the original scissor path;
+reversed edges are empty. No native renderer or private clip compositor is used.
+
+LayerSpec.source_crop and Layers.setSourceCrop/sourceCrop expose the separate
+source geometry/UV operation. It crops the own payload before projection,
+without reflowing text or changing child transforms. Scene PositionedGlyph.crop
+clips each coverage/outline bitmap in its containing layer coordinates; glyph
+resources keep their immutable identity. Shared Scene crop math also handles
+perspective subrectangles. Canvas sampling and immutable snapshot transport
+preserve the local crop instead of dropping it.
+
+Siglus SET_SRC_CLIP161, scalar properties149..153 and edge events154..157
+translate signed center-relative source edges into these shared declarations.
+The adapter retains original object/texture center and tight per-glyph texture
+padding policy. STRING passes keep original per-character shadow/edge/body
+order. SET_POS/SET_SCALE/SET_ROTATE/SET_CENTER/SET_CENTER_REP preserve the
+pinned early setter path: XY leaves Z unchanged, XYZ assigns all three.
+Malformed signatures and missing property layouts fail before mutation.
+
+At the preceding target-clip source batch, device-free owner-media runs executed and extracted
+2000 frames each for Rewrite HF and Rewrite Plus without a native or frame
+extraction error. HF remained in its original op00 Media wait with a ready
+picture; Plus retained41 primitives in sys10_tt01. These are execution and
+logical extraction receipts. Neither run used the GPU or established a visually
+correct title screen, complete playthrough or complete Siglus compatibility.
+
+SCRIPT/EXCALL font-name overrides and the complete SYSCOM font preference group
+use the same engine FontLibrary as public Text.resolveFontAlias/fontMetrics.
+Family names of static faces are prepared at installation, not reparsed during
+a frame. Dynamic aliases/metrics remain client-owned. Missing native font names
+use the configured project fallback and expose requested/alias/fallback in
+adapter diagnostics. IS_FONT_EXIST queries actual registered resources and does
+not turn a fallback into a positive existence result. Its capability query uses
+the original instruction retry fence, with transient per-pump observations.
+Caller-authored plain MWND profiles without Gameexe retain their explicit face
+and decoration until a native font preference/override changes them. This is
+not an OS font enumeration API or a bundled font distribution.

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Capability-based roots. No adapter can open an ambient absolute path here.
+/// Some legacy archives hold far more than 65536 members (Grisaia's image.int).
+const MAX_DIRECTORY_ENTRIES: usize = 1 << 20;
 use crate::model::identity;
 mod fallback;
 use cap_std::{
@@ -368,6 +370,41 @@ impl ClientStorage for CapStorage {
             created_ms: millis(metadata.created()), modified_ms: millis(metadata.modified()), accessed_ms: millis(metadata.accessed()) }))
     }
 
+    fn read_only(&self,mount:Mount,relative:&str)->Result<bool>{
+        if !relative.is_empty()&&VfsPath::new(mount,relative)?.relative()!=relative {
+            return Err(Error::Invalid("read-only metadata canonical path"));
+        }
+        Ok(self.dir(mount).metadata(if relative.is_empty(){"."}else{relative}).map_err(io)?.permissions().readonly())
+    }
+
+    fn copy_file(&self,source:&VfsPath,target:&VfsPath,replace_read_only:bool)->Result<()>{
+        if target.mount()==Mount::Asset{return Err(Error::ReadOnly);}
+        let source_dir=self.dir(source.mount());
+        let target_dir=self.dir(target.mount());
+        let metadata=source_dir.metadata(source.relative()).map_err(io)?;
+        if !metadata.is_file(){return Err(Error::Invalid("copy source is not a regular file"));}
+        if metadata.len()>MAX_FILE{return Err(Error::Limit("file copy size"));}
+        match target_dir.metadata(target.relative()){
+            Ok(m) if m.permissions().readonly()=>{
+                if !replace_read_only{return Err(Error::ReadOnly);}
+                let mut permission=m.permissions();
+                #[allow(clippy::permissions_set_readonly_false)]
+                permission.set_readonly(false);
+                target_dir.set_permissions(target.relative(),permission).map_err(io)?;
+            },
+            Ok(_)=>{},
+            Err(e) if e.kind()==std::io::ErrorKind::NotFound=>{},
+            Err(e)=>return Err(io(e)),
+        }
+        source_dir.copy(source.relative(),target_dir,target.relative()).map_err(io)?;
+        // Like native CopyFile, timestamp preservation is best effort; the
+        // file was copied even on filesystems which cannot set its timestamp.
+        if let (Ok(modified),Ok(file))=(metadata.modified(),target_dir.open_with(target.relative(),OpenOptions::new().write(true))){
+            let _=file.into_std().set_modified(modified.into_std());
+        }
+        Ok(())
+    }
+
     fn served_by_container(&self, path: &VfsPath) -> bool {
         if path.mount() != Mount::Asset {
             return false;
@@ -505,6 +542,14 @@ impl ClientStorage for CapStorage {
         }
         write_atomic(self.dir(path.mount()), path.relative(), data)
     }
+    fn create_directory(&self,path:&VfsPath)->Result<()>{
+        if path.mount()==Mount::Asset{return Err(Error::ReadOnly);}
+        self.dir(path.mount()).create_dir(path.relative()).map_err(io)
+    }
+    fn remove_directory(&self,path:&VfsPath)->Result<()>{
+        if path.mount()==Mount::Asset{return Err(Error::ReadOnly);}
+        self.dir(path.mount()).remove_dir(path.relative()).map_err(io)
+    }
     fn remove(&self, path: &VfsPath) -> Result<()> {
         if path.mount() == Mount::Asset {
             return Err(Error::ReadOnly);
@@ -537,7 +582,7 @@ impl ClientStorage for CapStorage {
                     virtual_directory = true;
                     if let Some(child) = rest.split('/').next().filter(|v| !v.is_empty()) { names.insert(child.into()); }
                 }
-                if names.len() > 65536 { return Err(Error::Limit("directory listing")); }
+                if names.len() > MAX_DIRECTORY_ENTRIES { return Err(Error::Limit("directory listing")); }
             }
         }
         let d = self.dir(mount);
@@ -555,7 +600,7 @@ impl ClientStorage for CapStorage {
                             names.insert(n);
                         }
                     }
-                    if names.len() > 65536 {
+                    if names.len() > MAX_DIRECTORY_ENTRIES {
                         return Err(Error::Limit("directory listing"));
                     }
                 }
@@ -592,6 +637,16 @@ impl FileSystem for DiskVfs {
             return Err(Error::ReadOnly);
         }
         write_atomic(self.dir(client, path.mount())?, path.relative(), data)
+    }
+    fn remove(&mut self, client: ClientId, path: &VfsPath) -> Result<()> {
+        if path.mount() == Mount::Asset {
+            return Err(Error::ReadOnly);
+        }
+        match self.dir(client, path.mount())?.remove_file(path.relative()) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(io(e)),
+        }
     }
 }
 

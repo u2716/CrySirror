@@ -1,88 +1,122 @@
-# Desktop project and command guide
+# Desktop player and project guide
 
-## Schema 2 minimum
+The default workspace target is `crysirror-desktop`, binary `crysirror`.
+Build locally with the locked dependencies and release profile:
 
-```json
-{
-  "schema": 2,
-  "name": "My CrySirror Project",
-  "content_revision": "v1",
-  "canvas": [960, 540],
-  "assets": "assets",
-  "clients": [{
-    "name": "story",
-    "adapter": "crysirror-script-v1",
-    "game": "my_game",
-    "asset_prefix": "story",
-    "program": [
-      {"op": "sprite", "id": 0, "asset": "background.png", "rect": [0, 0, 960, 540], "z": 0},
-      {"op": "wait_input"},
-      {"op": "halt"}
-    ]
-  }]
-}
+```sh
+cargo build --release --locked
 ```
 
-This needs an actual assets/story/background.png. The shipped desktop fixtures
-supply their own original tiny images. Paths are logical relative paths, not
-ambient drive letters, parent traversal or arbitrary host absolute paths.
+All native VM adapters, scripting and resource providers are linked by this
+build. Desktop features now select device options: `audio`, `gamepad` (defaults)
+and optional `acoustics-obvhs`. `--no-default-features` disables audio output and
+gamepad support; it does not remove native adapters. The minimum Rust version is
+declared in the root Cargo.toml. OS graphics/input/audio libraries remain native
+build prerequisites. Windows calls the executable `crysirror.exe`.
 
-The project describes data, resources and client instances. Each adapter owns
-its instruction semantics and private state. The data-program syntax below is
-not a compatibility format for the old engines.
+## Play an installed game
 
-## Built-in data-program actions
+```sh
+./target/release/crysirror play /path/to/game
+./target/release/crysirror play /path/to/game --detect-only
+./target/release/crysirror play /path/to/game --headless --frames 1200 \
+  --capture /tmp/game.png
+```
 
-| op | Required values | Optional values |
-|---|---|---|
-| sprite | id, asset, rect [x,y,w,h], z | tint RGBA8 |
-| text | id, text, font alias, size, rect, z | color RGBA8, layout |
-| remove | id | none |
-| play | channel, asset | looping, gain_milli 0..1000 |
-| stop | channel | none |
-| wait | ms | none |
-| wait_input | none | none |
-| halt | none | none |
+The path may be a game directory or a file inside it. The player detects the
+native profile, builds its project and installs capability-scoped resource
+mounts internally. No hand-written bootstrap JSON or manual bulk extraction is
+needed for supported layouts. Unknown formats, protection profiles and native
+operations can still fail explicitly. See [native adapters](NATIVE_ADAPTERS.md)
+for profile and ownership boundaries.
 
-Only simple-horizontal-v1 is a supported desktop text layout. An arbitrary
-native profile name is rejected by the renderer/packager, not guessed.
-A text project's fonts object maps aliases to files under the project asset
-root, not the per-client prefix. Font files must be provided/licensed by the user.
+`play` supports `--data-dir`, `--font`, `--no-audio`, `--input-track`, `--frames`,
+`--capture`, `--headless`, `--detect-only` and `--allow-borderless`. Headless mode
+creates no window/audio device but capture still requires the renderer.
+Without a subcommand the executable attempts to play the game beside itself.
 
-Limits include project size 4 MiB, canvas dimensions 1..8192, at most 64 clients,
-100,000 actions per client, files 64 MiB, cache budgets 256 MiB, text surfaces
-four million pixels and static 3D at most one million expanded vertices. GPU
-limits may be lower and are checked separately.
+Windowed games retain their OS title bar unless borderless behavior is allowed.
+macOS menus use the screen menu bar; Windows uses native window menus; Linux
+currently uses the engine menu fallback. An offscreen capture cannot verify OS
+menu presentation or physical input.
 
-## CLI
+## Run and inspect an engine project
 
-- run: windowed loop, optional --data-dir, --font, --no-audio, --frames, --capture.
-- render: actual offscreen GPU PNG, --output, --frames, --step-ms, --font, --data-dir.
-- trace: VM-only ticks, --frames, --step-ms, repeatable --press-at frame indices.
-- validate: schema/data checks, not native compatibility or complete asset checks.
-- inspect: project and registered adapters, explicitly reporting absent natives.
-- gpu-info: actual adapter feature flags and separately implemented renderer paths.
+```sh
+./target/release/crysirror run examples/desktop/project.json --no-audio
+./target/release/crysirror inspect examples/desktop/project.json
+./target/release/crysirror trace examples/desktop/project.json --frames 120 --press-at 1
+./target/release/crysirror render examples/desktop/project.json --output /tmp/scene.png
+./target/release/crysirror gpu-info
+```
 
-run and render accept --renderer raster (default), compute-raytrace or
-hardware-raytrace. Compute ray tracing executes on the GPU and preserves 2D
-overlays; hardware-raytrace currently fails explicitly. See ADR 0003 for limits.
-Default desktop builds include the siglus-resources image plugin. G00 files with
-multiple cuts or native pivot/crop metadata require explicit native processing
-and fail in the generic sprite decoder. The original Siglus VM remains unlinked.
+| Command | Purpose |
+| --- | --- |
+| `run` | Windowed project; supports font/state overrides, scripts, capture and profiling. |
+| `render` | Offscreen GPU PNG; supports bounded warm-up frames, step/input tracks, scripts and consecutive movie-frame captures. |
+| `trace` | Engine/VM ticks and service diagnostics without a window/GPU/audio device. |
+| `validate` | Project schema/data validation; not complete asset or game compatibility. |
+| `inspect` | Project data and the executable's actually registered adapters. |
+| `gpu-info` | Adapter features, enabled device capabilities and implemented rendering selections. |
+| `script-types` | Generate project-bound script declarations from the class registry. |
+| `shader-check` | Validate a scoped custom WGSL surface asset without a GPU. |
+| `puppet-import` | Convert supplied E-mote data to engine puppet assets; native format limits apply. |
 
-The shared CPU image service bounds each decoded surface to 64 MiB and dimensions
-8192. The existing GPU cache budget remains 256 MiB.
+Use `crysirror <command> --help` for that build's option definitions. `render`
+and `trace` accept repeatable zero-based `--press-at` indices and JSON
+`--input-track` input. `run`, `render` and `trace` accept JS/TS `--script` sources
+with `--script-client` selecting their project client. Offline `buildProject()`
+recipes use the separate [authoring tool](AUTHORING.md).
 
-Run the Python validator with --assets for explicit asset inventory checks.
-Audio/device execution requires run; render and trace never emit sound.
+`run` and `render` select `--renderer raster`, `compute-raytrace` or
+`hardware-raytrace`. Hardware queries require supported device features/limits;
+unsupported devices fail with a reason rather than silently switching paths.
+Capabilities, encoded work, successful pixels and performance measurements are
+separate evidence. See [architecture](ARCHITECTURE.md) and the
+[frame/profiling guide](FRAME_PIPELINE.md).
 
-## State location and portability
+F5/F9 request framework save/restore, F12 captures, and Escape exits the host.
+Native adapters may reject unsupported snapshot states. These shortcuts do not
+promise original-game save compatibility; see [save boundaries](SAVE_FORMAT.md).
 
---data-dir overrides the selected state root. Otherwise the host uses the OS
-user-data location plus a project fingerprint. Asset semantics changes require
-a content_revision bump. Moving the whole project directory does not change its
-logical asset references. Absolute --font overrides are not part of a portable
-asset package or a snapshot identity.
+## Project data and fonts
 
-F5/F9 quick saves are CrySirror envelopes. They are not original RFVP/Siglus
-save files. GPU/audio handles are reconstructed, not serialized. Audio restarts.
+Schema-2 projects name an asset root and client instances. Each client's resource
+paths remain scoped to its capability root. `crysirror-script-v1` data actions
+are separate from original native script formats; native adapters run their own
+instruction sets. `ClientSpec.systems` declares shared World/Layer/UI state.
+See [engine systems](ENGINE_SYSTEMS.md) and [generated data/API declarations](api/README.md).
+
+Projects can declare licensed fonts in `project.fonts`. Development `--font`
+reads a caller-supplied face; it is not a portable asset declaration. G00 and
+other native image formats use shared decoder registries; adapter-specific
+cuts/pivots remain native policy. No game data or fonts are bundled.
+
+`--data-dir` overrides state storage. Otherwise the host selects the platform's
+user-data location under CrySirror; project fingerprints or installed-game
+identity distinguish state. Change `content_revision` when asset semantics
+change. Logical relative asset references survive moving the project together.
+Budgets and supported data fields are defined by code/API validation, rather
+than a second independently maintained limit table here.
+
+## Packaging
+
+```sh
+python3 tools/desktop_project.py examples/desktop/project.json --assets
+python3 tools/package_game.py --project examples/desktop/project.json \
+  --executable target/release/crysirror --target linux --output dist/CrySirror-linux.zip
+```
+
+Use an executable built for the requested target. The packager checks its format
+and explicit resources; it does not compile/sign the host, test target execution
+or prove dependency/asset licensing completeness. `--data-only` replaces
+`--executable`/`--target` when distributing project data without a runtime.
+See [NOTICE.md](../NOTICE.md) for component notices and [icons](../icon/README.md)
+for prepared platform icon assets.
+
+## Local validation
+
+`python3 tools/verify.py` runs Python tests plus release Cargo checks/tests.
+`--gpu` explicitly includes the ignored GPU smoke test. Use local checks; do not
+enable GitHub workflows. Test commands, failures, platform evidence and bounded
+game milestones belong in dated [STATUS.md](../STATUS.md) entries.

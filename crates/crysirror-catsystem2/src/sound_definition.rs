@@ -14,6 +14,7 @@ use std::sync::Arc;
 pub(crate) struct SoundDefinition {
     pub source: Option<String>,
     pub document: Option<Arc<XmlDocument>>,
+    pub policy: Option<crate::native_sound_policy::SoundPolicy>,
 }
 impl SoundDefinition {
     pub fn found(&self) -> u32 {
@@ -28,7 +29,7 @@ impl SoundDefinition {
                     .and_then(|n| d.children(n).ok().map(|n| n.count()))
             })
         };
-        serde_json::json!({"source":self.source,"found":self.found()!=0,"resident_bytes":self.document.as_ref().map_or(0,|d|d.resident_bytes()),"groups":count("SOUNDGROUP"),"parts":count("PART"),"representation":"shared_xml_declarations","audio_playback_mapped":false})
+        serde_json::json!({"source":self.source,"found":self.found()!=0,"resident_bytes":self.document.as_ref().map_or(0,|d|d.resident_bytes()),"groups":count("SOUNDGROUP"),"parts":count("PART"),"policy":self.policy.as_ref().map(|p|p.diagnostics()),"representation":"shared_xml_declarations","audio_playback_mapped":false})
     }
 }
 pub(crate) fn load(
@@ -38,15 +39,18 @@ pub(crate) fn load(
     check()?;
     let startup = crate::native_settings::optional_asset(storage, "config/startup.xml")?
         .context("CatSystem2 startup missing for sound definition")?;
-    let startup = XmlDocument::parse(&startup)?;
+    let startup = XmlDocument::parse_with_fallback(&startup,encoding_rs::SHIFT_JIS)?;
     let name = startup
         .unique_child_path("SOUNDCONFIG")?
         .map(|n| n.text.as_str())
         .unwrap_or("");
     if name.is_empty() {
+        // Older games (Grisaia) keep SOUNDGROUP in startup.xml and have no soundconf.xml.
+        let policy = startup.unique_child_path("SOUNDGROUP").ok().flatten().is_some().then(|| crate::native_sound_policy::SoundPolicy::parse(&startup)).transpose()?;
         return Ok(SoundDefinition {
             source: None,
             document: None,
+            policy,
         });
     }
     ensure!(
@@ -91,11 +95,32 @@ pub(crate) fn load(
     let bytes = crate::native_settings::optional_native_asset(storage, &startup, &path)?;
     check()?;
     let document = bytes
-        .map(|bytes| XmlDocument::parse(&bytes).map(Arc::new))
+        .map(|bytes| XmlDocument::parse_with_fallback(&bytes,encoding_rs::SHIFT_JIS).map(Arc::new))
         .transpose()?;
+    let mut policy = document
+        .as_ref()
+        .map(|d| crate::native_sound_policy::SoundPolicy::parse(d))
+        .transpose()?;
+    //7182B0 imports user preferences only from client-owned setup.xml. All
+    //storage/decoding work stays on this preparation worker.
+    if let Some(policy) = policy.as_mut() {
+        use crysirror_core::{
+            path::{Mount, VfsPath},
+            Error,
+        };
+        match storage.open_read(&VfsPath::new(Mount::Save, "setup.xml")?) {
+            Ok(reader) => {
+                let bytes = crysirror_resource::read_all(reader.as_ref(), 1024 * 1024)?;
+                policy.overlay(&XmlDocument::parse_with_fallback(&bytes,encoding_rs::SHIFT_JIS)?)?;
+            }
+            Err(Error::NotFound) => {}
+            Err(e) => return Err(e.into()),
+        }
+    }
     check()?;
     Ok(SoundDefinition {
         source: Some(path),
         document,
+        policy,
     })
 }

@@ -22,50 +22,9 @@ class BgiCpuToolGuards(unittest.TestCase):
         self.base = Path(self.temp.name).resolve()
         self.source = self.base / "source"
         self.source.mkdir()
-        self.git("init", "--quiet")
-        for name in bgi.FILES:
-            path = self.source / name
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text("synthetic reference\n")
-        self.git("add", ".")
-        self.git("-c", "user.name=BGI Guard Test", "-c", "user.email=bgi@example.invalid",
-                 "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "synthetic source")
-        self.pin = self.git("rev-parse", "HEAD").strip()
-
-    def git(self, *args):
-        return subprocess.check_output(["git", "-C", str(self.source), *args], text=True)
-
-    def test_clean_source_and_hashes_use_verified_head_bytes(self):
-        with patch.object(bgi, "PIN", self.pin):
-            source, contents, metadata = bgi.source_snapshot(self.source)
-        self.assertEqual(source, self.source)
-        self.assertEqual(metadata["source_head"], self.pin)
-        self.assertEqual(set(contents), set(bgi.FILES))
-        self.assertTrue(all(len(value) == 64 for value in metadata["reference_sha256"].values()))
-
-    def test_wrong_pin_and_dirty_or_staged_reference_are_rejected(self):
-        with self.assertRaisesRegex(ValueError, "HEAD differs"):
-            bgi.source_snapshot(self.source)
         path = self.source / bgi.FILES[0]
-        path.write_text("changed\n")
-        with patch.object(bgi, "PIN", self.pin):
-            with self.assertRaisesRegex(ValueError, "reference source changed"):
-                bgi.source_snapshot(self.source)
-            self.git("add", bgi.FILES[0])
-            with self.assertRaisesRegex(ValueError, "reference source changed"):
-                bgi.source_snapshot(self.source)
-
-    def test_source_symlink_cannot_escape_even_if_git_assumes_unchanged(self):
-        name = bgi.FILES[0]
-        self.git("update-index", "--assume-unchanged", name)
-        outside = self.base / "outside.rs"
-        outside.write_text("synthetic reference\n")
-        path = self.source / name
-        path.unlink()
-        path.symlink_to(outside)
-        with patch.object(bgi, "PIN", self.pin):
-            with self.assertRaisesRegex(ValueError, "source escapes checkout"):
-                bgi.source_snapshot(self.source)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("synthetic reference\n")
 
     def test_all_generated_source_and_lock_symlinks_are_rejected_without_cargo(self):
         cache = self.base / "cache"

@@ -515,5 +515,11 @@
     "Native reference names use UTF8 or strict Shift-JIS fallback. Reference reads go through context capability root; only typed NotFound means absent.",
     "PB3 fixed format name/XOR constants and header-embedded tail keys are format algorithms, not per-title key tables.",
     "ERI additive reference composition wraps RGB only and preserves base alpha, matching original AddSimple."
-  ]
+  ],
+  "native_qnt_extension_2026_11_01": {
+    "variants": "QNT0 fixed48 and QNT1/2 explicit headers, depth24; complete shared predictor/inflater kernel",
+    "source_audit": "docs/system4-qnt-source-audit.json",
+    "ordinary_tests": "qnt_native3passed; images_a14passed2ignored; actual native-source-batch/native-batch3-tests3.log",
+    "limits": "Earlier external-corpus hashes/counts remain historical; not rerun or inflated into new owner acceptance. ALK37 owner decode remains ignored."
+  }
 }

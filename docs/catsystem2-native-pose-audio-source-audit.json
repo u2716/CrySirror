@@ -1,0 +1,37 @@
+{
+  "schema": 1,
+  "engine": "CatSystem2",
+  "scope": "Whole CIMAGE/CPLANE/SOUND motion seed/apply semantic family and immediate2Dpan mapping; incomplete actual typed FES publication",
+  "native_evidence": {
+    "binary_sha256": "f8a1fb4fed8a0c64c3fbc0bcf009f63e8f3181cfbc1a0dbd60f9ddefc8e25b3d",
+    "version": "2.6.1.76",
+    "mode": "Read-only ignored local IDA/capstone; no original module executed/distributed",
+    "functions": {
+      "7488A0/749330/749420": "CIMAGE constructor/seed/apply; raw144byte output uses position6/7,pivot3/4,zero matrix/RGB,highalpha byte; storedbiased-priority comparison and visibility counter preserve original oddness",
+      "74A390/74AC30/74AD40": "CPLANE vectors constructor W1 from actual8D54A0/8D5690 constants; seedpriority5 versus outputpositionZ5,complete matrix/scale/base/ARGB/visibility and Euler bookkeeping",
+      "74A7F0/6780B0": "Bitwise compare/copy full matrix and native identity initializer; Euler not reapplied over computed matrix",
+      "74C090/74C520/74C590": "SOUND defaultvolume100/pan0; low-volume-byte alpha and pan float6; no guessed PCMseek semantics",
+      "5D1F60/5D23B0/5CE020/5CC2B0": "Original2DDirectSoundpan attenuates one channel,clamps-100..100; intermediate percent helper distinct from device volume clamping",
+      "6287B0/62D4A0": "Actual native object cache/publication/dispatch family inspected for next binding stage; decoding or class values alone do not publish resources",
+      "7690E0/7692C0/7693A0": "Native object-target lookup occurs before general native/expression fallback; Object pending preserves original source without evaluating unadmitted args"
+    }
+  },
+  "implementation": {
+    "native": "native_object_pose.rs stores only original class fields/conversions/callback results. No rendering/mixing/transform evaluation moved into VM. non_spatial_pan_request returns shared typedAudioRequest SetStereoGain with public Audio levels conversion. Native panfade191 and3Dposition branch not silently approximated.",
+    "engine": "Core AudioRequest::SetStereoGain, shared Mixer per-channel ramps/immutable worker observations, ChannelAudio bridge and public Audio.setVoice stereo_gain0..4. Existing equal-power pan remains separate. Output gain applies after spatial/pan DSP before Master/reverb sends; rendered voice-frame ramp clock and lease ownership explicit.",
+    "limits": "No typed39 resource gate removal, FES SOUND/IMAGE/PLANE creation, actual class motion-resource binding, native audio resource selection/lifecycle/save or title completion. Native class seed/apply is source policy only; publisher must preflight/commit shared receipt before original call completion."
+  },
+  "validation": {
+    "class_release": "115passed/1ignored in native-class-pose-family-final-tests.log, including native signed-zero retention,actual vector constants,classseed distinctions,priority/alpha/visibility and SSE indefinite casts",
+    "latest_cat_release": "118passed/1ignored in native-object-dispatch-boundary-tests.log, retaining actual RuntimeHost stereo PCM test from117/1. Adds exact Object pending/source/argument ownership and rejected general-native ACK; no silent expression fallback.",
+    "shared_audio_release": "8targets78passed/2ignored in shared-stereo-gain-tests.log:library,offline,channels,channel_async,render_job,reflections,reverb,newstereo_gain3actualPCM/typedrequest/lease tests",
+    "public_api_release": "Engineaudio_native4passed/0ignored in shared-stereo-gain-public-api-tests.log; authored NWA PCM and invalid mixed options before mutation",
+    "public_docs": "Measured5ba5be1c88e5f542,7139historical; actual no-bless release api_docs8/8+api_coverage1/1 passed systemnnn/api-stereo-gain-verify.log. Complete AudioRequest is Rust-only enum,not JSONcommand/reflectionclass.",
+    "failed_authored_attempts": "native-pan-stereo-host-tests.log failed test path borrow at compile; tests2.log ran116pass/1fail/1ignored due authored projectassets dot becoming empty path; corrected to valid capability path before tests3.log actual117/1. Failed attempts not passes.",
+    "python": "Final full tooling201tests OK,0skip,2.440s in native-object-dispatch-python-final.log (HomebrewPython3.11), after final Object pending source changes. git diff --check passed."
+  },
+  "behavior_boundary": {
+    "actual_game": "Unchanged frozen cat-owner-batch4 c5f41f86d362361c30b6f4a209b283c5d80d19a74ac1efca3f59a0612f41f5f1,KCS20360/FES53,pending execfes brandlogo; predates these source/API batches",
+    "claim": "No new Desktop/player,GPU,title,gameplay or full reverse-engineering result. No commits,pushes or CI."
+  }
+}

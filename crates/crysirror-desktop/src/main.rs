@@ -71,6 +71,9 @@ struct PlayOptions {
     input_track: Option<PathBuf>,
     #[arg(long)]
     no_audio: bool,
+    /// Export CPU Chrome trace and completed GPU timings from a real window.
+    #[arg(long)]
+    profile: Option<PathBuf>,
     /// Allow the game's windowed borderStyle to hide the OS title bar.
     #[arg(long)]
     allow_borderless: bool,
@@ -82,7 +85,6 @@ enum Command {
     Play(PlayOptions),
     /// Bake local E-mote PSB files into an engine puppet (rig JSON + PNG
     /// textures + report). The output never contains PSB data structures.
-    #[cfg(feature = "emote-import")]
     PuppetImport {
         /// Main PSB first, then any additional sources.
         #[arg(required = true)]
@@ -241,67 +243,51 @@ fn state_dir_base() -> PathBuf {
 fn adapter_registry() -> Result<AdapterRegistry> {
     #[allow(unused_mut)]
     let mut registry = AdapterRegistry::default();
-    #[cfg(feature = "reallive")]
     crysirror_reallive::register(&mut registry)?;
-    #[cfg(feature = "krkr")]
     crysirror_krkr::register(&mut registry)?;
-    #[cfg(feature = "rfvp")]
     crysirror_rfvp::register(&mut registry)?;
-    #[cfg(feature = "nscripter")]
     crysirror_nscripter::register(&mut registry)?;
-    #[cfg(feature = "bgi")]
     crysirror_bgi::register(&mut registry)?;
-    #[cfg(feature = "circus")]
     crysirror_circus::register(&mut registry)?;
-    #[cfg(feature = "catsystem2")]
     crysirror_catsystem2::register(&mut registry)?;
-    #[cfg(feature = "majiro")]
     crysirror_majiro::adapter::register(&mut registry)?;
-    #[cfg(feature = "system-nnn")]
     crysirror_system_nnn::installed::register(&mut registry)?;
-    #[cfg(feature = "avg32")]
+    crysirror_system4::factory::register(&mut registry)?;
     crysirror_avg32::register(&mut registry)?;
     Ok(registry)
 }
 fn load_project(path: &Path) -> Result<Project> {
     let project = Project::load(path)?;
-    #[cfg(feature = "system-nnn")]
+    for client in project.clients.iter().filter(|client|client.adapter=="system4") {
+        serde_json::from_value::<crysirror_system4::worker_adapter::Config>(client.config.clone())?.validate()?;
+    }
     for client in project.clients.iter().filter(|client|client.adapter=="system-nnn") {
         serde_json::from_value::<crysirror_system_nnn::installed::Config>(client.config.clone())?.validate()?;
     }
-    #[cfg(feature = "krkr")]
     for c in project.clients.iter().filter(|c| c.adapter == "krkr") {
         serde_json::from_value::<crysirror_krkr::Config>(c.config.clone())?.validate()?;
     }
-    #[cfg(feature = "rfvp")]
     for c in project.clients.iter().filter(|c| c.adapter == "rfvp") {
         serde_json::from_value::<crysirror_rfvp::Config>(c.config.clone())?.validate()?;
     }
-    #[cfg(feature = "reallive")]
     for c in project.clients.iter().filter(|c| c.adapter == "reallive") {
         serde_json::from_value::<crysirror_reallive::Config>(c.config.clone())?.validate()?;
     }
-    #[cfg(feature = "nscripter")]
     for c in project.clients.iter().filter(|c| c.adapter == "nscripter") {
         serde_json::from_value::<crysirror_nscripter::Config>(c.config.clone())?.validate()?;
     }
-    #[cfg(feature = "bgi")]
     for c in project.clients.iter().filter(|c| c.adapter == "bgi") {
         serde_json::from_value::<crysirror_bgi::Config>(c.config.clone())?.validate()?;
     }
-    #[cfg(feature = "circus")]
     for c in project.clients.iter().filter(|c| c.adapter == "circus") {
         serde_json::from_value::<crysirror_circus::Config>(c.config.clone())?.validate()?;
     }
-    #[cfg(feature = "catsystem2")]
     for c in project.clients.iter().filter(|c| c.adapter == "catsystem2") {
         serde_json::from_value::<crysirror_catsystem2::Config>(c.config.clone())?.validate()?;
     }
-    #[cfg(feature = "majiro")]
     for c in project.clients.iter().filter(|c| c.adapter == "majiro") {
         serde_json::from_value::<crysirror_majiro::adapter::Config>(c.config.clone())?.validate()?;
     }
-    #[cfg(feature = "avg32")]
     for c in project.clients.iter().filter(|c| c.adapter == "avg32") {
         serde_json::from_value::<crysirror_avg32::Config>(c.config.clone())?.validate()?;
     }
@@ -310,13 +296,11 @@ fn load_project(path: &Path) -> Result<Project> {
 fn load_runtime(path: &Path, dir: &Path) -> Result<Runtime> {
     let registry = adapter_registry()?;
     let mut rt = Runtime::with_registry(load_project(path)?, path, dir, registry)?;
-    #[cfg(feature = "siglus-resources")]
     rt.assets
         .decoders
         .register("g00", Arc::new(crysirror_siglus::SiglusImageDecoder))?;
     Ok(rt)
 }
-#[cfg(feature = "scripting")]
 fn scripted(
     rt: Runtime,
     scripts: &[PathBuf],
@@ -343,7 +327,6 @@ fn scripted(
     }
     app.into_runtime()
 }
-#[cfg(feature = "scripting")]
 fn start_app(rt: Runtime, scripts: &[PathBuf], client: &str) -> Result<crysirror_engine::App> {
     use crysirror_engine::ScriptHost;
     let mut app = crysirror_engine::App::new(rt, client)?;
@@ -363,9 +346,7 @@ fn start_app(rt: Runtime, scripts: &[PathBuf], client: &str) -> Result<crysirror
     Ok(app)
 }
 /// Scripted movie: the App keeps running its behaviours between frames.
-#[cfg(feature = "scripting")]
 struct ScriptedMovie(crysirror_engine::App);
-#[cfg(feature = "scripting")]
 impl app::MovieSource for ScriptedMovie {
     fn prepare_capture(&mut self) -> Result<()> {
         self.0.prepare_render_offline()
@@ -377,17 +358,11 @@ impl app::MovieSource for ScriptedMovie {
         self.0.runtime_mut().expect("engine app owns its runtime")
     }
 }
-#[cfg(feature = "scripting")]
 fn script_types(rt: Runtime, client: &str, output: &Path) -> Result<()> {
     let app = crysirror_engine::App::new(rt, client)?;
     std::fs::write(output, app.typescript_declarations()?)?;
     Ok(())
 }
-#[cfg(not(feature = "scripting"))]
-fn script_types(_: Runtime, _: &str, _: &Path) -> Result<()> {
-    anyhow::bail!("script-types requires the 'scripting' feature")
-}
-#[cfg(feature = "scripting")]
 fn engine_core(rt: Runtime, scripts: &[PathBuf], client: &str) -> Result<app::Core> {
     use crysirror_engine::ScriptHost;
     let mut app = crysirror_engine::App::new(rt, client)?;
@@ -406,23 +381,6 @@ fn engine_core(rt: Runtime, scripts: &[PathBuf], client: &str) -> Result<app::Co
     app.start()?;
     Ok(app::Core::Scripted(Box::new(app)))
 }
-#[cfg(not(feature = "scripting"))]
-fn engine_core(_: Runtime, _: &[PathBuf], _: &str) -> Result<app::Core> {
-    anyhow::bail!("--script requires the 'scripting' feature")
-}
-#[cfg(not(feature = "scripting"))]
-fn scripted(
-    _: Runtime,
-    _: &[PathBuf],
-    _: &str,
-    _: u32,
-    _: u64,
-    _: impl Fn(u32) -> InputFrame,
-    _: bool,
-    _: impl FnMut(&mut Runtime) -> Result<()>,
-) -> Result<Runtime> {
-    anyhow::bail!("--script requires the 'scripting' feature")
-}
 /// `crysirror play`: engine detection, then the ordinary scripted host with
 /// the game folder as the explicit asset root.
 fn play(options: PlayOptions) -> Result<()> {
@@ -436,12 +394,14 @@ fn play(options: PlayOptions) -> Result<()> {
         capture,
         input_track,
         no_audio,
+        profile,
         allow_borderless,
     } = options;
     anyhow::ensure!(
         headless || input_track.is_none(),
         "--input-track requires --headless"
     );
+    anyhow::ensure!(!headless || profile.is_none(), "--profile requires a window");
     let dir = match game {
         Some(p) if p.is_file() => p
             .parent()
@@ -500,7 +460,6 @@ fn play(options: PlayOptions) -> Result<()> {
     };
     std::fs::create_dir_all(&state_dir)?;
     let mut rt = Runtime::with_asset_root(project, &dir, &state_dir, adapter_registry()?)?;
-    #[cfg(feature = "siglus-resources")]
     rt.assets
         .decoders
         .register("g00", Arc::new(crysirror_siglus::SiglusImageDecoder))?;
@@ -537,7 +496,7 @@ fn play(options: PlayOptions) -> Result<()> {
             muted: no_audio,
             frames: frames.map(u64::from),
             capture,
-            profile_path: None,
+            profile_path: profile,
             state_dir,
             rendering_path: RenderingPath::Raster,
             allow_borderless,
@@ -639,7 +598,6 @@ fn run() -> Result<()> {
             let hardware_raytracing =
                 path == RenderingPath::HardwareRaytrace && gpu.capabilities().hardware_raytrace;
             let hardware_rt_report = gpu.hardware_rt_report();
-            #[cfg(feature = "scripting")]
             if let (false, Some(dir)) = (script.is_empty(), &movie_dir) {
                 // Scripts keep running while the movie is captured.
                 let mut app = start_app(rt, &script, &script_client)?;
@@ -813,7 +771,6 @@ fn run() -> Result<()> {
             );
             Ok(())
         }
-        #[cfg(feature = "emote-import")]
         Command::PuppetImport {
             sources,
             out,
@@ -872,7 +829,6 @@ fn main() -> ExitCode {
     }
 }
 
-#[cfg(feature = "emote-import")]
 fn puppet_import(
     sources: &[PathBuf],
     out: &std::path::Path,

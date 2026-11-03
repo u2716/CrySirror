@@ -8,6 +8,7 @@ impl SiglusVm {
         let owner = self.state.client;
         let batch = self.state.inputs.0.read(owner, 1)?;
         let vm = self.state.vm.as_mut().unwrap();
+        vm.ctx.begin_input_frame();
         vm.ctx.input.next_frame();
         if let Some(sample) = batch.samples.first() {
             let input = sample.frame;
@@ -32,8 +33,24 @@ impl SiglusVm {
                     crysirror_scene::input::VmKey::Escape,
                 ),
             ] {
+                let vk = crysirror_scene::input::vmkey_to_vk_code(key).unwrap();
+                if vm.ctx.globals.script.key_disable.contains(&vk) {
+                    continue;
+                }
                 if input.buttons_pressed & bit != 0 {
                     vm.ctx.input.on_key_down(key);
+                    if matches!(
+                        key,
+                        crysirror_scene::input::VmKey::Enter | crysirror_scene::input::VmKey::Space
+                    ) {
+                        vm.ctx.stop_read_skip_by_decide_down(vk);
+                    } else if matches!(
+                        key,
+                        crysirror_scene::input::VmKey::Escape
+                            | crysirror_scene::input::VmKey::Control
+                    ) {
+                        vm.ctx.register_skip_user_action();
+                    }
                 }
                 if sample.released & bit != 0 {
                     vm.ctx.input.on_key_up(key);
@@ -43,9 +60,11 @@ impl SiglusVm {
                         key,
                         crysirror_scene::input::VmKey::Enter | crysirror_scene::input::VmKey::Space
                     ) {
-                        let vk = crysirror_scene::input::vmkey_to_vk_code(key).unwrap();
+                        if vm.ctx.process_script_skip_trigger_decide(vk) {
+                            continue;
+                        }
                         if vm.ctx.input.vk_down_up_stock(vk) {
-                            if crate::message::complete_on_decide(
+                            if crate::message::complete_on_user_decide(
                                 &mut vm.ctx,
                                 ClientId(self.state.client),
                                 host,
@@ -75,21 +94,21 @@ impl SiglusVm {
             let mouse = crate::runtime::input::VmMouseButton::Left;
             if input.buttons_pressed & bit != 0 {
                 vm.ctx.input.on_mouse_down(mouse);
+                vm.ctx.stop_read_skip_by_decide_down(0x01);
             }
             if sample.released & bit != 0 {
                 vm.ctx.input.on_mouse_up(mouse);
-                if vm.ctx.input.vk_down_up_stock(0x01) {
-                    let revealed = crate::message::complete_on_decide(
-                        &mut vm.ctx,
-                        ClientId(self.state.client),
-                        host,
-                    )?;
-                    let skipped = !revealed
-                        && vm
-                            .ctx
-                            .wait
-                            .notify_movie_down_up(&mut vm.ctx.globals, &vm.ctx.ids, 1);
-                    if !skipped && !revealed {
+                let skipped = vm.ctx.input.vk_down_up_stock(0x01)
+                    && vm
+                        .ctx
+                        .wait
+                        .notify_movie_down_up(&mut vm.ctx.globals, &vm.ctx.ids, 1);
+                if !skipped
+                    && !vm.ctx.process_script_skip_trigger_decide(0x01)
+                    && vm.ctx.input.vk_down_up_stock(0x01)
+                {
+                    if !crate::message::complete_on_user_decide(&mut vm.ctx, ClientId(owner), host)?
+                    {
                         vm.ctx.wait.notify_key(&mut vm.ctx.globals, &vm.ctx.ids);
                     }
                 }
@@ -99,6 +118,7 @@ impl SiglusVm {
                 vm.ctx
                     .input
                     .on_mouse_down(crate::runtime::input::VmMouseButton::Right);
+                vm.ctx.register_skip_user_action();
             }
             if sample.released & right != 0 {
                 vm.ctx

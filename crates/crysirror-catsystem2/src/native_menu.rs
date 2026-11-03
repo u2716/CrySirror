@@ -62,7 +62,7 @@ pub fn build(template: &MenuTemplate, canvas: [u32; 2], font: &str) -> Result<Me
                 let (label, shortcut) = item.text.split_once('\t').unwrap_or((&item.text, ""));
                 Ok(MenuItemSpec {
                     id,
-                    label: label.into(),
+                    label: strip_language_tag(label).into(),
                     visible: true,
                     enabled: item.state & 3 == 0,
                     checked: item.state & 8 != 0,
@@ -90,6 +90,15 @@ pub fn build(template: &MenuTemplate, canvas: [u32; 2], font: &str) -> Result<Me
     };
     menu.validate()?;
     Ok(menu)
+}
+/// RT_MENU captions carry a language table key (`$0011-0001$システム(S)`) ahead of
+/// the default text; the key is never shown to a player.
+fn strip_language_tag(label: &str) -> &str {
+    let Some(rest) = label.strip_prefix('$') else { return label };
+    match rest.split_once('$') {
+        Some((key, text)) if !key.is_empty() && key.bytes().all(|b| b.is_ascii_digit() || b == b'-') => text,
+        _ => label,
+    }
 }
 pub fn production(resources: &[crysirror_resource::pe::PeMenuResource]) -> Result<&MenuTemplate> {
     let mut menus = resources

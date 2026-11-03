@@ -2,11 +2,9 @@
 
 Date: 2026-10-25. Status: implemented; CPU/offline behavior verified.
 
-The owner assigned audio and text work to Codex while another contributor owns
-the renderer, scene view/components, mesh clustering, GoW tools and ADR 0025–0029.
-This change stays in the audio crate and the engine Audio class, with small
-host/VFS integration performed by the parent task. No title-specific renderer
-or native VM is replaced.
+The shared audio crate and public Audio class provide SFX scheduling, spatial
+mixing and streaming music. Resource access uses host/VFS capabilities, keeping
+the mixer independent of title-specific rendering and native VM policy.
 
 ## Implementation
 
@@ -127,9 +125,9 @@ gain behavior; pooled `playSfx` supplies the full stereo/occlusion path.
 ## Compilation
 
 The audio crate and the engine API tests compiled on macOS arm64. The optional
-rodio-output profile compiled without opening a device. Parent-task workspace,
-desktop and no-default compilation results are recorded separately in its final
-evidence; this ADR does not infer them from unit tests.
+rodio-output profile compiled without opening a device. Workspace, desktop and
+no-default compilation results are recorded separately in STATUS.md; they are
+not inferred from the crate unit tests.
 
 ## Behavior validation
 

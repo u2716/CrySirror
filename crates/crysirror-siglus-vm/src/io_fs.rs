@@ -10,20 +10,81 @@ use std::{
 #[derive(Default, Clone, serde::Serialize, serde::Deserialize)]
 pub struct State {
     #[serde(skip)]
+    pub(crate) pending_texts: BTreeMap<u64, crate::native_string::Request>,
+    #[serde(skip)]
+    pub(crate) text_sizes: BTreeMap<u64, [u32; 2]>,
+    #[serde(skip)]
     pub files: BTreeMap<String, std::sync::Arc<Vec<u8>>>,
     pub absent: BTreeSet<String>,
     #[serde(skip)]
     pub missing: BTreeSet<String>,
     #[serde(skip)]
     pub writes: BTreeMap<String, Vec<u8>>,
+    /// Client save-mount deletions committed with `writes`. A later write to
+    /// the same key cancels its deletion and vice versa.
+    #[serde(skip)]
+    pub removes: BTreeSet<String>,
+    /// Deferred canonical engine logs; discarded with an uncommitted native
+    /// instruction, then appended through HostServices at its owner boundary.
+    #[serde(skip)]
+    pub logs: Vec<String>,
     /// Per-pump observations supplied by the shared capability metadata API.
     /// They are not serialized native or framework save state.
     #[serde(skip)]
     pub probes: BTreeMap<String, bool>,
     #[serde(skip)]
     pub pending_probes: BTreeSet<String>,
+    /// Engine canvas capture of the current composed frame, supplied by the
+    /// adapter for the instruction that requested it.
+    #[serde(skip)]
+    pub frame_capture: Option<std::sync::Arc<crate::assets::RgbaImage>>,
+    #[serde(skip)]
+    pub frame_capture_requested: bool,
 }
 thread_local! {static STATE:RefCell<State>=RefCell::new(State::default());}
+pub(crate) fn text_size(request: crate::native_string::Request) -> io::Result<[u32; 2]> {
+    STATE.with(|s| {
+        let mut state = s.borrow_mut();
+        let generation = request.definition.generation;
+        if let Some(size) = state.text_sizes.get(&generation) {
+            return Ok(*size);
+        }
+        if state.pending_texts.len() >= 256 {
+            return Err(io::Error::other("native STRING preparation budget"));
+        }
+        state.pending_texts.insert(generation, request);
+        Err(io::Error::new(
+            io::ErrorKind::WouldBlock,
+            "native STRING engine preparation pending",
+        ))
+    })
+}
+pub fn frame_capture() -> io::Result<crate::assets::RgbaImage> {
+    STATE.with(|s| {
+        let mut state = s.borrow_mut();
+        if let Some(image) = &state.frame_capture {
+            return Ok(image.as_ref().clone());
+        }
+        state.frame_capture_requested = true;
+        Err(io::Error::new(
+            io::ErrorKind::WouldBlock,
+            "native frame capture pending",
+        ))
+    })
+}
+pub fn append_engine_log(message: String) -> io::Result<()> {
+    if message.len() > crysirror_core::service::MAX_LOG_LINE_BYTES {
+        return Err(io::Error::other("native engine log line limit"));
+    }
+    STATE.with(|state| {
+        let mut state = state.borrow_mut();
+        if state.logs.len() >= 128 {
+            return Err(io::Error::other("native engine log batch limit"));
+        }
+        state.logs.push(message);
+        Ok(())
+    })
+}
 pub fn scoped<T>(state: &mut State, f: impl FnOnce() -> T) -> T {
     struct Guard<'a>(&'a mut State);
     impl Drop for Guard<'_> {
@@ -87,6 +148,29 @@ pub fn read_to_string(p: impl AsRef<Path>) -> io::Result<String> {
 /// Native file-existence policy, with no ambient filesystem or whole-file read.
 /// An unresolved observation causes the adapter to retry the instruction after
 /// the owner supplies metadata; false is never committed for a pending query.
+pub fn probe_font(name: &str) -> io::Result<bool> {
+    if name.is_empty() {
+        return Ok(false);
+    }
+    if name.len() > 256 || name.chars().any(char::is_control) {
+        return Err(io::Error::other("native font query name budget"));
+    }
+    let key = format!("font:{name}");
+    STATE.with(|s| {
+        let mut state = s.borrow_mut();
+        if let Some(value) = state.probes.get(&key) {
+            return Ok(*value);
+        }
+        if state.probes.len() >= 4096 || state.pending_probes.len() >= 32 {
+            return Err(io::Error::other("native font query budget"));
+        }
+        state.pending_probes.insert(key);
+        Err(io::Error::new(
+            io::ErrorKind::WouldBlock,
+            "native font capability query pending",
+        ))
+    })
+}
 pub fn probe_file(p: impl AsRef<Path>) -> io::Result<bool> {
     let key = canonical(p.as_ref())?;
     let key = if key == "asset" || key == "save" {
@@ -125,6 +209,7 @@ pub fn write(p: impl AsRef<Path>, data: impl AsRef<[u8]>) -> io::Result<()> {
         s.files
             .insert(key.clone(), std::sync::Arc::new(data.as_ref().to_vec()));
         s.probes.insert(key.clone(), true);
+        s.removes.remove(&key);
         s.writes.insert(key, data.as_ref().to_vec());
     });
     Ok(())
@@ -140,20 +225,57 @@ pub fn create_dir_all(p: impl AsRef<Path>) -> io::Result<()> {
         ))
     }
 }
+fn save_key(p: &Path) -> io::Result<String> {
+    let key = canonical(p)?;
+    if key.starts_with("save/") {
+        Ok(key)
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "native asset mount is read-only",
+        ))
+    }
+}
+pub fn copy(a: impl AsRef<Path>, b: impl AsRef<Path>) -> io::Result<u64> {
+    let bytes = read(a)?;
+    write(b, &bytes)?;
+    Ok(bytes.len() as u64)
+}
 pub fn rename(a: impl AsRef<Path>, b: impl AsRef<Path>) -> io::Result<()> {
-    let _ = (a, b);
-    Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        "native rename is not exposed by host",
-    ))
+    save_key(a.as_ref())?;
+    copy(a.as_ref(), b)?;
+    remove_file(a)
 }
-pub fn remove_file(_p: impl AsRef<Path>) -> io::Result<()> {
-    Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        "native delete is not exposed by host",
-    ))
+pub fn remove_file(p: impl AsRef<Path>) -> io::Result<()> {
+    let key = save_key(p.as_ref())?;
+    STATE.with(|s| {
+        let mut s = s.borrow_mut();
+        s.files.remove(&key);
+        s.writes.remove(&key);
+        s.probes.insert(key.clone(), false);
+        s.absent.insert(key.clone());
+        s.removes.insert(key);
+    });
+    Ok(())
 }
-#[derive(Clone)]
+/// Removes the files this view knows under a save directory. Host directory
+/// listing is not consulted; unknown files are left in place.
+pub fn remove_dir_all(p: impl AsRef<Path>) -> io::Result<()> {
+    let prefix = save_key(p.as_ref())? + "/";
+    let keys: Vec<String> = STATE.with(|s| {
+        let s = s.borrow();
+        s.files
+            .keys()
+            .chain(s.writes.keys())
+            .filter(|k| k.starts_with(&prefix))
+            .cloned()
+            .collect()
+    });
+    for key in keys {
+        remove_file(Path::new(&key))?;
+    }
+    Ok(())
+}
 pub struct Permissions {
     read_only: bool,
 }
@@ -316,4 +438,37 @@ pub fn read_dir(p: impl AsRef<Path>) -> io::Result<std::vec::IntoIter<io::Result
                 .collect::<Vec<_>>()
         })
         .into_iter())
+}
+
+#[cfg(test)]
+mod save_mutation_tests {
+    use super::*;
+
+    #[test]
+    fn remove_copy_and_rename_stay_inside_the_save_mount_and_commit_together() {
+        let mut state = State::default();
+        scoped(&mut state, || {
+            write("save/a.sav", b"one").unwrap();
+            assert_eq!(copy("save/a.sav", "save/b.sav").unwrap(), 3);
+            rename("save/b.sav", "save/c.sav").unwrap();
+            assert_eq!(read("save/c.sav").unwrap(), b"one");
+            assert!(read("save/b.sav").is_err());
+            remove_file("save/a.sav").unwrap();
+            assert_eq!(probe_file("save/a.sav").unwrap(), false);
+            assert!(remove_file("asset/Scene.pck").is_err());
+            assert!(copy("save/c.sav", "asset/x").is_err());
+        });
+        assert_eq!(
+            state.writes.keys().collect::<Vec<_>>(),
+            ["save/c.sav"],
+            "a removed or renamed file is not also written"
+        );
+        assert_eq!(
+            state.removes.iter().collect::<Vec<_>>(),
+            ["save/a.sav", "save/b.sav"]
+        );
+        let mut state2 = state.clone();
+        scoped(&mut state2, || write("save/a.sav", b"two").unwrap());
+        assert!(!state2.removes.contains("save/a.sav"), "a later write cancels deletion");
+    }
 }

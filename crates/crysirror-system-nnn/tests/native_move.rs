@@ -1,0 +1,26 @@
+//! Native MOVE state drives common image jobs; no local renderer or device.
+use crysirror_core::{image_processing::{ImageCompositeMath,ImageInput,ImageProcessState,ImageResource},service::HostServices,state::ClientId};
+use crysirror_image::temporal_pattern::PatternRng;
+use crysirror_system_nnn::{expression::{VariableProfile,Variables},machine::{Machine,Step},native_draw::NativeDraw,native_geometry::NativeRects,native_move::NativeMoveState,native_presentation::{MoveFrame,NativeFrameEffect,NativeFrameWork,ordered_frame_plan},Program,XorProfile};
+use std::{collections::{BTreeMap,BTreeSet},sync::Arc,time::{Duration,Instant}};
+fn image(host:&mut dyn HostServices,size:[u32;2],color:[u8;4])->Arc<dyn ImageResource>{let mut job=host.image_metadata(ClientId(1)).unwrap().begin_process(ImageInput::Solid{size,color},b"[]".as_slice().into()).unwrap();let end=Instant::now()+Duration::from_secs(5);loop{match job.poll().unwrap(){ImageProcessState::Ready(image)=>return image,ImageProcessState::Failed(e)=>panic!("{e}"),ImageProcessState::Pending=>{assert!(Instant::now()<end);std::thread::yield_now();}}}}
+#[test]
+fn move_prints_before_countup_and_shared_composite_clips_without_stretching() {
+ let dir=tempfile::tempdir().unwrap();std::fs::create_dir(dir.path().join("assets")).unwrap();let project:crysirror_runtime::Project=serde_json::from_value(serde_json::json!({"schema":2,"name":"authored move","content_revision":"1","assets":"assets","canvas":[4,1],"clients":[{"name":"native","adapter":"crysirror-script-v1","game":"authored"}]})).unwrap();let mut runtime=crysirror_runtime::Runtime::with_asset_root(project,dir.path(),&dir.path().join("state"),Default::default()).unwrap();runtime.tick(0,Default::default()).unwrap();
+ let base=image(&mut runtime.host,[4,1],[100,100,100,255]);let source=image(&mut runtime.host,[2,1],[200,0,0,255]);
+ let mut rectangles=NativeRects::natural([2,1]);rectangles.set_destination_pair([-1,0,2,1],[1,0,2,1]);
+ let effects=BTreeMap::from([(0,NativeFrameEffect::Move(MoveFrame{slot:0,state:NativeMoveState::parse(&[2],rectangles).unwrap(),source:Some(source),math:ImageCompositeMath::CopyRgb,visible:true}))]);let visible=BTreeSet::from([0]);let underlays=BTreeMap::new();let random=PatternRng::msvc(7);
+ let work=NativeFrameWork::with_base(ClientId(1),base,ordered_frame_plan(&effects,&visible,&underlays),random.clone(),&mut runtime.host).unwrap();
+ let mut words=vec![0u32;32];words[0]=32;words[1]=0x66660001;words[2]=0x55550001;words.extend([5,0x66660006,0x22220004,1,2]);words[18]=37;let program=Program::parse(&words.into_iter().flat_map(|w|(!w).to_le_bytes()).collect::<Vec<_>>(),XorProfile::default()).unwrap();let mut vars=Variables::fresh(VariableProfile::Legacy1000);vars.replace_random_state(random.clone()).unwrap();let mut machine=Machine::with_variables(vars);let Step::Native(call)=machine.poll(&program,100).unwrap()else{panic!("native DRAW expected")};
+ let mut draw=NativeDraw::begin(ClientId(1),116,16,[4,1],20,&call,work,effects,visible,underlays,None,runtime.host.now_ms()).unwrap();let end=Instant::now()+Duration::from_secs(5);
+ let result=loop {if let Some(result)=draw.poll(&mut machine,&call,&mut runtime.host).unwrap(){break result}runtime.tick(1,Default::default()).unwrap();assert!(Instant::now()<end);std::thread::yield_now();};
+ assert_eq!(machine.pc(),call.next);let NativeFrameEffect::Move(frame)=&result.effects[&0]else{panic!()};assert_eq!(frame.state.command(),0);assert_eq!(frame.state.count,2);assert_eq!(frame.state.rectangles.destination,[1,0,2,1]);
+ assert_eq!(result.frame.target.rgba().as_ref(),&[200,0,0,255,200,0,0,255,100,100,100,255,100,100,100,255],"final printed frame is count1/position0; CountIsMax moves metadata to position1 only after that print");assert_eq!(serde_json::to_vec(&result.frame.random).unwrap(),serde_json::to_vec(&random).unwrap());
+}
+
+#[test]
+fn hidden_move_calcu_updates_native_geometry_but_print_keeps_shared_base() {
+ let dir=tempfile::tempdir().unwrap();std::fs::create_dir(dir.path().join("assets")).unwrap();let project:crysirror_runtime::Project=serde_json::from_value(serde_json::json!({"schema":2,"name":"hidden move","content_revision":"1","assets":"assets","canvas":[4,1],"clients":[{"name":"native","adapter":"crysirror-script-v1","game":"authored"}]})).unwrap();let mut runtime=crysirror_runtime::Runtime::with_asset_root(project,dir.path(),&dir.path().join("state"),Default::default()).unwrap();runtime.tick(0,Default::default()).unwrap();
+ let base=image(&mut runtime.host,[4,1],[10,20,30,255]);let source=image(&mut runtime.host,[2,1],[200,0,0,255]);let mut rectangles=NativeRects::natural([2,1]);rectangles.set_destination_pair([3,-3,2,1],[0,0,2,1]);let mut state=NativeMoveState::parse(&[2],rectangles).unwrap();state.count=1;
+ let effects=BTreeMap::from([(0,NativeFrameEffect::Move(MoveFrame{slot:0,state,source:Some(source),math:ImageCompositeMath::CopyRgb,visible:false}))]);let plan=ordered_frame_plan(&effects,&BTreeSet::new(),&BTreeMap::new());assert_eq!(plan.len(),1,"Eye off does not suppress native Calcu");let mut work=NativeFrameWork::with_base(ClientId(1),base.clone(),plan,PatternRng::msvc(2),&mut runtime.host).unwrap();let result=work.poll(&mut runtime.host).unwrap().unwrap();assert_eq!(result.move_updates[&0].rectangles.destination,[1,-1,2,1]);assert_eq!(result.target.rgba().as_ref(),base.rgba().as_ref());
+}

@@ -35,6 +35,12 @@ impl ImageFormat for Plugin {
     fn decode(&self, bytes: &[u8], ctx: &ImageDecodeContext<'_>) -> Result<ImageSurface> {
         (self.decode)(self.id, bytes, ctx)
     }
+    fn encoding_info(&self, bytes: &[u8], ctx: &ImageDecodeContext<'_>) -> Result<Option<crysirror_core::image_encoding::ImageEncodingInfo>> {
+        ctx.check_cancelled()?;
+        if self.id == "alice-soft/qnt" {
+            Ok(Some(crate::images_a::qnt_encoding_info(bytes)?))
+        } else { Ok(None) }
+    }
 }
 pub fn image_format_ids() -> Vec<&'static str> {
     let mut ids = vec!["bgi/cbg"];

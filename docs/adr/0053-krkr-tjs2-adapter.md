@@ -5,28 +5,21 @@ compilation and behaviour evidence are recorded separately in STATUS.md.
 
 ## Context
 
-The owner asked for KiriKiri (吉里吉里, KRKR2/KRKRZ) support next, built on
-an existing Rust implementation, and chose Kirakira
-(https://github.com/liulifox233/Kirakira) over krkrz_rs. Kirakira is
-AGPL-3.0-or-later; CrySirror is MPL-2.0. Its E-mote support is not needed:
-CrySirror already owns puppets (ADR 0029).
+The KiriKiri (KRKR2/KRKRZ) integration consists of the `crysirror-tjs2` VM,
+`crysirror-kag` scenario parser and `crysirror-krkr` semantic adapter.
+CrySirror's shared puppet capability (ADR 0029) supplies E-mote presentation.
 
 AGENTS.md and NATIVE_ADAPTERS.md require a thin semantic/syscall adapter:
 original VM semantics, engine-owned resources, no second renderer.
 
 ## Decision
 
-1. **Vendor only the VM.** `crates/krkr-upstream/krkr-tjs2` (TJS2 frontend,
-   compiler, bytecode loader, VM, builtins) and `krkr-kag` (KAG parser) are
-   copied byte-for-byte from commit
-   `c451918023477620ff9055a2eb8a6714b947d9c1`; `SOURCE.json` records every
-   file's SHA-256. Kirakira's engine, renderer, audio, font, video, plugin,
-   XP3 and E-mote crates are not used.
-2. **Licence boundary.** These two crates and `crysirror-krkr` are the only
-   AGPL code. They are `publish = false`, no MPL crate depends on them, and
-   the desktop exposes them only through the non-default `krkr` feature (a
-   binary built with it is AGPL). `tests/test_krkr_policy.py` enforces this,
-   following the optional-GPL precedent of `crysirror-formats-arc`.
+1. **Maintain the VM/parser as first-class crates.** `crysirror-tjs2` owns TJS2
+   parsing, lowering, bytecode verification and execution. `crysirror-kag` owns
+   KAG scenario parsing. `crysirror-krkr` maps native objects and operations onto
+   shared engine services.
+2. **Link the native integration in the desktop host.** TJS2, KAG and the native
+   adapter are workspace dependencies; no per-engine feature flag is required.
 3. **Native classes translate to engine services** (`crysirror-krkr`):
    - `Layer` → one engine Layer node (position, size, clip to bounds,
      visibility, opacity) plus one engine Canvas surface for its image,
@@ -49,35 +42,27 @@ original VM semantics, engine-owned resources, no second renderer.
    - `HostServices::image_metadata`: a thread-safe image metadata handle,
      because KiriKiri scripts read `imageWidth` synchronously after
      `loadImages`.
-5. **Unsupported means visible failure.** Members whose meaning the engine
-   cannot reproduce throw a TJS exception naming the missing capability:
-   partial translucent `fillRect`, partial `copyRect` onto drawn pixels,
-   non-default draw faces/`holdAlpha`, `operateRect` modes other than
-   `omAlpha/omAuto` or opacity ≠ 255, text shadows, `Font.getTextWidth`,
-   stretch/affine/piled copies, pixel access, transitions, `Plugins.link`
-   (no DLL is ever loaded), `showModal`, a second `Window`, and a window size
-   different from the project canvas. Kirakira's practice of silently
-   counting stub calls is not adopted.
+5. **Unsupported means visible failure.** Unknown native profiles must report
+   their missing capability. The initial slice's unsupported font, canvas-copy,
+   draw-face, audio, archive and plugin families were extended by later work;
+   use current adapter tests/docs for their exact supported profiles.
 
 ## Rejected alternatives
 
-- **Vendor Kirakira's `krkr-engine`.** It is a second general-purpose engine
-  (layer blending, renderer, mixer, video); prohibited by AGENTS.md.
-- **krkrz_rs (MIT).** Offered; the owner chose Kirakira.
+- **Separate native renderer/mixer.** Layer composition, video and audio belong
+  to shared CrySirror services, so native scripts operate on engine-owned state.
 - **Unsafe borrowed host pointer inside TJS natives.** Replaced by the
   long-lived `image_metadata` handle, the same pattern as `storage()`.
 
-## Not done yet (in order)
+## Follow-up implementation
 
-1. XP3 archive mounts (`data.xp3`, `foo.xp3>` auto paths) through the shared
-   resource registry, and KiriKiri's TJS2 bytecode-in-archive startup path.
-2. `KAGParser` native class over `krkr-kag`, then the stock KAG3
-   `system/*.tjs` boot sequence (MainWindow, MessageLayer, Conductor).
-3. Synchronous engine font metrics (`Font.getTextWidth`), glyph shadows and
-   draw faces/region replace on canvases, so message layers work.
-4. `WaveSoundBuffer`/`VideoOverlay` over engine audio/Media services,
-   `beginTransition` over engine screen transitions (ADR 0022).
-5. Saves (`.ksd` via `Dictionary.saveStruct`), VM snapshots.
+Shared XP3 mounts/protection are covered by ADRs 0091/0096, engine font metrics by
+0063, KAG3/audio/storage mappings by 0088, menus/awaitable services by 0066, vector
+and worker effects by 0090/0093, and isolated subtree transitions by 0094.
+These retire the original five-item bootstrap checklist. Complete plugin/native
+save profiles, compatibility errors and game regressions remain tracked in
+NATIVE_ADAPTERS.md and dated STATUS.md entries. A successful boot is not full
+capability extraction or all-game acceptance.
 
 ## Acceptance evidence (this slice)
 
@@ -87,6 +72,7 @@ original VM semantics, engine-owned resources, no second renderer.
   Canvas state inspectable without the VM; unsupported members fail with
   their capability names; Shift_JIS scripts and case-insensitive storage.
 - `examples/krkr-demo` (self-authored script, generated images) renders
-  through the desktop renderer with `--features krkr`.
-- No commercial KiriKiri title was run. A real KAG3 game does not boot yet
-  (items 1–3 above).
+  through the desktop renderer; the current build needs no engine-specific flag.
+- This initial slice did not run a commercial KiriKiri title. Later KAG3 and
+  installed-game evidence is recorded separately in STATUS.md; it does not turn
+  the original slice's tests into complete game acceptance.

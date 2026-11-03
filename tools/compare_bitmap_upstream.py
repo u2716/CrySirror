@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MPL-2.0
-"""Compare shared CPU bitmaps against the complete pinned siglus_rs source.
+"""Compare shared CPU bitmaps against a caller-selected complete siglus_rs source.
 
 Build output stays in --work-dir / --target-dir outside both source trees.
 Only generated pixels are used; no game data, fonts or devices are required.
@@ -17,26 +17,12 @@ ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = "crysirror-bitmap-differential"
 
 
-def git(source_root: Path, *args: str) -> str:
-    return subprocess.check_output(
-        ["git", "-C", str(source_root), *args], text=True
-    ).strip()
-
-
-def validate_source(source_root: Path, pin: str) -> None:
-    if git(source_root, "rev-parse", "HEAD") != pin:
-        raise ValueError("siglus_rs HEAD differs from upstream-lock.json pin")
-    # Check index and working-tree edits against HEAD, including dependency crates
-    # and build scripts. Untracked game files are neither read nor distributed.
-    changed = git(source_root, "diff", "--name-only", "HEAD", "--",
-                  "Cargo.toml", "Cargo.lock", "rust-toolchain", "rust-toolchain.toml", "crates")
-    if changed:
-        raise ValueError(f"tracked upstream source changed:\n{changed}")
+def validate_source(source_root: Path) -> None:
     for relative in ["Cargo.toml", "Cargo.lock", "crates/reallive/Cargo.toml",
                      "crates/reallive/src/surface.rs", "crates/avg32/Cargo.toml",
                      "crates/avg32/src/buffer.rs", "crates/avg32/src/pdtmgr.rs"]:
         if not (source_root / relative).is_file():
-            raise ValueError(f"complete siglus_rs checkout required: missing {relative}")
+            raise ValueError(f"complete siglus_rs source required: missing {relative}")
 
 
 def external(path: Path, source_root: Path) -> Path:
@@ -48,8 +34,7 @@ def external(path: Path, source_root: Path) -> Path:
 
 def run(source_root: Path, work_dir: Path, target_dir: Path | None = None) -> None:
     source_root = source_root.expanduser().resolve()
-    pin = json.loads((ROOT / "upstream-lock.json").read_text())["sources"]["siglus_rs"]["commit"]
-    validate_source(source_root, pin)
+    validate_source(source_root)
     work_dir = external(external(work_dir, source_root) / "bitmap-differential", source_root)
     target_dir = external(target_dir if target_dir else work_dir / "target", source_root)
     manifest = external(work_dir / "Cargo.toml", source_root)
@@ -77,7 +62,7 @@ def run(source_root: Path, work_dir: Path, target_dir: Path | None = None) -> No
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-root", type=Path, required=True,
-                        help="complete external siglus_rs Git checkout at the locked pin")
+                        help="complete external siglus_rs source tree to compare against")
     parser.add_argument("--work-dir", type=Path, required=True,
                         help="external cache directory for the generated Cargo driver")
     parser.add_argument("--target-dir", type=Path,

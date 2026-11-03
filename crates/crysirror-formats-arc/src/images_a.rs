@@ -13,6 +13,7 @@ mod spb;
 mod tlg;
 use anyhow::Result;
 use crysirror_image::{ImageDecodeContext, ImageSurface};
+pub(crate) use alice::qnt_encoding_info;
 pub const FORMATS: &[&str] = &[
     "entis/eri",
     "kid/prt",

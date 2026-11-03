@@ -32,6 +32,10 @@ pub struct MessageWindow {
     pub source_size: [u32; 2],
     /// Native percent0..100; exact /256 profile is processed by engine jobs.
     pub percent: u16,
+    /// Native notTransWindowUse bits:2 draws a lower source plane before
+    /// the main window,1 draws source row+height after it. These are original
+    /// asset-stack semantics, not a renderer or pixel operation.
+    pub stacked_planes: u8,
     /// Engine source whose alpha is the original mask, or shared CornerKey
     /// extraction when native DWQ metadata proves the image has no mask.
     pub resource: Option<Arc<dyn crysirror_core::image_processing::ImageResource>>,
@@ -68,7 +72,7 @@ pub struct MessageProfile {
     pub window_rows: usize,
     pub full_rows: usize,
     pub reveal_per_second: u32,
-    pub name_colors: BTreeMap<Vec<u8>, [u8; 4]>,
+    pub name_colors: Arc<BTreeMap<Vec<u8>, [u8; 4]>>,
     pub window: Option<MessageWindow>,
     pub name_window: Option<MessageWindow>,
     /// Original MyMessage one-byte-to-two-byte resource table, supplied by a
@@ -175,7 +179,7 @@ impl MessageProfile {
                 (bindings.canvas[1] as i32 - ly) / ldy - 1,
             )?)?,
             reveal_per_second: u32::try_from(rate)?,
-            name_colors: colors,
+            name_colors: Arc::new(colors),
             window: bindings.window,
             name_window: None,
             single_byte_map,
@@ -231,7 +235,10 @@ impl MessageProfile {
             );
         }
         for w in self.window.iter().chain(self.name_window.iter()) {
-            ensure!(w.percent <= 100, "NNN message window percent bounds");
+            ensure!(
+                w.percent <= 100 && w.stacked_planes <= 3,
+                "NNN message window percent/plane bounds"
+            );
             if let Some(image) = &w.resource {
                 ensure!(
                     image.client() == self.client && image.size() == w.source_size,
@@ -239,7 +246,7 @@ impl MessageProfile {
                 );
             } else {
                 ensure!(
-                    w.percent == 100,
+                    w.percent == 100 && w.stacked_planes == 0,
                     "NNN translucent window requires engine resource"
                 );
             }
@@ -444,6 +451,9 @@ impl NativeMessageState {
         );
         let mut next = self.clone();
         let append = *kind == 0x22220003;
+        if append && matches!(next.mode, 0x22220004 | 0x22220005) {
+            next.mode = 0x22220001;
+        }
         if !append {
             next.mode = *kind;
             next.rows.clear();
@@ -497,6 +507,45 @@ impl NativeMessageState {
                 );
             }
         }
+        Self::layout_rows(next, previous, profile, metrics)
+    }
+    /// Original SetMessageByLoad supplies fixed native rows directly. This
+    /// neither receives a PRINT callback nor inserts/truncates rows again.
+    pub(crate) fn prepare_saved(
+        rows: Vec<Vec<u8>>,
+        mode: u32,
+        serial: u32,
+        window_visible: bool,
+        profile: &MessageProfile,
+        metrics: &dyn TextMeasurement,
+    ) -> Result<MessagePlan> {
+        profile.validate()?;
+        ensure!(
+            matches!(mode, 0x22220001 | 0x22220002),
+            "NNN saved message requires native PRINT/LPRINT wait state"
+        );
+        ensure!(
+            rows.len() <= 64 && rows.iter().all(|row| row.len() <= 254 && !row.contains(&0)),
+            "NNN saved fixed message rows"
+        );
+        let next = Self {
+            mode,
+            serial,
+            rows,
+            window_visible,
+            body_cells: 0,
+            next_window_override: None,
+        };
+        // Original InitByLoad resets per-row printed counts, independent of
+        // the current live message or how many characters it had revealed.
+        Self::layout_rows(next, 0, profile, metrics)
+    }
+    fn layout_rows(
+        mut next: Self,
+        previous: usize,
+        profile: &MessageProfile,
+        metrics: &dyn TextMeasurement,
+    ) -> Result<MessagePlan> {
         let has_name = next.mode == 0x22220001
             && profile.name_enabled
             && !next.rows.is_empty()
@@ -562,7 +611,7 @@ impl NativeMessageState {
                 w.rect[2] as f32 / w.source_size[0] as f32,
                 w.rect[3] as f32 / w.source_size[1] as f32,
             ];
-            layers.insert(0,json!({"op":"put","layer":{"id":w.id,"parent":profile.root,"rect":w.rect,"uv":uv,"visible":visible&&w.percent>0,"order":[profile.order,0],"paint":{"kind":"image","asset":w.asset}}}));
+            layers.insert(0,json!({"op":"put","layer":{"id":w.id,"parent":profile.root,"rect":w.rect,"uv":uv,"visible":visible&&(w.percent>0||w.stacked_planes!=0),"order":[profile.order,0],"paint":{"kind":"image","asset":w.asset}}}));
         }
         Ok(MessagePlan {
             next,
@@ -583,38 +632,242 @@ pub struct NativeTextBridge {
     published: bool,
     blocked_click_at: Option<u64>,
     layers_present: bool,
+    windows_present: bool,
     background: Option<Arc<dyn crysirror_core::image_processing::ImageResource>>,
     window_job: Option<crysirror_core::image_processing::ImageJob>,
     window_prepared: bool,
     window_path: Option<String>,
     window_candidate_path: Option<String>,
+    restored_wait_armed: bool,
+    window_on: bool,
+}
+/// Immutable native layout/resource seed. It never owns the live message or
+/// asks a restore preparation host to mutate the Scene.
+#[derive(Clone)]
+pub(crate) struct TextRestoreSeed {
+    profile: MessageProfile,
+    pool: TaskPool,
+    previous_window_path: Option<String>,
+    window_on: bool,
+}
+pub(crate) struct SavedTextPreparation {
+    bridge: NativeTextBridge,
+}
+pub(crate) struct PreparedSavedText {
+    pub bridge: NativeTextBridge,
+    pub batch: Value,
+    pub release_images: Vec<String>,
+}
+impl TextRestoreSeed {
+    pub(crate) fn dormant(
+        &self,
+        rows: Vec<Vec<u8>>,
+        mode: u32,
+        serial: u32,
+        window_visible: bool,
+        cannot_click: bool,
+    ) -> Result<NativeTextBridge> {
+        ensure!(
+            matches!(mode, 0x22220001..=0x22220005)
+                && rows.len() <= 64
+                && rows.iter().all(|row| row.len() <= 254 && !row.contains(&0)),
+            "NNN saved latent message state"
+        );
+        let mut profile = self.profile.clone();
+        profile.cannot_click = cannot_click;
+        let mut bridge = NativeTextBridge::from_pool(profile, self.pool.clone())?;
+        bridge.window_on = self.window_on;
+        bridge.state = NativeMessageState {
+            mode,
+            serial,
+            rows,
+            window_visible,
+            body_cells: 0,
+            next_window_override: None,
+        };
+        Ok(bridge)
+    }
+    pub(crate) fn previous_window_path(&self) -> Option<&str> {
+        self.previous_window_path.as_deref()
+    }
+
+    pub(crate) fn current_window_on(&self) -> bool {
+        self.window_on
+    }
+
+    pub(crate) fn begin(
+        &self,
+        rows: Vec<Vec<u8>>,
+        mode: u32,
+        serial: u32,
+        window_visible: bool,
+        cannot_click: bool,
+        background: Arc<dyn crysirror_core::image_processing::ImageResource>,
+        host: &mut dyn HostServices,
+    ) -> Result<SavedTextPreparation> {
+        let metrics = host.text_measurement(self.profile.client)?;
+        let mut profile = self.profile.clone();
+        profile.cannot_click = cannot_click;
+        let permit = self.pool.reserve()?;
+        let worker_profile = profile.clone();
+        let worker = permit.spawn(move |cancel| {
+            cancel.check()?;
+            let plan = NativeMessageState::prepare_saved(
+                rows,
+                mode,
+                serial,
+                window_visible,
+                &worker_profile,
+                metrics.as_ref(),
+            )?;
+            cancel.check()?;
+            Ok(plan)
+        })?;
+        let mut bridge = NativeTextBridge::from_pool(profile, self.pool.clone())?;
+        bridge.window_on = self.window_on;
+        bridge.set_background(background)?;
+        bridge.window_path = self.previous_window_path.clone();
+        bridge.worker = Some(worker);
+        Ok(SavedTextPreparation { bridge })
+    }
+}
+impl SavedTextPreparation {
+    pub(crate) fn poll(&mut self, host: &mut dyn HostServices) -> Result<bool> {
+        if let Some(worker) = &mut self.bridge.worker {
+            let Some(plan) = worker.try_take()? else {
+                return Ok(false);
+            };
+            self.bridge.worker = None;
+            // A restore cannot publish an unresolved native mask/window as
+            // ordinary alpha. All visible windows need actual shared resources.
+            for window in self
+                .bridge
+                .profile
+                .window
+                .iter()
+                .chain(self.bridge.profile.name_window.iter())
+            {
+                let visible = plan.batch["layers"].as_array().unwrap().iter().any(|node| {
+                    node["layer"]["id"].as_u64() == Some(u64::from(window.id))
+                        && node["layer"]["visible"].as_bool() == Some(true)
+                });
+                ensure!(
+                    !visible || window.resource.is_some(),
+                    "NNN saved visible native window resource is unresolved"
+                );
+            }
+            self.bridge.ready = Some(plan);
+        }
+        ensure!(
+            self.bridge.ready.is_some(),
+            "NNN saved text result already consumed"
+        );
+        self.bridge.prepare_windows(host)
+    }
+    pub(crate) fn finish(mut self) -> Result<PreparedSavedText> {
+        ensure!(
+            self.bridge.worker.is_none()
+                && self.bridge.window_job.is_none()
+                && self.bridge.window_prepared,
+            "NNN saved text is not ready"
+        );
+        let plan = self
+            .bridge
+            .ready
+            .take()
+            .context("NNN saved text plan absent")?;
+        let mut release_images = Vec::new();
+        if let Some(path) = self.bridge.window_candidate_path.take() {
+            if let Some(previous) = self.bridge.window_path.replace(path.clone()) {
+                if previous != path {
+                    release_images.push(previous);
+                }
+            }
+        } else if let Some(previous) = self.bridge.window_path.take() {
+            release_images.push(previous);
+        }
+        self.bridge.state = plan.next;
+        self.bridge.published = true;
+        self.bridge.layers_present = true;
+        self.bridge.windows_present =
+            self.bridge.profile.window.is_some() || self.bridge.profile.name_window.is_some();
+        // The first post-commit poll arms the new wait and blocks the load click.
+        self.bridge.restored_wait_armed = false;
+        self.bridge.blocked_click_at = None;
+        Ok(PreparedSavedText {
+            bridge: self.bridge,
+            batch: plan.batch,
+            release_images,
+        })
+    }
 }
 impl NativeTextBridge {
     pub fn new(profile: MessageProfile) -> Result<Self> {
+        Self::from_pool(profile, TaskPool::new("nnn-native-text", 1, 1)?)
+    }
+    fn from_pool(profile: MessageProfile, pool: TaskPool) -> Result<Self> {
         profile.validate()?;
         Ok(Self {
             profile,
             state: NativeMessageState::default(),
             api_calls: 0,
-            pool: TaskPool::new("nnn-native-text", 1, 1)?,
+            pool,
             worker: None,
             ready: None,
             pending: None,
             published: false,
             blocked_click_at: None,
             layers_present: false,
+            windows_present: false,
             background: None,
             window_job: None,
             window_prepared: false,
             window_path: None,
             window_candidate_path: None,
+            restored_wait_armed: false,
+            window_on: true,
         })
     }
-    pub fn pending_message(&self)->bool {self.pending.is_some()}
-    pub fn dependency_pending(&self)->bool {self.worker.is_some()||self.window_job.is_some()}
-    pub fn set_next_window_visibility(&mut self,visible:bool)->Result<()> {
-        ensure!(self.pending.is_none(),"NNN cannot override a pending native message");
-        self.state.next_window_override=Some(visible);
+    pub(crate) fn restored_layer_ids(&self) -> Vec<u32> {
+        let mut ids = Vec::new();
+        if self.layers_present {
+            ids.extend([self.profile.body_layer, self.profile.name_layer]);
+        }
+        if self.windows_present {
+            ids.extend(
+                self.profile
+                    .window
+                    .iter()
+                    .chain(self.profile.name_window.iter())
+                    .map(|window| window.id),
+            );
+        }
+        ids
+    }
+    pub(crate) fn restore_seed(&self) -> Result<TextRestoreSeed> {
+        ensure!(
+            self.worker.is_none() && self.ready.is_none() && self.window_job.is_none(),
+            "NNN text restore requires drained preparation dependencies"
+        );
+        Ok(TextRestoreSeed {
+            profile: self.profile.clone(),
+            pool: self.pool.clone(),
+            previous_window_path: self.window_path.clone(),
+            window_on: self.window_on,
+        })
+    }
+    pub fn pending_message(&self) -> bool {
+        self.pending.is_some()
+    }
+    pub fn dependency_pending(&self) -> bool {
+        self.worker.is_some() || self.window_job.is_some()
+    }
+    pub fn set_next_window_visibility(&mut self, visible: bool) -> Result<()> {
+        ensure!(
+            self.pending.is_none(),
+            "NNN cannot override a pending native message"
+        );
+        self.state.next_window_override = Some(visible);
         Ok(())
     }
     /// Stage with the parent's effect operations so one original ClearAll
@@ -633,7 +886,10 @@ impl NativeTextBridge {
             if Arc::ptr_eq(previous, &image) {
                 return Ok(());
             }
-            ensure!(self.pending.is_none(),"NNN changing message background needs native frame/window dependency recomposition");
+            ensure!(
+                self.pending.is_none(),
+                "NNN changing message background needs native frame/window dependency recomposition"
+            );
         }
         self.background = Some(image);
         Ok(())
@@ -662,7 +918,9 @@ impl NativeTextBridge {
                 .iter()
                 .find(|node| node["layer"]["id"].as_u64() == Some(u64::from(window.id)))
                 .context("NNN message window layer missing")?;
-            if node["layer"]["visible"].as_bool() == Some(true) && window.percent > 0 {
+            if node["layer"]["visible"].as_bool() == Some(true)
+                && (window.percent > 0 || window.stacked_planes != 0)
+            {
                 windows.push(window.clone());
             }
         }
@@ -680,19 +938,43 @@ impl NativeTextBridge {
                 .background
                 .clone()
                 .context("NNN native window requires completed engine background frame")?;
-            let layers = windows
-                .iter()
-                .map(|window| ImageCompositeLayer {
-                    input: Box::new(ImageInput::Resource(window.resource.clone().unwrap())),
-                    source: [0, 0, window.rect[2], window.rect[3]],
-                    destination: [window.rect[0], window.rect[1]],
-                    clip: None,
-                    opacity: 255,
-                    math: ImageCompositeMath::MaskPiecewise256 {
-                        weight: window.percent * 256 / 100,
-                    },
-                })
-                .collect();
+            let mut layers = Vec::new();
+            for window in &windows {
+                let mut append = |source_y: i32, math: ImageCompositeMath| {
+                    layers.push(ImageCompositeLayer {
+                        input: Box::new(ImageInput::Resource(window.resource.clone().unwrap())),
+                        source: [0, source_y, window.rect[2], window.rect[3]],
+                        destination: [window.rect[0], window.rect[1]],
+                        clip: None,
+                        opacity: 255,
+                        math,
+                    });
+                };
+                // The actual window painter has three native phases. Pixel
+                // clipping/mask/fixed-point products all belong to the engine.
+                if window.stacked_planes & 2 != 0 {
+                    let rows = if window.stacked_planes & 1 != 0 { 2 } else { 1 };
+                    append(
+                        window.rect[3]
+                            .checked_mul(rows)
+                            .context("NNN window plane offset overflow")?,
+                        ImageCompositeMath::MaskSeparate256,
+                    );
+                }
+                if window.percent >= 100 {
+                    append(0, ImageCompositeMath::MaskSeparate256);
+                } else if window.percent > 0 {
+                    append(
+                        0,
+                        ImageCompositeMath::MaskPiecewise256 {
+                            weight: window.percent * 256 / 100,
+                        },
+                    );
+                }
+                if window.stacked_planes & 1 != 0 {
+                    append(window.rect[3], ImageCompositeMath::MaskSeparate256);
+                }
+            }
             self.window_job = Some(host.image_metadata(self.profile.client)?.begin_process(
                 ImageInput::Composite {
                     base: Box::new(ImageInput::Resource(background)),
@@ -754,6 +1036,29 @@ impl NativeTextBridge {
         } else {
             vec![]
         })
+    }
+    /// Native NewGame hides presentation without erasing original message rows.
+    /// Window resources may outlive a prior glyph-only CLR, so track them apart.
+    pub(crate) fn hide_operations(&self) -> Result<Vec<Value>> {
+        let mut operations = self.clear_operations()?;
+        if self.windows_present {
+            for window in self
+                .profile
+                .window
+                .iter()
+                .chain(self.profile.name_window.iter())
+            {
+                operations.push(json!({"op":"remove","id":window.id}));
+            }
+        }
+        Ok(operations)
+    }
+    pub(crate) fn accept_hide(&mut self) -> Result<()> {
+        let _ = self.hide_operations()?;
+        self.layers_present = false;
+        self.windows_present = false;
+        self.state.window_visible = false;
+        Ok(())
     }
     /// Call only after the staged shared clear batch successfully publishes.
     pub fn accept_clear(&mut self) -> Result<()> {
@@ -831,8 +1136,25 @@ impl NativeTextBridge {
             self.ready = None;
             self.published = true;
             self.layers_present = true;
+            self.windows_present =
+                self.profile.window.is_some() || self.profile.name_window.is_some();
             self.blocked_click_at = Some(host.now_ms());
         }
+        if !self.poll_message_input(host, input)? {
+            return Ok(false);
+        }
+        machine.acknowledge(call)?;
+        self.pending = None;
+        self.published = false;
+        self.window_prepared = false;
+        self.blocked_click_at = Some(host.now_ms());
+        Ok(true)
+    }
+    fn poll_message_input(
+        &mut self,
+        host: &mut dyn HostServices,
+        input: InputFrame,
+    ) -> Result<bool> {
         ensure!(self.published, "NNN message publication absent");
         let bytes = host.query_engine(
             self.profile.client,
@@ -863,11 +1185,270 @@ impl NativeTextBridge {
             self.blocked_click_at = Some(host.now_ms());
             return Ok(false);
         }
-        machine.acknowledge(call)?;
-        self.pending = None;
+        Ok(true)
+    }
+    /// Resume the already-restored native wait at its saved nextPC. There is
+    /// no synthetic NativeCall and no VM acknowledgement to replay.
+    pub(crate) fn poll_restored_input(
+        &mut self,
+        host: &mut dyn HostServices,
+        input: InputFrame,
+    ) -> Result<bool> {
+        ensure!(
+            self.pending.is_none()
+                && self.worker.is_none()
+                && self.ready.is_none()
+                && self.window_job.is_none(),
+            "NNN restored text dependencies are not complete"
+        );
+        if !self.restored_wait_armed {
+            self.restored_wait_armed = true;
+            self.blocked_click_at = Some(host.now_ms());
+            return Ok(false);
+        }
+        if !self.poll_message_input(host, input)? {
+            return Ok(false);
+        }
         self.published = false;
         self.window_prepared = false;
         self.blocked_click_at = Some(host.now_ms());
+        self.restored_wait_armed = false;
         Ok(true)
+    }
+}
+
+#[cfg(test)]
+mod native_hide_tests {
+    use super::*;
+    #[test]
+    fn newgame_hides_glyphs_and_windows_but_preserves_original_rows_and_append_cells() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("assets")).unwrap();
+        let project:crysirror_runtime::Project=serde_json::from_value(json!({"schema":2,"name":"native hide","content_revision":"1","assets":"assets","canvas":[16,16],"clients":[{"name":"native","adapter":"crysirror-script-v1","game":"authored"}]})).unwrap();
+        let mut rt = crysirror_runtime::Runtime::with_asset_root(
+            project,
+            dir.path(),
+            &dir.path().join("state"),
+            Default::default(),
+        )
+        .unwrap();
+        rt.tick(0, Default::default()).unwrap();
+        let profile = MessageProfile::from_legacy_setup(
+            &Names::parse(b"fontSize 4 nameFontSize 4 printX 0 printY 0 nextY 4 LPrintX 0 LPrintY 0 LNextY 4 fullMessageNumber 3 windowMessageNumber 3 nameX 0 nameY 0 nameCenterFlag 0", false).unwrap(),
+            MessageBindings {
+                client: ClientId(1),
+                root: 1,
+                body_layer: 200,
+                name_layer: 201,
+                order: 30,
+                canvas: [16, 16],
+                window: Some(MessageWindow {
+                    id: 202,
+                    asset: "authored.png".into(),
+                    rect: [0, 0, 2, 1],
+                    source_size: [2, 1],
+                    percent: 100,
+                    stacked_planes: 0,
+                    resource: None,
+                }),
+            },
+            "unused-no-font-decoding",
+            2,
+            Some(&Names { tokens: vec![] }),
+            None,
+            crysirror_core::service::buttons::MOUSE_LEFT,
+        )
+        .unwrap();
+        assert_eq!(profile.full_rows, 3);
+        assert_eq!(profile.body.size, 4);
+        let mut text = NativeTextBridge::new(profile).unwrap();
+        text.state.rows = vec![vec![0x82, 0xa0]];
+        text.state.body_cells = 1;
+        text.state.window_visible = true;
+        text.layers_present = true;
+        text.windows_present = true;
+        let put = |id| json!({"op":"put","layer":{"id":id,"rect":[0,0,2,1],"paint":{"kind":"solid","color":[1,2,3,255]}}});
+        rt.host
+            .submit_engine(
+                ClientId(1),
+                1,
+                &serde_json::to_vec(&json!({"layers":[put(200),put(201),put(202)]})).unwrap(),
+            )
+            .unwrap();
+        let rows = text.state.rows.clone();
+        let ops = text.hide_operations().unwrap();
+        assert_eq!(ops.len(), 3);
+        rt.host
+            .submit_engine(
+                ClientId(1),
+                1,
+                &serde_json::to_vec(&json!({"layers":ops})).unwrap(),
+            )
+            .unwrap();
+        text.accept_hide().unwrap();
+        assert_eq!(text.state.rows, rows);
+        assert_eq!(text.state.body_cells, 1);
+        assert!(!text.state.window_visible);
+        for id in [200, 201, 202] {
+            assert!(rt.host.engine.layers.get(ClientId(1), id).is_none());
+        }
+        assert!(text.hide_operations().unwrap().is_empty());
+        // A prior glyph-only CLR does not imply its retained window was removed.
+        rt.host
+            .submit_engine(
+                ClientId(1),
+                1,
+                &serde_json::to_vec(&json!({"layers":[put(202)]})).unwrap(),
+            )
+            .unwrap();
+        text.windows_present = true;
+        let ops = text.hide_operations().unwrap();
+        assert_eq!(ops.len(), 1);
+        rt.host
+            .submit_engine(
+                ClientId(1),
+                1,
+                &serde_json::to_vec(&json!({"layers":ops})).unwrap(),
+            )
+            .unwrap();
+        text.accept_hide().unwrap();
+        assert!(rt.host.engine.layers.get(ClientId(1), 202).is_none());
+        assert_eq!(text.state.rows, rows);
+        assert_eq!(rt.host.now_ms(), 0);
+    }
+}
+
+#[cfg(test)]
+mod window_plane_tests {
+    use super::*;
+    use crysirror_core::image_processing::{ImageInput, ImageJob, ImageProcessState};
+    use std::time::{Duration, Instant};
+    fn finish(mut job: ImageJob) -> Arc<dyn crysirror_core::image_processing::ImageResource> {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            match job.poll().unwrap() {
+                ImageProcessState::Ready(image) => return image,
+                ImageProcessState::Failed(error) => panic!("{error}"),
+                ImageProcessState::Pending => {
+                    assert!(Instant::now() < deadline);
+                    std::thread::yield_now();
+                }
+            }
+        }
+    }
+    #[test]
+    fn original_stacked_window_order_and_full_percent_blt_use_real_shared_image_pixels() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("game")).unwrap();
+        let project:crysirror_runtime::Project=serde_json::from_value(json!({"schema":2,"name":"window plane oracle","content_revision":"1","assets":"game","canvas":[1,1],"clients":[{"name":"native","adapter":"crysirror-script-v1","game":"authored"}]})).unwrap();
+        let mut rt = crysirror_runtime::Runtime::with_asset_root(
+            project,
+            root.path(),
+            &root.path().join("state"),
+            Default::default(),
+        )
+        .unwrap();
+        let images = rt.host.image_metadata(ClientId(1)).unwrap();
+        let background = finish(
+            images
+                .begin_process(
+                    ImageInput::Solid {
+                        size: [1, 1],
+                        color: [20, 40, 60, 255],
+                    },
+                    b"[]".as_slice().into(),
+                )
+                .unwrap(),
+        );
+        let bytes = crysirror_image::encode_png(&crysirror_image::ImageSurface {
+            width: 1,
+            height: 3,
+            rgba: vec![100, 120, 140, 128, 200, 100, 50, 128, 10, 220, 30, 128],
+        })
+        .unwrap();
+        let source = finish(
+            images
+                .begin_process(
+                    ImageInput::Encoded {
+                        name: "window.png".into(),
+                        bytes: bytes.into(),
+                        size: [1, 3],
+                    },
+                    b"[]".as_slice().into(),
+                )
+                .unwrap(),
+        );
+        let raw = rt
+            .host
+            .publish_image_resource(ClientId(1), 202, source.clone())
+            .unwrap();
+        for (flags, percent, expected) in [
+            (0, 100, [60, 80, 100, 255]),
+            (1, 100, [130, 90, 75, 255]),
+            (2, 100, [105, 95, 97, 255]),
+            (3, 100, [128, 112, 71, 255]),
+            (3, 0, [107, 115, 47, 255]),
+        ] {
+            let names=crate::config::Names::parse(b"fontSize 4 nameFontSize 4 printX 0 printY 0 nextY 4 LPrintX 0 LPrintY 0 LNextY 4 fullMessageNumber 3 windowMessageNumber 3 nameFlag 0 nameColorChangeFlag 0",false).unwrap();
+            let profile = MessageProfile::from_legacy_setup(
+                &names,
+                MessageBindings {
+                    client: ClientId(1),
+                    root: 1,
+                    body_layer: 200,
+                    name_layer: 201,
+                    order: 30,
+                    canvas: [1, 1],
+                    window: Some(MessageWindow {
+                        id: 202,
+                        asset: raw.path.relative().into(),
+                        rect: [0, 0, 1, 1],
+                        source_size: [1, 3],
+                        percent,
+                        stacked_planes: flags,
+                        resource: Some(source.clone()),
+                    }),
+                },
+                "fixture",
+                2,
+                None,
+                None,
+                crysirror_core::service::buttons::MOUSE_LEFT,
+            )
+            .unwrap();
+            let text = NativeTextBridge::new(profile).unwrap();
+            let mut prep = text
+                .restore_seed()
+                .unwrap()
+                .begin(
+                    vec![],
+                    0x22220001,
+                    7,
+                    true,
+                    false,
+                    background.clone(),
+                    &mut rt.host,
+                )
+                .unwrap();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !prep.poll(&mut rt.host).unwrap() {
+                assert!(Instant::now() < deadline);
+                std::thread::yield_now();
+            }
+            let done = prep.finish().unwrap();
+            let window = done.batch["layers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|node| node["layer"]["id"] == 202)
+                .unwrap();
+            assert_eq!(window["layer"]["visible"], true);
+            let path = window["layer"]["paint"]["asset"].as_str().unwrap();
+            assert_eq!(
+                rt.assets.surface(ClientId(1), path).unwrap().rgba.as_ref(),
+                expected,
+                "flags={flags} percent={percent}"
+            );
+        }
     }
 }

@@ -34,6 +34,17 @@ and a test keeps it current.
 Rust crate internals are not part of this reference. For those, use
 `cargo doc --workspace --no-deps`.
 
+Rust image callers can append bitmap operations with
+`ImageInput::with_composite_layer`. A complete four-channel replacement drops
+obsolete destination history; partial and channel-only copies retain it. This
+helper adds no reflective JS/TS member.
+
+`VmAdapter::presentation_pending` marks an incomplete native drawing callback.
+`Runtime::presentation_pending` combines these dependencies for the live host,
+which retains its last completed render snapshot while resource work continues.
+Internal Canvas/Image captures still use current logical state. Native modal
+dialogs do not hold this fence, so their UI can be presented and answered.
+
 The native Rust contract also documents `HostServices.begin_pattern` and
 `begin_canvas_image`. Their immutable resources and nonblocking completion
 receipts use the shared image workers. Canvas capture needs an enabled
@@ -957,9 +968,10 @@ The host VFS keeps a hard limit of 256 provider mounts per client, including
 RealLive voice banks. No MSI actions or original executable code are run.
 
 The partial first-class Majiro adapter configuration is documented alongside the
-other native configurations. System 4 and System-NNN currently expose native
-program readers, not runnable VM factories. Their current boundaries are explicit
-in the crate READMEs and STATUS.
+other native configurations. System 4 and System-NNN provide first-class native
+VM factories with bounded, explicit compatibility profiles. Factory registration
+does not establish complete engine compatibility; their current native execution,
+resource, input and save boundaries are recorded in the crate READMEs and STATUS.
 
 
 The current fingerprint is `1dbdf921cc54e571`. `Engine.logs()` reads the same
@@ -1048,3 +1060,543 @@ The `self_source` profile deliberately reads the destination in forward order,
 including overlap feedback, and requires identical bitmap slots. It shares
 client/epoch/revision checks and status/cancellation with other bitmap jobs. It
 is a coverage operation, rather than an alpha bounding-box query.
+
+Shared Rust grouped-byte tokenization is available as:
+
+```rust
+crysirror_text::byte_groups::split_grouped_bytes(
+    source: &[u8],
+    delimiters: &[u8],
+    limits: ByteGroupSplitLimits,
+    check: &dyn Fn() -> anyhow::Result<()>,
+) -> anyhow::Result<ByteGroupSplitOutput>
+```
+
+This is a Rust API, with no new reflective Text method. It treats delimiters as
+raw bytes and preserves the reviewed parenthesis/quote, NUL-list and helper-copy
+tail protocol. It does not interpret UTF-8/Shift-JIS boundaries or backslash
+escapes. `written_bytes` includes all helper writes; `logical_len` can be shorter;
+`spans` are visible nonempty output ranges with exclusive ends. Input cannot
+contain NUL. Default limits are1MiB input,2MiB+8 output,65536tokens and depth64;
+configured depth is capped at256. Allocation follows a full extent preflight,
+and cancellation can fail either pass without returning a partial buffer.
+
+`Bitmap.beginMaskedPair(slot, first, second, options)` prepares a shared
+three-input `MaskedPairBlend` worker. `ImageInput::Ternary` contains immutable
+admission-time destination, first and second images, and requires this effect
+first in its processing chain. Equal-sized source rectangles, destination and
+optional clip retain their sampling phase through intersection. For each mask,
+coverage is `weight << 6` at255, otherwise `(weight * mask) >> 2`. Each RGB
+contribution is floored independently at14 fractional bits, including remaining
+destination coverage; destination alpha is retained. Weights sum to at most256.
+Aliased inputs still read frozen images. This is distinct from ordinary opacity
+or sequential crossfades. It shares bitmap owner/epoch/revision, status and
+cancellation,4MP effect outputs,128MiB graph and512MiB shared worker limits.
+
+The shared Resources format `siglus/cgm` decodes CGTABLE/CGTABLE2 into typed JSON
+`CgCatalog`/`CgCatalogEntry` metadata. `CgCatalog.by_name` and `by_flag` are Rust
+lookup methods. Decoding limits encoded and expanded data to8MiB and entries to
+65536, preserves version, auto flag, flag numbers and group codes, and validates
+Shift-JIS names. Catalogue metadata does not own a VM's seen/unseen progress.
+
+Shared Rust `crysirror_image::paged` exposes `PagedImageLayout`,
+`PagedImageRegion`, `PagedImage` and `PagedClearPlan`. Layout construction from
+explicit tile regions checks holes, overlap,4096 tile and512MiB allocated-byte
+limits (`MAX_PAGED_IMAGE_TILES`, `MAX_PAGED_IMAGE_BYTES`) while each page retains
+ordinary image limits. `intersect` plans signed half-open rectangles with
+cancellation. New pages are undefined; partial clear of an undefined page fails.
+`clear_plan` emits existing Solid/Composite image requests, and `complete_clear`
+validates the entire owner, generation, identity, dimensions and completion set
+before publishing a new immutable generation. Older clones keep their pages;
+`dirty_since` reports changed generations. These are Rust planning/resource APIs,
+with no new reflective class or private pixel renderer.
+
+`Layers.setSolidColor(id, rgba)` and `LayerCommand::SetSolidColor` change only
+an existing owned Solid layer's four stored colour bytes. Transform, motion,
+opacity, ordering, clipping and unrelated state are retained. Absent, foreign
+or other paint kinds fail under ordinary batch rollback. This operation is
+available to engine clients independently of CatSystem2's numeric hook.
+
+Shared Rust `crysirror_core::integer_fields` operates on borrowed `i64` storage
+containing32-bit packed words, without allocation, a VM or ambient state.
+`logical_size(storage_words, width)` checks capacity for1/2/4/8/16/32bit fields.
+`get(words, width, index)` returns unsigned narrow fields and sign-extended i32
+whole words; invalid indices/widths return None. `set` preserves neighbouring
+fields and returns false without mutation for invalid requests.
+`fill_clipped(words, width, first, last, value)` fills only the available
+intersection of an inclusive signed range, reports the written count, and is
+bounded by storage even for extreme signed endpoints. Reversed/disjoint ranges
+change nothing. Exclusive slice borrowing defines write ownership; no new
+reflective class, device operation or persistent handle is implied.
+
+`Input.observation()` returns the last client-scoped owner-admitted input sample,
+or null before admission/after restore. `revision`, `time_ms`, `buttons_down` and
+`buttons_pressed` are exact decimal strings; `pointer`, `pointer_inside` and
+`focused` remain optional. Unknown pointer metadata does not imply coordinate
+zero or an outside window. Queries consume no events and perform no OS polling;
+restoring logical data does not restore physical observation state. Rust types
+`PointerObservation` and `InputObservation` are read-only host records, with no
+serde wire implied by their catalogue entries.
+
+Core logical buttons now include C(bit49), L(50), middle mouse(51) and Z(52),
+shared with desktop input mapping and routing. Rust
+`buttons::windows_virtual_key(code)` is deliberately partial: unsupported keys
+and distinct keypad codes return None, rather than a fabricated released state.
+
+`Platform.integration("steam")` reports client/name/available/backend. An absent
+SDK backend yields unavailable with backend null. This is a read of a prepared
+host integration capability; it neither initializes a SDK nor claims ownership,
+entitlement, achievements or a successful SDK call. Unknown names fail. The
+Rust `PlatformIntegration`, `PlatformIntegrationInfo` and read-only
+`PlatformIntegrationProvider` keep SDK preparation/ownership outside Core and
+outside saved gameplay state.
+
+Shared Rust `crysirror_scene::reading_wait::ReadingWait` retains a fixed
+`started_at_ms` and character count. `due(now_ms, milliseconds_per_character,
+minimum_ms)` uses saturating elapsed time and a saturating duration of
+`max(max(characters, 1) * milliseconds_per_character, minimum_ms)`. It samples
+only caller-owned time, consumes no input and allocates no host resource; the
+serialized record survives logical restores without repeatedly resetting its
+start. Native auto/voice/reveal policy remains outside this generic deadline.
+
+Shared Rust `crysirror_formats_arc::ald_catalog` exposes `AldVolume { number,
+source }` and `AldCatalog::load(volumes, context)`, `entry(id)` plus the existing
+Archive interface. Callers supply authorized readers and explicit zero-based
+volume numbers. Original cross-volume link IDs and holes are preserved rather
+than inferred from filenames or enumeration order. Missing volumes and corrupt
+headers/ranges fail explicitly; payload reads retain the decode-context owner
+check and range-reader budgets. This CPU catalogue belongs on a resource worker;
+its reader handles are not serialized paths or device pointers. Source
+provenance and GPL notices remain in the formats crate. No new reflective class
+or method is implied.
+
+The optional desktop `system4` feature registers the first-class original AIN
+adapter. Its `clients[].config` comes from
+`crysirror_system4::worker_adapter::Config`; `factory::register` only links that
+VM factory. Detection prepares the original INI/AIN paths and native ALD
+volumes inside the program. A registered factory is separate from completing
+all native libraries or a particular game.
+
+The Rust catalogue qualifies otherwise ambiguous native names with the
+`System4` prefix. These reference labels do not rename Rust APIs or create
+reflective classes. `System4IniValue/IniEntry/IniDocument/Mixer/Bootstrap` refer
+to `crysirror_system4::bootstrap::{Value, Entry, Document, Mixer, Bootstrap}`.
+`Document::parse` preserves the original typed INI grammar, literal backslashes,
+root sparse assignments and nested Formation entries; `Bootstrap::from_document`
+extracts original code/view/save/mixer metadata. These Rust records have no
+implied JSON or serde wire format.
+
+`System4AssetClass/AssetVolume/Assets` refer to `assets::{Class, Volume, Assets}`.
+Class and Volume are actual serde configuration records; Assets is an opaque
+worker-prepared catalogue. `assets::classify` retains the native AIN-basename,
+class-letter and volume-letter rule. `Assets::{load,path,open}` translates
+original one-based IDs through shared ALD catalogues and authorized storage,
+preserving holes and distinguishing absent resources from malformed ones.
+Reader handles are not serialized as paths or device pointers.
+
+`System4SpriteSurface/Sprite/Sprites` qualify `sprites::{Surface, Sprite,
+Sprites}`: native solid/path declarations and slot/property policy are translated
+into shared Layer operations. Pixels, decoding, text rendering and composition
+remain engine operations. `System4Input` refers to native clearable input flags
+over the client's retained `InputObservation`; unknown keys, focus and pointer
+metadata are not fabricated. `System4Sact` describes native initialization state
+with real shared font/mixer checks and canvas/layer/sprite handles;
+`System4NativeAdapter` is an opaque worker-port object. Neither is another engine
+or a serialized save.
+The private `math` module has only a crate-visible scalar HLL dispatcher; it is
+not a new public Rust or reflective Math API, and unsupported random/geometry
+operations do not acquire fake implementations through this documentation.
+
+Shared `crysirror_formats_arc::alk::AlkCatalog::load(source, context)` implements
+the existing Archive contract. It preserves original numeric ALK IDs and empty
+slots, checks client/cancellation/range budgets, and returns shared immutable
+subrange readers. The existing `alice-soft/alk` registration delegates to the
+same physical directory parser and keeps its historical `000.dat` aliases and
+`original_id` metadata; no duplicate format registration is added. This Rust
+catalogue has no invented serde representation or reflective class. Original
+libsys4/xsystem4 provenance and applicable GPL notices remain in their crates.
+
+## Original image metadata and portable legacy CPU state
+
+Rust `ImageMetadata::begin_encoding_info` uses a client-scoped asynchronous
+query, with retained typed errors and a fingerprint of the original encoded
+bytes. `ImageEncodingInfo` reports the selected provider's original origin,
+color-bit depth and plane presence when available. An alpha plane whose values
+are all255 remains present. A Ready header receipt does not validate compressed
+pixel checksums or imply that a later decode succeeds; image processing is a
+separate operation. Runtime uses its existing worker pool and memory admission.
+
+`CivilTime::weekday` and `service::civil_weekday` are pure Gregorian Sunday0
+queries. They reject invalid dates and do not sample a second clock or replace
+local civil fields with Unix-epoch fields.
+
+The optional GPL `crysirror-text-legacy` crate exposes `ByteStringContext`,
+`ByteStringProfile`, `ByteLeadProfile`, `ByteStringLimits` and the numeric
+`ByteNumberSymbols`/`NumericCompaction` profiles. These bounded cancellable Rust
+operations preserve stored bytes versus NUL-prefix and original lead-byte/tail
+semantics without owning VM heaps, Unicode/font layout or presentation. The
+base `crysirror-text` licence remains separate. Resource's caller-owned
+`legacy_stream::Mt19937_1998` supplies the original1998 sequence and byte XOR;
+VM seed/discard/table-selection policy stays in each adapter. These are Rust
+APIs, without additional reflective script classes.
+
+Layer motion supports X/Y/Z, ScaleX/Y/Z, RotationX/Y/Z (radians), PivotX/Y/Z
+and quantized byte Opacity through the existing client-scoped ScalarTween
+tracks and automatic/external clocks. UI motion remains limited to X/Y.
+
+`legacy_stream::Mt19937Split::{new,next_u32,first_u32}` exposes the separately
+specified split-word69069+1 seed profile. It shares twist/temper machinery with
+other Resource streams while preserving its own seed expansion and cursor;
+`first_u32` keeps the existing format-probe fast path. It is distinct from the
+1998 full-word profile and each VM retains its own seed-selection policy.
+`text_stream::decode_shift_jis(bytes, max_output_bytes)` explicitly decodes the
+native CP932 profile with bounded output and malformed-input errors. It does not
+guess UTF8 merely because the same byte sequence is valid UTF8; `decode_auto`
+remains a separate choice. These Rust functions add no reflective script class.
+
+External procedural animation producers use `Layers.beginExternalMotion`,
+`commitExternalMotion`, `requestExternalMotionSkip` and `removeExternalMotion`.
+The client/layer/driver scope and exact generation/revision strings reject stale
+commits. A commit applies an optional rect/transform/opacity pose atomically with
+its completion sample; `Layers.setRect` can also mutate an existing rectangle.
+`motionStatus.drivers` contributes to combined completion. Requesting skip does
+not report completion until the producer publishes its actual terminal pose.
+Active external producers must retire before a scene snapshot; executable
+continuations are never serialized as scene data.
+
+`SpriteTransform.local_matrix` is an optional column-major affine matrix applied
+after scalar scale/rotation and before the anchor. It preserves affine shear in
+2D ancestry and projected 3D leaves; projective/singular matrices, matrix
+billboards and 3D layer parents fail explicitly.
+
+Rust `ImageCompositeMath::CopyAlpha` / bitmap `PixelMath::CopyAlpha` copies the
+alpha channel through the existing scoped image graph while retaining the
+destination RGB. Opacity uses the existing rounded /255 interpolation, and
+source/destination clipping follows the same composite-coordinate rules. These
+operations do not add a renderer or a native-VM-specific image implementation.
+
+Rust `crysirror_text::byte_replace::replace_spans_bytes(source, replacements,
+max_bytes, check)` assembles ordered disjoint byte ranges with explicit output
+admission and cancellation. Replacement bytes are not scanned again. Empty
+ranges insert bytes, including repeated insertion at the same offset; encoding
+selection remains the caller's responsibility.
+
+`crysirror_text::printf32::format_printf32_bytes(template, args, max_bytes)`
+uses explicit `Printf32Argument::Word(u32)` and borrowed `Bytes(&[u8])`, returning
+`Printf32Output { bytes, arguments_used }`. It supports the defined C32 integer,
+character and NUL-prefix byte-string conversions with flags, width, precision
+and dynamic word fields. Templates and used byte strings are bounded to16MiB;
+output has the caller's explicit limit. Unsafe or unsupported format profiles
+fail without dereferencing host pointers. This reusable Rust API is distinct
+from `format_one_bytes`'s first-compatible-placeholder semantics; it adds no
+reflective script class or VM-specific text engine.
+
+`Audio.setVoice(handle, options)` accepts either `gain` (linear amplitude) or
+`gain_db100` (integer hundredths of a dB, -16000..1204). Supplying both fails
+before mutating the voice. Ordinary `gain_db100:-10000` means finite -100dB;
+use `gain:0` for silence. Existing `fade_ms` interpolates linear amplitude and
+pan rather than logarithmic units. The method still takes the same options Map.
+
+The shared Rust `crysirror_audio::levels` module exposes four explicit functions:
+`gain_from_db100(i32) -> Result<f32>` and
+`db100_from_gain(f32) -> Result<Option<i32>>` convert finite decibels and
+amplitude0..4; zero amplitude returns `None` because it has no finite logarithm.
+`gain_from_legacy_db100(i32) -> Result<f32>` accepts attenuation -10000..0 with
+-10000 as an exact silence sentinel.
+`legacy_db100_from_gain(f32) -> Result<i32>` captures amplitude0..1, mapping
+values at/below -100dB to that sentinel. Native sentinel policy is explicit and
+never changes ordinary finite-dB behavior. Mixer release/capture paths reuse
+these tested kernels; no native VM or audio device is required.
+
+`Canvases.apply` accepts `present_isolated` with the same `id`, `layer`,
+`order`, optional `parent` and `position` fields as `present`. It keeps the live
+source surface as one engine-owned snapshot draw, rebuilding its immutable
+paint after source edits. An external parent's transform and opacity apply to
+the completed composition instead of independently to its overlapping children.
+Existing `present` behavior remains available for its original retained tree.
+
+Isolated presentation state survives scene serialization/restoration; an absent
+map-encoded isolation flag defaults to ordinary presentation. Previously frozen
+snapshot generations remain immutable. Snapshot inlining requires the entire
+outer SpriteTransform to be identity, including z and local_matrix, so an
+optimization cannot discard native affine/depth properties. The same existing
+renderer and region-paint pipeline handles these nodes; CPU state/geometry and
+public API tests do not establish GPU visual acceptance.
+
+`Audio.setVoice(handle, options)` also accepts `stereo_gain:[left,right]`,
+with each finite amplitude in0..4. These independent output-channel controls
+retain the existing equal-power pan/spatial law: they apply after pan/spatial
+DSP and before Master/reverb sends. The complete options set is validated before
+mutation, including mixed gain/pan/stereo controls. Existing `fade_ms` drives the
+stereo ramps using rendered voice-frame time; paused and dependency-held voices
+do not advance those ramps.
+
+Rust clients can submit
+`AudioRequest::SetStereoGain { channel, gains, fade_ms }` through the existing
+scoped audio capability. The reference now includes the complete real
+`AudioRequest` enum; it carries resource capabilities and is not a serialized
+JSON command or an additional script class.
+`Mixer::set_stereo_gain(client:u32, handle:VoiceHandle, gains:[f32;2],
+duration_ms:f32) -> Result<()>` controls pooled voices and
+`Mixer::stereo_gain(client, handle) -> Result<[f32;2]>` observes current channel
+amplitudes. `levels::validate_stereo_gains([f32;2]) -> Result<()>` supplies the
+shared finite/range validation independently of a mixer. While a render worker
+owns the mixer, observations are immutable and control attempts fail; PCM and
+its completed control state publish together. These CPU/PCM capability contracts
+do not imply audio-device or native-game acceptance.
+
+Original native saves use the optional Rust `OriginalRestorePreparation` port,
+separate from framework snapshots and old synchronous imports. Runtime exposes
+begin/poll/status/cancel/release/commit_original_save_restore with a ticket scoped
+to runtime instance, client, epoch and serial. Only the target VM is held;
+preparation never steps a VM or advances input/clock/playback. Its restricted
+resource host grants read-only scoped storage and shared immutable workers.
+Reserved image paths remain absent from the live catalog until commit. Generic
+scene JSON decoding is also a bounded worker dependency. The final owner
+preflight validates the latest scene, ready image references and lease releases
+before installing resource generations and swapping VM/scene. Cancellation,
+failure and obsolete receipts cannot publish partial results.
+`OriginalRestoreCommit` is an owner-only Rust plan containing a detached VM;
+it has no Serialize implementation and is never project data or a JSON command.
+An optional prepared audio replacement uses the same final owner transaction;
+sequential requests are rejected. World/Media producers, classic scene audio,
+client reverb-history reconstruction and unretired external motion producers
+remain unsupported in the restored client. Other clients' producers remain
+intact; `LayerSystem::has_external_motion_producers(client)` and
+`MediaManager::has_client_resources(client)` supply scoped ownership queries.
+See [ADR 0099](../adr/0099-staged-original-save-restore.md).
+
+`Media.setGain(id, gain)` / `Media.gain(id)` retain finite0..4 playback amplitude
+and update actual media audio without restarting its decoder, loop or clock.
+Rust `MediaRequest::SetGain` and MediaManager use the same behavior.
+`Input.pointerActivity()` returns an optional exact decimal-string motion token;
+it reflects backend movement/entry rather than input-frame revision. No token
+means unavailable observation. Rust `ActivityTimer` uses an owner-supplied clock
+and optional sequence to measure inactivity; it neither samples a device nor
+installs a timer. `animation::sample_integer_line(time,start_time,start,end_time,
+end)` supplies clamped, truncating signed interpolation over the full i64 domain.
+
+Audio's `setVoiceLoop(handle, schedule)` accepts decoded-frame start, optional
+exclusive end and optional positive passes (including the current pass).
+Omitted end uses source EOF; omitted passes is unbounded. Replacing a schedule
+preserves fractional source position and pause state; seeking does not reset
+remaining passes. `setVoice` also accepts `swap_channels`, applied before
+pan/spatial DSP. `fadeVoiceGain(handle,gain,fade_ms,stop_after?)` reaches the
+retained target and can stop there without adding another fade to zero;
+`finishVoiceGainFade(handle)` completes that own-gain ramp. Transport stop/pause
+schedules remain separate. Public playback info reports remaining loop passes,
+channel exchange and own gain/target/rendered fade frames/stop-after state.
+
+Rust `alice_audio_metadata::{MusicLoopCatalog,WaveRoutingCatalog}` loads bounded
+BGI music-loop and XI2/WAI routing metadata through AssetReader/DecodeContext,
+with original field versions, one-based IDs and source lookup policy. These
+five catalogue/entry/version types are resources, not native HLL completion or
+new FileRegistry decoder IDs; existing file-format counts are unchanged.
+HG3 archive entry `metadata.hg3` retains native frame_id, size/canvas/origin,
+base, color_bits, flags, image_mode, compression_type and attribute rectangles.
+Absent trailing native fields remain null. The decoder context's expand_canvas
+parameter can select condensed output while its default preserves expansion;
+`cat-system/hg3.pixel_profile` selects `archive` (default) or `native`, also
+retained in `metadata.hg3.pixel_profile`. Native requires full40-byte stdinfo,
+uses packed24-bit rows and ordinal chunk overwrite, and rejects uncovered gaps.
+JPEG defaults to mode1/24-bit and ignores independent alpha; WebP retains its
+embedded alpha and reviewed color mode. These metadata/decoder contracts alone
+do not establish native CatSystem game/title acceptance.
+
+`Text.resolveFontAlias(aliasOrFamily)` resolves a client binding, canonical alias
+or installed static family to the exact engine drawing alias. Static fonts do
+not gain invented dynamic leases. `FontLibrary::resolve_alias/metrics` are scoped
+Rust capability methods; `Text.fontMetrics(alias,size,character)` returns the
+existing `FontMetrics` ascent/descent/advance for exactly one Unicode scalar at
+size1..512. `crysirror_text::TextSystem::static_font_alias` uses family metadata prepared
+when a static face was installed, without parsing font bytes during lookup.
+An unresolved/unauthorized face remains absent or an explicit error.
+
+`Audio.beginSeekChannel(channel,source_frame)` admits a bounded seek on an
+existing client channel. `channelSeekStatus(ticket)` retains its real source
+cursor publication result independently of later EOF or voice removal;
+`cancelChannelSeek(ticket)` cancels pending work/re-aligns the previous logical
+cursor or releases a terminal receipt. The decoder is not reopened and loop,
+pause and gain envelopes are preserved. During a mixer render-worker lease,
+new completion remains Pending until that frame is published; an aborted frame
+cannot become a successful seek. Channel retirement/restore obsoletes tickets.
+Rust `Mixer::source_seek_receipt/source_seek_state` use the opaque Clone
+`SourceSeekReceipt` and typed `SourceSeekState`; `ChannelAudio` owns channel seek
+preparation/release. Core HostServices delegates this capability with explicit
+Unsupported defaults. These Rust receipts are not serialized script objects.
+
+
+Rust `AudioReplacementProcess` / `AudioReplacementResource` provide retained,
+client-scoped Pending/Ready/Failed(Core Error) preparation without changing live
+channels. `ChannelAudio::prepare_client_replacement` runs pure Play recipes on
+workers; `ChannelReplacementJob::poll` yields `PreparedChannelReplacement`.
+`stage_client_replacement` checks host/reset/client revisions and returns an
+exclusive `ChannelReplacementCommit`; its consuming `install()` cannot fail.
+The final original-restore commit holds this token across image publication,
+then swaps only the target client's channels, tails and queued operations.
+Empty recipes clear that client's playback. Catalog/group/bus/listener state and
+peer DSP histories remain intact. This is not a live-mixer clone or a sequence
+of audio requests; already submitted device PCM cannot be rolled back.
+
+Shared `visit_font_dependencies` visitors on LayerSpec/LayerSystem,
+CanvasSystem, UiSystem and EngineSystems enumerate retained font aliases,
+including frozen snapshots and unpresented canvases. Original restore currently
+admits exact static project aliases only. A momentary dynamic `is_loaded` check
+is not an atomic font lease and cannot satisfy this profile. Staged
+`UiSystem::reset_client_input_after_restore` and
+`InputRouting::reset_client_input_after_restore` discard only the target's old
+focus/events/captures/delivery epochs; physical held state and peer input remain.
+None of these preparation checks mutate live Scene state before commit.
+
+`Text.layoutUnitFlow(items,options)` and Rust
+`unit_flow::layout_unit_flow` lay out bounded, font-independent glyph/move/line
+break streams. `half_cell` classifies ASCII/half-width katakana; style indices
+remain opaque. Returned bounds describe logical full cells rather than raster
+ink. Native markup, fonts and resource lifetimes remain caller policy.
+`Text.beginGlyphBounds` / `glyphBoundsStatus` / `releaseGlyphBounds` use the
+scoped `FontLibrary::begin_glyph_bounds` worker. Rust `GlyphBoundsQuery` retains
+Pending/Ready/Failed/Cancelled progress; `GlyphBoundsResource` retains the
+admitted font snapshot, digest, budget and immutable coverage-cell geometry.
+`TextSystem::frozen_font` captures only the authorized font view for this work.
+These read-only bounds jobs do not publish Scene elements or draw glyphs.
+
+Rust `rgba_pixel_at(size,bytes,point)` performs checked resident RGBA lookup.
+`ImageResource::pixel_at` defaults to Unsupported, with no full-image `rgba()`
+fallback; Runtime image resources and Engine bitmap snapshots opt in by borrowing
+resident bytes. `ImageInput::resident_pixel(client,point)` accepts only Solid or
+resident Resource inputs, checks ownership first and does no decoding or IO.
+
+
+Rust `ImageMetadata::begin_glyph_image(GlyphImageSpec)` is an optional capability
+(default Unsupported) that rasterizes through the same TextSystem glyph kernel
+as engine GlyphRuns and returns the existing ImageJob/ImageResource contract.
+The spec supplies font alias, size1..512, positive canvas and ordered Glyphs.
+Runtime admits at most4Mi pixels/65536 glyphs, checks a64MiB glyph-work bound,
+retains exactly the authorized frozen font face and reserves the standard image
+output/scratch budgets before worker admission. Completion retains Ready pixels;
+drop/cancellation releases admitted work without Scene mutation. Results can use
+existing image composition/CopyAlpha and publication APIs. The cancellable Rust
+`TextSystem::rasterize_glyphs_cancellable` and the old rasterize_glyphs entry use
+one coverage implementation. No new reflective class or native HLL completion
+is implied by this metadata/render-resource service.
+
+
+`Canvases.applyBatch(batch)` submits the actual typed `ServiceBatch` through
+HostServices with one atomic engine transaction. Its six default-empty sections
+are prepare_layers, canvases, world, layers, ui and input_routes. Prepare layers
+run before Canvas operations, allowing new presentation parents/motion producers
+without intermediate publication; the ordinary layers section keeps its old
+post-Canvas position. Input routes stage in the same transaction. A later error
+rolls back earlier stages and producer generations rather than publishing and
+then issuing a private compensating rollback. The facade admits at most4096
+combined commands and4MiB serialized data and retains host resource/font
+preparation. `Canvases.apply(commands)` remains the canvas-only entry. This is a
+shared engine batch, not native VM bytecode or a game-rendering acceptance claim.
+
+`LayerSpec.viewport_clip` and `Layers.setViewportClip(id,rect)` retain an
+optional rectangle in the client's viewport coordinates; `Layers.viewportClip`
+returns that scoped state. `LayerCommand::SetViewportClip` uses the same field.
+A zero extent is empty, and null removes the viewport clip. `LayerSpec.clip`
+and setClip remain local-coordinate clipping. Ancestor/child viewport clips
+intersect after transformation rather than rotating with local geometry. Canvas
+subtree capture maps admitted axis-aligned roots into its local capture frame;
+rotated/sheared roots with viewport clipping fail explicitly when that inverse
+mapping cannot be represented exactly. Snapshot inlining retains the original
+viewport coordinate boundary. These are retained logical geometry contracts;
+the independent CPU checks do not establish new game/GPU rendering acceptance.
+
+Rust `AudioParameters` and `VoiceSpec` expose default-false retain_on_finish and
+default-true transport_active; `AudioPlaybackInfo` reports both states. A retained
+voice keeps its source/cursor/fader at natural EOF or its own gain-stop endpoint
+and cannot be stolen. Setting transport_active false freezes source decoding
+and source/spatial DSP, while the rendered-voice-frame gain/pan ramps continue;
+ordinary Pause retains its existing full-pause behavior. The typed
+`AudioRequest::SetTransportActive {channel,active}` and Mixer
+validate_transport_active/set_transport_active address an existing scoped voice.
+The existing Audio.setVoice options map exposes transport_active, with full
+option validation before mutation; Audio.playSfx accepts the VoiceSpec fields.
+Explicit Stop, retirement and prepared client replacement release retained
+voices as well as active voices, without replacing peer source/DSP state.
+These are actual Rust capability/voice options, not a separate reflected class
+or an implicit native game-engine implementation.
+
+Rust `HostServices::begin_session_seed(client, SessionSeedSource)` returns the
+optional `SessionSeedQuery` capability (default Unsupported). Source is explicit
+Os {words} or Fixed {words}, with1..16 exact u32 words. Ready returns owned
+SessionSeedMaterial {client,words}; poll retains Ready/Failed/Cancelled, and
+cancel changes Pending only. The Runtime validates client/bounds and reserves
+worker capacity before OS sampling; failure never substitutes an ambient or
+simulation clock. Seed acquisition and the caller's exact random-stream
+algorithm/state remain separate. These Rust contracts do not create a reflected
+class or JSON command. CatSystem2's real native Config.random_seeds is an optional
+pair of u32 values; omission/null selects its authorized default source, and an
+explicit pair retains zero/MAX exactly. The strict CLI/schema validator accepts
+the same field without manual game JSON or extraction.
+
+`ImageCompositeMath::Normalized(RgbaBlendState)` and
+`ImageSurface::blend_fixed_factors` implement independent RGB/alpha blend
+components,15 factors,5 equations, constants, source scale/bias, key/alpha gates
+and channel write masks on the existing checked/cancellable image graph.
+RgbaBlendArithmetic chooses FloatNearest or Byte255 with separate
+RgbaByteRounding for source/destination products. Byte255 quantizes the source
+transform before products and clamps equation results to byte range; Min/Max
+ignore product factors/rounding. The profile is explicit; ordinary normalized
+blending does not silently stand in for a native table arithmetic variant.
+`Bitmap.beginFixedBlend(slot,source,options)` uses the existing scoped bitmap
+snapshot/revision/epoch/ticket/cancellation pipeline and freezes the source
+generation; late completion cannot replace a changed destination. The new Rust
+types are capability data, not separate script classes or a native DLL host.
+
+`LayerSpec.source_crop` and `Layers.setSourceCrop`/`sourceCrop` retain a local
+source geometry crop on that layer only; it is not inherited and does not reflow
+children or text. `PositionedGlyph.crop` is expressed in its GlyphRun's local
+coordinates and crops each expanded glyph's geometry/UVs before projection.
+Rust `layer::crop::{valid_rect,crop_rect,subrect_quad}` uses the actual CropRect
+result and preserves source mapping, including reversed UV math and homogeneous
+quad interpolation. The renderer applies the prepared UV/geometry boundary;
+empty intersections emit no pixels. Viewport clipping remains a separate
+viewport-coordinate intersection. CPU/native tests and explicit GPU receipts
+are tracked independently from this API generation.
+
+Shared Rust Scene scheduling exposes `animation::AdaptiveStepClock` independently
+of VMs, devices or wall time. `new(period_ms, maximum_steps, horizon)` selects
+zero prediction lead; `with_lookahead(..., lookahead_steps)` makes a prediction
+policy explicit. `begin`, `available`, `consume_frames`/`consume_time` and `end`
+track bounded signed debt; an update with no consumer clears stale debt, while
+zero consumption is a real processed update. `set_period`, `clear` and `validate`
+preserve checked state/serialization boundaries. Every overflow or malformed-state
+operation fails before mutation. This differs from elapsed/period flooring and
+is a Rust capability, not a reflective script class or a timer producer. The
+authenticated legacy System-NNN profile uses zero lead; later public-source
+lookahead is not silently substituted. Scene independent tests cover both.
+
+`animation::step_remaining_time_scalar(current,target,remaining,elapsed)` is a
+separate finite binary32 per-update recurrence. It subtracts elapsed, then moves
+once by `(target-current)/remaining` while positive, retaining the nonpositive
+remainder at arrival. Zero elapsed still performs a step. Callers own native
+action completion; this function does not emit completion events, advance clocks
+or replace a scalar tween with a different time policy.
+
+Styled glyph preparation is an explicit Rust ImageMetadata capability:
+`begin_styled_glyph_image(StyledGlyphImageSpec)` and
+`begin_glyph_image_batch(GlyphImageBatchSpec)`. GlyphSizeBasis and GlyphImageOrigin
+select actual size/position policy. GlyphRasterOptions declares supersampling,
+binary coverage, bounded emboldening, optional coverage-count LUT, reduction and
+underline/strikeout. The existing default regular glyph path remains unchanged.
+TextSystem.rasterize_glyphs_styled_cancellable reuses the shared raster/morphology
+kernels and does not claim GDI/font pixel matching. Runtime captures one
+authorized immutable face and reserves worker/memory capacity before processing.
+
+GlyphImageBatchQuery exposes scoped client/poll/cancel with retained Pending,
+Ready, typed Failed and Cancelled states. Its Ready GlyphImageBatchResource
+exposes client and immutable images; all cells complete together from one worker,
+and each cell retains an independent lease after the query/batch is dropped.
+No partial output is published after cancellation or a later-cell failure. These
+are Rust capability resources, not serialized command values or new script classes.
+
+`Text.glyphId(alias,character)` is a scoped metadata lookup for one Unicode scalar,
+and `Text.fontStyle(alias)` returns cached actual outline OS/2 weight/italic or
+null for missing metadata and precomputed-only faces. FontLibrary::glyph_id and
+face_style default to explicit Unsupported; TextSystem caches style at font
+installation. These lookups do not rasterize, decode a font on the owner thread
+or guess a regular face when no style metadata exists.

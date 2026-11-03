@@ -2,7 +2,7 @@
 //! Font-independent cell layout for terminals and fixed-cell message windows.
 //! Callers supply their line-break and indentation policy. Glyph rasterization
 //! and reveal clocks remain separate engine services.
-use anyhow::{Result, ensure};
+use anyhow::{ensure, Result};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -230,4 +230,33 @@ mod tests {
         assert_eq!(&input[result.consumed..], "うえお");
         assert_eq!(result.glyphs.len(), 2);
     }
+}
+
+/// Native code-page cell placement: one encoded byte advances half a cell,
+/// any multi-byte scalar one whole cell. Glyph width and spacing stay integer.
+pub fn encoded_cell_run(
+    text: &str,
+    origin: [i32; 2],
+    size: i32,
+    encoding: &'static encoding_rs::Encoding,
+) -> Result<(Vec<CellGlyph>, i32)> {
+    ensure!(
+        (1..=512).contains(&size) && text.len() <= 1024 * 1024 && text.chars().count() <= 65536,
+        "encoded cell run budget"
+    );
+    let mut x = origin[0];
+    let mut glyphs = Vec::with_capacity(text.chars().count());
+    for character in text.chars() {
+        glyphs.push(CellGlyph {
+            character,
+            position: [x, origin[1]],
+        });
+        let mut buffer = [0; 4];
+        let bytes = encoding.encode(character.encode_utf8(&mut buffer)).0;
+        let step = if bytes.len() > 1 { size } else { size / 2 };
+        x = x
+            .checked_add(step)
+            .ok_or_else(|| anyhow::anyhow!("encoded cell advance overflow"))?;
+    }
+    Ok((glyphs, x - origin[0]))
 }

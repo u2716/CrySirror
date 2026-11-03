@@ -31,6 +31,11 @@ fn program_preserves_native_strings_addresses_and_envelope_profiles() {
     assert_eq!(crysirror_system4::opcodes::layout(0x62), Some(("EOF", 1)));
     assert_eq!(crysirror_system4::opcodes::layout(0x59), Some(("MSG", 1)));
     assert_eq!(p.functions[0].return_structure, -1);
+    assert!(!p.scenario_label_section);
+    let mut with_empty_labels = plain.clone();
+    with_empty_labels.extend(b"SLBL\0\0\0\0");
+    let labelled = Program::parse(&with_empty_labels).unwrap();
+    assert!(labelled.scenario_label_section && labelled.labels.is_empty());
     let mut encrypted = plain.clone();
     crysirror_resource::legacy_stream::mt19937_1998_xor(&mut encrypted, 0x5d3e3);
     assert_eq!(decode(&encrypted).unwrap(), plain);

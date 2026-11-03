@@ -1,7 +1,14 @@
 # ADR 0091: Authenticated HXV4 resources and explicit executable bootstrap
 
 Date: 2026-10-28
-Status: Accepted for the bounded static resource profile below
+Status: implemented bounded HXV4/bootstrap profile; other protection families remain separate
+
+## Follow-up bootstrap boundary
+
+The validated native HXV4 bootstrap now proceeds beyond the initial linkZ
+frontier; see [bootstrap research updates](../krkr-bootstrap-gap.md) and dated
+[STATUS.md](../../STATUS.md) entries. This does not complete arbitrary protection
+callbacks; the interpreted/lifted approach in ADR 0097 remains proposed.
 
 ## Source and ownership
 
@@ -71,7 +78,7 @@ within its existing capability root. Names/paths do not confer OS authority.
 
 The tested local archive's ordinary startup.tjs is a plaintext corruption sentinel;
 executing it produces an informational error and no game layers. That is not a
-successful game boot or evidence that the owner's executable is corrupt.
+successful game boot or evidence of executable corruption.
 
 When explicitly requested by hxv4_startup_target, the shared archive exposes the
 exact statically decoded PE RCDATA/STARTUP.TJS bytes as a separate derived resource,

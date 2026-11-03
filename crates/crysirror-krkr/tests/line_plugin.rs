@@ -923,6 +923,27 @@ fn live_transition_endpoint_sizes_publish_in_one_engine_layer_batch() {
 }
 
 #[test]
+fn layer_get_layer_at_returns_front_hit_and_honours_exclusion_and_disabled() {
+    let (_dir,mut runtime)=fixture(r#"
+        var w=new Window();w.visible=true;var root=new Layer(w,null);root.visible=true;root.setSize(100,100);
+        var a=new Layer(w,root);a.visible=true;a.setSize(50,50);a.fillRect(0,0,50,50,0xffffffff);
+        var b=new Layer(w,a);b.visible=true;b.left=10;b.top=10;b.setSize(10,10);b.fillRect(0,0,10,10,0xffffffff);
+        a.name='a';b.name='b';root.name='root';
+        if(a.getLayerAt(15,15).name!='b')throw new Exception('front child');
+        if(a.getLayerAt(5,5).name!='a')throw new Exception('self');
+        if(b.getLayerAt(-5,-5).name!='a')throw new Exception('child coordinates');
+        if(a.getLayerAt(5,5,true)!==null&&a.getLayerAt(5,5,true).name=='a')throw new Exception('exclude self');
+        a.enabled=false;
+        if(a.getLayerAt(5,5)!==null)throw new Exception('disabled hit');
+        if(a.getLayerAt(5,5,false,true).name!='a')throw new Exception('get disabled');
+        Debug.message('layer-at-complete');
+    "#);
+    runtime.tick(1,InputFrame::default()).unwrap();
+    let log=runtime.inspect()["sessions"][0]["native"]["log_tail"].to_string();
+    assert!(log.contains("layer-at-complete"),"{log}");
+}
+
+#[test]
 fn positive_native_alpha_hits_use_prepared_shared_image_coverage() {
     use crysirror_core::service::buttons;
     let (dir,mut runtime)=fixture(r#"
@@ -946,6 +967,11 @@ fn positive_native_alpha_hits_use_prepared_shared_image_coverage() {
     for x in [0,1] {
         runtime.tick(1,InputFrame{buttons_down:buttons::MOUSE_LEFT,buttons_pressed:0,pointer_x:x,pointer_y:0}).unwrap();
         runtime.tick(1,InputFrame{buttons_down:0,buttons_pressed:0,pointer_x:x,pointer_y:0}).unwrap();
+    }
+    // Input is delivered through the inbox one frame later: drain the release.
+    for _ in 0..8 {
+        if runtime.inspect()["sessions"][0]["native"]["queued_input"]==0 {break;}
+        runtime.tick(1,InputFrame{buttons_down:0,buttons_pressed:0,pointer_x:1,pointer_y:0}).unwrap();
     }
     let log=runtime.inspect()["sessions"][0]["native"]["log_tail"].to_string();
     assert_eq!(log.matches("alpha-click").count(),1,"{log}");
@@ -1318,9 +1344,71 @@ fn native_focus_defaults_forward_action_and_subclass_super_handlers() {
         }
         var a=new Focusable(w,root);a.name='A';var b=new Focusable(w,root);b.name='B';
         a.focus();b.focus();w.focusedLayer=null;
-        if(events.join('|')!='onFocus:A:null:1|onBlur:A:B|onFocus:B:A:1|onBlur:B:null')throw new Exception(events.join('|'));
+        if(events.join('|')!='onBeforeFocus:A:null|onFocus:A:null:1|onBeforeFocus:B:A|onBlur:A:B|onFocus:B:A:1|onBlur:B:null')throw new Exception(events.join('|'));
         Debug.message('focus-default-action-complete');
     "#);
     runtime.tick(1,InputFrame::default()).unwrap();
     assert!(runtime.inspect()["sessions"][0]["native"]["log_tail"].to_string().contains("focus-default-action-complete"));
+}
+
+#[test]
+fn layer_cursor_x_waits_for_cursor_y_like_krkrz() {
+    let (_dir,mut runtime)=fixture(r#"
+        var w=new Window();w.visible=true;var root=new Layer(w,null);
+        var l=new Layer(w,root);l.left=10;l.top=20;
+        var before=l.cursorX;
+        l.cursorX=5;
+        if(l.cursorX!=before)throw new Exception('cursorX moved before cursorY');
+        l.cursorY=6;
+        if(l.cursorX!=5||l.cursorY!=6)throw new Exception('cursor '+l.cursorX+','+l.cursorY);
+        Debug.message('cursor-setter-complete');
+    "#);
+    runtime.tick(1,InputFrame::default()).unwrap();
+    assert!(runtime.inspect()["sessions"][0]["native"]["log_tail"].to_string().contains("cursor-setter-complete"));
+}
+
+fn find_file(root: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
+    for entry in std::fs::read_dir(root).ok()?.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if let Some(found) = find_file(&path, name) {
+                return Some(found);
+            }
+        } else if path.file_name().is_some_and(|n| n == name) {
+            return Some(path);
+        }
+    }
+    None
+}
+
+#[test]
+fn save_layer_image_writes_the_requested_bitmap_depths() {
+    let (dir, mut runtime) = fixture(r#"
+        var w=new Window();w.visible=true;var root=new Layer(w,null);
+        var l=new Layer(w,root);l.setImageSize(3,2);l.setSizeToImageSize();
+        l.fillRect(0,0,3,2,0xff102030);
+        l.saveLayerImage('savedata/a.bmp');
+        l.saveLayerImage('savedata/b.bmp','bmp24');
+        l.saveLayerImage('savedata/c.png','png');
+        var bad=false;try{l.saveLayerImage('savedata/d.gif','gif');}catch(e){bad=true;}
+        if(!bad)throw new Exception('unknown format accepted');
+        Debug.message('save-layer-image-complete');
+    "#);
+    runtime.set_canvas_image_presenter(true);
+    for _ in 0..200 {
+        runtime.tick(1, InputFrame::default()).unwrap();
+        if runtime.inspect()["sessions"][0]["native"]["log_tail"].to_string().contains("save-layer-image-complete") {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(runtime.inspect()["sessions"][0]["native"]["log_tail"].to_string().contains("save-layer-image-complete"));
+    let state = dir.path().join("state");
+    let a = std::fs::read(find_file(&state, "a.bmp").expect("a.bmp")).unwrap();
+    assert_eq!(&a[..2], b"BM");
+    assert_eq!(u16::from_le_bytes([a[28], a[29]]), 32);
+    let b = std::fs::read(find_file(&state, "b.bmp").expect("b.bmp")).unwrap();
+    assert_eq!(u16::from_le_bytes([b[28], b[29]]), 24);
+    let c = std::fs::read(find_file(&state, "c.png").expect("c.png")).unwrap();
+    assert_eq!(&c[1..4], b"PNG");
 }

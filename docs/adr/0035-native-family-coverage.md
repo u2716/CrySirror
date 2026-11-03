@@ -1,5 +1,10 @@
 # 0035 — RealLive / AVG32 source coverage and integration boundary
 
+> Historical audit checkpoint (2026-10-25). Its missing-bridge statements describe
+> that source revision; subsequent first-class native adapters and shared services
+> are documented in [NATIVE_ADAPTERS.md](../NATIVE_ADAPTERS.md). Retained results
+> are not current command coverage or whole-game acceptance.
+
 Status: audit completed; adapters not implemented by this change.
 
 Date: 2026-10-25.
@@ -84,7 +89,7 @@ or proprietary SDK files were copied into this repository.
 
 ## Conclusion
 
-The user's statement that `siglus_rs` contains these interpreters is correct.
+The inspected `siglus_rs` revision contains independent RealLive and AVG32 interpreters.
 External native tests demonstrate useful existing implementations. CrySirror
 integration and extraction of their shared services remain unfinished and must
 be reported independently from those upstream results.

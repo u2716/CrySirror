@@ -573,21 +573,8 @@ fn int(s: &dyn AssetReader, cx: &DecodeContext) -> Result<Vec<Row>> {
     int_aliases::coalesce(s, cx, rows, known_decode)
 }
 /// MT19937 classic seeding differs from the modern standard recurrence.
-fn mt_classic_first(mut seed: u32) -> u32 {
-    let mut mt = [0u32; 624];
-    for value in &mut mt {
-        *value = seed & 0xffff0000;
-        seed = seed.wrapping_mul(69069).wrapping_add(1);
-        *value |= (seed & 0xffff0000) >> 16;
-        seed = seed.wrapping_mul(69069).wrapping_add(1);
-    }
-    let y = (mt[0] & 0x80000000) | (mt[1] & 0x7fffffff);
-    let mut y = mt[397] ^ (y >> 1) ^ if y & 1 != 0 { 0x9908b0df } else { 0 };
-    y ^= y >> 11;
-    y ^= (y << 7) & 0x9d2c5680;
-    y ^= (y << 15) & 0xefc60000;
-    y ^= y >> 18;
-    y
+fn mt_classic_first(seed: u32) -> u32 {
+    crysirror_resource::legacy_stream::Mt19937Split::first_u32(seed)
 }
 fn chanchan(s: &dyn AssetReader, cx: &DecodeContext) -> Result<Vec<Row>> {
     for ver in 1..=3 {

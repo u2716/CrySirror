@@ -18,6 +18,12 @@ pub struct UiRuntime {
     pub name_spacing: Option<[i32; 2]>,
     pub window_tween: Option<crysirror_scene::animation::ScalarTween>,
     pub window_animation_type: i64,
+    /// Engine-owned deadline data for the original message wait, not a timer
+    /// inferred from the current text or a renderer/device handle.
+    pub reading_wait: Option<crysirror_scene::reading_wait::ReadingWait>,
+    #[serde(skip)]
+    pub(crate) font_selection: Option<crate::message::font::Selection>,
+    pub cursor_idle: Option<crysirror_scene::activity::ActivityTimer>,
 }
 impl UiRuntime {
     pub fn message_waiting(&self) -> bool {

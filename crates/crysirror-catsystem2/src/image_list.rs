@@ -16,7 +16,7 @@ fn page_size(storage: &dyn ClientStorage, check: &dyn Fn() -> Result<()>) -> Res
     check()?;
     let bytes = crate::native_settings::optional_asset(storage, "config/startup.xml")?
         .context("CatSystem2 texture page startup missing")?;
-    let d = XmlDocument::parse(&bytes)?;
+    let d = XmlDocument::parse_with_fallback(&bytes,encoding_rs::SHIFT_JIS)?;
     let mut size = [0; 2];
     for (i, path) in ["TEXTURE/size/x", "TEXTURE/size/y"].iter().enumerate() {
         size[i] = crate::native_values::integer(

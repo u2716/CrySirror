@@ -1,9 +1,9 @@
 # ADR 0013: assessing the "Ashen Vow" Unreal demo as a port target
 
-Status: in progress. The owner confirmed authorization for the packaged
-build (no project source) and chose not to run the original on this Mac
-yet. Extracted data stays in ~/.cache/crysirror/ashen (outside the repo);
-nothing extracted is committed.
+Status: accepted assessment; content conversion remains partial.
+The input is a packaged Windows build without project source. The original
+executable was not run during the 2026-10-24 inspection. Extracted data stays in
+~/.cache/crysirror/ashen outside the repository.
 
 ## Facts gathered (2026-10-24, from the local build in ~/Downloads only)
 

@@ -318,3 +318,25 @@ This bounded profile accepts one active receiver client. Interactive Widget or
 dialog mixing fails explicitly. Controller events require a backend to submit
 real controller identities; their presence in the data model does not simulate
 hardware support. VM callback dispatch remains native adapter policy.
+
+## Original native-save restoration
+
+`Runtime::begin_original_save_restore` starts an adapter's optional detached
+`OriginalRestorePreparation`. Explicit poll/status/cancel/release/commit calls
+use an instance/client/epoch/serial ticket. The target VM is held; resource polls
+do not tick any VM, clock or input. Preparation gets read-only scoped storage
+and shared image/pattern/header jobs, with invisible capacity-reserved immutable
+image publication. Scene JSON validation is a bounded worker dependency; the
+owner installs only a ready VM and validated scene plan. Cancellation and failure
+leave the running VM/scene/audio unchanged and release unpublished reservations.
+
+This is separate from framework snapshots and old synchronous native imports.
+Pure audio replacement recipes now prepare detached decoders/sources through
+Core AudioReplacementJob. A scoped one-shot resource enters the restore plan;
+the owner's exclusive preflight token installs channels/tails/queued intents in
+one infallible operation after image publication. Peer voices/DSP are retained.
+Sequential audio, client reverb history, World/Media producers, classic scene
+audio and remaining external motion producers stay explicit unsupported
+boundaries. No native load is acknowledged from a parsed file or ready helper
+alone. See [ADR 0099](adr/0099-staged-original-save-restore.md)
+and actual behavior receipts in STATUS.md.

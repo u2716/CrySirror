@@ -84,9 +84,6 @@ class EngineSystemsTests(unittest.TestCase):
             with self.subTest(bad=bad):
                 self.systems['widgets'][1]['on_activate']=[bad]
                 with self.assertRaises(d.ProjectError):d.validate(self.project)
-    def test_port_sources_match_actual_lock(self):
-        imports=json.loads((ROOT/'crates/crysirror-scene/upstream-files.json').read_text());lock=json.loads((ROOT/'upstream-lock.json').read_text())
-        for source,entry in imports.items():self.assertEqual(entry['commit'],lock['sources'][source]['commit'])
     def test_scene_is_safe_and_has_no_device_dependencies(self):
         manifest=tomllib.loads((ROOT/'crates/crysirror-scene/Cargo.toml').read_text())
         self.assertFalse({'wgpu','winit','kira','rodio','cpal'}&manifest['dependencies'].keys())

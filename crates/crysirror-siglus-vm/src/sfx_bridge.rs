@@ -79,12 +79,32 @@ impl State {
     }
     fn volume(&mut self, group: &str, v: u8, fade: i64) -> Result<()> {
         let fade_ms = duration(fade)?;
-        self.pending
-            .push(Operation::Control(AudioRequest::SetMixGroupGain {
+        let request = if self.initialized {
+            AudioRequest::SetMixGroupGain {
                 name: group.into(),
                 gain: f32::from(v) / 255.,
                 fade_ms,
-            }))?;
+            }
+        } else {
+            AudioRequest::SetMixGroup {
+                name: group.into(),
+                settings: crysirror_core::service::AudioMixGroupSettings {
+                    parent: Some(
+                        (if group == PCM_GROUP {
+                            crate::audio::TrackKind::GlobalPcm
+                        } else {
+                            crate::audio::TrackKind::Se
+                        })
+                        .group()
+                        .into(),
+                    ),
+                    gain: f32::from(v) / 255.,
+                    muted: false,
+                },
+                fade_ms,
+            }
+        };
+        self.pending.push(Operation::Control(request))?;
         self.volume = v;
         self.initialized = true;
         Ok(())

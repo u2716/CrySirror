@@ -8,10 +8,14 @@ spelling of pathHash it inherited from xp3-brute was wrong and is corrected in
 
 The existing shared Hxv4 reader, JSON facade and bounded solid vector drawing
 facade are separate capabilities. Their implementation and recorded checks are
-not evidence that the protected bootstrap or the whole game runs. In the current
-`game-kr` probe the original EXE resource startup reaches `Plugins.linkZ` after
+not evidence of whole-game compatibility. In the earlier probe recorded below,
+the original `game-kr` EXE resource startup reached `Plugins.linkZ` after
 `Storages.setDefaultPath`; no rendered game frame was established. Probe evidence
 is local/ignored: `target/verification/game-kr/embedded-container-probe.log`.
+
+This is historical bootstrap research. Unresolved details and proposed steps
+below describe that investigation; they are not a current startup frontier or
+implementation checklist. Later validation belongs in [STATUS.md](../STATUS.md).
 
 ## Source provenance and limits
 

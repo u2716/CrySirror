@@ -6,8 +6,8 @@ instancing, normal and specular maps, lighting and vehicles are pending.
 
 ## Context
 
-The owner supplied `NFSCarbonCE_JP.iso` (PC, Collector's Edition, Japanese)
-and wants the canyon areas loaded, to drive more engine capability:
+The input fixture is `NFSCarbonCE_JP.iso` (PC, Collector's Edition, Japanese).
+Canyon scenes exercise:
 - large open-world streaming;
 - vehicles;
 - road surfaces;

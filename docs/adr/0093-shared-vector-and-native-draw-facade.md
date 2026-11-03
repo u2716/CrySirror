@@ -1,7 +1,7 @@
 # ADR 0093: Shared vector geometry and native LayerExDraw facade
 
 Date: 2026-10-28
-Status: Accepted for the bounded solid-linear profile below
+Status: implemented bounded solid-linear profile; full GDI semantics remain unsupported
 
 ## Decision and ownership
 
@@ -32,7 +32,6 @@ must not quantize unrelated semitransparent background pixels. The test suite ad
 independent geometry/pixel checks plus native transform/bounds/worker publication
 and finalizer tests. These second-batch tests were provided to the integrating
 owner before a unified release run; no unexecuted test is reported as a pass.
-Source pin and review scopes are in docs/krkr-draw-source-audit.json.
 
 
 ## Raster evidence limits
@@ -53,8 +52,8 @@ No second pixel layer or private native image buffer is introduced.
 ## Validation boundary
 
 Implementation is recorded above. Compilation and the three shared geometry/
-pixel tests plus three native bridge tests are reported separately by the owner
-following the unified release run. Tests that have merely been authored are not
+pixel tests plus three native bridge tests are recorded separately in STATUS.md
+with the unified release results. Tests that have merely been authored are not
 counted as passing. No GPU, fonts, native DLL or game data is needed for these
 fixtures. This phase leaves the shared image-worker API and ADR 0090 publication
 bounds intact; metadata geometry computation is bounded owner-side CPU work.

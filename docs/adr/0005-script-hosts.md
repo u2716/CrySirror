@@ -2,7 +2,8 @@
 
 Status: implemented (partial) on 2026-10-24 in `crates/crysirror-script-js`.
 This ADR supersedes ADR 0002's "no per-frame JS / no JS engine in the player"
-for builds with the default `scripting` feature.
+for the runtime JS/TS host. The desktop now links that host unconditionally;
+`scripting` is no longer a desktop feature flag.
 
 ## Requirement
 
@@ -16,7 +17,7 @@ There are two kinds of script integration. They are deliberately not merged:
 
 | | Script host (`ScriptHost: Lifecycle`) | VM peer (`VmAdapter`, ADR 0001) |
 |---|---|---|
-| Examples | JS/TS (Boa + Oxc) | Siglus SceneVm (`siglus`), data VM, RFVP (pending) |
+| Examples | JS/TS (Boa + Oxc) | Siglus SceneVm (`siglus`), data VM, first-class RFVP and other native adapters |
 | Scheduling | Engine lifecycle hooks | Own instruction budget, waits and yields |
 | Engine access | Reflective object API only | `HostServices` service batches |
 | Save state | Script persists explicitly via `fs.writeSave` | Versioned private VM snapshot + original-save codecs |

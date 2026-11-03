@@ -118,6 +118,19 @@ impl FileSystem for ReferenceHost {
         self.writable.insert(key, data.to_vec());
         Ok(())
     }
+    fn remove(&mut self, client: ClientId, path: &VfsPath) -> Result<()> {
+        let info = self.client(client)?;
+        if path.mount() == Mount::Asset {
+            return Err(Error::ReadOnly);
+        }
+        self.writable.remove(&(
+            info.engine.clone(),
+            info.game.clone(),
+            path.mount(),
+            path.relative().to_string(),
+        ));
+        Ok(())
+    }
 }
 
 impl HostServices for ReferenceHost {

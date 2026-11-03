@@ -17,8 +17,12 @@ mod audio_release;
 pub use audio_release::*;
 mod audio_sequence;
 pub use audio_sequence::*;
+mod audio_replacement;
+pub use audio_replacement::*;
 mod civil_time;
 pub use civil_time::*;
+mod session_seed;
+pub use session_seed::*;
 mod diagnostics;
 pub use diagnostics::*;
 mod keyboard_locks;
@@ -27,6 +31,10 @@ mod font;
 pub use font::*;
 mod frame_history;
 pub use frame_history::*;
+mod input_observation;
+pub use input_observation::*;
+mod platform;
+pub use platform::*;
 
 pub const SIMPLE_TEXT_LAYOUT: &str = "simple-horizontal-v1";
 /// Shared per-client count budget for retained drawing canvases and their
@@ -208,6 +216,11 @@ pub struct AudioParameters {
     pub pan: f32,
     /// Repeat source input, default false.
     pub looping: bool,
+    /// Total remaining source-range passes, including the current pass.
+    /// None preserves unbounded looping; Some must be positive and requires looping.
+    pub loop_passes: Option<u32>,
+    /// Exchange decoded left/right channels before pan/spatial processing.
+    pub swap_channels: bool,
     /// Decoded-source frame to repeat from, default zero.
     pub loop_start: u64,
     /// Decoded-source frame at which a loop jumps back to `loop_start`;
@@ -219,6 +232,15 @@ pub struct AudioParameters {
     pub start_frame: Option<u64>,
     /// Clamp authored source/loop positions to the prepared source boundary.
     pub clamp_range: bool,
+    /// Keep the canonical source, cursor and controls after natural EOF or an
+    /// own-gain stop. Held voices consume pool capacity and cannot be stolen;
+    /// admission never steals another voice for a retained instance. Stop and
+    /// client replacement still release it. Default false.
+    pub retain_on_finish: bool,
+    /// Run input/per-voice DSP. Inactive transport retains source position while
+    /// independent gain/pan controls continue; ordinary Pause still freezes
+    /// those controls. Reactivating EOF requires a completed seek. Default true.
+    pub transport_active: bool,
     /// Publish without consuming samples until an explicit resume.
     pub paused: bool,
     /// Fade the previous channel voice after successful replacement publication.
@@ -241,12 +263,16 @@ impl Default for AudioParameters {
             rate: 1.,
             pan: 0.5,
             looping: false,
+            loop_passes: None,
+            swap_channels: false,
             loop_start: 0,
             loop_end: None,
             start_ms: 0,
             start_frame: None,
             clamp_range: false,
             paused: false,
+            retain_on_finish: false,
+            transport_active: true,
             replace_fade_ms: 0.,
             fade_ms: 0.,
             restart: true,
@@ -263,8 +289,18 @@ pub struct AudioPlaybackInfo {
     pub source_playing: bool,
     /// Source clock currently frozen by pause or a freezing scheduled resume.
     pub paused: bool,
+    /// Canonical source retention/protection policy of this allocated voice.
+    pub retain_on_finish: bool,
+    /// Whether input/per-voice DSP may run. Separate from full Pause and from
+    /// source_playing, which reports remaining input even when inactive.
+    pub transport_active: bool,
     /// Actual prepared source loop mode.
     pub looping: bool,
+    /// Remaining range passes including the current pass; None is unbounded
+    /// when looping, or no counted schedule when looping is disabled.
+    pub loop_passes: Option<u32>,
+    /// Actual decoded-channel exchange before pan/spatial processing.
+    pub swap_channels: bool,
     /// Output frames since voice publication, including pauses, dependency
     /// holds, starvation and effect tails. Seeking does not reset this age.
     pub age_frames: u64,
@@ -289,6 +325,14 @@ pub struct AudioPlaybackInfo {
     pub fade_out_frames: u64,
     /// Remaining scheduled-resume delay in mixer frames.
     pub resume_delay_frames: u64,
+    /// Current own voice amplitude and target, excluding bus/groups/envelopes.
+    pub gain: f32,
+    pub gain_target: f32,
+    /// Remaining unpaused output-control frames in the amplitude ramp. Parked
+    /// transport still advances it; explicit full Pause freezes it.
+    pub gain_fade_frames: u64,
+    /// Stop after this amplitude ramp, independently of transport stop/pause.
+    pub gain_stop_after_fade: bool,
 }
 /// How existing input transport behaves before a scheduled resume deadline.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -388,6 +432,12 @@ pub struct AudioPreparation {
 /// and decoder resources are not part of logical VM snapshots.
 #[derive(Clone, Debug)]
 pub enum AudioRequest {
+    /// Atomically exchange two logical channels in this client. The existing
+    /// voice/source handles, fractional cursor, DSP history and gain/transport
+    /// ramps remain intact. An empty side moves the other voice. Unpublished
+    /// preparation intents, pending seeks/retirements or an active render lease
+    /// reject before mutation. This is unrelated to decoded left/right exchange.
+    ExchangeChannels { left: u32, right: u32 },
     /// Set only a group's gain, creating a root with default settings if absent.
     /// Existing parent and mute controls remain host-owned.
     SetMixGroupGain {
@@ -432,6 +482,10 @@ pub enum AudioRequest {
         channel: u32,
         fade_ms: f32,
     },
+    /// Park/re-enable input and per-voice DSP without reopening a decoder,
+    /// resetting gain or cancelling a seek. Independent gain/pan clocks keep
+    /// running unless fully paused. Ended sources must seek before activation.
+    SetTransportActive { channel: u32, active: bool },
     Pause {
         channel: u32,
         paused: bool,
@@ -457,12 +511,42 @@ pub enum AudioRequest {
         gain: f32,
         fade_ms: f32,
     },
+    /// Fade the own amplitude to a target, optionally stop when that ramp
+    /// finishes. Unlike Stop this adds no independent envelope toward zero.
+    FadeGain {
+        channel: u32,
+        gain: f32,
+        fade_ms: f32,
+        stop_after: bool,
+    },
+    /// Finish the current own-amplitude ramp at its retained target. A pending
+    /// gain-stop retires the voice; independent transport deadlines stay intact.
+    FinishGainFade { channel: u32 },
     SetPan {
         channel: u32,
         pan: f32,
         fade_ms: f32,
     },
+    /// Independent post-processing left/right amplitude controls, each0..4.
+    /// Unity preserves the current pan/spatial law. This is not equal-power pan.
+    SetStereoGain {
+        channel: u32,
+        gains: [f32; 2],
+        fade_ms: f32,
+    },
+    /// Replace the decoded-frame loop range and remaining-pass schedule while
+    /// retaining the current fractional cursor. None passes repeats unbounded;
+    /// Some must be positive, including the current pass. None end uses EOF.
+    SetLoopSchedule {
+        channel: u32,
+        start: u64,
+        end: Option<u64>,
+        passes: Option<u32>,
+    },
+    /// Exchange decoded left/right channels without restarting transport.
+    SetChannelSwap { channel: u32, swapped: bool },
     /// Change loop mode at the current source position; never restart/seek.
+    /// Enabling restores unbounded repeats, clearing a prior counted schedule.
     SetLooped {
         channel: u32,
         looping: bool,
@@ -474,6 +558,11 @@ pub trait FileSystem {
     fn read(&mut self, client: ClientId, path: &VfsPath) -> Result<Vec<u8>>;
     /// Either the complete new value is visible or the previous value remains.
     fn write_atomic(&mut self, client: ClientId, path: &VfsPath, data: &[u8]) -> Result<()>;
+    /// Remove one client-owned writable file. A missing file is not an error;
+    /// the asset mount is read-only. Hosts without deletion report Unsupported.
+    fn remove(&mut self, _client: ClientId, _path: &VfsPath) -> Result<()> {
+        Err(crate::Error::Unsupported("client file removal"))
+    }
 }
 
 /// Engine media resources, independent of a script VM or a window.
@@ -488,6 +577,12 @@ pub enum MediaRequest {
     },
     Stop {
         id: u32,
+    },
+    /// Change retained/live audio amplitude without restarting a decoder,
+    /// changing presentation time or acquiring a new voice. Finite 0..4.
+    SetGain {
+        id: u32,
+        gain: f32,
     },
     /// Stop workers/playback and release this scoped media resource and surface.
     /// Unlike Stop, later queries report the handle as absent.
@@ -519,6 +614,7 @@ impl MediaRequest {
     pub fn id(&self) -> u32 {
         match self {
             Self::Play { id, .. }
+            | Self::SetGain { id, .. }
             | Self::Stop { id }
             | Self::Remove { id }
             | Self::SetClock { id, .. }
@@ -534,6 +630,13 @@ impl MediaRequest {
 pub struct DisplayInfo {
     pub screen: [u32; 2],
     pub work: [i32; 4],
+}
+/// Physical geometry reported by the presenting window owner.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WindowGeometry {
+    pub inner_size:[u32;2],
+    pub outer_size:[u32;2],
+    pub outer_position:Option<[i32;2]>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MediaPhase {
@@ -604,6 +707,11 @@ pub enum EngineQuery {
     UiWidget(u32),
     /// Owner-scoped retained button pointer/focus/press state.
     UiInteraction(u32),
+    /// Retained last text-control action for one owned widget; does not drain UI events.
+    UiTextAction(u32),
+    /// Whether an owned interactive widget is enabled, visible and admitted
+    /// by the current topmost modal subtree (independent of focus/hover).
+    UiInputEligible(u32),
     /// Owned widget motion tracks; external elapsed values use caller units.
     UiMotion(u32),
     /// Freeze this client's current engine UI into reusable logical LayerSpec
@@ -658,6 +766,20 @@ pub trait ClientStorage: Send + Sync {
         Err(crate::Error::Unsupported("capability storage metadata"))
     }
 
+    /// Physical read-only permission, independent of a capability's access mode.
+    /// Empty canonical names refer to the selected capability root.
+    fn read_only(&self, _mount: crate::path::Mount, _relative: &str) -> Result<bool> {
+        Err(crate::Error::Unsupported("storage physical read-only permission"))
+    }
+
+    /// Copy a loose regular file and its permissions to an existing directory.
+    /// Preserve its modification time when the filesystem permits. Providers
+    /// unable to copy metadata reject rather than falling back to byte upload.
+    /// Clearing an existing target's read-only permission is explicit policy.
+    fn copy_file(&self, _source: &VfsPath, _target: &VfsPath, _replace_read_only: bool) -> Result<()> {
+        Err(crate::Error::Unsupported("storage file copy with metadata"))
+    }
+
     /// Reserve worker capacity before moving immutable bytes. Ready means the
     /// atomic commit completed; unsupported providers reject before admission.
     fn begin_write_atomic(
@@ -701,6 +823,12 @@ pub trait ClientStorage: Send + Sync {
     }
     fn write_atomic(&self, path: &VfsPath, data: &[u8]) -> Result<()>;
     fn remove(&self, path: &VfsPath) -> Result<()>;
+    /// Create exactly one directory level in a writable namespace. Existing
+    /// directories fail; implicit parent creation is an atomic-write policy.
+    fn create_directory(&self,_path:&VfsPath)->Result<()>{Err(crate::Error::Unsupported("storage directory creation"))}
+    /// Remove an empty directory only; never a recursive deletion.
+    fn remove_directory(&self,_path:&VfsPath)->Result<()>{Err(crate::Error::Unsupported("storage empty-directory removal"))}
+
     /// Names directly inside `dir` ("" is the mount root), sorted.
     fn list(&self, mount: crate::path::Mount, dir: &str) -> Result<Vec<String>>;
     fn exists(&self, path: &VfsPath) -> bool {
@@ -722,6 +850,36 @@ pub struct UploadedImage {
 }
 
 pub trait ImageMetadata: Send + Sync {
+    fn begin_packed_pixels(&self,_spec:crate::image_processing::PackedImageSpec)->Result<crate::image_processing::ImageJob>{Err(crate::Error::Unsupported("packed image resource preparation"))}
+
+    fn begin_bitmap_text(&self, _destination:crate::image_processing::ImageInput, _spec:crate::image_processing::BitmapTextSpec)->Result<crate::image_processing::ImageJob>{
+        Err(crate::Error::Unsupported("integer bitmap text records"))
+    }
+
+    /// Decode bounded immutable encoded bytes on engine workers. Dimensions
+    /// are learned by the shared registry, without an adapter-side decoder.
+    fn begin_encoded(&self, _name:&str, _bytes:Arc<[u8]>)->Result<crate::image_processing::ImageJob>{
+        Err(crate::Error::Unsupported("encoded image resource preparation"))
+    }
+    /// Freeze an authorized font and prepare regular positioned coverage using
+    /// the engine text rasterizer. Polling is nonblocking; dropping the job
+    /// cancels preparation. The result is not implicitly published to a catalog.
+    fn begin_glyph_image(&self, _spec: crate::image_processing::GlyphImageSpec) -> Result<crate::image_processing::ImageJob> {
+        Err(crate::Error::Unsupported("worker glyph image preparation"))
+    }
+    /// Freeze the same scoped face and prepare an explicit styled/coverage
+    /// pipeline. This is not an implicit claim of a native platform rasterizer.
+    fn begin_glyph_image_batch(&self, _spec:crate::image_processing::GlyphImageBatchSpec)->Result<alloc::boxed::Box<dyn crate::image_processing::GlyphImageBatchQuery>> {
+        Err(crate::Error::Unsupported("batched glyph image preparation"))
+    }
+    fn begin_styled_glyph_image(&self, _spec: crate::image_processing::StyledGlyphImageSpec) -> Result<crate::image_processing::ImageJob> {
+        Err(crate::Error::Unsupported("worker styled glyph image preparation"))
+    }
+    /// Original encoded properties from the same shared decoder selection.
+    /// Absence is Unsupported, never inferred from normalized pixel opacity.
+    fn begin_encoding_info(&self, _asset: &str) -> Result<alloc::boxed::Box<dyn crate::image_encoding::ImageEncodingInfoQuery>> {
+        Err(crate::Error::Unsupported("encoded image metadata"))
+    }
     /// Encoded content identity observed by the metadata decode. Native retained
     /// image processing rejects a changed file rather than transforming new bytes.
     fn fingerprint(&self,_asset:&str)->Result<[u8;32]>{Err(crate::Error::Unsupported("image content identity"))}
@@ -773,11 +931,27 @@ pub trait TextMeasurement: Send + Sync {
 }
 
 pub trait HostServices: FileSystem {
+    /// Prepare bounded seed words for a client's game random streams. Sampling
+    /// is an explicit worker dependency; no ambient/simulation clock fallback.
+    fn begin_session_seed(&mut self,_client:ClientId,_source:SessionSeedSource)->Result<alloc::boxed::Box<dyn SessionSeedQuery>>{
+        Err(crate::Error::Unsupported("session seed material"))
+    }
     fn begin_media_probe(&mut self,_client:ClientId,_asset:&VfsPath)->Result<MediaProbeJob>{Err(crate::Error::Unsupported("media decoder header probe"))}
     /// Freeze a client Canvas and asynchronously prepare an immutable engine
     /// image. Requires an installed presenter; polling never waits for a GPU.
     fn begin_canvas_image(&mut self, _client: ClientId, _canvas: u32) -> Result<crate::image_processing::ImageJob> {
         Err(crate::Error::Unsupported("Canvas image capture presenter"))
+    }
+    /// Asynchronously capture the frame the presenter would show now, with every
+    /// blend, movie and transition as displayed. Requires an installed presenter.
+    /// Freeze only the owned Layer painter prefix below an exclusive order.
+    /// The presenter rasterizes shared scene resources; no adapter pixels or
+    /// later display payloads enter the result.
+    fn begin_layer_prefix_image(&mut self,_client:ClientId,_size:[u32;2],_order_exclusive:[i32;2])->Result<crate::image_processing::ImageJob>{Err(crate::Error::Unsupported("layer prefix image capture"))}
+    fn begin_layer_prefix_image_over(&mut self,client:ClientId,size:[u32;2],order_exclusive:[i32;2],clear:[u8;4])->Result<crate::image_processing::ImageJob>{if clear==[0;4]{self.begin_layer_prefix_image(client,size,order_exclusive)}else{Err(crate::Error::Unsupported("layer prefix capture clear colour"))}}
+
+    fn begin_frame_capture(&mut self, _client: ClientId) -> Result<crate::image_processing::ImageJob> {
+        Err(crate::Error::Unsupported("frame capture presenter"))
     }
     fn begin_pattern(&mut self,_client:ClientId,_request:PatternRequest)->Result<PatternJob>{Err(crate::Error::Unsupported("persistent pattern worker"))}
 
@@ -900,6 +1074,11 @@ pub trait HostServices: FileSystem {
     ) -> Result<u64> {
         Err(crate::Error::Unsupported("prepared audio resources"))
     }
+    /// Prepare a scoped immutable encoded resource from an archive member or
+    /// VM memory block. Decoder work and metadata measurement stay on workers.
+    fn begin_encoded_audio_resource(&mut self, _client:ClientId, _name:&str, _encoded:EncodedAudio, _measure_frames:bool)->Result<u64> {
+        Err(crate::Error::Unsupported("encoded audio resource preparation"))
+    }
     /// Prepare a new immutable resource using a bounded CPU transform.
     fn begin_transformed_audio_resource(
         &mut self,
@@ -950,6 +1129,26 @@ pub trait HostServices: FileSystem {
             "channel audio transport inspection",
         ))
     }
+    /// Seek an existing native/media channel without reopening its source or
+    /// resetting gain, loop count, pause, fades or source identity. Completion
+    /// remains pending until the real decoder cursor and owner publication.
+    /// Prepare a complete client replacement from pure play recipes. An empty
+    /// list means clear that client's voices at commit; this starts no playback.
+    fn begin_audio_replacement(&mut self, _client: ClientId, _requests: Vec<AudioRequest>) -> Result<AudioReplacementJob> {
+        Err(crate::Error::Unsupported("detached client audio replacement"))
+    }
+    fn begin_audio_seek(&mut self, _client: ClientId, _channel: u32, _frame: u64) -> Result<u64> {
+        Err(crate::Error::Unsupported("channel audio seek"))
+    }
+    /// Retained scoped seek receipt; Ready is distinct from later voice EOF.
+    fn audio_seek_preparation(&mut self, _client: ClientId, _ticket: u64) -> Result<AudioPreparation> {
+        Err(crate::Error::Unsupported("channel audio seek status"))
+    }
+    /// Cancel a pending seek/restore the previous logical position, or release
+    /// a terminal receipt. A newer seek cannot be cancelled by an older ID.
+    fn release_audio_seek(&mut self, _client: ClientId, _ticket: u64) -> Result<()> {
+        Err(crate::Error::Unsupported("channel audio seek receipt"))
+    }
     fn query_engine(&mut self, _client: ClientId, _query: EngineQuery) -> Result<Vec<u8>> {
         Err(crate::Error::Unsupported("engine state query"))
     }
@@ -976,6 +1175,40 @@ pub trait HostServices: FileSystem {
     /// Clients decide their explicit offscreen execution policy separately.
     fn window_focused(&self, _client: ClientId) -> Result<Option<bool>> {
         Ok(None)
+    }
+    fn window_geometry(&self,_client:ClientId)->Result<Option<WindowGeometry>>{Ok(None)}
+    /// Actual minimized/iconic state from the window owner. Unavailable is
+    /// distinct from false; loss of keyboard focus is not minimization.
+    fn window_minimized(&self, _client: ClientId) -> Result<Option<bool>> {
+        Ok(None)
+    }
+    /// Live backend pointer-motion token, independent of admitted input-frame
+    /// revisions. Changes on actual movement/entry even if canvas coordinates
+    /// round to the same pixel. None means the backend has no such observation.
+    fn pointer_activity(&self, _client: ClientId) -> Result<Option<u64>> {
+        Ok(None)
+    }
+    /// Move the host pointer to canvas coordinates (a native `SetCursorPos`
+    /// or confined mouse area). Hosts without a pointer they may move report
+    /// Unsupported; the request never fabricates an input event.
+    fn warp_pointer(&mut self, _client: ClientId, _x: i32, _y: i32) -> Result<()> {
+        Err(crate::Error::Unsupported("pointer warp"))
+    }
+    /// Offer one of the client's own read-only assets (a game manual) to the
+    /// platform's document viewer. Never executes it and never accepts paths
+    /// outside the client's asset mount.
+    fn open_document(&mut self, _client: ClientId, _path: &crate::path::VfsPath) -> Result<()> {
+        Err(crate::Error::Unsupported("open document"))
+    }
+    /// Last completed owner input admission. A query does not consume edges,
+    /// advance input time, or turn unknown pointer/focus metadata into defaults.
+    fn input_observation(&self, _client: ClientId) -> Result<InputObservation> {
+        Err(crate::Error::Unsupported("input observation"))
+    }
+    /// Availability of an explicitly installed platform backend. This is not
+    /// an entitlement check and never substitutes an SDK achievement result.
+    fn platform_integration(&self, _client: ClientId, _integration: PlatformIntegration) -> Result<PlatformIntegrationInfo> {
+        Err(crate::Error::Unsupported("platform integration status"))
     }
     /// Last owner-published picture; None while no frame has completed. A stale
     /// or foreign media identity must not expose another client's picture.
@@ -1144,6 +1377,10 @@ pub mod buttons {
     pub const F12: u64 = 1 << 46;
     pub const WHEEL_UP: u64 = 1 << 47;
     pub const WHEEL_DOWN: u64 = 1 << 48;
+    pub const KEY_C: u64 = 1 << 49;
+    pub const KEY_L: u64 = 1 << 50;
+    pub const MOUSE_MIDDLE: u64 = 1 << 51;
+    pub const KEY_Z: u64 = 1 << 52;
     /// Logical names used by action maps, in bit order.
     pub const NAMES: &[(&str, u64)] = &[
         ("enter", ENTER),
@@ -1195,7 +1432,28 @@ pub mod buttons {
         ("f12", F12),
         ("wheel_up", WHEEL_UP),
         ("wheel_down", WHEEL_DOWN),
+        ("c", KEY_C),
+        ("l", KEY_L),
+        ("mouse_middle", MOUSE_MIDDLE),
+        ("z", KEY_Z),
     ];
+    /// Checked legacy VK translation for this framed-button profile. None
+    /// means unrepresented, not released. Distinct keypad/side-specific keys
+    /// are not aliased to a different physical key by this conversion.
+    pub fn windows_virtual_key(code: u32) -> Option<u64> {
+        Some(match code {
+            1 => MOUSE_LEFT, 2 => MOUSE_RIGHT, 4 => MOUSE_MIDDLE,
+            8 => BACKSPACE, 9 => TAB, 13 => ENTER, 16 => SHIFT, 17 => CTRL,
+            27 => ESCAPE, 32 => SPACE, 33 => PAGE_UP, 34 => PAGE_DOWN,
+            35 => END, 36 => HOME, 37 => LEFT, 38 => UP, 39 => RIGHT, 40 => DOWN,
+            0x30..=0x39 => KEY_0 << (code - 0x30),
+            0x41 => KEY_A, 0x43 => KEY_C, 0x44 => KEY_D, 0x45 => KEY_E,
+            0x46 => KEY_F, 0x4c => KEY_L, 0x51 => KEY_Q, 0x52 => KEY_R,
+            0x53 => KEY_S, 0x57 => KEY_W, 0x5a => KEY_Z,
+            0x70..=0x7b => F1 << (code - 0x70),
+            _ => return None,
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

@@ -3,23 +3,50 @@ struct Out {
     @location(0) uv: vec2<f32>,
     @location(1) color: vec4<f32>,
     @location(2) @interpolate(flat) filter_index: u32,
+    @location(3) @interpolate(flat) sample_bounds: vec4<f32>,
+    @location(4) @interpolate(flat) clip_rect: vec4<f32>,
+    @location(5) @interpolate(linear) clip_position: vec2<f32>,
 }
 @group(0) @binding(0) var image: texture_2d<f32>;
 @group(0) @binding(1) var image_sampler: sampler;
-@vertex fn vs_main(@location(0) position: vec4<f32>, @location(1) uv: vec2<f32>, @location(2) color: vec4<f32>, @location(3) filter_slot: f32) -> Out {
+fn vertex(position: vec4<f32>, uv: vec2<f32>, color: vec4<f32>, filter_slot: f32) -> Out {
     var out: Out;
     out.position = position;
     out.uv = uv;
     out.color = color;
     out.filter_index = u32(max(filter_slot, 0.0));
+    out.sample_bounds = vec4<f32>(-1e20, -1e20, 1e20, 1e20);
+    out.clip_rect = out.sample_bounds;
+    out.clip_position = position.xy / position.w * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5);
     return out;
 }
+@vertex fn vs_main(@location(0) position: vec4<f32>, @location(1) uv: vec2<f32>, @location(2) color: vec4<f32>, @location(3) filter_slot: f32, @location(4) sample_bounds: vec4<f32>, @location(5) clip_rect: vec4<f32>) -> Out {
+    var out = vertex(position, uv, color, filter_slot);
+    out.sample_bounds = sample_bounds;
+    out.clip_rect = clip_rect;
+    return out;
+}
+@vertex fn vs_plain(@location(0) position: vec4<f32>, @location(1) uv: vec2<f32>, @location(2) color: vec4<f32>, @location(3) filter_slot: f32) -> Out {
+    return vertex(position, uv, color, filter_slot);
+}
+fn outside_clip(in: Out) -> bool {
+    return any(in.clip_position < in.clip_rect.xy) || any(in.clip_position >= in.clip_rect.zw);
+}
+fn bounded_uv(uv: vec2<f32>, bounds: vec4<f32>) -> vec2<f32> {
+    let half_texel = vec2<f32>(0.5) / vec2<f32>(textureDimensions(image, 0));
+    let lo = bounds.xy + half_texel;
+    let hi = bounds.zw - half_texel;
+    let middle = (lo + hi) * 0.5;
+    return clamp(uv, min(lo, middle), max(hi, middle));
+}
 @fragment fn fs_main(in: Out) -> @location(0) vec4<f32> {
-    return textureSample(image, image_sampler, in.uv) * in.color;
+    if outside_clip(in) { discard; }
+    return textureSampleLevel(image, image_sampler, bounded_uv(in.uv, in.sample_bounds), 0.0) * in.color;
 }
 
 @fragment fn fs_premultiply(in: Out) -> @location(0) vec4<f32> {
-    let c = textureSample(image, image_sampler, in.uv) * in.color;
+    if outside_clip(in) { discard; }
+    let c = textureSampleLevel(image, image_sampler, bounded_uv(in.uv, in.sample_bounds), 0.0) * in.color;
     return vec4<f32>(c.rgb * c.a, c.a);
 }
 
@@ -112,9 +139,10 @@ fn flag(f: LayerFilter, bit: u32) -> bool {
     return (u32(f.c.w) & bit) != 0u;
 }
 fn filtered(in: Out) -> vec4<f32> {
+    if outside_clip(in) { discard; }
     let f = filters[in.filter_index];
     let tint = vec4<f32>(to_gamma(in.color.rgb), in.color.a);
-    var color = distorted(in.uv, f) * tint;
+    var color = distorted(bounded_uv(in.uv, in.sample_bounds), f) * tint;
     let org_a = color.a;
     let mono_y = dot(color.rgb, vec3<f32>(0.2989, 0.5886, 0.1145));
     if flag(f, 1u) {

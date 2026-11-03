@@ -75,7 +75,7 @@ fn typescript_bitmaps_publish_shared_pixels_and_feed_transformed_filtered_layers
             .surface(state.client, &format!("__surface/{slot}"))
             .unwrap()
             .rgba
-            .as_ref()
+            .to_vec()
     };
     assert_eq!(
         pixels(2),

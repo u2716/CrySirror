@@ -3,6 +3,14 @@
 Date: 2026-10-27. Status: implemented point-source, single-specular-bounce profile.
 Follows ADR 0050, 0067–0073. Actual validation is recorded in STATUS.md.
 
+## Follow-up implementation (updated 2026-11-03)
+
+Pose tracking/crossfades, worker mixing/output, instance snapshots and direct Doppler were added later. Higher-order/diffuse reflections, deformation and per-reflected-path Doppler remain outside this profile.
+
+Follow-ups: [ADR 0075](0075-tracked-reflection-plans.md), [ADR 0079](0079-worker-final-audio-frames.md), [ADR 0080](0080-async-output-worker-and-bounded-pcm-transfer.md), [ADR 0082](0082-acoustic-instance-snapshots.md), [ADR 0084](0084-kinematic-doppler-and-motion-capture.md).
+The original checkpoint evidence and remaining-boundary paragraphs below retain
+their dated scope. They must not be read as an engine-wide current missing list.
+
 ## Model and source boundary
 
 Add reusable first-order image-source queries and sparse echo DSP to
@@ -128,9 +136,10 @@ sound demos exercise publication, scopes, invalidation and actual PCM output.
 The dense-grid benchmark checks the analytic mirror oracle near the scene limit;
 it is not a cross-hardware ranking. See STATUS.md for measured results.
 
-Automatic pose refresh, dynamic acoustic geometry/refit, higher-order/diffuse
-reflections, diffraction/pathing, reflection HRIR/ambisonic rendering, Doppler and
-seamless filter transitions remain open. Final mixing, control/scratch allocation,
-last-reference disposal and device/pool teardown retain synchronous boundaries.
+Pose refresh and tap crossfades followed in ADR 0075, instance snapshots in
+0082, direct Doppler in 0084 and final DSP/output workers in 0079/0080. Deformation/
+refit, higher-order/diffuse paths, diffraction, reflected HRIR/ambisonics and
+reflected-path Doppler remain separate gaps. Allocation/disposal and teardown
+limits must be evaluated against those later worker ownership boundaries.
 This does not complete engine-wide async execution or establish new commercial-
 game, original-save, GPU or other-platform behavior.

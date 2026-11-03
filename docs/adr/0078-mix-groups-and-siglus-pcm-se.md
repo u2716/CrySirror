@@ -3,6 +3,14 @@
 Date: 2026-10-27. Status: implemented bounded profile.
 Follows ADR 0050 and 0067–0077. Actual validation is recorded in STATUS.md.
 
+## Follow-up implementation (updated 2026-11-03)
+
+Global voice, PCMCH/cue mapping, worker mixing/output, geometry instances and direct Doppler extend this gain-group/PCM profile. Full speech/mouth/category policy and native timing still require their own acceptance.
+
+Follow-ups: [ADR 0079](0079-worker-final-audio-frames.md), [ADR 0080](0080-async-output-worker-and-bounded-pcm-transfer.md), [ADR 0081](0081-prepared-voice-compression-and-siglus-koe.md), [ADR 0082](0082-acoustic-instance-snapshots.md), [ADR 0083](0083-shared-transport-and-siglus-pcmch.md), [ADR 0084](0084-kinematic-doppler-and-motion-capture.md), [ADR 0086](0086-native-pcmevent-and-portable-cue-cursors.md).
+The original checkpoint evidence and remaining-boundary paragraphs below retain
+their dated scope. They must not be read as an engine-wide current missing list.
+
 ## Research and the reusable gap
 
 Fixed master/music/sfx/voice/ambient/ui buses cannot express separate PCM and SE
@@ -146,8 +154,8 @@ persistent in that format: import stops it and restores category volumes through
 shared controls. The isolated codec test host now uses real ChannelAudio in a
 dev dependency; product VM dependencies still exclude an audio device/mixer.
 
-PCMCH/PCM events, general KOE speech/JITAN/mouth tables, native UI sound slots,
-automatic archives/append discovery, encrypted Gameexe, exact native audio timing,
-all save variants and whole-game compatibility remain unsupported or unproven.
-Dynamic acoustic geometry, Doppler, higher/diffuse propagation and full async
-mix/output remain broader active goals.
+PCMCH, global KOE and cue events subsequently received bounded mappings in
+0083/0081/0086. General speech/JITAN/mouth tables, native UI sound policy,
+automatic discovery, protection variants, exact timing, all save variants and
+whole-game compatibility remain separate. Worker mix/output, instances and direct
+Doppler followed in 0079/0080/0082/0084; higher/diffuse propagation remains open.

@@ -10,56 +10,39 @@ name = "crysirror"
 path = "src/main.rs"
 
 [features]
-acoustics-obvhs = ["crysirror-engine/acoustics-obvhs"]
-default = ["avg32", "reallive", "audio", "siglus-resources", "scripting", "gamepad", "emote-import"]
-reallive = ["dep:crysirror-reallive"]
-avg32 = ["dep:crysirror-avg32"]
-# KiriKiri TJS2 adapter (ADR 0053). AGPL-3.0-or-later: never in `default`;
-# a binary built with it is distributed under the AGPL. Pair with `arc-formats`
-# for TLG images.
-krkr = ["dep:crysirror-krkr", "dep:crysirror-tjs2"]
-rfvp = ["dep:crysirror-rfvp", "dep:crysirror-rfvp-vm"]
-# ONScripter-derived native semantics, GPL-2.0-or-later; opt-in distribution profile.
-nscripter = ["dep:crysirror-nscripter"]
-bgi = ["dep:crysirror-bgi"]
-circus = ["dep:crysirror-circus"]
-catsystem2 = ["dep:crysirror-catsystem2", "arc-formats"]
-majiro = ["dep:crysirror-majiro", "arc-formats"]
-system-nnn = ["dep:crysirror-system-nnn", "crysirror-engine/blackcyc-formats", "crysirror-runtime/blackcyc-formats", "scripting"]
+# Every native VM and format provider is linked unconditionally: a plain
+# `cargo build` is the complete player. Only host-device choices remain optional.
+default = ["audio", "gamepad"]
 audio = ["crysirror-audio/cpal-output"]
-gamepad = ["dep:gilrs", "scripting"]
-siglus-resources = ["dep:crysirror-siglus"]
-# Default JS/TS script host (Boa + Oxc) driving the engine object API (ADR 0005).
-# `puppet-import`: bake local E-mote PSB files into the engine puppet format (ADR 0029).
-emote-import = ["dep:crysirror-puppet-eluna", "dep:crysirror-puppet"]
-scripting = ["dep:crysirror-engine", "dep:crysirror-script-js"]
-arc-formats = ["scripting", "crysirror-engine/arc-formats", "dep:crysirror-formats-arc"]
+gamepad = ["dep:gilrs"]
+acoustics-obvhs = ["crysirror-engine/acoustics-obvhs"]
 
 [dependencies]
-crysirror-reallive = {workspace=true,optional=true}
-crysirror-avg32 = {workspace=true,optional=true}
-crysirror-krkr = {workspace=true,optional=true}
-crysirror-rfvp = {workspace=true,optional=true}
-crysirror-rfvp-vm = {workspace=true,optional=true}
+crysirror-reallive.workspace = true
+crysirror-avg32.workspace = true
+crysirror-krkr.workspace = true
+crysirror-rfvp.workspace = true
+crysirror-rfvp-vm.workspace = true
 crysirror-siglus-vm.workspace = true
-crysirror-nscripter = {workspace=true,optional=true}
-crysirror-bgi = {workspace=true,optional=true}
-crysirror-circus = {workspace=true,optional=true,features=["runtime"]}
-crysirror-catsystem2 = {workspace=true,optional=true,features=["runtime"]}
-crysirror-majiro = {workspace=true,optional=true,features=["runtime"]}
-crysirror-system-nnn = {workspace=true,optional=true,features=["runtime"]}
+crysirror-nscripter.workspace = true
+crysirror-bgi.workspace = true
+crysirror-circus = {workspace=true,features=["runtime"]}
+crysirror-catsystem2 = {workspace=true,features=["runtime"]}
+crysirror-majiro = {workspace=true,features=["runtime"]}
+crysirror-system-nnn = {workspace=true,features=["runtime"]}
+crysirror-system4 = {path="../crysirror-system4",features=["runtime"]}
 crysirror-core.workspace = true
 crysirror-resource.workspace = true
-crysirror-formats-arc = { workspace = true, optional = true }
-crysirror-tjs2 = { workspace = true, optional = true }
-crysirror-runtime.workspace = true
+crysirror-formats-arc.workspace = true
+crysirror-tjs2.workspace = true
+crysirror-runtime = { workspace = true, features = ["arc-formats", "blackcyc-formats"] }
 crysirror-wgpu.workspace = true
 crysirror-audio.workspace = true
-crysirror-siglus = { workspace = true, optional = true }
-crysirror-engine = { workspace = true, optional = true }
-crysirror-puppet = { workspace = true, optional = true }
-crysirror-puppet-eluna = { path = "../crysirror-puppet-eluna", optional = true }
-crysirror-script-js = { workspace = true, optional = true }
+crysirror-siglus.workspace = true
+crysirror-engine = { workspace = true, features = ["arc-formats", "blackcyc-formats"] }
+crysirror-puppet.workspace = true
+crysirror-puppet-eluna = { path = "../crysirror-puppet-eluna" }
+crysirror-script-js.workspace = true
 winit.workspace = true
 wgpu.workspace = true
 pollster.workspace = true

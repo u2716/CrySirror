@@ -65,12 +65,9 @@ editor/MCP live operations and other subsystem gaps retain their prior status.
 
 ## Source and validation
 
-Inspected KiriKiri native registration/menu conventions in the complete pinned
-Kirakira reference `c451918023477620ff9055a2eb8a6714b947d9c1`.
-The vendored original TJS2/KAG libraries and their hash manifests are unchanged;
-no general engine implementation is imported. Full original KAG3 startup is an
-external diagnostic at `1f3ab309106d210e3169bbbe0fb4e066ae463b42`; loading
-menu.dll alone does not establish KAGParser/KAG3/game compatibility.
+Native registration and menu behavior is mapped through the TJS2/KAG adapter
+and shared engine UI. Loading menu.dll alone does not establish complete
+KAGParser/KAG3/game compatibility.
 
 Independent engine menu tests, native TJS tests and blocked-worker service tests
 separate shared capability acceptance from native registration. System-font and

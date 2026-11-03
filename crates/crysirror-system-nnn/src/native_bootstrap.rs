@@ -32,6 +32,8 @@ pub enum RandomSeedPolicy {
 pub struct NativeConfiguration {
     pub resources: ResourceNames,
     pub setup: Names,
+    /// Distinct native MainControl configuration; absence means its original defaults.
+    pub main_control: Option<Names>,
     pub variable_names: Names,
     pub project: Names,
     pub commands: Names,
@@ -46,6 +48,8 @@ pub struct PreparedBoot {
     pub session: ScriptSession,
     pub resources: ResourceNames,
     pub setup: Names,
+    /// Distinct native MainControl configuration; absence means its original defaults.
+    pub main_control: Option<Names>,
     pub variable_names: Names,
     pub project: Names,
     pub commands: Names,
@@ -60,6 +64,7 @@ impl PreparedBoot {
         NativeConfiguration {
             resources: self.resources.clone(),
             setup: self.setup.clone(),
+            main_control: self.main_control.clone(),
             variable_names: self.variable_names.clone(),
             project: self.project.clone(),
             commands: self.commands.clone(),
@@ -71,7 +76,14 @@ impl PreparedBoot {
         }
     }
     pub fn random_seed_policy(&self) -> Result<RandomSeedPolicy> {
-        Ok(match self.setup.integer(b"initRandomSeed")?.unwrap_or(-1) {
+        let seed = self
+            .main_control
+            .as_ref()
+            .map(|table| table.integer(b"initRandomSeed"))
+            .transpose()?
+            .flatten()
+            .unwrap_or(-1);
+        Ok(match seed {
             -1 => RandomSeedPolicy::WallClockSeconds,
             value if value > 0 => RandomSeedPolicy::Fixed(value as u32),
             _ => RandomSeedPolicy::PreserveStartup,
@@ -148,6 +160,17 @@ impl PreparedBoot {
                 false,
             )?
         };
+        cancel.check()?;
+        // CMainControl owns a separate name table. A missing host config uses
+        // the original defaults; a present malformed table is not ignored.
+        let main_control =
+            if let Some(bytes) = read(&resources.path("init2/mainControl.fxf")?, 1 << 20)? {
+                Some(Names::parse(&bytes, true)?)
+            } else {
+                read(&resources.path("init/mainControl.xtx")?, 1 << 20)?
+                    .map(|bytes| Names::parse(&bytes, false))
+                    .transpose()?
+            };
         ensure!(
             setup.integer(b"noScriptFlag")?.unwrap_or(0) == 0,
             "System-NNN no-script bootstrap is not a VM profile"
@@ -181,6 +204,14 @@ impl PreparedBoot {
         };
         drop(names);
         let mut variables = config::configured_variables(profile, &variable_names, &setup)?;
+        if variables.native_holidays_pending() {
+            cancel.check()?;
+            let path = resources.path("nya/saijitsu.xtx")?;
+            // Missing CNameList input produces zero tuples in the original;
+            // malformed/policy/I/O errors still propagate from the capability.
+            let bytes = read(&path, 1 << 20)?.unwrap_or_default();
+            variables.prepare_native_holidays(&Names::parse(&bytes, false)?)?;
+        }
         if entry == BootEntry::NewGame {
             config::initialize_new_game(&mut variables, profile, initial.as_ref())?;
         }
@@ -195,6 +226,7 @@ impl PreparedBoot {
             session: ScriptSession::new(controller, Machine::with_variables(variables)),
             resources,
             setup,
+            main_control,
             variable_names,
             project,
             commands,
@@ -224,5 +256,86 @@ impl PreparedBoot {
         let program = Arc::new(Program::parse(&bytes, self.scripts)?);
         cancel.check()?;
         Ok(program)
+    }
+}
+
+#[cfg(test)]
+mod host_configuration_tests {
+    use super::*;
+    fn prepared() -> PreparedBoot {
+        let mut words = vec![0u32; 32];
+        words[0] = 32;
+        words[1] = 0x66660001;
+        words[2] = 0x55550001;
+        words[18] = 32;
+        let bytes: Vec<_> = words
+            .into_iter()
+            .flat_map(|word| (!word).to_le_bytes())
+            .collect();
+        let empty = Names::parse(b"", false).unwrap();
+        PreparedBoot {
+            session: ScriptSession::new(
+                Arc::new(Program::parse(&bytes, XorProfile::default()).unwrap()),
+                Machine::with_variables(crate::expression::Variables::fresh(
+                    VariableProfile::Legacy1000,
+                )),
+            ),
+            resources: ResourceNames::new("").unwrap(),
+            setup: Names::parse(b"initRandomSeed 77", false).unwrap(),
+            main_control: None,
+            variable_names: empty.clone(),
+            project: empty.clone(),
+            commands: empty.clone(),
+            functions: empty,
+            initial: None,
+            module_sha256: MUGEN2_MODULE_SHA256.into(),
+            profile: VariableProfile::Legacy1000,
+            scripts: XorProfile::default(),
+        }
+    }
+    #[test]
+    fn original_host_seed_namespace_is_distinct_from_game_and_preserved_in_configuration() {
+        let mut boot = prepared();
+        assert_eq!(
+            boot.random_seed_policy().unwrap(),
+            RandomSeedPolicy::WallClockSeconds
+        );
+        boot.main_control = Some(Names::parse(b"initRandomSeed 42", false).unwrap());
+        assert_eq!(
+            boot.random_seed_policy().unwrap(),
+            RandomSeedPolicy::Fixed(42)
+        );
+        assert_eq!(
+            boot.configuration()
+                .main_control
+                .unwrap()
+                .integer(b"initRandomSeed")
+                .unwrap(),
+            Some(42)
+        );
+        boot.main_control = Some(Names::parse(b"initRandomSeed nope", false).unwrap());
+        assert_eq!(
+            boot.random_seed_policy().unwrap(),
+            RandomSeedPolicy::PreserveStartup,
+            "original atoi no-digit token is0; a syntactically valid table is not a malformed file"
+        );
+    }
+    #[test]
+    fn no_srand_branch_requires_actual_startup_state_and_missing_clock_is_not_zero_seed() {
+        let mut boot = prepared();
+        assert!(boot.initialize_random_state(None, None).is_err());
+        boot.main_control = Some(Names::parse(b"initRandomSeed 0", false).unwrap());
+        assert_eq!(
+            boot.random_seed_policy().unwrap(),
+            RandomSeedPolicy::PreserveStartup
+        );
+        assert!(boot.initialize_random_state(Some(99), None).is_err());
+        boot.initialize_random_state(
+            None,
+            Some(crysirror_image::temporal_pattern::PatternRng::msvc(123)),
+        )
+        .unwrap();
+        boot.main_control = Some(Names::parse(b"initRandomSeed 42", false).unwrap());
+        boot.initialize_random_state(None, None).unwrap();
     }
 }

@@ -27,9 +27,12 @@ const SCENE_ROOT: u32 = 9;
 /// Canvas presented while the draw mode is manual.
 const SHOWN: u32 = 1000;
 mod commands;
+mod extended;
 mod objects;
 mod cursor;
 mod tone;
+mod selection;
+use commands::colour as commands_colour;
 use std::{collections::BTreeMap, rc::Rc, sync::Arc};
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -87,6 +90,28 @@ enum Wait {
     Audio {
         channel: u32,
     },
+    /// A sound wait a click or key also ends (`PCMWAITKEY`, `koePlayExC`).
+    AudioKey {
+        channel: u32,
+    },
+    /// `ShakeScreen*Ex` / `ShakeLayers*Ex`: until the shake ended.
+    ShakeEnd {
+        layer: bool,
+    },
+    /// `grpPan` / `grpShift` / `grpSlide` running.
+    Pan(extended::Pan),
+    /// `PCMEVENT_WAIT`: until the event finished.
+    PcmEvent(i32),
+    /// `FLUSHWAIT` / `PIKACHUWAIT`: until the screen flash ends.
+    Flash,
+    /// `ShowBackground` / `MESSAGE_ERASE`: the windows stay hidden until a
+    /// click (original `ShowBackground` long operation).
+    ShowBackground,
+    /// `MsgBox`: until one of the engine dialog's buttons is chosen.
+    MessageBox {
+        ids: Vec<u32>,
+        values: Vec<i32>,
+    },
     Reveal {
         layer: u32,
     },
@@ -120,11 +145,7 @@ enum Wait {
         local: bool,
         fields: Vec<(i32, u32)>,
     },
-    Choice {
-        indices: Vec<usize>,
-        ids: Vec<u32>,
-        enabled: Vec<bool>,
-    },
+    Choice(Box<selection::Selection>),
 }
 pub struct RealLiveVm {
     client: ClientId,
@@ -179,6 +200,8 @@ pub struct RealLiveVm {
     /// Original draw mode is manual (1:30:22): the screen shows the frozen
     /// copy of DC 0 (canvas `SHOWN`) until `refresh`.
     manual: bool,
+    /// State of the adopted original modules beyond the first bridge.
+    ext: extended::Ext,
 }
 impl RealLiveVm {
     pub fn new(client: ClientId, config: Config) -> Result<Self> {
@@ -228,6 +251,7 @@ impl RealLiveVm {
             approximated: BTreeMap::new(),
             page_rest: None,
             manual: false,
+            ext: Default::default(),
         })
     }
     fn boot(&mut self, h: &mut dyn HostServices) -> Result<()> {
@@ -299,6 +323,15 @@ impl RealLiveVm {
         self.submit(h, json!({"layers":[{"op":"put","layer":{"id":SCENE_ROOT,"rect":[0,0,self.width,self.height],"paint":{"kind":"solid","color":[0,0,0,0]}}}]}))?;
         self.submit(h, json!({"canvases":ops}))?;
         self.install_object_assets(h, &mut vm)?;
+        self.load_global(&mut vm, h)?;
+        if let Some(name) = exe.str("CGTABLE_FILENAME").map(str::to_owned).filter(|n| !n.is_empty()) {
+            // Absent tables leave CG mode empty, as in the original.
+            match self.load_cg_table(&name) {
+                Ok(table) => vm.sys.cg_table = Some(Rc::new(table)),
+                Err(e) if format!("{e:#}").contains("not found") => {}
+                Err(e) => return Err(e),
+            }
+        }
         self.machine = Some(vm);
         Ok(())
     }
@@ -379,6 +412,20 @@ impl RealLiveVm {
                 != 0
                 || input.buttons_down & buttons::MOUSE_LEFT != 0
                     && self.last_down & buttons::MOUSE_LEFT == 0);
+        let wait = match wait {
+            Wait::Choice(mut selection) => {
+                if !self.poll_selection(m, h, input, &mut selection)? {
+                    self.wait = Some(Wait::Choice(selection));
+                    return Ok(false);
+                }
+                if let Some(rest) = self.page_rest.take() {
+                    self.wait = Some(Wait::PageFull { window: self.window, rest });
+                    return Ok(false);
+                }
+                return Ok(true);
+            }
+            other => other,
+        };
         let done = match &wait {
             Wait::Time { until, cancel } => {
                 if *cancel && pressed {
@@ -437,6 +484,54 @@ impl RealLiveVm {
                 }
             }
             Wait::Audio { channel } => !h.audio_playing(self.client, *channel).map_err(err)?,
+            Wait::AudioKey { channel } => {
+                if pressed {
+                    self.input_used = true;
+                    true
+                } else {
+                    !h.audio_playing(self.client, *channel).map_err(err)?
+                }
+            }
+            Wait::PcmEvent(number) => !self.ext.pcm_events.contains_key(number),
+            Wait::Pan(pan) => {
+                let pan = pan.clone();
+                let now = h.now_ms();
+                let done = self.step_pan(h, &pan, now, m.sys.should_fast_forward())?;
+                if done {
+                    self.finish_pan(h, &pan)?;
+                }
+                done
+            }
+            Wait::ShakeEnd { layer } => {
+                if *layer { self.ext.layer_shake.is_none() } else { self.ext.screen_shake.is_none() }
+            }
+            Wait::Flash => self.ext.flash.as_ref().is_none_or(|f| f.finished(h.now_ms())) || m.sys.should_fast_forward(),
+            Wait::ShowBackground => {
+                if pressed || m.sys.should_fast_forward() {
+                    self.input_used |= pressed;
+                    self.set_text_hidden(h, false)?;
+                    true
+                } else {
+                    false
+                }
+            }
+            Wait::MessageBox { ids, values } => {
+                let events: Vec<crysirror_scene::ui::UiEvent> =
+                    serde_json::from_value(self.query(h, EngineQuery::UiEvents)?)?;
+                let pick = events
+                    .iter()
+                    .find(|e| matches!(e.kind.as_str(), "activate" | "click") && ids.contains(&e.widget.id))
+                    .and_then(|e| ids.iter().position(|id| *id == e.widget.id));
+                match pick {
+                    Some(at) => {
+                        m.store = values[at];
+                        self.input_used = true;
+                        self.close_message_box(h)?;
+                        true
+                    }
+                    None => false,
+                }
+            }
             Wait::PageFull { window, rest } => {
                 if pressed {
                     self.input_used = true;
@@ -543,47 +638,7 @@ impl RealLiveVm {
                     false
                 }
             }
-            Wait::Choice {
-                indices,
-                ids,
-                enabled,
-            } => {
-                let events: Vec<crysirror_scene::ui::UiEvent> =
-                    serde_json::from_value(self.query(h, EngineQuery::UiEvents)?)?;
-                let mut pick = events
-                    .iter()
-                    .find(|e| {
-                        matches!(e.kind.as_str(), "activate" | "click")
-                            && ids.contains(&e.widget.id)
-                    })
-                    .and_then(|e| ids.iter().position(|id| *id == e.widget.id));
-                for (at, bit) in [
-                    buttons::KEY_1,
-                    buttons::KEY_2,
-                    buttons::KEY_3,
-                    buttons::KEY_4,
-                    buttons::KEY_5,
-                    buttons::KEY_6,
-                    buttons::KEY_7,
-                    buttons::KEY_8,
-                    buttons::KEY_9,
-                ]
-                .into_iter()
-                .enumerate()
-                {
-                    if input.buttons_pressed & bit != 0 && at < indices.len() && enabled[at] {
-                        pick = Some(at);
-                    }
-                }
-                if let Some(at) = pick {
-                    m.store = indices[at] as i32;
-                    self.input_used = true;
-                    self.submit(h,json!({"ui":ids.iter().map(|id|json!({"op":"remove","id":id})).collect::<Vec<_>>()}))?;
-                    true
-                } else {
-                    false
-                }
-            }
+            Wait::Choice(_) => unreachable!("selection polled before the wait match"),
         };
         if !done {
             self.wait = Some(wait);
@@ -605,7 +660,11 @@ impl RealLiveVm {
                 h.release_audio(self.client, ticket).map_err(err)?;
                 self.pending_audio = None;
                 if let Some(channel) = wait_channel {
-                    self.wait = Some(Wait::Audio { channel });
+                    self.wait = Some(if std::mem::take(&mut self.ext.pending_audio_key) {
+                        Wait::AudioKey { channel }
+                    } else {
+                        Wait::Audio { channel }
+                    });
                 }
                 self.api_calls += 1;
                 Ok(true)
@@ -672,6 +731,7 @@ impl RealLiveVm {
                 }
                 m.ack(Next::Advance)?;
             }
+            self.tick_extended(&mut m, h, input)?;
             if !self.tick_wait(&mut m, h, input)? {
                 return Ok(VmYield::BudgetExhausted);
             }
@@ -697,6 +757,9 @@ impl RealLiveVm {
                             }
                             VmEvent::Text(text) => {
                                 self.text(&mut m, h, &text)?;
+                                if self.ext.text_hidden || !self.ext.windows_off.is_empty() {
+                                    self.apply_window_visibility(h)?;
+                                }
                                 Next::Advance
                             }
                         };
@@ -716,6 +779,8 @@ impl RealLiveVm {
             Ok(VmYield::BudgetExhausted)
         })();
         let result = result.and_then(|y| {
+            self.play_queued_se(&mut m, h)?;
+            self.persist_global(&m, h)?;
             self.sync_objects(&mut m, h)?;
             self.sync_cursor(&m, h)?;
             Ok(y)

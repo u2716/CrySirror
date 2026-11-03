@@ -1,0 +1,28 @@
+{
+  "references": [
+    {
+      "repository": "https://github.com/nunuhara/libsys4",
+      "commit": "b14839f23af0963abbdb17f7cac57a36fd8e9bd2",
+      "license": "GPL-2.0-or-later",
+      "path": "src/ald.c",
+      "sha256": "e15818a46389ed93996f4f1bda77a140992bb8ff09fc0dcc197ea3356f82f38d"
+    },
+    {
+      "repository": "https://github.com/morkt/GARbro",
+      "commit": "b09ee4570ccb1daf6ac56710ee8934dc0b8baeb0",
+      "license": "MIT",
+      "path": "ArcFormats/AliceSoft/ArcALD.cs",
+      "sha256": "92f32639f4657070dcd261349da4774abbc1fcded21f689e2de2219c18ee7fc0"
+    }
+  ],
+  "ownership": {
+    "shared": "formats-arc::ald_catalog immutable Archive implementation, physical/header parsing shared with legacy ALD extractor, scoped random-access readers; no VM/image/audio renderer",
+    "native": "System4 asset class and one-based resource-number policy stay in adapter"
+  },
+  "validation": {
+    "authored": "3 passed /1owner ignored in native-source-batch/combined-release-tests.log",
+    "original_owner": "Explicitly invoked frozen release artifact:1passed0ignored;6606 entries [6506,100] volumes in native-source-batch/ald-owner.log; binary SHA in owner-artifacts.json",
+    "legacy_regression": "12passed0ignored tests/legacy_archives in same combined-release-tests.log",
+    "python_tooling": "16passed0failed in system4-ald-python.log"
+  }
+}

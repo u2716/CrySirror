@@ -199,12 +199,30 @@ pub enum CanvasCommand {
         #[serde(default)]
         position: [f32; 2],
     },
+    /// Keep the surface as one isolated snapshot draw. Source edits rebuild
+    /// its immutable paint automatically; the outer parent transform/opacity
+    /// applies after composition, not independently to every source draw.
+    PresentIsolated {
+        id: u32,
+        layer: u32,
+        #[serde(default)]
+        order: i32,
+        /// Existing client layer the presentation is attached under; its
+        /// transform, visibility, opacity and clip are inherited.
+        #[serde(default)]
+        parent: Option<u32>,
+        /// Top-left of the surface in the parent's (or canvas) space.
+        #[serde(default)]
+        position: [f32; 2],
+    },
     Hide {
         layer: u32,
     },
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct Presentation {
+    #[serde(default)]
+    isolated:bool,
     source: u32,
     order: i32,
     generated: Vec<u32>,
@@ -255,7 +273,7 @@ fn contains(outer: [f32; 4], inner: [f32; 4]) -> bool {
         && inner[1] + inner[3] <= outer[1] + outer[3]
 }
 fn spec(id: u32, rect: [f32; 4], paint: Paint) -> LayerSpec {
-    LayerSpec {
+    LayerSpec { source_crop: None, viewport_clip: None,
         id,
         parent: None,
         rect,
@@ -746,13 +764,9 @@ impl CanvasSystem {
                         (bounds[0] + bounds[2]) / size[0] as f32, (bounds[1] + bounds[3]) / size[1] as f32]);
                     dst.nodes.push(CanvasNode::Draw { layer: draw });
                 }
-                CanvasCommand::Present {
-                    id,
-                    layer,
-                    order,
-                    parent,
-                    position,
-                } => {
+                CanvasCommand::Present {id,layer,order,parent,position}
+                |CanvasCommand::PresentIsolated {id,layer,order,parent,position} => {
+                    let isolated=matches!(command,CanvasCommand::PresentIsolated{..});
                     ensure!(next.surface(c, *id).is_some(), "present canvas absent");
                     ensure!(*layer < 0x2000_0000, "reserved canvas layer id");
                     ensure!(
@@ -769,6 +783,7 @@ impl CanvasSystem {
                     let owner = next.presentations.entry(c.0).or_default();
                     if let Some(p) = owner.get_mut(layer) {
                         p.source = *id;
+                        p.isolated=isolated;
                         p.order = *order;
                         p.parent = *parent;
                         p.position = *position;
@@ -776,6 +791,7 @@ impl CanvasSystem {
                         owner.insert(
                             *layer,
                             Presentation {
+                                isolated,
                                 source: *id,
                                 order: *order,
                                 generated: vec![],
@@ -825,7 +841,7 @@ impl CanvasSystem {
                 CanvasCommand::Copy { destination, .. }
                 | CanvasCommand::TransformCopy { destination, .. }
                 | CanvasCommand::CopySubtree { destination, .. } => Some(*destination),
-                CanvasCommand::Present { layer, .. } => {
+                CanvasCommand::Present { layer, .. }|CanvasCommand::PresentIsolated {layer,..} => {
                     dirty_presentations.insert(*layer);
                     None
                 }
@@ -999,6 +1015,18 @@ impl CanvasSystem {
                 .filter(|id| layers.get(c, **id).is_some())
                 .map(|id| LayerCommand::Remove { id: *id })
                 .collect::<Vec<_>>();
+            if p.isolated {
+                let (paint,uv)=region_paint(&s.nodes,[0.,0.,s.width as f32,s.height as f32])?;
+                let mut draw=spec(root,[p.position[0],p.position[1],s.width as f32,s.height as f32],paint);
+                draw.parent=p.parent;draw.order=[p.order,0];draw.uv=Some(uv);
+                //Keep the same source-local clipping contract as Present,
+                //including separately attached children of its public root.
+                draw.clip=Some([0.,0.,s.width as f32,s.height as f32]);
+                commands.push(LayerCommand::Put{layer:draw});
+                layers.apply_batch(c,&commands).context("isolated canvas presentation")?;
+                self.presentations.get_mut(&c.0).unwrap().get_mut(&root).unwrap().generated.clear();
+                continue;
+            }
             let mut parent = spec(
                 root,
                 [p.position[0], p.position[1], s.width as f32, s.height as f32],
@@ -1060,7 +1088,7 @@ fn node_bounds_mode(node: &CanvasNode, keep_rgb: bool) -> Option<[f32; 4]> {
             }
             let tr = &layer.transform;
             // Without rotation/scale/projection the rect is the drawn area.
-            let identity = tr.rotate == 0.
+            let identity = tr.local_matrix.is_none() && tr.rotate == 0.
                 && tr.rotate_x == 0.
                 && tr.rotate_y == 0.
                 && tr.scale_x == 1.
@@ -1416,11 +1444,17 @@ fn region_snapshot(layer: &LayerSpec) -> Option<&[LayerSpec]> {
         && layer.opacity == 255
         && layer.visible
         && layer.clip.is_none()
+        && layer.source_crop.is_none()
+        && layer.viewport_clip.is_none()
+        // Inlining changes render-target coordinates. Keep clips inside
+        // their immutable snapshot target rather than silently rebasing them.
+        && layers.iter().all(|node|node.viewport_clip.is_none())
         && layer.filter.is_none()
         && matches!(layer.blend, crate::layer::Blend::Normal)
-        && t.rotate == 0.
-        && t.scale_x == 1.
-        && t.scale_y == 1.)
+        //Inlining removes the outer draw. Every transform component must
+        //be identity, including producer matrices and flat depth; otherwise
+        //retain the snapshot so no geometry/property is silently discarded.
+        && *t == crate::layer::SpriteTransform::default())
         .then_some(layers.as_slice())
 }
 /// Canvas nodes as snapshot-local LayerSpecs under `parent` (ids from 2).

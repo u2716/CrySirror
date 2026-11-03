@@ -99,11 +99,101 @@
         {
           "path": "src/format.c",
           "sha256": "7f4e0e431184d10aa57553027cf673fd38cabc6bef9b1b353ca63b7010de7fd2"
+        },
+        {
+          "path": "src/hll/DrawGraph.c",
+          "sha256": "4e203ac05c7a1736d8689289252a69ef5a015f7a4378a4ee1c22d03231c2c6ae"
+        },
+        {
+          "path": "src/hll/DrawPluginManager.c",
+          "sha256": "2a7ec94e7e7fa98e472bee1a2b8afad7bd5ad90ae5611167760b702c17f21e92"
+        },
+        {
+          "path": "src/draw.c",
+          "sha256": "240ad8df8a7d381a24419fb999cf849c24c579c6b69246a4f95adfc28c10d3ea"
+        },
+        {
+          "path": "src/util.c",
+          "sha256": "d91ce2ea661cf35c46974661b47102b0cddc11d3c722b35ad147a264f222e368"
+        },
+        {
+          "path": "src/audio_meta.c",
+          "sha256": "8937c35317e2c47ceb0953fbb05e4399fc1a4b91f062c3a123f5babdfd1d8258"
+        },
+        {
+          "path": "src/hll/PlayMovie.c",
+          "sha256": "36ce9b89a67e83f5ab1693d21965c97c5db15cf29f811a6b0a0c5f35c1271c26"
+        },
+        {
+          "path": "src/movie_ffmpeg.c",
+          "sha256": "f6de14b5c8da1ff08541c2ef392db784bd9ce05dbb8c4bba4dddd2e9d62abfa8",
+          "credit": "Copyright2022/2023 kichikuou, GPL-2.0-or-later",
+          "review": "Complete source read for policy/capability audit; not imported as renderer/decoder"
+        },
+        {
+          "path": "src/movie_plmpeg.c",
+          "sha256": "771722dae8b275a76521be216777e5f17b8ead99e179a49e026a70f64c5e0a90",
+          "credit": "Copyright2022/2023 kichikuou, GPL-2.0-or-later",
+          "review": "Complete source read for policy/capability audit; not imported as renderer/decoder"
+        },
+        {
+          "path": "src/hll/DrawMovie.c",
+          "sha256": "fa05cb1154b5db9b6b575cae48780287f160f8b3eff8d3b4910ff5d20ff89c63",
+          "credit": "Copyright2022/2023 kichikuou, GPL-2.0-or-later",
+          "review": "Complete source read for policy/capability audit; not imported as renderer/decoder"
+        },
+        {
+          "path": "include/movie.h",
+          "sha256": "3e9810460229cc3f2d2e940f0e5f05a1b077eac9d6d4784b5c5ae39b02edd20d",
+          "credit": "Copyright2022/2023 kichikuou, GPL-2.0-or-later",
+          "review": "Complete source read for policy/capability audit; not imported as renderer/decoder"
+        },
+        {
+          "path": "src/video.c",
+          "sha256": "751edffd67576aec4d09b2d762b74c93282eb5155f63b6ae7beadcaa647a087f",
+          "credit": "Nunuhara Cabbage; Fumihiko Murata, GPL-2.0-or-later",
+          "review": "Complete source read; only stored-pixel/query policy used, no GL/SDL renderer imported"
+        },
+        {
+          "path": "shaders/copy.f.glsl",
+          "sha256": "81eb53ca9e18ffb9e225ee733dab9cd5a0945251551465af3f1f20feeeb0020b"
+        },
+        {
+          "path": "shaders/blend_amap_color.f.glsl",
+          "sha256": "2dddee5848d3dda6d59ff0621fe8102244650108a53b1fce9e3ce504d0ab6028"
+        },
+        {
+          "path": "shaders/blend_amap_alpha_bright.f.glsl",
+          "sha256": "205cf6ef1607a917a315eab7789514472a6fcd49c60798e9ebc48fe03489b805"
+        },
+        {
+          "path": "shaders/blend_use_amap_color.f.glsl",
+          "sha256": "9582aad2aa0b898bb93be2be753cdd323fd093dac5e49aa5b1557f5df8e0eaae"
+        },
+        {
+          "path": "shaders/amap_saturate.f.glsl",
+          "sha256": "342ed33b9a0269533d00ef0851dd0bfc62f55f6b779bc903c5a8edd66c951eb3"
+        },
+        {
+          "path": "shaders/fill_amap_over_border.f.glsl",
+          "sha256": "b734cf3137fea8a1da5492e89efc1d6cacde57affafd9e1ea1bf49bf92a1145e"
+        },
+        {
+          "path": "shaders/fill_amap_under_border.f.glsl",
+          "sha256": "6aa01ef019172bd0003aa3b4e907b29608e0e487f3393133bda48848b34c39bd"
+        },
+        {
+          "path": "shaders/copy_use_amap_under.f.glsl",
+          "sha256": "d32770cd5db4144c13c867f40ff140bdaf49461f694301ea7050468dee3d0deb"
+        },
+        {
+          "path": "shaders/copy_use_amap_border.f.glsl",
+          "sha256": "695107de96ca9875d2523481c5fc4c68eff38678289a1592a6a88fd205dcc784"
         }
       ]
     }
   ],
-  "scope": "First-class safe Rust AIN v5 VM/heap, worker execution and thin shared host mappings. SACT2 logical Init materializes shared hidden main Canvas/Layer and checks published fonts/audio services. No complete SACT HLL, sprite renderer, playable factory, original saves or serialized native snapshots.",
+  "scope": "First-class safe Rust AIN v5 VM/heap, native configuration and bounded worker execution, with thin shared host mappings. Shared image metadata/pixel publication, byte-text, MT state and input receipts do not host another engine. Full HLL/title/gameplay, original saves and serialized native snapshots remain unsupported.",
   "ownership": {
     "native": [
       "AIN encoding, operands and byte PCs",
@@ -111,7 +201,16 @@
       "native calls, argument transfer, variable references, constructor/destructor continuation",
       "reviewed OutputLog.dll absent Windows debug-interface policy",
       "SACT2 main-surface number and logical canvas metadata; repeated-init and typed HLL completion",
-      "S_MOD native value kinds, argument ownership and original string-slot release policy"
+      "S_MOD native value kinds, argument ownership and original string-slot release policy",
+      "Original Math RNG/table instance lifetime and typed call/return policy; all random-word generation uses shared Resource MT kernel",
+      "Native message/function/scenario metadata and resumable call-frame policy; no text layout in MSG",
+      "Native peek lock depth, explicit Peek and clearable input flags; shared input receipt storage",
+      "DrawPluginManager exact native loaded-name state and six DrawGraph channel operations translated to shared Image jobs/resources/retained Layers",
+      "Native save-root alias and filename policy, file-existence return/owned-string policy; case lookup and storage IO use shared capabilities/workers",
+      "Reviewed 2004 MsgSkip message-bit order, UseFlag and exact DWORD-count save format; initialization/lifecycle atomic-write waits do not substitute for original VM saves",
+      "scene.c complete three background setters map native numbered CG/clear colour/RGB sprite snapshot policy onto engine Layer/Image workers; no private renderer",
+      "A_SORT/A_SORT_MEM stable original key/tie/argument-copy/refcount policy with resumable AIN callback continuations on VM worker; scoped heap identity/layout checks",
+      "DG_* complete sixteen-opcode source family: weak delegate triples/object generation, native ordered collection operations and resumable original AIN callbacks; no host-language executable pointers"
     ],
     "shared": [
       "crysirror-resource legacy MT19937-1998 envelope decode and capability read_all",
@@ -119,7 +218,16 @@
       "crysirror-core client storage and HostServices.now_ms; VmYield deadline",
       "crysirror-scene Canvas/Layer transactional main resource and background state",
       "crysirror-core scoped FontLibrary/TextMeasurement and ChannelAudio readiness",
-      "crysirror-text::format bounded first-compatible byte formatting independent of VM and fonts"
+      "crysirror-text::format bounded first-compatible byte formatting independent of VM and fonts",
+      "crysirror-text-legacy GPL2+ bounded byte-character/numeric profiles; native stack/lifetime policy stays in vm/strings.rs",
+      "crysirror-resource::legacy_stream::Mt19937_1998 Clone stateful word stream; original Math seed/table policy stays native",
+      "crysirror-core scoped CivilTime query for real host-time random seed, distinct from engine now_ms",
+      "Core ImageEncodingInfo query through shared registry/header parser and bounded Resource workers; typed NotFound and exact source fingerprint",
+      "Scoped shared ImageProcess/immutable ImageResource publication and retained Layers for native CG; no private raster storage",
+      "Core InputBuffer bounded receipts and InputObservation; VM keeps only native delivery/lock/clear policy",
+      "Core ImageCompositeMath::CopyAlpha and Image PixelMath::CopyAlpha; shared Runtime composite worker clipping/cancellation/owner checks",
+      "Resource capability_lookup case-insensitive bounded lookup and Core scoped storage metadata/read/atomic write; native save records remain adapter policy",
+      "Core integer_fields MSB-to-logical-bit addressing; no private generic bit-array algorithm"
     ],
     "not_imported": [
       "xsystem4 C runtime or FFI engine",
@@ -151,7 +259,9 @@
     "reviewed_owner_view": [
       800,
       600
-    ]
+    ],
+    "sprites": "Native properties use retained shared Layers; CG file/numbered sources use shared encoded metrics, fingerprint-coupled pixel processing and ImageResource publication. Exact native RGB-only blends, manual frame-publication fence and full text/effects/audio remain unsupported.",
+    "input": "Shared bounded InputBuffer receipts with native nested lock/force-Peek delivery and clearable flags; real pointer/focus observations. Owner-boundary delivery is not exact original32-op host callback cadence."
   },
   "string_format_profile": {
     "shared_api": "crysirror_text::format::format_one_bytes",
@@ -175,5 +285,265 @@
     ],
     "value_nul": "%s uses val->size and string_append memcpy, preserving embedded NUL; it is not strlen",
     "precision": "integer and string precision parsed but ignored; string zero-pad ignored"
+  },
+  "native_configuration_reference": {
+    "repository": "https://github.com/nunuhara/libsys4",
+    "commit": "b14839f23af0963abbdb17f7cac57a36fd8e9bd2",
+    "license": "GPL-2.0-or-later",
+    "files": [
+      {
+        "path": "src/ini.c",
+        "sha256": "3bccbf21a6824061e149280fec79224a413937e63bb8bb75500b73a379f5c66d"
+      },
+      {
+        "path": "src/ini_lexer.l",
+        "sha256": "5b30889c8ab719b7c71ba134b5ad269a7bc0eb82ef6222ff3ffe15c1fd09402d"
+      },
+      {
+        "path": "src/ini_parser.y",
+        "sha256": "72a2679fdc84d1913bf5936e36e6ed4a5015cb52b17d438c4e17022bfc2581db"
+      }
+    ]
+  },
+  "shared_resources": {
+    "ald": "crysirror_formats_arc::ald_catalog, src/ald_catalog.NOTICE; native class/one-based ID->VFS mount path remains here",
+    "qnt": "shared formats-arc images_a codec, libsys4 qnt.c header reference; no private decoder in System4",
+    "byte_text": "crysirror-text-legacy; preserved libsys4 string.c/utfsjis.c notices and pins in its SOURCE.json"
+  },
+  "validation_latest": {
+    "ordinary_previous": "System4 nine ordinary targets60passed5ignored; system4-final-native-modules.log. Before later private control/events/function additions.",
+    "control_events": "Native lock/input library13/13 and Input2/2; VM35/1. Worker regression now uses actual Runtime pre-first-frame InputObservation NotFound and provided VmAdapter input, without fabricating pointer/focus.",
+    "functions": "Full ordinary release77passed5ignored/11targets; functions6,find7,VM35/1,lib13, system4-functions-find-final.log. Final startup/callback guards separately passed43/3:find7,VM35/1,sact1/2, system4-final-scoped-guards.log.",
+    "byte_text": "6passed0ignored; system4-text-legacy-tests.log",
+    "shared_metadata": "image135pass2ignored; QNT native5pass0ignored; final runtime changing-length source1pass and freshly compiled integration2pass. system4-image-encoding-final{,-integration}.log.",
+    "actual_owner": "Frozen e0abb3dad2f1c62bdb75dd1fdfdb32e4ee8956f8f01accfcbb88b1961a94c883:435187instructions,pc0x15bde,WP_SET_COLOR,main=true; real MsgSkip.Init92120messages and fatal-path atomic flag-write committed. Next SACT2.SetWP(int10)->int10 retained. Explicit1passed0ignored/0.53s; no title/render/gameplay acceptance.",
+    "owner_logo_qnt": "Frozen formats762cd1... explicit1pass0ignored,37originalQNT/version2/11220069decodedpixels; no animation/render/title claim.",
+    "failed_owner": "Earlier frozen760b0c... failed before bootstrap: new optional input observation propagated genuine NotFound. Corrected startup boundary, retained failed artifact/log and ordinary regression, then explicit final owner rerun above.",
+    "python": "201/201 tooling tests; final QNT ledger16/16 after metadata evidence update.",
+    "native_draw": "release lib17passed0ignored, sact1passed2ignored, sprites2passed0ignored; system4-draw-channel-{family,owner-build}.log. Six native channel operations verified independently through actual engine Image resources/retained Layers; no private compositor.",
+    "actual_owner_previous": "Frozen e4201dab468a4da47071b76c1c134a2644f9421f3d895b5918c868177414a301:435060instructions,pc0x1167e,SACT_MSG_SKIP_INIT,main=true; actual DrawPluginManager.Load committed with loaded DrawGraph binding. Next System12 GetSaveFolderName retained. Explicit1passed0ignored/0.56s; before newer NativeFiles/MsgSkip source, no title/render/gameplay acceptance.",
+    "native_files": "release library20passed0ignored after three NativeFiles tests; system4-native-files-module.log. Actual metadata/list calls run off owner thread, no file payloads read; case/save alias/fallback/owned-name/foreign/traversal behavior tested.",
+    "native_msgskip": "release library26passed0ignored, system4-native-msgskip-final.log. Six MsgSkip tests cover MSB padding/UseFlag, repeat Init/corrupt-save reset, readonly install fallback, normal halt, close during native Sleep and fatal unsupported HLL; writes settle before halt/error. First authored fixture used invalid layout rejected before bootstrap (25pass1fail); corrected valid unknown-HLL fixture only, no production validation relaxation. Original owner e0abb3... explicitly1passed0ignored/0.53s,435187instructions/92120messages, retained later SetWP.",
+    "msgskip_scoped_regression": "release VM35passed1ignored and sact1passed2ignored; system4-native-msgskip-owner-build.log",
+    "scene_and_sort": "release combined82passed3ignored:lib30,find7,sort9,sact1/2,VM35/1; system4-native-scene-sort-final.log. Final narrowed comparator-type guards/member-string/cancellation/heap-slot-reuse suite11passed0ignored, system4-native-array-sort-guards.log. No newer original owner or Desktop build.",
+    "python_latest": "Bundled runtime Python201tests OK(1skip), system4-audio-seek-python.log. Prior default XcodePython3.9 import errors remain historical failures.",
+    "audio_public_batch": "Common Audio55/55 + public Engine13/13 in earlier shared-gain batch; subsequent retained-seek regression96passed2ignored above. Native Sound/Music stream actor remains unregistered; complete SystemService8 mixer family is routed but awaits new owncrate compilation/behavior validation.",
+    "audio_metadata": "Shared BGI/WAI3passed1ignored; original explicit1/1 with44Music/2219Wave, frozen77798a33..., target/verification/system4-audio-metadata/owner.log; no native audio/title claim.",
+    "audio_channel_seek": "Shared Audio/Runtime/Engine release check passed; final Audio lib41passed2ignored plus8targets55passed0ignored,96passed2ignored total, system4-channel-seek-audio-regressions.log. Root96018 public audio_loops3/3 includes scoped retained seek. Joint API f52fcaec3a9ab322 actual no-bless8+coverage1 passed; subsequent audio replacement source is newer and not covered by these results.",
+    "system_mixer": "release System4 runtime lib34passed0ignored in Root96018, whole combined87passed1ignored. No original title/render result.",
+    "prepared_audio_replacement": "New shared Audio standalone9/9 and final Audio+Tasks release118passed2ignored (Audio library50/2ignored+integration55, Tasks lib7+operations6), system4-audio-replacement/regressions.log. Actual worker WAVE decode/seek/prewarm, budget lease retirement, scope/reset/perclient generations, preflight rollback, late-invalid/capacity, peer PCM and reverb-history bit-exact oracles. Core/Runtime restore wrapper and updated API fingerprint are still owned by NNN/pending; this is not original save or native Alice stream completion.",
+    "resident_pixels": "Core2/2 and NativeDraw6/6 release actual passed, no ignored; System4+Engine check success. Primitive and original wrapper policy validated independently of game. No new title/desktop result.",
+    "normalized_draw": "Actual311passed5ignored final; see normalized_draw_profile. No new game acceptance."
+  },
+  "native_control_abi": {
+    "module": "owner-installed Sys42VM.dll, inspected only as static data; no module execution or redistribution",
+    "sha256": "9cac2159e84392b08fb6b1d785b6acea798fa77271db7012ec7c02f706251e33",
+    "peek": "VA10024690 syscall dispatcher calls CVMPeekLock vtable1005680c slots1003dda0/1003ddb0, returns ++depth / max(--depth,0). Actual EAX result pushed, not fixed1.",
+    "host_gate": "10014510 host callback at32-op cadence and10028150 after-HLL gate only when counter<=0; new adapter uses genuine shared input receipts at async owner boundaries and explicit Peek/Update. Exact callback cadence/presentation fence remains incomplete.",
+    "scenario": "10027100 CALLONJUMP uses declared OJMP resolver with one string argument, or leaves operands unchanged when index<0. 10026ec0 SJUMP consumes string name, unwinds old frames and checks a label target. This differs from publicly marked guessed preallocated-page branch; no copied guess is used for tagged native profile.",
+    "message": "10023fc0 MSG validates three args, reverse temporary vector transfers original id/count/string to local0/1/2.",
+    "proof": "Private ignored target/verification/system4-ida; static provenance does not count as runtime behavior."
+  },
+  "native_module_gaps": [
+    "Delegate family, other later-version opcodes and unsupported untagged scenario profiles. Sort family uses bounded rank1 profiles and deterministic stable merge order; original platform qsort comparator invocation order/unstable equal-key permutations are not reproduced.",
+    "No-SLBL/no-OJMP preallocated-page guess is unsupported; source-tagged native OJMP and legacy SLBL profiles must remain distinct",
+    "Complete SACT DrawGraph/text/outline/effects/audio and actual AliceLogo2 seasonal animation",
+    "Engine-owned manual per-client presentation fence and callback/dependency pump cadence",
+    "Original global/group/resume saves and VM/resource reconstruction"
+  ],
+  "draw_plugin_manager_abi": {
+    "module": "owner-installed DrawPluginManager.dll; static data inspection only, not executed or distributed",
+    "sha256": "b24a69e6ba6e7f07e683106932cb356063841ba9a2538a509f79bf8711eea698",
+    "bytes": 65536,
+    "exports_rva": {
+      "CreateInterface": "0x2e50",
+      "Load": "0x2ea0",
+      "IsLoad": "0x2ec0"
+    },
+    "load_helper_va": "0x10001380",
+    "isload_helper_va": "0x100012a0",
+    "observed_policy": "Exact case-sensitive stored C-name comparison. Repeated Load of the same name returns0. First Load requires GetModuleHandleA, CreateInterface, non-null draw interface and replay of existing property bindings before publishing a loaded entry and returning1. IsLoad queries that actual table.",
+    "reimplementation_boundary": "Native builtin mapping binds the real client-scoped engine Image interface before publishing a loaded name. Exact same-name repeat Load returns0; IsLoad queries that table. Six bounded copy/fill RGB/alpha/RGBA exports execute shared Image workers and publish immutable engine resources plus Layers before void ACK; remaining exports, unknown plugins and alpha-less destinations explicitly fail. Public fixed-success macros are not adopted.",
+    "private_evidence": "Ignored target/verification/system4-ida/plugin-*.c, inspect_plugin.py; IDA database closed and process exited."
+  },
+  "msgskip_abi": {
+    "module": "owner-installed 2004 MsgSkip.dll; inspected only as static data, never executed or redistributed",
+    "sha256": "89f56adb771f8066fc38dde0fe8d991aaa49f9c54eced0e32254f738aa4ed78b",
+    "bytes": 53248,
+    "exports_rva": {
+      "Init": "0x19c0",
+      "UseFlag": "0x19cf",
+      "SetEnable": "0x19de",
+      "SetState": "0x19ed",
+      "SetFlag": "0x19fc",
+      "GetEnable": "0x1a0b",
+      "GetState": "0x1a15",
+      "GetFlag": "0x1a1f",
+      "GetNumofMsg": "0x1a2e",
+      "GetNumofFlag": "0x1a38"
+    },
+    "helpers": {
+      "constructor": "0x100015f6",
+      "destructor": "0x10001638",
+      "Init": "0x1000169d",
+      "UseFlag": "0x1000180e",
+      "SetFlag": "0x1000188c",
+      "GetFlag": "0x1000190e"
+    },
+    "save": "little-endian DWORD message count followed by ceil(count/8) zero-initialized MSB-first bytes; exact count and byte size only. GetNumofFlag counts all stored payload bits including padding.",
+    "policy": "UseFlag defaults1. Disabling makes valid GetFlag return1 and suppresses destructor/reinitialization save, without preventing SetFlag. Repeated Init saves prior active flags then frees/reloads. Bad nonzero save size/count is deleted/reset. Enable/state normalize to bool. Native filenames are C-prefix length<260.",
+    "difference_from_public_reference": "Public xsystem4 warning stubs for UseFlag/GetNumofMsg/GetNumofFlag and legacy byte-per-message migration/clipped-count copies are not adopted for this reviewed native profile.",
+    "shared_boundary": "Scoped async metadata/read and atomic save writes; Core integer_fields bit storage. No private filesystem, OS paths or generic bit library. Readonly original install fallback is never modified; corrupt original fallback requires explicit import/reset.",
+    "limits": "Read flags are not original global/group/resume saves. Native undocumented skip-controller gating beyond reviewed booleans is not claimed. Actual saved-file corpus and full native lifecycle/render/gameplay remain unproven.",
+    "private_evidence": "Ignored target/verification/system4-ida/{inspect_msgskip.py,msgskip-*.c,msgskip-*.json}; private copied DB closed and process exited."
+  },
+  "array_sort_profile": {
+    "source": "Full pinned vm.c A_SORT/A_SORT_MEM and page.c compare/custom/member families reviewed",
+    "supported": "Rank1 default int/long/float/NUL-string sort; stable struct-member raw-word/NUL-string keys; original AIN custom comparators with fresh owned string copies or retained struct references, including external waits",
+    "implementation": "Bounded VM continuation merge passes. Native page remains unchanged until final publication; original array heap identity/layout revalidated after every callback. Comparator result0 custom/member order retains original index. Cancellation is observed at each native step; no nested interpreter or C callback. Working-set cap1000000 entries.",
+    "limits": "Deterministic merge callback order, not exact platform qsort call sequence; source does not promise qsort side-effect order. Default equal-key permutation is stable here; no claim to original unstable-platform tie permutations. Multi-rank and unreviewed delegate/custom value profiles fail explicitly. Native callback page-pointer invalidation is rejected, never redirected to a reused slot."
+  },
+  "scene_background_profile": {
+    "source": "Full pinned scene.c; SACT2.c and sact.h exports SetWP/SetWP_Color/WP_SetSP",
+    "implementation": "SetWP0 removes only wallpaper; numbered CG queries shared encoding/pixels with coupled fingerprint, preserving previous wallpaper on missing/corrupt inputs. Colour changes independent background Layer. WP_SetSP captures source RGB into a new opaque immutable engine ImageResource through shared CopyRgb, ignoring sprite position/visibility/display opacity. Frozen wallpaper survives source mutation/delete.",
+    "validation": "Four independent actual Runtime tests inside lib30; missing/corrupt/cross-client/byte-color boundary and immutable source retirement; no original render acceptance.",
+    "limits": "Out-of-byte clear colors fail explicitly. Manual perclient SACT.Update presentation fence remains incomplete; live retained resources alone do not reproduce all native frame timing."
+  },
+  "native_audio_static": {
+    "scope": "Read-only static analysis of owner-installed SACT2.dll, MusicSystem.dll,Sound2.dll; copied databases and C evidence stay ignored target, never executed or distributed.",
+    "SACT2_sha256": "3b03b168e11f136efc22168f8b0e019f107f4350b1c210a2d45ef82913e27659",
+    "MusicSystem_sha256": "601d5ffc106ec8837c4a8e80153ac659da564a3178e3f20ea8eeecefcafdcd4f",
+    "Sound2_sha256": "a0236ec181235428a2f52d6e1f4af1de72d0f137681afa89f98d0076a20c607a",
+    "observed": "SACT2 Music_MillisecondsToSamples uses signed64 product/div1000. Pause/Restart/IsPause delegate through music facade64/68/72 and underlying resource GUIDs; public warning0 macros do not establish implemented semantics. Music facade ctor1000c8b0 uses main table10036280; raw adjacent executable candidates are not all proven one-table methods.44audio exports statically available is inventory only. Follow-up raw QIF10004530 proof: Pause GUID235eefbb7882d411beb200c0f6b0e9be atRVA100121fc reaches Japanese IMusicPause unimplemented log then null; SACT facade returns0 on absent interface. Not inferred from public warning macros.",
+    "status": "All IDA databases closed(false) and processes exited; Cat may use licence independently. Full native audio source family still ongoing."
+  },
+  "system_mixer_profile": {
+    "source": "Pinned complete SystemService.c and audio_mixer.c mixer family, preserved GPL-2.0-or-later provenance",
+    "implementation": "Eight mixer methods retain native configuration count/names/raw defaults, Master/Voice hierarchy. Actual gain/mute route shared AudioMixGroup. Native name changes do not reparent. Typed ref outputs are changed only on valid native indices; missing native configuration, bad ABI or foreign owner fails at original call. Metadata BGI/WAI read/parse happens on startup worker through scoped shared parsers.",
+    "validation": "Root native-remaining-consumers retry96018 actual exit0: Sys4 runtime lib34/34, Engine audio_loops3/3, plus Engine lib3/3 and NNN47/1ignored, combined87passed1ignored. NativeMixer8 typed references, invalid unchanged outputs, raw names and actual shared PCM mute/gain passed. Initial authored cfg issue was fixed without moving dev-only tempfile to production.",
+    "limits": "Mixer8 plus checked canonical Sound/Music actor now production-routed, with real shared source/ticket lifecycle. This is not complete SACT audio: control-only lazy resource declarations, remaining Sound optional interfaces/sample-data/native callbacks and original saves remain unimplemented."
+  },
+  "playmovie_static": {
+    "module": "Owner-installed PlayMovie.dll, static data inspection only; not executed or redistributed",
+    "sha256": "4ac952009a13518d759967ea85ccab39339b5398cd0c44f60ff155d6d181c20f",
+    "bytes": 49152,
+    "exports": {
+      "Init": "0x100013b0",
+      "Load": "0x100013d0",
+      "Play": "0x100013f0",
+      "Stop": "0x10001420",
+      "IsPlay": "0x10001430",
+      "Release": "0x10001470"
+    },
+    "direct_helpers": [
+      "0x10001040",
+      "0x10001190",
+      "0x10001240",
+      "0x100012e0"
+    ],
+    "observed": "Init resolves actual MainSystem/window interfaces and graph creation; not constant success. Stop invokes IMediaControl+36, unlike public warning stub. IsPlay pumps original window sizing then waits complete graph at0 timeout. Presentation helper preserves video aspect centered in client window. Release stops/releases real interfaces.",
+    "migration_gaps": "No Movie native registration/behavior result. Shared Media currently finishes/stops audio at video end and cannot by that alone establish original all-stream graph completion. Prepared paused-load resource, retained clock/source, native interface/source/case lookup, entire6 operations and manual presentation semantics still need implementation. Public movie code renderer/codec/COM are not integration boundaries.",
+    "private_evidence": "Ignored target/verification/system4-ida/PlayMovie-*.c and exports.json; database close(False), processes exited"
+  },
+  "resident_pixel_profile": {
+    "source": "Complete pinned DrawGraph.c,SACT2.c,sprite.c,video.c reviewed. No GL/SDL implementation imported.",
+    "implementation": "Four native stored pixel queries call shared ImageInput::resident_pixel and opt-in ImageResource::pixel_at; Core checked rgba_pixel_at is zero-allocation and independent of VM. Generic trait default is Unsupported, never fallback to full rgba materialization; Runtime/Engine providers directly borrow resident bytes.",
+    "native_policy": "DrawGraph GetAlphaColor lazy-declares a missing logical sprite and returns0/outref untouched for its empty bounds; other three try-queries do not allocate. SP_GetAMapValue returns-1 on absent/outside/no-alpha; DrawGraph alpha returns1 and writes-1 on in-bounds RGB-only storage. RGB referenced outputs preflight together. Native undefined out-of-bounds GL RGB reads fail visibly rather than fabricating a colour.",
+    "validation": "release Core2passed0ignored; System4 NativeDraw6passed0ignored including two new real Runtime resources/reference/scoping tests and existing4 Copy/Fill/Load regressions. System4+Engine releasecheck passed. Logs system4-resident-pixel-tests.log, system4-native-pixel-tests.log,system4-resident-pixel-check.log. Next shared docs fingerprint pending coordinator.",
+    "limits": "No original GPU/readback/render validation; remaining DrawGraph text/filter/transforms/effects and manual presentation fence still incomplete."
+  },
+  "reviewed_optional_music_profile": {
+    "implementation": "Exact SACT2/MusicSystem pair admits proven interface absence for Pause/Restart/IsPause/GetLoopCount/GetSamplePos/GetSampleLength/Seek. Prepared loop setters preserve original absent-interface0 only with an existing canonical instance; missing native lazy-instance declaration is explicitfail. Startup scoped worker binds both hashes; no module execution.",
+    "validation": "release native_audio filter6passed1ignored; independently explicit original-owner readonly profile1passed0ignored by parent, target/verification/siglus-script-source/system4-owner-music-profile-test.log. Only INI+module reads/hashes, no game/DLL execution.",
+    "limits": "Exact-module absence policy only, not generic pause emulation. Full canonical Sound/Music actor is now routed after independent lifecycle/worker PCM tests; missing native optional/control-only/sample interfaces still fail explicitly."
+  },
+  "shared_glyph_image_prerequisite": {
+    "implementation": "Core GlyphImageSpec and ImageMetadata.begin_glyph_image prepare immutable regular positioned coverage on shared Runtime task pool, with scoped frozen single-font snapshot, separate output/scratch reservations, cancellation and existing ImageJob/resource/publication contract. TextSystem.rasterize_glyphs delegates to its same cancellable kernel for outline and precomputed faces; actual outline work is bounded. No VM pixel/font kernel or implicit catalog publication.",
+    "validation": "Core/Text/Runtime releasecheck passed. Text lib46passed3ignored; Runtime lib first81passed1authoredfixturefailure1ignored, fixture corrected to await actual queued-closure retirement (no production relaxation), exact2cancellation/admission tests thenpassed2/2. Frozen compiled glyph_images2/2 and precomputed_fonts2/2 explicitly passed. Python201OK1skip. Logs/artifact SHAs target/verification/system4-glyph-image/. API regen coordinated separately. Final parent4529 actual204passed3ignored includes current Glyph8192 preflight-negative in glyph_images2/2, Runtime82/1ignored, precomputed2/2; subsequent parent5822 default-consumer203passed3ignored also passed. Public Glyph+ServiceBatch fingerprint1bea1d048c6dd276 actual no-bless API docs8/8 and coverage1/1.",
+    "limits": "Prerequisite only: not yet native DrawGraph/SACT Text routing. It creates regular-face white-RGB union coverage. Native weight/bold/block-advance/source/destination threshold/color and AMap per-glyph overwrite semantics require their actual shared consumers; never substitute a whole-run union or overlay for stored native pixels."
+  },
+  "delegate_profile": {
+    "source": "Complete pinned vm.c DG_SET..DG_STR_TO_METHOD,delegate_call,function_matches_delegate and page.c delegate_* family; heap.c heap_get_seq invalid-slot0 semantics.",
+    "instructions": [
+      "DG_SET",
+      "DG_ADD",
+      "DG_CALL",
+      "DG_NUMOF",
+      "DG_EXIST",
+      "DG_ERASE",
+      "DG_CLEAR",
+      "DG_COPY",
+      "DG_ASSIGN",
+      "DG_PLUSA",
+      "DG_POP",
+      "DG_NEW_FROM_METHOD",
+      "DG_MINUSA",
+      "DG_CALLBEGIN",
+      "DG_NEW",
+      "DG_STR_TO_METHOD"
+    ],
+    "implementation": "Weak object/function/sequence triples do not retain instance references. Collection order/dedup/stale-generation compaction and original alias DG_MINUSA shrinking-source order preserved. Shared original call_frame reserves local identity/locals before per-callback typed value copies; caller arguments remain until final original cleanup, reference arguments stay aliases, last callback return survives. Native callbacks use existing VM frames/external waits and clone logical continuation, no native C callback or second interpreter.",
+    "limits": "AINv5 only; callbacks must have a checked compatible declared signature. Heap/stack/type/coordinate/work bounds fail at original instruction; ordered set comparisons capped64M. This is VM source-family validation, not whole VM/HLL/gameplay or original-save completion.",
+    "validation": "Local releasecheck passed. One --no-fail-fast release combo: system4 runtime lib38passed1ignored; existing VM35passed1ignored; authored original bytecode delegates7/7, total80passed2ignored. No original game/DLL/GPU run. target/verification/system4-delegates/{check,tests}.log."
+  },
+  "canonical_audio_retention": {
+    "implementation": "Shared Core/Audio canonical retain_on_finish and independent transport_active, held slots nonstealable; natural EOF and own-gain stop keep the same source/cursor/control state. Inactive control clocks continue independently of input/pervoice DSP; fullPause freezes controls. Completed actual seek required to replay EOF. ExplicitStop/replacement releases ownership. Prepared native Sound/Music uses real scoped AudioResource, inactive prewarm, same-voice async seek and actual completion observations; no decoder reopen or inferred EOF.",
+    "compile": "Core/Audio/Runtime/Engine/System4 runtime release check passed before final profile refinements; final9-target release test compiled current actor/sharedpoint successfully.",
+    "behavior": "Single release --no-fail-fast9targets137passed3ignored: Audio lib51/2ignored (including target retained replacement cleanup and peer bit-exact PCM), channel_async6,counted_loops8,gain_fades6,retained_transport8,transport9; Engine lib3/audio_loops4; System4 runtime lib42/1ignored. target/verification/system4-retained-audio/tests.log. No original game/device/GPU execution.",
+    "production_route": "NativeAdapter now routes full checked Sound/Music actor and closes retained source/ticket authorities at halt, explicit close and deferred fatal error. Separate final release System4 lib44passed1ignored; originalAIN HLL→shared48framePCM→halt/close and unsupportedHLL cleanup preserving PC/stack both passed. target/verification/system4-retained-audio/worker-tests.log.",
+    "native_limits": "Known original MusicSystem absent interfaces version-bound to both DLL hashes. Loop setters on existing canonical prepared instance return proven interface0 without changing state; missing instances still explicitfail because original setter lazy-creation requires true control-only resource capability. Music_GetSampleData/remaining Sound optional profiles and full original saves unsupported, no copied public warning0 stubs.",
+    "docs": "Retained Audio+viewport531a48a7ce30ee00 actual no-bless docs8/8+coverage1/1; subsequent normalized math is a separate pending generation."
+  },
+  "normalized_draw_profile": {
+    "shared": "Core image_blend six typed DTOs, explicit FloatNearest/Byte255 arithmetic with independently rounded products, raw fragment keys/ranges, transform, color/alpha equations and write masks. ImageSurface.blend_fixed_factors shares the original checked bitmap visitor; Runtime immutable jobs admit/charge/validate scoped inputs and publish only complete results. Byte transforms/constants compile once per operation. No VM pixel loops or imported renderer.",
+    "source": "Complete pinned xsystem4 DrawGraph.c/draw.c plus referenced fragment shaders; conventional normalized factors independently checked against Khronos OpenGL Refpages glBlendFuncSeparate/glBlendEquationSeparate. Original Graph scalar tables and wrappers read only as static source facts, no DLL execution.",
+    "static_modules": {
+      "DrawGraph.dll": {
+        "bytes": 122880,
+        "sha256": "d971926868adf5936b598a83dd9185c3e74d9d1ce57a7c7c732ccd5c59d09eae"
+      },
+      "Graph.dll": {
+        "bytes": 114688,
+        "sha256": "7bae2983dd5b82dfc904f1f45359081da115838c5cc2cf1742edf67fab789720"
+      }
+    },
+    "native": "32 public-reference fragment/blend/copy/fill mappings plus original scalar ScreenDA mapping. Startup worker checks both original module hashes before granting native table policy. Unknown installed module identities fail Load explicitly. Native scalar profile keeps separate floor products, source prequantization and complementary-floor screen, distinguishing ScreenDA from saturated AddDA. Authored/no-original-module reference path retains explicit normalized arithmetic. The generic source SrcBright mapping omitted alpha in an initial authored fixture; corrected to sourceScale(rate) then alpha, independently checked with alpha0.",
+    "compile_behavior": "Final single release6targets actual311passed5ignored: Core33,Image136/2ignored+fixed_blend6,Runtime86/1ignored+fixed_blend3,System4runtime47/2ignored. Includes all65536 multiply/screen byte-pairs, allalpha separate product tables, immutable scoped jobs,32 native reference mappings,17 original scalar differences and unknown/changed/escape/cancel module guards. target/verification/system4-normalized-blend/integer-tests.log. Earlier generic307passed4ignored is a distinct historical source point and does not validate the subsequently discovered SrcBright bug.",
+    "owner_profile": "Root independently ran frozen owner-profile SHA97d9ef07de5c0c5b33eb6b37d473138529ca93b4395f195b4f8d54df5435e2a4 against original game-rance7/GAMEDATA; actual1passed0ignored/48filtered, original double-hash positive bound. owner-profile-root-verify.log. Read-only INI/module data, temporary state, no game/DLL execution or title/GPU claim.",
+    "limits": "Scalar byte-table profile only, not a claim of bit-identical historical MMX paths or every Graph.dll revision. Native inputs outside checked byte/color/positive-rectangle scope fail explicitly. Remaining native text/font styles, filters/blur/gradation/overlay, stretch/rotate/wrap/effects, DrawText2/AliceLogo2, presentation cadence and original saves remain unsupported/incomplete.",
+    "api": "Frozen final shape handed to NNN for combined actual generation/no-bless; prior531a48a7ce30ee00 is Audio+viewport history, not new normalized fingerprint.",
+    "public_frontend": "Bitmap.beginFixedBlend(slot,source,options)->ticket is production-routed through existing snapshot-based BitmapJobs and the same typed Runtime worker. Exact shared_effects release6/6 passed, including real integer pixels, frozen source generation, scope/revision/cancel/invalid guards and generated TypeScript declaration. target/verification/system4-normalized-blend/public-tests.log.",
+    "python": "Final full Python Ran205 tests OK(skipped=1),204pass1skip, python-final.log. Prior python.log failed only then-live Root src/export.rs ledger and is retained; no unrelated source edited to bypass."
+  },
+  "draw_text_profile": {
+    "source": "Complete pinned xsystem4 src/text.c, src/hll/DrawGraph.c and src/gfx font references; original DrawGraph/DrawText2 wrappers, constructors and monochrome coverage helpers read only as static facts. Public GetFontName warning/empty-string stub is not adopted; actual owned native name state is implemented.",
+    "original_module": {
+      "DrawText2.dll": {
+        "bytes": 65536,
+        "sha256": "cb429ab7a32dc1c140f2e502cbb5de7ad72ae71c98c1f77a539ab274337c35c8",
+        "interface_entries": 18,
+        "coverage_lookup": [
+          0,
+          28,
+          56,
+          113,
+          141,
+          169,
+          198,
+          226,
+          254,
+          255
+        ]
+      }
+    },
+    "shared": "Core explicit styled coverage options and font OS/2 metadata; Text reuses the existing outline/bitmap/rich morphology kernels with cancellation, design metrics, optional3x binary-count reduction. Runtime scoped immutable glyph cells freeze one face and reserve per-cell output leases before a single batch task; no partially ready batch is published. Cached glyph/style queries avoid owner font parsing. Public Text glyphId/fontStyle exposes those shared observations.",
+    "native": "Fourteen stateful font controls preserve raw size/weight/spacing, original exact-one flags, clamped colors and owned C-prefix CP932 font names. DrawTextToPMap/AMap use fixed native byte-unit cells, byte-index half-cell advance, shared batch coverage then a single shared immutable composition publication; PMap retains destination alpha, AMap overwrites the full cell including zero coverage. Original startup worker verifies DrawText2 hash separately from Graph arithmetic identity; unknown installed versions fail native text explicitly.",
+    "portable_font_policy": "Actual authorized outline OS/2 weight metadata required; matching nonitalic weights use that face. Requested bold on mapped regular350..550 uses explicit engine disk synthetic-bold profile ceil(3*size*.025), visible in diagnostics. This is portable outline coverage with the original reduction table, not a claim of Windows GDI face matching/hinting/bit identity. Missing metrics, unknown weight profiles, bitmap-only metadata, control characters, invalid CP932, oversize work and unknown interfaces fail at original PC. No system font bytes committed.",
+    "implementation": "Production shared/Core/Text/Runtime and NativeDraw worker consumer registered. No original DLL execution, renderer, VM pixel loop or per-character frame waits.",
+    "compile": "Coherent Core/Runtime/Engine/System4runtime release check passed. Final nine-target release --no-fail-fast combo compiled and exited0; no production fallback was enabled to obtain a pass.",
+    "prior_behavior": "Before batched/native consumer and cached font-style additions, one release6-target styled combo actual175passed5ignored; independent explicit system outline test1passed0ignored. target/verification/system4-styled-glyph/tests.log and system-font.log. These do not validate the later batch or NativeDraw consumer.",
+    "current_behavior": "Final nine-target release combo actual232passed9ignored: Core33; Engine3+dynamic_font_api2/1ignored; Runtime88/1ignored+glyph_images2+precomputed_fonts2+styled_glyph_images5; System4runtime48/3ignored; Text49/4ignored. Atomic batch one-task/full admission/cancel/late-error rollback/each cell independent budget leases and public scoped glyph/style observations passed. Separate frozen binaries explicitly executed originalAIN HLL PMap/AMap1/1, public system-font API1/1 and outline EM/top/decorations1/1 (zero ignored in each filtered run). Font is runtime-selected Arial.ttf; no font bytes committed. target/verification/system4-styled-glyph/{batch-tests,native-text-system-font,public-system-font,batch-system-font}.log, artifactSHA256 in batch-artifacts.json. No original game/DLL execution, title or GPU acceptance.",
+    "python": "Full Python205 tests OK(skipped1), actual204pass1skip, python.log.",
+    "api": "Final shared shape frozen to NNN for unified regeneration/no-bless; current prior0154abd7b61f34df is historical normalized/sourcecrop/sessionseed fingerprint, not this new font/batch surface."
   }
 }

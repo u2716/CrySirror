@@ -14,7 +14,8 @@ impl<'a> SceneVm<'a> {
         &mut self,
         rd: &mut crate::original_save::OriginalStreamReader<'_>,
     ) -> Result<()> {
-        let script = &mut self.ctx.globals.script;
+        let globals = &mut *self.ctx.globals;
+        let script = &mut globals.script;
 
         script.cur_koe_no = rd.i32()? as i64;
         script.cur_chr_no = rd.i32()? as i64;
@@ -22,7 +23,7 @@ impl<'a> SceneVm<'a> {
         script.cur_read_flag_flag_no = rd.i32()? as i64;
         script.cursor_no = rd.i32()? as i64;
 
-        self.ctx.globals.syscom.syscom_menu_disable = rd.bool()?;
+        globals.syscom.syscom_menu_disable = rd.bool()?;
         script.hide_mwnd_disable = rd.bool()?;
         script.msg_back_disable = rd.bool()?;
         script.shortcut_disable = rd.bool()?;
@@ -50,8 +51,8 @@ impl<'a> SceneVm<'a> {
         script.koe_dont_stop_on_flag = rd.bool()?;
         script.koe_dont_stop_off_flag = rd.bool()?;
 
-        self.ctx.globals.syscom.mwnd_btn_disable_all = rd.bool()?;
-        self.ctx.globals.syscom.mwnd_btn_touch_disable = rd.bool()?;
+        globals.syscom.mwnd_btn_disable_all = rd.bool()?;
+        globals.syscom.mwnd_btn_touch_disable = rd.bool()?;
         script.mwnd_anime_on_flag = rd.bool()?;
         script.mwnd_anime_off_flag = rd.bool()?;
         script.mwnd_disp_off_flag = rd.bool()?;
@@ -73,7 +74,7 @@ impl<'a> SceneVm<'a> {
 
         script.quake_stop_flag = rd.bool()?;
         script.emote_mouth_stop_flag = rd.bool()?;
-        self.ctx.globals.cg_table_off = rd.bool()?;
+        globals.cg_table_off = rd.bool()?;
         script.bgmfade_flag = rd.bool()?;
         script.dont_set_save_point = rd.bool()?;
         script.ignore_r_flag = rd.bool()?;
@@ -85,7 +86,7 @@ impl<'a> SceneVm<'a> {
         script.stage_time_stop_flag = rd.bool()?;
         rd.skip(1)?;
 
-        self.ctx.globals.syscom.replay_koe = if script.cur_koe_no >= 0 {
+        globals.syscom.replay_koe = if script.cur_koe_no >= 0 {
             Some((script.cur_koe_no, script.cur_chr_no))
         } else {
             None
@@ -235,7 +236,7 @@ impl<'a> SceneVm<'a> {
         obj.runtime.prop_event_lists.y_rep = Self::read_cpp_int_event_extend_list(rd)?;
         obj.runtime.prop_event_lists.z_rep = Self::read_cpp_int_event_extend_list(rd)?;
         obj.runtime.prop_event_lists.tr_rep = Self::read_cpp_int_event_extend_list(rd)?;
-        obj.runtime.prop_lists.f = rd.extend_i32_list()?;
+        obj.runtime.prop_lists.f = rd.extend_i32_list()?.into();
         let file_name = rd.string()?;
         obj.file_name = if file_name.is_empty() {
             None
@@ -603,7 +604,7 @@ impl<'a> SceneVm<'a> {
         st.group_lists
             .insert(stage_idx, rd.fixed_items(|rd| Self::read_cpp_group(rd))?);
         st.object_lists
-            .insert(stage_idx, rd.fixed_items(|rd| Self::read_cpp_object(rd))?);
+            .insert(stage_idx, rd.fixed_items(|rd| Self::read_cpp_object(rd))?.into());
         st.mwnd_lists
             .insert(stage_idx, rd.fixed_items(|rd| Self::read_cpp_mwnd(rd))?);
         let btn_select = Self::read_early_btn_select(rd)?;

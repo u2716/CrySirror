@@ -1,6 +1,11 @@
 # ADR 0039: BGI as a native VM calling CrySirror services
 
-Status: implemented first supported profile; evidence and limits below.
+Status: superseded by [ADR 0047](0047-engine-api-capability-extraction.md).
+
+The original experiment/integration below is historical. Its hosted/upstream
+boundary and acceptance conclusions were rejected; do not restore that design.
+The later first-class BP adapter is described in [BGI.md](../BGI.md). Source pins
+and old test results below document that old path only.
 
 ## Requirement
 

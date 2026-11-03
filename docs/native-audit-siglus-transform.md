@@ -1,5 +1,12 @@
 # Siglus transform bridge verification
 
+> Historical transform audit. Its geometry tests and source observations retain
+> their original scope. The missing destination/source clipping described below
+> was subsequently addressed by shared Layer viewport_clip/source_crop and native
+> SET_CLIP/SET_SRC_CLIP mappings; see
+> [native clipping](NATIVE_ADAPTERS.md#shared-target-clipping-and-siglus-set_clip-2026-11-01).
+> The old unsupported-state paragraph is not the current feature inventory.
+
 Source: complete local `siglus_rs` checkout at pinned commit
 `5f358ef1360b0439e92aed2b749e8f25d8721954`.
 

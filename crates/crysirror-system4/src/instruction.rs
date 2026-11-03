@@ -2,7 +2,7 @@
 //! Decode original v5 instruction operands without executing or acknowledging
 //! native operations. A recognized layout does not establish VM support.
 use crate::{ain::Program, opcodes};
-use anyhow::{Context, Result, ensure};
+use anyhow::{ensure, Context, Result};
 #[derive(Clone, Debug)]
 pub struct Instruction {
     pub pc: u32,

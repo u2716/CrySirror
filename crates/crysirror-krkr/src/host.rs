@@ -120,13 +120,21 @@ pub struct KrkrHost {
     /// Target, owner-polled job, native flips, whether to replace Canvas paint.
     /// Unmodified Asset preparation retains its original immutable paint.
     pub image_job: Option<(usize, crysirror_core::image_processing::ImageJob, [bool; 2], bool)>,
+    pub composite_pending: Vec<crate::image_api::PendingComposite>,
     pub(crate) image_pair:Option<crate::image_api::PairPreparation>,
+    pub(crate) image_save:Option<crate::image_api::LayerImageSave>,
     /// End publication caller ownership after ordered Canvas edits commit.
     /// Engine retained draws and frozen copies then own the resource lease.
     pub(crate) retired_images: Vec<String>,
     pub io_barrier: bool,
     pub writes: std::collections::VecDeque<Box<dyn crysirror_core::service::StorageWrite>>,
     pub can_suspend: bool,
+    /// `System.eventDisabled` (krkrz TVPSystemEventDisabledState): input and
+    /// timer events are not delivered while set.
+    pub event_disabled: bool,
+    /// `System.exeBits`; KiriKiri titles without a readable PE are treated as
+    /// the classic 32-bit executable.
+    pub exe_bits: i64,
     pub sounds: crate::sound::Sounds,
     pub videos: crate::video::Videos,
     pub alpha_movies: crate::alpha_movie::AlphaMovies,
@@ -198,12 +206,16 @@ impl KrkrHost {
             line_parser: Default::default(),
             psbfile: Default::default(),
             image_job: None,
+            composite_pending: Vec::new(),
             image_pair:None,
+            image_save:None,
             retired_images: Vec::new(),
             draws:Default::default(),
             io_barrier: false,
             writes: Default::default(),
             can_suspend: true,
+            event_disabled: false,
+            exe_bits: 32,
             sounds: Default::default(),
             videos: Default::default(),
             alpha_movies: Default::default(),
@@ -280,7 +292,18 @@ impl KrkrHost {
         self.log.push(line);
     }
 
-    pub fn canvas_op(&mut self, op: Value) {
+    pub fn canvas_op(&mut self, mut op: Value) {
+        // A motion paints the source layer as a puppet mesh, not into its pixels. Scripts
+        // that copy that hidden layer onto a visible one (AffineSourceMotion) must receive
+        // the composed mesh, so such a copy goes through the shared subtree snapshot.
+        if op["op"].as_str() == Some("copy") {
+            let source = op["source"].as_u64();
+            let motion_source = self.layers.iter().find(|(id, layer)| Some(u64::from(layer.slot)) == source && self.motion.has_frame(**id)).map(|(_, layer)| layer.container());
+            if let Some(container) = motion_source {
+                op = serde_json::json!({"op":"copy_subtree","source":container,"destination":op["destination"],
+                    "rect":op["rect"],"position":op["position"],"clip":op.get("clip").cloned().unwrap_or(Value::Null)});
+            }
+        }
         if matches!(
             op["op"].as_str(),
             Some("clear" | "set" | "draw" | "copy" | "create")
@@ -785,7 +808,9 @@ impl TjsHost for KrkrHost {
             .chain(self.menu_popups.iter().map(|(h, _)| h))
             .chain(self.image_job.iter().map(|(h, ..)| h));
         out.extend(ids.map(|h| ObjectHandle(*h)));
+        for pending in &self.composite_pending { out.extend(pending.layers()); }
         if let Some(pair)=&self.image_pair{out.extend([ObjectHandle(pair.target),ObjectHandle(pair.source)]);}
+        if let Some(save)=&self.image_save{out.push(ObjectHandle(save.layer));}
         out.extend(self.mouse.hover.into_iter().chain(self.mouse.capture).map(ObjectHandle));
         out.extend(self.deferred.targets(self.client).map(|t| ObjectHandle((t >> 2) as usize)));
         self.layer_movies.gc_roots(out);
@@ -861,12 +886,16 @@ impl TjsHost for KrkrHost {
         }
     }
 
-    fn read_text(&mut self, name: &str, _mode: &str) -> TjsResult<String> {
+    fn read_text(&mut self, name: &str, mode: &str) -> TjsResult<String> {
         let bytes = self
             .storage()?
             .read_named(name)
             .map_err(|e| TjsError::runtime(format!("{e:#}")))?;
-        decode_text(&bytes).map_err(|e| TjsError::runtime(format!("{name}: {e:#}")))
+        let (_, offset) = split_stream_offset(mode)?;
+        let bytes = bytes.get(offset..).ok_or_else(|| {
+            TjsError::runtime(format!("{name}: text stream offset {offset} is past the file end"))
+        })?;
+        decode_text(bytes).map_err(|e| TjsError::runtime(format!("{name}: {e:#}")))
     }
 
     fn read_binary(&mut self, name: &str, _mode: &str) -> TjsResult<Vec<u8>> {
@@ -876,7 +905,24 @@ impl TjsHost for KrkrHost {
     }
 
     fn write_text(&mut self, name: &str, mode: &str, text: &str) -> TjsResult<()> {
-        let data = encode_native_text(text,mode)?;
+        let (codec, offset) = split_stream_offset(mode)?;
+        let encoded = encode_native_text(text, &codec)?;
+        if offset == 0 {
+            return self.begin_native_write(name, encoded);
+        }
+        // `o<N>` keeps the file's first N bytes: KAG bookmarks are a thumbnail image
+        // with the save data behind it. Atomic writes make this one whole-file commit.
+        if !self.writes.is_empty() {
+            return Err(TjsError::runtime(
+                "text stream offset write requires its prefix to be committed first",
+            ));
+        }
+        let mut data = self
+            .storage()?
+            .read_named(name)
+            .map_err(|e| TjsError::runtime(format!("{e:#}")))?;
+        data.resize(offset, 0);
+        data.extend_from_slice(&encoded);
         self.begin_native_write(name, data)
     }
     fn write_binary(&mut self, name: &str, mode: &str, bytes: &[u8]) -> TjsResult<()> {
@@ -919,6 +965,18 @@ impl KrkrHost {
     }
 }
 
+/// Split krkr's `o<N>` stream offset out of a text mode, leaving the codec letters.
+pub(crate) fn split_stream_offset(mode: &str) -> TjsResult<(String, usize)> {
+    let Some((codec, rest)) = mode.split_once('o') else {
+        return Ok((mode.to_owned(), 0));
+    };
+    let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+    let offset = rest[..digits]
+        .parse::<usize>()
+        .map_err(|_| TjsError::runtime(format!("text stream offset in mode {mode:?}")))?;
+    Ok((format!("{codec}{}", &rest[digits..]), offset))
+}
+
 /// Native mode-string policy around the reusable text stream codec.
 pub(crate) fn encode_native_text(text:&str,mode:&str)->TjsResult<Vec<u8>> {
     use crysirror_resource::text_stream::TextWriteMode;
@@ -930,4 +988,16 @@ pub(crate) fn encode_native_text(text:&str,mode:&str)->TjsResult<Vec<u8>> {
         _=>return Err(TjsError::runtime("native text offset/unknown compression mode is unsupported")),
     };
     crysirror_resource::text_stream::encode(text,encoding,64*1024*1024).map_err(|e|TjsError::runtime(format!("text stream encoding: {e:#}")))
+}
+#[cfg(test)]
+mod stream_offset_tests {
+    use super::split_stream_offset;
+    #[test]
+    fn offset_is_split_from_the_codec_letters() {
+        assert_eq!(split_stream_offset("zo32454").unwrap(), ("z".into(), 32454));
+        assert_eq!(split_stream_offset("o12z").unwrap(), ("z".into(), 12));
+        assert_eq!(split_stream_offset("z9").unwrap(), ("z9".into(), 0));
+        assert_eq!(split_stream_offset("").unwrap(), ("".into(), 0));
+        assert!(split_stream_offset("zo").is_err());
+    }
 }

@@ -2,7 +2,7 @@
 //! Native Print/overlap dependency ordering. Rasterisation, dynamic patterns,
 //! weighted mixing and publication resources are all engine services.
 use crate::native_effects::{FadeInState, LayerGreyState, SunaState};
-use anyhow::{bail, ensure, Result};
+use anyhow::{Result, bail, ensure};
 use crysirror_core::{
     image_processing::{ImageInput, ImageJob, ImageProcessState, ImageResource},
     service::{
@@ -20,12 +20,42 @@ use std::{
 pub enum NativeFrameEffect {
     /// A native picture/fill at its original painter position. All pixel work is shared.
     Paint(crysirror_core::image_processing::ImageCompositeLayer),
+    Move(MoveFrame),
     Suna(SunaState),
     Fade(FadeInState),
     Grey(LayerGreyState),
     Chara(CharaTransFrame),
     Lamp(OldLampFrame),
     Bura(crate::native_bura::BuraState),
+}
+#[derive(Clone)]
+pub struct MoveFrame {
+    pub slot: i32,
+    pub state: crate::native_move::NativeMoveState,
+    pub source: Option<Arc<dyn ImageResource>>,
+    pub math: crysirror_core::image_processing::ImageCompositeMath,
+    pub visible: bool,
+}
+impl MoveFrame {
+    fn paint(&self) -> Option<crysirror_core::image_processing::ImageCompositeLayer> {
+        if !self.visible {
+            return None;
+        }
+        let image = self.source.as_ref()?;
+        let [x, y, w, h] = self.state.rectangles.destination;
+        let [sx, sy, _, _] = self.state.rectangles.source;
+        if w <= 0 || h <= 0 {
+            return None;
+        }
+        Some(crysirror_core::image_processing::ImageCompositeLayer {
+            input: Box::new(ImageInput::Resource(image.clone())),
+            source: [sx, sy, w, h],
+            destination: [x, y],
+            clip: None,
+            opacity: 255,
+            math: self.math,
+        })
+    }
 }
 /// The native state selects a shared immutable source and rectangle. Image
 /// graph workers perform the complete raster operation, including clipping.
@@ -59,7 +89,12 @@ pub fn ordered_frame_plan(
             plan.push(NativeFrameEffect::Paint(layer.clone()));
         }
         if let Some(effect) = effects.get(&slot) {
-            if visible.contains(&slot) || matches!(effect, NativeFrameEffect::Lamp(_)) {
+            if visible.contains(&slot)
+                || matches!(
+                    effect,
+                    NativeFrameEffect::Lamp(_) | NativeFrameEffect::Move(_)
+                )
+            {
                 plan.push(effect.clone());
             }
         }
@@ -70,9 +105,16 @@ fn prepare_calcu(
     effects: &mut [NativeFrameEffect],
     random: &mut PatternRng,
     calcu: bool,
+    moves: &mut BTreeMap<i32, crate::native_move::NativeMoveState>,
 ) -> Result<BTreeMap<i32, crate::native_old_lamp::OldLampState>> {
     let mut updates = BTreeMap::new();
     for effect in effects {
+        if let NativeFrameEffect::Move(frame) = effect {
+            if calcu {
+                frame.state.calcu(frame.source.is_some());
+            }
+            moves.insert(frame.slot, frame.state.clone());
+        }
         if let NativeFrameEffect::Lamp(frame) = effect {
             if calcu {
                 frame.state.calcu(random)?;
@@ -97,6 +139,7 @@ pub struct NativeFrameResult {
     pub shared_pattern: Option<Arc<dyn PatternResource>>,
     pub base: Arc<dyn ImageResource>,
     pub lamp_updates: BTreeMap<i32, crate::native_old_lamp::OldLampState>,
+    pub move_updates: BTreeMap<i32, crate::native_move::NativeMoveState>,
 }
 pub struct NativeFrameWork {
     client: ClientId,
@@ -111,6 +154,7 @@ pub struct NativeFrameWork {
     pub api_calls: u64,
     base: Option<Arc<dyn ImageResource>>,
     lamp_updates: BTreeMap<i32, crate::native_old_lamp::OldLampState>,
+    move_updates: BTreeMap<i32, crate::native_move::NativeMoveState>,
 }
 impl NativeFrameWork {
     pub fn begin(
@@ -123,7 +167,8 @@ impl NativeFrameWork {
         host: &mut dyn HostServices,
     ) -> Result<Self> {
         random.validate()?;
-        let lamp_updates = prepare_calcu(&mut effects, &mut random, false)?;
+        let mut move_updates = BTreeMap::new();
+        let lamp_updates = prepare_calcu(&mut effects, &mut random, false, &mut move_updates)?;
         let work = if old.is_some() {
             Work::Base(host.begin_canvas_image(client, base_canvas)?)
         } else {
@@ -142,6 +187,7 @@ impl NativeFrameWork {
             api_calls: 1,
             base: None,
             lamp_updates,
+            move_updates,
         })
     }
     pub fn begin_draw(
@@ -153,7 +199,8 @@ impl NativeFrameWork {
         host: &mut dyn HostServices,
     ) -> Result<Self> {
         random.validate()?;
-        let lamp_updates = prepare_calcu(&mut effects, &mut random, calcu)?;
+        let mut move_updates = BTreeMap::new();
+        let lamp_updates = prepare_calcu(&mut effects, &mut random, calcu, &mut move_updates)?;
         Ok(Self {
             client,
             base_canvas,
@@ -167,18 +214,39 @@ impl NativeFrameWork {
             api_calls: 1,
             base: None,
             lamp_updates,
+            move_updates,
         })
     }
     pub fn with_base(
         client: ClientId,
         base: Arc<dyn ImageResource>,
+        effects: Vec<NativeFrameEffect>,
+        random: PatternRng,
+        host: &mut dyn HostServices,
+    ) -> Result<Self> {
+        Self::with_base_policy(client, base, effects, random, true, host)
+    }
+    pub(crate) fn with_saved_base(
+        client: ClientId,
+        base: Arc<dyn ImageResource>,
+        effects: Vec<NativeFrameEffect>,
+        random: PatternRng,
+        host: &mut dyn HostServices,
+    ) -> Result<Self> {
+        Self::with_base_policy(client, base, effects, random, false, host)
+    }
+    fn with_base_policy(
+        client: ClientId,
+        base: Arc<dyn ImageResource>,
         mut effects: Vec<NativeFrameEffect>,
         mut random: PatternRng,
+        calcu: bool,
         host: &mut dyn HostServices,
     ) -> Result<Self> {
         ensure!(base.client() == client, "NNN cached base resource scope");
         random.validate()?;
-        let lamp_updates = prepare_calcu(&mut effects, &mut random, true)?;
+        let mut move_updates = BTreeMap::new();
+        let lamp_updates = prepare_calcu(&mut effects, &mut random, calcu, &mut move_updates)?;
         let mut job = Self {
             client,
             base_canvas: 0,
@@ -190,6 +258,7 @@ impl NativeFrameWork {
             pattern: None,
             work: None,
             lamp_updates,
+            move_updates,
             ready: None,
             api_calls: 0,
         };
@@ -205,10 +274,23 @@ impl NativeFrameWork {
                 shared_pattern: self.pattern.clone(),
                 base: self.base.clone().unwrap(),
                 lamp_updates: self.lamp_updates.clone(),
+                move_updates: self.move_updates.clone(),
             });
             return Ok(());
         };
         self.work = Some(match effect {
+            NativeFrameEffect::Move(frame) => {
+                let Some(layer) = frame.paint() else {
+                    return self.next(host);
+                };
+                Work::Effect(host.image_metadata(self.client)?.begin_process(
+                    ImageInput::Composite {
+                        base: Box::new(ImageInput::Resource(self.current.clone().unwrap())),
+                        layers: vec![layer],
+                    },
+                    b"[]".as_slice().into(),
+                )?)
+            }
             NativeFrameEffect::Paint(layer) => {
                 let input = ImageInput::Composite {
                     base: Box::new(ImageInput::Resource(self.current.clone().unwrap())),

@@ -1,6 +1,6 @@
 // Distributed under the GNU Affero General Public License, version 3 or
 // (at your option) any later version, https://www.gnu.org/licenses/agpl-3.0.html.
-//! `krkr` VmAdapter: runs original TJS2 scripts on the vendored Kirakira VM
+//! `krkr` VmAdapter: runs original TJS2 scripts through `crysirror-tjs2`
 //! and translates KiriKiri native objects onto engine Layer/Canvas services.
 use crate::{
     host::{Batch, KrkrHost},
@@ -223,6 +223,9 @@ impl KrkrVm {
             && let Some(path) = rt.host().storage.as_ref().and_then(|s| s.resolve(&exe))
         {
             let bytes = rt.host().storage.as_ref().unwrap().read_limited(&path, 64 << 20)?;
+            if let Some(bits) = crate::exe_options::pe_bits(&bytes) {
+                rt.host_mut().exe_bits = bits;
+            }
             let options = crate::exe_options::parse(&bytes)
                 .with_context(|| format!("{exe}: embedded options"))?;
             if !options.is_empty() {
@@ -395,6 +398,16 @@ impl KrkrVm {
             .with_context(|| format!("TJS event {method}"))
     }
 
+    fn layer_key(&mut self, window: ObjectHandle, event: &'static str, key: i64, shift: i64) -> Result<()> {
+        let rt = self.rt.as_mut().context("KiriKiri runtime absent")?;
+        if !rt.object_valid(window) {
+            return Ok(());
+        }
+        crate::native_members::primary_key(rt, window, event, key, shift)
+            .map_err(|e| anyhow::anyhow!("{e}"))
+            .with_context(|| format!("TJS layer event {event}"))
+    }
+
     fn observe_focus(&mut self, host:&dyn HostServices)->Result<()> {
         let focus=host.window_focused(self.client).map_err(err)?;
         let previous=std::mem::replace(&mut self.last_focus,focus);
@@ -489,6 +502,7 @@ impl KrkrVm {
                             Some(crysirror_core::image_processing::ImageInput::Solid{..})=>"solid".into(),
                             Some(crysirror_core::image_processing::ImageInput::Composite{..})=>"composite".into(),
                             Some(crysirror_core::image_processing::ImageInput::Raster{..})=>"raster".into(),
+                            Some(crysirror_core::image_processing::ImageInput::Ternary{..})=>"three-input image".into(),
                             Some(crysirror_core::image_processing::ImageInput::Transition{..})=>"transition".into(),
                             Some(crysirror_core::image_processing::ImageInput::Resource(_))=>"resource".into(),
                             None=>"composed canvas".into(),
@@ -578,6 +592,13 @@ impl KrkrVm {
     fn input(&mut self, input: InputFrame) -> Result<()> {
         self.rt.as_mut().unwrap().host_mut().input = input;
         self.rt.as_mut().unwrap().host_mut().input.buttons_down |= input.buttons_pressed;
+        // System.eventDisabled: TVPPostInputEvent discards input events
+        // (EventIntf.cpp:778); the device state itself stays current.
+        if self.rt.as_ref().unwrap().host().event_disabled {
+            self.last_down = input.buttons_down;
+            self.last_pointer = [input.pointer_x, input.pointer_y];
+            return Ok(());
+        }
         let rt = self.rt.as_mut().context("KiriKiri runtime absent")?;
         let window = rt
             .host()
@@ -672,6 +693,9 @@ impl KrkrVm {
                     "onKeyDown",
                     vec![Variant::Integer(key), Variant::Integer(flags)],
                 )?;
+                // tTJSNI_BaseWindow::OnKeyDown then hands the key to the
+                // layer manager (focused layer, else primary default).
+                self.layer_key(window, "onKeyDown", key, flags)?;
             }
             if input.buttons_down & bit == 0 && (self.last_down | input.buttons_pressed) & bit != 0
             {
@@ -681,6 +705,19 @@ impl KrkrVm {
                     "onKeyUp",
                     vec![Variant::Integer(key), Variant::Integer(flags)],
                 )?;
+                self.layer_key(window, "onKeyUp", key, flags)?;
+            }
+        }
+        // WM_MOUSEWHEEL: one WHEEL_DELTA (120) notch per engine wheel press,
+        // positive away from the user (tTJSNI_BaseWindow::OnMouseWheel).
+        for (bit, delta) in [(buttons::WHEEL_UP, 120), (buttons::WHEEL_DOWN, -120)] {
+            if input.buttons_pressed & bit != 0 {
+                self.call(window, "onMouseWheel",
+                    [flags, delta, x, y].map(Variant::Integer).to_vec())?;
+                if self.rt.as_ref().unwrap().object_valid(window) {
+                    crate::native_members::primary_wheel(self.rt.as_mut().unwrap(), window, flags, delta, x, y)
+                        .map_err(|e| anyhow::anyhow!("{e}")).context("TJS event onMouseWheel")?;
+                }
             }
         }
         self.rt.as_mut().unwrap().host_mut().input = input;
@@ -692,6 +729,7 @@ impl KrkrVm {
         use crysirror_core::deferred_dispatch::DispatchPhase;
         let rt = self.rt.as_mut().unwrap();
         let mut due = vec![];
+        let disabled = rt.host().event_disabled;
         for (id, t) in &mut rt.host_mut().timers {
             if !t.enabled || t.interval == 0 || now < t.next {
                 continue;
@@ -705,6 +743,11 @@ impl KrkrVm {
                         .context("timer deadline overflow")?,
                 )
                 .context("timer deadline overflow")?;
+            // Timer events are discardable posts: dropped, not deferred,
+            // while System.eventDisabled is set.
+            if disabled {
+                continue;
+            }
             for _ in 0..missed.min(t.capacity.max(1)) {
                 ensure!(due.len() < 4096, "native timer callback budget");
                 due.push((*id, t.mode));
@@ -890,7 +933,7 @@ impl KrkrVm {
             if phase == 1 {
                 let batch = self.inbox.read(self.client.0, 1)?;
                 let frame = batch.samples.first().map_or(input, |s| s.frame);
-                if !crate::image_api::prepare_hit_images(self.rt.as_mut().unwrap(), frame)? {
+                if !crate::image_api::prepare_hit_images(self.rt.as_mut().unwrap(), h, self.client, frame)? {
                     return Ok(VmYield::BudgetExhausted);
                 }
                 self.pass.as_mut().unwrap().phase = 2;
@@ -965,6 +1008,14 @@ fn err(e: Error) -> anyhow::Error {
 }
 
 impl VmAdapter for KrkrVm {
+    fn presentation_pending(&self) -> bool {
+        self.rt.as_ref().is_some_and(|rt| {
+            // A native modal must be shown so the owner can answer it. Resource
+            // suspension, in contrast, must not expose a half-redrawn text cell.
+            rt.host().dialog_pending.is_none()
+                && (rt.is_suspended() || self.pass.is_some())
+        })
+    }
     fn engine_id(&self) -> &'static str {
         "krkr"
     }
@@ -1080,7 +1131,7 @@ impl VmAdapter for KrkrVm {
             "plugin_shells": host.map(|h| &h.plugin_shells),
             "engine_api_calls": host.map(|h| h.api_calls),
             "events": self.events,
-            "log_tail": host.map(|h| h.log.iter().rev().take(16).cloned().collect::<Vec<_>>()),
+            "log_tail": host.map(|h| h.log.iter().rev().take(std::env::var("CRYSIRROR_KRKR_LOG_TAIL").ok().and_then(|n| n.parse().ok()).unwrap_or(16)).cloned().collect::<Vec<_>>()),
             "error": self.last_error,
             "rendering": "engine retained Layer/Canvas",
             "owns_framebuffer": false,
@@ -1110,3 +1161,7 @@ impl crysirror_runtime::runtime::VmFactory for KrkrFactory {
 pub fn register(r: &mut crysirror_runtime::AdapterRegistry) -> Result<()> {
     r.register("krkr", Arc::new(KrkrFactory))
 }
+
+#[cfg(test)]
+#[path = "presentation_tests.rs"]
+mod presentation_tests;

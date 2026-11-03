@@ -1105,9 +1105,10 @@ pub struct GlobalState {
     pub pending_button_actions: Vec<PendingButtonAction>,
 
     /// Stage UI subsystem state keyed by the stage form ID.
-    /// Boxed: `with_stage_state` takes a state out of the map around each
-    /// stage operation, which moved the whole struct twice per op.
-    pub stage_forms: HashMap<u32, Box<StageFormState>>,
+    /// Copy-on-write (boxed before): `with_stage_state` takes a state out of
+    /// the map around each stage operation, and instruction checkpoints share
+    /// untouched stages.
+    pub stage_forms: HashMap<u32, crate::shared::Shared<StageFormState>>,
     /// Currently focused stage group selection (form_id, stage_idx, group_idx).
     pub focused_stage_group: Option<(u32, i64, usize)>,
     /// Currently focused message-window selection (form_id, stage_idx, mwnd_idx).
@@ -4216,7 +4217,9 @@ pub struct ObjectPropLists {
     pub y_rep: Vec<i64>,
     pub z_rep: Vec<i64>,
     pub tr_rep: Vec<i64>,
-    pub f: Vec<i64>,
+    /// Immutable checkpoint generations share storage; native writes detach.
+    /// Serde Arc remains transparent to the existing Vec binary layout.
+    pub f: Arc<Vec<i64>>,
 }
 
 impl ObjectPropLists {
@@ -4229,7 +4232,7 @@ impl ObjectPropLists {
         // default size 0 and calls m_op.f.reinit() from C_elm_object::init_param().
         // Reinitializing therefore restores size 0 rather than preserving the
         // previous allocation and only zeroing its contents.
-        self.f.clear();
+        Arc::make_mut(&mut self.f).clear();
     }
 }
 
@@ -4245,6 +4248,9 @@ pub struct ObjectRectParam {
 
 #[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ObjectRuntimeState {
+    pub(crate) native_text:Option<crate::native_string::Definition>,
+    #[serde(skip)]
+    pub(crate) native_text_size:Option<[u32;2]>,
     /// NUMBER digit offsets relative to the object; None marks unused slots.
     pub number_sprite_offsets: Vec<Option<i32>>,
     pub explicit_int_props: HashSet<i32>,
@@ -4411,6 +4417,8 @@ impl ObjectState {
     ///
     /// Important: this does NOT clear button/groups/events (those are part of init_param/reinit in the original implementation).
     pub fn init_type_like(&mut self) {
+        self.runtime.native_text=None;
+        self.runtime.native_text_size=None;
         self.backend = ObjectBackend::None;
         self.file_name = None;
         self.string_value = None;
@@ -4543,6 +4551,15 @@ impl ObjectState {
         if cnt > self.weather_work.cnt_max {
             self.weather_work.cnt_max = cnt;
         }
+    }
+
+    /// Pinned stage reinit path: retire the old subtree and type, reset
+    /// parameters, but retain the receiver's stable native runtime identity.
+    /// This path resets action state; explicit stage finish/END is separate.
+    pub(crate) fn reinit_like(&mut self) {
+        self.runtime.child_objects.clear();
+        self.init_type_like();
+        self.init_param_like();
     }
 
     pub fn init_param_like(&mut self) {
@@ -4729,7 +4746,7 @@ impl ObjectState {
         op: i32,
     ) -> Option<&'a mut Vec<i64>> {
         if ids.obj_f != 0 && op == ids.obj_f {
-            Some(&mut self.runtime.prop_lists.f)
+            Some(Arc::make_mut(&mut self.runtime.prop_lists.f))
         } else {
             None
         }
@@ -5998,7 +6015,7 @@ pub struct StageFormState {
     pub quake_lists: HashMap<i64, Vec<ScreenQuakeState>>,
     // --- OBJECT / OBJECTLIST ---
     /// Per-stage object state (string objects, rect objects, nested child objects, etc.).
-    pub object_lists: HashMap<i64, Vec<ObjectState>>,
+    pub object_lists: HashMap<i64, crate::shared::Shared<Vec<ObjectState>>>,
     /// Fixed per-slot C++ `C_elm_object::m_op_def.use_flag` values.
     ///
     /// These belong to the destination object-list slot itself.  They are
@@ -6990,7 +7007,7 @@ impl StageFormState {
     }
 
     pub fn ensure_object_list(&mut self, stage_idx: i64, cnt: usize) {
-        let entry = self.object_lists.entry(stage_idx).or_default();
+        let entry = &mut **self.object_lists.entry(stage_idx).or_default();
         if entry.len() < cnt {
             entry.extend((0..(cnt - entry.len())).map(|_| ObjectState::default()));
         } else if entry.len() > cnt {
@@ -7312,6 +7329,7 @@ impl GlobalState {
         let Some(st) = self.stage_forms.get_mut(&stage_form_id) else {
             return;
         };
+        let st = &mut **st;
 
         let mut object_stage_ids: Vec<i64> = st.object_lists.keys().copied().collect();
         object_stage_ids.sort_unstable();

@@ -1,12 +1,10 @@
 // Distributed under the GNU Affero General Public License, version 3 or
 // (at your option) any later version, https://www.gnu.org/licenses/agpl-3.0.html.
-//! Optional KiriKiri (吉里吉里) adapter (ADR 0053).
+//! KiriKiri (吉里吉里) adapter over CrySirror services (ADR 0053).
 //!
-//! Original TJS2 scripts run on the vendored Kirakira VM (`crysirror-tjs2`,
-//! AGPL-3.0-or-later). KiriKiri's native classes are translated onto engine
-//! Layer/Canvas services, the engine clock and capability storage; there is
-//! no KiriKiri renderer, compositor or mixer in this crate. Because of the
-//! upstream licence this crate is not part of the default desktop build.
+//! Original TJS2 scripts execute through `crysirror-tjs2`; KAG scenarios use
+//! `crysirror-kag`. Native objects map onto shared Layer/Canvas, clock, audio
+//! and capability-storage services. The desktop links this adapter directly.
 #![forbid(unsafe_code)]
 // TjsError is the vendored VM's error type; its size is not ours to change.
 #![allow(clippy::result_large_err)]
@@ -20,6 +18,7 @@ mod kag_save;
 pub mod host;
 mod menus;
 pub mod natives;
+mod native_members;
 mod native_mouse;
 mod plugins;
 mod sound;

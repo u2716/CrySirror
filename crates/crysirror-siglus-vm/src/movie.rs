@@ -18,6 +18,8 @@ pub struct MovieManager {
     pub(crate) ready: bool,
     #[serde(skip)]
     pub(crate) live: bool,
+    #[serde(skip)]
+    pub(crate) gain: Option<f32>,
 }
 impl MovieManager {
     pub fn stop(&mut self) {
@@ -27,6 +29,7 @@ impl MovieManager {
         self.live = false;
         self.ready = false;
         self.surface = None;
+        self.gain = None;
     }
     pub(crate) fn play(&mut self, name: &str) -> Result<()> {
         ensure!(
@@ -38,6 +41,7 @@ impl MovieManager {
         self.live = true;
         self.ready = false;
         self.surface = None;
+        self.gain = None;
         Ok(())
     }
     pub fn prepare(&mut self, _: &str) -> Result<()> {

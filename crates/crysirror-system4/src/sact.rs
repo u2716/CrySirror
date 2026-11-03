@@ -13,6 +13,7 @@ pub struct Sact {
     pub font_ready: bool,
     pub audio_ready: bool,
     pub calls: u64,
+    pub sprites: Option<crate::sprites::Sprites>,
 }
 impl Sact {
     pub fn new(canvas: [u32; 2], font_aliases: [String; 2]) -> Result<Self> {
@@ -32,6 +33,7 @@ impl Sact {
             font_ready: false,
             audio_ready: false,
             calls: 0,
+            sprites: None,
         })
     }
     pub fn init(&mut self, client: ClientId, host: &mut dyn HostServices) -> Result<i32> {
@@ -55,16 +57,18 @@ impl Sact {
         // Runtime owns the already constructed device-free channel mixer. No
         // device or prepared voice is fabricated to acknowledge initialization.
         host.audio_playing(client, 0)?;
+        let sprites = crate::sprites::Sprites::new(client, self.canvas)?;
         let [w, h] = self.canvas;
         let batch = json!({"canvases":[
             {"op":"create","id":1,"width":w,"height":h},
             {"op":"clear","id":1,"color":[0,0,0,255]}
         ],"layers":[
-            {"op":"put","layer":{"id":1,"rect":[0,0,w,h],"paint":{"kind":"solid","color":[0,0,0,255]},"order":[-2147483648,0]}},
+            {"op":"put","layer":{"id":1,"rect":[0,0,w,h],"paint":{"kind":"solid","color":[0,0,0,255]},"order":[-2147483648,-2147483648]}},
             {"op":"put","layer":{"id":16,"rect":[0,0,w,h],"paint":{"kind":"solid","color":[0,0,0,0]},"visible":false}}
         ]});
         host.submit_engine(client, 1, &serde_json::to_vec(&batch)?)?;
         self.owner = Some(client);
+        self.sprites = Some(sprites);
         self.font_ready = true;
         self.audio_ready = true;
         self.initialized = true;

@@ -229,16 +229,178 @@ fn overwriting_buffer_zero_removes_the_glyphs_standing_there() {
     assert_eq!(diag(&r)["glyphs"], 0, "{}", diag(&r));
 }
 
-#[test]
-fn movies_report_the_missing_shared_decoder_instead_of_decoding_privately() {
-    let mut code = vec![0x0e, 0x50];
+fn riff_chunk(id: &[u8; 4], body: Vec<u8>) -> Vec<u8> {
+    let mut out = id.to_vec();
+    out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+    let odd = body.len() % 2 == 1;
+    out.extend(body);
+    if odd {
+        out.push(0);
+    }
+    out
+}
+
+fn riff_list(kind: &[u8; 4], body: Vec<u8>) -> Vec<u8> {
+    let mut payload = kind.to_vec();
+    payload.extend(body);
+    riff_chunk(b"LIST", payload)
+}
+
+/// A Cinepak AVI (three 100 ms frames) with a PCM audio track.
+fn cinepak_avi() -> Vec<u8> {
+    let (w, h) = (32u32, 16u32);
+    let rgb: Vec<u8> = (0..w * h).flat_map(|_| [10u8, 200, 30]).collect();
+    let frame = oxideav_cinepak::encode_rgb24(&rgb, w, h, Default::default()).unwrap();
+    let mut video_strf = vec![0u8; 40];
+    video_strf[16..20].copy_from_slice(b"cvid");
+    let mut audio_strf = vec![0u8; 16];
+    audio_strf[0..2].copy_from_slice(&1u16.to_le_bytes());
+    audio_strf[2..4].copy_from_slice(&2u16.to_le_bytes());
+    audio_strf[4..8].copy_from_slice(&22_050u32.to_le_bytes());
+    audio_strf[14..16].copy_from_slice(&16u16.to_le_bytes());
+    let strl = |kind: &[u8; 4], strf: Vec<u8>| {
+        riff_list(b"strl", [riff_chunk(b"strh", kind.to_vec()), riff_chunk(b"strf", strf)].concat())
+    };
+    let hdrl = riff_list(
+        b"hdrl",
+        [
+            riff_chunk(b"avih", 100_000u32.to_le_bytes().to_vec()),
+            strl(b"vids", video_strf),
+            strl(b"auds", audio_strf),
+        ]
+        .concat(),
+    );
+    let mut movi = Vec::new();
+    for _ in 0..3 {
+        movi.extend(riff_chunk(b"00dc", frame.clone()));
+        movi.extend(riff_chunk(b"01wb", vec![0; 8820]));
+    }
+    let mut body = b"AVI ".to_vec();
+    body.extend(hdrl);
+    body.extend(riff_list(b"movi", movi));
+    riff_chunk(b"RIFF", body)
+}
+
+/// `0x0e:52 "OP" rect` (blocking movie), then `0x3b` sets value 1 to 7.
+fn movie_scene() -> Vec<u8> {
+    let mut code = vec![0x0e, 0x52];
     code.extend(b"OP\0");
+    for value in [0, 0, 639, 479] {
+        code.extend(number(value));
+    }
+    code.push(0x3b);
+    code.extend(number(1));
+    code.extend(number(7));
     code.extend([0x60, 0x20]);
-    let (temp, mut r) = fixture(&code);
+    code
+}
+
+#[test]
+fn cinepak_movies_play_through_the_shared_video_service() {
+    let (temp, mut r) = fixture(&movie_scene());
+    std::fs::write(temp.path().join("assets/game/DAT/OP.AVI"), cinepak_avi()).unwrap();
+    ticks(&mut r, 3, InputFrame::default());
+    let d = diag(&r);
+    assert_eq!(d["warnings"], json!([]), "{d}");
+    // Movie PCM is an engine audio channel; the scenario waits for the movie.
+    assert!(d["recent_audio"].to_string().contains("play"), "{d}");
+    let waiting = d["position"].as_u64().unwrap();
+    ticks(&mut r, 60, InputFrame::default());
+    let d = diag(&r);
+    assert_eq!(d["warnings"], json!([]), "{d}");
+    assert!(d["position"].as_u64().unwrap() > waiting, "{d}");
+    // The last Cinepak frame (green) was stretched over buffer 0.
+    let pixel = screen_pixel(&r, 320, 240);
+    assert!(pixel[1] > 150 && pixel[0] < 90, "{pixel:?}");
+}
+
+#[test]
+fn malformed_movies_fail_visibly() {
+    let (temp, mut r) = fixture(&movie_scene());
     std::fs::write(temp.path().join("assets/game/DAT/OP.AVI"), b"RIFF").unwrap();
     ticks(&mut r, 10, InputFrame::default());
     let warnings = diag(&r)["warnings"].to_string();
-    assert!(warnings.contains("shared engine video decoder"), "{warnings}");
+    assert!(warnings.contains("movie OP"), "{warnings}");
+}
+
+/// Presented screen pixel (the adapter's dynamic surface slot).
+fn screen_pixel(r: &Runtime, x: usize, y: usize) -> [u8; 4] {
+    let surface = r
+        .assets
+        .surface(ClientId(1), &format!("__surface/{}", 0x4156_0000u32))
+        .expect("presented screen");
+    let at = (y * surface.width as usize + x) * 4;
+    surface.rgba[at..at + 4].try_into().unwrap()
+}
+
+/// A self-authored precomputed coverage face: 'A' is glyph 1, 2x2 pixels.
+fn authored_font(r: &mut Runtime) {
+    use crysirror_core::service::{FontLoadSource, FontLoadSpec, FontLoadState};
+    let mut b = b"TVP pre-rendered font\x1a".to_vec();
+    b.extend([1, 2]);
+    b.extend(1u32.to_le_bytes());
+    b.extend(36u32.to_le_bytes());
+    b.extend(38u32.to_le_bytes());
+    b.extend((b'A' as u16).to_le_bytes());
+    b.extend(58u32.to_le_bytes());
+    for v in [2i16, 2, -1, 2, 3, 0, 4, 0] {
+        b.extend(v.to_le_bytes());
+    }
+    b.extend([32, 0x43]);
+    let fonts = r.host.font_library(ClientId(1)).unwrap();
+    let job = fonts
+        .begin(FontLoadSpec {
+            name: "default".into(),
+            source: FontLoadSource::PrecomputedBytes { bytes: b.into(), pixel_size: 24 },
+            face_index: 0,
+        })
+        .unwrap();
+    let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        match fonts.status(job).unwrap() {
+            FontLoadState::Ready(_) => break,
+            FontLoadState::Failed(e) => panic!("{e:?}"),
+            FontLoadState::Pending => {
+                assert!(std::time::Instant::now() < end);
+                std::thread::yield_now();
+            }
+        }
+    }
+}
+
+#[test]
+fn work_buffer_text_becomes_buffer_pixels_through_engine_glyph_images() {
+    // `0x66` "A" in white into buffer 1, then `0x67:01` copies buffer 1 to 0.
+    let mut code = vec![0x66, 0x01];
+    for value in [100, 100, 1, 255, 255, 255] {
+        code.extend(number(value));
+    }
+    code.extend([0xff, b'A', 0, 0]);
+    code.extend([0x67, 0x01]);
+    for value in [0, 0, 639, 479, 1, 0, 0, 0] {
+        code.extend(number(value));
+    }
+    code.extend([0x60, 0x20]);
+    let (temp, mut r) = fixture(&code);
+    let ini = temp.path().join("assets/game/GAMEEXE.INI");
+    std::fs::write(&ini, GAMEEXE.replace("#FONT_SIZE=026", "#FONT_SIZE=024")).unwrap();
+    authored_font(&mut r);
+    let mut lit = None;
+    for _ in 0..240 {
+        ticks(&mut r, 1, InputFrame::default());
+        let found = (90..140)
+            .flat_map(|y| (90..140).map(move |x| (x, y)))
+            .find(|&(x, y)| screen_pixel(&r, x, y)[0] > 0);
+        if found.is_some() {
+            lit = found;
+            break;
+        }
+    }
+    let d = diag(&r);
+    assert_eq!(d["warnings"], json!([]), "{d}");
+    assert!(lit.is_some(), "no glyph coverage reached buffer 0: {d}");
+    // Buffer text is pixels in the PDT, not a retained glyph layer.
+    assert_eq!(d["glyphs"], 0, "{d}");
 }
 
 #[test]

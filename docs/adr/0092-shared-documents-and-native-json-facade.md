@@ -1,7 +1,7 @@
 # ADR 0092: Shared document grammar and native JSON facade
 
 Date: 2026-10-28
-Status: Accepted for the bounded profile below
+Status: implemented bounded document/native JSON profile; async read boundaries remain partial
 
 ## Decision and ownership
 
@@ -10,15 +10,13 @@ reusable engine capabilities. Add `crysirror-runtime::structured_text` with
 DocumentValue, explicit JsonDialect, parse_json and write_json. Values keep exact
 i64, real, text, void, ordered dictionary pairs and arrays. The pure safe Rust
 kernel has no VM, storage, window, renderer or device dependency and is tested
-without a native interpreter. No Kirakira engine/parser or C++ implementation is
-copied. Official source revision and complete review hashes are recorded in
-`docs/krkr-json-source-audit.json`.
+without a native interpreter.
 
 The explicit KiriKiri dialect admits comments, quoted strings/keys, alternative
 separators, trailing separators and empty array slots. `1e5` retains the original
 integer strtoll quirk and becomes integer 1; decimal tokens use real conversion.
 Duplicate keys overwrite the earlier position. Bare-word keys are rejected,
-following the actual C++ parser rather than Kirakira's documented extension.
+following the native JSON grammar.
 The reference's single-value/trailing-input behavior is retained. Pretty output
 uses one-space indentation and CRLF by default, or explicit LF.
 
@@ -49,11 +47,11 @@ async completion or hide this work inside an unrelated worker API.
 
 ## Plugin support claims
 
-`docs/krkr-plugin-audit.md` inventories the 39 DLL files in the user's local
+`docs/krkr-plugin-audit.md` inventories the 39 DLL files in the local
 `game-kr` package. Those files are not an executed dependency list. At the time
 of inventory the real game startup was blocked by HXV4 resource processing.
-Finding a Kirakira compatibility module is not proof of CrySirror support, and
-shared vector/text/audio foundations alone are not completed native mappings.
+Shared vector/text/audio foundations and native plugin mappings are separate
+capabilities.
 
 This batch implements the bounded JSON facade. ADR 0093 separately records the
 solid-linear LayerExDraw mapping. No alternate software rasterizer is imported.

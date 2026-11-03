@@ -2,8 +2,10 @@
 //! Shared archive and transform contracts. No VM, window or device dependency.
 #![forbid(unsafe_code)]
 pub mod compound;
+pub mod dsc;
 pub mod capability_lookup;
 pub mod circus_pck;
+pub mod cg_catalog;
 mod context;
 mod crypto;
 mod jobs;
@@ -76,3 +78,5 @@ pub trait ArchiveFormat: Send + Sync {
         context: &DecodeContext,
     ) -> Result<Box<dyn Archive>>;
 }
+
+pub mod dos_glob;

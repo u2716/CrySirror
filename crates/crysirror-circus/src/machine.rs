@@ -778,13 +778,13 @@ impl Machine {
             0x34 if (1..=4).contains(&a[0])=>{self.state.builder.behavior_flags.insert(216+a[0] as u8);if a[0]==4{self.state.builder.behavior_flags.insert(244);}None},
             0x34 if a[0]==0=>{self.state.current_button.as_mut().context("Circus alpha-hit flag without current button")?.behavior_flags.insert(213);None},
             0x35=>{self.state.current_button.as_mut().context("Circus button flag without current button")?.behavior_flags.insert(214);None}, // sub_412870: builder[214] = 1.
-            0x3d=>{ensure!((0..=5).contains(&a[0]),"Circus system image slot");let slot=a[0] as u8+37;let name=if text=="-"{self.state.image_names.get(&slot).context("Circus retained image undefined")?.clone()}else{text.into()};let event=Event::LoadImage{slot,name:name.clone()};if !host.emit(&event)?{return Ok(Outcome::Pending);}self.state.image_names.insert(slot,name);None},
+            0x3d=>{ensure!((0..=5).contains(&a[0]),"Circus system image slot");let slot=a[0] as u8+37;let name=if text=="-"{self.state.image_names.get(&slot).context("Circus retained image undefined")?.clone()}else{text.into()};let event=Event::LoadImage{slot,name:name.clone()};if !host.emit(&event)?{return Ok(Outcome::Pending);}self.sync_native_event(host,&event)?;self.state.image_names.insert(slot,name);None},
             0x3c if a[0]==0=>None, // Exact native early-return for slot zero.
             0x3c=>{ensure!((1..=29).contains(&a[0]),"Circus staged image slot");ensure!(!text.starts_with('*')&&text!="-S","Circus indirect image resource policy");let slot=a[0] as u8;let event=Event::LoadImage{slot,name:text.into()};if !host.emit(&event)?{return Ok(Outcome::Pending);}self.state.image_names.insert(slot,text.into());self.state.pending_images.insert(slot);None},
             0x49 if text==":r"||text==":n"=>{
                 self.state.callbacks.clear();self.state.native_flags.insert(66512,i32::from(text==":n"));self.state.native_flags.insert(23908,i32::from(text==":n"));None
             },
-            0x49=>{self.state.native_flags.insert(66517,0);ensure!(!text.starts_with(':')&&text!="-S","Circus background display mode");ensure!(host.emit(&Event::ResetScene)?,"Circus scene reset must be synchronous");self.state.builder=Group::default();self.state.current_button=None;self.state.callbacks.clear();self.state.menu_wait=false;self.state.transition_wait=None;self.state.transition_poll_at=None;self.state.wait_animations=false;self.state.assign(99,246,0)?;for slot in &self.state.pending_images {ensure!(host.emit(&Event::DisplayImage{slot:*slot})?,"Circus publication must be synchronous");if let Some((allocation,logical))=host.image_dimensions(*slot)?{self.state.native_live.attach_image(*slot,allocation,logical)?;}else{self.state.native_live.gap(format!("slot{slot} completed image dimensions unavailable"));}}self.state.pending_images.clear();None},
+            0x49=>{self.state.native_flags.insert(66517,0);ensure!(!text.starts_with(':')&&text!="-S","Circus background display mode");ensure!(host.emit(&Event::ResetScene)?,"Circus scene reset must be synchronous");self.state.builder=Group::default();self.state.current_button=None;self.state.callbacks.clear();self.state.menu_wait=false;self.state.transition_wait=None;self.state.transition_poll_at=None;self.state.wait_animations=false;self.state.assign(99,246,0)?;for slot in self.state.pending_images.iter().copied().collect::<Vec<_>>() {let event=Event::DisplayImage{slot};ensure!(host.emit(&event)?,"Circus publication must be synchronous");self.sync_native_event(host,&event)?;}self.state.pending_images.clear();None},
             0x4c|0x4d=>{self.state.pending_audio.retain(|(channel,_,_)|*channel!=8);self.state.pending_audio.push((8,text.into(),true));None},
             // Exact entries of native DC4PH jump table 0x431b10 targeting
             // common continuation 0x430d4a. Not an unknown-opcode fallback.
@@ -818,9 +818,14 @@ impl Machine {
             },
             0x4f|0x50=>{
                 let target=host.scene(text)?;let Some(target)=target else{return Ok(Outcome::Pending);};
+                let Some(previous_index)=host.scene_index(&self.state.scene)? else{return Ok(Outcome::Pending)};
+                // Opcode4f records bank differences only for an indexed old
+                // scene;50 does so unconditionally. Other native scene-reset
+                // fields remain explicit save-projection gaps.
+                if i.opcode==0x50||previous_index>=0 {self.state.native_live.record_scene_bank_changes()?;}
                 self.state.scene=text.into();self.program=Some(target);next=3;None
             },
-            0x63=>{ensure!(self.state.version.len()+text.len()<=128,"Circus version string limit");self.state.version.push_str(text);None},
+            0x63=>{if self.state.native_live.append_version(text)?{self.state.version.push_str(text);}None},
             0x65=>{if text.is_empty(){self.state.voice_prefixes.clear();}else if !self.state.voice_prefixes.iter().any(|s|s.eq_ignore_ascii_case(text)){ensure!(self.state.voice_prefixes.len()<50,"Circus voice prefix count");self.state.voice_prefixes.push(text.into());}None},
             0x68=>Some(Event::Cursor(text.into())),
             0x70 if a[0]==255=>{if !host.emit(&Event::ReleaseMusic{forced:true,steps:30})?{return Ok(Outcome::Pending)}self.state.pending_music=None;self.state.last_music=None;self.state.current_music=0;self.state.native_live.music(255,"")?;None},
@@ -887,11 +892,14 @@ impl Machine {
         match event {
             Event::LoadImage{slot,name}=>self.state.native_live.image_name(*slot,name)?,
             Event::DisplayImage{slot}=>{
+                let name=self.state.image_names.get(slot).context("Circus completed image native name missing")?;
+                self.state.native_live.image_name(*slot,name)?;
                 if let Some((allocation,logical))=host.image_dimensions(*slot)?{self.state.native_live.attach_image(*slot,allocation,logical)?;}
                 else{self.state.native_live.gap(format!("slot{slot} completed image dimensions unavailable"));}
             }
             Event::SpritePosition{slot,position}=>self.state.native_live.position(*slot,*position),
             Event::SpriteScale{slot,percent,pivot}=>self.state.native_live.scale(*slot,*percent,*pivot),
+            Event::FallingEffect{kind,parameter}=>self.state.native_live.falling_effect(*kind,*parameter)?,
             _=>{}
         } Ok(())
     }
@@ -974,6 +982,7 @@ mod tests {
     #[derive(Default)]
     struct Host {
         program: Option<Arc<Program>>,
+        scene_pending: bool,
         events: Vec<Event>,
         pending: bool,
         playing: bool,
@@ -1038,6 +1047,7 @@ mod tests {
             }))
         }
         fn scene(&mut self, _: &str) -> Result<Option<Arc<Program>>> {
+            if self.scene_pending { self.scene_pending = false; return Ok(None); }
             Ok(self.program.clone())
         }
         fn emit(&mut self, e: &Event) -> Result<bool> {
@@ -1164,7 +1174,7 @@ mod tests {
                 0x3d,
                 Arguments::SlotString {
                     slot: 0,
-                    text: "SYSTEM\\MESWIN".into(),
+                    text: "system\\MesWin".into(),
                 },
             ),
             (0xfe, w(0, 0, 0, 0)),
@@ -1173,12 +1183,52 @@ mod tests {
         assert_eq!(m.step(&mut h, 0, false).unwrap(), Outcome::Pending);
         assert_eq!(m.state.pc, 3);
         assert!(m.state.image_names.is_empty());
+        assert_eq!(m.state.native_live.checkpoint(3).unwrap().image_name_bytes(37).unwrap(), b"");
         m.step(&mut h, 0, false).unwrap();
-        assert_eq!(m.state.image_names.get(&37).unwrap(), "SYSTEM\\MESWIN");
+        assert_eq!(m.state.image_names.get(&37).unwrap(), "system\\MesWin");
+        assert_eq!(m.state.native_live.checkpoint(m.state.pc).unwrap().image_name_bytes(37).unwrap(), b"SYSTEM\\MESWIN");
         let before = m.state.pc;
         let error = m.step(&mut h, 0, false).unwrap_err();
         assert!(format!("{error:#}").contains("opcode=0xfe"));
         assert_eq!(m.state.pc, before);
+    }
+    #[test]
+    fn falling_save_policy_waits_for_shared_effect_completion() {
+        let (mut m, mut h) = fixture(vec![(0x28, b(1, 43)), (0x28, b(0, 0))]);
+        let word = |m: &mut Machine, index: usize| {
+            let image = m.state.native_live.checkpoint(m.state.pc).unwrap();
+            let at = index * 4 - crate::native_save::LIVE_BASE;
+            u32::from_le_bytes(image.bytes()[at..at + 4].try_into().unwrap())
+        };
+        h.pending = true;
+        let pc = m.state.pc;
+        assert_eq!(m.step(&mut h, 0, false).unwrap(), Outcome::Pending);
+        assert_eq!(m.state.pc, pc);
+        assert_eq!(word(&mut m, 66337), 0);
+        m.step(&mut h, 1, false).unwrap();
+        assert_eq!(word(&mut m, 66337), 1);
+        assert_eq!(word(&mut m, 66338), 43);
+        m.step(&mut h, 2, false).unwrap();
+        assert_eq!(word(&mut m, 66337), 0);
+        assert_eq!(word(&mut m, 66338), 43);
+        // Other unaudited effect/save fields remain an explicit admission gap.
+        assert!(m.state.native_live.admitted_checkpoint(m.state.pc).is_err());
+    }
+    #[test]
+    fn staged_image_name_enters_native_save_table_only_when_published() {
+        let (mut m, mut h) = fixture(vec![
+            (0x3c, Arguments::SlotString { slot: 4, text: "bst\\Hero".into() }),
+            (0x49, Arguments::String("BG\\WHITE".into())),
+            (0, b(0, 0)),
+        ]);
+        m.step(&mut h, 0, false).unwrap();
+        assert_eq!(m.state.native_live.checkpoint(m.state.pc).unwrap().image_name_bytes(4).unwrap(), b"");
+        m.step(&mut h, 1, false).unwrap();
+        assert_eq!(m.state.native_live.checkpoint(m.state.pc).unwrap().image_name_bytes(4).unwrap(), b"BST\\HERO");
+        // This test host deliberately has no completed size receipt. Keeping
+        // the name cannot manufacture a writable native sprite/save image.
+        assert!(m.state.native_live.admitted_checkpoint(m.state.pc).is_err());
+        assert!(m.state.native_live.gaps().contains("slot4 completed image dimensions unavailable"));
     }
     #[test]
     fn random_instruction_waits_for_shared_stream_without_repeating_history() {
@@ -1204,6 +1254,32 @@ mod tests {
         let body=m.state.native_live.admitted_checkpoint(m.state.pc).unwrap();
         let at=111864-crate::native_save::LIVE_BASE;
         assert_eq!(u32::from_le_bytes(body.bytes()[at..at+4].try_into().unwrap()),1);
+    }
+    #[test]
+    fn scene_transfer_records_native_byte_delta_only_after_resource_completion() {
+        let (mut m, mut h) = fixture(vec![
+            (0x82, w(0, 2, 9, 0)),
+            (0x4f, Arguments::String("NEXT".into())),
+            (0, b(0, 0)),
+        ]);
+        m.step(&mut h, 0, false).unwrap();
+        let pc = m.state.pc;
+        h.scene_pending = true;
+        assert_eq!(m.step(&mut h, 1, false).unwrap(), Outcome::Pending);
+        assert_eq!(m.state.pc, pc);
+        let before = m.state.native_live.checkpoint(pc).unwrap();
+        let count = 115884 - crate::native_save::LIVE_BASE;
+        assert_eq!(&before.bytes()[count..count + 4], &[0; 4]);
+        m.step(&mut h, 2, false).unwrap();
+        assert_eq!(m.state.scene, "NEXT");
+        let body = m.state.native_live.checkpoint(3).unwrap();
+        assert_eq!(&body.bytes()[count..count + 4], &1u32.to_le_bytes());
+        let index = 115888 - crate::native_save::LIVE_BASE;
+        assert_eq!(&body.bytes()[index..index + 2], &2u16.to_le_bytes());
+        assert_eq!(body.bytes()[117888 - crate::native_save::LIVE_BASE], 9);
+        // This audited delta does not certify the still-incomplete scene
+        // cleanup/resource projection as a writable original slot save.
+        assert!(m.state.native_live.admitted_checkpoint(3).is_err());
     }
     #[test]
     fn native_group_slide_is_a_declaration_and_activation_stays_explicit() {

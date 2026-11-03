@@ -1,0 +1,74 @@
+{
+  "purpose": "Complete reviewed original audio status/work layout and detached preparation over engine-owned replacement resources; not completed dataN import.",
+  "reference": {
+    "repository": "https://github.com/tinyan/SystemNNN",
+    "commit": "78a05053c78b3b80065a9a209c6685a7c60a2e83",
+    "files": [
+      {
+        "path": "nnnUtilLib/musicControl.cpp",
+        "sha256": "b516c50b4c64879fe404798081b1f8f7397481199d22ada2e16b64831b0ef00e"
+      },
+      {
+        "path": "nnnUtilLib/waveMusic.cpp",
+        "sha256": "87cc082429607d2b4f025973eb3fbd62425607fb331a7ec30f0bcaa2b715addd"
+      },
+      {
+        "path": "nnnUtilLib/scriptSoundControl.cpp",
+        "sha256": "1ff19cd9e5c05d93105597e710015733ec1728d90bb7629fe23cc71e623cd072"
+      },
+      {
+        "path": "nnnUtilLib/scriptVoiceControl.cpp",
+        "sha256": "973c9e514ea46791f18e212d9b5ec5d1e7faafc56568bfb231417f43123c2b67"
+      },
+      {
+        "path": "nnnLib/commondatafile.h",
+        "sha256": "0f26cc0ab4e9311337ed5a64cf7e8c9a438caaa94c37f0290cdc110608ff7849"
+      },
+      {
+        "path": "nnnLib/gamecallback.cpp",
+        "sha256": "c40ac0c7320bde78d501642ec472555b61c0b324b112478b9d9bd6caf4fcce5a"
+      }
+    ],
+    "complete_routines": [
+      "CMusicControl::PlayMusic/StopMusic",
+      "CWaveMusic::PlayBGM/MyThread/OnWaveTime/GetBlock",
+      "CScriptSoundControl::SetLoopWorkParam",
+      "CScriptVoiceControl::SetLoopWorkParam",
+      "CGameCallBack::GetGameStatusForSave/SetGameStatusByLoad/RestartLoopSoundAndVoice"
+    ],
+    "licence": "No grant found. Independently expressed data-layout/behavior facts; original implementation is not copied, embedded or linked."
+  },
+  "actual_module": {
+    "sha256": "e85e92ec538d50eae08d27286177149972d443a96d1415277c1ae1f9ee108bdb",
+    "method": "Read-only IDA static decompilation, never original EXE execution",
+    "functions": {
+      "0x53ad20": "GetGameStatusForSave writes 8x16 sound words at native52, 8x16 voice at184 and512 filename bytes at312.",
+      "0x53b630": "SetGameStatusByLoad restores those raw records; saved music index is zero-based, sentinel delta-9999/default fades.",
+      "0x536740": "Complete RestartLoopSoundAndVoice:8 sound,4 voice, check native loop-work word0 before direct playback.",
+      "0x5321a0": "Sound callback reorders twelve arguments into native work0..10; stop clears only work0.",
+      "0x531820": "Voice callback uses the same native layout and truncates newly received names to62 plus two NUL bytes.",
+      "0x531dc0": "Sound playback reads signed native work coordinates directly and clamps volume0..100; no later source delta=-101 special case.",
+      "0x531370": "Voice replay reads saved64-byte name directly, packed-first then loose source, clamps legacy volume0..100; no later source delta=-101 special case."
+    },
+    "evidence": [
+      "target/verification/systemnnn/saved-audio-functions.json",
+      "target/verification/systemnnn/saved-audio-0x536740.c",
+      "target/verification/systemnnn/saved-audio-0x531dc0.c",
+      "target/verification/systemnnn/saved-audio-0x531370.c"
+    ]
+  },
+  "implementation": {
+    "canonical_work": "NativeAudioPolicy now retains actual16-word records. Callback number/channel/delta/loop/XYZ/time/endXYZ/doppler are explicitly reordered into native loop/number/delta/XYZ/time/endXYZ/doppler; unknown words11..15 survive. ClearWork and Stop clear native word0, not a callback number or coordinate.",
+    "save_record": "NativeSaveFile.audio_work/replace_audio_work retain all16 words and all64 name bytes, preserving every unrelated status field. Native raw records are not AudioRequests.",
+    "prepare": "SavedAudioPreparation validates the complete native save profile before I/O, resolves native source names on a cancellable worker, then polls HostServices.begin_audio_replacement. Ready retains original raw records and detached policy. Preparation, cancellation/failure/drop do not change old or peer playback/clock. It does not fabricate native instruction receipts.",
+    "counts": "On a reviewed plain single-source music resource, original0 means unbounded,1 means one pass,N>1 maps to the existing shared counted loop schedule. MML playlist/segment policy remains explicit unsupported.",
+    "remaining": "The prepared audio receipt is not yet connected to the complete NativeAdapter original-restore seed/message/selection/effect/status transaction. Native stepped fade/spatial/disabled-voice-duration policy remains explicit unsupported. No game/title/Start or full dataN acceptance claimed.",
+    "detached_component": "AudioRestoreSeed retains immutable Arc name tables/native resolver/task capabilities and fixed-size policy only. Its ready finish constructs an AudioBridge without a live-mixer copy; original_audio_work merges current native fields and retained raw64-byte tails. Full VM/Bridge original-restore entry still needs other consumers.",
+    "values": "Original x86 volume addition uses wrapping i32 before0..100 sound/voice or1..100 music clamp. Saved63-byte CP932 names bypass new-callback62-byte truncation entirely; a final double-byte character remains intact."
+  },
+  "validation": {
+    "initial": "native-audio-save-work-tests.log:56 passed,1 ignored; includes real PCM count completion and true shared WAV replacement preparation.",
+    "final": "native-audio-save-work-final-tests.log:57 passed,1 ignored, exit0. All eight new cases include exact16-word/64-byte preservation, callback reorder/stop/gain profile, full63-byte restored voice name, detached validation, real counted PCM and actual shared WAV replacement readiness/late failure. Ignored owner metadata case not counted. No Desktop/GPU/original-game run.",
+    "component_final": "native-audio-restore-seed-tests.log58passed1ignored; native-audio-restore-name-boundary-tests.log58passed1ignored after a second CP932 fixture, exit0. No original-game/Desktop/GPU acceptance claimed."
+  }
+}

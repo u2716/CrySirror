@@ -3,6 +3,14 @@
 Date: 2026-10-27. Status: implemented bounded BGM profile.
 Follows ADR 0050, 0067–0075. Actual validation is recorded in STATUS.md.
 
+## Follow-up implementation (updated 2026-11-03)
+
+Retained replay, PCM/SE/KOE/PCMCH, worker DSP/output, geometry instances, direct Doppler and a bounded KAG3 audio facade followed this BGM checkpoint. Full native audio/save fidelity remains per-profile work.
+
+Follow-ups: [ADR 0077](0077-prepared-audio-resources-and-native-replay.md), [ADR 0078](0078-mix-groups-and-siglus-pcm-se.md), [ADR 0079](0079-worker-final-audio-frames.md), [ADR 0080](0080-async-output-worker-and-bounded-pcm-transfer.md), [ADR 0081](0081-prepared-voice-compression-and-siglus-koe.md), [ADR 0082](0082-acoustic-instance-snapshots.md), [ADR 0083](0083-shared-transport-and-siglus-pcmch.md), [ADR 0084](0084-kinematic-doppler-and-motion-capture.md), [ADR 0088](0088-kag3-semantic-adapter-and-shared-prerequisites.md).
+The original checkpoint evidence and remaining-boundary paragraphs below retain
+their dated scope. They must not be read as an engine-wide current missing list.
+
 ## Source and ownership
 
 The original Siglus SceneVm is retained. The prior BgmEngine placeholder did
@@ -120,9 +128,9 @@ During an in-flight native resource command, direct original-file export/import
 fails visibly rather than mutating the separately retained VM. This bounded
 profile does not establish every native save variant or game compatibility.
 
-Native boot/scene/Gameexe reads and bounded metadata lookup remain synchronous
-owner work. Final DSP/mixing/output, control allocation/disposal and teardown
-remain synchronous boundaries. Retained-source replay after EOF/stop, dynamic acoustic geometry, Doppler, higher/diffuse
-reflections, full Siglus audio/layout coverage, KiriKiri WaveSoundBuffer and
-commercial-game/device/other-platform validation remain open. ADR 0050 and the
+This BGM checkpoint did not migrate every native boot/scene/Gameexe or metadata
+read. Follow-ups add retained-source replay (0077), worker DSP/output (0079/0080),
+geometry instances (0082), direct Doppler (0084) and bounded KAG3 audio (0088).
+General discovery, higher/diffuse transport, full Siglus audio/layout fidelity,
+allocation/teardown and broader game/device/platform validation remain separate. ADR 0050 and the
 broader modern engine/VN objective are not complete.

@@ -5,7 +5,11 @@ persistence. Data projects and compatibility frontends use these services.
 Siglus/RFVP keep their own interpreters, values/opcodes, syscall dispatch,
 resource policy, exact waits, native text rules and original save formats.
 
-## Executed implementations
+## Implemented systems
+
+This table describes source ownership and supported mechanisms. Actual compilation
+and behavior evidence remains in dated STATUS.md entries; this documentation
+update does not establish a new whole-engine or hardware validation result.
 
 | System | Engine implementation | Current limits |
 |---|---|---|
@@ -13,11 +17,11 @@ resource policy, exact waits, native text rules and original save formats.
 | Animation/input | Actual complete Siglus IntEvent and InputState ports; delayed one-shot/loop/ping-pong easing, game/real time, button/key stock lifecycle | Native behavioral algorithms are preserved; adapter clock/unit translation still needs native validation |
 | Layer | Retained hierarchy, scoped mutation batches, transform/pivot/anchor, camera/billboard/culling projection, inherited visibility/opacity/clips, explicit order pair, UV ranges and five blend pipelines | Rotations in radians; clips are axis-aligned scissors (rotated clip uses four-corner AABB); 3D parents rejected visibly; no native effect/shader emulation |
 | UI | Panel/Label/Button/Toggle/Slider, parent tree, absolute/row/column layout, padding/gap, clipping, hit testing, focus, Tab/Down navigation, pointer capture/release, modal routing, value/events and World actions | No theme editor/accessibility/complex layout; callbacks are checked typed world data, not JS; native message/menu/backlog behavior remains in adapters |
-| Text | crysirror-text owns fonts, simple-horizontal-v1 and explicit positioned glyph rasterization; renderer caches GPU surfaces | No complex shaping or native ruby/reveal/layout compatibility |
-| Audio/SFX | crysirror-audio owns voice pools/priorities, random containers, scoped buses/ducking, sample envelopes, streaming music, stereo spatial mixing and AudioDevice; crysirror-acoustics owns acoustic meshes/BVHs and worker direct-path propagation and SOFA/HRIR binaural resources/filters (ADR 0067/0068) | HRTF has an explicit partition delay; no reflections, reverb or applied direct-path travel delay yet; native audio wait/save fidelity needs per-adapter validation; decode/mix/output are not yet wholly asynchronous |
-| Assets | Scoped capability directories, cache keys and decoder registry, crysirror-image RGBA/standard codecs | No asynchronous streaming; native G00 metadata/codec stays in crysirror-siglus |
+| Text | crysirror-text owns font resources, fixed-cell and shaped/bidi layout, rich text/ruby/vertical layout, reveal and CPU SDF data; shared glyph raster and renderer caches own coverage | Generic text capabilities do not supply every native layout rule; GPU/3D SDF integration remains separate (ADR 0031/0033) |
+| Audio/SFX | crysirror-audio owns pools/priorities, random containers, buses/ducking, envelopes, streaming and worker-backed decode/mix/output; crysirror-acoustics owns BVHs, direct paths, SOFA/HRIR HRTF, late reverb and first-order reflected paths | Explicit HRTF/convolution latency and bounded acoustic profiles; direct propagation delay and per-path Doppler remain separate gaps; native wait/save fidelity is adapter-specific (ADR 0067–0084) |
+| Assets | Capability directories/read-at providers, native format registries, bounded asynchronous image/model/resource preparation and owner publication; streaming cells use explicit readiness and residency | No general asset GUID/cook database; remaining GPU upload and subsystem migration are documented in ASYNC_SERVICES.md and FRAME_PIPELINE.md |
 | Material | Safe CPU PBR description in crysirror-scene, shared by importers, project entities, Rust/JS/TS mutations and snapshots; scoped textures, unlit, opacity, UV0 transforms and soft depth intersections | Fog/Fresnel/Dissolve and custom WGSL surface hooks exist (ADR 0016); no material graph or per-slot override registry; raw cube/triangle UVs are zero |
-| Renderer | Independent wgpu PBR/HDR/IBL/CSM/SSAO/TAA with transparent composition before bloom/tonemap; shared retained overlays and bounded compute primary/shadow rays | Sorted single-sample transparency; no OIT/refraction, full UE shaders or hardware RT; PBR is raster only (ADR 0010/0015) |
+| Renderer | Independent wgpu PBR/HDR/IBL/CSM/SSAO/TAA, shared retained overlays, compute tracing and capability-gated hardware BLAS/TLAS queries; native RT includes bounded shadows, reflections and GI | Sorted transparency and explicit hit-material limits; device eligibility, actual pixels and multi-platform performance need separate evidence (ADR 0051/0055–0060) |
 
 The shared CPU package contains real migrated source, not an alias for a native
 VM. Exact commits, source SHA256 and changes are recorded in

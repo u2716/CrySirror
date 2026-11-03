@@ -18,10 +18,11 @@ pub(crate) fn project(
     }
     let (x, y) = m.window_pos.context("native MWND frame window position")?;
     let (w, h) = m.window_size.context("native MWND frame window size")?;
-    ensure!(
-        w > 0 && h > 0 && m.waku_extend_type == 0,
-        "native extended MWND frame layout is not mapped"
-    );
+    // A window restored before its first layout has no area to frame yet.
+    if w <= 0 || h <= 0 {
+        return Ok(vec![]);
+    }
+    ensure!(m.waku_extend_type == 0, "native extended MWND frame layout is not mapped");
     let (offset, alpha) = ops::visual(ctx);
     let margin = m.filter_margin.unwrap_or((0, 0, 0, 0));
     let filter_pos = [
@@ -110,7 +111,7 @@ pub(crate) fn project(
         } else {
             ctx.tables.mwnd_render.filter_layer_rep
         };
-        out.push(LayerSpec {
+        out.push(LayerSpec { source_crop: None, viewport_clip: None,
             id,
             parent: None,
             rect,

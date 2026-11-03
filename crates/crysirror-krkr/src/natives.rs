@@ -41,6 +41,8 @@ pub fn install(rt: &mut Rt) {
     crate::sound::install(rt);
     crate::video::install(rt);
     crate::pointer::install(rt);
+    // Members found missing by the krkrz native-member inventory.
+    crate::native_members::install(rt);
 }
 
 // ---------------------------------------------------------------- helpers
@@ -145,7 +147,7 @@ pub(crate) fn layer_node_enabled(rt: &Rt, h: ObjectHandle) -> Result<bool> {
 }
 
 /// Visible along the parent chain (krkrz GetParentVisible including self).
-fn layer_tree_visible(rt: &Rt, h: ObjectHandle) -> Result<bool> {
+pub(crate) fn layer_tree_visible(rt: &Rt, h: ObjectHandle) -> Result<bool> {
     let mut node = Some(h.0);
     let mut depth = 0;
     while let Some(id) = node {
@@ -224,7 +226,7 @@ fn notify_node_enabled(rt: &mut Rt, before: Vec<(usize, bool)>) -> Result<()> {
     Ok(())
 }
 
-fn focused_layer(rt: &Rt, window: ObjectHandle) -> Option<ObjectHandle> {
+pub(crate) fn focused_layer(rt: &Rt, window: ObjectHandle) -> Option<ObjectHandle> {
     rt.object_member(window, "__focusedLayer")
         .object_handle()
         .filter(|h| rt.object_valid(*h) && rt.host().layer(*h).is_ok())
@@ -232,7 +234,7 @@ fn focused_layer(rt: &Rt, window: ObjectHandle) -> Option<ObjectHandle> {
 
 /// krkrz tTVPLayerManager::SetFocusTo: onBlur(next) on the old layer, then
 /// onFocus(prev, direction) on the new one, both delivered immediately.
-fn set_focus(rt: &mut Rt, window: ObjectHandle, to: Option<ObjectHandle>, forward: bool) -> Result<()> {
+pub(crate) fn set_focus(rt: &mut Rt, window: ObjectHandle, to: Option<ObjectHandle>, forward: bool) -> Result<()> {
     let from = focused_layer(rt, window);
     if from == to {
         return Ok(());
@@ -489,8 +491,12 @@ fn install_system(rt: &mut Rt) {
                     "a modal dialog service",
                 ))
             }),
-            ("shellExecute", |_, _, _| {
-                Err(unsupported("System.shellExecute", "host process launching"))
+            // A game script does not launch host processes or browsers from this
+            // player; the native result for a failed launch is false.
+            ("shellExecute", |rt, _, a| {
+                let target = a.first().map(Variant::to_tjs_string).transpose()?.unwrap_or_default();
+                rt.host_mut().log.push(format!("System.shellExecute({target:?}) declined by the player"));
+                Ok(Variant::Integer(0))
             }),
             // The host has no Windows registry: every key is absent, and the
             // native result for an absent key is void.
@@ -783,9 +789,8 @@ fn install_storages(rt: &mut Rt) {
                     None => n,
                 }))
             }),
-            ("searchCD", |_, _, _| {
-                Err(unsupported("Storages.searchCD", "optical media"))
-            }),
+            // No optical media exists on this host: no volume matches.
+            ("searchCD", |_, _, _| Ok(Variant::String(String::new()))),
         ],
     );
 }
@@ -1454,9 +1459,8 @@ fn install_window(rt: &mut Rt) {
             ("showModal", |_, _, _| {
                 Err(unsupported("Window.showModal", "a nested modal event loop"))
             }),
-            ("setMaskRegion", |_, _, _| {
-                Err(unsupported("Window.setMaskRegion", "shaped OS windows"))
-            }),
+            // The host window stays rectangular; a shaped-window request has no state.
+            ("setMaskRegion", |_, _, _| Ok(Variant::Void)),
         ],
     );
     let inner_w: Getter = |rt, t| Ok(Variant::Integer(window_of(rt, t)?.inner[0]));
@@ -1464,12 +1468,18 @@ fn install_window(rt: &mut Rt) {
     let set_w: Setter = |rt, t, v| {
         let h = this_of(rt, t, "Window")?;
         let height = window_mut(rt, h)?.inner[1];
-        check_window_size(rt, v.to_integer()?, height)
+        let w = v.to_integer()?;
+        check_window_size(rt, w, height)?;
+        window_mut(rt, h)?.inner[0] = w;
+        Ok(())
     };
     let set_h: Setter = |rt, t, v| {
         let h = this_of(rt, t, "Window")?;
         let w = window_mut(rt, h)?.inner[0];
-        check_window_size(rt, w, v.to_integer()?)
+        let height = v.to_integer()?;
+        check_window_size(rt, w, height)?;
+        window_mut(rt, h)?.inner[1] = height;
+        Ok(())
     };
     properties(
         rt,
@@ -1518,16 +1528,12 @@ fn install_window(rt: &mut Rt) {
     );
 }
 
-/// The inner size is the displayed size: the engine presents the project
-/// canvas scaled into the host window, so any size with the canvas aspect
-/// ratio is a uniform zoom of it. Other aspect ratios need letterboxing.
-fn check_window_size(rt: &Rt, w: i64, h: i64) -> Result<()> {
-    let [cw, ch] = rt.host().canvas;
-    if w <= 0 || h <= 0 || w > 16384 || h > 16384 || w * ch as i64 != h * cw as i64 {
-        return Err(unsupported(
-            &format!("Window inner size {w}x{h}"),
-            &format!("the project canvas aspect ratio ({cw}x{ch})"),
-        ));
+/// The inner size is script state for the displayed size. The desktop host owns
+/// the OS window and presents the project canvas scaled and letterboxed into it,
+/// so a script changing width and height one at a time passes through any ratio.
+fn check_window_size(_rt: &Rt, w: i64, h: i64) -> Result<()> {
+    if w <= 0 || h <= 0 || w > 16384 || h > 16384 {
+        return Err(unsupported(&format!("Window inner size {w}x{h}"), "1..=16384 pixels"));
     }
     Ok(())
 }
@@ -1830,6 +1836,7 @@ fn install_layer(rt: &mut Rt) {
                     "shared premultiplied/opaque pixel conversion",
                 ))
             }),
+            ("getLayerAt", layer_get_layer_at),
             ("setPos", |rt, t, a| {
                 let h = this_of(rt, t, "Layer.setPos")?;
                 let (x, y) = (
@@ -2083,12 +2090,7 @@ fn install_layer(rt: &mut Rt) {
             ("affineCopy", layer_affine_copy),
             ("operateStretch", layer_operate_stretch),
             ("operateAffine", layer_operate_affine),
-            ("getMainPixel", |_, _, _| {
-                Err(unsupported(
-                    "Layer.getMainPixel",
-                    "CPU pixel readback of canvases",
-                ))
-            }),
+            ("getMainPixel", layer_get_main_pixel),
             // krkrz SetMainPixel (LayerIntf.cpp:2594): inside the clip rect,
             // write the colour channels of one pixel and keep its alpha
             // (SetPointMain) -- a 1x1 keep-alpha canvas fill.
@@ -2115,9 +2117,7 @@ fn install_layer(rt: &mut Rt) {
                 host.api_calls += 1;
                 Ok(Variant::Void)
             }),
-            ("saveLayerImage", |_, _, _| {
-                Err(unsupported("Layer.saveLayerImage", "canvas image export"))
-            }),
+            ("saveLayerImage", crate::image_api::save_layer_image),
         ],
     );
     properties(
@@ -2570,6 +2570,127 @@ fn argb(c: i64, alpha: Option<i64>) -> [u8; 4] {
     [(c >> 16) as u8, (c >> 8) as u8, c as u8, a]
 }
 
+/// krkrz Layer.getLayerAt (GetMostFrontChildAt): the front layer at a point in
+/// this layer's coordinates, using HitTestNoVisibleCheck without onHitTest.
+fn layer_get_layer_at(rt: &mut Rt, t: Option<ObjectHandle>, a: Vec<Variant>) -> Result<Variant> {
+    let h = this_of(rt, t, "Layer.getLayerAt")?;
+    let (mut x, mut y) = (need_int(&a, 0, "Layer.getLayerAt")?, need_int(&a, 1, "Layer.getLayerAt")?);
+    let exclude_self = a.get(2).is_some_and(Variant::is_truthy);
+    let get_disabled = a.get(3).is_some_and(Variant::is_truthy);
+    let mut root = h.0;
+    let mut node = rt.host().layer(h)?;
+    while let Some(parent) = node.parent {
+        x += node.left;
+        y += node.top;
+        root = parent;
+        node = rt.host().layer(ObjectHandle(parent))?;
+    }
+    // Front to back as GetMostFrontChildAt walks: last child first, then the parent.
+    fn front_first(host: &crate::host::KrkrHost, id: usize, point: [i64; 2], out: &mut Vec<(usize, i64, i64)>) {
+        let Some(l) = host.layers.get(&id) else { return };
+        if !l.visible {
+            return;
+        }
+        let local = [point[0] - l.left, point[1] - l.top];
+        if local[0] < 0 || local[1] < 0 || local[0] >= l.width || local[1] >= l.height {
+            return;
+        }
+        for child in host.sorted_children(id).into_iter().rev() {
+            front_first(host, child, local, out);
+        }
+        out.push((id, local[0], local[1]));
+    }
+    let mut candidates = Vec::new();
+    front_first(rt.host(), root, [x, y], &mut candidates);
+    for (id, lx, ly) in candidates {
+        if exclude_self && id == h.0 {
+            continue;
+        }
+        let target = ObjectHandle(id);
+        let layer = rt.host().layer(target)?;
+        let (px, py) = (lx - layer.image_left, ly - layer.image_top);
+        let kind = rt.object_member(target, "__lp_hitType").to_integer().unwrap_or(0);
+        let threshold = rt.object_member(target, "__lp_hitThreshold").to_integer().unwrap_or(16);
+        let hit = if kind == 1 {
+            layer.regions.get(rt.host().client, [px, py]).map_err(|e| TjsError::runtime(e.to_string()))? != 0
+        } else if layer.has_image && (px < 0 || py < 0 || px >= layer.image_width || py >= layer.image_height) {
+            false
+        } else if threshold <= 0 {
+            true
+        } else if threshold >= 256 || !layer.has_image {
+            false
+        } else if layer.kind == 1 {
+            true
+        } else if let Some(alpha) = layer.full_alpha {
+            i64::from(alpha) >= threshold
+        } else if let Some(crysirror_core::image_processing::ImageInput::Resource(image)) = &layer.image_source {
+            image.alpha_at([px as u32, py as u32]).is_some_and(|alpha| i64::from(alpha) >= threshold)
+        } else {
+            // A composed canvas has no synchronous sample here; only a blank one is known empty.
+            !layer.blank
+        };
+        if !hit {
+            continue;
+        }
+        if !get_disabled {
+            let mut enabled = !rt.host().disabled_by_mode(id);
+            let mut node = Some(id);
+            let mut depth = 0;
+            while let (true, Some(n)) = (enabled, node) {
+                enabled = rt.object_member(ObjectHandle(n), "__lp_enabled").is_truthy();
+                node = rt.host().layer(ObjectHandle(n))?.parent;
+                depth += 1;
+                if depth > 64 {
+                    return Err(TjsError::runtime("native enabled ancestry limit"));
+                }
+            }
+            if !enabled {
+                return Ok(Variant::Null);
+            }
+        }
+        // tTJSVariant(owner, owner): the result is bound to the layer itself.
+        return Ok(Variant::Closure(Closure::new(target, Some(target))));
+    }
+    Ok(Variant::Null)
+}
+
+/// krkrz GetMainPixel: the colour channels without alpha. Resident images read
+/// directly; a composed canvas has no synchronous CPU sample.
+fn layer_get_main_pixel(rt: &mut Rt, t: Option<ObjectHandle>, a: Vec<Variant>) -> Result<Variant> {
+    let h = this_of(rt, t, "Layer.getMainPixel")?;
+    let (x, y) = (need_int(&a, 0, "Layer.getMainPixel")?, need_int(&a, 1, "Layer.getMainPixel")?);
+    let l = rt.host().layer(h)?;
+    if x < 0 || y < 0 || x >= l.image_width || y >= l.image_height {
+        return Err(TjsError::runtime("Layer.getMainPixel: pixel out of range"));
+    }
+    if l.blank {
+        return Ok(Variant::Integer(0x00ff_ffff));
+    }
+    match &l.image_source {
+        Some(crysirror_core::image_processing::ImageInput::Resource(image)) => {
+            let [r, g, b, _] = image
+                .pixel_at([x as u32, y as u32])
+                .map_err(|e| TjsError::runtime(e.to_string()))?
+                .ok_or_else(|| TjsError::runtime("Layer.getMainPixel: pixel out of range"))?;
+            Ok(Variant::Integer(i64::from(r) << 16 | i64::from(g) << 8 | i64::from(b)))
+        }
+        _ => Err(unsupported("Layer.getMainPixel", "CPU pixel readback of composed canvases")),
+    }
+}
+
+/// krkrz UpdateDrawFace: dfAuto resolves through the layer's display type.
+fn draw_face(rt: &Rt, h: ObjectHandle) -> i64 {
+    let face = rt.object_member(h, "__lp_face").to_integer().unwrap_or(0);
+    if face != 128 {
+        return face;
+    }
+    match rt.host().layers.get(&h.0).map_or(2, |l| l.kind) {
+        1 | 3 | 4 | 5 | 8 | 9 | 10 | 11 => 1,
+        12 => 4,
+        _ => 0,
+    }
+}
+
 fn check_face(rt: &Rt, h: ObjectHandle, member: &str) -> Result<()> {
     let face = rt.object_member(h, "__lp_face").to_integer().unwrap_or(0);
     let hold = rt
@@ -2612,11 +2733,23 @@ fn layer_load_images(rt: &mut Rt, t: Option<ObjectHandle>, a: Vec<Variant>) -> R
     if name.to_lowercase().starts_with("psb://") {
         return crate::psbfile_plugin::load_image(rt, h, &name);
     }
-    let path = rt
+    let resolved = rt
         .host()
         .storage()?
-        .resolve_with(&name, &[".tlg", ".png", ".jpg", ".jpeg", ".bmp", ".webp"])
-        .ok_or_else(|| TjsError::runtime(format!("image storage `{name}` not found")))?;
+        .resolve_with(&name, &[".tlg", ".png", ".jpg", ".jpeg", ".bmp", ".webp"]);
+    // Assumption, not verified against the original: a `dummy_*` storage that no
+    // archive provides is a placeholder for a script-drawn control (Yuzusoft
+    // hsvcpick). It loads as a transparent pixel and the substitution is logged.
+    let base = name.rsplit(['/', '\\', '>']).next().unwrap_or(&name);
+    if resolved.is_none() && base.to_lowercase().starts_with("dummy_") {
+        let host = rt.host_mut();
+        host.log.push(format!("Layer.loadImages: placeholder `{name}` absent; using a transparent pixel"));
+        host.reset_surface(h, 1, 1, [255, 255, 255, 0])?;
+        let l = host.layer_mut(h)?;
+        (l.width, l.height) = (1, 1);
+        return Ok(Variant::Void);
+    }
+    let path = resolved.ok_or_else(|| TjsError::runtime(format!("image storage `{name}` not found")))?;
     let images = rt
         .host()
         .images
@@ -2692,11 +2825,12 @@ fn layer_fill_rect(rt: &mut Rt, t: Option<ObjectHandle>, a: Vec<Variant>) -> Res
         let region = need_int(&a, 4, "province region")? as u32 & 255;
         return fill_province(rt,h,owner,rect,region);
     }
-    // krkrz LayerIntf FillRect: holdAlpha with a colour face fills colour
-    // only; dfOpaque (1) without holdAlpha fills with alpha 255.
-    let face = rt.object_member(h, "__lp_face").to_integer().unwrap_or(0);
-    let hold = rt.object_member(h, "__lp_holdAlpha").to_integer().unwrap_or(0) != 0;
-    if !(hold && matches!(face, 0 | 1 | 4 | 128) || face == 1) {
+    // krkrz LayerIntf FillRect: dfAlpha and dfAddAlpha replace all four
+    // channels whatever holdAlpha says. holdAlpha only matters on dfOpaque,
+    // where it fills colour alone; otherwise dfOpaque fills with alpha 255.
+    let face = draw_face(rt, h);
+    let hold = face == 1 && rt.object_member(h, "__lp_holdAlpha").to_integer().unwrap_or(0) != 0;
+    if !matches!(face, 0 | 1 | 4) {
         check_face(rt, h, "Layer.fillRect")?;
     }
     let [x, y, w, ht] = [
@@ -2759,13 +2893,7 @@ fn filled_source(rt: &Rt, h: ObjectHandle, rect: [i64;4], color: [u8;4], keep_al
         source:[0,0,w,height],destination:[x,y],clip:None,opacity:255,
         math:if keep_alpha {ImageCompositeMath::CopyRgb} else {ImageCompositeMath::Copy},
     };
-    Some(match base {
-        ImageInput::Composite {base,mut layers} if layers.len()<64 => {
-            layers.push(layer);
-            ImageInput::Composite {base,layers}
-        }
-        base=>ImageInput::Composite {base:Box::new(base),layers:vec![layer]},
-    })
+    Some(base.with_composite_layer(layer))
 }
 
 fn layer_color_rect(rt: &mut Rt, t: Option<ObjectHandle>, a: Vec<Variant>) -> Result<Variant> {
@@ -2781,11 +2909,11 @@ fn layer_color_rect(rt: &mut Rt, t: Option<ObjectHandle>, a: Vec<Variant>) -> Re
         let owner = rt.host().client;
         return fill_province(rt,h,owner,rect,region);
     }
-    let face = rt.object_member(h, "__lp_face").to_integer().unwrap_or(0);
-    let hold = rt.object_member(h, "__lp_holdAlpha").to_integer().unwrap_or(0) != 0;
-    if hold && matches!(face, 0 | 1 | 128) {
-        // krkrz ColorRect with holdAlpha: blend the colour at `opa` onto the
-        // destination colour, alpha kept (source-atop solid).
+    let face = draw_face(rt, h);
+    if face == 1 {
+        // krkrz ColorRect on dfOpaque: tTVPBaseBitmap::FillColor blends the
+        // colour at `opa` and always keeps destination alpha (source-atop
+        // solid). dfAlpha uses FillColorOnAlpha regardless of holdAlpha.
         let r = [
             need_int(&a, 0, "Layer.colorRect")?,
             need_int(&a, 1, "Layer.colorRect")?,
@@ -2813,7 +2941,9 @@ fn layer_color_rect(rt: &mut Rt, t: Option<ObjectHandle>, a: Vec<Variant>) -> Re
         }
         return Ok(Variant::Void);
     }
-    check_face(rt, h, "Layer.colorRect")?;
+    if face != 0 {
+        check_face(rt, h, "Layer.colorRect")?;
+    }
     let [x, y, w, ht] = [
         need_int(&a, 0, "Layer.colorRect")?,
         need_int(&a, 1, "Layer.colorRect")?,
@@ -2904,7 +3034,15 @@ fn layer_copy(
     // layers have CPU sources.
     if atop && !matches!(mode, 2 | 13 | 128 | 16 | 17) {
         if let Some(blend) = ps_blend(mode) {
-            return layer_operate_ps_cpu(rt, h, &a, blend, member);
+            return layer_operate_ps_cpu(rt, h, &a, blend, true, member);
+        }
+    }
+    // Without holdAlpha the omPs* modes run the plain (non-HDA) tvpps
+    // kernels (LayerBitmapIntf.cpp TVP_BLEND_4), which store the operation
+    // result with a cleared alpha byte; same shared CPU compositor.
+    if !replace && !atop {
+        if let Some(blend) = ps_blend(mode) {
+            return layer_operate_ps_cpu(rt, h, &a, blend, false, member);
         }
     }
     let atop_mode = match (atop, mode) {
@@ -3033,6 +3171,10 @@ fn ps_blend(mode: i64) -> Option<crysirror_core::image_processing::PsBlend> {
     use crysirror_core::image_processing::PsBlend as P;
     Some(match mode {
         13 => P::Normal,
+        14 => P::Additive,
+        15 => P::Subtractive,
+        16 => P::Multiplicative,
+        17 => P::Screen,
         18 => P::Overlay,
         19 => P::HardLight,
         20 => P::SoftLight,
@@ -3040,6 +3182,10 @@ fn ps_blend(mode: i64) -> Option<crysirror_core::image_processing::PsBlend> {
         23 => P::ColorBurn,
         24 => P::Lighten,
         25 => P::Darken,
+        22 => P::ColorDodge5,
+        26 => P::Difference,
+        27 => P::Difference5,
+        28 => P::Exclusion,
         _ => return None,
     })
 }
@@ -3052,6 +3198,7 @@ fn layer_operate_ps_cpu(
     h: ObjectHandle,
     a: &[Variant],
     blend: crysirror_core::image_processing::PsBlend,
+    hold_alpha: bool,
     member: &str,
 ) -> Result<Variant> {
     let (dx, dy) = (need_int(a, 0, member)?, need_int(a, 1, member)?);
@@ -3069,12 +3216,20 @@ fn layer_operate_ps_cpu(
     }
     let source = rt.host().layer(src)?.clone();
     let dest = rt.host().layer(h)?.clone();
-    let math = crysirror_core::image_processing::ImageCompositeMath::Ps { blend, hold_alpha: true };
-    let Some(input) = composite_with(rt, h, src, &dest, &source, rect, [dx, dy], opacity, math) else {
-        return Err(unsupported(
-            &format!("{member} holdAlpha {blend:?} on a canvas-composed layer"),
-            "a CPU image source for both layers (shared compositor) or a canvas blend state",
+    let math = crysirror_core::image_processing::ImageCompositeMath::Ps { blend, hold_alpha };
+    let input = composite_with(rt, h, src, &dest, &source, rect, [dx, dy], opacity, math);
+    let suspendable = rt.host().can_suspend;
+    let Some(input) = input.filter(|_| suspendable) else {
+        // A composed layer has no CPU source yet, and a native input callback
+        // cannot suspend. Queue the operation: captures and composites finish in
+        // order before the VM runs again.
+        rt.host_mut().composite_pending.push(crate::image_api::PendingComposite::new(
+            h, src, rect, [dx, dy], opacity, math,
         ));
+        if suspendable {
+            rt.request_suspend();
+        }
+        return Ok(Variant::Void);
     };
     crate::image_api::queue_chain(rt, h, input, Vec::new())
 }
@@ -3113,7 +3268,7 @@ fn composite_source(
 
 /// `dest`'s CPU source with `source`'s rect drawn at `at` by `math`.
 #[allow(clippy::too_many_arguments)]
-fn composite_with(
+pub(crate) fn composite_with(
     rt: &Rt,
     h: ObjectHandle,
     src: ObjectHandle,
@@ -3124,7 +3279,7 @@ fn composite_with(
     opacity: u8,
     math: crysirror_core::image_processing::ImageCompositeMath,
 ) -> Option<crysirror_core::image_processing::ImageInput> {
-    use crysirror_core::image_processing::{ImageCompositeLayer, ImageInput};
+    use crysirror_core::image_processing::ImageCompositeLayer;
     let trace = std::env::var_os("CRYSIRROR_KRKR_TRACE_SOURCE").is_some();
     let base = crate::image_api::input(rt, h).inspect_err(|_| if trace { eprintln!("[source] composite base slot {} missing", dest.slot) }).ok()?;
     let input = crate::image_api::input(rt, src).inspect_err(|_| if trace { eprintln!("[source] composite input slot {} missing: {}", source.slot, source.source_lost) }).ok()?;
@@ -3140,13 +3295,7 @@ fn composite_with(
         opacity,
         math,
     };
-    Some(match base {
-        ImageInput::Composite { base, mut layers } if layers.len() < 64 => {
-            layers.push(layer);
-            ImageInput::Composite { base, layers }
-        }
-        base => ImageInput::Composite { base: Box::new(base), layers: vec![layer] },
-    })
+    Some(base.with_composite_layer(layer))
 }
 
 fn layer_assign_images(rt: &mut Rt, t: Option<ObjectHandle>, a: Vec<Variant>) -> Result<Variant> {

@@ -97,16 +97,7 @@ pub(crate) fn voice_gain(ctx: &CommandContext) -> Result<f32> {
     })
 }
 pub(crate) fn refresh(ctx: &mut CommandContext) -> Result<()> {
-    if ctx.koe.current_no() < 0 || !ctx.koe.is_playing_any() {
-        return Ok(());
-    }
-    let (enabled, gain) = routing(ctx, ctx.globals.sound_routing.koe_chara_no)?;
-    if !enabled && !ctx.globals.sound_routing.koe_ex_flag {
-        ctx.koe.stop(None)?;
-    } else {
-        ctx.koe.set_character_gain(gain)?;
-    }
-    Ok(())
+    crate::native_sound::update_audio_routing(ctx, 0, true)
 }
 pub(crate) fn dispatch(ctx: &mut CommandContext, command: i32, args: &[Value]) -> Result<bool> {
     let (volume, action) = match command {
@@ -191,7 +182,7 @@ mod tests {
         ctx.globals.sound_routing.koe_chara_no = 7;
         ctx.koe.play(1, 100).unwrap();
         refresh(&mut ctx).unwrap();
-        assert!(std::mem::take(&mut ctx.koe.pending).entries().iter().any(|(_,op)|matches!(op,crate::bgm_bridge::Operation::Control(crysirror_core::service::AudioRequest::SetGain {channel:3,gain,..}) if (*gain-32./255.).abs()<1e-6)));
+        assert!(ctx.audio.pending.iter().any(|op| matches!(op, crysirror_core::service::AudioRequest::SetMixGroupGain {name,gain,..} if name == "siglus.system.koe" && (*gain-32./255.).abs()<1e-6)));
         dispatch(
             &mut ctx,
             op::SET_CHARAKOE_ONOFF,

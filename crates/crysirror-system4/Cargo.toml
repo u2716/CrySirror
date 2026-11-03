@@ -9,12 +9,15 @@ description = "First-class AliceSoft System 4 AIN program and native semantics"
 [dependencies]
 anyhow.workspace = true
 crysirror-resource.workspace = true
+crysirror-formats-arc.workspace = true
+crysirror-runtime = {workspace=true,optional=true}
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 crysirror-core.workspace = true
 sha2 = "0.10"
 encoding_rs = "0.8"
 crysirror-tasks.workspace = true
 crysirror-text.workspace = true
+crysirror-text-legacy = { workspace = true, optional = true }
 serde_json.workspace = true
 
 serde.workspace = true
@@ -22,3 +25,8 @@ serde.workspace = true
 [dev-dependencies]
 crysirror-runtime.workspace = true
 tempfile = "3.12"
+
+[features]
+default = ["native-text"]
+native-text = ["dep:crysirror-text-legacy"]
+runtime = ["dep:crysirror-runtime", "crysirror-runtime/arc-formats", "native-text"]

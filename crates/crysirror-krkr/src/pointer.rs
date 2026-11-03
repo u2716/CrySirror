@@ -138,7 +138,31 @@ pub fn install(rt: &mut Rt) {
                     }
                     Ok(Variant::Integer(v))
                 },
-                read_only,
+                // krkrz SetCursorX only stores CursorX_Work; SetCursorY moves the
+                // pointer to (work, y), offset by every non-primary ancestor.
+                move |rt, t, value| {
+                    let h = this_of(rt, t, "cursor position")?;
+                    let value = value.to_integer()?;
+                    if axis == 0 {
+                        rt.set_object_member(h, "__cursor_x_work", Variant::Integer(value));
+                        return Ok(());
+                    }
+                    let (mut x, mut y) = (rt.object_member(h, "__cursor_x_work").to_integer().unwrap_or(0), value);
+                    let mut node = Some(h.0);
+                    let mut depth = 0;
+                    while let Some(id) = node {
+                        let l = rt.host().layer(ObjectHandle(id))?;
+                        let Some(parent) = l.parent else { break };
+                        x += l.left;
+                        y += l.top;
+                        node = Some(parent);
+                        depth += 1;
+                        if depth > 64 {
+                            return Err(TjsError::runtime("cursor ancestry limit"));
+                        }
+                    }
+                    warp(rt, x, y).map(|_| ())
+                },
             );
         }
     }
@@ -156,9 +180,8 @@ pub fn install(rt: &mut Rt) {
                         .iter()
                         .find(|(_, code)| *code == key)
                         .map(|(mask, _)| *mask)
-                        .ok_or_else(|| {
-                            unsupported("System.getKeyState", "this native virtual key mapping")
-                        })?,
+                        // A key the engine input frame does not carry reads as up.
+                        .unwrap_or(0),
                 };
                 Ok(Variant::Integer(
                     (rt.host().input.buttons_down & mask != 0) as i64,
@@ -174,6 +197,13 @@ pub(crate) struct Cursors {
     by_path: std::collections::BTreeMap<String, i64>,
     /// Last (visible, index) sent to the UI service.
     applied: Option<(bool, i64)>,
+}
+
+impl Cursors {
+    /// Forget the last applied state so the next `apply` resends it.
+    pub(crate) fn invalidate(&mut self) {
+        self.applied = None;
+    }
 }
 
 /// krkrz MouseCursor::AddCursor: custom cursors follow the 24 built-in
@@ -240,7 +270,10 @@ fn standard_shape(index: i64) -> Option<&'static str> {
 
 pub fn apply(rt: &mut Rt, target: ObjectHandle) {
     let window = rt.host().windows.keys().next().copied().map(ObjectHandle);
-    let hidden = window.is_some_and(|w| rt.object_member(w, "__temporary_cursor_hide").is_truthy());
+    let hidden = window.is_some_and(|w| {
+        rt.object_member(w, "__temporary_cursor_hide").is_truthy()
+            || crate::native_members::mouse_cursor_hidden(rt, w)
+    });
     // tTJSNI_BaseLayer::GetLayerActiveCursor: crDefault (0) defers to the
     // parent layer; the window's own cursor applies when no layer sets one.
     let mut index = 0;

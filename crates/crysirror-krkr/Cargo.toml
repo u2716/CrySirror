@@ -5,7 +5,7 @@ edition = "2024"
 license = "AGPL-3.0-or-later"
 rust-version.workspace = true
 publish = false
-description = "Optional KiriKiri (TJS2/KAG) VM adapter onto CrySirror engine APIs (ADR 0053)"
+description = "KiriKiri TJS2/KAG semantic adapter onto CrySirror engine APIs"
 
 [dependencies]
 crysirror-core.workspace = true

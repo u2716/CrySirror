@@ -3,12 +3,13 @@
 use super::*;
 use crysirror_core::image_processing::{ImageInput, ImageJob, ImageProcessState};
 
-const WINDOW: u32 = TEXT + 2;
+pub(super) const WINDOW: u32 = TEXT + 2;
 const SHADOW: u32 = TEXT + 3;
 const CURSOR: u32 = TEXT + 4;
 const MASK: u32 = TEXT + 32;
 const BUTTONS: u32 = CHOICES + 256;
-const TACHI: u32 = SPRITE + 1000;
+pub(super) const TACHI: u32 = SPRITE + 1000;
+pub(super) const SPRITE2: u32 = SPRITE + 2000;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(super) struct Effect {
     kind: i32,
@@ -44,6 +45,60 @@ pub(super) struct NativeState {
     pub globals_enabled: bool,
     pub filelog_enabled: bool,
     pub files: BTreeSet<String>,
+    pub rng: u32,
+    pub english: bool,
+    pub ruby: bool,
+    pub default_speed: [i32; 3],
+    pub history: Vec<String>,
+    pub max_history: usize,
+    pub automode: bool,
+    pub automode_ms: u64,
+    pub skip_mode: bool,
+    pub right_menu_off: bool,
+    pub right_trap: Option<String>,
+    pub pointer: [i32; 2],
+    pub mouse_down: bool,
+    pub button_started: u64,
+    pub button_timeout: Option<u64>,
+    pub keep_buttons: bool,
+    pub text_gosub: Option<String>,
+    pub pretext_gosub: Option<String>,
+    pub erase_window: bool,
+    pub lookback_color: Option<[u8; 4]>,
+    pub animations: BTreeMap<u32, SpriteAnimation>,
+    pub human_z: Option<i32>,
+    pub screen_filter: Option<Json>,
+    pub draw_next: u32,
+    pub csel: Vec<(String, String)>,
+    pub loop_after_intro: Option<String>,
+    pub fade_out_ms: u64,
+    pub fade_in_ms: u64,
+    pub volumes: [i32; 3],
+    pub loaded_waves: BTreeMap<u32, String>,
+    pub channels: BTreeMap<u32, (String, bool)>,
+    pub save_disabled: bool,
+    pub save_label: String,
+    pub load_gosub: Option<String>,
+    pub definereset_used: bool,
+    pub visited: BTreeSet<String>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(super) struct SpriteAnimation {
+    pub sequence: crysirror_scene::sprite::SheetSequence,
+    pub fixed_cell: Option<u32>,
+}
+impl SpriteAnimation {
+    pub(super) fn still(cells: u16) -> Self {
+        Self {
+            sequence: crysirror_scene::sprite::SheetSequence {
+                cells,
+                frame_ms: 1,
+                mode: crysirror_scene::sprite::SheetLoop::Still,
+                started_ms: 0,
+            },
+            fixed_cell: None,
+        }
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(super) struct NativeCursor {
@@ -53,9 +108,12 @@ pub(super) struct NativeCursor {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(super) struct NativeButton {
-    number: i32,
-    rect: [i32; 4],
-    source: [i32; 2],
+    pub number: i32,
+    pub rect: [i32; 4],
+    pub source: [i32; 2],
+    /// `spbtn`/`exbtn`: a retained sprite draws the button, not the btndef atlas.
+    #[serde(default)]
+    pub sprite: Option<u32>,
 }
 pub(super) struct PendingImage {
     pub job: ImageJob,
@@ -98,7 +156,7 @@ impl NscripterVm {
     pub(super) fn text_size(&self) -> u16 {
         self.state.native.size.unwrap_or(self.config.text.size)
     }
-    fn resolve_asset(&self, name: &str, host: &mut dyn HostServices) -> Result<String> {
+    pub(super) fn resolve_asset(&self, name: &str, host: &mut dyn HostServices) -> Result<String> {
         let path = asset(name)?;
         let storage = host.storage(self.client)?;
         if let Some(found) = case_path(storage.as_ref(), &path)? {
@@ -141,7 +199,22 @@ impl NscripterVm {
         self.state.native.text_visible = true;
         Ok(())
     }
-    fn hide_text(&mut self, host: &mut dyn HostServices) -> Result<()> {
+    pub(super) fn show_text(&mut self, host: &mut dyn HostServices) -> Result<()> {
+        let mut ops = vec![];
+        if self.state.text_published {
+            ops.push(json!({"op":"set_visible","id":TEXT,"visible":true}));
+        }
+        if self.state.native.window_published {
+            ops.push(json!({"op":"set_visible","id":WINDOW,"visible":true}));
+        }
+        if self.state.native.shadow_published {
+            ops.push(json!({"op":"set_visible","id":SHADOW,"visible":true}));
+        }
+        self.submit(host, ops, vec![])?;
+        self.state.native.text_visible = true;
+        Ok(())
+    }
+    pub(super) fn hide_text(&mut self, host: &mut dyn HostServices) -> Result<()> {
         let mut ops = vec![];
         if self.state.text_published {
             ops.push(json!({"op":"set_visible","id":TEXT,"visible":false}));
@@ -192,7 +265,7 @@ impl NscripterVm {
         self.state.wait = Wait::Time(host.now_ms().saturating_add(effect.duration));
         Ok(())
     }
-    fn start_image(
+    pub(super) fn start_image(
         &mut self,
         id: u32,
         name: &str,
@@ -219,10 +292,29 @@ impl NscripterVm {
         }
         let metadata = host.image_metadata(self.client)?;
         let size = metadata.size(&path)?;
-        ensure!(
-            !tag.contains('/') || self.state.native.cursors.contains_key(&id),
-            "native animated sprite resource needs shared layer animation mapping"
-        );
+        // `:a/cells,ms,mode;`: a horizontal cell sheet on the shared clock.
+        if let Some((_, animation)) = tag.split_once('/') {
+            if !self.state.native.cursors.contains_key(&id) {
+                let a = animation.split(',').map(str::parse::<u32>).collect::<std::result::Result<Vec<_>, _>>()?;
+                ensure!(!a.is_empty() && (1..=1024).contains(&a[0]), "native sprite animation tag");
+                use crysirror_scene::sprite::{SheetLoop, SheetSequence};
+                let sequence = SheetSequence {
+                    cells: a[0] as u16,
+                    frame_ms: a.get(1).copied().unwrap_or(1).max(1),
+                    mode: match a.get(2).copied().unwrap_or(3) {
+                        0 => SheetLoop::Repeat,
+                        1 => SheetLoop::Once,
+                        2 => SheetLoop::PingPong,
+                        _ => SheetLoop::Still,
+                    },
+                    started_ms: host.now_ms(),
+                };
+                sequence.validate()?;
+                self.state.native.animations.insert(id, SpriteAnimation { sequence, fixed_cell: None });
+            }
+        } else {
+            self.state.native.animations.remove(&id);
+        }
         let tag = tag.split('/').next().unwrap_or(tag);
         let mode = match tag {
             "c" => json!({"mode":"opaque"}),
@@ -230,7 +322,7 @@ impl NscripterVm {
             "r" => json!({"mode":"corner_key","right":true}),
             "a" if path.to_ascii_lowercase().ends_with(".png") => json!({"mode":"preserve"}),
             "a" => {
-                json!({"mode":"side_mask","cells":self.state.native.cursors.get(&id).map(|c|c.sequence.cells).unwrap_or(1),"channel":2})
+                json!({"mode":"side_mask","cells":self.state.native.cursors.get(&id).map(|c|c.sequence.cells).or_else(||self.state.native.animations.get(&id).map(|a|a.sequence.cells)).unwrap_or(1),"channel":2})
             }
             _ => bail!("native image tag `{tag}` needs shared sprite-sheet mapping"),
         };
@@ -307,6 +399,22 @@ impl NscripterVm {
                     layer["rect"][2] = json!(w);
                     layer["rect"][3] = json!(h);
                 }
+                if let Some(animation) = self.state.native.animations.get(&pending.id) {
+                    let cells = u32::from(animation.sequence.cells.max(1));
+                    layer["rect"][2] = json!(w / cells);
+                    layer["uv"] = json!(animation.sequence.uv(host.now_ms())?);
+                }
+                if pending.id >= SPRITE2 && pending.id < SPRITE2 + 1000 {
+                    // lsp2 positions by the sprite's centre.
+                    let width = layer["rect"][2].as_i64().unwrap_or(i64::from(w));
+                    layer["rect"][0] = json!(layer["rect"][0].as_i64().unwrap_or(0) - width / 2);
+                    layer["rect"][1] = json!(layer["rect"][1].as_i64().unwrap_or(0) - i64::from(h) / 2);
+                    layer["transform"]["pivot_x"] = json!(width as f32 / 2.);
+                    layer["transform"]["pivot_y"] = json!(h as f32 / 2.);
+                }
+                if let Some(filter) = &self.state.native.screen_filter {
+                    layer["filter"] = filter.clone();
+                }
                 if let Some(cursor) = self.state.native.cursors.get(&pending.id) {
                     layer["rect"] = json!([0, 0, w / u32::from(cursor.sequence.cells), h]);
                     layer["uv"] = json!(cursor.sequence.uv(host.now_ms())?);
@@ -327,7 +435,7 @@ impl NscripterVm {
             }
         }
     }
-    fn play(
+    pub(super) fn play(
         &mut self,
         path: &str,
         channel: u32,
@@ -369,7 +477,7 @@ impl NscripterVm {
         };
         Ok(())
     }
-    fn args(t: &mut Tokens, vars: &Variables) -> Result<Vec<Value>> {
+    pub(super) fn args(t: &mut Tokens, vars: &Variables) -> Result<Vec<Value>> {
         let mut args = vec![];
         while t.peek().is_some() {
             if !args.is_empty() {
@@ -490,13 +598,13 @@ impl NscripterVm {
                     };
                 }
             }
-            "setwindow" => {
+            "setwindow" | "setwindow3" => {
                 let a = Self::args(t, &self.state.vars)?;
-                ensure!(a.len() == 16, "native setwindow requires 16 arguments");
+                ensure!(a.len() == 16 || a.len() == 14, "native setwindow requires 14 or 16 arguments");
                 let n: Vec<i32> = a[..11].iter().map(Value::int).collect::<Result<_>>()?;
                 ensure!(
-                    (1..=512).contains(&n[4]) && n[4] == n[5] && n[2] > 0 && n[3] > 0,
-                    "native square horizontal font window required"
+                    (1..=512).contains(&n[4]) && (1..=512).contains(&n[5]) && n[2] > 0 && n[3] > 0,
+                    "native font window geometry"
                 );
                 self.clear_text(host)?;
                 self.state.native.window =
@@ -506,14 +614,19 @@ impl NscripterVm {
                 self.state.speed = n[8].clamp(0, 1000) as u64;
                 self.state.native.bold = n[9] != 0;
                 self.state.native.shadow = n[10] != 0;
-                self.state.native.window_color = Some(color(&a[11].string()?)?);
+                let backing = a[11].string()?;
                 let r = a[12..].iter().map(Value::int).collect::<Result<Vec<_>>>()?;
-                ensure!(
-                    r[2] >= r[0] && r[3] >= r[1],
-                    "native message backing rectangle"
-                );
-                self.state.native.window_rect =
-                    Some([r[0], r[1], r[2] - r[0] + 1, r[3] - r[1] + 1]);
+                if backing.starts_with('#') {
+                    ensure!(r.len() == 4 && r[2] >= r[0] && r[3] >= r[1], "native message backing rectangle");
+                    self.state.native.window_color = Some(color(&backing)?);
+                    self.state.native.window_rect = Some([r[0], r[1], r[2] - r[0] + 1, r[3] - r[1] + 1]);
+                } else {
+                    // An image window keeps its own size; the point is its top-left.
+                    self.state.native.window_color = None;
+                    self.state.native.window_rect = Some([r[0], r[1], 0, 0]);
+                    self.state.native.window_published = true;
+                    self.start_image(WINDOW, &backing, json!({"rect":[r[0],r[1],null,null],"order":[9998,0],"visible":false}), false, 0, host)?;
+                }
             }
             "setcursor" | "abssetcursor" => {
                 let n = number(t, &self.state.vars, 0, 1)? as u32;
@@ -600,7 +713,7 @@ impl NscripterVm {
                 t.end()?;
                 self.state.native.autoclick = Some(ms as u64);
             }
-            "trap" => {
+            "trap" | "lr_trap" | "r_trap" => {
                 let target = if matches!(t.peek(),Some(Token::Word(w)) if w=="off") {
                     t.at += 1;
                     None
@@ -610,7 +723,14 @@ impl NscripterVm {
                     Some(name)
                 };
                 t.end()?;
-                self.state.native.trap = target;
+                if command == "r_trap" {
+                    self.state.native.right_trap = target;
+                } else {
+                    if command == "lr_trap" {
+                        self.state.native.right_trap = target.clone();
+                    }
+                    self.state.native.trap = target;
+                }
             }
             "resettimer" => {
                 t.end()?;
@@ -635,18 +755,7 @@ impl NscripterVm {
             }
             "texton" => {
                 t.end()?;
-                let mut ops = vec![];
-                if self.state.text_published {
-                    ops.push(json!({"op":"set_visible","id":TEXT,"visible":true}));
-                }
-                if self.state.native.window_published {
-                    ops.push(json!({"op":"set_visible","id":WINDOW,"visible":true}));
-                }
-                if self.state.native.shadow_published {
-                    ops.push(json!({"op":"set_visible","id":SHADOW,"visible":true}));
-                }
-                self.submit(host, ops, vec![])?;
-                self.state.native.text_visible = true;
+                self.show_text(host)?;
             }
             "bg" => {
                 let value = if let Some(Token::Word(w)) = t.peek() {
@@ -723,7 +832,7 @@ impl NscripterVm {
                 self.start_image(
                     TACHI + no,
                     &name,
-                    json!({"order":[100+no,0]}),
+                    json!({"order":[1000-self.state.native.human_z.unwrap_or(499),no]}),
                     true,
                     effect,
                     host,
@@ -850,6 +959,7 @@ impl NscripterVm {
                     number: a[0],
                     rect: [a[1], a[2], a[3], a[4]],
                     source: [a[5], a[6]],
+                    sprite: None,
                 });
             }
             "btnwait" => {
@@ -951,29 +1061,31 @@ impl NscripterVm {
         }
         Ok(())
     }
-    fn show_buttons(&mut self, host: &mut dyn HostServices) -> Result<()> {
-        let path = self
-            .state
-            .native
-            .button_atlas
-            .as_ref()
-            .context("btnwait requires btndef")?;
-        let [w, h] = host.image_size(self.client, path)?;
+    pub(super) fn show_buttons(&mut self, host: &mut dyn HostServices) -> Result<()> {
+        let atlas = match &self.state.native.button_atlas {
+            Some(path) => Some((path.clone(), host.image_size(self.client, path)?)),
+            None => None,
+        };
         let mut ui = vec![
             json!({"op":"put","widget":{"id":BUTTONS,"rect":[0,0,self.config.canvas[0],self.config.canvas[1]],"kind":"panel","modal":true,"z":30000,"color":[0,0,0,0]}}),
         ];
         let mut layers = vec![];
+        self.flush(host)?;
         for (index, button) in self.state.native.buttons.iter().enumerate() {
+            let id = BUTTONS + 1 + index as u32;
+            ui.push(json!({"op":"put","widget":{"id":id,"parent":BUTTONS,"rect":button.rect,"kind":"button","color":[0,0,0,0]}}));
+            if button.sprite.is_some() {
+                continue;
+            }
+            let (path, [w, h]) = atlas.as_ref().context("btnwait requires btndef")?;
             ensure!(
                 button.source[0] >= 0
                     && button.source[1] >= 0
-                    && button.source[0] + button.rect[2] <= w as i32
-                    && button.source[1] + button.rect[3] <= h as i32,
+                    && button.source[0] + button.rect[2] <= *w as i32
+                    && button.source[1] + button.rect[3] <= *h as i32,
                 "native button atlas bounds"
             );
-            let id = BUTTONS + 1 + index as u32;
-            ui.push(json!({"op":"put","widget":{"id":id,"parent":BUTTONS,"rect":button.rect,"kind":"button","color":[0,0,0,0]}}));
-            layers.push(json!({"op":"put","layer":{"id":id,"rect":button.rect,"order":[20000,index],"visible":false,"uv":[button.source[0] as f32/w as f32,button.source[1] as f32/h as f32,(button.source[0]+button.rect[2]) as f32/w as f32,(button.source[1]+button.rect[3]) as f32/h as f32],"paint":{"kind":"image","asset":path}}}));
+            layers.push(json!({"op":"put","layer":{"id":id,"rect":button.rect,"order":[20000,index],"visible":false,"uv":[button.source[0] as f32/ *w as f32,button.source[1] as f32/ *h as f32,(button.source[0]+button.rect[2]) as f32/ *w as f32,(button.source[1]+button.rect[3]) as f32/ *h as f32],"paint":{"kind":"image","asset":path}}}));
         }
         self.submit(host, layers, ui)
     }
@@ -991,10 +1103,38 @@ impl NscripterVm {
                 && (BUTTONS + 1..BUTTONS + 1 + self.state.native.buttons.len() as u32)
                     .contains(&e.widget.id)
         });
+        // ONScripter_event.cpp key codes; the corresponding get* flags were declared.
+        let declared = |name: &str| self.state.native.declarations.contains_key(name);
+        let key = |bit: u64| input.buttons_pressed & bit != 0;
+        let timed_out = self.state.native.button_timeout.is_some_and(|ms| host.now_ms() >= self.state.native.button_started.saturating_add(ms));
         let number = if let Some(event) = selected {
             Some(self.state.native.buttons[(event.widget.id - BUTTONS - 1) as usize].number)
-        } else if input.buttons_pressed & buttons::MOUSE_RIGHT != 0 {
+        } else if key(buttons::MOUSE_RIGHT) {
             Some(-1)
+        } else if declared("getenter") && key(buttons::ENTER) {
+            Some(-19)
+        } else if declared("gettab") && key(buttons::TAB) {
+            Some(-20)
+        } else if declared("getcursor") && key(buttons::UP) {
+            Some(-40)
+        } else if declared("getcursor") && key(buttons::RIGHT) {
+            Some(-41)
+        } else if declared("getcursor") && key(buttons::DOWN) {
+            Some(-42)
+        } else if declared("getcursor") && key(buttons::LEFT) {
+            Some(-43)
+        } else if declared("getpageup") && key(buttons::PAGE_UP) {
+            Some(-12)
+        } else if declared("getpageup") && key(buttons::PAGE_DOWN) {
+            Some(-13)
+        } else if declared("usewheel") && key(buttons::WHEEL_UP) {
+            Some(-2)
+        } else if declared("usewheel") && key(buttons::WHEEL_DOWN) {
+            Some(-3)
+        } else if key(buttons::MOUSE_LEFT) {
+            Some(0)
+        } else if timed_out {
+            Some(if self.state.native.automode { 0 } else if declared("usewheel") { -5 } else { -2 })
         } else {
             None
         };
@@ -1007,16 +1147,28 @@ impl NscripterVm {
                         &host.query_engine(self.client, EngineQuery::UiInteraction(id))?,
                     )?;
                 let visible = interaction.is_some_and(|s| s.hovered || s.focused);
-                layers.push(json!({"op":"set_visible","id":id,"visible":visible}));
+                match self.state.native.buttons[index].sprite {
+                    // Cell 0 is the idle face, cell 1 the hovered one.
+                    Some(sprite) => {
+                        if let Some(animation) = self.state.native.animations.get_mut(&sprite) {
+                            animation.fixed_cell = Some(u32::from(visible).min(u32::from(animation.sequence.cells.max(1)) - 1));
+                        }
+                    }
+                    None => layers.push(json!({"op":"set_visible","id":id,"visible":visible})),
+                }
             }
             self.submit(host, layers, vec![])?;
             return Ok(Some(VmYield::WaitForInput));
         };
-        let layers = (0..self.state.native.buttons.len())
-            .map(|i| json!({"op":"remove","id":BUTTONS+1+i as u32}))
+        let layers = self.state.native.buttons.iter().enumerate()
+            .filter(|(_, b)| b.sprite.is_none())
+            .map(|(i, _)| json!({"op":"remove","id":BUTTONS+1+i as u32}))
             .collect();
         self.submit(host, layers, vec![json!({"op":"remove","id":BUTTONS})])?;
-        self.state.native.buttons.clear();
+        if !std::mem::take(&mut self.state.native.keep_buttons) {
+            self.state.native.buttons.clear();
+        }
+        self.state.native.button_timeout = None;
         self.state.vars.ints.insert(variable, number);
         self.state.wait = Wait::None;
         input.buttons_pressed = 0;

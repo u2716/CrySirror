@@ -1,7 +1,7 @@
 # ADR 0087: Logical input journals and native audio continuations
 
 Date: 2026-10-27
-Status: Accepted for framed digital/pointer input
+Status: implemented framed digital/pointer profile; raw OS/IME/analog coverage remains separate
 
 ## Problem and source review
 

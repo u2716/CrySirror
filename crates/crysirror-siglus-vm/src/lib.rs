@@ -22,7 +22,9 @@ pub mod resource;
 pub mod runtime;
 pub mod scene_pck;
 pub mod scene_stream;
+pub mod shared;
 pub mod text_render;
+pub mod thumb_table;
 mod util;
 pub mod vm;
 pub mod assets {
@@ -51,3 +53,6 @@ mod pcmch_bridge;
 mod sfx_bridge;
 
 mod pcmevent_bridge;
+
+mod native_sound;
+mod native_string;

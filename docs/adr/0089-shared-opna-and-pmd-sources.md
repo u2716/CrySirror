@@ -1,11 +1,11 @@
 # ADR 0089: Shared OPNA synthesis and bounded PMD sources
 
 Date: 2026-10-27
-Status: Accepted for the explicit profile below
+Status: implemented bounded register-score/PMD profile; full chip/driver coverage remains partial
 
 ## Decision
 
-Extract the pure YM2608 model and PMD v4.8 driver from the user's pinned UK2
+Extract the pure YM2608 model and PMD v4.8 driver from the pinned UK2
 implementation into crysirror-audio, preserving its MPL notice and provenance.
 No UK2 VM, Kira output/mixer, device layer, font or game resource is imported.
 The source audit records the exact revision and file hashes. This capability is

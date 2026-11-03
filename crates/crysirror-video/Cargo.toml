@@ -21,3 +21,5 @@ oxideav-h264 = { git = "https://github.com/OxideAV/oxideav-h264", rev = "f8404d8
 oxideav-h265 = { git = "https://github.com/OxideAV/oxideav-h265", rev = "276406e4288e5333c6d6d184f2a6d36e72010ba5" }
 oxideav-av1 = { git = "https://github.com/OxideAV/oxideav-av1", rev = "b3c95abe071037bb8ecf06dfc6ec17f1424a380d" }
 oxideav-pixfmt = "=0.1.11"
+# Cinepak (AVI/CVID, MIT) for AVG32 movies; no oxideav-core registry glue.
+oxideav-cinepak = { version = "=0.0.3", default-features = false }

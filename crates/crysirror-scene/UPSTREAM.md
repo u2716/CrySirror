@@ -3,18 +3,10 @@
 License: MPL-2.0; full text is the monorepo root LICENSE. This crate forbids
 unsafe code and has no window, GPU or audio SDK dependency.
 
-| Origin | Exact commit | Migrated implementation |
-|---|---|---|
-| https://github.com/xmoezzz/siglus_rs | `5f358ef1360b0439e92aed2b749e8f25d8721954` | Complete runtime/input.rs -> input.rs, runtime/int_event.rs -> animation.rs, render_math.rs -> projection.rs |
-| https://github.com/xmoezzz/rfvp | `062fec82033b554b9eb3b5da069518c0c96a354e` | UiSurfaceTransform, inside_rect, map_window_to_virtual from exit_confirm_ui.rs -> ui.rs |
-
-The complete listed source files were read at the pinned commits before this
-migration. Siglus layer.rs was also read as the reference for retained layer
-storage, ordering and sprite fields. It is NOT presented as a verbatim port:
-our safe scoped LayerSystem and frame extraction are new integration code.
-RFVP's capture-on-down/activate-on-matching-release behavior was generalized to
-retained widgets; its native GPU/window confirmation dialog was not copied.
-Source SHA256 values, including reviewed reference files, are in upstream-files.json.
+The shared input, event, projection and UI mechanisms were developed in
+xmoezzz's Siglus/RFVP implementations and are maintained here as engine services.
+Native VM policies remain separate from the shared retained state and rendering
+operations.
 
 Changes to directly migrated code:
 
@@ -40,6 +32,14 @@ Reproduce the actual original-vs-migrated algorithm comparison:
 python3 tools/compare_scene_upstream.py --source-root /absolute/external/references
 ```
 
-It verifies actual Git pins and source SHA256, compiles the original input,
+The historical differential driver compiles the reference input,
 IntEvent, projection and RFVP helper code in a temporary driver, then compares
 175,700 observations. No game data, SDK, credentials or fonts are imported.
+
+`animation/adaptive_steps.rs` is independently expressed shared scheduling data
+and arithmetic, using the complete SystemNNN CShakin routines as behavioral
+evidence at78a05053c78b3b80065a9a209c6685a7c60a2e83. No original C++ code or
+licence grant is imported. The authenticated old-module zero-lookahead policy
+and later public-source prediction policy are explicit constructor parameters;
+see docs/nnn-native-adaptive-clock-source-audit.json for complete static evidence
+and independent test receipts. Native triggering/preferences remain adapter policy.

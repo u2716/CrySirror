@@ -2,6 +2,14 @@
 
 Date: 2026-10-27. Status: implemented profile; validation is recorded in STATUS.md.
 
+## Follow-up implementation (updated 2026-11-03)
+
+Native/canonical decoder admission, media PCM, final mix and device ownership now have follow-up implementations. Original synchronous sources and remaining allocation/shutdown boundaries are not thereby universally asynchronous.
+
+Follow-ups: [ADR 0070](0070-native-channel-audio-readiness.md), [ADR 0071](0071-canonical-audio-worker-bridge.md), [ADR 0072](0072-worker-prepared-media-pcm.md), [ADR 0079](0079-worker-final-audio-frames.md), [ADR 0080](0080-async-output-worker-and-bounded-pcm-transfer.md).
+The original checkpoint evidence and remaining-boundary paragraphs below retain
+their dated scope. They must not be read as an engine-wide current missing list.
+
 ## Ownership and completion
 
 ADR 0050 applies to audio opening and decoding as well as acoustic/HRTF work.
@@ -81,7 +89,7 @@ previous blocking APIs. This behavior change and generated declarations belong
 in docs/api/CHANGES.md. No codec algorithm, whole-frame host or VM engine is
 copied for this feature.
 
-## Remaining boundaries
+## Initial checkpoint boundaries (follow-ups above)
 
 The existing SceneState/native channel opening, native AudioRequest decoder
 paths and synchronous native wait/checkpoint semantics are unchanged. Migrating

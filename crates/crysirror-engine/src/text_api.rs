@@ -41,6 +41,7 @@ pub(crate) struct Block {
 pub struct TextRuntime {
     pub(crate) blocks: BTreeMap<(u32, String), Block>,
     pub(crate) asynchronous: crate::text_async::TextJobs,
+    pub(crate) bounds: crate::text_bounds_api::Jobs,
 }
 const MAX_BLOCKS: usize = 8;
 const MAX_EVENTS: usize = 4096;
@@ -223,6 +224,14 @@ fn info() -> &'static ClassInfo {
             m("beginPrecomputedFont",vec![("alias",T::String),("asset",T::String),("pixelSize",T::Int)],T::Int,"Begin bounded TFT v0/v1 fixed-size coverage font preparation. Uses the same scoped fontStatus, measurement, TextRun and GlyphRun resources; missing glyphs or a different size fail explicitly."),
             m("fontStatus",vec![("ticket",T::Int)],T::Map,"Poll font workers. Ready contains canonical alias, digest, revision, families and resource handle; failed contains an error."),
             m("resolveFont",vec![("aliasOrFamily",T::String)],T::Any,"Resolve a client-owned logical alias or font family to immutable font metadata, or null."),
+            m("resolveFontAlias",vec![("aliasOrFamily",T::String)],T::Optional(Box::new(T::String)),"Resolve a scoped dynamic binding, canonical alias or installed static family to the exact engine drawing alias. No font lease is fabricated for static faces."),
+            m("glyphId",vec![("alias",T::String),("character",T::String)],T::Int,"Read one authorized character-to-glyph mapping without rasterization, parsing or I/O. Requires one Unicode scalar; a missing printable glyph fails explicitly."),
+            m("fontStyle",vec![("alias",T::String)],T::Optional(Box::new(T::Map)),"Read cached actual outline OS/2 {weight,italic}; unknown metadata/precomputed faces return null, never fabricated regular weight."),
+            m("fontMetrics",vec![("alias",T::String),("size",T::Number),("character",T::String)],T::Map,"Measure one Unicode scalar with this client's authorized immutable font view; returns ascent, descent and advance. Size 1..512."),
+            m("layoutUnitFlow",vec![("items",T::List(Box::new(T::Map))),("options",T::Optional(Box::new(T::Map)))],T::Map,"Font-independent cell-stream placement with unit wrapping, explicit moves, style indices and vertical columns. Returns logical cell bounds, not raster ink bounds. Live calls accept at most4096 commands; offline Rust layout accepts65536."),
+            m("beginGlyphBounds",vec![("font",T::String),("glyphs",T::List(Box::new(T::Map)))],T::Int,"Prepare actual glyph coverage-cell bounds on a scoped CPU worker. Each request contains character, size and optional baseline. Retains the admitted font snapshot; never joins the owner thread."),
+            m("glyphBoundsStatus",vec![("ticket",T::Int)],T::Map,"Retained glyph metadata completion: pending/ready/failed/cancelled. Ready includes admitted font digest and ordered glyph_id/origin/size records, not logical cell advances."),
+            m("releaseGlyphBounds",vec![("ticket",T::Int)],T::Void,"Cancel/release this client's glyph metadata ticket without joining a worker."),
             m("releaseFontJob",vec![("ticket",T::Int)],T::Void,"Cancel/release registration ticket. Published faces remain until releaseFont."),
             m("releaseFont",vec![("handle",T::Int)],T::Void,"Release this client's dynamic face. Existing layer references must be removed or replaced before rendering."),
             m("beginDraw",vec![("name",T::String),("markup",T::String),("options",T::Optional(Box::new(T::Map)))],T::Int,"Prepare markup, shaping, icon decoding and initial raster on bounded workers. Returns a client/generation ticket; the old block remains until successful publication."),
@@ -257,8 +266,18 @@ impl Class for TextClass {
         args: &[Value],
     ) -> Result<Value> {
         if let Some(value)=crate::text_font_api::call(cx.state()?,method,args)? {return Ok(value);}
+        if let Some(value)=crate::text_bounds_api::call(cx.state()?,method,args)? {return Ok(value);}
         if let Some(value) = crate::text_async::call(cx.state()?, method, args)? {
             return Ok(value);
+        }
+        if method=="layoutUnitFlow" {
+            use crysirror_text::unit_flow::{UnitFlowItem,UnitFlowOptions,layout_unit_flow,MAX_FLOW_ITEMS};
+            let Some(Value::List(items))=args.first() else {bail!("unit flow items must be a list");};
+            let maximum=if cx.state()?.runtime.assets.is_nonblocking(){4096}else{MAX_FLOW_ITEMS};
+            ensure!(items.len()<=maximum,"unit flow live/offline command budget");
+            let items=serde_json::from_value::<Vec<UnitFlowItem>>(args[0].to_json())?;
+            let options=args.get(1).map(|v|serde_json::from_value::<UnitFlowOptions>(v.to_json())).transpose()?.unwrap_or_default();
+            return Ok(Value::from_json(serde_json::to_value(layout_unit_flow(&items,options)?)?));
         }
         if matches!(method,"measureSimple"|"positionSimple") {
             let font = args.first().context("font alias")?.as_str()?;

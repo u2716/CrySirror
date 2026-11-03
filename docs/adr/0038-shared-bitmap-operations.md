@@ -4,10 +4,9 @@ Status: implementation and validation recorded with this change.
 
 ## Requirement
 
-The owner's priority is to use existing engine implementations to expand
-CrySirror's capabilities. Successfully launching an external engine is not the
-deliverable. Shared primitives execute in CrySirror; adapters retain bytecode,
-native handles, units, resource policies, waits and original saves.
+Reusable bitmap mechanisms execute through shared CrySirror primitives.
+Adapters retain native bytecode, handles, units, resource policies, waits and
+original-save semantics.
 
 ## Decision
 

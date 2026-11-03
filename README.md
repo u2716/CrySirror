@@ -1,266 +1,86 @@
-# CrySirror
+<p align="center">
+  <img src="icon/crysirror.svg" width="160" height="160" alt="CrySirror logo">
+</p>
 
-A data-driven Rust runtime with a shared **wgpu + winit desktop backend**,
-independent compatibility adapters, common rendering/audio/file services, and
-local MCP authoring tools.
+<h1 align="center">CrySirror</h1>
 
-**This is the 0.2 desktop foundation, not a completed RFVP/Siglus merge.**
-The workspace now compiles/tests locally and the offscreen GPU pixel test has
-been executed. Complete upstream checkouts are pinned, but their VMs have not
-been connected. The only executable adapter in this source tree is the explicit
-`crysirror-script-v1` data-program VM. See [STATUS.md](STATUS.md) for measured
-results rather than inferred compatibility.
+<p align="center">A data-driven Rust 3D engine with JS/TS scripting, native VN compatibility and MCP tools.</p>
 
-The long-term target is a modern, data-driven third-person 3D engine with MCP
-authoring/inspection. [ADR 0002](docs/adr/0002-modern-engine-and-optional-typescript.md)
-sets the architecture and measurable milestones. Optional TS/JS authoring now
-uses the Rust Oxc compiler and Boa JS engine to generate validated project data;
-see [AUTHORING.md](docs/AUTHORING.md) and `examples/desktop/arena.ts`.
+CrySirror provides shared rendering, physics, animation, audio, text, UI and asset
+systems for building games. Scenes and behaviours can be described as data or
+controlled through Rust and JavaScript/TypeScript APIs. The desktop host uses
+**wgpu + winit**, targeting Windows, Linux and macOS.
 
-The monorepo now includes a separate `crysirror-siglus` resource frontend and
-shared `crysirror-image` services. Native G00 pixels/metadata have been compared
-with the executed original decoder. The renderer also has an executed GPU
-compute ray tracer with directional shadows. Native BLAS/TLAS ray queries now
-provide opaque primary rays and hybrid PBR sun shadows, negotiated separately
-for Vulkan, DX12 and Metal; see [ADR 0051](docs/adr/0051-hardware-ray-query.md).
-[ADR 0003](docs/adr/0003-siglus-monorepo-and-rendering-capabilities.md)
-documents the boundaries, commands and desktop platform scope.
+## Capabilities
 
-The engine owns its [Audio/SFX, Text, UI, Layer and World systems](docs/ENGINE_SYSTEMS.md).
-Audio scheduling/buses and CPU text layout/rasterization now have separate engine
-crates; desktop/wgpu provide lifecycle/output. UI, full layer composition and a
-dynamic world remain future implementations, beyond today's flat visual/static
-scene model. Compatibility frontends preserve native policies on those services.
+| System | Features |
+| --- | --- |
+| 3D rendering | PBR/HDR, image-based lighting, local lights and shadows, fog, SSAO, TAA, bloom and tone mapping. |
+| Ray tracing | Hardware ray queries, dynamic BLAS/TLAS, alpha-tested shadows, soft shadows, glossy reflections and diffuse GI on supported devices. |
+| World and animation | Entity hierarchies, transforms, skeletal animation, blending, animation graphs and level sequences. |
+| Physics | Rapier 3D rigid bodies, colliders, CCD, joints, character control, queries and collision events. |
+| Visual effects | Modular CPU/GPU particles, sprite/mesh/ribbon rendering, sub-emitters and flipbooks. |
+| 2D and UI | Retained layers and canvases, transforms, clipping, blending, filters, transitions, widgets and menus. |
+| Text | Font resources/fallback, shaping, bidi, rich text, ruby, vertical layout, outlines/shadows and typewriter reveal. |
+| Audio | SFX pools, music streaming, buses/ducking, fades, 3D spatial processing, acoustic BVHs, HRTF, reverb and early reflections. |
+| Assets | glTF/GLB, FBX, PMX and VRM import; archive mounts, native image/audio/video codecs and asynchronous preparation. |
+| Scripting and tools | Boa + Oxc JS/TS lifecycle scripts, data-driven projects, profiling and MCP project operations. |
 
-## Architecture
+[Engine systems](docs/ENGINE_SYSTEMS.md) · [Rendering and frame pipeline](docs/FRAME_PIPELINE.md) · [Resource formats](docs/RESOURCES.md)
 
-```text
-Original RFVP VM      Original Siglus VM      New data programs
-     not linked            not linked         implemented source
-         |                     |                      |
-         +------- distinct VmAdapter factories ------+
-                               |
-                  Runtime / SharedHost / data model
-                  |          |           |         |
-              scene/text   files       audio     snapshots
-                  |                      |
-          crysirror-wgpu            desktop audio
-                  |                      |
-                  +---- crysirror-desktop ---------+
-                             winit event loop
-```
+## APIs
 
-`crysirror-core` and `crysirror-compat` remain independent of window/GPU/audio
-SDKs. The default desktop executable owns `winit`; the renderer uses `wgpu`
-and does not depend on `winit`. Switch and PS Vita backends are deferred,
-not conditional claims of support hidden inside the desktop implementation.
+Rust callers, JS/TS behaviours and native adapters use the same engine services
+and engine-owned resources.
 
-The default dependencies pin `wgpu = 29.0.3` and `winit = 0.30.12`. This is a
-chosen API baseline, not a claim that these are the latest versions or that
-upstream engines already compile against it. Cargo.lock now records a real,
-successfully built dependency resolution. Resolved dependencies require Rust
-1.95 (required by the native Rust MP4 codecs); the workspace declares that minimum, but only 1.98.1 was tested here.
-A full dependency license audit is still pending.
+| Entry point | Documentation |
+| --- | --- |
+| Engine classes and commands — World/Entity, Layers/Canvases, Text, Audio, Physics and Vfx | [API reference](docs/api/REFERENCE.md) |
+| JavaScript / TypeScript bindings | [TypeScript declarations](docs/api/crysirror.d.ts) |
+| Rust application lifecycle and public engine facade | [crysirror-engine](crates/crysirror-engine/src/lib.rs) |
+| Machine-readable API schema | [api.json](docs/api/api.json) |
+| MCP inspection, validation, editing, shader checks, trace, capture and packaging | [MCP tools](docs/MCP.md) |
+| Offline TS/JS scene recipes | [Authoring guide](docs/AUTHORING.md) |
 
-## What is in the implementation
+## Native engine compatibility
 
-| Component | Implemented source | Important boundary |
-|---|---|---|
-| Window/input | winit ApplicationHandler, resize/suspend, keyboard/mouse, logical pointer mapping | Desktop only; interactive input not yet verified |
-| 2D graphics | GPU textures, ordered alpha-blended quads, letterboxed canvas, bounded caches | PNG/JPEG/BMP, not native encrypted archives |
-| Siglus resources | Separate native G00 decoder, shared image/JPEG/upload services | Original SceneVm/syscalls/saves not linked |
-| Text | Supplied-font rasterization, simple wrapping/kerning, cached text surfaces | No bundled font, ruby/kinsoku/native layout not emulated |
-| 3D | Camera, transformed cubes/indexed triangles, lighting, depth buffer | Static opaque prototype, not PBR/animation/physics |
-| Ray tracing | Separate compute traversal and native BLAS/TLAS queries; opaque primary rays, hybrid PBR sun shadows, shared overlays | Capability negotiation across Vulkan/DX12/Metal; no RT GI/reflections, alpha candidates or vendor-wide hardware validation |
-| Audio | rodio output, namespaced channels, retrigger/loop/stop/gain | Native game codecs/semantics not verified |
-| Files | Per-client capability directories, read-only assets, bounded atomic writes | Not a sandbox for arbitrary native Rust code |
-| Saves | VM + shared-state snapshot, staged all-VM restore, version/identity/checksum checks | Not an importer for original saves; audio restarts |
-| Data VM | Explicit service instructions, time/input waits, PC snapshots, budget | Not RFVP HCB or Siglus bytecode |
-| TS/JS authoring | Oxc transform + Boa buildProject() -> validated JSON | Offline trusted recipes; no TS type checking or per-frame JS |
-| MCP | stdio handshake, inspect/validate/replace, capture/package tools | Project authoring, not a live native VM debugger |
-| Packaging | Existing host + explicit assets + hashes + own source/notices | Does not compile, sign, or bundle every OS library |
+The following engines have native adapters in the workspace. Their interpreters
+map operations onto CrySirror's shared graphics, text, UI, audio and resource APIs.
+Adapter documentation describes the native instruction and resource formats
+handled by each integration.
 
-## Build and run
+| Engine | Integration |
+| --- | --- |
+| Siglus | [Scene VM, native message/object/audio mappings](docs/NATIVE_ADAPTERS.md#siglus-portable-host-policy-and-shared-text-coverage-2026-10-30) |
+| RealLive | [Seen bytecode, graphics, text, selections, audio and media](docs/REALLIVE.md) |
+| AVG32 | [Original interpreter with shared PDT, text, audio and storage](docs/adr/0095-avg32-installed-games-shared-raster.md) |
+| KiriKiri 2 / Z · KAG3 | [TJS2/KAG adapters, shared layers/canvases and plugin facades](docs/adr/0088-kag3-semantic-adapter-and-shared-prerequisites.md) |
+| NScripter | [Native text scripts, SAR/NSA resources and command mappings](crates/crysirror-nscripter/README.md) |
+| RFVP | [HCB interpreter and native syscall adapter](docs/NATIVE_ADAPTERS.md) |
+| BGI / Ethornell | [Native BP bytecode adapter](crates/crysirror-bgi/README.md) |
+| Circus | [DC4 Plus Harmony MES adapter](crates/crysirror-circus/README.md) |
+| CatSystem2 | [KCS/FES adapter and shared resource mappings](crates/crysirror-catsystem2/README.md) |
+| Majiro | [MJO bytecode adapter and resource loading](crates/crysirror-majiro/README.md) |
+| AliceSoft System 4 | [AIN bytecode adapter and native graphics/audio mappings](crates/crysirror-system4/README.md) |
+| System-NNN | [SPT bytecode adapter and native service mappings](crates/crysirror-system-nnn/README.md) |
 
-Use a Rust development machine with an appropriate graphics driver. The locked
-workspace checks/tests have run on macOS with Rust 1.98.1. Other OSes and the
-minimum Rust version still need validation. Interactive window/audio behavior
-requires separate checks; see STATUS.md.
+## Try CrySirror
+
+Requires Rust 1.95 or newer and the platform's graphics/input/audio libraries.
 
 ```sh
-cargo check --locked --workspace --all-targets
-cargo test --locked --workspace
-cargo run --locked -p crysirror-desktop -- run examples/desktop/project.json --no-audio
+cargo build --release --locked
+./target/release/crysirror run examples/desktop/systems.json --no-audio
+./target/release/crysirror play /path/to/game
 ```
 
-On Debian/Ubuntu, desktop builds typically need native development packages for
-ALSA, X11/XKB and Wayland. Validate against the local platform libraries.
-Build without audio when those audio libraries are not available:
+The desktop build includes the native adapters and format providers. Installed
+games are detected and mounted in place. See the [desktop guide](docs/DESKTOP_API.md)
+for launch options, headless rendering and project setup.
 
-```sh
-cargo run -p crysirror-desktop --no-default-features -- run examples/desktop/project.json --no-audio
-```
-
-The fixture intentionally gives two clients the same local visual ID and asset
-filename. Separate client asset roots should draw a green panel on the left
-and an orange panel on the right, over one shared static 3D scene. That is a
-test of the new service implementation, not proof of native compatibility.
-
-| Input | Action |
-|---|---|
-| Enter / Space / mouse click | Advance a data-script input wait |
-| F5 | Save whole-runtime snapshot |
-| F9 | Restore snapshot transactionally |
-| F12 | Capture through the GPU renderer |
-| Escape | Exit |
-
-The `text.json` fixture needs a font you provide locally:
-
-```sh
-cargo run -p crysirror-desktop -- run examples/desktop/text.json --font /path/to/your-font.ttf --no-audio
-cargo run -p crysirror-desktop -- run examples/desktop/audio.json
-```
-
-For a distributable text project, declare a properly licensed font in
-`project.fonts` rather than relying on a developer's absolute `--font` path.
-No fonts are distributed in this repository or its source artifacts.
-
-## Inspect, trace and capture
-
-```sh
-cargo run -p crysirror-desktop -- inspect examples/desktop/project.json
-cargo run -p crysirror-desktop -- trace examples/desktop/project.json --frames 120 --press-at 1
-cargo run -p crysirror-desktop -- render examples/desktop/project.json --output dist/capture.png
-cargo run -p crysirror-desktop -- gpu-info
-cargo run -p crysirror-desktop -- render examples/desktop/arena.json --renderer hardware-raytrace --output dist/hardware-rt.png
-```
-
-`trace` executes VM ticks without opening a window or emitting sound. `render`
-uses the actual wgpu pipeline offscreen and requires a working GPU/backend,
-including a software Vulkan adapter where available. It never substitutes a
-fabricated PNG when GPU initialization fails.
-
-`gpu-info` separates adapter availability from features enabled on the default
-raster device. Explicit `--renderer hardware-raytrace` requests native ray
-queries and AS limits, or fails with a reason; it never silently substitutes
-software tracing. Render JSON records the selected device and encoded RT work.
-Those counters do not measure GPU completion or performance. Native API support
-also does not independently certify dedicated RT silicon. The initial profile
-uses opaque triangles; masked/transparent casters and custom fragment-discard
-materials fail visibly. PBR remains raster shaded with hardware sun visibility.
-
-The former bootstrap CLI remains available under a different binary name:
-
-```sh
-cargo run -p crysirror-cli --bin crysirror-contract -- replay examples/fusion.json
-```
-
-Schema 1 bootstrap transcripts and schema 2 desktop projects are separate.
-
-## MCP authoring tools
-
-Read-only project tooling works without Rust and was exercised in a real stdio
-subprocess test:
-
-```sh
-python3 tools/mcp_server.py --project examples/desktop/project.json
-```
-
-After compiling the host, enable project replacement and captures explicitly:
-
-```sh
-cargo build --release -p crysirror-desktop
-python3 tools/mcp_server.py --project examples/desktop/project.json \
-  --executable target/release/crysirror --allow-write
-```
-
-Tools: `project_inspect`, `project_validate`, optional `project_replace`,
-`scene_capture`, `game_package`. The last two need a configured executable.
-The server implements newline-delimited stdio JSON-RPC with protocol
-`2025-06-18`, initialization and tool errors. It has no shell-execution tool
-and no HTTP listener. stdout is reserved for protocol responses.
-
-A capture starts a fresh host from project data, not the currently running
-window. Replacing JSON does not hot-reload an existing process. There is no
-external generative-model provider or automatic 3D asset generator included.
-
-## Packaging
-
-```sh
-python3 tools/desktop_project.py examples/desktop/project.json --assets
-python3 tools/package_game.py --project examples/desktop/project.json \
-  --executable target/release/crysirror --target linux --output dist/CrySirror-linux.zip
-```
-
-Use a host built for the requested OS. Windows uses `crysirror.exe`. The tool
-checks executable format but does not prove execution, ABI compatibility,
-code signing or third-party-license completeness. It includes the current
-CrySirror engine sources and own notices. The distributor must verify those
-sources correspond to the executable and audit dependency/asset notices.
-
-For asset transfer only, use `--data-only` in place of `--executable/--target`.
-The resulting archive explicitly says `runtime_included: false`.
-
-## Verification
-
-```sh
-python3 -m unittest discover -s tests -v
-python3 tools/verify.py
-python3 tools/verify.py --gpu
-```
-
-`verify.py` exits with an error if cargo is absent. Python tests are never
-reported as Rust or GPU tests. Validation is local by default. GitHub CI has
-been removed at the owner's request; do not add or enable remote build automation
-without explicit authorization. Cross-platform results require actual evidence.
-
-[ADR 0050](docs/adr/0050-engine-wide-async-execution.md) requires asynchronous,
-multithreaded support throughout the engine. Current asset/pose workers are
-only stage one.
-
-## Connecting the original VMs
-
-[docs/NATIVE_ADAPTERS.md](docs/NATIVE_ADAPTERS.md) describes the exact new
-factory/VM/host interfaces and the remaining work. Existing VM semantics stay
-in their respective adapters. Do not substitute the demo interpreter for an
-unknown native opcode or silently approximate a native text layout.
-
-```sh
-python3 tools/upstreams.py fetch --source-root ../CrySirror-references
-python3 tools/upstreams.py audit --source-root ../CrySirror-references > upstream-audit.json
-```
-
-Fetching records real commits. It does not automatically refactor, merge or
-register either native VM. Original source is now pinned and locally available;
-original-game behavior remains unverified. Keep reference checkouts outside the
-deliverable because their font/game fixtures must not be redistributed.
-
-## Repository publication
-
-This workspace is currently a source export without a .git directory. No remote
-was created in this iteration. The publication helper requires a separately
-prepared clean Git checkout and an authorized local GitHub CLI session:
-
-```sh
-python3 tools/publish_github.py --private
-```
-
-The script checks that the account is `xmoezzz`, refuses an existing origin and
-dirty worktree, does not force-push, and defaults to private visibility.
+[Documentation](docs/README.md) · [Architecture](docs/ARCHITECTURE.md) · [Roadmap](docs/adr/0041-engine-capability-roadmap.md)
 
 ## License
 
-New code and self-authored demo assets: MPL-2.0. See [LICENSE](LICENSE) and
-[NOTICE.md](NOTICE.md). Upstream/third-party code and user assets keep their own
-licenses. No proprietary console SDK or game material is bundled.
-
-The [frame pipeline and profiling guide](docs/FRAME_PIPELINE.md) includes public
-Khronos showcase recipes for shared RT mesh instances and asynchronous level
-streaming. `run --profile PATH` exports a CPU Chrome trace and GPU timing
-diagnostics. This advances ADR 0050; engine-wide async migration remains partial.
-
-The [modular VFX laboratory](examples/aaa-vfx/README.md) exercises engine-owned
-CPU/GPU effect systems, typed parameters, collision sub-emitters, flipbooks,
-mesh particles and ribbons in a public PBR demo. [ADR 0064](docs/adr/0064-modular-vfx-cpu-gpu.md)
-documents asynchronous ownership, resident GPU simulation and the explicit
-remaining Niagara capability gaps; it is an independent implementation.
+CrySirror-authored code uses MPL-2.0. Adopted and third-party components retain
+their applicable licenses; see [LICENSE](LICENSE) and [NOTICE.md](NOTICE.md).

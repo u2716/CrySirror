@@ -3,6 +3,14 @@
 Date: 2026-10-27. Status: implemented bounded first-order tracking profile.
 Follows ADR 0050, 0067–0074. Actual validation is recorded in STATUS.md.
 
+## Follow-up implementation (updated 2026-11-03)
+
+Geometry instances and direct Doppler now have dedicated follow-ups, as do final mixing and output workers. Continuous reflected-path Doppler and deformation/refit remain separate gaps.
+
+Follow-ups: [ADR 0079](0079-worker-final-audio-frames.md), [ADR 0080](0080-async-output-worker-and-bounded-pcm-transfer.md), [ADR 0082](0082-acoustic-instance-snapshots.md), [ADR 0084](0084-kinematic-doppler-and-motion-capture.md).
+The original checkpoint evidence and remaining-boundary paragraphs below retain
+their dated scope. They must not be read as an engine-wide current missing list.
+
 ## Decision
 
 Extend the engine-owned geometry/DSP resources from ADR 0074 with automatic
@@ -93,11 +101,13 @@ moving_reflections example exports stationary/moving wet-only WAVs through the
 same worker-prepared plans and mixer; its explicit wait is an offline fence.
 Live engine tracking never waits for geometry work in Mixer::render.
 
-Geometry is still baked/static: no mesh refit, higher/diffuse bounce, diffraction,
-reflection HRIR/Ambisonics or continuous Doppler. Updates crossfade discrete
+Mesh data in this profile remains immutable. ADR 0082 adds moving instances;
+deformation/refit, higher/diffuse bounce, diffraction, reflected HRIR/Ambisonics
+and continuous reflected-path Doppler remain outside this model. Updates crossfade discrete
 captured delays rather than resampling a continuous physical trajectory. Ring
 capacity and pending jobs bound memory, not CPU throughput for arbitrary scenes.
-Final DSP/mixing, control/scratch allocation, last-reference disposal and device/
-pool teardown retain synchronous owner boundaries. This is partial progress on
+Final DSP and device output subsequently moved to workers (0079/0080). Remaining
+control/scratch allocation, last-reference disposal and teardown limits still
+require explicit ownership; this tracking ADR alone does not remove them. This is partial progress on
 ADR 0050, not complete engine-wide async execution or new commercial VN opcode,
 save, GPU, Windows/Linux or audio-output-device evidence.

@@ -1,25 +1,96 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // AliceSoft codecs ported from arc_unpacker, Copyright (C) 2016 rr-.
+// QNT 0/1 headers and bounded plane sizes additionally reviewed against
+// libsys4 b14839f23af0963abbdb17f7cac57a36fd8e9bd2 src/qnt.c:
+// (C) 1997-1998 Masaki Chikama; (C) 2019-2020 Nunuhara Cabbage;
+// (C) 2020 KichikuouChrome@gmail.com; GPL-2.0-or-later, used under GPLv3+.
 use super::common::*;
 use anyhow::{ensure, Result};
 use crysirror_image::{ImageDecodeContext, ImageSurface};
-pub fn qnt(bytes: &[u8]) -> Result<ImageSurface> {
+// QNT plane lengths are encoded in the header. Require the complete zlib
+// stream/checksum so a truncated plane cannot become an implicit black image.
+fn qnt_inflate(bytes: &[u8], limit: usize) -> Result<Vec<u8>> {
+    ensure!(
+        limit <= crysirror_image::MAX_DECODED_BYTES,
+        "QNT inflate byte budget"
+    );
+    let mut output = vec![0; limit + 1];
+    let mut decoder = flate2::Decompress::new(true);
+    let status = decoder.decompress(bytes, &mut output, flate2::FlushDecompress::Finish)?;
+    ensure!(
+        status == flate2::Status::StreamEnd && decoder.total_out() <= limit as u64,
+        "QNT incomplete/oversized zlib plane"
+    );
+    output.truncate(decoder.total_out() as usize);
+    Ok(output)
+}
+struct QntHeader {
+    header_size: usize,
+    origin: [i32; 2],
+    size: [u32; 2],
+    depth: u16,
+    color_bytes: usize,
+    alpha_bytes: usize,
+}
+fn qnt_header(bytes: &[u8]) -> Result<QntHeader> {
     let mut c = C::new(bytes);
     ensure!(c.take(4)? == b"QNT\0", "QNT magic");
-    ensure!(c.u32()? == 2, "unsupported QNT version");
-    c.skip(12)?;
+    let version = c.u32()?;
+    ensure!(version <= 2, "unsupported QNT version");
+    let header_size = if version == 0 { 48 } else { c.u32()? as usize };
+    let origin = [c.u32()? as i32, c.u32()? as i32];
     let (w, h) = (c.u32()?, c.u32()?);
     let depth = c.u32()?;
     ensure!(depth == 24, "unsupported QNT depth");
     c.skip(4)?;
     let (pc, ac) = (c.u32()? as usize, c.u32()? as usize);
-    c.skip(24)?;
+    ensure!(
+        header_size >= c.p && header_size <= 1024 * 1024,
+        "invalid QNT header size/budget"
+    );
+    c.skip(header_size - c.p)?;
+    // Metadata validates declared ranges without claiming that compressed
+    // payload/checksum has decoded. Pixel preparation still uses qnt_inflate.
+    c.take(pc)?;
+    c.take(ac)?;
+    crysirror_image::rgba_len(w, h)?;
+    Ok(QntHeader {
+        header_size,
+        origin,
+        size: [w, h],
+        depth: depth as u16,
+        color_bytes: pc,
+        alpha_bytes: ac,
+    })
+}
+pub(crate) fn qnt_encoding_info(
+    bytes: &[u8],
+) -> Result<crysirror_core::image_encoding::ImageEncodingInfo> {
+    let qnt = qnt_header(bytes)?;
+    Ok(crysirror_core::image_encoding::ImageEncodingInfo {
+        format: "alice-soft/qnt".into(),
+        size: qnt.size,
+        source_origin: Some(qnt.origin),
+        color_bits: Some(qnt.depth),
+        has_color_plane: Some(qnt.color_bytes > 0),
+        has_alpha_plane: Some(qnt.alpha_bytes > 0),
+        color_row_bytes: Some(qnt.size[0] * u32::from(qnt.depth / 8)),
+        alpha_sample_bytes: Some(1),
+    })
+}
+pub fn qnt(bytes: &[u8]) -> Result<ImageSurface> {
+    let header = qnt_header(bytes)?;
+    let [w, h] = header.size;
+    let (pc, ac) = (header.color_bytes, header.alpha_bytes);
+    let mut c = C::at(bytes, header.header_size)?;
     let mut out = image(w, h)?;
     let (w, h) = (w as usize, h as usize);
     let ew = (w + 1) & !1;
     let eh = (h + 1) & !1;
     let color = if pc > 0 {
-        inflate(c.take(pc)?, ew * eh * 3)?
+        let raw = qnt_inflate(c.take(pc)?, ew * eh * 3)?;
+        ensure!(raw.len() == ew * eh * 3, "QNT color plane size");
+        raw
     } else {
         Vec::new()
     };
@@ -60,7 +131,8 @@ pub fn qnt(bytes: &[u8]) -> Result<ImageSurface> {
         }
     }
     if ac > 0 {
-        let a = inflate(c.take(ac)?, ew * eh)?;
+        let a = qnt_inflate(c.take(ac)?, ew * eh)?;
+        ensure!(a.len() >= ew * h, "QNT alpha plane size");
         let mut a = C::new(&a);
         for y in 0..h {
             for x in 0..w {

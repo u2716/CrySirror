@@ -26,17 +26,10 @@ pub(super) fn detect(dir: &Path, names: &[String], name: &str) -> Result<Option<
     if archives.is_empty() {
         return Ok(None);
     }
-    #[cfg(not(feature = "majiro"))]
-    {
-        let _ = (name, archives);
-        bail!("recognized Majiro ARC in {}; native adapter 'majiro' is not linked; enable feature majiro",dir.display());
-    }
-    #[cfg(feature = "majiro")]
     {
         native_plan(dir, name, archives).map(Some)
     }
 }
-#[cfg(feature = "majiro")]
 fn native_plan(dir: &Path, name: &str, archives: Vec<String>) -> Result<Plan> {
     use crysirror_core::{service::AssetReader, state::ClientId};
     use crysirror_resource::{read_all, ArchiveFormat, DecodeContext};

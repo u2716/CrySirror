@@ -116,6 +116,9 @@ pub trait AudioSource: Send {
 /// Unified resident-resource decoder used by channels, data-VM playback and
 /// engine Audio APIs. Native codecs share the same AudioSource/mixer contract.
 pub fn open_memory(bytes: Arc<[u8]>, extension: Option<&str>) -> Result<Box<dyn AudioSource>> {
+    if crate::wave_box::WaveBoxInfo::parse(&bytes).is_some() {
+        return open_asset(Arc::new(crysirror_core::service::MemoryAssetReader(bytes)),extension);
+    }
     if bytes.starts_with(b"XPCM") {
         return crate::circus::open_reader(Box::new(Cursor::new(bytes)));
     }
@@ -645,13 +648,22 @@ pub fn open_asset(
     reader: Arc<dyn AssetReader>,
     extension: Option<&str>,
 ) -> Result<Box<dyn AudioSource>> {
+    let mut header=[0;64];
+    let mut count=0;
+    while count<header.len() {
+        let n=reader.read_at(count as u64,&mut header[count..])?;
+        if n==0{break;}ensure!(n<=header.len()-count,"invalid audio header read");count+=n;
+    }
+    if let Some(info)=crate::wave_box::WaveBoxInfo::parse(&header[..count]) {
+        return crate::wave_box::open(reader,info);
+    }
     open_reader(
         Box::new(AssetMedia(crysirror_io::AssetIo::new(reader)?)),
         extension,
     )
 }
 
-struct AssetMedia(crysirror_io::AssetIo);
+pub(crate) struct AssetMedia(pub(crate) crysirror_io::AssetIo);
 impl Read for AssetMedia {
     fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
         self.0.read(out)

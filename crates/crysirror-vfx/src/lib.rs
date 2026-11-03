@@ -5,6 +5,8 @@
 mod schema;
 mod simulation;
 pub mod screen;
+/// Device-free screen/layer shake curves (pattern, oscillation, circle, zoom).
+pub mod shake;
 pub mod falling_atlas;
 pub mod spatial;
 pub use schema::*;

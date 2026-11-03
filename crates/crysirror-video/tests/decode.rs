@@ -72,7 +72,10 @@ fn player_presents_frames_by_time_and_loops() {
 
 #[test]
 fn unknown_and_truncated_containers_fail_visibly() {
-    assert!(sniff(b"RIFF....AVI ").is_err());
+    // RIFF/AVI is recognized (Cinepak); a file with no video frames fails.
+    assert_eq!(sniff(b"RIFF....AVI ").unwrap(), Container::Avi);
+    assert!(open(b"RIFF\x04\0\0\0AVI ".to_vec()).is_err());
+    assert!(sniff(b"RIFF....WAVE").is_err());
     assert!(open(b"\0\0\x01\xba".to_vec()).is_err());
     // A Siglus OMV header (size 0x58) followed by an Ogg page is recognized.
     let mut omv = vec![0u8; 0x58];

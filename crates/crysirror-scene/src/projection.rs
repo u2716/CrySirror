@@ -79,13 +79,19 @@ fn rotate_z(v: Vec3, angle: f32) -> Vec3 {
 }
 
 fn uses_3d(sprite: &Sprite) -> bool {
-    sprite.billboard
+    !sprite.matrix_is_2d()||sprite.billboard
         || sprite.camera_enabled
         || sprite.z.abs() > f32::EPSILON
         || sprite.pivot_z.abs() > f32::EPSILON
         || (sprite.scale_z - 1.0).abs() > 1e-6
         || sprite.rotate_x.abs() > f32::EPSILON
         || sprite.rotate_y.abs() > f32::EPSILON
+}
+fn apply_local_matrix(sprite:&Sprite,p:Vec3)->Vec3 {
+    if let Some(matrix)=sprite.local_matrix {
+        let p=glam::Mat4::from_cols_array(&matrix).transform_point3(glam::Vec3::new(p.x,p.y,p.z));
+        Vec3::new(p.x,p.y,p.z)
+    }else{p}
 }
 
 fn transform_local_point(sprite: &Sprite, px: f32, py: f32, dst_x: f32, dst_y: f32) -> Vec3 {
@@ -114,6 +120,7 @@ fn transform_local_point(sprite: &Sprite, px: f32, py: f32, dst_x: f32, dst_y: f
     p = rotate_z(p, sprite.rotate);
     p = rotate_x(p, sprite.rotate_x);
     p = rotate_y(p, sprite.rotate_y);
+    p=apply_local_matrix(sprite,p);
     p.add(Vec3::new(anchor_x, anchor_y, sprite.z + sprite.pivot_z))
 }
 
@@ -343,6 +350,7 @@ pub fn project_model_point(
     p = rotate_z(p, sprite.rotate);
     p = rotate_x(p, sprite.rotate_x);
     p = rotate_y(p, sprite.rotate_y);
+    p=apply_local_matrix(sprite,p);
     p = p.add(Vec3::new(
         anchor_x + sprite.pivot_x,
         anchor_y + sprite.pivot_y,

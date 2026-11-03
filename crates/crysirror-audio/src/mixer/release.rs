@@ -21,11 +21,7 @@ impl Mixer {
             1.
         };
         let gain = (v.gain.value * v.envelope.value * group).clamp(0., 1.);
-        let db = if gain <= 0.00001 {
-            -10000
-        } else {
-            (2000. * f64::from(gain).log10()).round().clamp(-10000., 0.) as i32
-        };
+        let db = crate::levels::legacy_db100_from_gain(gain)?;
         Ok((db, v.position.floor() as u64))
     }
 
@@ -49,11 +45,7 @@ impl Mixer {
         };
         let voice = self.voice(client, h)?;
         let gain = (voice.gain.value * voice.envelope.value * group_gain).clamp(0., 1.);
-        let db100 = if gain <= 0.00001 {
-            -10000
-        } else {
-            (2000. * f64::from(gain).log10()).round().clamp(-10000., 0.) as i32
-        };
+        let db100 = crate::levels::legacy_db100_from_gain(gain)?;
         if spec.freeze_group_gain {
             voice.spec.mix_group = None;
             voice.mix_group = None;
@@ -63,6 +55,9 @@ impl Mixer {
         voice.envelope = Ramp::new(1.);
         voice.spec.looping = false;
         voice.spec.paused = false;
+        // Release handoff is explicit retirement, not a retained instance.
+        voice.spec.retain_on_finish = false;
+        voice.spec.transport_active = true;
         if let Some(rate) = spec.playback_rate {
             voice.spec.rate = rate;
         }
@@ -77,11 +72,7 @@ impl Mixer {
     }
     pub(crate) fn release_db100(&mut self, client: u32, h: VoiceHandle, db100: i32) -> Result<()> {
         ensure!((-10000..=0).contains(&db100), "release gain bounds");
-        let gain = if db100 == -10000 {
-            0.
-        } else {
-            10f64.powf(f64::from(db100) / 2000.) as f32
-        };
+        let gain = crate::levels::gain_from_legacy_db100(db100)?;
         self.set_gain(client, h, gain)
     }
 }

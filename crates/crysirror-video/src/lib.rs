@@ -6,6 +6,7 @@
 //! renderers upload frames as textures and audio is handed to the mixer.
 #![forbid(unsafe_code)]
 pub mod amv;
+pub mod avi;
 pub mod isobmff;
 pub mod mpeg;
 pub mod mpeg_probe;
@@ -28,6 +29,8 @@ pub enum Container {
     Mp4,
     /// KiriKiri AlphaMovie (AJPM): JPEG-like intra/delta frames with alpha.
     Amv,
+    /// Video-for-Windows RIFF/AVI with Cinepak video (AVG32 movies).
+    Avi,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -80,6 +83,9 @@ pub fn sniff(bytes: &[u8]) -> Result<Container> {
     if bytes.starts_with(b"AJPM") {
         return Ok(Container::Amv);
     }
+    if avi::is_avi(bytes) {
+        return Ok(Container::Avi);
+    }
     if bytes.starts_with(&ASF) {
         return Ok(Container::Asf);
     }
@@ -105,6 +111,7 @@ pub fn open(bytes: Vec<u8>) -> Result<Box<dyn VideoStream>> {
         Container::Asf => Box::new(AsfStream::new(bytes)?),
         Container::Mp4 => Box::new(isobmff::Mp4Stream::new(Cursor::new(bytes))?),
         Container::Amv => Box::new(AmvStream::new(bytes)?),
+        Container::Avi => Box::new(avi::AviStream::new(bytes)?),
     })
 }
 

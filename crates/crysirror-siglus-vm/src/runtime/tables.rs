@@ -8,9 +8,13 @@ pub struct AssetTables {
     /// Immutable native metadata is shared by transaction checkpoints instead
     /// of re-copying every string and index for each bytecode instruction.
     pub gameexe: Option<std::sync::Arc<GameexeConfig>>,
+    pub cg_catalog: Option<std::sync::Arc<crysirror_resource::cg_catalog::CgCatalog>>,
+    pub cg_flags: std::sync::Arc<Vec<i32>>,
     pub mwnd_render: MwndRenderTemplate,
     pub waku_templates: Vec<WakuTemplate>,
     pub sel_btn_templates: Vec<SelBtnTemplate>,
+    /// #THUMBTABLE_FILE, decoded on first save-thumbnail use.
+    pub thumb_table: Option<std::sync::Arc<crate::thumb_table::ThumbTable>>,
 }
 #[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 pub struct ShakeStep {

@@ -1,0 +1,50 @@
+{
+  "date": "2026-11-01",
+  "module_sha256": "f8a1fb4fed8a0c64c3fbc0bcf009f63e8f3181cfbc1a0dbd60f9ddefc8e25b3d",
+  "method": "Complete named functions reviewed using local IDA9 as data only; original EXE/DLL never executed and no proprietary code/data distributed",
+  "actual_frontier_before_hook": {
+    "instructions": 20272,
+    "native": 117,
+    "pc": "0xb4",
+    "arguments": [
+      0,
+      0,
+      0,
+      3072,
+      6656,
+      0
+    ],
+    "pending_retained": true
+  },
+  "functions": {
+    "64B440/native117": "Six arguments. Nonzero native bitmap handle resolves its bitmap and68C460; target0 uses Main DrawContext673FC0. Native void return2. Current explicit bitmap target remains unsupported.",
+    "673FC0/70DAE0/680090": "Active backend obtains global page cache. Requested signed rectangle intersects every page, skipping absent native page handles. Existing intersected pages are marked dirty6809E0, locked, clipped through688440, zero-filled then unlocked. Target0 passes color0 independently of sixth argument; no screen capture or clear-framebuffer substitution.",
+    "688440/68ADD0": "Validated byte-depth dispatch, clipping to backing image extent. Reviewed32bpp kernel fills DWORD color or zeroes4*width bytes per row including alpha bytes. Shared Image Solid/Composite Copy performs this pixel operation. Other native16/24bpp conversion profiles are not inferred.",
+    "5DBE40/673600/67F2E0/681FB0/678850/67FF30/680630": "Original DrawContext owns a separate tiled texture cache. Constructor adjusts source page sizes against device capabilities, constructs grid, preallocates configured areas, uses16bpp at/after bpp16y and requested bpp below it. It is not imageList6 CPU work bitmap. Shared backend admits only the checked power-of-two32bpp profile currently; unknown adjustments/formats fail visibly.",
+    "71C670/71CE30/9E53D0/71D2F0/71D430/71E8E0": "Original defaults are256x256 tile,0x0 grid,eight[-1;-1;-1;-1] disabled areas,zero split rows,bpp32. Same startup XML overlays original fields. Actual owner request maps12x26 grid/four regions to292 allocated256-square32bpp pages,20 absent slots. Logical extent3072x6656 exceeds single shared64MiB limit; allocated RGBA extent is76,546,048bytes."
+  },
+  "shared_boundary": {
+    "module": "crysirror_image::paged",
+    "types": [
+      "PagedImageLayout",
+      "PagedImageRegion",
+      "PagedImage",
+      "PagedClearPlan"
+    ],
+    "algorithms": "Bounded sparse page union, signed half-open rectangle intersection, clear work graphs, complete exact-generation/client-scoped result validation, immutable page sets and dirty revisions. Independent public Rust API, no Cat dependencies.",
+    "pixel_work": "Existing client ImageMetadata.begin_process with ImageInput Solid or Composite Copy and owner-polled ImageJob; per-page ImageResource. No private clear loop or full-size framebuffer.",
+    "undefined": "Allocated but undefined pages are explicit. Full-page clear may define them; partial clear that would invent untouched pixels fails. Empty and absent pages are distinct.",
+    "ownership": "Original task handles, startup field/layout/default/bit-depth policy and published page bindings remain in Cat. Old resources use public image publication/retirement. Page sets freeze old Arc resources across generations.",
+    "async": "Native117 remains pending until every engine page task and client publication succeeds. Only117 resource worker dependency gates native callback drain; canonical input journal/receipt is preserved, not discarded. Budget exhaustion and native71 event wait do not activate that gate."
+  },
+  "independent_validation": {
+    "shared": "shared-paged-image-tests.log release3/3passed; budget/holes/overlaps/clipping/cancel/undefined/partial/full/foreign/duplicate/incomplete/stale generations/immutable dirty tested.",
+    "native": "native117-production-check.log release check passed1m31s; native117-lib-tests2.log29passed/1ignored; native117-canonical-owner.log1/1passed0.42s, actual20,285instructions→100PC0xa2f and all292publicpage geometry/zeroRGBA/foreignscope verified.",
+    "previous_actual": "native447-canonical-owner5.log1/1passed: actual117/0xb4 remains pending. Click-down first leases Fes9 HoverEnter and retains physical sample; test-isolated cancel then click-up/Ctrl down/up reach receiver5 Release/Press/Release without advancing native continuation. This does not claim successful original input callbacks."
+  },
+  "limits": [
+    "No global cache upload/draw/capture/resize/dither/filter implementation is inferred from clear.",
+    "Nonzero bitmap target,16bpp cache conversion, native device adjustment and later FES input/platform/callbacks remain explicit gaps.",
+    "No Cat title/gameplay/pixels/audio/full-integration claim."
+  ]
+}

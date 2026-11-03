@@ -1,0 +1,27 @@
+{
+  "date": "2026-11-01",
+  "status": "Shared Text byte_groups implemented and independently tested; Cat FES VM/load integration remains in progress",
+  "module_sha256": "f8a1fb4fed8a0c64c3fbc0bcf009f63e8f3181cfbc1a0dbd60f9ddefc8e25b3d",
+  "method": "Owner-authorized local IDA9 static review only; original EXE/DLL never executed, no proprietary code/data distributed",
+  "functions": {
+    "767050/765F40": "FES token read uses6A5910 and6A54B0, not native41 delimiter splitter.765F40 additionally applies original string bank/localization policy, which is outside this generic byte kernel.",
+    "6A5910": "Raw byte delimiter set; parenthesis/quote groups; ASCII alphabetic saved-prefix before a group inserts NUL if currently inside a token. Group handling does not update the saved ordinary byte. Repeated delimiters collapse. Final WORD NUL. No6A7590/SJIS lead/trail boundary check.",
+    "6A52F0": "Quote helper strips delimiters while returning the consumed input length including a closing quote. It writes two NULs at payload end. Outer cursor still advances by consumed length, so subsequent visible NUL-list enumeration can end before later stored bytes. Backslash is not a quote escape. Unterminated quote copies to input end.",
+    "6A5340": "Parenthesis helper recursively copies nested groups, retains parentheses and treats quote bytes as ordinary content. Unterminated group copies to input end. Two NULs are written after the copied group.",
+    "6A5910 colon branch": "If second source byte is colon, helper bytes atoutput+2 are copied over the group start for consumed-3 bytes, and a NUL is written there. This preserves quote-helper quirks, including loss of first payload byte/included NUL for a closed quote-colon group. Intermediate helper tails beyond final cursor remain written. Native underflow for a too-short unwrap is rejected visibly by the safe API.",
+    "6A54B0": "Reads NUL-list item ordinal and stops at the first empty token; returned spans must index visible output tokens rather than source ranges."
+  },
+  "shared_API": {
+    "module": "crysirror_text::byte_groups",
+    "function": "split_grouped_bytes(source:&[u8],delimiters:&[u8],limits:ByteGroupSplitLimits,check:&dyn Fn()->anyhow::Result<()>) ->Result<ByteGroupSplitOutput>",
+    "limits": "max_input_bytes<=1MiB,max_output_bytes<=2MiB+8,max_tokens<=65536,max_depth<=256(default64)",
+    "output": "written_bytes retains every modified byte including helper tails;logical_len is finalcursor+WORD NUL;spans reference visible output bytes until first empty C-string.",
+    "ownership": "Pure shared CPU algorithm reusable without Cat; dual-pass capacity/overflow/depth preflight before allocating output, cancellation on both passes, errors never publish partial buffers. Native AST/value/resource/PC/wait semantics remain in the adapter.",
+    "boundary": "Explicit raw-byte protocol, not a normal argv/unicode tokenizer or SJIS-protected delimiter splitter."
+  },
+  "validation": {
+    "release": "3/3 shared-byte-groups-tests2.log",
+    "cases": "nested/unclosed parentheses, quotes inside parentheses treated literally, saved alpha prefix, repeated/empty delimiters, normal quote NUL early termination, colon quoted/parenthesis unwrap and written tails, raw SJIS trail delimiter splitting, helper-written output capacity before allocation, nesting/token limits, cancellation during preflight and output pass",
+    "not_claimed": "No Cat FES execution/title/gameplay/callback success or completed integration. API docs coordinated with NNN for a later single regeneration; no reflective method invented."
+  }
+}

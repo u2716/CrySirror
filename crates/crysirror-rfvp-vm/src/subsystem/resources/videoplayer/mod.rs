@@ -35,6 +35,7 @@ pub struct VideoPlayerManager {
     loaded: bool,
     epoch: u64,
     commands: Vec<MovieCommand>,
+    screen: (u32, u32),
 }
 impl VideoPlayerManager {
     pub fn new() -> Self {
@@ -67,6 +68,7 @@ impl VideoPlayerManager {
             name: request.name.into(),
             audio: request.mode == MovieMode::ModalWithAudio,
         });
+        self.screen = (request.screen_w, request.screen_h);
         self.ensure_layer(motion, request.screen_w as i16, request.screen_h as i16);
         Ok(())
     }
@@ -84,7 +86,10 @@ impl VideoPlayerManager {
             return Ok(());
         }
         if let Some((width, height, pixels)) = frame {
-            motion.load_texture_from_buff(MOVIE_GRAPH_ID, pixels, width, height)?;
+            // Scripts address the movie graph in screen coordinates (White Eternity draws
+            // it through its own prim with a 1024x640 rect) whatever the encoded size,
+            // so the stream's whole picture maps onto a screen-sized logical graph.
+            motion.load_movie_texture(MOVIE_GRAPH_ID, pixels, width, height, self.screen)?;
             motion.refresh_prims(MOVIE_GRAPH_ID);
         }
         if !playing {
@@ -145,6 +150,9 @@ mod tests {
         assert!(manager.is_playing() && manager.is_loaded());
         manager.observe(second,true,Some((2,2,alloc::vec![255;16])),motion).unwrap();
         assert!(manager.is_playing());
+        let graph=motion.get_texture(u32::from(MOVIE_GRAPH_ID));
+        assert_eq!((graph.get_display_width(),graph.get_display_height()),(64,48));
+        assert_eq!(graph.image_dimensions(),Some((2,2)));
         manager.observe(second,false,None,motion).unwrap();
         assert!(!manager.is_playing() && !manager.is_loaded());
         assert!(manager.drain_commands().is_empty());

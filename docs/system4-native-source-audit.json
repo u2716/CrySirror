@@ -1,0 +1,140 @@
+{
+  "reference": {
+    "repository": "https://github.com/nunuhara/xsystem4",
+    "commit": "a85467d78eb5c7fb6e581d7fe5a6fdaec42b9ef7",
+    "license": "GPL-2.0-or-later",
+    "files": [
+      {
+        "path": "src/vm.c",
+        "sha256": "4ddc9d9abfc3eb583c91a55650a1a5c44001d81a8e1568f7a93acf479d5bd860"
+      },
+      {
+        "path": "src/page.c",
+        "sha256": "a3db5e4fe4b358dc1b5c65dffe9fde89e7b348f6dace3bf088da1632037185df"
+      },
+      {
+        "path": "src/hll/Math.c",
+        "sha256": "6b6765d55d768833f63abf9282c179f60dbbdbd547cd5a01316c30285fc7711b"
+      }
+    ]
+  },
+  "source_modules": {
+    "native_vm": [
+      "functions: MSG,FT_ASSIGNS,CALLONJUMP,SJUMP; original metadata and resumable frame teardown",
+      "array_find: original owned-key/borrowed-key distinction, raw-word or NUL-prefix compare, real AIN callback continuations",
+      "control: nested native peek-lock counter, function-name introspection; unknown syscalls retain original PC",
+      "strings:11 opcodes delegate byte/number algorithms to shared text-legacy",
+      "arrays/primitives/shorthand: native heap/value/typed-page and destructor continuation policy",
+      "array_sort: A_SORT/A_SORT_MEM rank1 scalar/string/member/custom families with stable key policy, owned callback strings and retained struct references; resumable HLL waits and original heap identity/layout guards"
+    ],
+    "native_hll": [
+      "Math scalar/seed/table policy on worker; no private random-word generator or host clock",
+      "SACT2 encoded CG/header metrics/file/native-ID publication through shared Image/Resource/Layer; strict corruption failure",
+      "DrawPluginManager actual scoped interface/name table and six DrawGraph channel copy/fill mappings; remaining exports explicit",
+      "NativeFiles System10/12/14/16 on scoped case-aware storage workers",
+      "MsgSkip complete ten-export reviewed 2004 DLL family; exact bit/save semantics and normal-halt/close/error atomic-write fence",
+      "scene.c complete three background setters through shared Layers, encoded metadata and immutable CopyRgb snapshot jobs"
+    ],
+    "shared": [
+      "Resource Mt19937_1998 cloneable stateful word stream reused by native Math and envelope decoder",
+      "text-legacy bounded byte-character/numeric semantics, independent of VM and font renderer",
+      "Core encoded-image metadata DTO/query, ImageFormat and registry selection, Runtime bounded async worker; QNT same header parser",
+      "InputBuffer shared bounded receipts; native delivery/lock/clear policy stays in adapter"
+    ]
+  },
+  "defined_limits": [
+    "Source scan/census counts are not execution coverage. Original AIN126distinct opcodes/237HLL pairs15libraries is inventory only.",
+    "Original Sys42VM inspected as data, never executed, copied into a crate or redistributed.",
+    "No-SLBL/no-OJMP guessed page-preallocation profile is not implemented. Original tagged OJMP and legacy SLBL are distinct.",
+    "A_FIND original NULL-page string-key leak is preserved; allocated empty page releases key. Callback page destruction/reallocation is explicitly rejected as undefined original retained-pointer use.",
+    "Native event delivery uses async owner boundaries and explicit Peek/Update, not exact32-op host callback cadence. Shared manual presentation fence is still missing.",
+    "No private renderer/mixer/font engine, original save reconstruction, complete HLL/title/gameplay/60fps claim."
+  ],
+  "validation": {
+    "ordinary_full": "77passed5ignored11targets; system4-functions-find-final.log. Before final optional-observation startup fix and strengthened matched-callback invalidation guard.",
+    "python": "201passed, system4-final-python-tests.log; QNT ledger final16passed,system4-final-ledgers-python.log.",
+    "owner": {
+      "artifact": "target/verification/system4-native-msgskip/owner-sact-host",
+      "sha256": "e0abb3dad2f1c62bdb75dd1fdfdb32e4ee8956f8f01accfcbb88b1961a94c883",
+      "instructions": 435187,
+      "pc": "0x15bde",
+      "function": "WP_SET_COLOR",
+      "main_entered": true,
+      "frontier": "SACT2.SetWP(int10)->int10; original pending call retained",
+      "result": "explicit1passed0ignored/0.53s; actual MsgSkip.Init92120messages, fatal read-history atomic save completed before exposing unsupported HLL; no title/render/gameplay acceptance"
+    },
+    "final_selected": "Final targeted release43passed3ignored: find7,VM35/1,sact1/2; system4-final-scoped-guards.log. Optional InputObservation NotFound fallback and both matched/nonmatched callback page guards are covered.",
+    "owner_previous": {
+      "artifact": "target/verification/system4-native-draw-channels/owner-sact-host",
+      "sha256": "e4201dab468a4da47071b76c1c134a2644f9421f3d895b5918c868177414a301",
+      "instructions": 435060,
+      "pc": "0x1167e",
+      "function": "SACT_MSG_SKIP_INIT",
+      "main_entered": true,
+      "frontier": "System12 GetSaveFolderName; actual scoped DrawGraph binding loaded",
+      "result": "explicit1passed0ignored/0.56s; before NativeFiles/MsgSkip source; no title/render/gameplay acceptance"
+    },
+    "scene_and_sort": "release combined82passed3ignored:lib30,find7,sort9,sact1/2,VM35/1; system4-native-scene-sort-final.log. Final narrowed comparator-type guards/member-string/cancellation/heap-slot-reuse suite11passed0ignored, system4-native-array-sort-guards.log. No newer original owner or Desktop build.",
+    "python_latest": "Bundled runtime Python201tests OK(1skip), system4-native-msgskip-scene-python-runtime.log. Initial default XcodePython3.9 ran91 with6 import errors (tomllib absent); preserved failed log, not counted as pass."
+  },
+  "shared_drawgraph_prerequisite": {
+    "api": "Core ImageCompositeMath::CopyAlpha and Image PixelMath::CopyAlpha, mapped by existing Runtime Composite worker",
+    "behavior": "Writes stored alpha only, retaining destination RGB; optional opacity is existing rounded /255 interpolation. Standalone engine capability, not VM private algorithm.",
+    "validation": "Image selected1passed0ignored; Runtime newimage_copy_alpha2+priorimage_composite_clip3passed0ignored; system4-copy-alpha-{pixel,runtime}.log. Negative coordinates/source phase, clipping, cross-client rejection, retained Ready identity, dropped-query resource cleanup verified.",
+    "source_point": "Common CopyAlpha independently verified, then native six-operation channel family library17/17; actual e420 frozen owner committed DrawGraph Load and retained later System12.",
+    "still_required": "Remaining native DrawGraph exports, alpha-less destination semantics, whole text/effect/presentation lifecycle and actual game rendering.",
+    "api_docs": "Regenerated42a8c3604407b796, independent no-bless8+coverage1passed; no further public shape change for private DrawGraph/NativeFiles/MsgSkip."
+  },
+  "draw_plugin_manager_static": {
+    "module": "owner-installed DrawPluginManager.dll; static data inspection only, not executed or distributed",
+    "sha256": "b24a69e6ba6e7f07e683106932cb356063841ba9a2538a509f79bf8711eea698",
+    "bytes": 65536,
+    "exports_rva": {
+      "CreateInterface": "0x2e50",
+      "Load": "0x2ea0",
+      "IsLoad": "0x2ec0"
+    },
+    "load_helper_va": "0x10001380",
+    "isload_helper_va": "0x100012a0",
+    "observed_policy": "Exact case-sensitive stored C-name comparison. Repeated Load of the same name returns0. First Load requires GetModuleHandleA, CreateInterface, non-null draw interface and replay of existing property bindings before publishing a loaded entry and returning1. IsLoad queries that actual table.",
+    "reimplementation_boundary": "Native builtin mapping binds the real client-scoped engine Image interface before publishing a loaded name. Exact same-name repeat Load returns0; IsLoad queries that table. Six bounded copy/fill RGB/alpha/RGBA exports execute shared Image workers and publish immutable engine resources plus Layers before void ACK; remaining exports, unknown plugins and alpha-less destinations explicitly fail. Public fixed-success macros are not adopted.",
+    "private_evidence": "Ignored target/verification/system4-ida/plugin-*.c, inspect_plugin.py; IDA database closed and process exited."
+  },
+  "native_files_and_msgskip": {
+    "reference": "See crates/crysirror-system4/SOURCE.json msgskip_abi; full pinned vm.c syscall and MsgSkip.c reviewed, original DLL static evidence overrides warning stubs",
+    "native_files_validation": "release library20passed0ignored after three NativeFiles tests; system4-native-files-module.log. Actual metadata/list calls run off owner thread, no file payloads read; case/save alias/fallback/owned-name/foreign/traversal behavior tested.",
+    "msgskip_validation": "release library26passed0ignored, system4-native-msgskip-final.log. Six MsgSkip tests cover MSB padding/UseFlag, repeat Init/corrupt-save reset, readonly install fallback, normal halt, close during native Sleep and fatal unsupported HLL; writes settle before halt/error. First authored fixture used invalid layout rejected before bootstrap (25pass1fail); corrected valid unknown-HLL fixture only, no production validation relaxation. Original owner e0abb3... explicitly1passed0ignored/0.53s,435187instructions/92120messages, retained later SetWP.",
+    "owner_after_new_source": {
+      "artifact": "target/verification/system4-native-msgskip/owner-sact-host",
+      "sha256": "e0abb3dad2f1c62bdb75dd1fdfdb32e4ee8956f8f01accfcbb88b1961a94c883",
+      "instructions": 435187,
+      "pc": "0x15bde",
+      "function": "WP_SET_COLOR",
+      "main_entered": true,
+      "frontier": "SACT2.SetWP(int10)->int10; original pending call retained",
+      "result": "explicit1passed0ignored/0.53s; actual MsgSkip.Init92120messages, fatal read-history atomic save completed before exposing unsupported HLL; no title/render/gameplay acceptance"
+    }
+  },
+  "array_sort_profile": {
+    "source": "Full pinned vm.c A_SORT/A_SORT_MEM and page.c compare/custom/member families reviewed",
+    "supported": "Rank1 default int/long/float/NUL-string sort; stable struct-member raw-word/NUL-string keys; original AIN custom comparators with fresh owned string copies or retained struct references, including external waits",
+    "implementation": "Bounded VM continuation merge passes. Native page remains unchanged until final publication; original array heap identity/layout revalidated after every callback. Comparator result0 custom/member order retains original index. Cancellation is observed at each native step; no nested interpreter or C callback. Working-set cap1000000 entries.",
+    "limits": "Deterministic merge callback order, not exact platform qsort call sequence; source does not promise qsort side-effect order. Default equal-key permutation is stable here; no claim to original unstable-platform tie permutations. Multi-rank and unreviewed delegate/custom value profiles fail explicitly. Native callback page-pointer invalidation is rejected, never redirected to a reused slot."
+  },
+  "scene_background_profile": {
+    "source": "Full pinned scene.c; SACT2.c and sact.h exports SetWP/SetWP_Color/WP_SetSP",
+    "implementation": "SetWP0 removes only wallpaper; numbered CG queries shared encoding/pixels with coupled fingerprint, preserving previous wallpaper on missing/corrupt inputs. Colour changes independent background Layer. WP_SetSP captures source RGB into a new opaque immutable engine ImageResource through shared CopyRgb, ignoring sprite position/visibility/display opacity. Frozen wallpaper survives source mutation/delete.",
+    "validation": "Four independent actual Runtime tests inside lib30; missing/corrupt/cross-client/byte-color boundary and immutable source retirement; no original render acceptance.",
+    "limits": "Out-of-byte clear colors fail explicitly. Manual perclient SACT.Update presentation fence remains incomplete; live retained resources alone do not reproduce all native frame timing."
+  },
+  "system_mixer_source_batch": {
+    "implementation": "All8 SystemService native mixer methods routed to shared AudioMixGroup, original config names/defaults/hierarchy and typed references retained. Startup shared BGI/WAI metadata worker.",
+    "compilation_and_behavior": "Root96018 release Sys4 runtime lib34/34 and public Engine audio_loops3/3 passed, whole combined87passed1ignored. Includes8-method native mixer/ref/PCM fixture. No owner game/render acceptance.",
+    "stream_boundary": "Native SACT Music/Sound actor still unregistered until stop/seek/replay/EOF/fade lifetime is preserved; shared retained seek is now independently verified96passed2ignored Audio regression, not full native audio."
+  },
+  "resident_pixel_source_batch": {
+    "shared": "Core opt-in resident pixel access and checked zero-allocation RGBA lookup; nonresident/unsupported providers explicit failures, never full-image materialization. RuntimeResource/EngineSnapshot implement it using existing resident bytes.",
+    "native": "DrawGraph2 and SACT2 SP2 stored-pixel HLL family, exact try/lazy/noalpha/ref policy. No adapter pixel loop.",
+    "validation": "Core2/2 +NativeDraw6/6 actual release passed0ignored, System4+Enginecheck; no original render result."
+  }
+}

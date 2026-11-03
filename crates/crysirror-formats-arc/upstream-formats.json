@@ -1592,21 +1592,26 @@
         "registration_group": "a",
         "entrypoint": "ald",
         "implementation": [
-          "src/legacy/a.rs"
+          "src/legacy/a.rs",
+          "src/ald_catalog.rs"
         ],
         "variants": [
-          "24-bit sector index and per-entry variable header"
+          "24-bit sector index and per-entry variable header",
+          "Plain ALD original logical link IDs across explicitly supplied volumes through shared AldCatalog/Archive"
         ],
         "limits": [
-          "Sector bounds and sorted records checked",
-          "Shared entry/index/count/resident budgets and canonical capability paths apply; unknown native layouts fail."
+          "Sector/header/payload intervals, footer counts and pointer ordinals are bounded",
+          "Scrambled pointer-table headers remain unsupported",
+          "Absent volume is an explicit numeric-lookup error; zero map or next pointer retains original absence; no filename-order fallback",
+          "Shared entry/index/count limits, cancellation and catalogue client ownership apply; payloads use existing streaming subranges"
         ],
         "evidence": {
           "ordinary_tests": [
-            "tests/legacy_archives.rs"
+            "tests/legacy_archives.rs",
+            "tests/ald_catalog.rs"
           ],
           "external_corpus_tests": [],
-          "behavior_scope": "Test files cover the reviewed group; not every native/title variant has an external fixture. No commercial game or hardware result is implied."
+          "behavior_scope": "Authored catalogue3 and legacy archive regression12 passed. Explicit original-owner catalogue1/1 passed with6606 entries across6506+100; target/verification/native-source-batch/ald-owner.log. Native VM/title compatibility is not implied."
         }
       }
     },
@@ -1623,21 +1628,27 @@
         "registration_group": "a",
         "entrypoint": "alk",
         "implementation": [
-          "src/legacy/a.rs"
+          "src/legacy/a.rs",
+          "src/alk.rs"
         ],
         "variants": [
-          "ALK0 fixed offset/size records"
+          "ALK0 fixed offset/size records",
+          "Shared AlkCatalog original numeric IDs and holes; the single legacy registry entry keeps sequential 000.dat aliases with original_id metadata"
         ],
         "limits": [
-          "Zero-sized slots omitted using the pinned reader policy",
-          "Shared entry/index/count/resident budgets and canonical capability paths apply; unknown native layouts fail."
+          "Zero-sized slots retain native numeric holes in AlkCatalog; legacy filename aliases omit empty slots as before",
+          "One shared physical table parser; duplicate format IDs rejected by registry test",
+          "Header/payload bounds, client ownership, cancellation and subrange/read budgets apply; unknown layouts fail"
         ],
         "evidence": {
           "ordinary_tests": [
+            "src/alk.rs::original_numeric_holes_and_foreign_owner_are_retained",
+            "src/alk.rs::bounded_directory_and_payload_fail_before_publication",
+            "src/alk.rs::single_registered_legacy_view_uses_the_same_original_id_metadata",
             "tests/legacy_archives.rs"
           ],
           "external_corpus_tests": [],
-          "behavior_scope": "Test files cover the reviewed group; not every native/title variant has an external fixture. No commercial game or hardware result is implied."
+          "behavior_scope": "Three authored ALK tests and legacy archive regression12 passed after correcting an initially duplicated registration. Actual formats results: native-source-batch/native-batch3-tests3.log. Owner37-QNT decode remains ignored/unexecuted; no logo/game claim."
         }
       }
     },
@@ -1752,16 +1763,18 @@
         "registration_group": "a",
         "source": "src/dec/alice_soft/qnt_image_decoder.cc",
         "implementation": [
-          "src/images_a.rs"
+          "src/images_a.rs",
+          "src/images_a/alice.rs"
         ],
         "variants": [
-          "version2 depth24, zlib 2x2 color deinterleave, odd padding, optional predictive alpha"
+          "Version0 fixed48-byte header; versions1/2 bounded explicit header, depth24",
+          "Shared zlib 2x2 color deinterleave and predictor; exact color plane and bounded odd-height alpha padding"
         ],
         "limits": [
           "Only listed native variants are implemented; malformed, truncated or unsupported layouts fail.",
           "Safe CPU ImageSurface output only: no original-VM, full-game, animation/pivot or console-host compatibility claim.",
           "Encoded and decoded byte/dimension limits apply; sibling dependencies and keys remain client-scoped.",
-          "Only the declared version2 depth24 QNT variant is implemented."
+          "Only versions0/1/2 with24 color bits are accepted. Plane inflation must finish with valid zlib checksum and bounded exact layout; source-origin/encoded-plane metadata service is separate pending work."
         ],
         "evidence": {
           "report": "docs/arc-images-a.json",
@@ -1770,7 +1783,17 @@
           ],
           "test_source": "crates/crysirror-formats-arc/tests/images_a.rs",
           "external_validation": "See report for exact fixture/count and codec tolerance; no fixture binary is redistributed.",
-          "external_fixture_count": 4
+          "external_fixture_count": 4,
+          "native_extension": {
+            "report": "docs/system4-qnt-source-audit.json",
+            "test_source": "crates/crysirror-formats-arc/tests/qnt_native.rs",
+            "ordinary_tests": [
+              "qnt_0_1_2_share_predictor_channel_order_and_alpha",
+              "qnt_odd_height_accepts_both_original_and_aldbuilder_alpha_padding",
+              "qnt_invalid_headers_and_short_or_oversized_planes_fail"
+            ],
+            "actual": "3passed/0ignored; historical external corpus not rerun"
+          }
         },
         "kind": "image"
       }
@@ -2647,23 +2670,32 @@
         "entrypoint": "images::hg3",
         "implementation": [
           "src/legacy/e.rs",
-          "src/legacy/e/images.rs"
+          "src/legacy/e/images.rs",
+          "src/legacy/e/images/hg3.rs"
         ],
         "variants": [
-          "HG3 stdinfo/img control planes, delta filters and canvas coordinates"
+          "HG3 linked stdinfo frame catalogs preserving native IDs, canvas/origin/base, raw mode/flag/attribute metadata",
+          "Archive default profile:24/32-bit padded img0000 control rows and raw or expanded canvas output",
+          "Explicit native profile:full40-byte stdinfo, packed24/32 rows, ordinal control-segment coverage/overlap order and color-mode normalization",
+          "Shared JPEG decoding with native depth-specific alpha/defaultmode1; shared32-bit WebP decoding with embedded alpha/native mode policy"
         ],
         "limits": [
-          "32-bit img0000 control-plane profile; img_jpg unsupported by pinned reader; transparent hidden RGB compared using upstream rule",
-          "Shared entry/index/count/resident budgets and canonical capability paths apply; unknown native layouts fail."
+          "Alpha-only/img_jpa, mixed color payloads, control+separate alpha and unreviewed descriptor profiles fail explicitly",
+          "Native segments require contiguous zero-based ordinals and complete row coverage; uninitialized native gap rows are rejected",
+          "Archive profile remains default; segmented packed-row/mode semantics require explicit pixel_profile:native. WebP24 native surface is unsupported",
+          "Raw cptype/ATS/flags remain metadata; canonical decode is not original adapter admission or title/GPU parity",
+          "Shared entry/index/count/resident budgets and canonical capability paths apply; unknown native layouts fail.",
+          "Cumulative control-chunk/run/pixel work is bounded by active context max_resident_bytes; entry-open cancellation is checked between segments and CPU blocks"
         ],
         "evidence": {
           "ordinary_tests": [
-            "tests/archives_e.rs"
+            "tests/archives_e.rs",
+            "tests/hg3_frames.rs"
           ],
           "external_corpus_tests": [
             "tests/archives_e.rs::upstream_archive_corpus_e"
           ],
-          "behavior_scope": "Test files cover the reviewed group; not every native/title variant has an external fixture. No commercial game or hardware result is implied.",
+          "behavior_scope": "Latest native-alias-fifo-geometry-budget-tests.log: formats lib45passed1ignored and HG3frames11passed0ignored, including native cumulative-work and current scoped decoder-context regressions. Prior archives_e20passed1ignored remains a historical separate run. Authored layouts only; no new external corpus/game/GPU comparison.",
           "external_fixture_coverage": "Selected native fixtures for this ID are compared by the referenced explicitly invoked corpus test; unlisted title/codec variants are not implied."
         }
       }

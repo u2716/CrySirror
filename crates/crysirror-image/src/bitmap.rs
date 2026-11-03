@@ -31,6 +31,8 @@ pub enum PixelMath {
     Copy,
     /// Copy/opacity-lerp RGB only, retaining destination alpha.
     CopyRgb,
+    /// Copy/opacity-lerp alpha only, retaining destination RGB.
+    CopyAlpha,
     /// Copy all four channels only when the source alpha is nonzero. Alpha
     /// selects coverage; it does not become an additional blend weight.
     CopyNonTransparent,
@@ -155,6 +157,24 @@ pub enum PsBlend {
     ColorBurn,
     Lighten,
     Darken,
+    /// `TVPPsAddBlend`: saturated sum, then alpha-blended onto the destination.
+    Additive,
+    /// `TVPPsSubBlend`: `d - (255 - s)` saturated at zero, then alpha-blended.
+    Subtractive,
+    /// `TVPPsMulBlend`: `(s * d) >> 8`, then alpha-blended.
+    Multiplicative,
+    /// `TVPPsScreenBlend`: `d + ((s - (s * d >> 8)) * a >> 8)`.
+    Screen,
+    /// `TVPPsColorDodge5Blend`: Photoshop 5 form; the source is faded by its
+    /// alpha first and the dodge table result replaces the colour.
+    ColorDodge5,
+    /// `TVPPsDiffBlend`: `|s - d|`, then alpha-blended.
+    Difference,
+    /// `TVPPsDiff5Blend`: Photoshop 5 form; faded source, `|s' - d|` replaces
+    /// the colour and the destination alpha byte passes through.
+    Difference5,
+    /// `TVPPsExclusionBlend`: `d + ((s - (s * d >> 7)) * a >> 8)`.
+    Exclusion,
 }
 
 /// `TVPPsMakeTable` (krkrz visual/glgen/tvpps.c): table[s][d].
@@ -203,6 +223,36 @@ fn ps_channel(blend: PsBlend, s: u8, d: u8) -> u8 {
         PsBlend::ColorBurn => burn[si][di],
         PsBlend::Lighten => s.max(d),
         PsBlend::Darken => s.min(d),
+        PsBlend::Additive => s.saturating_add(d),
+        PsBlend::Subtractive => d.saturating_sub(255 - s),
+        PsBlend::Multiplicative => ((u32::from(s) * u32::from(d)) >> 8) as u8,
+        PsBlend::Difference => s.abs_diff(d),
+        // Forms that are not "table result alpha-blended onto d" are computed
+        // in `ps_pixel_channel`; these arms are their unfaded colour terms.
+        PsBlend::ColorDodge5 => dodge[si][di],
+        PsBlend::Difference5 => s.abs_diff(d),
+        PsBlend::Screen | PsBlend::Exclusion => s,
+    }
+}
+
+/// One colour channel of a krkr `tvpps.c` operation (`TVPPS_OPERATION` in
+/// `visual/glgen/tvpps.c`, krkrz fd5c4baa), `a` being the faded source alpha.
+fn ps_pixel_channel(blend: PsBlend, s: u8, d: u8, a: i32) -> u8 {
+    let (si, di) = (i32::from(s), i32::from(d));
+    match blend {
+        // c = (s - s*d/256) * a + d (the packed form never goes negative).
+        PsBlend::Screen => (di + ((si - ((si * di) >> 8)) * a).div_euclid(256)) as u8,
+        // c = (s - s*d*2/256) * a + d.
+        PsBlend::Exclusion => (di + ((si - ((si * di) >> 7)) * a).div_euclid(256)) as u8,
+        // TVPPS_FADESRC first, then the table/difference replaces the colour.
+        PsBlend::ColorDodge5 | PsBlend::Difference5 => {
+            let faded = ((si * a) >> 8) as u8;
+            ps_channel(blend, faded, d)
+        }
+        _ => {
+            let f = ps_channel(blend, s, d);
+            (di + ((i32::from(f) - di) * a).div_euclid(256)) as u8
+        }
     }
 }
 
@@ -254,11 +304,11 @@ fn combine(d: &mut [u8], s: &[u8], opacity: u8, mode: PixelMath) {
                 u32::from(s[3]) * op >> 8
             } as i32;
             for c in 0..3 {
-                let f = ps_channel(blend, s[c], d[c]);
-                d[c] = (i32::from(d[c]) + ((i32::from(f) - i32::from(d[c])) * a).div_euclid(256))
-                    as u8;
+                d[c] = ps_pixel_channel(blend, s[c], d[c], a);
             }
-            if !hold_alpha {
+            // Non-HDA kernels store the operation result, whose alpha byte is
+            // cleared -- except Diff5, whose `d & ~n` term keeps d's alpha.
+            if !hold_alpha && blend != PsBlend::Difference5 {
                 d[3] = 0;
             }
         }
@@ -310,12 +360,16 @@ fn combine(d: &mut [u8], s: &[u8], opacity: u8, mode: PixelMath) {
             }
             d[3] = alpha;
         }
-        PixelMath::Copy | PixelMath::CopyRgb | PixelMath::CopyNonTransparent => {
+        PixelMath::Copy | PixelMath::CopyRgb | PixelMath::CopyAlpha | PixelMath::CopyNonTransparent => {
             if mode == PixelMath::CopyNonTransparent && s[3] == 0 {
                 return;
             }
-            let channels = if mode == PixelMath::CopyRgb { 3 } else { 4 };
-            for c in 0..channels {
+            let channels = match mode {
+                PixelMath::CopyRgb => 0..3,
+                PixelMath::CopyAlpha => 3..4,
+                _ => 0..4,
+            };
+            for c in channels {
                 d[c] = lerp(d[c], s[c], op);
             }
         }
@@ -603,6 +657,27 @@ mod tests {
         assert_eq!(d[3], 0);
     }
     #[test]
+    fn ps_arithmetic_modes_follow_the_native_operations() {
+        let ps = |blend, hold_alpha, d: [u8; 4], s: [u8; 4], opacity| {
+            let mut d = d;
+            combine(&mut d, &s, opacity, PixelMath::Ps { blend, hold_alpha });
+            d
+        };
+        // Saturating add/sub, then the TVPPS_ALPHABLEND lerp.
+        assert_eq!(ps(PsBlend::Additive, true, [200, 10, 0, 9], [100, 20, 0, 255], 255), [254, 29, 0, 9]);
+        assert_eq!(ps(PsBlend::Subtractive, true, [200, 10, 0, 9], [100, 250, 0, 255], 255), [45, 5, 0, 9]);
+        assert_eq!(ps(PsBlend::Multiplicative, true, [200, 255, 0, 9], [128, 255, 9, 255], 255), [100, 254, 0, 9]);
+        // Every lerp is TVPPS_ALPHABLEND's floor of (f - d) * a / 256.
+        assert_eq!(ps(PsBlend::Screen, true, [100, 0, 0, 9], [100, 200, 0, 255], 255), [160, 199, 0, 9]);
+        assert_eq!(ps(PsBlend::Difference, true, [10, 200, 0, 9], [200, 10, 0, 128], 255), [100, 195, 0, 9]);
+        assert_eq!(ps(PsBlend::Exclusion, true, [128, 0, 0, 9], [128, 64, 0, 255], 255), [128, 63, 0, 9]);
+        // Photoshop 5 forms fade the source and do not lerp afterwards.
+        assert_eq!(ps(PsBlend::Difference5, false, [10, 200, 0, 77], [200, 10, 0, 128], 255), [90, 195, 0, 77]);
+        assert_eq!(ps(PsBlend::ColorDodge5, false, [100, 0, 0, 77], [0, 0, 0, 255], 255), [100, 0, 0, 0]);
+        // Without holdAlpha the stored alpha byte is cleared.
+        assert_eq!(ps(PsBlend::Additive, false, [1, 1, 1, 200], [1, 1, 1, 255], 255)[3], 0);
+    }
+    #[test]
     fn hold_alpha_blend_keeps_destination_alpha() {
         // krkrz TVPAlphaBlend_HDA(_o): rgb d + ((s-d)*sopa >> 8), alpha kept.
         let mut d = [100, 200, 0, 77];
@@ -738,6 +813,24 @@ mod tests {
         assert_eq!(premul, before);
     }
     #[test]
+    fn copy_alpha_retains_rgb_and_has_independent_opacity_and_clipping() {
+        let source = ImageSurface {
+            width: 3, height: 1,
+            rgba: vec![200, 210, 220, 0, 190, 180, 170, 127, 160, 150, 140, 255],
+        };
+        for opacity in [0u8, 1, 127, 128, 254, 255] {
+            let mut target = ImageSurface::filled(2, 1, [9, 19, 29, 61]).unwrap();
+            target.blit(&source, BlitOptions {
+                source_rect: BitmapRect::new(0, 0, 3, 1),
+                destination: [-1, 0], opacity, mode: PixelMath::CopyAlpha, color_key: None,
+            }).unwrap();
+            for (index, source_alpha) in [127u32, 255].into_iter().enumerate() {
+                let alpha = ((61 * (255-u32::from(opacity)) + source_alpha*u32::from(opacity) +127)/255) as u8;
+                assert_eq!(&target.rgba[index*4..index*4+4], &[9, 19, 29, alpha]);
+            }
+        }
+    }
+    #[test]
     fn nearest_clipping_preserves_phase_and_color_key_preserves_alpha() {
         let src = ImageSurface {
             width: 3,
@@ -808,6 +901,16 @@ pub fn blit_rgba8(
     source_size: [u32; 2],
     options: BlitOptions,
 ) -> Result<()> {
+    visit_blit_rgba8(destination, size, source, source_size, options, &|| Ok(()),
+        &mut |d, s| combine(d, s, options.opacity, options.mode))
+}
+/// Common checked pixel correspondence, shared by every stored bitmap blend.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn visit_blit_rgba8(
+    destination: &mut [u8], size: [u32; 2], source: &[u8], source_size: [u32; 2],
+    options: BlitOptions, check: &dyn Fn() -> Result<()>,
+    pixel_op: &mut dyn FnMut(&mut [u8], &[u8]),
+) -> Result<()> {
     ensure!(
         crate::rgba_len(size[0], size[1])? == destination.len(),
         "destination pixel length mismatch"
@@ -831,7 +934,9 @@ pub fn blit_rgba8(
     let y2 = i64::from(r.height)
         .min(i64::from(source_size[1]) - sy)
         .min(i64::from(size[1]) - dy);
+    check()?;
     for y in y1..y2 {
+        check()?;
         for x in x1..x2 {
             let s = (((sy + y) * i64::from(source_size[0]) + sx + x) * 4) as usize;
             let d = (((dy + y) * i64::from(size[0]) + dx + x) * 4) as usize;
@@ -839,12 +944,7 @@ pub fn blit_rgba8(
             if options.color_key.is_some_and(|key| pixel[..3] == key) {
                 continue;
             }
-            combine(
-                &mut destination[d..d + 4],
-                pixel,
-                options.opacity,
-                options.mode,
-            );
+            pixel_op(&mut destination[d..d + 4], pixel);
         }
     }
     Ok(())

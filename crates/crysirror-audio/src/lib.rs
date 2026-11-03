@@ -7,10 +7,15 @@ use crysirror_core::state::{AudioVoice, ObjectId, SceneState};
 use std::{collections::BTreeMap, sync::Arc};
 
 pub mod loop_catalog;
+pub mod levels;
 pub mod buffered;
 pub mod channels;
 mod channel_async;
+mod channel_exchange;
 pub mod decoder;
+pub mod wave_box;
+pub mod legacy_envelopes;
+mod encoded_resource;
 pub mod opus;
 pub mod synth;
 pub mod doppler;
@@ -331,3 +336,8 @@ mod tests {
         assert!(failed.playing.is_empty());
     }
 }
+
+pub mod seek_receipt;
+mod channel_seek;
+
+pub mod channel_replacement;

@@ -442,6 +442,15 @@ impl PrecomputedFont {
         canvas: [u32; 2],
         glyphs: &[crysirror_core::service::Glyph],
     ) -> Result<Vec<u8>> {
+        self.paint_cancellable(canvas, glyphs, &|| Ok(()))
+    }
+    pub(crate) fn paint_cancellable(
+        &self,
+        canvas: [u32; 2],
+        glyphs: &[crysirror_core::service::Glyph],
+        check: &dyn Fn() -> Result<()>,
+    ) -> Result<Vec<u8>> {
+        check()?;
         ensure!(
             canvas[0] > 0
                 && canvas[1] > 0
@@ -449,16 +458,24 @@ impl PrecomputedFont {
             "precomputed text surface budget"
         );
         let mut rgba = vec![0u8; canvas[0] as usize * canvas[1] as usize * 4];
-        for p in rgba.chunks_exact_mut(4) {
-            p[..3].fill(255);
+        for block in rgba.chunks_mut(256 * 1024) {
+            check()?;
+            for p in block.chunks_exact_mut(4) { p[..3].fill(255); }
         }
+        let mut work = 0u64;
         for glyph in glyphs {
+            check()?;
+            let metrics = self.glyph(glyph.glyph_id)?;
+            work = work.checked_add(u64::from(metrics.size[0]) * u64::from(metrics.size[1]))
+                .context("precomputed glyph work overflow")?;
+            ensure!(work <= 64 * 1024 * 1024, "precomputed glyph work budget");
             let cell = self.cell(crate::glyph::GlyphRaster {
                 glyph_id: glyph.glyph_id,
                 size: f32::from(self.pixel_size),
                 baseline: [glyph.x_26_6 as f32 / 64., glyph.y_26_6 as f32 / 64.],
             })?;
             for y in 0..cell.height {
+                check()?;
                 let py = cell.origin[1] + y as i32;
                 if py < 0 || py >= canvas[1] as i32 {
                     continue;
@@ -475,6 +492,27 @@ impl PrecomputedFont {
                 }
             }
         }
+        check()?;
         Ok(rgba)
+    }
+}
+
+#[cfg(test)]
+mod paint_cancellation_tests {
+    use super::*;
+    use std::cell::Cell;
+    #[test]
+    fn positioned_bitmap_paint_is_cancellable_inside_rows_and_matches_existing_kernel() {
+        let face=PrecomputedFont::from_tft(&super::tests::fixture(1),24,&||Ok(())).unwrap();
+        let glyph=crysirror_core::service::Glyph{glyph_id:1,x_26_6:64,y_26_6:128,advance_26_6:192};
+        let old=face.paint([4,3],&[glyph.clone(),glyph.clone()]).unwrap();
+        let got=face.paint_cancellable([4,3],&[glyph.clone(),glyph.clone()],&||Ok(())).unwrap();assert_eq!(got,old);
+        let calls=Cell::new(0);let result=face.paint_cancellable([4,3],&[glyph.clone()],&||{calls.set(calls.get()+1);anyhow::ensure!(calls.get()<5,"cancel at second glyph row");Ok(())});
+        assert!(result.is_err());assert_eq!(calls.get(),5);
+        let face=Arc::new(crate::dynamic::PreparedFontFace::prepare_precomputed(super::tests::fixture(1).into(),24,&||Ok(())).unwrap());
+        let text=crate::TextSystem::default();text.publish_font(crysirror_core::state::ClientId(1),"__font/1/paint",face).unwrap();
+        let scoped=text.for_client(crysirror_core::state::ClientId(1));
+        assert_eq!(scoped.rasterize_glyphs_cancellable("__font/1/paint",24,[4,3],&[glyph.clone(),glyph],&||Ok(())).unwrap(),old);
+        assert!(scoped.rasterize_glyphs_cancellable("__font/1/paint",24,[4,3],&[],&||anyhow::bail!("cancelled before allocation")).is_err());
     }
 }

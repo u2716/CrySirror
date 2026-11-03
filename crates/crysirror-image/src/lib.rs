@@ -4,6 +4,7 @@
 use anyhow::{ensure, Result};
 use std::{collections::BTreeMap, io::Cursor, sync::Arc};
 mod formats;
+mod fixed_blend;
 pub use formats::{ImageDecodeContext, ImageFormat, ImageSource};
 
 pub const MAX_DECODED_BYTES: usize = 64 * 1024 * 1024;
@@ -14,10 +15,14 @@ pub mod wipe_mask;
 mod png;
 pub use png::{encode_png_uncompressed, png_uncompressed_len};
 pub mod alpha_clip;
+/// Longest decoded image edge. Original sprite sheets exceed 8192 (Little
+/// Busters! `EF_RPW_RP08.g00` is 1200x12000); `MAX_DECODED_BYTES` bounds memory
+/// and the renderer validates uploads against the actual device limit.
+pub const MAX_IMAGE_DIMENSION: u32 = 16384;
 pub fn rgba_len(width: u32, height: u32) -> Result<usize> {
     ensure!(
-        width > 0 && height > 0 && width <= 8192 && height <= 8192,
-        "image dimensions must be 1..8192"
+        width > 0 && height > 0 && width <= MAX_IMAGE_DIMENSION && height <= MAX_IMAGE_DIMENSION,
+        "image dimensions must be 1..{MAX_IMAGE_DIMENSION}"
     );
     let n = u64::from(width) * u64::from(height) * 4;
     ensure!(
@@ -58,6 +63,8 @@ pub trait ImageDecoder: Send + Sync {
 }
 pub mod associated;
 pub mod bitmap;
+pub mod integer_raster;
+pub mod packed_bitmap;
 pub mod composition;
 pub mod cursor;
 pub mod color;
@@ -74,6 +81,42 @@ pub mod row_copy;
 pub mod transition;
 pub mod vector;
 pub mod warp;
+/// Pixel size from a KiriKiri TLG5/TLG6 header, directly or in a TLG0 `sds` wrapper.
+/// Lets a caller size a surface before a shared decoder job runs.
+pub fn tlg_size(bytes: &[u8]) -> Option<[u32; 2]> {
+    const MAGIC: usize = 11;
+    let bytes = match bytes.get(..MAGIC)? {
+        b"TLG0.0\0sds\x1a" => bytes.get(MAGIC + 4..)?,
+        _ => bytes,
+    };
+    let start = match bytes.get(..MAGIC)? {
+        b"TLG5.0\0raw\x1a" => MAGIC + 1,
+        b"TLG6.0\0raw\x1a" => MAGIC + 4,
+        _ => return None,
+    };
+    let word = |at: usize| Some(u32::from_le_bytes(bytes.get(at..at + 4)?.try_into().ok()?));
+    Some([word(start)?, word(start + 4)?])
+}
+
+#[cfg(test)]
+mod tlg_size_tests {
+    #[test]
+    fn reads_plain_and_wrapped_headers() {
+        let mut tlg5 = b"TLG5.0\0raw\x1a\x04".to_vec();
+        tlg5.extend(7u32.to_le_bytes());
+        tlg5.extend(9u32.to_le_bytes());
+        assert_eq!(super::tlg_size(&tlg5), Some([7, 9]));
+        let mut tlg6 = b"TLG6.0\0raw\x1a\x04\0\0\x08".to_vec();
+        tlg6.extend(3u32.to_le_bytes());
+        tlg6.extend(5u32.to_le_bytes());
+        assert_eq!(super::tlg_size(&tlg6), Some([3, 5]));
+        let mut wrapped = b"TLG0.0\0sds\x1a\0\0\0\0".to_vec();
+        wrapped.extend(&tlg5);
+        assert_eq!(super::tlg_size(&wrapped), Some([7, 9]));
+        assert_eq!(super::tlg_size(b"\x89PNG"), None);
+    }
+}
+
 pub fn decode_standard(bytes: &[u8]) -> Result<ImageSurface> {
     ensure!(
         bytes.len() <= MAX_DECODED_BYTES,
@@ -149,6 +192,7 @@ impl Default for DecoderRegistry {
         }
         this.decoders.insert("pdt".into(), Arc::new(Pdt));
         this.formats.insert("circus/crx", Arc::new(crx::Format));
+        this.formats.insert("engine/packed-bitmap", Arc::new(packed_bitmap::Format));
         this
     }
 }
@@ -178,6 +222,9 @@ mod tests {
     #[test]
     fn invalid_surfaces_and_unknown_formats_fail() {
         assert!(rgba_len(u32::MAX, 2).is_err());
+        assert!(rgba_len(MAX_IMAGE_DIMENSION + 1, 1).is_err());
+        assert_eq!(rgba_len(1200, 12000).unwrap(), 1200 * 12000 * 4);
+        assert!(rgba_len(MAX_IMAGE_DIMENSION, MAX_IMAGE_DIMENSION).is_err());
         assert!(ImageSurface {
             width: 1,
             height: 1,
@@ -242,3 +289,20 @@ pub mod fixed_luma;
 pub mod piecewise_resample;
 
 pub mod progress_curve;
+
+pub mod masked_pair;
+
+pub mod paged;
+pub mod bmp_encode;
+
+pub mod packed_pixels;
+
+/// Header-only allocation hint for built-in image encodings. Unknown custom
+/// formats return None so the caller retains its conservative byte cap.
+/// Call on an I/O/CPU worker: parsing a container header can seek internally.
+pub fn encoded_dimensions_hint(bytes:&[u8])->Option<[u32;2]>{
+    if let Ok(info)=cbg::probe_image(bytes){if let(Some(width),Some(height))=(info.width,info.height){return Some([width,height]);}}
+    let reader=image::io::Reader::new(std::io::Cursor::new(bytes)).with_guessed_format().ok()?;
+    if reader.format().is_none(){return None;}
+    let(width,height)=reader.into_dimensions().ok()?;Some([width,height])
+}

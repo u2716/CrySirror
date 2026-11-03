@@ -50,3 +50,20 @@ pub fn game_file_len(p: &Path) -> Result<u64> {
 pub fn resolve_game_file(p: &Path) -> Result<Option<PathBuf>> {
     Ok(crate::io_fs::read(p).ok().map(|_| p.to_path_buf()))
 }
+
+/// Capability metadata probe; a pending observation retries the instruction.
+pub fn game_path_exists(p: &Path) -> bool {
+    crate::io_fs::probe_file(p).unwrap_or(false)
+}
+pub fn resolve_game_path(p: &Path) -> Result<Option<PathBuf>> {
+    Ok(game_path_exists(p).then(|| p.to_path_buf()))
+}
+/// Capability mounts are already case-normalized by the host VFS. Original
+/// save files are read right after this check, so existence uses the read
+/// capability rather than a separate metadata query.
+pub(crate) fn resolve_windows_case_insensitive_file(p: &Path) -> Result<Option<PathBuf>> {
+    Ok(game_file_exists(p).then(|| p.to_path_buf()))
+}
+pub fn read_file_to_string(p: &Path) -> Result<String> {
+    Ok(crate::io_fs::read_to_string(p)?)
+}

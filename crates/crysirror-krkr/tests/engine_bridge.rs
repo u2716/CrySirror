@@ -152,7 +152,7 @@ fn clipped_native_copy_keeps_shared_image_source_for_following_soft_light() {
         a.setClip(1,1,2,2);a.copyRect(0,0,b,0,0,4,4);a.setClip();
         a.setImageSize(4,4);a.setImageSize(5,5);a.setImageSize(4,4);
         a.fillRect(0,0,1,1,0x80602010);
-        a.holdAlpha=true;a.fillRect(0,0,1,1,0x00402010);
+        a.face=dfOpaque;a.holdAlpha=true;a.fillRect(0,0,1,1,0x00402010);a.face=dfAuto;
         a.holdAlpha=true;a.operateRect(0,0,b,0,0,4,4,20,128);
         Debug.message('clipped-soft-light-complete');
     "#,&[]);
@@ -233,11 +233,16 @@ fn unsupported_natives_fail_visibly() {
     let e = failure(&mut r);
     assert!(e.contains("native DLLs are never loaded"), "{e}");
 
-    // A uniform zoom of the canvas is a valid display size; another aspect
-    // ratio needs letterboxing, which is not mapped.
-    let (_t, mut r) = fixture(r#"var w = new Window(); w.setInnerSize(800, 500);"#, &[]);
+    // The inner size is script state; only an impossible size fails.
+    let (_t, mut r) = fixture(r#"var w = new Window(); w.setInnerSize(0, 500);"#, &[]);
     let e = failure(&mut r);
-    assert!(e.contains("project canvas aspect ratio"), "{e}");
+    assert!(e.contains("Window inner size"), "{e}");
+    let (_t, mut r) = fixture(
+        r#"var w = new Window(); w.innerWidth = 800; w.innerHeight = 500;
+           if (w.innerWidth != 800 || w.innerHeight != 500) throw new Exception("inner size");"#,
+        &[],
+    );
+    r.tick(0, InputFrame::default()).unwrap();
 }
 
 #[test]

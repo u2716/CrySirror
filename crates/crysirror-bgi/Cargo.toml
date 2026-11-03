@@ -12,10 +12,15 @@ crysirror-runtime.workspace = true
 crysirror-scene.workspace = true
 crysirror-tasks.workspace = true
 crysirror-text.workspace = true
+crysirror-resource.workspace = true
+crysirror-formats-arc.workspace = true
+crysirror-image.workspace = true
+crysirror-audio.workspace = true
 crysirror-bgi-vm = { path = "../crysirror-bgi-vm" }
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+encoding_rs = "0.8"
 
 [dev-dependencies]
 crysirror-image.workspace = true

@@ -445,6 +445,7 @@ fn translucent_native_window_is_exact_shared_composition_and_retained_text() {
         rect: [10, 11, 3, 1],
         source_size: [3, 1],
         percent: 50,
+        stacked_planes: 0,
         resource: Some(source),
     });
     let mut text = NativeTextBridge::new(profile).unwrap();

@@ -73,3 +73,63 @@ fn repeat_mirror_and_default_are_independent_for_the_same_asset() {
     assert_eq!(again.get_pixel(0, 1), output.get_pixel(0, 1));
     assert_eq!(again.get_pixel(7, 1), output.get_pixel(7, 1));
 }
+
+#[test]
+#[ignore = "requires an actual wgpu adapter; execute explicitly"]
+fn clipped_atlas_views_exclude_guard_pixels_at_fractional_window_scale() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("assets")).unwrap();
+    let file = dir.path().join("project.json");
+    std::fs::write(&file, serde_json::to_vec(&json!({
+        "schema":2,"name":"atlas-clip","content_revision":"1","canvas":[16,12],
+        "assets":"assets","clients":[{"name":"app","adapter":"crysirror-script-v1","game":"fixture"}]
+    })).unwrap()).unwrap();
+    let mut rt = Runtime::load(&file, &dir.path().join("state")).unwrap();
+    let mut pixels = vec![0; 8 * 8 * 4];
+    for y in 0..8 {
+        for x in 0..8 {
+            let color = if (2..6).contains(&x) && (2..6).contains(&y) {
+                [96, 96, 96, 255]
+            } else { [255, 0, 255, 255] };
+            pixels[(y * 8 + x) * 4..(y * 8 + x + 1) * 4].copy_from_slice(&color);
+        }
+    }
+    let path = rt.host.upload_rgba(ClientId(1), 1, 8, 8, &pixels).unwrap();
+    rt.tick(0, Default::default()).unwrap();
+    let gpu = Arc::new(pollster::block_on(Gpu::request(&wgpu::Instance::default(), None)).unwrap());
+    for format in [wgpu::TextureFormat::Rgba8UnormSrgb, wgpu::TextureFormat::Bgra8UnormSrgb] {
+        let mut renderer = Renderer::new(gpu.clone(), format);
+        for (rotation, filtered, snapshot) in [(0., false, false), (std::f32::consts::FRAC_PI_2, false, false), (std::f32::consts::FRAC_PI_2, true, false), (0., false, true)] {
+            let mut child = json!({"id":2,"parent":1,"rect":[-2,-2,8,8],
+                "paint":{"kind":"image","asset":path.relative()}});
+            if filtered { child["filter"] = json!({"mono":0.5}); }
+            if snapshot {
+                child["paint"] = json!({"kind":"snapshot","size":[8,8],"layers":[
+                    {"id":10,"rect":[0,0,8,8],"paint":{"kind":"image","asset":path.relative()}}
+                ]});
+            }
+            submit(&mut rt,json!({"layers":[
+                {"op":"put","layer":{"id":1,"rect":[8.3,3.3,4,4],"clip":[0,0,4,4],
+                    "transform":{"rotate":rotation},"paint":{"kind":"solid","color":[0,0,0,0]}}},
+                {"op":"put","layer":child}
+            ]}));
+            renderer.set_engine_frame(rt.host.engine.frame([16,12]).unwrap()).unwrap();
+            let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("fractional atlas clip"), size: wgpu::Extent3d {width:37,height:29,depth_or_array_layers:1},
+                mip_level_count:1, sample_count:1, dimension:wgpu::TextureDimension::D2, format,
+                usage:wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC, view_formats:&[],
+            });
+            renderer.render(&rt.host.scene,&mut rt.assets,crysirror_wgpu::RenderTarget {
+                view:&texture.create_view(&Default::default()),size:[37,29],
+            },[16,12],[0,0,0,255]).unwrap();
+            let output=renderer.read_texture(&texture,37,29).unwrap();
+            let mut content=0;
+            for pixel in output.pixels() {
+                assert!(pixel[0].abs_diff(pixel[1])<=2 && pixel[2].abs_diff(pixel[1])<=2,
+                    "atlas guard leaked: {pixel:?}, rotation={rotation}, filtered={filtered}, format={format:?}");
+                content+=usize::from(pixel[1]>30);
+            }
+            assert!(content>30,"clipped image disappeared");
+        }
+    }
+}

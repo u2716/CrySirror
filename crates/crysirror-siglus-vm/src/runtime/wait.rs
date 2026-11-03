@@ -441,7 +441,7 @@ fn object_active_by_runtime_slot_mut(
     stage_idx: i64,
     runtime_slot: usize,
 ) -> Option<&mut ObjectState> {
-    let st = globals.stage_forms.get_mut(&stage_form_id)?;
+    let st = &mut **globals.stage_forms.get_mut(&stage_form_id)?;
 
     if let Some(ptr) = st
         .object_lists

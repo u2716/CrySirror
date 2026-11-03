@@ -7,6 +7,59 @@
 //! - `value` is the "current" stored value (for oneshot, it is set to the target immediately).
 //! - `cur_value` is the animated/interpolated value computed each frame.
 
+mod scalar_steps;
+pub use scalar_steps::step_remaining_time_scalar;
+
+/// Sample a clamped integer line on a caller-owned signed clock. Division
+/// truncates toward zero, including descending ramps. Wide intermediates keep
+/// the full i64 endpoint/clock domain defined without changing integer rounding.
+pub fn sample_integer_line(time: i64, start_time: i64, start: i64, end_time: i64, end: i64) -> i64 {
+    if end_time <= start_time {
+        return if time < start_time { start } else { end };
+    }
+    if time <= start_time {
+        return start;
+    }
+    if time >= end_time {
+        return end;
+    }
+    let change = i128::from(end) - i128::from(start);
+    let elapsed = (i128::from(time) - i128::from(start_time)) as u128;
+    let duration = (i128::from(end_time) - i128::from(start_time)) as u128;
+    let magnitude = change.unsigned_abs() * elapsed / duration;
+    (i128::from(start)
+        + if change < 0 {
+            -(magnitude as i128)
+        } else {
+            magnitude as i128
+        }) as i64
+}
+
+#[cfg(test)]
+mod integer_line_tests {
+    use super::sample_integer_line as sample;
+    #[test]
+    fn signed_rounding_and_zero_duration_are_exact() {
+        assert_eq!(sample(1, 0, 255, 1000, 192), 255);
+        assert_eq!(sample(500, 0, 255, 1000, 192), 224);
+        assert_eq!(sample(501, 0, -255, 1000, -192), -224);
+        assert_eq!(sample(9, 10, 4, 10, 7), 4);
+        assert_eq!(sample(10, 10, 4, 10, 7), 7);
+        assert_eq!(sample(10, 10, 4, 5, 7), 7);
+    }
+    #[test]
+    fn full_signed_domain_and_delayed_limits_have_no_overflow() {
+        assert_eq!(
+            sample(i64::MIN, i64::MIN, i64::MIN, i64::MAX, i64::MAX),
+            i64::MIN
+        );
+        assert_eq!(sample(0, i64::MIN, i64::MIN, i64::MAX, i64::MAX), 0);
+        assert_eq!(sample(0, i64::MIN, i64::MAX, i64::MAX, i64::MIN), -1);
+        assert_eq!(sample(1999, 2000, 192, 3000, 255), 192);
+        assert_eq!(sample(2500, 2000, 192, 3000, 255), 223);
+    }
+}
+
 /// Device-free scalar motion on a caller-supplied monotonic millisecond clock.
 /// The engine owns the immutable curve data; adapters choose native targets.
 /// No wall clock, thread, device or VM reference is retained.
@@ -54,12 +107,15 @@ impl ScalarTween {
         if elapsed >= self.duration_ms {
             return self.end;
         }
-        let ratio=elapsed as f64 / self.duration_ms as f64;
-        let eased=if self.easing==crate::layer::Easing::Linear{ratio}else{f64::from(self.easing.apply(ratio as f32))};
+        let ratio = elapsed as f64 / self.duration_ms as f64;
+        let eased = if self.easing == crate::layer::Easing::Linear {
+            ratio
+        } else {
+            f64::from(self.easing.apply(ratio as f32))
+        };
         // f64 avoids overflowing an intermediate end-start for finite f32
         // endpoints of opposite signs.
-        ((1. - eased) * f64::from(self.start) + eased * f64::from(self.end))
-            as f32
+        ((1. - eased) * f64::from(self.start) + eased * f64::from(self.end)) as f32
     }
     pub fn complete(&self, now_ms: u64) -> bool {
         now_ms >= self.started_ms && now_ms - self.started_ms >= self.duration_ms
@@ -328,3 +384,6 @@ impl IntEvent {
         self.frame();
     }
 }
+
+mod adaptive_steps;
+pub use adaptive_steps::AdaptiveStepClock;

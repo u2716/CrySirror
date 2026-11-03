@@ -40,12 +40,6 @@ The interactive Run command also loads overrides before script init/start.
 
 ## Source and acceptance boundaries
 
-Reviewed the complete local pinned Kirakira source checkout at
-`c451918023477620ff9055a2eb8a6714b947d9c1`, including native Font methods,
-font resource/measurement contracts and parser/VM dependency boundaries. No
-Kirakira font, renderer, audio or other engine implementation is copied or
-linked. The already-vendored original TJS2 VM stays unchanged.
-
 Independent engine measurement tests and original TJS2 callback tests use a
 caller-provided licensed system font at runtime and are marked ignored by
 default. `examples/krkr-demo/metrics.json` is a self-authored script through

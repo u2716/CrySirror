@@ -46,7 +46,8 @@ Message buffer/layout, image/audio syscalls, cross-module library linking,
 original save/restore and whole-game compatibility remain unfinished and fail
 visibly. Registration or successful format parsing is not completed integration.
 
-Desktop feature `majiro` enables original archive/ENV boot without extraction.
+The desktop always links Majiro and detects original archive/ENV boot layouts
+without extraction; no per-engine feature flag is required.
 Detection reads `majiro.env` from fastdata/update and `start.mjo` through common
 `majiro/arc` indexing; original files remain intact. Conflicting patch providers
 fail until their native precedence policy is mapped.

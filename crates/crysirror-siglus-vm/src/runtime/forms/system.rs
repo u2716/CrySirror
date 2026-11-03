@@ -9,8 +9,9 @@ use anyhow::{Context, Result, bail, ensure};
 pub fn dispatch(ctx: &mut CommandContext, args: &[Value]) -> Result<bool> {
     let call = ctx.vm_call.as_ref().context("native SYSTEM metadata")?;
     ensure!(
-        call.element.len() == 2 && call.al_id == 0,
-        "unsupported native SYSTEM chain/overload"
+        call.element.len() == 2 && (call.al_id == 0 || call.element.get(1) == Some(&11) && call.al_id == 1),
+        "unsupported native SYSTEM chain {:?}, overload {}, scene {:?}:{}",
+        call.element, call.al_id, ctx.current_scene_name, ctx.current_line_no
     );
     let op = call.element[1];
     match op {
@@ -33,6 +34,29 @@ pub fn dispatch(ctx: &mut CommandContext, args: &[Value]) -> Result<bool> {
         13 => {
             ensure!(args.is_empty(), "SYSTEM.CHECK_DEBUG_FLAG arguments");
             ctx.push(Value::Int(i64::from(ctx.globals.system.debug_flag)));
+        }
+        11 => {
+            ensure!(args.len() == 1 && if call.al_id == 0 {
+                args[0].as_i64().is_some()
+            } else { args[0].as_str().is_some() }, "SYSTEM.DEBUG_WRITE_LOG overload/arguments");
+            // The original implementation performs no formatting, directory
+            // creation or write at all when its debug flag is off. Preserve
+            // that production branch rather than treating the string overload
+            // as an unknown SYSTEM call.
+            if ctx.globals.system.debug_flag {
+                let text = if call.al_id == 0 { args[0].as_i64().unwrap().to_string() }
+                    else { args[0].as_str().unwrap().to_owned() };
+                let message = format!("({}.ss line={})\t{text}",
+                    ctx.current_scene_name.as_deref().unwrap_or("<none>"), ctx.current_line_no);
+                // CrySirror owns logging and host sink selection. The adapter
+                // supplies native context; no ambient Windows debug directory
+                // or VM-private logging backend is created.
+                crate::io_fs::append_engine_log(message)?;
+                if ctx.globals.system.debug_logs.len() == crysirror_core::service::MAX_LOG_LINES {
+                    ctx.globals.system.debug_logs.remove(0);
+                }
+                ctx.globals.system.debug_logs.push(text);
+            }
         }
         16 => {
             ensure!(args.is_empty(), "SYSTEM.GET_LANGUAGE arguments");
@@ -141,5 +165,29 @@ mod tests {
             Some(0),
             "inactive host must not be reported active"
         );
+    }
+    #[test]
+    fn disabled_debug_log_consumes_both_native_overloads_without_storage_or_history() {
+        let mut context = ctx(11);
+        dispatch(&mut context, &[Value::Int(-12)]).unwrap();
+        context.vm_call.as_mut().unwrap().al_id = 1;
+        dispatch(&mut context, &[Value::Str("■友達■ ID:001".into())]).unwrap();
+        assert!(context.stack.is_empty());
+        assert!(context.globals.system.debug_logs.is_empty());
+        let mut state = crate::io_fs::State::default();
+        crate::io_fs::scoped(&mut state, || {
+            dispatch(&mut context, &[Value::Str("actual production branch".into())]).unwrap();
+        });
+        assert!(state.writes.is_empty());
+        context.globals.system.debug_flag = true;
+        crate::io_fs::scoped(&mut state, || {
+            dispatch(&mut context, &[Value::Str("actual engine log".into())]).unwrap();
+        });
+        assert_eq!(state.logs, ["(<none>.ss line=-1)\tactual engine log"]);
+        assert_eq!(context.globals.system.debug_logs, ["actual engine log"]);
+        context.globals.system.debug_flag = false;
+        assert!(dispatch(&mut context, &[Value::Int(1)]).is_err());
+        context.vm_call.as_mut().unwrap().element.push(0);
+        assert!(dispatch(&mut context, &[Value::Str("nested".into())]).is_err());
     }
 }

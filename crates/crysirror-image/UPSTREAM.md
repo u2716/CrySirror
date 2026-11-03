@@ -81,8 +81,8 @@ python3 tools/compare_bitmap_upstream.py \
   --target-dir /absolute/path/to/external/cargo-target
 ```
 
-The tool checks the actual HEAD against `upstream-lock.json` and rejects index
-or working-tree modifications to tracked upstream workspace/dependency sources.
+The tool uses the complete source tree selected with `--source-root`; no Git
+revision lock or clean-working-tree requirement is imposed.
 Its generated Cargo workspace and target directory stay outside both source
 trees, including when output directories use symbolic links. The Rust corpus
 is `tools/bitmap_reference.rs`; the Python guard tests do not invoke Cargo.

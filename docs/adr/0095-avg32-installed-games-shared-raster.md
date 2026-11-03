@@ -1,5 +1,7 @@
 # ADR 0095: Installed AVG32 games over a shared raster device
 
+Status: implemented installed-game runtime profile; supersedes the runtime boundary of ADR 0062.
+
 Supersedes the runtime part of ADR 0062 (portable-vm profile).
 
 ## Context
@@ -13,10 +15,9 @@ them.
 
 ## Decision
 
-- The original interpreter is vendored from siglus_rs 5f358ef into
-  `crysirror-avg32/src/vm` (scenario, flags, Gameexe.ini, menus, meswin,
-  savedata, sound policy, animation, CG mode, voice patch), with per-file
-  hashes and a complete seam list in `SOURCE.json`.
+- The AVG32 interpreter is xmoezzz's implementation, maintained directly in
+  `crysirror-avg32/src/vm`. Native scenario, value, wait, menu and save policy
+  remains in that VM; shared mechanisms use CrySirror services.
 - The reusable pixel model moves out of the VM: `crysirror_image::avg32` owns
   the 32-buffer RGB+mask bank, its copy/mask/colour-key/swap/fill/fade/
   mono/invert/stretch/get-put primitives and every native transition.

@@ -142,6 +142,39 @@ impl NativeLiveState {
             self.write32(111864, count as u32 + 1);
         }
     }
+    ///402A10 records changed byte-bank entries in ascending index order. Even
+    /// after the1000-record history is full, the comparison bank is updated.
+    pub(crate) fn record_scene_bank_changes(&mut self) -> Result<()> {
+        let mut count = self.read32(115884) as usize;
+        ensure!(count <= 1000, "Circus native byte-change history extent");
+        for index in 0..1100 {
+            let current = self.body[118892 - LIVE_BASE + index];
+            let previous = self.body[119992 - LIVE_BASE + index];
+            if current == previous { continue; }
+            if count < 1000 {
+                let at = 115888 - LIVE_BASE + count * 2;
+                self.body[at..at + 2].copy_from_slice(&(index as u16).to_le_bytes());
+                self.body[117888 - LIVE_BASE + count] = current;
+                count += 1;
+            }
+            self.body[119992 - LIVE_BASE + index] = current;
+        }
+        self.write32(115884, count as u32);
+        Ok(())
+    }
+    /// Opcode63 appends only when the original Shift-JIS byte extent remains
+    /// below128, retaining the previous string when a suffix does not fit.
+    pub(crate) fn append_version(&mut self, suffix: &str) -> Result<bool> {
+        let at = 265848 - LIVE_BASE;
+        let length = self.body[at..at + 128].iter().position(|b| *b == 0)
+            .ok_or_else(|| anyhow::anyhow!("Circus native version unterminated"))?;
+        let (bytes, _, errors) = encoding_rs::SHIFT_JIS.encode(suffix);
+        ensure!(!errors && !bytes.contains(&0), "Circus native version encoding");
+        if length + bytes.len() >= 128 { return Ok(false); }
+        self.body[at + length..at + length + bytes.len()].copy_from_slice(&bytes);
+        self.body[at + length + bytes.len()] = 0;
+        Ok(true)
+    }
     pub(crate) fn music(&mut self, id: i16, name: &str) -> Result<()> {
         self.cstring(21944, 32, name)?;
         self.write32(21976, id as u32);
@@ -271,7 +304,10 @@ impl NativeLiveState {
     }
     pub(crate) fn image_name(&mut self, slot: u8, text: &str) -> Result<()> {
         ensure!(slot < 51, "Circus native image-name slot");
-        self.cstring(19496 + usize::from(slot) * 48, 48, text)
+        //422CF0 uppercases its local filename before loading and copying it
+        // into the original live slot table. This is format state, not an
+        // ambient filesystem path or an engine texture identity.
+        self.cstring(19496 + usize::from(slot) * 48, 48, &text.to_ascii_uppercase())
     }
     pub(crate) fn position(&mut self, slot: u8, position: [i16; 2]) {
         if let Some(index) = sprite_for_slot(slot) {
@@ -349,6 +385,21 @@ impl NativeLiveState {
         self.image_bindings.insert(slot, index);
         Ok(())
     }
+    /// The accepted falling-particle profiles of4284B0 case40. Pool storage
+    /// belongs to the shared VFX worker; these words are original save policy.
+    ///425B90 preserves66338 (the previous intensity) when disabling effects.
+    pub(crate) fn falling_effect(&mut self, kind: u8, parameter: u8) -> Result<()> {
+        ensure!(matches!(kind, 0 | 1), "Circus native falling save profile {kind}");
+        if kind == 0 {
+            for index in [66336, 66337, 66339, 66340, 66341, 66342] {
+                self.write32(index * 4, 0);
+            }
+        } else {
+            self.write32(66337 * 4, u32::from(kind));
+            self.write32(66338 * 4, u32::from(parameter));
+        }
+        Ok(())
+    }
     pub(crate) fn audit_completed(&mut self, opcode: u8, scene: &str, pc: u32) -> Result<()> {
         self.validate()?;
         self.completed.insert(opcode);
@@ -358,7 +409,7 @@ impl NativeLiveState {
         // above or the original dispatch's explicit no-live-body branch.
         if !matches!(opcode,0x00..=0x04|0x06|0x08|0x0d|0x0e|0x11|0x12|0x13|0x14|0x19|0x1c|0x1f|0x20|0x23|0x25|0x27|
             0x29..=0x31|0x3a|0x3b|0x42|0x48|0x4b|0x53|0x54|0x57|0x5d|0x60|0x62|0x66|0x69|0x6c|0x6e|0x8b..=0x8d|
-            0x46|0x47|0x70|0x91|0x92|0x93|0x97|0x98|0xa3|0xa6|0xaf|0xb3)
+            0x46|0x47|0x63|0x70|0x82|0x83|0x85|0x86|0x90|0x91|0x92|0x93|0x97|0x98|0xa3|0xa6|0xaf|0xb3)
         {
             self.gap(format!(
                 "opcode0x{opcode:02x} live-body writes not yet audited"
@@ -447,6 +498,66 @@ fn sprite_for_slot(slot: u8) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn scene_bank_history_saturates_without_losing_the_comparison_bank() {
+        let mut live = NativeLiveState::fresh();
+        live.system_assignment(241, 0x12345678);
+        for index in 0..1100 { live.body[118892 - LIVE_BASE + index] = 1; }
+        live.record_scene_bank_changes().unwrap();
+        assert_eq!(live.read32(115884), 1000);
+        assert_eq!(live.read16(115888), 0);
+        assert_eq!(live.read16(117886), 999);
+        assert!(live.body[117888 - LIVE_BASE..118888 - LIVE_BASE].iter().all(|b| *b == 1));
+        assert!(live.body[119992 - LIVE_BASE..121092 - LIVE_BASE].iter().all(|b| *b == 1));
+        assert_eq!(live.read32(118888), 0x12345678);
+        live.byte_assignment(10, 99, 9);
+        live.record_scene_bank_changes().unwrap();
+        assert_eq!(live.read32(115884), 1000);
+        assert_eq!(live.body[121091 - LIVE_BASE], 9);
+        // A later native reset clears the count, retaining raw history tails
+        // and comparison bytes. Only subsequently changed entries are added.
+        live.reset_script(false, &["A".into(), "B".into()]).unwrap();
+        live.byte_assignment(0, 2, 77);
+        live.byte_assignment(10, 99, 3);
+        live.record_scene_bank_changes().unwrap();
+        assert_eq!(live.read32(115884), 2);
+        assert_eq!([live.read16(115888), live.read16(115890)], [2, 1099]);
+        assert_eq!(&live.body[117888 - LIVE_BASE..117890 - LIVE_BASE], &[77, 3]);
+    }
+    #[test]
+    fn completed_falling_policy_keeps_original_intensity_when_disabled() {
+        let mut live = NativeLiveState::fresh();
+        live.falling_effect(1, 43).unwrap();
+        assert_eq!(live.read32(66337 * 4), 1);
+        assert_eq!(live.read32(66338 * 4), 43);
+        // Native425B90 clears the other effect families too, but preserves
+        // the last falling intensity rather than zeroing the entire range.
+        for i in [66336, 66339, 66340, 66341, 66342] {
+            live.write32(i * 4, 9);
+        }
+        live.falling_effect(0, 0).unwrap();
+        for i in [66336, 66337, 66339, 66340, 66341, 66342] {
+            assert_eq!(live.read32(i * 4), 0);
+        }
+        assert_eq!(live.read32(66338 * 4), 43);
+        let before = live.body.clone();
+        assert!(live.falling_effect(7, 1).is_err());
+        assert_eq!(live.body, before);
+    }
+    #[test]
+    fn original_version_append_uses_encoded_bytes_and_retains_rejected_suffix() {
+        let mut live = NativeLiveState::fresh();
+        assert!(live.append_version(&"あ".repeat(61)).unwrap());
+        assert!(live.append_version("12345").unwrap());
+        let before = live.body.clone();
+        assert!(!live.append_version("x").unwrap());
+        assert!(!live.append_version("あ").unwrap());
+        assert_eq!(live.body, before);
+        assert!(live.append_version("\0").is_err());
+        assert!(live.append_version("😀").is_err());
+        assert_eq!(live.body, before);
+        assert_eq!(live.body[265975 - LIVE_BASE], 0);
+    }
     #[test]
     fn new_slot_tables_match_original_music_placement_and_voice_memory() {
         let mut live = NativeLiveState::fresh();

@@ -1,0 +1,53 @@
+{
+  "schema": 1,
+  "engine": "CatSystem2",
+  "scope": "Original nested FES task and string-bank policies; bounded shared-resource profile, incomplete full adapter",
+  "native_evidence": {
+    "binary_sha256": "f8a1fb4fed8a0c64c3fbc0bcf009f63e8f3181cfbc1a0dbd60f9ddefc8e25b3d",
+    "file_version": "2.6.1.76",
+    "mode": "Read-only static IDA/capstone on ignored local copy; original EXE/DLL never executed",
+    "functions": {
+      "62DAA0/7576F0/728870": "Attach resolves actual parent177 raw string-bank root before331; independent512-word player banks and selected-bank deletion",
+      "77A630/629850/757650": "execfes snapshots at most16 raw arguments, publishes child class34, attaches inherited interpreter/imagelist, loads, forces actual subtree tick, then stores parent106",
+      "77A7C0/77AAA0/5DC9D0/6280C0/5DC790": "end-child clears parent slot and resets parent named EXITCODE, child destroy marks pending before postorder actual resource/bank retirement",
+      "62BED0/62D260/62D3F0/62AD10": "Child-before-parent phase, ancestry-based lowbutton priorities, unloaded/paused/dead hover avoids fabricated pointer observations",
+      "73FF40/6A49D0/765D20/769F30/766720/765F40": "Wrapping signed numeric marker prefixes, single-pass replacement; whole-row substitution then macros then per-word substitution",
+      "77C270/740150/740450": "strvar copy/get, literal zero-vararg copy, at most4 C32 numeric varargs and native C-string truncation",
+      "77C4B0/77C6D0/782FB0/785670": "Per-player string table store/delete; original second-argument lookup/destination ABI verified in x86, normalized unsigned byte strcmp and raw-tail CP932-aware space replacement"
+    }
+  },
+  "reusable_capabilities": {
+    "task": "Existing shared bounded TaskPool, cancellation and client-scoped storage own asynchronous FES I/O; owner retains exact operation/arguments/input receipt until completion",
+    "resources": "Actual shared Layer and InputRouting resources publish/retire in one atomic engine batch. Native local result banks remain VM data; no private renderer or screen host",
+    "text": "crysirror-text byte_replace::replace_spans_bytes validates disjoint bounded ranges and supports task cancellation. printf32::format_printf32_bytes takes explicit words/borrowed byte strings, preserves encoding and C32 integer widths without host pointer dereferencing",
+    "async_ownership": "Forced subtree cursor and immutable input receipt prevent quota/dependency replay; admitted arguments evaluate once. Deferred destruction rejects protected jobs and unported resource owners before publication. Failed engine receipt preserves native state/resources",
+    "audio": "Shared crysirror-audio::levels owns ordinary finite dB100 and explicit legacy silence-sentinel conversions; public Audio.setVoice gain_db100 validates before mutation and renders actual PCM independently of Cat.",
+    "composition": "Shared Scene Canvas PresentIsolated presents a live source as one immutable/COW Snapshot beneath outer opacity/transform/clip, with old Present preserved. Public Canvases.apply exposes this without a native VM."
+  },
+  "validation": {
+    "release_cat": "105passed/1ignored in native-tuple-value-family-tests.log, retaining earlier full string/motion-manager/sound native-policy coverage; latest whole OBJECT-value batch is recorded separately after actual validation",
+    "release_text": "42passed/3ignored in native-string-family-final-tests2.log (also shared-byte-text-kernels-tests.log); five new byte-span/printf tests independent of any VM",
+    "independent_c_oracle": "Authored printf32-oracle.c compiled locally against snprintf; numeric sign/radix/width/precision/narrowing and explicit CP932-byte output match Rust fixture vectors; shared-printf32-c-oracle.log. No legacy executable/library linked",
+    "prior_nested_batches": "Native nested roots78, exec81, retirement83, forced subtree86 passed with1ignored each; logs native-nested-task-roots-tests/native-nested-exec-tests/native-nested-retirement-tests/native-forced-subtree-tests",
+    "prior_shared_scene": "75passed/0ignored in shared-procedural-matrix-tests.log, actual Engine public external_motion_api1/solid_color_api1 plus lib3 passed",
+    "python": "201tests OK in native-fes-string-python-tests.log using HomebrewPython3.11. Older system3.9/tomllib and isolated numpy failures were not passes.",
+    "first_authored_compile_failure": "native-string-table-family-tests.log failed on an accidentally inserted raw field in a test function signature body; corrected before the successful95-test run. It is not a pass",
+    "release_shared_audio": "Audio36passed/2ignored in shared-audio-levels-tests.log. Actual public Engine audio_native3passed, including PCM gain/atomic errors, rerun in shared-canvas-audio-final-api-tests.log.",
+    "release_shared_canvas": "Final Scene10targets93passed/0ignored in shared-canvas-isolation-final-tests.log, including library50, isolated5 and existing subtree/capacity/dirty/destroy/lifecycle/materialize/canvas/matrix regressions. Actual public Engine canvas_isolation_api1passed in shared-canvas-audio-final-api-tests.log. CPU/resource/geometry tests, no GPU visual claim.",
+    "public_docs": "Measured7139e6a8e9650eac (prior ceb843 preserved); real no-bless release api_docs8/8+api_coverage1/1 passed in systemnnn/api-canvas-isolation-verify.log. Audio Map option changed semantics without changing prior metadata fingerprint; Canvas command changed the measured fingerprint."
+  },
+  "owner_behavior": {
+    "latest_frozen_binary": "cat-owner-batch4",
+    "sha256": "c5f41f86d362361c30b6f4a209b283c5d80d19a74ac1efca3f59a0612f41f5f1",
+    "receipt": "KCS20360/FES53 pending execfes brandlogo; original448 already acknowledged only after earlier actual forced FES wait. This frozen binary predates current source batches",
+    "claim": "No new Desktop/GPU/title/gameplay run or complete reverse-engineering claim"
+  },
+  "explicit_remaining_profiles": [
+    "Typed39 object resources, actual image/audio/text publication and FES aliases bound to original motion Controllers",
+    "execkcs and active KCS child lifecycle; auxiliary tables and objects whose retirement is not yet implemented",
+    "Constructor metadata containing dollar-str needs actual bank/interpreter admission; dynamic structural branch substitution requires reviewed link construction",
+    "Pointer-valued percent-s, floating/I64/locale/percent-n printf profiles fail explicitly; no guessed host pointers or unsafe varargs",
+    "Actual CST/dialogue/UI/audio playback/input callbacks/original live saves and complete title/start/gameplay"
+  ],
+  "not_completed_by_inventory": "Static131FES/122object/911KCS decompilations and45 motion slots are not completed native-handler counts or adapter acceptance"
+}

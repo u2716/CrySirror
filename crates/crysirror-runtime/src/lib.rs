@@ -19,12 +19,15 @@ pub use model::Project;
 pub use runtime::{AdapterRegistry, Runtime};
 
 mod image_processing;
+mod image_encoding;
+mod audio_replacement;
 
 pub mod text_storage;
 
 pub mod published_images;
 
 mod civil_time;
+mod session_seed;
 
 mod pattern_resources;
 pub mod canvas_images;

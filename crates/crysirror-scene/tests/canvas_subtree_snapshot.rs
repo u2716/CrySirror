@@ -367,6 +367,24 @@ fn unsupported_blend_group_opacity_and_active_composite_fail_explicitly() {
 }
 
 #[test]
+fn composition_above_the_captured_root_does_not_block_the_copy() {
+    let ancestor = solid(90, None, [0., 0., 32., 32.], [255; 4], 0);
+    let root = solid(100, Some(90), [0., 0., 16., 16.], [255; 4], 0);
+    let child = solid(102, Some(100), [0., 0., 4., 4.], [255; 4], 2);
+    let sibling = solid(200, None, [0., 0., 32., 32.], [255; 4], 0);
+    let mut layers = LayerSystem::default();
+    layers.install(CLIENT, &[ancestor, root, child, sibling]).unwrap();
+    layers
+        .apply_batch(
+            CLIENT,
+            &[L::BeginCrossfade { id: 90, source: 200, duration_ms: 500, rule: None, external: false }],
+        )
+        .unwrap();
+    let mut c = destination(&mut layers);
+    c.apply_batch(CLIENT, &[copy(100)], &mut layers).unwrap();
+}
+
+#[test]
 fn ancestor_chains_are_stored_once_without_flattening_expansion() {
     let mut specs = Vec::new();
     for id in 100..120 {

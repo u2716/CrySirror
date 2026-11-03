@@ -1,7 +1,7 @@
 # ADR 0085: Owner-clock cue programs and dependency receipts
 
 Date: 2026-10-27
-Status: Accepted for shared scheduling; native mapping follows in ADR 0086
+Status: implemented bounded shared scheduling; native mapping in ADR 0086
 
 ## Problem and source evidence
 

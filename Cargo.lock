@@ -1361,7 +1361,9 @@ dependencies = [
  "crysirror-runtime",
  "crysirror-scene",
  "crysirror-text",
+ "crysirror-video",
  "encoding_rs",
+ "oxideav-cinepak",
  "serde",
  "serde_json",
  "tempfile",
@@ -1372,13 +1374,17 @@ name = "crysirror-bgi"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "crysirror-audio",
  "crysirror-bgi-vm",
  "crysirror-core",
+ "crysirror-formats-arc",
  "crysirror-image",
+ "crysirror-resource",
  "crysirror-runtime",
  "crysirror-scene",
  "crysirror-tasks",
  "crysirror-text",
+ "encoding_rs",
  "serde",
  "serde_json",
  "tempfile",
@@ -1389,7 +1395,16 @@ name = "crysirror-bgi-vm"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "byteorder",
+ "chrono",
+ "crysirror-image",
+ "crysirror-resource",
+ "crysirror-scene",
  "encoding_rs",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tracing",
 ]
 
 [[package]]
@@ -1400,12 +1415,17 @@ dependencies = [
  "crysirror-audio",
  "crysirror-core",
  "crysirror-formats-arc",
+ "crysirror-image",
+ "crysirror-puppet",
+ "crysirror-puppet-eluna",
  "crysirror-resource",
  "crysirror-runtime",
  "crysirror-scene",
  "crysirror-tasks",
  "crysirror-text",
+ "encoding_rs",
  "flate2",
+ "glam 0.27.0",
  "serde",
  "serde_json",
  "tempfile",
@@ -1535,6 +1555,7 @@ dependencies = [
  "crysirror-siglus",
  "crysirror-siglus-vm",
  "crysirror-system-nnn",
+ "crysirror-system4",
  "crysirror-tjs2",
  "crysirror-wgpu",
  "env_logger",
@@ -1765,6 +1786,7 @@ dependencies = [
  "crysirror-runtime",
  "crysirror-scene",
  "crysirror-tasks",
+ "crysirror-vfx",
  "encoding_rs",
  "serde",
  "serde_json",
@@ -1883,6 +1905,7 @@ dependencies = [
  "crysirror-vfx",
  "crysirror-video",
  "encoding_rs",
+ "getrandom 0.3.4",
  "glam 0.27.0",
  "serde",
  "serde_json",
@@ -1895,6 +1918,7 @@ name = "crysirror-scene"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "bincode 1.3.3",
  "crysirror-core",
  "crysirror-puppet",
  "crysirror-vfx",
@@ -1944,6 +1968,7 @@ dependencies = [
  "crysirror-resource",
  "crysirror-scene",
  "crysirror-siglus",
+ "crysirror-tasks",
  "crysirror-text",
  "encoding_rs",
  "flate2",
@@ -1978,10 +2003,12 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "crysirror-core",
+ "crysirror-formats-arc",
  "crysirror-resource",
  "crysirror-runtime",
  "crysirror-tasks",
  "crysirror-text",
+ "crysirror-text-legacy",
  "encoding_rs",
  "flate2",
  "serde",
@@ -2009,6 +2036,8 @@ dependencies = [
  "anyhow",
  "blake3",
  "crysirror-core",
+ "crysirror-image",
+ "encoding_rs",
  "image",
  "rustybuzz",
  "serde",
@@ -2016,6 +2045,13 @@ dependencies = [
  "unicode-linebreak",
  "unicode-script",
  "unicode-segmentation",
+]
+
+[[package]]
+name = "crysirror-text-legacy"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
 ]
 
 [[package]]
@@ -2058,6 +2094,7 @@ dependencies = [
  "crysirror-codec-wmv",
  "crysirror-image",
  "oxideav-av1",
+ "oxideav-cinepak",
  "oxideav-core",
  "oxideav-h264",
  "oxideav-h265",
@@ -4978,6 +5015,12 @@ source = "git+https://github.com/OxideAV/oxideav-av1?rev=b3c95abe071037bb8ecf06d
 dependencies = [
  "oxideav-core",
 ]
+
+[[package]]
+name = "oxideav-cinepak"
+version = "0.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "992a0ea3442dfa3a0ec893c117297f5dc76d50f19c8600853875896956618835"
 
 [[package]]
 name = "oxideav-core"

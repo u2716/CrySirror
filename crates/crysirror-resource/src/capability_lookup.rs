@@ -24,7 +24,7 @@ pub fn resolve_ascii_case_insensitive(
         entries = entries
             .checked_add(names.len())
             .ok_or_else(|| anyhow::anyhow!("capability lookup entry overflow"))?;
-        ensure!(entries <= 65536, "capability lookup entry budget");
+        ensure!(entries <= 1 << 21, "capability lookup entry budget");
         let mut matches = names
             .into_iter()
             .filter(|n| n.eq_ignore_ascii_case(component));

@@ -1,0 +1,50 @@
+{
+  "reference": {
+    "repository": "https://github.com/tinyan/SystemNNN",
+    "commit": "78a05053c78b3b80065a9a209c6685a7c60a2e83",
+    "complete_files": [
+      "nnnUtilLib/shakin.cpp",
+      "nnnUtilLib/shakin.h"
+    ],
+    "policy": "Independent implementation of scheduling facts; no original C++ copied or linked and no licence grant asserted."
+  },
+  "actual_module": {
+    "sha256": "e85e92ec538d50eae08d27286177149972d443a96d1415277c1ae1f9ee108bdb",
+    "constructor": "0x542180",
+    "clock_complete_functions": [
+      "0x441760",
+      "0x4417a0",
+      "0x4417c0",
+      "0x4417d0",
+      "0x4417f0",
+      "0x441810",
+      "0x441830",
+      "0x441860",
+      "0x441900",
+      "0x4419c0"
+    ],
+    "no_skip_frame": "0x535090: SystemFile object+220 maps to serialized SYSTEM DATA byte152",
+    "configuration": {
+      "maxSkipFrame": "default2, clamp minimum1",
+      "skipAdjustFrame": "default10",
+      "maxSkipFrameBackScript": "defaultglobalmax; native background limiter remains actor policy",
+      "noSkipFrame": "nonzero caps global scheduler at1"
+    },
+    "evidence": [
+      "target/verification/systemnnn/native-adaptive-config.json",
+      "target/verification/systemnnn/native-adaptive-config-0x542180.c",
+      "target/verification/systemnnn/native-adaptive-clock-static.log",
+      "target/verification/systemnnn/native-adaptive-noskip-static.log"
+    ]
+  },
+  "version_difference": {
+    "actual_legacy": "Begin compares planned*horizon*period against existing debt only; shared new() selects lookahead0.",
+    "later_public_source": "Begin compares against debt+horizon*period; shared with_lookahead(...,horizon) expresses this explicitly.",
+    "overflow": "Shared signed32 finite profile rejects overflowing configurations/elapsed/consumption atomically, instead of relying on unchecked compiler behaviour."
+  },
+  "engine_boundary": "Scene AdaptiveStepClock owns all bounded scheduling arithmetic/state/serialization. NNN supplies reviewed setup/preference/owner elapsed and native actor CountUp policy. Core/runtime preparation does not advance this clock.",
+  "validation": {
+    "shared": "shared-adaptive-steps-tests2.log release4passed/0ignored",
+    "native_consumer": "native-original-wait-clock-tests.log:73passed/2ignored; runtime-clock-actual.log explicitly1passed covering NativeAdapter and InstalledAdapter plus original Fill count7->8. Static saved PRINT/SELECT CountUp and actual noSkipFrame override preserve source bytes. Dynamic frame/window rendering, ordinary PRINT/SELECT and DRAW clock unification remain incomplete."
+  }
+}

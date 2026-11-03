@@ -1,10 +1,12 @@
 // Native VM/page semantics derived from xsystem4 a85467d (C) Nunuhara Cabbage.
 // GPL-2.0-or-later; see SOURCE.json. No image, text layout or device resources.
-use anyhow::{Context, Result, ensure};
+use anyhow::{ensure, Context, Result};
 use std::sync::Arc;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PageKind {
     Global,
+    /// Weak (object,function,heap-sequence) triples; members are not owned.
+    Delegate,
     Local(usize),
     Structure(usize),
     Array {

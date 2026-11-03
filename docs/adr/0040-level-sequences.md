@@ -1,11 +1,10 @@
 # 0040: Level sequences
 
-Date: 2026-10-25. Status: implemented and validated. ADR numbers 0030–0039
-belong to the parallel Codex work, so this one continues after them.
+Date: 2026-10-25. Status: implemented and validated.
 
 ## Context
 
-The owner asked for the GoW III level to move. The level's WAD has 332
+Animated level objects require sequence playback. The inspected GoW III WAD has 332
 ANM-related records, for example `ANM_chainl1`, `ANM_gearplatupcd`,
 `ANM_sparkleflame1` and `ANM_screenshaker` (kind `0x00010034`). Inspection
 of `ANM_sparkleflame1` shows:

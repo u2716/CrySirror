@@ -16,6 +16,7 @@ encoding_rs = "0.8"
 crysirror-reallive-dll.workspace = true
 crysirror-image.workspace = true
 crysirror-resource.workspace = true
+crysirror-vfx.workspace = true
 crysirror-tasks.workspace = true
 blake3.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["clock"] }

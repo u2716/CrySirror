@@ -1,7 +1,7 @@
 # 0050: Asynchronous, multithreaded execution across the entire engine
 
 Date: 2026-10-26. Status: **accepted architecture requirement; partially implemented**.
-Owner direction: asynchronous/multithreaded support is required throughout
+Asynchronous/multithreaded support is required throughout
 CrySirror. The worker pools and asset/pose work in ADR 0049 are stage one.
 They do not complete this requirement.
 
@@ -29,8 +29,8 @@ an asynchronous pipeline around it.
 2. Give each operation a client/generation identity and observable
    pending/running/ready/failed/cancelled state, as appropriate. Rust callers can
    await asynchronous results; script/tool bindings must provide equivalent
-   completion semantics. Current polling script handles are an interim binding,
-   not completed Promise support.
+   completion semantics. ADR 0066 supplies bounded generated Promise bindings
+   for mapped services; a polling-only API still needs its own completion plan.
 3. Workers receive immutable snapshots or exclusively owned data. Stage changes
    as typed results/command buffers and validate ownership/generation at commit.
    Do not share mutable World/VM state behind a global lock as the architecture.
@@ -60,14 +60,14 @@ an asynchronous pipeline around it.
 | World, gameplay, AI, navigation | Dependency-aware simulation jobs, spatial/navigation jobs and immutable render extraction; deterministic commits | Owner-thread updates remain; general frame graph/system parallelism is outstanding |
 | Physics | Background shape/mesh cooking and independent simulation/query work, with fixed-step barriers and event publication | Rapier backend exists; general scheduling/cooking migration remains |
 | Animation | Parallel sampling, blending, IK/retargeting preparation and ordered event/root-motion application | Independent PBR poses run in workers; broader animation pipeline remains |
-| Renderer | Parallel CPU preparation/culling, budgeted asynchronous uploads, pipeline compilation, GPU submission/completion and frame overlap | Async image/model input exists; uploads, pipelines, LOD and general frame overlap remain |
+| Renderer | Parallel CPU preparation/culling, budgeted asynchronous uploads, pipeline compilation, GPU submission/completion and frame overlap | ADR 0052 adds extraction DAGs, retained snapshots, profiling and streaming; general uploads/pipelines, simulation overlap and full frame scheduling remain |
 | 2D layers, Canvas, filters, transitions | Background preparation/composition work and retained scene snapshots; transitions wait on declared resource readiness | Shared layers/Canvas exist; full async preparation and transition fences remain |
-| Resources | Scoped asynchronous reads, archive/decompression/decryption, decoding/import/cook, streaming/unload and revision invalidation | ADR 0049 covers initial reads/image/model imports; broader streaming/cook/lifetime pipeline remains |
-| Audio | Streaming decode/DSP scheduling with bounded command/sample queues; real-time callback consumes ready data without blocking | Existing mixer/media workers are partial coverage; no whole-audio migration claim |
+| Resources | Scoped asynchronous reads, archive/decompression/decryption, decoding/import/cook, streaming/unload and revision invalidation | ADRs 0049/0052/0065 cover reads, cells and bounded native decode tasks; general cook/dependency and lifetime migration remains |
+| Audio | Streaming decode/DSP scheduling with bounded command/sample queues; real-time callback consumes ready data without blocking | ADRs 0069–0080 provide decoder/native/media preparation, final DSP and device workers; independent render clock, remaining allocation/teardown and platform validation remain |
 | Video | Asynchronous demux/decode, bounded video/audio queues, synchronized presentation, seek/cancel and teardown | Existing media workers cover a bounded profile; streaming/seek and full integration remain |
-| Text and UI | Font loading, shaping/layout/raster/atlas preparation as jobs; ordered input/focus and short UI-state commits | ADR 0066 adds worker rich-text preparation/reveal and shared menus; font loading and GPU atlas boundaries remain |
+| Text and UI | Font loading, shaping/layout/raster/atlas preparation as jobs; ordered input/focus and short UI-state commits | ADR 0066 adds worker rich text/reveal/menus; shared FontLibrary workers prepare dynamic faces and glyph products; remaining synchronous shaping/metrics and GPU atlas migration remain |
 | Scripts and native VMs | Ordered interpreter execution with service suspension/resumption, off-thread compilation and typed owner-thread commits | ADR 0066 adds bounded JS service Promise bindings; native execution/storage callbacks and startup compilation still have synchronous boundaries |
-| Save/restore | Asynchronous staging/serialization/I/O/reconstruction followed by an atomic validated safepoint commit | ADR 0066 adds worker encoding/I/O/validation and atomic prepared commit; native checkpoint capture/reconstruction remain ordered owner operations |
+| Save/restore | Asynchronous staging/serialization/I/O/reconstruction followed by an atomic validated safepoint commit | ADR 0066 adds worker framework staging; ADR 0099 adds a bounded original-restore coordinator; native consumers/safepoints and complete reconstruction remain adapter-specific |
 | Editor, authoring, MCP | Asynchronous import/build/inspection/capture/edit operations, cancellation/progress and live-session completion handling | Existing APIs/worker inspection are partial; end-to-end async operation protocol remains |
 
 These are acceptance requirements, not declarations that the listed work has
@@ -98,7 +98,5 @@ any table row lacks its declared boundary and behavioral evidence.
 
 ## Validation and automation policy
 
-Validation is local by default. The owner has requested removal of GitHub CI.
-Do not add, restore or enable GitHub Actions/CI or other remote build automation
-without a new explicit owner request. This does not prohibit running appropriate
-local checks/tests for actual changes.
+Validation runs locally. GitHub Actions and other remote build automation are
+disabled. Appropriate local checks/tests apply to each implementation change.

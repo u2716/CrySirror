@@ -115,6 +115,7 @@ impl SiglusVm {
                     let movie = &mut self.state.vm.as_mut().unwrap().ctx.movie;
                     movie.surface = Some(path.relative().into());
                     movie.ready = false;
+                    movie.gain = Some(raw as f32 / 255.);
                 }
                 MovieCommand::Stop => {
                     host.media_request(
@@ -123,6 +124,12 @@ impl SiglusVm {
                     )?;
                 }
             }
+        }
+        let gain = self.native_movie_gain();
+        let movie = &self.state.vm.as_ref().unwrap().ctx.movie;
+        if movie.live && movie.surface.is_some() && movie.gain != Some(gain) {
+            host.media_request(ClientId(self.state.client), MediaRequest::SetGain { id: MEDIA_ID, gain })?;
+            self.state.vm.as_mut().unwrap().ctx.movie.gain = Some(gain);
         }
         Ok(())
     }
@@ -219,6 +226,10 @@ mod tests {
                 return Err(Error::NotFound);
             }
             match &request {
+                MediaRequest::SetGain { .. } => {
+                    self.requests.push(request);
+                    return VfsPath::new(Mount::Asset, "__surface/1895826431");
+                }
                 MediaRequest::SetClock { id, .. } => {
                     assert!(*id < MEDIA_ID);
                     self.requests.push(request);
@@ -309,6 +320,21 @@ mod tests {
                 ..Default::default()
             },
         )
+    }
+    #[test]
+    fn native_movie_category_gain_changes_retained_media_without_restarting_it() {
+        let (mut vm,mut host)=fixture(codes::mov_op::PLAY_WAIT);
+        vm.step(&mut host,InputFrame::default(),1024).unwrap();
+        host.info.as_mut().unwrap().position_ms=123;
+        let plays=host.requests.iter().filter(|r|matches!(r,MediaRequest::Play{..})).count();
+        let ctx=&mut vm.state.vm.as_mut().unwrap().ctx;
+        ctx.globals.syscom.original_config.all_sound_user_volume=201;
+        ctx.globals.syscom.original_config.sound_user_volume[4]=193;
+        vm.flush_movie(&mut host).unwrap();
+        assert!(matches!(host.requests.last(),Some(MediaRequest::SetGain{id:MEDIA_ID,gain}) if (*gain-152./255.).abs()<1e-6));
+        assert_eq!(host.info.as_ref().unwrap().position_ms,123);
+        assert_eq!(host.requests.iter().filter(|r|matches!(r,MediaRequest::Play{..})).count(),plays);
+        let count=host.requests.len();vm.flush_movie(&mut host).unwrap();assert_eq!(host.requests.len(),count);
     }
     #[test]
     fn original_movie_bytecode_waits_on_engine_frames_and_eof() {

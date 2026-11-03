@@ -46,7 +46,7 @@ fn fixture(s: SceneBuilder, extra: &str) -> (tempfile::TempDir, Runtime) {
     std::fs::write(d.path().join("assets/a/tone.wav"), wave()).unwrap();
     std::fs::write(
         d.path().join("assets/a/Gameexe.ini"),
-        format!("#BGM.000=\"Song\",\"tone\",700,800,750\n#SE.000=\"tone\"\n{extra}"),
+        format!("#START_SCENE=\"entry\"\n#BGM.000=\"Song\",\"tone\",700,800,750\n#SE.000=\"tone\"\n{extra}"),
     )
     .unwrap();
     let project = json!({"schema":2,"name":"native PCMCH","content_revision":"1","canvas":[64,64],"assets":"assets","clients":[{"name":"a","adapter":"siglus","game":"authored","asset_prefix":"a","config":{"scene":"Scene.pck","format":"pck","string_codec":"plain","gameexe":"Gameexe.ini","resources":{"tone":"tone.wav","koe/12":"tone.wav"}}},{"name":"b","adapter":"crysirror-script-v1","game":"other","program":[]}]});
@@ -367,14 +367,14 @@ fn unsupported_routing_unknown_operation_bounds_and_missing_alias_fail_before_ar
         match variant {
             0 => command(&mut s, 0, 9876, &[], fm::VOID),
             1 => play(&mut s, 16, c::ELM_PCMCH_PLAY),
-            2 => named(&mut s, 0, c::ELM_PCMCH_PLAY, &[(7, "tone")], &[(3, 1)]),
-            3 => named(&mut s, 0, c::ELM_PCMCH_PLAY, &[(7, "tone")], &[(11, 1)]),
+            2 => named(&mut s, 0, c::ELM_PCMCH_PLAY, &[(7, "tone")], &[(12, 1)]),
+            3 => named(&mut s, 0, c::ELM_PCMCH_PLAY, &[(7, "tone")], &[(13, 1)]),
             4 => s.command_string(&chain(0, c::ELM_PCMCH_PLAY), 0, "missing", &[], fm::VOID),
             _ => command(&mut s, 0, c::ELM_PCMCH_PLAY, &[], fm::VOID),
         }
         finish(&mut s);
         let (_d, mut r) = fixture(s, "");
-        assert!(r.tick(0, InputFrame::default()).is_err());
+        assert!(r.tick(0, InputFrame::default()).is_err(), "variant {variant}");
         assert_ne!(native(&r)["int_stack"], json!([42]));
         assert!(info(&r, 0).is_none());
     }

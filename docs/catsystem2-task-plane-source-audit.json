@@ -2,7 +2,7 @@
   "date": "2026-11-01",
   "module_sha256": "f8a1fb4fed8a0c64c3fbc0bcf009f63e8f3181cfbc1a0dbd60f9ddefc8e25b3d",
   "method": "Owner-authorized local static IDA9 review; original EXE never run",
-  "scope": "Reviewed type2 Plane,type6 controller,type15 image-list andtype34 FES constructor/attach/26;79/88/92 shared plane behavior. FES first native child tick maps lowerbutton through shared InputRouting;449 binds real manager geometry/XY.447/FES load remains unsupported.",
+  "scope": "Reviewed type2Plane/type6controller/type15image-list/type34FES constructor/load/firsttick,79/88/92/100 plane behavior. Native100 uniform solid vertex override maps shared SetSolidColor; actual KCS now448, which remains unacknowledged.",
   "functions": {
     "659dc0": "Format task name; send synchronous message1 to requested task parent with requested class; return real allocated logical task ID; send message26 with current KCS argument-state address",
     "5dd130/5dd210/5de540": "Parent routing and class construction; message1 becomes message2 with allocated native ID and object",
@@ -17,17 +17,20 @@
     "640ff0/5e01f0/5e3840/5e3610/6770f0": "native92 message47 stores own flag, recursively emits48 with same raw event flag to task descendants. Backend enabled=recipient own flag AND event flag. This is imperative delivery; direct child show may override previous parent hide. Default plane has no grid/button/hover side effects; mutations enabling these remain unmapped.",
     "5dd580/5de590/8cdaa8": "Class6 constructs5DE590 alone(0xA4), not5DF070Plane;empty rect,binding target-1,event mode0,result0,own enabled1,relative0,full-canvas-rect marker0. Full8CDAA8 vtable=[5DE6A0,5DD350,5DE8A0,5DC9B0,5DD130,5DD210,5DCC80,5DE8E0]. Message26 unhandled through5DE8E0+5DC9D0, hence no input registration or draw resource at construction.",
     "648a50/5de8e0/5e6f50": "Native104 supplies[task,x,y,w,h,priority,eventmode] to89;fixedsource mask7(all),prioritysignedi32 preserved. Fullcanvas canonicalRECT8CDAD0 is[-100000,-100000,100000,100000], matching sharedrect[x,y,w,h]=[-100000,-100000,200000,200000]. Native rect retains sourcecanonicalvalue. SharedInputRouting owns registry,hit/coverage/capture/receipt;104ACKafterenginecommit.",
-    "5e7a30/5e7bf0/5e7d10/5e6020/5e5fb0": "Input registry stable priority sort (first high), per-source eligibility, pointerhalf-openrect/coverage filtering, captured down receiver/up handling, hover distinct from press;native parent handled receipt controls trying next. Must be engine shared capability; no private hit tester."
+    "5e7a30/5e7bf0/5e7d10/5e6020/5e5fb0": "Input registry stable priority sort (first high), per-source eligibility, pointerhalf-openrect/coverage filtering, captured down receiver/up handling, hover distinct from press;native parent handled receipt controls trying next. Must be engine shared capability; no private hit tester.",
+    "640D30/5E01F0/676BB0/67D7C0/6840C0": "Native100 sends Plane59 with raw enable/color; renderer writes original fields87/88 and dirties geometry. No-resource target has no effect. Only reviewed uniform solid primitive profile is admitted; image/other resources remain explicit gaps.",
+    "682370/6824D0": "Original triangle object initializes override enable0/colorFFFFFFFF. Exported vertex color is original per-vertex ARGB when enable0, stored overrideARGB when nonzero. Adapter retains original uniform vertex color from79, exact raw enable and last supplied color, so disabling restores original vertex color and79 replacement resets native defaults."
   },
   "shared_owner": "Existing client-scoped LayerSystem owns transparent group resource, transform, graph ancestry, paint, visibility and later payload composition",
   "native_owner": "Original task ID/class/name/task-parent, native empty rectangle and graph binding policy; task ancestry never silently becomes graph ancestry",
   "group_convention": "Transparent solid group at[0,0,1,1], default transform and no clip. Shared Layer requires positive extents;1x1 is not native GET_SIZE or rectangle data. Original source default visible=true. Future image/effect/graph operations must be separately source-reviewed and translated through shared APIs.",
   "limits": "65536 logical task IDs; native32-byte task name field accepts at most31 non-NUL bytes. Unsupported classes and operations preserve pending original PC. Current XY/native graph/capture/text/image/effect/hit-test setters remain unmapped. Native visibility supported boolean profile0/1; other values explicitly rejected.",
-  "validation": "native66-fes-owner.log andnative449-canonical-runtime-owner.log eachrelease1/1,20,227instructions then447/1926/[8,406]/flow,pendingretained;lib23/23. CanonicalRuntime all31INTs/sharedatlas clientisolation/baseLayer andfourRuntime.tick inputedges verified. No Cat title/GPU-pixel/input callback success claim.",
+  "validation": "native100-lib-tests.log30passed/1ownerignored;shared-solid-color-tests2.log2/2passed (state/motion/depth preservation, nonSolid/foreign/missing targets and atomic rollback). native100-canonical-owner.log1/1passed,31INT canonical Runtime20,292instructions then448PC0x1943 args[8]. Native100 real transparent baseARGB0→FF000000 override is common Layer Solid[0,0,0,255], original parent intact. All292globalcachepages and click/Ctrl receipt probes also retained. shared-solid-color-api-tests3.log public reflected API1/1passed; NNN solid-color-api-docs-verify.log8/8+coverage1/1passed, fingerprintc8c180ba4ff65706; no title/GPU/gameplay claim.",
   "depth_mapping": "Only payload receives shared SetDepth; transparent native group never receives depth automatically. Native Task parent is not graph parent. This preserves native global flat payload Z, while generic engine depth scopes independently support subtree inheritance. Future native graph/relative cases require further evidence and may not silently inherit depth.",
   "public_capabilities": [
     "client-scoped shared Layer Solid/transform/visible/parent commands",
     "shared stable finite float SetDepth canonical side-map and commit_frame_order",
-    "shared comparison used by frame/crossfade/WGPU merge; frozen snapshots bake order"
+    "shared comparison used by frame/crossfade/WGPU merge; frozen snapshots bake order",
+    "Shared SetSolidColor command and Layers.setSolidColor(id,rgba) preserve all unrelated motion/spec; only existing Solid targets, client-scoped/atomic rollback"
   ]
 }

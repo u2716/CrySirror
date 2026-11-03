@@ -26,15 +26,24 @@ CRC32 detects accidental damage and is not an authentication mechanism.
 
 Both payload schemas must match the consumer or pass an explicit migration before
 restore. A different engine/game/content revision is not silently accepted.
-The two payload codecs and atomic whole-engine restore remain to be implemented.
+Runtime implements payload serialization and staged framework restore: candidate
+VM/service state is decoded and validated before publication. An adapter may
+reject a snapshot state it cannot reconstruct; this is not a guarantee of every
+subsystem or native-save profile. Platform durability and recovery semantics
+remain the responsibility of the storage backend implementing scoped atomic
+writes; the desktop DiskVfs supplies that backend. See
+[architecture](ARCHITECTURE.md) for ownership and
+[ADR 0099](adr/0099-staged-original-save-restore.md) for the separate bounded
+resource-dependent original-save restore coordinator.
 
-The in-memory host demonstrates file namespace separation and atomic map
-replacement only. Actual durable save files require a platform implementation
-of `FileSystem::write_atomic`, including platform-specific failure/recovery
-semantics and safe path resolution.
 
+## Historical Siglus audio schema checkpoints
 
-Native Siglus runtime payload schema 2 (ADR 0076) includes logical BGM state.
+The schema numbers below identify the ADR 0076/0083 checkpoints, not the latest
+Siglus VM snapshot schema. Current VM schemas and reconstruction limits are
+defined by each adapter; do not infer migration support from these older notes.
+
+Siglus runtime payload schema 2 at ADR 0076 included logical BGM state.
 Schema-1 payloads require migration; the envelope rejects a mismatch. Pending
 resource checkpoints retain the original uncommitted instruction. Active audio
 restores declarations at authored range start after candidate commit; worker
@@ -44,7 +53,7 @@ pause/delay/volume persistence uses those existing fields and shared preparation
 this bounded profile does not establish every original save variant.
 
 
-Current Siglus runtime audio payload is schema **5** (ADR 0083), following BGM
+The ADR 0083 Siglus runtime audio checkpoint used schema **5**, following BGM
 schema 2, PCM/SE schema 3 and KOE schema 4. No automatic migration of older
 payloads is supplied. PCMCH declarations reconstruct running/READY/paused cues
 at source start; remaining integer-ms resume delay is scheduled again. A pending

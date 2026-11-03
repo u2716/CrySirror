@@ -39,16 +39,19 @@ fn commit(ctx: &mut CommandContext) {
     }
 }
 fn clear_ready(ctx: &mut CommandContext) {
+    ctx.clear_script_trigger_skip();
     commit(ctx);
     let m = state_mut(ctx);
     m.clear_ready = true;
     m.msg_block_started = false;
     m.multi_msg = false;
-    let script = &mut ctx.globals.script;
+    let globals = &mut *ctx.globals;
+    let script = &mut globals.script;
     script.multi_msg_mode = false;
     script.cur_koe_no = -1;
     script.cur_chr_no = -1;
     script.auto_mode_moji_cnt = 0;
+    globals.syscom.replay_koe = None;
     if script.async_msg_mode_once {
         script.async_msg_mode = false;
         script.async_msg_mode_once = false;
@@ -118,7 +121,11 @@ pub(super) fn visual(ctx: &CommandContext) -> ([f32; 2], u8) {
     };
     (
         offset,
-        if ctx.ui.window_animation_type == 0 {
+        if ctx.globals.script.mwnd_disp_off_flag
+            || ctx.globals.syscom.hide_mwnd.onoff
+            || ctx.globals.syscom.msg_back_open {
+            0
+        } else if ctx.ui.window_animation_type == 0 {
             if p > 0. { 255 } else { 0 }
         } else {
             (255. * eased).clamp(0., 255.) as u8
@@ -236,6 +243,7 @@ pub(crate) fn dispatch(ctx: &mut CommandContext, op: i32, args: &[Value]) -> Res
                 state(ctx).is_none_or(|m| m.novel_mode == 0),
                 "native novel-mode clear is not mapped"
             );
+            begin_reading_wait(ctx);
             if op == codes::ELM_MWND_WAIT_MSG {
                 ctx.wait.wait_message_reveal();
             } else {

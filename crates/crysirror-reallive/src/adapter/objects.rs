@@ -298,11 +298,20 @@ impl RealLiveVm {
     fn insert_clipped(&self, out: &mut BTreeMap<u32, Value>, mut layer: Value, clip: Option<crate::vm::rect::Rect>, rank: i32) {
         let id = layer["id"].as_u64().expect("native layer id") as u32;
         if let Some(c) = clip {
+            // Native screen-space clipping happens against the destination
+            // screen as well. Empty intersections (e.g. a slider at its end)
+            // draw no pixels; they are not zero-sized retained Layer clips.
+            // Keep the VM's rectangle intact so later property changes can
+            // reveal the same object again.
+            let c = c.intersect(&crate::vm::rect::Rect::new(0, 0, self.width as i32, self.height as i32));
+            if c.is_empty() {
+                return;
+            }
             let parent = OBJECT_CLIP_GROUP + id;
             out.insert(parent, json!({
                 "id":parent,"parent":SCENE_ROOT,"rect":[0,0,self.width,self.height],
                 "paint":{"kind":"solid","color":[0,0,0,0]},"order":[OBJECT_ORDER,rank],
-                "clip":[c.x,c.y,c.w.max(0),c.h.max(0)]
+                "clip":[c.x,c.y,c.w,c.h]
             }));
             layer["parent"] = json!(parent);
         }
@@ -395,6 +404,26 @@ fn filter(p: &ObjectParams) -> Result<Value> {
 mod tests {
     use super::*;
     use crate::vm::{archive, scenario};
+
+    #[test]
+    fn screen_clip_projection_omits_empty_bounds_and_bounds_positive_clips() {
+        use crate::vm::rect::Rect;
+        let vm = RealLiveVm::new(ClientId(1), serde_json::from_value(json!({})).unwrap()).unwrap();
+        let layer = json!({"id":42,"parent":SCENE_ROOT,"rect":[0,0,20,8],"paint":{"kind":"solid","color":[255,0,0,255]}});
+        for clip in [Rect::new(351,208,0,8),Rect::new(0,0,-1,8),Rect::new(0,0,20,0),Rect::new(800,0,20,8)] {
+            let mut layers = BTreeMap::new();
+            vm.insert_clipped(&mut layers,layer.clone(),Some(clip),0);
+            assert!(layers.is_empty(),"empty native clip {clip:?}");
+        }
+        let mut layers = BTreeMap::new();
+        vm.insert_clipped(&mut layers,layer,Some(Rect::new(-100,-200,20_000,20_000)),0);
+        assert_eq!(layers[&(OBJECT_CLIP_GROUP+42)]["clip"],json!([0,0,vm.width,vm.height]));
+        let specs = std::iter::once(json!({"id":SCENE_ROOT,"rect":[0,0,vm.width,vm.height],"paint":{"kind":"solid","color":[0,0,0,0]}}))
+            .chain(layers.into_values()).map(serde_json::from_value).collect::<std::result::Result<Vec<crysirror_scene::layer::LayerSpec>,_>>().unwrap();
+        let mut engine = crysirror_scene::layer::LayerSystem::default();
+        engine.install(ClientId(1),&specs).unwrap();
+        assert!(!engine.frame([vm.width,vm.height]).unwrap().is_empty());
+    }
 
     #[test]
     fn parent_scale_and_adjustments_reach_child_engine_sprite() {

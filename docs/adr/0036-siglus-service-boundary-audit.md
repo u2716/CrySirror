@@ -1,10 +1,15 @@
 # 0036: Siglus shared-service coverage must be verified through the native VM
 
+> Historical audit checkpoint (2026-10-25). Its missing-bridge statements describe
+> that source revision; subsequent first-class native adapters and shared services
+> are documented in [NATIVE_ADAPTERS.md](../NATIVE_ADAPTERS.md). Retained results
+> are not current command coverage or whole-game acceptance.
+
 Date: 2026-10-25. Status: audited; native text/audio/movie bridges incomplete.
 
-The owner asked whether Siglus's details, including text drawing, have all been
-extracted into the engine and whether games can now run. The answer must separate
-shared mechanisms, native adapter wiring and actual native execution.
+This audit distinguishes shared text/rendering mechanisms, native Siglus
+adapter mappings and execution of original bytecode. Each has a separate
+implementation and validation boundary.
 
 ## Actual execution path
 

@@ -67,6 +67,17 @@
       "source": "crates.io release; commit from packaged .cargo_vcs_info.json",
       "inspection": "Pinned-source API, decoder adapter, packet/flush/reset/output metadata, MP4 sample and edit handling, decoder limits; full released source available in Cargo registry. No upstream engine copied or hosted.",
       "upstream_author": "Mark Karpeles (see upstream MIT LICENSE)"
+    },
+    {
+      "crate": "oxideav-cinepak",
+      "version": "0.0.3",
+      "repository": "https://github.com/OxideAV/oxideav-cinepak",
+      "commit": "ff82fab7af6efe19e9aa1cd106be0d1655873091",
+      "license": "MIT",
+      "license_sha256": "4ecae6b086e0d2663c8629e7d3d7ab7d8b39958e8853f9e1371159499a0c3bf2",
+      "source": "crates.io release; commit from packaged .cargo_vcs_info.json; default-features=false (no oxideav-core registry glue)",
+      "inspection": "Decoder API (CinepakDecoder::decode_frame/reset, Rgb24/Gray8 frames) used by crysirror_video::avi for AVG32 RIFF/AVI movies; encoder used only by tests. No upstream engine copied or hosted.",
+      "upstream_author": "Mark Karpeles (see upstream MIT LICENSE)"
     }
   ],
   "minimum_rust_version": "1.95"

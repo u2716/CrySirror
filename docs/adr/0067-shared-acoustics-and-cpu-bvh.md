@@ -1,7 +1,8 @@
 # 0067: Shared acoustic geometry and asynchronous direct sound
 
 Date: 2026-10-27. Status: implemented direct-sound profile; validation results
-are recorded separately in STATUS.md. HRTF/reflections/reverb remain pending.
+are recorded separately in STATUS.md. HRTF, reverb and reflected-path follow-ups
+are implemented within the bounded scopes of ADRs 0068 and 0073–0075.
 
 ## Decision
 
@@ -76,13 +77,14 @@ client. Choosing both physics-ray and dedicated acoustic modes is rejected.
 
 ## Capability boundary and next work
 
-Absorption/scattering are validated metadata reserved for future reflections;
-no reflected sound is synthesized yet. Reported travel time does not delay PCM.
-HRTF dataset loading/convolution, diffraction, geometric early reflections,
-late reverb, dynamic mesh refit/instancing, pose-age quality policy and a unified
-async decode/mix/output pipeline remain open. Stereo pan is not an HRTF claim.
-The inspected phonon reference embeds a SOFA dataset in its binaural effect;
-we do not copy that dataset or import its unfinished reverb path.
+This direct-sound ADR does not itself synthesize reflected sound, and reported
+travel time does not delay direct PCM. Follow-ups provide HRTF data/convolution
+(0068), late reverb (0073), first-order reflected paths/tracking (0074/0075),
+instance snapshots (0082), direct Doppler (0084) and decode/mix/output workers
+(0069–0080). Those bounded features do not supply diffraction, arbitrary
+higher-order/diffuse propagation, mesh deformation/refit or complete acoustic
+transport. Stereo pan alone is not an HRTF claim. No bundled SOFA dataset is
+copied from the inspected phonon reference.
 
 No new native VM integration is claimed by these Audio APIs. Native opcode,
 wait, resource and save mappings need their own source audit and behavior tests.

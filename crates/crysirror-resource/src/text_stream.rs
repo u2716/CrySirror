@@ -5,7 +5,7 @@
 //! the per-character XOR, mode 1 swaps adjacent bits of each UTF-16 unit, and
 //! mode 2 is zlib with 64-bit compressed/uncompressed sizes. Any other mode or
 //! a missing inner UTF-16LE mark is an error. No VM is involved.
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{bail, ensure, Context, Result};
 use std::io::Read;
 
 /// Header of a ciphered or compressed stream.
@@ -149,6 +149,16 @@ fn utf16(units: impl Iterator<Item = u16>) -> Result<String> {
     String::from_utf16(&units[..end]).context("invalid UTF-16 in ciphered text")
 }
 
+/// Decode an explicitly selected Windows-compatible Shift_JIS byte stream.
+/// This never guesses UTF-8 first or strips a UTF-8/UTF-16 BOM. In particular,
+/// some byte sequences are valid in both encodings with different text.
+pub fn decode_shift_jis(bytes: &[u8], max_bytes: usize) -> Result<String> {
+    ensure!(bytes.len() <= max_bytes, "Shift_JIS text stream byte limit");
+    let (text, errors) = encoding_rs::SHIFT_JIS.decode_without_bom_handling(bytes);
+    ensure!(!errors, "invalid Shift_JIS text stream");
+    Ok(text.into_owned())
+}
+
 /// Decode a bounded legacy text resource: cipher/compressed streams and BOMs
 /// take precedence, followed by valid UTF-8 and finally strict Shift_JIS.
 /// This is a codec policy, independent of the syntax or VM consuming the text.
@@ -171,9 +181,7 @@ pub fn decode_auto(bytes: &[u8], max_bytes: usize) -> Result<String> {
     if let Ok(text) = std::str::from_utf8(bytes) {
         return Ok(text.to_owned());
     }
-    let (text, _, errors) = encoding_rs::SHIFT_JIS.decode(bytes);
-    ensure!(!errors, "text is neither UTF-8 nor Shift_JIS");
-    Ok(text.into_owned())
+    decode_shift_jis(bytes, max_bytes).context("text is neither UTF-8 nor Shift_JIS")
 }
 
 /// Owned, bounded text cursor accepting LF, CRLF and CR line endings.
@@ -310,6 +318,15 @@ mod tests {
 mod output_tests {
     use super::*;
     const TEXT: &str = "保存テキスト 😀\nvalue=42;\r\n";
+    #[test]
+    fn explicit_legacy_encoding_retains_dual_valid_bytes_and_rejects_bad_input() {
+        let bytes = [0xc2, 0xa5];
+        assert_eq!(decode_auto(&bytes, 2).unwrap(), "¥");
+        assert_eq!(decode_shift_jis(&bytes, 2).unwrap(), "ﾂ･");
+        assert!(decode_shift_jis(&[0x81], 1).is_err());
+        assert!(decode_shift_jis(&bytes, 1).is_err());
+        assert_eq!(decode_shift_jis(b"", 0).unwrap(), "");
+    }
     #[test]
     fn writer_preserves_original_bytes_lengths_unicode_and_limits() {
         assert_eq!(

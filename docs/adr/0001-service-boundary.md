@@ -1,6 +1,8 @@
 # ADR 0001: data-driven core, engine-specific compatibility frontends
 
-Status: accepted; initial boundary code written; native integration pending.
+Status: accepted service boundary; first-class native consumers now exist.
+Per-adapter implementation and acceptance are tracked in NATIVE_ADAPTERS.md;
+original engine hosting was retired by ADR 0047.
 
 ## Decision
 

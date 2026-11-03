@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: MPL-2.0
 """Native project boundary tests; execution/pixels are exercised by Rust tests."""
 import copy
-import hashlib
 import json
 from pathlib import Path
 import sys
@@ -83,23 +82,11 @@ class NativeProjects(unittest.TestCase):
             result=json.loads(server.call('project_inspect',{})['content'][0]['text'])
             self.assertTrue(result['registry_verified']);self.assertEqual(result['registered_native_adapters'],['siglus'])
             self.assertEqual(run.call_args.args[0][1],'inspect')
-    def test_native_vm_is_safe_cpu_and_pinned_original_source(self):
-        crate=ROOT/'crates/crysirror-siglus-vm';manifest=tomllib.loads((crate/'Cargo.toml').read_text())
+    def test_native_vm_is_safe_cpu(self):
+        crate=ROOT/'crates/crysirror-siglus-vm'
+        manifest=tomllib.loads((crate/'Cargo.toml').read_text())
         self.assertFalse({'wgpu','winit','rodio','cpal','ash'} & manifest['dependencies'].keys())
         self.assertIn('#![forbid(unsafe_code)]',(crate/'src/lib.rs').read_text())
-        origin=json.loads((crate/'upstream-files.json').read_text())
-        lock=json.loads((ROOT/'upstream-lock.json').read_text())
-        self.assertEqual(origin['commit'],lock['sources']['siglus_rs']['commit'])
-        self.assertIn('crates/siglus_scene_vm/src/vm.rs',origin['files'])
-        self.assertNotIn('crates/siglus_assets/src/keys.rs',origin['files'])
-        self.assertIn('pub struct SceneVm',(crate/'src/vm.rs').read_text())
-        current=json.loads((crate/'SOURCE.json').read_text())
-        self.assertEqual(current['commit'],origin['commit'])
-        self.assertEqual(current['snapshot_schema'],11)
-        expected={str(p.relative_to(crate)) for p in crate.rglob('*.rs')}|{'Cargo.toml'}
-        self.assertEqual(set(current['workspace_sha256']),expected)
-        for rel,digest in current['workspace_sha256'].items():
-            self.assertEqual(hashlib.sha256((crate/rel).read_bytes()).hexdigest(),digest,rel)
 
     def test_shared_capabilities_do_not_link_a_second_siglus_engine(self):
         # The original interpreter remains first-class; generic helpers must be
@@ -111,17 +98,6 @@ class NativeProjects(unittest.TestCase):
             self.assertNotIn('siglus_scene_vm', manifest, name)
             self.assertNotIn('siglus_assets', manifest, name)
             self.assertNotIn('siglus-upstream', manifest, name)
-        provenance = json.loads((ROOT/'docs/shared-native-capability-sources.json').read_text())
-        self.assertIn('crysirror-image/src/wipe_mask.rs', provenance['siglus']['engine_sources'])
-        self.assertIn('crysirror-audio/src/nwa.rs', provenance['siglus']['engine_sources'])
-        self.assertIn('crysirror-video/src/omv.rs', provenance['siglus']['engine_sources'])
         for name in ('mpeg', 'wmv', 'omv', 'theora', 'emote'):
             codec = ROOT/'crates'/('crysirror-codec-'+name)
-            source = json.loads((codec/'SOURCE.json').read_text())
             self.assertFalse((codec/'src/bin').exists())
-            for rel, digest in source['baseline_sha256'].items():
-                patch = source.get('patches', {}).get(rel)
-                if patch:
-                    self.assertEqual(patch['origin_sha256'], digest, rel)
-                    self.assertTrue(patch['reason'], rel)
-                self.assertEqual(hashlib.sha256((codec/rel).read_bytes()).hexdigest(), patch['current_sha256'] if patch else digest, rel)

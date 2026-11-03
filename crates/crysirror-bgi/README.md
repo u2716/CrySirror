@@ -1,35 +1,31 @@
-# Native BGI BP profile
+# BGI native adapter
 
-`crysirror-bgi-vm` executes native BP bytes and retains the recovered dispatch
-ABI/opcode metadata from the owner's ethornell-rs (see SOURCE.json). This is a
-bounded, one-module/one-thread interpreter slice, not a completed BGI runtime.
-No `ethornell-app`, renderer, decoder, text painter or mixer is linked.
+The BP VM and script parser from xmoezzz's [ethornell-rs](https://github.com/xmoezzz/ethornell-rs)
+are maintained directly in `crysirror-bgi-vm`. This includes the original operand
+ring, memory/heap, BP modules, native thread and cooperative scheduler logic,
+scenario helpers, native ABI profiles and native save-data mechanisms.
+The complete original application, renderer and audio backend are not linked.
 
-Config is `{ "script": "main._bp", "root": "", "font": "main" }`.
-`font` is optional unless plain native text is executed. Images are shared engine
-resources; native bitmaps become Canvas objects and sprites/backgrounds ordinary
-Layer presentations. Plain Graph92:9C text is shared grid/GlyphRun state. BGM
-load waits for shared audio-resource preparation before acknowledging the native
-call; playback, pause/resume and mixing use shared channels. Native timers,
-cooperative yield and supported physical-key queries use engine time/input.
+Config: `{ "script": "main._bp", "root": "", "font": "main" }`.
+The entry point is a BP bootstrap, not a standalone Buriko scenario file.
+Dynamic BP reads run on bounded workers through client storage and shared
+BGI archive readers. Missing modules fail; they never become empty scripts.
 
-The resource worker owns the capability reader and immutable BP image. The VM
-owner alone publishes prepared state. Native calls retain their operands/PC until
-a successful engine call. Image metadata admission is still synchronous through
-the existing engine image-size API; full async image preparation remains open.
+Native bitmaps are immutable CrySirror image resources presented through
+Canvas/Layer. Integer blits, region copies, transforms, colour curves and native
+shadow glyph records execute in shared image/text workers. Font resources use
+the client font library. Markup and ruby registries use the shared text module.
+DSC decoding is in `crysirror-resource::dsc`, CBG decoding in `crysirror-image`.
+Strategy grids, body queries, splines and tactical evaluation are public
+`crysirror-scene::strategy` capabilities, independent of this VM.
+Native sound slots, gain banks, ramps and virtual CD-DA use shared audio
+resources, streaming decoders and channels. Host calls suspend their issuing
+thread; per-resource dependencies order bitmap/audio mutations while other
+native threads continue. Installed BP bootstraps and BGI archive mounts are
+recognized by the desktop detector.
 
-Native opcode coverage is partial. Scenario/Buriko script files, packed resource
-search, heap/module/thread scheduling, original saves, native text markup/ruby/
-kinsoku/shadows/vertical output, most graphics/filter modes and complete sound
-control are not implemented. Unknown modes/calls fail visibly. No real BGI game
-has been verified. Synthetic BP and source tables are not whole-game acceptance.
-
-An authored scene exercising bitmap/image/sprite/text/audio/time/input can be
-created locally with:
-
-```
-cargo run --release -p crysirror-bgi --example fixture -- TARGET_DIR SYSTEM_FONT
-```
-
-The font is read at runtime only. The fixture creates its own PNG/WAVE/BP assets,
-waits for Enter after the timer, and never distributes game content or fonts.
+Full native host coverage is still incomplete: window/message procedures,
+remaining object/effect classes, movie controls and native save-host operations
+need further mappings. Whole-adapter snapshot/restore remains unsupported.
+Unknown operations fail explicitly. These changes have not been compiled or
+behavior-tested.

@@ -1,0 +1,35 @@
+{
+  "date": "2026-11-01",
+  "status": "Original FES VM/source loader connected to native447; integrated first task-tick continuation under verification, native input/platform operations not mapped",
+  "module_sha256": "f8a1fb4fed8a0c64c3fbc0bcf009f63e8f3181cfbc1a0dbd60f9ddefc8e25b3d",
+  "method": "Complete listed local IDA9 static decompilation/disassembly review; original EXE/DLL never executed, original code/data not distributed",
+  "functions": {
+    "6548C0/native447": "Original resource-kind FES name resolution then task messages331(create/bind player) and332(load); void return. No forced task tick here.",
+    "62BED0/message331,755600,7286D0,728800,728B70": "Player-local512DWORD bank keyed by player identity; nine constructor named values, _EXITCODE_ fromTask and _SAVEOBJ_=0, Main Interpreter/raw string context, actual INPUT/SOUND roots and parent parameters. Existing bank creation does not select, failed selection retains old bank. Global backup is unrelated.",
+    "755C20,7659D0,62D130": "Actual custom FES read callback resolves resource type3 via scoped original load policy; default767240 CreateFileW is not the installed callback.",
+    "755D10,765A50,766CE0,7676C0": "Bounded compressed FES header and text loader, sections and original line indices; plaintext includes/preprocess remain visibly unsupported.",
+    "758C60,7597B0,7589E0,758F70,75AAC0": "Load phases MACRO/KEYBLOCK/DEFINE/OBJECT/SUBCOMMAND. Current bounded profile rejects the first four; preserves SUBCOMMAND alias/default/argument AST without claiming alias callable effects.",
+    "73FF40,766720,767050": "Original dollar-str numeric string-bank substitution, macro expansion and raw-byte grouped tokenizer; unsupported substitutions/macros explicit. Shared Text byte_groups owns the generic6A5910 algorithm.",
+    "7690E0,7692C0,769F30,76A680,7563A0": "Original command line read/object resolution/builtin dispatch or integer expression fallback, row advancement and first tick _FRAME_=1. Native operations retain section,row,physical line,byte offset. Blank wait/section restart/budget are distinct and never converted to successful native ACK.",
+    "8F4A58/8F4A78": "131 original builtin command names inventoried as ABI metadata only. Case-sensitive lookup; unknown names fall back to original integer evaluator rather than guessed native operation.",
+    "62BBC0,6287B0,628570": "Object resource/preload/admission/update stages are empty for the explicitly admitted no-OBJECT source. No fake image/object construction.",
+    "654B30/native448,62BED0/message333,629850": "333 sets running and immediately forces task tick. First low-button registration is engine InputRouting; before FES execution62D3F0 and INPUT144(slot12) must be mapped, so an expression-only standalone run is not equivalent to this integrated task tick.",
+    "62D3F0,5E6270,5E66C0,5E6F50/152/125/144,70F6D0,7106F0,676990": "INPUT152 reads field1316==0. Constructor sets0, but every real input tick writes70F6D0 active return. Pointer query125 can run7106F0 foreground/background/held-key release semantics and virtual coordinate conversion; unavailable pointer writes INT_MIN names. Native slot12 is logical original key policy. Neither pointer/focus nor native logical-key outcomes may be fabricated.",
+    "785920/steam_isenable": "Evaluates destination flag index, branches on actual platform manager presence/status; shared platform/backend contract not implemented. No forcedfalse result merely to advance."
+  },
+  "shared_ownership": {
+    "io_xml_decode": "ClientStorage/VfsPath, shared XmlDocument, cancellable TaskPool and Resource zlib transform",
+    "grouping": "crysirror_text::byte_groups; raw byte/NUL quirks and bounded dual-pass capacity/cancellation",
+    "graphics_input_audio": "Remain engine services; FES has no private renderer/compositor/hit tester/mixer. Existing atlas and low-button use shared Image/Layer/InputRouting."
+  },
+  "validation": {
+    "independent": "fes-flow-shared-tokenizer-tests.log26passed/1ignored; fes-flow-source-owner.log actual original flow267lines/25sections/26aliases executes4flag expressions then retains steam_isenable args1002 START row5 physical33 byte0x790. This is standalone VM behavior, not integrated gameplay.",
+    "integrated": "native117-canonical-owner.log1/1passed, actual31INT canonical Runtime20,285instructions thennative100PC0xa2f.447source loaded with real localbank8, later71constructslowbutton9,117sharedpage clear completed. FES0expressions/runningfalse in integrated KCS. Four input admissions retained at unknown callbacks; no title/gameplay/pixels-output claim.",
+    "hardware": "No new Cat GPU pixels/title/gameplay/audio claim; immutable26 stops447/PC1926 before capture."
+  },
+  "limits": [
+    "No FES object declarations/macros/plaintext preprocessing/string templates/alias invocation/waits/section branches beyond expression frontier.",
+    "Original pointer/focus/logical-key event policy, platform query, original saves and CST remain unsupported.",
+    "Worker completion and errors cached across owner admission retries; task id/native PC must match before publication."
+  ]
+}

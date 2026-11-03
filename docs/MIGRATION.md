@@ -1,46 +1,40 @@
-# Migration gates
+# Native adapter migration requirements
 
-The default implementation path is now **wgpu + winit desktop first**.
-Console-specific implementations are deferred as requested.
+The desktop baseline is wgpu + winit. Native VMs are first-class workspace
+crates; all desktop adapter factories are linked by the standard player build.
+The previous “fetch sources, connect RFVP, then Siglus, add a static 3D renderer”
+sequence has been retired. See [native adapters](NATIVE_ADAPTERS.md) for current
+profiles and [the roadmap](adr/0041-engine-capability-roadmap.md) for remaining
+engine work.
 
-## 0. Establish the desktop implementation baseline
+## Ownership
 
-Compile the supplied desktop/runtime/rendering source, resolve Cargo.lock,
-run all Rust tests, run the ignored real-GPU test explicitly, and run a window
-smoke test. Python/tooling tests alone do not satisfy this gate. Record failures
-instead of treating CI configuration as proof of a passing run.
+Keep original opcode/value/control-flow, resource selection, waits and save
+policy in the adapter. Reusable image, text, composition, UI, effects, codecs and
+audio mechanisms belong in shared engine crates with independent APIs.
+An original engine core, private renderer/mixer or composed-screen upload is not
+an accepted integration boundary. Preserve source provenance and license notices.
 
-## 1. Acquire and pin original source
+## Resource and task boundaries
 
-Fetch rfvp and siglus_rs, inspect actual VM-to-host seams, and capture legal
-reference fixtures. Preserve upstream source/license notices. See
-NATIVE_ADAPTERS.md for precise destination APIs and required behavior evidence.
+Use client-scoped handles and capability roots. Workers prepare bounded immutable
+inputs/results; owners publish completed state. Preserve a native call's PC,
+arguments and waits until the required service actually completes. Unknown
+operations/layouts fail visibly. Engine-wide async ownership remains mandatory
+under [ADR 0050](adr/0050-engine-wide-async-execution.md); existing worker paths
+do not establish that every subsystem is fully migrated.
 
-## 2. Connect RFVP, then Siglus
+## Saves and validation
 
-Keep each original interpreter, instruction/data model and private save state.
-Route compatible operations to one shared host, renderer and audio system.
-Keep behavior differences in adapters/profiles. Do not silently approximate
-unknown text layouts or promote demonstration scripts into native-VM claims.
+Original saves and framework snapshots are distinct formats and promises.
+Resource-dependent original restore can use the staged coordinator described in
+[ADR 0099](adr/0099-staged-original-save-restore.md). Each adapter still needs its
+own source-correct import/export and completion policy; a coordinator does not
+supply those automatically.
 
-## 3. Validate the shared implementations
-
-The source now includes textures/compositing, simple text, audio, VFS and staged
-whole-runtime restore. Validate their runtime behavior, then extend the seams
-for real native image/text/audio/archive formats. Original save import remains
-a separate feature with golden files. Audio sample-exact resume is not present.
-
-## 4. Broaden 3D and agent tooling from real use cases
-
-The static 3D renderer and project-level MCP server are initial implementations.
-Add logical 3D resources, animation/physics and eventually road/vehicle recipes
-when a game requires them. Live session control, arbitrary asset generation
-providers and a racing game do not exist in this snapshot.
-
-## 5. Switch and PS Vita only
-
-After desktop native behavior is validated, use audited platform work and
-legitimate SDKs to build independent window/render/audio/package backends.
-Do not assume a desktop wgpu configuration maps onto either console. No other
-console is currently in scope. Only hardware/emulator evidence establishes
-console support.
+Verify the shared capability without the VM, then verify real native calls,
+input edges, error retention and restore boundaries. Record implementation,
+release compilation and behavior separately in [STATUS.md](../STATUS.md).
+A factory, parsed archive or screenshot is not complete integration. Run local
+release checks/tests; do not enable remote CI. Platform support requires actual
+platform evidence; Switch/PS Vita remain deferred.

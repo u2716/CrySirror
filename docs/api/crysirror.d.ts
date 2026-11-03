@@ -27,6 +27,14 @@ declare class Audio {
   setMotionSettings(settings: Record<string, any>): void;
   /** Reset this client's automatic source/listener pose histories for the next frame, such as a teleport. Explicit velocities are retained. Does not reset source position, user pitch/rate or DSP history. */
   resetMotion(): void;
+  /** Begin a scoped seek on an existing native/media channel, without reopening its decoder or resetting fades/loop/pause. A retained ticket acknowledges actual cursor publication independently of later EOF. */
+  beginSeekChannel(channel: number, source_frame: number): number;
+  /** Retained AudioPreparation {channel,phase,error} for a channel seek. During a render-worker lease new completion remains pending until frame publication. Foreign/obsolete tickets fail. */
+  channelSeekStatus(ticket: number): Record<string, any>;
+  /** Cancel a pending channel seek and realign its previous logical cursor, or release a terminal receipt. A later seek is unaffected. Pending final DSP must be collected before cancellation. */
+  cancelChannelSeek(ticket: number): void;
+  /** Atomically exchange this client's two shared native/media logical channels, moving a voice if the other side is empty. Retains source handle, fractional cursor, DSP history and gain/transport ramps; opens no decoder. Unpublished preparation intents, pending seeks/retirement actors or render leases reject before any change. Ready receipts remain historical observations of their earlier publication. This is separate from decoded left/right channel swap; pooled VoiceHandles remain unchanged. */
+  exchangeChannels(left: number, right: number): void;
   /** Shared native/media channel AudioPlaybackInfo or null when ended. Scoped to the caller; source frame units, output-clock fades/delays and source completion remain distinct from processing tails. */
   nativeChannelInfo(channel: number): any;
   /** Retire a shared native channel decoder to a tail channel without reopening or seeking; admit an externally clocked stepped db100 release and return an owned operation handle. Pending is not transfer completion. */
@@ -137,7 +145,7 @@ declare class Audio {
   sourceStatus(handle: Record<string, any>): any;
   /** Drop this client's cached clips. Playing voices retain their own PCM and residency receipts. */
   clearSfxCache(): void;
-  /** {asset,bus?,mix_group?,gain?,rate?,pitch_semitones?,priority?,looping?,loop_points?:{start,end},fade_in_ms?,paused?,spatial?,follow?:Entity,raycast_occlusion?,acoustics?:AcousticSource,binaural?:boolean,reflections?:ReflectionTrackingSpec}; acoustics requires a ready scene; binaural requires a ready HRTF profile. These use background preparation; reflections automatically follow source/listener poses. Realtime hosts require a preloaded clip or playSfxAsync. Returns scoped generation handle. */
+  /** {asset,bus?,mix_group?,gain?,rate?,pitch_semitones?,priority?,looping?,loop_passes?:positiveCount,swap_channels?:boolean,loop_points?:{start,end},fade_in_ms?,paused?,retain_on_finish?:boolean,transport_active?:boolean,spatial?,follow?:Entity,raycast_occlusion?,acoustics?:AcousticSource,binaural?:boolean,reflections?:ReflectionTrackingSpec}; acoustics requires a ready scene; binaural requires a ready HRTF profile. These use background preparation; reflections automatically follow source/listener poses. Realtime hosts require a preloaded clip or playSfxAsync. Returns scoped generation handle. */
   playSfx(voice: Record<string, any>): Record<string, any>;
   /** Seeded weighted variants [{asset,weight?}], gain:[min,max], pitch_semitones:[min,max], avoid_repeat; optional VoiceSpec. Realtime hosts require preloaded variants. */
   playRandom(name: string, container: Record<string, any>, voice: Record<string, any>): Record<string, any>;
@@ -165,7 +173,13 @@ declare class Audio {
   pauseVoice(handle: Record<string, any>, paused: boolean): void;
   /** Synchronous exact seek. Worker-buffered streams require beginSeekVoice/seekVoiceAsync. */
   seekVoice(handle: Record<string, any>, frame: number): void;
-  /** Update {gain?,pan?:0..1,fade_ms?,rate?,pitch_semitones?,paused?,spatial?}. Fade applies to gain/pan. Pitch/rate change resampling speed. */
+  /** Ramp own amplitude to a finite0..4 target and optionally stop when that ramp truly completes, without an extra fade to zero. Pause and decoder starvation freeze this ramp; transport deadlines are independent. stop_after defaults false. */
+  fadeVoiceGain(handle: Record<string, any>, gain: number, fade_ms: number, stop_after: boolean | null): void;
+  /** Finish the current own-amplitude ramp at its retained target. A gain-stop retires the voice; independent transport stop deadlines are preserved. Foreign/stale handles fail. */
+  finishVoiceGainFade(handle: Record<string, any>): void;
+  /** Replace a live decoded-frame loop schedule {start,end?:frame,passes?:positiveCount}; omitted end uses source EOF and omitted passes loops unbounded. Count includes the current pass. Keeps the fractional source cursor and paused state; seek does not reset the count. Requires valid source range; changes apply on the next completed mixer boundary. */
+  setVoiceLoop(handle: Record<string, any>, schedule: Record<string, any>): void;
+  /** Update {gain? OR gain_db100?:-16000..1204,pan?:0..1,stereo_gain?:[left,right]0..4,swap_channels?:boolean,fade_ms?,rate?,pitch_semitones?,paused?,transport_active?,spatial?}. transport_active:false parks source/DSP while gain/pan clocks continue; full paused still freezes controls. Ended retained sources require a completed seek before activation. gain_db100 is finite hundredths of one dB; -10000 remains finite attenuation, use gain:0 for silence. Independent stereo_gain applies after pan/spatial DSP, before Master/reverb sends. Fade uses linear amplitude and rendered voice-frame clocks; paused/dependency-held voices retain ramps. Pitch/rate change resampling speed. */
   setVoice(handle: Record<string, any>, options: Record<string, any>): void;
   /** {playing,source_playing,position_seconds?}; playing includes pending stop completion and effect tails; source_playing excludes both. Stale/stolen/ended handles are inactive. */
   voice(handle: Record<string, any>): Record<string, any>;
@@ -196,10 +210,14 @@ declare class Audio {
 }
 /** Client-scoped CPU RGBA bitmaps; paths feed Layers and share its surface limits. Transient pixels are not runtime snapshots. */
 declare class Bitmap {
+  /** Prepare immutable source/destination snapshots with explicit RGBA fixed factors. options:{source:[sx,sy,w,h],destination?:[x,y],clip?:[x,y,w,h],state?:RgbaBlendState}. State fields match the typed Core descriptor: arithmetic:{kind:'float_nearest'} or {kind:'byte255',source:'floor'|'nearest'|'ceil',destination:...}; color/alpha:{source:factor,destination:factor,equation:'add'|'subtract'|'reverse_subtract'|'min'|'max'}, constant,write_mask,source_scale,source_bias,source_alpha_range,source_color_key,source_alpha_key. Factor names are snake_case. Uses revision/scope/epoch-checked effectStatus/cancelEffect, not an owner-thread pixel loop. */
+  beginFixedBlend(slot: number, source: number, options: Record<string, any>): number;
   /** Prepare a SineRowCopy from a shared bitmap snapshot. Full-image clip; uncovered destination pixels are preserved. Uses effectStatus/cancelEffect. */
   beginRowCopy(slot: number, source: number, options: Record<string, any>): number;
   /** Prepare clipped stored-coverage multiplication using AlphaClipRect. RGB is retained unless multiply_rgb is explicit; self_source reads the current destination in forward order and requires identical slots. Uses client/epoch/revision-checked effectStatus/cancelEffect. */
   beginAlphaClip(slot: number, source: number, options: Record<string, any>): number;
+  /** Prepare MaskedPairBlend from three immutable client-owned bitmap snapshots. Independent masks use exact14bit products with separate truncation, retaining destination alpha. Target epoch/revision checks and effectStatus/cancelEffect are shared with other image jobs. */
+  beginMaskedPair(slot: number, first: number, second: number, options: Record<string, any>): number;
   /** Prepare a snapshot crossfade/rule-mask/blur transition into slot at explicit ImageTransition progress. Inputs must be client-owned equal-size bitmaps. Uses effectStatus/cancelEffect and rejects a stale target revision. */
   beginTransition(slot: number, other: number, options: Record<string, any>, mask: number | null): number;
   /** Prepare an ImageEffect chain on shared workers. Captures immutable pixels and the target revision; effectStatus publishes only if the client/epoch/revision still match. Max 4M pixels, 16 effects. */
@@ -231,8 +249,10 @@ declare class Bitmap {
 declare class Canvases {
   /** Return shared retained-canvas capacity: surfacesPerClient. Pixel-byte, dimension and node limits are admitted separately. */
   getLimits(): Record<string, any>;
-  /** Atomically apply typed canvas commands: create, destroy, clear, draw, set, copy, present and hide. Destroy releases an existing unpresented surface; hide its presentations first. Frozen copies survive source destruction. Draws contain ordinary Layer specs, including positioned glyph runs. */
+  /** Atomically apply typed canvas commands: create, destroy, clear, draw, set, copy, present, present_isolated and hide. present_isolated keeps a live source surface as one immutable snapshot draw, refreshing it after edits; parent opacity/transform applies after composition. Nested snapshot/resource limits fail atomically. Destroy releases an existing unpresented surface; hide its presentations first. Frozen copies survive source destruction. Draws contain ordinary Layer specs, including positioned glyph runs. */
   apply(commands: Record<string, any>[]): void;
+  /** Atomically submit a typed ServiceBatch: prepare_layers before canvases, then world, ordinary layers and UI; input routes are staged in the same transaction. New Canvas parents and real motion producers may be created in prepare_layers without intermediate publication. Existing apply remains canvas-only. At most4096 combined commands and4MiB serialized data; host resource/font preparation applies. */
+  applyBatch(batch: Record<string, any>): void;
   /** Inspect this client's canvas dimensions and logical draw nodes, or null when absent. No flattened native frame is returned. */
   get(id: number): Record<string, any> | null;
   /** Read exact RGBA bytes from supported retained solid canvas nodes. Missing/outside coordinates and unsupported image/text/group/filter/transform/blend profiles fail; no guessed matte or GPU readback. */
@@ -440,6 +460,10 @@ declare class Input {
   readonly lastDevice: string;
   /** Action waiting for a new physical binding. */
   readonly pendingRebind: string | null;
+  /** Read the live backend pointer-motion token as an exact decimal string; null when unavailable. Actual movement/entry changes it even when rounded canvas coordinates stay the same. This is independent of input-frame revisions and snapshot state. */
+  pointerActivity(): string | null;
+  /** Last owner-admitted input sample with exact revision/time/button strings and optional pointer/inside/focus metadata. Null before admission or after restore. Querying does not consume events or infer a default pointer. */
+  observation(): Record<string, any> | null;
   /** This client's logical Caps/Num/Scroll lock state and revision. Physical state is null unless imported; logical control never toggles the OS keyboard. Session state resets only on successful Runtime restore. */
   keyboardLocks(): Record<string, any>;
   /** Patch this client's logical caps_lock/num_lock/scroll_lock. mode must be logical; physical requests fail explicitly. Returns owner-committed state/revision, not device success. */
@@ -522,7 +546,7 @@ declare class Layers {
   put(layer: Record<string, any>): void;
   /** Remove a layer and its descendants. */
   remove(id: number): void;
-  /** Pivot/anchor/rotation/scale/z transform. */
+  /** Pivot/anchor/rotation/scale/z and optional column-major affine local_matrix, applied after local scale/YPR before the anchor. Shear is preserved; perspective, singular matrices and matrix billboards fail. */
   setTransform(id: number, transform: Record<string, any>): void;
   /** Inherited visibility. */
   setVisible(id: number, visible: boolean): void;
@@ -532,12 +556,22 @@ declare class Layers {
   completeReveal(id: number): void;
   /** Inherited opacity 0..255. */
   setOpacity(id: number, opacity: number): void;
+  /** Change existing Solid paint RGBA bytes while preserving unrelated motion, transform, opacity, order and clip. Other paint kinds fail. */
+  setSolidColor(id: number, rgba: number[]): void;
   /** Opt this subtree into stable floating-depth painter order within its major bucket. Equal depths preserve the last committed frame order; ordinary layers draw before depth scopes. Null restores ordinary order. This does not change geometric position. */
   setDepth(id: number, depth: number | null): void;
   /** Explicit [major, minor] draw order. */
   setOrder(id: number, order: number[]): void;
   /** Clip rectangle [x,y,w,h] or null. */
   setClip(id: number, clip: number[] | null): void;
+  /** Inherited clip [x,y,w,h] in logical render-target coordinates, unaffected by layer or parent transforms. Zero width/height hides the subtree; null removes this clip. Local clip remains independent. */
+  setViewportClip(id: number, clip: number[] | null): void;
+  /** Crop this layer's own geometry and source UVs in local [x,y,w,h] coordinates before projection, without changing content layout or children. Null removes; zero extent hides its payload. */
+  setSourceCrop(id: number, crop: number[] | null): void;
+  /** Read this owned layer's source crop; a missing target fails, null means none. */
+  sourceCrop(id: number): number[] | null;
+  /** Read this owned layer's explicit render-target clip; a missing target fails, null means none. */
+  viewportClip(id: number): number[] | null;
   /** Siglus-style 2D filter {mono, invert, bright, dark, color_rate, color, add, tone_curve?:{asset,row,saturation}, mask?:{asset,gray_alpha}, alpha_test, distortion?:{kind:'mosaic'|'raster'|'radial_blur'|'threshold_fade',...}} or null. */
   setFilter(id: number, filter: Record<string, any> | null): void;
   /** Screen transition from the last presented frame: {effect:{kind:'crossfade'|'mask'{asset,fade}|'slide'{direction}|'mosaic'{size}|'ordered_dither'{cell:[x,y],diagonal?,steps}|'siglus'{code,options?,mask?}}, duration_ms, easing?:'linear'|'ease_in'|'ease_out'|'smooth'}. */
@@ -554,13 +588,23 @@ declare class Layers {
   setCrossfadeElapsed(id: number, elapsedMs: number): void;
   /** Finish this client's transition now (skip). */
   endTransition(): void;
-  /** Animate x/y/scale_x/scale_y with a shared MotionTrackSpec; engine duration uses milliseconds, external duration uses caller units. */
+  /** Animate layer position, scale, rotation (radians), pivot or opacity with shared MotionTrackSpec; opacity samples truncate to0..255 bytes, engine duration uses milliseconds, external duration uses caller units. */
   beginMotion(id: number, track: Record<string, any>): void;
+  /** Register an external procedural animation producer. Query motionStatus for its fresh generation; engine stores no executable callback. Retire producers before scene snapshots. */
+  beginExternalMotion(id: number, driver: number): void;
+  /** Atomically publish an optional {rect,transform,opacity} pose with a consecutive animation revision using {generation,revision} decimal u64 strings. Completion reflects the real producer; stale/invalid samples roll back both pose and revision. */
+  commitExternalMotion(id: number, driver: number, stamp: Record<string, any>, complete: boolean, pose: Record<string, any> | null): void;
+  /** Request the actual external producer's skip branch. The request alone never completes or samples an endpoint. */
+  requestExternalMotionSkip(id: number, driver: number, generation: string): void;
+  /** Retire a scoped external producer; old asynchronous results remain invalid after node/driver reuse. */
+  removeExternalMotion(id: number, driver: number, generation: string): void;
+  /** Change finite positive rectangle geometry while preserving scalar/external animation and unrelated Layer state. */
+  setRect(id: number, rect: number[]): void;
   /** Sample an externally clocked motion track at caller elapsed units. */
   setMotionElapsed(id: number, property: string, elapsed: number): void;
   /** Cancel one track or all tracks; finish optionally applies the target before removal. */
   endMotion(id: number, property: string | null, finish: boolean): void;
-  /** Current owned motion tracks and completion; a missing target fails. */
+  /** Owned scalar tracks, external drivers with exact generation/revision stamps, and combined completion; a missing target fails. */
   motionStatus(id: number): Record<string, any>;
 }
 /** Client-scoped string catalogs, CLDR plurals and locale font aliases; no filesystem or GPU ownership. */
@@ -594,6 +638,10 @@ declare class Media {
   play(id: number, asset: string, options: Record<string, any> | null): string;
   /** Stop only this client's media resource. */
   stop(id: number): void;
+  /** Set finite 0..4 media audio gain without restarting decoding, changing the presentation clock or affecting another client. Loading/paused resources retain the value for their next audio start. */
+  setGain(id: number, gain: number): void;
+  /** Read this client's retained media gain; null when the resource is absent. */
+  gain(id: number): number | null;
   /** Release this client's media resource and decoded surface after detaching its image references. */
   remove(id: number): void;
   /** Freeze the media clock; audio stops and the current picture stays. */
@@ -642,6 +690,11 @@ declare class PhysicsJoint {
   setSpec(spec: Record<string, any>): void;
   /** Remove this joint; stale calls fail. */
   destroy(): void;
+}
+/** Optional host integration backend availability. No backend is unavailable; this is not an entitlement, achievement or SDK-operation result. */
+declare class Platform {
+  /** Read owner-scoped backend availability for steam. Returns client/name/available/backend; backend null means no SDK backend is installed. Unknown integration names fail. */
+  integration(name: string): Record<string, any>;
 }
 /** Bounded engine CPU timings and optional completed GPU timestamp samples. Diagnostics never serialize device state into project saves. */
 declare class Profiler {
@@ -749,6 +802,22 @@ declare class Text {
   fontStatus(ticket: number): Record<string, any>;
   /** Resolve a client-owned logical alias or font family to immutable font metadata, or null. */
   resolveFont(aliasOrFamily: string): any;
+  /** Resolve a scoped dynamic binding, canonical alias or installed static family to the exact engine drawing alias. No font lease is fabricated for static faces. */
+  resolveFontAlias(aliasOrFamily: string): string | null;
+  /** Read one authorized character-to-glyph mapping without rasterization, parsing or I/O. Requires one Unicode scalar; a missing printable glyph fails explicitly. */
+  glyphId(alias: string, character: string): number;
+  /** Read cached actual outline OS/2 {weight,italic}; unknown metadata/precomputed faces return null, never fabricated regular weight. */
+  fontStyle(alias: string): Record<string, any> | null;
+  /** Measure one Unicode scalar with this client's authorized immutable font view; returns ascent, descent and advance. Size 1..512. */
+  fontMetrics(alias: string, size: number, character: string): Record<string, any>;
+  /** Font-independent cell-stream placement with unit wrapping, explicit moves, style indices and vertical columns. Returns logical cell bounds, not raster ink bounds. Live calls accept at most4096 commands; offline Rust layout accepts65536. */
+  layoutUnitFlow(items: Record<string, any>[], options: Record<string, any> | null): Record<string, any>;
+  /** Prepare actual glyph coverage-cell bounds on a scoped CPU worker. Each request contains character, size and optional baseline. Retains the admitted font snapshot; never joins the owner thread. */
+  beginGlyphBounds(font: string, glyphs: Record<string, any>[]): number;
+  /** Retained glyph metadata completion: pending/ready/failed/cancelled. Ready includes admitted font digest and ordered glyph_id/origin/size records, not logical cell advances. */
+  glyphBoundsStatus(ticket: number): Record<string, any>;
+  /** Cancel/release this client's glyph metadata ticket without joining a worker. */
+  releaseGlyphBounds(ticket: number): void;
   /** Cancel/release registration ticket. Published faces remain until releaseFont. */
   releaseFontJob(ticket: number): void;
   /** Release this client's dynamic face. Existing layer references must be removed or replaced before rendering. */

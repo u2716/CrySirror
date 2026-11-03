@@ -87,3 +87,35 @@ fn ordinary_data_vm_play_reaches_the_same_native_resource_decoder() {
     audio.render_pcm(&mut out).unwrap();
     assert!(out.iter().flatten().all(|x| (*x - 0.25).abs() < 1e-6));
 }
+
+#[test]
+fn public_voice_decibel_controls_use_shared_pcm_and_validate_before_mutation() {
+    let (_dir,runtime)=runtime(json!([]));let mut app=App::new(runtime,"game").unwrap();app.init().unwrap();app.start().unwrap();
+    let h=call(&mut app,"playSfx",&[Value::from_json(json!({"asset":"tone.nwa","gain":1.,"looping":true}))]);
+    call(&mut app,"setVoice",&[h.clone(),Value::from_json(json!({"gain_db100":-600}))]);
+    assert!(output(&mut app).iter().flatten().all(|x|(*x-0.2505936).abs()<1e-6));
+    for options in [json!({"gain":0.,"gain_db100":0,"pan":1.}),json!({"gain_db100":1205,"paused":true}),json!({"gain_db100":-16001}),json!({"gain_db100":1.5})] {
+        let cx=app.context();let audio=cx.singleton("Audio").unwrap();
+        assert!(cx.call(audio,"setVoice",&[h.clone(),Value::from_json(options)]).is_err());
+    }
+    //All invalid mixed options failed before pan/pause/gain changed any state.
+    assert!(output(&mut app).iter().flatten().all(|x|(*x-0.2505936).abs()<1e-6));
+    call(&mut app,"setVoice",&[h.clone(),Value::from_json(json!({"gain_db100":-10000}))]);
+    let samples=output(&mut app);assert!(samples.iter().flatten().all(|x|(*x-0.000005).abs()<1e-10));
+    call(&mut app,"setVoice",&[h,Value::from_json(json!({"gain":0.}))]);assert!(output(&mut app).iter().flatten().all(|x|*x==0.));
+}
+
+#[test]
+fn public_voice_stereo_gain_preserves_independent_channels_and_preflights_mixed_options() {
+    let (_dir,runtime)=runtime(json!([]));let mut app=App::new(runtime,"game").unwrap();app.init().unwrap();app.start().unwrap();
+    let h=call(&mut app,"playSfx",&[Value::from_json(json!({"asset":"tone.nwa","looping":true}))]);
+    call(&mut app,"setVoice",&[h.clone(),Value::from_json(json!({"stereo_gain":[0.25,1.]}))]);
+    for frame in output(&mut app) {assert!((frame[0]-0.125).abs()<1e-6);assert!((frame[1]-0.5).abs()<1e-6);}
+    for options in [json!({"stereo_gain":[5.,0.],"gain":0.,"paused":true}),json!({"stereo_gain":[0.,-1.],"pan":0.}),json!({"stereo_gain":[1.]})] {
+        let cx=app.context();let audio=cx.singleton("Audio").unwrap();
+        assert!(cx.call(audio,"setVoice",&[h.clone(),Value::from_json(options)]).is_err());
+    }
+    for frame in output(&mut app) {assert!((frame[0]-0.125).abs()<1e-6);assert!((frame[1]-0.5).abs()<1e-6);}
+    call(&mut app,"setVoice",&[h,Value::from_json(json!({"gain_db100":-600,"stereo_gain":[0.5,1.]}))]);
+    for frame in output(&mut app) {assert!((frame[0]-0.1252968).abs()<1e-6);assert!((frame[1]-0.2505936).abs()<1e-6);}
+}

@@ -1,18 +1,23 @@
 # Local game-kr plugin audit
 
+> Historical shipped-plugin inventory (2026-10-28), not the current plugin support
+> matrix. The startup frontier and missing mappings below describe that batch.
+> Later changes include the validated HXV4 bootstrap and a bounded PSBFile/PSBValue
+> facade; they do not imply every shipped plugin is implemented. Consult current
+> `crysirror-krkr` source and dated [STATUS.md](../STATUS.md) validation entries.
+
 Date: 2026-10-28. This is a disk inventory, **not an executed dependency graph**.
 The main startup was blocked by HXV4 resource handling when this inventory was
 taken; no claim is made that the game loads every DLL shipped beside it.
 
-Current probe: shared HXV4 indexing, checksum-verified reads and explicit EXE
+Probe at the inventory checkpoint: shared HXV4 indexing, checksum-verified reads and explicit EXE
 RCDATA startup loading now work for this local package. The unchanged native
 startup passes its archive-directory request and stops at Plugins.linkZ; no game
 scene is established. See [krkr-bootstrap-gap.md](krkr-bootstrap-gap.md). JSON and
 solid-linear LayerExDraw fixtures are separate passing capability evidence.
 
-Reference catalog: Kirakira `c451918023477620ff9055a2eb8a6714b947d9c1`.
-Module location and an upstream status are reference leads, not CrySirror behavior
-evidence. Only the explicitly implemented/tested CrySirror mappings count.
+Module names below classify the shipped plugin interfaces. Only the
+implemented CrySirror mappings describe supported behavior.
 
 | Shipped file | Reference module located | CrySirror state |
 |---|---|---|
@@ -68,7 +73,7 @@ parser/writer code was copied: the new safe Rust parser/writer lives in
 The grammar includes comments, single/double quotes, `:`/`=`/`=>`, comma/semicolon
 separators, trailing separators, empty array slots, void, signed exact integers
 and the reference integer exponent quirk. Quoted/scalar keys are accepted;
-bare-word keys are rejected (unlike Kirakira's documented lenient extension).
+bare-word keys are rejected.
 Malformed Unicode, cycles, callables, nonfinite numbers and excessive inputs
 fail. Input is capped at 1 MiB, 65536 nodes and depth 64; output is at most 4 MiB.
 
@@ -95,9 +100,7 @@ No native binary is loaded or executed.
 
 ## Second batch: solid-brush LayerExDraw profile
 
-Official reference: `wtnbgo/layerExDraw` at
-`f665a153fa774e47069f53e303329be15975d1e0`, selected complete function scopes and
-hashes in krkr-draw-source-audit.json. No C++ or Kirakira rasterizer is imported.
+Rasterization and transformed geometry use shared CrySirror services.
 
 Native GdiPlus.Appearance retains an ordered list of solid ARGB brushes and their
 per-brush offsets. GdiPlus.Path retains logical rectangle/polygon/connected-line

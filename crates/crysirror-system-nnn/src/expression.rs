@@ -22,6 +22,7 @@ pub struct NativeVariableWrite {
 pub struct Variables {
     values: Vec<i32>,
     calculated: BTreeMap<u16, Vec<u8>>,
+    calendar: Option<crate::native_calendar::NativeCalendar>,
     write_effects: BTreeMap<u16, Vec<u8>>,
     calculated_values: BTreeMap<u16, i32>,
     random: RefCell<Option<PatternRng>>,
@@ -41,12 +42,30 @@ impl Variables {
                 }
             ],
             calculated: BTreeMap::new(),
+            calendar: None,
             write_effects: BTreeMap::new(),
             calculated_values: BTreeMap::new(),
             random: RefCell::new(None),
             capture_writes: false,
             native_writes: Vec::new(),
         }
+    }
+    pub(crate) fn configure_native_calendar(
+        &mut self,
+        calendar: crate::native_calendar::NativeCalendar,
+    ) {
+        self.calendar = Some(calendar);
+    }
+    pub(crate) fn native_holidays_pending(&self) -> bool {
+        self.calendar
+            .as_ref()
+            .is_some_and(|calendar| calendar.needs_holidays())
+    }
+    pub(crate) fn prepare_native_holidays(&mut self, table: &crate::config::Names) -> Result<()> {
+        self.calendar
+            .as_mut()
+            .context("NNN native calendar not configured")?
+            .prepare_holidays(table)
     }
     pub fn mark_calculated(&mut self, id: u16, name: Vec<u8>) {
         self.calculated.insert(id, name);
@@ -130,6 +149,9 @@ impl Variables {
         self.write_stored(id, value);
         Ok(())
     }
+    pub(crate) fn stored_word_count(&self) -> usize {
+        self.values.len()
+    }
     pub fn read_stored(&self, id: u16) -> i32 {
         self.values.get(id as usize).copied().unwrap_or_else(|| {
             if id & 0x8000 != 0 {
@@ -141,6 +163,13 @@ impl Variables {
     }
     pub fn read_calculated(&self, id: u16) -> Result<i32> {
         if let Some(name) = self.calculated.get(&id) {
+            if matches!(name.as_slice(), b"week" | b"holiday") {
+                return self
+                    .calendar
+                    .as_ref()
+                    .context("NNN native calendar not configured")?
+                    .value(name, self);
+            }
             if name == b"rnd" {
                 let mut candidate = self
                     .random

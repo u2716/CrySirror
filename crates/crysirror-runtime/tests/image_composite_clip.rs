@@ -77,6 +77,43 @@ fn clipped_rgb_copy_preserves_mapping_alpha_and_rejects_malformed_clip() {
 }
 
 #[test]
+fn pruned_copy_history_matches_unoptimized_worker_pixels() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("assets")).unwrap();
+    let path = root.path().join("project.json");
+    std::fs::write(&path, br#"{"schema":2,"name":"copy history","content_revision":"1","canvas":[8,8],"assets":"assets","clients":[{"name":"app","adapter":"crysirror-script-v1","game":"test"}]}"#).unwrap();
+    let mut rt = Runtime::load(&path, &root.path().join("state")).unwrap();
+    let images = rt.host.image_metadata(ClientId(1)).unwrap();
+    for (source, clip, math) in [
+        ([1, 1, 2, 1], None, ImageCompositeMath::Copy),
+        ([1, 1, 2, 1], Some([0, 0, 1, 1]), ImageCompositeMath::Copy),
+        ([1, 1, 2, 1], None, ImageCompositeMath::CopyRgb),
+    ] {
+        let base = ImageInput::Solid { size: [2, 1], color: [9, 8, 7, 77] };
+        let layer = ImageCompositeLayer {
+            input: Box::new(ImageInput::Resource(std::sync::Arc::new(Columns))),
+            source, destination: [0, 0], clip, opacity: 255, math,
+        };
+        let optimized = base.clone().with_composite_layer(layer.clone());
+        let original = ImageInput::Composite { base: Box::new(base), layers: vec![layer] };
+        let mut results = Vec::new();
+        for input in [original, optimized] {
+            let mut job = images.begin_process(input, b"[]".as_slice().into()).unwrap();
+            let until = Instant::now() + Duration::from_secs(10);
+            loop {
+                match job.poll().unwrap() {
+                    ImageProcessState::Ready(image) => { results.push(image.rgba()); break; }
+                    ImageProcessState::Failed(error) => panic!("{error}"),
+                    ImageProcessState::Pending => { assert!(Instant::now() < until); std::thread::yield_now(); }
+                }
+            }
+        }
+        assert_eq!(results[0], results[1]);
+        assert_eq!(&results[1][..3], &[60, 0, 0]);
+    }
+}
+
+#[test]
 fn bare_asset_preparation_publishes_exact_owned_pixels_and_checks_identity() {
     let root=tempfile::tempdir().unwrap();std::fs::create_dir(root.path().join("assets")).unwrap();
     let path=root.path().join("project.json");

@@ -38,6 +38,24 @@ pub struct TextLayer {
 
 pub const MAX_GLYPHS: usize = 8192;
 
+/// A character the original rasterises into a PDT work buffer (`0x66` with
+/// a buffer other than 0). CrySirror: the adapter prepares its coverage with
+/// the engine glyph-image service and blends it into the buffer
+/// (`PdtManager::draw_coverage`) before the scenario runs again, so later
+/// copies from that buffer carry the text exactly as native pixels did.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BufferGlyph {
+    pub buffer: usize,
+    pub character: char,
+    pub x: i32,
+    pub baseline: i32,
+    pub size: i32,
+    pub colour: [u8; 3],
+}
+
+/// Upper bound on queued work-buffer glyphs between two scenario steps.
+pub const MAX_BUFFER_GLYPHS: usize = 4096;
+
 impl TextLayer {
     /// Drops glyphs under freshly written regions of buffer 0.
     pub fn apply_damage(&mut self, damage: &[Rect]) {

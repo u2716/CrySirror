@@ -12,7 +12,7 @@ use std::{
 };
 use winit::{
     application::ApplicationHandler,
-    dpi::LogicalSize,
+    dpi::PhysicalSize,
     event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
     keyboard::{KeyCode, PhysicalKey},
@@ -23,14 +23,12 @@ use winit::{
 /// behaviours/scripts (which owns the runtime).
 pub enum Core {
     Plain(Runtime),
-    #[cfg(feature = "scripting")]
     Scripted(Box<crysirror_engine::App>),
 }
 impl Core {
     pub fn rt(&mut self) -> &mut Runtime {
         match self {
             Core::Plain(rt) => rt,
-            #[cfg(feature = "scripting")]
             Core::Scripted(app) => app
                 .runtime_mut()
                 .expect("engine context present between frames"),
@@ -39,7 +37,6 @@ impl Core {
     fn frame_pending(&self, audio: &Audio) -> bool {
         match self {
             Core::Plain(_) => audio.frame_pending(),
-            #[cfg(feature = "scripting")]
             Core::Scripted(app) => app.frame_pending(),
         }
     }
@@ -53,7 +50,6 @@ impl Core {
                 rt.tick_control(ms, input)?;
                 audio.begin_frame(rt, ms)
             }
-            #[cfg(feature = "scripting")]
             Core::Scripted(app) => app.begin_frame(ms, input),
         }
     }
@@ -61,7 +57,6 @@ impl Core {
         audio.poll_device()?;
         match self {
             Core::Plain(rt) => audio.poll_frame(rt),
-            #[cfg(feature = "scripting")]
             Core::Scripted(app) => {
                 if !app.poll_frame()? {
                     return Ok(false);
@@ -79,7 +74,6 @@ impl Core {
                 audio.cancel_frame(rt);
                 Ok(())
             }
-            #[cfg(feature = "scripting")]
             Core::Scripted(app) => app.shutdown(),
         };
         audio.close_device();
@@ -88,9 +82,21 @@ impl Core {
     fn quit_requested(&self) -> bool {
         match self {
             Core::Plain(_) => false,
-            #[cfg(feature = "scripting")]
             Core::Scripted(app) => app.quit_requested(),
         }
+    }
+    fn should_exit(&mut self) -> bool {
+        if self.quit_requested() {
+            return true;
+        }
+        let rt = self.rt();
+        // A data VM may halt after declaring a scene while World animation and
+        // JS/TS behaviours keep running. Only native games own a VM-driven end.
+        rt.project
+            .clients
+            .iter()
+            .any(|client| client.adapter != "crysirror-script-v1")
+            && rt.vm_sessions_halted()
     }
 }
 
@@ -260,6 +266,12 @@ pub fn movie_on(
 /// snapshot trees stop nesting. A request whose images are still loading is
 /// retried next frame.
 pub fn materialize_canvases(renderer: &mut Renderer, rt: &mut Runtime) -> Result<()> {
+    rt.prepare_frame_captures(|rt| {
+        let canvas = rt.project.canvas;
+        renderer.set_engine_frame(rt.host.engine.frame(canvas)?)?;
+        let image = renderer.capture(&rt.host.scene, &mut rt.assets, canvas, rt.project.background)?;
+        Ok(image.into_raw())
+    })?;
     rt.prepare_canvas_images(|request,assets| renderer.snapshot_readback(assets,request.client,request.size,&request.layers))?;
     for request in rt.host.engine.canvases.materialize_requests() {
         let Some(image) = renderer.materialize_snapshot(&mut rt.assets, request.client, request.size, &request.layers)?
@@ -479,18 +491,27 @@ impl App {
             el.create_window(
                 Window::default_attributes()
                     .with_title(format!("CrySirror | {}", self.core.rt().project.name))
-                    .with_inner_size(LogicalSize::new(canvas[0] as f64, canvas[1] as f64)),
+                    // Game canvas dimensions are pixels, not desktop points.
+                    // Start at native resolution even on a Retina display.
+                    .with_inner_size(PhysicalSize::new(canvas[0], canvas[1]))
+                    .with_resizable(true),
             )?,
         );
         window.set_ime_allowed(true);
         self.focused = window.has_focus();
         self.core.rt().host.window_focused = Some(self.focused);
-        // The display VMs size their windows against, in the same logical
-        // units as the window. winit has no work-area query; the whole
+        self.core.rt().host.window_minimized=window.is_minimized();
+        self.core.rt().host.window_geometry=Some(crysirror_core::service::WindowGeometry{
+            inner_size:[window.inner_size().width,window.inner_size().height],
+            outer_size:[window.outer_size().width,window.outer_size().height],
+            outer_position:window.outer_position().ok().map(|p|[p.x,p.y]),
+        });
+        // The display VMs size their windows against, in the same physical
+        // pixel units as the game canvas. winit has no work-area query; the whole
         // monitor is reported as the work area.
         if let Some(monitor) = window.current_monitor().or_else(|| el.primary_monitor()) {
-            let size = monitor.size().to_logical::<f64>(monitor.scale_factor());
-            let (w, h) = (size.width.round() as u32, size.height.round() as u32);
+            let size = monitor.size();
+            let (w, h) = (size.width, size.height);
             if w > 0 && h > 0 {
                 self.core.rt().host.display = Some(crysirror_core::service::DisplayInfo {
                     screen: [w, h],
@@ -579,6 +600,7 @@ impl App {
             minimized: false,
             window_policy: None,
         });
+        self.core.rt().host.note_pointer_activity()?;
         self.last_tick = Instant::now();
         self.remainder = Duration::ZERO;
         self.audio.resume()?;
@@ -622,6 +644,8 @@ impl App {
         }
     }
     fn redraw(&mut self, el: &ActiveEventLoop) -> Result<()> {
+        let profiler = self.core.rt().profiler.clone();
+        let _redraw_span = profiler.span(profiler.frame(), "desktop.redraw");
         let Some(w) = self.window.as_mut() else {
             return Ok(());
         };
@@ -693,11 +717,18 @@ impl App {
             self.input.buttons_pressed = 0;
         }
         materialize_canvases(&mut w.renderer, self.core.rt())?;
+        self.core.rt().host.engine.ui.pointer_surface=[w.config.width,w.config.height];
+        self.core.rt().host.window_minimized=w.window.is_minimized();
+        self.core.rt().host.window_geometry=Some(crysirror_core::service::WindowGeometry{
+            inner_size:[w.window.inner_size().width,w.window.inner_size().height],
+            outer_size:[w.window.outer_size().width,w.window.outer_size().height],
+            outer_position:w.window.outer_position().ok().map(|p|[p.x,p.y]),
+        });
         if !self.core.poll_tick(&mut self.audio)? {
             w.window.request_redraw();
             return Ok(());
         }
-        if self.core.quit_requested() || self.core.rt().vm_sessions_halted() {
+        if self.core.should_exit() {
             el.exit();
         }
         if let Some(menu) = &mut self.native_menu {
@@ -726,17 +757,30 @@ impl App {
                 w.window.fullscreen().is_some(),
                 self.options.allow_borderless,
             );
-            let next = (decorated, policy.resizable);
+            // The desktop player permits resizing the presentation independently
+            // of the native VM's retained window style. Canvas coordinates and
+            // pointer mapping keep the original game's resolution.
+            let next = (decorated, true);
             if w.window_policy != Some(next) {
                 w.window.set_decorations(decorated);
-                w.window.set_resizable(policy.resizable);
+                w.window.set_resizable(true);
                 log::info!(
-                    "window policy: requested decorations={}, applied decorations={}, resizable={}",
+                    "window policy: requested decorations={}, applied decorations={}, requested resizable={}, applied resizable=true",
                     policy.decorated, decorated, policy.resizable
                 );
                 w.window_policy = Some(next);
             }
         }
+        // The window owner applies shared logical requests after fullscreen and
+        // decoration changes. Native VMs never own a winit window or DPI state.
+        if let Some((_,size))=self.core.rt().host.engine.ui.window_requests.size.take(){
+            let _=w.window.request_inner_size(winit::dpi::PhysicalSize::new(size[0],size[1]));
+        }
+        if let Some((_,position))=self.core.rt().host.engine.ui.window_requests.position.take(){
+            w.window.set_outer_position(winit::dpi::PhysicalPosition::new(position[0],position[1]));
+        }
+        if let Some((_,visible))=self.core.rt().host.engine.ui.window_requests.visible.take(){w.window.set_visible(visible);}
+        if let Some((_,minimized))=self.core.rt().host.engine.ui.window_requests.minimized.take(){w.window.set_minimized(minimized);}
         if let Some((_, title)) = &self.core.rt().host.engine.ui.title {
             w.window.set_title(title);
         }
@@ -747,7 +791,7 @@ impl App {
             w.snapshot_store = rt.assets.store_id();
             w.snapshot_restored = rt.restored;
         }
-        if w.pending_snapshot.is_none() {
+        if w.pending_snapshot.is_none() && !rt.presentation_pending() {
             w.pending_snapshot = Some(rt.schedule_render_snapshot()?);
         }
         if let Some(pending) = &mut w.pending_snapshot {
@@ -760,6 +804,7 @@ impl App {
             return Ok(());
         };
         w.renderer.set_profiler(rt.profiler.clone(), snapshot.frame);
+        let acquire_span = profiler.span(profiler.frame(), "desktop.acquire");
         let (frame, reconfigure) = match w.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame) => (frame, false),
             wgpu::CurrentSurfaceTexture::Suboptimal(frame) => (frame, true),
@@ -779,6 +824,7 @@ impl App {
                 bail!("surface acquisition validation failed")
             }
         };
+        drop(acquire_span);
         let view = frame.texture.create_view(&Default::default());
         let rt = self.core.rt();
         w.renderer.set_scene3d(snapshot.simple.as_ref())?;
@@ -806,7 +852,10 @@ impl App {
             }
         }
         w.window.pre_present_notify();
-        frame.present();
+        {
+            let _present_span = profiler.span(profiler.frame(), "desktop.present");
+            frame.present();
+        }
         if reconfigure {
             w.surface.configure(&w.renderer.gpu.device, &w.config);
         }
@@ -867,12 +916,12 @@ impl App {
             WindowEvent::Focused(focused) => {
                 self.focused = focused;
                 self.core.rt().host.window_focused = Some(focused);
+                if let Some(w)=self.window.as_ref(){self.core.rt().host.window_minimized=w.window.is_minimized();}
                 self.input = InputFrame::default();
                 #[cfg(feature = "gamepad")]
                 if let Some(backend) = &mut self.gamepad {
                     backend.reset_navigation();
                 }
-                #[cfg(feature = "scripting")]
                 if let Core::Scripted(app) = &mut self.core {
                     let actions = &mut app.context().state()?.actions;
                     actions.reset_devices();
@@ -946,6 +995,9 @@ impl App {
                         KeyCode::KeyQ => Some(1 << 14),
                         KeyCode::KeyF => Some(1 << 15),
                         KeyCode::KeyR => Some(1 << 18),
+                        KeyCode::KeyC => Some(buttons::KEY_C),
+                        KeyCode::KeyL => Some(buttons::KEY_L),
+                        KeyCode::KeyZ => Some(buttons::KEY_Z),
                         KeyCode::Escape => Some(buttons::ESCAPE),
                         KeyCode::Backspace => Some(buttons::BACKSPACE),
                         KeyCode::Home => Some(buttons::HOME),
@@ -1000,6 +1052,7 @@ impl App {
                 let bit = match button {
                     MouseButton::Left => Some(1 << 16),
                     MouseButton::Right => Some(1 << 17),
+                    MouseButton::Middle => Some(buttons::MOUSE_MIDDLE),
                     _ => None,
                 };
                 if let Some(bit) = bit {
@@ -1015,10 +1068,22 @@ impl App {
                         );
                         let [x, y] =
                             vp.pointer(position.x, position.y, self.core.rt().project.canvas);
+                        self.core.rt().host.note_pointer_activity()?;
                         self.input.pointer_x = x;
                         self.input.pointer_y = y;
+                        self.core.rt().host.pointer_observation = crysirror_core::service::PointerObservation {
+                            position: Some([x, y]),
+                            inside: Some(true),
+                        };
                     }
                 }
+            }
+            WindowEvent::CursorEntered { .. } => {
+                self.core.rt().host.note_pointer_activity()?;
+                self.core.rt().host.pointer_observation.inside = Some(true);
+            }
+            WindowEvent::CursorLeft { .. } => {
+                self.core.rt().host.pointer_observation.inside = Some(false);
             }
             _ => {}
         }
@@ -1040,6 +1105,9 @@ impl ApplicationHandler for App {
     fn suspended(&mut self, el: &ActiveEventLoop) {
         self.window = None;
         self.core.rt().host.window_focused = None;
+        self.core.rt().host.window_minimized=None;
+        self.core.rt().host.window_geometry=None;
+        self.core.rt().host.pointer_observation = Default::default();
         if let Err(error) = self.audio.pause() {
             self.fail(el, error);
         }
@@ -1048,7 +1116,6 @@ impl ApplicationHandler for App {
         if let Some(backend) = &mut self.gamepad {
             backend.reset_navigation();
         }
-        #[cfg(feature = "scripting")]
         if let Core::Scripted(app) = &mut self.core {
             if let Ok(state) = app.context().state() {
                 state.actions.reset_devices();
@@ -1100,6 +1167,88 @@ mod audio_frame_tests {
         std::fs::write(&path,serde_json::to_vec(&serde_json::json!({"schema":2,"name":"desktop-mix","content_revision":"1","canvas":[64,64],"assets":"assets","clients":[{"name":"game","adapter":"crysirror-script-v1","game":"test"}]})).unwrap()).unwrap();
         let rt = Runtime::load(&path, &dir.path().join("state")).unwrap();
         (dir, rt)
+    }
+    #[test]
+    fn halted_data_scene_keeps_plain_and_scripted_windows_open() {
+        let (_dir, mut rt) = runtime();
+        rt.tick(0, InputFrame::default()).unwrap();
+        assert!(rt.vm_sessions_halted());
+        let mut core = Core::Plain(rt);
+        assert!(!core.should_exit());
+        // A data scene still allows the OS close action to close immediately.
+        assert!(!core.rt().request_close());
+
+        let (_dir, mut rt) = runtime();
+        rt.tick(0, InputFrame::default()).unwrap();
+        assert!(rt.vm_sessions_halted());
+        let mut app = crysirror_engine::App::new(rt, "game").unwrap();
+        app.init().unwrap();
+        app.start().unwrap();
+        let mut core = Core::Scripted(Box::new(app));
+        assert!(!core.should_exit());
+        if let Core::Scripted(app) = &mut core {
+            app.context().state().unwrap().quit_requested = true;
+        }
+        assert!(core.should_exit());
+    }
+    #[test]
+    fn native_game_still_closes_only_after_its_vm_halts() {
+        use crysirror_core::vm::{VmAdapter, VmYield};
+        use crysirror_runtime::{AdapterRegistry, model::ClientSpec, runtime::VmFactory};
+        struct Native(bool);
+        impl VmAdapter for Native {
+            fn engine_id(&self) -> &'static str {
+                "desktop-exit-test"
+            }
+            fn snapshot_schema(&self) -> u32 {
+                1
+            }
+            fn step(
+                &mut self,
+                _: &mut dyn HostServices,
+                _: InputFrame,
+                _: u32,
+            ) -> crysirror_core::Result<VmYield> {
+                let yielded = if self.0 {
+                    VmYield::Halted
+                } else {
+                    VmYield::WaitForInput
+                };
+                self.0 = true;
+                Ok(yielded)
+            }
+            fn snapshot(&self) -> crysirror_core::Result<Vec<u8>> {
+                Ok(vec![])
+            }
+            fn restore(&mut self, _: &[u8]) -> crysirror_core::Result<()> {
+                Ok(())
+            }
+        }
+        struct Factory;
+        impl VmFactory for Factory {
+            fn create(&self, _: ClientId, _: &ClientSpec) -> Result<Box<dyn VmAdapter>> {
+                Ok(Box::new(Native(false)))
+            }
+        }
+        let (dir, rt) = runtime();
+        let mut project = rt.project.clone();
+        project.clients[0].adapter = "desktop-exit-test".into();
+        let mut registry = AdapterRegistry::default();
+        registry
+            .register("desktop-exit-test", Arc::new(Factory))
+            .unwrap();
+        let rt = Runtime::with_registry(
+            project,
+            &dir.path().join("project.json"),
+            &dir.path().join("native-state"),
+            registry,
+        )
+        .unwrap();
+        let mut core = Core::Plain(rt);
+        core.rt().tick(0, InputFrame::default()).unwrap();
+        assert!(!core.should_exit());
+        core.rt().tick(16, InputFrame::default()).unwrap();
+        assert!(core.should_exit());
     }
     fn verify(mut core: Core) {
         core.rt()
@@ -1227,7 +1376,6 @@ mod audio_frame_tests {
         let (_dir, rt) = runtime();
         verify(Core::Plain(rt));
     }
-    #[cfg(feature = "scripting")]
     #[test]
     fn scripted_desktop_uses_worker_frame_completion_and_preserves_clock_under_backpressure() {
         let (_dir, rt) = runtime();

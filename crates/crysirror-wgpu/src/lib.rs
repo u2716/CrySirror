@@ -2,6 +2,7 @@
 //! wgpu backend, independent of winit and native VM instruction sets.
 #![deny(unsafe_code)]
 mod composite;
+mod clip_sampling;
 mod frame_history;
 pub mod geometry;
 mod glyph_run;
@@ -339,6 +340,8 @@ impl Renderer {
         });
         const QUAD_ATTR: [wgpu::VertexAttribute; 4] =
             wgpu::vertex_attr_array![0=>Float32x4,1=>Float32x2,2=>Float32x4,3=>Float32];
+        const LAYER_ATTR: [wgpu::VertexAttribute; 6] =
+            wgpu::vertex_attr_array![0=>Float32x4,1=>Float32x2,2=>Float32x4,3=>Float32,4=>Float32x4,5=>Float32x4];
         let filter_layout = d.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("layer filter layout"),
             entries: &[
@@ -464,9 +467,9 @@ impl Renderer {
                     entry_point: Some("vs_main"),
                     compilation_options: Default::default(),
                     buffers: &[wgpu::VertexBufferLayout {
-                        array_stride: std::mem::size_of::<Vertex2d>() as u64,
+                        array_stride: std::mem::size_of::<clip_sampling::LayerVertex>() as u64,
                         step_mode: wgpu::VertexStepMode::Vertex,
-                        attributes: &QUAD_ATTR,
+                        attributes: &LAYER_ATTR,
                     }],
                 },
                 fragment: Some(wgpu::FragmentState {
@@ -545,7 +548,7 @@ impl Renderer {
             layout: Some(&quad_layout),
             vertex: wgpu::VertexState {
                 module: &quad_shader,
-                entry_point: Some("vs_main"),
+                entry_point: Some("vs_plain"),
                 compilation_options: Default::default(),
                 buffers: &[wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<Vertex2d>() as u64,
@@ -1012,7 +1015,7 @@ impl Renderer {
         scene: &SceneState,
         assets: &mut Assets,
         canvas: [u32; 2],
-    ) -> Result<(Vec<Vertex2d>, Vec<Draw>)> {
+    ) -> Result<(Vec<clip_sampling::LayerVertex>, Vec<Draw>)> {
         let mut frame = self.engine_frame.clone();
         for (id, node) in scene.draw_order() {
             let (r, paint) = match &node.visual {
@@ -1374,7 +1377,7 @@ impl Renderer {
                 }
             };
             let start = vertices.len() as u32;
-            let mut quad = geometry::layer_quad(p, canvas, color);
+            let mut quad = clip_sampling::quad(p, canvas, color);
             if let Some(f) = &p.filter {
                 let index = records.len() as f32;
                 records.push(filter_gpu(f));

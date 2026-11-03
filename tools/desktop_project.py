@@ -155,6 +155,21 @@ def bgi_config(config: Any) -> dict:
     require(config.get("font") is None or isinstance(config["font"], str) and 0 < len(config["font"]) <= 256 and not any(ord(c) < 32 for c in config["font"]), "BGI font alias")
     return config
 
+def catsystem2_config(config: Any) -> dict:
+    """First-class native KCS configuration, including explicit reproducible seeds."""
+    config = obj(config, {"script", "font"}, {"heap_bytes", "executable", "canvas", "random_seeds"})
+    script = config["script"]
+    require(logical_path(script) == script and script.lower().endswith(".kcs"), "CatSystem2 native KCS path")
+    require(isinstance(config["font"], str) and 0 < len(config["font"].encode()) <= 256, "CatSystem2 font alias")
+    require(integer(config.get("heap_bytes", 1024 * 1024), 4, 16 * 1024 * 1024), "CatSystem2 heap budget")
+    executable = config.get("executable")
+    if executable is not None:
+        require(logical_path(executable) == executable, "CatSystem2 executable data path")
+    require(vector(config.get("canvas", [1280, 720]), 2, lambda n: integer(n, 1, 8192)), "CatSystem2 canvas")
+    seeds = config.get("random_seeds")
+    require(seeds is None or vector(seeds, 2, lambda n: integer(n, 0, 2**32 - 1)), "CatSystem2 float/integer seeds")
+    return config
+
 def nscripter_config(config: Any) -> dict:
     config = obj(config, {"script", "font"}, {"encoding", "canvas", "text", "archives"})
     require(logical_path(config["script"]) == config["script"], "non-canonical NScripter script")
@@ -199,7 +214,7 @@ def validate(p: Any) -> dict:
         if c["adapter"] == "reallive":
             require(not program, "RealLive uses original bytecode, not data VM actions")
             reallive_config(c.get("config"))
-        native_validators = {"rfvp": rfvp_config, "bgi": bgi_config, "nscripter": nscripter_config}
+        native_validators = {"rfvp": rfvp_config, "bgi": bgi_config, "nscripter": nscripter_config, "catsystem2": catsystem2_config}
         if c["adapter"] in native_validators:
             require(not program, "native adapter uses original scripts, not data VM actions")
             native_validators[c["adapter"]](c.get("config"))

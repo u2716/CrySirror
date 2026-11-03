@@ -13,6 +13,8 @@ pub const MAX_EFFECT_PIXELS: u64 = 4_194_304;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ImageEffect {
+    /// Exact stored-channel bitmap kernels over two immutable resources.
+    IntegerRaster { spec: crate::integer_raster::IntegerRaster },
     /// Replace coverage while retaining all stored RGB bytes. Useful for
     /// opaque XRGB resources and explicitly authored mask normalisation.
     OverrideAlpha {
@@ -44,6 +46,8 @@ pub enum ImageEffect {
     },
     /// Two-input clipped coverage multiplication with optional exterior clear.
     AlphaClipRect { spec:crate::alpha_clip::AlphaClipRect },
+    /// Three immutable inputs, two independent masks and exact14bit products.
+    MaskedPairBlend {spec:crate::masked_pair::MaskedPairBlend},
     Transition {
         spec: crate::transition::ImageTransition,
     },
@@ -115,6 +119,15 @@ pub enum ImageEffect {
         horizontal: bool,
         vertical: bool,
     },
+    /// Bilinear resize of straight RGBA to a new size.
+    Resize {
+        width: u32,
+        height: u32,
+    },
+    /// Clockwise quarter turns; 90 and 270 swap width and height.
+    Rotate {
+        degrees: u16,
+    },
     /// Whole-pixel row displacement: round(sin(phase+y*frequency)*amplitude).
     /// Source edges clamp. Phase/frequency are radians, amplitude is pixels.
     Raster {
@@ -126,6 +139,7 @@ pub enum ImageEffect {
 impl ImageEffect {
     pub fn validate(&self) -> Result<()> {
         match self {
+            Self::IntegerRaster { spec } => spec.validate()?,
             Self::RgbLookup { spec } => spec.validate()?,
             Self::FixedLuma { spec } => spec.validate()?,
             Self::PiecewiseResample { spec } => spec.validate()?,
@@ -133,6 +147,7 @@ impl ImageEffect {
             Self::SpriteAlpha { spec } => spec.validate()?,
             Self::SineRowCopy { .. } => (),
             Self::AlphaClipRect {spec} => spec.validate()?,
+            Self::MaskedPairBlend {spec} => spec.validate()?,
             Self::Transition { spec } => spec.validate()?,
             Self::Vector { path } => path.validate()?,
             Self::Perspective { quad } => crate::warp::validate_quad(quad)?,
@@ -180,6 +195,11 @@ impl ImageEffect {
                 );
                 ensure!(area.iter().all(|v| v.abs() <= 8192), "box blur area bounds");
             }
+            Self::Resize { width, height } => ensure!(
+                *width > 0 && *height > 0 && u64::from(*width) * u64::from(*height) <= MAX_EFFECT_PIXELS,
+                "resize extent"
+            ),
+            Self::Rotate { degrees } => ensure!(matches!(degrees, 90 | 180 | 270), "rotation must be a quarter turn"),
             Self::GaussianBlur { sigma } => ensure!(
                 sigma.is_finite() && (0.0..=16.).contains(sigma),
                 "blur sigma must be 0..16"
@@ -219,9 +239,9 @@ impl ImageSurface {
         check()?;
         if matches!(
             effect,
-            ImageEffect::Transition { .. } | ImageEffect::SineRowCopy { .. } | ImageEffect::AlphaClipRect {..}
+            ImageEffect::Transition { .. } | ImageEffect::SineRowCopy { .. } | ImageEffect::AlphaClipRect {..} | ImageEffect::MaskedPairBlend{..} | ImageEffect::IntegerRaster {..}
         ) {
-            anyhow::bail!("transition requires a two-image context")
+            anyhow::bail!("image effect requires its multi-image context")
         }
         if let ImageEffect::RgbLookup { spec } = effect {
             return spec.apply(self, check);
@@ -243,6 +263,12 @@ impl ImageSurface {
         }
         if let ImageEffect::Perspective { quad } = effect {
             return self.perspective(*quad, check);
+        }
+        if let ImageEffect::Resize { width, height } = effect {
+            return self.resized(*width, *height, check);
+        }
+        if let ImageEffect::Rotate { degrees } = effect {
+            return self.rotated(*degrees, check);
         }
         if let ImageEffect::GaussianBlur { sigma } = effect {
             return self.gaussian(*sigma, check);
@@ -394,6 +420,53 @@ impl ImageSurface {
             }
         }
         Ok(out)
+    }
+    fn resized(&self, width: u32, height: u32, check: &dyn Fn() -> Result<()>) -> Result<Self> {
+        let (w, h) = (self.width as usize, self.height as usize);
+        let (nw, nh) = (width as usize, height as usize);
+        let mut out = vec![0u8; nw * nh * 4];
+        let axis = |at: usize, new: usize, old: usize| {
+            let source = ((at as f64 + 0.5) * old as f64 / new as f64 - 0.5).max(0.);
+            let low = (source as usize).min(old - 1);
+            (low, (low + 1).min(old - 1), source - low as f64)
+        };
+        for y in 0..nh {
+            check()?;
+            let (y0, y1, fy) = axis(y, nh, h);
+            for x in 0..nw {
+                let (x0, x1, fx) = axis(x, nw, w);
+                let to = (y * nw + x) * 4;
+                for c in 0..4 {
+                    let sample = |sy: usize, sx: usize| f64::from(self.rgba[(sy * w + sx) * 4 + c]);
+                    let top = sample(y0, x0) * (1. - fx) + sample(y0, x1) * fx;
+                    let bottom = sample(y1, x0) * (1. - fx) + sample(y1, x1) * fx;
+                    out[to + c] = (top * (1. - fy) + bottom * fy + 0.5) as u8;
+                }
+            }
+        }
+        Ok(Self { width, height, rgba: out })
+    }
+    fn rotated(&self, degrees: u16, check: &dyn Fn() -> Result<()>) -> Result<Self> {
+        let (w, h) = (self.width as usize, self.height as usize);
+        let (nw, nh) = if degrees == 180 { (w, h) } else { (h, w) };
+        let mut out = vec![0u8; nw * nh * 4];
+        for y in 0..h {
+            check()?;
+            for x in 0..w {
+                let (dx, dy) = match degrees {
+                    90 => (h - 1 - y, x),
+                    180 => (w - 1 - x, h - 1 - y),
+                    _ => (y, w - 1 - x),
+                };
+                let (from, to) = ((y * w + x) * 4, (dy * nw + dx) * 4);
+                out[to..to + 4].copy_from_slice(&self.rgba[from..from + 4]);
+            }
+        }
+        let mut result = self.clone();
+        result.width = nw as u32;
+        result.height = nh as u32;
+        result.rgba = out.into();
+        Ok(result)
     }
     fn box_blur(
         &self,

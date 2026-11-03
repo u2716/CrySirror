@@ -74,8 +74,12 @@ fn u32_at(s: &dyn AssetReader, at: u64) -> Result<u32> {
 fn reallive(s: &dyn AssetReader, cx: &DecodeContext, record: u64, ext: &str) -> Result<Vec<Row>> {
     let count = u64::from(u32_at(s, 0)?);
     limits(cx, count as usize)?;
+    // Shipped packs can repeat a sample number with different data; the native
+    // lookup takes the first entry in table order.
+    let mut seen = std::collections::HashSet::new();
     index(s, cx, 4, count * record)?
         .chunks_exact(record as usize)
+        .filter(|r| le32(r, 8).map_or(true, |id| seen.insert(id)))
         .map(|r| {
             let id = le32(r, 8)?;
             Ok(Row::raw(

@@ -393,7 +393,7 @@ impl VfxRuntime {
                 },
                 emitter.screen_uvs.as_deref(),
             )?);
-            let spec = LayerSpec {
+            let spec = LayerSpec { source_crop: None, viewport_clip: None,
                 id: target.layer,
                 parent: target.parent,
                 rect: [0., 0., target.canvas[0] as f32, target.canvas[1] as f32],

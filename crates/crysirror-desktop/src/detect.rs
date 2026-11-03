@@ -7,6 +7,8 @@
 //! no native executable or external launcher script runs.
 mod majiro;
 mod system_nnn;
+mod system4;
+mod bgi;
 use anyhow::{bail, ensure, Context, Result};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -86,6 +88,11 @@ fn main_exe(dir: &Path, names: &[String]) -> Option<String> {
 /// parsers still decide layout/profile support, including encrypted scripts.
 pub fn detect(dir: &Path) -> Result<Plan> {
     let mut plan = detect_layout(dir)?;
+    // Original engines clear the game screen to black before their first
+    // draw; the authored-project default is a demo colour.
+    if plan.project.get("background").is_none() {
+        plan.project["background"] = serde_json::json!([0, 0, 0, 255]);
+    }
     let prefix = plan.project["clients"][0]["asset_prefix"].as_str().unwrap_or("");
     if !prefix.is_empty() {
         crysirror_core::path::VfsPath::new(crysirror_core::path::Mount::Asset, prefix)?;
@@ -173,8 +180,10 @@ fn detect_layout(dir: &Path) -> Result<Plan> {
         if std::fs::File::open(path)?.read_exact(&mut signature).is_err() || signature != *b"KIF\0" { continue; }
         return catsystem2(dir,&local,&name,prefix,&format!("{config}/{startup}"));
     }
+    if let Some(plan) = system4::detect(dir, &names, &name)? { return Ok(plan); }
     if let Some(plan) = majiro::detect(dir, &names, &name)? { return Ok(plan); }
     if let Some(plan) = system_nnn::detect(dir, &names, &name)? { return Ok(plan); }
+    if let Some(plan) = bgi::detect(dir,&names,&name)? {return Ok(plan);}
     if find(&names, "data.xp3").is_some() {
         return krkr(dir, &names, &name);
     }
@@ -241,7 +250,6 @@ fn detect_layout(dir: &Path) -> Result<Plan> {
                             };
                             if let Some(abi) = abi {
                                 if version == [0xb6, 0xab, 0] {
-                                    #[cfg(feature = "circus")]
                                     {
                                         crysirror_circus::Program::parse(&bytes)?;
                                         return Ok(Plan {
@@ -251,8 +259,6 @@ fn detect_layout(dir: &Path) -> Result<Plan> {
                                             profiles:Default::default(),mounts:Vec::new(),
                                         });
                                     }
-                                    #[cfg(not(feature = "circus"))]
-                                    bail!("recognized Circus MES ({abi}) in {}; native adapter 'circus' is not linked; enable feature circus",dir.display());
                                 }
                                 bail!("recognized Circus MES ({abi}) in {}; native execution for this ABI is not implemented",dir.display());
                             }
@@ -278,12 +284,6 @@ fn project(name: &str, canvas: [u32; 2], adapter: &str, config: Value) -> Value 
 }
 
 fn catsystem2(dir:&Path,names:&[String],name:&str,prefix:&str,startup_path:&str)->Result<Plan> {
-    #[cfg(not(feature="catsystem2"))]
-    {
-        let _=(names,name,prefix,startup_path);
-        bail!("recognized CatSystem2 startup/INT in {}; native adapter 'catsystem2' is not linked; enable feature catsystem2",dir.display());
-    }
-    #[cfg(feature="catsystem2")]
     {
         use std::io::Read;
         let root=dir.join(prefix).canonicalize()?;
@@ -334,7 +334,6 @@ fn reallive(dir: &Path, names: &[String], name: &str) -> Result<Plan> {
 
 // Keep the original voice packs intact. The common resource registry indexes
 // their numbered audio entries; the VM only selects the native pack/sample ID.
-#[cfg(feature = "reallive")]
 fn reallive_voice_mounts(dir: &Path, ini: &[u8]) -> Result<Vec<ArchiveMount>> {
     use crysirror_reallive::vm::{Gameexe, Nls};
     let exe = Gameexe::from_bytes(ini, Nls::Sjis);
@@ -352,10 +351,7 @@ fn reallive_voice_mounts(dir: &Path, ini: &[u8]) -> Result<Vec<ArchiveMount>> {
     }
     voice_packs_in(dir, &root, &[dir.to_path_buf(), folder])
 }
-#[cfg(not(feature = "reallive"))]
-fn reallive_voice_mounts(_: &Path, _: &[u8]) -> Result<Vec<ArchiveMount>> { Ok(Vec::new()) }
 
-#[cfg(feature = "reallive")]
 fn voice_packs_in(dir: &Path, root: &Path, folders: &[PathBuf]) -> Result<Vec<ArchiveMount>> {
     let mut packs = std::collections::BTreeMap::new();
     for folder in folders {
@@ -376,11 +372,9 @@ fn voice_packs_in(dir: &Path, root: &Path, folders: &[PathBuf]) -> Result<Vec<Ar
             ensure!(packs.len() <= crysirror_runtime::vfs::MAX_PROVIDER_MOUNTS, "RealLive voice archive mount budget");
         }
     }
-    ensure!(packs.is_empty() || cfg!(feature="arc-formats"), "RealLive voice packs require the shared arc-formats feature");
     Ok(packs.into_iter().map(|(source, format)| ArchiveMount { fallback:false, target: source.clone(), source, options: json!({"format":format}) }).collect())
 }
 
-#[cfg(all(feature = "krkr", feature = "arc-formats"))]
 fn krkr(dir: &Path, names: &[String], name: &str) -> Result<Plan> {
     use krkr_probe::*;
     let exe = main_exe(dir, names).context("KiriKiri game without an executable")?;
@@ -437,12 +431,7 @@ fn krkr(dir: &Path, names: &[String], name: &str) -> Result<Plan> {
     )
 }
 
-#[cfg(not(all(feature = "krkr", feature = "arc-formats")))]
-fn krkr(_: &Path, _: &[String], _: &str) -> Result<Plan> {
-    bail!("KiriKiri game found, but this build lacks the `krkr` and `arc-formats` features")
-}
 
-#[cfg(all(feature = "krkr", feature = "arc-formats"))]
 mod krkr_probe {
     use super::*;
     use crysirror_core::{service::AssetReader, state::ClientId};
@@ -774,10 +763,6 @@ fn read_bounded(dir: &Path, path: &str, limit: usize) -> Result<Vec<u8>> {
 }
 
 fn nscripter(dir: &Path, names: &[String], name: &str) -> Result<Plan> {
-    ensure!(
-        cfg!(feature = "nscripter"),
-        "NScripter found; this build needs the nscripter feature"
-    );
     let script = ["0.txt", "00.txt", "nscript.dat", "pscript.dat"]
         .into_iter()
         .find_map(|s| find(names, s))
@@ -833,10 +818,6 @@ fn nscripter(dir: &Path, names: &[String], name: &str) -> Result<Plan> {
     let mut sources: Vec<String> = find(names, "arc.sar").cloned().into_iter().collect();
     sources.extend(archives.into_iter().map(|(_, n)| n));
     ensure!(sources.len() <= 64, "NScripter archive mount limit");
-    ensure!(
-        sources.is_empty() || cfg!(feature = "arc-formats"),
-        "NScripter archives need the arc-formats feature"
-    );
     let mounts: Vec<ArchiveMount> = sources
         .into_iter()
         .map(|source| {
@@ -933,7 +914,6 @@ fn nscript_canvas(bytes: &[u8]) -> Result<[u32; 2]> {
     Ok(canvas)
 }
 
-#[cfg(feature = "rfvp")]
 fn rfvp(dir: &Path, names: &[String], name: &str) -> Result<Plan> {
     let scripts: Vec<_> = with_ext(names, "hcb").collect();
     ensure!(
@@ -965,10 +945,6 @@ fn rfvp(dir: &Path, names: &[String], name: &str) -> Result<Plan> {
         profiles: Default::default(),
         mounts: vec![],
     })
-}
-#[cfg(not(feature = "rfvp"))]
-fn rfvp(_: &Path, _: &[String], _: &str) -> Result<Plan> {
-    bail!("RFVP found; this build needs the rfvp feature")
 }
 
 fn siglus(dir: &Path, names: &[String], name: &str) -> Result<Plan> {
@@ -1024,7 +1000,14 @@ fn siglus(dir: &Path, names: &[String], name: &str) -> Result<Plan> {
         project: project(name, canvas, "siglus", config),
         evidence: Vec::new(),
         profiles: Default::default(),
-        mounts: vec![],
+        // Original voice packs stay intact; the VM selects pack and sample numbers.
+        mounts: match find(names, "koe") {
+            Some(koe) => {
+                let root = dir.canonicalize()?;
+                voice_packs_in(dir, &root, &[dir.join(koe)])?
+            }
+            None => Vec::new(),
+        },
     })
 }
 
@@ -1056,7 +1039,6 @@ mod tests {
     use super::*;
 
     #[test]
-    #[cfg(all(feature="reallive", feature="arc-formats"))]
     fn reallive_voice_archives_use_shared_mounts_without_extraction() {
         let dir=tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join("KOE")).unwrap();
@@ -1086,11 +1068,33 @@ mod tests {
     }
 
     #[test]
+    fn system4_detection_builds_original_nested_ini_plan_without_unpacking() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("GAMEDATA");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("System40.ini"), b"CodeName=\"Game.ain\" GameName=\"Example\" ViewWidth=800 ViewHeight=600").unwrap();
+        std::fs::write(root.join("Game.ain"), b"AI2\0").unwrap();
+        std::fs::write(root.join("GameGA.ald"), []).unwrap();
+        std::fs::write(root.join("GameGB.ald"), []).unwrap();
+        {
+            let plan = detect(dir.path()).unwrap();
+            assert_eq!(plan.engine, "System4");
+            assert_eq!(plan.project["clients"][0]["adapter"], "system4");
+            assert_eq!(plan.project["clients"][0]["asset_prefix"], "GAMEDATA");
+            assert_eq!(plan.project["clients"][0]["config"]["program"], "Game.ain");
+            assert_eq!(plan.mounts.len(), 2);
+            assert!(plan.mounts.iter().all(|m| m.options["format"] == "alice-soft/ald"));
+            let typed: crysirror_runtime::Project = serde_json::from_value(plan.project.clone()).unwrap();
+            assert!(typed.clients[0].program.is_empty());
+            assert_eq!(detect(&root).unwrap().project["clients"][0]["config"]["ini"], "System40.ini");
+        }
+    }
+
+    #[test]
     fn catsystem2_detection_selects_original_nested_capability_and_startup() {
         let dir=tempfile::tempdir().unwrap();
         cat_startup_fixture(&dir.path().join("data"));
         std::fs::write(dir.path().join("installer.exe"),vec![0;1024]).unwrap();
-        #[cfg(feature="catsystem2")]
         {
             let p=detect(dir.path()).unwrap();
             assert_eq!(p.engine,"CatSystem2");
@@ -1106,12 +1110,10 @@ mod tests {
             let direct=detect(&dir.path().join("data")).unwrap();
             assert!(direct.project["clients"][0].get("asset_prefix").is_none());
         }
-        #[cfg(not(feature="catsystem2"))]
-        assert!(detect(dir.path()).unwrap_err().to_string().contains("native adapter 'catsystem2' is not linked"));
     }
 
     #[test]
-    #[cfg(all(unix,feature="catsystem2"))]
+    #[cfg(unix)]
     fn catsystem2_evidence_cannot_escape_its_selected_client_root() {
         let dir=tempfile::tempdir().unwrap();
         cat_startup_fixture(&dir.path().join("data"));
@@ -1132,7 +1134,6 @@ mod tests {
         bytes.extend([0; 8]);
         bytes.extend([0xb6, 0xab, 0, 0, 0, 0]);
         std::fs::write(scripts.join("start.mes"), &bytes).unwrap();
-        #[cfg(feature = "circus")]
         {
             let plan = detect(dir.path()).unwrap();
             assert_eq!(plan.engine, "circus");
@@ -1141,12 +1142,6 @@ mod tests {
                 plan.project["clients"][0]["config"],
                 json!({"script":"start","font":"default"})
             );
-        }
-        #[cfg(not(feature = "circus"))]
-        {
-            let error = detect(dir.path()).unwrap_err().to_string();
-            assert!(error.contains("recognized Circus MES (dc4ph / 0xabb6)"));
-            assert!(error.contains("native adapter 'circus' is not linked"));
         }
         bytes[17] = 0xaa;
         std::fs::write(scripts.join("start.mes"), &bytes).unwrap();
@@ -1188,7 +1183,6 @@ mod tests {
         assert_eq!(with_ext(&names, "xp3").count(), 1);
     }
 
-    #[cfg(all(feature = "nscripter", feature = "arc-formats"))]
     #[test]
     fn nscripter_plan_mounts_original_archives_and_keeps_native_precedence() {
         let dir = tempfile::tempdir().unwrap();
@@ -1240,7 +1234,6 @@ mod tests {
         assert!(read_bounded(dir.path(), "large", 8).is_err());
     }
 
-    #[cfg(feature = "nscripter")]
     #[test]
     fn renamed_image_cannot_be_selected_as_native_script() {
         let dir = tempfile::tempdir().unwrap();
@@ -1253,7 +1246,6 @@ mod tests {
         assert!(error.contains("image/png"), "{error}");
     }
 
-    #[cfg(all(feature = "krkr", feature = "arc-formats"))]
     #[test]
     fn installed_player_selects_native_production_mode_before_game_scripts() {
         let names = vec!["data.xp3".to_owned()];

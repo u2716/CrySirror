@@ -44,7 +44,9 @@ struct Source {
     gain: f32,
 }
 impl AudioSource for Source {
-    fn has_replay_gain(&self) -> bool { self.inner.has_replay_gain() }
+    fn has_replay_gain(&self) -> bool {
+        self.inner.has_replay_gain()
+    }
     fn is_nonblocking(&self) -> bool {
         self.inner.is_nonblocking()
     }
@@ -116,7 +118,9 @@ struct Joined {
     at: u64,
 }
 impl AudioSource for Joined {
-    fn has_replay_gain(&self) -> bool { self.intro.has_replay_gain() || self.tail.has_replay_gain() }
+    fn has_replay_gain(&self) -> bool {
+        self.intro.has_replay_gain() || self.tail.has_replay_gain()
+    }
     fn sample_rate(&self) -> u32 {
         self.intro.sample_rate()
     }
@@ -261,9 +265,13 @@ pub(super) fn prepare(
         gain: p.gain,
         rate: p.rate,
         looping,
+        loop_passes: p.loop_passes,
+        swap_channels: p.swap_channels,
         loop_points,
         fade_in_ms: p.fade_ms,
         paused: p.paused,
+        retain_on_finish:p.retain_on_finish,
+        transport_active:p.transport_active,
         ..Default::default()
     };
     spec.validate()?;
@@ -288,7 +296,7 @@ pub(super) fn prepare(
 }
 pub struct ChannelAudio {
     pub sequences: crate::sequence::Sequences,
-    pub(super) releases:crate::release::Releases,
+    pub(super) releases: crate::release::Releases,
     pub mixer: Mixer,
     pub resources: crate::resources::AudioResources,
     pub(super) voices: BTreeMap<(u32, u32), VoiceHandle>,
@@ -296,12 +304,15 @@ pub struct ChannelAudio {
     pub(super) output: Vec<StereoFrame>,
     pub(super) remainder: u64,
     pub(super) jobs: super::channel_async::ChannelJobs,
+    pub(super) seeks: super::channel_seek::ChannelSeeks,
+    pub(super) replacement_epoch: u64,
+    pub(super) replacement_versions: BTreeMap<u32, u64>,
 }
 impl Default for ChannelAudio {
     fn default() -> Self {
         Self {
             sequences: Default::default(),
-            releases:Default::default(),
+            releases: Default::default(),
             mixer: Mixer::new(MixerConfig {
                 max_voices: 256,
                 ..Default::default()
@@ -313,6 +324,9 @@ impl Default for ChannelAudio {
             output: Vec::new(),
             remainder: 0,
             jobs: Default::default(),
+            seeks: Default::default(),
+            replacement_epoch: 0,
+            replacement_versions: BTreeMap::new(),
         }
     }
 }
@@ -378,6 +392,9 @@ impl ChannelAudio {
         Ok(())
     }
     pub fn submit(&mut self, client: u32, request: AudioRequest) -> Result<()> {
+        if let AudioRequest::ExchangeChannels { left, right } = request {
+            return self.exchange_channels(client,left,right);
+        }
         self.mixer.idle()?;
         self.poll_releases()?;
         if self.clients.insert(client) {
@@ -395,15 +412,28 @@ impl ChannelAudio {
             .retain(|_, h| self.mixer.is_playing(h.client, *h));
         self.cancel_pending_control(client, &request)?;
         let controlled_channel = match &request {
+            AudioRequest::ExchangeChannels { .. } => unreachable!("atomic exchange handled before single-channel controls"),
             AudioRequest::SetMixGroup { .. } | AudioRequest::SetMixGroupGain { .. } => None,
-            AudioRequest::Play {channel,..} | AudioRequest::PlayAsset {channel,..}
-            | AudioRequest::PlayPcm {channel,..} | AudioRequest::PlayResource {channel,..}
-            | AudioRequest::Stop {channel,..} | AudioRequest::Pause {channel,..}
-            | AudioRequest::Resume {channel,..} | AudioRequest::ResumeWithOptions {channel,..}
-            | AudioRequest::SetGain {channel,..} | AudioRequest::SetLooped {channel,..}
-            | AudioRequest::SetPan {channel,..} => Some(*channel),
+            AudioRequest::Play { channel, .. }
+            | AudioRequest::PlayAsset { channel, .. }
+            | AudioRequest::PlayPcm { channel, .. }
+            | AudioRequest::PlayResource { channel, .. }
+            | AudioRequest::Stop { channel, .. }
+            | AudioRequest::Pause { channel, .. }
+            | AudioRequest::SetTransportActive { channel, .. }
+            | AudioRequest::Resume { channel, .. }
+            | AudioRequest::ResumeWithOptions { channel, .. }
+            | AudioRequest::SetGain { channel, .. }
+            | AudioRequest::FadeGain { channel, .. }
+            | AudioRequest::FinishGainFade { channel, .. }
+            | AudioRequest::SetLooped { channel, .. }
+            | AudioRequest::SetLoopSchedule { channel, .. }
+            | AudioRequest::SetChannelSwap { channel, .. }
+            | AudioRequest::SetPan { channel, .. }
+            | AudioRequest::SetStereoGain { channel, .. } => Some(*channel),
         };
         match request {
+            AudioRequest::ExchangeChannels { .. } => unreachable!("atomic exchange handled before single-channel controls"),
             AudioRequest::SetMixGroupGain {
                 name,
                 gain,
@@ -456,6 +486,10 @@ impl ChannelAudio {
                 {
                     self.mixer.stop(client, h, fade_ms)?;
                 }
+            }
+            AudioRequest::SetTransportActive{channel,active}=>{
+                let h=*self.voices.get(&(client,channel)).context("audio channel is not allocated")?;
+                self.mixer.set_transport_active(client,h,active)?;
             }
             AudioRequest::Pause {
                 channel,
@@ -511,6 +545,30 @@ impl ChannelAudio {
                     self.mixer.fade_gain(client, h, gain, fade_ms)?;
                 }
             }
+            AudioRequest::FadeGain {
+                channel,
+                gain,
+                fade_ms,
+                stop_after,
+            } => {
+                if let Some(&h) = self
+                    .voices
+                    .get(&(client, channel))
+                    .filter(|h| self.mixer.is_playing(client, **h))
+                {
+                    self.mixer
+                        .fade_gain_with_stop(client, h, gain, fade_ms, stop_after)?;
+                }
+            }
+            AudioRequest::FinishGainFade { channel } => {
+                if let Some(&h) = self
+                    .voices
+                    .get(&(client, channel))
+                    .filter(|h| self.mixer.is_playing(client, **h))
+                {
+                    self.mixer.finish_gain_fade(client, h)?;
+                }
+            }
             AudioRequest::SetLooped {
                 channel,
                 looping,
@@ -522,6 +580,43 @@ impl ChannelAudio {
                     .filter(|h| self.mixer.is_playing(client, **h))
                 {
                     self.mixer.set_looped(client, h, looping, loop_start)?;
+                }
+            }
+            AudioRequest::SetLoopSchedule {
+                channel,
+                start,
+                end,
+                passes,
+            } => {
+                if let Some(&h) = self
+                    .voices
+                    .get(&(client, channel))
+                    .filter(|h| self.mixer.is_playing(client, **h))
+                {
+                    self.mixer
+                        .set_loop_schedule(client, h, start, end, passes)?;
+                }
+            }
+            AudioRequest::SetChannelSwap { channel, swapped } => {
+                if let Some(&h) = self
+                    .voices
+                    .get(&(client, channel))
+                    .filter(|h| self.mixer.is_playing(client, **h))
+                {
+                    self.mixer.set_channel_swap(client, h, swapped)?;
+                }
+            }
+            AudioRequest::SetStereoGain {
+                channel,
+                gains,
+                fade_ms,
+            } => {
+                if let Some(&h) = self
+                    .voices
+                    .get(&(client, channel))
+                    .filter(|h| self.mixer.is_playing(client, **h))
+                {
+                    self.mixer.set_stereo_gain(client, h, gains, fade_ms)?;
                 }
             }
             AudioRequest::SetPan {
@@ -538,7 +633,9 @@ impl ChannelAudio {
                 }
             }
         }
-        if let Some(channel) = controlled_channel { self.cancel_release_channel(client, channel); }
+        if let Some(channel) = controlled_channel {
+            self.cancel_release_channel(client, channel);
+        }
         Ok(())
     }
     fn play(

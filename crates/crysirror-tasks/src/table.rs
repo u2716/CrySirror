@@ -345,6 +345,12 @@ impl<T> OperationTable<T> {
     pub fn discard_obsolete(&mut self, generation: u64) {
         self.entries.retain(|_, e| e.generation == generation);
     }
+    /// Retire only this owner. Dropping work cancels it without waiting; other
+    /// clients retain their receipts and worker leases. This is infallible for
+    /// an already validated owner transaction.
+    pub fn clear_owner(&mut self, owner: u32) {
+        self.entries.retain(|_, entry| entry.owner != owner);
+    }
     pub fn clear(&mut self) {
         self.entries.clear();
     }

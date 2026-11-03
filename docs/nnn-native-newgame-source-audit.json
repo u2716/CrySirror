@@ -1,0 +1,57 @@
+{
+  "purpose": "Native Title selection, outer-mode cancellation and NewGame contract; implementation is not complete",
+  "reference": {
+    "repository": "https://github.com/tinyan/SystemNNN",
+    "commit": "78a05053c78b3b80065a9a209c6685a7c60a2e83",
+    "reviewed": [
+      "nnnLib/commonTitle.cpp: complete class, especially Calcu and FinalExitRoutine",
+      "nnnLib/commonGeneral.cpp: GeneralFinalExitRoutine and exit/frame ordering",
+      "nnnLib/gamecallback.cpp: complete InitNewGame, YoyakuExecRoutine, ChangeMode and surrounding presentation ordering",
+      "nnnLib/gameCallBack.h: SetYoyaku only stores the pending-execution flag",
+      "nnnLib/backExecClass.cpp: complete background script/frame lifecycle",
+      "nyanEffectLib/allEffect.cpp: ClearAllEffect, ClearEffect and frame calculation/print/count ordering",
+      "nyanEffectLib/allEffect.h: ClearAllEffect defaults to FALSE"
+    ],
+    "licence": "No licence grant found. These behavior facts are independently expressed; original engine implementation is not copied or linked."
+  },
+  "actual_module": {
+    "sha256": "e85e92ec538d50eae08d27286177149972d443a96d1415277c1ae1f9ee108bdb",
+    "method": "Read-only IDA static analysis; the original executable was not executed",
+    "title_vtable": "0x566b9c",
+    "title_calcu": "0x4dff40",
+    "title_final_exit": "0x4df680",
+    "callback_vtable": "0x564f04",
+    "callback_init_new_game": "0x53a710 (slot90, byte offset360)",
+    "callback_set_yoyaku": "0x4010e0 (slot17): assigns the pending-execution flag",
+    "ignored_evidence": [
+      "target/verification/systemnnn/title-start-class-static.log",
+      "target/verification/systemnnn/title-newgame-static.log",
+      "target/verification/systemnnn/CCommonTitle-vt12-0x4dff40.c",
+      "target/verification/systemnnn/CCommonTitle-vt16-0x4df680.c",
+      "target/verification/systemnnn/CGameCallBack-vt90-0x53a710.c",
+      "target/verification/systemnnn/title-native-game-static.log",
+      "target/verification/systemnnn/CGame-vt116-0x533220.c"
+    ],
+    "game_vtable": "0x564ad4 (CGame): slots17/90 reuse callback SetYoyaku/InitNewGame; slot116 AfterInitNewGame0x533220 is an empty two-argument leaf in this exact module"
+  },
+  "native_contract": {
+    "selection": "A real completed button0 selection requests the original NewGame branch. Button1/2/3 select Load/Config/Omake; button4 requests closing. No boot-time synthetic selection or forced variable flag is valid.",
+    "final_frame": "The native click-count frame is printed before FinalExitRoutine. A configured exit-screen capture therefore refers to that full Title frame, including buttons, rather than the last background-script-only frame.",
+    "background": "Selection first disables background-script mode. The original background context may be discarded at this explicit outer-mode boundary; this does not acknowledge an unknown native call or complete its remaining DRAW count.",
+    "variables": "The reviewed Legacy1000 InitNewGame clears [100,200) and [300,1000), then applies those same indices from the enabled original VarInit table. Persistent [200,300) is retained. Optional extension variable assignment follows initialization.",
+    "effects": "InitNewGame resets all16 eyes, layer-off and effect state. ClearAllEffect(FALSE) resets command/flags/picture assignment/rectangles/count, retaining the distinct picture-file cache and previous-effect metadata; it does not imply deleting every decoded picture resource.",
+    "controller": "Original control-script PC and stack pointer reset to0, script-run mode resets, and SetYoyaku schedules execution. It does not assign a made-up game-mode0 or directly jump to a named story script.",
+    "state": "Message-window/option/scene/skip/demo-related native state is reset by the reviewed initialization. Later source-only state such as expanded-variable or new subsystem hooks must not be imported silently.",
+    "shared_boundary": "Resource lifetime, immutable frame handles, retained layers/widgets, image composition and audio stay in CrySirror services. The adapter retains only native transition/parameter/reset/save policy."
+  },
+  "validation": {
+    "existing": "Authored Title tests cover shared image composition, immutable generations, alpha-hit widgets and native clickTime; actual player31 reached native Title counter70 and then stopped at MOVE52.",
+    "not_claimed": [
+      "Completed original Title intro",
+      "Original Start selection or first story text",
+      "Outer-context cancellation implementation",
+      "Native original-save reconstruction",
+      "Complete System-NNN compatibility"
+    ]
+  }
+}

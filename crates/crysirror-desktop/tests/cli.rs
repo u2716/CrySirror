@@ -27,14 +27,14 @@ fn inspection_reports_only_actually_registered_native_vms() {
         .unwrap();
     assert!(output.status.success());
     let v: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(v["rfvp_native_vm"], false);
-    assert_eq!(v["bgi_native_vm"], false);
-    assert_eq!(v["reallive_native_vm"], cfg!(feature = "reallive"));
-    assert_eq!(v["avg32_native_vm"], cfg!(feature = "avg32"));
-    let mut expected = vec!["crysirror-script-v1", "siglus"];
-    if cfg!(feature = "reallive") { expected.push("reallive"); }
-    if cfg!(feature = "avg32") { expected.push("avg32"); }
-    if cfg!(feature = "krkr") { expected.push("krkr"); }
+    assert_eq!(v["rfvp_native_vm"], true);
+    assert_eq!(v["bgi_native_vm"], true);
+    assert_eq!(v["reallive_native_vm"], true);
+    assert_eq!(v["avg32_native_vm"], true);
+    let mut expected = vec![
+        "avg32", "bgi", "catsystem2", "circus", "crysirror-script-v1", "krkr", "majiro",
+        "nscripter", "reallive", "rfvp", "siglus", "system-nnn", "system4",
+    ];
     expected.sort_unstable();
     assert_eq!(v["registered_adapters"], serde_json::json!(expected));
 }

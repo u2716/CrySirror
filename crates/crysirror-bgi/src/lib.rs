@@ -1,7 +1,29 @@
 //! BGI native BP semantic adapter over CrySirror resources, Canvas and Layer.
 //! No pixel buffer, rasterizer, font algorithm or audio mixer lives here.
 #![forbid(unsafe_code)]
+mod audio_api;
+mod audio_cd;
+mod bitmap_api;
+mod bitmap_checks;
+mod bitmap_memory;
+mod display_tree;
+mod file_api;
 pub mod fixture;
+mod graph_api;
+mod graph_state;
+mod message_api;
+mod native_background;
+mod native_display;
+mod program_io;
+mod save_api;
+mod selection_api;
+mod system_files;
+mod target_checks;
+mod text_api;
+mod text_policy;
+mod user_api;
+mod user_dialog_api;
+mod window_api;
 use anyhow::{Context, Result, bail, ensure};
 use crysirror_bgi_vm::{Machine, NativeCall, Step};
 use crysirror_core::{
@@ -41,9 +63,11 @@ impl Config {
             self.script.to_ascii_lowercase().ends_with("._bp"),
             "BGI profile requires a native ._bp module"
         );
-        for name in [&self.script]
+        let script_parts = self.configured_script();
+        for name in [script_parts.1]
             .into_iter()
-            .chain((!self.root.is_empty()).then_some(&self.root))
+            .chain((!script_parts.0.is_empty()).then_some(script_parts.0))
+            .chain((!self.root.is_empty()).then_some(self.root.as_str()))
         {
             ensure!(
                 VfsPath::new(Mount::Asset, name)?.relative() == name,
@@ -51,6 +75,9 @@ impl Config {
             );
         }
         Ok(())
+    }
+    fn configured_script(&self) -> (&str, &str) {
+        self.script.split_once(':').unwrap_or(("", &self.script))
     }
     fn asset(&self, name: &str) -> Result<String> {
         let name = name.replace('\\', "/");
@@ -81,8 +108,12 @@ pub fn register(registry: &mut AdapterRegistry) -> Result<()> {
 
 #[derive(Clone)]
 struct Bitmap {
+    generation: u64,
+    published_path: Option<String>,
     size: [u32; 2],
     format: i32,
+    image: Option<Arc<dyn crysirror_core::image_processing::ImageResource>>,
+    auxiliary: [i32; 2],
 }
 #[derive(Clone, Default)]
 struct Sprite {
@@ -99,16 +130,34 @@ pub struct BgiVm {
     config: Config,
     pool: TaskPool,
     load: Option<Task<Machine>>,
+    program_load: Option<Task<Vec<u8>>>,
+    file_load: Option<Task<file_api::FileReply>>,
+    audio: audio_api::AudioState,
+    bitmap_work: Option<bitmap_api::BitmapWork>,
+    memory_jobs: BTreeMap<u64, bitmap_memory::MemoryWork>,
+    graph: graph_api::GraphState,
+    resource_fences: BTreeMap<u32, u64>,
+    audio_fences: BTreeMap<u32, u64>,
+    save_jobs: BTreeMap<u64, save_api::SaveWork>,
+    dialog_work: Option<user_dialog_api::DialogWork>,
+    user: user_api::UserState,
+    windows: window_api::WindowState,
+    messages: message_api::MessageState,
+    selections: selection_api::SelectionState,
+    text: text_api::TextState,
+    text_jobs: BTreeMap<u64, text_api::TextWork>,
+    color_luts: BTreeMap<i32, [[i32; 2]; 3]>,
+    bitmap_jobs: BTreeMap<u64, bitmap_api::BitmapWork>,
+    file_jobs: BTreeMap<u64, Task<file_api::FileReply>>,
+    program_jobs: BTreeMap<u64, Task<Vec<u8>>>,
     vm: Option<Machine>,
     bitmaps: BTreeMap<u32, Bitmap>,
+    bitmap_serial: u64,
     sprites: BTreeMap<u32, Sprite>,
     timer: u64,
     wait: Option<VmYield>,
     calls: u64,
     input: InputFrame,
-    audio_ticket: Option<(u32, u64)>,
-    playback_ticket: Option<(u32, u64)>,
-    music: BTreeMap<u32, (crysirror_core::service::AudioResourceHandle, bool)>,
 }
 impl BgiVm {
     pub fn new(client: ClientId, config: Config) -> Result<Self> {
@@ -116,19 +165,69 @@ impl BgiVm {
         Ok(Self {
             client,
             config,
-            pool: TaskPool::new("bgi-resource", 1, 2)?,
+            pool: TaskPool::new("bgi-resource", 2, 128)?,
             load: None,
+            program_load: None,
+            file_load: None,
+            audio: Default::default(),
+            bitmap_work: None,
+            memory_jobs: BTreeMap::new(),
+            graph: Default::default(),
+            resource_fences: BTreeMap::new(),
+            audio_fences: BTreeMap::new(),
+            save_jobs: BTreeMap::new(),
+            dialog_work: None,
+            user: Default::default(),
+            windows: Default::default(),
+            messages: Default::default(),
+            selections: Default::default(),
+            text: Default::default(),
+            text_jobs: BTreeMap::new(),
+            color_luts: BTreeMap::new(),
+            bitmap_jobs: BTreeMap::new(),
+            file_jobs: BTreeMap::new(),
+            program_jobs: BTreeMap::new(),
             vm: None,
             bitmaps: BTreeMap::new(),
+            bitmap_serial: 0,
             sprites: BTreeMap::new(),
             timer: 0,
             wait: None,
             calls: 0,
             input: InputFrame::default(),
-            audio_ticket: None,
-            playback_ticket: None,
-            music: BTreeMap::new(),
         })
+    }
+    fn call_bitmap_dependencies(call: &NativeCall) -> Vec<u32> {
+        let a = &call.args;
+        let indices: &[usize] = match (call.group, call.id) {
+            (0x90, 0x10..=0x13) | (0x92, 0x9c) | (0x91, 0x9c | 0x9d) => &[0],
+            (0x90, 0xcd) | (0x91, 0x18..=0x1f) => &[0, 1],
+            (0x90, 0xc8) => &[0, 3],
+            (0x90, 0x56 | 0x59) => &[3],
+            (0x90, 0x57) => &[1],
+            (0x90, 0x04 | 0x17) => &[0],
+            (0x90, 0x18 | 0x1e) => &[0, 3],
+            (0x90, 0x1f) => &[0, 1],
+            (0x90, 0x14) => &[0],
+            (0x90, 0x15) => &[3],
+            (0x90, 0x16) | (0x92, 0x16 | 0x17) => &[1],
+            (0x92, 0x12) => &[0],
+            (0x90, 0x40) => &[0],
+            (0xb0, 0x00) => &[2],
+            _ => &[],
+        };
+        indices
+            .iter()
+            .filter_map(|&i| a.get(i))
+            .filter_map(|&id| ((id as u32) < 0x4000).then_some(id as u32))
+            .collect()
+    }
+    fn allocate_bitmap_generation(&mut self) -> Result<u64> {
+        self.bitmap_serial = self
+            .bitmap_serial
+            .checked_add(1)
+            .context("BGI bitmap generation exhausted")?;
+        Ok(self.bitmap_serial)
     }
     fn submit(&self, host: &mut dyn HostServices, batch: Value) -> Result<()> {
         host.submit_engine(self.client, 1, &serde_json::to_vec(&batch)?)
@@ -142,16 +241,6 @@ impl BgiVm {
                 .get(&(id as u32))
                 .context("unallocated BGI bitmap")?,
         ))
-    }
-    fn sprite_id(handle: i32) -> Result<u32> {
-        let raw = handle as u32;
-        ensure!(raw & 0xfffffe00 == 0x80000000, "BGI sprite handle");
-        Ok(raw)
-    }
-    fn present_sprite(&self, host: &mut dyn HostServices, id: u32, sprite: &Sprite) -> Result<()> {
-        let bitmap = sprite.bitmap.context("BGI sprite is not configured")?;
-        let id = (id & 0x1ff) + 1;
-        self.submit(host,json!({"canvases":[{"op":"present","id":bitmap,"layer":id,"order":sprite.priority,"position":sprite.position}],"layers":[{"op":"set_opacity","id":id,"opacity":sprite.opacity},{"op":"set_visible","id":id,"visible":sprite.visible}]}))
     }
     fn native(
         &mut self,
@@ -196,110 +285,6 @@ impl BgiVm {
             }
             (0x80, 0x5f) => wait = Some(VmYield::WaitUntil(host.now_ms().saturating_add(1))),
             (0x80, 0x6a) => wait = Some(VmYield::Halted),
-            (0xa0, 0x10) => {
-                use crysirror_core::service::{AudioAsset, AudioPreparePhase};
-                ensure!(
-                    (0..16).contains(&a[0]) && a[2] == 128,
-                    "BGI BGM profile supports channels 0..15 at native full volume"
-                );
-                let channel = a[0] as u32;
-                let ticket = if let Some((owner, ticket)) = self.audio_ticket {
-                    ensure!(owner == channel, "BGI stale audio admission");
-                    ticket
-                } else {
-                    let asset = VfsPath::new(Mount::Asset, &self.config.asset(&vm.string(a[1])?)?)?;
-                    let ticket = host.begin_audio_resource(
-                        self.client,
-                        AudioAsset {
-                            path: asset,
-                            frame_limit: None,
-                        },
-                        false,
-                    )?;
-                    self.audio_ticket = Some((channel, ticket));
-                    ticket
-                };
-                let prepared = host.audio_resource_preparation(self.client, ticket)?;
-                match prepared.phase {
-                    AudioPreparePhase::Pending => return Ok(None),
-                    AudioPreparePhase::Failed => {
-                        host.release_audio_resource_preparation(self.client, ticket)?;
-                        self.audio_ticket = None;
-                        bail!(
-                            "BGI BGM preparation failed: {}",
-                            prepared.error.unwrap_or_default()
-                        );
-                    }
-                    AudioPreparePhase::Ready => {
-                        let resource = prepared
-                            .resource
-                            .context("BGI audio preparation has no resource")?;
-                        host.release_audio_resource_preparation(self.client, ticket)?;
-                        self.audio_ticket = None;
-                        if let Some((old, _)) = self.music.insert(channel, (resource, false)) {
-                            host.release_audio_resource(self.client, old)?;
-                        }
-                    }
-                }
-            }
-            (0xa0, 0x14) => {
-                use crysirror_core::service::{
-                    AudioParameters, AudioPreparePhase, AudioRequest, PcmBus,
-                };
-                ensure!((0..16).contains(&a[0]), "BGI music channel");
-                let channel = a[0] as u32;
-                if let Some((resource, started)) = self.music.get_mut(&channel) {
-                    if a[1] != 0 && !*started {
-                        // Prepared resources still enter playback through the engine's
-                        // admission boundary. Keep this native call pending until the
-                        // owner publishes its channel preparation result.
-                        let ticket = if let Some((owner, ticket)) = self.playback_ticket {
-                            ensure!(owner == channel, "BGI stale playback admission");
-                            ticket
-                        } else {
-                            let ticket = host.begin_audio(
-                                self.client,
-                                AudioRequest::PlayResource {
-                                    channel,
-                                    resource: *resource,
-                                    parameters: AudioParameters {
-                                        bus: PcmBus::Music,
-                                        ..Default::default()
-                                    },
-                                },
-                            )?;
-                            self.playback_ticket = Some((channel, ticket));
-                            ticket
-                        };
-                        let prepared = host.audio_preparation(self.client, ticket)?;
-                        match prepared.phase {
-                            AudioPreparePhase::Pending => return Ok(None),
-                            AudioPreparePhase::Failed => {
-                                host.release_audio(self.client, ticket)?;
-                                self.playback_ticket = None;
-                                bail!(
-                                    "BGI channel admission failed: {}",
-                                    prepared.error.unwrap_or_default()
-                                );
-                            }
-                            AudioPreparePhase::Ready => {
-                                host.release_audio(self.client, ticket)?;
-                                self.playback_ticket = None;
-                                *started = true;
-                            }
-                        }
-                    } else {
-                        host.submit_audio(
-                            self.client,
-                            AudioRequest::Pause {
-                                channel,
-                                paused: a[1] == 0,
-                                fade_ms: 0.,
-                            },
-                        )?;
-                    }
-                }
-            }
             (0x90, 0x11) => {
                 let id = a[0];
                 ensure!((0..0x4000).contains(&id), "BGI bitmap handle");
@@ -310,118 +295,60 @@ impl BgiVm {
                 );
                 let format = if a[3] == 7 { 1 } else { a[3] };
                 ensure!(
-                    matches!(format, 1 | 2),
+                    matches!(format, 0..=3),
                     "BGI bitmap format {format} needs an engine pixel profile"
                 );
-                let color = if format == 1 {
+                let color = if format != 2 {
                     [0, 0, 0, 255]
                 } else {
                     [0, 0, 0, 0]
                 };
                 self.submit(host,json!({"canvases":[{"op":"create","id":id,"width":w,"height":h},{"op":"clear","id":id,"color":color}]}))?;
+                if let Some(old) = self
+                    .bitmaps
+                    .get(&(id as u32))
+                    .and_then(|b| b.published_path.as_deref())
+                {
+                    host.release_image_resource(self.client, old)?;
+                }
+                let generation = self.allocate_bitmap_generation()?;
                 self.bitmaps.insert(
                     id as u32,
                     Bitmap {
+                        published_path: None,
+                        generation,
                         size: [w, h],
                         format,
+                        image: None,
+                        auxiliary: [-1, -1],
                     },
                 );
             }
             (0x90, 0x13) => {
                 let (id, bitmap) = self.bitmap(a[0])?;
                 ensure!(
-                    matches!(bitmap.format, 1 | 2),
+                    matches!(bitmap.format, 0..=3),
                     "BGI fill needs the decoded resource's native bitmap format metadata"
                 );
                 let packed = a[1] as u32;
-                let color = [
-                    (packed >> 16) as u8,
-                    (packed >> 8) as u8,
-                    packed as u8,
-                    if bitmap.format == 1 {
-                        255
-                    } else {
-                        (packed >> 24) as u8
-                    },
-                ];
+                let rgb = [(packed >> 16) as u8, (packed >> 8) as u8, packed as u8];
+                let color = match bitmap.format {
+                    0 => [rgb[0] & 0xf8, rgb[1] & 0xf8, rgb[2] & 0xf8, 255],
+                    1 => [rgb[0], rgb[1], rgb[2], 255],
+                    2 => [rgb[0], rgb[1], rgb[2], (packed >> 24) as u8],
+                    3 => [rgb[2], 0, 0, 255],
+                    _ => unreachable!(),
+                };
                 self.submit(
                     host,
                     json!({"canvases":[{"op":"clear","id":id,"color":color}]}),
                 )?;
-            }
-            (0x90, 0x10) => {
-                let id = a[0];
-                ensure!((0..0x4000).contains(&id), "BGI bitmap handle");
-                let archive = vm.string(a[1])?;
-                ensure!(
-                    archive.is_empty(),
-                    "BGI archive selection must be mapped to Resources before loading {archive}"
-                );
-                let asset = self.config.asset(&vm.string(a[2])?)?;
-                let size = host.image_size(self.client, &asset)?;
-                self.submit(host,json!({"canvases":[{"op":"create","id":id,"width":size[0],"height":size[1]},{"op":"set","id":id,"layer":{"id":0,"rect":[0,0,size[0],size[1]],"paint":{"kind":"image","asset":asset}}}]}))?;
-                self.bitmaps.insert(id as u32, Bitmap { size, format: -1 });
-                // The non-cached native image-load form installs a cooperative
-                // procedure. Publish this completed engine resource, then let
-                // the scheduler resume this thread on its next owner tick.
-                wait = Some(VmYield::WaitUntil(host.now_ms().saturating_add(1)));
-            }
-            (0x92, 0x9c) => {
-                use crysirror_text::grid::{CellCursor, CellLayoutOptions, layout_cells};
-                let (id, bitmap) = self.bitmap(a[0])?;
-                let text = vm.string(a[3])?;
-                ensure!(
-                    a[6] == 0 || vm.string(a[6])?.is_empty(),
-                    "BGI ruby text needs a native text mapping"
-                );
-                ensure!(
-                    a[8] == 0
-                        && a[10] == 100
-                        && a[11] == 0
-                        && a[12] == 0
-                        && a[13] == 0
-                        && a[14] == 100
-                        && a[15] == 0,
-                    "BGI text only supports native font 0, plain horizontal 100-percent fixed cells without ruby/kinsoku/shadows"
-                );
-                ensure!(
-                    (4..=200).contains(&a[9]) && a[1] >= 0 && a[2] >= 0,
-                    "BGI text size/position"
-                );
-                ensure!(
-                    !text
-                        .chars()
-                        .any(|c| matches!(c, '\\' | '<' | '>' | '[' | ']' | '{' | '}' | '$')),
-                    "BGI markup is not yet mapped"
-                );
-                let font = self
-                    .config
-                    .font
-                    .as_deref()
-                    .context("BGI text requires a project font alias")?;
-                let metrics = host.font_metrics(font, a[9] as f32, '字')?;
-                let options = CellLayoutOptions {
-                    bounds: [bitmap.size[0] as i32, bitmap.size[1] as i32],
-                    size: a[9],
-                    spacing: [0, 0],
-                    half_width: true,
-                    half_spacing: false,
-                    hanging: 0,
-                    forbidden_line_start: String::new(),
-                    indent_pairs: vec![],
-                };
-                let mut cursor = CellCursor::at_start();
-                cursor.position = [a[1], a[2]];
-                let layout = layout_cells(&text, &options, &mut cursor)?;
-                ensure!(
-                    layout.consumed == text.len(),
-                    "BGI text overflows the supported bitmap profile"
-                );
-                let packed = a[4] as u32;
-                let color = [(packed >> 16) as u8, (packed >> 8) as u8, packed as u8, 255];
-                let glyphs=layout.glyphs.into_iter().map(|g|json!({"character":g.character,"baseline":[g.position[0]as f32,g.position[1]as f32+metrics.ascent]})).collect::<Vec<_>>();
-                self.submit(host,json!({"canvases":[{"op":"draw","id":id,"layer":{"id":0,"rect":[0,0,bitmap.size[0],bitmap.size[1]],"paint":{"kind":"glyph_run","font":font,"size":a[9],"color":color,"glyphs":glyphs}}}]}))?;
-                output.push(1 + (cursor.position[1] - a[2]) / a[9]);
+                let bitmap = self.bitmaps.get_mut(&id).unwrap();
+                bitmap.image = None;
+                if let Some(path) = bitmap.published_path.take() {
+                    host.release_image_resource(self.client, &path)?;
+                }
+                self.invalidate_graph_bitmap(id);
             }
             (0x90, 0x40) => {
                 let (id, _) = self.bitmap(a[0])?;
@@ -433,77 +360,6 @@ impl BgiVm {
             (0xb0, 0x00) => {
                 let (id, _) = self.bitmap(a[2])?;
                 self.submit(host,json!({"canvases":[{"op":"present","id":id,"layer":1025u32,"position":[a[0],a[1]],"order":0}]}))?;
-            }
-            (0x90, 0x50) => {
-                let slot = (0..512)
-                    .find(|n| !self.sprites.contains_key(&(0x8000_0000 | n)))
-                    .context("BGI sprite pool exhausted")?;
-                let id = 0x8000_0000 | slot;
-                self.sprites.insert(
-                    id,
-                    Sprite {
-                        opacity: 255,
-                        visible: true,
-                        ..Default::default()
-                    },
-                );
-                output.push(id as i32);
-            }
-            (0x90, 0x56) => {
-                let id = Self::sprite_id(a[0])?;
-                let (bitmap, _) = self.bitmap(a[3])?;
-                ensure!(
-                    a[4] == 128,
-                    "BGI native blend selector {} needs a shared blend profile",
-                    a[4]
-                );
-                ensure!(
-                    (0..=256).contains(&a[5]) && (0..=65535).contains(&a[6]),
-                    "BGI sprite transparency/priority"
-                );
-                ensure!(self.sprites.contains_key(&id), "unallocated BGI sprite");
-                let next = Sprite {
-                    bitmap: Some(bitmap),
-                    position: [a[1], a[2]],
-                    priority: a[6],
-                    opacity: ((256 - a[5]) * 255 / 256) as u8,
-                    visible: true,
-                };
-                self.present_sprite(host, id, &next)?;
-                self.sprites.insert(id, next);
-            }
-            (0x90, 0x30) | (0x90, 0x32) | (0x90, 0x33) | (0x90, 0x3a) => {
-                let id = Self::sprite_id(a[0])?;
-                let mut sprite = self
-                    .sprites
-                    .get(&id)
-                    .context("unallocated BGI sprite")?
-                    .clone();
-                match call.id {
-                    0x30 => sprite.visible = a[1] != 0,
-                    0x32 => {
-                        ensure!((0..=256).contains(&a[1]), "BGI transparency");
-                        sprite.opacity = ((256 - a[1]) * 255 / 256) as u8;
-                    }
-                    0x33 => sprite.position = [a[1], a[2]],
-                    _ => {
-                        ensure!((0..65536).contains(&a[1]), "BGI priority");
-                        sprite.priority = a[1];
-                    }
-                }
-                self.present_sprite(host, id, &sprite)?;
-                self.sprites.insert(id, sprite);
-            }
-            (0x90, 0x51) => {
-                let id = Self::sprite_id(a[0])?;
-                ensure!(self.sprites.contains_key(&id), "unallocated BGI sprite");
-                if self.sprites[&id].bitmap.is_some() {
-                    self.submit(
-                        host,
-                        json!({"canvases":[{"op":"hide","layer":(id&0x1ff)+1}]}),
-                    )?;
-                }
-                self.sprites.remove(&id);
             }
             _ => bail!(
                 "unmapped BGI native call {:#04x}:{:#04x}; missing CrySirror semantic mapping",
@@ -525,31 +381,22 @@ impl BgiVm {
         budget: u32,
     ) -> Result<VmYield> {
         self.input = input;
+        self.tick_user(host)?;
+        self.audio.tick(host, self.client)?;
+        self.graph_tick(host)?;
         if self.vm.is_none() {
             if self.load.is_none() {
                 let storage = host.storage(self.client)?;
-                let asset = VfsPath::new(Mount::Asset, &self.config.asset(&self.config.script)?)?;
+                let config = self.config.clone();
+                let client = self.client;
                 self.load = Some(self.pool.spawn(move |cancel| {
                     cancel.check()?;
-                    let reader = storage.open_asset(&asset)?;
-                    let len = reader.len()?;
-                    ensure!(
-                        (8..=16 * 1024 * 1024).contains(&len),
-                        "BGI BP source budget"
-                    );
-                    let mut bytes = vec![0; len as usize];
-                    let mut offset = 0;
-                    while offset < bytes.len() {
-                        cancel.check()?;
-                        let count = reader.read_at(offset as u64, &mut bytes[offset..])?;
-                        ensure!(
-                            count > 0 && count <= bytes.len() - offset,
-                            "BGI short/invalid source read"
-                        );
-                        offset += count;
-                    }
+                    let (archive, file) = config.configured_script();
+                    let bytes = program_io::load(storage.clone(), client, &config, archive, file)?;
+                    let profile =
+                        program_io::native_profile(storage.as_ref(), client, &config, &bytes)?;
                     cancel.check()?;
-                    Machine::from_bp(&bytes)
+                    Machine::from_bp_with_profile(&bytes, profile)
                 })?);
             }
             let Some(vm) = self.load.as_mut().unwrap().try_take()? else {
@@ -567,12 +414,234 @@ impl BgiVm {
             }
         }
         let mut vm = self.vm.take().unwrap();
+        use crysirror_core::service::buttons;
+        let active = input.buttons_down | input.buttons_pressed;
+        let held_keys = (0..256)
+            .filter_map(|key| {
+                crysirror_core::service::buttons::windows_virtual_key(key)
+                    .filter(|bit| active & bit != 0)
+                    .map(|_| key as i32)
+            })
+            .collect();
+        vm.update_host(host.now_ms(), held_keys, [input.pointer_x, input.pointer_y]);
+        if input.buttons_pressed & buttons::WHEEL_UP != 0 {
+            vm.pulse_input(14);
+        }
+        if input.buttons_pressed & buttons::WHEEL_DOWN != 0 {
+            vm.pulse_input(15);
+        }
         let result = (|| {
-            for _ in 0..budget {
-                match vm.step()? {
+            let mut pending = std::collections::BTreeSet::new();
+            let mut remaining = budget as usize;
+            while remaining > 0 {
+                if vm.halted() {
+                    return Ok(VmYield::Halted);
+                }
+                if vm.request_id().is_some() && !vm.select_request(&pending) {
+                    if !vm.advance_scheduler_with_budget(remaining)? {
+                        return Ok(VmYield::WaitUntil(host.now_ms().saturating_add(1)));
+                    }
+                    remaining = remaining.saturating_sub(vm.consumed_steps().max(1));
+                    continue;
+                }
+                vm.update_window_handles(self.windows.records.keys().copied().collect());
+                self.tick_selection(host, &mut vm)?;
+                self.tick_messages(host, &mut vm)?;
+                let step = vm.step_with_budget(remaining)?;
+                self.tick_selection(host, &mut vm)?;
+                self.tick_messages(host, &mut vm)?;
+                remaining = remaining.saturating_sub(vm.consumed_steps().max(1));
+                match step {
                     Step::Continue => {}
                     Step::Halted => return Ok(VmYield::Halted),
+                    Step::Yielded => {
+                        return Ok(VmYield::WaitUntil(host.now_ms().saturating_add(1)));
+                    }
+                    Step::Input => return Ok(VmYield::WaitForInput),
+                    Step::Selection { id, request } => {
+                        if !self.selection_call(host, &mut vm, id, request)? {
+                            pending.insert(id);
+                            vm.postpone_request();
+                        }
+                    }
+                    Step::UserDialog { request } => {
+                        let id = vm.request_id().context("BGI user dialog identity")?;
+                        if !self.user_dialog_call(host, &mut vm, id, &request)? {
+                            pending.insert(id);
+                            vm.postpone_request();
+                        }
+                    }
+                    Step::Prompt { text, default_yes } => {
+                        let id = vm.request_id().context("BGI prompt identity")?;
+                        if !self.prompt_call(host, &mut vm, id, &text, default_yes)? {
+                            pending.insert(id);
+                            vm.postpone_request();
+                        }
+                    }
+                    Step::NativeFileRead { path } => {
+                        let request = vm.request_id().context("BGI native file read identity")?;
+                        if !self.native_file_read(host, &mut vm, request, &path)? {
+                            pending.insert(request);
+                            vm.postpone_request();
+                        }
+                    }
+                    Step::NativeFileWrite { path, bytes } => {
+                        let request = vm.request_id().context("BGI native file write identity")?;
+                        if !self.native_file_write(host, &mut vm, request, &path, bytes)? {
+                            pending.insert(request);
+                            vm.postpone_request();
+                        }
+                    }
+                    Step::LoadProgram { archive, file } => {
+                        let request = vm.request_id().context("BGI program request identity")?;
+                        self.program_load = self.program_jobs.remove(&request);
+                        if self.program_load.is_none() {
+                            let storage = host.storage(self.client)?;
+                            let client = self.client;
+                            let config = self.config.clone();
+                            self.program_load = Some(self.pool.spawn(move |cancel| {
+                                cancel.check()?;
+                                let bytes =
+                                    program_io::load(storage, client, &config, &archive, &file)?;
+                                cancel.check()?;
+                                Ok(bytes)
+                            })?);
+                        }
+                        let Some(bytes) = self.program_load.as_mut().unwrap().try_take()? else {
+                            self.program_jobs
+                                .insert(request, self.program_load.take().unwrap());
+                            pending.insert(request);
+                            vm.postpone_request();
+                            continue;
+                        };
+                        vm.commit_program(&bytes)?;
+                        self.program_load = None;
+                    }
                     Step::Call(call) => {
+                        let request = vm.request_id().context("BGI native request identity")?;
+                        let mut resources = Self::call_bitmap_dependencies(&call);
+                        resources.extend(self.graph_bitmap_dependencies(&call, &vm)?);
+                        resources.sort_unstable();
+                        resources.dedup();
+                        if resources.iter().any(|id| {
+                            self.resource_fences
+                                .get(id)
+                                .is_some_and(|owner| *owner != request)
+                        }) {
+                            pending.insert(request);
+                            vm.postpone_request();
+                            continue;
+                        }
+                        if user_api::handles(call.group, call.id) {
+                            if !self.user_call(host, &mut vm, &call, request)? {
+                                pending.insert(request);
+                                vm.postpone_request();
+                            }
+                            continue;
+                        }
+                        if self.window_call(host, &mut vm, &call)? {
+                            continue;
+                        }
+                        if self.message_call(host, &mut vm, &call)? {
+                            continue;
+                        }
+                        if bitmap_memory::handles(call.group, call.id) {
+                            for &id in &resources {
+                                self.resource_fences.insert(id, request);
+                            }
+                            if !self.bitmap_memory_call(host, &mut vm, &call, request)? {
+                                pending.insert(request);
+                                vm.postpone_request();
+                            } else {
+                                self.resource_fences.retain(|_, owner| *owner != request);
+                            }
+                            continue;
+                        }
+                        if graph_api::handles(call.group, call.id) {
+                            for &id in &resources {
+                                self.resource_fences.insert(id, request);
+                            }
+                            if !self.graph_call(host, &mut vm, &call)? {
+                                pending.insert(request);
+                                vm.postpone_request();
+                            } else {
+                                self.resource_fences.retain(|_, owner| *owner != request);
+                            }
+                            continue;
+                        }
+                        if text_api::handles(call.group, call.id) {
+                            for &id in &resources {
+                                self.resource_fences.insert(id, request);
+                            }
+                            if !self.text_call(host, &mut vm, &call, request)? {
+                                pending.insert(request);
+                                vm.postpone_request();
+                            } else {
+                                self.resource_fences.retain(|_, owner| *owner != request);
+                            }
+                            continue;
+                        }
+                        if bitmap_api::handles(call.group, call.id) {
+                            for &id in &resources {
+                                self.resource_fences.insert(id, request);
+                            }
+                            self.bitmap_work = self.bitmap_jobs.remove(&request);
+                            let complete = self.bitmap_call(host, &mut vm, &call)?;
+                            if let Some(work) = self.bitmap_work.take() {
+                                self.bitmap_jobs.insert(request, work);
+                            }
+                            if !complete {
+                                pending.insert(request);
+                                vm.postpone_request();
+                            } else {
+                                self.resource_fences.retain(|_, owner| *owner != request);
+                            }
+                            continue;
+                        }
+                        if call.group == 0xa0 {
+                            let channel = match call.id {
+                                0x10..=0x19 | 0x1c => call.args.first().map(|n| *n as u32),
+                                0x20..=0x2f => call.args.first().map(|n| 0x100 | *n as u32),
+                                0x80 | 0x81 | 0x84 | 0x85 | 0x86 => Some(0x1fe),
+                                0xc0 => Some(0x13f),
+                                _ => None,
+                            };
+                            if let Some(channel) = channel {
+                                if self
+                                    .audio_fences
+                                    .get(&channel)
+                                    .is_some_and(|owner| *owner != request)
+                                {
+                                    pending.insert(request);
+                                    vm.postpone_request();
+                                    continue;
+                                }
+                                self.audio_fences.insert(channel, request);
+                            }
+                            self.audio.enter_call(request);
+                            let complete = self.audio_call(host, &mut vm, &call)?;
+                            self.audio.leave_call(request, complete);
+                            if complete {
+                                self.audio_fences.retain(|_, owner| *owner != request);
+                            }
+                            if !complete {
+                                pending.insert(request);
+                                vm.postpone_request();
+                            }
+                            continue;
+                        }
+                        if call.group == 0x80 && matches!(call.id, 0x30..=0x35) {
+                            self.file_load = self.file_jobs.remove(&request);
+                            let complete = self.file_call(host, &mut vm, &call)?;
+                            if let Some(work) = self.file_load.take() {
+                                self.file_jobs.insert(request, work);
+                            }
+                            if !complete {
+                                pending.insert(request);
+                                vm.postpone_request();
+                            }
+                            continue;
+                        }
                         let Some((results, wait)) = self.native(host, &vm, &call)? else {
                             return Ok(VmYield::WaitUntil(host.now_ms().saturating_add(1)));
                         };
@@ -586,6 +655,20 @@ impl BgiVm {
             }
             Ok(VmYield::BudgetExhausted)
         })();
+        if matches!(&result, Ok(VmYield::Halted)) {
+            self.bitmap_jobs.clear();
+            self.text_jobs.clear();
+            self.memory_jobs.clear();
+            self.program_jobs.clear();
+            self.file_jobs.clear();
+            self.resource_fences.clear();
+            self.audio_fences.clear();
+            self.save_jobs.clear();
+        }
+        let result = result.and_then(|yielded| {
+            self.graph_tick(host)?;
+            Ok(yielded)
+        });
         self.vm = Some(vm);
         result
     }
@@ -616,6 +699,6 @@ impl VmAdapter for BgiVm {
         Err(Error::Unsupported("BGI native runtime snapshot"))
     }
     fn diagnostics(&self) -> Vec<u8> {
-        serde_json::to_vec(&json!({"profile":"native-bp-v1","loaded":self.vm.is_some(),"pc":self.vm.as_ref().map(Machine::pc),"native_calls":self.calls,"bitmaps":self.bitmaps.len(),"sprites":self.sprites.len(),"bitmap_sizes":self.bitmaps.iter().take(16).map(|(id,b)|(*id,b.size)).collect::<Vec<_>>()})).unwrap_or_default()
+        serde_json::to_vec(&json!({"profile":"native-bp","loaded":self.vm.is_some(),"pc":self.vm.as_ref().map(Machine::pc),"modules":self.vm.as_ref().map(Machine::module_count),"threads":self.vm.as_ref().map(Machine::thread_count),"native_calls":self.calls,"bitmaps":self.bitmaps.len(),"sprites":self.sprites.len(),"bitmap_sizes":self.bitmaps.iter().take(16).map(|(id,b)|(*id,b.size)).collect::<Vec<_>>()})).unwrap_or_default()
     }
 }

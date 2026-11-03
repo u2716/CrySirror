@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Content-recognized CPU image plugins, with scoped dependency reads.
 use crate::{DecoderRegistry, ImageSurface, MAX_DECODED_BYTES};
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{bail, ensure, Context, Result};
 use crysirror_core::{
-    Error,
     path::{Mount, VfsPath},
+    Error,
 };
 use crysirror_resource::{ArchiveEntry, DecodeContext};
 use std::{cell::Cell, sync::Arc};
@@ -22,6 +22,15 @@ pub trait ImageFormat: Send + Sync {
     }
     fn recognize(&self, path: &str, bytes: &[u8]) -> bool;
     fn decode(&self, bytes: &[u8], context: &ImageDecodeContext<'_>) -> Result<ImageSurface>;
+    /// Header/range properties of the encoded source. A codec that cannot
+    /// answer returns None; normalized RGBA must not stand in for this data.
+    fn encoding_info(
+        &self,
+        _bytes: &[u8],
+        _context: &ImageDecodeContext<'_>,
+    ) -> Result<Option<crysirror_core::image_encoding::ImageEncodingInfo>> {
+        Ok(None)
+    }
 }
 struct Work {
     encoded: Cell<usize>,
@@ -39,7 +48,9 @@ impl<'a> ImageDecodeContext<'a> {
     /// Observe the current resource worker's cancellation without copying input.
     /// Standalone decoding without a resource job has no cancellation token.
     pub fn check_cancelled(&self) -> Result<()> {
-        if let Some(resource)=self.resource {resource.check_cancelled()?;}
+        if let Some(resource) = self.resource {
+            resource.check_cancelled()?;
+        }
         Ok(())
     }
 
@@ -157,6 +168,77 @@ impl<'a> ImageDecodeContext<'a> {
     }
 }
 impl DecoderRegistry {
+    /// Encoded source metadata, selected by exactly the same native-provider
+    /// priorities and ambiguity rules as pixel decoding. Unknown fields remain
+    /// None and no standard-codec fallback fabricates original plane presence.
+    pub fn encoding_info_with(
+        &self,
+        path: &str,
+        bytes: &[u8],
+        source: Option<&ImageSource<'_>>,
+        resource: Option<&DecodeContext>,
+        format: Option<&str>,
+    ) -> Result<Option<crysirror_core::image_encoding::ImageEncodingInfo>> {
+        ensure!(bytes.len() <= MAX_DECODED_BYTES, "encoded image byte limit");
+        let context = ImageDecodeContext {
+            path,
+            registry: self,
+            source,
+            resource,
+            depth: 0,
+            work: None,
+        };
+        context.check_cancelled()?;
+        let Some(decoder) = self.select_format(path, bytes, format)? else {
+            return Ok(None);
+        };
+        let result = decoder.encoding_info(bytes, &context)?;
+        if let Some(info) = &result {
+            ensure!(
+                info.format == decoder.id(),
+                "encoded image metadata provider identity"
+            );
+            crate::rgba_len(info.size[0], info.size[1])?;
+        }
+        context.check_cancelled()?;
+        Ok(result)
+    }
+    fn select_format(
+        &self,
+        path: &str,
+        bytes: &[u8],
+        explicit: Option<&str>,
+    ) -> Result<Option<&Arc<dyn ImageFormat>>> {
+        let decoder = if let Some(id) = explicit {
+            Some(
+                self.formats
+                    .get(id)
+                    .context("image format not registered")?,
+            )
+        } else {
+            let mut matches = self.probe(path, bytes)?;
+            if let Some(priority) = matches
+                .iter()
+                .map(|id| self.formats[id].priority_for(path, bytes))
+                .max()
+            {
+                matches.retain(|id| self.formats[id].priority_for(path, bytes) == priority);
+            }
+            ensure!(
+                matches.len() <= 1,
+                "ambiguous image formats {matches:?}; specify a format ID"
+            );
+            matches.first().map(|id| &self.formats[id])
+        };
+        if let Some(decoder) = decoder {
+            ensure!(
+                decoder.recognize(path, bytes),
+                "image does not match selected format {}",
+                decoder.id()
+            );
+        }
+        Ok(decoder)
+    }
     pub fn register_format(&mut self, format: Arc<dyn ImageFormat>) -> Result<()> {
         let id = format.id();
         ensure!(
@@ -221,33 +303,8 @@ impl DecoderRegistry {
             );
             work.encoded.set(n);
         }
-        let decoder = if let Some(id) = format {
-            Some(
-                self.formats
-                    .get(id)
-                    .context("image format not registered")?,
-            )
-        } else {
-            let mut matches = self.probe(context.path, bytes)?;
-            if let Some(priority) = matches
-                .iter()
-                .map(|id| self.formats[id].priority_for(context.path, bytes))
-                .max()
-            {
-                matches.retain(|id| self.formats[id].priority_for(context.path, bytes) == priority);
-            }
-            ensure!(
-                matches.len() <= 1,
-                "ambiguous image formats {matches:?}; specify a format ID"
-            );
-            matches.first().map(|id| &self.formats[id])
-        };
+        let decoder = self.select_format(context.path, bytes, format)?;
         let surface = if let Some(decoder) = decoder {
-            ensure!(
-                decoder.recognize(context.path, bytes),
-                "image does not match selected format {}",
-                decoder.id()
-            );
             decoder
                 .decode(bytes, context)
                 .with_context(|| format!("decode {} as {}", context.path, decoder.id()))?
@@ -307,10 +364,94 @@ mod memory_codec_tests {
             assert_eq!([surface.width, surface.height], [2, 1]);
             assert_eq!(&surface.rgba[..4], &[17, 31, 99, 255]);
         }
-        assert!(
+        assert!(registry
+            .decode_with("memory-octet", b"not an image", None, None, None)
+            .is_err());
+    }
+    struct HeaderPlugin {
+        id: &'static str,
+        priority: u8,
+    }
+    impl ImageFormat for HeaderPlugin {
+        fn id(&self) -> &'static str {
+            self.id
+        }
+        fn priority_for(&self, _: &str, _: &[u8]) -> u8 {
+            self.priority
+        }
+        fn recognize(&self, _: &str, bytes: &[u8]) -> bool {
+            bytes == b"shared header"
+        }
+        fn decode(&self, _: &[u8], _: &ImageDecodeContext<'_>) -> Result<ImageSurface> {
+            Ok(ImageSurface {
+                width: 1,
+                height: 1,
+                rgba: vec![self.priority, 0, 0, 255],
+            })
+        }
+        fn encoding_info(
+            &self,
+            _: &[u8],
+            _: &ImageDecodeContext<'_>,
+        ) -> Result<Option<crysirror_core::image_encoding::ImageEncodingInfo>> {
+            Ok(Some(crysirror_core::image_encoding::ImageEncodingInfo {
+                format: self.id.into(),
+                size: [1, 1],
+                source_origin: None,
+                color_bits: None,
+                has_color_plane: None,
+                has_alpha_plane: None,
+                color_row_bytes: None,
+                alpha_sample_bytes: None,
+            }))
+        }
+    }
+    #[test]
+    fn encoded_metadata_and_pixels_share_provider_priority_and_ambiguity_policy() {
+        let mut registry = DecoderRegistry::default();
+        registry
+            .register_format(Arc::new(HeaderPlugin {
+                id: "test/low",
+                priority: 1,
+            }))
+            .unwrap();
+        registry
+            .register_format(Arc::new(HeaderPlugin {
+                id: "test/high",
+                priority: 2,
+            }))
+            .unwrap();
+        let info = registry
+            .encoding_info_with("x", b"shared header", None, None, None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(info.format, "test/high");
+        assert_eq!(info.has_alpha_plane, None);
+        assert_eq!(
             registry
-                .decode_with("memory-octet", b"not an image", None, None, None)
-                .is_err()
+                .decode_with("x", b"shared header", None, None, None)
+                .unwrap()
+                .rgba[0],
+            2
         );
+        assert!(registry
+            .encoding_info_with("x", b"mismatch", None, None, Some("test/high"))
+            .is_err());
+        registry
+            .register_format(Arc::new(HeaderPlugin {
+                id: "test/tied",
+                priority: 2,
+            }))
+            .unwrap();
+        assert!(registry
+            .encoding_info_with("x", b"shared header", None, None, None)
+            .is_err());
+        assert!(registry
+            .decode_with("x", b"shared header", None, None, None)
+            .is_err());
+        assert!(registry
+            .encoding_info_with("x", b"unrecognized", None, None, None)
+            .unwrap()
+            .is_none());
     }
 }

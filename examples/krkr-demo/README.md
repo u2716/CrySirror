@@ -1,11 +1,11 @@
 # KiriKiri API examples
 
-The optional `krkr` feature uses the original pinned Kirakira TJS2 VM.
+CrySirror executes these TJS2 examples through `crysirror-tjs2`.
 Native Layer/Window/Timer calls issue CrySirror Layer/Canvas/clock operations.
 These are self-authored scripts, not complete KAG3 game support.
 
 ```sh
-cargo run -p crysirror-desktop --features krkr -- render \
+cargo run -p crysirror-desktop -- render \
   examples/krkr-demo/metrics.json --font /path/to/licensed/system-font.ttf \
   --output target/verification/krkr-metrics.png
 ```

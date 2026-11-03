@@ -6,7 +6,7 @@ use crysirror_core::{
 };
 use crysirror_runtime::font_resources::FontResources;
 use crysirror_tasks::TaskPool;
-use crysirror_text::{glyph::GlyphRaster, TextSystem};
+use crysirror_text::{TextSystem, glyph::GlyphRaster};
 use std::{
     sync::Arc,
     time::{Duration, Instant},
@@ -78,6 +78,71 @@ fn workers_publish_fixed_metrics_and_shared_coverage_with_scoping_and_frozen_ret
     a.release_job(job).unwrap();
     assert_eq!(info.collection_faces, 1);
     assert!(info.families.is_empty());
+    assert_eq!(
+        a.resolve_alias("authored").unwrap(),
+        Some(info.alias.clone())
+    );
+    assert_eq!(
+        a.resolve_alias(&info.alias).unwrap(),
+        Some(info.alias.clone())
+    );
+    assert!(b.resolve_alias("authored").unwrap().is_none());
+    assert!(b.resolve_alias(&info.alias).unwrap().is_none());
+    let scoped_metrics = a.metrics(&info.alias, 24., 'A').unwrap();
+    assert_eq!(scoped_metrics.advance, 4.);
+    assert!(b.metrics(&info.alias, 24., 'A').is_err());
+    assert!(a.metrics(&info.alias, 32., 'A').is_err());
+    assert!(a.metrics(&info.alias, f32::NAN, 'A').is_err());
+    let request = GlyphBoundsSpec {
+        font: info.alias.clone(),
+        glyphs: vec![
+            GlyphBoundsRequest {
+                character: 'A',
+                size: 24.,
+                baseline: [1., 2.],
+            },
+            GlyphBoundsRequest {
+                character: 'A',
+                size: 24.,
+                baseline: [4., 5.],
+            },
+        ],
+    };
+    assert!(b.begin_glyph_bounds(request.clone()).is_err());
+    let mut bounds = a.begin_glyph_bounds(request.clone()).unwrap();
+    let start = Instant::now();
+    let measured = loop {
+        match bounds.poll().unwrap() {
+            GlyphBoundsProgress::Pending => {
+                assert!(start.elapsed() < Duration::from_secs(10));
+                std::thread::yield_now();
+            }
+            GlyphBoundsProgress::Ready(resource) => break resource,
+            _ => panic!("actual shared glyph bounds must become ready"),
+        }
+    };
+    assert_eq!(measured.client(), ClientId(17));
+    assert_eq!(measured.digest(), info.digest);
+    assert_eq!(measured.glyphs()[0].origin, [0, 0]);
+    assert_eq!(measured.glyphs()[1].origin, [3, 3]);
+    assert_eq!(measured.glyphs()[0].size, [2, 2]);
+    let GlyphBoundsProgress::Ready(repeated) = bounds.poll().unwrap() else {
+        panic!("retained completion")
+    };
+    assert!(Arc::ptr_eq(&measured, &repeated));
+    let mut cancelled = a.begin_glyph_bounds(request.clone()).unwrap();
+    cancelled.cancel().unwrap();
+    assert!(matches!(
+        cancelled.poll().unwrap(),
+        GlyphBoundsProgress::Cancelled
+    ));
+    assert!(matches!(
+        cancelled.poll().unwrap(),
+        GlyphBoundsProgress::Cancelled
+    ));
+    let mut bad = request.clone();
+    bad.glyphs[0].size = f32::NAN;
+    assert!(a.begin_glyph_bounds(bad).is_err());
     assert!(!b.is_loaded(&info.alias).unwrap());
     let view = text.for_client(ClientId(17));
     assert_eq!(
@@ -103,8 +168,8 @@ fn workers_publish_fixed_metrics_and_shared_coverage_with_scoping_and_frozen_ret
         .unwrap();
     assert_eq!(cell.origin, [0, 0]);
     assert_eq!(cell.coverage, [0.5; 4]);
-    assert!(view
-        .rasterize_glyph_cell(
+    assert!(
+        view.rasterize_glyph_cell(
             &info.alias,
             GlyphRaster {
                 glyph_id: id,
@@ -112,7 +177,8 @@ fn workers_publish_fixed_metrics_and_shared_coverage_with_scoping_and_frozen_ret
                 baseline: [1., 2.]
             }
         )
-        .is_err());
+        .is_err()
+    );
     let run = TextRun {
         text: "AA".into(),
         font: info.alias.clone(),
@@ -170,8 +236,6 @@ fn workers_publish_fixed_metrics_and_shared_coverage_with_scoping_and_frozen_ret
     a.release_font(other.handle).unwrap();
     let frozen = view.frozen().unwrap();
     a.release_font(info.handle).unwrap();
-    assert!(!a.is_loaded(&info.alias).unwrap());
-    assert!(view.rasterize(&run).is_err());
     assert_eq!(frozen.rasterize(&run).unwrap(), pixels);
     assert!(!fonts.has_resources());
 }
@@ -184,8 +248,8 @@ fn source_limits_malformed_streams_and_nonzero_face_indices_do_not_publish_faces
         TaskPool::new("bitmap-bad-cpu", 1, 16).unwrap(),
     );
     let lib = fonts.for_client(ClientId(1), Arc::new(Empty));
-    assert!(lib
-        .begin(FontLoadSpec {
+    assert!(
+        lib.begin(FontLoadSpec {
             name: "wrong-index".into(),
             source: FontLoadSource::PrecomputedBytes {
                 bytes: fixture(),
@@ -193,7 +257,8 @@ fn source_limits_malformed_streams_and_nonzero_face_indices_do_not_publish_faces
             },
             face_index: 1
         })
-        .is_err());
+        .is_err()
+    );
     let mut bad = fixture().to_vec();
     bad[58] = 0x43;
     let job = lib

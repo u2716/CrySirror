@@ -2,11 +2,14 @@
 mod audio;
 mod audio_asset;
 mod buttons;
+mod cg_catalog;
 mod cursor;
 mod events;
 mod input;
 mod movie;
 pub(crate) mod object_movie;
+mod capture;
+pub(crate) mod object_string;
 mod presentation;
 mod proc;
 use crate::{
@@ -115,6 +118,7 @@ struct Machine {
     io: io_fs::State,
     inputs: crysirror_scene::input_buffer::InputInbox,
     pump_continuation: bool,
+    native_frame_now: Option<u64>,
     now_ms: u64,
     event_cursors: BTreeMap<events::Key, events::Record>,
     event_frame: Option<events::Frame>,
@@ -130,6 +134,10 @@ pub struct SiglusVm {
     focus_observation: Option<bool>,
     buttons: buttons::Buttons,
     object_movies: object_movie::ObjectMovies,
+    object_strings: object_string::ObjectStrings,
+    capture: capture::FrameCapture,
+    catalog_job: Option<crysirror_tasks::Task<Arc<crysirror_resource::cg_catalog::CgCatalog>>>,
+    catalog_pool: Option<crysirror_tasks::TaskPool>,
 }
 fn err(e: impl std::fmt::Display) -> Error {
     Error::Io(format!("{e:#}"))
@@ -159,6 +167,7 @@ impl SiglusVm {
                     crysirror_core::input_buffer::InputBuffer::new(client.0, 1, 256)?,
                 ),
                 pump_continuation: false,
+                native_frame_now: None,
                 now_ms: 0,
                 event_cursors: BTreeMap::new(),
                 event_frame: None,
@@ -172,6 +181,10 @@ impl SiglusVm {
             focus_observation: None,
             buttons: Default::default(),
             object_movies: Default::default(),
+            object_strings: Default::default(),
+            capture: Default::default(),
+            catalog_job: None,
+            catalog_pool: None,
         })
     }
     fn path(key: &str) -> Result<VfsPath> {
@@ -374,12 +387,14 @@ impl SiglusVm {
             let mut vm = SceneVm::new(stream, ctx);
             vm.install_initial_scene_pck(pck, String::new());
             vm.restart_scene_name(&name, entry_z)?;
+            vm.ctx.global_save_pending = true;
             vm
         };
         vm.cfg.max_steps = 1_000_000;
         vm.ctx.globals.script.cursor_no = cursor::default_no(&vm.ctx)?;
         vm.engine_validate()?;
         self.state.vm = Some(vm);
+        self.begin_catalog(host)?;
         Ok(())
     }
     fn resolve_io(
@@ -392,6 +407,14 @@ impl SiglusVm {
             self.fetch(host, &key)?;
         }
         for key in probes {
+            if let Some(name) = key.strip_prefix("font:") {
+                let fonts = host
+                    .font_library(ClientId(self.state.client))
+                    .map_err(err)?;
+                let exists = fonts.resolve_alias(name).map_err(err)?.is_some();
+                self.state.io.probes.insert(key, exists);
+                continue;
+            }
             if key == "asset/" || key == "save/" {
                 let mount = if key == "asset/" {
                     Mount::Asset
@@ -425,37 +448,67 @@ impl SiglusVm {
     }
     /// Capability retry fence for native frame callbacks. Restore clocks and
     /// callback state before retry, without delivering the input edge twice.
-    fn tick_native_frame(&mut self, host: &mut dyn HostServices) -> Result<()> {
-        self.commit_button_inputs()?;
+    fn tick_native_frame(&mut self, host: &mut dyn HostServices) -> Result<bool> {
+        if self.state.native_frame_now.is_none() {
+            self.commit_button_inputs()?;
+            self.state.native_frame_now = Some(self.state.now_ms);
+        }
+        let moment = self.state.native_frame_now.unwrap();
         let before = self.state.vm.as_ref().unwrap().clone();
         let mut io_before = self.state.io.clone();
         for _ in 0..32 {
             self.state.io.missing.clear();
             self.state.io.pending_probes.clear();
+            self.state.io.pending_texts.clear();
             self.state.io.writes.clear();
-            let result = io_fs::scoped(&mut self.state.io, || {
-                self.state.vm.as_mut().unwrap().tick_frame()
+            self.state.io.removes.clear();
+            self.state.io.logs.clear();
+            let result = platform_time::scoped(moment, || {
+                io_fs::scoped(&mut self.state.io, || {
+                    self.state.vm.as_mut().unwrap().tick_frame()
+                })
             });
-            if !self.state.io.missing.is_empty() || !self.state.io.pending_probes.is_empty() {
+            if !self.state.io.missing.is_empty()
+                || !self.state.io.pending_probes.is_empty()
+                || !self.state.io.pending_texts.is_empty()
+                || self.state.io.frame_capture_requested
+            {
                 self.state.vm = Some(before.clone());
                 let keys = std::mem::take(&mut self.state.io.missing);
                 let probes = std::mem::take(&mut self.state.io.pending_probes);
+                let texts = std::mem::take(&mut self.state.io.pending_texts);
+                let capture = std::mem::take(&mut self.state.io.frame_capture_requested);
                 self.state.io = io_before.clone();
                 self.resolve_io(host, keys, probes)?;
+                self.state.io.pending_texts = texts;
+                if !self.poll_strings(host)? {
+                    return Ok(false);
+                }
+                if capture && !self.poll_frame_capture(host)? {
+                    return Ok(false);
+                }
                 io_before = self.state.io.clone();
                 continue;
             }
             result?;
             self.state.vm.as_ref().unwrap().engine_reject_unknown()?;
             self.sync_native_proc_requests()?;
+            self.commit_logs(host)?;
             for (key, bytes) in std::mem::take(&mut self.state.io.writes) {
                 host.write_atomic(ClientId(self.state.client), &Self::path(&key)?, &bytes)
                     .map_err(err)?;
             }
-            return Ok(());
+            for key in std::mem::take(&mut self.state.io.removes) {
+                host.remove(ClientId(self.state.client), &Self::path(&key)?)
+                    .map_err(err)?;
+            }
+            self.state.native_frame_now = None;
+            self.retire_strings()?;
+            return Ok(true);
         }
         anyhow::bail!("native frame callback resource retry limit")
     }
+
     fn execute(
         &mut self,
         host: &mut dyn HostServices,
@@ -474,6 +527,12 @@ impl SiglusVm {
         platform_time::scoped(now, || -> Result<VmYield> {
             if self.state.vm.is_none() {
                 self.boot(host)?;
+            }
+            if !self.poll_catalog()? {
+                return Ok(VmYield::BudgetExhausted);
+            }
+            if !self.poll_strings(host)? || !self.hydrate_strings(host)? {
+                return Ok(VmYield::BudgetExhausted);
             }
             self.focus_observation = host
                 .window_focused(ClientId(self.state.client))
@@ -495,7 +554,8 @@ impl SiglusVm {
             let resumed_events = self.state.event_frame.is_some();
             let has_audio = {
                 let vm = self.state.vm.as_ref().unwrap();
-                !vm.ctx.bgm.pending.is_empty()
+                !vm.ctx.audio.pending.is_empty()
+                    || !vm.ctx.bgm.pending.is_empty()
                     || vm.ctx.pcm.pending()
                     || vm.ctx.se.pending()
                     || !vm.ctx.koe.pending.is_empty()
@@ -506,16 +566,29 @@ impl SiglusVm {
                     return Ok(VmYield::BudgetExhausted);
                 }
             }
-            if !resumed_events && !self.state.pump_continuation {
-                self.sync_audio(host)?;
-                crate::message::sync_progress(
-                    &mut self.state.vm.as_mut().unwrap().ctx,
-                    ClientId(self.state.client),
-                    host,
-                )?;
-                self.apply_queued_input(host)?;
-                self.state.vm.as_mut().unwrap().begin_script_proc_pump();
-                self.tick_native_frame(host)?;
+            self.poll_system_messagebox(host)?;
+            if (!resumed_events && !self.state.pump_continuation)
+                || self.state.native_frame_now.is_some()
+            {
+                if self.state.native_frame_now.is_none() {
+                    self.sync_audio(host)?;
+                    crate::message::sync_progress(
+                        &mut self.state.vm.as_mut().unwrap().ctx,
+                        ClientId(self.state.client),
+                        host,
+                    )?;
+                    self.apply_queued_input(host)?;
+                    crate::message::auto_advance(
+                        &mut self.state.vm.as_mut().unwrap().ctx,
+                        ClientId(self.state.client),
+                        host,
+                    )?;
+                    self.state.vm.as_mut().unwrap().begin_script_proc_pump();
+                }
+                if !self.tick_native_frame(host)? {
+                    self.publish(host)?;
+                    return Ok(VmYield::BudgetExhausted);
+                }
                 self.begin_event_frame()?;
             }
             // A blocked native wait still supplied this frame's clock samples.
@@ -544,22 +617,47 @@ impl SiglusVm {
                     let generation = self.state.vm.as_ref().unwrap().proc_generation();
                     self.state.io.missing.clear();
                     self.state.io.pending_probes.clear();
+                    self.state.io.pending_texts.clear();
                     self.state.io.writes.clear();
+                    self.state.io.removes.clear();
+                    self.state.io.logs.clear();
                     let result = io_fs::scoped(&mut self.state.io, || {
                         self.state.vm.as_mut().unwrap().step()
                     });
-                    if !self.state.io.missing.is_empty() || !self.state.io.pending_probes.is_empty()
+                    if !self.state.io.missing.is_empty()
+                        || !self.state.io.pending_probes.is_empty()
+                        || !self.state.io.pending_texts.is_empty()
+                        || self.state.io.frame_capture_requested
                     {
                         self.state.vm = Some(before.clone());
                         let keys = std::mem::take(&mut self.state.io.missing);
                         let probes = std::mem::take(&mut self.state.io.pending_probes);
+                        let texts = std::mem::take(&mut self.state.io.pending_texts);
+                        let capture = std::mem::take(&mut self.state.io.frame_capture_requested);
                         self.state.io = io_before.clone();
                         self.resolve_io(host, keys, probes)?;
+                        self.state.io.pending_texts = texts;
+                        if !self.poll_strings(host)? {
+                            self.state.pump_continuation = true;
+                            self.publish(host)?;
+                            return Ok(VmYield::BudgetExhausted);
+                        }
+                        if capture && !self.poll_frame_capture(host)? {
+                            self.state.pump_continuation = true;
+                            return Ok(VmYield::BudgetExhausted);
+                        }
                         io_before = self.state.io.clone();
                         continue;
                     }
                     result?;
+                    self.state.io.frame_capture = None;
                     self.sync_native_proc_requests()?;
+                    self.commit_logs(host)?;
+                    if before.ctx.native_media_revision
+                        != self.state.vm.as_ref().unwrap().ctx.native_media_revision
+                    {
+                        self.retire_strings()?;
+                    }
                     self.flush_movie(host)?;
                     if !self.sync_object_movies(host)? {
                         self.state.pump_continuation = true;
@@ -578,6 +676,11 @@ impl SiglusVm {
                         self.state.event_frame = None;
                         self.state.event_clock_ms = Some(self.state.now_ms);
                         self.discard_queued_input()?;
+                        self.reset_strings();
+                        if !self.hydrate_strings(host)? {
+                            self.state.pump_continuation = true;
+                            return Ok(VmYield::BudgetExhausted);
+                        }
                     }
                     let vm = self.state.vm.as_mut().unwrap();
                     vm.engine_reject_unknown()?;
@@ -585,7 +688,12 @@ impl SiglusVm {
                         host.write_atomic(ClientId(self.state.client), &Self::path(&key)?, &bytes)
                             .map_err(err)?;
                     }
-                    if !vm.ctx.bgm.pending.is_empty()
+                    for key in std::mem::take(&mut self.state.io.removes) {
+                        host.remove(ClientId(self.state.client), &Self::path(&key)?)
+                            .map_err(err)?;
+                    }
+                    if !vm.ctx.audio.pending.is_empty()
+                        || !vm.ctx.bgm.pending.is_empty()
                         || vm.ctx.pcm.pending()
                         || vm.ctx.se.pending()
                         || !vm.ctx.koe.pending.is_empty()
@@ -632,7 +740,24 @@ impl SiglusVm {
             Ok(VmYield::BudgetExhausted)
         })
     }
+    fn commit_logs(&mut self, host: &mut dyn HostServices) -> Result<()> {
+        for message in std::mem::take(&mut self.state.io.logs) {
+            let receipt = host
+                .append_log(ClientId(self.state.client), &message)
+                .map_err(err)?;
+            ensure!(
+                receipt.client == ClientId(self.state.client) && receipt.sequence != 0,
+                "native engine log receipt ownership/sequence"
+            );
+        }
+        Ok(())
+    }
     fn publish(&mut self, host: &mut dyn HostServices) -> Result<()> {
+        // Reclaim FREE/INIT declarations at the owner publish boundary. Never
+        // discard receipts that an uncommitted callback still needs to replay.
+        if self.state.native_frame_now.is_none() && !self.object_strings.preparing() {
+            self.retire_strings()?;
+        }
         self.apply_activity_observation();
         self.sync_presentation(host)?;
         self.sync_cursor(host)?;
@@ -646,6 +771,7 @@ impl SiglusVm {
                     &mut self.state.published,
                     &mut self.buttons.published,
                     &self.object_movies.pictures,
+                    &self.object_strings,
                     host,
                 )
             });
@@ -747,6 +873,8 @@ impl SiglusVm {
             self.state.event_frame = None;
             self.state.event_clock_ms = Some(self.state.now_ms);
             self.state.pump_continuation = false;
+            self.state.native_frame_now = None;
+            self.reset_strings();
             self.discard_queued_input()?;
         }
         result
@@ -768,6 +896,7 @@ impl SiglusVm {
         if let Some(vm) = &self.state.vm {
             value["activity"] = serde_json::json!({"window_focus":self.focus_observation,"effective_active":vm.ctx.globals.system.active_flag,"no_window_policy":"active-offscreen-host"});
             value["optical_disc_check"] = serde_json::json!({"policy":self.state.optical_disc_policy,"applicability":"not-applicable","once_requests":vm.ctx.globals.system.dummy_checks.len(),"authentication_performed":false});
+            value["font_selection"] = vm.ctx.ui.font_selection.as_ref().map(|f|serde_json::json!({"requested":f.requested,"alias":f.alias,"fallback":f.fallback})).unwrap_or(serde_json::Value::Null);
             value["pcmch"] = vm.ctx.pcm.channels.inspect();
             value["koe"] = serde_json::json!({"number":vm.ctx.koe.current_no(),"compression_percent":vm.ctx.koe.rate(),"volume":vm.ctx.koe.volume_raw(),"cached":vm.ctx.koe.bindings.len(),"message_number":vm.ctx.globals.script.cur_koe_no,"message_character":vm.ctx.globals.script.cur_chr_no,"is_ex":vm.ctx.globals.sound_routing.koe_ex_flag});
             value["bgm"] = serde_json::json!({"name":vm.ctx.bgm.current_name(),"volume":vm.ctx.bgm.volume_raw(),"state":vm.ctx.bgm.check_state(),"looping":vm.ctx.bgm.save_loop_flag(),"paused":vm.ctx.bgm.save_pause_flag(),"delay_ms":vm.ctx.bgm.save_delay_time_ms(),"listened":vm.ctx.globals.bgm_table_flags});
@@ -780,7 +909,7 @@ impl VmAdapter for SiglusVm {
         "siglus"
     }
     fn snapshot_schema(&self) -> u32 {
-        11
+        16
     }
     fn step(
         &mut self,
@@ -791,6 +920,9 @@ impl VmAdapter for SiglusVm {
         self.execute(host, input, budget).map_err(err)
     }
     fn snapshot(&self) -> crysirror_core::Result<Vec<u8>> {
+        if self.catalog_job.is_some() {
+            return Err(Error::Unsupported("Siglus catalogue preparation snapshot"));
+        }
         if self.buttons.pending() {
             return Err(Error::Unsupported(
                 "Siglus pending native UI intent snapshot",
@@ -834,11 +966,30 @@ impl VmAdapter for SiglusVm {
         if state.inputs.0.client() != state.client
             || state.inputs.0.observed_time() > state.now_ms
             || (state.pump_continuation && state.event_frame.is_some())
+            || state
+                .native_frame_now
+                .is_some_and(|time| time > state.now_ms)
         {
             return Err(Error::SnapshotMismatch("native input/continuation"));
         }
         Self::validate_event_state(&state).map_err(err)?;
         if let Some(vm) = &state.vm {
+            if vm.ctx.tables.cg_flags.len() > 1_048_576 {
+                return Err(Error::SnapshotMismatch("native CG snapshot flag count"));
+            }
+            if let Some(catalog) = &vm.ctx.tables.cg_catalog {
+                if catalog.entries.len() > crysirror_resource::cg_catalog::MAX_CATALOG_ENTRIES
+                    || catalog.entries.iter().any(|entry| {
+                        entry.flag_no >= 1_048_576
+                            || entry.name.len() > 96
+                            || !(0..=5).contains(&entry.code_count)
+                    })
+                {
+                    return Err(Error::SnapshotMismatch(
+                        "native CG snapshot catalogue layout",
+                    ));
+                }
+            }
             if vm.ctx.globals.mov.file_name.is_some() || object_movie::has_movies(&vm.ctx) {
                 return Err(Error::Unsupported(
                     "Siglus Movie runtime resource reconstruction",
@@ -867,8 +1018,10 @@ impl VmAdapter for SiglusVm {
             vm.ctx.se.rebind().map_err(err)?;
         }
         self.events.invalidate();
+        self.catalog_job = None;
         self.state = state;
         self.pending_audio = None;
+        self.object_strings = Default::default();
         self.cursors = Default::default();
         self.presentation = Default::default();
         self.focus_observation = None;
@@ -878,7 +1031,8 @@ impl VmAdapter for SiglusVm {
     fn restore_resources(&mut self, host: &mut dyn HostServices) -> crysirror_core::Result<()> {
         if let Some(vm) = self.state.vm.as_mut() {
             vm.ctx.images.published.clear();
-            for (index, image) in vm.ctx.images.images.iter().enumerate() {
+            let images = vm.ctx.images.images.clone();
+            for (index, image) in images.iter().enumerate() {
                 let path = host.upload_rgba(
                     ClientId(self.state.client),
                     index as u32,
@@ -914,6 +1068,9 @@ impl VmAdapter for SiglusVm {
 
 #[cfg(test)]
 mod verification_tests {
+    mod object_clip_tests;
+    mod object_lifetime_tests;
+    mod object_string_tests;
     use super::*;
     use crysirror_core::{
         service::FileSystem,
@@ -925,6 +1082,11 @@ mod verification_tests {
         files: BTreeMap<String, Vec<u8>>,
         scene: SceneState,
         engine: crysirror_scene::EngineSystems,
+        logs: crysirror_core::service::LogBook,
+        pointer_activity: Option<u64>,
+        glyph_pending: Arc<std::sync::atomic::AtomicBool>,
+        glyph_requests: Arc<std::sync::Mutex<Vec<crysirror_core::service::GlyphBoundsSpec>>>,
+        audio: crysirror_audio::channels::ChannelAudio,
     }
     fn key(path: &VfsPath) -> String {
         format!("{:?}/{}", path.mount(), path.relative())
@@ -953,6 +1115,161 @@ mod verification_tests {
         }
     }
     impl HostServices for Host {
+        fn submit_audio(
+            &mut self,
+            client: ClientId,
+            request: crysirror_core::service::AudioRequest,
+        ) -> crysirror_core::Result<()> {
+            if client != ClientId(1) {
+                return Err(Error::NotFound);
+            }
+            self.audio.submit(client.0, request).map_err(err)
+        }
+        fn font_library(
+            &mut self,
+            client: ClientId,
+        ) -> crysirror_core::Result<Arc<dyn crysirror_core::service::FontLibrary>> {
+            use crysirror_core::service::*;
+            if client != ClientId(1) {
+                return Err(Error::NotFound);
+            }
+            // Deterministic adapter contract only; real font lookup/metrics are
+            // verified independently by shared Runtime tests and system fonts.
+            struct MetricsFonts {
+                pending: Arc<std::sync::atomic::AtomicBool>,
+                requests: Arc<std::sync::Mutex<Vec<GlyphBoundsSpec>>>,
+            }
+            impl FontLibrary for MetricsFonts {
+                fn begin(&self, _: FontLoadSpec) -> crysirror_core::Result<FontJob> {
+                    Err(Error::Unsupported("fixture font loading"))
+                }
+                fn status(&self, _: FontJob) -> crysirror_core::Result<FontLoadState> {
+                    Err(Error::NotFound)
+                }
+                fn resolve(&self, _: &str) -> crysirror_core::Result<Option<FontInfo>> {
+                    Err(Error::Unsupported("fixture font leases"))
+                }
+                fn resolve_alias(&self, name: &str) -> crysirror_core::Result<Option<String>> {
+                    Ok(match name {
+                        "NativeTestFamily" | "message-font-alt" => Some("message-font-alt".into()),
+                        "message-font" | "default" => Some(name.into()),
+                        _ => None,
+                    })
+                }
+                fn metrics(
+                    &self,
+                    alias: &str,
+                    size: f32,
+                    _: char,
+                ) -> crysirror_core::Result<FontMetrics> {
+                    if !size.is_finite() || !(1.0..=512.0).contains(&size) {
+                        return Err(Error::Invalid("fixture font size"));
+                    }
+                    let ascent = match alias {
+                        "message-font-alt" => size * 0.5,
+                        "message-font" | "default" => size * 0.75,
+                        _ => return Err(Error::NotFound),
+                    };
+                    Ok(FontMetrics {
+                        ascent,
+                        descent: ascent - size,
+                        advance: size,
+                    })
+                }
+                fn begin_glyph_bounds(
+                    &self,
+                    spec: GlyphBoundsSpec,
+                ) -> crysirror_core::Result<Box<dyn GlyphBoundsQuery>> {
+                    // Deliberately controllable contract receipt. Independent
+                    // Runtime tests exercise the actual font worker/pixels.
+                    struct Bounds {
+                        font: String,
+                        glyphs: Vec<GlyphBounds>,
+                    }
+                    impl GlyphBoundsResource for Bounds {
+                        fn client(&self) -> ClientId {
+                            ClientId(1)
+                        }
+                        fn font(&self) -> &str {
+                            &self.font
+                        }
+                        fn digest(&self) -> &str {
+                            "authored-contract-bounds"
+                        }
+                        fn glyphs(&self) -> &[GlyphBounds] {
+                            &self.glyphs
+                        }
+                    }
+                    struct Query {
+                        pending: Arc<std::sync::atomic::AtomicBool>,
+                        resource: Arc<Bounds>,
+                        cancelled: bool,
+                    }
+                    impl GlyphBoundsQuery for Query {
+                        fn poll(&mut self) -> crysirror_core::Result<GlyphBoundsProgress> {
+                            Ok(if self.cancelled {
+                                GlyphBoundsProgress::Cancelled
+                            } else if self.pending.load(std::sync::atomic::Ordering::SeqCst) {
+                                GlyphBoundsProgress::Pending
+                            } else {
+                                GlyphBoundsProgress::Ready(self.resource.clone())
+                            })
+                        }
+                        fn cancel(&mut self) -> crysirror_core::Result<()> {
+                            self.cancelled = true;
+                            Ok(())
+                        }
+                    }
+                    let glyphs = spec
+                        .glyphs
+                        .iter()
+                        .map(|g| GlyphBounds {
+                            glyph_id: g.character as u32,
+                            origin: [-1, 0],
+                            size: [(g.size / 2.).ceil() as u32, g.size.ceil() as u32],
+                        })
+                        .collect();
+                    self.requests.lock().unwrap().push(spec.clone());
+                    Ok(Box::new(Query {
+                        pending: self.pending.clone(),
+                        resource: Arc::new(Bounds {
+                            font: spec.font,
+                            glyphs,
+                        }),
+                        cancelled: false,
+                    }))
+                }
+                fn is_loaded(&self, name: &str) -> crysirror_core::Result<bool> {
+                    Ok(self.resolve_alias(name)?.is_some())
+                }
+                fn release_job(&self, _: FontJob) -> crysirror_core::Result<()> {
+                    Err(Error::NotFound)
+                }
+                fn release_font(&self, _: FontHandle) -> crysirror_core::Result<()> {
+                    Err(Error::NotFound)
+                }
+            }
+            Ok(Arc::new(MetricsFonts {
+                pending: self.glyph_pending.clone(),
+                requests: self.glyph_requests.clone(),
+            }))
+        }
+        fn pointer_activity(&self, client: ClientId) -> crysirror_core::Result<Option<u64>> {
+            if client != ClientId(1) {
+                return Err(Error::NotFound);
+            }
+            Ok(self.pointer_activity)
+        }
+        fn append_log(
+            &mut self,
+            client: ClientId,
+            message: &str,
+        ) -> crysirror_core::Result<crysirror_core::service::LogReceipt> {
+            if client != ClientId(1) {
+                return Err(Error::NotFound);
+            }
+            self.logs.append(client, self.now, message)
+        }
         fn storage(
             &mut self,
             client: ClientId,
@@ -1084,6 +1401,39 @@ mod verification_tests {
             crate::fixture::pack_scene(&crate::fixture::key_wait_scene(savepoint)),
         );
         (SiglusVm::new(ClientId(1), config).unwrap(), host)
+    }
+    #[test]
+    fn native_debug_logs_commit_to_engine_once_across_quotas_and_restore() {
+        use crate::runtime::constants::{cd, fm};
+        let mut scene = crate::fixture::SceneBuilder::default();
+        scene.command_string(&[92, 11], 1, "友達", &[], fm::VOID);
+        scene.command(&[92, 11], 0, &[-12], fm::VOID);
+        scene.code.push(cd::EOF);
+        let (mut vm, mut host) = machine(false);
+        host.files.insert(
+            "Asset/Scene.pck".into(),
+            crate::fixture::pack_scene(&scene.finish()),
+        );
+        vm.boot(&mut host).unwrap();
+        vm.state.vm.as_mut().unwrap().ctx.globals.system.debug_flag = true;
+        for tick in 0..100 {
+            host.now = tick * 16;
+            if vm.step(&mut host, InputFrame::default(), 1).unwrap() == VmYield::Halted {
+                break;
+            }
+        }
+        assert_eq!(vm.diagnostics()["halted"], true);
+        let records = host.logs.snapshot(ClientId(1));
+        assert_eq!(records.records.len(), 2);
+        assert_eq!(records.records[0].message, "(entry.ss line=-1)\t友達");
+        assert_eq!(records.records[1].message, "(entry.ss line=-1)\t-12");
+        assert!(host.logs.snapshot(ClientId(2)).records.is_empty());
+        assert!(vm.state.io.logs.is_empty());
+        assert!(!host.files.keys().any(|name| name.starts_with("Save/")));
+        let saved = vm.snapshot().unwrap();
+        vm.restore(&saved).unwrap();
+        vm.step(&mut host, InputFrame::default(), 100).unwrap();
+        assert_eq!(host.logs.snapshot(ClientId(1)), records);
     }
     #[test]
     fn scheduling_quotas_resume_one_native_frame_and_preserve_input_edges() {
@@ -1226,7 +1576,7 @@ mod verification_tests {
             false
         );
         assert_eq!(diag["optical_disc_check"]["policy"], OPTICAL_DISC_POLICY);
-        assert_eq!(vm.snapshot_schema(), 11);
+        assert_eq!(vm.snapshot_schema(), 16);
         let saved = vm.snapshot().unwrap();
         vm.restore(&saved).unwrap();
         let mut wrong: Machine = binary().deserialize(&saved).unwrap();
@@ -1378,6 +1728,404 @@ mod verification_tests {
         vm.import_original_save(&original).unwrap();
         assert_eq!(vm.diagnostics()["halted"], false);
         assert_eq!(vm.diagnostics()["int_stack"], serde_json::json!([1]));
+    }
+    #[test]
+    fn native_size_queries_accept_original_pattern_overload_and_2d_depth() {
+        use crate::runtime::{
+            constants::{cd, fm},
+            forms::codes,
+        };
+        let (mut vm, mut host) = machine(false);
+        let mut scene = crate::fixture::SceneBuilder::default();
+        let object = [
+            codes::ELM_GLOBAL_FRONT,
+            codes::ELM_STAGE_OBJECT,
+            codes::ELM_ARRAY,
+            0,
+        ];
+        let chain = |tail: &[i32]| [object.as_slice(), tail].concat();
+        scene.command_string(
+            &chain(&[codes::ELM_OBJECT_CREATE]),
+            1,
+            "pixel",
+            &[1],
+            fm::VOID,
+        );
+        scene.command(&chain(&[codes::ELM_OBJECT_GET_SIZE_X]), 0, &[], fm::INT);
+        scene.command(&chain(&[codes::ELM_OBJECT_GET_SIZE_Y]), 1, &[0], fm::INT);
+        scene.command(&chain(&[codes::ELM_OBJECT_GET_SIZE_Z]), 1, &[0], fm::INT);
+        scene.command(&chain(&[codes::ELM_OBJECT_GET_SIZE_X]), 1, &[4], fm::INT);
+        scene.command(&chain(&[codes::ELM_OBJECT_GET_SIZE_X]), 1, &[-1], fm::INT);
+        scene.code.push(cd::EOF);
+        host.files.insert(
+            "Asset/Scene.pck".into(),
+            crate::fixture::pack_scene(&scene.finish()),
+        );
+        host.files
+            .insert("Asset/g00/pixel.g00".into(), crate::fixture::pixel_g00());
+        assert_eq!(
+            vm.step(&mut host, InputFrame::default(), 1000).unwrap(),
+            VmYield::Halted
+        );
+        assert_eq!(
+            vm.diagnostics()["int_stack"],
+            serde_json::json!([1, 1, 0, 0, 1])
+        );
+    }
+    #[test]
+    fn native_all_events_end_and_check_finish_shared_scalar_and_offset_curves() {
+        use crate::runtime::{
+            constants::{cd, fm},
+            forms::codes,
+        };
+        let (mut vm, mut host) = machine(false);
+        let mut scene = crate::fixture::SceneBuilder::default();
+        let object = [
+            codes::ELM_GLOBAL_FRONT,
+            codes::ELM_STAGE_OBJECT,
+            codes::ELM_ARRAY,
+            0,
+        ];
+        let chain = |tail: &[i32]| [object.as_slice(), tail].concat();
+        scene.command(
+            &chain(&[codes::ELM_OBJECT_CREATE_RECT]),
+            2,
+            &[0, 0, 4, 3, 255, 0, 0, 255, 1, 10, 20],
+            fm::VOID,
+        );
+        scene.command(&chain(&[codes::ELM_OBJECT_TR]), 1, &[0], fm::VOID);
+        scene.command(
+            &chain(&[codes::ELM_OBJECT_TR_EVE, codes::int_event_op::SET]),
+            0,
+            &[255, 100, 0, 0],
+            fm::VOID,
+        );
+        scene.command(
+            &chain(&[
+                codes::ELM_OBJECT_Y_REP_EVE,
+                codes::ELM_ARRAY,
+                0,
+                codes::int_event_op::SET,
+            ]),
+            0,
+            &[10, 100, 0, 0],
+            fm::VOID,
+        );
+        scene.command(
+            &chain(&[codes::ELM_OBJECT_ALL_EVE, codes::ELM_ALLEVENT_CHECK]),
+            0,
+            &[],
+            fm::INT,
+        );
+        scene.command(
+            &chain(&[codes::ELM_OBJECT_ALL_EVE, codes::ELM_ALLEVENT_END]),
+            0,
+            &[],
+            fm::VOID,
+        );
+        scene.command(
+            &chain(&[codes::ELM_OBJECT_ALL_EVE, codes::ELM_ALLEVENT_CHECK]),
+            0,
+            &[],
+            fm::INT,
+        );
+        scene.code.push(cd::EOF);
+        host.files.insert(
+            "Asset/Scene.pck".into(),
+            crate::fixture::pack_scene(&scene.finish()),
+        );
+        assert_eq!(
+            vm.step(&mut host, InputFrame::default(), 1000).unwrap(),
+            VmYield::Halted
+        );
+        assert_eq!(vm.diagnostics()["int_stack"], serde_json::json!([1, 0]));
+        let layer = host.engine.layers.get(ClientId(1), 0x80000000).unwrap();
+        assert_eq!(layer.opacity, 255);
+        assert_eq!(layer.rect, [10., 30., 4., 3.]);
+    }
+    #[test]
+    fn native_object_flags_use_shared_packed_fields_and_keep_child_state_across_restore() {
+        use crate::runtime::{
+            constants::{cd, fm},
+            forms::codes,
+        };
+        let mut scene = crate::fixture::SceneBuilder::default();
+        scene.command(
+            &[codes::ELM_GLOBAL_FRONT, codes::ELM_STAGE_CREATE_OBJECT],
+            0,
+            &[1],
+            fm::VOID,
+        );
+        let root = vec![codes::ELM_GLOBAL_FRONT, codes::ELM_STAGE_OBJECT, -1, 0];
+        let chain =
+            |base: &[i32], tail: &[i32]| base.iter().chain(tail).copied().collect::<Vec<_>>();
+        let flags = chain(&root, &[codes::ELM_OBJECT_F]);
+        scene.command(
+            &chain(&flags, &[codes::ELM_INTLIST_RESIZE]),
+            0,
+            &[2],
+            fm::VOID,
+        );
+        scene.command(
+            &chain(&flags, &[codes::ELM_INTLIST_SETS]),
+            0,
+            &[0, 0x1234_5678, -1],
+            fm::VOID,
+        );
+        scene.command(&chain(&flags, &[-1, 1]), 0, &[], fm::INT);
+        scene.command(
+            &chain(&flags, &[codes::ELM_INTLIST_BIT8, -1, 3]),
+            0,
+            &[],
+            fm::INT,
+        );
+        scene.command(
+            &chain(
+                &root,
+                &[codes::ELM_OBJECT_CHILD, codes::ELM_OBJECTLIST_RESIZE],
+            ),
+            0,
+            &[1],
+            fm::VOID,
+        );
+        let child = chain(
+            &root,
+            &[codes::ELM_OBJECT_CHILD, -1, 0, codes::ELM_OBJECT_F],
+        );
+        scene.command(
+            &chain(&child, &[codes::ELM_INTLIST_RESIZE]),
+            0,
+            &[1],
+            fm::VOID,
+        );
+        scene.command(&chain(&child, &[-1, 0]), 1, &[77], fm::VOID);
+        scene.command(&[codes::ELM_GLOBAL_DISP], 0, &[], fm::VOID);
+        scene.command(
+            &chain(&flags, &[codes::ELM_INTLIST_CLEAR]),
+            0,
+            &[0, 1],
+            fm::VOID,
+        );
+        scene.command(&chain(&flags, &[-1, 0]), 0, &[], fm::INT);
+        scene.command(&chain(&child, &[-1, 0]), 0, &[], fm::INT);
+        scene.code.push(cd::EOF);
+        let (mut vm, mut host) = machine(false);
+        host.files.insert(
+            "Asset/Scene.pck".into(),
+            crate::fixture::pack_scene(&scene.finish()),
+        );
+        vm.step(&mut host, InputFrame::default(), 1000).unwrap();
+        assert_eq!(vm.diagnostics()["int_stack"], serde_json::json!([-1, 0x12]));
+        let saved = vm.snapshot().unwrap();
+        vm.restore(&saved).unwrap();
+        host.now = 16;
+        assert_eq!(
+            vm.step(&mut host, InputFrame::default(), 1000).unwrap(),
+            VmYield::Halted
+        );
+        assert_eq!(
+            vm.diagnostics()["int_stack"],
+            serde_json::json!([-1, 0x12, 0, 77])
+        );
+    }
+    #[test]
+    fn object_frame_action_executes_original_callback_and_finish_across_restore() {
+        use crate::runtime::{
+            constants::{cd, fm, op},
+            forms::codes,
+        };
+        let (mut vm, mut host) = machine(false);
+        let root = [codes::ELM_GLOBAL_FRONT, codes::ELM_STAGE_OBJECT, -1, 52];
+        let chain = |tail: &[i32]| [root.as_slice(), tail].concat();
+        let mut scene = crate::fixture::SceneBuilder::default();
+        scene.command(
+            &chain(&[codes::ELM_OBJECT_CREATE_RECT]),
+            2,
+            &[0, 0, 4, 3, 255, 0, 0, 255, 1, 0, 0],
+            fm::VOID,
+        );
+        scene.element(&chain(&[
+            codes::ELM_OBJECT_FRAME_ACTION,
+            codes::ELM_FRAMEACTION_START,
+        ]));
+        scene.int(32);
+        scene.string("pulse");
+        scene.code.push(cd::COMMAND);
+        for v in [0, 2, fm::STR, fm::INT, 0, fm::VOID] {
+            scene.i32(v);
+        }
+        scene.int(77); // A callback must preserve the suspended caller's stack.
+        scene.command(&[codes::ELM_GLOBAL_TIMEWAIT], 0, &[1000], fm::VOID);
+        scene.code.push(cd::EOF);
+        let callback = scene.code.len();
+        for (id, form) in [codes::FM_FRAMEACTION, codes::FM_OBJECT]
+            .into_iter()
+            .enumerate()
+        {
+            scene.code.push(cd::DEC_PROP);
+            scene.i32(form);
+            scene.i32(id as i32);
+        }
+        scene.code.push(cd::ARG);
+        let g = [codes::ELM_GLOBAL_G, -1, 0];
+        scene.element(&g);
+        scene.command(&g, 0, &[], fm::INT);
+        scene.int(1);
+        scene.code.push(cd::OPERATE_2);
+        scene.i32(fm::INT);
+        scene.i32(fm::INT);
+        scene.code.push(op::PLUS);
+        scene.code.push(cd::COMMAND);
+        for v in [1, 1, fm::INT, 0, fm::VOID] {
+            scene.i32(v);
+        }
+        scene.command(&chain(&[codes::ELM_OBJECT_X]), 1, &[42], fm::VOID);
+        scene.code.push(cd::RETURN);
+        scene.i32(0);
+        let mut bytes = scene.finish();
+        // One original local command table/name, with offsets relative to SCN.
+        let table = bytes.len();
+        bytes.extend((callback as i32).to_le_bytes());
+        let index = bytes.len();
+        bytes.extend(0i32.to_le_bytes());
+        bytes.extend(5i32.to_le_bytes());
+        let name = bytes.len();
+        for w in "pulse".encode_utf16() {
+            bytes.extend(w.to_le_bytes());
+        }
+        for (field, value) in [
+            (19, table),
+            (20, 1),
+            (21, index),
+            (22, 1),
+            (23, name),
+            (24, 1),
+        ] {
+            bytes[field * 4..field * 4 + 4].copy_from_slice(&(value as i32).to_le_bytes());
+        }
+        host.files
+            .insert("Asset/Scene.pck".into(), crate::fixture::pack_scene(&bytes));
+        vm.step(&mut host, InputFrame::default(), 5000).unwrap();
+        let inspect = |vm: &SiglusVm| {
+            let global = &vm.state.vm.as_ref().unwrap().ctx.globals;
+            let stage = global
+                .stage_forms
+                .values()
+                .find(|s| s.object_lists.contains_key(&1))
+                .unwrap();
+            let object = &stage.object_lists[&1][52];
+            (
+                global
+                    .int_lists
+                    .get(&(codes::ELM_GLOBAL_G as u32))
+                    .and_then(|l| l.first())
+                    .copied()
+                    .unwrap_or(0),
+                object.base.x,
+                object.frame_action.cmd_name.clone(),
+            )
+        };
+        host.now = 16;
+        vm.step(&mut host, InputFrame::default(), 5000).unwrap();
+        assert_eq!(inspect(&vm), (1, 42, "pulse".into()));
+        assert_eq!(vm.diagnostics()["int_stack"], serde_json::json!([77]));
+        let saved = vm.snapshot().unwrap();
+        host.now = 32;
+        vm.step(&mut host, InputFrame::default(), 5000).unwrap();
+        assert_eq!(inspect(&vm), (3, 42, String::new()));
+        vm.restore(&saved).unwrap();
+        host.now = 32;
+        vm.step(&mut host, InputFrame::default(), 5000).unwrap();
+        assert_eq!(inspect(&vm), (3, 42, String::new()));
+        assert_eq!(vm.diagnostics()["int_stack"], serde_json::json!([77]));
+    }
+    #[test]
+    fn native_child_all_events_wait_keeps_its_own_identity_across_restore() {
+        use crate::runtime::{
+            constants::{cd, fm},
+            forms::codes,
+        };
+        let (mut vm, mut host) = machine(false);
+        let mut scene = crate::fixture::SceneBuilder::default();
+        let parent = [
+            codes::ELM_GLOBAL_FRONT,
+            codes::ELM_STAGE_OBJECT,
+            codes::ELM_ARRAY,
+            0,
+        ];
+        let child = [
+            parent.as_slice(),
+            &[codes::ELM_OBJECT_CHILD, codes::ELM_ARRAY, 0],
+        ]
+        .concat();
+        let chain = |object: &[i32], tail: &[i32]| [object, tail].concat();
+        scene.command(
+            &chain(
+                &parent,
+                &[codes::ELM_OBJECT_CHILD, codes::ELM_OBJECTLIST_RESIZE],
+            ),
+            0,
+            &[1],
+            fm::VOID,
+        );
+        scene.command(
+            &chain(&child, &[codes::ELM_OBJECT_CREATE_RECT]),
+            2,
+            &[0, 0, 4, 3, 255, 0, 0, 255, 1, 0, 0],
+            fm::VOID,
+        );
+        scene.command(
+            &chain(
+                &parent,
+                &[codes::ELM_OBJECT_X_EVE, codes::int_event_op::SET],
+            ),
+            0,
+            &[500, 1000, 0, 0],
+            fm::VOID,
+        );
+        scene.command(
+            &chain(&child, &[codes::ELM_OBJECT_Y_EVE, codes::int_event_op::SET]),
+            0,
+            &[20, 100, 0, 0],
+            fm::VOID,
+        );
+        scene.command(
+            &chain(
+                &child,
+                &[codes::ELM_OBJECT_ALL_EVE, codes::ELM_ALLEVENT_WAIT],
+            ),
+            0,
+            &[],
+            fm::VOID,
+        );
+        scene.int(77);
+        scene.code.push(cd::EOF);
+        host.files.insert(
+            "Asset/Scene.pck".into(),
+            crate::fixture::pack_scene(&scene.finish()),
+        );
+        vm.step(&mut host, InputFrame::default(), 1000).unwrap();
+        assert_eq!(vm.diagnostics()["halted"], false);
+        assert_eq!(vm.diagnostics()["int_stack"], serde_json::json!([]));
+        host.now = 50;
+        vm.step(&mut host, InputFrame::default(), 1000).unwrap();
+        let saved = vm.snapshot().unwrap();
+        assert_eq!(vm.diagnostics()["halted"], false);
+        host.now = 100;
+        assert_eq!(
+            vm.step(&mut host, InputFrame::default(), 1000).unwrap(),
+            VmYield::Halted
+        );
+        assert_eq!(vm.diagnostics()["int_stack"], serde_json::json!([77]));
+        vm.restore(&saved).unwrap();
+        host.now = 75;
+        vm.step(&mut host, InputFrame::default(), 1000).unwrap();
+        assert_eq!(vm.diagnostics()["halted"], false);
+        host.now = 100;
+        assert_eq!(
+            vm.step(&mut host, InputFrame::default(), 1000).unwrap(),
+            VmYield::Halted
+        );
     }
     #[test]
     fn native_offset_list_event_uses_the_shared_curve_and_layer_origin() {
@@ -1717,6 +2465,486 @@ mod verification_tests {
         );
         (vm, host)
     }
+
+    #[test]
+    fn original_font_name_commands_change_shared_glyph_resource_and_report_native_fallback() {
+        use crate::runtime::{
+            constants::{cd, fm},
+            forms::codes,
+        };
+        let (mut vm, mut host) = plain_message_machine(&[]);
+        let mut scene = crate::fixture::SceneBuilder::default();
+        let script = codes::ELM_GLOBAL_SCRIPT;
+        scene.command_string(
+            &[codes::ELM_GLOBAL_SYSCOM, codes::syscom_op::IS_FONT_EXIST],
+            0,
+            "NativeTestFamily",
+            &[],
+            fm::INT,
+        );
+        scene.command_string(
+            &[codes::ELM_GLOBAL_SYSCOM, codes::syscom_op::IS_FONT_EXIST],
+            0,
+            "AbsentTestFamily",
+            &[],
+            fm::INT,
+        );
+        scene.command(
+            &[script, codes::ELM_SCRIPT_SET_MSG_ASYNC_MODE_ON],
+            0,
+            &[],
+            fm::VOID,
+        );
+        scene.command_string(
+            &[script, codes::ELM_SCRIPT_SET_FONT_NAME],
+            0,
+            "NativeTestFamily",
+            &[],
+            fm::VOID,
+        );
+        scene.string("A");
+        scene.code.push(cd::TEXT);
+        scene.i32(-1);
+        scene.command(&[codes::ELM_GLOBAL_DISP], 0, &[], fm::VOID);
+        scene.command_string(
+            &[script, codes::ELM_SCRIPT_SET_FONT_NAME],
+            0,
+            "AbsentTestFamily",
+            &[],
+            fm::VOID,
+        );
+        scene.command(&[codes::ELM_GLOBAL_DISP], 0, &[], fm::VOID);
+        scene.command(
+            &[script, codes::ELM_SCRIPT_SET_FONT_NAME_DEFAULT],
+            0,
+            &[],
+            fm::VOID,
+        );
+        scene.code.push(cd::EOF);
+        host.files.insert(
+            "Asset/Scene.pck".into(),
+            crate::fixture::pack_scene(&scene.finish()),
+        );
+        vm.step(&mut host, InputFrame::default(), 5000).unwrap();
+        let inspect = |host: &Host| {
+            let layer = host
+                .engine
+                .layers
+                .get(ClientId(1), crate::message::MESSAGE_LAYER)
+                .unwrap();
+            let crysirror_scene::layer::Paint::GlyphRun { font, glyphs, .. } = &layer.paint else {
+                panic!("native text must publish shared GlyphRun")
+            };
+            (font.clone(), glyphs[0].baseline[1])
+        };
+        let selected = inspect(&host);
+        assert_eq!(vm.diagnostics()["int_stack"], serde_json::json!([1, 0]));
+        assert_eq!(selected.0, "message-font-alt");
+        assert_eq!(vm.diagnostics()["font_selection"]["fallback"], false);
+        let saved = vm.snapshot().unwrap();
+        host.now = 16;
+        vm.step(&mut host, InputFrame::default(), 5000).unwrap();
+        let fallback = inspect(&host);
+        assert_eq!(fallback.0, "message-font");
+        assert_eq!(fallback.1 - selected.1, 5.);
+        assert_eq!(
+            vm.diagnostics()["font_selection"]["requested"],
+            "AbsentTestFamily"
+        );
+        assert_eq!(vm.diagnostics()["font_selection"]["fallback"], true);
+        vm.restore(&saved).unwrap();
+        assert!(
+            vm.diagnostics()["font_selection"].is_null(),
+            "resource observations are not serialized as native VM state"
+        );
+        host.now = 16;
+        vm.step(&mut host, InputFrame::default(), 5000).unwrap();
+        assert_eq!(inspect(&host), fallback);
+        host.now = 32;
+        assert_eq!(
+            vm.step(&mut host, InputFrame::default(), 5000).unwrap(),
+            VmYield::Halted
+        );
+        assert_eq!(inspect(&host), fallback);
+        assert_eq!(vm.diagnostics()["font_selection"]["requested"], "");
+        assert_eq!(vm.diagnostics()["font_selection"]["fallback"], false);
+    }
+
+    #[test]
+    fn excall_original_scene_namespace_and_teardown_publish_shared_layers_across_restore() {
+        use crate::runtime::{
+            constants::{cd, fm},
+            forms::codes,
+        };
+        let mut scene = crate::fixture::SceneBuilder::default();
+        let normal = [codes::ELM_GLOBAL_FRONT, codes::ELM_STAGE_OBJECT, -1, 0];
+        let private = [
+            codes::ELM_GLOBAL_EXCALL,
+            codes::ELM_EXCALL_FRONT,
+            codes::ELM_STAGE_OBJECT,
+            -1,
+            0,
+        ];
+        let chain = |base: &[i32], tail: &[i32]| [base, tail].concat();
+        scene.command(
+            &chain(&normal, &[codes::ELM_OBJECT_CREATE_RECT]),
+            2,
+            &[0, 0, 4, 3, 255, 0, 0, 255, 1, 10, 20],
+            fm::VOID,
+        );
+        scene.command(
+            &[codes::ELM_GLOBAL_EXCALL, codes::ELM_EXCALL_ALLOC],
+            0,
+            &[],
+            fm::VOID,
+        );
+        scene.command(
+            &chain(&private, &[codes::ELM_OBJECT_CREATE_RECT]),
+            2,
+            &[0, 0, 4, 3, 0, 255, 0, 255, 1, 30, 40],
+            fm::VOID,
+        );
+        // BACK is a genuine separate native store; it is never drawn as FRONT.
+        let back = [
+            codes::ELM_GLOBAL_EXCALL,
+            codes::ELM_EXCALL_BACK,
+            codes::ELM_STAGE_OBJECT,
+            -1,
+            0,
+        ];
+        scene.command(
+            &chain(&back, &[codes::ELM_OBJECT_CREATE_RECT]),
+            2,
+            &[0, 0, 9, 9, 0, 0, 255, 255, 1, 90, 90],
+            fm::VOID,
+        );
+        let f = [codes::ELM_GLOBAL_EXCALL, codes::ELM_EXCALL_F, -1, 0];
+        scene.command(&f, 1, &[55], fm::VOID);
+        scene.command(&f, 0, &[], fm::INT);
+        scene.command(
+            &[codes::ELM_GLOBAL_EXCALL, codes::ELM_EXCALL_CHECK_ALLOC],
+            0,
+            &[],
+            fm::INT,
+        );
+        scene.element(&chain(
+            &private,
+            &[codes::ELM_OBJECT_FRAME_ACTION, codes::ELM_FRAMEACTION_START],
+        ));
+        scene.int(1000);
+        scene.string("pulse");
+        scene.code.push(cd::COMMAND);
+        for v in [0, 2, fm::STR, fm::INT, 0, fm::VOID] {
+            scene.i32(v);
+        }
+        scene.command(&[codes::ELM_GLOBAL_DISP], 0, &[], fm::VOID);
+        scene.command(
+            &[codes::ELM_GLOBAL_EXCALL, codes::ELM_EXCALL_FREE],
+            0,
+            &[],
+            fm::VOID,
+        );
+        scene.command(
+            &[codes::ELM_GLOBAL_EXCALL, codes::ELM_EXCALL_CHECK_ALLOC],
+            0,
+            &[],
+            fm::INT,
+        );
+        scene.code.push(cd::EOF);
+        let callback = scene.code.len();
+        for (id, form) in [codes::FM_FRAMEACTION, codes::FM_OBJECT]
+            .into_iter()
+            .enumerate()
+        {
+            scene.code.push(cd::DEC_PROP);
+            scene.i32(form);
+            scene.i32(id as i32);
+        }
+        scene.code.push(cd::ARG);
+        let global = [codes::ELM_GLOBAL_G, -1, 0];
+        scene.element(&global);
+        scene.command(&global, 0, &[], fm::INT);
+        scene.int(1);
+        scene.code.push(cd::OPERATE_2);
+        scene.i32(fm::INT);
+        scene.i32(fm::INT);
+        scene.code.push(crate::runtime::constants::op::PLUS);
+        scene.code.push(cd::COMMAND);
+        for value in [1, 1, fm::INT, 0, fm::VOID] {
+            scene.i32(value);
+        }
+        scene.command(&chain(&private, &[codes::ELM_OBJECT_X]), 1, &[42], fm::VOID);
+        scene.code.push(cd::RETURN);
+        scene.i32(0);
+        let mut bytes = scene.finish();
+        let table = bytes.len();
+        bytes.extend((callback as i32).to_le_bytes());
+        let index = bytes.len();
+        bytes.extend(0i32.to_le_bytes());
+        bytes.extend(5i32.to_le_bytes());
+        let name = bytes.len();
+        for word in "pulse".encode_utf16() {
+            bytes.extend(word.to_le_bytes());
+        }
+        for (field, value) in [
+            (19, table),
+            (20, 1),
+            (21, index),
+            (22, 1),
+            (23, name),
+            (24, 1),
+        ] {
+            bytes[field * 4..field * 4 + 4].copy_from_slice(&(value as i32).to_le_bytes());
+        }
+        let (mut vm, mut host) = machine(false);
+        host.files
+            .insert("Asset/Scene.pck".into(), crate::fixture::pack_scene(&bytes));
+        vm.step(&mut host, InputFrame::default(), 5000).unwrap();
+        assert_eq!(vm.diagnostics()["int_stack"], serde_json::json!([55, 1]));
+        let a = host.engine.layers.get(ClientId(1), 0x8000_0000).unwrap();
+        let b = host.engine.layers.get(ClientId(1), 0xc000_0000).unwrap();
+        assert_eq!(a.rect, [10., 20., 4., 3.]);
+        assert_eq!(b.rect, [30., 40., 4., 3.]);
+        assert_eq!(b.order[0] - a.order[0], 20_000);
+        assert_eq!(
+            vm.state.vm.as_ref().unwrap().ctx.globals.stage_forms.len(),
+            2
+        );
+        let saved = vm.snapshot().unwrap();
+        let shared = host.engine.clone();
+        host.now = 16;
+        assert_eq!(
+            vm.step(&mut host, InputFrame::default(), 5000).unwrap(),
+            VmYield::Halted
+        );
+        assert_eq!(vm.diagnostics()["int_stack"], serde_json::json!([55, 1, 0]));
+        assert!(host.engine.layers.get(ClientId(1), 0xc000_0000).is_none());
+        assert!(host.engine.layers.get(ClientId(1), 0x8000_0000).is_some());
+        assert_eq!(
+            vm.state.vm.as_ref().unwrap().ctx.globals.stage_forms.len(),
+            1
+        );
+        let global_count = |vm: &SiglusVm| {
+            vm.state.vm.as_ref().unwrap().ctx.globals.int_lists[&(codes::ELM_GLOBAL_G as u32)][0]
+        };
+        assert_eq!(
+            global_count(&vm),
+            2,
+            "one live-frame callback then the native FREE finish callback before releasing its owner"
+        );
+        vm.restore(&saved).unwrap();
+        host.engine = shared;
+        host.now = 32;
+        assert_eq!(
+            vm.step(&mut host, InputFrame::default(), 5000).unwrap(),
+            VmYield::Halted
+        );
+        assert_eq!(vm.diagnostics()["int_stack"], serde_json::json!([55, 1, 0]));
+        assert!(host.engine.layers.get(ClientId(1), 0xc000_0000).is_none());
+        assert!(host.engine.layers.get(ClientId(1), 0x8000_0000).is_some());
+        assert_eq!(
+            global_count(&vm),
+            2,
+            "restoring the suspended caller must not double-run teardown callbacks"
+        );
+    }
+    #[test]
+    fn global_message_aliases_share_native_block_reveal_and_clear_state() {
+        use crate::runtime::{
+            constants::{cd, fm},
+            forms::codes,
+        };
+        let (mut vm, mut host) = plain_message_machine(&[]);
+        let mut scene = crate::fixture::SceneBuilder::default();
+        scene.command(&[codes::ELM_GLOBAL_MSG_BLOCK], 0, &[], fm::VOID);
+        scene.command(&[codes::ELM_GLOBAL_MSG_PP_BLOCK], 0, &[], fm::VOID);
+        scene.command_string(&[codes::ELM_GLOBAL_PRINT], 0, "AB", &[], fm::VOID);
+        scene.command(&[codes::ELM_GLOBAL_WAIT_MSG], 0, &[], fm::VOID);
+        scene.command(&[codes::ELM_GLOBAL_CLEAR], 0, &[], fm::VOID);
+        scene.command_string(&[codes::ELM_GLOBAL_PRINT], 0, "C", &[], fm::VOID);
+        scene.command(&[codes::ELM_GLOBAL_WAIT_MSG], 0, &[], fm::VOID);
+        scene.code.push(cd::EOF);
+        host.files.insert(
+            "Asset/Scene.pck".into(),
+            crate::fixture::pack_scene(&scene.finish()),
+        );
+        vm.step(&mut host, InputFrame::default(), 5000).unwrap();
+        let ui = &vm.state.vm.as_ref().unwrap().ctx.ui;
+        assert_eq!(ui.message.as_deref(), Some("AB"));
+        assert_eq!(ui.glyphs.len(), 2);
+        assert_eq!(vm.diagnostics()["wait"]["message_reveal"], true);
+        host.now = 100;
+        host.engine.layers.tick(100);
+        vm.step(&mut host, InputFrame::default(), 5000).unwrap();
+        // Original WAIT_MSG creates its own proc boundary even after PRINT's
+        // reveal wait completed; resume that boundary on the next native pass.
+        host.now = 101;
+        vm.step(&mut host, InputFrame::default(), 5000).unwrap();
+        assert_eq!(
+            vm.state.vm.as_ref().unwrap().ctx.ui.message.as_deref(),
+            Some("C")
+        );
+        assert_eq!(vm.state.vm.as_ref().unwrap().ctx.ui.glyphs.len(), 1);
+        host.now = 200;
+        host.engine.layers.tick(100);
+        vm.step(&mut host, InputFrame::default(), 5000).unwrap();
+        host.now = 201;
+        assert_eq!(
+            vm.step(&mut host, InputFrame::default(), 5000).unwrap(),
+            VmYield::Halted
+        );
+    }
+    #[test]
+    fn global_voice_keeps_its_shared_audio_route_without_a_message_profile() {
+        use crate::runtime::{CommandContext, VmCallMeta, forms::codes};
+        let mut ctx = CommandContext::new("asset".into());
+        // Negative original voice means stop/clear the slot, no resource or
+        // message-window profile is required by the existing native audio API.
+        ctx.vm_call = Some(VmCallMeta {
+            element: vec![codes::ELM_GLOBAL_KOE],
+            ..Default::default()
+        });
+        crate::runtime::dispatch_form_code(
+            &mut ctx,
+            codes::ELM_GLOBAL_KOE as u32,
+            &[crate::runtime::Value::Int(-1)],
+        )
+        .unwrap();
+        assert_eq!(ctx.koe.current_no(), -1);
+        assert!(!ctx.koe.pending.is_empty());
+        assert!(ctx.ui.window.is_none());
+    }
+    #[test]
+    fn original_script_window_visibility_keeps_engine_reveal_and_text_state() {
+        use crate::runtime::{
+            constants::{cd, fm},
+            forms::codes,
+        };
+        use crysirror_scene::layer::Paint;
+        let (mut vm, mut host) = plain_message_machine(&[]);
+        let script = |op| [codes::ELM_GLOBAL_SCRIPT, op];
+        let mut scene = crate::fixture::SceneBuilder::default();
+        scene.command(
+            &script(codes::ELM_SCRIPT_SET_MSG_ASYNC_MODE_ON),
+            0,
+            &[],
+            fm::VOID,
+        );
+        scene.command(
+            &script(codes::ELM_SCRIPT_SET_MWND_DISP_OFF_FLAG),
+            0,
+            &[1],
+            fm::VOID,
+        );
+        scene.command_string(&[codes::ELM_GLOBAL_PRINT], 0, "AB", &[], fm::VOID);
+        scene.command(&[codes::ELM_GLOBAL_DISP], 0, &[], fm::VOID);
+        scene.command(
+            &script(codes::ELM_SCRIPT_SET_MWND_DISP_OFF_FLAG),
+            0,
+            &[0],
+            fm::VOID,
+        );
+        scene.command(&[codes::ELM_GLOBAL_DISP], 0, &[], fm::VOID);
+        scene.code.push(cd::EOF);
+        host.files.insert(
+            "Asset/Scene.pck".into(),
+            crate::fixture::pack_scene(&scene.finish()),
+        );
+        vm.step(&mut host, InputFrame::default(), 5000).unwrap();
+        let layer = host
+            .engine
+            .layers
+            .get(ClientId(1), crate::message::MESSAGE_LAYER)
+            .unwrap();
+        assert!(!layer.visible);
+        assert_eq!(layer.opacity, 0);
+        host.engine.layers.tick(100);
+        host.now = 100;
+        vm.step(&mut host, InputFrame::default(), 5000).unwrap();
+        let layer = host
+            .engine
+            .layers
+            .get(ClientId(1), crate::message::MESSAGE_LAYER)
+            .unwrap();
+        assert!(layer.visible);
+        assert_eq!(layer.opacity, 255);
+        let Paint::GlyphRun {
+            glyphs,
+            reveal: Some(reveal),
+            ..
+        } = &layer.paint
+        else {
+            panic!("engine retained text");
+        };
+        assert_eq!(glyphs.iter().map(|g| g.character).collect::<String>(), "AB");
+        assert_eq!(reveal.visible_count(glyphs.len()), 2);
+        assert_eq!(
+            vm.state.vm.as_ref().unwrap().ctx.ui.message.as_deref(),
+            Some("AB")
+        );
+    }
+    #[test]
+    fn original_auto_mode_uses_shared_deadline_and_keeps_key_wait_across_restore() {
+        use crate::runtime::{
+            constants::{cd, fm},
+            forms::codes,
+        };
+        let (mut vm, mut host) = plain_message_machine(&[]);
+        let mut scene = crate::fixture::SceneBuilder::default();
+        let script = |op| [codes::ELM_GLOBAL_SCRIPT, op];
+        scene.command(
+            &script(codes::ELM_SCRIPT_SET_AUTO_MODE_MOJI_WAIT),
+            0,
+            &[100],
+            fm::VOID,
+        );
+        scene.command(
+            &script(codes::ELM_SCRIPT_SET_AUTO_MODE_MIN_WAIT),
+            0,
+            &[300],
+            fm::VOID,
+        );
+        scene.command(&script(codes::ELM_SCRIPT_START_AUTO_MODE), 0, &[], fm::VOID);
+        scene.command(
+            &script(codes::ELM_SCRIPT_SET_MSG_ASYNC_MODE_ON),
+            0,
+            &[],
+            fm::VOID,
+        );
+        scene.command_string(&[codes::ELM_GLOBAL_PRINT], 0, "AB", &[], fm::VOID);
+        scene.command(&[codes::ELM_GLOBAL_PP], 0, &[], fm::VOID);
+        scene.int(77);
+        scene.code.push(cd::EOF);
+        host.files.insert(
+            "Asset/Scene.pck".into(),
+            crate::fixture::pack_scene(&scene.finish()),
+        );
+        vm.step(&mut host, InputFrame::default(), 5000).unwrap();
+        host.engine.layers.tick(40);
+        host.now = 40;
+        vm.step(&mut host, InputFrame::default(), 5000).unwrap();
+        assert_eq!(vm.diagnostics()["wait"]["message_reveal"], false);
+        assert_eq!(vm.diagnostics()["wait"]["key"], true);
+        let saved = vm.snapshot().unwrap();
+        let engine_saved = host.engine.clone();
+        for restore in [false, true] {
+            if restore {
+                vm.restore(&saved).unwrap();
+                host.engine = engine_saved.clone();
+            }
+            host.now = 299;
+            vm.step(&mut host, InputFrame::default(), 5000).unwrap();
+            assert_eq!(vm.diagnostics()["halted"], false);
+            assert_eq!(vm.diagnostics()["int_stack"], serde_json::json!([]));
+            host.now = 300;
+            assert_eq!(
+                vm.step(&mut host, InputFrame::default(), 5000).unwrap(),
+                VmYield::Halted
+            );
+            assert_eq!(vm.diagnostics()["int_stack"], serde_json::json!([77]));
+            assert!(vm.state.vm.as_ref().unwrap().ctx.ui.reading_wait.is_none());
+        }
+    }
     #[test]
     fn native_font_shadow_modes_publish_shared_faces_and_synchronized_reveal() {
         use crate::message::MESSAGE_LAYER;
@@ -1779,6 +3007,81 @@ mod verification_tests {
             vm.restore(&bytes).unwrap();
             assert_eq!(vm.state.vm.as_ref().unwrap().ctx.ui.visible_chars, 1);
         }
+    }
+    #[test]
+    fn native_script_speed_async_once_and_savepoint_gate_reach_shared_text() {
+        use crate::runtime::{
+            constants::{cd, fm},
+            forms::codes,
+        };
+        let (mut vm, mut host) = plain_message_machine(&[]);
+        let mut scene = crate::fixture::SceneBuilder::default();
+        for command in [
+            codes::ELM_SCRIPT_SET_MSG_BACK_OFF,
+            codes::ELM_SCRIPT_SET_MSG_BACK_DISP_OFF,
+            codes::ELM_SCRIPT_SET_AUTO_SAVEPOINT_OFF,
+            codes::ELM_SCRIPT_SET_MSG_ASYNC_MODE_ON_ONCE,
+        ] {
+            scene.command(&[64, command], 0, &[], fm::VOID);
+        }
+        scene.command(
+            &[64, codes::ELM_SCRIPT_SET_MESSAGE_SPEED],
+            0,
+            &[37],
+            fm::VOID,
+        );
+        scene.string("AB");
+        scene.code.push(cd::TEXT);
+        scene.i32(-1);
+        scene.command(&[codes::ELM_GLOBAL_DISP], 0, &[], fm::VOID);
+        scene.command(
+            &[
+                codes::ELM_GLOBAL_FRONT,
+                codes::ELM_STAGE_MWND,
+                -1,
+                0,
+                codes::ELM_MWND_CLEAR,
+            ],
+            0,
+            &[],
+            fm::VOID,
+        );
+        scene.string("C");
+        scene.code.push(cd::TEXT);
+        scene.i32(-1);
+        scene.code.push(cd::EOF);
+        host.files.insert(
+            "Asset/Scene.pck".into(),
+            crate::fixture::pack_scene(&scene.finish()),
+        );
+        vm.step(&mut host, InputFrame::default(), 1000).unwrap();
+        let text = host
+            .engine
+            .layers
+            .get(ClientId(1), crate::message::MESSAGE_LAYER)
+            .unwrap();
+        let crysirror_scene::layer::Paint::GlyphRun {
+            reveal: Some(reveal),
+            ..
+        } = &text.paint
+        else {
+            panic!("shared text reveal");
+        };
+        assert_eq!(reveal.interval_ms, 37);
+        let ctx = &vm.state.vm.as_ref().unwrap().ctx;
+        assert!(!ctx.wait.message_reveal_waiting());
+        assert!(ctx.globals.script.async_msg_mode_once);
+        assert!(ctx.globals.script.msg_back_off && ctx.globals.script.msg_back_disp_off);
+        assert!(ctx.local_save_snapshot.is_none());
+        let state = vm.snapshot().unwrap();
+        vm.restore(&state).unwrap();
+        host.now = 16;
+        vm.step(&mut host, InputFrame::default(), 1000).unwrap();
+        let ctx = &vm.state.vm.as_ref().unwrap().ctx;
+        assert!(!ctx.globals.script.async_msg_mode && !ctx.globals.script.async_msg_mode_once);
+        assert!(ctx.wait.message_reveal_waiting());
+        assert_eq!(ctx.ui.message.as_deref(), Some("C"));
+        assert!(ctx.local_save_snapshot.is_none());
     }
     #[test]
     fn native_text_uses_shared_cells_retained_glyphs_and_engine_reveal_clock() {
@@ -1889,6 +3192,191 @@ mod verification_tests {
         assert_eq!(native.name_text, "A name");
         assert_eq!(native.glyphs.len(), 3);
     }
+    #[test]
+    fn native_deferred_print_flag_does_not_apply_a_synthetic_unread_message_first() {
+        let (mut vm, mut host) = plain_message_machine(&[]);
+        vm.step(&mut host, InputFrame::default(), 1000).unwrap();
+        let ctx = &mut vm.state.vm.as_mut().unwrap().ctx;
+        ctx.current_scene_no = Some(3);
+        ctx.globals.set_read_flag(3, 7);
+        ctx.globals.syscom.auto_skip.onoff = true;
+        ctx.register_skip_user_action();
+        ctx.set_current_read_flag_for_skip(3, 7);
+        assert!(ctx.globals.syscom.read_skip.onoff);
+        // MWND.PRINT pops its trailing read flag after its handler returns.
+        // Its append(-1) is a deferred placeholder, not a CD_TEXT(-1).
+        crate::message::append(ctx, "AB", -1).unwrap();
+        assert_eq!(ctx.globals.script.cur_read_flag_flag_no, 7);
+        ctx.submit_read_flag_no(7);
+        assert!(ctx.globals.syscom.read_skip.onoff);
+        crate::runtime::forms::stage::cd_text_current_mwnd(ctx, "C", -1).unwrap();
+        assert_eq!(ctx.globals.script.cur_read_flag_flag_no, -1);
+        assert!(!ctx.globals.syscom.read_skip.onoff);
+    }
+
+    #[test]
+    fn native_click_restriction_and_read_skip_stop_consume_real_engine_input() {
+        let (mut vm, mut host) = plain_message_machine(&["AB", "CD"]);
+        vm.step(&mut host, InputFrame::default(), 1000).unwrap();
+        vm.state
+            .vm
+            .as_mut()
+            .unwrap()
+            .ctx
+            .globals
+            .script
+            .not_skip_msg_by_click = true;
+        for input in [
+            InputFrame {
+                buttons_down: 1,
+                buttons_pressed: 1,
+                ..Default::default()
+            },
+            InputFrame::default(),
+        ] {
+            vm.step(&mut host, input, 1000).unwrap();
+        }
+        assert_eq!(
+            host.engine
+                .layers
+                .reveal_status(ClientId(1), crate::message::MESSAGE_LAYER)
+                .unwrap()
+                .visible,
+            0
+        );
+        {
+            let ctx = &mut vm.state.vm.as_mut().unwrap().ctx;
+            ctx.globals.script.not_skip_msg_by_click = false;
+            ctx.globals.script.skip_unread_message = true;
+            ctx.globals.syscom.read_skip.onoff = true;
+        }
+        for input in [
+            InputFrame {
+                buttons_down: 1,
+                buttons_pressed: 1,
+                ..Default::default()
+            },
+            InputFrame::default(),
+        ] {
+            vm.step(&mut host, input, 1000).unwrap();
+        }
+        let ctx = &vm.state.vm.as_ref().unwrap().ctx;
+        assert!(!ctx.globals.syscom.read_skip.onoff);
+        assert_eq!(ctx.ui.message.as_deref(), Some("AB"));
+        assert_eq!(
+            host.engine
+                .layers
+                .reveal_status(ClientId(1), crate::message::MESSAGE_LAYER)
+                .unwrap()
+                .visible,
+            0
+        );
+    }
+
+    #[test]
+    fn native_cursor_idle_deadline_uses_real_motion_tokens_and_retains_framework_state() {
+        use crate::runtime::forms::{codes, script};
+        let (mut vm, mut host) = machine(false);
+        host.pointer_activity = Some(7);
+        vm.step(&mut host, InputFrame::default(), 1000).unwrap();
+        let ctx = &mut vm.state.vm.as_mut().unwrap().ctx;
+        for (op, value) in [
+            (codes::ELM_SCRIPT_SET_MOUSE_CURSOR_HIDE_ONOFF, 1),
+            (codes::ELM_SCRIPT_SET_MOUSE_CURSOR_HIDE_TIME, 100),
+        ] {
+            ctx.vm_call = Some(crate::runtime::VmCallMeta {
+                element: vec![64, op],
+                ..Default::default()
+            });
+            script::dispatch(ctx, &[crate::runtime::Value::Int(value)]).unwrap();
+            ctx.pop();
+        }
+        host.now = 99;
+        vm.step(&mut host, InputFrame::default(), 1000).unwrap();
+        assert_eq!(host.engine.ui.cursor, Some((1, true)));
+        let saved = vm.snapshot().unwrap();
+        let engine = host.engine.clone();
+        host.now = 100;
+        vm.step(&mut host, InputFrame::default(), 1000).unwrap();
+        assert_eq!(host.engine.ui.cursor, Some((1, false)));
+        // Same canvas position with a new raw move/entry token still wakes it.
+        host.pointer_activity = Some(8);
+        host.now = 101;
+        vm.step(&mut host, InputFrame::default(), 1000).unwrap();
+        assert_eq!(host.engine.ui.cursor, Some((1, true)));
+        vm.restore(&saved).unwrap();
+        host.engine = engine;
+        host.pointer_activity = Some(7);
+        host.now = 99;
+        vm.restore_resources(&mut host).unwrap();
+        host.now = 100;
+        vm.step(&mut host, InputFrame::default(), 1000).unwrap();
+        assert_eq!(host.engine.ui.cursor, Some((1, false)));
+    }
+
+    #[test]
+    fn native_cursor_config_defaults_and_zero_delay_keep_original_visibility_policy() {
+        let (mut vm, mut host) = machine(false);
+        host.pointer_activity = Some(1);
+        vm.state.config.gameexe = Some("Gameexe.ini".into());
+        host.files.insert("Asset/Gameexe.ini".into(),b"#START_SCENE=\"entry\"\n#CONFIG.MOUSE_CURSOR_HIDE_ONOFF=1\n#CONFIG.MOUSE_CURSOR_HIDE_TIME=30\n".to_vec());
+        vm.step(&mut host, InputFrame::default(), 1000).unwrap();
+        host.now = 30;
+        vm.step(&mut host, InputFrame::default(), 1000).unwrap();
+        assert_eq!(host.engine.ui.cursor, Some((1, false)));
+        vm.state
+            .vm
+            .as_mut()
+            .unwrap()
+            .ctx
+            .globals
+            .script
+            .mouse_cursor_hide_time = 0;
+        host.now = 31;
+        vm.step(&mut host, InputFrame::default(), 1000).unwrap();
+        assert_eq!(host.engine.ui.cursor, Some((1, true)));
+    }
+
+    #[test]
+    fn native_ctrl_shift_completes_shared_reveal_and_snapshot_keeps_original_skip_state() {
+        use crysirror_core::service::buttons;
+        let (mut vm, mut host) = plain_message_machine(&["AB", "CD"]);
+        vm.step(&mut host, InputFrame::default(), 1000).unwrap();
+        let saved = vm.snapshot().unwrap();
+        let saved_engine = host.engine.clone();
+        for attempt in 0..2 {
+            // Runtime snapshots restore shared engine state and VM together;
+            // restore_resources only rebuilds immutable uploads by contract.
+            if attempt == 1 {
+                vm.restore(&saved).unwrap();
+                host.engine = saved_engine.clone();
+                vm.restore_resources(&mut host).unwrap();
+            }
+            vm.step(
+                &mut host,
+                InputFrame {
+                    buttons_down: buttons::CTRL | buttons::SHIFT,
+                    buttons_pressed: buttons::CTRL | buttons::SHIFT,
+                    ..Default::default()
+                },
+                1000,
+            )
+            .unwrap();
+            let ctx = &vm.state.vm.as_ref().unwrap().ctx;
+            assert!(!ctx.runtime_is_skipping());
+            assert!(ctx.runtime_is_skipping_msg());
+            assert_eq!(ctx.ui.message.as_deref(), Some("ABCD"));
+            assert_eq!(
+                host.engine
+                    .layers
+                    .reveal_status(ClientId(1), crate::message::MESSAGE_LAYER)
+                    .unwrap()
+                    .visible,
+                2
+            );
+        }
+    }
+
     #[test]
     fn native_decide_completes_only_the_current_reveal() {
         let (mut vm, mut host) = plain_message_machine(&["AB", "CD"]);

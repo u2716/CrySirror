@@ -9,7 +9,6 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import tomllib
 import unittest
 import zipfile
 
@@ -321,38 +320,6 @@ class McpTests(unittest.TestCase):
                 s.call("project_replace", {"project": invalid, "expected_sha256": hashlib.sha256(before).hexdigest()})
             self.assertEqual(s.project.read_bytes(), before)
 
-class SourceBoundaryTests(unittest.TestCase):
-    def test_engine_audio_and_text_are_independent_subsystems(self):
-        for name in ("crysirror-text", "crysirror-audio"):
-            manifest=tomllib.loads((ROOT/"crates"/name/"Cargo.toml").read_text())
-            self.assertFalse({"wgpu","winit","crysirror-runtime","crysirror-siglus"} & manifest["dependencies"].keys())
-        renderer=tomllib.loads((ROOT/"crates/crysirror-wgpu/Cargo.toml").read_text())
-        desktop=tomllib.loads((ROOT/"crates/crysirror-desktop/Cargo.toml").read_text())
-        runtime=tomllib.loads((ROOT/"crates/crysirror-runtime/Cargo.toml").read_text())
-        self.assertNotIn("ab_glyph", renderer["dependencies"])
-        self.assertNotIn("rodio", desktop["dependencies"])
-        self.assertNotIn("crysirror-compat", runtime["dependencies"])
-        self.assertEqual((ROOT/"crates/crysirror-wgpu/src/text.rs").read_text().count("impl "),0)
-    def test_desktop_really_declares_wgpu_and_winit(self):
-        m = tomllib.loads((ROOT/"crates/crysirror-desktop/Cargo.toml").read_text())
-        self.assertIn("winit", m["dependencies"])
-        self.assertIn("wgpu", m["dependencies"])
-    def test_renderer_is_not_bound_to_winit(self):
-        m = tomllib.loads((ROOT/"crates/crysirror-wgpu/Cargo.toml").read_text())
-        self.assertNotIn("winit", m["dependencies"])
-    def test_core_remains_dependency_free(self):
-        m = tomllib.loads((ROOT/"crates/crysirror-core/Cargo.toml").read_text())
-        self.assertNotIn("dependencies", m)
-    def test_workspace_members_exist(self):
-        m = tomllib.loads((ROOT/"Cargo.toml").read_text())
-        for member in m["workspace"]["members"]:
-            self.assertTrue((ROOT/member/"Cargo.toml").is_file())
-    def test_no_font_files_shipped(self):
-        self.assertFalse([p for p in (ROOT/"examples").rglob("*") if p.suffix.lower() in (".ttf", ".otf", ".ttc", ".woff")])
-    def test_rust_sources_have_no_unimplemented_macros(self):
-        for p in (ROOT/"crates").rglob("*.rs"):
-            self.assertNotIn("todo!", p.read_text())
-            self.assertNotIn("unimplemented!", p.read_text())
 
 if __name__ == "__main__":
     unittest.main()

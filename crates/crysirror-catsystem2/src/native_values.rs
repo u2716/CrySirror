@@ -5,39 +5,49 @@ use anyhow::{ensure, Context, Result};
 /// Native sub6A48F0 integer syntax: no whitespace, optional sign and hex prefix,
 /// wrapping 32-bit accumulation, and decimal fractions explicitly become zero.
 pub fn integer(text: &str) -> u32 {
-    let mut bytes = text.as_bytes();
-    let negative = bytes.first() == Some(&b'-');
-    if matches!(bytes.first(), Some(b'+' | b'-')) {
-        bytes = &bytes[1..];
+    integer_prefix(text.as_bytes()).map_or(0,|(_,value)|value)
+}
+///6A49D0 accepts a signed wrapping DWORD prefix; decimal dots invalidate the
+///whole match, while `0x` without digits still succeeds as zero.
+pub(crate) fn integer_prefix(source: &[u8]) -> Option<(usize, u32)> {
+    let (mut at, negative) = match source.first()? {
+        b'-' => (1, true),
+        b'+' => (1, false),
+        _ => (0, false),
+    };
+    if !source.get(at)?.is_ascii_digit() {
+        return None;
     }
-    if !bytes.first().is_some_and(u8::is_ascii_digit) {
-        return 0;
-    }
-    let hex = bytes.starts_with(b"0x") || bytes.starts_with(b"0X");
-    if hex {
-        bytes = &bytes[2..];
-    }
-    let radix = if hex { 16 } else { 10 };
     let mut value = 0u32;
-    let mut count = 0;
-    for b in bytes {
-        let digit = match b {
-            b'0'..=b'9' => u32::from(b - b'0'),
-            b'a'..=b'f' if hex => u32::from(b - b'a' + 10),
-            b'A'..=b'F' if hex => u32::from(b - b'A' + 10),
-            _ => break,
-        };
-        value = value.wrapping_mul(radix).wrapping_add(digit);
-        count += 1;
-    }
-    if !hex && bytes.get(count) == Some(&b'.') {
-        return 0;
-    }
-    if negative {
-        value.wrapping_neg()
+    if source.get(at) == Some(&b'0') && matches!(source.get(at + 1), Some(b'x' | b'X')) {
+        at += 2;
+        while let Some(b) = source.get(at) {
+            let digit = match b {
+                b'0'..=b'9' => b - b'0',
+                b'a'..=b'f' => b - b'a' + 10,
+                b'A'..=b'F' => b - b'A' + 10,
+                _ => break,
+            };
+            value = value.wrapping_mul(16).wrapping_add(digit as u32);
+            at += 1;
+        }
     } else {
-        value
+        while let Some(b @ b'0'..=b'9') = source.get(at) {
+            value = value.wrapping_mul(10).wrapping_add((b - b'0') as u32);
+            at += 1;
+        }
+        if source.get(at) == Some(&b'.') {
+            return None;
+        }
     }
+    Some((
+        at,
+        if negative {
+            value.wrapping_neg()
+        } else {
+            value
+        },
+    ))
 }
 pub fn format_bytes(machine: &Machine, address: u32) -> Result<Vec<u8>> {
     format_inner(machine, address, 0)
@@ -261,10 +271,12 @@ mod tests {
 
 ///73FE70/740450: original per-KCS numeric string variable bank, not a text
 /// layout/formatting engine. Empty assigned strings remain present values.
-#[derive(Default)]
+#[derive(Clone,Debug,Default)]
 pub(crate) struct StringVariables {
     values: std::collections::BTreeMap<u32,Vec<u8>>,
     pub dirty:bool,
+    /// 7136F0's `%LANG%` and `%LANG_M%` substitution.
+    pub language_prefix:Vec<u8>,
 }
 impl StringVariables {
     pub fn assign(&mut self,id:u32,bytes:Vec<u8>)->Result<()> {
@@ -275,5 +287,7 @@ impl StringVariables {
         self.values.insert(id,bytes);self.dirty=true;Ok(())
     }
     pub fn get(&self,id:u32)->Option<&[u8]> {self.values.get(&id).map(Vec::as_slice)}
+    pub(crate) fn remove(&mut self,id:u32) {if self.values.remove(&id).is_some(){self.dirty=true;}}
     pub fn diagnostics(&self)->serde_json::Value {serde_json::json!({"count":self.values.len(),"bytes":self.values.values().map(Vec::len).sum::<usize>(),"dirty":self.dirty})}
 }
+

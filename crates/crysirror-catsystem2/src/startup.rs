@@ -22,7 +22,7 @@ pub fn parse_startup(bytes: &[u8]) -> Result<Startup> {
         bytes.len() <= 1024 * 1024,
         "CatSystem2 startup XML byte budget"
     );
-    let document = XmlDocument::parse(bytes)?;
+    let document = XmlDocument::parse_with_fallback(bytes,encoding_rs::SHIFT_JIS)?;
     ensure!(
         document.root().name == "document",
         "CatSystem2 startup root must be document"

@@ -2,10 +2,10 @@
 
 Date: 2026-10-25. Status: implemented and locally validated (surface ABI v1).
 
-The owner requested reusable shader presets, including fog, and the ability to
-run developer-authored shaders. Extend the engine material system (ADR 0015)
-with shared preset data and a client-scoped code-asset reference. Source-game
-material names and graphs do not belong in the renderer.
+The material system (ADR 0015) supports reusable shader presets, including fog,
+and developer-authored surface shaders through shared preset data and a
+client-scoped code-asset reference. Source-game material names and graphs remain
+outside the renderer's common contract.
 
 ## Implementation
 

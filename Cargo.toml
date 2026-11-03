@@ -26,6 +26,7 @@ members = [
     "crates/crysirror-physics",
     "crates/crysirror-siglus",
     "crates/crysirror-text",
+    "crates/crysirror-text-legacy",
     "crates/crysirror-audio",
     "crates/crysirror-acoustics",
     "crates/crysirror-scene",
@@ -83,6 +84,7 @@ crysirror-system-nnn = { path = "crates/crysirror-system-nnn" }
 crysirror-physics = { path = "crates/crysirror-physics" }
 crysirror-siglus = { path = "crates/crysirror-siglus" }
 crysirror-text = { path = "crates/crysirror-text" }
+crysirror-text-legacy = { path = "crates/crysirror-text-legacy" }
 crysirror-audio = { path = "crates/crysirror-audio" }
 crysirror-acoustics = { path = "crates/crysirror-acoustics" }
 crysirror-scene = { path = "crates/crysirror-scene" }
@@ -123,13 +125,21 @@ cap-std = "3.4"
 
 # Local debug artifacts previously exceeded 300 GiB. Keep development builds
 # disposable and use release for validation/benchmarks (owner preference).
+# Plain `cargo build` must be a playable player: an unoptimized binary was too
+# slow to decode opening movies, so dev is optimized without runtime checks.
 [profile.dev]
 debug = 0
 incremental = false
+opt-level = 2
+debug-assertions = false
+overflow-checks = false
 
 [profile.test]
 debug = 0
 incremental = false
+opt-level = 0
+debug-assertions = true
+overflow-checks = true
 
 [profile.release]
 lto = "thin"

@@ -15,6 +15,13 @@ The complete read-only reference checkout is kept in ignored
 upstream binary fixtures, title key catalogue or generated executable decryptor
 is distributed with these plugins.
 
+HG3 frame-layout/JPEG-alpha metadata additionally uses the complete reviewed
+MIT `TriggersTools.CatSystem2` reference at
+`47fdcb605c16a5d93a97cb2894684326f21885c8`: `Hg3Image.Structs.cs`,
+`Hg3Image.Extract.Private.cs`, `HgxImage.Extract.Private.cs` and
+`HgxImage.ProcessImageManaged.cs`. The shared codec retains its GPL provenance;
+this does not import that project's engine, unsafe bitmap writer or renderer.
+
 ## Reviewed implementation scope
 
 [`upstream-formats.json`](upstream-formats.json) inventories **289 concrete
@@ -99,10 +106,23 @@ Material partial boundaries remain recorded per ID:
   type trees. PSB covers image-resource PSB2/3 with PNG/TLG chunks and layer
   placement; encrypted PSB needs caller preprocessing. These are resource
   formats, without Unity or E-mote runtime hosting.
-- Leaf A encryption1/2, GXT palettes/nonlinear textures, HG3 `img_jpg` and
+- Leaf A encryption1/2, GXT palettes/nonlinear textures and
   Cyberworks type `a2` retain the pinned reader's explicit unsupported branches.
   RPA accepts a bounded data-only pickle subset and rejects executable or
   unknown opcodes/structures.
+- HG3 supports linked frame catalogs and an explicit pixel profile. The default
+  `archive` profile retains padded24/32-bit control rows; `pixel_profile: native`
+  requires full40-byte stdinfo and supports packed24/32 rows, numbered segments
+  in ordinal order (later overlap overwrites), native colour modes, shared JPEG
+  (defaultmode1; separate alpha only for native32-bit) and shared32-bit WebP
+  with embedded alpha. Native undefined gap rows, mixed color payloads,
+  alpha-only/img_jpa and native24-bit WebP fail explicitly. Entry `hg3` metadata
+  preserves native frame IDs, condensed/canvas dimensions, signed origin/base,
+  raw flags, mode words, pixel_profile and ATS rectangles/colours. The option
+  `expand_canvas: false` retains condensed pixels outside the logical canvas.
+  Eleven authored frame tests passed, including cumulative decoded-work limits.
+  The active entry-open context supplies cancellation between CPU blocks; this
+  adds no new external fixture claim.
 - MIO implements PCM16 lossless Huffman and LOT/LOT-MSS synthesis; PCM8, DCT1
   and Nemesis remain unsupported as in the pinned source. HCA uses the shared
   decoder for cipher0/1/56; cipher56 needs a nonzero caller key. External PCM
@@ -207,9 +227,6 @@ accepted as plain only when its complete raw bytes already match its `adlr`.
 Unknown bias, ambiguous candidates, unproved zero substitution and later damaged
 entries fail visibly. Adler-32 here is format compatibility evidence, not a
 cryptographic authenticity claim.
-
-Pinned sources, hashes, reviewed semantics and file ownership are recorded in
-[`docs/krkr-folded-xor-source-audit.json`](../../docs/krkr-folded-xor-source-audit.json).
 
 Inline preferred names also form a distinct logical namespace: a proven inline
 name supersedes a same-name ordinary-index diagnostic fallback. The winning

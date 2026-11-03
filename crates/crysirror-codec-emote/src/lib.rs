@@ -24,6 +24,7 @@ pub use emote::{
     EmoteStepFrameOutput, EmoteTextureIcon, EmoteTextureSource,
 };
 pub use psb::{
+    emote_key_from_header,
     adler32, bruteforce_emote_key, normalize_psb_input, PsbBruteforceOptions, PsbBruteforceResult,
     PsbDecryptionKey, PsbError, PsbFile, PsbHeader, PsbNormalizeOptions, PsbResourceRange,
     PsbValue, EMOTE_PSB_KEY0, EMOTE_PSB_KEY1, EMOTE_PSB_KEY2, EMOTE_PSB_KEY4, EMOTE_PSB_KEY5,

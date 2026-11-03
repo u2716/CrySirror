@@ -1,0 +1,16 @@
+{
+  "reference": {
+    "repository": "https://github.com/nunuhara/libsys4",
+    "commit": "b14839f23af0963abbdb17f7cac57a36fd8e9bd2",
+    "path": "src/qnt.c",
+    "sha256": "eb4264f189bb742f8ffcb8b7078b73c8bc58267ddc317745b073a4c9ec5f858e",
+    "license": "GPL-2.0-or-later; applied under existing formats-arc GPL-3.0-or-later"
+  },
+  "implementation": "Shared formats-arc images_a/alice.rs QNT kernel; native version0 header48; versions1/2 explicit header-size; original planar/predictor math reused; exact color length and bounded alpha even-height or original-height padding; complete zlib checksum required. No System4 image decoder. Shared QntHeader parser now also supplies encoded plane declarations and origin/stride to the generic ImageEncodingInfo capability, independent of pixel opacity.",
+  "validation": {
+    "source": "One shared formats-arc QNT parser/kernel, never a VM decoder. HeaderReady validates bounds but does not establish zlib payload integrity.",
+    "compilation": "Current release shared metadata/QNT/Image/Runtime targets compiled successfully.",
+    "authored": "qnt_native5passed0ignored; image lib135passed2ignored; Runtime final changing-length provider1passed and fresh final integration2passed. Metadata tests distinguish absent/all255 alpha even when decoded pixels are equally opaque, reject stale fingerprints and preserve typed NotFound.",
+    "owner": "Frozen owner formats762cd155ed11a13ac814612e460d401720fee87bc0fd661770e524db6caf5207 explicitly ran ignored owner test:1passed0ignored,37QNTs allversion2,11220069decodedpixels. No logo animation/render/title acceptance."
+  }
+}

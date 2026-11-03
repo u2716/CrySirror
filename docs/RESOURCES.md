@@ -15,15 +15,15 @@ variants and evidence; [arc-image-support.json](arc-image-support.json) retains
 image-specific boundaries. Unsupported variants and missing native profiles
 fail explicitly. There is no pending ID hidden behind a registered stub.
 
-Select the plugins explicitly:
+The desktop binary always links the plugins; engine library users opt in:
 
 ```sh
-cargo run -p crysirror-desktop --features arc-formats -- --help
+cargo run -p crysirror-desktop -- --help
 cargo test -p crysirror-engine --features arc-formats --test resource_api
 ```
 
-`arc-formats` is an opt-in feature because the translated source retains its
-GPL-3.0-or-later license. The resource contract crate retains MPL-2.0.
+`arc-formats` remains a library-crate feature because the translated source retains its
+GPL-3.0-or-later license; a distributed desktop binary carries that obligation (NOTICE.md). The resource contract crate retains MPL-2.0.
 The complete pinned decoder inventory records implemented, partial and pending
 formats; pending formats are never registered as working decoders.
 This ledger describes this migration only. Existing CrySirror image, audio and
@@ -84,7 +84,7 @@ NVSG images plus a PNG reference, read from a generated SAR archive. Reproduce:
 
 ```sh
 python3 tools/make_native_image_smoke.py local/work/native-image-archive-smoke
-cargo run -p crysirror-desktop --features arc-formats -- render \
+cargo run -p crysirror-desktop -- render \
   local/work/native-image-archive-smoke/project.json \
   --script local/work/native-image-archive-smoke/mount.ts \
   --output local/work/native-image-archive-smoke/render.png \

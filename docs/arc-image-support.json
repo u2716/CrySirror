@@ -340,16 +340,18 @@
       "registration_group": "a",
       "source": "src/dec/alice_soft/qnt_image_decoder.cc",
       "implementation": [
-        "src/images_a.rs"
+        "src/images_a.rs",
+        "src/images_a/alice.rs"
       ],
       "variants": [
-        "version2 depth24, zlib 2x2 color deinterleave, odd padding, optional predictive alpha"
+        "Version0 fixed48-byte header; versions1/2 bounded explicit header, depth24",
+        "Shared zlib 2x2 color deinterleave and predictor; exact color plane and bounded odd-height alpha padding"
       ],
       "limits": [
         "Only listed native variants are implemented; malformed, truncated or unsupported layouts fail.",
         "Safe CPU ImageSurface output only: no original-VM, full-game, animation/pivot or console-host compatibility claim.",
         "Encoded and decoded byte/dimension limits apply; sibling dependencies and keys remain client-scoped.",
-        "Only the declared version2 depth24 QNT variant is implemented."
+        "Only versions0/1/2 with24 color bits are accepted. Plane inflation must finish with valid zlib checksum and bounded exact layout. Generic encoded metadata validates header/ranges only, never pixel-payload integrity or transparency inferred from decoded opacity."
       ],
       "evidence": {
         "report": "docs/arc-images-a.json",
@@ -358,7 +360,19 @@
         ],
         "test_source": "crates/crysirror-formats-arc/tests/images_a.rs",
         "external_validation": "See report for exact fixture/count and codec tolerance; no fixture binary is redistributed.",
-        "external_fixture_count": 4
+        "external_fixture_count": 4,
+        "native_extension": {
+          "report": "docs/system4-qnt-source-audit.json",
+          "test_source": "crates/crysirror-formats-arc/tests/qnt_native.rs",
+          "ordinary_tests": [
+            "qnt_0_1_2_share_predictor_channel_order_and_alpha",
+            "qnt_odd_height_accepts_both_original_and_aldbuilder_alpha_padding",
+            "qnt_invalid_headers_and_short_or_oversized_planes_fail",
+            "original_plane_metadata_is_distinct_from_decoded_opacity_for_every_header",
+            "encoded_metadata_confirms_ranges_not_successful_payload_decode"
+          ],
+          "actual": "5passed/0ignored in system4-qnt-metadata-release.log; separate explicit owner logo test37QNT/version2/11220069pixels passed1/1. Historical four-fixture external corpus was not rerun."
+        }
       }
     },
     {

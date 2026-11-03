@@ -3,6 +3,14 @@
 Date: 2026-10-27. Status: implemented parametric profile; results in STATUS.md.
 Follows ADR 0030, 0050, 0067–0072.
 
+## Follow-up implementation (updated 2026-11-03)
+
+Geometric early reflections and tracking, worker final DSP and output follow this parametric reverb decision. Its original mixer-owner boundary is historical.
+
+Follow-ups: [ADR 0074](0074-captured-geometric-early-reflections.md), [ADR 0075](0075-tracked-reflection-plans.md), [ADR 0079](0079-worker-final-audio-frames.md), [ADR 0080](0080-async-output-worker-and-bounded-pcm-transfer.md).
+The original checkpoint evidence and remaining-boundary paragraphs below retain
+their dated scope. They must not be read as an engine-wide current missing list.
+
 ## Scope and source
 
 Use standalone FunDSP 0.23.0's 32-channel FDN for authored late reverberation,
@@ -72,7 +80,8 @@ prepared/installed pair against an estimated 512 MiB host budget. Leases follow
 both actual DSP owners and canceled workers; reset does not zero live counters.
 These are conservative admission estimates, not a process-memory limit.
 
-Final sample processing/mixing remains on the current owner. Old effect disposal
+At this checkpoint final sample processing/mixing remained on the owner; ADR 0079
+subsequently moved final DSP to workers and ADR 0080 added device-worker output. Old effect disposal
 on replacement/clear/restore, control/scratch allocations, device queues and final
 pool destruction still have synchronous boundaries. This ADR does not complete
 the engine-wide async migration or claim hard realtime execution.

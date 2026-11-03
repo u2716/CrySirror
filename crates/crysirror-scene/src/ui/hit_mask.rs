@@ -2,6 +2,8 @@
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. A copy is available at https://mozilla.org/MPL/2.0/.
 //! Immutable engine-owned pointer coverage, independent of a VM or renderer.
+pub mod channel;
+pub use channel::CoverageChannel;
 use anyhow::{ensure, Result};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;

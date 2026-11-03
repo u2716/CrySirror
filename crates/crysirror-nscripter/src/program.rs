@@ -14,6 +14,8 @@ pub struct Statement {
 pub struct Program {
     pub statements: Vec<Statement>,
     pub labels: BTreeMap<String, usize>,
+    /// Statement index following each `~` line, for `jumpf` and `jumpb`.
+    pub tildes: Vec<usize>,
 }
 impl Program {
     pub fn parse(text: &str) -> Result<Self> {
@@ -24,6 +26,7 @@ impl Program {
         let mut p = Self {
             statements: vec![],
             labels: BTreeMap::new(),
+            tildes: vec![],
         };
         let lines: Vec<&str> = text.lines().collect();
         let mut index = 0;
@@ -36,6 +39,10 @@ impl Program {
                 .to_owned();
             index += 1;
             if raw.is_empty() || raw.starts_with(';') {
+                continue;
+            }
+            if raw.starts_with('~') {
+                p.tildes.push(p.statements.len());
                 continue;
             }
             if raw.starts_with('*') {
@@ -70,7 +77,7 @@ impl Program {
                 append_text(&mut p.statements, line, &raw)?;
             } else {
                 // Native select arguments can continue over physical newlines.
-                if ["select ", "selgosub ", "selnum "]
+                if ["select ", "selgosub ", "selnum ", "csel "]
                     .iter()
                     .any(|pre| raw.starts_with(pre))
                 {
@@ -259,6 +266,13 @@ pub enum Token {
     Label(String),
     Op(String),
     Comma,
+    /// `?n[a][b]` before its index expressions are evaluated.
+    ArrayRef {
+        no: Box<Token>,
+        dims: Vec<Vec<Token>>,
+    },
+    /// Resolved array variable and flat cell index.
+    ArrayCell(u16, usize),
 }
 #[derive(Clone, Debug)]
 pub struct Tokens {
@@ -275,6 +289,40 @@ impl Tokens {
                 break;
             }
             let c = s.chars().next().unwrap();
+            if c == '?' {
+                let digits = s[1..].bytes().take_while(|b| b.is_ascii_alphanumeric() || *b == b'_').count();
+                ensure!(digits > 0, "native array index/alias required");
+                let name = &s[1..1 + digits];
+                let no = if name.bytes().all(|b| b.is_ascii_digit()) {
+                    Token::Num(name.parse()?)
+                } else {
+                    Token::Word(name.to_ascii_lowercase())
+                };
+                s = &s[1 + digits..];
+                let mut dims = vec![];
+                while s.trim_start().starts_with('[') {
+                    let open = s.find('[').unwrap();
+                    let mut depth = 0;
+                    let mut close = None;
+                    for (at, b) in s.bytes().enumerate().skip(open) {
+                        if b == b'[' {
+                            depth += 1;
+                        } else if b == b']' {
+                            depth -= 1;
+                            if depth == 0 {
+                                close = Some(at);
+                                break;
+                            }
+                        }
+                    }
+                    let close = close.context("unterminated native array index")?;
+                    dims.push(Tokens::new(&s[open + 1..close])?.values);
+                    ensure!(dims.len() <= 8, "native array dimensions");
+                    s = &s[close + 1..];
+                }
+                values.push(Token::ArrayRef { no: Box::new(no), dims });
+                continue;
+            }
             if c == '"' || c == '`' {
                 let end = s[1..].find(c).context("unterminated quoted value")? + 1;
                 values.push(Token::Str(s[1..end].into()));
@@ -393,6 +441,7 @@ impl Tokens {
             matches!(
                 t,
                 Token::IntVar(_) | Token::StrVar(_) | Token::IntAlias(_) | Token::StrAlias(_)
+                    | Token::ArrayRef { .. }
             ),
             "native destination variable required"
         );
@@ -414,6 +463,13 @@ impl Tokens {
                 Value::Str(vars.strings.get(&n).cloned().unwrap_or_default())
             }
             Token::IntVar(n) => Value::Int(*vars.ints.get(&n).unwrap_or(&0)),
+            array @ Token::ArrayRef { .. } => {
+                let Token::ArrayCell(no, cell) = vars.resolve(array)? else {
+                    bail!("native array expression")
+                };
+                Value::Int(vars.cell(no, cell)?)
+            }
+            Token::ArrayCell(no, cell) => Value::Int(vars.cell(no, cell)?),
             Token::StrVar(n) => Value::Str(vars.strings.get(&n).cloned().unwrap_or_default()),
             Token::Word(w) => vars
                 .aliases
@@ -473,8 +529,57 @@ pub struct Variables {
     pub ints: BTreeMap<u16, i32>,
     pub strings: BTreeMap<u16, String>,
     pub aliases: BTreeMap<String, Value>,
+    /// `intlimit`: out-of-range writes clamp to [low, high].
+    #[serde(default)]
+    pub limits: BTreeMap<u16, [i32; 2]>,
+    /// `dim`: dimension sizes and flat cells.
+    #[serde(default)]
+    pub arrays: BTreeMap<u16, (Vec<usize>, Vec<i32>)>,
 }
 impl Variables {
+    fn array_number(&self, no: &Token) -> Result<u16> {
+        let n = match no {
+            Token::Num(n) => *n,
+            Token::Word(w) => self.aliases.get(w).with_context(|| format!("native array alias `{w}` missing"))?.int()?,
+            _ => bail!("native array number"),
+        };
+        ensure!((0..10000).contains(&n), "native array number range");
+        Ok(n as u16)
+    }
+    fn index_values(&self, dims: &[Vec<Token>]) -> Result<Vec<i32>> {
+        dims.iter().map(|tokens| Tokens { values: tokens.clone(), at: 0 }.expr(self)?.int()).collect()
+    }
+    /// `dim ?n[a][b]`: each dimension holds indices 0 through its given bound.
+    pub fn declare_array(&mut self, no: Box<Token>, dims: &[Vec<Token>]) -> Result<()> {
+        let n = self.array_number(&no)?;
+        let bounds = self.index_values(dims)?;
+        ensure!(!bounds.is_empty() && bounds.iter().all(|b| *b >= 0), "native dim bounds");
+        let sizes: Vec<usize> = bounds.iter().map(|b| *b as usize + 1).collect();
+        let total = sizes.iter().try_fold(1usize, |a, b| a.checked_mul(*b)).filter(|t| *t <= 1 << 22).context("native dim budget")?;
+        self.arrays.insert(n, (sizes, vec![0; total]));
+        Ok(())
+    }
+    pub fn array_cell(&self, no: Box<Token>, dims: &[Vec<Token>]) -> Result<usize> {
+        let n = self.array_number(&no)?;
+        let (sizes, _) = self.arrays.get(&n).with_context(|| format!("native array {n} not declared"))?;
+        let indices = self.index_values(dims)?;
+        ensure!(indices.len() <= sizes.len(), "native array index count");
+        let mut flat = 0usize;
+        for (at, size) in sizes.iter().enumerate() {
+            let index = indices.get(at).copied().unwrap_or(0);
+            ensure!(index >= 0 && (index as usize) < *size, "native array index range");
+            flat = flat * size + index as usize;
+        }
+        Ok(flat)
+    }
+    pub fn cell(&self, no: u16, cell: usize) -> Result<i32> {
+        self.arrays.get(&no).and_then(|(_, data)| data.get(cell)).copied().context("native array cell")
+    }
+    pub fn set_cell(&mut self, no: Box<Token>, cell: usize, value: i32) -> Result<()> {
+        let n = self.array_number(&no)?;
+        *self.arrays.get_mut(&n).and_then(|(_, data)| data.get_mut(cell)).context("native array cell")? = value;
+        Ok(())
+    }
     pub fn index(&self, name: &str) -> Result<u16> {
         let n = self
             .aliases
@@ -488,13 +593,25 @@ impl Variables {
         Ok(match dest {
             Token::IntAlias(name) => Token::IntVar(self.index(&name)?),
             Token::StrAlias(name) => Token::StrVar(self.index(&name)?),
+            Token::ArrayRef { no, dims } => {
+                let n = self.array_number(&no)?;
+                Token::ArrayCell(n, self.array_cell(no, &dims)?)
+            }
             t => t,
         })
     }
     pub fn set(&mut self, dest: Token, value: Value) -> Result<()> {
         match self.resolve(dest)? {
             Token::IntVar(n) => {
-                self.ints.insert(n, value.int()?);
+                let mut value = value.int()?;
+                if let Some([low, high]) = self.limits.get(&n) {
+                    value = value.clamp(*low, (*high).max(*low));
+                }
+                self.ints.insert(n, value);
+            }
+            Token::ArrayCell(no, cell) => {
+                let value = value.int()?;
+                *self.arrays.get_mut(&no).and_then(|(_, data)| data.get_mut(cell)).context("native array cell")? = value;
             }
             Token::StrVar(n) => {
                 let s = value.string()?;

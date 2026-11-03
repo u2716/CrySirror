@@ -325,7 +325,7 @@ pub(crate) fn project(
         let hit_bitmap = &ctx.images.images[hit_image];
         let hit_size = [hit_bitmap.width, hit_bitmap.height];
         let hit_center = [hit_bitmap.center_x, hit_bitmap.center_y];
-        let bitmap = &ctx.images.images[image];
+        let bitmap = ctx.images.images[image].clone();
         let asset = if let Some(path) = ctx.images.published.get(&image) {
             path.clone()
         } else {
@@ -395,7 +395,7 @@ pub(crate) fn project(
         let mut visual = b.clone();
         visual.bright = (visual.bright + i64::from(pat[4])).clamp(0, 255);
         visual.dark = (visual.dark + i64::from(pat[5])).clamp(0, 255);
-        layers.push(LayerSpec {
+        layers.push(LayerSpec { source_crop: None, viewport_clip: None,
             id: LAYER_BASE + index as u32,
             parent: None,
             rect,

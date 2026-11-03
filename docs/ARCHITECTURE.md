@@ -5,6 +5,10 @@ translate their operations into engine APIs and engine-owned logical state.
 Hosting a second engine and uploading its composed screen is prohibited.
 The previous RFVP/BGI/RealLive hosting paths were removed on 2026-10-26.
 
+Dated source/validation sections below describe their recorded profiles. Consult
+[the documentation index](README.md), current adapter crate docs and dated
+[STATUS.md](../STATUS.md) entries when reviewing later implementation changes.
+
 ## Modules
 
 | Crate | Role |
@@ -17,7 +21,7 @@ The previous RFVP/BGI/RealLive hosting paths were removed on 2026-10-26.
 | crysirror-runtime | Schema-2 data, capability VFS/assets, factories, scheduler, snapshots |
 | crysirror-image | Shared safe CPU surfaces, content/extension decoder registry, scoped dependency/key contexts and bitmap operations; explicit native pixel-math profiles |
 | crysirror-resource | CPU archive/file/audio contracts, bounded decode tasks and streams, transform/key/companion capabilities, WAVE containers and VFS mounts |
-| crysirror-formats-arc | Optional GPL Rust plugins for 152 archives, 96 images, 16 audio and 25 files from pinned arc_unpacker; explicit partial-format ledger (ADR 0065) |
+| crysirror-formats-arc | GPL Rust format plugins, linked by the desktop; pinned arc_unpacker inventory and variants are recorded in the resource support ledgers; explicit partial-format ledger (ADR 0065) |
 | crysirror-physics | Persistent Rapier 3D CPU backend; rigid bodies, CCD, joints, queries, event queues and scoped handles (ADR 0045) |
 | crysirror-wgpu | GPU uploads, clipped/blended 2D/text, extracted dynamic 3D and readback |
 | crysirror-desktop | winit lifecycle/input, audio sink, CLI and persistent state location |
@@ -28,18 +32,18 @@ The previous RFVP/BGI/RealLive hosting paths were removed on 2026-10-26.
 | crysirror-text | Engine CPU fonts, shaping/bidi, rich layout/ruby/vertical text, fixed-cell layout, synchronous font-resource measurement handles, reveal and CPU SDF data |
 | crysirror-scene | Safe CPU World/Layer/UI state, migrated input/animation/projection, transactional mutations and frame extraction |
 | crysirror-reallive | Original RealLive bytecode VM and thin semantic/syscall adapter; retained Canvas/Layer/GlyphRun/UI and engine audio/Media services, no hosted renderer |
-| crysirror-krkr | Optional AGPL KiriKiri adapter: first-party TJS2 VM (crysirror-tjs2) and KAG parser (crysirror-kag), derived from Kirakira with native KAG3 classes translated onto shared Layer/Canvas/Text/UI/audio/clock/storage (ADR 0053/0088); not in default builds |
-| crysirror-avg32 | Vendored original AVG32 interpreter (siglus_rs 5f358ef) running installed games; PDT raster on shared `crysirror_image::avg32`, text/menus as engine GlyphRun/solid layers, audio channels, storage and save mount (ADR 0095) |
+| crysirror-krkr | AGPL KiriKiri adapter, linked by the desktop: CrySirror TJS2 VM (crysirror-tjs2) and KAG parser (crysirror-kag), with native KAG3 classes mapped onto shared Layer/Canvas/Text/UI/audio/clock/storage (ADR 0053/0088) |
+| crysirror-avg32 | xmoezzz's AVG32 interpreter maintained in the workspace running installed games; PDT raster on shared `crysirror_image::avg32`, text/menus as engine GlyphRun/solid layers, audio channels, storage and save mount (ADR 0095) |
 | crysirror-rfvp-vm | First-class HCB interpreter and native syscall/primitive/wait/save policy; per-instance globals, shared text/font/image kernels, no original software renderer/mixer or private pixel-storage implementation |
 | crysirror-codec-{omv,theora,mpeg,wmv,emote} | First-class CPU format/codec libraries used by shared Video/Puppet services; no original standalone players, windows or renderers |
-| crysirror-rfvp | Optional `rfvp` semantic adapter: scoped storage/surfaces/PuppetFrame declarations, shared CPU mesh capture, channel audio and Media; framework snapshots remain unsupported |
-| crysirror-bgi-vm / crysirror-bgi | Optional first-class bounded native BP executor and semantic adapter; shared Canvas/Layer/GlyphRun, capability tasks, audio admission and input; no original BGI App or renderer |
-| crysirror-nscripter | Optional GPL-2.0-or-later native text-script interpreter; shared Layer/GlyphRun/UI, resource workers, audio and cyclic XOR; no ONScripter runtime or renderer linked |
-| crysirror-circus | First-class bounded DC4PH MES native interpreter and semantic/resource/wait adapter, registered by desktop feature `circus` for ABI0xabb6; shared Image/Layer/UI/Audio/VFX own presentation. ABI0xaab6 remains parse-only; original saves and later native operations remain unsupported |
-| crysirror-catsystem2 | First-class original KCS v2 stack VM and pending-native adapter; shared INT/PE MENU/XML/task/UI resources, reviewed module ABI guard and visible opcode/native frontiers. CST/FES execution and original saves remain unsupported |
+| crysirror-rfvp | `rfvp` semantic adapter, linked by the desktop: scoped storage/surfaces/PuppetFrame declarations, shared CPU mesh capture, channel audio and Media; framework snapshots remain unsupported |
+| crysirror-bgi-vm / crysirror-bgi | First-class bounded native BP executor and semantic adapter, linked by the desktop; shared Canvas/Layer/GlyphRun, capability tasks, audio admission and input; no original BGI App or renderer |
+| crysirror-nscripter | GPL-2.0-or-later native text-script interpreter, linked by the desktop; shared Layer/GlyphRun/UI, resource workers, audio and cyclic XOR; no ONScripter runtime or renderer linked |
+| crysirror-circus | First-class bounded DC4PH MES native interpreter and semantic/resource/wait adapter, registered by the desktop binary for ABI0xabb6; shared Image/Layer/UI/Audio/VFX own presentation. ABI0xaab6 remains parse-only; original saves and later native operations remain unsupported |
+| crysirror-catsystem2 | First-class original KCS v2 and FES semantic/resource/wait policy; shared scoped INT/HG3/Image/Canvas/Layer/Input/Audio workers, real KCS pose/root completion and reviewed module/resource guards. Remaining native classes, complete CST/dialogue/input and original saves remain incomplete |
 | crysirror-siglus-vm | Independent original SceneVm subset registered as `siglus`; native operations call shared engine services, including the explicit plain TEXT/NAME profile (ADR 0061) |
 | crysirror-engine | Unity-style public API: reflective classes/objects, App lifecycle, behaviours, plugins, ScriptHost contract (ADR 0004/0005) |
-| crysirror-script-js | Default JS/TS script host (Boa + Oxc) bound to the class registry; desktop feature `scripting` (ADR 0005) |
+| crysirror-script-js | Default JS/TS script host (Boa + Oxc) bound to the class registry; always linked by the desktop binary (ADR 0005) |
 | crysirror-asset | Device-free importers; glTF 2.0/GLB/VRM, binary FBX and PMX (converted to GLB in memory) into world entities and PBR models (ADR 0007, 0054) |
 
 Layering for engine users (ADR 0004): `App` (crysirror-engine) owns a `Runtime`
@@ -69,10 +73,11 @@ crysirror-scene and are installed, ticked, extracted and saved by Runtime.
 
 The modern 3D product direction and data/VM/optional-script ownership decisions
 are in [ADR 0002](adr/0002-modern-engine-and-optional-typescript.md). The executed
-TS/JS authoring profile is documented in [AUTHORING.md](AUTHORING.md). Compiler
-and JS execution dependencies are confined to the optional authoring crate;
-JSON-only projects run without them. Dynamic 3D systems now use ClientSpec.systems;
-per-frame JS remains pending. Existing original VM contracts retain their roles.
+TS/JS authoring profile is documented in [AUTHORING.md](AUTHORING.md). The offline `crysirror-author` recipe tool is separate from the runtime
+`crysirror-script-js` host. The desktop links Boa/Oxc gameplay scripting and
+drives init/start/fixed/update/late-update callbacks through the engine App.
+Data-only projects need no script evaluation, while ClientSpec.systems owns
+dynamic World/Layer/UI declarations. Original native VMs remain independent.
 
 [ADR 0003](adr/0003-siglus-monorepo-and-rendering-capabilities.md) records the
 monorepo extraction, executed Siglus resource comparison, desktop platform scope,
@@ -242,7 +247,7 @@ not expose arbitrary memory writes or parallel bypasses around the scheduler.
 The new `crysirror-reallive` dependency direction is VM/semantic adapter to
 shared engine services. It does not restore the removed RealLive hosted engine.
 The source pin and excluded engine modules are in
-[`SOURCE.json`](../crates/crysirror-reallive/src/vm/SOURCE.json). Original
+the workspace VM and adapter modules. Original
 bytecode/value/call semantics stay in the VM; pending Command/Text events are
 acknowledged only after the corresponding engine calls succeed.
 
@@ -288,8 +293,7 @@ all engine subsystems, including World, physics, rendering, text/UI, audio/video
 scripts/native VMs, save/restore and MCP. The current worker pools and asset/pose
 paths are stage one. Present owner-thread limitations are migration work, not
 permanent exemptions. Thread affinity and native ordering remain explicit graph
-dependencies/commit boundaries. Validation is local; GitHub CI was removed at
-the owner's request and must not be restored without explicit authorization.
+dependencies/commit boundaries. Validation runs locally; remote build automation is disabled.
 
 ## Frame pipeline, profiling and streamed cells (2026-10-26)
 
@@ -546,8 +550,8 @@ KiriKiri only translates parameters and parks/resumes its original TJS stack.
 Images are ordinary engine resources, never a hosted legacy composed screen.
 Asset content fingerprints keep worker mutations tied to the image observed by a
 native load. These are CPU resource operations; GPU shader equivalents and
-arbitrary Canvas readback remain separate work. Source/provenance and supported
-native profiles are recorded in `docs/synth-image-source-audit.json` and ADR 0090.
+arbitrary Canvas readback remain separate work. Shared image operations and
+native effect profiles are described in ADR 0090.
 
 ## Authenticated resource containers and native plugin authoring (ADR 0091–0093)
 

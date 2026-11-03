@@ -17,12 +17,22 @@ pub enum VmYield {
 /// The data VM and independent original Siglus interpreter implement this port.
 /// Device handles remain outside private logical state.
 pub trait VmAdapter {
+    /// A native drawing callback has yielded before publishing its complete
+    /// visual result. Internal resource captures may still use current logical
+    /// state; a live presenter must retain its last completed frame meanwhile.
+    /// User-facing modal/input waits must not hold this fence, since their UI
+    /// needs presentation before the VM can continue.
+    fn presentation_pending(&self) -> bool {
+        false
+    }
     /// True only during dormant boot/resource preparation, before ordinary VM
     /// execution. step with empty input may poll/prepare this phase, but must
     /// not execute normal game instructions after it becomes ready. Offline
     /// hosts can settle this dependency without replaying other clients/input
     /// or advancing simulated time. Window hosts keep polling normally.
-    fn preparation_pending(&self) -> bool { false }
+    fn preparation_pending(&self) -> bool {
+        false
+    }
     fn engine_id(&self) -> &'static str;
     fn snapshot_schema(&self) -> u32;
     fn step(
@@ -55,6 +65,18 @@ pub trait VmAdapter {
     /// unchanged. Lets native savepoints work without claiming runtime snapshots.
     fn original_save_import_is_transactional(&self) -> bool {
         false
+    }
+    /// Create a detached original-save resource preparation at a native
+    /// safepoint. No parse/I/O/host effects here: reserve worker capacity in
+    /// the returned job when the restricted resource host is first polled.
+    /// The live VM remains owned by its runtime until atomic commit.
+    fn begin_original_restore(
+        &self,
+        _bytes: alloc::sync::Arc<[u8]>,
+    ) -> Result<alloc::boxed::Box<dyn crate::native_restore::OriginalRestorePreparation>> {
+        Err(crate::Error::Unsupported(
+            "asynchronous original save restore",
+        ))
     }
     /// The user asked to close the game (window close button, OS quit).
     /// An adapter whose game confirms or saves before closing returns `true`

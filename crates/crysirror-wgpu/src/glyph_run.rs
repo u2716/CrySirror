@@ -23,7 +23,9 @@ fn phase(baseline: [f32; 2]) -> [f32; 2] {
     })
 }
 pub(super) fn key(assets: &Assets, owner: u32, paint: &Paint) -> Result<String> {
-    let text=assets.text.for_client(crysirror_core::state::ClientId(owner));
+    let text = assets
+        .text
+        .for_client(crysirror_core::state::ClientId(owner));
     let Paint::GlyphRun {
         font,
         size,
@@ -63,7 +65,9 @@ impl Renderer {
         // changing a complete paragraph must not count both paragraphs forever.
         let mut needed = std::collections::BTreeSet::new();
         for p in &frame {
-            let text=assets.text.for_client(crysirror_core::state::ClientId(p.owner));
+            let text = assets
+                .text
+                .for_client(crysirror_core::state::ClientId(p.owner));
             if let Paint::GlyphRun {
                 font,
                 size,
@@ -76,6 +80,9 @@ impl Renderer {
                 p.paint.validate()?;
                 let visible = p.paint.glyph_reveal_status().expect("glyph run").visible;
                 for g in glyphs.iter().take(visible) {
+                    if g.crop.is_some_and(|r| r[2] == 0. || r[3] == 0.) {
+                        continue;
+                    }
                     let request = GlyphRaster {
                         glyph_id: text.glyph_id(font, g.character)?,
                         size: g.size.unwrap_or(*size),
@@ -95,7 +102,9 @@ impl Renderer {
         let mut count = 0usize;
         let mut bytes: usize = self.glyph_cells.values().map(|c| c.rgba.len()).sum();
         for p in frame {
-            let text=assets.text.for_client(crysirror_core::state::ClientId(p.owner));
+            let text = assets
+                .text
+                .for_client(crysirror_core::state::ClientId(p.owner));
             let Paint::GlyphRun {
                 font,
                 size,
@@ -116,6 +125,9 @@ impl Renderer {
             );
             let visible = p.paint.glyph_reveal_status().expect("glyph run").visible;
             for g in glyphs.iter().take(visible) {
+                if g.crop.is_some_and(|r| r[2] == 0. || r[3] == 0.) {
+                    continue;
+                }
                 count = count.checked_add(1).context("glyph frame count overflow")?;
                 ensure!(count <= 65_536, "positioned glyph frame budget");
                 let size = g.size.unwrap_or(*size);
@@ -132,6 +144,7 @@ impl Renderer {
                     color,
                     bold,
                     glyphs: vec![PositionedGlyph {
+                        crop: None,
                         character: g.character,
                         baseline: request.baseline,
                         size: None,
@@ -190,6 +203,33 @@ impl Renderer {
                                 );
                                 (out, w, h, [-i32::from(b.radius); 2])
                             }
+                            GlyphCoverageKernel::ObliqueBoxSum {
+                                numerator,
+                                denominator,
+                                radius_x,
+                                radius_y,
+                            } => {
+                                let cell = crysirror_text::glyph_coverage::oblique_box_sum(
+                                    &coverage,
+                                    bitmap.width as usize,
+                                    bitmap.height as usize,
+                                    numerator,
+                                    denominator,
+                                    radius_x,
+                                    radius_y,
+                                )?;
+                                (cell.pixels, cell.size[0], cell.size[1], cell.origin)
+                            }
+                            GlyphCoverageKernel::BoxSumRect { radius_x, radius_y } => {
+                                let cell = crysirror_text::glyph_coverage::box_sum_rect(
+                                    &coverage,
+                                    bitmap.width as usize,
+                                    bitmap.height as usize,
+                                    radius_x,
+                                    radius_y,
+                                )?;
+                                (cell.pixels, cell.size[0], cell.size[1], cell.origin)
+                            }
                             mode => {
                                 let apply = match mode {
                                     GlyphCoverageKernel::DiskOutline => {
@@ -197,6 +237,9 @@ impl Renderer {
                                     }
                                     GlyphCoverageKernel::SquareFace => {
                                         crysirror_text::glyph_coverage::square_face
+                                    }
+                                    GlyphCoverageKernel::BoxSum => {
+                                        crysirror_text::glyph_coverage::box_sum
                                     }
                                     _ => unreachable!(),
                                 };
@@ -232,12 +275,18 @@ impl Renderer {
                     g.baseline[1].floor() + cell.origin[1] as f32,
                 ];
                 let mut draw = p.clone();
-                draw.quad = local_quad(
-                    &p,
+                let Some(crop) = crysirror_scene::layer::crop::crop_rect(
                     [origin[0], origin[1], cell.width as f32, cell.height as f32],
-                )?;
+                    g.crop,
+                    [0., 0., 1., 1.],
+                )?
+                else {
+                    continue;
+                };
+                draw.quad = local_quad(&p, crop.rect)?;
+                draw.uv = crop.uv;
                 draw.size = [cell.width, cell.height];
-                draw.extent = [cell.width as f32, cell.height as f32];
+                draw.extent = [crop.rect[2], crop.rect[3]];
                 draw.paint = paint;
                 expanded.push(draw);
             }
@@ -250,32 +299,7 @@ impl Renderer {
 /// scale/rotation/projected camera transforms rather than treating text as a
 /// screen-space overlay. Primitive stores divided xyz plus homogeneous w.
 fn local_quad(p: &Primitive, rect: [f32; 4]) -> Result<[[f32; 4]; 4]> {
-    ensure!(
-        p.extent.iter().all(|v| v.is_finite() && *v > 0.),
-        "glyph layer extent is empty"
-    );
-    let positions = p.quad.map(|[x, y, z, w]| [x * w, y * w, z * w, w]);
-    let point = |x: f32, y: f32| -> Result<[f32; 4]> {
-        let (u, v) = (x / p.extent[0], y / p.extent[1]);
-        let h: [f32; 4] = std::array::from_fn(|i| {
-            positions[0][i] * (1. - u) * (1. - v)
-                + positions[1][i] * u * (1. - v)
-                + positions[2][i] * u * v
-                + positions[3][i] * (1. - u) * v
-        });
-        ensure!(
-            h.iter().all(|v| v.is_finite()) && h[3].abs() > 1e-6,
-            "glyph projection has invalid homogeneous coordinates"
-        );
-        Ok([h[0] / h[3], h[1] / h[3], h[2] / h[3], h[3]])
-    };
-    let [x, y, w, h] = rect;
-    Ok([
-        point(x, y)?,
-        point(x + w, y)?,
-        point(x + w, y + h)?,
-        point(x, y + h)?,
-    ])
+    crysirror_scene::layer::crop::subrect_quad(p.quad, p.extent, rect)
 }
 
 #[cfg(test)]
@@ -384,6 +408,42 @@ mod tests {
         if let Some(path) = std::env::var_os("CRYSIRROR_GLYPH_CAPTURE") {
             pixels.save(path).unwrap();
         }
+        let mut cropped = spec.clone();
+        cropped.source_crop = Some([13., 0., 12., 80.]);
+        layers
+            .apply_batch(ClientId(1), &[LayerCommand::Put { layer: cropped }])
+            .unwrap();
+        renderer
+            .set_engine_frame(layers.frame([140, 80]).unwrap())
+            .unwrap();
+        let cropped_pixels = renderer
+            .capture(
+                &SceneState::default(),
+                &mut assets,
+                [140, 80],
+                [0, 0, 0, 255],
+            )
+            .unwrap();
+        for (x, y, pixel) in cropped_pixels.enumerate_pixels() {
+            let expected = if (13..25).contains(&x) {
+                pixels.get_pixel(x, y).0
+            } else {
+                [0, 0, 0, 255]
+            };
+            assert_eq!(pixel.0, expected, "source crop at {x},{y}");
+        }
+        assert!(
+            renderer.glyph_cells.keys().all(|key| cached.contains(key)),
+            "cropping must reuse the original immutable coverage keys; fully hidden glyphs may be retired"
+        );
+        layers
+            .apply_batch(
+                ClientId(1),
+                &[LayerCommand::Put {
+                    layer: spec.clone(),
+                }],
+            )
+            .unwrap();
         let mut moved = layers.frame([140, 80]).unwrap();
         for point in &mut moved[0].quad {
             point[0] += 10.;
@@ -403,7 +463,7 @@ mod tests {
             *reveal = Some(GlyphReveal {
                 unit: GlyphRevealUnit::UnicodeScalar,
                 interval_ms: 20,
-                rate_per_second:None,
+                rate_per_second: None,
                 initial_visible: 0,
                 elapsed_ms: 0,
                 forced_complete: false,

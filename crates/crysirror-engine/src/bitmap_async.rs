@@ -3,7 +3,7 @@
 // License, v. 2.0. A copy is available at https://mozilla.org/MPL/2.0/.
 //! Client/epoch/revision-checked publication of shared worker image operations.
 use crate::{EngineState, Value};
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use crysirror_core::{image_processing::*, service::HostServices, state::ClientId};
 use serde_json::json;
 use std::{collections::BTreeMap, sync::Arc};
@@ -22,6 +22,9 @@ impl ImageResource for Snapshot {
     }
     fn rgba(&self) -> Arc<[u8]> {
         self.pixels.clone()
+    }
+    fn pixel_at(&self, point: [u32; 2]) -> crysirror_core::Result<Option<[u8; 4]>> {
+        crysirror_core::image_processing::rgba_pixel_at(self.size, &self.pixels, point)
     }
     fn opaque(&self) -> bool {
         false
@@ -44,7 +47,14 @@ pub struct BitmapJobs {
 pub(crate) fn call(state: &mut EngineState, name: &str, args: &[Value]) -> Result<Option<Value>> {
     if !matches!(
         name,
-        "beginEffect" | "beginTransition" | "beginRowCopy" | "beginAlphaClip" | "effectStatus" | "cancelEffect"
+        "beginFixedBlend"
+            | "beginEffect"
+            | "beginTransition"
+            | "beginRowCopy"
+            | "beginAlphaClip"
+            | "beginMaskedPair"
+            | "effectStatus"
+            | "cancelEffect"
     ) {
         return Ok(None);
     }
@@ -55,7 +65,10 @@ pub(crate) fn call(state: &mut EngineState, name: &str, args: &[Value]) -> Resul
         .first()
         .context("bitmap operation argument")?
         .as_i64()?;
-    if matches!(name, "beginEffect" | "beginTransition" | "beginRowCopy" | "beginAlphaClip") {
+    if matches!(
+        name,
+        "beginFixedBlend" | "beginEffect" | "beginTransition" | "beginRowCopy" | "beginAlphaClip" | "beginMaskedPair"
+    ) {
         ensure!(
             state.bitmap_jobs.entries.len() < 32
                 && state
@@ -80,9 +93,45 @@ pub(crate) fn call(state: &mut EngineState, name: &str, args: &[Value]) -> Resul
             pixels: surface.rgba.clone(),
         });
         let revision = surface.revision;
-        let (input, effects) = if matches!(name,"beginRowCopy"|"beginAlphaClip") {
+        let (input, effects) = if name == "beginFixedBlend" {
+            let source_slot=u32::try_from(args.get(1).context("fixed blend source slot")?.as_i64()?)?;
+            let path=format!("{}{}",crysirror_runtime::assets::SURFACE_PREFIX,source_slot);
+            let source=state.runtime.assets.surface(state.client,&path).context("fixed blend source absent")?;
+            let source=Arc::new(Snapshot{owner:state.client,size:[source.width,source.height],pixels:source.rgba.clone()});
+            (crate::bitmap_blend::input(ImageInput::Resource(input),ImageInput::Resource(source),args.get(2).context("fixed blend options")?.to_json())?,vec![])
+        } else if name == "beginMaskedPair" {
+            let snapshot = |arg: usize| -> Result<Arc<dyn ImageResource>> {
+                let slot =
+                    u32::try_from(args.get(arg).context("masked pair source slot")?.as_i64()?)?;
+                let path = format!("{}{}", crysirror_runtime::assets::SURFACE_PREFIX, slot);
+                let image = state
+                    .runtime
+                    .assets
+                    .surface(state.client, &path)
+                    .context("masked pair source absent")?;
+                Ok(Arc::new(Snapshot {
+                    owner: state.client,
+                    size: [image.width, image.height],
+                    pixels: image.rgba.clone(),
+                }))
+            };
+            let spec =
+                serde_json::from_value(args.get(3).context("masked pair parameters")?.to_json())?;
+            (
+                ImageInput::Ternary {
+                    destination: Box::new(ImageInput::Resource(input)),
+                    first: Box::new(ImageInput::Resource(snapshot(1)?)),
+                    second: Box::new(ImageInput::Resource(snapshot(2)?)),
+                },
+                vec![crysirror_image::effects::ImageEffect::MaskedPairBlend { spec }],
+            )
+        } else if matches!(name, "beginRowCopy" | "beginAlphaClip") {
             let source_slot = u32::try_from(args.get(1).context("pair source slot")?.as_i64()?)?;
-            let path = format!("{}{}", crysirror_runtime::assets::SURFACE_PREFIX, source_slot);
+            let path = format!(
+                "{}{}",
+                crysirror_runtime::assets::SURFACE_PREFIX,
+                source_slot
+            );
             let source = state
                 .runtime
                 .assets
@@ -93,13 +142,19 @@ pub(crate) fn call(state: &mut EngineState, name: &str, args: &[Value]) -> Resul
                 size: [source.width, source.height],
                 pixels: source.rgba.clone(),
             });
-            let options=args.get(2).context("pair image parameters")?.to_json();
-            let effect=if name=="beginRowCopy" {
-                crysirror_image::effects::ImageEffect::SineRowCopy{spec:serde_json::from_value(options)?}
-            }else{
-                let spec:crysirror_image::alpha_clip::AlphaClipRect=serde_json::from_value(options)?;
-                ensure!(!spec.self_source||source_slot==slot,"self-source alpha clip requires the same bitmap slot");
-                crysirror_image::effects::ImageEffect::AlphaClipRect{spec}
+            let options = args.get(2).context("pair image parameters")?.to_json();
+            let effect = if name == "beginRowCopy" {
+                crysirror_image::effects::ImageEffect::SineRowCopy {
+                    spec: serde_json::from_value(options)?,
+                }
+            } else {
+                let spec: crysirror_image::alpha_clip::AlphaClipRect =
+                    serde_json::from_value(options)?;
+                ensure!(
+                    !spec.self_source || source_slot == slot,
+                    "self-source alpha clip requires the same bitmap slot"
+                );
+                crysirror_image::effects::ImageEffect::AlphaClipRect { spec }
             };
             (
                 ImageInput::Raster {

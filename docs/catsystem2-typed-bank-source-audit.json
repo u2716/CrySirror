@@ -1,0 +1,48 @@
+{
+  "schema": 1,
+  "engine": "CatSystem2",
+  "scope": "Reviewed typed native data and engine-backed ImageList publication, with full FES resource admission still in progress",
+  "native_evidence": {
+    "module_sha256": "f8a1fb4fed8a0c64c3fbc0bcf009f63e8f3181cfbc1a0dbd60f9ddefc8e25b3d",
+    "method": "Read-only local IDA/capstone; no original EXE/DLL execution or distribution",
+    "families": {
+      "754310/7589E0/758F70/7590F0": "Implicit BASE and whole declaration order, all-array evaluate-once application and parent-before-class policy",
+      "767A80/767BF0/767DB0/767F80/7682C0": "Whole CIMAGE/IMAGE/CPLANE/PLANE/SOUND OBJECT field callbacks; VIEW shares BASE constructor",
+      "745430/743F90/7491B0": "Permanent draw key, independent priority and signed-priority/unsigned-key ordering confirmed in x86",
+      "745900/746C40/7463C0": "Actual source origin/base, position and pivot readback; no guessed drawing-center correction",
+      "728FA0/729C20": "Index right-child AST attachment and original named-value lookup within the selected owner bank",
+      "75C4D0/755D80/6287B0": "Original DEFINE/index FIFO resource initialization differs from object-name lookup tree; corrected and validated in141/1.",
+      "65C820/65DC00": "Separate original CIMAGE/IMAGE mode0 draw placement and PATHMODE0/1 origin/base policy; same common Image/Canvas resources, Runtime nonzero-geometry test passed."
+    }
+  },
+  "implementation": {
+    "files": [
+      "crates/crysirror-catsystem2/src/native_class_state.rs",
+      "crates/crysirror-catsystem2/src/fes_object_bank.rs",
+      "crates/crysirror-catsystem2/src/native_image_publication.rs",
+      "crates/crysirror-catsystem2/src/native_interpreter.rs",
+      "crates/crysirror-catsystem2/src/fes_object_resources.rs"
+    ],
+    "native_only": "Raw class fields, counters, native names/arrays, handle IDs, references and original motion Controllers. No private pixel codec, renderer, compositor, text engine or mixer. Class data alone does not grant native admission.",
+    "shared_services": "Actual ImageMetadata workers and immutable ImageResources; Canvas Restore/Copy/PresentIsolated and Layer external-motion/opacity/client-scoping. Dirty-pixel rendering/composition remains engine-owned.",
+    "ast": "Named/literal [] attaches an index tree; prefix flag #[expr]/$[expr] groups its operand, retaining original flag operations. Nested/dynamic index side effects execute once; repeated attachment replaces the right child like original728FA0. Malformed brackets fail before committing VM state.",
+    "boundaries": [
+      "The original typed39 Machine gate remains until complete resource/alias/motion/input/lifetime receipts are connected",
+      "Seven declared types (six actual constructor variants including shared BASE/VIEW) have reviewed data callbacks; other32 types remain visibly unsupported",
+      "Initial field metadata/data bank is not title/gameplay acceptance",
+      "Native whole-bank resource publisher is runtime-only production;4 Runtime tests passed inside135passed1ignored release lib, but Machine admission and full class/alias/motion/lifetime wiring remain gated",
+      "No desktop/GPU/current owner-game receipt for this batch"
+    ]
+  },
+  "validation": {
+    "release": "native-object-bank-family-tests4.log:131passed0failed1ignored; frozen cat-object-bank-lib SHA256561445d890edb3aa786a1df6dc524213cc4735e3b532e920cac368c005170569",
+    "preceding_phases": "native-image-publication-all-lib-tests.log126passed1ignored; native-class-state-all-lib-tests.log128passed1ignored. New Runtime image/Canvas publication actually checks parent motion stamp, opacity128, client isolation, bad-parent atomic rollback and immutable old snapshot state.",
+    "failed_iterations": "Bank initial two targeted runs each1passed1failed exposed missing named-array AST. First complete fix130passed1failed1ignored regressed preexisting prefix flag brackets; corrected before final131/1. Failed runs are not passes.",
+    "python": "native-hg3-worker-python-final.log201passed0skipped2.801s. First prior run had concurrent Siglus source-hash failure; final explicit rerun passed.",
+    "api": "Shared metadata contract documented by unified agent; actual API docs no-bless8/8+coverage1/1 passed with fingerprintfeb2ec9be29523ba. Private Cat Rust modules add no reflected class/DTO.",
+    "owner": "Unchanged old cat-owner-batch4 c5f41f86d362361c30b6f4a209b283c5d80d19a74ac1efca3f59a0612f41f5f1; KCS20360/FES53 pendingexecfes brandlogo. No new title/start/CPUgame/GPU claim.",
+    "whole_bank_release": "native-hg3-typed-resource-batch-tests2.log: Cat135passed1ignored, formats lib44passed1ignored, archives_e20passed1ignored, HG3frames10passed0ignored. First run132passed3failed1ignored exposed native adapter Canvas reserved presentation-ID namespace; corrected adapter IDs before final pass, preserving shared guard. Frozen cat-typed-resources-lib SHA256922e9bf77e9b43e544f3fb73c611458f7f843f4feea887cc2ed0eb22e9a125ac.",
+    "python_current": "native-hg3-typed-resource-python-tests.log201tests OK,0skipped,3.976s.",
+    "source_corrections_release": "native-alias-fifo-geometry-budget-tests.log: Cat141passed1ignored includes DEFINE FIFO vs lookup-order correction, native IMAGE/CIMAGE distinct pivot and PATHMODE0/1 nonzero geometry, plus4 alias-value tests; formats lib45/1+HG3frames11/0 passed including cumulative work/current context. Frozen cat-alias-fifo-geometry-lib SHA256d9c6a383cc4ec6e265a2e801349069d183fe746d6a1d699ac50a5ab22eaf20d3. Private Machine gate remains."
+  }
+}

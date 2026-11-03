@@ -18,6 +18,8 @@ pub(crate) fn call(state: &mut EngineState, method: &str, args: &[Value]) -> Res
             | "beginPrecomputedFont"
             | "fontStatus"
             | "resolveFont"
+            | "resolveFontAlias"
+            | "fontMetrics" | "glyphId" | "fontStyle"
             | "releaseFontJob"
             | "releaseFont"
     ) {
@@ -80,6 +82,33 @@ pub(crate) fn call(state: &mut EngineState, method: &str, args: &[Value]) -> Res
                 .map(info)
                 .unwrap_or(serde_json::Value::Null),
         ),
+        "resolveFontAlias" => library
+            .resolve_alias(arg.as_str()?)?
+            .map(Value::Str)
+            .unwrap_or(Value::Null),
+        "glyphId" => {
+            let text=args.get(1).context("glyph character")?.as_str()?;let mut chars=text.chars();let ch=chars.next().context("empty glyph character")?;
+            anyhow::ensure!(chars.next().is_none(),"glyph identifier requires one scalar");
+            Value::Int(i64::from(library.glyph_id(arg.as_str()?,ch)?))
+        }
+        "fontStyle" => Value::from_json(library.face_style(arg.as_str()?)?.map(|s|json!({"weight":s.weight,"italic":s.italic})).unwrap_or(serde_json::Value::Null)),
+        "fontMetrics" => {
+            let alias = arg.as_str()?;
+            let size = args.get(1).context("font metric size")?.as_f64()? as f32;
+            let text = args.get(2).context("font metric character")?.as_str()?;
+            let mut characters = text.chars();
+            let character = characters
+                .next()
+                .context("font metric character is empty")?;
+            anyhow::ensure!(
+                characters.next().is_none(),
+                "font metrics require one Unicode scalar"
+            );
+            let metrics = library.metrics(alias, size, character)?;
+            Value::from_json(
+                json!({"ascent":metrics.ascent,"descent":metrics.descent,"advance":metrics.advance}),
+            )
+        }
         "releaseFontJob" => {
             library.release_job(FontJob {
                 owner,

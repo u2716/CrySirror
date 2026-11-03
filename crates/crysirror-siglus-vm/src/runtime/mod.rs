@@ -22,6 +22,7 @@ pub mod int_event {
     pub use crysirror_scene::animation::*;
 }
 mod scene_metadata;
+mod native_skip;
 pub mod tables;
 pub mod twitter;
 pub mod ui;
@@ -255,7 +256,7 @@ pub struct CommandContext {
     pub int_vec_pool: IntVecPool,
     pub project_dir: PathBuf,
     pub ids: constants::RuntimeConstants,
-    pub globals: globals::GlobalState,
+    pub globals: crate::shared::Shared<globals::GlobalState>,
     pub tables: tables::AssetTables,
     pub stack: Vec<Value>,
     pub unknown: unknown::UnknownOpRecorder,
@@ -266,9 +267,9 @@ pub struct CommandContext {
     /// Original EXCALL caller continuations. Kept inside VM transaction data
     /// so worker admission/rollback and framework snapshots remain atomic.
     pub(crate) native_proc_waits: Vec<wait::VmWait>,
-    /// Runtime-only monotonic identity for shared Media declarations. Movies
-    /// cannot be restored without external-resource reconstruction.
-    #[serde(skip)]
+    /// Monotonic logical resource identity. STRING recipes need this counter
+    /// across framework restores; worker tickets and Media leases stay outside
+    /// the VM. The original save codec has its own explicitly written fields.
     pub(crate) native_media_revision: u64,
     pub screen_w: u32,
     pub screen_h: u32,
@@ -279,7 +280,7 @@ pub struct CommandContext {
     pub excall_state: ExcallCompatState,
     pub local_save_snapshot: Option<LocalSaveSnapshot>,
     pub pending_scene_restart: Option<(String, i32)>,
-    pub images: ImageManager,
+    pub images: crate::shared::Shared<ImageManager>,
     pub audio: AudioHub,
     pub bgm: BgmEngine,
     pub koe: KoeEngine,
@@ -291,11 +292,23 @@ pub struct CommandContext {
     proc_generation: u64,
     last_proc_kind: ProcKind,
     pending_auto_savepoint: bool,
+    pending_runtime_save: Option<RuntimeSaveRequest>,
+    pending_runtime_load: Option<RuntimeLoadRequest>,
+    messagebox_request_seq: u64,
+    /// C_tnm_eng::init_global(): load global/read/config saves before the
+    /// first scene instruction, inside the capability I/O transaction.
+    #[serde(default)]
+    pub(crate) global_save_pending: bool,
     pending_read_flag_no: bool,
     runtime_load_completed: bool,
     pub backend_faults: RefCell<Vec<String>>,
     scene_names: RefCell<Option<Arc<scene_metadata::SceneMetadata>>>,
     last_ms: u64,
+    // Original C_tnm_global state, separate from local SCRIPT/EXCALL state.
+    pub(crate) skip_because_skip_trigger: bool,
+    pub(crate) msg_wait_skip_by_click: bool,
+    read_skip_enable_flag: bool,
+    cant_auto_skip_before_click: bool,
 }
 impl CommandContext {
     pub fn new(project_dir: PathBuf) -> Self {
@@ -333,11 +346,19 @@ impl CommandContext {
             proc_generation: 0,
             last_proc_kind: ProcKind::Script,
             pending_auto_savepoint: false,
+            pending_runtime_save: None,
+            pending_runtime_load: None,
+            messagebox_request_seq: 0,
+            global_save_pending: false,
             pending_read_flag_no: false,
             runtime_load_completed: false,
             backend_faults: Default::default(),
             scene_names: Default::default(),
             last_ms: crate::platform_time::Instant::now().0,
+            skip_because_skip_trigger: false,
+            msg_wait_skip_by_click: false,
+            read_skip_enable_flag: false,
+            cant_auto_skip_before_click: false,
         }
     }
     pub fn push(&mut self, v: Value) {
@@ -360,11 +381,14 @@ impl CommandContext {
         self.request_proc_boundary(kind)
     }
     pub fn begin_frame_main_proc_pass(&mut self) {}
-    pub fn begin_input_frame(&mut self) {}
+    pub fn begin_input_frame(&mut self) {
+        self.msg_wait_skip_by_click = false;
+    }
     pub fn sync_script_input_from_runtime(&mut self) {
         self.script_input = self.input.clone();
     }
     pub fn wait_poll(&mut self) -> bool {
+        let skipping = self.runtime_is_skipping();
         self.wait.poll(
             &mut self.stack,
             &mut self.bgm,
@@ -373,7 +397,7 @@ impl CommandContext {
             &mut self.pcm,
             &mut self.globals,
             &self.ids,
-            false,
+            skipping,
         )
     }
     pub fn tick_frame(&mut self) -> Result<()> {
@@ -388,10 +412,12 @@ impl CommandContext {
         } else {
             delta
         };
-        self.globals.tick_frame(game_delta, delta, &[], None);
+        let excall = self.excall_state.ready.then(|| forms::excall::tick_targets(self));
+        self.globals.tick_frame(game_delta, delta, &[], excall);
         if let Some(time) = media_time {
             self.globals.mov.timer_ms = time;
         }
+        crate::native_sound::update_audio_routing(self, delta, false)?;
         Ok(())
     }
     pub fn on_mouse_down(&mut self, b: input::VmMouseButton) {
@@ -411,26 +437,67 @@ impl CommandContext {
         self.runtime_load_completed = true;
     }
     pub fn begin_runtime_load_apply(&mut self) {
+        self.skip_because_skip_trigger = false;
+        self.msg_wait_skip_by_click = false;
+        self.read_skip_enable_flag = false;
+        self.cant_auto_skip_before_click = false;
         self.native_proc_waits.clear();
         self.wait.clear();
         self.input.clear_all();
         self.script_input.clear_all();
     }
+    pub fn request_runtime_save(&mut self, kind: RuntimeSaveKind, index: usize) {
+        self.pending_runtime_save = Some(RuntimeSaveRequest { kind, index });
+    }
+    pub fn request_runtime_load(&mut self, kind: RuntimeSaveKind, index: usize) {
+        self.pending_runtime_load = Some(RuntimeLoadRequest { kind, index });
+    }
     pub fn take_runtime_save_request(&mut self) -> Option<RuntimeSaveRequest> {
-        None
+        self.pending_runtime_save.take()
     }
     pub fn take_runtime_load_request(&mut self) -> Option<RuntimeLoadRequest> {
-        None
+        self.pending_runtime_load.take()
+    }
+    /// Original internal system message box. The adapter presents it through
+    /// the engine modal dialog service and completes the system-modal wait.
+    pub fn request_internal_system_messagebox_no_return(
+        &mut self,
+        kind: i32,
+        debug_only: bool,
+        text: String,
+        buttons: Vec<globals::SystemMessageBoxButton>,
+    ) {
+        self.messagebox_request_seq += 1;
+        self.globals.system.messagebox_modal_result = None;
+        self.globals.system.messagebox_modal = Some(globals::SystemMessageBoxModalState {
+            request_id: self.messagebox_request_seq,
+            kind,
+            text,
+            debug_only,
+            buttons,
+            cursor: 0,
+            native_pending: false,
+            complete_wait_with_value: false,
+        });
+        self.wait.wait_system_modal();
+    }
+    /// Current composed game frame from the engine canvas capture service. A
+    /// pending capture retries the native instruction once the image exists.
+    pub fn capture_frame_rgba(&mut self) -> Result<RgbaImage> {
+        Ok(crate::io_fs::frame_capture()?)
     }
     pub fn request_auto_savepoint(&mut self) {
-        self.pending_auto_savepoint = true;
+        self.globals.syscom.current_save_message.clear();
+        if !self.globals.script.dont_set_save_point {
+            self.pending_auto_savepoint = true;
+        }
     }
     pub fn take_pending_auto_savepoint(&mut self) -> bool {
         std::mem::take(&mut self.pending_auto_savepoint)
     }
     pub fn request_message_auto_savepoint(&mut self) {
         self.local_save_snapshot = None;
-        self.pending_auto_savepoint = true;
+        self.request_auto_savepoint();
     }
     pub fn take_pending_sel_point_result(&mut self) -> Option<i32> {
         None
@@ -445,6 +512,7 @@ impl CommandContext {
         self.pending_read_flag_no = false;
     }
     pub fn submit_read_flag_no(&mut self, flag: i32) {
+        self.set_current_read_flag_for_skip(self.current_scene_no.unwrap_or(-1), i64::from(flag));
         if self.ui.window.is_some() {
             crate::message::stock_flag(self, flag);
             return;
@@ -497,6 +565,15 @@ pub fn dispatch_form_code(ctx: &mut CommandContext, id: u32, args: &[Value]) -> 
     }
     if constants::matches_form_id(id, ctx.ids.form_global_script, gf::SCRIPT) {
         return forms::script::dispatch(ctx, args);
+    }
+    if constants::matches_form_id(id, ctx.ids.form_global_excall, gf::EXCALL) {
+        return forms::excall::dispatch(ctx, args);
+    }
+    if forms::global::dispatch_capture(ctx, id, args)? {
+        return Ok(true);
+    }
+    if id==forms::codes::FORM_GLOBAL_CGTABLE {
+        return forms::cgtable::dispatch(ctx,args);
     }
     if id == gf::FRAME_ACTION {
         return forms::frame_action::dispatch(ctx, id, args);
@@ -558,8 +635,16 @@ pub fn dispatch_form_code(ctx: &mut CommandContext, id: u32, args: &[Value]) -> 
     if crate::koe_bridge::dispatch(ctx, id, args)? || crate::koe_bridge::config(ctx, id, args)? {
         return Ok(true);
     }
-    if id == ctx.ids.form_global_syscom && forms::syscom::dispatch_config(ctx, args)? {
+    if crate::message::global::dispatch(ctx, id, args)? {
         return Ok(true);
+    }
+    if id == ctx.ids.form_global_syscom {
+        if forms::syscom::dispatch_config(ctx, args)? {
+            return Ok(true);
+        }
+        // Remaining original SYSCOM operations (save slots, menus, capture,
+        // message back, replay voice, local extras) use the adopted source.
+        return forms::syscom_original::dispatch(ctx, id, args);
     }
     if id == gf::TIMEWAIT {
         return forms::timewait::dispatch(ctx, false, args);

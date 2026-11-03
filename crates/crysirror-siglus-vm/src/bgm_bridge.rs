@@ -444,9 +444,10 @@ pub(crate) fn dispatch_table(ctx: &mut CommandContext, args: &[Value]) -> Result
         })
         .unwrap_or(0);
     ensure!(count <= 4096, "Siglus BGM table exceeds 4096 entries");
-    ctx.globals.bgm_table_flags.resize(
-        count.max(ctx.globals.bgm_table_flags.len()),
-        ctx.globals.bgm_table_all_flag,
+    let globals = &mut *ctx.globals;
+    globals.bgm_table_flags.resize(
+        count.max(globals.bgm_table_flags.len()),
+        globals.bgm_table_all_flag,
     );
     match operation {
         table::GET_COUNT => ctx.push(Value::Int(

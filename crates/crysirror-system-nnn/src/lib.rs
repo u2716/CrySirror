@@ -21,6 +21,14 @@ pub mod audio_bridge;
 pub mod native_text;
 pub mod native_ui;
 pub mod native_save;
+mod native_system_file;
+mod native_calendar;
+mod native_general;
+mod native_mode;
+mod native_save_images;
+mod native_save_audio;
+mod native_save_wait;
+mod native_game_restore;
 pub mod native_presentation;
 pub mod native_overlap;
 pub mod native_services_bootstrap;
@@ -30,6 +38,9 @@ pub mod native_draw;
 pub mod native_skip;
 pub mod native_message_control;
 pub mod native_shell;
+pub mod native_movie;
+pub mod native_title;
+pub mod native_move;
 pub mod native_geometry;
 use anyhow::{ensure, Context, Result};
 const MAX_SCRIPT_BYTES: usize = 16 * 1024 * 1024;
@@ -198,3 +209,6 @@ pub mod native_old_lamp;
 pub mod native_curve;
 
 pub mod native_bura;
+
+#[cfg(test)]
+mod native_save_wait_tests;

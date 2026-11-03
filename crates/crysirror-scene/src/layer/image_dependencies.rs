@@ -1,6 +1,18 @@
 // Copyright (c) 2026 CrySirror contributors. MPL-2.0.
 use super::*;
 impl LayerSpec {
+    /// Visit retained font aliases, including frozen nested scene inputs.
+    pub fn visit_font_dependencies(&self, visitor: &mut dyn FnMut(&str)) {
+        match &self.paint {
+            Paint::Text { font, .. } | Paint::GlyphRun { font, .. } => visitor(font),
+            Paint::Snapshot { layers, .. } => {
+                for layer in layers.iter() {
+                    layer.visit_font_dependencies(visitor);
+                }
+            }
+            _ => {}
+        }
+    }
     /// Visit immutable image paths without copying glyph/mesh/vertex payloads.
     pub fn visit_image_dependencies(&self, visitor: &mut dyn FnMut(&str)) {
         if let Some(filter) = &self.filter {
@@ -28,6 +40,13 @@ impl LayerSpec {
     }
 }
 impl LayerSystem {
+    pub fn visit_font_dependencies(&self, visitor: &mut dyn FnMut(ClientId, &str)) {
+        for (client, layers) in &self.clients {
+            for layer in layers.values() {
+                layer.visit_font_dependencies(&mut |font| visitor(ClientId(*client), font));
+            }
+        }
+    }
     /// Enumerate retained dependencies. False is a retirement barrier: an open
     /// transaction may still restore older paths that its journal retains.
     pub fn visit_image_dependencies(&self, visitor: &mut dyn FnMut(ClientId, &str)) -> bool {

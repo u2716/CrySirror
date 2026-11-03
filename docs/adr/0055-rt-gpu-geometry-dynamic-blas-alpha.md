@@ -8,7 +8,7 @@ the instancing of ADR 0052.
 The PBR hardware path (ADR 0051/0052) copied every primitive's triangles to
 the CPU, skinned them on workers per pose, keyed BLAS by position content,
 created a new BLAS and buffer for each new pose, and rejected masked or
-transparent casters. Gaps listed by Codex: efficient dynamic scenes (BLAS
+transparent casters. The resulting limitations were dynamic-scene efficiency (BLAS
 caching, instancing, dynamic update/refit), alpha-tested occluders.
 
 ## Decision

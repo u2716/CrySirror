@@ -138,7 +138,32 @@ fn dynamic_font_publication_is_shared_scoped_idempotent_and_immutable() {
     assert!(!a.is_loaded("late-default").unwrap());
     let late = resources.for_client_with_text(ClientId(1), Arc::new(Empty), &render);
     assert!(late.is_loaded("late-default").unwrap());
-    assert!(render.for_client(ClientId(1)).measure_simple("late-default", 24., "ABC").is_ok());
+    assert_eq!(
+        late.resolve_alias("late-default").unwrap().as_deref(),
+        Some("late-default")
+    );
+    let prepared = crysirror_text::dynamic::PreparedFontFace::prepare(first.clone(), 0).unwrap();
+    assert!(!prepared.families.is_empty());
+    assert_eq!(
+        late.resolve_alias(&prepared.families[0])
+            .unwrap()
+            .as_deref(),
+        Some("late-default")
+    );
+    assert_eq!(
+        late.metrics("late-default", 24., 'A').unwrap().advance,
+        render
+            .for_client(ClientId(1))
+            .metrics("late-default", 24., 'A')
+            .unwrap()
+            .advance
+    );
+    assert!(
+        render
+            .for_client(ClientId(1))
+            .measure_simple("late-default", 24., "ABC")
+            .is_ok()
+    );
     let measurement = resources.measurement(ClientId(1));
     let info = load(a.as_ref(), "game", first.clone(), 0);
     let duplicate = load(a.as_ref(), "game", first, 0);
@@ -147,6 +172,13 @@ fn dynamic_font_publication_is_shared_scoped_idempotent_and_immutable() {
     assert!(!info.families.is_empty());
     assert_eq!(a.resolve(&info.families[0]).unwrap(), Some(info.clone()));
     assert!(b.resolve("game").unwrap().is_none());
+    assert_eq!(a.resolve_alias("game").unwrap(), Some(info.alias.clone()));
+    assert_eq!(
+        a.resolve_alias(&info.families[0]).unwrap(),
+        Some(info.alias.clone())
+    );
+    assert!(b.resolve_alias(&info.families[0]).unwrap().is_none());
+    assert!(b.metrics(&info.alias, 32., 'A').is_err());
     assert!(!b.is_loaded(&info.alias).unwrap());
     assert!(render.font_digest(&info.alias).is_err());
     let view = render.for_client(ClientId(1));

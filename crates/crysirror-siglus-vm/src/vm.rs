@@ -8,7 +8,7 @@ mod short_save;
 use crate::original_save::NativeLocalLayout;
 mod indexed_save;
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::sync::Arc;
@@ -397,7 +397,7 @@ struct VmResumePoint<'a> {
     current_scene_no: Option<usize>,
     current_scene_name: Option<String>,
     current_line_no: i32,
-    globals: runtime::globals::GlobalState,
+    globals: crate::shared::Shared<runtime::globals::GlobalState>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
@@ -448,7 +448,8 @@ pub struct SceneVm<'a> {
 
     // C++ keeps the lexer / scene package resident. Do not reload and rebuild
     // Scene.pck for frame-action callbacks or scene-local user command calls.
-    scene_pck_cache: Option<ScenePck>,
+    /// Immutable once loaded; shared by instruction checkpoints.
+    scene_pck_cache: Option<Arc<ScenePck>>,
     scene_pck_append_dir: Option<String>,
     scene_stream_cache: BTreeMap<usize, SceneStream<'a>>,
     scene_name_resolve_cache: std::collections::HashMap<String, Option<usize>>,
@@ -1890,7 +1891,7 @@ impl<'a> SceneVm<'a> {
     }
 
     pub fn install_initial_scene_pck(&mut self, pack: ScenePck, append_dir: String) {
-        self.scene_pck_cache = Some(pack);
+        self.scene_pck_cache = Some(Arc::new(pack));
         self.scene_pck_append_dir = Some(append_dir);
     }
 
@@ -1939,13 +1940,13 @@ impl<'a> SceneVm<'a> {
                 easy_angou_code: Some(siglus_assets::keys::SCENE_KEY.to_vec()),
                 string_encryption_override,
             };
-            self.scene_pck_cache = Some(ScenePck::load_lazy_from_bytes(bytes, &opt)?);
+            self.scene_pck_cache = Some(Arc::new(ScenePck::load_lazy_from_bytes(bytes, &opt)?));
         }
 
         #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
         {
             let opt = crate::resource::load_scene_pck_decode_options(&self.ctx.project_dir)?;
-            self.scene_pck_cache = Some(ScenePck::load_lazy(&scene_pck_path, &opt)?);
+            self.scene_pck_cache = Some(Arc::new(ScenePck::load_lazy(&scene_pck_path, &opt)?));
         }
 
         self.ctx.install_scene_metadata(
@@ -3029,6 +3030,7 @@ impl<'a> SceneVm<'a> {
         let Some(st) = self.ctx.globals.stage_forms.get_mut(&stage_form) else {
             return fallback_obj_idx;
         };
+        let st = &mut **st;
         let nested_slot_base = st.backend_slot_base + 100_000;
         let next_slot = st
             .next_nested_object_slot
@@ -3931,6 +3933,11 @@ impl<'a> SceneVm<'a> {
     }
 
     pub fn step(&mut self) -> Result<bool> {
+        if self.ctx.global_save_pending {
+            crate::runtime::forms::syscom::load_global_save(&mut self.ctx)
+                .context("load global save during engine initialization")?;
+            self.ctx.global_save_pending = false;
+        }
         match self.step_inner(true) {
             Ok(running) => Ok(running),
             Err(err) => {
@@ -4552,22 +4559,6 @@ impl<'a> SceneVm<'a> {
                 let _ = self.ctx.take_read_flag_no_request();
                 let block_generation = self.ctx.wait.block_generation();
                 let proc_generation = self.ctx.proc_generation();
-                let global_koe = elm.first().is_some_and(|head| {
-                    matches!(
-                        self.canonical_runtime_form_id(*head as u32) as i32,
-                        constants::elm_value::GLOBAL_KOE
-                            | constants::elm_value::GLOBAL_KOE_PLAY_WAIT
-                            | constants::elm_value::GLOBAL_KOE_PLAY_WAIT_KEY
-                    )
-                });
-                if global_koe
-                    && (!self.stream.has_resolved_command_read_flag_layout()
-                        || self.stream.command_read_flag_no_at_current_pc().is_some())
-                {
-                    let reason = "Siglus KOE trailing read-flag requires unmapped MWND/read-skip bookkeeping";
-                    self.ctx.backend_faults.borrow_mut().push(reason.into());
-                    bail!(reason);
-                }
                 self.exec_command(elm, arg_list_id, ret_form, &mut args)?;
                 self.drain_runtime_save_load_requests()?;
                 if self.ctx.take_read_flag_no_request() {
@@ -4596,10 +4587,10 @@ impl<'a> SceneVm<'a> {
                             self.ctx.discard_read_flag_no_request();
                         }
                     } else {
-                        bail!(
-                            "unresolved native command read-flag layout at pc=0x{:x}",
-                            self.stream.pc
-                        );
+                        // Scenes whose historical layout the static scan cannot
+                        // prove keep the modern ABI (siglus_rs vm.rs).
+                        let read_flag_no = self.stream.pop_i32()?;
+                        self.ctx.submit_read_flag_no(read_flag_no);
                     }
                 }
                 if self.ctx.proc_generation() != proc_generation {
@@ -8579,7 +8570,8 @@ impl<'a> SceneVm<'a> {
         if rd.layout.uses_early_records() {
             return self.read_early_local_data_pod(rd);
         }
-        let script = &mut self.ctx.globals.script;
+        let globals = &mut *self.ctx.globals;
+        let script = &mut globals.script;
 
         script.cur_koe_no = rd.i32()? as i64;
         script.cur_chr_no = rd.i32()? as i64;
@@ -8587,7 +8579,7 @@ impl<'a> SceneVm<'a> {
         script.cur_read_flag_flag_no = rd.i32()? as i64;
         script.cursor_no = rd.i32()? as i64;
 
-        self.ctx.globals.syscom.syscom_menu_disable = rd.bool()?;
+        globals.syscom.syscom_menu_disable = rd.bool()?;
         script.hide_mwnd_disable = rd.bool()?;
         script.msg_back_disable = rd.bool()?;
         script.shortcut_disable = rd.bool()?;
@@ -8615,8 +8607,8 @@ impl<'a> SceneVm<'a> {
         script.koe_dont_stop_on_flag = rd.bool()?;
         script.koe_dont_stop_off_flag = rd.bool()?;
 
-        self.ctx.globals.syscom.mwnd_btn_disable_all = rd.bool()?;
-        self.ctx.globals.syscom.mwnd_btn_touch_disable = rd.bool()?;
+        globals.syscom.mwnd_btn_disable_all = rd.bool()?;
+        globals.syscom.mwnd_btn_touch_disable = rd.bool()?;
         script.mwnd_anime_on_flag = rd.bool()?;
         script.mwnd_anime_off_flag = rd.bool()?;
         script.mwnd_disp_off_flag = rd.bool()?;
@@ -8644,7 +8636,7 @@ impl<'a> SceneVm<'a> {
 
         script.quake_stop_flag = rd.bool()?;
         script.emote_mouth_stop_flag = rd.bool()?;
-        self.ctx.globals.cg_table_off = rd.bool()?;
+        globals.cg_table_off = rd.bool()?;
         script.bgmfade_flag = rd.bool()?;
         script.dont_set_save_point = rd.bool()?;
         script.ignore_r_flag = rd.bool()?;
@@ -8656,7 +8648,7 @@ impl<'a> SceneVm<'a> {
         script.stage_time_stop_flag = rd.bool()?;
         rd.skip(if has_font { 3 } else { 1 })?;
 
-        self.ctx.globals.syscom.replay_koe = if script.cur_koe_no >= 0 {
+        globals.syscom.replay_koe = if script.cur_koe_no >= 0 {
             Some((script.cur_koe_no, script.cur_chr_no))
         } else {
             None
@@ -9702,7 +9694,7 @@ impl<'a> SceneVm<'a> {
         obj.runtime.prop_event_lists.y_rep = Self::read_cpp_int_event_extend_list(rd)?;
         obj.runtime.prop_event_lists.z_rep = Self::read_cpp_int_event_extend_list(rd)?;
         obj.runtime.prop_event_lists.tr_rep = Self::read_cpp_int_event_extend_list(rd)?;
-        obj.runtime.prop_lists.f = rd.extend_i32_list()?;
+        obj.runtime.prop_lists.f = rd.extend_i32_list()?.into();
         let file_name = rd.string()?;
         obj.file_name = if file_name.is_empty() {
             None
@@ -10936,7 +10928,7 @@ impl<'a> SceneVm<'a> {
         };
         let st = self.ctx.globals.stage_forms.get(&form_id);
         let empty_groups: Vec<runtime::globals::GroupState> = Vec::new();
-        let empty_objects: Vec<runtime::globals::ObjectState> = Vec::new();
+        let empty_objects: crate::shared::Shared<Vec<runtime::globals::ObjectState>> = Default::default();
         let empty_mwnds: Vec<runtime::globals::MwndState> = Vec::new();
         let empty_worlds: Vec<runtime::globals::WorldState> = Vec::new();
         let empty_effects: Vec<runtime::globals::ScreenEffectState> = Vec::new();
@@ -10991,7 +10983,7 @@ impl<'a> SceneVm<'a> {
         st.group_lists
             .insert(stage_idx, rd.fixed_items(|rd| Self::read_cpp_group(rd))?);
         st.object_lists
-            .insert(stage_idx, rd.fixed_items(|rd| Self::read_cpp_object(rd))?);
+            .insert(stage_idx, rd.fixed_items(|rd| Self::read_cpp_object(rd))?.into());
         st.mwnd_lists
             .insert(stage_idx, rd.fixed_items(|rd| Self::read_cpp_mwnd(rd))?);
         let btn_select = Self::read_cpp_btn_select(rd)?;
@@ -11541,7 +11533,7 @@ impl<'a> SceneVm<'a> {
         self.ctx
             .globals
             .stage_forms
-            .insert(normal_stage_form_id, Box::new(st));
+            .insert(normal_stage_form_id, crate::shared::Shared::new(st));
         if !back_btn_select.choices.is_empty() {
             runtime::forms::global::prepare_saved_stage_btnselitems(
                 &mut self.ctx,
@@ -13821,6 +13813,7 @@ impl<'a> SceneVm<'a> {
 // of the data VM. Serialize its actual stacks/frames/globals, not a replay log.
 impl SceneVm<'static> {
     pub fn engine_validate(&self) -> Result<()> {
+        crate::native_string::validate(&self.ctx)?;
         self.ctx.bgm.validate()?;
         self.ctx.koe.validate()?;
         self.ctx.pcm.validate()?;
@@ -13856,7 +13849,7 @@ impl SceneVm<'static> {
             .stage_forms
             .values()
             .flat_map(|s| s.object_lists.values())
-            .map(Vec::len)
+            .map(|v| v.len())
             .sum();
         anyhow::ensure!(count <= 4096, "native object count");
         anyhow::ensure!(

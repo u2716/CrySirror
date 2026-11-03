@@ -159,3 +159,31 @@ fn owner_invalidation_keeps_a_failed_receipt_without_starting_queued_work() {
     assert!(table.poll(1, 8, id).is_err());
     table.cancel(1, id).unwrap();
 }
+
+#[test]
+fn scoped_owner_retirement_keeps_peer_ready_values_and_queued_work() {
+    let pool = TaskPool::new("clear-owner", 1, 4).unwrap();
+    let permit = pool.reserve().unwrap();
+    let mut jobs = OperationTable::new(4, 8).unwrap();
+    let own = jobs.insert_ready(1, 0, "ready", 10).unwrap();
+    let peer = jobs.insert_ready(2, 0, "ready", 20).unwrap();
+    let ran = Arc::new(AtomicUsize::new(0));
+    let state = ran.clone();
+    let queued = jobs
+        .submit_deferred(1, 0, "queued", &pool, move |_| {
+            state.fetch_add(1, Ordering::SeqCst);
+            Ok(30)
+        })
+        .unwrap();
+    let peer_queued = jobs
+        .submit_deferred(2, 0, "peer queued", &pool, |_| Ok(40))
+        .unwrap();
+    jobs.clear_owner(1);
+    assert!(!jobs.contains(1, own));
+    assert!(!jobs.contains(1, queued));
+    assert_eq!(jobs.take(2, 0, peer).unwrap(), Some(20));
+    drop(permit);
+    assert_eq!(ready(&mut jobs, 2, 0, peer_queued), OperationState::Ready);
+    assert_eq!(jobs.take(2, 0, peer_queued).unwrap(), Some(40));
+    assert_eq!(ran.load(Ordering::SeqCst), 0);
+}

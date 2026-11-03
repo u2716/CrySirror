@@ -16,6 +16,30 @@ pub enum HllReturn {
     String(Vec<u8>),
 }
 impl Machine {
+    pub(crate) fn complete_system_bytes(
+        &mut self,
+        call: &ExternalCall,
+        bytes: Vec<u8>,
+    ) -> Result<()> {
+        self.validate_system(call)?;
+        ensure!(
+            self.stack.len() < MAX_STACK,
+            "System4 native system string return budget"
+        );
+        let slot = self.heap.alloc(Object::String(Arc::new(bytes)))?;
+        self.complete_system(call, 0, Some(slot))
+    }
+    pub(crate) fn complete_system_owned_string(
+        &mut self,
+        call: &ExternalCall,
+        value: Option<i32>,
+    ) -> Result<()> {
+        self.validate_system(call)?;
+        let slot = self.peek(0)?;
+        self.heap.string(slot)?;
+        self.complete_system(call, 1, value)?;
+        self.release_string_now(slot)
+    }
     pub fn hll_arguments(&self, call: &ExternalCall) -> Result<Vec<Argument>> {
         ensure!(
             self.pending.as_ref() == Some(call),
@@ -110,8 +134,11 @@ impl Machine {
         self.schedule(releases, call.next);
         Ok(())
     }
-    pub(crate) fn validate_system(&self,call:&ExternalCall)->Result<()> {
-        ensure!(self.pending.as_ref()==Some(call) && matches!(call.target,ExternalTarget::System(_)),"System4 stale syscall receipt");
+    pub(crate) fn validate_system(&self, call: &ExternalCall) -> Result<()> {
+        ensure!(
+            self.pending.as_ref() == Some(call) && matches!(call.target, ExternalTarget::System(_)),
+            "System4 stale syscall receipt"
+        );
         Ok(())
     }
     /// Shared-service adapters select exact, already-validated syscall ABIs.

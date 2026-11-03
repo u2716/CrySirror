@@ -1,0 +1,136 @@
+{
+  "purpose": "Reviewed original game-slot status/context restoration policy. Private worker preparation is not a completed live original-save import.",
+  "reference": {
+    "repository": "https://github.com/tinyan/SystemNNN",
+    "commit": "78a05053c78b3b80065a9a209c6685a7c60a2e83",
+    "complete_routines": [
+      "nnnLib/gamecallback.cpp GetGameStatusForSave",
+      "nnnLib/gamecallback.cpp SetGameStatusByLoad",
+      "nnnLib/gamecallback.cpp SetVarByLoad",
+      "nnnLib/execscript.cpp ChangeIDToAddr",
+      "nnnLib/execscript.cpp AdjustScriptCall",
+      "nnnLib/execscript.cpp AdjustCommandCall"
+    ],
+    "previous_complete_source_review": [
+      "nnnLib/execscript.cpp",
+      "nnnLib/execscript.h"
+    ],
+    "licence": "No grant found. Independent expression of format/behavior facts; original C++ implementation is not copied or linked."
+  },
+  "actual_module": {
+    "sha256": "e85e92ec538d50eae08d27286177149972d443a96d1415277c1ae1f9ee108bdb",
+    "method": "Read-only static IDA data/control analysis; module not executed",
+    "get_status": "0x53ad20",
+    "set_status": "0x53b630",
+    "status_record_bytes": 7088,
+    "native_absolute_word_offsets": {
+      "mode": 20,
+      "script_adjust_version": 22,
+      "script_run_mode": 24,
+      "project_script_indices": [
+        26,
+        27,
+        31
+      ],
+      "pcs": [
+        472,
+        473,
+        474,
+        475
+      ],
+      "stack_pointers": [
+        488,
+        744,
+        1000,
+        1256
+      ],
+      "stack_first_words": [
+        489,
+        745,
+        1001,
+        1257
+      ]
+    },
+    "ignored_evidence": [
+      "target/verification/systemnnn/native-save-0x53ad20.c",
+      "target/verification/systemnnn/native-save-0x53b630.c",
+      "target/verification/systemnnn/native-save-functions.json"
+    ]
+  },
+  "policy": {
+    "variables": "Legacy SetVarByLoad copies0..199 and300..999, retaining current persistent200..299. Current global RNG/calculated metadata remain in the detached candidate; native game slots are not framework snapshots.",
+    "contexts": "Run mode0..3 selects the sys controller plus up to3 original project-indexed script contexts; validate all names/fixed fields before loader admission. Each saved stack has255 words with at most249 active calls.",
+    "adjusted": "Saved adjust1 interprets active call entries as native subroutine IDs via header20 table. Parent PCs use the original SCRIPT/SUBSCRIPT continuation table at header23 and stack253. Active general modes use command table header22/stack254; Title4, selection9 and message10 preserve their own saved continuation policy.",
+    "raw": "Saved adjust0 preserves raw return PCs. One bounded cancellable record scan recovers each CALL's native ID for future saves, without executing bytecode or rescanning once per stack entry.",
+    "receipts": "Machine retains typed script/command continuation IDs only after the exact native receipt is acknowledged. Failed/stale receipts cannot change them.",
+    "atomicity": "All preparation returns detached Machines/ScriptSession. Corruption, cancellation or a bad loader never mutates current VM variables/save bytes. No live importer/factory is enabled from this preparation alone.",
+    "not_restored_yet": [
+      "native16-slot EFFECT data and original image/cache policy",
+      "native message/selection/layout/reveal state",
+      "native music/SE/voice work and source reconstruction",
+      "thumbnail/original comments and extended native families",
+      "all live original-save staging/owner commit and UI slot catalogues"
+    ]
+  },
+  "validation": {
+    "initial": "native-game-save-context-tests.log:44passed/5ignored, exit0",
+    "final": "native-game-save-context-final-tests.log:45passed/5ignored (library32, machine3, native_control6, native_services4), exit0",
+    "coverage": [
+      "actual four detached native contexts and original program-table destinations",
+      "obsolete adjusted parent rawPC is not used",
+      "current persistent range/global RNG retained",
+      "raw CALL return boundaries/native IDs recovered",
+      "script/command IDs change only after native ACK",
+      "general-mode command continuation exact nextPC",
+      "bad depth/run mode/adjust version/return/table and cancellation leave source unchanged"
+    ],
+    "not_claimed": "No new original-game/Desktop run, save UI, complete original-save import/export, frame/resource restoration or playable-engine completion."
+  },
+  "native_wait_consumers_2026_11_01": {
+    "complete_reference_routines": [
+      "nnnLib/gamecallback.cpp SetGameStatusByLoad / SetMessageByLoad",
+      "nnnLib/commonprintmessage.cpp SetMessageMode / SetPrintModeByLoad / InitByLoad / Init / complete fixed-row layout consumers",
+      "nnnLib/commonSelectMessage.h GetMessageKosuu / SetMessageKosuu / SetTimeLimit / SetSpecialFlag"
+    ],
+    "actual_module": "Authenticated MUGEN2 SHA e85e92ec538d50eae08d27286177149972d443a96d1415277c1ae1f9ee108bdb; read-only53b630 and53ad20 already preserved under target/verification/systemnnn/native-save-*.c",
+    "records": {
+      "word20": "saved native actor mode9 selection /10 print",
+      "word29": "fixed message-row count",
+      "word30": "native PRINT/LPRINT code, not a host mode alias",
+      "word33": "TOTAL selection rows, including supplemental rows",
+      "word34": "supplemental prefix count; choices=total-supplemental",
+      "words480_482": "time limit / automatic choice / special layout, preserved as native policy and explicitly gated until consumers complete",
+      "word180": "scriptWindowNumber (variant selection), NEVER a visibility bit",
+      "word485": "cannot-click policy"
+    },
+    "mechanism": "Fixed saved rows go directly to shared cell/GlyphRun preparation. No synthetic PRINT or SELECT NativeCall, acknowledgement or opcode count. New wait is armed only after commit; loading click cannot reveal/advance it. Shared Ui events drive original CASE lookup from saved nextPC; invalid tables retain PC/variables/count and widgets.",
+    "worker": "Detached immutable text/selection profile seeds, scoped TextMeasurement, real cancellation-aware TaskPool; resource-only window composition ImageJobs and immutable publication, no Scene mutation during preparation. Native name-colour table now Arc-shared rather than owner-deep-copied.",
+    "release_validation": "target/verification/systemnnn/native-original-wait-consumers-tests4.log:65 passed,1ignored,exit0. Includes actual Core VmAdapter step, shared Scene/UI/reveal and nativeCASE/END, plus original count64/extra4 envelope validation.",
+    "corrected_fixtures": "First text fixture attempted immediate reuse of a cancelled single-slot pool, correctly rejected by capacity; use an independent pool. Core VM END retains its original PC47, not nextPC50. No production relaxation.",
+    "limits": "This batch connects saved waiting actors and source records, not complete dataN restore entry. Nonzero saved window variants, timed/special menus, full Bridge/effect frame and native UI slot import remain work. No original-game/Desktop/GPU acceptance."
+  },
+  "native_load_initialization_2026_11_01": {
+    "module_sha256": "e85e92ec538d50eae08d27286177149972d443a96d1415277c1ae1f9ee108bdb",
+    "complete_static_routines": [
+      "InitLoadGame 0x541fc0",
+      "General Init 0x4f3ad0",
+      "RestartLoopSoundVoice 0x536740",
+      "InitAllParameter 0x4c6560",
+      "effect enabled traversal 0x4c1a40/0x4c19d0",
+      "AfterInitLoad 0x533210"
+    ],
+    "status_words": {
+      "message_window_print_flag": 44,
+      "script_window_variant": 180,
+      "message_serial": 476,
+      "last_message_id": 28
+    },
+    "policy": "Load resets next-skip/effect-skip/film-skip flags, not F4/F5 preferences. Message window local on/off is distinct from global saved visibility. Ready preparation and shared resource tests do not establish complete original game-slot restore acceptance.",
+    "evidence": [
+      "target/verification/systemnnn/native-load-family.json",
+      "target/verification/systemnnn/native-load-init-leaves-static3.log"
+    ],
+    "actual_runtime_test": "native-original-entry/runtime-actual5.log explicitly passed1/1 (same test covers NativeAdapter and InstalledAdapter, runtime supplied Arial only). Ready preparation preserves old state; atomic commit replaces target only; load click arms restored wait, real subsequent release/press continues saved nextPC; END correctly restarts sys. Same frozen binary ordinary library70passed/2ignored. Earlier wrong factory key and Halt-expectation fixture failures retained, not passes.",
+    "runtime_receipt": "target/verification/systemnnn/native-original-entry/artifacts-actual5.json"
+  }
+}

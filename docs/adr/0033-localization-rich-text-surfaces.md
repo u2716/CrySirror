@@ -2,10 +2,9 @@
 
 Date: 2026-10-25. Status: implemented first slice, CPU/engine validation below.
 
-The owner authorized parallel audio/text/input work while another developer owns
-the renderer, scene view/components, mesh clustering and GoW import tools.
-This change uses the CPU text APIs from ADR 0031 and existing dynamic RGBA
-surfaces, without changing those renderer/native-import paths.
+Localization uses the CPU text APIs from ADR 0031 and shared dynamic RGBA
+surfaces. Catalog selection and plural rules are independent of native asset
+import and renderer-specific code.
 
 ## Implementation
 
@@ -101,6 +100,3 @@ See `../codex-services-results.json` for final aggregate results. Dedicated test
   client isolation, surface release and event-overflow rollback. No font is
   copied into the source tree. Explicit execution is reported separately from
   default ignored-test counts.
-
-No changes to `crysirror-wgpu`, scene `view.rs`/`components.rs`,
-`crysirror-asset`, `tools/gow3_*`, or probe code are part of this parallel slice.

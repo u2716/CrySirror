@@ -1,7 +1,8 @@
 # ADR 0003: Siglus resource compatibility and desktop rendering capabilities
 
 Status: resource slice and compute ray tracer implemented and executed locally;
-original VM integration and hardware acceleration remain incomplete.
+native VM mappings and hardware ray queries were subsequently added through
+ADRs 0061 and 0051–0060. Full native coverage and hardware portability remain partial.
 
 ## Monorepo split
 
@@ -15,17 +16,18 @@ second workspace or as an unpinned Git dependency.
 | core::binary checked range/endian reads | G00 header/cut/chip layouts |
 | crysirror-image RGBA surfaces, channel conversion, PNG/JPEG/BMP decoding, decoder registry and bounds | Native LZSS, palette semantics, type-3 format scrambling |
 | Runtime per-client capability roots and asset byte caches | PATNO slot identity, missing/reused cuts, pivots and original dimensions |
-| wgpu texture uploads, compositing, raster/compute rendering | Future original SceneVm, values, forms/syscalls, waits and original saves |
+| wgpu texture uploads, compositing, raster/compute rendering | Original SceneVm, values, forms/syscalls, waits and original saves |
 | Desktop window/device/audio lifecycle | Native object/text/audio policies translated at audited service boundaries |
 
 The new crysirror-siglus crate has no window/GPU/audio SDK dependencies and forbids
 unsafe code. Its full normal dependency tree was checked with cargo tree. The
 existing core remains dependency-free/no_std; crysirror-compat depends only on it.
 
-The desktop installs the G00 decoder through the default `siglus-resources`
-feature. The shared runtime/image/renderer crates do not depend on Siglus. The
-wgpu crate uses Siglus only as a dev-dependency for the integration test.
-`--no-default-features` removes the desktop audio and G00 plugins.
+The desktop installs G00 support unconditionally; the former `siglus-resources`
+feature is retired. `--no-default-features` disables the optional audio/gamepad
+device paths, not native adapters or format providers. Shared resource contracts
+remain separate from native policy. The original tests below describe the
+resource checkpoint; current dependencies are defined by workspace manifests.
 
 ## Executable Siglus resource slice
 
@@ -68,13 +70,13 @@ resource. Its name/output reports that fact. It is not a converted Siglus progra
 
 ## Desktop platforms
 
-The user selected Windows, Linux and macOS first. Mobile and Web are later work;
+The desktop targets are Windows, Linux and macOS. Mobile and Web are deferred;
 Switch and PS Vita remain deferred, with no other console scope.
 
 wgpu backend selection belongs to the host: DX12/Vulkan/Metal are desktop backend
 routes, not fields in VM state. The renderer remains independent of winit. This
-iteration was executed only on macOS/Apple M5/Metal. Existing CI defines all three
-desktop jobs but has not run here; Windows/Linux behavior is not claimed proven.
+checkpoint was executed only on macOS/Apple M5/Metal. Windows/Linux behavior
+requires separate platform validation. Build automation is not execution evidence.
 
 ## Ray tracing as an explicit capability
 

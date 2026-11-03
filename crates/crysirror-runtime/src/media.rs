@@ -607,6 +607,12 @@ impl MediaManager {
     pub fn has_resources(&self) -> bool {
         !self.slots.is_empty()
     }
+    /// Includes retained EOF/failed slots and queued channel updates. A native
+    /// restore cannot replace only the audio voice while this producer survives.
+    pub fn has_client_resources(&self,client:ClientId)->bool {
+        self.slots.keys().any(|(owner,_)|*owner==client)
+            || self.pending_audio.iter().any(|update|update.client==client)
+    }
     pub fn has_active(&self) -> bool {
         self.slots
             .values()
@@ -673,6 +679,33 @@ impl MediaManager {
                 });
             }
         }
+        Ok(())
+    }
+    /// Current retained gain, including changes admitted while loading/paused.
+    pub fn gain(&self, client: ClientId, id: u32) -> Option<f32> {
+        self.slots.get(&(client, id)).map(|slot| slot.options.gain)
+    }
+    /// Validate without mutating retained media or live audio. The owner may
+    /// submit the returned audio control first, then commit the retained gain.
+    pub(crate) fn gain_update(&self, client: ClientId, id: u32, gain: f32) -> Result<Option<MediaAudioUpdate>> {
+        ensure!(gain.is_finite() && (0. ..=4.).contains(&gain), "media gain must be finite and 0..4");
+        let slot = self.slots.get(&(client, id)).context("media handle not found in client scope")?;
+        Ok((slot.audio_sent && slot.options.gain != gain).then(|| MediaAudioUpdate {
+            client,
+            request: AudioRequest::SetGain { channel: slot.options.audio_channel, gain, fade_ms: 0. },
+        }))
+    }
+    pub(crate) fn commit_gain(&mut self, client: ClientId, id: u32, gain: f32) {
+        // Caller validated the resource and performs no await between validation
+        // and commit. Decoder workers cannot replace this owner-owned slot.
+        self.slots.get_mut(&(client, id)).expect("validated media owner slot").options.gain = gain;
+    }
+    /// Queue the real live-audio control and retain the new value for later
+    /// first playback, replay or resume. Picture/decoder/clock state is unchanged.
+    pub fn set_gain(&mut self, client: ClientId, id: u32, gain: f32) -> Result<()> {
+        let update = self.gain_update(client, id, gain)?;
+        self.commit_gain(client, id, gain);
+        self.pending_audio.extend(update);
         Ok(())
     }
     pub fn stop(&mut self, client: ClientId, id: u32) -> Result<()> {
@@ -1470,6 +1503,59 @@ mod tests {
             peak > 0.01,
             "decoded media audio did not reach shared mixer output"
         );
+    }
+    #[test]
+    fn live_gain_changes_real_pcm_without_restarting_clock_or_other_clients() {
+        let c=ClientId(3);
+        let mut manager=MediaManager::default();
+        manager.play(c,8,Arc::new(Storage(include_bytes!("../../crysirror-video/tests/fixtures/media_av.mpg").to_vec())),
+            &path(),MediaOptions{audio_channel:0x7000_0008,..Default::default()},0).unwrap();
+        // A loading mutation is retained; it must not emit a premature voice.
+        manager.set_gain(c,8,0.5).unwrap();
+        assert_eq!(manager.gain(c,8),Some(0.5));
+        assert!(manager.take_audio().is_empty());
+        let mut mixer=crysirror_audio::channels::ChannelAudio::default();
+        let deadline=Instant::now()+Duration::from_secs(5);
+        let mut now=0;
+        loop {
+            let updates=manager.tick(now).unwrap();
+            let mut ready=false;
+            for update in updates.audio {
+                if let AudioRequest::PlayPcm{parameters,..}=&update.request {
+                    assert_eq!(parameters.gain,0.5); ready=true;
+                }
+                mixer.submit(update.client.0,update.request).unwrap();
+            }
+            if ready {break;}
+            assert!(Instant::now()<deadline,"media audio startup timeout");
+            now+=1;std::thread::sleep(Duration::from_millis(1));
+        }
+        mixer.submit(4,AudioRequest::PlayPcm{channel:0x7000_0008,
+            source:PcmAudio::new(48000,vec![[0.125;2];1024]).unwrap(),parameters:AudioParameters{looping:true,..Default::default()}}).unwrap();
+        let position=mixer.playback_info(c.0,0x7000_0008).unwrap().unwrap().position_frames;
+        let status=manager.status(c,8).unwrap();
+        for bad in [f32::NAN,-1.,4.01] {
+            assert!(manager.set_gain(c,8,bad).is_err());
+            assert_eq!(manager.gain(c,8),Some(0.5));
+            assert!(manager.take_audio().is_empty());
+        }
+        assert!(manager.set_gain(ClientId(4),8,0.).is_err());
+        manager.set_gain(c,8,0.).unwrap();
+        let controls=manager.take_audio();assert_eq!(controls.len(),1);
+        assert!(matches!(controls[0].request,AudioRequest::SetGain{channel:0x7000_0008,gain:0.,fade_ms:0.}));
+        for update in controls {mixer.submit(update.client.0,update.request).unwrap();}
+        assert_eq!(mixer.playback_info(c.0,0x7000_0008).unwrap().unwrap().position_frames,position);
+        let after=manager.status(c,8).unwrap();
+        assert_eq!((after.position_ms,after.published_frames,after.loops_completed),(status.position_ms,status.published_frames,status.loops_completed));
+        mixer.render(1).unwrap();
+        assert!(mixer.take_output().iter().flatten().all(|sample|(*sample-0.125).abs()<1e-6));
+        manager.pause(c,8,now).unwrap();manager.take_audio();
+        manager.set_gain(c,8,0.25).unwrap();
+        assert!(manager.take_audio().is_empty());
+        assert!(manager.status(c,8).unwrap().paused);
+        manager.resume(c,8,now+100).unwrap();
+        let resumed=manager.tick(now+100).unwrap();
+        assert!(resumed.audio.iter().any(|update| matches!(&update.request,AudioRequest::PlayPcm{parameters,..} if parameters.gain==0.25)));
     }
     #[test]
     fn invalid_capabilities_and_background_decode_errors_do_not_report_successful_eos() {

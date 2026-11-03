@@ -3,6 +3,14 @@
 Date: 2026-10-27. Status: implemented bounded profile.
 Follows ADR 0050 and 0069–0076. Actual local results are recorded in STATUS.md.
 
+## Follow-up implementation (updated 2026-11-03)
+
+Native PCM/SE/KOE/PCMCH, worker mixing/output, geometry instances and direct Doppler were added later. Full native discovery, DSP-history snapshots and higher-order transport remain open.
+
+Follow-ups: [ADR 0078](0078-mix-groups-and-siglus-pcm-se.md), [ADR 0079](0079-worker-final-audio-frames.md), [ADR 0080](0080-async-output-worker-and-bounded-pcm-transfer.md), [ADR 0081](0081-prepared-voice-compression-and-siglus-koe.md), [ADR 0082](0082-acoustic-instance-snapshots.md), [ADR 0083](0083-shared-transport-and-siglus-pcmch.md), [ADR 0084](0084-kinematic-doppler-and-motion-capture.md).
+The original checkpoint evidence and remaining-boundary paragraphs below retain
+their dated scope. They must not be read as an engine-wide current missing list.
+
 ## Engine ownership
 
 AudioResources in crysirror-audio owns client-scoped immutable encoded snapshots.
@@ -97,7 +105,8 @@ must not mark gallery flags as newly listened.
 ## Remaining boundaries
 
 This resolves the retained-source replay gap documented in ADR 0076. Native
-PCM/PCMCH/SE/voice, automatic pack/append discovery, encrypted Gameexe, complete
-game compatibility, final mixing/output async ownership, teardown allocation,
-dynamic acoustic geometry, Doppler and higher/diffuse reflections remain open.
+PCM/SE/KOE/PCMCH profiles followed in 0078/0081/0083, worker final DSP/output in
+0079/0080, instances in 0082 and direct Doppler in 0084. Automatic discovery,
+protection variants, complete game fidelity, remaining allocation/teardown and
+higher/diffuse transport are not completed by those bounded follow-ups.
 No device, GPU, Windows/Linux or console behavior follows from CPU tests.

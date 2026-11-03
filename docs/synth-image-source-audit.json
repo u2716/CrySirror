@@ -110,19 +110,6 @@
           "new_code_copied": false
         }
       ]
-    },
-    {
-      "repository": "https://github.com/liulifox233/Kirakira",
-      "commit": "c451918023477620ff9055a2eb8a6714b947d9c1",
-      "files": [
-        {
-          "path": "crates/krkr-plugins/src/layer_ex_raster.rs",
-          "bytes": 17340,
-          "sha256": "cd5c37f6b88e17be5e5078109cde60085b6afe8ac0ca4710b4f7f1a7e681dbba",
-          "review": "Complete file inspected; semantic/source boundary reference only.",
-          "new_code_copied": false
-        }
-      ]
     }
   ],
   "dependencies": [

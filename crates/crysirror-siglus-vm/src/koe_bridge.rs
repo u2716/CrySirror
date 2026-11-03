@@ -81,12 +81,25 @@ impl KoeEngine {
     }
     pub fn set_volume_raw_fade(&mut self, _: &mut AudioHub, v: u8, ms: i64) -> Result<()> {
         ensure!(ms.max(0) <= 600000, "voice fade exceeds engine limit");
-        self.pending
-            .push(Operation::Control(AudioRequest::SetMixGroupGain {
+        let fade_ms = ms.max(0) as f32;
+        let request = if self.initialized {
+            AudioRequest::SetMixGroupGain {
                 name: GROUP.into(),
                 gain: f32::from(v) / 255.,
-                fade_ms: ms.max(0) as f32,
-            }))?;
+                fade_ms,
+            }
+        } else {
+            AudioRequest::SetMixGroup {
+                name: GROUP.into(),
+                settings: crysirror_core::service::AudioMixGroupSettings {
+                    parent: Some((crate::audio::TrackKind::Koe).group().into()),
+                    gain: f32::from(v) / 255.,
+                    muted: false,
+                },
+                fade_ms,
+            }
+        };
+        self.pending.push(Operation::Control(request))?;
         self.volume = v;
         self.initialized = true;
         Ok(())
@@ -118,7 +131,7 @@ impl KoeEngine {
         self.rate = rate.clamp(100, 400);
         if no >= 0 {
             if !self.initialized {
-                self.set_volume_raw(&mut AudioHub, self.volume)?;
+                self.set_volume_raw(&mut AudioHub::default(), self.volume)?;
             }
             self.pending.push(Operation::Speech {
                 number: no,
@@ -158,7 +171,7 @@ impl KoeEngine {
                 self.rate,
             )?;
         } else if self.volume != 255 {
-            self.set_volume_raw(&mut AudioHub, self.volume)?;
+            self.set_volume_raw(&mut AudioHub::default(), self.volume)?;
         }
         Ok(())
     }
@@ -208,7 +221,8 @@ fn positional(args: &[Value], n: usize) -> Option<i64> {
         .filter_map(Value::as_i64)
         .nth(n)
 }
-fn remember(ctx: &mut CommandContext, no: i64, chara: i64, ex: bool) {
+fn remember(ctx: &mut CommandContext, no: i64, chara: i64, ex: bool) -> Result<()> {
+    crate::message::voice::remember(ctx, no, chara, ex)?;
     ctx.globals.sound_routing.koe_chara_no = chara;
     ctx.globals.sound_routing.koe_ex_flag = ex;
     if !ex {
@@ -225,9 +239,44 @@ fn remember(ctx: &mut CommandContext, no: i64, chara: i64, ex: bool) {
     props.insert(op::GLOBAL_KOE_CHECK_GET_KOE_NO, no);
     props.insert(op::GLOBAL_KOE_CHECK_GET_CHARA_NO, chara);
     props.insert(op::GLOBAL_KOE_CHECK_IS_EX_KOE, i64::from(ex));
+    Ok(())
+}
+/// SYSCOM.REPLAY_KOE: a new normal C_elm_koe playback of the current message
+/// voice, re-establishing its routing metadata.
+pub(crate) fn replay(ctx: &mut CommandContext, no: i64, chara: i64) -> Result<()> {
+    remember(ctx, no, chara, false)?;
+    let rate = rate(ctx, None);
+    ctx.koe.play(no, rate)
 }
 pub(crate) fn dispatch(ctx: &mut CommandContext, id: u32, args: &[Value]) -> Result<bool> {
     let id = id as i32;
+    if !matches!(
+        id,
+        op::GLOBAL_KOE
+            | op::GLOBAL_EXKOE
+            | op::GLOBAL_KOE_PLAY_WAIT
+            | op::GLOBAL_KOE_PLAY_WAIT_KEY
+            | op::GLOBAL_EXKOE_PLAY_WAIT
+            | op::GLOBAL_EXKOE_PLAY_WAIT_KEY
+            | op::GLOBAL_KOE_STOP
+            | op::GLOBAL_KOE_WAIT
+            | op::GLOBAL_KOE_WAIT_KEY
+            | op::GLOBAL_KOE_CHECK
+            | op::GLOBAL_KOE_CHECK_GET_KOE_NO
+            | op::GLOBAL_KOE_CHECK_GET_CHARA_NO
+            | op::GLOBAL_KOE_CHECK_IS_EX_KOE
+            | op::GLOBAL_KOE_SET_VOLUME
+            | op::GLOBAL_KOE_SET_VOLUME_MAX
+            | op::GLOBAL_KOE_SET_VOLUME_MIN
+            | op::GLOBAL_KOE_GET_VOLUME
+    ) {
+        return Ok(false);
+    }
+    let call = ctx.vm_call.as_ref().context("native KOE metadata")?;
+    ensure!(
+        call.element.as_slice() == [id] || crate::message::voice::window_operation(ctx) == Some(id),
+        "native KOE receiver chain"
+    );
     let returns = prop_access::current_vm_meta(ctx).1.unwrap_or(0) != 0;
     match id {
         op::GLOBAL_KOE
@@ -255,7 +304,7 @@ pub(crate) fn dispatch(ctx: &mut CommandContext, id: u32, args: &[Value]) -> Res
             if !ex {
                 ctx.request_read_flag_no();
             }
-            remember(ctx, no, chara, ex);
+            remember(ctx, no, chara, ex)?;
             let percent = rate(ctx, ex.then(|| named(args, 4).unwrap_or(0) != 0));
             ctx.koe.play(no, percent)?;
             crate::character_voice::refresh(ctx)?;

@@ -13,6 +13,7 @@ use std::{
         Arc, Mutex,
     },
 };
+mod bounds;
 const MAX_RESIDENT: usize = 256 * 1024 * 1024;
 struct Charge {
     used: Arc<AtomicUsize>,
@@ -236,6 +237,9 @@ struct ClientFonts {
     text: TextSystem,
 }
 impl FontLibrary for ClientFonts {
+    fn begin_glyph_bounds(&self,spec:GlyphBoundsSpec)->crysirror_core::Result<Box<dyn GlyphBoundsQuery>> {
+        bounds::begin(self,spec)
+    }
     fn begin(&self, spec: FontLoadSpec) -> crysirror_core::Result<FontJob> {
         if spec.name.is_empty()
             || spec.name.len() > 256
@@ -358,6 +362,16 @@ impl FontLibrary for ClientFonts {
                         || f.families.iter().any(|v| v.eq_ignore_ascii_case(name)))
             })
             .cloned())
+    }
+    fn resolve_alias(&self,name:&str)->crysirror_core::Result<Option<String>> {
+        if name.is_empty() || name.len()>256 || name.chars().any(char::is_control) {return Err(crysirror_core::Error::Invalid("font alias/name"));}
+        if let Some(info)=self.resolve(name)? {return Ok(Some(info.alias));}
+        Ok(self.text.static_font_alias(name))
+    }
+    fn glyph_id(&self,alias:&str,character:char)->crysirror_core::Result<u32> {self.text.glyph_id(alias,character).map_err(err)}
+    fn face_style(&self,alias:&str)->crysirror_core::Result<Option<crysirror_core::service::FontFaceStyle>> {self.text.font_style(alias).map_err(err)}
+    fn metrics(&self,alias:&str,size:f32,character:char)->crysirror_core::Result<FontMetrics> {
+        self.text.metrics(alias,size,character).map_err(err)
     }
     fn is_loaded(&self, alias: &str) -> crysirror_core::Result<bool> {
         Ok(self.text.font_digest(alias).is_ok())

@@ -1,11 +1,11 @@
 # 0021: Siglus-style 2D layer filters
 
 Date: 2026-10-25. Status: implemented and locally validated (sprite stages,
-distortions, masks, tone curves). Screen-transition wipes are pending.
+distortions, masks, tone curves). Screen-transition wipes were subsequently implemented in [ADR 0022](0022-screen-transitions.md).
 
 ## Context
 
-The owner asked for Siglus's 2D and shader capabilities in the engine. The
+Shared 2D filters cover the reusable operations found in the
 pinned siglus_rs renderer (`render/shaders/sprite.wgsl`, `render_plan`)
 applies a fixed per-sprite stack: tr/alpha, tone-curve LUT, reverse, mono,
 bright, dark, color rate toward a color, color add, mask texture, gray-as-alpha

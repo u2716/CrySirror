@@ -2,8 +2,8 @@
 
 Date: 2026-10-25. Status: implemented first preview; remaining APIs proposed.
 
-The owner requested rendering the local God of War III scene to identify missing
-engine capabilities. The selected asset is **OLY100.WAD**, one resource in
+The God of War III scene import exercises shared asset and rendering APIs.
+The selected asset is **OLY100.WAD**, one resource in
 OLY.PSARC. This acceptance scope is the selected resource, not the entire game,
 every Olympus streaming cell, or execution of the PS3 executable.
 

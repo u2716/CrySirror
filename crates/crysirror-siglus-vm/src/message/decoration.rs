@@ -6,16 +6,41 @@ use super::*;
 use crysirror_scene::layer::{GlyphBlur, GlyphCoverageKernel};
 
 fn settings(ctx: &CommandContext) -> Result<(bool, i32)> {
-    let cfg = ctx.tables.gameexe.as_ref();
-    let bold = if ctx.globals.script.font_bold >= 0 {
-        i32::try_from(ctx.globals.script.font_bold)?
-    } else {
-        config::scalar(cfg.and_then(|c| c.get_unquoted("CONFIG.FONT.FUTOKU")), 0)?
+    let configured = |op, key: &str| -> Result<i32> {
+        if let Some(value) = ctx.globals.syscom.config_int.get(&op) {
+            Ok(i32::try_from(*value)?)
+        } else {
+            config::scalar(
+                ctx.tables
+                    .gameexe
+                    .as_ref()
+                    .and_then(|cfg| cfg.get_unquoted(key)),
+                0,
+            )
+        }
     };
-    let mode = if ctx.globals.script.font_shadow >= 0 {
-        i32::try_from(ctx.globals.script.font_shadow)?
+    let (bold_override, shadow_override) = if ctx.globals.syscom.msg_back_open {
+        (-1, -1)
+    } else if ctx.excall_state.ex_call_flag {
+        (ctx.excall_state.font_bold, ctx.excall_state.font_shadow)
     } else {
-        config::scalar(cfg.and_then(|c| c.get_unquoted("CONFIG.FONT.SHADOW")), 0)?
+        (ctx.globals.script.font_bold, ctx.globals.script.font_shadow)
+    };
+    let bold = if bold_override >= 0 {
+        i32::try_from(bold_override)?
+    } else {
+        configured(
+            crate::runtime::forms::codes::syscom_op::GET_FONT_BOLD,
+            "CONFIG.FONT.FUTOKU",
+        )?
+    };
+    let mode = if shadow_override >= 0 {
+        i32::try_from(shadow_override)?
+    } else {
+        configured(
+            crate::runtime::forms::codes::syscom_op::GET_FONT_DECORATION,
+            "CONFIG.FONT.SHADOW",
+        )?
     };
     // Native queries retain the raw override; only rendering clamps the four
     // decoration modes. Bold follows the original nonzero boolean rule.

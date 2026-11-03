@@ -30,6 +30,7 @@ pub use audio_resources_api::{AudioSourcePrepareSpec, AudioTransformSpec};
 pub mod binaural_api;
 pub mod bitmap_api;
 mod bitmap_async;
+mod bitmap_blend;
 pub use bitmap_async::BitmapJobs;
 pub mod builtin;
 pub mod canvas_api;
@@ -69,5 +70,7 @@ pub use value::Value;
 pub use acoustics_api::AcousticMeshBindingSpec;
 
 mod text_font_api;
+mod text_bounds_api;
 
 mod input_locks_api;
+mod platform_api;

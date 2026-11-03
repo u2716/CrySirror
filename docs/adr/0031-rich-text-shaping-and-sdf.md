@@ -5,17 +5,16 @@ rendering is not connected by this change.
 
 ## Requirement and ownership
 
-The owner requested the text capabilities needed by visual novels and a modern
-3D engine: complex shaping, bidirectional text, Unicode wrapping with Chinese /
+The text system provides complex shaping, bidirectional text,
+Unicode wrapping with Chinese /
 Japanese prohibition tailoring, ruby, vertical writing, rich spans and icons,
 outlines/shadows, typewriter events, fallback fonts and signed-distance glyphs.
 
 These are shared safe CPU services in `crysirror-text`. The existing
 `simple-horizontal-v1`, `TextService` and explicit positioned-glyph raster APIs
 retain their behavior; a native VM is never treated as a new data VM and an
-unknown native text profile still fails. This adds a separate rich API rather
-than silently changing original layout/positioning semantics. No wgpu, scene,
-GoW importer, probe or VM file is changed by this work.
+unknown native text profile still fails. Rich layout is a separate API with its
+own metrics; original native layout/positioning semantics remain adapter policy.
 
 ## Implementation
 
@@ -111,8 +110,8 @@ separate integration described in ADR 0033.
 `cargo check -p crysirror-text --all-targets` and
 `cargo test -p crysirror-text` passed on the local macOS arm64 host.
 `cargo clippy -p crysirror-text --all-targets -- -D warnings` also passed. Full
-workspace, script binding and desktop validation belong to the parent
-integration run; this ADR does not infer their results from a crate build.
+workspace, script-binding and desktop validation are separate integration checks;
+their results are not inferred from a crate build.
 
 ## Behavior validation
 

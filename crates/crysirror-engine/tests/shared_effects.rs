@@ -232,3 +232,53 @@ fn synthetic_audio_assets_prepare_and_play_through_public_worker_mixer_without_u
     }
     call(&mut a, "Audio", "releaseSource", json!([resource])).unwrap();
 }
+
+#[test]
+fn masked_pair_is_public_frozen_scoped_revision_checked_and_cancellable(){
+    let (_d,mut a)=app();
+    for(slot,color)in [(1,[100,100,100,91]),(2,[200,200,200,128]),(3,[20,20,20,255])]{call(&mut a,"Bitmap","create",json!([slot,1,1,color])).unwrap();}
+    let options=json!({"sources":[[0,0,1,1],[0,0,1,1]],"destination":[0,0],"weights256":[64,192]});
+    let t=call(&mut a,"Bitmap","beginMaskedPair",json!([1,2,3,options])).unwrap();
+    a.context().state().unwrap().client=ClientId(2);assert!(call(&mut a,"Bitmap","effectStatus",json!([t])).is_err());a.context().state().unwrap().client=ClientId(1);
+    call(&mut a,"Bitmap","fill",json!([3,{"x":0,"y":0,"width":1,"height":1},[255,255,255,255]])).unwrap();
+    assert_eq!(wait(&mut a,"Bitmap","effectStatus",t.clone())["state"],"ready");assert_eq!(pixels(&a,1),[52,52,52,91],"third source must be the admitted generation");
+    call(&mut a,"Bitmap","cancelEffect",json!([t])).unwrap();
+    let t=call(&mut a,"Bitmap","beginMaskedPair",json!([1,2,3,options])).unwrap();
+    call(&mut a,"Bitmap","fill",json!([1,{"x":0,"y":0,"width":1,"height":1},[9,8,7,6]])).unwrap();
+    let s=wait(&mut a,"Bitmap","effectStatus",t.clone());assert_eq!(s["state"],"failed");assert!(s["error"].as_str().unwrap().contains("stale"));assert_eq!(pixels(&a,1),[9,8,7,6]);
+    call(&mut a,"Bitmap","cancelEffect",json!([t])).unwrap();
+    let t=call(&mut a,"Bitmap","beginMaskedPair",json!([1,2,3,options])).unwrap();call(&mut a,"Bitmap","cancelEffect",json!([t])).unwrap();assert!(call(&mut a,"Bitmap","effectStatus",json!([t])).is_err());assert_eq!(pixels(&a,1),[9,8,7,6]);
+    assert!(a.typescript_declarations().unwrap().contains("beginMaskedPair("));
+}
+
+#[test]
+fn public_fixed_blend_uses_explicit_integer_profile_and_snapshot_revision_scope_guards() {
+    let (_d,mut a)=app();
+    call(&mut a,"Bitmap","create",json!([1,2,1,[10,20,30,61]])).unwrap();
+    call(&mut a,"Bitmap","create",json!([2,2,1,[111,122,133,202]])).unwrap();
+    let options=json!({"source":[0,0,2,1],"destination":[0,0],"clip":[1,0,1,1],"state":{
+        "arithmetic":{"kind":"byte255","source":"floor","destination":"floor"},
+        "color":{"source":"source_alpha","destination":"one_minus_source_alpha","equation":"add"},
+        "write_mask":[true,true,true,false]}});
+    let ticket=call(&mut a,"Bitmap","beginFixedBlend",json!([1,2,options])).unwrap();
+    call(&mut a,"Bitmap","fill",json!([2,{"x":0,"y":0,"width":2,"height":1},[255,255,255,255]])).unwrap();
+    a.context().state().unwrap().client=ClientId(2);
+    assert!(call(&mut a,"Bitmap","effectStatus",json!([ticket])).is_err());
+    assert!(call(&mut a,"Bitmap","beginFixedBlend",json!([1,2,options])).is_err());
+    a.context().state().unwrap().client=ClientId(1);
+    assert_eq!(wait(&mut a,"Bitmap","effectStatus",ticket)["state"],"ready");
+    assert_eq!(pixels(&a,1),[10,20,30,61,89,100,111,61],"source generation must be frozen");
+    let ticket=call(&mut a,"Bitmap","beginFixedBlend",json!([1,2,options])).unwrap();
+    call(&mut a,"Bitmap","fill",json!([1,{"x":0,"y":0,"width":2,"height":1},[3,4,5,6]])).unwrap();
+    assert_eq!(wait(&mut a,"Bitmap","effectStatus",ticket)["state"],"failed");
+    assert_eq!(pixels(&a,1),[3,4,5,6,3,4,5,6]);
+    let ticket=call(&mut a,"Bitmap","beginFixedBlend",json!([1,1,options])).unwrap();
+    call(&mut a,"Bitmap","cancelEffect",json!([ticket])).unwrap();
+    assert!(call(&mut a,"Bitmap","effectStatus",json!([ticket])).is_err());
+    let mut invalid=options.clone();invalid["state"]["color"]["source"]=json!("imaginary");
+    assert!(call(&mut a,"Bitmap","beginFixedBlend",json!([1,2,invalid])).is_err());
+    let mut invalid=options.clone();invalid["state"]["source_scale"]=json!([65,1,1,1]);
+    assert!(call(&mut a,"Bitmap","beginFixedBlend",json!([1,2,invalid])).is_err());
+    assert_eq!(pixels(&a,1),[3,4,5,6,3,4,5,6]);
+    assert!(a.typescript_declarations().unwrap().contains("beginFixedBlend("));
+}

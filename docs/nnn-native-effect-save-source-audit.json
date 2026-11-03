@@ -1,0 +1,86 @@
+{
+  "purpose": "Complete native EFFECT/name record interpretation and image preparation, not a completed effect/runtime restore",
+  "reference": {
+    "repository": "https://github.com/tinyan/SystemNNN",
+    "commit": "78a05053c78b3b80065a9a209c6685a7c60a2e83",
+    "complete_source": [
+      "nyanEffectLib/effectstruct.h"
+    ],
+    "complete_routines": [
+      "nnnLib/gamecallback.cpp GetEffectForSave",
+      "nnnLib/gamecallback.cpp GetEffectFileNameForSave",
+      "nnnLib/gamecallback.cpp SetEffectByLoad",
+      "nnnLib/gamecallback.cpp SetEffectFileNameByLoad"
+    ],
+    "licence": "No grant found. Independent format/behavior facts only; no original C++ engine implementation copied or hosted."
+  },
+  "actual_module": {
+    "sha256": "e85e92ec538d50eae08d27286177149972d443a96d1415277c1ae1f9ee108bdb",
+    "method": "Read-only IDA data/control analysis, no original execution",
+    "get_effect": "0x534390",
+    "get_filename": "0x5342f0",
+    "set_effect": "0x534640",
+    "set_filename": "0x541220",
+    "contract": "Exactly16 records, each1024 bytes, plus16 names each256 bytes. Get/set copy every original EFFECT word. Names are clamped254 plus double NUL. Image loads happen only for nonzero EFFECT.flag and nonempty name.",
+    "ignored_evidence": [
+      "target/verification/systemnnn/native-effect-save-static.log",
+      "target/verification/systemnnn/native-effect-save-*.c"
+    ]
+  },
+  "native_words": {
+    "flag": 0,
+    "picture": 1,
+    "command": 2,
+    "rectangles": {
+      "src": 3,
+      "dst": 7,
+      "srcFrom": 11,
+      "dstFrom": 15,
+      "srcTo": 19,
+      "dstTo": 23
+    },
+    "count": 27,
+    "countMax": 28,
+    "parameters": "29..252 inclusive,224 signed words",
+    "notTransFlag": 253,
+    "previousEffect": 254,
+    "padding": 255
+  },
+  "implementation": {
+    "records": "Private SavedEffect retains all256 native words and name. Unknown commands remain opaque data, not a supported shader or acknowledgement.",
+    "resource_policy": "SavedPictures validates every fixed/name field before I/O, sequentially prepares only enabled/nonempty slots, preserves inactive/unnamed warm slots, retains Ready and failure without resubmission.",
+    "engine_boundary": "Ordinary LOADDWQ and saved pictures share the same PicturePreparation. It calls shared resource registries and ImageMetadata ImageJobs for decode/opaque view/corner key; every raw/opaque/display surface is an immutable engine ImageResource. No fake NativeCall, pixel loop, frame upload or renderer is used.",
+    "scope": "NativeResources and picture request client IDs must match before worker admission. No scene/presentation/clock or live VM changes occur during preparation."
+  },
+  "validation": {
+    "release": "native-game-save-image-tests.log:52passed/1ignored (library34,Bridge18), exit0",
+    "behavior": [
+      "two original slots decoded through real shared DWQ/PNG/ImageJob pipeline",
+      "raw alpha preserved, background opacity normalized, masked character display retains alpha",
+      "inactive/empty names cause no I/O and prepared slots overlay rather than clear warm cache",
+      "complete rectangles/opaque parameter words retained",
+      "no VM instruction/receipt, scene or virtual clock change",
+      "foreign capability/corrupt names fail before I/O",
+      "missing image error retained and repeated polls do not reopen source",
+      "ordinary native LOADDWQ and18 existing Bridge behavior tests still pass after workflow reuse"
+    ],
+    "not_claimed": "Complete effect semantic-state restore, actual game-slot import/export, native save UI, original-game acceptance or full engine completion."
+  },
+  "native_init_parameter_2026_11_01": {
+    "complete_static_vtable_review": "Every supported native effect class initialization slot+36; target/verification/systemnnn/native-saved-effect-init.json",
+    "no_op_initializers": [
+      "Nop",
+      "Move",
+      "Fill",
+      "Fadein",
+      "Fadeout",
+      "CTrans",
+      "LayerGrey",
+      "Bura",
+      "OldLamp"
+    ],
+    "suna_initializer": "Actual legacy0x4a68d0 copies16parameters then SetParam16: count resets0, countMax=original para0, class-global pattern reinitializes using the existing shared native RNG. Later public source preserves count and must not replace this verified module profile.",
+    "shared_boundary": "Pattern creation, RNG advancement and immutable pixel composition are engine APIs. Native layer order, initialization triggers and global pattern sharing stay adapter policy.",
+    "remaining": "Active dynamic effects during saved message/selection remain explicit errors until their actual actor-frame/window refresh consumer exists; no frozen static replacement is claimed as a running restored animation."
+  }
+}

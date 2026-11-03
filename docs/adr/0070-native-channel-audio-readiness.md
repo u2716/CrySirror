@@ -2,6 +2,14 @@
 
 Date: 2026-10-27. Status: implemented profile; validation is in STATUS.md.
 
+## Follow-up implementation (updated 2026-11-03)
+
+Canonical/media preparation and final DSP/device output were added after this native-channel checkpoint. AVG32 now uses the installed-game adapter in ADR 0095, not the old portable-event integration.
+
+Follow-ups: [ADR 0071](0071-canonical-audio-worker-bridge.md), [ADR 0072](0072-worker-prepared-media-pcm.md), [ADR 0079](0079-worker-final-audio-frames.md), [ADR 0080](0080-async-output-worker-and-bounded-pcm-transfer.md), [ADR 0095](0095-avg32-installed-games-shared-raster.md).
+The original checkpoint evidence and remaining-boundary paragraphs below retain
+their dated scope. They must not be read as an engine-wide current missing list.
+
 ## Contract
 
 RealLive's mapped BGM/WAV operations and AVG32's mapped music, wave, SE and
@@ -95,7 +103,7 @@ native sound waits. No commercial game, additional native opcode, original save
 compatibility, subjective audio quality, device, GPU or other platform result
 is established by those fixtures.
 
-Native resource-name discovery/directory listings, VM boot/scenario reads and
+At this checkpoint, native resource-name discovery/directory listings, VM boot/scenario reads and
 other unmigrated image/video operations remain synchronous. SceneState/data-VM
 channel mirroring and encoded media audio requests retain their previous
 synchronous opening paths. Final mixing/output, scratch/voice allocation and

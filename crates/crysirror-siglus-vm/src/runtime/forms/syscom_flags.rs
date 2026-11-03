@@ -14,13 +14,6 @@ pub(super) fn dispatch(ctx: &mut CommandContext, args: &[Value]) -> Result<bool>
         .element
         .get(1)
         .context("native SYSCOM flag operation")?;
-    let activation = matches!(
-        command,
-        op::SET_READ_SKIP_ONOFF_FLAG
-            | op::SET_AUTO_SKIP_ONOFF_FLAG
-            | op::SET_AUTO_MODE_ONOFF_FLAG
-            | op::SET_HIDE_MWND_ONOFF_FLAG
-    );
     let setter = matches!(
         command,
         op::SET_READ_SKIP_ONOFF_FLAG
@@ -55,8 +48,8 @@ pub(super) fn dispatch(ctx: &mut CommandContext, args: &[Value]) -> Result<bool>
         );
         let value = args[0].as_i64().context("native feature flag value")? != 0;
         ensure!(
-            !activation || !value,
-            "native feature activation {command} needs its skip/auto/hide execution profile"
+            command != op::SET_HIDE_MWND_ONOFF_FLAG || !value,
+            "native hide-window activation requires the complete cancel/restore input policy"
         );
         let st = &mut ctx.globals.syscom;
         let flag = match command {
@@ -87,6 +80,15 @@ pub(super) fn dispatch(ctx: &mut CommandContext, args: &[Value]) -> Result<bool>
             _ => unreachable!(),
         };
         *flag = value;
+        if matches!(
+            command,
+            op::SET_READ_SKIP_ONOFF_FLAG
+                | op::SET_READ_SKIP_ENABLE_FLAG
+                | op::SET_READ_SKIP_EXIST_FLAG
+        ) {
+            ctx.runtime_update_read_skip_menu();
+            ctx.push(Value::Int(0));
+        }
         return Ok(true);
     }
     let st = &ctx.globals.syscom;
@@ -94,7 +96,7 @@ pub(super) fn dispatch(ctx: &mut CommandContext, args: &[Value]) -> Result<bool>
         op::GET_READ_SKIP_ONOFF_FLAG => st.read_skip.onoff,
         op::GET_READ_SKIP_ENABLE_FLAG => st.read_skip.enable,
         op::GET_READ_SKIP_EXIST_FLAG => st.read_skip.exist,
-        op::CHECK_READ_SKIP_ENABLE => st.read_skip.enable && st.read_skip.exist,
+        op::CHECK_READ_SKIP_ENABLE => ctx.runtime_read_skip_is_enable(),
         op::GET_AUTO_SKIP_ONOFF_FLAG => st.auto_skip.onoff,
         op::GET_AUTO_SKIP_ENABLE_FLAG => st.auto_skip.enable,
         op::GET_AUTO_SKIP_EXIST_FLAG => st.auto_skip.exist,
@@ -139,6 +141,29 @@ pub(super) fn dispatch(ctx: &mut CommandContext, args: &[Value]) -> Result<bool>
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn read_skip_native_setters_and_query_use_committed_message_eligibility() {
+        let mut ctx = CommandContext::new("asset".into());
+        ctx.vm_call = Some(crate::runtime::VmCallMeta {
+            element: vec![63, op::SET_READ_SKIP_ONOFF_FLAG],
+            ..Default::default()
+        });
+        dispatch(&mut ctx, &[Value::Int(1)]).unwrap();
+        assert!(!ctx.globals.syscom.read_skip.onoff);
+        assert_eq!(ctx.pop().and_then(|v| v.as_i64()), Some(0));
+        ctx.globals.set_read_flag(2, 5);
+        ctx.set_current_read_flag_for_skip(2, 5);
+        dispatch(&mut ctx, &[Value::Int(1)]).unwrap();
+        assert!(ctx.globals.syscom.read_skip.onoff);
+        ctx.pop();
+        ctx.vm_call.as_mut().unwrap().element[1] = op::CHECK_READ_SKIP_ENABLE;
+        dispatch(&mut ctx, &[]).unwrap();
+        assert_eq!(ctx.pop().and_then(|v| v.as_i64()), Some(1));
+        ctx.set_current_read_flag_for_skip(2, 6);
+        dispatch(&mut ctx, &[]).unwrap();
+        assert_eq!(ctx.pop().and_then(|v| v.as_i64()), Some(0));
+        assert!(!ctx.globals.syscom.read_skip.onoff);
+    }
     #[test]
     fn queries_observe_native_flags_without_acknowledging_unmapped_actions() {
         let mut ctx = CommandContext::new("asset".into());

@@ -34,6 +34,7 @@ pub struct NativeOverlap {
     rendering_count: u32,
     presented_count: Option<u32>,
     display_path: Option<String>,
+    presented_frame: Option<std::sync::Arc<dyn crysirror_core::image_processing::ImageResource>>,
     pub api_calls: u64,
 }
 impl NativeOverlap {
@@ -81,37 +82,38 @@ impl NativeOverlap {
             rendering_count: 0,
             presented_count: None,
             display_path,
+            presented_frame: None,
             api_calls: 0,
         })
     }
-    pub fn dependency_pending(&self)->bool {self.frame.is_none()||self.blend.is_some()}
-    pub fn poll(
-        &mut self,
-        machine: &mut Machine,
-        call: &NativeCall,
-        host: &mut dyn HostServices,
-    ) -> Result<Option<OverlapResult>> {
-        ensure!(self.receipt == *call, "NNN overlap receipt changed");
-        machine.validate_receipt(call)?;
+    pub(crate) fn presented_frame(
+        &self,
+    ) -> Option<std::sync::Arc<dyn crysirror_core::image_processing::ImageResource>> {
+        self.presented_frame.clone()
+    }
+    pub fn dependency_pending(&self) -> bool {
+        self.frame.is_none() || self.blend.is_some()
+    }
+    fn poll_admitted_frame(&mut self, host: &mut dyn HostServices) -> Result<bool> {
         if self.frame.is_none() {
             let before = self.work.api_calls;
             let result = self.work.poll(host);
             self.api_calls += self.work.api_calls - before;
             self.frame = result?;
             if self.frame.is_none() {
-                return Ok(None);
+                return Ok(false);
             }
         }
         if let Some(job) = self.blend.as_mut() {
             match job.poll()? {
-                ImageProcessState::Pending => return Ok(None),
+                ImageProcessState::Pending => return Ok(false),
                 ImageProcessState::Failed(error) => {
                     bail!("NNN shared integer overlap failed: {error}")
                 }
                 ImageProcessState::Ready(image) => {
                     ensure!(image.client() == self.client, "NNN foreign overlap frame");
                     let published =
-                        host.publish_image_resource(self.client, self.display, image)?;
+                        host.publish_image_resource(self.client, self.display, image.clone())?;
                     self.api_calls += 1;
                     let [w, h] = self.size;
                     // A sibling of the source hierarchy: captures cannot feed a
@@ -126,10 +128,54 @@ impl NativeOverlap {
                     {
                         host.release_image_resource(self.client, &previous)?;
                     }
+                    self.presented_frame = Some(image);
                     self.presented_count = Some(self.rendering_count);
                     self.blend = None;
                 }
             }
+        }
+        Ok(true)
+    }
+    /// Drain only admitted target/blend dependencies at an explicit native
+    /// outer-mode exit. No new blend or native acknowledgement is produced.
+    pub(crate) fn cancel_at_frame(
+        &mut self,
+        machine: &Machine,
+        call: &NativeCall,
+        host: &mut dyn HostServices,
+    ) -> Result<Option<OverlapResult>> {
+        machine.validate_receipt(call)?;
+        ensure!(
+            self.receipt == *call,
+            "NNN cancelled overlap receipt changed"
+        );
+        if !self.poll_admitted_frame(host)? {
+            return Ok(None);
+        }
+        let mut frame = self
+            .frame
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("NNN cancelled overlap target absent"))?
+            .clone();
+        frame.target = self
+            .presented_frame
+            .clone()
+            .unwrap_or_else(|| frame.old.clone());
+        Ok(Some(OverlapResult {
+            frame,
+            display_path: self.display_path.take(),
+        }))
+    }
+    pub fn poll(
+        &mut self,
+        machine: &mut Machine,
+        call: &NativeCall,
+        host: &mut dyn HostServices,
+    ) -> Result<Option<OverlapResult>> {
+        ensure!(self.receipt == *call, "NNN overlap receipt changed");
+        machine.validate_receipt(call)?;
+        if !self.poll_admitted_frame(host)? {
+            return Ok(None);
         }
         if self.presented_count == Some(self.frames) {
             let frame = self.frame.as_ref().unwrap();

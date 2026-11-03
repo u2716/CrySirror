@@ -384,7 +384,7 @@ fn malformed_layout_unknown_parameters_missing_alias_and_nondefault_routes_fail_
                 s.i32(fm::STR);
                 s.i32(fm::INT);
                 s.i32(1);
-                s.i32(if mode == 5 { 3 } else { 17 });
+                s.i32(if mode == 5 { 13 } else { 17 });
                 s.i32(fm::VOID);
             }
             _ => s.command(

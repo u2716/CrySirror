@@ -17,7 +17,7 @@ use crysirror_audio::{
 };
 use crysirror_core::{
     path::{Mount, VfsPath},
-    service::FileSystem,
+    service::{FileSystem,HostServices},
     state::{ClientId, ObjectId as ChannelId},
 };
 use crysirror_scene::world::EntityHandle;
@@ -387,7 +387,7 @@ fn method(
 }
 fn playback_json(info: crysirror_core::service::AudioPlaybackInfo) -> Value {
     Value::from_json(
-        serde_json::json!({"age_frames":info.age_frames,"transport_frames":info.transport_frames,"stopping":info.stopping,"pausing":info.pausing,"source_playing":info.source_playing,"paused":info.paused,"looping":info.looping,"position_frames":info.position_frames,"source_rate":info.source_rate,"source_frames":info.source_frames,"output_rate":info.output_rate,"fade_out_frames":info.fade_out_frames,"resume_delay_frames":info.resume_delay_frames}),
+        serde_json::json!({"age_frames":info.age_frames,"transport_frames":info.transport_frames,"stopping":info.stopping,"pausing":info.pausing,"source_playing":info.source_playing,"paused":info.paused,"retain_on_finish":info.retain_on_finish,"transport_active":info.transport_active,"looping":info.looping,"loop_passes":info.loop_passes,"swap_channels":info.swap_channels,"gain":info.gain,"gain_target":info.gain_target,"gain_fade_frames":info.gain_fade_frames,"gain_stop_after_fade":info.gain_stop_after_fade,"position_frames":info.position_frames,"source_rate":info.source_rate,"source_frames":info.source_frames,"output_rate":info.output_rate,"fade_out_frames":info.fade_out_frames,"resume_delay_frames":info.resume_delay_frames}),
     )
 }
 fn info() -> &'static ClassInfo {
@@ -397,6 +397,10 @@ fn info() -> &'static ClassInfo {
         method("motionSettings",vec![],T::Map,"Client automatic world-velocity inference settings: max_interval_ms=250,teleport_distance=50 metres. Explicit velocities bypass inference. Retained host policy, not a VM save."),
         method("setMotionSettings",vec![("settings",T::Map)],T::Void,"Set strict MotionSettings and reset this client's automatic source/listener histories. Pose capture happens once per App frame; DSP interpolation belongs to workers."),
         method("resetMotion",vec![],T::Void,"Reset this client's automatic source/listener pose histories for the next frame, such as a teleport. Explicit velocities are retained. Does not reset source position, user pitch/rate or DSP history."),
+        method("beginSeekChannel",vec![("channel",T::Int),("source_frame",T::Int)],T::Int,"Begin a scoped seek on an existing native/media channel, without reopening its decoder or resetting fades/loop/pause. A retained ticket acknowledges actual cursor publication independently of later EOF."),
+        method("channelSeekStatus",vec![("ticket",T::Int)],T::Map,"Retained AudioPreparation {channel,phase,error} for a channel seek. During a render-worker lease new completion remains pending until frame publication. Foreign/obsolete tickets fail."),
+        method("cancelChannelSeek",vec![("ticket",T::Int)],T::Void,"Cancel a pending channel seek and realign its previous logical cursor, or release a terminal receipt. A later seek is unaffected. Pending final DSP must be collected before cancellation."),
+        method("exchangeChannels",vec![("left",T::Int),("right",T::Int)],T::Void,"Atomically exchange this client's two shared native/media logical channels, moving a voice if the other side is empty. Retains source handle, fractional cursor, DSP history and gain/transport ramps; opens no decoder. Unpublished preparation intents, pending seeks/retirement actors or render leases reject before any change. Ready receipts remain historical observations of their earlier publication. This is separate from decoded left/right channel swap; pooled VoiceHandles remain unchanged."),
         method("nativeChannelInfo",vec![("channel",T::Int)],T::Any,"Shared native/media channel AudioPlaybackInfo or null when ended. Scoped to the caller; source frame units, output-clock fades/delays and source completion remain distinct from processing tails."),
         method("beginVoiceRelease",vec![("spec",T::Map)],T::Map,"Retire a shared native channel decoder to a tail channel without reopening or seeking; admit an externally clocked stepped db100 release and return an owned operation handle. Pending is not transfer completion."),
         method("advanceVoiceRelease",vec![("handle",T::Map),("elapsedUpdates",T::Any)],T::Void,"Supply a monotonic exact update counter (integer or decimal string) for a channel release; repeated samples are idempotent."),
@@ -452,7 +456,7 @@ fn info() -> &'static ClassInfo {
         method("beginSeekVoice",vec![("handle",T::Map),("source_frame",T::Int)],T::Int,"Exact nonblocking seek for resident or worker-buffered sources. A newer seek supersedes an older one; pending seeks freeze the voice clock."),
         method("sourceStatus",vec![("handle",T::Map)],T::Any,"Worker stream queue, decoded frame count, seek generation and errors, or null for a resident source."),
         method("clearSfxCache",vec![],T::Void,"Drop this client's cached clips. Playing voices retain their own PCM and residency receipts."),
-        method("playSfx",vec![("voice",T::Map)],T::Map,"{asset,bus?,mix_group?,gain?,rate?,pitch_semitones?,priority?,looping?,loop_points?:{start,end},fade_in_ms?,paused?,spatial?,follow?:Entity,raycast_occlusion?,acoustics?:AcousticSource,binaural?:boolean,reflections?:ReflectionTrackingSpec}; acoustics requires a ready scene; binaural requires a ready HRTF profile. These use background preparation; reflections automatically follow source/listener poses. Realtime hosts require a preloaded clip or playSfxAsync. Returns scoped generation handle."),
+        method("playSfx",vec![("voice",T::Map)],T::Map,"{asset,bus?,mix_group?,gain?,rate?,pitch_semitones?,priority?,looping?,loop_passes?:positiveCount,swap_channels?:boolean,loop_points?:{start,end},fade_in_ms?,paused?,retain_on_finish?:boolean,transport_active?:boolean,spatial?,follow?:Entity,raycast_occlusion?,acoustics?:AcousticSource,binaural?:boolean,reflections?:ReflectionTrackingSpec}; acoustics requires a ready scene; binaural requires a ready HRTF profile. These use background preparation; reflections automatically follow source/listener poses. Realtime hosts require a preloaded clip or playSfxAsync. Returns scoped generation handle."),
         method("playRandom",vec![("name",T::String),("container",T::Map),("voice",T::Map)],T::Map,"Seeded weighted variants [{asset,weight?}], gain:[min,max], pitch_semitones:[min,max], avoid_repeat; optional VoiceSpec. Realtime hosts require preloaded variants."),
         method("createCueSequence",vec![("spec",T::Map),("seed",T::Int)],T::Map,"Create a client-owned CueSequenceSpec. Returns {client,generation}. Emits symbolic cues; opens no files or voices. Explicit owner clocks and completion tokens allow async resource/voice dependencies."),
         method("captureCueSequence",vec![("handle",T::Map)],T::Map,"Capture a portable CueSequenceCursor after its pending dependency is acknowledged. Preserves RNG, clock, ordering and frame budget; no resource/device handles. Read-only under final DSP fencing."),
@@ -466,7 +470,10 @@ fn info() -> &'static ClassInfo {
         method("stopVoice",vec![("handle",T::Map),("fade_ms",T::Number)],T::Void,"Stop immediately or sample-accurate fade out."),
         method("pauseVoice",vec![("handle",T::Map),("paused",T::Bool)],T::Void,"Pause without advancing the source or fade clock."),
         method("seekVoice",vec![("handle",T::Map),("frame",T::Int)],T::Void,"Synchronous exact seek. Worker-buffered streams require beginSeekVoice/seekVoiceAsync."),
-        method("setVoice",vec![("handle",T::Map),("options",T::Map)],T::Void,"Update {gain?,pan?:0..1,fade_ms?,rate?,pitch_semitones?,paused?,spatial?}. Fade applies to gain/pan. Pitch/rate change resampling speed."),
+        method("fadeVoiceGain",vec![("handle",T::Map),("gain",T::Number),("fade_ms",T::Number),("stop_after",T::Optional(Box::new(T::Bool)))],T::Void,"Ramp own amplitude to a finite0..4 target and optionally stop when that ramp truly completes, without an extra fade to zero. Pause and decoder starvation freeze this ramp; transport deadlines are independent. stop_after defaults false."),
+        method("finishVoiceGainFade",vec![("handle",T::Map)],T::Void,"Finish the current own-amplitude ramp at its retained target. A gain-stop retires the voice; independent transport stop deadlines are preserved. Foreign/stale handles fail."),
+        method("setVoiceLoop",vec![("handle",T::Map),("schedule",T::Map)],T::Void,"Replace a live decoded-frame loop schedule {start,end?:frame,passes?:positiveCount}; omitted end uses source EOF and omitted passes loops unbounded. Count includes the current pass. Keeps the fractional source cursor and paused state; seek does not reset the count. Requires valid source range; changes apply on the next completed mixer boundary."),
+        method("setVoice",vec![("handle",T::Map),("options",T::Map)],T::Void,"Update {gain? OR gain_db100?:-16000..1204,pan?:0..1,stereo_gain?:[left,right]0..4,swap_channels?:boolean,fade_ms?,rate?,pitch_semitones?,paused?,transport_active?,spatial?}. transport_active:false parks source/DSP while gain/pan clocks continue; full paused still freezes controls. Ended retained sources require a completed seek before activation. gain_db100 is finite hundredths of one dB; -10000 remains finite attenuation, use gain:0 for silence. Independent stereo_gain applies after pan/spatial DSP, before Master/reverb sends. Fade uses linear amplitude and rendered voice-frame clocks; paused/dependency-held voices retain ramps. Pitch/rate change resampling speed."),
         method("voice",vec![("handle",T::Map)],T::Map,"{playing,source_playing,position_seconds?}; playing includes pending stop completion and effect tails; source_playing excludes both. Stale/stolen/ended handles are inactive."),
         method("setMixGroup",vec![("name",T::String),("settings",T::Map),("fade_ms",T::Optional(Box::new(T::Number)))],T::Void,"Create/update a client logical gain group in pooled and native/media mixers after validating both. Partial settings: parent?:string|null, gain?:0..4, muted?:boolean; new defaults parent=null,gain=1,muted=false. Parent must exist in both namespaces; cycles/depth>8/budgets fail atomically. Fade uses each output clock, including silence/paused sources. This is gain control, not an effect submix."),
         method("mixGroup",vec![("name",T::String)],T::Any,"Pooled AudioMixGroupInfo for the next output frame, or null. Controls multiply voice gain and ancestors before bus/master and reverb sends. Host controls persist through playback clear/restore; DSP history is not saved."),
@@ -674,6 +681,7 @@ impl Class for AudioClass {
                 matches!(
                     name,
                     "playbackInfo"
+                        | "channelSeekStatus"
                         | "cueSequence"
                         | "captureCueSequence"
                         | "dopplerVoice"
@@ -732,6 +740,11 @@ impl Class for AudioClass {
         }
         let client = cx.state()?.client.0;
         match name {
+            "exchangeChannels" => {
+                let left=u32::try_from(arg(args,0,"left channel")?.as_i64()?)?;
+                let right=u32::try_from(arg(args,1,"right channel")?.as_i64()?)?;
+                cx.state()?.runtime.host.submit_audio(ClientId(client),crysirror_core::service::AudioRequest::ExchangeChannels{left,right})?;
+            }
             "nativeChannelInfo" => {
                 let channel = u32::try_from(arg(args, 0, "channel")?.as_i64()?)?;
                 return Ok(cx
@@ -940,20 +953,59 @@ impl Class for AudioClass {
                 let frame = u64::try_from(arg(args, 1, "source frame")?.as_i64()?)?;
                 cx.state()?.mixer_audio.mixer.seek(client, h, frame)?;
             }
+            "beginSeekChannel" => {
+                let channel=u32::try_from(arg(args,0,"channel")?.as_i64()?)?;
+                let frame=u64::try_from(arg(args,1,"source frame")?.as_i64()?)?;
+                let ticket=cx.state()?.runtime.host.begin_audio_seek(ClientId(client),channel,frame)?;
+                return Ok(Value::Int(i64::try_from(ticket)?));
+            }
+            "channelSeekStatus" => {
+                let ticket=u64::try_from(arg(args,0,"seek ticket")?.as_i64()?)?;
+                let status=cx.state()?.runtime.host.audio_seek_preparation(ClientId(client),ticket)?;
+                return Ok(Value::from_json(serde_json::json!({"channel":status.channel,"phase":match status.phase{crysirror_core::service::AudioPreparePhase::Pending=>"pending",crysirror_core::service::AudioPreparePhase::Ready=>"ready",crysirror_core::service::AudioPreparePhase::Failed=>"failed"},"error":status.error})));
+            }
+            "cancelChannelSeek" => {
+                let ticket=u64::try_from(arg(args,0,"seek ticket")?.as_i64()?)?;
+                cx.state()?.runtime.host.release_audio_seek(ClientId(client),ticket)?;
+            }
+            "fadeVoiceGain" => {
+                let h=handle(cx,args)?;
+                let gain=arg(args,1,"voice gain")?.as_f64()? as f32;
+                let ms=arg(args,2,"gain fade milliseconds")?.as_f64()? as f32;
+                let stop=args.get(3).filter(|v|!matches!(v,Value::Null)).map(Value::as_bool).transpose()?.unwrap_or(false);
+                cx.state()?.mixer_audio.mixer.fade_gain_with_stop(client,h,gain,ms,stop)?;
+            }
+            "finishVoiceGainFade" => {
+                let h=handle(cx,args)?;cx.state()?.mixer_audio.mixer.finish_gain_fade(client,h)?;
+            }
+            "setVoiceLoop" => {
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Schedule { start:u64, #[serde(default)] end:Option<u64>, #[serde(default)] passes:Option<u32> }
+                let h=handle(cx,args)?;
+                let schedule:Schedule=parse(arg(args,1,"voice loop schedule")?)?;
+                cx.state()?.mixer_audio.mixer.set_loop_schedule(client,h,schedule.start,schedule.end,schedule.passes)?;
+            }
             "setVoice" => {
                 #[derive(Deserialize, Default)]
                 #[serde(default, deny_unknown_fields)]
                 struct Options {
                     gain: Option<f32>,
+                    gain_db100: Option<i32>,
+                    stereo_gain: Option<[f32;2]>,
+                    swap_channels: Option<bool>,
                     pan: Option<f32>,
                     fade_ms: f32,
                     rate: Option<f32>,
                     pitch_semitones: Option<f32>,
                     paused: Option<bool>,
+                    transport_active: Option<bool>,
                     spatial: Option<Spatial>,
                 }
                 let h = handle(cx, args)?;
                 let opts: Options = parse(arg(args, 1, "voice options")?)?;
+                ensure!(opts.gain.is_none()||opts.gain_db100.is_none(),"specify only one voice gain unit");
+                let gain=opts.gain_db100.map(crysirror_audio::levels::gain_from_db100).transpose()?.or(opts.gain);
                 ensure!(
                     opts.fade_ms.is_finite() && (0.0..=600000.).contains(&opts.fade_ms),
                     "invalid voice fade"
@@ -963,8 +1015,9 @@ impl Class for AudioClass {
                         .is_none_or(|p| p.is_finite() && (0.0..=1.).contains(&p)),
                     "invalid voice pan"
                 );
+                if let Some(gains)=opts.stereo_gain {crysirror_audio::levels::validate_stereo_gains(gains)?;}
                 let mut spec = cx.state()?.mixer_audio.mixer.spec(client, h)?;
-                if let Some(gain) = opts.gain {
+                if let Some(gain) = gain {
                     spec.gain = gain
                 }
                 if let Some(rate) = opts.rate {
@@ -979,12 +1032,17 @@ impl Class for AudioClass {
                 spec.validate()?;
                 let a = &mut cx.state()?.mixer_audio;
                 a.mixer.position(client, h)?;
-                if let Some(gain) = opts.gain {
+                if let Some(active)=opts.transport_active {a.mixer.validate_transport_active(client,h,active)?;}
+                if let Some(gain) = gain {
                     a.mixer.fade_gain(client, h, gain, opts.fade_ms)?
                 }
                 if let Some(pan) = opts.pan {
                     a.mixer.set_pan(client, h, pan, opts.fade_ms)?;
                 }
+                if let Some(gains)=opts.stereo_gain {
+                    a.mixer.set_stereo_gain(client,h,gains,opts.fade_ms)?;
+                }
+                if let Some(swapped)=opts.swap_channels { a.mixer.set_channel_swap(client,h,swapped)?; }
                 if opts.rate.is_some() || opts.pitch_semitones.is_some() {
                     a.mixer
                         .set_rate(client, h, spec.rate, spec.pitch_semitones)?
@@ -992,6 +1050,7 @@ impl Class for AudioClass {
                 if let Some(paused) = opts.paused {
                     a.mixer.pause(client, h, paused)?
                 }
+                if let Some(active)=opts.transport_active {a.mixer.set_transport_active(client,h,active)?;}
                 if let Some(spatial) = opts.spatial {
                     a.mixer.set_spatial(client, h, Some(spatial.clone()))?;
                     if let Some(attached) = a.attachments.get_mut(&key(h)) {

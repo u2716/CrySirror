@@ -118,8 +118,12 @@ fn compose(
     }
 }
 pub(crate) fn dilate(m: &GlyphMask, radius: usize) -> GlyphMask {
+    dilate_cancellable(m,radius,&|| Ok(())).expect("infallible rich glyph dilation")
+}
+pub(crate) fn dilate_cancellable(m:&GlyphMask,radius:usize,check:&dyn Fn()->Result<()>)->Result<GlyphMask> {
+    check()?;
     if radius == 0 {
-        return m.clone();
+        return Ok(m.clone());
     }
     let (w, h) = (m.width + 2 * radius, m.height + 2 * radius);
     let mut out = GlyphMask {
@@ -132,6 +136,7 @@ pub(crate) fn dilate(m: &GlyphMask, radius: usize) -> GlyphMask {
     // Disk dilation with monotonic row windows: O(radius * pixels), rather
     // than testing every disk point at every destination pixel.
     for sy in 0..m.height {
+        check()?;
         let source = &m.alpha[sy * m.width..(sy + 1) * m.width];
         let mut rows = BTreeMap::new();
         for dy in -(radius as i32)..=radius as i32 {
@@ -165,7 +170,8 @@ pub(crate) fn dilate(m: &GlyphMask, radius: usize) -> GlyphMask {
             }
         }
     }
-    out
+    check()?;
+    Ok(out)
 }
 fn blur(m: &GlyphMask, r: usize) -> GlyphMask {
     if r == 0 {

@@ -60,10 +60,39 @@ impl Drop for CanvasImageCapture {
     }
 }
 
+struct FrameCapture {
+    response: Weak<Completion>,
+}
+impl Drop for FrameCapture {
+    fn drop(&mut self) {
+        if let Some(response) = self.response.upgrade() {
+            if let Ok(mut value) = response.lock() {
+                if value.is_none() {
+                    *value = Some(Err("frame capture presenter abandoned request".into()));
+                }
+            }
+        }
+    }
+}
+/// Presenter pixels, read on the engine worker like a Canvas capture.
+struct FrameReader(Vec<u8>);
+impl AssetReader for FrameReader {
+    fn len(&self) -> Result<u64> {
+        Ok(self.0.len() as u64)
+    }
+    fn read_at(&self, offset: u64, out: &mut [u8]) -> Result<usize> {
+        let start = usize::try_from(offset).map_err(error)?.min(self.0.len());
+        let count = out.len().min(self.0.len() - start);
+        out[..count].copy_from_slice(&self.0[start..start + count]);
+        Ok(count)
+    }
+}
+
 pub(crate) struct Broker {
     enabled: bool,
     store: u64,
     pending: VecDeque<CanvasImageCapture>,
+    frames: Vec<FrameCapture>,
     count: Arc<AtomicUsize>,
 }
 impl Broker {
@@ -72,6 +101,7 @@ impl Broker {
             enabled: false,
             store,
             pending: VecDeque::new(),
+            frames: Vec::new(),
             count: Arc::new(AtomicUsize::new(0)),
         }
     }
@@ -119,6 +149,43 @@ impl Broker {
         Ok(Box::new(Job {
             owner,
             size: [width, height],
+            response,
+            admission: Some((permit, output, scratch)),
+            task: None,
+            state: ImageProcessState::Pending,
+            _lease: lease,
+        }))
+    }
+}
+
+impl Broker {
+    pub(crate) fn begin_frame(
+        &mut self,
+        owner: ClientId,
+        size: [u32; 2],
+        tasks: &TaskPool,
+        memory: Arc<AtomicUsize>,
+    ) -> Result<ImageJob> {
+        if !self.enabled {
+            return Err(Error::Unsupported("frame capture presenter"));
+        }
+        let pixels = u64::from(size[0]) * u64::from(size[1]);
+        if size[0] == 0 || size[1] == 0 || pixels > MAX_PIXELS * 4 {
+            return Err(Error::Limit("frame capture geometry"));
+        }
+        let bytes = usize::try_from(pixels * 4).map_err(error)?;
+        let output = Charge::new(memory.clone(), bytes)?;
+        let scratch = Charge::new(memory, bytes * 2)?;
+        let permit = tasks.reserve().map_err(error)?;
+        self.count
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| (n < MAX_CAPTURES).then_some(n + 1))
+            .map_err(|_| Error::Limit("Canvas capture jobs"))?;
+        let lease = Admission(self.count.clone());
+        let response = Arc::new(Mutex::new(None));
+        self.frames.push(FrameCapture { response: Arc::downgrade(&response) });
+        Ok(Box::new(Job {
+            owner,
+            size,
             response,
             admission: Some((permit, output, scratch)),
             task: None,
@@ -273,6 +340,31 @@ impl Runtime {
                 work.complete(Err("Canvas image presenter removed".into()));
             }
         }
+    }
+    /// Complete pending whole-frame captures. `capture` renders the current frame
+    /// and returns tightly packed canvas-sized RGBA; it runs only when requested.
+    pub fn prepare_frame_captures(
+        &mut self,
+        capture: impl FnOnce(&mut Self) -> anyhow::Result<Vec<u8>>,
+    ) -> anyhow::Result<()> {
+        self.host.canvas_images.frames.retain(|f| f.response.strong_count() != 0);
+        if self.host.canvas_images.frames.is_empty() {
+            return Ok(());
+        }
+        let result = capture(self);
+        let frames = std::mem::take(&mut self.host.canvas_images.frames);
+        let reader: Reply = match result {
+            Ok(rgba) => Ok(Arc::new(FrameReader(rgba))),
+            Err(reason) => Err(format!("frame capture: {reason:#}")),
+        };
+        for frame in &frames {
+            if let Some(response) = frame.response.upgrade() {
+                if let Ok(mut value) = response.lock() {
+                    *value = Some(reader.clone());
+                }
+            }
+        }
+        Ok(())
     }
     /// Prepare admitted immutable requests on the presenter owner. Returning
     /// None retries loading dependencies next frame; a reader is consumed only

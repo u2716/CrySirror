@@ -50,6 +50,7 @@ fn sample_draw(layer: &LayerSpec, point: [f32; 2]) -> Result<Option<[u8; 4]>> {
     let t = &layer.transform;
     ensure!(
         layer.parent.is_none()
+            && t.local_matrix.is_none()
             && t.z == 0.
             && t.scale_x == 1.
             && t.scale_y == 1.
@@ -75,6 +76,8 @@ fn sample_draw(layer: &LayerSpec, point: [f32; 2]) -> Result<Option<[u8; 4]>> {
     if !contains(layer.rect, point) {
         return Ok(None);
     }
+    if layer.viewport_clip.is_some_and(|clip|!contains(clip,point)) {return Ok(None);}
+    if layer.source_crop.is_some_and(|crop|!contains(crop,[point[0]-layer.rect[0],point[1]-layer.rect[1]])) {return Ok(None);}
     // Layer clips are sprite-local, unlike the surface-space query point.
     if layer
         .clip
@@ -181,6 +184,18 @@ mod tests {
             c.sample_pixel(ClientId(1), 7, [10, 5]).unwrap(),
             [1, 2, 3, 255]
         );
+    }
+
+    #[test]
+    fn source_crop_is_local_half_open_and_empty_does_not_cover_older_nodes() {
+        let mut foreground=spec(1,[3.,2.,10.,6.],Paint::Solid{color:[9,8,7,255]});
+        foreground.source_crop=Some([1.,1.,2.,2.]);
+        let c=canvas(vec![solid([0.,0.,20.,10.],[1,2,3,255]),CanvasNode::Draw{layer:foreground.clone()}]);
+        assert_eq!(c.sample_pixel(ClientId(1),7,[4,3]).unwrap(),[9,8,7,255]);
+        for p in [[3,3],[6,3],[4,5]] {assert_eq!(c.sample_pixel(ClientId(1),7,p).unwrap(),[1,2,3,255]);}
+        foreground.source_crop=Some([0.;4]);
+        let c=canvas(vec![CanvasNode::Draw{layer:foreground}]);
+        assert_eq!(c.sample_pixel(ClientId(1),7,[4,3]).unwrap(),[0;4]);
     }
 
     #[test]

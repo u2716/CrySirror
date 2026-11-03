@@ -1,5 +1,10 @@
 # 0034: Verify Siglus execution separately from shared engine features
 
+> Historical audit checkpoint (2026-10-25). Its missing-bridge statements describe
+> that source revision; subsequent first-class native adapters and shared services
+> are documented in [NATIVE_ADAPTERS.md](../NATIVE_ADAPTERS.md). Retained results
+> are not current command coverage or whole-game acceptance.
+
 Date: 2026-10-25. Status: supported native slice executed; complete game support
 and message-window integration remain incomplete.
 

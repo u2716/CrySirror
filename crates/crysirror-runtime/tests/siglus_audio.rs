@@ -49,7 +49,7 @@ fn fixture(scene: SceneBuilder, end: u32) -> (tempfile::TempDir, Runtime) {
     std::fs::write(dir.path().join("assets/a/tone.wav"), wave()).unwrap();
     std::fs::write(
         dir.path().join("assets/a/Gameexe.ini"),
-        format!("#BGM.000=\"Song\",\"native-music\",7,{end},20\n"),
+        format!("#START_SCENE=\"entry\"\n#BGM.000=\"Song\",\"native-music\",7,{end},20\n"),
     )
     .unwrap();
     let project = json!({"schema":2,"name":"native audio","content_revision":"1","canvas":[64,64],"assets":"assets","clients":[{"name":"a","adapter":"siglus","game":"authored","asset_prefix":"a","config":{"scene":"Scene.pck","format":"pck","string_codec":"plain","gameexe":"Gameexe.ini","resources":{"native-music":"tone.wav"}}},{"name":"b","adapter":"crysirror-script-v1","game":"other","program":[]}]});
@@ -345,7 +345,7 @@ fn unknown_audio_opcode_fails_instead_of_becoming_a_fake_property() {
     let (dir, mut r) = fixture(s, 61);
     std::fs::write(
         dir.path().join("assets/a/Gameexe.ini"),
-        "#BGM.CNT=999999999\n",
+        "#START_SCENE=\"entry\"\n#BGM.CNT=999999999\n",
     )
     .unwrap();
     let error = format!("{:#}", r.tick(0, InputFrame::default()).unwrap_err());
@@ -553,7 +553,7 @@ fn failed_voice_stage_releases_new_resource_and_preserves_the_previous_prepared_
     let (dir, mut r) = fixture(s, 61);
     std::fs::write(
         dir.path().join("assets/a/Gameexe.ini"),
-        "#BGM.000=\"Song\",\"native-music\",7,61,20\n#BGM.001=\"bad\",\"native-music\",61,61,20\n",
+        "#START_SCENE=\"entry\"\n#BGM.000=\"Song\",\"native-music\",7,61,20\n#BGM.001=\"bad\",\"native-music\",61,61,20\n",
     )
     .unwrap();
     let error = format!("{:#}", r.tick(0, InputFrame::default()).unwrap_err());
@@ -667,7 +667,7 @@ fn native_numbered_se_and_active_snapshot_rebind_use_explicit_table_and_shared_g
     let (dir, mut r) = fixture(s, 1000);
     std::fs::write(
         dir.path().join("assets/a/Gameexe.ini"),
-        "#SE.CNT=16\n#SE.000=\"native-music\"\n",
+        "#START_SCENE=\"entry\"\n#SE.CNT=16\n#SE.000=\"native-music\"\n",
     )
     .unwrap();
     tick(&mut r, 0);

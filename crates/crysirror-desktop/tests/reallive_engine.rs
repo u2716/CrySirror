@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: MPL-2.0
-#![cfg(feature = "reallive")]
 //! Opt-in owner-provided content, never committed fixtures. The assertions test
 //! engine-owned resources and edits at a paused native PC, beyond a screenshot.
 #[path = "../src/input_track.rs"]

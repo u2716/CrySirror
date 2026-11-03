@@ -15,6 +15,7 @@
 //! render-target clip space.
 #![forbid(unsafe_code)]
 pub mod motion;
+pub use eluna::emote_key_from_header;
 use anyhow::{bail, ensure, Context, Result};
 use crysirror_puppet::{FramePart, MotionInfo, ParameterInfo, PartBlend, PlayOptions, PuppetFrame, PuppetSource};
 use eluna::{EmoteDrawPass, EmoteStaticScene, EmoteStaticSprite, TimelinePlayMode};
@@ -83,6 +84,10 @@ impl ElunaPuppet {
         this.origin = min;
         this.size = [(max[0] - min[0]).max(1.), (max[1] - min[1]).max(1.)];
         Ok(this)
+    }
+    /// Model-space point at the frame's top-left corner.
+    pub fn origin(&self) -> [f32; 2] {
+        self.origin
     }
     pub fn diagnostics(&self) -> BridgeDiagnostics {
         self.diagnostics.get()

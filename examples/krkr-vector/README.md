@@ -6,7 +6,7 @@ geometry, bounds, worker raster products and retained-layer renderer. No game,
 DLL, source image or font is included. This is not a commercial-game startup test.
 
 ```sh
-cargo build --release -p crysirror-desktop --features krkr
+cargo build --release -p crysirror-desktop
 target/release/crysirror render examples/krkr-vector/project.json \
   --frames 600 --font /absolute/path/to/licensed-font.ttf \
   --data-dir /tmp/crysirror-vector-state --output /tmp/crysirror-vector.png

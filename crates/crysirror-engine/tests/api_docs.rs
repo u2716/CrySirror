@@ -176,12 +176,113 @@ fn vfx_doc_items() -> Vec<api_doc::RustItem> {
             }
             item.name = (*alias).to_owned();
             for member in &mut item.members {
-                member.ty = vfx_type_aliases(&member.ty.replace("crate::screen::", "").replace("crate::falling_atlas::", ""));
+                member.ty = vfx_type_aliases(
+                    &member
+                        .ty
+                        .replace("crate::screen::", "")
+                        .replace("crate::falling_atlas::", ""),
+                );
             }
             result.push(item);
         }
     }
     result
+}
+
+// Reference labels qualify native Rust names such as Value/Input/Surface;
+// they do not rename Rust APIs or invent a serde/reflective adapter surface.
+fn system4_doc_items() -> Vec<api_doc::RustItem> {
+    const ALIASES: &[(&str, &str)] = &[
+        ("Value", "System4IniValue"),
+        ("Entry", "System4IniEntry"),
+        ("Document", "System4IniDocument"),
+        ("Mixer", "System4Mixer"),
+        ("Bootstrap", "System4Bootstrap"),
+        ("Class", "System4AssetClass"),
+        ("Volume", "System4AssetVolume"),
+        ("Assets", "System4Assets"),
+        ("Surface", "System4SpriteSurface"),
+        ("Sprite", "System4Sprite"),
+        ("Sprites", "System4Sprites"),
+        ("Input", "System4Input"),
+        ("Sact", "System4Sact"),
+        ("NativeAdapter", "System4NativeAdapter"),
+    ];
+    let rename = |source: &str| {
+        let mut output = String::new();
+        let mut word = String::new();
+        let emit = |word: &mut String, output: &mut String| {
+            output.push_str(
+                ALIASES
+                    .iter()
+                    .find(|(name, _)| *name == word)
+                    .map_or(word.as_str(), |(_, alias)| *alias),
+            );
+            word.clear();
+        };
+        for character in source.chars() {
+            if character.is_alphanumeric() || character == '_' {
+                word.push(character)
+            } else {
+                emit(&mut word, &mut output);
+                output.push(character)
+            }
+        }
+        emit(&mut word, &mut output);
+        output
+    };
+    let mut output = Vec::new();
+    for file in [
+        "bootstrap",
+        "assets",
+        "sprites",
+        "input",
+        "sact",
+        "worker_adapter",
+    ] {
+        let source = read(&format!("crates/crysirror-system4/src/{file}.rs"));
+        for mut item in api_doc::parse_rust_items(&source) {
+            let Some((_, alias)) = ALIASES.iter().find(|(name, _)| *name == item.name) else {
+                continue;
+            };
+            if file == "bootstrap" && item.name == "Value" {
+                for member in &mut item.members {
+                    let payload = match member.name.as_str() {
+                        "Integer" => Some("i32"),
+                        "Float" => Some("f32"),
+                        "Boolean" => Some("bool"),
+                        "String" => Some("String"),
+                        "List" => Some("Vec<Value>"),
+                        "Formation" => Some("Vec<Entry>"),
+                        _ => None,
+                    };
+                    if let Some(payload) = payload {
+                        member.ty = payload.into();
+                    }
+                }
+            }
+            if file == "sprites" && item.name == "Surface" {
+                for member in &mut item.members {
+                    match member.name.as_str() {
+                        "Solid" => member.ty = "[u8; 4]".into(),
+                        "Image" => member.ty = "String".into(),
+                        _ => (),
+                    }
+                }
+            }
+            for member in &mut item.members {
+                let native_type = member
+                    .ty
+                    .replace("crate::sprites::", "")
+                    .replace("crate::assets::", "")
+                    .replace("crate::bootstrap::", "");
+                member.ty = rename(&native_type);
+            }
+            item.name = (*alias).into();
+            output.push(item);
+        }
+    }
+    output
 }
 
 fn generate() -> api_doc::ApiDocs {
@@ -193,42 +294,66 @@ fn generate() -> api_doc::ApiDocs {
         "crates/crysirror-scene/src/components.rs",
         "crates/crysirror-scene/src/world.rs",
         "crates/crysirror-scene/src/layer.rs",
+        "crates/crysirror-scene/src/layer/crop.rs",
         "crates/crysirror-scene/src/layer/motion.rs",
+        "crates/crysirror-scene/src/layer/external_motion.rs",
         "crates/crysirror-scene/src/layer/depth_order.rs",
         "crates/crysirror-scene/src/input_routes.rs",
+        "crates/crysirror-scene/src/reading_wait.rs",
+        "crates/crysirror-scene/src/activity.rs",
+        "crates/crysirror-scene/src/animation.rs",
+        "crates/crysirror-scene/src/animation/adaptive_steps.rs",
+        "crates/crysirror-scene/src/animation/scalar_steps.rs",
         "crates/crysirror-scene/src/layer/crossfade.rs",
         "crates/crysirror-scene/src/layer/crossfade_effect.rs",
         "crates/crysirror-scene/src/canvas.rs",
         "crates/crysirror-core/src/service.rs",
         "crates/crysirror-core/src/service/diagnostics.rs",
         "crates/crysirror-core/src/service/keyboard_locks.rs",
+        "crates/crysirror-core/src/service/input_observation.rs",
+        "crates/crysirror-core/src/service/platform.rs",
         "crates/crysirror-core/src/service/civil_time.rs",
+        "crates/crysirror-core/src/service/session_seed.rs",
         "crates/crysirror-core/src/service/pattern.rs",
         "crates/crysirror-core/src/service/media_probe.rs",
         "crates/crysirror-core/src/image_processing.rs",
+        "crates/crysirror-core/src/image_blend.rs",
+        "crates/crysirror-core/src/image_encoding.rs",
+        "crates/crysirror-core/src/native_restore.rs",
+        "crates/crysirror-core/src/integer_fields.rs",
         "crates/crysirror-image/src/temporal_pattern.rs",
         "crates/crysirror-image/src/fixed_mix.rs",
         "crates/crysirror-image/src/fixed_luma.rs",
         "crates/crysirror-image/src/piecewise_resample.rs",
         "crates/crysirror-image/src/progress_curve.rs",
         "crates/crysirror-image/src/alpha_clip.rs",
+        "crates/crysirror-image/src/masked_pair.rs",
+        "crates/crysirror-image/src/paged.rs",
         "crates/crysirror-circus/src/native_live.rs",
         "crates/crysirror-image/src/rgb_lut.rs",
         "crates/crysirror-majiro/src/keyboard_policy.rs",
-
         "crates/crysirror-core/src/service/font.rs",
         "crates/crysirror-core/src/service/audio_release.rs",
         "crates/crysirror-core/src/service/audio_loop.rs",
+        "crates/crysirror-core/src/service/audio_replacement.rs",
         "crates/crysirror-audio/src/loop_catalog.rs",
         "crates/crysirror-text/src/format.rs",
         "crates/crysirror-text/src/precomputed_font.rs",
         "crates/crysirror-text/src/byte_split.rs",
+        "crates/crysirror-text/src/byte_groups.rs",
+        "crates/crysirror-text/src/byte_replace.rs",
+        "crates/crysirror-text/src/printf32.rs",
+        "crates/crysirror-text/src/unit_flow.rs",
         "crates/crysirror-core/src/region_map.rs",
         "crates/crysirror-engine/src/audio_release_api.rs",
         "crates/crysirror-scene/src/ui/tooltip.rs",
         "crates/crysirror-image/src/cursor/sprite.rs",
         "crates/crysirror-resource/src/xml.rs",
         "crates/crysirror-resource/src/installer.rs",
+        "crates/crysirror-formats-arc/src/ald_catalog.rs",
+        "crates/crysirror-formats-arc/src/alk.rs",
+        "crates/crysirror-formats-arc/src/alice_audio_metadata.rs",
+        "crates/crysirror-resource/src/cg_catalog.rs",
         "crates/crysirror-reallive/src/adapter.rs",
         "crates/crysirror-majiro/src/settings_policy.rs",
         "crates/crysirror-image/src/associated.rs",
@@ -242,6 +367,9 @@ fn generate() -> api_doc::ApiDocs {
         "crates/crysirror-image/src/bitmap.rs",
         "crates/crysirror-resource/src/context.rs",
         "crates/crysirror-resource/src/transforms.rs",
+        "crates/crysirror-resource/src/legacy_stream.rs",
+        "crates/crysirror-text-legacy/src/lib.rs",
+        "crates/crysirror-text-legacy/src/numeric.rs",
         "crates/crysirror-resource/src/file.rs",
         "crates/crysirror-resource/src/lzss.rs",
         "crates/crysirror-resource/src/wave.rs",
@@ -260,6 +388,9 @@ fn generate() -> api_doc::ApiDocs {
         "crates/crysirror-audio/src/buffered.rs",
         "crates/crysirror-audio/src/decoder.rs",
         "crates/crysirror-audio/src/mixer.rs",
+        "crates/crysirror-audio/src/levels.rs",
+        "crates/crysirror-audio/src/seek_receipt.rs",
+        "crates/crysirror-audio/src/channel_replacement.rs",
         "crates/crysirror-audio/src/doppler.rs",
         "crates/crysirror-audio/src/motion.rs",
         "crates/crysirror-audio/src/reverb.rs",
@@ -282,6 +413,38 @@ fn generate() -> api_doc::ApiDocs {
         items.extend(api_doc::parse_rust_items(&read(f)));
     }
     for item in &mut items {
+        let tuple_source = match item.name.as_str() {
+            "Printf32Argument" => Some(("crates/crysirror-text/src/printf32.rs", "pub enum Printf32Argument<'a> {")),
+            "OriginalRestoreStatus" => Some(("crates/crysirror-core/src/native_restore.rs", "pub enum OriginalRestoreStatus {")),
+            "AudioReplacementState" => Some(("crates/crysirror-core/src/service/audio_replacement.rs", "pub enum AudioReplacementState {")),
+            "GlyphBoundsProgress" => Some(("crates/crysirror-core/src/service/font.rs", "pub enum GlyphBoundsProgress {")),
+            "SessionSeedState" => Some(("crates/crysirror-core/src/service/session_seed.rs", "pub enum SessionSeedState {")),
+            "ImageCompositeMath" => Some(("crates/crysirror-core/src/image_processing.rs", "pub enum ImageCompositeMath {")),
+            "GlyphImageBatchState" => Some(("crates/crysirror-core/src/image_processing.rs", "pub enum GlyphImageBatchState {")),
+            "SourceSeekState" => Some(("crates/crysirror-audio/src/seek_receipt.rs", "pub enum SourceSeekState {")),
+            _ => None,
+        };
+        if let Some((path, marker)) = tuple_source {
+            // Preserve Rust-only tuple payloads from the declaration rather
+            // than documenting empty variant tags.
+            let source = read(path);
+            let rest = source.split_once(marker).expect("Rust tuple enum declaration").1;
+            let mut depth=1usize;
+            let end=rest.char_indices().find_map(|(offset,ch)| {
+                if ch=='{' {depth+=1;}
+                if ch=='}' {depth-=1;if depth==0 {return Some(offset);}}
+                None
+            }).expect("Rust tuple enum body");
+            let declaration=&rest[..end];
+            for line in declaration.lines().map(str::trim) {
+                if line.starts_with("//") { continue; }
+                let Some((name, rest)) = line.split_once('(') else { continue };
+                let payload = rest.split_once(')').expect("Rust tuple variant").0;
+                let member = item.members.iter_mut().find(|member| member.name == name)
+                    .expect("Rust parsed tuple variant");
+                member.ty = payload.to_owned();
+            }
+        }
         for member in &mut item.members {
             member.ty = member
                 .ty
@@ -289,6 +452,7 @@ fn generate() -> api_doc::ApiDocs {
         }
     }
     items.extend(vfx_doc_items());
+    items.extend(system4_doc_items());
     let config = |f: &str| {
         api_doc::parse_rust_items(&read(f))
             .into_iter()
@@ -297,14 +461,58 @@ fn generate() -> api_doc::ApiDocs {
     let e = json!({});
     let extent = json!({"extent": [1, 1, 1]});
     let data = vec![
+        d("ImageCompositeMath","Rust typed immutable-image composite arithmetic; resource graph operation, not a JSON command or reflected class",None),
+        d("RgbaBlendFactor","Rust normalized/Byte255 source and destination channel factors",None),
+        d("RgbaBlendEquation","Rust per-component normalized/fixed blend equation",None),
+        d("RgbaBlendComponent","Rust independent RGB/alpha factor and equation selection",None),
+        d("RgbaByteRounding","Rust explicit byte product quantization",None),
+        d("RgbaBlendArithmetic","Rust floating nearest or independently rounded /255 integer products",None),
+        d("RgbaBlendState","Rust checked fragment transform, gates, colour/alpha equations and channel write mask; Bitmap.beginFixedBlend options map",None),
+        d("SessionSeedSource","Rust bounded fixed words or authorized OS-worker seed sampling; not a serialized project command",None),
+        d("SessionSeedMaterial","Rust client-scoped ready seed words; native stream algorithm and ownership remain caller policy",None),
+        d("SessionSeedState","Rust SessionSeedQuery retained Pending/Ready/Failed/Cancelled completion",None),
+        d("CropRect","Rust layer::crop shared local geometry/UV intersection result",None),
         d("ImageEffect","Bitmap.applyEffectAsync; shared worker effects",None),
         d("LogRecord", "Engine.logs records; canonical client log", None),
         d("LogReceipt", "HostServices.append_log committed owner receipt", None),
         d("LogSnapshot", "HostServices.log_snapshot; Engine.logs converts u64 fields to decimal strings", None),
+        d("ReadingWait", "Shared retained reading deadline over caller-owned logical time; ReadingWait::due is pure CPU and consumes no clock/input", sample::<crysirror_scene::reading_wait::ReadingWait>(json!({"started_at_ms":100,"characters":3}))),
+        d("AldVolume", "Rust capability-authorized ALD input reader with explicit zero-based volume number; not a serialized path/device pointer", None),
+        d("AldCatalog", "Rust immutable ALD link-table catalogue and shared Archive implementation; original sparse IDs/holes, scoped payload reads", None),
+        d("AlkCatalog", "Rust shared numeric ALK catalogue and Archive implementation; original IDs/holes and scoped subrange reads, no duplicate format registration", None),
+        d("System4IniValue", "Rust crysirror_system4::bootstrap::Value; original typed INI grammar, not a JSON/serde value", None),
+        d("System4IniEntry", "Rust crysirror_system4::bootstrap::Entry; ordered native INI entry, not a reflective class", None),
+        d("System4IniDocument", "Rust crysirror_system4::bootstrap::Document::parse; bounded original INI document and diagnostics", None),
+        d("System4Mixer", "Rust crysirror_system4::bootstrap::Mixer; native configured mixer metadata, no audio-device handle", None),
+        d("System4Bootstrap", "Rust crysirror_system4::bootstrap::Bootstrap::from_document; typed original paths/view/save/mixer policy", None),
+        d("System4AssetClass", "Serde crysirror_system4::assets::Class; native ALD role in system4 clients config.volumes", None),
+        d("System4AssetVolume", "Serde crysirror_system4::assets::Volume; original class/zero-based volume/scoped source and mount paths", None),
+        d("System4Assets", "Opaque Rust crysirror_system4::assets::Assets; worker-prepared shared ALD catalogues and original one-based ID policy", None),
+        d("System4SpriteSurface", "Rust crysirror_system4::sprites::Surface; native solid/path declaration for shared Layer, not a private pixel buffer", None),
+        d("System4Sprite", "Rust crysirror_system4::sprites::Sprite; native retained properties translated into engine-owned layers", None),
+        d("System4Sprites", "Opaque Rust crysirror_system4::sprites::Sprites; scoped original slot/native policy over shared HostServices", None),
+        d("System4Input", "Opaque Rust crysirror_system4::input::Input; native clearable key state over retained engine InputObservation", None),
+        d("System4Sact", "Rust crysirror_system4::sact::Sact; scoped native initialization state with real shared font/mixer checks and canvas/layer/sprite handles", None),
+        d("System4NativeAdapter", "Opaque Rust crysirror_system4::worker_adapter::NativeAdapter; original AIN worker/owner port, not another general engine", None),
+        d("PointerObservation", "Rust owner-supplied pointer metadata; unavailable is distinct from coordinate zero; no serde wire implied", None),
+        d("InputObservation", "Rust retained client input observation; Input.observation emits exact decimal strings for revision/time/button masks", None),
+        d("PlatformIntegration", "Rust optional backend selector; script Platform.integration accepts the name steam; no serde/SDK operation implied", None),
+        d("PlatformIntegrationInfo", "Rust client-scoped ready-backend metadata; Platform.integration exposes name/available/backend without entitlement claims", None),
         d("KeyboardLockState", "Logical engine keyboard locks; physical control separate", None),
         d("KeyboardLockSnapshot", "Input.keyboardLocks / setKeyboardLocks", None),
         d("NativeLiveState", "Opaque Circus native save-image mutation audit; gaps block original save admission", None),
         d("CivilTime", "HostServices.begin_civil_time worker result, independent of virtual clock", None),
+        d("ImageEncodingInfo", "ImageMetadata.begin_encoding_info retained original encoded header/plane properties; no pixel CRC claim", None),
+        d("ImageEncodingInfoReceipt", "Client-scoped encoded-header receipt and original-byte fingerprint", None),
+        d("ImageEncodingInfoState", "ImageEncodingInfoQuery.poll retained pending/ready/typed failure state", None),
+        d("Mt19937_1998", "Rust Resource legacy_stream::Mt19937_1998; caller-owned original 1998 sequence state, no VM", None),
+        d("Mt19937Split", "Rust Resource legacy_stream::Mt19937Split; explicit split-word seed profile, caller-owned state/fast first word", None),
+        d("ByteLeadProfile", "Rust GPL text-legacy native lead-byte profile, separate from Unicode shaping", None),
+        d("ByteStringProfile", "Rust text-legacy byte character/signedness policy; no code-page validation", None),
+        d("ByteStringLimits", "Rust text-legacy bounded input/output/work admission", None),
+        d("ByteStringContext", "Opaque Rust text-legacy borrowed profile/limits/cancellation context; no heap or renderer ownership", None),
+        d("ByteNumberSymbols", "Rust text-legacy numeric::ByteNumberSymbols for native decimal byte parsing", None),
+        d("NumericCompaction", "Rust text-legacy numeric tail-preservation policy", None),
         d("CivilTimeState", "CivilTimeQuery.poll completion", None),
         d("MediaProbeInfo", "Media.probeStatus.info; header/decoder preparation without playback or PCM", None),
         d("MediaProbeState", "HostServices.begin_media_probe nonblocking retained completion", None),
@@ -336,9 +544,27 @@ fn generate() -> api_doc::ApiDocs {
         d("ResampleAlpha", "PiecewiseResampleSpec.alpha; weighted, preserved or opaque channel policy", None),
         d("PiecewiseResampleSpec", "ImageEffect.piecewise_resample; bounded ordered nearest sampling with independent Q8 weights", None),
         d("AlphaClipRect", "Bitmap.beginAlphaClip and ImageEffect.alpha_clip_rect; exact coverage products, clipping and explicit forward self-source profile", sample::<crysirror_image::alpha_clip::AlphaClipRect>(json!({"destination":[0,0],"source":[0,0,16,16],"clip":[0,0,16,16],"clear":null}))),
+        d("ByteGroupSplitLimits", "Rust Text split_grouped_bytes limits; bounded two-pass raw-byte grouping independent of UTF-8", None),
+        d("ByteGroupSplitOutput", "Rust Text split_grouped_bytes result; initialized output bytes, logical length and group spans", None),
+        d("MaskedPairBlend", "Bitmap.beginMaskedPair and ImageEffect.masked_pair_blend; three immutable inputs with independently masked14bit contributions", sample::<crysirror_image::masked_pair::MaskedPairBlend>(json!({"sources":[[0,0,1,1],[0,0,1,1]],"destination":[0,0],"weights256":[128,128]}))),
+        d("CgCatalogEntry", "Resources siglus/cgm decoded metadata entries; catalogue identity/group codes, no progress state", sample::<crysirror_resource::cg_catalog::CgCatalogEntry>(json!({"name":"AUTHOR_IMAGE","flag_no":12,"codes":[1,2,0,0,0],"code_count":2}))),
+        d("CgCatalog", "Resources siglus/cgm decoded CGTABLE/CGTABLE2 catalogue; shared Rust metadata", sample::<crysirror_resource::cg_catalog::CgCatalog>(json!({"version":2,"auto_flag":0,"entries":[]}))),
+        d("PagedImageLayout", "Rust sparse image page layout; bounded allocated slots, logical extent and half-open region intersection", None),
+        d("PagedImageRegion", "PagedImageLayout.intersect and PagedClearPlan; checked page-local rectangle and virtual origin", None),
+        d("PagedImage", "Rust client-scoped immutable page generations; original resources remain held by old clones", None),
+        d("PagedClearPlan", "Rust staged page clear inputs; complete_clear validates full worker-result batch and generation before publication", None),
         d("DepthOrderKey", "Derived immutable Primitive subtree depth path; no device handles", None),
         d("DepthOrderStep", "DepthOrderKey.path; finite depth, scope and last committed stable rank", None),
+        d("ServiceBatch", "Canvases.applyBatch / Rust EngineSystems.submit typed atomic multi-service data", sample::<crysirror_scene::ServiceBatch>(json!({}))),
         d("ImageInput", "ImageMetadata.begin_process; scoped resources, encoded memory and immutable composition graphs", None),
+        d("GlyphImageSpec", "Rust ImageMetadata.begin_glyph_image prepares resident immutable RGBA from a scoped frozen font; not a reflected class", None),
+        d("GlyphSizeBasis","Rust styled glyph size basis: line height or EM, explicit choice without font-matching claims",None),
+        d("GlyphImageOrigin","Rust styled glyph positioning policy: baseline or top",None),
+        d("GlyphRasterOptions","Rust ImageMetadata.begin_styled_glyph_image/begin_glyph_image_batch explicit bounded coverage pipeline; no reflected class or JSON command",None),
+        d("StyledGlyphImageSpec","Rust single immutable styled glyph-image request over one scoped frozen font",None),
+        d("GlyphImageCell","Rust separately bounded glyph cell canvas/positioned glyph stream",None),
+        d("GlyphImageBatchSpec","Rust single-worker all-or-nothing immutable glyph cell batch",None),
+        d("GlyphImageBatchState","Rust retained GlyphImageBatchQuery progress; opaque resource and typed Core error payloads, not serialized command tags",None),
         d("ImageProcessState", "ImageJob.poll; includes HostServices.begin_canvas_image retained receipt", None),
         d("MaterializeRequest", "CanvasSystem.capture_request frozen logical scene; presenter prepares a lazy readback capability", None),
         d("KeyboardLockPolicy", "Majiro explicit logical vs physical host policy", None),
@@ -404,8 +630,36 @@ fn generate() -> api_doc::ApiDocs {
         d("SceneVoicePhase","SceneVoiceStatus.phase",None),
         d("SceneVoiceStatus","Audio.channelStatus",None),
         d("AudioAsset","HostServices::begin_audio / AudioRequest::PlayAsset",None),
+        d("AudioRequest","Rust client-scoped HostServices audio commands; resource-bearing enum, not a JSON command or reflected class",None),
+        d("OriginalRestoreTicket","Rust Runtime original-save resource preparation; instance/client/epoch/serial capability, not a script object",None),
+        d("OriginalRestoreStatus","Rust retained original-save preparation status; Failed preserves Core Error",None),
+        d("OriginalRestoreProgress","OriginalRestorePreparation resource dependency result",None),
+        d("OriginalRestoreBatch","Rust schema/immutable shared-scene bytes validated by a bounded preparation worker",None),
+        d("OriginalRestoreCommit","Rust owner-only detached VM/resource plan; no Serialize implementation or project/JSON command boundary",None),
+        d("AudioReplacementInfo","Rust detached per-client audio replacement channel count and owner",None),
+        d("AudioReplacementState","Rust retained scoped preparation status; opaque Ready resource and typed Core Error",None),
+        d("ChannelReplacementJob","Opaque Rust worker-owned audio replacement admission; poll yields detached prepared sources",None),
+        d("PreparedChannelReplacement","Opaque Rust one-shot replacement resources; no decoder or device pointers exposed",None),
+        d("ChannelReplacementCommit","Opaque exclusive Rust owner preflight token; install consumes it infallibly",None),
+        d("UnitFlowOptions","Text.layoutUnitFlow and Rust layout_unit_flow bounded cell layout policy",None),
+        d("UnitFlowItem","Text.layoutUnitFlow explicit glyph/move/line_break stream; native syntax remains adapter policy",None),
+        d("UnitFlowGlyph","Font-independent cell origin, character, size and opaque style index",None),
+        d("UnitFlowLayout","Text.layoutUnitFlow cell extent/cursor result, distinct from raster ink bounds",None),
+        d("GlyphBoundsRequest","Rust FontLibrary.begin_glyph_bounds one-character size and baseline",None),
+        d("GlyphBoundsSpec","Text.beginGlyphBounds scoped font and bounded glyph request stream",None),
+        d("GlyphBounds","Text.glyphBoundsStatus immutable glyph coverage-cell geometry",None),
+        d("GlyphBoundsProgress","Rust GlyphBoundsQuery retained typed progress; Ready retains admitted font and accounting",None),
+        d("AdaptiveStepClock","Rust-only bounded adaptive fixed-step debt over caller-owned elapsed time; new selects zero lookahead, with_lookahead is explicit, every state-changing method validates the finite signed32 domain; no VM/device/reflective class",sample::<crysirror_scene::animation::AdaptiveStepClock>(json!({"period_ms":50,"maximum_steps":2,"horizon":10,"lookahead_steps":0,"debt_ms":0,"planned_steps":0,"consumed":true,"open":false}))),
+        d("ActivityTimer","Rust owner-clock inactivity deadline with explicit optional activity sequence",None),
+        d("MusicMetadataVersion","Rust AliceSoft BGI music-loop record profile; not a registry decoder ID",None),
+        d("MusicLoopEntry","MusicLoopCatalog original numeric loop/group/volume fields",None),
+        d("MusicLoopCatalog","Rust bounded AssetReader/DecodeContext catalogue load and first-number lookup",None),
+        d("WaveRoutingEntry","WaveRoutingCatalog original one-based wave ID, group and retained raw words",None),
+        d("WaveRoutingCatalog","Rust bounded XI2/WAI wave-routing resource catalogue, independent of VM/audio playback",None),
         d("ByteFormatValue", "Rust shared first-compatible encoded-byte formatting value", None),
         d("ByteFormatOutput", "format_one_bytes bounded output and argument-consumption receipt", None),
+        d("Printf32Argument", "Rust format_printf32_bytes explicit C32 Word(u32) or borrowed Bytes; no pointer varargs or reflective class", None),
+        d("Printf32Output", "Rust format_printf32_bytes bounded byte output and arguments_used receipt", None),
         d("BitmapGlyph", "PrecomputedFont checked TFT v0/v1 metrics and original coverage layout", None),
         d("PrecomputedFont", "Text.beginPrecomputedFont / FontLoadSource.PrecomputedStorage and PrecomputedBytes fixed-size faces", None),
         d("ByteSplitBoundary", "Rust shared byte-delimiter tokenizer; explicit single-byte or reviewed Shift-JIS boundaries", None),
@@ -438,6 +692,10 @@ fn generate() -> api_doc::ApiDocs {
         d("MajiroSettingsProfile", "Majiro explicit portable client settings or unsupported Windows-registry import", Some(json!("portable_client"))),
         d("OpticalDiscPolicy", "RealLive native host optical-disc policy; not authentication", Some(json!("disabled_for_native_host"))),
         d("SeekProgress","Rust Mixer::seek_progress",None),
+        d("SourceSeekReceipt","Opaque Rust Mixer-owned retained source cursor publication; not constructible from project data",None),
+        d("SourceSeekState","Rust Mixer::source_seek_state retained result, independent of later source EOF/removal",None),
+        d("FontMetrics","Rust FontLibrary::metrics and Text.fontMetrics return immutable scoped ascent/descent/advance",None),
+        d("FontFaceStyle","Rust FontLibrary::face_style and Text.fontStyle cached actual OS/2 weight/italic; missing metadata/precomputed faces return None",None),
         d("HrtfEarOrder","HrtfOptions.ear_order",Some(json!("left_right"))),
         d("HrtfOptions","Audio.beginHrtf options",sample::<crysirror_acoustics::binaural::HrtfOptions>(json!({}))),
         d("HrirAsset","Audio.beginHrtf JSON asset",sample::<crysirror_acoustics::binaural::HrirAsset>(json!({"sample_rate":48000,"measurements":[{"direction":[0,0,-1],"left":[1],"right":[1]}]}))),
@@ -981,6 +1239,9 @@ fn generate() -> api_doc::ApiDocs {
         d("MotionTrackSpec", "Layers.beginMotion / Ui.beginMotion", sample::<layer::motion::MotionTrackSpec>(json!({"property":"x","to":100,"duration":20}))),
         d("MotionTrackStatus", "MotionStatus.tracks", None),
         d("MotionStatus", "Layers.motionStatus / Ui.motionStatus / EngineQuery", None),
+        d("ExternalMotionPose", "Layers.commitExternalMotion atomic optional pose", sample::<layer::ExternalMotionPose>(json!({}))),
+        d("ExternalMotionStamp", "Layers.commitExternalMotion exact generation/revision strings", sample::<layer::ExternalMotionStamp>(json!({"generation":"1","revision":"1"}))),
+        d("ExternalMotionStatus", "MotionStatus.drivers owner-scoped producer state", None),
         d("WidgetHitMask", "WidgetSpec.hit_mask / Ui.setHitMask", sample::<ui::WidgetHitMask>(json!({"size":[1,1],"coverage":[255],"threshold":1}))),
         d("MenuTemplate", "Shared PE standard menu template parser", None),
         d("MenuTemplateItem", "MenuTemplate.items recursive native menu data", None),
@@ -998,7 +1259,10 @@ fn generate() -> api_doc::ApiDocs {
             ("world", variants::<world::WorldCommand>()),
             ("layer", variants::<layer::LayerCommand>()),
             ("ui", variants::<ui::UiCommand>()),
-            ("input_route", variants::<crysirror_scene::input_routes::InputRouteCommand>()),
+            (
+                "input_route",
+                variants::<crysirror_scene::input_routes::InputRouteCommand>(),
+            ),
         ],
         command_enums: vec![
             ("canvas", "CanvasCommand"),
@@ -1012,10 +1276,20 @@ fn generate() -> api_doc::ApiDocs {
             ("avg32".into(), config("crates/crysirror-avg32/src/lib.rs")),
             ("bgi", config("crates/crysirror-bgi/src/lib.rs")),
             ("circus", config("crates/crysirror-circus/src/adapter.rs")),
-            ("catsystem2", config("crates/crysirror-catsystem2/src/adapter.rs")),
+            (
+                "catsystem2",
+                config("crates/crysirror-catsystem2/src/adapter.rs"),
+            ),
             ("krkr", config("crates/crysirror-krkr/src/adapter.rs")),
             ("majiro", config("crates/crysirror-majiro/src/adapter.rs")),
-            ("system-nnn", config("crates/crysirror-system-nnn/src/installed.rs")),
+            (
+                "system-nnn",
+                config("crates/crysirror-system-nnn/src/installed.rs"),
+            ),
+            (
+                "system4",
+                config("crates/crysirror-system4/src/worker_adapter.rs"),
+            ),
             ("nscripter", config("crates/crysirror-nscripter/src/lib.rs")),
             ("rfvp", config("crates/crysirror-rfvp/src/adapter.rs")),
             (
@@ -1175,6 +1449,65 @@ fn modular_vfx_reference_keeps_legacy_types_distinct_and_explains_wire_values() 
 #[test]
 fn native_capabilities_and_config_are_in_public_reference() {
     let docs = generate();
+    let metadata: serde_json::Value = serde_json::from_str(&docs.json).unwrap();
+    let arguments = metadata["data"].as_array().unwrap().iter()
+        .find(|spec| spec["name"] == "Printf32Argument").unwrap();
+    for (name, ty) in [("Word", "u32"), ("Bytes", "&'a [u8]")] {
+        let variant = arguments["fields"].as_array().unwrap().iter()
+            .find(|field| field["name"] == name).unwrap();
+        assert_eq!(variant["rust_type"], ty);
+    }
+    assert!(!docs.typescript.contains("class Printf32"));
+    let requests = metadata["data"].as_array().unwrap().iter()
+        .find(|spec| spec["name"] == "AudioRequest").unwrap();
+    let stereo = requests["fields"].as_array().unwrap().iter()
+        .find(|variant| variant["name"] == "SetStereoGain").unwrap();
+    assert_eq!(stereo["rust_type"], "channel: u32, gains: [f32; 2], fade_ms: f32");
+    assert!(!docs.typescript.contains("class AudioRequest"));
+    let restore_status = metadata["data"].as_array().unwrap().iter()
+        .find(|spec| spec["name"] == "OriginalRestoreStatus").unwrap();
+    assert_eq!(restore_status["fields"].as_array().unwrap().iter()
+        .find(|variant| variant["name"] == "Failed").unwrap()["rust_type"], "Error");
+    assert!(!docs.typescript.contains("class OriginalRestore"));
+    let seek = metadata["data"].as_array().unwrap().iter()
+        .find(|spec| spec["name"] == "SourceSeekState").unwrap();
+    assert_eq!(seek["fields"].as_array().unwrap().iter()
+        .find(|variant| variant["name"] == "Failed").unwrap()["rust_type"], "String");
+    let receipt=metadata["data"].as_array().unwrap().iter()
+        .find(|spec|spec["name"]=="SourceSeekReceipt").unwrap();
+    assert!(receipt["fields"].as_array().unwrap().is_empty(),"opaque Rust handle has no public payload");
+    let metrics=metadata["data"].as_array().unwrap().iter()
+        .find(|spec|spec["name"]=="FontMetrics").unwrap();
+    assert_eq!(metrics["fields"].as_array().unwrap().len(),3);
+    assert!(!docs.typescript.contains("class SourceSeekReceipt"));
+    let seed_state=metadata["data"].as_array().unwrap().iter().find(|spec|spec["name"]=="SessionSeedState").unwrap();
+    assert_eq!(seed_state["fields"].as_array().unwrap().iter().find(|field|field["name"]=="Ready").unwrap()["rust_type"],"SessionSeedMaterial");
+    let blend=metadata["data"].as_array().unwrap().iter().find(|spec|spec["name"]=="RgbaBlendState").unwrap();
+    assert_eq!(blend["fields"].as_array().unwrap().len(),10);
+    let math=metadata["data"].as_array().unwrap().iter().find(|spec|spec["name"]=="ImageCompositeMath").unwrap();
+    assert_eq!(math["fields"].as_array().unwrap().iter().find(|field|field["name"]=="Normalized").unwrap()["rust_type"],"crate::image_blend::RgbaBlendState");
+    let specs=metadata["data"].as_array().unwrap();
+    for (name,fields) in [("AdaptiveStepClock",8),("GlyphRasterOptions",9),("StyledGlyphImageSpec",2),
+        ("GlyphImageCell",2),("GlyphImageBatchSpec",4),("FontFaceStyle",2)] {
+        let spec=specs.iter().find(|spec|spec["name"]==name).unwrap();
+        assert_eq!(spec["fields"].as_array().unwrap().len(),fields,"{name} actual declared fields");
+    }
+    let batch=specs.iter().find(|spec|spec["name"]=="GlyphImageBatchState").unwrap();
+    for (variant,payload) in [("Ready","Arc<dyn GlyphImageBatchResource>"),("Failed","crate::Error")] {
+        assert_eq!(batch["fields"].as_array().unwrap().iter().find(|field|field["name"]==variant).unwrap()["rust_type"],payload);
+    }
+    assert!(!docs.typescript.contains("class SessionSeed"));
+    assert!(!docs.typescript.contains("class RgbaBlend"));
+    for name in ["ChannelReplacementJob", "PreparedChannelReplacement", "ChannelReplacementCommit"] {
+        let spec=metadata["data"].as_array().unwrap().iter().find(|spec|spec["name"]==name).unwrap();
+        assert!(spec["fields"].as_array().unwrap().is_empty(), "{name} must stay opaque");
+        assert!(!docs.typescript.contains(&format!("class {name}")));
+    }
+    for name in ["AudioReplacementState", "GlyphBoundsProgress"] {
+        let spec=metadata["data"].as_array().unwrap().iter().find(|spec|spec["name"]==name).unwrap();
+        assert_eq!(spec["fields"].as_array().unwrap().iter().find(|field|field["name"]=="Failed").unwrap()["rust_type"], if name=="AudioReplacementState" {"Error"} else {"crate::Error"});
+    }
+
     for term in [
         "Canvases",
         "Media",
@@ -1210,7 +1543,13 @@ fn native_capabilities_and_config_are_in_public_reference() {
             .iter()
             .map(|f| f.name.as_str())
             .collect::<Vec<_>>(),
-        ["root", "font_alias", "encoding", "start_scene", "optical_disc_check"]
+        [
+            "root",
+            "font_alias",
+            "encoding",
+            "start_scene",
+            "optical_disc_check"
+        ]
     );
 }
 
@@ -1262,9 +1601,13 @@ fn documented_text_input_methods_mutate_engine_owned_state_without_native_vm() {
     call("insertText", json!(["界"])).unwrap();
     call("setTitle", json!(["engine UI"])).unwrap();
     call("setCursorVisible", json!([false])).unwrap();
-    let frozen=call("snapshotLayers",json!([7])).unwrap().to_json();
-    assert!(frozen.as_array().unwrap().iter().any(|layer|layer["paint"]["text"]=="あ界"));
-    assert!(call("snapshotLayers",json!([999])).is_err());
+    let frozen = call("snapshotLayers", json!([7])).unwrap().to_json();
+    assert!(frozen
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|layer| layer["paint"]["text"] == "あ界"));
+    assert!(call("snapshotLayers", json!([999])).is_err());
     let ui = &app.runtime().unwrap().host.engine.ui;
     let owner = ui.focus.unwrap().owner;
     assert_eq!(ui.get(owner, 7).unwrap().text, "あ界");
@@ -1281,25 +1624,60 @@ fn audio_transport_keeps_existing_three_argument_typescript_calls_compatible() {
 
 #[test]
 fn documented_subtree_effect_is_engine_owned_without_a_native_vm() {
-    use crysirror_engine::{App,Value};
-    let root=tempfile::tempdir().unwrap();
+    use crysirror_engine::{App, Value};
+    let root = tempfile::tempdir().unwrap();
     std::fs::create_dir(root.path().join("assets")).unwrap();
     std::fs::write(root.path().join("project.json"),serde_json::to_vec(&json!({"schema":2,"name":"subtree-api","content_revision":"1","assets":"assets","canvas":[64,64],"clients":[{"name":"main","adapter":"crysirror-script-v1","game":"test"}]})).unwrap()).unwrap();
-    let rt=crysirror_runtime::Runtime::load(&root.path().join("project.json"),&root.path().join("state")).unwrap();
-    let mut app=App::new(rt,"main").unwrap(); app.init().unwrap(); app.start().unwrap();
-    let cx=app.context(); let layers=cx.singleton("Layers").unwrap();
-    for (id,color) in [(1,[255,0,0,255]),(2,[0,0,255,255])] {
-        cx.call(layers,"put",&[Value::from_json(json!({"id":id,"rect":[0,0,32,32],"paint":{"kind":"solid","color":color}}))]).unwrap();
+    let rt = crysirror_runtime::Runtime::load(
+        &root.path().join("project.json"),
+        &root.path().join("state"),
+    )
+    .unwrap();
+    let mut app = App::new(rt, "main").unwrap();
+    app.init().unwrap();
+    app.start().unwrap();
+    let cx = app.context();
+    let layers = cx.singleton("Layers").unwrap();
+    for (id, color) in [(1, [255, 0, 0, 255]), (2, [0, 0, 255, 255])] {
+        cx.call(
+            layers,
+            "put",
+            &[Value::from_json(
+                json!({"id":id,"rect":[0,0,32,32],"paint":{"kind":"solid","color":color}}),
+            )],
+        )
+        .unwrap();
     }
-    let args=[Value::Int(1),Value::Int(2),Value::Int(1000),Value::from_json(json!({"kind":"blur","before":[2,1],"after":[0,2]}))];
-    cx.call(layers,"beginCrossfadeEffect",&args).unwrap();
-    let status=cx.call(layers,"crossfadeStatus",&[Value::Int(1)]).unwrap().to_json();
-    assert_eq!(status["effect"]["kind"],"blur");
-    assert_eq!(status["effect"]["before"],json!([2,1]));
-    assert_eq!(status["duration_ms"],1000);
-    cx.call(layers,"endCrossfade",&[Value::Int(1)]).unwrap();
-    assert!(cx.call(layers,"crossfadeStatus",&[Value::Int(1)]).unwrap().to_json().is_null());
-    let invalid=[Value::Int(1),Value::Int(2),Value::Int(1000),Value::from_json(json!({"kind":"blur","before":[129,1],"after":[0,2]}))];
-    assert!(cx.call(layers,"beginCrossfadeEffect",&invalid).is_err());
-    assert!(cx.call(layers,"crossfadeStatus",&[Value::Int(1)]).unwrap().to_json().is_null());
+    let args = [
+        Value::Int(1),
+        Value::Int(2),
+        Value::Int(1000),
+        Value::from_json(json!({"kind":"blur","before":[2,1],"after":[0,2]})),
+    ];
+    cx.call(layers, "beginCrossfadeEffect", &args).unwrap();
+    let status = cx
+        .call(layers, "crossfadeStatus", &[Value::Int(1)])
+        .unwrap()
+        .to_json();
+    assert_eq!(status["effect"]["kind"], "blur");
+    assert_eq!(status["effect"]["before"], json!([2, 1]));
+    assert_eq!(status["duration_ms"], 1000);
+    cx.call(layers, "endCrossfade", &[Value::Int(1)]).unwrap();
+    assert!(cx
+        .call(layers, "crossfadeStatus", &[Value::Int(1)])
+        .unwrap()
+        .to_json()
+        .is_null());
+    let invalid = [
+        Value::Int(1),
+        Value::Int(2),
+        Value::Int(1000),
+        Value::from_json(json!({"kind":"blur","before":[129,1],"after":[0,2]})),
+    ];
+    assert!(cx.call(layers, "beginCrossfadeEffect", &invalid).is_err());
+    assert!(cx
+        .call(layers, "crossfadeStatus", &[Value::Int(1)])
+        .unwrap()
+        .to_json()
+        .is_null());
 }

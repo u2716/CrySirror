@@ -5,8 +5,8 @@ selection (step 1) and GPU selection and frustum culling (step 2, below).
 
 ## Context
 
-The owner asked for UE5's key capabilities, implemented independently.
-Nanite's core is a crack-free cluster LOD hierarchy whose cut is chosen per
+View-dependent cluster LOD reduces the geometry cost of dense scenes.
+A virtualized-geometry approach uses a crack-free cluster LOD hierarchy whose cut is chosen per
 view by projected error. Imported scenes are dense: the OLY100 preview has
 999,296 source triangles. This step builds that hierarchy and draws its cut
 through the existing PBR passes.

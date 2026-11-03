@@ -1,15 +1,17 @@
 # 0041: Engine capability roadmap (what a complete engine still needs)
 
 Date: 2026-10-25. Status: accepted; living list. Update a row only from
-actual results, as STATUS.md requires.
+actual results, as STATUS.md requires. This matrix is not a whole-engine test
+report. The 2026-11-03 documentation pass corrects superseded missing-feature
+claims using their owning ADRs and existing recorded evidence; it adds no new
+hardware or full-game acceptance.
 
 ## Context
 
-The owner's goal is a Unity/UE-class general engine. Requirements have been
-added piece by piece (ADRs 0001–0040), but there was no single list of what
-a complete engine needs, what exists, and what is missing. The question
-"can at least one scene run with a character walking in it" also showed
-that the gaps are often integration, not features:
+A general-purpose 3D engine needs a capability matrix across runtime, rendering,
+content, gameplay and tooling. Subsystem availability and end-to-end integration
+are separate: a playable scene can require integration fixes even when its
+individual mechanisms already exist. For example:
 - skeletal animation, character physics, navigation and cameras all
   existed;
 - an imported level needed a navigation fix before an autopilot could
@@ -63,12 +65,12 @@ Priorities:
 | SSR, reflection probes | partial | 0023–0025 | glossy SSR, Hi-Z, realtime probes | P1 |
 | Virtual geometry (cluster LOD, GPU culling) | partial | 0026 | HZB occlusion, software raster | P1 |
 | Virtual shadow maps | partial | 0027 | GPU page allocation, local lights | P1 |
-| Dynamic GI | partial | 0028, 0059 | ray-traced probe updates (opt-in); local lights in RT bounces, specular GI | P1 |
+| Dynamic GI | partial | 0028, 0059, 0060 | RT probes and per-pixel single-bounce GI include local-light hit shading; broader transport, denoising and performance comparisons remain | P1 |
 | Transparency, materials, shader effects | partial | 0015, 0016 | material graph and editor, OIT, refraction | P1 |
 | Decals, terrain, foliage | partial | 0014 | deferred decals, foliage instancing and wind | P1 |
 | Post FX (DOF, motion blur, color grading LUT) | missing | — | per-camera post stack | P1 |
 | Upscaling (FSR-class) | missing | 0007 | open upscaler | P2 |
-| Hardware RT | partial | 0051, 0052, 0055–0059 | GPU-stream/dynamic BLAS, alpha-tested, soft sun and local-light shadows with denoising, mirror reflections, RT irradiance probes done; glossy reflections, per-pixel GI, refit (wgpu), Vulkan/DX12 device validation remain | P1 |
+| Hardware RT | partial | 0051, 0052, 0055–0060 | GPU-stream/dynamic BLAS, alpha tests, soft/local shadows, GGX reflections and probe/per-pixel GI exist; broader hit shading/denoising, refit and multi-device validation remain | P1 |
 | 2D layers, filters, transitions, puppets, video | done | 0020–0022, 0029 | — | |
 
 ### Animation
@@ -88,9 +90,9 @@ Priorities:
 | Capability | Status | ADR | Next step | P |
 |---|---|---|---|---|
 | Rigid bodies, colliders, character controller (Rapier) | done | 0012 | — | |
-| Triggers (sensors), contact events → scripts | missing | 0012 | sensor colliders and enter/exit callbacks | P0 |
+| Triggers (sensors), contact events → scripts | implemented bounded service | 0045 | sensor/contact/force/sleep events are exposed through Physics.events; application policies remain caller-owned | P0 |
 | Vehicles (arcade) | partial | 0043 | save state, dynamic bodies, wheel visuals | P1 |
-| Joints, cloth | missing | — | joints first | P1 |
+| Joints, cloth | partial | 0045 | fixed/spherical/revolute/prismatic joints exist; cloth and authoring tools remain | P1 |
 | Gameplay ability system, attributes, effects | done | 0014 | — | |
 | Behaviour trees, perception | done | 0014 | — | |
 | Navigation grid + A* | done | 0014 | navmesh polygons, dynamic obstacles, crowds | P1 |
@@ -100,7 +102,7 @@ Priorities:
 
 | Capability | Status | ADR | Next step | P |
 |---|---|---|---|---|
-| Mixer, buses, SFX pools, music, spatial | partial | 0030 | reverb zones, occlusion, DSP graph | P1 |
+| Mixer, buses, SFX pools, music, spatial | partial | 0030, 0067–0084 | BVH occlusion, HRTF, late reverb, reflected paths and worker decode/mix/output exist; full acoustic transport, hard-realtime guarantees and broader native fidelity remain | P1 |
 | Input actions, rebinding, gamepads | partial | 0032 | hardware gamepad validation | P0 |
 | UI widgets, layout, focus | partial | — | theming, scroll/list/text-input widgets, accessibility | P0 |
 | Text shaping, bidi, ruby, SDF | partial | 0031 | GPU SDF text rendering | P1 |
@@ -115,25 +117,25 @@ Priorities:
 | Debug draw, console, in-game stats | missing | — | debug-draw API, command console | P1 |
 | MCP/automation tools | done | MCP.md | — | |
 | Networking (replication, RPC) | missing | — | client/server replication of world state | P2 |
-| Platforms (Windows/macOS/Linux desktop) | partial | — | local platform validation; no GitHub CI without owner request; mobile and web remain deferred | P1 |
+| Platforms (Windows/macOS/Linux desktop) | partial | — | local platform validation; mobile and web remain deferred | P1 |
 | Consoles (Switch, Vita) | deferred | AGENTS.md | — | |
 
 ### Compatibility targets (secondary, ADR 0010)
 
 | Target | Status | ADR |
 |---|---|---|
-| RFVP | done (original VM) | 0008 |
+| RFVP | partial first-class HCB adapter; original VM availability is not full integration | 0047, NATIVE_ADAPTERS |
 | Siglus | partial | 0009, 0034–0036 |
-| BGI | partial | 0037, 0039 |
+| BGI | bounded first-class BP profile; old hosted acceptance superseded | 0047, BGI |
 | GoW III level | partial: geometry, materials, lights, cubemaps, probes, collision, navigation | 0017, 0018, 0025 |
 | GoW III characters | missing: skeleton, skinning and ANM undecoded (`ANM_hero` is 10.5 MB in hero.wad) | 0017 |
-| NFS Carbon (canyons) | started: disc zips, BUN chunks and 962 stream sections parsed; geometry pending | 0042 |
+| NFS Carbon (canyons) | partial geometry/texture rendering; full instances/material/gameplay fidelity remains open | 0042 |
 
 ## Order of work
 
 1. **P0 game loop gaps:** root motion; triggers and contact callbacks;
    UI widgets; save migrations; profiler.
-2. **GoW III character pipeline** (owner request): decode the hero
+2. **GoW III character pipeline**: decode the hero
    skeleton, skin weights and `ANM_hero`, and drive Kratos through the
    existing animation graph instead of the Fox stand-in.
 3. **Editor** on the reflective API (largest single gap).
@@ -161,8 +163,9 @@ Priorities:
 
 ## Clipping fixes (2026-10-25, second pass)
 
-The owner reported clipping in the walking slice. Its causes became engine
-capabilities, each with a test in `crysirror-engine/tests/physics.rs`:
+Clipping in the walking scene exposed collider sizing and terrain-alignment
+requirements. Shared capabilities cover them, with tests in
+`crysirror-engine/tests/physics.rs`:
 - **`modelInfo(..).bounds`** gives rest-pose bounds, with skinned vertices
   posed through their joints. The character collider is now sized from the
   model instead of guessed: the capsule radius is half the body length, and

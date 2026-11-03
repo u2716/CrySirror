@@ -6,9 +6,9 @@ use crate::{
     object::{Class, ClassInfo, ClassRegistry, MethodInfo, ObjectId, TypeHint as T},
     value::Value,
 };
-use anyhow::{Context, Result, ensure};
+use anyhow::{ensure, Context, Result};
 use crysirror_core::service::{HostServices, MediaRequest};
-use crysirror_scene::{ServiceBatch, canvas::CanvasCommand};
+use crysirror_scene::{canvas::CanvasCommand, ServiceBatch};
 use serde::Deserialize;
 use std::sync::{Arc, OnceLock};
 
@@ -50,7 +50,9 @@ impl Class for CanvasesClass {
                 method("getLimits",vec![],T::Map,
                     "Return shared retained-canvas capacity: surfacesPerClient. Pixel-byte, dimension and node limits are admitted separately."),
                 method("apply",vec![("commands",T::List(Box::new(T::Map)))],T::Void,
-                    "Atomically apply typed canvas commands: create, destroy, clear, draw, set, copy, present and hide. Destroy releases an existing unpresented surface; hide its presentations first. Frozen copies survive source destruction. Draws contain ordinary Layer specs, including positioned glyph runs."),
+                    "Atomically apply typed canvas commands: create, destroy, clear, draw, set, copy, present, present_isolated and hide. present_isolated keeps a live source surface as one immutable snapshot draw, refreshing it after edits; parent opacity/transform applies after composition. Nested snapshot/resource limits fail atomically. Destroy releases an existing unpresented surface; hide its presentations first. Frozen copies survive source destruction. Draws contain ordinary Layer specs, including positioned glyph runs."),
+                method("applyBatch",vec![("batch",T::Map)],T::Void,
+                    "Atomically submit a typed ServiceBatch: prepare_layers before canvases, then world, ordinary layers and UI; input routes are staged in the same transaction. New Canvas parents and real motion producers may be created in prepare_layers without intermediate publication. Existing apply remains canvas-only. At most4096 combined commands and4MiB serialized data; host resource/font preparation applies."),
                 method("get",vec![("id",T::Int)],T::Optional(Box::new(T::Map)),
                     "Inspect this client's canvas dimensions and logical draw nodes, or null when absent. No flattened native frame is returned."),
                 method("readPixel",vec![("id",T::Int),("x",T::Int),("y",T::Int)],T::List(Box::new(T::Int)),
@@ -69,7 +71,9 @@ impl Class for CanvasesClass {
         args: &[Value],
     ) -> Result<Value> {
         match name {
-            "getLimits" => json(serde_json::json!({"surfacesPerClient":crysirror_core::service::MAX_CANVAS_SURFACES_PER_CLIENT})),
+            "getLimits" => json(
+                serde_json::json!({"surfacesPerClient":crysirror_core::service::MAX_CANVAS_SURFACES_PER_CLIENT}),
+            ),
             "apply" => {
                 let Value::List(values) = arg(args, 0, "commands")? else {
                     anyhow::bail!("canvas commands must be a list");
@@ -92,6 +96,32 @@ impl Class for CanvasesClass {
                 )?;
                 Ok(Value::Null)
             }
+            "applyBatch" => {
+                let value = arg(args, 0, "batch")?;
+                ensure!(matches!(value, Value::Map(_)), "engine batch must be a map");
+                let data = serde_json::to_vec(value)?;
+                ensure!(
+                    data.len() <= 4 * 1024 * 1024,
+                    "engine batch payload exceeds4MiB"
+                );
+                let batch: ServiceBatch =
+                    serde_json::from_slice(&data).context("engine batch data")?;
+                let count = [
+                    batch.prepare_layers.len(),
+                    batch.canvases.len(),
+                    batch.world.len(),
+                    batch.layers.len(),
+                    batch.ui.len(),
+                    batch.input_routes.len(),
+                ]
+                .into_iter()
+                .try_fold(0usize, |sum, n| sum.checked_add(n))
+                .context("engine batch command count overflow")?;
+                ensure!(count <= 4096, "engine batch command budget");
+                let state = cx.state()?;
+                state.runtime.host.submit_engine(state.client, 1, &data)?;
+                Ok(Value::Null)
+            }
             "get" => {
                 let id = id(args)?;
                 let state = cx.state()?;
@@ -101,12 +131,17 @@ impl Class for CanvasesClass {
                 }
             }
             "readPixel" => {
-                let target=id(args)?;
-                let point=[u32::try_from(arg(args,1,"x")?.as_i64()?)?,u32::try_from(arg(args,2,"y")?.as_i64()?)?];
-                let state=cx.state()?;
-                let bytes=state.runtime.host.query_engine(state.client,
-                    crysirror_core::service::EngineQuery::CanvasPixel{id:target,point})?;
-                let rgba:[u8;4]=serde_json::from_slice(&bytes)?;
+                let target = id(args)?;
+                let point = [
+                    u32::try_from(arg(args, 1, "x")?.as_i64()?)?,
+                    u32::try_from(arg(args, 2, "y")?.as_i64()?)?,
+                ];
+                let state = cx.state()?;
+                let bytes = state.runtime.host.query_engine(
+                    state.client,
+                    crysirror_core::service::EngineQuery::CanvasPixel { id: target, point },
+                )?;
+                let rgba: [u8; 4] = serde_json::from_slice(&bytes)?;
                 json(&rgba)
             }
             _ => unreachable!(),
@@ -152,6 +187,8 @@ impl Class for MediaClass {
                 method("play",vec![("id",T::Int),("asset",T::String),("options",T::Optional(Box::new(T::Map)))],T::String,
                     "Start a scoped media resource; options {loop?:false,audio?:true,gain?:1}. Returns its logical image resource path for Layer/Canvas/Material APIs; inspect status for loading, playback and errors."),
                 method("stop",vec![("id",T::Int)],T::Void,"Stop only this client's media resource."),
+                method("setGain",vec![("id",T::Int),("gain",T::Number)],T::Void,"Set finite 0..4 media audio gain without restarting decoding, changing the presentation clock or affecting another client. Loading/paused resources retain the value for their next audio start."),
+                method("gain",vec![("id",T::Int)],T::Optional(Box::new(T::Number)),"Read this client's retained media gain; null when the resource is absent."),
                 method("remove",vec![("id",T::Int)],T::Void,"Release this client's media resource and decoded surface after detaching its image references."),
                 method("pause",vec![("id",T::Int)],T::Void,"Freeze the media clock; audio stops and the current picture stays."),
                 method("resume",vec![("id",T::Int)],T::Void,"Continue a paused media clock; audio restarts at the matching offset."),
@@ -173,7 +210,9 @@ impl Class for MediaClass {
         name: &str,
         args: &[Value],
     ) -> Result<Value> {
-        if let Some(result)=crate::media_probe_api::call(cx.state()?,name,args)? {return Ok(result);}
+        if let Some(result) = crate::media_probe_api::call(cx.state()?, name, args)? {
+            return Ok(result);
+        }
         let id = id(args)?;
         match name {
             "play" => {
@@ -204,12 +243,48 @@ impl Class for MediaClass {
                     .map_err(|e| anyhow::anyhow!("{e}"))?;
                 Ok(path.relative().to_owned().into())
             }
+            "setGain" => {
+                let value = arg(args, 1, "gain")?.as_f64()?;
+                ensure!(
+                    value.is_finite() && (0. ..=4.).contains(&value),
+                    "media gain must be finite and 0..4"
+                );
+                let state = cx.state()?;
+                state
+                    .runtime
+                    .host
+                    .media_request(
+                        state.client,
+                        MediaRequest::SetGain {
+                            id,
+                            gain: value as f32,
+                        },
+                    )
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                Ok(Value::Null)
+            }
+            "gain" => {
+                let state = cx.state()?;
+                Ok(state
+                    .runtime
+                    .host
+                    .media
+                    .gain(state.client, id)
+                    .map_or(Value::Null, |gain| Value::Float(f64::from(gain))))
+            }
             "stop" | "remove" => {
                 let state = cx.state()?;
                 state
                     .runtime
                     .host
-                    .media_request(state.client, if name == "remove" { MediaRequest::Remove { id } } else { MediaRequest::Stop { id } })
+                    .media_request(
+                        state.client,
+                        if name == "remove" {
+                            MediaRequest::Remove { id }
+                        } else {
+                            MediaRequest::Stop { id }
+                        },
+                    )
                     .map_err(|e| anyhow::anyhow!("{e}"))?;
                 Ok(Value::Null)
             }

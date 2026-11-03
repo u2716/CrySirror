@@ -1,7 +1,7 @@
 # ADR 0086: Native PCMEVENT over shared cue programs
 
 Date: 2026-10-27
-Status: Accepted for the explicit resource/default routing profile below
+Status: implemented bounded resource/default routing profile; full native timing remains separate
 
 ## Decision and source
 

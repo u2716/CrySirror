@@ -24,6 +24,46 @@ use std::{
 };
 type Key = (u32, u32, u32);
 type MeshData = (Arc<Vec<Vec3>>, Arc<Vec<[u32; 3]>>);
+fn append_collision_primitive(
+    primitive: &cpu::PbrPrimitive,
+    matrix: Mat4,
+    vertices: &mut Vec<Vec3>,
+    triangles: &mut Vec<[u32; 3]>,
+) -> Result<()> {
+    // glTF primitives can share a large POSITION accessor while indexing only
+    // a small part of it. Unused render vertices are not collision geometry.
+    let mut remap = vec![u32::MAX; primitive.vertices.len()];
+    for triangle in primitive.indices.chunks_exact(3) {
+        let mut points = [Vec3::ZERO; 3];
+        for (point, &index) in points.iter_mut().zip(triangle) {
+            *point = matrix.transform_point3(Vec3::from(
+                primitive.vertices.get(index as usize)
+                    .context("collider vertex index")?.position,
+            ));
+            ensure!(point.is_finite(), "nonfinite collider vertex");
+        }
+        // Degenerate render triangles have no collision surface. Test in the
+        // final coordinate space, using the backend's same area threshold.
+        if (points[1] - points[0]).cross(points[2] - points[0]).length_squared() <= 1e-20 {
+            continue;
+        }
+        let mut mapped = [0; 3];
+        for (corner, (out, &index)) in mapped.iter_mut().zip(triangle).enumerate() {
+            let entry = remap
+                .get_mut(index as usize)
+                .context("collider vertex index")?;
+            if *entry == u32::MAX {
+                ensure!(vertices.len() < 4_000_000, "collider vertex count");
+                *entry = vertices.len() as u32;
+                vertices.push(points[corner]);
+            }
+            *out = *entry;
+        }
+        ensure!(triangles.len() < 4_000_000, "collider triangle count");
+        triangles.push(mapped);
+    }
+    Ok(())
+}
 struct Entry {
     entity: EntityHandle,
     body: backend::BodyHandle,
@@ -87,6 +127,7 @@ pub struct PhysicsEvent {
 fn key(h: EntityHandle) -> Key {
     (h.client, h.id, h.generation)
 }
+
 fn bodykey(h: EntityHandle) -> backend::BodyKey {
     backend::BodyKey {
         id: h.id,
@@ -597,31 +638,22 @@ impl Physics {
             .unwrap_or_default();
         let model = cpu::load_geometry(&bytes, |uri| read(fs, &format!("{directory}{uri}")))?;
         let (mut vertices, mut triangles) = (Vec::new(), Vec::new());
-        let mut add = |prims: &[cpu::PbrPrimitive], m: Mat4| {
+        let mut add = |prims: &[cpu::PbrPrimitive], m: Mat4| -> Result<()> {
             for p in prims {
-                let base = vertices.len() as u32;
-                vertices.extend(
-                    p.vertices
-                        .iter()
-                        .map(|p| m.transform_point3(Vec3::from(p.position))),
-                );
-                triangles.extend(
-                    p.indices
-                        .chunks_exact(3)
-                        .map(|t| [base + t[0], base + t[1], base + t[2]]),
-                );
+                append_collision_primitive(p, m, &mut vertices, &mut triangles)?;
             }
+            Ok(())
         };
         if let Some(index) = index {
             add(
                 model.meshes.get(index).context("collider mesh index")?,
                 Mat4::IDENTITY,
-            );
+            )?;
         } else {
             let global = crysirror_asset::anim::pose(&model, &[]);
             for (ni, n) in model.nodes.iter().enumerate() {
                 if let Some(mi) = n.mesh {
-                    add(&model.meshes[mi], global[ni]);
+                    add(&model.meshes[mi], global[ni])?;
                 }
             }
         }
@@ -1040,5 +1072,96 @@ impl Physics {
             translation: m.translation,
             grounded: m.grounded,
         })
+    }
+}
+
+#[cfg(test)]
+mod collision_mesh_tests {
+    use super::*;
+
+    fn primitive() -> cpu::PbrPrimitive {
+        let mut vertices = vec![cpu::PbrVertex::default(); 12];
+        vertices[4].position = [1., 0., 0.];
+        vertices[9].position = [0., 0., 1.];
+        cpu::PbrPrimitive {
+            skin_attrs: None,
+            vertices,
+            indices: vec![9, 2, 4, 4, 2, 9],
+            material: 0,
+            bounds: ([0.; 3], [1.; 3]),
+            morphs: vec![],
+        }
+    }
+
+    #[test]
+    fn indexed_collision_vertices_preserve_winding_and_instance_transforms() {
+        let p = primitive();
+        let (mut vertices, mut triangles) = (vec![], vec![]);
+        append_collision_primitive(&p, Mat4::IDENTITY, &mut vertices, &mut triangles).unwrap();
+        append_collision_primitive(
+            &p,
+            Mat4::from_translation(Vec3::new(10., 2., 3.)),
+            &mut vertices,
+            &mut triangles,
+        )
+        .unwrap();
+        assert_eq!(
+            vertices,
+            vec![
+                Vec3::Z,
+                Vec3::ZERO,
+                Vec3::X,
+                Vec3::new(10., 2., 4.),
+                Vec3::new(10., 2., 3.),
+                Vec3::new(11., 2., 3.),
+            ]
+        );
+        assert_eq!(triangles, vec![[0, 1, 2], [2, 1, 0], [3, 4, 5], [5, 4, 3]]);
+        backend::Shape::TriMesh {
+            vertices: Arc::new(vertices),
+            indices: Arc::new(triangles),
+        }
+        .validate()
+        .unwrap();
+    }
+
+    #[test]
+    fn invalid_collision_index_fails_visibly() {
+        let mut p = primitive();
+        p.indices[0] = 12;
+        assert!(
+            append_collision_primitive(&p, Mat4::IDENTITY, &mut vec![], &mut vec![])
+                .unwrap_err()
+                .to_string()
+                .contains("collider vertex index")
+        );
+    }
+
+    #[test]
+    fn zero_area_faces_are_removed_without_allocating_unused_vertices() {
+        let mut p = primitive();
+        // Vertex 1 coincides with vertex 2; neither this face nor the repeated
+        // index face is a surface. The final face remains unchanged.
+        p.indices = vec![4, 4, 2, 2, 1, 4, 9, 2, 4];
+        let (mut vertices, mut triangles) = (vec![], vec![]);
+        append_collision_primitive(&p, Mat4::IDENTITY, &mut vertices, &mut triangles).unwrap();
+        assert_eq!(vertices, vec![Vec3::Z, Vec3::ZERO, Vec3::X]);
+        assert_eq!(triangles, vec![[0, 1, 2]]);
+
+        let (mut vertices, mut triangles) = (vec![], vec![]);
+        append_collision_primitive(
+            &p,
+            Mat4::from_scale(Vec3::ZERO),
+            &mut vertices,
+            &mut triangles,
+        )
+        .unwrap();
+        assert!(vertices.is_empty() && triangles.is_empty());
+        assert!(backend::Shape::TriMesh {
+            vertices: Arc::new(vertices),
+            indices: Arc::new(triangles)
+        }
+        .validate()
+        .is_err());
     }
 }

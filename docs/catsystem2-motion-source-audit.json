@@ -1,0 +1,54 @@
+{
+  "schema": 1,
+  "engine": "CatSystem2",
+  "scope": "Original motion KCS role and reusable procedural Layer capabilities; incomplete FES object integration",
+  "native_evidence": {
+    "binary_sha256": "f8a1fb4fed8a0c64c3fbc0bcf009f63e8f3181cfbc1a0dbd60f9ddefc8e25b3d",
+    "file_version": "2.6.1.76",
+    "mode": "Read-only static IDA/capstone on ignored local copy; original EXE/DLL never executed",
+    "motion_slots": 45,
+    "original_resource_programs": 72,
+    "methods": {
+      "78A0B0/78A340/78A3F0": "1192-byte numeric external block,256 raw parameters, original copy/count policy",
+      "78A480/78A4B0/78A4E0/877270": "Pose copy, unsigned delay and per-frame original entry restart preserving external data",
+      "78A540": "Evaluate frameFFFFFFFF/skip1 through original program; restore only frame/active/skip, preserving actual output",
+      "78A5C0": "Only set original skip flag; do not substitute generic EndMotion",
+      "78A5D0/78A630/8761F0/876F50/877170": "Set-once custom data and separately owned positive VM allocation ranges after fixed globals/stack, never host pointers",
+      "78B250/78B270/7C40B0/5C1F60/5C20F0": "Independent float/integer split-high MT streams with explicit owner seeds, fullu32 and inclusivef32 output",
+      "78A6D0/876D70/5CAC00": "Native raw format bytes, explicitly selectedSJIS and real committed engine log receipt",
+      "4E6B29/B32F30": "Runtime scalar D3DX dispatch proves matrix/rotation/vector ABI, including native24translation/25scale",
+      "788AF0/788D60/788D90/788DC0/788DF0/788E20": "Separate original base/output36-word poses; output is explicitly unavailable before initialization, not a fabricated zero pose. Only explicit commit copies actual output back to base.",
+      "788E50/789140/7891D0/789380/7893D0/7894E0/789590/7895B0": "Ordered original Controller map, actual shared program admission, parameter/group mutation, start0 sentinel, delay and rounded scaled clock, original sequential pose seeding and terminal evaluation. Retained quota cursor cannot replay or reseed a completed controller.",
+      "789660/7896A0/789730/7897B0/7897F0/789870/789AA0": "Distinct retained-track versus actual-active status, per-id/group/all skip flags, original case-insensitive ASCII resource-name profile; name query resets output to base. Native789730 additionally reviewed as short x86 (single-CC entry absent from old padding heuristic)."
+    }
+  },
+  "reusable_capabilities": {
+    "resource": "legacy_stream::Mt19937Split uses same twist/temper kernel as preserved Mt19937_1998; fast first_u32 reused by formats-arc legacy/e.rs. text_stream::decode_shift_jis is explicit/strict, distinct from UTF8-first decode_auto.",
+    "scene": "ExternalMotionStamp/Status/Pose and Layer begin/commit/request_skip/remove_external_motion commands. Engine owns client/layer scoped producer status, fresh ephemeral generation and consecutive revisions. Pose plus status is one atomic operation. Scalar and producer completion are combined.",
+    "async_ownership": "Generation prevents stale producer writes after delete/reuse; failed samples roll back geometry and status. Requests do not fabricate completion. Host producer continuations are not serialized; retained producers require explicit retirement before scene state snapshots.",
+    "matrix": "SpriteTransform.local_matrix is an optional finite nonsingular affine column-major4x4 after local scale/YPR and before anchor. Shared projection preserves shear and full3D leaf matrices; planar2D matrices work in Layer ancestry and frozen2D composition. World hierarchy is still required for3D parents; matrixbillboard/projective/singular profiles fail.",
+    "scripts": "Public Layers beginExternalMotion,commitExternalMotion,requestExternalMotionSkip,removeExternalMotion,setRect plus existing setTransform/motionStatus. No original VM required to own/query/sample these resources."
+  },
+  "native_policy_only": [
+    "KCS bytecode, raw argument/native numeric ABI, original per-frame/terminal/skip semantics",
+    "FES object alias/class policy and program ordering remain adapter work; no renderer/interpolation graph/mixer imported"
+  ],
+  "validation": {
+    "release_library": "Latest Cat100passed/1ignored in native-motion-set-owner-tests.log; preceding full motion-set4 tests99passed/1ignored in native-motion-set-family-tests.log. Actual shared scoped log receipts validate ordered continuation/client ownership; no Scene pose or FES object binding implied.",
+    "release_resource_formats": "Resource33passed/3ignored, formats-arc44passed/1ignored; native-motion-services-lib-tests2.log",
+    "release_kcs": "Existing KCSintegration12 and preparation1 pass after dynamic allocations; native-kcs-allocation-regression-tests.log",
+    "release_shared_scene": "75passed/0ignored: lib50, canvas snapshot9, external producer5, affine matrix3, visual motion3, UI motion5; shared-procedural-matrix-tests.log",
+    "release_public_api": "Actual App/Runtime external motion1, solid color1 and Engine lib3 passed; shared-procedural-public-api-tests.log",
+    "python": "201 tests OK with1skip in native-source-python-tests3.log using bundledPython. Prior system3.9/tomllib and Catvenv/numpy failures are not passes.",
+    "independent_oracle": "Shared Split MT four seed vectors match pinned libsys4 b14839f23af0963abbdb17f7cac57a36fd8e9bd2 C twist/temper across two twist boundaries. No reference engine is linked in production.",
+    "original_program_replay": "Seven original motion programs CPU replay sampled frames through currentRust VM/math. Original motFade skip changes ARGB/active by its bytecode; motion-matrix-vm-static-replay.log predates later service/custom/terminal source.",
+    "public_docs": "Measured ceb843236c48cb69 (prior42a8) after shared Text byte_replace/printf32; NNN no-bless api_docs8+coverage1passed in systemnnn/api-byte-text-kernels-verify.log. MotionSet is private native policy and adds no public shape."
+  },
+  "owner_behavior": "No new game/GPU run in this source batch. Frozen cat-owner-batch4 remains KCS20360/FES53 pending execfes brandlogo; no title/render/gameplay or complete reverse-engineering claim.",
+  "remaining": [
+    "Nested KCS/auxiliary/typed-object ownership; bounded plain FES exec/forced phase/deferred retirement now implemented and covered by latest Cat95 source tests (separate lifecycle audit)",
+    "Typed39-object shared resource publication, real FES alias-to-motion-set binding, actual class-specific pose interpretation and wait/input callbacks. MotionSet source is implemented but not connected to a live FES object.",
+    "Original CST/text/UI/audio playback/save coverage and complete game title/start/gameplay"
+  ],
+  "not_completed_by_inventory": "Static131FES/122object/911KCS decompilations are not implemented-handler counts or completed integration."
+}

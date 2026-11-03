@@ -23,6 +23,7 @@ struct Binding {
     real: bool,
     surface: String,
     ended: bool,
+    gain: f32,
 }
 #[derive(Default)]
 pub(super) struct ObjectMovies {
@@ -39,6 +40,20 @@ struct Declaration {
     real: bool,
     sample_ms: u64,
 }
+fn object_ref<'a>(ctx: &'a CommandContext, path: &[usize]) -> Option<&'a ObjectState> {
+    let mut object = ctx
+        .globals
+        .stage_forms
+        .values()
+        .next()?
+        .object_lists
+        .get(&1)?
+        .get(*path.first()?)?;
+    for index in &path[1..] {
+        object = object.runtime.child_objects.get(*index)?;
+    }
+    Some(object)
+}
 fn object_mut<'a>(ctx: &'a mut CommandContext, path: &[usize]) -> Option<&'a mut ObjectState> {
     let mut object = ctx
         .globals
@@ -54,6 +69,11 @@ fn object_mut<'a>(ctx: &'a mut CommandContext, path: &[usize]) -> Option<&'a mut
     Some(object)
 }
 fn declarations(ctx: &CommandContext) -> Result<Vec<Declaration>> {
+    // Allocating a second native stage does not itself declare any Media.
+    // Empty declarations must still retire previous owner resources below.
+    if !has_movies(ctx) {
+        return Ok(Vec::new());
+    }
     ensure!(
         ctx.globals.stage_forms.len() <= 1,
         "object Media supports one native stage namespace"
@@ -191,6 +211,7 @@ impl SiglusVm {
             self.object_movies.pictures.remove(&path);
         }
         let mut ready = true;
+        let current_gain = self.native_movie_gain();
         for declaration in wanted {
             if !self.object_movies.bindings.contains_key(&declaration.path) {
                 let asset = self.movie_asset(host, &declaration.file)?;
@@ -234,6 +255,7 @@ impl SiglusVm {
                         real: declaration.real,
                         surface,
                         ended: false,
+                        gain,
                     },
                 );
             }
@@ -242,6 +264,10 @@ impl SiglusVm {
                 .bindings
                 .get_mut(&declaration.path)
                 .unwrap();
+            if binding.gain != current_gain {
+                host.media_request(ClientId(self.state.client), MediaRequest::SetGain { id: binding.id, gain: current_gain })?;
+                binding.gain = current_gain;
+            }
             ensure!(
                 binding.real == declaration.real,
                 "native object Media clock domain mutation requires recreation"
@@ -283,20 +309,37 @@ impl SiglusVm {
             };
             let size = status.size.or_else(|| frame.as_ref().map(|f| f.size()));
             ready &= size.is_some();
-            let object = object_mut(&mut self.state.vm.as_mut().unwrap().ctx, &declaration.path)
-                .context("native object Media target disappeared")?;
-            let previous = object.movie.timer_ms;
-            object.movie.timer_ms = status.position_ms;
-            object.movie.total_ms = status.duration_ms;
-            if let Some(size) = size {
-                object.movie.width = size[0];
-                object.movie.height = size[1];
-            }
             let ended = matches!(status.phase, MediaPhase::Ended | MediaPhase::Stopped);
-            object.movie.just_finished = ended && !binding.ended;
-            object.movie.just_looped = declaration.looping && status.position_ms < previous;
-            if ended {
-                object.movie.playing = false;
+            // This runs after every native instruction while the Media status
+            // is constant within a frame. Only take the copy-on-write stage
+            // mutably when an observed value actually changes.
+            let current = object_ref(&self.state.vm.as_ref().unwrap().ctx, &declaration.path)
+                .context("native object Media target disappeared")?;
+            let previous = current.movie.timer_ms;
+            let auto_free = current.movie.auto_free_flag;
+            let (width, height) = size.map_or((current.movie.width, current.movie.height), |s| (s[0], s[1]));
+            let just_finished = ended && !binding.ended;
+            let just_looped = declaration.looping && status.position_ms < previous;
+            let changed = current.movie.timer_ms != status.position_ms
+                || current.movie.total_ms != status.duration_ms
+                || current.movie.width != width
+                || current.movie.height != height
+                || current.movie.just_finished != just_finished
+                || current.movie.just_looped != just_looped
+                || (ended && current.movie.playing)
+                || (ended && auto_free);
+            if changed {
+                let object = object_mut(&mut self.state.vm.as_mut().unwrap().ctx, &declaration.path)
+                    .context("native object Media target disappeared")?;
+                object.movie.timer_ms = status.position_ms;
+                object.movie.total_ms = status.duration_ms;
+                object.movie.width = width;
+                object.movie.height = height;
+                object.movie.just_finished = just_finished;
+                object.movie.just_looped = just_looped;
+                if ended {
+                    object.movie.playing = false;
+                }
             }
             binding.ended = ended;
             self.object_movies.pictures.insert(
@@ -307,7 +350,10 @@ impl SiglusVm {
                     ready: frame.is_some(),
                 },
             );
-            if ended && object.movie.auto_free_flag {
+            if ended
+                && auto_free
+                && let Some(object) = object_mut(&mut self.state.vm.as_mut().unwrap().ctx, &declaration.path)
+            {
                 // Original EOS releases only the type-owned resource; CHILD
                 // and render/callback state survive init_type(true).
                 object.init_type_like();
@@ -338,7 +384,7 @@ mod tests {
             .entry(38)
             .or_default()
             .object_lists
-            .insert(1, vec![object]);
+            .insert(1, vec![object].into());
         ctx.globals.local_game_time = 320;
         ctx.globals.local_real_time = 10;
         let d = declarations(&ctx).unwrap().remove(0);

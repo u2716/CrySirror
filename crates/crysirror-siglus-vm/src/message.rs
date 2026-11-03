@@ -16,8 +16,11 @@ pub(crate) mod buttons;
 mod config;
 mod decoration;
 mod frame;
+pub(crate) mod font;
+pub(crate) mod global;
 mod metadata;
 mod ops;
+pub(crate) mod voice;
 pub(crate) use config::initialize as initialize_profile;
 pub(crate) use frame::project as project_frame;
 pub(crate) use ops::dispatch;
@@ -272,6 +275,7 @@ pub fn append(ctx: &mut CommandContext, text: &str, read_flag: i64) -> Result<bo
         paused: false,
     });
     if !script.async_msg_mode {
+        begin_reading_wait(ctx);
         ctx.wait.wait_message_reveal();
         ctx.request_proc_boundary(ProcKind::MessageWait);
     }
@@ -324,7 +328,8 @@ pub fn sync_progress(
     }
     if !ctx.ui.published_message {
         if ctx.ui.glyphs.is_empty() && ctx.wait.message_reveal_waiting() {
-            ctx.wait.finish_message_reveal();
+            if !ctx.wait.finish_message_reveal() { ctx.ui.reading_wait = None; }
+        else { ctx.globals.script.skip_trigger = false; }
         }
         return Ok(());
     }
@@ -344,7 +349,8 @@ pub fn sync_progress(
     ctx.ui.visible_chars = visible;
     ctx.ui.reveal = reveal;
     if visible == ctx.ui.glyphs.len() && ctx.wait.message_reveal_waiting() {
-        ctx.wait.finish_message_reveal();
+        if !ctx.wait.finish_message_reveal() { ctx.ui.reading_wait = None; }
+        else { ctx.globals.script.skip_trigger = false; }
     }
     sync_native(ctx);
     Ok(())
@@ -352,6 +358,8 @@ pub fn sync_progress(
 
 pub fn validate(ctx: &CommandContext) -> Result<()> {
     let ui = &ctx.ui;
+    ensure!(ui.reading_wait.is_none_or(|wait| wait.characters <= 16384),
+        "native reading wait character budget");
     if let Some(m) = ops::state(ctx) {
         if let Some((x, y)) = m.window_pos {
             ensure!(
@@ -361,7 +369,7 @@ pub fn validate(ctx: &CommandContext) -> Result<()> {
         }
         if let Some((w, h)) = m.window_size {
             ensure!(
-                (1..=32767).contains(&w) && (1..=32767).contains(&h),
+                (0..=32767).contains(&w) && (0..=32767).contains(&h),
                 "native frame size"
             );
         }
@@ -408,6 +416,17 @@ pub fn validate(ctx: &CommandContext) -> Result<()> {
     }
     Ok(())
 }
+pub(crate) fn complete_on_user_decide(
+    ctx: &mut CommandContext, client: ClientId, host: &mut dyn HostServices,
+) -> Result<bool> {
+    // Original click restriction affects unfinished reveal only. The edge is
+    // still a message input and must not fall through to another key-wait proc.
+    if ctx.wait.message_reveal_waiting() && ctx.ui.message_waiting()
+        && ctx.globals.script.not_skip_msg_by_click {
+        return Ok(true);
+    }
+    complete_on_decide(ctx, client, host)
+}
 pub fn complete_on_decide(
     ctx: &mut CommandContext,
     client: ClientId,
@@ -425,8 +444,10 @@ pub fn complete_on_decide(
             || ctx.globals.script.koe_dont_stop_on_flag;
         if !keep_voice || ctx.globals.script.koe_dont_stop_off_flag {
             ctx.koe.stop(None)?;
+            ctx.globals.sound_routing.bgmfade2_need_flag = false;
         }
         ctx.wait.finish_message_key_wait();
+        ctx.ui.reading_wait = None;
         return Ok(true);
     }
     if !ctx.wait.message_reveal_waiting() || ctx.ui.window.is_none() || !ctx.ui.published_message {
@@ -440,10 +461,49 @@ pub fn complete_on_decide(
     sync_progress(ctx, client, host)?;
     Ok(true)
 }
-pub fn project(ctx: &CommandContext, host: &dyn HostServices) -> Result<Vec<LayerSpec>> {
+pub(super) fn begin_reading_wait(ctx: &mut CommandContext) {
+    ctx.ui.reading_wait = Some(crysirror_scene::reading_wait::ReadingWait {
+        started_at_ms: crate::platform_time::Instant::now().0,
+        characters: ctx.ui.message.as_deref().unwrap_or("").chars().count(),
+    });
+}
+pub(crate) fn auto_advance(ctx: &mut CommandContext, client: ClientId, host: &mut dyn HostServices) -> Result<()> {
+    ctx.runtime_update_read_skip_menu();
+    if ctx.wait.message_key_waiting() { ctx.globals.script.skip_trigger = false; }
+    let skipping = ctx.runtime_is_skipping_msg();
+    if (skipping || ctx.msg_wait_skip_by_click) && ctx.wait.message_reveal_waiting() {
+        complete_on_decide(ctx, client, host)?;
+        return Ok(());
+    }
+    if skipping && ctx.wait.message_key_waiting() {
+        complete_on_decide(ctx, client, host)?;
+        return Ok(());
+    }
+    ctx.globals.script.auto_mode_moji_cnt = ctx.ui.message_wait_message_len() as i64;
+    let Some(wait) = ctx.ui.reading_wait else { return Ok(()); };
+    if !ctx.wait.message_reveal_waiting() && !ctx.wait.message_key_waiting() {
+        ctx.ui.reading_wait = None;
+        return Ok(());
+    }
+    let st = &ctx.globals.script;
+    let sc = &ctx.globals.syscom;
+    let automatic = st.auto_mode_flag || sc.auto_mode.onoff;
+    let configured = |value: i64, key: i32, fallback: i64| {
+        let value = if value >= 0 { value } else { sc.config_int.get(&key).copied().unwrap_or(-1) };
+        if value >= 0 { value as u64 } else { fallback as u64 }
+    };
+    let due = st.msg_nowait || (automatic && wait.due(crate::platform_time::Instant::now().0,
+        configured(st.auto_mode_moji_wait, 254, 80), configured(st.auto_mode_min_wait, 257, 0)));
+    if due { complete_on_decide(ctx, client, host)?; }
+    Ok(())
+}
+pub fn project(ctx: &mut CommandContext, client:ClientId, host: &mut dyn HostServices) -> Result<Vec<LayerSpec>> {
+    ctx.ui.font_selection=font::select(ctx,client,host)?;
     let Some(window) = ctx.ui.window.as_ref() else {
         return Ok(vec![]);
     };
+    let selection=ctx.ui.font_selection.as_ref().context("native font selection")?;
+    let scoped=selection.scoped.then(||host.font_library(client)).transpose()?;
     let mut out = Vec::new();
     let (offset, opacity) = ops::visual(ctx);
     for (name, cells, id, rect, size, color) in [
@@ -467,12 +527,12 @@ pub fn project(ctx: &CommandContext, host: &dyn HostServices) -> Result<Vec<Laye
         if cells.is_empty() {
             continue;
         }
-        let ascent = host
-            .font_metrics(&window.font, f32::from(size), 'A')?
-            .ascent;
+        let metrics=if let Some(library)=&scoped {library.metrics(&selection.alias,f32::from(size),'A')?}
+            else {host.font_metrics(&selection.alias,f32::from(size),'A')?};
+        let ascent=metrics.ascent;
         let glyphs = cells
             .iter()
-            .map(|cell| PositionedGlyph {
+            .map(|cell| PositionedGlyph { crop: None,
                 character: cell.character,
                 baseline: [cell.position[0] as f32, cell.position[1] as f32 + ascent],
                 size: None,
@@ -480,7 +540,7 @@ pub fn project(ctx: &CommandContext, host: &dyn HostServices) -> Result<Vec<Laye
                 bold: None,
             })
             .collect();
-        let body = LayerSpec {
+        let body = LayerSpec { source_crop: None, viewport_clip: None,
             id,
             parent: None,
             rect: [
@@ -490,7 +550,7 @@ pub fn project(ctx: &CommandContext, host: &dyn HostServices) -> Result<Vec<Laye
                 rect[3] as f32,
             ],
             paint: Paint::GlyphRun {
-                font: window.font.clone(),
+                font: selection.alias.clone(),
                 size: f32::from(size),
                 color,
                 bold: false,

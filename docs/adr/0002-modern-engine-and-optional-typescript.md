@@ -1,7 +1,8 @@
 # ADR 0002: a modern 3D engine with independent compatibility frontends
 
-Status: direction accepted for this source iteration; only the offline TS/JS
-authoring path below is implemented. The dynamic 3D systems remain planned.
+Status: accepted architecture direction; implementation spans the follow-up ADRs.
+Dynamic World/Layer/UI and runtime JS/TS now exist. This decision remains active;
+its initial offline-only implementation boundary was extended by ADRs 0004/0005.
 
 ## Product goal
 
@@ -21,7 +22,7 @@ Editor / MCP       JSON scene/component/behavior data       Optional TS/JS
       |                           |                             |
       +---------- validated project operations <---- authoring compiler
                                   |
-                    authoritative logical world [planned]
+                    authoritative logical world
                     compiled Rust simulation systems
                                   |
 Original RFVP VM ---- adapter -----+----- adapter ---- Original Siglus VM
@@ -33,9 +34,9 @@ Original RFVP VM ---- adapter -----+----- adapter ---- Original Siglus VM
                                                         winit
 ```
 
-The current implementation has retained 2D service state and a static `Scene3d`,
-not the authoritative dynamic world in this diagram. Add the world as a CPU-only
-module/crate when it becomes executable. The `no_std` core stays small and free of
+The authoritative dynamic World/Layer/UI state lives in `crysirror-scene` and is
+installed, ticked, extracted and saved by Runtime. The legacy static `Scene3d`
+fixture remains a separate input path. The `no_std` core stays small and free of
 window, GPU and audio SDK dependencies. The renderer consumes extracted frame data
 and owns device resources; the desktop owns the window and event loop.
 
@@ -56,13 +57,13 @@ for service tests; it is not the final gameplay/scene language.
 
 Unity also uses scripts; CrySirror's preference for data is its own design choice.
 Use fixed simulation steps, explicit input sampling and ordered command commits
-for the future world. Rendering may interpolate extracted snapshots independently.
+for World simulation. Rendering may interpolate extracted snapshots independently.
 Each native VM retains its own tested clock, yield, redraw and blocking behavior;
 the modern fixed step must not erase native wait semantics.
 
 ## Optional TypeScript and JavaScript
 
-The implemented first profile is **offline authoring**:
+The separate **offline authoring** profile uses:
 
 ```text
 .ts / .js -> Oxc parse/semantic checks/TS transform -> JavaScript
@@ -76,13 +77,14 @@ executed as a distinct TS VM. Oxc's syntax/semantic checks are not TypeScript ty
 checking. No claim of a Rust `tsc` replacement is made. See the pinned dependencies
 and lockfile for the actual versions, rather than assuming the latest releases.
 
-The separate `crysirror-author` crate keeps compiler/GC dependencies out of the
-default player and out of core/compat. JSON-only projects need neither the TS
-compiler nor the JS engine. No native VM factory is replaced or registered by this
-authoring tool. Generated native client specs still require real factories.
+The `crysirror-author` crate is an offline recipe tool. The desktop separately
+links `crysirror-script-js` with Boa/Oxc for runtime gameplay callbacks, as specified
+by [ADR 0005](0005-script-hosts.md). Data-only projects need no script evaluation;
+core/compat remain free of compiler/GC dependencies. Authoring does not substitute
+for a real native VM factory.
 
-Optional **runtime extensions** are a later profile, not yet implemented. They
-must emit validated, client-scoped commands at scheduler boundaries, consume
+Runtime scripts implement init/start/fixed/update/late-update lifecycle hooks.
+Their commands must remain validated and client-scoped, consume
 logical snapshots/events, and have explicit persistent JSON state and schema
 migrations. Do not serialize the Boa heap or map native VM saves into JS objects.
 Do not claim replay or deterministic execution merely because source is hashed:
@@ -105,8 +107,8 @@ MCP are not present. Source evaluation is not added as an unrestricted MCP tool.
 
 ## Compatibility extraction
 
-Extract implementations only after auditing complete source at the commits in
-`upstream-lock.json`, then identifying behavior proven common. Initial candidates
+Extract implementations only after reviewing the complete reference source,
+then identifying behavior proven common. Initial candidates
 are capability VFS and random-access streams, decoded image/texture resources,
 glyph positioning, audio voices/streams, input and time, and save envelopes.
 RFVP/Siglus keep their own archive codecs, opcode/value/coroutine logic, text

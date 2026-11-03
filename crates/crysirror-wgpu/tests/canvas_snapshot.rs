@@ -47,6 +47,33 @@ fn bakes(r: &mut Renderer) -> u64 {
 }
 #[test]
 #[ignore = "requires a real wgpu adapter; execute explicitly"]
+fn text_cell_save_restore_keeps_translucent_background_outside_the_cell() {
+    let (_root, mut rt, mut renderer) = fixture();
+    submit(&mut rt, json!({"canvases":[
+        {"op":"create","id":1,"width":16,"height":16},
+        {"op":"clear","id":1,"color":[0,0,0,0]},
+        {"op":"create","id":2,"width":16,"height":16},
+        {"op":"present","id":1,"layer":10,"order":0}
+    ]}));
+    for y in 0..16 {
+        submit(&mut rt, json!({"canvases":[{"op":"fill","id":1,
+            "rect":[0,y,16,1],"color":[128,128,128,y*12],"replace":true}]}));
+    }
+    let before = capture(&mut rt, &mut renderer);
+    for (x,y,w,h) in [(0,4,13,4),(3,5,8,2),(0,0,15,8),(2,10,7,4)] {
+        submit(&mut rt,json!({"canvases":[
+            {"op":"clear","id":2,"color":[255,255,255,0]},
+            {"op":"copy","source":1,"destination":2,"rect":[x,y,w,h],"position":[0,0],"opacity":255},
+            {"op":"copy","source":2,"destination":1,"rect":[0,0,w,h],"position":[x,y],"replace":true,"opacity":255}
+        ]}));
+        let after=capture(&mut rt,&mut renderer);
+        for (a,b) in before.pixels().zip(after.pixels()) {
+            assert!(a.0.iter().zip(b.0).all(|(a,b)|a.abs_diff(b)<=1),"saved region changed background: {a:?} -> {b:?}");
+        }
+    }
+}
+#[test]
+#[ignore = "requires a real wgpu adapter; execute explicitly"]
 fn canvas_image_job_uses_engine_compositor_and_freezes_its_admitted_generation() {
     use crysirror_core::{image_processing::ImageProcessState,service::HostServices};
     let (_root,mut rt,mut renderer)=fixture();

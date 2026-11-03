@@ -1,0 +1,97 @@
+{
+  "purpose": "Original Title and button semantics mapped to engine-owned resources, ImageJobs and retained widgets",
+  "reference": {
+    "repository": "https://github.com/tinyan/SystemNNN",
+    "commit": "78a05053c78b3b80065a9a209c6685a7c60a2e83",
+    "files": [
+      "nnnLib/commonTitle.cpp (complete)",
+      "nnnLib/commonGeneral.cpp (complete)",
+      "nnnUtilLib/commonButton.cpp (complete)",
+      "nnnUtilLib/superButtonSetup.cpp (complete)",
+      "nnnUtilLib/menuButtonSetup.cpp (complete)",
+      "nnnUtilLib/commonButtonGroup.cpp (complete)",
+      "nnnUtilLib/menuButtonGroup.cpp (complete)",
+      "nnnLib/gameCallBack.cpp (complete relevant bootstrap, lookup and audio callbacks)"
+    ],
+    "licence": "No licence grant found. Behavior facts are independently expressed; original engine implementations are not copied or linked."
+  },
+  "actual_module": {
+    "sha256": "e85e92ec538d50eae08d27286177149972d443a96d1415277c1ae1f9ee108bdb",
+    "constructor": "0x4df920 original Title setup/defaults and version-dependent load/omake flags reviewed",
+    "init": "0x4e0410 reviewed separately: do not import the later source's additional variable-clearing loops",
+    "version_evidence": "Getter leaves401c30/401c40/401c50/4038b0 and .data virtual-zero-fill metadata retained under ignored target/verification/systemnnn; no original PE was executed",
+    "button_group": "0x461d50 delegates to complete reviewed0x461d80: first click locks that button, others receive NULL input; one last non-NOTHING event is returned",
+    "system_sound": "0x530350 uses sound/voice switch and volume selector, unconditionally stops previous and next alternating buffer. Later systemSoundMulti key is absent from the reviewed PE; the legacy startup profile does not apply it."
+  },
+  "shared_boundary": {
+    "source_loading": "Scoped NativeResources workers obtain original DWQ bytes/metadata. Public BlackCyc decoder and ImageJobs own decoding and corner-key preparation; declared mask existence is not inferred from opaque().",
+    "pixels": "ImageInput Composite and Ternary/MaskedPair, plus existing MaskSeparate256/MaskPiecewise256. No native pixel loop, renderer, PNG-per-frame encoding or private image-resource implementation.",
+    "input": "Public ImageResource.alpha_region and retained WidgetHitMask threshold1; UiInteraction and activate-on-press UiEvents. Native layout/clickTime/animation counters remain adapter policy.",
+    "frames": "Parallel cropped button ImageJobs then a single shared complete-frame Composite. Immutable published generations, client scopes and common retirement apply; caller releases the previous publication only after scene commit.",
+    "background": "Original Title-mode4 SPT restarts through the scoped worker loader with the same variable/RNG bank and bridge, without applying NewGame. Current Draw/Overlap resources expose only completed immutable engine frame handles.",
+    "music": "GeneralInit outer BGM uses the existing native audio policy and shared begin_audio receipts, with no fabricated SPT callback or private decoder/mixer. Unsupported stepped decibel fades remain explicit.",
+    "native_group": "Original group lock, single returned sound and menuAnimeAdjustFlag remain native policy; hit testing, pointer ownership and pixels remain shared engine services."
+  },
+  "validation": {
+    "compilation": "native-title-installed-check.log: releasecheck passed11.29s before final authored tests",
+    "authored_behavior": "native-title-tests.log:2passed; common Runtime/ImageJobs produce exact stored pixels and retain older immutable generations; common widget alpha hit and native clickTime1 are verified without GPU/audio devices",
+    "actual_prior_frontier": "Immutable player31 entered mode4, real sprites/BGM/widgets, counter70;261instructions/PC0xe39 nativeMove52 stopped before complete intro. No final capture or Start/story acceptance.",
+    "not_claimed": [
+      "Original Title rendering",
+      "Original Title Start/story success",
+      "System sound transport",
+      "Hardware L/C accelerators",
+      "Original exit/Start/save reconstruction",
+      "Complete System-NNN compatibility"
+    ],
+    "latest_verified_batch": "Owner selected45passed: native-batch3-lib-fixes.log lib16; frozen nnn-batch3 Bridge18/Title4/Shell5/installed2=29. Earlier new hide fixture omissions were corrected; original native configuration validation was not weakened.",
+    "actual_player32": {
+      "sha256": "783940ef4a493cdebe59c04172191887952257a5072b19200d97f897c0abcd0c",
+      "gpu": "Apple M5 / Metal",
+      "requested_frames": 20000,
+      "failed_frame": 17150,
+      "time_ms": 274400,
+      "native_instructions": 348,
+      "native_pc": "0x1d0",
+      "title_counter_published": 2568,
+      "enabled_engine_widgets": 5,
+      "native_background_naturally_completed": true,
+      "error": "Title original autoRestart requires original exit transition",
+      "capture_written": false,
+      "limits": "No final screenshot/visual Title check, Start/story, native saves or complete engine claim; no source patch followed this single validation"
+    }
+  },
+  "native_return_family_2026_11_01": {
+    "reference": "Pinned complete commonOpening/commonLogo/commonTitle/commonGeneral compared with actual constructor/Init/Calcu/ReturnFadeOut/helpers; PE not executed.",
+    "actual_post_close": {
+      "tables": [
+        "0x564ad4+240",
+        "0x564f04+240"
+      ],
+      "target": "0x534b00 PostMessageA(WM_CLOSE)",
+      "correction": "Old direct-EndGame inference was wrong; use native host-close protocol."
+    },
+    "policy": [
+      "Title selection precedes autoRestart/scriptEnd; returns wait for exact shared frame publication.",
+      "Restart Nothing/Logo/Opening retains original variables/RNG without VarInit or SystemFile reload. Unsupported consumers fail before transferring ownership.",
+      "Opening directly returns on left/right click or background END, unlike Title ReturnFadeOut. Draining admits no fake ACK/NEXT; Logo-finishing mouse edge is not reused by Opening.",
+      "Title entry preserves actual process launch guard/saturated RAM count,8sound/4voice stops and work-row enable reset; music/peers/other words survive.",
+      "Visible covers and terminal Logo fill use shared ImageJobs/ImageResources/Layers. Native exit-buffer validity remains distinct; unknown retained-buffer requirements fail.",
+      "Ordinary/special zero-fade profile conditions match actual4f2640. Nonzero entry/exit effects and configured delayed voice remain explicit unsupported."
+    ],
+    "ignored_evidence": [
+      "native-title-return-vtables.json",
+      "native-title-return-0x534b00.c",
+      "native-general-fades-0x4f2640.c",
+      "native-title-init-0x52f5f0.c",
+      "native-title-init-0x52f4c0.c",
+      "native-title-init-0x53fa30.c"
+    ],
+    "validation": {
+      "first_return_group": "native-mode-return-tests.log57passed1ignored; authored4pixel sheet required8pixels; corrected fixture then Root native-remaining-consumers-tests2.log lib47passed1ignored.",
+      "init_group": "native-title-init-return-final-tests.log67passed1ignored: lib49/installed2/movie5/shell5/title6.",
+      "root_latest": "flow-bounds-native-batch-tests.log NNNlib49passed1ignored+native_shell5passed; no new Desktop/GPU run.",
+      "remaining": "Title Load/Config/Omake/other returns, nonzero General fades/voices, full backdrop/backlog/cursor/window policy and live original game-slot import/export."
+    }
+  }
+}

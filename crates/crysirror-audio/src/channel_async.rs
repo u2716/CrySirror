@@ -23,17 +23,17 @@ use std::{
         atomic::{AtomicUsize, Ordering},
     },
 };
-enum Product {
+pub(super) enum Product {
     Prepared(PreparedChannel),
     Published,
 }
 pub(super) struct ChannelJobs {
-    jobs: OperationTable<Product>,
+    pub(super) jobs: OperationTable<Product>,
     channels: BTreeMap<u64, u32>,
     intent: BTreeMap<(u32, u32), u64>,
     pool: Option<TaskPool>,
-    nonblocking: bool,
-    budget: Arc<AtomicUsize>,
+    pub(super) nonblocking: bool,
+    pub(super) budget: Arc<AtomicUsize>,
 }
 impl Default for ChannelJobs {
     fn default() -> Self {
@@ -45,6 +45,22 @@ impl Default for ChannelJobs {
             nonblocking: false,
             budget: Arc::new(AtomicUsize::new(0)),
         }
+    }
+}
+impl ChannelJobs {
+    pub(super) fn exchange_reserved(&self,client:u32,left:u32,right:u32)->bool{
+        self.intent.contains_key(&(client,left))||self.intent.contains_key(&(client,right))
+    }
+    pub(super) fn clear_owner(&mut self, owner: u32) {
+        let ids = self
+            .jobs
+            .tickets()
+            .into_iter()
+            .filter_map(|(client, _, ticket)| if client == owner { Some(ticket) } else { None })
+            .collect::<std::collections::BTreeSet<_>>();
+        self.jobs.clear_owner(owner);
+        self.channels.retain(|ticket, _| !ids.contains(ticket));
+        self.intent.retain(|(client, _), _| *client != owner);
     }
 }
 struct Charge {
@@ -68,7 +84,10 @@ impl ChannelAudio {
     /// Restore/shutdown boundary. Receipts cancel without waiting; reservations
     /// stay alive while any worker or stream still owns the corresponding data.
     pub fn reset(&mut self) {
+        self.replacement_epoch = self.replacement_epoch.saturating_add(1);
+        self.replacement_versions.clear();
         self.sequences.clear();
+        self.seeks.clear();
         self.clear_releases();
         self.jobs.jobs.clear();
         self.jobs.intent.clear();
@@ -127,7 +146,7 @@ impl ChannelAudio {
     ) -> Result<u64> {
         self.poll_releases()?;
         let channel = channel(&request)?;
-        self.jobs.jobs.admit(client)?;
+        self.admit_channel_operation(client)?;
         let p = match &request {
             AudioRequest::Play { parameters, .. }
             | AudioRequest::PlayAsset { parameters, .. }
@@ -300,7 +319,7 @@ impl ChannelAudio {
                     continue;
                 }
                 let channel = jobs.channels[&ticket];
-                let _ = jobs.jobs.publish(owner, 0, ticket, |product| {
+                let published = jobs.jobs.publish(owner, 0, ticket, |product| {
                     let Product::Prepared(prepared) = product else {
                         return Ok(product);
                     };
@@ -320,6 +339,11 @@ impl ChannelAudio {
                     self.publish(owner, channel, prepared)?;
                     Ok(Product::Published)
                 });
+                //The intent protects publication, not the lifetime of a ready
+                //receipt. Once installed it must not pin its old channel name.
+                if published.is_ok()&&jobs.intent.get(&(owner,channel))==Some(&ticket){
+                    jobs.intent.remove(&(owner,channel));
+                }
             }
             self.mixer.service_sources()?;
             Ok(())
@@ -362,6 +386,7 @@ impl ChannelAudio {
         request: &AudioRequest,
     ) -> Result<()> {
         let (channel, stop) = match request {
+            AudioRequest::ExchangeChannels { .. } => anyhow::bail!("channel exchange must preflight both channels atomically"),
             AudioRequest::SetMixGroup { .. } | AudioRequest::SetMixGroupGain { .. } => {
                 return Ok(());
             }
@@ -376,12 +401,52 @@ impl ChannelAudio {
                 );
                 (*channel, true)
             }
+            AudioRequest::SetStereoGain {
+                channel,
+                gains,
+                fade_ms,
+            } => {
+                crate::levels::validate_stereo_gains(*gains)?;
+                ensure!(
+                    fade_ms.is_finite() && (0.0..=600000.).contains(fade_ms),
+                    "channel stereo gain fade"
+                );
+                (*channel, false)
+            }
+            AudioRequest::FadeGain {
+                channel,
+                gain,
+                fade_ms,
+                ..
+            } => {
+                ensure!(
+                    gain.is_finite() && (0.0..=4.).contains(gain),
+                    "channel voice gain"
+                );
+                ensure!(
+                    fade_ms.is_finite() && (0.0..=600000.).contains(fade_ms),
+                    "channel gain fade"
+                );
+                (*channel, false)
+            }
+            AudioRequest::SetLoopSchedule {
+                channel,
+                start,
+                end,
+                passes,
+            } => {
+                crate::mixer::validate_loop_schedule(*start, *end, *passes)?;
+                (*channel, false)
+            }
             AudioRequest::Pause { channel, .. }
+            | AudioRequest::SetTransportActive { channel, .. }
             | AudioRequest::Resume { channel, .. }
             | AudioRequest::ResumeWithOptions { channel, .. }
             | AudioRequest::SetGain { channel, .. }
+            | AudioRequest::FinishGainFade { channel, .. }
             | AudioRequest::SetPan { channel, .. }
-            | AudioRequest::SetLooped { channel, .. } => (*channel, false),
+            | AudioRequest::SetLooped { channel, .. }
+            | AudioRequest::SetChannelSwap { channel, .. } => (*channel, false),
         };
         if !stop {
             self.poll_preparations()?;

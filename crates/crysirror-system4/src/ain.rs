@@ -2,7 +2,7 @@
 // Format definitions researched against libsys4, Copyright (C) 2019 Nunuhara
 // Cabbage; GPL-2.0-or-later. See SOURCE.json and LICENSE.
 //! Bounded AIN v5 program reader. Byte strings retain original encoding.
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{bail, ensure, Context, Result};
 use std::{collections::BTreeSet, io::Read};
 pub const MAX_AIN_BYTES: usize = 64 * 1024 * 1024;
 const MAX_RECORDS: usize = 1_000_000;
@@ -80,6 +80,9 @@ pub struct Program {
     pub switches: Vec<Switch>,
     pub game_version: i32,
     pub labels: Vec<(Vec<u8>, u32)>,
+    /// Original SLBL tag presence: an explicitly empty table differs from an
+    /// absent table when selecting the original scenario-jump ABI.
+    pub scenario_label_section: bool,
     pub object_jump: Option<i32>,
     pub function_types: Vec<FunctionType>,
     pub delegates: Vec<FunctionType>,
@@ -350,6 +353,7 @@ impl Program {
                     }
                 }
                 b"SLBL" => {
+                    p.scenario_label_section = true;
                     let n = r.count()?;
                     p.labels = (0..n)
                         .map(|_| Ok((r.string()?, r.word()?)))

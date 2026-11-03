@@ -54,9 +54,12 @@ recipe execution. Source evaluation is intentionally absent from the MCP tool
 surface. Existing MCP project inspection/validation/replacement works with the
 generated JSON exactly as with hand-authored project data.
 
-This implements authoring scripts only. Optional per-frame gameplay JS, type
-declarations for a runtime scripting API and state migration remain future work
-described in ADR 0002. The RFVP and Siglus VMs remain independent and unlinked.
+This crate implements offline authoring only. Runtime gameplay JS/TS is already
+provided separately by `crysirror-script-js`, including engine lifecycle hooks and
+generated bindings; see the [API reference](api/README.md) and
+[desktop script options](DESKTOP_API.md). Native RFVP/Siglus VMs remain independent
+first-class adapters linked by the desktop. Script-state migration and complete
+native compatibility remain separate work.
 
 ## Engine systems data
 

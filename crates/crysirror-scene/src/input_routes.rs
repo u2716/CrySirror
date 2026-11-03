@@ -156,6 +156,25 @@ pub enum InputRouteCommand {
         handled: bool,
     },
     Cancel,
+    /// Silently set one receiver's hover marker. Marking a receiver unmarks
+    /// every other one; unmarking touches only `id`. No enter/leave event is
+    /// produced now: the next pointer move compares against the markers.
+    SetHoverMarker {
+        id: u32,
+        marked: bool,
+    },
+    /// Silently drop every hover marker (no leave events). With `reevaluate`
+    /// the next owner frame recomputes hover at the current pointer, so a
+    /// receiver under it is entered again.
+    ClearHoverMarkers {
+        #[serde(default)]
+        reevaluate: bool,
+    },
+    /// Drop not-yet-delivered button events (press/repeat/release) whose code
+    /// is listed, e.g. accumulated wheel notches a script resets.
+    DiscardQueued {
+        codes: Vec<u32>,
+    },
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct InputRouteStats {
@@ -309,6 +328,49 @@ impl InputRouting {
                 }
                 InputRouteCommand::Acknowledge { receipt, handled } => {
                     staged.acknowledge(client, *receipt, *handled)?
+                }
+                InputRouteCommand::SetHoverMarker { id, marked } => {
+                    let d = staged
+                        .clients
+                        .get_mut(&client.0)
+                        .context("input routing owner missing")?;
+                    ensure!(
+                        d.live.leased.is_none() && d.live.plan.is_none(),
+                        "input hover marker during unacknowledged delivery"
+                    );
+                    if *marked {
+                        d.live.hover_marked.clear();
+                        if d.receivers.iter().any(|r| r.id == *id) {
+                            d.live.hover_marked.insert(*id);
+                        }
+                    } else {
+                        d.live.hover_marked.remove(id);
+                    }
+                }
+                InputRouteCommand::DiscardQueued { codes } => {
+                    if let Some(d) = staged.clients.get_mut(&client.0) {
+                        ensure!(
+                            d.live.leased.is_none() && d.live.plan.is_none(),
+                            "input discard during unacknowledged delivery"
+                        );
+                        use InputRoutePhase as P;
+                        d.live.events.retain(|e| {
+                            !(matches!(e.phase, P::Press | P::Repeat | P::Release)
+                                && codes.contains(&e.code))
+                        });
+                    }
+                }
+                InputRouteCommand::ClearHoverMarkers { reevaluate } => {
+                    if let Some(d) = staged.clients.get_mut(&client.0) {
+                        ensure!(
+                            d.live.leased.is_none() && d.live.plan.is_none(),
+                            "input hover marker during unacknowledged delivery"
+                        );
+                        d.live.hover_marked.clear();
+                        if *reevaluate {
+                            d.live.hover_dirty = true;
+                        }
+                    }
                 }
                 InputRouteCommand::Cancel => {
                     let d = staged
@@ -606,7 +668,7 @@ impl InputRouting {
             d.live.point = Some(point);
         }
         let pointer =
-            buttons::MOUSE_LEFT | buttons::MOUSE_RIGHT | buttons::WHEEL_UP | buttons::WHEEL_DOWN;
+            buttons::MOUSE_LEFT | buttons::MOUSE_RIGHT | buttons::MOUSE_MIDDLE | buttons::WHEEL_UP | buttons::WHEEL_DOWN;
         for (bits, phase) in [
             (sample.frame.buttons_pressed, InputRoutePhase::Press),
             (sample.released, InputRoutePhase::Release),
@@ -741,6 +803,11 @@ impl InputRouting {
         for d in self.clients.values_mut() {
             d.live = Live::default();
         }
+    }
+    /// Discard only this client's old journals, leases and pointer captures.
+    /// Its next admission gets a fresh engine epoch; peer leases stay valid.
+    pub fn reset_client_input_after_restore(&mut self,client:ClientId) {
+        if let Some(state)=self.clients.get_mut(&client.0){state.live=Live::default();}
     }
 }
 

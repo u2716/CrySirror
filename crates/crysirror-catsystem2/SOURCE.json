@@ -33,6 +33,22 @@
         {
           "path": "src/TriggersTools.CatSystem2.Shared/Decompile/CstScene.Decompile.cs",
           "sha256": "9be7713733c00a63c113607ec159675dbbbc80867ae81771106a0fd36c75e264"
+        },
+        {
+          "path": "src/TriggersTools.CatSystem2.Shared/Extract/Structs/Hg3Image.Structs.cs",
+          "sha256": "9f95267935ec593069333d372742d6d1d8789fd1774652dd102527d8242d7159"
+        },
+        {
+          "path": "src/TriggersTools.CatSystem2.Shared/Extract/Hg3Image.Extract.Private.cs",
+          "sha256": "9a7cf2e7443788a72c3f4ad4264aaa522bc2869b908745249d07f712fd83be48"
+        },
+        {
+          "path": "src/TriggersTools.CatSystem2.Shared/Extract/HgxImage.Extract.Private.cs",
+          "sha256": "d8e1ba36006d4d93901d98d26a2c48468a058a9bf70e8598ff1e52f946860d61"
+        },
+        {
+          "path": "src/TriggersTools.CatSystem2.Shared/Extract/HgxImage.ProcessImageManaged.cs",
+          "sha256": "d852225cf02820fc2bb54d07600c4b1bc1b96118542a8f762488c7dd2e0683c7"
         }
       ]
     },
@@ -135,21 +151,47 @@
       "0x627e50/0x8d2a90/0x629850/0x62bed0": "type34 FES constructor/attach/26 real state, initial lowbutton shared InputRouting native-child-tick gate;447/player/load remains unsupported",
       "0x5dc340/0x5dd130/0x5dd210/0x5dcd70/0x5dc9d0": "Constructor125 target is indeterminate but parent0/emptychildren before attach prove INPUT unreachable;self125unhandled,nobroadcast. Saved cursor remainsUnknown; no fakeINPUT1/zerocursor.",
       "0x654a70/0x743e00/0x68f5a0/0x68cac0": "449 binds sourceFes/imageList reference, real engine atlas dimensions and original task uploadXY; no drawing",
-      "0x7286d0/0x728800/0x728b70/0x755600": "Next447 requires original FESplayer-local512DWORD bank,selection,namedvalues and load graph;not mapped,global backup remainsuninitialized."
+      "0x7286d0/0x728800/0x728b70/0x755600": "Next447 requires original FESplayer-local512DWORD bank,selection,namedvalues and load graph;not mapped,global backup remainsuninitialized.",
+      "0x767050/0x6a5910/0x6a54b0/0x6a52f0/0x6a5340": "FES raw grouped-byte tokenizer extracted to reusable crysirror-text::byte_groups, original NUL/quote/colon-tail semantics and safe capacity/depth/cancel boundaries; distinct from native41/SJIS delimiter profile",
+      "0x6548c0/0x755600/0x755d10/0x62d130": "447 actual shared FES worker load, original player-local bank/name/resource policy; actual loaded source retained, subsequent task tick/input semantics still gated",
+      "0x654b30/0x629850/0x62d3f0": "448 forces native FES tick, including input availability/coordinate/native logical-key prelude before script execution; unsupported outcomes not fabricated",
+      "0x64b440/0x673fc0/0x680090/0x688440/0x68add0": "117 actual shared paged ImageJob clear and scoped publication; canonical all292256-square pages verifiedzero. Unsupported formats/targets explicit.",
+      "0x640d30/0x676bb0/0x67d7c0/0x6840c0/0x6824d0": "100 original uniform solid vertex diffuse override with raw enable/color and original baseARGB; shared SetSolidColor preserves unrelated Layer state/motion. Actual canonical KCS advances20292instructions then448PC1943pending.",
+      "0x5d2200/0x5d1420": "Native sound percent-to-device attenuation uses wrapping DWORD product, f32 stages and log10; channel policy delegates actual finite/sentinel dB gain conversion to shared Audio, not a private mixer.",
+      "0x7182b0/0x5ea9a0/0x5ed080": "SOUNDGROUP retains raw ordered channel ranges; exact label lookup and unloaded/releasing/auto-release/minimum allocation preference are native ID policy, not mix buses. Native channel64 failed-load profile explicitly unsupported.",
+      "0x759680/0x6a56f0/0x6a49d0": "Lazy requested tuple component evaluates only that literal comma-delimited substring; skipped components preserve side effects, missing versus empty distinct, no CSV guessing.",
+      "0x759e50/0x6a79a0": "Full66-code OBJECT row evaluator retains original896-byte numeric/byte layout,3presence masks,BLEND255 default,per-component effects,indexed priority flag and logical parent reference. Native process pointer slot never published as a number. Whole row commits interpreter only after bounded validation.",
+      "0x758d40/0x758e00/0x754e80/0x754f90/0x729b90": "Original reference splits at firstASCIIspace/bracket, expands actual string bank before case-sensitive count lookup, evaluates index once and normalizes all-array-1 to0 only for count<=1. Empty native-uninitialized bracket profile explicitly unsupported. Original lookup exact bytes, never a guessed casefold.",
+      "0x7597b0": "Whole KEYBLOCK native table initializer and partial/duplicate rows, lazy component evaluation and ignored out-of-range value tails. No InputRouting registration or live button is fabricated by decoded metadata.",
+      "0x7488a0/0x749330/0x749420": "Original CIMAGE constructor and complete pose callbacks: words6/7 are position,3/4 pivot; zero matrix and RGB,alpha-only,biased priority comparison and visibility counter retained. No UV assumption or generic guessed pose mapping.",
+      "0x74a390/0x74ac30/0x74ad40/0x74a7f0/0x6780b0": "Original CPLANE constructor and complete pose callbacks: actual vector constants haveW1; output vectorsW0,priority seeds5 but output5 writespositionZ without modifyingpriority; copy raw fullmatrix and record Euler without double rotation. Shared resource publication still separate.",
+      "0x74c090/0x74c520/0x74c590": "Original SOUND pose callbacks: volume low byte in alpha,integer pan in float6,no visual identity/scale/PCM-position inference; x86CVTTSS2SI indefinite conversion explicitly retained.",
+      "0x5d1f60/0x5d23b0/0x5ce020/0x5cc2b0": "Original immediate2Dpan branch clamps-100..100 and attenuates only one channel; separate pan percent helper does not use volume attenuation clamp. Native request delegates dB conversion and SetStereoGain to shared Audio.3Dposition and native owner-tick panfade remain separate unsupported profiles.",
+      "0x7690e0/0x7692c0/0x7693a0": "Native first-token object lookup precedes general natives/default expressions. Implicit BASE or declared-object calls now retain separate Object pending source/arguments; unsupported object operations cannot fall into default-zero expression evaluation or be acknowledged as general natives."
     },
     "scope": "Generated complete 69-slot dispatch inventory and handler decompilations. Reviewed loader, typed operands, arithmetic, increment/compound/address/stack and original call/return handlers. Debug/native handlers without mapping remain explicit failures.",
-    "file_version": "2.6.1.76 (fixed version resource 0x00020006/0x0001004c, read as file data)"
+    "file_version": "2.6.1.76 (fixed version resource 0x00020006/0x0001004c, read as file data)",
+    "remaining": "Typed39 shared resources/aliases, actual motion callbacks and waits, execkcs/auxiliary lifetimes, constructor dynamic metadata, full physical input/CST/text/UI/audio/save execution remain incomplete. Latest118passed/1ignored runtime lib includes actual native-pan-to-RuntimeHost PCM test; it is not live FES SOUND or title/gameplay acceptance.",
+    "next_source_batch": "Read full 6287B0 cache/publication and 62D4A0 class dispatch; translate CIMAGE65C820/IMAGE65DC00/CPLANE65CCB0/PLANE661430/SOUND662640 through actual engine resources before lifting typed39 gate. Reuse native SoundPaths/worker capabilities, no guessed filenames. Bind original motion Controllers to class output and actual completion receipts, then CST/execkcs/input/save."
   },
   "public_docs": [
     "https://cs2.suki.jp/manual/system/startup.html",
     "https://github.com/trigger-segfault/TriggersTools.CatSystem2/wiki/CST-Scene",
     "https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-menuitemtemplate",
-    "https://www.w3.org/TR/REC-xml/"
+    "https://www.w3.org/TR/REC-xml/",
+    "https://cs2.suki.jp/manual/fes/reference/ref_abc.html",
+    "https://cs2.suki.jp/manual/fes/reference/cn/setconf.html",
+    "https://cs2.suki.jp/manual/fes/reference/cn/getconf.html",
+    "https://cs2.suki.jp/manual/fes/reference/cn/setsndconfex.html",
+    "https://cs2.suki.jp/manual/fes/reference/cn/exit.html",
+    "https://learn.microsoft.com/en-us/windows/win32/direct3d9/d3dxmatrixrotationyawpitchroll",
+    "https://learn.microsoft.com/en-us/windows/win32/direct3d9/d3dxmatrixinverse",
+    "https://learn.microsoft.com/en-us/windows/win32/direct3d9/d3dxvec4normalize"
   ],
   "limits": [
     "No complete CatSystem2 integration claimed.",
-    "Reviewed native1/8/13-22/36/41-42/66(type2/6/15/34)/68/71/77/79/88/92/104-105/209-213/247/256/260/262/276-277/359/393/400/449/465/590-593/789/848-849/938. Actual owner main20,227instructions then447PC0x1926,args[8,406],textflow,pendingretained. Fes8 holds real imageList6 binding and bankowner3; no fake player/title/gameplay claim.",
-    "KCS debug opcodes, FES/CST execution, original saves and framework snapshots remain unsupported.",
+    "Current actual-owner receipt KCS20360/FES53 retains execfes brandlogo, START_LOGO row4 byte0x973, KCS event71@0x921 and owner continuation. Native450/451/452/453 and shared BASE/root status are actual source; typed objects, child execution and dialogue/audio/save are incomplete. Library76/1 and shared motion8/0 are partial independent evidence, not title completion.",
+    "KCS debug opcodes, full native FES/CST task execution (beyond independently validated bounded integer-expression VM), original saves and framework snapshots remain unsupported.",
     "No original EXE/DLL execution, game content/font distribution, GPU/window/audio output or full-game validation."
   ],
   "int_namespace_policy": {
@@ -183,6 +225,200 @@
     "../../docs/catsystem2-shared-depth-source-audit.json",
     "../../docs/catsystem2-state-source-audit.json",
     "../../docs/catsystem2-input-routing-source-audit.json",
-    "../../docs/catsystem2-image-list-source-audit.json"
-  ]
+    "../../docs/catsystem2-image-list-source-audit.json",
+    "../../docs/catsystem2-byte-groups-source-audit.json",
+    "../../docs/catsystem2-fes-source-audit.json",
+    "../../docs/catsystem2-texture-cache-source-audit.json",
+    "../../docs/catsystem2-motion-source-audit.json",
+    "docs/catsystem2-fes-lifecycle-source-audit.json"
+  ],
+  "fes_continuation_2026_11_01": {
+    "validated": "Latest release Cat100passed/1ignored (native-motion-set-owner-tests.log); prior string family Cat95/1 +sharedText42/3 final combined tests. Python201OK. Public docs measured ceb843236c48cb69/no-bless8+1 passed. No new game/Desktop/GPU run; frozen batch4 remains partial.",
+    "reviewed_native_policy": {
+      "0x71ec50/0x720300/0x528710": "Native KEYCUSTOMIZE/KEY source IDs/repeat preferences; physical state and original VK identity from shared InputObservation/buttons. Nonzero unknown joystick/touch sources remain unsupported.",
+      "0x7106f0/0x7109c0/0x62d3f0": "Native cursor availability/inside/focus retention and unavailable MIN sentinel. Shared backend observation owns valid coordinates; no default zero cursor.",
+      "0x785920/0x5af7e0/0x5af8d0": "Absent lazy Steam manager query0; explicit init samples cached shared PlatformIntegration observation, never executes proprietary SDK/EXE.",
+      "0x77c070/0x5d4a00/0x5d59e0": "FES fileexist actual scoped metadata on bounded worker, original loose-before-archive mode3 and retained completion.",
+      "0x767730/0x76a680/0x7563a0": "Native if/else/endif linked successors, call/return/next and retained original section/row/byte operations.",
+      "0x77c810/0x77d780/0x71c670/0x713f40": "Scalar configuration family, full32 auto presets/48 play flags, original dirty and wrapping product/100 effective audio gains; required window/font/language mutations remain explicit boundaries.",
+      "0x7182b0/0x718cb0/0x719930/0x783090/0x783a30": "Original SoundConfig PART preference/import/inheritance/overlay and label/id/type/get/set/reset policy, actual controls published with shared AudioRequest::SetMixGroup. No private mixer or decoder; playback still unmapped.",
+      "0x5db8d0/0x5dbda0/0x7563a0/0x77a070/0x77a830/0x77a3a0": "Original60Hz simulation clock, absolute numeric and relative-frame waits, reset_frame/keyskip flags; forced448 and ordinary owner child phase share the same retained dispatcher. Native endfes/endkcs with no child preserve their one-frame yield. Active child destroy/execfes/object waits still explicit boundaries.",
+      "0x5de8e0/0x62bed0/0x62d260/0x62d3f0/0x62d4a0/0x757620": "Real low-button hover in admitted no-OBJECT program: publish shared-observed pointer/MIN named values, clear native selection, return unhandled; no fabricated object callback. Real object/physical callbacks remain separate missing mappings.",
+      "0x64fa00/0x650230/0x5dc9d0/0x77a580/0x77fdf0": "Original base-task20 result query/set, FES exit publishes task20 and continues same frame; player519 result and parent108 remain separate fields.",
+      "0x758c60/0x766510/0x766720/0x878190/0x878760": "Original case-sensitive replace-existing macro map, one-pass identifier substitution with raw numeric/quoted/multibyte tokens and original comment/continuation skipping; expanded executable rows retain original byte PC.",
+      "0x7589e0/0x758d40/0x758e00/0x758f70/0x759af0/0x759e50/0x759680/0x7597b0": "Full39-type/66-field declaration inventory and repeated OBJECT headers/missing-tail fields/KEYBLOCK AST. Shared resource publication is not yet mapped; no loaded player is fabricated from parsing alone.",
+      "0x654790/0x654ad0/0x62bed0/0x757800/0x757620": "Native450/451 target original335/336 messages; section jump preserves frame/wait and fails on live dependency; SAVEOBJ selects actual target local bank.",
+      "0x782880/0x77ee20/0x6a7450": "FES gettime samples shared client-scoped CivilTimeQuery once, retaining Pending/Ready/Failed and exact original operation; getweek delegates shared Gregorian weekday for valid dates. Native weekday static formula independently matched360 legal date samples.",
+      "0x754310/0x7485e0/0x748610/0x789870/0x78a5c0": "Original implicit BASE _TOPOBJ_ is published as a real client-scoped shared transparent Layer group before native447 completes. No-DEFINE all-object wait reads actual LayerMotion and retains the native completion yield. Original skip sets motion-program global40; generic EndMotion is not substituted. Busy source skip remains explicitly unsupported pending actual original-motion binding.",
+      "0x78a0b0/0x78a340/0x78a480/0x78a4b0/0x78a4e0/0x877270/0x78b230": "Original motion role reuses first-class KCS VM, external1192-byte owned numeric memory and actual per-frame entry reset. Skip only writes original data flag; original resource program computes output/completion. No second VM, interpolation graph, renderer or mixer.",
+      "0x78a9a0..0x78b1c0/0x78b490/0x78b520/0x4e6b29/0xb32f30": "22 native vector/matrix helpers mapped using shared glam0.27. Original runtime scalar-dispatch table proves native24translation/25scale, opposite vector/matrix XYZ rotation signs, row-vector order, Vec4W/norm/length and scalar-pointer ABI. Exact aliases supported; unreviewed partial overlaps, singular inversion and nonfinite calculation profiles fail before writes/ACK.",
+      "0x78b250/0x78b270/0x7c4090/0x7c40a0/0x7c40b0/0x5c1f60/0x5c20f0": "Motion39/40 use client-owned independently seeded float/integer streams over sharedResource Mt19937Split. Split-high initialization is distinct from direct1998 and uses same twist/temper core. Fullu32 and inclusive float conversion policy preserved; preflight precedes draws. No fabricated owner-game seed/default entropy; missing context/foreign owner fails before ACK.",
+      "0x78a6d0/0x876d70/0x5cac00": "Motion0 raw VM string substitution with shared strictSJIS codec and actual HostServices.append_log committed client receipt. Foreign/failed receipt retained at original PC, no duplicate log append on polls. No private text renderer or process-console sink.",
+      "0x78a5d0/0x78a630/0x8761f0/0x876f50/0x877170": "Original custom data is set once into separately owned positive numeric VM allocations. Blocks do not grow the fixed result stack, cross-block accesses fail safely, actual KCS mutations are read back. No host pointers or fabricated allocator/free policy.",
+      "0x78a3f0/0x78a480/0x78a4b0/0x78a540/0x78a670": "Raw parameters/pose/delay methods and original terminal evaluation: execute frameFFFFFFFF/skip1, restore only frame/active/skip, preserve real pose/parameter/custom output. Async budget ownership distinguishes terminal from ordinary frames.",
+      "0x62daa0/0x62bed0/0x757650/0x728ca0/0x728870": "FES attach resolves actual parent177 raw string bank before331. Nested tasks share Main string/interpreter roots, own separate512-word banks, raw local assignment and selected-bank deletion. Native ancestry produces lowbutton priorities2/3 and true child-before-parent traversal; loader/forced child execution/deferred destruction still next source batch.",
+      "0x77a630/0x629850/0x77a7c0/0x77aaa0/0x6280c0/0x5dc790": "Nested execfes uses shared bounded I/O then actual forced child-before-parent subtree phase before parent106 publication. Arguments/input observations are retained across dependency/quota. endfes marks deferred destroy and resets original parent EXITCODE; retirement atomically removes actual shared Layers/InputRouting and owned banks only after owner receipt. Typed object/aux/KCS child retirement remains unsupported.",
+      "0x73ff40/0x6a49d0/0x765d20/0x769f30/0x765f40/0x77c270": "Actual Main string bank shared by nested FES. Original row->macro->word expansion, signed wrapping numeric prefix and single-pass missing-empty policy retained. Shared Text owns bounded byte spans and safe C32 numeric printf; literal0-vararg copy, get/copy/clear and native C-string truncation remain semantic policy.",
+      "0x77c4b0/0x77c6d0/0x782fb0/0x785670": "Independent per-player string tables store/delete. Native getstbl first expression is deliberately discarded and second used for both lookup/destination, verified by original x86. Byte strcmp normalizes to-1/0/+1. Space replacement uses immutable raw row tail and CP932 pairs, delegating byte assembly to shared Text.",
+      "0x788af0..0x789b40": "Original multi-Controller manager family in private motion_set.rs: distinct base/output, actual sorted Controller seeding, scoped RNG/log services, start/delay/speed/group/active/skip/terminal policy, retained quota cursor and owner boundary. Output unknown before evaluation; no guessed pose. ASCII filename/finite clock profiles bounded, native save/resource cache/class-specific pose/FES bindings remain separate."
+    },
+    "next_source_batch": "Continue whole typed object publication and alias-to-original-motion binding families through shared engine resources, then execkcs/CST/text/audio/save. No single-frontier probe loop or completion by inventories.",
+    "static_inventory": "131/131 general FES and122/122 object command functions extracted with matching entry/header checks. KCS1000slots/912unique:911 matching C exports, remaining76 reviewed short asm. Motion has45 native slots and72 original KCS resource programs. Static exports are not implemented-handler counts or completed reverse engineering.",
+    "remaining": "Typed39 shared resources/aliases, actual motion callbacks and waits, execkcs/auxiliary lifetimes, constructor dynamic metadata, full physical input/CST/text/UI/audio/save execution remain incomplete. Source100 tests do not establish a title or gameplay.",
+    "motion_resource_behavior": "PureRust production KCS+Controller+motion_math CPU replay of seven original pBase/pScale/pRot/pDepth/motFade/motFade2/mcFade resources completes sampled frames. Original motFade skip executes ownARGB00ffffff->ffffffff and active1->0 branch. Logs motion-matrix-vm-static-replay.log and older scalar replay; no GPU or sharedScene publication claim."
+  },
+  "shared_hg3_resource_boundary": {
+    "implementation": [
+      "src/native_image_resource.rs",
+      "src/native_resource_paths.rs"
+    ],
+    "codec": "Shared optional GPL crysirror-formats-arc cat-system/hg3; runtime feature selects this codec. No legacy engine core or renderer is linked.",
+    "format_implementation": "Explicit archive/native pixel profiles. Native requires full40-byte stdinfo, packed24/32 control rows, ordinal multi-segment overwrite with gap rejection, JPEG defaultmode1/depth-specific alpha and WebP embedded-alpha/color-mode policy. Archive default retains padded row profile. Alpha-only/img_jpa remain unsupported.",
+    "native_policy": "5D3C20 naming; full5D4B50 LST loader,6A73A0 line rules and5D59E0 mode3 ordered loose-before-archive candidates. Shared capability lookup handles case and boundaries. Two retained asynchronous stages select the actual frame and create a shared immutable ImageResource; native ACK remains separate.",
+    "static_new_families": "5D3FC0/5D4B50/6A73A0/5D2450; complete ImageList5F3AE0/742A70/743600/742FE0/743E40 and draw-state7468D0/746920/746360/7464A0/747580;7590F0 class application dispatch. Original modules never executed.",
+    "verified_format_tests": "native-alias-fifo-geometry-budget-tests.log: formats lib45passed1ignored, HG3frames11passed0ignored, combined exit0. Prior archives_e20passed1ignored in native-hg3-typed-resource-batch-tests2.log remains historical; it was not rerun in latest batch. No external corpus/GPU title claim.",
+    "native_worker_validation": "Release runtime lib targeted native_image_resource4passed, then the same frozen binary d4f9214c40773b705c227bd1ab8a4ec79f80e471cd4468c2c9a97df6f2cec23b ran124passed1ignored (native-image-resource-all-lib-tests.log). Actual Runtime resource leases, foreign refusal, stable repeated publication, rollback/fresh generation, named LST/case/loose-before-archive precedence and distinct missing file/frame/malformed/capacity. Native typed resource gate remains; no new owner title/GPU behavior.",
+    "work_boundary": "Internal formats decoder callback forwards active entry-open DecodeContext without capturing old index-worker token/resolver. Existing2-arg decoder constructors stay wrapped. HG3 charges cumulative inflated/run/pixel work to cx.max_resident_bytes and checks cancellation between tags/segments/RLE runs/bitplane blocks/rows; generic context-forwarding test and overlapping-segment budget regression both passed."
+  },
+  "typed_bank_source_family": {
+    "implementation": [
+      "src/native_class_state.rs",
+      "src/fes_object_bank.rs",
+      "src/native_image_publication.rs",
+      "src/native_interpreter.rs",
+      "src/fes_object_resources.rs"
+    ],
+    "source_functions": {
+      "754310/7589E0/758F70/7590F0": "Implicit BASE, KEYBLOCK then all DEFINE then OBJECT; native logical named handles, parent before class setters, all-array row evaluated once",
+      "767A80/767BF0/767DB0/767F80/7682C0": "Complete reviewed CIMAGE/IMAGE/CPLANE/PLANE/SOUND OBJECT property families; image ID remap, ignored fields differ per native class, integer position truncation, signed original priority plus20 and separate draw ID",
+      "745430/743F90/7491B0": "Permanent draw key differs from dynamic priority; original x86 signed high-DWORD priority then unsigned full draw-key tie ordering",
+      "728FA0/729C20": "Named index attaches a right AST child; prefix flag #[expr] retains its grouping behavior; nested/dynamic reads evaluate once and owner bank lookup stays separate",
+      "745900/746C40/7463C0": "Native pixel source origin/base seed and raw position/pivot mapping now fully statically reviewed; actual typed bank renderer binding remains in progress",
+      "75C4D0/755D80/6287B0": "DEFINE/index initialization FIFO is separate from signed-char name lookup tree; complete native source invalidated initial publisher name-sort assumption. Corrected FIFO and same-key-overwrite Runtime regression passed in141/1.",
+      "65C820/65DC00/748DA0/748AF0/748BF0": "Complete CIMAGE and IMAGE update families use different mode0 pivot formulas. IMAGE path0 clears source origin and sets offset=base/pivot=base-origin; path1 retains source origin with offset0/pivot=base. Nonzero-origin/base PATHMODE0/1 Runtime regression passed in141/1."
+    },
+    "release_result": "native-object-bank-family-tests4.log:131passed0failed1ignored, frozen cat-object-bank-lib SHA256561445d890edb3aa786a1df6dc524213cc4735e3b532e920cac368c005170569. Prior1/1failed targeted bank tests exposed real missing named-index AST; initial full fix130passed1failed1ignored regressed prefix flag brackets, corrected before final131/1.",
+    "shared_scene_receipt": "native-image-publication-all-lib-tests.log126passed1ignored includes actual Runtime ImageResource->Canvas atlas->PLANE views/PresentIsolated, original external motion stamp/parent opacity, foreign refusal and complete rollback on bad parent. Native6-class field tests subsequently full128/1.",
+    "limits": "Historical141/1 helper-only gate description is superseded for the reviewed flat runtime profile by live_fes_class_frame_family. Other32 constructors, alias/motion/SOUND/input/full CST/save remain incomplete; see exact current validation/limits there.",
+    "whole_bank_resource_publication": {
+      "file": "src/fes_object_resources.rs",
+      "worker_boundary": "Fresh native owner-local expression bank on cloned Interpreter; complete declaration metadata/preflight before bounded shared image jobs. Named HG3 selection is immutable and separate from owner publication. No original PC/ACK change.",
+      "publisher_boundary": "Reviewed flat CIMAGE/IMAGE/CPLANE/PLANE resource profile, native DEFINE/index FIFO traversal (validated correction after full source review), independent priority/key ordering and class Layers/Canvas views. Engine CopyRgb makes native flags0 draws opaque while original frame Arc/raw alpha remains retained for queries. Same owner publication retries return existing receipt; bad parent rolls back new roots/leases and leaves proposed native VM state unchanged.",
+      "limits": "Initial declaration profile rejects KEYBLOCK/nonroot parents/dynamic metadata/nonwhite textured planes/affine contexts/nonempty SOUND and other unsupported class constructors. Actual Machine resource gate still requires full lifecycle+alias wiring.",
+      "validation": "Latest native-alias-fifo-geometry-budget-tests.log Cat141passed0failed1ignored includes6 new tests beyond135/1: alias-value4, FIFO duplicate-draw-key1 and IMAGE nonzero-origin/base PATHMODE0/1 placement1. Shared formats45/1 and HG3frames11/0 also passed. Original publisher135/1 remains historical; first attempt132/3failed/1ignored caught reserved presentation IDs and was corrected only in adapter namespace. Frozen current cat-alias-fifo-geometry-lib SHA256d9c6a383cc4ec6e265a2e801349069d183fe746d6a1d699ac50a5ab22eaf20d3."
+    }
+  },
+  "native_alias_values_family": {
+    "implementation": [
+      "src/fes_alias_values.rs",
+      "src/native_interpreter.rs"
+    ],
+    "evidence": "Complete75AAC0/7693A0/769FC0/76A070/76A130/76A190/76A230/76A3E0/76A470/76A570; static original PE float constants and complete capstone assembly used to correct decompiler spills/default conversions. Original module never executed.",
+    "native_policy": "41 actual parameter tokens; referenced parameter selects kind/default but consumes next actual argument word. Literal/colour arguments consume no word. Original per-class base/position/VRAM/scale/angle/rawARGB getters; absolute/delta and percent/degree Float32 ordering, temporary CVTTSS2SI default restored after each expression, transactional whole projection. Original CX/cx switch branch leaves zero without evaluating user expression.",
+    "validation": "Complete release Cat141passed0failed1ignored (native-alias-fifo-geometry-budget-tests.log) includes4 new alias-value tests. Frozen cat-alias-fifo-geometry-lib SHA256d9c6a383cc4ec6e265a2e801349069d183fe746d6a1d699ac50a5ab22eaf20d3. This validates projection/default/lazy/class getter policies, not live alias MotionSet/admission or PC ACK."
+  },
+  "live_fes_class_frame_family": {
+    "implementation": [
+      "src/fes_live_frames.rs",
+      "src/fes_runtime.rs",
+      "src/fes_children.rs",
+      "src/fes_object_resources.rs",
+      "src/task_policy/retirement.rs"
+    ],
+    "native_stage_contract": "331/447 constructs reviewed metadata/local banks only. 7563A0 original script runs before 629850 post-script6287B0/62D4A0 shared resource phase. Runtime-only pending jobs stay outside cloneable native task state; original PC/input observation/frame continuation remain retained until actual shared publication. No alternate renderer or composed framebuffer.",
+    "implemented_profile": "First-class BASE/VIEW/CIMAGE/IMAGE/CPLANE/PLANE and blank SOUND records; direct native disp/size/pri transactional commands. Typed child script can enter actual shared Image/Canvas/Layer frame publication. Unchanged image descriptors retain immutable Arc and published generation; resource replacement delegates old-reader retirement to shared Runtime. Native endfes/task retirement atomically hides/destroys class Canvas views, rebuilds remaining sender records and removes owned roots/input, then retires real leases; failed releases stay queued.",
+    "source_correction": "Full767DB0/767F80 plus raw74A4E0/74A540/74A600/74A620 and74AC30/74AD40 prove POS at0x30 and BASE at0x40. Corrected prior swapped Rust motion-seed/apply/alias mapping: BASE3/4, priority5, POS6/7/8. No renderer coordinate guess or default unknown pointer/UV.",
+    "compilation": "live-class-frame-check.log release check passed before final typed retirement and separate Object ACK refinement. Final live-class-frame-tests2.log142passed0failed1ignored; earlier live-class-frame-tests.log140passed2failed1ignored preserved, exposing generic native ACK accepting Object and an explicitly unset fixture atlas base. Fixed independent Object completion and explicit fixture283, without relaxing unknown UV.",
+    "independent_behavior": "Actual authored original FES child VM -> shared worker image leases -> one atomic Canvas/Layer publication -> parent execfes ACK -> next frame same image generation -> original endfes Hide/Destroy/Remove/lease cleanup passed. Frozen cat-live-class-frame-lib SHA256c23d01f06874329edd51582a8956a298c2c23768bd68a58fea3223ebbf4fff6b. Python live-class-frame-python-tests2.log201/201 passed.",
+    "limits": "Original class-frame resource acceptance passed, not title or GPU acceptance. Native alias motion dispatch/evaluation/completion, baseimg/SOUND/rand, nonzero/unknown atlas base, transformed/nonwhite planes, dynamic metadata, KEYBLOCK and remaining32 constructor types remain explicit boundaries. Uncompiled next alias worker draft lives only under ignored target/verification, not workspace integration.",
+    "original_owner_behavior": "live-class-owner-actual.log exact owner_actual_fes_forced_tick_uses_shared_input_and_resource_observations1passed0failed0ignored in1.11s using frozen cat-owner-live-class-frame SHA2564e9e2b083710ffa6adea60b6ab3dd900596a5fed096b5b4b094408ed42d09ae5. Actual original IMAGE+CIMAGE2 shared leases,2 Canvas draws and6 PLANE Canvas/Layer views. Parent execfes completed; flow59operations/KCS20410. Not title: original brandlogo START baseimg physical79 byte0xad8 remains unacknowledged at owner KCS PC0x92c/fes_owner_tick."
+  },
+  "baseimg_bitmap_frame_family": {
+    "implementation": [
+      "src/fes_base_image.rs",
+      "src/native_image_publication.rs",
+      "src/fes_runtime.rs"
+    ],
+    "evidence": "Complete77A860,629850 events0/1,5F3AE0 message296,742FE0,68E7C0/68E830; raw779D70 copies20-byte native event,757BC0 queries player501 and757BD0 clears it. This supports same-clock event processing/continuation, not an invented frame wait.",
+    "policy": "No-arg baseimg removes only reserved drawkey0 and hides the real base Plane, retaining old native copied bitmap. IMAGE/CIMAGE freeze actual scoped bitmap generation into engine Canvas; PLANE flushes the shared ImageList then copies its current VRAM rectangle with native upper-bound clipping. Reserved Canvas-source draw metadata shares original signed-priority/unsigned-key ordering with normal image draws. A low presentation child under the existing native payload provides live atlas view, preserving original transform/motion/header rather than Put-replacing it. Snapshot/copy/pixel composition remains shared Canvas, not private VM raster code.",
+    "validation": "native-baseimg-family-tests2.log actual143passed0failed1ignored, immutable cat-native-baseimg-lib SHA2564d4ae635ba599c99318a120a8271051e641848b6f4c68a120a6d0dc479141fa5. New original FES fixture checks CIMAGE old generation frozen/readable through real Runtime Assets RGBA after new size/lease, real Plane copy, no-arg removal of key0 only/hidden bitmap retained, original payload transform and external producer stamp unchanged. First142passed1failed1ignored used encoded ImageMetadata to query a virtual published lease; fixture corrected to real Assets.surface, production isolation untouched.",
+    "next_source_only": "baseimg_pri780710/event28/ImageList297 complete source now mapped to signed integer/default1000 base position(0,0,z), actual Layer depth/visibility with preserved producer. New independent FES test added but not compiled by143 receipt; next planned batch must validate. No new owner-media run after this family, older owner4e9e2b remains the actual last game receipt."
+  },
+  "live_fes_sound_basic_family": {
+    "module_sha256": "f8a1fb4fed8a0c64c3fbc0bcf009f63e8f3181cfbc1a0dbd60f9ddefc8e25b3d",
+    "original_functions": [
+      "76BAF0",
+      "76C000",
+      "770200",
+      "7702F0",
+      "7792A0",
+      "779A80",
+      "779AC0",
+      "662640",
+      "6285C0",
+      "71AF40",
+      "71B260",
+      "5EAEA0",
+      "5EA3F0"
+    ],
+    "representation": "Original resource/channel/preference/flag policy over engine AudioResource/PlayResource/PCM; no original decoder/mixer",
+    "validation": {
+      "release_log": "target/verification/catsystem2/live-sound-family-tests.log",
+      "passed": 151,
+      "failed": 0,
+      "ignored": 1,
+      "frozen_binary_sha256": "de67223b464b06e2e00f29b19ea91f699cb33911fa5a6abf7d01178afa54fe6f",
+      "original_media_run": false,
+      "gpu_run": false
+    },
+    "limits": "active grouped10-native-tick percent fades, paired crossfade, builtin blend/stop KCS, tags/callbacks and remaining classes/CST/original save incomplete"
+  },
+  "live_fes_sound_counted_fade_family": {
+    "module_sha256": "f8a1fb4fed8a0c64c3fbc0bcf009f63e8f3181cfbc1a0dbd60f9ddefc8e25b3d",
+    "source_evidence": [
+      "5EAEA0 cases182/218",
+      "5D17A0 rawassembly",
+      "5D1955/5D1A9C rawbytes confirm total count",
+      "5EA3F0 remaining-time recurrence/action order"
+    ],
+    "engine_capabilities": [
+      "shared Scene binary32 remaining-time step",
+      "AudioResource/PlayResource/count/range/SetGain/Pause/Stop/actualPCM"
+    ],
+    "validation": {
+      "log": "target/verification/catsystem2/live-sound-counted-fade-tests.log",
+      "passed": 154,
+      "failed": 0,
+      "ignored": 1,
+      "sha256": "22bbca50ca6416b595dfe08d3859f58fce66cb392d552d95e0070ae109a89891",
+      "independent_scene_step_tests": 3,
+      "original_game": false,
+      "gpu": false
+    },
+    "correction": "Prior151/153 real PCM tests assumed boolean loop; original ABI is total passes1 once0 unlimitedN finite. Historical receipts do not validate old native mapping.",
+    "limits": "paired crossfade and release-owned play, builtin blend/stop current new source unverified, tags/CST/callbacks/other classes/original saves incomplete"
+  },
+  "native_builtin_stop_blend_family": {
+    "original_functions": [
+      "76B7B0",
+      "76B880",
+      "748580",
+      "7893D0",
+      "79FE00"
+    ],
+    "pcolor_code_sha256": "6bdd6c4a8a5a6c2f69af35366a14e5a03453f5fd86073d64a9d5a670f012d893",
+    "pcolor_code_crc32": "975a7795",
+    "pcolor_code_len": 767,
+    "limits": "SOUND-only reviewed independent-byte pColor profile; source-pointer RGB is not portable semantic data. CRC is layout guard, not a security claim. Positive actual media acceptance pending.",
+    "validation": {
+      "log": "target/verification/catsystem2/live-sound-builtin-motion-tests2.log",
+      "passed": 155,
+      "failed": 0,
+      "ignored": 1,
+      "frozen_binary_sha256": "c4c8360398a9912247dc8a4bdd3abe5495e0714734c3c500c2daeab606966830",
+      "original_media": false,
+      "gpu": false
+    },
+    "previous_failure": "153passed1failed1ignored caught actual stop clock0 / binary32-to-signed64-low-DWORD conversion; production ABI fixed, not bypassed"
+  }
 }

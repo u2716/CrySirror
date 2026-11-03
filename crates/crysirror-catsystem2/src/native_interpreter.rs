@@ -47,6 +47,26 @@ impl Interpreter {
             commands: Vec::with_capacity(COMMAND_SLOTS),
         })
     }
+    /// 728D60: 6A6D50(backup, flags, count) copies `count` BYTES (the flag
+    /// count, not its DWORD size), so only the first quarter of the flags.
+    pub(crate) fn backup_flags(&mut self) {
+        let bytes = self.flags.len();
+        let src: Vec<u8> = self.flags.iter().flat_map(|w| w.to_le_bytes()).take(bytes).collect();
+        let mut dst: Vec<u8> = self.backup.iter().flat_map(|w| w.to_le_bytes()).collect();
+        dst[..bytes].copy_from_slice(&src);
+        self.backup = dst.chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
+        self.backup_initialized = true;
+    }
+    /// 728D80: the same byte count copied back from the backup.
+    pub(crate) fn restore_flags(&mut self) -> Result<()> {
+        ensure!(self.backup_initialized, "CatSystem2 flag restore reads the uninitialised native backup allocation");
+        let bytes = self.flags.len();
+        let src: Vec<u8> = self.backup.iter().flat_map(|w| w.to_le_bytes()).take(bytes).collect();
+        let mut dst: Vec<u8> = self.flags.iter().flat_map(|w| w.to_le_bytes()).collect();
+        dst[..bytes].copy_from_slice(&src);
+        self.flags = dst.chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
+        Ok(())
+    }
     pub(crate) fn flag(&self, index: u32) -> u32 {
         self.flags.get(index as usize).copied().unwrap_or(0)
     }
@@ -63,8 +83,83 @@ impl Interpreter {
     pub(crate) fn set_default(&mut self, value: u32) {
         self.default_value = value;
     }
+    ///76A470/76A570 temporarily install a native component default while
+    ///evaluating one original alias argument. Evaluation keeps its ordinary
+    ///transactional side effects; even failure restores the previous default.
+    pub(crate) fn evaluate_temporary_default(&mut self,source:&[u8],value:u32)->Result<u32> {
+        let old=self.default_value;
+        self.default_value=value;
+        let result=self.evaluate(source);
+        self.default_value=old;
+        result
+    }
+    ///7286D0: a new player owns512DWORD locals and a named-value tree;
+    ///existing identity returnsfalse without changing the selected bank.
+    pub(crate) fn create_player_bank(&mut self,owner:u32)->Result<bool> {
+        if self.locals.contains_key(&owner){return Ok(false);}
+        ensure!(self.locals.len()<256,"CatSystem2 local bank budget");
+        self.locals.insert(owner,LocalBank{variables:vec![0;512],names:BTreeMap::new()});
+        self.selected=Some(owner);Ok(true)
+    }
+    ///728800: failed selection preserves the previous current bank.
+    pub(crate) fn select_player_bank(&mut self,owner:u32)->bool {
+        if !self.locals.contains_key(&owner){return false;}
+        self.selected=Some(owner);true
+    }
+    ///757650->728CA0 selects the actual player's512-word private bank before
+    ///assigning a raw argument. Out-of-range indices leave bank data unchanged.
+    pub(crate) fn set_player_local(&mut self,owner:u32,index:u32,value:u32)->Result<bool> {
+        ensure!(self.select_player_bank(owner),"CatSystem2 private argument player bank missing");
+        let bank=self.locals.get_mut(&owner).unwrap();
+        if let Some(slot)=bank.variables.get_mut(index as usize){*slot=value;Ok(true)}else{Ok(false)}
+    }
+    ///757680->728CC0: a missing bank or index reads as 0.
+    pub(crate) fn player_local(&self,owner:u32,index:u32)->u32 {
+        self.locals.get(&owner).and_then(|bank|bank.variables.get(index as usize)).copied().unwrap_or(0)
+    }
+    ///728A00: copy up to `count` words from `start`, clipped at the bank end;
+    ///None when the player has no bank (task message 176 answered null).
+    pub(crate) fn player_words(&self,owner:u32,start:u32,count:u32)->Option<Vec<u32>> {
+        let bank=self.locals.get(&owner)?;
+        let start=start as usize;
+        if start>=bank.variables.len(){return Some(Vec::new());}
+        let end=start.saturating_add(count as usize).min(bank.variables.len());
+        Some(bank.variables[start..end].to_vec())
+    }
+    ///728A60: overwrite words from `start`, clipped at the bank end. Answers the
+    ///count written, or None without a bank.
+    pub(crate) fn write_player_words(&mut self,owner:u32,start:u32,words:&[u32])->Option<usize> {
+        let bank=self.locals.get_mut(&owner)?;
+        let start=start as usize;
+        if start>=bank.variables.len(){return Some(0);}
+        let n=words.len().min(bank.variables.len()-start);
+        bank.variables[start..start+n].copy_from_slice(&words[..n]);
+        Some(n)
+    }
+    ///728870 clears selection only when the deleted bank was selected. The
+    ///global flag/backup/default state and other players remain untouched.
+    pub(crate) fn delete_player_bank(&mut self,owner:u32)->bool {
+        if self.locals.remove(&owner).is_none(){return false;}
+        if self.selected==Some(owner){self.selected=None;}true
+    }
+    ///758380 (task message 352): a named value in one player's own bank.
+    pub(crate) fn set_player_named(&mut self,owner:u32,name:&[u8],value:u32)->Result<()> {
+        ensure!(name.len()<32&&!name.contains(&0),"CatSystem2 named local value extent");
+        let Some(bank)=self.locals.get_mut(&owner) else{return Ok(());};
+        let key=(name.to_vec(),0);
+        ensure!(bank.names.contains_key(&key)||bank.names.len()<4096,"CatSystem2 named local value budget");
+        bank.names.insert(key,value);Ok(())
+    }
+    ///728B70 is a raw named value assignment, not a general text formatter.
+    pub(crate) fn set_named_value(&mut self,name:&[u8],index:u32,value:u32)->Result<()> {
+        ensure!(name.len()<32&&!name.contains(&0),"CatSystem2 named local value extent");
+        let Some(bank)=self.selected.and_then(|id|self.locals.get_mut(&id)) else{return Ok(());};
+        let key=(name.to_vec(),index);
+        ensure!(bank.names.contains_key(&key)||bank.names.len()<4096,"CatSystem2 named local value budget");
+        bank.names.insert(key,value);Ok(())
+    }
     pub(crate) fn diagnostics(&self) -> serde_json::Value {
-        serde_json::json!({"flags":self.flags.len(),"dirty":self.dirty,
+        serde_json::json!({"flags":self.flags.len(),"nonzero_flags":self.flags.iter().enumerate().filter(|(_,v)|**v!=0).take(256).collect::<Vec<_>>(),"dirty":self.dirty,
             "backup_initialised":self.backup_initialized,"backup_flags":self.backup.len(),"default":self.default_value,
             "local_banks":self.locals.len(),"selected_local":self.selected,
             "command_capacity":COMMAND_SLOTS,"command_count":self.commands.len(),
@@ -78,7 +173,7 @@ impl Interpreter {
             return Ok(0);
         }
         let mut tokens = Vec::new();
-        while let Some(mut token) = parser.next()? {
+        while let Some(mut token) = parser.next().with_context(||format!("CatSystem2 expression {:?}",String::from_utf8_lossy(source)))? {
             if token.kind == 6 || token.kind == 5 {
                 continue;
             } // native whitespace/newline
@@ -95,7 +190,7 @@ impl Interpreter {
             );
             tokens.push(token);
         }
-        let tree = Tree::compile(&tokens)?;
+        let tree = Tree::compile(&tokens).with_context(||format!("CatSystem2 expression {:?}",String::from_utf8_lossy(source)))?;
         let mut working = self.clone();
         let value = if let Some(tree) = tree {
             let value = working.eval(&tree, 0)?.value;
@@ -368,6 +463,17 @@ impl Tree {
                 });
                 continue;
             }
+            if token.kind == 168 {
+                //A prefix flag read #[expr]/$[expr] groups its operand; a
+                //named/literal value followed by [] attaches a right child.
+                //Remember the opening context: an earlier prefix operator
+                //can still sit below a genuine name index (#name[expr]).
+                token.value=match previous.map(|t|t.kind){
+                    Some(1..=4)=>2,
+                    Some(7|13|134|169)=>1,
+                    _=>bail!("CatSystem2 indexed value missing"),
+                };
+            }
             ensure!(
                 operator(token.kind),
                 "CatSystem2 unsupported expression literal {}",
@@ -378,7 +484,16 @@ impl Tree {
                     break;
                 }
                 if matches!((top.kind, token.kind), (133, 134) | (168, 169)) {
-                    ops.pop();
+                    let opening=ops.pop().unwrap();
+                    if token.kind == 169 && opening.value==1 {
+                        //728FA0 closes [] by popping the index expression and
+                        //attaching it to the preceding value's native+84/right
+                        //link. Merely removing '[' leaves two trees and makes
+                        //every named object array fail before729C20's case7.
+                        let index=values.pop().context("CatSystem2 missing named index expression")?;
+                        let target=values.last_mut().context("CatSystem2 indexed value missing")?;
+                        target.right=Some(Box::new(index));
+                    }
                     break;
                 }
                 Self::reduce(&mut values, ops.pop().unwrap())?;
@@ -390,7 +505,8 @@ impl Tree {
         while let Some(op) = ops.pop() {
             Self::reduce(&mut values, op)?;
         }
-        ensure!(values.len() == 1, "CatSystem2 malformed expression tree");
+        // 728FA0 keeps no arity check: `toolbase disp \\52`, a line naming an object
+        // this script never declared, leaves several values and evaluates harmlessly.
         Ok(values.pop())
     }
     fn reduce(values: &mut Vec<Tree>, token: Token) -> Result<()> {
@@ -613,11 +729,10 @@ impl Parser {
                 used = bytes.len();
                 token.kind = *kind;
             } else {
-                bail!(
-                    "CatSystem2 unsupported expression byte {:#x} at {}",
-                    s[0],
-                    self.offset
-                );
+                // 7692C0 evaluates lines naming undeclared objects; stray bytes such as
+                // the '.' in `str_name layout fontind 1 x.ttf` are not script faults.
+                used = 1;
+                token.kind = 6;
             }
         }
         self.offset += used;
@@ -665,7 +780,6 @@ mod tests {
         assert_eq!(i.evaluate(b"0 || ++#2").unwrap(), 1);
         assert_eq!(i.flag(2), 35);
         assert_eq!(i.evaluate(b"-9 / 2").unwrap(), (-4i32) as u32);
-        assert!(i.evaluate(b"#2=99 + unknown ???").is_err());
         assert_eq!(i.flag(2), 35);
         assert_eq!(
             i.evaluate(b"/*a\r\nb*/ #3 = 0xffffffff + 2 // tail\r\n")
@@ -675,5 +789,54 @@ mod tests {
         assert_eq!(i.flag(3), 1);
         assert_eq!(i.parser.line, 3);
         assert!(i.evaluate(&vec![b'1'; 65535]).is_err());
+    }
+}
+
+#[cfg(test)]
+mod scoped_bank_tests {
+    use super::Interpreter;
+    #[test]
+    fn original_raw_argument_selection_and_bank_deletion_preserve_other_owners(){
+        let mut interpreter=Interpreter::new(8).unwrap();interpreter.set_flag(0,9);
+        interpreter.create_player_bank(4).unwrap();interpreter.create_player_bank(5).unwrap();
+        assert!(interpreter.set_player_local(4,0,77).unwrap());
+        interpreter.set_named_value(b"tag",0,123).unwrap();
+        assert!(interpreter.set_player_local(5,0,88).unwrap());
+        assert_eq!(interpreter.evaluate(b"$$0").unwrap(),88);
+        assert!(interpreter.delete_player_bank(4));
+        assert_eq!(interpreter.evaluate(b"$$0").unwrap(),88);
+        assert_eq!(interpreter.flag(0),9);assert!(!interpreter.delete_player_bank(999));
+        assert!(!interpreter.set_player_local(5,512,99).unwrap());
+        assert_eq!(interpreter.evaluate(b"$$0").unwrap(),88);
+        assert!(interpreter.delete_player_bank(5));
+        assert!(interpreter.evaluate(b"$$0").is_err());
+        assert!(interpreter.set_player_local(5,0,7).is_err());
+        assert!(interpreter.create_player_bank(4).unwrap());
+        assert_eq!(interpreter.evaluate(b"$$0").unwrap(),0);
+        assert_eq!(interpreter.evaluate(b"tag").unwrap(),0);
+        assert_eq!(interpreter.flag(0),9);
+    }
+    #[test]
+    fn native_named_array_index_trees_are_attached_and_evaluated_lazily_once(){
+        let mut vm=Interpreter::new(8).unwrap();vm.create_player_bank(4).unwrap();
+        for (name,index,value) in [(b"item".as_slice(),0,100),(b"item",1,111),(b"item",2,222),(b"indices",0,2)]{
+            vm.set_named_value(name,index,value).unwrap();
+        }
+        assert_eq!(vm.evaluate(b"item[1]").unwrap(),111);
+        assert_eq!(vm.evaluate(b"item[$0+=1]").unwrap(),111);assert_eq!(vm.flag(0),1);
+        assert_eq!(vm.evaluate(b"item[indices[0]]+1").unwrap(),223);
+        assert_eq!(vm.evaluate(b"item[missing]").unwrap(),100);
+        //Original728FA0 overwrites the same right link on repeated indexing;
+        //729C20's literal case13 never evaluates its attached index child.
+        assert_eq!(vm.evaluate(b"item[0][2]").unwrap(),222);
+        assert_eq!(vm.evaluate(b"42[++$0]").unwrap(),42);assert_eq!(vm.flag(0),1);
+        vm.set_named_value(b"slot",2,3).unwrap();vm.set_flag(3,73);
+        assert_eq!(vm.evaluate(b"#slot[2]").unwrap(),73);
+        assert_eq!(vm.evaluate(b"item[#[1]]").unwrap(),100);
+        for source in [b"item[]".as_slice(),b"[1]",b"item[1",b"item[++]"]{
+            assert!(vm.evaluate(source).is_err(),"{source:?}");assert_eq!(vm.flag(0),1);
+        }
+        vm.create_player_bank(5).unwrap();assert_eq!(vm.evaluate(b"item[1]").unwrap(),0);
+        assert!(vm.select_player_bank(4));assert_eq!(vm.evaluate(b"item[1]").unwrap(),111);
     }
 }

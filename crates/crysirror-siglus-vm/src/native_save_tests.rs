@@ -21,7 +21,10 @@ struct Host {
     audio: crysirror_audio::channels::ChannelAudio,
 }
 impl FileSystem for Host {
-    fn read(&mut self, _: ClientId, _: &VfsPath) -> crysirror_core::Result<Vec<u8>> {
+    fn read(&mut self, _: ClientId, path: &VfsPath) -> crysirror_core::Result<Vec<u8>> {
+        if path.mount() != crysirror_core::path::Mount::Asset {
+            return Err(Error::NotFound);
+        }
         Ok(self.scene.clone())
     }
     fn write_atomic(&mut self, _: ClientId, _: &VfsPath, _: &[u8]) -> crysirror_core::Result<()> {

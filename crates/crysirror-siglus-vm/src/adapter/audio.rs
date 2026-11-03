@@ -125,12 +125,20 @@ impl SiglusVm {
         before: SceneVm<'static>,
     ) -> Result<bool> {
         let vm = self.state.vm.as_mut().unwrap();
+        crate::native_sound::update_audio_routing(&mut vm.ctx, 0, false)?;
+        // System routing groups are dependencies of script-volume child groups
+        // and prepared voices. Publish them before the ordered native commands.
+        let mut system: VecDeque<_> = std::mem::take(&mut vm.ctx.audio.pending)
+            .into_iter()
+            .map(Operation::Control)
+            .collect();
         let mut ordered = std::mem::take(&mut vm.ctx.bgm.pending).entries();
         ordered.extend(vm.ctx.pcm.take().entries());
         ordered.extend(vm.ctx.se.take().entries());
         ordered.extend(std::mem::take(&mut vm.ctx.koe.pending).entries());
         ordered.sort_unstable_by_key(|(serial, _)| *serial);
-        let operations: VecDeque<_> = ordered.into_iter().map(|(_, op)| op).collect();
+        system.extend(ordered.into_iter().map(|(_, op)| op));
+        let operations = system;
         if operations.is_empty() {
             return Ok(true);
         }
@@ -197,7 +205,7 @@ impl SiglusVm {
                                 resource,
                                 parameters: AudioParameters {
                                     bus: PcmBus::Voice,
-                                    gain: crate::character_voice::voice_gain(&pending.after.ctx)?,
+                                    gain: 1.,
                                     mix_group: Some(crate::koe_bridge::GROUP.into()),
                                     ..Default::default()
                                 },
@@ -396,9 +404,7 @@ impl SiglusVm {
                                     resource,
                                     parameters: AudioParameters {
                                         bus: PcmBus::Voice,
-                                        gain: crate::character_voice::voice_gain(
-                                            &pending.after.ctx,
-                                        )?,
+                                        gain: 1.,
                                         mix_group: Some(crate::koe_bridge::GROUP.into()),
                                         ..Default::default()
                                     },
@@ -413,10 +419,7 @@ impl SiglusVm {
                             fresh: false,
                         });
                     } else {
-                        let key = format!("koe/{number}");
-                        let asset = self.state.config.resources.get(&key).with_context(|| {
-                            format!("Siglus voice requires config.resources alias for {key:?}")
-                        })?;
+                        let asset = self.koe_asset(host, i64::from(number))?;
                         let ticket = host
                             .begin_transformed_audio_resource(
                                 client,
@@ -607,9 +610,10 @@ impl SiglusVm {
                     .get_usize("BGM.CNT")
                     .unwrap_or_else(|| cfg.indexed_count("BGM"));
                 if mark_listened && index < count {
-                    vm.ctx.globals.bgm_table_flags.resize(
-                        count.max(vm.ctx.globals.bgm_table_flags.len()),
-                        vm.ctx.globals.bgm_table_all_flag,
+                    let globals = &mut *vm.ctx.globals;
+                    globals.bgm_table_flags.resize(
+                        count.max(globals.bgm_table_flags.len()),
+                        globals.bgm_table_all_flag,
                     );
                     vm.ctx.globals.bgm_table_flags[index] = true;
                     vm.ctx
@@ -628,6 +632,7 @@ impl SiglusVm {
             },
             AudioParameters {
                 bus: PcmBus::Music,
+                mix_group: Some(crate::audio::TrackKind::Bgm.group().into()),
                 gain: f32::from(vm.ctx.bgm.volume_raw()) / 255.,
                 start_frame: Some(if play.start == -1 { start } else { play.start }.max(0) as u64),
                 clamp_range: true,

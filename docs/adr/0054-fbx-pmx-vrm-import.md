@@ -1,11 +1,12 @@
 # 0054: FBX, PMX and VRM model import through the glTF pipeline
 
-Date: 2026-10-26. Status: implemented (first slice). Evidence in STATUS.md.
+Date: 2026-10-26. Status: implemented bounded converters, including the morph-target extension
+below. Remaining format losses and validation scope are recorded in STATUS.md.
 
 ## Context
 
-The engine imported glTF 2.0/GLB only (ADR 0007). The owner asked for FBX
-(the DCC/marketplace interchange format) and VRM/PMX (anime characters).
+FBX supplies a DCC/marketplace interchange path, while VRM/PMX cover anime
+character assets. Both extend the existing glTF 2.0/GLB pipeline (ADR 0007).
 
 ## Decision
 

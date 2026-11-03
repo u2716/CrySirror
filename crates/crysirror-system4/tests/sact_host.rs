@@ -95,19 +95,54 @@ fn sact_init_publishes_engine_owned_hidden_main_and_repeat_is_idempotent() {
 #[ignore = "reads owner Rance7 AIN/DLL plus system font, executes no original program"]
 fn owner_rance7_sact_shared_init_advances_to_next_real_frontier() {
     let root = std::path::PathBuf::from(std::env::var("CRYSIRROR_SYSTEM4_ROOT").unwrap());
-    let (_t, mut r) = runtime();
-    load_fonts(&mut r);
-    let mut files = crysirror_core::vfs::MemoryProvider::new();
-    for name in ["戦国ランス.ain", "DLL/OutputLog.dll"] {
-        files
-            .insert(name, std::fs::read(root.join(name)).unwrap())
+    let t = tempfile::tempdir().unwrap();
+    let project=serde_json::from_value(serde_json::json!({"schema":2,"name":"owner native Rance7","content_revision":"1","canvas":[800,600],"assets":"game","clients":[{"name":"data","adapter":"crysirror-script-v1","game":"test"}]})).unwrap();
+    let mut r =
+        Runtime::with_asset_root(project, &root, &t.path().join("state"), Default::default())
             .unwrap();
+    load_fonts(&mut r);
+    let mut formats = crysirror_resource::FormatRegistry::default();
+    crysirror_formats_arc::register(&mut formats).unwrap();
+    let storage = r.host.storage(ClientId(1)).unwrap();
+    let mut volumes = Vec::new();
+    let mut names = std::fs::read_dir(&root)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect::<Vec<_>>();
+    names.sort();
+    for name in names {
+        if let Some((class, volume)) = crysirror_system4::assets::classify("戦国ランス.ain", &name)
+        {
+            let mount = format!("__system4/{class:?}/{volume}");
+            let mut cx = crysirror_resource::DecodeContext::new(ClientId(1));
+            cx.limits.max_entry_size = 1024 * 1024 * 1024;
+            let source = storage
+                .open_asset(
+                    &crysirror_core::path::VfsPath::new(crysirror_core::path::Mount::Asset, &name)
+                        .unwrap(),
+                )
+                .unwrap();
+            let (_, archive) = formats.open(source, Some("alice-soft/ald"), &cx).unwrap();
+            r.mount_provider(
+                ClientId(1),
+                &mount,
+                Arc::new(crysirror_resource::ArchiveMount::new(archive, cx).unwrap()),
+            )
+            .unwrap();
+            volumes.push(crysirror_system4::assets::Volume {
+                class,
+                volume,
+                source: name,
+                mount,
+            });
+        }
     }
-    r.mount_provider(ClientId(1), "", Arc::new(files)).unwrap();
     let mut vm = NativeAdapter::new(
         ClientId(1),
         Config {
             program: "戦国ランス.ain".into(),
+            ini: Some("System40.ini".into()),
+            volumes,
             reviewed_output_log_dll: Some("DLL/OutputLog.dll".into()),
             canvas: Some([800, 600]),
             font_aliases: ["test_gothic".into(), "test_mincho".into()],
@@ -141,8 +176,10 @@ fn owner_rance7_sact_shared_init_advances_to_next_real_frontier() {
         error.is_some(),
         "bounded native profile must not imply complete game"
     );
-    assert!(!d["native_location"]
-        .as_str()
-        .unwrap()
-        .starts_with("pc=0x6f6 "));
+    assert!(
+        !d["native_location"]
+            .as_str()
+            .unwrap()
+            .starts_with("pc=0x6f6 ")
+    );
 }

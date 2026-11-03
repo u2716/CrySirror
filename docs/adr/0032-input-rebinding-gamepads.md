@@ -4,15 +4,14 @@ Date: 2026-10-25. Status: implemented; validation results recorded below.
 
 ## Scope and ownership
 
-The owner authorized an input task in parallel with the audio and text work.
 The engine owns checked physical-input events, logical action bindings and
 prompt descriptors. The desktop owns the optional GilRs device context and
-polls it on its event-loop thread. No GPU/scene/GoW importer or native VM
-instruction/save layout is changed. The existing core `InputFrame` is unchanged.
+polls it on its event-loop thread. Native instruction/save policy remains in the
+adapter; the core InputFrame contract remains separate from action bindings.
 
-New implementation files are `crysirror-engine/src/input_api.rs` and
-`crysirror-desktop/src/gamepad.rs`. Existing engine class registration/context/
-frame hooks and desktop feature/event-loop integration are parent-owned seams.
+`crysirror-engine/src/input_api.rs` exposes actions and rebinding;
+`crysirror-desktop/src/gamepad.rs` connects device events to the engine frame
+lifecycle through the desktop event loop.
 
 ## Engine contract
 
@@ -104,7 +103,7 @@ original VM key semantics. Other native buttons use the advanced action path.
 
 Implementation includes the engine action map, reflective methods, semantic
 prompts, checked profile replacement, physical capture, optional native backend,
-and synthetic event tests. Parent-owned integration connects the engine class
+and synthetic event tests. Host integration connects the engine class
 and frame hooks plus desktop event polling.
 
 Validation commands:

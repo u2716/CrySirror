@@ -1,0 +1,55 @@
+{
+  "repository": "https://github.com/xmoezzz/siglus_rs.git",
+  "commit": "5f358ef1360b0439e92aed2b749e8f25d8721954",
+  "inspection": "Original Object::render/blit_region and Surface::draw_transformed: screen-space clip and screen bounds intersect at presentation; an empty region produces no pixels. No original pixel algorithm adopted.",
+  "sources": {
+    "object.rs": "743549dd5b01cff195deee4e5c31757f73c82e1891f3f1a7aaabd3eb1809304b",
+    "surface.rs": "aa332fb7b320fc18099a609a2affbdecd96c6c9c6d8d92b47739e61174c1b73c"
+  },
+  "native_reproduction": {
+    "game": "game-rl-LB",
+    "route": "Title Config / system settings",
+    "player": "player25",
+    "clip": [
+      351,
+      208,
+      0,
+      8
+    ],
+    "asset": "g00/MN_CF_SB03.g00",
+    "layer": 1802608,
+    "clip_group": 270238064,
+    "result": "invalid layer clip"
+  },
+  "implementation": "Native screen-space rectangle intersects the destination screen before shared Layer submission. Empty intersection omits the drawable and clip group; original object/clip remains VM state. A later nonempty rectangle restores engine-owned nodes. Shared Layer validation remains strict.",
+  "validation": {
+    "release_lib": 48,
+    "release_engine_bridge": 15,
+    "actual_fixed_game": {
+      "player": "player27",
+      "sha256": "8d7c607fb330c43779744e80924979b0085c3d624ab233e907db2a982ec6fdd7",
+      "settings_frames": 5000,
+      "interaction_frames": 7500,
+      "settings_scene": 9001,
+      "settings_line": 865,
+      "error": null,
+      "positive_clips": 21,
+      "retained_layers": 127,
+      "renderer": "Apple M5 / Metal offscreen",
+      "physical_window_verified": false,
+      "exit_title": {
+        "frames": 6300,
+        "scene": 9012,
+        "line": 541,
+        "error": null
+      },
+      "reopened_settings": {
+        "frames": 7500,
+        "scene": 9001,
+        "line": 865,
+        "error": null
+      }
+    },
+    "python_schema": 8
+  }
+}

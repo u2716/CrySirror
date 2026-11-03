@@ -3,6 +3,7 @@
 //! wrapper. Archive storage, budgets, transforms, keys and mounts are shared APIs.
 #![forbid(unsafe_code)]
 mod audio;
+pub mod ald_catalog;
 mod common;
 mod files;
 pub use audio::{audio_format_ids, register_audio};
@@ -63,3 +64,7 @@ impl crysirror_resource::ArchiveFormat for LegacyFormat {
         self.0.open(source, context)
     }
 }
+
+pub mod alk;
+
+pub mod alice_audio_metadata;

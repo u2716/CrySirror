@@ -43,6 +43,8 @@ pub struct State {
     /// PSBFile instance → its domain key.
     owners: BTreeMap<usize, String>,
     pending: Option<PendingImage>,
+    /// Images loaded inside a non-suspending callback, publishing next boundary.
+    deferred: Vec<(ObjectHandle, crysirror_core::image_processing::ImageInput)>,
     next_slot: u32,
 }
 
@@ -181,10 +183,7 @@ pub(crate) fn load_encoded_image(
     bytes: Vec<u8>,
 ) -> Result<Variant> {
     if !rt.host().can_suspend {
-        return Err(unsupported(
-            "Layer.loadImages(encoded resource) in this callback",
-            "a resumable TJS boundary",
-        ));
+        return load_encoded_deferred(rt, layer, uri, bytes);
     }
     let state = &mut rt.host_mut().psbfile;
     if state.pending.is_some() {
@@ -199,7 +198,44 @@ pub(crate) fn load_encoded_image(
     Ok(Variant::Void)
 }
 
+/// A native input callback cannot suspend, yet its script reads the new size at
+/// once. Decode for the size and CPU source now; the shared image job publishes
+/// the pixels at the next boundary, before the VM continues.
+fn load_encoded_deferred(rt: &mut Rt, layer: ObjectHandle, uri: &str, bytes: Vec<u8>) -> Result<Variant> {
+    let (size, opaque) = match crysirror_image::tlg_size(&bytes) {
+        Some(size) => (size, false),
+        None => {
+            let surface = crysirror_image::decode_standard(&bytes)
+                .map_err(|e| err(format!("decode `{uri}` in a native callback: {e}")))?;
+            ([surface.width, surface.height], surface.rgba.chunks_exact(4).all(|p| p[3] == 255))
+        }
+    };
+    let (w, h) = (i64::from(size[0]), i64::from(size[1]));
+    let name = uri.rsplit('/').next().unwrap_or(uri).to_owned();
+    let input = crysirror_core::image_processing::ImageInput::Encoded {
+        name,
+        bytes: bytes.into(),
+        size,
+    };
+    let host = rt.host_mut();
+    host.reset_surface(layer, w, h, [255, 255, 255, 0])?;
+    let l = host.layer_mut(layer)?;
+    (l.width, l.height) = (w, h);
+    l.blank = false;
+    l.image_source = Some(input.clone());
+    l.full_alpha = opaque.then_some(255);
+    host.psbfile.deferred.push((layer, input));
+    Ok(Variant::Void)
+}
+
 pub fn poll(rt: &mut Rt, host: &mut dyn HostServices, client: ClientId) -> anyhow::Result<bool> {
+    if !rt.host().psbfile.deferred.is_empty() {
+        let (layer, input) = rt.host_mut().psbfile.deferred.remove(0);
+        let job = rt.host().images.as_ref().ok_or_else(|| anyhow::anyhow!("image service absent"))?
+            .begin_process(input, std::sync::Arc::from(&b"[]"[..]))?;
+        rt.host_mut().image_job = Some((layer.0, job, [false; 2], true));
+        return Ok(false);
+    }
     let Some(p) = rt.host_mut().psbfile.pending.take() else {
         return Ok(true);
     };
@@ -240,5 +276,6 @@ impl State {
         if let Some(p) = &self.pending {
             out.push(p.layer);
         }
+        out.extend(self.deferred.iter().map(|(layer, _)| *layer));
     }
 }

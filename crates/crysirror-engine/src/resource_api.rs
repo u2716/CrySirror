@@ -53,6 +53,8 @@ impl Default for ResourceRuntime {
         crysirror_formats_blackcyc::register_archives(&mut formats).expect("BlackCyc archive identifiers are unique");
         #[allow(unused_mut)]
         let mut files = FileRegistry::default();
+        files.register(Arc::new(crysirror_resource::cg_catalog::CgCatalogFormat))
+            .expect("CG catalogue decoder identifier is unique");
         #[cfg(feature = "blackcyc-formats")]
         crysirror_formats_blackcyc::register_audio(&mut files).expect("BlackCyc audio identifiers are unique");
         #[cfg(feature = "arc-formats")]

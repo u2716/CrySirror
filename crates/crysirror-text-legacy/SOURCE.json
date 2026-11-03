@@ -1,0 +1,30 @@
+{
+  "repository": "https://github.com/nunuhara/libsys4",
+  "commit": "b14839f23af0963abbdb17f7cac57a36fd8e9bd2",
+  "license": "GPL-2.0-or-later",
+  "copyright": [
+    "2019 Nunuhara Cabbage",
+    "1997 Yutaka OIWA",
+    "1997-1998 Masaki Chikama (utfsjis.h)"
+  ],
+  "files": [
+    {
+      "path": "src/string.c",
+      "sha256": "3584dee68eaa760aee6dc89476bedde67ec5dd20143cfae3e7cd233394d0fb32"
+    },
+    {
+      "path": "src/utfsjis.c",
+      "sha256": "8c9b272d9bff4867933617912f9c3c71a29da2967d7d412603ea80b1267ec91e"
+    },
+    {
+      "path": "include/system4/utfsjis.h",
+      "sha256": "009c84438a1533f7a97de7e214850295f7deba80018b01aeb3800d895f933daf"
+    }
+  ],
+  "scope": "Bounded safe Rust byte-string algorithms, generic character/number profiles, independent of native VM or renderer. Preserve source NUL/stored extent and compaction behavior. Native undefined overrun/atoi overflow fails explicitly. No C interpreter, Unicode mapping tables, platform IO, font rendering, game data or proprietary code imported.",
+  "validation": {
+    "implementation": "first-class shared crate; authored vectors independent of VM",
+    "compilation": "cargo test --release -p crysirror-text-legacy --lib succeeded",
+    "behavior": "6 authored tests passed, 0 ignored; target/verification/system4-text-legacy-tests.log; no original-game acceptance claimed"
+  }
+}

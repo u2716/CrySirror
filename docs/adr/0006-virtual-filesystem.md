@@ -25,10 +25,10 @@ top of it.
   path or archive decoding. Engine scripts reach the same namespace through
   the `Fs` class.
 
-A format-specific archive (for example an RFVP pack or a Siglus resource
-archive) is implemented as a provider **inside its compatibility crate**,
-after its format is audited at the pinned commit. The shared VFS does not
-decode native archive formats.
+The VFS contract itself does not decode native archives. Audited reusable
+archive parsers and providers now live in shared resource/format crates (ADRs
+0044/0065); native adapters retain archive selection and precedence policy.
+A generic decoder must not be kept private to a VM merely to get it running.
 
 ## Evidence
 
@@ -36,6 +36,8 @@ decode native archive formats.
 - `provider_tests::siglus_reads_its_scene_through_a_mounted_provider`: the
   original Siglus SceneVm loaded its `.scn` from a memory mount, with no
   file on disk.
-- Not done: async/streaming reads, provider-backed `Assets` (renderer images
-  still read the disk root, while Siglus uploads decoded pixels), archive
-  providers.
+- Later capability read-at and provider-backed Assets/resource services replaced
+  the initial disk-only limitation. ADRs 0049/0052/0065 add bounded async reads,
+  imports, streamed cells and native decoding; remaining cook/upload/lifetime
+  work is tracked under ADR 0050. The original test receipts above remain scoped
+  to the mount-table decision.

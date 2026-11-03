@@ -27,6 +27,8 @@ fn owner_constructor_output_commits_to_shared_log_before_pc_advance() {
             canvas: Some([800,600]), // Original System40.ini logical view.
             font_aliases: ["default".into(), "default".into()],
             program: "戦国ランス.ain".into(),
+            ini: None,
+            volumes: Vec::new(),
             reviewed_output_log_dll: Some("DLL/OutputLog.dll".into()),
         },
     )

@@ -1,7 +1,7 @@
 # ADR 0096: CXDEC XP3 content filter and indirect Special filename index
 
 Date: 2026-10-30
-Status: Accepted for the bounded static resource profile below
+Status: implemented bounded static CXDEC/Special profile; interpreted filters remain proposed in ADR 0097
 
 ## Source and ownership
 

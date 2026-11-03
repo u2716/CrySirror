@@ -131,6 +131,9 @@ impl DialogSystem {
     pub fn reset_input(&mut self) {
         self.pressed = None;
     }
+    pub fn reset_client_input_after_restore(&mut self,owner:u32) {
+        if self.pressed.is_some_and(|value|value.0==owner){self.pressed=None;}
+    }
     fn active(&self) -> Option<(u32, &Dialog)> {
         self.clients.iter().next().map(|(o, d)| (*o, d))
     }

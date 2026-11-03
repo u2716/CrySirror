@@ -156,7 +156,8 @@ fn portable_disc_policy_rejects_unknown_or_malformed_abi() {
     for code in [
         command(5, 114, &[encode::quoted(b"marker"),encode::int(124)]),
         command(5, 114, &[encode::int(7),encode::int(124),encode::quoted(b"code")]),
-        command(5, 120, &[]),
+        // GET_COMPUTER_ID (120) is an implemented original operation now; 121 is unknown.
+        command(5, 121, &[]),
         asm::command(Opcode::new(1,5,114,1),3,&[encode::quoted(b"marker"),encode::int(124),encode::quoted(b"code")]),
     ] {
         let (_t,mut r) = fixture(code);

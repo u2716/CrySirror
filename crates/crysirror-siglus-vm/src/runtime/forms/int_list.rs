@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 // Migrated from pinned siglus_rs; see UPSTREAM.md and upstream-files.json.
-use anyhow::Result;
+use anyhow::{Result, bail, ensure};
 
 use crate::runtime::{CommandContext, Value};
 
@@ -188,23 +188,7 @@ fn is_fixed(ctx: &CommandContext, form_id: u32) -> bool {
     fixed_default_len(ctx, form_id).is_some()
 }
 
-fn i32_value(value: i64) -> i64 {
-    i64::from(value as i32)
-}
-
-fn bit_location(list_len: usize, width: u32, index: i64) -> Option<(usize, u32)> {
-    if index < 0 || !matches!(width, 1 | 2 | 4 | 8 | 16 | 32) {
-        return None;
-    }
-    let bit_index = (index as u64).checked_mul(u64::from(width))?;
-    let word = bit_index / 32;
-    if word >= list_len as u64 {
-        return None;
-    }
-    Some((word as usize, (bit_index % 32) as u32))
-}
-
-fn log_out_of_range(form_id: u32, width: u32, index: i64, words: usize) {
+pub(super) fn log_out_of_range(form_id: u32, width: u32, index: i64, words: usize) {
     log::error!(
         "INTLIST index out of range: form_id={} width={} index={} storage_words={}",
         form_id,
@@ -215,59 +199,33 @@ fn log_out_of_range(form_id: u32, width: u32, index: i64, words: usize) {
 }
 
 pub(super) fn bit_get(form_id: u32, list: &[i64], width: u32, index: i64) -> i64 {
-    let Some((word, shift)) = bit_location(list.len(), width, index) else {
-        log_out_of_range(form_id, width, index, list.len());
-        return 0;
-    };
-
-    if width == 32 {
-        return i64::from(list[word] as i32);
-    }
-    let mask = (1u32 << width) - 1;
-    i64::from(((list[word] as i32 as u32) >> shift) & mask)
+    if let Some(value) = crysirror_core::integer_fields::get(list, width, index) { return value; }
+    log_out_of_range(form_id, width, index, list.len());
+    0
 }
-
 pub(super) fn bit_set(form_id: u32, list: &mut [i64], width: u32, index: i64, value: i64) {
-    let Some((word, shift)) = bit_location(list.len(), width, index) else {
+    if !crysirror_core::integer_fields::set(list, width, index, value) {
         log_out_of_range(form_id, width, index, list.len());
-        return;
-    };
-
-    if width == 32 {
-        list[word] = i32_value(value);
-        return;
     }
-
-    let value_mask = (1u32 << width) - 1;
-    let field_mask = value_mask << shift;
-    let raw = list[word] as i32 as u32;
-    let next = (raw & !field_mask) | (((value as u32) & value_mask) << shift);
-    list[word] = i64::from(next as i32);
 }
-
 pub(super) fn logical_size(storage_words: usize, width: u32) -> i64 {
-    let per_word = 32usize / width as usize;
-    storage_words.saturating_mul(per_word) as i64
+    crysirror_core::integer_fields::logical_size(storage_words, width)
+        .and_then(|size| i64::try_from(size).ok()).unwrap_or(0)
 }
 
-fn resize_list(ctx: &mut CommandContext, form_id: u32, requested: i64) {
+fn resize_list(ctx: &mut CommandContext, form_id: u32, requested: i64) -> Result<()> {
     if is_fixed(ctx, form_id) {
         log::error!(
             "INTLIST.RESIZE rejected for fixed list: form_id={} requested={}",
             form_id,
             requested
         );
-        return;
+        return Ok(());
     }
-    let Ok(new_len) = usize::try_from(requested.max(0)) else {
-        log::error!(
-            "INTLIST.RESIZE size is not representable: form_id={} requested={}",
-            form_id,
-            requested
-        );
-        return;
-    };
+    let new_len = usize::try_from(requested.max(0))?;
+    ensure!(new_len <= 1_048_576, "native INTLIST storage word budget");
     list_mut(ctx, form_id).resize(new_len, 0);
+    Ok(())
 }
 
 fn reinit_list(ctx: &mut CommandContext, form_id: u32) {
@@ -291,8 +249,7 @@ pub fn dispatch(ctx: &mut CommandContext, form_id: u32, args: &[Value]) -> Resul
     let Some((chain_pos, chain_ref)) = prop_access::parse_element_chain_ctx(ctx, form_id, args)
         .or_else(|| prop_access::parse_element_chain(form_id, args))
     else {
-        ctx.push(Value::Int(0));
-        return Ok(true);
+        bail!("malformed native INTLIST root {form_id}");
     };
     let chain = chain_ref.to_vec();
     let target = parse_target(ctx, &chain);
@@ -328,7 +285,7 @@ pub fn dispatch(ctx: &mut CommandContext, form_id: u32, args: &[Value]) -> Resul
             }
             intlist_op::RESIZE => {
                 let requested = script_params.first().and_then(Value::as_i64).unwrap_or(0);
-                resize_list(ctx, form_id, requested);
+                resize_list(ctx, form_id, requested)?;
                 ctx.push(Value::Int(0));
             }
             intlist_op::GET_SIZE => {
@@ -352,9 +309,8 @@ pub fn dispatch(ctx: &mut CommandContext, form_id: u32, args: &[Value]) -> Resul
                 if start <= end {
                     ensure_compatible_access_capacity(ctx, form_id, width, end);
                     let list = list_mut(ctx, form_id);
-                    for index in start..=end {
-                        bit_set(form_id, list.as_mut_slice(), width, index, value);
-                    }
+                    ensure!(crysirror_core::integer_fields::fill_clipped(list.as_mut_slice(), width, start, end, value).is_some(),
+                        "native INTLIST packed range layout");
                 }
                 ctx.push(Value::Int(0));
             }
@@ -386,23 +342,11 @@ pub fn dispatch(ctx: &mut CommandContext, form_id: u32, args: &[Value]) -> Resul
                 ctx.push(Value::Int(0));
             }
             _ => {
-                log::error!(
-                    "unsupported INTLIST command: form_id={} op={} width={} ret_form={:?}",
-                    form_id,
-                    op,
-                    width,
-                    ret_form
-                );
-                ctx.push(Value::Int(0));
+                bail!("unsupported native INTLIST command: form={form_id} op={op} width={width} ret={ret_form:?}");
             }
         },
         None => {
-            log::error!(
-                "malformed INTLIST element chain: form_id={} chain={:?}",
-                form_id,
-                chain
-            );
-            ctx.push(Value::Int(0));
+            bail!("malformed native INTLIST element chain: form={form_id} chain={chain:?}");
         }
     }
 
@@ -413,6 +357,24 @@ pub fn dispatch(ctx: &mut CommandContext, form_id: u32, args: &[Value]) -> Resul
 mod cow_tests {
     use super::*;
     use std::sync::Arc;
+
+    #[test]
+    fn unknown_commands_and_excessive_extendable_allocations_fail_visibly() {
+        let mut ctx = CommandContext::new("asset".into());
+        let form = codes::ELM_GLOBAL_A as u32;
+        ctx.vm_call = Some(crate::runtime::VmCallMeta {
+            element: vec![form as i32, 9999],
+            ..Default::default()
+        });
+        assert!(dispatch(&mut ctx, form, &[]).is_err());
+        assert!(ctx.stack.is_empty());
+        // Test the extendable typed-storage helper directly; FM_INTLIST is
+        // not being registered here as an additional global runtime form.
+        let extendable = codes::FM_INTLIST as u32;
+        assert!(resize_list(&mut ctx, extendable, 1_048_577).is_err());
+        assert!(ctx.stack.is_empty());
+        assert!(!ctx.globals.int_lists.contains_key(&extendable));
+    }
 
     #[test]
     fn rollback_flag_reads_share_storage_and_writes_detach_one_list() {

@@ -11,7 +11,6 @@ pub fn bootstrap(rt: Runtime, plan: &Plan) -> Result<app::Core> {
     if plan.mounts.is_empty() {
         return Ok(app::Core::Plain(rt));
     }
-    #[cfg(feature = "scripting")]
     {
         use crysirror_engine::Value;
         let mut engine = crysirror_engine::App::new(rt, "game")?;
@@ -74,14 +73,11 @@ pub fn bootstrap(rt: Runtime, plan: &Plan) -> Result<app::Core> {
         engine.start()?;
         Ok(app::Core::Scripted(Box::new(engine)))
     }
-    #[cfg(not(feature = "scripting"))]
-    bail!("this build lacks the engine Resources bootstrap; enable arc-formats")
 }
 
 fn runtime(core: &mut app::Core) -> Result<&mut Runtime> {
     match core {
         app::Core::Plain(rt) => Ok(rt),
-        #[cfg(feature = "scripting")]
         app::Core::Scripted(engine) => engine.runtime_mut(),
     }
 }
@@ -96,6 +92,12 @@ pub fn offscreen(
     font: Option<&Path>,
 ) -> Result<()> {
     let input = InputTrack::load(track)?;
+    // Optional wall pacing gives asynchronous decoder/resource workers time
+    // during reproducible offline runs. It never changes native elapsed time,
+    // input frames or decoder EOF/completion receipts.
+    let wall_pacing_ms = std::env::var("CRYSIRROR_OFFSCREEN_PACING_MS").ok()
+        .map(|s| s.parse::<u64>()).transpose()?.unwrap_or(0);
+    ensure!(wall_pacing_ms <= 16, "offscreen pacing must be 0..=16ms");
     // Native text callbacks may query metrics before the first presented frame.
     app::load_fonts(runtime(&mut core)?,font)?;
     // Match the desktop canvas: on OS-bar platforms the menu lives outside
@@ -130,12 +132,47 @@ pub fn offscreen(
     }
     runtime(&mut core)?.set_canvas_image_presenter(true);
     app::settle_vm_preparations(runtime(&mut core)?)?;
+    let close_frame = std::env::var("CRYSIRROR_HEADLESS_CLOSE_FRAME")
+        .ok()
+        .and_then(|frame| frame.parse::<u32>().ok());
     for frame in 0..frames {
         let dt = if frame == 0 { 0 } else { 16 };
-        match &mut core {
-            app::Core::Plain(rt) => rt.tick(dt, input.at(frame))?,
-            #[cfg(feature = "scripting")]
-            app::Core::Scripted(engine) => engine.frame(dt, input.at(frame))?,
+        let frame_input = input.at(frame);
+        let rt = runtime(&mut core)?;
+        // The offline host explicitly supplies a virtual pointer, including
+        // its initial origin. This is a backend policy, never a VM fallback
+        // from missing native/window observations.
+        if rt.host.pointer_activity.is_none()
+            || rt.host.pointer_observation.position != Some([frame_input.pointer_x, frame_input.pointer_y]) {
+            rt.host.note_pointer_activity()?;
+        }
+        rt.host.pointer_observation = crysirror_core::service::PointerObservation {
+            position: Some([frame_input.pointer_x, frame_input.pointer_y]),
+            inside: Some(frame_input.pointer_x >= 0 && frame_input.pointer_y >= 0
+                && frame_input.pointer_x < rt.project.canvas[0] as i32
+                && frame_input.pointer_y < rt.project.canvas[1] as i32),
+        };
+        let step = match &mut core {
+            app::Core::Plain(rt) => {
+                // Developer diagnostic: the window close button, without a window.
+                if close_frame == Some(frame) && !rt.request_close() {
+                    break;
+                }
+                rt.tick(dt, frame_input)
+            }
+            app::Core::Scripted(engine) => engine.frame(dt, frame_input),
+        };
+        if let Err(error) = step {
+            // Preserve the real VM frontier once, before propagating its
+            // failure. No image is presented as a completed capture here.
+            println!("{}", serde_json::json!({
+                "output":output,"gpu":adapter,"error":format!("{error:#}"),
+                "failed_frame":frame,"frames_completed":frame,"requested_frames":frames,
+                "runtime":runtime(&mut core)?.inspect(),"capture_written":false,
+                "audio_emitted":false,"window_created":false,"wall_pacing_ms":wall_pacing_ms,
+                "os_menu_created":false
+            }));
+            return Err(error);
         }
         // Restoring native/framework state must not restore the host's
         // presentation choice. The window host also reapplies this per frame.
@@ -146,14 +183,15 @@ pub fn offscreen(
             .menus
             .set_native_bars(external_bar);
         app::materialize_canvases(&mut materializer, runtime(&mut core)?)?;
-        #[cfg(feature = "scripting")]
+        if wall_pacing_ms != 0 {
+            std::thread::sleep(std::time::Duration::from_millis(wall_pacing_ms));
+        }
         if let app::Core::Scripted(engine) = &core {
             if engine.quit_requested() {
                 break;
             }
         }
     }
-    #[cfg(feature = "scripting")]
     if let app::Core::Scripted(engine) = &mut core {
         engine.prepare_render_offline()?;
     }
@@ -165,14 +203,14 @@ pub fn offscreen(
     println!(
         "{}",
         serde_json::json!({"output":output, "gpu":adapter, "stats":stats,
-        "runtime":rt.inspect(), "audio_emitted":false, "window_created":false,
+        "runtime":rt.inspect(), "audio_emitted":false, "window_created":false, "wall_pacing_ms":wall_pacing_ms,
         "menu_bar_presentation":if external_bar {"outside_capture"} else {"engine"},
         "os_menu_created":false})
     );
     Ok(())
 }
 
-#[cfg(all(test, feature = "arc-formats"))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::detect::ArchiveMount;

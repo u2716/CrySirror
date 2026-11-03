@@ -18,6 +18,7 @@ struct Frame {
 pub struct ScriptSession {
     frames: Vec<Frame>,
     retired_instructions: u64,
+    background: bool,
 }
 impl ScriptSession {
     /// Context zero is the original sys.spt controller, including for NewGame.
@@ -29,16 +30,63 @@ impl ScriptSession {
                 machine,
             }],
             retired_instructions: 0,
+            background: false,
         }
     }
-    pub fn background(name:Vec<u8>,program:Arc<Program>,machine:Machine)->Result<Self> {
-        ensure!(!name.is_empty()&&name.len()<=128&&!name.contains(&0),"NNN background original script name bounds");
-        Ok(Self{frames:vec![Frame{name,program,machine}],retired_instructions:0})
+    /// Construct all original saved contexts together on a worker. This does
+    /// not install images/text/audio or admit an original save into a live VM.
+    pub(crate) fn from_saved_contexts(
+        contexts: Vec<(Vec<u8>, Arc<Program>, Machine)>,
+    ) -> Result<Self> {
+        ensure!(
+            (1..=4).contains(&contexts.len()),
+            "NNN saved execution context count"
+        );
+        ensure!(
+            contexts[0].0 == b"sys",
+            "NNN original saved controller identity"
+        );
+        for (name, _, _) in &contexts {
+            ensure!(
+                !name.is_empty() && name.len() <= 128 && !name.contains(&0),
+                "NNN saved script name"
+            );
+        }
+        Ok(Self {
+            frames: contexts
+                .into_iter()
+                .map(|(name, program, machine)| Frame {
+                    name,
+                    program,
+                    machine,
+                })
+                .collect(),
+            retired_instructions: 0,
+            background: false,
+        })
+    }
+    pub fn background(name: Vec<u8>, program: Arc<Program>, machine: Machine) -> Result<Self> {
+        ensure!(
+            !name.is_empty() && name.len() <= 128 && !name.contains(&0),
+            "NNN background original script name bounds"
+        );
+        Ok(Self {
+            frames: vec![Frame {
+                name,
+                program,
+                machine,
+            }],
+            retired_instructions: 0,
+            background: true,
+        })
     }
     /// Original CBackExecClass::ReStart resets its own PC and return stack;
     /// it does not restart sys or clear shared game variables.
-    pub fn restart_background(&mut self)->Result<()> {
-        ensure!(self.frames.len()==1,"NNN background restart with active subcontext");
+    pub fn restart_background(&mut self) -> Result<()> {
+        ensure!(
+            self.frames.len() == 1,
+            "NNN background restart with active subcontext"
+        );
         self.frames[0].machine.restart()
     }
     pub fn machine(&self) -> &Machine {
@@ -53,6 +101,13 @@ impl ScriptSession {
     pub fn script_name(&self) -> &[u8] {
         &self.frames.last().unwrap().name
     }
+    pub(crate) fn contexts_for_save(
+        &self,
+    ) -> impl Iterator<Item = (&[u8], &Arc<Program>, &Machine)> {
+        self.frames
+            .iter()
+            .map(|frame| (frame.name.as_slice(), &frame.program, &frame.machine))
+    }
     pub fn depth(&self) -> usize {
         self.frames.len() - 1
     }
@@ -66,7 +121,11 @@ impl ScriptSession {
     }
     pub fn poll(&mut self, budget: u32) -> Result<Step> {
         let frame = self.frames.last_mut().unwrap();
-        frame.machine.poll(&frame.program, budget)
+        if self.background {
+            frame.machine.poll_background(&frame.program, budget)
+        } else {
+            frame.machine.poll(&frame.program, budget)
+        }
     }
     pub fn acknowledge(&mut self, receipt: &NativeCall) -> Result<()> {
         self.machine_mut().acknowledge(receipt)
@@ -146,6 +205,10 @@ impl ScriptSession {
     /// The caller invokes this on Step::Halted; an uncompleted callback cannot
     /// be discarded under the guise of reaching END.
     pub fn restart_controller_after_end(&mut self) -> Result<()> {
+        ensure!(
+            !self.background,
+            "NNN background context cannot restart the sys controller"
+        );
         let mut active = self.frames.last().unwrap().machine.clone();
         ensure!(
             matches!(active.poll(self.program(), 1)?, Step::Halted),

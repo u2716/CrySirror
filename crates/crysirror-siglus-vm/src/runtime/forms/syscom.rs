@@ -20,6 +20,9 @@ fn extra_default(ctx: &CommandContext, index: usize, mode: bool) -> i64 {
 }
 pub(crate) fn initialize_config(ctx: &mut CommandContext) {
     super::syscom_preferences::initialize(ctx);
+    super::sound_config::initialize(ctx);
+    super::cursor_preferences::initialize(ctx);
+    super::font_preferences::initialize(ctx);
     let mode = ctx
         .tables
         .gameexe
@@ -43,6 +46,9 @@ pub(crate) fn dispatch_config(
     ctx: &mut CommandContext,
     args: &[crate::runtime::Value],
 ) -> anyhow::Result<bool> {
+    if super::font_preferences::dispatch(ctx,args)? {return Ok(true);}
+    if super::cursor_preferences::dispatch(ctx,args)? { return Ok(true); }
+    if super::sound_config::dispatch(ctx, args)? { return Ok(true); }
     if super::syscom_preferences::dispatch(ctx, args)? {
         return Ok(true);
     }
@@ -271,59 +277,14 @@ mod config_tests {
         );
     }
 }
-pub const CAPTURE_PRIOR_SAVE: i32 = 0;
-pub fn prepare_runtime_save_thumb_capture(ctx: &mut CommandContext) {
-    ctx.unknown
-        .record_note("native save thumbnail capture unsupported");
-}
-pub fn free_runtime_save_thumb_capture(_: &mut CommandContext, _: i32) {}
-pub fn write_runtime_slot_thumb(ctx: &mut CommandContext, _: usize) {
-    ctx.unknown
-        .record_note("native slot thumbnail write unsupported");
-}
-pub fn write_global_save(ctx: &CommandContext) {
-    ctx.backend_faults
-        .borrow_mut()
-        .push("native global/config save backend unavailable".into());
-}
-pub fn read_save_flag_values(
-    ctx: &mut CommandContext,
-    quick: bool,
-    idx: i64,
-    count: usize,
-) -> Option<Vec<i64>> {
-    if idx < 0 {
-        return None;
-    }
-    let slots = if quick {
-        &ctx.globals.syscom.quick_save_slots
-    } else {
-        &ctx.globals.syscom.save_slots
-    };
-    let slot = slots.get(idx as usize).filter(|s| s.exist)?;
-    Some(
-        (0..count.min(256))
-            .map(|i| slot.values.get(&(i as i32)).copied().unwrap_or(0))
-            .collect(),
-    )
-}
-pub fn write_save_flag_values(ctx: &mut CommandContext, quick: bool, idx: i64, v: &[i64]) -> bool {
-    if idx < 0 {
-        return false;
-    }
-    let slots = if quick {
-        &mut ctx.globals.syscom.quick_save_slots
-    } else {
-        &mut ctx.globals.syscom.save_slots
-    };
-    let Some(slot) = slots.get_mut(idx as usize).filter(|s| s.exist) else {
-        return false;
-    };
-    for (i, v) in v.iter().take(256).enumerate() {
-        slot.values.insert(i as i32, *v);
-    }
-    true
-}
+// Original save slots, thumbnails and global/config/read streams.
+pub use super::syscom_original::{
+    CAPTURE_PRIOR_SAVE, free_runtime_save_thumb_capture, load_global_save, write_global_save,
+};
+pub(crate) use super::syscom_original::{
+    prepare_runtime_save_thumb_capture, read_save_flag_values, write_runtime_slot_thumb,
+    write_save_flag_values,
+};
 pub fn append_current_save_message(ctx: &mut CommandContext, msg: &str) {
     ctx.globals.syscom.current_save_message.push_str(msg);
     ctx.globals.syscom.current_save_message = ctx
@@ -346,3 +307,5 @@ pub fn append_current_save_message(ctx: &mut CommandContext, msg: &str) {
         s.save_full_msg = ctx.globals.syscom.current_save_full_message.clone();
     }
 }
+
+pub(crate) fn cursor_defaults(ctx:&CommandContext)->(i64,i64) { super::cursor_preferences::defaults(ctx) }

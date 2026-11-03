@@ -1,0 +1,165 @@
+{
+  "purpose": "Reviewed complete legacy SystemFile layout/policy, native bootstrap namespace and shared persistence boundary; full original dataN runtime save remains incomplete",
+  "reference": {
+    "repository": "https://github.com/tinyan/SystemNNN",
+    "commit": "78a05053c78b3b80065a9a209c6685a7c60a2e83",
+    "complete_files": [
+      "nnnUtilLib/commonSystemFile.h",
+      "nnnUtilLib/commonSystemFile.cpp",
+      "nnnLib/maincontrol.cpp"
+    ],
+    "additional_reviewed_routines": [
+      "nnnLib/gamecallback.cpp SystemFunctionSetFilm complete",
+      "nnnLib/gamecallback.cpp complete ReceiveUserFunction0 builtin dispatch and SaveSystemFile routine",
+      "nnnLib/gamecallback.cpp complete YoyakuExecRoutine foreground control resume policy"
+    ],
+    "licence": "No licence grant found; independently expressed behavior facts, no original engine implementation copied or linked"
+  },
+  "actual_module": {
+    "sha256": "e85e92ec538d50eae08d27286177149972d443a96d1415277c1ae1f9ee108bdb",
+    "method": "Read-only IDA static analysis; original executable not executed",
+    "vtable": "0x553184",
+    "constructor": "0x458b70",
+    "load": "0x458c80",
+    "save": "0x459640",
+    "create_init_data": "0x4590d0",
+    "calculate_limits": "0x459c90",
+    "set_film": "0x459b70",
+    "check_film": "0x459c00",
+    "ignored_evidence": [
+      "target/verification/systemnnn/systemfile-complete-class-static.log",
+      "target/verification/systemnnn/CCommonSystemFile-vt*.c",
+      "target/verification/systemnnn/service-bootstrap-0x4590d0.c",
+      "target/verification/systemnnn/native-system-defaults-static.log",
+      "target/verification/systemnnn/ida-native-system-defaults.py",
+      "target/verification/systemnnn/setfilm-0x5324b0.c",
+      "target/verification/systemnnn/native-maincontrol-lifecycle-static.log",
+      "target/verification/systemnnn/maincontrol-systemfile-caller-0x52d6b0.c",
+      "target/verification/systemnnn/maincontrol-systemfile-caller-0x52c6f0.c",
+      "target/verification/systemnnn/maincontrol-outer-caller-0x4019e0.c",
+      "target/verification/systemnnn/native-system-save-hook-static.log",
+      "target/verification/systemnnn/native-system-save-hook-0x5330f0.c",
+      "target/verification/systemnnn/native-system-save-hook-0x403030.c",
+      "target/verification/systemnnn/control-loop-0x538ba0.c"
+    ],
+    "font_default_literal": "0x553064, NUL-terminated CP932 MS Gothic name; read through shared PeData only after authenticating the module SHA",
+    "surname_given_defaults": {
+      "addresses": [
+        "0x586cd8",
+        "0x586ce8"
+      ],
+      "policy": "Native loader-zero-filled16-byte BSS fields, no setter/writer reference in this reviewed module. Section metadata verifies zero-fill; do not copy IDA uninitialized 0xff as a default."
+    },
+    "host_lifecycle": {
+      "maincontrol_constructor": "0x52c9a0",
+      "game_loop": "0x52d6b0",
+      "end": "0x52c6f0",
+      "winmain": "0x4019e0",
+      "contract": "WinMain runs Game, deletes the game, calls MainControl.End then its destructor; Game and End each call SystemFile vtable+12 Save. End clears its pointer, preventing a third destructor write."
+    },
+    "builtin_function_dispatch": "0x5355c0",
+    "system_save_callback": "0x5330f0 (CGame and CGameCallBack virtual slot476)",
+    "before_after_system_save_hooks": "virtual offsets1028/1032 both0x403030 empty in this legacy module; optional ResultData persistence remains explicitly unsupported"
+  },
+  "legacy_records": [
+    {
+      "code": 0,
+      "size": 64,
+      "label": "FILE INFO",
+      "description": "dataKosuu field at byte32 is10 in the reviewed module"
+    },
+    {
+      "code": 1,
+      "size": 2048,
+      "label": "SYSTEM DATA"
+    },
+    {
+      "code": 5,
+      "size": 32800,
+      "label": "MES FLAG"
+    },
+    {
+      "code": 6,
+      "size": 544,
+      "label": "SYSTEMVAR",
+      "description": "128 reserved words; legacy persistence maps100 game variables at200..299"
+    },
+    {
+      "code": 7,
+      "size": 1312,
+      "label": "CGFLAG"
+    },
+    {
+      "code": 8,
+      "size": 2080,
+      "label": "SCENEFLAG"
+    },
+    {
+      "code": 9,
+      "size": 16416,
+      "label": "FILMFLAG"
+    },
+    {
+      "code": 10,
+      "size": 1056,
+      "label": "VOICEFLAG"
+    },
+    {
+      "code": 11,
+      "size": 1056,
+      "label": "MOVIEFLAG"
+    },
+    {
+      "code": 12,
+      "size": 1056,
+      "label": "MUSICFLAG"
+    }
+  ],
+  "policies": {
+    "load": "Native scoped Save sysfile.sav/tsysfile.sav first, then original Asset sav/sysfile.org/tsysfile.org, then proven constructor defaults. The latter must not manufacture a successful original disk read.",
+    "save": "Reviewed module writes exactly10 fixed-size records, refreshes local civil timestamp and increments SYSTEM DATA saveCount; later public14/16-record formats cannot replace this ABI.",
+    "film": "Out-of-range script/film arguments are the original known ignored branch. In-range bit index is script*filmsPerScript+film. Script callback passes original project script index and filmNumber-1.",
+    "limits": "MainControl reads original project.xtx name count, using64 if its count is0; the setter clamps2..256. Film/message strides use power-of-two grouped capacity:131072/grouped and262144/grouped respectively. Contiguous native cglist names determine CG/movie character limits.",
+    "gate": "Native0x5324b0 suppresses SETFILM if original background policy is disabled, or when skipNextCommand and mustSetFilmFlag0. Otherwise writes current project script index and filmNumber-1 into prepared original SystemFile. It does not write disk per command; full native save/close boundary remains pending.",
+    "layout": "Record-boundary/size validation must precede mutation. Preserve opaque preference, padding and unused fields. Later public SYSTEMVAR1024 and additional record families cannot replace this reviewed legacy128-word system-variable payload/10-record profile.",
+    "engine_boundary": "Native record layout/index/default/save policy stays in adapter. Reusable bit fields use Core integer_fields; scoped storage reads/writes and worker/cancellation/atomic completion use engine capabilities. No adapter-private generic bitmap/state service.",
+    "original_saves": "SystemFile progress/preferences differs from dataN.sav GAMESTATUS/effect/message/context save reconstruction. Implementing either one is not a claim that the other is done.",
+    "shutdown": "Installed VmAdapter.request_close admits native host quit only once a real original VM/outer state exists. Drain current resource/frame work without scheduling another native batch; known Message/Selection waits are cancelled without producing a result or ACK, unknown operations remain explicit. Scoped audio preparations/channels are released/stopped. Separate civil samples and retained atomic write receipts implement Game-loop Save and End Save; halt only after both Ready. No emulated Win32 host or process is linked.",
+    "config_namespaces": "MainControl loads init2/mainControl.fxf or init/mainControl.xtx separately from the game table. Missing host table keeps native defaults; malformed present table fails. initRandomSeed is host-owned; game initRandomSeed is ignored. Native atoi valid nonnumeric token yields0/no srand, which still requires actual supplied startup RNG state."
+  },
+  "validation": {
+    "first_native_module_tests": "native-system-file-tests.log:5 passed; record/load/bounds/variables and retained atomic-write/read-only semantics",
+    "calendar_tests": "shared-civil-weekday-tests.log:3 passed",
+    "boot_expanded": "native-system-file-boot-tests2.log:54 passed/1 ignored across lib+bridge+installed+shell+title. Initial native-system-file-boot-tests.log23/1 failure was authored atoi expectation; corrected without changing original atoi production behavior.",
+    "close_final": "native-system-file-close-final2-tests.log:57 passed/1 ignored (lib28,Bridge18,installed2,Shell5,Title4), exit0. Tests verify two actual scoped writes/saveCount2, only variables200..299, no new script load/clock/scene work; text cancellation leaves exact pending PC/receipt; same audio channel in another client remains playing.",
+    "close_first_regression": "native-system-file-close-tests.log56 passed/1 ignored. Added foreground unknown-cancellation check exposed a remaining background-only Bridge guard (close-final-tests.log26pass/1fail/1ignored); explicit shutdown path fixed production and final2 passed.",
+    "module_literal": "native-system-file-original-constructor.log explicit ignored owner test1passed against authenticated module as data; font-name literal/BSS verified, original executable not run.",
+    "shared_api": "api-shared-metadata-verify.log api_docs8+api_coverage1passed with actual1cae8f9410b1b5b9; Python201passed system-file-python-tooling.log.",
+    "not_claimed": [
+      "All progress callback families and calculated getters",
+      "Original dataN.sav VM/resources restoration",
+      "Actual post-change game Title/Start/native-close acceptance",
+      "Complete original engine or all outer mode families"
+    ]
+  },
+  "implementation": {
+    "adapter_module": "crates/crysirror-system-nnn/src/native_system_file.rs",
+    "storage": "Worker-scoped ClientStorage and existing begin_write_atomic retained receipt; native RAM save count/timestamp update precedes admission, including read-only failure. No VM-private filesystem.",
+    "generic_bit_ops": "crysirror_core::integer_fields",
+    "calendar": "Core service::civil_weekday and CivilTime::weekday, scoped sample validated before native timestamp conversion",
+    "boot": "InstalledAdapter first awaits real civil sample, then worker inspects authenticated module defaults, derives native limits from project+contiguous cglist existence, overlays original preference bytes and restores200..299 before original SPT execution",
+    "flags": "Independent in-memory film/message/CG/movie/voice/music methods; opaque scene record and all padding retained. Only mapped callbacks may mutate; no blanket acknowledgement.",
+    "name_initialization": "Reviewed CGame0x542180 fills only empty surname/given fields from seiInitData/meiInitData; optional clear flag then writes the leading NUL only, preserving later padding. Both fields validate before mutation. Nonempty saved names take precedence."
+  },
+  "builtin_function_batch": {
+    "native_system_save": "Ordinary savesystemfile resolves through the original function table, awaits scoped real CivilTime and existing atomic storage receipt, and commits the exact pending native candidate only after Ready. Argument ordinary-variable side effects commit once. Stale receipts cannot write twice. Original resultFlag extension is rejected before mutation. Resource-write-bound argument candidates reject before any dependency until a real atomic owner plan exists.",
+    "layer": "Original layer(slot,onoff=1) updates actual shared Layer visibility and native layer-off mask. Hidden native slots are excluded from the next engine Canvas frame capture. Defined legacy shift domain0..31 only; out-of-domain x86/undefined-shift behavior is explicitly unsupported. No private raster fallback.",
+    "foreground_control": "Ordinary foreground ENDFILM/ENDKOMA/ENDIF resume immediately; active film-end skip resets its original four related flags while F4/F5 stay intact. CBackExec retains actual one-frame shared drawing; scene replay ENDFILM remains an explicit unimplemented transition.",
+    "validation": {
+      "foreground": "native-foreground-control-family-tests.log:67passed/1ignored in selected release targets",
+      "builtin_first": "native-builtins-system-save-layer-tests.log:36passed/2failed/1ignored. Authored fixture errors: same-game clients legitimately shared a save directory; CanvasPixel cannot rasterize Snapshot without a backend. No production relaxation.",
+      "builtin_final": "native-builtins-system-save-layer-final-lib.log:39passed/1ignored. Corrected separate game directory and assertions on actual shared retained Snapshot content, plus candidate resource-write preflight test.",
+      "limits": "No new Desktop artifact/GPU/owner-game acceptance. Original dataN live restore and complete outer modes remain incomplete."
+    }
+  }
+}

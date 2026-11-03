@@ -1,7 +1,8 @@
 # ADR 0007: modern rendering features and Blender/glTF assets
 
-Status: glTF import implemented; upscaler contract implemented; hardware ray
-tracing and vendor upscalers **not implemented**.
+Status: implemented initial asset-import scope, extended by ADRs 0010/0012/0015/
+0054. Hardware ray queries are implemented in ADRs 0051–0060. Vendor upscalers
+remain contract-only; this record does not establish their implementation.
 
 ## Requirement
 
@@ -17,9 +18,11 @@ upscaling, and loading Blender models.
   engine VFS and keeps the node hierarchy as entities. It converts TRS to
   engine transforms (glTF +Y up, as exported by Blender), turns multi-primitive
   meshes into child entities, and converts base-color factors from linear to
-  sRGB. Features it cannot represent are listed in `report.dropped`:
-  textures, animations, skins, cameras, morph targets, transparency. They are
-  never claimed as imported. Non-triangle modes and data URIs are errors.
+  sRGB. The initial importer reported textures, animation, skins, cameras, morphs
+  and transparency as dropped. PBR materials/textures, skins/animation and morphs
+  were subsequently added through ADRs 0010/0012/0015/0054. Actual unsupported
+  formats/extensions remain in `ImportReport.dropped`; this is not a claim of
+  complete glTF or DCC interchange coverage.
 - `.blend` is not parsed in-engine, because it is an undocumented
   memory-layout dump that changes per Blender version.
   `tools/blender_export_gltf.py` runs inside Blender to convert. Run with
@@ -32,12 +35,15 @@ upscaling, and loading Blender models.
 `crysirror_core::graphics::{Upscaler, UpscalerSupport}` covers Native, DLSS,
 FSR, XeSS and MetalFX. A required upscaler that is not implemented returns
 `Unsupported`, with no silent fallback to native. Every non-native upscaler
-needs motion vectors, depth and jitter from the renderer. The renderer
-currently produces none of these, so no backend reports support.
+needs a compatible motion/depth/jitter and temporal integration contract. The
+renderer now has depth, jitter and temporal processing, but those mechanisms do
+not implement a vendor upscaler. No non-native upscaler backend is established
+by this ADR.
 
 Integration rules:
 - DLSS requires NVIDIA's SDK and an NVIDIA RTX GPU. It runs through a
-  native D3D12/Vulkan interop path that wgpu 0.20 does not expose. The SDK
+  backend-specific graphics interop path; eligibility must be established against
+  the actual SDK and renderer rather than the retired wgpu 0.20 baseline. The SDK
   is not redistributed in this repository (AGENTS.md); a backend plugin would
   load it from the user's install. It cannot run on the macOS/M5 host used
   here.
@@ -48,14 +54,12 @@ Integration rules:
 
 ### Ray tracing
 
-The compute ray tracer from ADR 0003 remains: primary and shadow rays with
-linear traversal. It now also renders imported Blender geometry (see STATUS).
-Hardware ray tracing needs a wgpu upgrade to a generation with ray-query
-support, and a BVH/acceleration-structure lifecycle that is rebuilt from
-logical scene data (never saved). Next steps: (1) a CPU-built BVH for the
-compute path, which removes the 4096-triangle cap; (2) a wgpu upgrade spike
-on a separate branch with real device tests; (3) PBR materials and textures
-from glTF, shared by raster and RT.
+The compute prototype remains a separate rendering choice. The hardware path
+now negotiates actual device features and owns BLAS/TLAS over renderer geometry;
+ADRs 0051–0060 add dynamic geometry, alpha tests, shadows, reflections and GI.
+The workspace's current wgpu baseline is declared in Cargo.toml. Logical scenes
+and saves do not contain acceleration-structure/device handles. The initial
+prototype captures below predate those changes and are not hardware-RT evidence.
 
 ## Evidence
 

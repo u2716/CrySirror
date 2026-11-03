@@ -2,6 +2,7 @@
 //! First-class bounded NScripter text VM. Rendering, text layout/reveal, images,
 //! audio and UI state are CrySirror services; no legacy engine is hosted.
 #![forbid(unsafe_code)]
+mod commands;
 mod native;
 mod program;
 use anyhow::{bail, ensure, Context, Result};
@@ -164,6 +165,39 @@ enum Wait {
         number: Option<u16>,
         gosub: bool,
     },
+    Menu {
+        kind: MenuKind,
+        count: usize,
+        resume: Box<Wait>,
+    },
+    Lookback {
+        page: usize,
+        resume: Box<Wait>,
+    },
+    Erased {
+        resume: Box<Wait>,
+    },
+    Dialog {
+        variable: u16,
+    },
+    Input {
+        variable: u16,
+    },
+    Movie {
+        click: bool,
+    },
+    Quake {
+        until: u64,
+        amplitude: [i32; 2],
+        step: u64,
+    },
+    Capture,
+}
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+enum MenuKind {
+    System,
+    Save,
+    Load,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct Call {
@@ -252,6 +286,9 @@ pub struct NscripterVm {
     loaded_persistent: Option<native::Persistent>,
     persistent_write: Option<Box<dyn crysirror_core::service::StorageWrite>>,
     persistent_dirty: bool,
+    save_write: Option<Box<dyn crysirror_core::service::StorageWrite>>,
+    frame_capture: Option<(crysirror_core::image_processing::ImageJob, bool)>,
+    screenshot: Option<(u32, u32, Vec<u8>)>,
 }
 impl NscripterVm {
     pub fn new(client: ClientId, config: Config) -> Result<Self> {
@@ -268,6 +305,9 @@ impl NscripterVm {
             loaded_persistent: None,
             persistent_write: None,
             persistent_dirty: false,
+            save_write: None,
+            frame_capture: None,
+            screenshot: None,
         })
     }
     fn load(&mut self, host: &mut dyn HostServices) -> Result<bool> {
@@ -380,6 +420,13 @@ impl NscripterVm {
         }
     }
     fn clear_text(&mut self, host: &mut dyn HostServices) -> Result<()> {
+        if !self.state.text.is_empty() {
+            let page = self.state.text.clone();
+            let limit = self.state.native.max_history.max(1);
+            self.state.native.history.push(page);
+            let excess = self.state.native.history.len().saturating_sub(limit);
+            self.state.native.history.drain(..excess);
+        }
         if self.state.text_published {
             self.submit(host, vec![json!({"op":"remove","id":TEXT})], vec![])?;
         }
@@ -396,6 +443,13 @@ impl NscripterVm {
     fn text(&mut self, text: &str, host: &mut dyn HostServices) -> Result<()> {
         ensure!(!self.state.define, "native dialogue in define section");
         let text = text.strip_prefix('`').unwrap_or(text);
+        let expanded = commands::expand_text(text, &self.state.vars, self.state.native.english);
+        let (expanded, ruby) = if self.state.native.ruby {
+            commands::split_ruby(&expanded)
+        } else {
+            (expanded, vec![])
+        };
+        let text = expanded.as_str();
         ensure!(
             !text.chars().any(|c| matches!(c, '@' | '\\' | '`')),
             "inline native text control is outside plain-terminal-marker profile"
@@ -427,7 +481,18 @@ impl NscripterVm {
         let size = self.text_size();
         let color = self.state.native.color.unwrap_or(self.config.text.color);
         let bold = self.state.native.bold;
+        let positions: Vec<[i32; 2]> = layout.glyphs.iter().map(|g| g.position).collect();
         self.state.glyphs.extend(layout.glyphs.into_iter().map(|g|json!({"character":g.character,"baseline":[g.position[0],g.position[1]+i32::from(size)],"color":color,"bold":bold})));
+        let ruby_size = i32::from(size) / 2;
+        for (first, len, reading) in &ruby {
+            let Some(start) = positions.get(*first) else { continue };
+            let count = reading.chars().count().max(1) as i32;
+            let span = *len as i32 * i32::from(size);
+            let step = (span / count).max(1);
+            for (at, character) in reading.chars().enumerate() {
+                self.state.glyphs.push(json!({"character":character.to_string(),"baseline":[start[0]+at as i32*step+(step-ruby_size)/2,start[1]+ruby_size/4],"size":ruby_size,"color":color,"bold":false}));
+            }
+        }
         self.state.text += &text;
         let layer = json!({"id":TEXT,"rect":self.window_rect(),"order":[10000,0],"paint":{"kind":"glyph_run","font":self.config.font,"size":self.text_size(),"color":self.state.native.color.unwrap_or(self.config.text.color),"bold":self.state.native.bold,"glyphs":self.state.glyphs,"reveal":{"interval_ms":self.state.speed,"initial_visible":initial}}});
         self.publish_text(layer, host)?;
@@ -495,6 +560,14 @@ impl NscripterVm {
                 input.buttons_pressed &= !(buttons::ENTER | buttons::SPACE | buttons::MOUSE_LEFT);
                 Ok(None)
             }
+            wait @ (Wait::Menu { .. }
+            | Wait::Lookback { .. }
+            | Wait::Erased { .. }
+            | Wait::Dialog { .. }
+            | Wait::Input { .. }
+            | Wait::Movie { .. }
+            | Wait::Quake { .. }
+            | Wait::Capture) => self.poll_extended(wait, host, input),
             Wait::Image { next } => self.poll_image(host, next),
             Wait::Buttons { variable } => self.poll_buttons(host, input, variable),
             Wait::Delay(until) if host.now_ms() < until && !pressed => {
@@ -532,8 +605,36 @@ impl NscripterVm {
                         host.now_ms().saturating_add(interval),
                     )));
                 }
-                if !pressed {
+                let right = input.buttons_pressed & buttons::MOUSE_RIGHT != 0;
+                if right && self.state.native.right_trap.is_some() {
+                    input.buttons_pressed &= !buttons::MOUSE_RIGHT;
+                    let target = self.state.native.right_trap.take().unwrap();
+                    self.state.pc = self.program.as_ref().unwrap().label(&target)?;
+                    self.state.wait = Wait::None;
+                    return Ok(None);
+                }
+                if right && !self.state.native.right_menu_off {
+                    input.buttons_pressed &= !buttons::MOUSE_RIGHT;
+                    self.open_system_menu(Wait::Click { page }, host)?;
+                    return self.poll_wait(host, input);
+                }
+                if input.buttons_pressed & buttons::WHEEL_UP != 0 && !self.state.native.history.is_empty() {
+                    input.buttons_pressed &= !buttons::WHEEL_UP;
+                    self.open_lookback(Wait::Click { page }, host)?;
+                    return self.poll_wait(host, input);
+                }
+                let held = self.state.native.skip_mode || input.buttons_down & buttons::CTRL != 0;
+                if self.state.native.automode && !pressed && !held {
+                    let until = host.now_ms().saturating_add(self.state.native.automode_ms);
+                    self.state.wait = Wait::AutoClick { until, page };
+                    return Ok(Some(VmYield::WaitUntil(until)));
+                }
+                if !pressed && !held {
                     return Ok(Some(VmYield::WaitForInput));
+                }
+                if pressed {
+                    self.state.native.skip_mode = false;
+                    self.state.native.automode = false;
                 }
                 input.buttons_pressed &= !(buttons::ENTER | buttons::SPACE | buttons::MOUSE_LEFT);
                 if page {
@@ -551,7 +652,7 @@ impl NscripterVm {
                     .glyph_reveal_status()
                     .context("native text layer replaced externally")?;
                 if !status.complete {
-                    if pressed {
+                    if pressed || self.state.native.skip_mode || input.buttons_down & buttons::CTRL != 0 {
                         self.submit(
                             host,
                             if self.state.native.shadow_published {
@@ -625,8 +726,23 @@ impl NscripterVm {
                 input.buttons_pressed &= !(buttons::ENTER | buttons::SPACE | buttons::MOUSE_LEFT);
             }
         }
+        self.state.native.pointer = [input.pointer_x, input.pointer_y];
+        self.state.native.mouse_down = input.buttons_down & buttons::MOUSE_LEFT != 0;
+        if let Some(job) = self.save_write.as_mut() {
+            use crysirror_core::service::StorageWriteState;
+            match job.poll()? {
+                StorageWriteState::Pending => {}
+                StorageWriteState::Ready => self.save_write = None,
+                StorageWriteState::Failed(error) => bail!("native save write failed: {error}"),
+            }
+            // The next command may read the slot, so it waits for the commit.
+            if self.save_write.is_some() {
+                return Ok(VmYield::BudgetExhausted);
+            }
+        }
         self.poll_persistent(host)?;
         self.update_cursors(host)?;
+        self.update_animations(host)?;
         if let Some(yielded) = self.poll_wait(host, &mut input)? {
             return Ok(yielded);
         }
@@ -667,13 +783,16 @@ impl NscripterVm {
             {
                 self.persistent_dirty = true;
             }
+            if self.save_write.is_some() && matches!(self.state.wait, Wait::None) {
+                return Ok(VmYield::BudgetExhausted);
+            }
             if !matches!(self.state.wait, Wait::None) {
                 if matches!(self.state.wait, Wait::Audio { .. } | Wait::Image { .. }) {
                     self.state.pc = before.pc;
                 }
                 return Ok(match self.state.wait {
                     Wait::Time(t) => VmYield::WaitUntil(t),
-                    Wait::Audio { .. } => VmYield::BudgetExhausted,
+                    Wait::Audio { .. } | Wait::Movie { .. } | Wait::Quake { .. } | Wait::Capture => VmYield::BudgetExhausted,
                     _ => VmYield::WaitForInput,
                 });
             }
@@ -788,10 +907,12 @@ impl NscripterVm {
             "goto" => {
                 let label = t.expr(&self.state.vars)?.string()?;
                 t.end()?;
+                self.state.native.visited.insert(label.trim_start_matches('*').to_ascii_lowercase());
                 self.state.pc = self.program.as_ref().unwrap().label(&label)?;
             }
             "gosub" => {
                 let label = t.expr(&self.state.vars)?.string()?;
+                self.state.native.visited.insert(label.trim_start_matches('*').to_ascii_lowercase());
                 self.call(&label, &mut t, true)?;
             }
             "getparam" => loop {
@@ -1005,62 +1126,16 @@ impl NscripterVm {
                 );
                 self.flush(host)?;
             }
-            "bgm" | "bgmonce" | "dwave" | "dwaveloop" => {
-                let channel = if command.starts_with("dwave") {
-                    let ch = number(&mut t, &self.state.vars, 0, 49)? as u32;
-                    t.comma()?;
-                    ch
-                } else {
-                    100
-                };
-                let path = asset(&t.expr(&self.state.vars)?.string()?)?;
-                t.end()?;
-                let ticket = host.begin_audio(
-                    self.client,
-                    AudioRequest::PlayAsset {
-                        channel,
-                        source: AudioAsset {
-                            path: VfsPath::new(Mount::Asset, &path)?,
-                            frame_limit: None,
-                        },
-                        intro: None,
-                        parameters: AudioParameters {
-                            looping: matches!(command.as_str(), "bgm" | "dwaveloop"),
-                            bus: if channel == 100 {
-                                PcmBus::Music
-                            } else {
-                                PcmBus::Sfx
-                            },
-                            ..Default::default()
-                        },
-                    },
-                )?;
-                self.state.wait = Wait::Audio {
-                    ticket,
-                    next: self.state.pc,
-                };
-            }
-            "bgmstop" | "dwavestop" => {
-                let channel = if command == "bgmstop" {
-                    100
-                } else {
-                    number(&mut t, &self.state.vars, 0, 49)? as u32
-                };
-                t.end()?;
-                host.submit_audio(
-                    self.client,
-                    AudioRequest::Stop {
-                        channel,
-                        fade_ms: 0.,
-                    },
-                )?;
-            }
             "end" => {
                 t.end()?;
                 self.state.halted = true;
             }
             name if self.state.subroutines.contains(name) => self.call(name, &mut t, false)?,
-            _ => bail!("unsupported NScripter native command `{command}`"),
+            other => {
+                if !self.extended_command(other, &mut t, host)? {
+                    bail!("unsupported NScripter native command `{command}`")
+                }
+            }
         }
         Ok(())
     }
@@ -1114,6 +1189,9 @@ impl NscripterVm {
             }
             t.comma()?;
         }
+        self.show_choices(&choices, targets, number, mode == "selgosub", host)
+    }
+    fn show_choices(&mut self, choices: &[String], targets: Vec<String>, number: Option<u16>, gosub: bool, host: &mut dyn HostServices) -> Result<()> {
         let visible = choices.iter().filter(|s| !s.is_empty()).count();
         ensure!(visible > 0, "native selection has no visible choices");
         let row = u32::from(self.text_size()) + 8;
@@ -1143,7 +1221,7 @@ impl NscripterVm {
         self.state.wait = Wait::Choices {
             targets,
             number,
-            gosub: mode == "selgosub",
+            gosub,
         };
         Ok(())
     }
@@ -1173,6 +1251,38 @@ impl NscripterVm {
         let mut combined = None;
         let mut mode = None;
         loop {
+            if let Some(Token::Word(word)) = t.peek() {
+                if matches!(word.as_str(), "fchk" | "lchk") {
+                    let label = word == "lchk";
+                    t.at += 1;
+                    let name = t.expr(&self.state.vars)?.string()?;
+                    let mut test = if label {
+                        self.program.as_ref().unwrap().label(&name).is_ok()
+                            && self.state.native.visited.contains(&name.trim_start_matches('*').to_ascii_lowercase())
+                    } else {
+                        self.state.native.files.contains(&asset(&name)?)
+                    };
+                    if invert {
+                        test = !test;
+                    }
+                    combined = Some(match (combined, mode) {
+                        (None, _) => test,
+                        (Some(a), Some(true)) => a && test,
+                        (Some(a), _) => a || test,
+                    });
+                    let Some(Token::Op(op)) = t.peek() else { break };
+                    if !matches!(op.as_str(), "&" | "&&" | "|" | "||") {
+                        break;
+                    }
+                    let and = op.starts_with('&');
+                    if let Some(previous) = mode {
+                        ensure!(previous == and, "native if cannot mix and/or");
+                    }
+                    mode = Some(and);
+                    t.at += 1;
+                    continue;
+                }
+            }
             let a = t.expr(&self.state.vars)?;
             let Token::Op(op) = t.take()? else {
                 bail!("native if comparison required")
@@ -1244,6 +1354,16 @@ fn token_source(t: &Token) -> String {
         Token::StrAlias(n) => format!("${n}"),
         Token::Word(s) | Token::Op(s) => s.clone(),
         Token::Comma => ",".into(),
+        Token::ArrayRef { no, dims } => {
+            let mut text = format!("?{}", token_source(no));
+            for dim in dims {
+                text.push('[');
+                text.extend(dim.iter().map(token_source).collect::<Vec<_>>().join(" ").chars());
+                text.push(']');
+            }
+            text
+        }
+        Token::ArrayCell(no, _) => format!("?{no}"),
     }
 }
 fn number(t: &mut Tokens, v: &Variables, min: i32, max: i32) -> Result<i32> {

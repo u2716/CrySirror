@@ -1,20 +1,20 @@
 # 0029: 2D deformable puppets (engine rig format, PuppetSource, eluna bridge)
 
-Date: 2026-10-25. Status: implemented and validated on synthetic rigs. The
-eluna bridge has not been run on a real E-mote file, because none is
-available locally.
+Date: 2026-10-25. Status: implemented synthetic-rig profile. At that checkpoint,
+the eluna bridge had no real-file acceptance. Later native motion-player and
+CatSystem2 character work uses real E-mote data; see dated STATUS.md entries.
+Those later runs do not establish full E-mote masks/actions/physics parity.
 
 ## Context
 
-The owner asked for their eluna E-mote runtime (the Live2D-class player
-vendored with siglus_rs) to become an engine capability, with two
-constraints:
+The eluna E-mote runtime adopted from siglus_rs supplies deformable 2D content
+through a shared puppet interface. The design has two format boundaries:
 - Packages must not use PSB, a third-party container format.
 - The engine provides the interface; the underlying runtime provides the
   data.
 
-Siglus keeps its own E-mote path (ADR 0009); this ADR is about the general
-engine.
+Native adapters map their animation and resource semantics onto this shared
+puppet capability.
 
 ## Decision
 

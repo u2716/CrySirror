@@ -1187,6 +1187,18 @@ fn emit_graph_sprite(
     if tw == 0 || th == 0 {
         return Ok(());
     }
+    // The movie graph's picture spans its screen-sized logical extent.
+    let movie = graph_id == crate::subsystem::resources::videoplayer::MOVIE_GRAPH_ID;
+    let (tw, th) = if movie {
+        (u32::from(graph.get_display_width()), u32::from(graph.get_display_height()))
+    } else {
+        (tw, th)
+    };
+    let (graph_w, graph_h) = if movie {
+        (tw as f32, th as f32)
+    } else {
+        (graph.get_width() as f32, graph.get_height() as f32)
+    };
     let attr = prim.get_attr();
     let use_rect = (attr & 1) != 0;
     let mut text_draw_x = 0.0;
@@ -1218,10 +1230,10 @@ fn emit_graph_sprite(
         let mut w = prim.get_w() as f32;
         let mut h = prim.get_h() as f32;
         if w <= 0.0 {
-            w = graph.get_width() as f32;
+            w = graph_w;
         }
         if h <= 0.0 {
-            h = graph.get_height() as f32;
+            h = graph_h;
         }
         (
             w,
@@ -1232,14 +1244,7 @@ fn emit_graph_sprite(
             h,
         )
     } else {
-        (
-            graph.get_width() as f32,
-            graph.get_height() as f32,
-            0.0,
-            0.0,
-            graph.get_width() as f32,
-            graph.get_height() as f32,
-        )
+        (graph_w, graph_h, 0.0, 0.0, graph_w, graph_h)
     };
 
     let mut clip_x = 0.0;

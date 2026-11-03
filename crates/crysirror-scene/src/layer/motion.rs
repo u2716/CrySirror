@@ -8,7 +8,7 @@ use anyhow::{ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-/// Logical property controlled by one retained two-dimensional motion track.
+/// Logical property controlled by one retained scalar motion track.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MotionProperty {
@@ -16,26 +16,70 @@ pub enum MotionProperty {
     X,
     /// Local rectangle y coordinate in logical pixels.
     Y,
+    /// Local transform depth, distinct from explicit draw-order scopes.
+    Z,
     /// Layer horizontal transform scale; UI widgets reject this property.
     ScaleX,
     /// Layer vertical transform scale; UI widgets reject this property.
     ScaleY,
+    /// Layer depth scale; UI widgets reject this property.
+    ScaleZ,
+    /// Layer rotation about its local X axis, in radians.
+    RotationX,
+    /// Layer rotation about its local Y axis, in radians.
+    RotationY,
+    /// Layer rotation about its local Z axis, in radians.
+    RotationZ,
+    /// Local transform pivot X coordinate in logical pixels.
+    PivotX,
+    /// Local transform pivot Y coordinate in logical pixels.
+    PivotY,
+    /// Local transform pivot Z coordinate in logical pixels.
+    PivotZ,
+    /// Inherited Layer opacity in0..255. Each applied sample truncates toward
+    /// zero to a stored byte; status reports that same applied value.
+    Opacity,
 }
 impl MotionProperty {
     pub(crate) fn layer_value(self, layer: &super::LayerSpec) -> f32 {
         match self {
             Self::X => layer.rect[0],
             Self::Y => layer.rect[1],
+            Self::Z => layer.transform.z,
             Self::ScaleX => layer.transform.scale_x,
             Self::ScaleY => layer.transform.scale_y,
+            Self::ScaleZ => layer.transform.scale_z,
+            Self::RotationX => layer.transform.rotate_x,
+            Self::RotationY => layer.transform.rotate_y,
+            Self::RotationZ => layer.transform.rotate,
+            Self::PivotX => layer.transform.pivot_x,
+            Self::PivotY => layer.transform.pivot_y,
+            Self::PivotZ => layer.transform.pivot_z,
+            Self::Opacity => f32::from(layer.opacity),
         }
     }
     pub(crate) fn set_layer(self, layer: &mut super::LayerSpec, value: f32) {
         match self {
             Self::X => layer.rect[0] = value,
             Self::Y => layer.rect[1] = value,
+            Self::Z => layer.transform.z = value,
             Self::ScaleX => layer.transform.scale_x = value,
             Self::ScaleY => layer.transform.scale_y = value,
+            Self::ScaleZ => layer.transform.scale_z = value,
+            Self::RotationX => layer.transform.rotate_x = value,
+            Self::RotationY => layer.transform.rotate_y = value,
+            Self::RotationZ => layer.transform.rotate = value,
+            Self::PivotX => layer.transform.pivot_x = value,
+            Self::PivotY => layer.transform.pivot_y = value,
+            Self::PivotZ => layer.transform.pivot_z = value,
+            Self::Opacity => layer.opacity = value as u8,
+        }
+    }
+    fn applied(self, value: f32) -> f32 {
+        if self == Self::Opacity {
+            value.trunc()
+        } else {
+            value
         }
     }
     pub(crate) fn rect_value(self, rect: [f32; 4]) -> Result<f32> {
@@ -84,7 +128,8 @@ pub struct MotionTrackStatus {
     pub from: f32,
     /// Requested final property value.
     pub to: f32,
-    /// Current sampled value already applied to the target.
+    /// Current sampled value already applied to the target, including byte
+    /// quantization for Layer opacity.
     pub current: f32,
     /// Duration in the track's declared clock units.
     pub duration: u64,
@@ -102,7 +147,10 @@ pub struct MotionTrackStatus {
 pub struct MotionStatus {
     /// Active or completed tracks, in deterministic property order.
     pub tracks: Vec<MotionTrackStatus>,
-    /// Every retained track has reached its endpoint.
+    ///Retained external procedural producers in deterministic driver order.
+    #[serde(default)]
+    pub drivers: Vec<super::ExternalMotionStatus>,
+    /// Every retained track and external producer has completed.
     pub complete: bool,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -116,15 +164,24 @@ struct Track {
 #[serde(deny_unknown_fields)]
 pub(crate) struct MotionTracks {
     by_owner: BTreeMap<u32, BTreeMap<u32, BTreeMap<MotionProperty, Track>>>,
+    #[serde(default)]
+    pub(super) external: super::external_motion::ExternalMotions,
 }
 fn endpoints(property: MotionProperty, from: f32, to: f32, scale: bool) -> Result<()> {
+    ensure!(
+        scale || matches!(property, MotionProperty::X | MotionProperty::Y),
+        "UI motion only supports rectangle X/Y"
+    );
     ensure!(
         [from, to]
             .iter()
             .all(|v| v.is_finite() && v.abs() <= 1_000_000.),
         "motion endpoint bounds"
     );
-    if matches!(property, MotionProperty::ScaleX | MotionProperty::ScaleY) {
+    if matches!(
+        property,
+        MotionProperty::ScaleX | MotionProperty::ScaleY | MotionProperty::ScaleZ
+    ) {
         ensure!(scale, "UI motion only supports rectangle X/Y");
         ensure!(
             [from, to]
@@ -132,6 +189,12 @@ fn endpoints(property: MotionProperty, from: f32, to: f32, scale: bool) -> Resul
                 .all(|v| v.abs() >= 0.0001 && v.abs() <= 4096.)
                 && from.signum() == to.signum(),
             "motion cannot cross a singular transform scale"
+        );
+    }
+    if property == MotionProperty::Opacity {
+        ensure!(
+            [from, to].iter().all(|v| (0.0..=255.0).contains(v)),
+            "motion opacity endpoints must be0..255"
         );
     }
     Ok(())
@@ -168,7 +231,7 @@ impl MotionTracks {
             external: spec.external,
             elapsed: 0,
         };
-        let value = track.curve.sample(0);
+        let value = spec.property.applied(track.curve.sample(0));
         self.by_owner
             .entry(owner)
             .or_default()
@@ -196,7 +259,7 @@ impl MotionTracks {
             "motion elapsed cannot move backwards"
         );
         track.elapsed = elapsed;
-        Ok(track.curve.sample(elapsed))
+        Ok(property.applied(track.curve.sample(elapsed)))
     }
     pub(crate) fn end(
         &mut self,
@@ -214,17 +277,18 @@ impl MotionTracks {
                 .and_then(|t| t.remove(&property))
                 .context("motion track missing")?;
             if finish {
-                values.push((property, track.curve.end));
+                values.push((property, property.applied(track.curve.end)));
             }
         } else if let Some(tracks) = self.by_owner.get_mut(&owner).and_then(|o| o.remove(&id)) {
             if finish {
-                values.extend(tracks.into_iter().map(|(p, t)| (p, t.curve.end)));
+                values.extend(tracks.into_iter().map(|(p, t)| (p, p.applied(t.curve.end))));
             }
         }
         self.clean();
         Ok(values)
     }
     pub(crate) fn cancel(&mut self, owner: u32, id: u32) {
+        self.external.cancel_layer(owner, id);
         if let Some(o) = self.by_owner.get_mut(&owner) {
             o.remove(&id);
         }
@@ -247,16 +311,18 @@ impl MotionTracks {
                 property,
                 from: t.curve.start,
                 to: t.curve.end,
-                current: t.curve.sample(t.elapsed),
+                current: property.applied(t.curve.sample(t.elapsed)),
                 duration: t.curve.duration_ms,
                 elapsed: t.elapsed,
                 external: t.external,
                 complete: t.curve.complete(t.elapsed),
             })
             .collect::<Vec<_>>();
+        let drivers = self.external.status(owner, id);
         MotionStatus {
-            complete: tracks.iter().all(|t| t.complete),
+            complete: tracks.iter().all(|t| t.complete) && drivers.iter().all(|d| d.complete),
             tracks,
+            drivers,
         }
     }
     pub(crate) fn tick(&mut self, delta: u64) -> Vec<(u32, u32, MotionProperty, f32)> {
@@ -266,7 +332,12 @@ impl MotionTracks {
                 for (&property, t) in tracks {
                     if !t.external && !t.curve.complete(t.elapsed) {
                         t.elapsed = t.elapsed.saturating_add(delta).min(t.curve.duration_ms);
-                        values.push((owner, id, property, t.curve.sample(t.elapsed)));
+                        values.push((
+                            owner,
+                            id,
+                            property,
+                            property.applied(t.curve.sample(t.elapsed)),
+                        ));
                     }
                 }
             }
@@ -274,12 +345,15 @@ impl MotionTracks {
         values
     }
     pub(crate) fn validate(&self, scale: bool, target: impl Fn(u32, u32) -> bool) -> Result<()> {
+        self.external.validate(scale, &target)?;
         let mut total = 0;
         for (&owner, targets) in &self.by_owner {
             let mut count = 0;
             for (&id, tracks) in targets {
                 ensure!(
-                    target(owner, id) && !tracks.is_empty() && tracks.len() <= 4,
+                    target(owner, id)
+                        && !tracks.is_empty()
+                        && tracks.len() <= if scale { 13 } else { 2 },
                     "motion target missing"
                 );
                 for (&p, t) in tracks {

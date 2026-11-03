@@ -41,6 +41,7 @@ Debug.message("second " + b);
         r.tick(16, InputFrame::default()).unwrap();
     }
     let dialog = r.host.engine.ui.dialogs.get(1).expect("dialog open").clone();
+    assert!(!r.presentation_pending(), "the owner must be able to see and answer the modal");
     assert_eq!(dialog.title, "確認");
     assert_eq!(dialog.buttons.iter().map(|b| b.id).collect::<Vec<_>>(), [6, 7]);
     assert!(!log(&r).contains("first"));

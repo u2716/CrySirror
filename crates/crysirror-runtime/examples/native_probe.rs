@@ -102,16 +102,44 @@ fn main() -> Result<()> {
     }
     let mut error = None;
     let mut completed = 0;
-    for _ in 0..frames {
-        match rt.tick(16, InputFrame::default()) {
-            Ok(()) => completed += 1,
+    let mut extracted = 0;
+    let mut last_primitives = 0;
+    let wall_pacing_ms=std::env::var("CRYSIRROR_PROBE_WALL_PACING_MS").ok()
+        .map(|v|v.parse::<u64>()).transpose()?.unwrap_or(0);
+    ensure!(wall_pacing_ms<=16,"probe wall pacing must be 0..=16ms");
+    // Optional real input for device-free original-game progression. This is
+    // a three-frame mouse down/up, not a scene jump or native result override.
+    let click = std::env::var("CRYSIRROR_PROBE_CLICK_AT").ok().map(|v| -> Result<[i32; 3]> {
+        let values = v.split(',').map(str::parse::<i32>).collect::<std::result::Result<Vec<_>, _>>()?;
+        let values: [i32; 3] = values.try_into().map_err(|_| anyhow::anyhow!("click format: frame,x,y"))?;
+        ensure!(values[0] >= 0 && values[0] as u32 <= frames.saturating_sub(4), "click frame budget");
+        Ok(values)
+    }).transpose()?;
+    for frame in 0..frames {
+        let mut input = InputFrame::default();
+        if let Some([at, x, y]) = click {
+            if frame >= at as u32 {
+                input.pointer_x = x; input.pointer_y = y;
+                if frame < at as u32 + 3 { input.buttons_down = crysirror_core::service::buttons::MOUSE_LEFT; }
+                if frame == at as u32 { input.buttons_pressed = crysirror_core::service::buttons::MOUSE_LEFT; }
+            }
+        }
+        match rt.tick(16, input) {
+            Ok(()) => {
+                completed+=1;
+                match rt.host.engine.frame(rt.project.canvas) {
+                    Ok(frame)=>{extracted+=1;last_primitives=frame.len();}
+                    Err(error_value)=>{error=Some(format!("engine frame extraction: {error_value:#}"));break;}
+                }
+            },
             Err(e) => {
                 error = Some(format!("{e:#}"));
                 break;
             }
         }
+        if wall_pacing_ms>0 {std::thread::sleep(std::time::Duration::from_millis(wall_pacing_ms));}
     }
-    let report = serde_json::json!({"frames_completed":completed,"requested_frames":frames,"gpu_rendered":false,"error":error,"runtime":rt.inspect()});
+    let report = serde_json::json!({"frames_completed":completed,"frames_extracted":extracted,"last_primitives":last_primitives,"requested_frames":frames,"wall_pacing_ms":wall_pacing_ms,"mouse_click":click,"gpu_rendered":false,"error":error,"runtime":rt.inspect()});
     std::fs::write(&args[3], serde_json::to_vec_pretty(&report)?)?;
     println!(
         "completed={completed}/{frames}; {}",

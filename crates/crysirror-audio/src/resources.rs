@@ -224,10 +224,10 @@ impl AudioResources {
         );
         self.jobs.admit(client)?;
         ensure!(
-            self.resources.len() + self.reserved.len() < 128
+            self.resources.len() + self.reserved.len() < 1024
                 && self.resources.keys().filter(|h| h.client == client).count()
                     + self.reserved.values().filter(|v| **v == client).count()
-                    < 32,
+                    < 256,
             "prepared audio handle capacity exceeded"
         );
         let budget = self.budget.clone();

@@ -67,30 +67,15 @@ pub(crate) fn probe_context() -> DecodeContext {
 /// Alice Soft ALD: 24-bit sector offsets (value << 8); the first one is the
 /// byte size of the offset table itself. A zero offset ends the list.
 fn ald(s: &dyn AssetReader, cx: &DecodeContext) -> Result<Vec<Row>> {
-    let r24 = |b: &[u8]| (u64::from(b[0]) << 8) | (u64::from(b[1]) << 16) | (u64::from(b[2]) << 24);
-    let count = r24(&bytes(s, 0, 3, 3)?) / 3;
-    limits(cx, count as usize)?;
-    let table = index(s, cx, 3, count * 3)?;
-    let size = length(s)?;
-    let mut rows = Vec::new();
-    for raw in table.chunks_exact(3) {
-        let offset = r24(raw);
-        if offset == 0 {
-            break;
-        }
-        let header_size = u64::from(le32(&bytes(s, offset, 4, 4)?, 0)?);
-        if size - (offset + 4) >= header_size {
-            ensure!(header_size >= 16, "ALD entry header too small");
-            let header = index(s, cx, offset, header_size)?;
-            let path = sjis(zstr(&header[16..]))?;
-            rows.push(Row::raw(
-                path,
-                offset + header_size,
-                u64::from(le32(&header, 4)?),
-            ));
-        }
-    }
-    Ok(rows)
+    crate::ald_catalog::physical_files(s, cx)?
+        .into_iter()
+        .map(|entry| {
+            let offset = entry.metadata["offset"]
+                .as_u64()
+                .context("ALD physical offset")?;
+            Ok(Row::raw(entry.path, offset, entry.size).meta(entry.metadata))
+        })
+        .collect()
 }
 
 fn afa_probe(s: &dyn AssetReader) -> Result<bool> {
@@ -125,21 +110,16 @@ fn afa(s: &dyn AssetReader, cx: &DecodeContext) -> Result<Vec<Row>> {
 }
 
 fn alk(s: &dyn AssetReader, cx: &DecodeContext) -> Result<Vec<Row>> {
-    let count = u64::from(le32(&bytes(s, 4, 4, 4)?, 0)?);
-    limits(cx, count as usize)?;
-    let table = index(s, cx, 8, count * 8)?;
-    let mut rows = Vec::new();
-    for pair in table.chunks_exact(8) {
-        let (offset, size) = (le32(pair, 0)?, le32(pair, 4)?);
-        if size != 0 {
-            rows.push(Row::raw(
-                format!("{:03}.dat", rows.len()),
-                offset.into(),
-                size.into(),
-            ));
-        }
-    }
-    Ok(rows)
+    crate::alk::physical_files(s, cx)?
+        .into_iter()
+        .enumerate()
+        .map(|(ordinal, entry)| {
+            let offset = entry.metadata["offset"]
+                .as_u64()
+                .context("ALK source offset")?;
+            Ok(Row::raw(format!("{ordinal:03}.dat"), offset, entry.size).meta(entry.metadata))
+        })
+        .collect()
 }
 
 /// Alice Soft System1-3 DAT: 256-byte sector table. Upstream also picked an

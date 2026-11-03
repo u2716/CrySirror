@@ -74,7 +74,7 @@ impl Slot {
             key: key.into(),
             parameters: AudioParameters {
                 // PCMCH script volume is independent of GLOBAL.PCM volume.
-                mix_group: None,
+                mix_group: Some(crate::audio::pcmch_group(ch)),
                 gain: if fade_ms > 0. && !ready {
                     0.
                 } else {
@@ -119,6 +119,9 @@ impl Slot {
     }
 }
 impl Channels {
+    pub(crate) fn allocated(&self, ch: usize) -> bool {
+        self.0.contains_key(&ch)
+    }
     fn slot(&mut self, ch: usize) -> Result<&mut Slot> {
         ensure!(ch < MAX_CHANNELS, "Siglus PCMCH index exceeds 256");
         Ok(self.0.entry(ch).or_default())
@@ -313,25 +316,6 @@ fn stored(ctx: &mut CommandContext, ch: usize) -> &mut PcmChPersistentState {
     }
     &mut ctx.globals.pcmch_persistent[ch]
 }
-fn routing(ctx: &CommandContext, s: &PcmChPersistentState) -> Result<()> {
-    ensure!(
-        matches!(s.volume_type, 2 | 3)
-            && s.chara_no < 0
-            && !s.bgm_fade_target_flag
-            && !s.bgm_fade2_target_flag
-            && !s.bgm_fade_source_flag,
-        "Siglus PCMCH character/category/BGM duck routing unsupported"
-    );
-    let cfg = &ctx.globals.syscom.original_config;
-    ensure!(
-        cfg.play_all_sound_check
-            && cfg.all_sound_user_volume == 255
-            && cfg.play_sound_check[s.volume_type as usize]
-            && cfg.sound_user_volume[s.volume_type as usize] == 255,
-        "Siglus PCMCH nondefault native system volume routing unsupported"
-    );
-    Ok(())
-}
 fn source(ctx: &CommandContext, s: &PcmChPersistentState) -> Result<(String, bool, i64)> {
     if !s.pcm_name.is_empty() {
         return Ok((s.pcm_name.clone(), s.loop_flag, s.fade_in_time));
@@ -387,7 +371,6 @@ fn source(ctx: &CommandContext, s: &PcmChPersistentState) -> Result<(String, boo
     bail!("Siglus PCMCH PLAY/READY needs a supported source identity")
 }
 fn start(ctx: &mut CommandContext, ch: usize, s: &PcmChPersistentState) -> Result<()> {
-    routing(ctx, s)?;
     let (key, looping, fade) = source(ctx, s)?;
     ctx.pcm.ensure_group()?;
     ctx.pcm
@@ -673,7 +656,7 @@ mod tests {
     fn pcmch_se_category_keeps_channel_volume_independent_of_global_pcm_group() {
         let mut ctx = CommandContext::new(".".into());
         ctx.pcm
-            .set_volume_raw(&mut crate::audio::AudioHub, 0)
+            .set_volume_raw(&mut crate::audio::AudioHub::default(), 0)
             .unwrap();
         ctx.pcm.channels.set_volume(0, 128, 0).unwrap();
         let state = PcmChPersistentState {
@@ -694,17 +677,16 @@ mod tests {
         assert_eq!(params.gain, 128. / 255.);
         assert!(params.paused);
         assert_eq!(
-            params.mix_group, None,
-            "GLOBAL.PCM script gain must not alter a PCMCH source"
+            params.mix_group.as_deref(),
+            Some("siglus.system.pcmch.0"),
+            "PCMCH system route is separate from GLOBAL.PCM script gain"
         );
         ctx.globals.syscom.original_config.sound_user_volume[3] = 128;
-        assert!(
-            start(&mut ctx, 0, &state)
-                .unwrap_err()
-                .to_string()
-                .contains("nondefault"),
-            "an unmapped system-volume factor is never discarded"
-        );
+        start(&mut ctx, 0, &state).unwrap();
+        *stored(&mut ctx, 0) = state;
+        crate::native_sound::update_audio_routing(&mut ctx, 0, true).unwrap();
+        assert!(ctx.audio.pending.iter().any(|op| matches!(op,
+            AudioRequest::SetMixGroupGain {name,gain,..} if name == "siglus.system.pcmch.0" && (*gain-128./255.).abs()<1e-6)));
     }
     #[test]
     fn sparse_bgm_indices_are_bounded_before_native_alias_lookup() {
@@ -724,7 +706,7 @@ mod tests {
         );
     }
     #[test]
-    fn original_nonpersistent_restore_only_restores_volume_and_rejects_live_unknown_routing() {
+    fn original_nonpersistent_restore_only_restores_volume_and_live_source_keeps_system_route() {
         let mut ctx = CommandContext::new(".".into());
         restore(
             &mut ctx,
@@ -739,19 +721,20 @@ mod tests {
         assert_eq!(ctx.pcm.slot_volume_raw(0), 64);
         assert!(!ctx.pcm.pending());
         assert_eq!(ctx.pcm.slot_volume_raw(1), 255);
-        assert!(
-            restore(
-                &mut ctx,
-                1,
-                PcmChPersistentState {
-                    pcm_name: "cue".into(),
-                    loop_flag: true,
-                    bgm_fade_source_flag: true,
-                    ..Default::default()
-                }
-            )
-            .is_err()
-        );
-        assert!(ctx.pcm.channels.active().is_empty());
+        restore(
+            &mut ctx,
+            1,
+            PcmChPersistentState {
+                pcm_name: "cue".into(),
+                loop_flag: true,
+                bgm_fade_source_flag: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(ctx.pcm.channels.active(), vec![1]);
+        crate::native_sound::update_audio_routing(&mut ctx, 0, true).unwrap();
+        assert!(ctx.audio.pending.iter().any(|op| matches!(op,
+            AudioRequest::SetMixGroupGain {name,gain,..} if name == "siglus.system.pcmch.1" && *gain == 1.)));
     }
 }

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Optional native gamepad event source. Owns GilRs, never enters saved data.
-//! Compile with desktop feature `gamepad = ["dep:gilrs", "scripting"]`.
+//! Compile with desktop feature `gamepad = ["dep:gilrs"]`.
 use anyhow::{Context, Result};
 use crysirror_core::service::InputFrame;
 use crysirror_engine::input_api::{ActionMap, GamepadEvent, GamepadFamily, PadAxis, PadButton};

@@ -35,8 +35,10 @@ allocation. Entry offsets/sizes and table/count limits are checked before
 resource publication. Unknown formats, unsupported SPB conversion, unsupported
 XP3 layouts and missing encrypted-entry profiles fail visibly.
 
-The generated inventory contains all **289** concrete upstream decoder IDs;
-only three are marked ported and two partial. The remaining 284 are pending.
+At initial acceptance the inventory contained all **289** concrete decoder IDs,
+with three ported and two partial. The then-pending 284 are a historical count:
+ADR 0065 subsequently completed the named migration scope with per-variant
+limitations. Current support is defined by its ledgers, not this first batch.
 The often quoted source count 290 includes the registration helper's template
 definition. The inventory is a migration ledger, never a registration list.
 See `crates/crysirror-formats-arc/UPSTREAM.md` for exact variants, exceptions,
@@ -45,23 +47,24 @@ metadata semantics and verification commands.
 ## Validation evidence
 
 Implementation, compilation and behavior are recorded separately in the
-plugin's UPSTREAM document. Current actual results: the plugin compiles;
+plugin's UPSTREAM document. At the original checkpoint the plugin compiled;
 seven self-authored behavior tests pass; an explicitly executed ignored
 external-corpus test passes over 14 upstream synthetic fixtures against the
 original C++ tests' expected outputs. The C++ executable was not built or run.
 No game asset, font, embedded title key, proprietary SDK, device or hardware
 result is distributed or claimed by these tests.
 
-Follow-on work should port cohesive format groups and update each inventory
-entry only after its actual parser/decoder and behavior checks exist. Image,
-audio, file codecs and game-specific cryptographic profiles remain pending
-unless explicitly named by that ledger.
+The expanded archive/image/audio/file migration is recorded in ADR 0065.
+Per-format updates still require an actual implementation and behavior evidence;
+registration alone is not sufficient. Unsupported variants and title-specific
+cryptographic profiles remain explicit in the current ledgers.
 
 ## Engine integration
 
 The reflective `Resources` class/global exposes installed formats/transforms,
 bounded detection, paged metadata, client decode profiles and archive mounts.
-The desktop `arc-formats` feature enables the migrated plugins explicitly.
+The desktop now links the migrated format plugins unconditionally. The library
+feature boundary remains separate; `arc-formats` is no longer a desktop switch.
 Three engine integration tests generate SAR/PNG fixtures and pass through the
 existing Bitmap, Fs, Assets and capability storage APIs. They verify decoded
 pixels, scoped host keys, client isolation, mount traversal rejection and cache

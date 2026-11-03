@@ -1349,3 +1349,52 @@ mod tests {
         assert_eq!(a, b);
     }
 }
+
+/// Recover the private word of an encrypted E-mote PSB from its own header: the first
+/// keystream DWORD depends only on the key, and every known layout stores the same value
+/// in its first two header fields, which also confirms the answer. No search is involved.
+pub fn emote_key_from_header(data: &[u8]) -> Option<u32> {
+    if data.len() < 16 || &data[..3] != b"PSB" {
+        return None;
+    }
+    const SEED: [u32; 3] = [0x075B_CD15, 0x159A_55E5, 0x1F12_3BB5];
+    let word = |at: usize| Some(u32::from_le_bytes(data.get(at..at + 4)?.try_into().ok()?));
+    let (first, second) = (word(8)?, word(12)?);
+    let mix = SEED[0] ^ SEED[0].wrapping_shl(11);
+    for header in [0x38u32, 0x34, 0x30, 0x2c, 0x28] {
+        // output = mix ^ key ^ ((mix ^ (key >> 11)) >> 8), inverted by fixed-point steps.
+        let target = first ^ header ^ mix ^ (mix >> 8);
+        let mut key = target;
+        for _ in 0..3 {
+            key = target ^ (key >> 19);
+        }
+        let mut state = [SEED[0], SEED[1], SEED[2], key];
+        let mut next = || {
+            let (v5, v6) = (state[3], state[0] ^ state[0].wrapping_shl(11));
+            state = [state[1], state[2], v5, v6 ^ v5 ^ ((v6 ^ (v5 >> 11)) >> 8)];
+            state[3]
+        };
+        let (a, b) = (next(), next());
+        if first ^ a == header && second ^ b == header {
+            return Some(key);
+        }
+    }
+    None
+}
+#[cfg(test)]
+mod key_tests {
+    use super::*;
+    #[test]
+    fn the_key_comes_back_from_an_encrypted_header() {
+        let key = 0x1234_5678u32;
+        let mut state = [0x075B_CD15u32, 0x159A_55E5, 0x1F12_3BB5, key];
+        let mut bytes = b"PSB\0\x04\0\x01\0".to_vec();
+        for _ in 0..2 {
+            let (v5, v6) = (state[3], state[0] ^ state[0].wrapping_shl(11));
+            state = [state[1], state[2], v5, v6 ^ v5 ^ ((v6 ^ (v5 >> 11)) >> 8)];
+            bytes.extend((0x38 ^ state[3]).to_le_bytes());
+        }
+        assert_eq!(emote_key_from_header(&bytes), Some(key));
+        assert_eq!(emote_key_from_header(b"not a psb header"), None);
+    }
+}

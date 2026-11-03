@@ -9,8 +9,9 @@ The complete pinned arc_unpacker image inventory contains 96 decoder IDs.
 All 96 now have registered Rust implementations/adapters in the optional
 `crysirror-formats-arc` crate: A21, B37, C32, D5 and the reused CBG CPU decoder.
 The image ledger records 80 ported and 16 partial implementations. Combining
-these with the five archive decoders gives 101 registered implementations;
-188 other archive/audio/file decoders are still pending. The inventory tool
+these with the initial five archive decoders gave 101 implementations at that
+image-pipeline checkpoint. The other 188 subsequently received implementations
+under ADR 0065, with explicit variant limits. The inventory tool
 retains all 289 original registrations and the 870-file source hash manifest.
 
 `crysirror-image` owns the safe CPU `ImageFormat`/`ImageDecodeContext` contract,

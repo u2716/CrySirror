@@ -31,12 +31,64 @@ pub struct Sys {
     pub mouse_cursor: i32,
     pub misc_flags: Vec<i32>,
     pub system_menu_animation: bool,
+    /// Original `System::remembered`: switches and values scripts set and
+    /// read back (adopted RealLiveMax `sys_max` tables).
+    pub remembered: std::collections::BTreeMap<u16, i32>,
+    /// Script-visible sound state (volumes, names, fades); playback is the
+    /// engine's.
+    pub sound: crate::vm::sound_state::SoundState,
+    /// `#CGTABLE_FILENAME`, decoded by the shared resource catalogue.
+    pub cg_table: Option<std::rc::Rc<crysirror_resource::cg_catalog::CgCatalog>>,
+    pub cg_table_enabled: bool,
+    /// `SET_MOUSEAREA`: the pointer is confined to `(x1, y1, x2, y2)`.
+    pub mouse_area: Option<(i32, i32, i32, i32)>,
+    /// `SetCursorPos`: a pointer warp the host is asked to perform.
+    pub warp_cursor: Option<(i32, i32)>,
+    /// Interface sounds (`#SE.nnn`) the VM asked for; the adapter plays them.
+    pub se_requests: Vec<i32>,
+    /// `select_btnobjstart`: the polled button-object selection.
+    pub polled_buttons: Option<crate::vm::select::PolledButtons>,
+}
+
+/// A mouse button of the original input events.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Button {
+    Left,
+    Right,
+}
+
+/// Keys VM waits react to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Key {
+    Escape,
+    Enter,
+    Space,
+}
+
+/// Original `input::InputEvent`s of one frame, filled by the adapter from
+/// the shared input frame's edges.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputEvent {
+    Press(Button),
+    Release(Button),
+    KeyDown(Key),
 }
 
 /// Clicks the adapter received and VM waits may consume.
 #[derive(Debug, Clone, Default)]
 pub struct Input {
     pub clicks: Vec<(i32, i32)>,
+    /// This frame's button/key edges, consumed by VM selections.
+    pub events: Vec<InputEvent>,
+    /// Pointer position at the start of the frame.
+    pub mouse: (i32, i32),
+    /// Accumulated wheel notches since `MOUSEWHEELCLEAR` (-up, +down).
+    pub wheel: i32,
+    /// Original double-click records (left, right) since `DBLCLKCLEAR`.
+    pub double_clicks: [Option<(i32, i32)>; 2],
+    /// Key codes pressed since `CLEAR_KEYTABLE` and those held now.
+    pub keys_pressed: std::collections::BTreeSet<i32>,
+    pub keys_held: std::collections::BTreeSet<i32>,
     pub key_mouse: bool,
     pub ctrl: bool,
     pub shift: bool,
@@ -74,6 +126,21 @@ impl Sys {
             mouse_cursor: 0,
             misc_flags: Vec::new(),
             system_menu_animation: true,
+            remembered: Default::default(),
+            sound: crate::vm::sound_state::SoundState::new(),
+            cg_table: None,
+            cg_table_enabled: true,
+            mouse_area: None,
+            warp_cursor: None,
+            se_requests: Vec::new(),
+            polled_buttons: None,
+        }
+    }
+
+    /// Original `System::play_se`: an interface sound by `#SE` number.
+    pub fn play_se(&mut self, number: i32) {
+        if !self.fast_forward {
+            self.se_requests.push(number);
         }
     }
 

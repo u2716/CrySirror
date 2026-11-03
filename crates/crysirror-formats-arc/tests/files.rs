@@ -155,6 +155,7 @@ fn dsc_canonical_codes() {
     let mut d = b"DSC FORMAT 1.00\0".to_vec();
     d.resize(544, 0);
     put32(&mut d, 20, 3);
+    put32(&mut d, 24, 3);
     let mut key = 0u32;
     for i in 0..512 {
         let a = 0x4e35u32.wrapping_mul(key & 0xffff);

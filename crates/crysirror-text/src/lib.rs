@@ -13,13 +13,19 @@ use std::{collections::BTreeMap, sync::Arc};
 pub mod dynamic;
 pub mod precomputed_font;
 pub mod format;
+pub mod byte_replace;
+pub mod printf32;
 pub mod glyph;
 pub mod glyph_blur;
 pub mod glyph_coverage;
 pub mod grid;
+pub mod bitmap_layout;
+pub mod message;
+pub mod unit_flow;
 pub mod layout;
 pub mod markup;
 pub mod raster;
+mod styled_glyph;
 pub mod reveal;
 pub mod rich;
 pub mod sdf;
@@ -27,6 +33,8 @@ pub mod sdf;
 #[derive(Clone, Default)]
 pub struct TextSystem {
     fonts: Arc<BTreeMap<String, (FontArc, String)>>,
+    font_families: Arc<BTreeMap<String, Vec<String>>>,
+    font_styles: Arc<BTreeMap<String,Option<crysirror_core::service::FontFaceStyle>>>,
     // Font bytes remain CPU resources, never project/save data or atlas output.
     font_sources: Arc<BTreeMap<String, (Arc<[u8]>, u32)>>,
     dynamic: dynamic::Catalog,
@@ -159,14 +167,29 @@ impl TextSystem {
             self.fonts.contains_key(alias) || self.fonts.len() < 64,
             "font resource limit"
         );
-        rustybuzz::Face::from_slice(&bytes, face_index).context("invalid shaping face/index")?;
+        let face=rustybuzz::Face::from_slice(&bytes, face_index).context("invalid shaping face/index")?;
+        let families=dynamic::family_names(&face)?;
+        let style=dynamic::face_style(&face);
         let font: FontArc = ab_glyph::FontVec::try_from_vec_and_index(bytes.clone(), face_index)
             .map_err(|e| anyhow::anyhow!("font {alias}: {e}"))?
             .into();
         Arc::make_mut(&mut self.font_sources)
             .insert(alias.into(), (Arc::from(bytes), face_index));
         Arc::make_mut(&mut self.fonts).insert(alias.into(), (font, digest));
+        Arc::make_mut(&mut self.font_families).insert(alias.into(),families);
+        Arc::make_mut(&mut self.font_styles).insert(alias.into(),style);
         Ok(())
+    }
+    /// Resolve only preinstalled static aliases/family names. Metadata is
+    /// prepared at face installation, so this bounded lookup parses no bytes.
+    pub fn static_font_alias(&self,name:&str)->Option<String> {
+        if self.fonts.contains_key(name) { return Some(name.into()); }
+        self.font_families.iter().find(|(_,families)|families.iter().any(|f|f.eq_ignore_ascii_case(name))).map(|(alias,_)|alias.clone())
+    }
+    /// Cached OS/2 face style, scoped like glyph lookup; no parsing occurs here.
+    pub fn font_style(&self,alias:&str)->Result<Option<crysirror_core::service::FontFaceStyle>> {
+        if let Some(style)=self.font_styles.get(alias) {return Ok(*style);}
+        Ok(self.dynamic_face(alias)?.style)
     }
     /// Content digest of a static or client-authorized dynamic face.
     pub fn font_digest(&self, alias: &str) -> Result<String> {
@@ -312,16 +335,31 @@ impl TextSystem {
         canvas: [u32; 2],
         glyphs: &[PositionedGlyph],
     ) -> Result<Vec<u8>> {
+        self.rasterize_glyphs_cancellable(font, size, canvas, glyphs, &|| Ok(()))
+    }
+    /// The same white-RGB/coverage-alpha primitive, with cooperative cancellation
+    /// and bounded actual outline work. A worker can freeze its face before
+    /// calling this method; it never publishes mutable font or image state.
+    pub fn rasterize_glyphs_cancellable(
+        &self,
+        font: &str,
+        size: u16,
+        canvas: [u32; 2],
+        glyphs: &[PositionedGlyph],
+        check: &dyn Fn() -> Result<()>,
+    ) -> Result<Vec<u8>> {
+        check()?;
         Self::validate_surface(size, canvas)?;
         ensure!(glyphs.len() <= 1024 * 1024, "too many positioned glyphs");
-        if let Some(face)=self.precomputed_face(font)? {face.check_size(f32::from(size))?;return face.paint(canvas,glyphs);}
+        if let Some(face) = self.precomputed_face(font)? {
+            face.check_size(f32::from(size))?;
+            return face.paint_cancellable(canvas, glyphs, check);
+        }
         let font = self.font(font)?;
         let mut positioned = Vec::with_capacity(glyphs.len());
-        for g in glyphs {
-            ensure!(
-                (g.glyph_id as usize) < font.glyph_count(),
-                "glyph id out of font range"
-            );
+        for (index, g) in glyphs.iter().enumerate() {
+            if index % 256 == 0 { check()?; }
+            ensure!((g.glyph_id as usize) < font.glyph_count(), "glyph id out of font range");
             let id = u16::try_from(g.glyph_id).context("glyph id exceeds font representation")?;
             positioned.push(Glyph {
                 id: GlyphId(id),
@@ -329,31 +367,61 @@ impl TextSystem {
                 position: point(g.x_26_6 as f32 / 64., g.y_26_6 as f32 / 64.),
             });
         }
-        Self::paint(&font, canvas, &positioned)
+        Self::paint_cancellable(&font, canvas, &positioned, check)
     }
     fn paint(font: &FontArc, canvas: [u32; 2], glyphs: &[Glyph]) -> Result<Vec<u8>> {
+        Self::paint_cancellable(font, canvas, glyphs, &|| Ok(()))
+    }
+    fn paint_cancellable(
+        font: &FontArc,
+        canvas: [u32; 2],
+        glyphs: &[Glyph],
+        check: &dyn Fn() -> Result<()>,
+    ) -> Result<Vec<u8>> {
+        check()?;
         let (w, h) = (canvas[0], canvas[1]);
         let mut pixels = vec![0u8; (w as usize) * (h as usize) * 4];
-        for pixel in pixels.as_chunks_mut::<4>().0 {
-            pixel[..3].fill(255);
+        for block in pixels.chunks_mut(256 * 1024) {
+            check()?;
+            for pixel in block.chunks_exact_mut(4) { pixel[..3].fill(255); }
         }
+        let mut work = 0u64;
         for glyph in glyphs {
+            check()?;
             if let Some(outline) = font.outline_glyph(glyph.clone()) {
                 let bounds = outline.px_bounds();
+                ensure!(bounds.min.x.is_finite() && bounds.min.y.is_finite()
+                    && bounds.width().is_finite() && bounds.height().is_finite()
+                    && bounds.width() >= 0. && bounds.height() >= 0., "invalid glyph outline bounds");
+                let samples = (bounds.width().ceil() as u64)
+                    .checked_mul(bounds.height().ceil() as u64).context("glyph outline size overflow")?;
+                ensure!(samples <= 4 * 1024 * 1024, "glyph outline sample budget");
+                work = work.checked_add(samples).context("glyph outline work overflow")?;
+                ensure!(work <= 64 * 1024 * 1024, "glyph outline work budget");
+                let mut last_row = u32::MAX;
+                let mut cancelled = None;
                 outline.draw(|gx, gy, coverage| {
-                    let px = bounds.min.x as i32 + gx as i32;
-                    let py = bounds.min.y as i32 + gy as i32;
-                    if px >= 0 && py >= 0 && (px as u32) < w && (py as u32) < h {
+                    if cancelled.is_some() { return; }
+                    if gy != last_row {
+                        last_row = gy;
+                        if let Err(error) = check() { cancelled = Some(error); return; }
+                    }
+                    let px = bounds.min.x as i64 + i64::from(gx);
+                    let py = bounds.min.y as i64 + i64::from(gy);
+                    if px >= 0 && py >= 0 && px < i64::from(w) && py < i64::from(h) {
                         let i = ((py as usize) * (w as usize) + px as usize) * 4 + 3;
                         let alpha = (coverage.clamp(0., 1.) * 255.).round() as u16;
                         let old = u16::from(pixels[i]);
                         pixels[i] = (alpha + (old * (255 - alpha) + 127) / 255) as u8;
                     }
                 });
+                if let Some(error) = cancelled { return Err(error); }
             }
         }
+        check()?;
         Ok(pixels)
     }
+
 }
 impl crysirror_core::service::TextMeasurement for TextSystem {
     fn position_simple(
@@ -569,3 +637,6 @@ pub mod slot_color;
 
 pub mod vn_slot;
 pub mod byte_split;
+pub mod byte_groups;
+
+pub mod bitmap_raster;

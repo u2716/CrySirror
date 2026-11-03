@@ -2,12 +2,15 @@
 //! CPU engine systems. Ported algorithms retain explicit upstream provenance.
 #![forbid(unsafe_code)]
 pub mod ai;
+pub mod strategy;
 pub mod animation;
+pub mod activity;
 pub mod animgraph;
 pub mod canvas;
 pub mod components;
 pub mod gameplay;
 pub mod input;
+pub mod input_ledger;
 pub mod input_buffer;
 pub mod input_routes;
 pub mod layer;
@@ -18,6 +21,7 @@ pub mod projection;
 pub mod sequence;
 pub mod terrain;
 pub mod timeline_counter;
+pub mod reading_wait;
 pub mod ui;
 pub mod view;
 pub mod world;
@@ -59,6 +63,12 @@ pub struct EngineSystems {
     pub ui: UiSystem,
 }
 impl EngineSystems {
+    /// Font references retained by drawable layers, offscreen canvases and UI.
+    pub fn visit_font_dependencies(&self,visitor:&mut dyn FnMut(ClientId,&str)) {
+        self.layers.visit_font_dependencies(visitor);
+        self.canvases.visit_font_dependencies(visitor);
+        self.ui.visit_font_dependencies(visitor);
+    }
     /// Pure eligibility preflight for hosts whose behaviour hooks precede the
     /// runtime tick. A conflict cannot advance UI, journals or engine clocks.
     pub fn preflight_input(&self,input:InputFrame,canvas:[u32;2])->Result<()> {
@@ -183,6 +193,11 @@ impl EngineSystems {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ServiceBatch {
+    ///Layer operations applied before Canvas commands, inside the same rollback
+    ///transaction. This admits new presentation parents without an intermediate
+    ///publication. The ordinary layers section retains its post-Canvas order.
+    #[serde(default)]
+    pub prepare_layers: Vec<layer::LayerCommand>,
     #[serde(default)]
     pub canvases: Vec<canvas::CanvasCommand>,
     #[serde(default)]
@@ -207,6 +222,9 @@ impl EngineSystems {
         let mut routing=(!batch.input_routes.is_empty()).then(||self.input_routes.clone());
         if let Some(routing)=&mut routing{routing.apply_batch(client,&batch.input_routes)?;}
         self.layers.transaction(|layers| {
+            if !batch.prepare_layers.is_empty() {
+                layers.apply_batch(client, &batch.prepare_layers)?;
+            }
             if let Some(canvases) = &mut canvases {
                 canvases.apply_batch(client, &batch.canvases, layers)?;
             }

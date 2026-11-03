@@ -6,6 +6,9 @@
 //!   raster device; the presented screen is one engine surface layer.
 //! - Message/choice text, menus, backlog and name entry: retained engine
 //!   GlyphRun and solid layers (no private font rasteriser).
+//! - `0x66` text into PDT work buffers: engine glyph-image coverage blended
+//!   into the buffer before the scenario continues.
+//! - Cinepak AVI movies: the shared `crysirror_video::avi` demuxer/decoder.
 //! - BGM, effects and voices: engine audio channels (`AudioRequest`).
 //! - Files and the original `SAVE.INI`: client-scoped capability storage.
 #![forbid(unsafe_code)]
@@ -92,6 +95,20 @@ pub struct Avg32Vm {
     cursor_image: Option<Arc<crysirror_image::cursor::CursorImage>>,
     cursor_selected: Option<bool>,
     cursor_visible: Option<bool>,
+    /// Work-buffer text being rasterised by the engine glyph-image service.
+    glyph_jobs: Vec<GlyphJob>,
+    glyph_font: Option<String>,
+    buffer_glyphs_drawn: u64,
+    images: Option<Arc<dyn crysirror_core::service::ImageMetadata>>,
+}
+
+/// One `0x66` character bound for a PDT work buffer, with its engine job.
+struct GlyphJob {
+    glyph: vm::text::BufferGlyph,
+    /// Pen origin inside the job canvas.
+    origin: [i32; 2],
+    job: Option<crysirror_core::image_processing::ImageJob>,
+    coverage: Option<Arc<dyn crysirror_core::image_processing::ImageResource>>,
 }
 
 fn error(e: impl std::fmt::Display) -> Error {
@@ -101,7 +118,7 @@ fn error(e: impl std::fmt::Display) -> Error {
 fn glyphs(source: &[TextGlyph], base: f32) -> Vec<PositionedGlyph> {
     source
         .iter()
-        .map(|g| PositionedGlyph {
+        .map(|g| PositionedGlyph { crop: None,
             character: g.character,
             baseline: [g.x as f32, g.baseline as f32],
             size: (g.size as f32 != base).then_some(g.size as f32),
@@ -135,6 +152,10 @@ impl Avg32Vm {
             cursor_image: None,
             cursor_selected: None,
             cursor_visible: None,
+            glyph_jobs: Vec::new(),
+            glyph_font: None,
+            buffer_glyphs_drawn: 0,
+            images: None,
         })
     }
 
@@ -320,6 +341,131 @@ impl Avg32Vm {
         Ok(())
     }
 
+    fn warn(&mut self, warning: String) {
+        if self.warnings.len() == WARNINGS {
+            self.warnings.pop_front();
+        }
+        self.warnings.push_back(warning);
+    }
+
+    /// Starts engine glyph-image jobs for queued work-buffer characters and
+    /// blends finished coverage into the PDT buffers in drawing order.
+    /// Returns true while the scenario must wait for coverage (the native
+    /// `0x66` completed its drawing before the next command ran).
+    fn buffer_text(&mut self, host: &mut dyn HostServices) -> Result<bool> {
+        use crysirror_core::image_processing::{GlyphImageSpec, ImageProcessState};
+        if self.glyph_jobs.is_empty() {
+            let engine = self.engine.as_mut().expect("booted");
+            let queued = std::mem::take(&mut engine.system_mut().buffer_glyphs);
+            if queued.is_empty() {
+                return Ok(false);
+            }
+            let prepared = (|| -> crysirror_core::Result<_> {
+                let fonts = host.font_library(self.client)?;
+                if self.glyph_font.is_none() {
+                    self.glyph_font = Some(
+                        fonts
+                            .resolve_alias(&self.config.font)?
+                            .unwrap_or_else(|| self.config.font.clone()),
+                    );
+                }
+                if self.images.is_none() {
+                    self.images = Some(host.image_metadata(self.client)?);
+                }
+                Ok(fonts)
+            })();
+            let fonts = match prepared {
+                Ok(fonts) => fonts,
+                Err(e) => {
+                    self.warn(format!("AVG32 work-buffer text: engine glyph service: {e}"));
+                    return Ok(false);
+                }
+            };
+            let alias = self.glyph_font.clone().expect("resolved");
+            let images = self.images.clone().expect("resolved");
+            for glyph in queued {
+                let size = glyph.size.clamp(1, 1024);
+                let origin = [size / 2, size * 3 / 2];
+                let job = fonts
+                    .glyph_id(&alias, glyph.character)
+                    .and_then(|glyph_id| {
+                        images.begin_glyph_image(GlyphImageSpec {
+                            font: alias.clone(),
+                            size: size as u16,
+                            canvas: [size as u32 * 2, size as u32 * 2],
+                            glyphs: vec![crysirror_core::service::Glyph {
+                                glyph_id,
+                                x_26_6: origin[0] * 64,
+                                y_26_6: origin[1] * 64,
+                                advance_26_6: size * 64,
+                            }],
+                        })
+                    });
+                match job {
+                    Ok(job) => self.glyph_jobs.push(GlyphJob {
+                        glyph,
+                        origin,
+                        job: Some(job),
+                        coverage: None,
+                    }),
+                    Err(e) => self.warn(format!(
+                        "AVG32 work-buffer glyph {:?}: {e}",
+                        glyph.character
+                    )),
+                }
+            }
+        }
+        let mut failures = Vec::new();
+        for entry in &mut self.glyph_jobs {
+            let Some(job) = entry.job.as_mut() else {
+                continue;
+            };
+            match job.poll().map_err(|e| anyhow::anyhow!("{e}"))? {
+                ImageProcessState::Pending => {}
+                ImageProcessState::Ready(image) => {
+                    entry.coverage = Some(image);
+                    entry.job = None;
+                }
+                ImageProcessState::Failed(e) => {
+                    failures.push(format!(
+                        "AVG32 work-buffer glyph {:?}: {e}",
+                        entry.glyph.character
+                    ));
+                    entry.job = None;
+                }
+            }
+        }
+        for failure in failures {
+            self.warn(failure);
+        }
+        if self.glyph_jobs.iter().any(|entry| entry.job.is_some()) {
+            return Ok(true);
+        }
+        let gfx = &mut self.engine.as_mut().expect("booted").system_mut().gfx;
+        let drawn = &mut self.buffer_glyphs_drawn;
+        for entry in std::mem::take(&mut self.glyph_jobs) {
+            let Some(image) = entry.coverage else {
+                continue;
+            };
+            let [width, height] = image.size();
+            let coverage = image
+                .alpha_region([0, 0, width, height])
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            let glyph = &entry.glyph;
+            gfx.draw_coverage(
+                glyph.buffer,
+                glyph.x - entry.origin[0],
+                glyph.baseline - entry.origin[1],
+                width as usize,
+                height as usize,
+                &coverage,
+                glyph.colour,
+            );
+            *drawn += 1;
+        }
+        Ok(false)
+    }
+
     fn run(&mut self, host: &mut dyn HostServices, input: InputFrame) -> Result<VmYield> {
         vm::nls::set(self.nls);
         if self.engine.is_none() {
@@ -330,17 +476,24 @@ impl Avg32Vm {
         self.input(&input);
         let engine = self.engine.as_mut().expect("booted");
         engine.system_mut().clock = vm::system::Clock::Virtual(now);
-        vm::fs::with(&storage, || engine.tick());
-        for warning in engine.take_warnings() {
-            if self.warnings.len() == WARNINGS {
-                self.warnings.pop_front();
+        // The scenario does not run on while `0x66` work-buffer text is
+        // still being rasterised by the engine.
+        let mut quit = false;
+        if !self.buffer_text(host)? {
+            let engine = self.engine.as_mut().expect("booted");
+            vm::fs::with(&storage, || engine.tick());
+            for warning in engine.take_warnings() {
+                self.warn(warning);
             }
-            self.warnings.push_back(warning);
+            quit = self
+                .engine
+                .as_mut()
+                .expect("booted")
+                .take_requests()
+                .into_iter()
+                .any(|request| request == HostRequest::Quit);
+            self.buffer_text(host)?;
         }
-        let quit = engine
-            .take_requests()
-            .into_iter()
-            .any(|request| request == HostRequest::Quit);
         self.audio(host)?;
         self.publish_cursor(host)?;
         self.publish(host)?;
@@ -388,7 +541,7 @@ impl VmAdapter for Avg32Vm {
         let engine = self.engine.as_ref();
         serde_json::to_vec(&json!({
             "vm": "original-avg32",
-            "source": "siglus_rs 5f358ef1360b0439e92aed2b749e8f25d8721954",
+            "source": "siglus_rs 256c398e06fbcbae8e956eb046c831b3d6c8a593",
             "owns_framebuffer": false,
             "raster": "crysirror_image::avg32",
             "frames": self.frames,
@@ -398,6 +551,7 @@ impl VmAdapter for Avg32Vm {
             "position": engine.map(|e| e.scenario().pos),
             "title": self.title,
             "glyphs": engine.map(|e| e.system().text.glyphs.len()),
+            "buffer_glyphs_drawn": self.buffer_glyphs_drawn,
             "warnings": self.warnings,
             "audio_requests": self.audio_requests,
             "recent_audio": self.recent_audio,

@@ -137,7 +137,8 @@ pub(crate) enum EntryPlan {
     },
     Unsupported(&'static str),
 }
-pub(crate) type DecodeFn = Arc<dyn Fn(&[u8], &ArchiveEntry) -> Result<Vec<u8>> + Send + Sync>;
+pub(crate) type DecodeFn =
+    Arc<dyn Fn(&[u8], &ArchiveEntry, &DecodeContext) -> Result<Vec<u8>> + Send + Sync>;
 pub(crate) struct ParsedArchive {
     pub format: &'static str,
     pub source: Arc<dyn AssetReader>,
@@ -219,7 +220,7 @@ impl Archive for ParsedArchive {
                     context.limits.max_resident_bytes,
                 )?;
                 (
-                    context.decode_with(entry.size, || decode(&input, entry))?,
+                    context.decode_with(entry.size, || decode(&input, entry, context))?,
                     false,
                 )
             }
@@ -268,4 +269,46 @@ fn nsa_lzss(input: &[u8], size: u64) -> Result<Vec<u8>> {
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod active_decode_context_tests {
+    use super::*;
+    use crysirror_core::{service::MemoryAssetReader, state::ClientId};
+    #[test]
+    fn entry_cpu_decoder_receives_the_active_scoped_open_context() -> Result<()> {
+        let source = Arc::new(MemoryAssetReader(Arc::from([17u8])));
+        let archive = ParsedArchive {
+            format: "authored-context-forwarding",
+            source,
+            entries: vec![ArchiveEntry {
+                id: 0,
+                path: "entry.bin".into(),
+                size: 1,
+                stored_size: 1,
+                metadata: serde_json::Value::Null,
+            }],
+            plans: vec![EntryPlan::Decode {
+                offset: 0,
+                decode: Arc::new(|bytes, entry, context| {
+                    ensure!(context.client == ClientId(7), "stale decode client context");
+                    ensure!(
+                        context.parameters.get("active") == Some(&serde_json::json!(true)),
+                        "stale decode options"
+                    );
+                    context.check_cancelled()?;
+                    ensure!(entry.id == 0, "wrong native entry");
+                    Ok(bytes.to_vec())
+                }),
+            }],
+        };
+        let mut current = DecodeContext::new(ClientId(7));
+        current
+            .parameters
+            .insert("active".into(), serde_json::json!(true));
+        let reader = archive.open(0, &current)?;
+        assert_eq!(read_all(reader.as_ref(), 16)?, [17]);
+        assert!(archive.open(0, &DecodeContext::new(ClientId(8))).is_err());
+        Ok(())
+    }
 }

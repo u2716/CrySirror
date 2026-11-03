@@ -5,11 +5,11 @@ OMV/Theora compile-only.
 
 ## Context
 
-The owner asked for the video decoders that ship with siglus_rs to become an
-engine capability. The vendored crates (pinned in
-crates/siglus-upstream/UPSTREAM.md, MPL-2.0) are `siglus_omv_decoder` +
-`theora-rs` (Siglus OMV and Ogg/Theora), `na_mpeg2_decoder` (MPEG-1/2 PS/ES,
-MPA/AC-3 audio) and `na_wmv_player` (ASF: WMV2/WMV3/VC-1, WMA).
+Video codecs are shared engine capabilities. The original Siglus codec sources
+were `siglus_omv_decoder`/`theora-rs` (OMV and Ogg/Theora), `na_mpeg2_decoder`
+(MPEG-1/2 PS/ES with MPA/AC-3) and `na_wmv_player` (ASF with WMV2/WMV3/VC-1/WMA).
+The adopted first-class codec crates retain provenance and applicable notices in
+their SOURCE.json records; the former siglus-upstream package is retired.
 
 ## Decision
 
@@ -57,9 +57,11 @@ of hiding it.
 lacks a Theora encoder and no Theora/OMV file is available). Only container
 sniffing and the failure path are tested; this is compile-only.
 
-## Gaps
+## Follow-up implementation and gaps
 
-Audio tracks are not yet routed to the mixer (decoders expose PCM), frames are
-not yet bound as PBR material textures (2D surfaces only), large files are
-decoded from memory (the MPEG path decodes all frames up front), and
-there is no hardware decode.
+The original full-memory MPEG/no-audio boundary was extended by shared incremental
+Media decoding and worker-prepared PCM routing (ADRs 0048/0072); final DSP/output
+workers followed in 0079/0080. Codec-specific buffering and seek limitations must
+still be reviewed separately. PBR video-material binding and hardware decoding
+are not established by this ADR. The Theora fixture limitation above belongs to
+its original validation checkpoint, not a claim that all video paths are untested.

@@ -146,9 +146,10 @@ impl SiglusVm {
         let h = self.events.bindings[&k];
         let cursor = host.capture_audio_sequence(client, h).map_err(err)?;
         let vm = self.state.vm.as_mut().unwrap();
-        let st = &mut vm.ctx.globals.pcm_event_lists.get_mut(&k.0).unwrap()[k.1];
+        let globals = &mut *vm.ctx.globals;
+        let st = &mut globals.pcm_event_lists.get_mut(&k.0).unwrap()[k.1];
         if selected {
-            vm.ctx.globals.rng_state = cursor.rng_state;
+            globals.rng_state = cursor.rng_state;
         }
         if cursor.active {
             if selected && st.event_type == crate::runtime::globals::PCM_EVENT_TYPE_RANDOM {

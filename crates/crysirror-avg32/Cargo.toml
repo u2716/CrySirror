@@ -12,6 +12,7 @@ crysirror-image.workspace = true
 crysirror-runtime.workspace = true
 crysirror-scene.workspace = true
 crysirror-text.workspace = true
+crysirror-video = { path = "../crysirror-video" }
 anyhow.workspace = true
 encoding_rs = "0.8"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
@@ -20,3 +21,5 @@ serde_json.workspace = true
 
 [dev-dependencies]
 tempfile = "3.12"
+# Encodes Cinepak test movies (the decoder is crysirror-video).
+oxideav-cinepak = { version = "=0.0.3", default-features = false }

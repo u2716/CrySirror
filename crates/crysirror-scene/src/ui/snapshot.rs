@@ -106,7 +106,7 @@ impl UiSystem {
             } else {
                 Some(primitive.uv)
             };
-            layers.push(LayerSpec {
+            layers.push(LayerSpec { source_crop: None, viewport_clip: None,
                 id: layers.len() as u32 + 1,
                 parent: None,
                 rect: [x, y, width, height],

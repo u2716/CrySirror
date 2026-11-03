@@ -1,0 +1,65 @@
+{
+  "purpose": "Complete native script week/holiday calculated-variable family over shared Gregorian date validation; not a complete GetCalcuVarData implementation",
+  "reference": {
+    "repository": "https://github.com/tinyan/SystemNNN",
+    "commit": "78a05053c78b3b80065a9a209c6685a7c60a2e83",
+    "complete_routines": [
+      "nnnLib/gamecallback.cpp GetCalcuVarData",
+      "nnnLib/gamecallback.cpp GetWeek",
+      "nnnLib/gamecallback.cpp CheckSaijitsu",
+      "nnnLib/gamecallback.cpp SetSystemVarNumber",
+      "nnnLib/gamecallback.cpp complete GetSystemParam"
+    ],
+    "complete_files": [
+      "nnnUtilLib/saijitsuList.cpp",
+      "nnnUtilLib/saijitsuList.h"
+    ],
+    "licence": "No licence grant found. Independently expressed native policy facts; no original C++ engine implementation linked or copied."
+  },
+  "actual_module": {
+    "sha256": "e85e92ec538d50eae08d27286177149972d443a96d1415277c1ae1f9ee108bdb",
+    "method": "Read-only IDA; original PE not executed",
+    "calculated_dispatch": "0x5335e0",
+    "weekday": "CGame virtual344 ->0x534210",
+    "holiday_gate": "CGame virtual416 ->0x5335a0",
+    "holiday_constructor": "0x452730, nya\\saijitsu.xtx, token_count/3",
+    "holiday_match": "0x4528f0 exact year/month/day triples",
+    "constructor_policy": "0x542180 uses original misspelled key useSaijistu; legacy year binding remains active unlike later optional notUseYearVar behavior",
+    "evidence": [
+      "target/verification/systemnnn/native-calendar-static.log",
+      "target/verification/systemnnn/native-calendar-0x534210.c",
+      "target/verification/systemnnn/native-calendar-0x5335a0.c",
+      "target/verification/systemnnn/native-calendar-0x452730.c",
+      "target/verification/systemnnn/native-calendar-0x4528f0.c",
+      "target/verification/systemnnn/bootstrap-control-0x5335e0.c",
+      "target/verification/systemnnn/bootstrap-control-0x542180.c",
+      "target/verification/systemnnn/native-calendar-0x534b30.c"
+    ],
+    "system_parameter_getter": "CGame virtual232 ->0x534b30, complete legacy16-slot preference arrays; constructor binds only first five names per group"
+  },
+  "native_policy": {
+    "adapter": "Private native_calendar.rs contains only configured date/year IDs, optional native holiday tuples and resource preparation policy",
+    "shared_algorithm": "Core service::civil_weekday; no second private Gregorian arithmetic",
+    "read_boundary": "Read current stored script bank on every expression read; no stale admission-time week/holiday constants. VM clones retain immutable tuple capability, not ambient filesystem access.",
+    "dates": "Original YYYY plus MMDD fields, fallback year2000 when year binding absent; legacy always binds year. Weekend returns1, otherwise only exact enabled native tuple matches return1.",
+    "preparation": "PreparedBoot resource worker reads nya/saijitsu.xtx only when configured. Missing NameList input is the original zero-tuple policy; malformed/other I/O errors propagate. Incomplete trailing one/two tokens are ignored by original count/3 rule.",
+    "checked_boundary": "Invalid Gregorian dates and out-of-range month/day fail explicitly rather than adopting original arithmetic over invalid fields. Enabled unprepared holiday table on weekdays fails explicitly.",
+    "not_implemented": [
+      "Eight system clock calculated fields need per-read async native dependencies, not one fabricated clock snapshot",
+      "Wheel and CG/scene percentage groups",
+      "Legacy adjustdate is absent from actual0x5355c0 builtin dispatch; it is not ACKed from the later public source alone"
+    ]
+  },
+  "validation": {
+    "release": "native-calendar-family-tests.log:42passed/1ignored in native crate lib; includes prior system-save/Layer/foreground/resource/close regressions",
+    "calendar_tests": "Three tests verify live date/year mutations, leap1900/2000, Sundays/Saturdays, explicit year tuples, configured absence/disabled distinction, trailing tokens, cloned banks and invalid-date errors",
+    "python": "native-calendar-python-tooling.log:201passed; tooling suite only, no original-game acceptance",
+    "not_claimed": "No Desktop rebuild/GPU/game Title/Start completion or native dataN importer enabled"
+  },
+  "preference_variable_family": {
+    "native_serialized_offsets": "SYSTEM DATA expMode[16] at1792 and expCheck[16] at1856; class object has68-byte prefix before this record. Actual getter300+i uses object+1860+4*i and400+i usesobject+1924+4*i.",
+    "scope": "Only first5 expmode and first5 expcheck names are bound by actual legacy constructor, despite16 stored values. Other names retain ordinary bank semantics.",
+    "ownership": "Bridge samples owner-held original SystemFile logical values into the existing detached VM admission; callbacks/UI cannot mutate that file during its VM worker batch. Existing VM postfix interpreter consumes those bindings; no renderer, UI simulator or second state provider.",
+    "validation": "native-calculated-preference-family-tests2.log:43passed/1ignored release native lib. Real worker executes all10 original postfix preference assignments from modified native save bytes, keeps stored source words unchanged and sixth-name ordinary fallback, no Scene/clock/host operations. First authored fixture compile required immutable encoded Arc->Vec for test mutation; production not relaxed."
+  }
+}

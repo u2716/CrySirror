@@ -1,5 +1,7 @@
 # ADR 0094: Isolated retained-layer subtree crossfades
 
+Status: implemented bounded isolated subtree transitions; immutable-capture limits remain explicit.
+
 ## Decision
 
 `LayerSystem` owns a client-scoped transition between two sibling subtrees.

@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "engine": "CatSystem2",
+  "scope": "Whole OBJECT field-value, named-array and KEYBLOCK source policy; actual typed resources remain unadmitted",
+  "native_evidence": {
+    "binary_sha256": "f8a1fb4fed8a0c64c3fbc0bcf009f63e8f3181cfbc1a0dbd60f9ddefc8e25b3d",
+    "version": "2.6.1.76",
+    "method": "Read-only local IDA/capstone; no original executable/library executed or distributed",
+    "functions": {
+      "759E50": "All66 field codes into224 nativeDWORDs,3maskwords,defaultblend255,arrays PRI flag218,reference-index evaluation even when only name retained",
+      "6A79A0": "Static disassembly confirms zero initializer through memset or SIMD zero stores; no uninitialised zero-state claim for other buffers",
+      "758D40/758E00": "Original raw name/index split; actual Main string expansion before arity lookup; -1 scalar versus array sentinel; closing bracket trailing bytes ignored by native parser",
+      "754E80/754F90/729B90/6A6CF0": "Native exact case-sensitive array count and object-name/index lookup, signed native byte compare; no ASCII fold invented",
+      "759680/6A56F0": "Lazy literal-comma component evaluation with missing/empty distinction",
+      "7597B0": "KEYBLOCK sixDWORD initializer0,0,-1,-1,-1,-1; repeated rows retain untouched values; out-of-range index skips subsequent expression evaluation"
+    }
+  },
+  "implementation": {
+    "files": [
+      "src/fes_object_values.rs",
+      "src/fes_references.rs",
+      "src/fes_key_blocks.rs"
+    ],
+    "ownership": "Only native argument/layout/expression/lookup policy. Shared Layer/Canvas/Audio/Input resources must be separately admitted by the adapter through engine APIs. Numeric row slot60 remains zero; optional parent stores only caller-provided logical identity, never an original process pointer. No private renderer/mixer/compositor.",
+    "failure": "Decode preflights bounded values and uses a cloned Interpreter; failed row/table does not advance original expression state or complete native waits. Resource callbacks may only observe identities, never publish resources.",
+    "limits": [
+      "Typed39 DEFINE/OBJECT resource gate intentionally remains until actual class resources/lifetimes are published",
+      "FIELD raw string extents are safe bounded native layout profiles; overflow fails visibly",
+      "Empty brackets use uninitialized original scratch data and are explicitly unsupported",
+      "Expanded empty reference names, dynamic metadata profile, arbitrary host pointer fields and unported callbacks remain unsupported"
+    ]
+  },
+  "validation": {
+    "release_lib": "cargo test --release -p crysirror-catsystem2 --lib:107passed/0ignored in native-object-field-family-tests.log; owner feature-gated test not compiled by this command",
+    "release_runtime_lib": "cargo test --release -p crysirror-catsystem2 --features runtime --lib:111passed/1ignored in native-object-reference-keyblock-tests2.log. Whole66-code ABI fixture, expression order/defaults/logical parent/rollback, native names/sentinel/string expansion, KEYBLOCK defaults/partial/duplicates/skipped tails. Ignored game test not a pass.",
+    "first_authored_compile": "native-object-reference-keyblock-tests.log failed on Rust cast parsing and an authored test using set instead of assign; corrected before actual successful111/1 run, not a pass",
+    "static_exports": "object-reference-family-static.log records matching entries; attempted754FD0/755030 entry mismatches are not counted or adopted"
+  },
+  "owner_behavior": {
+    "unchanged": "Frozen cat-owner-batch4 c5f41f86d362361c30b6f4a209b283c5d80d19a74ac1efca3f59a0612f41f5f1 remainsKCS20360/FES53 pending execfes brandlogo; it predates this source",
+    "claim": "No new title/start/gameplay/Desktop/GPU result; row decoding and static inventories do not establish resource publication or full reverse engineering"
+  }
+}

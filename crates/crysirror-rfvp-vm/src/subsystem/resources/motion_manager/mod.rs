@@ -1112,6 +1112,20 @@ impl MotionManager {
         self.dissolve2.is_transitioning()
     }
 
+    /// A movie picture of any encoded size behind a screen-sized logical graph.
+    pub(crate) fn load_movie_texture(
+        &mut self,
+        id: u16,
+        buff: Vec<u8>,
+        width: u32,
+        height: u32,
+        screen: (u32, u32),
+    ) -> Result<()> {
+        self.textures[id as usize].load_from_buff_with_display_size(
+            buff, width, height, screen.0, screen.1,
+        )
+    }
+
     pub fn load_texture_from_buff(
         &mut self,
         id: u16,

@@ -13,10 +13,27 @@ pub(crate) struct FesTask {
     pub string_bank_owner: Option<u32>,
     pub interpreter_owner: Option<u32>,
     pub player_loaded: bool,
+    pub player: Option<crate::fes_program::Machine>,
+    ///Original constructor/OBJECT data; no pixels, engine handles or device
+    ///pointers. Its resource phase belongs to the retained owner frame.
+    pub object_bank: Option<crate::fes_object_bank::Bank>,
+    ///Scoped published image paths only. Resource release is delegated to the
+    ///shared host, which preserves older Canvas/snapshot readers.
+    pub class_image_leases:Vec<String>,
+    /// Shared transparent Layer group for754310's implicit BASE _TOPOBJ_.
+    /// It owns reusable transform/motion state, not a private composed screen.
+    pub object_root: Option<u32>,
     pub running: bool,
+    /// Button-pass values for `_CLICK_L_`/`_CLICK_R_`, written before the next step.
+    pub click_values: Vec<(&'static [u8], u32)>,
+    pub deletion_pending:bool,
     pub paused: bool,
     pub first_tick: bool,
     pub low_button: Option<u32>,
+    /// Previous frame left and right button state for BUTTON edges.
+    pub button_down: [bool; 2],
+    /// Button events not yet given to the player; one section runs at a time.
+    pub button_queue: std::collections::VecDeque<crate::fes_button::Dispatch>,
     pub image_list: Option<u32>,
     pub native_rect: [i32; 4],
     pub upload_position: Option<[i32; 2]>,
@@ -51,10 +68,18 @@ impl FesTask {
             string_bank_owner: Some(parent),
             interpreter_owner: None,
             player_loaded: false,
+            player: None,
+            object_bank: None,
+            class_image_leases:Vec::new(),
+            object_root: None,
             running: false,
+            click_values: Vec::new(),
+            deletion_pending:false,
             paused: false,
             first_tick: true,
             low_button: None,
+            button_down: [false; 2],
+            button_queue: Default::default(),
             image_list: None,
             native_rect: [0; 4],
             //627E50 explicitly zeroes1108/1112, unlike image-list112/116.
@@ -79,6 +104,10 @@ impl FesTask {
         })
     }
     pub fn diagnostics(&self) -> serde_json::Value {
-        serde_json::json!({"id":self.id,"task_parent":self.parent,"name":String::from_utf8_lossy(&self.name),"parameters":self.parameters,"string_bank_owner":self.string_bank_owner,"interpreter_owner":self.interpreter_owner,"player_loaded":self.player_loaded,"running":self.running,"paused":self.paused,"first_tick":self.first_tick,"low_button":self.low_button,"image_list":self.image_list,"native_rect":self.native_rect,"upload_position":self.upload_position,"saved_cursor":self.saved_cursor,"input_task":self.input_task,"sound_task":self.sound_task,"child_tasks":self.child_tasks,"exit_code":self.exit_code,"selected_object":self.selected_object,"click_state":self.click_state,"message_parameter":self.message_parameter,"script_name":self.script_name,"next_object":self.next_object.as_slice(),"previous_object":self.previous_object.as_slice(),"resource_directory_utf16":self.resource_directory,"auxiliary_records":self.auxiliary_records.len(),"preload_names":self.preload_names.len()})
+        let mut value=serde_json::json!({"id":self.id,"task_parent":self.parent,"name":String::from_utf8_lossy(&self.name),"parameters":self.parameters,"string_bank_owner":self.string_bank_owner,"interpreter_owner":self.interpreter_owner,"player_loaded":self.player_loaded,"object_root":self.object_root,"player":self.player.as_ref().map(crate::fes_program::Machine::diagnostics),"running":self.running,"paused":self.paused,"first_tick":self.first_tick,"low_button":self.low_button,"image_list":self.image_list,"native_rect":self.native_rect,"upload_position":self.upload_position,"saved_cursor":self.saved_cursor,"input_task":self.input_task,"sound_task":self.sound_task,"child_tasks":self.child_tasks,"exit_code":self.exit_code,"selected_object":self.selected_object,"click_state":self.click_state,"message_parameter":self.message_parameter,"script_name":self.script_name,"next_object":self.next_object.as_slice(),"previous_object":self.previous_object.as_slice(),"resource_directory_utf16":self.resource_directory,"auxiliary_records":self.auxiliary_records.len(),"preload_names":self.preload_names.len()});
+        value["deletion_pending"]=serde_json::Value::Bool(self.deletion_pending);
+        value["class_objects"]=serde_json::json!(self.object_bank.as_ref().map(|bank|bank.objects.values().map(|object|serde_json::json!({"id":object.id,"type":object.declared_type})).collect::<Vec<_>>()));
+        value["class_image_leases"]=serde_json::json!(self.class_image_leases);
+        value
     }
 }

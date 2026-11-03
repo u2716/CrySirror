@@ -2,6 +2,14 @@
 
 Date: 2026-10-27. Status: implemented profile; validation is in STATUS.md.
 
+## Follow-up implementation (updated 2026-11-03)
+
+Worker-owned final DSP and device output extend this canonical bridge. Its original remaining-synchronous paragraph describes that checkpoint, not the current entire audio path.
+
+Follow-ups: [ADR 0072](0072-worker-prepared-media-pcm.md), [ADR 0079](0079-worker-final-audio-frames.md), [ADR 0080](0080-async-output-worker-and-bounded-pcm-transfer.md).
+The original checkpoint evidence and remaining-boundary paragraphs below retain
+their dated scope. They must not be read as an engine-wide current missing list.
+
 ## Shared ownership
 
 SceneState AudioVoice declarations and their logical epochs remain canonical.
@@ -72,7 +80,7 @@ already specified in ADR 0069. Canonical play remains a logical declaration;
 channelStatus distinguishes it from completed loading. Offline render/trace
 hosts retain their explicit blocking policy unless they override audio.
 
-## Validation and remaining boundaries
+## Validation and initial checkpoint boundaries (follow-ups above)
 
 Independent authored PCM tests exercise full-pool pressure, cancellation,
 replay/restore epochs, routing/gain, pause, natural EOF, failed replacement,

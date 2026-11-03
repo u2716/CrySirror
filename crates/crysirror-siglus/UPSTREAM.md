@@ -1,22 +1,14 @@
-# Siglus resource port
+# Siglus resource integration
 
-Source: https://github.com/xmoezzz/siglus_rs
-Commit: `5f358ef1360b0439e92aed2b749e8f25d8721954` (actual clean checkout).
-License: MPL-2.0; full text is in the monorepo root LICENSE.
-Source hashes are in upstream-files.json.
-
-The complete runtime assets/g00.rs and assets/mod.rs files were read before
-porting. The format crate's complete g00.rs was also inspected to distinguish
-its parser from the runtime decoder. Only its fixed type-3 JPEG XOR transform
-was carried into jpeg.rs. That table is a public format algorithm constant,
-not a game-specific key or user credential. No fonts, games, keys, executables,
-platform patches or SDK files were imported.
+The Siglus resource implementation is maintained by xmoezzz within CrySirror.
+This crate owns native G00 layouts and metadata; common binary, image and codec
+operations use shared engine services. License: MPL-2.0.
 
 The runtime decoder is the reference for palette alpha, forward overlapping
 LZSS matches, display cropping, image centers, original sizes, missing PATNO
 slots and negative-length reused cuts. These policies stay in this crate.
 
-Changes from upstream:
+Engine integration:
 
 - Checked little-endian reads use crysirror-core::binary.
 - RGBA size checks, red/blue conversion and bounded JPEG decoding use the shared

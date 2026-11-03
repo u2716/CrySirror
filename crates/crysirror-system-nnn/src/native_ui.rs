@@ -108,8 +108,22 @@ fn prepare(
         *time_limit == 0,
         "NNN timed selection needs native timeout/variable/timer profile"
     );
-    let choices = *choices as usize;
-    let messages = *messages as usize;
+    prepare_records(
+        strings,
+        *choices as usize,
+        *messages as usize,
+        profile,
+        metrics,
+    )
+}
+fn prepare_records(
+    strings: &[Vec<u8>],
+    choices: usize,
+    messages: usize,
+    profile: &SelectionProfile,
+    metrics: &dyn TextMeasurement,
+) -> Result<SelectionPlan> {
+    profile.validate()?;
     ensure!(
         choices > 0
             && choices == profile.rows.len()
@@ -159,21 +173,28 @@ pub struct NativeSelectionBridge {
     pending: Option<NativeCall>,
     live: Option<(usize, usize)>,
     selected: Option<usize>,
+    restored_wait_armed: bool,
 }
 impl NativeSelectionBridge {
-    pub fn dependency_pending(&self)->bool {self.worker.is_some()}
+    pub fn dependency_pending(&self) -> bool {
+        self.worker.is_some()
+    }
     pub fn new(profile: SelectionProfile) -> Result<Self> {
+        Self::from_pool(profile, TaskPool::new("nnn-native-selection", 1, 1)?)
+    }
+    fn from_pool(profile: SelectionProfile, pool: TaskPool) -> Result<Self> {
         profile.validate()?;
         Ok(Self {
             profile,
             api_calls: 0,
             profile_factory: None,
-            pool: TaskPool::new("nnn-native-selection", 1, 1)?,
+            pool,
             worker: None,
             ready: None,
             pending: None,
             live: None,
             selected: None,
+            restored_wait_armed: false,
         })
     }
     /// Original scripts determine choice counts at the pending opcode. Keep
@@ -254,7 +275,22 @@ impl NativeSelectionBridge {
             self.selected = None;
             return Ok(false);
         }
-        let (choices, messages) = self.live.context("NNN selection UI not published")?;
+        let Some(chosen) = self.poll_choice(host)? else {
+            return Ok(false);
+        };
+        // Validate CASE destination before removing shared resources. A bad
+        // original table cannot consume the UI then fail with its PC pending.
+        let mut candidate = machine.clone();
+        candidate.acknowledge_case(call, program, u16::try_from(chosen)?)?;
+        self.retire_selection(host)?;
+        *machine = candidate;
+        self.live = None;
+        self.pending = None;
+        self.selected = None;
+        Ok(true)
+    }
+    fn poll_choice(&mut self, host: &mut dyn HostServices) -> Result<Option<usize>> {
+        let (choices, _) = self.live.context("NNN selection UI not published")?;
         if self.selected.is_none() {
             let events: Vec<Value> = serde_json::from_slice(
                 &host.query_engine(self.profile.client, EngineQuery::UiEvents)?,
@@ -273,13 +309,10 @@ impl NativeSelectionBridge {
                 }
             }
         }
-        let Some(chosen) = self.selected else {
-            return Ok(false);
-        };
-        // Validate CASE destination before removing shared resources. A bad
-        // original table cannot consume the UI then fail with its PC pending.
-        let mut candidate = machine.clone();
-        candidate.acknowledge_case(call, program, u16::try_from(chosen)?)?;
+        Ok(self.selected)
+    }
+    fn retire_selection(&mut self, host: &mut dyn HostServices) -> Result<()> {
+        let (choices, messages) = self.live.context("NNN selection UI not published")?;
         let layers = (0..choices + messages)
             .map(|n| json!({"op":"remove","id":self.profile.layer_base+n as u32}))
             .collect::<Vec<_>>();
@@ -292,10 +325,166 @@ impl NativeSelectionBridge {
             &serde_json::to_vec(&json!({"layers":layers,"ui":ui}))?,
         )?;
         self.api_calls += 1;
+        Ok(())
+    }
+    pub(crate) fn restored_node_ids(&self) -> (Vec<u32>, Vec<u32>) {
+        let Some((choices, messages)) = self.live else {
+            return (vec![], vec![]);
+        };
+        (
+            (0..choices + messages)
+                .map(|n| self.profile.layer_base + n as u32)
+                .collect(),
+            (0..choices)
+                .map(|n| self.profile.widget_base + n as u32)
+                .collect(),
+        )
+    }
+    pub(crate) fn restore_seed(&self) -> Result<SelectionRestoreSeed> {
+        ensure!(
+            self.worker.is_none() && self.ready.is_none(),
+            "NNN selection restore requires drained dependencies"
+        );
+        Ok(SelectionRestoreSeed {
+            profile: self.profile.clone(),
+            factory: self.profile_factory.clone(),
+            pool: self.pool.clone(),
+        })
+    }
+    /// A loaded SELECT has already consumed its opcode; only the saved CASE
+    /// cursor is resumed after a real shared UI activation.
+    pub(crate) fn poll_restored_input(
+        &mut self,
+        machine: &mut Machine,
+        program: &Program,
+        host: &mut dyn HostServices,
+    ) -> Result<bool> {
+        ensure!(
+            self.pending.is_none() && self.worker.is_none() && self.ready.is_none(),
+            "NNN saved selection dependencies are incomplete"
+        );
+        if !self.restored_wait_armed {
+            let _ = host.query_engine(self.profile.client, EngineQuery::UiEvents)?;
+            self.restored_wait_armed = true;
+            return Ok(false);
+        }
+        let Some(chosen) = self.poll_choice(host)? else {
+            return Ok(false);
+        };
+        let mut candidate = machine.clone();
+        candidate.resume_saved_case(program, u16::try_from(chosen)?)?;
+        self.retire_selection(host)?;
         *machine = candidate;
         self.live = None;
-        self.pending = None;
         self.selected = None;
+        self.restored_wait_armed = false;
         Ok(true)
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct SelectionRestoreSeed {
+    profile: SelectionProfile,
+    factory: Option<SelectionProfileFactory>,
+    pool: TaskPool,
+}
+pub(crate) struct SavedSelectionPreparation {
+    bridge: NativeSelectionBridge,
+}
+pub(crate) struct PreparedSavedSelection {
+    pub bridge: NativeSelectionBridge,
+    pub batch: Value,
+}
+impl SelectionRestoreSeed {
+    pub(crate) fn dormant(&self) -> Result<NativeSelectionBridge> {
+        let mut bridge = NativeSelectionBridge::from_pool(self.profile.clone(), self.pool.clone())?;
+        bridge.profile_factory = self.factory.clone();
+        Ok(bridge)
+    }
+
+    pub(crate) fn begin(
+        &self,
+        strings: Vec<Vec<u8>>,
+        total: usize,
+        supplemental: usize,
+        host: &mut dyn HostServices,
+    ) -> Result<SavedSelectionPreparation> {
+        // Original native word33 is total, word34 the supplemental prefix;
+        // SetMessageKosuu(total - supplemental, supplemental) follows directly.
+        ensure!(
+            total <= 64
+                && supplemental < total
+                && strings.len() == total
+                && strings
+                    .iter()
+                    .all(|raw| raw.len() <= 254 && !raw.contains(&0)),
+            "NNN saved selection fixed rows"
+        );
+        let choices = total - supplemental;
+        let profile = if let Some(factory) = &self.factory {
+            factory(choices, supplemental)?
+        } else {
+            self.profile.clone()
+        };
+        profile.validate()?;
+        ensure!(
+            profile.client == self.profile.client
+                && profile.root == self.profile.root
+                && profile.widget_base == self.profile.widget_base
+                && profile.layer_base == self.profile.layer_base,
+            "NNN saved selection changed capability bindings"
+        );
+        let metrics = host.text_measurement(profile.client)?;
+        let worker_profile = profile.clone();
+        let permit = self.pool.reserve()?;
+        let worker = permit.spawn(move |cancel| {
+            cancel.check()?;
+            let plan = prepare_records(
+                &strings,
+                choices,
+                supplemental,
+                &worker_profile,
+                metrics.as_ref(),
+            )?;
+            cancel.check()?;
+            Ok(plan)
+        })?;
+        let mut bridge = NativeSelectionBridge::from_pool(profile, self.pool.clone())?;
+        bridge.profile_factory = self.factory.clone();
+        bridge.worker = Some(worker);
+        Ok(SavedSelectionPreparation { bridge })
+    }
+}
+impl SavedSelectionPreparation {
+    pub(crate) fn poll(&mut self) -> Result<bool> {
+        if let Some(worker) = &mut self.bridge.worker {
+            let Some(plan) = worker.try_take()? else {
+                return Ok(false);
+            };
+            self.bridge.worker = None;
+            self.bridge.ready = Some(plan);
+        }
+        ensure!(
+            self.bridge.ready.is_some(),
+            "NNN saved selection result already consumed"
+        );
+        Ok(true)
+    }
+    pub(crate) fn finish(mut self) -> Result<PreparedSavedSelection> {
+        ensure!(
+            self.bridge.worker.is_none(),
+            "NNN saved selection is not ready"
+        );
+        let plan = self
+            .bridge
+            .ready
+            .take()
+            .context("NNN saved selection plan absent")?;
+        self.bridge.live = Some((plan.choices, plan.messages));
+        self.bridge.restored_wait_armed = false;
+        Ok(PreparedSavedSelection {
+            bridge: self.bridge,
+            batch: plan.batch,
+        })
     }
 }

@@ -56,7 +56,7 @@ fn walk_rules(
 }
 impl SoundPaths {
     pub(crate) fn config_name(startup: &[u8]) -> Result<String> {
-        let doc = XmlDocument::parse(startup)?;
+        let doc = XmlDocument::parse_with_fallback(startup,encoding_rs::SHIFT_JIS)?;
         let name = doc
             .unique_child_path("SOUNDCONFIG")?
             .context("CatSystem2 legacy sound-prefix profile unsupported")?
@@ -74,8 +74,40 @@ impl SoundPaths {
         );
         Ok(path)
     }
+    /// Older games have no soundconf.xml: a name's archive follows from its own prefix
+    /// (`bgm_09`, `se0123`, `a_01_023` -> pcm_a).
+    pub(crate) fn legacy(startup: &[u8]) -> Result<Self> {
+        let mut paths = Self::parse_archives(startup)?;
+        let mut names = paths.archives.keys().cloned().collect::<Vec<_>>();
+        names.sort_by_key(|name| std::cmp::Reverse(name.len()));
+        for name in names {
+            if let Some(letter) = name.strip_prefix("pcm_") {
+                paths.rules.push((format!("{letter}_"), name.clone()));
+            } else if matches!(name.as_str(), "bgm" | "se") {
+                paths.rules.push((name.clone(), name.clone()));
+            }
+        }
+        Ok(paths)
+    }
+    pub(crate) fn has_config(startup: &[u8]) -> Result<bool> {
+        let doc = XmlDocument::parse_with_fallback(startup,encoding_rs::SHIFT_JIS)?;
+        Ok(doc.unique_child_path("SOUNDCONFIG")?.is_some_and(|n| !n.text.trim().is_empty()))
+    }
     pub(crate) fn parse(startup: &[u8], sound: &[u8]) -> Result<Self> {
-        let doc = XmlDocument::parse(startup)?;
+        let Self { archives, .. } = Self::parse_archives(startup)?;
+        let sound = XmlDocument::parse_with_fallback(sound,encoding_rs::SHIFT_JIS)?;
+        let parts = sound
+            .unique_child_path("PART")?
+            .context("CatSystem2 PART sound config")?;
+        let mut rules = vec![];
+        for part in sound.children(parts)? {
+            walk_rules(&sound, part, &mut rules, 0)?;
+        }
+        ensure!(!rules.is_empty(), "CatSystem2 sound-prefix rules absent");
+        Ok(Self { archives, rules })
+    }
+    fn parse_archives(startup: &[u8]) -> Result<Self> {
+        let doc = XmlDocument::parse_with_fallback(startup,encoding_rs::SHIFT_JIS)?;
         let table = doc
             .unique_child_path("INT")?
             .context("CatSystem2 INT resource table")?;
@@ -99,23 +131,10 @@ impl SoundPaths {
                 !ext.contains(['/', '\\', ':', '.']) && ext.len() <= 32,
                 "CatSystem2 sound extension"
             );
-            ensure!(
-                archives
-                    .insert(name.to_ascii_lowercase(), Archive { path, ext })
-                    .is_none(),
-                "duplicate CatSystem2 archive type"
-            );
+            // A repeated row (Grisaia's dummy, kx3): the first one stands.
+            archives.entry(name.to_ascii_lowercase()).or_insert(Archive { path, ext });
         }
-        let sound = XmlDocument::parse(sound)?;
-        let parts = sound
-            .unique_child_path("PART")?
-            .context("CatSystem2 PART sound config")?;
-        let mut rules = vec![];
-        for part in sound.children(parts)? {
-            walk_rules(&sound, part, &mut rules, 0)?;
-        }
-        ensure!(!rules.is_empty(), "CatSystem2 sound-prefix rules absent");
-        Ok(Self { archives, rules })
+        Ok(Self { archives, rules: Vec::new() })
     }
     pub(crate) fn resolve(&self, name: &str) -> Result<String> {
         ensure!(

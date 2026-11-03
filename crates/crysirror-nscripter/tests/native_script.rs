@@ -107,7 +107,7 @@ fn xor_script_and_framework_restore_preserve_native_control_without_faking_origi
 }
 #[test]
 fn unsupported_native_command_fails_at_its_pc_and_does_not_acknowledge_the_next_instruction() {
-    let (_temp, mut r) = fixture("*start\nmov %0,3\nsavegame 1\nmov %0,999\nend\n", false);
+    let (_temp, mut r) = fixture("*start\nmov %0,3\nluacall \"x\"\nmov %0,999\nend\n", false);
     let until = Instant::now() + Duration::from_secs(3);
     loop {
         match r.tick(16, InputFrame::default()) {
@@ -116,7 +116,7 @@ fn unsupported_native_command_fails_at_its_pc_and_does_not_acknowledge_the_next_
                 std::thread::sleep(Duration::from_millis(1));
             }
             Err(error) => {
-                assert!(format!("{error:#}").contains("savegame"));
+                assert!(format!("{error:#}").contains("luacall"));
                 break;
             }
         }
@@ -196,4 +196,109 @@ fn native_background_clears_all_character_slots_and_staging_but_keeps_ordinary_s
     assert!(!after["engine"]["layers"]["clients"]["1"]["4103"].is_null());
     press(&mut runtime);
     assert!(runtime.vm_sessions_halted());
+}
+
+fn run_to_halt(r: &mut Runtime) {
+    let until = Instant::now() + Duration::from_secs(10);
+    loop {
+        r.tick(16, InputFrame::default()).unwrap();
+        if diag(r)["halted"] == true {
+            return;
+        }
+        assert!(Instant::now() < until, "{}", diag(r));
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+#[test]
+fn logic_commands_follow_the_original_script_parser() {
+    let (_temp, mut r) = fixture(
+        concat!(
+            "*start\n",
+            "dim ?1[2][3]\n",
+            "mov ?1[1][2],7\n",
+            "mov %1,?1[1][2]\n",
+            "atoi %2,\"-42x\"\n",
+            "itoa $1,15\n",
+            "len %3,\"aあ\"\n",
+            "mid $2,\"abcdef\",2,3\n",
+            "split \"1,two,3\",\",\",%4,$3,%5\n",
+            "sin %6,90\n",
+            "rnd2 %7,5,5\n",
+            "getversion %8\n",
+            "intlimit 9,0,10\n",
+            "mov %9,99\n",
+            "mov3 %20,1,2,3\n",
+            "tablegoto 1,*wrong,*right\n",
+            "*wrong\n",
+            "mov %10,-1\n",
+            "*right\n",
+            "jumpf\n",
+            "mov %11,-1\n",
+            "~\n",
+            "mov %12,5\n",
+            "fileexist %13,\"pixel.png\"\n",
+            "fileexist %14,\"absent.png\"\n",
+            "end\n",
+        ),
+        false,
+    );
+    run_to_halt(&mut r);
+    let ints = diag(&r)["integers"].clone();
+    for (name, expected) in [("1", 7), ("2", -42), ("3", 3), ("4", 1), ("5", 3), ("6", 1000), ("7", 5), ("8", 296), ("9", 10), ("20", 1), ("21", 2), ("22", 3), ("12", 5), ("13", 1)] {
+        assert_eq!(ints[name], expected, "%{name}: {ints}");
+    }
+    assert!(ints["10"].is_null() && ints["11"].is_null(), "{ints}");
+    assert_eq!(ints["14"].as_i64().unwrap_or(0), 0);
+    let strings = diag(&r)["strings"].clone();
+    assert_eq!(strings["1"], "15");
+    assert_eq!(strings["2"], "cde");
+    assert_eq!(strings["3"], "two");
+}
+
+#[test]
+fn sprites_buttons_and_private_saves_use_engine_state() {
+    let (temp, mut r) = fixture(
+        concat!(
+            "*start\n",
+            "lsp 1,\":a;pixel.png\",3,4\n",
+            "lsp2 2,\":a;pixel.png\",10,10,200,100,0\n",
+            "amsp 1,8,9\n",
+            "getsppos 1,%1,%2\n",
+            "getspsize 1,%3,%4\n",
+            "print 1\n",
+            "mov %5,123\n",
+            "savegame 1\n",
+            "savefileexist %7,2\n",
+            "if %7=1 goto *done\n",
+            "savegame 2\n",
+            "mov %5,0\n",
+            "loadgame 1\n",
+            "mov %5,-1\n",
+            "*done\n",
+            "savefileexist %6,1\n",
+            "mov %8,%5\n",
+            "end\n",
+        ),
+        false,
+    );
+    let until = Instant::now() + Duration::from_secs(10);
+    loop {
+        r.tick(16, InputFrame::default()).unwrap();
+        if diag(&r)["halted"] == true {
+            break;
+        }
+        assert!(Instant::now() < until, "{}", diag(&r));
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let ints = diag(&r)["integers"].clone();
+    assert_eq!(ints["1"], 8);
+    assert_eq!(ints["2"], 9);
+    assert_eq!(ints["3"], 2);
+    assert_eq!(ints["4"], 2);
+    // Restoring the slot returns to the saved values and program counter.
+    assert_eq!(ints["5"], 123, "{ints}");
+    assert_eq!(ints["8"], 123, "{ints}");
+    assert_eq!(ints["6"], 1);
+    assert!(std::fs::read_dir(temp.path().join("state")).is_ok());
 }

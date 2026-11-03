@@ -134,6 +134,11 @@ pub struct Machine {
     pub accumulator: u32,
     pub memory: Vec<u8>,
     pub heap: Vec<u8>,
+    ///8761F0 separately owned allocations occupy consecutive positive VM
+    ///address ranges after fixed globals/stack. They never extend the stack.
+    #[serde(default)]
+    allocations: Vec<Vec<u8>>,
+    free_blocks: Vec<(u32,usize)>,
     pub instructions: u64,
     pub halted: bool,
     pub pending: Option<NativeCall>,
@@ -187,6 +192,8 @@ impl Machine {
             accumulator: 0,
             memory,
             heap: vec![0; heap_bytes as usize],
+            allocations: Vec::new(),
+            free_blocks: Vec::new(),
             instructions: 0,
             halted: false,
             pending: None,
@@ -194,8 +201,12 @@ impl Machine {
         })
     }
     fn region(&self, address: u32, count: usize) -> Result<&[u8]> {
+        if count==0&&address as usize==self.memory.len(){return Ok(&self.memory[self.memory.len()..]);}
         let (bytes, at) = if address & 0x80000000 != 0 {
             (&self.heap, (address & 0x7fffffff) as usize)
+        } else if address as usize >= self.memory.len() {
+            let (index,offset)=self.allocation_at(address)?;
+            (&self.allocations[index],offset)
         } else {
             (&self.memory, address as usize)
         };
@@ -208,6 +219,62 @@ impl Machine {
     }
     pub fn read_word(&self, address: u32) -> Result<u32> {
         u32_at(self.region(address, 4)?, 0)
+    }
+    /// Read owned VM data without returning a native pointer. An operation
+    ///cannot cross separately allocated native blocks, even when their numeric
+    ///addresses are adjacent. Such an original out-of-bounds profile fails.
+    pub fn read_bytes(&self,address:u32,count:usize)->Result<Vec<u8>> {
+        Ok(self.region(address,count)?.to_vec())
+    }
+    /// Up to `limit` bytes from `address` to the end of its block.
+    pub fn read_block(&self,address:u32,limit:usize)->Result<Vec<u8>> {
+        let (bytes,at)=if address&0x80000000!=0{(&self.heap,(address&0x7fffffff) as usize)}
+            else if address as usize>=self.memory.len(){let (index,offset)=self.allocation_at(address)?;(&self.allocations[index],offset)}
+            else{(&self.memory,address as usize)};
+        let end=at.saturating_add(limit).min(bytes.len());
+        Ok(bytes.get(at..end).context("KCS address outside owned memory")?.to_vec())
+    }
+    fn allocation_at(&self,address:u32)->Result<(usize,usize)> {
+        let mut at=(address as usize).checked_sub(self.memory.len())
+            .context("KCS allocation address precedes dynamic memory")?;
+        for(index,block)in self.allocations.iter().enumerate(){
+            if at<block.len(){return Ok((index,at));}at-=block.len();
+        }
+        anyhow::bail!("KCS address outside owned allocations")
+    }
+    ///8761F0/876F50 append a zeroed block and return its positive numeric
+    ///address. Allocation is an owner/native boundary, never an opcode-side
+    ///effect inside the instruction rollback transaction. A freed block is reused
+    ///for a request that fits it; nothing is compacted, so addresses stay stable.
+    pub fn allocate_memory(&mut self,count:usize)->Result<u32> {
+        ensure!(self.undo.is_none(),"KCS allocation inside an unfinished instruction");
+        ensure!(count>0,"KCS allocation extent/count profile");
+        if let Some(at)=self.free_blocks.iter().position(|(_,len)|*len>=count&&*len<=count.saturating_mul(2).max(64)){
+            let (address,_)=self.free_blocks.swap_remove(at);
+            let base=self.memory.len();
+            let mut start=base;
+            for block in &mut self.allocations{
+                if start==address as usize{block.fill(0);return Ok(address);}
+                start+=block.len();
+            }
+            anyhow::bail!("KCS freed block {address:#x} is not an allocation");
+        }
+        ensure!(self.allocations.len()<65536,"KCS allocation extent/count profile");
+        let used=self.allocations.iter().try_fold(self.memory.len(),|used,block|
+            used.checked_add(block.len()).context("KCS allocation extent overflow"))?;
+        ensure!(used.checked_add(count).is_some_and(|end|end<=MAX_MEMORY_BYTES),"KCS allocation memory budget");
+        let address=u32::try_from(used).context("KCS allocation address overflow")?;
+        self.allocations.push(vec![0;count]);Ok(address)
+    }
+    /// 6A4640: return a block for reuse. An address that is not a live allocation
+    /// is ignored, as is a second free of the same block.
+    pub fn free_memory(&mut self,address:u32){
+        if self.free_blocks.iter().any(|(free,_)|*free==address){return;}
+        let mut start=self.memory.len();
+        for block in &self.allocations{
+            if start==address as usize{self.free_blocks.push((address,block.len()));return;}
+            start+=block.len();
+        }
     }
     /// Read one native byte string without exposing a host pointer.
     pub fn read_cstring(&self, address: u32, limit: usize) -> Result<Vec<u8>> {
@@ -227,12 +294,16 @@ impl Machine {
         unreachable!()
     }
     pub fn write_bytes(&mut self, address: u32, value: &[u8]) -> Result<()> {
+        if value.is_empty(){self.region(address,0)?;return Ok(());}
         if self.undo.is_some() {
             let old = self.region(address, value.len())?.to_vec();
             self.undo.as_mut().unwrap().push((address, old));
         }
         let (bytes, at) = if address & 0x80000000 != 0 {
             (&mut self.heap, (address & 0x7fffffff) as usize)
+        } else if address as usize >= self.memory.len() {
+            let(index,offset)=self.allocation_at(address)?;
+            (&mut self.allocations[index],offset)
         } else {
             (&mut self.memory, address as usize)
         };
@@ -246,13 +317,20 @@ impl Machine {
         Ok(())
     }
     fn push(&mut self, value: u32) -> Result<()> {
+        self.stack_region(self.stack,4)?;
         self.write_bytes(self.stack, &value.to_le_bytes())?;
         self.stack = self.stack.checked_add(4).context("KCS stack overflow")?;
         Ok(())
     }
     fn pop(&mut self) -> Result<u32> {
         self.stack = self.stack.checked_sub(4).context("KCS stack underflow")?;
+        self.stack_region(self.stack,4)?;
         self.read_word(self.stack)
+    }
+    fn stack_region(&self,address:u32,count:usize)->Result<&[u8]> {
+        let at=address as usize;
+        let end=at.checked_add(count).context("KCS stack extent overflow")?;
+        self.memory.get(at..end).context("KCS stack outside fixed globals/stack memory")
     }
     fn raw_operand(&mut self, code: &[u8]) -> Result<Operand> {
         let at = self.pc as usize;
@@ -306,7 +384,7 @@ impl Machine {
     /// pushes1. Validate every write before mutation, preserving source stack.
     pub fn resume_native_event(&mut self,event:Option<(u32,[u32;4])>)->Result<()> {
         ensure!(self.pending.is_none()&&!self.halted,"KCS cannot resume native event at pending call/halt");
-        self.region(self.stack,4)?;self.stack.checked_add(4).context("KCS event resume stack overflow")?;
+        self.stack_region(self.stack,4)?;self.stack.checked_add(4).context("KCS event resume stack overflow")?;
         if let Some((address,_))=event{self.region(address,16)?;}
         if let Some((address,words))=event{let mut bytes=[0u8;16];for (out,word) in bytes.chunks_exact_mut(4).zip(words){out.copy_from_slice(&word.to_le_bytes());}self.write_bytes(address,&bytes)?;}
         self.push(u32::from(event.is_some()))?;Ok(())
@@ -348,7 +426,7 @@ impl Machine {
             self.region(*address, bytes.len())?;
         }
         if result {
-            self.region(pending.stack_after_arguments, 4)?;
+            self.stack_region(pending.stack_after_arguments, 4)?;
         }
         Ok(())
     }
@@ -830,5 +908,52 @@ impl Machine {
             _ => bail!("unsupported KCS opcode {op:#04x} at native PC {original:#x}"),
         }
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod allocation_tests {
+    use super::*;
+    fn program(code:Vec<u8>)->Program {Program{code,globals_bytes:0,stack_bytes:16,strings:Vec::new()}}
+    #[test]
+    fn original_dynamic_ranges_preserve_boundaries_clone_and_address_class() {
+        let mut machine=Machine::new(&program(vec![0x3b]),32).unwrap();
+        assert!(machine.allocate_memory(0).is_err());
+        let first=machine.allocate_memory(3).unwrap();
+        let second=machine.allocate_memory(5).unwrap();
+        assert_eq!((first,second),(16,19));
+        assert_eq!(machine.read_bytes(first,3).unwrap(),[0;3]);
+        machine.write_bytes(first,&[1,2,3]).unwrap();
+        machine.write_bytes(second,&[4,5,6,7,8]).unwrap();
+        assert_eq!(machine.read_word(second).unwrap(),0x07060504);
+        assert!(machine.write_bytes(first,&[9;4]).is_err());
+        assert!(machine.read_bytes(first,4).is_err());
+        assert_eq!(machine.read_bytes(first,3).unwrap(),[1,2,3]);
+        assert!(machine.read_bytes(24,1).is_err());
+        assert!(machine.allocate_memory(MAX_MEMORY_BYTES).is_err());
+        let third=machine.allocate_memory(1).unwrap();assert_eq!(third,24);
+        let mut cloned=machine.clone();cloned.write_bytes(first,&[9;3]).unwrap();
+        assert_eq!(machine.read_bytes(first,3).unwrap(),[1,2,3]);
+        machine.write_bytes(0x80000000,&[42]).unwrap();
+        assert_eq!(machine.read_bytes(0x80000000,1).unwrap(),[42]);
+        assert_eq!(machine.read_bytes(first,3).unwrap(),[1,2,3]);
+        let restored:Machine=serde_json::from_slice(&serde_json::to_vec(&machine).unwrap()).unwrap();
+        assert_eq!(restored.read_bytes(second,5).unwrap(),[4,5,6,7,8]);
+    }
+    #[test]
+    fn native_allocations_do_not_expand_the_result_stack_or_instruction_transaction() {
+        let mut code=Vec::new();
+        for _ in 0..4 {code.extend([0x2e,3]);code.extend(7u32.to_le_bytes());}
+        code.extend([0x2b,3]);code.extend(39u32.to_le_bytes());code.push(3);code.extend(0u32.to_le_bytes());
+        let program=program(code);
+        let mut machine=Machine::new(&program,32).unwrap();
+        let block=machine.allocate_memory(16).unwrap();assert_eq!(block,16);
+        let Event::Native(call)=machine.step(&program,100).unwrap()else{panic!("expected native result admission");};
+        assert_eq!(call.id,39);assert!(machine.preflight_native(true,&[]).is_err());
+        assert!(machine.acknowledge(Some(42)).is_err());assert_eq!(machine.pending,Some(call));
+        assert_eq!(machine.read_bytes(block,16).unwrap(),[0;16]);
+        machine.undo=Some(Vec::new());
+        assert!(machine.allocate_memory(1).is_err());machine.undo=None;
+        assert_eq!(machine.allocate_memory(1).unwrap(),32);
     }
 }

@@ -21,6 +21,9 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
+#[path = "native_restore.rs"]
+mod native_restore;
+
 fn core<T>(r: crysirror_core::Result<T>) -> Result<T> {
     r.map_err(|e| anyhow::anyhow!("{e}"))
 }
@@ -118,6 +121,7 @@ pub struct SharedHost {
     surfaces: Vec<(ClientId, u32, Option<(u32, u32, Vec<u8>)>)>,
     pcm: BTreeMap<ClientId, Vec<[f32; 2]>>,
     pub channel_audio: crysirror_audio::channels::ChannelAudio,
+    pub(crate) audio_replacement_owner: Arc<()>,
     pub media: crate::media::MediaManager,
     pub fonts: crate::font_resources::FontResources,
     pub text: crysirror_text::TextSystem,
@@ -127,11 +131,23 @@ pub struct SharedHost {
     image_memory: Arc<std::sync::atomic::AtomicUsize>,
     pattern_owner:Arc<()>,
     pub(crate) canvas_images: crate::canvas_images::Broker,
+    pub(crate) capture_canvas: [u32; 2],
     vfx_image_dependencies:BTreeSet<(ClientId,String)>,
     /// Display reported by the presenting host (desktop monitor, or a
     /// headless render's virtual display).
     pub display: Option<crysirror_core::service::DisplayInfo>,
     pub window_focused: Option<bool>,
+    pub window_minimized:Option<bool>,
+    pub window_geometry:Option<crysirror_core::service::WindowGeometry>,
+    /// Backend metadata, independent of saved simulation/input state. The
+    /// position is absent until the backend actually reports one.
+    pub pointer_observation: crysirror_core::service::PointerObservation,
+    /// Live backend pointer events, never restored from simulation snapshots.
+    pub pointer_activity: Option<u64>,
+    input_observation: Option<crysirror_core::service::InputObservation>,
+    input_revision: u64,
+    /// Optional backend owned by the host, never by a VM or save snapshot.
+    pub platform_integration_provider: Option<Arc<dyn crysirror_core::service::PlatformIntegrationProvider>>,
     /// Derived worker receipts, never VM/snapshot declarations or device state.
     pub(crate) vfx_sequences: BTreeMap<(u32, u32), serde_json::Value>,
 }
@@ -144,6 +160,13 @@ impl SharedHost {
     }
     fn collect_retired_images(&self)->crysirror_core::Result<()> {
         if self.published_images.has_retired(){let (complete,paths)=self.retained_images();if complete {self.published_images.collect_retired(&paths)?;}}
+        Ok(())
+    }
+    /// Publish one actual pointer move/entry (or explicit virtual-backend
+    /// initialization). This does not invent a coordinate or admit VM input.
+    pub fn note_pointer_activity(&mut self) -> Result<()> {
+        self.pointer_activity = Some(self.pointer_activity.unwrap_or(0).checked_add(1)
+            .context("pointer activity counter exhausted")?);
         Ok(())
     }
     /// Drain all client PCM blocks for one host frame, mixing without clipping.
@@ -177,8 +200,15 @@ impl FileSystem for SharedHost {
     fn write_atomic(&mut self, c: ClientId, p: &VfsPath, b: &[u8]) -> crysirror_core::Result<()> {
         self.fs.write_atomic(c, p, b)
     }
+    fn remove(&mut self, c: ClientId, p: &VfsPath) -> crysirror_core::Result<()> {
+        self.fs.remove(c, p)
+    }
 }
 impl HostServices for SharedHost {
+    fn begin_session_seed(&mut self,client:ClientId,source:crysirror_core::service::SessionSeedSource)->crysirror_core::Result<Box<dyn crysirror_core::service::SessionSeedQuery>> {
+        if !self.clients.contains(&client){return Err(Error::NotFound);}
+        crate::session_seed::begin(&self.image_tasks,client,source)
+    }
     fn begin_media_probe(&mut self,client:ClientId,asset:&VfsPath)->crysirror_core::Result<crysirror_core::service::MediaProbeJob> {
         if !self.clients.contains(&client){return Err(Error::NotFound);}
         crate::media::probe::begin(client,asset.clone(),self.fs.storage(client)?,self.image_tasks.clone(),self.image_memory.clone())
@@ -187,6 +217,24 @@ impl HostServices for SharedHost {
         if !self.clients.contains(&client) { return Err(Error::NotFound); }
         let request=self.engine.canvases.capture_request(client,canvas).map_err(|e|Error::Io(e.to_string()))?;
         self.canvas_images.begin(client,request,self.published_images.snapshot(),&self.text,&self.image_tasks,self.image_memory.clone())
+    }
+    fn begin_layer_prefix_image(&mut self,client:ClientId,size:[u32;2],order_exclusive:[i32;2])->crysirror_core::Result<crysirror_core::image_processing::ImageJob>{self.begin_layer_prefix_image_over(client,size,order_exclusive,[0;4])}
+    fn begin_layer_prefix_image_over(&mut self,client:ClientId,size:[u32;2],order_exclusive:[i32;2],clear:[u8;4])->crysirror_core::Result<crysirror_core::image_processing::ImageJob>{
+        if !self.clients.contains(&client){return Err(Error::NotFound);}
+        let mut layers=self.engine.layers.prefix_snapshot_specs(client,order_exclusive).map_err(|e|Error::Io(e.to_string()))?;
+        if clear!=[0;4]{
+            if layers.iter().any(|l|l.order==[i32::MIN;2]){return Err(Error::Unsupported("prefix clear with occupied minimum order"));}
+            let id=(0..=layers.len()as u32).map(|n|u32::MAX-n).find(|id|layers.iter().all(|l|l.id!=*id)).ok_or(Error::Limit("prefix clear layer id"))?;
+            let layer=serde_json::from_value(serde_json::json!({"id":id,"rect":[0,0,size[0],size[1]],"paint":{"kind":"solid","color":clear},"order":[i32::MIN,i32::MIN]})).map_err(|e|Error::Io(e.to_string()))?;
+            layers.insert(0,layer);
+        }
+        let request=crysirror_scene::canvas::MaterializeRequest{client:client.0,surface:0,size,layers:Arc::new(layers)};
+        self.canvas_images.begin(client,request,self.published_images.snapshot(),&self.text,&self.image_tasks,self.image_memory.clone())
+    }
+    fn begin_frame_capture(&mut self, client:ClientId)->crysirror_core::Result<crysirror_core::image_processing::ImageJob> {
+        if !self.clients.contains(&client) { return Err(Error::NotFound); }
+        let size=self.capture_canvas;
+        self.canvas_images.begin_frame(client,size,&self.image_tasks,self.image_memory.clone())
     }
     fn begin_pattern(&mut self,client:ClientId,request:crysirror_core::service::PatternRequest)->crysirror_core::Result<crysirror_core::service::PatternJob> {
         if !self.clients.contains(&client){return Err(Error::NotFound);}
@@ -374,6 +422,11 @@ impl HostServices for SharedHost {
             .begin_resource_preparation(client.0, asset, measure_frames, storage)
             .map_err(|e| Error::Io(format!("audio resource preparation: {e:#}")))
     }
+    fn begin_encoded_audio_resource(&mut self, client:ClientId, name:&str, encoded:crysirror_core::service::EncodedAudio, measure_frames:bool)->crysirror_core::Result<u64> {
+        if !self.clients.contains(&client){return Err(Error::NotFound)}
+        self.channel_audio.begin_encoded_resource_preparation(client.0,name,encoded,measure_frames)
+            .map_err(|error|Error::Io(format!("encoded audio resource preparation: {error:#}")))
+    }
     fn begin_transformed_audio_resource(
         &mut self,
         client: ClientId,
@@ -469,6 +522,23 @@ impl HostServices for SharedHost {
             .playback_info(client.0, channel)
             .map_err(|e| Error::Io(format!("shared audio transport: {e:#}")))
     }
+    fn begin_audio_replacement(&mut self,client:ClientId,requests:Vec<crysirror_core::service::AudioRequest>)->crysirror_core::Result<crysirror_core::service::AudioReplacementJob> {
+        if !self.clients.contains(&client) {return Err(Error::NotFound);}
+        crate::audio_replacement::begin(&self.channel_audio,self.audio_replacement_owner.clone(),client,
+            requests,self.fs.storage(client)?,self.host_tasks.clone())
+    }
+    fn begin_audio_seek(&mut self, client:ClientId,channel:u32,frame:u64)->crysirror_core::Result<u64>{
+        if !self.clients.contains(&client){return Err(Error::NotFound);}
+        self.channel_audio.begin_channel_seek(client.0,channel,frame).map_err(|e|Error::Io(format!("shared audio seek: {e:#}")))
+    }
+    fn audio_seek_preparation(&mut self,client:ClientId,ticket:u64)->crysirror_core::Result<crysirror_core::service::AudioPreparation>{
+        if !self.clients.contains(&client){return Err(Error::NotFound);}
+        self.channel_audio.channel_seek_preparation(client.0,ticket).map_err(|e|Error::Io(format!("shared audio seek: {e:#}")))
+    }
+    fn release_audio_seek(&mut self,client:ClientId,ticket:u64)->crysirror_core::Result<()>{
+        if !self.clients.contains(&client){return Err(Error::NotFound);}
+        self.channel_audio.release_channel_seek(client.0,ticket).map_err(|e|Error::Io(format!("shared audio seek: {e:#}")))
+    }
     fn audio_playing(&self, client: ClientId, channel: u32) -> crysirror_core::Result<bool> {
         if !self.clients.contains(&client) {
             return Err(Error::NotFound);
@@ -501,6 +571,8 @@ impl HostServices for SharedHost {
             ),
             Q::UiWidget(id) => serde_json::to_value(self.engine.ui.get(client.0, id)),
             Q::UiInteraction(id)=>serde_json::to_value(self.engine.ui.interaction(client.0,id)),
+            Q::UiTextAction(id)=>serde_json::to_value(self.engine.ui.text_action(client.0,id)),
+            Q::UiInputEligible(id)=>serde_json::to_value(self.engine.ui.input_eligible(client.0,id,self.capture_canvas).map_err(|e|Error::Io(e.to_string()))?),
             Q::UiMotion(id) => serde_json::to_value(self.engine.ui.motion_status(client, id).map_err(|e|Error::Io(e.to_string()))?),
             Q::UiSnapshot {canvas,root} => serde_json::to_value(
                 self.engine.ui.snapshot_layers(client.0,canvas,root).map_err(|e|Error::Io(e.to_string()))?
@@ -608,6 +680,15 @@ impl HostServices for SharedHost {
                 .media
                 .stop(client, id)
                 .map_err(|e| Error::Io(e.to_string()))?,
+            MediaRequest::SetGain { gain, .. } => {
+                let update = self.media.gain_update(client, id, gain)
+                    .map_err(|e| Error::Io(e.to_string()))?;
+                if let Some(update) = update {
+                    self.channel_audio.submit(update.client.0, update.request)
+                        .map_err(|e| Error::Io(e.to_string()))?;
+                }
+                self.media.commit_gain(client, id, gain);
+            }
             MediaRequest::Remove { .. } => {
                 self.media.remove(client, id).map_err(|e| Error::Io(e.to_string()))?;
                 self.surfaces.push((client, slot, None));
@@ -641,6 +722,36 @@ impl HostServices for SharedHost {
     fn window_focused(&self, client: ClientId) -> crysirror_core::Result<Option<bool>> {
         if !self.clients.contains(&client) { return Err(Error::NotFound); }
         Ok(self.window_focused)
+    }
+    fn window_geometry(&self,client:ClientId)->crysirror_core::Result<Option<crysirror_core::service::WindowGeometry>>{
+        if !self.clients.contains(&client){return Err(Error::NotFound);}
+        Ok(self.window_geometry)
+    }
+    fn window_minimized(&self,client:ClientId)->crysirror_core::Result<Option<bool>>{
+        if !self.clients.contains(&client){return Err(Error::NotFound);}
+        Ok(self.window_minimized)
+    }
+    fn pointer_activity(&self, client: ClientId) -> crysirror_core::Result<Option<u64>> {
+        if !self.clients.contains(&client) { return Err(Error::NotFound); }
+        Ok(self.pointer_activity)
+    }
+    fn input_observation(&self, client: ClientId) -> crysirror_core::Result<crysirror_core::service::InputObservation> {
+        if !self.clients.contains(&client) { return Err(Error::NotFound); }
+        let mut observation = self.input_observation.ok_or(Error::NotFound)?;
+        observation.client = client;
+        Ok(observation)
+    }
+    fn platform_integration(&self, client: ClientId, integration: crysirror_core::service::PlatformIntegration) -> crysirror_core::Result<crysirror_core::service::PlatformIntegrationInfo> {
+        if !self.clients.contains(&client) { return Err(Error::NotFound); }
+        if let Some(provider)=&self.platform_integration_provider {
+            let info=provider.info(client,integration)?;
+            if info.client!=client||info.integration!=integration||info.available&&info.backend.is_none() {
+                return Err(Error::Invalid("platform integration owner/backend receipt"));
+            }
+            Ok(info)
+        } else {
+            Ok(crysirror_core::service::PlatformIntegrationInfo { client,integration,available:false,backend:None })
+        }
     }
     fn media_info(
         &self,
@@ -888,6 +999,7 @@ impl HostServices for SharedHost {
             return Err(Error::NotFound);
         }
         Ok(Arc::new(SharedImageMetadata {
+            text: self.text.for_client(client),
             storage: self.fs.storage(client)?,
             decoders: self.decoders.clone(),
             sizes: std::sync::Mutex::new(BTreeMap::new()),
@@ -1020,7 +1132,7 @@ impl HostServices for RestoreResources<'_> {
         if !self.source.clients.contains(&client) { return Err(Error::NotFound); }
         if schema != 1 { return Err(Error::Unsupported("restore engine batch schema")); }
         let batch: crysirror_scene::ServiceBatch = serde_json::from_slice(data).map_err(|e|Error::Io(e.to_string()))?;
-        if !batch.input_routes.is_empty() || !batch.world.is_empty() || !batch.layers.is_empty() || !batch.canvases.is_empty()
+        if !batch.input_routes.is_empty() || !batch.world.is_empty() || !batch.prepare_layers.is_empty() || !batch.layers.is_empty() || !batch.canvases.is_empty()
             || !batch.ui.iter().all(|command| matches!(command,
                 U::SetFullscreen { .. } | U::DefineCursor { .. } |
                 U::SetCursor { .. } | U::SetCursorVisible { .. }))
@@ -1053,6 +1165,7 @@ pub struct Runtime {
     audio_frame: Option<(u64, crysirror_audio::render_job::MixFrame)>,
     sessions: Vec<Session>,
     registry: AdapterRegistry,
+    native_restores: native_restore::Coordinator,
     fingerprint: String,
     /// Decoders for world videos (visual state, rebuilt from the saved spec).
     videos: std::collections::HashMap<(u32, String), VideoPlayback>,
@@ -1251,6 +1364,7 @@ impl Runtime {
         registry: AdapterRegistry,
     ) -> Result<Self> {
         project.validate()?;
+        let capture_canvas = project.canvas;
         let root = root.canonicalize().context("asset directory missing")?;
         ensure!(root.is_dir(), "asset root is not a directory");
         let mut sessions = Vec::new();
@@ -1309,9 +1423,17 @@ impl Runtime {
                 image_memory: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
                 pattern_owner:Arc::new(()),
                 canvas_images:crate::canvas_images::Broker::new(assets.store_id()),
+                capture_canvas,
                 vfx_image_dependencies:BTreeSet::new(),
                 display: None,
                 window_focused: None,
+                window_minimized:None,
+                window_geometry:None,
+                pointer_observation: Default::default(),
+                pointer_activity: None,
+                input_observation: None,
+                input_revision: 0,
+                platform_integration_provider: None,
                 vfx_sequences: BTreeMap::new(),
                 scene: SceneState::default(),
                 engine,
@@ -1323,6 +1445,7 @@ impl Runtime {
                 surfaces: Vec::new(),
                 pcm: BTreeMap::new(),
                 channel_audio: Default::default(),
+                audio_replacement_owner: Arc::new(()),
                 media: Default::default(),
                 fonts,
                 text,
@@ -1336,6 +1459,7 @@ impl Runtime {
             audio_frame: None,
             sessions,
             registry,
+            native_restores: native_restore::Coordinator::new()?,
             fingerprint,
             videos: Default::default(),
             transition_mask: None,
@@ -1482,12 +1606,17 @@ impl Runtime {
         self.host.decoders=self.assets.decoders.clone();
         self.host.fonts.advance()?;
         for session in &mut self.sessions {
-            if session.vm.preparation_pending() {
+            if !self.native_restores.active(session.id) && session.vm.preparation_pending() {
                 session.yielded=core(session.vm.step(&mut self.host,InputFrame::default(),1024))
                     .with_context(||format!("VM {} preparation",session.name))?;
             }
         }
         Ok(self.sessions.iter().any(|session|session.vm.preparation_pending()))
+    }
+    /// Keep displaying the last complete frame while a native callback awaits
+    /// resources. This does not block internal image/canvas preparation.
+    pub fn presentation_pending(&self) -> bool {
+        self.sessions.iter().any(|session| session.vm.presentation_pending())
     }
     fn tick_inner(&mut self, delta_ms: u64, input: InputFrame, render_audio: bool) -> Result<()> {
         ensure!(
@@ -1511,6 +1640,8 @@ impl Runtime {
             .clock_ms
             .checked_add(delta_ms)
             .context("clock overflow")?;
+        let input_revision = self.host.input_revision.checked_add(1).context("input observation revision overflow")?;
+        self.host.engine.ui.pointer_window_focused=self.host.window_focused;
         let consumed = {
             let _span = self.profiler.span(profile_frame, "world.physics_ui");
             let physics = &mut self.physics;
@@ -1526,6 +1657,19 @@ impl Runtime {
             }
         };
         self.host.clock_ms = clock;
+        self.host.input_revision = input_revision;
+        self.host.input_observation = Some(crysirror_core::service::InputObservation {
+            client: ClientId(0),
+            revision: input_revision,
+            time_ms: clock,
+            buttons_down: input.buttons_down,
+            buttons_pressed: input.buttons_pressed,
+            pointer: self.host.pointer_observation.position,
+            pointer_inside: self.host.pointer_observation.inside,
+            focused: self.host.window_focused,
+        });
+        let mut input=input;
+        if let Some([x,y])=self.host.engine.ui.pointer_override(){input.pointer_x=x;input.pointer_y=y;}
         let input = if consumed {
             InputFrame {
                 buttons_down: 0,
@@ -1544,7 +1688,7 @@ impl Runtime {
         self.host.vfx_image_dependencies.clear();
         self.vfx.visit_image_dependencies(&mut |client,path|{if path.starts_with("__image_resource/"){self.host.vfx_image_dependencies.insert((client,path.to_owned()));}});
         for s in &mut self.sessions {
-            if s.yielded == VmYield::Halted {
+            if s.yielded == VmYield::Halted || self.native_restores.active(s.id) {
                 continue;
             }
             s.yielded = core(s.vm.step(&mut self.host, input, 1024))
@@ -1701,7 +1845,7 @@ impl Runtime {
         Ok(())
     }
     pub fn all_halted(&self) -> bool {
-        self.sessions.iter().all(|s| s.yielded == VmYield::Halted)
+        !self.native_restores.any_active() && self.sessions.iter().all(|s| s.yielded == VmYield::Halted)
     }
     /// Every VM session (at least one) has halted: the games are done.
     pub fn vm_sessions_halted(&self) -> bool {
@@ -1711,6 +1855,7 @@ impl Runtime {
     /// some game handles it (it halts once it agrees); `false` when the host
     /// should close now.
     pub fn request_close(&mut self) -> bool {
+        self.native_restores.cancel_all();
         let mut handled = false;
         for s in &mut self.sessions {
             if s.yielded != VmYield::Halted {
@@ -1724,9 +1869,10 @@ impl Runtime {
     }
     pub fn inspect(&self) -> serde_json::Value {
         serde_json::json!({"name":self.project.name,"frame":self.host.scene.frame(),"time_ms":self.host.clock_ms,
+            "native_restore":self.native_restores.inspect(),
             "visuals":self.host.scene.visuals().len(),"voices":self.host.scene.voices().len(),
             "profile":self.profiler.snapshot(),"tasks":self.assets.tasks_inspect(),"channel_audio":self.host.channel_audio.mixer.stats(),"audio_nonblocking":self.audio_is_nonblocking(),"media":self.host.media.inspect(),"vfx":self.vfx.inspect(None),
-            "engine":self.host.engine,
+            "engine":serde_json::to_value(&self.host.engine).unwrap_or_else(|e|serde_json::json!({"unavailable":e.to_string()})),
             "adapters":self.registry.names(),"sessions":self.sessions.iter().map(|s|serde_json::json!({
                 "name":s.name,"client":s.id.0,"engine":s.vm.engine_id(),"yield":format!("{:?}",s.yielded),"native":serde_json::from_slice::<serde_json::Value>(&s.vm.diagnostics()).ok()
             })).collect::<Vec<_>>()})
@@ -1750,6 +1896,7 @@ impl Runtime {
         }
     }
     pub fn capture_snapshot(&self) -> Result<SnapshotCapture> {
+        ensure!(!self.native_restores.any_active(), "original restore preparation cannot be snapshotted");
         ensure!(
             !self.host.channel_audio.has_release_state(),
             "engine audio release snapshot requires worker/decoder reconstruction support"
@@ -1908,6 +2055,7 @@ impl Runtime {
             });
         }
         let next_restored = self.restored.checked_add(1).context("restore counter")?;
+        let next_input_revision = self.host.input_revision.checked_add(1).context("input observation revision overflow")?;
         let previous_uploads = std::mem::take(&mut self.host.generated);
         let rebuild = (|| -> Result<()> {
             let mut host = RestoreResources {
@@ -1927,6 +2075,8 @@ impl Runtime {
             self.assets.register_generated(client, &path, bytes)?;
         }
 
+        let native_restore_epoch = self.native_restores.next_epoch()?;
+        self.native_restores.invalidate(native_restore_epoch);
         scene.restore_frame(services.frame);
         self.sessions = staged_sessions;
         self.host.scene = scene;
@@ -1936,6 +2086,8 @@ impl Runtime {
         self.host.engine = engine;
         // Lock state describes this live input session, never restored OS state.
         self.host.keyboard_locks.clear();
+        self.host.input_observation = None;
+        self.host.input_revision = next_input_revision;
         self.physics.invalidate();
         self.vfx.reset(self.host.clock_ms);
         self.host.vfx_sequences.clear();
@@ -1957,6 +2109,8 @@ impl Runtime {
         core(s.vm.export_original_save())
     }
     pub fn import_original_save(&mut self, client: ClientId, bytes: &[u8]) -> Result<()> {
+        ensure!(!self.native_restores.active(client), "original restore client busy");
+        let native_restore_epoch = self.native_restores.next_epoch()?;
         let i = self
             .sessions
             .iter()
@@ -1965,6 +2119,7 @@ impl Runtime {
         if self.sessions[i].vm.original_save_import_is_transactional() {
             core(self.sessions[i].vm.import_original_save(bytes))?;
             self.sessions[i].yielded = VmYield::BudgetExhausted;
+            self.native_restores.invalidate(native_restore_epoch);
             return Ok(());
         }
         let mut vm = self.registry.create(client, &self.project.clients[i])?;
@@ -1972,6 +2127,7 @@ impl Runtime {
         core(vm.import_original_save(bytes))?;
         self.sessions[i].vm = vm;
         self.sessions[i].yielded = VmYield::BudgetExhausted;
+        self.native_restores.invalidate(native_restore_epoch);
         Ok(())
     }
     /// This frame's screen transition (ADR 0022). Pattern wipes get the
@@ -2058,6 +2214,83 @@ mod tests {
         let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/desktop/project.json");
         let r = Runtime::load(&p, tmp.path()).unwrap();
         (tmp, r)
+    }
+    #[test]
+    fn platform_integrations_are_live_owner_checked_capabilities_not_saved_game_flags() {
+        use crysirror_core::service::{PlatformIntegration as K, PlatformIntegrationInfo as I, PlatformIntegrationProvider as P};
+        struct Provider { foreign:bool, ready:bool, backend:bool }
+        impl P for Provider {
+            fn info(&self,client:ClientId,integration:K)->crysirror_core::Result<I> {
+                Ok(I {client:if self.foreign {ClientId(999)}else{client},integration,available:self.ready,backend:self.backend.then_some("authored-test-provider")})
+            }
+        }
+        let (_tmp,mut r)=runtime();
+        let no_backend=r.host.platform_integration(ClientId(1),K::Steam).unwrap();
+        assert!(!no_backend.available&&no_backend.backend.is_none());
+        assert!(r.host.platform_integration(ClientId(999),K::Steam).is_err());
+        for (foreign,ready,backend) in [(true,true,true),(false,true,false)] {
+            r.host.platform_integration_provider=Some(Arc::new(Provider {foreign,ready,backend}));
+            assert!(r.host.platform_integration(ClientId(1),K::Steam).is_err());
+        }
+        r.host.platform_integration_provider=Some(Arc::new(Provider {foreign:false,ready:true,backend:true}));
+        let ready=r.host.platform_integration(ClientId(1),K::Steam).unwrap();
+        assert!(ready.available&&ready.backend.is_some());
+        let snapshot=r.snapshot().unwrap();
+        r.host.platform_integration_provider=None;
+        r.restore(&snapshot).unwrap();
+        assert_eq!(r.host.platform_integration(ClientId(1),K::Steam).unwrap(),no_backend);
+    }
+    #[test]
+    fn pointer_activity_is_live_scope_checked_and_not_an_admitted_frame_or_saved_counter() {
+        let (_tmp,mut r)=runtime();
+        assert_eq!(r.host.pointer_activity(ClientId(1)).unwrap(),None);
+        assert!(r.host.pointer_activity(ClientId(999)).is_err());
+        r.host.note_pointer_activity().unwrap();
+        assert_eq!(r.host.pointer_activity(ClientId(1)).unwrap(),Some(1));
+        assert!(r.host.input_observation(ClientId(1)).is_err());
+        let saved=r.snapshot().unwrap();
+        r.host.note_pointer_activity().unwrap();
+        r.restore(&saved).unwrap();
+        assert_eq!(r.host.pointer_activity(ClientId(1)).unwrap(),Some(2));
+        assert_eq!(r.host.pointer_activity(ClientId(2)).unwrap(),Some(2));
+        assert!(r.host.pointer_observation.position.is_none());
+        r.host.pointer_activity=Some(u64::MAX);
+        assert!(r.host.note_pointer_activity().is_err());
+        assert_eq!(r.host.pointer_activity,Some(u64::MAX));
+    }
+    #[test]
+    fn input_observation_requires_admission_and_preserves_unknown_pointer_metadata() {
+        let (_tmp, mut r) = runtime();
+        assert!(r.host.input_observation(ClientId(1)).is_err());
+        r.poll_vm_preparations().unwrap();
+        assert!(r.host.input_observation(ClientId(1)).is_err());
+        r.tick(0, InputFrame::default()).unwrap();
+        let first = r.host.input_observation(ClientId(1)).unwrap();
+        assert_eq!((first.pointer, first.pointer_inside, first.focused), (None, None, None));
+        assert_eq!(first, r.host.input_observation(ClientId(1)).unwrap());
+        assert!(r.host.input_observation(ClientId(999)).is_err());
+        assert_eq!(r.host.input_observation(ClientId(2)).unwrap().client, ClientId(2));
+        r.host.pointer_observation = crysirror_core::service::PointerObservation {
+            position: Some([0, 0]), inside: Some(true),
+        };
+        r.host.window_focused = Some(true);
+        // Backend publication alone does not create an admitted input sample.
+        assert_eq!(first, r.host.input_observation(ClientId(1)).unwrap());
+        r.tick(16, InputFrame { buttons_down: 1, buttons_pressed: 1, ..Default::default() }).unwrap();
+        let second = r.host.input_observation(ClientId(1)).unwrap();
+        assert!(second.revision > first.revision);
+        assert_eq!((second.pointer, second.pointer_inside, second.focused), (Some([0,0]), Some(true), Some(true)));
+        assert_eq!((second.buttons_down, second.buttons_pressed), (1,1));
+        let snapshot = r.snapshot().unwrap();
+        r.host.pointer_observation.inside = Some(false);
+        r.host.window_focused = Some(false);
+        r.restore(&snapshot).unwrap();
+        assert!(r.host.input_observation(ClientId(1)).is_err());
+        assert_eq!(r.host.pointer_observation.position, Some([0,0]));
+        r.tick(16, InputFrame::default()).unwrap();
+        let third = r.host.input_observation(ClientId(1)).unwrap();
+        assert!(third.revision > second.revision);
+        assert_eq!((third.pointer_inside, third.focused, third.buttons_pressed), (Some(false), Some(false), 0));
     }
     #[test]
     fn window_focus_is_client_scoped_live_host_state_after_restore() {
@@ -2184,8 +2417,14 @@ mod engine_tests {
             assert!(host.submit_engine(ClientId(999), 1, &allowed).is_err());
             let forbidden = serde_json::to_vec(&ServiceBatch { world: vec![WorldCommand::Despawn { id: 1 }], ..Default::default() }).unwrap();
             assert!(host.submit_engine(ClientId(1), 1, &forbidden).is_err());
+            let forbidden_prepass=serde_json::to_vec(&ServiceBatch {
+                prepare_layers:vec![serde_json::from_value(serde_json::json!({"op":"put","layer":{"id":77,"rect":[0,0,1,1],"paint":{"kind":"solid","color":[1,2,3,255]}}})).unwrap()],
+                ..Default::default()
+            }).unwrap();
+            assert!(host.submit_engine(ClientId(1),1,&forbidden_prepass).is_err());
         }
         assert_eq!(staged.ui.fullscreen, Some((1, true)));
+        assert!(staged.layers.get(ClientId(1),77).is_none());
         assert_eq!(serde_json::to_value(&runtime.host.engine).unwrap(), live);
     }
     #[test]
@@ -2559,6 +2798,7 @@ mod siglus_pack_tests {
 /// Image metadata handle over the same scoped storage and decoder registry the
 /// renderer uses; sizes are cached per handle.
 struct SharedImageMetadata {
+    text:crysirror_text::TextSystem,
     owner:ClientId,
     tasks:crysirror_tasks::TaskPool,
     memory:Arc<std::sync::atomic::AtomicUsize>,
@@ -2567,6 +2807,27 @@ struct SharedImageMetadata {
     sizes: std::sync::Mutex<BTreeMap<String, ([u32; 2],bool,[u8;32])>>,
 }
 impl crysirror_core::service::ImageMetadata for SharedImageMetadata {
+    fn begin_packed_pixels(&self,spec:crysirror_core::image_processing::PackedImageSpec)->crysirror_core::Result<crysirror_core::image_processing::ImageJob>{crate::image_processing::begin_packed(self.owner,spec,self.tasks.clone(),self.memory.clone())}
+
+    fn begin_bitmap_text(&self,input:crysirror_core::image_processing::ImageInput,spec:crysirror_core::image_processing::BitmapTextSpec)->crysirror_core::Result<crysirror_core::image_processing::ImageJob>{
+        crate::image_processing::bitmap_text::begin(self.owner,input,spec,self.text.clone(),self.storage.clone(),self.decoders.clone(),self.tasks.clone(),self.memory.clone())
+    }
+
+    fn begin_encoded(&self,name:&str,bytes:Arc<[u8]>)->crysirror_core::Result<crysirror_core::image_processing::ImageJob>{
+        crate::image_processing::encoded::begin(self.owner,name,bytes,self.storage.clone(),self.decoders.clone(),self.tasks.clone(),self.memory.clone())
+    }
+    fn begin_glyph_image(&self,spec:crysirror_core::image_processing::GlyphImageSpec)->crysirror_core::Result<crysirror_core::image_processing::ImageJob> {
+        crate::image_processing::glyph::begin(self.owner,spec,self.text.clone(),self.tasks.clone(),self.memory.clone())
+    }
+    fn begin_glyph_image_batch(&self,spec:crysirror_core::image_processing::GlyphImageBatchSpec)->crysirror_core::Result<Box<dyn crysirror_core::image_processing::GlyphImageBatchQuery>> {
+        crate::image_processing::glyph_batch::begin(self.owner,spec,self.text.clone(),self.tasks.clone(),self.memory.clone())
+    }
+    fn begin_styled_glyph_image(&self,spec:crysirror_core::image_processing::StyledGlyphImageSpec)->crysirror_core::Result<crysirror_core::image_processing::ImageJob> {
+        crate::image_processing::glyph::begin_styled(self.owner,spec,self.text.clone(),self.tasks.clone(),self.memory.clone())
+    }
+    fn begin_encoding_info(&self, asset: &str)->crysirror_core::Result<Box<dyn crysirror_core::image_encoding::ImageEncodingInfoQuery>> {
+        crate::image_encoding::begin(self.owner,asset,self.storage.clone(),self.decoders.clone(),self.tasks.clone(),self.memory.clone())
+    }
     fn fingerprint(&self,asset:&str)->crysirror_core::Result<[u8;32]>{self.size(asset)?;self.sizes.lock().map_err(|_|Error::Io("image metadata lock".into()))?.get(asset).map(|v|v.2).ok_or(Error::NotFound)}
 
     fn begin_process(&self,input:crysirror_core::image_processing::ImageInput,effects:Arc<[u8]>)->crysirror_core::Result<crysirror_core::image_processing::ImageJob>{

@@ -998,7 +998,7 @@ fn upstream_archive_corpus_e() {
 fn hg3_control_planes_canvas_offset() {
     fn chunk(name: &[u8], data: &[u8]) -> Vec<u8> {
         let mut b = name.to_vec();
-        b.extend(0u32.to_le_bytes());
+        b.extend((if name==b"stdinfo\0" {16+data.len()as u32}else{0}).to_le_bytes());
         b.extend((data.len() as u32).to_le_bytes());
         b.extend(data);
         b

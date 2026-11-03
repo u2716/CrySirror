@@ -1,7 +1,7 @@
 # ADR 0088: KAG3 semantic adapter and shared engine prerequisites
 
 Date: 2026-10-27
-Status: Accepted for the bounded native profile below
+Status: implemented bounded native profile; complete games/plugins/saves remain partial
 
 ## Purpose and source boundary
 
@@ -12,10 +12,9 @@ executes the already pinned, unchanged original TJS2 VM and KAG parser. Newly
 written native facades translate semantics to shared engine resources/operations.
 No upstream engine, renderer, font rasterizer, mixer or media player is imported.
 
-The stock KAG3 system scripts remain external runtime inputs. Source pins and
-review scopes/hashes are in `docs/kag3-source-audit.json`. In particular, original
-KAGParser callback and save field meanings were inspected before implementing
-hooks; native label restore is not replaced with CrySirror's runtime save format.
+The stock KAG3 system scripts remain external runtime inputs. KAGParser callback
+and save-field meanings remain native semantics; native label restore uses its
+own representation rather than the framework snapshot format.
 The optional AGPL boundary remains confined to the existing three krkr crates.
 
 ## Reusable engine capabilities

@@ -117,8 +117,9 @@ impl<'a> SceneVm<'a> {
         rd: &mut crate::original_save::OriginalStreamReader<'_>,
     ) -> Result<()> {
         let button_count = self.mwnd_waku_btn_count();
-        let script = &mut self.ctx.globals.script;
-        let syscom = &mut self.ctx.globals.syscom;
+        let globals = &mut *self.ctx.globals;
+        let script = &mut globals.script;
+        let syscom = &mut globals.syscom;
         script.cur_koe_no = rd.i32()? as i64;
         script.cur_chr_no = rd.i32()? as i64;
         script.cur_read_flag_scn_no = rd.i32()? as i64;
@@ -168,7 +169,7 @@ impl<'a> SceneVm<'a> {
         script.koe_dont_stop_on_flag = rd.bool()?;
         script.koe_dont_stop_off_flag = rd.bool()?;
         script.quake_stop_flag = rd.bool()?;
-        self.ctx.globals.cg_table_off = rd.bool()?;
+        globals.cg_table_off = rd.bool()?;
         script.bgmfade_flag = rd.bool()?;
         script.dont_set_save_point = rd.bool()?;
         script.ignore_r_flag = rd.bool()?;

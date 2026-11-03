@@ -1203,3 +1203,32 @@ fn native_fadeout_becomes_exact_fill_at_count_max_and_remains_for_draw_zero() {
     };
     assert!(rt.assets.surface(ClientId(1),asset).unwrap().rgba.chunks_exact(4).all(|p|p==[255,0,0,255]),"CountIsMax changes command to Fill54; Q15 endpoint254 or removed fade revealing the background is wrong");
 }
+
+#[test]
+fn setfilm_write_suppression_requires_explicit_disabled_background_policy() {
+    for policy in [None, Some(true), Some(false)] {
+        let (_dir, mut rt) = runtime();
+        root(&mut rt);
+        let p = program(vec![vec![0x3333001a, 1, 1]]);
+        let mut machine = Machine::default();
+        let Step::Native(call) = machine.poll(&p, 100).unwrap() else {
+            panic!()
+        };
+        let mut bridge =
+            Bridge::new(ClientId(1), CallbackProfile::Mugen2Legacy, bindings()).unwrap();
+        if let Some(allow) = policy {
+            bridge.configure_background_read_marks(allow).unwrap();
+        }
+        let before = serde_json::to_value(&rt.host.engine).unwrap();
+        if policy == Some(false) {
+            bridge.commit(&mut machine, &call, &mut rt.host).unwrap();
+            assert_eq!(machine.pc(), call.next);
+        } else {
+            assert!(bridge.commit(&mut machine, &call, &mut rt.host).is_err());
+            assert_eq!(machine.poll(&p, 1).unwrap(), Step::Native(call));
+        }
+        assert_eq!(serde_json::to_value(&rt.host.engine).unwrap(), before);
+        assert_eq!(bridge.api_calls, 0);
+        assert_eq!(rt.host.now_ms(), 0);
+    }
+}
