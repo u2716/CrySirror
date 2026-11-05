@@ -125,17 +125,21 @@ pub struct MediaUpdates {
 /// Opening and length queries are worker work. Audio/video share one opened
 /// capability while keeping independent cursors, including across replay loops.
 struct MediaInput {
-    storage: Arc<dyn ClientStorage>,
-    path: VfsPath,
+    source:MediaSource,
     reader: OnceLock<core::result::Result<Arc<dyn AssetReader>, String>>,
+}
+enum MediaSource {
+    Asset{storage:Arc<dyn ClientStorage>,path:VfsPath},
+    Reader(Arc<dyn AssetReader>),
 }
 impl MediaInput {
     fn reader(&self) -> Result<Arc<dyn AssetReader>> {
         self.reader
             .get_or_init(|| {
-                self.storage
-                    .open_asset(&self.path)
-                    .map_err(|e| format!("open scoped media asset: {e}"))
+                match &self.source {
+                    MediaSource::Asset{storage,path}=>storage.open_asset(path).map_err(|e| format!("open scoped media asset: {e}")),
+                    MediaSource::Reader(reader)=>Ok(reader.clone()),
+                }
             })
             .as_ref()
             .map(Arc::clone)
@@ -631,6 +635,14 @@ impl MediaManager {
             path.mount() == Mount::Asset,
             "media source must use asset capability"
         );
+        self.play_source(client,id,MediaSource::Asset{storage,path:path.clone()},options)
+    }
+    /// Reader-backed resources share file media's admission, workers, seek,
+    /// loop, cancellation and retirement.
+    pub fn play_reader(&mut self,client:ClientId,id:u32,source:Arc<dyn AssetReader>,options:MediaOptions)->Result<()> {
+        self.play_source(client,id,MediaSource::Reader(source),options)
+    }
+    fn play_source(&mut self,client:ClientId,id:u32,source:MediaSource,options:MediaOptions)->Result<()> {
         options.validate()?;
         if options.audio {
             ensure!(
@@ -656,8 +668,7 @@ impl MediaManager {
             );
         }
         let reader = Arc::new(MediaInput {
-            storage,
-            path: path.clone(),
+            source,
             reader: OnceLock::new(),
         });
         let workers = Workers::new(
@@ -1715,8 +1726,7 @@ mod tests {
                 metadata: Arc::new(Mutex::new(None)),
             };
             let input = Arc::new(MediaInput {
-                storage: fixture(),
-                path: path(),
+                source:MediaSource::Asset{storage:fixture(),path:path()},
                 reader: OnceLock::new(),
             });
             let mut slot = Slot::new(input, MediaOptions::default(), workers);

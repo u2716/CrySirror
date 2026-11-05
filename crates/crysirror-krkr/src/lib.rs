@@ -5,6 +5,17 @@
 //! Original TJS2 scripts execute through `crysirror-tjs2`; KAG scenarios use
 //! `crysirror-kag`. Native objects map onto shared Layer/Canvas, clock, audio
 //! and capability-storage services. The desktop links this adapter directly.
+//!
+//! Native implementation entry points:
+//! - `natives.rs`: Layer operations, native faces and holdAlpha policy.
+//! - `host.rs`: queued engine commands, layer lifetime and surface ownership.
+//! - `image_api.rs` / `piled_copy.rs`: image dependencies and composed copies.
+//! - `native_mouse.rs` / `pointer.rs` / `tooltip.rs`: pointer and hint policy.
+//! - `storage.rs` / `storage_plugins.rs`: native names and text streams.
+//! - `protect_plugin.rs`: protected archive registration over shared Resources.
+//! - `video.rs` / `alpha_movie.rs`: native media state and event translation.
+//! - `kag.rs` / `kag_save.rs`: scenario and parser-save semantics.
+//! - `font_resources.rs` / `menus.rs`: font waits and menu-handle translation.
 #![forbid(unsafe_code)]
 // TjsError is the vendored VM's error type; its size is not ours to change.
 #![allow(clippy::result_large_err)]

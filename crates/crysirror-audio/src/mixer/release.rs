@@ -53,11 +53,13 @@ impl Mixer {
         voice.spec.gain = gain;
         voice.gain = Ramp::new(gain);
         voice.envelope = Ramp::new(1.);
-        voice.spec.looping = false;
-        voice.spec.paused = false;
+        if spec.source_channel!=spec.tail_channel {
+            voice.spec.looping = false;
+            voice.spec.paused = false;
+            voice.spec.transport_active = true;
+        }
         // Release handoff is explicit retirement, not a retained instance.
         voice.spec.retain_on_finish = false;
-        voice.spec.transport_active = true;
         if let Some(rate) = spec.playback_rate {
             voice.spec.rate = rate;
         }

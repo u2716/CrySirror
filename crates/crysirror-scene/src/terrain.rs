@@ -2,7 +2,7 @@
 //! Heightfield terrain (ADR 0014): the spec is saved; heights, meshes,
 //! color maps and colliders are derived. Procedural terrain is fBm value
 //! noise; image terrain reads a grayscale heightmap asset.
-use anyhow::{ensure, Result};
+use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
 fn res() -> u32 {

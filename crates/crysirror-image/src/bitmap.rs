@@ -2,7 +2,7 @@
 //! Checked CPU bitmap primitives. Coordinates are pixels, rectangles are half-open.
 //! Native buffer numbers, presentation, and inclusive-corner conversion belong to adapters.
 use crate::ImageSurface;
-use anyhow::{ensure, Result};
+use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -257,7 +257,10 @@ fn ps_pixel_channel(blend: PsBlend, s: u8, d: u8, a: i32) -> u8 {
 }
 
 fn check_mode(mode: PixelMath, opacity: u8) -> Result<()> {
-    ensure!(mode!=PixelMath::MaskSeparate256||opacity==255,"mask_separate256 requires opacity255");
+    ensure!(
+        mode != PixelMath::MaskSeparate256 || opacity == 255,
+        "mask_separate256 requires opacity255"
+    );
     if let PixelMath::MaskPiecewise256 { weight } = mode {
         ensure!(
             weight <= 256 && opacity == 255,
@@ -276,13 +279,16 @@ fn combine(d: &mut [u8], s: &[u8], opacity: u8, mode: PixelMath) {
         return;
     }
     match mode {
-        PixelMath::MaskSeparate256 => {
-            match s[3] {
-                0=>{},
-                255=>d[..3].copy_from_slice(&s[..3]),
-                mask=>{let a=u32::from(mask);for c in 0..3 {d[c]=((u32::from(s[c])*a>>8)+(u32::from(d[c])*(256-a)>>8))as u8;}},
+        PixelMath::MaskSeparate256 => match s[3] {
+            0 => {}
+            255 => d[..3].copy_from_slice(&s[..3]),
+            mask => {
+                let a = u32::from(mask);
+                for c in 0..3 {
+                    d[c] = ((u32::from(s[c]) * a >> 8) + (u32::from(d[c]) * (256 - a) >> 8)) as u8;
+                }
             }
-        }
+        },
         PixelMath::MaskPiecewise256 { weight } => {
             if weight == 0 || s[3] == 0 {
                 return;
@@ -360,7 +366,10 @@ fn combine(d: &mut [u8], s: &[u8], opacity: u8, mode: PixelMath) {
             }
             d[3] = alpha;
         }
-        PixelMath::Copy | PixelMath::CopyRgb | PixelMath::CopyAlpha | PixelMath::CopyNonTransparent => {
+        PixelMath::Copy
+        | PixelMath::CopyRgb
+        | PixelMath::CopyAlpha
+        | PixelMath::CopyNonTransparent => {
             if mode == PixelMath::CopyNonTransparent && s[3] == 0 {
                 return;
             }
@@ -514,13 +523,45 @@ mod tests {
     use super::*;
     #[test]
     fn separate_mask_floors_each_product_and_keeps_destination_alpha() {
-        let source=ImageSurface{width:5,height:1,rgba:[0,1,128,254,255].into_iter().flat_map(|a|[255,255,255,a]).collect()};
-        let mut target=ImageSurface::filled(5,1,[255,255,255,91]).unwrap();
-        target.blit(&source,options(BitmapRect::new(0,0,5,1),[0,0],PixelMath::MaskSeparate256)).unwrap();
-        assert_eq!(target.rgba,[255,254,254,254,255].into_iter().flat_map(|c|[c,c,c,91]).collect::<Vec<_>>());
-        let saved=target.clone();let mut invalid=options(BitmapRect::new(0,0,5,1),[0,0],PixelMath::MaskSeparate256);invalid.opacity=128;
-        assert!(target.blit(&source,invalid).is_err());assert_eq!(target,saved);
-        assert_eq!(serde_json::from_str::<PixelMath>("\"mask_separate256\"").unwrap(),PixelMath::MaskSeparate256);
+        let source = ImageSurface {
+            width: 5,
+            height: 1,
+            rgba: [0, 1, 128, 254, 255]
+                .into_iter()
+                .flat_map(|a| [255, 255, 255, a])
+                .collect(),
+        };
+        let mut target = ImageSurface::filled(5, 1, [255, 255, 255, 91]).unwrap();
+        target
+            .blit(
+                &source,
+                options(
+                    BitmapRect::new(0, 0, 5, 1),
+                    [0, 0],
+                    PixelMath::MaskSeparate256,
+                ),
+            )
+            .unwrap();
+        assert_eq!(
+            target.rgba,
+            [255, 254, 254, 254, 255]
+                .into_iter()
+                .flat_map(|c| [c, c, c, 91])
+                .collect::<Vec<_>>()
+        );
+        let saved = target.clone();
+        let mut invalid = options(
+            BitmapRect::new(0, 0, 5, 1),
+            [0, 0],
+            PixelMath::MaskSeparate256,
+        );
+        invalid.opacity = 128;
+        assert!(target.blit(&source, invalid).is_err());
+        assert_eq!(target, saved);
+        assert_eq!(
+            serde_json::from_str::<PixelMath>("\"mask_separate256\"").unwrap(),
+            PixelMath::MaskSeparate256
+        );
     }
     #[test]
     fn piecewise_mask_uses_distinct_partial_complement_and_preserves_coverage() {
@@ -546,18 +587,20 @@ mod tests {
             target.rgba,
             [255, 255, 255, 99, 190, 190, 190, 99, 128, 128, 128, 99]
         );
-        assert!(target
-            .blit(
-                &source,
-                BlitOptions {
-                    source_rect: BitmapRect::new(0, 0, 3, 1),
-                    destination: [0, 0],
-                    opacity: 128,
-                    mode: PixelMath::MaskPiecewise256 { weight: 128 },
-                    color_key: None
-                }
-            )
-            .is_err());
+        assert!(
+            target
+                .blit(
+                    &source,
+                    BlitOptions {
+                        source_rect: BitmapRect::new(0, 0, 3, 1),
+                        destination: [0, 0],
+                        opacity: 128,
+                        mode: PixelMath::MaskPiecewise256 { weight: 128 },
+                        color_key: None
+                    }
+                )
+                .is_err()
+        );
     }
     fn options(rect: BitmapRect, destination: [i32; 2], mode: PixelMath) -> BlitOptions {
         BlitOptions {
@@ -664,18 +707,99 @@ mod tests {
             d
         };
         // Saturating add/sub, then the TVPPS_ALPHABLEND lerp.
-        assert_eq!(ps(PsBlend::Additive, true, [200, 10, 0, 9], [100, 20, 0, 255], 255), [254, 29, 0, 9]);
-        assert_eq!(ps(PsBlend::Subtractive, true, [200, 10, 0, 9], [100, 250, 0, 255], 255), [45, 5, 0, 9]);
-        assert_eq!(ps(PsBlend::Multiplicative, true, [200, 255, 0, 9], [128, 255, 9, 255], 255), [100, 254, 0, 9]);
+        assert_eq!(
+            ps(
+                PsBlend::Additive,
+                true,
+                [200, 10, 0, 9],
+                [100, 20, 0, 255],
+                255
+            ),
+            [254, 29, 0, 9]
+        );
+        assert_eq!(
+            ps(
+                PsBlend::Subtractive,
+                true,
+                [200, 10, 0, 9],
+                [100, 250, 0, 255],
+                255
+            ),
+            [45, 5, 0, 9]
+        );
+        assert_eq!(
+            ps(
+                PsBlend::Multiplicative,
+                true,
+                [200, 255, 0, 9],
+                [128, 255, 9, 255],
+                255
+            ),
+            [100, 254, 0, 9]
+        );
         // Every lerp is TVPPS_ALPHABLEND's floor of (f - d) * a / 256.
-        assert_eq!(ps(PsBlend::Screen, true, [100, 0, 0, 9], [100, 200, 0, 255], 255), [160, 199, 0, 9]);
-        assert_eq!(ps(PsBlend::Difference, true, [10, 200, 0, 9], [200, 10, 0, 128], 255), [100, 195, 0, 9]);
-        assert_eq!(ps(PsBlend::Exclusion, true, [128, 0, 0, 9], [128, 64, 0, 255], 255), [128, 63, 0, 9]);
+        assert_eq!(
+            ps(
+                PsBlend::Screen,
+                true,
+                [100, 0, 0, 9],
+                [100, 200, 0, 255],
+                255
+            ),
+            [160, 199, 0, 9]
+        );
+        assert_eq!(
+            ps(
+                PsBlend::Difference,
+                true,
+                [10, 200, 0, 9],
+                [200, 10, 0, 128],
+                255
+            ),
+            [100, 195, 0, 9]
+        );
+        assert_eq!(
+            ps(
+                PsBlend::Exclusion,
+                true,
+                [128, 0, 0, 9],
+                [128, 64, 0, 255],
+                255
+            ),
+            [128, 63, 0, 9]
+        );
         // Photoshop 5 forms fade the source and do not lerp afterwards.
-        assert_eq!(ps(PsBlend::Difference5, false, [10, 200, 0, 77], [200, 10, 0, 128], 255), [90, 195, 0, 77]);
-        assert_eq!(ps(PsBlend::ColorDodge5, false, [100, 0, 0, 77], [0, 0, 0, 255], 255), [100, 0, 0, 0]);
+        assert_eq!(
+            ps(
+                PsBlend::Difference5,
+                false,
+                [10, 200, 0, 77],
+                [200, 10, 0, 128],
+                255
+            ),
+            [90, 195, 0, 77]
+        );
+        assert_eq!(
+            ps(
+                PsBlend::ColorDodge5,
+                false,
+                [100, 0, 0, 77],
+                [0, 0, 0, 255],
+                255
+            ),
+            [100, 0, 0, 0]
+        );
         // Without holdAlpha the stored alpha byte is cleared.
-        assert_eq!(ps(PsBlend::Additive, false, [1, 1, 1, 200], [1, 1, 1, 255], 255)[3], 0);
+        assert_eq!(
+            ps(
+                PsBlend::Additive,
+                false,
+                [1, 1, 1, 200],
+                [1, 1, 1, 255],
+                255
+            )[3],
+            0
+        );
     }
     #[test]
     fn hold_alpha_blend_keeps_destination_alpha() {
@@ -815,18 +939,29 @@ mod tests {
     #[test]
     fn copy_alpha_retains_rgb_and_has_independent_opacity_and_clipping() {
         let source = ImageSurface {
-            width: 3, height: 1,
+            width: 3,
+            height: 1,
             rgba: vec![200, 210, 220, 0, 190, 180, 170, 127, 160, 150, 140, 255],
         };
         for opacity in [0u8, 1, 127, 128, 254, 255] {
             let mut target = ImageSurface::filled(2, 1, [9, 19, 29, 61]).unwrap();
-            target.blit(&source, BlitOptions {
-                source_rect: BitmapRect::new(0, 0, 3, 1),
-                destination: [-1, 0], opacity, mode: PixelMath::CopyAlpha, color_key: None,
-            }).unwrap();
+            target
+                .blit(
+                    &source,
+                    BlitOptions {
+                        source_rect: BitmapRect::new(0, 0, 3, 1),
+                        destination: [-1, 0],
+                        opacity,
+                        mode: PixelMath::CopyAlpha,
+                        color_key: None,
+                    },
+                )
+                .unwrap();
             for (index, source_alpha) in [127u32, 255].into_iter().enumerate() {
-                let alpha = ((61 * (255-u32::from(opacity)) + source_alpha*u32::from(opacity) +127)/255) as u8;
-                assert_eq!(&target.rgba[index*4..index*4+4], &[9, 19, 29, alpha]);
+                let alpha =
+                    ((61 * (255 - u32::from(opacity)) + source_alpha * u32::from(opacity) + 127)
+                        / 255) as u8;
+                assert_eq!(&target.rgba[index * 4..index * 4 + 4], &[9, 19, 29, alpha]);
             }
         }
     }
@@ -880,12 +1015,13 @@ mod tests {
             rgba: vec![],
         };
         let before = dst.clone();
-        assert!(dst
-            .blit(
+        assert!(
+            dst.blit(
                 &src,
                 options(BitmapRect::new(0, 0, 1, 1), [0, 0], PixelMath::Copy)
             )
-            .is_err());
+            .is_err()
+        );
         assert_eq!(dst, before);
         assert!(ImageSurface::filled(0, 1, [0; 4]).is_err());
     }
@@ -901,14 +1037,25 @@ pub fn blit_rgba8(
     source_size: [u32; 2],
     options: BlitOptions,
 ) -> Result<()> {
-    visit_blit_rgba8(destination, size, source, source_size, options, &|| Ok(()),
-        &mut |d, s| combine(d, s, options.opacity, options.mode))
+    visit_blit_rgba8(
+        destination,
+        size,
+        source,
+        source_size,
+        options,
+        &|| Ok(()),
+        &mut |d, s| combine(d, s, options.opacity, options.mode),
+    )
 }
 /// Common checked pixel correspondence, shared by every stored bitmap blend.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn visit_blit_rgba8(
-    destination: &mut [u8], size: [u32; 2], source: &[u8], source_size: [u32; 2],
-    options: BlitOptions, check: &dyn Fn() -> Result<()>,
+    destination: &mut [u8],
+    size: [u32; 2],
+    source: &[u8],
+    source_size: [u32; 2],
+    options: BlitOptions,
+    check: &dyn Fn() -> Result<()>,
     pixel_op: &mut dyn FnMut(&mut [u8], &[u8]),
 ) -> Result<()> {
     ensure!(

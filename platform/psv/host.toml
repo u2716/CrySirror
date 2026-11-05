@@ -1,0 +1,21 @@
+# Host implementation plan; capabilities are unavailable until a real driver registers them.
+platform = "psv"
+rust_target = "armv7-sony-vita-newlibeabihf"
+contract_crate = "crysirror-console"
+sdk_environment = "VITASDK"
+package_format = "vpk"
+icon_source = "icon/crysirror.svg"
+
+[backends]
+window = "native"
+graphics = "unimplemented"
+audio = "unimplemented"
+storage = "unimplemented"
+tasks = "unimplemented"
+
+[storage_policy]
+# Physical roots are host configuration, never accepted directly from a VM.
+base = "ux0:data/CrySirror"
+assets = "games/{game_id}"
+saves = "saves/{adapter}/{game_id}"
+cache = "cache/{adapter}/{game_id}"

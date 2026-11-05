@@ -7,7 +7,6 @@
 //! transition. Styles that move pictures (scrolls, slides, zooms) are not
 //! reveals and return `None`.
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Transition {
     pub time: i32,
@@ -404,7 +403,9 @@ mod tests {
     use super::*;
 
     fn sel(style: i32, direction: i32) -> Vec<i32> {
-        let mut v = vec![0, 0, 639, 479, 0, 0, 1000, style, direction, 0, 0, 0, 0, 0, 255, 0];
+        let mut v = vec![
+            0, 0, 639, 479, 0, 0, 1000, style, direction, 0, 0, 0, 0, 0, 255, 0,
+        ];
         v.truncate(16);
         v
     }

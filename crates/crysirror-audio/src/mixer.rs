@@ -288,7 +288,7 @@ impl VoiceSpec {
         );
         ensure!(
             self.rate.is_finite()
-                && (0.125..=4.).contains(&self.rate)
+                && (1./4096. ..=32.).contains(&self.rate)
                 && self.pitch_semitones.is_finite()
                 && (-24.0..=24.).contains(&self.pitch_semitones),
             "audio rate/pitch out of range"
@@ -430,6 +430,7 @@ impl Cursor {
 }
 
 struct Voice {
+    balance:crate::balance::Balance,
     doppler: Ramp,
     doppler_settings: Option<DopplerSettings>,
     age_frames: u64,
@@ -1292,6 +1293,10 @@ impl Mixer {
         self.voice(client, h)?.pan.to(pan, count);
         Ok(())
     }
+    /// Apply an external logarithmic balance control to this exact owned voice.
+    pub fn balance_control(&mut self,client:u32,h:VoiceHandle,command:crysirror_core::service::AudioBalanceCommand)->Result<()> {
+        self.voice(client,h)?.balance.apply(command)
+    }
     /// Independent0..4 output-channel amplitudes after spatial DSP/pan and
     /// before Master/reverb sends. Ramps follow the same rendered voice-frame
     /// clock as pan; paused/dependency-held voices retain their ramps. Shared
@@ -1397,6 +1402,13 @@ impl Mixer {
     pub fn set_channel_swap(&mut self, client: u32, h: VoiceHandle, swapped: bool) -> Result<()> {
         self.voice(client, h)?.spec.swap_channels = swapped;
         Ok(())
+    }
+    ///Live source-rate control. This wider bounded domain includes native
+    ///100..200000Hz controls for every supported8..192kHz decoded source.
+    ///Only the multiplier changes: preserve fractional cursor and DSP history.
+    pub fn set_playback_rate(&mut self,client:u32,h:VoiceHandle,rate:f32)->Result<()> {
+        ensure!(rate.is_finite()&&(1./4096. ..=32.).contains(&rate),"live audio rate out of range");
+        self.voice(client,h)?.spec.rate=rate;Ok(())
     }
     pub fn set_rate(&mut self, client: u32, h: VoiceHandle, rate: f32, pitch: f32) -> Result<()> {
         ensure!(
@@ -1818,6 +1830,7 @@ impl Mixer {
         self.spec(client, h)?;
         let voice = self.voices[h.slot as usize].as_ref().unwrap();
         Ok(crysirror_core::service::AudioPlaybackInfo {
+            balance:voice.balance.info(),
             age_frames: voice.age_frames,
             transport_frames: voice.transport_frames,
             stopping: voice.stop_after_fade || voice.gain_stop_after_fade,
@@ -2451,8 +2464,8 @@ impl Mixer {
                 }
                 let stereo_gain = v.stereo_gain.each_mut().map(|ramp| ramp.step());
                 let mixed = [
-                    (s[0] * gain + echo[0] * source_gain) * stereo_gain[0],
-                    (s[1] * gain + echo[1] * source_gain) * stereo_gain[1],
+                    (s[0] * gain + echo[0] * source_gain) * stereo_gain[0]*v.balance.gains[0],
+                    (s[1] * gain + echo[1] * source_gain) * stereo_gain[1]*v.balance.gains[1],
                 ];
                 sample[0] += mixed[0] * master_gain;
                 sample[1] += mixed[1] * master_gain;
@@ -2648,6 +2661,7 @@ fn new_voice(
     let mut envelope = Ramp::new(if spec.fade_in_ms > 0. { 0. } else { 1. });
     envelope.to(1., frames(spec.fade_in_ms, rate));
     Voice {
+        balance:Default::default(),
         doppler: Ramp::new(1.),
         doppler_settings: None,
         age_frames: 0,

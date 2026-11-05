@@ -2,8 +2,8 @@
 //! Checked grouped fixed-point luminance and colour mixing. Quantization groups
 //! model SIMD pair-wise arithmetic as well as ordinary sum-before-shift luma;
 //! no VM or platform code is required to use this image operation.
-use crate::{effects::MAX_EFFECT_PIXELS, ImageSurface};
-use anyhow::{ensure, Result};
+use crate::{ImageSurface, effects::MAX_EFFECT_PIXELS};
+use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -91,7 +91,9 @@ mod tests {
         let out = spec.apply(&image(), &|| Ok(())).unwrap();
         assert_eq!(
             out.rgba,
-            [253, 253, 253, 7, 75, 75, 75, 13, 149, 149, 149, 19, 28, 28, 28, 23]
+            [
+                253, 253, 253, 7, 75, 75, 75, 13, 149, 149, 149, 19, 28, 28, 28, 23
+            ]
         );
         let ordinary = FixedLumaSpec {
             groups: [0, 0, 0],
@@ -127,24 +129,30 @@ mod tests {
             fractional_bits: 8,
             amount256: 256,
         };
-        assert!(FixedLumaSpec {
-            amount256: 257,
-            ..base
-        }
-        .validate()
-        .is_err());
-        assert!(FixedLumaSpec {
-            groups: [3, 0, 0],
-            ..base
-        }
-        .validate()
-        .is_err());
-        assert!(FixedLumaSpec {
-            coefficients: [255, 255, 255],
-            ..base
-        }
-        .validate()
-        .is_err());
+        assert!(
+            FixedLumaSpec {
+                amount256: 257,
+                ..base
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            FixedLumaSpec {
+                groups: [3, 0, 0],
+                ..base
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            FixedLumaSpec {
+                coefficients: [255, 255, 255],
+                ..base
+            }
+            .validate()
+            .is_err()
+        );
         let image = image();
         let before = image.rgba.clone();
         assert!(base.apply(&image, &|| anyhow::bail!("cancelled")).is_err());

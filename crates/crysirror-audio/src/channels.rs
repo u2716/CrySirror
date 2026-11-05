@@ -413,8 +413,9 @@ impl ChannelAudio {
         self.cancel_pending_control(client, &request)?;
         let controlled_channel = match &request {
             AudioRequest::ExchangeChannels { .. } => unreachable!("atomic exchange handled before single-channel controls"),
-            AudioRequest::SetMixGroup { .. } | AudioRequest::SetMixGroupGain { .. } => None,
+            AudioRequest::SetMixGroup { .. } | AudioRequest::SetMixGroupGain { .. } | AudioRequest::Balance { .. } | AudioRequest::SetRate{..} => None,
             AudioRequest::Play { channel, .. }
+            | AudioRequest::PlayResident {channel,..}
             | AudioRequest::PlayAsset { channel, .. }
             | AudioRequest::PlayPcm { channel, .. }
             | AudioRequest::PlayResource { channel, .. }
@@ -433,6 +434,10 @@ impl ChannelAudio {
             | AudioRequest::SetStereoGain { channel, .. } => Some(*channel),
         };
         match request {
+            AudioRequest::Balance{channel,command}=>{
+                crate::balance::validate(command)?;
+                if let Some(&handle)=self.voices.get(&(client,channel)){self.mixer.balance_control(client,handle,command)?;}
+            },
             AudioRequest::ExchangeChannels { .. } => unreachable!("atomic exchange handled before single-channel controls"),
             AudioRequest::SetMixGroupGain {
                 name,
@@ -464,7 +469,7 @@ impl ChannelAudio {
                 )?;
                 self.publish(client, channel, ready)?;
             }
-            AudioRequest::PlayAsset { .. } | AudioRequest::PlayResource { .. } => {
+            AudioRequest::PlayAsset { .. } | AudioRequest::PlayResource { .. } | AudioRequest::PlayResident{..} => {
                 anyhow::bail!("asset channel playback requires begin preparation")
             }
             AudioRequest::Play {
@@ -532,6 +537,10 @@ impl ChannelAudio {
                         .schedule_resume_with_settings(client, h, delay_ms, fade_ms, settings)?;
                 }
             }
+            AudioRequest::SetRate{channel,rate}=>{
+                ensure!(rate.is_finite()&&(1./4096. ..=32.).contains(&rate),"live audio rate out of range");
+                if let Some(&handle)=self.voices.get(&(client,channel)).filter(|handle|self.mixer.is_playing(client,**handle)){self.mixer.set_playback_rate(client,handle,rate)?;}
+            },
             AudioRequest::SetGain {
                 channel,
                 gain,

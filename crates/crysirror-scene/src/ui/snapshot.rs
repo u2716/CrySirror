@@ -1,8 +1,8 @@
 //! Immutable logical snapshots of engine-rendered UI. No font rasterizer,
 //! device readback or native VM is required to freeze the current controls.
 use super::UiSystem;
-use crate::layer::{LayerSpec, Paint, SpriteTransform, MAX_LAYERS};
-use anyhow::{ensure, Context, Result};
+use crate::layer::{LayerSpec, MAX_LAYERS, Paint, SpriteTransform};
+use anyhow::{Context, Result, ensure};
 use std::collections::BTreeSet;
 
 impl UiSystem {
@@ -106,7 +106,9 @@ impl UiSystem {
             } else {
                 Some(primitive.uv)
             };
-            layers.push(LayerSpec { source_crop: None, viewport_clip: None,
+            layers.push(LayerSpec {
+                source_crop: None,
+                viewport_clip: None,
                 id: layers.len() as u32 + 1,
                 parent: None,
                 rect: [x, y, width, height],

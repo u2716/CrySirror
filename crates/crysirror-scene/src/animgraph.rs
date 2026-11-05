@@ -4,7 +4,7 @@
 //! AnimationState and resolve every fixed step to weighted clip layers, which
 //! the renderer already skins. Notifies become events for gameplay.
 use crate::components::AnimationLayer;
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 

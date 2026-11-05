@@ -1,5 +1,5 @@
 //! Reusable wrapping grid navigation, independent of widget rendering.
-use anyhow::{ensure, Result};
+use anyhow::{Result, ensure};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GridDirection {
     Up,

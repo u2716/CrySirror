@@ -9,9 +9,12 @@ mod majiro;
 mod system_nnn;
 mod system4;
 mod bgi;
+mod softpal;
+mod qlie;
 use anyhow::{bail, ensure, Context, Result};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
+use crate::source_path::SourcePath;
 
 /// What `play` runs.
 #[derive(Debug, serde::Serialize)]
@@ -39,8 +42,8 @@ pub struct ArchiveMount {
 }
 
 /// File names in `dir`, as found.
-fn listing(dir: &Path) -> Result<Vec<String>> {
-    let mut names: Vec<String> = std::fs::read_dir(dir)
+fn listing(dir: &SourcePath) -> Result<Vec<String>> {
+    let mut names: Vec<String> = dir.read_dir()
         .with_context(|| format!("read {}", dir.display()))?
         .filter_map(|e| e.ok()?.file_name().into_string().ok())
         .collect();
@@ -64,7 +67,7 @@ fn with_ext<'a>(names: &'a [String], ext: &str) -> impl Iterator<Item = &'a Stri
 
 /// The game's main executable: signed/configured companions first, then the
 /// largest, skipping obvious tools.
-fn main_exe(dir: &Path, names: &[String]) -> Option<String> {
+fn main_exe(dir: &SourcePath, names: &[String]) -> Option<String> {
     let tool = |n: &str| {
         let l = n.to_ascii_lowercase();
         [
@@ -80,13 +83,17 @@ fn main_exe(dir: &Path, names: &[String]) -> Option<String> {
         return Some((*e).clone());
     }
     exes.into_iter()
-        .max_by_key(|e| std::fs::metadata(dir.join(e)).map(|m| m.len()).unwrap_or(0))
+        .max_by_key(|e| dir.join(e).metadata().map(|m| m.len()).unwrap_or(0))
         .cloned()
 }
 
 /// The bounded magic classifier supplies content evidence. Native engine
 /// parsers still decide layout/profile support, including encrypted scripts.
 pub fn detect(dir: &Path) -> Result<Plan> {
+    detect_source(&SourcePath::local(dir))
+}
+
+pub(crate) fn detect_source(dir: &SourcePath) -> Result<Plan> {
     let mut plan = detect_layout(dir)?;
     // Original engines clear the game screen to black before their first
     // draw; the authored-project default is a demo colour.
@@ -134,7 +141,7 @@ pub fn detect(dir: &Path) -> Result<Plan> {
             "detection input escapes client capability root: {path}"
         );
         use std::io::Read;
-        let mut file = std::fs::File::open(full)?;
+        let mut file = crate::source_path::SourceFile::open(full)?;
         let length = file.metadata()?.len();
         let expected = length.min(crysirror_resource::sniff::MAX_FILE_PREFIX_BYTES as u64);
         let mut prefix = Vec::new();
@@ -154,7 +161,7 @@ pub fn detect(dir: &Path) -> Result<Plan> {
     Ok(plan)
 }
 
-fn detect_layout(dir: &Path) -> Result<Plan> {
+fn detect_layout(dir: &SourcePath) -> Result<Plan> {
     let names = listing(dir)?;
     let name = dir
         .file_name()
@@ -177,13 +184,15 @@ fn detect_layout(dir: &Path) -> Result<Plan> {
         ensure!(path.starts_with(&root), "native archive escapes capability root");
         use std::io::Read;
         let mut signature = [0;4];
-        if std::fs::File::open(path)?.read_exact(&mut signature).is_err() || signature != *b"KIF\0" { continue; }
+        if crate::source_path::SourceFile::open(path)?.read_exact(&mut signature).is_err() || signature != *b"KIF\0" { continue; }
         return catsystem2(dir,&local,&name,prefix,&format!("{config}/{startup}"));
     }
     if let Some(plan) = system4::detect(dir, &names, &name)? { return Ok(plan); }
     if let Some(plan) = majiro::detect(dir, &names, &name)? { return Ok(plan); }
     if let Some(plan) = system_nnn::detect(dir, &names, &name)? { return Ok(plan); }
     if let Some(plan) = bgi::detect(dir,&names,&name)? {return Ok(plan);}
+    if let Some(plan) = softpal::detect(dir,&names,&name)? {return Ok(plan);}
+    if let Some(plan) = qlie::detect(dir,&names,&name)? {return Ok(plan);}
     if find(&names, "data.xp3").is_some() {
         return krkr(dir, &names, &name);
     }
@@ -234,7 +243,7 @@ fn detect_layout(dir: &Path) -> Result<Plan> {
                 );
                 use std::io::Read;
                 let mut bytes = Vec::new();
-                std::fs::File::open(path)?
+                crate::source_path::SourceFile::open(path)?
                     .take(16 * 1024 * 1024 + 1)
                     .read_to_end(&mut bytes)?;
                 if bytes.len() >= 8 && bytes.len() <= 16 * 1024 * 1024 {
@@ -283,29 +292,31 @@ fn project(name: &str, canvas: [u32; 2], adapter: &str, config: Value) -> Value 
     })
 }
 
-fn catsystem2(dir:&Path,names:&[String],name:&str,prefix:&str,startup_path:&str)->Result<Plan> {
+fn catsystem2(dir:&SourcePath,names:&[String],name:&str,prefix:&str,startup_path:&str)->Result<Plan> {
     {
         use std::io::Read;
         let root=dir.join(prefix).canonicalize()?;
         let startup_file=root.join(startup_path).canonicalize()?;
         ensure!(startup_file.starts_with(&root),"CatSystem2 startup escapes capability root");
         let mut bytes=Vec::new();
-        std::fs::File::open(startup_file)?.take(1024*1024+1).read_to_end(&mut bytes)?;
+        crate::source_path::SourceFile::open(startup_file)?.take(1024*1024+1).read_to_end(&mut bytes)?;
         let startup=crysirror_catsystem2::parse_startup(&bytes)?;
         let executable=find(names,"cs2.exe").cloned().or_else(||main_exe(&root,names)).context("CatSystem2 archive profile executable missing")?;
         let archive=startup.script.split('/').next().context("CatSystem2 script path missing")?;
         ensure!(find(names,archive).is_some_and(|p|Path::new(p).extension().and_then(|e|e.to_str()).is_some_and(|e|e.eq_ignore_ascii_case("int"))),"CatSystem2 startup archive is absent");
         let mut p=project(name,startup.canvas,"catsystem2",json!({"script":startup.script,"font":"default","heap_bytes":startup.heap_bytes,"executable":executable.clone(),"canvas":startup.canvas}));
         if !prefix.is_empty(){p["clients"][0]["asset_prefix"]=json!(prefix);}
-        let mounts=with_ext(names,"int").map(|source|ArchiveMount{fallback:false,source:source.clone(),target:source.clone(),options:json!({"format":"cat-system/int","profile":"game"})}).collect();
+        // Some titles ship an ordinary archive as `<name>.int.FWP`; it serves as `<name>.int`.
+        let renamed=with_ext(names,"fwp").filter(|n|n.len()>4&&n[..n.len()-4].to_ascii_lowercase().ends_with(".int")).map(|source|(source.clone(),source[..source.len()-4].to_owned()));
+        let mounts=with_ext(names,"int").map(|source|(source.clone(),source.clone())).chain(renamed).map(|(source,target)|ArchiveMount{fallback:false,source,target,options:json!({"format":"cat-system/int","profile":"game"})}).collect();
         Ok(Plan{engine:"CatSystem2",project:p,profiles:std::collections::BTreeMap::from([("game".into(),json!({"limits":{"max_entry_size":1024u64*1024*1024},"parameters":{"cat-system/int":{"executable":executable}}}))]),mounts,evidence:vec![FileEvidence{path:if prefix.is_empty(){startup_path.to_owned()}else{format!("{prefix}/{startup_path}")},identity:None}]})
     }
 }
 
 /// RealLive: `#SCREENSIZE_MOD` selects the canvas (0 = 640x480, 1 = 800x600,
 /// 999 = explicit size).
-fn reallive(dir: &Path, names: &[String], name: &str) -> Result<Plan> {
-    let ini = std::fs::read(dir.join(find(names, "gameexe.ini").unwrap()))?;
+fn reallive(dir: &SourcePath, names: &[String], name: &str) -> Result<Plan> {
+    let ini = dir.join(find(names, "gameexe.ini").unwrap()).read()?;
     let text = String::from_utf8_lossy(&ini);
     let mut canvas = [640, 480];
     if let Some(line) = text
@@ -334,7 +345,7 @@ fn reallive(dir: &Path, names: &[String], name: &str) -> Result<Plan> {
 
 // Keep the original voice packs intact. The common resource registry indexes
 // their numbered audio entries; the VM only selects the native pack/sample ID.
-fn reallive_voice_mounts(dir: &Path, ini: &[u8]) -> Result<Vec<ArchiveMount>> {
+fn reallive_voice_mounts(dir: &SourcePath, ini: &[u8]) -> Result<Vec<ArchiveMount>> {
     use crysirror_reallive::vm::{Gameexe, Nls};
     let exe = Gameexe::from_bytes(ini, Nls::Sjis);
     let requested = exe.get("FOLDNAME.KOE").and_then(|e| e.str(0)).unwrap_or("koe").replace('\\', "/");
@@ -345,14 +356,14 @@ fn reallive_voice_mounts(dir: &Path, ini: &[u8]) -> Result<Vec<ArchiveMount>> {
         for component in path.relative().split('/') {
             let names = listing(&folder)?;
             let Some(actual) = find(&names, component) else { return voice_packs_in(dir, &root, &[dir.to_path_buf()]); };
-            folder.push(actual);
+            folder = folder.join(actual);
             ensure!(folder.canonicalize()?.starts_with(&root), "RealLive voice directory escapes game capability root");
         }
     }
     voice_packs_in(dir, &root, &[dir.to_path_buf(), folder])
 }
 
-fn voice_packs_in(dir: &Path, root: &Path, folders: &[PathBuf]) -> Result<Vec<ArchiveMount>> {
+fn voice_packs_in(dir: &SourcePath, root: &SourcePath, folders: &[SourcePath]) -> Result<Vec<ArchiveMount>> {
     let mut packs = std::collections::BTreeMap::new();
     for folder in folders {
         if !folder.is_dir() { continue; }
@@ -375,7 +386,7 @@ fn voice_packs_in(dir: &Path, root: &Path, folders: &[PathBuf]) -> Result<Vec<Ar
     Ok(packs.into_iter().map(|(source, format)| ArchiveMount { fallback:false, target: source.clone(), source, options: json!({"format":format}) }).collect())
 }
 
-fn krkr(dir: &Path, names: &[String], name: &str) -> Result<Plan> {
+fn krkr(dir: &SourcePath, names: &[String], name: &str) -> Result<Plan> {
     use krkr_probe::*;
     let exe = main_exe(dir, names).context("KiriKiri game without an executable")?;
     let tpm: Vec<String> = listing(&dir.join("plugin"))
@@ -492,7 +503,7 @@ mod krkr_probe {
         }
     }
 
-    struct File(Mutex<std::fs::File>);
+    struct File(Mutex<crate::source_path::SourceFile>);
     impl AssetReader for File {
         fn len(&self) -> crysirror_core::Result<u64> {
             let f = self
@@ -515,14 +526,14 @@ mod krkr_probe {
         }
     }
     /// Companion modules, confined to the game folder.
-    struct Companions(PathBuf);
+    struct Companions(SourcePath);
     impl DependencyResolver for Companions {
         fn open(&self, path: &str) -> anyhow::Result<Arc<dyn AssetReader>> {
             anyhow::ensure!(
                 !path.split(['/', '\\']).any(|s| s == ".."),
                 "companion escapes the game folder"
             );
-            Ok(Arc::new(File(Mutex::new(std::fs::File::open(
+            Ok(Arc::new(File(Mutex::new(crate::source_path::SourceFile::open(
                 self.0.join(path),
             )?))))
         }
@@ -533,7 +544,7 @@ mod krkr_probe {
         context: DecodeContext,
     }
 
-    pub fn open(dir: &Path, exe: &str, protection: &Protection) -> Result<Opened> {
+    pub fn open(dir: &SourcePath, exe: &str, protection: &Protection) -> Result<Opened> {
         let opened = open_archive(dir, "data.xp3", exe, protection)?;
         // The profile must reach the game's startup script.
         let startup = match protection {
@@ -548,7 +559,7 @@ mod krkr_probe {
     }
 
     pub fn open_archive(
-        dir: &Path,
+        dir: &SourcePath,
         name: &str,
         exe: &str,
         protection: &Protection,
@@ -563,12 +574,12 @@ mod krkr_probe {
             .parameters
             .insert("kirikiri/xp3".into(), protection.parameters(exe));
         let data = names_ci(dir, name)?;
-        let source = Arc::new(File(Mutex::new(std::fs::File::open(&data)?)));
+        let source = Arc::new(File(Mutex::new(crate::source_path::SourceFile::open(&data)?)));
         let archive = crysirror_formats_arc::Xp3.open(source, &context)?;
         Ok(Opened { archive, context })
     }
 
-    fn names_ci(dir: &Path, name: &str) -> Result<PathBuf> {
+    fn names_ci(dir: &SourcePath, name: &str) -> Result<SourcePath> {
         let names = listing(dir)?;
         Ok(dir.join(find(&names, name).with_context(|| format!("{name} missing"))?))
     }
@@ -598,7 +609,7 @@ mod krkr_probe {
     /// `scWidth`/`scHeight` from Config.tjs in data.xp3 or, failing that, the
     /// other archives (some titles keep `main/` in its own `main.xp3`).
     pub fn canvas(
-        dir: &Path,
+        dir: &SourcePath,
         exe: &str,
         archive: &Opened,
         protection: &Protection,
@@ -686,7 +697,7 @@ mod krkr_probe {
     }
 
     pub fn plan(
-        dir: &Path,
+        dir: &SourcePath,
         names: &[String],
         name: &str,
         exe: &str,
@@ -743,7 +754,7 @@ mod krkr_probe {
 
 /// Read bounded launch metadata, never an entire archive. A symlink companion
 /// still has to resolve inside the selected game's capability root.
-fn read_bounded(dir: &Path, path: &str, limit: usize) -> Result<Vec<u8>> {
+fn read_bounded(dir: &SourcePath, path: &str, limit: usize) -> Result<Vec<u8>> {
     use std::io::Read;
     let full = dir.join(path).canonicalize()?;
     let root = dir.canonicalize()?;
@@ -752,7 +763,7 @@ fn read_bounded(dir: &Path, path: &str, limit: usize) -> Result<Vec<u8>> {
         "launch metadata escapes game folder: {path}"
     );
     let mut bytes = Vec::new();
-    std::fs::File::open(full)?
+    crate::source_path::SourceFile::open(full)?
         .take(limit as u64 + 1)
         .read_to_end(&mut bytes)?;
     ensure!(
@@ -762,7 +773,7 @@ fn read_bounded(dir: &Path, path: &str, limit: usize) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-fn nscripter(dir: &Path, names: &[String], name: &str) -> Result<Plan> {
+fn nscripter(dir: &SourcePath, names: &[String], name: &str) -> Result<Plan> {
     let script = ["0.txt", "00.txt", "nscript.dat", "pscript.dat"]
         .into_iter()
         .find_map(|s| find(names, s))
@@ -914,7 +925,7 @@ fn nscript_canvas(bytes: &[u8]) -> Result<[u32; 2]> {
     Ok(canvas)
 }
 
-fn rfvp(dir: &Path, names: &[String], name: &str) -> Result<Plan> {
+fn rfvp(dir: &SourcePath, names: &[String], name: &str) -> Result<Plan> {
     let scripts: Vec<_> = with_ext(names, "hcb").collect();
     ensure!(
         scripts.len() == 1,
@@ -947,7 +958,7 @@ fn rfvp(dir: &Path, names: &[String], name: &str) -> Result<Plan> {
     })
 }
 
-fn siglus(dir: &Path, names: &[String], name: &str) -> Result<Plan> {
+fn siglus(dir: &SourcePath, names: &[String], name: &str) -> Result<Plan> {
     use crysirror_siglus_vm::{
         gameexe::{decode_gameexe_dat_bytes, GameexeConfig, GameexeDecodeOptions},
         key_toml,
@@ -1019,6 +1030,11 @@ pub fn system_font() -> Option<PathBuf> {
             "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
             "/System/Library/Fonts/Hiragino Sans GB.ttc",
         ]
+    } else if cfg!(target_os = "ios") {
+        &["/System/Library/Fonts/LanguageSupport/PingFang.ttc",
+          "/System/Library/Fonts/Core/PingFang.ttc"]
+    } else if cfg!(target_os = "android") {
+        &["/system/fonts/NotoSansCJK-Regular.ttc", "/system/fonts/Roboto-Regular.ttf"]
     } else if cfg!(target_os = "windows") {
         &[
             "C:\\Windows\\Fonts\\msgothic.ttc",
@@ -1045,7 +1061,7 @@ mod tests {
         for file in ["KOE/z0629.nwk", "KOE/z0751.ovk", "z0001.koe"] {
             std::fs::write(dir.path().join(file), []).unwrap();
         }
-        let mounts=reallive_voice_mounts(dir.path(), b"#FOLDNAME.KOE=\"koe\"\n").unwrap();
+        let mounts=reallive_voice_mounts(&SourcePath::local(dir.path()), b"#FOLDNAME.KOE=\"koe\"\n").unwrap();
         assert_eq!(mounts.len(),3);
         assert_eq!(mounts[0].source,"KOE/z0629.nwk");
         assert_eq!(mounts[0].target,mounts[0].source);
@@ -1056,7 +1072,7 @@ mod tests {
             let outside=tempfile::tempdir().unwrap();
             std::fs::write(outside.path().join("z0002.nwk"), []).unwrap();
             std::os::unix::fs::symlink(outside.path().join("z0002.nwk"),dir.path().join("KOE/z0002.nwk")).unwrap();
-            assert!(reallive_voice_mounts(dir.path(), b"").unwrap_err().to_string().contains("escapes"));
+            assert!(reallive_voice_mounts(&SourcePath::local(dir.path()), b"").unwrap_err().to_string().contains("escapes"));
         }
     }
 
@@ -1229,9 +1245,9 @@ mod tests {
         std::fs::write(outside.path().join("source"), b"private").unwrap();
         std::os::unix::fs::symlink(outside.path().join("source"), dir.path().join("0.txt"))
             .unwrap();
-        assert!(read_bounded(dir.path(), "0.txt", 1024).is_err());
+        assert!(read_bounded(&SourcePath::local(dir.path()), "0.txt", 1024).is_err());
         std::fs::write(dir.path().join("large"), [0; 16]).unwrap();
-        assert!(read_bounded(dir.path(), "large", 8).is_err());
+        assert!(read_bounded(&SourcePath::local(dir.path()), "large", 8).is_err());
     }
 
     #[test]
@@ -1250,7 +1266,7 @@ mod tests {
     fn installed_player_selects_native_production_mode_before_game_scripts() {
         let names = vec!["data.xp3".to_owned()];
         let plan = krkr_probe::plan(
-            Path::new("."),
+            &SourcePath::local("."),
             &names,
             "authored",
             "game.exe",

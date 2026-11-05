@@ -5,9 +5,9 @@
 //! renderer from these references and are never saved.
 use crate::{
     model::{Camera, Geometry, Scene3d},
-    world::{geometry_data, EntityHandle, World},
+    world::{EntityHandle, World, geometry_data},
 };
-use anyhow::{ensure, Result};
+use anyhow::{Result, ensure};
 use glam::Vec3;
 use serde::{Deserialize, Serialize};
 
@@ -835,22 +835,26 @@ mod ray_lighting_tests {
         assert_eq!(g.samples, 8);
         g.validate().unwrap();
         for samples in [0, 65, u32::MAX] {
-            assert!(RayTracedGi {
-                samples,
-                ..g.clone()
-            }
-            .validate()
-            .is_err());
+            assert!(
+                RayTracedGi {
+                    samples,
+                    ..g.clone()
+                }
+                .validate()
+                .is_err()
+            );
         }
         let mut reflections: ScreenSpaceReflections = serde_json::from_str("{}").unwrap();
         assert_eq!(reflections.ray_samples, 16);
         reflections.ray_samples = 0;
         assert!(reflections.validate().is_err());
-        assert!(RayTracedGi {
-            max_distance: f32::NAN,
-            ..g
-        }
-        .validate()
-        .is_err());
+        assert!(
+            RayTracedGi {
+                max_distance: f32::NAN,
+                ..g
+            }
+            .validate()
+            .is_err()
+        );
     }
 }

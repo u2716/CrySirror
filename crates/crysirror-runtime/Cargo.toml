@@ -19,7 +19,6 @@ crysirror-puppet.workspace = true
 crysirror-physics.workspace = true
 crysirror-asset.workspace = true
 glam.workspace = true
-crysirror-siglus-vm.workspace = true
 crysirror-image.workspace = true
 crysirror-resource.workspace = true
 crysirror-formats-arc = { workspace = true, optional = true }
@@ -32,10 +31,21 @@ serde_json.workspace = true
 anyhow.workspace = true
 toml_edit = { version = "=0.25.17", default-features = false, features = ["parse"] }
 blake3.workspace = true
-cap-std.workspace = true
 chrono = "=0.4.45"
 getrandom = "=0.3.4"
+web-time = "1"
 
 [dev-dependencies]
 crysirror-acoustics.workspace = true
 tempfile = "3.12"
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "=1.1.6", features = ["fs"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+crysirror-network = { path = "../crysirror-network", default-features = false, features = ["http"] }
+cap-std.workspace = true
+crysirror-siglus-vm.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "=0.3.4", features = ["wasm_js"] }

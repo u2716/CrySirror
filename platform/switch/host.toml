@@ -1,0 +1,20 @@
+# Freestanding target checks the host contract, not the std-based Runtime.
+platform = "switch"
+rust_target = "aarch64-nintendo-switch-freestanding"
+contract_crate = "crysirror-console"
+sdk_environment = "DEVKITPRO"
+package_format = "nro"
+icon_source = "icon/crysirror.svg"
+
+[backends]
+window = "native"
+graphics = "unimplemented"
+audio = "unimplemented"
+storage = "unimplemented"
+tasks = "unimplemented"
+
+[storage_policy]
+base = "sdmc:/switch/CrySirror"
+assets = "games/{game_id}"
+saves = "saves/{adapter}/{game_id}"
+cache = "cache/{adapter}/{game_id}"

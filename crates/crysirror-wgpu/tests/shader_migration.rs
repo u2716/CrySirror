@@ -2,7 +2,7 @@
 //! Keep the complete fullscreen post stack valid across backend/compiler upgrades.
 #[test]
 fn fullscreen_post_shaders_validate_with_current_naga() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/shaders");
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../crysirror-shaders/wgsl");
     let fullscreen = std::fs::read_to_string(root.join("fullscreen.wgsl")).unwrap();
     for name in ["ssao", "taa", "ssr", "brdf", "prefilter", "tonemap", "bloom"] {
         let source = format!("{fullscreen}\n{}", std::fs::read_to_string(root.join(format!("{name}.wgsl"))).unwrap());

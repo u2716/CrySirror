@@ -3,7 +3,8 @@
 //! docs/api is generated from the live registry and specs. This test fails
 //! when the checked-in reference is stale or an API signature change has no
 //! CHANGES.md entry. Regenerate with
-//! `CRYSIRROR_BLESS=1 cargo test -p crysirror-engine --test api_docs`.
+//! `cargo run --release -p crysirror-engine --example api_reference`.
+//! The test-only blessing path remains available when test execution is wanted.
 use crysirror_engine::{
     api_doc::{self, sample, ApiInput, DataType},
     builtin,
@@ -80,6 +81,10 @@ const VFX_ALIASES: &[(&str, &str)] = &[
     ("SequenceRng", "VfxSequenceRng"),
     ("SequenceExchange", "VfxSequenceExchange"),
     ("FallingAtlasSpec", "VfxFallingAtlasSpec"),
+    ("DriftMotion", "VfxDriftMotion"),
+    ("DriftSpawnWindow", "VfxDriftSpawnWindow"),
+    ("DriftingAtlasSpec", "VfxDriftingAtlasSpec"),
+    ("DriftingAtlasState", "VfxDriftingAtlasState"),
     ("SystemSequenceState", "VfxSystemSequenceState"),
     ("Particle", "VfxParticle"),
     ("ParticleEvent", "VfxParticleEvent"),
@@ -120,7 +125,7 @@ fn vfx_type_aliases(ty: &str) -> String {
 
 fn vfx_doc_items() -> Vec<api_doc::RustItem> {
     let mut result = Vec::new();
-    for file in ["schema", "simulation", "screen", "falling_atlas"] {
+    for file in ["schema", "simulation", "screen", "falling_atlas", "drifting_atlas"] {
         let source = read(&format!("crates/crysirror-vfx/src/{file}.rs"));
         // Preserve serde's multiline tag/rename metadata for the deliberately
         // small generic parser, which normally sees single-line attributes.
@@ -180,7 +185,8 @@ fn vfx_doc_items() -> Vec<api_doc::RustItem> {
                     &member
                         .ty
                         .replace("crate::screen::", "")
-                        .replace("crate::falling_atlas::", ""),
+                        .replace("crate::falling_atlas::", "")
+                        .replace("crate::drifting_atlas::", ""),
                 );
             }
             result.push(item);
@@ -285,7 +291,7 @@ fn system4_doc_items() -> Vec<api_doc::RustItem> {
     output
 }
 
-fn generate() -> api_doc::ApiDocs {
+pub(crate) fn generate() -> api_doc::ApiDocs {
     let mut classes = ClassRegistry::default();
     builtin::register(&mut classes).unwrap();
     let mut items = Vec::new();
@@ -313,11 +319,15 @@ fn generate() -> api_doc::ApiDocs {
         "crates/crysirror-core/src/service/input_observation.rs",
         "crates/crysirror-core/src/service/platform.rs",
         "crates/crysirror-core/src/service/civil_time.rs",
+        "crates/crysirror-core/src/service/http.rs",
+        "crates/crysirror-core/src/service/stepped_pointer.rs",
+        "crates/crysirror-scene/src/ui/pointer_motion.rs",
         "crates/crysirror-core/src/service/session_seed.rs",
         "crates/crysirror-core/src/service/pattern.rs",
         "crates/crysirror-core/src/service/media_probe.rs",
         "crates/crysirror-core/src/image_processing.rs",
         "crates/crysirror-core/src/image_blend.rs",
+        "crates/crysirror-core/src/vector_scene.rs",
         "crates/crysirror-core/src/image_encoding.rs",
         "crates/crysirror-core/src/native_restore.rs",
         "crates/crysirror-core/src/integer_fields.rs",
@@ -384,6 +394,7 @@ fn generate() -> api_doc::ApiDocs {
         "crates/crysirror-engine/src/audio_sequences_api.rs",
         "crates/crysirror-core/src/service/audio_sequence.rs",
         "crates/crysirror-core/src/input_buffer.rs",
+        "crates/crysirror-core/src/frame_admission.rs",
         "crates/crysirror-audio/src/scene.rs",
         "crates/crysirror-audio/src/buffered.rs",
         "crates/crysirror-audio/src/decoder.rs",
@@ -412,7 +423,24 @@ fn generate() -> api_doc::ApiDocs {
     ] {
         items.extend(api_doc::parse_rust_items(&read(f)));
     }
+    let aliases=[("SequenceSpec","LayerSequenceSpec"),("SequenceBinding","LayerSequenceBinding"),("BindingTarget","LayerSequenceBindingTarget"),("ValueMap","LayerSequenceValueMap"),("DeltaSource","LayerSequenceDeltaSource"),("SequenceTrack","LayerSequenceTrack"),("SequenceOperation","LayerSequenceOperation"),("SequenceStatus","LayerSequenceStatus"),("Lane","LayerSequenceLane"),("Record","LayerSequenceRecord"),("Active","LayerSequenceActive")];
+    for mut item in api_doc::parse_rust_items(&read("crates/crysirror-scene/src/layer/queued.rs")) {
+        if let Some((_,name))=aliases.iter().find(|(name,_)|*name==item.name) {
+            item.name=(*name).into();
+            for member in &mut item.members {
+                let mut rewritten=String::new();let mut word=String::new();
+                for character in member.ty.chars().chain(std::iter::once(' ')) {
+                    if character.is_alphanumeric()||character=='_' {word.push(character)}else{
+                        rewritten.push_str(aliases.iter().find(|(name,_)|*name==word).map_or(word.as_str(),|(_,alias)|*alias));word.clear();rewritten.push(character);
+                    }
+                }
+                member.ty=rewritten.trim_end().into();
+            }
+            items.push(item);
+        }
+    }
     for item in &mut items {
+        for member in &mut item.members {for (name,alias) in &aliases {member.ty=member.ty.replace(&format!("queued::{name}"),alias);}}
         let tuple_source = match item.name.as_str() {
             "Printf32Argument" => Some(("crates/crysirror-text/src/printf32.rs", "pub enum Printf32Argument<'a> {")),
             "OriginalRestoreStatus" => Some(("crates/crysirror-core/src/native_restore.rs", "pub enum OriginalRestoreStatus {")),
@@ -502,6 +530,32 @@ fn generate() -> api_doc::ApiDocs {
         d("KeyboardLockSnapshot", "Input.keyboardLocks / setKeyboardLocks", None),
         d("NativeLiveState", "Opaque Circus native save-image mutation audit; gaps block original save admission", None),
         d("CivilTime", "HostServices.begin_civil_time worker result, independent of virtual clock", None),
+        d("CivilTransitionDay","Rust host timezone annual transition rule",None),
+        d("CivilTransition","Rust historical standard/daylight transition",None),
+        d("CivilDaylightRules","CivilTimeZoneProfile retained annual daylight rules",None),
+        d("CivilTimeZoneProfile","HostServices.begin_civil_timezone retained host profile",None),
+        d("CivilTimeZoneState","CivilTimeZoneQuery.poll completion",None),
+        d("CivilTimeZoneQuery","Opaque client-owned asynchronous timezone query",None),
+        d("HttpMethod","Rust owner-authorized HttpRequest.method",None),
+        d("HttpRequest","HostServices.begin_http; explicit origin capability required",None),
+        d("HttpResponse","Bounded retained HTTP response bytes",None),
+        d("HttpRequestState","HttpRequestJob.poll completion",None),
+        d("HttpRequestJob","Opaque cancellable client-scoped HTTP job",None),
+        d("SteppedPointerMotionSpec","Ui.movePointerStepped / shared float-step pointer interpolation",None),
+        d("SteppedPointerMotion","Rust pure retained float-step pointer state",None),
+        d("TexelQuad","Rust layer::crop::texel_center_quad projection, independent of any VM",None),
+        d("LayerSequenceSpec","Rust layer queue; LayerCommand.BeginSequence/Sequence and EngineQuery.LayerSequence",None),
+        d("LayerSequenceBinding","Rust layer queue; LayerCommand.BeginSequence/Sequence and EngineQuery.LayerSequence",None),
+        d("LayerSequenceBindingTarget","Rust layer queue; LayerCommand.BeginSequence/Sequence and EngineQuery.LayerSequence",None),
+        d("LayerSequenceValueMap","Rust layer queue; LayerCommand.BeginSequence/Sequence and EngineQuery.LayerSequence",None),
+        d("LayerSequenceDeltaSource","Rust layer queue; LayerCommand.BeginSequence/Sequence and EngineQuery.LayerSequence",None),
+        d("LayerSequenceTrack","Rust layer queue; LayerCommand.BeginSequence/Sequence and EngineQuery.LayerSequence",None),
+        d("LayerSequenceOperation","Rust layer queue; LayerCommand.BeginSequence/Sequence and EngineQuery.LayerSequence",None),
+        d("LayerSequenceStatus","Rust layer queue; LayerCommand.BeginSequence/Sequence and EngineQuery.LayerSequence",None),
+        d("LayerSequenceLane","Rust layer queue; LayerCommand.BeginSequence/Sequence and EngineQuery.LayerSequence",None),
+        d("LayerSequenceRecord","Rust layer queue; LayerCommand.BeginSequence/Sequence and EngineQuery.LayerSequence",None),
+        d("LayerSequenceActive","Rust layer queue; LayerCommand.BeginSequence/Sequence and EngineQuery.LayerSequence",None),
+
         d("ImageEncodingInfo", "ImageMetadata.begin_encoding_info retained original encoded header/plane properties; no pixel CRC claim", None),
         d("ImageEncodingInfoReceipt", "Client-scoped encoded-header receipt and original-byte fingerprint", None),
         d("ImageEncodingInfoState", "ImageEncodingInfoQuery.poll retained pending/ready/typed failure state", None),
@@ -585,6 +639,7 @@ fn generate() -> api_doc::ApiDocs {
         d("WindowPolicy","Ui.setWindowPolicy / UiSystem.window_policy",None),
         d("InputSample","Input.events samples; journal JSON u64 fields are decimal strings",None),
         d("InputReceipt","Input.events receipt / ackEvents; JSON epoch/sequence are decimal strings",None),
+        d("FrameAdmissionClock", "Native wrapping-clock frame admission; caller retains input and pending work", None),
         d("InputBufferSnapshot","Input.captureEvents / restoreEvents; schema 1, JSON u64 fields are decimal strings",None),
         d("InputFrame","InputSample.frame; journal wire uses decimal strings for masks",None),
         d("CueSequenceCursor","Audio.captureCueSequence / restoreCueSequence",None),
@@ -968,6 +1023,10 @@ fn generate() -> api_doc::ApiDocs {
         d("VfxSequenceRng", "`VfxSystemSpec.sequence_rng`; explicit serializable integer stream", None),
         d("VfxSequenceExchange", "`VfxSystemSpec.sequence_exchange`; fenced stream replacement acknowledged by workers", None),
         d("VfxFallingAtlasSpec", "`VfxEmitterSpec.falling_atlas`; bounded CPU pixel-motion and atlas node", None),
+        d("VfxDriftMotion", "Streak or buoyant pixel-space drift over an existing CPU particle pool", None),
+        d("VfxDriftSpawnWindow", "Bounded native-independent spawn-window selection over the shared sequence RNG", None),
+        d("VfxDriftingAtlasSpec", "`VfxEmitterSpec.drifting_atlas`; externally clocked drift, alpha and atlas policy", None),
+        d("VfxDriftingAtlasState", "Worker-owned per-particle drift and atlas progression", None),
         d("VfxSystemSequenceState", "Worker-completed state queried through `Vfx.sequenceStatus`", None),
         d(
             "VfxParameterValue",
@@ -1172,6 +1231,8 @@ fn generate() -> api_doc::ApiDocs {
             sample::<ui::WidgetSpec>(json!({"id": 1, "rect": [0, 0, 1, 1]})),
         ),
         d("WidgetKind", "`WidgetSpec.kind`", None),
+        d("WidgetKeyEvent", "`WidgetSpec.key_events`", sample::<ui::WidgetKeyEvent>(json!({"buttons":1,"edge":"press","event":"confirm"}))),
+        d("WidgetKeyEdge", "`WidgetKeyEvent.edge`", None),
         d("Flow", "`WidgetSpec.flow`", None),
         d("PuppetCommand", "`Puppets.*`, `layer.puppet`", None),
         d(

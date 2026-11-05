@@ -3,6 +3,13 @@
 // (at your option) any later version, https://www.gnu.org/licenses/agpl-3.0.html.
 //! Native parameter/value mapping only. Pixels and algorithms belong to shared
 //! engine resources; alpha clips prepare composed inputs through shared Canvases.
+// Native image lifetime and dependency policy:
+// Keep encoded Asset descriptions immutable; hidden PSD cache layers must not
+// eagerly acquire duplicate RGBA buffers. Before admitting pointer input,
+// prepare visible positive-alpha hit candidates through the shared image jobs.
+// A composed Canvas has no direct CPU image: use the shared capture dependency
+// for hit coverage, saves and pair effects, then retain its completed generation.
+// Never acknowledge an undecoded image as an opaque hit or a successful read.
 use crate::natives::*;
 use crysirror_core::{
     image_processing::{ImageInput, ImageProcessState},
@@ -14,6 +21,36 @@ use crysirror_tjs2::{
     runtime::{ObjectHandle, Variant},
 };
 use serde_json::{Value, json};
+
+/// Consecutive native bitmap operations, retained as an engine image DAG.
+/// The native owner keeps only the target and a bounded operation count.
+pub(crate) struct BitmapBatch {
+    pub target: usize,
+    pub operations: usize,
+}
+
+fn seal_bitmap_batch(rt: &mut Rt) -> Result<()> {
+    let Some(batch) = rt.host().bitmap_batch.as_ref() else { return Ok(()); };
+    let target = ObjectHandle(batch.target);
+    let source = input(rt, target)?;
+    if rt.host().image_job.is_some() || rt.host().image_pair.is_some() {
+        return Err(TjsError::runtime("bitmap batch overlaps image preparation"));
+    }
+    let job = rt.host().images.as_ref().ok_or_else(|| TjsError::runtime("image service absent"))?
+        .begin_process(source, std::sync::Arc::from(&b"[]"[..]))
+        .map_err(|e| TjsError::runtime(e.to_string()))?;
+    rt.host_mut().bitmap_batch = None;
+    rt.host_mut().image_job = Some((target.0, job, [false; 2], true));
+    Ok(())
+}
+
+/// A non-batched call must observe all prior bitmap writes. ResourcePending
+/// retries this same instruction before it has performed any side effect.
+pub(crate) fn before_bitmap_call(rt: &mut Rt) -> Result<()> {
+    if rt.host().bitmap_batch.is_none() { return Ok(()); }
+    seal_bitmap_batch(rt)?;
+    Err(TjsError::resource_pending("ordered bitmap batch"))
+}
 pub fn gamma(rt: &mut Rt, t: Option<ObjectHandle>, a: Vec<Variant>) -> Result<Variant> {
     let h = this_of(rt, t, "Layer.adjustGamma")?;
     rt.host().layer(h)?;
@@ -146,6 +183,7 @@ fn poll_composite(rt: &mut Rt, host: &mut dyn HostServices, client: ClientId) ->
 }
 
 pub fn poll(rt: &mut Rt, host: &mut dyn HostServices, client: ClientId) -> anyhow::Result<bool> {
+    seal_bitmap_batch(rt).map_err(|e|anyhow::anyhow!("{e}"))?;
     if !poll_save(rt,host,client)?{return Ok(false);}
     if !poll_pair(rt,host,client)?{return Ok(false);}
     if rt.host().image_job.is_none() && !poll_composite(rt,host,client)?{return Ok(false);}

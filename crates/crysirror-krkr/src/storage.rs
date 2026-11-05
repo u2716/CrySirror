@@ -5,6 +5,10 @@
 //! with case-insensitive matching. Only that naming policy lives here; bytes
 //! come from the shared `ClientStorage` handle and images are decoded by the
 //! engine's shared decoders.
+// Native storage syntax does not grant filesystem authority. Auto paths and
+// archive URIs resolve through installed client mounts; save names route to the
+// Save capability. Native text encoding/offset modes remain stream policy rather
+// than a host-path or archive-unpacking shortcut.
 use anyhow::{Context, Result, ensure};
 use crysirror_core::{
     path::{Mount, VfsPath},

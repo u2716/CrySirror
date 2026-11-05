@@ -47,8 +47,10 @@ pub(crate) fn preflight(bank: &Bank) -> Result<()> {
     for object in bank.objects.values() {
         match &object.state{
    State::Base=>{},
-   // Masks, affine poses and plane transforms still publish their axis-aligned base.
-   State::CImage(_)|State::Image(_)|State::CPlane(_)|State::Plane(_)=>{},
+   State::CImage(image)|State::Image(image)=>ensure!(matches!(image.mask,0|4),
+    "CatSystem2 unsupported image MASK {} (channel masks 1..3 require explicit channel selection)",image.mask),
+   // Affine poses and plane transforms still publish their axis-aligned base.
+   State::CPlane(_)|State::Plane(_)=>{},
    State::Sound(sound)=>ensure!(sound.filename.len()<260&&!sound.filename.contains(&0)&&sound.group.is_ascii()&&sound.group.len()<32,
     "CatSystem2 SOUND filename/group field extent or encoding"),
   }
@@ -60,7 +62,9 @@ struct Metadata {
     vm: Interpreter,
 }
 enum Current {
+    BgTable(u32, Task<Option<crate::fes_bg_table::Table>>),
     Solid(u32, ImageJob),
+    Effects(u32, ImageJob),
     Frame(u32, FramePending),
     /// SIZE2/POS2 name an HG3 frame whose geometry supplies the object's size/position.
     Reference(u32, FramePending),
@@ -79,6 +83,7 @@ pub(crate) struct Pending {
     next: usize,
     current: Option<Current>,
     ready: BTreeMap<u32, Arc<dyn ImageResource>>,
+    effects_done: std::collections::BTreeSet<u32>,
     frames: BTreeMap<u32, crate::native_image_resource::Prepared>,
     failure: Option<String>,
     published: Option<(u32, Vec<u8>, Receipt)>,
@@ -128,6 +133,7 @@ impl Pending {
             next: 0,
             current: None,
             ready: BTreeMap::new(),
+            effects_done: Default::default(),
             frames: BTreeMap::new(),
             failure: None,
             published: None,
@@ -145,7 +151,9 @@ impl Pending {
             ensure!(old.owner==bank.owner,"CatSystem2 changed frame resource owner");
             for (id,image) in &old.resident {
                 if let (Some(a),Some(b))=(old.bank.objects.get(id),bank.objects.get(id)) {
-                    if resource_identity(&a.state)==resource_identity(&b.state) {
+                    let dependency=match &b.state {State::Image(image)|State::CImage(image)=>image.object_reference,_=>None};
+                    let dependency_unchanged=dependency.is_none_or(|source|match(old.bank.objects.get(&source),bank.objects.get(&source)){(Some(a),Some(b))=>resource_identity(&a.state)==resource_identity(&b.state),_=>false});
+                    if dependency_unchanged&&resource_identity(&a.state)==resource_identity(&b.state) {
                         ready.insert(*id,image.clone());
                         if let Some(frame)=old.frames.get(id){frames.insert(*id,frame.clone());}
                     }
@@ -153,15 +161,16 @@ impl Pending {
             }
         }
         let mut value=Self{owner:bank.owner,native_pc:pc,client,metadata:None,
-            ids:bank.ordered_ids(),bank:Some(bank),vm:Some(vm),strings,
+            ids:reference_order(&bank)?,bank:Some(bank),vm:Some(vm),strings,
             images:host.image_metadata(client)?,pool:pool.clone(),next:0,current:None,
-            ready,frames,failure:None,published:None,existing:previous,retiring:Vec::new(),upload:[0,0]};
+            effects_done:ready.keys().copied().collect(),ready,frames,failure:None,published:None,existing:previous,retiring:Vec::new(),upload:[0,0]};
         let inherited=value.frames.clone();
         for (id,frame) in inherited{value.apply_geometry(id,&frame)?;}
         Ok(value)
     }
     fn apply_geometry(&mut self,id:u32,frame:&crate::native_image_resource::Prepared)->Result<()> {
         let State::Image(image)=&mut self.bank.as_mut().unwrap().objects.get_mut(&id).context("CatSystem2 frame geometry target missing")?.state else{anyhow::bail!("CatSystem2 frame geometry target class changed")};
+        if image.reference.is_some()||image.object_reference.is_some(){return Ok(());}
         let base=frame.geometry.base.context("CatSystem2 native HG3 missing base metadata profile")?;
         if image.path_mode==0 {
             image.pose.offset=[base[0] as f32,base[1] as f32];
@@ -197,12 +206,28 @@ impl Pending {
                 return Ok(false);
             };
             self.metadata = None;
-            self.ids = metadata.bank.ordered_ids();
+            self.ids = reference_order(&metadata.bank)?;
             self.vm = Some(metadata.vm);
             self.bank = Some(metadata.bank);
         }
         if let Some(mut current) = self.current.take() {
             match &mut current {
+                Current::BgTable(id, task) => {
+                    let Some(table) = task.try_take()? else { self.current = Some(current); return Ok(false) };
+                    let State::Image(image) = &mut self.bank.as_mut().unwrap().objects.get_mut(id).context("CatSystem2 BGTABLE object missing")?.state else { anyhow::bail!("CatSystem2 BGTABLE class changed") };
+                    image.bg_table_source = None;
+                    if let Some(table) = table { image.bg_table = Some(table); }
+                    return self.poll_inner(host);
+                }
+                Current::Effects(id, job) => {
+                    match job.poll()? {
+                        ImageProcessState::Pending => { self.current=Some(current);return Ok(false); }
+                        ImageProcessState::Failed(error) => anyhow::bail!("CatSystem2 object effects: {error}"),
+                        ImageProcessState::Ready(image) => { self.ready.insert(*id,image);self.effects_done.insert(*id); }
+                    }
+                    return self.poll_inner(host);
+                }
+
                 Current::Solid(id, job) => match job.poll()? {
                     ImageProcessState::Pending => {
                         self.current = Some(current);
@@ -297,8 +322,21 @@ impl Pending {
             self.next += 1;
         }
         while let Some(id) = self.ids.get(self.next).copied() {
-            if self.ready.contains_key(&id){self.next+=1;continue;}
             let object = &self.bank.as_ref().unwrap().objects[&id];
+            if let State::Image(image) = &object.state {
+                if let (Some(kind), Some(source)) = (image.bg_table_kind, image.bg_table_source.as_ref()) {
+                    let source = self.strings.expand(source, 255)?;
+                    let storage = host.storage(self.client)?;
+                    let permit = match self.pool.reserve() {
+                        Ok(permit) => permit,
+                        Err(error) if error.is::<crysirror_tasks::CapacityExceeded>() => return Ok(false),
+                        Err(error) => return Err(error),
+                    };
+                    self.current = Some(Current::BgTable(id, permit.spawn(move |cancel| crate::fes_bg_table::load(storage.as_ref(), &source, kind, &cancel))?));
+                    return Ok(false);
+                }
+            }
+            if self.ready.contains_key(&id){self.next+=1;continue;}
             let reference = match &object.state {
                 State::Plane(p) | State::CPlane(p) => p.size_reference.as_ref().or(p.position_reference.as_ref()),
                 State::Image(p) | State::CImage(p) => p.size_reference.as_ref().or(p.position_reference.as_ref()),
@@ -315,7 +353,43 @@ impl Pending {
                 self.current = Some(Current::Reference(id, pending));
                 return Ok(false);
             }
+            let dependency=match &object.state {State::Image(image)|State::CImage(image)=>image.object_reference,_=>None};
+            if let Some(source)=dependency {
+                if !self.effects_done.contains(&source) {
+                    if let Some(resource)=self.ready.get(&source) {
+                        let effects=object_effects(&self.bank.as_ref().unwrap().objects[&source].state,self.frames.get(&source).map(|f|&f.geometry))?;
+                        if effects.is_empty(){self.effects_done.insert(source);}else{
+                            self.current=Some(Current::Effects(source,self.images.begin_process(ImageInput::Resource(resource.clone()),serde_json::to_vec(&effects)?.into())?));return Ok(false);
+                        }
+                    }
+                }
+                if let (Some(frame),Some(resource))=(self.frames.get(&source).cloned(),self.ready.get(&source).cloned()) {
+                    let mut frame=frame;frame.image=resource;
+                    let (State::Image(image)|State::CImage(image))=&mut self.bank.as_mut().unwrap().objects.get_mut(&id).unwrap().state else{unreachable!()};
+                    image.reference=Some(frame);
+                }
+            }
+            let object=&self.bank.as_ref().unwrap().objects[&id];
             match &object.state {
+                State::Image(image)|State::CImage(image) if image.reference.is_some() => {
+                    let frame=image.reference.clone().unwrap();
+                    let resource=frame.image.clone();
+                    let opaque=frame.geometry.flags==Some(0);
+                    let size=resource.size();
+                    let rect=image.copy_rect.filter(|r|r[2]!=0&&r[3]!=0).unwrap_or([0,0,size[0] as i32,size[1] as i32]);
+                    ensure!(rect[0]>=0&&rect[1]>=0&&rect[2]>0&&rect[3]>0,"CatSystem2 copy source rectangle");
+                    let width=(rect[2] as u32).min(size[0].saturating_sub(rect[0] as u32));
+                    let height=(rect[3] as u32).min(size[1].saturating_sub(rect[1] as u32));
+                    ensure!(width>0&&height>0,"CatSystem2 copy outside source surface");
+                    self.frames.insert(id,frame);
+                    let (State::Image(image)|State::CImage(image))=&mut self.bank.as_mut().unwrap().objects.get_mut(&id).unwrap().state else{unreachable!()};
+                    image.size=[width as i32,height as i32];
+                    self.current=Some(Current::Solid(id,self.images.begin_process(ImageInput::Composite{
+                        base:Box::new(ImageInput::Solid{size:[width,height],color:[0;4]}),
+                        layers:vec![ImageCompositeLayer{input:Box::new(ImageInput::Resource(resource)),source:[rect[0],rect[1],width as i32,height as i32],destination:[0;2],clip:None,opacity:255,math:ImageCompositeMath::Copy}],
+                    },if opaque{Arc::from(b"[{\"kind\":\"override_alpha\",\"alpha\":255}]".as_slice())}else{Arc::from(b"[]".as_slice())})?));
+                    return Ok(false);
+                }
                 State::CImage(image) if image.size.iter().all(|v| *v > 0) => {
                     self.current = Some(Current::Solid(
                         id,
@@ -356,6 +430,17 @@ impl Pending {
                 }
                 _ => self.next += 1,
             }
+        }
+        // Immutable effect resources are prepared by the engine worker, after source
+        // admission and before any Canvas transaction. Native queries keep raw HG3.
+        for id in &self.ids {
+            if self.effects_done.contains(id) {continue;}
+            let Some(resource)=self.ready.get(id) else {continue};
+            let state=&self.bank.as_ref().unwrap().objects[id].state;
+            let effects=object_effects(state,self.frames.get(id).map(|f|&f.geometry))?;
+            if effects.is_empty() {self.effects_done.insert(*id);continue;}
+            self.current=Some(Current::Effects(*id,self.images.begin_process(ImageInput::Resource(resource.clone()),serde_json::to_vec(&effects)?.into())?));
+            return Ok(false);
         }
         Ok(true)
     }
@@ -453,7 +538,7 @@ impl Pending {
                         if !unchanged {
                             let child = 0x12000000u32.checked_add(object.id).filter(|id| *id < 0x20000000).context("CatSystem2 text layer ID range")?;
                             let mut glyphs: LayerSpec = serde_json::from_value(serde_json::json!({"id":child,"parent":id,"rect":[0,0,plane.size[0],plane.size[1]],"paint":{"kind":"solid","color":[0,0,0,0]}}))?;
-                            glyphs.paint = crysirror_scene::layer::Paint::GlyphRun {
+                            glyphs.paint = crysirror_scene::layer::Paint::GlyphRun { outline:None,
                                 font: "default".to_owned(),
                                 size: text.sizes[2],
                                 color: [text.color[0], text.color[1], text.color[2], 255],
@@ -557,7 +642,7 @@ impl Pending {
                 //65DC00 mode0 adds its pivot back before746C40 subtracts it.
                 //PATHMODE1 also retains native surface origin, which canonical
                 //PNG does not carry; translate that metadata here, not pixels.
-                let extra = if matches!(&object.state, State::Image(_)) {
+                let extra = if matches!(&object.state, State::Image(_)) && image.coordinate_mode==0 {
                     let origin = if image.path_mode == 1 {
                         self.frames
                             .get(&object.id)
@@ -575,13 +660,14 @@ impl Pending {
                 } else {
                     [0.; 2]
                 };
+                let padding=blur_padding(image,self.frames.get(&object.id).map(|f|&f.geometry))?;
                 let position = [
                     image.pose.position[0] + image.pose.offset[0] - image.pose.pivot[0]
                         + offset[0]
-                        + extra[0],
+                        + extra[0] - padding[0] as f32,
                     image.pose.position[1] + image.pose.offset[1] - image.pose.pivot[1]
                         + offset[1]
-                        + extra[1],
+                        + extra[1] - padding[1] as f32,
                 ];
                 proposed.put(Draw {
                     key,
@@ -589,9 +675,23 @@ impl Pending {
                     size: resource.size,
                     position,
                     pivot: image.pose.pivot,
-                    alpha: u8::try_from(image.pose.alpha)
-                        .context("CatSystem2 class image alpha outside native renderer range")?,
-                    visible: image.pose.visible != 0,
+                    // Native 687370 selects 688EF0 for 32bpp MASK 4. It
+                    // multiplies destination alpha by source alpha, ignores
+                    // source RGB and does not apply the ordinary blend weight.
+                    // The pixel kernel keeps straight destination RGB and uses
+                    // ((Da+1)*(Sa+1)-1)>>8 for native byte alpha. This GPU mapping
+                    // uses normalized destination-in, not a promise of identical
+                    // integer rounding for every alpha pair. In particular, the
+                    // mask's coloured RGB must never become a visible sprite.
+                    // The shared Canvas stores premultiplied colour, so mask
+                    // both colour and alpha there to retain straight RGB.
+                    alpha: if image.mask==4 {255} else {u8::try_from(image.pose.alpha)
+                        .context("CatSystem2 class image alpha outside native renderer range")?},
+                    blend: if image.mask==4 {crysirror_scene::layer::Blend::DestinationIn} else {crysirror_scene::layer::Blend::Normal},
+                    // 743600 rejects zero draw alpha before selecting the
+                    // channel-mask kernel, even though that kernel otherwise
+                    // ignores the ordinary blend weight.
+                    visible: image.pose.visible != 0 && (image.mask!=4 || image.pose.alpha!=0),
                     clip: None,
                 })?;
                 let clip = plane
@@ -604,7 +704,14 @@ impl Pending {
                         ])
                     })
                     .transpose()?;
-                proposed.clip(key, clip);
+                let source_clip=image.clip.map(|b|[b[0].max(0),b[1].max(0),b[2].min(resource.size[0] as i32),b[3].min(resource.size[1] as i32)]).filter(|b|b[0]<b[2]&&b[1]<b[3]);
+                let origin=[(position[0]-image.pose.pivot[0]) as i32,(position[1]-image.pose.pivot[1]) as i32];
+                let clip = match (clip,source_clip) {
+                    (Some(a),Some(b))=>Some([a[0].max(b[0]+origin[0]),a[1].max(b[1]+origin[1]),a[2].min(b[2]+origin[0]),a[3].min(b[3]+origin[1])]),
+                    (None,Some(b))=>Some([b[0]+origin[0],b[1]+origin[1],b[2]+origin[0],b[3]+origin[1]]),
+                    (a,None)=>a,
+                };
+                if clip.is_some_and(|r|r[0]>=r[2]||r[1]>=r[3]){proposed.remove(key);}else{proposed.clip(key, clip);}
                 proposed.priority(key, image.pose.priority);
             }
             //One shared transaction creates parents before Canvas work and
@@ -648,12 +755,71 @@ pub(crate) struct Receipt {
     pub root: u32,
     pub resident:BTreeMap<u32,Arc<dyn ImageResource>>,
 }
-fn resource_identity(state:&State)->Vec<u8>{
-    match state {
-        State::CImage(v)=>{let mut out=vec![1];for x in v.size{out.extend(x.to_le_bytes());}out.extend(v.color.to_le_bytes());out},
-        State::Image(v)=>{let mut out=vec![2];out.extend(v.native_frame().to_le_bytes());out.extend(v.path_mode.to_le_bytes());out.extend(&v.filename);out},
-        _=>Vec::new(),
+fn reference_order(bank:&Bank)->Result<Vec<u32>>{
+    fn visit(bank:&Bank,id:u32,active:&mut std::collections::BTreeSet<u32>,done:&mut std::collections::BTreeSet<u32>,out:&mut Vec<u32>)->Result<()>{
+        if done.contains(&id){return Ok(());}
+        ensure!(active.len()<64&&active.insert(id),"CatSystem2 cyclic image reference");
+        if let Some(State::Image(image)|State::CImage(image))=bank.objects.get(&id).map(|o|&o.state){if let Some(source)=image.object_reference{visit(bank,source,active,done,out)?;}}
+        active.remove(&id);done.insert(id);out.push(id);Ok(())
     }
+    let mut out=Vec::new();let mut active=Default::default();let mut done=Default::default();
+    for id in bank.ordered_ids(){visit(bank,id,&mut active,&mut done,&mut out)?;}
+    Ok(out)
+}
+fn resource_identity(state:&State)->Vec<u8>{
+    let image=match state {State::CImage(v)|State::Image(v)=>v,_=>return Vec::new()};
+    let mut out=if matches!(state,State::CImage(_)){let mut out=vec![1];for x in image.size{out.extend(x.to_le_bytes());}out.extend(image.color.to_le_bytes());out}else{let mut out=vec![2];out.extend(image.native_frame().to_le_bytes());out.extend(image.path_mode.to_le_bytes());out.extend(&image.filename);out};
+    for v in image.tone {out.extend(v.to_le_bytes());}out.extend(image.filter.to_le_bytes());out.extend(image.blur);out.extend(image.object_reference.unwrap_or(0).to_le_bytes());
+    if let Some(reference)=&image.reference {out.extend(reference.source.as_bytes());out.extend(reference.geometry.frame_id.to_le_bytes());out.extend((Arc::as_ptr(&reference.image) as *const () as usize).to_le_bytes());}
+    if let Some(rect)=image.copy_rect {for v in rect{out.extend(v.to_le_bytes());}}
+    out
+}
+fn blur_padding(image:&crate::native_class_state::ImageState,g:Option<&crate::native_image_resource::Geometry>)->Result<[u32;4]>{
+    if image.blur==[1;2] || (image.reference.is_some()&&image.copy_rect.is_none()){return Ok([0;4]);}
+    let Some(g)=g else{return Ok([0;4])};
+    let [x,y]=g.origin;
+    ensure!(x>=0&&y>=0,"CatSystem2 blur surface origin");
+    let right=g.canvas[0].saturating_sub(x as u32).saturating_sub(g.size[0]);
+    let bottom=g.canvas[1].saturating_sub(y as u32).saturating_sub(g.size[1]);
+    //68DA70 passes (x,y,x,y) to the extension helper, unlike68DF70's
+    //(x,x,y,y). Retain that placement policy with the repaired RGB kernel.
+    if g.color_bits==24 {return Ok([(x as u32).min(image.blur[0].into()),(y as u32).min(image.blur[0].into()),right.min(image.blur[1].into()),bottom.min(image.blur[1].into())]);}
+    Ok([(x as u32).min(image.blur[0].into()),(y as u32).min(image.blur[1].into()),right.min(image.blur[0].into()),bottom.min(image.blur[1].into())])
+}
+/// 68D6E0 and 68C000/68C1E0/68C180: byte-exact tables over shared image effects.
+fn object_effects(state:&State,geometry:Option<&crate::native_image_resource::Geometry>)->Result<Vec<crysirror_image::effects::ImageEffect>> {
+    use crysirror_image::{effects::ImageEffect,rgb_lut::{RgbLookup,RgbLookupProfile},fixed_luma::FixedLumaSpec};
+    let v=match state {State::Image(v)|State::CImage(v)=>v,_=>return Ok(Vec::new())};
+    let mut out=Vec::new();
+    if v.tone != [100;3] && (v.reference.is_none()||v.copy_rect.is_some()) {
+        // The native unsigned accumulator deliberately wraps for negative rates.
+        let table=|rate:u32|(0u32..256).map(|x|(x.wrapping_mul(rate)/100).min(255) as u8).collect();
+        out.push(ImageEffect::RgbLookup{spec:RgbLookup{red:table(v.tone[0]),green:table(v.tone[1]),blue:table(v.tone[2]),profile:RgbLookupProfile::StraightRgba}});
+    }
+    if v.blur != [1;2] && (v.reference.is_none()||v.copy_rect.is_some()) {
+        let opaque=geometry.is_some_and(|g|g.color_bits==24);
+        // Intentional compatibility repair: native68DA70's horizontal pass
+        // writes only width bytes into an uninitialized RGB scratch buffer.
+        // Use the shared fully initialized, three-channel convolution for
+        // both axes instead. Preserve its weights, fixed16 truncation and
+        // padding, but deliberately do not reproduce undefined native pixels.
+        let math=if opaque {crysirror_image::triangular_blur::TriangularBlurMath::OpaqueFixed16}else{crysirror_image::triangular_blur::TriangularBlurMath::AlphaAwareFixed24};
+        out.push(ImageEffect::TriangularBlur{spec:crysirror_image::triangular_blur::TriangularBlur{radius:v.blur,padding:blur_padding(v,geometry)?,math}});
+    }
+    match v.filter {
+        1|2=>{
+            // These Q16 coefficients reproduce all256 entries of the original
+            // single-precision, separately truncated coefficient tables.
+            out.push(ImageEffect::FixedLuma{spec:FixedLumaSpec{coefficients:[19588,38444,7503],groups:[0,1,2],fractional_bits:16,amount256:256}});
+            if v.filter==2 {
+                let table=|offset:i32|(0..256).map(|x|(x+offset).clamp(0,255) as u8).collect();
+                out.push(ImageEffect::RgbLookup{spec:RgbLookup{red:table(30),green:table(5),blue:table(-35),profile:RgbLookupProfile::StraightRgba}});
+            }
+        }
+        3=>out.push(ImageEffect::Invert),
+        _=>{},
+    }
+    Ok(out)
 }
 
 #[cfg(test)]

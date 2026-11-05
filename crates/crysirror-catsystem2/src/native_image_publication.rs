@@ -20,6 +20,7 @@ pub(crate) struct Draw {
     pub position: [f32; 2],
     pub pivot: [f32; 2],
     pub alpha: u8,
+    pub blend: crysirror_scene::layer::Blend,
     pub visible: bool,
     ///Native7464A0 full-manager clipping is represented by None.
     pub clip: Option<[i32; 4]>,
@@ -60,7 +61,7 @@ impl Draw {
             );
         }
         Ok(serde_json::from_value(
-            serde_json::json!({"id":self.key,"rect":[position[0],position[1],self.size[0],self.size[1]],"paint":{"kind":"image","asset":self.image},"opacity":self.alpha,"visible":self.visible,"clip":clip}),
+            serde_json::json!({"id":self.key,"rect":[position[0],position[1],self.size[0],self.size[1]],"paint":{"kind":"image","asset":self.image},"opacity":self.alpha,"blend":self.blend,"visible":self.visible,"clip":clip}),
         )?)
     }
 }
@@ -99,6 +100,10 @@ impl ImageList {
             planes: BTreeMap::new(),
             canvas_records:BTreeMap::new(),
         })
+    }
+    pub fn diagnostics(&self) -> serde_json::Value {
+        if std::env::var_os("CRYSIRROR_CATSYSTEM2_OBJECTS").is_none() { return serde_json::Value::Null; }
+        serde_json::json!({"canvas":self.canvas,"size":self.size,"draws":self.records.values().map(|(priority,d)|serde_json::json!({"key":d.key,"priority":priority,"image":d.image,"size":d.size,"position":d.position,"pivot":d.pivot,"alpha":d.alpha,"visible":d.visible,"clip":d.clip})).collect::<Vec<_>>(),"planes":self.planes.values().map(|p|serde_json::json!({"canvas":p.canvas,"presentation":p.presentation,"parent":p.parent,"source":p.source})).collect::<Vec<_>>()})
     }
     pub fn scope(&self) -> (ClientId, u32, [u32; 2]) {
         (self.client, self.canvas, self.size)
@@ -308,6 +313,7 @@ mod tests {
             position: [3.9, -2.9],
             pivot: [1.9, -1.9],
             alpha: 128,
+            blend: crysirror_scene::layer::Blend::Normal,
             visible: true,
             clip: None,
         };
@@ -420,6 +426,7 @@ mod tests {
             position: [2., 0.],
             pivot: [0.; 2],
             alpha: 255,
+            blend: crysirror_scene::layer::Blend::Normal,
             visible: true,
             clip: None,
         })?;

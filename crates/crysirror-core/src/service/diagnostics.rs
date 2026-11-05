@@ -1,6 +1,6 @@
 // Copyright (c) 2026 CrySirror contributors. MPL-2.0.
 //! Bounded owner-committed, client-scoped engine logs. No VM/device/file sink.
-use crate::{state::ClientId, Error, Result};
+use crate::{Error, Result, state::ClientId};
 use alloc::{
     collections::{BTreeMap, VecDeque},
     string::String,

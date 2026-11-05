@@ -3,6 +3,11 @@
 //! GPL format plugin parses/decodes the container; shared Image workers own the
 //! immutable pixels. This module has no pixel codec, renderer or composition.
 //! Native FES completion remains the caller's responsibility after publication.
+// Native selection requests the shared HG3 decoder's `native` pixel profile:
+// full 40-byte stdinfo, packed 24-bit rows and ordinal chunk overwrite. Geometry
+// retains canvas/origin/base, flags, image mode, compression type and ats records;
+// absent trailing fields stay absent. The decoder lives in formats/image crates,
+// while this adapter decides frame selection and native callback completion.
 use anyhow::{ensure, Context, Result};
 use crysirror_core::{
     image_processing::{ImageInput, ImageJob, ImageProcessState, ImageResource},
@@ -16,6 +21,12 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub(crate) struct Attribute {
+    pub id: u32,
+    pub rect: [i32; 4],
+    pub color: u32,
+}
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub(crate) struct Geometry {
     pub frame_id: u32,
     pub size: [u32; 2],
@@ -26,12 +37,24 @@ pub(crate) struct Geometry {
     pub flags: Option<u32>,
     pub image_mode: Option<u32>,
     pub compression_type: Option<u32>,
+    #[serde(default)]
+    pub attributes: Vec<Attribute>,
+}
+impl Geometry {
+    /// 68C6F0 truncates an attribute number to the native unsigned WORD key.
+    pub fn attribute(&self, id: u32) -> Option<[u32; 5]> {
+        self.attributes.iter().find(|a| a.id == u32::from(id as u16)).map(|a| {
+            [a.rect[0] as u32, a.rect[1] as u32, a.rect[2] as u32, a.rect[3] as u32, a.color]
+        })
+    }
 }
 #[derive(Clone, Debug)]
 struct Encoded {
     path: String,
+    raster: bool,
     geometry: Geometry,
     bytes: Arc<[u8]>,
+    layers: Vec<Encoded>,
 }
 #[derive(Clone, Debug)]
 enum Selection {
@@ -42,6 +65,8 @@ enum Selection {
 enum Request {
     Resolved(VfsPath),
     Named(String),
+    /// 68F940 on a 365 memory block: the bytes a native already read.
+    Bytes(String, Arc<[u8]>),
 }
 fn select_request(
     storage: &dyn ClientStorage,
@@ -52,22 +77,121 @@ fn select_request(
 ) -> Result<Selection> {
     match request {
         Request::Resolved(path) => select(storage, client, &path, frame_id, cancel),
+        Request::Bytes(name, bytes) => select_bytes(client, &name, bytes, frame_id, cancel),
         Request::Named(name) => {
             cancel.check()?;
             let catalog = crate::native_resource_paths::Catalog::load(storage)?;
-            for candidate in catalog.candidates(storage, "image", &name, &|| cancel.check())? {
-                cancel.check()?;
-                let Some(path) = crate::native_resource_paths::resolve(storage, &candidate)? else {
-                    continue;
-                };
-                let selected = select(storage, client, &path, frame_id, cancel.clone())?;
-                if !matches!(selected, Selection::MissingFile) {
-                    return Ok(selected);
+            if let Some(parts) = grouped_names(&name)? {
+                let mut base: Option<Encoded> = None;
+                for part in parts {
+                    cancel.check()?;
+                    if let Selection::Frame(frame) = select_named(storage, client, &catalog, &part, frame_id, &cancel)? {
+                        ensure!(!frame.raster, "CatSystem2 grouped image requires native HG3 geometry");
+                        match &mut base { Some(base) => base.layers.push(frame), None => base = Some(frame) }
+                    }
                 }
+                return Ok(base.map_or(Selection::MissingFile, Selection::Frame));
             }
-            Ok(Selection::MissingFile)
+            select_named(storage, client, &catalog, &name, frame_id, &cancel)
         }
     }
+}
+
+// 653B10 -> 741600/7908B0: comma fields select independent HG3 parts.
+// The first byte of each selector follows `base_` with one extra zero per
+// field ordinal. A zero selector names no part; absent parts do not erase
+// those already found. Only naming and placement stay here: the shared image
+// service decodes and composites the resulting immutable graph.
+fn grouped_names(name: &str) -> Result<Option<Vec<String>>> {
+    if !name.contains(',') { return Ok(None); }
+    let (without_extension, extension) = name.rsplit_once('.').filter(|(_, ext)| !ext.contains('/') && !ext.contains(',')).map_or((name, None), |(stem, ext)| (stem, Some(ext)));
+    let mut words = without_extension.split(',');
+    let base = words.next().unwrap();
+    ensure!(!base.is_empty(), "CatSystem2 grouped image base name");
+    let mut parts = Vec::new();
+    for (ordinal, word) in words.enumerate() {
+        ensure!(ordinal < 64, "CatSystem2 grouped image selector budget");
+        let Some(selector) = word.bytes().next().filter(|b| *b != b'0') else { continue };
+        ensure!(selector.is_ascii_alphanumeric(), "CatSystem2 grouped image selector profile");
+        let mut part = format!("{base}_{}{selector}", "0".repeat(ordinal), selector = char::from(selector));
+        if let Some(extension) = extension { part.push('.'); part.push_str(extension); }
+        else if base.contains('/') { part.push_str(".hg3"); }
+        parts.push(part);
+    }
+    Ok(Some(parts))
+}
+fn select_named(storage: &dyn ClientStorage, client: ClientId, catalog: &crate::native_resource_paths::Catalog, name: &str, frame_id: u32, cancel: &Cancellation) -> Result<Selection> {
+    for candidate in catalog.candidates(storage, "image", name, &|| cancel.check())? {
+        cancel.check()?;
+        let Some(path) = crate::native_resource_paths::resolve(storage, &candidate)? else { continue };
+        let selected = select(storage, client, &path, frame_id, cancel.clone())?;
+        if !matches!(selected, Selection::MissingFile) { return Ok(selected); }
+    }
+    Ok(Selection::MissingFile)
+}
+impl Encoded {
+    fn bitmap_input(&self) -> ImageInput {
+        ImageInput::Encoded { name: format!("{}#{}.png", self.path, self.geometry.frame_id), bytes: self.bytes.clone(), size: self.geometry.size }
+    }
+    fn output_geometry(&self) -> Result<Geometry> {
+        let mut geometry = self.geometry.clone();
+        if self.layers.is_empty() { return Ok(geometry); }
+        // 6740B0 unions the selected parts' cropped rectangles, retains the
+        // first part's hot spot, and takes the largest declared canvas. The
+        // first body's crop must not clip a later hair/face/accessory part.
+        let mut low = [i64::MAX; 2];
+        let mut high = [i64::MIN; 2];
+        for part in std::iter::once(self).chain(self.layers.iter()) {
+            for axis in 0..2 {
+                let origin = i64::from(part.geometry.origin[axis]);
+                low[axis] = low[axis].min(origin);
+                high[axis] = high[axis].max(origin + i64::from(part.geometry.size[axis]));
+                geometry.canvas[axis] = geometry.canvas[axis].max(part.geometry.canvas[axis]);
+            }
+        }
+        for axis in 0..2 {
+            let size = high[axis] - low[axis];
+            ensure!((1..=8192).contains(&size), "CatSystem2 grouped image union extent");
+            geometry.origin[axis] = i32::try_from(low[axis]).context("CatSystem2 grouped image origin")?;
+            geometry.size[axis] = size as u32;
+        }
+        ensure!(u64::from(geometry.size[0]) * u64::from(geometry.size[1]) <= 16 * 1024 * 1024, "CatSystem2 grouped image union budget");
+        geometry.color_bits = 32;
+        Ok(geometry)
+    }
+    fn input(&self) -> Result<ImageInput> {
+        if self.layers.is_empty() { return Ok(self.bitmap_input()); }
+        let geometry = self.output_geometry()?;
+        Ok(ImageInput::Composite {
+            // Explicitly clear the union; do not depend on the native
+            // allocator's uninitialized destination bytes before the first blit.
+            base: Box::new(ImageInput::Solid { size: geometry.size, color: [0; 4] }),
+            layers: std::iter::once(self).chain(self.layers.iter()).map(|part| crysirror_core::image_processing::ImageCompositeLayer {
+                input: Box::new(part.bitmap_input()),
+                source: [0, 0, part.geometry.size[0] as i32, part.geometry.size[1] as i32],
+                destination: [part.geometry.origin[0] - geometry.origin[0], part.geometry.origin[1] - geometry.origin[1]],
+                clip: None, opacity: 255, math: crysirror_core::image_processing::ImageCompositeMath::AlphaOnAlphaScalar256,
+            }).collect(),
+        })
+    }
+}
+
+/// 64B010: 5D3C20 resolves `name` as an "image" resource and 5D53A0 reads the
+/// whole file. Answers the resolved path and bytes, or None when absent.
+pub(crate) fn read_named(storage: &dyn ClientStorage, name: &str, cancel: &Cancellation) -> Result<Option<(String, Vec<u8>)>> {
+    cancel.check()?;
+    let catalog = crate::native_resource_paths::Catalog::load(storage)?;
+    for candidate in catalog.candidates(storage, "image", name, &|| cancel.check())? {
+        cancel.check()?;
+        let Some(path) = crate::native_resource_paths::resolve(storage, &candidate)? else { continue };
+        let reader = match storage.open_asset(&path) {
+            Ok(reader) => reader,
+            Err(crysirror_core::Error::NotFound) => continue,
+            Err(error) => return Err(error.into()),
+        };
+        return Ok(Some((path.relative().to_owned(), crysirror_resource::read_all(reader.as_ref(), 64 * 1024 * 1024)?)));
+    }
+    Ok(None)
 }
 
 // The caller supplies the already resolved native archive/member path. LST,
@@ -89,16 +213,28 @@ fn select(
     // Capture one bounded immutable source generation before indexing. A file
     // replacement cannot mix old metadata with newly read frame bytes.
     let bytes = crysirror_resource::read_all(reader.as_ref(), 64 * 1024 * 1024)?;
+    select_bytes(client, path.relative(), bytes.into(), frame_id, cancel)
+}
+
+/// The HG3 frame whose id is `frame_id` in already read file bytes.
+fn select_bytes(client: ClientId, name: &str, bytes: Arc<[u8]>, frame_id: u32, cancel: Cancellation) -> Result<Selection> {
+    let path_name = name.to_owned();
     cancel.check()?;
+    if !bytes.starts_with(b"HG-3") {
+        if frame_id!=0{return Ok(Selection::MissingFrame);}
+        // Save records written by native241 contain ordinary encoded images.
+        // Their actual dimensions/decoder completion are owned by ImageMetadata.
+        return Ok(Selection::Frame(Encoded{path:path_name,raster:true,geometry:Geometry{frame_id:0,size:[0;2],canvas:[0;2],origin:[0;2],base:Some([0;2]),color_bits:32,flags:Some(1),image_mode:Some(0),compression_type:Some(0),attributes:Vec::new()},bytes,layers:Vec::new()}));
+    }
     let mut context = DecodeContext::new(client).with_cancellation(cancel.clone());
-    context.source_name = Some(path.relative().to_owned());
+    context.source_name = Some(path_name.clone());
     context.parameters.insert(
         "cat-system/hg3".into(),
         serde_json::json!({"expand_canvas":false,"pixel_profile":"native"}),
     );
     let archive = crysirror_formats_arc::legacy_archive("cat-system/hg3")
         .context("CatSystem2 shared HG3 format unavailable")?
-        .open(Arc::new(MemoryAssetReader(bytes.into())), &context)?;
+        .open(Arc::new(MemoryAssetReader(bytes)), &context)?;
     let mut selected = None;
     for entry in archive.entries() {
         cancel.check()?;
@@ -132,9 +268,11 @@ fn select(
     )?;
     cancel.check()?;
     Ok(Selection::Frame(Encoded {
-        path: path.relative().to_owned(),
+        path: path_name,
+        raster: false,
         geometry,
         bytes: bytes.into(),
+        layers: Vec::new(),
     }))
 }
 
@@ -183,6 +321,19 @@ impl Pending {
             Request::Resolved(VfsPath::new(Mount::Asset, path)?),
             frame_id,
         )
+    }
+    /// 6750A0 → 68F940: frame `frame_id` of a file a native read into memory.
+    pub fn begin_bytes(
+        pool: &TaskPool,
+        host: &mut dyn HostServices,
+        client: ClientId,
+        owner: u32,
+        native_pc: u32,
+        name: &str,
+        bytes: Arc<[u8]>,
+        frame_id: u32,
+    ) -> Result<Option<Self>> {
+        Self::begin_request(pool, host, client, owner, native_pc, Request::Bytes(name.to_owned(), bytes), frame_id)
     }
     pub fn begin_named(
         pool: &TaskPool,
@@ -276,14 +427,12 @@ impl Pending {
             .as_ref()
             .context("CatSystem2 image selection phase")?;
         if self.image_job.is_none() {
-            self.image_job = Some(self.images.begin_process(
-                ImageInput::Encoded {
-                    name: format!("{}#{}.png", frame.path, frame.geometry.frame_id),
-                    bytes: frame.bytes.clone(),
-                    size: frame.geometry.size,
-                },
+            self.image_job = Some(if frame.raster {
+                self.images.begin_encoded(&frame.path,frame.bytes.clone())?
+            }else{self.images.begin_process(
+                frame.input()?,
                 Arc::from(b"[]".as_slice()),
-            )?);
+            )?});
             return Ok(None);
         }
         match self.image_job.as_mut().unwrap().poll()? {
@@ -292,13 +441,15 @@ impl Pending {
                 anyhow::bail!("CatSystem2 shared image worker: {error}")
             }
             ImageProcessState::Ready(image) => {
+                let mut geometry=frame.output_geometry()?;
+                if frame.raster{geometry.size=image.size();geometry.canvas=image.size();}
                 ensure!(
-                    image.client() == self.client && image.size() == frame.geometry.size,
+                    image.client() == self.client && image.size() == geometry.size,
                     "CatSystem2 shared image ownership/geometry receipt"
                 );
                 self.outcome = Some(Outcome::Ready(Prepared {
                     source: frame.path.clone(),
-                    geometry: frame.geometry.clone(),
+                    geometry,
                     image,
                 }));
                 self.image_job = None;

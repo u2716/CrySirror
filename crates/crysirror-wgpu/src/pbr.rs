@@ -300,7 +300,7 @@ impl GiGpu {
         });
         let module = d.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("gi project"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/gi_project.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(crysirror_shaders::wgsl::GI_PROJECT.into()),
         });
         let layout = d.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("gi project"),
@@ -396,7 +396,7 @@ impl VsmGpu {
         });
         let module = d.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("vsm mark"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/vsm_mark.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(crysirror_shaders::wgsl::VSM_MARK.into()),
         });
         let layout = d.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("vsm mark"),
@@ -605,7 +605,7 @@ impl LodGpu {
         });
         let module = d.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("lod select"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/lod_select.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(crysirror_shaders::wgsl::LOD_SELECT.into()),
         });
         let layout = d.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("lod select"),
@@ -1016,6 +1016,7 @@ fn bytes_of_vertices(v: &[PbrVertex]) -> Vec<u8> {
 }
 
 struct SurfacePipelines {
+    validation: crate::pipeline::Validation,
     opaque: wgpu::RenderPipeline,
     opaque_double: wgpu::RenderPipeline,
     opaque_skin: wgpu::RenderPipeline,
@@ -1192,10 +1193,9 @@ impl SurfacePipelines {
         };
         let shadow = shadow_pipeline(false);
         let shadow_skin = shadow_pipeline(true);
-        if let Some(error) = pollster::block_on(error_scope.pop()) {
-            anyhow::bail!("material pipeline: {error}");
-        }
+        let validation = crate::pipeline::Validation::new(error_scope.pop())?;
         Ok(Self {
+            validation,
             opaque,
             opaque_double,
             opaque_skin,
@@ -1432,48 +1432,48 @@ impl PbrRenderer {
         });
 
         let common = crate::effect::common(crate::effect::PRESETS);
-        let fs = include_str!("shaders/fullscreen.wgsl");
+        let fs = crysirror_shaders::wgsl::FULLSCREEN;
 
         let ssao_sh = shader(
             d,
             "ssao",
-            format!("{fs}\n{}", include_str!("shaders/ssao.wgsl")),
+            format!("{fs}\n{}", crysirror_shaders::wgsl::SSAO),
         );
         let taa_sh = shader(
             d,
             "taa",
-            format!("{fs}\n{}", include_str!("shaders/taa.wgsl")),
+            format!("{fs}\n{}", crysirror_shaders::wgsl::TAA),
         );
         let ssr_sh = shader(
             d,
             "ssr",
-            format!("{fs}\n{}", include_str!("shaders/ssr.wgsl")),
+            format!("{fs}\n{}", crysirror_shaders::wgsl::SSR),
         );
         let sky_sh = shader(
             d,
             "sky",
-            format!("{common}\n{}", include_str!("shaders/sky.wgsl")),
+            format!("{common}\n{}", crysirror_shaders::wgsl::SKY),
         );
 
         let brdf_sh = shader(
             d,
             "brdf",
-            format!("{fs}\n{}", include_str!("shaders/brdf.wgsl")),
+            format!("{fs}\n{}", crysirror_shaders::wgsl::BRDF),
         );
         let pre_sh = shader(
             d,
             "prefilter",
-            format!("{fs}\n{}", include_str!("shaders/prefilter.wgsl")),
+            format!("{fs}\n{}", crysirror_shaders::wgsl::PREFILTER),
         );
         let tone_sh = shader(
             d,
             "tonemap",
-            format!("{fs}\n{}", include_str!("shaders/tonemap.wgsl")),
+            format!("{fs}\n{}", crysirror_shaders::wgsl::TONEMAP),
         );
         let bloom_sh = shader(
             d,
             "bloom",
-            format!("{fs}\n{}", include_str!("shaders/bloom.wgsl")),
+            format!("{fs}\n{}", crysirror_shaders::wgsl::BLOOM),
         );
 
         let depth_state = |write: bool, cmp: wgpu::CompareFunction| wgpu::DepthStencilState {
@@ -1563,7 +1563,7 @@ impl PbrRenderer {
         let copy_shader = shader(
             d,
             "copy HDR",
-            format!("{fs}\n{}", include_str!("shaders/copy_hdr.wgsl")),
+            format!("{fs}\n{}", crysirror_shaders::wgsl::COPY_HDR),
         );
         let copy_hdr = fullscreen("copy HDR", &copy_shader, "fs_copy", &step_bgl, HDR, None);
         let additive = wgpu::BlendState {
@@ -1588,8 +1588,8 @@ impl PbrRenderer {
             "auto exposure",
             format!(
                 "{}\n{}",
-                include_str!("shaders/fullscreen.wgsl"),
-                include_str!("shaders/exposure.wgsl")
+                crysirror_shaders::wgsl::FULLSCREEN,
+                crysirror_shaders::wgsl::EXPOSURE
             ),
         );
         let exposure_pipe = fullscreen(
@@ -1870,7 +1870,7 @@ impl PbrRenderer {
                 &shader(
                     d,
                     "probe",
-                    format!("{fs}\n{}", include_str!("shaders/probe.wgsl")),
+                    format!("{fs}\n{}", crysirror_shaders::wgsl::PROBE),
                 ),
             ),
             local_shadows: LocalShadows::new(d, &shadow_bgl),
@@ -2885,6 +2885,10 @@ impl PbrRenderer {
         let _span = self.profiler.span(self.profile_frame, "pbr.encode");
         ensure!(self.gpu_particles.values().all(|r|r.pending.is_none()),
             "previous PBR VFX encoding is pending; submit + after_submit, or abandon its encoder and cancel_unsubmitted_vfx before encoding again");
+        if !self.pipelines.validation.ready()? { return Err(crate::pipeline::PreparationPending.into()); }
+        for pipelines in self.custom_pipelines.values_mut() {
+            if !pipelines.validation.ready()? { return Err(crate::pipeline::PreparationPending.into()); }
+        }
         self.hardware_encoded = false;
         let use_rt = self.hardware_rt.is_some();
         assets.poll_tasks();
@@ -3006,6 +3010,9 @@ impl PbrRenderer {
             if let Some((client, material)) = &inst.material {
                 self.load_override(assets, *client, material)?;
             }
+        }
+        for pipelines in self.custom_pipelines.values_mut() {
+            if !pipelines.validation.ready()? { return Err(crate::pipeline::PreparationPending.into()); }
         }
         self.ensure_targets(canvas);
 

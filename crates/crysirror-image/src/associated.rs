@@ -3,8 +3,8 @@
 //!
 //! These operations work on stored channel bytes. They do not convert color
 //! spaces or normalize associated RGB into straight-alpha display pixels.
-use crate::{bitmap::BitmapRect, ImageSurface};
-use anyhow::{ensure, Result};
+use crate::{ImageSurface, bitmap::BitmapRect};
+use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
 /// Stored associated-channel tone adjustment. Channel order is caller-defined;
@@ -278,18 +278,20 @@ mod tests {
         };
         let mut dst = ImageSurface::filled(2, 1, [1, 2, 3, 4]).unwrap();
         let before = dst.clone();
-        assert!(dst
-            .composite_associated(&src, None, options(AssociatedBlend::Copy, 257))
-            .is_err());
+        assert!(
+            dst.composite_associated(&src, None, options(AssociatedBlend::Copy, 257))
+                .is_err()
+        );
         assert_eq!(dst, before);
         let plane = CoveragePlane {
             width: 1,
             height: 1,
             bytes: vec![1],
         };
-        assert!(dst
-            .composite_associated(&src, Some(&plane), options(AssociatedBlend::Copy, 256))
-            .is_err());
+        assert!(
+            dst.composite_associated(&src, Some(&plane), options(AssociatedBlend::Copy, 256))
+                .is_err()
+        );
         assert_eq!(dst, before);
         let opt = AssociatedBlitOptions {
             source_rect: BitmapRect::new(-1, 0, 3, 1),
@@ -323,14 +325,16 @@ mod tests {
             .unwrap();
         assert_eq!(image.rgba, [254, 0, 0, 13]);
         let before = image.clone();
-        assert!(image
-            .filter_rgb(
-                BitmapRect::new(0, 0, 1, 1),
-                RgbFilter::Multiply {
-                    factors: [257, 0, 0]
-                }
-            )
-            .is_err());
+        assert!(
+            image
+                .filter_rgb(
+                    BitmapRect::new(0, 0, 1, 1),
+                    RgbFilter::Multiply {
+                        factors: [257, 0, 0]
+                    }
+                )
+                .is_err()
+        );
         assert_eq!(image, before);
     }
 }
@@ -377,11 +381,7 @@ pub fn map_coverage_alpha(pixels: &mut [u8], coverage: &[u8], lookup: &[u8; 256]
 pub fn coverage_threshold_lut(hard: bool, phase: u16) -> [u8; 256] {
     std::array::from_fn(|a| {
         if hard {
-            if a as u16 >= (phase & 255) {
-                255
-            } else {
-                0
-            }
+            if a as u16 >= (phase & 255) { 255 } else { 0 }
         } else {
             (a as i32 + i32::from(phase) - 255).clamp(0, 255) as u8
         }
@@ -409,7 +409,9 @@ mod coverage_mapping_tests {
         .unwrap();
         assert_eq!(
             &pixels[..16],
-            &[11, 22, 33, 0, 11, 22, 33, 0, 11, 22, 33, 255, 11, 22, 33, 255]
+            &[
+                11, 22, 33, 0, 11, 22, 33, 0, 11, 22, 33, 255, 11, 22, 33, 255
+            ]
         );
         assert_eq!(coverage_threshold_lut(false, 255)[128], 128);
         assert!(map_coverage_alpha(&mut pixels, &[0], &[0; 256]).is_err());

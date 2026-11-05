@@ -24,7 +24,8 @@ compilation and observed behavior are separate claims.
 - [Bitmap operations](BITMAPS.md) and [physics](PHYSICS.md)
 - [Framework saves and native-save boundaries](SAVE_FORMAT.md)
 - [Adapter migration requirements](MIGRATION.md)
-- [RealLive](REALLIVE.md), [BGI](BGI.md) and
+- [RealLive](REALLIVE.md), [BGI](BGI.md),
+  [SoftPAL](NATIVE_ADAPTERS.md#bgi-and-softpal) and
   [NScripter](../crates/crysirror-nscripter/README.md)
 - [Local game imports](LOCAL_GAME_IMPORT.md)
 - [Application icons](../icon/README.md)
@@ -50,3 +51,5 @@ The following records are historical research snapshots. Their old “current”
 API signatures come from code generation. User-facing CLI options live in the
 desktop guide. Adapter-specific semantic limits belong in the adapter docs;
 historical source hashes and test receipts remain in their original records.
+
+- [Native application packages](NATIVE_PACKAGING.md): macOS, iOS, Android and engine-specific NLS launch settings.

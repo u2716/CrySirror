@@ -1,0 +1,54 @@
+[package]
+name = "crysirror-softpal"
+version = "0.1.0"
+edition = "2021"
+license = "MPL-2.0"
+publish = false
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
+
+[lib]
+test = false
+doctest = false
+
+[features]
+default = ["host-audio"]
+host-audio = []
+
+[dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+crysirror-core = { path = "../crysirror-core" }
+crysirror-runtime = { path = "../crysirror-runtime" }
+crysirror-scene = { path = "../crysirror-scene" }
+ab_glyph = "0.2"
+encoding_rs = "0.8"
+log = "0.4"
+kira = { package = "crysirror-softpal-kira", path = "../crysirror-softpal-kira", default-features = false, features = ["mp3", "ogg", "vorbis", "flac", "wav", "pcm"] }
+na_mpeg2_decoder = { package = "crysirror-codec-mpeg", path = "../crysirror-codec-mpeg" }
+wmv-decoder = { package = "crysirror-codec-wmv", path = "../crysirror-codec-wmv", default-features = false, features = ["video-only", "audio"] }
+png = "0.17"
+jpeg-decoder = { version = "=0.3.2", default-features = false }
+symphonia = { version = "=0.5.5", default-features = false, features = ["mp1", "mp2", "mp3"] }
+sha2 = { version = "=0.10.9", default-features = false }
+
+[target.'cfg(any(target_os = "linux", target_os = "android", target_os = "macos", target_os = "ios"))'.dependencies]
+libc = "0.2"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_SystemInformation", "Win32_System_EventNotificationService"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+android_logger = "0.15"
+ndk-context = "0.1"
+
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+web-time = "1.1"
+
+[lints.rust]
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("desktop", "device-audio"))'] }

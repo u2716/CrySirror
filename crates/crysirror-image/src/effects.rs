@@ -4,7 +4,7 @@
 //! Shared image processing for bitmap, UI, sprite and texture resources. These
 //! are destructive resource operations, separate from display-only layer filters.
 use crate::ImageSurface;
-use anyhow::{ensure, Result};
+use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 /// CPU pixel limit bounds scratch memory independently of the decoder budget.
 pub const MAX_EFFECT_PIXELS: u64 = 4_194_304;
@@ -13,8 +13,31 @@ pub const MAX_EFFECT_PIXELS: u64 = 4_194_304;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ImageEffect {
+    /// Truncated straight RGBA means, one uniform colour per rectangular cell.
+    BlockAverage { cell:[u16;2] },
+    /// Signed left/top/right/bottom expansion or crop, preserving stored bytes.
+    CanvasMargins { margins:[i32;4], fill:[u8;4] },
+    /// Modulate stored alpha using an immutable original-alpha plane.
+    AlphaMaskPlane {spec:crate::alpha_mask::AlphaMaskPlane},
+    /// Ordered atlas alpha replacement, retaining stored destination RGB.
+    AlphaStamps {spec:crate::alpha_stamps::AlphaStamps},
+    /// Saturating alpha neighborhoods with explicit sample offsets and edge colour.
+    CoverageSum { spec:crate::coverage_sum::CoverageSum },
+    /// Fixed-point alpha-aware triangular kernel; expands only explicit padding.
+    TriangularBlur { spec: crate::triangular_blur::TriangularBlur },
+    RowDeform {
+        spec: crate::pyramid::RowDeform,
+    },
+    AlphaPlanePair {
+        spec: crate::alpha_planes::AlphaPlanePair,
+    },
+    StoredMaskBlend {
+        spec: crate::stored_mask::StoredMaskBlend,
+    },
     /// Exact stored-channel bitmap kernels over two immutable resources.
-    IntegerRaster { spec: crate::integer_raster::IntegerRaster },
+    IntegerRaster {
+        spec: crate::integer_raster::IntegerRaster,
+    },
     /// Replace coverage while retaining all stored RGB bytes. Useful for
     /// opaque XRGB resources and explicitly authored mask normalisation.
     OverrideAlpha {
@@ -45,9 +68,13 @@ pub enum ImageEffect {
         spec: crate::row_copy::SineRowCopy,
     },
     /// Two-input clipped coverage multiplication with optional exterior clear.
-    AlphaClipRect { spec:crate::alpha_clip::AlphaClipRect },
+    AlphaClipRect {
+        spec: crate::alpha_clip::AlphaClipRect,
+    },
     /// Three immutable inputs, two independent masks and exact14bit products.
-    MaskedPairBlend {spec:crate::masked_pair::MaskedPairBlend},
+    MaskedPairBlend {
+        spec: crate::masked_pair::MaskedPairBlend,
+    },
     Transition {
         spec: crate::transition::ImageTransition,
     },
@@ -91,6 +118,11 @@ pub enum ImageEffect {
         seed: u32,
     },
     Invert,
+    /// Every stored byte, alpha included, becomes floor(byte * factor / 255),
+    /// factors in RGBA order (CatSystem2 68BEC0 multiplies a bitmap by ARGB).
+    ChannelScale {
+        factors: [u8; 4],
+    },
     /// Box blur of `rect` (x, y, w, h; whole image when absent): each pixel
     /// becomes the truncated mean of the window `area` = [left, top, right,
     /// bottom] offsets (inclusive, containing 0) around it, with the window
@@ -139,15 +171,22 @@ pub enum ImageEffect {
 impl ImageEffect {
     pub fn validate(&self) -> Result<()> {
         match self {
+            Self::BlockAverage{cell}=>ensure!(cell.iter().all(|v|(1..=1024).contains(v)),"block average cell must be1..1024"),
+            Self::CanvasMargins{margins,..}=>ensure!(margins.iter().all(|v|v.unsigned_abs()<=8192),"canvas margin bounds"),
+            Self::AlphaMaskPlane{spec}=>spec.validate()?,
+            Self::AlphaStamps{spec}=>spec.validate()?,
+            Self::RowDeform { spec } => spec.validate()?,
             Self::IntegerRaster { spec } => spec.validate()?,
+            Self::StoredMaskBlend { spec } => spec.validate()?,
+            Self::AlphaPlanePair { spec } => spec.validate()?,
             Self::RgbLookup { spec } => spec.validate()?,
             Self::FixedLuma { spec } => spec.validate()?,
             Self::PiecewiseResample { spec } => spec.validate()?,
             Self::StripeReveal { spec } => spec.validate()?,
             Self::SpriteAlpha { spec } => spec.validate()?,
             Self::SineRowCopy { .. } => (),
-            Self::AlphaClipRect {spec} => spec.validate()?,
-            Self::MaskedPairBlend {spec} => spec.validate()?,
+            Self::AlphaClipRect { spec } => spec.validate()?,
+            Self::MaskedPairBlend { spec } => spec.validate()?,
             Self::Transition { spec } => spec.validate()?,
             Self::Vector { path } => path.validate()?,
             Self::Perspective { quad } => crate::warp::validate_quad(quad)?,
@@ -196,10 +235,15 @@ impl ImageEffect {
                 ensure!(area.iter().all(|v| v.abs() <= 8192), "box blur area bounds");
             }
             Self::Resize { width, height } => ensure!(
-                *width > 0 && *height > 0 && u64::from(*width) * u64::from(*height) <= MAX_EFFECT_PIXELS,
+                *width > 0
+                    && *height > 0
+                    && u64::from(*width) * u64::from(*height) <= MAX_EFFECT_PIXELS,
                 "resize extent"
             ),
-            Self::Rotate { degrees } => ensure!(matches!(degrees, 90 | 180 | 270), "rotation must be a quarter turn"),
+            Self::Rotate { degrees } => ensure!(
+                matches!(degrees, 90 | 180 | 270),
+                "rotation must be a quarter turn"
+            ),
             Self::GaussianBlur { sigma } => ensure!(
                 sigma.is_finite() && (0.0..=16.).contains(sigma),
                 "blur sigma must be 0..16"
@@ -239,9 +283,24 @@ impl ImageSurface {
         check()?;
         if matches!(
             effect,
-            ImageEffect::Transition { .. } | ImageEffect::SineRowCopy { .. } | ImageEffect::AlphaClipRect {..} | ImageEffect::MaskedPairBlend{..} | ImageEffect::IntegerRaster {..}
+            ImageEffect::AlphaMaskPlane{..}|ImageEffect::AlphaStamps{..}|ImageEffect::AlphaPlanePair { .. }
+                | ImageEffect::StoredMaskBlend { .. }
+                | ImageEffect::Transition { .. }
+                | ImageEffect::SineRowCopy { .. }
+                | ImageEffect::AlphaClipRect { .. }
+                | ImageEffect::MaskedPairBlend { .. }
+                | ImageEffect::IntegerRaster { .. }
         ) {
             anyhow::bail!("image effect requires its multi-image context")
+        }
+        if let ImageEffect::RowDeform { spec } = effect {
+            return crate::pyramid::row_deform(self, spec, check);
+        }
+        if let ImageEffect::BlockAverage {cell} = effect {
+            return self.block_average(*cell,check);
+        }
+        if let ImageEffect::CanvasMargins {margins,fill} = effect {
+            return self.canvas_margins(*margins,*fill,check);
         }
         if let ImageEffect::RgbLookup { spec } = effect {
             return spec.apply(self, check);
@@ -269,6 +328,12 @@ impl ImageSurface {
         }
         if let ImageEffect::Rotate { degrees } = effect {
             return self.rotated(*degrees, check);
+        }
+        if let ImageEffect::CoverageSum { spec } = effect {
+            return spec.apply(self,check);
+        }
+        if let ImageEffect::TriangularBlur { spec } = effect {
+            return spec.apply(self, check);
         }
         if let ImageEffect::GaussianBlur { sigma } = effect {
             return self.gaussian(*sigma, check);
@@ -380,6 +445,11 @@ impl ImageSurface {
                             out.rgba[at + c] = 255 - p[c];
                         }
                     }
+                    ImageEffect::ChannelScale { factors } => {
+                        for c in 0..4 {
+                            out.rgba[at + c] = (u32::from(p[c]) * u32::from(factors[c]) / 255) as u8;
+                        }
+                    }
                     ImageEffect::Noise {
                         amplitude,
                         monochrome,
@@ -444,7 +514,11 @@ impl ImageSurface {
                 }
             }
         }
-        Ok(Self { width, height, rgba: out })
+        Ok(Self {
+            width,
+            height,
+            rgba: out,
+        })
     }
     fn rotated(&self, degrees: u16, check: &dyn Fn() -> Result<()>) -> Result<Self> {
         let (w, h) = (self.width as usize, self.height as usize);

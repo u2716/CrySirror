@@ -514,12 +514,12 @@ impl PreparedString {
                     id,
                     parent,
                     rect: [0., 0., self.size[0] as f32, self.size[1] as f32],
-                    paint: Paint::GlyphRun {
+                    paint: Paint::GlyphRun {outline: None, 
                         font: self.font.font().to_owned(),
                         size: f32::from(glyph.size),
                         color,
                         bold: false,
-                        glyphs: vec![PositionedGlyph { crop,
+                        glyphs: vec![PositionedGlyph { font: None,horizontal_scale: None, font_width: None, cell_width: None,  crop,
                             character: glyph.character,
                             baseline: [
                                 glyph.position[0] as f32 + offset as f32,

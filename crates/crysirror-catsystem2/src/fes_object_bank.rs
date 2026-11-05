@@ -93,7 +93,7 @@ impl Bank {
         let range=if reference.index==-1{0..count}else{
             // 754F90 misses and 7690E0 falls through to 7692C0's non-object evaluation: no member changes.
             let Ok(index)=u32::try_from(reference.index) else{return Ok(Vec::new());};
-            if index>=count{return Ok(Vec::new());}
+            if !self.names.contains_key(&(reference.name.clone(),index)){return Ok(Vec::new());}
             index..index+1
         };
         range.map(|index|self.names.get(&(reference.name.clone(),index)).copied().context("CatSystem2 object command missing member")).collect()
@@ -208,15 +208,16 @@ impl Bank {
                         .is_some_and(|n| n <= 4096),
                 "CatSystem2 typed object allocation budget"
             );
-            // 755E50 finds the name already made: the first declaration stands.
-            if bank.counts.contains_key(&reference.name) {
-                continue;
-            }
             //Unknown classes must fail before registering a name as a zero/default
             //expression. Constructors are original VM data, not original engine cores.
             let state = State::new(definition.kind)?;
-            bank.counts.insert(reference.name.clone(), count);
+            // 7544F0 makes every member and 755400 keeps the first per (name, index), so a
+            // longer repeat adds members; the name's whole-array count stays the first one.
+            bank.counts.entry(reference.name.clone()).or_insert(count);
             for index in 0..count {
+                if bank.names.contains_key(&(reference.name.clone(), index)) {
+                    continue;
+                }
                 let id = root
                     .checked_add(bank.objects.len() as u32)
                     .context("CatSystem2 typed object ID overflow")?;
@@ -250,7 +251,7 @@ impl Bank {
             } else {
                 // 754F90 finds no such member: the row is dropped.
                 let Ok(index) = u32::try_from(target.index) else { continue };
-                if index >= count {
+                if !bank.names.contains_key(&(target.name.clone(), index)) {
                     continue;
                 }
                 index..index + 1

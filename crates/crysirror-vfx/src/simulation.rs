@@ -1,18 +1,20 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Deterministic fixed-step CPU oracle and engine-owned particle frames.
+use crate::drifting_atlas::{CompiledDriftingAtlas, DriftingAtlasState};
 use crate::falling_atlas::{
     CompiledFallingAtlas, FallingAtlasState, SequenceExchange, SequenceRng, SimulationClock,
     SystemSequenceState,
 };
+use crate::orbit_atlas::{CompiledOrbitAtlas, OrbitAtlasState};
 use crate::*;
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use glam::{Mat4, Quat, Vec3};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, VecDeque},
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicU64, Ordering},
     },
 };
 
@@ -408,7 +410,12 @@ pub fn update_particle(
 
 #[derive(Clone, Debug)]
 struct EmitterState {
+    drifting: Option<CompiledDriftingAtlas>,
+    drifting_states: Vec<Option<DriftingAtlasState>>,
+    retained_scales: Vec<f32>,
     falling: Option<CompiledFallingAtlas>,
+    orbit: Option<CompiledOrbitAtlas>,
+    orbit_states: Vec<Option<OrbitAtlasState>>,
     atlas_states: Vec<Option<FallingAtlasState>>,
     atlas_uvs: Vec<Option<[f32; 4]>>,
     client: u32,
@@ -636,6 +643,11 @@ impl CpuWorld {
                         .next_emitter_key
                         .checked_add(1)
                         .ok_or_else(|| anyhow::anyhow!("VFX identity space exhausted"))?;
+                    let mut retained_scales = previous.as_ref().map_or_else(
+                        || vec![1.; spec.capacity as usize],
+                        |old| old.retained_scales.clone(),
+                    );
+                    retained_scales.resize(spec.capacity as usize, 1.);
                     let (key, generation) = previous.map_or(
                         ((u64::from(input.client) << 32) | u64::from(serial), 1),
                         |old| (old.key, old.generation + 1),
@@ -643,6 +655,27 @@ impl CpuWorld {
                     state.emitters.insert(
                         spec.id.clone(),
                         EmitterState {
+                            drifting: spec
+                                .drifting_atlas
+                                .clone()
+                                .map(CompiledDriftingAtlas::compile)
+                                .transpose()?,
+                            drifting_states: if spec.drifting_atlas.is_some() {
+                                vec![None; spec.capacity as usize]
+                            } else {
+                                vec![]
+                            },
+                            retained_scales,
+                            orbit: spec
+                                .orbit_atlas
+                                .clone()
+                                .map(CompiledOrbitAtlas::compile)
+                                .transpose()?,
+                            orbit_states: if spec.orbit_atlas.is_some() {
+                                vec![None; spec.capacity as usize]
+                            } else {
+                                vec![]
+                            },
                             falling: spec
                                 .falling_atlas
                                 .clone()
@@ -653,7 +686,10 @@ impl CpuWorld {
                             } else {
                                 vec![]
                             },
-                            atlas_uvs: if spec.falling_atlas.is_some() {
+                            atlas_uvs: if spec.falling_atlas.is_some()
+                                || spec.orbit_atlas.is_some()
+                                || spec.drifting_atlas.is_some()
+                            {
                                 vec![None; spec.capacity as usize]
                             } else {
                                 vec![]
@@ -678,6 +714,24 @@ impl CpuWorld {
                             initialized: false,
                         },
                     );
+                }
+                if let (Some(node), Some(declaration)) = (
+                    &mut state.emitters.get_mut(&spec.id).unwrap().falling,
+                    &spec.falling_atlas,
+                ) {
+                    node.update_spawn_window(declaration.spawn_window.clone())?;
+                }
+                if let (Some(node), Some(declaration)) = (
+                    &mut state.emitters.get_mut(&spec.id).unwrap().drifting,
+                    &spec.drifting_atlas,
+                ) {
+                    node.update_window(declaration.spawn_window.clone())?;
+                }
+                if let (Some(node), Some(declaration)) = (
+                    &mut state.emitters.get_mut(&spec.id).unwrap().orbit,
+                    &spec.orbit_atlas,
+                ) {
+                    node.update_control(declaration.control.clone())?;
                 }
                 state.emitters.get_mut(&spec.id).unwrap().spec = spec.clone();
                 state.emitters.get_mut(&spec.id).unwrap().transform = input.transform;
@@ -729,8 +783,12 @@ impl CpuWorld {
                         space: spec.space,
                         render: spec.render.clone(),
                         particles: Arc::from(particles),
-                        screen: spec.screen.clone(),
-                        screen_uvs: if emitter.falling.is_some() {
+                        screen: if spec.paused {
+                            None
+                        } else {
+                            spec.screen.clone()
+                        },
+                        screen_uvs: if emitter.falling.is_some() || emitter.orbit.is_some() {
                             Some(
                                 emitter
                                     .slots
@@ -785,10 +843,30 @@ fn same_template(a: &EmitterSpec, b: &EmitterSpec) -> bool {
     let (mut a, mut b) = (a.clone(), b.clone());
     a.enabled = true;
     b.enabled = true;
+    a.paused = false;
+    b.paused = false;
     a.enabled_parameter = None;
     b.enabled_parameter = None;
     a.spawn.rate = 0.0.into();
     b.spawn.rate = 0.0.into();
+    if let Some(node) = &mut a.falling_atlas {
+        node.spawn_window = None;
+    }
+    if let Some(node) = &mut b.falling_atlas {
+        node.spawn_window = None;
+    }
+    if let Some(node) = &mut a.drifting_atlas {
+        node.spawn_window = None;
+    }
+    if let Some(node) = &mut b.drifting_atlas {
+        node.spawn_window = None;
+    }
+    if let Some(node) = &mut a.orbit_atlas {
+        node.control = Default::default();
+    }
+    if let Some(node) = &mut b.orbit_atlas {
+        node.control = Default::default();
+    }
     a == b
 }
 fn restarting(old: Option<&SystemState>, input: &SystemInstance) -> bool {
@@ -803,7 +881,39 @@ fn restarting(old: Option<&SystemState>, input: &SystemInstance) -> bool {
 fn input_delta(old: Option<&SystemState>, input: &SystemInstance, delta: f64) -> Result<f64> {
     let reset = restarting(old, input);
     if let Some(old) = old.filter(|old| old.spec.revision == input.spec.revision) {
+        for emitter in &input.spec.emitters {
+            if let Some(previous) = old
+                .spec
+                .emitters
+                .iter()
+                .find(|previous| previous.id == emitter.id)
+            {
+                ensure!(
+                    emitter.revision >= previous.revision,
+                    "VFX stale emitter restart epoch"
+                );
+            }
+        }
         if old.spec.sequence_rng.is_some() || input.spec.sequence_rng.is_some() {
+            let pool_restart = input.spec.emitters.iter().any(|emitter| {
+                old.spec.emitters.iter().any(|previous| {
+                    previous.id == emitter.id && emitter.revision > previous.revision
+                })
+            });
+            if pool_restart {
+                let prior = old
+                    .last_exchange
+                    .as_ref()
+                    .map_or(0, |exchange| exchange.epoch);
+                ensure!(
+                    input
+                        .spec
+                        .sequence_exchange
+                        .as_ref()
+                        .is_some_and(|exchange| exchange.epoch > prior),
+                    "VFX shared-sequence pool restart requires a fresh fenced stream exchange"
+                );
+            }
             ensure!(
                 !reset
                     && old.spec.emitters.len() == input.spec.emitters.len()
@@ -812,8 +922,9 @@ fn input_delta(old: Option<&SystemState>, input: &SystemInstance, delta: f64) ->
                         .emitters
                         .iter()
                         .zip(&input.spec.emitters)
-                        .all(|(a, b)| same_template(a, b)),
-                "VFX shared-sequence source/template changes require a new revision"
+                        .all(|(a, b)| same_template(a, b)
+                            || (a.id == b.id && b.revision > a.revision)),
+                "VFX shared-sequence template changes require an explicit system/emitter restart epoch"
             );
         }
     }
@@ -1022,6 +1133,9 @@ fn tick_system(
     let mut spawned_events = std::mem::take(&mut state.pending_events);
     for spec in &input.spec.emitters {
         let e = state.emitters.get_mut(&spec.id).unwrap();
+        if spec.paused {
+            continue;
+        }
         e.tick += 1;
         let requested = spawn_count(e, &input.spec, dt as f64)?;
         let first = e.next_id;
@@ -1084,6 +1198,37 @@ fn tick_system(
                         frame.stats.spawned += 1;
                     }
                     (result.alive, false)
+                } else if let Some(node) = &e.drifting {
+                    let wall = match input.spec.clock {
+                        SimulationClock::External { wall_time_ms, .. } => wall_time_ms,
+                        _ => anyhow::bail!("VFX drifting clock"),
+                    };
+                    let result = node.step(
+                        &mut particle,
+                        e.drifting_states[slot]
+                            .as_mut()
+                            .context("VFX drifting attributes missing")?,
+                        state
+                            .sequence_rng
+                            .as_mut()
+                            .context("VFX drifting sequence missing")?,
+                        wall,
+                        emission_enabled(&input.spec, spec),
+                    )?;
+                    e.atlas_uvs[slot] = Some(result.uv);
+                    if result.recycled {
+                        frame.stats.spawned += 1;
+                    }
+                    (result.alive, false)
+                } else if let Some(node) = &e.orbit {
+                    let uv = node.step(
+                        &mut particle,
+                        e.orbit_states[slot]
+                            .as_mut()
+                            .context("VFX orbit attributes missing")?,
+                    );
+                    e.atlas_uvs[slot] = Some(uv);
+                    (true, false)
                 } else {
                     update_particle(&mut particle, &compiled, input.transform, dt, e.age as f32)?
                 };
@@ -1103,6 +1248,14 @@ fn tick_system(
                 } else {
                     if e.falling.is_some() {
                         e.atlas_states[slot] = None;
+                        e.atlas_uvs[slot] = None;
+                    }
+                    if e.drifting.is_some() {
+                        e.drifting_states[slot] = None;
+                        e.atlas_uvs[slot] = None;
+                    }
+                    if e.orbit.is_some() {
+                        e.orbit_states[slot] = None;
                         e.atlas_uvs[slot] = None;
                     }
                     defer(
@@ -1288,6 +1441,39 @@ fn spawn_into(
             )?;
             e.atlas_uvs[slot] = Some(node.initial_uv(&state));
             e.atlas_states[slot] = Some(state);
+        }
+        if let Some(node) = &e.drifting {
+            let state = node.initialize(
+                &mut particle,
+                sequence
+                    .as_deref_mut()
+                    .context("VFX drifting sequence unavailable")?,
+                0,
+                e.retained_scales[slot],
+            )?;
+            e.atlas_uvs[slot] = Some(node.initial_uv(&state));
+            e.drifting_states[slot] = Some(state);
+        }
+        if let Some(node) = &e.orbit {
+            let state = node.initialize(
+                &mut particle,
+                slot as u32,
+                sequence
+                    .as_deref_mut()
+                    .context("VFX orbit sequence unavailable")?,
+            )?;
+            e.atlas_uvs[slot] = Some(node.uv(&state));
+            e.orbit_states[slot] = Some(state);
+        }
+        if let Some(state) = e.drifting_states.get(slot).and_then(Option::as_ref) {
+            e.retained_scales[slot] = state.scale;
+        } else if let Some(node) = &e.spec.falling_atlas {
+            e.retained_scales[slot] = node.scale;
+        } else if let Some(state) = e.orbit_states.get(slot).and_then(Option::as_ref) {
+            let width = (state.cell[2] - state.cell[0]) as f32;
+            if width > 0. {
+                e.retained_scales[slot] = particle.size[0] / width;
+            }
         }
         if let Some((parent, inherit)) = parent {
             let origin = if compiled.spec.space == SimulationSpace::World {

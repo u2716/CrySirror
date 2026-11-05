@@ -1,7 +1,7 @@
 //! Majiro native boot over shared archives. Never launches install/executable.
 use super::*;
 use std::io::Read;
-pub(super) fn detect(dir: &Path, names: &[String], name: &str) -> Result<Option<Plan>> {
+pub(super) fn detect(dir: &SourcePath, names: &[String], name: &str) -> Result<Option<Plan>> {
     let root = dir.canonicalize()?;
     ensure!(names.len() <= 32768, "Majiro directory metadata budget");
     ensure!(
@@ -15,7 +15,7 @@ pub(super) fn detect(dir: &Path, names: &[String], name: &str) -> Result<Option<
             full.starts_with(&root),
             "Majiro archive probe escapes game root"
         );
-        let mut f = std::fs::File::open(full)?;
+        let mut f = crate::source_path::SourceFile::open(full)?;
         let mut h = [0; 16];
         if f.read_exact(&mut h).is_ok()
             && (h == *b"MajiroArcV2.000\0" || h == *b"MajiroArcV3.000\0")
@@ -30,11 +30,11 @@ pub(super) fn detect(dir: &Path, names: &[String], name: &str) -> Result<Option<
         native_plan(dir, name, archives).map(Some)
     }
 }
-fn native_plan(dir: &Path, name: &str, archives: Vec<String>) -> Result<Plan> {
+fn native_plan(dir: &SourcePath, name: &str, archives: Vec<String>) -> Result<Plan> {
     use crysirror_core::{service::AssetReader, state::ClientId};
     use crysirror_resource::{read_all, ArchiveFormat, DecodeContext};
     use std::sync::{Arc, Mutex};
-    struct File(Mutex<std::fs::File>);
+    struct File(Mutex<crate::source_path::SourceFile>);
     impl AssetReader for File {
         fn len(&self) -> crysirror_core::Result<u64> {
             self.0
@@ -67,7 +67,7 @@ fn native_plan(dir: &Path, name: &str, archives: Vec<String>) -> Result<Plan> {
         let full = dir.join(&file).canonicalize()?;
         ensure!(full.starts_with(&root), "Majiro archive escapes game root");
         let a = crysirror_formats_arc::MajiroArc
-            .open(Arc::new(File(Mutex::new(std::fs::File::open(full)?))), &cx)?;
+            .open(Arc::new(File(Mutex::new(crate::source_path::SourceFile::open(full)?))), &cx)?;
         let target = format!("__majiro/{index}");
         for e in a.entries() {
             if e.path.eq_ignore_ascii_case("majiro.env")

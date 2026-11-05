@@ -27,6 +27,11 @@ pub(crate) struct State {
     /// INPUT this[1309]: the software cursor state 677130 last accepted.
     cursor_visible: Option<bool>,
 }
+impl State {
+    pub(crate) fn begin_glide(&mut self, now_ms:u64, target:[i32;2], milliseconds:i32) {
+        self.glide=Some(Glide{start_ms:now_ms,remaining:i64::from(milliseconds),target});
+    }
+}
 
 fn route(cx: &mut Ctx, commands: serde_json::Value) -> Result<()> {
     cx.host.submit_engine(cx.client, 1, &serde_json::to_vec(&json!({ "input_routes": commands }))?)?;

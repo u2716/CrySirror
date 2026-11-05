@@ -53,6 +53,10 @@ impl RandomStreams {
     pub(crate) fn integer_word(&mut self,client:ClientId)->Result<u32>{
         ensure!(self.client==client,"CatSystem2 foreign native integer random stream");Ok(self.integer.next_u32())
     }
+    /// 5C1FB0: the float stream's word over 2^32-1, inclusive at both ends.
+    pub(crate) fn float_value(&mut self,client:ClientId)->Result<f32>{
+        ensure!(self.client==client,"CatSystem2 foreign native float random stream");Ok((f64::from(self.float.next_u32())/4294967295.0) as f32)
+    }
     pub fn new(client: ClientId, float_seed: u32, integer_seed: u32) -> Self {
         Self {
             client,
@@ -490,7 +494,7 @@ impl Controller {
 
 ///Native scalar arithmetic, not an engine animation implementation. Geometric
 ///matrix operations are mapped separately; shared RNG/debug stay explicit.
-fn scalar(id: u32, words: &[u32]) -> Result<u32> {
+pub(crate) fn scalar(id: u32, words: &[u32]) -> Result<u32> {
     let arity=match id {1..=6|8..=10|12|14..=17=>1,7|11|13|42=>2,41=>5,
         _=>anyhow::bail!("unsupported original motion native family {id}; shared RNG/debug mappings are not fabricated")};
     ensure!(

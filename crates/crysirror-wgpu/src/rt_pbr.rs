@@ -276,11 +276,11 @@ fn compute(d: &wgpu::Device, layout: &wgpu::BindGroupLayout, label: &str, source
 
 /// Shadow pass source: the shared ray-query prelude plus the pass.
 pub(crate) fn shadow_source() -> String {
-    format!("{}\n{}", include_str!("shaders/rt_common.wgsl"), include_str!("shaders/rt_pbr_shadow.wgsl"))
+    format!("{}\n{}", crysirror_shaders::wgsl::RT_COMMON, crysirror_shaders::wgsl::RT_PBR_SHADOW)
 }
 /// Reflection pass source.
 pub(crate) fn reflect_source() -> String {
-    format!("{}\n{}\n{}", include_str!("shaders/rt_common.wgsl"), include_str!("shaders/rt_lighting.wgsl"), include_str!("shaders/rt_reflect.wgsl"))
+    format!("{}\n{}\n{}", crysirror_shaders::wgsl::RT_COMMON, crysirror_shaders::wgsl::RT_LIGHTING, crysirror_shaders::wgsl::RT_REFLECT)
 }
 
 /// Camera, sun and environment for ray-traced reflections.
@@ -321,7 +321,7 @@ struct ReflectParams {
 
 /// Probe update source.
 pub(crate) fn gi_source() -> String {
-    format!("{}\n{}\n{}", include_str!("shaders/rt_common.wgsl"), include_str!("shaders/rt_lighting.wgsl"), include_str!("shaders/rt_gi.wgsl"))
+    format!("{}\n{}\n{}", crysirror_shaders::wgsl::RT_COMMON, crysirror_shaders::wgsl::RT_LIGHTING, crysirror_shaders::wgsl::RT_GI)
 }
 /// Probe updates per dispatch (`jobs` uniform capacity).
 pub const MAX_GI_JOBS: usize = 64;
@@ -384,7 +384,7 @@ impl PbrRt {
             "hardware RT requires an explicitly enabled native ray-query device"
         );
         for (label, source) in [
-            ("RT geometry", include_str!("shaders/rt_geometry.wgsl")),
+            ("RT geometry", crysirror_shaders::wgsl::RT_GEOMETRY),
             ("RT PBR shadow", shadow_source().as_str()),
             ("RT reflections", reflect_source().as_str()),
             ("RT irradiance probes", gi_source().as_str()),
@@ -399,7 +399,7 @@ impl PbrRt {
             label: Some("RT alpha UV gather"),
             entries: &[uniform(0), storage(1, true), storage(5, true), storage(6, false)],
         });
-        let source = include_str!("shaders/rt_geometry.wgsl");
+        let source = crysirror_shaders::wgsl::RT_GEOMETRY;
         let skin_pipeline = compute(d, &skin_layout, "RT dynamic positions", source, "skin_positions");
         let uv_pipeline = compute(d, &uv_layout, "RT corner attributes", source, "gather_attributes");
         let shadow_layout = d.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -533,7 +533,7 @@ impl PbrRt {
             ],
         });
         let clear = compute(d, &clear_layout, "RT PBR empty visibility", &shadow_source(), "clear");
-        crate::hardware_rt::validate_wgsl(include_str!("shaders/rt_denoise.wgsl")).context("RT denoise")?;
+        crate::hardware_rt::validate_wgsl(crysirror_shaders::wgsl::RT_DENOISE).context("RT denoise")?;
         let storage_out = |binding, format| wgpu::BindGroupLayoutEntry {
             binding,
             visibility: wgpu::ShaderStages::COMPUTE,
@@ -559,7 +559,7 @@ impl PbrRt {
                 storage_out(9, wgpu::TextureFormat::R32Float),
             ],
         });
-        let denoise_source = include_str!("shaders/rt_denoise.wgsl");
+        let denoise_source = crysirror_shaders::wgsl::RT_DENOISE;
         let temporal = compute(d, &denoise_layout, "RT visibility temporal", denoise_source, "temporal");
         let spatial = compute(d, &denoise_layout, "RT visibility spatial", denoise_source, "spatial");
         let atlas = d.create_texture(&wgpu::TextureDescriptor {
@@ -680,8 +680,8 @@ impl PbrRt {
         let source = format!(
             "{}\n{}\n{}",
             crate::effect::shadow_material_prelude(),
-            include_str!("shaders/surface_sample.wgsl"),
-            include_str!("shaders/rt_alpha_bake.wgsl")
+            crysirror_shaders::wgsl::SURFACE_SAMPLE,
+            crysirror_shaders::wgsl::RT_ALPHA_BAKE
         );
         crate::hardware_rt::validate_wgsl(&source).context("RT alpha bake shader")?;
         let d = &gpu.device;
@@ -1396,27 +1396,27 @@ mod tests {
     #[test]
     fn rt_geometry_shadow_and_alpha_bake_shaders_validate() {
         for source in [
-            include_str!("shaders/rt_geometry.wgsl").to_owned(),
+            crysirror_shaders::wgsl::RT_GEOMETRY.to_owned(),
             shadow_source(),
             reflect_source(),
             gi_source(),
             format!(
                 "{}\n{}\n{}",
                 crate::effect::shadow_material_prelude(),
-                include_str!("shaders/surface_sample.wgsl"),
-                include_str!("shaders/rt_alpha_bake.wgsl")
+                crysirror_shaders::wgsl::SURFACE_SAMPLE,
+                crysirror_shaders::wgsl::RT_ALPHA_BAKE
             ),
         ] {
             crate::hardware_rt::validate_wgsl(&source).unwrap();
         }
         // Every shadow query proceeds exactly once on force-opaque rays.
-        let common = include_str!("shaders/rt_common.wgsl");
+        let common = crysirror_shaders::wgsl::RT_COMMON;
         assert_eq!(common.matches("rayQueryProceed(").count(), 2, "visible() and closest()");
         assert!(!common.contains("while"));
         for pass in [
-            include_str!("shaders/rt_pbr_shadow.wgsl"),
-            include_str!("shaders/rt_reflect.wgsl"),
-            include_str!("shaders/rt_gi.wgsl"),
+            crysirror_shaders::wgsl::RT_PBR_SHADOW,
+            crysirror_shaders::wgsl::RT_REFLECT,
+            crysirror_shaders::wgsl::RT_GI,
         ] {
             assert!(!pass.contains("rayQueryProceed("), "passes query only through rt_common");
         }

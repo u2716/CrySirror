@@ -25,6 +25,13 @@ fn main() -> Result<()> {
     let owner = runtime.inspect()["sessions"][0]["client"]
         .as_u64()
         .context("native owner")? as u32;
+    if let Some(index)=std::env::args().position(|argument|argument=="--font") {
+        let path=std::env::args().nth(index+1).context("--font requires a caller-selected licensed font")?;
+        let bytes=std::fs::read(path)?;
+        runtime.host.text.add_font("native-font",bytes.clone())?;
+        runtime.assets.text.add_font("native-font",bytes)?;
+    }
+    let dialogue_clicks=std::env::args().any(|argument|argument=="--dialogue-clicks");
     let mut profile_input = 0;
     let activate_title=std::env::args().any(|a|a=="--activate-title");
     let mut title_wait=0;
@@ -92,6 +99,9 @@ fn main() -> Result<()> {
                 let mask=widget.hit_mask.as_ref().unwrap();let index=mask.coverage.iter().enumerate().find(|(i,v)|**v>=mask.threshold&&i%mask.size[0] as usize>0&&i/mask.size[0] as usize>0).unwrap().0;
                 input.pointer_x=widget.rect[0] as i32+(index%mask.size[0] as usize) as i32;input.pointer_y=widget.rect[1] as i32+(index/mask.size[0] as usize) as i32;
             }
+        }
+        if dialogue_clicks&&title_clicked&&frame%120==0&&runtime.host.engine.layers.get(owner,0x39000000).is_some(){
+            input.buttons_down|=buttons::MOUSE_LEFT;input.buttons_pressed|=buttons::MOUSE_LEFT;
         }
         let result = runtime.tick(16, input);
         if let Err(e) = result {

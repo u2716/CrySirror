@@ -16,6 +16,7 @@ pub(crate) enum Tick {
 }
 pub(crate) struct Services<'a> {
     pub client: ClientId,
+    pub pointer_glide:Option<&'a mut crate::native_classes::input_task::State>,
     pub string_variables:&'a mut crate::native_values::StringVariables,
     pub tasks: &'a mut NativeTaskPolicy,
     pub interpreter: &'a mut Interpreter,
@@ -26,6 +27,7 @@ pub(crate) struct Services<'a> {
     pub fes_file_probe: &'a mut Option<crate::fes_file_probe::Pending>,
     pub fes_civil_time: &'a mut Option<crate::fes_civil_time::Pending>,
     pub fes_children:&'a mut crate::fes_children::Children,
+    pub handles: Option<&'a crate::native_scene::Handles>,
     pub saves:&'a std::collections::BTreeMap<u32,crate::native_save::Container>,
     pub pool: &'a crysirror_tasks::TaskPool,
 }
@@ -33,13 +35,16 @@ impl Services<'_> {
     pub fn run(&mut self,host:&mut dyn HostServices,owner:u32,origin_pc:u32,
         observation:InputObservation,budget:&mut u32)->Result<Tick> {
         #[cfg(feature="runtime")]
-        if self.fes_children.frames.in_flight(owner){
+        if self.fes_children.panel_render.in_flight(owner)||self.fes_children.frames.in_flight(owner){
+            if !self.fes_children.panel_render.advance(host,self.client,self.pool,self.tasks,owner,origin_pc,&mut self.fes_children.panels,self.string_variables)?{return Ok(Tick::Dependency);}
             if !self.fes_children.frames.advance(host,self.client,self.pool,self.tasks,self.interpreter,self.string_variables,self.sound_definition.as_ref().and_then(|d|d.policy.as_ref()),&mut self.fes_children.motions,budget,owner,origin_pc,observation)?{return Ok(Tick::Dependency);}
             self.tasks.observe_fes_child_result(owner,self.interpreter)?;
             return Ok(Tick::Waited);
         }
         let tick=self.run_frame(host,owner,origin_pc,observation,budget)?;
         if matches!(tick,Tick::Waited){
+            #[cfg(feature="runtime")]
+            if !self.fes_children.panel_render.advance(host,self.client,self.pool,self.tasks,owner,origin_pc,&mut self.fes_children.panels,self.string_variables)?{return Ok(Tick::Dependency);}
             #[cfg(feature="runtime")]
             if !self.fes_children.frames.advance(host,self.client,self.pool,self.tasks,self.interpreter,self.string_variables,self.sound_definition.as_ref().and_then(|d|d.policy.as_ref()),&mut self.fes_children.motions,budget,owner,origin_pc,observation)?{return Ok(Tick::Dependency);}
             self.tasks.observe_fes_child_result(owner,self.interpreter)?;
@@ -68,9 +73,11 @@ impl Services<'_> {
         self.input_state.observe(&observation)?;
         //5DBDA0's native task counter advances at60Hz, independent of present FPS.
         let clock = (u128::from(observation.time_ms) * 60 / 1000) as u32;
+        if let Some(bank)=self.tasks.fes_object_bank_mut(owner)?{self.fes_children.animations.tick(bank,clock);}
         {
             use crysirror_core::service::buttons;
             let held=|bit:u64|observation.buttons_down&bit!=0||observation.buttons_pressed&bit!=0;
+            self.tasks.dispatch_fes_directions(owner,observation.revision,observation.buttons_pressed)?;
             self.tasks.dispatch_fes_buttons(owner,self.input_state.fes_position(),held(buttons::MOUSE_LEFT),held(buttons::MOUSE_RIGHT))?;
         }
         loop {
@@ -97,7 +104,158 @@ impl Services<'_> {
 
 (PendingKind::Object,_)=>{
  let method=op.arguments.first().context("CatSystem2 native object method missing")?;
- if method==b"blend" {
+ #[cfg(feature="runtime")]
+ let panel_method=crate::fes_save_panel::supports(method);
+ #[cfg(not(feature="runtime"))]
+ let panel_method=false;
+ let bg_table_method = {
+  let mut probe=self.interpreter.clone();
+  let bank=self.tasks.fes_object_bank_mut(owner)?.context("CatSystem2 BGTABLE object bank")?;
+  crate::fes_bg_table::applies(bank,&op.name,method,&mut probe,self.string_variables)?
+ };
+ if bg_table_method {
+  let bank=self.tasks.fes_object_bank_mut(owner)?.context("CatSystem2 BGTABLE object bank")?;
+  crate::fes_bg_table::apply(bank,&op.name,&op.arguments,self.interpreter,self.string_variables)?;
+ }else if panel_method {
+  #[cfg(feature="runtime")]
+  if !crate::fes_save_panel::apply(host,self.client,self.pool,owner,origin_pc,&op,&mut self.fes_children.panels,self.tasks,self.interpreter,self.string_variables)?{return Ok(Tick::Dependency);}
+ }else if method==b"setanm" {
+  let storage=host.storage(self.client)?;
+  let bank=self.tasks.fes_object_bank_mut(owner)?.context("CatSystem2 setanm has no native object bank")?;
+  let name=op.arguments.get(1).context("CatSystem2 setanm name")?;
+  if !self.fes_children.animations.set(storage,self.pool,origin_pc,bank,&op.name,name,self.interpreter,self.string_variables)?{return Ok(Tick::Dependency);}
+ }else if method==b"anm" {
+  let bank=self.tasks.fes_object_bank_mut(owner)?.context("CatSystem2 anm has no native object bank")?;
+  self.fes_children.animations.run(bank,&op.name,op.arguments.get(1).map(Vec::as_slice),self.interpreter,self.string_variables)?;
+ }else if method==b"loadlist2" {
+  // 76D080: `loadlist2 _ group row frame`: the row-th seen string names the bitmap.
+  use crate::native_classes::cg_register::Group;
+  let mut vm=self.interpreter.clone();
+  let group_source=op.arguments.get(2).context("CatSystem2 loadlist2 group")?;
+  let row=op.arguments.get(3).map_or(Ok(0),|s|vm.evaluate(s))?;
+  let frame=op.arguments.get(4).map_or(Ok(0),|s|vm.evaluate(s))?;
+  let group=if matches!(group_source.first(),Some(b'$'|b'0'..=b'9')){Group::Number(vm.evaluate(group_source)?)}else{Group::Name(frame,group_source.clone())};
+  let name=self.fes_children.cg.as_ref().and_then(|register|register.nth_seen(&group,row));
+  if let Some(name)=name{
+   let bank=self.tasks.fes_object_bank_mut(owner)?.context("CatSystem2 loadlist2 has no native object bank")?;
+   for id in bank.targets(&op.name,&mut vm,self.string_variables)?{
+    if let Some(crate::native_class_state::State::Image(image))=bank.objects.get_mut(&id).map(|o|&mut o.state){
+     image.filename=name.clone();
+     image.image_changed=true;
+     image.select_frame(frame);
+    }
+   }
+  }
+  *self.interpreter=vm;
+ }else if crate::fes_image_methods::supports(method) {
+  let bank=self.tasks.fes_object_bank_mut(owner)?.context("CatSystem2 image method has no native object bank")?;
+  crate::fes_image_methods::apply(bank,&op.name,&op.arguments,self.interpreter,self.string_variables)?;
+ }else if matches!(method.as_slice(),b"ref"|b"refex"|b"copy") {
+  #[cfg(feature="runtime")]
+  {
+   let mut vm=self.interpreter.clone();
+   let args=&op.arguments[1..];
+   let bank=self.tasks.fes_object_bank_mut(owner)?.context("CatSystem2 reference has no object bank")?;
+   let mut source_id=None;
+   let source=if method==b"refex" {
+    let handle=args.first().map_or(Ok(0),|v|vm.evaluate(v))?;
+    self.handles.and_then(|h|h.images.get(&handle)).cloned()
+   }else{
+    let raw=args.first().context("CatSystem2 image reference argument")?;
+    let reference=crate::fes_references::evaluate(raw,&mut vm,self.string_variables,&|name|bank.count(name))?;
+    let id=bank.lookup(&reference);source_id=id;
+    id.and_then(|id|{let receipt=self.fes_children.frames.ready.get(&owner)?;let mut frame=receipt.frames.get(&id)?.clone();if let Some(resource)=receipt.resident.get(&id){frame.image=resource.clone();}Some(frame)})
+   };
+   let rect=if method==b"copy" {
+    let mut rect=[0i32;4];
+    for (at,value) in rect.iter_mut().enumerate(){if let Some(raw)=args.get(at+1){*value=vm.evaluate(raw)? as i32;}}
+    Some(rect)
+   }else{None};
+   for id in bank.targets(&op.name,&mut vm,self.string_variables)? {
+    let object=bank.objects.get_mut(&id).unwrap();
+    if (method==b"refex"&&matches!(object.declared_type,1|2|25))||(method!=b"refex"&&matches!(object.declared_type,2|6|11|12|22)) {
+     if let crate::native_class_state::State::Image(image)|crate::native_class_state::State::CImage(image)=&mut object.state {
+      if method==b"refex"||source_id.is_some(){image.reference=source.clone();image.object_reference=source_id.filter(|source|*source!=id);image.copy_rect=rect;}
+     }
+    }
+   }
+   *self.interpreter=vm;
+  }
+  #[cfg(not(feature="runtime"))]
+  anyhow::bail!("CatSystem2 image references need shared resources");
+ }else if method==b"attr" {
+  let mut vm=self.interpreter.clone();
+  let number=op.arguments.get(1).map(|a|vm.evaluate(a)).transpose()?;
+  let destinations=op.arguments.iter().skip(2).take(5).map(|a|vm.evaluate(a)).collect::<Result<Vec<_>>>()?;
+  let bank=self.tasks.fes_object_bank_mut(owner)?.context("CatSystem2 attr has no native object bank")?;
+  let ids=bank.targets(&op.name,&mut vm,self.string_variables)?;
+  #[cfg(feature="runtime")]
+  for id in ids {
+   if let Some(values)=number.and_then(|number|self.fes_children.frames.ready.get(&owner)?.frames.get(&id)?.geometry.attribute(number)) {
+    for (destination,value) in destinations.iter().zip(values){if *destination!=u32::MAX{vm.set_flag(*destination,value);}}
+   }
+  }
+  #[cfg(not(feature="runtime"))]
+  {let _=(number,destinations,ids);anyhow::bail!("CatSystem2 attr needs shared image resources");}
+  *self.interpreter=vm;
+ }else if method==b"sndtag" {
+  let mut vm=self.interpreter.clone();
+  let args=&op.arguments[1..];
+  let command=args.first().map(Vec::as_slice).unwrap_or_default();
+  let bank=self.tasks.fes_object_bank_mut(owner)?.context("CatSystem2 sndtag has no object bank")?;
+  let reference=crate::fes_references::evaluate(&op.name,&mut vm,self.string_variables,&|name|bank.count(name))?;
+  let ids=bank.targets(&op.name,&mut vm,self.string_variables)?;
+  if command==b"init" {
+   for id in ids {
+    if let crate::native_class_state::State::Sound(sound)=&bank.objects[&id].state {
+     let name=self.string_variables.expand(&sound.filename,259)?;
+     if !self.fes_children.sound_tags.init(owner,origin_pc,id,&name,host.storage(self.client)?,self.pool)?{return Ok(Tick::Dependency);}
+    }
+   }
+   self.fes_children.sound_tags.finish(owner,origin_pc);
+  }else if matches!(command,b"wait"|b"remain")&&reference.index!=-1 {
+   let name=args.get(1).map(|name|self.string_variables.expand(name,255)).transpose()?.unwrap_or_default();
+   let frames=ids.first().and_then(|id|match &bank.objects[id].state {crate::native_class_state::State::Sound(sound)=>Some(self.fes_children.sound_tags.remaining(*id,&name,sound.first_play_ms,observation.time_ms as u32)),_=>None}).unwrap_or(0);
+   if command==b"remain" {
+    if let Some(dest)=args.get(2){let dest=vm.evaluate(dest)?;vm.set_flag(dest,frames);}
+   }else if frames>0 {
+    *self.interpreter=vm;
+    self.tasks.begin_fes_wait(owner,&op,None,frames)?;
+    *budget=budget.saturating_sub(1);return Ok(Tick::Waited);
+   }
+  }else if !matches!(command,b"init"|b"wait"|b"remain") {anyhow::bail!("CatSystem2 unsupported sndtag command {}",String::from_utf8_lossy(command));}
+  *self.interpreter=vm;
+ }else if method==b"time" {
+  let mut vm=self.interpreter.clone();
+  let destinations=op.arguments.iter().skip(1).take(3).map(|v|vm.evaluate(v)).collect::<Result<Vec<_>>>()?;
+  let bank=self.tasks.fes_object_bank_mut(owner)?.context("CatSystem2 time has no object bank")?;
+  for id in bank.targets(&op.name,&mut vm,self.string_variables)? {
+   if let crate::native_class_state::State::Sound(sound)=&bank.objects[&id].state {
+    let ms=if sound.channel>=0 {host.audio_info(self.client,sound.channel as u32)?.map_or(0,|info|info.position_frames.saturating_mul(1000)/u64::from(info.source_rate.max(1)))} else {0};
+    for (dest,value) in destinations.iter().zip([ms/60000,(ms%60000)/1000,ms%1000]) {if *dest!=u32::MAX {vm.set_flag(*dest,value as u32);}}
+   }
+  }
+  *self.interpreter=vm;
+ }else if method==b"ismot" {
+  let mut vm=self.interpreter.clone();
+  if let Some(source)=op.arguments.get(1){
+   let destination=vm.evaluate(source)?;
+   let bank=self.tasks.fes_object_bank_mut(owner)?.context("CatSystem2 ismot has no native object bank")?;
+   let mut active=false;
+   for id in bank.targets(&op.name,&mut vm,self.string_variables)?{active|=bank.active_subtree(id)?;}
+   vm.set_flag(destination,u32::from(active));
+  }
+  *self.interpreter=vm;
+ }else if matches!(method.as_slice(),b"arc"|b"mcarc"|b"pend"|b"mcpend") {
+  #[cfg(feature="runtime")]
+  {
+   let root=self.tasks.fes(owner)?.object_root.context("CatSystem2 arc has no engine root")?;
+   let bank=self.tasks.fes_object_bank_mut(owner)?.context("CatSystem2 arc has no native object bank")?;
+   if !self.fes_children.motions.builtin_path(host,self.client,self.pool,owner,root,origin_pc,&op,bank,self.interpreter,self.string_variables)?{return Ok(Tick::Dependency);}
+  }
+  #[cfg(not(feature="runtime"))]
+  anyhow::bail!("CatSystem2 original arc motion capability is not linked");
+ }else if method==b"blend" {
   #[cfg(feature="runtime")]
   {
    let root=self.tasks.fes(owner)?.object_root.context("CatSystem2 blend has no engine root")?;
@@ -150,13 +308,27 @@ impl Services<'_> {
   let bank=self.tasks.fes_object_bank_mut(owner)?.context("CatSystem2 object operation has no admitted native metadata bank")?;
   bank.direct(&op.name,&op.arguments,self.interpreter,self.string_variables)?;
  }else{
-  if crate::fes_object_natives::is_builtin(method){
-   // Not connected yet (settbl, arc, page, attach, history-text queries): the object keeps its state.
-   host.append_log(self.client,&format!("CatSystem2 FES object method {} has no capability yet",String::from_utf8_lossy(method)))?;
+  // 778050..778230: these E-mote methods only count the array and return in this engine build.
+  if matches!(method.as_slice(),b"m2eff"|b"m2att"|b"m2fspeed"|b"m2prmscale"|b"m2iner"|b"m2enable_blink"|b"m2enable_lip"|b"m2splay"|b"m2draw"){
    self.tasks.acknowledge_fes_object(owner,&op)?;
    *budget=budget.saturating_sub(1);
    if *budget>0{continue;}
    return Ok(Tick::Budget);
+  }
+  if method==b"delete"{
+   // 76C350 → 754E20 destroys the instance. Members here stay declared for the bank's
+   // lookups, so a deleted one goes dark and stops taking input.
+   let bank=self.tasks.fes_object_bank_mut(owner)?.context("CatSystem2 delete has no native object bank")?;
+   let ids=bank.targets(&op.name,self.interpreter,self.string_variables)?;
+   bank.direct(&op.name,&[b"disp".to_vec(),b"0".to_vec()],self.interpreter,self.string_variables)?;
+   for id in ids{if let Some(object)=bank.objects.get_mut(&id){object.enabled=false;}}
+   self.tasks.acknowledge_fes_object(owner,&op)?;
+   *budget=budget.saturating_sub(1);
+   if *budget>0{continue;}
+   return Ok(Tick::Budget);
+  }
+  if crate::fes_object_natives::is_builtin(method){
+   anyhow::bail!("CatSystem2 FES object method {} has no implemented capability; original operation remains pending",String::from_utf8_lossy(method));
   }
   #[cfg(feature="runtime")]
   {
@@ -207,12 +379,61 @@ impl Services<'_> {
 }
 // Developer output and Steam overlays: nothing for a player to see on this host.
 (PendingKind::Native,b"dbgstr"|b"dbgstru8"|b"debug"|b"steam_enablescreenshot"|b"steam_achievement"|b"xchgcursor")=>{}
-// 77AB10 leaves the CG register absent when no table loads; 77ADF0/77AF20 then
-// store 0 in the destination, which is what every query below reports.
-(PendingKind::Native,b"cgreg_init")=>{}
+// 77AB10: `cgreg_init file key list`: the record under key in that save file, plus the
+// group list, on a worker.
+(PendingKind::Native,b"cgreg_init")=>{
+ use crate::native_classes::cg_register::Register;
+ if self.fes_children.cg_load.is_none(){
+  let mut vm=self.interpreter.clone();
+  let file=String::from_utf8_lossy(&self.string_variables.expand(op.arguments.first().context("CatSystem2 cgreg_init file")?,259)?).into_owned();
+  let key=op.arguments.get(1).map_or(Ok(0),|s|vm.evaluate(s))?;
+  let list=String::from_utf8_lossy(&self.string_variables.expand(op.arguments.get(2).context("CatSystem2 cgreg_init list")?,259)?).into_owned();
+  let storage=host.storage(self.client)?;let client=self.client;
+  let permit=match self.pool.reserve(){Ok(p)=>p,Err(e) if e.is::<crysirror_tasks::CapacityExceeded>()=>return Ok(Tick::Dependency),Err(e)=>return Err(e)};
+  self.fes_children.cg_load=Some(permit.spawn(move|cancel|{
+   let saved=crate::native_save::load(storage.as_ref(),client,&file,cancel)?;
+   let startup=crate::native_settings::optional_asset(storage.as_ref(),"config/startup.xml")?.context("CatSystem2 startup missing for gallery list")?;
+   let startup=crysirror_resource::xml::XmlDocument::parse_with_fallback(&startup,encoding_rs::SHIFT_JIS)?;
+   let bytes=crate::native_settings::optional_native_asset(storage.as_ref(),&startup,&list)?;
+   Ok(Register::from_parts(saved.as_ref().and_then(|s|s.first(key)),bytes.as_deref()))
+  })?);
+  return Ok(Tick::Dependency);
+ }
+ let Some(register)=self.fes_children.cg_load.as_mut().unwrap().try_take()? else{return Ok(Tick::Dependency);};
+ self.fes_children.cg_load=None;
+ self.fes_children.cg=Some(register);
+}
 // Window chrome and developer hooks with no effect on this host's scene.
 (PendingKind::Native,b"deletebgbutton"|b"force_redraw"|b"wndmenu"|b"decode"|b"resetactive"|b"sendbtn")=>{}
 // 77BEE0: `send target a b [wait]` posts a message the owning KCS reads from native71.
+(PendingKind::Native,b"maketask"|b"deletetask")=>{
+ //77FB90/77FD00 enqueue record16. 629850 forwards it to the owning
+ //KCS input task, not the native66 factory: the game script creates/deletes
+ //its named task in response to message103/104 from native71.
+ let create=op.name==b"maketask";
+ ensure!(op.arguments.len()==if create{3}else{1},"CatSystem2 FES task-message arguments");
+ let mut interpreter=self.interpreter.clone();
+ let number=interpreter.evaluate(&op.arguments[0])?;
+ if create{
+  let mut strings=self.string_variables.clone();
+  let mut name=strings.expand(&op.arguments[1],2559)?;
+  //6A6A10 replaces only the extension after the last path separator.
+  if let Some(dot)=name.iter().rposition(|b|matches!(b,b'.'|b'/'|b'\\')){
+   if name[dot]==b'.'{name.truncate(dot);}
+  }
+  name.extend_from_slice(b".xml");
+  let parameters=strings.expand(&op.arguments[2],2559)?;
+  strings.assign(700,name)?;
+  strings.assign(701,parameters)?;
+  *self.string_variables=strings;
+ }
+ self.tasks.post_script_event(owner,[owner,if create{103}else{104},number,if create{700}else{0}]);
+ *self.interpreter=interpreter;
+ self.tasks.acknowledge_fes_native(owner,&op)?;
+ *budget=budget.saturating_sub(1);
+ //The original -3 yields to message dispatch without adding a frame wait.
+ return Ok(Tick::Waited);
+}
 (PendingKind::Native,b"send")=>{
  let mut interpreter=self.interpreter.clone();
  let mut word=|i:usize|->Result<u32>{op.arguments.get(i).map_or(Ok(0),|source|interpreter.evaluate(source))};
@@ -220,10 +441,46 @@ impl Services<'_> {
  self.tasks.post_script_event(owner,[owner,target,a,b]);
  *self.interpreter=interpreter;
 }
-(PendingKind::Native,b"cgreg_t"|b"cgregnum")=>{
- let mut interpreter=self.interpreter.clone();
- if let Some(source)=op.arguments.first(){let destination=interpreter.evaluate(source)?;interpreter.set_flag(destination,0);}
- *self.interpreter=interpreter;
+// 77ADF0, 77AF20, 77B050: `dest [list] group`; a group starting with $, \ or a digit is a
+// record number, anything else a name in that list. Without a register they store 0.
+(PendingKind::Native,b"cgreg_t"|b"cgregnum"|b"cgregmax")=>{
+ use crate::native_classes::cg_register::Group;
+ let mut vm=self.interpreter.clone();
+ let dest=vm.evaluate(op.arguments.first().context("CatSystem2 cgreg destination")?)?;
+ let (list,source)=match op.arguments.len(){3=>(vm.evaluate(&op.arguments[1])?,Some(&op.arguments[2])),_=>(0,op.arguments.get(1))};
+ let group=match source{
+  Some(s) if matches!(s.first(),Some(b'$'|b'\\'|b'0'..=b'9'))=>Some(Group::Number(vm.evaluate(s)?)),
+  Some(s)=>Some(Group::Name(list,s.clone())),
+  None=>None,
+ };
+ let value=match (&self.fes_children.cg,group){
+  (Some(register),Some(group))=>match op.name.as_slice(){
+   b"cgreg_t"=>u32::from(register.any_seen(&group)),
+   b"cgregnum"=>register.seen_count(&group),
+   _=>register.total(&group),
+  },
+  _=>0,
+ };
+ vm.set_flag(dest,value);
+ *self.interpreter=vm;
+}
+// 77AD00: `dest name,variant,flags`.
+(PendingKind::Native,b"cgreg")=>{
+ let mut vm=self.interpreter.clone();
+ let dest=vm.evaluate(op.arguments.first().context("CatSystem2 cgreg destination")?)?;
+ let text=self.string_variables.expand(op.arguments.get(1).context("CatSystem2 cgreg key")?,2560)?;
+ let value=self.fes_children.cg.as_ref().is_some_and(|register|register.query(&text));
+ vm.set_flag(dest,u32::from(value));
+ *self.interpreter=vm;
+}
+// 77B180: `dest list name`.
+(PendingKind::Native,b"cgregtbl")=>{
+ let mut vm=self.interpreter.clone();
+ let dest=vm.evaluate(op.arguments.first().context("CatSystem2 cgregtbl destination")?)?;
+ let list=op.arguments.get(1).map_or(Ok(0),|s|vm.evaluate(s))?;
+ let value=match (&self.fes_children.cg,op.arguments.get(2)){(Some(register),Some(name))=>register.ordinal(list,name) as u32,_=>0};
+ vm.set_flag(dest,value);
+ *self.interpreter=vm;
 }
 (PendingKind::Native,b"steam_isbroadcast")=>{
  let mut interpreter=self.interpreter.clone();
@@ -330,8 +587,54 @@ impl Services<'_> {
  for (flag,value) in answer.flags{self.interpreter.set_flag(flag,value);}
  if let Some((target,text))=answer.string{self.string_variables.assign(target,text)?;}
 }
-// 77B640, 77B820, 7814A0: pointer warps the host does not perform for a script.
-(PendingKind::Native,b"automove"|b"restoremove"|b"automoveex")=>{}
+(PendingKind::Native,b"_redirect"|b"_redirect_erase"|b"_redirect_clear")=>{
+ let storage=host.storage(self.client)?;
+ let words=op.arguments.iter().map(|word|{
+  let bytes=self.string_variables.expand(word,1024)?;
+  let name=std::str::from_utf8(&bytes).context("CatSystem2 redirect resource encoding")?.replace('\\',"/");
+  Ok(name)
+ }).collect::<Result<Vec<String>>>()?;
+ match op.name.as_slice(){
+  b"_redirect"=>{
+   ensure!(words.len()==4,"CatSystem2 redirect arguments");
+   //6A5610 cannot advance on an empty find string; reject that native
+   //infinite-loop input rather than acknowledging a different substitution.
+   ensure!(!words[2].is_empty(),"CatSystem2 redirect empty search would not terminate in the original engine");
+   storage.insert_asset_redirect(&words[0],&words[1],&words[2],&words[3])?;
+  }
+  b"_redirect_erase"=>{ensure!(words.len()==1,"CatSystem2 redirect erase arguments");storage.erase_asset_redirect(&words[0])?;}
+  _=>{ensure!(words.is_empty(),"CatSystem2 redirect clear arguments");storage.clear_asset_redirects()?;}
+ }
+}
+//77B640/77B820/7814A0 ->629850 messages9/10/30 ->INPUT137.
+(PendingKind::Native,b"automove"|b"restoremove"|b"automoveex")=>{
+ let enabled=self.settings.as_ref().context("CatSystem2 pointer settings")?.configuration(b"autocur",0,0)?!=0;
+  let mut vm=self.interpreter.clone();
+  let target=match op.name.as_slice(){
+   b"restoremove"=>self.tasks.fes(owner)?.saved_cursor.map(|p|(p.map(|v|i32::from(v as u16)),4)),
+   b"automoveex"=>{
+    ensure!((2..=3).contains(&op.arguments.len()),"CatSystem2 automoveex arguments");
+    let x=i32::from(vm.evaluate(&op.arguments[0])? as u16);
+    let y=i32::from(vm.evaluate(&op.arguments[1])? as u16);
+    let duration=op.arguments.get(2).map_or(Ok(8),|v|vm.evaluate(v))? as i32;
+    Some(([x,y],duration))
+   }
+   _=>{
+    ensure!(op.arguments.len()==1,"CatSystem2 automove arguments");
+    let bank=self.tasks.fes_object_bank_mut(owner)?.context("CatSystem2 automove object bank")?;
+    let reference=crate::fes_references::evaluate(&op.arguments[0],&mut vm,self.string_variables,&|name|bank.count(name))?;
+    bank.lookup(&reference).and_then(|id|crate::fes_button::key_position(bank,id)).map(|p|(p.map(|v|i32::from(v as u16)),4))
+   }
+  };
+  if let Some((target,duration))=target.filter(|_|enabled){
+   let rect=self.tasks.fes(owner)?.native_rect;
+   if op.name!=b"restoremove" {self.tasks.save_fes_cursor(owner,self.input_state.fes_position())?;}
+   if target[0]<rect[2]&&target[1]<rect[3]&&host.window_focused(self.client)?!=Some(false){
+    self.pointer_glide.as_deref_mut().context("CatSystem2 FES pointer input owner missing")?.begin_glide(host.now_ms(),target,duration);
+   }
+  }
+  *self.interpreter=vm;
+}
 // 77B880, 77BE30, 7813A0: button-pass requests that take effect on the next frame.
 (PendingKind::Native,b"react"|b"basebtnpri"|b"btnsimulate")=>{
  self.tasks.begin_fes_wait(owner,&op,None,1)?;
@@ -343,13 +646,200 @@ impl Services<'_> {
  if let Some(source)=op.arguments.first(){let flag=vm.evaluate(source)?;vm.set_flag(flag,u32::MAX);}
  *self.interpreter=vm;
 }
-// 786360, 786840: E-mote quality options are owned by the shared puppet.
+// 786360, 786840: E-mote options, keyed by word; the labelled ones take a last word.
 (PendingKind::Native,b"m2_getconf")=>{
+ let key=op.arguments.first().context("CatSystem2 m2_getconf key")?;
+ let label=op.arguments.get(2).map(|l|String::from_utf8_lossy(l).into_owned()).unwrap_or_default();
+ let settings=self.settings.as_ref().context("CatSystem2 m2_getconf settings")?;
+ if let (Some(value),Some(source))=(settings.m2.get(key,&label),op.arguments.get(1)){
+  let mut vm=self.interpreter.clone();
+  let flag=vm.evaluate(source)?;vm.set_flag(flag,value);
+  *self.interpreter=vm;
+ }
+}
+(PendingKind::Native,b"m2_setconf")=>{
+ let key=op.arguments.first().context("CatSystem2 m2_setconf key")?;
  let mut vm=self.interpreter.clone();
- if let Some(source)=op.arguments.first(){let flag=vm.evaluate(source)?;vm.set_flag(flag,1);}
+ let value=op.arguments.get(1).map(|source|vm.evaluate(source)).transpose()?;
+ *self.interpreter=vm;
+ let label=op.arguments.get(2).map(|l|String::from_utf8_lossy(l).into_owned()).unwrap_or_default();
+ let settings=self.settings.as_mut().context("CatSystem2 m2_setconf settings")?;
+ settings.m2.set(key,value,&label);
+ let config=settings.m2.clone();
+ crate::native_m2::save_m2_config(host.storage(self.client)?.as_ref(),&config)?;
+}
+// 780B00..781180: the read-marks database of KCS native 869, by the handle in the first word.
+(PendingKind::Native,b"dic_find"|b"dic_appear"|b"dic_title"|b"dic_ind"|b"dic_max_appear"|b"dic_update"|b"dic_update_clear"|b"dic_id")=>{
+ let mut vm=self.interpreter.clone();
+ let number=|at:usize,vm:&mut crate::native_interpreter::Interpreter|->Result<u32>{vm.evaluate(op.arguments.get(at).context("CatSystem2 dic argument")?)};
+ let handle=number(0,&mut vm)?;
+ let text=|at:usize,strings:&crate::native_values::StringVariables|->Result<Vec<u8>>{strings.expand(op.arguments.get(at).context("CatSystem2 dic text")?,259)};
+ let settings=self.settings.as_mut().context("CatSystem2 dic settings")?;
+ let database=settings.databases.get_mut(&handle);
+ match op.name.as_slice(){
+  b"dic_find"=>{
+   let (flag,variable,nth)=(number(1,&mut vm)?,number(2,&mut vm)?,number(3,&mut vm)?);
+   let (from,to)=(text(4,self.string_variables)?,text(5,self.string_variables)?);
+   let found=database.and_then(|d|d.find(&from,&to,nth).map(<[u8]>::to_vec));
+   vm.set_flag(flag,u32::from(found.is_some()));
+   self.string_variables.assign(variable,found.unwrap_or_default())?;
+  }
+  b"dic_appear"|b"dic_max_appear"|b"dic_id"=>{
+   let flag=number(1,&mut vm)?;
+   let name=text(2,self.string_variables)?;
+   let value=database.map_or(0,|d|match op.name.as_slice(){b"dic_appear"=>d.appear(&name),b"dic_max_appear"=>d.max_appear(&name),_=>d.id(&name)});
+   vm.set_flag(flag,value);
+  }
+  b"dic_title"=>{
+   let (title,short)=(number(1,&mut vm)?,number(2,&mut vm)?);
+   let name=text(3,self.string_variables)?;
+   let found=database.and_then(|d|d.titles(&name).map(|(a,b)|(a.to_vec(),b.to_vec()))).unwrap_or_default();
+   self.string_variables.assign(title,found.0)?;
+   self.string_variables.assign(short,found.1)?;
+  }
+  b"dic_ind"=>{
+   let variable=number(1,&mut vm)?;
+   let name=text(2,self.string_variables)?;
+   self.string_variables.assign(variable,database.and_then(|d|d.ind(&name)).unwrap_or_default())?;
+  }
+  b"dic_update"=>{
+   let (first,second)=(number(1,&mut vm)?,number(2,&mut vm)?);
+   let name=text(3,self.string_variables)?;
+   let (a,b)=database.map_or((0,0),|d|d.update_flags(&name));
+   vm.set_flag(first,a);vm.set_flag(second,b);
+  }
+  _=>{
+   let name=op.arguments.get(1).map(|_|text(1,self.string_variables)).transpose()?;
+   if let Some(database)=database{database.clear_updates(name.as_deref());}
+  }
+ }
  *self.interpreter=vm;
 }
-(PendingKind::Native,b"m2_setconf"|b"input_text"|b"messagebox"|b"config_open")=>{
+// 781AC0, 781D80: slots ordered newest file first into consecutive flags; a slot with no
+// file has the zero time. Equal times keep their order.
+(PendingKind::Native,b"sortsave"|b"sortsave2")=>{
+ let mut vm=self.interpreter.clone();
+ let first=vm.evaluate(op.arguments.first().context("CatSystem2 sortsave flag")?)?;
+ let slots:Vec<u32>=if op.name==b"sortsave"{
+  let from=vm.evaluate(op.arguments.get(1).context("CatSystem2 sortsave from")?)?;
+  let to=vm.evaluate(op.arguments.get(2).context("CatSystem2 sortsave to")?)?;
+  if to>from{(from..=to).collect()}else{Vec::new()}
+ }else{
+  op.arguments[1..].iter().map(|source|vm.evaluate(source)).collect::<Result<_>>()?
+ };
+ let storage=host.storage(self.client)?;
+ let mut timed=Vec::with_capacity(slots.len());
+ for slot in slots{
+  let name=format!("save{slot:04}.dat");
+  let time=storage.metadata(crysirror_core::path::Mount::Save,&name).ok().flatten().and_then(|m|m.modified_ms).unwrap_or(0);
+  timed.push((time,slot));
+ }
+ timed.sort_by(|a,b|b.0.cmp(&a.0));
+ for (at,(_,slot)) in timed.iter().enumerate(){vm.set_flag(first+at as u32,*slot);}
+ *self.interpreter=vm;
+}
+// 77FE60: the system font list. This player does not enumerate host fonts, so the list is
+// empty: count answers 0 and a search finds nothing.
+(PendingKind::Native,b"fontcom")=>{
+ let mut vm=self.interpreter.clone();
+ match op.arguments.first().map(Vec::as_slice){
+  Some(b"count")=>{
+   if let Some(source)=op.arguments.get(1){let flag=vm.evaluate(source)?;vm.set_flag(flag,0);}
+  }
+  Some(b"search")=>{
+   if let Some(source)=op.arguments.get(2){let variable=vm.evaluate(source)?;self.string_variables.assign(variable,Vec::new())?;}
+  }
+  _=>{}
+ }
+ *self.interpreter=vm;
+}
+// 785A10: with no list entry found the string variable is emptied.
+(PendingKind::Native,b"cgreg_getlist")=>{
+ let mut vm=self.interpreter.clone();
+ if let Some(source)=op.arguments.first(){
+  let variable=vm.evaluate(source)?;
+  if variable!=u32::MAX{self.string_variables.assign(variable,Vec::new())?;}
+ }
+ *self.interpreter=vm;
+}
+// 781310: the set bits of a value into a flag.
+(PendingKind::Native,b"bitcount")=>{
+ let mut vm=self.interpreter.clone();
+ if let (Some(target),Some(source))=(op.arguments.first(),op.arguments.get(1)){
+  let flag=vm.evaluate(target)?;let value=vm.evaluate(source)?;vm.set_flag(flag,value.count_ones());
+ }
+ *self.interpreter=vm;
+}
+// 7823A0 reads the debug switch (off); 784B50 the pixel shader version, where this renderer
+// meets the 3.0 profile the scripts test for; 785610 mouse and keyboard; 782B40 finds no
+// installed companion title; 7822B0 has no video memory figures to report.
+(PendingKind::Native,b"isdebug"|b"psversion"|b"inputdevice"|b"check_install"|b"vram_get")=>{
+ let value=if op.name==b"psversion"{0x300}else{0};
+ let mut vm=self.interpreter.clone();
+ for source in op.arguments.iter().take(if op.name==b"vram_get"{2}else{1}){
+  let flag=vm.evaluate(source)?;
+  if flag!=u32::MAX{vm.set_flag(flag,value);}
+ }
+ *self.interpreter=vm;
+}
+// 782160, 7821E0: the frame counters report the configured rate.
+(PendingKind::Native,b"fps_enable")=>{}
+(PendingKind::Native,b"fps_get")=>{
+ let rate=self.settings.as_ref().map_or(60,|settings|settings.fps);
+ let mut vm=self.interpreter.clone();
+ for source in op.arguments.iter().take(2){
+  let flag=vm.evaluate(source)?;
+  if flag!=u32::MAX{vm.set_flag(flag,rate);}
+ }
+ *self.interpreter=vm;
+}
+// 779E20, 779EA0: values kept by name for the session.
+(PendingKind::Native,b"setexvar")=>{
+ let name=op.arguments.first().context("CatSystem2 setexvar name")?;
+ let mut vm=self.interpreter.clone();
+ let value=op.arguments.get(1).map(|source|vm.evaluate(source)).transpose()?.unwrap_or(0);
+ *self.interpreter=vm;
+ let key=[b"exvar:",name.as_slice()].concat();
+ self.settings.as_mut().context("CatSystem2 setexvar settings")?.extras.insert(key,value);
+}
+(PendingKind::Native,b"getexvar")=>{
+ if let (Some(name),Some(source))=(op.arguments.first(),op.arguments.get(1)){
+  let key=[b"exvar:",name.as_slice()].concat();
+  let value=self.settings.as_ref().and_then(|settings|settings.extras.get(&key).copied()).unwrap_or(0);
+  let mut vm=self.interpreter.clone();
+  let flag=vm.evaluate(source)?;vm.set_flag(flag,value);
+  *self.interpreter=vm;
+ }
+}
+// The rest are requests to the window or debug output with no effect on script state:
+// 784BC0 warps the cursor, 782A30/782A90 touch input, 7820B0 the background button, 77F2C0
+// a debug timer, 782DB0 a relaunch path, 786D40 a view reset, 786D60 waits on E-mote effects
+// that finish at once here, 77B8E0 retitles the window, 785880 resets Steam achievements.
+(PendingKind::Native,b"cursormove"|b"touch_kill"|b"touch_enable"|b"enablebgbutton"|b"dbgtime"|b"exit_boot"|b"m2_resetview"|b"m2_waiteff"|b"checktitle"|b"steam_achievement_reset")=>{
+ host.append_log(self.client,&format!("CatSystem2 FES {} ignored: no host capability",String::from_utf8_lossy(&op.name)))?;
+}
+// The fw_* disc and activation commands do nothing, by owner decision: the scripts set
+// their own status flag ($700=2) straight after fw_status.
+(PendingKind::Native,b"fw_init"|b"fw_hash"|b"fw_limitpos"|b"fw_auth"|b"fw_activate"|b"fw_status"|b"fw_actcode"|b"fw_uniquecode"|b"fw_destroy")=>{}
+// 77BAC0: a volume into a flag; other names leave it.
+(PendingKind::Native,b"config")=>{
+ let name=op.arguments.get(1).context("CatSystem2 config name")?.to_ascii_lowercase();
+ let source=op.arguments.first().context("CatSystem2 config flag")?;
+ let field:Option<&[u8]>=match name.as_slice(){b"vol_bgm"=>Some(b"vol_bgm"),b"vol_se"=>Some(b"vol_se"),b"vol_pcm"=>Some(b"vol_voice"),_=>None};
+ if let Some(field)=field{
+  let value=self.settings.as_ref().context("CatSystem2 config settings")?.configuration(field,0,0)?;
+  let mut vm=self.interpreter.clone();
+  let flag=vm.evaluate(source)?;vm.set_flag(flag,value);
+  *self.interpreter=vm;
+ }
+}
+// 77E8E0, 784C90, 77EA20: a browser and the system clipboard are outside this player.
+(PendingKind::Native,b"opensite"|b"opensiteenc"|b"clipboard")=>{
+ host.append_log(self.client,&format!("CatSystem2 FES {} ignored: no host capability",String::from_utf8_lossy(&op.name)))?;
+}
+// 77F150: posts message 22 about the window's active lock; the host owns focus.
+(PendingKind::Native,b"lockactive")=>{}
+(PendingKind::Native,b"input_text"|b"messagebox"|b"config_open")=>{
  host.append_log(self.client,&format!("CatSystem2 FES {} has no host dialog yet",String::from_utf8_lossy(&op.name)))?;
 }
 // 77E890 event 19: the owner's script returns to its title.
@@ -629,9 +1119,9 @@ mod tests {
             let mut probe=None;let mut civil=None;let pool=crysirror_tasks::TaskPool::new("authored-shared-fes-motion",1,1)?;
             let mut children=crate::fes_children::Children::default();
             let mut string_variables=crate::native_values::StringVariables::default();
-            let mut driver=Services{string_variables:&mut string_variables,client:ClientId(1),tasks:&mut tasks,interpreter:&mut interpreter,
+            let mut driver=Services{pointer_glide:None,string_variables:&mut string_variables,client:ClientId(1),tasks:&mut tasks,interpreter:&mut interpreter,
                 settings:&mut settings,sound_definition:&mut sound,input_state:&mut input,
-                steam_manager:&mut steam,fes_file_probe:&mut probe,fes_civil_time:&mut civil,fes_children:&mut children,saves:&Default::default(),pool:&pool};
+                steam_manager:&mut steam,fes_file_probe:&mut probe,fes_civil_time:&mut civil,fes_children:&mut children,handles:None,saves:&Default::default(),pool:&pool};
             assert!(matches!(driver.run(&mut runtime.host,owner,0x1943,observation(1,0),&mut 100)?,Tick::Waited));
             assert_eq!(driver.interpreter.flag(0),1);
             assert_eq!(driver.tasks.fes(owner)?.player.as_ref().unwrap().timing.wait,Some(crate::fes_timing::Wait::Objects));
@@ -699,9 +1189,9 @@ mod tests {
         let pool=crysirror_tasks::TaskPool::new("authored-fes-civil",1,1).unwrap();
         let mut children=crate::fes_children::Children::default();
             let mut string_variables=crate::native_values::StringVariables::default();
-            let mut driver=Services{string_variables:&mut string_variables,client:ClientId(1),tasks:&mut tasks,interpreter:&mut interpreter,
+            let mut driver=Services{pointer_glide:None,string_variables:&mut string_variables,client:ClientId(1),tasks:&mut tasks,interpreter:&mut interpreter,
             settings:&mut settings,sound_definition:&mut sound,input_state:&mut input,
-            steam_manager:&mut steam,fes_file_probe:&mut probe,fes_civil_time:&mut civil,fes_children:&mut children,saves:&Default::default(),pool:&pool};
+            steam_manager:&mut steam,fes_file_probe:&mut probe,fes_civil_time:&mut civil,fes_children:&mut children,handles:None,saves:&Default::default(),pool:&pool};
         let mut host=ClockHost{begins:0,polls:Arc::new(AtomicUsize::new(0))};
         for _ in 0..2 {
             assert!(matches!(driver.run(&mut host,owner,0x1943,observation(1,0),&mut 100).unwrap(),Tick::Dependency));
@@ -740,7 +1230,7 @@ mod tests {
         let pool = crysirror_tasks::TaskPool::new("authored-fes-result", 1, 1).unwrap();
         let mut children=crate::fes_children::Children::default();
             let mut string_variables=crate::native_values::StringVariables::default();
-        let mut driver = Services {
+        let mut driver = Services {pointer_glide:None,
             string_variables:&mut string_variables,
             client: ClientId(1),
             tasks: &mut tasks,
@@ -751,7 +1241,7 @@ mod tests {
             steam_manager: &mut steam,
             fes_file_probe: &mut probe,
             fes_civil_time: &mut civil,
-            fes_children:&mut children,saves:&Default::default(),
+            fes_children:&mut children,handles:None,saves:&Default::default(),
             pool: &pool,
         };
         let mut budget = 100;
@@ -826,7 +1316,7 @@ mod tests {
         let pool = crysirror_tasks::TaskPool::new("authored-fes", 1, 1).unwrap();
         let mut children=crate::fes_children::Children::default();
             let mut string_variables=crate::native_values::StringVariables::default();
-        let mut driver = Services {
+        let mut driver = Services {pointer_glide:None,
             string_variables:&mut string_variables,
             client: ClientId(1),
             tasks: &mut tasks,
@@ -837,7 +1327,7 @@ mod tests {
             steam_manager: &mut steam,
             fes_file_probe: &mut probe,
             fes_civil_time: &mut civil,
-            fes_children:&mut children,saves:&Default::default(),
+            fes_children:&mut children,handles:None,saves:&Default::default(),
             pool: &pool,
         };
         for (revision, time, expected) in [
@@ -887,7 +1377,7 @@ mod tests {
         let pool = crysirror_tasks::TaskPool::new("authored-fes-retain", 1, 1).unwrap();
         let mut children=crate::fes_children::Children::default();
             let mut string_variables=crate::native_values::StringVariables::default();
-        let mut driver = Services {
+        let mut driver = Services {pointer_glide:None,
             string_variables:&mut string_variables,
             client: ClientId(1),
             tasks: &mut tasks,
@@ -898,7 +1388,7 @@ mod tests {
             steam_manager: &mut steam,
             fes_file_probe: &mut probe,
             fes_civil_time: &mut civil,
-            fes_children:&mut children,saves:&Default::default(),
+            fes_children:&mut children,handles:None,saves:&Default::default(),
             pool: &pool,
         };
         let mut budget = 100;

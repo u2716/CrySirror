@@ -6,6 +6,7 @@ use anyhow::{ensure, Result};
 use crysirror_core::image_processing::{
     ImageCompositeLayer, ImageCompositeMath, ImageInput, ImageJob, ImageResource,
 };
+use crysirror_core::{service::HostServices, state::ClientId};
 use std::sync::Arc;
 
 /// Image handed out for an image list's work bitmap (message 285).
@@ -19,6 +20,30 @@ pub(crate) enum Pending {
     Capture { job: ImageJob, blit: Blit, region: u32 },
     /// The composite that replaces the destination image.
     Compose { job: ImageJob, destination: u32 },
+}
+
+/// One retained native image operation, including the geometry it publishes.
+/// Other KCS tasks can wait for this slot but cannot take its completion.
+#[derive(Default)]
+pub(crate) struct PendingCall {
+    pub job: Option<Pending>,
+    pub owner: Option<(u32, u32, u32)>,
+    pub geometry: Option<([u32; 2], [i32; 2])>,
+}
+impl PendingCall {
+    pub fn cancel(&mut self, host: &mut dyn HostServices, client: ClientId, owner: u32) -> Result<()> {
+        if self.owner.is_some_and(|(task, _, _)| task == owner) {
+            if let Some(Pending::Capture { region, .. }) = self.job.as_ref() {
+                let batch = crysirror_scene::ServiceBatch {
+                    canvases: vec![crysirror_scene::canvas::CanvasCommand::Destroy { id: *region }],
+                    ..Default::default()
+                };
+                host.submit_engine(client, 1, &serde_json::to_vec(&batch)?)?;
+            }
+            *self = Self::default();
+        }
+        Ok(())
+    }
 }
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Blit {
@@ -63,6 +88,7 @@ pub(crate) fn prepared(image: Arc<dyn ImageResource>) -> Prepared {
             flags: None,
             image_mode: None,
             compression_type: None,
+            attributes: Vec::new(),
         },
         image,
     }
@@ -86,6 +112,21 @@ pub(crate) fn clip(blit: Blit, source: &Prepared, destination: &Prepared) -> Opt
         }
     }
     Some((src, dst, size))
+}
+/// 6874B0: `from` of the source scaled onto `to` of the base, replacing what was there.
+pub(crate) fn stretch(base: Arc<dyn ImageResource>, source: Arc<dyn ImageResource>, from: [i32; 4], to: [i32; 4]) -> Result<ImageInput> {
+    let cut = ImageInput::Composite {
+        base: Box::new(empty_input([from[2] as u32, from[3] as u32])?),
+        layers: vec![ImageCompositeLayer { input: Box::new(ImageInput::Resource(source)), source: from, destination: [0, 0], clip: None, opacity: 255, math: ImageCompositeMath::Copy }],
+    };
+    let resized = ImageInput::Process {
+        input: Box::new(cut),
+        effects: crate::native_surface_ops::effects_bytes(&[serde_json::json!({"kind":"resize","width":to[2],"height":to[3]})]),
+    };
+    Ok(ImageInput::Composite {
+        base: Box::new(ImageInput::Resource(base)),
+        layers: vec![ImageCompositeLayer { input: Box::new(resized), source: [0, 0, to[2], to[3]], destination: [to[0], to[1]], clip: None, opacity: 255, math: ImageCompositeMath::Copy }],
+    })
 }
 pub(crate) fn composite(
     base: Arc<dyn ImageResource>,

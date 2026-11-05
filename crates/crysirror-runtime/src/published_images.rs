@@ -3,17 +3,17 @@
 //! mutable slot reuse at publication. Frozen frames retain the resource lease.
 use crate::assets::Surface;
 use crysirror_core::{
+    Error, Result,
     image_processing::ImageResource,
     path::{Mount, VfsPath},
     service::UploadedImage,
     state::ClientId,
-    Error, Result,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
     },
 };
 static NEXT_IMAGE: AtomicU64 = AtomicU64::new(1);
@@ -28,6 +28,70 @@ struct State {
 #[derive(Clone, Default)]
 pub struct PublishedImages(Arc<Mutex<State>>);
 impl PublishedImages {
+    pub(crate) fn inspect(&self)->serde_json::Value {
+        self.0.lock().map(|state|serde_json::json!({
+            "resources":state.entries.len(),"bytes":state.bytes,
+            "retired":state.retired.len(),"reserved_count":state.reserved_count,
+            "reserved_bytes":state.reserved_bytes,
+        })).unwrap_or(serde_json::Value::Null)
+    }
+    /// Retain the immutable decoded lease of an owner upload. The generated
+    ///file path still follows the ordinary asset route; CPU consumers can
+    ///borrow these bytes without re-encoding/decoding that route.
+    pub(crate) fn retain_upload(
+        &self,
+        client: ClientId,
+        path: &str,
+        size: [u32; 2],
+        pixels: Arc<[u8]>,
+        opaque: bool,
+    ) -> Result<()> {
+        if !path.starts_with("__crysirror/")
+            || pixels.len() as u64 != u64::from(size[0]) * u64::from(size[1]) * 4
+        {
+            return Err(Error::Invalid("uploaded resource lease layout/path"));
+        }
+        let resource: Arc<dyn ImageResource> = Arc::new(UploadedLease {
+            client,
+            size,
+            pixels: pixels.clone(),
+            opaque,
+        });
+        let mut state = self
+            .0
+            .lock()
+            .map_err(|_| Error::Invalid("uploaded resource lease lock"))?;
+        let key = (client, path.to_owned());
+        if state.entries.contains_key(&key) {
+            return Ok(());
+        }
+        if state
+            .entries
+            .len()
+            .checked_add(state.reserved_count)
+            .is_none_or(|n| n >= 4096)
+            || state
+                .bytes
+                .checked_add(state.reserved_bytes)
+                .and_then(|n| n.checked_add(pixels.len()))
+                .is_none_or(|n| n > 256 * 1024 * 1024)
+        {
+            return Err(Error::Limit("uploaded resource leases"));
+        }
+        state.bytes += pixels.len();
+        state.entries.insert(
+            key,
+            Surface {
+                width: size[0],
+                height: size[1],
+                rgba: pixels,
+                revision: 0,
+                _resource: Some(resource),
+            },
+        );
+        Ok(())
+    }
+
     pub fn publish(
         &self,
         client: ClientId,
@@ -88,7 +152,9 @@ impl PublishedImages {
     }
     /// End caller ownership while preserving engine-retained logical paths.
     pub(crate) fn retire(&self, client: ClientId, path: &str, retained: bool) -> Result<()> {
-        if !path.starts_with("__image_resource/")
+        // Raw uploads now enter this same owner-scoped lease catalog. Their
+        // generated asset names must retire through the same lifetime fence.
+        if !(path.starts_with("__image_resource/")||path.starts_with("__crysirror/"))
             || VfsPath::new(Mount::Asset, path)?.relative() != path
         {
             return Err(Error::Invalid("published image path"));
@@ -98,9 +164,11 @@ impl PublishedImages {
             .lock()
             .map_err(|_| Error::Invalid("image publication owner lock"))?;
         let key = (client, path.to_owned());
-        if s.retired.contains(&key) || !s.entries.contains_key(&key) {
-            return Err(Error::NotFound);
-        }
+        // Multiple live aliases can end ownership before the retained layer
+        // fence releases the generation. A repeat for this owned retired key
+        // is already satisfied; foreign or unknown keys still fail.
+        if s.retired.contains(&key){return Ok(())}
+        if !s.entries.contains_key(&key){return Err(Error::NotFound)}
         if retained {
             s.retired.insert(key);
             return Ok(());
@@ -290,5 +358,30 @@ impl Drop for PreparedImages {
             state.reserved_count -= self.entries.len();
             state.reserved_bytes -= self.bytes;
         }
+    }
+}
+
+#[derive(Debug)]
+struct UploadedLease {
+    client: ClientId,
+    size: [u32; 2],
+    pixels: Arc<[u8]>,
+    opaque: bool,
+}
+impl ImageResource for UploadedLease {
+    fn client(&self) -> ClientId {
+        self.client
+    }
+    fn size(&self) -> [u32; 2] {
+        self.size
+    }
+    fn rgba(&self) -> Arc<[u8]> {
+        self.pixels.clone()
+    }
+    fn opaque(&self) -> bool {
+        self.opaque
+    }
+    fn pixel_at(&self, point: [u32; 2]) -> Result<Option<[u8; 4]>> {
+        crysirror_core::image_processing::rgba_pixel_at(self.size, &self.pixels, point)
     }
 }

@@ -1,7 +1,7 @@
 // Copyright (c) 2026 CrySirror contributors. MPL-2.0.
 //! Bounded two-input stored-coverage multiplication and optional exterior clear.
 use crate::ImageSurface;
-use anyhow::{ensure, Result};
+use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
 /// Integer image coordinates; the source's own draw clip does not constrain
@@ -206,9 +206,10 @@ mod tests {
         p.clear_empty_alpha_only = true;
         let out = p.apply(&d, &d, &|| Ok(())).unwrap();
         assert!(out.rgba.chunks_exact(4).all(|p| p == [9, 13, 17, 0]));
-        assert!(p
-            .apply(&d, &d, &|| anyhow::bail!("authored cancellation"))
-            .is_err());
+        assert!(
+            p.apply(&d, &d, &|| anyhow::bail!("authored cancellation"))
+                .is_err()
+        );
     }
     #[test]
     fn clipping_clear_and_premultiplied_channels_preserve_exact_extents() {

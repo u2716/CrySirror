@@ -638,12 +638,24 @@ pub(super) fn abmp10(s: &dyn AssetReader, cx: &DecodeContext) -> Result<Vec<Row>
             b"abdata11",
             b"abdata12",
             b"abdata13",
+            b"abdata14",
+            b"abdata15",
         ]
         .contains(&tag)
         {
             let size = u64::from(u32_at(s, at)?);
             at += 4;
-            rows.push(Row::raw("unknown.dat".into(), at, size));
+            let name=if tag==b"abdata14"||tag==b"abdata15"{"metadata.bin"}else{"unknown.dat"};
+            let data = index(s, cx, at, size)?;
+            let plan = if data.starts_with(b"1PC\xff") {
+                let expected = le32(&data, 8)? as u64;
+                ensure!(expected <= cx.limits.max_entry_size, "ABMP metadata byte limit");
+                let mut row = Row::packed(name.into(), at, size, expected,
+                    decode(|b, e|super::crypt::pack_decompress(b,e.size as usize)));
+                row.meta = serde_json::json!({"section":std::str::from_utf8(tag)?});
+                row
+            } else { Row::raw(name.into(), at, size) };
+            rows.push(plan.meta(serde_json::json!({"section":std::str::from_utf8(tag)?})));
             at += size;
         } else {
             ensure!(
@@ -653,11 +665,60 @@ pub(super) fn abmp10(s: &dyn AssetReader, cx: &DecodeContext) -> Result<Vec<Row>
             let n = bytes(s, at, 1, 1)?[0];
             at += 1;
             for _ in 0..n {
+                if magic(s, at, b"abimgdat15\0\0\0\0\0\0")? {
+                    let header = index(s,cx,at,(total-at).min(16*1024).min(cx.limits.max_index_size))?;
+                    let mut c = Cursor::new(&header);
+                    c.take(16)?;
+                    let virtual_flag = c.le32()?;
+                    ensure!(virtual_flag <= 2,"ABMP image virtual flag");
+                    let count = c.le16()? as usize;
+                    ensure!(count<=4096,"ABMP image name limit");
+                    let name = utf16(c.take(count * 2)?)?;
+                    let count = c.le16()? as usize;
+                    ensure!(count<=4096,"ABMP image hash-name limit");
+                    let hash_name = sjis(c.take(count)?)?;
+                    let kind = c.u8()?;
+                    let offset = [c.le32()? as i32,c.le32()? as i32,c.le32()? as i32];
+                    let virtual_size = if virtual_flag==2 {Some([c.le32()?,c.le32()?,c.le32()?])} else {None};
+                    let texture_mode = c.u8()?;
+                    let background = c.le32()?;
+                    let size = u64::from(c.le32()?);
+                    at += c.at as u64;
+                    let suffix=match kind {0=>"bmp",1=>"jpg",2|3=>"png",4=>"m",5=>"argb",6=>"b",7=>"ogv",8=>"mdl",_=>anyhow::bail!("ABMP image type {kind}")};
+                    let path=if name.is_empty(){format!("__image/{}.{suffix}",rows.len())}else{format!("{name}.{suffix}")};
+                    // Empty virtual images are meaningful records, not absent data.
+                    rows.push(Row::raw(path,at,size).meta(serde_json::json!({"section":"image","native_name":name,"hash_name":hash_name,"kind":kind,"virtual_flag":virtual_flag,"offset":offset,"virtual_size":virtual_size,"texture_mode":texture_mode,"background":background})));
+                    at += size;
+                    ensure!(at<=total,"ABMP image outside source");
+                    limits(cx,rows.len())?;
+                    continue;
+                }
+                if magic(s, at, b"absnddat12\0\0\0\0\0\0")? {
+                    let h=index(s,cx,at,(total-at).min(16*1024).min(cx.limits.max_index_size))?;
+                    let mut c=Cursor::new(&h);c.take(16)?;
+                    let flags=c.le32()?;
+                    ensure!(flags<=1,"ABMP sound flags");
+                    let count=c.le16()? as usize;
+                    let name=utf16(c.take(count*2)?)?;
+                    let count=c.le16()? as usize;
+                    let hash_name=sjis(c.take(count)?)?;
+                    let kind=c.u8()?;
+                    ensure!(kind<=1,"ABMP sound type");
+                    let size=u64::from(c.le32()?);
+                    at+=c.at as u64;
+                    let base=if name.is_empty(){format!("__sound/{}",rows.len())}else{name.clone()};
+                    let path=format!("{base}.{}",if kind==0{"wav"}else{"ogg"});
+                    rows.push(Row::raw(path,at,size).meta(serde_json::json!({"section":"sound","native_name":name,"hash_name":hash_name,"kind":kind,"flags":flags})));
+                    at+=size;
+                    ensure!(at<=total,"ABMP sound outside source");
+                    continue;
+                }
                 let raw = bytes(s, at, 18, 18)?;
                 let tag = zstr(&raw[..16]);
                 let ns = u16::from_le_bytes(raw[16..18].try_into().unwrap()) as u64;
                 at += 18;
-                let name = dat_name(&sjis(&index(s, cx, at, ns)?)?);
+                let native_name=sjis(&index(s,cx,at,ns)?)?;
+                let name = dat_name(&native_name);
                 at += ns;
                 if [
                     b"absnddat11".as_slice(),
@@ -675,18 +736,23 @@ pub(super) fn abmp10(s: &dyn AssetReader, cx: &DecodeContext) -> Result<Vec<Row>
                         "unknown ABMP resource"
                     );
                 }
+                let kind=bytes(s,at,1,1)?[0];
                 at += 1;
+                let mut offset=[0i32;3];
                 if tag == b"abimgdat14" {
                     at += 76
                 }
                 if tag == b"abimgdat13" {
+                    let coordinates=bytes(s,at,12,12)?;
+                    for (i,coordinate) in offset.iter_mut().enumerate(){*coordinate=le32(&coordinates,i*4)?as i32;}
                     at += 12
                 }
                 let size = u64::from(u32_at(s, at)?);
                 at += 4;
-                if size > 0 {
-                    rows.push(Row::raw(name, at, size))
-                }
+                // Empty import slots still occupy native ABMP image/sound
+                // indices. Dropping one shifts every subsequent animation key.
+                let name=if native_name.is_empty(){format!("__empty/{}.dat",rows.len())}else{name};
+                rows.push(Row::raw(name, at, size).meta(serde_json::json!({"section":if tag.starts_with(b"abimg"){"image"}else{"sound"},"native_name":native_name,"kind":kind,"offset":offset})));
                 at += size;
                 limits(cx, rows.len())?;
             }

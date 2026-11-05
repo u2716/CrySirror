@@ -24,6 +24,7 @@ fn commit(stamp: ExternalMotionStamp, complete: bool, rect: [f32; 4]) -> C {
         stamp,
         complete,
         pose: Some(ExternalMotionPose {
+            offset: None,
             rect: Some(rect),
             opacity: Some(99),
             transform: None,

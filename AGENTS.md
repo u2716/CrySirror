@@ -2,6 +2,14 @@
 
 Read STATUS.md, docs/ARCHITECTURE.md and docs/NATIVE_ADAPTERS.md before editing.
 
+- BGI and Softpal use direct integration backends: retain their complete
+  implementations as internal modules of workspace crates and present their
+  frame/PCM output through CrySirror. The host owns the window/event loop and
+  output devices. Their existing capability-extraction code remains preserved,
+  inactive in the default player; `codex/bgi-extraction-backup` preserves it
+  separately. These two backends are exceptions to the extraction-only and
+  no-hosting rules below. Other adapters continue to follow those rules.
+
 - Engine integrations exist to grow CrySirror's reusable capabilities. A new VM
   must call CrySirror APIs through a thin semantic/syscall adapter; it must not
   bring a second general-purpose engine implementation or renderer with it.

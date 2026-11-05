@@ -69,10 +69,15 @@ pub const COMMAND_API: &[(&str, &str, &str)] = &[
     ("layer", "set_order", "Layers.setOrder"),
     ("layer", "set_depth", "Layers.setDepth"),
     ("layer", "set_solid_color", "Layers.setSolidColor"),
+    ("layer", "set_paint", "Layers.setPaint"),
+    ("layer", "set_parent", "Layers.setParent"),
+    ("layer", "advance_time", "Layers.advanceTime"),
     ("layer", "set_clip", "Layers.setClip"),
     ("layer", "set_viewport_clip", "Layers.setViewportClip"),
     ("layer", "set_source_crop", "Layers.setSourceCrop"),
+    ("layer", "set_glyph_crops", "Layers.setGlyphCrops"),
     ("layer", "set_filter", "Layers.setFilter"),
+    ("layer", "rebind_image", "Layers.rebindImage"),
     ("layer", "transition", "Layers.transition"),
     ("layer", "end_transition", "Layers.endTransition"),
     ("layer", "begin_crossfade", "Layers.beginCrossfade"),
@@ -80,6 +85,8 @@ pub const COMMAND_API: &[(&str, &str, &str)] = &[
     ("layer", "end_crossfade", "Layers.endCrossfade"),
     ("layer", "set_crossfade_elapsed", "Layers.setCrossfadeElapsed"),
     ("layer", "begin_motion", "Layers.beginMotion"),
+    ("layer", "begin_sequence", "Layers.beginSequence"),
+    ("layer", "sequence", "Layers.sequence"),
     ("layer", "begin_external_motion", "Layers.beginExternalMotion"),
     ("layer", "commit_external_motion", "Layers.commitExternalMotion"),
     ("layer", "request_external_motion_skip", "Layers.requestExternalMotionSkip"),
@@ -102,14 +109,18 @@ pub const COMMAND_API: &[(&str, &str, &str)] = &[
     ("canvas", "restore", "Canvases.apply"),
     ("canvas", "present", "Canvases.apply"),
     ("canvas", "present_isolated", "Canvases.apply"),
+    ("canvas", "present_target", "Canvases.apply"),
     ("canvas", "hide", "Canvases.apply"),
     ("canvas", "destroy", "Canvases.apply"),
+    ("canvas", "retire", "Canvases.apply"),
     ("ui", "set_menu", "Ui.setMenu"),
     ("ui", "remove_menu", "Ui.removeMenu"),
     ("ui", "open_menu", "Ui.openMenu"),
     ("ui", "open_dialog", "Ui.openDialog"),
     ("ui", "close_dialog", "Ui.closeDialog"),
     ("ui", "warp_pointer", "Ui.warpPointer"),
+    ("ui", "move_pointer_stepped", "Ui.movePointerStepped"),
+    ("ui", "advance_pointer_motion", "Ui.advancePointerMotion"),
     ("ui", "close_menu", "Ui.closeMenu"),
     ("ui", "set_menu_checked", "Ui.setMenuChecked"),
     ("ui", "set_menu_enabled", "Ui.setMenuEnabled"),
@@ -119,6 +130,7 @@ pub const COMMAND_API: &[(&str, &str, &str)] = &[
     ("ui", "hide_tooltip", "Ui.hideTooltip"),
     ("ui", "put", "Ui.put"),
     ("ui", "remove", "Ui.remove"),
+    ("ui", "set_rect", "Ui.setRect"),
     ("ui", "set_visible", "Ui.setVisible"),
     ("ui", "set_enabled", "Ui.setEnabled"),
     ("ui", "set_value", "Ui.setValue"),
@@ -213,11 +225,12 @@ fn layers_info() -> &'static ClassInfo {
             m("setOrder", vec![("id", T::Int), ("order", T::List(Box::new(T::Int)))], T::Void, "Explicit [major, minor] draw order."),
             m("setClip", vec![("id", T::Int), ("clip", T::Optional(Box::new(T::List(Box::new(T::Number)))))], T::Void, "Clip rectangle [x,y,w,h] or null."),
             m("setViewportClip",vec![("id",T::Int),("clip",T::Optional(Box::new(T::List(Box::new(T::Number)))))],T::Void,"Inherited clip [x,y,w,h] in logical render-target coordinates, unaffected by layer or parent transforms. Zero width/height hides the subtree; null removes this clip. Local clip remains independent."),
+            m("setGlyphCrops",vec![("id",T::Int),("crops",T::List(Box::new(T::Optional(Box::new(T::List(Box::new(T::Number)))))))],T::Void,"Replace each positioned glyph clip {x,y,width,height} or null; preserves all layer motion and sequence ownership. Count must match the existing glyph run."),
             m("setSourceCrop",vec![("id",T::Int),("crop",T::Optional(Box::new(T::List(Box::new(T::Number)))))],T::Void,"Crop this layer's own geometry and source UVs in local [x,y,w,h] coordinates before projection, without changing content layout or children. Null removes; zero extent hides its payload."),
             m("sourceCrop",vec![("id",T::Int)],T::Optional(Box::new(T::List(Box::new(T::Number)))),"Read this owned layer's source crop; a missing target fails, null means none."),
             m("viewportClip",vec![("id",T::Int)],T::Optional(Box::new(T::List(Box::new(T::Number)))),"Read this owned layer's explicit render-target clip; a missing target fails, null means none."),
             m("setFilter", vec![("id", T::Int), ("filter", T::Optional(Box::new(T::Map)))], T::Void,
-                "Siglus-style 2D filter {mono, invert, bright, dark, color_rate, color, add, tone_curve?:{asset,row,saturation}, mask?:{asset,gray_alpha}, alpha_test, distortion?:{kind:'mosaic'|'raster'|'radial_blur'|'threshold_fade',...}} or null."),
+                "Siglus-style 2D filter {mono, invert, bright, dark, color_rate, color, add, tone_curve?:{asset,row,saturation}, mask?:{asset,gray_alpha?,channel?:'rgba'|'red'|'green'|'blue'|'alpha',offset?:number}, alpha_test, distortion?:{kind:'mosaic'|'raster'|'radial_blur'|'threshold_fade',...}} or null."),
             m("transition", vec![("transition", T::Map)], T::Void,
                 "Screen transition from the last presented frame: {effect:{kind:'crossfade'|'mask'{asset,fade}|'slide'{direction}|'mosaic'{size}|'ordered_dither'{cell:[x,y],diagonal?,steps}|'siglus'{code,options?,mask?}}, duration_ms, easing?:'linear'|'ease_in'|'ease_out'|'smooth'}."),
             m("crossfadeStatus", vec![("id", T::Int)], T::Optional(Box::new(T::Map)), "Owned subtree transition {source, duration_ms, elapsed_ms}, or null."),
@@ -226,11 +239,17 @@ fn layers_info() -> &'static ClassInfo {
             m("endCrossfade", vec![("id", T::Int)], T::Void, "Release a subtree crossfade; leaves original nodes intact."),
             m("setCrossfadeElapsed", vec![("id", T::Int), ("elapsedMs", T::Int)], T::Void, "Set an externally clocked crossfade's progress (clamped to its duration)."),
             m("endTransition", vec![], T::Void, "Finish this client's transition now (skip)."),
-            m("beginMotion", vec![("id", T::Int), ("track", T::Map)], T::Void, "Animate layer position, scale, rotation (radians), pivot or opacity with shared MotionTrackSpec; opacity samples truncate to0..255 bytes, engine duration uses milliseconds, external duration uses caller units."),
+            m("beginMotion", vec![("id", T::Int), ("track", T::Map)], T::Void, "Animate layer position, scale, rotation (radians), pivot, opacity or filter RGB multiplication with shared MotionTrackSpec. Optional repeat counts additional passes; -1 repeats indefinitely. Opacity samples truncate to0..255 bytes; RGB multipliers use0..1. Engine duration uses milliseconds; external duration uses caller units."),
+            m("beginSequence",vec![("id",T::Int),("spec",T::Map)],T::Void,"Create owned externally clocked incremental channels and Layer/filter bindings. Banked linear/oscillating queues retain activation, velocity, loop origins and capture/replay state."),
+            m("sequence",vec![("id",T::Int),("operation",T::Map)],T::Void,"Enqueue, set, capture, replay, advance or finish an owned channel queue. Advance requires consecutive decimal-string generation/revision receipts; a pending worker never advances its clock."),
+            m("sequenceStatus",vec![("id",T::Int)],T::Optional(Box::new(T::Map)),"Retained owner-scoped sequence channels, queues, active/last records and exact generation/revision. Null means the owned layer has no sequence."),
             m("beginExternalMotion",vec![("id",T::Int),("driver",T::Int)],T::Void,"Register an external procedural animation producer. Query motionStatus for its fresh generation; engine stores no executable callback. Retire producers before scene snapshots."),
             m("commitExternalMotion",vec![("id",T::Int),("driver",T::Int),("stamp",T::Map),("complete",T::Bool),("pose",T::Optional(Box::new(T::Map)))],T::Void,"Atomically publish an optional {rect,transform,opacity} pose with a consecutive animation revision using {generation,revision} decimal u64 strings. Completion reflects the real producer; stale/invalid samples roll back both pose and revision."),
             m("requestExternalMotionSkip",vec![("id",T::Int),("driver",T::Int),("generation",T::String)],T::Void,"Request the actual external producer's skip branch. The request alone never completes or samples an endpoint."),
             m("removeExternalMotion",vec![("id",T::Int),("driver",T::Int),("generation",T::String)],T::Void,"Retire a scoped external producer; old asynchronous results remain invalid after node/driver reuse."),
+            m("advanceTime",vec![("deltaMs",T::Int)],T::Void,"Advance only this client's automatic layer motion, text reveal and transition clocks by 0..86400000 ms; external tracks and other clients retain their clocks."),
+            m("setParent",vec![("id",T::Int),("parent",T::Optional(Box::new(T::Int)))],T::Void,"Reparent an owned node while preserving paint, animation and child hierarchy; absent/cyclic/foreign parents fail atomically."),
+            m("setPaint",vec![("id",T::Int),("paint",T::Map)],T::Void,"Replace owned layer paint while retaining geometry and animation; non-image paints clear image-only sampling and UV crop."),
             m("setRect",vec![("id",T::Int),("rect",T::List(Box::new(T::Number)))],T::Void,"Change finite positive rectangle geometry while preserving scalar/external animation and unrelated Layer state."),
             m("setMotionElapsed", vec![("id", T::Int), ("property", T::String), ("elapsed", T::Int)], T::Void, "Sample an externally clocked motion track at caller elapsed units."),
             m("endMotion", vec![("id", T::Int), ("property", T::Optional(Box::new(T::String))), ("finish", T::Bool)], T::Void, "Cancel one track or all tracks; finish optionally applies the target before removal."),
@@ -283,6 +302,10 @@ impl Class for LayersClass {
             let layer=state.runtime.host.engine.layers.get(state.client,id).context("viewport clip layer missing")?;
             return Ok(Value::from_json(serde_json::to_value(layer.viewport_clip)?));
         }
+        if method=="sequenceStatus"{
+            let target=id(args)?;let state=cx.state()?;
+            return Ok(Value::from_json(serde_json::to_value(state.runtime.host.engine.layers.sequence_status(state.client,target)?)?));
+        }
         if method == "motionStatus" {
             let target = id(args)?;
             let state = cx.state()?;
@@ -333,14 +356,19 @@ impl Class for LayersClass {
                 id: id(args)?,
                 order: json(arg(args, 1, "order")?, "order")?,
             },
+            "advanceTime"=>LayerCommand::AdvanceTime{delta_ms:u64::try_from(arg(args,0,"deltaMs")?.as_i64()?)?},
+            "setParent"=>LayerCommand::SetParent{id:id(args)?,parent:match args.get(1){None|Some(Value::Null)=>None,Some(v)=>Some(u32::try_from(v.as_i64()?)?)}},
+            "setPaint"=>LayerCommand::SetPaint{id:id(args)?,paint:json(arg(args,1,"paint")?,"layer paint")?},
             "setSolidColor"=>LayerCommand::SetSolidColor{id:id(args)?,color:json(arg(args,1,"rgba")?,"solid color RGBA")?},
             "setDepth"=>LayerCommand::SetDepth{id:id(args)?,depth:match args.get(1){None|Some(Value::Null)=>None,Some(value)=>Some(value.as_f32()?)}},
             "setClip" => LayerCommand::SetClip {
                 id: id(args)?,
                 clip: json(args.get(1).unwrap_or(&Value::Null), "clip")?,
             },
+            "setGlyphCrops"=>LayerCommand::SetGlyphCrops{id:id(args)?,crops:json(arg(args,1,"crops")?,"positioned glyph crops")?},
             "setSourceCrop"=>LayerCommand::SetSourceCrop{id:id(args)?,crop:json(args.get(1).unwrap_or(&Value::Null),"source crop")?},
             "setViewportClip"=>LayerCommand::SetViewportClip{id:id(args)?,clip:json(args.get(1).unwrap_or(&Value::Null),"viewport clip")?},
+            "rebindImage"=>LayerCommand::RebindImage{from:arg(args,0,"source asset")?.as_str()?.to_owned(),to:arg(args,1,"destination asset")?.as_str()?.to_owned()},
             "setFilter" => LayerCommand::SetFilter {
                 id: id(args)?,
                 filter: json(args.get(1).unwrap_or(&Value::Null), "filter")?,
@@ -350,6 +378,8 @@ impl Class for LayersClass {
             },
             "endTransition" => LayerCommand::EndTransition,
             "beginMotion" => LayerCommand::BeginMotion { id: id(args)?, track: json(arg(args,1,"track")?,"motion track")? },
+            "beginSequence"=>LayerCommand::BeginSequence{id:id(args)?,spec:json(arg(args,1,"spec")?,"sequence spec")?},
+            "sequence"=>LayerCommand::Sequence{id:id(args)?,operation:json(arg(args,1,"operation")?,"sequence operation")?},
             "beginExternalMotion"=>LayerCommand::BeginExternalMotion{id:id(args)?,driver:u32::try_from(arg(args,1,"driver")?.as_i64()?)?},
             "commitExternalMotion"=>LayerCommand::CommitExternalMotion{id:id(args)?,driver:u32::try_from(arg(args,1,"driver")?.as_i64()?)?,stamp:json(arg(args,2,"stamp")?,"external motion stamp")?,complete:arg(args,3,"complete")?.as_bool()?,pose:json(args.get(4).unwrap_or(&Value::Null),"external motion pose")?},
             "requestExternalMotionSkip"=>LayerCommand::RequestExternalMotionSkip{id:id(args)?,driver:u32::try_from(arg(args,1,"driver")?.as_i64()?)?,generation:arg(args,2,"generation")?.as_str()?.parse()?},
@@ -390,6 +420,7 @@ fn ui_info() -> &'static ClassInfo {
             PropertyInfo { name: "focus", ty: T::Any, writable: false, doc: "Focused widget or null." },
         ],
         methods: vec![
+            m("drainSubtreeEvents",vec![("root",T::Int)],T::List(Box::new(T::Map)),"Consume only this client's retained events in an owned widget subtree, preserving all other deliveries."),
             m("drainEvents",vec![],T::List(Box::new(T::Map)),"Consume this client's retained events once, preserving other clients' events. Use this for action dispatch; events only reads a snapshot of the queue."),
             m("snapshotLayers",vec![("root",T::Optional(Box::new(T::Int)))],T::List(Box::new(T::Map)),"Freeze owned UI into independent logical LayerSpec records on the project canvas. Pass null for all owned UI, or a widget id for its subtree; current values, style and clip are preserved."),
             m("putTooltip",vec![("tooltip",T::Map)],T::Void,"Prepare font-measured bounds and register an owned plain single-line TooltipSpec; no native VM or pointer capture is required."),
@@ -402,11 +433,14 @@ fn ui_info() -> &'static ClassInfo {
             m("closeMenu",vec![("id",T::Int)],T::Void,"Close this client's menu popups."),
             m("openDialog",vec![("dialog",T::Map)],T::Void,"Open an engine-drawn modal message dialog {id, title?, message, buttons:[{id,label}], default, cancel?, font, text_size?}; the choice arrives as a dialog_result event (value = button id)."),
             m("closeDialog",vec![("id",T::Int)],T::Void,"Close this client's open dialog without a result."),
+            m("movePointerStepped",vec![("motion",T::Map)],T::Void,"Begin owner-scoped externally ticked f32 pointer motion {start,target,ticks}; each axis snaps within one absolute increment."),
+            m("advancePointerMotion",vec![("ticks",T::Int)],T::Void,"Advance only this client's externally clocked pointer motion."),
             m("warpPointer",vec![("position",T::List(Box::new(T::Int)))],T::Void,"Ask the presenting host to move the OS pointer to a canvas position."),
             m("setMenuChecked",vec![("id",T::Int),("item",T::Int),("checked",T::Bool)],T::Void,"Update checked state with shared sibling radio-group semantics."),
             m("setMenuEnabled",vec![("id",T::Int),("item",T::Int),("enabled",T::Bool)],T::Void,"Enable or disable an owned menu item, closing invalid popup branches and canceling ineligible gestures."),
-            m("put", vec![("widget", T::Map)], T::Void, "Insert/replace a widget spec {id, parent?, rect, kind, flow?, text?, ...}."),
+            m("put", vec![("widget", T::Map)], T::Void, "Insert/replace a widget spec {id, parent?, rect, kind, flow?, text?, slider_axis?:horizontal|vertical, focus_follows_pointer?:bool, ...}. Sliders use that axis for shared pointer capture, keyboard adjustment and fill."),
             m("remove", vec![("id", T::Int)], T::Void, "Remove a widget and its children."),
+            m("setRect", vec![("id", T::Int), ("rect", T::List(Box::new(T::Number)))], T::Void, "Update owned widget geometry while retaining input and motion state."),
             m("setVisible", vec![("id", T::Int), ("visible", T::Bool)], T::Void, "Show/hide."),
             m("setEnabled", vec![("id", T::Int), ("enabled", T::Bool)], T::Void, "Enable/disable input."),
             m("setValue", vec![("id", T::Int), ("value", T::Number)], T::Void, "Toggle/slider value."),
@@ -474,6 +508,11 @@ impl Class for UiClass {
                 state.runtime.host.engine.ui.motion_status(state.client, target)?
             )?));
         }
+        if method == "drainSubtreeEvents" {
+            let root=id(args)?;
+            let state=cx.state()?;
+            return Ok(Value::from_json(serde_json::to_value(state.runtime.host.engine.ui.drain_subtree_events(state.client.0,root))?));
+        }
         if method == "drainEvents" {
             let state = cx.state()?;
             return Ok(Value::from_json(serde_json::to_value(
@@ -511,6 +550,8 @@ impl Class for UiClass {
                 dialog: json(arg(args, 0, "dialog")?, "dialog spec")?,
             },
             "closeDialog" => UiCommand::CloseDialog { id: id(args)? },
+            "movePointerStepped" => UiCommand::MovePointerStepped {motion:json(arg(args,0,"motion")?,"stepped pointer motion")?},
+            "advancePointerMotion" => UiCommand::AdvancePointerMotion {ticks:u32::try_from(arg(args,0,"ticks")?.as_i64()?)?},
             "warpPointer" => UiCommand::WarpPointer {
                 position: json(arg(args, 0, "position")?, "pointer position")?,
             },
@@ -531,6 +572,7 @@ impl Class for UiClass {
             "beginMotion" => UiCommand::BeginMotion { id: id(args)?, track: json(arg(args,1,"track")?,"motion track")? },
             "setMotionElapsed" => UiCommand::SetMotionElapsed { id:id(args)?, property:json(arg(args,1,"property")?,"motion property")?, elapsed:u64::try_from(arg(args,2,"elapsed")?.as_i64()?)? },
             "endMotion" => UiCommand::EndMotion { id:id(args)?, property:json(args.get(1).unwrap_or(&Value::Null),"motion property")?, finish:arg(args,2,"finish")?.as_bool()? },
+            "setRect" => UiCommand::SetRect {id:id(args)?,rect:json(arg(args,1,"rect")?,"widget rectangle")?},
             "setVisible" => UiCommand::SetVisible {
                 id: id(args)?,
                 visible: arg(args, 1, "visible")?.as_bool()?,

@@ -105,6 +105,7 @@ fn recipe(request: &AudioRequest) -> Result<(u32, &AudioParameters)> {
             parameters,
             ..
         }
+        | AudioRequest::PlayResident {channel,parameters,..}
         | AudioRequest::PlayAsset {
             channel,
             parameters,
@@ -150,6 +151,7 @@ impl ChannelAudio {
         let mut bytes = 0usize;
         let mut inputs = Vec::new();
         for request in requests {
+            ensure!(!matches!(&request,AudioRequest::PlayResident{..}),"resident client replacement requires a prepared PCM recipe");
             let (channel, p) = recipe(&request)?;
             ensure!(channels.insert(channel), "duplicate replacement channel");
             ensure!(
@@ -157,7 +159,7 @@ impl ChannelAudio {
                 "audio replacement cannot depend on old playback"
             );
             let input_bytes = match &request {
-                AudioRequest::Play { source, intro, .. } => {
+                AudioRequest::Play { source, intro, .. } | AudioRequest::PlayResident {source,intro,..} => {
                     ensure!(
                         source.bytes.len() <= 64 * 1024 * 1024
                             && intro

@@ -979,7 +979,7 @@ impl Class for WorldClass {
                 let path = arg(args, 0, "path")?.as_str()?.to_owned();
                 let s = cx.state()?;
                 let client = s.client;
-                let read = |fs: &mut crysirror_runtime::vfs::DiskVfs, p: &str| -> Result<Vec<u8>> {
+                let read = |fs: &mut dyn crysirror_core::service::FileSystem, p: &str| -> Result<Vec<u8>> {
                     let vp =
                         VfsPath::new(Mount::Asset, p).map_err(|e| anyhow::anyhow!("{p}: {e}"))?;
                     fs.read(client, &vp)

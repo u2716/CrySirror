@@ -1,0 +1,24 @@
+[package]
+name = "crysirror-network"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[features]
+default = ["smb", "nfs"]
+smb = ["dep:smb"]
+nfs = ["dep:nfs-rs", "dep:tokio", "dep:futures"]
+http = ["dep:reqwest"]
+
+[dependencies]
+anyhow.workspace = true
+crysirror-core.workspace = true
+crysirror-tasks.workspace = true
+smb = { version = "=0.12.1", optional = true, default-features = false, features = ["multi_threaded", "sign", "encrypt", "netbios-transport"] }
+reqwest = { version = "=0.12.28", optional = true, default-features = false, features = ["blocking", "rustls-tls"] }
+url = "2.5"
+percent-encoding = "2.3"
+nfs-rs = { version = "=0.11.3", optional = true }
+tokio = { version = "1", optional = true, features = ["rt", "sync", "time", "net", "macros"] }
+futures = { version = "0.3", optional = true }

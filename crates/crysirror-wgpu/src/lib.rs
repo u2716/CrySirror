@@ -2,6 +2,7 @@
 //! wgpu backend, independent of winit and native VM instruction sets.
 #![deny(unsafe_code)]
 mod composite;
+mod texture_cache;
 mod clip_sampling;
 mod frame_history;
 pub mod geometry;
@@ -12,6 +13,8 @@ pub mod particles;
 pub mod pbr;
 pub mod probes;
 mod profile;
+mod pipeline;
+pub use pipeline::PreparationPending;
 mod puppet;
 mod ray_geometry;
 mod raytrace;
@@ -163,6 +166,8 @@ impl Gpu {
     }
 }
 
+/// The single readback texture of `Paint::Backdrop`.
+const BACKDROP_KEY: &str = "backdrop:frame";
 struct Texture {
     bind: wgpu::BindGroup,
     view: wgpu::TextureView,
@@ -183,6 +188,8 @@ struct Draw {
     range: Range<u32>,
     clip: Option<[f32; 4]>,
     blend: Blend,
+    /// Paint::Backdrop's history mode: capture after drawing instead of before.
+    capture_after: bool,
     /// (mask texture key, tone-curve texture key) when a layer filter applies.
     filter: Option<(String, String)>,
 }
@@ -195,15 +202,24 @@ struct FilterGpu {
     c: [f32; 4],
     d: [f32; 4],
     e: [f32; 4],
+    f: [f32; 4],
+    g: [f32; 4],
+    h: [f32; 4],
 }
 fn filter_gpu(f: &crysirror_scene::layer::LayerFilter) -> FilterGpu {
     use crysirror_scene::layer::Distortion;
     let flags = u32::from(f.tone_curve.is_some())
         | u32::from(f.mask.is_some()) << 1
         | u32::from(f.mask.as_ref().is_some_and(|m| m.gray_alpha)) << 2
-        | u32::from(f.alpha_test) << 3;
+        | u32::from(f.alpha_test) << 3
+        | u32::from(f.ignore_tint_alpha) << 4
+        | u32::from(f.encoded_sampling) << 5;
     let (kind, p) = match f.distortion {
         None => (0., [0.; 5]),
+        Some(Distortion::NineTap { offset, center_weight, neighbor_weight }) =>
+            (9., [offset[0], offset[1], center_weight, neighbor_weight, 0.]),
+        Some(Distortion::Quantized { steps, phase }) =>
+            (10., [steps[0], steps[1], phase[0], phase[1], 0.]),
         Some(Distortion::Mosaic { cut, aspect }) => (1., [cut, aspect, 0., 0., 0.]),
         Some(Distortion::Raster {
             vertical,
@@ -220,6 +236,10 @@ fn filter_gpu(f: &crysirror_scene::layer::LayerFilter) -> FilterGpu {
             power,
             coeff,
         }) => (4., [center[0], center[1], power, coeff, 0.]),
+        Some(Distortion::Wave { vertical, amplitude, cycles, phase }) => (
+            if vertical { 8. } else { 7. },
+            [amplitude, cycles, phase, 0., 0.],
+        ),
         Some(Distortion::ThresholdFade {
             fade,
             threshold,
@@ -238,9 +258,16 @@ fn filter_gpu(f: &crysirror_scene::layer::LayerFilter) -> FilterGpu {
             p[0],
         ],
         e: [p[1], p[2], p[3], p[4]],
+        f: {let weights=f.luma_weights.unwrap_or([0.2989,0.5886,0.1145]);[weights[0],weights[1],weights[2],f.rgb_alpha_power]},
+        g: f.mask.as_ref().map_or([0.;4],|mask|{
+            use crysirror_scene::layer::MaskChannel;
+            [match mask.channel{MaskChannel::Rgba=>0.,MaskChannel::Red=>1.,MaskChannel::Green=>2.,MaskChannel::Blue=>3.,MaskChannel::Alpha=>4.},mask.offset,if mask.preserve_source_alpha {1.}else{0.},if mask.source_space {1.}else{0.}]
+        }),
+        h: [f.mask.as_ref().map_or(1.,|mask|mask.scale),f.multiply[0],f.multiply[1],f.multiply[2]],
     }
 }
 pub struct Renderer {
+    presentation_scale: crysirror_core::service::PresentationScale,
     histories: Arc<frame_history::Provider>,
     profiler: crysirror_tasks::profile::Profiler,
     profile_frame: u64,
@@ -266,6 +293,11 @@ pub struct Renderer {
     /// Explicit capture-only generations are bounded even in a headless host
     /// that prepares images without submitting a normal display frame.
     snapshot_readbacks: std::collections::VecDeque<String>,
+    /// Logical scene draws are outside engine_frame; preserve their actual
+    /// keys while an immutable capture temporarily installs a probe frame.
+    scene_texture_keys: BTreeSet<String>,
+    capture_texture_keys: BTreeSet<String>,
+    snapshot_readers: BTreeMap<String, Vec<std::sync::Weak<dyn crysirror_core::service::AssetReader>>>,
     glyph_cells: BTreeMap<String, glyph_run::GlyphBitmap>,
     camera_buffer: wgpu::Buffer,
     camera_bind: wgpu::BindGroup,
@@ -332,11 +364,11 @@ impl Renderer {
         });
         let quad_shader = d.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("quad shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/quad.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(crysirror_shaders::wgsl::QUAD.into()),
         });
         let mesh_shader = d.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("mesh shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/mesh.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(crysirror_shaders::wgsl::MESH.into()),
         });
         const QUAD_ATTR: [wgpu::VertexAttribute; 4] =
             wgpu::vertex_attr_array![0=>Float32x4,1=>Float32x2,2=>Float32x4,3=>Float32];
@@ -394,7 +426,14 @@ impl Renderer {
             Blend::AtopMultiply,
             Blend::AtopScreen,
             Blend::AtopCopy,
+            Blend::SourceOver,
+            Blend::Modulate,
+            Blend::InverseDestination,
+            Blend::ModulateAdd,
+            Blend::DestinationIn,
         ];
+        // Fixed-function factor pairs apply to colour and alpha alike.
+        let fixed = |src_factor, dst_factor| wgpu::BlendComponent { src_factor, dst_factor, operation: wgpu::BlendOperation::Add };
         let quad_pipeline = |blend: Blend, filtered: bool| {
             let color = match blend {
                 Blend::Normal => wgpu::BlendState::ALPHA_BLENDING.color,
@@ -442,8 +481,14 @@ impl Renderer {
                     dst_factor: wgpu::BlendFactor::Zero,
                     operation: wgpu::BlendOperation::Add,
                 },
+                Blend::SourceOver => fixed(wgpu::BlendFactor::One, wgpu::BlendFactor::OneMinusSrcAlpha),
+                Blend::Modulate => fixed(wgpu::BlendFactor::Zero, wgpu::BlendFactor::Src),
+                Blend::InverseDestination => fixed(wgpu::BlendFactor::OneMinusDst, wgpu::BlendFactor::Zero),
+                Blend::ModulateAdd => fixed(wgpu::BlendFactor::Dst, wgpu::BlendFactor::One),
+                Blend::DestinationIn => fixed(wgpu::BlendFactor::Zero, wgpu::BlendFactor::SrcAlpha),
             };
-            // Atop keeps the destination alpha; every other mode is "over".
+            // Atop keeps destination alpha; destination-in masks the complete
+            // premultiplied destination without introducing source colour.
             let alpha = match blend {
                 Blend::Atop | Blend::AtopMultiply | Blend::AtopScreen | Blend::AtopCopy => {
                     wgpu::BlendComponent {
@@ -452,6 +497,7 @@ impl Renderer {
                         operation: wgpu::BlendOperation::Add,
                     }
                 }
+                Blend::SourceOver | Blend::Modulate | Blend::InverseDestination | Blend::ModulateAdd | Blend::DestinationIn => color,
                 _ => wgpu::BlendComponent::OVER,
             };
             d.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -594,6 +640,7 @@ impl Renderer {
         let puppets =
             puppet::PuppetRenderer::new(d, &texture_layout, wgpu::TextureFormat::Rgba8UnormSrgb);
         Self {
+            presentation_scale:Default::default(),
             histories: frame_history::Provider::new(gpu.clone()),
             gpu_timings: profile::GpuTimings::new(&gpu),
             profiler: Default::default(),
@@ -615,6 +662,9 @@ impl Renderer {
             sampler,
             textures: BTreeMap::new(),
             snapshot_readbacks: Default::default(),
+            scene_texture_keys: Default::default(),
+            capture_texture_keys: Default::default(),
+            snapshot_readers: Default::default(),
             glyph_cells: BTreeMap::new(),
             camera_buffer,
             camera_bind,
@@ -774,7 +824,10 @@ impl Renderer {
     }
     /// Install before VM boot; capabilities contain logical layer IDs only.
     pub fn mesh_frame_history_provider(&self) -> Arc<dyn MeshFrameHistoryProvider> {
-        self.histories.clone()
+        #[cfg(not(target_arch = "wasm32"))]
+        { self.histories.clone() }
+        #[cfg(target_arch = "wasm32")]
+        { Arc::new(frame_history::BrowserHistory) }
     }
     /// Advance mesh feedback and isolated subtree input snapshots once per
     /// logical frame, also offscreen. No final framebuffer readback is needed.
@@ -837,6 +890,35 @@ impl Renderer {
             }
         }
         self.engine_frame = frame;
+        Ok(())
+    }
+    /// The texture `Paint::Backdrop` samples, in the composed frame's own format.
+    fn ensure_backdrop(&mut self, size: [u32; 2]) -> Result<()> {
+        let Some((_, raw, format)) = self.transitions.composing() else { return Ok(()) };
+        if self.textures.get(BACKDROP_KEY).is_some_and(|t| { let s = t.texture.size(); [s.width, s.height] == size && s.width > 1 }) {
+            return Ok(());
+        }
+        let texture = self.gpu.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(BACKDROP_KEY),
+            size: wgpu::Extent3d { width: size[0].max(1), height: size[1].max(1), depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: raw,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[format],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor { format: Some(format), ..Default::default() });
+        let bind = self.gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some(BACKDROP_KEY),
+            layout: &self.texture_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+            ],
+        });
+        let bytes = u64::from(size[0]) * u64::from(size[1]) * 4;
+        self.textures.insert(BACKDROP_KEY.to_owned(), Texture { bind, view, texture, bytes });
         Ok(())
     }
     fn upload(&mut self, key: String, width: u32, height: u32, rgba: &[u8]) -> Result<()> {
@@ -1145,6 +1227,7 @@ impl Renderer {
             .iter()
             .map(|p| match &p.paint {
                 Paint::Solid { .. } => Ok("solid:white".to_string()),
+                Paint::Backdrop { .. } => Ok(BACKDROP_KEY.to_string()),
                 Paint::Snapshot { size, layers } => {
                     Self::snapshot_key(assets, p.owner, *size, layers)
                 }
@@ -1197,6 +1280,8 @@ impl Renderer {
                             );
                             Ok(format!("history:{}:{id}", p.owner))
                         }
+                        // A mesh may sample what the last Paint::Backdrop captured.
+                        None if t == BACKDROP_KEY => Ok(BACKDROP_KEY.to_string()),
                         None => Self::image_key(assets, p.owner, t),
                     })
                     .collect::<Result<Vec<_>>>()?,
@@ -1216,6 +1301,7 @@ impl Renderer {
             used.insert(m.clone());
             used.insert(c.clone());
         }
+        self.preserve_capture_textures(&mut used);
         self.textures.retain(|key, _| used.contains(key.as_str()));
         self.glyph_cells.retain(|key, _| used.contains(key));
         if filter_keys.iter().any(Option::is_some) {
@@ -1244,12 +1330,19 @@ impl Renderer {
             c: [0.; 4],
             d: [0.; 4],
             e: [0.; 4],
+            f: [0.2989,0.5886,0.1145,0.],
+            g: [0.; 4],
+            h: [1.; 4],
         }];
         let mut vertices = Vec::with_capacity(frame.len() * 6);
         let mut draws = Vec::new();
         for (((p, key), fkeys), tex_keys) in
             frame.iter().zip(keys).zip(filter_keys).zip(puppet_textures)
         {
+            // The capture exists from the first frame a Backdrop layer has drawn.
+            if tex_keys.iter().any(|key| key == BACKDROP_KEY && !self.textures.contains_key(key)) {
+                continue;
+            }
             if fkeys.as_ref().is_some_and(|(a, b)| {
                 !self.textures.contains_key(a) || !self.textures.contains_key(b)
             }) {
@@ -1261,6 +1354,13 @@ impl Renderer {
                         self.upload(key.clone(), 1, 1, &[255; 4])?;
                     }
                     *color
+                }
+                // A placeholder until the frame's size is known at the copy.
+                Paint::Backdrop { .. } => {
+                    if !self.textures.contains_key(&key) {
+                        self.upload(key.clone(), 1, 1, &[0; 4])?;
+                    }
+                    [255; 4]
                 }
                 Paint::Snapshot { .. } => {
                     // A pending immutable dependency has not published a texture.
@@ -1391,6 +1491,7 @@ impl Renderer {
                 range: start..start + 6,
                 clip: p.clip,
                 blend: p.blend,
+                capture_after: matches!(p.paint, Paint::Backdrop { history: true }),
                 filter: fkeys,
             });
         }
@@ -1472,6 +1573,9 @@ impl Renderer {
             view,
         });
     }
+    pub fn set_presentation_scale(&mut self, mode:crysirror_core::service::PresentationScale) {
+        self.presentation_scale=mode;
+    }
     pub fn render(
         &mut self,
         scene: &SceneState,
@@ -1491,6 +1595,7 @@ impl Renderer {
                 .all(|n| *n <= self.gpu.device.limits().max_texture_dimension_2d),
             "render target too large"
         );
+        self.scene_texture_keys = Self::scene_cache_keys(assets, scene)?;
         self.prepare_snapshots(assets)?;
         self.prepare_composites(assets, canvas)?;
         let (vertices, draws) = self.prepare(scene, assets, canvas)?;
@@ -1520,7 +1625,7 @@ impl Renderer {
         let _profile_span = self
             .profiler
             .span(self.profile_frame, "renderer.prepare_encode_submit");
-        let vp = Viewport::fit(canvas, target.size);
+        let vp = Viewport::with_mode(canvas, target.size, self.presentation_scale);
         let color = geometry::tint(background);
         let mut encoder = self
             .gpu
@@ -1538,6 +1643,13 @@ impl Renderer {
                 .begin(&mut encoder, self.profiler.clone(), self.profile_frame);
         let pbr_active = self.pbr_active();
         // Compose into a retained frame; `transitions.finish` presents it.
+        self.transitions.begin(&self.gpu.device, target.size);
+        let backdrop_source = if draws.iter().any(|draw| draw.key == BACKDROP_KEY) {
+            self.ensure_backdrop([vp.width.ceil() as u32, vp.height.ceil() as u32])?;
+            self.transitions.composing()
+        } else {
+            None
+        };
         let frame_view = self.transitions.begin(&self.gpu.device, target.size);
         ensure!(
             !(pbr_active && self.path == RenderingPath::ComputeRaytrace),
@@ -1695,7 +1807,7 @@ impl Renderer {
             pass.draw(0..6, 0..1);
         }
         if let Some(buffer) = &quad_buffer {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let overlay_pass = wgpu::RenderPassDescriptor {
                 multiview_mask: None,
                 label: Some("2D overlay"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -1710,11 +1822,39 @@ impl Renderer {
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
-            });
+            };
+            let mut pass = encoder.begin_render_pass(&overlay_pass);
             pass.set_viewport(vp.x, vp.y, vp.width, vp.height, 0., 1.);
 
             pass.set_vertex_buffer(0, buffer.slice(..));
             for draw in &draws {
+                // Paint::Backdrop: end the pass so what was drawn so far can be read.
+                macro_rules! capture {
+                    () => {
+                        if let Some((source, _, _)) = &backdrop_source {
+                            drop(pass);
+                            let destination = &self.textures.get(BACKDROP_KEY).context("backdrop texture")?.texture;
+                            let extent = destination.size();
+                            let origin = [vp.x.max(0.) as u32, vp.y.max(0.) as u32];
+                            let copy = wgpu::Extent3d {
+                                width: extent.width.min(source.width().saturating_sub(origin[0])),
+                                height: extent.height.min(source.height().saturating_sub(origin[1])),
+                                depth_or_array_layers: 1,
+                            };
+                            encoder.copy_texture_to_texture(
+                                wgpu::TexelCopyTextureInfo { texture: source, mip_level: 0, origin: wgpu::Origin3d { x: origin[0], y: origin[1], z: 0 }, aspect: wgpu::TextureAspect::All },
+                                wgpu::TexelCopyTextureInfo { texture: destination, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                                copy,
+                            );
+                            pass = encoder.begin_render_pass(&overlay_pass);
+                            pass.set_viewport(vp.x, vp.y, vp.width, vp.height, 0., 1.);
+                            pass.set_vertex_buffer(0, buffer.slice(..));
+                        }
+                    };
+                }
+                if draw.key == BACKDROP_KEY && !draw.capture_after {
+                    capture!();
+                }
                 let c = draw
                     .clip
                     .unwrap_or([0., 0., canvas[0] as f32, canvas[1] as f32]);
@@ -1744,6 +1884,11 @@ impl Renderer {
                     Blend::AtopMultiply => 6,
                     Blend::AtopScreen => 7,
                     Blend::AtopCopy => 8,
+                    Blend::SourceOver => 9,
+                    Blend::Modulate => 10,
+                    Blend::InverseDestination => 11,
+                    Blend::ModulateAdd => 12,
+                    Blend::DestinationIn => 13,
                 };
                 match &draw.filter {
                     Some(k) => {
@@ -1766,6 +1911,9 @@ impl Renderer {
                     &[],
                 );
                 pass.draw(draw.range.clone(), 0..1);
+                if draw.key == BACKDROP_KEY && draw.capture_after {
+                    capture!();
+                }
             }
         }
         self.transitions.finish(

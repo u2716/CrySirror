@@ -72,7 +72,7 @@ impl Compositor {
         });
         let shader = d.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("isolated crossfade"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/composite.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(crysirror_shaders::wgsl::COMPOSITE.into()),
         });
         let pl = d.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("subtree crossfade"),
@@ -164,6 +164,7 @@ impl Renderer {
         assets: &mut Assets,
         canvas: [u32; 2],
     ) -> Result<()> {
+        self.retire_unused_textures(assets)?;
         let composites: Vec<_> = self
             .engine_frame
             .iter()
@@ -301,6 +302,14 @@ impl Renderer {
                 // Match prepare's ordinary Paint::Image cache namespace.
                 let key = Self::image_key(assets, owner, &asset)?;
                 ensure!(!products.contains_key(&key), "duplicate composite product");
+                //The child still owns the preceding isolated input's cache.
+                //Admit this input pair only after removing those dead keys,
+                //rather than counting both generations before render.prepare.
+                let mut child_frame = frame.before.clone();
+                child_frame.extend(frame.after.iter().cloned());
+                c.renderer.set_engine_frame(child_frame)?;
+                c.renderer.scene_texture_keys.clear();
+                c.renderer.retire_unused_textures(assets)?;
                 let cached: u64 = self.textures.values().map(|t| t.bytes).sum();
                 let child_cached: u64 = c.renderer.textures.values().map(|t| t.bytes).sum();
                 ensure!(
@@ -576,6 +585,22 @@ impl Renderer {
             definition.len() <= 4 * 1024 * 1024,
             "snapshot definition exceeds 4 MiB"
         );
+        //Local node IDs and transforms distinguish scene declarations, but
+        //cannot distinguish their pixels when every draw is an unfiltered
+        //RGBA-zero solid with normal blending over this transparent target.
+        //CopySubtree commonly freezes many such empty carriers at canvas
+        //resolution. Keep one real allocation per owner/store/size, rather
+        //than charging a full render target for each structurally different
+        //empty tree. Validate before sharing: an invalid tree must not acquire
+        //a previously admitted transparent snapshot just by matching pixels.
+        if !layers.is_empty() && layers.iter().all(|layer| {
+            matches!(&layer.paint,Paint::Solid{color} if *color==[0;4])
+                && layer.filter.is_none()
+                && layer.blend==crysirror_scene::layer::Blend::Normal
+        }) {
+            Paint::Snapshot { size, layers: Arc::new(layers.to_vec()) }.validate()?;
+            return Ok(format!("snapshot:{}:{owner}:transparent:{}x{}",assets.store_id(),size[0],size[1]));
+        }
         // Text is rasterized from the shared fonts: their content digests
         // are part of the key, so replacing a font alias re-keys the snapshot.
         let mut fonts = BTreeSet::new();
@@ -585,8 +610,14 @@ impl Renderer {
         ) {
             for layer in layers {
                 match &layer.paint {
-                    Paint::Text { font, .. } | Paint::GlyphRun { font, .. } => {
+                    Paint::Text { font, .. } => {
                         out.insert(font.as_str());
+                    }
+                    Paint::GlyphRun { font, glyphs, .. } => {
+                        out.insert(font.as_str());
+                        for glyph in glyphs {
+                            if let Some(font) = &glyph.font { out.insert(font.as_str()); }
+                        }
                     }
                     Paint::Snapshot { layers, .. } => collect(layers, out),
                     _ => {}
@@ -633,13 +664,20 @@ impl Renderer {
         flatten(layers, &mut all);
         for layer in all {
             match &layer.paint {
-                Paint::Solid { .. } => {}
+                Paint::Solid { .. } | Paint::Backdrop { .. } => {}
                 Paint::Image { asset, .. } => {
                     names.insert(asset.as_str());
                 }
                 // Fonts are pinned by content digest in the snapshot key.
-                Paint::Text { font, .. } | Paint::GlyphRun { font, .. } => {
+                Paint::Text { font, .. } => {
                     assets.text.for_client(crysirror_core::state::ClientId(owner)).font_digest(font)?;
+                }
+                Paint::GlyphRun { font, glyphs, .. } => {
+                    let text = assets.text.for_client(crysirror_core::state::ClientId(owner));
+                    text.font_digest(font)?;
+                    for glyph in glyphs {
+                        if let Some(font) = &glyph.font { text.font_digest(font)?; }
+                    }
                 }
                 Paint::Snapshot { .. } => {}
                 Paint::Mesh { frame, .. } => {
@@ -714,6 +752,7 @@ impl Renderer {
     }
 
     pub(super) fn prepare_snapshots(&mut self, assets: &mut Assets) -> Result<()> {
+        self.retire_unused_textures(assets)?;
         // The same frozen content drawn several times is one snapshot.
         let mut seen = BTreeSet::new();
         let mut snapshots = Vec::new();
@@ -770,12 +809,17 @@ impl Renderer {
                     work_bytes <= 128 * 1024 * 1024,
                     "snapshot working set exceeds 128 MiB"
                 );
+                let mut isolated = crysirror_scene::layer::LayerSystem::default();
+                isolated.install(ClientId(owner), &layers)?;
+                c.renderer.set_engine_frame(isolated.frame(size)?)?;
+                c.renderer.scene_texture_keys.clear();
+                c.renderer.retire_unused_textures(assets)?;
+                let resident_bytes = self.textures.values().map(|t| t.bytes).sum::<u64>();
+                let isolated_bytes = c.renderer.textures.values().map(|t| t.bytes).sum::<u64>();
                 ensure!(
-                    self.textures.values().map(|t| t.bytes).sum::<u64>()
-                        + c.renderer.textures.values().map(|t| t.bytes).sum::<u64>()
-                        + work_bytes
+                    resident_bytes + isolated_bytes + work_bytes
                         <= 256 * 1024 * 1024,
-                    "snapshot and texture caches exceed 256 MiB"
+                    "snapshot and texture caches exceed 256 MiB (resident={resident_bytes}, isolated={isolated_bytes}, working={work_bytes})"
                 );
                 let Some(_pins) = Self::snapshot_dependencies(
                     &mut self.snapshot_plain_images,
@@ -786,9 +830,6 @@ impl Renderer {
                 else {
                     continue;
                 };
-                let mut isolated = crysirror_scene::layer::LayerSystem::default();
-                isolated.install(ClientId(owner), &layers)?;
-                c.renderer.set_engine_frame(isolated.frame(size)?)?;
                 let make = |label| {
                     self.gpu.device.create_texture(&wgpu::TextureDescriptor {
                         label: Some(label),
@@ -817,12 +858,12 @@ impl Renderer {
                     size,
                     [0; 4],
                 )?;
+                let resident_bytes = self.textures.values().map(|t| t.bytes).sum::<u64>();
+                let isolated_bytes = c.renderer.textures.values().map(|t| t.bytes).sum::<u64>();
                 ensure!(
-                    self.textures.values().map(|t| t.bytes).sum::<u64>()
-                        + c.renderer.textures.values().map(|t| t.bytes).sum::<u64>()
-                        + work_bytes
+                    resident_bytes + isolated_bytes + work_bytes
                         <= 256 * 1024 * 1024,
-                    "snapshot and texture caches exceed 256 MiB"
+                    "snapshot and texture caches exceed 256 MiB (resident={resident_bytes}, isolated={isolated_bytes}, working={work_bytes})"
                 );
                 let output = make("immutable snapshot straight alpha");
                 let view = output.create_view(&Default::default());
@@ -942,6 +983,7 @@ impl Renderer {
     /// returned capability reads/de-pads GPU pixels lazily on the calling
     /// worker; preparing it never waits for mapping or copies pixel bytes.
     /// None means image dependencies are still loading.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn snapshot_readback(
         &mut self,
         assets: &mut Assets,
@@ -953,7 +995,7 @@ impl Renderer {
         self.snapshot_readbacks.retain(|cached|cached!=&key);
         self.snapshot_readbacks.push_back(key.clone());
         while self.snapshot_readbacks.len()>2 {
-            if let Some(previous)=self.snapshot_readbacks.pop_front(){self.textures.remove(&previous);}
+            self.snapshot_readbacks.pop_front();
         }
         if !self.textures.contains_key(&key) {
             let probe = crysirror_scene::layer::Primitive {
@@ -978,17 +1020,36 @@ impl Renderer {
                 filter: None,
                 puppet: None,
             };
+            //The probe is temporary. Keep the actual display frame and every
+            //worker-owned reader alive while preparing its immutable input.
+            let mut protected = Self::frame_cache_keys(assets, &self.engine_frame)?;
+            protected.extend(self.capture_texture_keys.iter().cloned());
+            let saved_keys = std::mem::replace(&mut self.capture_texture_keys, protected);
             let saved = std::mem::replace(&mut self.engine_frame, vec![probe]);
             let result = self.prepare_snapshots(assets);
             self.engine_frame = saved;
+            self.capture_texture_keys = saved_keys;
             result?;
         }
-        Ok(self.textures.get(&key).map(|texture| {
+        let reader = self.textures.get(&key).map(|texture| {
             std::sync::Arc::new(SnapshotReadback {
                 gpu: self.gpu.clone(), texture: texture.texture.clone(), size,
                 pixels: std::sync::OnceLock::new(),
             }) as std::sync::Arc<dyn crysirror_core::service::AssetReader>
-        }))
+        });
+        if let Some(reader) = &reader {
+            self.snapshot_readers.entry(key).or_default().push(std::sync::Arc::downgrade(reader));
+        }
+        Ok(reader)
+    }
+    /// Browser GPU objects stay on the presenter worker. A CPU reader must
+    /// not carry JS textures into shared-memory workers or block their owner.
+    #[cfg(target_arch = "wasm32")]
+    pub fn snapshot_readback(
+        &mut self, _: &mut Assets, _: u32, _: [u32; 2],
+        _: &std::sync::Arc<Vec<crysirror_scene::layer::LayerSpec>>,
+    ) -> Result<Option<std::sync::Arc<dyn crysirror_core::service::AssetReader>>> {
+        anyhow::bail!("browser GPU snapshot readback requires an asynchronous presenter-owned transfer")
     }
     /// Synchronous compaction helper. Explicit ImageJobs use snapshot_readback
     /// and put its read fence on an engine worker instead.
@@ -1001,12 +1062,14 @@ impl Renderer {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 struct SnapshotReadback {
     gpu: std::sync::Arc<crate::Gpu>,
     texture: wgpu::Texture,
     size: [u32;2],
     pixels: std::sync::OnceLock<std::result::Result<std::sync::Arc<[u8]>,String>>,
 }
+#[cfg(not(target_arch = "wasm32"))]
 impl crysirror_core::service::AssetReader for SnapshotReadback {
     fn len(&self) -> crysirror_core::Result<u64> { Ok(u64::from(self.size[0])*u64::from(self.size[1])*4) }
     fn read_at(&self,offset:u64,output:&mut[u8])->crysirror_core::Result<usize> {

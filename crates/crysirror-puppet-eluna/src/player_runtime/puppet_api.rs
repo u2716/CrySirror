@@ -35,6 +35,15 @@ impl EmoteRuntime {
 
     /// `SetVariable(name, value[, ticks, easing])`, then a scene rebuild.
     pub fn set_variable(&mut self, name: &str, value: f32, ticks: f32, easing: f32) -> Result<()> {
+        self.stage_variable(name, value, ticks, easing);
+        self.commit_variables()
+            .with_context(|| format!("Eluna SetVariable({name:?}) failed"))
+    }
+
+    // Parameter state changes immediately inside a batch, so subsequent reads
+    // and spring calculations see preceding writes. Geometry is evaluated once
+    // at the batch boundary instead of once for every variable.
+    pub(crate) fn stage_variable(&mut self, name: &str, value: f32, ticks: f32, easing: f32) {
         if ticks > 0.0 {
             self.runtime
                 .inner
@@ -42,9 +51,19 @@ impl EmoteRuntime {
         } else {
             self.runtime.inner.set_variable_immediate(name, value);
         }
+    }
+
+    pub(crate) fn commit_variables(&mut self) -> Result<()> {
         self.runtime
             .rebuild_scene(0.0)
-            .with_context(|| format!("Eluna SetVariable({name:?}) failed"))?;
+            .context("Eluna parameter update failed")?;
+        self.bump_version();
+        Ok(())
+    }
+
+    pub fn set_variables_immediate(&mut self, values: &[(String, f32)]) -> Result<()> {
+        for (name, value) in values { self.runtime.inner.set_variable_immediate(name, *value); }
+        self.runtime.rebuild_scene(0.0).context("Eluna parameter batch failed")?;
         self.bump_version();
         Ok(())
     }

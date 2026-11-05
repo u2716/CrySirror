@@ -16,6 +16,49 @@ pub const TH_PF_420: i32 = 0;
 pub const TH_PF_422: i32 = 2;
 pub const TH_PF_444: i32 = 3;
 
+/// Read the selected Theora stream's terminal granule without decoding pictures.
+/// PacketReader validates Ogg pages/CRC and stream identity. Only the first
+/// 2 MiB and last 4 MiB are inspected; absence of a terminal page is unknown,
+/// never an estimate from file size or the last decoded frame. Restores input.
+pub fn theora_duration_ms<R: Read + Seek>(reader: &mut R, mut cancelled: impl FnMut() -> bool) -> Result<Option<u64>> {
+    let start = reader.stream_position()?;
+    let result = (|| -> Result<Option<u64>> {
+        let mut packets = PacketReader::new(&mut *reader);
+        let mut selected = None;
+        for _ in 0..128 {
+            if cancelled() { return Ok(None); }
+            let Some(packet) = packets.read_packet()? else { return Ok(None); };
+            if packets.get_mut().stream_position()?.saturating_sub(start) > 2 * 1024 * 1024 { return Ok(None); }
+            if packet.first_in_stream() && packet.data.starts_with(b"\x80theora") {
+                let serial = packet.stream_serial();
+                let mut parser = HeaderParser::new();
+                parser.push(&OggPacket { packet:packet.data,b_o_s:true,e_o_s:false,granulepos:0,packetno:0 })?;
+                selected = Some((serial, parser.info));
+                break;
+            }
+        }
+        let Some((serial, info)) = selected else { return Ok(None); };
+        if info.fps_numerator == 0 || info.fps_denominator == 0 { bail!("invalid Theora duration clock"); }
+        let end = packets.seek_bytes(SeekFrom::End(0))?;
+        packets.seek_bytes(SeekFrom::Start(start.max(end.saturating_sub(4 * 1024 * 1024))))?;
+        for _ in 0..65536 {
+            if cancelled() { return Ok(None); }
+            let Some(packet) = packets.read_packet()? else { return Ok(None); };
+            if packet.stream_serial()!=serial || !packet.last_in_stream() { continue; }
+            let granule = packet.absgp_page();
+            if granule > i64::MAX as u64 { return Ok(None); }
+            let frame = theora_rs::th_granule_frame(&info, granule as i64);
+            if frame < 0 { return Ok(None); }
+            let numerator=(frame as u128 + 1) * u128::from(info.fps_denominator) * 1000;
+            let denominator=u128::from(info.fps_numerator);
+            return Ok(Some(u64::try_from((numerator + denominator / 2) / denominator)?));
+        }
+        Ok(None)
+    })();
+    reader.seek(SeekFrom::Start(start))?;
+    result
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct VideoInfo {
     /// Theora picture-region width reported by the bitstream.

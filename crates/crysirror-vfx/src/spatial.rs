@@ -107,11 +107,7 @@ pub fn segment_foot_x_ordered(
     } else {
         x2 <= x1 || x2 <= fx
     };
-    if second {
-        end(x2, y2)
-    } else {
-        foot
-    }
+    if second { end(x2, y2) } else { foot }
 }
 
 /// `sub_10001CD0`: intersection of the lines through (a1, a2)-(a3, a4)

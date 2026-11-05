@@ -97,7 +97,7 @@ impl Catalog {
     ) -> Result<Vec<VfsPath>> {
         check()?;
         ensure!(
-            !name.is_empty() && name.is_ascii() && name.len() < 260 && !name.contains('\0'),
+            !name.is_empty() && name.len() < 1040 && name.encode_utf16().count()<260 && !name.contains('\0'),
             "CatSystem2 native resource name extent/encoding"
         );
         let name = name.replace('\\', "/");

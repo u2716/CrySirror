@@ -2,7 +2,7 @@
 //! the existing VFX Particle and explicit clocks/random state; no VM, renderer
 //! or second particle-world scheduler is embedded here.
 use crate::Particle;
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
 /// Serializable integer sequence. One owner hands the stream to a worker and
@@ -111,6 +111,27 @@ impl SequenceRng {
     }
 }
 /// Data-driven pixel-motion and nonuniform-atlas operator.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FallingSpawnWindow {
+    /// Inclusive accepted horizontal range in logical pixels. A reversed or
+    /// empty interval disables selection without consuming a chance sample.
+    pub bounds: [i32; 2],
+    /// Signed inclusive cutoff for a random0..99 sample. Zero disables the
+    /// control; negative cutoffs still consume the chance draw and never pass.
+    pub chance: i32,
+    /// Maximum rejection samples. Exhaustion keeps the last sampled x.
+    pub attempts: u16,
+}
+impl FallingSpawnWindow {
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            self.attempts <= 1000,
+            "VFX falling spawn-window sample budget"
+        );
+        Ok(())
+    }
+}
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FallingAtlasSpec {
@@ -122,6 +143,13 @@ pub struct FallingAtlasSpec {
     pub x_bands: Vec<i32>,
     /// Inclusive integer speed numerator sampled once per birth/reset.
     pub fall_range: [u32; 2],
+    /// Optional first-birth speed range; subsequent recycling uses fall_range.
+    #[serde(default)]
+    pub initial_fall_range: Option<[u32; 2]>,
+    /// Live birth/reset sampling control. Updating it preserves existing
+    /// particles and consumes no random values until their next birth.
+    #[serde(default)]
+    pub spawn_window: Option<FallingSpawnWindow>,
     /// Converts the speed numerator into displacement per fixed update tick.
     pub fall_divisor: f32,
     /// Inclusive integer horizontal oscillation amplitude range.
@@ -176,6 +204,18 @@ impl FallingAtlasSpec {
                 range[0] <= range[1] && range[1] <= 65535,
                 "VFX falling integer range"
             );
+        }
+        if let Some(range) = self.initial_fall_range {
+            ensure!(
+                range[0] > 0
+                    && range[0] <= range[1]
+                    && range[1] <= 65535
+                    && range[1] as f32 / self.fall_divisor <= self.canvas[1] as f32 * 2.,
+                "VFX falling first-birth speed"
+            );
+        }
+        if let Some(window) = &self.spawn_window {
+            window.validate()?;
         }
         ensure!(
             self.fall_range[0] > 0
@@ -255,6 +295,8 @@ mod tests {
             tick_hz: 60,
             x_bands: vec![0, -1, 1],
             fall_range: [2, 4],
+            initial_fall_range: None,
+            spawn_window: None,
             fall_divisor: 2.,
             sway_range: [0, 3],
             phase_modulus: 5,
@@ -300,6 +342,65 @@ mod tests {
             output_mask: 1,
         };
         assert!(bad.next_u32().is_err());
+    }
+    #[test]
+    fn first_birth_speed_differs_from_recycling_and_live_control_does_not_resimulate() {
+        let mut declaration = spec();
+        declaration.initial_fall_range = Some([2, 2]);
+        declaration.fall_range = [4, 4];
+        let mut node = CompiledFallingAtlas::compile(declaration).unwrap();
+        let mut rng = SequenceRng::msvc(1);
+        let mut p = particle();
+        let mut state = node.initialize(&mut p, &mut rng, 77).unwrap();
+        assert_eq!(state.fall_step, 2. / spec().fall_divisor);
+        let before = (p.clone(), state.clone(), rng.clone());
+        node.update_spawn_window(Some(FallingSpawnWindow {
+            bounds: [-2, -1],
+            chance: 100,
+            attempts: 3,
+        }))
+        .unwrap();
+        assert_eq!((p.clone(), state.clone(), rng.clone()), before);
+        p.position[1] = spec().canvas[1] as f32 + 1.;
+        let rng_before = rng.clone();
+        node.step(&mut p, &mut state, &mut rng, 100, true).unwrap();
+        assert_eq!(state.fall_step, 4. / spec().fall_divisor);
+        assert_eq!(state.atlas_at_ms, 77);
+        let mut expected = rng_before;
+        for _ in 0..13 {
+            expected.next_u32().unwrap();
+        }
+        assert_eq!(rng, expected);
+        assert!((0.0..spec().canvas[0] as f32).contains(&p.position[0]));
+    }
+    #[test]
+    fn zero_or_reversed_window_does_not_consume_a_chance_draw() {
+        let baseline = CompiledFallingAtlas::compile(spec()).unwrap();
+        let mut rng = SequenceRng::msvc(9);
+        let mut p = particle();
+        let expected = baseline.initialize(&mut p, &mut rng, 0).unwrap();
+        for window in [
+            FallingSpawnWindow {
+                bounds: [0, 8],
+                chance: 0,
+                attempts: 100,
+            },
+            FallingSpawnWindow {
+                bounds: [8, 0],
+                chance: 100,
+                attempts: 100,
+            },
+        ] {
+            let mut declaration = spec();
+            declaration.spawn_window = Some(window);
+            let node = CompiledFallingAtlas::compile(declaration).unwrap();
+            let mut other_rng = SequenceRng::msvc(9);
+            let mut other = particle();
+            let state = node.initialize(&mut other, &mut other_rng, 0).unwrap();
+            assert_eq!(other, p);
+            assert_eq!(state, expected);
+            assert_eq!(rng, other_rng);
+        }
     }
     #[test]
     fn atlas_wall_clock_does_not_create_motion_or_animation_catchup_frames() {
@@ -420,6 +521,13 @@ impl CompiledFallingAtlas {
         spec.validate()?;
         Ok(Self { spec })
     }
+    pub fn update_spawn_window(&mut self, window: Option<FallingSpawnWindow>) -> Result<()> {
+        if let Some(window) = &window {
+            window.validate()?;
+        }
+        self.spec.spawn_window = window;
+        Ok(())
+    }
     fn range(rng: &mut SequenceRng, range: [u32; 2]) -> Result<u32> {
         Ok(range[0] + rng.modulo(range[1] - range[0] + 1)?)
     }
@@ -439,12 +547,39 @@ impl CompiledFallingAtlas {
         rng: &mut SequenceRng,
         previous_clock: u64,
     ) -> Result<FallingAtlasState> {
+        self.initialize_range(
+            particle,
+            rng,
+            previous_clock,
+            self.spec.initial_fall_range.unwrap_or(self.spec.fall_range),
+        )
+    }
+    fn initialize_range(
+        &self,
+        particle: &mut Particle,
+        rng: &mut SequenceRng,
+        previous_clock: u64,
+        fall_range: [u32; 2],
+    ) -> Result<FallingAtlasState> {
         let s = &self.spec;
         let x = rng.modulo(s.canvas[0])? as f32;
         let band = s.x_bands[rng.modulo(s.x_bands.len() as u32)? as usize];
-        let x = x + band as f32 * s.canvas[0] as f32;
+        let mut x = x + band as f32 * s.canvas[0] as f32;
         let y = -(rng.modulo(s.canvas[1])? as f32);
-        let speed = Self::range(rng, s.fall_range)? as f32 / s.fall_divisor;
+        if let Some(window) = &s.spawn_window {
+            if window.chance != 0
+                && window.bounds[0] < window.bounds[1]
+                && rng.modulo(100)? as i32 <= window.chance
+            {
+                for _ in 0..window.attempts {
+                    x = rng.modulo(s.canvas[0])? as f32;
+                    if x >= window.bounds[0] as f32 && x <= window.bounds[1] as f32 {
+                        break;
+                    }
+                }
+            }
+        }
+        let speed = Self::range(rng, fall_range)? as f32 / s.fall_divisor;
         let amplitude = Self::range(rng, s.sway_range)?;
         let row = s.rows[rng.modulo(s.rows.len() as u32)? as usize];
         let phase = rng.modulo(s.phase_modulus)? as f32;
@@ -533,7 +668,7 @@ impl CompiledFallingAtlas {
                     uv: self.uv(state, 0),
                 });
             }
-            *state = self.initialize(particle, rng, state.atlas_at_ms)?;
+            *state = self.initialize_range(particle, rng, state.atlas_at_ms, s.fall_range)?;
             return Ok(FallingStep {
                 alive: true,
                 recycled: true,

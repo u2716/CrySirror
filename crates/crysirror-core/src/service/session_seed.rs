@@ -1,7 +1,7 @@
 // Copyright (c) 2026 CrySirror contributors. MPL-2.0.
 //! Bounded seed material for owned game random streams. Sampling and stream
 //! algorithms are distinct; this API never reads the simulation/ambient clock.
-use crate::{state::ClientId, Error, Result};
+use crate::{Error, Result, state::ClientId};
 use alloc::{string::String, vec::Vec};
 pub const MAX_SESSION_SEED_WORDS: usize = 16;
 /// Explicit, portable initialization source. Fixed words support reproducible
@@ -57,14 +57,18 @@ mod tests {
         for words in [1, 2, 16] {
             assert!(SessionSeedSource::Os { words }.validate().is_ok());
         }
-        assert!(SessionSeedSource::Fixed { words: Vec::new() }
+        assert!(
+            SessionSeedSource::Fixed { words: Vec::new() }
+                .validate()
+                .is_err()
+        );
+        assert!(
+            SessionSeedSource::Fixed {
+                words: alloc::vec![0;17]
+            }
             .validate()
-            .is_err());
-        assert!(SessionSeedSource::Fixed {
-            words: alloc::vec![0;17]
-        }
-        .validate()
-        .is_err());
+            .is_err()
+        );
         let source = SessionSeedSource::Fixed {
             words: alloc::vec![0, u32::MAX],
         };

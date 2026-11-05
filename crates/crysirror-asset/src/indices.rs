@@ -71,7 +71,7 @@ fn edge(data: &[u8], index_count: usize, vertex_count: usize) -> Result<Vec<u32>
     let masks = u16at(4);
     let width = data[6] as usize;
     ensure!(
-        data[7] == 0 && width <= 16 && (width > 0 || reused == 0),
+        data[7] == 0 && width <= 16,
         "unsupported EDGE version/width"
     );
     let codes = (index_count / 3 + 3) / 4;
@@ -145,6 +145,12 @@ mod tests {
     use super::*;
     #[test]
     fn topology_modes_deltas_and_endian_have_known_results() {
+        // Zero-bit explicit deltas reuse the predictor without a payload.
+        let zero_width = [0, 1, 0, 0, 0, 1, 0, 0, 0x10, 0xd0];
+        assert_eq!(
+            decode(&zero_width, IndexEncoding::Edge, 6, 3).unwrap(),
+            [0, 1, 2, 2, 1, 0]
+        );
         // Four triangles, explicit [0,1,2], then each reversed previous edge + next.
         // flags: six sequential vertices. controls: 3,0,1,2 = 0xc6.
         let data = [0, 0, 0, 0, 0, 1, 0, 0, 0, 0xc6];

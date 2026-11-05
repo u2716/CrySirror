@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
+pub mod embedded;
 use crate::audio::Audio;
 use anyhow::{Context, Result, bail, ensure};
 use crysirror_core::service::{InputFrame, buttons};
@@ -498,9 +499,11 @@ impl App {
             )?,
         );
         window.set_ime_allowed(true);
+        crate::desktop_provider::install(self.core.rt(),true)?;
         self.focused = window.has_focus();
         self.core.rt().host.window_focused = Some(self.focused);
         self.core.rt().host.window_minimized=window.is_minimized();
+        self.core.rt().host.window_fullscreen=Some(window.fullscreen().is_some());
         self.core.rt().host.window_geometry=Some(crysirror_core::service::WindowGeometry{
             inner_size:[window.inner_size().width,window.inner_size().height],
             outer_size:[window.outer_size().width,window.outer_size().height],
@@ -607,8 +610,12 @@ impl App {
         Ok(())
     }
     fn fail(&mut self, el: &ActiveEventLoop, error: anyhow::Error) {
-        log::error!("{error:#}");
-        self.error = Some(error);
+        // Exit is asynchronous: queued events must not overwrite the first
+        // fault with a subsequent lifecycle error from the same runtime.
+        if self.error.is_none() {
+            log::error!("{error:#}");
+            self.error = Some(error);
+        }
         el.exit();
     }
     fn save(&mut self) -> Result<()> {
@@ -719,6 +726,7 @@ impl App {
         materialize_canvases(&mut w.renderer, self.core.rt())?;
         self.core.rt().host.engine.ui.pointer_surface=[w.config.width,w.config.height];
         self.core.rt().host.window_minimized=w.window.is_minimized();
+        self.core.rt().host.window_fullscreen=Some(w.window.fullscreen().is_some());
         self.core.rt().host.window_geometry=Some(crysirror_core::service::WindowGeometry{
             inner_size:[w.window.inner_size().width,w.window.inner_size().height],
             outer_size:[w.window.outer_size().width,w.window.outer_size().height],
@@ -737,7 +745,8 @@ impl App {
         // KiriKiri setCursorPos: move the OS pointer to a canvas position.
         if let Some((_, [x, y])) = self.core.rt().host.engine.ui.pointer_warp.take() {
             let canvas = self.core.rt().project.canvas;
-            let vp = Viewport::fit(canvas, [w.config.width, w.config.height]);
+            let mode=self.core.rt().host.engine.ui.presentation_scale.map(|(_,mode)|mode).unwrap_or_default();
+            let vp = Viewport::with_mode(canvas, [w.config.width, w.config.height],mode);
             let wx = f64::from(vp.x) + f64::from(x) / f64::from(canvas[0]) * f64::from(vp.width);
             let wy = f64::from(vp.y) + f64::from(y) / f64::from(canvas[1]) * f64::from(vp.height);
             if let Err(e) = w.window.set_cursor_position(winit::dpi::PhysicalPosition::new(wx, wy)) {
@@ -791,7 +800,11 @@ impl App {
             w.snapshot_store = rt.assets.store_id();
             w.snapshot_restored = rt.restored;
         }
-        if w.pending_snapshot.is_none() && !rt.presentation_pending() {
+        // Always submit the first picture: startup time must not depend on a
+        // bitmap callback finishing before the window has ever presented.
+        if w.pending_snapshot.is_none()
+            && (w.render_snapshot.is_none() || !rt.presentation_pending())
+        {
             w.pending_snapshot = Some(rt.schedule_render_snapshot()?);
         }
         if let Some(pending) = &mut w.pending_snapshot {
@@ -827,6 +840,7 @@ impl App {
         drop(acquire_span);
         let view = frame.texture.create_view(&Default::default());
         let rt = self.core.rt();
+        w.renderer.set_presentation_scale(rt.host.engine.ui.presentation_scale.map(|(_,mode)|mode).unwrap_or_default());
         w.renderer.set_scene3d(snapshot.simple.as_ref())?;
         w.renderer.set_pbr_scene(snapshot.pbr.clone())?;
         w.renderer.set_engine_frame(snapshot.layers.clone())?;
@@ -881,6 +895,10 @@ impl App {
         Ok(())
     }
     fn event(&mut self, el: &ActiveEventLoop, event: WindowEvent) -> Result<()> {
+        if self.error.is_some() {
+            el.exit();
+            return Ok(());
+        }
         match event {
             // A running game may confirm or save first; it halts when done.
             WindowEvent::CloseRequested => {
@@ -1003,6 +1021,7 @@ impl App {
                         KeyCode::Home => Some(buttons::HOME),
                         KeyCode::End => Some(buttons::END),
                         KeyCode::PageUp => Some(buttons::PAGE_UP),
+                        KeyCode::Insert=>Some(buttons::INSERT),
                         KeyCode::PageDown => Some(buttons::PAGE_DOWN),
                         KeyCode::Digit0 | KeyCode::Numpad0 => Some(buttons::KEY_0),
                         KeyCode::Digit1 | KeyCode::Numpad1 => Some(buttons::KEY_1),
@@ -1062,9 +1081,10 @@ impl App {
             WindowEvent::CursorMoved { position, .. } => {
                 if let Some(w) = &self.window {
                     if !w.minimized {
-                        let vp = Viewport::fit(
+                        let mode=self.core.rt().host.engine.ui.presentation_scale.map(|(_,mode)|mode).unwrap_or_default();
+                        let vp = Viewport::with_mode(
                             self.core.rt().project.canvas,
-                            [w.config.width, w.config.height],
+                            [w.config.width, w.config.height],mode,
                         );
                         let [x, y] =
                             vp.pointer(position.x, position.y, self.core.rt().project.canvas);
@@ -1105,7 +1125,9 @@ impl ApplicationHandler for App {
     fn suspended(&mut self, el: &ActiveEventLoop) {
         self.window = None;
         self.core.rt().host.window_focused = None;
+        if let Err(error)=crate::desktop_provider::install(self.core.rt(),false){self.fail(el,error);return;}
         self.core.rt().host.window_minimized=None;
+        self.core.rt().host.window_fullscreen=None;
         self.core.rt().host.window_geometry=None;
         self.core.rt().host.pointer_observation = Default::default();
         if let Err(error) = self.audio.pause() {
@@ -1131,6 +1153,10 @@ impl ApplicationHandler for App {
         }
     }
     fn about_to_wait(&mut self, el: &ActiveEventLoop) {
+        if self.error.is_some() {
+            el.exit();
+            return;
+        }
         if let Err(error) = self.audio.poll_device() {
             self.fail(el, error);
             return;

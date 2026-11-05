@@ -227,6 +227,7 @@ fn info() -> &'static ClassInfo {
             m("resolveFontAlias",vec![("aliasOrFamily",T::String)],T::Optional(Box::new(T::String)),"Resolve a scoped dynamic binding, canonical alias or installed static family to the exact engine drawing alias. No font lease is fabricated for static faces."),
             m("glyphId",vec![("alias",T::String),("character",T::String)],T::Int,"Read one authorized character-to-glyph mapping without rasterization, parsing or I/O. Requires one Unicode scalar; a missing printable glyph fails explicitly."),
             m("fontStyle",vec![("alias",T::String)],T::Optional(Box::new(T::Map)),"Read cached actual outline OS/2 {weight,italic}; unknown metadata/precomputed faces return null, never fabricated regular weight."),
+            m("fontWidthScale",vec![("alias",T::String),("size",T::Number),("averageWidth",T::Number)],T::Number,"Resolve an explicit outline average-character pixel width using this client's OS/2 font metadata. Returns a horizontal outline scale; precomputed/unspecified faces fail visibly."),
             m("fontMetrics",vec![("alias",T::String),("size",T::Number),("character",T::String)],T::Map,"Measure one Unicode scalar with this client's authorized immutable font view; returns ascent, descent and advance. Size 1..512."),
             m("layoutUnitFlow",vec![("items",T::List(Box::new(T::Map))),("options",T::Optional(Box::new(T::Map)))],T::Map,"Font-independent cell-stream placement with unit wrapping, explicit moves, style indices and vertical columns. Returns logical cell bounds, not raster ink bounds. Live calls accept at most4096 commands; offline Rust layout accepts65536."),
             m("beginGlyphBounds",vec![("font",T::String),("glyphs",T::List(Box::new(T::Map)))],T::Int,"Prepare actual glyph coverage-cell bounds on a scoped CPU worker. Each request contains character, size and optional baseline. Retains the admitted font snapshot; never joins the owner thread."),
@@ -269,6 +270,14 @@ impl Class for TextClass {
         if let Some(value)=crate::text_bounds_api::call(cx.state()?,method,args)? {return Ok(value);}
         if let Some(value) = crate::text_async::call(cx.state()?, method, args)? {
             return Ok(value);
+        }
+        if method=="fontWidthScale" {
+            let font=args.first().context("font alias")?.as_str()?;
+            let size=args.get(1).context("font size")?.as_f32()?;
+            let width=args.get(2).context("font average width")?.as_f32()?;
+            let state=cx.state()?;
+            let value=state.runtime.assets.text.for_client(state.client).font_width_scale(font,size,width)?;
+            return Ok(Value::from_json(serde_json::json!(value)));
         }
         if method=="layoutUnitFlow" {
             use crysirror_text::unit_flow::{UnitFlowItem,UnitFlowOptions,layout_unit_flow,MAX_FLOW_ITEMS};

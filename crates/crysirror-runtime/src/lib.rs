@@ -11,7 +11,9 @@ pub mod physics;
 pub mod runtime;
 pub mod script;
 pub mod structured_text;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod vfs;
+pub mod storage;
 pub mod vfx;
 mod vfx_query;
 pub mod vector;
@@ -31,3 +33,5 @@ mod session_seed;
 
 mod pattern_resources;
 pub mod canvas_images;
+
+mod media_image;

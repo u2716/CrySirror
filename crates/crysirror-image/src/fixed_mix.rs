@@ -1,7 +1,7 @@
 // Copyright (c) 2026 CrySirror contributors. MPL-2.0.
 //! Exact fixed-point mixing of immutable image resources on engine workers.
-use crate::{effects::MAX_EFFECT_PIXELS, ImageSurface};
-use anyhow::{ensure, Result};
+use crate::{ImageSurface, effects::MAX_EFFECT_PIXELS};
+use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

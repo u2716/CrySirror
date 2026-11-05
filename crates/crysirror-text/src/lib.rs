@@ -19,6 +19,7 @@ pub mod glyph;
 pub mod glyph_blur;
 pub mod glyph_coverage;
 pub mod grid;
+pub mod width;
 pub mod bitmap_layout;
 pub mod message;
 pub mod unit_flow;

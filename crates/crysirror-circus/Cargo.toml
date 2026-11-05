@@ -12,6 +12,8 @@ encoding_rs = "0.8"
 crysirror-core.workspace = true
 crysirror-runtime = { workspace = true, optional = true }
 crysirror-image.workspace = true
+crysirror-text.workspace = true
+crysirror-scene.workspace = true
 crysirror-resource.workspace = true
 crysirror-vfx.workspace = true
 serde_json.workspace = true

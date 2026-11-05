@@ -2,6 +2,10 @@
 // Distributed under the GNU Affero General Public License, version 3 or later.
 //! Original LayerManager hover/capture policy; hit testing remains the existing
 //! native semantic query over engine-owned Layer/Canvas resources.
+// LayerManager dispatch ordering is observable by script callbacks. Preserve
+// Leave/re-hit/Enter and the bounded corrective hit after Enter changes a target.
+// Hover, press capture and explicit release are separate state. Hiding a tree
+// is not equivalent to detaching it; a retired target must receive no callbacks.
 use crate::natives::Rt;
 use crysirror_tjs2::{Result, runtime::ObjectHandle};
 

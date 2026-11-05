@@ -1,0 +1,32 @@
+// SPDX-License-Identifier: MPL-2.0
+// Native SceShaccCg FP source. Compile options must retain full float precision.
+uniform sampler2D node_texture : TEXUNIT0;
+uniform sampler2D triangle_texture : TEXUNIT1;
+uniform float4 ray_nodes;      // width, height, node_count, reserved
+uniform float4 ray_triangles;  // width, height, triangle_count, reserved
+uniform float4 ray_eye;        // eye.xyz, positive world-space ray bias
+uniform float4 ray_corner;     // unnormalized top-left perspective ray
+uniform float4 ray_dx;         // unnormalized ray delta over screen width
+uniform float4 ray_dy;         // unnormalized ray delta over screen height
+uniform float4 ray_light;      // nonzero direction toward sun, max distance
+uniform float4 ray_sun;        // linear RGB directional radiance
+uniform float4 ray_ambient;    // linear RGB ambient radiance
+uniform float4 ray_sky_low;    // linear RGB
+uniform float4 ray_sky_high;   // linear RGB
+
+float2 load_node(float index) {
+    float y = floor(index / ray_nodes.x);
+    float2 uv = (float2(index - y * ray_nodes.x, y) + 0.5) / ray_nodes.xy;
+    return tex2Dlod(node_texture, float4(uv, 0.0, 0.0)).xy;
+}
+float2 load_triangle(float index) {
+    float y = floor(index / ray_triangles.x);
+    float2 uv = (float2(index - y * ray_triangles.x, y) + 0.5) / ray_triangles.xy;
+    return tex2Dlod(triangle_texture, float4(uv, 0.0, 0.0)).xy;
+}
+
+#include "../ray_lite.cgh"
+
+float4 main(float2 uv : TEXCOORD0) : COLOR {
+    return lite_pixel(uv);
+}

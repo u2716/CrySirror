@@ -100,6 +100,12 @@ pub(crate) fn blur(frame: &Prepared, reach: [u32; 2]) -> Edit {
         origin: [x - left, y - top],
     }
 }
+/// 64A3E0 → 68B490 → 68D840: only the growth blur uses, without the blur.
+pub(crate) fn grow(frame: &Prepared, reach: [u32; 2]) -> Edit {
+    let mut edit = blur(frame, reach);
+    edit.effects.clear();
+    edit
+}
 /// 68C460 -> 688440: a rectangle of one ARGB colour replaces what was there.
 pub(crate) fn fill(frame: &Prepared, rect: [i32; 4], argb: u32) -> Edit {
     let color = [(argb >> 16) as u8, (argb >> 8) as u8, argb as u8, (argb >> 24) as u8];

@@ -1,0 +1,26 @@
+[package]
+name = "crysirror-qlie"
+description = "QLIE original script interpreter and CrySirror semantic adapter"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+encoding_rs = "0.8"
+regex = {version="1",optional=true}
+crysirror-core.workspace = true
+crysirror-resource.workspace = true
+crysirror-tasks.workspace = true
+crysirror-runtime = {workspace=true,optional=true}
+crysirror-text = {workspace=true,optional=true}
+crysirror-image = {workspace=true,optional=true}
+crysirror-scene = {workspace=true,optional=true}
+crysirror-formats-arc = {workspace=true,optional=true}
+
+[features]
+runtime = ["dep:regex","dep:crysirror-image","dep:crysirror-text", "dep:crysirror-runtime", "dep:crysirror-scene", "dep:crysirror-formats-arc"]

@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[lib]
+name = "crysirror_player"
+
 [[bin]]
 name = "crysirror"
 path = "src/main.rs"
@@ -18,6 +21,7 @@ gamepad = ["dep:gilrs"]
 acoustics-obvhs = ["crysirror-engine/acoustics-obvhs"]
 
 [dependencies]
+crysirror-qlie = {workspace=true,features=["runtime"]}
 crysirror-reallive.workspace = true
 crysirror-avg32.workspace = true
 crysirror-krkr.workspace = true
@@ -25,14 +29,17 @@ crysirror-rfvp.workspace = true
 crysirror-rfvp-vm.workspace = true
 crysirror-siglus-vm.workspace = true
 crysirror-nscripter.workspace = true
-crysirror-bgi.workspace = true
+crysirror-bgi-integrated.workspace = true
+crysirror-softpal.workspace = true
 crysirror-circus = {workspace=true,features=["runtime"]}
 crysirror-catsystem2 = {workspace=true,features=["runtime"]}
 crysirror-majiro = {workspace=true,features=["runtime"]}
 crysirror-system-nnn = {workspace=true,features=["runtime"]}
 crysirror-system4 = {path="../crysirror-system4",features=["runtime"]}
 crysirror-core.workspace = true
+crysirror-tasks.workspace = true
 crysirror-resource.workspace = true
+crysirror-network.workspace = true
 crysirror-formats-arc.workspace = true
 crysirror-tjs2.workspace = true
 crysirror-runtime = { workspace = true, features = ["arc-formats", "blackcyc-formats"] }
@@ -67,3 +74,6 @@ windows-sys = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging", "W
 
 [dev-dependencies]
 tempfile = "3.12"
+
+[target.'cfg(target_os = "android")'.dependencies]
+winit = { workspace = true, features = ["android-native-activity"] }

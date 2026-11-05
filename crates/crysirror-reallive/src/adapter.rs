@@ -32,6 +32,7 @@ mod objects;
 mod cursor;
 mod tone;
 mod selection;
+mod window_buttons;
 use commands::colour as commands_colour;
 use std::{collections::BTreeMap, rc::Rc, sync::Arc};
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -161,6 +162,7 @@ pub struct RealLiveVm {
     object_layers: BTreeMap<u32, Value>,
     /// Engine layers of open text-window frames.
     waku_ids: Vec<u32>,
+    toolbar: window_buttons::Toolbar,
     /// Generated `#SEL` reveal rule images by style row.
     rules: BTreeMap<String, String>,
     /// Rotates SE voices over channels 32..48.
@@ -246,6 +248,7 @@ impl RealLiveVm {
             input_used: false,
             object_layers: BTreeMap::new(),
             waku_ids: Vec::new(),
+            toolbar: Default::default(),
             rules: BTreeMap::new(),
             se_serial: 0,
             approximated: BTreeMap::new(),
@@ -533,8 +536,11 @@ impl RealLiveVm {
                 }
             }
             Wait::PageFull { window, rest } => {
-                if pressed {
+                let automatic = self.button_pause_ready(m, h);
+                if !self.input_used && (pressed || automatic) {
                     self.input_used = true;
+                    self.toolbar.pause_started = None;
+                    self.toolbar.chars_since_pause = 0;
                     self.clear_window(h, *window)?;
                     let rest = rest.clone();
                     // The continuation may itself fill the page again.
@@ -598,8 +604,11 @@ impl RealLiveVm {
                 }
             }
             Wait::Pause { kind, window } => {
-                if pressed {
+                let automatic = self.button_pause_ready(m, h);
+                if !self.input_used && (pressed || automatic) {
                     self.input_used = true;
+                    self.toolbar.pause_started = None;
+                    self.toolbar.chars_since_pause = 0;
                     self.finish_pause(m, h, *kind, *window)?;
                     true
                 } else {
@@ -729,9 +738,15 @@ impl RealLiveVm {
                 if !self.poll_audio(h)? {
                     return Ok(VmYield::BudgetExhausted);
                 }
-                m.ack(Next::Advance)?;
+                // UI voice replay/queued SE can prepare audio while the
+                // native PC is already paused and has no syscall to ack.
+                if m.pending().is_some() { m.ack(Next::Advance)?; }
             }
             self.tick_extended(&mut m, h, input)?;
+            self.restore_button_wait(&m);
+            if self.tick_window_buttons(&mut m, h, input)? {
+                return Ok(VmYield::BudgetExhausted);
+            }
             if !self.tick_wait(&mut m, h, input)? {
                 return Ok(VmYield::BudgetExhausted);
             }
@@ -782,6 +797,7 @@ impl RealLiveVm {
             self.play_queued_se(&mut m, h)?;
             self.persist_global(&m, h)?;
             self.sync_objects(&mut m, h)?;
+            self.sync_window_buttons(&m, h)?;
             self.sync_cursor(&m, h)?;
             Ok(y)
         });

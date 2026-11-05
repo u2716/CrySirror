@@ -108,89 +108,60 @@ fn format_inner(machine: &Machine, address: u32, depth: u8) -> Result<Vec<u8>> {
     let mut i = 0;
     while i < input.len() {
         if input[i] != b'%' {
-            ensure!(
-                output.len() < 4096,
-                "CatSystem2 native format output budget"
-            );
-            output.push(input[i]);
-            i += 1;
-            continue;
+            ensure!(output.len() < 4096, "CatSystem2 native format output budget");
+            output.push(input[i]); i += 1; continue;
         }
         if input.get(i + 1) == Some(&b'%') {
-            ensure!(
-                output.len() < 4096,
-                "CatSystem2 native format output budget"
-            );
-            output.push(b'%');
-            i += 2;
-            continue;
+            ensure!(output.len() < 4096, "CatSystem2 native format output budget");
+            output.push(b'%'); i += 2; continue;
         }
         let begin = i;
-        i += 1;
-        let zero = input.get(i) == Some(&b'0');
-        let mut width = 0usize;
-        while input.get(i).is_some_and(u8::is_ascii_digit) {
-            width = width
-                .checked_mul(10)
-                .and_then(|n| n.checked_add((input[i] - b'0') as usize))
-                .context("native format width overflow")?;
-            ensure!(width <= 64, "native format width budget");
-            i += 1;
-        }
-        let kind = *input.get(i).context("incomplete native format")?;
-        i += 1;
-        ensure!(
-            input.get(i) == Some(&b'['),
-            "unsupported native format at byte {begin}"
-        );
-        i += 1;
-        let region = *input.get(i).context("native format region")?;
-        i += 1;
-        let mut offset = 0u32;
-        let digits = i;
-        while input.get(i).is_some_and(u8::is_ascii_digit) {
-            offset = offset
-                .checked_mul(10)
-                .and_then(|n| n.checked_add(u32::from(input[i] - b'0')))
-                .context("native format offset overflow")?;
-            i += 1;
-        }
-        ensure!(
-            i > digits && input.get(i) == Some(&b']'),
-            "native format address syntax"
-        );
-        i += 1;
+        // 8763B0 scans to '[' before interpreting a printf template. Missing
+        // brackets/unknown regions/malformed addresses copy only '%' literally,
+        // then resume at the following byte; ordinary command text is valid.
+        let placeholder = input[begin + 1..].iter().position(|byte| *byte == b'[').and_then(|relative| {
+            let open = begin + 1 + relative;
+            let region = *input.get(open + 1)?;
+            if !matches!(region, b'G' | b'L' | b'H') { return None; }
+            let mut end = open + 2;
+            let mut offset = 0u32;
+            while let Some(byte @ b'0'..=b'9') = input.get(end) {
+                offset = offset.wrapping_mul(10).wrapping_add(u32::from(byte - b'0'));
+                end += 1;
+            }
+            // Native accepts an omitted numeric offset as zero.
+            (input.get(end) == Some(&b']')).then_some((open, end + 1, region, offset))
+        });
+        let Some((open, end, region, offset)) = placeholder else {
+            ensure!(output.len() < 4096, "CatSystem2 native format output budget");
+            output.push(b'%'); i += 1; continue;
+        };
+        ensure!(open - begin < 64, "CatSystem2 native printf template budget");
         let at = match region {
             b'G' => offset,
-            b'L' => machine
-                .frame_base
-                .checked_add(offset)
-                .context("native local format overflow")?,
+            b'L' => machine.frame_base.checked_add(offset).context("native local format overflow")?,
             b'H' => offset | 0x80000000,
-            _ => anyhow::bail!("unsupported native format region"),
+            _ => unreachable!(),
         };
-        let value = match kind {
-            b'd' | b'i' => format!("{}", machine.read_word(at)? as i32).into_bytes(),
-            b'u' => format!("{}", machine.read_word(at)?).into_bytes(),
-            b'x' => format!("{:x}", machine.read_word(at)?).into_bytes(),
-            b'X' => format!("{:X}", machine.read_word(at)?).into_bytes(),
-            b's' => format_inner(machine, at, depth + 1)?,
-            _ => anyhow::bail!("unsupported native format conversion {}", kind as char),
-        };
-        let padding = width.saturating_sub(value.len());
-        if zero && value.first() == Some(&b'-') {
-            output.push(b'-');
-            output.extend(std::iter::repeat_n(b'0', padding));
-            output.extend_from_slice(&value[1..]);
+        let template = &input[begin..open];
+        let string;
+        let argument = if template.iter().any(|byte| matches!(byte, b's' | b'S')) {
+            string = format_inner(machine, at, depth + 1)?;
+            crysirror_text::printf32::Printf32Argument::Bytes(&string)
         } else {
-            output.extend(std::iter::repeat_n(if zero { b'0' } else { b' ' }, padding));
-            output.extend(value);
-        }
-        ensure!(
-            output.len() <= 4096,
-            "CatSystem2 native format output budget"
-        );
+            // The native reads a float and promotes it for f/F. Shared C32
+            // formatting deliberately rejects unsupported floating varargs;
+            // it must not reinterpret the word as an integer conversion.
+            ensure!(!template.iter().any(|byte| matches!(byte, b'f' | b'F')), "CatSystem2 floating native printf is unsupported");
+            crysirror_text::printf32::Printf32Argument::Word(machine.read_word(at)?)
+        };
+        let formatted = crysirror_text::printf32::format_printf32_bytes(template, &[argument], 4096 - output.len())
+            .with_context(|| format!("CatSystem2 native printf at byte {begin}, template {:?}", String::from_utf8_lossy(template)))?;
+        output.extend(formatted.bytes);
+        i = end;
     }
+    // All users consume the formatted result as a C string, including %c=0.
+    if let Some(end) = output.iter().position(|byte| *byte == 0) { output.truncate(end); }
     Ok(output)
 }
 #[cfg(test)]
@@ -274,12 +245,38 @@ mod tests {
 #[derive(Clone,Debug,Default)]
 pub(crate) struct StringVariables {
     values: std::collections::BTreeMap<u32,Vec<u8>>,
+    /// VM+180 exists (73FE70 ran: first assignment or a 253 load).
+    created:bool,
     pub dirty:bool,
     /// 7136F0's `%LANG%` and `%LANG_M%` substitution.
     pub language_prefix:Vec<u8>,
 }
 impl StringVariables {
+    /// 73FE70: the bank exists even while empty.
+    pub fn mark_created(&mut self) {self.created=true;}
+    /// 740070: [count][id, NUL-terminated text]... in id order, plus the 8 bytes
+    /// 6A4510 allocates beyond the written size. None before 73FE70 built the bank.
+    pub fn serialize(&self)->Option<Vec<u8>> {
+        if !self.created{return None;}
+        let mut out=(self.values.len() as u32).to_le_bytes().to_vec();
+        for (id,text) in &self.values{out.extend(id.to_le_bytes());out.extend(text);out.push(0);}
+        out.extend([0;8]);
+        Some(out)
+    }
+    /// 740290: the bank is emptied, then every record is assigned again.
+    pub fn deserialize(&mut self,bytes:&[u8])->Result<()> {
+        let word=|at:usize|->Result<u32>{Ok(u32::from_le_bytes(bytes.get(at..at+4).context("CatSystem2 string bank record")?.try_into().unwrap()))};
+        let count=word(0)?;let mut at=4;
+        let mut values=std::collections::BTreeMap::new();
+        for _ in 0..count{
+            let id=word(at)?;at+=4;
+            let end=bytes[at..].iter().position(|b|*b==0).context("CatSystem2 string bank text")?;
+            values.insert(id,bytes[at..at+end].to_vec());at+=end+1;
+        }
+        self.values=values;self.created=true;self.dirty=true;Ok(())
+    }
     pub fn assign(&mut self,id:u32,bytes:Vec<u8>)->Result<()> {
+        self.created=true;
         ensure!(bytes.len()<=65534&&!bytes.contains(&0),"CatSystem2 string variable extent");
         ensure!(self.values.contains_key(&id)||self.values.len()<65536,"CatSystem2 string variable count");
         let resident=self.values.values().map(Vec::len).sum::<usize>()-self.values.get(&id).map_or(0,Vec::len)+bytes.len();

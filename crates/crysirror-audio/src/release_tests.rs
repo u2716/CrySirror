@@ -92,6 +92,24 @@ fn render(a: &mut ChannelAudio, n: usize) -> Vec<StereoFrame> {
     pcm
 }
 #[test]
+fn in_place_release_keeps_loop_cursor_and_channel_ownership() {
+    let mut a=ChannelAudio::default();
+    play(&mut a,3,1.,None,Some(20),true);
+    render(&mut a,7);
+    let handle=a.begin_audio_release(7,Spec{source_channel:3,tail_channel:3,pan:None,playback_rate:None,..spec()}).unwrap();
+    assert!(a.is_playing(7,3));
+    assert_eq!(a.playback_info(7,3).unwrap().unwrap().position_frames,7);
+    assert!(a.playback_info(7,3).unwrap().unwrap().looping);
+    assert!(a.audio_release_info(8,handle).is_err());
+    let pcm=render(&mut a,40);
+    assert!((pcm[13][0]-0.003).abs()<1e-6);
+    assert!(a.playback_info(7,3).unwrap().unwrap().position_frames<20);
+    assert_eq!(a.audio_release_info(7,handle).unwrap().completed_updates,0);
+    a.advance_audio_release(7,handle,30).unwrap();
+    assert_eq!(a.audio_release_info(7,handle).unwrap().phase,Phase::Complete);
+    assert!(!a.is_playing(7,3));
+}
+#[test]
 fn transfer_preserves_consumed_cursor_despite_read_ahead_and_never_reopens() {
     let mut a = ChannelAudio::default();
     let seeks = play(&mut a, 0, 1., None, None, false);

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Passive client-scoped tooltip resources and delayed engine presentation.
 //! Text extents come from shared TextMeasurement, never character estimates.
-use crate::layer::{rectangle, Paint, Primitive};
-use anyhow::{ensure, Context, Result};
+use crate::layer::{Paint, Primitive, rectangle};
+use anyhow::{Context, Result, ensure};
 use crysirror_core::service::{TextMeasurement, UNWRAPPED_TEXT_LAYOUT};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -103,9 +103,15 @@ pub struct TooltipSystem {
     active: BTreeMap<u32, Active>,
 }
 impl TooltipSystem {
-    pub fn visit_font_dependencies(&self,visitor:&mut dyn FnMut(u32,&str)) {
-        for (owner,tips) in &self.clients {for tip in tips.values(){visitor(*owner,&tip.spec.font);}}
-        for (owner,spec,_) in &self.prepared {visitor(*owner,&spec.font);}
+    pub fn visit_font_dependencies(&self, visitor: &mut dyn FnMut(u32, &str)) {
+        for (owner, tips) in &self.clients {
+            for tip in tips.values() {
+                visitor(*owner, &tip.spec.font);
+            }
+        }
+        for (owner, spec, _) in &self.prepared {
+            visitor(*owner, &spec.font);
+        }
     }
     pub fn is_empty(&self) -> bool {
         self.clients.values().all(BTreeMap::is_empty)
@@ -221,7 +227,7 @@ impl TooltipSystem {
     pub fn reset_input(&mut self) {
         self.active.clear();
     }
-    pub fn reset_client_input_after_restore(&mut self,owner:u32) {
+    pub fn reset_client_input_after_restore(&mut self, owner: u32) {
         self.active.remove(&owner);
     }
     pub fn advance(&mut self, delta_ms: u64) {
@@ -352,14 +358,15 @@ mod tests {
     fn exact_measurement_delay_expiry_and_canvas_clamping_are_engine_owned() {
         let mut ui = UiSystem::default();
         let tip = spec();
-        assert!(ui
-            .apply_batch(
+        assert!(
+            ui.apply_batch(
                 ClientId(1),
                 &[UiCommand::PutTooltip {
                     tooltip: tip.clone()
                 }]
             )
-            .is_err());
+            .is_err()
+        );
         ui.tooltips.prepare(1, &tip, &Metrics).unwrap();
         ui.apply_batch(
             ClientId(1),
@@ -405,8 +412,8 @@ mod tests {
         let mut ui = UiSystem::default();
         let tip = spec();
         ui.tooltips.prepare(1, &tip, &Metrics).unwrap();
-        assert!(ui
-            .apply_batch(
+        assert!(
+            ui.apply_batch(
                 ClientId(1),
                 &[
                     UiCommand::PutTooltip {
@@ -418,7 +425,8 @@ mod tests {
                     }
                 ]
             )
-            .is_err());
+            .is_err()
+        );
         assert!(ui.tooltips.get(1, 7).is_none());
         ui.apply_batch(
             ClientId(1),

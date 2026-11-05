@@ -2,7 +2,7 @@
 //! (single or animated). A presenting host maps the selected cursor onto its
 //! window system; definitions are client-scoped and shared by `Arc` so a UI
 //! batch clone does not copy pixels.
-use anyhow::{ensure, Result};
+use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, sync::Arc};
 

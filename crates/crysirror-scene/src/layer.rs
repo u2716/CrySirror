@@ -3,27 +3,28 @@
 //! siglus_rs layer.rs storage/ordering and render_math.rs projection semantics.
 mod crossfade;
 mod depth_order;
-pub use depth_order::{compare_primitives,DepthOrderKey,DepthOrderStep};
 use depth_order::DepthOrders;
-mod crossfade_effect;
-mod snapshot_opacity;
-mod viewport_clip;
+pub use depth_order::{DepthOrderKey, DepthOrderStep, compare_primitives};
 pub mod crop;
+mod crossfade_effect;
+mod external_motion;
 mod image_dependencies;
 pub mod motion;
-mod external_motion;
-pub use external_motion::{ExternalMotionStamp,ExternalMotionStatus,ExternalMotionPose};
-pub use motion::{MotionProperty,MotionTrackSpec,MotionTrackStatus,MotionStatus};
-use motion::MotionTracks;
+pub mod queued;
+mod snapshot_opacity;
+mod viewport_clip;
 use crate::projection;
 use anyhow::{Context, Result, bail, ensure};
 pub use crossfade::{CompositeFrame, RuleWipe, SubtreeCrossfade};
-pub use crossfade_effect::{SubtreeTransitionEffect, MAX_TRANSITION_BLUR_RADIUS};
+pub use crossfade_effect::{MAX_TRANSITION_BLUR_RADIUS, SubtreeTransitionEffect};
 use crysirror_core::{
     path::{Mount, VfsPath},
     state::ClientId,
 };
+pub use external_motion::{ExternalMotionPose, ExternalMotionStamp, ExternalMotionStatus};
 use glam::{Mat3, Vec2, Vec3};
+use motion::MotionTracks;
+pub use motion::{MotionProperty, MotionStatus, MotionTrackSpec, MotionTrackStatus};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -47,14 +48,28 @@ fn yes() -> bool {
 fn white() -> [u8; 4] {
     [255; 4]
 }
+fn unit_rgb() -> [f32; 3] { [1.; 3] }
+/// Additive pose channels in logical pixels, scale units and radians. They
+/// compose before pivot/anchor construction, including collapsed base scales.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PoseOffset {
+    pub translation: [f32;3],
+    pub scale: [f32;3],
+    pub rotation: [f32;3],
+}
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct SpriteTransform {
+    /// Procedural deltas applied to the current base pose before matrix
+    /// construction. Base motion tracks retain independent clocks/endpoints.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pose_offset: Option<PoseOffset>,
     ///Optional column-major affine4x4, applied after local scale/YPR rotation
     ///and before the rectangle/pivot anchor. This preserves shear and arbitrary
     ///producer matrices without guessing Euler angles. No perspective row.
-    #[serde(default,skip_serializing_if="Option::is_none")]
-    pub local_matrix:Option<[f32;16]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_matrix: Option<[f32; 16]>,
     pub z: f32,
     pub scale_x: f32,
     pub scale_y: f32,
@@ -79,7 +94,8 @@ pub struct SpriteTransform {
 impl Default for SpriteTransform {
     fn default() -> Self {
         Self {
-            local_matrix:None,
+            pose_offset: None,
+            local_matrix: None,
             z: 0.,
             scale_x: one(),
             scale_y: one(),
@@ -104,18 +120,54 @@ impl Default for SpriteTransform {
     }
 }
 impl SpriteTransform {
+    pub fn resolved(&self) -> (Self, [f32; 2]) {
+        let mut value=self.clone();
+        let Some(offset)=value.pose_offset.take() else { return (value,[0.;2]); };
+        value.z+=offset.translation[2];
+        value.scale_x+=offset.scale[0];
+        value.scale_y+=offset.scale[1];
+        value.scale_z+=offset.scale[2];
+        value.rotate_x+=offset.rotation[0];
+        value.rotate_y+=offset.rotation[1];
+        value.rotate+=offset.rotation[2];
+        (value,[offset.translation[0],offset.translation[1]])
+    }
     ///Whether the optional matrix can participate in retained 2D ancestry and
     ///frozen 2D composition. Full3D parents still require the World hierarchy.
-    pub fn matrix_is_2d(&self)->bool {
-        self.local_matrix.is_none_or(|m|m[2]==0.&&m[6]==0.&&m[8]==0.&&m[9]==0.&&m[14]==0.)
+    pub fn matrix_is_2d(&self) -> bool {
+        self.pose_offset.as_ref().is_none_or(|o|o.translation[2]==0. && o.rotation[0]==0. && o.rotation[1]==0. && o.scale[2]==0.) && self.local_matrix
+            .is_none_or(|m| m[2] == 0. && m[6] == 0. && m[8] == 0. && m[9] == 0. && m[14] == 0.)
+    }
+    pub fn collapsed(&self)->bool {
+        let offset=self.pose_offset.as_ref().map_or([0.;3],|o|o.scale);
+        self.scale_x+offset[0]==0.||self.scale_y+offset[1]==0.
     }
     pub fn validate(&self) -> Result<()> {
-        if let Some(matrix)=self.local_matrix {
-            ensure!(matrix.iter().all(|v|v.is_finite()&&v.abs()<=1_000_000.),"invalid local matrix values");
-            ensure!(matrix[3]==0.&&matrix[7]==0.&&matrix[11]==0.&&matrix[15]==1.,"local matrix must be affine");
-            let determinant=glam::Mat4::from_cols_array(&matrix).determinant();
-            ensure!(determinant.is_finite()&&determinant!=0.,"singular local matrix");
-            ensure!(!self.billboard,"billboard with local matrix requires an explicit World transform");
+        if let Some(offset)=&self.pose_offset {
+            ensure!(offset.translation.iter().chain(&offset.scale).chain(&offset.rotation)
+                .all(|v|v.is_finite() && v.abs()<=1_000_000.),"invalid procedural pose offset");
+            self.resolved().0.validate()?;
+        }
+        if let Some(matrix) = self.local_matrix {
+            ensure!(
+                matrix
+                    .iter()
+                    .all(|v| v.is_finite() && v.abs() <= 1_000_000.),
+                "invalid local matrix values"
+            );
+            ensure!(
+                matrix[3] == 0. && matrix[7] == 0. && matrix[11] == 0. && matrix[15] == 1.,
+                "local matrix must be affine"
+            );
+            let determinant = glam::Mat4::from_cols_array(&matrix).determinant();
+            ensure!(
+                determinant.is_finite() && determinant != 0.,
+                "singular local matrix"
+            );
+            ensure!(
+                !self.billboard,
+                "billboard with local matrix requires an explicit World transform"
+            );
         }
         let values = [
             self.z,
@@ -141,10 +193,10 @@ impl SpriteTransform {
                 .all(|v| v.is_finite() && v.abs() <= 1_000_000.),
             "invalid sprite transform"
         );
-        ensure!(
-            self.scale_x.abs() > 1e-6 && self.scale_y.abs() > 1e-6 && self.scale_z.abs() > 1e-6,
-            "singular sprite transform"
-        );
+        // Exact zero scale is a retained collapsed pose. Extraction omits its
+        // surface/subtree until a later sample expands it; never replace zero
+        // with epsilon or feed a singular quad into coverage/hit inversion.
+
         if self.camera_enabled {
             let d = Vec3::from_array(self.camera_target) - Vec3::from_array(self.camera_eye);
             ensure!(
@@ -183,6 +235,18 @@ pub enum Blend {
     /// Replace the colour and keep the destination alpha (KiriKiri copyRect
     /// on dfOpaque with holdAlpha, TVP_BB_COPY_MAIN): straight S·Da.
     AtopCopy,
+    /// Fixed-function (ONE, INVSRCALPHA) on straight texels: S + D·(1 - Sa),
+    /// every channel including alpha.
+    SourceOver,
+    /// (ZERO, SRCCOLOR): D·S on every channel, alpha ignored as a weight.
+    Modulate,
+    /// (INVDESTCOLOR, ZERO): S·(1 - D) on every channel.
+    InverseDestination,
+    /// (DESTCOLOR, ONE): S·D + D on every channel.
+    ModulateAdd,
+    /// Keep the destination only under the source alpha: D·Sa, including
+    /// alpha. Source RGB is ignored; use inside an isolated Canvas for masks.
+    DestinationIn,
 }
 /// Per-layer 2D filter stack with the stage order and parameter meaning of
 /// the Siglus/tona3 sprite effect (ADR 0021). Color math runs on 8-bit
@@ -192,6 +256,26 @@ pub enum Blend {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LayerFilter {
+    /// Gamma-space RGB modulation before the effect stack, preserving alpha.
+    /// Works for retained snapshots and other paints without image tint slots.
+    #[serde(default = "unit_rgb")]
+    pub multiply: [f32; 3],
+    /// Optional normalized RGB luminance coefficients. None preserves the
+    /// established filter profile; adapters may declare a native color model.
+    #[serde(default)]
+    pub luma_weights: Option<[f32; 3]>,
+    /// Multiply filtered RGB by sampled alpha raised to this power (0..4),
+    /// independently of the blend mode and without replacing stored alpha.
+    #[serde(default)]
+    pub rgb_alpha_power: f32,
+    /// Sampling effects may preserve source alpha without applying vertex tint
+    /// alpha. Parent transform/clip ownership remains unchanged.
+    #[serde(default)]
+    pub ignore_tint_alpha: bool,
+    /// Interpolate gamma-encoded RGB texels before color effects. This matches
+    /// raster APIs whose texture sampler does not decode sRGB before filtering.
+    #[serde(default)]
+    pub encoded_sampling: bool,
     /// Mix toward grayscale (0..1).
     #[serde(default)]
     pub mono: f32,
@@ -226,6 +310,14 @@ pub struct LayerFilter {
     #[serde(default)]
     pub distortion: Option<Distortion>,
 }
+impl Default for LayerFilter {
+    fn default() -> Self {
+        Self { multiply: [1.; 3], luma_weights: None, rgb_alpha_power: 0.,
+            ignore_tint_alpha: false, encoded_sampling: false, mono: 0.,
+            invert: 0., bright: 0., dark: 0., color_rate: 0., color: [0.; 3],
+            add: [0.; 3], tone_curve: None, mask: None, alpha_test: false, distortion: None }
+    }
+}
 /// Tone-curve lookup: each channel indexes column `value` of `row` in a
 /// LUT image (e.g. 256×N), after mixing `saturation` toward mono.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -248,11 +340,38 @@ pub struct LayerMask {
     /// Replace alpha with the final gray level (Siglus mask mode 1).
     #[serde(default)]
     pub gray_alpha: bool,
+    /// Rgba multiplies all source channels. Selecting one encoded mask byte
+    /// replaces source alpha with clamp(trunc(byte*scale+offset),0,255)/255,
+    /// applied per texel before linear interpolation.
+    #[serde(default)]
+    pub channel:MaskChannel,
+    #[serde(default)]
+    pub offset:f32,
+    /// Signed multiplier of the selected encoded byte, before `offset` and
+    /// saturation. Negative values implement inverted rule-image wipes.
+    #[serde(default = "one_f")]
+    pub scale:f32,
+    /// Multiply the selected mask byte by each original source alpha byte.
+    #[serde(default)]
+    pub preserve_source_alpha:bool,
+    /// Address mask pixels in source-image coordinates; outside pixels keep
+    /// their original alpha instead of stretching or clamping the mask.
+    #[serde(default)]
+    pub source_space:bool,
 }
+#[derive(Clone,Copy,Debug,Default,PartialEq,Eq,Serialize,Deserialize)]
+#[serde(rename_all="snake_case")]
+pub enum MaskChannel {#[default] Rgba,Red,Green,Blue,Alpha}
 /// Source-sampling effects (Siglus wipe modes 1–6), in texture UV space.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Distortion {
+    /// Nine clamped taps: one center and eight surrounding samples at ±offset.
+    /// Weights are explicit, without implicit normalization or alpha replacement.
+    NineTap { offset: [f32; 2], center_weight: f32, neighbor_weight: f32 },
+    /// Quantize UV independently per axis: floor(uv*steps+phase)/steps.
+    /// Source alpha is preserved, including transparent atlas padding.
+    Quantized { steps: [f32; 2], phase: [f32; 2] },
     /// Cells of `cut` UV width; height = cut × `aspect`.
     Mosaic {
         cut: f32,
@@ -274,6 +393,14 @@ pub enum Distortion {
         power: f32,
         coeff: f32,
     },
+    /// Rows (or columns when `vertical`) shifted by amplitude·sin(2π(cycles·t + phase)), all in UV.
+    Wave {
+        #[serde(default)]
+        vertical: bool,
+        amplitude: f32,
+        cycles: f32,
+        phase: f32,
+    },
     /// Multiply alpha by `fade` where luminance ≤ `threshold` (or ≥ when `invert`).
     ThresholdFade {
         fade: f32,
@@ -288,6 +415,11 @@ fn one_f() -> f32 {
 impl LayerFilter {
     pub fn validate(&self) -> Result<()> {
         let unit = |v: f32| v.is_finite() && (0.0..=1.).contains(&v);
+        ensure!(self.multiply.into_iter().all(unit), "invalid filter RGB multiplier");
+        ensure!(self.rgb_alpha_power.is_finite()&&(0.0..=4.).contains(&self.rgb_alpha_power),"invalid filter RGB alpha exponent");
+        if let Some(weights)=self.luma_weights {
+            ensure!(weights.into_iter().all(unit)&&(weights.iter().sum::<f32>()-1.).abs()<0.00001,"invalid filter luminance weights");
+        }
         ensure!(
             [
                 self.mono,
@@ -311,13 +443,25 @@ impl LayerFilter {
         }
         if let Some(m) = &self.mask {
             VfsPath::new(Mount::Asset, &m.asset).map_err(|e| anyhow::anyhow!("{e}"))?;
+            ensure!(m.offset.is_finite()&&(-65535.0..=65535.0).contains(&m.offset),"invalid mask byte offset");
+            ensure!(m.scale.is_finite()&&(-256.0..=256.0).contains(&m.scale),"invalid mask byte scale");
+            ensure!(m.channel!=MaskChannel::Rgba||m.scale==1.,"RGBA multiplication has no scalar alpha scale");
+            ensure!(m.channel!=MaskChannel::Rgba||m.offset==0.,"RGBA multiplication has no scalar alpha offset");
+            ensure!(!m.gray_alpha||m.channel==MaskChannel::Rgba,"mask alpha channel conflicts with gray alpha");
         }
         if let Some(d) = self.distortion {
             let f = |v: f32, lo: f32, hi: f32| v.is_finite() && (lo..=hi).contains(&v);
             ensure!(
                 match d {
+                    Distortion::NineTap { offset, center_weight, neighbor_weight } =>
+                        offset.into_iter().all(|value|f(value,0.,1.))&&unit(center_weight)&&unit(neighbor_weight)
+                            && center_weight+8.*neighbor_weight<=4.,
+                    Distortion::Quantized { steps, phase } =>
+                        steps.into_iter().all(|value|f(value,1.,100_000.))&&phase.into_iter().all(unit),
                     Distortion::Mosaic { cut, aspect } =>
                         f(cut, 1e-5, 1.) && f(aspect, 1e-3, 1000.),
+                    Distortion::Wave { amplitude, cycles, phase, .. } =>
+                        f(amplitude, -1., 1.) && f(cycles, -4096., 4096.) && phase.is_finite(),
                     Distortion::Raster {
                         fractions,
                         waves,
@@ -354,10 +498,14 @@ impl LayerFilter {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PositionedGlyph {
+    /// Optional client-scoped font alias for this scalar. None uses the run's
+    /// font; explicit aliases retain the same shared reveal clock and layout.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font: Option<String>,
     /// Optional geometry crop in the containing layer's local pixels. This
     /// clips each glyph after coverage/outline generation, without reshaping.
-    #[serde(default,skip_serializing_if="Option::is_none")]
-    pub crop:Option<[f32;4]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crop: Option<[f32; 4]>,
     pub character: char,
     pub baseline: [f32; 2],
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -366,7 +514,26 @@ pub struct PositionedGlyph {
     pub color: Option<[u8; 4]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bold: Option<bool>,
+    /// Horizontal outline raster scale, preserving the supplied baseline and
+    /// logical advance. This changes coverage, not the layer transform.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub horizontal_scale:Option<f32>,
+    /// Requested average character width in pixels, using the authorized
+    /// outline face's OS/2 average width. Multiplied by horizontal_scale.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_width:Option<f32>,
+    /// Center the rounded glyph advance in this integer logical cell, using
+    /// truncation toward zero for the half-difference. Raster baseline y stays.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cell_width:Option<u16>,
 }
+
+#[derive(Clone,Copy,Debug,PartialEq,Eq,Serialize,Deserialize)]
+#[serde(rename_all="snake_case")]
+pub enum GlyphOutlineKernel {Disk,Square}
+#[derive(Clone,Copy,Debug,PartialEq,Eq,Serialize,Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GlyphOutline {pub radius:u8,pub color:[u8;4],pub kernel:GlyphOutlineKernel}
 
 /// Unit of an explicitly positioned run. Each item contains one Unicode
 /// scalar; this deliberately does not reinterpret native scalar timing as
@@ -390,7 +557,7 @@ pub struct GlyphReveal {
     /// Exact rational scalar clock. When present this overrides interval_ms;
     /// the engine retains fractional milliseconds through elapsed_ms.
     #[serde(default)]
-    pub rate_per_second:Option<u32>,
+    pub rate_per_second: Option<u32>,
     /// Prefix already visible when new text is appended to a page.
     #[serde(default)]
     pub initial_visible: usize,
@@ -402,20 +569,25 @@ pub struct GlyphReveal {
     pub paused: bool,
 }
 impl Serialize for GlyphReveal {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok,S::Error> {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
         // Sparse JSON remains compatible with existing authoring APIs. A
         // positional binary format must always encode every field, including
         // the None tag, or its deserializer consumes the following field.
         let rate = !serializer.is_human_readable() || self.rate_per_second.is_some();
-        let mut out=serializer.serialize_struct("GlyphReveal",if rate {7}else{6})?;
-        out.serialize_field("unit",&self.unit)?;
-        out.serialize_field("interval_ms",&self.interval_ms)?;
-        if rate {out.serialize_field("rate_per_second",&self.rate_per_second)?;}
-        out.serialize_field("initial_visible",&self.initial_visible)?;
-        out.serialize_field("elapsed_ms",&self.elapsed_ms)?;
-        out.serialize_field("forced_complete",&self.forced_complete)?;
-        out.serialize_field("paused",&self.paused)?;
+        let mut out = serializer.serialize_struct("GlyphReveal", if rate { 7 } else { 6 })?;
+        out.serialize_field("unit", &self.unit)?;
+        out.serialize_field("interval_ms", &self.interval_ms)?;
+        if rate {
+            out.serialize_field("rate_per_second", &self.rate_per_second)?;
+        }
+        out.serialize_field("initial_visible", &self.initial_visible)?;
+        out.serialize_field("elapsed_ms", &self.elapsed_ms)?;
+        out.serialize_field("forced_complete", &self.forced_complete)?;
+        out.serialize_field("paused", &self.paused)?;
         out.end()
     }
 }
@@ -432,7 +604,11 @@ impl GlyphReveal {
             self.initial_visible <= total && self.interval_ms <= 86_400_000,
             "invalid glyph reveal prefix/interval"
         );
-        ensure!(self.rate_per_second.is_none_or(|rate|(1..=1_000_000).contains(&rate)),"invalid glyph reveal rate");
+        ensure!(
+            self.rate_per_second
+                .is_none_or(|rate| (1..=1_000_000).contains(&rate)),
+            "invalid glyph reveal rate"
+        );
         Ok(())
     }
     pub fn visible_count(&self, total: usize) -> usize {
@@ -440,18 +616,21 @@ impl GlyphReveal {
             return total;
         }
         self.initial_visible
-            .saturating_add(
-                match self.rate_per_second{
-                    Some(rate)=>usize::try_from(u128::from(self.elapsed_ms)*u128::from(rate)/1000).unwrap_or(usize::MAX),
-                    None=>usize::try_from(self.elapsed_ms / self.interval_ms).unwrap_or(usize::MAX),
-                },
-            )
+            .saturating_add(match self.rate_per_second {
+                Some(rate) => {
+                    usize::try_from(u128::from(self.elapsed_ms) * u128::from(rate) / 1000)
+                        .unwrap_or(usize::MAX)
+                }
+                None => usize::try_from(self.elapsed_ms / self.interval_ms).unwrap_or(usize::MAX),
+            })
             .min(total)
     }
     /// Fractional scalar numerator retained by an exact rate clock, in 1/1000
     /// units. No rounded integer interval or per-frame truncation is used.
-    pub fn rate_remainder(&self)->u16{
-        self.rate_per_second.map_or(0,|rate|((u128::from(self.elapsed_ms)*u128::from(rate))%1000) as u16)
+    pub fn rate_remainder(&self) -> u16 {
+        self.rate_per_second.map_or(0, |rate| {
+            ((u128::from(self.elapsed_ms) * u128::from(rate)) % 1000) as u16
+        })
     }
     pub fn status(&self, total: usize) -> GlyphRevealStatus {
         let visible = self.visible_count(total);
@@ -463,11 +642,13 @@ impl GlyphReveal {
     }
     fn advance(&mut self, total: usize, delta_ms: u64) {
         if !self.paused && !self.status(total).complete {
-            let remaining=total.saturating_sub(self.initial_visible) as u128;
-            let duration=match self.rate_per_second{
-                Some(0)=>0,
-                Some(rate)=>u64::try_from((remaining*1000).div_ceil(u128::from(rate))).unwrap_or(u64::MAX),
-                None=>(remaining as u64).saturating_mul(self.interval_ms),
+            let remaining = total.saturating_sub(self.initial_visible) as u128;
+            let duration = match self.rate_per_second {
+                Some(0) => 0,
+                Some(rate) => {
+                    u64::try_from((remaining * 1000).div_ceil(u128::from(rate))).unwrap_or(u64::MAX)
+                }
+                None => (remaining as u64).saturating_mul(self.interval_ms),
             };
             self.elapsed_ms = self.elapsed_ms.saturating_add(delta_ms).min(duration);
         }
@@ -514,6 +695,9 @@ pub enum Paint {
         /// spread by `radius` and scaled by `level`/256 (KiriKiri drawText).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         blur: Option<GlyphBlur>,
+        /// Maximum-coverage border behind each independently retained face.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        outline:Option<GlyphOutline>,
     },
     /// Frozen, source-local static scene, rasterized once at `size` before the
     /// outer Layer's transform, opacity, UV crop and filter are applied.
@@ -522,6 +706,15 @@ pub enum Paint {
         size: [u32; 2],
         /// Shared, immutable frozen tree (cheap to clone with the system).
         layers: Arc<Vec<LayerSpec>>,
+    },
+    /// What has been drawn beneath this layer in the current frame, read back into a quad.
+    /// With a filter's distortion this is a screen effect over a depth band: layers ordered
+    /// above stay untouched. Only the top-level frame has such a backdrop; inside isolated
+    /// targets the layer draws nothing. With `history` it shows what the previous frame had
+    /// at this depth, then captures again: drawn with an opacity below 255 that is a feedback trail.
+    Backdrop {
+        #[serde(default)]
+        history: bool,
     },
     /// Immutable, validated engine mesh resource. Capturing an evaluated
     /// puppet freezes its completed geometry; textures remain client-scoped
@@ -545,13 +738,18 @@ fn layout() -> String {
 impl Paint {
     pub fn validate(&self) -> Result<()> {
         match self {
+            Self::Backdrop { .. } => {}
             Self::Image { asset, .. } => {
                 VfsPath::new(Mount::Asset, asset).map_err(|e| anyhow::anyhow!("{e}"))?;
             }
             Self::Mesh { frame, .. } => {
                 frame.validate()?;
                 for texture in &frame.textures {
-                    ensure!(crysirror_core::service::frame_history_layer(texture).is_none() && !texture.starts_with("__surface/"), "immutable mesh cannot retain live surface/media/frame history");
+                    ensure!(
+                        crysirror_core::service::frame_history_layer(texture).is_none()
+                            && !texture.starts_with("__surface/"),
+                        "immutable mesh cannot retain live surface/media/frame history"
+                    );
                     VfsPath::new(Mount::Asset, texture).map_err(|e| anyhow::anyhow!("{e}"))?;
                 }
             }
@@ -585,6 +783,7 @@ impl Paint {
                 glyphs,
                 reveal,
                 blur,
+                outline,
                 ..
             } => {
                 ensure!(
@@ -595,12 +794,21 @@ impl Paint {
                     blur.is_none_or(|b| b.radius <= 64),
                     "glyph blur radius must be 0..=64"
                 );
+                ensure!(outline.is_none_or(|o|o.radius<=16),"glyph outline radius must be 0..=16");
                 ensure!(
-                    blur.is_none_or(|b|match b.kernel{
-                        GlyphCoverageKernel::WeightedBlur=>true,
-                        GlyphCoverageKernel::BoxSumRect{..}=>b.radius==0&&b.level==256,
-                        GlyphCoverageKernel::ObliqueBoxSum{numerator,denominator,..}=>b.radius==0&&b.level==256&&numerator<=16&&(1..=16).contains(&denominator),
-                        _=>b.radius<=16&&b.level==256,
+                    blur.is_none_or(|b| match b.kernel {
+                        GlyphCoverageKernel::WeightedBlur => true,
+                        GlyphCoverageKernel::BoxSumRect { .. } => b.radius == 0 && b.level == 256,
+                        GlyphCoverageKernel::ObliqueBoxSum {
+                            numerator,
+                            denominator,
+                            ..
+                        } =>
+                            b.radius == 0
+                                && b.level == 256
+                                && numerator <= 16
+                                && (1..=16).contains(&denominator),
+                        _ => b.radius <= 16 && b.level == 256,
                     }),
                     "glyph outline/face requires radius 0..=16 and level 256"
                 );
@@ -617,6 +825,10 @@ impl Paint {
                                 .iter()
                                 .all(|v| v.is_finite() && v.abs() <= 1_000_000.)
                             && glyph.size.is_none_or(valid_size)
+                            && glyph.font.as_ref().is_none_or(|font| !font.is_empty() && font.len() <= 256 && !font.chars().any(char::is_control))
+                            && glyph.horizontal_scale.is_none_or(|s|s.is_finite()&&(0.03125..=32.).contains(&s))
+                            && glyph.font_width.is_none_or(|w|w.is_finite()&&(0.01..=4096.).contains(&w))
+                            && glyph.cell_width.is_none_or(|w|(1..=4096).contains(&w))
                             && glyph.crop.is_none_or(crop::valid_rect),
                         "invalid positioned glyph"
                     );
@@ -695,12 +907,17 @@ fn validate_snapshot(size: [u32; 2], layers: &[LayerSpec]) -> Result<()> {
             matches!(
                 layer.blend,
                 Blend::Normal
+                    | Blend::Add
+                    | Blend::Subtract
+                    | Blend::Multiply
+                    | Blend::Screen
                     | Blend::Atop
                     | Blend::AtopMultiply
                     | Blend::AtopScreen
                     | Blend::AtopCopy
+                    | Blend::DestinationIn
             ),
-            "snapshot requires normal or atop layer blend"
+            "snapshot layer blend is unsupported"
         );
         if parents.contains(&layer.id) {
             ensure!(
@@ -708,9 +925,13 @@ fn validate_snapshot(size: [u32; 2], layers: &[LayerSpec]) -> Result<()> {
                 "snapshot group opacity requires isolated composition"
             );
         }
-        let t = &layer.transform;
+        let (t,_) = layer.transform.resolved();
         ensure!(
-            !t.camera_enabled && !t.billboard && t.rotate_x == 0. && t.rotate_y == 0. && t.matrix_is_2d(),
+            !t.camera_enabled
+                && !t.billboard
+                && t.rotate_x == 0.
+                && t.rotate_y == 0.
+                && t.matrix_is_2d(),
             "snapshot requires 2D layer transforms"
         );
         let mut parent = layer.parent;
@@ -761,10 +982,15 @@ pub enum GlyphCoverageKernel {
     BoxSum,
     /// Independent horizontal/vertical unnormalised coverage sums. The
     /// explicit extents replace `GlyphBlur.radius` (which must be zero).
-    BoxSumRect {radius_x:u8,radius_y:u8},
+    BoxSumRect { radius_x: u8, radius_y: u8 },
     /// Apply a rational horizontal oblique shear to coverage before the
     /// rectangular sum. Zero extents retain the sheared face unchanged.
-    ObliqueBoxSum {numerator:u8,denominator:u8,radius_x:u8,radius_y:u8},
+    ObliqueBoxSum {
+        numerator: u8,
+        denominator: u8,
+        radius_x: u8,
+        radius_y: u8,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -791,13 +1017,13 @@ pub struct LayerSpec {
     /// Inherited clip [x,y,w,h] in logical render-target coordinates. Unlike
     /// `clip`, this rectangle is unaffected by this layer's/parents' transforms.
     /// Zero width or height clips the complete subtree. None adds no clip.
-    #[serde(default,skip_serializing_if="Option::is_none")]
-    pub viewport_clip: Option<[f32;4]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub viewport_clip: Option<[f32; 4]>,
     /// Non-inherited source geometry crop in layer-local [x,y,w,h] coordinates.
     /// Image/text content keeps its original size; UVs follow surviving geometry.
     /// Positioned glyph runs crop each expanded glyph in this same local space.
-    #[serde(default,skip_serializing_if="Option::is_none")]
-    pub source_crop:Option<[f32;4]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_crop: Option<[f32; 4]>,
     /// Opacity 0..255, multiplied down the tree.
     #[serde(default = "alpha")]
     pub opacity: u8,
@@ -813,7 +1039,7 @@ pub struct LayerSpec {
     /// Explicit image texture addressing. Non-default modes accept bounded
     /// repeated UV coordinates and are supported only by image paints.
     #[serde(default)]
-    pub sampling:ImageSampling,
+    pub sampling: ImageSampling,
     /// Siglus-style 2D filter stack (ADR 0021).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filter: Option<LayerFilter>,
@@ -824,7 +1050,7 @@ fn alpha() -> u8 {
 #[derive(Clone, Debug)]
 pub struct Primitive {
     /// Derived client-scoped floating-depth scopes, inherited by child payloads.
-    pub depth_order:Option<DepthOrderKey>,
+    pub depth_order: Option<DepthOrderKey>,
     /// Engine-isolated subtree inputs; renderer composites once, after child draws.
     pub composite: Option<Arc<CompositeFrame>>,
     pub owner: u32,
@@ -840,7 +1066,7 @@ pub struct Primitive {
     pub opacity: u8,
     pub blend: Blend,
     pub uv: [f32; 4],
-    pub sampling:ImageSampling,
+    pub sampling: ImageSampling,
     pub filter: Option<LayerFilter>,
     /// Evaluated puppet meshes of a `Paint::Puppet` layer (ADR 0029).
     pub puppet: Option<Arc<crysirror_puppet::PuppetFrame>>,
@@ -916,7 +1142,7 @@ pub struct LayerSystem {
     /// Derived adjacency retained across small Canvas rebuild batches. It is
     /// invalidated on rollback/install and reconstructed after deserialization.
     #[serde(skip)]
-    child_index: BTreeMap<u32,BTreeMap<u32,BTreeSet<u32>>>,
+    child_index: BTreeMap<u32, BTreeMap<u32, BTreeSet<u32>>>,
     /// Puppet layers' states by client and layer id (ADR 0029).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     puppets: BTreeMap<u32, BTreeMap<u32, PuppetSlot>>,
@@ -932,7 +1158,9 @@ pub struct LayerSystem {
     #[serde(default)]
     motions: MotionTracks,
     #[serde(default)]
-    depth_orders:DepthOrders,
+    sequences:queued::Sequences,
+    #[serde(default)]
+    depth_orders: DepthOrders,
     /// An open multi-batch transaction (see [`LayerSystem::transaction`]).
     #[serde(skip)]
     txn: TxnSlot,
@@ -955,6 +1183,7 @@ type SideState = (
     Option<ActiveTransition>,
     u64,
     MotionTracks,
+    queued::Sequences,
     DepthOrders,
 );
 
@@ -1028,6 +1257,11 @@ pub enum Easing {
     EaseOut,
     /// Mode 3: smoothstep.
     Smooth,
+    /// Quartic acceleration/deceleration for retained animation curves.
+    EaseInQuart,
+    EaseOutQuart,
+    EaseInOutQuart,
+    EaseOutInQuart,
 }
 impl Easing {
     /// siglus_rs `runtime/wipe.rs::eased_progress`.
@@ -1038,6 +1272,10 @@ impl Easing {
             Easing::EaseIn => p * p,
             Easing::EaseOut => 1. - (1. - p) * (1. - p),
             Easing::Smooth => p * p * (3. - 2. * p),
+            Easing::EaseInQuart => p.powi(4),
+            Easing::EaseOutQuart => 1. - (1. - p).powi(4),
+            Easing::EaseInOutQuart => if p < 0.5 {8. * p.powi(4)}else{1. - (-2. * p + 2.).powi(4) / 2.},
+            Easing::EaseOutInQuart => if p < 0.5 {(1. - (1. - 2. * p).powi(4)) / 2.}else{0.5 + (2. * p - 1.).powi(4) / 2.},
         }
     }
 }
@@ -1173,42 +1411,109 @@ pub fn intersect(a: [f32; 4], b: [f32; 4]) -> Option<[f32; 4]> {
     let d = (a[1] + a[3]).min(b[1] + b[3]);
     (r > x && d > y).then_some([x, y, r - x, d - y])
 }
-fn viewport_clip_valid(rect:[f32;4])->bool {
-    rect.iter().all(|v|v.is_finite()) && rect[2]>=0. && rect[3]>=0.
-        && (rect[0]+rect[2]).is_finite() && (rect[1]+rect[3]).is_finite()
+fn viewport_clip_valid(rect: [f32; 4]) -> bool {
+    rect.iter().all(|v| v.is_finite())
+        && rect[2] >= 0.
+        && rect[3] >= 0.
+        && (rect[0] + rect[2]).is_finite()
+        && (rect[1] + rect[3]).is_finite()
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum LayerCommand {
+    /// Advance this client's automatic motion, reveal and transition clocks.
+    /// Other clients, physical input, external producers and global time stay
+    /// on their own clocks. Bounded to one day per admitted operation.
+    AdvanceTime { delta_ms: u64 },
+    /// Atomically retarget every live owned Image paint using one immutable
+    /// generation. Frozen Snapshot paints and other clients retain their leases.
+    RebindImage {from:String,to:String},
+    /// Create an owner-scoped incremental channel sequence on an existing node.
+    BeginSequence {id:u32,spec:queued::SequenceSpec},
+    /// Mutate or advance retained banked queues; Advance uses exact receipts.
+    Sequence {id:u32,operation:queued::SequenceOperation},
     ///Register an external procedural producer; query MotionStatus for its
     ///fresh generation before admitting worker samples. No code is hosted.
-    BeginExternalMotion {id:u32,driver:u32},
+    BeginExternalMotion {
+        id: u32,
+        driver: u32,
+    },
     ///Publish one consecutive producer revision. Pose changes can share this
     ///atomic Layer batch; stale results roll back every operation in the batch.
-    CommitExternalMotion {id:u32,driver:u32,stamp:ExternalMotionStamp,complete:bool,#[serde(default)] pose:Option<ExternalMotionPose>},
+    CommitExternalMotion {
+        id: u32,
+        driver: u32,
+        stamp: ExternalMotionStamp,
+        complete: bool,
+        #[serde(default)]
+        pose: Option<ExternalMotionPose>,
+    },
     ///Request the real producer's skip branch, without fabricating an endpoint.
-    RequestExternalMotionSkip {id:u32,driver:u32,#[serde(with="crate::input_buffer::exact_u64")] generation:u64},
+    RequestExternalMotionSkip {
+        id: u32,
+        driver: u32,
+        #[serde(with = "crate::input_buffer::exact_u64")]
+        generation: u64,
+    },
     ///Retire the producer capability, invalidating outstanding worker samples.
-    RemoveExternalMotion {id:u32,driver:u32,#[serde(with="crate::input_buffer::exact_u64")] generation:u64},
+    RemoveExternalMotion {
+        id: u32,
+        driver: u32,
+        #[serde(with = "crate::input_buffer::exact_u64")]
+        generation: u64,
+    },
     ///Change rectangle geometry while preserving other motion/producer state.
-    SetRect {id:u32,rect:[f32;4]},
+    SetRect {
+        id: u32,
+        rect: [f32; 4],
+    },
     /// Stable finite floating depth within order major buckets; inherited by
     /// descendants. None returns this node to ordinary ordering in its scope.
-    SetDepth {id:u32,depth:Option<f32>},
+    SetDepth {
+        id: u32,
+        depth: Option<f32>,
+    },
     /// Start or replace one local scalar track on an owned layer.
-    BeginMotion {id:u32,track:MotionTrackSpec},
+    BeginMotion {
+        id: u32,
+        track: MotionTrackSpec,
+    },
     /// Advance an external track in its caller-declared clock units.
-    SetMotionElapsed {id:u32,property:MotionProperty,elapsed:u64},
+    SetMotionElapsed {
+        id: u32,
+        property: MotionProperty,
+        elapsed: u64,
+    },
     /// Cancel selected/all tracks, optionally applying their final values.
-    EndMotion {id:u32,#[serde(default)] property:Option<MotionProperty>,#[serde(default)] finish:bool},
+    EndMotion {
+        id: u32,
+        #[serde(default)]
+        property: Option<MotionProperty>,
+        #[serde(default)]
+        finish: bool,
+    },
     /// Change an existing Solid paint without replacing its layer or cancelling
     /// unrelated motion. Other paint kinds fail explicitly.
-    SetSolidColor { id: u32, color: [u8; 4] },
+    SetSolidColor {
+        id: u32,
+        color: [u8; 4],
+    },
+    /// Replace paint while retaining layer geometry and motion/sequence state.
+    /// Non-image paints clear image-only sampling and UV crop state.
+    SetPaint {
+        id: u32,
+        paint: Paint,
+    },
     Put {
         layer: LayerSpec,
     },
     Remove {
         id: u32,
+    },
+    /// Reparent an owned node without cancelling its retained motion or paint.
+    SetParent {
+        id: u32,
+        parent: Option<u32>,
     },
     SetTransform {
         id: u32,
@@ -1227,7 +1532,10 @@ pub enum LayerCommand {
         opacity: u8,
     },
     /// Change composition without replacing paint, hierarchy or motion.
-    SetBlend {id:u32,blend:Blend},
+    SetBlend {
+        id: u32,
+        blend: Blend,
+    },
     SetOrder {
         id: u32,
         order: [i32; 2],
@@ -1237,9 +1545,17 @@ pub enum LayerCommand {
         clip: Option<[f32; 4]>,
     },
     /// Set an inherited render-target clip, preserving geometry and motion.
-    SetViewportClip {id:u32,clip:Option<[f32;4]>},
+    SetViewportClip {
+        id: u32,
+        clip: Option<[f32; 4]>,
+    },
     /// Change own source geometry/UV crop without touching children or motion.
-    SetSourceCrop {id:u32,crop:Option<[f32;4]>},
+    SetSourceCrop {
+        id: u32,
+        crop: Option<[f32; 4]>,
+    },
+    ///Update positioned-glyph clips without replacing paint or canceling motion.
+    SetGlyphCrops {id:u32,crops:Vec<Option<[f32;4]>>},
     SetFilter {
         id: u32,
         filter: Option<LayerFilter>,
@@ -1289,37 +1605,93 @@ pub enum LayerCommand {
 impl LayerSystem {
     /// Commit accepted frame ordering history at the exclusive owner boundary.
     /// Intermediate SetDepth calls and frame extraction never advance history.
-    pub fn commit_frame_order(&mut self)->Result<()> {self.depth_orders.commit(&self.clients)}
-    /// Explicit local depth (an inherited scope is visible in frame keys).
-    pub fn depth(&self,client:ClientId,id:u32)->Result<Option<f32>> {
-        ensure!(self.get(client,id).is_some(),"layer depth target missing");
-        Ok(self.depth_orders.get(client.0,id))
+    pub fn commit_frame_order(&mut self) -> Result<()> {
+        self.depth_orders.commit(&self.clients)
     }
-    pub(super) fn depth_key(&self,client:u32,id:u32)->Result<Option<DepthOrderKey>> {Ok(self.depth_orders.keys(&self.clients)?.remove(&(client,id)))}
+    /// Explicit local depth (an inherited scope is visible in frame keys).
+    pub fn depth(&self, client: ClientId, id: u32) -> Result<Option<f32>> {
+        ensure!(self.get(client, id).is_some(), "layer depth target missing");
+        Ok(self.depth_orders.get(client.0, id))
+    }
+    pub(super) fn depth_key(&self, client: u32, id: u32) -> Result<Option<DepthOrderKey>> {
+        Ok(self.depth_orders.keys(&self.clients)?.remove(&(client, id)))
+    }
     /// Inspect the same client-scoped logical node used by render extraction.
     /// Owner-scoped retained motion state; an unknown layer is an error.
-    pub fn motion_status(&self,client:ClientId,id:u32)->Result<MotionStatus>{
-        ensure!(self.get(client,id).is_some(),"motion layer missing");
-        Ok(self.motions.status(client.0,id))
+    pub fn motion_status(&self, client: ClientId, id: u32) -> Result<MotionStatus> {
+        ensure!(self.get(client, id).is_some(), "motion layer missing");
+        Ok(self.motions.status(client.0, id))
+    }
+    pub fn sequence_status(&self,client:ClientId,id:u32)->Result<Option<queued::SequenceStatus>>{
+        ensure!(self.get(client,id).is_some(),"sequence layer missing");Ok(self.sequences.status(client.0,id))
+    }
+    /// Preview a dependency-bearing queue update without changing this owner.
+    pub fn sequence_preview(&self,client:ClientId,id:u32,rate:f32,fast:bool)->Result<Option<queued::SequenceStatus>> {
+        ensure!(self.get(client,id).is_some(),"sequence layer missing");self.sequences.preview(client.0,id,rate,fast)
     }
     /// Freeze this owner's painter prefix without including later payloads.
     /// Required ancestors remain as transparent transform/clip carriers.
-    pub fn prefix_snapshot_specs(&self,client:ClientId,order_exclusive:[i32;2])->Result<Vec<LayerSpec>>{
-        ensure!(self.transition.as_ref().is_none_or(|t|t.owner!=client.0),"prefix capture during screen transition requires its explicit composition scope");
-        ensure!(self.crossfades.get(&client.0).is_none_or(|f|f.is_empty()),"prefix capture of active subtree crossfade requires an isolated scope");
-        ensure!(!self.depth_orders.keys(&self.clients)?.keys().any(|(owner,_)|*owner==client.0),"prefix capture with remapped depth ordering requires an explicit depth scope");
-        let Some(owner)=self.clients.get(&client.0)else{return Ok(Vec::new());};
-        let selected=owner.values().filter(|spec|spec.order<order_exclusive).map(|spec|spec.id).collect::<BTreeSet<_>>();
-        let mut required=selected.clone();
-        for &id in &selected{let mut parent=owner[&id].parent;let mut depth=0;while let Some(id)=parent{ensure!(depth<=owner.len(),"prefix capture parent cycle");let spec=owner.get(&id).context("prefix capture parent missing")?;required.insert(id);parent=spec.parent;depth+=1;}}
-        let mut layers=Vec::with_capacity(required.len());
-        for id in required {let mut spec=owner[&id].clone();
-            if !selected.contains(&id){spec.paint=Paint::Solid{color:[0;4]};}
-            else{match &mut spec.paint{
-                Paint::GlyphRun{glyphs,reveal,..}=>{if let Some(r)=reveal.take(){glyphs.truncate(r.visible_count(glyphs.len()));}},
-                Paint::Puppet{..}=>bail!("prefix capture requires an immutable evaluated puppet mesh"),
-                _=>{},
-            }}
+    pub fn prefix_snapshot_specs(
+        &self,
+        client: ClientId,
+        order_exclusive: [i32; 2],
+    ) -> Result<Vec<LayerSpec>> {
+        ensure!(
+            self.transition.as_ref().is_none_or(|t| t.owner != client.0),
+            "prefix capture during screen transition requires its explicit composition scope"
+        );
+        ensure!(
+            self.crossfades.get(&client.0).is_none_or(|f| f.is_empty()),
+            "prefix capture of active subtree crossfade requires an isolated scope"
+        );
+        ensure!(
+            !self
+                .depth_orders
+                .keys(&self.clients)?
+                .keys()
+                .any(|(owner, _)| *owner == client.0),
+            "prefix capture with remapped depth ordering requires an explicit depth scope"
+        );
+        let Some(owner) = self.clients.get(&client.0) else {
+            return Ok(Vec::new());
+        };
+        let selected = owner
+            .values()
+            .filter(|spec| spec.order < order_exclusive)
+            .map(|spec| spec.id)
+            .collect::<BTreeSet<_>>();
+        let mut required = selected.clone();
+        for &id in &selected {
+            let mut parent = owner[&id].parent;
+            let mut depth = 0;
+            while let Some(id) = parent {
+                ensure!(depth <= owner.len(), "prefix capture parent cycle");
+                let spec = owner.get(&id).context("prefix capture parent missing")?;
+                required.insert(id);
+                parent = spec.parent;
+                depth += 1;
+            }
+        }
+        let suppressed=self.sequences.suppressed_layers(client.0);
+        let mut layers = Vec::with_capacity(required.len());
+        for id in required {
+            let mut spec = owner[&id].clone();
+            if suppressed.contains(&id){spec.visible=false;}
+            if !selected.contains(&id) {
+                spec.paint = Paint::Solid { color: [0; 4] };
+            } else {
+                match &mut spec.paint {
+                    Paint::GlyphRun { glyphs, reveal, .. } => {
+                        if let Some(r) = reveal.take() {
+                            glyphs.truncate(r.visible_count(glyphs.len()));
+                        }
+                    }
+                    Paint::Puppet { .. } => {
+                        bail!("prefix capture requires an immutable evaluated puppet mesh")
+                    }
+                    _ => {}
+                }
+            }
             layers.push(spec);
         }
         Ok(layers)
@@ -1329,12 +1701,21 @@ impl LayerSystem {
     }
     /// Inspect an immutable owner-published dynamic mesh frame. This is CPU
     /// geometry/resource metadata, never a renderer or device pointer.
-    pub fn dynamic_puppet_frame(&self,client:u32,id:u32)->Option<&Arc<crysirror_puppet::PuppetFrame>>{
-        self.dynamic_puppets.contains(&(client,id)).then(||self.puppet_frames.get(&(client,id))).flatten()
+    pub fn dynamic_puppet_frame(
+        &self,
+        client: u32,
+        id: u32,
+    ) -> Option<&Arc<crysirror_puppet::PuppetFrame>> {
+        self.dynamic_puppets
+            .contains(&(client, id))
+            .then(|| self.puppet_frames.get(&(client, id)))
+            .flatten()
     }
     /// Whether removing this node would also affect a client-owned child.
-    pub fn has_children(&self,client:ClientId,id:u32)->bool{
-        self.clients.get(&client.0).is_some_and(|layers|layers.values().any(|layer|layer.parent==Some(id)))
+    pub fn has_children(&self, client: ClientId, id: u32) -> bool {
+        self.clients
+            .get(&client.0)
+            .is_some_and(|layers| layers.values().any(|layer| layer.parent == Some(id)))
     }
     /// Frozen static, visible subtree input for shared retained Canvas capture.
     /// The requested root is evaluated in its own local image space.
@@ -1356,12 +1737,13 @@ impl LayerSystem {
                 children.entry(parent).or_default().push(id);
             }
         }
+        let suppressed=self.sequences.suppressed_layers(client.0);
         let mut selected = BTreeSet::new();
         let mut stack = vec![(root, 0usize)];
         let mut out = Vec::new();
         while let Some((id, depth)) = stack.pop() {
             let original = &owner[&id];
-            if id != root && (!original.visible || original.opacity == 0) {
+            if id != root && (!original.visible || original.opacity == 0||original.transform.collapsed()||suppressed.contains(&id)) {
                 continue;
             }
             ensure!(depth < 30, "snapshot subtree depth budget");
@@ -1374,42 +1756,59 @@ impl LayerSystem {
                 layer.rect[1] = 0.;
                 layer.transform = SpriteTransform::default();
                 layer.visible = true;
-                layer.opacity = 255;
+                layer.opacity = if suppressed.contains(&id){0}else{255};
             }
             ensure!(
-                layer.blend == Blend::Normal,
-                "snapshot requires normal layer blend"
+                matches!(layer.blend, Blend::Normal | Blend::Add | Blend::Subtract | Blend::Multiply | Blend::Screen | Blend::Atop | Blend::AtopMultiply | Blend::AtopScreen | Blend::AtopCopy | Blend::DestinationIn),
+                "snapshot layer blend is unsupported"
             );
-            if let Some(frame) = self.puppet_frames.get(&(client.0,id)) {
-                let tint=match &layer.paint {Paint::Puppet{tint,..}|Paint::Mesh{tint,..}=>*tint,_=>[255;4]};
-                layer.paint=Paint::Mesh {frame:frame.clone(),tint};
+            if let Some(frame) = self.puppet_frames.get(&(client.0, id)) {
+                let tint = match &layer.paint {
+                    Paint::Puppet { tint, .. } | Paint::Mesh { tint, .. } => *tint,
+                    _ => [255; 4],
+                };
+                layer.paint = Paint::Mesh {
+                    frame: frame.clone(),
+                    tint,
+                };
                 layer.paint.validate()?;
             } else {
-                ensure!(!matches!(layer.paint, Paint::Puppet { .. }) && !self.dynamic_puppets.contains(&(client.0,id)), "snapshot puppet frame has not completed owner publication");
+                ensure!(
+                    !matches!(layer.paint, Paint::Puppet { .. })
+                        && !self.dynamic_puppets.contains(&(client.0, id)),
+                    "snapshot puppet frame has not completed owner publication"
+                );
             }
             if let Paint::Snapshot { layers, .. } = &layer.paint {
-                ensure!(1 + snapshot_nesting(layers) < MAX_SNAPSHOT_NESTING,"snapshot nesting budget");
+                ensure!(
+                    1 + snapshot_nesting(layers) < MAX_SNAPSHOT_NESTING,
+                    "snapshot nesting budget"
+                );
             }
             ensure!(
                 layer.paint.glyph_reveal_status().is_none_or(|r| r.complete),
                 "snapshot of dynamic glyph reveal is unsupported"
             );
-            let t = &layer.transform;
+            let (t,_) = layer.transform.resolved();
             ensure!(
-                !t.camera_enabled && !t.billboard && t.rotate_x == 0. && t.rotate_y == 0. && t.matrix_is_2d(),
+                !t.camera_enabled
+                    && !t.billboard
+                    && t.rotate_x == 0.
+                    && t.rotate_y == 0.
+                    && t.matrix_is_2d(),
                 "snapshot requires 2D layer transforms"
             );
-            if let Some(ids) = children.get(&id) {
+            if let Some(ids) = children.get(&id).filter(|_|!suppressed.contains(&id)) {
                 // Partial group alpha is isolated after the complete visible
                 // tree (and any transition endpoint) is frozen.
                 stack.extend(ids.iter().map(|child| (*child, depth + 1)));
             }
             out.push(layer);
         }
-        if out.iter().any(|layer|layer.viewport_clip.is_some()) {
-            let by_id=owner.iter().map(|(id,layer)|(*id,layer)).collect();
-            let inverse=viewport_clip::inverse_to_root(root,&by_id)?;
-            viewport_clip::rebase(&mut out,inverse)?;
+        if out.iter().any(|layer| layer.viewport_clip.is_some()) {
+            let by_id = owner.iter().map(|(id, layer)| (*id, layer)).collect();
+            let inverse = viewport_clip::inverse_to_root(root, &by_id)?;
+            viewport_clip::rebase(&mut out, inverse)?;
         }
         // An active isolated composition wholly inside the captured subtree is
         // frozen at its nearest endpoint (before below half progress, else the
@@ -1438,7 +1837,8 @@ impl LayerSystem {
                 "snapshot of active composite is unsupported"
             );
         }
-        self.depth_orders.freeze(client.0,&self.clients,&mut out)?;
+        self.depth_orders
+            .freeze(client.0, &self.clients, &mut out)?;
         snapshot_opacity::isolate(&mut out)?;
         out.sort_by_key(|layer| (layer.order, layer.id));
         Ok(out)
@@ -1455,6 +1855,7 @@ impl LayerSystem {
             self.transition.clone(),
             self.transition_serial,
             self.motions.clone(),
+            self.sequences.clone(),
             self.depth_orders.clone(),
         )
     }
@@ -1497,6 +1898,7 @@ impl LayerSystem {
                 self.transition,
                 self.transition_serial,
                 self.motions,
+                self.sequences,
                 self.depth_orders,
             ) = txn.side;
         }
@@ -1533,6 +1935,7 @@ impl LayerSystem {
                 self.transition,
                 self.transition_serial,
                 self.motions,
+                self.sequences,
                 self.depth_orders,
             ) = side;
             return Err(e);
@@ -1555,55 +1958,214 @@ impl LayerSystem {
         // batches; one Canvas edit must not rescan thousands of unrelated nodes.
         for command in commands {
             match command {
-                LayerCommand::BeginExternalMotion{id,..}|LayerCommand::CommitExternalMotion{id,..}
-                |LayerCommand::RequestExternalMotionSkip{id,..}|LayerCommand::RemoveExternalMotion{id,..}=>{
-                    ensure!(staged.get(client,*id).is_some(),"external motion layer missing");
-                    match command {
-                        LayerCommand::BeginExternalMotion{id,driver}=>staged.motions.external.begin(client.0,*id,*driver)?,
-                        LayerCommand::CommitExternalMotion{id,driver,stamp,complete,pose}=>{
-                            if let Some(pose)=pose {
-                                let layer=staged.clients.get_mut(&client.0).unwrap().get_mut(id).unwrap();
-                                journal.entry(*id).or_insert_with(||Some(layer.clone()));
-                                if let Some(rect)=pose.rect{layer.rect=rect;}
-                                if let Some(transform)=&pose.transform{layer.transform=transform.clone();}
-                                if let Some(opacity)=pose.opacity{layer.opacity=opacity;}
-                            }
-                            staged.motions.external.commit(client.0,*id,*driver,*stamp,*complete)?;
+                LayerCommand::AdvanceTime { delta_ms } => {
+                    ensure!(*delta_ms <= 86_400_000, "layer clock advance limit");
+                    if let Some(owner) = staged.clients.get(&client.0) {
+                        for (&id, layer) in owner {
+                            journal.entry(id).or_insert_with(|| Some(layer.clone()));
                         }
-                        LayerCommand::RequestExternalMotionSkip{id,driver,generation}=>staged.motions.external.request_skip(client.0,*id,*driver,*generation)?,
-                        LayerCommand::RemoveExternalMotion{id,driver,generation}=>staged.motions.external.remove(client.0,*id,*driver,*generation)?,
-                        _=>unreachable!(),
+                    }
+                    staged.advance_owner_time(client, *delta_ms);
+                    continue;
+                }
+                LayerCommand::SetParent { id, parent } => {
+                    if let Some(parent) = parent {
+                        ensure!(*parent != *id && staged.get(client, *parent).is_some(), "owned layer parent missing or self-referential");
+                    }
+                    let layer = staged.clients.get_mut(&client.0).and_then(|owner| owner.get_mut(id)).context("reparent layer missing")?;
+                    journal.entry(*id).or_insert_with(|| Some(layer.clone()));
+                    layer.parent = *parent;
+                    staged.child_index.remove(&client.0);
+                    continue;
+                }
+                LayerCommand::RebindImage{from,to}=>{
+                    crysirror_core::path::VfsPath::new(crysirror_core::path::Mount::Asset,from)?;
+                    crysirror_core::path::VfsPath::new(crysirror_core::path::Mount::Asset,to)?;
+                    if let Some(owner)=staged.clients.get_mut(&client.0){
+                        for (id,layer) in owner.iter_mut(){
+                            if matches!(&layer.paint,Paint::Image{asset,..} if asset==from){
+                                journal.entry(*id).or_insert_with(||Some(layer.clone()));
+                                if let Paint::Image{asset,..}=&mut layer.paint{*asset=to.clone();}
+                            }
+                        }
+                    }
+                    continue;
+                },
+                LayerCommand::BeginExternalMotion { id, .. }
+                | LayerCommand::CommitExternalMotion { id, .. }
+                | LayerCommand::RequestExternalMotionSkip { id, .. }
+                | LayerCommand::RemoveExternalMotion { id, .. } => {
+                    ensure!(
+                        staged.get(client, *id).is_some(),
+                        "external motion layer missing"
+                    );
+                    match command {
+                        LayerCommand::BeginExternalMotion { id, driver } => {
+                            staged.motions.external.begin(client.0, *id, *driver)?
+                        }
+                        LayerCommand::CommitExternalMotion {
+                            id,
+                            driver,
+                            stamp,
+                            complete,
+                            pose,
+                        } => {
+                            if let Some(pose) = pose {
+                                let layer = staged
+                                    .clients
+                                    .get_mut(&client.0)
+                                    .unwrap()
+                                    .get_mut(id)
+                                    .unwrap();
+                                journal.entry(*id).or_insert_with(|| Some(layer.clone()));
+                                if let Some(rect) = pose.rect {
+                                    layer.rect = rect;
+                                }
+                                if let Some(transform) = &pose.transform {
+                                    layer.transform = transform.clone();
+                                }
+                                if let Some(offset) = &pose.offset {
+                                    layer.transform.pose_offset = Some(offset.clone());
+                                }
+                                if let Some(opacity) = pose.opacity {
+                                    layer.opacity = opacity;
+                                }
+                            }
+                            staged
+                                .motions
+                                .external
+                                .commit(client.0, *id, *driver, *stamp, *complete)?;
+                        }
+                        LayerCommand::RequestExternalMotionSkip {
+                            id,
+                            driver,
+                            generation,
+                        } => staged.motions.external.request_skip(
+                            client.0,
+                            *id,
+                            *driver,
+                            *generation,
+                        )?,
+                        LayerCommand::RemoveExternalMotion {
+                            id,
+                            driver,
+                            generation,
+                        } => staged
+                            .motions
+                            .external
+                            .remove(client.0, *id, *driver, *generation)?,
+                        _ => unreachable!(),
                     }
                     continue;
                 }
-                LayerCommand::SetSolidColor{id,color}=>{
-                    let layer=staged.clients.get_mut(&client.0).and_then(|o|o.get_mut(id)).context("solid color layer missing")?;
-                    ensure!(matches!(layer.paint,Paint::Solid{..}),"solid color requires Solid paint");
-                    journal.entry(*id).or_insert_with(||Some(layer.clone()));
-                    if let Paint::Solid{color:stored}=&mut layer.paint{*stored=*color;}
+                LayerCommand::SetSolidColor { id, color } => {
+                    let layer = staged
+                        .clients
+                        .get_mut(&client.0)
+                        .and_then(|o| o.get_mut(id))
+                        .context("solid color layer missing")?;
+                    ensure!(
+                        matches!(layer.paint, Paint::Solid { .. }),
+                        "solid color requires Solid paint"
+                    );
+                    journal.entry(*id).or_insert_with(|| Some(layer.clone()));
+                    if let Paint::Solid { color: stored } = &mut layer.paint {
+                        *stored = *color;
+                    }
                     continue;
                 }
-                LayerCommand::SetDepth{id,depth}=>{
-                    ensure!(staged.clients.get(&client.0).is_some_and(|o|o.contains_key(id)),"layer depth target missing");
-                    staged.depth_orders.set(client.0,*id,*depth)?;continue;
+                LayerCommand::SetDepth { id, depth } => {
+                    ensure!(
+                        staged
+                            .clients
+                            .get(&client.0)
+                            .is_some_and(|o| o.contains_key(id)),
+                        "layer depth target missing"
+                    );
+                    staged.depth_orders.set(client.0, *id, *depth)?;
+                    continue;
                 }
-                LayerCommand::BeginMotion{id,track}=>{
-                    let layer=staged.clients.get_mut(&client.0).and_then(|o|o.get_mut(id)).context("motion layer missing")?;
-                    journal.entry(*id).or_insert_with(||Some(layer.clone()));
-                    let current=track.property.layer_value(layer);
-                    let value=staged.motions.begin(client.0,*id,track,current,true)?;
-                    track.property.set_layer(layer,value);continue;
+                LayerCommand::BeginSequence {id,..}|LayerCommand::Sequence{id,..}=>{
+                    ensure!(staged.get(client,*id).is_some(),"sequence owner layer missing");
+                    let samples=match command{
+                        LayerCommand::BeginSequence{spec,..}=>staged.sequences.begin(client.0,*id,spec.clone())?,
+                        LayerCommand::Sequence{operation,..}=>staged.sequences.operate(client.0,*id,operation.clone())?,
+                        _=>unreachable!(),
+                    };
+                    for(target,binding,value)in samples{
+                        let layer=staged.clients.get_mut(&client.0).and_then(|owner|owner.get_mut(&target)).context("sequence bound layer missing")?;
+                        journal.entry(target).or_insert_with(||Some(layer.clone()));
+                        match binding{
+                            queued::BindingTarget::FiniteGate=>{},
+                            queued::BindingTarget::Motion{property}=>property.set_layer(layer,value),
+                            queued::BindingTarget::ImageUv{origin,step,terminal_frame,..}=>{
+                                if value>=0.||terminal_frame.is_some(){
+                                    let frame=if value<0.{terminal_frame.unwrap() as f32}else{value.trunc()};
+                                    let x=frame*step[0];let y=frame*step[1];
+                                    let uv=[origin[0]+x,origin[1]+y,origin[2]+x,origin[3]+y];
+                                    ensure!(uv.iter().all(|v|v.is_finite()),"sequence image UV overflow");layer.uv=Some(uv);
+                                }
+                            },
+                            queued::BindingTarget::TexelImageUv{allocation,reference,source,step,terminal_frame,..}=>{
+                                if value>=0.||terminal_frame.is_some(){
+                                    let frame=if value<0.{terminal_frame.unwrap() as f32}else{value.trunc()};
+                                    let shifted=[source[0]+frame*step[0],source[1]+frame*step[1],source[2]+frame*step[0],source[3]+frame*step[1]];
+                                    if let Some(quad)=crop::texel_center_quad(allocation,reference,shifted,[0.,0.])? {
+                                        layer.uv=Some(quad.uv);layer.rect[2]=quad.size[0];layer.rect[3]=quad.size[1];
+                                    }
+                                }
+                            },
+                            queued::BindingTarget::NineTapOffset{axis}=>{
+                                if let Some(Distortion::NineTap{offset,..})=layer.filter.as_mut().and_then(|filter|filter.distortion.as_mut()){
+                                    offset[usize::from(axis)]=value;
+                                }
+                            },
+                        }
+                    }
+                    continue;
                 }
-                LayerCommand::SetMotionElapsed{id,property,elapsed}=>{
-                    let layer=staged.clients.get_mut(&client.0).and_then(|o|o.get_mut(id)).context("motion layer missing")?;
-                    journal.entry(*id).or_insert_with(||Some(layer.clone()));
-                    let value=staged.motions.advance(client.0,*id,*property,*elapsed)?;
-                    property.set_layer(layer,value);continue;
+                LayerCommand::BeginMotion { id, track } => {
+                    let layer = staged
+                        .clients
+                        .get_mut(&client.0)
+                        .and_then(|o| o.get_mut(id))
+                        .context("motion layer missing")?;
+                    journal.entry(*id).or_insert_with(|| Some(layer.clone()));
+                    let current = track.property.layer_value(layer);
+                    let value = staged.motions.begin(client.0, *id, track, current, true)?;
+                    track.property.set_layer(layer, value);
+                    continue;
                 }
-                LayerCommand::EndMotion{id,property,finish}=>{
-                    let layer=staged.clients.get_mut(&client.0).and_then(|o|o.get_mut(id)).context("motion layer missing")?;
-                    journal.entry(*id).or_insert_with(||Some(layer.clone()));
-                    for(p,value)in staged.motions.end(client.0,*id,*property,*finish)?{p.set_layer(layer,value);}continue;
+                LayerCommand::SetMotionElapsed {
+                    id,
+                    property,
+                    elapsed,
+                } => {
+                    let layer = staged
+                        .clients
+                        .get_mut(&client.0)
+                        .and_then(|o| o.get_mut(id))
+                        .context("motion layer missing")?;
+                    journal.entry(*id).or_insert_with(|| Some(layer.clone()));
+                    let value = staged.motions.advance(client.0, *id, *property, *elapsed)?;
+                    property.set_layer(layer, value);
+                    continue;
+                }
+                LayerCommand::EndMotion {
+                    id,
+                    property,
+                    finish,
+                } => {
+                    let layer = staged
+                        .clients
+                        .get_mut(&client.0)
+                        .and_then(|o| o.get_mut(id))
+                        .context("motion layer missing")?;
+                    journal.entry(*id).or_insert_with(|| Some(layer.clone()));
+                    for (p, value) in staged.motions.end(client.0, *id, *property, *finish)? {
+                        p.set_layer(layer, value);
+                    }
+                    continue;
                 }
                 LayerCommand::BeginCrossfade {
                     id,
@@ -1622,10 +2184,22 @@ impl LayerSystem {
                     )?;
                     continue;
                 }
-                LayerCommand::BeginCrossfadeEffect {id,source,duration_ms,effect,external} => {
+                LayerCommand::BeginCrossfadeEffect {
+                    id,
+                    source,
+                    duration_ms,
+                    effect,
+                    external,
+                } => {
                     effect.validate()?;
-                    staged.begin_crossfade(client,*id,*source,*duration_ms,None,*external)?;
-                    staged.crossfades.get_mut(&client.0).unwrap().get_mut(id).unwrap().effect=Some(effect.clone());
+                    staged.begin_crossfade(client, *id, *source, *duration_ms, None, *external)?;
+                    staged
+                        .crossfades
+                        .get_mut(&client.0)
+                        .unwrap()
+                        .get_mut(id)
+                        .unwrap()
+                        .effect = Some(effect.clone());
                     continue;
                 }
                 LayerCommand::SetCrossfadeElapsed { id, elapsed_ms } => {
@@ -1702,7 +2276,8 @@ impl LayerSystem {
                     if matches!(layer.paint, Paint::Snapshot { .. }) {
                         layer.paint.validate()?;
                     }
-                    staged.motions.cancel(client.0,layer.id);
+                    staged.motions.cancel(client.0, layer.id);
+                    staged.sequences.cancel_owner(client.0,layer.id);
                     let previous = owner.insert(layer.id, layer.clone());
                     if let Some(index) = staged.child_index.get_mut(&client.0) {
                         if let Some(p) = previous.as_ref().and_then(|s| s.parent) {
@@ -1736,9 +2311,10 @@ impl LayerSystem {
                             }
                         }
                     }
+                    staged.sequences.cancel(client.0,&remove);
                     for r in &remove {
-                        staged.depth_orders.remove(client.0,*r);
-                        staged.motions.cancel(client.0,*r);
+                        staged.depth_orders.remove(client.0, *r);
+                        staged.motions.cancel(client.0, *r);
                         if let Some(spec) = owner.remove(r) {
                             if let Some(set) = spec.parent.and_then(|p| index.get_mut(&p)) {
                                 set.remove(r);
@@ -1759,8 +2335,9 @@ impl LayerSystem {
                 }
                 other => {
                     let id = match other {
-                        LayerCommand::SetTransform { id, .. }
-                        | LayerCommand::SetRect {id,..}
+                        LayerCommand::SetPaint { id, .. }
+                        | LayerCommand::SetTransform { id, .. }
+                        | LayerCommand::SetRect { id, .. }
                         | LayerCommand::SetVisible { id, .. }
                         | LayerCommand::CompleteReveal { id }
                         | LayerCommand::SetOpacity { id, .. }
@@ -1769,13 +2346,22 @@ impl LayerSystem {
                         | LayerCommand::SetClip { id, .. }
                         | LayerCommand::SetViewportClip { id, .. }
                         | LayerCommand::SetSourceCrop { id, .. }
+                        | LayerCommand::SetGlyphCrops { id, .. }
                         | LayerCommand::SetFilter { id, .. } => id,
                         _ => unreachable!(),
                     };
                     let layer = owner.get_mut(id).context("layer missing")?;
                     journal.entry(*id).or_insert_with(|| Some(layer.clone()));
                     match other {
-                        LayerCommand::SetRect{rect,..}=>layer.rect=*rect,
+                        LayerCommand::SetPaint {paint,..} => {
+                            paint.validate()?;
+                            layer.paint=paint.clone();
+                            if !matches!(paint,Paint::Image{..}) {
+                                layer.sampling=ImageSampling::default();
+                                layer.uv=None;
+                            }
+                        },
+                        LayerCommand::SetRect { rect, .. } => layer.rect = *rect,
                         LayerCommand::SetTransform { transform, .. } => {
                             layer.transform = transform.clone()
                         }
@@ -1789,11 +2375,18 @@ impl LayerSystem {
                             _ => bail!("reveal target is not a positioned glyph run"),
                         },
                         LayerCommand::SetOpacity { opacity, .. } => layer.opacity = *opacity,
-                        LayerCommand::SetBlend {blend,..}=>layer.blend=*blend,
+                        LayerCommand::SetBlend { blend, .. } => layer.blend = *blend,
                         LayerCommand::SetOrder { order, .. } => layer.order = *order,
                         LayerCommand::SetClip { clip, .. } => layer.clip = *clip,
-                        LayerCommand::SetViewportClip {clip,..}=>layer.viewport_clip=*clip,
-                        LayerCommand::SetSourceCrop {crop,..}=>layer.source_crop=*crop,
+                        LayerCommand::SetViewportClip { clip, .. } => layer.viewport_clip = *clip,
+                        LayerCommand::SetSourceCrop { crop, .. } => layer.source_crop = *crop,
+                        LayerCommand::SetGlyphCrops {crops,..} => match &mut layer.paint {
+                            Paint::GlyphRun {glyphs,..} => {
+                                ensure!(glyphs.len()==crops.len(),"positioned glyph crop count");
+                                for (glyph,crop) in glyphs.iter_mut().zip(crops){glyph.crop=*crop;}
+                            }
+                            _=>bail!("glyph crop target is not a positioned glyph run"),
+                        },
                         LayerCommand::SetFilter { filter, .. } => layer.filter = filter.clone(),
                         _ => unreachable!(),
                     }
@@ -1903,11 +2496,41 @@ impl LayerSystem {
             .glyph_reveal_status()
     }
     /// Advance engine-owned text and transition clocks.
+    fn advance_owner_time(&mut self, client: ClientId, delta_ms: u64) {
+        for (owner, id, property, value) in self.motions.tick_owner(client.0, delta_ms) {
+            if let Some(layer) = self.clients.get_mut(&owner).and_then(|o| o.get_mut(&id)) {
+                property.set_layer(layer, value);
+            }
+        }
+        if let Some(fades) = self.crossfades.get_mut(&client.0) {
+            for fade in fades.values_mut().filter(|f| !f.external) {
+                fade.elapsed_ms = fade.elapsed_ms.saturating_add(delta_ms).min(fade.duration_ms);
+            }
+        }
+        if let Some(owner) = self.clients.get_mut(&client.0) {
+            for layer in owner.values_mut() {
+                if let Paint::GlyphRun { glyphs, reveal: Some(reveal), .. } = &mut layer.paint {
+                    reveal.advance(glyphs.len(), delta_ms);
+                }
+            }
+        }
+        if let Some(transition) = self.transition.as_mut().filter(|t| t.owner == client.0) {
+            transition.elapsed_ms = transition.elapsed_ms.saturating_add(delta_ms);
+            if transition.elapsed_ms >= transition.spec.duration_ms {
+                self.transition = None;
+            }
+        }
+    }
+    /// Advance engine-owned text and transition clocks.
     pub fn tick(&mut self, delta_ms: u64) {
-        for(owner,id,property,value)in self.motions.tick(delta_ms){
-            if let Some(layer)=self.clients.get_mut(&owner).and_then(|o|o.get_mut(&id)){
-                if let Some(txn)=self.txn.0.last_mut(){txn.journal.entry((owner,id)).or_insert_with(||Some(layer.clone()));}
-                property.set_layer(layer,value);
+        for (owner, id, property, value) in self.motions.tick(delta_ms) {
+            if let Some(layer) = self.clients.get_mut(&owner).and_then(|o| o.get_mut(&id)) {
+                if let Some(txn) = self.txn.0.last_mut() {
+                    txn.journal
+                        .entry((owner, id))
+                        .or_insert_with(|| Some(layer.clone()));
+                }
+                property.set_layer(layer, value);
             }
         }
         for fade in self
@@ -1975,6 +2598,7 @@ impl LayerSystem {
     }
     /// Global invariants plus the layers a batch touched (still present).
     fn validate_touched(&self, client: ClientId, ids: impl Iterator<Item = u32>) -> Result<()> {
+        self.sequences.validate(|owner,id|self.clients.get(&owner).is_some_and(|layers|layers.contains_key(&id)))?;
         if let Some(t) = &self.transition {
             t.spec.validate()?;
             ensure!(t.serial <= self.transition_serial, "transition serial");
@@ -2012,7 +2636,12 @@ impl LayerSystem {
         self.validate_with(true)
     }
     fn validate_with(&self, snapshots: bool) -> Result<()> {
-        self.motions.validate(true,|owner,id|self.clients.get(&owner).is_some_and(|o|o.contains_key(&id)))?;
+        self.sequences.validate(|owner,id|self.clients.get(&owner).is_some_and(|layers|layers.contains_key(&id)))?;
+        self.motions.validate(true, |owner, id| {
+            self.clients
+                .get(&owner)
+                .is_some_and(|o| o.contains_key(&id))
+        })?;
         if let Some(t) = &self.transition {
             t.spec.validate()?;
             ensure!(t.serial <= self.transition_serial, "transition serial");
@@ -2061,8 +2690,9 @@ impl LayerSystem {
             "layer canvas bounds"
         );
         let mut out = Vec::new();
-        let depth_keys=self.depth_orders.keys(&self.clients)?;
+        let depth_keys = self.depth_orders.keys(&self.clients)?;
         for (client, owner) in &self.clients {
+            let suppressed=self.sequences.suppressed_layers(*client);
             for spec in owner.values() {
                 let mut chain = vec![spec];
                 let mut p = spec.parent;
@@ -2075,16 +2705,20 @@ impl LayerSystem {
                     p = parent.parent;
                 }
                 chain.reverse();
-                if chain.iter().any(|s| !s.visible || s.opacity == 0) {
+                if chain.iter().any(|s| !s.visible || s.opacity == 0||s.transform.collapsed()||suppressed.contains(&s.id)) {
                     continue;
                 }
                 let mut matrix = Mat3::IDENTITY;
                 let mut clip = Some([0., 0., canvas[0] as f32, canvas[1] as f32]);
                 let mut opacity = 255u32;
                 for s in chain.iter().take(chain.len() - 1) {
-                    let t = &s.transform;
+                    let (t,_) = s.transform.resolved();
                     ensure!(
-                        !t.camera_enabled && !t.billboard && t.rotate_x == 0. && t.rotate_y == 0. && t.matrix_is_2d(),
+                        !t.camera_enabled
+                            && !t.billboard
+                            && t.rotate_x == 0.
+                            && t.rotate_y == 0.
+                            && t.matrix_is_2d(),
                         "3D layer parents require a world hierarchy"
                     );
                     matrix *= affine(s);
@@ -2092,9 +2726,13 @@ impl LayerSystem {
                     if let Some(c) = s.clip {
                         clip = clip.and_then(|old| intersect(old, transformed_bounds(matrix, c)));
                     }
-                    if let Some(c)=s.viewport_clip {clip=clip.and_then(|old|intersect(old,c));}
+                    if let Some(c) = s.viewport_clip {
+                        clip = clip.and_then(|old| intersect(old, c));
+                    }
                 }
-                if let Some(c)=spec.viewport_clip {clip=clip.and_then(|old|intersect(old,c));}
+                if let Some(c) = spec.viewport_clip {
+                    clip = clip.and_then(|old| intersect(old, c));
+                }
                 if let Some(c) = spec.clip {
                     let projected = projection::sprite_quad_geometry_rect(
                         &spec.transform,
@@ -2117,18 +2755,33 @@ impl LayerSystem {
                 let Some(clip) = clip else {
                     continue;
                 };
-                let mut paint=spec.paint.clone();
-                let (local,uv)=if let Paint::GlyphRun{glyphs,..}=&mut paint {
-                    if let Some(crop)=spec.source_crop {
-                        if crop[2]==0. || crop[3]==0. {continue;}
+                let mut paint = spec.paint.clone();
+                let (local, uv) = if let Paint::GlyphRun { glyphs, .. } = &mut paint {
+                    if let Some(crop) = spec.source_crop {
+                        if crop[2] == 0. || crop[3] == 0. {
+                            continue;
+                        }
                         for glyph in glyphs {
-                            glyph.crop=Some(match glyph.crop {Some(old)=>intersect(old,crop).unwrap_or([0.;4]),None=>crop});
+                            glyph.crop = Some(match glyph.crop {
+                                Some(old) => intersect(old, crop).unwrap_or([0.; 4]),
+                                None => crop,
+                            });
                         }
                     }
-                    ([0.,0.,spec.rect[2],spec.rect[3]],spec.uv.unwrap_or([0.,0.,1.,1.]))
+                    (
+                        [0., 0., spec.rect[2], spec.rect[3]],
+                        spec.uv.unwrap_or([0., 0., 1., 1.]),
+                    )
                 } else {
-                    let Some(crop)=crop::crop_rect([0.,0.,spec.rect[2],spec.rect[3]],spec.source_crop,spec.uv.unwrap_or([0.,0.,1.,1.]))? else {continue;};
-                    (crop.rect,crop.uv)
+                    let Some(crop) = crop::crop_rect(
+                        [0., 0., spec.rect[2], spec.rect[3]],
+                        spec.source_crop,
+                        spec.uv.unwrap_or([0., 0., 1., 1.]),
+                    )?
+                    else {
+                        continue;
+                    };
+                    (crop.rect, crop.uv)
                 };
                 let Some(geometry) = projection::sprite_quad_geometry_rect(
                     &spec.transform,
@@ -2136,8 +2789,8 @@ impl LayerSystem {
                     spec.rect[1],
                     local[0],
                     local[1],
-                    local[0]+local[2],
-                    local[1]+local[3],
+                    local[0] + local[2],
+                    local[1] + local[3],
                     canvas[0] as f32,
                     canvas[1] as f32,
                 ) else {
@@ -2151,8 +2804,32 @@ impl LayerSystem {
                     quad.iter().flatten().all(|v| v.is_finite()),
                     "non-finite layer geometry"
                 );
+                // Cull from the actual transformed quad, never its pivot or
+                // untransformed rectangle. Glyph runs expand to independent
+                // cells and meshes/puppets own their geometry later.
+                if quad.iter().all(|p| p[3] > 0.)
+                    && matches!(
+                        &paint,
+                        Paint::Solid { .. }
+                            | Paint::Image { .. }
+                            | Paint::Snapshot { .. }
+                            | Paint::Text { .. }
+                    )
+                {
+                    let min_x = quad.iter().map(|p| p[0]).fold(f32::INFINITY, f32::min);
+                    let min_y = quad.iter().map(|p| p[1]).fold(f32::INFINITY, f32::min);
+                    let max_x = quad.iter().map(|p| p[0]).fold(f32::NEG_INFINITY, f32::max);
+                    let max_y = quad.iter().map(|p| p[1]).fold(f32::NEG_INFINITY, f32::max);
+                    if max_x <= clip[0]
+                        || max_y <= clip[1]
+                        || min_x >= clip[0] + clip[2]
+                        || min_y >= clip[1] + clip[3]
+                    {
+                        continue;
+                    }
+                }
                 out.push(Primitive {
-                    depth_order:depth_keys.get(&(*client,spec.id)).cloned(),
+                    depth_order: depth_keys.get(&(*client, spec.id)).cloned(),
                     composite: None,
                     owner: *client,
                     id: spec.id,
@@ -2166,9 +2843,12 @@ impl LayerSystem {
                     opacity: (opacity * u32::from(spec.opacity) / 255) as u8,
                     blend: spec.blend,
                     uv,
-                    sampling:spec.sampling,
+                    sampling: spec.sampling,
                     filter: spec.filter.clone(),
-                    puppet: match &spec.paint {Paint::Mesh{frame,..}=>Some(frame.clone()),_=>self.puppet_frames.get(&(*client, spec.id)).cloned()},
+                    puppet: match &spec.paint {
+                        Paint::Mesh { frame, .. } => Some(frame.clone()),
+                        _ => self.puppet_frames.get(&(*client, spec.id)).cloned(),
+                    },
                 });
             }
         }
@@ -2187,7 +2867,7 @@ pub fn rectangle(
 ) -> Primitive {
     let [x, y, w, h] = rect;
     Primitive {
-        depth_order:None,
+        depth_order: None,
         composite: None,
         owner,
         id,
@@ -2206,7 +2886,7 @@ pub fn rectangle(
         opacity: 255,
         blend: Blend::Normal,
         uv: [0., 0., 1., 1.],
-        sampling:ImageSampling::default(),
+        sampling: ImageSampling::default(),
         filter: None,
         puppet: None,
     }
@@ -2233,7 +2913,7 @@ fn transformed_bounds(m: Mat3, r: [f32; 4]) -> [f32; 4] {
 }
 
 fn affine(s: &LayerSpec) -> Mat3 {
-    let t = &s.transform;
+    let (t,translation) = s.transform.resolved();
     let (anchor, offset) = if t.object_anchor {
         (
             Vec2::new(s.rect[0], s.rect[1]),
@@ -2248,9 +2928,14 @@ fn affine(s: &LayerSpec) -> Mat3 {
             Vec2::new(t.pivot_x, t.pivot_y),
         )
     };
-    let local=t.local_matrix.map_or(Mat3::IDENTITY,|m|Mat3::from_cols(
-        Vec3::new(m[0],m[1],0.),Vec3::new(m[4],m[5],0.),Vec3::new(m[12],m[13],1.)));
-    Mat3::from_translation(anchor)
+    let local = t.local_matrix.map_or(Mat3::IDENTITY, |m| {
+        Mat3::from_cols(
+            Vec3::new(m[0], m[1], 0.),
+            Vec3::new(m[4], m[5], 0.),
+            Vec3::new(m[12], m[13], 1.),
+        )
+    });
+    Mat3::from_translation(anchor+Vec2::from_array(translation))
         * local
         * Mat3::from_angle(t.rotate)
         * Mat3::from_scale(Vec2::new(t.scale_x, t.scale_y))
@@ -2303,23 +2988,26 @@ fn validate_layer(
     if let Some(clip) = s.clip {
         ensure!(rect_valid(clip), "invalid layer clip");
     }
-    if let Some(clip)=s.viewport_clip {
-        ensure!(viewport_clip_valid(clip),"invalid layer viewport clip");
+    if let Some(clip) = s.viewport_clip {
+        ensure!(viewport_clip_valid(clip), "invalid layer viewport clip");
     }
-    ensure!(s.source_crop.is_none_or(crop::valid_rect),"invalid layer source crop");
+    ensure!(
+        s.source_crop.is_none_or(crop::valid_rect),
+        "invalid layer source crop"
+    );
     if let Some(f) = &s.filter {
         f.validate()?;
     }
-    ensure!(s.sampling==ImageSampling::default()||matches!(s.paint,Paint::Image{..}),"image sampling requires an image paint");
+    ensure!(
+        s.sampling == ImageSampling::default() || matches!(s.paint, Paint::Image { .. }),
+        "image sampling requires an image paint"
+    );
     if let Some(uv) = s.uv {
         ensure!(
             !matches!(s.paint, Paint::GlyphRun { .. }),
             "glyph runs do not take image UV crops"
         );
-        ensure!(
-            s.sampling.valid_uv(uv),
-            "invalid source UV"
-        );
+        ensure!(s.sampling.valid_uv(uv), "invalid source UV");
     }
     let mut depth = 0;
     let mut p = s.parent;
@@ -2333,8 +3021,8 @@ fn validate_layer(
 
 /// Per-axis image texture addressing. Explicit modes never change other
 /// clients, unrelated layers, fonts, masks or render-target sampling.
-#[derive(Clone,Copy,Debug,Default,PartialEq,Eq,Serialize,Deserialize)]
-#[serde(rename_all="snake_case")]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TextureAddressMode {
     /// Extend the nearest edge texel; UV coordinates remain inside 0..1.
     #[default]
@@ -2345,20 +3033,27 @@ pub enum TextureAddressMode {
     MirrorRepeat,
 }
 /// Sampler state stored with a retained image layer, independent of a GPU.
-#[derive(Clone,Copy,Debug,Default,PartialEq,Eq,Serialize,Deserialize)]
-#[serde(default,deny_unknown_fields)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct ImageSampling {
     /// Horizontal texture coordinate addressing.
-    pub address_u:TextureAddressMode,
+    pub address_u: TextureAddressMode,
     /// Vertical texture coordinate addressing.
-    pub address_v:TextureAddressMode,
+    pub address_v: TextureAddressMode,
 }
 impl ImageSampling {
-    pub fn valid_uv(self,uv:[f32;4])->bool {
-        fn axis(mode:TextureAddressMode,a:f32,b:f32)->bool {
-            if !a.is_finite()||!b.is_finite()||b<=a{return false;}
-            match mode {TextureAddressMode::ClampToEdge=>(0.0..=1.0).contains(&a)&&(0.0..=1.0).contains(&b),_=>a.abs()<=4096.0&&b.abs()<=4096.0}
+    pub fn valid_uv(self, uv: [f32; 4]) -> bool {
+        fn axis(mode: TextureAddressMode, a: f32, b: f32) -> bool {
+            if !a.is_finite() || !b.is_finite() || b <= a {
+                return false;
+            }
+            match mode {
+                TextureAddressMode::ClampToEdge => {
+                    (0.0..=1.0).contains(&a) && (0.0..=1.0).contains(&b)
+                }
+                _ => a.abs() <= 4096.0 && b.abs() <= 4096.0,
+            }
         }
-        axis(self.address_u,uv[0],uv[2])&&axis(self.address_v,uv[1],uv[3])
+        axis(self.address_u, uv[0], uv[2]) && axis(self.address_v, uv[1], uv[3])
     }
 }

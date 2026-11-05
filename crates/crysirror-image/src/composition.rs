@@ -3,8 +3,8 @@
 //! are explicit; compatibility layout, native handles and VM execution stay outside.
 //! Recovered profiles follow ethornell-rs core::composite_native_rgba and snapshot.rs
 //! at 4c41dc3a566338d2ea8400635e23b062613e3782; no whole-frame native renderer is called.
-use crate::{rgba_len, ImageSurface};
-use anyhow::{ensure, Result};
+use crate::{ImageSurface, rgba_len};
+use anyhow::{Result, ensure};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FloatBlend {
     Coverage,
@@ -379,21 +379,23 @@ mod tests {
         let source = ImageSurface::filled(1, 1, [255; 4]).unwrap();
         let mut target = ImageSurface::filled(1, 1, [0; 4]).unwrap();
         let old = target.clone();
-        assert!(target
-            .draw_image(
-                (&source).into(),
-                FloatDraw {
-                    destination: [f32::NAN, 0., 1., 1.],
-                    source: [0., 0., 1., 1.],
-                    opacity: 1.,
-                    ignore_source_alpha: false,
-                    blend: FloatBlend::Coverage,
-                    quad: None,
-                    sampling: FloatSampling::NearestClamp,
-                    clip: None
-                }
-            )
-            .is_err());
+        assert!(
+            target
+                .draw_image(
+                    (&source).into(),
+                    FloatDraw {
+                        destination: [f32::NAN, 0., 1., 1.],
+                        source: [0., 0., 1., 1.],
+                        opacity: 1.,
+                        ignore_source_alpha: false,
+                        blend: FloatBlend::Coverage,
+                        quad: None,
+                        sampling: FloatSampling::NearestClamp,
+                        clip: None
+                    }
+                )
+                .is_err()
+        );
         assert_eq!(target, old);
         assert!(crate::packed::blit(&mut target, 1, &source, 2, 0, 0, 0x38, 0).is_err());
         assert_eq!(target, old);

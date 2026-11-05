@@ -532,7 +532,7 @@ pub fn project(ctx: &mut CommandContext, client:ClientId, host: &mut dyn HostSer
         let ascent=metrics.ascent;
         let glyphs = cells
             .iter()
-            .map(|cell| PositionedGlyph { crop: None,
+            .map(|cell| PositionedGlyph { font: None,horizontal_scale: None, font_width: None, cell_width: None,  crop: None,
                 character: cell.character,
                 baseline: [cell.position[0] as f32, cell.position[1] as f32 + ascent],
                 size: None,
@@ -550,6 +550,7 @@ pub fn project(ctx: &mut CommandContext, client:ClientId, host: &mut dyn HostSer
                 rect[3] as f32,
             ],
             paint: Paint::GlyphRun {
+                outline:None,
                 font: selection.alias.clone(),
                 size: f32::from(size),
                 color,

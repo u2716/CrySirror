@@ -2,11 +2,12 @@
 //! Original instruction semantics are separate from shared engine services.
 //! Nothing in this module fabricates successful execution of an unknown opcode.
 #![forbid(unsafe_code)]
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 mod adapter;
 pub mod machine;
 pub mod names;
+pub mod opcodes;
 pub mod settings;
 #[cfg(feature = "runtime")]
 pub use adapter::register;
@@ -59,6 +60,9 @@ pub struct Program {
     /// Native auxiliary u16 per label, copied separately by sub_437FD0.
     pub label_metadata: Vec<u16>,
     pub instructions: Vec<Instruction>,
+    ///Parser-owned, decrypted literal bytes keyed by native instruction offset.
+    ///Keep CP932 aliases distinct when native code reinterprets bytes as WCHARs.
+    raw_strings: std::collections::BTreeMap<u32, Vec<u8>>,
 }
 fn word(bytes: &[u8], at: usize) -> Result<u16> {
     Ok(u16::from_le_bytes(
@@ -84,7 +88,7 @@ fn words(bytes: &[u8], at: usize) -> Result<[i16; 4]> {
         word(bytes, at + 6)? as i16,
     ])
 }
-fn string(bytes: &[u8], at: usize, encrypted: bool) -> Result<(String, usize)> {
+fn string_bytes(bytes: &[u8], at: usize, encrypted: bool) -> Result<(String, usize, Vec<u8>)> {
     let rest = bytes.get(at..).context("truncated Circus string")?;
     let end = rest
         .iter()
@@ -93,13 +97,27 @@ fn string(bytes: &[u8], at: usize, encrypted: bool) -> Result<(String, usize)> {
         .context("unterminated/oversized Circus string")?;
     let raw = rest[..end]
         .iter()
-        .map(|b| if encrypted { b.wrapping_add(0x20) } else { *b })
+        .map(|b| {
+            if encrypted {
+                let value = b.wrapping_add(0x20);
+                if value == b'$' { b' ' } else { value }
+            } else {
+                *b
+            }
+        })
         .collect::<Vec<_>>();
     let (decoded, errors) = encoding_rs::SHIFT_JIS.decode_without_bom_handling(&raw);
     ensure!(!errors, "invalid Circus Shift-JIS string at {at:#x}");
-    Ok((decoded.into_owned(), at + end + 1))
+    Ok((decoded.into_owned(), at + end + 1, raw))
+}
+#[cfg(test)]
+fn string(bytes:&[u8],at:usize,encrypted:bool)->Result<(String,usize)> {
+    let (text,next,_)=string_bytes(bytes,at,encrypted)?;Ok((text,next))
 }
 impl Program {
+    pub(crate) fn literal_bytes(&self,offset:u32)->Option<&[u8]> {
+        self.raw_strings.get(&offset).map(Vec::as_slice)
+    }
     /// Parse the offset2 native layout used by DC4/Plus Harmony. Arithmetic,
     /// allocation, string reads and continuation consumption are bounded.
     pub fn parse(bytes: &[u8]) -> Result<Self> {
@@ -133,6 +151,7 @@ impl Program {
             .map(|i| word(bytes, 4 + 4 * count + 2 * i))
             .collect::<Result<Vec<_>>>()?;
         let mut instructions = Vec::new();
+        let mut raw_strings=std::collections::BTreeMap::new();
         let mut pos = 3;
         while pos < code.len() {
             ensure!(
@@ -155,12 +174,14 @@ impl Program {
                 }
                 0x3b..=0x47 => {
                     let slot = *code.get(pos + 1).context("truncated Circus string slot")?;
-                    let (text, next) = string(code, pos + 2, false)?;
+                    let (text, next, raw) = string_bytes(code, pos + 2, false)?;
+                    raw_strings.insert(start as u32,raw);
                     pos = next;
                     Arguments::SlotString { slot, text }
                 }
                 0x48..=0x6d => {
-                    let (text, next) = string(code, pos + 1, opcode >= 0x69)?;
+                    let (text, next, raw) = string_bytes(code, pos + 1, opcode >= 0x69)?;
+                    raw_strings.insert(start as u32,raw);
                     pos = next;
                     Arguments::String(text)
                 }
@@ -191,6 +212,7 @@ impl Program {
             labels,
             label_metadata,
             instructions,
+            raw_strings,
         })
     }
     /// Instruction lookup rejects entry into strings, arguments or extensions.
@@ -206,6 +228,14 @@ impl Program {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn encrypted_native_space_escape_is_normalized_after_byte_decryption() {
+        assert_eq!(
+            string(&[b'A' - 32, 4, b'B' - 32, 0], 0, true).unwrap(),
+            ("A B".into(), 4)
+        );
+        assert_eq!(string(b"A$B\0", 0, false).unwrap(), ("A$B".into(), 4));
+    }
     fn fixture(code: &[u8]) -> Vec<u8> {
         let mut b = vec![];
         b.extend(2u32.to_le_bytes());
@@ -279,5 +309,6 @@ mod tests {
     }
 }
 
-pub mod native_save;
+mod native_control;
 pub mod native_live;
+pub mod native_save;

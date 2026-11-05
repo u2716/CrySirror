@@ -35,6 +35,66 @@ for profile and ownership boundaries.
 creates no window/audio device but capture still requires the renderer.
 Without a subcommand the executable attempts to play the game beside itself.
 
+### Games on an SMB share
+
+`play` accepts `smb://server/share/game-directory` directly, using a Rust SMB2/3
+client. For example:
+
+```sh
+export CRYSIRROR_SMB_USER='your-user'
+read -rs 'CRYSIRROR_SMB_PASSWORD?SMB password: '; echo
+export CRYSIRROR_SMB_PASSWORD
+./target/release/crysirror play 'smb://server/GameTest/game-Grisaia'
+```
+
+The password prompt above uses zsh. Credentials may also be supplied in URL
+userinfo, with special characters percent-encoded. Diagnostic source names and
+save-directory identities omit URL credentials. Without credentials, the client
+attempts the `guest` account with an empty password.
+
+Detection and archive access use the same network source. Files are read on
+demand with random access, bounded I/O workers and a shared 32 MiB block cache;
+the player does not download the whole game. Game assets are read-only, while
+saves and cache remain local (`--data-dir` selects their location). A dropped
+connection reports an error; automatic reconnection is not implemented.
+
+BGI and SoftPAL's direct integration backends currently require a local or
+OS-mounted directory. HTTP, WebDAV and SFTP URLs are not supported by `play`.
+
+### Games on an NFS export
+
+`play` also accepts `nfs://` URLs. The pure Rust client reads NFSv3, NFSv4.1 or
+NFSv4.2 directly, without an operating-system mount or helper process:
+
+```sh
+./target/release/crysirror play 'nfs://server/data/GameTest/game-Grisaia'
+./target/release/crysirror play 'nfs://server/data/GameTest/game-Grisaia?export=/data/GameTest&version=3'
+./target/release/crysirror play 'nfs://server/GameTest/game-Grisaia?version=4.1'
+```
+
+The URL directory itself is mounted by default. If the server requires its exact
+export path, supply `export=/data/GameTest`; the remaining URL path selects the
+game directory or executable inside that export. NFSv4 paths use the server's
+NFS namespace, which may differ from its local filesystem paths.
+
+`version` defaults to `3`; select `4.1` or `4.2` explicitly. Authentication uses
+the server's AUTH_SYS UID/GID mapping. Set `uid=1000&gid=1000` in the URL or use
+`CRYSIRROR_NFS_UID` and `CRYSIRROR_NFS_GID`. Without either setting, the library
+uses UID/GID 0; server root-squashing and file permissions still apply. Password
+and URL-userinfo authentication are unsupported.
+
+The client defaults to `noresvport=true`, so it does not need privileged source
+ports. The server export must permit these connections (`insecure` in a Linux
+export configuration). `noresvport=false` requests a reserved port and can fail
+if the host account cannot bind one. `:port` selects the NFS TCP service port;
+`mountport=` optionally selects the NFSv3 MOUNT service port.
+
+Reads use four concurrent operations, a bounded queue and a shared 32 MiB block
+cache. Files remain on the server; archives use random access. Game assets are
+read-only, saves remain local, and symlinks/special files fail explicitly. An
+operation timeout retires the connection; reopen the game to reconnect. As with
+SMB, BGI and SoftPAL currently require a local or OS-mounted directory.
+
 Windowed games retain their OS title bar unless borderless behavior is allowed.
 macOS menus use the screen menu bar; Windows uses native window menus; Linux
 currently uses the engine menu fallback. An offscreen capture cannot verify OS

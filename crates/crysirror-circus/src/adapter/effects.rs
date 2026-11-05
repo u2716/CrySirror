@@ -2,17 +2,17 @@
 //! atlas animation and mesh publication belong to the shared VFX worker.
 use super::*;
 use crysirror_vfx::{
+    BlendMode, Burst, EmitterSpec, FacingMode, RenderSpec, SimulationSpace, SystemSpec,
     falling_atlas::{FallingAtlasSpec, SequenceExchange, SequenceRng, SimulationClock},
     screen::ScreenSpriteTarget,
-    BlendMode, Burst, EmitterSpec, FacingMode, RenderSpec, SimulationSpace, SystemSpec,
 };
 
 const EFFECT_ENTITY: u32 = 0x3900_0000;
 const EFFECT_LAYER: u32 = 0x3900_0010;
 pub(super) struct NativeEffect {
-    spec: SystemSpec,
-    kind: u8,
-    parameter: u8,
+    pub(super) spec: SystemSpec,
+    kind: i16,
+    parameter: i16,
 }
 impl Bridge<'_> {
     fn world(&mut self, commands: Vec<Value>) -> Result<()> {
@@ -24,6 +24,9 @@ impl Bridge<'_> {
         Ok(())
     }
     pub(super) fn effects_ready(&mut self) -> Result<bool> {
+        if !self.framebuffer_ready()? {
+            return Ok(false);
+        }
         let Some(effect) = &self.services.effects else {
             return Ok(true);
         };
@@ -67,27 +70,71 @@ impl Bridge<'_> {
         let spec = serde_json::to_value(&effect.spec)?;
         self.world(vec![json!({"op":"set_vfx","id":EFFECT_ENTITY,"vfx":spec})])
     }
-    pub(super) fn falling_effect(&mut self, kind: u8, parameter: u8) -> Result<bool> {
-        ensure!(
-            matches!(kind, 0 | 1),
-            "Circus falling effect type {kind} needs verified mapping"
-        );
+    pub(super) fn falling_effect(&mut self, kind: i16, parameter: i16) -> Result<bool> {
+        if matches!(kind, 7 | 16) {
+            return self.falling_scene_special(kind, parameter);
+        }
         if !self.effects_ready()? {
             return Ok(false);
         }
+        //40EEC0 selects the pool wrapper even for the empty kind0 profile;
+        //density and texture presence do not select the primary sprite back.
+        self.mark_particle_wrappers(if kind==15 {&[59]}else{&[6,19,29,39,59]})?;
         if kind == 0 {
             if self.services.effect_stopping {
                 self.services.effect_stopping = false;
+                self.services.effect_control.clear_pool_controls();
                 return Ok(true);
             }
-            if self.services.effects.is_some() {
-                self.world(vec![json!({"op":"despawn","id":EFFECT_ENTITY})])?;
-                self.services.effects = None;
-                // Let engine-owned screen publication release its leases
-                // before a following native screenshot/fade can inspect it.
+            if let Some(previous) = &self.services.effects {
+                if previous.kind == 0 {
+                    self.services.effect_control.clear_pool_controls();
+                    return Ok(true);
+                }
+                //41DAC0(0) clears descriptors but keeps the twenty native
+                //sprite objects per pool. In particular rain inherits their
+                //scale after a later restart; despawning loses that state.
+                let mut spec = previous.spec.clone();
+                for emitter in &mut spec.emitters {
+                    emitter.revision = emitter
+                        .revision
+                        .checked_add(1)
+                        .context("Circus cleared pool revision")?;
+                    emitter.spawn.bursts.clear();
+                    emitter.spawn.rate = 0.0.into();
+                    emitter.screen = None;
+                    emitter.falling_atlas = None;
+                    emitter.orbit_atlas = None;
+                    emitter.drifting_atlas = None;
+                    if let RenderSpec::Sprite { texture, .. } = &mut emitter.render {
+                        *texture = None;
+                    }
+                }
+                let SimulationClock::External { tick, .. } = spec.clock else {
+                    bail!("Circus cleared pool clock");
+                };
+                let epoch = spec.sequence_exchange.as_ref().map_or(Ok(1), |e| {
+                    e.epoch.checked_add(1).context("Circus cleared pool epoch")
+                })?;
+                spec.sequence_exchange = Some(SequenceExchange {
+                    epoch,
+                    base_tick: tick,
+                    state: self
+                        .services
+                        .sequence_rng
+                        .clone()
+                        .context("Circus cleared pool sequence")?,
+                });
+                self.world(vec![json!({"op":"set_vfx","id":EFFECT_ENTITY,"vfx":spec})])?;
+                self.services.effects = Some(NativeEffect {
+                    spec,
+                    kind: 0,
+                    parameter: 0,
+                });
                 self.services.effect_stopping = true;
                 return Ok(false);
             }
+            self.services.effect_control.clear_pool_controls();
             return Ok(true);
         }
         if self.services.effect_starting {
@@ -103,29 +150,155 @@ impl Bridge<'_> {
             self.services.effect_starting = false;
             return Ok(true);
         }
-        // Five original depth layers share ONE stream, in native41F300 order.
-        // Additional simultaneously active native effect families are rejected.
-        ensure!(
-            self.services.effects.is_none(),
-            "Circus replacing active effect requires a verified pool/reset mapping"
-        );
-        let image = self
+        // These three profiles bind their fixed image before constructing any
+        // pool (4284B0 case40); ordinary/rain pools use the existing resource.
+        let built_in = match kind {
+            13 => Some((28, "system\\effyousei")),
+            15 => Some((30, "system\\efflens")),
+            17 => Some((28, "system\\effhotaru")),
+            _ => None,
+        };
+        //425640 reconstructs pools from the already restored resource handles;
+        //in particular a saved hotaru texture must not turn into effyousei just
+        //because that reconstruction invokes the common kind13 initializer.
+        if let Some((slot, name)) = built_in.filter(|_| self.services.saves.restore.is_none()) {
+            if !self.emit(&Event::LoadImage {
+                slot,
+                name: name.into(),
+            })? {
+                return Ok(false);
+            }
+        }
+        let image = self.services.images.get(&if kind == 15 {
+            30
+        } else if kind == 2 {
+            29
+        } else {
+            28
+        });
+        let rng = self
             .services
-            .images
-            .get(&28)
-            .context("Circus falling texture slot28 missing")?;
-        let spec = native_spec(
-            parameter,
-            image.path.relative(),
-            image.size,
-            self.services
-                .sequence_rng
-                .clone()
-                .context("Circus process random sequence missing")?,
-            self.host.now_ms(),
-        )?;
+            .sequence_rng
+            .clone()
+            .context("Circus process random sequence missing")?;
+        let mut spec = if (parameter % 10).clamp(0, 6) == 0 {
+            //41DAC0 stores the passed handle, clears its twenty descriptors,
+            //then exits before any texture bind/dimension read at density0.
+            //Keep native pool objects (and retained scale), consume no RNG,
+            //and permit the original null texture on this empty branch.
+            let mut empty = empty_pools("", rng.clone(), self.host.now_ms());
+            for emitter in &mut empty.emitters {
+                emitter.screen = None;
+                if let RenderSpec::Sprite { texture, .. } = &mut emitter.render {
+                    *texture = None;
+                }
+            }
+            if kind == 15 {
+                let mut spec = self
+                    .services
+                    .effects
+                    .as_ref()
+                    .map(|effect| effect.spec.clone())
+                    .unwrap_or_else(|| empty.clone());
+                spec.emitters[0] = empty.emitters.remove(0);
+                spec
+            } else {
+                empty
+            }
+        } else if kind == 15 {
+            let image = image.context("Circus particle texture missing")?;
+            let emitter = native_orbit_emitter(
+                parameter,
+                image.path.relative(),
+                image.size,
+                self.services.effect_control.orbit_control(),
+            )?;
+            let mut spec = if let Some(effect) = &self.services.effects {
+                effect.spec.clone()
+            } else {
+                empty_pools(image.path.relative(), rng.clone(), self.host.now_ms())
+            };
+            spec.emitters[0] = emitter;
+            spec
+        } else if matches!(kind, 2 | 3 | 13 | 14 | 17) {
+            let image = image.context("Circus particle texture missing")?;
+            drifting_spec(
+                kind,
+                parameter,
+                image.path.relative(),
+                image.size,
+                rng.clone(),
+                self.host.now_ms(),
+            )?
+        } else {
+            let image = image.context("Circus particle texture missing")?;
+            native_spec(
+                parameter,
+                image.path.relative(),
+                image.size,
+                rng.clone(),
+                self.host.now_ms(),
+            )?
+        };
+        for emitter in &mut spec.emitters {
+            if let Some(node) = &mut emitter.falling_atlas {
+                node.spawn_window = self.services.effect_control.spawn_window();
+            }
+            if let Some(node) = &mut emitter.drifting_atlas {
+                node.spawn_window = self.services.effect_control.drift_window();
+            }
+            let bypass = emitter.drifting_atlas.as_ref().is_some_and(|node| {
+                matches!(
+                    node.motion,
+                    crysirror_vfx::drifting_atlas::DriftMotion::Buoyant
+                        | crysirror_vfx::drifting_atlas::DriftMotion::FallingGlow
+                )
+            });
+            emitter.paused = !self.services.effect_control.effects_enabled() && !bypass;
+        }
+        let replacing = self.services.effects.is_some();
+        if let Some(previous) = &self.services.effects {
+            ensure!(
+                previous.spec.emitters.len() == 5 && spec.emitters.len() == 5,
+                "Circus native particle pool count"
+            );
+            for (index, emitter) in spec.emitters.iter_mut().enumerate() {
+                if kind != 15 || index == 0 {
+                    emitter.revision = previous.spec.emitters[index]
+                        .revision
+                        .checked_add(1)
+                        .context("Circus particle pool revision overflow")?;
+                }
+            }
+            let SimulationClock::External { tick, .. } = previous.spec.clock else {
+                bail!("Circus particle pool clock")
+            };
+            let epoch = previous
+                .spec
+                .sequence_exchange
+                .as_ref()
+                .map_or(Ok(1), |exchange| {
+                    exchange
+                        .epoch
+                        .checked_add(1)
+                        .context("Circus particle pool exchange overflow")
+                })?;
+            spec.clock = previous.spec.clock.clone();
+            spec.revision = previous.spec.revision;
+            spec.sequence_rng = previous.spec.sequence_rng.clone();
+            spec.sequence_exchange = Some(SequenceExchange {
+                epoch,
+                base_tick: tick,
+                state: rng,
+            });
+        }
+        spec.compile()?;
         self.root()?;
-        self.world(vec![json!({"op":"spawn","entity":{"id":EFFECT_ENTITY,"name":"Circus native falling layers","vfx":spec}})])?;
+        if replacing {
+            self.world(vec![json!({"op":"set_vfx","id":EFFECT_ENTITY,"vfx":spec})])?;
+        } else {
+            self.world(vec![json!({"op":"spawn","entity":{"id":EFFECT_ENTITY,"name":"Circus native particle pools","vfx":spec}})])?;
+        }
         self.services.effects = Some(NativeEffect {
             spec,
             kind,
@@ -175,7 +348,7 @@ impl Bridge<'_> {
     }
 }
 fn native_spec(
-    parameter: u8,
+    parameter: i16,
     texture: &str,
     extent: [u32; 2],
     rng: SequenceRng,
@@ -190,19 +363,13 @@ fn native_spec(
         -(i32::from(parameter) % 100 / 10)
     };
     let density = (i32::from(parameter) - 10 * tens).clamp(0, 6) as usize;
-    // Native storm uses a different speed distribution on the first birth
-    // than on reset. Preserve an explicit boundary until both are mapped.
-    ensure!(
-        density != 6,
-        "Circus storm initial/reset speed distinction is not mapped"
-    );
     let count = [0, 1, 3, 6, 9, 12, 20][density];
     let emitters = (0..=4)
         .rev()
         .map(|depth| {
             let mut emitter = EmitterSpec::default();
             emitter.id = format!("depth-{depth}");
-            emitter.capacity = count.max(1);
+            emitter.capacity = 20;
             emitter.space = SimulationSpace::Local;
             emitter.spawn.rate = 0.0.into();
             emitter.spawn.bursts = if count == 0 {
@@ -215,14 +382,16 @@ fn native_spec(
                 canvas: [1280, 720],
                 layer: EFFECT_LAYER + depth,
                 parent: Some(SCENE_ROOT),
-                order: [0, 100 + 4 - depth as i32],
+                order: pool_order(depth),
                 anchor: [0., 0.],
             });
             emitter.falling_atlas = Some(FallingAtlasSpec {
                 canvas: [1280, 720],
                 tick_hz: 60,
                 x_bands: vec![0, -1, 1],
-                fall_range: if density == 6 { [2, 5] } else { [2, 11] },
+                fall_range: [2, 11],
+                initial_fall_range: if density == 6 { Some([2, 5]) } else { None },
+                spawn_window: None,
                 fall_divisor: 1.5,
                 sway_range: [28, 59],
                 phase_modulus: 360,
@@ -265,6 +434,160 @@ fn native_spec(
     };
     spec.compile()?;
     Ok(spec)
+}
+fn pool_order(depth: u32) -> [i32; 2] {
+    //41F300 binds depth4/3/2/1/0 to wrappers6/19/29/39/59. Use the same
+    //painter partitions as the ordinary native object renderer.
+    let object = [59, 39, 29, 19, 6][depth as usize];
+    if object < 10 {
+        [0, object]
+    } else {
+        [1, 50 * 64 + object]
+    }
+}
+fn drifting_spec(
+    kind: i16,
+    parameter: i16,
+    texture: &str,
+    extent: [u32; 2],
+    rng: SequenceRng,
+    now: u64,
+) -> Result<SystemSpec> {
+    let mut spec = empty_pools(texture, rng, now);
+    let count = [0, 1, 3, 6, 9, 12, 20][(parameter % 10).clamp(0, 6) as usize];
+    for (index, emitter) in spec.emitters.iter_mut().enumerate() {
+        let depth = 4 - index as u32;
+        emitter.enabled = true;
+        emitter.capacity = 20;
+        emitter.spawn.bursts = if count == 0 {
+            vec![]
+        } else {
+            vec![Burst { time: 0., count }]
+        };
+        emitter.screen = Some(ScreenSpriteTarget {
+            canvas: [1280, 720],
+            layer: EFFECT_LAYER + depth,
+            parent: Some(SCENE_ROOT),
+            order: pool_order(depth),
+            anchor: [0., 0.],
+        });
+        emitter.drifting_atlas = Some(crysirror_vfx::drifting_atlas::DriftingAtlasSpec {
+            canvas: [1280, 720],
+            texture_extent: extent,
+            tick_hz: 60,
+            depth,
+            motion: match kind {
+                2 => crysirror_vfx::drifting_atlas::DriftMotion::Streak,
+                3 => crysirror_vfx::drifting_atlas::DriftMotion::FallingGlow,
+                14 => crysirror_vfx::drifting_atlas::DriftMotion::RisingGlow,
+                _ => crysirror_vfx::drifting_atlas::DriftMotion::Buoyant,
+            },
+            spawn_window: None,
+        });
+        emitter.render = RenderSpec::Sprite {
+            texture: Some(texture.into()),
+            columns: 1,
+            rows: 1,
+            frames: 1,
+            fps: 0.,
+            soft_distance: 0.,
+            blend: BlendMode::Alpha,
+            facing: FacingMode::Camera,
+        };
+    }
+    spec.compile()?;
+    Ok(spec)
+}
+fn empty_pools(texture: &str, rng: SequenceRng, now: u64) -> SystemSpec {
+    let mut emitters = Vec::new();
+    for depth in (0..=4).rev() {
+        let mut emitter = EmitterSpec::default();
+        emitter.id = format!("depth-{depth}");
+        emitter.enabled = false;
+        emitter.capacity = 20;
+        emitter.space = SimulationSpace::Local;
+        emitter.spawn.rate = 0.0.into();
+        emitter.screen = Some(ScreenSpriteTarget {
+            canvas: [1280, 720],
+            layer: EFFECT_LAYER + depth,
+            parent: Some(SCENE_ROOT),
+            order: pool_order(depth),
+            anchor: [0., 0.],
+        });
+        emitter.render = RenderSpec::Sprite {
+            texture: Some(texture.into()),
+            columns: 1,
+            rows: 1,
+            frames: 1,
+            fps: 0.,
+            soft_distance: 0.,
+            blend: BlendMode::Alpha,
+            facing: FacingMode::Camera,
+        };
+        emitters.push(emitter);
+    }
+    SystemSpec {
+        emitters,
+        clock: SimulationClock::External {
+            tick: 0,
+            wall_time_ms: now,
+        },
+        sequence_rng: Some(rng),
+        ..Default::default()
+    }
+}
+fn native_orbit_emitter(
+    parameter: i16,
+    texture: &str,
+    extent: [u32; 2],
+    control: crysirror_vfx::orbit_atlas::OrbitControl,
+) -> Result<EmitterSpec> {
+    let density = (parameter % 10).clamp(0, 6) as usize;
+    let count = [0, 1, 3, 6, 9, 12, 20][density];
+    let mut emitter = EmitterSpec::default();
+    emitter.id = "depth-4".into();
+    emitter.capacity = 20;
+    emitter.space = SimulationSpace::Local;
+    emitter.spawn.rate = 0.0.into();
+    emitter.spawn.bursts = if count == 0 {
+        vec![]
+    } else {
+        vec![Burst { time: 0., count }]
+    };
+    emitter.spawn.burst_looping = false;
+    emitter.screen = Some(ScreenSpriteTarget {
+        canvas: [1280, 720],
+        layer: EFFECT_LAYER + 4,
+        parent: Some(SCENE_ROOT),
+        order: pool_order(4),
+        anchor: [0.5, 0.5],
+    });
+    emitter.orbit_atlas = Some(crysirror_vfx::orbit_atlas::OrbitAtlasSpec {
+        tick_hz: 60,
+        texture_extent: extent,
+        cells: vec![[140, 0, 180, 40], [180, 0, 200, 20], [200, 0, 208, 8]],
+        radius_stride: 64,
+        radius_base: 8,
+        radius_span: 20,
+        scale_percent: [300, 699],
+        alpha_steps: 10,
+        alpha_divisor: 100.,
+        radians_per_degree: 0.01745327777777778,
+        position_anchor: [0.5, 0.5],
+        signed_tolerance: true,
+        control,
+    });
+    emitter.render = RenderSpec::Sprite {
+        texture: Some(texture.into()),
+        columns: 1,
+        rows: 1,
+        frames: 1,
+        fps: 0.,
+        soft_distance: 0.,
+        blend: BlendMode::Alpha,
+        facing: FacingMode::Camera,
+    };
+    Ok(emitter)
 }
 #[cfg(test)]
 mod tests {

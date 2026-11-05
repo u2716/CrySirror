@@ -22,3 +22,12 @@ __pycache__/
 /local/
 # Screenshots/movies rendered from third-party game data (see images/README.md).
 /images/third-party/
+
+# Native packaging intermediates (local builds only)
+/platform/apple/Vendor/
+/platform/apple/*.xcodeproj/
+/platform/android/.gradle/
+/platform/android/.kotlin/
+/platform/android/build/
+/platform/android/app/build/
+/platform/android/local.properties

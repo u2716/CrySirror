@@ -9,6 +9,8 @@ fn node() -> FallingAtlasSpec {
         tick_hz: 60,
         x_bands: vec![0, -1, 1],
         fall_range: [2, 4],
+        initial_fall_range: None,
+        spawn_window: None,
         fall_divisor: 2.,
         sway_range: [0, 3],
         phase_modulus: 5,
@@ -181,4 +183,106 @@ fn receipt_counts_completed_steps_instead_of_last_accepted_tick() {
         assert_eq!(frame.sequence_states[0].completed_tick, expected);
     }
     assert!(world.is_caught_up());
+}
+#[test]
+fn live_spawn_window_is_fenced_without_restarting_existing_particles() {
+    let mut world = CpuWorld::default();
+    let mut input = input();
+    let original = world.advance(&[input.clone()], 0).unwrap();
+    let sequence = original.sequence_states[0].sequence_rng.clone();
+    for emitter in &mut input.spec.emitters {
+        emitter.falling_atlas.as_mut().unwrap().spawn_window = Some(FallingSpawnWindow {
+            bounds: [4, 9],
+            chance: 100,
+            attempts: 100,
+        });
+    }
+    input.spec.sequence_exchange = Some(SequenceExchange {
+        epoch: 1,
+        base_tick: 0,
+        state: sequence.clone(),
+    });
+    let changed = world.advance(&[input.clone()], 0).unwrap();
+    assert_eq!(changed.sequence_states[0].sequence_rng, sequence);
+    assert_eq!(changed.sequence_states[0].exchange_epoch, 1);
+    for (before, after) in original.emitters.iter().zip(&changed.emitters) {
+        assert_eq!(before.particles, after.particles);
+        assert_eq!(before.screen_uvs, after.screen_uvs);
+    }
+    input.spec.clock = SimulationClock::External {
+        tick: 1,
+        wall_time_ms: 17,
+    };
+    let tick = world.advance(&[input], 0).unwrap();
+    assert_eq!(tick.sequence_states[0].completed_tick, 1);
+}
+fn orbit() -> orbit_atlas::OrbitAtlasSpec {
+    orbit_atlas::OrbitAtlasSpec {
+        tick_hz: 60,
+        texture_extent: [256, 64],
+        cells: vec![[140, 0, 180, 40], [180, 0, 200, 20], [200, 0, 208, 8]],
+        radius_stride: 64,
+        radius_base: 8,
+        radius_span: 20,
+        scale_percent: [300, 699],
+        alpha_steps: 10,
+        alpha_divisor: 100.,
+        radians_per_degree: 0.01745327777777778,
+        position_anchor: [0.5, 0.5],
+        signed_tolerance: true,
+        control: orbit_atlas::OrbitControl {
+            origin: [320., 180.],
+            angle: 0.,
+            target: Some(90.),
+            ticks: 10,
+        },
+    }
+}
+#[test]
+fn explicit_pool_restart_preserves_other_pools_and_consumes_only_the_new_birth_draws() {
+    let mut world = CpuWorld::default();
+    let mut input = input();
+    let original = world.advance(&[input.clone()], 0).unwrap();
+    input.spec.emitters[0].revision = 1;
+    input.spec.emitters[0].falling_atlas = None;
+    input.spec.emitters[0].orbit_atlas = Some(orbit());
+    input.spec.emitters[0].screen.as_mut().unwrap().anchor = [0.5, 0.5];
+    assert!(world.advance(&[input.clone()], 0).is_err());
+    let sequence = original.sequence_states[0].sequence_rng.clone();
+    input.spec.sequence_exchange = Some(SequenceExchange {
+        epoch: 1,
+        base_tick: 0,
+        state: sequence.clone(),
+    });
+    let restarted = world.advance(&[input.clone()], 0).unwrap();
+    assert_eq!(
+        restarted.emitters[1].particles,
+        original.emitters[1].particles
+    );
+    assert_eq!(
+        restarted.emitters[1].screen_uvs,
+        original.emitters[1].screen_uvs
+    );
+    assert_ne!(
+        restarted.emitters[0].particles,
+        original.emitters[0].particles
+    );
+    let mut expected = sequence;
+    for _ in 0..5 {
+        expected.next_u32().unwrap();
+    }
+    assert_eq!(restarted.sequence_states[0].sequence_rng, expected);
+    let packed = screen::pack_screen_emitter(
+        4,
+        &restarted.emitters[0],
+        &screen::ScreenSpriteOptions {
+            canvas: [32, 12],
+            anchor: [0.5, 0.5],
+        },
+        restarted.emitters[0].screen_uvs.as_deref(),
+    )
+    .unwrap();
+    assert_eq!(packed.parts.len(), 1);
+    input.spec.emitters[0].revision = 0;
+    assert!(world.advance(&[input], 0).is_err());
 }

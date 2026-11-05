@@ -1,4 +1,4 @@
-# Native adapters: engine capability extraction
+# Native adapters
 
 The launch/registry sections describe the current desktop boundary. Dated sections
 record bounded implementation checkpoints, not an exhaustive current command
@@ -38,6 +38,12 @@ style; that request remains retained VM state. Rendering keeps the canvas
 aspect ratio, and pointer input maps back to the original canvas coordinates.
 Display dimensions reported to native VMs use physical pixels as well.
 
+Engine menus and modal dialogs temporarily own input ahead of registered native
+routes. Their samples do not enter the native event journal; receivers and existing
+receipts remain valid. Buttons held by the UI stay isolated until physical release,
+then normal routing resumes. Ordinary interactive widgets still require an explicit
+compatible input owner.
+
 NScripter launch reads the original source and mounts SAR/NSA containers on
 engine resource workers under private `__nscript/` prefixes. Native lookup
 checks loose files first, then configured containers. The mixed SAR/NSA profile
@@ -56,22 +62,28 @@ their empty default. This does not implement or acknowledge unsupported
 WIN32Dialog modeless windows. Startup arguments do not relocate the automatic
 player's existing save directory; snapshot configuration still includes them.
 
+QLIE launch mounts the original FilePack archives and derives its canvas from
+`System/Etc/Game.txt`. Its first-class `.s` VM maps ABMP, formatted text,
+collision buttons, image processing, audio and media to the shared services.
+See [the QLIE adapter](../crates/crysirror-qlie/README.md) for its supported
+resource profiles and remaining native operations.
+
 Reference engines provide native semantic requirements and test inputs.
 Reusable capabilities belong in CrySirror; native VMs call them through thin
 semantic/syscall adapters.
 
-## Removed hosting paths
+## Integration boundaries
 
-RFVP, BGI and RealLive hosted adapters and their dedicated engine packages
-have been deleted, including desktop features, factories and native project
-configuration schemas. Whole-frame hosting is prohibited. Earlier successful
-screenshots/builds document the rejected approach, not accepted integrations.
-No fallback aliases to the data VM are provided.
+BGI and SoftPAL retain complete native implementations inside their workspace
+crates. A session worker owns the native runtime; CrySirror supplies input and
+presents its frames and PCM. The default desktop does not register the preserved
+BGI capability-extraction implementation. Other adapters use shared engine APIs
+through semantic adapters. No fallback aliases to the data VM are provided.
 
 ## Current registry
 
 The desktop binary always registers `crysirror-script-v1`, `siglus`, `reallive`,
-`avg32`, `krkr`, `rfvp`, `nscripter`, `bgi`, `circus`, `catsystem2`, `majiro`,
+`avg32`, `krkr`, `rfvp`, `nscripter`, `bgi`, `softpal`, `circus`, `catsystem2`, `majiro`,
 `system-nnn` and `system4`; there is no per-engine build feature. Linking `krkr`
 (ADR 0053) makes a distributed binary AGPL; see NOTICE.md.
 The bare Runtime registers the first two; hosts explicitly register other VMs.
@@ -82,6 +94,9 @@ TEXT/NAME profile described below. Unconfigured or unmapped text fails visibly.
 (ADR 0095); raster work is the shared `crysirror_image::avg32` device.
 
 ## Acceptance
+
+The extraction criteria below apply to semantic adapters. BGI and SoftPAL use
+the complete-runtime boundary described above.
 
 KiriKiri's menu.dll now names a facade over CrySirror MenuSpec/Ui operations.
 Explicit registration-only plugin shells are allowed through Config.plugin_shells;
@@ -110,7 +125,7 @@ Pinned upstream source is reference material; it is not a product host.
 `crysirror-reallive` is a new pure-VM/semantic adapter after removal of the old
 hosted implementation. The desktop links and registers it unconditionally.
 Other hosts can register its factory explicitly; the default Runtime registry remains data VM
-plus the Siglus subset. This does not reinstate RFVP/BGI hosting.
+plus the Siglus subset. RealLive uses the shared-service boundary.
 
 Original parser/bank/control flow remains in the VM, whose external Command/Text
 events stay pending until successful CrySirror calls. Native operations target
@@ -641,14 +656,28 @@ end-loop changes and live Movie save reconstruction remain explicit unsupported
 profiles. This implementation does not itself establish that a real Rewrite title
 is working.
 
-BGI is a bounded native-bp-v1 executor plus a semantic adapter, derived from
-the owner's ethornell-rs `0cfff1d274ecc4554d0af8af1c7b1c7908595e96`.
-Native BP uses shared Canvas/Layer/GlyphRun, worker-backed resource/audio
-admission and engine time/input. It is not the old complete BGI VM/App moved
-under another name. Scenario/Buriko, archive search, complete heap/scheduling,
-original saves and numerous native calls are unsupported. No real BGI game
-has been verified in this batch; its independent authored BP fixture is
-separate evidence. See the two crate SOURCE.json files and adapter README.
+## BGI and SoftPAL
+
+BGI uses `crysirror-bgi-integrated`, containing the original core, archive,
+image, script, VM, audio, render and app modules. SoftPAL uses
+`crysirror-softpal`, containing the original asset, script and VM modules from
+sena-rs. Both load original game resources directly. Desktop bootstrap supplies
+physical resource/save roots and an optional runtime font, with no external
+extraction or bootstrap script. Original native saves remain with the runtimes;
+framework snapshots are explicitly unsupported.
+
+BGI detection also recognizes a game's `Install/` media layout. Its session
+exposes an installed resource view when the original bootstrap identifier and
+installation sentinel match. The media files stay in place. Native writes to
+the primary directory, including configuration and original save files, use a
+per-client writable overlay; subsequent native reads see that overlay first.
+
+SoftPAL retains native aspect-mode values and sprite-positioning logic. The
+host's `aspect_modes` configuration selects the output scale for indices 0–3;
+the portable defaults are `stretch`, `fit`, `center`, `fit`. This output policy
+is independent of the original Windows renderer's scaling implementation.
+
+## NScripter
 
 NScripter uses a first-class Rust text VM over shared engine services, referenced
 against ONScripter `848a60892e4d721459e8d1051e1b8fe45164c3e9`, GPL-2.0-or-later.
@@ -803,43 +832,18 @@ native button/wait/snapshot callbacks and generic UI tests have passed, while
 rich/vertical layout, wipes, other object profiles and original-save
 reconstruction are not implied by that verified subset.
 
-### CatSystem2 native KCS foundation (2026-10-31)
+## CatSystem2
 
-`crysirror-catsystem2` is a first-class original KCS v2 VM and thin semantic
-adapter. It does not host an original engine or reuse a composed framebuffer.
-The original configured KCS entry is parsed and stepped; substituting a CST
-scenario for the KCS boot is not accepted. `SOURCE.json` records inspected public
-source pins and the owner module SHA256 used only to guard reviewed native ABI
-semantics. Unknown ABI, opcode, native call or native menu command fails visibly.
+`crysirror-catsystem2` runs KCS and FES through shared Resource, Image, Canvas,
+Layer, Text, Input, Audio and UI services. Installed-game detection mounts INT
+and FWP resources directly. Image effects, PANEL composition, E-mote playback,
+message history and native menus use the corresponding engine capabilities.
 
-Shared `cat-system/int` archive loading can derive the encrypted archive profile
-from capability-scoped PE V_CODE2 resources. Shared `resource::pe_menu` parses
-bounded standard MENU v0 resources; the adapter translates original menu IDs to
-engine-owned retained UI trees and maps enabled state through public UI commands.
-Shared `resource::xml` owns bounded immutable XML element/attribute/text parsing
-and path lookup. CatSystem2 retains only original numeric XML handles, native
-format/address/default/close policy, and pending-call completion. Task admission
-precedes XML source reads and CPU parsing; only the owner publishes completed Arc
-resources and native handles. Original logical addresses never become pointers.
-
-This is partial implementation. Parsing all original containers/scripts and
-reaching a native frontier does not validate a title screen, text/image/audio
-playback, CST/FES execution, original saves or complete game compatibility.
-Observed behavior and compilation results are separately logged in STATUS.md.
-
-The current reviewed FES runtime profile constructs original metadata before
-executing script, then publishes real engine-owned IMAGE/CIMAGE leases, Canvas
-draws and PLANE views at the retained post-script resource boundary. The sealed
-owner class-frame receipt asserts2 image leases/draws and6 Plane views; it is
-CPU resource acceptance, not a title or GPU result. Native baseimg bitmap/Plane
-copies and visibility use shared Canvas operations and preserve the original
-native payload/motion producer. Other classes, full motion/SOUND/CST/save and
-unsupported transform/input profiles remain separate unfinished source families.
-Optional native `random_seeds: [float_seed, integer_seed]` supplies exact u32
-words; omission/null requests the shared scoped async seed capability without a
-clock fallback. Rust Config, the Python desktop-project validator and
-`schemas/catsystem2-config.schema.json` share this strict optional pair contract;
-ordinary detection omits it and uses the same native default.
+The [crate module index](../crates/crysirror-catsystem2/src/lib.rs) identifies
+implementation entry points. Native mappings and reverse-engineering findings
+are documented beside those operations. Shared contracts are described in the
+[engine API reference](api/REFERENCE.md). Adapter-specific validation remains
+with the [crate notes](../crates/crysirror-catsystem2/HANDOFF.md).
 
 ## Siglus font and EXCALL source families (2026-11-01)
 

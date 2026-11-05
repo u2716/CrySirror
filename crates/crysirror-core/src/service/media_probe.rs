@@ -1,6 +1,6 @@
 // Copyright (c) 2026 CrySirror contributors. MPL-2.0.
 //! Device-free decoder/header preparation, with no playback resource or PCM.
-use crate::{state::ClientId, Result};
+use crate::{Result, state::ClientId};
 use alloc::{boxed::Box, string::String};
 #[derive(Clone, Debug, PartialEq)]
 pub struct MediaProbeInfo {

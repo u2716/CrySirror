@@ -2488,7 +2488,7 @@
           "returns": "Record<string, any>"
         },
         {
-          "doc": "Atomically apply typed canvas commands: create, destroy, clear, draw, set, copy, present, present_isolated and hide. present_isolated keeps a live source surface as one immutable snapshot draw, refreshing it after edits; parent opacity/transform applies after composition. Nested snapshot/resource limits fail atomically. Destroy releases an existing unpresented surface; hide its presentations first. Frozen copies survive source destruction. Draws contain ordinary Layer specs, including positioned glyph runs.",
+          "doc": "Atomically apply typed canvas commands: create, destroy, clear, draw, set, copy, present, present_isolated, present_target and hide. present_isolated isolates composition with paged output for large surfaces; present_target uses one whole target up to8192 per axis so masks/distortion sample globally across storage pages. Both refresh after source edits. Parent opacity/transform applies after composition; renderer memory/device budgets still apply. Nested snapshot/resource limits fail atomically. Destroy releases an existing unpresented surface; hide its presentations first. Frozen copies survive source destruction. Draws contain ordinary Layer specs, including positioned glyph runs.",
           "name": "apply",
           "params": [
             {
@@ -3953,6 +3953,21 @@
           "returns": "void"
         },
         {
+          "doc": "Replace each positioned glyph clip {x,y,width,height} or null; preserves all layer motion and sequence ownership. Count must match the existing glyph run.",
+          "name": "setGlyphCrops",
+          "params": [
+            {
+              "name": "id",
+              "type": "number"
+            },
+            {
+              "name": "crops",
+              "type": "number[] | null[]"
+            }
+          ],
+          "returns": "void"
+        },
+        {
           "doc": "Crop this layer's own geometry and source UVs in local [x,y,w,h] coordinates before projection, without changing content layout or children. Null removes; zero extent hides its payload.",
           "name": "setSourceCrop",
           "params": [
@@ -3990,7 +4005,7 @@
           "returns": "number[] | null"
         },
         {
-          "doc": "Siglus-style 2D filter {mono, invert, bright, dark, color_rate, color, add, tone_curve?:{asset,row,saturation}, mask?:{asset,gray_alpha}, alpha_test, distortion?:{kind:'mosaic'|'raster'|'radial_blur'|'threshold_fade',...}} or null.",
+          "doc": "Siglus-style 2D filter {mono, invert, bright, dark, color_rate, color, add, tone_curve?:{asset,row,saturation}, mask?:{asset,gray_alpha?,channel?:'rgba'|'red'|'green'|'blue'|'alpha',offset?:number}, alpha_test, distortion?:{kind:'mosaic'|'raster'|'radial_blur'|'threshold_fade',...}} or null.",
           "name": "setFilter",
           "params": [
             {
@@ -4116,6 +4131,47 @@
           "returns": "void"
         },
         {
+          "doc": "Create owned externally clocked incremental channels and Layer/filter bindings. Banked linear/oscillating queues retain activation, velocity, loop origins and capture/replay state.",
+          "name": "beginSequence",
+          "params": [
+            {
+              "name": "id",
+              "type": "number"
+            },
+            {
+              "name": "spec",
+              "type": "Record<string, any>"
+            }
+          ],
+          "returns": "void"
+        },
+        {
+          "doc": "Enqueue, set, capture, replay, advance or finish an owned channel queue. Advance requires consecutive decimal-string generation/revision receipts; a pending worker never advances its clock.",
+          "name": "sequence",
+          "params": [
+            {
+              "name": "id",
+              "type": "number"
+            },
+            {
+              "name": "operation",
+              "type": "Record<string, any>"
+            }
+          ],
+          "returns": "void"
+        },
+        {
+          "doc": "Retained owner-scoped sequence channels, queues, active/last records and exact generation/revision. Null means the owned layer has no sequence.",
+          "name": "sequenceStatus",
+          "params": [
+            {
+              "name": "id",
+              "type": "number"
+            }
+          ],
+          "returns": "Record<string, any> | null"
+        },
+        {
           "doc": "Register an external procedural animation producer. Query motionStatus for its fresh generation; engine stores no executable callback. Retire producers before scene snapshots.",
           "name": "beginExternalMotion",
           "params": [
@@ -4191,6 +4247,47 @@
             {
               "name": "generation",
               "type": "string"
+            }
+          ],
+          "returns": "void"
+        },
+        {
+          "doc": "Advance only this client's automatic layer motion, text reveal and transition clocks by 0..86400000 ms; external tracks and other clients retain their clocks.",
+          "name": "advanceTime",
+          "params": [
+            {
+              "name": "deltaMs",
+              "type": "number"
+            }
+          ],
+          "returns": "void"
+        },
+        {
+          "doc": "Reparent an owned node while preserving paint, animation and child hierarchy; absent/cyclic/foreign parents fail atomically.",
+          "name": "setParent",
+          "params": [
+            {
+              "name": "id",
+              "type": "number"
+            },
+            {
+              "name": "parent",
+              "type": "number | null"
+            }
+          ],
+          "returns": "void"
+        },
+        {
+          "doc": "Replace owned layer paint while retaining geometry and animation; non-image paints clear image-only sampling and UV crop.",
+          "name": "setPaint",
+          "params": [
+            {
+              "name": "id",
+              "type": "number"
+            },
+            {
+              "name": "paint",
+              "type": "Record<string, any>"
             }
           ],
           "returns": "void"
@@ -5418,6 +5515,25 @@
           "returns": "Record<string, any> | null"
         },
         {
+          "doc": "Resolve an explicit outline average-character pixel width using this client's OS/2 font metadata. Returns a horizontal outline scale; precomputed/unspecified faces fail visibly.",
+          "name": "fontWidthScale",
+          "params": [
+            {
+              "name": "alias",
+              "type": "string"
+            },
+            {
+              "name": "size",
+              "type": "number"
+            },
+            {
+              "name": "averageWidth",
+              "type": "number"
+            }
+          ],
+          "returns": "number"
+        },
+        {
           "doc": "Measure one Unicode scalar with this client's authorized immutable font view; returns ascent, descent and advance. Size 1..512.",
           "name": "fontMetrics",
           "params": [
@@ -5725,6 +5841,17 @@
       "global": "ui",
       "methods": [
         {
+          "doc": "Consume only this client's retained events in an owned widget subtree, preserving all other deliveries.",
+          "name": "drainSubtreeEvents",
+          "params": [
+            {
+              "name": "root",
+              "type": "number"
+            }
+          ],
+          "returns": "Record<string, any>[]"
+        },
+        {
           "doc": "Consume this client's retained events once, preserving other clients' events. Use this for action dispatch; events only reads a snapshot of the queue.",
           "name": "drainEvents",
           "params": [],
@@ -5864,6 +5991,28 @@
           "returns": "void"
         },
         {
+          "doc": "Begin owner-scoped externally ticked f32 pointer motion {start,target,ticks}; each axis snaps within one absolute increment.",
+          "name": "movePointerStepped",
+          "params": [
+            {
+              "name": "motion",
+              "type": "Record<string, any>"
+            }
+          ],
+          "returns": "void"
+        },
+        {
+          "doc": "Advance only this client's externally clocked pointer motion.",
+          "name": "advancePointerMotion",
+          "params": [
+            {
+              "name": "ticks",
+              "type": "number"
+            }
+          ],
+          "returns": "void"
+        },
+        {
           "doc": "Ask the presenting host to move the OS pointer to a canvas position.",
           "name": "warpPointer",
           "params": [
@@ -5913,7 +6062,7 @@
           "returns": "void"
         },
         {
-          "doc": "Insert/replace a widget spec {id, parent?, rect, kind, flow?, text?, ...}.",
+          "doc": "Insert/replace a widget spec {id, parent?, rect, kind, flow?, text?, slider_axis?:horizontal|vertical, focus_follows_pointer?:bool, ...}. Sliders use that axis for shared pointer capture, keyboard adjustment and fill.",
           "name": "put",
           "params": [
             {
@@ -5930,6 +6079,21 @@
             {
               "name": "id",
               "type": "number"
+            }
+          ],
+          "returns": "void"
+        },
+        {
+          "doc": "Update owned widget geometry while retaining input and motion state.",
+          "name": "setRect",
+          "params": [
+            {
+              "name": "id",
+              "type": "number"
+            },
+            {
+              "name": "rect",
+              "type": "number[]"
             }
           ],
           "returns": "void"
@@ -6959,6 +7123,21 @@
       "system": "layer"
     },
     {
+      "api": "Layers.setPaint",
+      "op": "set_paint",
+      "system": "layer"
+    },
+    {
+      "api": "Layers.setParent",
+      "op": "set_parent",
+      "system": "layer"
+    },
+    {
+      "api": "Layers.advanceTime",
+      "op": "advance_time",
+      "system": "layer"
+    },
+    {
       "api": "Layers.setClip",
       "op": "set_clip",
       "system": "layer"
@@ -6974,8 +7153,18 @@
       "system": "layer"
     },
     {
+      "api": "Layers.setGlyphCrops",
+      "op": "set_glyph_crops",
+      "system": "layer"
+    },
+    {
       "api": "Layers.setFilter",
       "op": "set_filter",
+      "system": "layer"
+    },
+    {
+      "api": "Layers.rebindImage",
+      "op": "rebind_image",
       "system": "layer"
     },
     {
@@ -7011,6 +7200,16 @@
     {
       "api": "Layers.beginMotion",
       "op": "begin_motion",
+      "system": "layer"
+    },
+    {
+      "api": "Layers.beginSequence",
+      "op": "begin_sequence",
+      "system": "layer"
+    },
+    {
+      "api": "Layers.sequence",
+      "op": "sequence",
       "system": "layer"
     },
     {
@@ -7125,12 +7324,22 @@
     },
     {
       "api": "Canvases.apply",
+      "op": "present_target",
+      "system": "canvas"
+    },
+    {
+      "api": "Canvases.apply",
       "op": "hide",
       "system": "canvas"
     },
     {
       "api": "Canvases.apply",
       "op": "destroy",
+      "system": "canvas"
+    },
+    {
+      "api": "Canvases.apply",
+      "op": "retire",
       "system": "canvas"
     },
     {
@@ -7161,6 +7370,16 @@
     {
       "api": "Ui.warpPointer",
       "op": "warp_pointer",
+      "system": "ui"
+    },
+    {
+      "api": "Ui.movePointerStepped",
+      "op": "move_pointer_stepped",
+      "system": "ui"
+    },
+    {
+      "api": "Ui.advancePointerMotion",
+      "op": "advance_pointer_motion",
       "system": "ui"
     },
     {
@@ -7206,6 +7425,11 @@
     {
       "api": "Ui.remove",
       "op": "remove",
+      "system": "ui"
+    },
+    {
+      "api": "Ui.setRect",
+      "op": "set_rect",
       "system": "ui"
     },
     {
@@ -7778,6 +8002,48 @@
       "fields": [
         {
           "default": null,
+          "doc": "Modulate stored alpha using an immutable original-alpha plane.",
+          "name": "alpha_mask_plane",
+          "rust_type": "spec: crate::alpha_mask::AlphaMaskPlane"
+        },
+        {
+          "default": null,
+          "doc": "Ordered atlas alpha replacement, retaining stored destination RGB.",
+          "name": "alpha_stamps",
+          "rust_type": "spec: crate::alpha_stamps::AlphaStamps"
+        },
+        {
+          "default": null,
+          "doc": "Saturating alpha neighborhoods with explicit sample offsets and edge colour.",
+          "name": "coverage_sum",
+          "rust_type": "spec: crate::coverage_sum::CoverageSum"
+        },
+        {
+          "default": null,
+          "doc": "Fixed-point alpha-aware triangular kernel; expands only explicit padding.",
+          "name": "triangular_blur",
+          "rust_type": "spec: crate::triangular_blur::TriangularBlur"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "row_deform",
+          "rust_type": "spec: crate::pyramid::RowDeform"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "alpha_plane_pair",
+          "rust_type": "spec: crate::alpha_planes::AlphaPlanePair"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "stored_mask_blend",
+          "rust_type": "spec: crate::stored_mask::StoredMaskBlend"
+        },
+        {
+          "default": null,
           "doc": "Exact stored-channel bitmap kernels over two immutable resources.",
           "name": "integer_raster",
           "rust_type": "spec: crate::integer_raster::IntegerRaster"
@@ -7895,6 +8161,12 @@
           "doc": "",
           "name": "invert",
           "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "Every stored byte, alpha included, becomes floor(byte * factor / 255), factors in RGBA order (CatSystem2 68BEC0 multiplies a bitmap by ARGB).",
+          "name": "channel_scale",
+          "rust_type": "factors: [u8; 4]"
         },
         {
           "default": null,
@@ -8715,6 +8987,730 @@
       "used_by": "HostServices.begin_civil_time worker result, independent of virtual clock"
     },
     {
+      "doc": "A recurring calendar day in a timezone's published annual rule.",
+      "fields": [
+        {
+          "default": null,
+          "doc": "Month1..12, week1..5 (5 means last), weekday Sunday0..Saturday6.",
+          "name": "MonthWeekday",
+          "rust_type": "month: u8, week: u8, weekday: u8"
+        },
+        {
+          "default": null,
+          "doc": "Day1..365, omitting February29 from the count.",
+          "name": "JulianNoLeap",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "Day0..365, counting February29 when present.",
+          "name": "Ordinal",
+          "rust_type": ""
+        }
+      ],
+      "name": "CivilTransitionDay",
+      "used_by": "Rust host timezone annual transition rule"
+    },
+    {
+      "doc": "Annual transition wall time; seconds may extend outside the named day.",
+      "fields": [
+        {
+          "default": null,
+          "doc": "Calendar day before adding the transition's clock displacement.",
+          "name": "day",
+          "rust_type": "CivilTransitionDay"
+        },
+        {
+          "default": null,
+          "doc": "Seconds from midnight, in the wall clock immediately before transition.",
+          "name": "seconds",
+          "rust_type": "i32"
+        }
+      ],
+      "name": "CivilTransition",
+      "used_by": "Rust historical standard/daylight transition"
+    },
+    {
+      "doc": "Published annual daylight-saving rules, independent of an instant sample.",
+      "fields": [
+        {
+          "default": null,
+          "doc": "Transition into daylight time, declared on the standard clock.",
+          "name": "start",
+          "rust_type": "CivilTransition"
+        },
+        {
+          "default": null,
+          "doc": "Transition into standard time, declared on the daylight clock.",
+          "name": "end",
+          "rust_type": "CivilTransition"
+        }
+      ],
+      "name": "CivilDaylightRules",
+      "used_by": "CivilTimeZoneProfile retained annual daylight rules"
+    },
+    {
+      "doc": "Current host timezone policy captured once by an authorized worker. Biases are seconds west of UTC, and daylight bias is added to standard bias. Rules describe current recurring policy, not historical IANA eras.",
+      "fields": [
+        {
+          "default": null,
+          "doc": "Standard-time seconds west of UTC.",
+          "name": "standard_bias_seconds",
+          "rust_type": "i32"
+        },
+        {
+          "default": null,
+          "doc": "Additional seconds west of UTC during daylight time, often -3600.",
+          "name": "daylight_bias_seconds",
+          "rust_type": "i32"
+        },
+        {
+          "default": null,
+          "doc": "Explicit recurring policy; None means daylight time is disabled.",
+          "name": "daylight",
+          "rust_type": "Option<CivilDaylightRules>"
+        },
+        {
+          "default": null,
+          "doc": "Uninterpreted process TZ override, for callers with a specific CRT's environment grammar. It does not replace the published host rules.",
+          "name": "environment_tz",
+          "rust_type": "Option<alloc::string::String>"
+        }
+      ],
+      "name": "CivilTimeZoneProfile",
+      "used_by": "HostServices.begin_civil_timezone retained host profile"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "Pending",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "Ready",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "Failed",
+          "rust_type": ""
+        }
+      ],
+      "name": "CivilTimeZoneState",
+      "used_by": "CivilTimeZoneQuery.poll completion"
+    },
+    {
+      "doc": "",
+      "fields": [],
+      "name": "CivilTimeZoneQuery",
+      "used_by": "Opaque client-owned asynchronous timezone query"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "Get",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "Post",
+          "rust_type": ""
+        }
+      ],
+      "name": "HttpMethod",
+      "used_by": "Rust owner-authorized HttpRequest.method"
+    },
+    {
+      "doc": "Request admission is limited to an exact origin granted by the host owner. Bodies and URL query strings must not be copied to diagnostics.",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "url",
+          "rust_type": "String"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "method",
+          "rust_type": "HttpMethod"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "headers",
+          "rust_type": "Vec<(String, String)>"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "body",
+          "rust_type": "Vec<u8>"
+        },
+        {
+          "default": null,
+          "doc": "Maximum response body bytes (host limit also applies).",
+          "name": "response_limit",
+          "rust_type": "u32"
+        },
+        {
+          "default": null,
+          "doc": "Total operation deadline including redirects, in milliseconds.",
+          "name": "timeout_ms",
+          "rust_type": "u32"
+        }
+      ],
+      "name": "HttpRequest",
+      "used_by": "HostServices.begin_http; explicit origin capability required"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "status",
+          "rust_type": "u16"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "body",
+          "rust_type": "Vec<u8>"
+        }
+      ],
+      "name": "HttpResponse",
+      "used_by": "Bounded retained HTTP response bytes"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "Pending",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "Ready",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "Failed",
+          "rust_type": ""
+        }
+      ],
+      "name": "HttpRequestState",
+      "used_by": "HttpRequestJob.poll completion"
+    },
+    {
+      "doc": "",
+      "fields": [],
+      "name": "HttpRequestJob",
+      "used_by": "Opaque cancellable client-scoped HTTP job"
+    },
+    {
+      "doc": "Independent fixed-step f32 pointer interpolation. Each axis adds its rounded f32 delta and snaps within one absolute step, including the first tick.",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "start",
+          "rust_type": "[i32;2]"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "target",
+          "rust_type": "[i32;2]"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "ticks",
+          "rust_type": "i32"
+        }
+      ],
+      "name": "SteppedPointerMotionSpec",
+      "used_by": "Ui.movePointerStepped / shared float-step pointer interpolation"
+    },
+    {
+      "doc": "Incremental float32 interpolation with a per-axis one-step snap window. A caller advances it only at its admitted input boundary; it samples no clock, owns no OS pointer, and emits logical coordinates for a host to apply.",
+      "fields": [],
+      "name": "SteppedPointerMotion",
+      "used_by": "Rust pure retained float-step pointer state"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "size",
+          "rust_type": "[f32;2]"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "uv",
+          "rust_type": "[f32;4]"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "pivot",
+          "rust_type": "[f32;2]"
+        }
+      ],
+      "name": "TexelQuad",
+      "used_by": "Rust layer::crop::texel_center_quad projection, independent of any VM"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "values",
+          "rust_type": "Vec<f32>"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "retained",
+          "rust_type": "Option<Vec<f32>>"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "rate_channel",
+          "rust_type": "Option<u8>"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "bindings",
+          "rust_type": "Vec<LayerSequenceBinding>"
+        }
+      ],
+      "name": "LayerSequenceSpec",
+      "used_by": "Rust layer queue; LayerCommand.BeginSequence/Sequence and EngineQuery.LayerSequence"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "layer",
+          "rust_type": "u32"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "channel",
+          "rust_type": "u8"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "target",
+          "rust_type": "LayerSequenceBindingTarget"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "map",
+          "rust_type": "LayerSequenceValueMap"
+        }
+      ],
+      "name": "LayerSequenceBinding",
+      "used_by": "Rust layer queue; LayerCommand.BeginSequence/Sequence and EngineQuery.LayerSequence"
+    },
+    {
+      "doc": "Variants are tagged by `\"kind\"`.",
+      "fields": [
+        {
+          "default": null,
+          "doc": "A derived projection depends on this channel without copying it into a finite layer property. Undefined IEEE input suppresses the subtree.",
+          "name": "finite_gate",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "motion",
+          "rust_type": "property: MotionProperty"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "nine_tap_offset",
+          "rust_type": "axis: u8"
+        },
+        {
+          "default": null,
+          "doc": "Drive a retained image's atlas rectangle from an integer frame cursor. A terminal frame retains the atlas producer's final crop on completion.",
+          "name": "texel_image_uv",
+          "rust_type": "allocation: [u32;2], reference: [f32;2], source: [f32;4], step: [f32;2], terminal_frame: Option<u32>, active_lane: Option<u8>"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "image_uv",
+          "rust_type": "origin: [f32; 4], step: [f32; 2], terminal_frame: Option<u32>, active_lane: Option<u8>"
+        }
+      ],
+      "name": "LayerSequenceBindingTarget",
+      "used_by": "Rust layer queue; LayerCommand.BeginSequence/Sequence and EngineQuery.LayerSequence"
+    },
+    {
+      "doc": "Variants are tagged by `\"kind\"`.",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "identity",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "affine",
+          "rust_type": "scale: f32, offset: f32"
+        },
+        {
+          "default": null,
+          "doc": "One threshold applied to all listed channels before choosing a divisor. Useful for encoded percentages that share a domain switch across axes.",
+          "name": "ratio",
+          "rust_type": "test_channels: Vec<u8>, threshold: f32, below: f32, above: f32"
+        },
+        {
+          "default": null,
+          "doc": "Keep a scaled extent centered in a reference extent while the input position and scale channels remain independent CPU values.",
+          "name": "centered_scale",
+          "rust_type": "source_extent: f32, reference_extent: f32, scale_channel: u8, test_channels: Vec<u8>, threshold: f32, below: f32, above: f32"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "zero_fallback",
+          "rust_type": "channel: u8, scale: f32"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "clamp",
+          "rust_type": "low: f32, high: f32, scale: f32"
+        }
+      ],
+      "name": "LayerSequenceValueMap",
+      "used_by": "Rust layer queue; LayerCommand.BeginSequence/Sequence and EngineQuery.LayerSequence"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "current",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "retained",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "current_at_zero_bank",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "explicit_start",
+          "rust_type": ""
+        }
+      ],
+      "name": "LayerSequenceDeltaSource",
+      "used_by": "Rust layer queue; LayerCommand.BeginSequence/Sequence and EngineQuery.LayerSequence"
+    },
+    {
+      "doc": "Variants are tagged by `\"kind\"`.",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "frames",
+          "rust_type": "channel: u8, frames: u32, hold_ticks: i32, looping: bool, capture: bool"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "linear",
+          "rust_type": "channels: Vec<u8>, target: Vec<f32>, ticks: u32, velocity_divisor: Option<f32>, ieee_inputs: bool, references: Vec<u8>, loop_origins: Vec<u8>, delta: LayerSequenceDeltaSource, looping: bool, start: Option<Vec<f32>>, complete_first: bool, complete_zero: bool, fast: bool, fast_channels: Option<Vec<u8>>, skip_zero: bool, capture_zero: bool"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "oscillation",
+          "rust_type": "channel: u8, amplitude: f32, start_degrees: f32, end_degrees: f32, ticks: u32, cosine: bool, looping: bool, radians_per_degree: f64, fast: bool"
+        }
+      ],
+      "name": "LayerSequenceTrack",
+      "used_by": "Rust layer queue; LayerCommand.BeginSequence/Sequence and EngineQuery.LayerSequence"
+    },
+    {
+      "doc": "Variants are tagged by `\"kind\"`.",
+      "fields": [
+        {
+          "default": null,
+          "doc": "Restore execution channels/activation without replacing queued banks or capture templates. Selected active lanes seed a neutral bank-zero entry only if it is absent; existing future records retain their metadata.",
+          "name": "restore_control",
+          "rust_type": "state: LayerSequenceStatus, seed_missing: Vec<u8>"
+        },
+        {
+          "default": null,
+          "doc": "Replace current and retained channel values and clear activation state, while retaining queued records and capture/replay ownership.",
+          "name": "reset",
+          "rust_type": "values: Vec<f32>, retained: Vec<f32>"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "enqueue",
+          "rust_type": "lane: u8, bank: Option<u8>, track: LayerSequenceTrack"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "set",
+          "rust_type": "channels: Vec<u8>, values: Vec<f32>, retained: bool"
+        },
+        {
+          "default": null,
+          "doc": "Change only an existing binding's projection map. Retain its actor, channels, active execution fields and captured/queued records.",
+          "name": "set_binding_map",
+          "rust_type": "layer: u32, channel: u8, map: LayerSequenceValueMap"
+        },
+        {
+          "default": null,
+          "doc": "Update a sampled image's retained source edges without replacing its actor, current channels, queued motion or frame cursor.",
+          "name": "set_texel_source",
+          "rust_type": "layer: u32, source: [f32;4]"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "capture",
+          "rust_type": "enabled: bool, repeats: u16, forever: bool"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "replay",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "advance",
+          "rust_type": "generation: u64, revision: u64, rate: f32, fast: bool"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "finish",
+          "rust_type": "cancel: bool, lanes: Option<Vec<u8>>"
+        }
+      ],
+      "name": "LayerSequenceOperation",
+      "used_by": "Rust layer queue; LayerCommand.BeginSequence/Sequence and EngineQuery.LayerSequence"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "generation",
+          "rust_type": "u64"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "revision",
+          "rust_type": "u64"
+        },
+        {
+          "default": null,
+          "doc": "Nonfinite values use {\"ieee754\":u32} only on zero-divisor-owned channels.",
+          "name": "values",
+          "rust_type": "Vec<f32>"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "retained",
+          "rust_type": "Vec<f32>"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "lanes",
+          "rust_type": "BTreeMap<u8, LayerSequenceLane>"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "capture",
+          "rust_type": "bool"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "captured",
+          "rust_type": "BTreeMap<u8, BTreeMap<u8, LayerSequenceTrack>>"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "repeats",
+          "rust_type": "u16"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "forever",
+          "rust_type": "bool"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "complete",
+          "rust_type": "bool"
+        }
+      ],
+      "name": "LayerSequenceStatus",
+      "used_by": "Rust layer queue; LayerCommand.BeginSequence/Sequence and EngineQuery.LayerSequence"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "cursor",
+          "rust_type": "u16"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "records",
+          "rust_type": "BTreeMap<u8, LayerSequenceRecord>"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "active",
+          "rust_type": "Option<LayerSequenceActive>"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "control",
+          "rust_type": "Option<LayerSequenceRecord>"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "last_record",
+          "rust_type": "Option<LayerSequenceRecord>"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "last_active",
+          "rust_type": "Option<LayerSequenceActive>"
+        }
+      ],
+      "name": "LayerSequenceLane",
+      "used_by": "Rust layer queue; LayerCommand.BeginSequence/Sequence and EngineQuery.LayerSequence"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "progress",
+          "rust_type": "Option<LayerSequenceActive>"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "track",
+          "rust_type": "LayerSequenceTrack"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "velocity",
+          "rust_type": "Vec<f32>"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "origin",
+          "rust_type": "Vec<f32>"
+        }
+      ],
+      "name": "LayerSequenceRecord",
+      "used_by": "Rust layer queue; LayerCommand.BeginSequence/Sequence and EngineQuery.LayerSequence"
+    },
+    {
+      "doc": "Variants are tagged by `\"kind\"`.",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "frames",
+          "rust_type": "frame: u32, counter: u32, attached: bool"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "linear",
+          "rust_type": "velocity: Vec<f32>, multiplier: f32"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "oscillation",
+          "rust_type": "phase: f32, velocity: f32, baseline: f32, multiplier: f32"
+        }
+      ],
+      "name": "LayerSequenceActive",
+      "used_by": "Rust layer queue; LayerCommand.BeginSequence/Sequence and EngineQuery.LayerSequence"
+    },
+    {
       "doc": "",
       "fields": [
         {
@@ -9454,6 +10450,18 @@
         },
         {
           "default": null,
+          "doc": "Preserve the complete stored pixel when alpha is zero. Visible RGB uses the tables; alpha and hidden transparent RGB remain unchanged.",
+          "name": "straight_nonzero_alpha",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "Preserve this exact stored RGB key; transform all other pixels. Useful for opaque colour-key rasters before later alpha association.",
+          "name": "straight_color_key",
+          "rust_type": "color: [u8; 3]"
+        },
+        {
+          "default": null,
           "doc": "Recognized for explicit rejection: this pipeline cannot publish premultiplied bytes as an ordinary straight ImageSurface. No implicit unpremultiplication.",
           "name": "premultiplied_rgba",
           "rust_type": ""
@@ -9574,7 +10582,7 @@
           "default": null,
           "doc": "",
           "name": "size",
-          "rust_type": "[u32;2]"
+          "rust_type": "[u32; 2]"
         },
         {
           "default": null,
@@ -9617,7 +10625,7 @@
           "default": null,
           "doc": "",
           "name": "Render",
-          "rust_type": "source: Arc<dyn PatternResource>, destination: ImageInput, rect: [u32;4], opacity256: u16"
+          "rust_type": "source: Arc<dyn PatternResource>, destination: ImageInput, rect: [u32; 4], opacity256: u16"
         },
         {
           "default": null,
@@ -10312,6 +11320,30 @@
       "fields": [
         {
           "default": null,
+          "doc": "Bounded bulk sprite composition with shared exact fixed-point mip sampling. Equal resource/format/shrink tuples are sampled once per job.",
+          "name": "ParticlePlane",
+          "rust_type": "size: [u32; 2], sprites: Vec<ImageParticleSprite>"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "PyramidLevel",
+          "rust_type": "pyramid: Arc<ImagePyramidResource>, level: u8"
+        },
+        {
+          "default": null,
+          "doc": "Signed-field sampling evaluated by the shared image worker. The immutable field leases are owner-checked and included in admission.",
+          "name": "FieldWarp",
+          "rust_type": "source: Box<ImageInput>, size: [u32; 2], spec: FieldWarpSpec"
+        },
+        {
+          "default": null,
+          "doc": "A bounded, immutable subgraph with its own typed effect context. The shared worker evaluates it inside the same admission and cancellation scope; no nested worker or VM state is created.",
+          "name": "Process",
+          "rust_type": "input: Box<ImageInput>, effects: Arc<[u8]>"
+        },
+        {
+          "default": null,
           "doc": "Capability-resolved encoded bytes, for archive members and embedded resources. Shared workers decode using the same registry as file assets. Declared dimensions bound admission and must match the decoded result.",
           "name": "Encoded",
           "rust_type": "name: alloc::string::String, bytes: Arc<[u8]>, size: [u32; 2]"
@@ -10802,6 +11834,24 @@
       "fields": [
         {
           "default": null,
+          "doc": "Current canvas pointer for this widget's UI input owner. Absent when another client or a separate modal service owns the input tick.",
+          "name": "pointer",
+          "rust_type": "Option<[i32;2]>"
+        },
+        {
+          "default": null,
+          "doc": "Mouse buttons admitted to this UI owner in the current input tick. These are zero when `pointer` is absent and never survive restoration.",
+          "name": "pointer_buttons_down",
+          "rust_type": "u64"
+        },
+        {
+          "default": null,
+          "doc": "Mouse press edges for this UI owner, including inferred down transitions.",
+          "name": "pointer_buttons_pressed",
+          "rust_type": "u64"
+        },
+        {
+          "default": null,
           "doc": "The engine's topmost eligible pointer hit is this widget.",
           "name": "hovered",
           "rust_type": "bool"
@@ -10872,7 +11922,7 @@
       "used_by": "ImageEffect.vector.path"
     },
     {
-      "doc": "A geometric path command; curves use explicit control points. Variants are tagged by `\"kind\"`.",
+      "doc": "Variants are tagged by `\"kind\"`.",
       "fields": [
         {
           "default": null,
@@ -10953,6 +12003,12 @@
           "doc": "Exact integer-weighted profile. With this profile mask/blur/softness must be absent/zero; floating progress is retained only for old schemas.",
           "name": "fixed_weighted",
           "rust_type": "Option<crate::fixed_mix::FixedMixSpec>"
+        },
+        {
+          "default": null,
+          "doc": "Exact per-pixel integer weights looked up from one mask channel.",
+          "name": "rule_table",
+          "rust_type": "Option<RuleTable>"
         }
       ],
       "name": "ImageTransition",
@@ -11144,6 +12200,12 @@
       ],
       "name": "InputReceipt",
       "used_by": "Input.events receipt / ackEvents; JSON epoch/sequence are decimal strings"
+    },
+    {
+      "doc": "",
+      "fields": [],
+      "name": "FrameAdmissionClock",
+      "used_by": "Native wrapping-clock frame admission; caller retains input and pending work"
     },
     {
       "doc": "Portable logical input, not hardware state. Owner supplies a fresh epoch when reconstructing it so old acknowledgement receipts cannot be reused.",
@@ -12347,6 +13409,12 @@
       "fields": [
         {
           "default": null,
+          "doc": "Mixer-owner observation of the independent external dB balance track.",
+          "name": "balance",
+          "rust_type": "AudioBalanceInfo"
+        },
+        {
+          "default": null,
           "doc": "Source has remaining input, even when paused; excludes processing tails.",
           "name": "source_playing",
           "rust_type": "bool"
@@ -12977,6 +14045,18 @@
       "fields": [
         {
           "default": null,
+          "doc": "Decode all bounded input frames before publication. Playback, loops and exact seeks subsequently use resident PCM without a decoder/I/O worker.",
+          "name": "PlayResident",
+          "rust_type": "channel: u32, source: EncodedAudio, intro: Option<EncodedAudio>, parameters: AudioParameters"
+        },
+        {
+          "default": null,
+          "doc": "Control the independent dB balance on this client's channel. Missing sources remain a no-op; newly published voices start centered.",
+          "name": "Balance",
+          "rust_type": "channel: u32, command: AudioBalanceCommand"
+        },
+        {
+          "default": null,
           "doc": "Atomically exchange two logical channels in this client. The existing voice/source handles, fractional cursor, DSP history and gain/transport ramps remain intact. An empty side moves the other voice. Unpublished preparation intents, pending seeks/retirements or an active render lease reject before mutation. This is unrelated to decoded left/right exchange.",
           "name": "ExchangeChannels",
           "rust_type": "left: u32, right: u32"
@@ -13046,6 +14126,12 @@
           "doc": "Resume at an output-clock deadline with explicit pre-deadline transport. Later pause/stop/resume replaces this action; readiness is independent.",
           "name": "ResumeWithOptions",
           "rust_type": "channel: u32, delay_ms: f32, fade_ms: f32, settings: AudioResumeSettings"
+        },
+        {
+          "default": null,
+          "doc": "Change the source playback multiplier without seeking, restarting or resetting resampler/DSP history. Pitch, looping and transport survive.",
+          "name": "SetRate",
+          "rust_type": "channel: u32, rate: f32"
         },
         {
           "default": null,
@@ -14176,7 +15262,7 @@
         },
         {
           "default": null,
-          "doc": "Independent channel receiving the retired nonlooping voice.",
+          "doc": "Independent channel receiving the retired nonlooping voice. Equal to source_channel performs an in-place release, preserving loop/transport.",
           "name": "tail_channel",
           "rust_type": "u32"
         },
@@ -17935,6 +19021,7 @@
           "default": [
             {
               "capacity": 1024,
+              "drifting_atlas": null,
               "enabled": true,
               "enabled_parameter": null,
               "events": [],
@@ -17976,7 +19063,9 @@
                 ],
                 "spread_degrees": 20.0
               },
+              "orbit_atlas": null,
               "overflow": "drop_new",
+              "paused": false,
               "render": {
                 "blend": "additive",
                 "columns": 1,
@@ -17990,6 +19079,7 @@
                 "soft_distance": 0.0,
                 "texture": null
               },
+              "revision": 0,
               "screen": null,
               "seed": 1,
               "space": "world",
@@ -18065,9 +19155,21 @@
           "rust_type": "String"
         },
         {
+          "default": 0,
+          "doc": "Explicit monotonic pool restart epoch. A higher value can replace this emitter while preserving other pools and their shared sequence stream.",
+          "name": "revision",
+          "rust_type": "u64"
+        },
+        {
           "default": true,
           "doc": "",
           "name": "enabled",
+          "rust_type": "bool"
+        },
+        {
+          "default": false,
+          "doc": "Freeze and hide existing particles without updating or consuming RNG draws.",
+          "name": "paused",
           "rust_type": "bool"
         },
         {
@@ -18197,6 +19299,18 @@
           "rust_type": "Option<VfxFallingAtlasSpec>"
         },
         {
+          "default": null,
+          "doc": "Optional explicitly clocked streak or buoyant atlas motion in pixel space.",
+          "name": "drifting_atlas",
+          "rust_type": "Option<VfxDriftingAtlasSpec>"
+        },
+        {
+          "default": null,
+          "doc": "Optional explicitly clocked elliptical atlas particles.",
+          "name": "orbit_atlas",
+          "rust_type": "Option<crate::orbit_atlas::OrbitAtlasSpec>"
+        },
+        {
           "default": [],
           "doc": "",
           "name": "events",
@@ -18320,7 +19434,7 @@
       "used_by": "`VfxSystemSpec.sequence_exchange`; fenced stream replacement acknowledged by workers"
     },
     {
-      "doc": "Data-driven pixel-motion and nonuniform-atlas operator.",
+      "doc": "",
       "fields": [
         {
           "default": null,
@@ -18345,6 +19459,18 @@
           "doc": "Inclusive integer speed numerator sampled once per birth/reset.",
           "name": "fall_range",
           "rust_type": "[u32; 2]"
+        },
+        {
+          "default": null,
+          "doc": "Optional first-birth speed range; subsequent recycling uses fall_range.",
+          "name": "initial_fall_range",
+          "rust_type": "Option<[u32; 2]>"
+        },
+        {
+          "default": null,
+          "doc": "Live birth/reset sampling control. Updating it preserves existing particles and consumes no random values until their next birth.",
+          "name": "spawn_window",
+          "rust_type": "Option<FallingSpawnWindow>"
         },
         {
           "default": null,
@@ -18451,6 +19577,178 @@
       ],
       "name": "VfxFallingAtlasSpec",
       "used_by": "`VfxEmitterSpec.falling_atlas`; bounded CPU pixel-motion and atlas node"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "Downward streaks with a fixed atlas row and clipped lower edge.",
+          "name": "streak",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "Signed vertical drift, sinusoidal horizontal motion and animated atlas rows.",
+          "name": "buoyant",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "Downward sinusoidal motion with a slow translucent pulse.",
+          "name": "falling_glow",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "Upward sinusoidal motion with a full-range alpha pulse.",
+          "name": "rising_glow",
+          "rust_type": ""
+        }
+      ],
+      "name": "VfxDriftMotion",
+      "used_by": "Streak or buoyant pixel-space drift over an existing CPU particle pool"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "Inclusive spawn rectangle [left, top, right, bottom], in canvas pixels.",
+          "name": "bounds",
+          "rust_type": "[i32; 4]"
+        },
+        {
+          "default": null,
+          "doc": "Draw in 0..100 passes when it is at most this value; zero disables bias.",
+          "name": "chance",
+          "rust_type": "i32"
+        },
+        {
+          "default": null,
+          "doc": "Maximum rejection-sampling attempts per biased coordinate.",
+          "name": "attempts",
+          "rust_type": "u16"
+        }
+      ],
+      "name": "VfxDriftSpawnWindow",
+      "used_by": "Bounded native-independent spawn-window selection over the shared sequence RNG"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "Logical canvas width and height, in pixels.",
+          "name": "canvas",
+          "rust_type": "[u32; 2]"
+        },
+        {
+          "default": null,
+          "doc": "Atlas texture width and height, in pixels.",
+          "name": "texture_extent",
+          "rust_type": "[u32; 2]"
+        },
+        {
+          "default": null,
+          "doc": "Number of explicit simulation steps per second.",
+          "name": "tick_hz",
+          "rust_type": "u32"
+        },
+        {
+          "default": null,
+          "doc": "Pool depth in 0..5, selecting the buoyant atlas row pair.",
+          "name": "depth",
+          "rust_type": "u32"
+        },
+        {
+          "default": null,
+          "doc": "Motion and atlas-layout preset consumed by this node.",
+          "name": "motion",
+          "rust_type": "VfxDriftMotion"
+        },
+        {
+          "default": null,
+          "doc": "Optional biased respawn area; updates preserve live particle attributes.",
+          "name": "spawn_window",
+          "rust_type": "Option<VfxDriftSpawnWindow>"
+        }
+      ],
+      "name": "VfxDriftingAtlasSpec",
+      "used_by": "`VfxEmitterSpec.drifting_atlas`; externally clocked drift, alpha and atlas policy"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "Horizontal orbit center, in canvas pixels.",
+          "name": "center_x",
+          "rust_type": "f32"
+        },
+        {
+          "default": null,
+          "doc": "Horizontal oscillation phase, in radians.",
+          "name": "phase",
+          "rust_type": "f32"
+        },
+        {
+          "default": null,
+          "doc": "Signed vertical displacement per simulation tick, in pixels.",
+          "name": "speed",
+          "rust_type": "f32"
+        },
+        {
+          "default": null,
+          "doc": "Horizontal oscillation radius, in pixels.",
+          "name": "amplitude",
+          "rust_type": "u32"
+        },
+        {
+          "default": null,
+          "doc": "Constant horizontal offset in tenths of a pixel.",
+          "name": "horizontal",
+          "rust_type": "i32"
+        },
+        {
+          "default": null,
+          "doc": "Selected atlas row index.",
+          "name": "row",
+          "rust_type": "u32"
+        },
+        {
+          "default": null,
+          "doc": "Current animation frame within that row.",
+          "name": "frame",
+          "rust_type": "u32"
+        },
+        {
+          "default": null,
+          "doc": "Previous atlas frame timestamp, in wrapping milliseconds.",
+          "name": "clock",
+          "rust_type": "u32"
+        },
+        {
+          "default": null,
+          "doc": "Current straight alpha in 0..1.",
+          "name": "alpha",
+          "rust_type": "f32"
+        },
+        {
+          "default": null,
+          "doc": "Whether the alpha pulse is moving toward its upper bound.",
+          "name": "rising",
+          "rust_type": "bool"
+        },
+        {
+          "default": null,
+          "doc": "Multiplicative pixel size, retained across streak respawns.",
+          "name": "scale",
+          "rust_type": "f32"
+        }
+      ],
+      "name": "VfxDriftingAtlasState",
+      "used_by": "Worker-owned per-particle drift and atlas progression"
     },
     {
       "doc": "Worker-completed state, never a copy of the last submitted declaration.",
@@ -19572,13 +20870,13 @@
           "default": null,
           "doc": "Inherited clip [x,y,w,h] in logical render-target coordinates. Unlike `clip`, this rectangle is unaffected by this layer's/parents' transforms. Zero width or height clips the complete subtree. None adds no clip.",
           "name": "viewport_clip",
-          "rust_type": "Option<[f32;4]>"
+          "rust_type": "Option<[f32; 4]>"
         },
         {
           "default": null,
           "doc": "Non-inherited source geometry crop in layer-local [x,y,w,h] coordinates. Image/text content keeps its original size; UVs follow surviving geometry. Positioned glyph runs crop each expanded glyph in this same local space.",
           "name": "source_crop",
-          "rust_type": "Option<[f32;4]>"
+          "rust_type": "Option<[f32; 4]>"
         },
         {
           "default": null,
@@ -19645,13 +20943,19 @@
           "default": null,
           "doc": "Retained explicit glyph positions, rendered as independent cached glyph quads. No VM renderer or flattened text/screen image is involved.",
           "name": "glyph_run",
-          "rust_type": "font: String, size: f32, color: [u8; 4], bold: bool, glyphs: Vec<PositionedGlyph>, reveal: Option<GlyphReveal>, blur: Option<GlyphBlur>"
+          "rust_type": "font: String, size: f32, color: [u8; 4], bold: bool, glyphs: Vec<PositionedGlyph>, reveal: Option<GlyphReveal>, blur: Option<GlyphBlur>, outline: Option<GlyphOutline>"
         },
         {
           "default": null,
           "doc": "Frozen, source-local static scene, rasterized once at `size` before the outer Layer's transform, opacity, UV crop and filter are applied. Inputs contain no nested snapshots, external parents or dynamic state.",
           "name": "snapshot",
           "rust_type": "size: [u32; 2], layers: Arc<Vec<LayerSpec>>"
+        },
+        {
+          "default": null,
+          "doc": "What has been drawn beneath this layer in the current frame, read back into a quad. With a filter's distortion this is a screen effect over a depth band: layers ordered above stay untouched. Only the top-level frame has such a backdrop; inside isolated targets the layer draws nothing. With `history` it shows what the previous frame had at this depth, then captures again: drawn with an opacity below 255 that is a feedback trail.",
+          "name": "backdrop",
+          "rust_type": "history: bool"
         },
         {
           "default": null,
@@ -19732,19 +21036,19 @@
         {
           "default": null,
           "doc": "Extend the nearest edge texel; UV coordinates remain inside 0..1.",
-          "name": "ClampToEdge",
+          "name": "clamp_to_edge",
           "rust_type": ""
         },
         {
           "default": null,
           "doc": "Repeat the texture after each integer UV boundary.",
-          "name": "Repeat",
+          "name": "repeat",
           "rust_type": ""
         },
         {
           "default": null,
           "doc": "Alternate forward and reversed texture copies across UV boundaries.",
-          "name": "MirrorRepeat",
+          "name": "mirror_repeat",
           "rust_type": ""
         }
       ],
@@ -19758,7 +21062,7 @@
           "default": null,
           "doc": "Optional geometry crop in the containing layer's local pixels. This clips each glyph after coverage/outline generation, without reshaping.",
           "name": "crop",
-          "rust_type": "Option<[f32;4]>"
+          "rust_type": "Option<[f32; 4]>"
         },
         {
           "default": "あ",
@@ -19792,6 +21096,24 @@
           "doc": "",
           "name": "bold",
           "rust_type": "Option<bool>"
+        },
+        {
+          "default": null,
+          "doc": "Horizontal outline raster scale, preserving the supplied baseline and logical advance. This changes coverage, not the layer transform.",
+          "name": "horizontal_scale",
+          "rust_type": "Option<f32>"
+        },
+        {
+          "default": null,
+          "doc": "Requested average character width in pixels, using the authorized outline face's OS/2 average width. Multiplied by horizontal_scale.",
+          "name": "font_width",
+          "rust_type": "Option<f32>"
+        },
+        {
+          "default": null,
+          "doc": "Center the rounded glyph advance in this integer logical cell, using truncation toward zero for the half-difference. Raster baseline y stays.",
+          "name": "cell_width",
+          "rust_type": "Option<u16>"
         }
       ],
       "name": "PositionedGlyph",
@@ -20013,6 +21335,12 @@
         },
         {
           "default": null,
+          "doc": "Release a source and its generated presentation draws while retaining public root layers (placement, effects and externally attached children). Frozen copies continue to own their immutable content.",
+          "name": "retire",
+          "rust_type": "id: u32"
+        },
+        {
+          "default": null,
           "doc": "",
           "name": "clear",
           "rust_type": "id: u32, color: [u8; 4]"
@@ -20067,7 +21395,13 @@
         },
         {
           "default": null,
-          "doc": "Freeze a visible, static, normal-alpha Layer subtree as one snapshot draw. The renderer rasterizes it at its original size before later effects. `rect` is source-root-local; `position` and `clip` are destination-space. The region is replaced, including alpha. Root placement/visibility/opacity and inheritance from outside the subtree do not enter the snapshot.",
+          "doc": "Freeze a visible, static, normal-alpha Layer subtree as one snapshot draw. The renderer rasterizes it at its original size before later effects. `rect` is source-root-local; `position` and `clip` are destination-space. The region is replaced, including alpha. Root placement/visibility/opacity and inheritance from outside the subtree do not enter the snapshot. Append an immutable subtree using its own placement, transform, group opacity and visibility. Outside ancestry is excluded; source pixels are composed over existing destination content instead of replacing it.",
+          "name": "draw_subtree",
+          "rust_type": "source: u32, destination: u32"
+        },
+        {
+          "default": null,
+          "doc": "",
           "name": "copy_subtree",
           "rust_type": "source: u32, destination: u32, rect: [f32; 4], position: [f32; 2], clip: Option<[f32; 4]>"
         },
@@ -20087,6 +21421,12 @@
           "default": null,
           "doc": "Keep the surface as one isolated snapshot draw. Source edits rebuild its immutable paint automatically; the outer parent transform/opacity applies after composition, not independently to every source draw.",
           "name": "present_isolated",
+          "rust_type": "id: u32, layer: u32, order: i32, parent: Option<u32>, position: [f32; 2]"
+        },
+        {
+          "default": null,
+          "doc": "Compose the whole surface into one bounded render target, including surfaces backed by storage pages. Global masks/distortion sample that target once rather than independently sampling each storage tile. Dimensions must not exceed 8192; renderer memory/device budgets apply.",
+          "name": "present_target",
           "rust_type": "id: u32, layer: u32, order: i32, parent: Option<u32>, position: [f32; 2]"
         },
         {
@@ -20461,6 +21801,30 @@
       "doc": "Per-layer 2D filter stack with the stage order and parameter meaning of the Siglus/tona3 sprite effect (ADR 0021). Color math runs on 8-bit gamma-encoded values like the original: distortion sampling → tint/alpha → tone curve → invert → mono → bright → dark → color rate → add → mask → gray-as-alpha → alpha test.",
       "fields": [
         {
+          "default": null,
+          "doc": "Optional normalized RGB luminance coefficients. None preserves the established filter profile; adapters may declare a native color model.",
+          "name": "luma_weights",
+          "rust_type": "Option<[f32; 3]>"
+        },
+        {
+          "default": 0.0,
+          "doc": "Multiply filtered RGB by sampled alpha raised to this power (0..4), independently of the blend mode and without replacing stored alpha.",
+          "name": "rgb_alpha_power",
+          "rust_type": "f32"
+        },
+        {
+          "default": false,
+          "doc": "Sampling effects may preserve source alpha without applying vertex tint alpha. Parent transform/clip ownership remains unchanged.",
+          "name": "ignore_tint_alpha",
+          "rust_type": "bool"
+        },
+        {
+          "default": false,
+          "doc": "Interpolate gamma-encoded RGB texels before color effects. This matches raster APIs whose texture sampler does not decode sRGB before filtering.",
+          "name": "encoded_sampling",
+          "rust_type": "bool"
+        },
+        {
           "default": 0.0,
           "doc": "Mix toward grayscale (0..1).",
           "name": "mono",
@@ -20594,6 +21958,36 @@
           "doc": "Replace the colour and keep the destination alpha (KiriKiri copyRect on dfOpaque with holdAlpha, TVP_BB_COPY_MAIN): straight S·Da.",
           "name": "atop_copy",
           "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "Fixed-function (ONE, INVSRCALPHA) on straight texels: S + D·(1 - Sa), every channel including alpha.",
+          "name": "source_over",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "(ZERO, SRCCOLOR): D·S on every channel, alpha ignored as a weight.",
+          "name": "modulate",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "(INVDESTCOLOR, ZERO): S·(1 - D) on every channel.",
+          "name": "inverse_destination",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "(DESTCOLOR, ONE): S·D + D on every channel.",
+          "name": "modulate_add",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "Keep the destination only under the source alpha: D·Sa, including alpha. Source RGB is ignored; use inside an isolated Canvas for masks.",
+          "name": "destination_in",
+          "rust_type": ""
         }
       ],
       "name": "Blend",
@@ -20638,6 +22032,36 @@
           "doc": "Replace alpha with the final gray level (Siglus mask mode 1).",
           "name": "gray_alpha",
           "rust_type": "bool"
+        },
+        {
+          "default": null,
+          "doc": "Rgba multiplies all source channels. Selecting one encoded mask byte replaces source alpha with clamp(trunc(byte*scale+offset),0,255)/255, applied per texel before linear interpolation.",
+          "name": "channel",
+          "rust_type": "MaskChannel"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "offset",
+          "rust_type": "f32"
+        },
+        {
+          "default": null,
+          "doc": "Signed multiplier of the selected encoded byte, before `offset` and saturation. Negative values implement inverted rule-image wipes.",
+          "name": "scale",
+          "rust_type": "f32"
+        },
+        {
+          "default": null,
+          "doc": "Multiply the selected mask byte by each original source alpha byte.",
+          "name": "preserve_source_alpha",
+          "rust_type": "bool"
+        },
+        {
+          "default": null,
+          "doc": "Address mask pixels in source-image coordinates; outside pixels keep their original alpha instead of stretching or clamping the mask.",
+          "name": "source_space",
+          "rust_type": "bool"
         }
       ],
       "name": "LayerMask",
@@ -20646,6 +22070,18 @@
     {
       "doc": "Source-sampling effects (Siglus wipe modes 1–6), in texture UV space. Variants are tagged by `\"kind\"`.",
       "fields": [
+        {
+          "default": null,
+          "doc": "Nine clamped taps: one center and eight surrounding samples at ±offset. Weights are explicit, without implicit normalization or alpha replacement.",
+          "name": "nine_tap",
+          "rust_type": "offset: [f32; 2], center_weight: f32, neighbor_weight: f32"
+        },
+        {
+          "default": null,
+          "doc": "Quantize UV independently per axis: floor(uv*steps+phase)/steps. Source alpha is preserved, including transparent atlas padding.",
+          "name": "quantized",
+          "rust_type": "steps: [f32; 2], phase: [f32; 2]"
+        },
         {
           "default": null,
           "doc": "Cells of `cut` UV width; height = cut × `aspect`.",
@@ -20663,6 +22099,12 @@
           "doc": "Radial blur toward `center` (UV), 10 weighted taps.",
           "name": "radial_blur",
           "rust_type": "center: [f32; 2], power: f32, coeff: f32"
+        },
+        {
+          "default": null,
+          "doc": "Rows (or columns when `vertical`) shifted by amplitude·sin(2π(cycles·t + phase)), all in UV.",
+          "name": "wave",
+          "rust_type": "vertical: bool, amplitude: f32, cycles: f32, phase: f32"
         },
         {
           "default": null,
@@ -20768,6 +22210,30 @@
           "doc": "Mode 3: smoothstep.",
           "name": "smooth",
           "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "Quartic acceleration/deceleration for retained animation curves.",
+          "name": "ease_in_quart",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "ease_out_quart",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "ease_in_out_quart",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "ease_out_in_quart",
+          "rust_type": ""
         }
       ],
       "name": "Easing",
@@ -20776,6 +22242,42 @@
     {
       "doc": "",
       "fields": [
+        {
+          "default": [],
+          "doc": "Optional retained key events. Only the topmost eligible binding widget receives them, within the current modal subtree and client owner.",
+          "name": "key_events",
+          "rust_type": "Vec<WidgetKeyEvent>"
+        },
+        {
+          "default": false,
+          "doc": "Keep key-edge ownership on this ancestor as focus moves within it.",
+          "name": "key_event_scope",
+          "rust_type": "bool"
+        },
+        {
+          "default": "horizontal",
+          "doc": "Slider pointer/value axis; other widgets retain the horizontal default.",
+          "name": "slider_axis",
+          "rust_type": "SliderAxis"
+        },
+        {
+          "default": true,
+          "doc": "Enable built-in arrow stepping. Retained key bindings can instead provide a native policy while shared UI keeps pointer capture/focus.",
+          "name": "slider_keyboard",
+          "rust_type": "bool"
+        },
+        {
+          "default": true,
+          "doc": "Built-in focus traversal may be replaced by retained owner key events.",
+          "name": "keyboard_navigation",
+          "rust_type": "bool"
+        },
+        {
+          "default": true,
+          "doc": "Built-in Enter/Space activation; pointer activation is independent.",
+          "name": "keyboard_activation",
+          "rust_type": "bool"
+        },
         {
           "default": 1,
           "doc": "Client-local widget id.",
@@ -20857,6 +22359,12 @@
           "default": true,
           "doc": "Participates in keyboard focus/navigation and takes focus on pointer press. Pointer hover/press/activation still works when false.",
           "name": "keyboard_focusable",
+          "rust_type": "bool"
+        },
+        {
+          "default": false,
+          "doc": "Pointer movement hands keyboard focus to the hovered widget. Leaving this policy's widgets clears that focus until navigation or another hit.",
+          "name": "focus_follows_pointer",
           "rust_type": "bool"
         },
         {
@@ -20990,6 +22498,62 @@
       ],
       "name": "WidgetKind",
       "used_by": "`WidgetSpec.kind`"
+    },
+    {
+      "doc": "Engine-owned key delivery. Buttons use the shared InputFrame bit namespace; a release belongs only to a widget that owned that key while it was held.",
+      "fields": [
+        {
+          "default": 1,
+          "doc": "",
+          "name": "buttons",
+          "rust_type": "u64"
+        },
+        {
+          "default": "press",
+          "doc": "",
+          "name": "edge",
+          "rust_type": "WidgetKeyEdge"
+        },
+        {
+          "default": "confirm",
+          "doc": "",
+          "name": "event",
+          "rust_type": "String"
+        },
+        {
+          "default": 0,
+          "doc": "Held emits each eligible input tick after this engine-clock delay.",
+          "name": "delay_ms",
+          "rust_type": "u32"
+        }
+      ],
+      "name": "WidgetKeyEvent",
+      "used_by": "`WidgetSpec.key_events`"
+    },
+    {
+      "doc": "Edge delivered to an eligible widget's retained event queue.",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "press",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "release",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "held",
+          "rust_type": ""
+        }
+      ],
+      "name": "WidgetKeyEdge",
+      "used_by": "`WidgetKeyEvent.edge`"
     },
     {
       "doc": "",
@@ -21929,6 +23493,30 @@
       "fields": [
         {
           "default": null,
+          "doc": "Advance this client's automatic motion, reveal and transition clocks. Other clients, physical input, external producers and global time stay on their own clocks. Bounded to one day per admitted operation.",
+          "name": "advance_time",
+          "rust_type": "delta_ms: u64"
+        },
+        {
+          "default": null,
+          "doc": "Atomically retarget every live owned Image paint using one immutable generation. Frozen Snapshot paints and other clients retain their leases.",
+          "name": "rebind_image",
+          "rust_type": "from: String, to: String"
+        },
+        {
+          "default": null,
+          "doc": "Create an owner-scoped incremental channel sequence on an existing node.",
+          "name": "begin_sequence",
+          "rust_type": "id: u32, spec: LayerSequenceSpec"
+        },
+        {
+          "default": null,
+          "doc": "Mutate or advance retained banked queues; Advance uses exact receipts.",
+          "name": "sequence",
+          "rust_type": "id: u32, operation: LayerSequenceOperation"
+        },
+        {
+          "default": null,
           "doc": "Register an external procedural producer; query MotionStatus for its fresh generation before admitting worker samples. No code is hosted.",
           "name": "begin_external_motion",
           "rust_type": "id: u32, driver: u32"
@@ -21955,7 +23543,7 @@
           "default": null,
           "doc": "Change rectangle geometry while preserving other motion/producer state.",
           "name": "set_rect",
-          "rust_type": "id: u32, rect: [f32;4]"
+          "rust_type": "id: u32, rect: [f32; 4]"
         },
         {
           "default": null,
@@ -21989,6 +23577,12 @@
         },
         {
           "default": null,
+          "doc": "Replace paint while retaining layer geometry and motion/sequence state. Non-image paints clear image-only sampling and UV crop state.",
+          "name": "set_paint",
+          "rust_type": "id: u32, paint: Paint"
+        },
+        {
+          "default": null,
           "doc": "",
           "name": "put",
           "rust_type": "layer: LayerSpec"
@@ -21998,6 +23592,12 @@
           "doc": "",
           "name": "remove",
           "rust_type": "id: u32"
+        },
+        {
+          "default": null,
+          "doc": "Reparent an owned node without cancelling its retained motion or paint.",
+          "name": "set_parent",
+          "rust_type": "id: u32, parent: Option<u32>"
         },
         {
           "default": null,
@@ -22045,13 +23645,19 @@
           "default": null,
           "doc": "Set an inherited render-target clip, preserving geometry and motion.",
           "name": "set_viewport_clip",
-          "rust_type": "id: u32, clip: Option<[f32;4]>"
+          "rust_type": "id: u32, clip: Option<[f32; 4]>"
         },
         {
           "default": null,
           "doc": "Change own source geometry/UV crop without touching children or motion.",
           "name": "set_source_crop",
-          "rust_type": "id: u32, crop: Option<[f32;4]>"
+          "rust_type": "id: u32, crop: Option<[f32; 4]>"
+        },
+        {
+          "default": null,
+          "doc": "Update positioned-glyph clips without replacing paint or canceling motion.",
+          "name": "set_glyph_crops",
+          "rust_type": "id: u32, crops: Vec<Option<[f32;4]>>"
         },
         {
           "default": null,
@@ -22124,7 +23730,7 @@
           "default": null,
           "doc": "",
           "name": "show_tooltip",
-          "rust_type": "id: u32, position: [f32;2]"
+          "rust_type": "id: u32, position: [f32; 2]"
         },
         {
           "default": null,
@@ -22218,6 +23824,12 @@
         },
         {
           "default": null,
+          "doc": "Release explicit focus until navigation or a pointer gesture selects it again.",
+          "name": "blur",
+          "rust_type": "id: u32"
+        },
+        {
+          "default": null,
           "doc": "",
           "name": "set_cursor_visible",
           "rust_type": "visible: bool"
@@ -22243,6 +23855,24 @@
         {
           "default": null,
           "doc": "",
+          "name": "move_pointer",
+          "rust_type": "motion: pointer_motion::PointerMotionSpec, aspect_fit: bool"
+        },
+        {
+          "default": null,
+          "doc": "Start an owner-scoped f32 motion driven only by explicit external ticks.",
+          "name": "move_pointer_stepped",
+          "rust_type": "motion: pointer_motion::SteppedPointerMotionSpec"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "advance_pointer_motion",
+          "rust_type": "ticks: u32"
+        },
+        {
+          "default": null,
+          "doc": "",
           "name": "set_title",
           "rust_type": "text: String"
         },
@@ -22250,13 +23880,19 @@
           "default": null,
           "doc": "Physical client size, applied by the host after presentation-mode changes.",
           "name": "set_window_size",
-          "rust_type": "size: [u32;2]"
+          "rust_type": "size: [u32; 2]"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "set_presentation_scale",
+          "rust_type": "mode: crysirror_core::service::PresentationScale"
         },
         {
           "default": null,
           "doc": "Outer frame coordinates in the host display space.",
           "name": "set_window_position",
-          "rust_type": "position: [i32;2]"
+          "rust_type": "position: [i32; 2]"
         },
         {
           "default": null,
@@ -22299,6 +23935,12 @@
           "doc": "Replace or clear one owned widget's pointer coverage without repainting it.",
           "name": "set_hit_mask",
           "rust_type": "id: u32, mask: Option<WidgetHitMask>"
+        },
+        {
+          "default": null,
+          "doc": "Update owned widget geometry, retaining its input and motion state.",
+          "name": "set_rect",
+          "rust_type": "id: u32, rect: [f32; 4]"
         },
         {
           "default": null,
@@ -23173,7 +24815,7 @@
       "used_by": "UiEvent.widget client/local identity"
     }
   ],
-  "fingerprint": "c47c9352e8db80c9",
+  "fingerprint": "7ae03e5812971428",
   "generated_by": "crysirror-engine api_doc (tests/api_docs.rs)",
   "globals": [
     {

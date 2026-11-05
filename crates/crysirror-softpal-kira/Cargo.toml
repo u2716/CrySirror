@@ -1,0 +1,139 @@
+[package]
+name = "crysirror-softpal-kira"
+version = "0.12.1"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+autotests = false
+autobenches = false
+autoexamples = false
+
+[features]
+aac = [
+    "symphonia",
+    "symphonia/aac",
+]
+adpcm = [
+    "symphonia",
+    "symphonia/adpcm",
+]
+aiff = [
+    "symphonia",
+    "symphonia/aiff",
+]
+alac = [
+    "symphonia",
+    "symphonia/alac",
+]
+caf = [
+    "symphonia",
+    "symphonia/caf",
+]
+default = [
+    "cpal",
+    "mp3",
+    "ogg",
+    "vorbis",
+    "flac",
+    "wav",
+    "pcm",
+]
+flac = [
+    "symphonia",
+    "symphonia/flac",
+]
+isomp4 = [
+    "symphonia",
+    "symphonia/isomp4",
+]
+mkv = [
+    "symphonia",
+    "symphonia/mkv",
+]
+mp1 = [
+    "symphonia",
+    "symphonia/mp1",
+]
+mp2 = [
+    "symphonia",
+    "symphonia/mp2",
+]
+mp3 = [
+    "symphonia",
+    "symphonia/mp3",
+]
+mpa = [
+    "symphonia",
+    "symphonia/mpa",
+]
+ogg = [
+    "symphonia",
+    "symphonia/ogg",
+]
+pcm = [
+    "symphonia",
+    "symphonia/pcm",
+]
+vorbis = [
+    "symphonia",
+    "symphonia/vorbis",
+]
+wav = [
+    "symphonia",
+    "symphonia/wav",
+]
+
+[lib]
+test = false
+doctest = false
+name = "kira"
+path = "src/lib.rs"
+
+
+
+
+[dependencies.assert_no_alloc]
+version = "1.1.2"
+optional = true
+
+[dependencies.atomic-arena]
+version = "0.1.2"
+
+[dependencies.glam]
+version = "0.33.0"
+features = ["mint"]
+
+[dependencies.mint]
+version = "0.5.9"
+
+[dependencies.pastey]
+version = "0.2.1"
+
+[dependencies.rtrb]
+version = "0.3.2"
+
+[dependencies.serde]
+version = "1.0.219"
+features = ["derive"]
+optional = true
+
+[dependencies.symphonia]
+version = "0.5.4"
+optional = true
+default-features = false
+
+[dependencies.triple_buffer]
+version = "9.0.0"
+
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies.cpal]
+version = "0.17.0"
+optional = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies.cpal]
+version = "0.17.0"
+features = ["wasm-bindgen"]
+optional = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies.send_wrapper]
+version = "0.6.0"

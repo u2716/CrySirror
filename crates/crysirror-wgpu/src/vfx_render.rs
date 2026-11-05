@@ -331,7 +331,7 @@ impl VfxRenderer {
         });
         let shader = d.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("VFX shared render"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/vfx_render.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(crysirror_shaders::wgsl::VFX_RENDER.into()),
         });
         let mut pipelines = Vec::new();
         const MESH_ATTRS: [wgpu::VertexAttribute; 2] =
@@ -429,7 +429,7 @@ impl VfxRenderer {
         });
         let sort_shader = d.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("VFX sort"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/vfx_sort.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(crysirror_shaders::wgsl::VFX_SORT.into()),
         });
         let layout = d.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("VFX sort layout"),
@@ -460,7 +460,7 @@ impl VfxRenderer {
         });
         let cull_shader = d.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("VFX culling"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/vfx_cull.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(crysirror_shaders::wgsl::VFX_CULL.into()),
         });
         let cull_pipeline_layout = d.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("VFX cull layout"),

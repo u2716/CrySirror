@@ -1,7 +1,7 @@
 // Copyright (c) 2026 CrySirror contributors. MPL-2.0.
 //! Detached audio replacement preparation. Preparing never stops live channels;
 //! only a host-owned original-restore transaction may install the ready value.
-use crate::{state::ClientId, Error, Result};
+use crate::{Error, Result, state::ClientId};
 use alloc::{boxed::Box, sync::Arc};
 use core::any::Any;
 

@@ -8,6 +8,7 @@ engine data; UE shader graphs, landscape, skeletal objects and gameplay are not 
 from __future__ import annotations
 import argparse,json,math,struct,zlib,binascii,shutil
 from pathlib import Path
+from local_assets import output_root
 
 ROOT=Path(__file__).resolve().parents[1]
 def require(v,msg):
@@ -20,8 +21,7 @@ def png_rgba(width,height,rgba):
     return b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',struct.pack('>2I5B',width,height,8,6,0,0,0))+chunk(b'IDAT',zlib.compress(raw))+chunk(b'IEND',b'')
 
 def convert(source:Path,out:Path,eye=None,target=None,omit_meshes=(),material_profile=None,project_name=None,game_id=None,data_driven=False):
-    source=source.resolve();out=out.resolve()
-    require(not out.is_relative_to(ROOT),'local game assets must remain outside source export')
+    source=source.resolve();out=output_root(out)
     out.mkdir(parents=True,exist_ok=True);assets=out/'assets';assets.mkdir(exist_ok=True)
     scene=json.loads((source/'scene-source.json').read_text())
     profiles={};profile_root=None;used_profiles=set()
@@ -99,16 +99,27 @@ def convert(source:Path,out:Path,eye=None,target=None,omit_meshes=(),material_pr
         rel=Path(info['file']);require(rel.name==str(rel),'non-canonical bridge mesh path')
         m=json.loads((source/rel).read_text());pos=m['positions'];norm=m['normals'];uv=m['uv'];ix=m['indices']
         require(len(pos)==len(norm)==len(uv) and len(ix)%3==0 and all(type(i)is int and 0<=i<len(pos) for i in ix),'mesh topology mismatch')
-        p=accessor(pos,'VEC3',3,'f',5126,True);n=accessor(norm,'VEC3',3,'f',5126);u=accessor(uv,'VEC2',2,'f',5126)
-        attributes={'POSITION':p,'NORMAL':n,'TEXCOORD_0':u}
         if m.get('tangents'):
-            require(len(m['tangents'])==len(pos),'tangent count');attributes['TANGENT']=accessor(m['tangents'],'VEC4',4,'f',5126)
+            require(len(m['tangents'])==len(pos),'tangent count')
         primitives=[]
         for section in m['sections']:
             begin,count=section['start'],section['count'];require(0<=begin<=begin+count<=len(ix) and count%3==0,'section range')
-            if count:primitives.append({'attributes':attributes,'indices':accessor(ix[begin:begin+count],'SCALAR',1,'I',5125),'material':material(m.get('materials',[])[section['material']]) if 0<=section['material']<len(m.get('materials',[])) else 0})
+            if not count:continue
+            # Each engine primitive owns its vertex stream. Referencing the
+            # entire mesh accessor from every material section multiplied CPU
+            # and GPU residency by the number of sections, despite disjoint
+            # indices. Export only each section's referenced vertices.
+            referenced=sorted(set(ix[begin:begin+count]));remap={old:new for new,old in enumerate(referenced)}
+            p=accessor([pos[i]for i in referenced],'VEC3',3,'f',5126,True)
+            attributes={'POSITION':p,'NORMAL':accessor([norm[i]for i in referenced],'VEC3',3,'f',5126),
+                        'TEXCOORD_0':accessor([uv[i]for i in referenced],'VEC2',2,'f',5126)}
+            if m.get('tangents'):attributes['TANGENT']=accessor([m['tangents'][i]for i in referenced],'VEC4',4,'f',5126)
+            primitives.append({'attributes':attributes,'indices':accessor([remap[i]for i in ix[begin:begin+count]],'SCALAR',1,'I',5125),'material':material(m.get('materials',[])[section['material']]) if 0<=section['material']<len(m.get('materials',[])) else 0})
         require(bool(primitives),'no mesh primitives')
-        source_sections.append([section['material']for section in m['sections']if section['count']]);meshes.append({'name':info['source'],'primitives':primitives});mesh_bounds.append((accessors[p]['min'],accessors[p]['max']))
+        source_sections.append([section['material']for section in m['sections']if section['count']]);meshes.append({'name':info['source'],'primitives':primitives})
+        bounds=[accessors[p['attributes']['POSITION']]for p in primitives]
+        mesh_bounds.append(([min(a['min'][i]for a in bounds)for i in range(3)],
+                            [max(a['max'][i]for a in bounds)for i in range(3)]))
     variants={};nodes=[];lo=[float('inf')]*3;hi=[-float('inf')]*3;omitted=[]
     for node in scene['nodes']:
         if scene['meshes'][node['mesh']]['source'] in omit_meshes:

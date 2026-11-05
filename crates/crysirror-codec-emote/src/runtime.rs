@@ -1504,6 +1504,12 @@ impl ElunaPlayer {
         self.variable_value(&format!("{module}/{name}"))
     }
 
+    /// A one-shot timeline still runs or a variable still moves. Loops and wind never end, so a
+    /// host waiting for a pose to settle cannot count them.
+    pub fn is_settling(&self) -> bool {
+        self.active_timeline_states.values().any(|state| state.blend_ratio > 0.0 && !state.mode.looping)
+            || self.variables.values().any(|state| state.target.is_some())
+    }
     pub fn is_animating(&self) -> bool {
         if self
             .active_timeline_states

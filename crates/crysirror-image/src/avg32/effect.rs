@@ -11,8 +11,8 @@
 //! elapsed (or immediately while skipping) and clears `cmd` once the
 //! transition has finished — exactly how the scenario loop polls it.
 
-use super::buffer::{PdtBuffer, blend_pixel, fade_pixel};
 use super::bank::{Blit, PdtManager, Rect};
+use super::buffer::{PdtBuffer, blend_pixel, fade_pixel};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Effect {

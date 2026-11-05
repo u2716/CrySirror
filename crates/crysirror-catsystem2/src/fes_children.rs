@@ -12,7 +12,16 @@ use crysirror_core::service::{HostServices, InputObservation};
 use std::collections::BTreeMap;
 #[derive(Default)]
 pub(crate) struct Children {
+    pub sound_tags:crate::fes_sound_tags::Tags,
     pub(crate) save: Option<crate::fes_save::Job>,
+    pub(crate) animations: crate::fes_image_methods::Animations,
+    /// FES machine a1[500]: its own gallery register, opened by cgreg_init.
+    pub(crate) cg: Option<crate::native_classes::cg_register::Register>,
+    pub(crate) cg_load: Option<crysirror_tasks::Task<crate::native_classes::cg_register::Register>>,
+    #[cfg(feature="runtime")]
+    pub(crate) panels: crate::fes_save_panel::Panels,
+    #[cfg(feature="runtime")]
+    pub(crate) panel_render: crate::fes_panel_render::Renders,
     #[cfg(feature="runtime")]
     pub(crate) rule: Option<crate::native_image_resource::Pending>,
     by_owner: BTreeMap<u32, Pending>,
@@ -60,6 +69,8 @@ impl Children {
         let mut owners=self.by_owner.keys().copied().collect::<Vec<_>>();
         #[cfg(feature="runtime")]
         owners.extend(self.frames.protected_owners());
+        #[cfg(feature="runtime")]
+        owners.extend(self.panel_render.pending_owners());
         #[cfg(feature="runtime")]
         owners.extend(self.motions.pending_owners());
         owners
@@ -518,7 +529,7 @@ mod tests {
                 steam_manager: &mut self.steam,
                 fes_file_probe: &mut self.probe,
                 fes_civil_time: &mut self.civil,
-                fes_children: &mut self.children,saves:&Default::default(),
+                fes_children: &mut self.children,handles:None,saves:&Default::default(),
                 pool: &self.pool,
             };
             if forced {

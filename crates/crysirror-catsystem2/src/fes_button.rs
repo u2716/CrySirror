@@ -5,7 +5,7 @@
 use crate::{fes_object_bank::Bank, native_class_state::State, native_interpreter::Interpreter, native_values::StringVariables};
 use anyhow::{Context, Result};
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub(crate) struct ButtonState {
     pub enabled: bool,
     /// 74B780: shared event-name prefix, separate from the object name.
@@ -17,6 +17,12 @@ pub(crate) struct ButtonState {
     pub no_action: bool,
     pub focused: bool,
     pub pressed: bool,
+    pub attach:Option<crate::fes_references::IndexedName>,
+    pub drag:bool,
+    pub navigation:[i32;3],
+}
+impl Default for ButtonState {
+    fn default()->Self{Self{enabled:false,group:Vec::new(),kind:0,lock:0,no_action:false,focused:false,pressed:false,attach:None,drag:false,navigation:[-1,0,0]}}
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Event {
@@ -105,7 +111,7 @@ pub(crate) struct Dispatch {
     pub index: u32,
 }
 pub(crate) fn supports(method: &[u8]) -> bool {
-    matches!(method, b"setid" | b"getid" | b"enable" | b"noact" | b"lock")
+    matches!(method, b"setid" | b"getid" | b"enable" | b"noact" | b"lock" | b"attach" | b"drag")
 }
 /// True when `target` names a BUTTON or, for frame selection, a plain IMAGE.
 pub(crate) fn applies(bank: &Bank, target: &[u8], method: &[u8], vm: &Interpreter, strings: &StringVariables) -> Result<bool> {
@@ -131,6 +137,13 @@ pub(crate) fn apply(bank: &mut Bank, target: &[u8], arguments: &[Vec<u8>], vm: &
         *vm = staged;
         return Ok(());
     }
+    if method==b"attach" {
+        let attached=args.first().map(|source|crate::fes_references::evaluate(source,&mut staged,strings,&|name|bank.count(name))).transpose()?;
+        for id in bank.targets(target,&mut staged,strings)? {
+            if let Some(State::Image(image))=bank.objects.get_mut(&id).map(|o|&mut o.state){if let Some(button)=&mut image.button{button.attach=attached.clone();}}
+        }
+        *vm=staged;return Ok(());
+    }
     let value = args.first().map_or(Ok(0), |source| staged.evaluate(source))?;
     let indices: Vec<i32> = if reference.index == -1 { (0..count as i32).collect() } else { vec![reference.index] };
     for index in indices {
@@ -155,6 +168,7 @@ pub(crate) fn apply(bank: &mut Bank, target: &[u8], arguments: &[Vec<u8>], vm: &
                     button.pressed = false;
                 }
             }
+            b"drag" => image.button.as_mut().context("CatSystem2 drag on a plain IMAGE")?.drag=value!=0,
             b"noact" => image.button.as_mut().context("CatSystem2 noact on a plain IMAGE")?.no_action = value != 0,
             b"lock" => image.button.as_mut().context("CatSystem2 lock on a plain IMAGE")?.lock = value,
             _ => anyhow::bail!("CatSystem2 unknown BUTTON method"),
@@ -169,6 +183,7 @@ fn contains(bank: &Bank, id: u32, pointer: [i32; 2]) -> bool {
     let State::Image(image) = &bank.objects[&id].state else {
         return false;
     };
+    if image.button.as_ref().is_some_and(|b|b.drag){return true;}
     if image.size[0] <= 0 || image.size[1] <= 0 {
         return false;
     }
@@ -227,10 +242,12 @@ pub(crate) fn step(bank: &mut Bank, pointer: [i32; 2], left: [bool; 2], right: [
     for id in &ids {
         let State::Image(image) = &bank.objects[id].state else { continue };
         let Some(button) = &image.button else { continue };
-        if !button.enabled || image.pose.visible == 0 || !contains(bank, *id, pointer) {
+        // Display does not gate a hit: title scripts click invisible map buttons, and they
+        // pair `disp 0` with `enable 0` to take a button away.
+        if !button.enabled || !contains(bank, *id, pointer) {
             continue;
         }
-        let priority = image.pose.priority as i32;
+        let priority = if button.drag {100000}else{image.pose.priority as i32};
         if top.is_none_or(|(best, _)| priority >= best) {
             top = Some((priority, *id));
         }
@@ -285,6 +302,31 @@ pub(crate) fn step(bank: &mut Bank, pointer: [i32; 2], left: [bool; 2], right: [
         }
     }
     out
+}
+/// 77B640: native key anchor plus image pose and its displayed PLANE origin.
+pub(crate) fn key_position(bank:&Bank,id:u32)->Option<[i32;2]>{
+    let object=bank.objects.get(&id)?;
+    let image=match &object.state{State::Image(v)|State::CImage(v)=>v,_=>return None};
+    let mut point=[(image.pose.position[0]+image.pose.offset[0]-image.pose.pivot[0]) as i32+image.key_position[0],(image.pose.position[1]+image.pose.offset[1]-image.pose.pivot[1]) as i32+image.key_position[1]];
+    if let Some(State::Plane(p)|State::CPlane(p))=bank.lookup(&image.plane).and_then(|id|bank.objects.get(&id)).map(|o|&o.state){if p.pose.visible!=0{point[0]+=p.pose.position[0] as i32;point[1]+=p.pose.position[1] as i32;}}
+    Some(point)
+}
+/// 757C20: when grid navigation has no next button, an attached scrollbar/slider
+/// consumes the direction by moving its native value by one and dispatching SCRL_P.
+pub(crate) fn attached_direction(bank:&mut Bank,direction:usize)->Vec<Dispatch>{
+    let focused=bank.ordered_ids().into_iter().find(|id|matches!(&bank.objects[id].state,State::Image(image) if image.button.as_ref().is_some_and(|b|b.enabled&&b.focused)));
+    let Some(id)=focused else{return Vec::new()};
+    let attached=match &bank.objects[&id].state{State::Image(v)=>v.button.as_ref().and_then(|b|b.attach.clone()),_=>None};
+    let Some(target)=attached.and_then(|name|bank.lookup(&name))else{return Vec::new()};
+    let object=bank.objects.get_mut(&target).unwrap();
+    let State::Image(image)=&mut object.state else{return Vec::new()};
+    let Some(slider)=&mut image.slider else{return Vec::new()};
+    let relevant=if slider.horizontal{direction==2||direction==3}else{direction<2};
+    if !relevant{return Vec::new()};
+    let delta=if direction==0||direction==2{-1}else{1};
+    if !slider.set(slider.value.saturating_add(delta)){return Vec::new()};
+    let group=image.button.as_ref().map_or(&[][..],|b|b.group.as_slice());
+    vec![Dispatch{object:target,event:Event::ScrollPosition,section:section(&object.name,group,Event::ScrollPosition),name:object.name.clone(),index:object.index}]
 }
 #[cfg(test)]
 mod tests {

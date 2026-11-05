@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Engine-owned, device-free material data. `String` textures are client asset
 //! paths; importers use image indices with the same shading/alpha contract.
-use anyhow::{ensure, Result};
+use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

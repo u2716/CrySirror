@@ -79,6 +79,13 @@ pub fn layout_cells(
     options: &CellLayoutOptions,
     cursor: &mut CellCursor,
 ) -> Result<CellLayout> {
+    layout_cells_with_breaks(text,options,cursor,"")
+}
+
+/// Fixed-cell layout with an explicit set of characters forbidden at the end
+/// of an automatically wrapped line. Existing callers retain their profile.
+pub fn layout_cells_with_breaks(text:&str,options:&CellLayoutOptions,cursor:&mut CellCursor,forbidden_line_end:&str)->Result<CellLayout>{
+    ensure!(forbidden_line_end.len()<=4096,"cell line-end policy limit");
     options.validate()?;
     ensure!(
         text.len() <= 1024 * 1024 && text.chars().count() <= 65536,
@@ -98,7 +105,8 @@ pub fn layout_cells(
         state.line_head = true;
     };
     let mut glyphs = Vec::new();
-    for (byte, character) in text.char_indices() {
+    let mut input=text.char_indices().peekable();
+    while let Some((byte,character))=input.next() {
         if character == '\r' {
             continue;
         }
@@ -119,7 +127,12 @@ pub fn layout_cells(
             cell + options.spacing[0]
         };
         let next = cursor.position[0].saturating_add(advance);
-        let wrap = next > options.bounds[0].saturating_add(options.hanging)
+        let end_wrap=cursor.position[0]>0 && forbidden_line_end.contains(character) && input.peek().is_some_and(|(_,next_character)| {
+            let next_half=options.half_width&&(next_character.is_ascii()||('｡'..='ﾟ').contains(next_character));
+            let next_advance=if next_half{(options.size/2).max(1)}else{options.size}+options.spacing[0];
+            next.saturating_add(next_advance)>options.bounds[0]
+        });
+        let wrap = end_wrap || next > options.bounds[0].saturating_add(options.hanging)
             || (next > options.bounds[0] && !options.forbidden_line_start.contains(character));
         if wrap {
             newline(cursor, true);
@@ -259,4 +272,52 @@ pub fn encoded_cell_run(
             .ok_or_else(|| anyhow::anyhow!("encoded cell advance overflow"))?;
     }
     Ok((glyphs, x - origin[0]))
+}
+
+/// Two encoded fixed-cell runs centered in a common advance box. This is a
+/// font-independent placement operation; native delimiters, relative line
+/// offsets, colors and reveal order remain the caller's semantic policy.
+pub fn encoded_ruby_run(
+    base: &str,
+    reading: &str,
+    origin: [i32; 2],
+    base_size: i32,
+    reading_size: i32,
+    reading_offset_y: i32,
+    encoding: &'static encoding_rs::Encoding,
+) -> Result<(Vec<CellGlyph>, Vec<CellGlyph>, i32)> {
+    ensure!(!base.is_empty() && !reading.is_empty(), "encoded ruby requires base and reading");
+    ensure!(!base.contains(['\n','\r']) && !reading.contains(['\n','\r']), "encoded ruby requires single lines");
+    let (mut base_cells, base_width) = encoded_cell_run(base, origin, base_size, encoding)?;
+    let reading_y = origin[1].checked_add(reading_offset_y).ok_or_else(|| anyhow::anyhow!("encoded ruby vertical overflow"))?;
+    let (mut reading_cells, reading_width) = encoded_cell_run(reading, [origin[0],reading_y], reading_size, encoding)?;
+    let advance = base_width.max(reading_width);
+    for (cells, width) in [(&mut base_cells,base_width),(&mut reading_cells,reading_width)] {
+        let offset = (advance-width)/2;
+        for cell in cells {
+            cell.position[0] = cell.position[0].checked_add(offset).ok_or_else(|| anyhow::anyhow!("encoded ruby horizontal overflow"))?;
+        }
+    }
+    Ok((base_cells,reading_cells,advance))
+}
+
+#[cfg(test)]
+mod ruby_tests {
+    use super::*;
+    #[test]
+    fn encoded_ruby_centers_shorter_run_and_preserves_odd_integer_remainder() {
+        let (base,reading,advance)=encoded_ruby_run("A","あいう",[4,20],22,12,-9,encoding_rs::SHIFT_JIS).unwrap();
+        assert_eq!(advance,36);
+        assert_eq!(base[0].position,[16,20]);
+        assert_eq!(reading[0].position,[4,11]);
+        assert_eq!(reading[2].position,[28,11]);
+    }
+    #[test]
+    fn encoded_ruby_rejects_bad_geometry_and_keeps_halfwidth_encoding() {
+        assert!(encoded_ruby_run("","x",[0,0],22,12,-9,encoding_rs::SHIFT_JIS).is_err());
+        assert!(encoded_ruby_run("a\nb","x",[0,0],22,12,-9,encoding_rs::SHIFT_JIS).is_err());
+        assert!(encoded_ruby_run("a","x",[0,i32::MIN],22,12,-9,encoding_rs::SHIFT_JIS).is_err());
+        let (_,reading,advance)=encoded_ruby_run("あ","ｱA",[0,0],22,12,-9,encoding_rs::SHIFT_JIS).unwrap();
+        assert_eq!(advance,22);assert_eq!(reading[1].position[0]-reading[0].position[0],6);
+    }
 }

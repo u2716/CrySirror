@@ -8,7 +8,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 struct Reader {
-    file: Mutex<std::fs::File>,
+    file: Mutex<crate::source_path::SourceFile>,
     length: u64,
 }
 impl AssetReader for Reader {
@@ -25,20 +25,20 @@ impl AssetReader for Reader {
             .map_err(|e| crysirror_core::Error::Io(e.to_string()))
     }
 }
-fn source(root: &Path, path: &str) -> Result<Arc<dyn AssetReader>> {
+fn source(root: &SourcePath, path: &str) -> Result<Arc<dyn AssetReader>> {
     let full = root.join(path).canonicalize()?;
     ensure!(
         full.starts_with(root),
         "NNN detection escapes capability root"
     );
-    let file = std::fs::File::open(full)?;
+    let file = crate::source_path::SourceFile::open(full)?;
     let length = file.metadata()?.len();
     Ok(Arc::new(Reader {
         file: Mutex::new(file),
         length,
     }))
 }
-pub(super) fn detect(dir: &Path, names: &[String], name: &str) -> Result<Option<Plan>> {
+pub(super) fn detect(dir: &SourcePath, names: &[String], name: &str) -> Result<Option<Plan>> {
     let root = dir.canonicalize()?;
     ensure!(
         with_ext(names, "msi").count() <= 4,
@@ -148,14 +148,14 @@ mod tests {
     fn no_native_tables_or_installer_header_means_no_nnn_match() {
         let root = tempfile::tempdir().unwrap();
         std::fs::write(root.path().join("renamed.msi"), b"not an installer").unwrap();
-        assert!(detect(root.path(), &["renamed.msi".into()], "authored")
+        assert!(detect(&SourcePath::local(root.path()), &["renamed.msi".into()], "authored")
             .unwrap()
             .is_none());
     }
     #[test]
     #[ignore = "reads owner installation media; no original executable is run"]
     fn owner_media_plan_selects_real_adapter_and_scoped_installed_archive_root() {
-        let root = PathBuf::from(std::env::var("CRYSIRROR_TEST_NNN_ROOT").unwrap());
+        let root = SourcePath::local(PathBuf::from(std::env::var("CRYSIRROR_TEST_NNN_ROOT").unwrap()));
         let names = listing(&root).unwrap();
         let plan = detect(&root, &names, "NNN owner media").unwrap().unwrap();
         assert_eq!(plan.engine, "System-NNN");

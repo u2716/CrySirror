@@ -129,6 +129,8 @@ pub(crate) fn project(
             sampling: Default::default(),
             filter: if id == FILTER_LAYER && add != [0; 3] {
                 Some(crysirror_scene::layer::LayerFilter {
+                    multiply: [1.; 3],
+                    luma_weights: None, rgb_alpha_power: 0., ignore_tint_alpha: false, encoded_sampling:false,
                     add: add.map(|n| f32::from(n) / 255.),
                     mono: 0.,
                     invert: 0.,

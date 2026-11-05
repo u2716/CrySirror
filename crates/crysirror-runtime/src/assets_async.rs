@@ -91,7 +91,7 @@ struct Entry {
     pins: Arc<AtomicUsize>,
     automatic: bool,
     leased: bool,
-    touched: std::time::Instant,
+    touched: web_time::Instant,
     status: AssetStatus,
     job: Option<Task<Prepared>>,
     value: Option<Prepared>,
@@ -209,7 +209,7 @@ impl Drop for AsyncAssets {
 #[derive(Clone)]
 struct Source {
     storage: Option<Arc<dyn ClientStorage>>,
-    dir: Arc<cap_std::fs::Dir>,
+    dir: Arc<dyn ClientStorage>,
     cache: BTreeMap<String, Arc<[u8]>>,
 }
 impl Source {
@@ -238,7 +238,7 @@ impl Source {
             }
             out
         } else {
-            super::read_limited(&self.dir, p.relative())?
+            self.dir.read(&p)?
         };
         cancel.check()?;
         Ok(Arc::from(bytes))
@@ -310,11 +310,11 @@ impl Assets {
             .clients
             .get(&client)
             .context("unknown asset client")?
-            .try_clone()?;
+            .clone();
         let prefix = format!("client:{}:", client.0);
         Ok(Source {
             storage: self.storage.get(&client).cloned(),
-            dir: Arc::new(dir),
+            dir,
             cache: self
                 .bytes
                 .iter()
@@ -363,7 +363,7 @@ impl Assets {
         let key = (client, kind, path.clone());
         if let Some(id) = self.asynchronous.keys.get(&key) {
             let entry = self.asynchronous.entries.get_mut(id).unwrap();
-            entry.touched = std::time::Instant::now();
+            entry.touched = web_time::Instant::now();
             if explicit {
                 entry.automatic = false;
             }
@@ -450,7 +450,7 @@ impl Assets {
                 pins: Arc::new(AtomicUsize::new(0)),
                 automatic: !explicit,
                 leased: false,
-                touched: std::time::Instant::now(),
+                touched: web_time::Instant::now(),
                 status: AssetStatus {
                     ticket,
                     path,

@@ -302,6 +302,71 @@ impl Window {
     }
 }
 
+/// 69A450 over a parsed message: glyphs stay, ruby text (after `/` in `[base/ruby]`) and
+/// escapes go. `\\n` leaves no glyph; `\\\\` leaves a backslash.
+pub(super) fn plain_text(text: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(text.len());
+    let (mut at, mut base, mut ruby) = (0, false, false);
+    while at < text.len() && text[at] != 0 {
+        let byte = text[at];
+        if is_lead(byte) && at + 1 < text.len() {
+            if !ruby {
+                out.extend_from_slice(&text[at..at + 2]);
+            }
+            at += 2;
+            continue;
+        }
+        match byte {
+            b'[' => {
+                base = true;
+                at += 1;
+            }
+            b'/' if base => {
+                base = false;
+                ruby = true;
+                at += 1;
+            }
+            b']' if ruby => {
+                ruby = false;
+                at += 1;
+            }
+            b']' if base => {
+                base = false;
+                at += 1;
+            }
+            b'\\' => {
+                let letter = text.get(at + 1).copied().unwrap_or(0);
+                at += 2;
+                match letter {
+                    b'c' | b'C' | b'f' | b'F' => {
+                        if letter.eq_ignore_ascii_case(&b'f') && matches!(text.get(at), Some(b'S' | b's' | b'L' | b'l' | b'N' | b'n')) {
+                            let first = text[at];
+                            at += 1;
+                            if text.get(at).is_some_and(|b| b.eq_ignore_ascii_case(&first)) {
+                                at += 1;
+                            }
+                        } else if let Some((_, used)) = text.get(at..).and_then(number) {
+                            at += used;
+                        }
+                        if text.get(at) == Some(&b';') {
+                            at += 1;
+                        }
+                    }
+                    b'\\' if !ruby => out.push(b'\\'),
+                    _ => {}
+                }
+            }
+            _ => {
+                if !ruby {
+                    out.push(byte);
+                }
+                at += 1;
+            }
+        }
+    }
+    out
+}
+
 fn decode(code: u16) -> Option<char> {
     let bytes = code.to_be_bytes();
     let source: &[u8] = if code & 0xff00 != 0 { &bytes } else { &bytes[1..] };
@@ -338,7 +403,7 @@ fn present(host: &mut dyn HostServices, client: ClientId, font: &str, tasks: &cr
         // 5E3F90 asks the cache for size h-2; GGO bitmaps sit on the cell's ascent.
         let size = (glyph.h - 2).max(1) as f32;
         let ascent = host.font_metrics(font, size, 'あ').context("CatSystem2 text window font metrics")?.ascent;
-        runs.push(crysirror_scene::layer::PositionedGlyph { crop: None, character, baseline: [x as f32, y as f32 + ascent], size: Some(size), color: Some(rgba(glyph.colour)), bold: None });
+        runs.push(crysirror_scene::layer::PositionedGlyph { font: None, horizontal_scale:None,font_width:None, cell_width: None, crop: None, character, baseline: [x as f32, y as f32 + ascent], size: Some(size), color: Some(rgba(glyph.colour)), bold: None });
     }
     let [edge_layer, face_layer] = glyph_layers(id)?;
     let rect = [0., 0., config.width().max(1) as f32, config.height().max(1) as f32];
@@ -355,7 +420,7 @@ fn present(host: &mut dyn HostServices, client: ClientId, font: &str, tasks: &cr
     }
     let run = |id: u32, order: i32, colour: Option<[u8; 4]>, blur: Option<crysirror_scene::layer::GlyphBlur>| -> Result<serde_json::Value> {
         let glyphs: Vec<_> = runs.iter().cloned().map(|mut g| { if colour.is_some() { g.color = colour; } g }).collect();
-        let paint = crysirror_scene::layer::Paint::GlyphRun { font: font.to_owned(), size: config.size().max(1) as f32, color: [255; 4], bold: false, glyphs, reveal: None, blur };
+        let paint = crysirror_scene::layer::Paint::GlyphRun { outline:None, font: font.to_owned(), size: config.size().max(1) as f32, color: [255; 4], bold: false, glyphs, reveal: None, blur };
         Ok(json!({"op":"put","layer":{"id":id,"parent":payload,"rect":rect,"order":[0,order],"paint":serde_json::to_value(paint)?}}))
     };
     if edge {

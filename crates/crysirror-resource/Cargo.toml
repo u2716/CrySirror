@@ -7,6 +7,7 @@ rust-version.workspace = true
 description = "CPU archive registry, capability streams and scoped resource transforms"
 
 [dependencies]
+md-5 = "=0.11.0"
 crysirror-io.workspace = true
 crysirror-core.workspace = true
 crysirror-tasks.workspace = true
@@ -36,3 +37,7 @@ pelite = { version = "=0.10.0", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 tempfile = "3.12"
+
+# RSA's rand_core dependency uses the browser Web Crypto entropy source.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "=0.2.17", features = ["js"] }

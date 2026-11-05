@@ -12,7 +12,7 @@ pub(super) fn inverse_to_root(root: u32, owner: &BTreeMap<u32, &LayerSpec>) -> R
         let layer = owner
             .get(&id)
             .context("viewport clip snapshot parent missing")?;
-        let t = &layer.transform;
+        let (t,_) = layer.transform.resolved();
         ensure!(
             !t.camera_enabled
                 && !t.billboard

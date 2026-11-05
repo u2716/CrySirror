@@ -2,8 +2,8 @@
 //! reuses the VFX simulator's immutable frames and PuppetFrame rendering path;
 //! it does not simulate particles or render a private composed screen.
 use crate::{BlendMode, EmitterFrame, FacingMode, RenderSpec, SimulationSpace};
-use anyhow::{ensure, Context, Result};
-use crysirror_puppet::{FramePart, PartBlend, PuppetFrame, MAX_PARTS};
+use anyhow::{Context, Result, ensure};
+use crysirror_puppet::{FramePart, MAX_PARTS, PartBlend, PuppetFrame};
 use glam::{Mat4, Vec3};
 use serde::{Deserialize, Serialize};
 

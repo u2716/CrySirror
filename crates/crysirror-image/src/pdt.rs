@@ -3,7 +3,7 @@
 // commit 5f358ef1360b0439e92aed2b749e8f25d8721954 (MPL-2.0); not the AVG32 VM.
 //! Decoder for the `PDT10` and `PDT11` bitmap formats used by AVG32.
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PdtImage {

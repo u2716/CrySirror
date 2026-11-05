@@ -1,6 +1,20 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Original CatSystem2 script policy over CrySirror capability services.
 //! No original engine, executable, renderer, mixer or game content is linked.
+//!
+//! Implementation map:
+//! - `adapter.rs`: KCS syscall dispatch, scoped configuration and completion.
+//! - `fes_runtime.rs` / `fes_natives.rs`: FES task and command semantics.
+//! - `fes_object_resources.rs`: image policy mapped to shared Image/Canvas/Layer.
+//! - `native_image_resource.rs`: HG3 selection and original geometry metadata.
+//! - `fes_panel_parts.rs` / `fes_panel_render.rs`: configured and live PANEL parts.
+//! - `native_log.rs` / `fes_text.rs`: message history and native text policy.
+//! - `native_m2.rs` / `native_classes/emote_messages.rs`: E-mote native policy.
+//! - `native_menu.rs`: native menu IDs mapped to shared UI dialogs.
+//! - `native_classes/view3d.rs`: reviewed factory and native-save receiver policy.
+//!
+//! Native implementation evidence belongs beside these operations. Reusable
+//! drawing, text, resource and audio contracts belong to their engine crates.
 #![forbid(unsafe_code)]
 mod adapter;
 pub mod kcs;
@@ -17,7 +31,6 @@ mod native_store;
 mod native_math;
 mod native_log;
 mod native_misc;
-mod native_pending;
 mod native_classes;
 mod image_list;
 mod fes_task;
@@ -31,7 +44,15 @@ mod fes_macros;
 mod fes_loading;
 mod fes_children;
 mod fes_natives;
+mod fes_image_methods;
+mod fes_bg_table;
+mod fes_panel_parts;
+mod fes_sound_tags;
 mod fes_save;
+#[cfg(feature = "runtime")]
+mod fes_file_list;
+#[cfg(feature = "runtime")]
+mod fes_save_panel;
 mod fes_sound_table;
 mod fes_button;
 mod fes_file_probe;
@@ -52,10 +73,11 @@ pub use startup::{parse_startup, Startup};
 mod loop_policy;
 
 mod fes_text;
+#[cfg(feature = "runtime")]
+mod native_text_coverage;
 mod native_plane;
 mod native_scene;
 mod native_strings;
-mod native_inert;
 mod native_motion;
 #[cfg(feature="runtime")]
 mod native_kcs_sound;
@@ -85,6 +107,8 @@ mod fes_object_bank;
 
 #[cfg(feature = "runtime")]
 mod fes_object_resources;
+#[cfg(feature = "runtime")]
+mod fes_panel_render;
 #[cfg(feature = "runtime")]
 mod fes_live_frames;
 #[cfg(feature = "runtime")]

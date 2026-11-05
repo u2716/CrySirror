@@ -7,8 +7,9 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
-    time::Instant,
 };
+
+use web_time::Instant;
 
 const MAX_SAMPLES: usize = 8192;
 #[derive(Clone, Debug, Serialize)]
@@ -111,7 +112,17 @@ impl Drop for Span {
         self.profiler.record(Sample {
             frame: self.frame,
             name: std::mem::take(&mut self.name),
-            thread: format!("{:?}", std::thread::current().id()),
+            thread: {
+                #[cfg(not(target_arch = "wasm32"))]
+                { format!("{:?}", std::thread::current().id()) }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    #[cfg(feature = "web-threads")]
+                    { format!("browser-cpu-{:?}", rayon::current_thread_index()) }
+                    #[cfg(not(feature = "web-threads"))]
+                    { "browser-worker".into() }
+                }
+            },
             start_us: self
                 .start
                 .duration_since(self.profiler.0.origin)

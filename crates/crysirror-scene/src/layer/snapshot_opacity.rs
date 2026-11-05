@@ -51,9 +51,9 @@ pub(super) fn isolate(layers: &mut Vec<LayerSpec>) -> Result<()> {
             .filter(|layer| selected.contains(&layer.id))
             .cloned()
             .collect();
-        if input.iter().any(|layer|layer.viewport_clip.is_some()) {
-            let inverse=super::viewport_clip::inverse_to_root(id,&by_id)?;
-            super::viewport_clip::rebase(&mut input,inverse)?;
+        if input.iter().any(|layer| layer.viewport_clip.is_some()) {
+            let inverse = super::viewport_clip::inverse_to_root(id, &by_id)?;
+            super::viewport_clip::rebase(&mut input, inverse)?;
         }
         let input_root = input.iter_mut().find(|layer| layer.id == id).unwrap();
         input_root.parent = None;

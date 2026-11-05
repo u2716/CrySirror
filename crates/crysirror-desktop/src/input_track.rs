@@ -15,9 +15,14 @@ struct Entry {
     pressed: Vec<String>,
     #[serde(default)]
     pointer: Option<[i32; 2]>,
+    #[serde(default)]
+    text: Option<String>,
 }
 #[derive(Default)]
-pub struct InputTrack(Vec<(u32, InputFrame)>);
+pub struct InputTrack(
+    Vec<(u32, InputFrame)>,
+    std::collections::BTreeMap<u32, String>,
+);
 impl InputTrack {
     pub fn load(path: Option<&Path>) -> Result<Self> {
         let Some(path) = path else {
@@ -35,6 +40,7 @@ impl InputTrack {
         ensure!(entries.len() <= 100_000, "input track event limit");
         let mut state = InputFrame::default();
         let mut result = Vec::new();
+        let mut text = std::collections::BTreeMap::new();
         let bits = |names: &[String]| -> Result<u64> {
             ensure!(
                 names.len() <= buttons::NAMES.len(),
@@ -63,9 +69,22 @@ impl InputTrack {
                 state.pointer_x = x;
                 state.pointer_y = y;
             }
+            if let Some(value) = entry.text {
+                ensure!(
+                    value.len() <= 16384 && !value.chars().any(char::is_control),
+                    "invalid committed text in input track"
+                );
+                text.insert(entry.frame, value);
+            }
             result.push((entry.frame, state));
         }
-        Ok(Self(result))
+        Ok(Self(result, text))
+    }
+    pub fn has_text(&self) -> bool {
+        !self.1.is_empty()
+    }
+    pub fn text_at(&self, frame: u32) -> Option<&str> {
+        self.1.get(&frame).map(String::as_str)
     }
     pub fn at(&self, frame: u32) -> InputFrame {
         let count = self.0.partition_point(|(f, _)| *f <= frame);

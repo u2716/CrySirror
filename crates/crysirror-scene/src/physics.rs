@@ -2,7 +2,7 @@
 //! Saved, client-scoped physics declarations. Solver handles and caches live
 //! in the runtime; snapshots retain transforms/velocities, forces and joints.
 use crate::world::{EntityHandle, World};
-use anyhow::{ensure, Result};
+use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 

@@ -3,8 +3,8 @@
 // License, v. 2.0. A copy is available at https://mozilla.org/MPL/2.0/.
 //! Immutable engine-owned pointer coverage, independent of a VM or renderer.
 pub mod channel;
+use anyhow::{Result, ensure};
 pub use channel::CoverageChannel;
-use anyhow::{ensure, Result};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 /// One byte per logical widget pixel. Transparent samples permit pointer input

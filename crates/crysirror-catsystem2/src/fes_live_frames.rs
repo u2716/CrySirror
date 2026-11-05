@@ -36,6 +36,10 @@ pub(crate) struct Frames {
     sounds: crate::fes_live_sound::Sounds,
 }
 impl Frames {
+    /// A native draw phase has not published its complete class/motion batch.
+    pub fn presentation_pending(&self) -> bool {
+        !self.pending.is_empty() || !self.motion.is_empty()
+    }
     pub fn audio_diagnostics(&self)->serde_json::Value{self.sounds.diagnostics()}
     #[cfg(test)]pub fn audio_resource(&self,channel:u32)->Option<crysirror_core::service::AudioResourceHandle>{self.sounds.resource(channel)}
     pub fn audio_needs_updates(&self)->bool{self.sounds.needs_updates()}

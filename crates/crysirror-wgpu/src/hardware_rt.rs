@@ -84,7 +84,7 @@ impl HardwareRt {
                 && limits.max_acceleration_structures_per_shader_stage > 0,
             "hardware RT acceleration-structure limits were not negotiated"
         );
-        validate_shader(include_str!("shaders/hardware_rt.wgsl"))?;
+        validate_shader(crysirror_shaders::wgsl::HARDWARE_RT)?;
         let d = &gpu.device;
         let primary_layout = d.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("hardware RT primary resources"),
@@ -108,7 +108,7 @@ impl HardwareRt {
             d,
             &primary_layout,
             "hardware primary and shadow rays",
-            include_str!("shaders/hardware_rt.wgsl"),
+            crysirror_shaders::wgsl::HARDWARE_RT,
         );
         Ok(Self {
             pending_world: false,
@@ -560,7 +560,7 @@ mod tests {
     #[test]
     fn genuine_ray_query_shaders_parse_and_validate() {
         for shader in [
-            include_str!("shaders/hardware_rt.wgsl").to_owned(),
+            crysirror_shaders::wgsl::HARDWARE_RT.to_owned(),
             crate::rt_pbr::shadow_source(),
         ] {
             validate_shader(&shader).unwrap();

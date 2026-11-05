@@ -848,7 +848,8 @@ impl RealLiveVm {
                 }
             }
             let frame = 20000 + w * 8..20000 + w * 8 + 8;
-            ids.extend(self.waku_ids.iter().copied().filter(|id| frame.contains(id)));
+            let nine = selection::NINE_SLICE_BASE + w * 16..selection::NINE_SLICE_BASE + w * 16 + 16;
+            ids.extend(self.waku_ids.iter().copied().filter(|id| frame.contains(id) || nine.contains(id)));
         }
         Ok(ids)
     }
@@ -1353,6 +1354,7 @@ impl RealLiveVm {
         match opcode {
             // PAGE: wait, then start a new page.
             163 => {
+                self.toolbar.pause_started = None;
                 self.wait = Some(Wait::Pause { kind: 210, window: self.window });
             }
             // CANCELCALL: the right-click routine, as if right-clicked.

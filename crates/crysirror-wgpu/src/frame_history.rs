@@ -26,10 +26,12 @@ pub(super) struct Provider {
     renders: AtomicU64,
     readbacks: AtomicU64,
 }
+#[cfg(not(target_arch = "wasm32"))]
 struct Client {
     owner: Arc<Provider>,
     client: u32,
 }
+#[cfg(not(target_arch = "wasm32"))]
 impl Drop for Client {
     fn drop(&mut self) {
         if let Ok(mut state) = self.owner.state.lock() {
@@ -46,6 +48,7 @@ impl Drop for Client {
 fn error(e: impl std::fmt::Display) -> crysirror_core::Error {
     crysirror_core::Error::Io(e.to_string())
 }
+#[cfg(not(target_arch = "wasm32"))]
 impl MeshFrameHistoryProvider for Provider {
     fn client(
         self: Arc<Self>,
@@ -69,6 +72,7 @@ impl MeshFrameHistoryProvider for Provider {
             .is_ok_and(|s| s.slots.contains_key(&(client.0, layer)))
     }
 }
+#[cfg(not(target_arch = "wasm32"))]
 impl MeshFrameHistory for Client {
     fn texture(&self, layer: u32, size: [u32; 2]) -> crysirror_core::Result<String> {
         let bytes = crysirror_image::rgba_len(size[0], size[1]).map_err(error)? as u64;
@@ -145,6 +149,9 @@ impl MeshFrameHistory for Client {
     }
 }
 impl Provider {
+    pub fn registered(&self, client: ClientId, layer: u32) -> bool {
+        self.state.lock().is_ok_and(|s| s.slots.contains_key(&(client.0, layer)))
+    }
     pub fn new(gpu: Arc<Gpu>) -> Arc<Self> {
         Arc::new(Self {
             gpu,
@@ -337,4 +344,16 @@ pub(super) fn read_texture(
         }
     }
     image::RgbaImage::from_raw(width, height, pixels).context("invalid GPU readback dimensions")
+}
+
+/// No GPU object is embedded in this Send/Sync browser capability. Support
+/// needs a presenter actor with asynchronous readback receipts first.
+#[cfg(target_arch = "wasm32")]
+pub(super) struct BrowserHistory;
+#[cfg(target_arch = "wasm32")]
+impl MeshFrameHistoryProvider for BrowserHistory {
+    fn client(self: Arc<Self>, _: ClientId) -> crysirror_core::Result<Arc<dyn MeshFrameHistory>> {
+        Err(crysirror_core::Error::Unsupported("browser GPU frame-history actor"))
+    }
+    fn registered(&self, _: ClientId, _: u32) -> bool { false }
 }

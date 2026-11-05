@@ -5,7 +5,7 @@
 //!
 //! Playback is world state: it advances on the fixed world step, pauses
 //! with its client and is saved, so a restored game resumes mid-sequence.
-use anyhow::{bail, ensure, Result};
+use anyhow::{Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 
 pub const MAX_TRACKS: usize = 512;

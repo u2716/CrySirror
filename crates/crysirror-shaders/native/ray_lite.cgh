@@ -1,0 +1,120 @@
+// SPDX-License-Identifier: MPL-2.0
+// Shared arithmetic for native Cg fragment / deko3d GLSL compute wrappers.
+// ABI v1: crysirror-raytrace::PackedScene. No GL runtime or hardware ray query.
+// Wrappers supply load_node/load_triangle and the ray_* uniform vectors.
+
+bool lite_slab(float o, float d, float lo, float hi, inout float near_t, inout float far_t) {
+    if (abs(d) < 1.0e-20) return o >= lo && o <= hi;
+    float a = (lo - o) / d;
+    float b = (hi - o) / d;
+    near_t = max(near_t, min(a, b));
+    far_t = min(far_t, max(a, b));
+    return near_t <= far_t;
+}
+
+bool lite_box(float3 origin, float3 direction, float3 lo, float3 hi, float limit) {
+    float near_t = ray_eye.w;
+    float far_t = limit;
+    return lite_slab(origin.x, direction.x, lo.x, hi.x, near_t, far_t)
+        && lite_slab(origin.y, direction.y, lo.y, hi.y, near_t, far_t)
+        && lite_slab(origin.z, direction.z, lo.z, hi.z, near_t, far_t);
+}
+
+bool lite_triangle(float3 origin, float3 direction, float index, float limit,
+                   out float distance, out float3 normal, out float3 color) {
+    float base = index * 6.0;
+    float2 a0 = load_triangle(base);
+    float2 a1 = load_triangle(base + 1.0);
+    float2 b0 = load_triangle(base + 2.0);
+    float2 b1 = load_triangle(base + 3.0);
+    float2 c0 = load_triangle(base + 4.0);
+    float2 c1 = load_triangle(base + 5.0);
+    float3 a = float3(a0, a1.x);
+    float3 e1 = float3(b0, b1.x) - a;
+    float3 e2 = float3(c0, c1.x) - a;
+    float3 p = cross(direction, e2);
+    float det = dot(e1, p);
+    float3 n = cross(e1, e2);
+    float area2 = dot(n, n);
+    distance = limit;
+    normal = float3(0.0, 0.0, 0.0);
+    color = float3(a1.y, b1.y, c1.y);
+    if (area2 < 1.0e-30 || abs(det) < 1.0e-7 * sqrt(area2)) return false;
+    float inverse = 1.0 / det;
+    float3 offset = origin - a;
+    float u = dot(offset, p) * inverse;
+    if (u < 0.0 || u > 1.0) return false;
+    float3 q = cross(offset, e1);
+    float v = dot(direction, q) * inverse;
+    if (v < 0.0 || u + v > 1.0) return false;
+    distance = dot(e2, q) * inverse;
+    if (distance <= ray_eye.w || distance >= limit) return false;
+    normal = n / sqrt(area2);
+    if (dot(normal, direction) > 0.0) normal = -normal;
+    return true;
+}
+
+bool lite_trace(float3 origin, float3 direction, bool any_hit,
+                out float distance, out float3 normal, out float3 color) {
+    distance = ray_light.w;
+    normal = float3(0.0, 0.0, 0.0);
+    color = float3(0.0, 0.0, 0.0);
+    bool hit = false;
+    float index = 0.0;
+    // Valid immutable scenes have strictly increasing preorder/escape links.
+    // The exact node_count bound covers a complete traversal, never a quality cap.
+    for (float visit = 0.0; visit < ray_nodes.z && index < ray_nodes.z; visit += 1.0) {
+        float base = index * 4.0;
+        float2 n0 = load_node(base);
+        float2 n1 = load_node(base + 1.0);
+        float2 n2 = load_node(base + 2.0);
+        float2 n3 = load_node(base + 3.0);
+        if (!lite_box(origin, direction, float3(n0, n1.x), float3(n2, n3.x), distance)) {
+            index = n1.y;
+            continue;
+        }
+        float first = floor(n3.y / 5.0);
+        float count = n3.y - first * 5.0;
+        if (count == 0.0) {
+            index += 1.0;
+            continue;
+        }
+        for (int item = 0; item < 4; item += 1) {
+            if (float(item) >= count) break;
+            float candidate;
+            float3 candidate_normal;
+            float3 candidate_color;
+            if (lite_triangle(origin, direction, first + float(item), distance,
+                              candidate, candidate_normal, candidate_color)) {
+                hit = true;
+                distance = candidate;
+                normal = candidate_normal;
+                color = candidate_color;
+                if (any_hit) return true;
+            }
+        }
+        index = n1.y;
+    }
+    return hit;
+}
+
+float4 lite_pixel(float2 uv) {
+    float3 direction = normalize(ray_corner.xyz + uv.x * ray_dx.xyz + uv.y * ray_dy.xyz);
+    float distance;
+    float3 normal;
+    float3 color;
+    if (!lite_trace(ray_eye.xyz, direction, false, distance, normal, color)) {
+        float sky = clamp(direction.y * 0.5 + 0.5, 0.0, 1.0);
+        return float4(ray_sky_low.xyz * (1.0 - sky) + ray_sky_high.xyz * sky, 1.0);
+    }
+    float3 light = normalize(ray_light.xyz);
+    float lambert = max(dot(normal, light), 0.0);
+    if (lambert > 0.0) {
+        float ignored_distance;
+        float3 ignored_normal;
+        float3 ignored_color;
+        float3 origin = ray_eye.xyz + direction * distance + normal * (ray_eye.w * 2.0);
+        if (lite_trace(origin, light, true, ignored_distance, ignored_normal, ignored_color)) lambert = 0.0;
+    }
+    return float4(color * (ray_ambient.xyz + ray_sun.xyz * lambert), 1.0);
+}

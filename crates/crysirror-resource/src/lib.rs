@@ -5,6 +5,8 @@ pub mod compound;
 pub mod dsc;
 pub mod capability_lookup;
 pub mod circus_pck;
+pub mod circus_crm;
+pub mod circus_frames;
 pub mod cg_catalog;
 mod context;
 mod crypto;
@@ -13,6 +15,7 @@ pub mod krkr_pbd;
 pub mod signature;
 pub mod sniff;
 pub mod pe;
+pub mod checksum;
 pub mod pe_menu;
 pub mod xml;
 pub mod sli;
@@ -25,15 +28,17 @@ pub mod io;
 pub mod keys;
 pub mod lzss;
 pub mod legacy_stream;
+pub mod lane_feedback;
 pub mod installer;
 pub mod registry;
+pub mod redirect;
 pub mod transforms;
 pub mod xor_recovery;
 
 pub use context::{DecodeContext, DecodeLimits, PipelineRules, PipelineSelector};
 pub use crypto::rsa_public_decrypt;
 pub use crypto::{
-    aes256_cbc_decrypt, aes_cbc_decrypt, blowfish_le_decrypt, md5_with_iv, rc4_crypt,
+    aes256_cbc_decrypt, aes_cbc_decrypt, blowfish_le_decrypt, blowfish_le_encrypt, md5_with_iv, rc4_crypt,
 };
 pub use file::{DecodedFile, DependencyResolver, FileFormat, FileKind, FileRegistry};
 pub use io::{concat, read_all, read_exact_at, subrange, AssetIo};
@@ -80,3 +85,5 @@ pub trait ArchiveFormat: Send + Sync {
 }
 
 pub mod dos_glob;
+
+pub mod bwef;

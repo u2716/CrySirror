@@ -4,6 +4,134 @@ Newest first. Each entry is keyed by the API fingerprint printed in
 [REFERENCE.md](REFERENCE.md). `tests/api_docs.rs` fails until the current
 fingerprint appears here. Mark breaking changes with **Breaking**.
 
+## `7ae03e5812971428` (2026-11-05): whole-surface Canvas presentation
+
+- Added `CanvasCommand::PresentTarget` (`present_target` via `Canvases.apply`)
+  to compose a paged surface into one bounded isolated target before applying
+  global masks or distortion. Existing presentations retain their paging policy.
+- Whole-target dimensions are limited to 8192 per axis; renderer memory and
+  device budgets remain applicable. Source edits rebuild the retained paint.
+- Shared Rust `ScalarOscillator` signals and constant-colour screen lookup
+  arithmetic add no reflective script signatures.
+- Regenerated the reference using the release example, separately from game
+  execution and rendering verification.
+
+## `aad72562918cd94f` (2026-11-05): retained parenting and scoped clocks
+
+- Added `Layers.setParent` / `LayerCommand::SetParent`, preserving paint,
+  retained motion and child hierarchy while validating parent ownership/cycles.
+- Added `Layers.advanceTime` / `LayerCommand::AdvanceTime`, advancing only the
+  calling client's automatic motion, glyph reveal and transitions. External
+  producers, other clients and global/input clocks retain their own time.
+- Added shared Rust text helpers for full-width conversion and fixed-cell
+  forbidden line-end rules. They add no reflective script signature.
+- Regenerated the reference with the release example; execution verification
+  of native games remains separate from schema generation.
+
+## `db5dbce037a2d408` (2026-11-05): affine masks and quartic interpolation
+
+- Added `LayerMask.scale`: the selected encoded mask byte is multiplied by
+  this signed value before applying its offset, truncation and saturation.
+  Its default of one preserves existing mask operations; negative values
+  support inverted rule-image fades.
+- Added quartic in, out, in-out and out-in easing to shared layer motion and
+  scalar interpolation. Regenerated the reference using the release example.
+- Rust hosts can submit scoped `AssetReader` media with `media_reader` and
+  `MediaSourceOptions`, using the existing decoder workers, clocks and surfaces.
+  This Rust host method adds no reflective script signature.
+- `MediaFrame::as_image(client)` retains a completed picture and its storage
+  lease as an immutable engine image without encoding or copying pixels.
+  Layer/Canvas snapshots also accept additive, subtractive, multiply and screen
+  blending through the isolated renderer.
+
+## `bddc750232fac763` (2026-11-05): selective straight-RGBA lookup profiles
+
+- Added shared `RgbLookupProfile::StraightNonzeroAlpha` and
+  `StraightColorKey { color }` to preserve transparent or keyed source pixels
+  while applying the same byte-channel lookup tables to visible pixels.
+  Existing straight/premultiplied profiles retain their behavior.
+- Regenerated the current workspace reference with the release example. The
+  previous recorded fingerprint was `acee7de9dee324bf`; generation is separate
+  from installed-game behavior verification.
+
+## `acee7de9dee324bf` (2026-11-05): retained UI geometry and layer paint
+
+- Added `Ui.setRect` / `UiCommand::SetRect` to update a client-owned widget's
+  geometry while preserving input ownership and existing motion state.
+- Added `Layers.setPaint` / `LayerCommand::SetPaint` to replace paint without
+  recreating the layer or cancelling its queues. Changing away from image paint
+  clears image-only sampling and UV state.
+- Both commands are available through the shared Rust and reflective APIs.
+  The release reference generator completed; the prior fingerprint was
+  `9f6118935489bf0d`. Compilation and API generation do not establish full-game
+  behavior. Actual offscreen runs are recorded separately.
+
+## `9f6118935489bf0d` (2026-11-05): shared native control capabilities
+
+- Added scoped UI keyboard ownership, pointer observations, stepped pointer
+  motion and positioned-glyph crop updates.
+- Layer queues expose signed/IEEE velocity policy, finite draw gates,
+  texel-center image projection, centered alignment maps and retained binding
+  updates. Qualified `LayerSequence*` data types avoid world-queue name collisions.
+- Added live audio playback-rate control, owner-authorized HTTP jobs, historical
+  civil-time profiles, and the device-independent `FrameAdmissionClock` helper.
+- Regenerated all three reference artifacts with the release example; the prior
+  fingerprint was `54bfb53217aaaad3`. Generation succeeded; it does not establish
+  native game behavior or hardware validation. No test suite was executed.
+
+## `54bfb53217aaaad3` (2026-11-05): scoped UI key receipts
+
+- Added `WidgetSpec.key_events` with press, release and delayed held edges.
+  The focused client and modal subtree own delivery; release requires prior
+  ownership of the held key.
+- `Ui.drainSubtreeEvents(root)` consumes retained events for one client-owned
+  subtree, independently of other dialogs and native input consumers.
+- Regenerated the public reference using the release example. The fingerprint
+  changed from `203f0e16362f21cd`; generation does not establish game behavior.
+
+## `203f0e16362f21cd` (2026-11-04): retained queues, alpha resources and atlas motion
+
+- Shared layer queues expose frame cursors, record-owned frame progress,
+  retained control restoration and image-UV bindings. Explicit reset preserves
+  queued records and their recorded frame progress.
+- Layer masks support encoded byte channels, signed offsets, source-space
+  coordinates and per-texel preservation of original alpha. Shared image
+  workers can generate an alpha plane from current, baseline and rule resources.
+- `Layers.rebindImage` updates one client's live image paints atomically while
+  frozen snapshots retain their previous resource generation. Rust hosts can
+  borrow a client-owned published image lease without decoding generated PNGs.
+- Shared VFX atlas drift supports streak, buoyant, falling-glow and rising-glow
+  motion; paused emitters retain their pool and RNG state while hidden.
+
+## `2ea382a5cb5bf198` (2026-11-04): destination-in Canvas masking
+
+- Added `Blend::DestinationIn` (`destination_in`) to shared Layer/Canvas drawing.
+  It multiplies the premultiplied destination and its alpha by source alpha,
+  ignoring source RGB; isolated Canvas snapshots support this mode.
+- The operation is available to Rust and script clients through existing Layer
+  specs and Canvas draws; it adds no VM-specific API.
+
+## `c1a04f58f36209a0` (2026-11-04): browser host boundary and workspace regeneration
+
+- Added the Rust host entry points `Runtime::with_storage`,
+  `Assets::from_storage` and `RuntimeStorage`. `SharedHost.fs` now uses the
+  capability router; native constructors and native DiskVfs delegation remain.
+  Physics accepts the existing `FileSystem` contract. The separate browser
+  bindings are generated by wasm-bindgen with the browser artifact; these
+  constructors add no reflective engine class.
+- Registered the existing `CanvasCommand::Retire` under `Canvases.apply` and
+  restored source discovery of `PathCommand` after its move into core's vector
+  scene module. This repairs reference metadata without changing these drawing
+  operations.
+- Regeneration also captures concurrent shared image work: row deformation,
+  paired alpha planes, stored-mask blending, particle planes, pyramid levels,
+  field warps and immutable process subgraphs. These are engine changes already
+  present in the workspace, not browser-only algorithms.
+- The reference now records the current serialized `TextureAddressMode`
+  spellings (`clamp_to_edge`, `repeat`, `mirror_repeat`). Use these serde names
+  for project data. Explicitly unmapped UI/layer/input commands remain visible
+  in the reference; generation is not a compatibility claim for them.
+
 ## `c47c9352e8db80c9` (2026-11-03): native presentation boundary and workspace regeneration
 
 - The live host can query `Runtime::presentation_pending`, backed by the

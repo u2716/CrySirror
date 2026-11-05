@@ -104,6 +104,24 @@ impl Motions {
             .as_mut()
             .context("CatSystem2 session random stream has no seed receipt")
     }
+    /// A KCS native's turn at the session streams: while an FES operation owns the
+    /// pending seed the native waits for it instead of competing.
+    pub fn ensure_random_for_kcs(&mut self, host: &mut dyn HostServices, client: ClientId, owner: u32, pc: u32) -> Result<bool> {
+        if self.random.is_none() && self.seed.as_ref().is_some_and(|seed| seed.owner != owner || seed.pc != pc) {
+            return Ok(false);
+        }
+        let operation = crate::fes_program::PendingOperation {
+            raw: Vec::new(),
+            kind: crate::fes_program::PendingKind::Native,
+            section: b"KCS".to_vec(),
+            ordinal: 0,
+            line: 0,
+            byte_offset: 0,
+            name: b"random".to_vec(),
+            arguments: Vec::new(),
+        };
+        self.ensure_random(host, client, owner, pc, &operation)
+    }
     pub fn ensure_random(
         &mut self,
         host: &mut dyn HostServices,
@@ -193,6 +211,14 @@ impl Motions {
         let alias=Alias{mode:b"oneshot".to_vec(),name:b"blend".to_vec(),resource:b"pColor".to_vec(),defaults:Vec::new(),arguments:Vec::new()};
         self.apply_common(host,client,pool,owner,root,pc,operation,&alias,bank,vm,strings,true)
     }
+    /// 76F7F0/76FA80/770920/770BC0 supply parameters to the actual motion KCS.
+    #[allow(clippy::too_many_arguments)]
+    pub fn builtin_path(&mut self,host:&mut dyn HostServices,client:ClientId,pool:&TaskPool,owner:u32,root:u32,pc:u32,operation:&PendingOperation,bank:&mut Bank,vm:&mut Interpreter,strings:&StringVariables)->Result<bool>{
+        let method=operation.arguments.first().context("CatSystem2 builtin path method")?;
+        let resource=match method.as_slice(){b"arc"=>b"motArc".as_slice(),b"mcarc"=>b"mcArc",b"pend"=>b"motPend",b"mcpend"=>b"mcPend",_=>anyhow::bail!("CatSystem2 unknown builtin path")};
+        let alias=Alias{mode:b"oneshot".to_vec(),name:method.clone(),resource:resource.to_vec(),defaults:Vec::new(),arguments:Vec::new()};
+        self.apply_common(host,client,pool,owner,root,pc,operation,&alias,bank,vm,strings,false)
+    }
     fn apply_common(
         &mut self,
         host: &mut dyn HostServices,
@@ -255,6 +281,18 @@ impl Motions {
                     };
                     states.insert(id,state);
                     words.push((id,vec![(value as i32 as f32).to_bits(),(((color>>16)&255) as f32).to_bits(),(((color>>8)&255) as f32).to_bits(),((color&255) as f32).to_bits()]));
+                    continue;
+                }
+                if matches!(alias.resource.as_slice(),b"motArc"|b"mcArc"|b"motPend"|b"mcPend") {
+                    let mut word = |at: usize, default: i32| operation.arguments.get(at).map_or(Ok(default), |s| staged.evaluate(s).map(|v| v as i32));
+                    let frames = word(1, 30)?.max(0);
+                    let radians = |degrees: i32| (degrees as f32 * core::f32::consts::PI) / 180.;
+                    let values=match alias.resource.as_slice(){
+                        b"motPend"=>vec![frames as f32,word(2,1)? as f32,radians(word(3,0)?),radians(word(4,0)?),radians(word(5,0)?)],
+                        b"mcPend"=>vec![frames as f32,radians(word(2,0)?),radians(word(3,0)?),radians(word(4,0)?)],
+                        _=>vec![frames as f32,radians(word(2,0)?),radians(word(3,0)?),word(4,0)? as f32,word(5,0)? as f32,0.],
+                    };
+                    words.push((id,values.into_iter().map(f32::to_bits).collect()));
                     continue;
                 }
                 let values = crate::fes_alias_values::Values::from_state(&bank.objects[&id].state);
@@ -346,14 +384,15 @@ impl Motions {
                     object.motions.set_base(seed)?;
                 }
             }
-            //75AAC0 zeroes record32 for both accepted mode spellings; the
-            //reviewed path passes that original group0, start0 and delay0.
+            //75AAC0 aliases use group0. 76FA80/770BC0 pass group1 for
+            //the mcArc/mcPend center-coordinate controllers through748520.
+            let group=u32::from(matches!(pending.name.as_slice(),b"mcArc"|b"mcPend"));
             object.motions.insert(
                 pending.name.iter().map(|b| u16::from(*b)).collect(),
                 program.clone(),
                 parameters,
                 None,
-                0,
+                group,
                 0,
                 0,
             )?;

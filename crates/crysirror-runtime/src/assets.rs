@@ -1,14 +1,14 @@
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. A copy is available at https://mozilla.org/MPL/2.0/.
-use crate::vfs::read_limited;
 use anyhow::{Context, Result, ensure};
-use cap_std::{ambient_authority, fs::Dir};
 use crysirror_core::{
     path::{Mount, VfsPath},
     service::ClientStorage,
     state::ClientId,
 };
-use std::{collections::BTreeMap, path::Path, sync::Arc};
+use std::{collections::BTreeMap, sync::Arc};
+#[cfg(not(target_arch = "wasm32"))]
+use std::path::Path;
 
 #[path = "assets_async.rs"]
 mod asynchronous;
@@ -24,8 +24,10 @@ pub struct Assets {
     /// CPU text resources belong to engine resources, not a GPU/device lifetime.
     pub text: crysirror_text::TextSystem,
     pub decoders: crysirror_image::DecoderRegistry,
-    root: Dir,
-    clients: BTreeMap<ClientId, Dir>,
+    root: Arc<dyn ClientStorage>,
+    #[cfg(not(target_arch = "wasm32"))]
+    native_root: Option<cap_std::fs::Dir>,
+    clients: BTreeMap<ClientId, Arc<dyn ClientStorage>>,
     storage: BTreeMap<ClientId, Arc<dyn ClientStorage>>,
     bytes: BTreeMap<String, Arc<[u8]>>,
     total: usize,
@@ -69,7 +71,15 @@ impl Assets {
         let frame = SurfaceSnapshot { store, surfaces: BTreeMap::new(), published };
         guard.assets.with_frame_surfaces(frame, work)
     }
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn new(path: &Path) -> Result<Self> {
+        let dir = cap_std::fs::Dir::open_ambient_dir(path, cap_std::ambient_authority()).context("open asset root")?;
+        let mut assets = Self::from_storage(crate::vfs::asset_storage_from_dir(dir.try_clone()?))?;
+        assets.native_root = Some(dir);
+        Ok(assets)
+    }
+    /// Project root supplied by the host; never opens an ambient file.
+    pub fn from_storage(root: Arc<dyn ClientStorage>) -> Result<Self> {
         #[allow(unused_mut)]
         let mut decoders = crysirror_image::DecoderRegistry::default();
         #[cfg(feature = "arc-formats")]
@@ -83,7 +93,9 @@ impl Assets {
             asynchronous: asynchronous::AsyncAssets::new()?,
             text: Default::default(),
             decoders,
-            root: Dir::open_ambient_dir(path, ambient_authority()).context("open asset root")?,
+            root,
+            #[cfg(not(target_arch = "wasm32"))]
+            native_root: None,
             clients: BTreeMap::new(),
             storage: BTreeMap::new(),
             bytes: BTreeMap::new(),
@@ -115,9 +127,9 @@ impl Assets {
             if let Some(storage) = self.storage.get(&client) {
                 storage.read(&logical)
             } else if let Some(dir) = self.clients.get(&client) {
-                read_limited(dir, logical.relative())
+                dir.read(&logical)
             } else if client.0 == 0 {
-                read_limited(&self.root, logical.relative())
+                self.root.read(&logical)
             } else {
                 Err(crysirror_core::Error::NotFound)
             }
@@ -144,7 +156,7 @@ impl Assets {
         if let Some(bytes) = self.bytes.get(&key) {
             return Ok(bytes.clone());
         }
-        let bytes = read_limited(&self.root, path.relative())
+        let bytes = self.root.read(&path)
             .map_err(|e| anyhow::anyhow!("asset {}: {e}", path.relative()))?;
         self.insert(key, bytes)
     }
@@ -153,14 +165,14 @@ impl Assets {
             !self.clients.contains_key(&client),
             "duplicate asset client"
         );
-        let dir = if prefix.is_empty() {
-            self.root.try_clone()?
-        } else {
-            let path = VfsPath::new(Mount::Asset, prefix).map_err(|e| anyhow::anyhow!("{e}"))?;
-            self.root
-                .open_dir(path.relative())
-                .context("client asset root")?
+        let prefix = if prefix.is_empty() { String::new() } else {
+            VfsPath::new(Mount::Asset, prefix).map_err(|e| anyhow::anyhow!("{e}"))?.relative().into()
         };
+        let dir: Arc<dyn ClientStorage> = Arc::new(crate::storage::AssetPrefix { source: self.root.clone(), prefix: prefix.clone() });
+        #[cfg(not(target_arch = "wasm32"))]
+        let dir = if let Some(root) = &self.native_root {
+            crate::vfs::asset_storage_from_dir(if prefix.is_empty() { root.try_clone()? } else { root.open_dir(&prefix).context("client asset root")? })
+        } else { dir };
         self.clients.insert(client, dir);
         Ok(())
     }
@@ -185,7 +197,7 @@ impl Assets {
                 .map_err(|e| anyhow::anyhow!("client asset {path}: {e}"))?
         } else {
             let dir = self.clients.get(&client).context("unknown asset client")?;
-            read_limited(dir, path).map_err(|e| anyhow::anyhow!("client asset {path}: {e}"))?
+            dir.read(&VfsPath::new(Mount::Asset, path).map_err(|e| anyhow::anyhow!("{e}"))?).map_err(|e| anyhow::anyhow!("client asset {path}: {e}"))?
         };
         self.insert(key, bytes)
     }

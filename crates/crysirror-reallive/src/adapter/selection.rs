@@ -365,6 +365,7 @@ impl RealLiveVm {
         if !frame.is_empty() {
             self.submit(h, json!({ "layers": frame }))?;
         }
+        self.toolbar.open.insert(window);
         Ok(Selection {
             layout: Layout::Window { window, restore },
             choices,

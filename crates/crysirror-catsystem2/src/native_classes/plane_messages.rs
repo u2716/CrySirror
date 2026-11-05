@@ -8,7 +8,7 @@ use crysirror_core::{service::HostServices, state::ClientId};
 use serde_json::json;
 
 /// Natives implemented by this family.
-pub(crate) const IDS: &[u32] = &[95, 346, 651, 653, 654, 655, 694];
+pub(crate) const IDS: &[u32] = &[95, 346, 402, 651, 653, 654, 655, 694];
 
 #[derive(Default)]
 pub(crate) struct State {}
@@ -33,6 +33,27 @@ pub(crate) fn handle(cx: &mut Ctx) -> Result<bool> {
             cx.machine.acknowledge(None)?;
         }
         // 640DE0 → msg 84: this[170] = render type for later object creation.
+        // 640BD0 → 81: modes 1..5 (else 0) → 676AB0 → 67D750 object +0x1C, which
+        // 6718F0 turns into D3D (SRC, DEST) blend: 0 (SRCALPHA, INVSRCALPHA),
+        // 1 (SRCALPHA, ONE), 2 (ONE, INVSRCALPHA), 3 (ZERO, SRCCOLOR),
+        // 4 (INVDESTCOLOR, ZERO), 5 (DESTCOLOR, ONE). Only the current object
+        // takes it; a rebuilt object (41/43/44/46/69) starts at mode 0 again.
+        402 => {
+            ensure!(a.len() == 2, "CatSystem2 Plane blend arguments");
+            cx.machine.preflight_native(false, &[])?;
+            if let Some(payload) = cx.tasks.plane(a[0]).ok().and_then(|plane| plane.payload) {
+                let blend = match a[1] {
+                    1 => "add",
+                    2 => "source_over",
+                    3 => "modulate",
+                    4 => "inverse_destination",
+                    5 => "modulate_add",
+                    _ => "normal",
+                };
+                cx.host.submit_engine(cx.client, 1, &serde_json::to_vec(&serde_json::json!({"layers":[{"op":"set_blend","id":payload,"blend":blend}]}))?)?;
+            }
+            cx.machine.acknowledge(None)?;
+        }
         653 => {
             ensure!(a.len() == 2, "CatSystem2 Plane render type arguments");
             cx.machine.preflight_native(false, &[])?;

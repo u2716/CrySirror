@@ -1,4 +1,4 @@
-//! BP bootstrap selection and shared archive mounts for installed BGI.
+//! BP bootstrap selection for the integrated BGI runtime.
 use super::*;
 use crysirror_core::service::AssetReader;
 use crysirror_resource::{ArchiveFormat, DecodeContext};
@@ -6,7 +6,7 @@ use std::{
     io::{Read, Seek, SeekFrom},
     sync::{Arc, Mutex},
 };
-struct Reader(Mutex<std::fs::File>);
+struct Reader(Mutex<crate::source_path::SourceFile>);
 impl AssetReader for Reader {
     fn len(&self) -> crysirror_core::Result<u64> {
         self.0
@@ -27,7 +27,37 @@ impl AssetReader for Reader {
             .map_err(|e| crysirror_core::Error::Io(e.to_string()))
     }
 }
-pub(super) fn detect(dir: &Path, names: &[String], name: &str) -> Result<Option<Plan>> {
+pub(super) fn detect(dir: &SourcePath, names: &[String], name: &str) -> Result<Option<Plan>> {
+    if let Some(plan) = detect_root(dir, names, name)? {
+        return Ok(Some(plan));
+    }
+    // Disc layouts keep the actual game and original archives under Install/.
+    // Select that resource root directly; never execute the Windows installer.
+    if let Some(folder) = find(names, "Install").filter(|folder| dir.join(folder).is_dir()) {
+        let root = dir.join(folder).canonicalize()?;
+        ensure!(
+            root.starts_with(dir.canonicalize()?),
+            "BGI Install root escapes game folder"
+        );
+        if let Some(mut plan) = detect_root(&root, &listing(&root)?, name)? {
+            plan.project["clients"][0]["asset_prefix"] = json!(folder);
+            if let Some(fonts) = plan.project.get_mut("fonts").and_then(Value::as_object_mut) {
+                for value in fonts.values_mut() {
+                    if let Some(path) = value.as_str() {
+                        *value = json!(format!("{folder}/{path}"));
+                    }
+                }
+            }
+            for evidence in &mut plan.evidence {
+                evidence.path = format!("{folder}/{}", evidence.path);
+            }
+            return Ok(Some(plan));
+        }
+    }
+    Ok(None)
+}
+
+fn detect_root(dir: &SourcePath, names: &[String], name: &str) -> Result<Option<Plan>> {
     let root = dir.canonicalize()?;
     let mut mounts = Vec::new();
     let mut bootstrap = None;
@@ -37,7 +67,7 @@ pub(super) fn detect(dir: &Path, names: &[String], name: &str) -> Result<Option<
             full.starts_with(&root),
             "BGI archive escapes game directory"
         );
-        let reader: Arc<dyn AssetReader> = Arc::new(Reader(Mutex::new(std::fs::File::open(full)?)));
+        let reader: Arc<dyn AssetReader> = Arc::new(Reader(Mutex::new(crate::source_path::SourceFile::open(full)?)));
         if crysirror_formats_arc::BgiArc
             .probe(reader.as_ref())?
             .confidence
@@ -81,12 +111,12 @@ pub(super) fn detect(dir: &Path, names: &[String], name: &str) -> Result<Option<
             if let Some(file) = find(names, candidate) {
                 let path = dir.join(file).canonicalize()?;
                 ensure!(path.starts_with(&root), "BGI BP escapes game directory");
-                let metadata = std::fs::metadata(&path)?;
+                let metadata = path.metadata()?;
                 ensure!(
                     metadata.len() <= 16 * 1024 * 1024,
                     "BGI bootstrap byte budget"
                 );
-                ensure!(valid_bp(&std::fs::read(path)?), "invalid BGI BP bootstrap");
+                ensure!(valid_bp(&path.read()?), "invalid BGI BP bootstrap");
                 bootstrap = Some(file.clone());
                 break;
             }
@@ -109,8 +139,16 @@ pub(super) fn detect(dir: &Path, names: &[String], name: &str) -> Result<Option<
         engine: "BGI",
         project,
         profiles: Default::default(),
-        mounts,
-        evidence: Vec::new(),
+        evidence: mounts
+            .into_iter()
+            .map(|mount| FileEvidence {
+                path: mount.source,
+                identity: None,
+            })
+            .collect(),
+        // The original archive manager owns these packs. Do not index/mount a
+        // second copy in the general resource service during player startup.
+        mounts: Vec::new(),
     }))
 }
 fn valid_bp(bytes: &[u8]) -> bool {

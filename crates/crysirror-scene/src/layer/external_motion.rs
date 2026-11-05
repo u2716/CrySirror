@@ -16,6 +16,10 @@ static NEXT_GENERATION: AtomicU64 = AtomicU64::new(1);
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExternalMotionPose {
+    /// Procedural additive channels, independent of retained base tracks.
+    /// Publish a zero offset to return to the unmodified base pose.
+    #[serde(default)]
+    pub offset: Option<super::PoseOffset>,
     #[serde(default)]
     pub rect: Option<[f32; 4]>,
     #[serde(default)]

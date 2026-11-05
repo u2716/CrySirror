@@ -2,7 +2,7 @@
 //! Bounded adaptive fixed-step debt, independent of devices, VMs and wall time.
 //! Hosts open one update, consume its planned work, then close it. A host that
 //! does no fixed-step work drops old debt instead of accumulating a later burst.
-use anyhow::{ensure, Result};
+use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
 /// Serializable adaptive step scheduling state. All methods validate restored

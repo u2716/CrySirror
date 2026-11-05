@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 //! WGSL surface ABI v1, compilation diagnostics and restricted resource boundary.
 use anyhow::{ensure, Context, Result};
-pub const SURFACE_ABI: &str = include_str!("shaders/surface_abi.wgsl");
-pub(crate) const PRESETS: &str = include_str!("shaders/surface_presets.wgsl");
+pub const SURFACE_ABI: &str = crysirror_shaders::wgsl::SURFACE_ABI;
+pub(crate) const PRESETS: &str = crysirror_shaders::wgsl::SURFACE_PRESETS;
 fn validate(source: &str, label: &str) -> Result<naga::Module> {
     let module = naga::front::wgsl::parse_str(source)
         .map_err(|e| anyhow::anyhow!("{label}: {}", e.emit_to_string(source)))?;
@@ -45,20 +45,13 @@ pub fn validate_custom(source: &str) -> Result<()> {
     );
     Ok(())
 }
-pub(crate) fn common(hook: &str) -> String {
-    format!(
-        "{}\n{}\n{SURFACE_ABI}\n{hook}\n{}",
-        include_str!("shaders/pbr_common.wgsl"),
-        include_str!("shaders/material.wgsl"),
-        include_str!("shaders/surface_sample.wgsl")
-    )
-}
+pub(crate) fn common(hook: &str) -> String { crysirror_shaders::surface_common(hook) }
 /// Material bindings at group 0 with the built-in surface hook: the prelude
 /// of coverage-only passes outside the PBR pipeline (RT alpha baking).
 pub(crate) fn shadow_material_prelude() -> String {
     format!(
         "{}\n{SURFACE_ABI}\n{PRESETS}",
-        include_str!("shaders/material.wgsl").replace("@group(1)", "@group(0)")
+        crysirror_shaders::wgsl::MATERIAL.replace("@group(1)", "@group(0)")
     )
 }
 pub(crate) fn modules(custom: Option<&str>) -> Result<[String; 3]> {
@@ -66,15 +59,7 @@ pub(crate) fn modules(custom: Option<&str>) -> Result<[String; 3]> {
         validate_custom(s)?;
     }
     let hook = custom.unwrap_or(PRESETS);
-    let common = common(hook);
-    let color = format!("{common}\n{}", include_str!("shaders/pbr.wgsl"));
-    let depth = format!("{common}\n{}", include_str!("shaders/prepass.wgsl"));
-    let shadow = format!(
-        "{}\n{SURFACE_ABI}\n{hook}\n{}\n{}",
-        include_str!("shaders/material.wgsl").replace("@group(1)", "@group(2)"),
-        include_str!("shaders/surface_sample.wgsl"),
-        include_str!("shaders/shadow.wgsl")
-    );
+    let [color, depth, shadow] = crysirror_shaders::material_modules(hook);
     for (label, source) in [("color", &color), ("prepass", &depth), ("shadow", &shadow)] {
         validate(source, label).with_context(|| format!("compile material {label}"))?;
     }

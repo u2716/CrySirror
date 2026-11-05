@@ -1,8 +1,8 @@
 // Copyright (c) 2026 CrySirror contributors. MPL-2.0.
 //! Normalized fixed-factor arithmetic on the shared checked bitmap visitor.
 use crate::{
-    bitmap::{visit_blit_rgba8, BitmapRect, BlitOptions, PixelMath},
     ImageSurface,
+    bitmap::{BitmapRect, BlitOptions, PixelMath, visit_blit_rgba8},
 };
 use anyhow::Result;
 use crysirror_core::image_blend::{

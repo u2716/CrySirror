@@ -41,14 +41,14 @@ fn begin(rt: &mut Runtime, effect: serde_json::Value, elapsed: u64) {
 fn transition_shaders_validate_without_a_device() {
     for (source, format) in [
         (
-            include_str!("../src/shaders/composite_filter.wgsl"),
+            crysirror_shaders::wgsl::COMPOSITE_FILTER,
             "rgba32float",
         ),
         (
-            include_str!("../src/shaders/composite_filter.wgsl"),
+            crysirror_shaders::wgsl::COMPOSITE_FILTER,
             "rgba16float",
         ),
-        (include_str!("../src/shaders/composite.wgsl"), ""),
+        (crysirror_shaders::wgsl::COMPOSITE, ""),
     ] {
         let source = source.replace("__OUTPUT_FORMAT__", format);
         let module = naga::front::wgsl::parse_str(&source)

@@ -382,7 +382,7 @@ impl GpuSimulation {
         });
         let shader = d.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("vfx compute"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/vfx_compute.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(crysirror_shaders::wgsl::VFX_COMPUTE.into()),
         });
         let pipeline = |entry| {
             d.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {

@@ -51,6 +51,9 @@ pub struct NativePlane {
     /// parent message48. A direct child show can override a prior parent hide.
     pub own_enabled: bool,
     pub pose: PlanePose,
+    /// 67C450 selects the source mesh for nonzero selector, and the divided
+    /// screen mesh for zero. Only atlas-backed quads have both objects.
+    pub(crate) source_pose: Option<PlanePose>,
     /// Original this[170] (5DF070 sets 1; message 84 replaces it). The render
     /// manager only builds an object for type 1 (676CB0 then `type==1` in
     /// 675240/675710/675780/674E50/676350); any other type leaves the Plane empty.
@@ -59,7 +62,7 @@ pub struct NativePlane {
     pub own_button: bool,
 }
 /// 67DE50 base, 67D780 position, 67DE90 scale and 67D7C0 colour words of one Plane.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PlanePose {
     pub position: [f32; 3],
     pub base: [f32; 3],
@@ -67,10 +70,11 @@ pub struct PlanePose {
     pub rotation: f32,
     pub alpha: u8,
     pub size: [f32; 2],
+    pub(crate) matrix: Option<[f32; 16]>,
 }
 impl Default for PlanePose {
     fn default() -> Self {
-        Self { position: [0.; 3], base: [0.; 3], scale: [1.; 3], rotation: 0., alpha: 255, size: [0.; 2] }
+        Self { position: [0.; 3], base: [0.; 3], scale: [1.; 3], rotation: 0., alpha: 255, size: [0.; 2], matrix: None }
     }
 }
 /// Original5DE590 type6 controller. The source creates no draw geometry and
@@ -278,6 +282,25 @@ impl NativeTaskPolicy {
     }
     pub(crate) fn fes(&self,id:u32)->Result<&crate::fes_task::FesTask> {
         self.fes_tasks.get(&id).context("CatSystem2 target is not a native FES task")
+    }
+    pub(crate) fn save_fes_cursor(&mut self,id:u32,point:[i32;2])->Result<()> {
+        self.fes_tasks.get_mut(&id).context("CatSystem2 FES cursor owner missing")?.saved_cursor=Some(point);Ok(())
+    }
+    pub(crate) fn dispatch_fes_directions(&mut self,id:u32,revision:u64,pressed:u64)->Result<()> {
+        let task=self.fes_tasks.get_mut(&id).context("CatSystem2 FES direction owner missing")?;
+        if task.direction_revision==Some(revision){return Ok(());}
+        task.direction_revision=Some(revision);
+        if let Some(bank)=task.object_bank.as_mut(){
+            use crysirror_core::service::buttons;
+            for (direction,button) in [buttons::UP,buttons::DOWN,buttons::LEFT,buttons::RIGHT].into_iter().enumerate(){
+                if pressed&button!=0{
+                    let events=crate::fes_button::attached_direction(bank,direction);
+                    for event in &events {task.click_values.push((&b"_SCRL_P_"[..],event.object));}
+                    task.button_queue.extend(events);
+                }
+            }
+        }
+        Ok(())
     }
     pub(crate) fn fes_string_table_mut(&mut self,id:u32)->Result<&mut crate::native_values::StringVariables> {
         Ok(&mut self.fes_tasks.get_mut(&id).context("CatSystem2 FES string-table owner missing")?.player.as_mut()
@@ -518,6 +541,7 @@ impl NativeTaskPolicy {
             solid_vertex_argb: None,diffuse_enable:0,diffuse_argb:u32::MAX,
             own_enabled: true,
             pose: Default::default(),
+            source_pose: None,
             render_type: 1,
             own_button: false,
         };
@@ -690,12 +714,13 @@ impl NativeTaskPolicy {
             .get_mut(&base)
             .context("CatSystem2 base image plane missing")?;
         plane.payload = Some(plane.layer + 1);
+        plane.pose.size = image.resource.size().map(|value| value as f32);
         plane.image = Some(image);
         plane.own_enabled = false;
         Ok(())
     }
     pub fn diagnostics(&self) -> serde_json::Value {
-        serde_json::json!({"fes_tasks":self.fes_tasks.values().map(crate::fes_task::FesTask::diagnostics).collect::<Vec<_>>(),"current":self.current,"task_results":self.slots.iter().map(|id|(*id,self.results.query(*id))).collect::<Vec<_>>(),"allocated":self.slots.len(),"image_lists":self.image_lists.values().map(|t|serde_json::json!({"id":t.id,"task_parent":t.parent,"name":String::from_utf8_lossy(&t.name),"manager":t.manager.as_ref().map(|p|serde_json::json!({"path":p.path,"size":p.size,"owner":p.resource.client().0,"bytes":p.resource.rgba().len(),"page_size":p.page_size,"page_count":p.page_count,"dirty_bounds":p.dirty_bounds,"upload_position":p.upload_position,"native_entries":p.native_entry_keys.len()})),"field_120":t.field_120,"field_124":t.field_124,"field_132":t.field_132,"upload_position":t.upload_position,"base_plane":t.base_plane,"field_140":t.field_140,"empty_bitmap":{"resource":t.bitmap.is_some(),"field4":t.bitmap_field4,"field8":t.bitmap_field8,"field532":t.bitmap_field532,"name_utf16":t.bitmap_name},"native_entry_keys":t.native_entry_keys.len()})).collect::<Vec<_>>(),"buttons":self.buttons.values().map(|b|serde_json::json!({"id":b.id,"task_parent":b.parent,"name":String::from_utf8_lossy(&b.name),"binding_target":b.binding_target,"native_rect":b.rect,"own_enabled":b.own_enabled,"relative":b.relative,"result":b.result,"event_mode":b.event_mode,"full_canvas_rect":b.full_canvas_rect})).collect::<Vec<_>>(),"planes":self.planes.values().map(|p|serde_json::json!({"id":p.id,"task_parent":p.parent,"layer":p.layer,"payload":p.payload,"image":p.image.as_ref().map(|i|serde_json::json!({"path":i.path,"size":i.resource.size(),"owner":i.resource.client().0})),"name":String::from_utf8_lossy(&p.name),"graph_parent":p.graph_parent,"native_rect":p.native_rect,"solid_vertex_argb":p.solid_vertex_argb,"diffuse_enable":p.diffuse_enable,"diffuse_argb":p.diffuse_argb})).collect::<Vec<_>>()})
+        serde_json::json!({"fes_tasks":self.fes_tasks.values().map(crate::fes_task::FesTask::diagnostics).collect::<Vec<_>>(),"current":self.current,"task_results":self.slots.iter().map(|id|(*id,self.results.query(*id))).collect::<Vec<_>>(),"allocated":self.slots.len(),"image_lists":self.image_lists.values().map(|t|serde_json::json!({"id":t.id,"task_parent":t.parent,"name":String::from_utf8_lossy(&t.name),"manager":t.manager.as_ref().map(|p|serde_json::json!({"path":p.path,"size":p.size,"owner":p.resource.client().0,"bytes":p.resource.rgba().len(),"page_size":p.page_size,"page_count":p.page_count,"dirty_bounds":p.dirty_bounds,"upload_position":p.upload_position,"native_entries":p.native_entry_keys.len()})),"publication":t.publication.as_ref().map(crate::native_image_publication::ImageList::diagnostics),"field_120":t.field_120,"field_124":t.field_124,"field_132":t.field_132,"upload_position":t.upload_position,"base_plane":t.base_plane,"field_140":t.field_140,"empty_bitmap":{"resource":t.bitmap.is_some(),"field4":t.bitmap_field4,"field8":t.bitmap_field8,"field532":t.bitmap_field532,"name_utf16":t.bitmap_name},"native_entry_keys":t.native_entry_keys.len()})).collect::<Vec<_>>(),"buttons":self.buttons.values().map(|b|serde_json::json!({"id":b.id,"task_parent":b.parent,"name":String::from_utf8_lossy(&b.name),"binding_target":b.binding_target,"native_rect":b.rect,"own_enabled":b.own_enabled,"relative":b.relative,"result":b.result,"event_mode":b.event_mode,"full_canvas_rect":b.full_canvas_rect})).collect::<Vec<_>>(),"planes":self.planes.values().map(|p|serde_json::json!({"id":p.id,"task_parent":p.parent,"layer":p.layer,"payload":p.payload,"image":p.image.as_ref().map(|i|serde_json::json!({"path":i.path,"size":i.resource.size(),"owner":i.resource.client().0})),"name":String::from_utf8_lossy(&p.name),"graph_parent":p.graph_parent,"own_enabled":p.own_enabled,"source_pose":p.source_pose.map(|pose|serde_json::json!({"position":pose.position,"base":pose.base,"scale":pose.scale,"matrix":pose.matrix})),"pose":{"position":p.pose.position,"base":p.pose.base,"size":p.pose.size,"scale":p.pose.scale,"alpha":p.pose.alpha},"native_rect":p.native_rect,"solid_vertex_argb":p.solid_vertex_argb,"diffuse_enable":p.diffuse_enable,"diffuse_argb":p.diffuse_argb})).collect::<Vec<_>>()})
     }
     pub fn plane(&self, id: u32) -> Result<&NativePlane> {
         self.planes
@@ -737,6 +762,22 @@ impl NativeTaskPolicy {
         let id = self.allocate()?;
         self.opaque.insert(id, OpaqueTask { class, parent, name });
         Ok(id)
+    }
+    /// Task +0xC: the task this one was created under (0 at the root).
+    pub(crate) fn parent_of(&self, id: u32) -> Result<u32> {
+        if let Some(task) = self.opaque.get(&id) {
+            return Ok(task.parent);
+        }
+        if let Some(plane) = self.planes.get(&id) {
+            return Ok(plane.parent);
+        }
+        if let Some(task) = self.fes_tasks.get(&id) {
+            return Ok(task.parent);
+        }
+        if let Some((owner, _)) = self.fes_tasks.iter().find(|(_, task)| task.child_tasks.contains(&Some(id))) {
+            return Ok(*owner);
+        }
+        Ok(0)
     }
     /// Class number of a task created through `create_opaque`.
     pub(crate) fn opaque_class(&self, id: u32) -> Option<u32> {
@@ -792,6 +833,7 @@ impl NativeTaskPolicy {
             .context("CatSystem2 target is not a native Plane task")?;
         plane.payload = Some(plane.layer + 1);
         plane.solid_vertex_argb=Some(argb);plane.diffuse_enable=0;plane.diffuse_argb=u32::MAX;
+        plane.source_pose=None;
         Ok(())
     }
     pub fn set_solid_diffuse(&mut self,id:u32,argb:u32,enabled:u32)->Result<Option<(u32,[u8;4])>> {

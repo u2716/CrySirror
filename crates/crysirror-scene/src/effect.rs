@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Logical material effects. Custom shader source remains a separate code asset.
-use anyhow::{ensure, Result};
+use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 fn density() -> f32 {
     1.

@@ -4,7 +4,7 @@
 //! no executable, external bootstrap manifest or unpacked game copy is used.
 use super::*;
 use std::io::Read;
-pub(super) fn detect(dir: &Path, names: &[String], name: &str) -> Result<Option<Plan>> {
+pub(super) fn detect(dir: &SourcePath, names: &[String], name: &str) -> Result<Option<Plan>> {
     for prefix in std::iter::once("").chain(find(names, "GAMEDATA").map(String::as_str)) {
         let root = dir.join(prefix).canonicalize()?;
         ensure!(
@@ -26,8 +26,8 @@ pub(super) fn detect(dir: &Path, names: &[String], name: &str) -> Result<Option<
     Ok(None)
 }
 fn native_plan(
-    dir: &Path,
-    root: &Path,
+    dir: &SourcePath,
+    root: &SourcePath,
     names: &[String],
     prefix: &str,
     ini: &str,
@@ -44,7 +44,7 @@ fn native_plan(
             "System4 detection input escapes capability root"
         );
         let mut bytes = Vec::new();
-        std::fs::File::open(full)?
+        crate::source_path::SourceFile::open(full)?
             .take(limit + 1)
             .read_to_end(&mut bytes)?;
         ensure!(bytes.len() as u64 <= limit, "System4 detection byte budget");

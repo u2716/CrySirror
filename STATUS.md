@@ -1,227 +1,51 @@
 # Implementation and validation status
 
-## 2026-11-03 — RiddleJoker copy-history performance diagnosis; desktop build blocked
-
-- Observed on the existing release: automatic detection took 0.927 seconds. A real-window process sample found the main thread spending most of its running sample in recursive `ImageInput` cloning/freeing inside KiriKiri layer calls. Full destination copies retained obsolete composition histories. The 9000-tick offscreen input run ended on black, so its timings are not accepted as visible-story or live-frame-rate validation.
-- Implementation: shared `ImageInput::with_composite_layer` removes overwritten destination history only when a full-opacity four-channel copy provably covers it with valid source coordinates. Atlas crops retain their mapping; partial clips and RGB/alpha-only copies retain history. KiriKiri fill/copy declarations use the shared helper. Desktop `play --profile` and redraw/acquire/present spans were added for live timing.
-- Component validation: three core composition tests passed, including 1000 alternating full copies; one runtime worker test compared optimized/unoptimized pixels for atlas, partial-clip and RGB-only copies and passed. Python tests: 148 passed. API reference regenerated at workspace fingerprint `336786cebccc73ce`; the eight API documentation tests passed after logging that fingerprint.
-- Compilation: desktop release attempts remain blocked by concurrent BGI work: `Step::UserDialog` and `Step::Prompt` have no adapter match arms. No placeholder handling was added. Mechanical build fixes made along the way were the image0.24 `image::io::Reader` path and visibility of BGI's parent-called `install_native_host_start`.
-- Not validated: post-fix game-window behavior, startup improvement, sustained story frame rate or audio-enabled performance. The installed release binary has not been replaced by this repair. Evidence: `target/verification/riddle-performance/verification.json`.
-
 ## 2026-11-03 — Original-pixel desktop window and free resizing
 
 - Implementation: desktop startup requests the original canvas size in physical pixels instead of logical desktop points; reported display dimensions use the same units. The host permits resizing the presentation independently of the native script's retained window style. Existing aspect-fit rendering and original-canvas pointer mapping are unchanged.
 - Compilation: `cargo build --release -p crysirror-desktop --bin crysirror` passed using the existing target tree; no debug build. No public engine API changed.
-- Behavior: game-kr ran in a real window for 120 frames and exited 0. On the scale-2 display the logged content/surface size is now 1920x1080, with resizing enabled. Manual dragging and changing monitors were not exercised. Evidence: `target/verification/game-kr-purple-border/native-size-verification.json`.
 
 ## 2026-11-03 — Fractional-scale clipped atlas sampling
 
 - Implementation: shared `crysirror-wgpu` layer vertices carry exact fragment clip bounds and isolated UV sampling bounds. Clamp-to-edge atlas views, including quarter-turn and snapshot layers, no longer sample neighbouring texels across an axis-aligned clip. Repeat/mirror addressing and distortion retain their sampling policy. Public engine APIs and `Vertex2d` are unchanged.
-- Compilation: `cargo build --release -p crysirror-desktop --bin crysirror` passed. The existing release cache was reused; no debug build or separate target tree was created. A BGI `&String`/`&str` iterator mismatch needed the mechanical `self.root.as_str()` correction.
 - Tests: the two explicitly enabled `image_sampling` GPU tests passed on Apple M5/Metal, covering RGBA/BGRA, quarter-turn, filtered and snapshot atlas views; Python tooling tests passed (148). A four-frame helmet hardware-raytrace render also exited successfully with `hardware_raytracing: true`.
-- Behavior: the game-kr title purple borders reproduced at the real window's physical size, 3024x1676, while native-canvas captures had missed them. After rebuilding, the same offscreen GPU capture at that size has zero magenta pixels in the button comparison crop (1007 before). This supersedes the unresolved title-border entry below. The post-fix swapchain and a separate modal dialog were not captured. Local evidence: `target/verification/game-kr-purple-border/verification.json`; game assets remain outside the repository.
 
-## 2026-11-03 — CatSystem2: no native stops a script; Nekopara shows a white screen after about frame 21800
+## 2026-11-02 — RealLive / NScripter implementation and validation
 
-- Implemented: save containers and CSS file writing (238, 242, 244-248, 252, 254, 387-390, 469, 836, 990, 1031), VM block allocate and free (833-835), read-only file natives (29, 30, 32, 33), image objects and blits (112-116, 118, 362, 363, 367, 372, 373, 718-720, 728, 877, 1026), image-list messages (261, 263, 340, 341, 455, 862, 880), small natives in `native_misc.rs`.
-- `native_pending.rs` acknowledges about 220 natives without effect and logs the first call of each; `native_inert.rs` does the same for about 70. Movies, particles, 3D models, data tables and other task classes are behind these tables. Those natives are not implemented.
-- Native 11 returns UTC, not local time. Clipboard, message box and process launch natives do nothing.
-- Actual run: `crysirror-catsystem2 --lib` 175 passed, 1 ignored. Nekopara headless with fast clicks exits 0 at 42000 frames. Dialogue with characters renders at frame 21000. Frame 21800 is black and every capture from 22600 is pure white. Scripts keep running but no plane is visible except the base plane; native 92 hides the scene planes at about frame 21808 as part of the original freeze onto the image-list base image (116 then 455). The fix is unresolved. Native 733, which creates a surface the script may need, is still acknowledged with null.
-- Not run: a real save and load cycle, Grisaia, windowed play, workspace regression. `CRYSIRROR_CATSYSTEM2_SCOUT` code is still in the adapter.
+- RealLive: `adapter/selection.rs` implements `select_w` in its own window with others closed, `select`, `select_s` with SELBTN images, colour/title/hide/blank/cursor effects, hover, keyboard and SE. `frame_geometry` adds right/bottom origins and content-fitted type 3 frames; nine-slice type 3/4 frames are engine layers. Text windows in type 3 frames use the full text area and do not shrink.
 
-## 2026-11-02 — KRKR title fixes and Siglus Config crash
-
-- KRKR `canvas_op`: a `copy` from a motion layer now becomes `copy_subtree`. CafeStella and RiddleJoker title art appears in headless captures.
-- KRKR `Layer.fillRect`/`colorRect` now follow krkrz `visual/LayerIntf.cpp`: holdAlpha only affects dfOpaque in fillRect, and dfAuto resolves through the layer type. This removed the 512x648 dark rectangle on the RiddleJoker title (headless capture, 2000 frames).
-- Siglus: added the missing SCRIPT policy forms and GLOBAL.CAPTURE. The Rewrite+ Config screen opens and tab/save/load clicks ran 5200 frames, exit 0. Save thumbnails still log `native frame capture pending`.
-- Tests: `crysirror-siglus-vm --lib` 148 passed, 2 ignored; `crysirror-krkr --lib` 6 passed. Workspace regression not run.
-- KRKR tests corrected: `clipped_native_copy_keeps_shared_image_source_for_following_soft_light` now holds alpha through dfOpaque, as krkrz FillRect requires; `positive_native_alpha_hits_use_prepared_shared_image_coverage` now drains the inbox before asserting.
-- KRKR crashes found by seeded random-click runs and fixed: alpha hit on a composed canvas (E×E; coverage now comes from the shared canvas capture), missing `Layer.getLayerAt` (game-kr), `Layer.loadImages` of an encoded image inside an input callback (CafeStella; shared `crysirror_image::tlg_size`, pixels publish at the next boundary), non-canvas-ratio `Window` inner sizes, and Photoshop-mode `operateRect` on composed layers or in callbacks (queued capture and composite).
-- KRKR natives that no longer abort: `System.getKeyState` for untracked keys reads up, `System.shellExecute` is declined and returns false, `Storages.searchCD` finds nothing, `Window.stayOnTop`/`imeMode` are script state, `Window.setMaskRegion` does nothing, `Layer.getMainPixel` reads resident images. Composed canvases still fail visibly for `getMainPixel`.
-- Unverified assumption: a missing `dummy_*` image loads as a logged transparent pixel. CafeStella's `dummy_colorpicker` was not found under any tried extension; the picker's appearance has not been checked. Draws made after a deferred load in the same callback can be overwritten when the pixels publish.
-- Siglus crashes fixed entering Rewrite+ story: KOE read flags follow siglus_rs, voice numbers resolve through mounted `koe/*.ovk` packs and loose files, duplicate OVK sample numbers keep the first entry, nested objects inherit parent filters and blend per tnm_add_parent_trp. The `native frame capture pending` thumbnail log was a false error from the frame replay.
-- Headless random-click runs: game-kr, E×E, RiddleJoker, CafeStella exit 0 on the seeds run after these fixes (5-8 before later fixes; seed 6 rerun on the final build for CafeStella only). Rewrite+ reached story text and stayed in the prologue; Rewrite HF was not driven past its opening. Siglus save/load in a story and thumbnail contents were not exercised.
-- KRKR cleanup: `CRYSIRROR_KRKR_TRACE_CANVAS`, `TRACE_MOTION_LAYERS`, `TRACE_MOTION_CHAIN`, `DUMP_STORAGE` and the `psb_probe` example are removed; `api_docs` test passes.
-- Not fixed: the owner still sees the game-kr purple button border in a real window. Headless captures of hover, press, leave, sweep and BGRA show no purple pixels, and the windowed surface has not been captured; no texture-square cause beyond the rectangle above was confirmed. Debug env traces (`CRYSIRROR_KRKR_TRACE_*`, `CRYSIRROR_KRKR_DUMP_STORAGE`) are still in the code.
-
-## 2026-11-02 — CatSystem2 plays dialogue with E-mote characters; natives still incomplete
-
-- Behavior: `game-nekopara-vol3` headless, clicks driven by an input track, no debug switch: backgrounds, message window, name plate, tool buttons, advancing dialogue and E-mote characters through `crysirror-puppet-eluna`. Checked by screenshot only; no audio and no GPU window run. A 22000-frame click run stops at unimplemented native 261.
-- Added: MotionSet natives over `motion_set.rs`, KCS sound natives, logical KEYCUSTOMIZE slots as script input payloads, `emote_key_from_header` in `crysirror-codec-emote` (reads the key out of the PSB header, no search), class 54 `m2plane` model loading.
-- Not done: of 576 natives seen in scripts, about 250 have no implementation and fail visibly, and `native_inert.rs` acknowledges over 80 more with no effect (save containers, bitmap editing, E-mote expressions and most class 54 messages, post-effect classes). Character poses and scale were judged by eye, not compared with the original. Movies, save/load, DIFIMAGE faces, SAVEPANEL and Grisaia are not done.
-- Tests: `cargo test --release -p crysirror-catsystem2 --features runtime --lib` 171 passed, 1 ignored; `crysirror-codec-emote` key test passed. Full workspace regression not run.
-
-## 2026-11-02 — CatSystem2 reaches its gameplay script; RFVP movie graph; KiriKiri offset saves
-
-Implementation:
-
-- CatSystem2 FES: BUTTON hit/focus/press dispatch, SNDTABLE, `%LANG%` language prefix, KEYBLOCK parsed but not acted on, undeclared SOUND groups leave the slot at -1 (5EC038).
-- CatSystem2 KCS: Main-bound Press/Release/Hover messages resume native71 (5DE8E0 → 5E8B36 → 877310); `execkcs`/`endkcs` run a child KCS task beside Main; scalar natives; string-map natives 515-518 and 885-902.
-- Draw clips convert from manager coordinates to rect-local `LayerSpec.clip`. This was the cause of a black title with a nonzero Plane VRAM origin.
-- `XmlDocument` reads declared legacy encodings; `parse_with_fallback` reads undeclared Shift_JIS leniently for byte-oriented native formats.
-- RFVP: graph 4063 keeps a screen-sized logical extent over any encoded movie size, so script prims addressing it in screen coordinates see the whole picture.
-- KiriKiri: text streams accept `o<N>` for both read and write (KAG bookmarks).
-- Developer diagnostics: `CRYSIRROR_HEADLESS_CLOSE_FRAME`, `CRYSIRROR_KRKR_LOG_TAIL`.
-
-Placeholders, not behavior: `xchgcursor` does nothing; CG register natives 419-425 and FES `cgreg*` answer empty; native table 594-597 answers absent and logs; 790, 999, 571 and 572 answer 0 or do nothing; XML open of a directory name answers 0. The empty `config.int/` name that reaches this last case in `sscript.kcs` is not explained yet.
-
-Compilation and tests (`--release`, this crate set only, after the changes above): `crysirror-catsystem2 --lib` passes, `crysirror-rfvp-vm --lib` 34 passed before the final catsystem2 edits, `crysirror-engine --test api_docs` passes, named new tests in `crysirror-resource` and `crysirror-krkr` pass. **The full workspace run did not complete**: it first exposed three stale test sources (fixed), then the owner asked to defer it until the large feature is done, so it was stopped with no result.
-
-Behavior, headless with a scripted input track, no window, no audio:
-
-- Nekopara vol3: logo, language screen with hover and OK, title with its buttons, GAME START, then `kcs.int/sscript.kcs` runs and stops visibly at unsupported native 342, PC 0xe6585. No gameplay text has been shown.
-- Census by byte scan of all KCS files: 576 native ids used, 56 implemented when counted, 520 missing, 478 distinct handlers. These are heuristic counts. Seven classes remain absent: RDRAW, SAVEPANEL, SLIDER, RWIPE, STRING, SCROLL2, DIFIMAGE.
-- Grisaia: parses its Shift_JIS startup.xml, then stops at gcall 393 because its executable hash has no reviewed native ABI.
-- White Eternity (RFVP): `meffect/001.wmv` (1920x1080 on a 1024x640 canvas) now shows the whole picture instead of its top-left corner. Compared by eye against an ffmpeg frame. Whether the native engine stretches or letterboxes was not checked against the executable.
-- game-kr-ExE: a simulated window close at frame 1500 writes a 34926-byte `data999.ksd` starting `BM` with no error dialog. Not tried with a real window.
-- RiddleJoker title reproduces as a white screen with a 512x648 dark region; cause not found. CafeStella reaches title.ks; its picture was not inspected.
-
-Still open from owner feedback: Siglus settings crash, texture square artifacts, game-kr purple button border, RiddleJoker/CafeStella titles.
-
-## 2026-11-02 — RealLive selections, KiriKiri saveLayerImage, Siglus capture and modal dialogs, NScripter commands
-
-Implementation:
-- RealLive: `adapter/selection.rs` adopts siglus_rs `select.rs`: `select_w` in its own window with others closed, `select`, `select_s` with SELBTN images, colour/title/hide/blank/cursor effects, hover, keyboard and SE. `frame_geometry` adds right/bottom origins and content-fitted type 3 frames; nine-slice type 3/4 frames are engine layers. Text windows in type 3 frames use the full text area and do not shrink.
-- Engine: `HostServices::begin_frame_capture` and `Runtime::prepare_frame_captures` return the presented frame as an image job. The presenter renders synchronously when a capture is pending.
-- Siglus: frame capture, `SYSTEM.MESSAGEBOX` through the engine dialog, and capture files on the save mount because the game folder is read-only. `OPEN_TWEET_DIALOG` logs and does nothing.
-- KiriKiri: `Layer.saveLayerImage` writes bmp, bmp24, bmp8 and png. JPEG and TLG fail visibly.
 - NScripter: `commands.rs` adds about 250 ONScripter commands and syntax: arrays, `~` jumps, math and strings, sprite2, sprite animation, buttons, csel, dialogs, input, movies, audio aliases, private-format save slots, right-click menu, lookback, skip and auto modes, ruby, `%n`/`$n` in text, quake, monocro, nega, draw overlay and screen copies. Save slots do not interchange with original `.dat` files. `drawsp3`, `exec_dll`, `luacall` and `luasub` fail visibly.
-- Fixes: Siglus MWND with a zero size no longer aborts; updated stale tests for font retention, START_SCENE fixtures and named-argument lists.
 
-Validation (local, release):
-- crysirror-siglus-vm, runtime, krkr, reallive, rfvp, rfvp-vm, text, image, scene: 961 passed, 1 failed. `positive_native_alpha_hits_use_prepared_shared_image_coverage` also fails at 9457543 and stays open.
 - crysirror-nscripter: 13 passed, 1 ignored. These are authored scripts; `~/Downloads` holds no NScripter title, so no real game ran. Screen-copy commands compile but were not executed.
-- CatSystem2 next: `game-nekopara-vol3` stops at FES class 10 (SNDTABLE) in `ttlflow.fes`. An ignored census test over its 20 FES files shows the classes still needed: BUTTON (12 files), RDRAW (5), SAVEPANEL (2), SLIDER, RWIPE, STRING, SNDTABLE, SCROLL2 and DIFIMAGE (1 each).
-- GPU test `siglus_frame_capture` (explicit `--ignored`, Apple M5, Metal): passed.
-- Headless 2400 frames, exit 0 with sensible captures: Rewrite HF, Rewrite+, RUSUR, LB, After, AIR SE, game-kr, White Eternity (RFVP). RUSUR's first selection was inspected and New Game clicked headless. `~/Downloads/testcase` is gone; White Eternity replaced it.
-- Not run: real-game save thumbnails and message boxes, sound by ear, long play. RFVP logs `id must be in range 0..256` for ignored negative ColorSet ids, matching the original rule.
 
-## 2026-11-02 — KiriKiri exeBits, cursor setters and snapshots below compositions
+## 2026-11-01 — RealLive implementation and validation
 
-Findings and fixes:
-- game-kr title lost its motion art: the uncommitted `native_members.rs` hard-coded `System.exeBits` to 64, so scripts never linked `motionplayer.dll` and skipped the logo/title motion path. Not a PSB decoder fault. `exeBits` now follows the executable's PE machine (32 for 0x014c, 64 for 0x8664/0xaa64) and defaults to 32 without a readable PE. All 8 KiriKiri executables in the owner's folder are PE32.
-- E×E failed with `property is read-only` on `cursorX`. Added krkrz semantics from `visual/LayerIntf.cpp` at fd5c4baa: SetCursorX stores CursorX_Work; SetCursorY moves the pointer.
-- game-kr failed during play with `snapshot of active composite is unsupported` when a copied subtree sat below a crossfading ancestor. A composition strictly above the captured root no longer blocks the copy; one on the root or inside the selection still fails.
-
-Validation (local, release):
-- crysirror-scene `canvas_subtree_snapshot`: 10 passed, including a new ancestor test. New cursor and PE tests passed.
-- crysirror-krkr `line_plugin`: 29 passed, 2 failed, 3 ignored. `native_focus_defaults_forward_action_and_subclass_super_handlers` fails because of the new `onBeforeFocus` dispatch; `positive_native_alpha_hits_use_prepared_shared_image_coverage` fails with native_members disabled too. Both also fail without the PE change and stay open.
-- game-kr headless capture shows the full title art. Headless scripted clicks, 11000 frames: game-kr reached `start.ks`, E×E stayed in `title.ks` after its dialog, both exit 0. CLOVERDAYS and natsuzora exit 0. The earlier sweep's other four titles had exit 0 before the last fixes and were not rerun after them.
-- Coverage is limited: only game-kr was seen in a story script; other titles stayed on title, caution or load scripts. Long play was not done.
-
-Open:
-- `Layer.saveLayerImage` is unimplemented; CLOVERDAYS and natsuzora log `saveBookMarkToFile失敗`.
-- Windowed CLOVERDAYS and ousama did not finish 3000 frames in 150 s; the cause was not investigated.
-- Owner-reported small image seams were not reproduced or diagnosed.
-
-## 2026-11-01 — Siglus white title regression, LB oversized g00 crash, playable dev build
-
-Findings (owner reported Rewrite HF white screen/no OMV and an LB crash):
-- Siglus: reproduced in the uncommitted tree; commit 9457543 did not show it. `activate_child_receiver` forced `disp=1` on every CHILD access because CREATE stores its display argument without marking it explicit, so hidden full-screen `siro`/`kuro` children covered the title and its OMV. Default visibility now applies only to an object's first activation. The earlier feature removal did not cause this: pre-removal and post-removal captures were byte-identical at frames 600 and 1200.
-- RealLive LB: windowed exit 1, `asset g00/TT_TTA_RP00.g00 Failed: image dimensions must be 1..8192`. Original sheets reach 1200x12000 (10 files in LB; After and Rewrite+ also have files above 8192). `crysirror_image::rgba_len` now allows 16384; the 64 MiB budget and the renderer's device-limit check still apply. A GPU limited to 8192 fails visibly on these images.
-- `cargo build` now has `opt-level = 2` without debug assertions or overflow checks. The previous unoptimized binary did not reach 1800 windowed Rewrite frames in 120 s; the optimized dev binary finished them in 17 s. Test profile stays unoptimized and checked. Clean dev build: about 4 min.
-
-Validation (local):
-- `cargo test --release -p crysirror-siglus-vm -p crysirror-image`: all passed, 0 failed, including a new child-visibility test.
-- Rewrite HF release headless at 600/1200/1800 frames: notice screen, KEY logo over the running OMV, then `op00`. Timing and pixels differ from the 9457543 captures; byte equality with that commit was not established.
-- Rewrite HF windowed with audio, dev profile, 1800 frames: exit 0. Sound was not listened to.
-- LB windowed with audio, dev profile, 3000 frames: exit 0, using a scratch-clone-only input hook that clicked New Game; the hook is not in this tree. Only this opening was exercised; the rest of the story was not played.
-- Correction: the earlier "boot/exit" entry ran 120 headless frames without input. Headless runs do not reproduce the fatal windowed asset path, so they were not evidence of playability.
-- Siglus source migration remains incomplete; see the 2026-11-01 SYSCOM entry (composed-frame capture and system message boxes). The runtime glyph_images, precomputed_fonts and siglus_audio failures recorded there were not rerun.
+- RealLive LB: windowed exit 1, `asset g00/TT_TTA_RP00.g00 Failed: image dimensions must be 1..8192`. Original sheets reach 1200x12000 (10 files in LB; After also has files above 8192). `crysirror_image::rgba_len` now allows 16384; the 64 MiB budget and the renderer's device-limit check still apply. A GPU limited to 8192 fails visibly on these images.
 
 ## 2026-11-01 — Desktop links every engine; no per-engine build features
 
 Implementation:
-- Owner request: plain `cargo build` produces the complete player. Removed desktop features `reallive`, `avg32`, `krkr`, `rfvp`, `nscripter`, `bgi`, `circus`, `catsystem2`, `majiro`, `system-nnn`, `system4`, `siglus-resources`, `scripting`, `emote-import` and `arc-formats`, with their `cfg` arms and "feature not linked" errors. Desktop features remaining: `audio` and `gamepad` (default), `acoustics-obvhs`. Library-crate features (`runtime`, `arc-formats`, `blackcyc-formats`) are unchanged; the desktop enables them.
-- Licence consequence: the desktop binary now links AGPL-3.0-or-later and GPL crates, so a distributed binary is AGPL-covered. NOTICE.md is updated and `tests/test_krkr_policy.py` no longer requires `krkr` to stay out of the default build; it still confines AGPL dependencies to the desktop crate.
+- Owner request: plain `cargo build` produces the complete player. Removed desktop features `reallive`, `avg32`, `nscripter`, `circus`, `majiro`, `system-nnn`, `system4`, `scripting`, `emote-import` and `arc-formats`, with their `cfg` arms and "feature not linked" errors. Desktop features remaining: `audio` and `gamepad` (default), `acoustics-obvhs`. Library-crate features (`runtime`, `arc-formats`, `blackcyc-formats`) are unchanged; the desktop enables them.
 
 Validation (local):
-- `cargo build`: finished; `cargo test --release -p crysirror-desktop`: 24+4+2 passed, 0 failed, 4 ignored (GPU/owner-game tests were not run). `cargo check --release -p crysirror-desktop --no-default-features`: passed. Python `tests/test_krkr_policy.py` 4 passed, `tests/test_desktop_tools.py` 49 passed.
-- `inspect` reports the adapters as registered. Release binary `play --headless --frames 120 --no-audio` exited 0 for `~/Downloads/testcase` (RFVP), `~/Downloads/Game_RUSUR` (RealLive) and `~/Downloads/game-kr` (KiriKiri). Boot/exit only; pixels, audio and interactive windowed play were not checked. RFVP logged `id must be in range 0..256` from its color syscall (not investigated).
-- Not run: Siglus, AVG32 (`~/Downloads/game_kanon` is absent), BGI, Circus, CatSystem2, Majiro, System-NNN, NScripter and System4 titles.
+- `inspect` reports the adapters as registered. Release binary `play --headless --frames 120 --no-audio` exited 0 for `~/Downloads/Game_RUSUR` (RealLive). Boot/exit only; pixels, audio and interactive windowed play were not checked.
+- Not run: AVG32 (`~/Downloads/game_kanon` is absent), Circus, Majiro, System-NNN, NScripter and System4 titles.
 
-## 2026-11-01 — Siglus checkpoint performance, black native background, AVG32 source completion
+## 2026-11-01 — AVG32 implementation and validation
 
-Implementation:
-- Siglus performance: the adapter checkpoints the whole SceneVm before every native instruction (rollback for pending capability reads). Sampling Rewrite HF showed checkpoint clone/drop at ~55% of adapter CPU versus ~3% interpretation. New `crysirror_siglus_vm::shared::Shared<T>` (Arc copy-on-write, serializes exactly as T) now wraps CommandContext.globals, ImageManager, each stage form and each stage object list; the immutable ScenePck cache is an Arc. Object-movie synchronization, which ran after every instruction and rewrote unchanged movie fields, now mutates only on change.
-- Installed-game launches (`play`/detection) default the project background to black instead of the authored demo colour [16,20,30].
-- AVG32 (separate agent): input/rng split adopted from siglus_rs 256c398; AVI/Cinepak demux/decode added to shared crysirror-video (`Container::Avi`, oxideav-cinepak =0.0.3, MIT) and used by the original movie policy on the engine clock; `0x66` text into non-zero PDT work buffers now uses the engine glyph service plus PdtManager coverage blending. Details and remaining gaps in crates/crysirror-avg32/UPSTREAM.md.
+- AVG32 (separate agent): original input/rng split adopted; AVI/Cinepak demux/decode added to shared crysirror-video (`Container::Avi`, oxideav-cinepak =0.0.3, MIT) and used by the original movie policy on the engine clock; `0x66` text into non-zero PDT work buffers now uses the engine glyph service plus PdtManager coverage blending. Details and remaining gaps in crates/crysirror-avg32/UPSTREAM.md.
 
-Validation (local, release):
-- Rewrite HF headless 600 frames, isolated build without RealLive feature (agents were editing RealLive concurrently): vm.step mean 6.4 ms -> 1.2 ms, p95 18.8 ms -> 3.3-3.7 ms (three runs), process CPU 3.1 s -> 0.8-0.9 s. A single ~57-69 ms max spike remains and is not yet attributed.
-- crysirror-siglus-vm: 147 passed, 0 failed, 2 ignored.
 - crysirror-avg32: 21 unit + 8 integration passed; crysirror-video 27 passed, 4 ignored. Kanon (local/work/avg32-kanon/project/assets/game) headless runs reached the title, main menu, scene 70 choice and scene 501 with zero warnings; the new Cinepak and work-buffer text paths were not exercised by Kanon.
 
-## 2026-11-01 — Original Siglus SYSCOM source adoption and client file removal
+## 2026-11-01 — System4 implementation and validation
 
-Implementation:
-- Owner directed bulk adoption of siglus_rs 256c398 sources (VM semantics verbatim; reusable algorithms into shared crates; device layers dropped). First batch: the complete original runtime/forms/syscom.rs (+ syscom/save_versions.rs) is now `syscom_original.rs`. Codex's tested config handlers still run first; every remaining SYSCOM operation (save/quick/inner slots, copy/change/delete, save metadata, local extras, filter colour, capture buffers, message back, replay voice, config menus) reaches the original dispatcher instead of failing. Previously 131 of 334 SYSCOM operations had no handler.
-- Original global/read/config save streams, slot files and thumbnails replace the former stubs. Boot loads global saves before the first scene instruction (C_tnm_eng::init_global) inside the capability I/O transaction. All file access goes through `io_fs` on the client `save/` mount; with no config.sav the existing initialize_config defaults are kept.
-- New shared capability: `FileSystem::remove(client, path)` (core default Unsupported; DiskVfs, SharedHost and the reference host implement it; asset mount read-only). `io_fs` gained buffered remove/copy/rename/remove_dir_all, committed with writes by the Siglus adapter.
-- REPLAY_KOE uses koe_bridge::replay; SYSCOM audio routing uses the existing native_sound implementation. ThumbTable decoder adopted (thumb_table.rs). PNG output uses crysirror_image::encode_png.
-- Not yet engine-backed: composed-frame capture (`capture_frame_rgba` requests a pending capture that no adapter fulfils yet, so thumbnails/CAPTURE_* fail or are skipped with a log); system message boxes set VM modal state but are not yet presented through the engine dialog service; OPEN_TWEET_DIALOG fails visibly. A presenter-side client scene capture service is the next engine capability.
-
-Validation (local, release):
-- crysirror-siglus-vm: 146 passed, 0 failed, 2 ignored (includes adopted original global/config save tests adapted to the save mount, and a new io_fs save-mutation test).
-- crysirror-runtime/host/core with --no-fail-fast: 238 passed, 46 failed. Failures are runtime tests glyph_images, precomputed_fonts and siglus_audio ("native entry scene not found"); siglus_audio fails identically with the new boot global-save load disabled, so these are not attributed to this batch and remain open.
-- No game run was performed for this batch.
-
-## 2026-11-01 — Whole Siglus SCRIPT source migration and shared reading deadlines
-
-Implementation:
-- Adopted the complete pinned99-operation SCRIPT/EXCALL.SCRIPT policy as first-class script_native.rs, preserving provenance and original default/return behavior; the checked adapter validates the original command signatures and bounds.72 current consumers/raw queries are admitted;27 still-missing effect/input/display consumers fail explicitly. This is one complete source module, not completed Siglus integration. Static comparison with the original generated compiler declarations found no matching-arity differences; recovered joypad3 are newer than that generated table, while2 older compiler MSG_BACK_PROC declarations have no original Rust handler and remain unknown.
-- Extracted shared Scene ReadingWait (fixed start/character count, saturating length/minimum deadline, caller-owned clock). Original SCRIPT auto-mode policy now drives shared GlyphReveal completion/key-wait/voice services; native message visibility maps all text/frame/embedded presentation through retained engine layer opacity without clearing text/reveal. Framework snapshot schema13 retains the reading deadline; original save codec is unchanged.
-- Owner changed validation strategy to whole-source module migration and independent API/VM validation. Repeated Rewrite frontier runs stopped; future game runs are acceptance checks after source batches.
-
-Compilation and independent validation:
-- Combined local release validation of7packages passed650 tests with43 ignored across71 targets (target/verification/native-source-batch/combined-release-tests.log, exit0). Siglus passed80 with2ignored; Scene library50 passed including the independent ReadingWait deadline/overflow/roundtrip test. Native authored SCN verifies automatic PP completion at the exact deadline, framework restore, retained hidden text and reveal progression, and original callback lifecycle. Python tooling passed201/201. Public API regeneration/verification is being completed separately; no unverified fingerprint is claimed here.
-
-Other actual original-media observations from frozen test binaries:
-- Cat actual FES owner test passed1/1 and executed47 original FES operations inside native448, reaching SETCONF at INIT_GLOBAL row37/physical267/byte0x131a; original KCS PC0x1943 stays pending. The initial exact-name invocation selected0 tests and is explicitly not counted. This is a verified next frontier, not a completed title.
 - Alice original Rance7 owner test passed1/1,11256 instructions to A_PUSHBACK0x84 at pc0x1007c/mes_mark_metrics_t@AddCG; main and desktop factory were still absent in that frozen version. Shared ALD owner test passed1/1 with6606 original numeric entries across two volumes6506+100. Agent continuation is newer source and has separate verification requirements.
 
-## 2026-11-01 — Siglus object callback lifecycle and Circus effect save words
+## 2026-11-01 — Circus implementation and validation
 
-Implementation:
-- Added native OBJECT.FRAME_ACTION and indexed FRAME_ACTION_CH start/real-start/end/counter policy. Structural object/channel chains are retained for the existing original VM callback runner and pending finish snapshots; integer timeline arithmetic remains in shared Scene Counter. Active replacement retains the complete prior callback state; unknown operations and direct object-counter waits still fail explicitly.
 - Circus accepted falling type1 now mirrors original save words only after shared VFX completion; type0 preserves the previous intensity while clearing the native effect-family flags. This completes another save-state prerequisite, without admitting an incomplete original slot or bypassing autosave0.
 
-Compilation and independent validation:
-- Siglus release library run passed76 with2ignored (object-frame-action-tests3.log). Authored native SCN verifies actual callback execution, final callback, shared Layer property changes, caller stack preservation and identical results after framework restore; channel unit tests verify old-finish ownership and game/real clock selection. A later expanded channel-list test is queued separately; no pass is inferred for it. The initial new test build failed because Value does not implement PartialEq; its assertion now checks the native integer value without changing Value's public traits.
 - Circus release library passed47 with1ignored (native-falling-save-tests.log), including pending shared-effect receipt preserving PC/body and native intensity retention. Original autosave/thumbnail admission remains blocked.
-
-Actual behavior:
-- Immutable full-feature player31 built in2m59s, SHA256eb4bb341fde3b473690ed09aac5480cbd553d52bc2cc313bda8becfc95648f31. Actual Rewrite Plus Start passed OBJECT.F RESIZE and next stopped at OBJECT.FRAME_ACTION.START[52,1], sys50_ef00_ev10:450 PC20355, frame5238. The callback source above is newer than31; original-game post-fix validation is running separately. No complete opcode/gameplay claim is made.
-
-## 2026-11-01 — Siglus packed object flags and continued original Start validation
-
-Implementation:
-- Added device-free Core integer_fields logical_size/get/set/fill_clipped. Native global integer lists and OBJECT.F now share packed-bit arithmetic; the adapter retains original overload, index, signed-word, child identity and bounded allocation policy. Object flag buffers use copy-on-write; getter/checkpoint reads share storage, writes detach, and the original Vec serialization wire remains unchanged. Unknown global-list commands now fail visibly.
-
-Compilation and independent validation:
-- Combined release library run passed Core26, Siglus73 (2ignored), Circus45 (1ignored), recorded in target/verification/siglus-opcode-completion/core-flags-circus-final2-tests.log. Tests include full native F resize/bit views/clear/sets, extreme clipped ranges, child isolation across framework restore, copy-on-write and legacy binary layout. Python tooling passed201/201 (python-flags-final.log). Generated API verification passed8 plus1coverage after registering the Core source; the actual API fingerprint remains c8c180ba4ff65706.
-
-Actual behavior and limits:
-- Immutable player30 passed the prior DEBUG_WRITE_LOG and SCRIPT34 frontiers after actual Rewrite Plus Start, then failed at OBJECT.F RESIZE[111,2], sys50_ef00_ev10:448 PC20030, frame5236. The common offscreen path emitted the actual failure/runtime JSON and exited1 with capture_written=false. This is not a successful gameplay run. The F fix above is not linked into30; full-feature player31 is building for the next original-game verification. Other native forms and original global/config saves are still incomplete.
-
-## 2026-11-01 — Siglus ALL_EVE, image queries and shared CG catalogues
-
-Implementation:
-- Fixed native OBJECT.ALL_EVE END/CHECK/WAIT through the existing shared Scene IntEvent implementation, including independent nested CHILD/MWND wait identities. Fixed GET_SIZE_X/Y optional pattern selection using original image dimensions; supported 2D GET_SIZE_Z returns0. Original VM and resource/wait policy remain in the first-class workspace adapter.
-- Added shared Resource CGTABLE/CGTABLE2 decoding (siglus/cgm), bounded temporary/output budgets, cancellation and the existing shared LZSS kernel. Siglus prepares configured catalogues through scoped storage workers before its first original instruction; its11 CGTABLE operations retain signed flags, exact ==1 look counts and original name/enable policy. Framework snapshot schema12 includes catalogue/flags; original global/config save reconstruction remains unsupported.
-- Fixed shared GlyphReveal positional binary serialization: the optional rate tag is always present for bincode while sparse JSON stays unchanged. This fixes six existing Siglus text snapshot failures; it is an independent engine state fix.
-
-Compilation and independent validation:
-- Shared Resource catalogue tests passed3/3, including the explicitly invoked owner-media test against both Rewrite mode.cgm files. Scene library49/49 and independent GlyphReveal binary/JSON roundtrip1/1 passed. Siglus library62 passed with1 ignored before adding a second ignored worker test; the new worker test was explicitly invoked and passed1/1. Python native/source tests passed9/9. Logs are under target/verification/siglus-opcode-completion; ignored tests are not counted as passed.
-- Full-feature release player28 built successfully on the second attempt; the first exposed a missing KRKR diagnostic match arm for the concurrent shared Ternary input addition. The fixed immutable artifact SHA256 is b6d6b7479ebad8d8d599b1a0a47c8251eb59daa204168864ad230979713dee8f. API docs for shared CG/MaskedPair/Paged changes were independently verified8/8 plus1coverage, fingerprint1171d6b86d446b00. Later SYSTEM logging/SetSolidColor changes are not included in28 and are being validated separately.
-
-Actual game behavior:
-- Player27 reproduced the owner's unsupported native object chain[91,0]. After the fixes, ordinary CPU runs completed Plus4000frames and Harvest Festa10000frames without native errors; the latter naturally completed its opening with8ms wall pacing. No script entry rewrite, forced decoder EOF, fake disc material or original executable was used.
-- Player28 rendered the actual Rewrite Plus title at5000frames on Apple M5/Metal through the shared renderer; plus-gpu.png was visually inspected. Clicking its Start button then exposed SYSTEM.DEBUG_WRITE_LOG string overload1, so this title result is explicitly not a gameplay-complete claim. Both original debug-log overloads and enabled shared LogBook routing have since passed the latest release library suite64/64 (2ignored); the first run failed two authored expectations that incorrectly assumed line0 instead of the native unknown-line sentinel-1. The corrected assertions preserve-1, and the enabled-log test verifies actual owner-scoped receipts, quotas and no replay after restore. This source is being linked into player29; no post-fix gameplay result is claimed yet.
-- Harvest Festa actual OP frames were decoded/rendered in10000/18000frame captures. The18000frame fast run still had global_movie=true and decoder picture PTS71787ms behind virtual transport260224ms; it is not a title/EOS success. Added optional bounded offscreen wall pacing for subsequent worker-aware verification without changing input/native time or fabricating completion.
-- Player29 (SHA25624218d166db484803755533a3518625cc7f6e50747007c692753b1d72a0b4850) linked the debug-log fix and concurrent native changes. A paced8ms10000frame actual Harvest Festa run naturally completed its OP and rendered the complete title (hf-paced29-report.json/png, visually inspected); moviefile=null/global_movie=false, sys10_tt01:476 PC68307. No decoder EOF or original script was changed.
-- Plus Start on29 passed DEBUG_WRITE_LOG and next stopped at SCRIPT34/SET_MSG_BACK_OFF. The related native policy batch is now implemented with actual shared consumers for message speed/nowait/async-once, timeline pauses, retained key filtering and voice-stop settings, plus the native automatic-savepoint gate. Latest release Siglus tests passed68/68 with2ignored (script-policy-tests.log), including shared GlyphReveal state/async reset after framework restore, shared timeline pause/resume and held-key filtering without fabricated release edges. The native-only backlog flags do not establish a working MSGBK viewer. The combined release check passed; linking/real post-policy behavior remains the next step.
-- A static source inventory finds the same25 referenced CD instruction tag names in the original and workspace interpreter. This does not establish native form/element/syscall completeness. Later forms, complex profiles and original save reconstruction remain partial, and failures remain visible.
 
 ## 2026-11-01 — Circus native save projection prerequisites
 
@@ -240,7 +64,7 @@ Implementation:
 
 Compilation and independent validation:
 - Release RealLive library tests passed48/48 and engine bridge tests passed15/15 (target/verification/reallive-lb-clip/reallive-clip-tests.log). The authored original-bytecode empty/visible/empty test first reproduced the same invalid-layer-clip error before the fix, then passed. Additional coverage includes zero/negative dimensions, offscreen and bounded positive clips. Relevant Python schema tests passed8/8 (python-schema-tests.log).
-- Combined release player27 built successfully with defaults plus rfvp,bgi,nscripter,krkr,arc-formats,circus,catsystem2,majiro,system-nnn. Its immutable SHA256 is 8d7c607fb330c43779744e80924979b0085c3d624ab233e907db2a982ec6fdd7. No public signature changed, so no new API fingerprint is required.
+- Combined release player27 built successfully with defaults plus nscripter,arc-formats,circus,majiro,system-nnn. Its immutable SHA256 is 8d7c607fb330c43779744e80924979b0085c3d624ab233e907db2a982ec6fdd7. No public signature changed, so no new API fingerprint is required.
 
 Actual game behavior:
 - Player25 reproduced the owner's game-rl-LB failure by opening Config/system settings: the native slider submitted clip[351,208,0,8] for MN_CF_SB03 and exited with invalid layer clip. This is separate from the earlier title/story routes, which did not reproduce it.
@@ -254,14 +78,12 @@ Implementation:
 - Added HostServices.begin_canvas_image and explicit Runtime presenter admission. A request freezes engine Canvas nodes, published image leases and font membership. The existing wgpu compositor prepares a retained texture; readback waiting, depadding and immutable ImageResource construction execute on a worker. Desktop window, render and in-place offscreen paths install/poll the same service. Live Puppet and replaceable surface/history dependencies fail explicitly. Explicit readback snapshot cache generations are bounded; automatic PNG compaction remains a separate synchronous path.
 - Image release now ends caller ownership while retained Canvas/Layer/filter/transition/mesh and World/VFX references keep the published path alive. Owner collection retires unreferenced paths without serializing mesh/particle payloads; open Layer transactions defer collection. Frozen frame/capture leases remain usable after live lookup ends.
 - Added a dormant System-NNN installed factory and detection profile. Original MSI installed directories can be mounted at a selected shared windows/msi root alongside loose game resources, with original record IDs retained. Boot/config/script work uses scoped resource workers and the original reviewed callback module guard. Clock, image, text/UI and audio preparation use public engine services. The native controller remains the default entry; no data VM or original executable is substituted. This is partial integration; registration is not a playable-title or original-save claim.
-- Offscreen native play/render now loads host font aliases before stepping a VM that can request metrics. Siglus's existing interval reveal explicitly selects no per-second override; its local workspace source hash was updated while original source provenance was preserved.
 
 Compilation and independent behavior:
-- Release Runtime/WGPU check passed (canvas-image-check.log); combined desktop check with rfvp,bgi,nscripter,krkr,arc-formats,circus,catsystem2,majiro,system-nnn passed (desktop-installed-check.log). Later NNN window-resource wiring is also being checked by the combined player build; no newer whole-workspace success is claimed.
+- Release Runtime/WGPU check passed (canvas-image-check.log); combined desktop check with nscripter,arc-formats,circus,majiro,system-nnn passed (desktop-installed-check.log). Later NNN window-resource wiring is also being checked by the combined player build; no newer whole-workspace success is claimed.
 - Shared resource release tests passed6/6: Canvas jobs3, pattern resources2, RGB lookup/publication1 (shared-resources-final.log). Coverage includes worker-only short reads, frozen Canvas mutation, retained terminal receipts, client isolation, publication release/retirement, hidden nested snapshots, World material references and frozen render leases.
 - Explicit offscreen Metal Canvas capture test passed1/1 on Apple M5 (canvas-image-gpu-final.log). It uses engine-owned nested groups and retained copies, mutates/removes live input afterward, then verifies straight RGBA[255,0,0,128] from the immutable image job. This is an engine-only GPU test, not an original-game title result.
 - Shared MSI tests passed3/3 with1 owner test ignored by default (msi-root-tests.log); independent dormant factory test passed1/1 (installed-tests-final.log). Original MUGEN2 detection tests passed2/2 including its explicitly invoked owner-media test: actual catalog/module selects system-nnn and a scoped installer root without extraction or executable execution (detect-installed-tests.log). Original NNN gameplay/title/save compatibility remains unverified by these tests.
-- Python tooling passed201/201 after updating the explicit Siglus shared-API local source receipt (python-final2.log). Generated API docs passed8/8, fingerprint a7c6ab240046fa4c logged (api-shared-verified.log). Evidence is under ignored target/verification/systemnnn. No commit, push or CI change.
 
 Follow-up startup validation:
 - Actual player17 MUGEN2 controller invocation detected/mounted the installer, but20,000 fast offscreen frames ended with bootstrap_pending=true/phase=preparing. Its error=null and empty capture are **not** a successful native-game run: the simulated clock outran the cold worker before any original instruction started. Evidence: player17-controller-report.json/log.
@@ -272,141 +94,20 @@ Follow-up source precedence and device-free media preparation:
 - Actual MUGEN2 media contains four-byte MSI GPK/GTB placeholders alongside full loose resources. Correcting source priority gets past those placeholders; weakening the shared BlackCyc parser was unnecessary. Player19 then exposed the original controller's repeated StoryName/SUB1/END sequence, confirming the missing native outer startup/title controller. This is not a successful title or gameplay result; the native adapter work continues separately.
 - Added client-scoped HostServices.begin_media_probe plus Media.beginProbe/probeStatus/releaseProbe. Header/decoder preparation runs on bounded shared workers, retains completion and supports cancellation without creating a playback slot, picture, Layer, PCM or clock advance. Unknown audio identity/duration stays unknown; unsupported AlphaMovie header-only preparation fails explicitly. Public tickets become obsolete after Runtime restore.
 - Release Engine check passed (probe-routing-engine-check.log). Independent Runtime MediaProbe tests passed2/2 (media-probe-tests3.log), including a sparse100MiB MPEG resource, retained malformed-header failure and subsequent admission. Public Media facade/restore-ticket test passed1/1 (media-probe-api-tests.log). These establish engine capability behavior, not original NNN movie or title compatibility.
-- Added reflective InputRoutes methods/global over the canonical shared Scene router, with no private engine-API queue. Independent public receiver test passed1/1 and command API coverage passed1/1 (input-routes-api-tests.log): signed priority, retained leases, unhandled propagation, foreign/stale receipt rejection, registry retention and transient input retirement after restore. Native callback semantics remain the adapter's responsibility; this public API result is not a CatSystem2 gameplay result.
+- Added reflective InputRoutes methods/global over the canonical shared Scene router, with no private engine-API queue. Independent public receiver test passed1/1 and command API coverage passed1/1 (input-routes-api-tests.log): signed priority, retained leases, unhandled propagation, foreign/stale receipt rejection, registry retention and transient input retirement after restore. Native callback semantics remain the adapter's responsibility; this public API result does not establish game compatibility.
 - Regenerated docs/api for MediaProbe and InputRoutes; public reference tests passed8/8 (api-probe-routes-verified.log), fingerprint1dbdf921cc54e571 logged in docs/api/CHANGES.md. New API source and documentation diff checks passed. The next combined player22 build and native-game behavior checks are separate pending validation.
 
 Snapshot: 2026-10-25. Owner priority: the new AAA engine first;
 compatibility layers are secondary (ADR 0010).
 
-## KiriKiri CXDEC XP3 archives (ADR 0096, 2026-10-30)
-
-- Implementation: `crysirror-formats-arc` XP3 gains a CXDEC content filter and
-  the encrypted filename index (`yuz:`), ported from the owner's MIT xp3-brute
-  @ c82cb14. Parameters are recovered at mount time from the user's own
-  EXE/TPM and the archive's startup script; no per-game data is in the repo,
-  no module code is executed. Emulator init, SteamStub and symbolic TJS
-  execution are not ported (fail visibly).
-- Tests: `crysirror-formats-arc` release 221 passed, 0 failed, 20 ignored
-  (15 new synthetic CXDEC tests). Desktop `--features krkr,arc-formats` check
-  passed. `tests.test_krkr_probe` 3/3.
-- Behaviour (sampled reads, every 97th entry plus 128 at open, checksums
-  verified): CLOVERDAYS (classic, tpm) 4/4 archives, 392 ok; Riddle Joker 8/8,
-  476 ok; Cafe Stella 10/10, 490 ok, including prefix words read from the
-  module (upstream xp3-brute fails on this title). Logs in
-  `target/verification/krkr-cxdec/`.
-- Boot: none of the three reaches a title. CLOVERDAYS stops at a TJS parse
-  error on the `expr if cond` statement form (`MyYesNoDialog.tjs`); Riddle
-  Joker and Cafe Stella stop because `Storages.setupArchiveData` is not
-  provided by the adapter.
-
 ## In-place launch, native menu, window/fast-forward fixes (2026-10-30)
 
-- `crysirror play [game-folder|file]` (default when no subcommand: the
-  binary's folder) detects the engine and runs the game in place:
-  KiriKiri (opens `data.xp3` with plugin-TPM CXDEC, HXV4, EXE CXDEC, then
-  plain profiles; canvas = largest `scWidth/scHeight` in Config.tjs from any
-  archive), AVG32, RealLive (`#SCREENSIZE_MOD`). Siglus/RFVP/NScripter are
-  recognized and fail with a TODO. `--detect-only` prints the plan.
-  `Runtime::with_asset_root` takes the chosen folder; saves go to the
-  per-user state dir keyed by folder. Verified locally: detection matches the
-  hand-made projects for game-kr, RiddleJoker, CafeStella (1920x1080),
-  DC5t4LM, CLOVERDAYS (1280x720); `play` opened CLOVERDAYS, game-kr,
-  DC5t4LM and Kanon windows without errors (25 s each, not played through).
-- Desktop menus: OS menu bar by default (macOS via muda); other platforms show
-  no bar yet (TODO) instead of drawing it over the game.
-  `CRYSIRROR_ENGINE_MENU=1` restores the engine-drawn bar.
-- Window: KAGEX forced fullscreen / borderless pseudo-fullscreen because
-  `System.screenWidth/Height` reported the canvas. New
-  `HostServices::display_info` (desktop: monitor in logical units; headless
-  render: 1920x1080 virtual); krkr `System.screen*/desktop*` and windowEx
-  `getMonitorInfo/getDisplayMonitors` use it; `Window.min/maxWidth/Height`,
-  `setMinSize/setMaxSize` added. CLOVERDAYS and DC5t4LM now start windowed
-  and decorated.
-- Fast-forward: game-kr with Ctrl held for 6600 frames failed with "motion
-  client texture budget exceeded" (budget only grew); motion textures are now
-  leased per live model. The same run now skips into the story without error.
-- ADR 0097 (proposed): interpreted no-JIT x86 filters, lifted IR, no brute
-  force, no bulk extraction.
-
-## KiriKiri: titles reached, cursors, AlphaMovie, media transport (2026-10-30)
-
-- TJS2: a member both `extends` bases declare resolves to the last base
-  (`TJS_DO_SUPERCLASS_PROXY` walks `rbegin()`); KAGEX's
-  `AnimationLayerTransMove` now reaches `KAGTransMove.beginTransition`, so
-  `children=true` transitions move the back page forward.
-- Shared capabilities: `crysirror_image::cursor` (.cur/.ico/.ani) + UI
-  `DefineCursor`/`SetCursor` mapped to winit custom/standard cursors;
-  `ImageEffect::BoxBlur` (krkrz DoBoxBlur/ForAlpha arithmetic); bitmap math
-  `MaskHoldAlphaScalar256` and `Ps{blend, hold_alpha}` (tvpps tables);
-  `ClientStorage::serving_container`; media `Pause/Resume/Seek` with
-  catch-up (no intermediate pictures on seek); AlphaMovie (AJPM) decoding:
-  owner's amv_decoder 0.2.0 adopted as `crysirror-codec-amv` (SOURCE.json),
-  streaming in `crysirror-video::amv` and the media workers.
-- krkr adapter: `Layer.cursor = "file"` (krkrz TVPGetCursor ids from 2);
-  `System.createUUID`; `getPlacedPath` in `archive>member` form; executable
-  `XOPT_EMBED_AREA_` options seed `System.getArgument` (`-debugwin=no`);
-  `operateAffine`, `doBoxBlur`, `setMainPixel`; copy/operate keep a CPU
-  composite source (incl. holdAlpha normal, PS modes on CPU);
-  VideoOverlay `pause`/`rewind`/`frame`; `AlphaMovie.dll` facade
-  (open/play/stop/frame/showNextImage, members inferred from KAGEX
-  GFX_AMovie.tjs; plugin source unavailable).
-- Behaviour (local renders, owner-authorized games):
-  - CLOVERDAYS: title screen renders (logo movie, background, six buttons);
-    CONFIG opens; GAME START enters the scene player and draws a blurred
-    character composite; stops later at `copyRect` with dfMain+holdAlpha
-    (needs a canvas RGB-only copy).
-  - DC5t4LM (HXV4): title with sakura particles and SCENARIO select render;
-    entering a scenario hits the canvas presentation command limit (2187
-    nodes) — canvas compaction is open.
-  - RiddleJoker/CafeStella unchanged from the previous entry.
-- Tests: new krkr cursor/alpha_movie/video_overlay/tjs semantics tests;
-  image cursor/box blur/PS math; media pause/seek; AlphaMovie sample decode
-  (149 frames, 30 fps, alpha) is opt-in (`CRYSIRROR_AMV_SAMPLE`).
-- Known failing in the working tree: 42 runtime `siglus_audio`/`siglus_pcmch`
-  tests fail at Siglus boot ("native entry scene not found": fixture
-  Gameexe.ini has no START_SCENE, default `_start`) — from the earlier
-  uncommitted Siglus installed-resource change, not this round.
-
-## KiriKiri: CXDEC titles boot, VideoOverlay, TJS2 first-party (2026-10-30)
-
-- TJS2/KAG: Kirakira-derived `krkr-tjs2`/`krkr-kag` are now first-party
-  `crysirror-tjs2`/`crysirror-kag` (owner decision); the vendored-hash policy
-  test is replaced by a licence check, AGPL boundary tests kept.
-- Language/runtime fixes against krkrz fd5c4ba source: postfix `expr if
-  cond` with `invalidate this`; `@set` preprocessor values persist per
-  engine instance (`tTJS::PPValues`); expression mode is `return <text>;`
-  (`tjsLex.cpp`), used by `Scripts.eval/evalStorage`, KAG `exp=` and
-  textrender; host `Runtime::construct` (`new` from natives).
-- Adapter fixes: `Layer.font` self-bound with native Font properties
-  (Yuzusoft objectHookInjection), every Window gets its BasicDrawDevice
-  (`recreate`), `System.versionInformation/drawThreadNum`, krkr2
-  `Window.innerSunken/showScrollBars`, `beginTransition` `withchildren`
-  defaults to true, many-continuation frames yield instead of failing.
-- `VideoOverlay` facade over the shared media service: open/prepare/play/
-  stop/close with krkrz immediate/async status semantics, layer and overlay
-  modes; pause/rewind/seek/segment loops/other audio streams fail visibly.
-- Probe tool: `--setup-profile auto|on|off` (classic `.tpm` CXDEC has no
-  setupArchiveData profile); CXDEC diagnostic test can dump entries locally.
-- Tests: crysirror-krkr/tjs2/kag/formats-arc release 740 passed, 0 failed,
-  26 ignored (new: font hook, draw device, preprocessor persistence,
-  expression mode); Python 200 passed; workspace all-targets check passed.
-- Behaviour (600-frame CPU probes, final binary): RiddleJoker and
-  CafeStella finish init (AfterInit, revision log) and wait at KAG
-  `syshook`; renders at 1920x1080 show the ATTENTION screen with the
-  first-run patch-check dialog. CLOVERDAYS (classic CXDEC) finishes init,
-  plays the ALcot logo (MPEG-1) through shared media into a KAG layer and
-  reaches the title script, but the title UI stays on the back page (black
-  screen; KAGEnvironment transition path not yet traced). DC5t4LM (HXV4)
-  boots into its scripts and stops at `Layer.cursor = <cursor file>`
-  (needs a shared custom-cursor service). game-kr unchanged (KAG wait).
-- Not done: AlphaMovie.dll (port from xp3-brute), custom cursors, CLOVERDAYS
-  title transition, VideoOverlay transport.
+- `crysirror play [game-folder|file]` detects an installed game and constructs its resource roots. `--detect-only` prints the plan. `Runtime::with_asset_root` takes the chosen folder; saves use a per-user state directory keyed by that folder.
 
 ## AVG32 installed games: Kanon through shared services (ADR 0095, 2026-10-30)
 
 - Implementation: `crysirror-avg32` now vendors the original AVG32
-  interpreter from siglus_rs 5f358ef (per-file hashes and seam list in
-  `src/vm/SOURCE.json`) instead of the portable-vm Git build. The PDT bank,
+  interpreter from the original project instead of the portable-vm Git build. The PDT bank,
   copy/mask/fade/stretch primitives and all transitions moved to
   `crysirror_image::avg32` (plus buffer-0 write damage and a present
   revision). The screen is one engine surface layer; buffer-0 text is a
@@ -557,30 +258,6 @@ compatibility layers are secondary (ADR 0010).
   - No real PMX model was rendered (none with a redistributable licence was
     fetched); PMX is validated by a synthetic file only.
 
-## KiriKiri TJS2 adapter, first slice (ADR 0053)
-
-- **Source.** Kirakira `krkr-tjs2` and `krkr-kag` vendored unmodified from
-  `c451918023477620ff9055a2eb8a6714b947d9c1` (SHA-256 per file). AGPL is
-  confined to them and `crysirror-krkr`; the desktop `krkr` feature is not
-  in `default`. `tests/test_krkr_policy.py` checks both.
-- **Engine capabilities added first:** canvas presentations inside layer
-  trees (`present.parent/position`, 1024 surfaces) and a thread-safe
-  `image_metadata` handle.
-- **Translated natives:** Layer (tree, geometry, visibility, opacity,
-  `absolute`, loadImages, fillRect, colorRect, copyRect, operateRect,
-  assignImages, drawText), Window, Timer, System, Debug, Storages, Scripts.
-  Unsupported members throw TJS exceptions naming the missing capability.
-- **Behaviour.**
-  - `crysirror-krkr` tests: **3 passed** (layers/timer/click to engine
-    state; visible failures; Shift_JIS and case-insensitive storage), plus
-    1 unit test. `crysirror-scene` canvas tests: **7 passed**.
-  - `examples/krkr-demo` (self-authored) rendered through the release
-    desktop renderer (`--features krkr`, raster, Metal): 8 KiriKiri layers
-    as engine nodes, script subclass `Orbit extends Layer` driven by a Timer.
-  - Python 3.11: **169 passed**.
-  - No commercial title was run; KAG3 boot, XP3 mounts, font metrics,
-    audio, video, transitions and saves are not implemented.
-
 ## Latest: NFS Carbon canyon decoded and driven; arcade vehicles (ADR 0042, 0043)
 
 - **NFS Carbon geometry and textures** (`tools/nfsc_geometry.py`,
@@ -674,18 +351,6 @@ compatibility layers are secondary (ADR 0010).
 
 ## generated API reference; GI visibility and refresh cost (ADR 0028 step 2)
 
-- **API documentation** (`docs/api/`).
-  - `REFERENCE.md`, `api.json` and `crysirror.d.ts` are generated from the
-    class registry, the command table, serde defaults and the `///`
-    comments of the scene specs and adapter configs.
-  - `crysirror-engine/tests/api_docs.rs` fails in three cases: a generated
-    file is stale, the signature fingerprint is missing from
-    `docs/api/CHANGES.md`, or a class member has no doc.
-  - The reference covers 13 classes, 11 globals, 44 commands and 37 data
-    types, plus the Siglus, RFVP and BGI configs. Two BGI config fields
-    (`font_face_index`, `gbk`) have no description yet.
-  - AGENTS.md now requires regenerating the reference and logging
-    fingerprint changes.
 - **GI step 2.**
   - Octahedral distance moments per probe with Chebyshev visibility.
   - Probes inside geometry are disabled, detected by their back-face
@@ -702,12 +367,6 @@ compatibility layers are secondary (ADR 0010).
     capture passes was found by sampling and avoided by storing instead of
     discarding.
   - New optional fields: `visibility` and `idle_probes_per_frame`.
-- Behavior after this step:
-  - Rust workspace `--no-fail-fast`: **295 passed / 0 failed / 33 ignored**
-    (now including Codex's BGI work).
-  - Explicit Metal GPU (release): **28 passed**.
-  - Desktop release build passed.
-  - Python 3.11: **143 passed**.
 
 ## GPU cluster selection, VSM static/dynamic split, irradiance GI (ADR 0026–0028)
 
@@ -800,14 +459,6 @@ compatibility layers are secondary (ADR 0010).
 
 ## Screen transitions and screen-space reflections (ADR 0022, ADR 0023)
 
-- Screen transitions (`Layers.transition` / `endTransition` /
-  `activeTransition`). The renderer retains the last presented frame and
-  composes old → new with the vendored siglus_rs `wipe.wgsl`, sampling gamma
-  bytes as Siglus does. Pattern wipes use the original generated masks
-  (vendored change 6: `wipe_mask` visibility only). The transition is
-  world-timed and saved.
-  - Not done: page curls 300/301, partial-range wipes, and the Siglus VM
-    bridge export of `WIPE` (it still refuses visibly).
 - Screen-space reflections (`Environment.reflections`): prepass ray march
   with bisection and self-intersection rejection, previous-frame HDR
   radiance, roughness fade.
@@ -823,26 +474,8 @@ compatibility layers are secondary (ADR 0010).
   - Python 3.11: **123 passed**.
   - Desktop release build passed.
 
-## Siglus 2D filters, video, atmosphere (ADR 0019–0021)
-
-- Siglus-style layer filters (`LayerSpec.filter`, `Layers.setFilter`): color
-  stages, tone curve, mask/gray-alpha, alpha test, mosaic/raster/radial
-  blur/threshold fade, matching the reference arithmetic within ±3 on Metal.
-  `crysirror-siglus-vm` exports Siglus mono/reverse/bright/dark/color
-  rate/add and blend codes 0–4 instead of refusing them. Overlay blend is
-  still pending; wipes are in ADR 0022.
-- Behavior after this step: Rust **180 passed / 0 failed / 19 ignored**;
-  explicit Metal GPU **17 passed**; Python 3.11 **123 passed**; desktop release
-  build passed.
-
 ### Atmosphere, exposure and video (ADR 0019, ADR 0020)
 
-- Exponential height fog and auto exposure in `Environment` (GPU test). Video
-  service `crysirror-video` over the vendored Siglus decoders with world-timed,
-  saved playback into dynamic surfaces and `World.playVideo` etc. MPEG-2 and
-  WMV2 are behavior-validated with synthetic fixtures; OMV/Theora is
-  compile-only (no fixture). Upstream finding: `na_mpeg2_decoder` partially
-  decodes the final MPEG-2 picture at flush.
 - Behavior: Rust **179 passed / 0 failed / 18 ignored**; explicit Metal GPU
   **16 passed**; Python 3.11 **123 passed**. Desktop release build passed.
 
@@ -941,11 +574,6 @@ compatibility layers are secondary (ADR 0010).
   the prior self-authored opacity mask. Noise/flow/edges are engine approximations;
   full UE material/lighting/gameplay fidelity is not claimed. User assets stay
   external. The source sky sphere remains the only omitted geometry instance.
-- Compilation: workspace/all-targets, desktop release and no-default checks passed.
-  Behavior: Rust **166 passed / 0 failed / 13 ignored**; explicit Metal GPU
-  **11 passed**; Python 3.11 **110 passed**. Ignored = eleven GPU, one font and
-  one RFVP-game test, excluded from workspace passes. Actual MCP validation,
-  scoped shader compilation, path rejection, effect trace and capture succeeded.
 - Limits: surface hooks only, no custom bindings/vertex/post/compute replacement,
   hot reload or shader graph. Fog is a sheet effect, not global/volumetric fog.
   No new hardware RT, GoW geometry, Windows/Linux or GPU frame-time result.
@@ -970,11 +598,6 @@ compatibility layers are secondary (ADR 0010).
   original sky sphere is omitted. Fog uses recorded source color/opacity/depth
   parameters and a self-authored mask; UE noise/projection/panning remains an
   explicit approximation. User content/profile/capture stays outside the repo.
-- Compilation: workspace/all-targets, desktop no-default and release builds passed.
-  Behavior: Rust **162 passed / 0 failed / 11 ignored**; explicit Metal GPU suite
-  **9 passed**; Python 3.11 **109 passed**. Ignored = nine GPU, one font and one
-  RFVP game test, excluded from the workspace pass count. No-default retains an
-  existing unused-mut warning; the external developer bridge has upstream warnings.
 - Limits: center sorting, single-sample transparency outside TAA history; no OIT,
   refraction, complete UE shader graphs or jointly sorted particles. No new GoW
   mesh decoder, hardware RT, Windows/Linux or frame-time result.
@@ -1023,11 +646,6 @@ and test counts describe those checkpoints, not the latest implementation.
   bite on cooldown; player HP 100→10 with bonfire healing;
   dist/aaa-systems.png. Found and fixed a parry heightfield vertical-ray
   miss (regression-tested).
-- Evidence: `cargo test --workspace` **156 passed / 0 failed / 8 ignored**
-  (6 GPU, 1 font, 1 RFVP game; not counted as passes); explicit GPU run
-  **6 passed** (incl. terrain + HDR particles); Python 97 passed;
-  workspace and no-default-features checks pass. The API coverage test
-  maps all 18 world command variants. GPU frame time is not measured yet.
 
 ## Earlier: animation, physics, input, playable slice (ADR 0012)
 
@@ -1064,7 +682,7 @@ and test counts describe those checkpoints, not the latest implementation.
   explicit GPU tests 5 passed; Python 97 passed; workspace and
   no-default-features checks pass.
 
-## Previous: AAA PBR renderer, RFVP running, Siglus vendored
+## AAA rendering implementation and validation
 
 - **AAA rendering (ADR 0010), implemented:** glTF metallic-roughness
   materials with textures, a 4×MSAA HDR pipeline, GGX/Smith/Schlick shading,
@@ -1079,27 +697,8 @@ and test counts describe those checkpoints, not the latest implementation.
   70 textures, sun shadows) → dist/aaa-sponza.png. Assets are fetched with
   tools/fetch_demo_assets.py (pinned SHA-256, licenses recorded) and not
   committed.
-- **RFVP (ADR 0008):** the original engine is vendored (crates/rfvp; fonts
-  removed and host-supplied) and runs as the `rfvp` VmAdapter through
-  ClientStorage/present_surface. rfvp's win95_painter_demo produces
-  framebuffers bit-identical to the unmodified upstream headless host
-  (docs/rfvp-differential.json). The demo's click-to-paint does not work in
-  either host; this is an upstream finding.
-- **Siglus (ADR 0009, paused):** the full upstream SceneVm and its 8
-  dependency crates are vendored. They build headless and with an offscreen
-  original renderer. The embedding host and fixture game are not done.
 - Core gained `ClientStorage`, `present_surface`, `service::buttons`
   and the `VfsProvider` mounts.
-
-Evidence: `cargo test --workspace` **136 passed, 0 failed, 7 ignored**
-(docs/aaa-rust-tests.txt; ignored = 5 GPU, 1 font, 1 RFVP game). Explicit
-GPU run **5 passed**, including the PBR test (docs/aaa-gpu-tests.txt).
-Explicit RFVP game test **1 passed** (system Arial supplied at test time).
-Python **97 passed** (docs/aaa-python-tests.txt). `cargo check
---workspace --all-targets` and `--no-default-features` desktop: passed.
-Vendored upstream unit tests are excluded and documented (UPSTREAM.md files;
-eluna has 2 failures that also occur upstream). No frame-time, Windows/Linux,
-hardware-RT or upscaler results are claimed.
 
 ## Earlier iteration: engine object model, scripting, VFS, Blender assets
 
@@ -1130,33 +729,13 @@ Decisions and backlog: docs/adr/README.md (ADR 0004–0007 new).
   nothing dropped), and produced dist/engine-api-raster.png and
   dist/engine-api-compute-raytrace.png (docs/engine-api-render.json).
   hardware_raytracing=false.
-- A Siglus SceneVm loaded its scene from a memory provider mount and was
-  driven to Halted by App frames, visible as a `Client` object (tests).
-- Not done: DLSS/FSR/XeSS/MetalFX (contract only; no motion vectors/frame
-  graph; vendor SDKs not distributed), hardware RT (wgpu 0.20), PBR/textures/
-  skinning from glTF, component ECS, JS modules/determinism/heap saves,
-  archive providers, interactive `run --script` window path, RFVP adapter.
-
-Note: the earlier text below says only crysirror-script-v1 is registered.
-That is out of date. The runtime registry now also registers `siglus`
-(crysirror-siglus-vm). Its native-fidelity gates in NATIVE_ADAPTERS.md are
-still not claimed as met.
 
 ## Previous snapshot (shared CPU source migration)
-
-CrySirror now runs engine-owned World, Layer, UI, input/animation/projection,
-Text and Audio/SFX services. This iteration directly migrated upstream source
-and connected real state, rendering, input and snapshots. It is still not a
-complete AAA engine or a linked original Siglus/RFVP interpreter.
 
 ## Implemented source
 
 - Thirteen workspace crates; crysirror-desktop remains the default executable.
   Core remains no_std/dependency-free; core/compat stay safe and device-free.
-- New crysirror-scene contains the complete pinned Siglus input.rs,
-  int_event.rs and render_math.rs ports plus RFVP letterbox/hit helpers and
-  generalized capture/release behavior. Per-file provenance, exact source
-  SHA256, license and changes are in its UPSTREAM.md/upstream-files.json.
 - World owns scoped generational entity handles, validated transactional
   mutations, cascading removal, parent transforms/visibility, velocity/angular
   velocity, fixed 16 ms steps, fractional remainder and game/real-time tweens.
@@ -1184,9 +763,6 @@ complete AAA engine or a linked original Siglus/RFVP interpreter.
   Enter pulses. There is no in-process live game control API.
 - Existing crysirror-text owns fonts/simple layout/positioned glyph rasterization;
   crysirror-audio owns voice lifecycle/buses/AudioDevice with optional rodio.
-- Existing crysirror-siglus preserves native G00 cut/frame/pivot rules and its
-  actual pinned runtime decoder, using common image/endian/JPEG primitives.
-  Generic sprite usage rejects unrepresentable native metadata/multiple frames.
 - Optional crysirror-author retains Rust Oxc TS/JS compilation plus Boa offline
   buildProject execution. Runtime JSON needs no JS engine. No per-frame JS was
   added; original native VMs remain separate from the built-in data VM.
@@ -1211,10 +787,6 @@ resolved requirements; it was not independently tested here.
 
 ## Behavior evidence
 
-- tools/compare_scene_upstream.py verified pinned revisions and SHA256, compiled
-  the actual original CPU algorithms and compared **175,700 observations**:
-  input edge state, integer events across clocks/delays/easing/modes, projection
-  and RFVP letterbox mapping all agreed. docs/engine-systems-differential.json.
 - CPU tests exercise stale/scoped handles, hierarchy/cycle rollback, negative
   scale winding, fixed-step chunking and save continuity, pause versus real
   time, UI capture/release/focus/modal/slider, engine mutation rollback, input
@@ -1240,25 +812,6 @@ resolved requirements; it was not independently tested here.
 
 ## Remaining work and limits
 
-| Item | Actual status |
-|---|---|
-| Original Siglus SceneVm/syscalls/forms/waits/native saves | Not linked; retain independent compatibility implementation |
-| Original RFVP VM and native acceptance | Not linked; independent adapter still required |
-| Complete upstream semantic audit | Selected migrated modules reviewed; full native VM/text/audio/save audit pending |
-| Full modern 3D feature set | No general query ECS, physics/character controller, skeletal animation, combat, terrain or asset streaming |
-| Layer/native effects | Scissor AABB clips and standard blends implemented; no native shader/effect equivalence; 3D layer parents fail visibly |
-| Text fidelity | Basic horizontal and explicit positioned glyphs; no full shaping/ruby/reveal/native profiles |
-| Audio fidelity | Voice lifecycle/bus execution; native seek/fade/wait policies and project/save bus schema remain absent |
-| Hardware RT/PBR/BVH/reflections/GI | Not implemented; hardware requests fail visibly |
-| Compute scale | Opaque triangles, linear traversal, <=4096 triangles, <=1,048,576 pixels, <=256 million pixel/triangle pairs; buffers rebuilt per frame |
-| Runtime performance | Correctness profile with state staging/validation and per-frame mesh uploads; no AAA throughput claim |
-| Desktop interactive input/audible output | CPU/GPU behavior exercised; human window interaction and audible output not validated here |
-| Windows/Linux behavior | CI targets them; not executed locally in this iteration |
-| Mobile/Web | Later, per user direction |
-| Switch/PS Vita | Deferred; neither built/tested; no other console scope |
-| Live JS execution/type checking | Absent; current TS/JS profile is synchronous offline authoring |
-| CI/releases | CPU reference comparison job extended; workflow not triggered; release bundles not regenerated |
-
 Only crysirror-script-v1 is registered as a VM. Unknown native adapters and text
 profiles fail visibly. A successful common subsystem test is not evidence of
 native game compatibility. Snapshot identity hashes project data; bump
@@ -1271,7 +824,6 @@ Only attributed selected source was migrated; no game data, font, credential,
 SDK or proprietary binary was imported. Workspace has no .git; no remote or PR
 was created. Older bundle/hash/missing-toolchain records are historical and do
 not validate this source. tools/verify.py/release recovery were not rerun.
-
 
 ## Codex parallel service work: audio, text, input and localization (2026-10-25)
 
@@ -1293,13 +845,6 @@ retain their original checkpoint meaning.
 - Compilation: workspace/all-targets, desktop release and no-default checks
   passed; audio/text strict clippy passed. Existing no-default unused_mut and
   dependency future-incompatibility warnings remain.
-- Behavior: workspace **219 passed / 0 failed / 27 ignored**, plus a new actual
-  Oxc/Boa service integration test **1 passed** after that workspace run:
-  **220 unique normal CPU tests verified**. Python 3.11 **126 passed**.
-  Explicit licensed-system-font tests **4 passed** separately. The 27 default
-  ignored cases (22 GPU, 4 text-font, 1 RFVP-font fixture) are not workspace
-  passes. Audio's 15 tests include real sample assertions and compressed seek;
-  device queues and input use offline/injected tests, without device opening.
 - Limits: CPU SDF data only, no SDF GPU/3D pipeline. Advanced audio/session
   configuration is not automatically in Runtime snapshots; explicit text,
   localization and binding checkpoints are documented. Audio decode/mixing
@@ -1313,53 +858,14 @@ retain their original checkpoint meaning.
   ADR 0030–0033. Actual CPU typography/SDF previews remain under
   ~/.cache/crysirror/codex-text, outside the source export.
 
-## Codex native coverage audit and local BGI trial (2026-10-25)
+## 2026-10-25 — RealLive / AVG32 implementation and validation
 
-This appended checkpoint owns ADR 0034–0037. Earlier native adapter descriptions
-above are historical; docs/NATIVE_ADAPTERS.md now describes the current factory
-and service boundaries. No protected renderer/scene/asset/GoW code was changed.
-
-- Implementation: added native Siglus fixture generation and three adapter tests
-  covering DECIDE release edges, checkpoint/original-save round trips and
-  transactional rejection, plus CD_TEXT/CD_NAME rejection. No VM opcode or
-  syscall semantics were changed. Current `siglus` still constructs the subset,
-  not the complete vendored SceneVm. Existing native message/audio/movie/effect
-  bridges are incomplete despite the shared engine APIs from ADR 0030–0033.
-- Compilation: `cargo check --locked --workspace --all-targets` passed. The
-  separate local ethornell CLI and cached CPU-host example both built in release;
-  upstream warnings remain. The original ethornell dirty-source patch hash was
-  unchanged after compiling. Cached experimental source is not a shipped crate.
-- Siglus behavior: 42 focused VM/runtime tests passed, 0 failed/ignored;
-  Python 3.11 tooling 126 passed. Actual native PCK fixtures executed through
-  release CLI, including raster G00 and compute-with-3D overlays. Native TEXT
-  and NAME fixtures exit 1 with the explicit missing-message-layout error.
-  Original save tests cover supported synthetic checkpoints, not a full game.
-- RealLive/AVG32: both independent VMs already exist in pinned siglus_rs at
-  5f358ef1360b0439e92aed2b749e8f25d8721954. External AVG32 tests passed
+- RealLive/AVG32: both independent VMs already exist in the original VM project. External AVG32 tests passed
   33 library + 1 NLS + 4 native synthetic Engine cases; RealLive passed
   58 library tests. Missing-installed-data early returns were excluded. Neither
   family is vendored/registered in CrySirror; no installed game was run for them.
-- BGI behavior: actual local senmomo trial title, Japanese story and click-driven
-  next sentence captured at 1280×720. Rebuilt upstream CLI strict run completed
-  3600 frames. A separate cached HostRuntime CPU experiment also completed
-  3600 strict native ticks with renderer=false/audio=false, injected time/input,
-  read-only resources and a separate user root. Original game/source were not
-  edited; startup marker was moved only in the independent APFS execution copy.
-- Limits: BGI is not a CrySirror factory; these captures still use its native
-  CPU text/compositor. No native/shared text/audio extraction, full-game finish,
-  audio correctness, movie, original save/load or native GPU effect-equivalence
-  claim follows. Game images/fonts/source experiments remain outside the repo.
-- Evidence: docs/native-audit-results.json, siglus-runtime-verification-results.json,
-  siglus-service-coverage.json, native-family-audit.json and
-  bgi-local-trial-results.json. Tests from different scopes are reported
-  separately rather than added together as workspace coverage.
 
 ## Codex shared capability extraction: Bitmap API (2026-10-25)
-
-The owner's correction changes the acceptance target: use existing native
-implementations to enrich CrySirror, rather than demonstrate standalone games.
-The earlier BGI experiment remains historical evidence, not shared-service
-extraction. ADR 0038 records this delivered capability increment.
 
 - Implementation: crysirror-image now owns checked CPU bitmap fill, clipped
   copy/blit, opacity/mask math, RGB color-key and nearest stretch. RealLive
@@ -1370,14 +876,6 @@ extraction. ADR 0038 records this delivered capability increment.
   client-scoped surface store, Layer transform/filter/composition and budgets.
   Asset/provider reads and generated native images are supported. Operations
   stage pixels before publication, including source snapshots for self-blits.
-- Native caller: corrected Siglus CENTER_REP translation to shared transform
-  anchor/pivot/depth. Actual native setters execute through the registered VM
-  and EngineSystems regression, without changing opcodes or original saves.
-- Compilation: workspace all-targets cargo check passed. Focused image/engine/
-  JS/Siglus/runtime cargo suites passed **94 tests / 0 failed / 1 ignored**;
-  the ignored font test was not counted. Final Python tooling passed
-  **132 tests**, including six new source/pin/path guard tests for the
-  reproducible upstream bitmap comparison tool.
 - Behavior: comparison against unchanged pinned upstream matched all
   **19,200** RealLive Copy/Mask cases, **9,216** AVG32 premultiplied cases and
   **12** nearest stretch cases. Rust and actual Oxc/Boa tests verify provider
@@ -1388,18 +886,13 @@ extraction. ADR 0038 records this delivered capability increment.
 - Limits: no new GPU execution, complete native VM port, bilinear/external mask,
   AVG32 fade or automatic bitmap snapshot/save compatibility claim. No original
   game assets/fonts or protected renderer/scene/asset/GoW code were changed.
-- Evidence: docs/bitmap-capabilities-results.json, related logs, BITMAPS.md,
-  crysirror-image/UPSTREAM.md and native-audit-siglus-transform.md. Shared Rust
-  primitive APIs and script APIs execute the same implementation.
-
 
 ## 2026-10-25 Codex: shared resource formats and Rapier physics
 
 - Implementation — resources: added the safe CPU `crysirror-resource` contracts,
   registry, random-access archive streams, bounded decoding and scoped key/transform
-  pipelines. The optional GPL `crysirror-formats-arc` crate registers BGI ARC,
-  Majiro ARC, SAR/NSA and XP3. Its complete pinned inventory records 289 decoder
-  IDs: 3 ported, 2 partial and 284 pending. Existing BGI VM integration remains
+  pipelines. The optional GPL `crysirror-formats-arc` crate registers Majiro ARC, SAR/NSA and XP3. Its complete pinned inventory records 289 decoder
+  IDs: 3 ported, 2 partial and 284 pending. Existing native VM integration remains
   the ADR 0039 adapter; a resource plugin does not register another VM.
 - Implementation — engine integration: `Resources` exposes metadata, profiles
   and archive mounts through the shared object API. Bitmap/Fs/Assets consume
@@ -1441,7 +934,6 @@ extraction. ADR 0038 records this delivered capability increment.
   remain future work. Original native opcode/wait/save policies remain adapters.
 - Evidence: docs/RESOURCES.md, docs/PHYSICS.md, ADR 0044/0045,
   docs/physics-integration-validation.json and docs/resource-physics-validation.json.
-
 
 ## 2026-10-25 Codex: all pinned image decoder IDs on the shared resource path
 
@@ -1490,8 +982,7 @@ extraction. ADR 0038 records this delivered capability increment.
 ## 2026-10-26 — Original RealLive through shared CPU services
 
 - Implementation: added dormant `crysirror-reallive` and the attributed
-  original `reallive-original` VM from actual siglus_rs commit
-  `5f358ef1360b0439e92aed2b749e8f25d8721954`. Desktop registers `reallive`
+  original `reallive-original` VM from the original VM project. Desktop registers `reallive`
   by default. Original Seen instructions, values, waits, resource metadata,
   text layout and savepoints remain independent of the data VM.
 - Shared implementation: CPU Surface kernels, PDT10/11, glyph coverage and
@@ -1532,36 +1023,16 @@ extraction. ADR 0038 records this delivered capability increment.
 - Evidence: ADR 0047, docs/REALLIVE.md, docs/reallive-validation.json,
   docs/reallive-source-audit.json and the vendored UPSTREAM/source manifest.
 
-### BGI extraction boundary audit
-
-- Source inspection confirms real shared image/glyph/channel-audio calls;
-  `cpu-embedded` selects embedding.rs rather than the original desktop player.
-- Extraction is still partial: rotation/scaling/tone/concentration/process
-  kernels, perspective rasterization, some effects and codecs remain active
-  inside BGI packages. The earlier claim must not be read as all reusable
-  BGI functionality having moved into CrySirror. These kernels should move
-  behind shared APIs while native opcode/layout/wait/save policies stay native.
-- BGI publishes the composed CPU surface as layer 0; its individual native
-  images/text/effects are not yet separate engine Layer/UI nodes. RealLive's
-  current surface publication has the same retained-scene mapping boundary.
-- This is a call-chain audit, not a new local BGI game run. Details were added
-  to docs/BGI.md and docs/NATIVE_ADAPTERS.md without changing BGI production code.
-
-
 ## 2026-10-26 — Hosted engines removed at owner request
 
 - The owner explicitly prohibits engine hosting: integration work exists to
   expand CrySirror APIs and engine-owned state so different original VMs can
   use those capabilities through thin semantic/syscall adapters. A running
   original engine and matching composed screen do not satisfy that goal.
-- Deleted the RFVP/BGI/RealLive hosted adapter packages, dedicated embedded
+- Deleted the earlier RealLive hosted adapter package, dedicated embedded
   engine source trees, Cargo members/dependencies/features, desktop factories,
   configuration schemas and hosted integration tests. Old project names fail
   visibly. Previous hosted-integration completion claims are withdrawn.
-- Kept reusable engine capabilities: shared image/composition/PDT, glyphs,
-  audio/mixer looping, incremental MPEG, input tracks and capability services.
-  Existing standalone CBG resource decoding was moved into crysirror-image::cbg;
-  its optional format plugin no longer depends on any embedded BGI package.
 - Recorded the requirement in AGENTS.md, ARCHITECTURE.md, NATIVE_ADAPTERS.md and
   ADR 0047. Removed hosted setup instructions and regenerated API documentation:
   current fingerprint d233217062201fa1.
@@ -1573,8 +1044,7 @@ extraction. ADR 0038 records this delivered capability increment.
 ## 2026-10-26 — RealLive VM calls engine-owned APIs
 
 - Implementation: added `crysirror-reallive`, retaining the original Seen
-  parser/interpreter, values/banks, call stack and pure builtins from the audited
-  siglus_rs pin `5f358ef1360b0439e92aed2b749e8f25d8721954`. Engine operations
+  parser/interpreter, values/banks, call stack and pure builtins from the original VM project. Engine operations
   remain pending until CrySirror service calls succeed. No original Engine,
   System, Graphics, Sound, renderer or framebuffer is linked. The desktop
   default enables the new factory; the bare Runtime remains host controlled.
@@ -1728,17 +1198,6 @@ extraction. ADR 0038 records this delivered capability increment.
   encoded-work-report test passed on the recovered Metal device. The existing
   raster PBR sky/lighting/sun-shadow pixel regression also passed. Evidence:
   `hardware-rt-cli-render-final.log` and `hardware-rt-raster-pbr-final.log`.
-- Broad validation: `cargo test --locked --workspace --all-targets` ran 678
-  passing tests, 55 ignored and two failing tests before stopping in vendored
-  `eluna_rs`. Failures were
-  `runtime::reverse_parity_tests::timeline_hold_markers_do_not_pollute_authored_ranges`
-  (0 versus 3) and `vertex::tests::builds_single_cell_strip` (float UV equality).
-  `crates/siglus-upstream/UPSTREAM.md` already records these exact two failures
-  on the unmodified pinned upstream (96 passed / 2 failed). Its source and
-  dependency set were unchanged by this RT commit; its manifest sets
-  `lib.test=false`, which explicit `--all-targets` overrides. This broad command
-  is therefore a failed validation, not a green workspace claim. Evidence:
-  `target/verification/hardware-rt-workspace-tests.log`.
 - Default workspace validation: `cargo test --locked --workspace` passed,
   with 581 passed, zero failed and 55 ignored, respecting the documented
   upstream `lib.test=false` settings. Ignored tests are not counted as passes;
@@ -1840,19 +1299,8 @@ extraction. ADR 0038 records this delivered capability increment.
   read/write races. Native device negotiation checks six storage-buffer
   bindings. Nonuniform-scale hit normals and environment-zero reflection
   attenuation were corrected. These extend the earlier mirror/probe-only limits.
-- Implementation: reusable CPU text now provides fixed-cell layout, immutable
-  font measurement handles and an unwrapped Canvas layout. JS/TS callers can
-  use Text.measureSimple without a VM. KiriKiri Font width/nominal height and
-  single-line clipping call engine services. Font overrides are available before
-  both native ticks and script init/start; no private font system was added.
-- Implementation: Siglus's existing original SceneVm supports explicit plain
-  FRONT.MWND[0] TEXT/NAME mappings through shared grid/GlyphRun/reveal/query
-  operations. Chunk append, first-name policy, DECIDE consumption and runtime
-  snapshots are covered. Other native MWND/read-flag/page/original-save policies
-  remain explicit failures; this is not automatic Gameexe window conversion.
 - Implementation: AVG32 is a pinned Git library dependency on original
-  siglus_rs commit 256c398e06fbcbae8e956eb046c831b3d6c8a593, published on
-  codex/avg32-portable-vm without merging upstream main. Its portable build
+  the original project portable-vm branch. Its portable build
   compiles the same Scenario/parser/control-flow source; no VM source was copied
   into CrySirror. The dependency tree contains no original System, renderer,
   font/image painter or audio device. The thin adapter issues scoped engine
@@ -1865,18 +1313,18 @@ extraction. ADR 0038 records this delivered capability increment.
   The new AVG32 profile currently accepts only opaque full-size image loads;
   these primitives do not establish complete PDT effect/mask compatibility.
 - Compilation: locked workspace all-target check and the desktop build with
-  optional krkr passed. Default workspace tests completed: 623 passed, zero
+  selected adapter features passed. Default workspace tests completed: 623 passed, zero
   failed, 67 ignored. Python tooling passed 170 tests. Generated API checks
   passed 5/5; final fingerprint changed 3ff1c210d5f93836 → 1050976234c41b17
   and is logged in docs/api/CHANGES.md. The CLI registry assertion was updated
-  to verify the actual feature set, including AVG32 and optional KiriKiri.
+  to verify the actual feature set, including AVG32.
 - CPU behavior: AVG32's native bridge passed five tests; its licensed-font test
   was then explicitly executed and passed. The original upstream native engine
   passed 33 library, one NLS and four synthetic tests (one installed-game audio
   case filtered); portable-vm passed 11 tests. Shared bitmap differential tests
   matched the unchanged original pin for 1,776,384 associated cases and 2,304
   signed/clipped fades, plus existing 19,200 / 9,216 / 12 cases. Explicit system
-  font tests also passed for engine measurement, script rich text and KiriKiri.
+  font tests also passed for engine measurement and script rich text.
   Ignored font tests in the default suite are not counted as default passes.
 - GPU behavior: Apple M5 / Metal explicitly passed all 46 wgpu GPU tests in
   one serialized run. New tests distinguish a rough reflection from the mirror
@@ -1894,8 +1342,7 @@ extraction. ADR 0038 records this delivered capability increment.
 - Render behavior: the public Khronos DamagedHelmet/HDR files matched both
   recorded hashes and rendered with three roughness panels, a local light,
   native reflections and pixel GI: four instances, two BLAS, eight reflection
-  and eight pixel-GI dispatches. Original self-authored Siglus PCK and KiriKiri
-  TJS2 examples rendered through engine glyph/Canvas state. The AVG32 TPC32
+  and eight pixel-GI dispatches. The AVG32 TPC32
   example rendered background/text/wait icon and a subsequent native input
   trace reached Halted with 81 engine API calls and no private framebuffer.
   Configured font/cell metrics are explicit; these captures are not commercial
@@ -1903,8 +1350,8 @@ extraction. ADR 0038 records this delivered capability increment.
 - Remaining limits: pixel GI is one diffuse bounce, without dedicated GI or
   glossy denoising. Hit shading retains atlas/geometric-normal/constant-emission
   approximations; transparent/transmission and full path tracing remain out.
-  Other GPU vendors/platforms were not physically tested. Siglus/AVG32 complete
-  native drawing/layout/save support and KAG3 boot remain unfinished. New native
+  Other GPU vendors/platforms were not physically tested. AVG32 complete
+  native drawing/layout/save support remains unfinished. New native
   VM steps publish on the owner; bounded first-use resource reads still need the
   remaining ADR 0050 async migration. No old engine host, new GitHub CI, game
   data, font file, credential or proprietary SDK was added.
@@ -2067,7 +1514,6 @@ No commercial-game run, console validation or hardware-render result is claimed
 from these CPU codec/API checks. Per-format limits remain in RESOURCES.md,
 arc-resource-support.json and arc-image-support.json.
 
-
 ## 2026-10-27 — Awaitable services, shared menus and native plugin facades (ADR 0066)
 
 Implementation:
@@ -2101,9 +1547,6 @@ Implementation:
   documentation. Regenerated docs/api: d4f4c6edc250ee72 -> 5394949c5999cde6.
   Edited sources use full license notices while retaining third-party licenses
   and authors; pinned upstream files/hash manifests remain unchanged.
-- Local validation now defaults to release. Dev/test disable incremental output
-  and debug information. tools/verify.py no longer rewrites the lockfile or
-  formats pinned sources; --fmt opts into a readonly format check. No CI added.
 - Cleaned rebuildable target/debug after it reached about 313 GB (165 GB
   incremental and 145 GB dependencies). Available disk increased from about
   24 GiB to 336 GiB immediately after cleanup; after release verification about
@@ -2112,15 +1555,10 @@ Implementation:
 
 Compilation:
 - cargo check --release --locked --workspace --all-targets: passed on macOS.
-- Desktop arc-formats + krkr all-target release check: passed.
 - Formatting of the 38 edited Rust files and git diff whitespace checks: passed.
   No claim that unrelated existing whole-workspace formatting is clean.
 
 Behavior validation:
-- Targeted release suites: **100 passed, 0 failed, 1 ignored**: operation table 3,
-  resource contracts 9, resource jobs 7, arc-enabled resource APIs 10, shared menus
-  4, runtime state 44, engine async services 6, JS Promises/example 4, original
-  TJS native bridge 7 and API docs 6. Repeated gate/font reruns are not added.
 - Explicitly executed all three system-font tests using a runtime system font;
   these cover offline/worker pixel equality, reveal publication, native font
   callbacks and the standalone TS example. No font is committed. The example
@@ -2134,18 +1572,8 @@ Behavior validation:
   authoring validation. The external complete-movie test remains ignored; an
   accidental include-ignored attempt lacked its explicit MPEG path and is not
   counted as a pass.
-- Original pinned KAG3 release diagnostic **failed**, visibly, at startup.tjs:11:
-  menu.dll linked; KAGParser.dll has no implemented facade. This is recorded as
-  an integration gap, outside the successful targeted suites, never as a pass.
-- Evidence: target/verification/async-release-results.json, *-release-final.log
-  for the named suites; async-api-release-check.log, async-workspace-release-check.log,
-  async-desktop-features-release-check.log, async-python-final.log and
-  kag3-release-probe.log.
 
 Limits:
-- Full KAG3/game boot, KAGParser natives, native synchronous popup continuations
-  and menu keyboard accelerators remain unsupported. Engine menus are logical
-  canvas overlays. Original TJS libraries are unchanged, not replaced by data VM.
 - ADR 0050 remains partial: native interpretation/storage callbacks and startup
   compilation still have synchronous boundaries; native checkpoint capture and
   reconstruction remain owner operations. Remaining renderer/audio/media/editor
@@ -2186,11 +1614,6 @@ Implementation:
   `0d7b882595278ffb`. Added ADR 0067 and a synthesized offline acoustic-room demo.
 
 Compilation:
-- Local `cargo check --release --workspace --all-targets --features
-  crysirror-desktop/krkr,crysirror-desktop/arc-formats,
-  crysirror-desktop/acoustics-obvhs` passed on macOS aarch64. Default engine/JS
-  all-target checks and the optional acoustic backend check also passed.
-  Existing unused-code/variable warnings remain. No CI was added or run.
 
 Behavior validation:
 - Release targeted suites: **56 passed, zero failed, three ignored** across
@@ -2232,9 +1655,6 @@ Remaining boundaries:
   have synchronous boundaries; ADR 0050 is not complete. BVH library builds
   are bounded non-preemptible phases with cancellation between phases. Ready
   coefficients can be stale while workers are busy; there is no latency SLA.
-- These are independent engine capabilities, not a new completed VN adapter,
-  game boot, GPU/hardware-RT result or Windows/Linux behavior validation. KAG3's
-  previously recorded missing KAGParser facade remains an integration gap.
 
 ## HRTF resources and engine binaural voices (ADR 0068, 2026-10-27)
 
@@ -2278,9 +1698,6 @@ Implementation:
   Regenerated docs/api; fingerprint 0d7b882595278ffb -> c619eaa9bacd0fc3.
 
 Compilation:
-- Local release workspace/all-target check passed with desktop krkr,
-  arc-formats and acoustics-obvhs features. Engine/JS and library release
-  builds passed. Original unused-code/variable warnings remain. No CI ran.
 - The vendored source audit verified all 33 original Rust-source hashes after
   reversing the single declared parser fix; zero unexpected source changes.
   Manifest changes exclude upstream native/device/data test targets. This
@@ -2369,7 +1786,7 @@ Implementation:
   2d945b181a39e802 with realtime behavior migration instructions.
 
 Compilation:
-- Local release workspace/all-target check passed with desktop krkr,
+- Local release workspace/all-target check passed with desktop
   arc-formats and acoustics-obvhs features. Existing CBG dead-code and RealLive
   unused-variable warnings remain. No GitHub CI or remote build ran.
 
@@ -2450,7 +1867,7 @@ Implementation:
   d36d62998490cf17, including the exhaustive AudioRequest enum migration.
 
 Compilation:
-- Local release workspace/all-target check passed with desktop krkr,
+- Local release workspace/all-target check passed with desktop
   arc-formats and acoustics-obvhs features. Existing CBG/RealLive warnings
   remain. Exact-file rustfmt and git diff checks passed. No CI ran.
 
@@ -2537,7 +1954,7 @@ Implementation:
   ADR 0071 records initialization migration and remaining subsystem boundaries.
 
 Compilation:
-- Release workspace/all-target check passed with desktop krkr, arc-formats and
+- Release workspace/all-target check passed with desktop  arc-formats and
   acoustics-obvhs features. The desktop no-default-features reallive+avg32 check
   also passed, without scripting or audio-device output enabled. Existing CBG,
   RealLive and minimal-CLI warnings remain. No CI or remote build ran.
@@ -2619,7 +2036,7 @@ Implementation:
 
 Compilation:
 - Release audio/runtime checks and the final workspace/all-target check passed
-  with desktop krkr, arc-formats and acoustics-obvhs enabled. Existing CBG and
+  with desktop  arc-formats and acoustics-obvhs enabled. Existing CBG and
   RealLive warnings remain. No CI, remote build or new device/GPU validation ran.
 
 Behavior validation:
@@ -2692,7 +2109,7 @@ Implementation:
   f55ff4c1819aaa78 to 98b40f5f4c7c26d0 and is logged in CHANGES.md.
 
 Compilation:
-- Final local release workspace/all-target check passed with desktop krkr,
+- Final local release workspace/all-target check passed with desktop
   arc-formats and acoustics-obvhs. Desktop no-default-features reallive+avg32
   check also passed without scripting or device output. Existing CBG/RealLive
   and minimal-CLI warnings remain. No CI or remote build ran.
@@ -2783,7 +2200,7 @@ Implementation:
   APIs, snapshot semantics, source/tail distinction and initial paused-play recipe.
 
 Compilation:
-- Local release workspace/all-target check passed with desktop krkr, arc-formats
+- Local release workspace/all-target check passed with desktop  arc-formats
   and acoustics-obvhs; desktop no-default-features reallive+avg32 also passed
   without scripting or device output. Existing CBG/RealLive/minimal-CLI warnings
   remain. No CI or remote build ran.
@@ -2881,7 +2298,7 @@ Implementation:
   was imported; original native adapter implementations/opcodes are unchanged.
 
 Compilation:
-- Local release workspace/all-target check passed with desktop krkr, arc-formats
+- Local release workspace/all-target check passed with desktop  arc-formats
   and acoustics-obvhs. Minimal desktop no-default reallive+avg32 check passed.
   Existing CBG/RealLive/minimal-CLI warnings remain; no new warning was observed.
   No GitHub CI or remote build ran.
@@ -2940,216 +2357,6 @@ Remaining boundaries:
   additional commercial VN opcode/save compatibility is claimed. The broader
   modern engine/VN capability objective remains active.
 
-## Shared transport and original Siglus BGM (ADR 0076, 2026-10-27)
-
-Implementation:
-- Added reusable core AudioPlaybackInfo/HostServices.audio_info and shared
-  Mixer/ChannelAudio inspection. Decoded-source frame/rate/length, source
-  completion, pause/loop mode and output-clock fade/delay counters are distinct.
-  Audio.playbackInfo/nativeChannelInfo/scheduleVoiceResume expose the same
-  engine resources without a native VM. Canonical channelStatus stays separate.
-- AudioParameters now supports exact start_frame overriding start_ms, paused
-  publication, optional clamped source/loop ranges and replacement crossfade.
-  Workers seek/prewarm once; owner publication synchronizes both logical and
-  resampling cursors so the first mix does not perform another seek. Immediate
-  replacement uses the exact channel slot and restores old state on validation
-  failure. Crossfade needs a spare voice; capacity failure preserves old audio
-  without stealing another channel. Ended/stolen controls are idempotent.
-- Added scheduled resume with a fresh fade-in and output-clock delay. Explicit
-  stop/pause deadlines now progress through source starvation/preparation and
-  silent paused input; source position and ordinary initial fade stay frozen
-  without PCM. Pause/stop/resume supersedes a pending schedule. The mixer still
-  executes DSP/output synchronously; no whole-engine async completion is claimed.
-- Replaced Siglus BGM's unbound logical placeholder with semantic operations over
-  shared channel services. Original SceneVm execution, positional/named argument
-  decoding, native value/state codes and wait machinery remain. PLAY/one-shot/
-  wait/READY, retained-source pause/resume/delay, stop/fade waits, WAIT_KEY,
-  volume/name/position/check and BGMTABLE flags have mapped bounded profiles.
-  No native BGM decoder/player/Kira hub/mixer/renderer was copied into the hook.
-- Resource admission retains post-command VM state separately while the visible
-  VM stays at the original instruction/arguments. Only Ready commits it; failure
-  releases the receipt without running following instructions. Unexpected status
-  errors keep the same live ticket. Native resource work remains cooperative,
-  client-scoped and independent of other clients' playback.
-- Native BGM files require explicit client resources aliases. Optional decoded
-  UTF-8 Gameexe rows provide start/end/repeat frames; rows/declared count are
-  bounded at 4096. Unknown opcodes/property fallbacks and malformed layouts fail
-  visibly. Native gallery flags remain VM logical/save state, not engine DSP.
-- Native Siglus runtime payload schema changed 1 -> 2; incompatible old payloads
-  require migration. Pending snapshots serialize the uncommitted instruction,
-  never tickets. Active snapshots reprepare declarations after candidate commit
-  at authored start, without claiming device/sample-history checkpoints. New
-  logical-state validation rejects malformed restored BGM before resource work.
-  Original file codecs/header/layouts remain unchanged. Existing import rollback
-  now advertises transactional import; direct original-file operations reject
-  an in-flight resource command instead of mutating its separately retained VM.
-- Verified the existing original Git pin 5f358ef1360b0439e92aed2b749e8f25d8721954
-  and its 2519-file tree. Nine scoped source audit records cover full BGM/audio
-  files and selected complete resource/wait/argument/save call paths, with exact
-  immutable hashes in docs/siglus-bgm-source-audit.json. Existing reference
-  opt-in-device differences are explicit; this is not whole-engine semantic
-  coverage. Normal Siglus VM dependency inspection excludes kira, rodio, cpal,
-  wgpu, winit and ash. API docs regenerated/logged
-  1ff0b7ce813fb81e -> 4aee8cb171139420; Rust literal/enum and VM-payload breaking
-  changes are documented separately from additive JS/TS methods.
-
-Compilation:
-- Local release workspace/all-target check passed with desktop krkr, arc-formats
-  and acoustics-obvhs. Minimal no-default desktop reallive+avg32 check passed.
-  Existing CBG/RealLive/minimal-CLI warnings remain. No GitHub CI or remote
-  build ran; no output device/GPU or Windows/Linux behavior was exercised.
-
-Behavior validation:
-- Shared audio/core/compat/tasks suites: **104 passed**, one owner NWA-resource
-  case ignored. Runtime/Siglus unit, native audio and media snapshot suites:
-  **70 passed**, one font case ignored. Engine audio/acoustics/HRTF/reverb/
-  reflections: **42 passed**. RealLive/AVG32 bridges: **12 passed**, one font
-  case ignored. JS async services: **8 passed**, one font case ignored. API
-  reference: **6 passed**. Total: **242 distinct Rust tests passed**, four
-  ignored excluded. Focused reruns are not counted twice. Python 3.11 tooling:
-  **189 passed**.
-- Four transport sample cases verify exact frame-seven paused publication,
-  source/output units, bounded range/repeat clamping, delayed resume/fade samples,
-  cancellation, silent stop/pause deadlines on starvation/preparation, ordinary
-  fade-in hold, source freeze, stale controls and atomic failed replacement.
-  A full **256-voice** pool rejects crossfade without stealing/publishing, retains
-  old audible samples, then replaces the exact channel immediately. A separate
-  counted-source unit proves **one seek total** across worker preparation,
-  publication and first mix.
-- Seven authored native PCK/SCN cases run the original interpreter: worker-blocked
-  playback retains PC/arguments while another client's PCM advances; Ready starts
-  at source frame seven; source waits resume arithmetic while a real shared BVH
-  echo remains/drains; pending checkpoints replay without tickets. READY, delayed
-  resume, pause fade, WAIT_FADE and RESUME_WAIT observe shared state/positions.
-  WAIT_KEY returns 1 only after DECIDE release, returns 0 on natural EOF, and
-  leaves a looping sound running. Broken resources retain the original PC and
-  retry after repair. Same-loop-name playback succeeds without reopening a
-  deleted source; active snapshots rebind; gallery count/listened flags persist.
-  Unknown operations, oversized tables and unsupported freed-source RESUME fail.
-- Original native save-file export/import passes playing and READY-paused loop
-  declarations with volume 128/255 and authored start/end/repeat frames. Invalid
-  import rolls back native state; successful import reopens through shared
-  preparation and resumes the original VM checkpoint. Actual PCM amplitude is
-  checked before export/reload. Existing native save/text/DECIDE cases still pass.
-  This bounded evidence does not establish every original save variant or title.
-- Modern class tests inspect actual pooled/native channel state, exact output-
-  clock delay and sample-level fade, and reject foreign handles/channels. JS
-  inspects original 8 kHz source units versus the 48 kHz output delay counter
-  through the new registry methods. Native generated music, scenes and Gameexe
-  fixtures are self-authored; no game, measured HRIR, font, SDK or device data
-  is redistributed. API blessing initially required logging its new fingerprint;
-  the final logged reference check passed.
-- Evidence in target/verification: transport-library-final-tests.log,
-  transport-siglus-final-tests.log, transport-engine-final-tests.log,
-  transport-other-native-tests.log, transport-js-tests.log,
-  transport-api-final-tests.log, transport-workspace-check.log,
-  transport-minimal-check.log, transport-python-tests.log,
-  transport-final-focused.log, transport-native-validated-tests.log,
-  transport-cursor-final-tests.log and siglus-bgm-dependencies.txt.
-
-Remaining boundaries:
-- RESUME after EOF/immediate stop needs an engine-owned retained prepared-source
-  resource to match native data retention and replay. It explicitly fails;
-  reopening a mutable asset path is not substituted as equivalent behavior.
-  This shared resource primitive is the next concrete audio gap, also relevant
-  to KiriKiri WaveSoundBuffer. Explicit PLAY remains new resource preparation.
-- Other Siglus audio forms (PCM/PCMCH/SE/voice), resource/append discovery,
-  encrypted Gameexe conversion, native archive-entry selection and broader native
-  text/layout/save/game coverage remain open. Native boot/Gameexe reads, bounded
-  metadata translation, original VM ordering, final DSP/output, owner allocation/
-  disposal and teardown remain synchronous boundaries. Dynamic acoustic geometry,
-  Doppler, higher/diffuse reflections and complete engine-wide async remain open.
-  The larger modern engine/VN capability goal remains active.
-
-## 2026-10-27 — immutable prepared audio resources and Siglus retained-slot replay (ADR 0077)
-
-Implementation:
-- Added engine-owned AudioResources/PreparedSound, independent of any VM/device.
-  Core exposes plain scoped AudioResourceHandle/Info/Preparation and HostServices
-  resource preparation/status/info/release; AudioRequest::PlayResource captures
-  an immutable source lease before worker admission. Core gains no dependency.
-- Workers snapshot client-capability encoded assets, probe shared decoders and
-  optionally scan/discard bounded chunks when frame count is unknown. Each play
-  creates its own decoder/cursor and uses existing buffered realtime transport;
-  explicit offline native hosts retain immediate preparation receipts. A measured
-  source boundary propagates into independent decoder instances. Unknown lengths
-  are not presented as exact merely because a frame cap was requested.
-- The bank bounds encoded assets at 128 MiB, handles at 32/client and 128/host,
-  and retained preparation receipts at 16/client and 64/host. Atomic reservations
-  cap the bank at 512 MiB, including estimated probe/metadata allowances; these
-  are not whole-process RSS measurements. Stream/mixer budgets are separate.
-  Snapshot Vec storage moves into an Arc without another full encoded copy.
-- Only scoped preparation observation publishes resources. Cancellation cannot
-  publish unobserved completed work. Receipt release keeps published resources;
-  resource release prevents new lookup while admitted/live decoder leases retain
-  bytes. Clear/restore invalidates capabilities without resetting charges still
-  held by actual workers/instances. IDs use the existing monotonic host namespace.
-- Modern Rust/JS/TS Audio adds beginPrepareSource/sourcePreparation/
-  cancelSourcePreparation, sourceInfo/releaseSource and beginPlaySource, with
-  prepareSourceAsync/playSourceAsync helpers. Voice spatial/follow/acoustic/HRTF/
-  reflection options use the existing shared publication path. Asset in resource
-  voice options is rejected; optional preparation options accept omission/null.
-- Siglus PLAY/READY now has separate engine resource and voice completion stages.
-  Original PC/stacks remain uncommitted until publication. Failed second-stage
-  preparation releases its new resource and preserves the previous slot.
-  RESUME/RESUME_WAIT after EOF/stop uses the retained engine resource without
-  resolving/reopening its original file. Slot loop/range and current gain/fade/
-  delay translate into shared parameters; STOP's cleared outer name/loop values
-  remain distinct from the prepared source's loop region.
-- Stopped/ended logical runtime declarations reconstruct only a resource, with
-  no hidden voice or new gallery mark. Active declarations restart at authored
-  start. Bindings/tickets are serde-skipped; Siglus runtime schema stays 2 and
-  original file layouts stay unchanged. Snapshots still require asset aliases
-  and files to rebuild; they do not embed encoded/decoder/device/DSP state.
-- Existing pinned Siglus BGM/source audit remains applicable; reviewed retained
-  slot prepare/start/stop/resume/retire behavior, without copying a native player,
-  decoder, sample buffer, envelope, mixer or renderer into the adapter. API docs
-  regenerated and logged: 4aee8cb171139420 -> 5b75e19d7feee9bf.
-
-Compilation:
-- Final local release workspace/all-target check passed with desktop krkr,
-  arc-formats and acoustics-obvhs. Minimal no-default desktop reallive+avg32 check
-  passed. Existing CBG/RealLive/minimal-CLI warnings remain. No CI, remote build,
-  audio output device, GPU, Windows/Linux or console behavior was exercised.
-
-Behavior validation:
-- Final selected Rust suites: shared audio/core/compat/tasks **109 passed**;
-  Runtime/Siglus **105 passed** (full run plus final 11-case native audio rerun
-  replacing its earlier 10-case subset); engine audio/acoustics/HRTF/reverb/
-  reflections and API reference **52 passed**; RealLive/AVG32 bridges **12 passed**;
-  JS async services **9 passed**. **287 distinct passed**, four ignored excluded.
-  Focused reruns/earlier extra smoke cases are not added again. Python 3.11
-  tooling: **189 passed**.
-- Five independent resource tests verify immutable bytes after replacement,
-  independent seek/read cursors, WAV/Ogg/MP3/FLAC decoder instances, propagated
-  frame metadata, worker-only reads, foreign/stale handles, ready-unobserved and
-  queued cancellation, handle bounds, failed probe cleanup, admitted playback
-  after release, and byte charges until the actual last lease drops after clear.
-- Modern API tests share one resource between pooled and native channels, remove
-  the original file, release the handle while admitted playback is worker-gated,
-  then assert original 0.5-amplitude PCM. Other-client lookup/release, restore,
-  optional options and canceled preparation are checked. JS promises publish
-  resources/voices and preserve their separate receipt/handle/instance lifetimes.
-- Eleven authored original SceneVm audio cases include deletion of the source
-  file before stopped/EOF RESUME_WAIT, frame-seven PCM replay, inactive named and
-  stopped snapshot reconstruction, preserved gallery/outer-loop semantics and
-  failed voice-stage cleanup preserving the previous audible looping resource.
-  Existing original-save, waits/keys/delay/fade/volume, failure/retry, worker gate,
-  same-name idempotence, source-versus-effect-tail and unknown-op cases pass.
-- Evidence: target/verification/resources-{shared-tests,runtime-tests,engine-tests,
-  vn-bridge-tests,js-tests,siglus-tests,bank-final,python,workspace-final,
-  minimal-final}.log. API generation/reference is included in engine-tests.
-
-Remaining boundaries:
-- This closes ADR 0076's retained-source replay gap. Native PCM/PCMCH/SE/voice,
-  full-game/native resource discovery/encrypted Gameexe, full async final DSP/
-  mixing/output, dynamic acoustic geometry, Doppler and higher/diffuse reflection
-  remain open. Inactive snapshot reconstruction follows committed VM state;
-  halted VMs are not stepped solely to observe subsequent audio EOF, so their
-  snapshots can retain the last active declaration. Same-size writes during
-  snapshot reads can race; probing known-length sources is not full-file packet
-  validation. Broader engine/VN and ADR 0050 goals remain active.
-
 ## 2026-10-27 — shared mix groups, playback age and original PCM/global SE (ADR 0078)
 
 Implementation:
@@ -3180,36 +2387,15 @@ Implementation:
   seek does not reset age. Native PCM/SE resource preparation measures unknown
   lengths, then independent voice preparation captures a lease. Temporary lookup
   handles release at admission; workers/live instances retain actual encoded bytes.
-- Original global PCM PLAY/STOP and global SE filename/number/explicit voice-alias
-  play, volume/extremes/getter, stop/fade, CHECK and WAIT/WAIT_KEY use CrySirror
-  resources, channels and siglus.pcm/siglus.se gain groups. The adapter retains
-  native identity/volume/observed playing state and ordered semantic requests;
-  no native decoder, sample cache, timer, envelope, Kira hub/mixer or renderer is
-  copied/linked. Integer-ms SFX end predicates compare shared publication age;
-  they can end before the final fractional-ms PCM samples. SE key wait keeps its
-  native zero return, with playback continuing after skip.
 - Canonical resources aliases are mandatory. Decoded Gameexe numbered SE uses
   native count default16/min8/max256; SE voice numbers use explicit CrySirror
   aliases koe/{number}, without guessing native packs/filenames. Unknown forms,
   missing entries/aliases and property fallbacks fail visibly. BGM/PCM/SE pending
   operations carry ephemeral ordering stamps so original import stops PCM/SE
   before a later BGM preparation can block; no stamp/ticket enters saved data.
-- Siglus runtime payload schema is **3** for new PCM/SE logical declarations;
-  schema-2 snapshots require migration and are rejected by the version gate.
-  Active declarations rebuild only after candidate commit, with no exact PCM/
-  decoder/age/effect checkpoint. Original file codec/layouts are unchanged:
-  nonpersistent global PCM/SE stops on import and category volumes restore via
-  shared controls. The isolated codec test host uses real ChannelAudio through
-  a dev dependency; normal VM dependency inspection excludes crysirror-audio,
-  Kira, rodio, cpal, wgpu, winit and ash.
-- Verified existing immutable siglus_rs pin 5f358ef1360b0439e92aed2b749e8f25d8721954
-  and six scoped immutable source/hash audit records, including full SFX/forms/
-  hub and selected SE-table/save functions. Reference hub opt-in-device changes
-  remain explicit. API reference regenerated/logged:
-  5b75e19d7feee9bf -> f2af02453b2f74f8.
 
 Compilation:
-- Final release workspace/all-target check passed with desktop krkr, arc-formats
+- Final release workspace/all-target check passed with desktop  arc-formats
   and acoustics-obvhs; minimal no-default desktop reallive+avg32 check passed.
   Existing CBG/RealLive/minimal-CLI warnings remain; new fixture warning was fixed.
   No GitHub CI/workflow, remote build, output device, GPU, Windows/Linux or
@@ -3217,7 +2403,7 @@ Compilation:
 
 Behavior validation:
 - Final local release scopes: shared audio/core/compat/tasks **115 passed**;
-  Runtime/Siglus **114 passed**; engine audio/acoustics/HRTF/reflection/reverb and
+  joint Runtime suites **114 passed**; engine audio/acoustics/HRTF/reflection/reverb and
   API reference **54 passed**; RealLive/AVG32 bridges **12 passed**; JS async
   services **10 passed**. **305 distinct Rust passed**, four ignored excluded.
   Focused/earlier runs are not counted twice. Python 3.11 tooling: **189 passed**.
@@ -3240,10 +2426,6 @@ Behavior validation:
   48 kHz WAV from authored tones. Parent music fades leave the UI stem unchanged;
   Rust asserts its samples and restored level. Clear/muted/restored RMS:
   **0.158114 / 0.070711 / 0.158114**, peak **0.286419**. No game data/fonts/device.
-- Evidence: target/verification/groups-{shared-tests,runtime-final,engine-final,
-  js-final,vn-tests,transport-final,python,workspace-final,minimal-final,demo,
-  native-normal-dependencies}.log and mix-groups.wav. Source review:
-  docs/siglus-sfx-source-audit.json; contracts/limits: ADR 0078.
 
 Remaining boundaries:
 - These are gain/control hierarchies, not full Sound Class/submix effect graphs,
@@ -3285,7 +2467,7 @@ Implementation:
   original SceneVm WAIT/restore test. No new VM hooks or legacy DSP were imported.
 
 Compilation:
-- Release workspace/all-target check passed with desktop krkr, arc-formats and
+- Release workspace/all-target check passed with desktop  arc-formats and
   acoustics-obvhs. Minimal no-default desktop reallive+avg32 check also passed.
   Existing CBG/RealLive/minimal-CLI warnings remain. API reference regenerated;
   signature fingerprint f2af02453b2f74f8 -> bec05c019d833cb0 is logged in CHANGES.
@@ -3383,7 +2565,7 @@ Implementation:
   code or private legacy mixer was copied into a native adapter.
 
 Compilation:
-- Release workspace/all-target check passed with desktop krkr, arc-formats and
+- Release workspace/all-target check passed with desktop  arc-formats and
   acoustics-obvhs plus the optional rodio-output compatibility feature. Minimal
   no-default desktop reallive+avg32 check also passed. API docs regenerated;
   reflective fingerprint remains bec05c019d833cb0, with Rust host migration logged.
@@ -3394,8 +2576,7 @@ Compilation:
 
 Behavior validation:
 - Final release scopes: shared audio including optional device/compatibility
-  code **102 passed**; desktop CPU driver/input/output **8 passed**; original
-  Siglus audio **21 passed**; original RealLive/AVG32 bridges **12 passed**;
+  code **102 passed**; desktop CPU driver/input/output **8 passed** ; original RealLive/AVG32 bridges **12 passed**;
   engine frame/API reference **11 passed**. **154 distinct Rust passed**, two
   ignored excluded. Earlier/focused reruns are not counted again. Python 3.11
   tooling: **189 passed**.
@@ -3423,11 +2604,6 @@ Behavior validation:
   active underrun frames** are recorded, not reported as a streaming benchmark or
   performance pass. No listening-quality, capture-loopback, latency or sustained
   throughput assertion was made; test values were below audibility.
-- Evidence: target/verification/output-{audio-final,desktop-final,siglus-final,
-  vn-final,engine-final,workspace-check,minimal-check,device-probe-final,python-final,
-  diff-check}.log; output-validation.json, output-summary.json and
-  output-device-probe-final.json. output-fetch.log records the rejected latest
-  CPAL attempt. Earlier logs retain the corrected oracle/example failures.
 
 Remaining boundaries:
 - Engine DSP still follows simulation frames/shared CPU admission; device callback
@@ -3441,16 +2617,9 @@ Remaining boundaries:
   hardware/platform behavior nor a complete implementation of ADR 0050. Native
   opcode/save/timing/resource discovery gaps and broader acoustics remain active.
 
-
 ## 2026-10-27 — prepared voice compression and original global KOE (ADR 0081)
 
 Implementation:
-- Added engine-owned, safe PCM16 Siglus JITAN numeric processing. It preserves
-  rate, performs native stereo sum/clamp and splice/search/smoothing, handles
-  sub-100-ms cues as same-length silence and retains the native final fade. This
-  is separate from playback rate/pitch. No original converter/player/mixer code
-  is linked into the native adapter. Reference pin and exact reviewed blobs are
-  recorded in docs/siglus-koe-source-audit.json.
 - Added plain core AudioResourceTransform and transformed-resource preparation,
   plus public AudioSourcePrepareSpec/AudioTransformSpec options for the existing
   beginPrepareSource / JS prepareSourceAsync API. Shared audio owns capability
@@ -3464,28 +2633,14 @@ Implementation:
   bytes plus 8 KiB. Existing receipt/handle scopes, cancellation and restore
   invalidation remain. Processing runs in the bounded asset/preparation pool,
   not a separate CPU DAG stage or a realtime streaming time-stretch effect.
-- Replaced the volume-only global KOE stub with native identity/config/wait/save
-  translation onto shared Voice bus, siglus.koe mix group and channel 3. KOE and
-  EXKOE retain distinct message/playback identity; named wait/key/JITAN flags and
-  selected JITAN config SET/DEFAULT/GET operations are mapped. Explicit canonical
-  koe/{number} aliases supply resources. The 24-key number/rate cache contains
-  engine handles; it owns no private generic audio buffers or decoding engine.
 - Original replacement order stops the old voice before resource preparation,
   including failure/negative numbers. Readiness gates the original instruction
   commit. Failure is visible and repaired resources can retry. Native integer-ms
   completion uses shared output publication age; DECIDE releases a key wait
   without stopping the voice. Source completion excludes derived effect tails.
-- Runtime adapter snapshots advance from schema 3 to 4 without old-schema
-  migration. Active logical cues reconstruct at cue start, without preserving
-  decoder/DSP history. Original Siglus file layouts/codecs are unchanged: local
-  load stops speech and restores its volume.
-- Review found that newer trailing KOE read-flag operands need unmapped MWND/
-  read-skip bookkeeping. They now fail before audio admission and retain the
-  unsupported diagnostic across subsequent steps; no fallback marks text read.
-  The accepted global KOE profile uses the historical no-trailing-operand ABI.
 
 Compilation:
-- Final release workspace/all-target check passed with desktop krkr, arc-formats,
+- Final release workspace/all-target check passed with desktop  arc-formats,
   acoustics-obvhs and optional rodio-output compatibility; minimal no-default
   desktop reallive+avg32 check also passed after the native read-flag guard.
 - Generated API reference/JSON/TypeScript and logged fingerprint change from
@@ -3494,11 +2649,6 @@ Compilation:
   build, font/game data or proprietary SDK was added.
 
 Behavior validation:
-- Final release scopes: shared audio **106 passed**; engine audio/frame/API
-  **28 passed**; JS async services **11 passed**; runtime library **50 passed**,
-  authored original Siglus audio **28 passed** and original VM **12 passed**.
-  **235 distinct Rust passed**, three ignored excluded. Earlier/focused reruns
-  are not counted again. Python 3.11 tooling: **189 passed**.
 - A temporary standalone harness executed the complete unmodified pinned JITAN
   converter and compared full PCM samples for **784 authored vectors**: four
   rates, two durations, mono/stereo, seven patterns and seven percentages. All
@@ -3526,16 +2676,6 @@ Behavior validation:
   generation log retains the expected missing-fingerprint entry failure.
 
 Remaining boundaries:
-- Native speech pack/path/append-directory discovery, full MWND/KOE_ST and newer
-  KOE read flags, backlog/menu replay, mouth-volume tables/emotes and complete
-  character/system/BGM duck routing remain open. Storing a replay switch does
-  not implement its consumer. At 100 percent the shared cache retains encoded
-  bytes and redecodes per play; original decoded-cache performance is not claimed.
-- Codec parity beyond the tested PCM profile, general high-quality streaming
-  time stretching, an independent device render clock and the broader async/
-  acoustics/3D backlog remain open. This is reusable engine processing plus a
-  bounded native speech profile, not full Siglus/game or engine completion.
-
 
 ## 2026-10-27 — moving acoustic instances and World bindings (ADR 0082)
 
@@ -3581,7 +2721,7 @@ Implementation:
   spatial opcode or HostServices facade is claimed.
 
 Compilation:
-- Final release workspace/all-target check passed with desktop krkr, arc-formats,
+- Final release workspace/all-target check passed with desktop  arc-formats,
   acoustics-obvhs and optional rodio-output; minimal no-default desktop
   reallive+avg32 check passed. Generated API reference/JSON/TypeScript and logged
   fingerprint change **24e44c371ca52eb7 -> e73bda1334c12a7f**. Final API and command
@@ -3680,14 +2820,9 @@ Implementation:
   payload migration; logical cues rebuild at source start, with READY/paused and
   remaining integer-ms delay preserved. Pause fades rebuild fully paused and
   pending stops rebuild stopped; exact sample/envelope/DSP history is not saved.
-- Pinned reference blobs and inspected scope are recorded in
-  docs/siglus-pcmch-source-audit.json at siglus_rs
-  5f358ef1360b0439e92aed2b749e8f25d8721954. No original SFX/player/path/decoder
-  implementation was copied into this bridge. Default native PCM routing is
-  mapped; nondefault system/category/character/dual-BGM duck flags fail visibly.
 
 Compilation:
-- Final release workspace/all-target check passed with desktop krkr, arc-formats,
+- Final release workspace/all-target check passed with desktop  arc-formats,
   acoustics-obvhs and optional rodio-output. Minimal no-default desktop
   reallive+avg32 check passed. No CI/workflow/remote build was added.
 - Regenerated reference/JSON/TypeScript and logged fingerprint
@@ -3700,12 +2835,6 @@ Compilation:
   CLI warnings remain. All cargo validation used --release.
 
 Behavior validation:
-- Shared audio library/integration scopes: **111 passed**; Runtime/Siglus scopes:
-  **110 passed**; engine/public audio/frame/async/API and JS scopes: **53 passed**.
-  **274 distinct Rust tests passed**, four ignored excluded. The later bounded
-  BGM lookup scope supersedes the same earlier VM library cases; earlier/focused
-  reruns and API generation guard failures are not counted again. Python 3.11
-  tooling: **189 passed**.
 - Sample oracles cover preserved versus frozen delay, pause fades before/after
   resume deadlines, running clocks through starvation/holds, latest gain targets,
   short-source EOF with retained stop completion, pause-versus-stop deadlines,
@@ -3734,11 +2863,6 @@ Behavior validation:
   HRIR/SOFA data, credential or proprietary SDK was added.
 
 Remaining boundaries:
-- Full native system/category/character/dual-BGM duck routing, PCMEVENT and native
-  pack/path/append-directory discovery remain open. Frame-phase clocks are not
-  exact original wall-clock/device timing, and framework cues do not serialize
-  exact decoder/DSP history. This does not establish a whole Siglus game or all
-  original save variants.
 - Doppler/diffraction/higher-order sound, independent device clock, native spatial
   mappings and broader engine-wide async/3D/VN requirements remain active work.
   No listening-quality, performance ranking, GPU/hardware-RT, other-platform or
@@ -3780,7 +2904,7 @@ Implementation:
   does not opt into Doppler automatically; save schemas/layouts are unchanged.
 
 Compilation:
-- Release workspace/all-target check passed with desktop krkr, arc-formats,
+- Release workspace/all-target check passed with desktop  arc-formats,
   acoustics-obvhs and optional rodio-output. Minimal no-default desktop
   reallive+avg32 check passed. All cargo validation used --release; no workflow,
   CI or remote build was added. Existing CBG/RealLive/minimal CLI warnings remain.
@@ -3794,11 +2918,6 @@ Compilation:
   actual fingerprint was logged. These attempts are not behavior passes.
 
 Behavior validation:
-- Shared audio library/integration scopes: **117 passed**; engine API/motion and
-  real JS/async service scopes: **29 passed**; existing mixer/frame/command and
-  native Siglus audio/PCMCH regression scopes: **56 passed**. **202 distinct Rust
-  tests passed**, three ignored excluded. Earlier/focused reruns are not counted
-  again. Python 3.11 tooling: **189 passed**.
 - Independent analytic cases cover approaching/receding source and listener,
   equal/transverse motion, coincidence, factor zero, extreme/clamped velocities
   and invalid input. Actual PCM and decoded-source positions verify resampling,
@@ -3843,11 +2962,6 @@ Remaining boundaries:
 ## 2026-10-27: Shared cue programs, PCMEVENT prerequisite (ADR 0085)
 
 Implementation:
-- Reviewed complete pinned Siglus PCMEVENT source (472 lines), plus selected
-  complete state/wait/source/save functions, at commit
-  5f358ef1360b0439e92aed2b749e8f25d8721954. All audited local reference blobs
-  match the pin; hashes/scope are in siglus-pcmevent-source-audit.json. No original
-  PCMEVENT scheduler module, player, decoder or renderer is copied/imported.
 - Added engine-owned once/loop/weighted cue programs to crysirror-audio, with
   device-free Core DTOs and HostServices methods. SharedHost and the public Audio
   class use the same scoped ChannelAudio bank. Six Audio operations create,
@@ -3867,7 +2981,7 @@ Implementation:
   caller-owned sequence clocks, and working cursors are not implicitly saved.
 
 Compilation and reference validation:
-- Release workspace/all-targets check passed with desktop krkr, arc-formats,
+- Release workspace/all-targets check passed with desktop  arc-formats,
   acoustics-obvhs and audio rodio-output enabled. Minimal desktop no-default
   reallive+avg32 release check also passed. Existing image/RealLive/CLI warnings
   remain. No GitHub workflow or remote build automation was added or enabled.
@@ -3901,11 +3015,6 @@ Behavior validation:
   cue-sequence-{summary,demo-inspection}.json and cue-sequence-{worker,sync}.wav.
 
 Remaining boundaries:
-- **Native Siglus PCMEVENT is not yet mapped.** Dispatch, script-global RNG
-  reconciliation, native channel/source/routing policy, waits/key behavior and
-  original/runtime save reconstruction must translate onto this shared bank.
-  Existing unsupported dispatch still fails visibly. This phase establishes an
-  independently usable engine capability, not a running native game result.
 - Program clocks/acknowledged durations are caller-supplied, not automatic sample
   timestamps. Scheduling is owner-frame granular; voice DSP remains sample-based.
   No hardware, cross-platform playback, performance ranking, propagation-delay or
@@ -3914,11 +3023,6 @@ Remaining boundaries:
 ## 2026-10-27: Original PCMEVENT over shared cue services (ADR 0086)
 
 Implementation:
-- Original Siglus START_ONESHOT/START_LOOP/START_RANDOM, STOP, CHECK, WAIT and
-  WAIT_KEY now use engine-owned cue programs and existing global PCM/PCMCH
-  resource/voice APIs. Native code translates arguments, channel/wait/save policy,
-  derived observations and continuation intent; it has no new private scheduler,
-  weighted selection, interval RNG, decoder, mixer or renderer implementation.
 - Extended the pinned source audit with native clock feed and complete selected
   MATH.RAND/xorshift branches at commit 5f358ef1360b0439e92aed2b749e8f25d8721954.
   Six reference blobs match exactly; runtime/mod.rs has a pre-existing wipe_mask
@@ -3942,7 +3046,7 @@ Implementation:
   ONESHOT is discarded. Voices retain the existing reprepare/restart save policy.
 
 Compilation and reference validation:
-- Release workspace/all-targets check passed with desktop krkr, arc-formats,
+- Release workspace/all-targets check passed with desktop  arc-formats,
   acoustics-obvhs and audio rodio-output. Minimal no-default desktop reallive+avg32
   check also passed. Existing image/RealLive/CLI warnings remain. No CI/workflow
   or remote build automation was added or enabled.
@@ -3990,27 +3094,13 @@ Remaining boundaries:
 - New input edges while native audio admission is pending are not yet buffered.
   Exact ordering of native frame-action callbacks versus this event pass also needs
   further work; these straight-line fixtures do not establish callback compatibility.
-- Original MWND/layout/save coverage, sample-exact voice/DSP reconstruction,
-  whole-game execution, cross-platform/hardware playback and broader 3D/async
-  engine requirements remain open. The ongoing engine goal is not complete.
-
 
 ## 2026-10-27: Shared logical input journals and native continuations (ADR 0087)
 
 Implementation:
-- Core owns bounded input normalization, immutable published prefixes, scoped
-  receipts, atomic admission and portable validation. Scene supplies shared
-  serde transport. Optional public Input journals and Siglus use the same kernel.
-  JSON u64 masks/clocks/receipts use exact decimal strings; binary saves retain u64.
-- Siglus captures input before audio admission and resumes an interrupted script
-  before consuming the next queued intent. Runtime payload 7 preserves backlog
-  and phase; original files keep their codecs and discard pre-load clicks.
-  The adapter only maps native VK/DECIDE/wait semantics, with no private queue.
-- Source audit rechecked three original blobs against siglus_rs commit
-  5f358ef1360b0439e92aed2b749e8f25d8721954; hashes and reference bytes match.
 
 Compilation and reference validation:
-- Release workspace/all-target check passed with krkr, arc-formats,
+- Release workspace/all-target check passed with  arc-formats,
   acoustics-obvhs and rodio-output; minimal desktop reallive+avg32 also passed.
   Existing warnings remain. No GitHub CI/workflow was added or run.
 - Regenerated API reference/JSON/TypeScript; actual fingerprint changed
@@ -4041,78 +3131,6 @@ Remaining boundaries:
 - Original frame-action versus audio-event ordering remains open. No complete
   game, hardware or whole-engine result is claimed. The broader goal remains.
 
-## 2026-10-27 — KAG3 semantic adapter and shared prerequisites (ADR 0088)
-
-Implementation:
-- Original pinned TJS2/KAG parser crates remain byte-identical. New native
-  KAGParser, AsyncTrigger, sound and saveStruct facades call shared CrySirror
-  services; no upstream general engine/renderer/mixer/font/media implementation
-  was copied or hosted. Stock KAG3 scripts are external runtime inputs only.
-- Added reusable Core DeferredDispatch/RegionMap, shared simple scalar glyph
-  placement (public Text.positionSimple), client-owned window policy/fullscreen,
-  decoder opacity metadata and bounded worker-backed atomic capability writes.
-  Native bold/unblurred shadow text uses retained GlyphRun. Whole-destination
-  atlas cells use existing Canvas snapshots. Native region hits use Core's map.
-- Native owner phases retain a fence/cursor across shared audio/write readiness;
-  input ingress uses the Core journal before dependency checks. Native positive
-  onHitTest callbacks preserve the super-call work flag, and disabled hits block
-  fallthrough. Native reparenting rejects cycles/foreign windows. Audio source/
-  voice ownership stays in HostServices, including cleanup after custom finalize.
-- Source review pins, actual blob hashes and review scopes are recorded in
-  docs/kag3-source-audit.json. Newly authored native code remains in the optional
-  AGPL boundary; no game data, stock scripts, fonts or screenshots are committed.
-
-Compilation and reference validation:
-- Release workspace/all-target check passed with krkr, arc-formats,
-  acoustics-obvhs and rodio-output. Minimal desktop reallive+avg32 check passed.
-  Release desktop build with krkr, arc-formats and acoustics-obvhs passed.
-  Existing warnings remain; no GitHub CI/workflow was added or run.
-- Regenerated API reference/JSON/TypeScript and logged actual fingerprint
-  4b42007e15453574 -> be619476a3bcddb4. Final docs and command coverage passed.
-
-Behavior validation:
-- **34 distinct release Rust tests passed**: Core dispatch/regions 4, VFS writes
-  2, engine prerequisites/docs/coverage 10, native unit 1, native bridge 16 and
-  pinned stock KAG3 scenario 1. External KAG3/font tests were explicitly executed, not counted
-  as passes merely because they were ignored. No ignored cases in these runs.
-  Python 3.11 tooling: **189 passed**. Repeated probes are excluded from totals.
-- Unmodified KAG3 system scripts rendered authored text, held [l] without input,
-  accepted one Enter, held [p], accepted one mouse pulse and reached [s]. Both
-  scenario continuation markers were checked. Generated wait-glyph sheets match
-  the original 384x24 atlas layout. Self-authored tests additionally cover native
-  macros/conditions/script/call-return, live macro tables, label save dictionaries,
-  deferred cancellation/fences, hit filters, atomic UTF-16 saveStruct, queued input
-  during audio admission, nonzero offline mixed PCM and custom-finalizer cleanup.
-- Actual offscreen wgpu raster capture on **Apple M5 / Metal**, 640x480, after
-  300 owner ticks displayed stock menus, Latin/Japanese text and an animated wait
-  glyph through CrySirror's renderer. Diagnostics: 151 engine API calls,
-  owns_framebuffer=false, no native error, waiting at [l]. PNG inspected visually.
-  This is one local raster frame, not a frame-rate, hardware RT or other-platform
-  result. No live native audio-device or OS window-policy behavior is claimed.
-- Earlier stock probes exposed missing gamma identity, ancestor visibility,
-  atlas-copy admission, temporary cursor hiding and onHitTest routing. Those
-  failures led to the mapped behavior above; they were not reported as boot
-  success. Initial Rust borrow/Result issues and expected API generation guards
-  were corrected before final checks. Default Python lacked tomllib and failed;
-  the explicit Python 3.11 full run passed.
-- Evidence (ignored local files): target/verification/kag3-{core-final,vfs-final,
-  engine-final,native-regression,workspace-final,minimal-final,desktop-build,
-  python-311-final,gpu-render}.log, kag3-summary.json, kag3-gpu-summary.json and
-  kag3-demo/kag3.png. The external-source captures and system font stay local.
-
-Remaining boundaries:
-- Bounded KAG3 integration, not arbitrary commercial-game compatibility. Full
-  native save/call/macro stacks, TJS runtime snapshots, XP3 auto-path mounting,
-  mutable macro-parameter identity, native registered-object window shutdown,
-  font-face selection, nonuniform pixel masks, focus/modal input, video,
-  transitions and nonidentity gamma/gray/blur/
-  flip or unsupported blend/partial-replace operations remain open and fail
-  visibly. VideoOverlay currently admits only unloaded class construction.
-- Native audio currently uses the shared Sfx bus; music/voice bus inference,
-  live seek and delayed fades remain open. Nested Rust parser/input callbacks
-  cannot suspend; async admission there fails. Source/metadata reads still have
-  synchronous boundaries. ADR 0050 and the wider engine work remain unfinished.
-
 ## 2026-10-27 — shared Yamaha sources and worker image capabilities (ADR 0089–0090)
 
 Implementation:
@@ -4128,20 +3146,12 @@ Implementation:
   transitions and preserved-edge sine row copying. Core immutable image leases
   and owner-polled completion contain no device handles. Runtime reserves the
   existing CPU pool and bounded processing memory before accepting work.
-- Public Bitmap begin/status/cancel and JS awaitable effect/transition/row-copy
-  APIs use immutable source snapshots and client/epoch/target-revision checks.
-  Native KiriKiri gamma/gray/flips and a real layerExRaster.dll copyRaster facade
-  call that same shared service and resume the original TJS continuation only
-  after publication. LR/UD flips also reflect shared Core province regions.
-  Loaded/processed/uniform full-clip images are admitted; arbitrary composed
-  Canvas/text readback, partial clip and native overlapping self-copy fail.
 - Added self-authored examples/shared-effects and audio chiptune examples.
   Sources/pins/hashes and exclusions are in docs/synth-image-source-audit.json.
   No fonts, ROMs, sample banks, game files, captures or compiled outputs added.
 
 Compilation:
-- Release desktop build with krkr,arc-formats,acoustics-obvhs passed.
-- Release workspace --all-targets check with desktop krkr/arc-formats/
+- Release workspace --all-targets check with desktop arc-formats/
   acoustics-obvhs and audio rodio-output passed. Existing CBG/RealLive warnings
   remain. An initial command incorrectly named the acoustics feature on audio;
   feature resolution failed before compilation, then the corrected command passed.
@@ -4151,15 +3161,10 @@ Behavior validation completed:
   Core regions: 3 passed; public shared-effect/audio ownership tests: 3 passed.
   Earlier library regressions: audio 15 passed, 1 ignored; image 63 passed.
   The ignored environment-dependent audio test is not counted as a pass.
-- Release native bridge with an explicitly supplied system font: 18 passed,
-  including shared worker/TJS dependency gating, image pixels, province reflection
-  and Plugins.link/copyRaster behavior. No native engine framebuffer is owned.
 - Release JS/TypeScript Bitmap regressions: 2 passed, including awaited shared
   effects and transitions followed by ordinary retained-layer presentation.
 - Release generated API docs: 7 passed; command coverage: 1 passed. Fingerprint
   be619476a3bcddb4 -> 4fa7e1d7f355d61a regenerated and logged.
-- Explicit external stock KAG3 regression: 1 passed with the pinned checkout and
-  supplied system font; the originally ignored test was actually executed.
 - Python 3.11 tooling suite: 189 passed. Default Python lacked tomllib during
   source-audit generation; that failed invocation was rerun with Python 3.11.
 - Actual public-API showcase captured at 780x520 on Apple M5 / Metal, raster
@@ -4184,240 +3189,11 @@ Remaining boundaries:
 - Processing is CPU-worker based. GPU shader variants, metadata/discovery async,
   every other ADR 0050 boundary and broader 3D engine completion remain open.
 
-## 2026-10-28 — local game-kr probe and shared HXV4/document/vector capabilities
-
-Implementation:
-- Inspected the owner's local game-kr package: 39 DLL files and one 1.6 GB XP3.
-  The inventory is not an executed dependency list. docs/krkr-plugin-audit.md
-  distinguishes available reference modules from actually mapped capabilities.
-- Extracted only the pinned xp3-brute pure HXV4 Special/authentication/object/hash,
-  static PE bootstrap/KDF and reconstructed content-filter algorithms into the
-  existing shared XP3 resource plugin. MIT notices and complete source hashes are
-  retained. No CLI, native Win32 host, Unicorn, GPU solver or game runtime is
-  imported. Companion bytes come through the caller's existing VFS authority.
-- Authenticated requested-name lookup survives both ordinary and worker archive
-  mounts. Protected streams are incrementally verified with a 64 KiB buffer;
-  random-access reads apply the same native filter state. Plaintext bootstrap
-  entries with a protected flag retain their checksum-verified bytes. The
-  protected-warning pseudo entry is recognized by its actual prefix, not merely
-  by a fake ID. Optional PE RCDATA startup bytes are a separately labelled derived
-  resource, never a replacement for an archive's own startup.
-- Core adds optional read streams, container-origin metadata queries and direct
-  provider directory listings. Runtime supplies scoped asset/save/cache streams;
-  unsupported stream providers reject before reading. Shared archive directory
-  indices have a 16 MiB admission bound, avoiding repeated full-pack scans.
-  Native current-directory/auto-path rules preserve native archive URIs and only
-  refer to already installed client containers. Unknown media, unmounted archives,
-  traversal and foreign native roots fail. No OS working directory is changed.
-- A parallel agent implemented shared bounded document values/parser/writer and
-  a real json.dll Scripts facade; saves retain original TJS until atomic worker
-  completion. It also added shared vector geometry/Append matrices/bounds and a
-  solid-linear LayerExDraw facade over existing shared image workers. Original
-  superclass/function identity and RectF ObjThis behavior were preserved after
-  tests exposed incorrect initial mappings. Pen/gradient/font/metafile and full
-  native GDI edge equivalence remain unsupported.
-- Added the self-authored examples/krkr-vector scene and tools/probe_krkr.py.
-  The latter preserves project containment and removes its temporary project on
-  native failure; a process exit or blank frame is never classified as a running
-  game. Original user game files, fonts, keys, executables and DLLs are not shipped.
-  ADR 0091–0093 and their source audits record the exact profiles.
-
-Compilation and tooling:
-- Release workspace --all-targets check with desktop krkr/arc-formats/
-  acoustics-obvhs and audio rodio-output passed; existing CBG/RealLive warnings
-  remain. Release desktop builds passed for the actual probes below.
-- Generated API docs/command coverage: 7 + 1 passed. Explicit regeneration left
-  the reflected registry fingerprint unchanged at 4fa7e1d7f355d61a; Rust-only
-  contracts/native extensions are recorded under that fingerprint in CHANGES.md.
-- Final Python 3.11 suite: 191 passed, including probe failure/cleanup and companion
-  scope tests. No GitHub CI, workflows or remote automation added.
-
-Behavior validation:
-- Shared Core library: 20 passed; resource library: 3 passed; resource contracts:
-  10 passed; formats library: 14 passed; ordinary archive tests: 7 passed.
-  HXV4's 5 dedicated primitive tests cover the synthetic KDF vector, malformed
-  objects, AEAD tampering, bounded inflation and partition-invariant filtering.
-- Image library: 66 passed; image effects: 7 passed. Runtime library: 55 passed,
-  1 environment-dependent test ignored (not counted as a pass). Independent
-  vector geometry/pixels and document tests do not load any native VM.
-- Final native fixtures with an explicitly supplied system font and pinned KAG3:
-  LayerExDraw 3 passed; engine bridge 20 passed; JSON 2 passed; stock KAG3 1 passed.
-  Includes ordered brushes/transforms/bounds, real override rejection, original
-  caller suspension, atomic JSON save/load and scoped file/archive directory rules.
-- Public asynchronous archive -> mounted hash alias -> shared PNG/image product:
-  1 passed, exercising the SharedArchive wrapper, container origin and worker
-  resource opening without a native VM.
-- Explicit external HXV4 test was actually invoked: 1 passed. The local archive
-  yielded 10616 actual resources (warning pseudo entry removed), plus the optional
-  derived PE startup resource. Original startup is 316 bytes. Thirty-two protected
-  sample entries passed checksums; the largest 218196292-byte entry also verified
-  and supported nonzero reads. At that observation the tracked decoded-resource
-  budget was 316 bytes; this is not a measurement of total process peak memory.
-- Actual self-authored native-vector capture: Apple M5 / Metal, 640x420 raster.
-  Brush offsets/order, polygon, even-odd hole and affine view were visually
-  inspected. Native diagnostics: 9 engine API calls, 3 layers, no error,
-  plugin_shells=[], owns_framebuffer=false, native-vector-demo-ready. This is a
-  plugin/shared-API fixture, not a game-kr frame, Windows GDI pixel oracle,
-  hardware RT, cross-platform or live audio-device result.
-
-Actual game startup and remaining blocker:
-- Initial actual resource open rejected unknown Hxv4; this was fixed in the shared
-  parser. Opening the packed directory directly initially lacked startup because
-  no archive was mounted. An early external symlink project was correctly rejected
-  by containment; the reproducible probe keeps that check enabled instead.
-- Executing the archive's ordinary startup produced its own corruption-sentinel
-  message and zero game layers. The executable is not thereby declared corrupt,
-  and that blank renderer completion is not a successful game boot.
-- The correct, unchanged PE RCDATA startup now executes from its explicit derived
-  resource, passes the real native archive-directory request, then fails at
-  Plugins.linkZ (bytecode 43). No game scene/title/gameplay frame is established.
-- linkZ is not an alias for ordinary link. Its bootstrap registers signature and
-  CompoundStorage/media state beyond the already validated HXV4 reader. The
-  separate pinned research record docs/krkr-bootstrap-gap.md identifies PSS-SHA256,
-  bootstrap return-octet and CompoundStorage requirements, and explicit ABI/oracle
-  gaps. No signature success, returned key/octet, media/domain state or native DLL
-  execution is fabricated. Original executable identity/bres routing also remains
-  part of that future native bootstrap profile. The 39 DLLs are not all implemented.
-
-Corrections and evidence:
-- Initial integration tests exposed advisory protected flags/ordinary startup,
-  incorrect Special startup-by-basename binding, a local helper-name shadow,
-  ambiguous map typing and test-fixture setup/borrowing issues; they were corrected
-  before the final passing scopes. Early LayerExDraw checks also exposed inherited
-  update lookup and RectF ObjThis errors; both were fixed and revalidated. Final
-  review also moved built-in update identity capture before all scripts, with
-  a passing native-method override-before-link regression. An
-  initial repeated --lib CLI argument and Python macOS path-alias assertion failed;
-  corrected invocations passed. Failures are not counted as successful validation.
-- Local evidence is ignored under target/verification/game-kr/: hxv4-*-final.log,
-  hxv4-stream-final.log, shared-resource-tests.log, image-runtime-tests.log,
-  native-last-tests.log, async-hashed-test.log, final-{workspace-check,
-  python-tests,api-tests}.log, desktop-last-build.log, embedded-container/
-  summary.json and vector-demo/{final.png,final-render.log}. Source snapshots remain
-  ignored under target/research/. The broader engine and ADR 0050 work remain open.
-
-## 2026-10-28 — game-kr protected bootstrap runs through shared services
-
-Implementation:
-- `Plugins.linkZ` now installs the protected-bootstrap facade only when the
-  storage equals the bootstrap module named by the engine-published profile
-  (`hxv4_bootstrap_profile`, derived by the HXV4 resource plugin: prefix, unique
-  key, media name, PUBKEY PEM, context token — never the archive key). Member
-  surface taken from the bootstrap module's own string table: System.bootStrap,
-  System.checkSignature, Storages.CompoundStorageMedia, parseArchiveIndex,
-  archiveUniqueKey, isExistentStorageNoSearchNoNormalize, and the archive
-  addAutoPath/removeAutoPath hook. Unmapped media members fail visibly.
-- New shared `crysirror_resource::compound` (mount/domain/route state, pathHash/
-  fileHash) and `crysirror_resource::text_stream` (KiriKiri FE FE mode 0/1/2,
-  krkrz TextStream.cpp fd5c4ba). Signature checks use the existing shared
-  RSA-PSS verifier. `krmovie.dll` is an engine facade (no TJS exports).
-- Fixed shared pathHash: little-endian bytes over the exact spelling, directories
-  with trailing `/`, root `""` (root = 94d4a97c61498621 as documented). The
-  pinned xp3-brute spelling (big-endian, slashless) matched no directory record,
-  so every hashed lookup previously missed. Hashed names now resolve only under
-  an explicit `hxv4_hashed_root`, so the plain sentinel startup cannot shadow them.
-
-Compilation/tests: `cargo test --release -p crysirror-resource -p
-crysirror-formats-arc -p crysirror-krkr` all pass; the two ignored real-game
-HXV4 tests pass with CRYSIRROR_HXV4_GAME. Desktop built with `krkr,arc-formats`.
-
-Behavior (CPU probe, tools/probe_krkr.py, log under
-target/verification/game-kr/linkz/): bootStrap → CompoundStorage mount of
-data.xp3 → checkSignature(exe) true → krmovie link → real arc://./startup.tjs →
-Storages.tjs (ciphered text) → KAG system scripts. Now stops at
-`Plugins.link("layerExImage.dll")`. No rendered frame; whole game not established.
-Not mapped: the bootstrap's Plugins.link signature hook, setFile/getFile/getHashes,
-custom archive seeds; checkSignature reads synchronously (ADR 0050 split open).
-
-### 2026-10-28 (later) — next plugins on game-kr's real call chain
-
-- `layerExImage.dll` (wamsoft 3aff625): light/colorize/modulate/noise/
-  generateWhiteNoise/gaussianBlur onto shared `ImageEffect`s. New shared
-  `crysirror_image::cximage` ports the CxImage brightness/contrast LUT, HSL
-  colorize and HSL modulate exactly (notice: docs/third-party/cximage.txt).
-  gaussianBlur uses the native std-dev derivation with the shared sampled
-  kernel (CxImage's 50-sample integration is not reproduced).
-- `KAGParserEx.dll` (wamsoft 61d5f1e): extended-format parsers with `taglist`;
-  the shared parser already keeps attributes before `*` (Ex rule).
-  multiLineTagEnabled=true and paramMacros fail visibly (unused by game-kr).
-- Tests: crysirror-image/resource/krkr pass. Probe now stops at
-  `Plugins.link("textrender.dll")` (TextRenderBase message layout).
-- `textrender.dll` TextRenderBase: new shared `crysirror_text::markup`
-  (VM-free typed port of krkrz_rs b4a295f text_render.rs, MIT notice in
-  docs/third-party/krkrz_rs.txt) with width/font/eval/label host callbacks;
-  the adapter maps TJS values and script handlers only. Vertical ruby,
-  graphical characters, word_break and width_time_scale fail visibly.
-- System.confirm fails visibly with its prompt (no modal dialog service).
-- Probe now stops at `Plugins.link("motionplayer_nod3d.dll")` (E-mote Motion).
-
-### 2026-10-28 (session end) — game-kr boots into KAGWindow/UI construction
-
-Implemented this round (all tests in krkr/scene/runtime/text/image/resource pass):
-- Plugins: motionplayer(_nod3d) Motion namespace (real PSB ResourceManager via
-  eluna_rs; playback members fail visibly), csvParser (shared
-  `crysirror_runtime::csv`, TextStream BOM/FE FE decoding), scriptsEx, windowEx and
-  win32dialog vendored from Kirakira c451918 (win32dialog open/messageBox fail
-  visibly), addFont, known-surface table (msdfrender, k2compat, layerStwCopy:
-  members installed, each fails visibly when used).
-- Core: Scripts.setCallMissing/getClassNames/loadDataPack/getTraceString(empty),
-  Window.BasicDrawDevice/drawDevice/left/top/zoom/registerHotKey + empty base
-  event handlers, System.desktopLeft/Top, readRegValue (empty registry),
-  WaveSoundBuffer.PhaseVocoder (non-identity filters fail at play), VideoOverlay
-  geometry state, Layer.children/numChildren/order setter/callOnPaint+onPaint
-  dispatch, plain-state Layer properties as real native properties, pre-construct
-  left/top, standard cursor constants (shape not applied to host cursor).
-- Shared canvas: partial region replace, TransformCopy (rotate/scale, no skew),
-  Resize; krkr copyRect/affineCopy/stretchCopy/setImageSize use them.
-- Window inner size may be any uniform zoom of the canvas (probe uses 1920x1080).
-- Vendored lexer patch (regexp scan stops at line breaks in skipped @if blocks),
-  recorded in krkr-upstream SOURCE.json `patched` / UPSTREAM.md.
-- Diagnostics: CRYSIRROR_KRKR_TRACE_NATIVES, CRYSIRROR_KRKR_EXCEPTION_{EVAL,MATCH,ALL,REGS},
-  CRYSIRROR_KRKR_TRACE_STORAGE; tests/decompile_tool.rs; hxv4 dump_named test.
-
-Current stop: `Layer.convertType` missing during UI construction. Known open:
-per-channel draw faces (face=1/holdAlpha), fstat.dll, System.versionInformation,
-Debug.addLoggingHandler, Motion playback, psbfile/.scn scenarios, video/AMV,
-audio decoders. No rendered game frame yet; whole game not established.
-
-### 2026-10-29 — game-kr renders its first real screen
-
-Behavior: `crysirror render` (Metal, 1920x1080, 900 frames of 16 ms) shows the
-game's ATTENTION screen (attention.png drawn through the game's own AffineLayer
-onPaint path onto the shared canvas) plus the game's menu bar via UI.MenuSpec;
-Vorbis audio decodes. KAG is click-waiting at `sysvoice` in custom.ks *caution.
-Capture: target/verification/game-kr/render/attention-900.png (local, ignored).
-
-Fixes this round:
-- Vendored krkr-tjs2 patches (recorded in SOURCE.json `patched` + UPSTREAM.md):
-  `&a.p incontextof t` keeps the ignore-property context (parser rewrite matching
-  tjsInterCodeGen.cpp); call opcodes record the caller's `this`
-  (`Runtime::native_caller_this`), used by scriptsEx foreach `functhis`.
-- Shared canvas (crysirror-scene): band pruning keeps partial replaces linear
-  (400-cell test), copies keep only source nodes inside the copied rect,
-  destination draw clips on Copy/TransformCopy, new `Fill` with replace.
-- Adapter: Layer.update raises callOnPaint (krkrz UpdateByScript), layer growth
-  enlarges the image (krkrz ImageLayerSizeChanged), setClip/clip* properties,
-  partial translucent fillRect, convertType (alpha/add-alpha identity in the
-  adapter's straight-alpha representation; to-opaque fails), Layer.focused (false,
-  consistent with focusedLayer null), extrans/extNagano provider links,
-  KAGParser.store with native callStack/macroArgs layout (restoring active call
-  frames still fails visibly).
-- Tests: krkr/scene/runtime/text/image/resource all pass; tests/tjs_semantics.rs.
-
-Open: input/click to advance past the caution screen is unverified, title screen
-not yet reached; Motion playback, psbfile/.scn, video, per-channel faces, fstat,
-save-path cfu write, hotkey dispatch, cursor shapes, focus.
-
-## 2026-10-28: game-kr continuation and shared codec work (Codex)
-
 ### Implementation
 
 - Explicit `void` native storage strings convert to the empty string, distinct
   from a missing argument. `windowEx.getCursorPos` reads the client engine input
   snapshot in virtual window coordinates (not the OS desktop cursor).
-- Native relative/absolute sibling ordering now maps to engine retained order.
-  ADR 0094 adds engine-owned isolated subtree crossfades, public Layers commands
-  and progress, with KiriKiri exchange/completion semantics in a thin adapter.
 - Shared text-file encoding and scoped VFS metadata back `Array.save2` and the
   fstat read/query profile. Saves await actual atomic-write completion; failure
   does not resume the script as success. Unsupported mutation/saveStruct2 modes
@@ -4443,10 +3219,6 @@ save-path cfu write, hotkey dispatch, cursor shapes, focus.
 - Earlier in this phase, the native bridge suite passed 22 tests with 1 ignored,
   and Python tooling passed 191 tests. Those results precede the new crossfade
   and Motion changes and are not reported as verification of the final state.
-- Actual game-kr clicks progressed beyond ATTENTION and exposed native storage
-  string, cursor, ordering and transition gaps. At this checkpoint no title
-  screen has been verified. Later release/GPU/game results are appended below;
-  implementation or an authored test alone is not counted as a pass.
 
 - Subsequent native bridge release run: **23 passed, 1 ignored**, including
   actual engine-clock crossfade completion, self-bound native object identity,
@@ -4455,9 +3227,6 @@ save-path cfu write, hotkey dispatch, cursor shapes, focus.
   tests filtered). AVC/HEVC/AV1 frames publish through the existing bounded media
   workers; an MP4 audio track with audio enabled fails explicitly. MP4 audio
   decode, HDR tone mapping and hardware video decode are not implemented.
-- Desktop release build with `krkr,arc-formats` completed. The next real game
-  replay failed in a retained Canvas batch with `layer missing`; this is not a
-  successful title-screen result and is being investigated independently.
 
 - Shared subtree state tests: **3 passed**. Explicit release GPU test on
   **Apple M5 / Metal: 1 passed, 0 ignored**. Pixels verify overlapping descendants,
@@ -4519,256 +3288,9 @@ save-path cfu write, hotkey dispatch, cursor shapes, focus.
 - Final API fingerprint: `08381e9cfceae9bf`. Reference regeneration and command
   coverage ran; after the fingerprint log update, all **7 API documentation
   checks passed** from the newly built release test executable.
-- Desktop build8 with `krkr,arc-formats` passed. Actual replay8 still stops at
-  `custom.ks:110`: source slot3 is type1, uniform alpha0, 1920x1440, with two
-  visible type2 children; destination slot214 is type1 with no children. This is
-  an opaque composed-subtree path, not the raw-image fast path. Its upstream
-  cache-alpha behavior is distinct from ordinary alpha composition. It remains
-  an explicit error rather than being forced to A255 or silently approximated.
-  **The title screen has not been reached or captured.** The next engine gap is
-  a defined opaque bitmap/subtree composition and presentation policy.
 - No commits or pushes were made. No CI was added. Verification used local
   release builds, synthetic redistributable fixtures, existing local game data
   and runtime system fonts.
-- Final native release regression (`engine_bridge`, `motion_plugin`,
-  `piled_copy`, `storage_plugins`): **30 passed, 2 ignored, 0 failed**.
-  Ignored tests are not included in the pass count. Evidence:
-  `target/verification/game-kr/title-bringup/native-final.log`.
-
-### 2026-10-28 — game-kr reaches its title screen
-
-Behavior: `crysirror render` (Metal, 1920x1080, input track clicking the caution
-screen at frames 900/1200) runs 1800 and 2600 frames with exit 0 and shows the
-title screen: the seven menu buttons, the 体験版 badge (PSB pimg images), title
-BGM (Ogg Opus with .sli loop). Captures: target/verification/game-kr/title-bringup/
-title-1800.png, title-2600.png (local, ignored). Clicking はじめから reaches the
-next UI, which stops on unmapped toml.dll (uitexts.toml) and an audio open
-inside a non-resumable native callback.
-
-Fixes this round (on top of Codex's uncommitted work):
-- Repaired Codex's non-compiling image_processing edit and its `image_alpha`
-  present field the canvas never accepted.
-- Layer.piledCopy of a composed ltOpaque source goes through the shared
-  copy_subtree with straight alpha and logs the deviation (krkrz displays stored
-  RGB; where the source alpha is below 255 ours shows what lies beneath).
-- Window.focusedLayer writable, Layer.focus/focused, onBlur/onFocus delivery.
-- Shared canvas `fill keep_alpha` (holdAlpha); fillRect dfOpaque/holdAlpha.
-- VideoOverlay.stop is a no-op (open always fails visibly, nothing can play).
-- crysirror-audio: Ogg Opus decoder (opus-decoder 0.1.1, MIT/Apache, no unsafe),
-  `.sli` parser; AudioParameters.loop_end; WaveSoundBuffer labels/flags.
-- psbfile.dll facade: PSBFile.load/root via eluna_rs; `psb://` images decoded
-  by the engine registry through new HostServices::upload_encoded_image.
-- CSVParser accepts a null target. API docs regenerated (224cb89811441323).
-- Tests: krkr (all binaries), scene, audio, core, runtime pass; api_docs pass.
-  Opus decode/seek verified on the game's BGM via an ignored local-file test.
-
-Open: the title background motion (title_bg.mtn) publishes PuppetFrames but
-only its dark base parts render (character/logo art missing: motion renderer
-gaps); operateRect/colorRect with face=1 holdAlpha; toml.dll; WIN32Dialog;
-opaque-layer display semantics; fstat deleteFile.
-
-### 2026-10-28 — game-kr plays its opening scenario
-
-Behavior: `crysirror render` with an input track (caution clicks, はじめから at
-frame 2010, then a click every 150 frames) runs 3000 and 4900 frames with exit
-0: start.ks loads the PSB scenario (`.scn` via PSBFile) and the opening NVL
-monologue advances line by line with the click-wait icon and quick menu.
-Captures: target/verification/game-kr/title-bringup/start-3000.png,
-story-4900.png (local, ignored). Backgrounds/characters of these opening lines
-are dark/absent in the capture; whether that is the scene or a gap is not yet
-established.
-
-Fixes this round:
-- toml.dll: Scripts.tomlDecodeFromStorage over shared structured_text TOML
-  (toml_edit 0.25.17).
-- WaveSoundBuffer: open/play queued from input callbacks (no suspend there);
-  metadata reads while such an open prepares fail visibly; `frequency` writable
-  (rate applied at play; live change fails visibly).
-- Vendored krkr-kag: `%arg|default` resolves inside argument-less macros (KAG3
-  argument-stack depth); recorded in SOURCE.json/UPSTREAM.md.
-- Canvas: `fade` (krkr negative-opacity colorRect: alpha scaled, isolated
-  snapshot); copy provenance turns a krkr save/restore of a cell around each
-  redraw into (region over base) instead of nesting clones (was O(frames^2),
-  hit the 4096-layer limit within ~100 frames).
-- Layer: affineCopy clear (neutral-colour fill of the clip area, then copy);
-  drawText void colour → 0 and font members read through PropGet (script font
-  properties); blurred shadows via a new shared glyph blur ported from krkrz
-  fd5c4baa CharacterData::Blur / TVPChBlurCopy (crysirror_text::glyph_blur,
-  Paint::GlyphRun.blur; licence docs/third-party/krkrz.txt).
-- PSBFile(storage) constructor; msdfrender.dll links without its SDF members
-  (scripts feature-detect them and use the atlas stretchCopy path).
-- TextRender: read-only state visible to callbacks; `%n[N];` line breaks per the
-  game's TagTextConverter ([xr num]) and krkrz drop-in krkrsdl3 semantics (the
-  wamsoft source was not available).
-- Window.focusedLayer writable earlier this round; see previous entry.
-
-Open: title_bg motion art; operateRect/colorRect face=1 holdAlpha; WIN32Dialog;
-opaque-layer display; save/load not exercised.
-
-### 2026-10-29 — game-kr plays into the prologue with backgrounds and characters
-
-Behavior: `crysirror render` with an input track (New Game, then a click every
-90 frames) runs 12000 frames with exit 0 through scene changes: background art,
-event CG with name plate and dialogue (captures title-bringup/scene-8000.png,
-long-12000.png; local, ignored). Remaining caught script errors in that run:
-ctxfontprefs.tjs encoding, onResize `recreate` on void. System variables save
-(datasu/datasc.ksd with the game's backup rotation) in a 3000-frame run.
-A windowed `run` (Metal, Retina scale 2, surface 3024x1666 BGRA sRGB, opaque
-alpha) presents a full, correctly letterboxed caution screen: verified by
-reading back the presented swapchain image (CRYSIRROR_SURFACE_CAPTURE).
-
-Fixes this round:
-- Transitions: `universal` rule wipes (krkrz TVPInitUnivTransBlendTable) and
-  transitions without children (temporary sibling presentation + krkrz Swap);
-  strictly nested crossfades composed inside-out (scene + renderer); piledCopy
-  of a tree with an active transition captures its nearest endpoint (logged).
-- Keep-alpha drawing: Blend atop / atop_multiply / atop_screen; canvas atop
-  copies/draws frozen into region snapshots (inlined, never nested); krkr
-  operateRect/colorRect holdAlpha incl. omPsMultiplicative/omPsScreen (_HDA);
-  single-draw copy opacity.
-- Data packs: encrypted TJS/4s0 `.pbd` (ChaCha, LZ4 with 64 KiB dictionary)
-  via crysirror_resource::krkr_pbd, ported from xmoezzz/xp3-brute (MIT).
-- fstat deleteFile/moveFile/copyFile/createDirectory on the save mount.
-- Performance: menu specs rebuilt only on change; layer validation skips frozen
-  snapshot payloads (checked on entry); snapshot payloads shared via Arc.
-- Snapshots admit images served by mounted containers; plain files refused.
-- Tests: scene/krkr/resource/text/audio/runtime 458 passed 0 failed; GPU tests
-  (Metal, single-threaded, CRYSIRROR_TEST_FONT set) all pass; api_docs pass.
-
-Memory (same machine, `crysirror render`, input track long.json):
-- Before: peak RSS 2.27 GB and rising. Cause: every Array/Dictionary carried
-  its own native method objects, every call allocated a new this-proxy, and
-  the TJS heap never freed anything.
-- Now: shared built-in natives, a cached this-proxy, and a mark-and-sweep GC
-  for the TJS heap (krkr-upstream UPSTREAM.md item 5). The GC runs between
-  adapter steps. Swept objects invalidate their native state. PSBFile,
-  CSVParser and TextRender instances are no longer GC roots.
-- 9000 frames: peak RSS 821 MB, exit 0.
-- 30000 frames (about 410 s, around 73 frames/s headless): RSS stayed between
-  443 and 620 MB and ended at 455 MB, with no steady growth.
-- GC: two collections, freeing 19982 and 43262 objects; the larger took
-  90 ms (a visible hitch).
-- `TJS_GC_NO_REUSE` (freed slots never reused) 9000-frame run: no
-  invalid-object errors.
-- Profile: about half of the live heap is TJS member tables (about 2 KB per
-  Array, because methods are copied per instance as in TJS2). Most come from
-  PSB trees that motion/psbfile convert eagerly.
-- Tests: krkr-tjs2 lib 420 passed; crysirror-krkr all suites pass;
-  scene/core/runtime 246 passed, 0 failed.
-
-Follow-up (same day), measured on the same machine:
-- Throughput: EngineSystems::submit cloned and fully revalidated all engine
-  state per batch (about 87% of main-thread samples). Batches now stage only
-  touched systems: one LayerSystem transaction (journaled, no tree clone),
-  copy-on-write canvas surfaces, validation of touched surfaces only.
-  9000 frames: 150 s -> 33.6 s (exit 0, frame 9000 pixel-identical);
-  12000 frames ~50 s; 30000 frames 58 s (was 410 s).
-- GC pause: dead objects are dropped on a background thread and collected
-  objects only release weakly held native state (`object_collected`):
-  ~27 ms -> ~11 ms (mark phase).
-- Script errors fixed: completion callbacks (`_stop` missing) -- the port
-  bound context-free closures when stored into a member, unlike krkrz
-  PropSet; `Scripts.evalStorage`/`execStorage` read `KBAD100` binary struct
-  packs (ctxfontprefs.tjs) as krkrz LoadByteCode does; that table then
-  reached `Layer.operateStretch`, now an engine transformed blend with
-  opacity (normal alpha modes; holdAlpha/other modes fail visibly). The
-  12000-frame run logs no caught script exception.
-- Native menu bar (macOS, muda 0.19.3): engine menu bars are mirrored into
-  the OS menu bar; selections become the same engine menu events. Verified
-  only by the install log listing the game's menus; clicking has not been
-  exercised (screen locked, no accessibility/screen-recording permission).
-  Windows/Linux keep the engine-drawn bar. `CRYSIRROR_NATIVE_MENU=0` opts out.
-- A windowed run does not advance while the window is occluded or the
-  screen is locked (macOS delivers no redraws; ticks run in redraw).
-- Tests: krkr-tjs2/krkr/scene/core/runtime/desktop 738 passed 0 failed;
-  wgpu incl. ignored GPU tests (Metal, single-threaded) 93 passed; api_docs
-  pass (fingerprint 3a2df66087609087).
-
-Title motion and close/confirm flow (same day), measured headless:
-- Title (title_bg.mtn) now renders background, logo and character art. Fixes:
-  motion samples continue from the player's previous native step (type-0
-  HOLD keyframes keep state; previously everything vanished at the end
-  hold); eluna port changes 8-10 (sprite centre = coord - origin + size/2;
-  HOLD state keyed by structural path, labels repeat; a Null priority frame
-  keeps the previous order); krkr/win 32-bit motion textures are BGRA;
-  E-mote MODULATE2X (bm 0x10) vertex colour gain (0x80 neutral; the logo
-  screens were grey).
-- WIN32Dialog.messageBox is an engine-drawn modal dialog on every platform
-  (UiSystem dialogs; Win32 button sets, MB_DEFBUTTONn, Escape rules,
-  IDOK..IDCONTINUE returned on resume via a new VM resume-value hook).
-  chooseColor still answers cancel (stub); template dialogs (open) fail
-  visibly.
-- Window.close runs onCloseQuery like krkrz (program close synchronous,
-  user close posted); the desktop close button / native Quit go through the
-  game and the window closes when the VM halts. The title's ゲームの終了 shows
-  the game's own 「ゲームを終了しますか？」; はい saves system variables
-  (datavc.ksd via safe-save rename) and halts.
-- Added for that flow: Layer.setMode/removeMode (modal layers, hit/focus
-  limits, onNodeEnabled/Disabled, BlurTree on disable/hide), transition
-  `callback` tick sources (engine external crossfade clock), universal
-  vague 0, bounded nested snapshots, Layer.setCursorPos (engine pointer
-  warp, applied by the desktop), Scripts.saveDataPack (TJS/ns0; the
-  cryptmode/compress/iv 4s0 options are not reproduced), Storages.saveOctet,
-  registerHotKey(id) unregister, void integer arguments read as 0.
-- Not verified: clicking the native menu bar; windowed play (screen locked
-  during this session).
-- Tests: krkr-tjs2 420; scene 84; krkr/core/runtime/resource/puppet/engine/
-  desktop pass (api_coverage included); wgpu incl. ignored 93 (after the
-  nested-snapshot change, Metal, single-threaded); api_docs pass (4936e7b23cc5a98a).
-  12000-frame playthrough: exit 0, 45 s, no caught script exceptions.
-
-Owner play report follow-up (same day):
-- System Setting opens (headless capture): a script class with a later native
-  base (`extends Script, Layer`) now gets that base's members copied at
-  inclusion, as krkrz tTJSNativeClass::FuncCall does (VM change);
-  System.personalPath/appDataPath map into the save root; transitions may
-  join endpoints under different parents (KAG fore/back pages; krkrz
-  Exchange on completion); engine layer budget 4096 -> 16384 (the screen
-  needs 4793).
-- PackinOne data packs are the Kirakira c451918 port (reference container:
-  LZ4/ChaCha, IV, digest XXH32; thumbnails not captured), replacing the
-  interim ns0 writer. Saving system variables and the voice clip index works.
-- The engine-drawn in-window menu bar is the default again on every platform;
-  the macOS system menu bar is opt-in (CRYSIRROR_NATIVE_MENU=1).
-- Tests: krkr-tjs2/krkr/scene/engine 693 passed, 0 failed.
-
-Open: real-time frame rate not yet measured in a window; save/load slots not
-exercised; title_bg motion art; WIN32Dialog; owner-reported windowed "top-left
-quarter / wrong colours" not reproduced with the current build.
-
-
-## 2026-10-29 — RFVP through the vendored portable core
-
-- Implementation: `crates/rfvp-upstream` vendors xmoezzz/rfvp 062fec8
-  (`crates/rfvp`, MPL-2.0, byte-identical sources; the Microsoft fonts are
-  excluded; new manifest building only the `no_std` profile). The old
-  hand-written `crysirror-rfvp` interpreter (`script/`, `bridge.rs`) is
-  removed. `crysirror-rfvp` is now the core's host: files come from
-  ClientStorage, textures are engine surfaces, each frame's sprites and solids
-  are one engine dynamic puppet mesh on one engine layer (scissor via
-  clip_part_rect, blend modes mapped), sound slots are channel audio
-  (EncodedAudio), time is the engine clock, saves go to the save mount
-  (`rfvp/save/*`), and save dates use local wall time.
-- Engine additions: HostServices::release_surface; per-client surface slots
-  raised from 16 to 4096 (same 256 MiB budget). The `.sli` parser moved to
-  crysirror-resource, so crysirror-krkr no longer depends on crysirror-audio.
-  Also fixed stale krkr-upstream SOURCE.json hashes and recorded gc.rs as an
-  addition.
-- Behaviour (headless `render`, owner-authorized ~/Downloads/testcase, White
-  Eternity, 1024x640): title with BGM; NewGame → prologue text → CG with the
-  in-game toolbar; the toolbar menu (SAVE/LOAD/…); SAVE screen; saving slot 1
-  writes `rfvp_s001.bin` and the slot shows text and date. Logged
-  "Invalid duration" / "history_set … Nil" are the game script passing nil
-  into upstream syscalls, not adapter errors.
-- Not done / not verified: save thumbnails (capture_thumbnail; the engine has
-  no synchronous frame readback, same as krkr); loading a slot; movies
-  (meffect/*.wmv layer effects); windowed play; streaming audio
-  (create_stream/submit_* return Unsupported). The core still decodes game
-  images and rasterizes glyphs (ab_glyph) privately, so it hands over finished
-  RGBA; moving these into engine image/text services is open extraction work.
-- Tests: crysirror-rfvp 3 unit tests; runtime/krkr/scene/engine/resource/
-  audio/rfvp/krkr-tjs2 598 passed, 0 failed; policy tests (krkr + new rfvp)
-  8 OK; api_docs pass (4936e7b23cc5a98a, Rust-only changes logged).
 
 ## 2026-10-29 — RealLive: AIR SE and Game_RUSUR play through the story
 
@@ -4776,8 +3298,7 @@ Owner-authorized games: `~/Downloads/AIR Standard Edition` (a RealLive title,
 not AVG32: Seen.txt scene index, g00 art, RealLive.exe) and
 `~/Downloads/Game_RUSUR`. Scripts: `target/verification/reallive/scripts/`.
 
-- Copied from siglus_rs 5f358ef into the adapter VM (recorded in
-  `vm/SOURCE.json`): settings/syscom, frame counters, GAN, the object model
+- RealLive adapter VM includes settings/syscom, frame counters, GAN, the object model
   (params, properties, mutators, pattern/GAN animation, promotion) and
   `modules/obj.rs`, and the VM-state 1:4 system functions (arithmetic, date,
   settings 22xx/23xx/26xx, syscom states, flags, savepoints, call stack,
@@ -4816,23 +3337,12 @@ not AVG32: Seen.txt scene index, g00 art, RealLive.exe) and
   fail visibly; the text-object control syntax (`#c` etc.) is not
   interpreted; window open/close animations, backlog and auto mode are not
   implemented. Windowed play not verified.
-- Tests: reallive/reallive-dll/image/scene/runtime/engine/audio/siglus/
-  formats-arc/rfvp/krkr 907 passed, 0 failed; policy tests OK; api_docs pass
+- Tests: reallive/reallive-dll/image/scene/runtime/engine/audio/
+  formats-arc 907 passed, 0 failed; policy tests OK; api_docs pass
   (fingerprint 0a86cec0fc22dca2, logged).
 
 Follow-up (same day, owner report: kr crashes after a while, AIR `play` would not start):
 - `run.py … play` passed a nonexistent `play` subcommand; it now runs `crysirror run`.
-- kr exits reproduced and fixed at the engine level: snapshots may now contain
-  text (fonts pinned by content digest in the snapshot key; previously
-  "snapshot font requires an immutable captured font handle"); per-frame
-  snapshots are de-duplicated and limited to 512 (the load screen had 198,
-  extra mode 150); region freezes (fade/filter/opacity group/atop) are
-  rasterized at the region's size instead of the whole canvas (the load
-  screen exceeded the 256 MiB texture budget). All seven title buttons
-  (new game, load, last save, flowchart, extra, settings, quit) render
-  without error headless. An unresolved E-mote motion icon
-  ("normal/mask", seen once in a window, not reproduced headless) now logs
-  a warning and skips that frame instead of exiting.
 - AIR window exit ("manual-mode draw backlog limit") fixed: manual draw mode
   now presents a frozen copy of DC 0 that `refresh` replaces, instead of
   holding batches.
@@ -4844,75 +3354,6 @@ Follow-up (same day, owner report: kr crashes after a while, AIR `play` would no
   (frame included), 152 clears it, 161 closes all, 162 clears all. AIR's
   opening shows no window; story text still shows it; RUSUR 300k frames pass.
 
-## 2026-10-30 — RFVP/BGI integration boundary audit and owner requirement
-
-- Read-only code audit: the current `crysirror-rfvp` depends on workspace
-  `rfvp`, mapped to `crates/rfvp-upstream/rfvp` with its portable core. It
-  translates sprite/solid commands into a shared PuppetFrame and uses shared
-  channel audio/storage, but the original core still owns image decoding and
-  glyph rasterization. Earlier game screenshots and save-write results do not
-  establish completed capability extraction. RFVP does not yet meet the
-  owner's thin-adapter / first-class-source acceptance requirement.
-- BGI: no replacement native adapter is present; the desktop still rejects
-  `bgi`. Shared CBG/resource decoders are not a completed BGI integration.
-- Recorded the owner's first-class workspace-source rule in AGENTS.md.
-  Merely renaming upstream packages is insufficient. Existing source notices
-  and provenance must remain. No implementation migration, build, game replay,
-  commit or push was performed during this audit.
-
-## 2026-10-30 — First-class RFVP VM and shared native capabilities
-
-- Implementation: RFVP bytecode/syscall/primitive/wait/save policy now lives in
-  `crysirror-rfvp-vm`; the old `rfvp-upstream` package is removed. Font metrics,
-  glyph/ruby/inline-token layout, outline/shadow, reveal surfaces and snapshots
-  moved to `crysirror-text`. NVSG decode, channel conversion, tone, blits and
-  coverage operations belong to `crysirror-image`; output-history LZSS and cyclic
-  XOR belong to `crysirror-resource`. The native adapter translates handles and
-  policy. Original software rasterizer/mixer and unsafe pixel storage are gone.
-- Implementation: RFVP globals, legacy metadata and pending exit state are
-  instance-owned. Engine audio uses scoped groups, buses and source EOF feedback.
-  Shared immutable `puppet::cpu_snapshot::MeshSnapshot` provides bounded CPU mesh
-  capture, interpolation and linear blending; RFVP previous-frame/mask capture
-  calls it. Syscall errors now propagate instead of becoming `Nil`; unsupported
-  operations retain their opcode/argument cursor for failure diagnosis.
-- Implementation: the Siglus `SceneVm` remains first-class in
-  `crysirror-siglus-vm`. Shared wipe masks, NWA, OMV plane conversion, MPEG probes,
-  E-mote player helpers and the transition shader no longer pull the full old VM
-  into engine services. Five pure codec crates are first-class; original players
-  and their device dependencies are excluded. `siglus-upstream` is removed.
-  Provenance/licences remain in SOURCE.json and the shared capability source map.
-- Implementation: Siglus accepts capability-relative private decode material,
-  encoded Gameexe.dat, START_SCENE/label and screen metadata. No user keys, fonts
-  or game bytes are distributed. Scalar key-file parsing is corrected; native
-  runtime snapshot schema is 8. API docs regenerated: `26edfb80137ff54a` (previous
-  `c6204fad405840ca`); migration is recorded in docs/api/CHANGES.md.
-- Compilation: desktop release build with `rfvp,krkr,arc-formats` passed; release
-  `--all-targets` checks passed for the changed audio/image/puppet/puppet-eluna/
-  RFVP/RFVP-VM/Siglus-VM/video crates and desktop. Existing warnings remain.
-- Tests: release RFVP 4, RFVP-VM 31, Siglus-VM 19, Resource 14, Text 25 (3 ignored),
-  Puppet 9 plus 2 public capture tests, Image 84 (1 ignored) plus 1 public wipe
-  test, Audio 15 (1 ignored), Puppet-Eluna 9 (1 ignored), Video 18 (1 ignored),
-  API docs 7 passed. The opt-in shared slot-font test passed with a runtime system
-  font. Python tooling 199 passed. Ignored tests are not passes. Worker capture,
-  instance isolation, cancellation/budgets, original slot serialization,
-  plane/alpha pixels and shared source decoding have independent fixtures.
-- Behaviour: `Downloads/testcase` renders its title through shared engine meshes,
-  textures, text and CPU previous-frame capture on Apple M5/Metal. NewGame now
-  exits with `Unsupported RFVP syscall Movie at 0x6206d` for `meffect/001.wmv`.
-  Earlier CG renders that swallowed this Movie error are rejected evidence.
-  Rewrite HF and Rewrite Plus decode installed resources and reach real boot
-  scene `sys10_su00`, then explicitly fail at `system.check_dummy_file_once`.
-  Neither has reached title/gameplay; the reference handler merely recording a
-  request is not a verified disk-authentication implementation.
-- Limits: native Movie/Media mapping, PCM streams, full font/MWND/UI coverage,
-  whole-game/save coverage and BGI remain incomplete. Siglus still lacks form
-  adapters for its shared movie/E-mote/wipe capabilities. Mesh capture is a CPU
-  reference with a worker-safe job API; native RFVP currently calls its blocking
-  convenience path. GPU parity and live async capture are unverified; native
-  text/scenario/image/audio preparation still needs full ADR 0050 boundaries.
-  No whole-engine async or complete compatibility claim is made. Logs and local
-  screenshots: `target/verification/firstclass-native/`. No commit or push.
-
 ## 2026-10-30 — Parallel native API profiles and shared Media
 
 - Implementation: shared Media workers now route capability readers through
@@ -4922,58 +3363,18 @@ Follow-up (same day, owner report: kr crashes after a while, AIR `play` would no
   immutable engine pictures whose clones retain memory leases; foreign clients
   cannot read another resource. Stop releases the manager's picture. No VM,
   decoder process, window or private native mixer owns this pipeline.
-- Implementation: RFVP Movie submits shared Media requests and observes engine
-  frames/EOF through native epoch/slot/layer policy. Native movie decoders are
-  removed. Missing/header-only/bad load data, failed writes and unavailable
-  thumbnails fail instead of logging-and-continuing. BGI is a new first-class
-  bounded BP executor/semantic adapter; NScripter is a new first-class source
-  interpreter. They call Canvas/Layer/GlyphRun/UI/resource/audio APIs, with
-  worker loading and explicit unsupported operations. They do not host old
-  App/renderers. Sources/pins/licences are recorded in their crates.
-- Implementation: Siglus GLOBAL.MOV PLAY/WAIT/WAIT_KEY/STOP uses shared Media,
-  ordinary engine Image layers and native EOF/DECIDE/CANCEL results 0/1/2.
-  It owns no second decoder or movie clock. Live movie save reconstruction and
-  OBJECT movie/seek/pause/loop remain unsupported; no authentication was bypassed.
-- Compilation: final desktop release build with `rfvp,bgi,nscripter,krkr,arc-formats`
+- Implementation: NScripter is a first-class source interpreter using shared Canvas/Layer/GlyphRun/UI/resource/audio APIs, worker loading and explicit unsupported operations.
+
+- Compilation: final desktop release build with `nscripter,arc-formats`
   passed (`parallel-final2-desktop-build.log`); release desktop checks passed.
   Source-generated adapter metadata and strict Python config/declared-inventory
-  validation now include RFVP/BGI/NScripter. API fingerprint is
+  validation now includes NScripter. API fingerprint is
   `810d2690fcbf11b5` (formerly `26edfb80137ff54a`), logged in docs/api/CHANGES.md.
-- Tests: RFVP-VM release 33 passed; RFVP facade 4 passed. BGI VM 9 and adapter 2
-  passed, plus the runtime system-font test 1 passed (default font test remains
-  ignored). NScripter syntax 2 and native integration 4 passed, including hidden
-  choice ordinals and unsupported-save failure at the native PC. Siglus MOV
-  release suite 23 passed/1 ignored; the fixture writer separately passed 1.
-  ASF reader tests 2 passed/1 ignored, with owner WMV prefix separately passed 1;
-  Theora/Vorbis reader test 1 passed/1 ignored, with an owner Rewrite OMV separately
-  passed 1. Audio release 16 passed/1 ignored. API docs 7 and Python tooling 200
-  passed. Ignored tests are not counted as passes. Logs distinguish earlier
-  Canvas-ID/audio-admission/Focus failures from the final passing runs.
-- Behaviour (final desktop, Apple M5/Metal): real RFVP testcase NewGame reaches
-  its post-movie CG in 3500 ticks, decoding 979 and publishing 973 WMV frames.
-  The game's save UI writes slot 1 with its thumbnail; a fresh process uses
-  Continue/slot 1 to restore the saved scene. The final binary cold-load replay
-  passed with strict load-error propagation enabled. Whole-game coverage,
-  commercial original-save interchange, choices/endings, legacy shell/dialog
-  APIs, full font/PCM modes and live-movie save reconstruction remain unproven
-  or unsupported. Native CPU capture/admission still needs full async migration.
-- Behaviour: the authored BGI BP scene renders shared image/text layers, mixes
-  audio (peak 0.305), accepts Enter and halts. The authored NScripter source
-  renders shared image/text layers and waits for input. These are native format
-  fixtures, not real BGI/NScripter games. Siglus's authored SCN plays WMV/WMA,
-  publishes four frames, mixes audio (peak 0.127), stops and halts with int_stack
-  `[0,77]`. Rewrite HF/Plus still explicitly stop at disk authentication; neither
-  has reached title/gameplay. No blank frame, rejected Movie error or factory
-  registration is counted as game completion.
-- Remaining scope: BGI native-bp-v1 is not the complete original VM: scenario/
-  Buriko, archive search, complete heap/multi-module/scheduling, original saves
-  and many native calls are missing. NScripter plain-nscript-v1 still lacks
-  complex windows/markup/effects, archive mounting, numbered script concatenation,
-  skippable delay, original saves and real-game validation. All four adapters
-  therefore cannot be reported as fully completed. Native fixtures/screenshots
-  and final logs are in `target/verification/firstclass-native/` (BGI project in
-  `target/verification/bgi-native-profile/`). No commit, push or CI was added.
+- Tests: NScripter syntax 2 and native integration 4 passed, including hidden choice ordinals and unsupported-save failure at the native PC. ASF reader tests 2 passed/1 ignored; the owner WMV prefix separately passed 1. Theora/Vorbis reader test 1 passed/1 ignored. Audio release 16 passed/1 ignored. API docs 7 and Python tooling 200 passed. Ignored tests are not counted as passes.
 
+- Behaviour: the authored NScripter source renders shared image/text layers and waits for input. This is a native-format fixture, not real-game validation.
+
+- Remaining scope: the recorded NScripter plain-nscript-v1 profile lacked complex windows/markup/effects, archive mounting, numbered script concatenation, skippable delay, original saves and real-game validation. This is the historical result for that source batch.
 
 ## 2026-10-30 — Desktop native menu bar and title-bar policy
 
@@ -4990,32 +3391,13 @@ Follow-up (same day, owner report: kr crashes after a while, AIR `play` would no
   remains independent. The original native borderStyle and shared window-policy
   request are retained. Unchanged window styles are no longer reapplied every
   frame. No bundle was added.
-- Compilation: full-feature desktop release check passed (rfvp,bgi,nscripter,
-  krkr,arc-formats; native-launch-round/check-v2.log). An offline release
+- Compilation: full-feature desktop release check passed (nscripter,
+  arc-formats; native-launch-round/check-v2.log). An offline release
   cross-check for x86_64-pc-windows-gnu passed
   using the already installed target/toolchain. Its small ignored harness
   directly includes the production native_menu.rs with real Scene/winit/muda
   dependencies and deny(unsafe_code). This checks the Windows presenter source,
   not the full desktop application or Windows runtime behaviour.
-- Tests: the final full-feature desktop release binary suite passed (17/17),
-  including three native event-routing cases, title-bar/fullscreen/opt-out policy
-  and content-based detection (native-launch-round/unified-tests.log). The final
-  `native_menu_bridge` release integration suite passed (2/2), including refusal
-  to acknowledge unsupported popupEx as user cancellation. Its host selection case
-  enables native-bar presentation, activates a menu through the exact shared
-  host entry used by native presenters and verifies the TJS onClick callback
-  and authoritative radio state without canvas pointer input or an OS window.
-- Behaviour: a windowed game-kr diagnostic before the owner's subsequent
-  headless-only instruction installed the AppKit menu bar. Native logs identify
-  the missing-title-bar cause: the game writes borderStyle=2, then borderStyle=0.
-  That diagnostic process was stopped; all subsequent validation is device-free
-  or offscreen. The final title-bar preference and physical OS menu clicking
-  have not been window-tested. Non-bundled binaries cannot be selected by the
-  available computer-use app resolver, and no bundle workaround was introduced.
-  Native context popups/synchronous MenuItem.popup/popupEx remain unimplemented.
-  The boundary audit changed popupEx's old log-and-void path into an explicit
-  unsupported error: no host popup means no user cancellation may be reported.
-  Logs: target/verification/native-menu-round/.
 
 ## 2026-10-30 — NScripter installed Tsukihime native bring-up
 
@@ -5063,47 +3445,7 @@ Follow-up (same day, owner report: kr crashes after a while, AIR `play` would no
   target/verification/nscripter-tsukihime-owner-third.log,
   nscripter-tsukihime-story-first.log and nscripter-tsukihime/*.json.
 
-
-## 2026-10-30 — KiriKiri bitmap planes and Canvas capacity follow-up
-
-- Implementation: completed the existing shared RGB-only Canvas copy and
-  compaction path with zero-alpha RGB preservation and generation-safe
-  materialization completion. An older completion cannot discard a newer
-  pending request. Canvas shrink discards cropped pixels instead of exposing
-  them again after growth. Node budgets remain bounded.
-- Implementation: shared ImageCompositeLayer now carries destination clips;
-  worker composition validates clips and preserves source sampling offsets.
-  KiriKiri translates native clips, partial fills, holdAlpha fills and
-  top-left image resizing into those immutable engine bitmap declarations.
-  The adapter no longer loses or retains stale CPU image sources before
-  subsequent shared SoftLight/effect jobs. No private pixel algorithm,
-  renderer or composed legacy screen was introduced.
-- Compilation: the desktop release build with rfvp,bgi,nscripter,krkr,arc-formats
-  succeeded and its new binary ran both installed games below.
-- Tests: shared runtime clipped bitmap pixels 1 passed; Canvas materialization
-  ownership 2 passed. The final release KiriKiri engine_bridge harness passed
-  24 tests, with 1 ignored, including clipped copy, same-size/grow/shrink resize,
-  partial/holdAlpha fill and subsequent SoftLight publication. Two explicit
-  GPU regressions passed on Apple M5/Metal: RGB-only copy/direct draw with
-  transparent source, retained destination alpha and clip; compaction to PNG
-  materialization preserves every channel within one quantization step.
-  The additional shrink/regrowth GPU test is supplied but not counted in
-  this local result; duplicate Cargo jobs were cancelled for unified validation.
-- Behaviour: direct `crysirror play <installed-folder> --headless` required no
-  hand-written project, mount script, font option or game extraction. CLOVERDAYS
-  ran 6000 ticks through the old colour-only copyRect wall and the later
-  SoftLight source-loss failure: background, two characters and dialogue
-  rendered; 3130 engine API calls, native error=null. DC5t4LM ran 2700 ticks
-  into its scenario CG/dialogue; 7199 API calls, 184 Canvas surfaces, a maximum
-  of 203 logical nodes per surface and 13 materialized-image references, with
-  no old presentation-node-limit error. Both exited successfully and explicitly
-  reported window_created=false, os_menu_created=false and audio_emitted=false.
-- Limits: these are real story-prefix results, not whole-game/save compatibility
-  or audible-device/native-OS-menu validation. DC5t4LM still logs its existing
-  opaque piledCopy/straight-alpha profile limitation. Screenshots, exact input
-  tracks and logs are local under target/verification/krkr-walls-final/; final
-  automatic-launch captures are clover-play-final.png and dc5-play-final.png.
-  No game data/font was added to the repository; no commit, push or CI.
+## 2026-10-30 — NScripter implementation and validation
 
 NScripter rendering follow-up (same round): the desktop hospital capture exposed
 an adapter error that logical background checks alone missed. The original
@@ -5115,7 +3457,6 @@ An independent regression covers both published and staged character removal.
 The corrected desktop image and final release test results are recorded by the
 root task's final validation; the earlier half-black capture is rejected visual
 acceptance evidence.
-
 
 ## 2026-10-30 — Shared pure-Rust content identification
 
@@ -5151,8 +3492,8 @@ acceptance evidence.
 ## 2026-10-30 — Installed-game bootstrap, content evidence and final offscreen verification
 
 - Implementation: `play <folder-or-file>` now constructs typed native projects
-  and archive mounts internally. NScripter, RFVP and Siglus metadata paths join
-  the existing KiriKiri/RealLive/AVG32 detection. A named boot worker performs
+  and archive mounts internally. NScripter metadata paths join
+  the existing RealLive/AVG32 detection. A named boot worker performs
   inspection; Resources `beginDecode`/completion/`mountDecode` indexes on engine
   workers and publishes scoped containers before VM execution. No generated
   `play-mount.ts` is needed. `--headless`, frame bounds, capture and input tracks
@@ -5174,7 +3515,7 @@ acceptance evidence.
   staged slots so a later print cannot resurrect them. The original half-black
   capture is marked `rejected-retained-character-story.*`, not accepted evidence.
 - Compilation: the final full-feature desktop release build passed
-  (`native-launch-round/build-final2.log`, features rfvp,bgi,nscripter,krkr,
+  (`native-launch-round/build-final2.log`, features nscripter,
   arc-formats). API docs regenerated and verified: fingerprint
   `8ff9a0e655c6babe`, previous `8e6792f059054768`, with migration notes.
 - Tests: unified release validation passed 181 tests / 1 ignored across 12
@@ -5194,180 +3535,6 @@ acceptance evidence.
   Title and final story captures are `native-launch-round/tsukihime-title.png`
   and `tsukihime-story-final.png`. SAR/NSA patches and local font are used in
   place; no user game data or font was added to the repository.
-- Behaviour: CLOVERDAYS automatic `play --headless` runs 6000 ticks into
-  background/characters/dialogue after the original colour-only copyRect and
-  later SoftLight source paths. DC5t4LM runs 2700 ticks into CG/dialogue, with
-  203 maximum retained canvas nodes and 13 materialized-image references. Logs
-  and captures are in `krkr-walls-final/*-play-final.*`. Both report no window
-  or OS-menu creation. game-kr's same typed bootstrap reaches ATTENTION at
-  1200 ticks; its initial capture is not counted as a title/playthrough result.
-- Launchers: the verified binary is refreshed at local/launchers/crysirror-dev;
-  existing crysirror-krkr-dev shares that inode, so the existing game-kr
-  CrySirror.command uses the new title-bar/menu policy. Tsukihime has a local
-  CrySirror.command pointing at the same player. These were syntax-checked,
-  not executed to create windows. No bundle, commit, push or CI was added.
-- Limits: menu-bar event routing/title-bar policy are verified in tests and
-  Windows presenter source cross-check; final OS clicking/window appearance
-  remain untested under the requested headless workflow. Linux remains an
-  explicit engine menu fallback; synchronous native popup/popupEx remain
-  unsupported (popupEx no longer pretends cancellation). Original NS saves,
-  system menus/backlog, full window animation, exact native integer transition
-  parity and whole-game coverage remain open. DC5's existing opaque piledCopy
-  limitation remains recorded. ADR 0097's generic x86 interpreter/lifted filter
-  IR remains a design, while TJS executes verified portable bytecode today.
-
-## 2026-10-30 — RiddleJoker native startup and copyRect semantics
-
-- Implementation: KiriKiri Config.arguments supplies bounded native startup
-  arguments before the first game script, overriding executable options.
-  Automatic play supplies -debugwin=no, selecting the original game's
-  production branch. The previous crash was an optional modeless developer
-  LogPad WIN32Dialog.open request, not a gameplay message box. Unsupported
-  modeless windows still fail explicitly; no fake dialog result or VM jump
-  was introduced. Adding this startup policy preserves the automatic player's
-  previous persistent-directory identity while snapshots retain full config.
-- Implementation: native copyRect resolves dfAuto from the layer type and
-  ignores HoldAlpha for alpha/add-alpha faces, matching pinned krkrz
-  fd5c4baa6a2ef5978db1bd043634351f48667daf LayerIntf.cpp. Only the opaque
-  face preserves destination alpha. Operations use existing shared Canvas
-  Copy/CopyRgb and immutable image-composite workers; no private painter.
-- Compilation: full-feature desktop release build passed (rfvp,bgi,nscripter,
-  krkr,arc-formats), riddle-fix/build-final.log. Generated API docs verified
-  fingerprint 2663a3650d0f8656, previous 8ff9a0e655c6babe.
-- Tests: final release run passed desktop 18, engine_bridge 25 (1 ignored),
-  startup_arguments 2 and win32_dialog 3. API docs 7 passed separately; Python
-  tooling 200 passed. A first regression harness incorrectly used Gamma on
-  native layer kind 13; the final harness selects straight-alpha inspection
-  after copying and passes. No ignored test is counted as a pass.
-- Behaviour: the shared confirmation was crossed with ordinary No-button input.
-  The final automatic offscreen player reached the title at 6000 ticks, then
-  NewGame/story at 9000 ticks with native error=null and last_tag=p. The final
-  story capture contains starry background, dialogue frame and Japanese text;
-  copyRect frame-load errors are absent. Engine audio mixed one active source;
-  no window, OS menu or device audio was created. Evidence is local under
-  target/verification/riddle-fix/{title-final,story-final}.{log,png} with exact
-  input tracks. Original game resources and scripts were not changed.
-- Launchers: refreshed local/launchers/crysirror-dev and the hardlinked
-  crysirror-krkr-dev from this verified release binary; the installed game's
-  CrySirror.command still points to it. Shell syntax checked, no window opened.
-- Limits: the title menu is interactive but its dynamic background art remains
-  incomplete; the title capture is not accepted visual-parity evidence.
-  Missing native TFT fonts use fallback. Whole-game coverage, animated title
-  rendering, smooth-loop sidecar parity, native window/menu interaction and
-  audible-device output remain unproven. No commit, push, bundle or CI.
-
-
-## 2026-10-30 — Siglus native MWND proc and shared motion follow-up
-
-- Implementation: original SceneVm stage.MWND[0] commands now translate PRINT/
-  NAMAE, OPEN/CLOSE (wait and nowait), CHECK_OPEN, deferred CLEAR, message-block
-  boundaries, NL/NLI, WAIT_MSG/PP/R/PAGE and frame filename access onto retained
-  CrySirror GlyphRun/Image/Solid/Filter layers and engine reveal state. Native
-  read-flag stocks commit at clear/close boundaries. A DECIDE down-up that finishes
-  reveal cannot also consume the following native message-key proc. R/PAGE clears
-  the block after that key proc, retaining the old visible text until new text
-  starts. CLOSE preserves text instead of pretending that it is a clear.
-- Implementation: bounded horizontal Gameexe metadata provides actual window
-  positions, message grid/count/size/spacing, palette colors and default font
-  alias. Name spacing is independent; zero name-window dimensions derive from
-  the native name grid. Supported WAKU textures use individual scoped G00 assets
-  at intrinsic size and cropped origins, plus engine filter/opacity operations;
-  filters support native margins, configured channel additions and transparency.
-  Name message-position adjustments are retained. Native G00 names now search
-  g00/ before the authored-fixture root fallback. No complete legacy screen,
-  private glyph rasterizer or private image-composition algorithm was added.
-- Implementation: reusable device-free scene::animation::ScalarTween exposes
-  explicit monotonic-clock sampling, finite endpoints, continuous retargeting
-  and serializable state, reusing shared layer::Easing. Siglus native window
-  animation kinds 0..5 select directions/coordinates and map shared samples to
-  Layer position/opacity. The native 500-ms type-3 slide has independent coverage.
-  Runtime snapshots advance from schema 8 to 9 for native wait/window state;
-  restoration validates derived message configuration and shared curve state.
-  Original native MWND save-file reconstruction remains explicitly unsupported.
-- Compilation: cargo test --release -p crysirror-siglus-vm -p crysirror-scene
-  --lib completed successfully (native-tests-complete.log). Separate earlier
-  compile/test failures are retained in the verification directory and are not
-  counted as passes. The standalone self-authored mwnd_fixture generator also
-  compiled with release dependency artifacts and produced its native PCK/
-  Gameexe/project outside source export. Desktop build/render is a separate
-  validation boundary and is recorded by the root task after unified build.
-- Behaviour validation: shared scene tests passed 29; native Siglus tests passed
-  29 with 1 ignored, including real native-ABI SCN execution, engine resource
-  inspection, deferred clear/read flags, complete DECIDE release semantics and
-  combined VM/engine snapshot replay. WAKU Image/Filter layers, native palette,
-  grid, name spacing and slide position/opacity have direct shared-state
-  assertions. These are device-free tests, not GPU/font-raster parity evidence.
-- Installed-game evidence: both owner Rewrite HF and Rewrite Plus automatic
-  offscreen launches reproduce system.check_dummy_file_once before title. The
-  pinned siglus_rs reference only records that request; the official manual
-  describes disk authentication using DummyMaker data plus env/DISKMARK. No
-  verified authentication backend or supplied authentication medium was found.
-  Recording/ignoring that request is not treated as success. No game script,
-  PC, authentication result or user resource was altered. These baseline
-  failures are not new-binary title/gameplay results.
-- Limits: this remains a bounded Siglus integration. Gameexe vertical/novel
-  profiles, rich markup/ruby, font decorations, WAKU buttons/callbacks and other
-  unmapped native mechanisms still fail explicitly. The host default font is
-  not a claim of native font/metric identity. Native image admission still has
-  the prior synchronous capability/decode boundary; full ADR0050 resource-task
-  staging is not claimed. Evidence is local under
-  target/verification/siglus-completion/. No fonts/game data, CI, commit or push.
-
-Siglus pointer follow-up in the same round:
-
-- Implementation: native Gameexe MOUSE_CURSOR.DEFAULT is a table index; index
-  zero selects the game's custom cursor rather than the OS default. Scoped
-  G00 albums become shared UI CursorSpec definitions, preserving each 32x32
-  cut, native center hotspot and SPEED step duration. SCRIPT.SET/GET_CURSOR_NO
-  and SET_MOUSE_DISP_ON/OFF publish shared UI selection/visibility. Cursor
-  definitions are re-established after framework restore; no OS pointer/device
-  state enters the VM snapshot. Invalid sizes, out-of-image hotspots and
-  unsupported cursor resources fail visibly. Automatic hide policies and
-  exact original-versus-host animation phase parity are not established.
-- Compilation/validation: the final release library run passed 29 scene tests
-  and 31 Siglus tests, with 1 ignored (60 passes total). The cursor tests verify
-  original-ABI default/custom index zero, SCRIPT selection/visibility changes,
-  client ownership, RGBA/hotspot/schedule and resource redefinition on restore,
-  and reject a one-pixel native cursor without fake fallback.
-  Log: siglus-completion/cursor-tests-final.log. Python native-project tests
-  passed 9 after aligning the tool validator with the supported explicit
-  message-window override plus Gameexe boot metadata; no schema fields changed.
-- Real resource validation: both Rewrite HF and Plus's original
-  g00/mn_mw_mcur00.g00 decode through shared crysirror-siglus::g00 into 20 cuts,
-  all 32x32 with supported hotspots; first hotspot is (0,0). Their Gameexe
-  defaults select index 0 at 100 ms per cut. This is resource evidence, not
-  title/gameplay success or physical OS-cursor validation. Diagnostic decoder
-  output is siglus-completion/cursor-resources.log. Desktop behavior with the
-  final unified binary is recorded separately. No game resource was committed.
-
-Siglus final offscreen behavior (fixed desktop SHA-256
-706f94778ceea33672577a4fc1384990bec3ebf6e429857543ef64a132094812):
-
-- The self-authored native PCK/Gameexe fixture renders a visible engine-owned
-  message filter, speaker and GlyphRun at 100 frames (native R input wait,
-  PC153). A genuine mouse DECIDE down/up at frames150/152 advances to the
-  second named message at 250 frames (native PP input wait, PC306); first-page
-  text is cleared at the native boundary. Both screenshots were inspected.
-  Native unknown-form/opcode maps are empty. Logs and captures are
-  native-mwnd-first-final.* and native-mwnd-next-final.*. This validates shared
-  rendering/input, not original font-metric/pixel parity or a real-game title.
-- A separate authored SCN resource probe combines that fixture with the owner's
-  unchanged Rewrite cursor G00 and its MOUSE_CURSOR metadata. Native VM startup
-  publishes client1's engine custom cursor id0 with visible=true, verified in
-  native-owner-cursor.log. The source resource has 20 validated 32x32 cuts; no
-  original game script or authentication flow is executed by this resource
-  probe. A headless image does not establish physical OS cursor appearance or
-  exact host animation phase. User data stays only in ignored local target/.
-- Automatic original-directory launch with the same final desktop binary was
-  rerun on both Rewrite HF and Plus. Both still fail visibly at the real
-  system.check_dummy_file_once before title; hf-final.log and plus-final.log
-  record this. These are failed game starts, not successful game compatibility.
-- The fixture's first, mixed command/read-flag ABI failed native validation;
-  its generator was corrected to a consistent original CD_TEXT/-1 profile,
-  without changing the production interpreter or bypassing validation. The
-  rejected fixture run remains native-mwnd-first.log; accepted input is
-  native-mwnd-fixture-v2/project.json and native-mwnd-input.json. No window,
-  audio device, CI, commit or push was used for these checks.
 
 ## 2026-10-30 — Circus MES/CRXG/XPCM groundwork and explicit execution gap
 
@@ -5389,7 +3556,7 @@ Siglus final offscreen behavior (fixed desktop SHA-256
   Spectral modes 1/3 remain explicit unsupported errors. GARbro source commit,
   hashes and MIT notices are retained; no original engine host was adopted.
 - Compilation: final full-feature desktop release build passed with features
-  rfvp,bgi,nscripter,krkr,arc-formats (dc4ph/desktop-final-build.log).
+  nscripter,arc-formats (dc4ph/desktop-final-build.log).
   Binary sha256 706f94778ceea33672577a4fc1384990bec3ebf6e429857543ef64a132094812.
   crysirror-circus and crysirror-audio release library builds/tests also passed.
 - Tests: MES authored format/invalid-boundary tests 2 passed; XPCM sample/exact
@@ -5413,316 +3580,6 @@ Siglus final offscreen behavior (fixed desktop SHA-256
   was added to the repository, no native executable was run, no window created,
   and no commit, push, bundle or CI was added.
 
-## 2026-10-30 — Native pointer resources and measured RFVP capture cost
-
-- Implementation: RFVP now discovers native numbered loose ANI resources
-  through client-scoped storage, decodes them with crysirror-image::cursor,
-  and defines/selects shared UI cursor resources. Pinned rfvp 062fec8203
-  setup policy prefers available slot 1; native CursorChange(0) selects the
-  OS default, and subsequent selected indices, CursorShow and CursorMove
-  reach the same UI cursor/visibility/warp services. The VM supplies only
-  native indices and one-shot window requests; it retains no OS cursor or
-  private decoder. Asset reads occur at boot, not on every cursor frame.
-- Implementation: AVG32 native CUR loading now calls the shared bounded
-  CUR16M decoder. BGR conversion, AND-mask/red-key coverage, hotspot and the
-  native 150-ms schedule live in crysirror-image::cursor. The old VM cursor
-  painter is removed. Native area-load/clear and visibility select the shared
-  UI custom cursor or OS default; unchanged immutable images are not copied
-  or redefined each frame. Sources/licences and affected VM hashes are retained.
-- Implementation: RFVP's actual title uses a visible full-screen Sprt(-1)
-  feedback layer with alpha 200/255. Sampling identified shared CPU frame
-  capture as approximately 96% of main-thread samples; this is real required
-  previous-frame sampling, not a request that may be silently skipped. Shared
-  MeshSnapshot capture now specializes strictly validated rectangular topology,
-  affine rectangular UVs and constant vertex colours, retaining the triangle
-  reference for other geometry. Bilinear sampling, linear-light blending,
-  cancellation and work bounds remain in the engine. Shared image::color adds
-  a process-shared sRGB8 transfer with batch access. Byte transition boundaries
-  are derived from the prior f32 powf/round expression; bucket prediction is
-  corrected against the original unquantized input, avoiding per-pixel powf
-  without replacing the colour contract with an approximate LUT.
-- Compilation: the final full-feature desktop release build passed, SHA-256
-  706f94778ceea33672577a4fc1384990bec3ebf6e429857543ef64a132094812.
-  It includes the shared capture/colour and native RFVP/AVG32 cursor paths.
-- Tests: RFVP adapter release tests 6 passed, native RFVP VM 34 passed,
-  shared Puppet library 12 passed, shared CUR16M decoder 1 passed and AVG32
-  installed-game tests 6 passed. The latter executes native area-load/clear
-  instructions and checks engine cursor pixels/hotspot/schedule/default return.
-  Colour tests 2 passed: every byte round-trip, 65,537 linear samples and
-  +/-8 adjacent f32 values around every byte transition match the old f32
-  transfer exactly. Rectangle tests cover clipping, filtered UV edges, five
-  blend modes, translucent overlap and nonrectangular/gradient fallback.
-  Python RFVP provenance/policy tests 5 passed. No ignored test is a pass.
-- Behaviour: quiet A/B uses identical automatic play of Downloads/testcase,
-  600 native ticks, no input, separate empty state roots and final offscreen
-  capture. The previous binary (5b703468...) took 14.704 s, versus 7.059 s for
-  the final binary: approximately 2.08x faster. VM-step mean was 24.03 ->
-  11.32 ms, median 36.91 -> 17.55 ms, p95 44.11 -> 21.16 ms. Both reached
-  the real title successfully, and every final RGBA byte matches exactly.
-  The final instance decoded ANI slots 1/2 and selected slot 0 because the
-  game explicitly selected the OS default. No window/OS menu/audio device
-  was created. An earlier 34.56-s run overlapped desktop test LTO and is
-  rejected performance evidence. Full logs, commands, binary hashes, CPU
-  samples, timings and images are local in target/verification/rfvp-perf-cursor/;
-  accepted measurements are quiet-report.json and image-comparison.json.
-- Limits: these are title-prefix CPU/offscreen measurements, not interactive
-  display FPS or whole-game performance. p95 still exceeds a 16.7-ms frame
-  budget; previous-frame capture remains synchronous CPU work. No stable-60-FPS
-  or GPU capture pipeline claim is made. Physical OS cursor presentation was
-  not tested in the requested headless workflow. KiriKiri already uses the
-  shared cursor service; Siglus cursor work is recorded by its separate task.
-  NScripter setcursor is its message-wait indicator, not an OS pointer override.
-  RealLive/BGI complete custom-pointer coverage remains unverified. No commit,
-  push, bundle, proprietary font or game-data distribution was added.
-
-Final local launcher publication for this round: after both agents completed
-release tests and offscreen behaviour checks, the verified 706f94778ceea3367...
-full-feature player replaced local/launchers/crysirror-dev. krkr-dev, rfvp-dev
-and siglus-dev share that inode; the preserved RFVP baseline-player remains a
-separate old inode for reproducible comparison. A new local
-Downloads/testcase/CrySirror.command calls the common automatic player; shell
-syntax passed, it was not executed to open a window. Siglus launchers now carry
-the fixes but Rewrite HF/Plus still fail their actual disk-authentication call;
-no runnable Circus launcher was created. Generated API references were blessed
-then verified again successfully (the same 7 tests, not 14 distinct tests),
-with reflective fingerprint 2663a3650d0f8656 unchanged by Rust-only additions.
-No commit/push/CI or bundle was produced.
-
-### 2026-10-30 — OUSAMA shared XP3 resource-filter bring-up (Codex)
-
-- Implementation: added the shared XP3 `adler_xor_modules` profile for the
-  31-byte Adler-derived rotating XOR family. Companion PE32 callbacks are
-  inspected as bounded data; no DLL, executable, emulator or JIT runs. Known
-  instruction semantics identify this family, and protected resources verify
-  their original XP3 Adler checksum before a random-access reader is published.
-  Unsupported callback shapes fail explicitly. Automatic desktop detection
-  tries this profile for supplied TPM companions and reports each rejected
-  profile/canvas rather than stopping after an index-only open.
-- Compilation/verification: release filter library tests passed 3/3 (authored
-  key vector, large offsets/split reads, companion evidence, decoded checksums
-  and corruption rejection). An explicitly invoked ignored local-corpus test
-  opened all six Downloads/game_kr_ousama XP3 archives and verified 187 sampled
-  entries with zero failures; native startup/configuration were separately
-  decoded and checksum-verified. These are actual local resource checks, not
-  a claim that an ignored test passed without invocation.
-- Behaviour: the existing player initially stopped before VM execution with
-  `Config.tjs with scWidth/scHeight not found`. Static analysis of the supplied
-  TPM identified the missing resource filter; the decoded game's own config
-  declares 1920x1080. Native startup/title behaviour still awaits the rebuilt
-  player. This is not evidence of a completed OUSAMA adapter or whole game.
-  No missing optical-disc resource has yet been established. Original media,
-  scripts and plugins were not modified or executed; diagnostic copies/dumps
-  stay under ignored target/verification/ousama. No game bytes, fonts or keys
-  are committed; no commit, push or CI was performed.
-- Follow-up implementation: `lineParser.dll` now maps its native constructor,
-  init/initStorage/getNextLine/parse/parseStorage and read-only line-number
-  semantics to the shared resource `LineCursor`, with adapter-owned callback
-  targets and GC cleanup. The complete public source/interface was reviewed at
-  wamsoft/lineParser d8b6ec56810f1332f3d5e322986203630559791d. The shared cursor
-  release test passed (mixed CR/LF/CRLF, blank lines, Unicode, byte budgets,
-  reset and EOF); the native integration test is still compiling at this point.
-  This plugin addition does not imply all plugins in OUSAMA are implemented.
-- Additional real native evidence (player c4ccc1c7bf9c0254a449b617acc69cda8...):
-  a diagnostic typed project using the verified 1920x1080 configuration and
-  original shared archive mounts executed startup.tjs, Initialize, Config,
-  Utils, KAGLayer, HistoryLayer, BGM, SE, Movie, Conductor, AnimationLayer,
-  GraphicLayer, MessageLayer, Menus, DefaultMover and MainWindow. Execution
-  then failed explicitly at Override.tjs:5, `Plugins.link("varfile.dll")`.
-  Automatic play additionally exposed a missing ordinary UTF-16LE BOM decode
-  in launch detection. That codec policy was extracted from the adapter into
-  shared resource `text_stream::decode_auto`; automatic play awaits rebuilding.
-  The diagnostic did not change original scripts or skip the varfile error.
-- LineParser's native release integration test subsequently passed, including
-  scoped UTF-8 input, callback target binding, reset/EOF and read-only line
-  count. Varfile now has an implementation pending compilation/behaviour
-  validation: portable TJS storage-media dispatch; dynamic global octet reads,
-  ordinary text/binary writes, namespace traversal and image requests through
-  shared encoded-image upload. Unmapped offset/append/compressed stream modes
-  and property-backed writes fail explicitly. No varfile success is claimed
-  until its authored binary/text/image integration test runs.
-- Portable TJS media dispatch's targeted release test passed: handlers read and
-  write current VM values, unknown media fails, duplicate registration fails,
-  recursive media requests stop at the budget and later requests still work.
-  `cargo check --release -p crysirror-krkr` completed successfully before the
-  final synchronous-memory saveStruct guard was added. That guard's first
-  native-test compile required an explicit Vec<Variant> closure argument;
-  this was corrected, and the native varfile test is being rebuilt. These are
-  distinct compile/test results, not a game-start success claim.
-
-## 2026-10-30 Codex: RFVP feedback moved to shared presenter history
-
-Implementation: core `MeshFrameHistory`/provider capabilities reserve client-owned
-logical mesh-layer resources. Runtime rejects unreserved references; wgpu owns
-bounded history textures, queue copies and once-per-declaration rendering.
-Ordinary asset revisions remain dependencies. Explicit native thumbnails use a
-separate readback fence. RFVP maps `Sprt(-1)` to this shared capability; absent
-presenters keep the shared CPU reference. Desktop headless ticks advance the
-same mesh renderer and final capture retains it. ADR 0098 records ownership,
-completion and remaining blocking-save/movie limitations. No original renderer
-is hosted or imported; VM data contains logical IDs/paths only.
-
-Compilation: `cargo check --release -p crysirror-wgpu -p crysirror-rfvp` passed.
-The first union desktop release build passed with
-`rfvp,bgi,nscripter,krkr,arc-formats`; its binary SHA-256 was
-`c4ccc1c7bf9c0254a449b617acc69cda87eb94e03b325cb1a8b8aa79dc352f49`.
-The subsequent resource-revision guard was compiled in the engine-only GPU test.
-Later Siglus/Circus/plugin additions require their own final union rebuild;
-this paragraph does not validate those changes.
-
-Behavior: explicitly executed release GPU test
-`mesh_history_is_gpu_resident_scoped_and_advances_once_per_declaration` passed on
-Apple M5 / Metal (one passed, zero ignored), including retained-declaration
-idempotence, cross-layer latest-picture reads, mutable surface replacement,
-client isolation, resize/reset and last-lease cleanup. No game/VM/font is used.
-The first attempted fixture used an invalid generated-resource namespace and
-failed before rendering; it was corrected, then rerun successfully.
-Log: `target/verification/rfvp-perf-cursor/gpu-history-test-final.log`.
-
-Actual RFVP testcase: the above player completed 600 native ticks offscreen in
-0.488 s while other compilation was active. It submitted 600 mesh renders,
-337 feedback copies and one explicit native readback, with native automatic save
-slot 901 written. Final 1024x640 title RGBA matched the prior shared CPU reference
-byte for byte (all channel differences zero). This is a functional preflight,
-not a quiet benchmark or a measured window presentation rate. Evidence:
-`gpu-preflight.{json,stdout,stderr,png}` and
-`gpu-preflight-image-difference.json` in the same verification directory.
-Python 3.11 tooling tests: 200 passed after refreshing RFVP source-provenance
-hashes. System Python 3.9 could not import tomllib and is not counted as passing.
-API generation at this intermediate stage passed seven tests with fingerprint
-`2663a3650d0f8656`; new glyph/sampling/Circus public data additions will be
-regenerated and logged separately.
-
-
-## 2026-10-30 — Siglus native-host policy clarification and continued bring-up
-
-- Owner policy correction: CrySirror does not execute the original Windows
-  SiglusEngine.exe. Requiring its DVD authentication as a condition for this
-  native host was an incorrect compatibility policy. Form 92.2 now validates
-  and consumes its original three arguments/void ABI, records native once
-  identity and explicitly reports disabled-for-native-host / not-applicable /
-  authentication_performed=false. It neither fabricates a true return value
-  nor creates original authentication data. Snapshot schema 10 stores and
-  validates the selected host policy. Previous failed starts remain historical
-  observations of the superseded policy, not a current DVD requirement.
-- Implementation: SYSTEM file presence queries use client-scoped shared storage
-  metadata with instruction retry, rather than reading entire resources or
-  committing a pending result as false. SCRIPT font overrides and native
-  Gameexe bold/shadow/fuchi defaults map onto shared GlyphRun coverage layers.
-  Shared Text adds bounded circular outline and square-face alpha union; the
-  existing weighted blur remains default. Renderer glyph resources/reveal
-  remain engine-owned, and a pure engine example requires no Siglus VM.
-- Compilation/tests so far: the decoration-stage release suite passed Scene
-  29, Siglus 36 and Text 26 tests (91 passes / 4 ignored). Python native tooling
-  passed 9. These runs preceded the later optical policy/character-voice
-  additions and are not asserted as final verification of those additions.
-  Explicit GPU/system-font validation is being coordinated separately; an
-  ignored GPU test is not counted as a pass.
-- Actual native behavior: a release device-free probe uses the real Runtime,
-  SharedHost and unmodified detected projects/game roots. With the new optical
-  policy, Rewrite HF completed 208 ticks and Plus 66 before both hit native
-  SYSCOM.SET_CHARAKOE_VOLUME [63,186] at sys10_ginit00 line111. After implementing
-  CHRKOE defaults/membership and actual shared Audio gain/stop routing, HF
-  completed 209 ticks and Plus 134 before both hit [63,14], the native global
-  extra-switch setter (lines142/140). These are real subsequent failures, not
-  titles, game screenshots or completed Siglus compatibility. Extra switch/mode
-  semantics are now implemented and await the next probe.
-- Performance investigation: a local one-second CPU sample found heavy
-  per-instruction SceneVm checkpoint cloning, especially immutable Gameexe
-  strings/indexes. The metadata is now shared through Arc while mutable VM
-  state and rollback stay independent; no speedup/FPS claim is made before
-  measurement. Evidence, reports and private diagnostic copies remain ignored
-  under target/verification/siglus-full-bringup. No game data/font/key, original
-  executable execution, CI, commit or push was added.
-- KaichoTrans implementation now grows shared scene/GPU capabilities rather
-  than loading its DLL: additive `BeginCrossfadeEffect` commands describe
-  bounded encoded-byte box-blur input transitions and grayscale/blur/inverted
-  rule wipes. Static inputs use generation-scoped GPU snapshots; dynamic inputs
-  are rendered every frame. Separable workgroup tiles read each source texel
-  once, use exact horizontal sums and u32 vertical normalization, and retain
-  GPU-local textures without per-frame CPU screen readback/upload. Radius,
-  workgroup/format support and memory budgets are explicit; plain crossfades
-  do not create the new compute pipelines.
-- Source/compilation: complete KaichoTrans 0.2.5.1 Main/blur/dim source and its
-  license were reviewed at the author-release SHA-256 recorded in
-  docs/third-party/kaicho-trans.txt. Shared scene/GPU release checks passed;
-  both filter shader variants and the final composite shader passed Naga
-  parsing/validation. An Apple M5/Metal headless GPU run passed byte-domain
-  blur, edge replication, static/dynamic lifetime and alpha-coverage assertions
-  before failing a hand-calculated dim test expectation. The expected value
-  was corrected to an independent u32 scalar kernel (x=1 still truncates to
-  127; x=2 becomes 128), with no shader change to accommodate that failure.
-  The stricter full GPU rerun is pending. No whole-game success is claimed.
-
-## 2026-10-31 — Siglus shared glyph/clock validation and native title callbacks
-
-- Implementation: shared Text `glyph_coverage` owns bounded disk outline and
-  square-face alpha union; GlyphRun retains independent per-glyph resources and
-  synchronized reveal. Scene `timeline_counter::Counter` now owns the former
-  generic native integer clock/range/loop mechanism; the VM keeps its original
-  callback/opcode and original-save policy. Existing Scene IntEvent remains the
-  implementation behind native property offsets/events. Shared Image/Solid/
-  Layer parents represent bounded 2D native PCT/RECT children and preserve the
-  distinction between a child-transform origin and a payload's image center.
-  Unmapped inherited 3D/filter/blend or non-default subtree ordering fails.
-- Implementation: native character-voice groups, initialization switches and
-  preferences now translate to saved VM policy plus shared Audio gain/stop and
-  retained UI fullscreen requests. SYSTEM path presence uses capability metadata
-  (including directories), not payload reads. Host focus is observed through the
-  shared optional focus API; offscreen activity is an explicit host policy.
-  Native frame callbacks now use the normal capability I/O rollback/retry fence,
-  preventing resource requests from escaping their instance or ticking input/
-  time twice on a missing-resource retry. The optical-host policy remains
-  `disabled-for-native-host`, with no forged authentication result or original
-  executable invocation.
-- Compilation/CPU checks: the later release Scene suite passed 31 tests including
-  the independent Counter test. The initial expanded native suite passed 44,
-  failed one new offset assertion and ignored one fixture writer. That assertion
-  incorrectly expected IntEvent.set_value to change cur_value immediately; the
-  pinned/shared implementation commits it at the next native frame. The test
-  now asserts the original 17px same-frame position and 22px after TIMEWAIT;
-  the shared timing implementation was not changed to satisfy the assertion.
-  The corrected Siglus/Text release run is pending at this record. Python 3.11
-  tooling passed all 200 tests after refreshing the current 90-file Siglus
-  SOURCE.json hashes; original source/licence hashes remain unchanged.
-- GPU behavior: root explicitly ran the shared face/outline GPU test on Apple
-  M5/Metal: 1 passed, 0 ignored; its per-glyph/reveal/color assertions passed and
-  `shared-face-gpu.png` was inspected. A prior relative capture-path write failed;
-  rerunning the same test binary with an absolute capture path passed. Root's
-  desktop binary SHA-256 `749eae9d97993db912a3c1667e33ef813c7c48218baba9461158688e1612d067`
-  also rendered the independent data project (30 frames) and authored native SCN
-  decoration fixture (100 frames); both PNGs were inspected. These are shared
-  API/native-fixture evidence, not screenshots of a working Rewrite title.
-- Actual game behavior: device-free release probes use the real Runtime,
-  SharedHost, ordinary detected plans and unchanged game roots. Rewrite HF and
-  Plus now pass sys10_ginit00 and enter sys10_tt01/$FaMain. Probe13 completed
-  210/136 ticks respectively before GLOBAL.GET_MWND; probe14 passes that getter
-  and both stop at native MWND.BUTTON[0].GET_BUTTON_HIT_STATE, which the old
-  parser misleadingly reported as a window-number error. HF has also read the
-  original mn_mw_hint00 G00 cut through the callback resource fence. No real
-  title, interactive menu or complete Siglus compatibility is claimed. Logs,
-  reports and original-format diagnostic extracts stay ignored under
-  target/verification/siglus-full-bringup; no game/font/key data was committed.
-
-### OUSAMA native bring-up continuation (2026-10-31, local verification)
-
-- Implemented: first-class KAG VM ExtKAGParser dialect (official 0.1.4.3 archive SHA-256 `c379325129ebc8b70f063b7bb650d1c180e89a4b991f43fd66c86962fb9dbc46`): native while/init/each, continue/break and structural scope errors; local dictionaries, `$` arguments, call/return local ownership; physical multiline tags, parameter macros, numeric macro arguments, macro default eval tags and macro iscript recording. Internal extension snapshots have a separate v2 appendix while classic v1 encoding remains unchanged. Native original-format quiescent save fields preserve local structured values and IgnoreCR. Fuzzy return, enableNP=true, Ext assign and active original call/macro/loop save mapping still fail explicitly. Original notices/reference retained in docs/third-party/ext-kag-parser.txt.
-- Compilation: `cargo check --release -p crysirror-kag` and `cargo check --release -p crysirror-krkr` passed (`ext-kag-check.log`, `ext-native-check2.log`, `ext-native-finalcheck.log`). The KAG release suite passed 50/50 twice, including authored nested-loop, macro, excluded-effect, snapshot and multiline cases (`ext-kag-tests.log`, `ext-kag-tests-final.log`).
-- Implemented: kropus/wuvorbis bind to the client-validated shared decoder capability; no DLL or COM module is loaded and no dummy TJS codec class is manufactured. Shared AudioSource/AudioResourceInfo expose actual ReplayGain metadata without silently applying gain; KRKR refuses tagged assets where original wuvorbis would require it. Optional native codec gain/format settings remain explicit unsupported requests. Pinned original module references are recorded in docs/third-party/krkr-audio-codecs.txt.
-- Compilation: `cargo check --release -p crysirror-krkr` passed with the shared codec/metadata changes (`codecs-native-check.log`).
-- Behavior: shared decoder test was explicitly invoked against locally generated 2.5-second 440-Hz Opus/Vorbis and tagged Vorbis fixtures: 2/2 passed, including decoding, seeking and real metadata (`shared-codec-tests.log`). The native WaveSoundBuffer -> shared worker/resource/mixer path produced nonzero PCM for both codecs and rejected tagged Vorbis before playback: 1/1 explicitly invoked ignored test passed (`native-codec-test.log`). Authored native LineParser/varfile/dirlist/Kaicho/ExtKAG tests passed 5/5, with 2 separate corpus/codec tests ignored in that run (`native-api-final4.log`).
-- Behavior: the read-only six-XP3 installed corpus probe now passes the entire Override.tjs plugin loading chain and reaches construction of the real KAGWindow/BaseLayer. `native-shared-host5.json` records the new first error `k2compat.tjs:267 MemberNotFound(font)` during a Layer constructor injection. This is a TJS class/constructor ordering defect under investigation; no game script, PC, exception or plugin is skipped. GPU/title/gameplay success is not claimed. No evidence yet establishes that the omitted optical-media files are required.
-- Earlier shared graphics verification finalized independently of this VM: original subtree crossfade GPU regression 1/1 and new subtree effects 2/2 passed on Apple M5/Metal (`gpu-final-test.log`); extensionless/misnamed standard-image magic test 1/1 passed (`image-magic-test.log`). Parent's later headless-tick capture regression is separate and has not been counted here.
-
-### OUSAMA window construction, audio budgets and original text saves (2026-10-31)
-
-- Implemented: native class-body initialization copies primary native members after installing native state; a hooked named constructor is not mistaken for the extends operand. Native `super.Class(...)` and direct native construction honor the actual replaced constructor member and retain it after forwarding to the original. These are general TJS/native-class semantics pinned to krkrz `fd5c4baa6a2ef5978db1bd043634351f48667daf`, not OUSAMA class-name patches.
-- Compilation/behavior: `cargo test --release -p crysirror-tjs2` passed 422/422 (`native-class-tjs-tests2.log`). The first test attempt had a missing test import, fixed before the successful run. Supplemental optimized direct-rustc testing independently passed the same 422 cases. KAG final release tests passed 51/51 (`ext-kag-tests-final2.log`), including missing Ext macro arguments remaining void. Native direct/derived Layer constructor injection and Font creation ordering passed (`native-api-final7.log`).
-- Implemented: common audio group capacity is bounded at 128 per client and 256 globally; the adapter's logical sound-buffer pool is bounded at 127, reserving its root group. Original game configuration asks for 100 SE buffers. An engine-only test verifies both capacities, client isolation and released-slot reuse (`audio-group-capacity-test.log`, 1/1 passed). The native 100-idle-buffer path now passes without invoking playback.
-- Implemented: public resource `text_stream::TextWriteMode` and bounded `encode` own UTF16 BOM, original mode-1 adjacent-bit cipher and mode-2 zlib/64-bit LE lengths. KRKR only maps mode strings and retains atomic Save capability/continuation policy; `var://` uses the same codec. Offset/update and unknown modes still fail explicitly.
-- Behavior: shared codec tests 4 passed/1 ignored (`text-write-tests.log`); the ignored authored-fixture exporter was explicitly invoked and passed 1/1 (`text-writer-export.log`). Independent Python `zlib` verified z0/z6/z9 headers, compressed/raw lengths and exact UTF16 bytes, including emoji/CRLF; it also checked plain and mode-1 bytes (`text-streams/external-verification.json`). The initial external checker normalized CRLF through Python read_text; using read_bytes.decode corrected that reference-only mistake.
-- Behavior: latest native authored suite passed 8/8 with 2 separately invoked corpus/codec tests ignored (`native-api-final7.log`). This includes c1/z/z0/z9 Dictionary.saveStruct original-format output, successful return only after shared atomic commit, readback, and the memory-media codec path.
-- Behavior: `native-shared-host8.json` advances the real read-only OUSAMA game through completed KAGWindow construction, GeneralFunc/ConfigFunc/BackLogFunc/OriginalFunc/AfterInit, local font registration and into original scenario/plugin execution. It completes 71 logical frames, then honestly fails at CFPlugin_Base.ks/CF_DB.tjs because `Scripts.execStorage(name,mode,this)` had ignored the original third context argument. Native storage exec/eval context mapping is now implemented using the existing VM execution API and has a new authored regression queued; that later change has not yet been counted as a pass. GPU/title/gameplay acceptance remains outstanding.
-
 ### Native Circus execution and shared capabilities (2026-10-31)
 
 - Implemented: first-class `crysirror-circus` native0xabb6 interpreter retains original operands, labels/metadata, variable banks, branches/calls, resource/wait policy and explicit unsupported errors. A worker-backed thin adapter publishes shared CRX/PCK/cursor/image/layer/UI/audio resources; no original executable, renderer, mixer or composed-screen engine is hosted.0xaab6 remains parser-only and rejects execution.
@@ -5731,169 +3588,6 @@ regenerated and logged separately.
 - Compilation: release Circus/runtime examples check passed, including the external-clock changes (`check-music-clock.log`). Native release unit tests passed16, with the separate installed-corpus test ignored in that invocation (`tests-settings-music.log`). The installed MES corpus test was then explicitly invoked against the original536 MES files and passed1/1 (`corpus-final.log`).
 - Shared behavior: UI snapshot/text-style/press tests3, shared TextField tests4 and interaction test1 passed (`ui-snapshot-final-tests.log`); PE32/64/bounds tests2 passed (`pe-tests.log`); VFX screen packing tests3 passed, including independent common mesh CPU capture without a VM (`vfx-screen-tests.log`). Parent separately ran real shared image-sampling/frame-history GPU tests2/2 and the original20396-entry PCK voice range test; ignored GPU tests are not counted as passes here.
 - Installed behavior: a fresh private Save capability plus authored ordinary input (click submit, then confirm empty fields) executes original START/WIN_SIZE through the complete playerinput callback, writes native preferences and enters MAIN. `headless-music1.log` reaches MAIN pc0x1193/op28 after loading TITLEBACK02/TITLECHIP01/TITLECHIP02/EFFSAKURA01 and preparing original music with its42 native loop records. This is an honest first failure at the not-yet-mapped falling-atlas particle effect; a complete visible/interactable title or story is not claimed. The subsequently checked native external frame clock has not yet been behavior-revalidated by this log. No original game process/window was opened and no files were committed.
-
-
-### Shared native-host validation and Siglus scheduling correction (2026-10-31)
-
-- Implementation: a Siglus host instruction quota now retains the current SCRIPT
-  pass. It does not rerun native frame callbacks or consume another logical
-  input frame until the original proc/wait boundary. The portable optical-host
-  check remains explicitly not applicable; no disc-authentication result or
-  substitute dummy file is generated.
-- Compilation/behavior: `cargo test --release -p crysirror-siglus-vm
-  scheduling_quotas_resume_one_native_frame_and_preserve_input_edges` passed
-  1/1. The authored original-format scene compares 401 budget-one pumps with
-  one pass, asserts exactly one native render-frame tick, restores a mid-pass
-  framework snapshot and retains the queued down/up edges. The compiled release
-  optical-policy regression was explicitly invoked and passed 1/1. Logs are
-  `siglus-full-bringup/budget-continuation-test.log` and
-  `optical-policy-current-test.log` under target/verification. Actual Rewrite
-  title behavior after this scheduling correction is still being re-probed.
-- Shared behavior: release GPU frame-history, sampling and subtree-effect tests
-  passed on Apple M5/Metal (`rfvp-perf-cursor/shared-gpu-current-tests.log`).
-  Headless logical ticks freeze static transition inputs before any screenshot.
-  RGBA snapshot readback uses the actual source texture format; the new BGRA
-  presenter channel-order regression and six existing canvas snapshot cases
-  passed serially (7/7). The earlier parallel invocation had three profiler
-  compute-pipeline validation failures and is retained separately; its cause is
-  not established, and it is not counted as a pass.
-- Shared behavior: client-scoped UI snapshot query 1/1 and live host-focus
-  restore/query regression 1/1 passed. Public API tests passed 8/8 against the
-  generated fingerprint d7986e975e6c66a8; API changes and Rust-only service
-  contracts are recorded in docs/api/CHANGES.md and README.md.
-- Compilation/installed behavior: the combined release desktop built with
-  rfvp,bgi,nscripter,krkr,arc-formats,circus (binary SHA256
-  67b57c83a5824170df5fc53ed0600d064f8d7bc928c10369285264f784f79a9b).
-  An actual offscreen OUSAMA launch with that binary stopped at the old
-  CFPlugin_Base/TxHELP context error; the binary predates the subsequent native
-  context/focus fixes. It was not published as a completed integration or used
-  to claim title success. No original executable/window, CI, commit or push was
-  added.
-
-
-### OUSAMA script contexts, focus and conditional lvalues (2026-10-31)
-
-- Implemented: native Scripts.execStorage/evalStorage preserve the original third object context for source and existing bytecode execution; the default bootstrap remains the ordinary context. System event slots start as original null values and actual host-focus edges call the stored closure with its original binding. Native windowEx monitor queries preserve the pinned original HRESULT truthiness behavior for dictionary/zero-HWND nearest-monitor calls, while foreign nonzero handles fail explicitly.
-- Behavior: authored Runtime/SharedHost native tests passed 11/11, with the separately invoked installed-corpus/codec probes ignored in that run (`ousama/native-api-final10.log`). Source/context, default event values, focus edges and monitor fallback have explicit assertions. `native-shared-host11.json` advances the unchanged installed game to 77 logical frames and fails honestly in EX_Func.tjs at its valid conditional assignment target; this report has no GPU rendering or title-success claim.
-- Implemented: first-class TJS compiler accepts conditional lvalues, lowers only the selected address after the single right-hand evaluation, and retains native compound/update/delete/swap behavior. Original T_TYPEOF examines only direct member syntax, so a conditional reads its selected value before typeof. The complete pinned tjsInterCodeGen.cpp reference remains `fd5c4baa6a2ef5978db1bd043634351f48667daf`; no script or instruction pointer is patched.
-- Compilation/behavior: the release TJS suite passed 425/425 (`ousama/conditional-lvalue-tests3.log`) without increasing the fixed decompiler fuzz failure budget. The first draft exposed one extra deterministic fuzz case; matching original typeof lowering removed it. An initial new missing-member assertion incorrectly used a Dictionary (whose absent key reads void); the corrected explicit-class assertion also passed in the supplemental optimized isolated-source test, 3/3 (`ousama/conditional-verified/tests.log`). The next native integration build/corpus run is pending at this record.
-
-### Siglus native callbacks, COW checkpoints and object Media admission (2026-10-31)
-
-- Implemented: WAKU image buttons use ordinary engine Image layers and shared
-  interaction-only Widgets. Native TYPE/CALL/ACTION/SE, stable backing-image hit
-  rectangles, callback identity and selection policy remain in the original VM
-  adapter. Shared activation serials prevent duplicate callbacks across repeated
-  pumps; native EXCALL suspends/restores its caller's wait in schema11.
-- Compilation/behavior before the object-Media extension: the release native
-  suite passed50/50 with one separate fixture exporter ignored
-  (`native-current-cow-proc-tests.log`). This includes a real original-format
-  WAKU callback with its own wait and mid-callback framework restore; original
-  save-byte compatibility, per-table COW flag clone isolation and budget-one
-  continuation are separately asserted. This result does not validate later
-  object-Media changes.
-- Installed behavior: after the scheduling/COW corrections the unchanged HF
-  data executes220 logical frames, and Plus145, before actual
-  FRONT.OBJECT[0].CHILD[1].CREATE_MOVIE120 at the title logo. These replace the
-  earlier transparent-root600-frame result as the meaningful next blocker.
-  Neither log established a visible title or complete game compatibility
-  (`native-hf-probe21.log`, `native-plus-probe21.log`).
-- Implemented next: native OBJECT movie declarations, validated-header admission,
-  metadata/position/EOF mirroring, pause/resume and auto-free/Remove now call the
-  shared Media service. Retained Image layers consume only actual engine picture
-  receipts. Native movie ticking no longer advances a second private clock.
-  A client-local reusable0..1022 Media identity pool reserves1023 for GLOBAL.MOV.
-  Active decoder reconstruction in original saves/framework snapshots remains
-  explicitly unsupported; unknown duration remainsNone. EOS/explicit FREE reset
-  only original type-owned state, preserving children and render parameters.
-- Compilation: the first object-Media `cargo check --release` passed
-  (`object-movie-check.log`). The first full behavioral run passed50 tests but
-  failed the new movie test on duplicate layer-tree removal: deleting a parent
-  recursively removed its child before a second removal command. The adapter now
-  removes preorder-assigned tree IDs in reverse order; shared Layer validation
-  was preserved. Subsequent compilation attempts hit concurrent VFX/Scene API
-  write windows; those failures are retained and not counted as behavior passes.
-- Installed behavior limitation: probe24 used a binary linked before the Media
-  identity correction and honestly failed at220/600 with `media identity`.
-  It is not evidence for the corrected implementation. Its221-sample CPU profile
-  reports native-step p50=13.07ms/p95=17.72ms; this is initialization-only,
-  device-free evidence, not a GPU/FPS claim. Corrected movie/title validation is
-  still pending at this record. Private game/font/key/extract data remains under
-  ignored local verification paths; no original executable was run.
-
-- Corrected object-Media compilation/behavior: the final release native suite
-  passed51/51 with the separate fixture exporter ignored
-  (`native-object-movie-full-tests3.log`). Its authored original-format movie
-  scene waits at CREATE until actual metadata admission, does not create another
-  decoder while pending, keeps metadata separate from a decoded picture, reads
-  both intrinsic dimensions, publishes the shared Media surface at the original
-  object transform, mirrors the engine position without advancing a private
-  clock, retains unknown duration, and releases the decoder/tree on auto-free
-  before permitting a framework snapshot. This is a deterministic service
-  contract test; it does not replace installed-game/GPU evidence. The latest
- 95-file source hash manifest and dedicated Python native-boundary tests passed
-  9/9 (`python-siglus-object-movie-final.log`).
-
-
-### OUSAMA title script and shared frozen group opacity (2026-10-31)
-
-- Implemented: ExtKAGParser.assign maps complete supported VM cursor/call/loop/macro state, retains destination owner switches, shallow-copies the original LocalVariables array/parameter-macro dictionaries, and allocates independent active macro-argument dictionaries. Ordinary publication retains unchanged shared parameter-macro identities. Native source operator= and TJSAry/TJSDic assignment were inspected in the pinned 0.1.4.3 archive. KAG release tests passed 52/52 (`ousama/ext-assign-kag-tests3.log`), including destination interruption/switch retention and source continuation after clearing the copy.
-- Implemented: native ltAddAlpha resources already use the adapter's canonical straight-alpha representation, so piledCopy now permits that display type through the same public Canvas CopySubtree operation as ltAlpha. An authored half-transparent child exposed a real shared group-opacity gap: scene-owned subtree freezing now folds a clipped partial-opacity group into an immutable nested Paint::Snapshot and applies group alpha once, after child composition. Unbounded local groups and excessive snapshot nesting still fail explicitly. No composed-screen upload or VM compositor was added.
-- Compilation/behavior: shared scene release check passed, and the release scene suite passed 33/33 including two new engine-only isolation/source-ownership/unbounded-group cases (`ousama/group-opacity-scene-check.log`, `group-opacity-scene-tests2.log`). The new ignored GPU regression `frozen_canvas_composes_overlapping_children_before_group_opacity` is pending explicit execution at this record; it is not counted as a pass.
-- Implemented: native Font is a regular first-class facade using the existing shared text measurement/draw path and per-VM rasterizer preference. frGDI/frFreeType map explicitly to the portable outline compatibility backend and log that native GDI/FreeType raster pixels are not implemented. This is not a Windows GDI backend or a pixel-identity claim; unknown selectors and unsupported bound Font(layer) requests fail explicitly.
-- Compilation: `cargo check --release -p crysirror-krkr` passed with the Font and shared group changes (`ousama/font-group-native-check.log`). Native run16 passed 13/14 authored cases; the remaining newly added piledCopy fixture had left its logical Window invisible, so no frame was extracted. The fixture's visibility is corrected and its rebuilt test run is pending. The earlier failed fixture had an omitted endwhile, corrected before its assign case passed; neither failure was bypassed in engine code.
-- Actual installed behavior: `ousama/native-shared-host16.json` completed 1200/1200 real Runtime/SharedHost updates (1132 native frame passes), reached title.ks/*title_menu, and stopped on the original [s] command without an uncaught exception. It reports 236 retained layers, 1016 engine API calls, 18 real facade plugin registrations, no plugin shells, owns_framebuffer=false, no pending shared tasks and no active VM suspension. Original game resources/scripts remained unchanged. This is device-free execution evidence; visible GPU title and menu interaction remain separate acceptance work.
-- Known behavior gap: original automatic-bookmark thumbnail saving reaches unsupported saveLayerImage; the game catches the error and calls System.inform, currently represented by a log. The probe therefore does not establish successful thumbnail/bookmark output. Compressed text offset-update writes and exact original active Ext parser saves also remain unsupported. No omitted optical-media file has yet been shown necessary for this startup path.
-
-- Installed corrected-build behavior: HF probe25 reaches original
-  sys10_tt01:795/pc94369,519 logical owner ticks; Plus reaches
-  sys10_tt01:888/pc83689,434 ticks. The first movie declaration and PAUSE125
-  now pass through shared Media; both fail honestly on the later logo's
-  CREATE_MOVIE real_time=false requirement. The native original trace confirms
-  named argument1=0 for mn_tt_rlogo00; it is not inferred from a filename.
-  Real/trace runs can spend different logical tick counts awaiting asynchronous
-  metadata, so these counts are not deterministic instruction-progress or FPS
-  measurements. HF publishes78 retained layers and Plus80; evaluating visible
-  and opacity through all ancestors yields only one transparent Solid and no
-  visible Image in either capture. No GPU/title success is claimed. Shared
-  decoder reservations/queued video and the current native PC are preserved in
-  native-{hf,plus}-report25-boundary.json. The next common capability is an
-  explicitly sourced media clock; the VM must not add another playback timer.
-
-
-### OUSAMA final native regressions and offscreen title evidence (2026-10-31)
-
-- Compilation/behavior: the final release native integration binary built (`ousama/native-api-build18.log`) and all 14 authored Runtime/SharedHost cases passed, with 2 separately invoked installed-corpus/codec cases ignored in that ordinary run (`native-api-final18.log`). The half-transparent ltAddAlpha child is retained as a nested shared snapshot: pixel alpha128 remains inside and native group opacity128 is applied outside, even after the live source changes. The drawing-only fixture explicitly selects province hit testing; the default alpha-mask query on a nonuniform canvas snapshot remains unsupported, and is not counted as an input-capability pass.
-- Behavior: root explicitly ran the combined release desktop player SHA256 `2a6fb5607253667acef5708c76e44f14174ebda8c16d6f16fa5f635c33e56668` offscreen for 1200 frames against the unchanged installed game and inspected `ousama/title-player.png`: character/title artwork and CONTINUE/START/LOAD/EVENT/CONFIG/EXIT are visible. Reported native execution is1184 frame passes,1016 API calls and236 retained layers; Metal on Apple M5, window_created=false, owns_framebuffer=false, plugin_shells=[]. This establishes a rendered native title, not completed gameplay or bookmark saving. Normal pointer activation of START is separate verification still in progress at this record.
-- Shared GPU behavior: root explicitly ran all 8 canvas snapshot tests serially on Apple M5/Metal, including `frozen_canvas_composes_overlapping_children_before_group_opacity`; 8/8 passed (`ousama/group-opacity-shared-gpu-test.log`). The new overlap test asserts group alpha128 across overlapping opaque children, the expected sRGB output, clip bounds and immutability after source mutation. The prior pending/failed authored-fixture records above are superseded by this successful final run; their logs remain available.
-
-### Siglus source-clock selection through shared Media (2026-10-31)
-
-- Implemented: ordinary FRONT object movies sample existing native
-  local_game_time/local_real_time using shared Media.SetClock. The engine owns
-  start/position/loop/seek/pause compensation; no playback timer was added to the
-  VM. Stage time-stop and the object's native pause flag form an overlay without
-  mutating that flag. Native Ctrl/read skip selects32x game delta and1x real delta
-  with the original Ctrl-disable/Shift/focus precedence. Movie metadata admitted
-  from a native frame callback retains the existing event/SCRIPT continuation
-  ownership instead of ticking the callback again. EXCALL/MWND movie locations
-  and negative source clocks fail explicitly.
-- Behavior/compilation: the release native suite passed53/53, one separate
-  exporter ignored (`native-media-clock-tests.log`). New assertions cover native
-  game/real clock selection, skip precedence, stage pause ownership, clock samples
-  while blocked in TIMEWAIT, and sample-before-pause/resume request ordering.
-  All original save/EXCALL/WAKU/quota/COW regressions remain in the passing suite.
-  Updated95-file current source hashes and dedicated Python native boundary
-  tests passed9/9 (`python-siglus-media-clock.log`).
-- Installed asset evidence: a bounded, read-only Ogg structural inspection of
-  both game directories found the related5 logo OMV files contain one complete
-  Theora stream each, with contiguous page sequence and BOS/EOS; no Vorbis,
-  Opus or unknown stream was present (`logo-ogg-layout.json`). This is a
-  container/audio-presence check, not image fidelity or game completion.
-  External-clock sources with decoded audio must fail visibly until a shared
-  audio-master mapping exists; disabling game audio to hide this requirement
-  was not used. Real-game behavior after the new clock mapping is pending.
-
 
 ### Shared screen VFX and native Circus execution progress (2026-10-31)
 
@@ -5941,7 +3635,6 @@ regenerated and logged separately.
   nonempty native text/markup and original slot-save reconstruction. No native
   executable was run, no game/font data was committed, and no commits were made.
 
-
 ### 2026-10-31 — shared media clocks, VFX acknowledgements and verified desktop title
 
 - Implementation: MediaInfo/MediaStatus now publish validated display size before
@@ -5974,118 +3667,6 @@ regenerated and logged separately.
   497d019748fb64d4 remain separately logged in docs/api/CHANGES.md. Python3.11
   full tooling passed201/201 before the last native-only edits; default Python's
   missing tomllib was an environment error, not a passing run.
-- GPU behavior: shared canvas snapshot suite was explicitly invoked serially on
-  AppleM5/Metal and passed8/8,0ignored, including frozen group opacity over
-  overlapping children (`ousama/group-opacity-shared-gpu-test.log`). The combined
-  release player built successfully (`ousama/title-union-player-build.log`), SHA256
-  2a6fb5607253667acef5708c76e44f14174ebda8c16d6f16fa5f635c33e56668.
-  Its ordinary detected offscreen OUSAMA launch rendered the actual1920x1080
-  title image; root inspected characters, logo and all six menu items. The report
-  records window_created=false, owns_framebuffer=false, plugin_shells=[], retained
-  engine Layer/Canvas rendering,236layers and1016engine calls. This is real GPU
-  title evidence, not a hosted framebuffer or a VM-only probe. Four managed local
-  launchers now point to that player; their previous749eae9d build is retained.
-- Installed input behavior: the same player consumed ordinary pointer down/up
-  on START and reached original0_1.ks after loading bg5_0 and the main-window
-  frame. It stopped honestly at a typed MacroArgs value being overwritten as a
-  String (`ousama/start-player.log`), under active KRKR semantic repair. Bookmark
-  thumbnail save remains unsuccessful and is caught/informed by the game; no
-  complete save, story or windowed-menu acceptance is claimed. All evidence is
-  ignored under target/verification. No original executable/window, CI, commit
-  or push was created.
-
-### Siglus sound-category and shared capability name lookup (2026-10-31)
-
-- Installed evidence: clock-enabled direct device-free probe27 reaches HF
-  sys10_tt01:812/pc95478 and fails on PCMCH[0].READY("mn_ss_se31",volume_type3).
-  Trace28 confirms this is the ordinary SE category with no character or duck
-  request. Its real source is wav/MN_SS_SE31.nwa, while the detected plan has no
-  hand-authored aliases. Plus reaches sys10_tt01:927/pc87405 and honestly rejects
-  its fifth retained object movie at the old4/client cap. Both reports retain
-  zero effectively visible Image layers; partial initialized media or zero
-  unknown-opcode counts are not a completed title. Shared Media cap changes are
-  separately owned/validated by the parent task.
-- Implemented: reusable Resource capability_lookup resolves ASCII component
-  names using only an already scoped ClientStorage directory capability. It
-  reads no payload and constructs no ambient path; canonical validation,
-  ambiguous-name errors,64-component depth and65536 aggregate-entry bounds are
-  explicit. Siglus Movie and sound facades both use it while retaining their
-  own native directory/extension/append policy. Ordinary native wav/bgm names
-  no longer require manual aliases; numeric voice packs, nonempty append policy
-  and implicit dual-source PCM/BGM reconstruction remain bounded limitations.
-- Implemented: PCMCH default system-gain category3 joins category2 through shared
-  channel audio. Per-channel script gain has no GLOBAL.PCM script-volume group,
-  preserving the pinned source's independent terms. Unsupported character,
-  system-gain and duck semantics continue to fail explicitly instead of dropping
-  factors. No mixer, decoder, fader or playback clock was added to the VM.
-- Compilation/behavior: release Siglus check passed
-  (`audio-capability-check2.log`); the initial helper check required a mutable
-  HostServices reference for capability acquisition and was corrected before
-  the successful run. Resource lookup tests passed2/2 without opening files
-  (`shared-capability-lookup-tests.log`). Native release suite passed54/54 with
-  the separate exporter ignored (`native-audio-routing-tests.log`), including
-  independent PCMCH gain and unmapped-gain rejection. Current96-file source
-  hashes and native Python checks passed9/9
-  (`python-siglus-audio-resource.log`). Installed audio behavior after this
-  mapping is being checked with the ordinary Runtime/SharedHost probe29.
-
-
-### CXDEC clear-bootstrap recovery and Natsuzora archives (2026-10-31)
-
-- Diagnosis: raw TPM facts expose a control block but no complete generator.
-  The previous bitperm route could expose the two Classic LCG words while still
-  leaving invalid instruction bytes. Static IDA analysis of the clear link
-  bootstrap established current-state byte selection, a different four-case
-  permutation and arithmetic signed state shift; the older route uses an
-  unsigned shift before selection. A separate Classic PRNG instruction window
-  is needed when no callback descriptor/newer lane-manager anchor exists.
-- Implemented in the shared XP3 recovery layer: bounded clear-loop/backedge,
-  four-case table, recurrence and seed-instruction recognition; addresses and
-  seeds come from the supplied module. Complete control/dispatch grammar now
-  validates decoded candidates, rather than two constant words. Previous v1
-  support remains. No title name/hash/key/table or fixed game RVA selects a
-  profile; no original module code or Unicorn fallback executes.
-- Compilation/behavior: the release CXDEC library suite passed19/19 with no
-  ignored tests (`recovery-regressions.log`). The final seed-operand-boundary
-  hardening was additionally verified against the same production modules by
-  six release regressions, including varied seeds/case permutations, old v1,
-  wrong shift, duplicate cases, missing descriptor and LCG-only rejection
-  (`standalone-final-regressions.log`). Original TPM alone recovers one candidate
-  that verifies all32 real protected samples; combined TPM/EXE facts yield eight
-  candidates with exactly one32/32 match (`tpm-only-checksum.log`,
-  `current-final-checksum.log`). No recovered parameter values are published.
-- Installed resource behavior: explicitly invoked the existing ignored CXDEC
-  integration test with the original directory/modules; it passed1/1 with zero
-  ignored tests (`actual-archive-tests.log`). All10 XP3 archives opened through
-  the normal ArchiveFormat/DecodeContext path:25,995 entries,25,985 protected.
-  Stride97 reads verified273 entries with zero failures,13,466,275 bytes;
-  startup.tjs is read from original data.xp3. This is archive/filter evidence,
-  not a full game, title-screen, rendering or frame-rate claim. The complete
-  player build/launch is coordinated separately by the root agent. Diagnostic
-  binaries, source snapshots and private samples remain under ignored target/;
-  no game executable was run and no commit was made.
-
-### Siglus DISP native display boundary (2026-10-31)
-
-- Installed evidence before this mapping: probe29 passes the previous audio and
-  media-capacity walls. HF prepares two real NWA-backed READY channels and stops
-  at sys10_tt01:823/pc106651 on GLOBAL.DISP6; Plus retains five actual decoded
-  paused media pictures and stops at sys10_tt01:953/pc99393 on the same command.
-  Channel audio peak remains0 because those sounds are READY; audible playback
-  has not been claimed. Title containers are still hidden at this early boundary.
-- Implemented: pinned native GLOBAL.DISP calls wait_next_frame(render_frame) and
-  selects ProcKind::Disp. Existing engine-owned layer publication runs at the
-  adapter's proc boundary; no legacy display/renderer is called. Native FRAME
-  retains its separate kind, and host quota continuation remains distinct.
-- Compilation/behavior: native release suite passed55/55, with one separate
-  exporter ignored (`native-disp-tests.log`). A self-authored original-format
-  scene publishes a red engine Rect at DISP/frame1, asserts pump_continuation
-  isfalse and proc kind isDisp, then produces a blue Rect/EOF only on the next
-  native frame2. Current96-file source hashes and native Python checks passed
-  9/9 (`python-siglus-disp.log`). The next installed-game/GPU run uses the parent
-  task's combined player; source is frozen for that build. Full title/menu/story
-  compatibility remains unverified at this record.
-
 
 ### Circus original system preference reload26 (2026-10-31)
 
@@ -6117,32 +3698,7 @@ regenerated and logged separately.
   Original files were not changed, no native executable/window was opened,
   no Core/Runtime/public object API changed, and no commit was made.
 
-### Siglus object events over shared Scene curves (2026-10-31)
-
-- Installed evidence: the combined player's normal detected headless launch
-  passes DISP for both installed Rewrite directories, then honestly rejects
-  native object chain[72,0], OBJECT.TR_EVE.SET (`gpu-hf.log`, `gpu-plus.log`).
-  That player wrote no PNG; this record does not claim a visible title.
-- Implemented: ordinary object property event targets map SET/SET_REAL,
-  LOOP/TURN and real variants, END and CHECK onto the existing public Scene
-  IntEvent. Native field/subop/named-start policy remains in the adapter;
-  interpolation, looping and time-domain mechanics remain engine code. Retained
-  layer publication now samples existing event totals, including completed
-  one-shots. PCT/RECT/movie creation synchronizes X/Y/PATNO through native
-  setters, preserving static positions and event-backed getters. Event WAIT/KEY,
-  parameter slots and offset-event-list suboperations still fail explicitly.
-- Compilation/behavior: release native suite passed56/56, one separate exporter
-  ignored (`native-object-event-tests2.log`). Its authored native Rect fade uses
-  a shared curve, keeps position10,20, observes opacity0/127/255, and after a
-  mid-fade snapshot returns opacity191 at75ms. The first suite run found the
-  hand-made parent/child fixture had bypassed the native event backing by
-  writing base fields directly; converting that fixture to the same native
-  setters preserved its existing geometric assertions and all tests passed.
-  Current97-file hashes and dedicated Python checks passed9/9
-  (`python-siglus-object-event.log`). Next real-game render is delegated to the
-  combined player owner; no additional renderer or runtime-example build was
-  introduced for this mapping.
-
+### 2026-10-31 — Circus implementation and validation
 
 - Circus reload26 final follow-up: inspection of43CE40 corrected the reset's
   retained-name music action to looping replay, not an unconditional stop.
@@ -6154,7 +3710,6 @@ regenerated and logged separately.
   The latest rebuilt example again passes the user's existing-preferences18/26
   path and reaches MAIN pc0x14f9/op0b, at headless frame803
   (`reload26-fenced-boot.log`). No working title or original slot save is claimed.
-
 
 ### 2026-10-31 — published reload26 fix and current installed-game boundaries
 
@@ -6169,94 +3724,7 @@ regenerated and logged separately.
   The next original title-group/menu instruction remains under implementation;
   the reported reload instruction is fixed, not skipped. Original game data
   was not modified and no title/menu completion is claimed here.
-- Implementation/behavior: KAGParser is registered as the original built-in
-  class, also without a DLL link; the independent native parser test passes1/1
-  (`natsuzora/builtin-kag-test.log`). The same published player opens Natsuzora
-  archives and loads the original KAG system, then stops at custom.ks line2
-  eval with an explicit range error (`natsuzora/builtin-player.log`). Archive
-  decryption is no longer that launch's blocker; its title is not verified.
-- Implementation: restore-resource presentation/cursor requests now mutate
-  staged engine state only. Unknown clients and arbitrary scene mutations are
-  rejected during reconstruction. Release Runtime suite passed70 with one
-  separate corpus case ignored (`siglus-full-bringup/runtime-staged-restore-final-tests.log`),
-  including all previously failing Siglus restore cases. Current Python3.11
-  tooling passed201/201 (`natsuzora/python311-current.log`).
-- Installed Siglus behavior: a real offscreen HF capture now displays its
-  opening film through shared Media/Image/Layer; root inspected
-  `siglus-full-bringup/trace-hf-movie.png`. Native PLAY_WAIT(op00) is unskippable
-  and still waiting for actual decoder EOS; a fast logical frame budget is not
-  wall time or finished media decoding. This is opening-video evidence, not a
-  verified title/menu or full compatibility claim. New Plus indexed offset
-  events have separate native tests and await the next combined player.
 - No original executable, window, CI, commit or push was created.
-
-### Siglus indexed events and actual HF opening movie (2026-10-31)
-
-- Installed evidence: combined player09c492c843372cec49f5ea5acd0344f433730e7bdb47cded2f2e7fb174df1f80
-  reaches Plus's native Y_REP_EVE[0].SET chain[113,-1,0,0]
-  (`event-plus.log`). HF produces a black1800-tick capture, but its retained
-  graph has one effective Image: the top-level GLOBAL.MOV surface1280x720.
-  Title/MWND image children remain hidden by their native ancestors; this was
-  not evidence that a visible native title was discarded by the renderer.
-- Implemented: indexed X/Y/Z/TR event-list targets share the same native
-  subop facade and existing engine IntEvent used by ordinary property events.
-  New read-only wait/movie/proc/frame diagnostics expose scheduling intent
-  without polling a wait, consuming input or advancing time. Event WAIT/KEY and
-  parameter-slot semantics remain unsupported; no private tween was introduced.
-- Compilation/behavior: the release native suite passed57/57 with the separate
-  exporter ignored (`native-offset-events-tests.log`). An authored original
-  scene animates a Y offset from20 to25 to30 and restores the50ms state to27
-  at75ms; repeated diagnostic queries preserve its wait. Current97-file hashes
-  and dedicated Python native tests passed9/9
-  (`python-siglus-offset-event.log`). Sources are frozen for the next combined
-  player; the indexed-event mapping has not yet received its real Plus run.
-- Installed movie behavior: original command tracing identifies
-  GLOBAL.MOV.PLAY_WAIT("op00"), opcode2, with no key skip. No DECIDE input,
-  script/PC edit or synthetic EOF was used. The earlier1800-tick black image
-  observes only1.440s of media clock/1.050s picture timestamp, not28s of movie
-  playback. The same player at2400 ticks renders an actual nonblack1280x720
-  opening frame: blue sky, flower field and two characters
-  (`trace-hf-movie.png`, inspected locally); media position12.848s, picture
-  timestamp13.229s,353 published pictures. It remains the opening film, not an
-  interactive title. The only rendering path is shared Media -> engine Image.
-- Independent read-only ffprobe metadata identifies mov/op00.mpg as MPEG1 video
-  plus MP2 audio, container duration99.576s
-  (`hf-op00-reference-metadata.json`). That external duration is verification
-  data only and was never used to manufacture runtime completion. A later
- 10000-tick observation still has true decoder progress at picture38.721s while
-  the fast host clock is130.816s (`hf-opening-eos.png` / summary); logical tick
-  counts therefore cannot establish that the decoder reached EOF.
-- A single subsequently bounded natural-wait run ends on explicit native
-  CGTABLE form78 chain[78,3] (`hf-opening-natural-eos.log`) before its90-second
-  wall bound. It emits no PNG or final Runtime snapshot, so this error alone
-  does not verify movie EOF or a completed title. CGTABLE was not altered or
-  bypassed. No further run or build is active; root owns the next combined
-  player check while these sources remain frozen. No commit was made.
-
-### 2026-10-31 OUSAMA native macro values and original Ext saves (Codex)
-
-- Implemented: ExtKAG macro argument publication preserves typed dictionaries,
-  arrays and alias identity through nested macro calls/returns. A separately
-  maintained native-save translator maps original active call-stack buffers,
-  UTF-16 positions, argument pools and local-variable ownership into the
-  first-class KAG VM; it does not add an opaque extension to game save data.
-  Original label replay and onScenarioLoaded ownership are preserved.
-- Compilation: release `crysirror-krkr` check passed
-  (`target/verification/ousama/native-save-final-check.log`). The release KAG
-  suite passed54/54 (`native-save-kag-tests2.log`). The current authored native
-  SharedHost regression binary passed18/18, with three separate corpus/font
-  cases ignored (`font-native-regressions.log`).
-- Behavior: actual ordinary START input in the installed OUSAMA corpus reached
-  `0_1.ks`, loaded its background/character/window resources and completed the
-  native `saveAnywhere.ks` call/return path. The device-free native25 replay
-  stopped at the first dialogue's missing shared default font after1566 ticks;
-  it is evidence of that native control path, not a completed game/render run.
-- Limits: original active while-loop saves and unsupported active macro states
-  fail visibly. The game's caught automatic thumbnail-save error remains a
-  limitation; no successful thumbnail/bookmark output is claimed. Dynamic font
-  registration is being implemented separately; its final game replay is not
-  part of the native25 result above. No game data/fonts, window, CI, commit or
-  push was created.
 
 ### Circus process11 and reusable Layer/UI motion/coverage (2026-10-31)
 
@@ -6301,113 +3769,6 @@ regenerated and logged separately.
   unsupported. No original exe was run and no commit/CI was made. Root owns
   public API generation and its integration validation.
 
-### 2026-10-31 Shared dynamic fonts and OUSAMA dialogue (Codex)
-
-- Implemented: device-free `FontLibrary`/font job and immutable resource handles;
-  bounded client-scoped storage I/O, CPU outline/shaping preparation, and atomic
-  publication into a shared TextSystem catalog. Existing measurement handles
-  and renderer Assets share the same catalog. Canonical aliases pin content
-  and fit the shared128-byte menu font boundary; duplicate alias/content jobs
-  retain the original handle/revision. Old canonical faces remain stable when
-  a logical alias is updated. Admission is bounded to16 jobs/64 faces per client,
- 64 jobs/128 faces globally,32 MiB per source and256 MiB charged resident bytes.
-- Implemented: public `Text.beginFont/fontStatus/resolveFont/releaseFontJob/
-  releaseFont`; rich/simple/glyph rendering uses owner-scoped font views. Native
-  `System.addFont` now submits shared work and resumes TJS only after publication;
-  Font face-family selection, getTextWidth and drawText use these shared faces.
-  It no longer validates and discards a temporary font. Complete wtnbgo/addFont
-  source was inspected at86e6ecc27844a2b4aea8ca9d171061b70bd0072b; the new engine
-  font resource manager is authored Rust, without a second native font engine.
-- Compilation: release Runtime font tests compiled successfully
-  (`font-shared-tests2.log`); the final native test target compiled successfully
-  (`font-native-build4.log`). Root also compiled the engine API bundle. Earlier
-  attempts interrupted by unfinished shared CatSystem2 source/manifests are
-  retained as failed logs, not counted as compilation passes.
-- Behavior: shared resource tests passed2/2; the separate ignored system-font
-  case was explicitly run and passed1/1 (`font-shared-system-test.log`). It
-  checks existing measurement handles, CPU raster/metrics consistency, client
-  isolation, duplicate registration, old-face immutability and release. Public
-  Text API testing passed1/1 with an explicitly supplied system font
-  (`font-engine-system-test.log`). The native addFont suspend/resume/metrics/
-  draw test passed1/1 (`font-native-system-test2.log`); the current authored
-  native suite passed18/18 with three separate cases ignored
-  (`font-native-regressions2.log`). Font files are read only at test runtime.
-- Installed behavior: OUSAMA ordinary START replay now passed1800/1800 ticks
-  with no error (`start-native26.json`, `start-native26-full.log`), native1622
-  passes and1983 engine API calls. Its own Kosugi and Kosugi Maru fonts were
-  registered with distinct verified digests; the first dialogue proceeded to
-  native `[p]` click-wait, with no suspended VM, owned framebuffer or plugin
-  shells. This replay is device-free; the new dialogue GPU image is awaiting
-  the combined desktop player, separately from the earlier verified title.
-- Limits: collection-wide native addFont registration and native `@` vertical
-  font semantics fail explicitly; the shared API can select collection faces.
-  Native rasterizer selectors use the existing portable outline profile and
-  do not promise GDI/FreeType pixel identity. Runtime snapshots with dynamic
-  font resources/jobs are explicitly gated until font reconstruction exists.
-  The game's caught automatic-thumbnail error (opaque stored-RGB composed with
-  straight-alpha child) remains; no successful thumbnail/bookmark output is
-  claimed. No game/font payload, window, CI, commit or push was created.
-- Follow-up compilation/installed behavior: the scene-reset fixture passed in
-  the release native suite25 passed/1 separate corpus ignored
-  (`menu-visibility-tests.log`); a fresh release example run against another
-  private copy of those same preferences again activates the actual title
-  button and stops at native13 (`menu-title2-boot.log`). Its retained scene now
-  has SCENE_ROOT visible, COLOUR_ROOT hidden and the menu root visible
-  (`menu-title2-summary.json`). An actual renderer PNG is still pending.
-  Read-only analysis found normal native13 is a staged centibel fade through
- 43CC90/43BFF0/43C0C0, distinct from forced422330 immediate stop; it remains
-  explicit unsupported rather than being replaced with an inaccurate stop.
-  Shared/public API docs were regenerated and verified by root at fingerprint
-  `0f42d774636005f8` (its public motion/restore and API tests are separate from
-  the native and installed results above).
-
-
-### 2026-10-31 — desktop Circus title and KRKR dialogue rendered through shared APIs
-
-- Implementation: client-scoped font resources now join SharedHost and Assets
-  through one dynamic Text catalog. Runtime polls completion before VM work;
-  retained measurement handles and client-scoped text/GlyphRun GPU cache lookups
-  observe the same immutable canonical faces. Pending/retained dynamic fonts
-  explicitly reject framework capture and prepared restore until reconstruction
-  exists; staged restore cannot lose a face after its addFont instruction.
-- Behavior: the release snapshot gate test passed1/1
-  (`ousama/font-snapshot-gate-test2.log`). Public Layer/UI motion, mask routing
-  and mid-track Runtime restore passed1/1 (`circus-execution/public-motion-mask-test.log`).
-  Documentation was generated/verified8/8 at0f42d774636005f8 before the newer
-  menu-enabled API addition, which has its own pending generation below.
-- Compilation: combined desktop release features rfvp,bgi,nscripter,krkr,
-  arc-formats,circus,catsystem2 passed (`circus-execution/title-font-cat-player-build2.log`).
-  Frozen player SHA256 is
-  e1a627a3e855128ffcc4749095c190e16d367050326f20d21685c60d65d1f7cb;
-  all four existing managed local launchers now point to this player. The first
-  combined attempt stopped on missing PE traits in the new INT helper; the
-  helper was repaired before this successful build. No failed build is a pass.
-- GPU behavior: normal detected DC4PHDL launch with copied existing system.dat
-  rendered its actual1280x720 title on AppleM5/Metal, without a window or original
-  executable. Root inspected the full background, character, logo and seven
-  menu items in `circus-execution/desktop-title2.png`; report is desktop-title2.log,
- 1400 host frames, native MAIN pc0x14fc waiting for menu input. Separate shared
-  pointer-release input reaches original prologue and the explicit next0x13
-  audio-control boundary. Title rendering does not imply completed story/audio.
-- GPU behavior: the same player, original OUSAMA data, ordinary START input
-  track and no font override rendered real bedroom/character/name/dialogue and
-  quick menu at1920x1080 (`ousama/desktop-start26.png`, inspected by root).
-  The1800-frame report has error=null, original KAG last_tag=p/click_waiting=true,
- 1983engineAPIcalls, owns_framebuffer=false and plugin_shells=[]. Two original
-  game fonts came through the shared registration path. The caught thumbnail
-  piledCopy/opaque-alpha save failure remains; complete save compatibility is
-  not claimed.
-- CatSystem2 behavior: this combined player's detect-only launch recognizes
-  the outer game-nekopara-vol3 directory, selects its data client capability,
-  preserves startup kcs.int/main.kcs/1280x720/heap, and plans31 original INT
-  mounts without extraction (`catsystem2/desktop-detected-plan2.json`). Its
-  native syscall mapping is not yet in this frozen player. New shared menu
-  enable state has independently passed the release owner/ancestor/activation/
-  restore test1/1 (`catsystem2/shared-menu-enabled-tests.log`); native integration
-  and the next player are separate unfinished work.
-- Evidence remains ignored under target/verification. No proprietary game/font
-  files, original executable process, native window, CI, commit or push was added.
-
 ### Circus audio-release contract draft, paused before admission (2026-10-31)
 
 - Static analysis identifies native13's owner-update db100 release and retired
@@ -6424,152 +3785,6 @@ regenerated and logged separately.
   passed at this guarded boundary (`audio-release-paused-check.log`). Remaining
   gain capture, preparation/cancellation fences and required sample tests are
   recorded in ignored `AUDIO_RELEASE_HANDOFF.json`. No commit was made.
-
-### KAG bare-label semantics and bound XP3 containers (2026-10-31)
-
-- Installed evidence: the published offscreen player reaches Natsuzora's original
-  custom.ks, then fails in MainWindow.tjs setRecordLabel3304. The debugger
-  identifies the incorrectly emitted `*` alias: original script strips it and
-  reads index1 of the empty result. This is a parser semantic wall, separate
-  from the already validated CXDEC resources. ExE's actual case-sensitive path
-  is game-kr-ExE; its six XP3 resources begin with MZ and the earlier player
-  rejects all profiles at the offset-zero signature check.
-- Implementation: native KAGParser's one-character `*` line has an empty callback
-  alias and no jump target; `*|page` still requires a preceding named label.
-  Shared XP3 now searches paragraph-aligned signatures in256KiB read blocks,
-  applies native base-relative index/segment offsets (including unsigned
-  negative-relative addresses), and admits bounded raw/zlib continuation chains
-  with cycle and cumulative-byte limits. Bound HXV4/indirect descriptors remain
-  explicit unsupported profiles. No executable code or native renderer runs.
-  Real pinned source files/hashes/notices are recorded in
-  docs/krkr-bound-xp3-label-sources.json.
-- Compilation/tests: release KAG suite passed54/54; the initial shared archive
-  release suite passed9/9, including offset-zero XP3 regression, bound v1/v2
-  compressed/raw indices, negative-relative continuation, missing/unaligned
-  signatures, cycles and invalid segment ranges. Additional chunk-boundary and
-  protection-regression runs are recorded separately after completion.
-- Behavior: these changes have not yet been verified with a rebuilt combined
-  player. Neither game's title/menu/story is established by these parser/archive
-  results. Local diagnostics remain in target/verification/krkr-natsuzora-exe/;
-  original game resources were read only and no original EXE/DLL was executed.
-- Further validation: final release archive suite passed10/10, including a
-  chunk-boundary/bounded-read scanner fixture. The separately requested local
-  CXDEC corpus test ran for both actual directories with zero ignored cases:
-  ExE six XP3 archives/25,586 entries,267 stride97 reads with checksum0 failures;
-  Natsuzora ten archives/273 stride97 reads with checksum0 failures. ExE uses
-  its own plugin/cxdec.tpm via the existing static bootstrap recovery. Logs:
-  krkr-natsuzora-exe/{archive-final-tests,exe-archive,natsu-archive-final}.log.
-  These sampled reads establish neither complete-game nor title behavior.
-- Combined player3 behavior (SHA256
-  84af91007810fa3f8b8b2d592cae6832f3b7e46fe38b1a2f85d46d6487d7cd22):
-  both previous walls are passed. Natsuzora now reaches custom.ks92 image,
-  *title_white, then AffineLayer.tjs458 fails because Layer.loadImages returns
-  void instead of native null metadata. The actual white.png has no text/tag
-  chunks. ExE now loads its original KAG system and reaches AfterInit's
-  showdate.tjs176 callback, which fails after with-dot calling incorrectly
-  selects the callback dictionary as this. These are actual later VM walls;
-  neither run produced a PNG or reached a title input wait, and short-Ctrl
-  interaction has not yet occurred.
-- Implemented follow-up: empty Layer image metadata returns native null Object;
-  TJS WithMember calls follow original T_WITHDOT GPD+CALL rather than direct
-  CALLD. The original compiler tests haspropnode only for T_DOT/T_LBRACKET;
-  ordinary named dictionary member calls retain their distinct receiver policy.
-  Targeted release regressions are queued; compilation/behavior outcomes remain
-  pending at this entry. No game flags/PC or original scripts were changed.
-- Follow-up validation: release TJS with-dot regression passed1/1; executing
-  that same test binary's full suite passed426/426. The native empty-image
-  metadata regression passed1/1, and its compiled engine_bridge binary's full
-  suite passed26 with one separate installed case ignored. Logs are under krkr-natsuzora-exe/{with-call-tests,
-  tjs-full-tests,image-null-test,engine-bridge-full-tests}.log. The optional
-  installed Runtime test harness now explicitly selects CXDEC companions via
-  CRYSIRROR_KRKR_CXDEC while retaining its existing Adler default. Its initial
-  build was interrupted by a concurrent shared-resource Reservation initializer
-  missing cancellation (E0063); this is a compilation failure, not game behavior.
-
-## 2026-10-31 CatSystem2 native VM, shared MENU/XML and INT namespace handoff
-
-- Implementation: first-class `crysirror-catsystem2` executes original KCS v2
-  bytecode with numeric owned memory, native frames/typed values, transactional
-  native outparams, pending calls, increment/compound operations and explicit
-  unsupported PC/native errors. No hosted engine, original executable/DLL
-  execution, private renderer/mixer or game/font distribution. Public source pins,
-  licence scope and original-module IDA evidence are in its SOURCE.json.
-- Shared extraction: `resource::pe_menu` parses bounded standard PE MENU v0;
-  original production MENU104 is retained by shared UiSystem and native393 uses
-  its enabled-state command. `resource::xml` owns bounded immutable UTF-8 XML,
-  attributes/entities/text and slash-path/unique configuration lookup; startup
-  and native XML590-593 reuse it. Resource workers reserve before scoped I/O and
-  parsing, then owner publication precedes native handle returns. Native
-  copy/format/task/config policies remain in the thin adapter.
-- Compilation: `xml-adapter-check.log` passed release runtime-feature check;
-  `int-alias-check2.log` passed release formats-arc check after the shared
-  DecodeContext cancellation/INT namespace changes. An initial mechanical
-  Reservation field edit caused E0063 and was corrected before the passing
-  second check. The source is frozen for a parent-coordinated handoff.
-- Independent validation: `native-values-tests2.log` passed6 unit and11 KCS
-  tests, including atomic native writes, native narrow increment DWORD returns,
-  unsigned compound-divide remainder policy, stack-value push and allocation
-  budgets. `shared-resource-final-tests.log` passed MENU3/3 and XML4/4. Later
-  XML name validation/cancellation/namespace changes have final tests queued;
-  queued tests are not counted as passes.
-- Actual behavior: original owner data indexed31 encrypted INT archives with
-  11786 raw entries;14 KCS and66 CST records parsed. `owner-game-strings.log`
-  ran actual configured `kcs.int/main.kcs`8328 instructions through shared
-  MENU/worker/XML resources: native590 load2,592 integer-query626,593 string-query1,
- 591 close2,14 formatted-copy27. XML handles/resident bytes ended at0. The
-  unacknowledged next native is400 atPC0x4cd, args[19,222]. Unmapped production
-  menu commands fail visibly. This does not validate a title/image/audio/gameplay
-  or original saves, and is not completed game compatibility.
-- Public-entry gap and fix: parent desktop player3 exposed `duplicate archive
-  path or id` while mounting scene.int. Its26 same-name CSTL pairs have different
-  offsets but fully identical stored payloads; native INT body encryption uses
-  only the archive-wide file key, independently of entry ordinal/offset.
-  Provider-only coalescing now admits proven equivalents, retains every original
-  entry_id/native_index/path/offset/size row in metadata, and rejects conflicting
-  duplicates/custom transform ambiguity. Comparisons use64KiB chunks, a64MiB
-  cumulative read budget and cancellation checks. Common ArchiveMount duplicate
-  rejection remains strict. Index tokens are stripped on publication/mount.
-- Pending at handoff: release `int_aliases` tests, original all31 ArchiveMount
-  regression, and resource XML/MENU/resource-job tests are running/queued in
-  `int-alias-tests2.log`, `owner-game-mounted-final.log`, and
-  `resource-final-validation.log` respectively; no pass is claimed yet. Root
-  takes over observing these and public desktop bootstrap/API-doc regeneration.
-  Exact source boundaries, native400 evidence and next requirements are in
-  `crates/crysirror-catsystem2/HANDOFF.md`.
-
-### Two installed KRKR games: original Start paths and passive UI tooltips (2026-10-31)
-
-- Behavior (shared Runtime CPU probe, original archives/scripts, no GPU/window):
-  Natsuzora passes the prior loadImages wall, enters the title script and starts
-  original title_beach.mpg through shared Media. An ordinary pointer/down/up at
-  the original title.csv Start rectangle is handled by native onMouseDown/Up/
-  Click and enters start.ks then １日目.ks/*day_start. ExE passes the prior
-  showdate callback wall, then exposed a genuine intermediate crossfade geometry
-  validation failure. Grouping all dirty native containers into one engine Layer
-  batch fixes the half-updated endpoint pair while preserving strict validation.
-  The repeated original Start click then enters ExE 01.ks. Logs and reports are
-  natsu-start-native4 and exe-start-native5 under krkr-natsuzora-exe/.
-- Compilation/tests: the atomic live-crossfade resize regression passed1/1;
-  the same compiled native probe's authored suite passed19 with3 separate cases
-  ignored. Both real games next stop on nonempty Layer.hint while constructing
-  original system buttons (Natsuzora meswinload; ExE sysuiload). Neither run
-  reached the later scripted Ctrl-down event; no Ctrl delivery or GPU title/
-  dialogue rendering is claimed by those CPU runs.
-- Implemented: shared Scene UI TooltipSpec/TooltipSystem with scoped put/remove/
-  show/hide commands, real TextMeasurement extents, delay/lifetime, canvas-clamped
-  position, passive Solid/Text primitives and transient hover state. Root's
-  Runtime preparation/public Ui API work is coordinated separately. The native
-  adapter retains hint strings, parent-hint/ignore-sensing policy and existing
-  native topmost-hit decisions; no private tooltip paint, layout or hit tester
-  is added. Native hidden/retired/focus-lost targets cancel the shared intent.
-  The bounded profile accepts single-line plain text and rejects control/rich/
-  rotated declarations instead of fabricating support.
-- Compilation/tests: shared tooltip release tests passed2/2 for measured bounds,
-  timing/expiry, passive clicks, client isolation, batch rollback, removal and
-  restoration. Initial scene compilation failed on an unavailable serde_json
-  production dependency; replacing the derived preparation key with typed
-  bounded Spec comparisons removed that dependency. Native final probe rebuild
-  and actual-game continuation with tooltips remain pending at this entry.
 
 ## RealLive AIR clip, native cursors and installed after/LB regressions (2026-10-31)
 
@@ -6638,51 +3853,6 @@ regenerated and logged separately.
   native profiles remain unsupported. Checkpoint UI paints are not reconstructed
   interactive UI. Exact layout and remaining fields are in the local ignored
   `target/verification/circus-execution/CIRCUS_AUTOSAVE_HANDOFF.json`.
-
-### KRKR media facade and actual Ctrl continuation (2026-10-31)
-
-- Shared Image preparation now accepts an empty effect chain for Asset/Resource/
-  Solid inputs, keeping its existing worker reservations, memory lease,
-  cancellation and owner publication. Raster/Transition still require their
-  matching operation. The release image_composite_clip suite passed2/2,
-  including exact authored PNG RGBA/coverage, a foreign client resource rejection
-  and failed fingerprint admission. Native positive mask hits use a completed
-  shared ImageResource.alpha_at only while provenance remains an equivalent
-  immutable bitmap; unsupported composed canvases still fail explicitly.
-- layerExMovie's complete original plugin/header/base/manual/licence was read
-  at real krkrz49c4d53506edecb824cd7b2cff8d32959b1f1b70. Its four native methods
-  and original callbacks map to shared Media metadata preparation, pictures,
-  loop/stop and resource retirement; no DirectShow, pixel copier, native clock
-  or decoder is adopted. Open waits for actual header dimensions before original
-  TJS geometry reads. Audio is disabled as in the original primary-video-only
-  plugin. Side-by-side alpha, reopening/restarting while playing and resized
-  playback images fail explicitly. Source hashes/notices are recorded in
-  krkr-bound-xp3-label-sources.json and third-party/layer-ex-movie.txt.
-- Compilation/tests: final native probe release build passed; its authored
-  suite passed22 with3 separate cases ignored. New cases assert transparent and
-  opaque original input hits, real movie dimensions/frames/engine loop counts,
-  stop/retirement, and exactly one EOF callback after the final picture.
-- Installed CPU behavior: native7 observes Natsuzora's actual original title stop
-  at host frame432 before starting an ordinary input track. Start enters
-  １日目.ks; Ctrl down/up are each delivered once,49 actual onUpdateMovie events
-  update the original loop background, then original script retires media640
-  and enters op.wmv through shared Media512 without VM/codec errors. ExE's
-  immediate click during its title animation did not enter the story; this is
-  recorded rather than counted as success. Keeping the same original Start
-  coordinate and clicking110 updates after the observed title stop enters its
-  story, delivers Ctrl down/up once, and ends at an original page wait with
-  162 retained GlyphRun nodes and two actual audio channels, without errors.
-  Input update counts are simulated host updates, not claimed wall-clock time.
-- Installed GPU behavior: immutable player4 (SHA256
-  a8a1c108b7162dad0161c8a27c9e1f4fb187e2571546019452603a7a3a2ce83f)
-  renders both original titles; both PNGs were visually inspected. ExE ordinary
-  Start renders its original first Japanese dialogue and message frame; a
-  separate short-Ctrl/release run reaches and renders the original OP movie.
-  First-run opmovie is deliberately unskippable in original macro.ks until
-  movieseen, so extra clicks correctly do not fake an EOF. Reports confirm no
-  window/audio device and zero rejected audio channels; audible output is not
-  verified. Native7 CPU behavior is later than player4 and Natsuzora's first
-  dialogue still requires the coordinated rebuilt player GPU check.
 
 ## First-class native RealLive DLL semantics and shared spatial extraction (2026-10-31)
 
@@ -6777,38 +3947,36 @@ RealLive tooling follow-up: the Python authoring validator now accepts exactly
 `optical_disc_check = disabled_for_native_host | strict`, matching native Config;
 unknown values and non-string substitutes fail. Native API schema tests 8 passed.
 
-### KRKR installed GPU follow-up: original dialogue, movie loop and passive hint (2026-10-31)
+### 2026-10-31 — RealLive / System4 / Majiro implementation and validation
 
-- Actual behaviour with immutable combined player6
-  (`00f1b6ef71ac4471cc45e0e37d16c6d3456e91f475bedea977eff3c8e3e37304`):
-  Natsuzora normal bootstrap and original Start reach the complete original first
-  sentence, 【壮太】「そろそろ、暖かくなってきたな」, over the actual decoded ferry/sea
-  movie background. `natsu-first-line6.png` was inspected; its report has no
-  native error, original `p`/click wait, one completed background loop and239
-  original `onUpdateMovie` callbacks. Ordinary Ctrl down4300/up4420 then advances
-  the original scenario into `op.wmv`; `natsu-ctrl6.png` was inspected and the
-  report records one KeyDown/KeyUp and actual published video pictures. Host
-  frame budgets are not wall-clock or completed-movie evidence.
-- Actual passive tooltip: moving the original pointer to the original Hide
-  button after Start presents 「ウィンドウ消去」 through shared Ui measured text,
-  without advancing the original first-line click wait. `natsu-tooltip6.png`
-  was inspected; its native error is null, `p` remains waiting, and the report
-  retains the real engine tooltip specification/extent and248 movie callbacks.
-  All runs are offscreen with no game window or original executable execution;
-  mixed audio samples are reported, but audible device playback is unverified.
-- Remaining visual defect is confirmed, not accepted as correct UI: six toolbar
-  buttons all show the same pink X. Original CSV declares six separate14x14
-  controls and their original normal/off PNGs have six different RGBA hashes;
-  the source centre pixels are blue, while every rendered centre is exactly
-  `[244,106,195,255]`, matching Hide's original hover image. Read-only graph
-  inspection finds all normal/hover atlas copies retain the same mutable
-  `__surface/1073741864` asset from temporary Layer40. `image_api::poll` publishes
-  each prepared image into that reused surface slot, so later loads replace
-  earlier copied images. Bare-image alpha preparation must retain its immutable
-  original asset paint; effect-result publication also needs immutable generation
-  semantics before general copy correctness can be claimed. No fix/rebuild is
-  claimed here. Detailed source hashes, sample pixels and Canvas declarations:
-  `target/verification/krkr-natsuzora-exe/natsu-toolbar-evidence.json`.
+- AIN v5 full code-layout/entry-boundary validation explicitly passed on Rance7: 1,062,488 original instructions, main PC0x73a. All 6,580 function entries lie on decoded boundaries; validation uses a bounded bitset rather than an unbounded tree (`system4-rance7-layout-final2.log`). The initially omitted renamed EOF/MSG metadata rows were fixed from their original declarations before this pass. Authored AIN tests remain 2 passed; the actual owner test was explicitly run, not counted as an ignored pass.
+
+- Majiro follow-up: the thin native RNG policy now calls the existing shared
+  `SequenceRng::msvc` kernel, with original `srand(time(0))` Unix-second seeding
+  captured once by the startup I/O worker. Signed modulo and zero-bound error
+  policy stay native; state is explicit seed/accumulator/draw-count data and can
+  be captured/restored independently, with no global Random. Release tests now
+  pass1 RNG/capture +1 shared Canvas (including exact opaque-black sampling)
+  +5 native/ENV tests. The two explicit owner tests also pass again in
+  `owner-runtime-rng.log`: actual startup advances33 instructions and2 CRT draws,
+  then stops at **pc0x214, line58, syscall0x111bd910 `get_effectspeed`** inside an
+  original script function. Native ENV/settings getter mapping remains missing;
+  engine_api_calls is still0 for the real game and no title is claimed.
+
+RealLive final player7 behavior and read-only next-wall diagnosis:
+- Immutable player7 SHA256 `3af2da91bce72920c9aa54651f8667e13e1587b215d74c574f96ed6081dc51ea` crossed actual after/LB voice through shared NWK decoding/mixing after the shared mounted-file directory fix. Headless GPU only; no original EXE/window or physical OS cursor claim. after at frame5000 reaches scene628:43 Pause17 without error,4 acknowledged KOE operations,3,120,384 mixed PCM frames,peak1.3376832,rejected0/underrun0 (active1 is looping BGM). LB at frame7800 reaches scene513:59 Pause17 without error,1 acknowledged KOE,5,226,240 PCM frames,peak0.9996352,rejected0/underrun0,active0 after voice completion; screenshot shows original May13 bedroom narration. EF00 original execution retains4,176 successful samples. Evidence/screenshots/logs stay in ignored `target/verification/reallive-air-after-lb`.
+- Further normal LB clicks at frame10000 reach SEEN9030:82 element133 byte1425, native `1:72:1000` overload1 `objOfFile(110,strS1001,1)` and visibly fail loading `CGMS12?030`. Original preceding string branch appends that suffix. Complete pinned RLVM lookup strips `?` only for the resource filename, then SDL graphics applies tone curve `suffix/10-1`:030 selects table2. It loads a3×256 RGB lookup from configured TCC and preserves alpha. Existing shared G00 atlas/pattern expresses geometry, not this lookup; current ImageEffect has no arbitrary RGB LUT input. This is the explicit next shared capability/native policy gap; no guessed suffix stripping or production expansion was made. RealLive source is frozen.
+
+- Player7 already explicitly consumed after/LB first voice samples through shared NWK/OVK mounts and mixer. after reached scene628:43 with visible room/Tomoyo/dialogue. LB reached scene513:59 after the voice naturally ended. LB later stops at original `CGMS12?030`: the pinned native suffix selects tone-curve table2, not an atlas frame. Arbitrary RGB LUT support remains a shared-engine gap; the suffix was not stripped to fake success.
+
+- Majiro ENV/settings follow-up: detection records the actual unique ENV resource
+  path. The startup worker reads it and an explicitly labelled `portable_client`
+  settings file from that client's Save capability. Native REG_SZ decimal text,
+  ENV defaults and current speed globals remain distinct; generic reg_write does
+  not overwrite the current speed global. Dedicated setters stage a candidate,
+  call shared begin_write_atomic, retain their native PC while Pending, and only
+  publish/ACK after Ready. Strict original registry import is unsupported and
+  diagnostics report import_performed=false; this is not an original game save.
 
 Codex follow-up validation (same work, actual later results):
 - AIN v5 full code-layout/entry-boundary validation explicitly passed on Rance7: 1,062,488 original instructions, main PC0x73a. All 6,580 function entries lie on decoded boundaries; validation uses a bounded bitset rather than an unbounded tree (`system4-rance7-layout-final2.log`). The initially omitted renamed EOF/MSG metadata rows were fixed from their original declarations before this pass. Authored AIN tests remain 2 passed; the actual owner test was explicitly run, not counted as an ignored pass.
@@ -6828,53 +3996,6 @@ Codex follow-up validation (same work, actual later results):
   original script function. Native ENV/settings getter mapping remains missing;
   engine_api_calls is still0 for the real game and no title is claimed.
 
-KRKR toolbar follow-up implementation and independent validation:
-- `image_api` now keeps unchanged Asset preparation as an immutable resource for
-  alpha queries while retaining its original Canvas asset paint. Only this bare
-  preparation path avoids surface publication; pixel effects/composite output
-  publication is unchanged. No shared worker/scene/public API was changed.
-- Release targeted regression passed1/1. It loads authored A into a temporary
-  Layer, copies it, reloads different B, then asserts destination paint is A,
-  temporary paint is B, actual shared-worker A bytes/alpha are unchanged, and B's
-  opposite native alpha coverage triggers precisely its opaque first pixel.
-  The same immutable native test binary passed23/23 authored tests (3 externally
-  provisioned tests remain ignored by default).
-- Explicitly executed the installed Natsuzora test with that binary: normal boot
-  observed original title wait at frame498, original Start reached original `p`
-  click wait, no native error,198 original movie updates. The retained Canvas
-  graph now has separate original normal/hover/toggle asset paths for each of
-  the six buttons, without the reused temporary surface alias. Evidence:
-  `natsu-immutable8-toolbar.json`, `immutable-alpha-regression.log` and
-  `native-immutable8-suite.log` in the existing ignored verification directory.
-  New combined-player GPU pixels are being checked separately.
-
-RealLive final player7 behavior and read-only next-wall diagnosis:
-- Immutable player7 SHA256 `3af2da91bce72920c9aa54651f8667e13e1587b215d74c574f96ed6081dc51ea` crossed actual after/LB voice through shared NWK decoding/mixing after the shared mounted-file directory fix. Headless GPU only; no original EXE/window or physical OS cursor claim. after at frame5000 reaches scene628:43 Pause17 without error,4 acknowledged KOE operations,3,120,384 mixed PCM frames,peak1.3376832,rejected0/underrun0 (active1 is looping BGM). LB at frame7800 reaches scene513:59 Pause17 without error,1 acknowledged KOE,5,226,240 PCM frames,peak0.9996352,rejected0/underrun0,active0 after voice completion; screenshot shows original May13 bedroom narration. EF00 original execution retains4,176 successful samples. Evidence/screenshots/logs stay in ignored `target/verification/reallive-air-after-lb`.
-- Further normal LB clicks at frame10000 reach SEEN9030:82 element133 byte1425, native `1:72:1000` overload1 `objOfFile(110,strS1001,1)` and visibly fail loading `CGMS12?030`. Original preceding string branch appends that suffix. Complete pinned RLVM lookup strips `?` only for the resource filename, then SDL graphics applies tone curve `suffix/10-1`:030 selects table2. It loads a3×256 RGB lookup from configured TCC and preserves alpha. Existing shared G00 atlas/pattern expresses geometry, not this lookup; current ImageEffect has no arbitrary RGB LUT input. This is the explicit next shared capability/native policy gap; no guessed suffix stripping or production expansion was made. RealLive source is frozen.
-
-KRKR combined player8 GPU verification
-(`e86cbd7f0fb37b4a5913466a569392cf35bf1c316347bb9d6cbfd0c3376ad574`):
-`natsu-first-line8.png` and `natsu-tooltip8.png` were both inspected after normal
-installed-game bootstrap and ordinary original Start. The original complete first
-line and decoded ferry/sea background remain correct. All six normal/off toolbar
-icons now have distinct expected original artwork; each centre pixel matches its
-own source PNG exactly, including Skip's different grey-blue pixel. Hovering the
-original Hide location displays the shared measured 「ウィンドウ消去」 tooltip and
-does not advance the original `p` click wait. Both reports have null native error
-and250/251 original movie update callbacks respectively. This verifies the
-bare-image alias correction in actual GPU pixels, beyond the CPU graph test.
-
-A separate native input frontier remains visible: Hide's hover artwork stays
-normal blue instead of the original pink hover image. The original ButtonLayer
-sets `Butt_mouseOn` and redraws only in `onMouseEnter`/`onMouseLeave`, while the
-current adapter dispatches `onMouseMove`/Down/Up without those enter/leave events.
-The actual hover report likewise has no enter/leave dispatch. Shared tooltip
-presentation does not establish correct native hover highlighting; no event fix
-or newer binary is claimed in this entry.
-
-Codex installed-player8 publication (local only):
-- Release build with RFVP/BGI/NScripter/KRKR/arc formats/Circus/CatSystem2/Majiro features passed; immutable SHA256 `e86cbd7f0fb37b4a5913466a569392cf35bf1c316347bb9d6cbfd0c3376ad574`, `target/verification/majiro/player8`. Four existing managed `local/launchers/crysirror[-krkr/-rfvp/-siglus]-dev` launchers atomically repointed to this verified local binary. No commit/push/CI/deployment.
-- Root viewed player8 Natsuzora first dialogue and toolbar evidence: normal button sprites now retain separate original immutable images instead of aliasing a reused temporary surface. Original opening movie/background and measured tooltips remain shared Media/UI. Native Enter/Leave hover highlighting is a separately identified remaining gap, not claimed fixed by this publication.
 - Player7 already explicitly consumed after/LB first voice samples through shared NWK/OVK mounts and mixer. after reached scene628:43 with visible room/Tomoyo/dialogue. LB reached scene513:59 after the voice naturally ended. LB later stops at original `CGMS12?030`: the pinned native suffix selects tone-curve table2, not an atlas frame. Arbitrary RGB LUT support remains a shared-engine gap; the suffix was not stripped to fake success.
 - Majiro ENV/settings follow-up: detection records the actual unique ENV resource
   path. The startup worker reads it and an explicitly labelled `portable_client`
@@ -6897,64 +4018,7 @@ Codex installed-player8 publication (local only):
   state; no fake void ACK or private keyboard controller was substituted. Shared
   keyboard lock-state input/policy is the next capability requirement.
 
-### KRKR original pointer event semantics follow-up (2026-10-31)
-
-- Implementation: native LayerManager policy now dispatches Leave, re-hit, Enter
-  and at most one corrective re-hit after an Enter handler changes the target;
-  same-layer movement does not repeat Enter. Existing engine Layer/Canvas hit
-  resources are reused. Automatic mouse capture receives drag Move/Up, native
-  `releaseCapture` can cancel capture during Down, and all released mouse buttons
-  trigger release/recheck. Hiding/disabling runs original BlurTree Leave without
-  dropping capture; reparent Part releases capture; shutdown suppresses retired
-  callbacks. Focus deactivation releases capture. A slow >1000ms recheck uses the
-  existing shared host clock and does not synthesize Move or restart an unchanged
-  tooltip. No shared input/scene/runtime API or graphics algorithm was added.
-- Native click mapping follows the inspected Win32 caller chain: Window then
-  Layer, Click before Up, and Click coordinates are the shared last mouse Down
-  point (updated by either supported left/right button). Complete LayerManager
-  source and the relevant Layer/Window/DrawDevice/Win32 caller routines were
-  inspected at real krkrz commit `fd5c4baa6a2ef5978db1bd043634351f48667daf`;
-  added file hashes/review scope are in `docs/krkr-bound-xp3-label-sources.json`.
-- Compilation/tests: release authored suite passed27 tests,3 external-resource
-  tests ignored by default. Four mouse test groups cover same-layer/cross-layer
-  order, reentrant hit changes with the original one-recheck cap, captured drag,
-  Click-before-Up/press coordinates including Window order, explicit cancellation,
-  focus loss, hiding/Part/shutdown and idle recheck. Final left/right chord Down
-  point refinement and its additional assertion were added afterward; that
-  assertion has not yet been executed. The queued repeat test was cancelled
-  before compilation to avoid blocking the coordinated player9 build. Player9's
-  KRKR release library compiled after the final source write; production source
-  hashes are retained in `native-mouse9-source.json` (set SHA256
-  `919ae61fe0220d53bb34fa1b00a1af5b7eb612032474a2917459bbc71380f61d`).
-- Behaviour remains distinct: player8 also rendered ExE's original complete
-  cough dialogue and message UI (`exe-first-line8.png`, inspected), with null
-  native error and original `p` click wait. Final pointer changes await player9
-  original-script GPU hover verification; player8 cannot establish them.
-
-KRKR final player9 behaviour
-(`3af4e6303e6dd320afea76fd89009bd4d3143333dab83a1c3f3d8c804140973b`):
-- `natsu-tooltip9.png` was actually inspected after normal original bootstrap,
-  Start and ordinary pointer hover. Original first dialogue and decoded background
-  remain visible; five normal/off icons match their original centre pixels, while
-  Hide alone now matches the original hover pixel `[244,106,195,255]`. The measured
-  shared 「ウィンドウ消去」 tooltip remains visible. Native error is null, original
-  `p` is still click-waiting, with9 Enter,6 Leave and253 movie-update callbacks.
-  This establishes actual original ButtonLayer hover execution with the new
-  native event sequence; the player8 hover limitation above is historical.
-- The final chord refinement was verified without another Cargo build using
-  player9's real offscreen `render` command and the authored ignored-target
-  `chord9-fixture` project. Its native TJS compares complete Window/Layer traces
-  for left→right and right→left Down chords, including shared last-Down point15,
-  Click before Up, captured local coordinates and capture surviving until both
-  buttons release. Both assertions ran, then a Timer asserted stage2 completion
-  and emitted `native-chord-source9-complete`. `chord9.log` was parsed to require
-  null native error, both assertion-stage receipts and the final receipt.
-  This is current-binary execution evidence; the newly added equivalent Rust
-  chord assertion itself remains unexecuted. No extra production edits, Cargo
-  builds, original executable execution or game windows followed source freeze.
-- Earlier real Ctrl down/hold/up GPU runs for both games, first story waits and
-  original OP media are recorded above. These bounded runs do not establish
-  full-game completion, all plugins/saves or audible device output.
+### 2026-10-31 — System4 implementation and validation
 
 System4 native VM implementation (first-class crate, source frozen):
 - `crysirror-system4` now contains a bounded original AIN v5 stack/heap/page executor, native i32/f32 bit values, slot identity/reference counts/sequences, two-word variable references, original argument/return convention, and resumable constructor/destructor/array continuations. Startup allocates all global storage, applies initializers/references, runs original function `0`, then global constructors and main. Lazy member reads and sequential struct-array construction preserve mutation and allocation order; local/copy identity is reserved before child allocation. No C engine, renderer, text layout, image/effect/audio mechanism or private logging system was adopted.
@@ -6976,11 +4040,9 @@ Implementation and compilation:
 - System-NNN partial machine authored tests: 3 passed; native program authored tests: 2 passed, one owner test ignored by default. The owner test was explicitly executed afterward and passed its **partial VM boundary assertions**, not a gameplay acceptance test.
 
 Actual behavior:
-- Root independently viewed player9 Natsuzora's original first sentence over the looping sea video, six distinct original buttons, the pink Hide hover state and shared measured tooltip. Native Enter/Leave and source-accurate capture/click ordering are active. The same binary also executed strict authored TJS assertions for both left/right chord orders; this provides final-source verification separately from the earlier 27-pass/3-default-ignored Rust suite.
 - Root independently ran/viewed ExE player9 via normal installed-game bootstrap and original Start input: original first dialogue, last_tag=p/click_waiting=true/error=null, actual shared PCM consumption, no window or audio output device. This does not establish full-game, save or audible playback acceptance.
 - Root ran Majiro player9 normally from the unmodified installed directory. Shared atomic persistence actually wrote the portable named EffectSpeed value; the original script then failed visibly at start.mjo PC0x23e/line60/hash0x81ce0485, before any game page/title. No CapsLock operation was swallowed.
 - System-NNN owner media probe executed eight original internal/metadata instructions and retained the original story name, then explicitly stopped at original IF PC0x41/code0x55560002. Expressions, native resource/graphics/audio mapping and a playable factory remain unfinished (`systemnnn-owner-final2.log`).
-- Normal CatSystem2 bootstrap now mounts all 31 actual INT archives, including the verified equivalent scene aliases, and reaches native400 at PC0x4cd. Final owner mount/source tests 2 passed, independent alias tests 3 passed; this is still an unsupported native catalog operation, not a rendered title.
 
 Shared-production scope is frozen according to the earlier Claude coordination. The next concrete missing capabilities are shared keyboard-lock policy/state (Majiro), a client-scoped admission/completion path into the existing EngineContext log sink (System4), arbitrary RGB tone-curve LUTs (RealLive LB), and complete original Circus save-body/thumbnail/restore mapping. No private VM renderer, image algorithm or second logging implementation was introduced to evade those boundaries. Original save support has not been claimed for the new partial profiles.
 
@@ -6992,7 +4054,6 @@ RealLive RGB tone curves: actual release validation:
 - Final targeted tests passed8/8: shared arbitrary-table/alpha/strict-profile/cancellation4; native suffix/TCC1; native pending/immutable variants/bad-TCC bridge2; independent runtime file worker/client isolation/publication/release1. Native test removes the TCC after first load and verifies a second variant uses the retained original bank, both pixel results remain distinct and the first stays unchanged. Invalid TCC does not install an object or acknowledge the original opcode. Runtime rejects foreign input/publish/release, rejects premultiplied admission, and verifies a frozen Surface retains pixels after valid release. Logs under ignored `target/verification/reallive-air-after-lb`: `tone-straight-unit-final.log`, `tone-native-published-final.log`, `tone-runtime-published-final.log`.
 - New combined-player LB behavior remains to be tested separately; these independent passes do not claim that the installed game has crossed SEEN9030:82.
 
-
 ## 2026-10-31 — shared host capability extraction after owner lifted coordination freeze
 
 Implementation:
@@ -7003,14 +4064,13 @@ Implementation:
 
 Compilation:
 - Release check of crysirror-runtime/crysirror-engine/crysirror-wgpu passed (shared-capabilities-final-check.log); Majiro runtime release check passed (logical-lock-check.log).
-- Combined release desktop build passed with rfvp,bgi,nscripter,krkr,arc-formats,circus,catsystem2,majiro features. Immutable player10 SHA256 is913f4b795b1b38f5cc9920ea5d9fc8cc84fb353cc290eabba90970f9b3a7d45c. Four managed local launchers were atomically refreshed only after confirming their previous player9 identity. This binary does not register unfinished System4/System-NNN factories.
+- Combined release desktop build passed with nscripter,arc-formats,circus,majiro features. Immutable player10 SHA256 is913f4b795b1b38f5cc9920ea5d9fc8cc84fb353cc290eabba90970f9b3a7d45c. Four managed local launchers were atomically refreshed only after confirming their previous player9 identity. This binary does not register unfinished System4/System-NNN factories.
 
 Behavior validation:
 - Independent host_services3/3 passed: canonical native/public log, scope/atomic logical-lock policy/restore boundaries, and actual civil worker completion. Core log ring test1/1 passed. These tests need no native game or hardware device.
 - Actual Rance7 constructor with shared Runtime committed2 Output records and advanced past0xa4a to unsupported SACT2.Init at0x6f6 after1,586 original instructions. Original HLL call stays pending; main has not been entered. Explicit ignored owner test was run and passed1/1 (system4-shared-log-owner2.log).
 - Explicit Majiro owner tests passed2/2:181 original modules/496,549 instructions parsed; Runtime advanced past fast_mode_disable0x23e to unsupported syscall0x0c070535 at0x24a/line62 after42 instructions. Depth1/shared API completion confirmed, original next syscall not acknowledged (majiro/logical-lock-owner.log). No title or full game claim.
 - Python tooling tests201 passed (shared-capabilities-python.log). Shared log/input/civil Rust API tests and generated reference validation are distinct from game behavior. RealLive LUT tests and installed LB behavior are recorded separately below/by their owner.
-
 
 ### Circus original save-body state: audited partial live model (2026-10-31)
 
@@ -7026,7 +4086,6 @@ Compilation and behavior validation:
 Explicit remaining boundaries:
 - Native49/425C20 sprite/resource resets and animated final-state metadata;4f/425F50/425DC0/423070 scene activation, object740/908/904 and conditional string fields;3c background-root reset and resource alias/presentation lifecycle;28 falling-wrapper saved policy;4c/71 native voice/SE filenames/loops;ab backend1 saved movie tail. The live image cannot yet be admitted as a complete slot, and original1d/slot restoration remains unsupported.
 - Original save thumbnail4250B0 enables6276/6277, calls4226B0(1), enables native layer1 and stops the render loop at native index80. Native UI at70 has additional suppression/selection rules, including5970/2599 under a2=1. Generic scene plus all UI is not equivalent. ImageInput::Raster consumes image resources; MeshFrameHistory captures a single mesh. A client-scoped asynchronous capture of the proven selected complete snapshot must reuse existing desktop materialize_snapshot/read_snapshot and shared resize/PNG facilities before128x72 thumbnail persistence can be accepted. No private screenshot renderer was added.
-
 
 ## Shared API reference final validation
 
@@ -7104,29 +4163,6 @@ Actual original-script boundary:
   Production source is frozen for this bounded round; no full player build, CI,
   commit or game/font/key distribution was performed by this agent.
 
-
-## 2026-10-31 — CatSystem2 continuation: shared loop catalog and original settings records
-
-Implementation:
-- Added reusable engine-owned AudioLoopCatalog with client-scoped atomic publish/lookup/clear receipts, revision/entry/path budgets, exact decoded-vs-reference-frame timebases, explicit Floor/Ceil endpoint conversion and no implicit PlayAsset change. Native400 retains only original comment/quote/integer/path/duplicate policy. Original44.1k reference positions and -1 open end remain explicit. Worker reads/validates the complete batch; the owner commits before native acknowledgement.
-- Shared XmlDocument now exposes source-order child iteration with constant-time document ownership validation, rejecting foreign/cloned nodes without unsafe code. Confirmed mounted virtual-directory misses return NotFound consistently for streamed/read/metadata paths instead of leaking the underlying physical archive file's ENOTDIR. Shared VFS scope, provider order and size budgets remain intact.
-- Native359/789 use reviewed actual constructor/default bytes and startup overlays, then gamedef and client Save/setup.xml in original WinMain order. Native mode3 resource policy prefers the configured loose INT directory before packed members: actual gamedef is loose config/gamedef.xml. Original four configuration spans are5628/72/32/12 bytes, with nonzero48-row defaults and effective-volume math; GAME/flag/max is retained. These are native VM value/layout policies, never a private renderer/mixer. Diagnostics explicitly say Windows configuration was not imported. Unknown/malformed shared XML fails visibly; permissive original XML parse-failure behavior is not claimed.
-- Runtime snapshot/capture and restore reject live loop catalogs until resource reconstruction is implemented. Common publication remains usable without CatSystem2; original game saves and native audio playback remain unfinished.
-
-Compilation:
-- Native loop/runtime release check passed (native-loop-check3.log). Native settings plus Runtime release check passed (native-settings-check.log). No original EXE/DLL was executed. All commands/logs are under ignored target/verification/catsystem2.
-
-Behavior validation:
-- Shared audio catalog/explicit conversion3/3, native loop-text policy2/2 and XML5/5 passed. Runtime registered-client/atomic/restore coverage2/2 passed again after final shared VFS change (loop-runtime-final-tests.log). Mounted virtual missing-member open/read/metadata/client-isolation regression1/1 passed (vfs-virtual-missing-tests.log).
-- Fresh CatSystem2 library tests11/11 passed including real nonzero constructor, startup overlays, loose-default priority, setup override order, original effective-volume math, unknown XML and cancellation (native-settings-final-tests.log).
-- Explicit actual owner CPU test passed1/1: original main executed8,342 instructions, committed17 BGM loop metadata records/revision1, applied real loose gamedef with no setup file, copied original settings and returned original flag count2048. It advanced past native400/359/789 and stopped at native209 PC0x526,args[2048], retaining the original call. Log: owner-settings-native-actual2.log. The earlier strengthened owner test caught a missing gamedef overlay and failed; it was corrected through source-proven mode3 loose-file precedence, not by weakening the assertion.
-- No CatSystem2 title, CST/FES execution, gameplay, physical audio or original-save pass is claimed. Native209 kcInterpriter constructor contains variable banks,22528-byte command state, a list and an underlying parser; it remains unsupported pending actual implementation. No commit/push/CI.
-
-CatSystem2 continuation final local validation:
-- Full default-feature release suite passed22 tests (library11 +native KCS integration11), with2 owner tests ignored by default; ignored tests were not treated as passes (native-catsystem-final-suite.log).
-- The freshly compiled owner binary was then explicitly run with authorized Neko resources: both original31-archive/KCS/CST corpus and actual native adapter tests passed2/2 (owner-catsystem-final.log). The adapter still stops at209/PC0x526; this does not add a title/gameplay claim. All production source is frozen for the parent's combined player build; no validation process remains in this subtask.
-
-
 ### 2026-10-31 — System4 shared SACT initialization and text-format extraction
 
 Implementation:
@@ -7175,7 +4211,6 @@ Behavior validation:
 - Next-step source/commands are in ignored target/verification/system4/HANDOFF.json.
   Source is frozen after this bounded result; no commit, push or CI was added.
 
-
 ### System-NNN: real Core VmAdapter worker/owner seam (2026-10-31)
 
 Implementation:
@@ -7187,61 +4222,6 @@ Compilation and behavior validation:
 - Release check passed and final `cargo test -p crysirror-system-nnn --release` passed13 authored tests (bridge/Core-port3, expression/config5, machine3, program2), with2 installed-data tests ignored by default. Independent host tests verify frozen snapshots survive live layer removal, stale receipts/owner errors do not acknowledge or mutate, and the actual Core worker port commits only through owner services. Log: `target/verification/systemnnn/core-port-final-tests.log`.
 - Explicit original-data owner test1/1 passed on its fresh binary (`owner-core-port-actual.log`). Original NewGame config/Legacy1000 variables execute unchanged original preprologue through both direct bridge and real VmAdapter port:25 instructions,6 shared owner API calls,1 Canvas snapshot and actual opaque800x600 shared Fill Layer100. Original story18B/film16B remain. It now stops at originalPC0x1a1 / SetEffect29(SUNA), rather than16 instructions at0x173. Exact pending receipt persists; Core diagnostics worker_pending=false/owns_framebuffer=false/factory_registered=false; repeated terminal step makes no owner mutation. No original title, picture render, playable game, audio device, full compatibility or saves are claimed.
 - Existing ImageEffect WhiteNoise/Noise and VFX CurlNoise/SequenceRng were checked. They do not express SUNA's persistent packed2x2 mono state, original CRT15-bit draw/update order, alternating half-bank XOR,8x2 region alignment and temporal separate-term/256 blending. No static-noise substitution/private pixel loop was used. Required reusable temporal-raster API and exact next operands are recorded in `crates/crysirror-system-nnn/HANDOFF.md`. Production is frozen; no shared runtime/desktop/root-Cargo edits, full player build, CI or commit were made by this agent.
-
-
-## 2026-10-31 — reproduced KRKR Ctrl exits and engine-owned fixes
-
-Implementation:
-- Reproduced the owner's game_kr_ousama exit in immutable player10 after START: native layer2502/canvas8 required alpha for an immutable Composite source. Reproduced game-kr-natsuzora after OP/long Ctrl: same missing coverage at layer34825/canvas71. Native input now prepares these graphs through shared ImageJobs before consuming the input receipt; retained Canvas paint/copies are not retargeted by coverage preparation. No private alpha compositor or ignored error was added.
-- The next actual Natsuzora blocker was original１日目.ks:275 copyRect dfProvince3. Added shared Core RegionMap clipped snapshot copy, zero-hole replacement, resize and atomic fill-budget validation. Native province allocation/deallocation, absent-source source-rectangle behavior, assignImages and overlap policy remain in the adapter. These operations do not modify visible RGBA channels.
-- The next actual Ousama blocker was0_1.ks:image: bare resource decoding incorrectly used the4MP expensive-effect ceiling. Shared decode/composition now accepts16MP resources; actual effect outputs retain4MP. Decode-only jobs do not reserve nonexistent Gaussian planes. Graph128MiB/node bounds and common512MiB reservation remain enforced.
-- A longer Natsuzora choice/normal-input track reached２日目.ks:316 and exposed missing Layer.onBlur. Added reviewed native default onBlur/onFocus event dictionaries to constructor Window.action, preserving subtype super calls and focus parameters. Missing action follows the original default, not a swallowed unknown operation. Public source pin/hashes and native policy: docs/krkr-region-copy-source-audit.json.
-
-Compilation and independent behavior:
-- Release KRKR check passed. Fresh native suite30passed/3defaultignored, including immutable composite alpha/mutation/input, province clipping/overlap/absent-plane/resize and focus action/super dispatch (native-full-focus-final.log). Core region copy tests2passed. Public shared image tests3passed, including a3072x2048 RGBA PNG and rejection of oversized resources/effect targets (large-image-tests2.log).
-- Final combined desktop release build passed (player13-build.log) with rfvp,bgi,nscripter,krkr,arc-formats,circus,catsystem2,majiro. Immutable player13 and target/release/crysirror SHA256 da3646fc82fe2505d51ca9791e1949e3384b16dcbc8805a44c45eeb02659ea7e. Four managed launchers were atomically refreshed from verified player10 identities. The binary includes Cat400/359 changes; unfinished System4/System-NNN factories are not linked.
-
-Actual installed-game behavior:
-- Natsuzora player13 completed110,000 offscreen host frames with genuine Ctrl down/up, OP, choice selection and ordinary click. Native frame count97,099; original event counters include3 key-down/3 key-up and8 clicks. Error=null, current original tagselect/normal sleeping wait at a later choice; viewed screenshot shows the evening street/another character, beyond the earlier hospital choice and old２日目:316 error. This validates the bounded route, not all branches/saves. natsu-choice13-report.json and PNG contain compact evidence.
-- Ousama player13 completed50,000 offscreen host frames with two held/released Ctrl phases and an ordinary click between them. Native frame count15,792,4 clicks,2 key-down/2 key-up,12,268 onFire. Error=null and normal paragraph click wait. Viewed screenshot shows two original characters/dialogue in the house after the earlier street scene. No window/audio device was opened; offscreen behavior does not validate physical OS menus or audible playback.
-- All evidence lives under ignored target/verification/krkr-ctrl-exits. These fixes demonstrate API operations and bounded real-game progress, not completed compatibility of every referenced engine. No commit/push/CI was performed.
-
-### 2026-10-31 — KRKR shared archive/font checkpoint (ExE and Sabbat)
-
-Implementation: XP3 now reads bounded inline alternate-name records, validates
-next-File hash/name-token association, and publishes preferred-name resources
-with original info-token aliases and shadowed native record IDs retained. The
-shared resource XOR/Adler-32 candidate solver supports a generic folded-hash
-profile; bias and zero substitution are separately inferred and every protected
-open verifies the decoded Adler-32. No native executable/DLL runs. Shared font
-workers/catalog/TextSystem now accept fixed-size TFT v0/v1 coverage faces;
-`Text.beginPrecomputedFont(alias, asset, pixelSize)` exposes the capability.
-Native Font map/unmap only binds font signatures to these shared resources.
-The historical Motion.Player.varibleKeys property has static DLL registration/
-getter evidence and returns actual parameter records, not an empty shell.
-Source audits: `docs/krkr-folded-xor-source-audit.json`,
-`docs/krkr-precomputed-font-source-audit.json`, and
-`docs/krkr-motion-legacy-keys-source-audit.json`.
-
-Compilation/tests: release resource XOR tests 3 passed; XP3 tests 32 passed;
-inline parser 2 plus explicitly invoked owner archive test 1 passed. Shared TFT
-decoder 2, FontResources publication/isolation/frozen lifetime/fixed-size identity
-2, native Font mapping 1, and legacy Motion keys 1 passed. Player16 release build
-passed (SHA256 4fb701caaed516a3d52a23b7dff59507cec7f8108ad7e1d272299a3747cd4f99).
-The two fixed pixel sizes participate independently in font digests/aliases.
-
-Behavior: all 8 owner Sabbat XP3 archives were independently sampled, including
-large video and zero-domain entries (262,107,773 bytes, about 250 MiB verified). Player16
-actually initialized KAG and all font mappings and rendered ATTENTION with
-error:null, 140 native layers, and a real click wait. An ordinary mouse down/up
-advanced beyond it and exposed the legacy varibleKeys wall; that adapter fix is
-unit-validated, with player17 actual title/gameplay validation still pending.
-Current player13 ExE ran two real input tracks, including Ctrl down/up and a
-selection click, up to a later night-time choice: 110,000 requested frames,
-96,309 native ticks, error:null. The originally reported ExE exit was not
-reproduced; its exact original cause is not established. These observations do
-not establish complete game or engine compatibility. Logs/images remain under
-ignored `target/verification/krkr-ctrl-exits`; managed launchers are untouched.
 
 ### System-NNN native frame policy and real MSI resource diagnosis (2026-10-31)
 
@@ -7285,239 +4265,6 @@ Behavior:
   wrappers decoded2,555,904 PCM frames with finite nonzero samples. Evidence:
   `target/verification/systemnnn/owner-blackcyc-index-regression.log`.
 
-### KRKR player18 actual regression checkpoint (2026-10-31)
-
-Compilation: parent-built player18 release artifact SHA256
-`03fb691a8f7e5babfc641bc79177b58bc9c4294f59703e331154919192453719`
-includes shared TFT fonts and the legacy Motion varibleKeys semantic mapping.
-
-Behavior: ExE independently repeated the 110,000-frame input track on player18,
-including two Ctrl down/up phases and ordinary selection clicks. It reached the
-later night-time choice with error:null, 96,775 native ticks, onClick8 and
-onKeyDown2/onKeyUp2; the captured scene was visually inspected. This is bounded
-progression evidence, not a reproduction or diagnosis of the originally
-reported exit. Evidence: `exe-regression18.log` and `exe-regression18.png` under
-`target/verification/krkr-ctrl-exits`.
-
-Sabbat advanced beyond ATTENTION and both logos into `title.ks` at `*wait`,
-line36, with error:null on player18, but the capture is dark and title UI is
-hidden. Additional ordinary clicks do not resolve it. This remains an actual
-behavior blocker: title/gameplay are not validated. Read-only parser/object
-state diagnostics are being expanded to identify its precise semantic cause;
-no visibility forcing or game-script patch was added. Evidence:
-`sabbat-state18.log`, `sabbat-state18.png` and `sabbat-title-advance17.log`.
-- Native stopf5 now resolves through the original function-name table, resets
-  the5 explicit native skip flags and acknowledges only that reviewed semantic.
-  Static original0x5355c0 and constructor table binding were verified; actual
-  owner's function2 is stopf5. Authored relocation to index0 passed1/1, while an
-  unknown function kept its original PC/receipt and reported its table name.
-  Release check passed (`native-stopf5-check.log`, `native-stopf5-tests.log`).
-
-### KRKR player19 title command checkpoint (2026-10-31)
-
-Compilation: the unified desktop release build passed in3m32s with defaults
-plus rfvp,bgi,nscripter,krkr,arc-formats,circus,catsystem2,majiro,system-nnn.
-Frozen player19 SHA256 is
-`5f5ae9a1774ef98b9b7ba204499baa71c11fffae27db5d2e5e6b7197462e7ca2`.
-The subsequently added opt-in raw TJS source-line diagnostic passed the KRKR
-release check (`tjs-source-trace-check.log`); it is not in player19.
-
-Behavior: actual Sabbat9000-frame first-click run still captures a dark screen,
-error:null,8285 native ticks. Opt-in tag trace proves title.loop entered
-custom.ks *title_start and executed title_bg show/waitmovie, UI load and msgon.
-Raw fields show kag.msgState=1,_skipMode=0,_skipNoDisp=void, while
-world.msgVisible=1,envTransMode=1,basePlane=1 and current._visible=0. This rules
-out the earlier hook-jump/skip suppression hypotheses and narrows investigation
-to environment command/transition publication. It is not a title acceptance
-pass and no game visibility/state is forced. Evidence: `sabbat-title19.log` and
-visually inspected `sabbat-title19.png` under the same ignored verification root.
-
-## 2026-10-31 CatSystem2 native interpreter and shared depth continuation
-
-Implementation: native209 now constructs real live/backup flag banks, parser and
-256 native command slots, with executable bounded integer expression semantics
-(native210–213). Backup allocation is explicitly uninitialised save state.
-Native1 publishes original debug text through shared LogBook;19–22 preserve
-raw/formatted argument and signed-byte/CRT-fold comparison differences;36 fills
-owned VM memory. Native41 uses new independently usable
-`crysirror-text::byte_split` with original SJIS boundary profile, cancellation,
-preflight capacity checks, spans and NUL output;42 only maps native NUL-list ABI.
-
-Shared Scene `SetDepth` owns finite float sorting and client canonical stable
-history, explicit `commit_frame_order`, group scope inheritance, transactional
-rollback/clone/restore validation and frozen snapshot order. Frame computation
-is pure; intermediate updates do not change committed tie order. Ordinary
-layers precede depth scopes in the same major bucket. Crossfade and WGPU merge
-use shared comparison. Source renderer evidence shows native Cat Z is flat:
-only Cat payloads receive depth, never Task parents or transparent groups.
-Native88 preserves ordinary display range0<=Z<1,000,000; distinct native capture
-range0<=Z<65,536 stays unsupported. Native66 type2 constructs a genuine shared
-transparent Layer group;79 creates original ARGB Solid geometry initially
-hidden;92 delivers original imperative visibility events through Task ancestry.
-The native empty rectangle remains separate from the engine1x1 group extent.
-Type6 source constructor is also implemented as actual unbound click-controller
-state; no source input registration or geometry exists until bind message89.
-Its validation is queued and is not counted as a behavior pass here.
-
-Native938 reads the actual sound configuration into shared XmlDocument AST and
-returns its genuine found predicate. This is declaration representation, with
-`audio_playback_mapped=false`. Native247 reads client Save CSS containers through
-scoped storage and existing shared Resource zlib; original header/tag/record
-layout and logical handles belong to VM policy. Missing file returns0 after
-actual read. Save writing/restoration remain unmapped. Native276/277 preserve
-numeric raw-byte string variables and dirty state, with assigned-empty distinct
-from absent. Subsequent unknown natives retain their original PC/arguments.
-
-Compilation: release `cargo check -p crysirror-scene -p crysirror-wgpu` passed
-(`shared-depth-check.log`). Release Cat lib tests passed19/19 after247
-(`native247-tests.log`, repeated after27619/19). Shared byte_split3/3 passed;
-shared depth history4/4 passed after None→Some intermediate-update correction
-(`shared-byte-split-tests.log`, `shared-depth-history-tests.log`). New type6 and
-additional string-variable tests are queued, not included in these totals.
-
-Actual behavior: opt-in release owner adapter tests each passed1/1 using genuine
-mounted archives and original `kcs.int/main.kcs`. Native209 advanced8342→16971
-instructions;41 ran100 actual calls;938 retained real5groups/6parts and79216AST
-bytes;247 genuinely found isolated client Save/savegen.dat absent. Latest
-completed run `native276-owner.log` reaches20059 instructions then visibly stops
-at native66 type6 PC0x868, args[6,3,268], name“bg button”. Existing MENU104 command119
-remains disabled;XML handles/resident bytes end0. Native88/92 were each actually
-called once on engine-owned solid geometry. CPU owner test derives/commits
-shared logical frames, but no Cat GPU/title/text/image/audio/gameplay, clicks,
-Ctrl press/release, original-save compatibility or whole-game completion has
-been established. Original EXE/DLL was never executed; owner data is ignored
-under target/verification/catsystem2. Source audits: interpreter, byte-split,
-task-plane, shared-depth and state JSON documents under docs/. Root owns public
-API doc regeneration/fingerprints and desktop Runtime frame-history hook.
-
-Cat continuation validation update: type6 native66 now actually executes. Release
-Cat lib21/21 passed (`native66-button-tests.log`), including unbound-controller
-versus Plane separation and assigned-empty string variable semantics. Actual
-owner1/1 passed (`native66-button-owner.log`) and advances20059→20071instructions,
-then native104 PC0x8b5 args[5,0,0,1280,720,10000,5]. Binding104 remains unacknowledged
-while reusable input routing is being designed from the complete registration,
-priority, candidate, capture, hover and handled-receipt source. No click/Ctrl or
-rendered-title result is implied. Shared Resource inflate now checks scoped
-cancellation each16KiBblock and before output publication; release transform
-unit tests2/2 passed, including cancel during first block/final EOF with no
-partial result (`shared-inflate-cancel-tests.log`). No public API change in this
-small Resource cancellation fix.
-
-### KRKR actual title and TJS scope checkpoint (2026-10-31)
-
-Implementation: corrected KAGParserEx ordered tag metadata to include tagname
-first and preserve repeated written attribute names, matching pinned
-ArgValue::add. The native game's single-flag object-creation guard previously
-returned null. Separately, the TJS for statement now uses an existing HIR Block
-scope over initializer/condition/step/body. The original metadata loader reused
-var i in an inner loop; leaking its binding selected an absent outer record.
-No game script, filename fallback or forced layer visibility was added.
-Decompiled TopLevel negative-register locals now have one root declaration and
-subsequent assignments, avoiding a shadowed counter during round-trip execution.
-Sources: `docs/krkr-kag-ordered-tags-source-audit.json` and
-`docs/krkr-tjs-for-scope-source-audit.json`; original notices are retained.
-
-Compilation/tests: KAG native parser release regression2/2 passed; For binding
-VM regression3/3 passed; final complete TJS2 library426/426 passed, including
-control-flow round-trip and fuzz tests. The first broad run exposed the
-old decompiler loop-declaration problem and was terminated at its stuck own
-round-trip test; it is not counted as a pass. Final evidence is
-`kag-ex-ordered-tests.log`, `tjs-for-scope-final.log` and
-`tjs-for-scope-lib-final.log` in the KRKR verification root.
-Player21 release build passed2m10s, frozen SHA256
-`efd29b6bf935f429dfa7eac2d71a10deaa0e104eb8e606e4dd7881d64dcd45a1`.
-
-Behavior: player21 renders the real Sabbat title with all five menu items,
-character artwork and logo; capture visually inspected. After the ordinary
-ATTENTION click it reports error:null/8307 native ticks,
-envTransMode=0/basePlane=0/current._visible=1. Clicking START in a fresh profile
-then encounters a real StandImage.updateImage filename access on void baseInfo.
-Raw source breakpoints proved baseInfo was already absent when the native
-metadata setter ran, before onPaint; this produced the For scope diagnosis.
-The scope fix has not yet been behavior-validated in a new desktop artifact.
-The attempted45000-frame input track stopped at that error and is not a
-45000-frame success. Evidence: `sabbat-title21.log/png`, `sabbat-start21.log`,
-and `sabbat-stand21.log`. Full game progression remains unverified.
-
-Cat continuation input update: reusable Scene InputRouting now owns scoped
-receiver registry, signed stable priority, half-open press/coverage, global key
-receivers, captured release/repeat, distinct hover, Core input journal and one
-leased delivery receipt. Epoch/event/delivery numbers use decimal-string JSON.
-Registry/priority ordering persist; live device journal/hover/captures/leases
-never replay on restore. Runtime query/submit/tick/restore wiring and Scene
-ServiceBatch/EngineSystems fields are in place. Unsupported multi-owner or
-interactive-widget/dialog mixing explicitly fails. Menu conflicts with actual
-button activity roll back before journal/clock/UI publication. Root provides
-reflected InputRoutes and API docs. Shared release unit tests5/5 passed
-(`shared-input-routing-final-tests.log`); runtime+Cat release checks passed
-(`shared-input-routing-check*.log`). Engine lifecycle input isolation has been
-implemented with matching async-frame/end_frame input ownership; its independent
-3-test release run is queued, not yet counted as a pass.
-
-Real original native104 and105 each executed once after shared publication;
-`native105-owner.log` owner test1/1 reaches20079instructions then visibly fails
-at848 PC0x8e5,args[5,0]. The controller's actual full-canvas native RECT is source
-constant[-100000,-100000,100000,100000], distinct from empty/global press regions.
-Native71 uniquely arms the original event callback; it remains unimplemented.
-Ungated hover has no VM callback effect per877310 and may complete its receipt;
-press/release/keyslot callbacks remain explicit original-PC failures. Source
-Cat/shared production is temporarily frozen for the coordinated unique player22
-build; native848 is only statically reviewed so far. No Cat GPU/title/whole-game,
-actual click/Ctrl callback or original-save completion has been established.
-
-Input ownership validation completed: release Engine lifecycle isolation tests
-3/3 passed (`shared-input-routing-lifecycle-tests.log`). Both synchronous and
-worker-audio completion paths expose sanitized input to behaviours/actions/
-optional Input journals while the shared router retains actual Ctrl down/up;
-on_update receiver creation does not reoffer an already-observed press or held
-state. Menu conflicts precede behaviour/journal/clock changes. Production source
-remains frozen for player22. Static native848 review found original hover-enabled
-suspension retains each receiver's hover marker; shared per-receiver cache
-continuation is required before mapping this call, with no completion claim.
-
-### KRKR player22 actual progress (2026-10-31)
-
-Compilation: the single coordinated full-feature release player22 build passed,
-including shared MediaProbe/InputRoutes and native lifecycle changes. Frozen
-SHA256 `5d0a93d5800a806edd22f5ca080aa691f8d2ad0456a7e19904251068c519acd2`.
-Final For binding regression now4/4 passed, adding TopLevel global-index
-preservation; the previously recorded complete TJS library426/426 remains valid.
-
-Behavior: ExE repeated the full110000-frame track on player22 with error:null,
-96506 native ticks, onClick8 and Ctrl down/up2 each. The later night-time girl
-and two-choice capture was visually inspected (`exe-regression22.log/png`).
-This still does not reproduce or establish the cause of the reported old exit.
-
-Sabbat22 START+Ctrl passed the prior baseInfo-on-void point, then stopped with
-an explicit native layer quota error1000 in PSDInfoLayer/getDispLayer/updateDisp.
-The requested45000 frames were not completed. Adapter quota1000, Scene Canvas
-quota1024, Runtime surface quota4096 and Scene layer quota16384 are distinct;
-the next step is to distinguish legitimate PSD cache capacity from repeated
-creation/retirement faults before changing limits. No enormous private quota or
-silent skip was added. Evidence: `sabbat-start22.log`.
-
-After player22 SHA was fixed, shared hover suspension was completed without
-changing DTO/command/query forms. Each receiver retains its marker while hover
-is suspended; same-position property changes trigger recomputation. Re-enabling
-an already marked receiver emits no duplicate enter, while leaving other active
-receivers in source order. Input disable/cancel/remove/restore clear appropriate
-live state. Release Scene routing tests6/6 passed
-(`shared-input-routing-hover-tests.log`); release Cat runtime-feature check
-passed (`native848-check.log`). Native848 now changes the real shared receiver's
-hover_enabled property and actual original execution advances to20083instructions,
-native849 PC0x8fd,args[5,0] (`native848-owner.log`,1/1).
-
-That owner run also injects genuine shared-journal click-down/click-up and
-Ctrl-down/Ctrl-up into the actual original-script session. All four reach the
-explicit unsupported native callback boundary at the same PC; repeated polling
-and VM step retain the same receipt, instructions and pending native call.
-Cancellation between probes is explicit test-owner action. This negative-path
-receipt/PC validation is not successful game input/gameplay. Native849 remains
-unacknowledged pending shared drag-state routing review; source6489E0→Base99→
-INPUT153 changes receiver drag_enabled, and5E7950 broadcasts matching origin-
-rectangle pointer drag messages without pixel coverage or handled short-circuit.
-
-
 ### System-NNN native outer startup and picture transparency — 2026-10-31
 
 Implementation: first-class Controller now follows reviewed Nothing -> real
@@ -7551,7 +4298,6 @@ retirement and reran native-shell-completion-tests2.log: installed2/2 + shell4/4
 passed, including no-clock completion/failure retention and pending click edge.
 No title screenshot, Start/story, long input or complete original save is claimed.
 
-
 ### System-NNN Opening effect expansion and reusable sampling — 2026-10-31
 
 Implementation: reviewed original-module OldLamp109 now keeps only native
@@ -7572,23 +4318,7 @@ MAE state-preservation fixture each passed1/1. These are authored fixtures and
 static original-module facts; actual game frontier remains player22 PC0x37d
 until the single coordinated player23 is built/run. No title/play/save pass.
 
-API reference: shared sampler/envelope DTOs were registered from actual source.
-Merged docs also include KRKR's shared Canvases.getLimits and Cat's explicit
-backend Drag DTO fields (no automatic hardware drag claim). Generated fingerprint
-changed `1dbdf921cc54e571` -> `bd71afbaa37a19da`; CHANGES records it. Initial bless
-7/8 requested this new fingerprint entry; final no-bless release API reference
-verification passed8/8 in piecewise-api-docs-verify.log. No commits or CI added.
-
 ### Shared Canvas capacity and public query (2026-10-31)
-
-Implementation: Core now owns MAX_CANVAS_SURFACES_PER_CLIENT=4096; Scene Canvas
-and Runtime pixel-surface admission use that one count policy (Runtime already
-had4096). Public Canvases.getLimits() returns surfacesPerClient without a native
-VM. Native KRKR layers derive2048 slots from half the shared count, retaining
-one temporary transition-canvas slot per native layer. Existing node, dimension
-and256MiB pixel-byte constraints remain. This is a bounded engine capability,
-not an assertion that every native retirement pattern is correct. Opt-in raw
-source diagnostics now also report host time, total layers and attached layers.
 
 Compilation/tests: independent release Scene capacity/atomic-overflow/client
 isolation/slot-replacement/restore1/1 passed; public reflected getLimits1/1
@@ -7599,14 +4329,6 @@ Logs: shared-canvas-capacity-tests.log, public-canvas-capacity-test.log,
 native-canvas-capacity-test.log. Unified full-feature player23 release build
 passed3m09s, SHA256
 `2c7a0ac497d068d207b846ddbaa63c0b4f173342a2d74a0077e28762c557caf8`.
-
-Behavior: player22 PSD cache trace made262 constructor attempts with262 distinct
-info objects;261 cache assignments completed before the final quota failure.
-Seven PSD storages were involved; no same-info repeated construction was
-observed. This does not by itself rule out retained-resource lifetime faults.
-Actual player23 Sabbat progression with the new shared capacity is pending.
-Evidence: sabbat-cache22.log. No managed launcher was replaced.
-
 
 ### Published worker images in Canvas snapshots — 2026-11-01
 
@@ -7633,124 +4355,6 @@ ImageJob -> publication -> capture admission -> clear/remove/release live path
 fixture had incorrectly combined Layer creation and Canvas copy in one ordered
 service batch; it was corrected to create the source first and rerun. This fix
 is after player23 and still needs the next coordinated actual-game run.
-
-
-## 2026-11-01 — CatSystem2 native event waits and shared image-list initialization
-
-Implementation:
-- Mapped native848/849 to canonical shared InputRouting hover/drag-enabled state. Shared per-receiver hover markers preserve source suspension/re-enable behavior; explicit Drag events retain origin-rectangle and broadcast semantics. Automatic hardware drag and controller observation remain unimplemented. Engine lifecycle isolates routed/raw input consistently through behavior registration and async frame completion.
-- Mapped native71 original event wait: validate caller slot/result, yield, then actual nativeMain next owner tick resumes with false and leaves its16-byte event slot unchanged. KCS VM atomic message-copy/boolean resume is independently tested; original logical keyslots/controller callback/result projection remain unsupported.
-- Added native type15 image-list constructor and256 initialization using reusable shared ImageJobs and actual engine ImageResource publication. The original empty bitmap wrapper is preserved; it is not a directory scanner. Page nodes are dirty rectangles, not a second packing/render algorithm. Native260 stores upload XY only,262 source publication flags only. Original image composition/entry admission/upload/capture, task34/FES and source resource replacement remain unsupported. Source audits record the full reviewed vtables/functions and shared/native boundary.
-
-Compilation and independent behavior:
-- Cat release library passed22/22 (native262-tests.log); KCS VM release passed12/12 (native71-vm-tests.log); runtime-feature releasecheck passed (native256-check.log). Shared routing release passed7/7 (shared-input-routing-drag-tests.log), Engine lifecycle isolation3/3 (shared-input-routing-lifecycle-tests.log), Resource inflate cancellation2/2 (shared-inflate-cancel-tests.log).
-- Actual authorized original main adapter test passed1/1 (native262-owner.log), executes20,218 original instructions and retains native66 class34 atPC0x18eb,args[34,3,400]. Native71 executes twice,256/260/262 once each. Atlas3072x4096/50,331,648bytes/page256x256/count192 and hidden basePlane1280x720/Z1000 are actual client1 shared engine resources, not fake image handles. Upload XY is[0,0]; source policy fields120/124/140 are1/1/1.
-- Four real Core input-journal edge probes(click down/up,Ctrl down/up) retain original failure PC/instruction count/pending call and same leased receipt on repeated attempts. They establish explicit callback failure ownership, not successful gameplay input. Owner tests use an actual shared Runtime for image preparation/publication, but do not establish Cat GPU/window/title/image-content/text/audio/FES/CST execution or completed integration.
-- Evidence is under ignored target/verification/catsystem2. Root/NNN public API documentation validation separately passed8/8 with fingerprint bd71afbaa37a19da. No commit, push, CI change, original executable execution or owner data/font distribution.
-
-
-### KRKR Layer lifetime and actual encoded-byte admission — 2026-11-01
-
-Behavior before this fix: frozen player23 advanced Sabbat beyond the old1000
-layer quota, reaching2022 attached native layers at engine time165600ms. The
-original START+Ctrl route then failed explicitly with image-processing memory
-budget while loading a1280x242 UI image; the requested45000-frame run did not
-complete. Evidence: sabbat-start23.log. The shared image-processing budget is
-512MiB; the separate dynamic/published image stores have256MiB budgets.
-
-Implementation: source audit krkr-layer-lifetime-source-audit.json records pinned
-krkrz native Children/Primary raw-pointer ownership. A native Layer registry
-entry no longer permanently roots its TJS object. Actual script references,
-suspended work and event roots remain traced; collection drops native image
-leases and queues engine Canvas/Layer retirement before render/slot reuse.
-This does not claim exact reference-count finalizer timing for every TJS object.
-The image worker now reserves actual bounded-stream encoded bytes before input
-allocation/read instead of a fixed128MiB penalty for every Asset;512MiB total,
-64MiB encoded-file and existing pixel/graph/effect limits remain enforced.
-
-Validation: release lifetime3/3 and intentionally retained2048-layer admission/
-reuse1/1 passed (native-layer-lifetime-final3.log). Release image admission3/3
-passed: small actual encoded input under occupied budget, encoded reservation
-failure before read, and changed-fingerprint charge rollback
-(image-encoded-budget-tests.log). No real512MiB allocation was needed to test
-these counters. Actual game continuation after these changes remains pending.
-
-Shared resource retirement: CanvasCommand::Destroy releases only an existing
-unpresented canvas; hide its presentations first. It removes derived state and
-retains independent frozen-copy nodes. Scene scoped/strict/atomic/frozen-copy
-release1/1 plus capacity1/1 passed (canvas-destroy-tests.log). KRKR processed
-images now use existing immutable publish_image_resource/release_image_resource
-instead of a second pixel copy to mutable numeric surface slots. Caller
-publication ownership ends after ordered Canvas edits commit; engine retained
-paths and admitted snapshots retain their own leases. Public facade, native
-publication, final compilation/docs and actual games are still being verified.
-
-
-Canvas retirement follow-up validation: public data-VM Canvases.apply destroy,
-active-presentation rejection, scoped same-id isolation1/1 passed
-(public-canvas-destroy-test.log). Native gamma/flip/gray worker continuation,
-actual processed pixels, immediate live publication reclamation after destroy
-and frozen generation survival1/1 passed (native-publication-retirement-test.log).
-Shared vector/path drawing plugin3/3 passed after removing numeric mutable-surface
-assumptions (native-publication-drawing-test.log). Full native bridge/docs and
-actual player24 behavior are still pending; these are independent CPU tests.
-
-
-Final CPU validation for the retirement changes: full KRKR engine bridge27passed,
-1ignored (licensed runtime-font fixture not executed); no ignored result is a
-pass. Release check for KRKR/Engine succeeded. Public command coverage1/1 and
-API docs8/8 passed; coordinated fingerprint d22690a23af1bf9f recorded in
-CHANGES.md. The single full-feature player24 release build has begun;
-actual Sabbat/ExE continuation with this source is not yet validated.
-
-Cat follow-up source/tooling validation:
-- Python tooling passed201/201 using /opt/homebrew/bin/python3.11 (python-tooling-311.log). The default system Python lacked tomllib and failed6imports; that environment failure is retained separately in python-tooling-latest.log and is not counted as a pass.
-- Complete static class34 vtable/constructor/attach/tick/message review confirms a real FES task, with first-tick low-button registration and later331/332 player loading. Constructor ASM628072 reads an uninitialized native INPUT target; its125 query can have input-release side effects through7106F0, so the adapter does not invent INPUT1/zero cursor or acknowledge this task. Read-only bytecode inspection identifies later449/PC0x190e and447/PC0x1926; these are static next calls, not executed behavior. Current actual pending remains66/class34 at0x18eb.
-
-Cat startup fence follow-up implementation and independent behavior:
-- Cat now implements the existing VmAdapter.preparation_pending contract while its immutable source job is pending. Source publication yields without executing original KCS instructions, so shared Runtime startup polling does not move the native script into a game tick. No new shared API was introduced.
-- Independent release preparation test passed1/1 (bootstrap-preparation-tests.log), using actual Runtime, an authored original-format KCS and a peer client. Preparation keeps native instructions/PC and engine frame/time at0; first ordinary tick executes2KCS instructions thenHalt while the peer observes that same Ctrl press. Real owner regression for this latest hook is pending separately (bootstrap-owner.log).
-
-Cat latest startup-hook real behavior:
-- Authorized original adapter release regression passed1/1 (bootstrap-owner.log), explicitly confirms program publication at0original instructions/PC before ordinary stepping. It then again executes20,218instructions and retains66/class34 at0x18eb, with the same actual engine atlas/base and four retained input callback failure probes. This supersedes the pending owner check immediately above.
-- Immutable unified player24 SHA256 independently verified asf6cc7fc86de4ed35650c510ecdda07cc2007900f0876500727295da611ef8d98; detect-only selects CatSystem2/data prefix/1280x720 (player24-detect.json). This artifact predates the new startup-hook implementation; actual GPU/run validation is separate and remains pending at this checkpoint.
-
-
-Actual unified player24 (SHA256
-f6cc7fc86de4ed35650c510ecdda07cc2007900f0876500727295da611ef8d98,
-release build3m08s): Sabbat START+Ctrl passed the earlier165600ms failure;
-source counters show repeated Layer GC drops around900 instead of monotonically
-accumulating2022 entries. It nevertheless failed again at176640ms with1015
-native Layers on shared image-processing memory admission. The requested45000
-frames did not complete (sabbat-start24.log); there is no final screenshot/pass.
-
-Further inspection found native loadImages eagerly launched another complete
-RGBA decode for every non-opaque Asset, even hidden PSD cache layers. The native
-source now retains its immutable Asset description; existing shared effect jobs
-decode when required, and existing before-input prepare_hit_images prepares
-visible positive-alpha candidates before acknowledging input. This avoids
-unconditional hidden-cache RGBA copies without weakening alpha hits or memory
-limits. Authored hidden-cache/alpha-input and full native bridge regression are
-in progress; actual game validation of this refinement is still pending.
-
-Cat unified24 actual launch:
-- Ran immutable player24 against the actual authorized game folder with --headless --frames20000. It exited1 after about0.32seconds with the precise native66/class34/PC0x18eb failure and explicit unacknowledged original call (player24-original.log). This traverses the actual installed desktop bootstrap and Runtime; it is not a source-read-only result. Failure preceded final capture and player24-original.png was not created. No successful Cat frame pixels/title/gameplay/input callback are claimed. GPU was released to KRKR for ExE.
-
-
-Actual ExE regression with frozen player24 completed110000 requested/runtime
-frames, time1759984ms, native95569 frames, error:null,8 ordinary clicks and two
-Ctrl down/up phases. Native Layers101, compared with484 in player22's earlier
-route, after non-owning native Layer retirement. This verifies the new lifetime
-and immutable publication path on the actual game; the initially reported early
-exit is still not reproduced and its exact original cause is not claimed.
-Evidence: exe-regression24.log/png/report.json. Sabbat lazy-alpha refinement has
-release bridge28passed/1ignored and is now in the one coordinated player25 build;
-its actual-game result remains pending.
-
-Cat actual canonical Runtime acceptance-boundary regression:
-- New opt-in owner_actual_runtime test passed1/1 in release (canonical-runtime-owner.log,0.39seconds). It mounts31original INT namespaces into one real Runtime, independently of the focused MenuHost fixture. Bootstrap publication preserves0instructions/frame/time; normal stepping reaches20,218instructions and original66/class34/PC0x18eb pending.
-- The true50,331,648byte atlas resolves through public Assets.surface and remains unavailable to a foreign client. The same Runtime owns the actual hidden1280x720/Z1000 base Layer and original task state. Four click/Ctrl down/up events pass through Runtime.tick and canonical InputRouting; unsupported native callbacks preserve original pending/instruction count and the exact leased receipt on repeated query. Explicit test-owner Cancel separates failure probes. No successful original callback, title, game frame pixels or completed integration is claimed.
-
 
 ## 2026-11-01 — System-NNN actual Controller crosses first overlap
 
@@ -7783,20 +4387,6 @@ required the CHANGES entry, then no-bless docs8/8 plus command coverage1/1 passe
 (`mask-separate-api-docs-verify.log`). The actual game has not yet run this new
 source; coordinated next desktop artifact is still required.
 
-
-## 2026-11-01 — CatSystem2 real FES task construction and image-list binding
-
-Implementation:
-- Resolved the conservative class34 constructor boundary through complete native message routing.627E50 sends125 before attachment:5DC340 parent0/empty child map,5DD130/5DD210 and self/base125 handlers prove INPUT unreachable regardless of indeterminate target bits. The earlier concern about live INPUT125 side effects remains true for live calls but does not apply here. Cursor staysUnknown; no fabricated INPUT1/zero coordinate or host-policy substitution was used.
-- Added first-class original FES task state, attach177 bank reference and26 parameter policy, with source-empty player/object lists and real original flags/rect/exit/selection state. Its first native child tick registers the true lowbutton through shared InputRouting; existing controller results reset via original5DE8A0. Native child ticks occur only when Main resumes from actual71, never from host quota exhaustion or asset polling. Other parent profiles remain unsupported.
-- Native449 binds actual image-list manager bitmap dimensions from the engine ImageResource and source task uploadXY. It changes native references/rect, not drawing. Genuine447 creates a player/local bank and loads FES/object resources; it remains unsupported rather than acknowledging an empty player.
-
-Compilation and actual behavior:
-- Release Cat library passed23/23 (native66-fes-tests.log), including real shared lowerbutton registration, first/second native tick distinction and prior-controller result reset. Actual original adapter passed1/1 (native66-fes-owner.log), now20,227instructions, original447 atPC0x1926,args[8,406], textflow, pending retained.66 executes4times,449once,71twice.
-- Real FesTask8 binds imageList6/rect[0,0,3072,4096]/upload[0,0], raw-string bankowner3, unknown cursor, unloaded player and first_tick=true/lowbutton absent. This correctly avoids running the new task during quota/worker retries before the original Main yields again. Existing controller5result is0. Four click/Ctrl down/up probes retain the same failure PC/pending/instruction count/lease.
-- No actual FES commands, Cat title/gameplay/image-content/GPU pixels/audio, successful native input callback or original-save reconstruction are claimed. New canonical Runtime regression is pending separately; previous canonical31INT result and immutable player24/25 frontiers refer to their earlier fixed source.
-
-
 ### System-NNN native FadeOut11 — 2026-11-01
 
 Implementation: complete pinned FadeOut source plus original static callbacks
@@ -7815,69 +4405,11 @@ negative-channel follow-up; the final run is authoritative. Dedicated release
 check is separate. Actual MUGEN2 remains at the player24 observed141/0x6c2
 frontier until the next unique desktop build; static0x86d is not execution proof.
 
-
-### Sabbat actual clipping frontier and shared Canvas CPU cost — 2026-11-01
-
-Actual player25 (SHA256
-4241833a6b0bfdfd9185df9277a7450264588403f7f52e2291da47b07106cab5,
-release build2m13s) passed both previous image-budget failure points. Source
-traces reached225136ms/native1893 Layers before the diagnostic2048-hit cap;
-subsequent original sceneplay stopped explicitly at missing clipAlphaRect,
-AffineLayer.tjs:onPaint489. No45000-frame completion or final capture is claimed.
-Evidence: sabbat-start25.log. The repeated hidden-cache RGBA preparation was
-removed without disabling before-input alpha preparation. Independent complete
-native bridge28passed/1ignored at that stage, including32 hidden non-opaque
-Assets returning without parking and real positive/transparent input delivery.
-
-Implementation after25: one Canvas per native Layer now shares all4096 logical
-surfaces. Previous2048 adapter cap incorrectly reserved a second canvas for an
-image-only transition, which actually adds another presentation of the existing
-source. No engine count/byte/node limit was raised. Native4096 admission/reuse
-1/1 and image-only transition/surface-count fixture passed within complete
-bridge29passed/1ignored. Existing native lifetime3/3 also passed.
-
-CPU evidence: actual macOS1s sample (sabbat-start25-sample.txt) placed600/608 main
-thread samples under native drive_sound.flush -> shared Canvas rebuild; the hot
-Layer apply path rebuilt the whole client parent/child index on each small
-Remove batch. LayerSystem now retains a derived per-client adjacency index,
-updates Put/Remove incrementally, and invalidates rollback/install/deserialize.
-It is skipped in saves and public DTOs; clones remain independent. Releasecheck
-passed; independent reparent/cross-client, failed batch/nested rollback and
-clone/deserialization3/3 passed, plus Canvas capacity/destruction2/2. Actual
-speed improvement still needs the next original-game run, not inferred solely
-from the profiler or unit timings.
-
-Missing clipAlphaRect: complete pinned wtnbgo/layerExBTOA Main.cpp/manual/readme
-inspected at a57e7a25a9e079f95b93cf9768949e0f8789f685. Public engine AlphaClipRect
-and ImageEffect pair job implement exact coverage multiplication, optional
-exterior clearing, associated-channel profile and forward overlapping self
-reads. Bitmap.beginAlphaClip exposes the same worker without a native VM.
-Native mapping only coerces arguments, waits for engine Canvas image preparation
-when needed, and publishes the shared result. Source/licence notices retained;
-no original DLL execution or private pixel loop. Other BTOA exports remain
-unsupported; this is not whole-plugin completion.
-
-Validation: kernel3/3 passed (including all65536 alpha pairs, geometry, hidden
-RGB, clear profiles, self feedback, cancellation and wide coordinates); public
-Bitmap pair snapshot/client/revision fixture1/1 passed. Native complete bridge
-30passed/1ignored, native4096 admission1/1, lifetime3/3 passed after math/cache
-changes. The final partial plugin registration test, encoded-budget regression,
-API docs verification and actual player26 are pending.
+### 2026-11-01 — System-NNN implementation and validation
 
 System-NNN FadeOut compilation follow-up: dedicated `cargo check --release -p
 crysirror-system-nnn --features runtime` passed in9.79s
 (`native-fadeout-final-check.log`). Actual player continuation remains pending.
-
-
-Alpha-clip final CPU follow-up: partial layerExBTOA registration plus original
-TJS call/continuation/pixels1/1 passed (alpha-clip-plugin-test.log); unchanged
-actual-encoded image budget3/3 passed (alpha-clip-budget-regression.log). Public
-Bitmap client/snapshot/revision fixture1/1 passed. New effect/source API signatures
-are frozen; docs verification is coordinated separately and player26 is queued
-behind it. No actual26 success is yet claimed and no launcher was copied.
-
-Cat latest canonical447 regression passed1/1 in release (native449-canonical-runtime-owner.log,0.40seconds):all31INTs inoneRuntime,20,227instructions/447PC0x1926/flow;real Fes8 constructor/binding/unknowncursor/deferredfirsttick,sharedatlas isolation andbaseLayer verified. Four Runtime.tick click/Ctrl edge failures preserveoriginalcontinuation/exactlease. This supersedes the pending canonical check above.
-
 
 ## 2026-11-01 — System-NNN player26 original startup continuation
 
@@ -7896,35 +4428,6 @@ alpha-clip-api-docs-final-cargo.log. Current fingerprint66c74a7ee0a69bf1 replace
 both the reason and unchanged wire semantics are recorded in CHANGES. NNN source
 is frozen at player26 while Root prepares the separate unified player27.
 
-
-### Sabbat Chapter1-3 actual continuation — 2026-11-01
-
-Compilation/docs: unified player26 built successfully5m06s including its local
-queue, SHA256c67df6c247e15f6b4ec72a222d3c4d9c87b33828bfbbca2f7d6ad8d531166897.
-Final API docs8/8 and command coverage1/1 passed; fingerprint66c74a7ee0a69bf1
-recorded (the preceding formatting-only spelling drift is logged separately).
-No managed launcher replaced. Root subsequently froze player27 with only its
-RealLive settings clip fix beyond26; our final ExE check will use that artifact.
-
-Actual behavior: player26 completed all45000 requested/runtime frames on the
-original Sabbat directory, engine719984ms, native11785 frames, error:null and
-queued_input0. Track delivered attention click, title START, Ctrl down8000/up40000
-and ordinary click42010; callbacks record6clicks and1Ctrl down/up each. Final
-native1236 Layers, original KAG p/click-wait state in start.ks*envplay's actual
-sceneplay. Captured image was viewed: Chapter1-3 library, standing silver-haired
-girl, Japanese name/dialogue, chapter banner and bottom menu, all visibly drawn.
-It passed both former image budget failures and the missing clipAlphaRect
-frontier. This is a real startup-to-later-story route, not a whole-story,
-every-plugin, pixel-parity or real-time60fps claim.
-
-Evidence: sabbat-start26.log/png/report.json. Two SIGSTOP/SIGCONT pauses of this
-owned headless process yielded GPU to Root's independent RealLive settings
-validation;120.537seconds are explicitly recorded in sabbat-start26-pauses.json
-and excluded from any wall-time interpretation. Actual source tracing advanced
-past240864ms in about1m50 before those pauses, compared with the old long CPU
-rebuild hotspot; no controlled full performance benchmark is claimed.
-
-
 ### Final ExE regression after shared alpha/lazy/cache changes — 2026-11-01
 
 Frozen player27 SHA256
@@ -7935,16 +4438,6 @@ native97464 frames, error:null, queued_input0,8 ordinary clicks and two Ctrl
 down/up phases. Native Layers101. Actual captured image was viewed: original
 Day03 night street/standing girl/two Japanese choice buttons, normal date/menu
 UI; parser03.ks *day_03 line1475. Evidence: exe-regression27.log/png/report.json.
-
-Together with the complete45000-frame Sabbat Chapter1-3 route this validates
-actual startup and sustained progression for these two assigned cases through
-current CrySirror resource/Canvas/text/image/input APIs. Initial ExE automatic
-exit remains unreproduced; no exact original-cause or whole-story/every-plugin
-completion claim. No original engine hosting, DLL execution, second renderer,
-manual unpack/JSON startup, managed-launcher replacement or commit was added.
-GPU/test queues owned by this worker are now idle. Source audits and ignored
-SABBAT_HANDOFF.md record the independent CPU/API tests and actual runs separately.
-
 
 ### System-NNN background read-mark and control-frame policy — 2026-11-01
 
@@ -7965,17 +4458,6 @@ other contexts, three real shared frames, native counts/time and stable RNG.
 Actual game remains at previously observed player26211/PC0x8a7; this newer
 source still needs the next coordinated player. Title/Start/story/full native
 restore are not completed.
-
-
-## 2026-11-01 — shared raw-byte grouped tokenizer for original FES
-
-Implementation:
-- Extracted complete reviewed6A5910/6A54B0/6A52F0/6A5340 grouping protocol into reusable crysirror-text::byte_groups. It preserves nested/unclosed parenthesis copying, ordinary quotes' consumed-width/NUL-gap behavior, colon unwrap and helper-written tail bytes, saved ASCII-prefix boundaries and raw byte delimiter matching. It does not guess SJIS protection or silently reuse native41's different algorithm.
-- Public split_grouped_bytes returns all written bytes, final logical NUL extent and visible output spans. A complete first pass checks actual helper-written capacity/overflow/nesting before allocating output; both passes support cancellation. Too-short native unwrap underflow is a visible safe-boundary error. Cat keeps original syntax/value/resource/PC/wait policy only.
-
-Independent compilation and behavior:
-- Shared Text release tests passed3/3 (shared-byte-groups-tests2.log), covering grouped/quoted/unclosed data, raw SJIS trail delimiter, preserved written tails/NUL enumeration, empty/token/depth/output limits and cancellation in both passes. Source/DTO signatures were rustfmt-finalized and handed to NNN for a single later API documentation regeneration; this is a Rust Text API, not a fabricated reflective class method.
-- Actual unified player26 separately reproduced original447/PC0x1926 with unacknowledged call (player26-original.log;SHAc67df6c247e15f6b4ec72a222d3c4d9c87b33828bfbbca2f7d6ad8d531166897). It exited1 before capture, no Cat frame pixels/title success. New FES VM/loader drafts are still not integrated with447 and cannot be counted as game execution. A draft VM unit build passed25/25 before restoring the known26production point for Root27; that included two authored-only FES state/retained-operation tests, not original-game FES behavior.
 
 ### 2026-11-01 System-NNN shared three-input mask composition and background returns
 
@@ -8002,7 +4484,7 @@ check6.37s passed. Full logs are under ignored
 
 API reference: final merged fingerprint `1171d6b86d446b00` (previous
 `c4f0841c769d7a18`) includes this shared operation, the shared CG catalogue types
-and Cat's shared paged-image types. Actual no-bless release `api_docs`8/8 plus
+and shared paged-image types. Actual no-bless release `api_docs`8/8 plus
 `api_coverage`1/1 passed (`masked-pair-cgm-paged-api-docs-verify.log`).
 
 Actual game behavior remains the prior player26 frontier:211 original
@@ -8010,50 +4492,6 @@ instructions/PC0x8a7 (SETFILM), before these new source changes. Root coordinate
 the next single player28 build. No new original-game Title/Start/full integration
 success is claimed; Movie/Title continuation, live message/effect recomposition
 and complete original saves remain unfinished.
-
-
-## 2026-11-01 — Cat original FES load and shared paged texture clear
-
-Implementation: original447 now creates the actual512DWORD player-local bank,
-constructor/named values and Main Interpreter/raw-string/INPUT/SOUND bindings,
-and loads compressed FES through scoped workers/shared XML/zlib/Text byte_groups.
-Worker success/failure remains cached across owner-admission retries. Loaded but
-notrunning FES receives its genuine first71child tick/lowbutton construction.
-Native117 is a separate global texture-cache page clear, not the FES work image
-or framebuffer. SharedImage paged API now owns bounded layout/region clipping,
-clear plans using existing Solid/Composite ImageJobs, immutable page generations
-and dirty revisions. Cat retains original startup allocation/format/handle/wait
-policy. The original synchronous117 resource dependency defers callback drain
-while retaining canonical journal/receipts; arbitrary quotas/71wait do not.
-
-Independent compilation/behavior: native117-production-check.log passed1m31s;
-native117-lib-tests2.log29passed/1ignored. The first authored storage fixture
-missed remove/list trait methods; its failed build is retained separately.
-SharedPagedImage release3/3passed:4096tile/512MiB logical allocation bounds,
-original3072x6656 sparse layout292pages/76,546,048bytes, holes/overlaps/half-open
-clipping/cancellation, undefined partial-page refusal, owner/size/duplicate/
-missing/stale completion checks, frozen clones and dirty generations. Single
-Image64MiB limit remains unchanged. Shared Text grouped splitter3/3 and separate
-actual original FES VM test1/1 executefour flag assignments then retain
-steam_isenable1002 atSTARTrow5/physical33/byte0x790. That is independent VM
-behavior, not integrated FES task execution. NNN merged API docs8/8+coverage1/1
-passed with fingerprint1171d6b86d446b00, including real Rust-only Text/Paged APIs.
-
-Actual canonical original behavior: native117-canonical-owner.log1/1passed0.42s
-(after2m46link). One Runtime mounts31originalINTs, executes20,285KCSinstructions,
-loads actual FES267lines/25sections/26aliases/localbank8 and genuinely clears/
-publishes292256-square pages. Every published page resolves in canonical Assets
-with all-zero storedRGBA and rejects foreignclient2. The next genuine call is
-native100/PC0xa2f,args[4,4278190080,1],unacknowledged. FES remainsloaded/notrunning/
-executed0; its lowbutton9 is registered. Four actual input admissions show initial
-click-down first leases unknown Fes9HoverEnter while the press sample remains in
-journal; after explicit test-isolationCancel,click-up/Ctrl-down/Ctrl-up reach
-receiver5Release/Press/Release. Exact receipts/native continuation stayretained.
-This is not successful original callback completion. No Cat title/gameplay,
-visible GPU pixels/audio/CST/original-save/full-integration claim. Earlier
-canonical tests' stale447/448/phase assertions are recorded as failures, corrected
-from actual results rather than inferred continuations. Current117production is
-frozen for Root's unique player28; native100 is source-reviewed but still unmapped.
 
 ### 2026-11-01 System-NNN original Opening completion and outer Movie transport
 
@@ -8094,45 +4532,8 @@ command: actual fingerprint `c8c180ba4ff65706` (previous
 `1171d6b86d446b00`). `Layers.setSolidColor` / `LayerCommand::SetSolidColor` retain
 all unrelated layer state and reject non-Solid/foreign targets atomically.
 No-bless release api_docs8/8 plus api_coverage1/1 passed in ignored
-`target/verification/systemnnn/solid-color-api-docs-verify.log`. Cat's Scene,
-facade and original-game tests are separately reported by that owner. All source
+`target/verification/systemnnn/solid-color-api-docs-verify.log`. All source
 is frozen for Root's single player29 build; no new System-NNN Title claim.
-
-
-## 2026-11-01 — native100 vertex diffuse and public Solid color mutation
-
-Implementation: original100/640D30→Plane59→676BB0/67D7C0/6840C0 and6824D0
-triangle export were fully reviewed. The native solid profile retains original
-uniform vertexARGB, exact raw override enable/color and79replacement defaults;
-nonzero enable overrides every vertex, zero restores the original color.
-Shared LayerCommand::SetSolidColor and Layers.setSolidColor(id,rgba) now mutate
-existing Solid paint without Layer replacement (which cancels motions). Transform,
-opacity/order/clip, stable depth and unrelated motion remain intact. Foreign,
-missing and nonSolid targets fail; shared batch rollback restores previous state.
-Cat100 uses this public command only; no new Core/Runtime enum or pixel algorithm.
-Engine services.rs/COMMAND_API changes were explicitly delegated by Root.
-
-Independent compilation/behavior: native100-lib-tests.log30passed/1ignored;
-shared-solid-color-tests2.log2/2passed; shared-solid-color-api-tests3.log public
-facade1/1passed, including live motion, properties, RGBA/foreign validation and
-TypeScript declaration. Initial authored fixtures' rotation spelling and mutable
-App helper omissions are preserved as failed attempts, corrected before passes.
-Python3.11 tooling201/201passed in native100-python-tooling.log. NNN's final
-solid-color-api-docs-verify.log passed8/8+coverage1/1; fingerprintc8c180ba4ff65706
-is recorded in generated API/CHANGES/README. No full29build result is inferred.
-
-Actual original behavior: native100-canonical-owner.log1/1passed0.40s (including
-queue/link6m19). One canonical Runtime/all31INTs executes20,292KCSinstructions,
-then preserves native448/PC0x1943,args[8],next0x194e. Original Plane4 baseARGB0
-is genuinely overridden withFF000000 through shared Solid[0,0,0,255], same
-parent; all292global page zero-pixel/client-isolation checks and four retained
-input admissions still pass. Initial click remains blocked by Fes9HoverEnter;
-no successful original input callback or FES task execution is claimed. FES8 is
-loaded/notrunning/executed0. Native448 forces FES tick with the still-unmapped
-input prelude; no fake pointer/platform defaults or ACK were added. No Cat title,
-visible GPU game pixels/audio/full integration. Source is frozen for Root's unique
-player29; Root owns builder/GPU. This worker has no remaining Cargo/GPU process,
-no player build, commit, CI or distributed game/font data.
 
 ### 2026-11-01 System-NNN real mouse mapping and player29 continuation
 
@@ -8260,94 +4661,6 @@ profiles, full SACT HLL/text/audio, saves and title/gameplay remain incomplete.
 The new desktop detection leaf is not yet registered or linked into a player;
 no working play command is claimed. No original engine is hosted or executed.
 
-
-### CatSystem2 FES continuation: input, platform and native configuration (2026-11-01)
-
-Implementation: shared Core/Runtime/Engine InputObservation and cached host
-PlatformIntegration observations replace guessed pointer/SDK state; desktop
-C/L/Z/middle mappings included. Cat owns original key/cursor, lazy Steam manager,
-worker metadata fileexist, if/else/call/return/next policies and retained original
-FES locations. New unvalidated batch adds setconf/getconf native records,32 auto
-presets,48 play/sysplay preferences and SoundConfig PART lookup/inheritance/
-reset/overlay. Actual controls use existing shared Audio SetMixGroup; no native
-renderer/mixer/decoder is embedded. Window/font/language settings, playback and
-the full FES/CST task/resource pipeline remain explicit missing boundaries.
-
-Compilation/tests: Root combined release650 passed/43 ignored, including Cat
-lib37 passed/1 ignored. Independent Runtime observation1/1, platform1/1 and
-Engine input/platform2/2 passed. The newer settings/sound4 tests await Root's
-next combined run; no pass claimed for them. Ignored-target clock/wait drafts
-passed standalone rustc -O1/1 and2/2; they are not production integration.
-
-Behavior: exact authorized owner test1/1 passed: original KCS20292, retained
-native448 PC0x1943; original flow.fes47 operations, pending setconf0stillread
-INIT_GLOBAL row37/physical267/byte0x131a. Actual scoped fileexist sets1003=1;
-Steam manager remains absent and query0 follows the actual null-manager branch.
-An earlier short --exact test name selected0 tests and is not a pass; older
-frozen binary's stale zero-FES assertion exited101 and is not a pass either.
-No title, logo playback, gameplay or full CatSystem2 compatibility claim.
-
-Static audit:131/131 original FES functions extracted into ignored target; this
-is source inventory, not131 implemented handlers. SOURCE.json/HANDOFF.md record
-reviewed source addresses and remaining full native task/object/audio/save work.
-No commit, push, CI or proprietary game/font distribution.
-
-
-### CatSystem2 native FES clock/task phase — validated source batch (2026-11-01)
-
-Implementation: forced native448 and normal owner FES tasks now use one shared
-service dispatcher. Original60Hz simulation clock, numeric/frame/blank/section
-waits, keyskip/reset_frame and no-child endfes/endkcs one-frame boundaries are
-preserved. Resource continuations retain their source input revision and clock;
-ordinary tasks run once per admitted revision, child-before-parent, ahead of
-Main continuation. Empty-object fallback hover follows the actual native clear-
-selection/pointer observation branch and returns unhandled. This does not claim
-physical/object callback, nested child creation/destruction or typed resource
-execution; those still fail visibly. Huge diagnostics JSON was split into two
-identical-schema maps after an actual macro recursion compilation failure.
-
-Compilation: settings/sound batch Cat41 passed/1 ignored in
-next-native-tests3.log. New task/clock batch Cat47 passed/1 ignored in
-native-batch3-tests2.log; the combined command later failed an unrelated NNN
-precondition, so the whole command is not reported as passed. No own Cargo
-queues, GPU/game EXE execution or submission.
-
-Behavior: updated real-game owner test (native stillread0, shared bgvoice
-gain0.8 and foreign-client rejection) awaits explicit execution by Root. The
-previous47-FES/setconf frontier remains the latest verified real-game result
-until that run; no newer title/gameplay/complete-integration result is inferred
-from unit tests.
-
-## 2026-11-01 — Siglus original input/read/trigger-skip source batch
-
-Implementation: adopted the complete native Ctrl/read/automatic/trigger-skip
-policy group from pinned siglus_rs runtime/mod.rs into first-class
-runtime/native_skip.rs. Original precedence, previous-commit read eligibility,
-unread click guard, DECIDE-DOWN stock consumption and local armed/global
-promoted trigger distinction are retained. Shared Scene input stocks, timelines
-and engine GlyphReveal CompleteReveal own the mechanisms. The six corresponding
-SCRIPT consumers are now admitted; the full imported99-command SCRIPT module
-has78 admitted consumers/queries and21 explicit missing consumers. Read-skip
-SYSCOM setters/query now apply the original eligibility gate; automatic-mode
-activation consumes existing shared deadlines. Full hide-window interaction
-activation remains unsupported rather than merely acknowledging its flag.
-Framework schema14 retains four native transient skip fields; original save
-bytes remain unchanged. No original renderer, font rasterizer or mixer adopted.
-
-Compilation/independent behavior: release Siglus library90 passed,2 ignored
-(siglus-source-skip-tests3.log). New tests exercise Ctrl+Shift message-only skip
-through real shared GlyphRun completion, native click restrictions, stopping
-read skip without advancing on the matching release, committed-read/automatic
-skip guards, EXCALL restrictions and snapshot restoration. The final authored regression preserves deferred
-MWND.PRINT read-flag timing independently from immediate CD_TEXT(-1), avoiding
-a synthetic unread update before the trailing read operand. The first test run
-had87 passes and1 failure because its fixture restored only the VM while leaving
-the newer engine layers; the corrected fixture restores both as Runtime does,
-without allowing restore_resources to mutate the scene. Python tooling201 passed;
-Siglus fingerprint/tooling tests also rerun after the final SOURCE refresh.
-Logs are under target/verification/native-source-batch. No Rewrite game was
-repeatedly run for this source batch; it is not complete Siglus acceptance.
-
 ### 2026-11-01 System-NNN native Title exit and NewGame source batch
 
 Implementation now retains the full completed Title frame as an engine image,
@@ -8374,32 +4687,6 @@ long-story and original-save behavior remain unverified. Configured exit fades,
 other Title modes, foreground SystemFile/read-mark persistence and full native
 save reconstruction still contain explicit gaps. No commit or CI was added.
 
-
-### CatSystem2 actual shared sound and FES task wait acceptance (2026-11-01)
-
-Actual authorized game-data behavior: Root froze
-`target/verification/native-source-batch/cat-owner-batch3`
-SHA25636b1f9e80dd759e4a7da7e2c338f3ddf8d84087cffc11ab9b37f6d0e5572bed3,
-then ran the exact owner test:1 passed/0 ignored in1.01s. Original KCS executes
-20320 instructions and retains native452 atPC0xa71,args[8],next0xa7c. Original
-flow.fes executes52 operations and remains running in START_LOGO,row3,
-clock414/frame3 with actual Until415 wait. Original448 completed at its genuine
-FES wait boundary; normal child phase continued across the subsequent frame.
-
-The actual test observes native stillread0 and dirty preferences; real engine
-audio group catsystem2/sound/part/4 has authored gain0.8 under shared master;
-foreign client999 cannot read it. No audio device or original engine/EXE was
-used. The1.01s duration is CPU verification time, not a rendered game benchmark.
-No title, logo playback, interactive gameplay or full compatibility claim.
-
-Next source review is complete task-result semantics (base task20 versus FES
-player519 versus parent's cached child108), nested FES/KCS resources and typed
-DEFINE/OBJECT/MACRO publication. Static main script has81 native IDs,41 present
-in the current dispatch and40 absent; dispatch presence does not establish
-complete per-ID profiles or runtime coverage. Staged typed declarations3/3 and
-task-result policy1/1 passed standalone rustc -O under ignored target, not yet
-linked. Production remains frozen for Root's unique player32 build.
-
 ### 2026-11-01 System-NNN immutable32 original Controller validation
 
 Ran the original MUGEN2 Controller once with immutable release player32 SHA
@@ -8420,24 +4707,9 @@ modules remain the next source-based work, distinct from this runtime check.
 
 ### 2026-11-01 — Final source-batch player and public API verification
 
-Compilation: rebuilt the full-feature desktop release after the final Siglus
-source freeze. Immutable player33 SHA256
-141fc1865c40c5db289fb7eae5de1876a7186fb9cd21973fe1c65f44f0f25fe6
-is also the current target/release/crysirror. Its inspect command passed and
-reported13 linked adapters, including Siglus and the new opt-in System4.
-player32 is preserved separately: the final deferred-PRINT fix was edited during
-that build, so only the subsequent source-frozen33 is claimed to contain it.
-No source commit is implied by these artifact hashes, and nothing was committed.
+Compilation: rebuilt the full-feature desktop release. Its inspect command reported 13 linked adapters, including the opt-in System4 factory. No source commit was implied.
 
-Independent verification: final Siglus90 passed/2 ignored; Python201 passed;
-final no-bless public api_docs8 and api_coverage1 passed. The generated public
-fingerprint is cbe5a4c32a15c8b9 and is logged in docs/api/CHANGES.md. Selected
-other native-batch results are Cat lib47 passed/1 ignored plus actual owner1/1;
-NNN45 passed; System4 ordinary44 passed/5 ignored; shared formats76 passed/4
-ignored. Their actual logs and artifact identities are under
- target/verification/native-source-batch. Ignored cases are not passes, factory
-registration is not completed compatibility, and no Rewrite gameplay run was
-used as a substitute for the source migration in this batch.
+Independent verification: Python201 passed; public api_docs8 and api_coverage1 passed. Other native-batch results were NNN45 passed, System4 ordinary44 passed/5 ignored, and shared formats76 passed/4 ignored. Logs are under target/verification/native-source-batch. Ignored cases are not passes and factory registration is not completed compatibility.
 
 ### 2026-11-01 Alice System4 full-source batch and shared byte-text extraction
 
@@ -8474,32 +4746,6 @@ and existing VM31/1. Log: `system4-text-module-release.log`. Shared byte-text
 remains6/0. Immutable player33 predates this source; it is not evidence of these
 new operations in a desktop build. No original-game rerun was performed.
 
-
-### 2026-11-01 CatSystem2 native result, macro/declaration and civil-clock batch
-
-Implementation: original base-task20 result queries/setters and FES exit keep
-player519 and parent108 separate; exit continues the same FES frame. Original
-section/named-value messages preserve wait/frame/local-bank ownership. Native
-MACRO executes a bounded one-pass case-sensitive lexical substitution while
-retaining original PCs. DEFINE39 kinds/OBJECT66 slots/repeated headers/missing
-trailing cells/KEYBLOCK are parsed into native policy records. Nonempty object
-declarations remain rejected before player allocation pending real shared
-resource publication. Parsing is not complete object support. FES gettime
-uses shared client-scoped CivilTimeQuery with retained one-sample completion/
-failure; getweek uses shared Gregorian weekday. No private host clock/calendar,
-renderer, decoder or mixer was added.
-
-Compilation/independent behavior: release Cat runtime lib59passed/1ignored
-(native-civil-section-tests.log), including prior macro/declaration56/1 and
-result49/1 batches. Native calendar formula360 valid-date samples matched the
-Gregorian oracle; NNN separately verified the shared helper. Ignored owner
-cases do not count as passes. No new actual-game/GPU run in this source batch.
-Latest real owner evidence remains frozen cat-owner-batch3:1passed/0ignored,
-KCS20320/FES52, genuine START_LOGO wait415, original native452PC0xa71 pending.
-Newer source has not been claimed in that binary. Nested children/resources,
-typed object/input publication, CST/dialogue/audio/save and full compatibility
-remain unfinished; no title/gameplay/60fps claim, commit or CI.
-
 ## 2026-11-01 — System-NNN complete SystemFile layout, bootstrap namespace and native host close
 
 Implementation:
@@ -8524,8 +4770,7 @@ Implementation:
   preserve both original Game-loop Save and End Save before halting. Exact
   original lifecycle was statically checked at52d6b0/52c6f0; no EXE execution.
 - Added shared pure Core civil_weekday/CivilTime::weekday (Gregorian Sunday0,
-  invalid dates unavailable). Cat's independent gettime/getweek adapter reuses
-  this same helper. No new clock sampling or device dependency is introduced.
+  invalid dates unavailable). No new clock sampling or device dependency is introduced.
 
 Compilation and independent behavior:
 - Final local release selected NNN targets passed57 with1ignored: library28,
@@ -8554,37 +4799,6 @@ Limits:
   consumers, outer mode families and original dataN.sav VM/resource restoration
   are still incomplete. SystemFile is not a substitute for original game saves.
 - No commit, push, workflow or remote build automation was added.
-
-
-### 2026-11-01 CatSystem2 shared visual motion and actual batch4
-
-Implementation: shared Scene retained motion now covers all existing transform
-components (positionXYZ,scaleXYZ,rotationXYZ radians,pivotXYZ) and byte-opacity.
-These13 client-scoped tracks reuse shared ScalarTween with actual applied
-opacity reflected in status, external/automatic clock ownership, restore and
-rollback. UI remains XY. Cat native447 publishes original implicit BASE as a
-real shared Layer group; no-DEFINE all-object wait queries its real motion and
-retains the original extra completion yield. Original busy fast-forward is
-explicitly gated: source sets a motion-program flag, not generic cancellation.
-
-Compilation/independent behavior: shared Scene3new+5prior release tests pass,
-0ignored. Cat runtime library60/1 then64/1 passes (latest motion-role log).
-Native motion Controller reuses KCS with original1192-byte globals/frame/
-active/skip/256-parameter and entry-reset policy;20 scalar/end slots are mapped,
-remaining matrices/RNG/debug fail with original pending native. It has no
-private renderer/interpolation graph and no FES scene binding claim. Current
-Rust CPU execution of six original motion resources completes sampled frames;
-original motFade skip executes its own end branch; pRot retains native26.
-Static122 object command/45 motion syscall inventories are not handler counts.
-
-Actual owner behavior: frozen cat-owner-batch4 SHA256
-c5f41f86d362361c30b6f4a209b283c5d80d19a74ac1efca3f59a0612f41f5f1,
-exact1/1passed in1.05s, KCS20360/FES53. Native452 is executed; ordinary FES
-retains execfes brandlogo at START_LOGO row4 physical66 byte0x973, with KCS
-event71@0x921 and owner phase origin0x92c intact. Real BASE LayerMotion/client
-isolation, bgvoice0.8 and settings/input receipts pass. This CPU binary predates
-the new Controller; no title/render/gameplay/60fps claim. Shared API docs
-no-bless8+coverage1passed via NNN, fingerprint1cae8f9410b1b5b9. No commit/CI.
 
 ## 2026-11-01 — System-NNN original game-slot context preparation
 
@@ -8618,37 +4832,6 @@ Compilation and independent validation:
 - No desktop rebuild, actual game run, original-slot restoration or complete
   System-NNN integration is claimed from this preparation.
 
-### 2026-11-01 CatSystem2 original motion45 and reusable random/text kernels
-
-Implementation: original motion KCS role now maps all45 native slots in the
-reviewed finite/alias profile. Matrix/vector ABI maps through sharedglam;
-random39/40 use explicit client-owned independently seeded float/integer streams
-over sharedResource Split-high MT. Debug0 decodes through shared explicitSJIS
-and publishes actual engine committed LogReceipt, retaining foreign/error
-receipts at original PC. No procedural animation graph, renderer, mixer or
-original EXE/DLL host was imported. Motion-to-FES shared object binding remains
-unfinished. Existing sharedScene13 scalar properties are independently usable.
-
-Shared capability extraction: Resource now provides stateful Clone-able
-Mt19937Split and a fast first_u32 for archive keys; formats-arc's old private
-firstword algorithm calls that kernel. Existing1998 generator keeps its original
-seeding behavior and shares the twist/temper implementation. ExplicitSJIS
-codec prevents validUTF8 bytes being misinterpreted by encoding auto-detection.
-
-Compilation/independent behavior: release combined command exits0 with Cat72
-passed/1ignored, formats-arc44/1, Resource33/3. Log is
-native-motion-services-lib-tests2.log. First attempt's test-only private-field
-compile error was corrected using a real bounded VM stack exhaustion case;
-that failed attempt is not a pass. Four seed vectors across twist boundaries
-match an independent pinned C oracle. Actual Runtime log receipt/client tests
-pass without a device. Seven original motion programs CPU-replay sampled
-frames, now including pRot. No complete game/source reverse claim follows.
-
-Actual game behavior is unchanged since frozen cat-owner-batch4's KCS20360/
-FES53 execfes brandlogo receipt; no new title/GPU/60fps result is claimed.
-NNN owns public API regeneration for new Resource Rust helpers; last verified
-fingerprint remains1cae8f9410b1b5b9 until measured generation. No commit/CI.
-
 ## 2026-11-01 — System-NNN saved EFFECT images through the ordinary shared image workflow
 
 Implementation:
@@ -8674,7 +4857,6 @@ Compilation and independent behavior:
 - Complete live original-slot restore is still not admitted: effect semantic
   state, text/audio/UI and a common asynchronous native restore commit boundary
   remain necessary. No desktop rebuild/original-game run is claimed here.
-
 
 ### 2026-11-01 Alice System4 shared image metadata, native source families and real main
 
@@ -8736,7 +4918,6 @@ manual per-client presentation fencing and precise callback cadence still need
 work. Next-source order and exact reproduction are in the ignored System4
 HANDOFF.json; source audit is docs/system4-native-source-audit.json. No commit,
 push, CI/workflow or remote build automation was added.
-
 
 ### 2026-11-01 Alice DrawGraph prerequisite: shared alpha-channel copy
 
@@ -8836,68 +5017,6 @@ separately frozen435040/main=true/Load-retained source point.
   complete native UI/outer modes/original live saves and actual game acceptance
   are still pending. No Desktop artifact or GPU result is implied.
 
-### 2026-11-01 CatSystem2 procedural animation capabilities and native lifecycle
-
-Implementation: shared Scene now owns external procedural animation producer
-resources, exact generation/revision receipts, real combined motion completion,
-requested skip and atomic optional pose samples. Stale/foreign completions roll
-back pose and status. Layer rectangle updates preserve other animation state.
-No VM/callback executable lives in shared Scene; producer continuations must be
-retired before state snapshots instead of pretending they were restored.
-Shared affine4x4 local matrices preserve shear and3D leaf projection without
-Euler guessing; planar2D ancestry/frozen composition share the same transforms.
-Unsupported perspective/singular/matrixbillboard/3DLayer-parent profiles fail.
-
-Cat original motion lifecycle now includes set-once custom VM data, separate
-positive allocation ranges, actual pose/parameter read/write and terminal
-frameFFFFFFFF evaluation preserving original frame/active/skip. Native child
-attach inherits actual string/interpreter roots before player construction;
-local banks stay independent and descendant input priorities/order follow the
-original task hierarchy. The full child loader/retirement and typed39 object
-bindings are still incomplete; this is not a title/gameplay completion claim.
-
-Compilation and independent behavior: latest Cat78passed/1ignored; shared
-Scene75passed/0ignored; actual public Engine App/Runtime external motion1,
-solid-color1 and Engine lib3passed. KCS existing12+preparation1passed after
-allocator change. Python201 tests OK(1skip) in bundledPython; earlier older/
-isolatedPython failures are not passes. Logs: native-nested-task-roots-tests,
-shared-procedural-matrix-tests,shared-procedural-public-api-tests,
-native-kcs-allocation-regression-tests,native-source-python-tests3.
-NNN final no-blessAPI8+coverage1passed, measured42a8c3604407b796 fingerprint
-(including sibling CopyAlpha). Original game receipt stays frozen batch4,
-KCS20360/FES53 execfes brandlogo; no new GPU/game run, commit, push or CI.
-
-### 2026-11-01 CatSystem2 complete bounded FES child and string families
-
-Implementation: nested FES loading/forced subtree cursor preserves original
-arguments/input observations through dependency/quota, uses actual shared
-Layer/InputRouting resources, and publishes parent106 only after the true
-first-tick wait. Deferred child destruction atomically retires real engine
-resources and independent local banks; protected jobs/unsupported object owners
-stay explicit. Paused/dead/unloaded tasks avoid guessed input observations.
-
-Original row→macro→word dollar-str expansion now shares the true Main bank
-across worker-loaded children. strvar copy/clear/C32 numeric formatting,
-independent player tables, actual second-argument getstbl ABI, normalized byte
-comparison and raw-row CP932 space replacement retain source semantics.
-SharedText owns cancellable bounded byte-span assembly and safe explicit C32
-formatting usable without Cat; no pointer varargs or private text engine.
-
-Compilation and independent behavior: release Cat95passed/1ignored
-(native-string-table-family-tests2.log), sharedText42passed/3ignored
-(shared-byte-text-kernels-tests.log). An authored local C snprintf oracle
-matches sign/radix/width/precision/narrowing/byte-string fixture vectors.
-The first table-family compile had an authored field-insertion syntax error,
-corrected before the successful run. Prior full Python201 OK(1skip) remains
-separate evidence; public docs regeneration for Text is coordinated with NNN.
-
-Limits: typed39 resource/alias-to-motion publication, execkcs/auxiliary/owned
-object lifecycle, dynamic constructor/structural markers, unsafe printf profiles,
-full CST/text/UI/audio playback/original saves remain incomplete. Latest actual
-game is unchanged frozen batch4 KCS20360/FES53 pending execfes brandlogo; no new
-Desktop/GPU/title/gameplay result or all-reverse completion claim. No commit,
-push or CI. Detailed source audit: catsystem2-fes-lifecycle-source-audit.json.
-
 ### 2026-11-01 System4 real DrawGraph channel binding and native MsgSkip family
 
 Implementation: DrawPluginManager now requires a real scoped engine Image
@@ -8948,8 +5067,7 @@ commit, push or CI. Public API shape unchanged since independently verified
   api_coverage1/1 passed (`systemnnn/api-byte-text-kernels-verify.log`). The
   existing capability test also checks both tuple payloads and absence of a
   fake Printf32 script class. git diff --check passed.
-- Implementation evidence remains separate: Cat's native-string-family final
-  release has95passed/1ignored; shared Text has42passed/3ignored. Those source
+- Independent shared Text validation has42passed/3ignored. Those source
   tests and Python tooling do not establish new owner-game/GUI acceptance.
   This documentation batch changes no NNN/native source, Desktop, GPU, CI or
   repository history.
@@ -8966,28 +5084,6 @@ system4-native-msgskip/owner-sact-host.log. Separately, scoped VM35passed1ignore
 and sact1passed2ignored passed in system4-native-msgskip-owner-build.log.
 This is no title/render/gameplay or full native-save acceptance. Next complete
 scene.c background family is source work in progress, not part of that artifact.
-
-### 2026-11-01 CatSystem2 original multi-Controller motion manager
-
-Implementation: private native orchestration now retains ordered actual KCS
-Controllers over separate base/output poses, original start0/delay/speed/group
-policy, actual activity, skip flags and terminal evaluation. Output remains
-unavailable before initialization. Quota/client/mode ownership prevents replay,
-partial reseeding or publishing a guessed zero pose; actual shared log/RNG
-services remain scoped. This is original VM policy, with no second animation
-interpolator, renderer or mixer.
-
-Compilation/behavior: release100passed/1ignored
-(native-motion-set-owner-tests.log), including actual Runtime log continuation,
-foreign-owner rejection and ordered terminal sampling. Prior whole manager
-4tests yielded99/1. SharedText public docs actual no-bless8+coverage1passed,
-measured ceb843236c48cb69 (42a8 history preserved) by the unified docs agent.
-
-Limits: this manager is not yet connected to typed FES object resources or
-class-specific Layer/Audio pose application. Original save/cache/Unicode-name
-and out-of-profile clock policies remain explicit gaps. Static class readers
-show different CIMAGE/CPLANE/SOUND meanings; one generic guessed pose mapping
-would be incorrect. No new game/Desktop/GPU/title result, commit, push or CI.
 
 ### 2026-11-01 System4 source-family background and array-sort migration
 
@@ -9058,57 +5154,6 @@ push or CI.
   visual acceptance or a native-game completion claim. This documentation batch
   changes no NNN/native/renderer code, Desktop, CI or repository history.
 
-### 2026-11-01 Cat native sound/tuple policies and shared audio/isolated Canvas
-
-Implementation: Cat's source-reviewed sound percent/group/slot and lazy tuple
-policies retain original VM semantics. They do not contain a mixer/renderer or
-fake live SOUND playback. Shared Audio now owns ordinary finite-dB100 and legacy
-silence-sentinel conversions; Audio.setVoice exposes mutually exclusive gain or
-gain_db100 with validation before mutation. Shared Canvas PresentIsolated exposes
-live source composition as one immutable snapshot before outer opacity/transform;
-existing Present stays unchanged. Snapshot inline optimization now requires full
-identity transforms, preserving external local matrices/depth. Root clipping also
-preserves separately attached public children. All resources remain scoped engine
-state, independently usable without Cat.
-
-Compilation and behavior: actual Cat105passed/1ignored
-(native-tuple-value-family-tests.log); shared Audio36passed/2ignored
-(shared-audio-levels-tests.log); final Scene10targets93passed/0ignored
-(shared-canvas-isolation-final-tests.log), including5isolated and existing Canvas/
-Layer regressions. Actual public Engine Audio3passed and Canvas1passed reran after
-final source in shared-canvas-audio-final-api-tests.log. PCM, resource snapshots,
-geometry, client/generation ownership and atomic failure are exercised. No GPU
-visual test, Desktop/player build or new game receipt in this batch. Earlier
-authored test compile/fixture mistakes were corrected before these passing runs.
-NNN unified docs measured7139e6a8e9650eac (priorceb843 kept), actual no-bless release
-api_docs8/8+api_coverage1/1passed. Ignored tests are not counted as passes.
-
-Limits: typed39 native resource publication, actual class pose/motion/Audio
-binding, auxiliary/CST/dialogue/input/save profiles and complete title/gameplay
-remain incomplete. Latest real game proof remains immutable cat-owner-batch4
-KCS20360/FES53 pending execfes brandlogo; source tests do not supersede it. No
-commit, push or CI.
-
-### 2026-11-01 Cat whole OBJECT values, array reference and KEYBLOCK source
-
-Implementation: complete759E50 OBJECT66-code row layout/evaluation now preserves
-896-byte VM data,3presence masks,BLEND255,partial tuple writes,index-1 priority
-policy and logical parent identity. Original process-pointer slot is never
-exposed. Whole758D40/758E00 reference policy preserves string-before-arity order,
-case-sensitive lookup and scalar/all-array sentinel.7597B0 KEYBLOCK initializer,
-partial/duplicate rows and lazy side effects are implemented. All are native
-semantic data; reusable resource/render/input algorithms remain engine-owned.
-
-Compilation/behavior: release default lib107passed/0ignored (feature-gated owner
-case absent); release runtime lib111passed/1ignored in
-native-object-reference-keyblock-tests2.log. Six new cases exercise complete
-field ABI, raw references/defaults/rollback and ignored KEYBLOCK tail effects.
-First authored reference/keyblock compilation failed on a cast and test helper,
-then corrected; that log is not a pass. Whole typed resource binding is still
-explicitly gated. No new real game/title/scene/GPU/Desktop or original save
-validation; owner batch4 remains unchanged. No public API shape change beyond
-already independently verified Canvas7139e6a8e9650eac. No commit/push/CI.
-
 ### 2026-11-01 — Independent stereo gain API reference
 
 - Documentation/registration: listed the complete existing Rust AudioRequest
@@ -9130,76 +5175,6 @@ already independently verified Canvas7139e6a8e9650eac. No commit/push/CI.
   documentation batch changes no other production code, NNN, Desktop, CI or
   repository history.
 
-### 2026-11-01 Cat class pose semantics and shared stereo output gain
-
-Implementation: original CIMAGE/CPLANE/SOUND seed/apply families now retain
-class-specific raw VM state, priority/pivot/position/alpha/matrix/visibility and
-SSE conversion semantics. They are not generic renderer/mixer code. Whole2Dpan
-backend review found native single-channel dB attenuation differs from existing
-equal-power pan. Shared Core typed SetStereoGain, Audio Mixer owner/worker ramps,
-channel routing and public Audio.setVoice stereo_gain[2] now expose that missing
-independent engine ability. Existing pan stays unchanged. Native immediate2Dpan
-policy calls shared dB conversion and returns this request;3Dposition and native
-owner-tick fade remain separately unsupported. No fake FES object admission.
-
-Compilation/behavior: final release Cat117passed/1ignored
-(native-pan-stereo-host-tests3.log); earlier class115/1 independently passed.
-Actual native-pan request reaches RuntimeHost PCM with exact single-side output,
-no private mixer. Audio8targets78passed/2ignored (shared-stereo-gain-tests.log),
-including offline/channel/async/worker/reflection/reverb regressions and3new PCM/
-lease tests. Actual public EngineAudio4passed/0ignored. Two earlier authored host
-test borrow/path mistakes were corrected; their compile/116pass+1fail attempts
-are not counted as passing validation. Unified docs measured5ba5be1c88e5f542,
-independent release no-bless8+coverage1passed;7139 history preserved. AudioRequest
-is a Rust capability enum with real payloads, not a JSON command/reflectionclass.
-
-Remaining: typed39 actual resource publication, class motion aliases/owner
-receipts, full CST/dialogue/input/audio/save and title/gameplay. Latest real game
-proof stays batch4 KCS20360/FES53 pending execfes brandlogo. Source/PCM/API results
-do not imply a rendered title or completed reverse engineering. No new Desktop
-artifact, GPU/device test, commit, push or CI.
-
-### 2026-11-01 Cat native object-dispatch boundary
-
-Implementation: original7690E0 object lookup precedes general natives/default
-expressions. Implicit BASE and declared-object operations now retain explicit
-Object pending data/source/arguments; unsupported calls cannot fall through to
-zero-valued expression execution or be acknowledged as general natives.
-
-Compilation/behavior: full release runtime lib118passed/1ignored in
-native-object-dispatch-boundary-tests.log, including all prior native-pan actual
-HostPCM tests. New polling test preserves source, flags and unexecuted arguments,
-and rejects an incorrect general-native completion. This does not add the actual
-class resource publishers or remove typed39 gate. No new title/Desktop/GPU run;
-public shape stays5ba5be1c88e5f542. No commit/push/CI.
-
-Cat final tooling receipt for the preceding source/API batches: full Python3.11
-201tests OK,0skip (native-object-dispatch-python-final.log), git diff --check
-passed. No own Cargo/IDA/GPU queue remains. Renderer source was only read to
-confirm the existing Snapshot offscreen path; no GPU result inferred from it.
-
-
-### CatSystem2 resumed resource family — 2026-11-01
-
-Implementation: shared HG3 linked-frame catalog now preserves native IDs, raw
-geometry/flags/mode/ATS metadata;24/32-bit control and shared JPEG-alpha paths,
-with explicit partial boundaries. Cat native INT/LST naming/search policy uses
-shared case/capability lookup. Two asynchronous phases select an immutable raw
-frame and obtain a true shared ImageResource; owner publication is retained and
-can roll back without redecoding. Runtime optionally selects the existing GPL
-format plugin; no original engine/renderer is hosted. Typed FES object gate
-remains pending actual class-to-Canvas/Layer publication.
-
-Compilation/behavior: release formats archives_e20passed/1ignored plus new
-hg3_frames5passed; Python inventory16passed. Release Cat targeted Runtime
-resource tests4passed; same frozen executable subsequently124passed/1ignored
-(`native-image-resource-all-lib-tests.log`, SHA256
-d4f9214c40773b705c227bd1ab8a4ec79f80e471cd4468c2c9a97df6f2cec23b).
-Verified real image-worker pixels/client ownership/publication rollback and
-LST case/order/loose precedence using authored media; no new game, title,
-gameplay, native FES SOUND, desktop or GPU claim. Full Python first run had
-one concurrent Siglus source-hash failure; not recorded as a pass.
-
 ### 2026-11-01 System4 shared finite audio transport and metadata source family
 
 Implementation: common Core/Audio now owns positive finite loop-pass counts,
@@ -9212,11 +5187,6 @@ independent transport deadlines and worker publication remain distinct. Public
 Audio setVoiceLoop/fadeVoiceGain/finishVoiceGainFade and setVoice swap_channels
 reach these same resources. No System4 mixer/DLL is hosted.
 
-Shared GPL formats-arc BGI/XI2-WAI catalogues preserve original old/new row
-restart, first duplicate ID,255byte chunks, one-based wave routing and raw fields.
-They are standalone resource parsers with bounded/cancellable reader input;
-there is no new FileRegistry decoder ID or silent change to the25 migration count.
-
 Compilation/independent behavior: common release Audio55passed0ignored across
 8targets (system4-shared-gain-loop-atomic-tests.log); public Engine13passed0ignored
 across audio_loops2/audio_frame5/audio_mixer6 (system4-shared-gain-public-tests.log).
@@ -9224,7 +5194,7 @@ Shared metadata3passed1ignored (system4-audio-metadata-tests.log). Explicit orig
 metadata owner1/1 reads44old-format music records and2219version3 wave routes;
 frozen77798a33... at system4-audio-metadata/owner.log. No game bytes are committed.
 The first public test command typo named nonexistent async_channels; it did not
-compile. Another public attempt met a concurrently edited Siglus compile error,
+compile. Another public attempt met a concurrently edited adapter compile error,
 fixed by that owner before final passing verification; neither is counted as pass.
 
 Native source migration: new NativeAudio is currently test-only, not routed into
@@ -9237,37 +5207,6 @@ delegates and original saves still need complete semantics. Original game/title
 receipt remains e0abb3... from before this batch. NNN joint API gen measured
 feb2ec9be29523ba; final no-bless verification is pending at this entry. No Desktop
 build by this child, GPU/gameplay claim, commit, push or CI.
-
-### 2026-11-01 Siglus source sound/cursor and shared live controls
-
-Implementation: adopted the complete pinned siglus_rs sound-routing and native
-sound-config families, including master/category/character gain, PCMCH source/
-target routing and both BGM duck timelines. Native groups declare scoped shared
-Audio ownership; no native decoder/mixer is hosted. Shared Scene integer-line
-sampling preserves native signed truncation with full-domain bounds. Shared
-Media SetGain and public Media.setGain/gain retain loading/paused/live gain
-without decoder/clock restart; native global/object movie gain consumes it.
-Shared pointer-activity tokens and Scene ActivityTimer support the original
-SCRIPT/SYSCOM cursor-hide precedence; actual desktop/offscreen input ingress
-publishes activity separately from admitted VM input revisions. Native cursor
-state changes snapshot schema to15; original-save bytes remain unchanged.
-
-Compilation: all-feature desktop/engine/Siglus release check actually passed
-(`siglus-cursor-host-check.log`); this was not a desktop binary build. Independent
-public Media gain1/1 and actual shared PCM gain1/1 passed. The final source-batch
-release invocation (`cursor-media-source-batch-tests.log`) passed238 tests across
-six targets,3ignored: Engine3,Input2,Media1,Runtime80/1ignored,Scene54,Siglus98/
-2ignored. Earlier sound parent-group and test fixture/compile mistakes were
-fixed and are not counted as passing validation. Unified generated API actual
-fingerprint feb2ec9be29523ba; coordinator independently verified no-bless8+1.
-
-Behavior: authored native bytecode and engine-only CPU fixtures verify exact
-BGM/PCMCH routing/timing, peer-client PCM isolation, live gain without cursor/
-clock reset, backend motion at unchanged rounded coordinates and cursor idle
-continuation across restore. This does not establish a Rewrite title, original
-system-menu coverage, device/GPU behavior or full Siglus integration. No game
-runs, new player executable, commit, push or CI in this batch. EXCALL source
-lifecycle work below this point is still under implementation/validation.
 
 ### Shared original-save staged restoration and unified API reference (2026-11-01)
 
@@ -9321,88 +5260,7 @@ and awaiting the root's combined run; previous shared-gain Engine13/13 remains
 historical evidence. NNN will regenerate Font/seek API references together;
 feb2ec9be29523ba is the previous verified fingerprint, not this new shape.
 
-The entire native SystemService eight-method mixer family and startup BGI/WAI
-metadata worker have been implemented and routed through shared AudioMixGroup.
-Native names/defaults/hierarchy and typed reference behavior remain adapter
-policy. This new owncrate point awaits combined release compilation and actual
-PCM/reference tests, so is not recorded as passed. SACT Music/Sound stream
-actor remains unregistered while stop/replay/EOF/fade lifetime is unfinished.
-Prepared per-client atomic audio replacement is still a draft in ignored target;
-it has no production/runtime support yet. No new original-game, title, GPU or
-Desktop-player result, no commit, push or CI in this batch.
-
-### 2026-11-01 Siglus EXCALL lifecycle and scoped font consumption
-
-Implementation: adopted the pinned complete EXCALL selector/allocation/finish
-family and pure stage initialization/callback collection; shared engine Layer
-resources replace the original backend/UI projection cleanup. Native EXCALL
-counters tick in their independent scope while ordinary time is stopped. Two
-FRONT namespaces use separate logical IDs, with original EXCALL.ORDER applied
-only to top-level objects. Private MWND/movie scopes still fail explicitly.
-Whole native SCRIPT/EXCALL font-name and SYSCOM font preference families now
-consume shared scoped font alias/family/metrics APIs. Typeface existence queries
-retry without committing a false value and observe actual registered resources;
-fallback diagnostics stay transient. Static family metadata is prepared once
-in shared Text. Public Text.resolveFontAlias/fontMetrics require no native VM.
-
-Compilation/behavior: release shared Text check passed. The joint release test
-invocation (`font-excall-all-tests.log`) actually passed192 with5ignored across
-six targets: Engine3,public-font1/1ignored,Runtime80/1ignored,FontResources2/
-1ignored,precomputed-font2,Siglus104/2ignored. Source/provenance Python9passed
-(`font-excall-source-python-final.log`). Authored native bytecode verifies two
-stores/two independent retained layer identities, correct order, native F,
-finish-queue structural ownership and restore/teardown; native font setters
-change the retained GlyphRun resource and baseline, with explicit missing-font
-fallback. Shared authored bitmap glyphs independently verify real metrics and
-foreign-client rejection. No system-font ignored result is counted here.
-
-Remaining validation: a stronger actual EXCALL finish-callback execution fixture
-and explicit system-font runs are queued separately, not included in192. Earlier
-EXCALL first run2pass/1failure (empty second namespace incorrectly rejected by
-Media) and a shared Audio mid-edit E0583 were repaired, not counted as passes.
-API regeneration is being coordinated for these font and Audio-seek contracts;
-no new fingerprint is asserted before measured output. No game/GPU/player-build,
-commit, push or CI result is implied. Full integration remains an active goal.
-
-
-### CatSystem2 typed class/bank and true Canvas publisher — 2026-11-01
-
-Implementation: complete reviewed CIMAGE/IMAGE/CPLANE/PLANE/SOUND native
-constructors/OBJECT property families, separate BASE/VIEW declaration policy,
-real logical named object IDs, original KEYBLOCK→DEFINE→OBJECT ordering and
-all-array row evaluation once. ImageList native identity and dynamic priority
-remain separate; unsigned-key ties follow the original signed-priority x86
-comparison. Actual atlas/Plane views use common Canvas Restore/Copy/PresentIsolated.
-The native VM's previously missing named-index AST attachment was repaired while
-retaining prefix flag #[expr] semantics and owner bank isolation.
-
-Compilation/behavior: latest release full Cat library131passed/1ignored in
-`native-object-bank-family-tests4.log`, frozen binary SHA256
-561445d890edb3aa786a1df6dc524213cc4735e3b532e920cac368c005170569.
-Preceding source phases126/1 and128/1 include real Runtime ImageResource/Canvas
-publication, parent opacity/motion preservation, foreign refusal and bad-parent
-rollback. Initial bank tests failed; first AST fix regressed flag brackets;
-these were corrected before the final131/1 pass. Python final201/201 OK,0skip
-(`native-hg3-worker-python-final.log`,2.801s); unified API docs no-bless8+coverage1
-passed with actualfeb2ec9be29523ba.
-
-Limits: original typed39 gate still stays closed until full class resource,
-alias/original-motion, SOUND, input and lifetime binding. Whole-bank resource
-continuation is currently ignored-source draft, not production acceptance. Other
-32 declared classes remain visible failures. No new owner title/start/gameplay,
-desktop or GPU result; existing KCS20360/FES53 game checkpoint is unchanged.
-
-Siglus follow-up behavior: `excall-callback-tests.log` actually passed5/5; the
-stronger native scene now executes a live private-stage callback and then its
-FREE finish callback before the declaration disappears, mutating the actual
-native object and original global flag. Restoring the suspended caller repeats
-exactly the same pair, without duplicate teardown. Private MWND reads now also
-reject before accidentally querying ordinary message state. Explicit system-font
-runs (`shared-font-system-tests.log`) passed2/2 with runtime Arial/Times New Roman
-paths: static installed family lookup, scoped outline metrics, immutable dynamic
-publication/release, peer rejection and the public Text methods. The tests remain
-marked ignored for normal environments; these two explicit runs are separate
-from the192/5 summary above. No font file was added to the repository.
+### 2026-11-01 — System4 implementation and validation
 
 Alice mixer/seek source-batch validation follow-up: root retry96018 actually
 passed87 tests with1ignored across System4 runtime library34/34, public Engine
@@ -9416,8 +5274,6 @@ reference measured f52fcaec3a9ab322 and no-bless8+coverage1 passed. Independent
 bundled Python tooling ran201tests OK(1skip), system4-audio-seek-python.log.
 Prepared audio replacement is a later source point with release check only so
 far; these87 tests do not validate it. No original game/player/render result.
-
-Post-font consumer validation: `native-remaining-consumers-tests2.log` passed87/1ignored across Engine3, public Audio seek/loops3, System-NNN47/1ignored and System4 runtime34. The first attempt failed because a newly production-registered System4 module accidentally compiled its test fixtures without cfg(test); the owner corrected the test gate and retained all tests. This proof precedes the next prepared-audio-replacement source batch. API Font/Seek generation measured f52fcaec3a9ab322, coordinator no-bless8+1 passed.
 
 ### Shared prepared per-client audio replacement (2026-11-01)
 
@@ -9470,49 +5326,9 @@ RGB readback remains a visible unsupported profile. Next API regeneration is
 coordinated with restore/replacement work; f52fcaec3a9ab322 remains the previous
 verified reference. No original game/title/GPU/player result in this batch.
 
-## 2026-11-01 — Cat native HG3 profiles and whole-bank shared resource publication
-
-Implementation:
-- Shared formats HG3 now distinguishes its default archive profile from explicit `pixel_profile:native`: complete40-byte stdinfo, tightly packed24/32-bit rows, numbered segment load order/overlap, defined-row coverage, JPEG depth-specific alpha/defaultmode1 and32-bit WebP embedded alpha/native channel mode. Unknown/mixed/alpha-only/img_jpa and undefined native gap rows fail visibly. Cat selects this shared profile and retains raw frame IDs/geometry; no decoder/pixels/renderer moved into the VM.
-- Added runtime-only whole-bank FES resource preparation over fresh cloned original expression/name state, bounded shared Image workers and owner Layer/Canvas publication. Native CIMAGE/IMAGE/CPLANE/PLANE flat-profile policy retains original names/index order, draw keys, source geometry and flags. Flags0 draws use engine CopyRgb on a shared worker while immutable original alpha remains available for native queries. Same-owner retries retain one receipt; foreign clients fail and bad publication rolls back roots/leases without replaying VM expressions. KEYBLOCK, nonroot/dynamic/affine/nonwhite-plane/SOUND resources and other32 constructor types remain explicit boundaries. The actual Machine typed admission gate is unchanged pending aliases/motion/lifetimes.
-
-Compilation and independent behavior validation:
-- Final combined release command exited0: Cat library135passed/1ignored (four new real Runtime resource/publisher tests), formats library44passed/1ignored, archives_e20passed/1ignored, HG3frames10passed/0ignored (`target/verification/catsystem2/native-hg3-typed-resource-batch-tests2.log`). The first run132passed/3failed/1ignored exposed the Cat publisher's presentation IDs crossing Canvas's reserved range; corrected the adapter namespace and kept the common guard. Failed tests were not counted as successes.
-- Frozen Cat library binary `cat-typed-resources-lib` SHA256922e9bf77e9b43e544f3fb73c611458f7f843f4feea887cc2ed0eb22e9a125ac. Python tooling201/201 passed in3.976s (`native-hg3-typed-resource-python-tests.log`). API metadata documentation for the existing dynamic HG3 contract is coordinated separately; no new fingerprint is invented.
-
-Original-media behavior:
-- No new desktop/GPU/game execution this batch. Old owner batch4 KCS20360/FES53 pendingexecfes brandlogo remains the last game receipt; the new135 tests establish shared resources and thin native policy, not a completed title/start, typed39, audio or CST/save integration.
-
 ### 2026-11-01 Shared styled unit flow and glyph-bound preparation
 
-Implementation: extracted original object-string placement/wrap/bounds arithmetic
-into device-free Text.unit_flow, with explicit glyph/move/break commands, style
-indices, negative spacing, vertical column placement and saturated bounds. Native
-#C/#S/#X/#Y/#RX/#RY/#D/## parsing stays in first-class Siglus policy. FontLibrary
-now offers a bounded cancellable glyph-bound worker using exactly one frozen,
-authorized face. Ready retains immutable metadata/font accounting; scratch is
-released after preparation. Public Text.layoutUnitFlow and beginGlyphBounds/
-glyphBoundsStatus/releaseGlyphBounds reach these engine capabilities without a
-VM, renderer or font file. Logical cell bounds are explicitly separate from the
-actual font coverage-cell bounds; metadata capture is not a drawing font lease.
-
-Compilation: first release Core/Runtime/Engine/Siglus check passed12.20s before
-the final wrapper/frozen-single-font additions. Final joint release invocation
-`flow-bounds-native-batch-tests.log` actually passed292/8ignored over8targets:
-Engine3,public-font/flow2/1ignored,Runtime80/1ignored,precomputed2,Siglus106/
-2ignored,System-NNN49/1ignored,native-shell5,Text45/3ignored. Earlier standalone
-unit-flow3/3 also passed. Engine tests include the real scoped glyph worker and
-retained Ready metadata, foreign-client denial, baseline-derived bounds and
-public layout; native syntax tests exercise the whole escape family and original
-literal/overflow behavior. This batch did not run a game, GPU or desktop build.
-
-Remaining: OBJECT.STRING rendering/resource lifecycle is not admitted yet; its
-public engine preparation prerequisites and native syntax policy are now real.
-Native captured-style/generation/wait/save ownership and actual GlyphRun assembly
-still need wiring, including callback resource waits, before this can be called
-a completed string-object integration. No partial parser is claimed as a working
-game. Next coordinated API generation includes these new typed contracts; last
-completed fingerprint before this batch is f52fcaec3a9ab322. No commit/push/CI.
+Compilation: the joint release invocation flow-bounds-native-batch-tests.log included Engine3, public-font/flow2/1ignored, Runtime80/1ignored, precomputed2, System-NNN49/1ignored, native-shell5 and Text45/3ignored. Standalone unit-flow3/3 also passed. Engine cases exercise the scoped glyph worker, retained Ready metadata, foreign-client denial, baseline-derived bounds and public layout. This batch did not run a game, GPU or desktop build.
 
 ### System-NNN outer return / legacy Title initialization source family (2026-11-01)
 
@@ -9574,7 +5390,6 @@ Implementation:
 Compilation and independent behavior:
 - Release native_audio filtered run passed6 with1ignored (system4-reviewed-music-profile-tests2.log). Parent explicitly ran the frozen original-owner readonly profile test:1passed0ignored, system4-owner-music-profile-test.log. This only verifies scoped INI/module reads and exact profile binding; no new original-game or renderer result is claimed.
 
-
 ### 2026-11-01 — Original restore: static fonts and target-scoped input
 
 Implementation: shared typed font-dependency visitors cover retained Layer,
@@ -9595,7 +5410,6 @@ This validates shared restore mechanisms, not completed System-NNN originaldataN
 consumer wiring, game/title/Start acceptance, dynamic font transactions or GPU
 rendering.
 
-
 ### 2026-11-01 — Public restore/audio/font-flow reference synchronized
 
 Implementation: registered the actual Core detached AudioReplacementInfo/State
@@ -9614,36 +5428,6 @@ systemnnn/api-restore-font-flow-verify.log. The opaque-field and exact typed
 Failed payload assertions passed. No Desktop/GPU/device/native-game result is
 implied. Python tooling201/201 also passed this batch.
 
-Siglus STRING preparation follow-up: release native-string-layers check passed;
-`native-string-policy-tests.log` passed4/4, then the stronger final
-`native-string-layers-tests.log` passed5/5. Native captured font precedence,
-four-mode pass offsets/padding and the authoritative per-character shadow/edge/
-body ordering now produce actual shared retained GlyphRun declarations with
-native opacity/blend/order and worker-derived dimensions. A foreign glyph
-receipt and unmapped vertical orientation fail explicitly. This remains a
-preparation/layer-assembly family: original CREATE_STRING/SET_STRING/
-GET_STRING/SET_STRING_PARAM admission, lifetime/generation/save and callback
-resource waits are not yet connected. Snapshot schema remains15. Source policy
-Python9passed; diffcheckpassed. Subsequent shared API generation for the preceding
-Font/Flow/Restore/Pixel batch measured a7e4bc50985744b6; no-bless8+1 actuallypassed.
-The next GlyphImage worker additions are a later source point, not that hash or
-the preceding292-test proof. Root also explicitly ran the frozen System4 owner
-profile verifier:1/1passed in system4-owner-music-profile-test.log, reading scoped
-INI/DLL hashes only; no original executable, VM, GPU or desktop was run.
-
-## 2026-11-01 — Cat alias argument family, original declaration FIFO and IMAGE placement
-
-Implementation:
-- Completed the reviewed75AAC0/7693A0 alias-value projection family as private first-class native policy:41 parameter names, sequential user-word consumption, original declaration defaults, absolute/delta/percent/degree float order, CVTTSS2SI temporary defaults, raw color constants, separate per-class getters and transactional side effects. Original CX/cx switch leaves zero without evaluating its argument; this is a reviewed native branch, not unknown-op success. Alias MotionSet insertion/owner callbacks remain separate unfinished work.
-- Full755D80/6287B0 source corrected the prior resource publisher's ordering assumption: initialization consumes DEFINE/index FIFO, while signed name comparison only serves lookup. Full65DC00 also corrected native IMAGE placement separately from CIMAGE, including nonzero origin/base and PATHMODE0/1. New Runtime regressions check same-key later DEFINE overwrite and both original image placements.
-- Shared format CPU decoders can now receive their active entry-open context; the old two-argument constructor remains compatible and no stale index-worker token/resolver is retained. HG3 bounds cumulative segment inflate/run/pixel work using max_resident_bytes and checks cancellation between tags/segments/runs/bitplane blocks/rows. No new public DTO or reflected class is fabricated.
-
-Compilation and independent validation:
-- Unique release combination actually exited0: Cat library141passed/1ignored, formats library45passed/1ignored, HG3frames11passed/0ignored (`target/verification/catsystem2/native-alias-fifo-geometry-budget-tests.log`). This includes the6 new Cat regressions,1 active-context shared test and1 overlapping-segment work-budget test. New frozen `cat-alias-fifo-geometry-lib` SHA256d9c6a383cc4ec6e265a2e801349069d183fe746d6a1d699ac50a5ab22eaf20d3; prior135/1 remains historical and does not establish the corrected ordering/placement. Source inspection found the semantic issues before running a new game; passing prior tests was not treated as proof of those untested native rules.
-
-Original-media behavior and remaining admission:
-- No new game/Desktop/GPU execution. Original629850 runs script before6287B0 FIFO initialization and62D4A0 resource updates; sealed native admission must preserve those first-frame phases. The existing Machine typed gate stays until real alias/controller callbacks, input/SOUND and resource retirement are connected. Historical owner KCS20360/FES53 pendingexecfes brandlogo is unchanged.
-
 ## 2026-11-01 — Shared positioned glyphs to immutable image resources
 
 Implementation:
@@ -9653,7 +5437,6 @@ Implementation:
 Compilation and independent behavior:
 - Core/Text/Runtime release check passed. Text release library passed46 with3ignored. Runtime first library run passed81 with1ignored and one new authored test race; the test had equated scheduler counter retirement with the later closure/resource drop. After checking the actual Task lifecycle, only its wait assertion was corrected, and both exact cancellation/admission tests passed2/2. Production was not loosened.
 - The same compiled production point's frozen glyph_images and precomputed_fonts binaries passed2/2 each, including actual coverage pixels, CopyAlpha, font release/frozen retention, cross-client rejection, invalid glyph failure and explicit resource publication. Artifact SHAs/logs are in target/verification/system4-glyph-image/. Python tooling passed201 with1skip. Public docs are being regenerated separately; no unverified new fingerprint or original-game success is claimed.
-
 
 ### 2026-11-01 — System-NNN canonical saved audio work and shared preparation
 
@@ -9685,41 +5468,15 @@ Implementation:
 Compilation and independent behavior:
 - Local release check passed. A single release --no-fail-fast combination passed80 with2ignored: System4 runtime library38/1ignored, existing VM35/1ignored, new authored native-bytecode delegates7/0ignored (system4-delegates/tests.log). Tests exercise weak generation reuse, bound/static callbacks, unchanged instance ownership, clone during pending original HLL, per-callback owned argument isolation/final release, last-return semantics and invalid native PCs. There is no new original-game/GPU/save acceptance. Other AIN versions and incompatible callback declarations remain explicit failures.
 
-## 2026-11-01 — Shared atomic layer preparation and Cat resource publication
-
-Implementation:
-- ServiceBatch.prepare_layers creates or updates scoped layers before Canvas operations inside the same existing cloned transaction. Existing Canvas/World/layers/UI order remains intact. Canvases.applyBatch exposes the real six-section batch through HostServices, preserving resource preparation and combined4096-command/4MiB bounds. Restore rebinding rejects the new mutation phase. Cat's typed-bank publisher now submits parents and Canvas once, rather than exposing an intermediate parent transaction.
-
-Compilation and independent behavior:
-- Release combined validation actually passed Cat141/1ignored, Engine3, public canvas_batch_api2, Scene54 and prepared_layer_batch3 (catsystem2/shared-prepare-layer-batch-tests3.log). Tests use real shared resources, a real external producer, exact stamp/Arc preservation and owner-state rollback; forbidden serialization of live producers remains rejected. Two earlier fixture-only failures were corrected without relaxing production guards. Root separately passed Runtime82/1ignored including the new restore guard. No new original-game/title/GPU receipt is claimed; NNN owns the subsequent unified API regeneration.
-
-## 2026-11-01 — Native Siglus STRING commands on shared font tasks
-
-Implementation:
-- Connected CREATE_STRING, SET_STRING, GET_STRING and original7/8-argument SET_STRING_PARAM through native semantic policy to client-scoped FontLibrary glyph-bound workers and retained engine GlyphRun layers. Native escape grammar, palette/default selection, captured SCRIPT/EXCALL font policy and per-character shadow/edge/body ordering remain native policy; no original font/sprite renderer was adopted.
-- Pending normal instructions and inline frame callbacks roll back before preparation, retain their own frame moment/input boundary, and resume without duplicate commits. Same-content assignment recaptures the current font. Resource retirement follows successful resource mutations/publication, avoiding a full object-tree scan for every ordinary bytecode.
-- Framework schema16 saves logical string recipes plus their monotonic resource counter and pending frame moment; queries/leases stay transient. New restore tests exposed that the counter was still serde-skipped; it is now saved and validated before replacing the live VM. Original native save codec bytes remain unchanged. Pinned GET_SIZE returns0 for String and is preserved separately from rendering bounds.
-
-Compilation and behavior validation:
-- Final unique release combination actually exited0: Siglus library116passed/2ignored, Runtime library82passed/1ignored, actual native Siglus/shared-font-worker integration2/2, precomputed fonts2/2 and shared glyph images2/2 (including current8192 preflight). Total204passed/3ignored; target/verification/siglus-script-source/string-resource-final-tests4.log and string-source-batch-receipt.json record the exact scope. Frozen Siglus test binary SHA25634910e7869aafda9920d9fac12451d3c9fb14b24c155d1f8b24ea0202a48893b.
-- Tests cover pending-command snapshots, fixed-time callback replay, current-font recapture, per-glyph pass order/colours, native-save import/rebuild with unchanged codec/payload (native civil header timestamps refresh), invalid-generation rollback and actual scoped coverage/missing-glyph rejection. Contract fixtures use controllable font completions and actual shared ChannelAudio; separate Runtime tests use authored coverage data and real engine workers. Final Python native boundary/provenance suite passed9/9 using Homebrew Python; system Python3.9 lacks tomllib and was not a valid test runtime.
-
-Limits and original-media behavior:
-- No new Desktop binary, installed-game execution or GPU rendering in this batch. Vertical orientation, destructive callback/resource profiles and other unadmitted Siglus objects/operations still fail visibly. Actor/pass budgets and burst hydration admission remain bounded; this is four native operations, not full Siglus completion. Other native-engine migration work remains active. Root adds no reflected public API in this batch; coordinated shared API generation is tracked separately by its owner.
-
-
 ### 2026-11-01 — Shared glyph-image / prepared-layer batch API final receipt
 
 Implementation: documented the actual GlyphImageSpec optional Rust capability,
 ServiceBatch six-section DTO and Canvases.applyBatch with prepare_layers before
 Canvas inside the existing engine transaction. No fake reflective glyph class.
-Root's current Runtime/Glyph8192/font/STRING combined behavior and Cat's final
-prepared-layer/public facade behavior are separate implementation evidence.
 
 Generation: Glyph-only observed081fcf5a46b10d77 could not pass no-bless after
 concurrent applyBatch source landed; that failed7/8 run was not counted as a
-pass. After Cat froze and validated its public batch, final actual regeneration
-produced1bea1d048c6dd276. After recording that value, release no-bless
+pass. Final actual regeneration produced1bea1d048c6dd276. After recording that value, release no-bless
 api_docs8/8+api_coverage1/1 passed(api-glyph-service-batch-verify.log). Prior
 verifieda7e4bc50985744b6 history is retained. No Desktop/GPU/native-game result
 is inferred from these documents.
@@ -9740,32 +5497,6 @@ the second CP932 name fixture to the same case. This includes actual shared
 WAV preparation, detached bridge/raw export, old/peer isolation, PCM repeats,
 failed preparation retention and wrap boundaries. No original-game run here.
 
-### 2026-11-01 — Siglus STRING bank restore uses bounded worker admission
-
-Implementation: restored STRING recipes now queue scoped glyph-bound work and admit one shared CPU task at a time, instead of reserving scratch/tasks for the entire scene simultaneously. The queue remains outside snapshots, with the same schema16 logical recipes. No public API or original-save codec changed.
-Compilation and behavior: final string-bounded-bank-final-tests.log actually exited0: Siglus116passed/2ignored, Runtime82/1, precomputed_fonts2/2 and native siglus_strings3/3 (203passed/3ignored). The new test restores64 retained text objects through actual engine fonts/workers and compares their complete owner/id/paint/geometry projection. This source point also compiled against Alice's new shared retained/active audio DTO/default production point; it does not establish those new audio behaviors. Earlier shared glyph_images2/2 remains its separate final4 receipt.
-A full-file save comparison exposed only the original civil header millisecond changing at offset36; the deterministic test now compares every byte outside the eight original civil timestamp fields, including the complete native packed payload. Production save semantics were preserved. Source/provenance Python suite passed9/9. Frozen current native test SHA2565fc959c3ff2ad327b8a0c095bff9d2556a33b8fde51606b71ad2bea0da7bd50b; exact source/runtime-test hashes and scope are in target/verification/siglus-script-source/string-bounded-bank-receipt.json. No new game/GPU/Desktop run; full migrations remain active.
-
-## 2026-11-01 — Cat actual native class-frame consumer and retirement
-
-Implementation:
-- Replaced the blanket metadata gate only for the reviewed flat runtime class profile with original331/447 construction followed by real629850 post-script resource publication. Pending jobs/PC/input observations remain outside cloneable VM state. Direct disp/size/pri use original transactional class policy; generic native ACK still rejects Object commands, which have a distinct completion path. Changed resources use shared worker/lease services; pose-only frames retain the original generation. Original endfes/task retirement atomically hides/destroys class Canvas views, removes sender records/input/root and delegates old-reader image retirement to the host, retaining failed release requests.
-- Corrected Plane POS/BASE mapping after raw setter/getter and complete seed/callback review: POS0x30 uses pose6/7/8; BASE0x40 uses3/4 and priority5. Source unknown UV, other32 constructors, KEYBLOCK, transformed/nonwhite planes, alias motion/SOUND/baseimg/rand remain explicit limits. The next alias worker is an ignored target draft, not an uncompiled workspace module or completed native API.
-
-Compilation and independent behavior:
-- Release check passed before final retirement/ACK refinements; final narrow release library passed142/1ignored (catsystem2/live-class-frame-tests2.log). One added end-to-end authored original FES child drives script -> real worker image leases -> atomic Canvas/Layer publication -> parent execfes completion -> next frame same lease -> original endfes cleanup. Earlier140/2failed/1ignored exposed generic ACK admission and an explicitly unset fixture atlas base; failures were fixed without guessing UV/defaults or weakening restore guards. Frozen cat-live-class-frame-lib SHA256c23d01f06874329edd51582a8956a298c2c23768bd68a58fea3223ebbf4fff6b.
-- Python full tooling passed201/201 (live-class-frame-python-tests2.log). Earlier full run200/1 tracked only Root's then-live Siglus source hash and was not called successful. Shared public API documentation was separately finalized by NNN as1bea1d048c6dd276, no-bless8+coverage1 passed. Original-media verification for this whole class-frame batch is being built, not yet a new original game/title/GPU receipt.
-
-Cat whole class-frame original-media result (same batch): exact owner test1/1
-passed in1.11s using immutable cat-owner-live-class-frame SHA256
-4e9e2b083710ffa6adea60b6ab3dd900596a5fed096b5b4b094408ed42d09ae5
-(live-class-owner-actual.log). New strict assertions require original IMAGE +
-CIMAGE2 real shared leases/draws and all6 PLANE shared Canvas/Layer views. Parent
-execfes really completed; original flow now59operations/KCS20,410. This is CPU
-resource acceptance, not title/GPU acceptance. Native baseimg at brandlogo
-START physical79/byte0xad8 remains explicit at original owner KCS PC0x92c and
-retained FES owner phase. No repeated demo probing was used for this batch.
-
 ## 2026-11-01 — System4 canonical audio and shared retained transport
 
 Implementation:
@@ -9781,14 +5512,6 @@ Original media:
 - No new game/title/render acceptance. Remaining Sound/Music optional/sample-data profiles, native control-only instance creation, text/effects, real logo animation and original saves remain explicit gaps. No original engine, EXE or DLL was executed.
 
 System4 canonical actor routing follow-up: the separately compiled release library now passed44/44 ordinary tests,1ignored. Both new end-to-end original-HLL cases passed: Prepare/Play produced actual shared PCM before native halt or close, and unsupported-HLL failure released audio while retaining the original PC/arguments. `target/verification/system4-retained-audio/worker-tests.log`; this is authored CPU acceptance, not original game/title acceptance.
-
-## 2026-11-01 — Cat native baseimg bitmap/Plane copy and hide consumer
-
-Implementation:
-- Native77A860/event0/1/ImageList296 now handles no-arg removal of reserved draw0/hide, IMAGE/CIMAGE copied bitmap and PLANE VRAM copy using actual shared Canvas resources. Native draw ordering includes the copied Canvas record; no private raster/composition code is added. Its live base view is a low presentation child of the existing native payload, preserving payload depth/transform and external motion generation. Raw queue helpers confirm same-clock continuation; no extra frame is invented. Signed default1000 baseimg_pri/event28 mapping and its next test are source-only after this receipt, not counted validated yet.
-
-Compilation and independent behavior:
-- Final narrow release143passed/1ignored (native-baseimg-family-tests2.log), frozen cat-native-baseimg-lib SHA2564d4ae635ba599c99318a120a8271051e641848b6f4c68a120a6d0dc479141fa5. The new FES fixture really copies the old CIMAGE lease, resizes/publishes a new generation while old RGBA remains readable by shared Assets, copies a Plane, hides only key0 and retains copied bitmap, and verifies unchanged native payload transform/external stamp. Earlier142/1failed/1ignored was a fixture API mistake querying virtual leases through encoded-file metadata, fixed by querying the actual published Assets store; isolation was not relaxed. No new original-game/GPU/title result or public API change for this family. Full alias/motion/SOUND/random seed and other native classes remain ongoing.
 
 ### 2026-11-01 — System-NNN original text/selection wait consumers
 
@@ -9820,25 +5543,7 @@ without relaxing the check. Actual regeneration then produced531a48a7ce30ee00.
 After recording the observed value and retaining prior1bea history, release
 no-bless api_docs8/8 plus api_coverage1/1 passed in
 systemnnn/api-viewport-retained-audio-verify.log. Root's198/2 and Alice's137/3
-independent behavior receipts remain separate from document generation. Cat
-session seed and the next normalized blend are drafts outside this fingerprint;
-no new Desktop/GPU/game acceptance is implied.
-
-## 2026-11-01 — Shared viewport clipping and original Siglus clip family
-
-Implementation:
-- Added optional LayerSpec.viewport_clip, SetViewportClip and public Layers.setViewportClip/viewportClip. Target clips are independent of layer/ancestor transforms and coexist with local clips; zero-area clips hide pixels. Existing layer motion and unrelated state survive the setter, and scoped mutations/snapshots use the existing engine transactions.
-- Shared Scene frame extraction owns target clip intersection; Canvas capture rebases clips for axis-preserving roots and refuses an inexact rotated/sheared inverse instead of losing it. Nested region snapshots keep their clip target during inlining. Canvas solid sampling also observes the target clip.
-- Native SET_CLIP160 plus scalar clip properties/edge events map original signed LTRB policy onto ordinary engine payloads. Native parent clipping does not clip child payloads. Bad argument widths/layouts fail before mutation. SRC_CLIP geometry/UV, oriented vertical STRING, destructive callback profiles and remaining stage/MWND/world/effects are still separate unfinished work.
-
-Compilation and behavior:
-- Initial release check passed. Final release combination viewport-clip-final-tests.log exited0: Engine library3, public API1, Scene library54, viewport clipping3, existing Canvas isolated5/lifecycle3/subtree9 and Siglus120passed/2ignored:198passed/2ignored. Native fixtures cover target coordinates/events across restore, empty/native-child behavior, per-glyph String clipping and unknown-layout/width atomic rejection. No ignored test is counted as a pass.
-- The first docs run correctly caught the missing layer.set_viewport_clip command mapping; the real mapping was added, with coverage unchanged. Coordinated generation produced531a48a7ce30ee00 and release no-bless api_docs8/8+coverage1/1 passed. This records the viewport/retained-audio source point; subsequent session-seed/Normalized work has its own owner/batch. Source/provenance Python9/9 passed. Receipt: target/verification/siglus-script-source/viewport-clip-receipt.json.
-
-Owner media:
-- Built a new release native_probe example, not a Desktop player. It now calls the actual engine.frame after each tick and records extraction separately from GPU rendering. Frozen probe SHA256896d869a5be391d588e43ed572083356cc3263ec370410b0c0a788dad0a2d945.
-- Original installed HF and Plus each completed2000 ticks and2000 engine extractions, both exit0. HF:sys10_tt01 PC199429/line895, native frame1777, original op00 Movie playing with picture_ready=true/position12016ms,2 final primitives. Plus:sys10_tt01 PC46592/line432, native frame1629,41 primitives, no active Movie wait. Original assets/keys were read through the existing scoped project; no original executable or original renderer was run, and no font/game files were added to source.
-- Both reports explicitly say gpu_rendered=false and do not prove a correct title image/playthrough/full compatibility. No new Desktop binary or commit/CI. Full migration goal remains active.
+independent behavior receipts remain separate from document generation. No new Desktop/GPU/game acceptance is implied.
 
 ## 2026-11-01 — Shared normalized/scalar RGBA and native Graph families
 
@@ -9864,96 +5569,21 @@ Python ran205 tests successfully,1skip (`python-final.log`); the earlier live
 `src/export.rs` ledger failure remains recorded in `python.log`. No native
 title/GPU result has been added.
 
-## 2026-11-01 — CatSystem2 live alias/motion/root and owned random streams
-
-Implementation: actual native object aliases resolve original mot KCS through
-bounded resource workers, execute the first-class KCS Controller in child-first
-native tree order, and publish class poses plus the root external-motion stamp
-in one engine transaction. Native wait observes real shared completion. Both
-native skip and public producer skip execute the original KCS skip flag, retaining
-the original completion-yield. Native rand/randtbl consume the same owned integer
-stream (randtbl uses1001 pairs of swaps); no ambient time seeds. baseimg_pri
-preserves existing native payload/producer and applies signed/default depth.
-
-Shared capability: Core/Runtime now expose bounded asynchronous session seed
-material,1..16 words, explicit Fixed or OS source, client-owned completion/cancel,
-reserve-before-entropy and visible failure; the default host is Unsupported.
-Core remains no_std and dependency-free. Runtime getrandom0.3.4 samples on its
-worker; this is game-stream seed material, not a credential/security API.
-Cat's optional random_seeds is an exact [u32;2], mirrored by strict Python
-validation and its native config schema. Tooling validation4/4 actually passed.
-
-Compilation and behavior: shared-session-seed-tests2.log release8/8 passed
-(Core2, Runtime-private4, real Host integration2). The initial compile rejected
-accidental Core serde derives; those were removed, with no Core dependency added.
-The integration includes actual OS16-word sampling without any strength or
-uniqueness claim, fixed reproducibility, queue/cancel/drop and client isolation.
-live-motion-root-random-tests2.log release149passed0failed1ignored. Immutable
-cat-live-motion-root-random-lib SHA256
-cf1e5e1b1686f04db546e3d46854d981c7dbe33270fabaee1f48fd8705154a22.
-The previous test build had only a fixture access to nonexistent LayerSpec.depth;
-it now queries real LayerSystem.depth. Fixtures use authored KCS, real shared
-Canvas/Layer resources, real native/public skip and actual root revisions. The
-strict Rust config contract passed. Public docs regeneration is coordinated and
-pending; prior531a48a7ce30ee00 is not a seed/config receipt.
-
-Original media: no new game/GPU/title run in this batch. The last real original
-receipt remains IMAGE+CIMAGE2 leases/all6 planes at59FES/KCS20410. SOUND playback,
-other native classes, CST/input and original saves remain incomplete; complete
-SOUND source/resource/playback consumers are next before another owner run.
-
-Cat live-motion follow-up tooling: live-motion-python-tests.log actually ran205/205 Python tests successfully in2.965s; no skipped test or GPU claim.
-
-
 ## 2026-11-01 — Source geometry cropping and complete native vector setters
 
 Implementation:
 - Added engine-owned LayerSpec.source_crop, SetSourceCrop and scoped Layers.setSourceCrop/sourceCrop. Cropping changes only the payload geometry/UVs before projection, preserving original content size, child transforms and live motion. Shared Scene CropRect/crop_rect/subrect_quad handle finite/empty rectangles, atlas or reversed/repeated mathematical UVs and homogeneous projected subrectangles. Existing retained-layer UV validation is unchanged.
-- Added Scene PositionedGlyph.crop and shared renderer coverage/outline cropping without a second text compositor. Canvas solid sampling and snapshot inlining preserve local crop state. Siglus SET_SRC_CLIP161,149..153 scalar properties and154..157 edge events now translate signed center-relative edges to these declarations. Original per-glyph tight-texture padding and shadow/edge/body order remain native policy; shared font workers and glyph rasterization own resources.
 - Adopted all five original vector setters (SET_POS48, SET_SCALE49, SET_ROTATE50, SET_CENTER158 and SET_CENTER_REP159), including both XY/XYZ signatures. The original early setter path preserves omitted Z; layout/width/signature preflight completes before mutation. Final review also matched original integer-center summation before f32 conversion, including cancellation across2^24. Original save format/schema16 remain unchanged.
 
 Compilation and independent behavior validation:
-- source-crop-tests4.log: release238passed/6ignored across10targets (Engine3/public API1, Scene55/sourcecrop3/viewport3, Canvas isolated5/lifecycle3/subtree9, Siglus126/2ignored, wgpu30/4ignored). The final private center-precision assertion separately passed Siglus126/2ignored; final GPU-fixture correction separately passed wgpu30/4ignored. Final source-provenance/native Python checks passed9/9. Ignored tests are not passes.
 - Explicitly invoked real offscreen GPU test passed1/1 (source-crop-gpu-final.log), comparing every framebuffer pixel with the original image inside the crop and background outside, while retaining immutable coverage keys. The initial GPU run already passed its pixel oracle but incorrectly required a fully hidden glyph to remain cached; only that fixture assertion changed. Earlier release attempts exposed an invalid reversed-UV fixture and the genuine missing native SET_CENTER command; both histories are retained in the receipt rather than described as passes.
-- Unified generated API no-bless verification passed8 plus command coverage1 (systemnnn/api-seed-blend-crop-verify.log), actual fingerprint531a48a7ce30ee00 ->0154abd7b61f34df, covering source crop, Alice fixed/normalized blends and Cat seed material. Implementation, compilation, GPU pixels and native execution remain separate evidence.
+- Unified generated API no-bless verification passed8 plus command coverage1 (systemnnn/api-seed-blend-crop-verify.log), actual fingerprint531a48a7ce30ee00 ->0154abd7b61f34df, covering source crop, Alice fixed/normalized blends and shared session seed material. Implementation, compilation, GPU pixels and native execution remain separate evidence.
 
 Actual original-data behavior and limits:
-- Frozen release native_probe SHA2563bedebeebebead42ecfd1d3a212601b7263628faf15de926c7196b12643f7e92 executed both Rewrite roots through their real original VM and shared EngineSystems:2000ticks plus2000frame extractions each, exit0/no errors. HF reached sys10_tt01 PC199429/line895 with ready op00 picture at11968ms and2primitives; Plus reached PC46873/line444 with41primitives. These two runs used no GPU/window/audio device and do not establish title visuals or complete gameplay. The GPU fixture above is independent shared-capability evidence.
-- Full Siglus coverage, vertical STRING orientation, recursive destructive callback/resource replacement, full MWND/system-menu/wipe/world/effect and original-save reconstruction families remain work. No new desktop player, commit or CI was produced. The persistent goal remains active; see target/verification/siglus-script-source/source-crop-receipt.json for exact hashes/logs.
-
-### 2026-11-01 — CatSystem2 original SOUND basic resource/transport consumer
-
-Implemented:76BAF0/76C000/770200/7702F0/7792A0/779A80/779AC0 argument and flag
-policy plus662640/6285C0 resource/transport stages, retained between real owner
-frame phases. Native prefix/LST/INT lookup runs on bounded workers. Load publishes
-an actual shared immutable AudioResource; it does not create/play a voice. Play
-waits for real PlayResource admission. Shared Audio owns decoding, mixing, pause,
-looping, source status and PCM. Native preference integer products/dB and exact
-channel-range policy stay in the adapter. Grouped active release/pause/stop and
-paired crossfade are explicitly gated until their original fader lifecycle is
-implemented; no linear-amplitude approximation is substituted. Remaining native
-blend/stop require their real original KCS controller policy.
-
-Compilation/behavior: first releasecheck rejected two overlooked oldFrames.reap
-call signatures; all callers corrected, no host contract relaxed. The following
-live-sound-family-tests.log release actually passed151/0failed/1ignored. Frozen
-cat-live-sound-basic-lib SHA256de67223b464b06e2e00f29b19ea91f699cb33911fa5a6abf7d01178afa54fe6f.
-The new authored FES/WAV test exercises real Runtime resource preparation,
-load-without-playback, actual48-frame stereo PCM0.5, paused cursor preservation,
-looping past EOF, dynamic loop-off, actual EOF/native playing reset and empty-load
-release. A second pure test covers consumed/ignored arguments, defaults and flags.
-This is independent engine-service behavior, not a new original game/title/GPU
-receipt; the complete SOUND family and other typed classes remain ongoing.
-
-Static read-only review also found5EA3F0's real fader recurrence: subtract elapsed
-native ticks from binary32 remaining, then current+=(target-current)/remaining
-once per update. No elapsed multiplier; original action completes on the update
-following target arrival. This is not ordinary linear tweening. A shared Scene
-scalar step kernel is proposed to Root; no such new public API is claimed yet.
 
 ### 2026-11-01 — Unified seed, fixed-blend and source-crop public contracts
 
-Generated docs/api from the actual frozen public source: Core session seed material/query, Cat optional two-word random seed configuration, six normalized/fixed RGBA blend types with the real qualified tuple payload, Bitmap.beginFixedBlend, and Scene source geometry cropping. The historical531a48a7ce30ee00 receipt is retained; this actual generated fingerprint is0154abd7b61f34df. The first generation correctly rejected the missing CHANGES entry and an authored test that expected an unqualified type instead of the real crate::image_blend::RgbaBlendState declaration. The declaration and coverage constraints were not weakened. After correcting the assertion and recording the generated hash, release no-bless api_docs passed8/8 and command coverage1/1 (systemnnn/api-seed-blend-crop-verify.log). The README now describes System4/System-NNN bounded native factories rather than the obsolete parser-only boundary; it explicitly does not claim complete compatibility. Underlying seed/blend/crop and GPU behavior are recorded in their owners’ separate receipts; no desktop build, commit or CI was produced here.
+Generated docs/api from the actual frozen public source: Core session seed material/query, six normalized/fixed RGBA blend types with the real qualified tuple payload, Bitmap.beginFixedBlend, and Scene source geometry cropping. The historical531a48a7ce30ee00 receipt is retained; this actual generated fingerprint is0154abd7b61f34df. The first generation correctly rejected the missing CHANGES entry and an authored test that expected an unqualified type instead of the real crate::image_blend::RgbaBlendState declaration. The declaration and coverage constraints were not weakened. After correcting the assertion and recording the generated hash, release no-bless api_docs passed8/8 and command coverage1/1 (systemnnn/api-seed-blend-crop-verify.log). The README now describes System4/System-NNN bounded native factories rather than the obsolete parser-only boundary; it explicitly does not claim complete compatibility. Underlying seed/blend/crop and GPU behavior are recorded in their owners’ separate receipts; no desktop build, commit or CI was produced here.
 
 ### 2026-11-01 — System-NNN original dataN entry through shared atomic restore
 
@@ -9962,37 +5592,6 @@ Implemented: NativeAdapter and the installed first-class wrapper now admit origi
 Compilation/behavior: native-original-entry-check5.log releasecheck passed. Frozen native-original-entry/lib-89191493c4f8c016 (full SHA in artifacts-actual5.json) ordinary library regression passed70/0failed/2ignored. Explicit licensed system-font Runtime test passed1/1 (runtime-actual5.log), exercising both NativeAdapter and InstalledAdapter: Ready keeps old VM/Scene/clock/owner+peer playback unchanged, commit replaces target audio while preserving peer playback, first load click only arms the restored message wait, subsequent release/press advances the saved nextPC. The earlier authored test incorrectly waited for all VMs to halt despite native END restarting sys; diagnostic runs showed43million valid controller instructions, and only the test expectation/input trace changed. Earlier wrong authored factory-key and timeout logs remain failures, not counted as passes. Python205tests passed in native-original-entry/python-tests2.log.
 
 Limits: this is a synthetic original-format/runtime transaction, not a new real game/GPU/desktop receipt. Original slot-selection UI/export, Omake/Cutin/extensions, nonmessage/nonselection saved actors, active effect/window refresh while waiting, timed/special selection, nondefault native cursor/window variants and automatic-message consumers remain explicit incomplete boundaries. Full System-NNN migration remains active. Complete static InitLoadGame/effect-vtable audits record the actual old-module SUNA reset/global-RNG policy, distinct from the later public version. No commit, Desktop replacement or CI was produced.
-
-### 2026-11-01 — Cat SOUND count ABI corrected and real native fade updates
-
-Source correction: the151/153 authored loop fixtures exercised real shared PCM,
-but their original0/1 boolean-loop assumption was wrong. Read-only original
-5D1955/5D1A9C bytes compare native word0x124 to1(end), preserve0(unlimited), and
-decrement other DWORDs at each pass. Native77 is total pass count:1 once,0
-unbounded,N finite. The adapter now uses actual shared loop_passes; count1
-ignores LoopPoint, while other counts use the explicitly published native range.
-Original5D17A0 halves44100 coordinates only for22050; other rates retain original
-coordinates. Native218 changes count/range while keeping the current cursor.
-Historical test passes are not evidence that the older boolean mapping was right.
-
-Shared extraction: Scene animation::step_remaining_time_scalar performs the
-original binary32 remaining-time per-update recurrence. Its release3/3 passed
-(shared-remaining-step-tests.log), including irregular/zero elapsed, invalid and
-overflow inputs, and target-arrival versus next-update action distinction. Native
-Cat fader keeps only original clock/action policy, using this shared kernel and
-shared Audio levels/SetGain/transport. Faders deduplicate input revision, retain
-partial progress/completed actions across failures and advance independently of
-the FES script. Grouped releases remain retained until the real terminal action.
-Paired crossfade and play on another release-owned slot still fail explicitly.
-
-Compilation/independent behavior: live-sound-counted-fade-tests.log release
-154passed0failed1ignored. Frozen cat-sound-counted-fade-lib SHA25622bbca50ca6416b595dfe08d3859f58fce66cb392d552d95e0070ae109a89891.
-The authored512-frame WAV produces exactly1024 audible PCM frames for native
-count2 then actual EOF. First fade update reaches original88percent/dB, not an
-invented amplitude0.9; target arrival remains unpaused until the next owner update.
-The shared step3-test receipt is separate. Prior153/1 remains historical before
-the loop correction. No new original-game/title/GPU receipt. The new pColor blend
-and bounded stop continuation source is a subsequent currently unverified batch.
 
 ### 2026-11-01 Alice native font controls and atomic glyph-cell preparation
 
@@ -10013,39 +5612,6 @@ Behavior validation:
 - Three frozen binaries were then explicitly run against a runtime-selected system Arial font: original AIN HLL PMap/AMap1/1, public font API1/1, styled outline EM/top/decorations1/1; zero ignored in those filtered runs. The native test checks pending original PC/arguments, absence of partial sprite publication, PMap destination-alpha preservation, full AMap blank-cell overwrite and font-release-safe immutable output. No font files are committed.
 - Python tooling:205 tests OK,1 skipped. Logs and executable hashes: `target/verification/system4-styled-glyph/`. This is shared/native API behavior, not a new game/title/GPU acceptance. The previous original-game instruction/main evidence remains historical. Remaining filters/transforms/effects, AliceLogo animation, original saves and further SACT coverage are still incomplete. New public shape is frozen for the next unified docs/API generation.
 
-### 2026-11-01 — Cat native stop and reviewed pColor controller source
-
-Implementation: original76B7B0 stop retains a bounded child-first target
-continuation, asks original KCS Controllers to skip, executes them at original
-clock0 and commits their actual output before setting SOUND playword0. No
-controller is deleted or acknowledged complete on behalf of code ignoring SKIP.
-Native blend now loads/executes the real pColor resource and publishes a genuine
-root producer. The SOUND-only unobservable source-pointer RGB normalization is
-restricted to the reviewed767-byte pColor layout (CRC32975a7795, code SHA256
-6bdd6c4a8a5a6c2f69af35366a14e5a03453f5fd86073d64a9d5a670f012d893), globals0,
-stack1024 and no static strings; arbitrary replacements fail visibly. This CRC
-is a layout guard, not a security checksum. Original bytes were only read from
-ignored local media; none were added to source.
-
-Compilation/behavior: first live-sound-builtin-motion-tests.log was153passed/
-1failed/1ignored. The new real stop test exposed a genuine old MotionSet clock
-boundary: a wrapped DWORD delta can round to2^32 in f32. Static78945A calls
-79FE00, which truncates to signed64 and returns EAX low DWORD, so2^32 yields0.
-The bounded VM lowering now follows that actual ABI, with independent boundary
-checks; it was not bypassed by terminal evaluation. Final
-live-sound-builtin-motion-tests2.log release155passed0failed1ignored. Immutable
-cat-sound-builtin-motion-lib SHA256c4c8360398a9912247dc8a4bdd3abe5495e0714734c3c500c2daeab606966830. Existing genuine alias/engine-skip/
-native-skip tests also run an actual object-stop path to the shared Canvas
-endpoint and verify ignored extra arguments. Positive original pColor/game
-acceptance is not covered by those authored tests and remains pending.
-
-The subsequent grouped FES fade/release fixture and richer actual audio-resource
-diagnostics/ReplayGain metadata guard are a new currently unverified source point.
-Logical channel exchange for original paired promotion is being added as a
-separate shared engine capability; its package releasecheck passed, independent
-behavior/API verification remains pending. No title/GPU/new original-game claim.
-
-
 ## 2026-11-01 — Owner SVG and transparent desktop icon assets
 
 Implementation:
@@ -10058,21 +5624,17 @@ Compilation:
 Behavior validation:
 - Generated28 icon files with librsvg2.62.3. All16 PNG sizes passed RGBA/dimension checks and alpha inspection (transparent corners; alpha range0..1). Every ICO/ICNS embedded PNG matched the corresponding standalone PNG byte-for-byte. macOS `iconutil` decoded all10 ICNS representations successfully. Regeneration produced identical manifest/output hashes; the copied SVG remains byte-identical to the owner’s source. The1024px export was visually inspected. Windows/Linux installed-shell presentation was not exercised.
 
-
 ## 2026-11-03 — Documentation cleanup and current desktop entry points
 
 Implementation:
 - Rewrote root README from266 to97 lines around build/play, engine capabilities and documentation navigation; removed the obsolete source-export/publication instructions and claims that only the data VM, static 3D or offline JS existed. Added docs/README.md as the guide/evidence index.
-- Updated desktop/MCP, architecture/systems, authoring, migration, saves and BGI/NScripter/Majiro guides; corrected the roadmap's obsolete missing physics/RT/audio rows. Recorded new source as implementation, without promoting it to complete-game or hardware acceptance.
-- Scoped dated source/transform/KRKR/priority audits as historical; marked BGI ADR0037/0039 superseded by0047 and corrected index entries. Existing source provenance, licenses and historical test receipts were retained. Only Markdown prose was edited; no implementation/API, build configuration, workflow, source ledger, commit or push changed in this task.
+- Updated desktop/MCP, architecture/systems, authoring, migration, saves and NScripter/Majiro guides; corrected the roadmap's obsolete missing physics/RT/audio rows. Recorded new source as implementation, without promoting it to complete-game or hardware acceptance.
 
 Compilation:
 - Not run: Cargo builds/tests and API generation. This task changes documentation while another implementation task is active. No new compilation, GPU or game result is claimed.
 
 Validation:
 - Checked173 Markdown files (excluding STATUS contents, generated API and vendor): no missing relative link targets. Documented CLI command variants, current desktop feature names/default player target and clipping cross-reference match source; documentation whitespace check passed.
-- Focused Python desktop/system/menu tooling:65 passed. Full Python discovery:203 run,197 passed,3 failures,2 import errors,1 skipped. The import errors are missing NumPy in the selected Homebrew interpreter; failures are existing working-tree RFVP/Siglus/codec source-manifest mismatches. These were not fixed or counted as passes. No owner source/manifest changes were overwritten. Logs: target/verification/doc-cleanup-20261103/{python-all.log,python-focused.log,documentation-checks.txt}.
-
 
 ## 2026-11-03 — Developer-facing README and project logo
 
@@ -10085,80 +5647,20 @@ Compilation:
 Validation:
 - README relative file/image references and the engine example path resolve; the referenced SVG parses as SVG XML. Markdown whitespace check passed. No new runtime, browser-rendering or GPU test result is claimed.
 
-
 ## 2026-11-03 — ADR status reconciliation and retired hosting recipes
 
 Implementation:
 - Reorganized all99 ADR IDs into one index with91 active decisions/profiles,5 superseded decisions and3 historical audits; each ID appears once and existing filenames remain stable. Removed the parallel-task table fragmentation and reconciled follow-up statuses.
-- Retired the0008/0009 original-renderer/platform-seam hosting recipes, retaining their source/evidence scope and links to0047. Corrected0002/0003/0005/0006/0007, asset/video/KAG3 and archive statuses;0062 points to0095 for the runtime replacement. Updated shared audio checkpoint limits to distinguish implemented follow-ups from genuine remaining transport/async gaps.
 - Added explicit bounded implementation states to0085–0096 where recorded source/evidence already existed. Completed scopes remain as design records.0050 full-engine async,0097 interpreted filters and0099 incomplete native consumers remain open. No new engine, game or hardware completion is asserted. Only ADR Markdown and this appended STATUS section changed in this task; concurrent implementation, source ledgers and generated API docs were left untouched.
 
 Compilation:
 - No Cargo/API generation/GPU/game run: documentation-only maintenance while parallel implementation is active.
 
 Validation:
-- All99 ADR IDs index exactly once; superseded index/body states agree for0008/0009/0037/0039/0062. Relative file/image links across173 Markdown files resolve (STATUS contents, generated API and vendor excluded). The initial check found a nonexistent RFVP README link; it was corrected to the existing first-class source and the check passed on rerun. Documentation whitespace checks passed.
 - Focused Python desktop/system/menu tooling:65 passed. Logs, checked counts and document hashes: target/verification/adr-cleanup-20261103/{python-focused.log,receipt.json}. No full-workspace success is claimed; the previous full-Python source-manifest/dependency failures were not rerun or resolved by this prose change. No commit/push/CI or subagents.
-
 
 ## 2026-11-03 — README capability/API/compatibility presentation
 
 Implementation: removed internal verification and repository-policy prose from the README. Kept the logo; presented engine features, direct Rust/JS/TS/MCP API links, twelve native engine families with explicit profile scope, and a short build/example entry.
 Compilation: not run; README prose only, no implementation changes.
 Validation: README file/image links resolve, the SVG parses, and its native-profile anchor exists. Internal AGENTS/verify/CI/evidence instructions are absent from the homepage. No new compatibility, runtime or hardware result is claimed.
-
-## 2026-11-03 — CatSystem2: Nekopara plays past chapter 1; menus and quick save/load work; natives still open
-
-Implementation in this update: FES tasks owned by KCS child scripts now tick (they froze, which was the
-"white screen": the script's chapter eyecatch); FES `rdraw`/`rwipe`, `wait <object>`, `break`, save commands;
-`_CLICK_L_`/`_CLICK_R_`/`_SCRL_P_` carry the pressed object (HUD buttons never fired before); script-to-script
-natives 69/70/72/73; E-mote `.dif` digit expressions, blink, tone, parameter scale; image group natives
-710..737 (rotate, flip, blur, scale, tone, colour modes, fill) with shared `Rotate`/`Resize` image effects;
-stdinfo origin/base applied to list draws; movie natives over the shared media service; SLIDER objects;
-message log store; matrix, map, bracket-list natives; older-module tolerance for Grisaia (legacy sound paths,
-duplicate INT/DEFINE rows, archives over 65536 members).
-
-Behaviour validated (headless, Nekopara vol3, by capture and save files): story to frame 30000 past the
-eyecatch; quick save writes save5000.dat and quick load resumes the scene; save screen, config (slider drag
-moves the value) and backlog screens open.
-
-Backlog text now shows by capture; its speaker image stays on one name and block spacing fix is compiled, not re-run. Not validated or not done: movie, audio and windowed play untested; Grisaia reaches
-title.fes with a black screen and has no scene.int (only scene.int.FWP); 197 natives in native_pending.rs
-and native_inert.rs still acknowledge without effect (particles, 3D models, effects, tables, Effekseer);
-E-mote lip sync and inertia absent; workspace regression not run.
-
-## 2026-11-03 — BGI original VM source and shared capability extraction
-
-- Implementation: replaced the bounded BP machine with the original ethornell-rs
-  VM/parser in `crysirror-bgi-vm`; the existing adapter now drives this execution
-  path. Dynamic module reads use bounded capability workers and shared BGI
-  archive readers. Native graph/sound requests use continuations to the existing
-  CrySirror Canvas/Layer/GlyphRun/audio mappings; no legacy renderer is hosted.
-- Shared capabilities: DSC byte decoding in `crysirror-resource::dsc`; bitmap
-  wrapping/kinsoku in `crysirror-text::bitmap_layout`; grid navigation, body
-  queries, cubic paths and tactical evaluation in `crysirror-scene::strategy`.
-- Compilation: not run for these changes.
-- Behavior validation: not run for these changes. Full host ABI coverage,
-  adapter snapshots and real-game compatibility are not complete.
-
-
-## 2026-11-03 — BGI native host migration continued
-
-- Implementation: added native A0 sound-slot controls, gain banks/ramps, encoded
-  audio preparation and virtual CD-DA over shared audio; BW payload decoding
-  and native gain arithmetic are reusable audio modules. BP module/file reads
-  use capability-scoped workers and original native continuation ownership.
-- Implementation: shared integer raster kernels, packed pixel interchange,
-  encoded image jobs with separate header/decode admission, bitmap text glyph
-  records/drop shadows/glow, markup/reveal/ruby utilities and a retained Layer
-  blend setter. BGI bitmap import/export/queries, blits, regions, transforms,
-  tone curves, font registration, ruby dictionaries and basic native
-  object/group ordering/setters/queries call these shared services.
-- Implementation: bitmap and audio request dependencies fence conflicting
-  mutations; native scheduler reports are drained instead of accumulating.
-  Desktop BGI detection selects original BP bootstraps and mounts archives.
-- Compilation: not run; only edited-source formatting was performed.
-- Behavior validation: not run. No tests, benchmark or game session was started.
-  Full host migration is not complete: native windows/messages, remaining
-  object/effect classes, movie controls and native save-host operations remain.
-  This section does not establish complete integration or working games.

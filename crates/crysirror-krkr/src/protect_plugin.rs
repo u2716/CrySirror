@@ -18,6 +18,9 @@
 //! index and content-filter parameters) is already applied by the shared
 //! `kirikiri/xp3` mount; the facade only checks that the script supplies the
 //! exact argument that mount authenticated, so a mismatch fails visibly.
+// Protected-bootstrap registration matches the profile admitted by the shared
+// Resource service and adapter Config. This facade keeps native call/order
+// semantics; archive parsing, filters and companion reads stay in Resources.
 use crate::natives::{Rt, methods, object_arg, string};
 use crysirror_resource::{compound::CompoundStorage, signature::RsaPssSha256Verifier};
 use crysirror_tjs2::{

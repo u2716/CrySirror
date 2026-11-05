@@ -7,6 +7,14 @@
 //! presented beneath it for its image. Drawing calls become Canvas commands;
 //! no pixels are composed here. Commands are queued while TJS runs and
 //! submitted in order by the adapter after each script entry point returns.
+// Native Layer ownership:
+// Layer parent/child IDs describe relationships; mouse hover/capture references
+// do not keep native objects alive. Retirement cancels producers/callbacks,
+// detaches children before parents, hides presentations and destroys the owned
+// Canvas before returning its slot. Image-only transitions reuse that Canvas
+// through another presentation; native and engine capacity limits stay distinct.
+// Image composition declarations use the shared full-copy history-pruning
+// helper; partial clips and RGB/alpha-only writes must retain destination data.
 use crate::storage::{Storage, decode_text};
 use crysirror_core::service::{ImageMetadata, TextMeasurement};
 use crysirror_tjs2::{
@@ -121,6 +129,8 @@ pub struct KrkrHost {
     /// Unmodified Asset preparation retains its original immutable paint.
     pub image_job: Option<(usize, crysirror_core::image_processing::ImageJob, [bool; 2], bool)>,
     pub composite_pending: Vec<crate::image_api::PendingComposite>,
+    pub(crate) bitmap_batch: Option<crate::image_api::BitmapBatch>,
+    pub(crate) bitmap_redraw_pending: bool,
     pub(crate) image_pair:Option<crate::image_api::PairPreparation>,
     pub(crate) image_save:Option<crate::image_api::LayerImageSave>,
     /// End publication caller ownership after ordered Canvas edits commit.
@@ -207,6 +217,8 @@ impl KrkrHost {
             psbfile: Default::default(),
             image_job: None,
             composite_pending: Vec::new(),
+            bitmap_batch: None,
+            bitmap_redraw_pending: false,
             image_pair:None,
             image_save:None,
             retired_images: Vec::new(),
@@ -618,6 +630,9 @@ impl KrkrHost {
     }
 
     pub fn invalidate_layer(&mut self, h: usize) {
+        if self.bitmap_batch.as_ref().is_some_and(|batch| batch.target == h) {
+            self.bitmap_batch = None;
+        }
         self.detach_subtree(h);
         if let Some(l) = self.layers.remove(&h) {
             self.canvas_op(json!({"op":"destroy","id":l.slot}));
@@ -809,6 +824,7 @@ impl TjsHost for KrkrHost {
             .chain(self.image_job.iter().map(|(h, ..)| h));
         out.extend(ids.map(|h| ObjectHandle(*h)));
         for pending in &self.composite_pending { out.extend(pending.layers()); }
+        if let Some(batch) = &self.bitmap_batch { out.push(ObjectHandle(batch.target)); }
         if let Some(pair)=&self.image_pair{out.extend([ObjectHandle(pair.target),ObjectHandle(pair.source)]);}
         if let Some(save)=&self.image_save{out.push(ObjectHandle(save.layer));}
         out.extend(self.mouse.hover.into_iter().chain(self.mouse.capture).map(ObjectHandle));

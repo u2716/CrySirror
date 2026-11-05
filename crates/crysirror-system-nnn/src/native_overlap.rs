@@ -199,6 +199,7 @@ impl NativeOverlap {
                 progress: count as f32 / self.frames as f32,
                 softness: 0.,
                 blur: 0.,
+                rule_table: None,
                 fixed_weighted: Some(FixedMixSpec {
                     left_weight: ((100 - percent) * 256 / 100) as u32,
                     right_weight: (percent * 256 / 100) as u32,

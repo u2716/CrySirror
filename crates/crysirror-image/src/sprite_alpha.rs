@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Generic sprite-sheet transparency extraction. Native tags stay in adapters.
 use crate::ImageSurface;
-use anyhow::{ensure, Result};
+use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -110,18 +110,22 @@ mod tests {
             .unwrap();
         assert_eq!((mask.width, mask.height), (2, 1));
         assert_eq!(mask.rgba, vec![10, 20, 30, 255, 1, 2, 3, 0]);
-        assert!(image
-            .sprite_alpha(
-                &SpriteAlpha::SideMask {
-                    cells: 3,
-                    channel: 2
-                },
-                &|| Ok(())
-            )
-            .is_err());
-        assert!(image
-            .sprite_alpha(&SpriteAlpha::Opaque, &|| anyhow::bail!("cancelled"))
-            .is_err());
+        assert!(
+            image
+                .sprite_alpha(
+                    &SpriteAlpha::SideMask {
+                        cells: 3,
+                        channel: 2
+                    },
+                    &|| Ok(())
+                )
+                .is_err()
+        );
+        assert!(
+            image
+                .sprite_alpha(&SpriteAlpha::Opaque, &|| anyhow::bail!("cancelled"))
+                .is_err()
+        );
     }
 }
 

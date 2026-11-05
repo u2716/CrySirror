@@ -35,7 +35,7 @@ impl LayerSpec {
                     visitor(asset);
                 }
             }
-            Paint::Solid { .. } | Paint::Text { .. } | Paint::GlyphRun { .. } => (),
+            Paint::Solid { .. } | Paint::Text { .. } | Paint::GlyphRun { .. } | Paint::Backdrop { .. } => (),
         }
     }
 }

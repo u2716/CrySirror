@@ -3,9 +3,9 @@
 // License, v. 2.0. A copy is available at https://mozilla.org/MPL/2.0/.
 //! Engine-owned menu trees, popup layout, radio state and ordered activation.
 use super::{UiEvent, WidgetId};
-use crate::layer::{rect_valid, rectangle, Paint, Primitive};
-use anyhow::{ensure, Context, Result};
-use crysirror_core::service::{buttons, InputFrame};
+use crate::layer::{Paint, Primitive, rect_valid, rectangle};
+use anyhow::{Context, Result, ensure};
+use crysirror_core::service::{InputFrame, buttons};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 fn yes() -> bool {
@@ -90,14 +90,21 @@ impl MenuItemSpec {
     /// Mutable lookup within one already owner-scoped menu tree.
     pub fn find_mut(items: &mut [Self], id: u32) -> Option<&mut Self> {
         for item in items {
-            if item.id == id { return Some(item); }
-            if let Some(found) = Self::find_mut(&mut item.children, id) { return Some(found); }
+            if item.id == id {
+                return Some(item);
+            }
+            if let Some(found) = Self::find_mut(&mut item.children, id) {
+                return Some(found);
+            }
         }
         None
     }
     fn reachable(items: &[Self], id: u32) -> bool {
-        items.iter().any(|item| item.visible && item.enabled &&
-            ((item.id == id && !item.separator) || Self::reachable(&item.children,id)))
+        items.iter().any(|item| {
+            item.visible
+                && item.enabled
+                && ((item.id == id && !item.separator) || Self::reachable(&item.children, id))
+        })
     }
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -227,8 +234,12 @@ struct Cell {
 }
 impl MenuSystem {
     /// Context/native bars also retain their authored font for future display.
-    pub fn visit_font_dependencies(&self,visitor:&mut dyn FnMut(u32,&str)) {
-        for (owner,bars) in &self.clients {for menu in bars.values(){visitor(*owner,&menu.spec.font);}}
+    pub fn visit_font_dependencies(&self, visitor: &mut dyn FnMut(u32, &str)) {
+        for (owner, bars) in &self.clients {
+            for menu in bars.values() {
+                visitor(*owner, &menu.spec.font);
+            }
+        }
     }
     pub fn is_empty(&self) -> bool {
         self.clients.values().all(BTreeMap::is_empty)
@@ -321,14 +332,26 @@ impl MenuSystem {
     }
     /// Update an owned item and close any popup branch invalidated by disabling it.
     pub fn enabled(&mut self, owner: u32, bar: u32, item: u32, enabled: bool) -> Result<()> {
-        let menu = self.clients.get_mut(&owner).and_then(|bars| bars.get_mut(&bar)).context("menu missing")?;
-        MenuItemSpec::find_mut(&mut menu.spec.items, item).context("menu item missing")?.enabled = enabled;
+        let menu = self
+            .clients
+            .get_mut(&owner)
+            .and_then(|bars| bars.get_mut(&bar))
+            .context("menu missing")?;
+        MenuItemSpec::find_mut(&mut menu.spec.items, item)
+            .context("menu item missing")?
+            .enabled = enabled;
         menu.open = Menu::valid_path(&menu.spec, &menu.open);
         // Preserve unrelated eligible gestures; disabling their ancestor or
         // target must prevent a delayed release from activating it.
-        let invalid = |(o,b,target)| o==owner && b==bar && !MenuItemSpec::reachable(&menu.spec.items,target);
-        if self.pressed.is_some_and(invalid) { self.pressed=None; }
-        if self.focus.is_some_and(invalid) { self.focus=None; }
+        let invalid = |(o, b, target)| {
+            o == owner && b == bar && !MenuItemSpec::reachable(&menu.spec.items, target)
+        };
+        if self.pressed.is_some_and(invalid) {
+            self.pressed = None;
+        }
+        if self.focus.is_some_and(invalid) {
+            self.focus = None;
+        }
         Ok(())
     }
     pub fn get(&self, owner: u32, bar: u32) -> Option<&MenuSpec> {
@@ -364,10 +387,19 @@ impl MenuSystem {
             }
         }
     }
-    pub fn reset_client_input_after_restore(&mut self,owner:u32) {
-        if self.pressed.is_some_and(|value|value.0==owner){self.pressed=None;}
-        if self.focus.is_some_and(|value|value.0==owner){self.focus=None;}
-        if let Some(bars)=self.clients.get_mut(&owner) {for menu in bars.values_mut(){menu.open.clear();menu.position=None;}}
+    pub fn reset_client_input_after_restore(&mut self, owner: u32) {
+        if self.pressed.is_some_and(|value| value.0 == owner) {
+            self.pressed = None;
+        }
+        if self.focus.is_some_and(|value| value.0 == owner) {
+            self.focus = None;
+        }
+        if let Some(bars) = self.clients.get_mut(&owner) {
+            for menu in bars.values_mut() {
+                menu.open.clear();
+                menu.position = None;
+            }
+        }
         // `down` observes the live global pointer. Preserve it so another
         // client's held pointer does not become a fresh press.
     }

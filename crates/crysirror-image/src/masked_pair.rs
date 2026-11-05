@@ -1,7 +1,7 @@
 // Copyright (c) 2026 CrySirror contributors. MPL-2.0.
 //! Three immutable inputs with independently quantized mask contributions.
-use crate::{effects::MAX_EFFECT_PIXELS, ImageSurface};
-use anyhow::{ensure, Result};
+use crate::{ImageSurface, effects::MAX_EFFECT_PIXELS};
+use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 /// Two equally sized source rectangles over an immutable destination. Sources
 /// are read from their admission-time images, even when caller leases alias.
@@ -192,13 +192,14 @@ mod tests {
         assert!(p.validate().is_err());
         p = spec();
         let calls = std::cell::Cell::new(0);
-        assert!(p
-            .apply(&d, &d, &d, &|| {
+        assert!(
+            p.apply(&d, &d, &d, &|| {
                 calls.set(calls.get() + 1);
                 anyhow::ensure!(calls.get() < 2, "cancel after admission");
                 Ok(())
             })
-            .is_err());
+            .is_err()
+        );
         assert_eq!(d, original);
     }
 }

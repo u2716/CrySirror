@@ -1,5 +1,5 @@
 //! Client-scoped asynchronous font resources, independent of text backends.
-use crate::{path::VfsPath, state::ClientId, Result};
+use crate::{Result, path::VfsPath, state::ClientId};
 use alloc::{string::String, sync::Arc, vec::Vec};
 /// Client-owned asynchronous registration ticket.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]

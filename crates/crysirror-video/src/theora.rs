@@ -107,7 +107,8 @@ pub fn decode_video_with_metadata<R: Read + Seek>(
             ..Default::default()
         });
     }
-    let (reader, header) = source(reader)?;
+    let (mut reader, header) = source(reader)?;
+    let duration_ms = siglus_omv_decoder::theora_duration_ms(&mut reader, &mut cancelled)?;
     let mut decoder = siglus_omv_decoder::TheoraVideoStream::open(reader)?;
     let info = decoder.info();
     if header.is_none() {
@@ -134,9 +135,7 @@ pub fn decode_video_with_metadata<R: Read + Seek>(
     );
     metadata(crate::VideoMetadata {
         size,
-        // OMV page/packet hints do not specify a duration. Plain Theora's
-        // identification header likewise contains no total-frame count.
-        duration_ms: None,
+        duration_ms,
         frame_ms: Some(frame_ms),
     })?;
     let mut stats = DecodeStats::default();

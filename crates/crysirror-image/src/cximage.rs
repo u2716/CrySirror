@@ -33,8 +33,8 @@ fn rgb_to_hsl(r: u8, g: u8, b: u8) -> (u8, u8, u8) {
     let s = if u32::from(l) <= HSLMAX / 2 {
         ((((cmax - cmin) * HSLMAX) + ((cmax + cmin) / 2)) / (cmax + cmin)) as u8
     } else {
-        ((((cmax - cmin) * HSLMAX) + ((2 * RGBMAX - cmax - cmin) / 2))
-            / (2 * RGBMAX - cmax - cmin)) as u8
+        ((((cmax - cmin) * HSLMAX) + ((2 * RGBMAX - cmax - cmin) / 2)) / (2 * RGBMAX - cmax - cmin))
+            as u8
     };
     let d = cmax - cmin;
     let delta = |c: u32| ((((cmax - c) * (HSLMAX / 6)) + (d / 2)) / d) as u16;
@@ -43,9 +43,7 @@ fn rgb_to_hsl(r: u8, g: u8, b: u8) -> (u8, u8, u8) {
     let mut h = if r32 == cmax {
         bd.wrapping_sub(gd) as u8
     } else if g32 == cmax {
-        ((HSLMAX / 3) as u16)
-            .wrapping_add(rd)
-            .wrapping_sub(bd) as u8
+        ((HSLMAX / 3) as u16).wrapping_add(rd).wrapping_sub(bd) as u8
     } else {
         (((2 * HSLMAX) / 3) as u16)
             .wrapping_add(gd)
@@ -78,7 +76,11 @@ fn hsl_to_rgb(h: u8, s: u8, l: u8) -> (u8, u8, u8) {
     let h = f32::from(h) * 360.0 / 255.0;
     let s = f32::from(s) / 255.0;
     let l = f32::from(l) / 255.0;
-    let m2 = if l <= 0.5 { l * (1.0 + s) } else { l + s - l * s };
+    let m2 = if l <= 0.5 {
+        l * (1.0 + s)
+    } else {
+        l + s - l * s
+    };
     let m1 = 2.0 * l - m2;
     if s == 0.0 {
         let v = (l * 255.0) as u8;
@@ -143,7 +145,11 @@ pub fn modulate(rgb: [u8; 3], hue: i32, saturation: i32, luminance: i32) -> [u8;
         sat = 0.0;
         hh = 0.0;
     } else {
-        sat = if lum < 0.5 { delta / add } else { delta / (2.0 - add) };
+        sat = if lum < 0.5 {
+            delta / add
+        } else {
+            delta / (2.0 - add)
+        };
         hh = if red == cmax {
             (green - blue) / delta
         } else if green == cmax {
@@ -201,11 +207,17 @@ mod tests {
         for c in [[0, 0, 0], [255, 255, 255], [200, 30, 60], [12, 240, 99]] {
             let m = modulate(c, 0, 0, 0);
             for i in 0..3 {
-                assert!((i32::from(m[i]) - i32::from(c[i])).abs() <= 1, "{c:?} -> {m:?}");
+                assert!(
+                    (i32::from(m[i]) - i32::from(c[i])).abs() <= 1,
+                    "{c:?} -> {m:?}"
+                );
             }
             assert_eq!(colorize(c, 0, 0, 0.0), c);
         }
-        assert_eq!(modulate([200, 30, 60], 0, -100, 0)[0], modulate([200, 30, 60], 0, -100, 0)[1]);
+        assert_eq!(
+            modulate([200, 30, 60], 0, -100, 0)[0],
+            modulate([200, 30, 60], 0, -100, 0)[1]
+        );
         assert_eq!(modulate([10, 20, 30], 0, 0, 100), [255, 255, 255]);
         assert_eq!(modulate([10, 20, 30], 0, 0, -100), [0, 0, 0]);
     }

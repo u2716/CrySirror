@@ -554,13 +554,7 @@ impl GridFieldManager {
 
     /// D0:21 sub_453930: steps to (x, y) and, with `want_dirs`, the forward
     /// directions from the unit.
-    pub fn path(
-        &self,
-        id: i32,
-        x: i32,
-        y: i32,
-        want_dirs: bool,
-    ) -> Result<(i32, Vec<i32>), u32> {
+    pub fn path(&self, id: i32, x: i32, y: i32, want_dirs: bool) -> Result<(i32, Vec<i32>), u32> {
         let field = self.field(id)?;
         field.path(x, y, want_dirs).map_err(|status| match status {
             NO_CELLS => NO_SEARCH,
@@ -804,12 +798,7 @@ impl GridFieldManager {
 
     /// vtbl+14 sub_454F00: the tile next to the unit in direction `dir`
     /// (0..3 when `relative`, else 2..5). Not bounds-checked.
-    pub fn step_from_unit(
-        &self,
-        id: i32,
-        dir: i32,
-        relative: bool,
-    ) -> Result<(i32, i32), u32> {
+    pub fn step_from_unit(&self, id: i32, dir: i32, relative: bool) -> Result<(i32, i32), u32> {
         let unit = self.unit(id)?;
         let (mut x, mut y) = (unit.x, unit.y);
         let dir = if relative { dir.wrapping_add(2) } else { dir };
@@ -840,12 +829,7 @@ impl GridFieldManager {
     /// 1: for the four sides of (x, y) (y-1, y+1, x-1, x+1) that the search
     /// reached, that are open and within one height step, the step count and
     /// the tile; -1 elsewhere (six slots, the last two always -1).
-    pub fn neighbors(
-        &self,
-        id: i32,
-        x: i32,
-        y: i32,
-    ) -> Result<([i32; 6], [(i32, i32); 6]), u32> {
+    pub fn neighbors(&self, id: i32, x: i32, y: i32) -> Result<([i32; 6], [(i32, i32); 6]), u32> {
         let field = self.field(id)?;
         if field.cells.is_empty() {
             return Err(NO_SEARCH);
@@ -972,12 +956,7 @@ impl GridFieldManager {
     }
 
     /// sub_4541A0: a cached threat map (`second`: the double-move one).
-    pub fn threat_map(
-        &self,
-        id: i32,
-        key: &[i32; 5],
-        second: bool,
-    ) -> Result<Vec<i32>, u32> {
+    pub fn threat_map(&self, id: i32, key: &[i32; 5], second: bool) -> Result<Vec<i32>, u32> {
         let unit = self.unit(id)?;
         let entry = unit
             .cache

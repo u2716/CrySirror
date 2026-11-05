@@ -2,8 +2,8 @@
 //! Immutable piecewise nearest-neighbour sampling with explicit16.16 steps and
 //! byte-exact /256 mixing. Useful for quadrant zoom, mirrored tiles and fixed
 //! raster transforms; no native VM, device or external pointer is involved.
-use crate::{effects::MAX_EFFECT_PIXELS, ImageSurface};
-use anyhow::{ensure, Context, Result};
+use crate::{ImageSurface, effects::MAX_EFFECT_PIXELS};
+use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -211,13 +211,14 @@ mod tests {
         assert!(s.validate().is_err());
         let count = std::cell::Cell::new(0);
         let s = spec();
-        assert!(s
-            .apply(&input, &|| {
+        assert!(
+            s.apply(&input, &|| {
                 count.set(count.get() + 1);
                 ensure!(count.get() < 2, "cancelled");
                 Ok(())
             })
-            .is_err());
+            .is_err()
+        );
         assert_eq!(input, image());
     }
 }

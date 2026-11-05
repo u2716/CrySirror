@@ -2,8 +2,8 @@
 //! Deterministic, bounded PNG serialization for decoded resource frames. Using
 //! stored DEFLATE blocks gives a predictable size before decoding an archive
 //! entry, without maintaining private image exporters in format plugins.
-use crate::{rgba_len, ImageSurface};
-use anyhow::{ensure, Result};
+use crate::{ImageSurface, rgba_len};
+use anyhow::{Result, ensure};
 const fn crc_table() -> [u32; 256] {
     let mut table = [0; 256];
     let mut i = 0;

@@ -14,6 +14,9 @@ const EXTENT: usize = 5744;
 #[derive(Clone)]
 pub(crate) struct NativeSettings {
     pub(crate) extras: std::collections::BTreeMap<Vec<u8>, u32>,
+    pub(crate) m2: crate::native_m2::M2Config,
+    /// Native 869's databases, reached by KCS and by FES `dic_*`.
+    pub(crate) databases: std::collections::BTreeMap<u32, crate::native_classes::database::Database>,
     bytes: Vec<u8>,
     auto_presets: [[u32; 2]; 32],
     system_play: [u32; 48],
@@ -22,6 +25,14 @@ pub(crate) struct NativeSettings {
     pub language_prefix: Vec<u8>,
     /// lang_ui, lang_text_main and lang_text_sub: native words F7E4, F7E8 and F7EC.
     pub language: [u32; 3],
+    pub language_prefixes: Vec<Vec<u8>>,
+    pub language_default: u32,
+    /// B91BFC+52260 / +52324: GAME/flag local0..7 and global0..7 {start, count}.
+    pub flag_ranges: [[[u32; 2]; 8]; 2],
+    /// startup.xml SCREEN/fps.
+    pub fps: u32,
+    /// startup.xml SOUND/use3d (B91BFC+0xF144).
+    pub use_3d_sound: u32,
     pub flag_count: u32,
     pub gamedef: bool,
     pub setup: bool,
@@ -70,8 +81,15 @@ impl NativeSettings {
             input: Default::default(),
             language_prefix: Vec::new(),
             language: [0; 3],
+            language_prefixes: Vec::new(),
+            language_default: 0,
+            fps: 60,
+            use_3d_sound: 0,
+            m2: crate::native_m2::M2Config::default(),
+            databases: Default::default(),
             extras: Default::default(),
             flag_count: 1024,
+            flag_ranges: [[[0; 2]; 8]; 2],
             gamedef: false,
             setup: false,
         };
@@ -114,7 +132,23 @@ impl NativeSettings {
             self.language_prefix = prefix.as_bytes().to_vec();
         }
         self.language = [selected; 3];
+        // 7134A0's rows: +0 is the prefix wide string of each <language>/Lnn.
+        self.language_prefixes.clear();
+        while let Some(prefix) = value(d, &format!("language/L{:02}/prefix", self.language_prefixes.len()))? {
+            self.language_prefixes.push(prefix.as_bytes().to_vec());
+        }
+        self.language_default = selected;
+        self.fps = number(d, "SCREEN/fps", 60)?;
+        self.use_3d_sound = number(d, "SOUND/use3d", 0)?;
         self.flag_count = number(d, "GAME/flag/max", 1024)?;
+        for (table, tag) in ["local", "global"].into_iter().enumerate() {
+            for row in 0..8usize {
+                self.flag_ranges[table][row] = [
+                    number(d, &format!("GAME/flag/{tag}{row}/start"), 0)?,
+                    number(d, &format!("GAME/flag/{tag}{row}/count"), 0)?,
+                ];
+            }
+        }
         for row in 0..48 {
             let base = 73148 + row * 116;
             let path = format!("VOICE/v{row:02}");
@@ -260,6 +294,12 @@ impl NativeSettings {
     ///77C810/77D780's scalar projection. These are original VN preferences,
     ///not an alternate UI, renderer or audio implementation. Settings requiring
     ///a host mutation return an explicit boundary before changing this record.
+    /// 7139A0 (slot 1, +0xFC00) / 713AA0 (slot 2, +0xFC04): the selected language's
+    /// prefix; past the table the default row's, and otherwise the empty string.
+    pub(crate) fn language_prefix_of(&self, slot: usize) -> &[u8] {
+        let rows = &self.language_prefixes;
+        rows.get(self.language[slot] as usize).or_else(|| rows.get(self.language_default as usize)).map_or(&[], Vec::as_slice)
+    }
     pub(crate) fn configuration(&self, name: &[u8], first: u32, second: u32) -> Result<u32> {
         match name {
             b"lang_ui" => return Ok(self.language[0]),
@@ -517,6 +557,7 @@ pub(crate) fn load(
         result.apply_persisted(&setup)?;
         result.setup = true;
     }
+    result.m2 = crate::native_m2::load_m2_config(storage)?;
     result.finish();
     check()?;
     Ok(result)

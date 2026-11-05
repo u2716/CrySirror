@@ -2,55 +2,139 @@
 //! owner's DC4PH executable, analysed statically; no executable code is hosted.
 //! UI records here are native declarations, not a layout/hit-test/compositor.
 use crate::{Arguments, Instruction, Profile, Program};
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
 };
+mod macro_ops;
+pub mod comment_ops;
+pub mod history_ops;
+pub mod effect_ops;
+pub mod media_ops;
+pub mod movie_ops;
+pub mod restore_ops;
+pub mod resource_ops;
+pub mod save_ops;
+pub mod sprite_ops;
+pub mod packed_ops;
+pub mod system_ops;
+pub mod text_ops;
+mod value_ops;
+pub(crate) mod menu_ops;
+mod builder_ops;
+pub(crate) mod gesture_ops;
+pub mod visual_ops;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+/// A resource retry does not commit the native instruction or consume a frame.
+pub(super) enum CommandResult {
+    Retry,
+    Complete { next: u32, outcome: Outcome },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ImagePart {
     pub position: [i32; 2],
     pub source: [i16; 4],
     pub slot: u8,
     pub state: i16,
     pub auxiliary_flag: bool,
+    /// Client-owned logical image identity captured by418200/418460. This is
+    /// neither a native pointer nor a GPU handle; a later slot reload differs.
+    #[serde(default)]
+    pub resource_binding:Option<String>,
+    #[serde(default)]
+    pub binding_declared:bool,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize,PartialEq,Eq)]
 pub struct Button {
     pub bounds: [i16; 4],
     pub action: String,
+    #[serde(default)]
+    pub alternate_actions: [String; 2],
     pub sounds: [u8; 2],
     /// Native current-record flags copied with the button, not the whole group.
     #[serde(default)]
-    pub behavior_flags:BTreeSet<u8>,
+    pub behavior_flags: BTreeSet<u8>,
     pub images: Vec<ImagePart>,
     pub texts: Vec<TextPart>,
+    #[serde(default)]
+    pub slider:Option<NativeSlider>,
+    #[serde(default)]
+    pub image_pivots:BTreeMap<usize,[i16;2]>,
+    #[serde(default)]
+    pub text_pivots:BTreeMap<usize,[i16;2]>,
+    #[serde(default)]
+    pub check_index:i16,
+    #[serde(default)]
+    pub check_value:i32,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+///412A30's retained current-button range and encoded40CC50/40D240 target.
+#[derive(Clone,Debug,Serialize,Deserialize,PartialEq,Eq)]
+pub struct NativeSlider {
+    pub minimum:i16,
+    pub maximum:i16,
+    pub stops:i16,
+    pub variable:i32,
+    #[serde(default)]
+    pub initial_value:i32,
+}
+#[derive(Clone,Debug)]
+pub struct MenuValue {pub bank:i16,pub index:i16,pub value:i32}
+#[derive(Clone, Debug, Serialize, Deserialize,PartialEq,Eq)]
 pub struct TextPart {
     pub position: [i16; 2],
     pub text: String,
     pub color: i16,
     pub size: i16,
+    #[serde(default)]
+    pub line_pitch: Option<i16>,
     pub state: i16,
 }
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize,PartialEq,Eq)]
 pub struct Group {
     pub buttons: Vec<Button>,
     pub images: Vec<ImagePart>,
     pub texts: Vec<TextPart>,
     pub behavior_flags: BTreeSet<u8>,
+    #[serde(default)]
+    pub auxiliary_labels:[String;2],
+    #[serde(default)]
+    pub auxiliary_labels_enabled:bool,
     /// Native 0x7b image animation declarations. Evaluated only when activated.
     pub image_animations: Vec<[i16; 4]>,
+    #[serde(default)]
+    pub image_animation_targets: Vec<usize>,
+    #[serde(default)]
+    pub image_animation_owners:Vec<UiRecordTarget>,
+    #[serde(default)]
+    pub image_order:Vec<UiRecordTarget>,
+    #[serde(default)]
+    pub text_order:Vec<UiRecordTarget>,
     /// Original group-local translation. Native78 declares, not displays it.
     pub position: [i16; 2],
     /// Original412B50 pending20-render-tick movement declaration. Activation
     /// must map this to a shared timeline before presenting the group.
     pub motion: Option<GroupMotion>,
+    /// Native7C freezes the group and queues scale/translation before input.
+    #[serde(default)]
+    pub capture_transition:Option<[i16;3]>,
+    #[serde(default)]
+    pub last_image:Option<UiRecordTarget>,
+    #[serde(default)]
+    pub last_text:Option<UiRecordTarget>,
+    #[serde(default)]
+    pub control_operations:Vec<UiRecordOperation>,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone,Copy,Debug,PartialEq,Eq,Serialize,Deserialize)]
+pub enum UiRecordTarget {Image{button:Option<usize>,index:usize},Text{button:Option<usize>,index:usize}}
+#[derive(Clone,Debug,PartialEq,Eq,Serialize,Deserialize)]
+pub enum UiRecordAttribute {Pivot([i16;2]),Rotate,AlphaPulse,ScalePulse,Reveal{step:i32,pacing_ms:i32}}
+impl UiRecordAttribute {pub(crate) fn category(&self)->u8 {match self {Self::Pivot(_)=>0,Self::Reveal{..}=>1,_=>2}}}
+#[derive(Clone,Debug,PartialEq,Eq,Serialize,Deserialize)]
+pub struct UiRecordOperation {pub target:UiRecordTarget,pub attribute:UiRecordAttribute}
+#[derive(Clone, Debug, Serialize, Deserialize,PartialEq,Eq)]
 pub struct GroupMotion {
     pub from: [i16; 2],
     pub to: [i16; 2],
@@ -69,32 +153,52 @@ pub enum SystemReload {
     /// Native40EB40 calls40E9C0(reset_all=1) if the file is absent.
     Missing,
 }
-/// Original transient restore point. Encoded logical VM/resource declarations
-/// contain no device pointers. Replaying original1d remains an explicit
-/// unsupported boundary until all retained resources can be reconstructed.
+///41DD10 continuation and client-owned shared resource declarations retained
+///at capture time. Original1D/slot restoration uses the native body RestorePlan
+///and real resource/queue ACKs inrestore_ops, not this JSON as a fake slot body.
+///These declarations contain no GPU/device pointers.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NativeCheckpoint {
-    pub resume_pc:u32,
-    pub continuation:String,
-    pub vm_state:Vec<u8>,
-    pub shared_resources:Vec<u8>,
+    pub resume_pc: u32,
+    pub continuation: String,
+    pub vm_state: Vec<u8>,
+    pub shared_resources: Vec<u8>,
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct MixerControls {
     pub enabled: [bool; 3],
     pub gain: [f32; 3],
+    ///43C390 reapplies current preferences only when a new PCM buffer is ready.
+    pub playback_gain:[Option<f32>;3],
 }
 #[derive(Clone, Debug)]
 pub enum Event {
+    ///4226B0 conditional overlays; CPU actors continue while not drawn.
+    PresentationPolicy {window_visible:bool,confirmation_visible:bool,dialogue_visible:bool,status_visible:bool,indicator:Option<u8>},
+    /// Selected original builder/menu namespace. No rendering algorithm lives
+    /// in the VM; the bridge reuses the same engine menu controller per scope.
+    UiContext { context:u8, event:Box<Event> },
+    /// Source412090 clears only the selected menu owner;22 issues all3 scopes.
+    ClearUi,
+    ///4359E0 copies the selected builder into the independent panel1918 owner.
+    CopyUiToPanel(Group),
+    ///4375E0 snapshots/rebuilds the panel; it does not destroy its declarations.
+    FinalizePanel {declarations:text_ops::panel::PanelDeclarations,scroll:i32,selected:i32,focus:i32,ticket:(u64,u8)},
+    ActivatePanel,
+    /// Publish the complete mixer policy before a dependent restart.
+    MixerControls { enabled: [bool; 3], gain: [f32; 3], playback_gain:[Option<f32>;3] },
+    ///Original40D240 setter effects occur even when a preference is unchanged.
+    NativeMixerControls {enabled:[bool;3],gain:[f32;3],playback_gain:[Option<f32>;3],force_gain:[bool;3],force_enable:[bool;3]},
     /// Original scene-wide falling effect selector and encoded density/wind.
     FallingEffect {
-        kind: u8,
-        parameter: u8,
+        kind: i16,
+        parameter: i16,
     },
     PlayMusic {
         asset: MusicAsset,
         looping: bool,
     },
+    PlayResidentMusic {asset:MusicAsset,looping:bool},
     /// Built-in native name/mail input, completed through engine-owned UI.
     PlayerInput,
     /// Finalize the original central group and enter process11.
@@ -108,7 +212,7 @@ pub enum Event {
         slot: u8,
         group: Group,
     },
-    GroupVisibility(bool),
+    GroupReverseOrder(bool),
     /// Original49/425C20 ends retained transitions and current UI groups.
     ResetScene,
     DisplayImage {
@@ -123,7 +227,11 @@ pub enum Event {
         position: [i16; 2],
     },
     /// Native percentage scale and local pivot of an ordinary sprite slot.
-    SpriteScale { slot:u8, percent:i16, pivot:[i16;2] },
+    SpriteScale {
+        slot: u8,
+        percent: i16,
+        pivot: [i16; 2],
+    },
     /// Native read labels are VM/save policy, not visual labels.
     ReadLabel {
         scene: String,
@@ -137,10 +245,19 @@ pub enum Event {
     StopAudio {
         channel: u32,
     },
-    CenterAudioPan { kind:u8 },
+    ReleaseAudio {channel:u32,steps:u32},
+    ReleaseAudioGroup {kind:u8,forced:bool,steps:u32},
+    CenterAudioPan {
+        kind: u8,
+    },
+    AudioBalance {kind:u8,from:i32,to:i32,steps:u32},
+    MusicLoopStart {percent:i16},
     FitBackground,
     /// Original music0 -> nonlooping tail1; fade arithmetic belongs to Audio.
-    ReleaseMusic { forced: bool, steps: u32 },
+    ReleaseMusic {
+        forced: bool,
+        steps: u32,
+    },
     BeginFade {
         out: bool,
         duration_ms: u64,
@@ -150,12 +267,49 @@ pub enum Event {
 /// Resource preparation may complete on a worker; `false` retains the current
 /// instruction and yields without inventing success or advancing native PC.
 pub trait NativeHost {
+    fn effect_states(&mut self)->Result<Vec<effect_ops::StageSample>>{bail!("Circus effect queue observation unavailable")}
+    fn effect_control(&mut self,_request:&effect_ops::EffectRequest)->Result<bool>{bail!("Circus shared effect controls unavailable")}
+    fn visual(&mut self, _request: &visual_ops::VisualRequest) -> Result<bool> {
+        bail!("Circus native sprite service unavailable")
+    }
+    fn visual_complete(&mut self) -> Result<bool> {
+        Ok(true)
+    }
+    /// Original 15/254 frame-loop fence; distinct from presentation idleness.
+    fn native_animation_wait_complete(&mut self) -> Result<bool> {
+        self.visual_complete()
+    }
+    fn text(&mut self, _request: &text_ops::TextRequest) -> Result<Option<text_ops::TextReply>> {
+        bail!("Circus native text service unavailable")
+    }
+    fn system(
+        &mut self,
+        _request: system_ops::SystemRequest,
+    ) -> Result<Option<system_ops::SystemReply>> {
+        bail!("Circus native system service unavailable")
+    }
+    fn save(&mut self, _request: &save_ops::SaveRequest) -> Result<Option<save_ops::SaveReply>> {
+        bail!("Circus native save service unavailable")
+    }
     /// Actual completed shared texture backing and original logical extents.
-    fn image_dimensions(&mut self,_slot:u8)->Result<Option<([u32;2],[u32;2])>>{Ok(None)}
-    fn capture_checkpoint(&mut self)->Result<Option<Vec<u8>>>{bail!("Circus native shared checkpoint capture unavailable")}
+    fn image_dimensions(&mut self, _slot: u8) -> Result<Option<([u32; 2], [u32; 2])>> {
+        Ok(None)
+    }
+    fn image_identity(&mut self,_slot:u8)->Result<Option<String>> {Ok(None)}
+    fn capture_checkpoint(&mut self) -> Result<Option<Vec<u8>>> {
+        bail!("Circus native shared checkpoint capture unavailable")
+    }
 
     /// A real engine UI activation, or None while process11 remains waiting.
-    fn menu_action(&mut self)->Result<Option<String>>{bail!("Circus native menu interaction unavailable")}
+    fn menu_action(&mut self) -> Result<Option<String>> {
+        bail!("Circus native menu interaction unavailable")
+    }
+    ///436DB0's -2 receipt, retained until the post-UI common callback pass.
+    fn take_panel_scroll_changed(&mut self)->bool {false}
+    fn menu_bindings(&self)->Vec<(i16,i16)> {Vec::new()}
+    fn sync_menu_values(&mut self,_values:&[MenuValue])->Result<()> {Ok(())}
+    fn take_menu_values(&mut self)->Vec<MenuValue> {Vec::new()}
+    fn control_attribute(&mut self,_context:u8,_operation:&UiRecordOperation)->Result<bool>{bail!("Circus native control attribute service unavailable")}
 
     fn reload_system(&mut self) -> Result<Option<SystemReload>> {
         bail!("Circus native system.dat reload unavailable")
@@ -169,6 +323,10 @@ pub trait NativeHost {
     fn music(&mut self, _id: u16, _looping: bool) -> Result<Option<MusicAsset>> {
         bail!("Circus native music table unavailable")
     }
+    fn music_by_name(&mut self,_name:&str,_looping:bool)->Result<Option<MusicAsset>>{
+        bail!("Circus retained-name music metadata unavailable")
+    }
+    fn scene_name(&mut self, _index:i32)->Result<Option<String>> {bail!("Circus native scene-name lookup unavailable")}
     fn scene(&mut self, name: &str) -> Result<Option<Arc<Program>>>;
     fn emit(&mut self, event: &Event) -> Result<bool>;
     fn save_exists(&mut self, slot: u16) -> Result<bool>;
@@ -178,6 +336,19 @@ pub trait NativeHost {
     fn fade_complete(&mut self, _out: bool) -> Result<bool> {
         bail!("Circus native fade completion unavailable")
     }
+    fn publish_audio(&mut self,_declaration:&media_ops::AudioDeclaration)->Result<Option<media_ops::AudioPublication>> {
+        bail!("Circus native audio publication service unavailable")
+    }
+    fn packed(&mut self,_request:&packed_ops::PackedRequest)->Result<bool>{bail!("Circus packed image service unavailable")}
+    fn packed_dimensions(&mut self,_object:u16)->Result<Option<([u32;2],[u32;2])>>{bail!("Circus packed frame extent service unavailable")}
+    fn packed_frame_count(&mut self,_slot:u8)->Result<Option<u32>>{bail!("Circus packed frame count service unavailable")}
+    fn packed_lineage(&mut self,_object:u16)->Result<Option<u32>>{bail!("Circus packed immutable lineage service unavailable")}
+    fn sprite_resource_bound(&mut self,_object:u16,_slot:u8)->Result<bool>{bail!("Circus sprite resource identity unavailable")}
+    fn resource(&mut self,_request:&resource_ops::ResourceRequest)->Result<Option<resource_ops::ResourceReply>>{bail!("Circus native resource service unavailable")}
+    fn sprite_resources(&mut self,_request:&sprite_ops::SpriteResourceRequest)->Result<Option<sprite_ops::SpriteResourceReply>>{bail!("Circus sprite resource binding unavailable")}
+    fn callbacks_ready(&self)->bool{true}
+    fn sprite(&mut self,_request:&sprite_ops::SpriteRequest)->Result<bool>{bail!("Circus sprite queue service unavailable")}
+    fn sprite_states(&mut self)->Result<Vec<(u16,crysirror_scene::layer::queued::SequenceStatus)>>{bail!("Circus sprite queue observation unavailable")}
     fn audio_playing(&mut self, _channel: u32) -> Result<bool> {
         bail!("Circus native audio status unavailable")
     }
@@ -197,12 +368,49 @@ pub enum Outcome {
     Halted,
 }
 
+///406DB0's label-count replay, separate from bytecode PC and macro selectors.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+struct HistoryReplay { target:i32, phase:u8, limit:i32 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct State {
+    #[serde(default)]
+    history_replay:Option<HistoryReplay>,
+    #[serde(default)]
+    history:history_ops::HistoryState,
+    /// Local4284B0 arguments; a negative macro selector has already become
+    /// local a2=0. The independent Buf272090 mirror may still be negative.
+    #[serde(default)]
+    dispatch_a2:i32,
+    /// Asynchronous event consumer retained across instruction retries.
+    #[serde(default)]
+    native_poll_pending:u8,
+    #[serde(default)]
+    dispatch_a3:bool,
+    #[serde(default)]
+    resources:resource_ops::ResourceState,
+
     pub scene: String,
     pub pc: u32,
     pub instructions: u64,
+    #[serde(default)]
+    pub native_last_opcode:Option<u8>,
     pub version: String,
+    #[serde(default)]
+    pub dialogue: text_ops::TextState,
+    #[serde(default)]
+    pub saves: save_ops::SaveState,
+    #[serde(default)]
+    system_ops: system_ops::SystemState,
+    #[serde(default)]
+    visual: visual_ops::VisualState,
+    #[serde(default)]
+    effect_ops:effect_ops::EffectState,
+    #[serde(default)]
+    media: media_ops::MediaState,
+    #[serde(default)]
+    native_values: value_ops::NativeValues,
+    #[serde(default)]
+    macros: macro_ops::MacroState,
     /// Byte banks and indexed system values retain native value semantics.
     bytes: BTreeMap<u16, u8>,
     system: BTreeMap<u8, i32>,
@@ -214,6 +422,14 @@ pub struct State {
     pub groups: BTreeMap<u8, Group>,
     pending_images: BTreeSet<u8>,
     builder: Group,
+    #[serde(default,deserialize_with="builder_ops::deserialize_scope")]
+    selected_builder:u8,
+    #[serde(default)]
+    builder_contexts:[builder_ops::BuilderContext;3],
+    #[serde(skip)]
+    builder_menu_progress:Option<(u32,u8)>,
+    #[serde(skip)]
+    builder_instruction_stage:Option<(u32,u8)>,
     current_button: Option<Button>,
     read: BTreeSet<(String, u16)>,
     /// Native4036D0 current contiguous read-label record (no host pointer).
@@ -221,14 +437,18 @@ pub struct State {
     wait_until: Option<u64>,
     wait_click: bool,
     #[serde(default)]
-    menu_wait:bool,
+    wait_process:u8,
+    #[serde(default)]
+    wait_text_idle:Option<u64>,
+    #[serde(default)]
+    menu_wait: bool,
     wait_skippable: bool,
     pub halted: bool,
     pub savepoint: Option<(String, u16, u32, u16)>,
-    pub checkpoint:Option<NativeCheckpoint>,
+    pub checkpoint: Option<NativeCheckpoint>,
     /// Original ABI bytes/metadata, never renderer state or host pointers.
-    #[serde(default="crate::native_live::NativeLiveState::unavailable")]
-    pub native_live:crate::native_live::NativeLiveState,
+    #[serde(default = "crate::native_live::NativeLiveState::unavailable")]
+    pub native_live: crate::native_live::NativeLiveState,
     pub voice_prefixes: Vec<String>,
     pub video_backend: Option<i16>,
     /// Native scene field1764 is zeroed by the ctor until an effect opcode
@@ -248,14 +468,26 @@ pub struct State {
     transition_wait: Option<bool>,
     transition_poll_at: Option<u64>,
     wait_animations: bool,
+    #[serde(default)]
+    wait_menu_motion:bool,
+    #[serde(default)]
+    wait_audio_started:u64,
     wait_audio_mask: u8,
-    pending_audio: Vec<(u32, String, bool)>,
+    pending_audio: Vec<media_ops::PendingAudio>,
+    #[serde(default)]
+    sprite:sprite_ops::SpriteState,
+    #[serde(default)]
+    packed:packed_ops::PackedState,
+    #[serde(default)]
+    movie:movie_ops::MovieState,
+    #[serde(default)]
+    comments:comment_ops::CommentState,
     /// Original40E560 named placement tables; no image/layout algorithm here.
-    placement_tables: BTreeMap<i16,Vec<(String,[i16;2])>>,
-    placement_declaration: Option<(i16,[i16;2])>,
-    voice_timing:Vec<(String,i32)>,
-    voice_timing_from_sprite:bool,
-    sprite_shader:u8,
+    placement_tables: BTreeMap<i16, Vec<(String, [i16; 2])>>,
+    placement_declaration: Option<(i16, [i16; 2])>,
+    voice_timing: Vec<(String, i32)>,
+    voice_timing_from_sprite: bool,
+    sprite_shader: u8,
     current_music: i16,
     pending_music: Option<(MusicAsset, bool)>,
     /// Native filename buffer21944, retained across category disable/reset.
@@ -264,35 +496,35 @@ pub struct State {
     random_history: Vec<i32>,
 }
 impl State {
-    pub(crate) fn audio_controls(&self) -> Result<MixerControls> {
-        let master = self.value(99, 225)?;
-        ensure!(
-            (0..=100).contains(&master),
-            "Circus master volume outside native range"
-        );
-        let mut gain = [0.; 3];
-        let enabled = [
-            self.value(99, 14)? != 0,
-            self.value(99, 15)? != 0,
-            self.value(99, 5)? != 0,
-        ];
-        for (index, selector) in [7, 8, 9].into_iter().enumerate() {
-            let volume = self.value(99, selector)?;
-            ensure!(
-                (0..=100).contains(&volume),
-                "Circus bus volume outside native range"
-            );
-            if master != 0 && volume != 0 && self.value(99, 203)? != 0 {
-                let centibels = 5000 * (volume * master / 100) / 100 - 5000;
-                gain[index] = 10f32.powf(centibels as f32 / 2000.);
-            }
+    pub(super) fn native_skipping(&self)->bool {
+        let flag=|at|self.native_flags.get(&at).copied().unwrap_or(0)!=0;
+        !flag(272078)&&(flag(11484)||flag(11488)||flag(272077))
+    }
+    ///43B4C0 uses signed32-bit arithmetic; DirectSound ignores an out-of-
+    ///range SetVolume call. Preserve the previous effective gain in that case.
+    pub(super) fn native_audio_gains(&self,previous:[f32;3])->Result<([f32;3],[bool;3])> {
+        let master=self.value(99,225)?;let global=self.value(99,203)?;
+        let mut gains=previous;let mut valid=[false;3];
+        for (group,selector) in [7,8,9].into_iter().enumerate() {
+            let volume=self.value(99,selector)?;
+            let level=if master!=0&&volume!=0&&global!=0 {
+                5000i32.wrapping_mul(volume.wrapping_mul(master)/100)/100-5000
+            }else{-10000};
+            if (-10000..=0).contains(&level) {gains[group]=10f32.powf(level as f32/2000.);valid[group]=true;}
         }
-        Ok(MixerControls { enabled, gain })
+        Ok((gains,valid))
+    }
+    pub(crate) fn audio_controls(&self) -> Result<MixerControls> {
+        let enabled=[self.value(99,14)?!=0,self.value(99,15)?!=0,self.value(99,5)?!=0];
+        let gain=if let Some(gain)=self.media.effective_gains {gain}else{self.native_audio_gains([1.;3])?.0};
+        let (fresh,valid)=self.native_audio_gains([1.;3])?;
+        let playback_gain=std::array::from_fn(|index|valid[index].then_some(fresh[index]));
+        Ok(MixerControls{enabled,gain,playback_gain})
     }
     pub fn new(scene: String) -> Self {
         // sub_40E7D0 + initialized .data, getter sub_40CC50. These are native
         // fresh-install defaults, not guessed fallback values for unknown vars.
-        let system = [
+        let mut system: BTreeMap<u8, i32> = [
             (1, 0),
             (5, 1),
             (7, 60),
@@ -345,11 +577,23 @@ impl State {
         ]
         .into_iter()
         .collect();
+        for (index, value) in value_ops::runtime_defaults() {
+            system.entry(index).or_insert(value);
+        }
         Self {
             scene,
             pc: 3,
             instructions: 0,
+            native_last_opcode:None,
             version: String::new(),
+            dialogue: Default::default(),
+            saves: Default::default(),
+            system_ops: Default::default(),
+            visual: Default::default(),
+            media: Default::default(),
+            native_values: Default::default(),
+            macros: Default::default(),
+            effect_ops: Default::default(),
             bytes: BTreeMap::new(),
             system,
             system_data: crate::settings::SystemData::default(),
@@ -359,21 +603,27 @@ impl State {
             groups: BTreeMap::new(),
             pending_images: BTreeSet::new(),
             builder: Group::default(),
+            selected_builder:0,
+            builder_contexts:Default::default(),
+            builder_menu_progress:None,
+            builder_instruction_stage:None,
             current_button: None,
             read: BTreeSet::new(),
             read_run: None,
             wait_until: None,
             wait_click: false,
-            menu_wait:false,
+            wait_process:0,
+            wait_text_idle:None,
+            menu_wait: false,
             wait_skippable: false,
             halted: false,
             savepoint: None,
-            checkpoint:None,
-            native_live:crate::native_live::NativeLiveState::fresh(),
+            checkpoint: None,
+            native_live: crate::native_live::NativeLiveState::fresh(),
             voice_prefixes: Vec::new(),
             video_backend: None,
             transition_color: None,
-            native_flags: BTreeMap::new(),
+            native_flags: BTreeMap::from([(15632,1)]), //427E20 enables Ctrl skip by default.
             protagonist_names: [String::new(), String::new()], // sub_40EC50 zeroes these native name buffers.
             configured_names: ["常坂".into(), "一登".into()],
             animation_prefix: String::new(),
@@ -382,13 +632,22 @@ impl State {
             transition_wait: None,
             transition_poll_at: None,
             wait_animations: false,
+            wait_menu_motion:false,
+            wait_audio_started:0,
             wait_audio_mask: 0,
             pending_audio: Vec::new(),
-            placement_tables:BTreeMap::new(),
-            placement_declaration:None,
-            voice_timing:Vec::new(),
-            voice_timing_from_sprite:false,
-            sprite_shader:0,
+            sprite:Default::default(),
+            packed:Default::default(),
+            movie:Default::default(),
+            comments:Default::default(),
+            placement_tables: BTreeMap::new(),
+            placement_declaration: None,
+            voice_timing: Vec::new(),
+            voice_timing_from_sprite: false,
+            sprite_shader: 0,
+            dispatch_a2:0,native_poll_pending:0,history_replay:None,history:history_ops::HistoryState::default(),
+            dispatch_a3:false,
+            resources:Default::default(),
             current_music: 0,
             pending_music: None,
             last_music: None,
@@ -396,15 +655,26 @@ impl State {
         }
     }
     pub fn value(&self, bank: i16, index: i16) -> Result<i32> {
+        if let Some(value) = self.native_values.value(&self.system_data, bank, index)? {
+            return Ok(value);
+        }
         if bank == 99 {
+            if !(0..=255).contains(&index){return Ok(0)}
             if let Some(value) = self.system_data.value(u8::try_from(index)?)? {
                 return Ok(value);
+            }
+            if !value_ops::known_selector(index) {
+                return Ok(0);
+            }
+            if let Some(value)=self.native_live.runtime_system_value(index){return Ok(value)}
+            if let Some(value)=value_ops::runtime_field(index).and_then(|field|self.native_flags.get(&field)) {
+                return Ok(*value);
             }
             return self
                 .system
                 .get(&(u8::try_from(index)?))
                 .copied()
-                .with_context(|| format!("unimplemented Circus system selector {index}"));
+                .with_context(|| format!("Circus native system selector {index} has no initialized value provenance"));
         }
         if (0..=10).contains(&bank) && (0..100).contains(&index) {
             return Ok(i32::from(
@@ -420,9 +690,17 @@ impl State {
                     .byte(usize::from(base + index as u16) - 1832),
             ));
         }
-        bail!("unimplemented Circus value bank/index {bank}/{index}")
+        if (96..=100).contains(&bank){bail!("Circus native byte getter outside admitted body range {bank}/{index}")}
+        //40CC50 returns zero for every default bank/index.
+        Ok(0)
     }
     fn assign(&mut self, bank: i16, index: i16, value: i32) -> Result<()> {
+        if self
+            .native_values
+            .assign(&mut self.system_data, bank, index, value)?
+        {
+            return Ok(());
+        }
         if bank == 99 {
             let value = if index == 225 {
                 value.min(100)
@@ -434,24 +712,31 @@ impl State {
             if matches!(index,1|23..=25|223|234..=236|242|244|255) {
                 return Ok(());
             }
-            ensure!(
-                matches!(index,0|2|5|7..=19|26..=30|100|179..=182|183..=214|217|218|221|224..=226|233|237|241|243|245|246|253|254),
-                "Circus system setter selector {index}"
-            );
+            if !matches!(index,0|2|5|7..=19|26..=30|100|179..=182|183..=214|217|218|221|224..=226|233|237|241|243|245|246|253|254) {
+                //40D240's complete99 switch returns unchanged for every
+                //unlisted selector, including read-only getters3/4.
+                return Ok(());
+            }
+            let audio_old=if matches!(index,5|7|8|9|14|15|203|225) {Some((self.value(99,index)?,self.audio_controls()?))}else{None};
             let value = if value == 255 && matches!(index, 254 | 253 | 246 | 245 | 243) {
                 -1
             } else {
                 value
             };
             self.system.insert(u8::try_from(index)?, value);
-            self.native_live.system_assignment(index,value);
+            if let Some(field)=value_ops::runtime_field(index){self.native_flags.insert(field,value);}
+            self.native_live.system_assignment(index, value);
             self.system_data.assign(u8::try_from(index)?, value)?;
+            if let Some((previous,controls))=audio_old {self.remember_audio_setter(index,previous,controls)?;}
             if index == 10 {
                 self.system.insert(214, i32::from(value == 2));
                 self.system_data.assign(214, i32::from(value == 2))?;
             }
             return Ok(());
         }
+        if bank>10&&!matches!(bank,93..=100){return Ok(())}
+        if (96..=100).contains(&bank)&&byte_bank(bank,index).is_none(){return Ok(())}
+        if (0..=10).contains(&bank)&&index>=100{return Ok(())}
         ensure!(
             (0..=10).contains(&bank) && (0..100).contains(&index)
                 || byte_bank(bank, index).is_some(),
@@ -463,7 +748,7 @@ impl State {
             byte_bank(bank, index).unwrap() + index as u16
         };
         self.bytes.insert(key, value as u8);
-        self.native_live.byte_assignment(bank,index,value as u8);
+        self.native_live.byte_assignment(bank, index, value as u8);
         if bank >= 96 {
             if bank == 100 && index == 49 {
                 self.assign(99, 11, value)?;
@@ -487,20 +772,50 @@ pub struct Machine {
     program: Option<Arc<Program>>,
 }
 impl Machine {
+    pub(crate) fn native_presentation_policy(&self)->Result<Event> {
+        //4226B0 excludes the active decorative-sprite process (CWnd396).
+        let dialogue=(matches!(self.state.wait_process,6|7|8)||self.state.dialogue.auto_advance)
+            && self.state.native_flags.get(&1584).copied().unwrap_or(0)==0;
+        let unobstructed=self.state.native_flags.get(&23872).copied().unwrap_or(0)==0
+            && self.state.native_flags.get(&11480).copied().unwrap_or(0)==0;
+        let indicator=if dialogue&&unobstructed&&self.state.value(99,234)?==0&&self.state.value(99,213)?!=0 {
+            if self.state.native_skipping()&&self.state.groups.contains_key(&17){Some(17)}
+            else if self.state.value(99,13)?!=0&&self.state.groups.contains_key(&18){Some(18)}else{None}
+        }else{None};
+        Ok(Event::PresentationPolicy{window_visible:dialogue&&unobstructed&&self.state.value(99,234)?==0,confirmation_visible:self.state.native_flags.get(&11480).copied().unwrap_or(0)==0,dialogue_visible:unobstructed,status_visible:dialogue&&unobstructed&&self.state.value(99,181)?!=0,indicator})
+    }
     /// The original render loop resumes only after synchronous native I/O
     /// queued before a wait has finished. Instruction-budget yielding is not
     /// an original rendered frame.
     pub(crate) fn native_frame_ready(&self, outcome: Outcome) -> bool {
-        self.state.pending_audio.is_empty()
+        self.state.history_replay.is_none()
+            && !self.state.history.previewing()
+            && self.state.pending_audio.is_empty()
             && self.state.pending_music.is_none()
             && !self.state.pending_system_save
+            && !self.state.media.pending_controls()
             && (matches!(outcome, Outcome::WaitUntil(_) | Outcome::WaitForInput)
                 || outcome == Outcome::Pending
-                    && (self.state.wait_animations || self.state.wait_audio_mask != 0))
+                    && (self.state.wait_animations || self.state.wait_menu_motion || self.state.wait_audio_mask != 0 || self.framebuffer_waiting()))
     }
     /// Dispatcher-local declarations end at an actual original frame boundary,
     /// never at a resource retry or instruction-budget yield.
-    pub(crate) fn finish_native_frame(&mut self) {self.state.placement_declaration=None;}
+    pub(crate) fn finish_native_frame(&mut self) {
+        self.state.saves.dialogue_checkpoint=None;
+        self.state.saves.dialogue_checkpoint_suppressed=false;
+        self.state.select_builder(0);
+        self.state.placement_declaration = None;
+        self.state.visual.frame_toggle = false;
+        self.state.macros.finish_dispatch();
+        self.reset_effect_dispatch();
+        self.reset_packed_dispatch();
+        self.finish_sprite_dispatch();
+    }
+    pub(crate) fn native_thumbnail_due(&self)->bool {
+        self.state.wait_click&&self.state.wait_process==6&&!self.state.dialogue.auto_advance
+            && !self.state.history.active() && !self.state.history.previewing()
+            && self.state.native_flags.get(&23872).copied().unwrap_or(0)==0
+    }
     pub fn new(scene: impl Into<String>) -> Self {
         Self {
             state: State::new(scene.into()),
@@ -513,38 +828,168 @@ impl Machine {
             program: None,
         }
     }
-    pub fn step(&mut self, host: &mut dyn NativeHost, now: u64, pressed: bool) -> Result<Outcome> {
+    pub fn step(&mut self,host:&mut dyn NativeHost,now:u64,pressed:bool)->Result<Outcome>{
+        if !self.poll_audio_setters(host)?{return Ok(Outcome::Pending)}
+        if self.state.history.previewing(){return self.poll_history_preview(host,now)}
+        self.step_without_history_preview(host,now,pressed)
+    }
+    fn step_without_history_preview(&mut self,host:&mut dyn NativeHost,now:u64,pressed:bool)->Result<Outcome>{
+        let Some(replay)=self.state.history_replay else{return self.step_inner(host,now,pressed)};
+        if replay.phase==1||replay.phase==3 {
+            if replay.phase==1&&replay.target>replay.limit {
+                self.state.pending_audio.retain(|audio|!(2..=5).contains(&audio.slot)||audio.looping);
+            }
+            if !self.publish_native_audio(host,false)?||!self.publish_native_audio_frame(host)?||!self.publish_resources(host,now)?||!self.prepare_effects_frame(host)? {return Ok(Outcome::Pending)}
+            self.capture_dialogue_checkpoint(host)?;
+            if replay.phase==1&&replay.target>replay.limit {
+                if !host.emit(&Event::ReleaseAudioGroup{kind:2,forced:true,steps:0})?||!self.poll_text_events_mode(host,u64::MAX,2)?||host.text(&text_ops::TextRequest::ClearDialogue)?.is_none(){return Ok(Outcome::Pending)}
+                self.state.dialogue.speaker.clear();self.state.dialogue.body.clear();self.state.dialogue.voice_source.clear();
+                self.state.native_live.voice_source(0x71,"")?;
+                self.state.history_replay.as_mut().unwrap().phase=2;
+                self.state.dispatch_a2=0;self.state.dispatch_a3=true;
+                self.state.native_flags.insert(272090,0);
+                self.clear_history_waits();return Ok(Outcome::Advanced)
+            }
+            if self.state.native_flags.get(&25088).copied().unwrap_or(0)==0
+                && self.state.native_flags.get(&25104).copied().unwrap_or(0)==0 {
+                if let Some(asset)=self.state.last_music.clone().filter(|asset|!asset.name.is_empty()) {
+                    if !host.emit(&Event::PlayMusic{asset,looping:true})?{return Ok(Outcome::Pending)}
+                }
+            }
+            self.state.history_replay=None;
+            self.state.dispatch_a2=0;self.state.dispatch_a3=false;
+            self.state.native_flags.insert(272090,0);
+            self.state.native_flags.insert(15616,0);
+            return Ok(if replay.phase==3 {
+                if self.state.halted{Outcome::Halted}else if let Some(until)=self.state.wait_until{Outcome::WaitUntil(until)}else{Outcome::WaitForInput}
+            }else{self.clear_history_waits();Outcome::Advanced})
+        }
+        //431F20(2) executes due non-motion commands, retaining motion records.
+        //A pending receipt keeps this consumer and the native PC unchanged.
+        if !self.poll_text_events_mode(host,u64::MAX,2)? {return Ok(Outcome::Pending)}
+        self.clear_history_waits();
+        let before=self.state.instructions;
+        let outcome=self.step_inner(host,now,false)?;
+        if outcome==Outcome::Pending{return Ok(outcome)}
+        if replay.phase==0&&i64::from(self.state.native_live.replay_label())>=i64::from(replay.target)-1 {
+            self.state.history_replay.as_mut().unwrap().phase=1;
+            return Ok(Outcome::Advanced)
+        }
+        if replay.phase==2&&!matches!(outcome,Outcome::Advanced){
+            self.state.history_replay.as_mut().unwrap().phase=3;
+            return Ok(Outcome::Advanced)
+        }
+        ensure!(self.state.instructions>before,"Circus history replay made no instruction progress");
+        Ok(Outcome::Advanced)
+    }
+    fn clear_history_waits(&mut self){
+        self.state.wait_click=false;self.state.menu_wait=false;self.state.wait_until=None;
+        self.state.wait_text_idle=None;self.state.wait_animations=false;self.state.wait_menu_motion=false;
+        self.state.wait_audio_mask=0;self.state.dialogue.panel_wait=false;self.state.dialogue.gallery_wait=None;
+        self.state.transition_wait=None;self.state.native_poll_pending=0;
+    }
+    fn step_inner(&mut self, host: &mut dyn NativeHost, now: u64, pressed: bool) -> Result<Outcome> {
+        let pressed=pressed&&!self.sprite_input_blocked();
         if self.state.pending_system_save {
             if !host.write_system(self.state.system_data.bytes())? {
                 return Ok(Outcome::Pending);
             }
             self.state.pending_system_save = false;
         }
-        if self.state.menu_wait || self.state.wait_click
+        if self.state.menu_wait
+            || self.state.wait_text_idle.is_some()
+            || self.state.wait_click
             || self.state.wait_until.is_some()
             || self.state.halted
             || self.state.wait_animations
+            || self.state.wait_menu_motion
+            || self.state.dialogue.panel_wait
+            || self.framebuffer_waiting()
             || self.state.wait_audio_mask != 0
         {
-            if let Some((asset, looping)) = &self.state.pending_music {
-                if !host.emit(&Event::PlayMusic {
-                    asset: asset.clone(),
-                    looping: *looping,
-                })? {
-                    return Ok(Outcome::Pending);
-                }
-                self.state.pending_music = None;
+            if !self.publish_native_audio(host,false)? {
+                return Ok(Outcome::Pending);
             }
-            while let Some((channel, name, voice)) = self.state.pending_audio.first() {
-                if !host.emit(&Event::PlayAudio {
-                    channel: *channel,
-                    name: name.clone(),
-                    voice: *voice,
-                })? {
-                    return Ok(Outcome::Pending);
-                }
-                self.state.pending_audio.remove(0);
+        }
+        let callback_boundary=self.state.wait_click||self.state.menu_wait||self.state.wait_until.is_some()||self.state.wait_animations||self.state.wait_menu_motion||self.state.wait_audio_mask!=0||self.state.wait_text_idle.is_some()||self.state.dialogue.panel_wait||self.framebuffer_waiting();
+        let prefix_polled=!self.state.movie.active()&&self.state.history_replay.is_none()
+            &&(host.callbacks_ready()||self.native_prefix_pending()||self.native_action_pending());
+        if prefix_polled {
+            if !self.poll_native_prefix(host,now)? {return Ok(Outcome::WaitForInput)}
+        }
+        //433AA0 may consume Enter/left solely to unhide the message window.
+        //Re-read the stock after that pass instead of reusing an earlier edge.
+        let advance_mask=crysirror_core::service::buttons::MOUSE_LEFT
+            |crysirror_core::service::buttons::ENTER|crysirror_core::service::buttons::PAGE_DOWN;
+        let pressed=if pressed&&prefix_polled {
+            match self.gesture_request(host,gesture_ops::GestureRequest::PrefixInput)? {
+                Some(gesture_ops::GestureReply::PrefixInput(input))=>input.enabled&&input.released&advance_mask!=0,
+                None=>return Ok(Outcome::Pending),
+                _=>bail!("Circus advance input receipt"),
             }
+        }else{pressed};
+        if !self.state.movie.active()&&self.state.history_replay.is_none()
+            && (self.state.history.active() || self.state.wait_process==6) && host.callbacks_ready() {
+            let history_was_active=self.state.history.active();
+            if !self.poll_history(host,now)? { return Ok(Outcome::Pending); }
+            if self.state.history_replay.is_some() { return Ok(Outcome::Advanced); }
+            if self.state.history.active()||history_was_active { return Ok(Outcome::WaitForInput); }
+        }
+        if !self.state.movie.active()&&self.state.history_replay.is_none() {
+            if self.state.native_poll_pending==1 || self.state.native_poll_pending==0&&host.callbacks_ready() {
+                self.state.native_poll_pending=1;
+                if !self.poll_text_events(host,now)?{
+                    let ready=host.callbacks_ready();
+                    if ready{self.state.native_poll_pending=0;}
+                    return Ok(if ready&&self.state.dialogue.gallery_wait.is_some(){Outcome::WaitForInput}else{Outcome::Pending})
+                }
+                self.state.native_poll_pending=0;
+            }
+            if self.state.native_poll_pending==2 || self.state.native_poll_pending==0&&host.callbacks_ready() {
+                self.state.native_poll_pending=2;
+                if !self.poll_comments(host,now)?{if host.callbacks_ready(){self.state.native_poll_pending=0;}return Ok(Outcome::Pending)}
+                self.state.native_poll_pending=0;
+            }
+            if self.state.menu_wait&&self.state.native_poll_pending!=3 {
+            let action = host.menu_action()?;
+            self.sync_menu_variables(host)?;
+            if !host.callbacks_ready(){return Ok(Outcome::Pending)}
+            if let Some(action)=action {
+                let _=host.take_panel_scroll_changed();
+                self.state.system_ops.callback_panel_scroll=false;
+            ensure!(
+                !action.is_empty() && action != "-",
+                "Circus menu activation lacks native action"
+            );
+            let program = self
+                .program
+                .as_ref()
+                .context("Circus menu program missing")?;
+            let target = program
+                .instructions
+                .iter()
+                .find(|candidate| {
+                    candidate.opcode == 0x4b
+                        && matches!(&candidate.arguments,Arguments::String(label) if label==&action)
+                })
+                .context("Circus activated menu label missing")?;
+            self.state.pc = target.offset;
+            self.state.menu_wait = false;
+        }
+            }
+            if self.state.native_poll_pending==3 || self.state.native_poll_pending==0&&callback_boundary&&host.callbacks_ready() {
+                self.state.native_poll_pending=3;
+                if !self.poll_system_callbacks(host,now,pressed)?{if host.callbacks_ready(){self.state.native_poll_pending=0;}return Ok(Outcome::Pending)}
+                self.state.native_poll_pending=0;
+            }
+        }
+        if !self.poll_framebuffer(host)?{return Ok(Outcome::Pending)}
+        if self.state.dialogue.panel_wait{return Ok(Outcome::WaitForInput)}
+        if let Some(since)=self.state.wait_text_idle {
+            let ready=matches!(host.text(&text_ops::TextRequest::Status)?,Some(text_ops::TextReply::Input{advance:true}));
+            if !ready {self.state.wait_text_idle=Some(now);return Ok(Outcome::WaitUntil(now.saturating_add(1001)))}
+            if now.saturating_sub(since)<=1000 {return Ok(Outcome::WaitUntil(since.saturating_add(1001)))}
+            self.state.wait_text_idle=None;
         }
         if let Some(out) = self.state.transition_wait {
             if self.state.transition_poll_at != Some(now) {
@@ -561,37 +1006,56 @@ impl Machine {
             }
         }
         if self.state.wait_animations {
-            if self.state.transition_wait.is_some() {
+            if self.state.transition_wait.is_some() || !host.native_animation_wait_complete()? {
                 return Ok(Outcome::Pending);
             }
             self.state.wait_animations = false;
         }
+        if self.state.wait_menu_motion {
+            if !matches!(host.text(&text_ops::TextRequest::MovementStatus)?,Some(text_ops::TextReply::Input{advance:true})) {return Ok(Outcome::Pending)}
+            self.state.wait_menu_motion=false;
+        }
         if self.state.wait_audio_mask != 0 {
-            if host.audio_playing(8)? {
-                return Ok(Outcome::Pending);
+            let mask=self.state.wait_audio_mask;
+            let mut waiting=false;
+            if mask&1!=0 {waiting|=host.audio_playing(0)?;}
+            if mask&2!=0 {waiting|=host.audio_playing(8)?;}
+            if mask&4!=0 {for channel in 3..=5 {waiting|=host.audio_playing(channel)?;}}
+            if mask&32!=0 {
+                waiting|=!host.audio_playing(0)?;
+                if now.saturating_sub(self.state.wait_audio_started)>1000 {waiting=false;}
             }
-            self.state.wait_audio_mask = 0;
+            if waiting{return Ok(Outcome::Pending)}
+            self.state.wait_audio_mask=0;
         }
         if self.state.halted {
             return Ok(Outcome::Halted);
         }
-        if self.state.menu_wait {
-            let action=host.menu_action()?.or_else(||self.state.callbacks.get(&10520).filter(|s|!s.is_empty()&&*s!="-").cloned());
-            let Some(action)=action else{return Ok(Outcome::WaitForInput)};
-            ensure!(!action.is_empty()&&action!="-","Circus menu activation lacks native action");
-            let program=self.program.as_ref().context("Circus menu program missing")?;
-            let target=program.instructions.iter().find(|candidate|candidate.opcode==0x4b&&matches!(&candidate.arguments,Arguments::String(label) if label==&action)).context("Circus activated menu label missing")?;
-            self.state.pc=target.offset;self.state.menu_wait=false;
-        }
+        if self.state.menu_wait {return Ok(Outcome::WaitForInput)}
         if self.state.wait_click {
-            if !pressed {
-                return Ok(Outcome::WaitForInput);
+            if self.state.dialogue.native_forward_pending {
+                if !self.finish_native_dialogue_wait(host)? {return Ok(Outcome::Pending)}
+            }else if self.native_dialogue_auto_due(host,now)? {
+                if !self.poll_text_events_mode(host,u64::MAX,1)? {return Ok(Outcome::Pending)}
+                if host.text(&text_ops::TextRequest::Input)?.is_none(){return Ok(Outcome::Pending)}
+                self.state.dialogue.native_forward_pending=true;
+            }else{
+                if !pressed {
+                    return Ok(if self.native_dialogue_auto_polling()?{Outcome::WaitUntil(now.saturating_add(16))}else{Outcome::WaitForInput});
+                }
+                if !self.dialogue_input(host)? {
+                    return Ok(Outcome::WaitForInput);
+                }
+                self.state.dialogue.native_forward_pending=true;
             }
-            self.state.wait_click = false;
+            if self.state.dialogue.native_forward_pending&&!self.finish_native_dialogue_wait(host)? {return Ok(Outcome::Pending)}
         }
         if let Some(until) = self.state.wait_until {
             if now < until && !(pressed && self.state.wait_skippable) {
                 return Ok(Outcome::WaitUntil(until));
+            }
+            if pressed&&self.state.wait_skippable&&prefix_polled {
+                if !matches!(self.gesture_request(host,gesture_ops::GestureRequest::ConsumeInput{mask:advance_mask})?,Some(gesture_ops::GestureReply::Done)){return Ok(Outcome::Pending)}
             }
             self.state.wait_until = None;
         }
@@ -621,6 +1085,7 @@ impl Machine {
         host: &mut dyn NativeHost,
         now: u64,
     ) -> Result<Outcome> {
+        if !self.poll_audio_setters(host)?{return Ok(Outcome::Pending)}
         let mut a = [0i16; 8];
         match i.arguments {
             Arguments::Bytes(v) => {
@@ -638,270 +1103,1156 @@ impl Machine {
             Arguments::String(s) | Arguments::SlotString { text: s, .. } => s.as_str(),
             _ => "",
         };
+        if let Some(outcome) = self.record_macro(i, a, text)? {
+            if outcome!=Outcome::Pending&&!self.state.macros.suppresses_last_opcode_update() {self.state.native_last_opcode=Some(i.opcode);}
+            return Ok(outcome);
+        }
+        //4284B0 case30 suppresses every40A2E0 branch during positive-history
+        //execution and native capture. Keep this before delegated19/51 routes.
+        let handled = if i.opcode==0x1e && (self.state.dispatch_a2!=0 || self.state.native_flags.get(&25104).copied().unwrap_or(0)!=0) {
+            self.state.native_live.ignored_system_dispatch();
+            Some(CommandResult::Complete {next:i.next,outcome:Outcome::Advanced})
+        } else if let Some(result) = self.execute_save(program, i, a, text, host, now)? {
+            Some(result)
+        } else if let Some(result) = self.execute_system(program, i, a, text, host, now)? {
+            Some(result)
+        } else if let Some(result)=self.execute_movie(program,i,a,text,host,now)? {
+            Some(result)
+        } else if let Some(result)=self.execute_comment(program,i,a,text,host,now)? {
+            Some(result)
+        } else if let Some(result) = self.execute_media(program, i, a, text, host, now)? {
+            Some(result)
+        } else if let Some(result) = self.execute_effects(program, i, a, text, host, now)? {
+            Some(result)
+        } else if let Some(result)=self.execute_resource(program,i,a,text,host,now)? {
+            Some(result)
+        } else if let Some(result)=self.execute_packed(program,i,a,text,host,now)? {
+            Some(result)
+        } else if let Some(result)=self.execute_sprite(program,i,a,text,host,now)? {
+            Some(result)
+        } else if let Some(result) = self.execute_visual(program, i, a, text, host, now)? {
+            Some(result)
+        } else {
+            self.execute_text(program, i, a, text, host, now)?
+        };
+        if let Some(result) = handled {
+            return match result {
+                CommandResult::Retry => Ok(Outcome::Pending),
+                CommandResult::Complete { next, outcome } => {
+                    if !self.state.macros.suppresses_last_opcode_update() {self.state.native_last_opcode=Some(i.opcode);}
+                    if i.opcode==0x18 {self.state.native_live.syscall_completed(a[0]);}
+                    if i.opcode==0x1e {self.state.native_live.system_function_completed(a[0],a[1]);}
+                    self.state
+                        .native_live
+                        .audit_completed(i.opcode, &self.state.scene, next)?;
+                    self.state.pc = next;
+                    self.state.instructions += 1;
+                    Ok(outcome)
+                }
+            };
+        }
         let mut next = i.next;
         let mut outcome = Outcome::Advanced;
-        let event=match i.opcode {
+        let event = match i.opcode {
             // Parser leaves PC on 0; native main only yields (LABEL_989).
             // An end marker is an idle menu point, not a process-exit opcode.
-            0x00=>{self.state.wait_click=true;next=i.offset;outcome=Outcome::WaitForInput;None},
-            0x04=>{let label=a[0] as u16 | (a[1] as u16)<<8;let Some(scene)=host.scene_index(&self.state.scene)?else{return Ok(Outcome::Pending)};if scene>=0&&label!=0{self.state.system_data.mark_read(scene as usize,label,label)?;self.state.read.insert((self.state.scene.clone(),label));}Some(Event::ReadLabel{scene:self.state.scene.clone(),label})},
-            0x03=>{
-                let label=a[0] as u16 | (a[1] as u16)<<8;
-                let raw=*program.labels.get(usize::from(label)).context("Circus native read/save label index")?;
-                let metadata=*program.label_metadata.get(usize::from(label)).context("Circus native label metadata")?;
-                let Some(native_scene)=host.scene_index(&self.state.scene)?else{return Ok(Outcome::Pending)};
-                if program.instruction(next).map_or(true,|next|next.opcode!=0x4c) {
-                    let extend=self.state.read_run.as_ref().is_some_and(|(scene,_,end)|scene==&self.state.scene&&u32::from(*end)+1==u32::from(label));
-                    if extend {self.state.read_run.as_mut().unwrap().2=label;}
-                    else {
-                        if let Some((scene,start,end))=&self.state.read_run{let Some(id)=host.scene_index(scene)?else{return Ok(Outcome::Pending)};if id>=0&&*start!=0{self.state.system_data.mark_read(id as usize,*start,*end)?;}}
-                        self.state.read_run=Some((self.state.scene.clone(),label,label));
+            0x00 => {
+                self.state.wait_process=0;
+                self.state.wait_click = true;
+                next = i.offset;
+                outcome = Outcome::WaitForInput;
+                None
+            }
+            0x04 => {
+                let label = a[0] as u16 | (a[1] as u16) << 8;
+                let Some(scene) = host.scene_index(&self.state.scene)? else {
+                    return Ok(Outcome::Pending);
+                };
+                if scene >= 0 && label != 0 {
+                    self.state
+                        .system_data
+                        .mark_read(scene as usize, label, label)?;
+                    self.state.read.insert((self.state.scene.clone(), label));
+                }
+                Some(Event::ReadLabel {
+                    scene: self.state.scene.clone(),
+                    label,
+                })
+            }
+            0x03 => {
+                let label = a[0] as u16 | (a[1] as u16) << 8;
+                let raw = *program
+                    .labels
+                    .get(usize::from(label))
+                    .context("Circus native read/save label index")?;
+                let metadata = *program
+                    .label_metadata
+                    .get(usize::from(label))
+                    .context("Circus native label metadata")?;
+                let Some(native_scene) = host.scene_index(&self.state.scene)? else {
+                    return Ok(Outcome::Pending);
+                };
+                let read_owner = (self.state.scene.clone(), i.offset);
+                if let Some(existing) = &self.state.dialogue.pending_read_owner {
+                    ensure!(*existing == read_owner, "Circus read-check continuation owner");
+                }
+                if self.state.dialogue.pending_read_owner.is_none() {
+                if program
+                    .instruction(next)
+                    .map_or(true, |next| next.opcode != 0x4c)
+                {
+                    let extend = self.state.read_run.as_ref().is_some_and(|(scene, _, end)| {
+                        scene == &self.state.scene && u32::from(*end) + 1 == u32::from(label)
+                    });
+                    if extend {
+                        self.state.read_run.as_mut().unwrap().2 = label;
+                    } else {
+                        if let Some((scene, start, end)) = &self.state.read_run {
+                            let Some(id) = host.scene_index(scene)? else {
+                                return Ok(Outcome::Pending);
+                            };
+                            if id >= 0 && *start != 0 {
+                                self.state
+                                    .system_data
+                                    .mark_read(id as usize, *start, *end)?;
+                            }
+                        }
+                        self.state.read_run = Some((self.state.scene.clone(), label, label));
                     }
                 }
-                self.state.native_live.read_label(native_scene,label,metadata,raw,program.instruction(next).map_or(true,|next|next.opcode!=0x4c))?;
-                self.state.savepoint=Some((self.state.scene.clone(),label,raw,metadata));None
-            },
-            0x06=>{self.state.wait_click=true;outcome=Outcome::WaitForInput;None},
-            0x0b=>{self.state.finish_button();if !host.emit(&Event::BeginMenu(self.state.builder.clone()))?{return Ok(Outcome::Pending)}self.state.menu_wait=true;outcome=Outcome::WaitForInput;None},
-            0x0a if a[0]!=0=>{if self.state.value(99,209)?!=0&&self.state.value(99,13)?!=0{self.state.assign(99,13,0)?;}None},
-            0x0f if matches!(a[0],23|24|25|30|31|32)=>None, // Original dispatch explicitly excludes these modes from effects.
-            // sub_407BE0 requires an existing transition colour resource.
-            // All currently accepted portrait operations are immediate, so
-            // sub_422680 has no animation queue to finish on this path.
-            0x0f if a[0]<=1&&self.state.transition_color.is_none()=>None,
-            0x0f if matches!(a[0],0|1|2)=>{
-                ensure!(self.state.value(99,10)?!=0,"Circus disabled-effect cleanup policy");
-                let out=a[0]==2;let color=if out{[0;3]}else{self.state.transition_color.context("Circus fade colour resource missing")?};
-                let base=4*(5*i32::from(a[1])+5);let speed=self.state.value(99,12)?;
-                let adjusted=if speed<5{base+((f64::from(base/2)/5.)*f64::from(5-speed)) as i32}else if speed>5{base-((f64::from(base/2)/6.)*f64::from(speed-5)) as i32}else{base};
-                let duration_ms=fade_duration_ms(adjusted,!out)?;
-                // Native425E60/407BE0 replace an active colour effect.
-                self.state.transition_color=Some(color);self.state.transition_wait=Some(out);self.state.transition_poll_at=Some(now);
-                Some(Event::BeginFade{out,duration_ms,color})
-            },
-            0x11=>{
-                if a[0]==0 {self.state.bytes.retain(|key,_|*key>=1100);}
-                if self.state.configured_names[0].is_empty(){self.state.configured_names[0]="常坂".into();}
-                if self.state.configured_names[1].is_empty(){self.state.configured_names[1]="一登".into();}
-                self.state.protagonist_names=self.state.configured_names.clone();
-                self.state.system_data.set_names(&self.state.configured_names)?;
-                self.state.native_live.reset_script(a[0]==0,&self.state.configured_names)?;
+                self.state.native_live.read_label(
+                    native_scene,
+                    label,
+                    metadata,
+                    raw,
+                    program
+                        .instruction(next)
+                        .map_or(true, |next| next.opcode != 0x4c),
+                )?;
+                self.state.dialogue.pending_read_owner = Some(read_owner);
+                }
+                //438420 tests persisted read intervals, independently of
+                //the current native read-run which4036D0 has just extended.
+                if self.state.system_data.label_is_read(native_scene, label)? {
+                    self.state.native_live.read_check_state(false);
+                    self.state.native_flags.insert(66509, 0);
+                } else if self.state.system_data.dword(8) != 0
+                    && self.state.native_flags.get(&11488).copied().unwrap_or(0) == 0 {
+                    if !self.native_skip_notice(host, 2)? { return Ok(Outcome::Pending); }
+                    self.state.assign(99, 195, 0)?;
+                    self.state.native_flags.insert(66509, 1);
+                    self.state.native_live.read_check_state(true);
+                }
+                self.state.dialogue.pending_read_owner = None;
+                self.state.savepoint = Some((self.state.scene.clone(), label, raw, metadata));
+                None
+            }
+            0x06 => {
+                if self.state.value(99,186)?==0 {
+                    if self.state.native_flags.get(&66515).copied().unwrap_or(0)!=0 {
+                        self.state.native_flags.insert(66515,0);
+                        self.state.native_live.dialogue_marker(0x06, false)?;
+                    }
+                    else {self.state.wait_process=6;self.state.wait_click=true;self.begin_native_dialogue_wait(now)?;outcome=Outcome::WaitForInput;}
+                }
+                None
+            }
+            0x0b => {
+                if self.state.native_flags.get(&25104).copied().unwrap_or(0)==0 {
+                if !self.begin_all_builder_menus(host)? {
+                    return Ok(Outcome::Pending);
+                }
+                if !host.emit(&Event::ActivatePanel)? {return Ok(Outcome::Pending);}
+                // Native process11 owns this menu. A preceding inline/gallery
+                //wait must not drain its activation before menu_action below.
+                self.state.dialogue.inline_menu=false;
+                self.state.dialogue.gallery_wait=None;
+                self.state.dialogue.panel_wait=false;
+                self.state.dialogue.auto_advance=false;
+                self.state.wait_click=false;
+                self.state.menu_wait = true;
+                outcome = Outcome::WaitForInput;
+                }
+                None
+            }
+            0x0a => {
+                let label_replay = self.state.native_flags.get(&23872).copied().unwrap_or(0) != 0;
+                let forced = self.state.dispatch_a2 != 0
+                    || self.state.native_flags.get(&15616).copied().unwrap_or(0) != 0;
+                if label_replay {
+                    let target = self.state.history.target;
+                    if let Some(label) = self.state.native_live.dialogue_label_replay(target)? {
+                        //4382C0 returns-1 without changing the decoder when
+                        //the named numeric label is absent.
+                        if let Some(jump) = program.instructions.iter().find(|instruction| {
+                            instruction.opcode == 3 && matches!(instruction.arguments,
+                                Arguments::Bytes([lo, hi]) if (u16::from(lo) | (u16::from(hi) << 8)) == label)
+                        }) { next = jump.offset; }
+                        if i32::from(label) >= target { outcome = Outcome::WaitForInput; }
+                    }
+                    self.state.native_flags.insert(66515, 0);
+                    self.state.native_flags.insert(155596, 0);
+                } else {
+                    if self.state.value(99, 210)? != 0 && self.state.native_skipping() {
+                        self.state.native_flags.insert(11484, 0);
+                        self.state.assign(99, 195, 0)?;
+                    }
+                    if self.state.value(99, 209)? != 0 && self.state.value(99, 13)? != 0 {
+                        self.state.assign(99, 13, 0)?;
+                    }
+                    if forced {
+                        let action = self.state.native_live.dialogue_replay_action()?;
+                        if let Some(jump) = program.instructions.iter().find(|instruction| {
+                            instruction.opcode == 0x4b
+                                && matches!(&instruction.arguments, Arguments::String(label) if label == &action)
+                        }) { next = jump.offset; }
+                        self.state.native_flags.insert(66515, 0);
+                    } else if a[0] == 0 {
+                        let (speaker, body) = self.state.native_live.dialogue_refresh_buffers()?;
+                        let owner = (self.state.scene.clone(), i.offset);
+                        if let Some(existing) = &self.state.dialogue.refresh_text_owner {
+                            ensure!(*existing == owner, "Circus dialogue refresh continuation owner");
+                        }
+                        if self.state.dialogue.refresh_text_owner.is_none()
+                            && (self.state.groups.contains_key(&0) || self.state.groups.contains_key(&1))
+                            && host.text(&text_ops::TextRequest::Dialogue {
+                                speaker: speaker.clone(), body: body.clone(),
+                                body_template: self.state.dialogue.body_template.clone(),
+                                name_template: self.state.dialogue.name_template.clone(),
+                                body_group: self.state.groups.get(&0).cloned(),
+                                name_group: self.state.groups.get(&1).cloned(), speed: 0,
+                            })?.is_none() { return Ok(Outcome::Pending); }
+                        self.state.dialogue.refresh_text_owner = Some(owner);
+                        let center_rows = if self.state.value(99, 226)? != 0 {
+                            Some((i32::try_from(self.state.dialogue.gallery_row)?, self.state.dialogue.selection_anchor))
+                        } else { None };
+                        let append_extra = self.state.native_flags.get(&23876).copied().unwrap_or(0) != 0;
+                        if !self.refresh_dialogue_controls(host, center_rows, append_extra)? {
+                            return Ok(Outcome::Pending);
+                        }
+                        self.state.dialogue.refresh_text_owner = None;
+                        self.state.dialogue.speaker = speaker;
+                        self.state.dialogue.body = body;
+                        self.state.native_flags.insert(15628, 1);
+                        let message_wait = self.state.groups.contains_key(&9);
+                        self.state.native_live.dialogue_refresh_completed(message_wait);
+                        if message_wait {
+                            self.state.native_flags.insert(66510, 1);
+                            self.state.wait_process = 6;
+                            self.state.wait_click = true;
+                            self.begin_native_dialogue_wait(now)?;
+                            outcome = Outcome::WaitForInput;
+                        }
+                    } else {
+                        self.state.native_live.dialogue_nonzero_completed(a[0], 0, false, false);
+                    }
+                }
+                None
+            }
+            0x11 => {
+                if a[0] == 0 {
+                    self.state.bytes.retain(|key, _| *key >= 1100);
+                }
+                if self.state.configured_names[0].is_empty() {
+                    self.state.configured_names[0] = "常坂".into();
+                }
+                if self.state.configured_names[1].is_empty() {
+                    self.state.configured_names[1] = "一登".into();
+                }
+                self.state.protagonist_names = self.state.configured_names.clone();
+                self.state
+                    .system_data
+                    .set_names(&self.state.configured_names)?;
+                self.state
+                    .native_live
+                    .reset_script(a[0] == 0, &self.state.configured_names)?;
                 // The native count resets regardless of the byte-bank flag;
                 // NativeLiveState retains raw tail bytes for original saves.
                 self.state.random_history.clear();
-                self.state.savepoint=None;
-                self.state.read_run=None;
-                self.state.system.insert(233,0);
-                for index in [26559,27964,27965,27966,27967,27968,28971,28970]{self.state.native_flags.insert(index,0);}
+                self.state.savepoint = None;
+                self.state.read_run = None;
+                self.state.system.insert(233, 0);
+                for index in [26559, 27964, 27965, 27966, 27967, 27968, 28971, 28970] {
+                    self.state.native_flags.insert(index, 0);
+                }
                 None
-            },
-            0x13=>{
-                ensure!(self.state.value(99,179)?==0,"Circus alternate music backend release policy");
-                let forced=self.state.native_flags.get(&15616).copied().unwrap_or(0)!=0;
-                let steps=if a[1]==255&&a[4]!=0 {u32::try_from(a[4]).context("Circus music release divisor must be positive")?} else {30};
-                ensure!(self.state.native_flags.get(&25088).copied().unwrap_or(0)==0,"Circus music release suppressed native context");
-                if !host.emit(&Event::ReleaseMusic{forced,steps})? {return Ok(Outcome::Pending)}
-                self.state.pending_music=None;self.state.last_music=None;self.state.current_music=0;self.state.native_live.music(0,"")?;None
-            },
-            0x15 if a[0]==254=>{self.state.wait_animations=true;outcome=Outcome::Pending;None},
-            0x15=>{ensure!(a[0]<254,"unimplemented Circus timer mode {}",a[0]);if a[0]==0&&a[1]!=0{self.state.wait_click=true;outcome=Outcome::WaitForInput;}else{let until=now.saturating_add(a[0] as u64*200);self.state.wait_until=Some(until);self.state.wait_skippable=a[1]!=0;outcome=Outcome::WaitUntil(until);}None},
-            0x16=>{let mut mask=a[0] as u8;while let Ok(data)=program.instruction(next){if data.opcode!=0x16{break;}let Arguments::Bytes([value,_])=data.arguments else{bail!("Circus audio wait marker");};mask|=value;next=data.next;}ensure!(mask==2,"Circus native audio wait mask {mask:#x}");self.state.wait_audio_mask=mask;outcome=Outcome::Pending;None},
-            0x17=>{let b=self.state.current_button.as_mut().context("Circus button sounds without button")?;b.sounds=[a[0] as u8,a[1] as u8];None},
-            0x18 if a[0]==0=>{let slot=u16::try_from(self.state.value(99,254)?)?;ensure!(!host.save_exists(slot)?,"Circus native original save loading not yet implemented");None},
-            0x18 if a[0]==15=>{self.state.native_flags.insert(15632,a[1].into());self.state.native_flags.insert(11484,0);self.state.native_flags.insert(11488,0);self.state.assign(99,195,0)?;None}, // sub_421C90
-            0x18 if a[0]==7=>{self.state.system.insert(3,i32::from(a[1]));None}, // native window member6; getter99/3.
-            0x18 if a[0]==26=>{
-                if self.state.pending_system_reload.is_none(){let Some(loaded)=host.reload_system()?else{return Ok(Outcome::Pending)};self.state.pending_system_reload=Some(loaded);}
-                let loaded=self.state.pending_system_reload.as_ref().unwrap();
-                let mut data=self.state.system_data.clone();
-                let replay_music=matches!(loaded,SystemReload::Missing)&&self.state.value(99,14)?==0;
-                match loaded{SystemReload::Loaded(loaded)=>data=loaded.clone(),SystemReload::Missing=>data.reset_preferences()}
-                let names=data.names()?;
-                let replay=if replay_music&&self.state.last_music.is_some(){
-                    // A formerly nonlooping track must acquire real loop
-                    // metadata before replaying; keep the completed reload
-                    // instead of reissuing a conflicting storage worker.
-                    let Some(asset)=host.music(u16::try_from(self.state.current_music)?,true)?else{return Ok(Outcome::Pending)};
-                    ensure!(asset.name==self.state.last_music.as_ref().unwrap().name,"Circus reset retained music resource changed");Some(asset)
-                }else{None};
-                self.state.system_data=data;self.state.configured_names=names;
-                // 40E9C0→43CE40(name,0,1) replays a retained music name after
-                // restoring defaults; an empty filename produces no request.
-                if let Some(asset)=replay{self.state.last_music=Some(asset.clone());self.state.pending_music=Some((asset,true));}
-                self.state.pending_system_reload=None;
+            }
+            0x13 => {
+                let forced = self.state.native_flags.get(&15616).copied().unwrap_or(0) != 0 || self.state.dispatch_a2!=0;
+                let protected=self.state.native_flags.get(&25088).copied().unwrap_or(0)!=0;
+                let steps = if a[1] == 255 && a[4] != 0 {
+                    u32::try_from(a[4]).context("Circus music release divisor must be positive")?
+                } else {
+                    30
+                };
+                if !protected && !host.emit(&Event::ReleaseMusic { forced, steps })? {return Ok(Outcome::Pending);}
+                self.state.pending_music = None;
+                if forced||!protected {
+                    self.state.last_music = None;
+                    self.state.current_music = 0;
+                    self.state.native_live.music(0, "")?;
+                }
                 None
-            }, // 42B8B6 case1A →40EB40; this is a reload, not a no-op.
-            0x18 if a[0]==5=>{
+            }
+            0x15 if a[0] == 255 => {
+                self.state.wait_process=21;
+                self.state.wait_menu_motion=true;
+                outcome=Outcome::Pending;
+                None
+            }
+            0x15 if a[0] == 254 => {
+                self.state.wait_animations = true;
+                outcome = Outcome::Pending;
+                None
+            }
+            0x15 => {
+                self.state.wait_process=21;
+                if a[0] == 0 && a[1] != 0 {
+                    self.state.wait_click = true;
+                    outcome = Outcome::WaitForInput;
+                } else {
+                    let until = now.saturating_add(a[0] as u64 * 200);
+                    self.state.wait_until = Some(until);
+                    self.state.wait_skippable = a[1] != 0;
+                    outcome = Outcome::WaitUntil(until);
+                }
+                None
+            }
+            0x16 => {
+                let mut mask = a[0] as u8;
+                while let Ok(data) = program.instruction(next) {
+                    if data.opcode != 0x16 {
+                        break;
+                    }
+                    let Arguments::Bytes([value, _]) = data.arguments else {
+                        bail!("Circus audio wait marker");
+                    };
+                    mask |= value;
+                    next = data.next;
+                }
+                self.state.wait_audio_mask = mask;
+                if mask==32 {self.state.wait_audio_started=now;}
+                outcome = Outcome::Pending;
+                None
+            }
+            0x17 => {
+                let b = self
+                    .state
+                    .current_button
+                    .as_mut()
+                    .context("Circus button sounds without button")?;
+                b.sounds = [a[0] as u8, a[1] as u8];
+                None
+            }
+            0x18 if a[0] == 15 => {
+                self.state.native_flags.insert(15632, a[1].into());
+                self.state.native_flags.insert(11484, 0);
+                self.state.native_flags.insert(11488, 0);
+                self.state.assign(99, 195, 0)?;
+                None
+            } // sub_421C90
+            0x18 if a[0] == 7 => {
+                let Some(system_ops::SystemReply::WindowTransitionFlag(value))=host.system(system_ops::SystemRequest::WindowTransitionFlag(Some(i32::from(a[1]))))? else{return Ok(Outcome::Pending)};
+                ensure!(value==i32::from(a[1]),"Circus window transition flag receipt");
+                self.state.system.insert(3, i32::from(a[1]));
+                None
+            } // native window member6; getter99/3.
+            0x18 if a[0] == 26 => {
+                if self.state.pending_system_reload.is_none() {
+                    let Some(loaded) = host.reload_system()? else {
+                        return Ok(Outcome::Pending);
+                    };
+                    self.state.pending_system_reload = Some(loaded);
+                }
+                let loaded = self.state.pending_system_reload.as_ref().unwrap();
+                let mut data = self.state.system_data.clone();
+                let replay_music =
+                    matches!(loaded, SystemReload::Missing) && self.state.value(99, 14)? == 0;
+                match loaded {
+                    SystemReload::Loaded(loaded) => data = loaded.clone(),
+                    SystemReload::Missing => data.reset_preferences(),
+                }
+                let names = data.names()?;
+                if !self.poll_preference_reset(host, i, 26, 0, Some(data), replay_music, Some(names))? {
+                    return Ok(Outcome::Pending);
+                }
+                self.state.pending_system_reload = None;
+                None
+            } // 42B8B6 case1A →40EB40; this is a reload, not a no-op.
+            0x18 if a[0] == 5 => {
                 // 403370 marks the current read label, then40C1C0 writes the
                 // original two bounded preference blocks. Slot saves differ.
-                if let Some((scene,start,end))=&self.state.read_run{let Some(index)=host.scene_index(scene)?else{return Ok(Outcome::Pending)};if index>=0&&*start!=0{self.state.system_data.mark_read(index as usize,*start,*end)?;}}
-                if !host.write_system(self.state.system_data.bytes())?{return Ok(Outcome::Pending)}
+                if let Some((scene, start, end)) = &self.state.read_run {
+                    let Some(index) = host.scene_index(scene)? else {
+                        return Ok(Outcome::Pending);
+                    };
+                    if index >= 0 && *start != 0 {
+                        self.state
+                            .system_data
+                            .mark_read(index as usize, *start, *end)?;
+                    }
+                }
+                if !host.write_system(self.state.system_data.bytes())? {
+                    return Ok(Outcome::Pending);
+                }
                 None
-            },
-            0x1c=>{
-                ensure!(self.state.native_flags.get(&25088).copied().unwrap_or(0)==0&&self.state.native_flags.get(&66510).copied().unwrap_or(0)==0,"Circus checkpoint suppressed native context");
-                let data=program.instruction(next)?;
-                let Arguments::String(continuation)=&data.arguments else{bail!("Circus checkpoint requires following native string metadata")};
-                let Some(shared_resources)=host.capture_checkpoint()?else{return Ok(Outcome::Pending)};
-                // Populate the original live snapshot bytes even while exact
-                // mutation coverage still prevents admitting a writable slot.
-                self.state.native_live.checkpoint(i.next)?;
-                ensure!(shared_resources.len()<=8*1024*1024,"Circus checkpoint resource declaration budget");
-                let mut captured=self.state.clone();captured.checkpoint=None;captured.pc=i.next;
-                let vm_state=serde_json::to_vec(&captured)?;ensure!(vm_state.len()<=8*1024*1024,"Circus checkpoint native declaration budget");
-                self.state.checkpoint=Some(NativeCheckpoint{resume_pc:i.next,continuation:continuation.clone(),vm_state,shared_resources});
-                next=data.next;None
-            },
-            0x1e if a[0]==51&&a[1]==1=>{let unchanged=self.state.protagonist_names[0]=="常坂"&&self.state.protagonist_names[1]=="一登";self.state.native_flags.insert(66516,i32::from(!unchanged));None}, // sub_40A2E0 compares the two original four-byte names, not mail.
-            0x1e if a[0]==19=>{let slot=u16::try_from(self.state.value(99,254)?)?;let Some(readable)=host.save_readable(slot)?else{return Ok(Outcome::Pending)};self.state.assign(9,87,i32::from(!readable))?;None}, // 40A2E0/40C620: exact356324-byte read probe, not save loading.
-            0x1e if a[0]==51=>Some(Event::PlayerInput),
-            0x51=>{self.state.animation_prefix=text.into();None},
-            0x43=>{
-                let offset=match a[0]{0=>{self.state.callbacks.insert(10456,String::new());10584},1=>{self.state.callbacks.insert(10520,String::new());10648},2=>10456,3=>10520,4=>10712,5=>10776,10=>10840,11=>10904,12=>11032,13=>11096,14=>11160,15=>11288,_=>bail!("Circus native callback slot {} needs verified activation/timer policy",a[0])};
-                let(encoded,_,error)=encoding_rs::SHIFT_JIS.encode(text);ensure!(!error&&encoded.len()<64,"Circus native callback label extent");self.state.callbacks.insert(offset,text.into());None
-            },
-            0x1a if a[0]==0=>{self.state.builder=Group::default();self.state.current_button=None;None},
-            0x1a|0x24=>{
-                let slot=if i.opcode==0x1a {match a[0]{1=>Some(9),2=>Some(12),3=>Some(11),6=>Some(10),7=>Some(13),13..=17=>Some(a[0] as u8+4),_=>None}}
-                    else {match a[0]{1..=7=>Some(a[0] as u8-1),13|14=>Some(a[0] as u8+4),15|16=>Some(a[0] as u8-8),254|255=>return self.emit_and_advance(i,host,Event::GroupVisibility(a[0]==254)),_=>None}};
-                if let Some(slot)=slot {self.state.finish_button();let group=std::mem::take(&mut self.state.builder);self.state.groups.insert(slot,group.clone());Some(Event::DefineGroup{slot,group})}
-                else {None} // Explicit native switch default is a no-op (0x42b3b7).
-            },
-            0x20=>{if a[0]==0 {next=skip(program,next,a[1] as u8)?;}None},
-            0x32=>{self.state.builder.behavior_flags.insert(242);None}, // 412BE0 unconditionally sets group member242, regardless of operand.
+            }
+            0x1e if a[0] == 19 => {
+                let slot = u16::try_from(self.state.value(99, 254)?)?;
+                let Some(readable) = host.save_readable(slot)? else {
+                    return Ok(Outcome::Pending);
+                };
+                self.state.assign(9, 87, i32::from(!readable))?;
+                None
+            } // 40A2E0/40C620: exact356324-byte read probe, not save loading.
+            0x1e if a[0] == 51 => Some(Event::PlayerInput),
+            0x51 => {
+                self.state.animation_prefix = text.into();
+                None
+            }
+            0x43 => {
+                let offset = match a[0] {
+                    0 => {
+                        self.state.callbacks.insert(10456, String::new());
+                        10584
+                    }
+                    1 => {
+                        self.state.callbacks.insert(10520, String::new());
+                        10648
+                    }
+                    2 => 10456,
+                    3 => 10520,
+                    4 => 10712,
+                    5 => 10776,
+                    10 => 10840,
+                    11 => 10904,
+                    12 => 11032,
+                    13 => 11096,
+                    14 => 11160,
+                    15 => 11288,
+                    _ => bail!(
+                        "Circus native callback slot {} needs verified activation/timer policy",
+                        a[0]
+                    ),
+                };
+                let (encoded, _, error) = encoding_rs::SHIFT_JIS.encode(text);
+                ensure!(
+                    !error && encoded.len() < 64,
+                    "Circus native callback label extent"
+                );
+                self.state.callbacks.insert(offset, text.into());
+                None
+            }
+            0x1a | 0x24 => {
+                //Nativecase26 finalizes selected records before its inner
+                //positive-selector switch, including the explicit default.
+                if i.opcode==0x1a {self.state.finish_button();}
+                let slot = if i.opcode == 0x1a {
+                    match a[0] {
+                        1 => Some(9),
+                        2 => Some(12),
+                        3 => Some(11),
+                        6 => Some(10),
+                        7 => Some(13),
+                        13..=17 => Some(a[0] as u8 + 4),
+                        _ => None,
+                    }
+                } else {
+                    match a[0] {
+                        1..=7 => Some(a[0] as u8 - 1),
+                        13 | 14 => Some(a[0] as u8 + 4),
+                        15 | 16 => Some(a[0] as u8 - 8),
+                        254 | 255 => {
+                            return self.emit_and_advance(
+                                i,
+                                host,
+                                self.scoped_ui(Event::GroupReverseOrder(a[0] == 254)),
+                            );
+                        }
+                        _ => None,
+                    }
+                };
+                if let Some(slot) = slot {
+                    self.state.finish_button();
+                    let source = std::mem::take(&mut self.state.builder);
+                    let group=source.copy_native_records();
+                    self.state.current_button=None;self.state.builder_offset=[0;2];
+                    self.state.groups.insert(slot, group.clone());
+                    Some(self.scoped_ui(Event::DefineGroup { slot, group }))
+                } else {
+                    None
+                } // Explicit native switch default is a no-op (0x42b3b7).
+            }
+            0x20 => {
+                if a[0] == 0 {
+                    next = skip(program, next, a[1] as u8)?;
+                }
+                None
+            }
+            0x32 => {
+                self.state.builder.behavior_flags.insert(242);
+                None
+            } // 412BE0 unconditionally sets group member242, regardless of operand.
             // Native dispatch calls CRT rand once, writes99/2 and records the
             // first200 results through402320 for original save/replay policy.
             // The shared sequence may be leased to the particle worker.
-            0x25=>{ensure!(a[0]>0,"Circus native random modulo domain");let Some(value)=host.random(a[0] as u16)? else{return Ok(Outcome::Pending)};self.state.assign(99,2,value)?;self.state.native_live.random_result(value);if self.state.random_history.len()<200{self.state.random_history.push(value);}None},
-            0x28=>Some(Event::FallingEffect{kind:a[0] as u8,parameter:a[1] as u8}),
-            0x78=>{if self.state.builder.motion.is_none(){self.state.builder.position=[a[0],a[1]];if a[..2]!=a[2..4]{self.state.builder.motion=Some(GroupMotion{from:[a[0],a[1]],to:[a[2],a[3]],duration_ticks:20});}}None},
-            0x34 if (1..=4).contains(&a[0])=>{self.state.builder.behavior_flags.insert(216+a[0] as u8);if a[0]==4{self.state.builder.behavior_flags.insert(244);}None},
-            0x34 if a[0]==0=>{self.state.current_button.as_mut().context("Circus alpha-hit flag without current button")?.behavior_flags.insert(213);None},
-            0x35=>{self.state.current_button.as_mut().context("Circus button flag without current button")?.behavior_flags.insert(214);None}, // sub_412870: builder[214] = 1.
-            0x3d=>{ensure!((0..=5).contains(&a[0]),"Circus system image slot");let slot=a[0] as u8+37;let name=if text=="-"{self.state.image_names.get(&slot).context("Circus retained image undefined")?.clone()}else{text.into()};let event=Event::LoadImage{slot,name:name.clone()};if !host.emit(&event)?{return Ok(Outcome::Pending);}self.sync_native_event(host,&event)?;self.state.image_names.insert(slot,name);None},
-            0x3c if a[0]==0=>None, // Exact native early-return for slot zero.
-            0x3c=>{ensure!((1..=29).contains(&a[0]),"Circus staged image slot");ensure!(!text.starts_with('*')&&text!="-S","Circus indirect image resource policy");let slot=a[0] as u8;let event=Event::LoadImage{slot,name:text.into()};if !host.emit(&event)?{return Ok(Outcome::Pending);}self.state.image_names.insert(slot,text.into());self.state.pending_images.insert(slot);None},
-            0x49 if text==":r"||text==":n"=>{
-                self.state.callbacks.clear();self.state.native_flags.insert(66512,i32::from(text==":n"));self.state.native_flags.insert(23908,i32::from(text==":n"));None
+            0x25 => {
+                ensure!(a[0] > 0, "Circus native random modulo domain");
+                let value=if self.state.dispatch_a2!=0 {self.state.native_live.take_replay_random()?}else{
+                    let Some(value)=host.random(a[0] as u16)?else{return Ok(Outcome::Pending)};
+                    self.state.native_live.random_result(value);
+                    if self.state.random_history.len()<200{self.state.random_history.push(value);}
+                    value
+                };
+                self.state.assign(99,2,value)?;
+                None
+            }
+            0x28 => {
+                if !matches!(a[0], 7 | 16) && !self.flush_falling_resources(host)? {
+                    return Ok(Outcome::Pending);
+                }
+                if a[0] == 0 {
+                    //425B90(0) detaches only the two resources explicitly held
+                    //by special effects. Ordinary images in26/27 survive.
+                    for (slot, held) in [26,27].into_iter().zip(self.state.native_live.special_effects()) {
+                        if held {
+                            if host.resource(&resource_ops::ResourceRequest::Unload { slot })?.is_none() {
+                                return Ok(Outcome::Pending);
+                            }
+                            self.state.native_live.unload_image(slot)?;
+                            self.state.image_names.remove(&slot);
+                            self.state.resources.clear_pending(slot);
+                        }
+                    }
+                }
+                Some(Event::FallingEffect { kind: a[0], parameter: a[1] })
             },
-            0x49=>{self.state.native_flags.insert(66517,0);ensure!(!text.starts_with(':')&&text!="-S","Circus background display mode");ensure!(host.emit(&Event::ResetScene)?,"Circus scene reset must be synchronous");self.state.builder=Group::default();self.state.current_button=None;self.state.callbacks.clear();self.state.menu_wait=false;self.state.transition_wait=None;self.state.transition_poll_at=None;self.state.wait_animations=false;self.state.assign(99,246,0)?;for slot in self.state.pending_images.iter().copied().collect::<Vec<_>>() {let event=Event::DisplayImage{slot};ensure!(host.emit(&event)?,"Circus publication must be synchronous");self.sync_native_event(host,&event)?;}self.state.pending_images.clear();None},
-            0x4c|0x4d=>{self.state.pending_audio.retain(|(channel,_,_)|*channel!=8);self.state.pending_audio.push((8,text.into(),true));None},
-            // Exact entries of native DC4PH jump table 0x431b10 targeting
-            // common continuation 0x430d4a. Not an unknown-opcode fallback.
-            0x01|0x02|0x08|0x0d|0x0e|0x12|0x14|0x19|0x1f|0x23|0x27|
-            0x29..=0x31|0x3a|0x3b|0x42|0x48|0x4b|0x53|0x57|0x5d|
-            0x60|0x62|0x66|0x69|0x6c|0x6e|0x8a|0x91|0x92|0x93|0x97|
-            0x98|0xa3|0xa6=>None,
-            0x54=>{next=program.instructions.iter().find(|candidate|candidate.opcode==0x4b&&matches!(&candidate.arguments,Arguments::String(label) if label==text)).context("Circus named jump label missing")?.offset;None},
-            0x46=>{
-                self.state.native_live.voice_timing(a[0],text)?;
-                self.state.voice_timing_from_sprite=false;
-                if a[0]==255 {self.state.voice_timing.clear();self.state.voice_timing_from_sprite=true;}
-                else if text.starts_with('-'){self.state.voice_timing.clear();}
-                else {ensure!(text.is_ascii()&&text.len()<32,"Circus voice timing prefix extent/encoding");let key=text.to_ascii_uppercase();if !self.state.voice_timing.iter().any(|row|row.0.starts_with(&key)){ensure!(self.state.voice_timing.len()<50,"Circus voice timing table capacity");self.state.voice_timing.push((key,100*if a[0]>100{i32::from(a[0])-256}else{i32::from(a[0])}));}}None
-            },
-            0xaf=>{ensure!(a[..3]==[0,0,0]&&(0..3).contains(&a[3]),"Circus nonzero/native stepped DirectSound pan needs a db100 pan track");Some(Event::CenterAudioPan{kind:a[3] as u8})},
-            0xb3 if a[0]==0=>{self.state.sprite_shader=0;None}, // embedded Tech pass p0: SRCALPHA / INVSRCALPHA, ordinary shared normal layers.
-            0xb4=>{self.state.native_flags.insert(66517,1);Some(Event::FitBackground)},
-            0x9d if a[..4]==[0,100,0,0]&&self.state.native_flags.get(&66513).copied().unwrap_or(0)==0=>None, // original early-return identity when no queued stage effect.
-            0xae if a[3]==255=>{
-                ensure!((0..20).contains(&a[0]),"Circus placement table index");
-                self.state.placement_declaration=Some((a[0],[a[1],a[2]]));None
-            },
-            0x47 if self.state.placement_declaration.is_none()=>None, // native uninitialized local declaration is ignored.
-            0x47=>{
-                let (kind,position)=self.state.placement_declaration.unwrap();
-                ensure!(text.is_ascii()&&text.len()<32&&!text.contains('\0'),"Circus placement prefix extent/encoding");
-                self.state.native_live.placement(kind,text,position)?;let key=text.to_ascii_uppercase();let table=self.state.placement_tables.entry(kind).or_default();
-                if let Some(row)=table.iter_mut().find(|row|row.0==key){row.1=position;}
-                else {ensure!(table.len()<100,"Circus placement table capacity");table.push((key,position));}None
-            },
-            0x4f|0x50=>{
-                let target=host.scene(text)?;let Some(target)=target else{return Ok(Outcome::Pending);};
-                let Some(previous_index)=host.scene_index(&self.state.scene)? else{return Ok(Outcome::Pending)};
+            0x78 => {
+                if self.state.builder.motion.is_none() {
+                    self.state.builder.position = [a[0], a[1]];
+                    if a[..2] != a[2..4] {
+                        self.state.builder.motion = Some(GroupMotion {
+                            from: [a[0], a[1]],
+                            to: [a[2], a[3]],
+                            duration_ticks: 20,
+                        });
+                    }
+                }
+                None
+            }
+            0x34 if (1..=4).contains(&a[0]) => {
+                //412880..4128B0 address the current672-byte button record,
+                //not the group's unrelated217..220 members.
+                self.state.current_button.as_mut().context("Circus native control flag without button")?.behavior_flags.insert(216 + a[0] as u8);
+                if a[0] == 4 {
+                    self.state.builder.behavior_flags.insert(244);
+                }
+                None
+            }
+            0x34 if a[0]==99 => {
+                self.state.select_builder(match a[1]{1=>1,2=>2,_=>0});
+                None
+            }
+            0x34 if a[0]==8 => {
+                let flags=&mut self.state.current_button.as_mut().context("Circus native anchor flag without button")?.behavior_flags;
+                if a[1]!=0 {flags.insert(221);}else{flags.remove(&221);}
+                None
+            }
+            0x34 if matches!(a[0],5..=7)=> {
+                let attribute=match a[0]{5=>UiRecordAttribute::Rotate,6=>UiRecordAttribute::AlphaPulse,_=>UiRecordAttribute::ScalePulse};
+                if !self.set_control_attribute(host,a[1]!=0,attribute)? {return Ok(Outcome::Pending)}
+                None
+            }
+            0x34 if a[0] == 0 => {
+                self.state
+                    .current_button
+                    .as_mut()
+                    .context("Circus alpha-hit flag without current button")?
+                    .behavior_flags
+                    .insert(213);
+                None
+            }
+            0x35 => {
+                self.state
+                    .current_button
+                    .as_mut()
+                    .context("Circus button flag without current button")?
+                    .behavior_flags
+                    .insert(214);
+                None
+            } // sub_412870: builder[214] = 1.
+            0x3d => {
+                ensure!((0..=5).contains(&a[0]), "Circus system image slot");
+                let slot = a[0] as u8 + 37;
+                let name = if text == "-" {
+                    self.state
+                        .image_names
+                        .get(&slot)
+                        .context("Circus retained image undefined")?
+                        .clone()
+                } else {
+                    text.into()
+                };
+                let event = Event::LoadImage {
+                    slot,
+                    name: name.clone(),
+                };
+                if !host.emit(&event)? {
+                    return Ok(Outcome::Pending);
+                }
+                self.sync_native_event(host, &event)?;
+                self.state.image_names.insert(slot, name);
+                None
+            }
+            0x3c if a[0] == 0 => None, // Exact native early-return for slot zero.
+            0x3c => {
+                ensure!((1..=29).contains(&a[0]), "Circus staged image slot");
+                ensure!(
+                    !text.starts_with('*') && text != "-S",
+                    "Circus indirect image resource policy"
+                );
+                let slot = a[0] as u8;
+                let event = Event::LoadImage {
+                    slot,
+                    name: text.into(),
+                };
+                if !host.emit(&event)? {
+                    return Ok(Outcome::Pending);
+                }
+                self.state.image_names.insert(slot, text.into());
+                self.state.pending_images.insert(slot);
+                self.state.native_live.stage_image(slot, text)?;
+                None
+            }
+            0x49 if text == ":r" || text == ":n" => {
+                self.state.native_live.background_protection(text == ":n");
+                self.state.callbacks.clear();
+                self.state
+                    .native_flags
+                    .insert(66512, i32::from(text == ":n"));
+                self.state
+                    .native_flags
+                    .insert(23908, i32::from(text == ":n"));
+                None
+            }
+            0x49 => {
+                self.state.native_flags.insert(66517, 0);
+                ensure!(
+                    !text.starts_with(':') && text != "-S",
+                    "Circus background display mode"
+                );
+                ensure!(
+                    host.emit(&Event::ResetScene)?,
+                    "Circus scene reset must be synchronous"
+                );
+                self.state.builder = Group::default();
+                self.state.current_button = None;
+                self.state.native_live.reset_stage(false)?;
+                self.state.callbacks.clear();
+                self.state.menu_wait = false;
+                self.state.transition_wait = None;
+                self.state.transition_poll_at = None;
+                self.state.wait_animations = false;
+                self.state.assign(99, 246, 0)?;
+                for slot in self
+                    .state
+                    .pending_images
+                    .iter()
+                    .copied()
+                    .collect::<Vec<_>>()
+                {
+                    let event = Event::DisplayImage { slot };
+                    ensure!(host.emit(&event)?, "Circus publication must be synchronous");
+                    self.sync_native_event(host, &event)?;
+                }
+                self.state.pending_images.clear();
+                None
+            }
+            // Original empty jump-table entries retain distinct bytecode IDs.
+            opcode if crate::opcodes::native_opcode_kind(opcode)==Some(crate::opcodes::NativeOpcodeKind::NoOp)=>None,
+            0x54 => {
+                next=program.instructions.iter().find(|candidate|candidate.opcode==0x4b&&matches!(&candidate.arguments,Arguments::String(label) if label==text)).context("Circus named jump label missing")?.offset;
+                None
+            }
+            0x46 => {
+                self.state.native_live.voice_timing(a[0], text)?;
+                self.state.voice_timing_from_sprite = false;
+                if a[0] == 255 {
+                    self.state.voice_timing.clear();
+                    self.state.voice_timing_from_sprite = true;
+                } else if text.starts_with('-') {
+                    self.state.voice_timing.clear();
+                } else {
+                    ensure!(
+                        text.is_ascii() && text.len() < 32,
+                        "Circus voice timing prefix extent/encoding"
+                    );
+                    let key = text.to_ascii_uppercase();
+                    if !self
+                        .state
+                        .voice_timing
+                        .iter()
+                        .any(|row| row.0.starts_with(&key))
+                    {
+                        ensure!(
+                            self.state.voice_timing.len() < 50,
+                            "Circus voice timing table capacity"
+                        );
+                        self.state.voice_timing.push((
+                            key,
+                            100 * if a[0] > 100 {
+                                i32::from(a[0]) - 256
+                            } else {
+                                i32::from(a[0])
+                            },
+                        ));
+                    }
+                }
+                None
+            }
+            0xaf => {
+                ensure!(
+                    a[..3] == [0, 0, 0] && (0..3).contains(&a[3]),
+                    "Circus nonzero/native stepped DirectSound pan needs a db100 pan track"
+                );
+                Some(Event::CenterAudioPan { kind: a[3] as u8 })
+            }
+            0xb3 if a[0] == 0 => {
+                self.state.sprite_shader = 0;
+                None
+            } // embedded Tech pass p0: SRCALPHA / INVSRCALPHA, ordinary shared normal layers.
+            0xb4 => {
+                self.state.native_live.background_fit();
+                self.state.native_flags.insert(66517, 1);
+                Some(Event::FitBackground)
+            }
+            0x9d if a[..4] == [0, 100, 0, 0]
+                && self.state.native_flags.get(&66513).copied().unwrap_or(0) == 0 =>
+            {
+                None
+            } // original early-return identity when no queued stage effect.
+            0xae if a[3] == 255 => {
+                ensure!((0..20).contains(&a[0]), "Circus placement table index");
+                self.state.placement_declaration = Some((a[0], [a[1], a[2]]));
+                None
+            }
+            0x47 if self.state.placement_declaration.is_none() => None, // native uninitialized local declaration is ignored.
+            0x47 => {
+                let (kind, position) = self.state.placement_declaration.unwrap();
+                ensure!(
+                    text.is_ascii() && text.len() < 32 && !text.contains('\0'),
+                    "Circus placement prefix extent/encoding"
+                );
+                self.state.native_live.placement(kind, text, position)?;
+                let key = text.to_ascii_uppercase();
+                let table = self.state.placement_tables.entry(kind).or_default();
+                if let Some(row) = table.iter_mut().find(|row| row.0 == key) {
+                    row.1 = position;
+                } else {
+                    ensure!(table.len() < 100, "Circus placement table capacity");
+                    table.push((key, position));
+                }
+                None
+            }
+            0x4f | 0x50 => {
+                let target = host.scene(text)?;
+                let Some(target) = target else {
+                    return Ok(Outcome::Pending);
+                };
+                let Some(previous_index) = host.scene_index(&self.state.scene)? else {
+                    return Ok(Outcome::Pending);
+                };
+                if i.opcode==0x4f {
+                    //425DC0(0) calls44A4C0 before unpausing each renderer.
+                    //44A4C0 is an original no-op while raw908 is set. The
+                    //shared actor must acknowledge real finalization before
+                    //the native save body can record this scene transition.
+                    let mut commands=Vec::new();
+                    for object in 0..150 {
+                        let record=self.state.native_live.object_record(object)?;
+                        if u32::from_le_bytes(record[900..904].try_into()?)==0 {
+                            commands.push(sprite_ops::SpriteCommand{seed:self.state.native_live.sprite_seed(object)?,operations:vec![crysirror_scene::layer::queued::SequenceOperation::Finish{cancel:false,lanes:None}]});
+                        }
+                    }
+                    if !host.sprite(&sprite_ops::SpriteRequest{commands})? {return Ok(Outcome::Pending)}
+                    self.sync_sprite_states(host)?;
+                }
                 // Opcode4f records bank differences only for an indexed old
                 // scene;50 does so unconditionally. Other native scene-reset
                 // fields remain explicit save-projection gaps.
-                if i.opcode==0x50||previous_index>=0 {self.state.native_live.record_scene_bank_changes()?;}
-                self.state.scene=text.into();self.program=Some(target);next=3;None
-            },
-            0x63=>{if self.state.native_live.append_version(text)?{self.state.version.push_str(text);}None},
-            0x65=>{if text.is_empty(){self.state.voice_prefixes.clear();}else if !self.state.voice_prefixes.iter().any(|s|s.eq_ignore_ascii_case(text)){ensure!(self.state.voice_prefixes.len()<50,"Circus voice prefix count");self.state.voice_prefixes.push(text.into());}None},
-            0x68=>Some(Event::Cursor(text.into())),
-            0x70 if a[0]==255=>{if !host.emit(&Event::ReleaseMusic{forced:true,steps:30})?{return Ok(Outcome::Pending)}self.state.pending_music=None;self.state.last_music=None;self.state.current_music=0;self.state.native_live.music(255,"")?;None},
-            0x70=>{ensure!((0..400).contains(&a[0]),"Circus music index");let looping=a[1]<2;let Some(asset)=host.music(a[0] as u16,looping)?else{return Ok(Outcome::Pending)};self.state.assign(96,a[0],1)?;self.state.last_music=Some(asset.clone());if !(a[1]==1&&self.state.current_music==a[0]){self.state.pending_music=Some((asset,looping));}self.state.current_music=a[0];self.state.native_live.music(a[0],&self.state.last_music.as_ref().unwrap().name)?;None},
-            0x71 if a[0]>=0=>{ensure!(a[1]==0,"Circus extended SE playback mode");let Some(name)=host.sound_name(a[0] as u16)?else{return Ok(Outcome::Pending);};let count=self.state.pending_audio.iter().filter(|(ch,_,_)|(2..=5).contains(ch)).count();if count<4{self.state.pending_audio.push((2+count as u32,name,false));}None},
-            0x71 if a[0]==-2=>{self.state.pending_audio.retain(|(ch,_,_)|*ch<8);Some(Event::StopAudio{channel:8})},
-            0x72=>{
-                let data=program.instruction(next)?;let Arguments::String(action)=&data.arguments else{bail!("Circus button action must follow bounds as a string operand");};
-                self.state.finish_button();self.state.current_button=Some(Button{bounds:a[..4].try_into()?,action:action.clone(),sounds:[0;2],behavior_flags:BTreeSet::new(),images:Vec::new(),texts:Vec::new()});next=data.next;None
-            },
-            0x73=>{
-                ensure!(matches!(a[7],0|1|2|3|99),"Circus button image mode {}",a[7]);
-                let b=self.state.current_button.as_mut().context("Circus state image without button")?;
-                ensure!(b.images.len()<128,"Circus per-button image limit");b.images.push(image_part(a)?);None
-            },
-            0x7a=>{ensure!(self.state.builder.images.len()<4096,"Circus group image limit");let mut part=image_part(a)?;part.position[0]+=i32::from(self.state.builder_offset[0]);part.position[1]+=i32::from(self.state.builder_offset[1]);self.state.builder.images.push(part);None},
-            0x7b=>{ensure!(a[1]<=256,"Circus extended UI animation command");self.state.builder.image_animations.push(a[..4].try_into()?);None},
-            0x76=>{let data=program.instruction(next)?;let Arguments::String(text)=&data.arguments else{bail!("Circus button text operand");};let b=self.state.current_button.as_mut().context("Circus text without button")?;b.texts.push(TextPart{position:[a[0],a[1]],text:text.clone(),color:a[2],size:24,state:a[3]});next=data.next;None},
-            0x82=>{let old=if a[3]==0{0}else{self.state.value(a[0],a[1])?};let value=match a[3]{0=>i32::from(a[2]),1=>old.wrapping_add(a[2].into()),2=>old.wrapping_sub(a[2].into()),_=>bail!("Circus arithmetic assignment mode {}",a[3])};self.state.assign(a[0],a[1],value)?;None},
-            0x83=>{let value=self.value(host,a[2],a[3])?;self.state.assign(a[0],a[1],value)?;None},
-            0x85=>{let value=self.state.value(a[0],a[1])?.wrapping_add(self.value(host,a[2],a[3])?);self.state.assign(a[0],a[1],value)?;None},
-            0x86=>{
-                let lhs=self.value(host,a[0],a[1])?;
-                let mut comparison=a[3] as u8;let rhs=if comparison&0x80!=0 {comparison&=0x7f;self.value(host,(a[2] as u16>>8) as i16,(a[2] as u16&255) as i16)?}else{a[2].into()};
-                let result=match comparison{0=>lhs==rhs,1=>lhs!=rhs,2=>lhs>rhs,3=>lhs<rhs,4=>lhs>=rhs,5=>lhs<=rhs,_=>bail!("Circus comparison {}",comparison)};
-                let marker=program.instruction(next)?;ensure!(marker.opcode==2,"Circus conditional marker opcode");let Arguments::Bytes([id,_])=marker.arguments else{bail!("Circus conditional marker operands");};next=if result{marker.next}else{skip(program,marker.next,id)?};None
-            },
-            0x87 if a[2]==0=>None, // Original dispatch only enters its body for args[2] != 0.
-            0x87=>{let data=program.instruction(next)?;let Arguments::String(text)=&data.arguments else{bail!("Circus group text operand");};self.state.builder.texts.push(TextPart{position:[a[0],a[1]],text:text.clone(),color:a[3],size:a[2],state:99});next=data.next;None},
-            0x88=>{self.state.builder_offset=[a[0],a[1]];None}, // sub_412910
+                let ui_exists = [
+                    self.state.groups.contains_key(&0),
+                    self.state.groups.contains_key(&1),
+                ];
+                let protected = self.state.native_flags.get(&25088).copied().unwrap_or(0) != 0;
+                self.state.native_live.transfer_scene(
+                    i.opcode,
+                    text,
+                    previous_index,
+                    ui_exists,
+                    protected,
+                    i.opcode==0x4f,
+                )?;
+                self.state.dialogue.voice_name.clear();
+                if i.opcode==0x4f {self.state.dialogue.voice_source.clear();}
+                self.state.scene = text.into();
+                self.program = Some(target);
+                next = 3;
+                None
+            }
+            0x63 => {
+                if self.state.native_live.append_version(text)? {
+                    self.state.version.push_str(text);
+                }
+                None
+            }
+            0x65 => {
+                let (encoded,_,error)=encoding_rs::SHIFT_JIS.encode(text);
+                ensure!(!error&&encoded.len()<32,"Circus voice source prefix extent");
+                if text.is_empty() {
+                    self.state.voice_prefixes.clear();
+                    let mut bytes=self.state.system_data.bytes().to_vec();
+                    bytes[crate::settings::SETTINGS_BYTES..].fill(0);
+                    let at=crate::settings::SETTINGS_BYTES+50*40;
+                    bytes[at..at+4].copy_from_slice(&1i32.to_le_bytes());
+                    bytes[at+4..at+8].copy_from_slice(&100i32.to_le_bytes());
+                    self.state.system_data=crate::settings::SystemData::try_from(bytes)?;
+                } else if !self.state.voice_prefixes.iter().any(|prefix|prefix.get(..text.len()).is_some_and(|prefix|prefix.eq_ignore_ascii_case(text))) {
+                    let index=self.state.voice_prefixes.len();
+                    ensure!(index<50,"Circus voice prefix count");
+                    let mut bytes=self.state.system_data.bytes().to_vec();
+                    let at=crate::settings::SETTINGS_BYTES+index*40;
+                    bytes[at..at+4].copy_from_slice(&1i32.to_le_bytes());
+                    bytes[at+4..at+8].copy_from_slice(&100i32.to_le_bytes());
+                    bytes[at+8..at+8+encoded.len()].copy_from_slice(&encoded);
+                    bytes[at+8+encoded.len()]=0;
+                    self.state.system_data=crate::settings::SystemData::try_from(bytes)?;
+                    self.state.voice_prefixes.push(text.to_owned());
+                }
+                self.state.native_values.set_source_count(self.state.voice_prefixes.len())?;
+                None
+            }
+            0x68 => Some(Event::Cursor(text.into())),
+            0x72 => {
+                self.state.visual.frame_toggle=false;
+                let data = program.instruction(next)?;
+                let Arguments::String(action) = &data.arguments else {
+                    bail!("Circus button action must follow bounds as a string operand");
+                };
+                self.state.finish_button();
+                self.state.current_button = Some(Button {
+                    bounds: a[..4].try_into()?,
+                    action: action.clone(),
+                    alternate_actions: Default::default(),
+                    sounds: [0; 2],
+                    behavior_flags: BTreeSet::new(),
+                    images: Vec::new(),
+                    texts: Vec::new(),
+                    slider:None,
+                    image_pivots:BTreeMap::new(),
+                    text_pivots:BTreeMap::new(),
+                    check_index:0,
+                    check_value:0,
+                });
+                next = data.next;
+                None
+            }
+            0x73 => {
+                if !self.declare_button_image(a,host)? {return Ok(Outcome::Pending)}
+                None
+            }
+            0x7a => {
+                ensure!(
+                    self.state.builder.images.len() < 4096,
+                    "Circus group image limit"
+                );
+                //417B90 alone encodes its resource index in the low six
+                //bits and window-alpha policy in the signed low byte.
+                let mut image_args=a;image_args[6]&=0x3f;
+                let mut part = image_part(image_args)?;
+                part.auxiliary_flag=(a[6] as i8)<0;
+                part.bind_resource(host)?;
+                if host.image_dimensions(part.slot)?.is_some(){
+                part.position[0] += i32::from(self.state.builder_offset[0]);
+                part.position[1] += i32::from(self.state.builder_offset[1]);
+                self.state.builder.images.push(part);
+                self.state.builder.pushed_image(UiRecordTarget::Image{button:None,index:self.state.builder.images.len()-1});
+                }
+                None
+            }
+            0x7b => {
+                if a[1]<=256||a[1]==768 {
+                    if let Some(index)=self.state.builder.images.len().checked_sub(1) {
+                        let target=UiRecordTarget::Image{button:None,index};
+                        //4194B0/4191D0 replace the last standalone image with
+                        //412930's fresh renderer; old queues and pivots vanish.
+                        self.state.builder.control_operations.retain(|operation|operation.target!=target);
+                        self.state.builder.control_operations.push(UiRecordOperation{target,attribute:UiRecordAttribute::Pivot([0,0])});
+                        let mut animations=Vec::new();let mut owners=Vec::new();
+                        for (n,animation) in self.state.builder.image_animations.iter().copied().enumerate(){
+                            let owner=self.state.builder.image_animation_owners.get(n).copied().or_else(||self.state.builder.image_animation_targets.get(n).copied().map(|index|UiRecordTarget::Image{button:None,index}));
+                            if let Some(owner)=owner.filter(|owner|*owner!=target){animations.push(animation);owners.push(owner);}
+                        }
+                        animations.push(a[..4].try_into()?);owners.push(target);
+                        self.state.builder.image_animations=animations;
+                        self.state.builder.image_animation_targets=owners.iter().map(|target|match target{UiRecordTarget::Image{button:None,index}=>*index,_=>0}).collect();
+                        self.state.builder.image_animation_owners=owners;
+                    }
+                }
+                None
+            }
+            0x76 => {
+                let data = program.instruction(next)?;
+                let Arguments::String(text) = &data.arguments else {
+                    bail!("Circus button text operand");
+                };
+                let b = self
+                    .state
+                    .current_button
+                    .as_mut()
+                    .context("Circus text without button")?;
+                b.texts.push(TextPart {
+                    position: [a[0], a[1]],
+                    text: text.clone(),
+                    color: a[2],
+                    size: 22,
+                    line_pitch: None,
+                    state: a[3],
+                });
+                self.state.builder.pushed_text(UiRecordTarget::Text{button:Some(self.state.builder.buttons.len()),index:b.texts.len()-1});
+                next = data.next;
+                None
+            }
+            //4284B0 case130 has no default assignment or getter side effect.
+            0x82 if !matches!(a[3],0..=2)=>None,
+            0x82 => {
+                let old = if a[3] == 0 {
+                    0
+                } else {
+                    self.value(host,a[0],a[1])?
+                };
+                let value = match a[3] {
+                    0 => i32::from(a[2]),
+                    1 => old.wrapping_add(a[2].into()),
+                    2 => old.wrapping_sub(a[2].into()),
+                    _ => bail!("Circus arithmetic assignment mode {}", a[3]),
+                };
+                self.state.assign(a[0], a[1], value)?;
+                None
+            }
+            0x83 => {
+                let value = self.value(host, a[2], a[3])?;
+                self.state.assign(a[0], a[1], value)?;
+                None
+            }
+            0x85 => {
+                let value = self
+                    .value(host,a[0],a[1])?
+                    .wrapping_add(self.value(host, a[2], a[3])?);
+                self.state.assign(a[0], a[1], value)?;
+                None
+            }
+            0x86 => {
+                let lhs = self.value(host, a[0], a[1])?;
+                let mut comparison = a[3];
+                let rhs = if (comparison as i8)<0 {
+                    comparison &= 0x7f;
+                    self.value(host, a[2] >> 8, (a[2] as u16 & 255) as i16)?
+                } else {
+                    a[2].into()
+                };
+                let result = match comparison {
+                    0 => lhs == rhs,
+                    1 => lhs != rhs,
+                    2 => lhs > rhs,
+                    3 => lhs < rhs,
+                    4 => lhs >= rhs,
+                    5 => lhs <= rhs,
+                    //An unmatched original switch retains the numeric LHS;
+                    //its final conditional tests that retained value for zero.
+                    _ => lhs!=0,
+                };
+                let marker = program.instruction(next)?;
+                ensure!(marker.opcode == 2, "Circus conditional marker opcode");
+                let Arguments::Bytes([id, _]) = marker.arguments else {
+                    bail!("Circus conditional marker operands");
+                };
+                next = if result {
+                    marker.next
+                } else {
+                    skip(program, marker.next, id)?
+                };
+                None
+            }
+            0x87 if a[2] == 0 => None, // Original dispatch only enters its body for args[2] != 0.
+            0x87 => {
+                let data = program.instruction(next)?;
+                let Arguments::String(text) = &data.arguments else {
+                    bail!("Circus group text operand");
+                };
+                self.state.builder.texts.push(TextPart {
+                    position: [a[0], a[1]],
+                    text: text.clone(),
+                    color: a[3],
+                    size: 22,
+                    line_pitch: Some(a[2]),
+                    state: 99,
+                });
+                self.state.builder.pushed_text(UiRecordTarget::Text{button:None,index:self.state.builder.texts.len()-1});
+                next = data.next;
+                None
+            }
+            0x88 => {
+                self.state.builder_offset = [a[0], a[1]];
+                self.state.native_live.stage_opcode_completed(0x88, true)?;
+                None
+            } // sub_412910
             // Native object 10/20 maps to resource 4/5 (sub_41E6A0).
-            0x8b if (16..=20).contains(&a[3])=>{
-                ensure!(self.state.native_flags.get(&66513).copied().unwrap_or(0)==0,"Circus native protected sprite transform");
-                Some(Event::SpriteScale{slot:(a[3] as u8&15)+4,percent:a[0],pivot:[a[1],a[2]]})
-            },
-            0x8b if a[3]==0 && (0..=4).contains(&a[2])=>Some(Event::SpritePosition{slot:a[2] as u8+4,position:[a[0],a[1]]}),
+            0x8b if (16..=20).contains(&a[3]) => {
+                ensure!(
+                    self.state.native_flags.get(&66513).copied().unwrap_or(0) == 0,
+                    "Circus native protected sprite transform"
+                );
+                Some(Event::SpriteScale {
+                    slot: (a[3] as u8 & 15) + 4,
+                    percent: a[0],
+                    pivot: [a[1], a[2]],
+                })
+            }
+            0x8b if a[3] == 0 && (0..=4).contains(&a[2]) => Some(Event::SpritePosition {
+                slot: a[2] as u8 + 4,
+                position: [a[0], a[1]],
+            }),
             // 0x42d071 explicitly selects [this+0x60cc] => native object75,
             // which sub_41E6A0 maps from resource31 (message-window object).
-            0x8c if a[3]==0=>Some(Event::SpritePosition{slot:25,position:[a[0],a[1]]}),
-            0x8d=>Some(Event::SpritePosition{slot:31,position:[a[0],a[1]]}),
-            0x90=>{ensure!((0..64).contains(&a[0]),"Circus palette index");Some(Event::Palette{index:a[0] as u8,rgb:[a[1] as u8,a[2] as u8,a[3] as u8]})},
-            0xab if a[0]==-1=>None, // original early return with both player objects unopened; accepted profile has no Movie-open operation.
-            0xab if a[0]==99=>{ensure!(matches!(a[1],1|2),"Circus video backend ABI");self.state.video_backend=Some(a[1]);None}, // sub_457D90 selects a player; does not open/play media.
-            _=>bail!("unsupported native Circus instruction {:#04x}; execution stopped without advancing",i.opcode),
+            0x8c if a[3] == 0 => Some(Event::SpritePosition {
+                slot: 25,
+                position: [a[0], a[1]],
+            }),
+            0x8d => Some(Event::SpritePosition {
+                slot: 31,
+                position: [a[0], a[1]],
+            }),
+            0x90 => {
+                ensure!((0..64).contains(&a[0]), "Circus palette index");
+                Some(Event::Palette {
+                    index: a[0] as u8,
+                    rgb: [a[1] as u8, a[2] as u8, a[3] as u8],
+                })
+            }
+            0xab if a[0] == -1 => None, // original early return with both player objects unopened; accepted profile has no Movie-open operation.
+            0xab if a[0] == 99 => {
+                ensure!(matches!(a[1], 1 | 2), "Circus video backend ABI");
+                self.state.video_backend = Some(a[1]);
+                None
+            } // sub_457D90 selects a player; does not open/play media.
+            _ => bail!(
+                "unsupported native Circus instruction {:#04x}; execution stopped without advancing",
+                i.opcode
+            ),
         };
         if let Some(event) = event {
             if !host.emit(&event)? {
                 return Ok(Outcome::Pending);
             }
-            self.sync_native_event(host,&event)?;
+            self.sync_native_event(host, &event)?;
         }
-        self.state.native_live.audit_completed(i.opcode,&self.state.scene,next)?;
+        if !self.state.macros.suppresses_last_opcode_update() {self.state.native_last_opcode=Some(i.opcode);}
+        if i.opcode==0x18 {self.state.native_live.syscall_completed(a[0]);}
+        if i.opcode==0x1e {self.state.native_live.system_function_completed(a[0],a[1]);}
+        self.state
+            .native_live
+            .audit_completed(i.opcode, &self.state.scene, next)?;
         self.state.pc = next;
         self.state.instructions += 1;
         Ok(outcome)
     }
     fn value(&self, host: &mut dyn NativeHost, bank: i16, index: i16) -> Result<i32> {
+        if bank==99&&index==3 {
+            return match host.system(system_ops::SystemRequest::WindowTransitionFlag(None))? {
+                Some(system_ops::SystemReply::WindowTransitionFlag(value))=>Ok(value),
+                _=>bail!("Circus window transition state has no completed host receipt"),
+            }
+        }
+        if bank == 99 && index == 4 {
+            return match host.system(system_ops::SystemRequest::NativeWindowMode)? {
+                Some(system_ops::SystemReply::NativeWindowMode(mode)) => Ok(i32::from(mode)),
+                _ => bail!("Circus native fullscreen state has no completed host receipt"),
+            };
+        }
         if bank == 99 && index == 21 {
             return Ok(host.save_exists(2)? as i32);
         }
         self.state.value(bank, index)
     }
-    fn sync_native_event(&mut self,host:&mut dyn NativeHost,event:&Event)->Result<()> {
+    fn sync_native_event(&mut self, host: &mut dyn NativeHost, event: &Event) -> Result<()> {
         match event {
-            Event::LoadImage{slot,name}=>self.state.native_live.image_name(*slot,name)?,
-            Event::DisplayImage{slot}=>{
-                let name=self.state.image_names.get(slot).context("Circus completed image native name missing")?;
-                self.state.native_live.image_name(*slot,name)?;
-                if let Some((allocation,logical))=host.image_dimensions(*slot)?{self.state.native_live.attach_image(*slot,allocation,logical)?;}
-                else{self.state.native_live.gap(format!("slot{slot} completed image dimensions unavailable"));}
+            Event::LoadImage { slot, name } => self.state.native_live.load_image(*slot, name)?,
+            Event::DisplayImage { slot } => {
+                let name = self
+                    .state
+                    .image_names
+                    .get(slot)
+                    .context("Circus completed image native name missing")?;
+                self.state.native_live.image_name(*slot, name)?;
+                if let Some((allocation, logical)) = host.image_dimensions(*slot)? {
+                    self.state
+                        .native_live
+                        .attach_image(*slot, allocation, logical)?;
+                } else {
+                    self.state
+                        .native_live
+                        .gap(format!("slot{slot} completed image dimensions unavailable"));
+                }
             }
-            Event::SpritePosition{slot,position}=>self.state.native_live.position(*slot,*position),
-            Event::SpriteScale{slot,percent,pivot}=>self.state.native_live.scale(*slot,*percent,*pivot),
-            Event::FallingEffect{kind,parameter}=>self.state.native_live.falling_effect(*kind,*parameter)?,
-            _=>{}
-        } Ok(())
+            Event::SpritePosition { slot, position } => {
+                self.state.native_live.position(*slot, *position)
+            }
+            Event::SpriteScale {
+                slot,
+                percent,
+                pivot,
+            } => self.state.native_live.scale(*slot, *percent, *pivot),
+            Event::FallingEffect { kind, parameter } => {
+                if *kind==0 {self.clear_effect_pools();}
+                if matches!(*kind,7|16) && *parameter==0 {
+                    let slot=if *kind==7 {26} else {27};
+                    self.state.native_live.unload_image(slot)?;
+                    self.state.image_names.remove(&slot);
+                    self.state.resources.clear_pending(slot);
+                }
+                if *kind==15 {
+                    self.state.image_names.insert(30,"system\\efflens".to_owned());
+                    self.state.native_live.load_image(30,"system\\efflens")?;
+                }
+                if matches!(*kind,13|17) {
+                    let name=if *kind==13 {"system\\effyousei"} else {"system\\effhotaru"};
+                    self.state.image_names.insert(28,name.to_owned());
+                    self.state.native_live.load_image(28,name)?;
+                }
+                if matches!(*kind,13|15|17) {
+                    let slot=if *kind==15 {30} else {28};
+                    if let Some((allocation,logical))=host.image_dimensions(slot)? {
+                        self.state.native_live.attach_image(slot,allocation,logical)?;
+                    } else {
+                        self.state.native_live.gap(format!("slot{slot} falling texture dimensions unavailable"));
+                    }
+                }
+                if *kind==16 && *parameter!=0 {
+                    let dimensions=host.image_dimensions(27)?;
+                    for (object,crop) in [(64,[0,0,3072,576]),(65,[0,600,3072,1176])] {
+                        self.state.native_live.reset_object(object)?;
+                        self.state.native_live.bind_resource(27,object,Some(crop),dimensions)?;
+                    }
+                    self.sync_sprite_states(host)?;
+                    self.sync_effect_frame(&host.effect_states()?)?;
+                }
+                self.state.native_live.falling_effect(*kind, *parameter)?;
+                self.state.native_live.stage_opcode_completed(0x28, false)?;
+            }
+            _ => {}
+        }
+        Ok(())
     }
     fn emit_and_advance(
         &mut self,
@@ -912,22 +2263,26 @@ impl Machine {
         if !host.emit(&event)? {
             return Ok(Outcome::Pending);
         }
-        self.sync_native_event(host,&event)?;
-        self.state.native_live.audit_completed(i.opcode,&self.state.scene,i.next)?;
+        self.sync_native_event(host, &event)?;
+        if !self.state.macros.suppresses_last_opcode_update() {self.state.native_last_opcode=Some(i.opcode);}
+        self.state
+            .native_live
+            .audit_completed(i.opcode, &self.state.scene, i.next)?;
         self.state.pc = i.next;
         self.state.instructions += 1;
         Ok(Outcome::Advanced)
     }
 }
 fn image_part(a: [i16; 8]) -> Result<ImagePart> {
-    ensure!(a[4] >= 0 && a[5] >= 0, "Circus image extent");
-    ensure!((0..64).contains(&(a[6] & 0x3f)), "Circus bitmap slot");
+    ensure!((0..64).contains(&a[6]), "Circus bitmap slot");
     Ok(ImagePart {
         position: [i32::from(a[0]), i32::from(a[1])],
         source: [a[2], a[3], a[4], a[5]],
-        slot: (a[6] & 0x3f) as u8,
+        slot: a[6] as u8,
         state: a[7],
-        auxiliary_flag: (a[6] as i8) < 0,
+        auxiliary_flag: false,
+        resource_binding:None,
+        binding_declared:false,
     })
 }
 fn byte_bank(bank: i16, index: i16) -> Option<u16> {
@@ -992,11 +2347,66 @@ mod tests {
         reload_data: Option<crate::settings::SystemData>,
         reload_calls: usize,
         music_pending: bool,
-        menu_action:Option<String>,
+        menu_action: Option<String>,
+        sprite_engine:crysirror_scene::EngineSystems,
+        sprite_objects:BTreeSet<u16>,
+        effect_requests:Vec<effect_ops::EffectRequest>,
+        flat:Option<crysirror_core::service::SteppedRamp>,
     }
     impl NativeHost for Host {
-        fn menu_action(&mut self)->Result<Option<String>>{Ok(self.menu_action.take())}
-        fn capture_checkpoint(&mut self)->Result<Option<Vec<u8>>>{if self.pending{self.pending=false;Ok(None)}else{Ok(Some(br#"{"owner":1,"layers":[]}"#.to_vec()))}}
+        fn system(&mut self, request:system_ops::SystemRequest)->Result<Option<system_ops::SystemReply>> {
+            match request {
+                system_ops::SystemRequest::FramebufferStatus=>Ok(Some(system_ops::SystemReply::FramebufferComplete(self.flat.as_ref().is_none_or(|ramp|!ramp.active())))),
+                system_ops::SystemRequest::CallbackInput=>Ok(Some(system_ops::SystemReply::CallbackInput{pressed:0,fullscreen:None,idle:false})),
+                _=>bail!("unexpected test system request {request:?}"),
+            }
+        }
+        fn effect_control(&mut self,request:&effect_ops::EffectRequest)->Result<bool> {
+            match request {
+                effect_ops::EffectRequest::FlatFade{out,ticks,..}=>{self.flat=Some(crysirror_core::service::SteppedRamp::new(if *out{0.}else{1.},if *out{1.}else{0.},if *out{*ticks}else{ticks.checked_mul(2).context("test flat fade duration")?})?);}
+                effect_ops::EffectRequest::CancelColor|effect_ops::EffectRequest::ResetColor=>self.flat=None,
+                effect_ops::EffectRequest::FrameControl{..}=>{},
+                effect_ops::EffectRequest::Finish=>{for (_,state) in self.sprite_states()?{ensure!(state.complete,"test sprite finish fence incomplete");}},
+                _=>bail!("unexpected test effect request {request:?}"),
+            }
+            self.effect_requests.push(request.clone());Ok(true)
+        }
+        fn sprite(&mut self,request:&sprite_ops::SpriteRequest)->Result<bool> {
+            let mut layers=Vec::new();
+            for command in &request.commands {
+                ensure!(command.seed.object<150&&command.seed.values.len()==sprite_ops::CHANNELS&&command.seed.retained.len()==sprite_ops::CHANNELS,"test native sprite seed");
+                let id=0x3a04_0000+u32::from(command.seed.object);
+                if self.sprite_objects.insert(command.seed.object) {
+                    layers.push(serde_json::json!({"op":"put","layer":{"id":id,"rect":[0,0,1,1],"paint":{"kind":"solid","color":[0,0,0,0]},"visible":false}}));
+                    layers.push(serde_json::json!({"op":"begin_sequence","id":id,"spec":{"values":command.seed.values,"retained":command.seed.retained,"rate_channel":16,"bindings":[]}}));
+                }
+                for operation in &command.operations {layers.push(serde_json::json!({"op":"sequence","id":id,"operation":operation}));}
+            }
+            self.sprite_engine.submit(crysirror_core::state::ClientId(1),&serde_json::from_value(serde_json::json!({"layers":layers}))?)?;
+            Ok(true)
+        }
+        fn sprite_states(&mut self)->Result<Vec<(u16,crysirror_scene::layer::queued::SequenceStatus)>> {
+            self.sprite_objects.iter().map(|object|Ok((*object,self.sprite_engine.layers.sequence_status(crysirror_core::state::ClientId(1),0x3a04_0000+u32::from(*object))?.context("test native sprite actor missing")?))).collect()
+        }
+
+        fn text(
+            &mut self,
+            _request: &text_ops::TextRequest,
+        ) -> Result<Option<text_ops::TextReply>> {
+            Ok(Some(text_ops::TextReply::Done))
+        }
+
+        fn menu_action(&mut self) -> Result<Option<String>> {
+            Ok(self.menu_action.take())
+        }
+        fn capture_checkpoint(&mut self) -> Result<Option<Vec<u8>>> {
+            if self.pending {
+                self.pending = false;
+                Ok(None)
+            } else {
+                Ok(Some(br#"{"owner":1,"layers":[]}"#.to_vec()))
+            }
+        }
 
         fn reload_system(&mut self) -> Result<Option<SystemReload>> {
             self.reload_calls += 1;
@@ -1047,7 +2457,10 @@ mod tests {
             }))
         }
         fn scene(&mut self, _: &str) -> Result<Option<Arc<Program>>> {
-            if self.scene_pending { self.scene_pending = false; return Ok(None); }
+            if self.scene_pending {
+                self.scene_pending = false;
+                return Ok(None);
+            }
             Ok(self.program.clone())
         }
         fn emit(&mut self, e: &Event) -> Result<bool> {
@@ -1086,6 +2499,7 @@ mod tests {
             code_file_offset: 0,
             labels: vec![0; 8],
             label_metadata: vec![0; 8],
+            raw_strings: Default::default(),
             instructions,
         });
         (
@@ -1101,6 +2515,19 @@ mod tests {
     }
     fn w(a: i16, b: i16, c: i16, d: i16) -> Arguments {
         Arguments::Words([a, b, c, d])
+    }
+    #[test]
+    fn all_original_empty_opcodes_execute_without_host_calls() {
+        for &opcode in &crate::opcodes::NATIVE_NO_OPS {
+            let (mut machine,mut host)=fixture(vec![(opcode,b(0,0))]);
+            let program=host.program.clone().unwrap();
+            let instruction=&program.instructions[0];
+            let before=machine.state.instructions;
+            assert!(matches!(machine.execute(&program,instruction,&mut host,0).unwrap(),Outcome::Advanced));
+            assert_eq!(machine.state.pc,instruction.next);
+            assert_eq!(machine.state.instructions,before+1);
+            assert!(host.events.is_empty(),"native noop{opcode:02x}");
+        }
     }
     #[test]
     fn conditional_consumes_marker_and_skips_native_else() {
@@ -1183,10 +2610,26 @@ mod tests {
         assert_eq!(m.step(&mut h, 0, false).unwrap(), Outcome::Pending);
         assert_eq!(m.state.pc, 3);
         assert!(m.state.image_names.is_empty());
-        assert_eq!(m.state.native_live.checkpoint(3).unwrap().image_name_bytes(37).unwrap(), b"");
+        assert_eq!(
+            m.state
+                .native_live
+                .checkpoint(3)
+                .unwrap()
+                .image_name_bytes(37)
+                .unwrap(),
+            b""
+        );
         m.step(&mut h, 0, false).unwrap();
         assert_eq!(m.state.image_names.get(&37).unwrap(), "system\\MesWin");
-        assert_eq!(m.state.native_live.checkpoint(m.state.pc).unwrap().image_name_bytes(37).unwrap(), b"SYSTEM\\MESWIN");
+        assert_eq!(
+            m.state
+                .native_live
+                .checkpoint(m.state.pc)
+                .unwrap()
+                .image_name_bytes(37)
+                .unwrap(),
+            b"SYSTEM\\MESWIN"
+        );
         let before = m.state.pc;
         let error = m.step(&mut h, 0, false).unwrap_err();
         assert!(format!("{error:#}").contains("opcode=0xfe"));
@@ -1217,18 +2660,45 @@ mod tests {
     #[test]
     fn staged_image_name_enters_native_save_table_only_when_published() {
         let (mut m, mut h) = fixture(vec![
-            (0x3c, Arguments::SlotString { slot: 4, text: "bst\\Hero".into() }),
+            (
+                0x3c,
+                Arguments::SlotString {
+                    slot: 4,
+                    text: "bst\\Hero".into(),
+                },
+            ),
             (0x49, Arguments::String("BG\\WHITE".into())),
             (0, b(0, 0)),
         ]);
         m.step(&mut h, 0, false).unwrap();
-        assert_eq!(m.state.native_live.checkpoint(m.state.pc).unwrap().image_name_bytes(4).unwrap(), b"");
+        assert_eq!(
+            m.state
+                .native_live
+                .checkpoint(m.state.pc)
+                .unwrap()
+                .image_name_bytes(4)
+                .unwrap(),
+            b""
+        );
         m.step(&mut h, 1, false).unwrap();
-        assert_eq!(m.state.native_live.checkpoint(m.state.pc).unwrap().image_name_bytes(4).unwrap(), b"BST\\HERO");
+        assert_eq!(
+            m.state
+                .native_live
+                .checkpoint(m.state.pc)
+                .unwrap()
+                .image_name_bytes(4)
+                .unwrap(),
+            b"BST\\HERO"
+        );
         // This test host deliberately has no completed size receipt. Keeping
         // the name cannot manufacture a writable native sprite/save image.
         assert!(m.state.native_live.admitted_checkpoint(m.state.pc).is_err());
-        assert!(m.state.native_live.gaps().contains("slot4 completed image dimensions unavailable"));
+        assert!(
+            m.state
+                .native_live
+                .gaps()
+                .contains("slot4 completed image dimensions unavailable")
+        );
     }
     #[test]
     fn random_instruction_waits_for_shared_stream_without_repeating_history() {
@@ -1244,16 +2714,30 @@ mod tests {
     }
     #[test]
     fn original11_resets_random_logical_count_without_erasing_native_tail() {
-        let(mut m,mut h)=fixture(vec![(0x25,b(10,0)),(0x11,b(1,0)),(0x25,b(10,0)),(0,b(0,0))]);
-        m.step(&mut h,0,false).unwrap();assert_eq!(m.state.random_history,[7]);
-        m.step(&mut h,1,false).unwrap();assert!(m.state.random_history.is_empty());
-        let reset=m.state.native_live.admitted_checkpoint(m.state.pc).unwrap();
-        let tail=115080-crate::native_save::LIVE_BASE;
-        assert_eq!(u32::from_le_bytes(reset.bytes()[tail..tail+4].try_into().unwrap()),7);
-        m.step(&mut h,2,false).unwrap();assert_eq!(m.state.random_history,[7]);
-        let body=m.state.native_live.admitted_checkpoint(m.state.pc).unwrap();
-        let at=111864-crate::native_save::LIVE_BASE;
-        assert_eq!(u32::from_le_bytes(body.bytes()[at..at+4].try_into().unwrap()),1);
+        let (mut m, mut h) = fixture(vec![
+            (0x25, b(10, 0)),
+            (0x11, b(1, 0)),
+            (0x25, b(10, 0)),
+            (0, b(0, 0)),
+        ]);
+        m.step(&mut h, 0, false).unwrap();
+        assert_eq!(m.state.random_history, [7]);
+        m.step(&mut h, 1, false).unwrap();
+        assert!(m.state.random_history.is_empty());
+        let reset = m.state.native_live.admitted_checkpoint(m.state.pc).unwrap();
+        let tail = 115080 - crate::native_save::LIVE_BASE;
+        assert_eq!(
+            u32::from_le_bytes(reset.bytes()[tail..tail + 4].try_into().unwrap()),
+            7
+        );
+        m.step(&mut h, 2, false).unwrap();
+        assert_eq!(m.state.random_history, [7]);
+        let body = m.state.native_live.admitted_checkpoint(m.state.pc).unwrap();
+        let at = 111864 - crate::native_save::LIVE_BASE;
+        assert_eq!(
+            u32::from_le_bytes(body.bytes()[at..at + 4].try_into().unwrap()),
+            1
+        );
     }
     #[test]
     fn scene_transfer_records_native_byte_delta_only_after_resource_completion() {
@@ -1277,9 +2761,16 @@ mod tests {
         let index = 115888 - crate::native_save::LIVE_BASE;
         assert_eq!(&body.bytes()[index..index + 2], &2u16.to_le_bytes());
         assert_eq!(body.bytes()[117888 - crate::native_save::LIVE_BASE], 9);
-        // This audited delta does not certify the still-incomplete scene
-        // cleanup/resource projection as a writable original slot save.
-        assert!(m.state.native_live.admitted_checkpoint(3).is_err());
+        //4488E0 constructed every primary queue empty and this path has only
+        // completed a byte-bank assignment.425DC0's finalization is therefore
+        // a proven no-op; its deterministic scene/reset bytes are projected.
+        assert!(m.state.native_live.admitted_checkpoint(3).is_ok());
+        // An accepted producer without a native queue projection invalidates
+        // that constructor proof. A later scene transfer cannot erase its gap.
+        let(mut uncertain,mut host)=fixture(vec![(0x4f,Arguments::String("NEXT".into())),(0,b(0,0))]);
+        uncertain.state.native_live.audit_completed(0x95,"fixture",3).unwrap();
+        uncertain.step(&mut host,0,false).unwrap();
+        assert!(uncertain.state.native_live.admitted_checkpoint(3).is_err());
     }
     #[test]
     fn native_group_slide_is_a_declaration_and_activation_stays_explicit() {
@@ -1296,27 +2787,68 @@ mod tests {
         assert!(h.events.is_empty());
         assert_eq!(m.step(&mut h, 0, false).unwrap(), Outcome::Advanced);
         assert!(m.state.builder.behavior_flags.contains(&242));
-        assert_eq!(m.step(&mut h,0,false).unwrap(),Outcome::WaitForInput);
-        assert!(matches!(h.events.last(),Some(Event::BeginMenu(_))));
-        let before=m.state.pc;
-        assert_eq!(m.step(&mut h,1000,true).unwrap(),Outcome::WaitForInput);
-        assert_eq!(m.state.pc,before,"raw click is not an engine widget action");
+        assert_eq!(m.step(&mut h, 0, false).unwrap(), Outcome::WaitForInput);
+        assert!(matches!(h.events.last(), Some(Event::BeginMenu(_))));
+        let before = m.state.pc;
+        assert_eq!(m.step(&mut h, 1000, true).unwrap(), Outcome::WaitForInput);
+        assert_eq!(
+            m.state.pc, before,
+            "raw click is not an engine widget action"
+        );
     }
     #[test]
-    fn native_background49_resets_effect_and_current_groups_before_publication(){
-        let(mut m,mut h)=fixture(vec![(0x3c,Arguments::SlotString{slot:1,text:"bg".into()}),(0x49,Arguments::String("bg".into()))]);
-        m.step(&mut h,0,false).unwrap();h.events.clear();m.state.callbacks.insert(10520,"old_action".into());m.state.builder.position=[100,0];
-        m.step(&mut h,1,false).unwrap();assert!(matches!(h.events.as_slice(),[Event::ResetScene,Event::DisplayImage{slot:1}]));assert!(m.state.callbacks.is_empty());assert!(m.state.builder.buttons.is_empty());assert_eq!(m.state.builder.position,[0,0]);
+    fn native_background49_resets_effect_and_current_groups_before_publication() {
+        let (mut m, mut h) = fixture(vec![
+            (
+                0x3c,
+                Arguments::SlotString {
+                    slot: 1,
+                    text: "bg".into(),
+                },
+            ),
+            (0x49, Arguments::String("bg".into())),
+        ]);
+        m.step(&mut h, 0, false).unwrap();
+        h.events.clear();
+        m.state.callbacks.insert(10520, "old_action".into());
+        m.state.builder.position = [100, 0];
+        m.step(&mut h, 1, false).unwrap();
+        assert!(matches!(
+            h.events.as_slice(),
+            [Event::ResetScene, Event::DisplayImage { slot: 1 }]
+        ));
+        assert!(m.state.callbacks.is_empty());
+        assert!(m.state.builder.buttons.is_empty());
+        assert_eq!(m.state.builder.position, [0, 0]);
     }
     #[test]
-    fn process11_only_resumes_at_real_label_after_engine_activation(){
-        let(mut m,mut h)=fixture(vec![(0x0b,b(0,0)),(0x82,w(0,0,99,0)),(0x4b,Arguments::String("chosen".into())),(0x82,w(0,0,7,0)),(0,b(0,0))]);
-        h.pending=true;assert_eq!(m.step(&mut h,0,false).unwrap(),Outcome::Pending);assert_eq!(m.state.pc,3);
-        assert_eq!(m.step(&mut h,1,false).unwrap(),Outcome::WaitForInput);
-        for t in [10,20,30]{assert_eq!(m.step(&mut h,t,true).unwrap(),Outcome::WaitForInput);assert_eq!(m.state.value(0,0).unwrap(),0);}
-        h.menu_action=Some("chosen".into());assert_eq!(m.step(&mut h,40,false).unwrap(),Outcome::Advanced);assert_eq!(m.state.pc,33);
-        m.step(&mut h,40,false).unwrap();assert_eq!(m.state.value(0,0).unwrap(),7);
-        let(mut m,mut h)=fixture(vec![(0x0b,b(0,0))]);m.step(&mut h,0,false).unwrap();h.menu_action=Some("missing".into());let before=m.state.pc;assert!(m.step(&mut h,1,false).is_err());assert_eq!(m.state.pc,before);
+    fn process11_only_resumes_at_real_label_after_engine_activation() {
+        let (mut m, mut h) = fixture(vec![
+            (0x0b, b(0, 0)),
+            (0x82, w(0, 0, 99, 0)),
+            (0x4b, Arguments::String("chosen".into())),
+            (0x82, w(0, 0, 7, 0)),
+            (0, b(0, 0)),
+        ]);
+        h.pending = true;
+        assert_eq!(m.step(&mut h, 0, false).unwrap(), Outcome::Pending);
+        assert_eq!(m.state.pc, 3);
+        assert_eq!(m.step(&mut h, 1, false).unwrap(), Outcome::WaitForInput);
+        for t in [10, 20, 30] {
+            assert_eq!(m.step(&mut h, t, true).unwrap(), Outcome::WaitForInput);
+            assert_eq!(m.state.value(0, 0).unwrap(), 0);
+        }
+        h.menu_action = Some("chosen".into());
+        assert_eq!(m.step(&mut h, 40, false).unwrap(), Outcome::Advanced);
+        assert_eq!(m.state.pc, 33);
+        m.step(&mut h, 40, false).unwrap();
+        assert_eq!(m.state.value(0, 0).unwrap(), 7);
+        let (mut m, mut h) = fixture(vec![(0x0b, b(0, 0))]);
+        m.step(&mut h, 0, false).unwrap();
+        h.menu_action = Some("missing".into());
+        let before = m.state.pc;
+        assert!(m.step(&mut h, 1, false).is_err());
+        assert_eq!(m.state.pc, before);
     }
     #[test]
     fn original_save_availability_probe_waits_and_sets_the_native_disable_byte() {
@@ -1422,8 +2954,10 @@ mod tests {
         assert_eq!(machine.state.pc, 13);
         machine.state.transition_color = Some([0; 3]);
         machine.step(&mut host, 0, false).unwrap();
-        assert!(matches!(host.events.last(), Some(Event::BeginFade { .. })));
-        assert!(machine.step(&mut host, 1, false).is_err());
+        assert!(matches!(host.effect_requests.last(),Some(effect_ops::EffectRequest::FlatFade{out:false,..})));
+        assert!(host.events.is_empty());
+        machine.finish_native_frame();
+        assert_eq!(machine.step(&mut host,1,false).unwrap(),Outcome::Pending);
     }
     #[test]
     fn voice_wait_uses_engine_completion_without_advancing_pc() {
@@ -1483,39 +3017,114 @@ mod tests {
         assert_eq!(h.system_writes[0][265], 37);
     }
     #[test]
-    fn original_checkpoint_captures_state_and_consumes_following_metadata_only_after_shared_receipt() {
-        let (mut m,mut h)=fixture(vec![(0x1c,b(0,0)),(0x54,Arguments::String("autoloadmes".into())),(0x82,w(0,1,7,0)),(0,b(0,0))]);
-        m.state.assign(0,4,55).unwrap();h.pending=true;
-        assert_eq!(m.step(&mut h,0,false).unwrap(),Outcome::Pending);assert_eq!(m.state.pc,3);assert!(m.state.checkpoint.is_none());
-        m.step(&mut h,16,false).unwrap();assert_eq!(m.state.pc,23);
-        let checkpoint=m.state.checkpoint.as_ref().unwrap();assert_eq!(checkpoint.resume_pc,13);assert_eq!(checkpoint.continuation,"autoloadmes");
-        let saved:State=serde_json::from_slice(&checkpoint.vm_state).unwrap();assert!(saved.checkpoint.is_none());assert_eq!(saved.pc,13);assert_eq!(saved.value(0,4).unwrap(),55);assert_eq!(saved.system_data.bytes(),m.state.system_data.bytes());
-        assert_eq!(serde_json::from_slice::<serde_json::Value>(&checkpoint.shared_resources).unwrap()["owner"],1);
-        m.step(&mut h,32,false).unwrap();assert_eq!(m.state.value(0,1).unwrap(),7);
+    fn original_checkpoint_captures_state_and_consumes_following_metadata_only_after_shared_receipt()
+     {
+        let (mut m, mut h) = fixture(vec![
+            (0x1c, b(0, 0)),
+            (0x54, Arguments::String("autoloadmes".into())),
+            (0x82, w(0, 1, 7, 0)),
+            (0, b(0, 0)),
+        ]);
+        m.state.assign(0, 4, 55).unwrap();
+        h.pending = true;
+        assert_eq!(m.step(&mut h, 0, false).unwrap(), Outcome::Pending);
+        assert_eq!(m.state.pc, 3);
+        assert!(m.state.checkpoint.is_none());
+        m.step(&mut h, 16, false).unwrap();
+        assert_eq!(m.state.pc, 23);
+        let checkpoint = m.state.checkpoint.as_ref().unwrap();
+        assert_eq!(checkpoint.resume_pc, 13);
+        assert_eq!(checkpoint.continuation, "autoloadmes");
+        let saved: State = serde_json::from_slice(&checkpoint.vm_state).unwrap();
+        assert!(saved.checkpoint.is_none());
+        assert_eq!(saved.pc, 13);
+        assert_eq!(saved.value(0, 4).unwrap(), 55);
+        assert_eq!(saved.system_data.bytes(), m.state.system_data.bytes());
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&checkpoint.shared_resources).unwrap()["owner"],
+            1
+        );
+        m.step(&mut h, 32, false).unwrap();
+        assert_eq!(m.state.value(0, 1).unwrap(), 7);
     }
     #[test]
     fn sprite_scale_and_named_placement_declarations_preserve_original_stage_policy() {
-        let (mut m,mut h)=fixture(vec![(0x8b,w(100,640,360,20)),(0xae,w(2,560,120,255)),(0x47,Arguments::SlotString{slot:0,text:"so".into()}),(0,b(0,0))]);
-        m.step(&mut h,0,false).unwrap();assert!(matches!(h.events.last(),Some(Event::SpriteScale{slot:8,percent:100,pivot:[640,360]})));
-        m.step(&mut h,0,false).unwrap();m.step(&mut h,0,false).unwrap();assert_eq!(m.state.placement_tables[&2],vec![("SO".into(),[560,120])]);
-        assert_eq!(m.state.value(99,228).unwrap(),0);assert_eq!(m.state.value(99,251).unwrap(),0);
-        m.finish_native_frame();assert!(m.state.placement_declaration.is_none());
+        let (mut m, mut h) = fixture(vec![
+            (0x8b, w(100, 640, 360, 20)),
+            (0xae, w(2, 560, 120, 255)),
+            (
+                0x47,
+                Arguments::SlotString {
+                    slot: 0,
+                    text: "so".into(),
+                },
+            ),
+            (0, b(0, 0)),
+        ]);
+        m.step(&mut h, 0, false).unwrap();
+        assert!(matches!(
+            h.events.last(),
+            Some(Event::SpriteScale {
+                slot: 8,
+                percent: 100,
+                pivot: [640, 360]
+            })
+        ));
+        m.step(&mut h, 0, false).unwrap();
+        m.step(&mut h, 0, false).unwrap();
+        assert_eq!(
+            m.state.placement_tables[&2],
+            vec![("SO".into(), [560, 120])]
+        );
+        assert_eq!(m.state.value(99, 228).unwrap(), 0);
+        assert_eq!(m.state.value(99, 251).unwrap(), 0);
+        m.finish_native_frame();
+        assert!(m.state.placement_declaration.is_none());
     }
     #[test]
     fn music_release_retains_original_pc_until_owner_admission_and_clears_native_track() {
-        let (mut m, mut h) = fixture(vec![(0x70,w(1,1,0,0)),(0x13,b(0,0)),(0,b(0,0))]);
-        m.step(&mut h,0,false).unwrap();assert_eq!(m.state.current_music,1);
-        h.pending=true;
-        assert_eq!(m.step(&mut h,16,false).unwrap(),Outcome::Pending);
-        assert_eq!(m.state.pc,13);assert_eq!(m.state.current_music,1);
-        m.step(&mut h,32,false).unwrap();assert_eq!(m.state.pc,23);
-        assert_eq!(m.state.current_music,0);assert!(m.state.pending_music.is_none());assert!(m.state.last_music.is_none());
-        assert!(matches!(h.events.last(),Some(Event::ReleaseMusic{forced:false,steps:30})));
+        let (mut m, mut h) = fixture(vec![(0x70, w(1, 1, 0, 0)), (0x13, b(0, 0)), (0, b(0, 0))]);
+        m.step(&mut h, 0, false).unwrap();
+        assert_eq!(m.state.current_music, 1);
+        h.pending = true;
+        assert_eq!(m.step(&mut h, 16, false).unwrap(), Outcome::Pending);
+        assert_eq!(m.state.pc, 13);
+        assert_eq!(m.state.current_music, 1);
+        m.step(&mut h, 32, false).unwrap();
+        assert_eq!(m.state.pc, 23);
+        assert_eq!(m.state.current_music, 0);
+        assert!(m.state.pending_music.is_none());
+        assert!(m.state.last_music.is_none());
+        assert!(matches!(
+            h.events.last(),
+            Some(Event::ReleaseMusic {
+                forced: false,
+                steps: 30
+            })
+        ));
     }
     #[test]
-    fn alternate_music_backend_is_explicitly_rejected_before_release() {
-        let (mut m,mut h)=fixture(vec![(0x13,b(0,0))]);m.state.assign(99,179,1).unwrap();
-        let err=m.step(&mut h,0,false).unwrap_err();assert!(format!("{err:#}").contains("alternate music backend"));assert_eq!(m.state.pc,3);assert!(h.events.is_empty());
+    fn native_music_release_does_not_reject_the_legacy_device_setting() {
+        let (mut m, mut h) = fixture(vec![(0x13, b(0, 0))]);
+        m.state.assign(99, 179, 1).unwrap();
+        assert!(matches!(m.step(&mut h,0,false).unwrap(),Outcome::Advanced));
+        assert_eq!(m.state.pc,13);
+        assert!(matches!(h.events.as_slice(),[Event::ReleaseMusic{forced:false,steps:30}]));
+    }
+    #[test]
+    fn protected_music_release_clears_only_source_owned_native_fields() {
+        for forced in [false,true] {
+            let (mut m,mut h)=fixture(vec![(0x13,b(0,0))]);
+            m.state.native_flags.insert(25088,1);
+            m.state.native_flags.insert(15616,i32::from(forced));
+            m.state.current_music=7;
+            m.state.last_music=Some(MusicAsset{name:"music\\native".into(),loop_start:0,loop_end:None});
+            m.state.native_live.music(7,"music\\native").unwrap();
+            m.step(&mut h,0,false).unwrap();
+            assert!(h.events.is_empty());
+            assert_eq!(m.state.current_music,if forced{0}else{7});
+            assert_eq!(m.state.last_music.is_none(),forced);
+        }
     }
     #[test]
     fn music_repeat_keeps_native_same_id_suppression_and_engine_loop_points() {

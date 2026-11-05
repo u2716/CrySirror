@@ -1,17 +1,23 @@
-# BGI adapter status and ownership
+# BGI / Ethornell
 
-The current first-class `crysirror-bgi-vm` and `crysirror-bgi` crates provide a
-original native BP interpreter and a CrySirror semantic adapter. Images, canvases, layers,
-glyphs and audio use CrySirror services. No original BGI application, renderer
-or mixer is hosted.
+The desktop player uses `crysirror-bgi-integrated`, registered as `bgi`.
+It contains the BP interpreter, archive and image readers, graphics, text,
+effects, audio and native-save implementation. A session worker produces
+frames and PCM; CrySirror owns the desktop window, input and output devices.
 
-The earlier hosted implementation was removed on 2026-10-26 under
-[ADR 0047](adr/0047-engine-api-capability-extraction.md). That historical removal
-does not describe the later BP adapter. ADRs 0037/0039 record the superseded work
-and are not current integration instructions or acceptance evidence for this path.
+```sh
+crysirror play /path/to/game
+```
 
-See the [current adapter profile](../crates/crysirror-bgi/README.md) for its
-configuration and unsupported operations, and [native adapter requirements](NATIVE_ADAPTERS.md)
-for shared capability ownership. Migrating the original VM source does not establish complete native host ABI
-+coverage, whole-adapter saves or whole-game compatibility. Dated
-validation remains in [STATUS.md](../STATUS.md).
+Detection selects the original BP bootstrap and also recognizes game resources
+under `Install/`. Archives are read in place without an external extraction or
+bootstrap step. Installation-media layouts are exposed through an installed
+resource view. Configuration and native-save writes use a per-client writable
+overlay, with subsequent native reads seeing those files first.
+
+The separate `crysirror-bgi` and `crysirror-bgi-vm` capability-extraction crates
+are preserved; the default desktop registers the integrated runtime.
+
+See [BGI and SoftPAL](NATIVE_ADAPTERS.md#bgi-and-softpal) for integration details
+and [desktop launch options](DESKTOP_API.md) for headless rendering and save
+directory selection.

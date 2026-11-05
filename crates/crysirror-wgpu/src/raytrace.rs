@@ -71,7 +71,7 @@ impl RayTracer {
         });
         let shader = d.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("software ray/triangle queries"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/raytrace.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(crysirror_shaders::wgsl::RAYTRACE.into()),
         });
         let pipeline = d.create_compute_pipeline(&wgpu::ComputePipelineDescriptor { cache: None,
             label: Some("compute raytrace"),

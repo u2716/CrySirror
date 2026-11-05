@@ -130,6 +130,40 @@ fn setup() -> (ChannelAudio, TaskPool, Arc<Storage>) {
     )
 }
 #[test]
+fn resident_preparation_owns_complete_pcm_and_keeps_four_independent_voices() {
+    use crysirror_core::service::EncodedAudio;
+    let (mut a,p,storage)=setup();
+    let gate=Gate::block(&p);
+    let request=|channel| AudioRequest::PlayResident {
+        channel,
+        source:EncodedAudio{bytes:wav(&vec![8192;16000]).into(),frame_limit:None},
+        intro:None,
+        parameters:AudioParameters{looping:true,loop_start:8000,..Default::default()},
+    };
+    // A worker receipt cannot expose an incompletely decoded resident voice.
+    let ticket=a.begin_preparation(9,request(8),storage.clone()).unwrap();
+    assert_eq!(a.preparation(9,ticket).unwrap().phase,AudioPreparePhase::Pending);
+    assert!(!a.is_playing(9,8));
+    assert!(a.preparation(10,ticket).is_err());
+    drop(gate);
+    assert_eq!(wait(&mut a,9,ticket).phase,AudioPreparePhase::Ready);
+    a.release_preparation(9,ticket).unwrap();
+    for channel in 9..=11 {
+        let ticket=a.begin_preparation(9,request(channel),storage.clone()).unwrap();
+        assert_eq!(wait(&mut a,9,ticket).phase,AudioPreparePhase::Ready);
+        a.release_preparation(9,ticket).unwrap();
+    }
+    for channel in 8..=11 {
+        let info=a.playback_info(9,channel).unwrap().unwrap();
+        assert_eq!(info.source_frames,Some(16000));
+        assert!(info.looping);
+    }
+    // This crosses EOF repeatedly: playback never waits for decoder workers.
+    a.render(1000).unwrap();
+    assert!(a.take_output().iter().all(|frame|*frame==[1.;2]));
+    assert!(storage.calls.lock().unwrap().is_empty());
+}
+#[test]
 fn capability_reads_are_on_workers_and_foreign_or_canceled_receipts_cannot_publish() {
     let (mut a, p, storage) = setup();
     let gate = Gate::block(&p);

@@ -10,6 +10,7 @@ pub mod binary;
 pub mod graphics;
 pub mod image_blend;
 pub mod input_buffer;
+pub mod frame_admission;
 pub mod integer_fields;
 pub mod path;
 pub mod save;
@@ -58,3 +59,7 @@ pub mod region_map;
 
 pub mod image_processing;
 pub mod image_encoding;
+
+pub mod frame_image;
+
+pub mod vector_scene;

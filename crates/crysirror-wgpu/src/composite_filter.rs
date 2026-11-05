@@ -76,7 +76,7 @@ impl Filter {
                     ],
                 });
             let source =
-                include_str!("shaders/composite_filter.wgsl").replace("__OUTPUT_FORMAT__", name);
+                crysirror_shaders::wgsl::COMPOSITE_FILTER.replace("__OUTPUT_FORMAT__", name);
             let shader = gpu
                 .device
                 .create_shader_module(wgpu::ShaderModuleDescriptor {

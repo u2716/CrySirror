@@ -37,3 +37,32 @@ pub fn subrect_quad(quad:[[f32;4];4],extent:[f32;2],rect:[f32;4])->Result<[[f32;
     };
     let [x,y,w,h]=rect;Ok([point(x,y)?,point(x+w,y)?,point(x+w,y+h)?,point(x,y+h)?])
 }
+
+// Texel-center sampling is separate from geometric clipping above.
+#[derive(Clone,Copy,Debug,PartialEq)]
+pub struct TexelQuad {
+    pub size:[f32;2],
+    pub uv:[f32;4],
+    pub pivot:[f32;2],
+}
+/// Project a source rectangle through the texel-center sampling convention.
+/// A rectangle matching the reference extent includes its terminal texel;
+/// a partial rectangle excludes it. Empty/reversed projections have no quad.
+/// Zero pivot components select the original, unclamped source center.
+///
+/// This preserves the complete4432E0 arithmetic: only right/bottom clamp to
+/// allocation, both axes share the full-extent decision, and sampling uses
+/// pixel centers. Negative left/top are legitimate wrapping coordinates.
+pub fn texel_center_quad(allocation:[u32;2],reference:[f32;2],source:[f32;4],pivot:[f32;2])->Result<Option<TexelQuad>> {
+    ensure!(reference.iter().chain(source.iter()).chain(pivot.iter()).all(|value|value.is_finite()),"texel-center quad scalars");
+    if allocation.contains(&0){return Ok(None)}
+    let right=source[2].min(allocation[0] as f32);
+    let bottom=source[3].min(allocation[1] as f32);
+    let full=reference[0]==right-source[0]&&reference[1]==bottom-source[1];
+    let end_adjust=if full{0.5}else{-0.5};
+    let sample=[source[0]+0.5,source[1]+0.5,right+end_adjust,bottom+end_adjust];
+    let size=[sample[2]-sample[0],sample[3]-sample[1]];
+    if size.iter().any(|value|*value<=0.){return Ok(None)}
+    let pivot=[if pivot[0]==0.{(source[2]-source[0])*0.5}else{pivot[0]},if pivot[1]==0.{(source[3]-source[1])*0.5}else{pivot[1]}];
+    Ok(Some(TexelQuad{size,pivot,uv:[sample[0]/allocation[0] as f32,sample[1]/allocation[1] as f32,sample[2]/allocation[0] as f32,sample[3]/allocation[1] as f32]}))
+}

@@ -8,6 +8,10 @@ use crysirror_wgpu::{Gpu, RenderingPath};
 use std::{path::Path, sync::Arc};
 
 pub fn bootstrap(rt: Runtime, plan: &Plan) -> Result<app::Core> {
+    bootstrap_interruptible(rt, plan, || false)
+}
+pub fn bootstrap_interruptible(rt: Runtime, plan: &Plan, cancelled: impl Fn() -> bool) -> Result<app::Core> {
+    ensure!(!cancelled(), "native launch cancelled");
     if plan.mounts.is_empty() {
         return Ok(app::Core::Plain(rt));
     }
@@ -25,6 +29,7 @@ pub fn bootstrap(rt: Runtime, plan: &Plan) -> Result<app::Core> {
             )?;
         }
         for mount in &plan.mounts {
+            ensure!(!cancelled(), "native launch cancelled");
             let ticket = cx
                 .call(
                     resources,
@@ -39,6 +44,7 @@ pub fn bootstrap(rt: Runtime, plan: &Plan) -> Result<app::Core> {
             let started = std::time::Instant::now();
             let result = (|| -> Result<()> {
                 loop {
+                    ensure!(!cancelled(), "native launch cancelled");
                     let status = cx
                         .call(resources, "decodeStatus", &[ticket.clone()])?
                         .to_json();
@@ -70,6 +76,7 @@ pub fn bootstrap(rt: Runtime, plan: &Plan) -> Result<app::Core> {
             release?;
             log::info!("mounted {} at {}", mount.source, mount.target);
         }
+        ensure!(!cancelled(), "native launch cancelled");
         engine.start()?;
         Ok(app::Core::Scripted(Box::new(engine)))
     }
@@ -98,6 +105,8 @@ pub fn offscreen(
     let wall_pacing_ms = std::env::var("CRYSIRROR_OFFSCREEN_PACING_MS").ok()
         .map(|s| s.parse::<u64>()).transpose()?.unwrap_or(0);
     ensure!(wall_pacing_ms <= 16, "offscreen pacing must be 0..=16ms");
+    let mut virtual_window = crate::virtual_window::VirtualWindow::new(runtime(&mut core)?.project.canvas);
+    virtual_window.publish(runtime(&mut core)?);
     // Native text callbacks may query metrics before the first presented frame.
     app::load_fonts(runtime(&mut core)?,font)?;
     // Match the desktop canvas: on OS-bar platforms the menu lives outside
@@ -139,6 +148,12 @@ pub fn offscreen(
         let dt = if frame == 0 { 0 } else { 16 };
         let frame_input = input.at(frame);
         let rt = runtime(&mut core)?;
+        virtual_window.begin_tick(rt);
+        if let Some(text)=input.text_at(frame){
+            let focus=rt.host.engine.ui.focus.context("input track text requires a focused engine text field")?;
+            ensure!(rt.host.engine.ui.focused_text_field(),"input track text focus is not a text field");
+            crysirror_core::service::HostServices::submit_engine(&mut rt.host,crysirror_core::state::ClientId(focus.owner),1,&serde_json::to_vec(&serde_json::json!({"ui":[{"op":"insert_text","text":text}]}))?)?;
+        }
         // The offline host explicitly supplies a virtual pointer, including
         // its initial origin. This is a backend policy, never a VM fallback
         // from missing native/window observations.
@@ -169,7 +184,7 @@ pub fn offscreen(
                 "output":output,"gpu":adapter,"error":format!("{error:#}"),
                 "failed_frame":frame,"frames_completed":frame,"requested_frames":frames,
                 "runtime":runtime(&mut core)?.inspect(),"capture_written":false,
-                "audio_emitted":false,"window_created":false,"wall_pacing_ms":wall_pacing_ms,
+                "audio_emitted":false,"window_created":false,"virtual_window":true,"wall_pacing_ms":wall_pacing_ms,
                 "os_menu_created":false
             }));
             return Err(error);
@@ -203,7 +218,7 @@ pub fn offscreen(
     println!(
         "{}",
         serde_json::json!({"output":output, "gpu":adapter, "stats":stats,
-        "runtime":rt.inspect(), "audio_emitted":false, "window_created":false, "wall_pacing_ms":wall_pacing_ms,
+        "runtime":rt.inspect(), "audio_emitted":false, "window_created":false, "virtual_window":true, "wall_pacing_ms":wall_pacing_ms,
         "menu_bar_presentation":if external_bar {"outside_capture"} else {"engine"},
         "os_menu_created":false})
     );

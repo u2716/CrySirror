@@ -93,6 +93,11 @@ impl ArchiveFormat for Legacy {
         source: Arc<dyn AssetReader>,
         context: &DecodeContext,
     ) -> Result<Box<dyn Archive>> {
+        let source = if self.id == "cat-system/int" {
+            e::int_fwp::prepare(source, context)?
+        } else {
+            source
+        };
         let rows = (self.open)(source.as_ref(), context)?;
         finish(self.id, source, context, rows)
     }

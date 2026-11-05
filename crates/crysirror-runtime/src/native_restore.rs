@@ -3,8 +3,9 @@
 //! decoder or engine-specific save interpretation belongs here.
 use super::{Runtime, SharedHost};
 use crate::published_images::PreparedImages;
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use crysirror_core::{
+    Error,
     image_processing::ImageResource,
     native_restore::{
         OriginalRestoreCommit, OriginalRestorePreparation, OriginalRestoreProgress,
@@ -17,13 +18,12 @@ use crysirror_core::{
     },
     state::{ClientId, Command, Limits},
     vm::VmYield,
-    Error,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicU64, Ordering},
     },
 };
 static NEXT_OWNER: AtomicU64 = AtomicU64::new(1);

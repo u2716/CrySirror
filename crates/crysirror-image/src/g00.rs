@@ -193,11 +193,7 @@ pub fn decode_g00(data: &[u8]) -> Result<Atlas> {
             let mut image = Atlas::new(width, height);
             if kind == 0 {
                 let bgr = lz_extract(src, unpacked, 3, 1);
-                for (pixel, source) in image
-                    .rgba
-                    .chunks_exact_mut(4)
-                    .zip(bgr.chunks_exact(3))
-                {
+                for (pixel, source) in image.rgba.chunks_exact_mut(4).zip(bgr.chunks_exact(3)) {
                     pixel.copy_from_slice(&[source[2], source[1], source[0], 255]);
                 }
             } else {
@@ -305,7 +301,6 @@ pub fn decode_g00(data: &[u8]) -> Result<Atlas> {
         other => bail!("g00: unsupported g00 type {other}"),
     }
 }
-
 
 #[cfg(test)]
 mod tests {

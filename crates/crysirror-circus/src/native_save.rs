@@ -2,8 +2,9 @@
 //! it is not a live-State projection, slot restoration or fake autosave writer.
 //! Sources: owner-authorized static 40C360/40C620/41DD10/444770/444BC0;
 //! executable SHA256 and analysis provenance are retained in SOURCE.json.
-use anyhow::{ensure, Context, Result};
-use std::{fmt, ops::Range};
+use anyhow::{Context, Result, ensure};
+use serde::{Deserialize, Serialize};
+use std::{collections::BTreeSet, fmt, ops::Range};
 /// Native `_read` prefix. Original availability ignores trailing file data.
 pub const BODY_BYTES: usize = 0x56fe4;
 pub const LIVE_BASE: usize = 19328;
@@ -26,6 +27,213 @@ const READ_RUN_INDEX: usize = 106236 - LIVE_BASE;
 #[derive(Clone, PartialEq, Eq)]
 pub struct NativeSaveBody {
     bytes: Box<[u8]>,
+}
+impl Serialize for NativeSaveBody {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        self.bytes.serialize(serializer)
+    }
+}
+impl<'de> Deserialize<'de> for NativeSaveBody {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        let bytes = Vec::<u8>::deserialize(deserializer)?;
+        Self::from_exact(&bytes).map_err(serde::de::Error::custom)
+    }
+}
+/// Retained41DD10 mirror and its admission evidence at capture time.
+/// Later live mutations cannot change this image.40C2F0 alone stamps the
+/// retained mirror's six civil-time bytes before an original slot write.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CapturedNativeBody {
+    body: NativeSaveBody,
+    gaps: BTreeSet<String>,
+}
+impl CapturedNativeBody {
+    pub(crate) fn capture(body: NativeSaveBody, gaps: BTreeSet<String>) -> Self {
+        Self { body, gaps }
+    }
+    pub(crate) fn observed_body(&self) -> &NativeSaveBody {
+        &self.body
+    }
+    pub fn projection_gaps(&self) -> &BTreeSet<String> {
+        &self.gaps
+    }
+    pub fn admitted_body(&self) -> Result<&NativeSaveBody> {
+        ensure!(
+            self.gaps.is_empty(),
+            "Circus captured native save projection gaps: {:?}",
+            self.gaps
+        );
+        Ok(&self.body)
+    }
+    pub(crate) fn stamp_civil_time(&mut self, time: CivilFields) -> Result<()> {
+        self.body.set_civil_time_fields(
+            time.year,
+            time.month,
+            time.day,
+            time.hour,
+            time.minute,
+            time.second,
+        )
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SlotKind {
+    Normal,
+    Pre,
+}
+impl SlotKind {
+    pub fn filename(self, slot: i32) -> String {
+        format!(
+            "{}DC4PHDL{slot:02}.dat",
+            if self == Self::Pre { "PRE" } else { "" }
+        )
+    }
+    pub fn needs_civil_time(self, slot: i32) -> bool {
+        self == Self::Pre || slot < 110
+    }
+    pub fn needs_thumbnail(self, slot: i32) -> bool {
+        self == Self::Normal && slot != 9999
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CivilFields {
+    pub year: u16,
+    pub month: u8,
+    pub day: u8,
+    pub hour: u8,
+    pub minute: u8,
+    pub second: u8,
+}
+///425640 restoration policy derived from an authoritative original slot body.
+/// Resource workers consume names and copied records; native texture integers
+/// remain inert data and are never converted into engine/device identities.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RestorePlan {
+    pub body: NativeSaveBody,
+    pub scene: String,
+    pub resume_pc: u32,
+    pub origin: RestoreOrigin,
+    pub images: Vec<RestoreImage>,
+    pub audio: Vec<RestoreAudio>,
+    pub prefixes: [String; 2],
+    pub falling: [u32; 6],
+    pub movie: Vec<u8>,
+    pub restore_fade_ticks: Option<i32>,
+    ///Case24 allows66511 history replay;4260D0 quickload always425640.
+    pub history_replay_allowed:bool,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RestoreOrigin {
+    Slot,
+    Rollback { preserve_effects: bool },
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RestoreImage {
+    pub slot: u8,
+    pub name: String,
+    pub native_sprite: Option<usize>,
+    pub packed: bool,
+    pub native_ui: bool,
+}
+impl RestoreImage {
+    pub(crate) fn preloaded_archive_bitmap_reload(&self)->bool {
+        //3C33..36 stores an archive filename without _p,.425640 does not
+        //restart these packs: it passes the saved name to422CF0's bitmap
+        //loader, unlike a mapped object's explicit _p, descriptor.
+        (33..=36).contains(&self.slot)&&!self.packed&&self.name.to_ascii_lowercase().ends_with(".pck")
+    }
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RestoreAudio {
+    pub kind: u8,
+    pub name: String,
+    pub looping: bool,
+    /// Current native40DD40 preferences captured before async publication.
+    pub voice_volume:Option<(i32,i32)>,
+}
+impl RestorePlan {
+    pub fn decode(body: NativeSaveBody, origin: RestoreOrigin) -> Result<Self> {
+        let scene = body.scene_name()?;
+        ensure!(
+            !scene.is_empty() && !scene.contains(['/', '\\', ':']),
+            "Circus restored native scene basename"
+        );
+        let mut images = Vec::new();
+        //425640 loads exactly0..36.37..44 are existing system resources;
+        //45..50 remain retained original data, not newly loaded image slots.
+        for slot in 0..37u8 {
+            let name = body.native_string(19496 + usize::from(slot) * 48, 48)?;
+            if !name.is_empty() {
+                images.push(RestoreImage {
+                    slot,
+                    packed: name.get(..3).is_some_and(|s| s.eq_ignore_ascii_case("_p,")),
+                    native_ui: (14..=18).contains(&slot),
+                    native_sprite: crate::native_live::sprite_for_slot(slot),
+                    name,
+                });
+            }
+        }
+        let mut audio = Vec::new();
+        if origin == RestoreOrigin::Slot {
+            for (kind, absolute, capacity, looping) in
+                [(0, 21944, 32, true), (2, 265392, 128, false)]
+            {
+                let name = body.native_string(absolute, capacity)?;
+                if !name.is_empty() {
+                    audio.push(RestoreAudio {
+                        voice_volume:None,
+                        kind,
+                        name,
+                        looping,
+                    });
+                }
+            }
+        }
+        for n in 0..4 {
+            let looping = body.native_word(22112 + n * 4)? != 0;
+            if origin == RestoreOrigin::Slot || looping {
+                let name = body.native_string(21984 + n * 32, 32)?;
+                if !name.is_empty() {
+                    audio.push(RestoreAudio {
+                        voice_volume:None,
+                        kind: 1,
+                        name,
+                        looping,
+                    });
+                }
+            }
+        }
+        let prefixes = [
+            body.native_string(265812, 36)?,
+            body.native_string(265552, 260)?,
+        ];
+        let falling = [265348, 265352, 265356, 265360, 265364, 265368]
+            .map(|at| body.native_word(at))
+            .into_iter()
+            .collect::<Result<Vec<_>>>()?
+            .try_into()
+            .unwrap();
+        let movie = body.movie_record().to_vec();
+        let resume_pc = body.pc_fields().checkpoint_resume;
+        Ok(Self {
+            body,
+            scene,
+            resume_pc,
+            origin,
+            images,
+            audio,
+            prefixes,
+            falling,
+            movie,
+            restore_fade_ticks: None,
+            history_replay_allowed:true,
+        })
+    }
 }
 impl fmt::Debug for NativeSaveBody {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -110,6 +318,138 @@ fn checked_record(start: usize, size: usize, count: usize, index: usize) -> Resu
     Ok(at..at + size)
 }
 impl NativeSaveBody {
+    ///40C360/40C400 write the already captured mirror. Date and PRE-label
+    /// fixups apply to this file copy only; they never recapture a later State.
+    pub fn slot_bytes(
+        &self,
+        kind: SlotKind,
+        slot: i32,
+        time: Option<CivilFields>,
+    ) -> Result<Vec<u8>> {
+        let mut image = self.clone();
+        if kind.needs_civil_time(slot) {
+            let t = time.context("native Circus slot write requires sampled civil time")?;
+            image.set_civil_time_fields(t.year, t.month, t.day, t.hour, t.minute, t.second)?;
+        }
+        if kind == SlotKind::Pre {
+            let mut pc = image.pc_fields();
+            pc.label = pc.label.wrapping_sub(1);
+            image.set_pc_fields(pc);
+        }
+        Ok(image.bytes.into_vec())
+    }
+    pub fn scene_name(&self) -> Result<String> {
+        self.native_string(19336, 128)
+    }
+    pub(crate) fn native_string(&self, absolute: usize, capacity: usize) -> Result<String> {
+        let at = absolute
+            .checked_sub(LIVE_BASE)
+            .context("native string outside save body")?;
+        let bytes = self
+            .bytes
+            .get(at..at + capacity)
+            .context("native string outside save body")?;
+        let end = bytes
+            .iter()
+            .position(|b| *b == 0)
+            .context("unterminated native save string")?;
+        let (text, error) = encoding_rs::SHIFT_JIS.decode_without_bom_handling(&bytes[..end]);
+        ensure!(!error, "invalid native save Shift-JIS string");
+        Ok(text.into_owned())
+    }
+    ///406140(1) +406DB0(target,2,1), followed by the caller's bank
+    ///restore. The replay target is a label; it is never a bytecode offset.
+    pub(crate) fn prepare_history_load(&mut self, scene_index: i32) -> Result<(i32, i32)> {
+        let index = self.read_run_index() as usize;
+        let run = self.read_run(index)?;
+        let target = (self.pc_fields().label as i32).wrapping_add(1);
+        let mut limit = if scene_index == -1 { 2 } else { i32::from(self.read_run(0)?.first_label) };
+        if scene_index != -1 {
+            for n in 0..=index {
+                let row = self.read_run(n)?;
+                if i32::from(row.scene_index as i16) == scene_index {
+                    limit = i32::from(row.first_label);
+                }
+            }
+        }
+        //402A90 resets both banks, then case24 restores only118892.
+        //The retained second mirror must still reflect the recorded history.
+        if self.byte_bank(9, 7)? == 0 {
+            let count = usize::from(run.metadata_and_flags & 0x7fff);
+            ensure!(count <= 1000, "Circus history bank extent");
+            self.bytes[119992 - LIVE_BASE..121092 - LIVE_BASE].fill(0);
+            for n in 0..count {
+                let at = 115888 - LIVE_BASE + n * 2;
+                let destination = u16::from_le_bytes(self.bytes[at..at + 2].try_into()?) as usize;
+                ensure!(destination < 1100, "Circus history byte-bank destination");
+                self.bytes[119992 - LIVE_BASE + destination] = self.bytes[117888 - LIVE_BASE + n];
+            }
+            self.set_native_word(28971 * 4, count as u32)?;
+        }
+        for (at, value) in [
+            (66511 * 4, 0),
+            (27964 * 4, u32::from(run.source_word_55930)),
+            (27965 * 4, u32::from(run.source_word_55930)),
+            (27966 * 4, u32::from(run.source_word_55934)),
+            (27967 * 4, u32::from(run.source_word_55934)),
+            (27968 * 4, if index == 0 { 0 } else { u32::from(run.source_word_55936) }),
+        ] { self.set_native_word(at, value)?; }
+        self.set_read_run_index(index.saturating_sub(1))?;
+        if index == 0 { self.bytes[READ_RUNS..READ_RUNS + 2].fill(255); }
+        let mut cleared = self.read_run(index)?;
+        cleared.first_label = 0;
+        cleared.last_label = 0;
+        self.set_read_run(index, cleared)?;
+        Ok((target, limit))
+    }
+    ///406DB0(a3=1,a4=0): retained log directory metadata, not a slot load.
+    pub(crate) fn apply_log_metadata(&mut self,snapshot:&Self,selected:usize,page_run:usize)->Result<()> {
+        let run=snapshot.read_run(selected)?;
+        if self.byte_bank(9,7)?==0 {
+            let count=usize::from(snapshot.read_run(page_run)?.metadata_and_flags&0x7fff);
+            ensure!(count<=1000,"Circus log byte-bank history extent");
+            self.bytes[118892-LIVE_BASE..121092-LIVE_BASE].fill(0);
+            for n in 0..count {
+                let at=115888-LIVE_BASE+n*2;
+                let destination=u16::from_le_bytes(self.bytes[at..at+2].try_into()?) as usize;
+                ensure!(destination<1100,"Circus log byte-bank history destination");
+                let value=self.bytes[117888-LIVE_BASE+n];
+                self.bytes[118892-LIVE_BASE+destination]=value;
+                self.bytes[119992-LIVE_BASE+destination]=value;
+            }
+            self.set_native_word(28971*4,count as u32)?;
+        }
+        for (address,value) in [(27964*4,u32::from(run.source_word_55930)),
+            (27965*4,u32::from(run.source_word_55930)),(27966*4,u32::from(run.source_word_55934)),
+            (27967*4,u32::from(run.source_word_55934))] {self.set_native_word(address,value)?;}
+        if page_run!=0&&selected!=0 {
+            self.set_read_run_index(selected-1)?;
+            self.set_native_word(27968*4,u32::from(self.read_run(selected)?.source_word_55936))?;
+        } else {
+            self.set_read_run_index(0)?;
+            self.bytes[READ_RUNS..READ_RUNS+2].fill(255);
+            self.set_native_word(27968*4,0)?;
+        }
+        self.set_native_word(66515*4,0)?;
+        Ok(())
+    }
+    pub(crate) fn set_native_word(&mut self, absolute: usize, value: u32) -> Result<()> {
+        let at = absolute.checked_sub(LIVE_BASE).context("native word outside save body")?;
+        self.bytes.get_mut(at..at + 4).context("native word outside save body")?
+            .copy_from_slice(&value.to_le_bytes());
+        Ok(())
+    }
+    pub(crate) fn native_word(&self, absolute: usize) -> Result<u32> {
+        let at = absolute
+            .checked_sub(LIVE_BASE)
+            .context("native word outside save body")?;
+        Ok(u32::from_le_bytes(
+            self.bytes
+                .get(at..at + 4)
+                .context("native word outside save body")?
+                .try_into()?,
+        ))
+    }
     /// Admit exactly the native body without discarding or fabricating bytes.
     pub fn from_exact(bytes: &[u8]) -> Result<Self> {
         ensure!(
@@ -359,9 +699,11 @@ mod tests {
             .enumerate()
             .filter_map(|(i, (a, b))| (a != b).then_some(i))
             .collect::<Vec<_>>();
-        assert!(changed
-            .iter()
-            .all(|i| (NATIVE_DATE..NATIVE_DATE + 6).contains(i)));
+        assert!(
+            changed
+                .iter()
+                .all(|i| (NATIVE_DATE..NATIVE_DATE + 6).contains(i))
+        );
         let before = body.clone();
         assert!(body.set_civil_time_fields(2026, 0, 1, 0, 0, 0).is_err());
         assert_eq!(body, before);
@@ -414,17 +756,93 @@ mod tests {
             &body.bytes()[record..record + READ_RUN_BYTES],
             &[255, 255, 0x23, 0x81, 5, 0, 7, 0, 11, 0, 13, 0, 17, 0]
         );
-        assert!(body
-            .bytes()
-            .iter()
-            .zip(before.bytes())
-            .enumerate()
-            .all(|(i, (a, b))| a == b
-                || (record..record + READ_RUN_BYTES).contains(&i)
-                || (READ_RUN_INDEX..READ_RUN_INDEX + 4).contains(&i)));
+        assert!(
+            body.bytes()
+                .iter()
+                .zip(before.bytes())
+                .enumerate()
+                .all(|(i, (a, b))| a == b
+                    || (record..record + READ_RUN_BYTES).contains(&i)
+                    || (READ_RUN_INDEX..READ_RUN_INDEX + 4).contains(&i))
+        );
         let before = body.clone();
         assert!(body.set_read_run(400, run).is_err());
         assert!(body.set_read_run_index(400).is_err());
         assert_eq!(body, before);
+    }
+    #[test]
+    fn slot_writes_use_the_immutable_mirror_and_native_pre_label_transform() {
+        let mut mirror = NativeSaveBody::from_exact(&patterned()).unwrap();
+        let pc = NativePcFields {
+            decode_next: 0x831,
+            label_metadata: 0x901,
+            label: 0,
+            checkpoint_resume: 0x831,
+        };
+        mirror.set_pc_fields(pc);
+        let original = mirror.clone();
+        let time = CivilFields {
+            year: 2026,
+            month: 11,
+            day: 4,
+            hour: 8,
+            minute: 9,
+            second: 10,
+        };
+        let normal = NativeSaveBody::from_exact(
+            &mirror.slot_bytes(SlotKind::Normal, 0, Some(time)).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(normal.pc_fields(), pc);
+        assert_eq!(normal.civil_time_bytes(), [11, 4, 8, 9, 26, 10]);
+        let pre =
+            NativeSaveBody::from_exact(&mirror.slot_bytes(SlotKind::Pre, 0, Some(time)).unwrap())
+                .unwrap();
+        assert_eq!(
+            pre.pc_fields(),
+            NativePcFields {
+                label: u32::MAX,
+                ..pc
+            }
+        );
+        assert_eq!(pre.civil_time_bytes(), normal.civil_time_bytes());
+        assert_eq!(
+            mirror, original,
+            "writing must not stamp or decrement the retained mirror"
+        );
+        for (at, (a, b)) in pre.bytes().iter().zip(original.bytes()).enumerate() {
+            assert!(
+                a == b
+                    || (2812..2816).contains(&at)
+                    || (NATIVE_DATE..NATIVE_DATE + 6).contains(&at)
+            );
+        }
+        assert!(mirror.slot_bytes(SlotKind::Normal, 109, None).is_err());
+        assert_eq!(
+            mirror.slot_bytes(SlotKind::Normal, 110, None).unwrap(),
+            mirror.bytes()
+        );
+        assert!(mirror.slot_bytes(SlotKind::Pre, 110, None).is_err());
+        assert_eq!(SlotKind::Normal.filename(-1), "DC4PHDL-1.dat");
+        assert_eq!(SlotKind::Pre.filename(2), "PREDC4PHDL02.dat");
+        assert!(!SlotKind::Normal.needs_thumbnail(9999));
+        assert!(!SlotKind::Pre.needs_thumbnail(0));
+    }
+    #[test]
+    fn captured_admission_evidence_and_exact_extent_survive_serialization() {
+        let body = NativeSaveBody::from_exact(&patterned()).unwrap();
+        let captured = CapturedNativeBody::capture(
+            body.clone(),
+            BTreeSet::from(["native movie tail not audited".into()]),
+        );
+        let encoded = serde_json::to_vec(&captured).unwrap();
+        let decoded: CapturedNativeBody = serde_json::from_slice(&encoded).unwrap();
+        assert!(decoded.admitted_body().is_err());
+        assert_eq!(decoded.body, body);
+        assert_eq!(decoded.projection_gaps(), captured.projection_gaps());
+        let admitted = CapturedNativeBody::capture(body.clone(), BTreeSet::new());
+        assert_eq!(admitted.admitted_body().unwrap(), &body);
+        let short = serde_json::to_vec(&vec![0u8; BODY_BYTES - 1]).unwrap();
+        assert!(serde_json::from_slice::<NativeSaveBody>(&short).is_err());
     }
 }

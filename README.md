@@ -44,10 +44,10 @@ and engine-owned resources.
 
 ## Native engine compatibility
 
-The following engines have native adapters in the workspace. Their interpreters
-map operations onto CrySirror's shared graphics, text, UI, audio and resource APIs.
-Adapter documentation describes the native instruction and resource formats
-handled by each integration.
+Engine compatibility is provided by native adapters in the workspace.
+CrySirror supplies shared services and desktop presentation, input and audio
+output for the native runtimes. Adapter documentation describes each
+integration's instruction and resource formats.
 
 | Engine | Integration |
 | --- | --- |
@@ -57,9 +57,11 @@ handled by each integration.
 | KiriKiri 2 / Z · KAG3 | [TJS2/KAG adapters, shared layers/canvases and plugin facades](docs/adr/0088-kag3-semantic-adapter-and-shared-prerequisites.md) |
 | NScripter | [Native text scripts, SAR/NSA resources and command mappings](crates/crysirror-nscripter/README.md) |
 | RFVP | [HCB interpreter and native syscall adapter](docs/NATIVE_ADAPTERS.md) |
-| BGI / Ethornell | [Native BP bytecode adapter](crates/crysirror-bgi/README.md) |
+| BGI / Ethornell | [BP interpreter, original archives, graphics, text, audio and native saves](docs/BGI.md) |
+| SoftPAL | [Sv20 scripts, PAC resources, sprites, text and audio](docs/NATIVE_ADAPTERS.md#bgi-and-softpal) |
 | Circus | [DC4 Plus Harmony MES adapter](crates/crysirror-circus/README.md) |
 | CatSystem2 | [KCS/FES adapter and shared resource mappings](crates/crysirror-catsystem2/README.md) |
+| QLIE | [Native `.s` scripts, FilePack resources and ABMP animation mappings](crates/crysirror-qlie/README.md) |
 | Majiro | [MJO bytecode adapter and resource loading](crates/crysirror-majiro/README.md) |
 | AliceSoft System 4 | [AIN bytecode adapter and native graphics/audio mappings](crates/crysirror-system4/README.md) |
 | System-NNN | [SPT bytecode adapter and native service mappings](crates/crysirror-system-nnn/README.md) |
@@ -77,6 +79,12 @@ cargo build --release --locked
 The desktop build includes the native adapters and format providers. Installed
 games are detected and mounted in place. See the [desktop guide](docs/DESKTOP_API.md)
 for launch options, headless rendering and project setup.
+
+Games can also be opened from `smb://server/share/game` or `nfs://server/export/game`
+with on-demand network reads and local saves; see [SMB](docs/DESKTOP_API.md#games-on-an-smb-share)
+and [NFS launch options](docs/DESKTOP_API.md#games-on-an-nfs-export).
+
+[Native application packages](docs/NATIVE_PACKAGING.md) describe the macOS app, iOS and Android frontends and their local Release build commands.
 
 [Documentation](docs/README.md) · [Architecture](docs/ARCHITECTURE.md) · [Roadmap](docs/adr/0041-engine-capability-roadmap.md)
 

@@ -1,7 +1,7 @@
 //! Resource-level canvas padding without resampling. Useful for texture
 //! allocation contracts and atlas construction, independent of any native VM.
-use crate::{rgba_len, ImageSurface};
-use anyhow::{ensure, Result};
+use crate::{ImageSurface, rgba_len};
+use anyhow::{Result, ensure};
 
 /// Copy an image at the top-left of a larger, uniformly filled RGBA canvas.
 /// Logical source pixels are unchanged; padding never scales/crops the source.

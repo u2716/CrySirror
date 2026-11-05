@@ -6,7 +6,7 @@ Generated from the class registry, the command table, serde defaults and Rust do
 `CRYSIRROR_BLESS=1 cargo test --release -p crysirror-engine --test api_docs`.
 Policy and change log: [README](README.md), [CHANGES](CHANGES.md).
 
-API fingerprint: `c47c9352e8db80c9`
+API fingerprint: `7ae03e5812971428`
 
 The same classes are exposed to Rust (`EngineContext` calls), to JavaScript/TypeScript (bindings generated from the registry, [crysirror.d.ts](crysirror.d.ts)) and to inspection tools.
 
@@ -15,7 +15,7 @@ The same classes are exposed to Rust (`EngineContext` calls), to JavaScript/Type
 - [Globals](#globals)
 - Classes: [Assets](#class-assets), [Audio](#class-audio), [Bitmap](#class-bitmap), [Canvases](#class-canvases), [Client](#class-client), [Engine](#class-engine), [Entity](#class-entity), [Fs](#class-fs), [Input](#class-input), [InputRoutes](#class-inputroutes), [Layers](#class-layers), [Localization](#class-localization), [Media](#class-media), [Physics](#class-physics), [PhysicsJoint](#class-physicsjoint), [Platform](#class-platform), [Profiler](#class-profiler), [Puppets](#class-puppets), [Resources](#class-resources), [Save](#class-save), [Text](#class-text), [Ui](#class-ui), [Vfx](#class-vfx), [World](#class-world)
 - [Commands](#commands)
-- Data: [ImageCompositeMath](#imagecompositemath), [RgbaBlendFactor](#rgbablendfactor), [RgbaBlendEquation](#rgbablendequation), [RgbaBlendComponent](#rgbablendcomponent), [RgbaByteRounding](#rgbabyterounding), [RgbaBlendArithmetic](#rgbablendarithmetic), [RgbaBlendState](#rgbablendstate), [SessionSeedSource](#sessionseedsource), [SessionSeedMaterial](#sessionseedmaterial), [SessionSeedState](#sessionseedstate), [CropRect](#croprect), [ImageEffect](#imageeffect), [LogRecord](#logrecord), [LogReceipt](#logreceipt), [LogSnapshot](#logsnapshot), [ReadingWait](#readingwait), [AldVolume](#aldvolume), [AldCatalog](#aldcatalog), [AlkCatalog](#alkcatalog), [System4IniValue](#system4inivalue), [System4IniEntry](#system4inientry), [System4IniDocument](#system4inidocument), [System4Mixer](#system4mixer), [System4Bootstrap](#system4bootstrap), [System4AssetClass](#system4assetclass), [System4AssetVolume](#system4assetvolume), [System4Assets](#system4assets), [System4SpriteSurface](#system4spritesurface), [System4Sprite](#system4sprite), [System4Sprites](#system4sprites), [System4Input](#system4input), [System4Sact](#system4sact), [System4NativeAdapter](#system4nativeadapter), [PointerObservation](#pointerobservation), [InputObservation](#inputobservation), [PlatformIntegration](#platformintegration), [PlatformIntegrationInfo](#platformintegrationinfo), [KeyboardLockState](#keyboardlockstate), [KeyboardLockSnapshot](#keyboardlocksnapshot), [NativeLiveState](#nativelivestate), [CivilTime](#civiltime), [ImageEncodingInfo](#imageencodinginfo), [ImageEncodingInfoReceipt](#imageencodinginforeceipt), [ImageEncodingInfoState](#imageencodinginfostate), [Mt19937_1998](#mt199371998), [Mt19937Split](#mt19937split), [ByteLeadProfile](#byteleadprofile), [ByteStringProfile](#bytestringprofile), [ByteStringLimits](#bytestringlimits), [ByteStringContext](#bytestringcontext), [ByteNumberSymbols](#bytenumbersymbols), [NumericCompaction](#numericcompaction), [CivilTimeState](#civiltimestate), [MediaProbeInfo](#mediaprobeinfo), [MediaProbeState](#mediaprobestate), [InputReceiverSpec](#inputreceiverspec), [InputRouteSource](#inputroutesource), [InputRoutePhase](#inputroutephase), [InputRouteEvent](#inputrouteevent), [InputDeliveryReceipt](#inputdeliveryreceipt), [InputDelivery](#inputdelivery), [InputRouteStats](#inputroutestats), [InputRouteCommand](#inputroutecommand), [RgbLookup](#rgblookup), [RgbLookupProfile](#rgblookupprofile), [PatternRng](#patternrng), [TemporalPatternSpec](#temporalpatternspec), [TemporalPatternSnapshot](#temporalpatternsnapshot), [PatternResourceInfo](#patternresourceinfo), [PatternRequest](#patternrequest), [PatternOutput](#patternoutput), [PatternProcessState](#patternprocessstate), [FixedMixSpec](#fixedmixspec), [FixedMixRounding](#fixedmixrounding), [FixedMixAlpha](#fixedmixalpha), [FixedLumaSpec](#fixedlumaspec), [ProgressKnot](#progressknot), [ProgressShape](#progressshape), [ProgressCurve](#progresscurve), [FixedSampleRegion](#fixedsampleregion), [ResampleAlpha](#resamplealpha), [PiecewiseResampleSpec](#piecewiseresamplespec), [AlphaClipRect](#alphacliprect), [ByteGroupSplitLimits](#bytegroupsplitlimits), [ByteGroupSplitOutput](#bytegroupsplitoutput), [MaskedPairBlend](#maskedpairblend), [CgCatalogEntry](#cgcatalogentry), [CgCatalog](#cgcatalog), [PagedImageLayout](#pagedimagelayout), [PagedImageRegion](#pagedimageregion), [PagedImage](#pagedimage), [PagedClearPlan](#pagedclearplan), [DepthOrderKey](#depthorderkey), [DepthOrderStep](#depthorderstep), [ServiceBatch](#servicebatch), [ImageInput](#imageinput), [GlyphImageSpec](#glyphimagespec), [GlyphSizeBasis](#glyphsizebasis), [GlyphImageOrigin](#glyphimageorigin), [GlyphRasterOptions](#glyphrasteroptions), [StyledGlyphImageSpec](#styledglyphimagespec), [GlyphImageCell](#glyphimagecell), [GlyphImageBatchSpec](#glyphimagebatchspec), [GlyphImageBatchState](#glyphimagebatchstate), [ImageProcessState](#imageprocessstate), [MaterializeRequest](#materializerequest), [KeyboardLockPolicy](#keyboardlockpolicy), [SpriteAlpha](#spritealpha), [StripeReveal](#stripereveal), [SheetSequence](#sheetsequence), [SheetLoop](#sheetloop), [WidgetInteraction](#widgetinteraction), [VectorPath](#vectorpath), [PathCommand](#pathcommand), [PathStroke](#pathstroke), [ImageTransition](#imagetransition), [SineRowCopy](#sinerowcopy), [RegisterScore](#registerscore), [RegisterWrite](#registerwrite), [SimpleTextPlacement](#simpletextplacement), [WindowPolicy](#windowpolicy), [InputSample](#inputsample), [InputReceipt](#inputreceipt), [InputBufferSnapshot](#inputbuffersnapshot), [InputFrame](#inputframe), [CueSequenceCursor](#cuesequencecursor), [AudioSequenceCursor](#audiosequencecursor), [CueSequenceSpec](#cuesequencespec), [CueSequenceLine](#cuesequenceline), [CueSequenceMode](#cuesequencemode), [CueSequenceClock](#cuesequenceclock), [CueSequenceTiming](#cuesequencetiming), [CueSequenceRandom](#cuesequencerandom), [AudioSequenceHandle](#audiosequencehandle), [AudioSequenceEmission](#audiosequenceemission), [AudioSequenceInfo](#audiosequenceinfo), [DopplerSettings](#dopplersettings), [DopplerCalculation](#dopplercalculation), [DopplerInfo](#dopplerinfo), [MotionSettings](#motionsettings), [MotionEstimate](#motionestimate), [MotionStatus](#motionstatus), [Spatial](#spatial), [VoiceSpec](#voicespec), [AudioResourceHandle](#audioresourcehandle), [AudioSourcePrepareSpec](#audiosourcepreparespec), [AudioTransformSpec](#audiotransformspec), [AudioResourceTransform](#audioresourcetransform), [AudioResourceInfo](#audioresourceinfo), [AudioResourcePreparation](#audioresourcepreparation), [AudioMixGroupSettings](#audiomixgroupsettings), [AudioMixGroupInfo](#audiomixgroupinfo), [AudioParameters](#audioparameters), [PcmBus](#pcmbus), [AudioResumeSettings](#audioresumesettings), [AudioResumePolicy](#audioresumepolicy), [AudioPlaybackInfo](#audioplaybackinfo), [ReflectionTrackingSpec](#reflectiontrackingspec), [ReflectionOptions](#reflectionoptions), [ReflectionQuery](#reflectionquery), [ReflectionPath](#reflectionpath), [ReflectionPaths](#reflectionpaths), [ReverbSpec](#reverbspec), [ReverbSettings](#reverbsettings), [ReverbSend](#reverbsend), [SceneVoicePhase](#scenevoicephase), [SceneVoiceStatus](#scenevoicestatus), [AudioAsset](#audioasset), [AudioRequest](#audiorequest), [OriginalRestoreTicket](#originalrestoreticket), [OriginalRestoreStatus](#originalrestorestatus), [OriginalRestoreProgress](#originalrestoreprogress), [OriginalRestoreBatch](#originalrestorebatch), [OriginalRestoreCommit](#originalrestorecommit), [AudioReplacementInfo](#audioreplacementinfo), [AudioReplacementState](#audioreplacementstate), [ChannelReplacementJob](#channelreplacementjob), [PreparedChannelReplacement](#preparedchannelreplacement), [ChannelReplacementCommit](#channelreplacementcommit), [UnitFlowOptions](#unitflowoptions), [UnitFlowItem](#unitflowitem), [UnitFlowGlyph](#unitflowglyph), [UnitFlowLayout](#unitflowlayout), [GlyphBoundsRequest](#glyphboundsrequest), [GlyphBoundsSpec](#glyphboundsspec), [GlyphBounds](#glyphbounds), [GlyphBoundsProgress](#glyphboundsprogress), [AdaptiveStepClock](#adaptivestepclock), [ActivityTimer](#activitytimer), [MusicMetadataVersion](#musicmetadataversion), [MusicLoopEntry](#musicloopentry), [MusicLoopCatalog](#musicloopcatalog), [WaveRoutingEntry](#waveroutingentry), [WaveRoutingCatalog](#waveroutingcatalog), [ByteFormatValue](#byteformatvalue), [ByteFormatOutput](#byteformatoutput), [Printf32Argument](#printf32argument), [Printf32Output](#printf32output), [BitmapGlyph](#bitmapglyph), [PrecomputedFont](#precomputedfont), [ByteSplitBoundary](#bytesplitboundary), [ByteSplitLimits](#bytesplitlimits), [ByteSplitOutput](#bytesplitoutput), [LoopFrameRounding](#loopframerounding), [RegionMap](#regionmap), [AudioLoopTimebase](#audiolooptimebase), [AudioLoopRange](#audiolooprange), [AudioLoopMetadata](#audioloopmetadata), [AudioLoopCatalogReceipt](#audioloopcatalogreceipt), [AudioPreparePhase](#audiopreparephase), [AudioPreparation](#audiopreparation), [PcmAudioInfo](#pcmaudioinfo), [StreamBufferSpec](#streambufferspec), [SourceBufferStatus](#sourcebufferstatus), [AudioReleaseSpec](#audioreleasespec), [AudioReleaseHandle](#audioreleasehandle), [AudioReleasePhase](#audioreleasephase), [AudioReleaseInfo](#audioreleaseinfo), [VoiceReleaseSpec](#voicereleasespec), [TooltipSpec](#tooltipspec), [SpriteCursorLayout](#spritecursorlayout), [SpriteHotspot](#spritehotspot), [InstallerFile](#installerfile), [InstallerCatalog](#installercatalog), [XmlDocument](#xmldocument), [XmlNode](#xmlnode), [MajiroSettingsProfile](#majirosettingsprofile), [OpticalDiscPolicy](#opticaldiscpolicy), [SeekProgress](#seekprogress), [SourceSeekReceipt](#sourceseekreceipt), [SourceSeekState](#sourceseekstate), [FontMetrics](#fontmetrics), [FontFaceStyle](#fontfacestyle), [HrtfEarOrder](#hrtfearorder), [HrtfOptions](#hrtfoptions), [HrirAsset](#hrirasset), [HrirMeasurement](#hrirmeasurement), [AcousticBackend](#acousticbackend), [AcousticMeshUpdate](#acousticmeshupdate), [AcousticGeometryStats](#acousticgeometrystats), [AcousticMeshBindingSpec](#acousticmeshbindingspec), [AcousticSceneSpec](#acousticscenespec), [AcousticMesh](#acousticmesh), [AcousticMaterial](#acousticmaterial), [AcousticSource](#acousticsource), [AcousticQuery](#acousticquery), [DirectPath](#directpath), [DecodeLimits](#decodelimits), [TransformSpec](#transformspec), [LzssMode](#lzssmode), [LzssParams](#lzssparams), [FileKind](#filekind), [WaveLoop](#waveloop), [WaveSpec](#wavespec), [BitmapRect](#bitmaprect), [PixelMath](#pixelmath), [Sampling](#sampling), [BlitOptions](#blitoptions), [StretchOptions](#stretchoptions), [MessageWindow](#messagewindow), [AssociatedBlend](#associatedblend), [CoverageWrite](#coveragewrite), [AssociatedBlitOptions](#associatedblitoptions), [RgbFilter](#rgbfilter), [AssetKind](#assetkind), [AssetState](#assetstate), [AssetTicket](#assetticket), [AssetStatus](#assetstatus), [TaskStats](#taskstats), [Environment](#environment), [Sun](#sun), [Fog](#fog), [AutoExposure](#autoexposure), [ScreenSpaceReflections](#screenspacereflections), [RayTracedGi](#raytracedgi), [GeometryLod](#geometrylod), [VirtualShadows](#virtualshadows), [Tonemap](#tonemap), [EntitySpec](#entityspec), [Transform](#transform), [Material](#material), [AlphaMode](#alphamode), [NormalEncoding](#normalencoding), [LightSpec](#lightspec), [LightShape](#lightshape), [LightUnits](#lightunits), [Falloff](#falloff), [ReflectionProbeSpec](#reflectionprobespec), [IrradianceVolumeSpec](#irradiancevolumespec), [ColliderSpec](#colliderspec), [ColliderShape](#collidershape), [BodyKind](#bodykind), [CollisionGroups](#collisiongroups), [SystemsSpec](#systemsspec), [PhysicsScene](#physicsscene), [ClientPhysicsScene](#clientphysicsscene), [BodyForces](#bodyforces), [KinematicTarget](#kinematictarget), [JointFrame](#jointframe), [JointMotor](#jointmotor), [JointSpec](#jointspec), [JointHandle](#jointhandle), [JointState](#jointstate), [EmitterSpec](#emitterspec), [VfxSystemSpec](#vfxsystemspec), [VfxEmitterSpec](#vfxemitterspec), [VfxScreenSpriteTarget](#vfxscreenspritetarget), [VfxScreenSpriteOptions](#vfxscreenspriteoptions), [VfxSimulationClock](#vfxsimulationclock), [VfxSequenceRng](#vfxsequencerng), [VfxSequenceExchange](#vfxsequenceexchange), [VfxFallingAtlasSpec](#vfxfallingatlasspec), [VfxSystemSequenceState](#vfxsystemsequencestate), [VfxParameterValue](#vfxparametervalue), [VfxScalarValue](#vfxscalarvalue), [VfxScalarBinding](#vfxscalarbinding), [VfxVectorValue](#vfxvectorvalue), [VfxVectorBinding](#vfxvectorbinding), [VfxSimulationTarget](#vfxsimulationtarget), [VfxSimulationSpace](#vfxsimulationspace), [VfxOverflowPolicy](#vfxoverflowpolicy), [VfxSpawnSpec](#vfxspawnspec), [VfxBurst](#vfxburst), [VfxInitSpec](#vfxinitspec), [VfxSpawnShape](#vfxspawnshape), [VfxModule](#vfxmodule), [VfxInterpolation](#vfxinterpolation), [VfxScalarKey](#vfxscalarkey), [VfxVec2Key](#vfxvec2key), [VfxColorKey](#vfxcolorkey), [VfxScalarCurve](#vfxscalarcurve), [VfxVec2Curve](#vfxvec2curve), [VfxColorCurve](#vfxcolorcurve), [VfxRenderSpec](#vfxrenderspec), [VfxBlendMode](#vfxblendmode), [VfxFacingMode](#vfxfacingmode), [VfxMeshShape](#vfxmeshshape), [VfxEventKind](#vfxeventkind), [VfxEventHandler](#vfxeventhandler), [VfxParticle](#vfxparticle), [VfxParticleEvent](#vfxparticleevent), [VfxStats](#vfxstats), [VfxWorldBudget](#vfxworldbudget), [LayerSpec](#layerspec), [Paint](#paint), [SubtreeTransitionEffect](#subtreetransitioneffect), [RuleWipe](#rulewipe), [ImageSampling](#imagesampling), [TextureAddressMode](#textureaddressmode), [PositionedGlyph](#positionedglyph), [GlyphRevealUnit](#glyphrevealunit), [GlyphReveal](#glyphreveal), [GlyphRevealStatus](#glyphrevealstatus), [GlyphBlur](#glyphblur), [GlyphCoverageKernel](#glyphcoveragekernel), [CanvasSurface](#canvassurface), [CanvasNode](#canvasnode), [CanvasCommand](#canvascommand), [ServiceBatch](#servicebatch), [MediaRequest](#mediarequest), [MediaPhase](#mediaphase), [MediaInfo](#mediainfo), [MediaOptions](#mediaoptions), [MediaState](#mediastate), [MediaClock](#mediaclock), [MediaStatus](#mediastatus), [LayerFilter](#layerfilter), [Blend](#blend), [ToneCurve](#tonecurve), [LayerMask](#layermask), [Distortion](#distortion), [TransitionSpec](#transitionspec), [TransitionEffect](#transitioneffect), [Easing](#easing), [WidgetSpec](#widgetspec), [WidgetKind](#widgetkind), [Flow](#flow), [PuppetCommand](#puppetcommand), [PuppetRig](#puppetrig), [Parameter](#parameter), [Deformer](#deformer), [DeformerKey](#deformerkey), [Part](#part), [PartKey](#partkey), [PartBlend](#partblend), [Motion](#motion), [Curve](#curve), [Pendulum](#pendulum), [SequenceSpec](#sequencespec), [Track](#track), [TrackProperty](#trackproperty), [KeyInterpolation](#keyinterpolation), [TrackNoise](#tracknoise), [CameraTrack](#cameratrack), [CameraKey](#camerakey), [SequenceEvent](#sequenceevent), [WorldCommand](#worldcommand), [LayerCommand](#layercommand), [UiCommand](#uicommand), [MenuSpec](#menuspec), [MenuItemSpec](#menuitemspec), [OperationStatus](#operationstatus), [OperationState](#operationstate), [FontJob](#fontjob), [FontHandle](#fonthandle), [FontLoadSource](#fontloadsource), [FontLoadSpec](#fontloadspec), [FontInfo](#fontinfo), [FontLoadState](#fontloadstate), [MotionProperty](#motionproperty), [MotionTrackSpec](#motiontrackspec), [MotionTrackStatus](#motiontrackstatus), [MotionStatus](#motionstatus), [ExternalMotionPose](#externalmotionpose), [ExternalMotionStamp](#externalmotionstamp), [ExternalMotionStatus](#externalmotionstatus), [WidgetHitMask](#widgethitmask), [MenuTemplate](#menutemplate), [MenuTemplateItem](#menutemplateitem), [PeMenuResource](#pemenuresource), [PeResourceName](#peresourcename), [UiEvent](#uievent), [WidgetId](#widgetid)
+- Data: [ImageCompositeMath](#imagecompositemath), [RgbaBlendFactor](#rgbablendfactor), [RgbaBlendEquation](#rgbablendequation), [RgbaBlendComponent](#rgbablendcomponent), [RgbaByteRounding](#rgbabyterounding), [RgbaBlendArithmetic](#rgbablendarithmetic), [RgbaBlendState](#rgbablendstate), [SessionSeedSource](#sessionseedsource), [SessionSeedMaterial](#sessionseedmaterial), [SessionSeedState](#sessionseedstate), [CropRect](#croprect), [ImageEffect](#imageeffect), [LogRecord](#logrecord), [LogReceipt](#logreceipt), [LogSnapshot](#logsnapshot), [ReadingWait](#readingwait), [AldVolume](#aldvolume), [AldCatalog](#aldcatalog), [AlkCatalog](#alkcatalog), [System4IniValue](#system4inivalue), [System4IniEntry](#system4inientry), [System4IniDocument](#system4inidocument), [System4Mixer](#system4mixer), [System4Bootstrap](#system4bootstrap), [System4AssetClass](#system4assetclass), [System4AssetVolume](#system4assetvolume), [System4Assets](#system4assets), [System4SpriteSurface](#system4spritesurface), [System4Sprite](#system4sprite), [System4Sprites](#system4sprites), [System4Input](#system4input), [System4Sact](#system4sact), [System4NativeAdapter](#system4nativeadapter), [PointerObservation](#pointerobservation), [InputObservation](#inputobservation), [PlatformIntegration](#platformintegration), [PlatformIntegrationInfo](#platformintegrationinfo), [KeyboardLockState](#keyboardlockstate), [KeyboardLockSnapshot](#keyboardlocksnapshot), [NativeLiveState](#nativelivestate), [CivilTime](#civiltime), [CivilTransitionDay](#civiltransitionday), [CivilTransition](#civiltransition), [CivilDaylightRules](#civildaylightrules), [CivilTimeZoneProfile](#civiltimezoneprofile), [CivilTimeZoneState](#civiltimezonestate), [CivilTimeZoneQuery](#civiltimezonequery), [HttpMethod](#httpmethod), [HttpRequest](#httprequest), [HttpResponse](#httpresponse), [HttpRequestState](#httprequeststate), [HttpRequestJob](#httprequestjob), [SteppedPointerMotionSpec](#steppedpointermotionspec), [SteppedPointerMotion](#steppedpointermotion), [TexelQuad](#texelquad), [LayerSequenceSpec](#layersequencespec), [LayerSequenceBinding](#layersequencebinding), [LayerSequenceBindingTarget](#layersequencebindingtarget), [LayerSequenceValueMap](#layersequencevaluemap), [LayerSequenceDeltaSource](#layersequencedeltasource), [LayerSequenceTrack](#layersequencetrack), [LayerSequenceOperation](#layersequenceoperation), [LayerSequenceStatus](#layersequencestatus), [LayerSequenceLane](#layersequencelane), [LayerSequenceRecord](#layersequencerecord), [LayerSequenceActive](#layersequenceactive), [ImageEncodingInfo](#imageencodinginfo), [ImageEncodingInfoReceipt](#imageencodinginforeceipt), [ImageEncodingInfoState](#imageencodinginfostate), [Mt19937_1998](#mt199371998), [Mt19937Split](#mt19937split), [ByteLeadProfile](#byteleadprofile), [ByteStringProfile](#bytestringprofile), [ByteStringLimits](#bytestringlimits), [ByteStringContext](#bytestringcontext), [ByteNumberSymbols](#bytenumbersymbols), [NumericCompaction](#numericcompaction), [CivilTimeState](#civiltimestate), [MediaProbeInfo](#mediaprobeinfo), [MediaProbeState](#mediaprobestate), [InputReceiverSpec](#inputreceiverspec), [InputRouteSource](#inputroutesource), [InputRoutePhase](#inputroutephase), [InputRouteEvent](#inputrouteevent), [InputDeliveryReceipt](#inputdeliveryreceipt), [InputDelivery](#inputdelivery), [InputRouteStats](#inputroutestats), [InputRouteCommand](#inputroutecommand), [RgbLookup](#rgblookup), [RgbLookupProfile](#rgblookupprofile), [PatternRng](#patternrng), [TemporalPatternSpec](#temporalpatternspec), [TemporalPatternSnapshot](#temporalpatternsnapshot), [PatternResourceInfo](#patternresourceinfo), [PatternRequest](#patternrequest), [PatternOutput](#patternoutput), [PatternProcessState](#patternprocessstate), [FixedMixSpec](#fixedmixspec), [FixedMixRounding](#fixedmixrounding), [FixedMixAlpha](#fixedmixalpha), [FixedLumaSpec](#fixedlumaspec), [ProgressKnot](#progressknot), [ProgressShape](#progressshape), [ProgressCurve](#progresscurve), [FixedSampleRegion](#fixedsampleregion), [ResampleAlpha](#resamplealpha), [PiecewiseResampleSpec](#piecewiseresamplespec), [AlphaClipRect](#alphacliprect), [ByteGroupSplitLimits](#bytegroupsplitlimits), [ByteGroupSplitOutput](#bytegroupsplitoutput), [MaskedPairBlend](#maskedpairblend), [CgCatalogEntry](#cgcatalogentry), [CgCatalog](#cgcatalog), [PagedImageLayout](#pagedimagelayout), [PagedImageRegion](#pagedimageregion), [PagedImage](#pagedimage), [PagedClearPlan](#pagedclearplan), [DepthOrderKey](#depthorderkey), [DepthOrderStep](#depthorderstep), [ServiceBatch](#servicebatch), [ImageInput](#imageinput), [GlyphImageSpec](#glyphimagespec), [GlyphSizeBasis](#glyphsizebasis), [GlyphImageOrigin](#glyphimageorigin), [GlyphRasterOptions](#glyphrasteroptions), [StyledGlyphImageSpec](#styledglyphimagespec), [GlyphImageCell](#glyphimagecell), [GlyphImageBatchSpec](#glyphimagebatchspec), [GlyphImageBatchState](#glyphimagebatchstate), [ImageProcessState](#imageprocessstate), [MaterializeRequest](#materializerequest), [KeyboardLockPolicy](#keyboardlockpolicy), [SpriteAlpha](#spritealpha), [StripeReveal](#stripereveal), [SheetSequence](#sheetsequence), [SheetLoop](#sheetloop), [WidgetInteraction](#widgetinteraction), [VectorPath](#vectorpath), [PathCommand](#pathcommand), [PathStroke](#pathstroke), [ImageTransition](#imagetransition), [SineRowCopy](#sinerowcopy), [RegisterScore](#registerscore), [RegisterWrite](#registerwrite), [SimpleTextPlacement](#simpletextplacement), [WindowPolicy](#windowpolicy), [InputSample](#inputsample), [InputReceipt](#inputreceipt), [FrameAdmissionClock](#frameadmissionclock), [InputBufferSnapshot](#inputbuffersnapshot), [InputFrame](#inputframe), [CueSequenceCursor](#cuesequencecursor), [AudioSequenceCursor](#audiosequencecursor), [CueSequenceSpec](#cuesequencespec), [CueSequenceLine](#cuesequenceline), [CueSequenceMode](#cuesequencemode), [CueSequenceClock](#cuesequenceclock), [CueSequenceTiming](#cuesequencetiming), [CueSequenceRandom](#cuesequencerandom), [AudioSequenceHandle](#audiosequencehandle), [AudioSequenceEmission](#audiosequenceemission), [AudioSequenceInfo](#audiosequenceinfo), [DopplerSettings](#dopplersettings), [DopplerCalculation](#dopplercalculation), [DopplerInfo](#dopplerinfo), [MotionSettings](#motionsettings), [MotionEstimate](#motionestimate), [MotionStatus](#motionstatus), [Spatial](#spatial), [VoiceSpec](#voicespec), [AudioResourceHandle](#audioresourcehandle), [AudioSourcePrepareSpec](#audiosourcepreparespec), [AudioTransformSpec](#audiotransformspec), [AudioResourceTransform](#audioresourcetransform), [AudioResourceInfo](#audioresourceinfo), [AudioResourcePreparation](#audioresourcepreparation), [AudioMixGroupSettings](#audiomixgroupsettings), [AudioMixGroupInfo](#audiomixgroupinfo), [AudioParameters](#audioparameters), [PcmBus](#pcmbus), [AudioResumeSettings](#audioresumesettings), [AudioResumePolicy](#audioresumepolicy), [AudioPlaybackInfo](#audioplaybackinfo), [ReflectionTrackingSpec](#reflectiontrackingspec), [ReflectionOptions](#reflectionoptions), [ReflectionQuery](#reflectionquery), [ReflectionPath](#reflectionpath), [ReflectionPaths](#reflectionpaths), [ReverbSpec](#reverbspec), [ReverbSettings](#reverbsettings), [ReverbSend](#reverbsend), [SceneVoicePhase](#scenevoicephase), [SceneVoiceStatus](#scenevoicestatus), [AudioAsset](#audioasset), [AudioRequest](#audiorequest), [OriginalRestoreTicket](#originalrestoreticket), [OriginalRestoreStatus](#originalrestorestatus), [OriginalRestoreProgress](#originalrestoreprogress), [OriginalRestoreBatch](#originalrestorebatch), [OriginalRestoreCommit](#originalrestorecommit), [AudioReplacementInfo](#audioreplacementinfo), [AudioReplacementState](#audioreplacementstate), [ChannelReplacementJob](#channelreplacementjob), [PreparedChannelReplacement](#preparedchannelreplacement), [ChannelReplacementCommit](#channelreplacementcommit), [UnitFlowOptions](#unitflowoptions), [UnitFlowItem](#unitflowitem), [UnitFlowGlyph](#unitflowglyph), [UnitFlowLayout](#unitflowlayout), [GlyphBoundsRequest](#glyphboundsrequest), [GlyphBoundsSpec](#glyphboundsspec), [GlyphBounds](#glyphbounds), [GlyphBoundsProgress](#glyphboundsprogress), [AdaptiveStepClock](#adaptivestepclock), [ActivityTimer](#activitytimer), [MusicMetadataVersion](#musicmetadataversion), [MusicLoopEntry](#musicloopentry), [MusicLoopCatalog](#musicloopcatalog), [WaveRoutingEntry](#waveroutingentry), [WaveRoutingCatalog](#waveroutingcatalog), [ByteFormatValue](#byteformatvalue), [ByteFormatOutput](#byteformatoutput), [Printf32Argument](#printf32argument), [Printf32Output](#printf32output), [BitmapGlyph](#bitmapglyph), [PrecomputedFont](#precomputedfont), [ByteSplitBoundary](#bytesplitboundary), [ByteSplitLimits](#bytesplitlimits), [ByteSplitOutput](#bytesplitoutput), [LoopFrameRounding](#loopframerounding), [RegionMap](#regionmap), [AudioLoopTimebase](#audiolooptimebase), [AudioLoopRange](#audiolooprange), [AudioLoopMetadata](#audioloopmetadata), [AudioLoopCatalogReceipt](#audioloopcatalogreceipt), [AudioPreparePhase](#audiopreparephase), [AudioPreparation](#audiopreparation), [PcmAudioInfo](#pcmaudioinfo), [StreamBufferSpec](#streambufferspec), [SourceBufferStatus](#sourcebufferstatus), [AudioReleaseSpec](#audioreleasespec), [AudioReleaseHandle](#audioreleasehandle), [AudioReleasePhase](#audioreleasephase), [AudioReleaseInfo](#audioreleaseinfo), [VoiceReleaseSpec](#voicereleasespec), [TooltipSpec](#tooltipspec), [SpriteCursorLayout](#spritecursorlayout), [SpriteHotspot](#spritehotspot), [InstallerFile](#installerfile), [InstallerCatalog](#installercatalog), [XmlDocument](#xmldocument), [XmlNode](#xmlnode), [MajiroSettingsProfile](#majirosettingsprofile), [OpticalDiscPolicy](#opticaldiscpolicy), [SeekProgress](#seekprogress), [SourceSeekReceipt](#sourceseekreceipt), [SourceSeekState](#sourceseekstate), [FontMetrics](#fontmetrics), [FontFaceStyle](#fontfacestyle), [HrtfEarOrder](#hrtfearorder), [HrtfOptions](#hrtfoptions), [HrirAsset](#hrirasset), [HrirMeasurement](#hrirmeasurement), [AcousticBackend](#acousticbackend), [AcousticMeshUpdate](#acousticmeshupdate), [AcousticGeometryStats](#acousticgeometrystats), [AcousticMeshBindingSpec](#acousticmeshbindingspec), [AcousticSceneSpec](#acousticscenespec), [AcousticMesh](#acousticmesh), [AcousticMaterial](#acousticmaterial), [AcousticSource](#acousticsource), [AcousticQuery](#acousticquery), [DirectPath](#directpath), [DecodeLimits](#decodelimits), [TransformSpec](#transformspec), [LzssMode](#lzssmode), [LzssParams](#lzssparams), [FileKind](#filekind), [WaveLoop](#waveloop), [WaveSpec](#wavespec), [BitmapRect](#bitmaprect), [PixelMath](#pixelmath), [Sampling](#sampling), [BlitOptions](#blitoptions), [StretchOptions](#stretchoptions), [MessageWindow](#messagewindow), [AssociatedBlend](#associatedblend), [CoverageWrite](#coveragewrite), [AssociatedBlitOptions](#associatedblitoptions), [RgbFilter](#rgbfilter), [AssetKind](#assetkind), [AssetState](#assetstate), [AssetTicket](#assetticket), [AssetStatus](#assetstatus), [TaskStats](#taskstats), [Environment](#environment), [Sun](#sun), [Fog](#fog), [AutoExposure](#autoexposure), [ScreenSpaceReflections](#screenspacereflections), [RayTracedGi](#raytracedgi), [GeometryLod](#geometrylod), [VirtualShadows](#virtualshadows), [Tonemap](#tonemap), [EntitySpec](#entityspec), [Transform](#transform), [Material](#material), [AlphaMode](#alphamode), [NormalEncoding](#normalencoding), [LightSpec](#lightspec), [LightShape](#lightshape), [LightUnits](#lightunits), [Falloff](#falloff), [ReflectionProbeSpec](#reflectionprobespec), [IrradianceVolumeSpec](#irradiancevolumespec), [ColliderSpec](#colliderspec), [ColliderShape](#collidershape), [BodyKind](#bodykind), [CollisionGroups](#collisiongroups), [SystemsSpec](#systemsspec), [PhysicsScene](#physicsscene), [ClientPhysicsScene](#clientphysicsscene), [BodyForces](#bodyforces), [KinematicTarget](#kinematictarget), [JointFrame](#jointframe), [JointMotor](#jointmotor), [JointSpec](#jointspec), [JointHandle](#jointhandle), [JointState](#jointstate), [EmitterSpec](#emitterspec), [VfxSystemSpec](#vfxsystemspec), [VfxEmitterSpec](#vfxemitterspec), [VfxScreenSpriteTarget](#vfxscreenspritetarget), [VfxScreenSpriteOptions](#vfxscreenspriteoptions), [VfxSimulationClock](#vfxsimulationclock), [VfxSequenceRng](#vfxsequencerng), [VfxSequenceExchange](#vfxsequenceexchange), [VfxFallingAtlasSpec](#vfxfallingatlasspec), [VfxDriftMotion](#vfxdriftmotion), [VfxDriftSpawnWindow](#vfxdriftspawnwindow), [VfxDriftingAtlasSpec](#vfxdriftingatlasspec), [VfxDriftingAtlasState](#vfxdriftingatlasstate), [VfxSystemSequenceState](#vfxsystemsequencestate), [VfxParameterValue](#vfxparametervalue), [VfxScalarValue](#vfxscalarvalue), [VfxScalarBinding](#vfxscalarbinding), [VfxVectorValue](#vfxvectorvalue), [VfxVectorBinding](#vfxvectorbinding), [VfxSimulationTarget](#vfxsimulationtarget), [VfxSimulationSpace](#vfxsimulationspace), [VfxOverflowPolicy](#vfxoverflowpolicy), [VfxSpawnSpec](#vfxspawnspec), [VfxBurst](#vfxburst), [VfxInitSpec](#vfxinitspec), [VfxSpawnShape](#vfxspawnshape), [VfxModule](#vfxmodule), [VfxInterpolation](#vfxinterpolation), [VfxScalarKey](#vfxscalarkey), [VfxVec2Key](#vfxvec2key), [VfxColorKey](#vfxcolorkey), [VfxScalarCurve](#vfxscalarcurve), [VfxVec2Curve](#vfxvec2curve), [VfxColorCurve](#vfxcolorcurve), [VfxRenderSpec](#vfxrenderspec), [VfxBlendMode](#vfxblendmode), [VfxFacingMode](#vfxfacingmode), [VfxMeshShape](#vfxmeshshape), [VfxEventKind](#vfxeventkind), [VfxEventHandler](#vfxeventhandler), [VfxParticle](#vfxparticle), [VfxParticleEvent](#vfxparticleevent), [VfxStats](#vfxstats), [VfxWorldBudget](#vfxworldbudget), [LayerSpec](#layerspec), [Paint](#paint), [SubtreeTransitionEffect](#subtreetransitioneffect), [RuleWipe](#rulewipe), [ImageSampling](#imagesampling), [TextureAddressMode](#textureaddressmode), [PositionedGlyph](#positionedglyph), [GlyphRevealUnit](#glyphrevealunit), [GlyphReveal](#glyphreveal), [GlyphRevealStatus](#glyphrevealstatus), [GlyphBlur](#glyphblur), [GlyphCoverageKernel](#glyphcoveragekernel), [CanvasSurface](#canvassurface), [CanvasNode](#canvasnode), [CanvasCommand](#canvascommand), [ServiceBatch](#servicebatch), [MediaRequest](#mediarequest), [MediaPhase](#mediaphase), [MediaInfo](#mediainfo), [MediaOptions](#mediaoptions), [MediaState](#mediastate), [MediaClock](#mediaclock), [MediaStatus](#mediastatus), [LayerFilter](#layerfilter), [Blend](#blend), [ToneCurve](#tonecurve), [LayerMask](#layermask), [Distortion](#distortion), [TransitionSpec](#transitionspec), [TransitionEffect](#transitioneffect), [Easing](#easing), [WidgetSpec](#widgetspec), [WidgetKind](#widgetkind), [WidgetKeyEvent](#widgetkeyevent), [WidgetKeyEdge](#widgetkeyedge), [Flow](#flow), [PuppetCommand](#puppetcommand), [PuppetRig](#puppetrig), [Parameter](#parameter), [Deformer](#deformer), [DeformerKey](#deformerkey), [Part](#part), [PartKey](#partkey), [PartBlend](#partblend), [Motion](#motion), [Curve](#curve), [Pendulum](#pendulum), [SequenceSpec](#sequencespec), [Track](#track), [TrackProperty](#trackproperty), [KeyInterpolation](#keyinterpolation), [TrackNoise](#tracknoise), [CameraTrack](#cameratrack), [CameraKey](#camerakey), [SequenceEvent](#sequenceevent), [WorldCommand](#worldcommand), [LayerCommand](#layercommand), [UiCommand](#uicommand), [MenuSpec](#menuspec), [MenuItemSpec](#menuitemspec), [OperationStatus](#operationstatus), [OperationState](#operationstate), [FontJob](#fontjob), [FontHandle](#fonthandle), [FontLoadSource](#fontloadsource), [FontLoadSpec](#fontloadspec), [FontInfo](#fontinfo), [FontLoadState](#fontloadstate), [MotionProperty](#motionproperty), [MotionTrackSpec](#motiontrackspec), [MotionTrackStatus](#motiontrackstatus), [MotionStatus](#motionstatus), [ExternalMotionPose](#externalmotionpose), [ExternalMotionStamp](#externalmotionstamp), [ExternalMotionStatus](#externalmotionstatus), [WidgetHitMask](#widgethitmask), [MenuTemplate](#menutemplate), [MenuTemplateItem](#menutemplateitem), [PeMenuResource](#pemenuresource), [PeResourceName](#peresourcename), [UiEvent](#uievent), [WidgetId](#widgetid)
 - [Adapter configs](#adapter-configs)
 
 ## Globals
@@ -204,12 +204,12 @@ Script global: `canvases`.
 | Method | Returns | Description |
 |---|---|---|
 | `getLimits(—)` | `Record<string, any>` | Return shared retained-canvas capacity: surfacesPerClient. Pixel-byte, dimension and node limits are admitted separately. |
-| `apply(commands: Record<string, any>[])` | `void` | Atomically apply typed canvas commands: create, destroy, clear, draw, set, copy, present, present_isolated and hide. present_isolated keeps a live source surface as one immutable snapshot draw, refreshing it after edits; parent opacity/transform applies after composition. Nested snapshot/resource limits fail atomically. Destroy releases an existing unpresented surface; hide its presentations first. Frozen copies survive source destruction. Draws contain ordinary Layer specs, including positioned glyph runs. |
+| `apply(commands: Record<string, any>[])` | `void` | Atomically apply typed canvas commands: create, destroy, clear, draw, set, copy, present, present_isolated, present_target and hide. present_isolated isolates composition with paged output for large surfaces; present_target uses one whole target up to8192 per axis so masks/distortion sample globally across storage pages. Both refresh after source edits. Parent opacity/transform applies after composition; renderer memory/device budgets still apply. Nested snapshot/resource limits fail atomically. Destroy releases an existing unpresented surface; hide its presentations first. Frozen copies survive source destruction. Draws contain ordinary Layer specs, including positioned glyph runs. |
 | `applyBatch(batch: Record<string, any>)` | `void` | Atomically submit a typed ServiceBatch: prepare_layers before canvases, then world, ordinary layers and UI; input routes are staged in the same transaction. New Canvas parents and real motion producers may be created in prepare_layers without intermediate publication. Existing apply remains canvas-only. At most4096 combined commands and4MiB serialized data; host resource/font preparation applies. |
 | `get(id: number)` | `Record<string, any> \| null` | Inspect this client's canvas dimensions and logical draw nodes, or null when absent. No flattened native frame is returned. |
 | `readPixel(id: number, x: number, y: number)` | `number[]` | Read exact RGBA bytes from supported retained solid canvas nodes. Missing/outside coordinates and unsupported image/text/group/filter/transform/blend profiles fail; no guessed matte or GPU readback. |
 
-Commands issued: `apply` → `canvas.create`, `apply` → `canvas.clear`, `apply` → `canvas.draw`, `apply` → `canvas.set`, `apply` → `canvas.copy`, `apply` → `canvas.resize`, `apply` → `canvas.fill`, `apply` → `canvas.transform_copy`, `apply` → `canvas.copy_subtree`, `apply` → `canvas.fade`, `apply` → `canvas.filter`, `apply` → `canvas.restore`, `apply` → `canvas.present`, `apply` → `canvas.present_isolated`, `apply` → `canvas.hide`, `apply` → `canvas.destroy`.
+Commands issued: `apply` → `canvas.create`, `apply` → `canvas.clear`, `apply` → `canvas.draw`, `apply` → `canvas.set`, `apply` → `canvas.copy`, `apply` → `canvas.resize`, `apply` → `canvas.fill`, `apply` → `canvas.transform_copy`, `apply` → `canvas.copy_subtree`, `apply` → `canvas.fade`, `apply` → `canvas.filter`, `apply` → `canvas.restore`, `apply` → `canvas.present`, `apply` → `canvas.present_isolated`, `apply` → `canvas.present_target`, `apply` → `canvas.hide`, `apply` → `canvas.destroy`, `apply` → `canvas.retire`.
 
 ## Class Client
 
@@ -433,10 +433,11 @@ Script global: `layers`.
 | `setOrder(id: number, order: number[])` | `void` | Explicit [major, minor] draw order. |
 | `setClip(id: number, clip: number[] \| null)` | `void` | Clip rectangle [x,y,w,h] or null. |
 | `setViewportClip(id: number, clip: number[] \| null)` | `void` | Inherited clip [x,y,w,h] in logical render-target coordinates, unaffected by layer or parent transforms. Zero width/height hides the subtree; null removes this clip. Local clip remains independent. |
+| `setGlyphCrops(id: number, crops: number[] \| null[])` | `void` | Replace each positioned glyph clip {x,y,width,height} or null; preserves all layer motion and sequence ownership. Count must match the existing glyph run. |
 | `setSourceCrop(id: number, crop: number[] \| null)` | `void` | Crop this layer's own geometry and source UVs in local [x,y,w,h] coordinates before projection, without changing content layout or children. Null removes; zero extent hides its payload. |
 | `sourceCrop(id: number)` | `number[] \| null` | Read this owned layer's source crop; a missing target fails, null means none. |
 | `viewportClip(id: number)` | `number[] \| null` | Read this owned layer's explicit render-target clip; a missing target fails, null means none. |
-| `setFilter(id: number, filter: Record<string, any> \| null)` | `void` | Siglus-style 2D filter {mono, invert, bright, dark, color_rate, color, add, tone_curve?:{asset,row,saturation}, mask?:{asset,gray_alpha}, alpha_test, distortion?:{kind:'mosaic'\|'raster'\|'radial_blur'\|'threshold_fade',...}} or null. |
+| `setFilter(id: number, filter: Record<string, any> \| null)` | `void` | Siglus-style 2D filter {mono, invert, bright, dark, color_rate, color, add, tone_curve?:{asset,row,saturation}, mask?:{asset,gray_alpha?,channel?:'rgba'\|'red'\|'green'\|'blue'\|'alpha',offset?:number}, alpha_test, distortion?:{kind:'mosaic'\|'raster'\|'radial_blur'\|'threshold_fade',...}} or null. |
 | `transition(transition: Record<string, any>)` | `void` | Screen transition from the last presented frame: {effect:{kind:'crossfade'\|'mask'{asset,fade}\|'slide'{direction}\|'mosaic'{size}\|'ordered_dither'{cell:[x,y],diagonal?,steps}\|'siglus'{code,options?,mask?}}, duration_ms, easing?:'linear'\|'ease_in'\|'ease_out'\|'smooth'}. |
 | `crossfadeStatus(id: number)` | `Record<string, any> \| null` | Owned subtree transition {source, duration_ms, elapsed_ms}, or null. |
 | `beginCrossfade(id: number, source: number, durationMs: number)` | `void` | Crossfade two isolated sibling subtrees using the engine clock. |
@@ -445,16 +446,22 @@ Script global: `layers`.
 | `setCrossfadeElapsed(id: number, elapsedMs: number)` | `void` | Set an externally clocked crossfade's progress (clamped to its duration). |
 | `endTransition(—)` | `void` | Finish this client's transition now (skip). |
 | `beginMotion(id: number, track: Record<string, any>)` | `void` | Animate layer position, scale, rotation (radians), pivot or opacity with shared MotionTrackSpec; opacity samples truncate to0..255 bytes, engine duration uses milliseconds, external duration uses caller units. |
+| `beginSequence(id: number, spec: Record<string, any>)` | `void` | Create owned externally clocked incremental channels and Layer/filter bindings. Banked linear/oscillating queues retain activation, velocity, loop origins and capture/replay state. |
+| `sequence(id: number, operation: Record<string, any>)` | `void` | Enqueue, set, capture, replay, advance or finish an owned channel queue. Advance requires consecutive decimal-string generation/revision receipts; a pending worker never advances its clock. |
+| `sequenceStatus(id: number)` | `Record<string, any> \| null` | Retained owner-scoped sequence channels, queues, active/last records and exact generation/revision. Null means the owned layer has no sequence. |
 | `beginExternalMotion(id: number, driver: number)` | `void` | Register an external procedural animation producer. Query motionStatus for its fresh generation; engine stores no executable callback. Retire producers before scene snapshots. |
 | `commitExternalMotion(id: number, driver: number, stamp: Record<string, any>, complete: boolean, pose: Record<string, any> \| null)` | `void` | Atomically publish an optional {rect,transform,opacity} pose with a consecutive animation revision using {generation,revision} decimal u64 strings. Completion reflects the real producer; stale/invalid samples roll back both pose and revision. |
 | `requestExternalMotionSkip(id: number, driver: number, generation: string)` | `void` | Request the actual external producer's skip branch. The request alone never completes or samples an endpoint. |
 | `removeExternalMotion(id: number, driver: number, generation: string)` | `void` | Retire a scoped external producer; old asynchronous results remain invalid after node/driver reuse. |
+| `advanceTime(deltaMs: number)` | `void` | Advance only this client's automatic layer motion, text reveal and transition clocks by 0..86400000 ms; external tracks and other clients retain their clocks. |
+| `setParent(id: number, parent: number \| null)` | `void` | Reparent an owned node while preserving paint, animation and child hierarchy; absent/cyclic/foreign parents fail atomically. |
+| `setPaint(id: number, paint: Record<string, any>)` | `void` | Replace owned layer paint while retaining geometry and animation; non-image paints clear image-only sampling and UV crop. |
 | `setRect(id: number, rect: number[])` | `void` | Change finite positive rectangle geometry while preserving scalar/external animation and unrelated Layer state. |
 | `setMotionElapsed(id: number, property: string, elapsed: number)` | `void` | Sample an externally clocked motion track at caller elapsed units. |
 | `endMotion(id: number, property: string \| null, finish: boolean)` | `void` | Cancel one track or all tracks; finish optionally applies the target before removal. |
 | `motionStatus(id: number)` | `Record<string, any>` | Owned scalar tracks, external drivers with exact generation/revision stamps, and combined completion; a missing target fails. |
 
-Commands issued: `put` → `layer.put`, `remove` → `layer.remove`, `setTransform` → `layer.set_transform`, `setVisible` → `layer.set_visible`, `completeReveal` → `layer.complete_reveal`, `setOpacity` → `layer.set_opacity`, `setOrder` → `layer.set_order`, `setDepth` → `layer.set_depth`, `setSolidColor` → `layer.set_solid_color`, `setClip` → `layer.set_clip`, `setViewportClip` → `layer.set_viewport_clip`, `setSourceCrop` → `layer.set_source_crop`, `setFilter` → `layer.set_filter`, `transition` → `layer.transition`, `endTransition` → `layer.end_transition`, `beginCrossfade` → `layer.begin_crossfade`, `beginCrossfadeEffect` → `layer.begin_crossfade_effect`, `endCrossfade` → `layer.end_crossfade`, `setCrossfadeElapsed` → `layer.set_crossfade_elapsed`, `beginMotion` → `layer.begin_motion`, `beginExternalMotion` → `layer.begin_external_motion`, `commitExternalMotion` → `layer.commit_external_motion`, `requestExternalMotionSkip` → `layer.request_external_motion_skip`, `removeExternalMotion` → `layer.remove_external_motion`, `setRect` → `layer.set_rect`, `setMotionElapsed` → `layer.set_motion_elapsed`, `endMotion` → `layer.end_motion`.
+Commands issued: `put` → `layer.put`, `remove` → `layer.remove`, `setTransform` → `layer.set_transform`, `setVisible` → `layer.set_visible`, `completeReveal` → `layer.complete_reveal`, `setOpacity` → `layer.set_opacity`, `setOrder` → `layer.set_order`, `setDepth` → `layer.set_depth`, `setSolidColor` → `layer.set_solid_color`, `setPaint` → `layer.set_paint`, `setParent` → `layer.set_parent`, `advanceTime` → `layer.advance_time`, `setClip` → `layer.set_clip`, `setViewportClip` → `layer.set_viewport_clip`, `setSourceCrop` → `layer.set_source_crop`, `setGlyphCrops` → `layer.set_glyph_crops`, `setFilter` → `layer.set_filter`, `rebindImage` → `layer.rebind_image`, `transition` → `layer.transition`, `endTransition` → `layer.end_transition`, `beginCrossfade` → `layer.begin_crossfade`, `beginCrossfadeEffect` → `layer.begin_crossfade_effect`, `endCrossfade` → `layer.end_crossfade`, `setCrossfadeElapsed` → `layer.set_crossfade_elapsed`, `beginMotion` → `layer.begin_motion`, `beginSequence` → `layer.begin_sequence`, `sequence` → `layer.sequence`, `beginExternalMotion` → `layer.begin_external_motion`, `commitExternalMotion` → `layer.commit_external_motion`, `requestExternalMotionSkip` → `layer.request_external_motion_skip`, `removeExternalMotion` → `layer.remove_external_motion`, `setRect` → `layer.set_rect`, `setMotionElapsed` → `layer.set_motion_elapsed`, `endMotion` → `layer.end_motion`.
 
 ## Class Localization
 
@@ -652,6 +659,7 @@ Script global: `text`.
 | `resolveFontAlias(aliasOrFamily: string)` | `string \| null` | Resolve a scoped dynamic binding, canonical alias or installed static family to the exact engine drawing alias. No font lease is fabricated for static faces. |
 | `glyphId(alias: string, character: string)` | `number` | Read one authorized character-to-glyph mapping without rasterization, parsing or I/O. Requires one Unicode scalar; a missing printable glyph fails explicitly. |
 | `fontStyle(alias: string)` | `Record<string, any> \| null` | Read cached actual outline OS/2 {weight,italic}; unknown metadata/precomputed faces return null, never fabricated regular weight. |
+| `fontWidthScale(alias: string, size: number, averageWidth: number)` | `number` | Resolve an explicit outline average-character pixel width using this client's OS/2 font metadata. Returns a horizontal outline scale; precomputed/unspecified faces fail visibly. |
 | `fontMetrics(alias: string, size: number, character: string)` | `Record<string, any>` | Measure one Unicode scalar with this client's authorized immutable font view; returns ascent, descent and advance. Size 1..512. |
 | `layoutUnitFlow(items: Record<string, any>[], options: Record<string, any> \| null)` | `Record<string, any>` | Font-independent cell-stream placement with unit wrapping, explicit moves, style indices and vertical columns. Returns logical cell bounds, not raster ink bounds. Live calls accept at most4096 commands; offline Rust layout accepts65536. |
 | `beginGlyphBounds(font: string, glyphs: Record<string, any>[])` | `number` | Prepare actual glyph coverage-cell bounds on a scoped CPU worker. Each request contains character, size and optional baseline. Retains the admitted font snapshot; never joins the owner thread. |
@@ -688,6 +696,7 @@ Script global: `ui`.
 
 | Method | Returns | Description |
 |---|---|---|
+| `drainSubtreeEvents(root: number)` | `Record<string, any>[]` | Consume only this client's retained events in an owned widget subtree, preserving all other deliveries. |
 | `drainEvents(—)` | `Record<string, any>[]` | Consume this client's retained events once, preserving other clients' events. Use this for action dispatch; events only reads a snapshot of the queue. |
 | `snapshotLayers(root: number \| null)` | `Record<string, any>[]` | Freeze owned UI into independent logical LayerSpec records on the project canvas. Pass null for all owned UI, or a widget id for its subtree; current values, style and clip are preserved. |
 | `putTooltip(tooltip: Record<string, any>)` | `void` | Prepare font-measured bounds and register an owned plain single-line TooltipSpec; no native VM or pointer capture is required. |
@@ -700,11 +709,14 @@ Script global: `ui`.
 | `closeMenu(id: number)` | `void` | Close this client's menu popups. |
 | `openDialog(dialog: Record<string, any>)` | `void` | Open an engine-drawn modal message dialog {id, title?, message, buttons:[{id,label}], default, cancel?, font, text_size?}; the choice arrives as a dialog_result event (value = button id). |
 | `closeDialog(id: number)` | `void` | Close this client's open dialog without a result. |
+| `movePointerStepped(motion: Record<string, any>)` | `void` | Begin owner-scoped externally ticked f32 pointer motion {start,target,ticks}; each axis snaps within one absolute increment. |
+| `advancePointerMotion(ticks: number)` | `void` | Advance only this client's externally clocked pointer motion. |
 | `warpPointer(position: number[])` | `void` | Ask the presenting host to move the OS pointer to a canvas position. |
 | `setMenuChecked(id: number, item: number, checked: boolean)` | `void` | Update checked state with shared sibling radio-group semantics. |
 | `setMenuEnabled(id: number, item: number, enabled: boolean)` | `void` | Enable or disable an owned menu item, closing invalid popup branches and canceling ineligible gestures. |
-| `put(widget: Record<string, any>)` | `void` | Insert/replace a widget spec {id, parent?, rect, kind, flow?, text?, ...}. |
+| `put(widget: Record<string, any>)` | `void` | Insert/replace a widget spec {id, parent?, rect, kind, flow?, text?, slider_axis?:horizontal\|vertical, focus_follows_pointer?:bool, ...}. Sliders use that axis for shared pointer capture, keyboard adjustment and fill. |
 | `remove(id: number)` | `void` | Remove a widget and its children. |
+| `setRect(id: number, rect: number[])` | `void` | Update owned widget geometry while retaining input and motion state. |
 | `setVisible(id: number, visible: boolean)` | `void` | Show/hide. |
 | `setEnabled(id: number, enabled: boolean)` | `void` | Enable/disable input. |
 | `setValue(id: number, value: number)` | `void` | Toggle/slider value. |
@@ -724,7 +736,7 @@ Script global: `ui`.
 | `endMotion(id: number, property: string \| null, finish: boolean)` | `void` | Cancel one or all widget motion tracks, optionally applying their targets. |
 | `motionStatus(id: number)` | `Record<string, any>` | Current owned widget motion tracks and completion; a missing target fails. |
 
-Commands issued: `setMenu` → `ui.set_menu`, `removeMenu` → `ui.remove_menu`, `openMenu` → `ui.open_menu`, `openDialog` → `ui.open_dialog`, `closeDialog` → `ui.close_dialog`, `warpPointer` → `ui.warp_pointer`, `closeMenu` → `ui.close_menu`, `setMenuChecked` → `ui.set_menu_checked`, `setMenuEnabled` → `ui.set_menu_enabled`, `putTooltip` → `ui.put_tooltip`, `removeTooltip` → `ui.remove_tooltip`, `showTooltip` → `ui.show_tooltip`, `hideTooltip` → `ui.hide_tooltip`, `put` → `ui.put`, `remove` → `ui.remove`, `setVisible` → `ui.set_visible`, `setEnabled` → `ui.set_enabled`, `setValue` → `ui.set_value`, `setHitMask` → `ui.set_hit_mask`, `setText` → `ui.set_text`, `setTitle` → `ui.set_title`, `setWindowPolicy` → `ui.set_window_policy`, `setFullscreen` → `ui.set_fullscreen`, `setCursorVisible` → `ui.set_cursor_visible`, `defineCursor` → `ui.define_cursor`, `setCursor` → `ui.set_cursor`, `insertText` → `ui.insert_text`, `backspace` → `ui.backspace`, `focusTextField` → `ui.focus`, `beginMotion` → `ui.begin_motion`, `setMotionElapsed` → `ui.set_motion_elapsed`, `endMotion` → `ui.end_motion`.
+Commands issued: `setMenu` → `ui.set_menu`, `removeMenu` → `ui.remove_menu`, `openMenu` → `ui.open_menu`, `openDialog` → `ui.open_dialog`, `closeDialog` → `ui.close_dialog`, `warpPointer` → `ui.warp_pointer`, `movePointerStepped` → `ui.move_pointer_stepped`, `advancePointerMotion` → `ui.advance_pointer_motion`, `closeMenu` → `ui.close_menu`, `setMenuChecked` → `ui.set_menu_checked`, `setMenuEnabled` → `ui.set_menu_enabled`, `putTooltip` → `ui.put_tooltip`, `removeTooltip` → `ui.remove_tooltip`, `showTooltip` → `ui.show_tooltip`, `hideTooltip` → `ui.hide_tooltip`, `put` → `ui.put`, `remove` → `ui.remove`, `setRect` → `ui.set_rect`, `setVisible` → `ui.set_visible`, `setEnabled` → `ui.set_enabled`, `setValue` → `ui.set_value`, `setHitMask` → `ui.set_hit_mask`, `setText` → `ui.set_text`, `setTitle` → `ui.set_title`, `setWindowPolicy` → `ui.set_window_policy`, `setFullscreen` → `ui.set_fullscreen`, `setCursorVisible` → `ui.set_cursor_visible`, `defineCursor` → `ui.define_cursor`, `setCursor` → `ui.set_cursor`, `insertText` → `ui.insert_text`, `backspace` → `ui.backspace`, `focusTextField` → `ui.focus`, `beginMotion` → `ui.begin_motion`, `setMotionElapsed` → `ui.set_motion_elapsed`, `endMotion` → `ui.end_motion`.
 
 ## Class Vfx
 
@@ -841,10 +853,15 @@ Every typed engine command and the API member that issues it. `tests/api_coverag
 | layer | `set_order` | `Layers.setOrder` |
 | layer | `set_depth` | `Layers.setDepth` |
 | layer | `set_solid_color` | `Layers.setSolidColor` |
+| layer | `set_paint` | `Layers.setPaint` |
+| layer | `set_parent` | `Layers.setParent` |
+| layer | `advance_time` | `Layers.advanceTime` |
 | layer | `set_clip` | `Layers.setClip` |
 | layer | `set_viewport_clip` | `Layers.setViewportClip` |
 | layer | `set_source_crop` | `Layers.setSourceCrop` |
+| layer | `set_glyph_crops` | `Layers.setGlyphCrops` |
 | layer | `set_filter` | `Layers.setFilter` |
+| layer | `rebind_image` | `Layers.rebindImage` |
 | layer | `transition` | `Layers.transition` |
 | layer | `end_transition` | `Layers.endTransition` |
 | layer | `begin_crossfade` | `Layers.beginCrossfade` |
@@ -852,6 +869,8 @@ Every typed engine command and the API member that issues it. `tests/api_coverag
 | layer | `end_crossfade` | `Layers.endCrossfade` |
 | layer | `set_crossfade_elapsed` | `Layers.setCrossfadeElapsed` |
 | layer | `begin_motion` | `Layers.beginMotion` |
+| layer | `begin_sequence` | `Layers.beginSequence` |
+| layer | `sequence` | `Layers.sequence` |
 | layer | `begin_external_motion` | `Layers.beginExternalMotion` |
 | layer | `commit_external_motion` | `Layers.commitExternalMotion` |
 | layer | `request_external_motion_skip` | `Layers.requestExternalMotionSkip` |
@@ -874,14 +893,18 @@ Every typed engine command and the API member that issues it. `tests/api_coverag
 | canvas | `restore` | `Canvases.apply` |
 | canvas | `present` | `Canvases.apply` |
 | canvas | `present_isolated` | `Canvases.apply` |
+| canvas | `present_target` | `Canvases.apply` |
 | canvas | `hide` | `Canvases.apply` |
 | canvas | `destroy` | `Canvases.apply` |
+| canvas | `retire` | `Canvases.apply` |
 | ui | `set_menu` | `Ui.setMenu` |
 | ui | `remove_menu` | `Ui.removeMenu` |
 | ui | `open_menu` | `Ui.openMenu` |
 | ui | `open_dialog` | `Ui.openDialog` |
 | ui | `close_dialog` | `Ui.closeDialog` |
 | ui | `warp_pointer` | `Ui.warpPointer` |
+| ui | `move_pointer_stepped` | `Ui.movePointerStepped` |
+| ui | `advance_pointer_motion` | `Ui.advancePointerMotion` |
 | ui | `close_menu` | `Ui.closeMenu` |
 | ui | `set_menu_checked` | `Ui.setMenuChecked` |
 | ui | `set_menu_enabled` | `Ui.setMenuEnabled` |
@@ -891,6 +914,7 @@ Every typed engine command and the API member that issues it. `tests/api_coverag
 | ui | `hide_tooltip` | `Ui.hideTooltip` |
 | ui | `put` | `Ui.put` |
 | ui | `remove` | `Ui.remove` |
+| ui | `set_rect` | `Ui.setRect` |
 | ui | `set_visible` | `Ui.setVisible` |
 | ui | `set_enabled` | `Ui.setEnabled` |
 | ui | `set_value` | `Ui.setValue` |
@@ -916,7 +940,11 @@ Every typed engine command and the API member that issues it. `tests/api_coverag
 | runtime | `snapshot` | `Save.save` |
 | runtime | `restore` | `Save.load` |
 
+Unmapped `canvas` commands: ["draw_subtree"]
+
 Unmapped `layer` commands: ["set_blend"]
+
+Unmapped `ui` commands: ["blur", "move_pointer", "set_window_size", "set_presentation_scale", "set_window_position", "set_window_visible", "set_window_minimized"]
 
 Unmapped `input_route` commands: ["set_hover_marker", "clear_hover_markers", "discard_queued"]
 
@@ -1084,6 +1112,13 @@ Reusable image operations. All channels are straight RGBA bytes; RGB-only transf
 
 | Variant | Fields | Description |
 |---|---|---|
+| `alpha_mask_plane` | `spec: crate::alpha_mask::AlphaMaskPlane` | Modulate stored alpha using an immutable original-alpha plane. |
+| `alpha_stamps` | `spec: crate::alpha_stamps::AlphaStamps` | Ordered atlas alpha replacement, retaining stored destination RGB. |
+| `coverage_sum` | `spec: crate::coverage_sum::CoverageSum` | Saturating alpha neighborhoods with explicit sample offsets and edge colour. |
+| `triangular_blur` | `spec: crate::triangular_blur::TriangularBlur` | Fixed-point alpha-aware triangular kernel; expands only explicit padding. |
+| `row_deform` | `spec: crate::pyramid::RowDeform` | — |
+| `alpha_plane_pair` | `spec: crate::alpha_planes::AlphaPlanePair` | — |
+| `stored_mask_blend` | `spec: crate::stored_mask::StoredMaskBlend` | — |
 | `integer_raster` | `spec: crate::integer_raster::IntegerRaster` | Exact stored-channel bitmap kernels over two immutable resources. |
 | `override_alpha` | `alpha: u8` | Replace coverage while retaining all stored RGB bytes. Useful for opaque XRGB resources and explicitly authored mask normalisation. |
 | `rgb_lookup` | `spec: crate::rgb_lut::RgbLookup` | Arbitrary straight RGB tables; premultiplied profiles fail before admission. |
@@ -1104,6 +1139,7 @@ Reusable image operations. All channels are straight RGBA bytes; RGB-only transf
 | `hsl_modulate` | `hue: i32, saturation: i32, luminance: i32` | HSL modulate: hue degrees, saturation/luminance percent (-100..100). |
 | `white_noise` | `seed: u32` | Grey white noise replacing RGB; alpha is unchanged. |
 | `invert` | — | — |
+| `channel_scale` | `factors: [u8; 4]` | Every stored byte, alpha included, becomes floor(byte * factor / 255), factors in RGBA order (CatSystem2 68BEC0 multiplies a bitmap by ARGB). |
 | `box_blur` | `rect: Option<[u32; 4]>, area: [i32; 4], alpha_weighted: bool` | Box blur of `rect` (x, y, w, h; whole image when absent): each pixel becomes the truncated mean of the window `area` = [left, top, right, bottom] offsets (inclusive, containing 0) around it, with the window clipped to the image and the divisor counting only covered pixels. `alpha_weighted` averages colour premultiplied by alpha and un-premultiplies (krkrz `DoBoxBlurForAlpha`); otherwise all four channels average independently (`DoBoxBlur`). |
 | `gaussian_blur` | `sigma: f32` | Separable Gaussian on premultiplied floating RGBA, clamped image edges. |
 | `noise` | `seed: u32, amplitude: u8, monochrome: bool` | Deterministic signed uniform RGB noise. Alpha is unchanged. |
@@ -1413,6 +1449,295 @@ Used by: HostServices.begin_civil_time worker result, independent of virtual clo
 | `second` | `u8` | — | — |
 | `millisecond` | `u16` | — | — |
 
+### CivilTransitionDay
+
+Used by: Rust host timezone annual transition rule.
+
+A recurring calendar day in a timezone's published annual rule.
+
+| Variant | Fields | Description |
+|---|---|---|
+| `MonthWeekday` | `month: u8, week: u8, weekday: u8` | Month1..12, week1..5 (5 means last), weekday Sunday0..Saturday6. |
+| `JulianNoLeap` | — | Day1..365, omitting February29 from the count. |
+| `Ordinal` | — | Day0..365, counting February29 when present. |
+
+### CivilTransition
+
+Used by: Rust historical standard/daylight transition.
+
+Annual transition wall time; seconds may extend outside the named day.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+| `day` | `CivilTransitionDay` | — | Calendar day before adding the transition's clock displacement. |
+| `seconds` | `i32` | — | Seconds from midnight, in the wall clock immediately before transition. |
+
+### CivilDaylightRules
+
+Used by: CivilTimeZoneProfile retained annual daylight rules.
+
+Published annual daylight-saving rules, independent of an instant sample.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+| `start` | `CivilTransition` | — | Transition into daylight time, declared on the standard clock. |
+| `end` | `CivilTransition` | — | Transition into standard time, declared on the daylight clock. |
+
+### CivilTimeZoneProfile
+
+Used by: HostServices.begin_civil_timezone retained host profile.
+
+Current host timezone policy captured once by an authorized worker. Biases are seconds west of UTC, and daylight bias is added to standard bias. Rules describe current recurring policy, not historical IANA eras.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+| `standard_bias_seconds` | `i32` | — | Standard-time seconds west of UTC. |
+| `daylight_bias_seconds` | `i32` | — | Additional seconds west of UTC during daylight time, often -3600. |
+| `daylight` | `Option<CivilDaylightRules>` | — | Explicit recurring policy; None means daylight time is disabled. |
+| `environment_tz` | `Option<alloc::string::String>` | — | Uninterpreted process TZ override, for callers with a specific CRT's environment grammar. It does not replace the published host rules. |
+
+### CivilTimeZoneState
+
+Used by: CivilTimeZoneQuery.poll completion.
+
+| Variant | Fields | Description |
+|---|---|---|
+| `Pending` | — | — |
+| `Ready` | — | — |
+| `Failed` | — | — |
+
+### CivilTimeZoneQuery
+
+Used by: Opaque client-owned asynchronous timezone query.
+
+(no source declaration found)
+
+### HttpMethod
+
+Used by: Rust owner-authorized HttpRequest.method.
+
+| Variant | Fields | Description |
+|---|---|---|
+| `Get` | — | — |
+| `Post` | — | — |
+
+### HttpRequest
+
+Used by: HostServices.begin_http; explicit origin capability required.
+
+Request admission is limited to an exact origin granted by the host owner. Bodies and URL query strings must not be copied to diagnostics.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+| `url` | `String` | — | — |
+| `method` | `HttpMethod` | — | — |
+| `headers` | `Vec<(String, String)>` | — | — |
+| `body` | `Vec<u8>` | — | — |
+| `response_limit` | `u32` | — | Maximum response body bytes (host limit also applies). |
+| `timeout_ms` | `u32` | — | Total operation deadline including redirects, in milliseconds. |
+
+### HttpResponse
+
+Used by: Bounded retained HTTP response bytes.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+| `status` | `u16` | — | — |
+| `body` | `Vec<u8>` | — | — |
+
+### HttpRequestState
+
+Used by: HttpRequestJob.poll completion.
+
+| Variant | Fields | Description |
+|---|---|---|
+| `Pending` | — | — |
+| `Ready` | — | — |
+| `Failed` | — | — |
+
+### HttpRequestJob
+
+Used by: Opaque cancellable client-scoped HTTP job.
+
+(no source declaration found)
+
+### SteppedPointerMotionSpec
+
+Used by: Ui.movePointerStepped / shared float-step pointer interpolation.
+
+Independent fixed-step f32 pointer interpolation. Each axis adds its rounded f32 delta and snaps within one absolute step, including the first tick.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+| `start` | `[i32;2]` | — | — |
+| `target` | `[i32;2]` | — | — |
+| `ticks` | `i32` | — | — |
+
+### SteppedPointerMotion
+
+Used by: Rust pure retained float-step pointer state.
+
+Incremental float32 interpolation with a per-axis one-step snap window. A caller advances it only at its admitted input boundary; it samples no clock, owns no OS pointer, and emits logical coordinates for a host to apply.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+
+### TexelQuad
+
+Used by: Rust layer::crop::texel_center_quad projection, independent of any VM.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+| `size` | `[f32;2]` | — | — |
+| `uv` | `[f32;4]` | — | — |
+| `pivot` | `[f32;2]` | — | — |
+
+### LayerSequenceSpec
+
+Used by: Rust layer queue; LayerCommand.BeginSequence/Sequence and EngineQuery.LayerSequence.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+| `values` | `Vec<f32>` | — | — |
+| `retained` | `Option<Vec<f32>>` | — | — |
+| `rate_channel` | `Option<u8>` | — | — |
+| `bindings` | `Vec<LayerSequenceBinding>` | — | — |
+
+### LayerSequenceBinding
+
+Used by: Rust layer queue; LayerCommand.BeginSequence/Sequence and EngineQuery.LayerSequence.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+| `layer` | `u32` | — | — |
+| `channel` | `u8` | — | — |
+| `target` | `LayerSequenceBindingTarget` | — | — |
+| `map` | `LayerSequenceValueMap` | — | — |
+
+### LayerSequenceBindingTarget
+
+Used by: Rust layer queue; LayerCommand.BeginSequence/Sequence and EngineQuery.LayerSequence.
+
+Variants are tagged by `"kind"`.
+
+| Variant | Fields | Description |
+|---|---|---|
+| `finite_gate` | — | A derived projection depends on this channel without copying it into a finite layer property. Undefined IEEE input suppresses the subtree. |
+| `motion` | `property: MotionProperty` | — |
+| `nine_tap_offset` | `axis: u8` | — |
+| `texel_image_uv` | `allocation: [u32;2], reference: [f32;2], source: [f32;4], step: [f32;2], terminal_frame: Option<u32>, active_lane: Option<u8>` | Drive a retained image's atlas rectangle from an integer frame cursor. A terminal frame retains the atlas producer's final crop on completion. |
+| `image_uv` | `origin: [f32; 4], step: [f32; 2], terminal_frame: Option<u32>, active_lane: Option<u8>` | — |
+
+### LayerSequenceValueMap
+
+Used by: Rust layer queue; LayerCommand.BeginSequence/Sequence and EngineQuery.LayerSequence.
+
+Variants are tagged by `"kind"`.
+
+| Variant | Fields | Description |
+|---|---|---|
+| `identity` | — | — |
+| `affine` | `scale: f32, offset: f32` | — |
+| `ratio` | `test_channels: Vec<u8>, threshold: f32, below: f32, above: f32` | One threshold applied to all listed channels before choosing a divisor. Useful for encoded percentages that share a domain switch across axes. |
+| `centered_scale` | `source_extent: f32, reference_extent: f32, scale_channel: u8, test_channels: Vec<u8>, threshold: f32, below: f32, above: f32` | Keep a scaled extent centered in a reference extent while the input position and scale channels remain independent CPU values. |
+| `zero_fallback` | `channel: u8, scale: f32` | — |
+| `clamp` | `low: f32, high: f32, scale: f32` | — |
+
+### LayerSequenceDeltaSource
+
+Used by: Rust layer queue; LayerCommand.BeginSequence/Sequence and EngineQuery.LayerSequence.
+
+| Variant | Fields | Description |
+|---|---|---|
+| `current` | — | — |
+| `retained` | — | — |
+| `current_at_zero_bank` | — | — |
+| `explicit_start` | — | — |
+
+### LayerSequenceTrack
+
+Used by: Rust layer queue; LayerCommand.BeginSequence/Sequence and EngineQuery.LayerSequence.
+
+Variants are tagged by `"kind"`.
+
+| Variant | Fields | Description |
+|---|---|---|
+| `frames` | `channel: u8, frames: u32, hold_ticks: i32, looping: bool, capture: bool` | — |
+| `linear` | `channels: Vec<u8>, target: Vec<f32>, ticks: u32, velocity_divisor: Option<f32>, ieee_inputs: bool, references: Vec<u8>, loop_origins: Vec<u8>, delta: LayerSequenceDeltaSource, looping: bool, start: Option<Vec<f32>>, complete_first: bool, complete_zero: bool, fast: bool, fast_channels: Option<Vec<u8>>, skip_zero: bool, capture_zero: bool` | — |
+| `oscillation` | `channel: u8, amplitude: f32, start_degrees: f32, end_degrees: f32, ticks: u32, cosine: bool, looping: bool, radians_per_degree: f64, fast: bool` | — |
+
+### LayerSequenceOperation
+
+Used by: Rust layer queue; LayerCommand.BeginSequence/Sequence and EngineQuery.LayerSequence.
+
+Variants are tagged by `"kind"`.
+
+| Variant | Fields | Description |
+|---|---|---|
+| `restore_control` | `state: LayerSequenceStatus, seed_missing: Vec<u8>` | Restore execution channels/activation without replacing queued banks or capture templates. Selected active lanes seed a neutral bank-zero entry only if it is absent; existing future records retain their metadata. |
+| `reset` | `values: Vec<f32>, retained: Vec<f32>` | Replace current and retained channel values and clear activation state, while retaining queued records and capture/replay ownership. |
+| `enqueue` | `lane: u8, bank: Option<u8>, track: LayerSequenceTrack` | — |
+| `set` | `channels: Vec<u8>, values: Vec<f32>, retained: bool` | — |
+| `set_binding_map` | `layer: u32, channel: u8, map: LayerSequenceValueMap` | Change only an existing binding's projection map. Retain its actor, channels, active execution fields and captured/queued records. |
+| `set_texel_source` | `layer: u32, source: [f32;4]` | Update a sampled image's retained source edges without replacing its actor, current channels, queued motion or frame cursor. |
+| `capture` | `enabled: bool, repeats: u16, forever: bool` | — |
+| `replay` | — | — |
+| `advance` | `generation: u64, revision: u64, rate: f32, fast: bool` | — |
+| `finish` | `cancel: bool, lanes: Option<Vec<u8>>` | — |
+
+### LayerSequenceStatus
+
+Used by: Rust layer queue; LayerCommand.BeginSequence/Sequence and EngineQuery.LayerSequence.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+| `generation` | `u64` | — | — |
+| `revision` | `u64` | — | — |
+| `values` | `Vec<f32>` | — | Nonfinite values use {"ieee754":u32} only on zero-divisor-owned channels. |
+| `retained` | `Vec<f32>` | — | — |
+| `lanes` | `BTreeMap<u8, LayerSequenceLane>` | — | — |
+| `capture` | `bool` | — | — |
+| `captured` | `BTreeMap<u8, BTreeMap<u8, LayerSequenceTrack>>` | — | — |
+| `repeats` | `u16` | — | — |
+| `forever` | `bool` | — | — |
+| `complete` | `bool` | — | — |
+
+### LayerSequenceLane
+
+Used by: Rust layer queue; LayerCommand.BeginSequence/Sequence and EngineQuery.LayerSequence.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+| `cursor` | `u16` | — | — |
+| `records` | `BTreeMap<u8, LayerSequenceRecord>` | — | — |
+| `active` | `Option<LayerSequenceActive>` | — | — |
+| `control` | `Option<LayerSequenceRecord>` | — | — |
+| `last_record` | `Option<LayerSequenceRecord>` | — | — |
+| `last_active` | `Option<LayerSequenceActive>` | — | — |
+
+### LayerSequenceRecord
+
+Used by: Rust layer queue; LayerCommand.BeginSequence/Sequence and EngineQuery.LayerSequence.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+| `progress` | `Option<LayerSequenceActive>` | — | — |
+| `track` | `LayerSequenceTrack` | — | — |
+| `velocity` | `Vec<f32>` | — | — |
+| `origin` | `Vec<f32>` | — | — |
+
+### LayerSequenceActive
+
+Used by: Rust layer queue; LayerCommand.BeginSequence/Sequence and EngineQuery.LayerSequence.
+
+Variants are tagged by `"kind"`.
+
+| Variant | Fields | Description |
+|---|---|---|
+| `frames` | `frame: u32, counter: u32, attached: bool` | — |
+| `linear` | `velocity: Vec<f32>, multiplier: f32` | — |
+| `oscillation` | `phase: f32, velocity: f32, baseline: f32, multiplier: f32` | — |
+
 ### ImageEncodingInfo
 
 Used by: ImageMetadata.begin_encoding_info retained original encoded header/plane properties; no pixel CRC claim.
@@ -1690,6 +2015,8 @@ Used by: RgbLookup profile; premultiplied admission explicitly unsupported.
 | Variant | Fields | Description |
 |---|---|---|
 | `straight_rgba` | — | Lookup every straight RGB byte, including hidden RGB at zero alpha. |
+| `straight_nonzero_alpha` | — | Preserve the complete stored pixel when alpha is zero. Visible RGB uses the tables; alpha and hidden transparent RGB remain unchanged. |
+| `straight_color_key` | `color: [u8; 3]` | Preserve this exact stored RGB key; transform all other pixels. Useful for opaque colour-key rasters before later alpha association. |
 | `premultiplied_rgba` | — | Recognized for explicit rejection: this pipeline cannot publish premultiplied bytes as an ordinary straight ImageSurface. No implicit unpremultiplication. |
 
 ### PatternRng
@@ -1733,7 +2060,7 @@ Used by: Scoped immutable pattern generation and resident-byte metadata.
 | Field | Rust type | Default | Description |
 |---|---|---|---|
 | `client` | `ClientId` | — | — |
-| `size` | `[u32;2]` | — | — |
+| `size` | `[u32; 2]` | — | — |
 | `completed_steps` | `u64` | — | — |
 | `resident_bytes` | `usize` | — | — |
 
@@ -1746,7 +2073,7 @@ Used by: HostServices.begin_pattern; create/advance/render/restore on common ima
 | `Create` | `spec: Arc<[u8]>, rng: Arc<[u8]>` | — |
 | `Advance` | `source: Arc<dyn PatternResource>, rng: Arc<[u8]>` | — |
 | `AdvancePrefix` | `source: Arc<dyn PatternResource>, rng: Arc<[u8]>, words: usize` | Same immutable resource/RNG transaction, limited to a prefix bank. |
-| `Render` | `source: Arc<dyn PatternResource>, destination: ImageInput, rect: [u32;4], opacity256: u16` | — |
+| `Render` | `source: Arc<dyn PatternResource>, destination: ImageInput, rect: [u32; 4], opacity256: u16` | — |
 | `Restore` | `snapshot: Arc<[u8]>, rng: Arc<[u8]>` | — |
 
 ### PatternOutput
@@ -2018,6 +2345,10 @@ Used by: ImageMetadata.begin_process; scoped resources, encoded memory and immut
 
 | Variant | Fields | Description |
 |---|---|---|
+| `ParticlePlane` | `size: [u32; 2], sprites: Vec<ImageParticleSprite>` | Bounded bulk sprite composition with shared exact fixed-point mip sampling. Equal resource/format/shrink tuples are sampled once per job. |
+| `PyramidLevel` | `pyramid: Arc<ImagePyramidResource>, level: u8` | — |
+| `FieldWarp` | `source: Box<ImageInput>, size: [u32; 2], spec: FieldWarpSpec` | Signed-field sampling evaluated by the shared image worker. The immutable field leases are owner-checked and included in admission. |
+| `Process` | `input: Box<ImageInput>, effects: Arc<[u8]>` | A bounded, immutable subgraph with its own typed effect context. The shared worker evaluates it inside the same admission and cancellation scope; no nested worker or VM state is created. |
 | `Encoded` | `name: alloc::string::String, bytes: Arc<[u8]>, size: [u32; 2]` | Capability-resolved encoded bytes, for archive members and embedded resources. Shared workers decode using the same registry as file assets. Declared dimensions bound admission and must match the decoded result. |
 | `Composite` | `base: Box<ImageInput>, layers: Vec<ImageCompositeLayer>` | Immutable ordered bitmap operation graph, evaluated by shared CPU workers. Base and descendants retain original channel bytes; no screen is captured. |
 | `Solid` | `size: [u32; 2], color: [u8; 4]` | — |
@@ -2217,6 +2548,9 @@ Transient engine-owned widget interaction, independent of rendering or a VM.
 
 | Field | Rust type | Default | Description |
 |---|---|---|---|
+| `pointer` | `Option<[i32;2]>` | — | Current canvas pointer for this widget's UI input owner. Absent when another client or a separate modal service owns the input tick. |
+| `pointer_buttons_down` | `u64` | — | Mouse buttons admitted to this UI owner in the current input tick. These are zero when `pointer` is absent and never survive restoration. |
+| `pointer_buttons_pressed` | `u64` | — | Mouse press edges for this UI owner, including inferred down transitions. |
 | `hovered` | `bool` | — | The engine's topmost eligible pointer hit is this widget. |
 | `focused` | `bool` | — | Keyboard/controller navigation currently focuses this widget. |
 | `pressed` | `bool` | — | A pointer-down gesture began on this widget and has not been released. |
@@ -2241,7 +2575,7 @@ Solid fills/strokes with antialiasing and a six-value affine transform [scale_x,
 
 Used by: VectorPath.commands.
 
-A geometric path command; curves use explicit control points. Variants are tagged by `"kind"`.
+Variants are tagged by `"kind"`.
 
 | Variant | Fields | Description |
 |---|---|---|
@@ -2274,6 +2608,7 @@ A resource transition at explicit progress. A mask reveals bright pixels first; 
 | `softness` | `f32` | — | — |
 | `blur` | `f32` | — | — |
 | `fixed_weighted` | `Option<crate::fixed_mix::FixedMixSpec>` | — | Exact integer-weighted profile. With this profile mask/blur/softness must be absent/zero; floating progress is retained only for old schemas. |
+| `rule_table` | `Option<RuleTable>` | — | Exact per-pixel integer weights looked up from one mask channel. |
 
 ### SineRowCopy
 
@@ -2356,6 +2691,13 @@ Used by: Input.events receipt / ackEvents; JSON epoch/sequence are decimal strin
 | `client` | `u32` | — | — |
 | `epoch` | `u64` | — | — |
 | `sequence` | `u64` | — | — |
+
+### FrameAdmissionClock
+
+Used by: Native wrapping-clock frame admission; caller retains input and pending work.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
 
 ### InputBufferSnapshot
 
@@ -2802,6 +3144,7 @@ Shared source transport inspection. Processing tails do not prolong source compl
 
 | Field | Rust type | Default | Description |
 |---|---|---|---|
+| `balance` | `AudioBalanceInfo` | — | Mixer-owner observation of the independent external dB balance track. |
 | `source_playing` | `bool` | — | Source has remaining input, even when paused; excludes processing tails. |
 | `paused` | `bool` | — | Source clock currently frozen by pause or a freezing scheduled resume. |
 | `retain_on_finish` | `bool` | — | Canonical source retention/protection policy of this allocated voice. |
@@ -2985,6 +3328,8 @@ Client-scoped channel commands for the shared decoder/mixer. Encoded bytes and d
 
 | Variant | Fields | Description |
 |---|---|---|
+| `PlayResident` | `channel: u32, source: EncodedAudio, intro: Option<EncodedAudio>, parameters: AudioParameters` | Decode all bounded input frames before publication. Playback, loops and exact seeks subsequently use resident PCM without a decoder/I/O worker. |
+| `Balance` | `channel: u32, command: AudioBalanceCommand` | Control the independent dB balance on this client's channel. Missing sources remain a no-op; newly published voices start centered. |
 | `ExchangeChannels` | `left: u32, right: u32` | Atomically exchange two logical channels in this client. The existing voice/source handles, fractional cursor, DSP history and gain/transport ramps remain intact. An empty side moves the other voice. Unpublished preparation intents, pending seeks/retirements or an active render lease reject before mutation. This is unrelated to decoded left/right exchange. |
 | `SetMixGroupGain` | `name: String, gain: f32, fade_ms: f32` | Set only a group's gain, creating a root with default settings if absent. Existing parent and mute controls remain host-owned. |
 | `SetMixGroup` | `name: String, settings: AudioMixGroupSettings, fade_ms: f32` | Configure an owner-scoped gain group, with atomic parent/cycle/budget validation and an output-clock fade. Does not open an audio source. |
@@ -2997,6 +3342,7 @@ Client-scoped channel commands for the shared decoder/mixer. Encoded bytes and d
 | `Pause` | `channel: u32, paused: bool, fade_ms: f32` | — |
 | `Resume` | `channel: u32, delay_ms: f32, fade_ms: f32` | Freeze the source now, then resume after an output-clock delay with a fresh fade-in. A later pause/stop/resume replaces this scheduled action. |
 | `ResumeWithOptions` | `channel: u32, delay_ms: f32, fade_ms: f32, settings: AudioResumeSettings` | Resume at an output-clock deadline with explicit pre-deadline transport. Later pause/stop/resume replaces this action; readiness is independent. |
+| `SetRate` | `channel: u32, rate: f32` | Change the source playback multiplier without seeking, restarting or resetting resampler/DSP history. Pitch, looping and transport survive. |
 | `SetGain` | `channel: u32, gain: f32, fade_ms: f32` | — |
 | `FadeGain` | `channel: u32, gain: f32, fade_ms: f32, stop_after: bool` | Fade the own amplitude to a target, optionally stop when that ramp finishes. Unlike Stop this adds no independent envelope toward zero. |
 | `FinishGainFade` | `channel: u32` | Finish the current own-amplitude ramp at its retained target. A pending gain-stop retires the voice; independent transport deadlines stay intact. |
@@ -3494,7 +3840,7 @@ Immutable release policy. Volume units are hundredths of one dB (db100). Source/
 | Field | Rust type | Default | Description |
 |---|---|---|---|
 | `source_channel` | `u32` | — | Channel vacated by the live decoder without reopening or seeking. |
-| `tail_channel` | `u32` | — | Independent channel receiving the retired nonlooping voice. |
+| `tail_channel` | `u32` | — | Independent channel receiving the retired nonlooping voice. Equal to source_channel performs an in-place release, preserving loop/transport. |
 | `threshold_db100` | `i32` | — | Captured levels at/above this select target_above_db100. |
 | `target_above_db100` | `i32` | — | Target for captured levels at or above the threshold. |
 | `target_below_db100` | `i32` | — | Target for captured levels below the threshold. |
@@ -4674,7 +5020,7 @@ A scoped multi-emitter effect with typed parameters and a fixed simulation clock
 | `sequence_rng` | `Option<VfxSequenceRng>` | `null` | Initial single-stream random state; changing it restarts this revision. |
 | `sequence_exchange` | `Option<VfxSequenceExchange>` | `null` | Fenced stream replacement without particle-pool reinitialization. |
 | `revision` | `u64` | `0` | Explicit restart epoch; parameter/control changes do not increment it. |
-| `emitters` | `Vec<VfxEmitterSpec>` | `[{"capacity":1024,"enabled":true,"enabled_parameter":null,"events":[],"falling_atlas":null,"id":"emitter","initialize":{"color":[1.0,1.0,1.0,1.0],"color_parameter":null,"direction":[0.0,1.0,0.0],"lifetime":[1.0,2.0],"ribbon_id":0,"rotation":[0.0,0.0],"shape":{"kind":"point"},"size":[0.1,0.1],"size_parameter":null,"speed":[1.0,2.0],"spread_degrees":20.0},"overflow":"drop_new","render":{"blend":"additive","columns":1,"facing":{"kind":"camera"},"fps":0.0,"frames":1,"kind":"sprite","rows":1,"soft_distance":0.0,"texture":null},"screen":null,"seed":1,"space":"world","spawn":{"auto_start":true,"burst_looping":true,"bursts":[],"duration":5.0,"looping":true,"rate":20.0},"target":"cpu","update":[]}]` | — |
+| `emitters` | `Vec<VfxEmitterSpec>` | `[{"capacity":1024,"drifting_atlas":null,"enabled":true,"enabled_parameter":null,"events":[],"falling_atlas":null,"id":"emitter","initialize":{"color":[1.0,1.0,1.0,1.0],"color_parameter":null,"direction":[0.0,1.0,0.0],"lifetime":[1.0,2.0],"ribbon_id":0,"rotation":[0.0,0.0],"shape":{"kind":"point"},"size":[0.1,0.1],"size_parameter":null,"speed":[1.0,2.0],"spread_degrees":20.0},"orbit_atlas":null,"overflow":"drop_new","paused":false,"render":{"blend":"additive","columns":1,"facing":{"kind":"camera"},"fps":0.0,"frames":1,"kind":"sprite","rows":1,"soft_distance":0.0,"texture":null},"revision":0,"screen":null,"seed":1,"space":"world","spawn":{"auto_start":true,"burst_looping":true,"bursts":[],"duration":5.0,"looping":true,"rate":20.0},"target":"cpu","update":[]}]` | — |
 | `parameters` | `BTreeMap<String, VfxParameterValue>` | `{}` | — |
 | `fixed_step_hz` | `u32` | `60` | — |
 | `warmup_seconds` | `f32` | `0.0` | — |
@@ -4692,7 +5038,9 @@ Named data-driven emitter: schedule, initialization, typed module stack and rend
 | Field | Rust type | Default | Description |
 |---|---|---|---|
 | `id` | `String` | `"emitter"` | — |
+| `revision` | `u64` | `0` | Explicit monotonic pool restart epoch. A higher value can replace this emitter while preserving other pools and their shared sequence stream. |
 | `enabled` | `bool` | `true` | — |
+| `paused` | `bool` | `false` | Freeze and hide existing particles without updating or consuming RNG draws. |
 | `enabled_parameter` | `Option<String>` | `null` | — |
 | `target` | `VfxSimulationTarget` | `"cpu"` | — |
 | `space` | `VfxSimulationSpace` | `"world"` | — |
@@ -4705,6 +5053,8 @@ Named data-driven emitter: schedule, initialization, typed module stack and rend
 | `render` | `VfxRenderSpec` | `{"blend":"additive","columns":1,"facing":{"kind":"camera"},"fps":0.0,"frames":1,"kind":"sprite","rows":1,"soft_distance":0.0,"texture":null}` | — |
 | `screen` | `Option<VfxScreenSpriteTarget>` | `null` | Optional CPU pixel-plane mesh publication, independently of a native VM. |
 | `falling_atlas` | `Option<VfxFallingAtlasSpec>` | `null` | Optional CPU falling/periodic-drift/nonuniform-atlas node. |
+| `drifting_atlas` | `Option<VfxDriftingAtlasSpec>` | `null` | Optional explicitly clocked streak or buoyant atlas motion in pixel space. |
+| `orbit_atlas` | `Option<crate::orbit_atlas::OrbitAtlasSpec>` | `null` | Optional explicitly clocked elliptical atlas particles. |
 | `events` | `Vec<VfxEventHandler>` | `[]` | — |
 
 ### VfxScreenSpriteTarget
@@ -4769,14 +5119,14 @@ Fenced replacement of an engine-owned shared random stream. The emitter pools ar
 
 Used by: `VfxEmitterSpec.falling_atlas`; bounded CPU pixel-motion and atlas node.
 
-Data-driven pixel-motion and nonuniform-atlas operator.
-
 | Field | Rust type | Default | Description |
 |---|---|---|---|
 | `canvas` | `[u32; 2]` | — | Spawn width and bottom reset plane in logical pixels. |
 | `tick_hz` | `u32` | — | Fixed ticks per second, defining published velocity/age units. |
 | `x_bands` | `Vec<i32>` | — | Chosen x-band offsets in multiples of canvas width, in sequence order. |
 | `fall_range` | `[u32; 2]` | — | Inclusive integer speed numerator sampled once per birth/reset. |
+| `initial_fall_range` | `Option<[u32; 2]>` | — | Optional first-birth speed range; subsequent recycling uses fall_range. |
+| `spawn_window` | `Option<FallingSpawnWindow>` | — | Live birth/reset sampling control. Updating it preserves existing particles and consumes no random values until their next birth. |
 | `fall_divisor` | `f32` | — | Converts the speed numerator into displacement per fixed update tick. |
 | `sway_range` | `[u32; 2]` | — | Inclusive integer horizontal oscillation amplitude range. |
 | `phase_modulus` | `u32` | — | Initial phase is an integer in0..phase_modulus, interpreted as radians. |
@@ -4794,6 +5144,58 @@ Data-driven pixel-motion and nonuniform-atlas operator.
 | `alpha_offset` | `f32` | — | Final alpha offset, useful for authored depth attenuation. |
 | `atlas_interval_ms` | `u64` | — | Atlas advances by at most one frame only when elapsed exceeds this. |
 | `atlas_clock_bits` | `u8` | — | Timer arithmetic:32 for wrapping millisecond clocks,64 for monotonic. |
+
+### VfxDriftMotion
+
+Used by: Streak or buoyant pixel-space drift over an existing CPU particle pool.
+
+| Variant | Fields | Description |
+|---|---|---|
+| `streak` | — | Downward streaks with a fixed atlas row and clipped lower edge. |
+| `buoyant` | — | Signed vertical drift, sinusoidal horizontal motion and animated atlas rows. |
+| `falling_glow` | — | Downward sinusoidal motion with a slow translucent pulse. |
+| `rising_glow` | — | Upward sinusoidal motion with a full-range alpha pulse. |
+
+### VfxDriftSpawnWindow
+
+Used by: Bounded native-independent spawn-window selection over the shared sequence RNG.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+| `bounds` | `[i32; 4]` | — | Inclusive spawn rectangle [left, top, right, bottom], in canvas pixels. |
+| `chance` | `i32` | — | Draw in 0..100 passes when it is at most this value; zero disables bias. |
+| `attempts` | `u16` | — | Maximum rejection-sampling attempts per biased coordinate. |
+
+### VfxDriftingAtlasSpec
+
+Used by: `VfxEmitterSpec.drifting_atlas`; externally clocked drift, alpha and atlas policy.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+| `canvas` | `[u32; 2]` | — | Logical canvas width and height, in pixels. |
+| `texture_extent` | `[u32; 2]` | — | Atlas texture width and height, in pixels. |
+| `tick_hz` | `u32` | — | Number of explicit simulation steps per second. |
+| `depth` | `u32` | — | Pool depth in 0..5, selecting the buoyant atlas row pair. |
+| `motion` | `VfxDriftMotion` | — | Motion and atlas-layout preset consumed by this node. |
+| `spawn_window` | `Option<VfxDriftSpawnWindow>` | — | Optional biased respawn area; updates preserve live particle attributes. |
+
+### VfxDriftingAtlasState
+
+Used by: Worker-owned per-particle drift and atlas progression.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+| `center_x` | `f32` | — | Horizontal orbit center, in canvas pixels. |
+| `phase` | `f32` | — | Horizontal oscillation phase, in radians. |
+| `speed` | `f32` | — | Signed vertical displacement per simulation tick, in pixels. |
+| `amplitude` | `u32` | — | Horizontal oscillation radius, in pixels. |
+| `horizontal` | `i32` | — | Constant horizontal offset in tenths of a pixel. |
+| `row` | `u32` | — | Selected atlas row index. |
+| `frame` | `u32` | — | Current animation frame within that row. |
+| `clock` | `u32` | — | Previous atlas frame timestamp, in wrapping milliseconds. |
+| `alpha` | `f32` | — | Current straight alpha in 0..1. |
+| `rising` | `bool` | — | Whether the alpha pulse is moving toward its upper bound. |
+| `scale` | `f32` | — | Multiplicative pixel size, retained across streak respawns. |
 
 ### VfxSystemSequenceState
 
@@ -5217,8 +5619,8 @@ Used by: `Layers.put`, `ClientSpec.systems.layers`.
 | `transform` | `SpriteTransform` | — | Pivot, anchor, rotation, scale and z. |
 | `order` | `[i32; 2]` | — | Explicit [major, minor] draw order. |
 | `clip` | `Option<[f32; 4]>` | — | Clip rectangle [x, y, w, h], or `null`. |
-| `viewport_clip` | `Option<[f32;4]>` | — | Inherited clip [x,y,w,h] in logical render-target coordinates. Unlike `clip`, this rectangle is unaffected by this layer's/parents' transforms. Zero width or height clips the complete subtree. None adds no clip. |
-| `source_crop` | `Option<[f32;4]>` | — | Non-inherited source geometry crop in layer-local [x,y,w,h] coordinates. Image/text content keeps its original size; UVs follow surviving geometry. Positioned glyph runs crop each expanded glyph in this same local space. |
+| `viewport_clip` | `Option<[f32; 4]>` | — | Inherited clip [x,y,w,h] in logical render-target coordinates. Unlike `clip`, this rectangle is unaffected by this layer's/parents' transforms. Zero width or height clips the complete subtree. None adds no clip. |
+| `source_crop` | `Option<[f32; 4]>` | — | Non-inherited source geometry crop in layer-local [x,y,w,h] coordinates. Image/text content keeps its original size; UVs follow surviving geometry. Positioned glyph runs crop each expanded glyph in this same local space. |
 | `opacity` | `u8` | — | Opacity 0..255, multiplied down the tree. |
 | `visible` | `bool` | — | Inherited visibility. |
 | `blend` | `Blend` | — | Blend mode. |
@@ -5237,8 +5639,9 @@ Variants are tagged by `"kind"`.
 | `solid` | `color: [u8; 4]` | Solid RGBA8 fill. |
 | `image` | `asset: String, tint: [u8; 4]` | Image asset with an RGBA8 tint. |
 | `text` | `text: String, font: String, size: u16, color: [u8; 4], layout: String` | Text with an explicit project font alias, pixel size, color and layout. |
-| `glyph_run` | `font: String, size: f32, color: [u8; 4], bold: bool, glyphs: Vec<PositionedGlyph>, reveal: Option<GlyphReveal>, blur: Option<GlyphBlur>` | Retained explicit glyph positions, rendered as independent cached glyph quads. No VM renderer or flattened text/screen image is involved. |
+| `glyph_run` | `font: String, size: f32, color: [u8; 4], bold: bool, glyphs: Vec<PositionedGlyph>, reveal: Option<GlyphReveal>, blur: Option<GlyphBlur>, outline: Option<GlyphOutline>` | Retained explicit glyph positions, rendered as independent cached glyph quads. No VM renderer or flattened text/screen image is involved. |
 | `snapshot` | `size: [u32; 2], layers: Arc<Vec<LayerSpec>>` | Frozen, source-local static scene, rasterized once at `size` before the outer Layer's transform, opacity, UV crop and filter are applied. Inputs contain no nested snapshots, external parents or dynamic state. |
+| `backdrop` | `history: bool` | What has been drawn beneath this layer in the current frame, read back into a quad. With a filter's distortion this is a screen effect over a depth band: layers ordered above stay untouched. Only the top-level frame has such a backdrop; inside isolated targets the layer draws nothing. With `history` it shows what the previous frame had at this depth, then captures again: drawn with an opacity below 255 that is a feedback trail. |
 | `mesh` | `frame: Arc<crysirror_puppet::PuppetFrame>, tint: [u8; 4]` | Immutable, validated engine mesh resource. Capturing an evaluated puppet freezes its completed geometry; textures remain client-scoped immutable image dependencies, with no rig/player or device handles. |
 | `puppet` | `asset: String, tint: [u8; 4]` | 2D deformable puppet (ADR 0029): an engine puppet rig JSON asset, fitted into the layer rect (aspect preserved). |
 
@@ -5283,9 +5686,9 @@ Per-axis image texture addressing. Explicit modes never change other clients, un
 
 | Variant | Fields | Description |
 |---|---|---|
-| `ClampToEdge` | — | Extend the nearest edge texel; UV coordinates remain inside 0..1. |
-| `Repeat` | — | Repeat the texture after each integer UV boundary. |
-| `MirrorRepeat` | — | Alternate forward and reversed texture copies across UV boundaries. |
+| `clamp_to_edge` | — | Extend the nearest edge texel; UV coordinates remain inside 0..1. |
+| `repeat` | — | Repeat the texture after each integer UV boundary. |
+| `mirror_repeat` | — | Alternate forward and reversed texture copies across UV boundaries. |
 
 ### PositionedGlyph
 
@@ -5295,12 +5698,15 @@ A glyph with an explicit baseline in its containing layer's local pixels. Layout
 
 | Field | Rust type | Default | Description |
 |---|---|---|---|
-| `crop` | `Option<[f32;4]>` | — | Optional geometry crop in the containing layer's local pixels. This clips each glyph after coverage/outline generation, without reshaping. |
+| `crop` | `Option<[f32; 4]>` | — | Optional geometry crop in the containing layer's local pixels. This clips each glyph after coverage/outline generation, without reshaping. |
 | `character` | `char` | `"あ"` | — |
 | `baseline` | `[f32; 2]` | `[0.0,20.0]` | — |
 | `size` | `Option<f32>` | — | — |
 | `color` | `Option<[u8; 4]>` | — | — |
 | `bold` | `Option<bool>` | — | — |
+| `horizontal_scale` | `Option<f32>` | — | Horizontal outline raster scale, preserving the supplied baseline and logical advance. This changes coverage, not the layer transform. |
+| `font_width` | `Option<f32>` | — | Requested average character width in pixels, using the authorized outline face's OS/2 average width. Multiplied by horizontal_scale. |
+| `cell_width` | `Option<u16>` | — | Center the rounded glyph advance in this integer logical cell, using truncation toward zero for the half-difference. Raster baseline y stays. |
 
 ### GlyphRevealUnit
 
@@ -5396,6 +5802,7 @@ Variants are tagged by `"op"`.
 |---|---|---|
 | `create` | `id: u32, width: u32, height: u32` | Issued by `Canvases.apply`. |
 | `destroy` | `id: u32` | Release one unpresented surface. Hide its presentations first. Frozen copies own their draw nodes and remain valid after the source is gone. |
+| `retire` | `id: u32` | Release a source and its generated presentation draws while retaining public root layers (placement, effects and externally attached children). Frozen copies continue to own their immutable content. |
 | `clear` | `id: u32, color: [u8; 4]` | Issued by `Canvases.apply`. |
 | `resize` | `id: u32, width: u32, height: u32` | Change the surface size, keeping its contents anchored at the top-left; area outside previous content stays transparent. |
 | `draw` | `id: u32, layer: LayerSpec, atop: Option<AtopMode>` | Append a draw; with `atop` it is drawn source-atop (see Copy). |
@@ -5405,10 +5812,12 @@ Variants are tagged by `"op"`.
 | `fade` | `id: u32, rect: [f32; 4], opacity: u8` | Multiply the alpha of `rect`'s existing content by `opacity`/255, colour unchanged (krkr negative-opacity colorRect). The region is frozen as one isolated snapshot so overlapping draws fade as a single composite. |
 | `filter` | `id: u32, rect: [f32; 4], filter: crate::layer::LayerFilter, opacity: u8` | Recolour `rect`'s existing content through a layer filter (mono, invert, bright/dark, colour mix), blended over the original by `opacity`/255 (RealLive `grpMono`/`grpInvert`/`grpLight`). The region is frozen as one isolated snapshot, like `fade`. |
 | `transform_copy` | `source: u32, destination: u32, rect: [f32; 4], matrix: [f32; 6], replace: bool, clip: Option<[f32; 4]>, opacity: u8` | Copy `rect` of `source` through an affine map of source-surface coordinates (`[a, b, c, d, tx, ty]`: x' = a·x + c·y + tx, y' = b·x + d·y + ty) without skew. `replace` replaces the covered destination region; it requires an axis-aligned result. |
-| `copy_subtree` | `source: u32, destination: u32, rect: [f32; 4], position: [f32; 2], clip: Option<[f32; 4]>` | Freeze a visible, static, normal-alpha Layer subtree as one snapshot draw. The renderer rasterizes it at its original size before later effects. `rect` is source-root-local; `position` and `clip` are destination-space. The region is replaced, including alpha. Root placement/visibility/opacity and inheritance from outside the subtree do not enter the snapshot. |
+| `draw_subtree` | `source: u32, destination: u32` | Freeze a visible, static, normal-alpha Layer subtree as one snapshot draw. The renderer rasterizes it at its original size before later effects. `rect` is source-root-local; `position` and `clip` are destination-space. The region is replaced, including alpha. Root placement/visibility/opacity and inheritance from outside the subtree do not enter the snapshot. Append an immutable subtree using its own placement, transform, group opacity and visibility. Outside ancestry is excluded; source pixels are composed over existing destination content instead of replacing it. |
+| `copy_subtree` | `source: u32, destination: u32, rect: [f32; 4], position: [f32; 2], clip: Option<[f32; 4]>` | Issued by `Canvases.apply`. |
 | `restore` | `id: u32, surface: CanvasSurface` | Replace (or create) a surface with a previously queried state (`EngineQuery::Canvas`), e.g. a native game's saved DCs. |
 | `present` | `id: u32, layer: u32, order: i32, parent: Option<u32>, position: [f32; 2]` | Issued by `Canvases.apply`. |
 | `present_isolated` | `id: u32, layer: u32, order: i32, parent: Option<u32>, position: [f32; 2]` | Keep the surface as one isolated snapshot draw. Source edits rebuild its immutable paint automatically; the outer parent transform/opacity applies after composition, not independently to every source draw. |
+| `present_target` | `id: u32, layer: u32, order: i32, parent: Option<u32>, position: [f32; 2]` | Compose the whole surface into one bounded render target, including surfaces backed by storage pages. Global masks/distortion sample that target once rather than independently sampling each storage tile. Dimensions must not exceed 8192; renderer memory/device budgets apply. |
 | `hide` | `layer: u32` | Issued by `Canvases.apply`. |
 
 ### ServiceBatch
@@ -5531,6 +5940,10 @@ Per-layer 2D filter stack with the stage order and parameter meaning of the Sigl
 
 | Field | Rust type | Default | Description |
 |---|---|---|---|
+| `luma_weights` | `Option<[f32; 3]>` | `null` | Optional normalized RGB luminance coefficients. None preserves the established filter profile; adapters may declare a native color model. |
+| `rgb_alpha_power` | `f32` | `0.0` | Multiply filtered RGB by sampled alpha raised to this power (0..4), independently of the blend mode and without replacing stored alpha. |
+| `ignore_tint_alpha` | `bool` | `false` | Sampling effects may preserve source alpha without applying vertex tint alpha. Parent transform/clip ownership remains unchanged. |
+| `encoded_sampling` | `bool` | `false` | Interpolate gamma-encoded RGB texels before color effects. This matches raster APIs whose texture sampler does not decode sRGB before filtering. |
 | `mono` | `f32` | `0.0` | Mix toward grayscale (0..1). |
 | `invert` | `f32` | `0.0` | Mix toward the inverted color (0..1). |
 | `bright` | `f32` | `0.0` | Mix toward white (0..1). |
@@ -5558,6 +5971,11 @@ Used by: `LayerSpec.blend`.
 | `atop_multiply` | — | Photoshop multiply keeping the destination alpha (KiriKiri omPsMultiplicative with holdAlpha): D·(1 - a + a·S). |
 | `atop_screen` | — | Photoshop screen keeping the destination alpha (omPsScreen with holdAlpha): D·(1 - a·S) + a·S·Da. |
 | `atop_copy` | — | Replace the colour and keep the destination alpha (KiriKiri copyRect on dfOpaque with holdAlpha, TVP_BB_COPY_MAIN): straight S·Da. |
+| `source_over` | — | Fixed-function (ONE, INVSRCALPHA) on straight texels: S + D·(1 - Sa), every channel including alpha. |
+| `modulate` | — | (ZERO, SRCCOLOR): D·S on every channel, alpha ignored as a weight. |
+| `inverse_destination` | — | (INVDESTCOLOR, ZERO): S·(1 - D) on every channel. |
+| `modulate_add` | — | (DESTCOLOR, ONE): S·D + D on every channel. |
+| `destination_in` | — | Keep the destination only under the source alpha: D·Sa, including alpha. Source RGB is ignored; use inside an isolated Canvas for masks. |
 
 ### ToneCurve
 
@@ -5579,6 +5997,11 @@ Used by: `LayerFilter.mask`.
 |---|---|---|---|
 | `asset` | `String` | — | Grayscale mask image asset. |
 | `gray_alpha` | `bool` | — | Replace alpha with the final gray level (Siglus mask mode 1). |
+| `channel` | `MaskChannel` | — | Rgba multiplies all source channels. Selecting one encoded mask byte replaces source alpha with clamp(trunc(byte*scale+offset),0,255)/255, applied per texel before linear interpolation. |
+| `offset` | `f32` | — | — |
+| `scale` | `f32` | — | Signed multiplier of the selected encoded byte, before `offset` and saturation. Negative values implement inverted rule-image wipes. |
+| `preserve_source_alpha` | `bool` | — | Multiply the selected mask byte by each original source alpha byte. |
+| `source_space` | `bool` | — | Address mask pixels in source-image coordinates; outside pixels keep their original alpha instead of stretching or clamping the mask. |
 
 ### Distortion
 
@@ -5588,9 +6011,12 @@ Source-sampling effects (Siglus wipe modes 1–6), in texture UV space. Variants
 
 | Variant | Fields | Description |
 |---|---|---|
+| `nine_tap` | `offset: [f32; 2], center_weight: f32, neighbor_weight: f32` | Nine clamped taps: one center and eight surrounding samples at ±offset. Weights are explicit, without implicit normalization or alpha replacement. |
+| `quantized` | `steps: [f32; 2], phase: [f32; 2]` | Quantize UV independently per axis: floor(uv*steps+phase)/steps. Source alpha is preserved, including transparent atlas padding. |
 | `mosaic` | `cut: f32, aspect: f32` | Cells of `cut` UV width; height = cut × `aspect`. |
 | `raster` | `vertical: bool, fractions: f32, waves: f32, power: f32, progress: f32` | Sinusoidal row (`vertical: false`) or column offset driven by `progress`. |
 | `radial_blur` | `center: [f32; 2], power: f32, coeff: f32` | Radial blur toward `center` (UV), 10 weighted taps. |
+| `wave` | `vertical: bool, amplitude: f32, cycles: f32, phase: f32` | Rows (or columns when `vertical`) shifted by amplitude·sin(2π(cycles·t + phase)), all in UV. |
 | `threshold_fade` | `fade: f32, threshold: f32, invert: bool` | Multiply alpha by `fade` where luminance ≤ `threshold` (or ≥ when `invert`). |
 
 ### TransitionSpec
@@ -5632,6 +6058,10 @@ Siglus wipe speed modes 0-3.
 | `ease_in` | — | Mode 1: p². |
 | `ease_out` | — | Mode 2: 1 − (1 − p)². |
 | `smooth` | — | Mode 3: smoothstep. |
+| `ease_in_quart` | — | Quartic acceleration/deceleration for retained animation curves. |
+| `ease_out_quart` | — | — |
+| `ease_in_out_quart` | — | — |
+| `ease_out_in_quart` | — | — |
 
 ### WidgetSpec
 
@@ -5639,6 +6069,12 @@ Used by: `Ui.put`, `ClientSpec.systems.widgets`.
 
 | Field | Rust type | Default | Description |
 |---|---|---|---|
+| `key_events` | `Vec<WidgetKeyEvent>` | `[]` | Optional retained key events. Only the topmost eligible binding widget receives them, within the current modal subtree and client owner. |
+| `key_event_scope` | `bool` | `false` | Keep key-edge ownership on this ancestor as focus moves within it. |
+| `slider_axis` | `SliderAxis` | `"horizontal"` | Slider pointer/value axis; other widgets retain the horizontal default. |
+| `slider_keyboard` | `bool` | `true` | Enable built-in arrow stepping. Retained key bindings can instead provide a native policy while shared UI keeps pointer capture/focus. |
+| `keyboard_navigation` | `bool` | `true` | Built-in focus traversal may be replaced by retained owner key events. |
+| `keyboard_activation` | `bool` | `true` | Built-in Enter/Space activation; pointer activation is independent. |
 | `id` | `u32` | `1` | Client-local widget id. |
 | `parent` | `Option<u32>` | `null` | Parent widget id. |
 | `rect` | `[f32; 4]` | `[0.0,0.0,1.0,1.0]` | Rectangle [x, y, w, h], relative to the parent content box. |
@@ -5652,6 +6088,7 @@ Used by: `Ui.put`, `ClientSpec.systems.widgets`.
 | `enabled` | `bool` | `true` | Accepts focus and input. |
 | `interaction_only` | `bool` | `false` | Receives pointer input without emitting widget paint primitives. Image layers or other engine resources can supply the visual independently. |
 | `keyboard_focusable` | `bool` | `true` | Participates in keyboard focus/navigation and takes focus on pointer press. Pointer hover/press/activation still works when false. |
+| `focus_follows_pointer` | `bool` | `false` | Pointer movement hands keyboard focus to the hovered widget. Leaving this policy's widgets clears that focus until navigation or another hit. |
 | `clip_children` | `bool` | `false` | Clip children to this widget. |
 | `modal` | `bool` | `false` | While visible, the topmost modal subtree receives all input. |
 | `color` | `[u8; 4]` | `[52,66,88,255]` | RGBA8 fill color. |
@@ -5677,6 +6114,31 @@ Used by: `WidgetSpec.kind`.
 | `toggle` | — | Button that flips `value` between 0 and 1. |
 | `slider` | — | Horizontal 0..1 value; Left/Right or drag. |
 | `text_field` | — | Engine-owned single-line Unicode text, edited at the end. |
+
+### WidgetKeyEvent
+
+Used by: `WidgetSpec.key_events`.
+
+Engine-owned key delivery. Buttons use the shared InputFrame bit namespace; a release belongs only to a widget that owned that key while it was held.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+| `buttons` | `u64` | `1` | — |
+| `edge` | `WidgetKeyEdge` | `"press"` | — |
+| `event` | `String` | `"confirm"` | — |
+| `delay_ms` | `u32` | `0` | Held emits each eligible input tick after this engine-clock delay. |
+
+### WidgetKeyEdge
+
+Used by: `WidgetKeyEvent.edge`.
+
+Edge delivered to an eligible widget's retained event queue.
+
+| Variant | Fields | Description |
+|---|---|---|
+| `press` | — | — |
+| `release` | — | — |
+| `held` | — | — |
 
 ### Flow
 
@@ -5978,18 +6440,24 @@ Variants are tagged by `"op"`.
 
 | Variant | Fields | Description |
 |---|---|---|
+| `advance_time` | `delta_ms: u64` | Advance this client's automatic motion, reveal and transition clocks. Other clients, physical input, external producers and global time stay on their own clocks. Bounded to one day per admitted operation. |
+| `rebind_image` | `from: String, to: String` | Atomically retarget every live owned Image paint using one immutable generation. Frozen Snapshot paints and other clients retain their leases. |
+| `begin_sequence` | `id: u32, spec: LayerSequenceSpec` | Create an owner-scoped incremental channel sequence on an existing node. |
+| `sequence` | `id: u32, operation: LayerSequenceOperation` | Mutate or advance retained banked queues; Advance uses exact receipts. |
 | `begin_external_motion` | `id: u32, driver: u32` | Register an external procedural producer; query MotionStatus for its fresh generation before admitting worker samples. No code is hosted. |
 | `commit_external_motion` | `id: u32, driver: u32, stamp: ExternalMotionStamp, complete: bool, pose: Option<ExternalMotionPose>` | Publish one consecutive producer revision. Pose changes can share this atomic Layer batch; stale results roll back every operation in the batch. |
 | `request_external_motion_skip` | `id: u32, driver: u32, generation: u64` | Request the real producer's skip branch, without fabricating an endpoint. |
 | `remove_external_motion` | `id: u32, driver: u32, generation: u64` | Retire the producer capability, invalidating outstanding worker samples. |
-| `set_rect` | `id: u32, rect: [f32;4]` | Change rectangle geometry while preserving other motion/producer state. |
+| `set_rect` | `id: u32, rect: [f32; 4]` | Change rectangle geometry while preserving other motion/producer state. |
 | `set_depth` | `id: u32, depth: Option<f32>` | Stable finite floating depth within order major buckets; inherited by descendants. None returns this node to ordinary ordering in its scope. |
 | `begin_motion` | `id: u32, track: MotionTrackSpec` | Start or replace one local scalar track on an owned layer. |
 | `set_motion_elapsed` | `id: u32, property: MotionProperty, elapsed: u64` | Advance an external track in its caller-declared clock units. |
 | `end_motion` | `id: u32, property: Option<MotionProperty>, finish: bool` | Cancel selected/all tracks, optionally applying their final values. |
 | `set_solid_color` | `id: u32, color: [u8; 4]` | Change an existing Solid paint without replacing its layer or cancelling unrelated motion. Other paint kinds fail explicitly. |
+| `set_paint` | `id: u32, paint: Paint` | Replace paint while retaining layer geometry and motion/sequence state. Non-image paints clear image-only sampling and UV crop state. |
 | `put` | `layer: LayerSpec` | Issued by `Layers.put`. |
 | `remove` | `id: u32` | Issued by `Layers.remove`. |
+| `set_parent` | `id: u32, parent: Option<u32>` | Reparent an owned node without cancelling its retained motion or paint. |
 | `set_transform` | `id: u32, transform: SpriteTransform` | Issued by `Layers.setTransform`. |
 | `set_visible` | `id: u32, visible: bool` | Issued by `Layers.setVisible`. |
 | `complete_reveal` | `id: u32` | Complete a positioned text run through the engine clock/state service. |
@@ -5997,8 +6465,9 @@ Variants are tagged by `"op"`.
 | `set_blend` | `id: u32, blend: Blend` | Change composition without replacing paint, hierarchy or motion. |
 | `set_order` | `id: u32, order: [i32; 2]` | Issued by `Layers.setOrder`. |
 | `set_clip` | `id: u32, clip: Option<[f32; 4]>` | Issued by `Layers.setClip`. |
-| `set_viewport_clip` | `id: u32, clip: Option<[f32;4]>` | Set an inherited render-target clip, preserving geometry and motion. |
-| `set_source_crop` | `id: u32, crop: Option<[f32;4]>` | Change own source geometry/UV crop without touching children or motion. |
+| `set_viewport_clip` | `id: u32, clip: Option<[f32; 4]>` | Set an inherited render-target clip, preserving geometry and motion. |
+| `set_source_crop` | `id: u32, crop: Option<[f32; 4]>` | Change own source geometry/UV crop without touching children or motion. |
+| `set_glyph_crops` | `id: u32, crops: Vec<Option<[f32;4]>>` | Update positioned-glyph clips without replacing paint or canceling motion. |
 | `set_filter` | `id: u32, filter: Option<LayerFilter>` | Issued by `Layers.setFilter`. |
 | `puppet` | `id: u32, command: PuppetCommand` | Drive a puppet layer (ADR 0029). |
 | `transition` | `transition: TransitionSpec` | Start a screen transition owned by this client. |
@@ -6018,7 +6487,7 @@ Variants are tagged by `"op"`.
 |---|---|---|
 | `put_tooltip` | `tooltip: tooltip::TooltipSpec` | Issued by `Ui.putTooltip`. |
 | `remove_tooltip` | `id: u32` | Issued by `Ui.removeTooltip`. |
-| `show_tooltip` | `id: u32, position: [f32;2]` | Issued by `Ui.showTooltip`. |
+| `show_tooltip` | `id: u32, position: [f32; 2]` | Issued by `Ui.showTooltip`. |
 | `hide_tooltip` | `id: Option<u32>` | Issued by `Ui.hideTooltip`. |
 | `begin_motion` | `id: u32, track: MotionTrackSpec` | Start or replace a local X/Y rectangle track on an owned widget. |
 | `set_motion_elapsed` | `id: u32, property: MotionProperty, elapsed: u64` | Advance one external widget track in caller-declared units. |
@@ -6034,13 +6503,18 @@ Variants are tagged by `"op"`.
 | `insert_text` | `text: String` | Append committed Unicode text to this client's focused TextField. |
 | `backspace` | `id: u32` | Remove the last Unicode scalar from a client-local TextField. |
 | `focus` | `id: u32` | Issued by `Ui.focusTextField`. |
+| `blur` | `id: u32` | Release explicit focus until navigation or a pointer gesture selects it again. |
 | `set_cursor_visible` | `visible: bool` | Issued by `Ui.setCursorVisible`. |
 | `define_cursor` | `id: u32, cursor: cursor::CursorSpec` | Define (or replace) a client cursor image for `SetCursor`. |
 | `set_cursor` | `cursor: cursor::CursorSelect` | Select the pointer shape shown over the canvas. |
 | `warp_pointer` | `position: [i32; 2]` | Move the OS pointer to a canvas position. |
+| `move_pointer` | `motion: pointer_motion::PointerMotionSpec, aspect_fit: bool` | — |
+| `move_pointer_stepped` | `motion: pointer_motion::SteppedPointerMotionSpec` | Start an owner-scoped f32 motion driven only by explicit external ticks. |
+| `advance_pointer_motion` | `ticks: u32` | Issued by `Ui.advancePointerMotion`. |
 | `set_title` | `text: String` | Issued by `Ui.setTitle`. |
-| `set_window_size` | `size: [u32;2]` | Physical client size, applied by the host after presentation-mode changes. |
-| `set_window_position` | `position: [i32;2]` | Outer frame coordinates in the host display space. |
+| `set_window_size` | `size: [u32; 2]` | Physical client size, applied by the host after presentation-mode changes. |
+| `set_presentation_scale` | `mode: crysirror_core::service::PresentationScale` | — |
+| `set_window_position` | `position: [i32; 2]` | Outer frame coordinates in the host display space. |
 | `set_window_visible` | `visible: bool` | — |
 | `set_window_minimized` | `minimized: bool` | — |
 | `set_window_policy` | `decorated: bool, resizable: bool` | Issued by `Ui.setWindowPolicy`. |
@@ -6048,6 +6522,7 @@ Variants are tagged by `"op"`.
 | `put` | `widget: WidgetSpec` | Issued by `Ui.put`. |
 | `remove` | `id: u32` | Issued by `Ui.remove`. |
 | `set_hit_mask` | `id: u32, mask: Option<WidgetHitMask>` | Replace or clear one owned widget's pointer coverage without repainting it. |
+| `set_rect` | `id: u32, rect: [f32; 4]` | Update owned widget geometry, retaining its input and motion state. |
 | `set_visible` | `id: u32, visible: bool` | Issued by `Ui.setVisible`. |
 | `set_enabled` | `id: u32, enabled: bool` | Issued by `Ui.setEnabled`. |
 | `set_value` | `id: u32, value: f32` | Issued by `Ui.setValue`. |

@@ -322,7 +322,7 @@ impl LayerSystem {
                 Some(r) => Some((r.clone(), absolute_rect(owner, id)?)),
                 None => None,
             };
-            p.depth_order=self.depth_key(client,id)?;
+            p.depth_order = self.depth_key(client, id)?;
             p.composite = Some(Arc::new(CompositeFrame {
                 serial: fade.serial,
                 timing: [fade.elapsed_ms, fade.duration_ms],
@@ -358,7 +358,9 @@ fn absolute_rect(owner: &BTreeMap<u32, LayerSpec>, id: u32) -> Result<[f32; 4]> 
     let [mut x, mut y, w, h] = root.rect;
     let mut cur = root;
     loop {
-        let t = &cur.transform;
+        let (t,offset) = cur.transform.resolved();
+        x+=offset[0];
+        y+=offset[1];
         ensure!(
             t.rotate == 0. && t.scale_x == 1. && t.scale_y == 1. && !t.camera_enabled,
             "rule wipe requires an untransformed destination chain"

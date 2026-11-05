@@ -3,7 +3,7 @@
 //! tags, abilities and cue events — the data model of a GAS-style system.
 //! Definitions live in the world; per-entity state is an entity component.
 //! Both are plain saved data and advance on the world's fixed step.
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -580,10 +580,11 @@ mod tests {
         let mut s = knight();
         s.apply_effect(&d, "Damage", Some(7)).unwrap();
         assert_eq!(s.value(&d, "Health"), Some(70.));
-        assert!(s
-            .events
-            .iter()
-            .any(|e| e.kind == "cue" && e.name == "Cue.Hit" && e.source == Some(7)));
+        assert!(
+            s.events
+                .iter()
+                .any(|e| e.kind == "cue" && e.name == "Cue.Hit" && e.source == Some(7))
+        );
         s.apply_effect(&d, "Fortify", None).unwrap();
         s.apply_effect(&d, "Fortify", None).unwrap();
         s.apply_effect(&d, "Fortify", None).unwrap(); // capped at 2 stacks
@@ -597,10 +598,11 @@ mod tests {
             s.apply_effect(&d, "Damage", None).unwrap();
         }
         assert_eq!(s.value(&d, "Health"), Some(0.));
-        assert!(s
-            .events
-            .iter()
-            .any(|e| e.kind == "attribute_depleted" && e.name == "Health"));
+        assert!(
+            s.events
+                .iter()
+                .any(|e| e.kind == "attribute_depleted" && e.name == "Health")
+        );
     }
     #[test]
     fn abilities_check_tags_cost_cooldown_and_cancel() {

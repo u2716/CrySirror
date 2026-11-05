@@ -39,6 +39,10 @@ pub enum MotionProperty {
     /// Inherited Layer opacity in0..255. Each applied sample truncates toward
     /// zero to a stored byte; status reports that same applied value.
     Opacity,
+    /// Gamma-space RGB modulation in the layer filter,0..1 per channel.
+    MultiplyRed,
+    MultiplyGreen,
+    MultiplyBlue,
 }
 impl MotionProperty {
     pub(crate) fn layer_value(self, layer: &super::LayerSpec) -> f32 {
@@ -56,6 +60,9 @@ impl MotionProperty {
             Self::PivotY => layer.transform.pivot_y,
             Self::PivotZ => layer.transform.pivot_z,
             Self::Opacity => f32::from(layer.opacity),
+            Self::MultiplyRed => layer.filter.as_ref().map_or(1., |f| f.multiply[0]),
+            Self::MultiplyGreen => layer.filter.as_ref().map_or(1., |f| f.multiply[1]),
+            Self::MultiplyBlue => layer.filter.as_ref().map_or(1., |f| f.multiply[2]),
         }
     }
     pub(crate) fn set_layer(self, layer: &mut super::LayerSpec, value: f32) {
@@ -73,6 +80,15 @@ impl MotionProperty {
             Self::PivotY => layer.transform.pivot_y = value,
             Self::PivotZ => layer.transform.pivot_z = value,
             Self::Opacity => layer.opacity = value as u8,
+            Self::MultiplyRed => {
+                layer.filter.get_or_insert_with(Default::default).multiply[0] = value
+            }
+            Self::MultiplyGreen => {
+                layer.filter.get_or_insert_with(Default::default).multiply[1] = value
+            }
+            Self::MultiplyBlue => {
+                layer.filter.get_or_insert_with(Default::default).multiply[2] = value
+            }
         }
     }
     fn applied(self, value: f32) -> f32 {
@@ -111,6 +127,10 @@ pub struct MotionTrackSpec {
     pub to: f32,
     /// Duration in engine milliseconds or external caller units; zero is immediate.
     pub duration: u64,
+    /// Additional passes after the first; -1 repeats indefinitely. A zero
+    /// duration always completes immediately, including an infinite repeat.
+    #[serde(default)]
+    pub repeat: i32,
     /// Require explicit monotonic SetMotionElapsed instead of engine ticking.
     #[serde(default)]
     pub external: bool,
@@ -135,6 +155,8 @@ pub struct MotionTrackStatus {
     pub duration: u64,
     /// Last elapsed value in the same units.
     pub elapsed: u64,
+    #[serde(default)]
+    pub repeat: i32,
     /// Whether elapsed time is explicitly supplied by the caller.
     pub external: bool,
     /// True once the endpoint has been applied.
@@ -159,6 +181,32 @@ struct Track {
     curve: ScalarTween,
     external: bool,
     elapsed: u64,
+    #[serde(default)]
+    repeat: i32,
+}
+impl Track {
+    fn limit(&self) -> u64 {
+        if self.curve.duration_ms == 0 {
+            0
+        } else if self.repeat < 0 {
+            u64::MAX
+        } else {
+            self.curve
+                .duration_ms
+                .saturating_mul(self.repeat as u64 + 1)
+        }
+    }
+    fn complete(&self) -> bool {
+        self.elapsed >= self.limit()
+    }
+    fn sample(&self) -> f32 {
+        let phase = if self.complete() {
+            self.curve.duration_ms
+        } else {
+            self.elapsed % self.curve.duration_ms
+        };
+        self.curve.sample(phase)
+    }
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -184,17 +232,24 @@ fn endpoints(property: MotionProperty, from: f32, to: f32, scale: bool) -> Resul
     ) {
         ensure!(scale, "UI motion only supports rectangle X/Y");
         ensure!(
-            [from, to]
-                .iter()
-                .all(|v| v.abs() >= 0.0001 && v.abs() <= 4096.)
-                && from.signum() == to.signum(),
-            "motion cannot cross a singular transform scale"
+            [from, to].iter().all(|v| v.abs() <= 4096.)
+                && (from == 0. || to == 0. || from.signum() == to.signum()),
+            "scale motion endpoints must share a sign or a collapsed endpoint"
         );
     }
     if property == MotionProperty::Opacity {
         ensure!(
             [from, to].iter().all(|v| (0.0..=255.0).contains(v)),
             "motion opacity endpoints must be0..255"
+        );
+    }
+    if matches!(
+        property,
+        MotionProperty::MultiplyRed | MotionProperty::MultiplyGreen | MotionProperty::MultiplyBlue
+    ) {
+        ensure!(
+            [from, to].iter().all(|v| (0.0..=1.).contains(v)),
+            "filter modulation endpoints must be0..1"
         );
     }
     Ok(())
@@ -211,6 +266,7 @@ impl MotionTracks {
         let from = spec.from.unwrap_or(current);
         endpoints(spec.property, from, spec.to, scale)?;
         ensure!(spec.duration <= 86_400_000, "motion duration limit");
+        ensure!(spec.repeat >= -1, "motion repeat must be -1 or nonnegative");
         let replacing = self
             .by_owner
             .get(&owner)
@@ -230,8 +286,9 @@ impl MotionTracks {
             curve: ScalarTween::new(from, spec.to, 0, spec.duration, spec.easing)?,
             external: spec.external,
             elapsed: 0,
+            repeat: spec.repeat,
         };
-        let value = spec.property.applied(track.curve.sample(0));
+        let value = spec.property.applied(track.sample());
         self.by_owner
             .entry(owner)
             .or_default()
@@ -259,7 +316,7 @@ impl MotionTracks {
             "motion elapsed cannot move backwards"
         );
         track.elapsed = elapsed;
-        Ok(property.applied(track.curve.sample(elapsed)))
+        Ok(property.applied(track.sample()))
     }
     pub(crate) fn end(
         &mut self,
@@ -311,11 +368,12 @@ impl MotionTracks {
                 property,
                 from: t.curve.start,
                 to: t.curve.end,
-                current: property.applied(t.curve.sample(t.elapsed)),
+                current: property.applied(t.sample()),
                 duration: t.curve.duration_ms,
                 elapsed: t.elapsed,
+                repeat: t.repeat,
                 external: t.external,
-                complete: t.curve.complete(t.elapsed),
+                complete: t.complete(),
             })
             .collect::<Vec<_>>();
         let drivers = self.external.status(owner, id);
@@ -330,14 +388,27 @@ impl MotionTracks {
         for (&owner, targets) in &mut self.by_owner {
             for (&id, tracks) in targets {
                 for (&property, t) in tracks {
-                    if !t.external && !t.curve.complete(t.elapsed) {
-                        t.elapsed = t.elapsed.saturating_add(delta).min(t.curve.duration_ms);
-                        values.push((
-                            owner,
-                            id,
-                            property,
-                            property.applied(t.curve.sample(t.elapsed)),
-                        ));
+                    if !t.external && !t.complete() {
+                        t.elapsed = t.elapsed.saturating_add(delta).min(t.limit());
+                        values.push((owner, id, property, property.applied(t.sample())));
+                    }
+                }
+            }
+        }
+        values
+    }
+    pub(crate) fn tick_owner(
+        &mut self,
+        owner: u32,
+        delta: u64,
+    ) -> Vec<(u32, u32, MotionProperty, f32)> {
+        let mut values = Vec::new();
+        if let Some(targets) = self.by_owner.get_mut(&owner) {
+            for (&id, tracks) in targets {
+                for (&property, track) in tracks {
+                    if !track.external && !track.complete() {
+                        track.elapsed = track.elapsed.saturating_add(delta).min(track.limit());
+                        values.push((owner, id, property, property.applied(track.sample())));
                     }
                 }
             }
@@ -353,14 +424,16 @@ impl MotionTracks {
                 ensure!(
                     target(owner, id)
                         && !tracks.is_empty()
-                        && tracks.len() <= if scale { 13 } else { 2 },
+                        && tracks.len() <= if scale { 16 } else { 2 },
                     "motion target missing"
                 );
                 for (&p, t) in tracks {
                     endpoints(p, t.curve.start, t.curve.end, scale)?;
                     t.curve.validate()?;
                     ensure!(
-                        t.curve.started_ms == 0 && t.curve.duration_ms <= 86_400_000,
+                        t.curve.started_ms == 0
+                            && t.curve.duration_ms <= 86_400_000
+                            && t.repeat >= -1,
                         "invalid retained motion clock"
                     );
                     count += 1;

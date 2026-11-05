@@ -1,0 +1,7 @@
+// SPDX-License-Identifier: MPL-2.0
+// Draw an oversized fullscreen triangle. Native GXM attributes, no vertex ID.
+void main(float2 position : POSITION, float2 uv : TEXCOORD0,
+          out float4 clip : POSITION, out float2 out_uv : TEXCOORD0) {
+    clip = float4(position, 0.0, 1.0);
+    out_uv = uv;
+}

@@ -1,5 +1,5 @@
 use super::codec_error::{CodecError as EthornellError, Result};
-use crate::cbg::{parse_cbg_metadata, DecodedImage};
+use crate::cbg::{DecodedImage, parse_cbg_metadata};
 
 pub(crate) mod bf_movie;
 

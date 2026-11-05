@@ -7,7 +7,7 @@ use crysirror_scene::layer::TransitionFrame;
 use wgpu::util::DeviceExt;
 
 struct FrameTex {
-    _texture: wgpu::Texture,
+    texture: wgpu::Texture,
     /// View in the presentation format: render passes write through it.
     render: wgpu::TextureView,
     /// Raw (non-sRGB) view: the wipe samples gamma-encoded bytes.
@@ -100,7 +100,7 @@ impl Transitions {
         });
         let present_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("present shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/present.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(crysirror_shaders::wgsl::PRESENT.into()),
         });
         let present_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("present"),
@@ -161,7 +161,7 @@ impl Transitions {
         let wipe_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("siglus wipe"),
             source: wgpu::ShaderSource::Wgsl(
-                include_str!("shaders/wipe.wgsl")
+                crysirror_shaders::wgsl::WIPE
                     .into(),
             ),
         });
@@ -192,7 +192,7 @@ impl Transitions {
         });
         let dither_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("engine ordered dither"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/ordered_dither.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(crysirror_shaders::wgsl::ORDERED_DITHER.into()),
         });
         let ordered_dither_pipeline =
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { cache: None,
@@ -249,7 +249,7 @@ impl Transitions {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: self.raw_format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[self.format],
         });
         let render = texture.create_view(&wgpu::TextureViewDescriptor {
@@ -261,7 +261,7 @@ impl Transitions {
             ..Default::default()
         });
         FrameTex {
-            _texture: texture,
+            texture,
             render,
             raw,
         }
@@ -279,6 +279,11 @@ impl Transitions {
         }
         let f = self.frames.as_ref().unwrap();
         &f.tex[1 - f.last].render
+    }
+    /// The texture behind `begin`'s view, for `Paint::Backdrop`, with its formats.
+    pub(crate) fn composing(&self) -> Option<(wgpu::Texture, wgpu::TextureFormat, wgpu::TextureFormat)> {
+        let f = self.frames.as_ref()?;
+        Some((f.tex[1 - f.last].texture.clone(), self.raw_format, self.format))
     }
     /// Keyed mask image (gamma bytes, sampled raw like siglus_rs).
     pub(crate) fn mask_key(&self) -> Option<&str> {
@@ -472,7 +477,7 @@ impl Transitions {
 mod tests {
     #[test]
     fn ordered_dither_shader_validates_without_a_gpu() {
-        let source = include_str!("shaders/ordered_dither.wgsl");
+        let source = crysirror_shaders::wgsl::ORDERED_DITHER;
         let module = naga::front::wgsl::parse_str(source).unwrap();
         naga::valid::Validator::new(
             naga::valid::ValidationFlags::all(),

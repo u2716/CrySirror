@@ -281,6 +281,7 @@ impl Project {
             if !c.asset_prefix.is_empty() {
                 path(&c.asset_prefix)?;
             }
+            #[cfg(not(target_arch = "wasm32"))]
             if c.adapter == "siglus" {
                 ensure!(
                     c.program.is_empty(),

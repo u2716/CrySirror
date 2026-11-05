@@ -8,8 +8,8 @@
 //! append in admission order. A nested depth stays within its ancestor scope.
 //! `frame(&self)` only derives keys. The owner explicitly commits the history
 //! after accepting a logical frame, never after an intermediate property write.
-use super::{LayerSpec, Primitive, MAX_LAYERS};
-use anyhow::{ensure, Context, Result};
+use super::{LayerSpec, MAX_LAYERS, Primitive};
+use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::{
     cmp::Ordering,
@@ -325,15 +325,16 @@ mod tests {
         assert_eq!(ids(&s), [42, 99, 1]);
         depth(&mut s, 1, Some(0.));
         assert_eq!(ids(&s), [1, 42, 99]);
-        assert!(s
-            .apply_batch(
+        assert!(
+            s.apply_batch(
                 ClientId(1),
                 &[C::SetDepth {
                     id: 1,
                     depth: Some(f32::NAN)
                 }]
             )
-            .is_err());
+            .is_err()
+        );
         assert_eq!(ids(&s), [1, 42, 99]);
         depth(&mut s, 42, None);
         depth(&mut s, 42, Some(0.));
@@ -393,8 +394,8 @@ mod tests {
         }
         s.commit_frame_order().unwrap();
         let before = serde_json::to_value(&s).unwrap();
-        assert!(s
-            .apply_batch(
+        assert!(
+            s.apply_batch(
                 ClientId(1),
                 &[
                     C::SetDepth {
@@ -404,7 +405,8 @@ mod tests {
                     C::Remove { id: 999 }
                 ]
             )
-            .is_err());
+            .is_err()
+        );
         assert_eq!(serde_json::to_value(&s).unwrap(), before);
         let result: Result<()> = s.transaction(|s| {
             depth(s, 1, Some(-5.));
@@ -419,19 +421,22 @@ mod tests {
         assert_eq!(ids(&s.clone()), ids(&restored));
         let mut foreign = before.clone();
         foreign["depth_orders"]["clients"]["1"]["depths"]["999"] = serde_json::json!(0.);
-        assert!(serde_json::from_value::<LayerSystem>(foreign)
-            .unwrap()
-            .validate()
-            .is_err());
-        assert!(s
-            .apply_batch(
+        assert!(
+            serde_json::from_value::<LayerSystem>(foreign)
+                .unwrap()
+                .validate()
+                .is_err()
+        );
+        assert!(
+            s.apply_batch(
                 ClientId(2),
                 &[C::SetDepth {
                     id: 1,
                     depth: Some(0.)
                 }]
             )
-            .is_err());
+            .is_err()
+        );
         s.apply_batch(ClientId(1), &[C::Remove { id: 9 }]).unwrap();
         put(&mut s, 9, None, [0, 0]);
         depth(&mut s, 9, Some(0.));

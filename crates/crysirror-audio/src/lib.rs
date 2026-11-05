@@ -11,6 +11,8 @@ pub mod levels;
 pub mod buffered;
 pub mod channels;
 mod channel_async;
+mod balance;
+mod resident;
 mod channel_exchange;
 pub mod decoder;
 pub mod wave_box;

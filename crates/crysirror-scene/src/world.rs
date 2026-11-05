@@ -4,7 +4,7 @@ use crate::{
     animation::IntEvent,
     model::{Camera, Geometry, Mesh, Scene3d},
 };
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use crysirror_core::state::ClientId;
 use glam::{EulerRot, Mat4, Quat, Vec3};
 use serde::{Deserialize, Serialize};
@@ -951,13 +951,8 @@ impl World {
                                     e.spec.transform.rotation_degrees = [v[0], v[1], v[2]]
                                 }
                                 P::Scale => {
-                                    e.spec.transform.scale = [v[0], v[1], v[2]].map(|x| {
-                                        if x.abs() < 1e-6 {
-                                            1e-6
-                                        } else {
-                                            x
-                                        }
-                                    })
+                                    e.spec.transform.scale = [v[0], v[1], v[2]]
+                                        .map(|x| if x.abs() < 1e-6 { 1e-6 } else { x })
                                 }
                                 P::Visible => e.spec.visible = v[0] > 0.5,
                                 P::LightIntensity | P::LightColor | P::LightRange => {

@@ -204,7 +204,7 @@ impl ChannelAudio {
                         );
                         // Preflight above is read-only. Invalidate intents only
                         // after every fallible gain/voice validation succeeds.
-                        for channel in [e.spec.source_channel, e.spec.tail_channel] {
+                        for channel in std::collections::BTreeSet::from([e.spec.source_channel, e.spec.tail_channel]) {
                             self.cancel_pending_control(
                                 e.owner,
                                 &AudioRequest::Stop {
@@ -249,7 +249,7 @@ impl ChannelAudio {
                             e.spec.release_tail_when_source_missing,
                             "release source disappeared before publication"
                         );
-                        for channel in [e.spec.source_channel, e.spec.tail_channel] {
+                        for channel in std::collections::BTreeSet::from([e.spec.source_channel, e.spec.tail_channel]) {
                             self.cancel_pending_control(
                                 e.owner,
                                 &AudioRequest::Stop {

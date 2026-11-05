@@ -2,6 +2,7 @@
 // Native ciphers ported from arc_unpacker (C) 2016 rr-. Title secrets are
 // supplied by the client key provider; no upstream title key tables are copied.
 use super::*;
+mod qlie31;
 
 pub(super) fn leafpack(s: &dyn AssetReader, cx: &DecodeContext) -> Result<Vec<Row>> {
     let key = key_bytes(cx, "leaf/leafpack")?;
@@ -633,7 +634,7 @@ pub(super) fn cpz(s: &dyn AssetReader, cx: &DecodeContext, v: u8) -> Result<Vec<
 const PACK_MAGIC: &[u8] = b"FilePackVer3.0\0\0";
 pub(super) fn probe_pack(s: &dyn AssetReader) -> Result<bool> {
     let n = length(s)?;
-    Ok(n >= 28 && magic(s, n - 28, PACK_MAGIC)?)
+    Ok(n >= 28 && (magic(s, n - 28, PACK_MAGIC)? || magic(s, n - 28, b"FilePackVer3.1\0\0")?))
 }
 fn padd(a: u64, b: u64) -> u64 {
     u64::from((a as u32).wrapping_add(b as u32))
@@ -721,14 +722,7 @@ fn pack_decrypt(
 ) -> Vec<u8> {
     let mut out = b.to_vec();
     if key1.is_none() && key2.is_none() {
-        let mut key = 0xa73c5f9da73c5f9du64;
-        let state = seed.wrapping_add(b.len() as u32) ^ 0xfec9753e;
-        let mut state = u64::from(state) | (u64::from(state) << 32);
-        for w in out.chunks_exact_mut(8) {
-            key = padd(key, 0xce24f523ce24f523) ^ state;
-            state = u64::from_le_bytes(w.try_into().unwrap()) ^ key;
-            w.copy_from_slice(&state.to_le_bytes());
-        }
+        crysirror_resource::lane_feedback::decrypt(&mut out, seed);
         return out;
     }
     let (mut mutator, mut state) = (0x85f532u32, 0x33f641u32);
@@ -773,7 +767,7 @@ fn pack_decrypt(
     }
     out
 }
-fn pack_decompress(b: &[u8], size: usize) -> Result<Vec<u8>> {
+pub(super) fn pack_decompress(b: &[u8], size: usize) -> Result<Vec<u8>> {
     let mut c = Cursor::new(b);
     ensure!(
         c.take(4)? == b"1PC\xff",
@@ -840,6 +834,9 @@ fn pack_decompress(b: &[u8], size: usize) -> Result<Vec<u8>> {
     Ok(out)
 }
 pub(super) fn pack(s: &dyn AssetReader, cx: &DecodeContext) -> Result<Vec<Row>> {
+    if length(s)? >= 28 && magic(s, length(s)? - 28, b"FilePackVer3.1\0\0")? {
+        return qlie31::open(s, cx);
+    }
     let tail = length(s)?
         .checked_sub(28)
         .context("truncated QLiE footer")?;

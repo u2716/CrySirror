@@ -2,8 +2,8 @@
 //! Stateful packed block patterns. RNG state is supplied and returned by the
 //! caller so several resources can share one native/global integer stream.
 //! These CPU kernels are for engine workers; publication/handles stay host-owned.
-use crate::{rgba_len, ImageSurface};
-use anyhow::{ensure, Result};
+use crate::{ImageSurface, rgba_len};
+use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -292,9 +292,11 @@ mod tests {
         assert_eq!(pattern.snapshot().phase, 0);
         let snapshot = pattern.snapshot();
         let random = rng.clone();
-        assert!(pattern
-            .advance_prefix(snapshot.words.len() + 1, &mut rng, &|| Ok(()))
-            .is_err());
+        assert!(
+            pattern
+                .advance_prefix(snapshot.words.len() + 1, &mut rng, &|| Ok(()))
+                .is_err()
+        );
         assert_eq!(pattern.snapshot(), snapshot);
         assert_eq!(rng, random);
     }
@@ -345,14 +347,15 @@ mod tests {
         let initial = p.clone();
         let initial_rng = rng.clone();
         let checks = Cell::new(0);
-        assert!(p
-            .advance(&mut rng, &|| {
+        assert!(
+            p.advance(&mut rng, &|| {
                 let n = checks.get() + 1;
                 checks.set(n);
                 ensure!(n < 3, "cancelled");
                 Ok(())
             })
-            .is_err());
+            .is_err()
+        );
         assert_eq!(p, initial);
         assert_eq!(rng, initial_rng);
         p.advance(&mut rng, &|| Ok(())).unwrap();

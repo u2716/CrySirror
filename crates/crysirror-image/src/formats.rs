@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Content-recognized CPU image plugins, with scoped dependency reads.
 use crate::{DecoderRegistry, ImageSurface, MAX_DECODED_BYTES};
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{Context, Result, bail, ensure};
 use crysirror_core::{
-    path::{Mount, VfsPath},
     Error,
+    path::{Mount, VfsPath},
 };
 use crysirror_resource::{ArchiveEntry, DecodeContext};
 use std::{cell::Cell, sync::Arc};
@@ -364,9 +364,11 @@ mod memory_codec_tests {
             assert_eq!([surface.width, surface.height], [2, 1]);
             assert_eq!(&surface.rgba[..4], &[17, 31, 99, 255]);
         }
-        assert!(registry
-            .decode_with("memory-octet", b"not an image", None, None, None)
-            .is_err());
+        assert!(
+            registry
+                .decode_with("memory-octet", b"not an image", None, None, None)
+                .is_err()
+        );
     }
     struct HeaderPlugin {
         id: &'static str,
@@ -434,24 +436,32 @@ mod memory_codec_tests {
                 .rgba[0],
             2
         );
-        assert!(registry
-            .encoding_info_with("x", b"mismatch", None, None, Some("test/high"))
-            .is_err());
+        assert!(
+            registry
+                .encoding_info_with("x", b"mismatch", None, None, Some("test/high"))
+                .is_err()
+        );
         registry
             .register_format(Arc::new(HeaderPlugin {
                 id: "test/tied",
                 priority: 2,
             }))
             .unwrap();
-        assert!(registry
-            .encoding_info_with("x", b"shared header", None, None, None)
-            .is_err());
-        assert!(registry
-            .decode_with("x", b"shared header", None, None, None)
-            .is_err());
-        assert!(registry
-            .encoding_info_with("x", b"unrecognized", None, None, None)
-            .unwrap()
-            .is_none());
+        assert!(
+            registry
+                .encoding_info_with("x", b"shared header", None, None, None)
+                .is_err()
+        );
+        assert!(
+            registry
+                .decode_with("x", b"shared header", None, None, None)
+                .is_err()
+        );
+        assert!(
+            registry
+                .encoding_info_with("x", b"unrecognized", None, None, None)
+                .unwrap()
+                .is_none()
+        );
     }
 }

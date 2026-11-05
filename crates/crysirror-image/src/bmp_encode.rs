@@ -58,7 +58,12 @@ pub fn dither252_palette() -> [[u8; 4]; 256] {
     for r in 0..6u32 {
         for g in 0..7u32 {
             for b in 0..6u32 {
-                palette[c] = [(r * 255 / 5) as u8, (g * 255 / 6) as u8, (b * 255 / 5) as u8, 0];
+                palette[c] = [
+                    (r * 255 / 5) as u8,
+                    (g * 255 / 6) as u8,
+                    (b * 255 / 5) as u8,
+                    0,
+                ];
                 c += 1;
             }
         }
@@ -100,7 +105,11 @@ pub fn encode_bmp(width: u32, height: u32, rgba: &[u8], depth: BmpDepth) -> Resu
         BmpDepth::Dither252 => 1,
     };
     let pitch = ((width * pixel_bytes - 1) / 4 + 1) * 4;
-    let palette_bytes = if depth == BmpDepth::Dither252 { 1024 } else { 0 };
+    let palette_bytes = if depth == BmpDepth::Dither252 {
+        1024
+    } else {
+        0
+    };
     let offset = 14 + 40 + palette_bytes;
     let size = offset + pitch * height;
     let mut out = Vec::with_capacity(size as usize);
@@ -171,7 +180,14 @@ mod tests {
         assert_eq!(palette[251], [255, 255, 255, 0]);
         assert_eq!(palette[252], [0, 0, 0, 0]);
         let mut index = [0u8; 4];
-        dither252_row(&[255, 255, 255, 255, 0, 0, 0, 255, 255, 0, 0, 255, 0, 0, 255, 255], 0, &mut index).unwrap();
+        dither252_row(
+            &[
+                255, 255, 255, 255, 0, 0, 0, 255, 255, 0, 0, 255, 0, 0, 255, 255,
+            ],
+            0,
+            &mut index,
+        )
+        .unwrap();
         // White 5 + 6*6 + 5*42 = 251; black 0; pure R/B land on the major
         // (blue, palette byte 0) and minor (red, byte 2) ramps.
         assert_eq!(index, [251, 0, 5, 210]);

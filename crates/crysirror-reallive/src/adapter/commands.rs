@@ -907,6 +907,7 @@ impl RealLiveVm {
                 self.window = w as u32;
             }
             17 | 15 | 205 | 206 | 207 | 210 => {
+                self.toolbar.pause_started = None;
                 self.wait = Some(Wait::Pause {
                     kind: c.op.opcode,
                     window: self.window,
@@ -980,6 +981,8 @@ impl RealLiveVm {
         }
         self.submit(h, json!({"layers":ops}))?;
         self.pen.clear();
+        self.toolbar.open.clear();
+        self.toolbar.archive_all();
         Ok(())
     }
     pub(super) fn stop_movie(&mut self, h: &mut dyn HostServices) -> Result<()> {
@@ -1025,6 +1028,7 @@ impl RealLiveVm {
     }
     pub(super) fn close_window(&mut self, h: &mut dyn HostServices, window: u32) -> Result<()> {
         self.clear_window(h, window)?;
+        self.toolbar.open.remove(&window);
         let frame = 20000 + window * 8..20000 + window * 8 + 8;
         let nine = selection::NINE_SLICE_BASE + window * 16..selection::NINE_SLICE_BASE + window * 16 + 16;
         let ops: Vec<Value> = self
@@ -1048,6 +1052,7 @@ impl RealLiveVm {
         }
         self.submit(h, json!({"layers":ops}))?;
         self.pen.remove(&window);
+        self.toolbar.archive(window);
         Ok(())
     }
     pub(super) fn finish_pause(
@@ -1262,6 +1267,8 @@ impl RealLiveVm {
             backing.push(json!({"op":"put","layer":shadow}));
         }
         self.submit(h, json!({"layers":backing}))?;
+        self.toolbar.open.insert(self.window);
+        self.toolbar.record(self.window, &text[..overflow.unwrap_or(text.len())], total.saturating_sub(old));
         m.message_page_empty = false;
         self.wait = Some(Wait::Reveal { layer: id });
         Ok(())
@@ -1441,7 +1448,7 @@ fn interpret_names(text: &str, name: impl Fn(bool, usize) -> String) -> String {
             let value = crate::vm::memory::Memory::name_index(&letters)
                 .map(|index| name(c == '％', index))
                 .unwrap_or_default();
-            if let Some(digit) = chars.get(j).filter(|d| ('０'..='９').contains(d)) {
+            if let Some(digit) = chars.get(j).filter(|d| ('０'..='９').contains(*d)) {
                 let nth = *digit as usize - '０' as usize;
                 out.extend(value.chars().nth(nth));
                 j += 1;

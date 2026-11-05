@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Checked 2D DDS inputs: BC1/BC2/BC3 plus explicit RGB(A)32/R8/A8.
 use crate::ImageSurface;
-use anyhow::{bail, ensure, Result};
+use anyhow::{Result, bail, ensure};
 pub(crate) fn decode(bytes: &[u8]) -> Result<Option<ImageSurface>> {
     ensure!(bytes.len() >= 128, "truncated DDS header");
     let u = |at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
@@ -116,11 +116,13 @@ mod tests {
         let mut bc = header(4, 4, 4, 0, [0; 4]);
         bc[84..88].copy_from_slice(b"DXT1");
         bc.extend([0x00, 0xf8, 0, 0, 0, 0, 0, 0]);
-        assert!(decode_standard(&bc)
-            .unwrap()
-            .rgba
-            .chunks_exact(4)
-            .all(|p| p == [255, 0, 0, 255]));
+        assert!(
+            decode_standard(&bc)
+                .unwrap()
+                .rgba
+                .chunks_exact(4)
+                .all(|p| p == [255, 0, 0, 255])
+        );
         assert!(decode_standard(&b[..128]).is_err());
         let mut invalid = b.clone();
         invalid[112..116].copy_from_slice(&0x200u32.to_le_bytes());

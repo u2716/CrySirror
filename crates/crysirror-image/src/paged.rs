@@ -3,7 +3,7 @@
 // License, v. 2.0. A copy is available at https://mozilla.org/MPL/2.0/.
 //! Bounded sparse page layouts and immutable image generations. This module
 //! plans work; ordinary engine ImageJobs own every pixel allocation/operation.
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use crysirror_core::{
     image_processing::{ImageCompositeLayer, ImageCompositeMath, ImageInput, ImageResource},
     state::ClientId,
@@ -401,14 +401,18 @@ mod tests {
         );
         assert_eq!(regions[2].rect, [0, 0, 2, 1]);
         assert_eq!(regions[1].rect, [0, 0, 1, 2]);
-        assert!(layout
-            .intersect([2, 0, 0, 4], &|| Ok(()))
-            .unwrap()
-            .is_empty());
+        assert!(
+            layout
+                .intersect([2, 0, 0, 4], &|| Ok(()))
+                .unwrap()
+                .is_empty()
+        );
         assert!(layout.intersect([i64::MAX, 0, 1, 1], &|| Ok(())).is_err());
-        assert!(layout
-            .intersect([0, 0, 6, 4], &|| anyhow::bail!("cancel"))
-            .is_err());
+        assert!(
+            layout
+                .intersect([0, 0, 6, 4], &|| anyhow::bail!("cancel"))
+                .is_err()
+        );
     }
     #[test]
     fn generations_keep_frozen_pages_dirty_history_and_owner_checks() {
@@ -416,36 +420,49 @@ mod tests {
         let empty = PagedImage::new(ClientId(1), layout.clone());
         assert!(empty.clear_plan([0, 0, 1, 1], [0; 4], &|| Ok(())).is_err());
         let plan = empty.clear_plan([0, 0, 4, 2], [0; 4], &|| Ok(())).unwrap();
-        assert!(plan
-            .requests()
-            .all(|(_, i)| matches!(i, ImageInput::Solid { .. })));
+        assert!(
+            plan.requests()
+                .all(|(_, i)| matches!(i, ImageInput::Solid { .. }))
+        );
         let ready = vec![(0, image(1, [2, 2], 0)), (1, image(1, [2, 2], 0))];
-        assert!(empty
-            .complete_clear(&plan, &ready[..1], &|| Ok(()))
-            .is_err());
-        assert!(empty
-            .complete_clear(
-                &plan,
-                &[(0, image(2, [2, 2], 0)), ready[1].clone()],
-                &|| Ok(())
-            )
-            .is_err());
-        assert!(empty
-            .complete_clear(
-                &plan,
-                &[(0, image(1, [1, 2], 0)), ready[1].clone()],
-                &|| Ok(())
-            )
-            .is_err());
-        assert!(empty
-            .complete_clear(&plan, &[ready[0].clone(), ready[0].clone()], &|| Ok(()))
-            .is_err());
-        assert!(PagedImage::new(ClientId(1), layout)
-            .complete_clear(&plan, &ready, &|| Ok(()))
-            .is_err());
-        assert!(empty
-            .complete_clear(&plan, &ready, &|| anyhow::bail!("cancel"))
-            .is_err());
+        assert!(
+            empty
+                .complete_clear(&plan, &ready[..1], &|| Ok(()))
+                .is_err()
+        );
+        assert!(
+            empty
+                .complete_clear(
+                    &plan,
+                    &[(0, image(2, [2, 2], 0)), ready[1].clone()],
+                    &|| Ok(())
+                )
+                .is_err()
+        );
+        assert!(
+            empty
+                .complete_clear(
+                    &plan,
+                    &[(0, image(1, [1, 2], 0)), ready[1].clone()],
+                    &|| Ok(())
+                )
+                .is_err()
+        );
+        assert!(
+            empty
+                .complete_clear(&plan, &[ready[0].clone(), ready[0].clone()], &|| Ok(()))
+                .is_err()
+        );
+        assert!(
+            PagedImage::new(ClientId(1), layout)
+                .complete_clear(&plan, &ready, &|| Ok(()))
+                .is_err()
+        );
+        assert!(
+            empty
+                .complete_clear(&plan, &ready, &|| anyhow::bail!("cancel"))
+                .is_err()
+        );
         assert_eq!(empty.defined_pages(), 0);
         let first = empty.complete_clear(&plan, &ready, &|| Ok(())).unwrap();
         let frozen = first.clone();

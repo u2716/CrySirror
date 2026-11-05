@@ -455,6 +455,8 @@ pub(crate) fn object_filter(
 ) -> Option<crysirror_scene::layer::LayerFilter> {
     let u = |v: i64| (v.clamp(0, 255) as f32) / 255.;
     let f = crysirror_scene::layer::LayerFilter {
+        multiply: [1.; 3],
+                    luma_weights: None, rgb_alpha_power: 0., ignore_tint_alpha: false, encoded_sampling:false,
         mono: u(b.mono),
         invert: u(b.reverse),
         bright: u(b.bright),

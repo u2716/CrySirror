@@ -28,7 +28,7 @@ fn step(tick: u64, count: u32, first_id: u64) -> SimulationStep {
 #[test]
 fn compute_wgsl_is_valid_and_host_layout_is_exact() {
     let module =
-        naga::front::wgsl::parse_str(include_str!("../src/shaders/vfx_compute.wgsl")).unwrap();
+        naga::front::wgsl::parse_str(crysirror_shaders::wgsl::VFX_COMPUTE).unwrap();
     naga::valid::Validator::new(
         naga::valid::ValidationFlags::all(),
         naga::valid::Capabilities::empty(),

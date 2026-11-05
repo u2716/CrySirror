@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Generic caller-key crypto primitives for resource profiles. No game key
 //! catalogue, generated executable code, filesystem or implicit title choice.
-use aes::cipher::{generic_array::GenericArray, BlockDecrypt, KeyInit};
-use anyhow::{ensure, Result};
+use aes::cipher::{BlockDecrypt, BlockEncrypt, KeyInit, generic_array::GenericArray};
+use anyhow::{Result, ensure};
 /// RSA public operation with PKCS#1 v1.5 type-1 padding. This is for legacy
 /// resource decoding, not an authentication API. Modulus bytes are big endian;
 /// only initialized, unpadded payload bytes are returned.
@@ -38,6 +38,15 @@ pub fn rsa_public_decrypt(input: &[u8], modulus: &[u8], exponent: u32) -> Result
 /// Native little-endian word Blowfish used by legacy containers. Full blocks
 /// in the requested prefix are decrypted; trailing bytes remain unchanged.
 pub fn blowfish_le_decrypt(input: &[u8], key: &[u8], prefix: usize) -> Result<Vec<u8>> {
+    blowfish_le_crypt(input, key, prefix, false)
+}
+/// Native little-endian word Blowfish encryption. This also permits building
+/// known container headers without retaining title-specific ciphertext/keys.
+/// Only complete blocks in the requested prefix are transformed.
+pub fn blowfish_le_encrypt(input: &[u8], key: &[u8], prefix: usize) -> Result<Vec<u8>> {
+    blowfish_le_crypt(input, key, prefix, true)
+}
+fn blowfish_le_crypt(input: &[u8], key: &[u8], prefix: usize, encrypt: bool) -> Result<Vec<u8>> {
     ensure!(
         (4..=56).contains(&key.len()),
         "Blowfish key must contain 4..56 bytes"
@@ -51,7 +60,11 @@ pub fn blowfish_le_decrypt(input: &[u8], key: &[u8], prefix: usize) -> Result<Ve
     for block in out[..n].chunks_exact_mut(8) {
         block[..4].reverse();
         block[4..].reverse();
-        cipher.decrypt_block(GenericArray::from_mut_slice(block));
+        if encrypt {
+            cipher.encrypt_block(GenericArray::from_mut_slice(block));
+        } else {
+            cipher.decrypt_block(GenericArray::from_mut_slice(block));
+        }
         block[..4].reverse();
         block[4..].reverse();
     }

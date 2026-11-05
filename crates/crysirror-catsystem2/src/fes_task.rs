@@ -32,6 +32,7 @@ pub(crate) struct FesTask {
     pub low_button: Option<u32>,
     /// Previous frame left and right button state for BUTTON edges.
     pub button_down: [bool; 2],
+    pub direction_revision: Option<u64>,
     /// Button events not yet given to the player; one section runs at a time.
     pub button_queue: std::collections::VecDeque<crate::fes_button::Dispatch>,
     pub image_list: Option<u32>,
@@ -85,6 +86,7 @@ impl FesTask {
             //627E50 explicitly zeroes1108/1112, unlike image-list112/116.
             upload_position: Some([0, 0]),
             saved_cursor: None,
+            direction_revision: None,
             input_task: None,
             sound_task: None,
             child_tasks: [None, None],
@@ -106,7 +108,22 @@ impl FesTask {
     pub fn diagnostics(&self) -> serde_json::Value {
         let mut value=serde_json::json!({"id":self.id,"task_parent":self.parent,"name":String::from_utf8_lossy(&self.name),"parameters":self.parameters,"string_bank_owner":self.string_bank_owner,"interpreter_owner":self.interpreter_owner,"player_loaded":self.player_loaded,"object_root":self.object_root,"player":self.player.as_ref().map(crate::fes_program::Machine::diagnostics),"running":self.running,"paused":self.paused,"first_tick":self.first_tick,"low_button":self.low_button,"image_list":self.image_list,"native_rect":self.native_rect,"upload_position":self.upload_position,"saved_cursor":self.saved_cursor,"input_task":self.input_task,"sound_task":self.sound_task,"child_tasks":self.child_tasks,"exit_code":self.exit_code,"selected_object":self.selected_object,"click_state":self.click_state,"message_parameter":self.message_parameter,"script_name":self.script_name,"next_object":self.next_object.as_slice(),"previous_object":self.previous_object.as_slice(),"resource_directory_utf16":self.resource_directory,"auxiliary_records":self.auxiliary_records.len(),"preload_names":self.preload_names.len()});
         value["deletion_pending"]=serde_json::Value::Bool(self.deletion_pending);
-        value["class_objects"]=serde_json::json!(self.object_bank.as_ref().map(|bank|bank.objects.values().map(|object|serde_json::json!({"id":object.id,"type":object.declared_type})).collect::<Vec<_>>()));
+        let detail=std::env::var_os("CRYSIRROR_CATSYSTEM2_OBJECTS").is_some();
+        value["class_objects"]=serde_json::json!(self.object_bank.as_ref().map(|bank|bank.objects.values().map(|object|{
+            let mut item=serde_json::json!({"id":object.id,"type":object.declared_type});
+            if detail {
+                item["name"]=serde_json::json!(String::from_utf8_lossy(&object.name));
+                item["parent"]=serde_json::json!(object.parent);
+                item["enabled"]=serde_json::json!(object.enabled);
+                use crate::native_class_state::State;
+                item["state"]=match &object.state {
+                    State::Image(image)|State::CImage(image)=>serde_json::json!({"file":String::from_utf8_lossy(&image.filename),"frame":image.native_frame(),"position":image.pose.position,"scale":image.pose.scale,"visible":image.pose.visible,"alpha":image.pose.alpha,"size":image.size,"draw_id":image.draw_id,"mask":image.mask,"missing":image.missing}),
+                    State::Plane(plane)|State::CPlane(plane)=>serde_json::json!({"position":plane.pose.position,"visible":plane.pose.visible,"size":plane.size,"vram":plane.vram,"text_prefix":plane.text.as_ref().map(|t|&t.text[..t.text.len().min(16)]),"glyphs":plane.text.as_ref().map(|t|t.glyphs.len())}),
+                    _=>serde_json::Value::Null,
+                };
+            }
+            item
+        }).collect::<Vec<_>>()));
         value["class_image_leases"]=serde_json::json!(self.class_image_leases);
         value
     }

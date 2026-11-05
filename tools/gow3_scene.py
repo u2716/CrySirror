@@ -10,6 +10,7 @@ import json,struct,math,argparse
 from pathlib import Path
 from collections import Counter
 from gow3_wad import inspect,WadError
+from local_assets import output_root
 ROOT=Path(__file__).resolve().parents[1]
 def check(v,msg):
     if not v:raise WadError(msg)
@@ -33,7 +34,9 @@ class Bits:
 def edge_indices(data,index_count,vertex_count):
     check(0<index_count<=65535 and index_count%3==0 and 0<vertex_count<=65535,'EDGE count range')
     r=Reader(data);reused,bias,mask_bytes,width,version=r.get('>HHHBB',0)
-    check(version==0 and width<=16 and (width>0 or reused==0),'unsupported EDGE version/width')
+    # A zero-bit delta stream encodes the predictor itself (minus bias).
+    # Rigid character pieces legitimately reuse vertex zero without packed bits.
+    check(version==0 and width<=16,'unsupported EDGE version/width')
     code_bytes=(index_count//3+3)//4;packed_bytes=(reused*width+7)//8
     used=8+mask_bytes+code_bytes+packed_bytes
     check(used<=len(data)<=((used+15)&~15),'EDGE stream length/padding')
@@ -63,7 +66,21 @@ def edge_indices(data,index_count,vertex_count):
 
 def mesh(data,name,decoder=edge_indices):
     r=Reader(data);check(r.u32(0)==0x1000d and r.u32(4)==len(data),'unknown MG resource profile')
-    top=0x10+r.u32(0x18);groups=r.u16(top);check(0<groups<=4096,'MG surface group limit');table=r.rel(top+12)
+    count=r.u16(8);check(0<count<=256,'MG draw-set count')
+    r.raw(24,count*4)
+    tops=[0x10+r.u32(24+i*4)for i in range(count)]
+    check(len(set(tops))==count,'duplicate MG draw-set pointer')
+    parts=[]
+    for draw_set,top in enumerate(tops):
+        sub=top-16
+        check(r.u32(sub)==0x10100 and r.u32(sub+4)==12,'MG draw-set version/layout')
+        joint=r.u32(sub+8)
+        for part in _mesh_table(data,r,top,decoder):
+            part['draw_set']=draw_set;part['draw_joint']=joint;parts.append(part)
+    return parts
+
+def _mesh_table(data,r,top,decoder):
+    groups=r.u16(top);check(0<groups<=4096,'MG surface group limit');table=r.rel(top+12)
     parts=[]
     for group in range(groups):
         base=r.rel(table+group*4);check(r.u32(base)==23 and r.u32(base+4)==1,'MG surface version/layout')
@@ -96,7 +113,9 @@ def mesh(data,name,decoder=edge_indices):
                 else:tangents.append(None)
             check(all(math.isfinite(v)and abs(v)<1e7 for vtx in p for v in vtx),'non-finite/excessive position')
             ix=decoder(r.raw(r.rel(c+20),r.u16(c+24)),ic,vn);offset=len(positions);positions.extend(p);indices.extend(offset+i for i in ix);attributes.append(fields)
-        uv_bindings=[row for row in declarations if row[1][0:2]==(15,241) and row[1][3]==2 and row[2]>0]
+        # 0x12 is the observed skin-input UV binding; its payload is the same
+        # declared float2 stream, indexed over the concatenated meshlets.
+        uv_bindings=[row for row in declarations if row[1][0:2]==(15,241) and row[1][3] in (2,18) and row[2]>0]
         check(len(uv_bindings)<=1,'ambiguous UV0 binding')
         uv=[[0.,0.]]*len(positions)
         uv_supported=bool(uv_bindings)
@@ -123,7 +142,7 @@ def resources(data):
     return info,groups
 
 def extract(wad,out):
-    out=out.resolve();check(not out.is_relative_to(ROOT),'game data must remain outside source export');out.mkdir(parents=True,exist_ok=True)
+    out=output_root(out);out.mkdir(parents=True,exist_ok=True)
     data=wad.read_bytes();info,groups=resources(data);meshes={};errors=[]
     for record in info['records']:
         if record['kind']=='0x00010052' and record['name'].startswith('MG_'):
@@ -204,10 +223,10 @@ def dds_full(payload,ts,max_size=1024):
 # 9 grayscale specular. Other slots stay unmapped and are reported.
 ROLE_SLOTS={'base':0,'normal':5,'specular':9}
 
-def preview(wad,out,codec,eye=None,target=None,ts=None,base_size=256,detail_size=256):
+def preview(wad,out,codec,eye=None,target=None,ts=None,base_size=256,detail_size=256,character=False):
     import subprocess,hashlib
     from ue_preview import convert
-    out=out.resolve();check(not out.is_relative_to(ROOT),'game assets must remain external');out.mkdir(parents=True,exist_ok=True)
+    out=output_root(out);out.mkdir(parents=True,exist_ok=True)
     data=wad.read_bytes();info,groups=resources(data);rdir=out/'source';rdir.mkdir(exist_ok=True);jobs=[];stream=bytearray();reference=[]
     tsdata=ts.read_bytes()if ts else None
     def collect(raw,ic,vn):
@@ -222,6 +241,12 @@ def preview(wad,out,codec,eye=None,target=None,ts=None,base_size=256,detail_size
     meshes={}
     for r in selected:
         at=r['offset']+64;meshes[r['name']]=mesh(data[at:at+r['size']],r['name'],shared)
+    character_pose=None
+    if character:
+        from gow3_character import bind_pose, place_parts
+        character_pose=bind_pose(data,info)
+        for parts in meshes.values():place_parts(parts,character_pose)
+        (rdir/'native-skeleton.json').write_text(json.dumps(character_pose,separators=(',',':')))
     models,nodes,missing=links(data,info,groups);check(not missing,'unresolved model references')
     texrecords={r['name']:r for r in info['records']if r['kind']=='0x0001000d'and r['name'].endswith('.dds')}
     materials={};texture_jobs=[];texpaths={};unsupported=[];texture_names=[];unmapped=Counter()
@@ -243,7 +268,13 @@ def preview(wad,out,codec,eye=None,target=None,ts=None,base_size=256,detail_size
         for slot in by_slot:
             if slot not in ROLE_SLOTS.values():unmapped[slot]+=1
         roles={}
-        for role,slot in ROLE_SLOTS.items():
+        # Character outer-eye shaders can omit sampler 0 and bind their
+        # secondary color at 17. Keep this explicit reduced material policy.
+        role_slots=dict(ROLE_SLOTS)
+        if character:
+            role_slots['opacity']=1
+            if not by_slot.get(0) and len(by_slot.get(17,[]))==1:role_slots['base']=17
+        for role,slot in role_slots.items():
             names=by_slot.get(slot,[])
             if len(names)==1:
                 png=texture(names[0],base_size if role=='base'else detail_size)
@@ -268,6 +299,7 @@ def preview(wad,out,codec,eye=None,target=None,ts=None,base_size=256,detail_size
                 m={'alpha_mode':'opaque','double_sided':True,'roughness_factor':.6,'base_color_texture':roles['base']}
                 if 'normal' in roles:m|={'normal_texture':roles['normal'],'normal_encoding':'ag'}
                 if 'specular' in roles:m|={'specular_texture':roles['specular']}
+                if 'opacity' in roles:m|={'opacity_texture':roles['opacity'],'alpha_mode':'mask','alpha_cutoff':.5}
                 material_profile['materials'][mname]={'material':m,'note':'Slots 0/5/9 as base/DXT5nm normal/specular; native shader, alpha and baked lighting not evaluated'}
         file=f'mesh-{len(mesh_entries)}.json';d={'source':name,'positions':pos,'normals':norm,'uv':uv,'indices':ix,'sections':sections,'materials':mats}
         if all(t is not None for t in tan):d['tangents']=tan
@@ -278,14 +310,19 @@ def preview(wad,out,codec,eye=None,target=None,ts=None,base_size=256,detail_size
     # native bind/animation composition is decoded; display encoded rest space.
     ids={m['source']:i for i,m in enumerate(mesh_entries)};identity=[1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]
     scene_nodes=[{'name':n['name'],'mesh':ids[n['mesh']],'matrix':identity,'native_entity_matrix':n['matrix']}for n in nodes]
-    report={'source':wad.name,'records':len(info['records']),'native_mesh_groups':len(meshes),'surface_groups':sum(len(m)for m in meshes.values()),'meshlets':len(jobs),'vertices':sum(len(p['positions'])for m in meshes.values()for p in m),'triangles':sum(len(p['indices'])//3 for m in meshes.values()for p in m),'native_instances':len(nodes),'index_decoder':'crysirror-asset::indices','index_differential_matches':len(jobs),'texture_decoder':'crysirror-image::decode_standard','decoded_texture_previews':len(decoded_textures),'unsupported_textures':unsupported,'unsupported_uv':uv_unsupported,'source_normals_normalized':sum(p['nonunit_normals']for m in meshes.values()for p in m),'transform_policy':'encoded_rest_space; native entity matrices retained as metadata, not composed','original_materials':False,'original_animation_pose':False,'original_lighting':False,'complete_game_scene':False,'limitations':['First MG surface table; alternate native tables not selected','Native bind/entity/animation transform composition unresolved; encoded rest geometry only','Native shader semantics, baked vertex lighting and source punctual lights not reproduced','Source coordinate units preserved; physical scale not calibrated']}
+    report={'source':wad.name,'records':len(info['records']),'native_mesh_groups':len(meshes),'surface_groups':sum(len(m)for m in meshes.values()),'meshlets':len(jobs),'vertices':sum(len(p['positions'])for m in meshes.values()for p in m),'triangles':sum(len(p['indices'])//3 for m in meshes.values()for p in m),'native_instances':len(nodes),'index_decoder':'crysirror-asset::indices','index_differential_matches':len(jobs),'texture_decoder':'crysirror-image::decode_standard','decoded_texture_previews':len(decoded_textures),'unsupported_textures':unsupported,'unsupported_uv':uv_unsupported,'source_normals_normalized':sum(p['nonunit_normals']for m in meshes.values()for p in m),'transform_policy':'encoded_rest_space; native entity matrices retained as metadata, not composed','original_materials':False,'original_animation_pose':False,'original_lighting':False,'complete_game_scene':False,'limitations':['All declared MG draw sets; native visibility and variant policy not evaluated','Native bind/entity/animation transform composition unresolved; encoded rest geometry only','Native shader semantics, baked vertex lighting and source punctual lights not reproduced','Source coordinate units preserved; physical scale not calibrated']}
     textured=sum(bool(mat['texture'])for entry in mesh_entries for mat in json.loads((rdir/entry['file']).read_text())['materials'])
     report['texture_sources']={'ts_stream':ts.name if ts else None,'base_max_size':base_size,'detail_max_size':detail_size,'unmapped_sampler_slots':{str(k):v for k,v in sorted(unmapped.items())}}
     report['material_summary']={'source_records':len(materials),'records_without_unique_sampler_0':sum(v is None for v in materials.values()),'textured_surface_groups':textured,'neutral_surface_groups':report['surface_groups']-textured,'surfaces_without_verified_uv':sum(not p['uv_supported']for parts in meshes.values()for p in parts),'neutral_policy':'Explicit diagnostic fallback for missing verified UV or unique base-color sampler; native shader may need no base texture'}
     profile=rdir/'native-preview-materials.json';profile.write_text(json.dumps(material_profile))
-    (rdir/'scene-source.json').write_text(json.dumps({'report':report,'meshes':mesh_entries,'nodes':scene_nodes}));conversion=convert(rdir,out/'preview',eye=eye or[156,-18,-287],target=target or[156,-16,-345],material_profile=profile,project_name='God of War III: Olympus OLY100 rest-space preview',game_id='gow3-local-preview',data_driven=True)
+    if character:
+        report['character']={'pose':'native inverse-bind rest pose; rigid attachments composed from native hierarchy','bones':len(character_pose['bones']),'draw_sets':len({p['draw_set']for parts in meshes.values()for p in parts}),'animation':False,'skin_weights_exported':False}
+        report['transform_policy']='character bind-rest geometry with native rigid attachment placement'
+        report['limitations']=[v for v in report['limitations']if not v.startswith(('First MG','Native bind/entity'))]
+        report['limitations'].append('Static character bind preview only; compressed skin weights, native clips and cloth simulation not exported')
+    (rdir/'scene-source.json').write_text(json.dumps({'report':report,'meshes':mesh_entries,'nodes':scene_nodes}));conversion=convert(rdir,out/'preview',eye=eye or([3,1.8,-4]if character else[156,-18,-287]),target=target or([0,1.2,0]if character else[156,-16,-345]),material_profile=profile,project_name='God of War III: Kratos bind preview'if character else'God of War III: Olympus OLY100 rest-space preview',game_id='gow3-character-preview'if character else'gow3-local-preview',data_driven=True)
     result={'native':report,'conversion':{k:v for k,v in conversion.items()if k not in('original','material_report')}};(out/'import-report.json').write_text(json.dumps(result,indent=2));return result
 
 if __name__=='__main__':
-    a=argparse.ArgumentParser(description=__doc__);a.add_argument('wad',type=Path);a.add_argument('output',type=Path);a.add_argument('--codec',type=Path);a.add_argument('--eye',type=float,nargs=3);a.add_argument('--target',type=float,nargs=3);a.add_argument('--ts',type=Path,help='matching .TS stream for full mip chains');a.add_argument('--base-size',type=int,default=256);a.add_argument('--detail-size',type=int,default=256);args=a.parse_args()
-    print(json.dumps(preview(args.wad,args.output,args.codec,args.eye,args.target,args.ts,args.base_size,args.detail_size)if args.codec else extract(args.wad,args.output),indent=2))
+    a=argparse.ArgumentParser(description=__doc__);a.add_argument('wad',type=Path);a.add_argument('output',type=Path);a.add_argument('--codec',type=Path);a.add_argument('--eye',type=float,nargs=3);a.add_argument('--target',type=float,nargs=3);a.add_argument('--ts',type=Path,help='matching .TS stream for full mip chains');a.add_argument('--base-size',type=int,default=256);a.add_argument('--detail-size',type=int,default=256);a.add_argument('--character',action='store_true',help='decode native skeleton and place rigid character parts in bind pose');args=a.parse_args()
+    print(json.dumps(preview(args.wad,args.output,args.codec,args.eye,args.target,args.ts,args.base_size,args.detail_size,args.character)if args.codec else extract(args.wad,args.output),indent=2))

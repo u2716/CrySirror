@@ -1,17 +1,26 @@
 // Copyright (c) 2026 CrySirror contributors. MPL-2.0.
 //! Arbitrary encoded-byte RGB lookup. This is not a colour-space conversion:
-//! each table addresses one stored straight RGB channel, including hidden RGB
-//! at zero alpha. Alpha never changes. ImageSurface/ImageResource carry straight
+//! each table addresses one stored straight RGB channel. The default profile
+//! includes hidden RGB; optional profiles retain transparent/keyed pixels.
+//! Alpha never changes. ImageSurface/ImageResource carry straight
 //! RGBA; premultiplied input is explicitly rejected because they carry no
 //! association metadata. No VM policy, file parser or device lives here.
 use crate::ImageSurface;
-use anyhow::{ensure, Result};
+mod constant;
+pub use constant::ConstantByteBlend;
+use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RgbLookupProfile {
     /// Lookup every straight RGB byte, including hidden RGB at zero alpha.
     StraightRgba,
+    /// Preserve the complete stored pixel when alpha is zero. Visible RGB
+    ///uses the tables; alpha and hidden transparent RGB remain unchanged.
+    StraightNonzeroAlpha,
+    /// Preserve this exact stored RGB key; transform all other pixels.
+    ///Useful for opaque colour-key rasters before later alpha association.
+    StraightColorKey { color: [u8; 3] },
     /// Recognized for explicit rejection: this pipeline cannot publish premultiplied
     /// bytes as an ordinary straight ImageSurface. No implicit unpremultiplication.
     PremultipliedRgba,
@@ -25,6 +34,13 @@ pub struct RgbLookup {
     pub profile: RgbLookupProfile,
 }
 impl RgbLookup {
+    /// Constant-colour screen using encoded-byte /256 products. The constant
+    /// RGB is first scaled by (alpha + (alpha >> 7))/256, then each channel is
+    /// clamped from constant + destination - ((constant * destination) >> 8).
+    /// Stored destination alpha and hidden RGB policy are independent.
+    pub fn screen_constant_byte256(color: [u8; 4]) -> Self {
+        Self::constant_byte256(color, ConstantByteBlend::Screen)
+    }
     /// Exact encoded-byte weighted colour transform. Each contribution is
     /// truncated separately before addition; alpha remains unchanged, as for
     /// every RGB lookup. This admits legacy Q15/Q8 profiles without replacing
@@ -60,7 +76,7 @@ impl RgbLookup {
     }
     pub fn validate(&self) -> Result<()> {
         ensure!(
-            self.profile == RgbLookupProfile::StraightRgba,
+            self.profile != RgbLookupProfile::PremultipliedRgba,
             "premultiplied RGB lookup profile is unsupported for straight ImageSurface resources"
         );
         ensure!(
@@ -89,6 +105,11 @@ impl RgbLookup {
         for row in out.rgba.chunks_exact_mut(input.width as usize * 4) {
             check()?;
             for p in row.chunks_exact_mut(4) {
+                if match self.profile {
+                    RgbLookupProfile::StraightNonzeroAlpha=>p[3]==0,
+                    RgbLookupProfile::StraightColorKey{color}=>p[..3]==color,
+                    _=>false,
+                } {continue;}
                 for c in 0..3 {
                     p[c] = tables[c][p[c] as usize];
                 }
@@ -155,11 +176,13 @@ mod tests {
         let effect = crate::effects::ImageEffect::RgbLookup {
             spec: lookup(RgbLookupProfile::PremultipliedRgba),
         };
-        assert!(image
-            .apply_effect(&effect)
-            .unwrap_err()
-            .to_string()
-            .contains("premultiplied"));
+        assert!(
+            image
+                .apply_effect(&effect)
+                .unwrap_err()
+                .to_string()
+                .contains("premultiplied")
+        );
         assert_eq!(image.rgba, [32, 64, 128, 128, 0, 0, 0, 0]);
     }
     #[test]
@@ -170,9 +193,11 @@ mod tests {
             rgba: vec![129, 2, 3, 128],
         };
         let before = image.rgba.clone();
-        assert!(lookup(RgbLookupProfile::PremultipliedRgba)
-            .apply(&image, &|| Ok(()))
-            .is_err());
+        assert!(
+            lookup(RgbLookupProfile::PremultipliedRgba)
+                .apply(&image, &|| Ok(()))
+                .is_err()
+        );
         let mut invalid = lookup(RgbLookupProfile::StraightRgba);
         invalid.red.pop();
         assert!(invalid.apply(&image, &|| Ok(())).is_err());

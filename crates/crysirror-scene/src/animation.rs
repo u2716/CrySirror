@@ -8,6 +8,10 @@
 //! - `cur_value` is the animated/interpolated value computed each frame.
 
 mod scalar_steps;
+mod cubic_path;
+mod oscillator;
+pub use oscillator::{ScalarOscillator, SignalFade, Waveform};
+pub use cubic_path::NaturalCubicPath;
 pub use scalar_steps::step_remaining_time_scalar;
 
 /// Sample a clamped integer line on a caller-owned signed clock. Division

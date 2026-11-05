@@ -77,6 +77,7 @@ pub struct CatSystem2Vm {
     machine: Option<Machine>,
     error: Option<String>,
     native_abi: bool,
+    null_view_constructor: bool,
     abi_warned: bool,
     input_routes_bound:bool,
     event_wait:Option<NativeEventWait>,
@@ -91,6 +92,7 @@ pub struct CatSystem2Vm {
     texture_clear:Option<crate::texture_cache::PendingClear>,
     debug_key_absent: bool,
     menu_installed: bool,
+    menu_state: crate::native_menu::State,
     tasks: crate::task_policy::NativeTaskPolicy,
     xml_loading: Option<Task<Option<Arc<XmlDocument>>>>,
     loop_loading: Option<Task<PreparedLoops>>,
@@ -110,7 +112,17 @@ pub struct CatSystem2Vm {
     kcs_sound: crate::native_kcs_sound::KcsSound,
     motion_loading: Option<(Vec<u8>,crysirror_tasks::Task<std::sync::Arc<Program>>)>,
     #[cfg(feature="runtime")]
-    image_loading: Option<crate::native_image_resource::Pending>,
+    image_loading: std::collections::BTreeMap<u32,crate::native_image_resource::Pending>,
+    /// Native 111: the remaining "name[:frame]" tokens, the frames loaded so far,
+    /// the current load and the final composition job.
+    #[cfg(feature="runtime")]
+    layered_loading: Option<LayeredLoad>,
+    /// 365's refcounted file blocks {bytes, size, refcount} and the pending read,
+    /// decode (364/368) or recolour (369) of the call at that PC.
+    #[cfg(feature="runtime")]
+    blobs: BTreeMap<u32,(String,std::sync::Arc<[u8]>,i32)>,
+    #[cfg(feature="runtime")]
+    blob_pending: Option<(u32,BlobPending)>,
     scene_loading: Option<(u32,crysirror_tasks::Task<Option<(Vec<u8>,std::sync::Arc<crate::scene::Scene>)>>)>,
     split_loading: Option<Task<crysirror_text::byte_split::ByteSplitOutput>>,
     save_loading: Option<Task<Option<crate::native_save::Container>>>,
@@ -126,9 +138,7 @@ pub struct CatSystem2Vm {
     next_file: u32,
     image_tags: BTreeMap<u32,u32>,
     #[cfg(feature="runtime")]
-    surface_pending: Option<crate::native_surface::Pending>,
-    #[cfg(feature="runtime")]
-    surface_geometry:Option<([u32;2],[i32;2])>,
+    surface: crate::native_surface::PendingCall,
     #[cfg(feature="runtime")]
     movies:crate::native_movie::Movies,
     save_writing: Option<Task<Option<String>>>,
@@ -163,6 +173,7 @@ struct Prepared {
     program: Program,
     menu: Option<crysirror_scene::ui::menu::MenuSpec>,
     native_abi: bool,
+    null_view_constructor: bool,
     debug_key_absent: bool,
     sound: Option<crate::sound_definition::SoundDefinition>,
 }
@@ -181,6 +192,7 @@ impl CatSystem2Vm {
             machine: None,
             error: None,
             native_abi: false,
+            null_view_constructor: false,
             abi_warned: false,
             input_routes_bound:false,
             event_wait:None,
@@ -194,6 +206,7 @@ impl CatSystem2Vm {
             texture_cache:None,texture_clear:None,
             debug_key_absent: false,
             menu_installed: false,
+            menu_state: Default::default(),
             tasks: crate::task_policy::NativeTaskPolicy::bootstrap()?,
             xml_loading: None,
             loop_loading: None,
@@ -214,7 +227,13 @@ impl CatSystem2Vm {
             kcs_sound: Default::default(),
             motion_loading: None,
             #[cfg(feature="runtime")]
-            image_loading: None,
+            image_loading: Default::default(),
+            #[cfg(feature="runtime")]
+            layered_loading: None,
+            #[cfg(feature="runtime")]
+            blobs: BTreeMap::new(),
+            #[cfg(feature="runtime")]
+            blob_pending: None,
             scene_loading: None,
             split_loading: None,
             save_loading:None,
@@ -229,9 +248,7 @@ impl CatSystem2Vm {
             next_file:0,
             image_tags:BTreeMap::new(),
             #[cfg(feature="runtime")]
-            surface_pending:None,
-            #[cfg(feature="runtime")]
-            surface_geometry:None,
+            surface:Default::default(),
             #[cfg(feature="runtime")]
             movies:Default::default(),
             save_writing:None,
@@ -299,16 +316,20 @@ impl CatSystem2Vm {
                 #[cfg(feature="runtime")]
                 self.fes_children.frames.reap(host,self.client,&self.tasks)?;
                 #[cfg(feature="runtime")]
+                self.fes_children.panels.reap(&self.tasks);
+                #[cfg(feature="runtime")]
+                self.fes_children.panel_render.reap(&self.tasks);
+                #[cfg(feature="runtime")]
                 self.fes_children.motions.reap(&self.tasks);
                 return Ok(Some(true));
             }
-            let tick=crate::fes_runtime::Services{
+            let tick=crate::fes_runtime::Services{pointer_glide:Some(&mut self.classes.input_task),
                 string_variables:&mut self.string_variables,
                 client:self.client,tasks:&mut self.tasks,
                 interpreter:self.interpreter.as_mut().context("CatSystem2 FES interpreter unavailable")?,
                 settings:&mut self.settings,sound_definition:&mut self.sound_definition,
                 input_state:&mut self.input_state,steam_manager:&mut self.steam_manager,
-                fes_file_probe:&mut self.fes_file_probe,fes_civil_time:&mut self.fes_civil_time,fes_children:&mut self.fes_children,saves:&self.saves,
+                fes_file_probe:&mut self.fes_file_probe,fes_civil_time:&mut self.fes_civil_time,fes_children:&mut self.fes_children,handles:Some(&self.handles),saves:&self.saves,
                 pool:self.pool.as_ref().context("CatSystem2 worker pool missing")?,
             }.run(host,id,origin_pc,observation,budget)?;
             if self.fes_children.routes_published(){self.input_routes_bound=true;}
@@ -336,16 +357,18 @@ impl CatSystem2Vm {
                     let program=Program::parse(&bytes)?;
                     let mut menu=None;
                     let mut native_abi=false;
+                    let mut null_view_constructor=false;
                     let mut debug_key_absent=false;
                     if let Some(module)=config.executable.as_ref() {
                         let module=storage.open_asset(&VfsPath::new(Mount::Asset,module)?)?;
                         let module=crysirror_resource::read_all(module.as_ref(),crysirror_resource::pe::MAX_PE_BYTES as u64)?;
                         cancel.check()?;
                         let pe=crysirror_resource::pe::PeData::parse(&module)?;
+                        null_view_constructor=crate::native_classes::view3d::has_null_constructor(&pe);
                         // This is a verified native ABI fingerprint, never a game
                         // script/PC shortcut. Generic KCS parsing remains unpinned.
                         native_abi=pe.sha256()==[0xf8,0xa1,0xfb,0x4f,0xed,0x8a,0x0c,0x64,0xc3,0xfb,0xc0,0xbc,0xf0,0x09,0xf6,0x3e,0x8f,0x31,0x81,0xcf,0xbc,0x1a,0x0d,0xbd,0x60,0xf9,0xdd,0xef,0xc8,0xe2,0x5b,0x3d];
-                        debug_key_absent=storage.metadata(Mount::Asset,"cs2_debug_key.dat")?.is_none();
+                        debug_key_absent=storage.metadata(Mount::Asset,"cs2_debug_key.dat").context("CatSystem2 optional debug-key metadata")?.is_none();
                         ensure!(debug_key_absent,"CatSystem2 present debug key requires unsupported native validation");
                         if native_abi {
                             let resources=pe.menu_templates()?;
@@ -354,7 +377,7 @@ impl CatSystem2Vm {
                     }
                     // Older scripts (Grisaia) have no native 938: FES sounds still need their groups.
                     let sound=crate::sound_definition::load(storage.as_ref(),&||cancel.check()).ok();
-                    Ok(Prepared{program,menu,native_abi,debug_key_absent,sound})
+                    Ok(Prepared{program,menu,native_abi,null_view_constructor,debug_key_absent,sound})
                 })?);
                 self.pool = Some(pool);
                 return Ok(VmYield::BudgetExhausted);
@@ -371,6 +394,7 @@ impl CatSystem2Vm {
                 self.menu_installed = true;
             }
             self.native_abi = prepared.native_abi;
+            self.null_view_constructor = prepared.null_view_constructor;
             self.sound_definition = prepared.sound;
             self.debug_key_absent = prepared.debug_key_absent;
             self.machine = Some(Machine::new(&prepared.program, self.config.heap_bytes)?);
@@ -386,11 +410,11 @@ impl CatSystem2Vm {
                 serde_json::from_slice(&host.query_engine(self.client, EngineQuery::MenuEvents)?)?;
             for event in events {
                 if event.menu_bar == Some(crate::native_menu::PRODUCTION_MENU) {
-                    anyhow::bail!(
-                        "unsupported CatSystem2 native menu WM_COMMAND {}",
-                        event.widget.id
-                    );
+                    self.menu_state.enqueue(event.widget.id)?;
                 }
+            }
+            if self.menu_state.tick(host, self.client, self.pool.as_ref().context("CatSystem2 menu worker pool missing")?, self.config.canvas, &self.config.font, self.config.executable.as_deref())? {
+                return Ok(VmYield::BudgetExhausted);
             }
         }
         self.ticks+=1;
@@ -401,7 +425,7 @@ impl CatSystem2Vm {
             // Drain even while a KCS task owns a forced FES tick: unarmed deliveries only
             // acknowledge, and a queued sample would otherwise block that tick's route puts.
             let mut drained=false;
-            let mut delivered=false;
+            let mut completed_delivery=false;
             for _ in 0..16 {
             let delivery:Option<crysirror_scene::input_routes::InputDelivery>=serde_json::from_slice(&host.query_engine(self.client,EngineQuery::InputRouteDelivery)?)?;
             if let Some(delivery)=delivery {
@@ -452,8 +476,10 @@ impl CatSystem2Vm {
                     // event on to lower buttons, such as the running KCS task's own.
                     let handled=self.tasks.button(delivery.receiver)?.result!=0;
                     host.submit_engine(self.client,1,&serde_json::to_vec(&json!({"input_routes":[{"op":"acknowledge","receipt":delivery.receipt,"handled":handled}]}))?)?;
-                    delivered=true;
-                    if handled{break;}
+                    completed_delivery=handled;
+                    // A handled non-drag event retires its route plan at ACK;
+                    // the resumed script can now safely update receivers.
+                    if handled{drained=true;break;}
                 }else{
                     //877310 returns 0 when no native71 is armed; events the original
                     //InputTask has no message for are not VM callbacks either.
@@ -461,9 +487,16 @@ impl CatSystem2Vm {
                 }
             }else{drained=true;break;}
             }
-            if !drained&&!delivered{return Ok(VmYield::BudgetExhausted);}
+            // Resuming native71 does not finish an unhandled event: lower
+            // receivers still own the remaining dispatch plan. If the bounded
+            // drain runs out, retain that resumed VM until the next drain rather
+            // than letting native448 mutate the registry inside the old plan.
+            if !drained{return Ok(VmYield::BudgetExhausted);}
             let stats:crysirror_scene::input_routes::InputRouteStats=serde_json::from_slice(&host.query_engine(self.client,EngineQuery::InputRouteStats)?)?;
-            if !delivered&&(stats.queued_samples>0||stats.queued_events>0){return Ok(VmYield::BudgetExhausted);}
+            // A resumed but unhandled native71 still belongs to the old
+            // sample. poll(None) can also mean bounded work or UI suspension;
+            // its retained journal must drain before registry mutation.
+            if stats.leased||(!completed_delivery&&(stats.queued_samples>0||stats.queued_events>0)){return Ok(VmYield::BudgetExhausted);}
         }
         if self.event_wait.is_some()&&self.fes_owner_tick.is_none(){
             let mut proposed=self.tasks.clone();
@@ -479,11 +512,32 @@ impl CatSystem2Vm {
         if !self.advance_fes_tasks(host,&mut remaining)?{return Ok(VmYield::BudgetExhausted);}
         self.pump_kcs_children(host)?;
         #[cfg(feature="runtime")]
-        {let now=host.now_ms();self.m2.tick(host,self.client,&self.tasks,now)?;}
+        {
+            let pc=self.machine.as_ref().map_or(0,|machine|machine.pc);
+            if !self.tick_m2(host,pc)? { return Ok(VmYield::BudgetExhausted); }
+        }
         {let now=host.now_ms();crate::native_classes::tick(host,self.client,&mut self.tasks,&mut self.classes,now)?;}
+        #[cfg(feature="runtime")]
+        {let now=host.now_ms();crate::native_classes::particles::tick(host,self.client,&self.tasks,self.config.canvas,&mut self.classes.particles,self.fes_children.motions.random().ok(),now)?;}
         let main=self.run_script(host,remaining)?;
         self.run_kcs_child(host,budget)?;
+        #[cfg(feature="runtime")]
+        {
+            // Publish poses and commands from this script slice before the host
+            // renders it. The model clock has already advanced at this time;
+            // unchanged players are skipped by their owner update stamp.
+            let pc=self.machine.as_ref().map_or(0,|machine|machine.pc);
+            if !self.tick_m2(host,pc)? { return Ok(VmYield::BudgetExhausted); }
+        }
         Ok(main)
+    }
+    #[cfg(feature="runtime")]
+    fn tick_m2(&mut self,host:&mut dyn HostServices,pc:u32)->Result<bool>{
+        if self.m2.needs_random()&&!self.fes_children.motions.ensure_random_for_kcs(host,self.client,self.tasks.current(),pc)? { return Ok(false); }
+        let now=host.now_ms();
+        let config=self.settings.as_ref().map(|s|s.m2.clone()).unwrap_or_default();
+        self.m2.tick(host,self.client,&self.tasks,&self.kcs_sound,&config,self.config.canvas,now,self.fes_children.motions.random().ok())?;
+        Ok(true)
     }
     fn swap_kcs_child(&mut self,child:&mut KcsChild){
         std::mem::swap(&mut self.config.script,&mut child.script);
@@ -496,6 +550,11 @@ impl CatSystem2Vm {
     /// 629850 cases 4 and 5: start a requested KCS task, drop an ended one.
     fn pump_kcs_children(&mut self,host:&mut dyn HostServices)->Result<()>{
         for retired in self.tasks.take_retired_kcs(){
+            #[cfg(feature="runtime")]
+            {
+                self.image_loading.remove(&retired);
+                self.surface.cancel(host,self.client,retired)?;
+            }
             self.kcs_children.retain(|child|child.id!=retired);
             self.tasks.destroy_task_slot(retired)?;
         }
@@ -603,7 +662,9 @@ impl CatSystem2Vm {
                     }
                     match call.id {
                         id if crate::native_classes::claims(id) => {
-                            let mut cx=crate::native_classes::Ctx{machine:&mut *machine,host:&mut *host,client:self.client,tasks:&mut self.tasks,state:&mut self.classes,canvas:self.config.canvas,call:&call,pool:self.pool.as_ref(),settings:self.settings.as_mut(),handles:&mut self.handles,interpreter:self.interpreter.as_mut(),saves:&mut self.saves,next_save:&mut self.next_save,font:&self.config.font,input:&mut self.input_state,ticks:self.ticks,
+                            // Particle scripts draw from the session random streams (B93150).
+                            if matches!(id,271|693|965)&&!self.fes_children.motions.ensure_random_for_kcs(host,self.client,self.tasks.current(),call.pc)?{return Ok(VmYield::BudgetExhausted);}
+                            let mut cx=crate::native_classes::Ctx{strings:&mut self.string_variables,machine:&mut *machine,host:&mut *host,client:self.client,tasks:&mut self.tasks,state:&mut self.classes,canvas:self.config.canvas,call:&call,pool:self.pool.as_ref(),settings:self.settings.as_mut(),handles:&mut self.handles,interpreter:self.interpreter.as_mut(),saves:&mut self.saves,next_save:&mut self.next_save,font:&self.config.font,input:&mut self.input_state,ticks:self.ticks,
                                 #[cfg(feature="runtime")]m2:&mut self.m2,#[cfg(feature="runtime")]movies:&mut self.movies,#[cfg(feature="runtime")]kcs_sound:&mut self.kcs_sound};
                             if !crate::native_classes::dispatch(&mut cx)?{return Ok(VmYield::BudgetExhausted);}
                             if crate::native_classes::take_halt(&mut self.classes){return Ok(VmYield::Halted);}
@@ -674,7 +735,8 @@ impl CatSystem2Vm {
                                     let Some(vfs)=crate::native_resource_paths::resolve(storage.as_ref(),&vfs)? else{return Ok(None);};
                                     let reader=storage.open_asset(&vfs)?;
                                     let bytes=crysirror_resource::read_all(reader.as_ref(),crate::kcs::MAX_SCRIPT_BYTES as u64)?;
-                                    Ok(Some((stem,std::sync::Arc::new(crate::scene::Scene::parse(&bytes)?))))
+                                    let scene=crate::scene::Scene::parse(&bytes).with_context(||format!("CatSystem2 scene {path}"))?;
+                                    Ok(Some((stem,std::sync::Arc::new(scene))))
                                 })?;
                                 self.scene_loading=Some((id,task));
                                 return Ok(VmYield::BudgetExhausted);
@@ -715,7 +777,7 @@ impl CatSystem2Vm {
                                 None=>if call.id==329{u32::MAX}else{0},
                                 Some(scene)=>match call.id{
                                     328=>{if !first.is_empty(){scene.insert(&first,a[2]);}1}
-                                    329=>{if !first.is_empty(){scene.insert(&first,a[2]);}scene.names.len() as u32-1}
+                                    329=>if first.is_empty(){u32::MAX}else{scene.visit(&first,a[2])},
                                     332=>scene.value(&first),
                                     _=>{scene.alias(&first,crate::native_scene::stem(&second));0}
                                 }
@@ -742,23 +804,24 @@ impl CatSystem2Vm {
                             }
                             machine.acknowledge(None)?;
                         }
+                        // 72CF50 empties the first list, 72CFD0 the second.
                         330|331 => {
                             machine.preflight_native(false,&[])?;
-                            if let Some(scene)=self.handles.scenes.get_mut(&call.arguments[0]){scene.names.clear();scene.attributes.clear();}
+                            if let Some(scene)=self.handles.scenes.get_mut(&call.arguments[0]){if call.id==330{scene.names.clear();}else{scene.history.clear();}}
                             machine.acknowledge(None)?;
                         }
                         333 => {
                             // 72D080: copy the entry at an index, clamping past the end to the last.
                             ensure!(call.arguments.len()==4,"CatSystem2 scene name-list arguments");
-                            let names=self.handles.scenes.get(&call.arguments[0]).map_or(Vec::new(),|s|s.names.clone());
+                            let names=self.handles.scenes.get(&call.arguments[0]).map_or(Vec::new(),|s|s.history.clone());
                             let index=(call.arguments[1] as usize).min(names.len().saturating_sub(1));
-                            let (mut name,value)=names.get(index).cloned().unwrap_or((Vec::new(),u32::MAX));
+                            let (mut name,value)=names.get(index).map_or((Vec::new(),u32::MAX),|e|(e.name.clone(),e.value));
                             name.push(0);
                             machine.commit_native(Some(if names.is_empty(){u32::MAX}else{index as u32}),&[(call.arguments[2],name),(call.arguments[3],value.to_le_bytes().to_vec())])?;
                         }
                         982 => {
                             machine.preflight_native(true,&[])?;
-                            let value=self.handles.scenes.get(&call.arguments[0]).map_or(u32::MAX,|s|s.names.len() as u32);
+                            let value=self.handles.scenes.get(&call.arguments[0]).map_or(u32::MAX,|s|s.history.len() as u32);
                             machine.acknowledge(Some(value))?;
                         }
                         863 => {
@@ -819,7 +882,21 @@ impl CatSystem2Vm {
                             if self.tasks.exists(call.arguments[0]){self.kcs_starts.push_back((call.arguments[0],name));}
                             machine.acknowledge(None)?;
                         }
-                        1038 => {
+                        // 641CC0 -> 72BC80(4): input count, -1 before a scene loaded.
+                        608 => {
+                            machine.preflight_native(true,&[])?;
+                            let value=self.handles.scenes.get(&call.arguments[0]).map_or(0,|s|s.scene.as_ref().map_or(u32::MAX,|d|d.input_ranges.len() as u32));
+                            machine.acknowledge(Some(value))?;
+                        }
+                        // 641AE0 -> 72BD20.
+                        980 => {
+                            machine.preflight_native(true,&[])?;
+                            let value=self.handles.scenes.get(&call.arguments[0]).map_or(0,|s|s.count_kind_20());
+                            machine.acknowledge(Some(value))?;
+                        }
+                        // 641E00 -> 72B660(language): only a loaded .cstl table (+0x130) changes the
+                        // text, which this reader, like 1038 below, does not load.
+                        1033|1038 => {
                             // 641EB0 -> 72B930: the line in one language; other languages live in .cstl.
                             ensure!(call.arguments.len()==5,"CatSystem2 scene language text arguments");
                             let text=self.handles.scenes.get(&call.arguments[0]).and_then(|s|s.text(call.arguments[2] as i32,call.arguments[3] as i32));
@@ -834,20 +911,177 @@ impl CatSystem2Vm {
                             let mut bytes=crate::native_values::format_bytes(machine,call.arguments[1])?;bytes.push(0);
                             machine.commit_native((call.id==392).then_some(1),&[(call.arguments[0],bytes)])?;
                         }
+                        // 64BB80: space-separated "name[:frame]" images (6A5AB0/6A53B0). The first
+                        // that loads is the base; each later one is drawn over it (687370) at
+                        // its own canvas place (bitmap +0x24/+0x28), clipped to both images.
+                        // The result joins VM+152's owned images; nothing loaded answers 0.
+                        #[cfg(feature="runtime")]
+                        111 => {
+                            use crysirror_core::image_processing::ImageProcessState as State;
+                            ensure!(call.arguments.len()==1,"CatSystem2 layered image arguments");
+                            machine.preflight_native(true,&[])?;
+                            if self.layered_loading.as_ref().is_none_or(|l|l.pc!=call.pc){
+                                let list=crate::native_values::format_bytes(machine,call.arguments[0])?;
+                                let mut names=std::collections::VecDeque::new();
+                                for token in list.split(|b|*b==b' ').filter(|t|!t.is_empty()){
+                                    let (name,frame)=match token.iter().position(|b|*b==b':'){
+                                        Some(at)=>(&token[..at],crate::native_values::integer(&String::from_utf8_lossy(&token[at+1..])) as u32),
+                                        None=>(token,0),
+                                    };
+                                    names.push_back((String::from_utf8(crate::native_scene::stem(name).to_vec()).context("CatSystem2 image name encoding")?,frame));
+                                }
+                                self.layered_loading=Some(LayeredLoad{pc:call.pc,names,frames:Vec::new(),loading:None,job:None});
+                            }
+                            let load=self.layered_loading.as_mut().unwrap();
+                            if let Some(job)=load.job.as_mut(){
+                                match job.poll().map_err(anyhow::Error::from)?{
+                                    State::Pending=>return Ok(VmYield::BudgetExhausted),
+                                    State::Failed(e)=>anyhow::bail!("CatSystem2 layered image composition: {e}"),
+                                    State::Ready(image)=>{
+                                        let mut frame=load.frames[0].clone();frame.image=image;
+                                        self.layered_loading=None;
+                                        let id=self.handles.allocate()?;self.handles.images.insert(id,frame);
+                                        machine.acknowledge(Some(id))?;continue;
+                                    }
+                                }
+                            }
+                            if let Some(pending)=load.loading.as_mut(){
+                                let Some(outcome)=pending.poll()? else{return Ok(VmYield::BudgetExhausted);};
+                                load.loading=None;
+                                if let crate::native_image_resource::Outcome::Ready(frame)=outcome{load.frames.push(frame);}
+                            }
+                            if let Some((name,frame))=load.names.pop_front(){
+                                let Some(pending)=crate::native_image_resource::Pending::begin_named(self.pool.as_ref().context("CatSystem2 worker pool missing")?,host,self.client,self.tasks.current(),call.pc,&name,frame)? else{load.names.push_front((name,frame));return Ok(VmYield::BudgetExhausted);};
+                                load.loading=Some(pending);
+                                return Ok(VmYield::BudgetExhausted);
+                            }
+                            if load.frames.is_empty(){self.layered_loading=None;machine.acknowledge(Some(0))?;continue;}
+                            if load.frames.len()==1{
+                                let frame=load.frames.pop().unwrap();self.layered_loading=None;
+                                let id=self.handles.allocate()?;self.handles.images.insert(id,frame);
+                                machine.acknowledge(Some(id))?;continue;
+                            }
+                            let base=&load.frames[0];
+                            let mut layers=Vec::new();
+                            for layer in &load.frames[1..]{
+                                let size=layer.image.size();
+                                let blit=crate::native_surface::Blit{destination:0,at:[0,0],size:[size[0] as i32,size[1] as i32],source_at:layer.geometry.origin,math:crate::native_surface::Math::AlphaOver};
+                                let Some((src,dst,size))=crate::native_surface::clip(blit,layer,base) else{continue;};
+                                layers.push(crysirror_core::image_processing::ImageCompositeLayer{input:Box::new(crysirror_core::image_processing::ImageInput::Resource(layer.image.clone())),source:[src[0],src[1],size[0],size[1]],destination:dst,clip:None,opacity:255,math:crysirror_core::image_processing::ImageCompositeMath::AlphaOnAlphaScalar256});
+                            }
+                            let input=crysirror_core::image_processing::ImageInput::Composite{base:Box::new(crysirror_core::image_processing::ImageInput::Resource(base.image.clone())),layers};
+                            load.job=Some(host.image_metadata(self.client)?.begin_process(input,std::sync::Arc::from(&b"[]"[..])).map_err(anyhow::Error::from)?);
+                            return Ok(VmYield::BudgetExhausted);
+                        }
+                        // 64B010: read an "image" file into a refcounted block {data, size, size, 1, 0}.
+                        #[cfg(feature="runtime")]
+                        365 => {
+                            ensure!(call.arguments.len()==1,"CatSystem2 image block arguments");
+                            machine.preflight_native(true,&[])?;
+                            if self.blob_pending.as_ref().is_none_or(|(pc,_)|*pc!=call.pc){
+                                let name=crate::native_values::format_bytes(machine,call.arguments[0])?;
+                                let name=String::from_utf8(name).context("CatSystem2 image block name encoding")?;
+                                let storage=host.storage(self.client)?;
+                                let permit=match self.pool.as_ref().context("CatSystem2 worker pool missing")?.reserve(){Ok(p)=>p,Err(e) if e.is::<crysirror_tasks::CapacityExceeded>()=>return Ok(VmYield::BudgetExhausted),Err(e)=>return Err(e)};
+                                let task=permit.spawn(move|cancel|crate::native_image_resource::read_named(storage.as_ref(),&name,&cancel))?;
+                                self.blob_pending=Some((call.pc,BlobPending::Read(task)));
+                                return Ok(VmYield::BudgetExhausted);
+                            }
+                            let Some((_,BlobPending::Read(task)))=self.blob_pending.as_mut() else{anyhow::bail!("CatSystem2 image block pending state")};
+                            let Some(read)=task.try_take()? else{return Ok(VmYield::BudgetExhausted);};
+                            self.blob_pending=None;
+                            let id=match read{
+                                Some((path,bytes)) if !bytes.is_empty()=>{let id=self.handles.allocate()?;self.blobs.insert(id,(path,bytes.into(),1));id}
+                                _=>0,
+                            };
+                            machine.acknowledge(Some(id))?;
+                        }
+                        // 64B3A0: release one reference; the block goes at zero (its flag is never set).
+                        #[cfg(feature="runtime")]
+                        366 => {
+                            ensure!(call.arguments.len()==1,"CatSystem2 image block release arguments");
+                            machine.preflight_native(false,&[])?;
+                            if let Some(entry)=self.blobs.get_mut(&call.arguments[0]){
+                                entry.2-=1;
+                                if entry.2<=0{self.blobs.remove(&call.arguments[0]);}
+                            }
+                            machine.acknowledge(None)?;
+                        }
+                        // 64C190 → 6750A0/68F940: decode frame a2 of a block into a new image (VM+152).
+                        // 64B9C0 → 68F480: frame a1's 36-byte stdinfo into a VM buffer (6A1E70 layout).
+                        #[cfg(feature="runtime")]
+                        364|368 => {
+                            let a=call.arguments.clone();
+                            ensure!(a.len()==if call.id==364{2}else{3},"CatSystem2 image block decode arguments");
+                            let out=if call.id==368{a[2]}else{0};
+                            machine.preflight_native(true,&if out!=0{vec![(out,vec![0;36])]}else{vec![]})?;
+                            let Some((path,bytes,_))=self.blobs.get(&a[0]).cloned() else{machine.acknowledge(Some(0))?;continue;};
+                            if call.id==368&&out==0{machine.acknowledge(Some(0))?;continue;}
+                            if self.blob_pending.as_ref().is_none_or(|(pc,_)|*pc!=call.pc){
+                                let Some(pending)=crate::native_image_resource::Pending::begin_bytes(self.pool.as_ref().context("CatSystem2 worker pool missing")?,host,self.client,self.tasks.current(),call.pc,&path,bytes,a[1])? else{return Ok(VmYield::BudgetExhausted);};
+                                self.blob_pending=Some((call.pc,BlobPending::Decode(pending)));
+                                return Ok(VmYield::BudgetExhausted);
+                            }
+                            let Some((_,BlobPending::Decode(pending)))=self.blob_pending.as_mut() else{anyhow::bail!("CatSystem2 image block pending state")};
+                            let Some(outcome)=pending.poll()? else{return Ok(VmYield::BudgetExhausted);};
+                            self.blob_pending=None;
+                            let frame=match outcome{crate::native_image_resource::Outcome::Ready(frame)=>Some(frame),_=>None};
+                            match (call.id,frame){
+                                (364,Some(frame))=>{let id=self.handles.allocate()?;self.handles.images.insert(id,frame);machine.acknowledge(Some(id))?;}
+                                (368,Some(frame))=>{
+                                    let g=&frame.geometry;let base=g.base.unwrap_or_default();
+                                    let words=[g.origin[0],g.origin[1],g.size[0] as i32,g.size[1] as i32,g.canvas[0] as i32,g.canvas[1] as i32,(g.color_bits/8) as i32,base[0],base[1]];
+                                    machine.commit_native(Some(1),&[(out,words.iter().flat_map(|w|w.to_le_bytes()).collect())])?;
+                                }
+                                (368,None)=>machine.commit_native(Some(0),&[(out,vec![0;36])])?,
+                                _=>machine.acknowledge(Some(0))?,
+                            }
+                        }
+                        // 64B410 → 68BEC0: a 32-bit image's four stored bytes times ARGB a1 / 255.
+                        #[cfg(feature="runtime")]
+                        369 => {
+                            use crysirror_core::image_processing::ImageProcessState as State;
+                            ensure!(call.arguments.len()==2,"CatSystem2 image colour multiply arguments");
+                            machine.preflight_native(false,&[])?;
+                            let a=call.arguments.clone();
+                            let Some(frame)=self.handles.images.get(&a[0]).cloned() else{machine.acknowledge(None)?;continue;};
+                            if frame.geometry.color_bits/8<=3{machine.acknowledge(None)?;continue;}
+                            if self.blob_pending.as_ref().is_none_or(|(pc,_)|*pc!=call.pc){
+                                let [b,g,r,alpha]=a[1].to_le_bytes();
+                                let effects=crate::native_surface_ops::effects_bytes(&[json!({"kind":"channel_scale","factors":[r,g,b,alpha]})]);
+                                let job=host.image_metadata(self.client)?.begin_process(crysirror_core::image_processing::ImageInput::Resource(frame.image.clone()),effects).map_err(anyhow::Error::from)?;
+                                self.blob_pending=Some((call.pc,BlobPending::Recolour(job)));
+                                return Ok(VmYield::BudgetExhausted);
+                            }
+                            let Some((_,BlobPending::Recolour(job)))=self.blob_pending.as_mut() else{anyhow::bail!("CatSystem2 image colour pending state")};
+                            match job.poll().map_err(anyhow::Error::from)?{
+                                State::Pending=>return Ok(VmYield::BudgetExhausted),
+                                State::Failed(e)=>anyhow::bail!("CatSystem2 image colour multiply: {e}"),
+                                State::Ready(image)=>{
+                                    self.blob_pending=None;
+                                    if let Some(entry)=self.handles.images.get_mut(&a[0]){entry.image=image;}
+                                    if let Some(upload)=self.handles.uploads.remove(&a[0]){let _=host.release_image_resource(self.client,upload.path.relative());}
+                                    machine.acknowledge(None)?;
+                                }
+                            }
+                        }
                         #[cfg(feature="runtime")]
                         710 => {
                             // 653B10 -> 741600: decode a named image; a missing file answers 0.
                             ensure!(call.arguments.len()==1,"CatSystem2 image load arguments");
                             machine.preflight_native(true,&[])?;
-                            if self.image_loading.is_none(){
+                            let owner = self.tasks.current();
+                            if !self.image_loading.contains_key(&owner){
                                 let name=crate::native_values::format_bytes(machine,call.arguments[0])?;
                                 let name=String::from_utf8(crate::native_scene::stem(&name).to_vec()).context("CatSystem2 image name encoding")?;
                                 let Some(pending)=crate::native_image_resource::Pending::begin_named(self.pool.as_ref().context("CatSystem2 worker pool missing")?,host,self.client,self.tasks.current(),call.pc,&name,0)? else{return Ok(VmYield::BudgetExhausted);};
-                                self.image_loading=Some(pending);
+                                self.image_loading.insert(owner,pending);
                                 return Ok(VmYield::BudgetExhausted);
                             }
-                            let Some(outcome)=self.image_loading.as_mut().unwrap().poll()? else{return Ok(VmYield::BudgetExhausted);};
-                            self.image_loading=None;
+                            let pending = self.image_loading.get_mut(&owner).unwrap();
+                            ensure!(pending.owner == owner && pending.native_pc == call.pc, "CatSystem2 image completion belongs to another native call");
+                            let Some(outcome)=pending.poll()? else{return Ok(VmYield::BudgetExhausted);};
+                            self.image_loading.remove(&owner);
                             let id=match outcome{
                                 crate::native_image_resource::Outcome::Ready(frame)=>{let id=self.handles.allocate()?;self.handles.images.insert(id,frame);id}
                                 _=>0,
@@ -871,26 +1105,39 @@ impl CatSystem2Vm {
                                 let image=upload.path.relative().to_owned();let size=upload.size;
                                 let key=crate::native_image_publication::ImageList::key(self.tasks.current(),a[1])?;
                                 let publication=self.tasks.list_publication(a[0],self.client)?;
-                                // The bitmap's stdinfo place on its canvas and its hot spot (this[9..10], this[12..13]).
-                                let (origin,base)=(frame.geometry.origin,frame.geometry.base.unwrap_or_default());
-                                let position=[f32::from_bits(a[3])+(origin[0]-base[0]) as f32,f32::from_bits(a[4])+(origin[1]-base[1]) as f32];
-                                
-                                publication.put(crate::native_image_publication::Draw{key,image,size,position,pivot:[0.,0.],alpha:a[10].min(255) as u8,visible:a[11]!=0,clip:None})?;
+                                // 743230 -> 746330 replaces the bitmap's default
+                                // hot spot with arguments5/6. Using stdinfo.base
+                                // here loses the pivot of captured screen images.
+                                // 746C40 truncates position and pivot separately.
+                                let origin=frame.geometry.origin;
+                                let position=[f32::from_bits(a[3]).trunc()+origin[0] as f32,f32::from_bits(a[4]).trunc()+origin[1] as f32];
+                                let pivot=[f32::from_bits(a[5]),f32::from_bits(a[6])];
+                                publication.put(crate::native_image_publication::Draw{key,image,size,position,pivot,alpha:a[10].min(255) as u8,blend:crysirror_scene::layer::Blend::Normal,visible:a[11]!=0,clip:None})?;
                                 publication.publish(host,self.client,Vec::new())?;
                             }
                             machine.acknowledge(None)?;
                         }
                         #[cfg(feature="runtime")]
                         #[cfg(feature="runtime")]
-                        112|113|115|116|118|367|733|736|723|726|727|730|713|737 => {
+                        112|113|115|116|118|367|733|736|723|726|727|730|713|737|538|735 => {
                             use crate::native_surface::{self as surface,Pending,Math,Blit,LIST_BITMAP};
                             use crysirror_core::image_processing::ImageProcessState as State;
                             let returns=matches!(call.id,112|113|118|733);
                             machine.preflight_native(returns,&[])?;
-                            if let Some(pending)=self.surface_pending.take(){
+                            let owner = (self.tasks.current(),call.pc,call.id);
+                            // A pending screen capture/bitmap edit belongs to one
+                            // exact native call. Another KCS task may yield here,
+                            // but cannot consume that job or its geometry receipt.
+                            if self.surface.job.is_some() {
+                                if self.surface.owner != Some(owner) { return Ok(VmYield::BudgetExhausted); }
+                            } else {
+                                self.surface.owner = Some(owner);
+                                self.surface.geometry = None;
+                            }
+                            if let Some(pending)=self.surface.job.take(){
                                 match pending{
                                     Pending::Create(mut job)=>match job.poll().map_err(anyhow::Error::from)?{
-                                        State::Pending=>{self.surface_pending=Some(Pending::Create(job));return Ok(VmYield::BudgetExhausted);}
+                                        State::Pending=>{self.surface.job=Some(Pending::Create(job));return Ok(VmYield::BudgetExhausted);}
                                         State::Failed(e)=>anyhow::bail!("CatSystem2 native image creation: {e}"),
                                         State::Ready(image)=>{
                                             let id=self.handles.allocate()?;
@@ -899,7 +1146,7 @@ impl CatSystem2Vm {
                                         }
                                     },
                                     Pending::Capture{mut job,blit,region}=>match job.poll().map_err(anyhow::Error::from)?{
-                                        State::Pending=>{self.surface_pending=Some(Pending::Capture{job,blit,region});return Ok(VmYield::BudgetExhausted);}
+                                        State::Pending=>{self.surface.job=Some(Pending::Capture{job,blit,region});return Ok(VmYield::BudgetExhausted);}
                                         State::Failed(e)=>anyhow::bail!("CatSystem2 native list capture: {e}"),
                                         State::Ready(image)=>{
                                             let batch=crysirror_scene::ServiceBatch{canvases:vec![crysirror_scene::canvas::CanvasCommand::Destroy{id:region}],..Default::default()};
@@ -909,23 +1156,27 @@ impl CatSystem2Vm {
                                             let Some((src,dst,size))=surface::clip(blit,&source,&destination) else{machine.acknowledge(None)?;continue;};
                                             let input=surface::composite(destination.image.clone(),source.image,src,dst,size,blit.math);
                                             let job=host.image_metadata(self.client)?.begin_process(input,std::sync::Arc::from(&b"[]"[..])).map_err(anyhow::Error::from)?;
-                                            self.surface_pending=Some(Pending::Compose{job,destination:blit.destination});
+                                            self.surface.job=Some(Pending::Compose{job,destination:blit.destination});
                                             return Ok(VmYield::BudgetExhausted);
                                         }
                                     },
                                     Pending::Compose{mut job,destination}=>match job.poll().map_err(anyhow::Error::from)?{
-                                        State::Pending=>{self.surface_pending=Some(Pending::Compose{job,destination});return Ok(VmYield::BudgetExhausted);}
+                                        State::Pending=>{self.surface.job=Some(Pending::Compose{job,destination});return Ok(VmYield::BudgetExhausted);}
                                         State::Failed(e)=>anyhow::bail!("CatSystem2 native image blit: {e}"),
                                         State::Ready(image)=>{
                                             if let Some(frame)=self.handles.images.get_mut(&destination){
                                                 frame.geometry.size=image.size();
-                                                if let Some((canvas,origin))=self.surface_geometry.take(){frame.geometry.canvas=canvas;frame.geometry.origin=origin;}
+                                                if let Some((canvas,origin))=self.surface.geometry.take(){frame.geometry.canvas=canvas;frame.geometry.origin=origin;}
                                                 frame.image=image;
                                             }
                                             if let Some(upload)=self.handles.uploads.remove(&destination){let _=host.release_image_resource(self.client,upload.path.relative());}
                                             machine.acknowledge(None)?;
                                         }
                                     },
+                                }
+                                if self.surface.job.is_none() {
+                                    self.surface.owner=None;
+                                    self.surface.geometry=None;
                                 }
                                 continue;
                             }
@@ -936,13 +1187,25 @@ impl CatSystem2Vm {
                                     if a[0]==0||a[1]==0{machine.acknowledge(Some(0))?;continue;}
                                     let input=surface::empty_input([a[0],a[1]])?;
                                     let job=host.image_metadata(self.client)?.begin_process(input,std::sync::Arc::from(&b"[]"[..])).map_err(anyhow::Error::from)?;
-                                    self.surface_pending=Some(Pending::Create(job));
+                                    self.surface.job=Some(Pending::Create(job));
                                 }
                                 // 653C70, 653090, 653820, 653C90, 653DF0, 6530B0, 6537C0: edits of one image group.
-                                723|726|727|730|713|737|736=>{
+                                // 653390: image a0's rectangle a6..a9 onto image a5's rectangle a1..a4,
+                                // stretched unless the sizes match (6874B0 / 6876A0). A destination
+                                // without an image goes to VRAM, which the retained scene composes.
+                                735=>{
+                                    let (Some(source),Some(destination))=(self.handles.images.get(&a[0]).cloned(),self.handles.images.get(&a[5]).cloned()) else{machine.acknowledge(None)?;continue;};
+                                    let (from,to)=([a[6] as i32,a[7] as i32,a[8] as i32,a[9] as i32],[a[1] as i32,a[2] as i32,a[3] as i32,a[4] as i32]);
+                                    if from[2]<=0||from[3]<=0||to[2]<=0||to[3]<=0{machine.acknowledge(None)?;continue;}
+                                    let input=surface::stretch(destination.image.clone(),source.image,from,to)?;
+                                    let job=host.image_metadata(self.client)?.begin_process(input,std::sync::Arc::from(&b"[]"[..])).map_err(anyhow::Error::from)?;
+                                    self.surface.job=Some(Pending::Compose{job,destination:a[5]});
+                                }
+                                723|726|727|730|713|737|736|538=>{
                                     use crate::native_surface_ops as ops;
                                     let Some(frame)=self.handles.images.get(&a[0]) else{machine.acknowledge(None)?;continue;};
                                     let edit=match call.id{
+                                        538=>Some(ops::grow(frame,[a[1],a[2]])),
                                         723=>ops::rotate(frame,a[1]),
                                         726=>Some(ops::blur(frame,[a[1],a[2]])),
                                         727=>Some(ops::flip(frame,a[1]!=0)),
@@ -952,9 +1215,9 @@ impl CatSystem2Vm {
                                         _=>Some(ops::fill(frame,[a[1] as i32,a[2] as i32,a[3] as i32,a[4] as i32],a[5])),
                                     };
                                     let Some(edit)=edit else{machine.acknowledge(None)?;continue;};
-                                    self.surface_geometry=Some((edit.canvas,edit.origin));
+                                    self.surface.geometry=Some((edit.canvas,edit.origin));
                                     let job=host.image_metadata(self.client)?.begin_process(edit.input,ops::effects_bytes(&edit.effects)).map_err(anyhow::Error::from)?;
-                                    self.surface_pending=Some(Pending::Compose{job,destination:a[0]});
+                                    self.surface.job=Some(Pending::Compose{job,destination:a[0]});
                                 }
                                 // 674E90 a transparent bitmap; 6752F0 the current screen.
                                 112=>{
@@ -962,9 +1225,19 @@ impl CatSystem2Vm {
                                     if a[0]==0||a[1]==0{machine.acknowledge(Some(0))?;continue;}
                                     let input=surface::empty_input([a[0],a[1]])?;
                                     let job=host.image_metadata(self.client)?.begin_process(input,std::sync::Arc::from(&b"[]"[..])).map_err(anyhow::Error::from)?;
-                                    self.surface_pending=Some(Pending::Create(job));
+                                    self.surface.job=Some(Pending::Create(job));
                                 }
-                                113=>{self.surface_pending=Some(Pending::Create(host.begin_frame_capture(self.client).map_err(anyhow::Error::from)?));}
+                                113=>{
+                                    // Model commands/poses issued earlier in this
+                                    // KCS slice must reach the shared layers before
+                                    // capturing them; otherwise the freeze contains
+                                    // the preceding owner tick's actor placement.
+                                    if self.m2.needs_random() && !self.fes_children.motions.ensure_random_for_kcs(host,self.client,self.tasks.current(),call.pc)? { return Ok(VmYield::BudgetExhausted); }
+                                    let config=self.settings.as_ref().map(|settings|settings.m2.clone()).unwrap_or_default();
+                                    let now=host.now_ms();
+                                    self.m2.tick(host,self.client,&self.tasks,&self.kcs_sound,&config,self.config.canvas,now,self.fes_children.motions.random().ok())?;
+                                    self.surface.job=Some(Pending::Create(host.begin_frame_capture(self.client).map_err(anyhow::Error::from)?));
+                                }
                                 118=>{
                                     let copy=self.handles.images.get(&a[0]).cloned();
                                     let id=match copy{Some(copy)=>{let id=self.handles.allocate()?;self.handles.images.insert(id,copy);id}None=>0};
@@ -989,13 +1262,13 @@ impl CatSystem2Vm {
                                         let batch=crysirror_scene::ServiceBatch{canvases:surface::region_commands(canvas,region,[x as f32,y as f32,w as f32,h as f32]),..Default::default()};
                                         host.submit_engine(self.client,1,&serde_json::to_vec(&batch)?)?;
                                         let blit=Blit{source_at:[0;2],at:[blit.at[0]+x-blit.source_at[0],blit.at[1]+y-blit.source_at[1]],size:[w,h],..blit};
-                                        self.surface_pending=Some(Pending::Capture{job:host.begin_canvas_image(self.client,region).map_err(anyhow::Error::from)?,blit,region});
+                                        self.surface.job=Some(Pending::Capture{job:host.begin_canvas_image(self.client,region).map_err(anyhow::Error::from)?,blit,region});
                                     }else{
                                         let (Some(source),Some(destination))=(self.handles.images.get(&a[5]).cloned(),self.handles.images.get(&a[0]).cloned()) else{machine.acknowledge(None)?;continue;};
                                         let Some((src,dst,size))=surface::clip(blit,&source,&destination) else{machine.acknowledge(None)?;continue;};
                                         let input=surface::composite(destination.image.clone(),source.image,src,dst,size,blit.math);
                                         let job=host.image_metadata(self.client)?.begin_process(input,std::sync::Arc::from(&b"[]"[..])).map_err(anyhow::Error::from)?;
-                                        self.surface_pending=Some(Pending::Compose{job,destination:a[0]});
+                                        self.surface.job=Some(Pending::Compose{job,destination:a[0]});
                                     }
                                 }
                             }
@@ -1103,7 +1376,7 @@ impl CatSystem2Vm {
                                         let upload=&self.handles.uploads[&image];
                                         let (path,size)=(upload.path.relative().to_owned(),upload.size);
                                         let publication=self.tasks.list_publication(id,self.client)?;
-                                        publication.put(crate::native_image_publication::Draw{key:0,image:path,size,position:[0.;2],pivot:[0.;2],alpha:255,visible:true,clip:None})?;
+                                        publication.put(crate::native_image_publication::Draw{key:0,image:path,size,position:[0.;2],pivot:[0.;2],alpha:255,blend:crysirror_scene::layer::Blend::Normal,visible:true,clip:None})?;
                                         publication.publish(host,self.client,Vec::new())?;
                                     }
                                     None=>{
@@ -1412,12 +1685,15 @@ impl CatSystem2Vm {
                             for candidate in catalog.candidates(storage.as_ref(),"movie",&name,&||Ok(()))?{
                                 if let Some(path)=crate::native_resource_paths::resolve(storage.as_ref(),&candidate)?{found=Some(path);break;}
                             }
-                            let id=match found{Some(path)=>self.movies.open(path.relative().to_owned(),self.config.canvas),None=>{host.append_log(self.client,&format!("CatSystem2 movie {name} not found"))?;0}};
+                            let id=match found{Some(path)=>self.movies.open(path.relative().to_owned(),self.config.canvas)?,None=>{host.append_log(self.client,&format!("CatSystem2 movie {name} not found"))?;0}};
                             machine.acknowledge(Some(id))?;
                         }
                         #[cfg(feature="runtime")]
                         266 => {machine.preflight_native(true,&[])?;self.movies.play(host,self.client,call.arguments[0])?;machine.acknowledge(Some(1))?;}
                         #[cfg(feature="runtime")]
+                        // 655000 → 6FD6D0; 654C10 → 6FCA60.
+                        267 => {machine.preflight_native(true,&[])?;let stopped=self.movies.stop(host,self.client,call.arguments[0])?;machine.acknowledge(Some(u32::from(stopped)))?;}
+                        998 => {machine.preflight_native(true,&[])?;let at=self.movies.position_ms(host,self.client,call.arguments[0]);machine.acknowledge(Some(at))?;}
                         268 => {machine.preflight_native(true,&[])?;self.movies.close(host,self.client,call.arguments[0])?;machine.acknowledge(Some(1))?;}
                         #[cfg(feature="runtime")]
                         269 => {machine.preflight_native(true,&[])?;let playing=self.movies.playing(host,self.client,call.arguments[0]);machine.acknowledge(Some(playing))?;}
@@ -1557,8 +1833,9 @@ impl CatSystem2Vm {
                         }
                         // 5D3EC0, 5D6400, 5D4650: the original's archive read-ahead; the engine has its own.
                         434|436|438 => {machine.preflight_native(false,&[])?;machine.acknowledge(None)?;}
-                        // 64FBB0: the window title buffer.
-                        454 => {machine.preflight_native(false,&[])?;machine.acknowledge(None)?;}
+                        // 64FBB0: this task's argument string (+712, message 26 from 659DC0); the
+                        // tasks here take none, so the buffer gets an empty one.
+                        454 => {machine.commit_native(None,&[(call.arguments[0],vec![0])])?;}
                         // 645090: whether the named sound can be opened.
                         284 => {
                             machine.preflight_native(true,&[])?;
@@ -1577,19 +1854,44 @@ impl CatSystem2Vm {
                             let writes=call.arguments[1..].iter().zip(size).filter(|(p,_)|**p!=0).map(|(p,v)|(*p,v.to_le_bytes().to_vec())).collect::<Vec<_>>();
                             machine.commit_native(None,&writes)?;
                         }
-                        // 64B4C0, 653840 -> 68C6F0: this[18], an HG3 frame attribute table; decoded frames carry none.
-                        536|724 => {machine.preflight_native(true,&[])?;machine.acknowledge(Some(0))?;}
+                        // 64B4C0 / 653840 -> 68C6F0: five raw ats words from the shared HG3 metadata.
+                        #[cfg(feature="runtime")]
+                        536|724 => {
+                            let a=&call.arguments;
+                            ensure!(a.len()==7,"CatSystem2 bitmap attribute arguments");
+                            let values=self.handles.images.get(&a[0]).and_then(|frame|frame.geometry.attribute(a[1]));
+                            let writes=values.map_or(Vec::new(),|values|a[2..].iter().zip(values).filter(|(p,_)|**p!=0).map(|(p,v)|(*p,v.to_le_bytes().to_vec())).collect());
+                            // Native724 treats a null wrapper as success, unlike536.
+                            machine.commit_native(Some(u32::from(values.is_some()||(call.id==724&&a[0]==0))),&writes)?;
+                        }
                         // 650F30 and family: the message log the backlog reads.
                         696 => {machine.preflight_native(true,&[])?;let id=self.tasks.logs.create();machine.acknowledge(Some(id))?;}
                         697 => {machine.preflight_native(false,&[])?;self.tasks.logs.destroy(call.arguments[0]);machine.acknowledge(None)?;}
                         876 => {machine.preflight_native(false,&[])?;self.tasks.logs.clear(call.arguments[0]);machine.acknowledge(None)?;}
                         785 => {machine.preflight_native(false,&[])?;self.tasks.logs.set_limit(call.arguments[0],call.arguments[1]);machine.acknowledge(None)?;}
-                        977 => {
+                        // 650DB0 / 650E60 -> 72E8E0: live message insertion;
+                        // 698 supplies history_index=-1, while 977 passes it explicitly.
+                        698 | 977 => {
+                            let a=&call.arguments;
+                            ensure!(a.len()==if call.id==698 {7} else {8},"CatSystem2 message log arguments");
                             machine.preflight_native(false,&[])?;
-                            let a=call.arguments.clone();
-                            let text=|machine:&crate::kcs::Machine,at:u32|->Result<String>{Ok(String::from_utf8_lossy(&machine.read_cstring(at,4096)?).into_owned())};
-                            let row=crate::native_log::Row{scene:text(machine,a[1])?,line:a[2],name:machine.read_cstring(a[3],4096)?,text:machine.read_cstring(a[4],16384)?,voice:String::new()};
-                            self.tasks.logs.add(a[0],row);
+                            // The original null-handle wrapper does not even format
+                            // the three strings, which may be invalid VM addresses.
+                            if a[0]!=0 {
+                                ensure!(self.tasks.logs.contains(a[0]),"CatSystem2 message log handle {:#x} missing",a[0]);
+                                let scene=crate::native_values::format_bytes(machine,a[1])?;
+                                let name=crate::native_values::format_bytes(machine,a[3])?;
+                                let body=crate::native_values::format_bytes(machine,a[4])?;
+                                ensure!(scene.len()<64&&name.len()<256&&body.len()<4096,"CatSystem2 formatted message log extent");
+                                let scene=if let Ok(name)=std::str::from_utf8(&scene) {name.to_owned()} else {
+                                    encoding_rs::SHIFT_JIS.decode_without_bom_handling_and_without_replacement(&scene).context("CatSystem2 message log scene CP932")?.into_owned()
+                                };
+                                let row=crate::native_log::Row{
+                                    scene,line:a[2],name,text:body,voice:String::new(),
+                                    flags:u32::from(a[5]!=0)*4,page_start:a[6]!=0,history_index:if call.id==698 {-1} else {a[7] as i32},
+                                };
+                                self.tasks.logs.add_message(a[0],row)?;
+                            }
                             machine.acknowledge(None)?;
                         }
                         // 651040 -> 72EF40: the row's speaker, which the backlog turns into its name image.
@@ -1679,13 +1981,13 @@ impl CatSystem2Vm {
                                     self.fes_tick_input=Some((id,call.pc,observation));
                                     observation
                                 };
-                                let tick=crate::fes_runtime::Services{
+                                let tick=crate::fes_runtime::Services{pointer_glide:Some(&mut self.classes.input_task),
                                     string_variables:&mut self.string_variables,
                                     client:self.client,tasks:&mut self.tasks,
                                     interpreter:self.interpreter.as_mut().context("CatSystem2 FES interpreter unavailable")?,
                                     settings:&mut self.settings,sound_definition:&mut self.sound_definition,
                                     input_state:&mut self.input_state,steam_manager:&mut self.steam_manager,
-                                    fes_file_probe:&mut self.fes_file_probe,fes_civil_time:&mut self.fes_civil_time,fes_children:&mut self.fes_children,saves:&self.saves,
+                                    fes_file_probe:&mut self.fes_file_probe,fes_civil_time:&mut self.fes_civil_time,fes_children:&mut self.fes_children,handles:Some(&self.handles),saves:&self.saves,
                                     pool:self.pool.as_ref().context("CatSystem2 worker pool missing")?,
                                 }.run(host,id,call.pc,observation,&mut remaining)?;
                                 match tick{
@@ -1739,6 +2041,18 @@ impl CatSystem2Vm {
                         }
                         66 => {
                             ensure!(call.arguments.len()==3,"CatSystem2 task constructor arguments");
+                            if matches!(call.arguments[0],14|43) {
+                                ensure!(self.null_view_constructor,"CatSystem2 task class {} has no implemented constructor for this native module profile",call.arguments[0]);
+                                machine.preflight_native(true,&[])?;
+                                machine.acknowledge(Some(0))?;
+                                continue;
+                            }
+                            // 5DD580 has no constructor for these and answers a null task.
+                            if matches!(call.arguments[0],3|4|5|7|9|10|55|56){
+                                machine.preflight_native(true,&[])?;
+                                machine.acknowledge(Some(0))?;
+                                continue;
+                            }
                             if !matches!(call.arguments[0],2|6|8|15|34|54){
                                 // Task classes whose work has no CrySirror capability yet still own a real
                                 // slot, so scripts can address them; 5DC9D0 ignores messages they lack.
@@ -1790,7 +2104,12 @@ impl CatSystem2Vm {
                                 // 5DC510 releases the task; its Plane layers go with it.
                                 self.kcs_children.retain(|child|child.id!=id);
                                 #[cfg(feature="runtime")]
-                                self.m2.remove(id);
+                                {
+                                    self.image_loading.remove(&id);
+                                    self.surface.cancel(host,self.client,id)?;
+                                }
+                                #[cfg(feature="runtime")]
+                                self.m2.remove(host,self.client,id)?;
                                 crate::native_classes::retire(host,self.client,&mut self.classes,id)?;
                                 #[cfg(feature="runtime")]
                                 {
@@ -1843,6 +2162,9 @@ impl CatSystem2Vm {
                                 commands.push(json!({"op":"set_visible","id":plane.layer,"visible":false}));
                                 host.submit_engine(self.client,1,&serde_json::to_vec(&json!({"layers":commands}))?)?;
                                 self.tasks.set_solid_payload(id,c)?;
+                                // Later alpha/pose messages must retain this
+                                // quad's extent instead of rebuilding a 1x1 rect.
+                                self.tasks.plane_mut(id).unwrap().pose.size = [w,h];
                             }
                             machine.acknowledge(None)?;
                         }
@@ -1899,8 +2221,12 @@ impl CatSystem2Vm {
                             machine.preflight_native(false,&[])?;
                             let a=&call.arguments;
                             let word=|i:usize|a.get(i).map(|v|f32::from_bits(*v));
+                            let selector=match call.id {85=>a.get(3),84|93|101=>a.get(4),_=>None}.copied().unwrap_or(0);
+                            let mut source_changed=false;
                             if let Some(plane)=self.tasks.plane_mut(a[0]){
-                                let pose=&mut plane.pose;
+                                source_changed=selector!=0&&plane.source_pose.is_some();
+                                let pose=if source_changed {plane.source_pose.as_mut().unwrap()} else {&mut plane.pose};
+                                let previous=*pose;
                                 match call.id{
                                     84=>for i in 0..3{if let Some(v)=word(i+1){pose.base[i]=v;}},
                                     85=>for i in 0..2{if let Some(v)=word(i+1){pose.position[i]=v;}},
@@ -1911,14 +2237,18 @@ impl CatSystem2Vm {
                                     101=>for i in 0..3{if let Some(v)=word(i+1){pose.scale[i]=v;}},
                                     _=>pose.alpha=(a.get(1).copied().unwrap_or(255) as i32).clamp(0,255) as u8,
                                 }
+                                source_changed &= *pose!=previous;
                                 crate::native_plane::publish(host,self.client,plane)?;
                             }
+                            #[cfg(feature="runtime")]
+                            if source_changed {crate::native_plane::publish_source(host,self.client,&mut self.tasks,a[0])?;}
                             machine.acknowledge(None)?;
                         }
                         86|87|343|345 => {
                             // Messages 61, 62, 75, 76: read Plane words back through VM pointers.
                             let a=call.arguments.clone();
-                            let pose=self.tasks.plane_mut(a[0]).map(|p|p.pose).unwrap_or_default();
+                            let selector=match call.id {86=>a.get(3),87=>a.get(4),_=>None}.copied().unwrap_or(0);
+                            let pose=self.tasks.plane_mut(a[0]).map(|p|if selector!=0 {p.source_pose.unwrap_or(p.pose)}else{p.pose}).unwrap_or_default();
                             let values:Vec<f32>=match call.id{
                                 86=>pose.position[..2].to_vec(),
                                 87=>pose.base.to_vec(),
@@ -2065,13 +2395,13 @@ impl CatSystem2Vm {
                                 self.fes_tick_input=Some((call.arguments[0],call.pc,observation));
                                 observation
                             };
-                            let tick=crate::fes_runtime::Services{
+                            let tick=crate::fes_runtime::Services{pointer_glide:Some(&mut self.classes.input_task),
                 string_variables:&mut self.string_variables,
                                 client:self.client,tasks:&mut self.tasks,
                                 interpreter:self.interpreter.as_mut().context("CatSystem2 FES interpreter unavailable")?,
                                 settings:&mut self.settings,sound_definition:&mut self.sound_definition,
                                 input_state:&mut self.input_state,steam_manager:&mut self.steam_manager,
-                                fes_file_probe:&mut self.fes_file_probe,fes_civil_time:&mut self.fes_civil_time,fes_children:&mut self.fes_children,saves:&self.saves,
+                                fes_file_probe:&mut self.fes_file_probe,fes_civil_time:&mut self.fes_civil_time,fes_children:&mut self.fes_children,handles:Some(&self.handles),saves:&self.saves,
                                 pool:self.pool.as_ref().context("CatSystem2 worker pool missing")?,
                             }.force_tree(host,call.arguments[0],call.pc,observation,&mut remaining)?;
                             if self.fes_children.routes_published(){self.input_routes_bound=true;}
@@ -2260,6 +2590,27 @@ impl CatSystem2Vm {
                             if let Some(error)=&result{host.append_log(self.client,&format!("CatSystem2 save file: {error}"))?;}
                             let ok=result.is_none();
                             machine.acknowledge((call.id!=990).then_some(u32::from(ok)))?;
+                        }
+                        // 64A210: the string bank (VM+180, 740070) as one record of container a0 under key a1.
+                        243 => {
+                            ensure!(call.arguments.len()==2,"CatSystem2 string bank save arguments");
+                            machine.preflight_native(true,&[])?;
+                            let saved=match (call.arguments[0],self.string_variables.serialize()){
+                                (0,_)|(_,None)=>0,
+                                (container,Some(bytes))=>{
+                                    let save=self.saves.get_mut(&container).with_context(||format!("CatSystem2 string bank save into unknown container {container}"))?;
+                                    save.append(call.arguments[1],&bytes)?;1
+                                }
+                            };
+                            machine.acknowledge(Some(saved))?;
+                        }
+                        // 6496E0: the first record under key a1 replaces the whole bank (740290).
+                        253 => {
+                            ensure!(call.arguments.len()==2,"CatSystem2 string bank load arguments");
+                            machine.preflight_native(true,&[])?;
+                            let record=(call.arguments[0]!=0).then(||self.saves.get(&call.arguments[0]).and_then(|s|s.first(call.arguments[1])).map(<[u8]>::to_vec)).flatten();
+                            let loaded=match record{Some(bytes)=>{self.string_variables.deserialize(&bytes)?;1}None=>0};
+                            machine.acknowledge(Some(loaded))?;
                         }
                         276 => {
                             ensure!(call.arguments.len()==2,"CatSystem2 string variable assignment arguments");
@@ -2565,33 +2916,18 @@ impl CatSystem2Vm {
                                 None=>machine.acknowledge(Some(0))?,
                             }
                         }
-                        // The CG register (78FFB0): this build keeps no gallery table yet, so a
-                        // handle stands for an empty register and queries report nothing seen.
-                        419 => {
-                            machine.preflight_native(true,&[])?;
-                            let handle=self.string_maps.create()?;
-                            machine.acknowledge(Some(handle))?;
+                        // 647110: GAME/flag local (a1 == 0) or global range a2 into two VM words;
+                        // an index of 8 or more answers 0 without writing.
+                        790 => {
+                            ensure!(call.arguments.len()==4,"CatSystem2 flag range arguments");
+                            let range=self.settings.as_ref().and_then(|s|s.flag_ranges[usize::from(call.arguments[0]!=0)].get(call.arguments[1] as usize).copied());
+                            match range{
+                                Some([start,count])=>machine.commit_native(Some(1),&[(call.arguments[2],start.to_le_bytes().to_vec()),(call.arguments[3],count.to_le_bytes().to_vec())])?,
+                                None=>{machine.preflight_native(true,&[])?;machine.acknowledge(Some(0))?;}
+                            }
                         }
-                        420 => {
-                            machine.preflight_native(false,&[])?;
-                            self.string_maps.destroy(*call.arguments.first().context("CatSystem2 CG register handle")?);
-                            machine.acknowledge(None)?;
-                        }
-                        422|458|459 => {machine.preflight_native(false,&[])?;machine.acknowledge(None)?;}
-                        423|424|425 => {machine.preflight_native(true,&[])?;machine.acknowledge(Some(0))?;}
-                        // 64D870 answers 0 for an absent table file; its readers then answer 0.
-                        594 => {
-                            ensure!(!call.arguments.is_empty(),"CatSystem2 table open arguments");
-                            let name=crate::native_values::format_bytes(machine,call.arguments[0])?;
-                            let text=crysirror_resource::text_stream::decode_auto(&name,512)?;
-                            host.append_log(self.client,&format!("CatSystem2 native table {text} is not loaded by this build"))?;
-                            machine.acknowledge(Some(0))?;
-                        }
-                        595 => {machine.preflight_native(false,&[])?;machine.acknowledge(None)?;}
-                        596|597 => {machine.preflight_native(true,&[])?;machine.acknowledge(Some(0))?;}
-                        // 790: index 8+ of the native table answers 0 without writing; the
-                        // window size list behind it isn't modeled. 999 reads a zeroed setting.
-                        790|999 => {machine.preflight_native(true,&[])?;machine.acknowledge(Some(0))?;}
+                        // 999 reads a zeroed setting.
+                        999 => {machine.preflight_native(true,&[])?;machine.acknowledge(Some(0))?;}
                         739 => {
                             // 64FBF0: the virtual pointer position into two VM dwords.
                             ensure!(call.arguments.len()==2,"CatSystem2 pointer query arguments");
@@ -2633,22 +2969,6 @@ impl CatSystem2Vm {
                             machine.preflight_native(result.is_some(),&[])?;
                             machine.acknowledge(result)?;
                         }
-                        id if crate::native_pending::slot(id).is_some() => {
-                            let value=crate::native_pending::slot(id).unwrap();
-                            machine.preflight_native(value,&[])?;
-                            if *self.native_calls.get(&id).unwrap_or(&0)==0{
-                                host.append_log(self.client,&format!("CatSystem2 native {id} has no capability yet; acknowledged without effect"))?;
-                            }
-                            machine.acknowledge(value.then_some(0))?;
-                        }
-                        id if crate::native_inert::return_slot(id).is_some() => {
-                            let slot=crate::native_inert::return_slot(id).flatten();
-                            machine.preflight_native(slot.is_some(),&[])?;
-                            if *self.native_calls.get(&id).unwrap_or(&0)==0{
-                                host.append_log(self.client,&format!("CatSystem2 native {id} has no capability yet; acknowledged without effect"))?;
-                            }
-                            machine.acknowledge(slot)?;
-                        }
                         _=>anyhow::bail!("CatSystem2 unsupported native gcall {} at {} PC {:#x} ({} argument bytes); original call remains unacknowledged",call.id,self.config.script,call.pc,call.arguments.len()*4),
                     }
                     *self.native_calls.entry(call.id).or_default() += 1;
@@ -2681,6 +3001,27 @@ fn xml_node<'a>(
     document.child_path(&parts[1..].join("/"))
 }
 impl VmAdapter for CatSystem2Vm {
+    fn presentation_pending(&self) -> bool {
+        // A native modal needs a newly presented UI even if a game draw was
+        // interrupted. Ordinary event/timer waits do not hold this fence.
+        if self.menu_state.modal_active() { return false; }
+        #[cfg(feature="runtime")]
+        {
+            // These are synchronous native drawing/resource callbacks split
+            // over shared jobs. Keep the previous completed picture while a
+            // script has only changed part of its scene (e.g. scale, then
+            // capture/rebind, then position). Internal captures still consume
+            // the current logical scene and can finish behind this fence.
+            self.surface.job.is_some()
+                || self.blob_pending.is_some()
+                || !self.image_loading.is_empty()
+                || self.image_pool_loading.is_some()
+                || self.fes_children.frames.presentation_pending()
+                || !self.fes_children.panel_render.pending_owners().is_empty()
+        }
+        #[cfg(not(feature="runtime"))]
+        { false }
+    }
     fn preparation_pending(&self) -> bool {
         self.program.is_none()
     }
@@ -2720,9 +3061,14 @@ impl VmAdapter for CatSystem2Vm {
     fn diagnostics(&self) -> Vec<u8> {
         //Keep each json! expansion bounded; diagnostic growth must not
         //raise the entire crate's macro recursion limit or alter native state.
-        let mut value=json!({"profile":"kcs-v2","script":self.config.script,"loaded":self.program.is_some(),"pc":self.machine.as_ref().map(|m|m.pc),"instructions":self.machine.as_ref().map(|m|m.instructions),"pending_native":self.machine.as_ref().and_then(|m|m.pending.as_ref()),"native_calls":self.native_calls,"tasks":self.tasks.diagnostics(),"image_pool_pending":self.image_pool_loading.is_some(),"fes_loading_pending":self.fes_loading.is_some(),"texture_cache":self.texture_cache.as_ref().map(crate::texture_cache::NativeTextureCache::diagnostics),"texture_clear_pending":self.texture_clear.is_some(),"fes_file_probe_pending":self.fes_file_probe.is_some(),"fes_civil_time_pending":self.fes_civil_time.is_some(),"fes_tick_input_revision":self.fes_tick_input.map(|(_,_,o)|o.revision),"fes_owner_tick":self.fes_owner_tick.as_ref().map(|p|json!({"revision":p.observation.revision,"next":p.next,"tasks":p.tasks,"origin_pc":p.origin_pc})),"last_fes_owner_revision":self.last_fes_owner_revision,"input_observation":{"available":self.input_state.available,"revision":self.input_state.revision,"position":self.input_state.position},"steam_manager":self.steam_manager.diagnostics(),"native_event_wait":self.event_wait.as_ref().map(|w|json!({"slot":w.slot,"native_pc":w.pc,"resume":"next_owner_tick_zero_or_message_one"})),"input_routes_bound":self.input_routes_bound,"string_variables":self.string_variables.diagnostics(),"save_containers":self.saves.iter().map(|(id,c)|json!({"id":id,"container":c.diagnostics()})).collect::<Vec<_>>(),"save_container_pending":self.save_loading.is_some()});
+        let mut value=json!({"profile":"kcs-v2","script":self.config.script,"loaded":self.program.is_some(),"pc":self.machine.as_ref().map(|m|m.pc),"instructions":self.machine.as_ref().map(|m|m.instructions),"pending_native":self.machine.as_ref().and_then(|m|m.pending.as_ref()),"native_calls":self.native_calls,"message_log":self.tasks.logs.diagnostics(),"tasks":self.tasks.diagnostics(),"image_pool_pending":self.image_pool_loading.is_some(),"fes_loading_pending":self.fes_loading.is_some(),"texture_cache":self.texture_cache.as_ref().map(crate::texture_cache::NativeTextureCache::diagnostics),"texture_clear_pending":self.texture_clear.is_some(),"fes_file_probe_pending":self.fes_file_probe.is_some(),"fes_civil_time_pending":self.fes_civil_time.is_some(),"fes_tick_input_revision":self.fes_tick_input.map(|(_,_,o)|o.revision),"fes_owner_tick":self.fes_owner_tick.as_ref().map(|p|json!({"revision":p.observation.revision,"next":p.next,"tasks":p.tasks,"origin_pc":p.origin_pc})),"last_fes_owner_revision":self.last_fes_owner_revision,"input_observation":{"available":self.input_state.available,"revision":self.input_state.revision,"position":self.input_state.position},"steam_manager":self.steam_manager.diagnostics(),"native_event_wait":self.event_wait.as_ref().map(|w|json!({"slot":w.slot,"native_pc":w.pc,"resume":"next_owner_tick_zero_or_message_one"})),"input_routes_bound":self.input_routes_bound,"string_variables":self.string_variables.diagnostics(),"save_containers":self.saves.iter().map(|(id,c)|json!({"id":id,"container":c.diagnostics()})).collect::<Vec<_>>(),"save_container_pending":self.save_loading.is_some()});
+        if std::env::var_os("CRYSIRROR_CATSYSTEM2_OBJECTS").is_some() {
+            value["native_images"] = json!(self.handles.images.iter().map(|(id, frame)| json!({"id":id,"source":frame.source,"size":frame.geometry.size,"origin":frame.geometry.origin,"base":frame.geometry.base,"alpha_pixels":frame.image.rgba().chunks_exact(4).filter(|pixel|pixel[3]!=0).count(),"upload":self.handles.uploads.get(id).map(|u|u.path.relative())})).collect::<Vec<_>>());
+        }
         let services=json!({"sound_definition":self.sound_definition.as_ref().map(|s|s.diagnostics()),"sound_definition_pending":self.sound_loading.is_some(),"interpreter":self.interpreter.as_ref().map(|i|i.diagnostics()),"pending_native_text":self.machine.as_ref().and_then(|m|m.pending.as_ref().and_then(|p|match p.id{66=>p.arguments.get(2),447=>p.arguments.get(1),_=>None}).and_then(|a|crate::native_values::format(m,*a).ok())),"pending_resource":self.machine.as_ref().and_then(|m|m.pending.as_ref().filter(|p|p.id==400).and_then(|p|p.arguments.get(1)).and_then(|address|crate::native_values::format(m,*address).ok())),"xml_documents":self.documents.len(),"xml_resident_bytes":self.document_bytes,"loop_catalog_revision":self.loop_catalog_revision,"loop_catalog_entries":self.loop_entries,"loop_import_pending":self.loop_loading.is_some(),"settings_source":self.settings.as_ref().map(|s|json!({"policy":"client_save_setup_xml","windows_imported":false,"gamedef_loaded":s.gamedef,"setup_loaded":s.setup,"flag_count":s.flag_count,"dirty":s.dirty,"stillread":s.configuration(b"stillread",0,0).ok()})),"settings_pending":self.settings_loading.is_some(),"error":self.error});
         value["fes_children"]=self.fes_children.diagnostics();
+        #[cfg(feature="runtime")]
+        { value["m2_planes"] = self.m2.diagnostics(); }
         if let serde_json::Value::Object(services)=services {
             value.as_object_mut().unwrap().extend(services);
         }
@@ -2784,4 +3130,20 @@ mod tests {
         assert_eq!(super::xml_node(&d, "r/x").unwrap().unwrap().text, "7");
         assert!(super::xml_node(&d, "x").unwrap().is_none());
     }
+}
+
+#[cfg(feature="runtime")]
+struct LayeredLoad {
+    pc: u32,
+    names: std::collections::VecDeque<(String,u32)>,
+    frames: Vec<crate::native_image_resource::Prepared>,
+    loading: Option<crate::native_image_resource::Pending>,
+    job: Option<crysirror_core::image_processing::ImageJob>,
+}
+
+#[cfg(feature="runtime")]
+enum BlobPending {
+    Read(Task<Option<(String,Vec<u8>)>>),
+    Decode(crate::native_image_resource::Pending),
+    Recolour(crysirror_core::image_processing::ImageJob),
 }

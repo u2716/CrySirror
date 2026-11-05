@@ -1,0 +1,21 @@
+[package]
+name = "crysirror-mobile"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+crate-type = ["rlib", "staticlib", "cdylib"]
+
+[dependencies]
+crysirror-desktop = { path = "../crysirror-desktop", default-features = false, features = ["audio"] }
+anyhow.workspace = true
+serde_json.workspace = true
+wgpu.workspace = true
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21.1"
+ndk-sys = "0.6"
+ndk-context = "0.1.1"
+raw-window-handle = "0.6"

@@ -1,5 +1,13 @@
 # Local God of War III / Ashen Vow import trial
 
+Latest GoW follow-up (2026-11-04): native character geometry and rigid attachments
+now load as a static bind-pose preview. One OLY100 scene + Kratos regression pack
+is retained under `local/work/gow3/scene-character-regression`; the full disc and
+old intermediate material were pruned with owner authorization. See
+[character loading, current limits and validation](validation/gow3-character-loading.md).
+The dated commands below describe historical inputs/paths that may no longer
+exist after that cleanup.
+
 Executed on 2026-10-25, macOS arm64, Apple M5 / Metal. These are offline
 asset-conversion tools feeding CrySirror's existing desktop renderer. The
 original Windows/PS3 executables were not run. This adds no console backend.

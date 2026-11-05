@@ -8,7 +8,8 @@
 pub struct AudioReleaseSpec {
     /// Channel vacated by the live decoder without reopening or seeking.
     pub source_channel: u32,
-    /// Independent channel receiving the retired nonlooping voice.
+    /// Independent channel receiving the retired nonlooping voice. Equal to
+    /// source_channel performs an in-place release, preserving loop/transport.
     pub tail_channel: u32,
     /// Captured levels at/above this select target_above_db100.
     pub threshold_db100: i32,
@@ -31,8 +32,7 @@ pub struct AudioReleaseSpec {
 }
 impl AudioReleaseSpec {
     pub fn validate(&self) -> crate::Result<()> {
-        if self.source_channel == self.tail_channel
-            || self.source_channel > 65535
+        if self.source_channel > 65535
             || self.tail_channel > 65535
         {
             return Err(crate::Error::Invalid("audio release channels"));

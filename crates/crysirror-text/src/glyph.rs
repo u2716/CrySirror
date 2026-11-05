@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Float-positioned glyph coverage cells. Native layout and reveal stay with callers.
 use crate::TextSystem;
-use ab_glyph::{point, Font, GlyphId, PxScale, ScaleFont};
-use anyhow::{ensure, Context, Result};
+use ab_glyph::{Font, GlyphId, PxScale, ScaleFont, point};
+use anyhow::{Context, Result, ensure};
 
 #[derive(Clone, Copy, Debug)]
 pub struct GlyphRaster {
@@ -87,6 +87,20 @@ impl TextSystem {
         })
     }
     pub fn rasterize_glyph_cell(&self, font: &str, request: GlyphRaster) -> Result<GlyphCell> {
+        self.rasterize_glyph_cell_scaled(font, request, 1.)
+    }
+    /// Rasterize actual outline geometry at an explicit horizontal scale;
+    /// coverage is produced at its final width before any outline kernel.
+    pub fn rasterize_glyph_cell_scaled(
+        &self,
+        font: &str,
+        request: GlyphRaster,
+        horizontal_scale: f32,
+    ) -> Result<GlyphCell> {
+        ensure!(
+            horizontal_scale.is_finite() && (0.03125..=32.).contains(&horizontal_scale),
+            "glyph horizontal scale"
+        );
         self.glyph_metrics(font, request.glyph_id, request.size)?;
         ensure!(
             request
@@ -96,11 +110,18 @@ impl TextSystem {
             "invalid glyph baseline"
         );
         if let Some(face) = self.precomputed_face(font)? {
+            ensure!(
+                horizontal_scale == 1.,
+                "precomputed font has no outline width transform"
+            );
             return face.cell(request);
         }
         let font = self.font(font)?;
         let glyph = GlyphId(request.glyph_id as u16).with_scale_and_position(
-            PxScale::from(request.size),
+            PxScale {
+                x: request.size * horizontal_scale,
+                y: request.size,
+            },
             point(request.baseline[0], request.baseline[1]),
         );
         let Some(outlined) = font.outline_glyph(glyph) else {
@@ -137,15 +158,90 @@ impl TextSystem {
             coverage,
         })
     }
+    /// Scale an outline face so its OS/2 average-character width reaches the
+    /// requested logical pixel width. No system font substitution is involved.
+    pub fn font_width_scale(&self, font: &str, size: f32, width: f32) -> Result<f32> {
+        ensure!(
+            size.is_finite()
+                && (1.0..=512.).contains(&size)
+                && width.is_finite()
+                && (0.01..=4096.).contains(&width),
+            "font width request"
+        );
+        ensure!(
+            self.precomputed_face(font)?.is_none(),
+            "precomputed font has no design average width"
+        );
+        let (bytes, index) = self.font_source(font)?;
+        let face = rustybuzz::Face::from_slice(&bytes, index).context("font width face")?;
+        let table = face
+            .raw_face()
+            .table(rustybuzz::ttf_parser::Tag::from_bytes(b"OS/2"))
+            .context("font lacks OS/2 average width")?;
+        let raw = i16::from_be_bytes(
+            table
+                .get(2..4)
+                .context("font OS/2 average width field")?
+                .try_into()?,
+        );
+        ensure!(raw > 0, "font average width is unspecified");
+        let outline = self.font(font)?;
+        let average = f32::from(raw) * outline.as_scaled(PxScale::from(size)).h_scale_factor();
+        let scale = width / average;
+        ensure!(
+            scale.is_finite() && (0.03125..=32.).contains(&scale),
+            "requested font width exceeds supported scale"
+        );
+        Ok(scale)
+    }
 }
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
+    fn outline_horizontal_scale_is_validated_before_font_or_coverage_work() {
+        let text = TextSystem::default();
+        let request = GlyphRaster {
+            glyph_id: 1,
+            size: 22.,
+            baseline: [0., 0.],
+        };
+        for scale in [f32::NAN, 0., -1., 33.] {
+            assert!(
+                text.rasterize_glyph_cell_scaled("missing", request, scale)
+                    .is_err()
+            );
+        }
+        assert!(text.font_width_scale("missing", 22., 0.).is_err());
+    }
+    #[test]
+    #[ignore = "reads caller-selected outline font; no proprietary or system font bytes are committed"]
+    fn average_width_uses_actual_face_metadata_and_rasterizes_wider_outlines() {
+        let path =
+            std::env::var_os("CRYSIRROR_TEST_FONT").expect("supply a local outline font path");
+        let mut text = TextSystem::default();
+        text.add_font("test", std::fs::read(path).unwrap()).unwrap();
+        let glyph_id = text.glyph_id("test", 'A').unwrap();
+        let request = GlyphRaster {
+            glyph_id,
+            size: 22.,
+            baseline: [0., 0.],
+        };
+        let normal = text.rasterize_glyph_cell("test", request).unwrap();
+        let wide = text
+            .rasterize_glyph_cell_scaled("test", request, 2.)
+            .unwrap();
+        assert!(wide.width > normal.width);
+        assert_eq!(wide.height, normal.height);
+        let factor = text.font_width_scale("test", 22., 44.).unwrap();
+        assert!(factor.is_finite() && factor > 0.);
+        assert!((text.font_width_scale("test", 22., 22.).unwrap() * 2. - factor).abs() < 1e-5);
+    }
+    #[test]
     fn unloaded_font_and_invalid_float_requests_fail_without_allocation() {
         let text = TextSystem::default();
-        assert!(text
-            .rasterize_glyph_cell(
+        assert!(
+            text.rasterize_glyph_cell(
                 "missing",
                 GlyphRaster {
                     glyph_id: 1,
@@ -153,7 +249,8 @@ mod tests {
                     baseline: [0., 0.]
                 }
             )
-            .is_err());
+            .is_err()
+        );
         assert!(text.glyph_metrics("missing", 1, f32::NAN).is_err());
     }
 }

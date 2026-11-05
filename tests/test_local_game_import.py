@@ -89,6 +89,21 @@ class PreviewTests(unittest.TestCase):
             self.assertEqual(struct.unpack_from('<4f',b,v['byteOffset']),(1,0,0,-1))
             mesh['tangents'].pop();(root/'mesh.json').write_text(json.dumps(mesh))
             with self.assertRaisesRegex(ValueError,'tangent count'):ue_preview.convert(root,root/'bad')
+    def test_material_sections_only_export_their_referenced_vertices(self):
+        with tempfile.TemporaryDirectory()as temporary:
+            root=Path(temporary);mesh,_=self.fixture(root)
+            mesh['positions'] += [[2,0,0],[3,0,0],[2,1,0]]
+            mesh['normals'] *= 2;mesh['uv'] *= 2;mesh['indices'] += [3,4,5]
+            mesh['sections'].append({'start':3,'count':3,'material':0})
+            (root/'mesh.json').write_text(json.dumps(mesh))
+            receipt=ue_preview.convert(root,root/'preview')
+            self.assertEqual(receipt['rendered_triangles'],2)
+            g=json.loads((root/'preview/assets/scene.gltf').read_text())
+            for primitive in g['meshes'][0]['primitives']:
+                self.assertEqual(g['accessors'][primitive['attributes']['POSITION']]['count'],3)
+                a=g['accessors'][primitive['indices']];view=g['bufferViews'][a['bufferView']]
+                data=(root/'preview/assets/scene.bin').read_bytes()
+                self.assertEqual(struct.unpack_from('<3I',data,view['byteOffset']),(0,1,2))
     def test_material_override_and_bgra_png(self):
         with tempfile.TemporaryDirectory() as t:
             root=Path(t);mesh,scene=self.fixture(root)

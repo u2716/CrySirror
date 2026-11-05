@@ -8,6 +8,7 @@ mod extra;
 mod images;
 mod int_aliases;
 mod int_executable;
+pub(super) mod int_fwp;
 mod pac3;
 mod profiles;
 mod structured;
@@ -457,6 +458,10 @@ fn index_profile(
     Ok(out)
 }
 fn int(s: &dyn AssetReader, cx: &DecodeContext) -> Result<Vec<Row>> {
+    let (rows, known_decode) = int_rows(s, cx)?;
+    int_aliases::coalesce(s, cx, rows, known_decode)
+}
+fn int_rows(s: &dyn AssetReader, cx: &DecodeContext) -> Result<(Vec<Row>, bool)> {
     cx.check_cancelled()?;
     ensure!(magic(s, 0, b"KIF\0")?, "missing KIF");
     let n = le32(&bytes(s, 4, 4, 4)?, 0)? as usize;
@@ -570,7 +575,7 @@ fn int(s: &dyn AssetReader, cx: &DecodeContext) -> Result<Vec<Row>> {
             );
         }
     }
-    int_aliases::coalesce(s, cx, rows, known_decode)
+    Ok((rows, known_decode))
 }
 /// MT19937 classic seeding differs from the modern standard recurrence.
 fn mt_classic_first(seed: u32) -> u32 {

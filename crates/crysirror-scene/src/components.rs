@@ -2,7 +2,7 @@
 //! Gameplay components carried by world entities (ADR 0012): skeletal
 //! animation state and collider/body specifications. Plain, saved data;
 //! poses and physics broad-phase structures are derived from it.
-use anyhow::{ensure, Result};
+use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
 /// Dynamic diffuse global illumination volume (ADR 0028): a grid of
@@ -198,7 +198,10 @@ impl AnimationState {
                 "invalid animation layer"
             );
         }
-        ensure!(self.morphs.len() <= MAX_MORPH_WEIGHTS, "too many morph weights");
+        ensure!(
+            self.morphs.len() <= MAX_MORPH_WEIGHTS,
+            "too many morph weights"
+        );
         for (name, w) in &self.morphs {
             ensure!(
                 !name.is_empty() && name.len() <= 256 && w.is_finite() && w.abs() <= 16.,
@@ -471,7 +474,12 @@ impl ColliderSpec {
             self.body != BodyKind::Dynamic || self.mass.is_some() || self.density > 1e-6,
             "dynamic bodies require positive density or explicit mass"
         );
-        ensure!(self.body!=BodyKind::Dynamic||!matches!(self.shape,ColliderShape::Mesh)||self.mass.is_some(),"dynamic triangle meshes require explicit mass; convex hulls can derive mass from density");
+        ensure!(
+            self.body != BodyKind::Dynamic
+                || !matches!(self.shape, ColliderShape::Mesh)
+                || self.mass.is_some(),
+            "dynamic triangle meshes require explicit mass; convex hulls can derive mass from density"
+        );
         Ok(())
     }
 }

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Device-free, absolute engine-clock sprite sheet sequences for layers and UI.
-use anyhow::{ensure, Result};
+use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

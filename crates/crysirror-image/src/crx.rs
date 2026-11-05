@@ -3,8 +3,8 @@
 //! Format reference: GARbro b09ee4570ccb1daf6ac56710ee8934dc0b8baeb0,
 //! ArcFormats/Circus/ImageCRX.cs, Copyright (C) 2015-2016 by morkt.
 //! Its MIT permission notice is preserved in crx.LICENSE.
-use crate::{rgba_len, ImageSurface};
-use anyhow::{bail, ensure, Context, Result};
+use crate::{ImageSurface, rgba_len};
+use anyhow::{Context, Result, bail, ensure};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CrxImage {

@@ -241,6 +241,11 @@ impl EmoteRuntime {
         self.runtime.inner.is_animating()
     }
 
+    /// See the inner player: true only for what will end by itself.
+    pub fn is_settling(&self) -> bool {
+        self.runtime.inner.is_settling()
+    }
+
     pub fn pass(&mut self) -> Result<()> {
         self.runtime.inner.pass();
         self.runtime

@@ -29,6 +29,28 @@ impl std::fmt::Display for CapacityExceeded {
     }
 }
 impl std::error::Error for CapacityExceeded {}
+#[cfg(all(target_arch = "wasm32", feature = "web-threads", not(target_feature = "atomics")))]
+compile_error!("web-threads requires an atomics-enabled std; use tools/web_host.py build");
+#[cfg(all(target_arch = "wasm32", feature = "web-threads"))]
+static BROWSER_THREADS: AtomicUsize = AtomicUsize::new(0);
+/// Publish a successfully initialized host-owned Rayon worker pool. Native
+/// pools retain their own system threads; no JS/GPU objects enter these jobs.
+#[cfg(all(target_arch = "wasm32", feature = "web-threads"))]
+pub fn initialize_browser_workers(count: usize) -> Result<()> {
+    ensure!((2..=64).contains(&count), "browser pool requires 2..64 workers");
+    ensure!(rayon::current_num_threads() == count, "browser worker count mismatch");
+    BROWSER_THREADS.compare_exchange(0, count, Ordering::AcqRel, Ordering::Acquire)
+        .map_err(|_| anyhow::anyhow!("browser workers already initialized"))?;
+    Ok(())
+}
+/// Actual shared CPU worker count, zero in the cooperative browser backend.
+#[cfg(target_arch = "wasm32")]
+pub fn browser_workers() -> usize {
+    #[cfg(feature = "web-threads")]
+    { BROWSER_THREADS.load(Ordering::Acquire) }
+    #[cfg(not(feature = "web-threads"))]
+    { 0 }
+}
 static NEXT_POOL: AtomicU64 = AtomicU64::new(1);
 thread_local! {static WORKER:Cell<u64>=const {Cell::new(0)};}
 #[derive(Clone, Default)]
@@ -69,21 +91,58 @@ pub struct TaskStats {
     pub rejected: u64,
 }
 type Job = Box<dyn FnOnce() + Send + 'static>;
+#[cfg(all(target_arch = "wasm32", feature = "web-threads"))]
+#[derive(Default)]
+struct BrowserDispatch { jobs: std::collections::VecDeque<Job>, busy: usize }
 struct Owner {
     id: u64,
     sender: Option<Sender<Job>>,
     workers: Vec<JoinHandle<()>>,
     counts: Arc<Counters>,
     capacity: usize,
+    #[cfg(all(target_arch = "wasm32", feature = "web-threads"))]
+    dispatch: std::sync::Mutex<BrowserDispatch>,
+    #[cfg(all(target_arch = "wasm32", feature = "web-threads"))]
+    parallelism: usize,
+}
+#[cfg(all(target_arch = "wasm32", feature = "web-threads"))]
+fn dispatch_browser(owner: Arc<Owner>, job: Job) {
+    let start = {
+        let mut state = owner.dispatch.lock().unwrap();
+        state.jobs.push_back(job);
+        if state.busy < owner.parallelism {
+            state.busy += 1;
+            state.jobs.pop_front()
+        } else { None }
+    };
+    if let Some(job) = start { run_browser_job(owner, job); }
+}
+#[cfg(all(target_arch = "wasm32", feature = "web-threads"))]
+fn run_browser_job(owner: Arc<Owner>, job: Job) {
+    rayon::spawn(move || {
+        let previous = WORKER.with(|v| v.replace(owner.id));
+        job();
+        WORKER.with(|v| v.set(previous));
+        let next = {
+            let mut state = owner.dispatch.lock().unwrap();
+            let next = state.jobs.pop_front();
+            if next.is_none() { state.busy -= 1; }
+            next
+        };
+        if let Some(job) = next { run_browser_job(owner, job); }
+    });
 }
 impl Drop for Owner {
     fn drop(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
         self.sender.take();
         let current = thread::current().id();
         for worker in self.workers.drain(..) {
             if worker.thread().id() != current {
                 let _ = worker.join();
             }
+        }
         }
     }
 }
@@ -97,6 +156,22 @@ impl TaskPool {
             "invalid task pool limits"
         );
         let id = NEXT_POOL.fetch_add(1, Ordering::Relaxed);
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = name;
+            #[cfg(feature = "web-threads")]
+            ensure!(browser_workers() >= 2, "initialize browser CPU workers before constructing engine task pools");
+            // Threaded builds dispatch through the initialized shared pool;
+            // the optional cooperative backend defers jobs to timer turns.
+            Ok(Self(Arc::new(Owner { id, sender: None, workers: Vec::new(), counts: Arc::new(Counters::default()), capacity,
+                #[cfg(feature = "web-threads")]
+                dispatch: Default::default(),
+                #[cfg(feature = "web-threads")]
+                parallelism: workers.min(browser_workers()),
+            })))
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
         let (tx, rx) = bounded::<Job>(capacity);
         let counts = Arc::new(Counters::default());
         let mut handles = vec![];
@@ -128,6 +203,7 @@ impl TaskPool {
             counts,
             capacity,
         })))
+        }
     }
     /// Reserve admission before moving a resource into a job. A rejected
     /// reservation leaves the caller's decoder/buffer ownership intact.
@@ -157,7 +233,17 @@ impl TaskPool {
     pub fn stats(&self) -> TaskStats {
         let c = &self.0.counts;
         TaskStats {
-            workers: self.0.workers.len(),
+            workers: {
+                #[cfg(target_arch = "wasm32")]
+                {
+                    #[cfg(feature = "web-threads")]
+                    { self.0.parallelism }
+                    #[cfg(not(feature = "web-threads"))]
+                    { 0 }
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                { self.0.workers.len() }
+            },
             capacity: self.0.capacity,
             outstanding: c.outstanding.load(Ordering::Acquire),
             reserved: c.reserved.load(Ordering::Acquire),
@@ -211,9 +297,26 @@ impl TaskPermit {
             counts.completed.fetch_add(1, Ordering::Relaxed);
             let _ = tx.send(result);
         });
+        #[cfg(not(target_arch = "wasm32"))]
         if self.pool.0.sender.as_ref().unwrap().try_send(job).is_err() {
             c.rejected.fetch_add(1, Ordering::Relaxed);
             anyhow::bail!("task pool is closed");
+        }
+        #[cfg(all(target_arch = "wasm32", feature = "web-threads"))]
+        {
+            dispatch_browser(self.pool.0.clone(), job);
+        }
+        #[cfg(all(target_arch = "wasm32", not(feature = "web-threads")))]
+        {
+            let pool = self.pool.0.id;
+            wasm_bindgen_futures::spawn_local(async move {
+                // A timer yields to input/animation messages as well as JS
+                // promises; a microtask-only queue could starve presentation.
+                gloo_timers::future::TimeoutFuture::new(0).await;
+                let previous = WORKER.with(|v| v.replace(pool));
+                job();
+                WORKER.with(|v| v.set(previous));
+            });
         }
         self.submitted = true;
         c.reserved.fetch_sub(1, Ordering::AcqRel);
@@ -269,7 +372,10 @@ impl<T> Task<T> {
             !WORKER.with(|v| v.get() == self.pool),
             "cannot block a worker on its own task pool"
         );
-        futures::executor::block_on(self)
+        #[cfg(not(target_arch = "wasm32"))]
+        { futures::executor::block_on(self) }
+        #[cfg(target_arch = "wasm32")]
+        { anyhow::bail!("blocking task waits are unavailable in browsers; poll or await completion") }
     }
 }
 impl<T> Future for Task<T> {

@@ -4,6 +4,9 @@ CrySirror is in early development and its API changes often. The reference
 here is therefore generated from the code that runs, never written by hand,
 and a test keeps it current.
 
+Regenerate without executing tests with
+`cargo run --release -p crysirror-engine --example api_reference`.
+
 | File | Contents |
 |---|---|
 | [REFERENCE.md](REFERENCE.md) | Classes, properties, methods, script globals, command map, data specs with defaults, adapter configs |
@@ -31,8 +34,71 @@ and a test keeps it current.
   exported as a data specification. Removed hosted-engine configurations are
   not accepted.
 
+Native application embedding uses the [C/JNI host ABI](../NATIVE_PACKAGING.md)
+and `crysirror-console` Rust host traits. These do not register engine script
+classes or commands and do not change this schema fingerprint.
+
 Rust crate internals are not part of this reference. For those, use
 `cargo doc --workspace --no-deps`.
+
+`HostServices::media_reader` opens a client-scoped `AssetReader` with
+`MediaSourceOptions` through the ordinary media workers, surfaces and clocks.
+`MediaFrame::as_image(client)` retains a completed picture as an immutable image
+for publication and capture after playback stops, without encoding or copying
+pixels. These Rust methods add no reflective script signature.
+
+The Rust host query `HostServices::window_fullscreen(client)` reports the
+presenter's observed fullscreen state. `None` means no physical window
+observation is available; queuing `Ui.setFullscreen` does not create an
+observation. The desktop owner publishes this state, separate from saved
+simulation state. `normalize_civil_date(year, month, day)` is a pure Gregorian
+normalization of signed month/day fields; it does not infer a timezone, DST
+transition, or platform CRT timestamp range. These Rust helpers add no
+reflective script signature.
+
+`HostServices::begin_civil_date(client, year, month, day)` resolves a normalized
+date's local midnight on a worker, including the historical UTC offset. Its
+retained `CivilTimeQuery` reports ambiguous or nonexistent midnight as failure;
+it does not guess from the current offset. This Rust host method adds no
+reflective script signature.
+
+`WidgetSpec.key_events` declares retained key bindings using the shared input
+button bits and `WidgetKeyEdge`. Delivery belongs to the eligible UI owner and
+modal subtree. `key_event_scope` keeps a declared ancestor as the key owner
+across child focus changes, so a release is not lost during navigation.
+`keyboard_navigation` and `keyboard_activation` independently control the
+built-in policies; an adapter can instead consume the retained key receipts.
+A `held` binding emits on each owner tick after its `delay_ms`, measured by the
+engine clock. `Ui.drainSubtreeEvents(root)` consumes only that subtree's events.
+`WidgetInteraction.pointer` and its mouse button fields expose only the current
+UI input owner's canvas pointer and edges. They are transient, not save state.
+
+`Ui.movePointerStepped` uses `SteppedPointerMotionSpec` and
+`Ui.advancePointerMotion` advances its explicit native ticks. The common
+float-step state is independent of window presentation and game VM policy.
+`Layers.setGlyphCrops` changes positioned glyph clipping without replacing the
+layer or cancelling its motion and sequence state.
+
+Rust `HostServices::begin_http` admits a cancellable, bounded HTTP job only for
+an owner-granted exact origin. `Runtime::grant_http_origin` and
+`revoke_http_origin` manage those client capabilities; VM/project snapshots
+cannot grant them. Desktop `play --allow-http-origin https://HOST[:PORT]`
+explicitly grants an origin for that play session. Redirects require the same
+capability check and there is no default network origin grant.
+
+`HostServices::begin_civil_timezone` reads a retained host timezone profile on
+a worker. Annual transition rules and the pure CRT resolver preserve
+standard-first normalization separately from strict `begin_civil_date`.
+Unavailable host profiles report a typed failure rather than guessing rules
+from the current UTC offset.
+
+Layer `SequenceTrack::Linear.velocity_divisor` retains signed or zero native
+velocity arithmetic independently of its tick metadata. Explicit IEEE input
+ownership transports nonfinite channel values as `{ "ieee754": bits }` and
+suppresses their dependent projection without rewriting CPU state. Finite
+completion restores projection. `TexelImageUv` applies the shared
+`layer::crop::texel_center_quad` sampling policy to each atlas frame; invalid
+projected crops retain their actor and queue without drawing.
 
 Rust image callers can append bitmap operations with
 `ImageInput::with_composite_layer`. A complete four-channel replacement drops
@@ -1114,8 +1180,7 @@ with no new reflective class or private pixel renderer.
 `Layers.setSolidColor(id, rgba)` and `LayerCommand::SetSolidColor` change only
 an existing owned Solid layer's four stored colour bytes. Transform, motion,
 opacity, ordering, clipping and unrelated state are retained. Absent, foreign
-or other paint kinds fail under ordinary batch rollback. This operation is
-available to engine clients independently of CatSystem2's numeric hook.
+or other paint kinds fail under ordinary batch rollback.
 
 Shared Rust `crysirror_core::integer_fields` operates on borrowed `i64` storage
 containing32-bit packed words, without allocation, a VM or ambient state.
@@ -1400,8 +1465,7 @@ parameter can select condensed output while its default preserves expansion;
 retained in `metadata.hg3.pixel_profile`. Native requires full40-byte stdinfo,
 uses packed24-bit rows and ordinal chunk overwrite, and rejects uncovered gaps.
 JPEG defaults to mode1/24-bit and ignores independent alpha; WebP retains its
-embedded alpha and reviewed color mode. These metadata/decoder contracts alone
-do not establish native CatSystem game/title acceptance.
+embedded alpha and reviewed color mode.
 
 `Text.resolveFontAlias(aliasOrFamily)` resolves a client binding, canonical alias
 or installed static family to the exact engine drawing alias. Static fonts do
@@ -1528,10 +1592,7 @@ cancel changes Pending only. The Runtime validates client/bounds and reserves
 worker capacity before OS sampling; failure never substitutes an ambient or
 simulation clock. Seed acquisition and the caller's exact random-stream
 algorithm/state remain separate. These Rust contracts do not create a reflected
-class or JSON command. CatSystem2's real native Config.random_seeds is an optional
-pair of u32 values; omission/null selects its authorized default source, and an
-explicit pair retains zero/MAX exactly. The strict CLI/schema validator accepts
-the same field without manual game JSON or extraction.
+class or JSON command.
 
 `ImageCompositeMath::Normalized(RgbaBlendState)` and
 `ImageSurface::blend_fixed_factors` implement independent RGB/alpha blend
@@ -1600,3 +1661,54 @@ null for missing metadata and precomputed-only faces. FontLibrary::glyph_id and
 face_style default to explicit Unsupported; TextSystem caches style at font
 installation. These lookups do not rasterize, decode a font on the owner thread
 or guess a regular face when no style metadata exists.
+
+Shared layer queues expose `TexelImageUv` and `FiniteGate` bindings. The pure
+`layer::crop::texel_center_quad` helper computes signed source rectangles with
+texel-center endpoints; empty projections suppress drawing without discarding
+actor state. `SetTexelSource` changes the retained source rectangle, and
+`SetBindingMap` changes a binding's value map, preserving queue cursors and
+records. `CenteredScale` derives alignment from independent source/reference
+extents. Qualified `LayerSequence*` types distinguish these queues from world
+sequences in the generated reference.
+
+`AudioRequest::SetRate` and `Mixer::set_playback_rate` change an existing voice's
+playback multiplier while preserving its cursor, DSP and release state. Hosts
+retain channel/client ownership. `FrameAdmissionClock` in core is a pure rational
+frame-admission helper with wrapping millisecond input: late polls catch up phase
+and admit one update; forced admission retains phase. Its caller owns pending
+work and retains input until an admitted frame completes. It has no device or
+window dependency and does not choose a host scheduling policy.
+
+## Browser host capabilities (2026-11-04)
+
+`Runtime::with_storage` and `Assets::from_storage` accept explicit project/client
+capabilities without ambient native paths. `SharedHost.fs` is `RuntimeStorage`;
+native construction still delegates to DiskVfs. Physics consumes `FileSystem`.
+`crysirror-web` generates its separate BrowserPlayer TypeScript bindings with
+wasm-bindgen; it does not register duplicate reflective engine classes.
+
+The initial profile and unsupported operations are defined by
+[ADR 0100](../adr/0100-browser-host-and-capability-runtime.md). Workspace
+regeneration changed the recorded fingerprint from `c47c9352e8db80c9` to
+`c1a04f58f36209a0`, including concurrent image/command metadata and the repaired
+PathCommand source lookup; see [CHANGES](CHANGES.md).
+
+Browser CPU pools now expose the Rust startup boundary
+`initialize_browser_workers`/`browser_workers`. The renderer reports a typed
+`PreparationPending` dependency while browser material-pipeline validation is
+pending. These are Rust/host additions, with no reflective engine signature
+change. The release reference generator was rerun; fingerprint remains
+`c1a04f58f36209a0`. See the browser parallel/3D validation receipt.
+
+`Ui.setRect(id, rect)` updates one client-owned widget's geometry without
+replacing its input state. `Layers.setPaint(id, paint)` replaces validated paint
+while retaining geometry and motion/queue ownership; non-image paints clear
+image-only sampling and UV crop fields. These commands use the same canonical
+Scene batch validation and client ownership checks as other shared operations.
+The release reference fingerprint is `acee7de9dee324bf`; see CHANGES.md.
+
+Shared `RgbLookupProfile::StraightNonzeroAlpha` preserves alpha-zero source
+pixels; `StraightColorKey { color }` preserves a declared RGB key. Both apply
+the existing per-channel lookup tables to other straight-RGBA pixels. Existing
+straight/premultiplied behavior is unchanged. The generated workspace reference
+fingerprint is `bddc750232fac763`; see CHANGES.md.

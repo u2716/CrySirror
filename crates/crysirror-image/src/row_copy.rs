@@ -4,7 +4,7 @@
 //! Whole-pixel sine row copying. Parameter semantics checked against
 //! wamsoft/layerExRaster a4c9be0c7510cca552e27c0c3e931b2eaee399af.
 use crate::ImageSurface;
-use anyhow::{ensure, Result};
+use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 /// Whole-image copy profile. Unlike sampling distortion, uncovered destination
 /// pixels retain their old values. Displacement truncates toward zero; the phase

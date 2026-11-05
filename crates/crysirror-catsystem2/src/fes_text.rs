@@ -18,10 +18,15 @@ pub(crate) struct TextObject {
     pub margin: [f32; 4],
     /// `layout frame`: 60Hz frames per character; zero or less shows the page at once.
     pub frame: i32,
+    /// 69CA30: unsigned reveal clock multiplier, in tenths; never a font scale.
+    pub reveal_rate: u32,
+    pub last_clock: u32,
     pub spacing: [f32; 2],
     pub color: [u8; 3],
     pub indent: bool,
     pub text: Vec<u8>,
+    /// NVSTRING retains previous independently styled paragraph layouts.
+    pub blocks: Vec<TextObject>,
     pub drawing: bool,
     pub skip: bool,
     pub started: Option<u32>,
@@ -32,6 +37,7 @@ pub(crate) struct TextObject {
     pub end: [i32; 2],
     pub lines: u32,
     pub generation: u64,
+    pub native_ids:std::collections::BTreeMap<u32,u32>,
 }
 impl Default for TextObject {
     fn default() -> Self {
@@ -39,11 +45,12 @@ impl Default for TextObject {
             log: None,
             sizes: [18., 22., 25., 28., 32.],
             margin: [0.; 4],
-            frame: 0,
+            frame: 0, reveal_rate:10,last_clock:0,
             spacing: [0.; 2],
             color: [255; 3],
             indent: false,
             text: Vec::new(),
+            blocks: Vec::new(),
             drawing: false,
             skip: false,
             started: None,
@@ -53,13 +60,13 @@ impl Default for TextObject {
             shaped: None,
             end: [0; 2],
             lines: 0,
-            generation: 0,
+            generation: 0,native_ids:Default::default(),
         }
     }
 }
 fn is_text_method(method: &[u8]) -> bool {
     matches!(method, b"layout" | b"str" | b"apend" | b"apendmark" | b"clear" | b"reset" | b"draw" | b"skip"
-        | b"isdraw" | b"endpos" | b"linecnt" | b"userfont" | b"userfontobj" | b"delay")
+        | b"insert" | b"isdraw" | b"endpos" | b"linecnt" | b"userfont" | b"userfontobj" | b"delay" | b"mag" | b"strid")
 }
 fn is_common_method(method: &[u8]) -> bool {
     matches!(method, b"pos" | b"pos2" | b"getpos" | b"getpos2" | b"getsize" | b"page")
@@ -75,16 +82,28 @@ const LOG_BLOCKS: usize = 4;
 /// First text line of each block: the screen's 155-pixel block pitch in 29-pixel lines.
 const LOG_BLOCK_STARTS: [usize; LOG_BLOCKS + 1] = [0, 5, 11, 16, 21];
 pub(crate) fn is_log_method(method: &[u8]) -> bool {
-    matches!(method, b"setlog" | b"remake" | b"max" | b"lineinfo" | b"pathinfo" | b"blockinfo" | b"blockcolor" | b"getpos" | b"pos")
+    matches!(method, b"setlog" | b"remake" | b"max" | b"lineinfo" | b"pathinfo" | b"blockinfo" | b"blockcolor" | b"getpos" | b"pos" | b"strid")
+}
+fn log_blocks(rows: &[crate::native_log::Row]) -> Vec<std::ops::Range<usize>> {
+    let mut blocks = Vec::new();
+    let mut start = 0;
+    for (index, row) in rows.iter().enumerate().skip(1) {
+        if row.page_start { blocks.push(start..index); start = index; }
+    }
+    if !rows.is_empty() { blocks.push(start..rows.len()); }
+    blocks
 }
 fn log_page(rows: &[crate::native_log::Row], top: usize) -> Vec<u8> {
     let mut out = Vec::new();
-    for (block, row) in rows.iter().skip(top).take(LOG_BLOCKS).enumerate() {
-        // The page-wait mark `\\@` closes a message; it is not text.
-        let body = row.text.strip_suffix(b"\\@").unwrap_or(&row.text);
-        let lines = 1 + body.windows(2).filter(|pair| pair == b"\\n").count();
-        out.extend_from_slice(body);
-        for _ in lines - 1..LOG_BLOCK_STARTS[block + 1] - LOG_BLOCK_STARTS[block] {
+    for (block, range) in log_blocks(rows).into_iter().skip(top).take(LOG_BLOCKS).enumerate() {
+        let mut lines = 1;
+        for (index, row) in rows[range].iter().enumerate() {
+            if index != 0 { out.extend_from_slice(b"\\n"); lines += 1; }
+            let body = row.text.strip_suffix(b"\\@").unwrap_or(&row.text);
+            lines += body.windows(2).filter(|pair| pair == b"\\n").count();
+            out.extend_from_slice(body);
+        }
+        for _ in lines..LOG_BLOCK_STARTS[block + 1] - LOG_BLOCK_STARTS[block] + 1 {
             out.extend_from_slice(b"\\n");
         }
     }
@@ -107,7 +126,7 @@ pub(crate) fn log_command(bank: &mut Bank, target: &[u8], arguments: &[Vec<u8>],
         match method.as_slice() {
             b"setlog" => {
                 let log = word(&mut staged, 0)?;
-                text.log = (log != 0).then(|| LogView { id: log, top: logs.rows(log).len().saturating_sub(LOG_BLOCKS) });
+                text.log = (log != 0).then(|| LogView { id: log, top: log_blocks(logs.rows(log)).len().saturating_sub(LOG_BLOCKS) });
             }
             b"remake" | b"pos" => {
                 if method == b"pos" {
@@ -122,8 +141,25 @@ pub(crate) fn log_command(bank: &mut Bank, target: &[u8], arguments: &[Vec<u8>],
                     text.generation += 1;
                 }
             }
+            b"strid" => {
+                if args.len()>=3 {
+                    let block=word(&mut staged,0)? as usize;
+                    let key=word(&mut staged,1)?;
+                    let destination=word(&mut staged,2)?;
+                    let mut value=0;
+                    if let Some(view)=&text.log {
+                        let rows=logs.rows(view.id);
+                        if let Some(range)=log_blocks(rows).get(view.top.saturating_add(block)).cloned(){
+                            let mut body=Vec::new();for row in &rows[range]{body.extend_from_slice(&row.text);}
+                            let source=crysirror_resource::text_stream::decode_auto(&body,65534)?;
+                            value=strip_ids(&source).1.get(&key).copied().unwrap_or(0);
+                        }
+                    }
+                    if destination!=u32::MAX{staged.set_flag(destination,value);}
+                }
+            }
             b"max" | b"getpos" => {
-                let value = text.log.as_ref().map_or(0, |view| if method == b"max" { logs.rows(view.id).len().saturating_sub(LOG_BLOCKS) } else { view.top });
+                let value = text.log.as_ref().map_or(0, |view| if method == b"max" { log_blocks(logs.rows(view.id)).len().saturating_sub(LOG_BLOCKS) } else { view.top });
                 let flag = word(&mut staged, 0)?;
                 staged.set_flag(flag, value as u32);
             }
@@ -143,11 +179,6 @@ pub(crate) fn log_command(bank: &mut Bank, target: &[u8], arguments: &[Vec<u8>],
     }
     Ok(handled)
 }
-/// Methods accepted on every class until their capability exists: animation lists
-/// (setanm/anm), face composition (attr/refex) and SAVEPANEL's save pages.
-fn is_inert_method(method: &[u8]) -> bool {
-    matches!(method, b"setanm" | b"anm" | b"attr" | b"refex" | b"ptype" | b"dispid" | b"setsave" | b"getsavestr" | b"getsavedate" | b"setnum" | b"mode")
-}
 fn members(bank: &Bank, target: &[u8], vm: &mut Interpreter, strings: &StringVariables) -> Result<Vec<u32>> {
     let reference = crate::fes_references::evaluate(target, vm, strings, &|name| bank.count(name))?;
     let Some(count) = bank.count(&reference.name) else { return Ok(Vec::new()) };
@@ -155,15 +186,12 @@ fn members(bank: &Bank, target: &[u8], vm: &mut Interpreter, strings: &StringVar
     Ok(range.filter_map(|index| bank.lookup(&IndexedName { name: reference.name.clone(), index })).collect())
 }
 pub(crate) fn applies(bank: &Bank, target: &[u8], method: &[u8], vm: &Interpreter, strings: &StringVariables) -> Result<bool> {
-    if !is_text_method(method) && !is_common_method(method) && !is_inert_method(method) {
+    if !is_text_method(method) && !is_common_method(method) {
         return Ok(false);
     }
     let mut staged = vm.clone();
     let ids = members(bank, target, &mut staged, strings)?;
     let Some(id) = ids.first() else { return Ok(false) };
-    if is_inert_method(method) {
-        return Ok(true);
-    }
     Ok(match &bank.objects[id].state {
         State::Plane(plane) if plane.text.is_some() => true,
         State::Plane(_) | State::CPlane(_) | State::Image(_) | State::CImage(_) => is_common_method(method),
@@ -188,9 +216,7 @@ pub(crate) fn apply(bank: &mut Bank, target: &[u8], arguments: &[Vec<u8>], raw: 
     let args = &arguments[1..];
     let mut staged = vm.clone();
     let owner = bank.owner;
-    if is_inert_method(&method) {
-        return Ok(());
-    }
+    let mag=if method==b"mag"{Some(args.first().map_or(Ok(10),|v|staged.evaluate(v))?)}else{None};
     for id in members(bank, target, &mut staged, strings)? {
         let object = bank.objects.get_mut(&id).context("CatSystem2 text member missing")?;
         match method.as_slice() {
@@ -262,6 +288,19 @@ pub(crate) fn apply(bank: &mut Bank, target: &[u8], arguments: &[Vec<u8>], raw: 
                 let Some(text) = plane.text.as_mut() else { continue };
                 match method.as_slice() {
                     b"layout" => layout(text, args, &mut staged)?,
+                    b"strid" => {
+                        if matches!(object.declared_type,21|37)&&args.len()>=2 {
+                            let key=staged.evaluate(&args[0])?;
+                            let dest=staged.evaluate(&args[1])?;
+                            if dest!=u32::MAX{staged.set_flag(dest,text.native_ids.get(&key).copied().unwrap_or(0));}
+                        }
+                    }
+                    b"mag" => {
+                        if matches!(object.declared_type,21|29|37) {
+                            let value=mag.unwrap();
+                            if text.reveal_rate!=value {text.reveal_rate=value;text.base_visible=text.visible;text.started=Some(text.last_clock);}
+                        }
+                    },
                     b"str" => {
                         text.text = raw_tail(raw);
                         restart(text);
@@ -273,11 +312,29 @@ pub(crate) fn apply(bank: &mut Bank, target: &[u8], arguments: &[Vec<u8>], raw: 
                         text.generation += 1;
                     }
                     b"apendmark" => text.generation += 1,
+                    b"insert" => {
+                        anyhow::ensure!(object.declared_type == 29, "CatSystem2 insert requires NVSTRING");
+                        // 7516A0 -> 69DA40: retain the previous layout, then create
+                        // a fresh paragraph at the previous paragraph's bottom.
+                        let blocks = core::mem::take(&mut text.blocks);
+                        let prefix: usize = blocks.iter().map(|paragraph| paragraph.visible).sum();
+                        let mut block = (**text).clone();
+                        text.blocks = blocks;
+                        block.visible = block.visible.saturating_sub(prefix);
+                        text.blocks.push(block);
+                        text.text.clear();
+                        text.glyphs.clear();
+                        restart(text);
+                    }
                     b"clear" => {
+                        text.blocks.clear();
                         text.text.clear();
                         restart(text);
                     }
-                    b"reset" => **text = TextObject { log: text.log.take(), text: core::mem::take(&mut text.text), generation: text.generation + 1, ..Default::default() },
+                    b"reset" => {
+                        let source = if object.declared_type == 29 { Vec::new() } else { core::mem::take(&mut text.text) };
+                        **text = TextObject { log: text.log.take(), text: source, generation: text.generation + 1, ..Default::default() };
+                    },
                     b"draw" => {
                         text.drawing = true;
                         text.skip = false;
@@ -313,8 +370,8 @@ fn restart(text: &mut TextObject) {
     text.drawing = false;
     text.skip = false;
     text.started = None;
-    text.base_visible = 0;
-    text.visible = 0;
+    text.base_visible = text.blocks.iter().map(|block| block.visible).sum();
+    text.visible = text.base_visible;
     text.shaped = None;
     text.generation += 1;
 }
@@ -361,6 +418,34 @@ fn layout(text: &mut TextObject, args: &[Vec<u8>], vm: &mut Interpreter) -> Resu
     text.shaped = None;
     Ok(())
 }
+/// 6937B0/694780: `\\id<key>:<value>` metadata, first declaration wins.
+/// Both numeric words accept unsigned decimal/hex and consume a trailing `;`.
+fn strip_ids(source:&str)->(String,std::collections::BTreeMap<u32,u32>){
+    fn number(bytes:&[u8])->(usize,u32){
+        if !bytes.first().is_some_and(u8::is_ascii_digit){return (0,0);}
+        let (mut at,base)=if bytes.starts_with(b"0x")||bytes.starts_with(b"0X"){(2,16u32)}else{(0,10)};
+        let mut value=0u32;
+        while let Some(byte)=bytes.get(at){
+            let digit=match byte {b'0'..=b'9'=>u32::from(byte-b'0'),b'a'..=b'f' if base==16=>u32::from(byte-b'a'+10),b'A'..=b'F' if base==16=>u32::from(byte-b'A'+10),_=>break};
+            value=value.wrapping_mul(base).wrapping_add(digit);at+=1;
+        }
+        if bytes.get(at)==Some(&b';'){at+=1;}
+        (at,value)
+    }
+    let bytes=source.as_bytes();let mut out=Vec::new();let mut ids=std::collections::BTreeMap::new();let mut at=0;
+    while at<bytes.len(){
+        if bytes[at]==b'\\'&&bytes.get(at+1).is_some_and(|b|b.eq_ignore_ascii_case(&b'i'))&&bytes.get(at+2).is_some_and(|b|b.eq_ignore_ascii_case(&b'd')){
+            at+=3;let (count,key)=number(&bytes[at..]);at+=count;let mut value=0;
+            if count>0&&bytes.get(at)==Some(&b':'){at+=1;let (count,found)=number(&bytes[at..]);at+=count;value=found;}
+            ids.entry(key).or_insert(value);
+        }else{
+            out.push(bytes[at]);
+            if bytes[at]==b'\\'&&bytes.get(at+1)==Some(&b'\\'){at+=1;out.push(bytes[at]);}
+            at+=1;
+        }
+    }
+    (String::from_utf8(out).expect("ASCII control removal preserves UTF8"),ids)
+}
 /// Original inline escapes: `\n` breaks a line, `[base/ruby]` shows its base, and other
 /// backslash sequences are control codes with no glyphs of their own.
 pub(crate) fn plain_lines(source: &str) -> Vec<String> {
@@ -371,6 +456,25 @@ pub(crate) fn plain_lines(source: &str) -> Vec<String> {
         match c {
             '\\' => match chars.next() {
                 Some('n') => lines.push(String::new()),
+                Some('c' | 'C') => {
+                    // 6937B0 consumes the D/R/S selector as part of the colour
+                    // command, then 694780's optional decimal/hex word. Leaving
+                    // D behind draws a spurious 'd' before every default-colour
+                    // message. Only the actual escape is consumed; literal text
+                    // beginning with 'd' is unaffected.
+                    if chars.peek().is_some_and(|c| matches!(c, 'd'|'D'|'r'|'R'|'s'|'S')) {
+                        chars.next();
+                    }
+                    if chars.peek().is_some_and(char::is_ascii_digit) {
+                        let first = chars.next().unwrap();
+                        let hex = first=='0' && chars.peek().is_some_and(|c| matches!(c,'x'|'X'));
+                        if hex { chars.next(); }
+                        while chars.peek().is_some_and(|c| if hex {c.is_ascii_hexdigit()} else {c.is_ascii_digit()}) {
+                            chars.next();
+                        }
+                        if chars.peek()==Some(&';') {chars.next();}
+                    }
+                },
                 Some(_) | None => {}
             },
             '\n' => lines.push(String::new()),
@@ -403,7 +507,7 @@ pub(crate) fn advance(bank: &mut Bank, clock: u32, host: &dyn HostServices, font
             let shown = if text.skip || text.frame <= 0 {
                 total
             } else {
-                text.base_visible + (clock.saturating_sub(started) as usize) / text.frame as usize
+                text.base_visible + (text.reveal_rate.wrapping_mul(clock.wrapping_sub(started))/10) as usize / text.frame as usize
             };
             text.visible = shown.min(total);
             if text.visible == total {
@@ -411,6 +515,7 @@ pub(crate) fn advance(bank: &mut Bank, clock: u32, host: &dyn HostServices, font
                 text.skip = false;
             }
         }
+        text.last_clock=clock;
         if text.visible != before {
             text.generation += 1;
         }
@@ -418,7 +523,30 @@ pub(crate) fn advance(bank: &mut Bank, clock: u32, host: &dyn HostServices, font
     Ok(())
 }
 fn shape(text: &mut TextObject, width: i32, host: &dyn HostServices, font: &str) -> Result<()> {
+    let visible = text.visible;
+    shape_fragment(text, width, host, font)?;
+    if text.blocks.is_empty() { return Ok(()); }
+    let mut glyphs = Vec::new();
+    let mut y = 0.;
+    let mut lines = 0;
+    for block in &mut text.blocks {
+        shape_fragment(block, width, host, font)?;
+        let size = block.sizes[2].max(1.);
+        let metrics = host.font_metrics(font, size, 'あ')?;
+        for mut glyph in block.glyphs.iter().take(block.visible).cloned() { glyph.baseline[1] += y; glyphs.push(glyph); }
+        y += block.end[1] as f32 + metrics.ascent + metrics.descent + block.spacing[1];
+        lines += block.lines;
+    }
+    for mut glyph in core::mem::take(&mut text.glyphs) { glyph.baseline[1] += y; glyphs.push(glyph); }
+    text.end[1] += y as i32;
+    text.lines += lines;
+    text.visible = visible.min(glyphs.len());
+    text.glyphs = glyphs;
+    Ok(())
+}
+fn shape_fragment(text: &mut TextObject, width: i32, host: &dyn HostServices, font: &str) -> Result<()> {
     let source = crysirror_resource::text_stream::decode_auto(&text.text, 65534)?;
+    let (source,ids)=strip_ids(&source);text.native_ids=ids;
     let size = text.sizes[2].max(1.);
     let metrics = host.font_metrics(font, size, 'あ').context("CatSystem2 message font metrics")?;
     let line_height = metrics.ascent + metrics.descent + text.spacing[1];
@@ -441,7 +569,7 @@ fn shape(text: &mut TextObject, width: i32, host: &dyn HostServices, font: &str)
             if text.indent && pen[0] == text.margin[0] && matches!(character, '「' | '『' | '（') {
                 hanging = true;
             }
-            glyphs.push(crysirror_scene::layer::PositionedGlyph {
+            glyphs.push(crysirror_scene::layer::PositionedGlyph { font: None, horizontal_scale:None,font_width:None, cell_width: None,
                 crop: None,
                 character,
                 baseline: [pen[0], pen[1] + metrics.ascent],

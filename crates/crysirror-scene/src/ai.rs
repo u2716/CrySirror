@@ -2,7 +2,7 @@
 //! Behaviour tree definitions and per-entity AI state (ADR 0014). The
 //! executor lives in crysirror-engine (it needs physics, navigation and the
 //! gameplay system); everything here is saved data.
-use anyhow::{ensure, Result};
+use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 

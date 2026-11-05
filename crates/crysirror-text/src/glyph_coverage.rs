@@ -2,7 +2,7 @@
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. A copy is available at https://mozilla.org/MPL/2.0/.
 //! Bounded glyph-mask effects, independent of layout, renderer and native VM.
-use anyhow::{ensure, Result};
+use anyhow::{Result, ensure};
 
 pub struct Coverage {
     pub pixels: Vec<u8>,
@@ -51,6 +51,60 @@ pub fn disk_outline(src: &[u8], width: usize, height: usize, radius: u8) -> Resu
         size: [result.width, result.height],
         origin: [result.x, result.y],
     })
+}
+/// Square maximum-coverage dilation. Unlike square_face this is a centered
+/// border mask and does not repeatedly alpha-composite overlapping faces.
+pub fn square_outline(src: &[u8], width: usize, height: usize, radius: u8) -> Result<Coverage> {
+    validate(src, width, height, radius)?;
+    if width == 0 || height == 0 {
+        return Ok(Coverage {
+            pixels: vec![],
+            size: [0, 0],
+            origin: [0, 0],
+        });
+    }
+    let r = usize::from(radius);
+    let diameter = 2 * r + 1;
+    ensure!(
+        src.len()
+            .checked_mul(diameter * diameter)
+            .is_some_and(|work| work <= 64 * 1024 * 1024),
+        "square outline work budget"
+    );
+    let (w, h) = (width + 2 * r, height + 2 * r);
+    let mut pixels = vec![0; w * h];
+    for y in 0..height {
+        for x in 0..width {
+            let value = src[y * width + x];
+            for dy in 0..diameter {
+                for dx in 0..diameter {
+                    let cell = &mut pixels[(y + dy) * w + x + dx];
+                    *cell = (*cell).max(value);
+                }
+            }
+        }
+    }
+    Ok(Coverage {
+        pixels,
+        size: [w, h],
+        origin: [-(r as i32); 2],
+    })
+}
+
+#[cfg(test)]
+mod square_outline_tests {
+    use super::*;
+    #[test]
+    fn square_border_keeps_corners_and_uses_maximum_instead_of_alpha_sum() {
+        let square = square_outline(&[100, 200], 2, 1, 1).unwrap();
+        assert_eq!(square.size, [4, 3]);
+        assert_eq!(square.origin, [-1, -1]);
+        assert_eq!(&square.pixels[..4], &[100, 200, 200, 200]);
+        let disk = disk_outline(&[100], 1, 1, 1).unwrap();
+        assert_eq!(disk.pixels[0], 0);
+        assert_eq!(square_outline(&[100], 1, 1, 1).unwrap().pixels[0], 100);
+        assert!(square_outline(&[1], 2, 1, 1).is_err());
+    }
 }
 /// Union repeated source-over copies at every (x,y) in 0..=extent. The
 /// truncating union a+b-floor(a*b/255) preserves native coverage arithmetic.

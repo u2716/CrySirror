@@ -3,10 +3,10 @@
 //! Registry state is persistent; physical input, captures and receipts are live
 //! session state and never replay after deserialization. No VM callbacks run here.
 use crate::{input_buffer::InputInbox, ui::WidgetHitMask};
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use crysirror_core::{
     input_buffer::{InputBuffer, InputReceipt},
-    service::{buttons, InputFrame},
+    service::{InputFrame, buttons},
     state::ClientId,
 };
 use serde::{Deserialize, Serialize};
@@ -209,6 +209,10 @@ struct Live {
     hover_marked: BTreeSet<u32>,
     hover_dirty: bool,
     point: Option<[i32; 2]>,
+    /// Buttons pressed/held while engine UI owned their samples. They remain
+    /// masked after a modal closes until the physical release is observed.
+    ui_held: u64,
+    ui_explicit_held: BTreeSet<(u8, u32)>,
 }
 impl Live {
     fn init(&mut self, client: u32) -> Result<()> {
@@ -240,6 +244,8 @@ pub struct InputRouting {
     clients: BTreeMap<u32, Domain>,
     #[serde(default)]
     clock_ms: u64,
+    #[serde(skip)]
+    ui_owns_input: bool,
 }
 impl InputRouting {
     pub fn client_ids(&self) -> impl Iterator<Item = u32> + '_ {
@@ -247,6 +253,20 @@ impl InputRouting {
     }
     pub fn active(&self) -> bool {
         !self.clients.is_empty()
+    }
+    /// The engine menu/dialog consumed the current physical input frame.
+    pub fn ui_owns_input(&self) -> bool {
+        self.ui_owns_input
+    }
+    /// Shared native input observations use the same masked button state as
+    /// the journal, so querying raw held keys cannot bypass modal ownership.
+    pub fn observation_frame(&self, mut frame: InputFrame) -> InputFrame {
+        let blocked = if self.ui_owns_input { u64::MAX } else {
+            self.clients.values().fold(0, |bits, domain| bits | domain.live.ui_held)
+        };
+        frame.buttons_down &= !blocked;
+        frame.buttons_pressed &= !blocked;
+        frame
     }
     pub fn validate(&self) -> Result<()> {
         ensure!(self.clients.len() <= 64, "input routing owner count");
@@ -464,6 +484,12 @@ impl InputRouting {
         let mut staged = self.clone();
         for (client, d) in &mut staged.clients {
             d.live.init(*client)?;
+            d.live.ui_held &= frame.buttons_down;
+            let frame = InputFrame {
+                buttons_down: frame.buttons_down & !d.live.ui_held,
+                buttons_pressed: frame.buttons_pressed & !d.live.ui_held,
+                ..frame
+            };
             let j = &mut d.live.journal.as_mut().unwrap().0;
             if j.observed().is_none() {
                 d.live.point = Some([frame.pointer_x, frame.pointer_y]);
@@ -484,6 +510,11 @@ impl InputRouting {
             j.preflight_push(*client, time, frame)?;
         }
         for (client, d) in &mut staged.clients {
+            let frame = InputFrame {
+                buttons_down: frame.buttons_down & !d.live.ui_held,
+                buttons_pressed: frame.buttons_pressed & !d.live.ui_held,
+                ..frame
+            };
             d.live
                 .journal
                 .as_mut()
@@ -492,7 +523,22 @@ impl InputRouting {
                 .push(*client, time, frame)?;
         }
         staged.clock_ms = time;
+        staged.ui_owns_input = false;
         *self = staged;
+        Ok(())
+    }
+    /// A menu/dialog consumed this sample. Advance the route clock without
+    /// journaling its pointer or button edges. Existing receivers, captures,
+    /// queued pre-modal intents and acknowledgement receipts remain intact.
+    pub fn admit_ui_frame(&mut self, delta_ms: u64, frame: InputFrame) -> Result<()> {
+        let time = self.clock_ms.checked_add(delta_ms).context("input routing clock overflow")?;
+        for domain in self.clients.values_mut() {
+            // A release observed while still in the UI also clears the mask;
+            // a genuinely new post-modal press must not be swallowed.
+            domain.live.ui_held = frame.buttons_down | frame.buttons_pressed;
+        }
+        self.clock_ms = time;
+        self.ui_owns_input = true;
         Ok(())
     }
     /// Explicit device-neutral event admission, e.g. a controller backend. The
@@ -525,6 +571,22 @@ impl InputRouting {
             .get_mut(&client.0)
             .context("input routing owner missing")?;
         d.live.init(client.0)?;
+        let key = (event.source.mask(), event.code);
+        if self.ui_owns_input {
+            match event.phase {
+                InputRoutePhase::Press | InputRoutePhase::Repeat => {
+                    ensure!(d.live.ui_explicit_held.len() < 4096 || d.live.ui_explicit_held.contains(&key), "modal input held-key budget");
+                    d.live.ui_explicit_held.insert(key);
+                }
+                InputRoutePhase::Release => { d.live.ui_explicit_held.remove(&key); }
+                _ => {}
+            }
+            return Ok(());
+        }
+        if d.live.ui_explicit_held.contains(&key) {
+            if event.phase == InputRoutePhase::Release { d.live.ui_explicit_held.remove(&key); }
+            return Ok(());
+        }
         ensure!(d.live.events.len() < 4096, "input route event capacity");
         ensure!(
             d.live.sample.is_none() && d.live.journal.as_ref().unwrap().0.is_empty(),
@@ -667,8 +729,11 @@ impl InputRouting {
             });
             d.live.point = Some(point);
         }
-        let pointer =
-            buttons::MOUSE_LEFT | buttons::MOUSE_RIGHT | buttons::MOUSE_MIDDLE | buttons::WHEEL_UP | buttons::WHEEL_DOWN;
+        let pointer = buttons::MOUSE_LEFT
+            | buttons::MOUSE_RIGHT
+            | buttons::MOUSE_MIDDLE
+            | buttons::WHEEL_UP
+            | buttons::WHEEL_DOWN;
         for (bits, phase) in [
             (sample.frame.buttons_pressed, InputRoutePhase::Press),
             (sample.released, InputRoutePhase::Release),
@@ -700,6 +765,9 @@ impl InputRouting {
         d.live.init(client.0)?;
         if let Some(delivery) = &d.live.leased {
             return Ok(Some(delivery.clone()));
+        }
+        if self.ui_owns_input {
+            return Ok(None);
         }
         for _ in 0..512 {
             if let Some(plan) = &d.live.plan {
@@ -800,14 +868,17 @@ impl InputRouting {
     }
     /// Owner restore boundary: registry survives, live deliveries never replay.
     pub fn reset_input_after_restore(&mut self) {
+        self.ui_owns_input = false;
         for d in self.clients.values_mut() {
             d.live = Live::default();
         }
     }
     /// Discard only this client's old journals, leases and pointer captures.
     /// Its next admission gets a fresh engine epoch; peer leases stay valid.
-    pub fn reset_client_input_after_restore(&mut self,client:ClientId) {
-        if let Some(state)=self.clients.get_mut(&client.0){state.live=Live::default();}
+    pub fn reset_client_input_after_restore(&mut self, client: ClientId) {
+        if let Some(state) = self.clients.get_mut(&client.0) {
+            state.live = Live::default();
+        }
     }
 }
 
@@ -867,9 +938,10 @@ mod tests {
         assert_eq!(a.receiver, 9);
         assert_eq!(r.poll(C).unwrap(), Some(a.clone()));
         assert!(r.acknowledge(ClientId(2), a.receipt, true).is_err());
-        assert!(r
-            .apply_batch(C, &[InputRouteCommand::SetPriority { id: 1, priority: 5 }])
-            .is_err());
+        assert!(
+            r.apply_batch(C, &[InputRouteCommand::SetPriority { id: 1, priority: 5 }])
+                .is_err()
+        );
         ack(&mut r, &a, false);
         let b = r.poll(C).unwrap().unwrap();
         assert_eq!(b.receiver, 1);
@@ -1187,8 +1259,8 @@ mod tests {
         )
         .unwrap();
         let before = serde_json::to_value(&s).unwrap();
-        assert!(s
-            .tick(
+        assert!(
+            s.tick(
                 16,
                 InputFrame {
                     buttons_down: buttons::MOUSE_LEFT,
@@ -1198,7 +1270,8 @@ mod tests {
                 },
                 [100, 100]
             )
-            .is_err());
+            .is_err()
+        );
         assert_eq!(serde_json::to_value(&s).unwrap(), before);
         assert_eq!(s.input_routes.stats(C).queued_samples, 0);
     }
@@ -1221,18 +1294,19 @@ mod tests {
         let widget =
             serde_json::from_value(serde_json::json!({"id":4,"kind":"button","rect":[0,0,10,10]}))
                 .unwrap();
-        assert!(s
-            .submit(
+        assert!(
+            s.submit(
                 C,
                 &ServiceBatch {
                     ui: vec![UiCommand::Put { widget }],
                     ..Default::default()
                 }
             )
-            .is_err());
+            .is_err()
+        );
         assert_eq!(serde_json::to_value(&s).unwrap(), before);
-        assert!(s
-            .submit(
+        assert!(
+            s.submit(
                 ClientId(2),
                 &ServiceBatch {
                     input_routes: vec![InputRouteCommand::Put {
@@ -1241,10 +1315,11 @@ mod tests {
                     ..Default::default()
                 }
             )
-            .is_err());
+            .is_err()
+        );
         assert_eq!(serde_json::to_value(&s).unwrap(), before);
-        assert!(s
-            .tick(
+        assert!(
+            s.tick(
                 16,
                 InputFrame {
                     buttons_pressed: buttons::CTRL,
@@ -1253,12 +1328,13 @@ mod tests {
                 },
                 [100, 100]
             )
-            .unwrap());
+            .unwrap()
+        );
         let d = s.input_routes.poll(C).unwrap().unwrap();
         assert_eq!(d.event.phase, InputRoutePhase::Press);
         let before = serde_json::to_value(&s).unwrap();
-        assert!(s
-            .submit(
+        assert!(
+            s.submit(
                 C,
                 &ServiceBatch {
                     input_routes: vec![InputRouteCommand::SetPriority {
@@ -1268,7 +1344,8 @@ mod tests {
                     ..Default::default()
                 }
             )
-            .is_err());
+            .is_err()
+        );
         assert_eq!(serde_json::to_value(&s).unwrap(), before);
     }
 }

@@ -13,6 +13,8 @@ def triangle_mesh():
     b = bytearray(0x400)
     def put(fmt, at, *values): struct.pack_into(fmt, b, at, *values)
     put('>II', 0, 0x1000d, len(b))
+    put('>H', 8, 1)  # one declared MG draw set
+    put('>4I', 48, 0x10100, 12, 0, 0x4f000000)
     put('>I', 24, 48)  # top = 64
     put('>H', 64, 1)
     put('>i', 76, 8)  # group pointer table = 84
@@ -38,6 +40,7 @@ def triangle_mesh():
 
 class GoWSceneTests(unittest.TestCase):
     def test_topology_controls_reuse_and_winding(self):
+        self.assertEqual(edge_indices(bytes([0,1,0,0,0,1,0,0,0x10,0xd0]),6,3),[0,2,1,2,0,1])
         self.assertEqual(edge_indices(bytes([0,0,0,0,0,1,0,0,0,0xc6]),12,6),
                          [0,2,1,0,3,2,3,4,2,2,5,3])
         self.assertEqual(edge_indices(bytes([0,3,0,0,0,1,2,0,0x1c,0xf0,0x24]),6,3),[0,2,1,0,1,2])
@@ -66,6 +69,29 @@ class GoWSceneTests(unittest.TestCase):
     def test_unknown_vertex_layout_fails(self):
         b=triangle_mesh();b[389]=99
         with self.assertRaises(WadError):mesh(b,'unknown attribute')
+
+    def test_all_declared_draw_sets_and_joint_bindings_are_preserved(self):
+        first=triangle_mesh();b=first+first
+        struct.pack_into('>I',b,4,len(b));struct.pack_into('>H',b,8,2)
+        struct.pack_into('>I',b,28,48+1024)
+        struct.pack_into('>I',b,56+1024,7)
+        struct.pack_into('>f',b,768+1024,2.0)
+        parts=mesh(b,'two authored draw sets')
+        self.assertEqual([p['draw_set']for p in parts],[0,1])
+        self.assertEqual([p['draw_joint']for p in parts],[0,7])
+        self.assertEqual(parts[1]['positions'][0],[2,0,0])
+        struct.pack_into('>I',b,28,48)
+        with self.assertRaisesRegex(WadError,'duplicate'):mesh(b,'aliased draw set')
+
+    def test_skin_input_uv_binding_is_a_declared_float2_stream(self):
+        b=triangle_mesh()
+        struct.pack_into('>H',b,256,1)
+        struct.pack_into('>i',b,276,160)  # bindings at 436
+        struct.pack_into('>i4BI',b,436,464,15,241,2,18,24)
+        struct.pack_into('>6f',b,900,0,0,1,0,0,1)
+        p=mesh(b,'skin UV')[0]
+        self.assertTrue(p['uv_supported'])
+        self.assertEqual(p['uv'],[[0,0],[1,0],[0,1]])
 
     def test_inline_dds_mip_selection_and_vendor_flags(self):
         b=bytearray(204);struct.pack_into('>I',b,0,0x10007);struct.pack_into('>I',b,64,3)

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Checked channel layout conversion for engine image resources.
 //! Stored alpha association is preserved; this API does not premultiply RGB.
-use anyhow::{ensure, Result};
+use anyhow::{Result, ensure};
 #[derive(Debug, Clone, Copy)]
 pub enum PixelLayout {
     Rgba,

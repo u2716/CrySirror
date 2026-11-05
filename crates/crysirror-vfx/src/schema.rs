@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
-use anyhow::{bail, ensure, Result};
+use anyhow::{Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -563,7 +563,12 @@ pub struct EventHandler {
 /// Named data-driven emitter: schedule, initialization, typed module stack and renderer.
 pub struct EmitterSpec {
     pub id: String,
+    /// Explicit monotonic pool restart epoch. A higher value can replace this
+    /// emitter while preserving other pools and their shared sequence stream.
+    pub revision: u64,
     pub enabled: bool,
+    /// Freeze and hide existing particles without updating or consuming RNG draws.
+    pub paused: bool,
     pub enabled_parameter: Option<String>,
     pub target: SimulationTarget,
     pub space: SimulationSpace,
@@ -578,13 +583,20 @@ pub struct EmitterSpec {
     pub screen: Option<crate::screen::ScreenSpriteTarget>,
     /// Optional CPU falling/periodic-drift/nonuniform-atlas node.
     pub falling_atlas: Option<crate::falling_atlas::FallingAtlasSpec>,
+    #[serde(default)]
+    /// Optional explicitly clocked streak or buoyant atlas motion in pixel space.
+    pub drifting_atlas: Option<crate::drifting_atlas::DriftingAtlasSpec>,
+    /// Optional explicitly clocked elliptical atlas particles.
+    pub orbit_atlas: Option<crate::orbit_atlas::OrbitAtlasSpec>,
     pub events: Vec<EventHandler>,
 }
 impl Default for EmitterSpec {
     fn default() -> Self {
         Self {
             id: "emitter".into(),
+            revision: 0,
             enabled: true,
+            paused: false,
             enabled_parameter: None,
             target: SimulationTarget::Cpu,
             space: SimulationSpace::World,
@@ -597,6 +609,8 @@ impl Default for EmitterSpec {
             render: Default::default(),
             screen: None,
             falling_atlas: None,
+            drifting_atlas: None,
+            orbit_atlas: None,
             events: vec![],
         }
     }
@@ -964,7 +978,40 @@ impl EmitterSpec {
         self.render.validate()?;
         if let Some(node) = &self.falling_atlas {
             node.validate()?;
-            ensure!(self.target==SimulationTarget::Cpu&&self.screen.is_some()&&self.space==SimulationSpace::Local&&self.update.is_empty()&&self.events.is_empty(),"VFX falling node requires CPU local screen sprites without conflicting updates/events");
+            ensure!(
+                self.target == SimulationTarget::Cpu
+                    && self.screen.is_some()
+                    && self.space == SimulationSpace::Local
+                    && self.update.is_empty()
+                    && self.events.is_empty(),
+                "VFX falling node requires CPU local screen sprites without conflicting updates/events"
+            );
+        }
+        if let Some(node) = &self.drifting_atlas {
+            node.validate()?;
+            ensure!(
+                self.falling_atlas.is_none()
+                    && self.orbit_atlas.is_none()
+                    && self.target == SimulationTarget::Cpu
+                    && self.screen.is_some()
+                    && self.space == SimulationSpace::Local
+                    && self.update.is_empty()
+                    && self.events.is_empty(),
+                "VFX drifting node requires exclusive CPU local screen sprites"
+            );
+        }
+        if let Some(node) = &self.orbit_atlas {
+            node.validate()?;
+            node.validate_capacity(self.capacity)?;
+            ensure!(
+                self.falling_atlas.is_none()
+                    && self.target == SimulationTarget::Cpu
+                    && self.screen.is_some()
+                    && self.space == SimulationSpace::Local
+                    && self.update.is_empty()
+                    && self.events.is_empty(),
+                "VFX orbit node requires exclusive CPU local screen sprite updates"
+            );
         }
         if let Some(screen) = &self.screen {
             screen.validate()?;
@@ -1002,7 +1049,10 @@ pub fn validate_gpu_profile(spec: &EmitterSpec) -> Result<()> {
         spec.overflow == OverflowPolicy::DropNew,
         "GPU VFX does not implement kill_oldest allocation"
     );
-    ensure!(spec.events.is_empty(),"GPU VFX child-emitter handlers require a GPU event-consumer mapping; choose CPU explicitly");
+    ensure!(
+        spec.events.is_empty(),
+        "GPU VFX child-emitter handlers require a GPU event-consumer mapping; choose CPU explicitly"
+    );
     ensure!(
         !matches!(spec.render, RenderSpec::Ribbon { .. }),
         "GPU ribbons require resident trail history; choose CPU explicitly"
@@ -1055,7 +1105,40 @@ impl SystemSpec {
             ensure!(names.insert(e.id.clone()), "duplicate VFX emitter id");
             e.validate(&self.parameters)?;
             if let Some(node) = &e.falling_atlas {
-                ensure!(matches!(self.clock,crate::falling_atlas::SimulationClock::External{..})&&self.sequence_rng.is_some()&&self.warmup_seconds==0.&&self.time_scale==1.&&node.tick_hz==self.fixed_step_hz,"VFX falling node requires explicit external clocks, one stream, matching fixed ticks and no warmup/time scaling");
+                ensure!(
+                    matches!(
+                        self.clock,
+                        crate::falling_atlas::SimulationClock::External { .. }
+                    ) && self.sequence_rng.is_some()
+                        && self.warmup_seconds == 0.
+                        && self.time_scale == 1.
+                        && node.tick_hz == self.fixed_step_hz,
+                    "VFX falling node requires explicit external clocks, one stream, matching fixed ticks and no warmup/time scaling"
+                );
+            }
+            if let Some(node) = &e.drifting_atlas {
+                ensure!(
+                    matches!(
+                        self.clock,
+                        crate::falling_atlas::SimulationClock::External { .. }
+                    ) && self.sequence_rng.is_some()
+                        && self.warmup_seconds == 0.
+                        && self.time_scale == 1.
+                        && node.tick_hz == self.fixed_step_hz,
+                    "VFX drifting node requires explicit clocks and one stream"
+                );
+            }
+            if let Some(node) = &e.orbit_atlas {
+                ensure!(
+                    matches!(
+                        self.clock,
+                        crate::falling_atlas::SimulationClock::External { .. }
+                    ) && self.sequence_rng.is_some()
+                        && self.warmup_seconds == 0.
+                        && self.time_scale == 1.
+                        && node.tick_hz == self.fixed_step_hz,
+                    "VFX orbit node requires explicit clocks, matching ticks and one shared stream"
+                );
             }
             if let Some(screen) = &e.screen {
                 ensure!(
@@ -1067,10 +1150,10 @@ impl SystemSpec {
         for e in &self.emitters {
             for h in &e.events {
                 ensure!(
-                    !self
-                        .emitters
-                        .iter()
-                        .any(|target| target.id == h.emitter && target.falling_atlas.is_some()),
+                    !self.emitters.iter().any(|target| target.id == h.emitter
+                        && (target.falling_atlas.is_some()
+                            || target.orbit_atlas.is_some()
+                            || target.drifting_atlas.is_some())),
                     "VFX falling child event targets are not implemented"
                 );
                 ensure!(

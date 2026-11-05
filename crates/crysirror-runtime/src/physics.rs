@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Scene-to-physics bridge. Per-client persistent solvers are derived from
 //! saved World data; visual revisions never recreate an unchanged collider.
-use crate::vfs::DiskVfs;
 use anyhow::{ensure, Context, Result};
 use crysirror_asset::pbr as cpu;
 use crysirror_core::{
@@ -233,7 +232,7 @@ impl Physics {
         self.meshes.retain(|k, _| !k.starts_with(&prefix));
         self.synced_revision = None;
     }
-    pub fn sync(&mut self, world: &World, fs: &mut DiskVfs) -> Result<()> {
+    pub fn sync(&mut self, world: &World, fs: &mut dyn FileSystem) -> Result<()> {
         if self.synced_revision == Some(world.revision) {
             return Ok(());
         }
@@ -518,7 +517,7 @@ impl Physics {
         matrix: Mat4,
         scale: Vec3,
         baked: bool,
-        fs: &mut DiskVfs,
+        fs: &mut dyn FileSystem,
     ) -> Result<backend::Shape> {
         let shape = match &c.shape {
             ColliderShape::Box { half_extents } => backend::Shape::Cuboid {
@@ -582,7 +581,7 @@ impl Physics {
             shape.scaled(scale)
         }
     }
-    fn mesh(&mut self, client: u32, g: &Geometry, fs: &mut DiskVfs) -> Result<MeshData> {
+    fn mesh(&mut self, client: u32, g: &Geometry, fs: &mut dyn FileSystem) -> Result<MeshData> {
         let (asset, index) = match g {
             Geometry::Model { asset, mesh } => (asset.clone(), Some(*mesh as usize)),
             Geometry::Scene { asset } => (asset.clone(), None),
@@ -626,7 +625,7 @@ impl Physics {
         if let Some(mesh) = self.meshes.get(&cache) {
             return Ok(mesh.clone());
         }
-        let read = |fs: &mut DiskVfs, path: &str| -> Result<Vec<u8>> {
+        let read = |fs: &mut dyn FileSystem, path: &str| -> Result<Vec<u8>> {
             let p = VfsPath::new(Mount::Asset, path).map_err(|e| anyhow::anyhow!("{e}"))?;
             fs.read(ClientId(client), &p)
                 .map_err(|e| anyhow::anyhow!("{e}"))
@@ -665,7 +664,7 @@ impl Physics {
         self.meshes.insert(cache, mesh.clone());
         Ok(mesh)
     }
-    pub fn step(&mut self, world: &mut World, fs: &mut DiskVfs, dt: f32) -> Result<()> {
+    pub fn step(&mut self, world: &mut World, fs: &mut dyn FileSystem, dt: f32) -> Result<()> {
         self.sync(world, fs)?;
         for (&client, backend) in self.worlds.get_mut() {
             if !world.client_paused(client) {

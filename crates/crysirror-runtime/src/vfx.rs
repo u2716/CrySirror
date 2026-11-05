@@ -296,6 +296,7 @@ impl VfxRuntime {
         let mut desired = BTreeMap::new();
         for system in &self.inputs {
             for emitter in &system.spec.emitters {
+                if emitter.paused{continue;}
                 if let Some(target) = &emitter.screen {
                     target.validate()?;
                     ensure!(

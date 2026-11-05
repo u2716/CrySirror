@@ -70,6 +70,9 @@ impl Interpreter {
     pub(crate) fn flag(&self, index: u32) -> u32 {
         self.flags.get(index as usize).copied().unwrap_or(0)
     }
+    pub(crate) fn flag_count(&self) -> u32 {
+        self.flags.len() as u32
+    }
     pub(crate) fn set_flag(&mut self, index: u32, value: u32) -> bool {
         // The native dirty bit is set even for a rejected index.
         self.dirty = true;
@@ -138,6 +141,18 @@ impl Interpreter {
     }
     ///728870 clears selection only when the deleted bank was selected. The
     ///global flag/backup/default state and other players remain untouched.
+    /// 728D20: the player's local variables as their raw words.
+    pub(crate) fn player_bank_bytes(&self,owner:u32)->Option<Vec<u8>> {
+        self.locals.get(&owner).map(|bank|bank.variables.iter().flat_map(|v|v.to_le_bytes()).collect())
+    }
+    /// 728CF0: as many words as both sides hold; the rest keep their values.
+    pub(crate) fn restore_player_bank(&mut self,owner:u32,bytes:&[u8])->bool {
+        let Some(bank)=self.locals.get_mut(&owner) else {return false};
+        for (slot,word) in bank.variables.iter_mut().zip(bytes.chunks_exact(4)) {
+            *slot=u32::from_le_bytes(word.try_into().unwrap());
+        }
+        true
+    }
     pub(crate) fn delete_player_bank(&mut self,owner:u32)->bool {
         if self.locals.remove(&owner).is_none(){return false;}
         if self.selected==Some(owner){self.selected=None;}true

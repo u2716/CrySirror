@@ -3,7 +3,7 @@
 // License, v. 2.0. A copy is available at https://mozilla.org/MPL/2.0/.
 //! Shared vector authoring geometry and exact filled-path bounds.
 use crate::vector::{PathCommand, VectorPath};
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 pub type Affine2 = [f32; 6];
 pub const IDENTITY: Affine2 = [1., 0., 0., 1., 0., 0.];
 /// Validate finite invertible affine coordinates, shared with VectorPath.

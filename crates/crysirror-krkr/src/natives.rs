@@ -113,14 +113,22 @@ pub(crate) type Setter = fn(&mut Rt, Option<ObjectHandle>, Variant) -> Result<()
 pub(crate) fn methods(rt: &mut Rt, h: ObjectHandle, list: &[(&str, Native)]) {
     for (name, f) in list {
         let f = *f;
-        rt.register_object_native_with_arg_count(h, *name, NativeArgCount::Any, f);
+        let composite = *name == "operateRect";
+        rt.register_object_native_with_arg_count(h, *name, NativeArgCount::Any,
+            move |rt: &mut Rt, this, args| {
+                if !composite { crate::image_api::before_bitmap_call(rt)?; }
+                f(rt, this, args)
+            });
     }
 }
 
 pub(crate) fn properties(rt: &mut Rt, h: ObjectHandle, list: &[(&str, Getter, Setter)]) {
     for (name, g, s) in list {
         let (g, s) = (*g, *s);
-        rt.register_object_native_property(h, *name, g, s);
+        rt.register_object_native_property(h, *name, g, move |rt: &mut Rt, this, value| {
+            crate::image_api::before_bitmap_call(rt)?;
+            s(rt, this, value)
+        });
     }
 }
 
@@ -3045,6 +3053,7 @@ fn layer_copy(
             return layer_operate_ps_cpu(rt, h, &a, blend, false, member);
         }
     }
+    crate::image_api::before_bitmap_call(rt)?;
     let atop_mode = match (atop, mode) {
         (false, _) => None,
         _ if copy_main => Some("copy"),
@@ -3190,9 +3199,9 @@ fn ps_blend(mode: i64) -> Option<crysirror_core::image_processing::PsBlend> {
     })
 }
 
-/// holdAlpha operateRect in a Photoshop mode, computed as an ordered CPU
-/// composite of the two layers' sources; the result replaces the layer image
-/// when the job completes (the TJS call suspends until then).
+/// Photoshop-mode bitmap policy over the shared immutable compositor.
+/// Small independent writes batch until an ordering boundary; self/large or
+/// unresolved inputs retain the single-operation preparation path.
 fn layer_operate_ps_cpu(
     rt: &mut Rt,
     h: ObjectHandle,
@@ -3217,8 +3226,36 @@ fn layer_operate_ps_cpu(
     let source = rt.host().layer(src)?.clone();
     let dest = rt.host().layer(h)?.clone();
     let math = crysirror_core::image_processing::ImageCompositeMath::Ps { blend, hold_alpha };
+    if rt.host().bitmap_batch.as_ref().is_some_and(|b| b.target != h.0 || b.operations >= 64) {
+        crate::image_api::before_bitmap_call(rt)?;
+    }
     let input = composite_with(rt, h, src, &dest, &source, rect, [dx, dy], opacity, math);
     let suspendable = rt.host().can_suspend;
+    // The first operation may need a Canvas capture before it can enter a
+    // batch. Its temporary backing is part of this same redraw transaction.
+    rt.host_mut().bitmap_redraw_pending = true;
+    // Consecutive independent bitmap writes are one bounded shared image DAG.
+    // Reads, other native calls and callback completion seal it before their
+    // effects. No bitmap algorithm or pixel storage is implemented in the VM.
+    let small_source = source.image_width > 0 && source.image_height > 0
+        && source.image_width.saturating_mul(source.image_height) <= 65_536
+        && matches!(source.image_source, Some(crysirror_core::image_processing::ImageInput::Resource(_)
+            | crysirror_core::image_processing::ImageInput::Solid { .. }
+            | crysirror_core::image_processing::ImageInput::Asset { .. }));
+    if suspendable && src != h && small_source {
+        if let Some(input) = input {
+            let host = rt.host_mut();
+            let layer = host.layer_mut(h)?;
+            layer.image_source = Some(input);
+            layer.full_alpha = None;
+            layer.blank = false;
+            let batch = host.bitmap_batch.get_or_insert(crate::image_api::BitmapBatch { target: h.0, operations: 0 });
+            batch.operations += 1;
+            return Ok(Variant::Void);
+        }
+    }
+    crate::image_api::before_bitmap_call(rt)?;
+    let input = composite_with(rt, h, src, &dest, &source, rect, [dx, dy], opacity, math);
     let Some(input) = input.filter(|_| suspendable) else {
         // A composed layer has no CPU source yet, and a native input callback
         // cannot suspend. Queue the operation: captures and composites finish in

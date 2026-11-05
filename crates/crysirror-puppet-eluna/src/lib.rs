@@ -14,6 +14,8 @@
 //! difference is that positions stay in model space instead of the Siglus
 //! render-target clip space.
 #![forbid(unsafe_code)]
+pub mod inertia;
+pub mod modulation;
 pub mod motion;
 pub use eluna::emote_key_from_header;
 use anyhow::{bail, ensure, Context, Result};
@@ -38,6 +40,10 @@ pub struct BridgeDiagnostics {
     pub mixed_mask_chains: usize,
 }
 
+/// A CPU playback checkpoint; immutable model and texture storage remain shared.
+#[derive(Clone)]
+pub struct PlaybackCheckpoint { runtime: EmoteRuntime, pending_ms: f32 }
+
 pub struct ElunaPuppet {
     runtime: EmoteRuntime,
     /// Model-space origin (bounds minimum at load) and canvas size.
@@ -48,9 +54,49 @@ pub struct ElunaPuppet {
     /// Fractional milliseconds not yet passed to the integer-ms player.
     pending_ms: f32,
     diagnostics: std::cell::Cell<BridgeDiagnostics>,
+    parameter_offsets: std::collections::BTreeMap<String, f32>,
+    parameter_batch: bool,
+    parameter_batch_dirty: bool,
 }
 
 impl ElunaPuppet {
+    /// Coalesce parameter geometry updates until `end_parameter_batch`.
+    /// Values remain readable immediately; render the puppet after ending the
+    /// batch. Batches cannot nest. Checkpoint restores retain this boundary.
+    pub fn begin_parameter_batch(&mut self) -> Result<()> {
+        ensure!(!self.parameter_batch, "nested puppet parameter batch");
+        self.parameter_batch = true;
+        self.parameter_batch_dirty = false;
+        Ok(())
+    }
+
+    /// End a parameter batch and evaluate its final geometry once.
+    pub fn end_parameter_batch(&mut self) -> Result<()> {
+        ensure!(self.parameter_batch, "puppet parameter batch is not open");
+        self.parameter_batch = false;
+        if std::mem::take(&mut self.parameter_batch_dirty) {
+            self.runtime.commit_variables()?;
+        }
+        Ok(())
+    }
+    pub fn checkpoint(&self) -> PlaybackCheckpoint {
+        PlaybackCheckpoint { runtime: self.runtime.clone(), pending_ms: self.pending_ms }
+    }
+    pub fn restore_checkpoint(&mut self, checkpoint: &PlaybackCheckpoint) {
+        self.runtime = checkpoint.runtime.clone();
+        self.pending_ms = checkpoint.pending_ms;
+        self.parameter_offsets.clear();
+    }
+    /// Additive parameter values applied only while sampling a frame. Timelines and
+    /// their interpolation targets retain their own unmodified state.
+    pub fn set_parameter_offsets(&mut self, mut offsets: std::collections::BTreeMap<String, f32>) -> Result<()> {
+        ensure!(offsets.values().all(|value| value.is_finite()), "non-finite puppet parameter offset");
+        // Finished transitions commonly leave zero entries behind. They must
+        // not cause a player clone and a second complete geometry evaluation.
+        offsets.retain(|_, value| *value != 0.);
+        self.parameter_offsets = offsets;
+        Ok(())
+    }
     /// Loads PSB sources (main file first) with an optional decryption key.
     pub fn from_psb(sources: &[&[u8]], key: Option<u32>) -> Result<Self> {
         let runtime = EmoteRuntime::from_psb_sources(sources, key)?;
@@ -63,6 +109,9 @@ impl ElunaPuppet {
             textures,
             pending_ms: 0.,
             diagnostics: Default::default(),
+            parameter_offsets: Default::default(),
+            parameter_batch: false,
+            parameter_batch_dirty: false,
         };
         let scene = this.runtime.current_scene();
         let (min, max) = match scene.bounds {
@@ -89,12 +138,23 @@ impl ElunaPuppet {
     pub fn origin(&self) -> [f32; 2] {
         self.origin
     }
+    /// IEmotePlayer::IsAnimating: a timeline or variable transition is running.
+    pub fn is_animating(&self) -> bool {
+        self.runtime.is_settling()
+    }
     pub fn diagnostics(&self) -> BridgeDiagnostics {
         self.diagnostics.get()
     }
 
     fn frame_in_model_space(&self) -> Result<PuppetFrame> {
-        let scene = self.runtime.current_scene();
+        ensure!(!self.parameter_batch, "finish puppet parameter batch before sampling");
+        let sampled = if self.parameter_offsets.is_empty() { None } else {
+            let mut sampled = self.runtime.clone();
+            let values = self.parameter_offsets.iter().filter_map(|(name, offset)| self.runtime.variable_value(name).map(|value| (name.clone(), value + offset))).collect::<Vec<_>>();
+            sampled.set_variables_immediate(&values)?;
+            Some(sampled)
+        };
+        let scene = sampled.as_ref().unwrap_or(&self.runtime).current_scene();
         let texture_slot: HashMap<u32, u32> = self.textures.iter().enumerate().map(|(i, r)| (*r, i as u32)).collect();
         let mut diag = BridgeDiagnostics::default();
         let usable = |s: &EmoteStaticSprite, diag: &mut BridgeDiagnostics| {
@@ -309,7 +369,14 @@ impl PuppetSource for ElunaPuppet {
     }
     fn set_parameter(&mut self, id: &str, value: f32, duration_ms: f32) -> Result<()> {
         ensure!(self.runtime.variable_value(id).is_some(), "unknown E-mote variable '{id}'");
-        self.runtime.set_variable(id, value, duration_ms.max(0.) * TICKS_PER_SECOND / 1000., 0.)
+        let ticks = duration_ms.max(0.) * TICKS_PER_SECOND / 1000.;
+        if self.parameter_batch {
+            self.runtime.stage_variable(id, value, ticks, 0.);
+            self.parameter_batch_dirty = true;
+            Ok(())
+        } else {
+            self.runtime.set_variable(id, value, ticks, 0.)
+        }
     }
     /// E-mote variables are not latched: timelines keep writing them, so a
     /// release has nothing to undo.

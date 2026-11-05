@@ -3,8 +3,8 @@
 //! Adapted from rfvp 062fec82033b554b9eb3b5da069518c0c96a354e texture.rs.
 //! No VM, files, renderer, font or GPU dependency. Stored colour bytes are
 //! retained exactly; BGRA frames may contain associated RGB (not normalized).
-use crate::{rgba_len, ImageSurface, MAX_DECODED_BYTES};
-use anyhow::{ensure, Context, Result};
+use crate::{ImageSurface, MAX_DECODED_BYTES, rgba_len};
+use anyhow::{Context, Result, ensure};
 #[derive(Debug, Clone)]
 pub struct NvsgImage {
     pub format: u16,
@@ -94,7 +94,7 @@ impl NvsgImage {
     /// Native frontends retain the offset/cut policy; callers choose display blend.
     pub fn frame_stored_rgba(&self, index: usize) -> Result<ImageSurface> {
         let input = self.frames.get(index).context("NVSG frame index")?;
-        use crate::pixels::{to_rgba8, PixelLayout};
+        use crate::pixels::{PixelLayout, to_rgba8};
         let layout = match self.format {
             0 => PixelLayout::Bgr,
             1 | 2 => PixelLayout::Bgra,

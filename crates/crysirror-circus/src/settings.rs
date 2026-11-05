@@ -1,6 +1,6 @@
 //! Native system.dat preference ABI (40EB40/40C1C0), distinct from save slots.
 //! Buffers contain only game values; file/device pointers never enter this type.
-use anyhow::{ensure, Result};
+use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 pub const SETTINGS_BYTES: usize = 0x4b80;
 pub const SYSTEM_BYTES: usize = SETTINGS_BYTES + 0x7f8;
@@ -56,6 +56,24 @@ impl SystemData {
     pub(crate) fn reset_preferences(&mut self) {
         let defaults = Self::default();
         self.0[..SETTINGS_BYTES].copy_from_slice(&defaults.0[..SETTINGS_BYTES]);
+    }
+    ///438420 reads the same four inline intervals or500-entry overflow
+    ///directory used by4030F0. It stops at the first zero start WORD.
+    pub(crate) fn label_is_read(&self, scene: i32, label: u16) -> Result<bool> {
+        if scene < 0 { return Ok(false); }
+        let scene = usize::try_from(scene)?;
+        ensure!(scene < 650, "Circus read-check scene directory extent");
+        let record = 2636 + scene * 20;
+        let pointer = u32::from_le_bytes(self.0[record..record + 4].try_into()?) as usize;
+        ensure!(pointer < 500, "Circus read-check overflow pointer");
+        let (at, count) = if pointer == 0 { (record + 4, 4) } else { (15640 + pointer * 4, 500 - pointer) };
+        for n in 0..count {
+            let lo = u16::from_le_bytes(self.0[at + n * 4..at + n * 4 + 2].try_into()?);
+            if lo == 0 { break; }
+            let hi = u16::from_le_bytes(self.0[at + n * 4 + 2..at + n * 4 + 4].try_into()?);
+            if lo <= label && label <= hi { return Ok(true); }
+        }
+        Ok(false)
     }
     /// Merge a native read-label interval and encode it in the original four
     /// inline ranges / shared500-range overflow layout (4030F0/402430).

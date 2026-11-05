@@ -41,10 +41,26 @@ pub(crate) struct ImageState {
     pub mask: u32,
     pub bitmap_type: u32,
     pub path_mode: u32,
+    /// 749790: source-local clipping, and 749950's alternate coordinate mode.
+    pub clip: Option<[i32; 4]>,
+    pub coordinate_mode: u32,
+    pub key_position: [i32;2],
+    pub key_position_mode:u32,
+    pub tone: [u32; 3],
+    pub filter: u32,
+    pub blur: [u8;2],
+    /// 7499B0/74A0C0 retain an immutable engine image, never a renderer pointer.
+    #[cfg(feature="runtime")]
+    pub reference: Option<crate::native_image_resource::Prepared>,
+    pub copy_rect: Option<[i32; 4]>,
+    pub object_reference:Option<u32>,
     pub size_reference: Option<MetadataReference>,
     pub position_reference: Option<MetadataReference>,
     pub slider: Option<crate::fes_button::Slider>,
     pub filename: Vec<u8>,
+    pub bg_table_kind: Option<u8>,
+    pub bg_table_source: Option<Vec<u8>>,
+    pub bg_table: Option<crate::fes_bg_table::Table>,
     pub frame: u32,
     pub ids: [u32; 32],
     pub mapped_ids: bool,
@@ -69,10 +85,17 @@ impl Default for ImageState {
             mask: 0,
             bitmap_type: 0,
             path_mode: 0,
+            clip: None, coordinate_mode: 0,key_position:[0;2],key_position_mode:0, tone: [100;3], filter: 0, blur: [1;2],
+            #[cfg(feature="runtime")]
+            reference: None,
+            copy_rect: None,object_reference:None,
             size_reference: None,
             position_reference: None,
             slider: None,
             filename: Vec::new(),
+            bg_table_kind: None,
+            bg_table_source: None,
+            bg_table: None,
             frame: 0,
             ids: core::array::from_fn(|i| i as u32),
             mapped_ids: false,
@@ -123,6 +146,9 @@ impl ImageState {
         let flags = v.word(0);
         if loaded && flags & 1 != 0 {
             self.filename = v.string(12).to_vec();
+            #[cfg(feature="runtime")]
+            { self.reference = None; }
+            self.copy_rect = None;self.object_reference=None;
             self.image_changed = true;
         }
         if flags & 6 != 0 {
@@ -361,15 +387,15 @@ impl State {
     }
     pub fn new(kind: u8) -> Result<Self> {
         Ok(match kind {
-            0 | 5 => Self::Base,
+            0 | 5 | 35 => Self::Base,
             1 => Self::CImage(Default::default()),
             2 => Self::Image(Default::default()),
             6 => Self::Image(ImageState { button: Some(crate::fes_button::ButtonState { enabled: true, ..Default::default() }), ..Default::default() }),
             3 => Self::CPlane(Default::default()),
             4 => Self::Plane(Default::default()),
-            // DIFIMAGE draws through IMAGE; SAVEPANEL's thumbnails need save data first.
-            25 => Self::Image(Default::default()),
-            12 => Self::Base,
+            // DIFIMAGE and SAVEPANEL draw through IMAGE; fes_save_panel adds the save data.
+            25 | 11 | 12 => Self::Image(Default::default()),
+            16 | 17 => Self::Image(ImageState { bg_table_kind: Some(kind), ..Default::default() }),
             // SCROLL, SCROLL2 and SLIDER: their bitmap draws through IMAGE; 38 is LOGSTRING8's plane.
             13 | 14 | 15 => Self::Image(ImageState { button: Some(crate::fes_button::ButtonState { enabled: true, ..Default::default() }), slider: Some(crate::fes_button::Slider::new(kind == 15)), ..Default::default() }),
             24 | 38 => Self::Plane(PlaneState { text: Some(Default::default()), log_string: true, ..Default::default() }),
@@ -388,6 +414,9 @@ impl State {
             Self::CImage(image) => image.apply(v, index, false)?,
             Self::Image(image) => {
                 image.apply(v, index, true)?;
+                if image.bg_table_kind.is_some() && v.word(0) & 0x8000000 != 0 {
+                    image.bg_table_source = Some(v.string(800).to_vec());
+                }
                 // 768190: the BUTTON family after the IMAGE one.
                 if let Some(button) = &mut image.button {
                     let flags = v.word(0);
@@ -397,6 +426,7 @@ impl State {
                     if flags & 0x4000 != 0 {
                         button.group = v.string(308).to_vec();
                     }
+                    if flags & 0x4000000 != 0 {button.navigation=[v.word(153) as i32,v.word(154) as i32,v.word(155) as i32];}
                     if flags & 0x2000000 != 0 {
                         button.kind = v.word(152);
                     }

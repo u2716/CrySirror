@@ -111,6 +111,8 @@ struct FramePass {
     handlers: Vec<Variant>,
     handler: usize,
     now: u64,
+    paints: Option<Vec<usize>>,
+    paint: usize,
 }
 
 pub struct KrkrVm {
@@ -145,7 +147,12 @@ impl KrkrVm {
         if live < self.gc_threshold {
             return;
         }
-        let extra: Vec<Variant> = self.pass.as_ref().map(|p| p.handlers.clone()).unwrap_or_default();
+        let mut extra: Vec<Variant> = self.pass.as_ref().map(|p| p.handlers.clone()).unwrap_or_default();
+        if let Some(pass) = &self.pass {
+            if let Some(paints) = &pass.paints {
+                extra.extend(paints.iter().skip(pass.paint).map(|id| Variant::Object(ObjectHandle(*id))));
+            }
+        }
         let started = std::time::Instant::now();
         let freed = rt.collect_garbage(&extra);
         let live = rt.live_object_count();
@@ -505,6 +512,7 @@ impl KrkrVm {
                             Some(crysirror_core::image_processing::ImageInput::Ternary{..})=>"three-input image".into(),
                             Some(crysirror_core::image_processing::ImageInput::Transition{..})=>"transition".into(),
                             Some(crysirror_core::image_processing::ImageInput::Resource(_))=>"resource".into(),
+                            Some(_)=>"shared image operation graph".into(),
                             None=>"composed canvas".into(),
                         };
                         bail!("alpha-mask hit for native layer {id} canvas {} at {px},{py} requires a prepared shared image or composed-canvas query; source={source}",layer.slot);
@@ -797,6 +805,7 @@ impl KrkrVm {
             if rt.is_suspended() {
                 rt.resume_suspended().map_err(|e| anyhow::anyhow!("{e}"))?;
             } else {
+                rt.host_mut().bitmap_redraw_pending = false;
                 self.flush(h)?;
                 return Ok(true);
             }
@@ -874,6 +883,8 @@ impl KrkrVm {
                 handlers,
                 handler: 0,
                 now,
+                paints: None,
+                paint: 0,
             });
         }
         for _ in 0..16384 {
@@ -963,21 +974,32 @@ impl KrkrVm {
             }
             // Layer.callOnPaint: before the frame is drawn, each flagged layer
             // gets one onPaint() call and its flag is cleared (krkrz order).
-            let flagged: Vec<usize> = {
+            if self.pass.as_ref().unwrap().paints.is_none() {
                 let rt = self.rt.as_ref().unwrap();
-                rt.host()
+                let flagged = rt.host()
                     .layers
                     .keys()
                     .copied()
                     .filter(|id| rt.object_member(ObjectHandle(*id), "__lp_callOnPaint").is_truthy())
-                    .collect()
+                    .collect();
+                self.pass.as_mut().unwrap().paints = Some(flagged);
+            }
+            let paint = {
+                let pass = self.pass.as_mut().unwrap();
+                let id = pass.paints.as_ref().unwrap().get(pass.paint).copied();
+                if id.is_some() { pass.paint += 1; }
+                id
             };
-            for id in flagged {
+            if let Some(id) = paint {
                 let rt = self.rt.as_mut().unwrap();
+                if !rt.object_valid(ObjectHandle(id)) || !rt.host().layers.contains_key(&id) { continue; }
                 rt.set_object_member(ObjectHandle(id), "__lp_callOnPaint", Variant::Integer(0));
                 if has_member(rt, ObjectHandle(id), "onPaint") {
                     self.call(ObjectHandle(id), "onPaint", vec![])?;
                 }
+                // Complete this callback's resource dependencies before the
+                // next paint callback can enter TJS or mutate its Canvases.
+                continue;
             }
             self.pass = None;
             self.frames += 1;
@@ -1010,10 +1032,10 @@ fn err(e: Error) -> anyhow::Error {
 impl VmAdapter for KrkrVm {
     fn presentation_pending(&self) -> bool {
         self.rt.as_ref().is_some_and(|rt| {
-            // A native modal must be shown so the owner can answer it. Resource
-            // suspension, in contrast, must not expose a half-redrawn text cell.
-            rt.host().dialog_pending.is_none()
-                && (rt.is_suspended() || self.pass.is_some())
+            // Only a batched bitmap redraw retains the previous picture.
+            // Ordinary resource waits and the rest of a VM frame do not block
+            // startup/animation presentation. Native modals must remain visible.
+            rt.host().dialog_pending.is_none() && rt.host().bitmap_redraw_pending
         })
     }
     fn engine_id(&self) -> &'static str {

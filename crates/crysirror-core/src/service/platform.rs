@@ -18,6 +18,9 @@ pub trait PlatformIntegrationProvider: Send + Sync {
     /// Read a previously prepared host capability. This must not initialize an
     /// SDK, perform I/O or wait on a worker. SDK ownership/preparation stays in
     /// the provider; available means its integration is ready for use.
-    fn info(&self, client: crate::state::ClientId, integration: PlatformIntegration)
-        -> crate::Result<PlatformIntegrationInfo>;
+    fn info(
+        &self,
+        client: crate::state::ClientId,
+        integration: PlatformIntegration,
+    ) -> crate::Result<PlatformIntegrationInfo>;
 }

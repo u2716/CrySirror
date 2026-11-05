@@ -6,7 +6,7 @@ Native integration is first-class VM plus thin semantic adapter. Generic image,
 text, UI, input, layer, effects and audio work belongs reusable shared APIs.
 Never execute the original EXE/DLL, host another engine, upload a legacy composed
 screen, ACK unknown operations, distribute owner data/fonts, commit/push or add CI.
-Only release cargo validation is authorized. Append own STATUS sections only.
+Only release cargo validation is authorized.
 
 ## Current actual frontier
 
@@ -1284,3 +1284,332 @@ Remaining ids: `native_pending.rs` + `native_inert.rs` (≈176).
   image; 257: start = 5DCCE0 time, running = 1, speed this[46] = 1.0/1.5/2/3/4 by setconf
   B91BFC+77780; 259 answers running; 260 sets this[28]/this[31]; 261/258 finish (5EFEE0).
   Per-frame image generation is slot 5EFA10 (not yet read).
+- Class 26 per frame (slot 5EFA10): frame = ftol((now - start) * speed); frame ≥ duration →
+  677090 draws image B's region (+0x80,+0x84,+0x94,+0x98) at (+0x8C,+0x90) and stops; else
+  5EFF10(frame) composes into the 0x5C output image and 677090 draws it at (+0x8C,+0x90).
+  5EFF10 kernel (exact): phase = clamp(min(frame,dur)*512/dur, 0, 512); per pixel w =
+  clamp(phase - 256 + rule.B, 0, 256) (rule byte 0 of a 32bpp image at offsets +0x9C/+0xA0);
+  each of the 4 channels out = (B*w + A*(256-w)) >> 8; A at (+0x74,+0x78), B at (+0x80,+0x84)
+  plus the same offsets; extent (+0xC0,+0xC4).
+- 677090 targets the render manager's screen surface: 70DAE0(rm[2]) = rm[2]+8, a tiled
+  texture grid uploaded by 6802A0. Its place in the frame composition (above/below planes) is
+  NOT yet established; the adapter currently treats image draws to destination 0 as no-ops.
+  This must be settled before any transition class can be shown. Scripts around 0991EB call
+  261 (ImageList work bitmap handle), 112/116 (images), 340, 862, 111 before creating "wipe".
+
+### Batch 5 (compile-checked only)
+
+- 111 (64BB80): space-separated "name[:frame]" images (6A5AB0/6A53B0); first loaded is the
+  base, later ones AlphaOnAlphaScalar256 over it at their canvas origins (bitmap +0x24/+0x28,
+  68B620 clipping) — same composite math the adapter already uses for 115. Blend mode
+  bitmap +0x54 is not consulted (as for 115).
+- 365/366/364/368 (64B010/64B3A0/64C190/64B9C0): refcounted "image" file blocks; 364 decodes
+  frame a2 from the block (new `Pending::begin_bytes`, `Request::Bytes`); 368 writes the
+  6A1E70 36-byte stdinfo {origin x/y, size, canvas, bpp/8, base x/y}. Only HG3 is decoded
+  (68F480 also tries other formats).
+- 369 (64B410 → 68BEC0): 32-bit images only, every stored byte * ARGB factor / 255 (floor);
+  new shared `ImageEffect::ChannelScale { factors }` in crysirror-image.
+- Not yet: 315/316/317 serialize an object through 7898E0 (0x454-byte records with names at
+  +0x14 and 78A3F0/78A630/78A680 sub-objects); object kind still unidentified.
+
+### Batch 6 (compile-checked only)
+
+- Plane blend 402 (6718F0 factor pairs) via new shared `Blend::{SourceOver, Modulate,
+  InverseDestination, ModulateAdd}`. Movie 267 stop, 998 position. Container/string bank
+  243/253. E-mote 909 (busy).
+- Scene table: `NativeScene` now has both 72CCB0 lists: `names` (72CCF0/72D050/72D8F0) and
+  `history` (72CDB0/72D080/72CF40/72D7C0). This fixes the old 329/330/331/333/982 arms that used
+  one list for both. 385/386 (72D120/72D320 format incl. legacy records), 978/979/981/993,
+  608, 980, 1033 (no .cstl, as 1038). Not done: 994 (5B12A0), 991/992 (5B0B10 family).
+- 1036 language prefixes (`language_prefix_of`).
+- Particles, class 16 (`native_classes/particles.rs`): 271/272/273/274/275/426/427/693. ptcl
+  KCS script restarted per particle per frame (877270), native table A40778 ported (0..50,
+  48 fails visibly). Quads published as one PuppetFrame part per task; 67EC90 translation by
+  vertex w, 678170 perspective 1000/(1000 - z) in x/y only. rhw is dropped, so rotated quads are
+  affine, not perspective-correct. Layer blend carries 6718F0's mode; overlap within the task's
+  isolated target is Normal except mode 1 (Add). The 67C1C0 camera (renderer +0x60/+0xE4) is
+  not applied. `ptclpi` = Windows DLL: 693 logs and takes the load-failure path (no particles).
+- Screen surface notes for transitions: 67FB80 draws pass callbacks 1, then [2, 67B810, 3] while
+  pass 2 answers true, then 4 and 5 (callback +0xC0 registered by classes 35..). 67B810 uses
+  renderer grid tiles through 680990 as render targets. Whether 677090 output sits above or
+  below Planes is still open.
+- HG-2 (241, format 4, encoder 69FF50) has no shared codec. 649/576/688/689 not read further.
+- 168/347/348: `<SOUND><use3d>` (+0xF144) is 0 in Nekopara vol3, so no 3D interface exists and the
+  original changes nothing; use3d != 0 fails visibly (no spatial routing yet). 279..283, 287, 288,
+  570: Win32 developer dialogs (classes 32/33/47), noted once in the log and not presented.
+- 903 stays pending: SOUND 214 reads a per-channel name→value map at slot +44 whose writer is
+  not identified, so answering 0 is not established as faithful.
+- Classes 44/45/46 (600/601, 690..692): "export" worker threads (633640, 633EC0, 634250), not read.
+
+### Batch 7: transitions (compile-checked only)
+
+- Correction: 677090 does not draw to a "screen". rm[2]+8 is the VRAM tile atlas (6802A0 uploads, 680990
+  selects a tile); Planes sample it. In the adapter VRAM is the main ImageList Canvas.
+- Classes 26/27/28/29/30/31 in `effect_tasks.rs` (natives 196, 197, 200, 203). Kernels read exactly:
+  Soft T=clamp(f*512/d-256+r,0,256); Fade f*256/d; Hard r>=256-f*256/d; Ramp start[r]=d-r*d/255 then
+  (f-start)*256/v; Mix (B*w+A*(256-w))>>8 on 4 channels, A.a==0 takes B.rgb (5EF930). Alpha classes 28/31:
+  a=(A.a*T)>>8 or 255 minus it. Shared `ImageTransition.rule_table` (RuleTable/RuleOperation).
+- Scripts pass the list work bitmap (LIST_BITMAP) as second image, so the frame is laid over the live
+  list Canvas with inverted weights rather than reading it back: result agrees within rounding, and
+  the alpha result assumes an opaque Canvas. Draw records (key 0x7F00xxxx) use source-over,
+  while 677090 replaces pixels; this matters only for non-opaque output (classes 28/31).
+- Classes 18 raster, 19, 20 etc.: 196 logs once and drops parameters; 201 is still pending.
+
+### Batch 8 (compile-checked only, nothing run)
+
+- Task factory 5DD580: classes 3,4,5,7,9,10,55,56 have no constructor (null task). Scripts
+  create 2,6,8,12,15,16,18,26-36,38,39,43-48,50-52,54,57,58,62.
+- Class 48 (Select.kcs): natives 611-621 need config word 232; the script passes 196, so
+  they are no-ops. Name tables 633-640 read `config.int/nametable.csv`; 567 and 904 done.
+- Platform tasks 44 ChangeWP, 45 Export, 46 ChangeSnd, 62 Tweet: start logs and does not touch
+  the OS or network, finished queries answer 1, 1022 answers 0. **Deliberate gap.**
+- Database 869-873/878 (`qdb.int`, absent in Nekopara vol3): empty-map model; a present file
+  fails visibly because the 82ABD0 parser is not ported.
+- `tables_3d.rs`: 683-685 over `config.int/3DTable.txt`. `host_misc.rs`: 76 (parent id),
+  315-317 (scripts only keep and free the handle), 514, 577, 598, 628, 741 (windowed 0),
+  846 (no host minimize request, logged once), 1009 (bmp/png only, type 5 fails visibly),
+  1049 (`text_window::plain_text`).
+- `scene_records.rs`: 991/992/994 per-entry chain of zlib records; tracked flags are
+  GAME/flag local0..7, tracked strings are `localstr` in config/localstr.xml. 790 now reads
+  GAME/flag local/global ranges from `NativeSettings::flag_ranges`.
+- `render_settings.rs`: 541/542 (tile release), 568/859 (viewport depth range), 681 (cache
+  drop), 858 (shader query, result dropped) change no frame; 879/881 only keep link state
+  because draws carry no frame motion. 879 also skips the original's sound message 211.
+- 576/688/689 send messages 431/439/440/441 to a task id read from the script struct at
+  0x2c630. No class handler with those cases was found by constant search, so the receiver is
+  still unidentified. 649 targets class 34 (message 343, handler 62BED0).
+- Render manager holds one frame hook (67FE70, this[48..49]), so one shader class at a time.
+  Hook phases: 0 region, 2 per-pass target and z band (a4+20..a4+24), 3 composite, 5 end of
+  frame. Class/native map: 35 521/522, 36 523/524, 38 527/528, 39 530/531 (905 same message
+  with word 4 = 1), 50 853/854/855, 51 856/857, 52 860/861, 57 967/968, 58 970/971/972; 520
+  reads the enable state (377). Each needs z-band capture plus its D3D9 pixel shader decoded;
+  the renderer has `Paint::Snapshot`, `Distortion` and `CompositeFrame`, but no z-band backdrop.
+- Nekopara vol3 ships no kx2.int or veff archive. Natives 81/988 should be no-ops when the file
+  is absent and fail visibly when present. Message 46 (433) builds a child "ptn plane" grid;
+  messages 79/80 (398/399) keep a per-plane trail history (5E31D0).
+- E-mote lip sync (924): 637F30 message 540 reads sound messages 222/200 and drives players
+  through 574CE0/575600; it needs a sound level source the host does not expose yet.
+- 538 → 68D840 pads an image's canvas and shifts its offsets (+0x30/+0x34).
+
+### Batch 9 (compile-checked; unit tests of this crate only, nothing run against a game)
+
+- `native_pending.rs` and `native_inert.rs` are gone: no KCS native is acknowledged silently
+  any more. An id outside every family fails with "unsupported native gcall".
+- `shader_tasks.rs`: rdraw 38 (527/528), rwipe 39 (530/531/905), rwmos 50 (853/854/855), rfmos
+  51 (856/857) are shared screen transitions (`layers` op `transition`), started when the
+  script hands over parameters, durations in 60 Hz frames. Scenes use `rdraw` 1165 times,
+  `rwipe` 170, `rwmos` 8. **Deviations:** the originals fade only under their z band (the text
+  window stays out of it); if a bitmap publishes in an earlier frame than the parameters, the
+  fade has nothing old to show and the change is a cut. Classes 35, 36, 52, 57, 58 fail
+  visibly when enabled: no Nekopara scene uses them.
+- `plane_effects.rs`: 344 world matrix → `local_matrix` (a perspective row fails visibly), 398/399
+  history trail (5DFE50/5E29C0, mode 0 only; modes 1..5 fail visibly), 433 ptn child grid, 701/988
+  video object through `Movies` with 702/989 answering its id, 81 kx2 (missing file no-op;
+  present file fails visibly: Grisaia's kx2.int has raster_f/x/y.kx2).
+- `scene_log.rs`: 699/1034 rebuild the log from the visit history on a worker. The `novel` page
+  flag (72E8E0 a7) is not modelled because `native_log::Row` has no pages.
+- `emote_messages.rs` + `native_m2.rs`: `#attribute` (910), `#touch` tables (1029/1030), `action.def`
+  macros (1027/1028/1047/1048/908, with `restore`; `easing` is linear), lip sync 924 by `#lip_flow`
+  and `#lip_table`/`#lip_variable`, ended at a marked step once `audio_playing` is false. Voices with a
+  `.lv` table (see batch 10) drive the variable from it instead. 929/930 play a same-named PSB
+  motion. 907, 931, 965, 1025 are no-ops: the shared player has no inertia solver, and
+  `#pattern_shift` is commented out in this title.
+- `cg_register.rs`: 419..425, 458, 459 and the FES `cgreg*`, `loadlist2` natives; the register's
+  save record is this adapter's JSON, so it does not read an original game's savegen.dat record.
+  cglist layout: {next, list no, count} then records {size, name[64], n, strings[n * 64 or 256]}.
+- `fes_save_panel.rs`: SAVEPANEL (class 12) is now an IMAGE state; setsave, getsavestr,
+  getsavedate, ptype SIMAGE (thumbnail placed by the panel bitmap's frame of that part id), dispid.
+  241 writes PNG into the record, not HG-2.
+- `fes_image_methods.rs`: settbl, pl, getbase, getoffset, setanm/anm (`.anm`: 32-byte header, count at
+  +8, 68-byte rows with frame word 2, hold word 4). `arc` → motArc with 6 words. Still logged as
+  no capability: attach. Inert: attr/refex (no `ats` tag in the images checked), setnum, mode.
+- `particle_plugins.rs`: em_note, em_double, em_question, em_question_a, em_sweat, em_angry restated
+  from their DLL code (vtable init 2070-style, update, Hermite path). `particles.rs` gained
+  pivot/rotation/scale per particle (5F4DD0). Scenes use em_* 325 times. rain and dash are in
+  `particle_rain.rs` and `particle_dash.rs`; blur, steam, filmnoise (`particle_effects.rs`) and cmnptcl (`particle_cmn.rs`) follow; see batch 12.
+- `host_misc.rs`: 903 reads `pcm_tag.int/<sound>.tag` ({name[20], value} rows). 649/650: child FES state
+  is not saved (logged once). 576/688/689 belong to class 43 (3D view), created only with
+  `config.int/3DTable.txt`, which this title lacks; a real class 43 fails visibly.
+- Grisaia: see batch 11 for `scene.int.FWP`.
+
+## Batch 10 (2026-11-04): implemented after the first offscreen pass
+
+- Plane trail modes 1..5 (`plane_effects.rs`): 5E2C70 turns and stretches only unkeyed copies, 5E1BB0
+  halves the chord, 5E1F30 does not, and both stop before the last record. 5E22A0 (modes 4, 5) hangs
+  copies off the path at -90 degrees, turns the Plane itself, and 5DFA20 sets the slice thickness. Width
+  stands in for +0x160, which the original only has for rectangle Plane kinds. Not run in a game: no
+  script reached here uses a non-zero mode.
+- `native_classes/database.rs` replaces the empty 869..873/878 model. The table format is `KCDB` (magic,
+  packed size, plain size, zlib of columns and fixed rows), not XML. Only INDEX and the flags are kept,
+  since no native reads the titles. Neither test title ships a qdb, so only the unit tests exercise it.
+- Tone table 594..597 (`tables_3d.rs`), parsed from 78D750. Unit tested; no data file in the test titles.
+- `particle_rain.rs`: the `rain` plugin. Unit-compiled only; no scene use found.
+- Voice levels: 5EAC60 loads `<voice>.lv`, 60 Hz floats, and 5A1F30 feeds them straight to the lip
+  variable. Nekopara's voice archives carry `.lv` beside each `.ogg`, so this needs no PCM from the host.
+  **Inference:** the table index is an argument not traced to its source; playback position is used
+  because the tables hold exactly 60 entries per second of voice (301 entries, 5.01 s in XA_13_001).
+  `.lpb` (message 220, `LPD` format) appears in neither title and is not implemented; such a file is
+  ignored, not reported.
+- Offscreen check (Nekopara vol3, `--headless --no-audio`, 16000 frames): exits 0 with no error, and
+  story frames render with Backdrop in the build. A temporary log showed `face_talk` receiving table
+  values (1.48, 4.39). Under `--no-audio` voices end within a few frames, so only a few lip ticks run
+  per line and mouth timing against heard voice is **not** verified. Transition mid-frames and particle
+  visuals have not been inspected. Native 521/523 (blur, mosaic) did not fire in those frames, so they
+  and raster are compile-checked only.
+
+Still open: inertia solver (`#inertia_*`, `#material`, 907/931), 965, 1025; plugins blur, dash, steam,
+filmnoise, cmnptcl; `.lpb`; kx2 models (81); 3D view class 43 save state; child FES state save (649/650);
+FES attach, attr, refex, setnum, mode; true mesh motion for 57/58/wbreak (crossfade timing now); `novel`
+page flag; 3D sound paths 168/347/348.
+
+## Batch 11 (2026-11-04): inertia, E-mote options, dash, Grisaia start-up
+
+- `crysirror-puppet-eluna/src/inertia.rs`: reusable spring solver (5930C0, 594530, 594760, 5948F0).
+  `native_m2.rs` feeds it the Plane base (native 84 → message 51 → 574410) and `#material*`, `#inertia_*`
+  tables. It stays idle until the base first moves (574410 sets +0x160). Offsets add onto the variable.
+- FES `m2_getconf`/`m2_setconf` (786360, 786840) over `M2Config` in `NativeSettings`. `iner_lv`,
+  `iner_enable`, `eff_iner`, `eff_blink`, `eff_lip` take effect. `motion`, `eff_dif`, `fade`, `interleave` are
+  stored only. Saved as `m2config.json` on the Save mount, this adapter's own form, not the original's.
+- 907 is real. 931 (5743F0 → the motion setup's a5[11]), 965 (`#pattern_shift`) and 1025 stay no-ops.
+- `particle_dash.rs`. Its active counter is per instance; the original's is a static shared by instances.
+- FES natives: `fw_*` are empty on the owner's instruction; the scripts set `$700=2` themselves. `config` reads
+  volumes (`vol_pcm` is mapped to `vol_voice` by inference). `opensite`, `opensiteenc`, `clipboard` log and do
+  nothing. `lockactive` does nothing. `delete` hides and disables the member rather than destroying it.
+- Bugs found by running Grisaia, both of which affect any title:
+  - A repeated `#DEFINE` with a larger count (`PLANE pl[4]`, then `pl[6]`) now adds the missing members;
+    the whole-array count stays the first one (7544F0, 755400). The old "first declaration stands" was wrong.
+  - Button hits no longer require display: title scripts click invisible map buttons.
+- `detect.rs` mounts `<name>.int.FWP` as `<name>.int`.
+- **FWP resource decoding is now implemented** in `crysirror-formats-arc/src/legacy/e/int_fwp.rs`,
+  called automatically by the existing `cat-system/int` resource loader for `.int.FWP` sources.
+  Installer `0x482DE0` XORs the inclusive interval `[file_size/5, file_size-file_size/5]`,
+  indexed by absolute offset modulo 40. The plugin recovers all 40 bytes from consistent,
+  independent encrypted `CatScene` headers, without network access or embedded game passwords.
+  Shared `crysirror_resource::io::xor_region` keeps reads random-access and precedes normal INT
+  Blowfish and alias handling. The existing detection mounts need no configuration changes.
+  Release compilation and reading/decompressing all 281 original Grisaia scenes passed;
+  this is resource validation, not post-fix gameplay validation. No desktop binary rebuild here:
+  the next ordinary player build includes the change. No new test files are retained.
+
+## Batch 12 (2026-11-04): compile-checked only, nothing run, on the owner's instruction
+
+- All `ptclpi` plugins now have an implementation: `particle_effects.rs` (filmnoise, blur, steam) and
+  `particle_cmn.rs` (cmnptcl, reading `ptcl<a><bbb>.plist` from `ptcl.int`; no plist means no particles, as in the
+  original). `Record` gained depths, colour, per-vertex alpha and visibility. No test title has a scene using
+  them or ships a plist, so none has been seen on screen.
+- cmnptcl deviations: the key-to-field mapping relies on the keys sorting alphabetically, which fits every field
+  checked. Tangential force uses the current radial direction; the original's branch on the sign of the
+  tangential value (+0x120) was read only in outline. Blend function keys are ignored. The plist location
+  (`ptcl.int/`) is inferred; the original asks the host through vtable +128.
+- FES natives added: bitcount; isdebug, inputdevice, check_install, vram_get (0); psversion (0x300, a chosen value);
+  fps_get (the configured rate, not a measurement); setexvar/getexvar (session only); cursormove, touch_kill,
+  touch_enable, enablebgbutton, dbgtime, exit_boot, m2_resetview, m2_waiteff, checktitle,
+  steam_achievement_reset (log and do nothing).
+
+- 649/650 (7582E0, 758280): a child FES's 512 local words go into the save record; loading restores them and enters
+  `_LOAD_` when the script has it. The record is the same 2048 bytes as the original's.
+- `m2eff`, `m2att`, `m2fspeed`, `m2prmscale`, `m2iner`, `m2enable_blink`, `m2enable_lip`, `m2splay`, `m2draw`: 778050..778230
+  only count the array and return in this build, so they are accepted silently.
+
+- `.lpb` voices (`lpb_levels`, 5AB280, 5A1B90): tried before `.lv`, as 6383xx asks message 220 first. No test title has one.
+- `dic_*` over a fuller database model (titles, IND1..24, affixes) now kept in `NativeSettings`; no test title has a qdb.
+- `sortsave`, `sortsave2`: newest first by the Save mount's modified time.
+- Approximations: `fontcom` answers an empty font list (the host does not enumerate fonts); `cgreg_getlist` always empties
+  its string instead of walking the CG list.
+
+- 3D sound 168/347/348 under `<use3d>`: position and minimum distance become pan and inverse-distance gain for a listener at
+  the origin. Velocity (Doppler) has no host control. An approximation of DirectSound3D, unheard so far.
+- Screen meshes in `shader_tasks.rs`: wbreak (class 52, 5FDA10, 5FE650), page curl (57, 5FFA60) and cell flip (58, 601030) replace
+  the crossfade. They draw through `PuppetFrame` textured by `backdrop:frame`, a new case in `crysirror-wgpu`, with an
+  invisible Backdrop layer to capture. Known differences: the mesh samples the previous frame's capture; wbreak draws from a
+  local generator, not the session random streams; 58's back face is left to what lies beneath; the curl's 16-pixel cell is
+  chosen, since 5FEE20's cell size was not read.
+- kx2 (81, 67CE50): meshes parse and replace the Plane's quad with UVs over the file's bounds. 681FE0's UV use was read only in
+  outline. The file is read on the VM thread, against ADR 0050's rule for I/O. Grisaia's raster_f/x/y.kx2 have this layout.
+
+The remaining-item list from this batch is superseded by Batch 13 below. FWP automatic decoding is implemented in the shared INT reader.
+
+## Batch 13 — FES operations and shared image/text resources (2026-11-04)
+
+Implementation:
+- FES maketask/deletetask deliver original KCS messages 103/104 and string slots
+  700/701; they do not call the native task factory directly.
+- Resource redirects use client-scoped shared Storage state. Reads, metadata and
+  native-file fast paths apply one bounded rewrite; write authority is unchanged.
+  Empty native search strings fail instead of entering the original infinite loop.
+- HG3 ats metadata feeds FES attr and natives 536/724. Image clip/tone/filter,
+  ref/refex/copy, coordinate/key anchors, button attach/drag, sound time/tag waits,
+  ismot and built-in arc/pend variants use actual resource and input state.
+- Shared ImageEffect operations add fixed-point triangular blur and saturating
+  coverage neighborhoods. Image jobs own all pixels; FES retains native policy.
+  The 24-bit horizontal scratch bug is intentionally repaired: both axes write
+  every RGB channel through the initialized shared fixed16 convolution. Native
+  weights, truncation and padding remain; undefined native pixels are not reproduced.
+- PANEL/SAVEPANEL use separate configured/live parts, original source and digit
+  selection, shown-part order, setnum, scoped frame resources, glyph batches and
+  immutable image composition. PNG save thumbnails return through shared decode.
+- FILELIST make/get and BGTABLE loading/exist use scoped storage workers. Save
+  panel requests retain original evaluated parameters across dependency polls.
+- mag controls reveal timing, strid reads inline IDs, NVSTRING insert retains
+  independently styled paragraphs. Novel page boundaries survive log rebuilding.
+- E-mote 931 restores a shared playback checkpoint. Pattern shifts have independent
+  curves/durations. Native 965 loads waiting ranges, maintains correlated groups,
+  and consumes session MT streams on the owner after asynchronous model loading.
+- The reviewed Grisaia/Nekopara factories return null for class 14/43. No fake
+  3D task is allocated. Save 576/688/689 preserve their distinct missing-receiver
+  results; unknown factories with a real 3D task remain unsupported.
+
+Compilation: release checks with the runtime feature are recorded in STATUS.md.
+Behavior: no tests, game runs or pixel comparison were performed in this batch.
+No new test code or test files were added. docs/api was not regenerated: its
+current generator is test-driven and tests were not run.
+
+Remaining profiles, explicitly rejected rather than acknowledged:
+- Foreign HG-2 save thumbnails have no shared decoder; CrySirror-written PNG is supported.
+- PANEL zero-size font/GDI default-font behavior is not reproduced.
+- FILELIST ambient Windows directory substitutions other than the scoped save
+  root and BGTABLE2's non-CSV trailing-token extension are not implemented.
+- Other native binaries with real class43 or additional bitmap setters need
+  their own semantic profiles. These results do not establish complete games.
+
+
+## Batch 14 — actual offscreen checks and live log/menu fixes (2026-11-04)
+
+Native698 now shares977 insertion; its absent eighth argument is history index-1.
+KCS format strings are expanded before log filtering. The plain history mode
+removes native controls without treating CP932 trail bytes as backslashes; the
+preserve-layout option is retained but its original global configuration source
+is not mapped. Formatted scene/name/body remain bounded.
+
+Menu40019 and40041 open shared modal information dialogs. Shared menus/dialogs
+consume input before native journals without deleting receivers or invalidating
+receipts; UI-held keys stay masked until release. Unknown commands such as40037
+still fail explicitly. No external system utility is launched.
+
+Final release compilation passed; real Metal offscreen runs exited0 for Grisaia
+6000frames (698 count7/history inserts7), Nekopara15000frames (977 count14/inserts14),
+and40019 open/Enter-close. Shared blur GPU readback matched RGB references exactly.
+No physical OS-menu clicks/audio output/full playthrough/unit suite were tested.
+Evidence is in target/verification/catsystem2/offscreen-current/summary.json.
+
+The lower-left color block observed in this batch is fixed by Batch15 below.
+Unresolved: final info-dialog line clipping and Ctrl stress performance dominated
+by repeated E-mote scene rebuilds. The Ctrl run was interrupted and must not be reported as a pass.
+
+
+## Batch 15 — MASK4 destination-alpha composition (2026-11-04)
+
+The lower-left Grisaia block was sys_mwnd_fmask.hg3, a231x251 pink mask whose
+FES object declares MASK4. Original687370's32bpp channel-mask kernel688EF0
+multiplies destination alpha by source alpha, keeping straight destination RGB;
+it ignores the ordinary blend weight, after743600's zero-alpha rejection.
+FES now maps that policy to shared Layer/Canvas DestinationIn. The engine owns
+the premultiplied GPU operation and snapshot support. Masks1..3 remain explicit
+unsupported channel-selection profiles. This GPU mapping is not a claim of
+bit-exact native integer-rounding parity for all alpha values.
+
+Release compilation passed. Grisaia6000-frame offscreen run exits0 with seven
+698/history inserts and zero former pink pixels; screenshot inspected. Shared
+Canvas alpha0/128/255 probes on black/white match normal-alpha references within
+one channel byte. No unit tests, audio or complete-playthrough claims.
+Evidence: target/verification/catsystem2/offscreen-current/mask-result.json.

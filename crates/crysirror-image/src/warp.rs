@@ -4,7 +4,7 @@
 //! Convex projective image mapping. Inverse homography, center sampling and
 //! premultiplied bilinear filtering; outside the destination quad is transparent.
 use crate::ImageSurface;
-use anyhow::{ensure, Result};
+use anyhow::{Result, ensure};
 fn solve<const N: usize>(mut a: Vec<Vec<f64>>) -> Result<Vec<f64>> {
     for c in 0..N {
         let pivot = (c..N)

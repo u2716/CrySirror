@@ -6,9 +6,9 @@
 //! dialog is open it takes all UI input; choosing a button queues one
 //! `dialog_result` event (value = button id) for the owning client.
 use super::{UiEvent, WidgetId};
-use crate::layer::{rectangle, Paint, Primitive};
-use anyhow::{ensure, Context, Result};
-use crysirror_core::service::{buttons, InputFrame, SIMPLE_TEXT_LAYOUT, UNWRAPPED_TEXT_LAYOUT};
+use crate::layer::{Paint, Primitive, rectangle};
+use anyhow::{Context, Result, ensure};
+use crysirror_core::service::{InputFrame, SIMPLE_TEXT_LAYOUT, UNWRAPPED_TEXT_LAYOUT, buttons};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 fn size() -> u16 {
@@ -131,8 +131,10 @@ impl DialogSystem {
     pub fn reset_input(&mut self) {
         self.pressed = None;
     }
-    pub fn reset_client_input_after_restore(&mut self,owner:u32) {
-        if self.pressed.is_some_and(|value|value.0==owner){self.pressed=None;}
+    pub fn reset_client_input_after_restore(&mut self, owner: u32) {
+        if self.pressed.is_some_and(|value| value.0 == owner) {
+            self.pressed = None;
+        }
     }
     fn active(&self) -> Option<(u32, &Dialog)> {
         self.clients.iter().next().map(|(o, d)| (*o, d))

@@ -112,7 +112,7 @@ impl ImageProcess for EncodedJob {
                 self.decode = None;
                 self.input = None;
                 self.bytes = Arc::from([]);
-                self.state = ImageProcessState::Failed(error.to_string());
+                self.state = ImageProcessState::Failed(format!("{error:#}"));
             }
         }
         Ok(self.state.clone())

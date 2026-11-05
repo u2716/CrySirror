@@ -6,6 +6,59 @@ use std::sync::Arc;
 pub fn memory(bytes: Vec<u8>) -> Arc<dyn AssetReader> {
     Arc::new(MemoryAssetReader(Arc::from(bytes)))
 }
+/// A read-at view applying repeating XOR only inside an exclusive byte range.
+/// Key indexing uses absolute source offsets, including for unaligned/partial
+/// reads. No full-file copy, filesystem access or shared seek cursor is needed.
+pub fn xor_region(
+    source: Arc<dyn AssetReader>,
+    region: std::ops::Range<u64>,
+    key: Arc<[u8]>,
+) -> Result<Arc<dyn AssetReader>> {
+    let len = source.len().map_err(|e| anyhow::anyhow!("{e}"))?;
+    ensure!(
+        !key.is_empty() && key.len() <= 65536,
+        "XOR region key length"
+    );
+    ensure!(
+        region.start <= region.end && region.end <= len,
+        "XOR region outside source"
+    );
+    Ok(Arc::new(XorRegion {
+        source,
+        region,
+        key,
+        len,
+    }))
+}
+struct XorRegion {
+    source: Arc<dyn AssetReader>,
+    region: std::ops::Range<u64>,
+    key: Arc<[u8]>,
+    len: u64,
+}
+impl AssetReader for XorRegion {
+    fn len(&self) -> crysirror_core::Result<u64> {
+        Ok(self.len)
+    }
+    fn read_at(&self, offset: u64, out: &mut [u8]) -> crysirror_core::Result<usize> {
+        if offset >= self.len || out.is_empty() {
+            return Ok(0);
+        }
+        let count = out
+            .len()
+            .min((self.len - offset).min(usize::MAX as u64) as usize);
+        let n = self.source.read_at(offset, &mut out[..count])?;
+        if n > count {
+            return Err(crysirror_core::Error::Io("invalid XOR source read".into()));
+        }
+        let start = offset.max(self.region.start);
+        let end = (offset + n as u64).min(self.region.end);
+        for at in start..end {
+            out[(at - offset) as usize] ^= self.key[(at % self.key.len() as u64) as usize];
+        }
+        Ok(n)
+    }
+}
 pub fn read_exact_at(source: &dyn AssetReader, offset: u64, out: &mut [u8]) -> Result<()> {
     let mut done = 0;
     while done < out.len() {

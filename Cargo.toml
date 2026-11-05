@@ -18,9 +18,16 @@ members = [
     "crates/crysirror-runtime",
     "crates/crysirror-wgpu",
     "crates/crysirror-desktop",
+    "crates/crysirror-mobile",
+    "crates/crysirror-console",
+    "crates/crysirror-shader-tools",
+    "crates/crysirror-shaders",
+    "crates/crysirror-raytrace",
+    "crates/crysirror-web",
     "crates/crysirror-author",
     "crates/crysirror-image",
     "crates/crysirror-resource",
+    "crates/crysirror-network",
     "crates/crysirror-formats-arc",
     "crates/crysirror-formats-blackcyc",
     "crates/crysirror-physics",
@@ -48,11 +55,15 @@ members = [
     "crates/crysirror-nscripter",
     "crates/crysirror-bgi-vm",
     "crates/crysirror-bgi",
+    "crates/crysirror-bgi-integrated",
+    "crates/crysirror-softpal",
+    "crates/crysirror-softpal-kira",
     "crates/crysirror-circus",
     "crates/crysirror-catsystem2",
     "crates/crysirror-system4",
     "crates/crysirror-system-nnn",
     "crates/crysirror-majiro",
+    "crates/crysirror-qlie",
     "crates/crysirror-reallive-dll",
 ]
 exclude = [
@@ -68,6 +79,8 @@ license = "MPL-2.0"
 rust-version = "1.95"
 
 [workspace.dependencies]
+crysirror-qlie = { path = "crates/crysirror-qlie" }
+crysirror-network = { path = "crates/crysirror-network" }
 crysirror-io = { path = "crates/crysirror-io" }
 crysirror-tasks = { path = "crates/crysirror-tasks" }
 crysirror-vfx = { path = "crates/crysirror-vfx" }
@@ -99,6 +112,8 @@ crysirror-rfvp = { path = "crates/crysirror-rfvp" }
 crysirror-nscripter = { path = "crates/crysirror-nscripter" }
 crysirror-bgi-vm = { path = "crates/crysirror-bgi-vm" }
 crysirror-bgi = { path = "crates/crysirror-bgi" }
+crysirror-bgi-integrated = { path = "crates/crysirror-bgi-integrated" }
+crysirror-softpal = { path = "crates/crysirror-softpal" }
 crysirror-circus = { path = "crates/crysirror-circus" }
 crysirror-catsystem2 = { path = "crates/crysirror-catsystem2" }
 crysirror-majiro = { path = "crates/crysirror-majiro" }

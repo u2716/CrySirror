@@ -6,6 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+crysirror-shaders = { path = "../crysirror-shaders" }
 crysirror-vfx.workspace = true
 crysirror-tasks.workspace = true
 crysirror-core.workspace = true
@@ -29,7 +30,13 @@ naga = { version = "=29.0.3", features = ["wgsl-in"] }
 pollster.workspace = true
 
 [dev-dependencies]
+futures = "=0.3.34"
 tempfile = "3.12"
 crysirror-siglus.workspace = true
 crysirror-siglus-vm.workspace = true
 crysirror-scene.workspace = true
+
+# Browser GPU objects stay on the owning dedicated worker. This upstream
+# feature implements Send/Sync only for wasm builds without shared atomics.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wgpu = { workspace = true, features = ["fragile-send-sync-non-atomic-wasm"] }

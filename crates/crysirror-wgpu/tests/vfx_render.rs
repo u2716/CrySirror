@@ -22,9 +22,9 @@ use wgpu::util::DeviceExt;
 #[test]
 fn vfx_render_and_gpu_sort_sources_are_valid_wgsl() {
     for (name, text) in [
-        ("render", include_str!("../src/shaders/vfx_render.wgsl")),
-        ("sort", include_str!("../src/shaders/vfx_sort.wgsl")),
-        ("cull", include_str!("../src/shaders/vfx_cull.wgsl")),
+        ("render", crysirror_shaders::wgsl::VFX_RENDER),
+        ("sort", crysirror_shaders::wgsl::VFX_SORT),
+        ("cull", crysirror_shaders::wgsl::VFX_CULL),
     ] {
         let module = naga::front::wgsl::parse_str(text)
             .unwrap_or_else(|e| panic!("{name}: {}", e.emit_to_string(text)));

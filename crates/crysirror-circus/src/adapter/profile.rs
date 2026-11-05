@@ -67,6 +67,9 @@ pub(super) struct ProfileInput {
     accepted: bool,
     captured: bool,
 }
+impl ProfileInput {
+    pub(super) fn ui_waiting(&self)->bool {self.opened&&!self.accepted&&self.sound.is_none()&&self.submitted.is_none()}
+}
 impl Bridge<'_> {
     pub(super) fn player_input(&mut self) -> Result<bool> {
         if self.services.profile.is_none() {
@@ -165,8 +168,10 @@ impl Bridge<'_> {
             );
             return Ok(true);
         }
-        let events: Vec<Value> =
-            serde_json::from_slice(&self.host.query_engine(self.client, EngineQuery::UiEvents)?)?;
+        let mut events: Vec<Value> =
+            serde_json::from_slice(&self.host.query_engine(self.client, EngineQuery::UiSubtreeEvents(WIDGET_ROOT))?)?;
+        let dialogs:Vec<Value>=serde_json::from_slice(&self.host.query_engine(self.client,EngineQuery::UiSubtreeEvents(DIALOG))?)?;
+        events.extend(dialogs);
         for event in events {
             if event["kind"] == "dialog_result"
                 && event["widget"]["id"].as_u64() == Some(u64::from(DIALOG))

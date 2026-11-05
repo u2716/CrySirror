@@ -114,6 +114,8 @@ tracks remaining engine capabilities.
 | [0098](0098-client-scoped-gpu-mesh-frame-history.md) | Client-scoped GPU mesh frame history | implemented client-scoped mesh-frame history profile; remaining async scope explicit |
 | [0099](0099-staged-original-save-restore.md) | Staged original-save restoration | implemented bounded original-restore coordinator; native consumers remain partial |
 
+| [0100](0100-browser-host-and-capability-runtime.md) | Browser host and injected Runtime capabilities | 2D/PBR host and shared CPU workers; native adapters and broader migration remain partial |
+
 ## Superseded decisions
 
 | ADR | Decision | Status / follow-up |
@@ -151,3 +153,5 @@ scope and its recorded behavior validation.
 | R10 | Ray tracing | 0003, 0007, 0051, 0055–0060 | native primary/shadows, GGX reflections, probe and per-pixel GI; broader hit shading/denoising and multi-device validation remain |
 | R11 | DLSS-class upscaling | 0007 | capability contract only; vendor SDKs not distributed |
 | R12 | Asynchronous/multithreaded execution across every engine subsystem | 0049, 0050, 0052 | required; resource/pose/extraction, text/audio and staged restore worker paths exist; full subsystem migration remains partial |
+
+- [0101 Native packages and console seams](0101-native-host-packages-and-console-seams.md)

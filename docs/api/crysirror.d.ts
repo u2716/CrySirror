@@ -249,7 +249,7 @@ declare class Bitmap {
 declare class Canvases {
   /** Return shared retained-canvas capacity: surfacesPerClient. Pixel-byte, dimension and node limits are admitted separately. */
   getLimits(): Record<string, any>;
-  /** Atomically apply typed canvas commands: create, destroy, clear, draw, set, copy, present, present_isolated and hide. present_isolated keeps a live source surface as one immutable snapshot draw, refreshing it after edits; parent opacity/transform applies after composition. Nested snapshot/resource limits fail atomically. Destroy releases an existing unpresented surface; hide its presentations first. Frozen copies survive source destruction. Draws contain ordinary Layer specs, including positioned glyph runs. */
+  /** Atomically apply typed canvas commands: create, destroy, clear, draw, set, copy, present, present_isolated, present_target and hide. present_isolated isolates composition with paged output for large surfaces; present_target uses one whole target up to8192 per axis so masks/distortion sample globally across storage pages. Both refresh after source edits. Parent opacity/transform applies after composition; renderer memory/device budgets still apply. Nested snapshot/resource limits fail atomically. Destroy releases an existing unpresented surface; hide its presentations first. Frozen copies survive source destruction. Draws contain ordinary Layer specs, including positioned glyph runs. */
   apply(commands: Record<string, any>[]): void;
   /** Atomically submit a typed ServiceBatch: prepare_layers before canvases, then world, ordinary layers and UI; input routes are staged in the same transaction. New Canvas parents and real motion producers may be created in prepare_layers without intermediate publication. Existing apply remains canvas-only. At most4096 combined commands and4MiB serialized data; host resource/font preparation applies. */
   applyBatch(batch: Record<string, any>): void;
@@ -566,13 +566,15 @@ declare class Layers {
   setClip(id: number, clip: number[] | null): void;
   /** Inherited clip [x,y,w,h] in logical render-target coordinates, unaffected by layer or parent transforms. Zero width/height hides the subtree; null removes this clip. Local clip remains independent. */
   setViewportClip(id: number, clip: number[] | null): void;
+  /** Replace each positioned glyph clip {x,y,width,height} or null; preserves all layer motion and sequence ownership. Count must match the existing glyph run. */
+  setGlyphCrops(id: number, crops: number[] | null[]): void;
   /** Crop this layer's own geometry and source UVs in local [x,y,w,h] coordinates before projection, without changing content layout or children. Null removes; zero extent hides its payload. */
   setSourceCrop(id: number, crop: number[] | null): void;
   /** Read this owned layer's source crop; a missing target fails, null means none. */
   sourceCrop(id: number): number[] | null;
   /** Read this owned layer's explicit render-target clip; a missing target fails, null means none. */
   viewportClip(id: number): number[] | null;
-  /** Siglus-style 2D filter {mono, invert, bright, dark, color_rate, color, add, tone_curve?:{asset,row,saturation}, mask?:{asset,gray_alpha}, alpha_test, distortion?:{kind:'mosaic'|'raster'|'radial_blur'|'threshold_fade',...}} or null. */
+  /** Siglus-style 2D filter {mono, invert, bright, dark, color_rate, color, add, tone_curve?:{asset,row,saturation}, mask?:{asset,gray_alpha?,channel?:'rgba'|'red'|'green'|'blue'|'alpha',offset?:number}, alpha_test, distortion?:{kind:'mosaic'|'raster'|'radial_blur'|'threshold_fade',...}} or null. */
   setFilter(id: number, filter: Record<string, any> | null): void;
   /** Screen transition from the last presented frame: {effect:{kind:'crossfade'|'mask'{asset,fade}|'slide'{direction}|'mosaic'{size}|'ordered_dither'{cell:[x,y],diagonal?,steps}|'siglus'{code,options?,mask?}}, duration_ms, easing?:'linear'|'ease_in'|'ease_out'|'smooth'}. */
   transition(transition: Record<string, any>): void;
@@ -590,6 +592,12 @@ declare class Layers {
   endTransition(): void;
   /** Animate layer position, scale, rotation (radians), pivot or opacity with shared MotionTrackSpec; opacity samples truncate to0..255 bytes, engine duration uses milliseconds, external duration uses caller units. */
   beginMotion(id: number, track: Record<string, any>): void;
+  /** Create owned externally clocked incremental channels and Layer/filter bindings. Banked linear/oscillating queues retain activation, velocity, loop origins and capture/replay state. */
+  beginSequence(id: number, spec: Record<string, any>): void;
+  /** Enqueue, set, capture, replay, advance or finish an owned channel queue. Advance requires consecutive decimal-string generation/revision receipts; a pending worker never advances its clock. */
+  sequence(id: number, operation: Record<string, any>): void;
+  /** Retained owner-scoped sequence channels, queues, active/last records and exact generation/revision. Null means the owned layer has no sequence. */
+  sequenceStatus(id: number): Record<string, any> | null;
   /** Register an external procedural animation producer. Query motionStatus for its fresh generation; engine stores no executable callback. Retire producers before scene snapshots. */
   beginExternalMotion(id: number, driver: number): void;
   /** Atomically publish an optional {rect,transform,opacity} pose with a consecutive animation revision using {generation,revision} decimal u64 strings. Completion reflects the real producer; stale/invalid samples roll back both pose and revision. */
@@ -598,6 +606,12 @@ declare class Layers {
   requestExternalMotionSkip(id: number, driver: number, generation: string): void;
   /** Retire a scoped external producer; old asynchronous results remain invalid after node/driver reuse. */
   removeExternalMotion(id: number, driver: number, generation: string): void;
+  /** Advance only this client's automatic layer motion, text reveal and transition clocks by 0..86400000 ms; external tracks and other clients retain their clocks. */
+  advanceTime(deltaMs: number): void;
+  /** Reparent an owned node while preserving paint, animation and child hierarchy; absent/cyclic/foreign parents fail atomically. */
+  setParent(id: number, parent: number | null): void;
+  /** Replace owned layer paint while retaining geometry and animation; non-image paints clear image-only sampling and UV crop. */
+  setPaint(id: number, paint: Record<string, any>): void;
   /** Change finite positive rectangle geometry while preserving scalar/external animation and unrelated Layer state. */
   setRect(id: number, rect: number[]): void;
   /** Sample an externally clocked motion track at caller elapsed units. */
@@ -808,6 +822,8 @@ declare class Text {
   glyphId(alias: string, character: string): number;
   /** Read cached actual outline OS/2 {weight,italic}; unknown metadata/precomputed faces return null, never fabricated regular weight. */
   fontStyle(alias: string): Record<string, any> | null;
+  /** Resolve an explicit outline average-character pixel width using this client's OS/2 font metadata. Returns a horizontal outline scale; precomputed/unspecified faces fail visibly. */
+  fontWidthScale(alias: string, size: number, averageWidth: number): number;
   /** Measure one Unicode scalar with this client's authorized immutable font view; returns ascent, descent and advance. Size 1..512. */
   fontMetrics(alias: string, size: number, character: string): Record<string, any>;
   /** Font-independent cell-stream placement with unit wrapping, explicit moves, style indices and vertical columns. Returns logical cell bounds, not raster ink bounds. Live calls accept at most4096 commands; offline Rust layout accepts65536. */
@@ -857,6 +873,8 @@ declare class Ui {
   readonly events: Record<string, any>[];
   /** Focused widget or null. */
   readonly focus: any;
+  /** Consume only this client's retained events in an owned widget subtree, preserving all other deliveries. */
+  drainSubtreeEvents(root: number): Record<string, any>[];
   /** Consume this client's retained events once, preserving other clients' events. Use this for action dispatch; events only reads a snapshot of the queue. */
   drainEvents(): Record<string, any>[];
   /** Freeze owned UI into independent logical LayerSpec records on the project canvas. Pass null for all owned UI, or a widget id for its subtree; current values, style and clip are preserved. */
@@ -881,16 +899,22 @@ declare class Ui {
   openDialog(dialog: Record<string, any>): void;
   /** Close this client's open dialog without a result. */
   closeDialog(id: number): void;
+  /** Begin owner-scoped externally ticked f32 pointer motion {start,target,ticks}; each axis snaps within one absolute increment. */
+  movePointerStepped(motion: Record<string, any>): void;
+  /** Advance only this client's externally clocked pointer motion. */
+  advancePointerMotion(ticks: number): void;
   /** Ask the presenting host to move the OS pointer to a canvas position. */
   warpPointer(position: number[]): void;
   /** Update checked state with shared sibling radio-group semantics. */
   setMenuChecked(id: number, item: number, checked: boolean): void;
   /** Enable or disable an owned menu item, closing invalid popup branches and canceling ineligible gestures. */
   setMenuEnabled(id: number, item: number, enabled: boolean): void;
-  /** Insert/replace a widget spec {id, parent?, rect, kind, flow?, text?, ...}. */
+  /** Insert/replace a widget spec {id, parent?, rect, kind, flow?, text?, slider_axis?:horizontal|vertical, focus_follows_pointer?:bool, ...}. Sliders use that axis for shared pointer capture, keyboard adjustment and fill. */
   put(widget: Record<string, any>): void;
   /** Remove a widget and its children. */
   remove(id: number): void;
+  /** Update owned widget geometry while retaining input and motion state. */
+  setRect(id: number, rect: number[]): void;
   /** Show/hide. */
   setVisible(id: number, visible: boolean): void;
   /** Enable/disable input. */

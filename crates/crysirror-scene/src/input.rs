@@ -722,7 +722,7 @@ mod joypad_mode_tests {
 }
 
 mod serde_array {
-    use serde::{de::Error, Deserialize, Deserializer, Serialize, Serializer};
+    use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error};
     pub fn serialize<S: Serializer, T: Serialize, const N: usize>(
         v: &[T; N],
         s: S,

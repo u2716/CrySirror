@@ -2,7 +2,10 @@
 
 Engine integrations exist to expand CrySirror capabilities. Native VMs must
 translate their operations into engine APIs and engine-owned logical state.
-Hosting a second engine and uploading its composed screen is prohibited.
+BGI and Softpal use complete integrated runtimes that publish frames and PCM
+through CrySirror. Their native state stays on a session owner worker; the
+desktop retains the event loop and output devices. Other adapters follow the
+capability-extraction boundary.
 The previous RFVP/BGI/RealLive hosting paths were removed on 2026-10-26.
 
 Dated source/validation sections below describe their recorded profiles. Consult
@@ -37,7 +40,9 @@ Dated source/validation sections below describe their recorded profiles. Consult
 | crysirror-rfvp-vm | First-class HCB interpreter and native syscall/primitive/wait/save policy; per-instance globals, shared text/font/image kernels, no original software renderer/mixer or private pixel-storage implementation |
 | crysirror-codec-{omv,theora,mpeg,wmv,emote} | First-class CPU format/codec libraries used by shared Video/Puppet services; no original standalone players, windows or renderers |
 | crysirror-rfvp | `rfvp` semantic adapter, linked by the desktop: scoped storage/surfaces/PuppetFrame declarations, shared CPU mesh capture, channel audio and Media; framework snapshots remain unsupported |
-| crysirror-bgi-vm / crysirror-bgi | First-class bounded native BP executor and semantic adapter, linked by the desktop; shared Canvas/Layer/GlyphRun, capability tasks, audio admission and input; no original BGI App or renderer |
+| crysirror-bgi-integrated | Complete BGI implementation in one workspace crate; session worker publishes native frames and PCM through CrySirror, which owns the window/input/output devices |
+| crysirror-softpal | Complete SoftPAL implementation in one workspace crate; original asset/script/VM modules and native saves, session worker with frame/PCM output |
+| crysirror-bgi-vm / crysirror-bgi | Preserved capability-extraction implementation; not registered by the default desktop player |
 | crysirror-nscripter | GPL-2.0-or-later native text-script interpreter, linked by the desktop; shared Layer/GlyphRun/UI, resource workers, audio and cyclic XOR; no ONScripter runtime or renderer linked |
 | crysirror-circus | First-class bounded DC4PH MES native interpreter and semantic/resource/wait adapter, registered by the desktop binary for ABI0xabb6; shared Image/Layer/UI/Audio/VFX own presentation. ABI0xaab6 remains parse-only; original saves and later native operations remain unsupported |
 | crysirror-catsystem2 | First-class original KCS v2 and FES semantic/resource/wait policy; shared scoped INT/HG3/Image/Canvas/Layer/Input/Audio workers, real KCS pose/root completion and reviewed module/resource guards. Remaining native classes, complete CST/dialogue/input and original saves remain incomplete |
@@ -599,3 +604,17 @@ save/restore rejects live publications until reconstruction is supported.
 Arbitrary RGB LUT processing lives in crysirror-image; RealLive retains only TCC,
 filename, region and pending-opcode policy. These services are usable without
 any native VM; native success still requires their actual completion.
+
+## Browser presenting host
+
+`crysirror-web` runs the shared Runtime and `crysirror-wgpu` in a dedicated
+browser worker. Host-provided project/client storage capabilities enter through
+`Runtime::with_storage`; native constructors still use DiskVfs. The initial
+profile supports retained 2D/PBR data projects, immutable imported files and
+transactional browser snapshots. Core remains safe `no_std + alloc`.
+The default browser build dispatches bounded CPU jobs to shared-memory Workers;
+a cooperative build is explicit. This executor does not complete every
+subsystem migration in ADR 0050. See [ADR 0100](adr/0100-browser-host-and-capability-runtime.md)
+for supported services, limits and ownership boundaries.
+
+Native host crates and boundaries are described in [ADR 0101](adr/0101-native-host-packages-and-console-seams.md) and [native packaging](NATIVE_PACKAGING.md).

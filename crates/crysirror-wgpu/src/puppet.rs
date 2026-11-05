@@ -61,7 +61,7 @@ impl PuppetRenderer {
     pub fn new(d: &wgpu::Device, texture_layout: &wgpu::BindGroupLayout, output: wgpu::TextureFormat) -> Self {
         let shader = d.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("puppet"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/puppet.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(crysirror_shaders::wgsl::PUPPET.into()),
         });
         let layout = d.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("puppet"),

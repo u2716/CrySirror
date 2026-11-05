@@ -5,6 +5,7 @@ use anyhow::{ensure, Result};
 use serde::{Deserialize, Serialize};
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
+pub mod pixel_curtain;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RevealEvent {

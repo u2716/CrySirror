@@ -11,6 +11,52 @@ fn spec() -> LayerSpec {
                 {"character":"A","baseline":[42.5,30.],"size":30.,"color":[255,0,0,255],"bold":true}]}})).unwrap()
 }
 #[test]
+fn outline_and_explicit_font_width_are_saved_client_scoped_styles() {
+    let mut layer = spec();
+    let Paint::GlyphRun {
+        glyphs, outline, ..
+    } = &mut layer.paint
+    else {
+        unreachable!()
+    };
+    *outline = Some(crysirror_scene::layer::GlyphOutline {
+        radius: 1,
+        color: [0, 0, 0, 255],
+        kernel: crysirror_scene::layer::GlyphOutlineKernel::Square,
+    });
+    glyphs[0].font_width = Some(44.);
+    glyphs[1].horizontal_scale = Some(2.);
+    let mut layers = LayerSystem::default();
+    layers.install(ClientId(1), &[layer.clone()]).unwrap();
+    let snapshot = serde_json::to_vec(&layers).unwrap();
+    let restored: LayerSystem = serde_json::from_slice(&snapshot).unwrap();
+    restored.validate().unwrap();
+    assert_eq!(serde_json::to_vec(&restored).unwrap(), snapshot);
+    for scale in [0., f32::NAN, 33.] {
+        let mut bad = layer.clone();
+        let Paint::GlyphRun { glyphs, .. } = &mut bad.paint else {
+            unreachable!()
+        };
+        glyphs[0].horizontal_scale = Some(scale);
+        assert!(
+            layers
+                .apply_batch(ClientId(1), &[LayerCommand::Put { layer: bad }])
+                .is_err()
+        );
+        assert_eq!(serde_json::to_vec(&layers).unwrap(), snapshot);
+    }
+    let mut bad = layer;
+    let Paint::GlyphRun { outline, .. } = &mut bad.paint else {
+        unreachable!()
+    };
+    outline.as_mut().unwrap().radius = 17;
+    assert!(
+        layers
+            .apply_batch(ClientId(1), &[LayerCommand::Put { layer: bad }])
+            .is_err()
+    );
+}
+#[test]
 fn glyph_runs_are_inspectable_scoped_retained_and_saved_state() {
     let mut layers = LayerSystem::default();
     layers.install(ClientId(1), &[spec()]).unwrap();
@@ -45,24 +91,30 @@ fn malformed_glyph_data_rejects_without_partially_replacing_layers() {
         if let Paint::GlyphRun { glyphs, .. } = &mut bad.paint {
             glyphs[0].size = Some(size);
         }
-        assert!(layers
-            .apply_batch(ClientId(1), &[LayerCommand::Put { layer: bad }])
-            .is_err());
+        assert!(
+            layers
+                .apply_batch(ClientId(1), &[LayerCommand::Put { layer: bad }])
+                .is_err()
+        );
         assert_eq!(serde_json::to_value(&layers).unwrap(), before);
     }
     let mut bad = spec();
     if let Paint::GlyphRun { glyphs, .. } = &mut bad.paint {
         glyphs[0].baseline[0] = f32::INFINITY;
     }
-    assert!(layers
-        .apply_batch(ClientId(1), &[LayerCommand::Put { layer: bad }])
-        .is_err());
+    assert!(
+        layers
+            .apply_batch(ClientId(1), &[LayerCommand::Put { layer: bad }])
+            .is_err()
+    );
     assert_eq!(serde_json::to_value(&layers).unwrap(), before);
     let mut bad = spec();
     bad.uv = Some([0., 0., 0.5, 0.5]);
-    assert!(layers
-        .apply_batch(ClientId(1), &[LayerCommand::Put { layer: bad }])
-        .is_err());
+    assert!(
+        layers
+            .apply_batch(ClientId(1), &[LayerCommand::Put { layer: bad }])
+            .is_err()
+    );
     assert!(
         serde_json::from_value::<Paint>(json!({"kind":"glyph_run","font":"f","size":24.,
         "glyphs":[{"character":"two","baseline":[0.,0.]}]}))
@@ -216,17 +268,19 @@ fn complete_reveal_is_scoped_and_works_when_paused_without_a_private_clock() {
     assert!(layers.reveal_status(ClientId(1), 7).unwrap().complete);
     assert_eq!(layers.reveal_status(ClientId(2), 7).unwrap().visible, 2);
     let before = serde_json::to_value(&layers).unwrap();
-    assert!(layers
-        .apply_batch(
-            ClientId(1),
-            &[
-                LayerCommand::SetOpacity { id: 7, opacity: 2 },
-                LayerCommand::Put {
-                    layer: reveal_layer(5, 20)
-                }
-            ]
-        )
-        .is_err());
+    assert!(
+        layers
+            .apply_batch(
+                ClientId(1),
+                &[
+                    LayerCommand::SetOpacity { id: 7, opacity: 2 },
+                    LayerCommand::Put {
+                        layer: reveal_layer(5, 20)
+                    }
+                ]
+            )
+            .is_err()
+    );
     assert_eq!(serde_json::to_value(&layers).unwrap(), before);
     layers
         .apply_batch(

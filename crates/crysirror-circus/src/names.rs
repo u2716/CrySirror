@@ -1,6 +1,6 @@
 //! Native NAMES.DAT version 7 resource indices (sub_40C7B0). These are native
 //! semantic names/IDs; decoding, archive extraction and playback are engine APIs.
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 #[derive(Debug)]
 pub struct Names {
     pub bootstrap: Vec<String>,

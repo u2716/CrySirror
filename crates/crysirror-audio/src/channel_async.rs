@@ -65,16 +65,25 @@ impl ChannelJobs {
 }
 struct Charge {
     budget: Arc<AtomicUsize>,
-    bytes: usize,
+    bytes: AtomicUsize,
+}
+impl Charge {
+    fn shrink_to(&self,bytes:usize)->Result<()> {
+        let previous=self.bytes.load(Ordering::Relaxed);
+        ensure!(bytes<=previous,"audio preparation exceeded its reservation");
+        self.bytes.store(bytes,Ordering::Relaxed);
+        self.budget.fetch_sub(previous-bytes,Ordering::AcqRel);Ok(())
+    }
 }
 impl Drop for Charge {
     fn drop(&mut self) {
-        self.budget.fetch_sub(self.bytes, Ordering::Relaxed);
+        self.budget.fetch_sub(self.bytes.load(Ordering::Relaxed), Ordering::Relaxed);
     }
 }
 fn channel(request: &AudioRequest) -> Result<u32> {
     match request {
         AudioRequest::Play { channel, .. }
+        | AudioRequest::PlayResident {channel,..}
         | AudioRequest::PlayAsset { channel, .. }
         | AudioRequest::PlayResource { channel, .. } => Ok(*channel),
         _ => anyhow::bail!("preparation requires a play request"),
@@ -149,6 +158,7 @@ impl ChannelAudio {
         self.admit_channel_operation(client)?;
         let p = match &request {
             AudioRequest::Play { parameters, .. }
+            | AudioRequest::PlayResident {parameters,..}
             | AudioRequest::PlayAsset { parameters, .. }
             | AudioRequest::PlayResource { parameters, .. } => parameters,
             _ => unreachable!(),
@@ -174,7 +184,7 @@ impl ChannelAudio {
         .validate()?;
         let skip = !p.restart && self.is_playing(client, channel);
         let bytes = match &request {
-            AudioRequest::Play { source, intro, .. } => {
+            AudioRequest::Play { source, intro, .. } | AudioRequest::PlayResident {source,intro,..} => {
                 ensure!(
                     source.bytes.len() <= 64 * 1024 * 1024
                         && intro
@@ -196,7 +206,8 @@ impl ChannelAudio {
                 0
             }
             _ => unreachable!(),
-        } + 4 * 1024 * 1024;
+        } + if matches!(&request,AudioRequest::PlayResident{..}){(128*1024*1024)*(if matches!(&request,AudioRequest::PlayResident{intro:Some(_),..}){3}else{2})}else{4*1024*1024};
+        let resident=matches!(&request,AudioRequest::PlayResident{..});
         let resource = if let AudioRequest::PlayResource { resource, .. } = &request {
             Some(self.resources.capture(client, *resource)?)
         } else {
@@ -211,7 +222,7 @@ impl ChannelAudio {
                 .is_ok(),
             "channel audio reservation exceeded"
         );
-        let charge = Arc::new(Charge { budget, bytes });
+        let charge = Arc::new(Charge { budget, bytes:AtomicUsize::new(bytes) });
         let realtime = self.jobs.nonblocking;
         let pool = self.jobs.pool.clone();
         let workers = pool.clone();
@@ -227,13 +238,12 @@ impl ChannelAudio {
                     intro,
                     parameters: p,
                     ..
-                } => {
-                    let gain = p.decode_gain;
-                    (
-                        source(encoded, gain)?,
-                        intro.map(|v| source(v, gain)).transpose()?,
-                        p,
-                    )
+                } | AudioRequest::PlayResident {source:encoded,intro,parameters:p,..} => {
+                    let gain=p.decode_gain;
+                    let tail=source(encoded,gain)?;
+                    let tail=if resident{crate::resident::decode(tail,&cancel,Some(charge.clone()))?}else{tail};
+                    let intro=intro.map(|v|->Result<_>{let source=source(v,gain)?;if resident{crate::resident::decode(source,&cancel,Some(charge.clone()))}else{Ok(source)}}).transpose()?;
+                    (tail,intro,p)
                 }
                 AudioRequest::PlayResource { parameters: p, .. } => {
                     let opened = resource.context("prepared resource missing")?.open()?;
@@ -262,7 +272,12 @@ impl ChannelAudio {
             };
             cancel.check()?;
             let mut prepared = prepare(tail, intro, p)?;
-            if realtime {
+            if resident {
+                let frames=prepared.source.frame_count().context("resident PCM extent unavailable")?;
+                let retained=usize::try_from(frames)?.checked_mul(8).and_then(|bytes|bytes.checked_add(4096)).context("resident reservation overflow")?;
+                charge.shrink_to(retained)?;
+            }
+            if realtime && !resident {
                 let mut source = BufferedSource::prepare_at_cancellable(
                     prepared.source,
                     workers.context("audio worker pool")?,
@@ -391,6 +406,7 @@ impl ChannelAudio {
                 return Ok(());
             }
             AudioRequest::Play { channel, .. }
+            | AudioRequest::PlayResident {channel,..}
             | AudioRequest::PlayAsset { channel, .. }
             | AudioRequest::PlayPcm { channel, .. }
             | AudioRequest::PlayResource { channel, .. } => (*channel, false),
@@ -429,6 +445,8 @@ impl ChannelAudio {
                 );
                 (*channel, false)
             }
+            AudioRequest::SetRate{channel,rate}=>{ensure!(rate.is_finite()&&(1./4096. ..=32.).contains(rate),"live audio rate out of range");(*channel,false)},
+            AudioRequest::Balance{channel,command}=>{crate::balance::validate(*command)?;(*channel,false)},
             AudioRequest::SetLoopSchedule {
                 channel,
                 start,

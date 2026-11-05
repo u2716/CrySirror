@@ -1,0 +1,45 @@
+[package]
+name = "crysirror-bgi-integrated"
+version.workspace = true
+edition = "2024"
+license = "MPL-2.0"
+publish = false
+build = "build.rs"
+
+[features]
+default = ["crysirror-host"]
+crysirror-host = []
+host-driven = []
+desktop-window = ["dep:winit", "kira/cpal"]
+native-gpu = []
+console = ["host-driven", "native-gpu"]
+
+[dependencies]
+crysirror-core.workspace = true
+crysirror-runtime.workspace = true
+crysirror-codec-mpeg = { path = "../crysirror-codec-mpeg" }
+anyhow = "1"
+thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = "1"
+byteorder = "1"
+encoding_rs = "0.8"
+ab_glyph = "0.2"
+bytemuck = { version = "1", features = ["derive"] }
+pollster = "0.3"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "ico"] }
+pelite = { version = "0.10", default-features = false, features = ["std"] }
+libc = "0.2"
+cap-std = "3.4"
+raw-window-handle = "0.6"
+kira = { version = "0.8", default-features = false, features = ["mp3", "ogg", "flac", "wav"] }
+symphonia = { version = "0.5.5", default-features = false, features = ["mp2"] }
+winit = { version = "0.31.0-beta.3", optional = true }
+bgi_wgpu = { package = "wgpu", version = "0.19", default-features = false, features = ["wgsl", "dx12", "metal", "webgpu"] }
+ruffle_core = { git = "https://github.com/ruffle-rs/ruffle.git", tag = "v0.4.1", features = ["default_font", "lzma", "mp3", "aac", "nellymoser"] }
+ruffle_render_wgpu = { git = "https://github.com/ruffle-rs/ruffle.git", tag = "v0.4.1" }
+
+[target.'cfg(any(target_os="windows",target_os="macos",target_os="linux",target_os="freebsd",target_os="openbsd",target_os="netbsd",target_os="dragonfly",target_os="illumos",target_os="solaris",target_os="haiku"))'.dependencies]
+chardetng = "0.1.17"
