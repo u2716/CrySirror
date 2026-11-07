@@ -3,6 +3,16 @@
 //! 40D910/40D990/40DA50/40DB60 widen inputs then store single precision.
 use super::Value;
 use anyhow::{bail, ensure, Result};
+pub(super) fn branch(value:&Value,nonzero:bool)->bool {
+    //40CF50/40CFC0 use the stored string extent, not strlen or a pointer.
+    //The two comparisons intentionally differ for a zero-length allocation:
+    //native true tests length>1, false tests length==1. Preserve that case.
+    match value {
+        Value::Integer(value)=>if nonzero{*value!=0}else{*value==0},
+        Value::Float(value)=>if nonzero{*value!=0.0}else{*value==0.0},
+        Value::String(bytes)=>if nonzero{bytes.len()>1}else{bytes.len()==1},
+    }
+}
 pub(super) fn number(value: &Value) -> Result<f64> {
     match value {
         Value::Integer(n) => Ok(f64::from(*n)),
@@ -25,16 +35,20 @@ pub(super) fn binary(op: u16, left: &Value, right: &Value) -> Result<Value> {
     if op == 0x11a {
         let a = left.bytes()?;
         let b = right.bytes()?;
+        ensure!(!a.is_empty() && !b.is_empty(), "Majiro stored strings require their terminal storage byte");
         let count = a
             .len()
-            .checked_add(b.len())
+            .checked_add(b.len()-1)
             .ok_or_else(|| anyhow::anyhow!("Majiro string extent overflow"))?;
         ensure!(
             count <= 1024 * 1024,
             "Majiro concatenated string byte budget"
         );
         let mut out = Vec::with_capacity(count);
-        out.extend_from_slice(a);
+        //40DA90 copies the second stored allocation at left.length-1. It
+        //overwrites that byte, including a normal C terminator, but does not
+        //strlen/trim either allocation or discard their interior NUL bytes.
+        out.extend_from_slice(&a[..a.len()-1]);
         out.extend_from_slice(b);
         return Ok(Value::String(out));
     }

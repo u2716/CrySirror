@@ -21,6 +21,24 @@ fn event_hash(value: &Value) -> Result<u32> {
     Ok(crate::program::name_hash(bytes))
 }
 impl Machine {
+    /// Native services dispatch through the same hook traversal as do_event.
+    /// Validate the whole callback plan before consuming the retained call;
+    /// callbacks are stacked only after its procedure/function result exists.
+    pub(crate) fn complete_with_callback(
+        &mut self,
+        output: Vec<Value>,
+        event: Option<(u32, Vec<Value>)>,
+    ) -> Result<()> {
+        if let Some((event, arguments)) = event {
+            let plan = self.event_plan(event, None, &arguments)?;
+            self.reserve_argument_copies(&arguments, plan.len() + 1)?;
+            self.acknowledge(output)?;
+            self.deliver_plan(plan, arguments.into_iter().rev().collect())
+        } else {
+            self.acknowledge(output)
+        }
+    }
+
     /// Native semantic calls completed without host access. False leaves the
     /// original event and every operand untouched for the shared-service seam.
     pub(crate) fn native_thread_control(&mut self, event: &Event) -> Result<bool> {

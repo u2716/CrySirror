@@ -6,7 +6,7 @@ Generated from the class registry, the command table, serde defaults and Rust do
 `CRYSIRROR_BLESS=1 cargo test --release -p crysirror-engine --test api_docs`.
 Policy and change log: [README](README.md), [CHANGES](CHANGES.md).
 
-API fingerprint: `9983e526641d9b01`
+API fingerprint: `4c6395d28206ec40`
 
 The same classes are exposed to Rust (`EngineContext` calls), to JavaScript/TypeScript (bindings generated from the registry, [crysirror.d.ts](crysirror.d.ts)) and to inspection tools.
 
@@ -1156,6 +1156,7 @@ Reusable image operations. All channels are straight RGBA bytes; RGB-only transf
 | `canvas_margins` | `margins: [i32; 4], fill: [u8; 4]` | Signed left/top/right/bottom expansion or crop, preserving stored bytes. |
 | `alpha_mask_plane` | `spec: crate::alpha_mask::AlphaMaskPlane` | Modulate stored alpha using an immutable original-alpha plane. |
 | `alpha_stamps` | `spec: crate::alpha_stamps::AlphaStamps` | Ordered atlas alpha replacement, retaining stored destination RGB. |
+| `copy_channel` | `source_channel: u8, destination_channels: u8, invert: bool` | Replace selected stored RGBA channels from one channel of an equally sized second image. Destination bits R/G/B/A are 1/2/4/8; inversion is exactly 255-value. Unselected bytes, including hidden RGB, are retained. |
 | `coverage_sum` | `spec: crate::coverage_sum::CoverageSum` | Saturating alpha neighborhoods with explicit sample offsets and edge colour. |
 | `triangular_blur` | `spec: crate::triangular_blur::TriangularBlur` | Fixed-point alpha-aware triangular kernel; expands only explicit padding. |
 | `row_deform` | `spec: crate::pyramid::RowDeform` | — |
@@ -6993,6 +6994,7 @@ Used by: UiEvent.widget client/local identity.
 | `executable` | `Option<String>` | Optional caller-owned module inspected only to guard the reviewed native ABI. |
 | `run_mode` | `i32` | Original startup mode. Release play is 1; native is_testplay is mode!=1. |
 | `keyboard_lock_policy` | `crate::keyboard_policy::KeyboardLockPolicy` | Portable logical engine locks, separate from physical keyboard control. |
+| `font_fallback` | `Option<String>` | Explicit host font alias used only when the requested native family is absent. None requires that exact family to be available. |
 
 ### `system-nnn`
 

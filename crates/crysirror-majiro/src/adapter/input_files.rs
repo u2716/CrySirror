@@ -134,7 +134,7 @@ impl MajiroVm {
                 //4026F0 returns empty at EOF;402420 applies atoi to its
                 //zero/default field. Integer reads do not remove quotes.
                 let value = if hash == 0x55232561 {
-                    Value::String(bytes)
+                    Value::native_string(&bytes)?
                 } else {
                     Value::Integer(crate::byte_policy::integer(&bytes)?)
                 };

@@ -167,6 +167,11 @@
           "doc": "Portable logical engine locks, separate from physical keyboard control.",
           "name": "keyboard_lock_policy",
           "rust_type": "crate::keyboard_policy::KeyboardLockPolicy"
+        },
+        {
+          "doc": "Explicit host font alias used only when the requested native family is absent. None requires that exact family to be available.",
+          "name": "font_fallback",
+          "rust_type": "Option<String>"
         }
       ]
     },
@@ -8307,6 +8312,12 @@
           "doc": "Ordered atlas alpha replacement, retaining stored destination RGB.",
           "name": "alpha_stamps",
           "rust_type": "spec: crate::alpha_stamps::AlphaStamps"
+        },
+        {
+          "default": null,
+          "doc": "Replace selected stored RGBA channels from one channel of an equally sized second image. Destination bits R/G/B/A are 1/2/4/8; inversion is exactly 255-value. Unselected bytes, including hidden RGB, are retained.",
+          "name": "copy_channel",
+          "rust_type": "source_channel: u8, destination_channels: u8, invert: bool"
         },
         {
           "default": null,
@@ -25388,7 +25399,7 @@
       "used_by": "UiEvent.widget client/local identity"
     }
   ],
-  "fingerprint": "9983e526641d9b01",
+  "fingerprint": "4c6395d28206ec40",
   "generated_by": "crysirror-engine api_doc (tests/api_docs.rs)",
   "globals": [
     {

@@ -23,6 +23,15 @@ pub enum Value {
     String(Vec<u8>),
 }
 impl Value {
+    /// Native41DC40 stores strlen+1 bytes, including the terminator. This is
+    /// distinct from an encoded instruction's explicit byte extent.
+    pub(crate) fn native_string(bytes:&[u8])->Result<Self> {
+        let bytes=&bytes[..bytes.iter().position(|byte|*byte==0).unwrap_or(bytes.len())];
+        ensure!(bytes.len()<1024*1024,"Majiro native string byte budget");
+        let mut value=Vec::with_capacity(bytes.len()+1);
+        value.extend_from_slice(bytes);value.push(0);
+        Ok(Self::String(value))
+    }
     pub fn integer(&self) -> Result<i32> {
         if let Self::Integer(n) = self {
             Ok(*n)
@@ -41,7 +50,8 @@ impl Value {
         match t {
             0 => Ok(Self::Integer(0)),
             1 => Ok(Self::Float(0.)),
-            2 => Ok(Self::String(vec![])),
+            //41D980 creates a one-byte string allocation containing NUL.
+            2 => Ok(Self::String(vec![0])),
             _ => bail!("Majiro array allocation requires native reference semantics"),
         }
     }
@@ -289,7 +299,7 @@ impl Machine {
    (0x191|0x1a8|0x1a9,Operand::None)=>{},
    (0x82f,Operand::None)=>{self.tail(1)?;self.stack.pop();},
    (0x82c,Operand::Jump(target))=>next=*target,
-   (0x82d|0x82e,Operand::Jump(target))=>{let v=self.tail(1)?[0].integer()?;if (v!=0)==(i.opcode==0x82d){next=*target;}self.stack.pop();},
+   (0x82d|0x82e,Operand::Jump(target))=>{if scalar::branch(&self.tail(1)?[0],i.opcode==0x82d){next=*target;}self.stack.pop();},
    (0x830,Operand::Jump(target))=>{
     //40D630 stores the selector in the actual thread-local native variable,
     //then pops it. Nested switch statements share this original cell.
@@ -321,12 +331,14 @@ impl Machine {
     let serial=self.frame_serial()?;self.frames.push(Frame{serial,interrupted:None,global_initializer:false,return_pc:i.next,return_module:self.active_module,stack_base:base,arguments:args,locals:vec![],discard_return:i.opcode==0x810});self.stack.truncate(base);self.active_module=module;self.program=self.modules[module].program.clone();next=target;
    },
    (0x82b,Operand::None)=>{
-    let value=self.tail(1)?[0].clone();let f=self.frames.last().unwrap();
-    ensure!(self.stack.len()==f.stack_base+1,"Majiro return operand shape");
+    let value=if self.frames.last().unwrap().discard_return{None}else{Some(self.tail(1)?[0].clone())};
+    //40D490 destroys every callee temporary above the caller's stack base,
+    //then preserves only the top value for a function. Native case helpers
+    //leave comparison values behind; they are valid return-time temporaries.
     let f=self.frames.pop().unwrap();self.stack.truncate(f.stack_base);
     if f.global_initializer {self.finish_global_initializer();}
     self.pending=f.interrupted;
-    if self.frames.is_empty(){self.stack.push(value);self.halted=true;}else{if !f.discard_return{self.stack.push(value);}self.active_module=f.return_module;self.program=self.modules[f.return_module].program.clone();next=f.return_pc;}
+    if self.frames.is_empty(){if let Some(value)=value{self.stack.push(value);}self.halted=true;}else{if let Some(value)=value{self.stack.push(value);}self.active_module=f.return_module;self.program=self.modules[f.return_module].program.clone();next=f.return_pc;}
    },
    (0x834|0x835,Operand::Call{hash,arguments})=>{let args=self.tail(*arguments as usize)?.iter().rev().cloned().collect();let event=Event::Native{pc:self.pc,hash:*hash,arguments:args,returns:i.opcode==0x834};return Ok(Some(self.queue(event,i.next,*arguments as usize)));},
    (0x840,Operand::String(bytes))=>return Ok(Some(self.queue(Event::Text{pc:self.pc,bytes:bytes.clone()},i.next,0))),

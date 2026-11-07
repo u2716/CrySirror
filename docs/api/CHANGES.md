@@ -5,6 +5,15 @@ Newest first. Each entry is keyed by the API fingerprint printed in
 fingerprint appears here. Mark breaking changes with **Breaking**.
 
 
+## `4c6395d28206ec40` (2026-11-07): stored channel copies and font fallback
+
+- `ImageEffect::CopyChannel` copies one stored byte channel into selected RGBA
+  channels, with optional inversion, through the shared asynchronous image worker.
+  Unselected channels and hidden RGB are preserved.
+- Majiro `Config.font_fallback` selects an explicit prepared host font alias when
+  the requested native family is unavailable. Its default requires the exact family.
+- Regenerated the API reference with the release example; no tests were run.
+
 ## `079f7138a813b097` (2026-11-07): coverage keys and cyclic cell sampling
 
 - `ImageEffect::CoverageReferenceKey` derives binary coverage from a checked

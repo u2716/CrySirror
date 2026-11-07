@@ -7,6 +7,7 @@ pub(super) struct SuspendedServices {
     input_file: Option<input_files::PendingInputFile>,
     library: Option<libraries::PendingLibrary>,
     picture: Option<pictures::PendingPicture>,
+    bitmap: Option<page_bitmaps::PendingBitmap>,
     settings_write: Option<PendingSettingsWrite>,
     wait: Option<native_services::NativeWait>,
 }
@@ -18,6 +19,7 @@ impl SuspendedServices {
         self.input_file.is_none()
             && self.library.is_none()
             && self.picture.is_none()
+            && self.bitmap.is_none()
             && self.settings_write.is_none()
             && self.wait.is_none()
     }
@@ -28,6 +30,7 @@ impl MajiroVm {
             input_file: self.input_file_load.take(),
             library: self.library.take(),
             picture: self.picture.take(),
+            bitmap: self.bitmap_work.take(),
             settings_write: self.settings_write.take(),
             wait: self.wait.take(),
         }
@@ -50,6 +53,7 @@ impl MajiroVm {
         self.library = next.library;
         self.input_file_load = next.input_file;
         self.picture = next.picture;
+        self.bitmap_work = next.bitmap;
         self.settings_write = next.settings_write;
         self.wait = next.wait;
         self.service_context = id;
@@ -64,5 +68,6 @@ impl MajiroVm {
             drop(self.take_services());
             self.service_context = 0;
         }
+        self.page_busy.retain(|_, lock| lock.strong_count() != 0);
     }
 }

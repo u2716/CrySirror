@@ -434,6 +434,34 @@ fn clipped(rect: BitmapRect, width: u32, height: u32) -> (i64, i64, i64, i64) {
     )
 }
 impl ImageSurface {
+    /// Copy a stored byte channel without premultiplication or colour conversion.
+    pub fn copy_channel(
+        &self,
+        source: &ImageSurface,
+        source_channel: u8,
+        destination_channels: u8,
+        invert: bool,
+        check: &dyn Fn() -> Result<()>,
+    ) -> Result<Self> {
+        self.validate()?;
+        source.validate()?;
+        ensure!(source_channel < 4 && (1..=15).contains(&destination_channels), "stored channel copy selection");
+        ensure!(self.width == source.width && self.height == source.height, "stored channel copy dimensions");
+        ensure!(u64::from(self.width) * u64::from(self.height) <= crate::effects::MAX_EFFECT_PIXELS, "stored channel copy pixel budget");
+        check()?;
+        let mut out = self.clone();
+        for (dst, src) in out.rgba.chunks_exact_mut(self.width as usize * 4).zip(source.rgba.chunks_exact(self.width as usize * 4)) {
+            check()?;
+            for (dst, src) in dst.chunks_exact_mut(4).zip(src.chunks_exact(4)) {
+                let value = src[usize::from(source_channel)];
+                let value = if invert { 255 - value } else { value };
+                for (channel, byte) in dst.iter_mut().enumerate() {
+                    if destination_channels & (1 << channel) != 0 { *byte = value; }
+                }
+            }
+        }
+        Ok(out)
+    }
     /// Replace alpha with one channel of an equally sized engine surface.
     /// Both inputs are validated before any destination pixel is changed.
     pub fn apply_channel_mask(&mut self, mask: &ImageSurface, channel: usize) -> Result<()> {

@@ -27,6 +27,10 @@ mod native_audio;
 mod pictures;
 mod continuations;
 mod input_files;
+mod sprites;
+mod font_policy;
+mod console;
+mod page_bitmaps;
 
 fn mode() -> i32 {
     1
@@ -50,6 +54,10 @@ pub struct Config {
     /// Portable logical engine locks, separate from physical keyboard control.
     #[serde(default)]
     pub keyboard_lock_policy: crate::keyboard_policy::KeyboardLockPolicy,
+    /// Explicit host font alias used only when the requested native family
+    /// is absent. None requires that exact family to be available.
+    #[serde(default)]
+    pub font_fallback:Option<String>,
 }
 pub struct MajiroVm {
     service_context:u64,
@@ -79,7 +87,15 @@ pub struct MajiroVm {
     input_file_load:Option<input_files::PendingInputFile>,
     input_files:BTreeMap<u32,input_files::InputFile>,
     next_input_file:u32,
+    sprites:BTreeMap<u32,sprites::Sprite>,
+    next_sprite:u32,
+    sprite_order:Vec<u32>,
+    font:Option<font_policy::NativeFont>,
+    console:console::Console,
     page_resources: BTreeMap<u32,String>,
+    page_bitmaps:BTreeMap<u32,page_bitmaps::Bitmap>,
+    page_busy:BTreeMap<u32,std::sync::Weak<()>>,
+    bitmap_work:Option<page_bitmaps::PendingBitmap>,
     api_calls: u64,
     last_error: Option<String>,
 }
@@ -99,6 +115,8 @@ struct PendingSettingsWrite {
 }
 impl Config {
     pub fn validate(&self) -> Result<()> {
+        if let Some(alias)=&self.font_fallback {ensure!(!alias.is_empty() && alias.len()<=256
+            && !alias.chars().any(char::is_control),"Majiro font fallback alias");}
         ensure!(self.keyboard_lock_policy==crate::keyboard_policy::KeyboardLockPolicy::EngineLogical,"physical Windows keyboard-lock control is not supported");
 
         ensure!(
@@ -153,7 +171,10 @@ impl MajiroVm {
             picture: None,
             picture_context:crysirror_resource::DecodeContext::new(client),
             input_file_load:None,input_files:BTreeMap::new(),next_input_file:0x1000_0000,
+            sprites:BTreeMap::new(),next_sprite:0x0100_0000,sprite_order:Vec::new(),
+            font:None,console:console::Console::default(),
             page_resources: BTreeMap::new(),
+            page_bitmaps:BTreeMap::new(),page_busy:BTreeMap::new(),bitmap_work:None,
             api_calls: 0,
             last_error: None,
         })
@@ -184,12 +205,36 @@ impl MajiroVm {
             return self.poll_settings_write(*pc);
         }
         match *hash {
+   0xef4581dc=>self.create_page_sprite(a,*returns,h),
+   0xff7c52e6=>self.sprite_alpha(a,*returns,h),
+   0x4a02d664|0x5548ef5e|0x69073588|0x7bffc5b1=>self.sprite_priority(*hash,a,*returns,h),
+   0xa62aa5eb=>{
+    ensure!(a.is_empty(),"Majiro is_fast_mode ABI");
+    //410060/40B1F0: all force/read/auto-mode flags start0 (40B0A0).
+    //Their mutating selectors and read-mark import are not yet admitted.
+    //With the supported flags zero, disabled or CapsLock-off is exactly0;
+    //a logical CapsLock-on needs the original read-conditioned branch.
+    if self.fast_disable_depth==0 {
+     ensure!(!h.keyboard_locks(self.client).map_err(core_error)?.logical.caps_lock,
+        "Majiro read-conditioned fast-mode profile is not connected");
+    }
+    Ok(Some(if *returns{vec![Value::Integer(0)]}else{vec![]}))
+   },
+   0x098399f2=>self.select_font(a,*returns,h),
+   0x959b0a16=>{
+    ensure!(a.len()==1,"Majiro abs ABI");
+    //401D40 executes the original x86 abs32; MIN retains its low32 bits.
+    Ok(Some(if *returns{vec![Value::Integer(a[0].integer()?.wrapping_abs())]}else{vec![]}))
+   },
    0xe4e3b40d=>self.open_input_file(event,h),
    0xd6333b3c|0x55232561|0x2539d212=>self.read_input_file(*hash,a,*returns),
    0x266a3c79=>{
     ensure!(a.len()==1,"Majiro string uppercase ABI");
-    let value=crate::byte_policy::upper(a[0].bytes()?)?;
-    Ok(Some(if *returns{vec![Value::String(value)]}else{vec![]}))
+    let bytes=a[0].bytes()?;
+    ensure!(bytes.iter().position(|byte|*byte==0).unwrap_or(bytes.len())<=511,
+        "Majiro uppercase exceeds native512-byte buffer");
+    let value=crate::byte_policy::upper(bytes)?;
+    Ok(Some(if *returns{vec![Value::native_string(&value)?]}else{vec![]}))
    },
    0x7a7b6ed4 => {
     ensure!(a.len()==1,"Majiro SetEncryptionKey ABI");
@@ -201,7 +246,9 @@ impl MajiroVm {
     if !bytes.is_empty(){self.picture_key=Some(crysirror_resource::KeyMaterial::new(bytes.to_vec())?);}
     Ok(Some(if *returns {vec![Value::Integer(0)]}else{vec![]}))
    },
-   0xdad96289 | 0x539b07bc | 0xce94e6ca => self.native_picture(event,h),
+   0xdad96289 | 0x57efa275 | 0x539b07bc | 0xce94e6ca | 0xc2c3c4f4 => self.native_picture(event,h),
+   0x265e07d7 | 0x6b4a7873 | 0xf6459905 | 0xdcc706ef=>self.sprite_query(*hash,a,*returns),
+   0x58b31737=>self.release_sprite(a,*returns,h),
    0x0c070535 | 0x05d6ed69 | 0x83a53ffa | 0x2626fe02 | 0xd011ff32 | 0xf8d8925b => self.audio_control(*hash,a,*returns,h),
    0xe06200c4 | 0x8c283f7f => {
     ensure!(a.is_empty(),"Majiro client extent ABI");
@@ -276,18 +323,7 @@ impl MajiroVm {
     self.settings_write=Some(PendingSettingsWrite{pc:*pc,write,candidate,output:if *returns{vec![Value::Integer(0)]}else{vec![]}});
     self.poll_settings_write(*pc)
    },
-   // Original sub_419500/sub_4404a0: 24bpp BGR allocation, zero-filled storage.
-   // Indexed8bpp is a distinct palette resource and must not be approximated.
-   0x83d81f59=>{
-    ensure!(*returns&&(a.len()==2||a.len()==3),"page_create ABI");
-    ensure!(a.len()==2||a[2].integer()?!=0,"Majiro indexed page needs shared palette resource");
-    let w=a[0].integer()?;let height=a[1].integer()?;
-    ensure!(w>0&&height>0&&w<=8192&&height<=8192,"Majiro page geometry profile");
-    ensure!(self.pages.len()<256,"Majiro page budget");let id=self.next_page;
-    let batch=json!({"canvases":[{"op":"create","id":id,"width":w,"height":height},{"op":"clear","id":id,"color":[0,0,0,255]}]});
-    h.submit_engine(self.client,1,&serde_json::to_vec(&batch)?).map_err(core_error)?;
-    self.pages.insert(id,[w as u32,height as u32]);self.next_page=id.checked_add(1).context("Majiro page id overflow")?;self.api_calls+=1;Ok(Some(vec![Value::Integer(id as i32)]))
-   },
+   0x83d81f59|0xf94b3586|0x56bbba3a|0xf9705332|0xd01be374=>self.native_bitmap(event,h),
    _=>bail!("unsupported original Majiro syscall {hash:#010x}; pending call was not acknowledged"),
   }
     }
@@ -431,6 +467,8 @@ impl MajiroVm {
                         "Majiro {} pc={:#x} line={} thread/event control",m.module_name(),m.pc,m.line))? {
                         continue;
                     }
+                    if self.try_console(&mut m,&event,h).with_context(||format!(
+                        "Majiro {} pc={:#x} line={} console",m.module_name(),m.pc,m.line))? {continue;}
                     if matches!(event,Event::Native {hash:0x10db0a43|0xcd00d280|0x9627ddc3|0x0edefb0b,..}) {
                         ensure!(self.native_abi,"Majiro unreviewed library ABI");
                         let ready=self.try_library(&mut m,&event,h).with_context(|| format!(
@@ -499,7 +537,7 @@ impl VmAdapter for MajiroVm {
         ))
     }
     fn diagnostics(&self) -> Vec<u8> {
-        serde_json::to_vec(&json!({"vm":"original-majiro-mjo","module":self.machine.as_ref().map(Machine::module_name),"module_load_pending":self.library.is_some(),"script_threads":self.machine.as_ref().map(Machine::thread_count),"event_hooks":self.machine.as_ref().map(Machine::hook_count),"suspended_native_calls":self.suspended_services.len(),"text_buffer_bytes":self.text_buffer.len(),"pc":self.machine.as_ref().map(|m|m.pc),"line":self.machine.as_ref().map(|m|m.line),"instructions":self.machine.as_ref().map(|m|m.executed),"engine_api_calls":self.api_calls,"pages":self.pages.len(),"native_profile_enabled":self.native_abi,"rng":self.rng.as_ref().map(NativeRng::snapshot),"settings":{"profile":self.config.settings_profile,"import_performed":false,"loaded":self.settings.is_some(),"source":self.settings.as_ref().map(|s|if s.loaded_portable_file{"portable_client_save"}else{"native_env_defaults"}),"entries":self.settings.as_ref().map(NativeSettings::entries),"pending_write":self.settings_write.is_some(),"commits":self.settings.as_ref().map(|s|s.commits)},"module_guard":if self.config.executable.is_some(){"sha256"}else{"not_requested"},"auto_mode_config":self.auto_mode_config,"native_client_size":self.native_client_size,"native_wait":{"pending":self.wait.is_some(),"pc":self.wait.as_ref().map(|wait|wait.pc),"deadline_ms":self.wait.as_ref().map(|wait|wait.deadline)},"fast_disable_depth":self.fast_disable_depth,"keyboard_locks":{"policy":self.config.keyboard_lock_policy,"physical_imported":false,"physical_control":false},"run_mode":self.config.run_mode,"error":self.last_error,"owns_framebuffer":false})).unwrap_or_default()
+        serde_json::to_vec(&json!({"vm":"original-majiro-mjo","module":self.machine.as_ref().map(Machine::module_name),"module_load_pending":self.library.is_some(),"script_threads":self.machine.as_ref().map(Machine::thread_count),"event_hooks":self.machine.as_ref().map(Machine::hook_count),"suspended_native_calls":self.suspended_services.len(),"text_buffer_bytes":self.text_buffer.len(),"console":self.console.diagnostics(),"pc":self.machine.as_ref().map(|m|m.pc),"line":self.machine.as_ref().map(|m|m.line),"instructions":self.machine.as_ref().map(|m|m.executed),"engine_api_calls":self.api_calls,"pages":self.pages.len(),"indexed_pages":self.page_bitmaps.values().filter(|page|page.indexed).count(),"linked_alpha_pages":self.page_bitmaps.values().filter(|page|matches!(page.alpha,page_bitmaps::Alpha::Linked(_))).count(),"bitmap_pending":self.bitmap_work.is_some(),"sprites":self.sprites.len(),"font":self.font.as_ref().map(|font|json!({"requested":font.requested,"alias":font.alias,"height":font.height,"half_width":font.half_width})),"native_profile_enabled":self.native_abi,"rng":self.rng.as_ref().map(NativeRng::snapshot),"settings":{"profile":self.config.settings_profile,"import_performed":false,"loaded":self.settings.is_some(),"source":self.settings.as_ref().map(|s|if s.loaded_portable_file{"portable_client_save"}else{"native_env_defaults"}),"entries":self.settings.as_ref().map(NativeSettings::entries),"pending_write":self.settings_write.is_some(),"commits":self.settings.as_ref().map(|s|s.commits)},"module_guard":if self.config.executable.is_some(){"sha256"}else{"not_requested"},"auto_mode_config":self.auto_mode_config,"native_client_size":self.native_client_size,"native_wait":{"pending":self.wait.is_some(),"pc":self.wait.as_ref().map(|wait|wait.pc),"deadline_ms":self.wait.as_ref().map(|wait|wait.deadline)},"fast_disable_depth":self.fast_disable_depth,"keyboard_locks":{"policy":self.config.keyboard_lock_policy,"physical_imported":false,"physical_control":false},"run_mode":self.config.run_mode,"error":self.last_error,"owns_framebuffer":false})).unwrap_or_default()
     }
 }
 struct Factory;

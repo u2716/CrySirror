@@ -98,7 +98,7 @@ fn native_plan(dir: &SourcePath, name: &str, archives: Vec<String>) -> Result<Pl
     }
     let env = env.context("Majiro essential majiro.env absent from fastdata/update")?;
     let env = crysirror_majiro::environment::parse(&env)?;
-    let mut config = json!({"script":script.context("original Majiro start.mjo absent")?,"run_mode":1,"keyboard_lock_policy":"engine_logical","environment":environment.context("original Majiro ENV provider")?,"settings_profile":"portable_client"});
+    let mut config = json!({"script":script.context("original Majiro start.mjo absent")?,"run_mode":1,"keyboard_lock_policy":"engine_logical","environment":environment.context("original Majiro ENV provider")?,"settings_profile":"portable_client","font_fallback":"default"});
     // Native program lookup may include bin/, as on original installation media.
     if let Some(exe) = env.get("EXENAME") {
         let candidates = [dir.join(exe), dir.join("bin").join(exe)];

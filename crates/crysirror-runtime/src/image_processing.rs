@@ -368,6 +368,7 @@ fn validate_effect_context(input: &ImageInput, effects: &[ImageEffect]) -> Resul
                 | ImageEffect::TileReveal { .. }
                 | ImageEffect::AlphaMaskPlane { .. }
                 | ImageEffect::AlphaStamps { .. }
+                | ImageEffect::CopyChannel { .. }
                 | ImageEffect::AlphaPlanePair { .. }
                 | ImageEffect::StoredMaskBlend { .. }
                 | ImageEffect::Transition { .. }
@@ -396,6 +397,7 @@ fn validate_effect_context(input: &ImageInput, effects: &[ImageEffect]) -> Resul
                     | ImageEffect::ScanlineAffineNearest { .. }
                     | ImageEffect::TileReveal { .. }
                     | ImageEffect::AlphaStamps { .. }
+                    | ImageEffect::CopyChannel { .. }
                     | ImageEffect::SineRowCopy { .. }
                     | ImageEffect::DiscCopies { .. }
                     | ImageEffect::AlphaClipRect { .. }
@@ -478,6 +480,11 @@ fn process_input(
             spec.apply(&image,other.as_ref().ok_or_else(||anyhow::anyhow!("scanline affine source absent"))?,&||cancel.check())?
         } else if let ImageEffect::TileReveal { spec } = &effect {
             spec.apply(&image,other.as_ref().ok_or_else(||anyhow::anyhow!("tile reveal source absent"))?,&||cancel.check())?
+        } else if let ImageEffect::CopyChannel { source_channel, destination_channels, invert } = &effect {
+            image.copy_channel(
+                other.as_ref().ok_or_else(|| anyhow::anyhow!("stored channel source absent"))?,
+                *source_channel, *destination_channels, *invert, &|| cancel.check(),
+            )?
         } else if let ImageEffect::AlphaStamps { spec } = &effect {
             spec.apply(
                 &image,

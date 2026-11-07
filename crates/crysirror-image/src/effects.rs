@@ -138,6 +138,14 @@ pub enum ImageEffect {
     AlphaStamps {
         spec: crate::alpha_stamps::AlphaStamps,
     },
+    /// Replace selected stored RGBA channels from one channel of an equally
+    /// sized second image. Destination bits R/G/B/A are 1/2/4/8; inversion is
+    /// exactly 255-value. Unselected bytes, including hidden RGB, are retained.
+    CopyChannel {
+        source_channel: u8,
+        destination_channels: u8,
+        invert: bool,
+    },
     /// Saturating alpha neighborhoods with explicit sample offsets and edge colour.
     CoverageSum {
         spec: crate::coverage_sum::CoverageSum,
@@ -296,6 +304,10 @@ pub enum ImageEffect {
 impl ImageEffect {
     pub fn validate(&self) -> Result<()> {
         match self {
+            Self::CopyChannel { source_channel, destination_channels, .. } => ensure!(
+                *source_channel < 4 && (1..=15).contains(destination_channels),
+                "stored channel copy selection"
+            ),
             Self::AlphaLookup { table } => ensure!(table.len() == 256, "alpha lookup table length"),
             Self::CoverageReferenceKey { spec } => spec.validate()?,
             Self::RectMap { spec } => spec.validate()?,
@@ -489,6 +501,7 @@ impl ImageSurface {
                 | ImageEffect::TileReveal { .. }
                 | ImageEffect::AlphaMaskPlane { .. }
                 | ImageEffect::AlphaStamps { .. }
+                | ImageEffect::CopyChannel { .. }
                 | ImageEffect::AlphaPlanePair { .. }
                 | ImageEffect::StoredMaskBlend { .. }
                 | ImageEffect::Transition { .. }
