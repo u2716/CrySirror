@@ -40,6 +40,7 @@ impl Machine {
             arguments: vec![],
             locals: vec![],
             discard_return: true,
+            bsel: Bsel::default(),
         });
         self.pc = target;
         Ok(())
@@ -112,9 +113,9 @@ impl Machine {
         //409A90/409CE0 enter the module entry. 409B40/409C10 load the
         //module, then resolve an integer/encoded-name function in that module
         //before falling back to the newest loaded export provider.
-        let named = matches!(*hash, 0x9627ddc3 | 0x0edefb0b);
+        let named = matches!(*hash, 0x9627ddc3 | 0x0edefb0b | 0xedefb0b0);
         ensure!(
-            matches!(*hash, 0x10db0a43 | 0xcd00d280 | 0x9627ddc3 | 0x0edefb0b),
+            matches!(*hash, 0x10db0a43 | 0xcd00d280 | 0x9627ddc3 | 0x0edefb0b | 0xedefb0b0),
             "Majiro library native selector"
         );
         let skip = if named { 2 } else { 1 };
@@ -208,6 +209,7 @@ impl Machine {
             arguments,
             locals: vec![],
             discard_return,
+            bsel: Bsel::default(),
         };
         let index = if let Some(index) = existing {
             index

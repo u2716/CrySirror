@@ -16,9 +16,8 @@ impl Machine {
                     }
                     //The old native CRT's %f rounding/nonfinite profiles are
                     //not interchangeable with Rust Display or Unicode text.
-                    Value::Float(_) => {
-                        bail!("Majiro CTRL d float needs original CRT fixed-decimal profile")
-                    }
+                    Value::Float(value) => format!("{value:.6}").into_bytes(),
+                    Value::Array(_) => bail!("Majiro CTRL d array operand"),
                 };
                 ensure!(
                     bytes.len() <= 1023,

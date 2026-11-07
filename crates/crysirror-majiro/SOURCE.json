@@ -23,7 +23,7 @@
       ]
     }
   ],
-  "scope": "Independent bounded MJO parser/native stack execution. External operations remain pending until shared engine service completion. Unsupported semantics fail at original PC. No original executable execution, hosted engine, renderer or mixer.",
+  "scope": "Adopt-mode original MJO VM and native syscall semantics over shared image, glyph, audio, storage and presentation services. Pages/sprites are retained native pictures composed with shared transparency-plane kernels. No original executable execution or hosted engine.",
   "native_module": {
     "path": "owner game-akatsuki/bin/暁の護衛.exe (not distributed)",
     "sha256": "75f289d8d5b730c6f332488df8fe4827d7e95d1af4a100bfd2a880a0b9e80602",
@@ -47,7 +47,25 @@
       "0x41c5f0": "conditional CapsLock query/physical key toggle; explicit engine_logical policy clears only shared logical CapsLock, preserving NumLock/ScrollLock; no physical import/control",
       "0x410060-0x81ce0485": "fast_mode_disable increments native depth and invokes caps clear",
       "0x409f80": "native VM initialization resets fast-disable depth 0 before startup",
-      "0x41db40": "pushes a type3 native integer value onto VM stack; fast_mode_disable pushes zero"
+      "0x41db40": "pushes a type3 native integer value onto VM stack; fast_mode_disable pushes zero",
+      "0x40B350": "thread loop; click latches 130/131/136 jump frame targets; kill runs destructors",
+      "0x40CB00/0x40EE00/0x40CD30": "array ldelem/stelem and modulo subscripts",
+      "0x40D0A0/0x40D100/0x40D160/0x40D1C0/0x40D2C0/0x40D300": "frame click/AIP/destructor targets 0x83B..0x847",
+      "0x40D490": "return runs a registered destructor before popping",
+      "0x401D60/0x401EE0": "ArrayCreateInt/ArrayCreateString dimensions",
+      "0x409D90/0x41DD40": "RunScript resets thread 0 and enters the module entry",
+      "0x419500..0x41BD30": "page creation, fills, copies, mod-copy, sepia, alpha tables, pic_unpack",
+      "0x447AE0/0x4483F0/0x445700/0x445900": "copy, transparency blend, masked blend, additive kernels",
+      "0x43C590/0x43C790/0x43CCB0": "dirty tiles 160x40, destructive sprite redraw, frame render order",
+      "0x43DBE0/0x43CDC0/0x43D660": "sprite record, per-frame update, move interpolation",
+      "0x43C220/0x4403F0/0x43C260/0x440380": "init-time persistence and reset of sprites/pages",
+      "0x413360..0x413AC0": "fontout state and string drawing with shadow modes",
+      "0x417070": "PROC line layout and CONSOLE_ON/NAME_DISP/CONSOLE_WROTE/CONSOLE_CLS hooks",
+      "0x42F090/0x42F1B0": "hit regions and region poll callbacks",
+      "0x41C720/0x481F04": "window input and key-to-click table",
+      "0x4026F0/0x402420/0x4029E0": "buffered field/int/line file readers",
+      "0x41F7A0/0x41FCB0/0x420150/0x424CB0": "save point, slot save, load and HOT_RESET main loop",
+      "0x437E90..0x43B610": "music, sound slot, voice and voice channel handlers"
     }
   },
   "portable_settings": {

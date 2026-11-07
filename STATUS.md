@@ -1,5 +1,12 @@
 # Implementation and validation status
 
+## 2026-11-08 — Majiro playable bring-up (adopt)
+
+- Implementation: `crysirror-majiro` now executes the owner game 暁の護衛 through the title, scenario text, choices UI, save and load. VM: arrays, click/AIP/destructor targets (0x83B..0x847), destructors on return and kill, argument stores, native string storage, `RunScript`, same-update `wait(-2)` rounds. Pages/sprites are retained native pictures composed with the new shared `crysirror_image::transparency_planes` kernels and shared RCT/RC8 plane readers; the primary picture is published as an engine image layer. Text uses engine glyph jobs with native PROC layout and hooks. Input/hit regions, music/sound/voice, buffered file readers, message history recording/replay, portable settings and portable save records (not MajiroSavV1.103) are connected. Contract and gaps: `crates/crysirror-majiro/README.md`.
+- Compilation: `cargo build --release -p crysirror-desktop --bin crysirror` passed. API reference regenerated with the release example; fingerprint unchanged (`4c6395d28206ec40`).
+- Tests: `cargo test --release -p crysirror-majiro --features runtime` passed (4 unit, 1 bridge, 5 native; 2 owner-corpus tests remain ignored). Two settings unit tests and the bridge test were rewritten for the new contracts; the native division test now uses the defined fault case. `crysirror-image --lib transparency_planes` passed (2). The existing `crysirror-image` integration test `tests/effects.rs` does not compile (missing `rule_table`), unrelated to this change.
+- Behavior (local, headless `play --headless --no-audio` with input tracks): logos, title (frame ~1470), START into scenario 001 with dialogue and event CGs through 8000 frames, SAVE menu, slot save, LOAD menu with slot date/label, load confirmation and restore, backlog opened by wheel-up showing replayed history pages. A 40 s windowed run with audio decoded the Ogg streams without errors. Not exercised: backlog voice replay, movies (skipped with a warning), save thumbnails, auto/skip modes, endings.
+
 ## 2026-11-03 — Original-pixel desktop window and free resizing
 
 - Implementation: desktop startup requests the original canvas size in physical pixels instead of logical desktop points; reported display dimensions use the same units. The host permits resizing the presentation independently of the native script's retained window style. Existing aspect-fit rendering and original-canvas pointer mapping are unchanged.

@@ -87,10 +87,11 @@ fn boundary_validation_and_original_hashes_are_not_per_game_keys() {
 #[test]
 fn unsupported_and_arithmetic_faults_do_not_consume_operands() {
     let mut code = vec![];
+    // 40D950 defines x/0, but INT_MIN/-1 raises the CPU divide fault.
     short(&mut code, 0x800);
-    word(&mut code, 5);
+    word(&mut code, i32::MIN as u32);
     short(&mut code, 0x800);
-    word(&mut code, 0);
+    word(&mut code, (-1i32) as u32);
     short(&mut code, 0x108);
     short(&mut code, 0x82b);
     let mut m = Machine::new(Arc::new(Program::parse(&module(&code, false)).unwrap()));

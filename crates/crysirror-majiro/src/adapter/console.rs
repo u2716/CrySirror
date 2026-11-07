@@ -114,11 +114,27 @@ impl Console {
         self.history_controls = total;
         Ok(())
     }
+    /// 417070 history text record: bytes, NUL, u16 record size (len+3).
+    pub(super) fn record_text(&mut self, bytes: &[u8]) -> Result<()> {
+        if self.replay || bytes.is_empty() {
+            return Ok(());
+        }
+        let size = bytes.len() + 3;
+        ensure!(size <= HISTORY && size <= u16::MAX as usize, "Majiro history text record");
+        let history = Arc::make_mut(&mut self.history);
+        history.copy_within(size.., 0);
+        let start = HISTORY - size;
+        history[start..start + bytes.len()].copy_from_slice(bytes);
+        history[start + bytes.len()] = 0;
+        history[HISTORY - 2..].copy_from_slice(&(size as u16).to_le_bytes());
+        Ok(())
+    }
+    pub(super) fn history(&self) -> &[u8] {
+        &self.history
+    }
     fn clear(&mut self, token: &[u8]) -> Result<bool> {
         self.just_wrapped = false;
-        if self.replay {
-            return Ok(false);
-        }
+        // 4156E0 executes 'w' during replay too; only recording is skipped.
         self.record(token)?;
         Arc::make_mut(&mut self.voice_lines).fill(0);
         self.voice_line = 0;
@@ -207,6 +223,7 @@ impl MajiroVm {
                     | 0xc5270429
                     | 0x1ec3c6bb
                     | 0x5b87a41d
+                    | 0xba81ef8d
             )
         {
             return Ok(false);
@@ -240,7 +257,7 @@ impl MajiroVm {
                     let page = u32::try_from(args[0].integer()?)
                         .context("Majiro console destination page")?;
                     ensure!(
-                        self.pages.contains_key(&page),
+                        self.gfx.pages.contains_key(&page),
                         "Majiro console page missing or foreign"
                     );
                     candidate.page = Some(page);
@@ -326,6 +343,13 @@ impl MajiroVm {
                         format!("c0x{:08x}0x{:08x}", first as u32, second as u32).into_bytes(),
                     );
                 }
+                0xba81ef8d => {
+                    //4160C0 formats an 'l' locate control through 4156E0.
+                    ensure!(args.len() == 2, "Majiro console locate ABI");
+                    token = Some(
+                        format!("l0x{:08x}0x{:08x}", args[0].integer()? as u32, args[1].integer()? as u32).into_bytes(),
+                    );
+                }
                 0x924ee3eb => {
                     ensure!(args.len() == 3, "Majiro RGB packing ABI");
                     let values = args
@@ -351,22 +375,41 @@ impl MajiroVm {
             }
         }
         if let Some(bytes) = token {
+            callback = self.console_token(&mut candidate, &bytes, host)?;
+        }
+        machine.complete_with_callback(output(result), callback)?;
+        self.console = candidate;
+        Ok(true)
+    }
+}
+
+impl MajiroVm {
+    /// 4156E0: apply one console control. Replay (49B074) executes controls
+    /// and their hooks but records nothing. Returns the hook to dispatch.
+    pub(super) fn console_token(
+        &mut self,
+        candidate: &mut Console,
+        bytes: &[u8],
+        host: &mut dyn HostServices,
+    ) -> Result<Option<(u32, Vec<Value>)>> {
+        let bytes = bytes.to_vec();
+        let mut callback = None;
             ensure!(
                 !bytes.is_empty() && bytes.len() <= 127 && !bytes.contains(&0),
                 "Majiro console control buffer"
             );
             let tag = bytes[0];
             if tag == b'w' {
+                self.page_text.clear();
+                self.page_text_open = true;
                 if candidate.clear(&bytes)? {
                     callback = Some((0x93b38a0b, vec![]));
                 }
-            } else if !candidate.replay {
+            } else {
                 let just_wrapped = candidate.just_wrapped;
                 candidate.just_wrapped = false;
                 if tag == b'n' && just_wrapped && candidate.cursor == candidate.origin {
-                    machine.complete_with_callback(output(result), None)?;
-                    self.console = candidate;
-                    return Ok(true);
+                    return Ok(None);
                 }
                 //Validate the entire native operation before committing history.
                 match tag {
@@ -482,9 +525,7 @@ impl MajiroVm {
                 }
                 candidate.record(&bytes)?;
             }
-        }
-        machine.complete_with_callback(output(result), callback)?;
-        self.console = candidate;
-        Ok(true)
+        
+        Ok(callback)
     }
 }

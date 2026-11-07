@@ -24,13 +24,15 @@ mod native_services;
 mod libraries;
 mod text_buffer;
 mod native_audio;
-mod pictures;
 mod continuations;
 mod input_files;
-mod sprites;
 mod font_policy;
 mod console;
-mod page_bitmaps;
+mod gfx;
+mod syscalls;
+mod saves;
+mod history;
+mod text;
 
 fn mode() -> i32 {
     1
@@ -74,28 +76,43 @@ pub struct MajiroVm {
     rng: Option<NativeRng>,
     settings: Option<NativeSettings>,
     settings_write: Option<PendingSettingsWrite>,
-    next_page: u32,
-    pages: BTreeMap<u32, [u32; 2]>,
+    settings_flush: Option<Box<dyn StorageWrite>>,
+    settings_dirty: bool,
     auto_mode_config: i32,
     native_client_size: [i32; 2],
     fast_disable_depth: i32,
     wait: Option<native_services::NativeWait>,
     audio: native_audio::NativeAudio,
     picture_key: Option<crysirror_resource::KeyMaterial>,
-    picture: Option<pictures::PendingPicture>,
     picture_context:crysirror_resource::DecodeContext,
     input_file_load:Option<input_files::PendingInputFile>,
     input_files:BTreeMap<u32,input_files::InputFile>,
     next_input_file:u32,
-    sprites:BTreeMap<u32,sprites::Sprite>,
-    next_sprite:u32,
-    sprite_order:Vec<u32>,
     font:Option<font_policy::NativeFont>,
     console:console::Console,
-    page_resources: BTreeMap<u32,String>,
-    page_bitmaps:BTreeMap<u32,page_bitmaps::Bitmap>,
-    page_busy:BTreeMap<u32,std::sync::Weak<()>>,
-    bitmap_work:Option<page_bitmaps::PendingBitmap>,
+    gfx: gfx::Gfx,
+    flags: std::collections::BTreeSet<u32>,
+    regions: BTreeMap<i32, syscalls::Regions>,
+    fontout: BTreeMap<i32, text::Fontout>,
+    input: syscalls::Input,
+    input_tick: Option<u64>,
+    audio_names: BTreeMap<u32, Vec<u8>>,
+    exit_requested: bool,
+    saved_music: Option<Vec<u8>>,
+    frame_wait: Option<u32>,
+    parked_regions: Option<syscalls::Regions>,
+    timed_waits: BTreeMap<u64, i32>,
+    trace: bool,
+    history_pc: Option<u32>,
+    replay: Option<history::Replay>,
+    page_text: Vec<u8>,
+    page_text_open: bool,
+    saves: saves::Saves,
+    base_primary: Option<u32>,
+    trace_last: Option<(u64, u32)>,
+    round_yields: std::collections::BTreeSet<u64>,
+    glyphs: text::GlyphCache,
+    picture_cache: BTreeMap<String, crysirror_image::transparency_planes::Plane>,
     api_calls: u64,
     last_error: Option<String>,
 }
@@ -160,21 +177,40 @@ impl MajiroVm {
             rng: None,
             settings: None,
             settings_write: None,
-            next_page: 1,
-            pages: BTreeMap::new(),
+            settings_flush: None,
+            settings_dirty: false,
             auto_mode_config: 0,
             native_client_size: [640,480],
             fast_disable_depth: 0,
             wait: None,
             audio: native_audio::NativeAudio::default(),
             picture_key: None,
-            picture: None,
             picture_context:crysirror_resource::DecodeContext::new(client),
             input_file_load:None,input_files:BTreeMap::new(),next_input_file:0x1000_0000,
-            sprites:BTreeMap::new(),next_sprite:0x0100_0000,sprite_order:Vec::new(),
             font:None,console:console::Console::default(),
-            page_resources: BTreeMap::new(),
-            page_bitmaps:BTreeMap::new(),page_busy:BTreeMap::new(),bitmap_work:None,
+            gfx: gfx::Gfx::new([640, 480]),
+            flags: Default::default(),
+            regions: BTreeMap::new(),
+            fontout: BTreeMap::new(),
+            input: Default::default(),
+            input_tick: None,
+            audio_names: BTreeMap::new(),
+            exit_requested: false,
+            saved_music: None,
+            frame_wait: None,
+            parked_regions: None,
+            timed_waits: BTreeMap::new(),
+            trace: std::env::var_os("MAJIRO_TRACE").is_some(),
+            history_pc: None,
+            replay: None,
+            page_text: Vec::new(),
+            page_text_open: true,
+            saves: Default::default(),
+            base_primary: None,
+            round_yields: Default::default(),
+            trace_last: None,
+            glyphs: Default::default(),
+            picture_cache: BTreeMap::new(),
             api_calls: 0,
             last_error: None,
         })
@@ -204,10 +240,13 @@ impl MajiroVm {
         if self.settings_write.is_some() {
             return self.poll_settings_write(*pc);
         }
+        if let Some(out) = self.try_gfx(*hash, a, h)? {
+            return Ok(match out {
+                gfx::GfxOut::Wait => None,
+                gfx::GfxOut::Value(v) => Some(if *returns { vec![Value::Integer(v)] } else { vec![] }),
+            });
+        }
         match *hash {
-   0xef4581dc=>self.create_page_sprite(a,*returns,h),
-   0xff7c52e6=>self.sprite_alpha(a,*returns,h),
-   0x4a02d664|0x5548ef5e|0x69073588|0x7bffc5b1=>self.sprite_priority(*hash,a,*returns,h),
    0xa62aa5eb=>{
     ensure!(a.is_empty(),"Majiro is_fast_mode ABI");
     //410060/40B1F0: all force/read/auto-mode flags start0 (40B0A0).
@@ -227,7 +266,7 @@ impl MajiroVm {
     Ok(Some(if *returns{vec![Value::Integer(a[0].integer()?.wrapping_abs())]}else{vec![]}))
    },
    0xe4e3b40d=>self.open_input_file(event,h),
-   0xd6333b3c|0x55232561|0x2539d212=>self.read_input_file(*hash,a,*returns),
+   0xd6333b3c|0x55232561|0x2539d212|0x6008bebb=>self.read_input_file(*hash,a,*returns),
    0x266a3c79=>{
     ensure!(a.len()==1,"Majiro string uppercase ABI");
     let bytes=a[0].bytes()?;
@@ -246,9 +285,6 @@ impl MajiroVm {
     if !bytes.is_empty(){self.picture_key=Some(crysirror_resource::KeyMaterial::new(bytes.to_vec())?);}
     Ok(Some(if *returns {vec![Value::Integer(0)]}else{vec![]}))
    },
-   0xdad96289 | 0x57efa275 | 0x539b07bc | 0xce94e6ca | 0xc2c3c4f4 => self.native_picture(event,h),
-   0x265e07d7 | 0x6b4a7873 | 0xf6459905 | 0xdcc706ef=>self.sprite_query(*hash,a,*returns),
-   0x58b31737=>self.release_sprite(a,*returns,h),
    0x0c070535 | 0x05d6ed69 | 0x83a53ffa | 0x2626fe02 | 0xd011ff32 | 0xf8d8925b => self.audio_control(*hash,a,*returns,h),
    0xe06200c4 | 0x8c283f7f => {
     ensure!(a.is_empty(),"Majiro client extent ABI");
@@ -264,8 +300,6 @@ impl MajiroVm {
     Ok(Some(if *returns {vec![Value::Integer(h.now_ms() as u32 as i32)]} else {vec![]}))
    },
    0xcf35f0e3 => self.native_wait(*pc,a,*returns,h),
-   0xf8fd08f6 | 0x65f2e980 => self.native_page_size(a,*hash==0x65f2e980,*returns),
-   0xc50dfd06 => self.native_page_release(a,*returns,h),
    0x8c7f4c1e => {
     ensure!(a.is_empty(),"fast_mode_enable ABI");
     //410060 resets49B028 to0. This is not a decrement and does not
@@ -308,24 +342,40 @@ impl MajiroVm {
     Ok(Some(if *returns{vec![Value::Integer(value)]}else{vec![]}))
    },
    0x0c93fcb4|0x6501cc30|0x9a1aceca=>{
-    ensure!(!self.suspended_services.values().any(|state|state.has_settings_write()),
-        "Majiro concurrent native preference writes require ordered completion; original call retained");
     let settings=self.settings.as_ref().context("Majiro setting write requires original ENV and portable settings")?;
     let (name,value,current)=if *hash==0x9a1aceca {
      ensure!(a.len()==2,"native reg_write ABI");
      let name=encoding_rs::SHIFT_JIS.decode_without_bom_handling_and_without_replacement(a[0].bytes()?).context("native registry key encoding")?.into_owned();
      (name,a[1].integer()?,false)
     }else{ensure!(a.len()==1,"native speed setter ABI");(if *hash==0x0c93fcb4{"EffectSpeed"}else{"MojiSpeed"}.to_owned(),a[0].integer()?,true)};
+    //4430E0 writes the registry synchronously. The value is current at once;
+    //the portable copy is persisted by a coalesced background atomic write.
     let candidate=settings.candidate_integer(&name,value,current)?;
-    let storage=h.storage(self.client).map_err(core_error)?;
-    let path=VfsPath::new(Mount::Save,SETTINGS_FILE)?;
-    let write=storage.begin_write_atomic(&path,Arc::from(candidate.bytes()?)).map_err(core_error)?;
-    self.settings_write=Some(PendingSettingsWrite{pc:*pc,write,candidate,output:if *returns{vec![Value::Integer(0)]}else{vec![]}});
-    self.poll_settings_write(*pc)
+    self.settings=Some(candidate);
+    self.settings_dirty=true;
+    Ok(Some(if *returns{vec![Value::Integer(0)]}else{vec![]}))
    },
-   0x83d81f59|0xf94b3586|0x56bbba3a|0xf9705332|0xd01be374=>self.native_bitmap(event,h),
    _=>bail!("unsupported original Majiro syscall {hash:#010x}; pending call was not acknowledged"),
   }
+    }
+    fn flush_settings(&mut self, h: &mut dyn HostServices) -> Result<()> {
+        if let Some(write) = self.settings_flush.as_mut() {
+            match write.poll().map_err(core_error)? {
+                StorageWriteState::Pending => return Ok(()),
+                StorageWriteState::Failed(error) => self.gfx.warn(format!("Majiro settings persistence failed: {error}")),
+                StorageWriteState::Ready => {}
+            }
+            self.settings_flush = None;
+        }
+        if self.settings_dirty {
+            if let Some(settings) = &self.settings {
+                let storage = h.storage(self.client).map_err(core_error)?;
+                let path = VfsPath::new(Mount::Save, SETTINGS_FILE)?;
+                self.settings_flush = Some(storage.begin_write_atomic(&path, Arc::from(settings.bytes()?)).map_err(core_error)?);
+            }
+            self.settings_dirty = false;
+        }
+        Ok(())
     }
     fn poll_settings_write(&mut self, pc: u32) -> Result<Option<Vec<Value>>> {
         let pending = self
@@ -427,6 +477,7 @@ impl MajiroVm {
                 return Ok(VmYield::WaitUntil(h.now_ms().saturating_add(1)));
             };
             let mut machine=Machine::new(Arc::new(prepared.program));
+            self.load_system(&mut machine, h);
             let mut rng=NativeRng::new(prepared.seed);
             //41DED0 initializes the process thread-ID word with one CRT
             //draw, even when constructing explicit primary ID0.
@@ -442,17 +493,35 @@ impl MajiroVm {
             self.rng = Some(rng);
             self.settings = prepared.settings;
             self.native_client_size = prepared.native_client_size;
+            self.gfx = gfx::Gfx::new(self.native_client_size);
+            //424CB0 allocates the client-sized true-colour primary picture.
+            let [w, h] = self.native_client_size;
+            let primary = self.gfx.alloc_page(crysirror_image::transparency_planes::Plane::new(
+                w.max(1) as u32, h.max(1) as u32,
+                crysirror_image::transparency_planes::PlaneFormat::Bgr24)?)?;
+            self.gfx.set_primary(Some(primary));
+            self.base_primary = Some(primary);
             self.load = None;
         }
         let mut m = self.machine.take().unwrap();
         let result = (|| {
             let now=h.now_ms();m.begin_tick(now);
-            let mut selected=false;let mut quantum=0;
+            let mut selected=false;let mut quantum=0;let mut rounds=0;
+            let budget=budget.max(200_000);
             for _ in 0..budget {
                 if !selected {
                     selected=m.select_ready(now)?;
+                    while !selected && rounds<64 && m.start_round() {
+                        rounds+=1;
+                        selected=m.select_ready(now)?;
+                    }
                     if !selected {return Ok(VmYield::WaitUntil(now.saturating_add(1)));}
                     quantum=0;
+                }
+                if m.take_initializer_finished() {
+                    self.gfx.mark_persistent();
+                    m.dispatch_event_now(crate::program::name_hash(b"HOT_RESET"),
+                        vec![Value::Integer(0), Value::native_string(b"")?, Value::Integer(0)])?;
                 }
                 let event=m.step()?;
                 if m.thread_finished() {
@@ -461,6 +530,18 @@ impl MajiroVm {
                     selected=false;continue;
                 }
                 if let Some(event) = event {
+                    let fresh = self.trace_last != Some((m.context_id(), m.pc));
+                    if self.trace && fresh {
+                        self.trace_last = Some((m.context_id(), m.pc));
+                        if let Event::Native { hash, arguments, pc, .. } = &event {
+                            eprintln!("[mjtrace] t={} th={} {}:{pc:#x} {hash:08x} {:?}", now, m.current_thread(), m.module_name(), arguments.iter().map(|v| match v {
+                                Value::Integer(n) => format!("{n}"),
+                                Value::Float(f) => format!("{f}f"),
+                                Value::String(b) => format!("{:?}", encoding_rs::SHIFT_JIS.decode(&b[..b.iter().position(|x| *x == 0).unwrap_or(b.len())]).0),
+                                Value::Array(_) => "[array]".into(),
+                            }).collect::<Vec<_>>());
+                        }
+                    }
                     self.select_service_context(m.context_id())?;
                     if matches!(event,Event::Native{..}) {ensure!(self.native_abi,"Majiro executable native ABI has not been reviewed");}
                     if m.native_thread_control(&event).with_context(||format!(
@@ -469,7 +550,7 @@ impl MajiroVm {
                     }
                     if self.try_console(&mut m,&event,h).with_context(||format!(
                         "Majiro {} pc={:#x} line={} console",m.module_name(),m.pc,m.line))? {continue;}
-                    if matches!(event,Event::Native {hash:0x10db0a43|0xcd00d280|0x9627ddc3|0x0edefb0b,..}) {
+                    if matches!(event,Event::Native {hash:0x10db0a43|0xcd00d280|0x9627ddc3|0x0edefb0b|0xedefb0b0,..}) {
                         ensure!(self.native_abi,"Majiro unreviewed library ABI");
                         let ready=self.try_library(&mut m,&event,h).with_context(|| format!(
                             "Majiro {} pc={:#x} line={} load_library",m.module_name(),m.pc,m.line))?;
@@ -477,6 +558,69 @@ impl MajiroVm {
                             m.defer_current(now.saturating_add(1));selected=false;
                         }
                         continue;
+                    }
+                    if let Event::Native { hash: 0xcf35f0e3, arguments, returns, .. } = &event {
+                        if arguments.first() == Some(&Value::Integer(-2)) {
+                            let id = m.context_id();
+                            if self.round_yields.remove(&id) {
+                                m.acknowledge(if *returns { vec![Value::Integer(0)] } else { vec![] })?;
+                            } else {
+                                self.round_yields.insert(id);
+                                m.defer_round();
+                                selected = false;
+                            }
+                            continue;
+                        }
+                    }
+                    if matches!(event, Event::ProcessText { .. }) {
+                        let done = self.process_text(&mut m, h).with_context(|| format!(
+                            "Majiro {} pc={:#x} line={} PROC", m.module_name(), m.pc, m.line))?;
+                        if !done {
+                            m.defer_current(now.saturating_add(1));
+                            selected = false;
+                        }
+                        continue;
+                    }
+                    if let Event::Native { hash, arguments, returns, .. } = &event {
+                        let (hash, returns) = (*hash, *returns);
+                        let arguments = arguments.clone();
+                        let handled = match self.try_saves(&mut m, hash, &arguments, returns, h).with_context(|| format!(
+                            "Majiro {} pc={:#x} line={} save syscall {hash:#010x}", m.module_name(), m.pc, m.line))? {
+                            Some(out) => Some(out),
+                            None => self.try_syscall(&mut m, hash, &arguments, returns, h).with_context(|| format!(
+                            "Majiro {} pc={:#x} line={} syscall {hash:#010x}", m.module_name(), m.pc, m.line))?,
+                        };
+                        match handled {
+                            Some(syscalls::Out::Value(v)) => {
+                                m.acknowledge(if returns { vec![v] } else { vec![] })?;
+                                quantum += 1;
+                                continue;
+                            }
+                            Some(syscalls::Out::Done) => {
+                                quantum += 1;
+                                continue;
+                            }
+                            Some(syscalls::Out::Wait) => {
+                                m.defer_current(now.saturating_add(1));
+                                selected = false;
+                                continue;
+                            }
+                            None => {}
+                        }
+                        let fontout = self.try_fontout(&mut m, hash, &arguments, h).with_context(|| format!(
+                            "Majiro {} pc={:#x} line={} fontout", m.module_name(), m.pc, m.line))?;
+                        match fontout {
+                            Some(Some(v)) => {
+                                m.acknowledge(if returns { vec![Value::Integer(v)] } else { vec![] })?;
+                                continue;
+                            }
+                            Some(None) => {
+                                m.defer_current(now.saturating_add(1));
+                                selected = false;
+                                continue;
+                            }
+                            None => {}
+                        }
                     }
                     let output = self.native(h, &event).with_context(|| {
                         format!(
@@ -497,6 +641,12 @@ impl MajiroVm {
         })();
         self.collect_service_contexts(&m);
         self.machine = Some(m);
+        if result.is_ok() {
+            self.flush_settings(h)?;
+            self.poll_save_writes();
+            self.gfx.render(h.now_ms() as u32);
+            self.gfx.present(self.client, h)?;
+        }
         result
     }
 }
@@ -513,13 +663,28 @@ impl VmAdapter for MajiroVm {
     fn step(
         &mut self,
         h: &mut dyn HostServices,
-        _: InputFrame,
+        input: InputFrame,
         budget: u32,
     ) -> crysirror_core::Result<VmYield> {
         if self.last_error.is_some() {
             return Err(Error::Unsupported(
                 "Majiro stopped after failed native operation",
             ));
+        }
+        let now = h.now_ms();
+        if self.input_tick != Some(now) {
+            self.input_tick = Some(now);
+            self.input.update(&input);
+            if let Some(m) = self.machine.as_mut() {
+                let latch = self.input.latch();
+                if let Err(e) = m.deliver_clicks(latch) {
+                    self.last_error = Some(format!("{e:#}"));
+                    return Err(Error::Io(format!("{e:#}")));
+                }
+            }
+        }
+        if self.exit_requested {
+            return Ok(VmYield::Halted);
         }
         self.run(h, budget).map_err(|e| {
             self.last_error = Some(format!("{e:#}"));
@@ -537,7 +702,7 @@ impl VmAdapter for MajiroVm {
         ))
     }
     fn diagnostics(&self) -> Vec<u8> {
-        serde_json::to_vec(&json!({"vm":"original-majiro-mjo","module":self.machine.as_ref().map(Machine::module_name),"module_load_pending":self.library.is_some(),"script_threads":self.machine.as_ref().map(Machine::thread_count),"event_hooks":self.machine.as_ref().map(Machine::hook_count),"suspended_native_calls":self.suspended_services.len(),"text_buffer_bytes":self.text_buffer.len(),"console":self.console.diagnostics(),"pc":self.machine.as_ref().map(|m|m.pc),"line":self.machine.as_ref().map(|m|m.line),"instructions":self.machine.as_ref().map(|m|m.executed),"engine_api_calls":self.api_calls,"pages":self.pages.len(),"indexed_pages":self.page_bitmaps.values().filter(|page|page.indexed).count(),"linked_alpha_pages":self.page_bitmaps.values().filter(|page|matches!(page.alpha,page_bitmaps::Alpha::Linked(_))).count(),"bitmap_pending":self.bitmap_work.is_some(),"sprites":self.sprites.len(),"font":self.font.as_ref().map(|font|json!({"requested":font.requested,"alias":font.alias,"height":font.height,"half_width":font.half_width})),"native_profile_enabled":self.native_abi,"rng":self.rng.as_ref().map(NativeRng::snapshot),"settings":{"profile":self.config.settings_profile,"import_performed":false,"loaded":self.settings.is_some(),"source":self.settings.as_ref().map(|s|if s.loaded_portable_file{"portable_client_save"}else{"native_env_defaults"}),"entries":self.settings.as_ref().map(NativeSettings::entries),"pending_write":self.settings_write.is_some(),"commits":self.settings.as_ref().map(|s|s.commits)},"module_guard":if self.config.executable.is_some(){"sha256"}else{"not_requested"},"auto_mode_config":self.auto_mode_config,"native_client_size":self.native_client_size,"native_wait":{"pending":self.wait.is_some(),"pc":self.wait.as_ref().map(|wait|wait.pc),"deadline_ms":self.wait.as_ref().map(|wait|wait.deadline)},"fast_disable_depth":self.fast_disable_depth,"keyboard_locks":{"policy":self.config.keyboard_lock_policy,"physical_imported":false,"physical_control":false},"run_mode":self.config.run_mode,"error":self.last_error,"owns_framebuffer":false})).unwrap_or_default()
+        serde_json::to_vec(&json!({"vm":"original-majiro-mjo","module":self.machine.as_ref().map(Machine::module_name),"module_load_pending":self.library.is_some(),"script_threads":self.machine.as_ref().map(Machine::thread_count),"event_hooks":self.machine.as_ref().map(Machine::hook_count),"suspended_native_calls":self.suspended_services.len(),"text_buffer_bytes":self.text_buffer.len(),"console":self.console.diagnostics(),"pc":self.machine.as_ref().map(|m|m.pc),"line":self.machine.as_ref().map(|m|m.line),"instructions":self.machine.as_ref().map(|m|m.executed),"engine_api_calls":self.api_calls,"pages":self.gfx.pages.len(),"primary":self.gfx.primary,"sprites":self.gfx.sprites.len(),"render_lock":self.gfx.lock,"warnings":self.gfx.warnings,"font":self.font.as_ref().map(|font|json!({"requested":font.requested,"alias":font.alias,"height":font.height,"half_width":font.half_width})),"native_profile_enabled":self.native_abi,"rng":self.rng.as_ref().map(NativeRng::snapshot),"settings":{"profile":self.config.settings_profile,"import_performed":false,"loaded":self.settings.is_some(),"source":self.settings.as_ref().map(|s|if s.loaded_portable_file{"portable_client_save"}else{"native_env_defaults"}),"entries":self.settings.as_ref().map(NativeSettings::entries),"pending_write":self.settings_write.is_some(),"commits":self.settings.as_ref().map(|s|s.commits)},"module_guard":if self.config.executable.is_some(){"sha256"}else{"not_requested"},"auto_mode_config":self.auto_mode_config,"native_client_size":self.native_client_size,"native_wait":{"pending":self.wait.is_some(),"pc":self.wait.as_ref().map(|wait|wait.pc),"deadline_ms":self.wait.as_ref().map(|wait|wait.deadline)},"fast_disable_depth":self.fast_disable_depth,"keyboard_locks":{"policy":self.config.keyboard_lock_policy,"physical_imported":false,"physical_control":false},"run_mode":self.config.run_mode,"error":self.last_error,"owns_framebuffer":false})).unwrap_or_default()
     }
 }
 struct Factory;

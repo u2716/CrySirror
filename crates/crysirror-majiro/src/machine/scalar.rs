@@ -11,6 +11,7 @@ pub(super) fn branch(value:&Value,nonzero:bool)->bool {
         Value::Integer(value)=>if nonzero{*value!=0}else{*value==0},
         Value::Float(value)=>if nonzero{*value!=0.0}else{*value==0.0},
         Value::String(bytes)=>if nonzero{bytes.len()>1}else{bytes.len()==1},
+        Value::Array(_)=>nonzero,
     }
 }
 pub(super) fn number(value: &Value) -> Result<f64> {
@@ -33,8 +34,8 @@ pub(super) fn binary(op: u16, left: &Value, right: &Value) -> Result<Value> {
         return super::integer_binary(op, left, right);
     }
     if op == 0x11a {
-        let a = left.bytes()?;
-        let b = right.bytes()?;
+        let a = left.stored()?;
+        let b = right.stored()?;
         ensure!(!a.is_empty() && !b.is_empty(), "Majiro stored strings require their terminal storage byte");
         let count = a
             .len()

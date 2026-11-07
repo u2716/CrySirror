@@ -21,7 +21,7 @@ fn constant(b: &mut Vec<u8>, n: i32) {
     word(b, n as u32);
 }
 #[test]
-fn original_native_page_becomes_shared_canvas_and_unknown_stays_at_pc() {
+fn original_native_page_is_a_vm_picture_and_unknown_stays_at_pc() {
     let temp = tempfile::tempdir().unwrap();
     std::fs::create_dir(temp.path().join("assets")).unwrap();
     let mut code = vec![];
@@ -61,21 +61,11 @@ fn original_native_page_becomes_shared_canvas_and_unknown_stays_at_pc() {
         std::thread::sleep(Duration::from_millis(1));
     }
     let inspect = rt.inspect();
-    let canvas = &inspect["engine"]["canvases"]["clients"]["1"]["1"];
-    assert_eq!(canvas["width"], 32);
-    assert_eq!(canvas["height"], 24);
-    assert_eq!(
-        rt.host
-            .engine
-            .canvases
-            .sample_pixel(crysirror_core::state::ClientId(1), 1, [0, 0])
-            .unwrap(),
-        [0, 0, 0, 255]
-    );
-    assert_eq!(
-        inspect["sessions"][0]["native"]["vm"],
-        "original-majiro-mjo"
-    );
-    assert_eq!(inspect["sessions"][0]["native"]["pc"], unknown_pc);
+    let native = &inspect["sessions"][0]["native"];
+    assert_eq!(native["vm"], "original-majiro-mjo");
+    // page_create allocates a native picture beside the client-sized primary.
+    assert_eq!(native["pages"], 2);
+    assert!(native["primary"].is_number());
+    assert_eq!(native["pc"], unknown_pc);
     assert!(!rt.all_halted());
 }

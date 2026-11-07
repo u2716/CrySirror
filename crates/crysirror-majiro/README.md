@@ -1,56 +1,98 @@
 # Majiro native adapter
 
-This first-class crate owns original MJO parsing/control flow and native handle,
-argument, resource and wait policy. It contains no Majiro renderer, private
-bitmap/text algorithm or mixer and executes no original EXE/DLL.
+Onboarding mode: **adopt** (ADR 0102). This first-class crate owns original
+MJO parsing/execution and the native syscall semantics; pixel, glyph, audio,
+storage and presentation work goes through shared CrySirror services. No
+original EXE/DLL is executed. Native findings cite the examined module's
+functions (static IDA analysis; see `SOURCE.json`).
 
-The bounded X/V1.000 reader validates the entire bytecode, instruction and jump
-boundaries, function hashes and budgets. MJO XOR is the fixed CRC-table stream;
-it is separate from RCT picture-password handling. Original arrays, branch
-selectors, exceptional math, full call/return/value compatibility and saves are
-not completed. Unknown execution stays at its original instruction.
+## VM (`machine/`)
 
-Native syscall events retain arguments and PC until the host acknowledges an
-actual successful operation. Arguments use the original stack-top-first ABI.
-The current thin runtime facade maps true-colour `page_create` to shared
-Canvas resources. The examined native module allocates **24-bit BGR** pages,
-zero-filled and opaque; the public wiki's 32-bit description is not applied.
-Indexed pages fail rather than losing palette semantics. `auto_mode_config`
-is native policy state; `is_testplay` follows explicit `run_mode != 1`.
-An optional module path is only read and SHA-guarded against the examined ABI.
-Without it the caller selects this bounded native profile explicitly; this is
-not evidence of a reviewed arbitrary game module.
+- X/V1.000 MJO reader with bounded validation; fixed CRC-table XOR.
+- Stack machine with the native integer/float/string semantics, arrays
+  (401D60/40CB00/40EE00: 1..3 dimensions, innermost last, positive-modulo
+  subscripts, reference sharing), argument stores, switch/case selector.
+- Frame click targets `0x83B..0x847` (40D0A0..40D300): left/right/middle
+  targets, AIP4 and destructors. A click observed by the 40B350 input pass jumps
+  every frame whose target lies ahead and abandons a parked native call.
+- Destructors run on return (40D490) and on thread kill (frames without one
+  are discarded).
+- Cooperative threads, event hooks (`event_hook[_after]`, `do_event`,
+  thread-targeted events), module loading (`ExecuteScript`, named calls) and
+  `RunScript` (409D90: reset thread 0 and enter a scenario module).
+- `wait(-2)` yields one scheduler round inside the same update (49ADE4) instead
+  of costing a frame. The adapter runs up to 64 such rounds per update.
 
-Program reads/parsing, the original ENV and initial portable settings load run
-on bounded capability workers. `settings_profile=portable_client` stores named
-native decimal string values in the client's Save namespace; it never claims
-to import or inspect the original Windows registry. Missing portable values
-use reviewed ENV defaults. Setters retain native PC/current values until the
-shared atomic-write receipt completes. Strict original registry import is
-explicitly unsupported. This preferences profile is distinct from game saves.
+## Graphics (`adapter/gfx.rs`)
 
-Native random integers call the existing shared CRT sequence kernel. Startup
-captures original Unix-second seeding policy once; the VM retains explicit
-seed/accumulator/draw-count data. This does not replace native modulo sampling
-with uniform floats or fixed return values.
+Majiro is a software-composited engine: sprites draw *destructively* into
+their destination pictures during the native dirty-tile redraw (43C790,
+160x40 tiles), and scripts read pictures back (front-buffer captures for
+transitions, `grp_point_get`). Pages are therefore retained as VM-visible
+native pictures (8-bit indexed with palette, or 24-bit BGR, with an optional
+linked transparency page). All pixel kernels are the shared
+`crysirror_image::transparency_planes` capability (copy, transparency blend,
+masked blend with destination-mask update, additive, weighted fills, stretch,
+swap, duotone, mosaic). RCT/RC8 planes are decoded by the shared
+`crysirror_formats_arc::images_c::majiro` readers. The primary picture is
+published as an engine image resource on layer 1 when its content changes;
+`SetViewportOffset` wraps it like the native display offset.
 
-Native `fast_mode_disable` retains the reviewed nesting depth and zero result.
-Its default explicit `keyboard_lock_policy=engine_logical` clears only this
-client's shared logical CapsLock, preserving NumLock and ScrollLock. It does
-not import or toggle the physical OS keyboard. `physical_windows` fails at
-configuration admission. Shared owner completion precedes native acknowledgement.
+Sprites follow 43DBE0/43CDC0: move interpolation, keyframe tracks for cells,
+transparency and zoom, priority lists with groups, push/pop hiding, render
+lock, paste, and rotate/zoom into a temporary picture (nearest sampling; the
+native 448750 filter is not reproduced).
 
-Program reads/parsing run on bounded capability workers. Owner publication
-precedes VM execution. Shared Canvas owns all resulting rendering state.
-Message buffer/layout, image/audio syscalls, cross-module library linking,
-original save/restore and whole-game compatibility remain unfinished and fail
-visibly. Registration or successful format parsing is not completed integration.
+## Text (`adapter/text.rs`)
 
-The desktop always links Majiro and detects original archive/ENV boot layouts
-without extraction; no per-engine feature flag is required.
-Detection reads `majiro.env` from fastdata/update and `start.mjo` through common
-`majiro/arc` indexing; original files remain intact. Conflicting patch providers
-fail until their native precedence policy is mapped.
+Glyph coverage comes from engine glyph-image jobs (cached per face, size and
+character). `fontout` (413360/4132C0/4131E0/413560) and PROC (417070) compose
+it with the native colour and shadow modes into pages. PROC lays out one line
+per execution with gyoutou kinsoku, and fires `CONSOLE_ON`, `NAME_DISP`,
+`CONSOLE_WROTE` and `CONSOLE_CLS` with the native PC rewind, so the original
+script hooks own text animation and click waits. Advances assume the
+monospace GDI cell (full width = 2 x half width).
 
-Local release validation and owner-corpus evidence are recorded in STATUS.md,
-separately from implementation claims. No owner game/font/module is distributed.
+## Input, regions and sound (`adapter/syscalls.rs`)
+
+The shared logical buttons map through the native key table (word_481F04):
+Enter/Space act as left click, Escape/Insert as right click, Shift/Ctrl as the
+middle (skip) code, arrows as navigation. Hit regions (42F090/42F1B0) provide
+hover/leave/click callbacks, keyboard focus movement and background handlers.
+Music, four sound slots, voice and twenty voice channels use shared audio
+channels with the portable volume settings.
+
+## Settings, saves and files
+
+- Portable settings live in the client Save namespace. Setters commit at
+  once (the native 4430E0 writes synchronously); persistence is a coalesced
+  background atomic write. Strict original registry import is unsupported.
+- Saves (`adapter/saves.rs`) capture what 41F7A0 captures: thread 0 frames,
+  stack and thread locals plus the save-scope globals, label and BGM. Slots use
+  the original names (`majiro_%04d`, `quick%d`, `last`) as **portable
+  CrySirror JSON records, not interchangeable with MajiroSavV1.103**. Load
+  follows 424CB0: transient sprites/pages are released, init-time ones are
+  kept (43C220/4403F0), thread 0 is restored and `HOT_RESET(1,"",0)` runs.
+  Persistent globals and the `SetFlag` table are kept in a separate system
+  record.
+- Input files share one buffered line per handle exactly like
+  4026F0/402420/4029E0.
+
+## Message history (`adapter/history.rs`)
+
+PROC records each message once in the native 40000-byte record ring beside
+the console controls (4156E0). `6621F84D`/`2CB1BC41` walk page starts like
+416B50/4169F0, and `307F28BC` replays a page like 416280: controls run
+through the console with recording off but hooks on (`CONSOLE_CLS`, `CRLF`),
+text runs PROC in replay mode (`CONSOLE_WROTE` receives replay=1), with the
+native PC rewind between records. Voice-history records are not replayed.
+
+## Not implemented
+
+Save-slot thumbnails, voice replay from the backlog, movie playback (`movie_play` is skipped with a visible warning),
+the exact 448750 rotation filter, auto/skip modes, and original save-file
+interchange. Unknown syscalls still fail visibly at their original PC.
+
+The desktop always links Majiro and detects original archive/ENV layouts
+without extraction; no per-engine feature flag is required. Original game
+data, fonts and modules are never distributed.

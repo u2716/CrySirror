@@ -7,6 +7,10 @@ use crysirror_text_legacy::{
     fields::{ByteFieldCursor, ByteFieldOptions},
 };
 pub(super) struct InputFile {
+    bytes: Arc<[u8]>,
+    line: usize,
+    buffer: Vec<u8>,
+    #[allow(dead_code)]
     cursor: ByteFieldCursor,
     _lease: Arc<dyn crysirror_core::service::AssetReader>,
 }
@@ -81,8 +85,11 @@ impl MajiroVm {
                     skip_blank_lines: true,
                     windows_text: true,
                 };
-                let cursor = ByteFieldCursor::new(bytes, options, 4_000_000)?;
+                let cursor = ByteFieldCursor::new(bytes.clone(), options, 4_000_000)?;
                 Ok(InputFile {
+                    bytes,
+                    line: 0,
+                    buffer: vec![],
                     cursor,
                     _lease: lease,
                 })
@@ -114,35 +121,112 @@ impl MajiroVm {
     ) -> Result<Option<Vec<Value>>> {
         ensure!(args.len() == 1, "Majiro input-file ABI");
         let id = u32::try_from(args[0].integer()?).context("Majiro input-file handle")?;
+        if hash == 0xd6333b3c {
+            self.input_files.remove(&id);
+            return Ok(Some(if returns { vec![Value::Integer(0)] } else { vec![] }));
+        }
         let file = self
             .input_files
             .get_mut(&id)
             .context("Majiro missing/foreign input-file handle")?;
         let value = match hash {
-            0xd6333b3c => {
-                self.input_files.remove(&id);
-                Value::Integer(0)
-            }
-            0x55232561 | 0x2539d212 => {
-                let mut cursor = file.cursor.clone();
-                let bytes = if hash == 0x55232561 {
-                    cursor.next_field(&|| Ok(()))?
-                } else {
-                    cursor.next_raw_field(&|| Ok(()))?
+            0x55232561 => Value::native_string(&file.field())?,
+            0x2539d212 => {
+                let mut field = file.field();
+                if field.is_empty() {
+                    field = b"0".to_vec();
                 }
-                .unwrap_or_default();
-                //4026F0 returns empty at EOF;402420 applies atoi to its
-                //zero/default field. Integer reads do not remove quotes.
-                let value = if hash == 0x55232561 {
-                    Value::native_string(&bytes)?
-                } else {
-                    Value::Integer(crate::byte_policy::integer(&bytes)?)
-                };
-                file.cursor = cursor;
-                value
+                Value::Integer(crate::byte_policy::integer(&field).unwrap_or(0))
             }
+            0x6008bebb => Value::native_string(&file.line())?,
             _ => bail!("Majiro unknown input-file operation"),
         };
         Ok(Some(if returns { vec![value] } else { vec![] }))
+    }
+}
+/// _mbschr-aware ';' and "//" comment cut, then <=0x20 trim (4026F0).
+fn clean(mut line: Vec<u8>) -> Vec<u8> {
+    let mut i = 0;
+    while i < line.len() {
+        let b = line[i];
+        if b == b';' {
+            line.truncate(i);
+            break;
+        }
+        if b == b'/' && line.get(i + 1) == Some(&b'/') {
+            line.truncate(i);
+            break;
+        }
+        i += if (0x81..=0x9f).contains(&b) || (0xe0..=0xfc).contains(&b) { 2 } else { 1 };
+    }
+    let start = line.iter().position(|b| *b > 0x20).unwrap_or(line.len());
+    let end = line.iter().rposition(|b| *b > 0x20).map_or(start, |e| e + 1);
+    line[start..end.max(start)].to_vec()
+}
+impl InputFile {
+    /// fgets(512): next physical line including its terminator.
+    fn fgets(&mut self) -> Option<Vec<u8>> {
+        if self.line >= self.bytes.len() {
+            return None;
+        }
+        let rest = &self.bytes[self.line..];
+        let mut n = rest.iter().position(|b| *b == b'\n').map_or(rest.len(), |p| p + 1);
+        n = n.min(511);
+        let out = rest[..n].to_vec();
+        self.line += n;
+        Some(out)
+    }
+    fn refill(&mut self) -> bool {
+        while self.buffer.is_empty() {
+            match self.fgets() {
+                Some(line) => self.buffer = clean(line),
+                None => return false,
+            }
+        }
+        true
+    }
+    fn field(&mut self) -> Vec<u8> {
+        if !self.refill() {
+            return vec![];
+        }
+        let mut comma = None;
+        let mut i = 0;
+        while i < self.buffer.len() {
+            let b = self.buffer[i];
+            if b == b',' {
+                comma = Some(i);
+                break;
+            }
+            i += if (0x81..=0x9f).contains(&b) || (0xe0..=0xfc).contains(&b) { 2 } else { 1 };
+        }
+        let field = match comma {
+            Some(p) => {
+                let field = self.buffer[..p].to_vec();
+                let rest = self.buffer[p + 1..].to_vec();
+                self.buffer = if rest.is_empty() { b" ".to_vec() } else { rest };
+                field
+            }
+            None => std::mem::take(&mut self.buffer),
+        };
+        let mut field = clean(field);
+        if field.len() >= 2 && field[0] == b'"' && field[field.len() - 1] == b'"' {
+            field = field[1..field.len() - 1].to_vec();
+        }
+        field
+    }
+    fn line(&mut self) -> Vec<u8> {
+        if !self.buffer.is_empty() {
+            let line = clean(std::mem::take(&mut self.buffer));
+            if !line.is_empty() {
+                return line;
+            }
+        }
+        while let Some(line) = self.fgets() {
+            let line = clean(line);
+            if !line.is_empty() {
+                return line;
+            }
+        }
+        vec![]
     }
 }

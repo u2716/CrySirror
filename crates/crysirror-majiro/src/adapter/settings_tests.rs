@@ -100,37 +100,30 @@ fn setup() -> (MajiroVm, Host, Arc<Mutex<Control>>) {
     (vm, Host(storage), c)
 }
 #[test]
-fn native_settings_wait_for_real_shared_write_receipt_without_repeating_or_acknowledging() {
+fn native_setter_commits_at_once_and_persists_through_a_coalesced_shared_write() {
     let (mut vm, mut h, c) = setup();
-    assert_eq!(vm.run(&mut h, 100).unwrap(), VmYield::WaitUntil(1));
-    assert_eq!(vm.machine.as_ref().unwrap().pc, 6);
-    assert_eq!(vm.settings.as_ref().unwrap().effect_speed, 725);
-    assert_eq!(vm.run(&mut h, 100).unwrap(), VmYield::WaitUntil(1));
-    assert_eq!(c.lock().unwrap().writes, 1);
-    assert!(vm.poll_settings_write(999).is_err());
-    assert_eq!(vm.settings.as_ref().unwrap().effect_speed, 725);
-    c.lock().unwrap().status = StorageWriteState::Ready;
-    assert_eq!(vm.run(&mut h, 1).unwrap(), VmYield::BudgetExhausted);
-    assert_eq!(vm.machine.as_ref().unwrap().pc, 14);
+    // 4430E0 writes synchronously: the call completes in the same update.
+    vm.run(&mut h, 100).unwrap();
+    assert!(vm.machine.as_ref().unwrap().pc >= 14);
     assert_eq!(vm.settings.as_ref().unwrap().effect_speed, 342);
-    assert_eq!(vm.settings.as_ref().unwrap().commits, 1);
-    assert!(vm.settings_write.is_none());
+    assert_eq!(c.lock().unwrap().writes, 1);
+    // A pending shared write is polled, never duplicated.
+    vm.run(&mut h, 100).unwrap();
+    assert_eq!(c.lock().unwrap().writes, 1);
+    c.lock().unwrap().status = StorageWriteState::Ready;
+    vm.run(&mut h, 100).unwrap();
+    assert!(vm.settings_flush.is_none());
     let saved: serde_json::Value = serde_json::from_slice(&c.lock().unwrap().bytes).unwrap();
     assert_eq!(saved["values"]["effectspeed"], "342");
 }
 #[test]
-fn failed_shared_settings_write_keeps_native_pc_and_previous_published_values() {
+fn failed_shared_settings_persistence_is_reported_without_stalling_the_script() {
     let (mut vm, mut h, c) = setup();
     vm.run(&mut h, 100).unwrap();
     c.lock().unwrap().status = StorageWriteState::Failed("disk failure".into());
-    let error = vm.run(&mut h, 100).unwrap_err();
-    assert!(format!("{error:#}").contains("settings write failed"));
-    assert_eq!(vm.machine.as_ref().unwrap().pc, 6);
-    assert_eq!(
-        vm.machine.as_ref().unwrap().stack,
-        vec![Value::Integer(342)]
-    );
-    assert_eq!(vm.settings.as_ref().unwrap().effect_speed, 725);
-    assert_eq!(vm.settings.as_ref().unwrap().commits, 0);
-    assert_eq!(c.lock().unwrap().writes, 1);
+    vm.run(&mut h, 100).unwrap();
+    assert!(vm.settings_flush.is_none());
+    assert_eq!(vm.gfx.warnings, 1);
+    assert_eq!(vm.settings.as_ref().unwrap().effect_speed, 342);
+    assert!(vm.machine.as_ref().unwrap().pc >= 14);
 }

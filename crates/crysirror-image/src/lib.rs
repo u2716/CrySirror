@@ -406,3 +406,4 @@ pub mod truncated_row_blur;
 pub mod canvas_margins;
 
 pub mod rect_map;
+pub mod transparency_planes;

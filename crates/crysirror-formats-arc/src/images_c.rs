@@ -7,7 +7,7 @@ mod extra;
 mod gwd;
 mod leaf;
 mod liar;
-mod majiro;
+pub mod majiro;
 mod mgd;
 mod misc;
 mod pgd;

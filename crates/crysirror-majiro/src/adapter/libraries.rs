@@ -85,6 +85,9 @@ impl ModuleCatalog {
             assets: Arc::new(assets),
         })
     }
+    pub(super) fn resolve_name(&self, bytes: &[u8]) -> Result<&str> {
+        self.resolve(bytes)
+    }
     fn resolve(&self, bytes: &[u8]) -> Result<&str> {
         ensure!(
             !bytes.is_empty() && bytes.len() <= 4096 && !bytes.contains(&0),
@@ -124,7 +127,7 @@ impl MajiroVm {
         host: &mut dyn HostServices,
     ) -> Result<bool> {
         let Event::Native {
-            hash: 0x10db0a43 | 0xcd00d280 | 0x9627ddc3 | 0x0edefb0b,
+            hash: 0x10db0a43 | 0xcd00d280 | 0x9627ddc3 | 0x0edefb0b | 0xedefb0b0,
             arguments,
             ..
         } = event

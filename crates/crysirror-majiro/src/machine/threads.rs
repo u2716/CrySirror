@@ -13,15 +13,17 @@ pub(super) struct ThreadState {
     pending: Option<(Event, u32, usize)>,
     halted: bool,
     module: usize,
+    clicks: u8,
 }
 pub(super) struct Scheduler {
     pub current: i32,
     next: u32,
-    parked: BTreeMap<i32, ThreadState>,
-    order: Vec<i32>,
-    ready: VecDeque<i32>,
-    blocked: BTreeMap<i32, u64>,
+    pub(super) parked: BTreeMap<i32, ThreadState>,
+    pub(super) order: Vec<i32>,
+    pub(super) ready: VecDeque<i32>,
+    pub(super) blocked: BTreeMap<i32, u64>,
     tick: Option<u64>,
+    next_round: Vec<i32>,
 }
 impl Default for Scheduler {
     fn default() -> Self {
@@ -33,6 +35,7 @@ impl Default for Scheduler {
             ready: VecDeque::new(),
             blocked: BTreeMap::new(),
             tick: None,
+            next_round: Vec::new(),
         }
     }
 }
@@ -159,6 +162,27 @@ impl Machine {
         }
         Ok(false)
     }
+    /// wait(-2): park until the next scheduler round of this same update.
+    pub(crate) fn defer_round(&mut self) {
+        let id = self.scheduler.current;
+        if !self.scheduler.next_round.contains(&id) {
+            self.scheduler.next_round.push(id);
+        }
+        self.scheduler.blocked.insert(id, u64::MAX);
+    }
+    /// 49ADE4: start another thread round without rendering.
+    pub(crate) fn start_round(&mut self) -> bool {
+        if self.scheduler.next_round.is_empty() {
+            return false;
+        }
+        for id in std::mem::take(&mut self.scheduler.next_round) {
+            self.scheduler.blocked.remove(&id);
+            if !self.scheduler.ready.contains(&id) {
+                self.scheduler.ready.push_back(id);
+            }
+        }
+        true
+    }
     pub(crate) fn defer_current(&mut self, until: u64) {
         self.scheduler.blocked.insert(self.scheduler.current, until);
     }
@@ -192,6 +216,7 @@ impl Machine {
             pending: self.pending.take(),
             halted: self.halted,
             module: self.active_module,
+            clicks: std::mem::take(&mut self.clicks),
         }
     }
     pub(super) fn switch_thread(&mut self, id: i32) -> Result<()> {
@@ -216,6 +241,7 @@ impl Machine {
         self.pending = thread.pending;
         self.halted = thread.halted;
         self.active_module = thread.module;
+        self.clicks = thread.clicks;
         self.program = self.modules[thread.module].program.clone();
         Ok(())
     }
@@ -268,6 +294,7 @@ impl Machine {
             arguments,
             locals: vec![],
             discard_return: true,
+            bsel: Bsel::default(),
         };
         self.scheduler.parked.insert(
             id as i32,
@@ -280,6 +307,7 @@ impl Machine {
                 pending: None,
                 halted: false,
                 module: target.0,
+                clicks: 0,
             },
         );
         self.scheduler.order.insert(0, id as i32);
@@ -323,5 +351,6 @@ impl Machine {
         self.scheduler.blocked.clear();
         self.scheduler.current = 0;
         self.banks[2].clear();
+        self.initializer_finished = true;
     }
 }

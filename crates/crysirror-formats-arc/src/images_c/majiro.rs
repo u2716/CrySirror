@@ -181,3 +181,54 @@ pub(super) fn rct(b: &[u8], ctx: &ImageDecodeContext<'_>) -> Result<ImageSurface
     }
     Ok(out)
 }
+/// Native RC8 planes for engines that retain palette indices: width, height,
+/// one index byte per pixel and the stored 256-entry palette as B,G,R bytes.
+pub fn rc8_indexed(b: &[u8]) -> Result<(u32, u32, Vec<u8>, Vec<[u8; 3]>)> {
+    ensure!(b.starts_with(b"\x98\x5a\x92\x9a8"), "not an RC8 picture");
+    let mut c = Cursor::at(b, 5)?;
+    ensure!(
+        c.u8()? == b'_' && c.take(2)? == b"00",
+        "unsupported RC8 encryption/version"
+    );
+    let w = c.u32()?;
+    let h = c.u32()?;
+    pixels(w, h)?;
+    c.skip(4)?;
+    let mut palette = Vec::with_capacity(256);
+    for _ in 0..256 {
+        let p = c.take(3)?;
+        palette.push([p[0], p[1], p[2]]);
+    }
+    Ok((w, h, unpack(c.rest(), w, h, false)?, palette))
+}
+/// Native RCT planes: width, height, packed B,G,R bytes and the optional
+/// differential base filename (version 01). Encrypted data needs `key`.
+pub fn rct_bgr(b: &[u8], key: Option<&[u8]>) -> Result<(u32, u32, Vec<u8>, Option<String>)> {
+    ensure!(b.starts_with(b"\x98\x5a\x92\x9aT"), "not an RCT picture");
+    let mut c = Cursor::at(b, 5)?;
+    let flag = c.u8()?;
+    let encrypted = flag == b'S';
+    ensure!(flag == b'C' || encrypted, "unsupported RCT encryption flag");
+    let version = c.take(2)?;
+    ensure!(version == b"00" || version == b"01", "unsupported RCT version");
+    let w = c.u32()?;
+    let h = c.u32()?;
+    pixels(w, h)?;
+    let size = c.u32()? as usize;
+    let base = if version == b"01" {
+        let n = c.u16()? as usize;
+        let name = c.take(n)?;
+        let name = &name[..name.iter().position(|&x| x == 0).unwrap_or(name.len())];
+        let name = encoding_rs::SHIFT_JIS
+            .decode_without_bom_handling_and_without_replacement(name)
+            .context("invalid RCT base filename CP932")?;
+        (!name.is_empty()).then(|| name.into_owned())
+    } else {
+        None
+    };
+    let mut compressed = c.take(size)?.to_vec();
+    if encrypted {
+        decrypt(&mut compressed, key.context("encrypted RCT requires its picture key")?);
+    }
+    Ok((w, h, unpack(&compressed, w, h, true)?, base))
+}

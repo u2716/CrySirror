@@ -115,7 +115,7 @@ impl Machine {
                 self.acknowledge(output(0))?;
                 self.deliver_plan(plan, arguments)?;
             }
-            0xf2f9daa8 => {
+            0xf2f9daa8 | 0xae497f1a => {
                 ensure!(!a.is_empty(), "Majiro thread_begin ABI");
                 let target = self.resolve_function(a[0].integer()? as u32)?;
                 self.reserve_argument_copies(&a[1..], 1)?;
@@ -131,7 +131,7 @@ impl Machine {
         }
         Ok(true)
     }
-    fn event_plan(
+    pub(super) fn event_plan(
         &self,
         event: u32,
         thread: Option<i32>,
@@ -167,7 +167,7 @@ impl Machine {
         );
         Ok(plan)
     }
-    fn deliver_plan(
+    pub(super) fn deliver_plan(
         &mut self,
         plan: Vec<(i32, (usize, u32))>,
         arguments: Vec<Value>,
@@ -186,6 +186,7 @@ impl Machine {
                 arguments: arguments.clone(),
                 locals: vec![],
                 discard_return: true,
+                bsel: Bsel::default(),
             };
             self.frames.push(frame);
             self.active_module = target.0;
@@ -207,5 +208,162 @@ impl Machine {
                 .retain(|hook| hook.persistent || !dead.contains(&hook.owner));
         }
         Ok(())
+    }
+}
+impl Machine {
+    /// Complete the pending native call, then call a script function in the
+    /// current thread (40AE30). `native_args` are in parameter order.
+    pub(crate) fn complete_and_call(
+        &mut self,
+        output: Vec<Value>,
+        function: u32,
+        native_args: Vec<Value>,
+    ) -> Result<()> {
+        ensure!(self.frames.len() < MAX_FRAMES, "Majiro callback depth budget");
+        let target = self.resolve_function(function)?;
+        self.acknowledge(output)?;
+        let serial = self.frame_serial()?;
+        self.frames.push(Frame {
+            serial,
+            interrupted: None,
+            global_initializer: false,
+            return_pc: self.pc,
+            return_module: self.active_module,
+            stack_base: self.stack.len(),
+            arguments: native_args.into_iter().rev().collect(),
+            locals: vec![],
+            discard_return: true,
+            bsel: Bsel::default(),
+        });
+        self.active_module = target.0;
+        self.program = self.modules[target.0].program.clone();
+        self.pc = target.1;
+        Ok(())
+    }
+    /// Dispatch an event while keeping the pending native call parked; it is
+    /// re-delivered after the hooks return (native PC rewind). Returns false
+    /// when no hook is registered for the event.
+    pub(crate) fn interrupt_with_event(&mut self, event: u32, native_args: Vec<Value>) -> Result<bool> {
+        let plan = self.event_plan(event, None, &native_args)?;
+        if plan.is_empty() {
+            return Ok(false);
+        }
+        self.reserve_argument_copies(&native_args, plan.len() + 1)?;
+        self.deliver_plan(plan, native_args.into_iter().rev().collect())?;
+        Ok(true)
+    }
+    /// 409D90/41DD40: reset the current thread and enter a module's entry.
+    pub(crate) fn run_script(&mut self, name: String, program: Arc<Program>, native_args: Vec<Value>) -> Result<()> {
+        program.instruction(program.entry)?;
+        let index = match self.modules.iter().position(|m| m.name == name) {
+            Some(index) => index,
+            None => {
+                ensure!(self.modules.len() < modules::MAX_MODULES, "Majiro linked module count budget");
+                self.modules.push(modules::LinkedModule { name, program: program.clone() });
+                self.modules.len() - 1
+            }
+        };
+        let id = self.scheduler.current;
+        if !self.initializing() {
+            self.hooks.retain(|hook| hook.owner != id || hook.persistent);
+        }
+        self.pending = None;
+        self.stack.clear();
+        let serial = self.frame_serial()?;
+        self.frames = vec![Frame {
+            serial,
+            interrupted: None,
+            global_initializer: false,
+            return_pc: 0,
+            return_module: index,
+            stack_base: 0,
+            arguments: native_args.into_iter().rev().collect(),
+            locals: vec![],
+            discard_return: true,
+            bsel: Bsel::default(),
+        }];
+        self.active_module = index;
+        self.program = self.modules[index].program.clone();
+        self.pc = self.program.entry;
+        self.executed += 1;
+        Ok(())
+    }
+    pub fn current_thread(&self) -> i32 {
+        self.scheduler.current
+    }
+    pub fn depth(&self) -> usize {
+        self.frames.len()
+    }
+    /// Request termination of a thread (4EF903F3). 40B350 then resumes every
+    /// frame that registered a destructor (0x847) at that target; frames
+    /// without one are discarded. A thread without destructors ends at once.
+    pub(crate) fn kill_thread(&mut self, id: i32) -> Result<()> {
+        if !self.thread_alive(id) {
+            return Ok(());
+        }
+        let caller = self.scheduler.current;
+        self.switch_thread(id)?;
+        let mut kept: Vec<Frame> = vec![];
+        let frames = std::mem::take(&mut self.frames);
+        let bodies: Vec<usize> = (0..frames.len())
+            .map(|i| if i + 1 == frames.len() { self.active_module } else { frames[i + 1].return_module })
+            .collect();
+        let mut resume: Vec<(u32, usize)> = vec![];
+        for (i, frame) in frames.into_iter().enumerate() {
+            if frame.bsel.destructor != 0 {
+                resume.push((frame.bsel.destructor, bodies[i]));
+                let mut frame = frame;
+                frame.bsel = Bsel::default();
+                frame.interrupted = None;
+                kept.push(frame);
+            }
+        }
+        self.pending = None;
+        if kept.is_empty() {
+            self.halted = true;
+            self.frames = vec![];
+        } else {
+            // Re-link: each kept frame returns into the next lower kept frame
+            // at that frame's destructor; the top frame starts at its own.
+            for i in 1..kept.len() {
+                kept[i].return_pc = resume[i - 1].0;
+                kept[i].return_module = resume[i - 1].1;
+            }
+            let top = kept.len() - 1;
+            let base = kept[top].stack_base.min(self.stack.len());
+            self.stack.truncate(base);
+            self.pc = resume[top].0;
+            self.active_module = resume[top].1;
+            self.program = self.modules[self.active_module].program.clone();
+            self.frames = kept;
+        }
+        if id != caller && self.thread_alive(caller) {
+            self.switch_thread(caller)?;
+        } else if id != caller {
+            self.switch_thread(caller).ok();
+        }
+        if !self.thread_alive(id) {
+            self.scheduler.order.retain(|x| *x != id);
+            self.scheduler.blocked.remove(&id);
+            self.scheduler.parked.remove(&id);
+            self.hooks.retain(|hook| hook.owner != id || hook.persistent);
+        } else {
+            self.wake_thread(id);
+        }
+        Ok(())
+    }
+    pub(crate) fn thread_ids(&self) -> Vec<i32> {
+        self.scheduler.order.clone()
+    }
+    pub(crate) fn global(&self, hash: u32) -> Option<Value> {
+        self.banks[0].get(&hash).cloned()
+    }
+    pub(crate) fn set_global(&mut self, hash: u32, value: Value) {
+        self.banks[0].insert(hash, value);
+    }
+}
+impl Machine {
+    pub(crate) fn hook_exists(&self, event: u32) -> bool {
+        self.hooks.iter().any(|hook| hook.event == event && self.thread_alive(hook.owner))
     }
 }
