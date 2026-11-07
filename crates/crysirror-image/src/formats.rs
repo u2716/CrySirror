@@ -78,6 +78,11 @@ impl<'a> ImageDecodeContext<'a> {
             .context("encrypted image needs a client-scoped key provider")?;
         resources.keys.key(resources.client, id)
     }
+    /// Immutable format policy captured with this resource job, inherited by
+    /// dependency decodes. Secret bytes must use the scoped key provider.
+    pub fn parameter(&self, id: &str) -> Option<&serde_json::Value> {
+        self.resource.and_then(|resource| resource.parameters.get(id))
+    }
     fn relative(&self, name: &str) -> Result<String> {
         let native = name.replace('\\', "/");
         VfsPath::new(Mount::Asset, &native)

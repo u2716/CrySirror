@@ -7,6 +7,12 @@ use crate::program::{Instruction, Operand, Program};
 use anyhow::{bail, ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, sync::Arc};
+mod scalar;
+mod modules;
+mod text;
+mod events;
+mod threads;
+
 const MAX_STACK: usize = 65536;
 const MAX_LOCALS: usize = 16384;
 const MAX_FRAMES: usize = 128;
@@ -71,7 +77,11 @@ pub enum Event {
 }
 #[derive(Clone)]
 struct Frame {
+    serial: u64,
+    interrupted: Option<(Event,u32,usize)>,
+    global_initializer: bool,
     return_pc: u32,
+    return_module: usize,
     stack_base: usize,
     arguments: Vec<Value>,
     locals: Vec<Value>,
@@ -87,17 +97,29 @@ pub struct Machine {
     banks: [BTreeMap<u32, Value>; 3],
     pending: Option<(Event, u32, usize)>,
     halted: bool,
+    active_module: usize,
+    modules: Vec<modules::LinkedModule>,
+    call_cache: BTreeMap<(usize,u32),(usize,u32)>,
+    hooks: Vec<events::Hook>,
+    scheduler: threads::Scheduler,
+    next_frame: u64,
 }
 impl Machine {
     pub fn new(program: Arc<Program>) -> Self {
         Self {
             pc: program.entry,
+            modules: vec![modules::LinkedModule {name:"<entry>".into(),program:program.clone()}],
+            active_module:0,
+            call_cache:BTreeMap::new(),
+            hooks:vec![],scheduler:threads::Scheduler::default(),next_frame:2,
             program,
             line: 0,
             executed: 0,
             stack: vec![],
             frames: vec![Frame {
+                serial:1,interrupted:None,global_initializer:false,
                 return_pc: 0,
+                return_module: 0,
                 stack_base: 0,
                 arguments: vec![],
                 locals: vec![],
@@ -242,7 +264,8 @@ impl Machine {
    (0x803,Operand::Float(n))=>self.push(Value::Float(*n))?,
    (0x83a,Operand::Line(n))=>self.line=*n,
    (0x829,Operand::Types(types))=>{ensure!(self.frames.last().unwrap().locals.len()+types.len()<=MAX_LOCALS,"Majiro local budget");let v=types.iter().map(|t|Value::default_type(*t)).collect::<Result<Vec<_>>>()?;self.frames.last_mut().unwrap().locals.extend(v);},
-   (0x836,Operand::Types(types))=>{let a=&self.frames.last().unwrap().arguments;ensure!(types.len()==a.len() && types.iter().zip(a.iter().rev()).all(|(t,v)|*t==v.kind()),"Majiro function argument signature");},
+   //40D390 checks the required leading arguments and retains variadic extras.
+   (0x836,Operand::Types(types))=>{let a=&self.frames.last().unwrap().arguments;ensure!(types.len()<=a.len() && types.iter().zip(a.iter().rev()).all(|(t,v)|*t==v.kind()),"Majiro function argument signature");},
    (0x802,Operand::Variable{flags,hash,offset})=>{
     let mut value=self.variable(*flags,*hash,*offset)?;let modify=flags&7;let invert=(flags>>3)&3;
     ensure!(self.stack.len()<MAX_STACK,"Majiro stack budget");
@@ -252,33 +275,63 @@ impl Machine {
    },
    (op,Operand::Variable{flags,hash,offset}) if (0x1b0..=0x265).contains(op)=>{
     let base=if *op>=0x210{0x210}else{0x1b0};let group=(*op-base)/8;let ty=((*op-base)%8) as u8;
-    let rhs=self.tail(1)?[0].clone();ensure!(rhs.kind()==ty,"Majiro assignment type");
-    let value=if group==0{rhs}else{let old=self.variable(*flags,*hash,*offset)?;integer_binary(match group{1=>0x100,2=>0x108,3=>0x110,4=>0x118,5=>0x120,6=>0x130,7=>0x128,8=>0x180,9=>0x168,10=>0x188,_=>bail!("Majiro assignment group")},&old,&rhs)?};
+    let rhs=self.tail(1)?[0].clone();let rhs=if group==0 && ty==1 && rhs.kind()==0 {Value::Float(scalar::number(&rhs)? as f32)}else{rhs};ensure!(rhs.kind()==ty || (ty==1 && rhs.kind()==0),"Majiro assignment type");
+    let value=if group==0{rhs}else{let old=self.variable(*flags,*hash,*offset)?;scalar::binary(match group{1=>0x100,2=>0x108,3=>0x110,4=>0x118,5=>0x120,6=>0x130,7=>0x128,8=>0x180,9=>0x168,10=>0x188,_=>bail!("Majiro assignment group")}|u16::from(ty),&old,&rhs)?};
     self.store(*flags,*hash,*offset,value.clone())?;self.stack.pop();if base==0x1b0{self.stack.push(value);}
    },
    (op,Operand::None) if *op>=0x100 && *op<=0x188=>{
-    let a=self.tail(2)?;let value=integer_binary(*op,&a[0],&a[1])?;self.stack.truncate(self.stack.len()-2);self.stack.push(value);
+    let a=self.tail(2)?;let value=scalar::binary(*op,&a[0],&a[1])?;self.stack.truncate(self.stack.len()-2);self.stack.push(value);
    },
    (0x190|0x198|0x1a0,Operand::None)=>{let n=self.tail(1)?[0].integer()?;let value=match i.opcode{0x190=>i32::from(n==0),0x198=>!n,_=>n.wrapping_neg()};*self.stack.last_mut().unwrap()=Value::Integer(value);},
+   (0x1a1,Operand::None)=>{let Value::Float(n)=self.tail(1)?[0] else {bail!("Majiro neg.r requires float")};*self.stack.last_mut().unwrap()=Value::Float(-n);},
+   (0x83e,Operand::None)=>{let value=scalar::convert_integer(&self.tail(1)?[0])?;*self.stack.last_mut().unwrap()=value;},
+   (0x83f,Operand::None)=>{let value=self.tail(1)?[0].integer()?;*self.stack.last_mut().unwrap()=Value::Float(value as f32);},
    (0x191|0x1a8|0x1a9,Operand::None)=>{},
    (0x82f,Operand::None)=>{self.tail(1)?;self.stack.pop();},
    (0x82c,Operand::Jump(target))=>next=*target,
    (0x82d|0x82e,Operand::Jump(target))=>{let v=self.tail(1)?[0].integer()?;if (v!=0)==(i.opcode==0x82d){next=*target;}self.stack.pop();},
+   (0x830,Operand::Jump(target))=>{
+    //40D630 stores the selector in the actual thread-local native variable,
+    //then pops it. Nested switch statements share this original cell.
+    let value=self.tail(1)?[0].clone();
+    self.store(2<<5,0x11f91fd3,0,value)?;
+    self.stack.pop();next=*target;
+   },
+   (op @ (0x831..=0x833|0x838|0x839),Operand::Jump(target))=>{
+    let value=&self.tail(1)?[0];
+    let selector=self.banks[2].get(&0x11f91fd3).context("Majiro case selector absent")?;
+    let take=match (selector,value) {
+     (Value::Integer(a),Value::Integer(b))=>match *op {0x831=>a!=b,0x832=>a>=b,0x833=>a<=b,0x838=>a<b,_=>a>b},
+     (Value::Float(a),Value::Float(b))=>match *op {0x831=>a!=b,0x832=>a>=b,0x833=>a<=b,0x838=>a<b,_=>a>b},
+     _=>bail!("Majiro native case type not connected"),
+    };
+    //Actual40D670/40D710/40D790/40D810/40D890 only peek the
+    //comparison value; contrary to the public opcode table they do not pop.
+    if take {next=*target;}
+   },
+   (0x850,Operand::Switch(targets))=>{
+    ensure!(!targets.is_empty(),"Majiro native switch has no default target");
+    let index=self.tail(1)?[0].integer()?;
+    let index=if index<0 || index as usize>=targets.len(){targets.len()-1}else{index as usize};
+    next=targets[index];self.stack.pop();
+   },
    (0x80f|0x810,Operand::Call{hash,arguments})=>{
-    ensure!(self.frames.len()<MAX_FRAMES,"Majiro call depth budget");let target=*self.program.functions.get(hash).context("Majiro external library function is not loaded")?;
+    ensure!(self.frames.len()<MAX_FRAMES,"Majiro call depth budget");let (module,target)=self.resolve_call(*hash,i.pc)?;
     let args=self.tail(*arguments as usize)?.to_vec();let base=self.stack.len()-args.len();
-    self.frames.push(Frame{return_pc:i.next,stack_base:base,arguments:args,locals:vec![],discard_return:i.opcode==0x810});self.stack.truncate(base);next=target;
+    let serial=self.frame_serial()?;self.frames.push(Frame{serial,interrupted:None,global_initializer:false,return_pc:i.next,return_module:self.active_module,stack_base:base,arguments:args,locals:vec![],discard_return:i.opcode==0x810});self.stack.truncate(base);self.active_module=module;self.program=self.modules[module].program.clone();next=target;
    },
    (0x82b,Operand::None)=>{
     let value=self.tail(1)?[0].clone();let f=self.frames.last().unwrap();
     ensure!(self.stack.len()==f.stack_base+1,"Majiro return operand shape");
     let f=self.frames.pop().unwrap();self.stack.truncate(f.stack_base);
-    if self.frames.is_empty(){self.stack.push(value);self.halted=true;}else{if !f.discard_return{self.stack.push(value);}next=f.return_pc;}
+    if f.global_initializer {self.finish_global_initializer();}
+    self.pending=f.interrupted;
+    if self.frames.is_empty(){self.stack.push(value);self.halted=true;}else{if !f.discard_return{self.stack.push(value);}self.active_module=f.return_module;self.program=self.modules[f.return_module].program.clone();next=f.return_pc;}
    },
    (0x834|0x835,Operand::Call{hash,arguments})=>{let args=self.tail(*arguments as usize)?.iter().rev().cloned().collect();let event=Event::Native{pc:self.pc,hash:*hash,arguments:args,returns:i.opcode==0x834};return Ok(Some(self.queue(event,i.next,*arguments as usize)));},
    (0x840,Operand::String(bytes))=>return Ok(Some(self.queue(Event::Text{pc:self.pc,bytes:bytes.clone()},i.next,0))),
    (0x841,Operand::None)=>return Ok(Some(self.queue(Event::ProcessText{pc:self.pc},i.next,0))),
-   (0x842,Operand::String(bytes))=>return Ok(Some(self.queue(Event::Control{pc:self.pc,bytes:bytes.clone()},i.next,0))),
+   (0x842,Operand::String(bytes))=>return Ok(Some(self.text_control(bytes,i.next)?)),
    _=>bail!("unsupported original Majiro instruction {:#x}; execution stopped without advancing",i.opcode),
   }
         self.pc = next;
@@ -295,12 +348,15 @@ fn integer_binary(op: u16, a: &Value, b: &Value) -> Result<Value> {
     let b = b.integer()?;
     let result = match op {
         0x100 => a.wrapping_mul(b),
-        0x108 => a
-            .checked_div(b)
-            .context("Majiro exceptional integer division needs verified native profile")?,
-        0x110 => a
-            .checked_rem(b)
-            .context("Majiro exceptional integer remainder needs verified native profile")?,
+        //Actual40D950/40D9F0 have explicit zero-divisor branches. Keep
+        //x86 wrapping multiplication; INT_MIN/-1 still raises the original
+        //CPU divide exception and is not silently treated as wrapping division.
+        0x108 => if b == 0 { a.wrapping_mul(10000) } else {
+            a.checked_div(b).context("Majiro native signed division overflow")?
+        },
+        0x110 => if b == 0 { 0 } else {
+            a.checked_rem(b).context("Majiro native signed remainder overflow")?
+        },
         0x118 => a.wrapping_add(b),
         0x120 => a.wrapping_sub(b),
         0x128 => a.wrapping_shr(b as u32),

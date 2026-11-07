@@ -11,8 +11,10 @@ mod control;
 mod delegates;
 pub mod external;
 mod functions;
+pub(crate) mod global_save;
 pub mod heap;
 mod primitives;
+pub(crate) mod resume;
 mod shorthand;
 #[cfg(feature = "native-text")]
 mod strings;
@@ -143,6 +145,8 @@ pub struct Machine {
     actions: Vec<Action>,
     running_actions: bool,
     halted: bool,
+    pub(crate) exit_status: Option<i32>,
+    pub(crate) reset_once: bool,
     pending: Option<ExternalCall>,
     random: crate::math_random::Random,
     peek_lock: i32,
@@ -161,6 +165,8 @@ impl Machine {
             actions: Vec::new(),
             running_actions: true,
             halted: false,
+            exit_status: None,
+            reset_once: false,
             pending: None,
             random: crate::math_random::Random::default(),
             peek_lock: 0,
@@ -279,7 +285,15 @@ impl Machine {
             PageKind::Global => self.program.globals.get(i),
             PageKind::Local(f) => self.program.functions[f].variables.get(i),
             PageKind::Structure(s) => self.program.structures[s].members.get(i),
-            PageKind::Delegate => return Ok(Variable {name:Vec::new(),kind:0,structure:-1,rank:0,group:None}),
+            PageKind::Delegate => {
+                return Ok(Variable {
+                    name: Vec::new(),
+                    kind: 0,
+                    structure: -1,
+                    rank: 0,
+                    group: None,
+                })
+            }
             PageKind::Array {
                 kind,
                 structure,
@@ -322,13 +336,23 @@ impl Machine {
         Ok(())
     }
     fn call(&mut self, function: usize, structure: i32, return_to: Return) -> Result<()> {
-        let f = self.program.functions.get(function).context("System4 function index")?.clone();
+        let f = self
+            .program
+            .functions
+            .get(function)
+            .context("System4 function index")?
+            .clone();
         let argc = f.arguments as usize;
-        ensure!(argc <= f.variables.len() && argc <= self.stack.len(), "System4 native argument count");
+        ensure!(
+            argc <= f.variables.len() && argc <= self.stack.len(),
+            "System4 native argument count"
+        );
         let slot = self.call_frame(function, structure, return_to)?;
         for i in 0..argc {
             let x = self.stack[self.stack.len() - argc + i];
-            if is_reference(f.variables[i].kind) {self.heap.reference(x)?;}
+            if is_reference(f.variables[i].kind) {
+                self.heap.reference(x)?;
+            }
             self.heap.set(slot, i as i32, x)?;
         }
         self.consume(argc)?;
@@ -338,16 +362,37 @@ impl Machine {
     // caller arguments and deep-copies into this frame instead of consuming them.
     fn call_frame(&mut self, function: usize, structure: i32, return_to: Return) -> Result<i32> {
         ensure!(self.frames.len() < MAX_CALLS, "System4 call stack budget");
-        let f = self.program.functions.get(function).context("System4 function index")?.clone();
+        let f = self
+            .program
+            .functions
+            .get(function)
+            .context("System4 function index")?
+            .clone();
         let argc = f.arguments as usize;
-        ensure!(argc <= f.variables.len(), "System4 function local/argument metadata");
-        if structure != -1 {self.heap.page(structure)?;}
-        let slot = self.heap.alloc(Object::Page(Some(Page {kind: PageKind::Local(function),values: vec![0; f.variables.len()]})))?;
-        for (i, v) in f.variables.iter().enumerate().skip(argc) {
-            let x = self.initial(v.kind)?;self.heap.set(slot, i as i32, x)?;
+        ensure!(
+            argc <= f.variables.len(),
+            "System4 function local/argument metadata"
+        );
+        if structure != -1 {
+            self.heap.page(structure)?;
         }
-        self.frames.push(Frame {function,local_page: slot,structure_page: structure,call_pc: self.pc,return_to});
-        self.pc = f.address;self.entered_main |= function == self.program.main as usize;
+        let slot = self.heap.alloc(Object::Page(Some(Page {
+            kind: PageKind::Local(function),
+            values: vec![0; f.variables.len()],
+        })))?;
+        for (i, v) in f.variables.iter().enumerate().skip(argc) {
+            let x = self.initial(v.kind)?;
+            self.heap.set(slot, i as i32, x)?;
+        }
+        self.frames.push(Frame {
+            function,
+            local_page: slot,
+            structure_page: structure,
+            call_pc: self.pc,
+            return_to,
+        });
+        self.pc = f.address;
+        self.entered_main |= function == self.program.main as usize;
         Ok(slot)
     }
     fn schedule(&mut self, mut ordered: Vec<Action>, next: u32) {
@@ -995,6 +1040,35 @@ impl Machine {
                 if (x == 0) == (i.name == "IFZ") {
                     next = u32::try_from(a[0])?;
                 }
+                self.consume(1)?;
+            }
+            "STRSWITCH" => {
+                let slot = self.peek(0)?;
+                let text = self.heap.string(slot)?;
+                let text = text.split(|b| *b == 0).next().unwrap();
+                let switch = self
+                    .program
+                    .switches
+                    .get(usize::try_from(a[0])?)
+                    .context("System4 string switch index")?;
+                let mut matched = None;
+                for (literal, address) in &switch.cases {
+                    let bytes = self
+                        .program
+                        .strings
+                        .get(usize::try_from(*literal)?)
+                        .context("System4 string switch literal")?;
+                    if bytes.split(|b| *b == 0).next().unwrap() == text {
+                        matched = Some(*address);
+                        break;
+                    }
+                }
+                next = matched.unwrap_or(if switch.default > 0 {
+                    switch.default as u32
+                } else {
+                    i.next
+                });
+                self.release_string_now(slot)?;
                 self.consume(1)?;
             }
             "SWITCH" => {

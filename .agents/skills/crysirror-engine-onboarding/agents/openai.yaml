@@ -1,0 +1,4 @@
+interface:
+  display_name: "CrySirror Engine Onboarding"
+  short_description: "Adopt or integrate engines with safe source analysis"
+  default_prompt: "Use $crysirror-engine-onboarding to onboard this engine through the chosen mode and document its output and platform boundaries."

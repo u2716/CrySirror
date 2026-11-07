@@ -51,6 +51,7 @@ impl Mixer {
             voice.mix_group = None;
         }
         voice.spec.gain = gain;
+        super::gain_envelope::cancel(voice);
         voice.gain = Ramp::new(gain);
         voice.envelope = Ramp::new(1.);
         if spec.source_channel!=spec.tail_channel {

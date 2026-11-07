@@ -1,0 +1,23 @@
+{
+  "repository": "https://github.com/xmoezzz/siglus_rs",
+  "revision": "5f358ef1360b0439e92aed2b749e8f25d8721954",
+  "license": "MPL-2.0",
+  "files": [
+    {
+      "source": "crates/siglus_assets/src/keys.rs",
+      "sha256": "e6109338021220159bb7466a4939fcd52aa32c389dea1a4f0923bc81003d9e11",
+      "destination": "src/keys.rs"
+    },
+    {
+      "source": "crates/siglus_key_recovery/src/lib.rs",
+      "sha256": "64a7a5bcb6fb245965fadf4e9d418445f944cb2371abce0245d1d3df3ce04412",
+      "destination": "src/key_recovery.rs"
+    }
+  ],
+  "local_changes": [
+    "Retain production recovery only; no copied tests.",
+    "Use shared bounded LZSS decompression (64 MiB).",
+    "Bound native scoped workers to four; wasm uses serial path.",
+    "Remove private key diagnostics; preserve unique hard-validation admission."
+  ]
+}

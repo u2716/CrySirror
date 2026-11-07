@@ -302,7 +302,7 @@ fn contains(outer: [f32; 4], inner: [f32; 4]) -> bool {
         && inner[1] + inner[3] <= outer[1] + outer[3]
 }
 fn spec(id: u32, rect: [f32; 4], paint: Paint) -> LayerSpec {
-    LayerSpec {
+    LayerSpec { tie_order:None, clock_paused: false,
         source_crop: None,
         viewport_clip: None,
         id,
@@ -1555,9 +1555,10 @@ impl CanvasSystem {
 fn node_bounds_mode(node: &CanvasNode, keep_rgb: bool) -> Option<[f32; 4]> {
     match node {
         CanvasNode::Draw { layer } => {
-            if (!keep_rgb && matches!(layer.paint, Paint::Solid { color } if color[3] == 0))
+            let zero_writes=crate::layer::writes_at_zero_opacity(&layer.paint,layer.blend);
+            if (!keep_rgb && !zero_writes && matches!(layer.paint, Paint::Solid { color } if color[3] == 0))
                 || !layer.visible
-                || layer.opacity == 0
+                || (layer.opacity == 0 && !zero_writes)
             {
                 return None;
             }
@@ -2193,4 +2194,32 @@ fn preserve_presentation_root(
         retained.order = fresh.order;
     }
     retained
+}
+
+impl CanvasSystem {
+    pub(crate) fn checkpoint_scope(&self,client:u32,ids:&std::collections::BTreeSet<u32>)->Result<Self> {
+        let mut state=self.clone();
+        state.clients.retain(|owner,surfaces|{if *owner!=client{return false}surfaces.retain(|id,_|ids.contains(id));!surfaces.is_empty()});
+        state.presentations.retain(|owner,presentations|{if *owner!=client{return false}presentations.retain(|_,presentation|ids.contains(&presentation.source));!presentations.is_empty()});
+        state.serial.retain(|owner,_|*owner==client);
+        state.revisions.retain(|(owner,id),_|*owner==client&&ids.contains(id));
+        state.provenance.retain(|(owner,id),p|*owner==client&&ids.contains(id)&&ids.contains(&p.source));
+        state.materialize.retain(|(owner,id),_|*owner==client&&ids.contains(id));
+        state.validate()?;
+        Ok(state)
+    }
+    pub(crate) fn restore_checkpoint_scope(&mut self,client:u32,ids:&std::collections::BTreeSet<u32>,saved:&Self)->Result<()> {
+        if let Some(owner)=self.clients.get_mut(&client){owner.retain(|id,_|!ids.contains(id));}
+        if let Some(owner)=saved.clients.get(&client){self.clients.entry(client).or_default().extend(owner.clone());}
+        if let Some(owner)=self.presentations.get_mut(&client){owner.retain(|_,presentation|!ids.contains(&presentation.source));}
+        if let Some(owner)=saved.presentations.get(&client){self.presentations.entry(client).or_default().extend(owner.clone());}
+        self.revisions.retain(|(owner,id),_|*owner!=client||!ids.contains(id));
+        self.revisions.extend(saved.revisions.iter().map(|(k,v)|(*k,*v)));
+        self.provenance.retain(|(owner,id),p|*owner!=client||(!ids.contains(id)&&!ids.contains(&p.source)));
+        self.provenance.extend(saved.provenance.iter().map(|(k,v)|(*k,*v)));
+        self.materialize.retain(|(owner,id),_|*owner!=client||!ids.contains(id));
+        self.materialize.extend(saved.materialize.iter().map(|(k,v)|(*k,v.clone())));
+        if let Some(serial)=saved.serial.get(&client){let current=self.serial.entry(client).or_default();*current=(*current).max(*serial);}
+        self.validate()
+    }
 }

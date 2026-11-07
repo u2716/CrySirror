@@ -12,6 +12,15 @@ pub struct StoredMaskBlend {
     pub transparency: u16,
     pub control: u16,
     pub mask_channel: u8,
+    /// Optional direct 0..512 threshold phase: weight is
+    /// clamp((256 + mask - phase) >> 1, 0, 128) / 128.
+    /// Valid only with parameter/control zero; otherwise the existing tables
+    /// use transparency in 0..256. Direct phases retain odd-step precision.
+    #[serde(default)]
+    pub threshold_phase: Option<u16>,
+    /// Interpolate RGB while keeping the destination alpha byte unchanged.
+    #[serde(default)]
+    pub preserve_alpha: bool,
 }
 impl StoredMaskBlend {
     pub fn validate(&self) -> Result<()> {
@@ -24,6 +33,11 @@ impl StoredMaskBlend {
                 && self.control <= 256
                 && self.mask_channel < 4,
             "stored mask blend parameters"
+        );
+        ensure!(
+            self.threshold_phase
+                .is_none_or(|phase| phase <= 512 && self.parameter == 0 && self.control == 0),
+            "direct stored mask phase requires zero parameter/control and phase <=512"
         );
         Ok(())
     }
@@ -65,13 +79,19 @@ impl StoredMaskBlend {
                 let si = ((sy * i64::from(source.width) + sx) * 4) as usize;
                 let mi = ((my * i64::from(mask.width) + mx) * 4) as usize;
                 let di = ((y * out.width + x) * 4) as usize;
-                let w = threshold_weight(
-                    mask.rgba[mi + usize::from(self.mask_channel)],
-                    self.parameter,
-                    i32::from(self.transparency),
-                    i32::from(self.control),
-                );
-                for c in 0..4 {
+                let mask_byte = mask.rgba[mi + usize::from(self.mask_channel)];
+                let w = if let Some(phase) = self.threshold_phase {
+                    (((256 + i32::from(mask_byte) - i32::from(phase)) >> 1).clamp(0, 128) * 2)
+                        as u16
+                } else {
+                    threshold_weight(
+                        mask_byte,
+                        self.parameter,
+                        i32::from(self.transparency),
+                        i32::from(self.control),
+                    )
+                };
+                for c in 0..if self.preserve_alpha { 3 } else { 4 } {
                     let d = i32::from(out.rgba[di + c]);
                     let s = i32::from(source.rgba[si + c]);
                     out.rgba[di + c] = if w >= 256 {

@@ -118,7 +118,7 @@ fn error(e: impl std::fmt::Display) -> Error {
 fn glyphs(source: &[TextGlyph], base: f32) -> Vec<PositionedGlyph> {
     source
         .iter()
-        .map(|g| PositionedGlyph { font: None,horizontal_scale: None, font_width: None, cell_width: None,  crop: None,
+        .map(|g| PositionedGlyph { image: None, style: None, font: None,horizontal_scale: None, font_width: None, cell_width: None,  crop: None,
             character: g.character,
             baseline: [g.x as f32, g.baseline as f32],
             size: (g.size as f32 != base).then_some(g.size as f32),

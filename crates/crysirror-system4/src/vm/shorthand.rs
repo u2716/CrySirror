@@ -157,6 +157,66 @@ impl Machine {
                 let empty = self.heap.string(self.heap.get(page, a[0])?)?.is_empty();
                 self.push(i32::from(empty))?;
             }
+            "SH_S_ASSIGN_CALLSYS19" => {
+                let index = self.peek(0)?;
+                let name = usize::try_from(index)
+                    .ok()
+                    .and_then(|n| self.frames.len().checked_sub(n + 1))
+                    .map(|n| self.program.functions[self.frames[n].function].name.clone())
+                    .unwrap_or_default();
+                self.heap.set_string(self.peek(1)?, Arc::new(name))?;
+                self.consume(2)?;
+            }
+            "SH_LOCAL_APUSHBACK_LOCALSREF"
+            | "SH_GLOBAL_APUSHBACK_LOCALSREF"
+            | "SH_STRUCT_APUSHBACK_LOCALSREF" => {
+                let page = match i.name {
+                    "SH_LOCAL_APUSHBACK_LOCALSREF" => self.local()?,
+                    "SH_GLOBAL_APUSHBACK_LOCALSREF" => 0,
+                    _ => self.structure()?,
+                };
+                let var = self.variable(page, a[0])?;
+                ensure!(
+                    var.kind == 16 && var.rank == 1,
+                    "System4 string shorthand expected rank1 array"
+                );
+                let slot = self.heap.get(page, a[0])?;
+                let old = self.heap.page_opt(slot)?;
+                if let Some(old) = old {
+                    ensure!(
+                        matches!(
+                            old.kind,
+                            PageKind::Array {
+                                kind: 16,
+                                rank: 1,
+                                ..
+                            }
+                        ),
+                        "System4 string shorthand page type/rank"
+                    );
+                }
+                let source = self.heap.get(self.local()?, a[1])?;
+                let string = self.heap.string(source)?;
+                self.heap.check_growth(
+                    1,
+                    string
+                        .len()
+                        .div_ceil(4)
+                        .checked_add(1)
+                        .context("System4 string shorthand growth")?,
+                )?;
+                let mut page = old.cloned().unwrap_or_else(|| Page {
+                    kind: PageKind::Array {
+                        kind: 16,
+                        structure: -1,
+                        rank: 1,
+                    },
+                    values: Vec::new(),
+                });
+                let copied = self.heap.alloc(Object::String(string))?;
+                page.values.push(copied);
+                self.heap.set_page(slot, Some(page))?;
+            }
             "SH_S_ASSIGN_REF" => {
                 let (p, v) = self.reference(0)?;
                 let bytes = self.heap.string(self.heap.get(p, v)?)?;

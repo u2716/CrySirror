@@ -7,11 +7,11 @@
 //! - `value` is the "current" stored value (for oneshot, it is set to the target immediately).
 //! - `cur_value` is the animated/interpolated value computed each frame.
 
-mod scalar_steps;
 mod cubic_path;
 mod oscillator;
-pub use oscillator::{ScalarOscillator, SignalFade, Waveform};
+mod scalar_steps;
 pub use cubic_path::NaturalCubicPath;
+pub use oscillator::{ScalarOscillator, SignalFade, Waveform};
 pub use scalar_steps::step_remaining_time_scalar;
 
 /// Sample a clamped integer line on a caller-owned signed clock. Division
@@ -95,6 +95,7 @@ impl ScalarTween {
         Ok(value)
     }
     pub fn validate(&self) -> anyhow::Result<()> {
+        self.easing.validate()?;
         anyhow::ensure!(
             self.start.is_finite() && self.end.is_finite(),
             "scalar tween endpoints must be finite"

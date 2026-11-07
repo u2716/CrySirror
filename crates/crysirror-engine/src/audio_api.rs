@@ -402,6 +402,10 @@ fn info() -> &'static ClassInfo {
         method("cancelChannelSeek",vec![("ticket",T::Int)],T::Void,"Cancel a pending channel seek and realign its previous logical cursor, or release a terminal receipt. A later seek is unaffected. Pending final DSP must be collected before cancellation."),
         method("exchangeChannels",vec![("left",T::Int),("right",T::Int)],T::Void,"Atomically exchange this client's two shared native/media logical channels, moving a voice if the other side is empty. Retains source handle, fractional cursor, DSP history and gain/transport ramps; opens no decoder. Unpublished preparation intents, pending seeks/retirement actors or render leases reject before any change. Ready receipts remain historical observations of their earlier publication. This is separate from decoded left/right channel swap; pooled VoiceHandles remain unchanged."),
         method("nativeChannelInfo",vec![("channel",T::Int)],T::Any,"Shared native/media channel AudioPlaybackInfo or null when ended. Scoped to the caller; source frame units, output-clock fades/delays and source completion remain distinct from processing tails."),
+        method("setChannelGainEnvelope",vec![("channel",T::Int),("envelope",T::Any)],T::Void,"Set a mixer-owned stepped dB100 envelope: interval_ms,steps,start_db100,end_db100, optional elapsed_steps/phase_ms/apply_initial/stop_at_end. The -10000 floor is silence. Output time advances through pause/starvation; null cancels at current gain. No decoder/source restart."),
+        method("channelGainEnvelope",vec![("channel",T::Int)],T::Any,"Published stepped gain spec, elapsed_steps, phase_ms, current_db100 and active, or null for an absent voice/track. Foreign client state is inaccessible."),
+        method("setVoiceGainEnvelope",vec![("handle",T::Map),("envelope",T::Any)],T::Void,"Apply the same stepped dB100 envelope to a scoped pooled voice. Null cancels it at the applied level; ordinary gain controls supersede this track."),
+        method("voiceGainEnvelope",vec![("handle",T::Map)],T::Any,"Published stepped gain state of a scoped pooled voice, or null without an envelope."),
         method("beginVoiceRelease",vec![("spec",T::Map)],T::Map,"Retire a shared native channel decoder to a tail channel without reopening or seeking; admit an externally clocked stepped db100 release and return an owned operation handle. Pending is not transfer completion."),
         method("advanceVoiceRelease",vec![("handle",T::Map),("elapsedUpdates",T::Any)],T::Void,"Supply a monotonic exact update counter (integer or decimal string) for a channel release; repeated samples are idempotent."),
         method("voiceRelease",vec![("handle",T::Map)],T::Map,"Query actual owner-published release phase, completed counter, source position and stopped_at_update; requested counters alone are not completion."),
@@ -687,6 +691,8 @@ impl Class for AudioClass {
                         | "dopplerVoice"
                         | "motionSettings"
                         | "nativeChannelInfo"
+                        | "channelGainEnvelope"
+                        | "voiceGainEnvelope"
                         | "voice"
                         | "stats"
                         | "bus"
@@ -740,6 +746,24 @@ impl Class for AudioClass {
         }
         let client = cx.state()?.client.0;
         match name {
+            "setChannelGainEnvelope" => {
+                let channel = u32::try_from(arg(args,0,"channel")?.as_i64()?)?;
+                let envelope = parse(arg(args,1,"envelope")?)?;
+                cx.state()?.runtime.host.set_audio_gain_envelope(ClientId(client), channel, envelope)?;
+            }
+            "channelGainEnvelope" => {
+                let channel = u32::try_from(arg(args,0,"channel")?.as_i64()?)?;
+                return Ok(Value::from_json(serde_json::to_value(cx.state()?.runtime.host.audio_gain_envelope_info(ClientId(client), channel)?)?));
+            }
+            "setVoiceGainEnvelope" => {
+                let voice = handle(cx,args)?;
+                let envelope = parse(arg(args,1,"envelope")?)?;
+                cx.state()?.mixer_audio.mixer.set_gain_envelope(client,voice,envelope)?;
+            }
+            "voiceGainEnvelope" => {
+                let voice = handle(cx,args)?;
+                return Ok(Value::from_json(serde_json::to_value(cx.state()?.mixer_audio.mixer.gain_envelope_info(client,voice)?)?));
+            }
             "exchangeChannels" => {
                 let left=u32::try_from(arg(args,0,"left channel")?.as_i64()?)?;
                 let right=u32::try_from(arg(args,1,"right channel")?.as_i64()?)?;

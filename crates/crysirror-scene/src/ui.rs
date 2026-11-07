@@ -106,6 +106,10 @@ pub struct WidgetSpec {
     /// Slider pointer/value axis; other widgets retain the horizontal default.
     #[serde(default)]
     pub slider_axis:SliderAxis,
+    /// Leading/trailing thumb-center insets along the slider axis. Pointer
+    /// capture still covers the whole widget, including endpoint thumb halves.
+    #[serde(default)]
+    pub slider_inset:[f32;2],
     /// Enable built-in arrow stepping. Retained key bindings can instead
     /// provide a native policy while shared UI keeps pointer capture/focus.
     #[serde(default = "yes")]
@@ -508,6 +512,9 @@ pub enum UiCommand {
         id: u32,
         mask: Option<WidgetHitMask>,
     },
+    /// Change only the mapping and union geometry of already owned coverage
+    /// planes, preserving pixel resources, thresholds and the active gesture.
+    SetHitMaskGeometry { id:u32, geometry:hit_mask::WidgetMaskGeometry },
     /// Update owned widget geometry, retaining its input and motion state.
     SetRect {
         id: u32,
@@ -614,6 +621,11 @@ impl UiSystem {
                         mask.validate(widget.spec.rect)?;
                     }
                     widget.spec.hit_mask = mask.clone();
+                }
+                UiCommand::SetHitMaskGeometry {id,geometry} => {
+                    let widget=owner.get_mut(id).context("hit geometry widget missing")?;
+                    widget.spec.hit_mask.as_mut().context("hit geometry requires retained coverage")?
+                        .set_geometry(geometry,widget.spec.rect)?;
                 }
                 UiCommand::BeginMotion { id, track } => {
                     let widget = owner.get_mut(id).context("motion widget missing")?;
@@ -1101,6 +1113,8 @@ impl UiSystem {
                     "press activation requires a Button"
                 );
                 ensure!(s.kind==WidgetKind::Slider||s.slider_axis==SliderAxis::Horizontal,"slider axis requires a Slider widget");
+                let slider_dimension = if s.slider_axis==SliderAxis::Vertical {s.rect[3]}else{s.rect[2]};
+                ensure!(s.slider_inset.iter().all(|n|n.is_finite()&&*n>=0.) && (s.slider_inset==[0.,0.] || s.kind==WidgetKind::Slider && s.slider_inset.iter().sum::<f32>()<slider_dimension),"invalid slider thumb insets");
                 ensure!(
                     *id == s.id
                         && rect_valid(s.rect)
@@ -1626,7 +1640,12 @@ impl UiSystem {
                         .get_mut(&id.id)
                         .unwrap();
                     w.value = if self.pressed == Some(id) && down {
-                        if vertical {((frame.pointer_y as f32-l.rect[1])/l.rect[3]).clamp(0.,1.)}else{((frame.pointer_x as f32 - l.rect[0]) / l.rect[2]).clamp(0., 1.)}
+                        {
+                            let origin=if vertical {l.rect[1]}else{l.rect[0]};
+                            let extent=if vertical {l.rect[3]}else{l.rect[2]};
+                            let pointer=if vertical {frame.pointer_y}else{frame.pointer_x} as f32;
+                            ((pointer-origin-w.spec.slider_inset[0])/(extent-w.spec.slider_inset[0]-w.spec.slider_inset[1])).clamp(0.,1.)
+                        }
                     } else {
                         (w.value
                             + if increase {
@@ -1920,4 +1939,50 @@ pub fn map_window_to_virtual(
     let vx = ((px - off_x) / scale) as i32;
     let vy = ((py - off_y) / scale) as i32;
     Some((vx.clamp(0, vw as i32 - 1), vy.clamp(0, vh as i32 - 1)))
+}
+
+impl UiSystem {
+    fn checkpoint_widget_ids(&self,client:u32,roots:&[u32])->Result<BTreeSet<u32>> {
+        let mut ids=BTreeSet::new();
+        let Some(owner)=self.clients.get(&client)else{return Ok(ids)};
+        ids.extend(roots.iter().filter(|id|owner.contains_key(id)).copied());
+        for _ in 0..=64 {
+            let count=ids.len();
+            for (&id,widget) in owner{if widget.spec.parent.is_some_and(|parent|ids.contains(&parent)){ids.insert(id);}}
+            if ids.len()==count{return Ok(ids)}
+        }
+        anyhow::bail!("checkpoint widget hierarchy depth")
+    }
+    pub(crate) fn checkpoint_scope(&self,client:u32,roots:&[u32])->Result<Self> {
+        let ids=self.checkpoint_widget_ids(client,roots)?;
+        let mut state=Self::default();
+        if let Some(owner)=self.clients.get(&client){state.clients.insert(client,owner.iter().filter(|(id,_)|ids.contains(id)).map(|(id,w)|(*id,w.clone())).collect());}
+        if let Some(owner)=state.clients.get(&client){ensure!(owner.values().all(|widget|widget.spec.parent.is_none_or(|id|owner.contains_key(&id))),"checkpoint widget roots require complete parent hierarchy");}
+        state.motions=self.motions.clone();
+        state.motions.retain_checkpoint_scope(client,&ids);
+        state.focus=self.focus.filter(|id|id.owner==client&&ids.contains(&id.id));
+        state.activation_serial=self.activation_serial;
+        state.validate()?;
+        Ok(state)
+    }
+    pub(crate) fn restore_checkpoint_scope(&mut self,client:u32,roots:&[u32],saved:&Self)->Result<()> {
+        let mut ids=self.checkpoint_widget_ids(client,roots)?;
+        if let Some(owner)=saved.clients.get(&client){ids.extend(owner.keys());}
+        if let Some(owner)=self.clients.get_mut(&client){owner.retain(|id,_|!ids.contains(id));}
+        if let Some(owner)=saved.clients.get(&client){self.clients.entry(client).or_default().extend(owner.clone());}
+        self.motions.restore_checkpoint_scope(client,&ids,&saved.motions)?;
+        // Host pointer/key observations and other scopes' focus survive.
+        // Old delivered actions/captures never become fresh native input.
+        self.events.retain(|e|e.widget.owner!=client||!ids.contains(&e.widget.id));
+        if self.focus.is_some_and(|id|id.owner==client&&ids.contains(&id.id)){self.focus=saved.focus;}
+        self.hover=self.hover.filter(|id|id.owner!=client||!ids.contains(&id.id));
+        self.pressed=self.pressed.filter(|id|id.owner!=client||!ids.contains(&id.id));
+        self.activated=self.activated.filter(|id|id.owner!=client||!ids.contains(&id.id));
+        self.text_actions.retain(|(owner,id),_|*owner!=client||!ids.contains(id));
+        self.key_event_down.retain(|(owner,id),_|*owner!=client||!ids.contains(id));
+        self.key_held_since.retain(|(owner,id,_),_|*owner!=client||!ids.contains(id));
+        self.focus_suppressed.retain(|(owner,id)|*owner!=client||!ids.contains(id));
+        self.activation_serial=self.activation_serial.max(saved.activation_serial);
+        self.validate()
+    }
 }

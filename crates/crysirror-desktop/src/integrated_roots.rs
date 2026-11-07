@@ -15,7 +15,7 @@ pub(crate) fn bind(
         .map(Path::to_path_buf)
         .or_else(super::detect::system_font);
     for client in &mut project.clients {
-        if !matches!(client.adapter.as_str(), "bgi" | "softpal") {
+        if !matches!(client.adapter.as_str(), "bgi" | "softpal" | "siglus") {
             continue;
         }
         let base = assets

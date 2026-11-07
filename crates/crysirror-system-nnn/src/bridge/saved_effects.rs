@@ -15,10 +15,17 @@ impl Bridge {
                 && self.patterns.is_empty()
                 && self.fades.is_empty()
                 && self.greys.is_empty()
+                && self.negas.is_empty()
                 && self.chara_trans.is_empty()
                 && self.old_lamps.is_empty()
                 && self.buras.is_empty()
                 && self.moves.is_empty()
+                && self.scrolls.is_empty()
+                && self.fusumas.is_empty()
+                && self.shakes.is_empty()
+                && self.flashes.is_empty()
+                && self.picture_effects.is_empty()
+                && self.mosaics.is_empty()
                 && self.fill_effects.is_empty(),
             "NNN saved effects require detached native state"
         );
@@ -26,9 +33,14 @@ impl Bridge {
         for (slot, record) in records.iter().enumerate() {
             let slot = slot as i32;
             let words = &record.words;
-            // Disabled native records remain opaque and must not invoke an
-            // unknown effect merely because stale command/parameters remain.
+            // Disabled native records must not invoke a stale/unknown class,
+            // but their real raw parameter/counter/previous-effect state still
+            // belongs to this native slot and must survive another save.
+            self.previous_effects.insert(slot, words[254]);
+            self.rectangles.insert(slot, record.rectangles());
+            self.not_trans.insert(slot, words[253] != 0);
             if !record.enabled() {
+                self.inactive_effect_records.insert(slot, record.clone());
                 continue;
             }
             let count = words[27];
@@ -63,6 +75,20 @@ impl Bridge {
                 0 => {
                     self.passive_counts.insert(slot, (count, frames));
                 }
+                43 => {
+                    let mut state = crate::native_effects_mosaic::MosaicState::parse(&original_p[..7], self.bindings.size)?;
+                    state.count = count;
+                    state.frames = frames;
+                    self.mosaics.insert(slot, state);
+                }
+                8 | 90 | 99 | 124 => {
+                    let length = if words[2] == 8 { 2 } else if words[2] == 90 { 6 } else if words[2] == 124 { 5 } else { 10 };
+                    let mut state = crate::native_picture_effect::PictureEffectState::parse(words[2], &original_p[..length])?;
+                    state.count = count;
+                    state.frames = frames;
+                    state.validate()?;
+                    self.picture_effects.insert(slot, state);
+                }
                 9 => {
                     let mut state = crate::native_chara_trans::CharaTransState::parse(
                         &p[..14],
@@ -80,7 +106,7 @@ impl Bridge {
                     };
                     state.frames = frames;
                     state.count = count;
-                    state.linear_image_effect()?;
+                    state.validate_curve()?;
                     self.fades.insert(slot, state);
                 }
                 29 => {
@@ -110,13 +136,45 @@ impl Bridge {
                         .insert(slot, [p[1] as u8, p[2] as u8, p[3] as u8]);
                     self.passive_counts.insert(slot, (count, frames));
                 }
+                17 => {
+                    let mut state =
+                        crate::native_effects_flash::FlashState::parse(&original_p[..6]);
+                    state.frames = frames;
+                    state.count = count;
+                    self.flashes.insert(slot, state);
+                }
+                18 => {
+                    let mut state =
+                        crate::native_effects_shake::ShakeState::parse(&original_p[..3]);
+                    state.frames = frames;
+                    state.count = count;
+                    self.shakes.insert(slot, state);
+                }
+                39 => {
+                    let mut state = crate::native_effects_scroll::ScrollState::parse(
+                        &original_p[..4],
+                        self.bindings.size,
+                    )?;
+                    state.count = count;
+                    state.frames = frames;
+                    self.scrolls.insert(slot, state);
+                }
+                84 => {
+                    let mut state = crate::native_effects_fusuma::FusumaState::parse(
+                        &original_p[..7],
+                        self.bindings.size,
+                    )?;
+                    state.count = count;
+                    state.frames = frames;
+                    self.fusumas.insert(slot, state);
+                }
                 74 => {
                     let mut state =
                         crate::native_bura::BuraState::parse(&p[..13], self.bindings.size)?;
                     state.frames = frames;
                     state.count = count;
                     state.supplied = original_p[..13].to_vec();
-                    state.image_effect(self.bindings.size)?;
+                    state.validate(self.bindings.size)?;
                     self.buras.insert(slot, state);
                 }
                 109 => {
@@ -127,11 +185,18 @@ impl Bridge {
                     ensure!((0..=2).contains(&state.mode), "NNN saved lamp native mode");
                     self.old_lamps.insert(slot, state);
                 }
+                31 => {
+                    let mut state = crate::native_effects::LayerGreyState::parse(&p[..5])?;
+                    state.frames = frames;
+                    state.count = count;
+                    state.validate_curve()?;
+                    self.negas.insert(slot, state);
+                }
                 129 => {
                     let mut state = crate::native_effects::LayerGreyState::parse(&p[..5])?;
                     state.frames = frames;
                     state.count = count;
-                    state.linear_image_effect()?;
+                    state.validate_curve()?;
                     self.greys.insert(slot, state);
                 }
                 command => bail!(
@@ -275,18 +340,22 @@ mod tests {
     fn active_unknown_picture_and_uninitialized_class_global_pattern_never_fake_success() {
         let mut records = records();
         effect(&mut records, 0, 987654, 0, 0, &[]);
-        assert!(bridge()
-            .load_saved_effect_state(&records, 0)
-            .unwrap_err()
-            .to_string()
-            .contains("987654"));
+        assert!(
+            bridge()
+                .load_saved_effect_state(&records, 0)
+                .unwrap_err()
+                .to_string()
+                .contains("987654")
+        );
         records[0].words[2] = 0;
         records[0].words[1] = 15;
-        assert!(bridge()
-            .load_saved_effect_state(&records, 0)
-            .unwrap_err()
-            .to_string()
-            .contains("warm native picture"));
+        assert!(
+            bridge()
+                .load_saved_effect_state(&records, 0)
+                .unwrap_err()
+                .to_string()
+                .contains("warm native picture")
+        );
         records[0].words[1] = -1;
         records[0].words[2] = 29;
         records[0].words[29..39].copy_from_slice(&[0, 0, 100, 0, 0, 0, 0, 0, 8, 8]);

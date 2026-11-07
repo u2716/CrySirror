@@ -37,6 +37,14 @@ declare class Audio {
   exchangeChannels(left: number, right: number): void;
   /** Shared native/media channel AudioPlaybackInfo or null when ended. Scoped to the caller; source frame units, output-clock fades/delays and source completion remain distinct from processing tails. */
   nativeChannelInfo(channel: number): any;
+  /** Set a mixer-owned stepped dB100 envelope: interval_ms,steps,start_db100,end_db100, optional elapsed_steps/phase_ms/apply_initial/stop_at_end. The -10000 floor is silence. Output time advances through pause/starvation; null cancels at current gain. No decoder/source restart. */
+  setChannelGainEnvelope(channel: number, envelope: any): void;
+  /** Published stepped gain spec, elapsed_steps, phase_ms, current_db100 and active, or null for an absent voice/track. Foreign client state is inaccessible. */
+  channelGainEnvelope(channel: number): any;
+  /** Apply the same stepped dB100 envelope to a scoped pooled voice. Null cancels it at the applied level; ordinary gain controls supersede this track. */
+  setVoiceGainEnvelope(handle: Record<string, any>, envelope: any): void;
+  /** Published stepped gain state of a scoped pooled voice, or null without an envelope. */
+  voiceGainEnvelope(handle: Record<string, any>): any;
   /** Retire a shared native channel decoder to a tail channel without reopening or seeking; admit an externally clocked stepped db100 release and return an owned operation handle. Pending is not transfer completion. */
   beginVoiceRelease(spec: Record<string, any>): Record<string, any>;
   /** Supply a monotonic exact update counter (integer or decimal string) for a channel release; repeated samples are idempotent. */
@@ -550,6 +558,8 @@ declare class Layers {
   setTransform(id: number, transform: Record<string, any>): void;
   /** Inherited visibility. */
   setVisible(id: number, visible: boolean): void;
+  /** Pause or resume automatic subtree motion, positioned-text reveal and crossfade clocks while retaining elapsed time; explicit external updates remain caller-owned. */
+  setClockPaused(id: number, paused: boolean): void;
   /** Engine-owned glyph reveal {visible,total,complete}, or null for an absent/non-glyph layer. */
   revealStatus(id: number): Record<string, any> | null;
   /** Show the complete positioned text run without a VM-private reveal clock. */
@@ -590,7 +600,7 @@ declare class Layers {
   setCrossfadeElapsed(id: number, elapsedMs: number): void;
   /** Finish this client's transition now (skip). */
   endTransition(): void;
-  /** Animate layer position, scale, rotation (radians), pivot or opacity with shared MotionTrackSpec; opacity samples truncate to0..255 bytes, engine duration uses milliseconds, external duration uses caller units. */
+  /** Animate layer position, scale, rotation (radians), pivot, opacity or filter RGB multiplication with shared MotionTrackSpec. Optional repeat counts additional passes; -1 repeats indefinitely. Opacity samples truncate to0..255 bytes; RGB multipliers use0..1. Engine duration uses milliseconds; external duration uses caller units. */
   beginMotion(id: number, track: Record<string, any>): void;
   /** Create owned externally clocked incremental channels and Layer/filter bindings. Banked linear/oscillating queues retain activation, velocity, loop origins and capture/replay state. */
   beginSequence(id: number, spec: Record<string, any>): void;
@@ -923,6 +933,8 @@ declare class Ui {
   setValue(id: number, value: number): void;
   /** Bind an immutable WidgetHitMask coverage grid to pointer input, or clear it with null; keyboard focus remains independent. */
   setHitMask(id: number, mask: Record<string, any> | null): void;
+  /** Update retained source-coverage mappings and union rectangles without copying pixels or resetting input capture. */
+  setHitMaskGeometry(id: number, geometry: Record<string, any>): void;
   /** Set engine cursor presentation visibility. */
   setCursorVisible(visible: boolean): void;
   /** Define or replace a client cursor {frames:[{width,height,hotspot:[x,y],rgba:[bytes]}], steps:[[frame,ms]]} (edges 1..256, straight RGBA8; one 0 ms step for a still cursor). */

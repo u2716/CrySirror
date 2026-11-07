@@ -50,6 +50,18 @@ impl Renderer {
                         let [w,h] = Renderer::puppet_size(p);
                         keys.insert(format!("puppet:{}:{}:{w}x{h}", p.owner, p.id));
                     }
+                    Paint::ProjectedMesh { frame, .. } => {
+                        keys.insert("solid:white".into());
+                        keys.insert("curve:identity".into());
+                        for part in &frame.parts {
+                            if let Some(asset) = &part.texture {
+                                keys.insert(Renderer::image_key(assets,p.owner,asset)?);
+                                keys.insert(Renderer::sampled_image_key_filter(assets,p.owner,asset,p.sampling,part.linear)?);
+                            }
+                        }
+                    }
+                    Paint::LegacyMesh { .. } => anyhow::bail!("legacy mesh must be evaluated by shared layer extraction"),
+                    Paint::CoverageWrite{..}|Paint::CoverageReset{..}|Paint::GlyphView{..}|Paint::Group { .. } | Paint::OrderedState { .. } => anyhow::bail!("composition command must be consumed by shared layer extraction"),
                 }
                 if let Some(mesh) = &p.puppet {
                     for asset in &mesh.textures {

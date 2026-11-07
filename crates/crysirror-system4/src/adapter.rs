@@ -133,12 +133,7 @@ impl Bridge {
                             .collect::<Option<Vec<_>>>();
                         if let Some(scalars) = scalars {
                             if f.name == b"Update" && scalars.is_empty() {
-                                ensure!(
-                                    self.sact.as_ref().is_some_and(|s| s.initialized),
-                                    "SACT2 Update before native initialization"
-                                );
-                                m.complete_hll(call, HllReturn::Scalar(1))?;
-                                return Ok(Dispatch::Presented);
+                                bail!("System4 Update requires the retained native scene presentation actor");
                             }
                             if let Some(sprites) =
                                 self.sact.as_mut().and_then(|s| s.sprites.as_mut())

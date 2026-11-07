@@ -40,7 +40,7 @@ fn make(scene: SceneBuilder) -> (tempfile::TempDir, Runtime) {
     let project = serde_json::json!({"schema":2,"name":"native strings","content_revision":"1","assets":"assets","canvas":[64,64],"clients":[{"name":"native","adapter":"siglus","game":"authored","config":{"scene":"Scene.pck","string_codec":"plain"}},{"name":"peer","adapter":"crysirror-script-v1","game":"peer","program":[]}]});
     let path = root.path().join("project.json");
     std::fs::write(&path, serde_json::to_vec(&project).unwrap()).unwrap();
-    let runtime = Runtime::load(&path, &root.path().join("state")).unwrap();
+    let runtime = siglus_reference::load(&path, &root.path().join("state")).unwrap();
     (root, runtime)
 }
 fn load(runtime: &mut Runtime) -> FontInfo {
@@ -122,3 +122,6 @@ fn native_param_free_and_rebuild_retain_then_retire_actual_shared_glyph_resource
  assert_eq!(serde_json::to_value(runtime.host.engine.layers.get(ClientId(2),700).unwrap()).unwrap(),serde_json::to_value(peer).unwrap());
  assert_eq!(native(&runtime)["unknown_opcodes"],serde_json::json!({}));
 }
+
+#[path = "support/siglus_reference.rs"]
+mod siglus_reference;

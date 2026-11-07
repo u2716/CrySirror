@@ -2133,3 +2133,13 @@ mod tests {
         assert!(restored.sequence_status(ClientId(8), 1).is_err());
     }
 }
+
+impl Sequences {
+    pub(super) fn retain_checkpoint_scope(&mut self, client:u32, ids:&BTreeSet<u32>) {
+        self.clients.retain(|owner,layers| {if *owner!=client{return false} layers.retain(|id,_|ids.contains(id));!layers.is_empty()});
+    }
+    pub(super) fn restore_checkpoint_scope(&mut self, client:u32, removed:&BTreeSet<u32>, saved:&Self) {
+        if let Some(owner)=self.clients.get_mut(&client){owner.retain(|id,_|!removed.contains(id));}
+        if let Some(owner)=saved.clients.get(&client){self.clients.entry(client).or_default().extend(owner.clone());}
+    }
+}

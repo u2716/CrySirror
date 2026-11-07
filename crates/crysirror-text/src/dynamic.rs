@@ -183,6 +183,18 @@ impl TextSystem {
     pub fn attach_dynamic_fonts(&mut self, source: &Self) {
         self.dynamic = source.dynamic.clone();
     }
+    /// Cached aliases for static and active client-owned faces. Retired faces
+    /// and faces owned by other clients do not become new selectable bindings.
+    pub fn font_aliases(&self) -> Result<Vec<String>> {
+        let catalog = self.dynamic.0.read()
+            .map_err(|_| anyhow::anyhow!("font catalog poisoned"))?;
+        let mut aliases = self.fonts.keys().cloned().collect::<std::collections::BTreeSet<_>>();
+        aliases.extend(catalog.active.iter()
+            .filter(|(_, entry)| self.scope == Some(entry.owner))
+            .map(|(alias, _)| alias.clone()));
+        ensure!(aliases.len() <= 4096, "font enumeration budget");
+        Ok(aliases.into_iter().collect())
+    }
     /// A cheap client view. Dynamic aliases belonging to other clients are denied.
     pub fn for_client(&self, owner: ClientId) -> Self {
         let mut view = self.clone();

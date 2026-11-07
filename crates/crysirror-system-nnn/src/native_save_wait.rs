@@ -65,7 +65,10 @@ impl NativeSaveFile {
                 Some(SavedWait::Message {
                     rows: self.messages(count)?,
                     mode,
-                    serial: self.status_word(476)? as u32,
+                    //Actual53ad20/53b630 reserve476 for configMask. This
+                    //legacy layout does not persist the tagged message serial;
+                    //the original live class retains it across slot restore.
+                    serial: u32::MAX,
                     window_number: self.status_word(180)?,
                     window_visible: self.status_word(44)? != 0,
                     cannot_click: self.status_word(485)? != 0,
@@ -119,17 +122,19 @@ impl SavedWait {
                 window_visible,
                 cannot_click,
             } => {
-                // This word selects a native system-window variant; it is not
-                // a visibility bit. Live variant switching is not yet mapped.
-                ensure!(
-                    window_number == 0,
-                    "NNN saved window variant requires native window-resource rebinding"
-                );
                 let text = text.context("NNN saved message component not configured")?;
+                ensure!(
+                    window_number == text.window_variant(),
+                    "NNN saved window variant preparation is incomplete"
+                );
                 SavedWaitPreparation::Message(text.begin(
                     rows,
                     mode,
-                    serial,
+                    if serial == u32::MAX {
+                        text.retained_serial()
+                    } else {
+                        serial
+                    },
                     window_visible && text.current_window_on() && mode == 0x22220001,
                     cannot_click,
                     background,
@@ -164,7 +169,7 @@ impl SavedWaitPreparation {
     pub(crate) fn poll(&mut self, host: &mut dyn HostServices) -> Result<bool> {
         match self {
             Self::Message(prep) => prep.poll(host),
-            Self::Selection(prep) => prep.poll(),
+            Self::Selection(prep) => prep.poll_resources(host),
         }
     }
     pub(crate) fn finish(self) -> Result<PreparedWait> {

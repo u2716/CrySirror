@@ -99,22 +99,23 @@ other native tables remain unclassified.
 
 ## Required engine APIs versus native importer work
 
-The following are proposed next steps, not implemented capabilities:
+The following separates existing shared capabilities from remaining native
+importer work. Character geometry and rigid attachment loading are described in
+[the character validation](../validation/gow3-character-loading.md); native
+skinning and animation remain incomplete.
 
 | Priority | Need demonstrated by this trial | Shared engine direction | Native frontend responsibility |
 |---|---|---|---|
 | P0 | Correct placement and initial moving-part poses | Existing glTF nodes, skins and animation are already available; no new VM needed | Decode bind/entity/ANM composition and initial pose; 141 ANM records are present |
-| P0 | Interior local lighting | `EntitySpec.light: Option<LightSpec>` and `Entity.setLight`; point/spot variants, bounded range/cones/intensity; renderer light culling and an explicit shadow budget | Decode the 207 light records (names include `PSpointLite*`); calibrate source units and behavior |
+| P0 | Interior local lighting | Existing `EntitySpec.light`, `Entity.setLight`, clustered lights and budgeted shadows (ADR 0018) | Validate native light mappings, source units and behavior beyond the preview approximations |
 | P0 | Per-surface material authoring | Slot-addressed material overrides on model/scene entities; shared Rust/JSON/TS/save/MCP contract | Map MDL material slots, sampler roles, alpha and source parameters |
 | P1 | Additional vertex attributes and baked appearance | PBR `COLOR_0`, UV1, texture-coordinate selection and lightmap/baked-lighting data | Identify remaining native bindings; do not guess that an unknown binding is a lightmap |
 | P1 | Large resource sets and full mip chains | Client-scoped dependency resolver/import diagnostics, asynchronous source/transcode jobs, mip residency policy | Resolve PSARC/WAD/TS dependencies and source mip offsets; do not bake game paths into GPU code |
 | P1 | Alternate geometry/LOD variants | Shared LOD descriptors, selection and diagnostics after source meaning is verified | Classify alternate MG tables; they are not yet proven to be LODs |
 
-Current `PbrVertex` has position, normal, UV0 and tangent; current lighting has
-sun + IBL; `Entity.setMaterial` replaces the whole entity material. Thus local
-lights, additional attributes and slot overrides are concrete public-engine
-gaps. Animation itself already exists: the missing GoW ANM interpretation is a
-native frontend gap. Both distinctions matter when prioritizing the engine.
+Shared local lighting exists independently of this importer. Additional vertex
+attributes and slot overrides need their own API/renderer review; native ANM
+interpretation remains an importer task over the existing animation service.
 
 Do not add placeholder light/LOD APIs that silently discard data. Implement each
 slice together with renderer behavior, save/validation contracts and a small

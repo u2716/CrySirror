@@ -21,7 +21,6 @@ impl SavedAudioWork {
     /// bgmVolume/adjustLoadBGM extensions.
     pub(crate) fn prepare_policy(&self, current: &NativeAudioPolicy) -> Result<NativeAudioPolicy> {
         ensure!(self.music_number >= -1, "NNN saved music number");
-        ensure!(self.music_repeat_count >= 0, "NNN saved music repeat count");
         let mut names = std::array::from_fn(|_| Vec::new());
         for (index, raw) in self.voice_names.iter().enumerate() {
             let end = raw.iter().position(|byte| *byte == 0);
@@ -483,11 +482,12 @@ impl SavedAudioPreparation {
                 .music_number
                 .checked_add(1)
                 .context("NNN saved music index overflow")?;
-            let plan = policy.music(
+            let mut plan = policy.music(
                 &[number, original.music_repeat_count, -9999, -1, -1],
                 music,
                 false,
             )?;
+            plan.prepare_music_start(policy.bindings.music)?;
             policy = plan.next.clone();
             if let Some(source) = plan.source.clone() {
                 plans.push((plan, source));

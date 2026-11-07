@@ -48,6 +48,23 @@ pub(crate) fn load_text(
         )],
     )
 }
+/// Native PlayMovie child-window/transport profile, never executable code.
+pub(crate) fn load_movie(
+    document: &Document,
+    storage: &dyn ClientStorage,
+    cancel: &Cancellation,
+) -> Result<bool> {
+    load_modules(
+        document,
+        storage,
+        cancel,
+        &[(
+            "PlayMovie.dll",
+            49152,
+            "4ac952009a13518d759967ea85ccab39339b5398cd0c44f60ff155d6d181c20f",
+        )],
+    )
+}
 fn load_modules(
     document: &Document,
     storage: &dyn ClientStorage,

@@ -1,12 +1,64 @@
 //! Native message escape/state policy. Shared cell layout, glyph coverage and
 //! retained reveal clocks perform the reusable text work.
 use super::*;
-use crysirror_scene::layer::{LayerSpec, PositionedGlyph};
+use crysirror_core::image_processing::GlyphCoverageQuality;
+use crysirror_scene::layer::{
+    GlyphOutline, GlyphOutlineKernel, GlyphShadow, LayerSpec, PositionedGlyph, PositionedGlyphStyle,
+};
 use crysirror_text::grid::{layout_cells_with_breaks, CellCursor, CellLayoutOptions};
-#[derive(Clone)]
+//5051A4 ->4FF2B4 builds the original sixteen face/style passes. The
+//eight radius-one neighbours plus four radius-two cardinals are exactly
+//the shared integer Disk2 kernel, rather than a square radius-two border.
+pub(super) fn native_glyph_style(flags: i32, aa: i32, color: i32) -> Result<PositionedGlyphStyle> {
+    ensure!(
+        flags & !15 == 0,
+        "unsupported QLIE native font style bits {flags:#x}"
+    );
+    let color = color as u32;
+    Ok(PositionedGlyphStyle {
+        bold: flags & 1 != 0,
+        raster: match aa {
+            0 => GlyphCoverageQuality::Binary { threshold: 128 },
+            1 => GlyphCoverageQuality::Supersample { factor: 2 },
+            2 => GlyphCoverageQuality::Supersample { factor: 4 },
+            3 => GlyphCoverageQuality::Supersample { factor: 8 },
+            _ => bail!("unsupported QLIE font antialias mode {aa}"),
+        },
+        outline: if flags & 4 != 0 {
+            Some(GlyphOutline {
+                radius: if flags & 8 != 0 { 2 } else { 1 },
+                kernel: if flags & 8 != 0 {
+                    GlyphOutlineKernel::Disk
+                } else {
+                    GlyphOutlineKernel::Square
+                },
+                color: [(color >> 16) as u8, (color >> 8) as u8, color as u8, 255],
+            })
+        } else {
+            None
+        },
+        shadow: if flags & 2 != 0 {
+            Some(GlyphShadow {
+                offset: [3., 3.],
+                color: [0, 0, 0, 102],
+            })
+        } else {
+            None
+        },
+    })
+}
+#[derive(Clone, Serialize, Deserialize)]
+struct FontSlot {
+    alias: String,
+    style: PositionedGlyphStyle,
+}
+#[derive(Clone, Serialize, Deserialize)]
 struct Style {
     font: String,
+    font_slot: i32,
+    glyph_style: Option<PositionedGlyphStyle>,
     ruby_font: Option<String>,
+    ruby_style: Option<PositionedGlyphStyle>,
     size: [i32; 2],
     color: [u8; 4],
     pitch: [i32; 2],
@@ -15,13 +67,17 @@ struct Style {
     ruby_pitch: [i32; 2],
     ruby_color: [u8; 4],
     bold: bool,
+    bold_override: Option<bool>,
     interval: u64,
 }
 impl Default for Style {
     fn default() -> Self {
         Self {
             font: "default".into(),
+            font_slot: 0,
+            glyph_style: None,
             ruby_font: None,
+            ruby_style: None,
             size: [24, 24],
             color: [255; 4],
             pitch: [0, 8],
@@ -30,11 +86,12 @@ impl Default for Style {
             ruby_pitch: [0, 0],
             ruby_color: [255; 4],
             bold: false,
+            bold_override: None,
             interval: 30,
         }
     }
 }
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(super) struct Message {
     style: Style,
     defaults: Style,
@@ -53,15 +110,47 @@ pub(super) struct Message {
     kinsoku_length: i32,
     indent: String,
     indent_enabled: bool,
+    /// Text added since the page was cleared (+ED0), read by `gt`.
+    #[serde(default)]
+    pub(super) text: String,
+    #[serde(default)]
+    pub(super) pictures: glyph_pictures::GlyphPictures,
+    /// Picture glyphs held back until their sheets are published again.
+    #[serde(skip)]
+    pub(super) stashed_images: Vec<(usize, crysirror_scene::layer::GlyphImage)>,
+    #[serde(skip)]
+    pub(super) remap: BTreeMap<String, String>,
 }
 impl Message {
+    /// TMLSaveData keeps the reveal position (MesPos/State): a page saved
+    /// mid-reveal continues revealing from the glyphs already shown.
+    pub(super) fn prepare_save(&mut self, visible: usize) {
+        self.initial = visible.min(self.glyphs.len());
+    }
+    pub(super) fn reset_for_restore(&mut self) {
+        // Picture sheets are republished by the rebuild; until then their
+        // scalars draw with the font.
+        if !self.pictures.all_live() {
+            for (i, g) in self.glyphs.iter_mut().enumerate() {
+                if let Some(image) = g.image.take() {
+                    self.stashed_images.push((i, image));
+                }
+            }
+        }
+        self.initial = self.initial.min(self.glyphs.len());
+        self.created = false;
+        self.bound_parent = None;
+    }
+    pub(super) fn glyphs_mut(&mut self) -> &mut Vec<PositionedGlyph> {
+        &mut self.glyphs
+    }
     pub(super) fn surface_size(&self) -> [f32; 2] {
         [
             (self.area[2] - self.area[0]).max(1) as f32,
             (self.area[3] - self.area[1]).max(1) as f32,
         ]
     }
-    fn new(layer: u32, canvas: [u32; 2]) -> Self {
+    pub(super) fn new(layer: u32, canvas: [u32; 2]) -> Self {
         Self {
             style: Style::default(),
             defaults: Style::default(),
@@ -80,6 +169,10 @@ impl Message {
             kinsoku_length: 0,
             indent: String::new(),
             indent_enabled: false,
+            text: String::new(),
+            pictures: Default::default(),
+            stashed_images: Vec::new(),
+            remap: BTreeMap::new(),
         }
     }
 }
@@ -116,20 +209,34 @@ fn glyphs(h: &dyn HostServices, message: &mut Message, text: &str) -> Result<()>
         } else {
             vec![]
         },
+        cell_widths: message.pictures.cell_widths(message.style.size[0]),
     };
     let mut remaining = text;
     while !remaining.is_empty() {
+        let cursor = message.cursor.clone();
         let layout = layout_cells_with_breaks(
             remaining,
             &options,
             &mut message.cursor,
             &message.kinsoku_end,
-        )?;
+        )
+        .with_context(|| format!("QLIE message layout {remaining:?} at {cursor:?}"))?;
         for glyph in layout.glyphs {
             let ascent = h
                 .font_metrics(&message.style.font, size as f32, glyph.character)?
                 .ascent;
+            let image = message.pictures.image(
+                glyph.character,
+                glyph.position,
+                message.style.size,
+                message.style.color,
+            );
             message.glyphs.push(PositionedGlyph {
+                image,
+                style: message.style.glyph_style.map(|mut style| {
+                    style.bold = message.style.bold;
+                    style
+                }),
                 font: Some(message.style.font.clone()),
                 character: glyph.character,
                 baseline: [glyph.position[0] as f32, glyph.position[1] as f32 + ascent],
@@ -159,7 +266,7 @@ fn markup(
     h: &dyn HostServices,
     message: &mut Message,
     text: &str,
-    fonts: &BTreeMap<i32, String>,
+    fonts: &BTreeMap<i32, FontSlot>,
 ) -> Result<()> {
     let mut rest = text;
     while !rest.is_empty() {
@@ -185,22 +292,24 @@ fn markup(
         match tag {
             "f" => {
                 let index = n(1, 0)?;
-                let alias = fonts
+                let slot = fonts
                     .get(&index)
                     .cloned()
-                    .or_else(|| (index == 0).then(|| "default".into()))
                     .with_context(|| format!("QLIE font {index} is not configured"))?;
-                message.style.font = alias;
+                message.style.font = slot.alias;
+                message.style.font_slot = index;
+                message.style.bold = slot.style.bold;
+                message.style.bold_override = None;
+                message.style.glyph_style = Some(slot.style);
             }
             "rf" => {
                 let index = n(1, 0)?;
-                message.style.ruby_font = Some(
-                    fonts
-                        .get(&index)
-                        .cloned()
-                        .or_else(|| (index == 0).then(|| "default".into()))
-                        .with_context(|| format!("QLIE ruby font {index} is not configured"))?,
-                );
+                let slot = fonts
+                    .get(&index)
+                    .cloned()
+                    .with_context(|| format!("QLIE ruby font {index} is not configured"))?;
+                message.style.ruby_font = Some(slot.alias);
+                message.style.ruby_style = Some(slot.style);
             }
             "s" => {
                 message.style.size = [n(1, 24)?.clamp(1, 512), n(2, n(1, 24)?)?.clamp(1, 512)];
@@ -224,6 +333,15 @@ fn markup(
             "p" => {
                 message.cursor.position = [n(1, 0)?, n(2, 0)?];
             }
+            // 69E7AC [i,n]: advance the current line X (+3624) by n,
+            // clamped at the line start; omitted n is ignored.
+            "i" => {
+                if args.len() >= 2 {
+                    message.cursor.position[0] = (message.cursor.position[0]
+                        + crate::expression::parse_integer(&args[1]).unwrap_or(0))
+                    .max(0);
+                }
+            }
             "pc" | "pr" => {
                 let text = args.get(1).context("QLIE aligned text argument")?;
                 let mut preview = message.clone();
@@ -246,7 +364,11 @@ fn markup(
                 glyphs(h, message, &character.to_string())?;
             }
             "spd" => message.style.interval = n(1, message.defaults.interval as i32)?.max(0) as u64,
-            "b" => message.style.bold = n(1, 1)? != 0,
+            "b" => {
+                let bold = n(1, 1)? != 0;
+                message.style.bold = bold;
+                message.style.bold_override = Some(bold);
+            }
             "rb" => {
                 ensure!(args.len() == 3, "QLIE ruby ABI");
                 let start = message.cursor.clone();
@@ -258,6 +380,9 @@ fn markup(
                 message.cursor = start;
                 message.cursor.position[0] +=
                     (base_width - ruby_width) / 2 + style.ruby_position[0];
+                // 69FDFC: a ruby run starting left of the line origin is
+                // shifted right to start at zero, keeping its width.
+                message.cursor.position[0] = message.cursor.position[0].max(0);
                 message.cursor.position[1] += style.ruby_position[1] - style.ruby_size[1];
                 // The shared layout cursor is nonnegative; ruby may extend
                 // above the baseline by a semantic offset applied to its glyphs.
@@ -269,6 +394,10 @@ fn markup(
                     .ruby_font
                     .clone()
                     .unwrap_or_else(|| style.font.clone());
+                message.style.glyph_style = style.ruby_style.or(style.glyph_style);
+                if let Some(style) = message.style.glyph_style {
+                    message.style.bold = style.bold;
+                }
                 message.style.pitch = style.ruby_pitch;
                 message.style.color = style.ruby_color;
                 glyphs(h, message, &args[2])?;
@@ -285,7 +414,7 @@ fn markup(
     Ok(())
 }
 impl QlieVm {
-    fn publish_message(&mut self, h: &mut dyn HostServices, id: &str) -> Result<()> {
+    pub(super) fn publish_message(&mut self, h: &mut dyn HostServices, id: &str) -> Result<()> {
         self.put_parent(h, id)?;
         let o = &self.objects[id];
         let message = o.message.as_ref().unwrap();
@@ -301,7 +430,7 @@ impl QlieVm {
         let cmd = if message.created {
             json!({"op":"set_paint","id":message.layer,"paint":paint})
         } else {
-            json!({"op":"put","layer":{"id":message.layer,"parent":message.bound_parent.unwrap_or(o.layer),"visible":o.bundle.is_none()||message.bound_parent.is_some(),"rect":rect,"order":[i32::MAX,0],"paint":paint}})
+            json!({"op":"put","layer":{"id":message.layer,"parent":message.bound_parent.unwrap_or(o.layer),"visible":o.bundle.is_none()||message.bound_parent.is_some(),"rect":rect,"order":[o.position[2],0],"tie_order":u64::from(o.layer)<<32,"paint":paint}})
         };
         let mut commands = vec![cmd];
         if message.created {
@@ -366,22 +495,51 @@ impl QlieVm {
                 } else {
                     0
                 };
-                let fonts = self
-                    .objects
-                    .get("cfg")
-                    .map(|cfg| {
-                        cfg.properties
-                            .iter()
-                            .filter_map(|(key, value)| {
-                                key.strip_prefix("font_alias/")
-                                    .and_then(|n| n.parse::<i32>().ok())
-                                    .map(|n| (n, value[0].text()))
-                            })
-                            .collect::<BTreeMap<_, _>>()
-                    })
-                    .unwrap_or_default();
+                let mut fonts = BTreeMap::new();
+                let library = h.font_library(self.client)?;
+                for index in 0..16 {
+                    let cfg = self.objects.get("cfg");
+                    let number = |key: &str, default: i32| {
+                        cfg.and_then(|o| o.properties.get(&format!("{key}/{index}")))
+                            .and_then(|v| v.first())
+                            .and_then(|v| v.integer().ok())
+                            .unwrap_or(default)
+                    };
+                    let requested = cfg
+                        .and_then(|o| {
+                            o.properties
+                                .get(&format!("font_alias/{index}"))
+                                .or_else(|| o.properties.get(&format!("fn2/{index}")))
+                        })
+                        .and_then(|v| v.first())
+                        .map(Value::text)
+                        .unwrap_or_else(|| "default".into());
+                    let alias = library
+                        .resolve_alias(&requested)?
+                        .or(library.resolve_alias("default")?)
+                        .context("QLIE font slot and fallback unavailable")?;
+                    fonts.insert(
+                        index,
+                        FontSlot {
+                            alias,
+                            style: native_glyph_style(
+                                number("fst2", 1),
+                                number("faa2", 2),
+                                number("fsc2", 0),
+                            )?,
+                        },
+                    );
+                }
                 let msg = self.objects.get_mut(id).unwrap().message.as_mut().unwrap();
+                if let Some(slot) = fonts.get(&msg.style.font_slot) {
+                    msg.style.font = slot.alias.clone();
+                    msg.style.glyph_style = Some(slot.style);
+                    msg.style.bold = msg.style.bold_override.unwrap_or(slot.style.bold);
+                }
                 msg.initial = visible;
+                if msg.text.len() + text.len() <= 1 << 20 {
+                    msg.text.push_str(&text);
+                }
                 let before = msg.glyphs.len();
                 markup(h, msg, &text, &fonts)?;
                 let added = msg.glyphs.len().saturating_sub(before);
@@ -422,6 +580,7 @@ impl QlieVm {
                 let msg = self.objects.get_mut(id).unwrap().message.as_mut().unwrap();
                 msg.defaults = msg.style.clone();
                 msg.glyphs.clear();
+                msg.text.clear();
                 msg.cursor = CellCursor::at_start();
                 msg.initial = 0;
                 msg.click = 0;
@@ -555,6 +714,67 @@ impl QlieVm {
                     .unwrap()
                     .properties
                     .insert(op.into(), a.to_vec());
+            }
+            // 6F7484 queries of the message settings: ?as +3750, ?ap +3751,
+            // ?kwb/?kwe +3556/+3560, ?kwl +3736, ?kwd +3752, ?nsw +3564,
+            // ?ns +3728, ?tlt +3749, ?ts the text area size.
+            "?as" => {
+                let on = self.objects[id].message.as_ref().unwrap().auto_scroll;
+                m.result(0, Value::Int(i32::from(on)));
+            }
+            "?ap" => {
+                let on = self.objects[id]
+                    .properties
+                    .get("ap")
+                    .and_then(|v| v.first())
+                    .and_then(|v| v.integer().ok())
+                    .unwrap_or(0)
+                    == 1;
+                m.result(0, Value::Int(i32::from(on)));
+            }
+            "?kwb" | "?kwe" | "?nsw" => {
+                let msg = self.objects[id].message.as_ref().unwrap();
+                let text = match op {
+                    "?kwb" => msg.kinsoku_begin.clone(),
+                    "?kwe" => msg.kinsoku_end.clone(),
+                    _ => msg.indent.clone(),
+                };
+                m.result_text(0, text);
+            }
+            "?kwl" => {
+                let length = self.objects[id].message.as_ref().unwrap().kinsoku_length;
+                m.result(0, Value::Int(length));
+            }
+            "?ns" => {
+                let on = self.objects[id].message.as_ref().unwrap().indent_enabled;
+                m.result(0, Value::Int(i32::from(on)));
+            }
+            // kwd,v (+3752) and tlt,v (69E420, +3749) are kept settings.
+            "kwd" | "tlt" => {
+                let value = if op == "kwd" {
+                    i32::from(integer(a, 0, 0)? == 1)
+                } else {
+                    integer(a, 0, 0)? & 0xFF
+                };
+                self.objects
+                    .get_mut(id)
+                    .unwrap()
+                    .properties
+                    .insert(format!("msg/{op}"), vec![Value::Int(value)]);
+            }
+            "?kwd" | "?tlt" => {
+                let value = self.objects[id]
+                    .properties
+                    .get(&format!("msg/{}", &op[1..]))
+                    .and_then(|v| v.first())
+                    .cloned()
+                    .unwrap_or(Value::Int(0));
+                m.result(0, value);
+            }
+            "?ts" => {
+                let area = self.objects[id].message.as_ref().unwrap().area;
+                m.result(0, Value::Int(area[2] - area[0]));
+                m.result(1, Value::Int(area[3] - area[1]));
             }
             "mc" | "sk" => {
                 let msg = self.objects.get_mut(id).unwrap().message.as_mut().unwrap();

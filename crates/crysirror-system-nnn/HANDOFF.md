@@ -1,48 +1,9 @@
-# System-NNN current handoff — 2026-10-31
+# System-NNN implementation notes
 
-The partial native VM is first class and uses shared CrySirror services. No
-original executable, legacy host, renderer or private pixel resource is used.
-Installed factory/detection are present; **no complete title/play/save claim**.
-
-## Current real launch frontier
-
-The shared fallback mount resolves original loose DWQ packs before the MSI's
-intentional four-byte placeholders. Original resource regression remains1625
-DWQ and156 audio wrappers /2,555,904 PCM frames; no owner data is committed.
-
-Player19 exposed the missing outer shell (default Controller/sys loops in zero
-startup variables). Source now follows configured Nothing -> real MediaProbe ->
-Logo -> original `mugen2_backscript` as mode3, without forcing NewGame/VarInit.
-Player22 actually reached original Opening instruction22/PC0x37d CTRANS9.
-
-Fixed player23 SHA256
-`2c7a0ac497d068d207b846ddbaa63c0b4f173342a2d74a0077e28762c557caf8`
-was actually run by ordinary `play Downloads/game-MUGEN2 --headless --no-audio
---frames 20000`. It passed CTRANS and reached instruction25/PC0x397, the first
-OVERRAP, then failed in shared Canvas preflight: published image
-`__image_resource/16-100` was incorrectly read as a filesystem asset.
-See `target/verification/systemnnn/player23-controller.log`. No final screenshot
-was written because the original pending call correctly remained failed.
-
-This was a public compositor gap, not a missing GPK or a private VM image. The
-minimal fix in wgpu/composite.rs validates the actual owner-scoped published
-Surface and bypasses encoded-file preflight. It does not accept merely matching
-names. CPU preflight1/1 passed; an explicit real Apple M5/Metal capture fixture
-passed1/1, proving admitted old red image survives clear/remove/live release
-and worker readback at clock0. Logs published-snapshot-preflight-test.log and
-published-snapshot-gpu-test3.log. First GPU fixture attempt had cross-system
-batch ordering wrong; corrected setup creates Layer before copy_subtree.
-
-The fix is after23. KRKR owns the next unique full-feature player24 build,
-coordinating its native Layer GC fix; do not run a duplicate desktop LTO build.
-Use24 to advance the same original Controller past0x397. Nothing/Logo/Opening
-stage advancement is not a title/play/save pass. Native printmovie/Title
-continuation still explicitly fails after background NEXT; original Start,
-longer story/input and full native save restoration remain incomplete.
-
-Original printmovie.fxf selectByVarFlag=-1 with original Shift_JIS movie-number
-variable: value0 skips movie to Title. Do not force OP playback; configured
-movie/codec asset is mugen2_op.mpg.
+Current implementation entry points and supported profiles are indexed in
+[README.md](README.md). Native operation mappings and remaining gaps belong
+beside their source; source provenance is recorded in SOURCE.json.
+The dated notes below retain historical implementation and validation evidence.
 
 ## Production boundaries
 
@@ -149,35 +110,7 @@ Original title, Start/long story, ongoing input and original saves remain requir
   passed installed2/2 and shell4/4. The pending-click fixture retains one real
   edge through source/image jobs without creating/removing an absent Layer.
 
-
 ## Next Opening effects implemented after player22
-
-- `native_old_lamp.rs`: actual original109 Calcu/Print/native RNG policy, not a
-  noise-image substitute. All lamp Calcu runs before layer Print; candidates and
-  the single MSVC sequence commit only after shared frame work. DRAW0 does not
-  run Calcu; invisible/missing-picture lamps still run native Calcu and do not
-  consume Print-only random flips. Full-picture keyed/masked drawing is shared
-  Composite, with a distinct raw base excluding self-drawing picture slots.
-- `native_bura.rs`: original74 parameters/centre/count map into public
-  `PiecewiseResampleSpec`; exact quadrant16.16 sampling and independent Q8 weights
-  are shared image worker code. Renderer-display alpha remains opaque while
-  native raw save reconstruction is explicitly unsupported.
-- `native_curve.rs`: original numeric encoding maps into shared `ProgressCurve`.
-  Original0/4 time maps and linear/quadratic/sqrt/cosine shapes are mapped;
-  unsupported periodic/delay/random curve families still explicitly fail.
-  Actual opening's SUNA4 and Bura scale-curve30 are covered.
-- Release `native-oldlamp-tests.log`: lib6/6 + bridge13/13 passed.
-  Release `native-bura-tests.log`: lib8/8 + bridge13/13 passed; actual native
-  static-module quadrants have independent expected sample-index/RGB fixtures.
-  `piecewise-resample-tests2.log`:2/2; `progress-curve-tests.log`:2/2.
-  `native-bura-worker-test.log` passed1/1: actual shared ImageJob dispatch,
-  separate Q8 floor output254 and native frame-count/RNG assertions.
-- Shared public declarations added to API generator. KRKR is concurrently
-  aligning public Canvas quotas and Canvases.getLimits. One merged docs bless
-  generated fingerprint `bd71afbaa37a19da` (initial7/8 required its CHANGES
-  entry); no-bless piecewise-api-docs-verify.log passed8/8 after recording it.
-  Source is frozen for KRKR's single player23 build; never build a parallel
-  full-feature desktop/LTO artifact.
 
 - NativeMAE1 was then fully traced through actual wrapper0x4c6660 ->
   SetEffectScript0x4c18e0. It returns before SetParam without changing command,
@@ -194,22 +127,6 @@ The common published-resource capture fix therefore passed the prior25/0x397
 frontier. Next exact error: interleaved image/effect bands. No title or final
 capture was produced. Log: player24-controller.log. GPU released to Cat/KRKR.
 
-Current source adds shared MaskSeparate256 (legacy x86 separate-product floors,
-endpoint0/255, display alpha retained) and ordered native Paint DTOs routed to
-shared Composite ImageJobs. Persistent native effect state/counts remain separate
-from these picture/fill operations; every DRAW frame regenerates the same ordered
-plan. Compilation/independent tests are in progress; actual next player pending.
-Core/Runtime enum addition was coordinated with KRKR after its immutable25 freeze;
-encoded-byte budget helpers and tests were preserved. Do not build a second full
-player: KRKR coordinates the next unique full-feature artifact after tests/docs.
-
-Final ordered painter release checks: lib8/8 + bridge16/16, kernel1/1 and shared
-service1/1 passed, then dedicated releasecheck passed. New independent sequence
-fixture performs2native DRAW frames and asserts exact grey75, original counts,
-RNG, upper-raw exclusion from lower Canvas and retained unknown PC.
-No-bless API docs8/8 + command coverage1/1 passed; fingerprint6781d4170ef6e9f2.
-Next unique player must include this source; current immutable25 predates it.
-
 ## Further source-only startup work before player26
 
 Full original background SPT static inspection recorded1224records under ignored
@@ -224,12 +141,6 @@ than a Q15 endpoint254; it disables picture-underlay drawing and persists for
 DRAW0. Fade Print treats g/b=-1 as inheritance; terminal Fill masks each original
 parameter separately, so [10,-1,-1] changes from weighted grey10 to [10,255,255].
 This difference is explicitly tested. No new shared enum/API or pixel loop.
-
-Final native-fadeout-final-tests.log passed lib9/9 + bridge17/17. Dedicated
-releasecheck is queued separately. No original player has executed this source.
-Public API fingerprint remains6781d4170ef6e9f2 until KRKR's planned AlphaClipRect
-shared capability. KRKR now owns Runtime image_processing.rs again; do not edit
-its pair-context/dispatch while that work is ongoing. I retain docs coordination.
 
 FadeOut dedicated releasecheck then passed (`native-fadeout-final-check.log`,
 9.79s). The next player must include both ordered painter and FadeOut.
@@ -251,21 +162,7 @@ into original SystemFile. Next work must implement that explicit known native
 policy, not acknowledge all SetFilm or invent a shared read-history write.
 Normal/front-script original persistent marks are still unimplemented.
 
-ROOT now owns unique player27 for a separate RealLive LB clip fix. NNN source
-is unchanged since26 and explicitly FROZEN until root publishes27 SHA. The
-SetFilm semantic mapping has NOT yet been edited. Read-only static analysis may
-continue. Final shared AlphaClip API docs cargo8/8+coverage1/1 passed; current
-fingerprint66c74a7ee0a69bf1. Earlier6c31b5c44d887345 was invalidated only by
-AlphaClipRect Rust array whitespace after rustfmt, not a wire change.
-
 ## After27 source: exact background mark policy and frame returns
-
-Root fixed27 and lifted source freeze. Source now routes SETFILM suppression
-only when the constructor explicitly binds the original background context and
-backScriptSetCGOkFlag0. Original default0 is additionally proven by module ASM
-0x543061 (field2054/offset0x2018) before config read0x543083. Foreground or enabled
-background writes remain explicit errors retaining the original receipt/PC.
-Foreground constructors clear a previously carried background context.
 
 ScriptSession background profile now preserves ENDFILM/ENDKOMA/ENDIF receipts;
 normal Yoyaku still resumes ENDIF/ENDKOMA immediately. NativeDraw accepts the
@@ -273,14 +170,6 @@ original Control receipt and performs one shared frame, CountUp and native wait
 before ACK. This follows complete CBackExec ExecScript/Calcu/Print and actual
 CalcuBackScript/LoadBackScript source; it is not a timer-only ACK or a fabricated
 DRAW opcode. No public Core/API variant, private renderer or pixel loop added.
-
-Release native-background-frame-tests.log passed41/41:
-lib9, bridge18, machine3, native_control6, native_shell5. New real Core-port
-fixture verifies three shared frames, passive count3, elapsed>=60ms, unchanged
-RNG and the contrasting foreground profile. Final dedicated releasecheck
-passed6.37s (native-background-frame-final-check.log). Actual prior26 frontier
-remains211/0x8a7 until unique28 is built. Root coordinates28 after Cat's Text
-byte_groups final signature/tests and this agent's single merged API regen.
 
 ## Stable source for unique28: shared masked pair + final merged docs
 
@@ -329,20 +218,6 @@ docs/nnn-native-movie-source-audit.json and SOURCE reference. Music default fade
 computes original100ms stepped decibel policy but existing control_request
 explicitly fails when that nonzero fade is needed while music is playing;
 shared Host only has a linear fade. Do not approximate this in native code.
-
-Source FROZEN forRoot29. SolidColor final public fingerprint c8c180ba4ff65706
-(previous1171d6b86d446b00), CHANGES/README logged, no-bless8+coverage1 queued in
-solid-color-api-docs-verify.log (not yet claimed pass here). Root owns one29
-build after own Siglus/Circus/Cat tests and this docs queue. New29 should expose
-true Movie selector or next native gap. Continue Title shared Widgets/hitmasks/
-MaskedPair (already independent-tested), proper original exit-buffer handoff,
-background state transfer/quiesce, then actual Start/body/input/native saves.
-
-SolidColor docs final no-bless release8/8+coverage1/1 now PASSED in
-solid-color-api-docs-verify.log. Fingerprint c8c180ba4ff65706 is final; generated
-REFERENCE/JSON/TS and CHANGES/README reflect actual method/command. Root notified
-all29 prerequisites ready. Root's unique29 build queued after tests (session97939,
-krkr-ctrl-exits/player29-build.log). Maintain production FREEZE until fixedSHA.
 
 ## Stable30: actual29 Movie continuation and real shared mouse bits
 
@@ -466,32 +341,7 @@ Core WAV/alternating-channel lib test has been written, unrun. Delayed sounds
 still explicit unsupported; Start/exit still explicit. Dependency pump now
 handles admitted native VM work plus outer music/system sound/frame pipeline.
 
-Root CANCELLED queued32fullbuild at user's Siglus full-module-port steering;
-no immutable32 exists yet. Root owns combined-release-tests.log task28327 over
-7crates includingNNN(runtime), --lib --tests. All current NNN PRODUCTION SOURCE
-FROZEN for that run. Do NOT add cargo queues; Root schedules combined validation.
-Reported NNN set: lib/bridge/native_move/native_title/native_shell/installed/
-native_movie. Existing tasks retained. Fix own actual errors if Root reports,
-otherwise read-source work only until run result / next freeze release.
-
-Docs: Input/Platform firstbless yielded intermediate112d043e04e6dba1; only
-expected missingCHANGES7/8, entry now written. Source registry/README also
-prepared Root reading_wait.rs ReadingWait and Alice ALD catalogue(2Rusttypes),
-in addition toInput/Platform4Rusttypes. No final combined regen/verification
-claimed. Root explicitly forbids new cargo queues until combined finishes;
-ask Root to schedule one blessed api_docs then no-bless api_docs+api_coverage.
-Final hash may change from112d. New common source shapes are frozen.
-
-
 ## Unified release result after source-only freeze
-
-Root combined-release-tests.log now passed complete NNN suite:67passed8ignored,
-including lib12/system-sound, Bridge18, Move2/hiddenCalcu, Title3/Caccelerator,
-Shell5/Movie5, installed2 and original envelope/resource/control fixtures.
-No proprietary game or font ignored test was run by this combined command.
-The prior intermediate Title2args/1arg error is fixed and final-source compiled.
-Actual31 remains latest MUGEN2 behavior;32 is not built yet. Production still
-frozen for Root unique next artifact/docs scheduling; no new cargoqueue here.
 
 New audit docs/nnn-native-newgame-source-audit.json records actual Title vtable
 0x566b9c, Calcu4dff40/FinalExit4df680 and callback InitNewGame53a710/SetYoyaku4010e0.
@@ -502,7 +352,6 @@ Start/cancel behavior is not implemented yet. Read these facts before the next
 atomic Title-to-Controller work; don't clear unrelated original caches or assume
 later source-only fields exist. Shared Image/Layer/UI services own all pixels.
 
-
 ## API catalogue final verified / native Start source pending verification
 
 Root-owned api-docs-bless.log observed actualbef9ef5b2845175f; CHANGES now records
@@ -510,49 +359,6 @@ it plus the intermediate112d value and previousverifiedc8. Root no-bless
 api-docs-verify.log passed api_docs8/8+api_coverage1/1. Includes shared Input/
 Platform/C-L-Z-middle, ReadingWait and ALD registrations, no fake SDK/hardware
 claims. No pending docs queue from this agent.
-
-Own native Start source now includes explicit outer cancellation (finish one
-admitted shared frame, no nextDRAW admission or forged native ACK), same-bank/RNG
-transfer into originalsys worker program, native variable-range initialization,
-ClearAllEffect(FALSE) semantics retaining picture cache/previous metadata, final
-fullTitle ImageResource retention, and engine Widget/Layer retirement. Known
-foreground Message/positiveDRAW/OVERRAP completed mode bindings use10/10/14, not
-inventedmode0. Unsupported configured exitfade and other Title actions remain
-explicit. New source is NOT yet compiled/tested. Three new libfixtures authored:
-Draw cancellation/PC/count/clock; NewGame bank/PC/stack/mode/RNG; unknown native
-not swallowed by cancellation. Root owns next package validation, no separate
-Cargo queue was added. Last actual original MUGEN2 remains player31.
-
-Small static follow-up identified before next compile: after outer exit commits
-an ordinary known resource native call (not cancelledDRAW), adapter pc/executed
-should refresh from session. Parent notified; await its compile-read boundary
-before changing frozenRust. The native execution itself is preserved but current
-exit diagnostics may undercount one instruction in that specific branch.
-
-
-Root authorized the native-exit statistics fix; it now refreshes pc/executed
-from session after a genuinely completed resource native call. Unknown and
-cancelled DRAW receipts still retain their PC/count. Root's first new compile
-found NativeFrameEffect moved outside its prior local import scope (8 errors);
-fixed by top-level import and removing the old try_draw duplicate. Root owns
-next-native-tests3.log rerun; do not call the first attempt a pass.
-
-Additional complete-source Title/NewGame follow-ups identified while frozen:
-1. Original CMenuButtonGroup::Calcu firstClickStarted locks that button; other
-   buttons subsequently Calcu(NULL), and group returns one priority sound.
-   Current actor loops everybutton with input, so multi-key/overlap click and
-   sound arbitration still need native-only correction. Actual legacy Title
-   calls Calcu0x461d50; public menuButtonGroup.cpp/commonButtonGroup.cpp inspected.
-2. Original InitNewGame hides the message window and clears font cache, not
-   CommonPrintMessage rows. New initializer currently reuses accept_clear()
-   discarding rows; clear_operations only removes glyphs, not its window image
-   layers. First Opening→Title has no old message, but repeat NewGame/APPEND needs
-   new native hide operations retaining rows and removing window/glyph layers.
-3. Installed.dependency_pending should include title_newgame_requested so pure
-   owner mode-exit completion can drain in explicit dependency pump without
-   needing the next clock tick. Ordinary step currently completes it correctly.
-Keep these in one small native-only follow-up after current check/test, no new
-Core/Image API shape. Parent notified; do not modify files during its compile.
 
 Whole legacy SystemFile static audit now docs/nnn-native-system-file-source-audit.json.
 Read complete commonSystemFile.{h,cpp}1577lines; actual RTTI0x553184 ctor458b70,
@@ -563,7 +369,6 @@ Reuse Core.integer_fields for generic bit arithmetic, scoped Storage worker
 for native-save I/O. Foreground SETFILM still Unsupported; no fakeACK. Complete
 maincontrol.cpp is not yet read (only startup count block read), so finish that
 review before hooking count initialization. No new SystemFile Rust code yet.
-
 
 Root next-native-tests3.log targeted50/50passed after the import fix: lib15,
 Bridge18, installed2,Move2,Movie5,Shell5,Title3. This is a targeted subset of the
@@ -587,7 +392,6 @@ shared widgets/images dual-held accelerator lock (Title3→4); Shell existing
 startup fixture now proves later multi key does not change legacy policy.
 Root to schedule short lib+Title+Shell+installed+Bridge run; none added here.
 
-
 MainControl.cpp2084lines now completely inspected (including native Game and
 MultiThreadGame/End save lifecycles; do not copy its Win32 host). SystemFile audit
 updated from partial startup review to complete file. Corrected audit wording:
@@ -596,12 +400,6 @@ that the CG payload is enlarged (its320words match old1312-byte record).
 Also exact original Menu CalcuSuper461d80 and UI sound530350 statically inspected,
 ignored native-ui-group-*-static.log/C*.c. Source NativeRNG seed namespace needs
 future mainControl vs game table separation; actual defaults-1 unaffected.
-
-Batch3 first retry lib15passed1failed: authored hide fixture omitted required
-original name-color table, not production hide behavior. Fixed toSome(emptyNames)
-like existing native_services fixture; production validation unchanged. Root
-owns next retry, no local Cargo queue. FinalSource still frozen.
-
 
 Final native small-batch verification: Root native-batch3-lib-fixes.log lib16/16
 passed after author fixture supplied all16px layout parameters (full_rows3,fonts4)
@@ -615,15 +413,6 @@ SHA. No original32 behavior yet. Actual31 remainslatestMUGEN2; allother claims
 separate. ForegroundSETFILM/SystemFile/readmarks, saves, someeffects/menus/fades
 still explicit. Next SystemFile/nativebootstrap batch must use shared integer
 fields and Storage workers, not private generic algorithms or unknownACKs.
-
-API docs new batch prepared in api_docs.rs/README: finalAlkCatalog (notAlk),
-14 qualifiedSystem4Rust labels frombootstrap/assets/sprites/input/sact/worker,
-actualsystem4Config adapter table. Factory onlyRustregister; mathprivate, no
-fictional publicMath. Tuple nativeINI/Surface payloads preserved; no crates
-pulled into engine just to type-checkGPLdocs. Rootqueuedapi-docs-batch3-bless.log
-after32; actualnewhash unknown. NeedCHANGES basedactualthenno-bless8+coverage1.
-Priorbef9ef5b2845175f stilllastverifiedbatch. No localCargoqueue.
-
 
 ## Actual immutable32 single original-game validation
 
@@ -640,18 +429,7 @@ claim. Do not patch this frontier or continuouslyrerun; fulloutermode/source
 work scheduled after completeSystemFile/Boot/originalsave batches. Parentknows.
 Useplayer32-title-summary.json rather than dumpingfullruntimeUI maskJSON.
 
-APIblessobservedcbe5a4c32a15c8b9, RootalreadyCHANGES, verifyqueued. Native+API
-source remainfrozen atRootrequest; laterRootcachedfullbuild ensures finalSiglus
-readflagfix (not relatedNNN32identity). NoDocswritingornewCargoqueue here.
-
 ## Current source after immutable33: SystemFile/Boot/close module batch
-
-Source freeze33 was lifted by Root. Current module is native_system_file.rs
-(private first-class native layout/policy; generic bitfields/calendar/storage
-are shared), with installed worker integration and real native close boundary.
-main_control:Option<Names> is now separate from game setup in PreparedBoot and
-NativeConfiguration; all authored constructors were updated. Native seed policy
-reads the host table (missing→-1, atoi no-digit→0 requires supplied startup RNG).
 
 Installed samples CivilTime first, prepares resources/SystemFile on its worker,
 validates authenticated PE font-name literal+zero-fill defaults, derives native
@@ -851,7 +629,6 @@ in verification. NNN begin_original_restore/dataN itself is still not enabled:
 it needs the full detached native seed/state/message/selection/effect/audio
 consumer, not a helper-only or factory success flag.
 
-
 ### Original audio saved-work/consumer batch (2026-11-01)
 
 `native_audio::NativeAudioPolicy` sound_work/voice_work are now canonical
@@ -888,7 +665,6 @@ Shared static-font/input restore guards are ready:14passed1ignored plus explicit
 systemfont1passed. Unified docs a7e4bc50985744b6 no-bless8+coverage1passed,
 Python201passed. Next Alice GlyphImageSpec is a later publicbatch; do not mix
 its future fingerprint with this verified historical receipt.
-
 
 Audio restore component next point: AudioBridge.restore_seed now retains Arc
 music/sound/system tables + fixed-size native policy + resolver/TaskPool handles.

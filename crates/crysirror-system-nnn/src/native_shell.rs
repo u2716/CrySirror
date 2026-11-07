@@ -2,7 +2,7 @@
 //! Original outer modes. Configuration, counters and transitions remain native;
 //! resource reads, image transforms/composition, media and input are services.
 use crate::{config::Names, native_bootstrap::NativeConfiguration, native_resources::ImageLookup};
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use crysirror_core::{
     path::{Mount, VfsPath},
     service::ClientStorage,
@@ -27,10 +27,17 @@ impl NativeMode {
         }
     }
     pub fn named(name: &[u8]) -> Result<Self> {
-        let number=crate::native_mode::number(name)?;
+        let number = crate::native_mode::number(name)?;
         match number {
-            1=>Ok(Self::Nothing),2=>Ok(Self::Logo),3=>Ok(Self::Opening),4=>Ok(Self::Title),27=>Ok(Self::Movie),
-            _=>anyhow::bail!("NNN unimplemented outer native mode {} ({number})",String::from_utf8_lossy(name)),
+            1 => Ok(Self::Nothing),
+            2 => Ok(Self::Logo),
+            3 => Ok(Self::Opening),
+            4 => Ok(Self::Title),
+            27 => Ok(Self::Movie),
+            _ => anyhow::bail!(
+                "NNN unimplemented outer native mode {} ({number})",
+                String::from_utf8_lossy(name)
+            ),
         }
     }
 }
@@ -49,6 +56,7 @@ pub struct NativeStartupProfile {
     pub codec_limit: i32,
     pub startup_jump_script: bool,
     pub logos: Vec<NativeLogoSpec>,
+    pub logo_corner_colors: Vec<[bool; 2]>,
     pub logo_next: NativeMode,
     pub opening_next: NativeMode,
     pub opening_script: Vec<u8>,
@@ -168,6 +176,7 @@ impl NativeStartupProfile {
         ];
         let levels = u32::try_from(int(&config.setup, "dwqPackLevel", 0)?)?;
         let mut logos = Vec::new();
+        let mut logo_corner_colors = Vec::new();
         for i in 1..=count {
             let mut times = default_times;
             if use_times {
@@ -189,14 +198,19 @@ impl NativeStartupProfile {
                     colors[n] = c;
                 }
             }
-            for phase in ["fadeInBGColorFlag", "fadeOutBGColorFlag"] {
+            let mut corner_colors = [false; 2];
+            for (index, phase) in ["fadeInBGColorFlag", "fadeOutBGColorFlag"]
+                .into_iter()
+                .enumerate()
+            {
                 let bg = if use_custom_bg {
                     int(logo, &format!("{phase}{i}"), default_bg)?
                 } else {
                     default_bg
                 };
-                ensure!(bg==0,"NNN logo first-texel background colour requires shared pixel-sample capability");
+                corner_colors[index] = bg != 0;
             }
+            logo_corner_colors.push(corner_colors);
             let path = if use_files {
                 let file = logo
                     .parameter(format!("filename{i}").as_bytes())
@@ -229,10 +243,7 @@ impl NativeStartupProfile {
             let name = n
                 .parameter(b"backScriptName")
                 .context("NNN original background script absent")?;
-            ensure!(
-                config.project.index(name).is_some(),
-                "NNN background script absent from original project table"
-            );
+            config.resources.script(name)?;
             Ok((
                 name.to_vec(),
                 int(n, "backScriptLoopFlag", default_loop)? != 0,
@@ -257,6 +268,7 @@ impl NativeStartupProfile {
             codec_limit: int(nothing, "codecLimit", 3)?,
             startup_jump_script: int(nothing, "startupJumpScriptFlag", 0)? != 0,
             logos,
+            logo_corner_colors,
             logo_next: mode(logo, "nextMode", NativeMode::Title)?,
             opening_next: mode(opening, "nextMode", NativeMode::Title)?,
             opening_script,
@@ -298,6 +310,7 @@ pub struct NativeLogoPlayer {
     frame_ms: u64,
     launch_count: u32,
     specs: Vec<NativeLogoSpec>,
+    corner_colors: Vec<[bool; 2]>,
     resources: crate::resource_bridge::NativeResources,
     pool: TaskPool,
     source_task: Option<Task<crate::resource_bridge::NativeImageSource>>,
@@ -343,6 +356,7 @@ impl NativeLogoPlayer {
             canvas,
             frame_ms,
             launch_count,
+            corner_colors: vec![[false; 2]; specs.len()],
             specs,
             resources,
             pool: TaskPool::new("nnn-native-logo-source", 1, 1)?,
@@ -367,6 +381,16 @@ impl NativeLogoPlayer {
     }
     pub fn preparation_pending(&self) -> bool {
         !self.first_ready && !self.finished
+    }
+    fn configure_corner_colors(&mut self, flags: Vec<[bool; 2]>) -> Result<()> {
+        ensure!(
+            flags.len() == self.specs.len()
+                && self.source_task.is_none()
+                && self.source_job.is_none(),
+            "NNN logo corner-color policy shape/lifecycle"
+        );
+        self.corner_colors = flags;
+        Ok(())
     }
     pub fn dependency_pending(&self) -> bool {
         self.source_task.is_some()
@@ -508,6 +532,16 @@ impl NativeLogoPlayer {
                 }
                 ImageProcessState::Ready(image) => {
                     ensure!(image.client() == self.client, "NNN logo image client");
+                    if self.corner_colors[self.index].iter().any(|flag| *flag) {
+                        let [r, g, b, _] = image
+                            .pixel_at([0, 0])?
+                            .context("NNN decoded logo first pixel absent")?;
+                        for phase in 0..2 {
+                            if self.corner_colors[self.index][phase] {
+                                self.specs[self.index].colors[phase] = [r, g, b];
+                            }
+                        }
+                    }
                     self.source = Some(image);
                     self.source_job = None;
                     self.clock = Some(host.now_ms());
@@ -651,7 +685,7 @@ impl NativeStartupShell {
             profile.nothing_next == NativeMode::Logo && profile.logo_next == NativeMode::Opening,
             "NNN unreviewed startup mode chain"
         );
-        let logo = NativeLogoPlayer::new(
+        let mut logo = NativeLogoPlayer::new(
             client,
             9000,
             canvas,
@@ -660,6 +694,7 @@ impl NativeStartupShell {
             profile.logos.clone(),
             resources,
         )?;
+        logo.configure_corner_colors(profile.logo_corner_colors.clone())?;
         Ok(Self {
             client,
             root,
@@ -705,7 +740,7 @@ impl NativeStartupShell {
             ),
             "NNN native startup re-entry mode"
         );
-        let logo = NativeLogoPlayer::new(
+        let mut logo = NativeLogoPlayer::new(
             self.client,
             self.logo.layer,
             self.logo.canvas,
@@ -714,6 +749,7 @@ impl NativeStartupShell {
             self.profile.logos.clone(),
             self.logo.resources.clone(),
         )?;
+        logo.configure_corner_colors(self.profile.logo_corner_colors.clone())?;
         let cover = if mode == NativeMode::Nothing {
             self.nothing_frame
                 .clone()
@@ -831,9 +867,20 @@ impl NativeStartupShell {
                     self.api_calls += 1;
                 }
                 match self.probe.as_mut().unwrap().poll()? {
-                    crysirror_core::service::MediaProbeState::Pending=>return Ok(false),
-                    crysirror_core::service::MediaProbeState::Failed(error)=>anyhow::bail!("NNN portable shared video decoder/header check failed (legacy DirectShow status not substituted): {error}"),
-                    crysirror_core::service::MediaProbeState::Ready(info)=>{ensure!(info.client==self.client&&info.header_validated&&!info.video_decoder.is_empty(),"NNN shared video header capability not established");self.probe_info=Some(info);self.probe=None;}
+                    crysirror_core::service::MediaProbeState::Pending => return Ok(false),
+                    crysirror_core::service::MediaProbeState::Failed(error) => anyhow::bail!(
+                        "NNN portable shared video decoder/header check failed (legacy DirectShow status not substituted): {error}"
+                    ),
+                    crysirror_core::service::MediaProbeState::Ready(info) => {
+                        ensure!(
+                            info.client == self.client
+                                && info.header_validated
+                                && !info.video_decoder.is_empty(),
+                            "NNN shared video header capability not established"
+                        );
+                        self.probe_info = Some(info);
+                        self.probe = None;
+                    }
                 }
             }
             self.mode = NativeMode::Logo;
@@ -854,7 +901,7 @@ impl NativeStartupShell {
 #[cfg(test)]
 mod mode_reentry_tests {
     use super::*;
-    use crate::{expression::VariableProfile, native_resources::ResourceNames, XorProfile};
+    use crate::{XorProfile, expression::VariableProfile, native_resources::ResourceNames};
     use std::time::{Duration, Instant};
     fn names(text: &str) -> Names {
         Names::parse(text.as_bytes(), false).unwrap()

@@ -135,7 +135,7 @@ This decision does not claim full ray-tracing pipelines/SBTs, general path
 tracing, denoising, unlimited scene sizes, multi-bounce GI, transparent/alpha-test
 any-hit shading, complete dynamic BLAS refit/compaction or performance gains.
 Each additional feature needs an engine-owned implementation and its own
-behavioral evidence. GitHub CI remains disabled; run validation locally.
+behavioral evidence.
 
 ## Source references
 

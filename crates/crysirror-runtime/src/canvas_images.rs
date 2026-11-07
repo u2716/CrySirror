@@ -234,6 +234,9 @@ fn validate_layers(layers: &[LayerSpec], nodes: &mut usize, depth: usize) -> Res
             }
         }
         match &layer.paint {
+            Paint::CoverageWrite{paint}=>{let mut input=layer.clone();input.paint=(**paint).clone();validate_layers(&[input],nodes,depth+1)?;},
+            Paint::GlyphView{..}=>return Err(Error::Unsupported("unresolved glyph view in Canvas capture")),
+            Paint::CoverageReset{..}=>(),
             Paint::Image { asset, .. } => validate_asset(asset)?,
             Paint::Snapshot { layers, .. } => validate_layers(layers, nodes, depth + 1)?,
             Paint::Mesh { frame, .. } => {
@@ -241,9 +244,17 @@ fn validate_layers(layers: &[LayerSpec], nodes: &mut usize, depth: usize) -> Res
                     validate_asset(asset)?;
                 }
             }
+            Paint::ProjectedMesh { frame, .. } => {
+                for part in &frame.parts {
+                    if let Some(asset) = &part.texture { validate_asset(asset)?; }
+                }
+            }
+            Paint::LegacyMesh { spec } => {
+                for asset in spec.textures.iter().flatten() { validate_asset(asset)?; }
+            }
             Paint::Backdrop { .. } => return Err(Error::Unsupported("Backdrop in a Canvas capture")),
             Paint::Puppet { .. } => return Err(Error::Unsupported("live Puppet Canvas capture")),
-            Paint::Solid { .. } | Paint::Text { .. } | Paint::GlyphRun { .. } => (),
+            Paint::Group { .. } | Paint::OrderedState { .. } | Paint::Solid { .. } | Paint::Text { .. } | Paint::GlyphRun { .. } => (),
         }
     }
     Ok(())

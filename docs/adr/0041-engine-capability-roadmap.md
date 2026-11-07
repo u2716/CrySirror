@@ -104,7 +104,7 @@ Priorities:
 |---|---|---|---|---|
 | Mixer, buses, SFX pools, music, spatial | partial | 0030, 0067–0084 | BVH occlusion, HRTF, late reverb, reflected paths and worker decode/mix/output exist; full acoustic transport, hard-realtime guarantees and broader native fidelity remain | P1 |
 | Input actions, rebinding, gamepads | partial | 0032 | hardware gamepad validation | P0 |
-| UI widgets, layout, focus | partial | — | theming, scroll/list/text-input widgets, accessibility | P0 |
+| UI widgets, layout, focus | partial | — | TextField editing/focus exists; theming, scroll/list widgets and accessibility remain | P0 |
 | Text shaping, bidi, ruby, SDF | partial | 0031 | GPU SDF text rendering | P1 |
 | Localization | done | 0033 | — | |
 
@@ -117,7 +117,7 @@ Priorities:
 | Debug draw, console, in-game stats | missing | — | debug-draw API, command console | P1 |
 | MCP/automation tools | done | MCP.md | — | |
 | Networking (replication, RPC) | missing | — | client/server replication of world state | P2 |
-| Platforms (Windows/macOS/Linux desktop) | partial | — | local platform validation; mobile and web remain deferred | P1 |
+| Platforms (desktop, browser, mobile) | partial | 0100, 0101 | browser 2D/PBR and CPU-worker host plus native mobile packages exist; wider adapter/platform validation remains | P1 |
 | Consoles (Switch, Vita) | deferred | AGENTS.md | — | |
 
 ### Compatibility targets (secondary, ADR 0010)
@@ -125,19 +125,19 @@ Priorities:
 | Target | Status | ADR |
 |---|---|---|
 | RFVP | partial first-class HCB adapter; original VM availability is not full integration | 0047, NATIVE_ADAPTERS |
-| Siglus | partial | 0009, 0034–0036 |
-| BGI | bounded first-class BP profile; old hosted acceptance superseded | 0047, BGI |
+| Siglus | partial | 0047, 0061, NATIVE_ADAPTERS |
+| BGI / SoftPAL | complete integrated runtimes with CrySirror-owned window/input/output devices; game compatibility remains profile-specific | 0047, BGI, NATIVE_ADAPTERS |
 | GoW III level | partial: geometry, materials, lights, cubemaps, probes, collision, navigation | 0017, 0018, 0025 |
-| GoW III characters | missing: skeleton, skinning and ANM undecoded (`ANM_hero` is 10.5 MB in hero.wad) | 0017 |
+| GoW III characters | partial: textured static bind-pose geometry and rigid attachments load; compressed skin weights and native animation remain incomplete | 0017, [character validation](../validation/gow3-character-loading.md) |
 | NFS Carbon (canyons) | partial geometry/texture rendering; full instances/material/gameplay fidelity remains open | 0042 |
 
 ## Order of work
 
-1. **P0 game loop gaps:** root motion; triggers and contact callbacks;
+1. **P0 game loop gaps:** root motion; application integration of existing physics events;
    UI widgets; save migrations; profiler.
-2. **GoW III character pipeline**: decode the hero
-   skeleton, skin weights and `ANM_hero`, and drive Kratos through the
-   existing animation graph instead of the Fox stand-in.
+2. **GoW III character animation**: extend the retained static character with
+   native skin weights and ANM decoding, then drive it through the existing
+   animation graph.
 3. **Editor** on the reflective API (largest single gap).
 4. **Asset database and cook step.**
 5. Then the P1 rendering rows.

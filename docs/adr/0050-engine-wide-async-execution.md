@@ -95,8 +95,3 @@ and parallel results where order is required. Local GPU/hardware execution and
 other-platform results must be reported explicitly; unrun tests and a written
 plan are not passes. Do not mark the engine-wide requirement complete while
 any table row lacks its declared boundary and behavioral evidence.
-
-## Validation and automation policy
-
-Validation runs locally. GitHub Actions and other remote build automation are
-disabled. Appropriate local checks/tests apply to each implementation change.

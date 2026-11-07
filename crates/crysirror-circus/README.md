@@ -27,19 +27,17 @@ milliseconds. Native random instructions borrow that same stream through an
 acknowledged exchange before changing VM state. Storm birth/reset differences,
 other effect families and concurrent/replaced effect pools still fail visibly.
 
-This is partial native execution, not completed game compatibility. Unmapped
-instructions, nonempty native UI font/markup, native group activation,
-complex image animation, snapshots and original saves fail explicitly.
-Parsing 536 installed scripts or registering a factory does not establish
-title/story completion.
+Complete-game compatibility remains unverified. Unknown native profiles and
+unaudited save projections fail at their original operation. Parsing installed
+scripts or registering a factory does not establish title/story completion.
 
 `native_save` preserves the complete original 356324-byte slot prefix, opaque
 bytes and native read-run metadata. Its bounded patches implement the audited
 PC, byte-bank, image-name, civil timestamp and checkpoint sprite fixups. It
-deliberately cannot construct an empty slot body from logical VM JSON. The
-live native body projection, original slot restoration and actual 128x72 PNG
-thumbnail are still required before mandatory autosave can succeed; current
-DC4PHDL execution stops explicitly at that operation.
+deliberately cannot construct an empty slot body from logical VM JSON.
+`native_live` maintains the source-specific body and dialogue checkpoint;
+`save_resources` and `restore_ops` coordinate resource-dependent restoration.
+Original slots and their selected 128x72 PNG thumbnails use these native paths.
 
 `NativeLiveState` additionally tracks the audited original initialization and
 live mutations: nonzero native sprite constructor fields, both byte-bank reset
@@ -47,10 +45,16 @@ arrays, original read-history metadata/counters, random history, texture
 extents, sprite transforms, placement rows, voice timing and music fields.
 This VM metadata is distinct from shared engine rendering resources. Successful
 instructions synchronize it; unaudited instructions leave explicit admission
-gaps visible in runtime inspection. The real sequence still reaches forced
-autosave with these gaps and stops. Original thumbnail drawing selects native
-layers and UI explicitly; a generic capture of all UI does not establish the
-same result.
+gaps visible in runtime inspection. Original thumbnail drawing selects native
+layers and UI explicitly.
+
+Release/offscreen validation on 2026-11-05 exercised DC4PHDL for 12,200 host
+frames through scene D and wrote its original 356324-byte automatic slot.
+A separate 9,800-frame run wrote a quick slot, advanced dialogue, then restored
+the saved first sentence without replaying the opening. These runs created no
+window or audio device. They validate those paths, not every opcode selector,
+save profile or the complete game. Public API changes are documented in docs/api;
+native field mappings and remaining semantic gaps belong beside their source.
 
 Run the actual engine without a window or audio device:
 

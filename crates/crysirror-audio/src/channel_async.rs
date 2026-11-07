@@ -175,6 +175,7 @@ impl ChannelAudio {
             "channel replacement fade"
         );
         crate::mixer::VoiceSpec {
+            gain_envelope: p.gain_envelope,
             mix_group: p.mix_group.clone(),
             gain: p.gain,
             rate: p.rate,

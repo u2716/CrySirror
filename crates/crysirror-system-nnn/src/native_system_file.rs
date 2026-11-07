@@ -444,6 +444,17 @@ impl NativeSystemFile {
     pub fn system_word(&self, offset: usize) -> Result<i32> {
         self.records[1].word(offset)
     }
+    pub(crate) fn set_auto_mode(&mut self, enabled: bool) -> Result<()> {
+        self.set_auto_mode_raw(i32::from(enabled))
+    }
+    /// Legacy SetSystemParam(6,value) retains the signed native mode word.
+    pub(crate) fn set_auto_mode_raw(&mut self, value: i32) -> Result<()> {
+        if self.records[1].word(164)? != value {
+            self.changed()?;
+            self.records[1].set_word(164, value)?;
+        }
+        Ok(())
+    }
     /// Legacy LaunchCountUp's per-process guard lives in the game callback;
     /// this is the one admitted RAM increment, saturated at0x7ffffffe.
     pub(crate) fn record_launch(&mut self) -> Result<u32> {
@@ -1095,11 +1106,36 @@ impl NativeSystemSave {
     ) -> Result<bool> {
         ensure!(self.matches(call), "NNN system-save receipt changed");
         machine.validate_receipt(call)?;
+        if !self.poll_storage(file, call, host)? {
+            return Ok(false);
+        }
+        self.acknowledge(machine, call)?;
+        Ok(true)
+    }
+    /// ResultData follows SystemFile in the native callback. Keep its one VM
+    /// acknowledgement separate from the first storage completion.
+    pub(crate) fn acknowledge(
+        &self,
+        machine: &mut crate::machine::Machine,
+        call: &crate::machine::NativeCall,
+    ) -> Result<()> {
+        ensure!(self.matches(call), "NNN system-save receipt changed");
+        machine.acknowledge_with_variables(call, self.variables.clone())
+    }
+    pub(crate) fn poll_storage(
+        &mut self,
+        file: &mut NativeSystemFile,
+        call: &crate::machine::NativeCall,
+        host: &mut dyn crysirror_core::service::HostServices,
+    ) -> Result<bool> {
+        ensure!(
+            self.matches(call),
+            "NNN system-save storage receipt changed"
+        );
         if let Some(write) = self.write.as_mut() {
             if !write.poll(file)? {
                 return Ok(false);
             }
-            machine.acknowledge_with_variables(call, self.variables.clone())?;
             return Ok(true);
         }
         let sample = match self

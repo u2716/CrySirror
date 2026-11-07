@@ -2,9 +2,9 @@
 // GPL-2.0-or-later. xsystem4 a85467d SACT2.c / sprite.c native handle policy.
 //! Native sprite properties mapped to retained CrySirror layers. There is no
 //! private pixel buffer, image decoder, font renderer or general compositor.
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use crysirror_core::{service::HostServices, state::ClientId};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::BTreeMap;
 #[derive(Clone, Debug)]
 pub enum Surface {
@@ -34,7 +34,8 @@ impl Default for Sprite {
             size: [0, 0],
             z: 0,
             opacity: 255,
-            visible: false,
+            //Native SactEngine4B20 initializes byte40 (show) to1.
+            visible: true,
             alpha: false,
             brightness: 255,
             surface: None,
@@ -50,35 +51,57 @@ impl Default for Sprite {
 pub struct Sprites {
     owner: ClientId,
     values: BTreeMap<i32, Sprite>,
+    window: Sprite,
     capacity: i32,
 }
 fn layer(number: i32) -> Result<u32> {
     ensure!((-1..65536).contains(&number), "System4 sprite index budget");
     Ok(if number == -1 {
-        16
+        crate::sact::MAIN_SPRITE
     } else {
         0x4100_0000 + number as u32
     })
 }
 impl Sprite {
-    fn layer(&self, number: i32) -> Result<Option<Value>> {
-        let Some(surface) = &self.surface else {
-            return Ok(None);
-        };
+    pub(crate) fn layer(&self, number: i32) -> Result<Option<Value>> {
         ensure!(
-            self.size.iter().all(|n| (1..=8192).contains(n)),
+            self.size.iter().all(|n| *n <= 8192)
+                && (self.surface.is_none() || self.size.iter().all(|n| *n > 0)),
             "System4 sprite surface dimensions"
         );
-        let paint = match surface {
-            Surface::Solid(color) => json!({"kind":"solid","color":color}),
-            Surface::Image(path) => json!({"kind":"image","asset":path,"tint":[255,255,255,255]}),
+        let paint = match &self.surface {
+            Some(Surface::Solid(color)) => json!({"kind":"solid","color":color}),
+            Some(Surface::Image(path)) => {
+                json!({"kind":"image","asset":path,"tint":[255,255,255,255]})
+            }
+            // Native custom sprites retain position/show/opacity and may own
+            // independent glyph children even with no base pixel surface.
+            None => json!({"kind":"solid","color":[0,0,0,0]}),
         };
+        let width = self.size[0].max(1);
+        let height = self.size[1].max(1);
+        //Native sprite metadata and its retained text are part of the
+        //scene, not the physical WindowSurface presentation layer16.
+        let parent = Some(crate::sact::BACK_SCENE);
         Ok(Some(
-            json!({"op":"put","layer":{"id":layer(number)?,"rect":[self.position[0],self.position[1],self.size[0],self.size[1]],"paint":paint,"order":[self.z,number],"visible":self.visible,"opacity":self.opacity,"filter":{"dark":1.0-f64::from(self.brightness)/255.0}}}),
+            json!({"op":"put","layer":{"id":layer(number)?,"parent":parent,"rect":[self.position[0],self.position[1],width,height],"paint":paint,"order":[self.z,number],"visible":self.visible,"opacity":self.opacity,"filter":{"dark":1.0-f64::from(self.brightness)/255.0}}}),
         ))
     }
 }
 impl Sprites {
+    /// Install scalar native policy after the caller's one shared parent/child
+    /// batch succeeded. All fallible geometry validation precedes submission.
+    pub(crate) fn install_prepared(&mut self, number: i32, sprite: Sprite) {
+        debug_assert!((-1..65536).contains(&number));
+        self.values.insert(number, sprite);
+        if number >= self.capacity {
+            self.capacity = (number + 256).min(65536);
+        }
+    }
+    pub(crate) fn owned_layer_ids(&self) -> Result<Vec<u32>> {
+        self.values.keys().map(|number| layer(*number)).collect()
+    }
+
     pub(crate) fn require_owner(&self, owner: ClientId) -> Result<()> {
         ensure!(owner == self.owner, "foreign System4 sprite owner");
         Ok(())
@@ -88,17 +111,32 @@ impl Sprites {
             size.iter().all(|n| (1..=8192).contains(n)),
             "System4 sprite screen dimensions"
         );
-        let main = Sprite {
+        let window = Sprite {
             size,
             surface: Some(Surface::Solid([0, 0, 0, 255])),
             alpha: true,
+            visible: false,
             ..Sprite::default()
         };
         Ok(Self {
             owner,
-            values: BTreeMap::from([(-1, main)]),
+            values: BTreeMap::new(),
+            window,
             capacity: 256,
         })
+    }
+    ///The native graphics provider7A60 resolves-1 to the physical window,
+    ///independently of a possible negative entry in the ordinary sprite map.
+    pub(crate) fn graphics(&self, number: i32) -> Option<&Sprite> {
+        if number == -1 {
+            Some(&self.window)
+        } else {
+            self.values.get(&number)
+        }
+    }
+    pub(crate) fn install_window_data(&mut self, size: [u32; 2], path: String) {
+        self.window.size = size;
+        self.window.surface = Some(Surface::Image(path));
     }
     pub fn get(&self, number: i32) -> Option<&Sprite> {
         self.values.get(&number)
@@ -279,11 +317,16 @@ impl Sprites {
                 Ok(())
             })?,
             (b"SP_SetShow", [n, show]) => {
-                ensure!(*n >= 0, "System4 invalid SP_SetShow negative sprite");
-                self.update(client, *n, host, |s| {
-                    s.visible = *show != 0;
-                    Ok(())
-                })?
+                //Original F1E0 guards this one entry, unlike SP_Create and
+                //SP_SetCGFromFile. Do not forbid negative map keys globally.
+                if *n < 1 {
+                    0
+                } else {
+                    self.update(client, *n, host, |s| {
+                        s.visible = *show != 0;
+                        Ok(())
+                    })?
+                }
             }
             (b"SP_SetBrightness", [n, b]) => {
                 if self.get(*n).is_none() {

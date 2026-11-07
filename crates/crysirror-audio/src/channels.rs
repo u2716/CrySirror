@@ -260,6 +260,7 @@ pub(super) fn prepare(
         PcmBus::Ui => Bus::Ui,
     };
     let spec = VoiceSpec {
+        gain_envelope: p.gain_envelope,
         mix_group: p.mix_group.clone(),
         bus,
         gain: p.gain,

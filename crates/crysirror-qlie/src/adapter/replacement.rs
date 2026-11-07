@@ -3,13 +3,17 @@
 //! VM, including original ImoScripter functions, rather than a translated VN.
 use super::*;
 impl QlieVm {
-    pub(super) fn rewrite_line(&self, line: &str) -> Result<String> {
-        let Some(rep) = self.objects.get("rep") else {
+    pub(super) fn rewrite_line(&self, line: &str, manager: &str) -> Result<String> {
+        let Some(rep) = self.objects.get(manager) else {
             return Ok(line.to_owned());
         };
         let mut result = line.to_owned();
         if !rep.locked {
-            for (from, to) in rep.table.iter().rev() {
+            for from in rep.lines.iter().rev() {
+                let to = rep
+                    .table
+                    .get(from)
+                    .context("QLIE replacement entry missing")?;
                 let mode = rep
                     .properties
                     .get(&format!("rule:{from}"))
@@ -17,12 +21,31 @@ impl QlieVm {
                     .map(Value::integer)
                     .transpose()?
                     .unwrap_or(0);
+                if from.is_empty() {
+                    continue;
+                }
                 if mode == 0 {
-                    if !from.is_empty() {
-                        result = result.replace(from, to);
-                    }
+                    let regex = rep
+                        .regex_rules
+                        .get(from)
+                        .context("QLIE compiled literal rule missing")?;
+                    //4E4434 selects Delphi IgnoreCase and suppresses ReplaceAll
+                    //when the replacement itself contains the pattern. Output
+                    //is never recursively searched by the shared span copier.
+                    let one = regex.is_match(to);
+                    let matches = regex
+                        .find_iter(&result)
+                        .take(if one { 1 } else { usize::MAX })
+                        .map(|matched| (matched.range(), to.as_bytes()))
+                        .collect::<Vec<_>>();
+                    result = String::from_utf8(crysirror_text::byte_replace::replace_spans_bytes(
+                        result.as_bytes(),
+                        &matches,
+                        1024 * 1024,
+                        &|| Ok(()),
+                    )?)?;
                 } else {
-                    let regex = self
+                    let regex = rep
                         .regex_rules
                         .get(from)
                         .context("QLIE compiled replacement rule missing")?;
@@ -104,7 +127,7 @@ impl QlieVm {
         } else {
             format!("{},{}", ins.op, ins.args.join(","))
         };
-        let source = self.rewrite_line(&line)?;
+        let source = self.rewrite_line(&line, &Self::builtin("rep", m.source_thread_kind()))?;
         if source.is_empty() {
             return Ok(true);
         }

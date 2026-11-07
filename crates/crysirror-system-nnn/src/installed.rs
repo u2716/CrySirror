@@ -30,6 +30,8 @@ use crysirror_tasks::{Cancellation, Task, TaskPool};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 const SIZE: [u32; 2] = [800, 600];
+mod native_load;
+mod native_save;
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Entry {
@@ -90,6 +92,9 @@ struct WindowInput {
 struct Prepared {
     boot: PreparedBoot,
     system_file: NativeSystemFile,
+    result_data: Option<crate::native_result::NativeResultData>,
+    native_load: Option<native_load::Policy>,
+    native_save: Option<native_save::Policy>,
     loader: ScriptLoader,
     services: PreparedNativeServices,
     resources: NativeResources,
@@ -110,6 +115,8 @@ pub struct InstalledAdapter {
     prepared: Option<Prepared>,
     vm: Option<NativeAdapter>,
     failure: Option<String>,
+    native_load: Option<native_load::Controller>,
+    native_save: Option<native_save::Controller>,
     published: Vec<String>,
     started: bool,
     shell: Option<crate::native_shell::NativeStartupShell>,
@@ -144,6 +151,9 @@ struct InstalledRestoreJob {
     movie_preferences: Option<crate::native_services_bootstrap::NativePreferences>,
     title_resources: Option<NativeResources>,
     native_exit_available: bool,
+    native_load: Option<native_load::Policy>,
+    native_save: Option<native_save::Controller>,
+    load_request: Option<crysirror_core::native_restore::OriginalRestoreTicket>,
 }
 impl crysirror_core::native_restore::OriginalRestorePreparation for InstalledRestoreJob {
     fn client(&self) -> ClientId {
@@ -175,6 +185,10 @@ impl crysirror_core::native_restore::OriginalRestorePreparation for InstalledRes
         installed.movie_preferences = this.movie_preferences;
         installed.title_resources = this.title_resources;
         installed.native_exit_available = this.native_exit_available;
+        installed.native_save = this.native_save;
+        installed.native_load = this
+            .native_load
+            .map(|policy| native_load::Controller::after_restore(policy, this.load_request));
         Ok(crysirror_core::native_restore::OriginalRestoreCommit {
             vm: Box::new(installed),
             commands: vec![],
@@ -218,6 +232,8 @@ impl InstalledAdapter {
             prepared: None,
             vm: None,
             failure: None,
+            native_load: None,
+            native_save: None,
             published: vec![],
             started: false,
             shell: None,
@@ -266,6 +282,8 @@ impl InstalledAdapter {
             return false;
         }
         (self.closing && !self.closed)
+            || self.native_load.as_ref().is_some_and(|load| load.pending())
+            || self.native_save.as_ref().is_some_and(|save| save.pending())
             || self.title_newgame_requested
             || self.title_restart_requested.is_some()
             || self.opening_return_requested
@@ -294,7 +312,11 @@ impl InstalledAdapter {
         if !self.dependency_pending() {
             return Ok(());
         }
-        let result: Result<()> = if self.closing {
+        let result: Result<()> = if self.native_save.as_ref().is_some_and(|save| save.pending()) {
+            self.poll_slot_save(host, InputFrame::default()).map(|_| ())
+        } else if self.native_load.as_ref().is_some_and(|load| load.pending()) && !self.closing {
+            self.poll_slot_load(host, InputFrame::default()).map(|_| ())
+        } else if self.closing {
             self.poll_close(host).map(|_| ())
         } else if self.title_newgame_requested || self.title_restart_requested.is_some() {
             self.poll_title_newgame(host).map(|_| ())
@@ -371,6 +393,9 @@ impl InstalledAdapter {
         }
         if let Some(write) = self.close_write.as_mut() {
             if !write.poll(outer.bridge.system_file_mut()?)? {
+                return Ok(VmYield::BudgetExhausted);
+            }
+            if !outer.bridge.poll_result_save(host)? {
                 return Ok(VmYield::BudgetExhausted);
             }
             self.close_write = None;
@@ -465,6 +490,16 @@ impl InstalledAdapter {
                 defaults
             };
             system_file.initialize_player_names(&boot.setup)?;
+            let native_load =
+                native_load::Policy::prepare(&boot.configuration(), storage.as_ref(), &cancel)?;
+            let native_save =
+                native_save::Policy::prepare(&boot.configuration(), storage.as_ref(), &cancel)?;
+            let result_data = crate::native_result::NativeResultData::prepare(
+                &boot.setup,
+                &boot.variable_names,
+                storage.as_ref(),
+                &cancel,
+            )?;
             let mut variables = boot
                 .session
                 .machine()
@@ -525,13 +560,8 @@ impl InstalledAdapter {
                 }
             }
             let names = boot.resources.clone();
-            let project = boot.project.clone();
             let scripts = boot.scripts;
             let loader: ScriptLoader = Arc::new(move |name, cancel| {
-                ensure!(
-                    project.index(name).is_some(),
-                    "NNN script absent from original project"
-                );
                 let path = names.script(name)?;
                 let bytes = read(storage.as_ref(), &path, 16 << 20, cancel)?
                     .with_context(|| format!("NNN script absent: {path}"))?;
@@ -541,6 +571,9 @@ impl InstalledAdapter {
             Ok(Prepared {
                 boot,
                 system_file,
+                result_data,
+                native_load,
+                native_save,
                 loader,
                 services,
                 resources,
@@ -930,7 +963,27 @@ impl InstalledAdapter {
         budget: u32,
     ) -> Result<VmYield> {
         if self.closing {
+            if self.native_save.as_ref().is_some_and(|save| save.pending()) {
+                self.poll_slot_save(host, InputFrame::default())?;
+                return Ok(VmYield::BudgetExhausted);
+            }
             return self.poll_close(host);
+        }
+        if self.shell.is_none()
+            && self.outer.is_none()
+            && self.title.is_none()
+            && self.movie.is_none()
+            && self.poll_slot_save(host, input)?
+        {
+            return Ok(VmYield::BudgetExhausted);
+        }
+        if self.shell.is_none()
+            && self.outer.is_none()
+            && self.title.is_none()
+            && self.movie.is_none()
+            && self.poll_slot_load(host, input)?
+        {
+            return Ok(VmYield::BudgetExhausted);
         }
         if self.title_newgame_requested || self.title_restart_requested.is_some() {
             let _ = self.poll_title_newgame(host)?;
@@ -1131,7 +1184,7 @@ impl InstalledAdapter {
             profile.body.size as f32,
             "",
         )?;
-        let selection = prepared.services.selection_bridge(SelectionProfile {
+        let mut selection = prepared.services.selection_bridge(SelectionProfile {
             client: self.client,
             root: 1,
             widget_base: 6000,
@@ -1148,6 +1201,7 @@ impl InstalledAdapter {
             message_origins: vec![],
             single_byte_map: None,
         })?;
+        selection.configure_native_background(&prepared.services.selection_setup)?;
         let mut bridge = Bridge::new(
             self.client,
             CallbackProfile::Mugen2Legacy,
@@ -1162,8 +1216,27 @@ impl InstalledAdapter {
         )?;
         let frame_time = prepared.boot.setup.integer(b"frameTime")?.unwrap_or(50);
         bridge.set_frame_time(u64::try_from(frame_time)?)?;
+        if matches!(self.config.entry, Entry::NewGame) {
+            // Direct startup has no Title transition to invoke53a710. Apply
+            // its52f710(0) preference reset before admitting sys.spt as well.
+            prepared.system_file.set_auto_mode(false)?;
+        }
         bridge.configure_system_file(prepared.system_file, &prepared.boot.setup)?;
-        bridge.configure_text(NativeTextBridge::new(profile)?)?;
+        bridge.configure_result_data(prepared.result_data)?;
+        self.native_load = prepared.native_load.map(native_load::Controller::new);
+        self.native_save = prepared.native_save.map(native_save::Controller::new);
+        let mut text = NativeTextBridge::new(profile)?;
+        text.configure_native_timing(&prepared.services.print_setup)?;
+        bridge.configure_text(text)?;
+        bridge.configure_window_binding(
+            prepared.services.clone(),
+            prepared.resources.clone(),
+            u32::try_from(prepared.boot.setup.integer(b"dwqPackLevel")?.unwrap_or(0))?,
+            self.pool
+                .as_ref()
+                .context("NNN native window task pool absent")?
+                .clone(),
+        )?;
         bridge.configure_selection(selection)?;
         bridge.configure_resources(
             prepared.resources.clone(),
@@ -1223,9 +1296,15 @@ impl InstalledAdapter {
     }
 }
 impl VmAdapter for InstalledAdapter {
+    fn presentation_pending(&self) -> bool {
+        self.native_save.as_ref().is_some_and(|save| save.pending())
+            || self.vm.as_ref().is_some_and(|vm| vm.presentation_pending())
+    }
     fn preparation_pending(&self) -> bool {
         self.failure.is_none()
-            && ((self.vm.is_none() && self.outer.is_none())
+            && (self.native_save.as_ref().is_some_and(|save| save.pending())
+                || self.native_load.as_ref().is_some_and(|load| load.pending())
+                || (self.vm.is_none() && self.outer.is_none())
                 || self.shell.as_ref().is_some_and(|s| s.preparation_pending()))
     }
     fn request_close(&mut self) -> bool {
@@ -1286,6 +1365,11 @@ impl VmAdapter for InstalledAdapter {
                 "NNN original restore requires stable native gameplay; active outer modes need their own saved actor",
             ));
         }
+        if self.native_save.as_ref().is_some_and(|save| save.pending()) {
+            return Err(Error::Unsupported(
+                "NNN original restore during native slot save",
+            ));
+        }
         let vm = self
             .vm
             .as_ref()
@@ -1306,6 +1390,9 @@ impl VmAdapter for InstalledAdapter {
             movie_preferences: self.movie_preferences.clone(),
             title_resources: self.title_resources.clone(),
             native_exit_available: self.native_exit_available,
+            native_load: self.native_load.as_ref().map(|load| load.policy.clone()),
+            native_save: self.native_save.as_ref().map(|save| save.restore_copy()),
+            load_request: self.native_load.as_ref().and_then(|load| load.request()),
         }))
     }
     fn snapshot(&self) -> crysirror_core::Result<Vec<u8>> {

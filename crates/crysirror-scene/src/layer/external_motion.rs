@@ -241,3 +241,26 @@ impl<'de> Deserialize<'de> for ExternalMotions {
         Ok(Self::default())
     }
 }
+
+impl ExternalMotions {
+    pub(super) fn retain_checkpoint_scope(&mut self, client:u32, ids:&std::collections::BTreeSet<u32>) {
+        self.clients.retain(|owner,layers| {if *owner!=client{return false} layers.retain(|id,_|ids.contains(id));!layers.is_empty()});
+    }
+    pub(super) fn restore_checkpoint_scope(&mut self, client:u32, removed:&std::collections::BTreeSet<u32>, saved:&Self)->Result<()> {
+        if let Some(owner)=self.clients.get_mut(&client){owner.retain(|id,_|!removed.contains(id));}
+        if let Some(owner)=saved.clients.get(&client) {
+            for (&layer,drivers) in owner {
+                for (&driver,state) in drivers {
+                    self.begin(client,layer,driver)?;
+                    let restored=self.clients.get_mut(&client).unwrap().get_mut(&layer).unwrap().get_mut(&driver).unwrap();
+                    restored.skip_requested=state.skip_requested;
+                    restored.complete=state.complete;
+                    // New generation: an old asynchronous producer cannot
+                    // mutate a newly restored logical owner continuation.
+                    restored.stamp.revision=state.stamp.revision;
+                }
+            }
+        }
+        Ok(())
+    }
+}

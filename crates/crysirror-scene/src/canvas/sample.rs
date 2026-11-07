@@ -29,7 +29,7 @@ impl CanvasSystem {
                         return Ok(color);
                     }
                 }
-                CanvasNode::Group { opacity: 0, .. } => {}
+                CanvasNode::Group { opacity: 0, nodes, .. } if !writes_at_zero_opacity(nodes) => {}
                 CanvasNode::Group { .. } => {
                     bail!("canvas pixel sampling requires a raster backend for groups")
                 }
@@ -39,12 +39,19 @@ impl CanvasSystem {
     }
 }
 
+fn writes_at_zero_opacity(nodes: &[CanvasNode]) -> bool {
+    nodes.iter().any(|node| match node {
+        CanvasNode::Draw { layer } => crate::layer::writes_at_zero_opacity(&layer.paint,layer.blend),
+        CanvasNode::Group { nodes, .. } => writes_at_zero_opacity(nodes),
+    })
+}
+
 fn contains([x, y, w, h]: [f32; 4], p: [f32; 2]) -> bool {
     p[0] >= x && p[1] >= y && p[0] < x + w && p[1] < y + h
 }
 
 fn sample_draw(layer: &LayerSpec, point: [f32; 2]) -> Result<Option<[u8; 4]>> {
-    if !layer.visible || layer.opacity == 0 {
+    if !layer.visible || (layer.opacity == 0 && !crate::layer::writes_at_zero_opacity(&layer.paint,layer.blend)) {
         return Ok(None);
     }
     let t = &layer.transform;

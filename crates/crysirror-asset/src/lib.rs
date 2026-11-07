@@ -12,6 +12,7 @@ pub mod indices;
 pub mod interchange;
 pub mod pbr;
 pub mod terrain;
+pub mod tqmo;
 use anyhow::{bail, ensure, Context, Result};
 use crysirror_scene::{
     model::Geometry,

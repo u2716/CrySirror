@@ -1129,25 +1129,13 @@ retain their original checkpoint meaning.
   final-desktop-check.log,python-tests.log,gpu-tests.log,probe-regression.log};
   the new focused tests and ADR 0049 are committed without external game data.
 
-## 2026-10-26 — Owner scope: no GitHub CI, engine-wide async requirement
+## 2026-10-26 — Engine-wide async requirement
 
-- Removed `.github/workflows/ci.yml`. GitHub workflow `desktop-and-contracts`
-  (396111179) was disabled; run 40221613250 was cancelled and subsequently
-  verified as completed with conclusion `cancelled`. No other active workflow
-  was returned by the repository workflow listing. Existing historical run
-  records were not deleted.
 - Added accepted ADR 0050: asynchronous/multithreaded execution is required
   across every engine subsystem. It defines task/dependency, completion,
   ownership, backpressure and cancellation boundaries plus subsystem migration
   and acceptance criteria. ADR 0049 is explicitly stage one; the present
   asset/pose work does not complete the engine-wide requirement.
-- Recorded the owner's no-unsolicited-CI policy in AGENTS.md and ADR 0050;
-  validation stays local unless the owner explicitly requests remote automation.
-  Updated architecture, roadmap and README references to match.
-- Validation: local Python tooling passed 165 tests; Markdown links and absence
-  of workflow files were checked. No Rust/API implementation changed, so no new
-  compilation or engine/hardware behavior is claimed for this documentation
-  and workflow-removal change.
 
 ## 2026-10-26 — Native hardware ray queries and shared PBR sun visibility
 
@@ -1210,7 +1198,7 @@ retain their original checkpoint meaning.
   Windows/Vulkan/DX12 and NVIDIA/AMD/Intel physical execution remain unverified.
   Core/compat remain device-free and forbid unsafe code; the renderer isolates
   wgpu's required unsafe experimental-consent token at explicit device opt-in.
-  No game data, fonts, proprietary SDKs or GitHub workflows were added.
+  No game data, fonts, proprietary SDKs were added.
 
 ## 2026-10-26 — Frame DAG, profiler, leased streaming and instanced RT
 
@@ -1287,7 +1275,7 @@ retain their original checkpoint meaning.
   clones logical state; skinned geometry changes rebuild BLAS. RT alpha
   candidates/refit/reflections/GI/denoising, an editor/profiler overlay, complete
   GPU memory accounting and other desktop hardware/platform validation remain.
-  No new GitHub CI, proprietary data, fonts or SDKs were added.
+  No proprietary data, fonts or SDKs were added.
 
 ## Native VM API expansion and ray lighting (2026-10-26, ADR 0060–0063)
 
@@ -1353,7 +1341,7 @@ retain their original checkpoint meaning.
   Other GPU vendors/platforms were not physically tested. AVG32 complete
   native drawing/layout/save support remains unfinished. New native
   VM steps publish on the owner; bounded first-use resource reads still need the
-  remaining ADR 0050 async migration. No old engine host, new GitHub CI, game
+  remaining ADR 0050 async migration. No old engine host, game
   data, font file, credential or proprietary SDK was added.
 - Evidence: target/verification/vn-rt-{workspace-tests-complete.log,
   all-targets-verified.log,python-final.log,api-verified.log,
@@ -1508,7 +1496,7 @@ Behavior validation:
   **3 portable vectors**; Rust matches them. This excludes title-key branches
   and upstream's undefined negative floating-to-unsigned conversion behavior.
 - Python 3.11 tooling: **187 tests passed**, including inventory/source-linkage
-  checks. No GitHub CI/workflow or remote build automation was added.
+  checks.
 
 No commercial-game run, console validation or hardware-render result is claimed
 from these CPU codec/API checks. Per-format limits remain in RESOURCES.md,
@@ -1788,7 +1776,7 @@ Implementation:
 Compilation:
 - Local release workspace/all-target check passed with desktop
   arc-formats and acoustics-obvhs features. Existing CBG dead-code and RealLive
-  unused-variable warnings remain. No GitHub CI or remote build ran.
+  unused-variable warnings remain.
 
 Behavior validation:
 - Shared task/audio release validation passed 45 distinct tests (including
@@ -1869,7 +1857,7 @@ Implementation:
 Compilation:
 - Local release workspace/all-target check passed with desktop
   arc-formats and acoustics-obvhs features. Existing CBG/RealLive warnings
-  remain. Exact-file rustfmt and git diff checks passed. No CI ran.
+  remain. Exact-file rustfmt and git diff checks passed.
 
 Behavior validation:
 - Shared I/O/task/audio/resource suites passed **79 tests**, with one owner NWA
@@ -1957,7 +1945,7 @@ Compilation:
 - Release workspace/all-target check passed with desktop  arc-formats and
   acoustics-obvhs features. The desktop no-default-features reallive+avg32 check
   also passed, without scripting or audio-device output enabled. Existing CBG,
-  RealLive and minimal-CLI warnings remain. No CI or remote build ran.
+  RealLive and minimal-CLI warnings remain.
 
 Behavior validation:
 - Audio library suites passed **47 tests**, one owner-asset NWA case ignored.
@@ -2037,7 +2025,7 @@ Implementation:
 Compilation:
 - Release audio/runtime checks and the final workspace/all-target check passed
   with desktop  arc-formats and acoustics-obvhs enabled. Existing CBG and
-  RealLive warnings remain. No CI, remote build or new device/GPU validation ran.
+  RealLive warnings remain. No new device/GPU validation ran.
 
 Behavior validation:
 - Audio suites passed **51 tests**, one unrelated owner-NWA test ignored. Media
@@ -2112,7 +2100,7 @@ Compilation:
 - Final local release workspace/all-target check passed with desktop
   arc-formats and acoustics-obvhs. Desktop no-default-features reallive+avg32
   check also passed without scripting or device output. Existing CBG/RealLive
-  and minimal-CLI warnings remain. No CI or remote build ran.
+  and minimal-CLI warnings remain.
 
 Behavior validation:
 - Acoustics/audio suites with obvhs passed **68 tests**, two owner-resource cases
@@ -2203,7 +2191,7 @@ Compilation:
 - Local release workspace/all-target check passed with desktop  arc-formats
   and acoustics-obvhs; desktop no-default-features reallive+avg32 also passed
   without scripting or device output. Existing CBG/RealLive/minimal-CLI warnings
-  remain. No CI or remote build ran.
+  remain.
 
 Behavior validation:
 - Acoustics/audio/tasks suites with obvhs passed **91 tests** (two owner-resource
@@ -2301,7 +2289,6 @@ Compilation:
 - Local release workspace/all-target check passed with desktop  arc-formats
   and acoustics-obvhs. Minimal desktop no-default reallive+avg32 check passed.
   Existing CBG/RealLive/minimal-CLI warnings remain; no new warning was observed.
-  No GitHub CI or remote build ran.
 
 Behavior validation:
 - Acoustics/audio/tasks with obvhs: **95 passed**, two ignored. Engine audio,
@@ -2398,7 +2385,7 @@ Compilation:
 - Final release workspace/all-target check passed with desktop  arc-formats
   and acoustics-obvhs; minimal no-default desktop reallive+avg32 check passed.
   Existing CBG/RealLive/minimal-CLI warnings remain; new fixture warning was fixed.
-  No GitHub CI/workflow, remote build, output device, GPU, Windows/Linux or
+  No output device, GPU, Windows/Linux or
   console validation ran. Normal VM dependency audit is in the local evidence.
 
 Behavior validation:
@@ -2471,7 +2458,7 @@ Compilation:
   acoustics-obvhs. Minimal no-default desktop reallive+avg32 check also passed.
   Existing CBG/RealLive/minimal-CLI warnings remain. API reference regenerated;
   signature fingerprint f2af02453b2f74f8 -> bec05c019d833cb0 is logged in CHANGES.
-- No GitHub CI/workflow or remote build was added/run. No live window, GPU,
+-  No live window, GPU,
   output device, Windows/Linux or console behavior was tested by this phase.
 
 Behavior validation:
@@ -2571,7 +2558,7 @@ Compilation:
   reflective fingerprint remains bec05c019d833cb0, with Rust host migration logged.
 - Fixed a new unused test import and a probe example's missing local binding;
   final validation passes. Existing CBG/RealLive/minimal-CLI warnings remain.
-  No GitHub CI/workflow or remote build was added/run. Windows/Linux/console/GPU
+   Windows/Linux/console/GPU
   behavior and a live desktop window were not tested in this phase.
 
 Behavior validation:
@@ -2645,8 +2632,7 @@ Compilation:
   desktop reallive+avg32 check also passed after the native read-flag guard.
 - Generated API reference/JSON/TypeScript and logged fingerprint change from
   bec05c019d833cb0 to **24e44c371ca52eb7**. Final API reference tests pass.
-  Existing CBG/RealLive/minimal CLI warnings remain. No CI/workflow, remote
-  build, font/game data or proprietary SDK was added.
+  Existing CBG/RealLive/minimal CLI warnings remain. No font/game data or proprietary SDK was added.
 
 Behavior validation:
 - A temporary standalone harness executed the complete unmodified pinned JITAN
@@ -2727,8 +2713,7 @@ Compilation:
   fingerprint change **24e44c371ca52eb7 -> e73bda1334c12a7f**. Final API and command
   coverage checks pass. Existing CBG/RealLive/minimal CLI warnings remain.
 - Initial compile corrected the BoundingVolume trait import and the registry's
-  List type hint. Release-only validation was used; no CI/workflow/remote build
-  was added. No game, font, SOFA dataset or proprietary SDK bytes were added.
+  List type hint. Release-only validation was used;  No game, font, SOFA dataset or proprietary SDK bytes were added.
 
 Behavior validation:
 - Final release scopes: acoustic library/backend tests **23 passed** (including
@@ -2824,7 +2809,7 @@ Implementation:
 Compilation:
 - Final release workspace/all-target check passed with desktop  arc-formats,
   acoustics-obvhs and optional rodio-output. Minimal no-default desktop
-  reallive+avg32 check passed. No CI/workflow/remote build was added.
+  reallive+avg32 check passed.
 - Regenerated reference/JSON/TypeScript and logged fingerprint
   **e73bda1334c12a7f -> 0d9cec36638123d1**. Final API reference/documentation and
   typed three-argument compatibility checks passed. New Rust request/inspection
@@ -2906,8 +2891,7 @@ Implementation:
 Compilation:
 - Release workspace/all-target check passed with desktop  arc-formats,
   acoustics-obvhs and optional rodio-output. Minimal no-default desktop
-  reallive+avg32 check passed. All cargo validation used --release; no workflow,
-  CI or remote build was added. Existing CBG/RealLive/minimal CLI warnings remain.
+  reallive+avg32 check passed. All cargo validation used --release. Existing CBG/RealLive/minimal CLI warnings remain.
 - Regenerated reference/JSON/TypeScript and logged API fingerprint
   **0d9cec36638123d1 -> 768ebdf0e5892411**. API reference/command coverage checks
   passed. Added explicit public data descriptions/defaults for Spatial,
@@ -2984,7 +2968,7 @@ Compilation and reference validation:
 - Release workspace/all-targets check passed with desktop  arc-formats,
   acoustics-obvhs and audio rodio-output enabled. Minimal desktop no-default
   reallive+avg32 release check also passed. Existing image/RealLive/CLI warnings
-  remain. No GitHub workflow or remote build automation was added or enabled.
+  remain.
 - Generated reference/JSON/TypeScript and logged actual API fingerprint
   **768ebdf0e5892411 -> 2077f8fd45fb4b36**. Reference and command coverage checks
   passed. Initial generation attempts hit the expected changed-reference and
@@ -3048,8 +3032,7 @@ Implementation:
 Compilation and reference validation:
 - Release workspace/all-targets check passed with desktop  arc-formats,
   acoustics-obvhs and audio rodio-output. Minimal no-default desktop reallive+avg32
-  check also passed. Existing image/RealLive/CLI warnings remain. No CI/workflow
-  or remote build automation was added or enabled.
+  check also passed. Existing image/RealLive/CLI warnings remain.
 - Regenerated API reference/JSON/TypeScript and logged actual fingerprint
   **2077f8fd45fb4b36 -> 1c682b7ad1fb38cd**. API/reference coverage passed.
   Initial generation retained the expected drift/missing-fingerprint guard failures;
@@ -3102,7 +3085,7 @@ Implementation:
 Compilation and reference validation:
 - Release workspace/all-target check passed with  arc-formats,
   acoustics-obvhs and rodio-output; minimal desktop reallive+avg32 also passed.
-  Existing warnings remain. No GitHub CI/workflow was added or run.
+  Existing warnings remain.
 - Regenerated API reference/JSON/TypeScript; actual fingerprint changed
   1c682b7ad1fb38cd -> 4b42007e15453574 and is logged. Final coverage/docs passed.
 
@@ -3288,7 +3271,7 @@ Remaining boundaries:
 - Final API fingerprint: `08381e9cfceae9bf`. Reference regeneration and command
   coverage ran; after the fingerprint log update, all **7 API documentation
   checks passed** from the newly built release test executable.
-- No commits or pushes were made. No CI was added. Verification used local
+- No commits or pushes were made.  Verification used local
   release builds, synthetic redistributable fixtures, existing local game data
   and runtime system fonts.
 
@@ -3487,7 +3470,7 @@ acceptance evidence.
   complete files, authenticate bytes or detect arbitrary same-size mutation.
   Engine-specific signatures and parsers still establish native layouts;
   recognition does not add an unsupported format decoder or engine adapter.
-  No CI, bundle, commit or push was added.
+  No bundle, commit or push was added.
 
 ## 2026-10-30 — Installed-game bootstrap, content evidence and final offscreen verification
 
@@ -3578,7 +3561,7 @@ acceptance evidence.
   execution support; no game title/frame is claimed. Logs and local executable
   analysis are ignored under target/verification/dc4ph/. No game data/font/key
   was added to the repository, no native executable was run, no window created,
-  and no commit, push, bundle or CI was added.
+  and no commit, push, bundle was added.
 
 ### Native Circus execution and shared capabilities (2026-10-31)
 
@@ -3724,7 +3707,7 @@ acceptance evidence.
   The next original title-group/menu instruction remains under implementation;
   the reported reload instruction is fixed, not skipped. Original game data
   was not modified and no title/menu completion is claimed here.
-- No original executable, window, CI, commit or push was created.
+- No original executable, window, commit or push was created.
 
 ### Circus process11 and reusable Layer/UI motion/coverage (2026-10-31)
 
@@ -3766,7 +3749,7 @@ acceptance evidence.
   background publication, correcting the stale hidden scene/color overlay.
   Its new release fixture and actual offscreen verification are pending;
   later native13, complex animations and original slot restoration remain
-  unsupported. No original exe was run and no commit/CI was made. Root owns
+  unsupported. No original exe was run and no commit was made. Root owns
   public API generation and its integration validation.
 
 ### Circus audio-release contract draft, paused before admission (2026-10-31)
@@ -4035,7 +4018,7 @@ System4 actual behavior and next shared boundary:
 ### Codex 2026-10-31 — final local publication and truthful native boundaries
 
 Implementation and compilation:
-- The final combined player9 release build passed, immutable binary `target/verification/majiro/player9`, SHA256 `3af4e6303e6dd320afea76fd89009bd4d3143333dab83a1c3f3d8c804140973b`. The four existing managed local launchers now atomically point to player9. No CI, commit or push was added.
+- The final combined player9 release build passed, immutable binary `target/verification/majiro/player9`, SHA256 `3af4e6303e6dd320afea76fd89009bd4d3143333dab83a1c3f3d8c804140973b`. The four existing managed local launchers now atomically point to player9. No commit or push was added.
 - Public API/config reference passed all 8 tests at `61f9f936ff0989a4`, including explicit Majiro ENV and portable-client settings policy. Final Python tooling run: 201 passed (`python311-final2-tests.log`). `git diff --check` was clean.
 - System-NNN partial machine authored tests: 3 passed; native program authored tests: 2 passed, one owner test ignored by default. The owner test was explicitly executed afterward and passed its **partial VM boundary assertions**, not a gameplay acceptance test.
 
@@ -4089,14 +4072,14 @@ Explicit remaining boundaries:
 
 ## Shared API reference final validation
 
-- Final generated API reference validation passed8/8 after adding shared host data and opaque Circus NativeLiveState; current fingerprint f59d9a19867f34c9 is logged in docs/api/CHANGES.md (shared-capabilities-api-final2.log). Python tooling rerun after regeneration passed201/201; git diff --check passed. No commit, push or CI was performed.
+- Final generated API reference validation passed8/8 after adding shared host data and opaque Circus NativeLiveState; current fingerprint f59d9a19867f34c9 is logged in docs/api/CHANGES.md (shared-capabilities-api-final2.log). Python tooling rerun after regeneration passed201/201; git diff --check passed. No commit, push was performed.
 
 - Final small native11 correction separately passed1/1 in release: resetting the original random-history count also clears its logical Vec, while original native raw history tail is retained. `native-live-random-reset-tests.log` records this current-source result; no further game behavior was claimed.
 
 RealLive LB actual GPU validation of the shared RGB LUT fix:
 - Immutable player10 SHA256 `913f4b795b1b38f5cc9920ea5d9fc8cc84fb353cc290eabba90970f9b3a7d45c` was verified locally and run through normal installed-game detection/bootstrap, original Seen, voice mounts and ordinary Ctrl/mouse down-up input. Apple M5/Metal offscreen capture created no window or audio device. At10,000 frames LB crosses the former SEEN9030:82 wall and reaches scene513:91, showing the May13 dormitory corridor and original Japanese narration. At16,000 frames it reaches scene513:203, showing the cafeteria and original 【理樹】「…恭介は！？」 dialogue. Both screenshots were viewed; both reports have error=null and normal Pause17 input wait. No new unsupported native wall was observed within this bounded run.
 - Native tone-image cache is ready2/pendingfalse at both10k and16k; repeated original object-file calls rose7→21 without new variants. The16k report acknowledges4 KOE calls and actual shared PCM mixing11,523,840 frames (peak1.7876658,rejected0,underrun0; active1 at final capture). This is decoder/mixer consumption, not a hardware audio-output claim. Reports/screenshots/logs are ignored local evidence under `target/verification/reallive-air-after-lb/lb/player10-story-{10000,16000}*`. Actual shared publication byte/count statistics are not exposed in player10 inspection; ordinary asset-cache resident_bytes was not misreported as LUT-resource memory. The native count2 remained stable; source limits32 variants/128MiB RGBA/1MiB TCC still apply.
-- Pixel execution, immutable RGBA, publication identity/lease and renderer access belong to shared engine services. The native adapter retains filename/table choice, original atlas/pattern metadata, pending opcode and bounded policy state. Runtime snapshot/restore rejects live image publications, and RealLive checkpoint/original-save export remains unsupported; ephemeral published paths/Arcs are not persistent save identities. Future save support must reconstruct these shared resources from original native resource/table policy. Production source is frozen after the verified tests; no additional game runs, commits or CI were made.
+- Pixel execution, immutable RGBA, publication identity/lease and renderer access belong to shared engine services. The native adapter retains filename/table choice, original atlas/pattern metadata, pending opcode and bounded policy state. Runtime snapshot/restore rejects live image publications, and RealLive checkpoint/original-save export remains unsupported; ephemeral published paths/Arcs are not persistent save identities. Future save support must reconstruct these shared resources from original native resource/table policy. Production source is frozen after the verified tests; no additional game runs, commits were made.
 
 ### System-NNN execution and shared Black Cyc formats (2026-10-31)
 
@@ -4160,8 +4143,7 @@ Actual original-script boundary:
   a real semantic/shared-engine mapping. Evidence: `owner-control-final.log`.
 - These are executable native-control and reusable resource results, not a title
   screen, rendered System-NNN gameplay, completed integration or original saves.
-  Production source is frozen for this bounded round; no full player build, CI,
-  commit or game/font/key distribution was performed by this agent.
+  Production source is frozen for this bounded round; no full player build, commit or game/font/key distribution was performed by this agent.
 
 ### 2026-10-31 — System4 shared SACT initialization and text-format extraction
 
@@ -4209,7 +4191,7 @@ Behavior validation:
   audio/window/GPU or original-save support is claimed. Root player13 does not
   link System4; this evidence is library/VM plus shared Runtime owner execution.
 - Next-step source/commands are in ignored target/verification/system4/HANDOFF.json.
-  Source is frozen after this bounded result; no commit, push or CI was added.
+  Source is frozen after this bounded result; no commit, push was added.
 
 ### System-NNN: real Core VmAdapter worker/owner seam (2026-10-31)
 
@@ -4221,7 +4203,7 @@ Implementation:
 Compilation and behavior validation:
 - Release check passed and final `cargo test -p crysirror-system-nnn --release` passed13 authored tests (bridge/Core-port3, expression/config5, machine3, program2), with2 installed-data tests ignored by default. Independent host tests verify frozen snapshots survive live layer removal, stale receipts/owner errors do not acknowledge or mutate, and the actual Core worker port commits only through owner services. Log: `target/verification/systemnnn/core-port-final-tests.log`.
 - Explicit original-data owner test1/1 passed on its fresh binary (`owner-core-port-actual.log`). Original NewGame config/Legacy1000 variables execute unchanged original preprologue through both direct bridge and real VmAdapter port:25 instructions,6 shared owner API calls,1 Canvas snapshot and actual opaque800x600 shared Fill Layer100. Original story18B/film16B remain. It now stops at originalPC0x1a1 / SetEffect29(SUNA), rather than16 instructions at0x173. Exact pending receipt persists; Core diagnostics worker_pending=false/owns_framebuffer=false/factory_registered=false; repeated terminal step makes no owner mutation. No original title, picture render, playable game, audio device, full compatibility or saves are claimed.
-- Existing ImageEffect WhiteNoise/Noise and VFX CurlNoise/SequenceRng were checked. They do not express SUNA's persistent packed2x2 mono state, original CRT15-bit draw/update order, alternating half-bank XOR,8x2 region alignment and temporal separate-term/256 blending. No static-noise substitution/private pixel loop was used. Required reusable temporal-raster API and exact next operands are recorded in `crates/crysirror-system-nnn/HANDOFF.md`. Production is frozen; no shared runtime/desktop/root-Cargo edits, full player build, CI or commit were made by this agent.
+- Existing ImageEffect WhiteNoise/Noise and VFX CurlNoise/SequenceRng were checked. They do not express SUNA's persistent packed2x2 mono state, original CRT15-bit draw/update order, alternating half-bank XOR,8x2 region alignment and temporal separate-term/256 blending. No static-noise substitution/private pixel loop was used. Required reusable temporal-raster API and exact next operands are recorded in `crates/crysirror-system-nnn/HANDOFF.md`. Production is frozen; no shared runtime/desktop/root-Cargo edits, full player build, commit were made by this agent.
 
 ### System-NNN native frame policy and real MSI resource diagnosis (2026-10-31)
 
@@ -4609,7 +4591,7 @@ policy to shared Audio preparation and gates native Title frame/action on its
 receipt. That new leaf and later input/hiddenMove regression additions await
 Root's owner-scheduled combined release run; they are not reported as verified.
 The queued player32 build was cancelled by its owner before producing an
-artifact. No new standalone Cargo queues, commits or CI were added by this work.
+artifact. No new standalone Cargo queues, commits were added by this work.
 
 ### 2026-11-01 System-NNN unified release verification
 
@@ -4685,7 +4667,7 @@ Actual original-game evidence still ends at immutable31's Title MOVE52 frontier.
 Source is frozen for the owner's player32 build; complete Title, original Start,
 long-story and original-save behavior remain unverified. Configured exit fades,
 other Title modes, foreground SystemFile/read-mark persistence and full native
-save reconstruction still contain explicit gaps. No commit or CI was added.
+save reconstruction still contain explicit gaps. No commit was added.
 
 ### 2026-11-01 System-NNN immutable32 original Controller validation
 
@@ -4738,7 +4720,7 @@ the later A_FILL or string family; no new title/gameplay/save/60fps claim.
 Original save reconstruction, complete HLL coverage, encoded CG plane metadata,
 exact native blend/text profiles, audio control gaps and real AliceLogo2
 animation remain explicit work. No original-engine hosting, code execution,
-commit or CI was added.
+commit was added.
 
 System4 string-family follow-up actual result: the release command completed
 successfully, nine targets49 passed/5 ignored, including new string-family5/0
@@ -4798,7 +4780,7 @@ Limits:
   single player32 observations remain separate. Full progress callback/getter
   consumers, outer mode families and original dataN.sav VM/resource restoration
   are still incomplete. SystemFile is not a substitute for original game saves.
-- No commit, push, workflow or remote build automation was added.
+- No commit, push was added.
 
 ## 2026-11-01 — System-NNN original game-slot context preparation
 
@@ -4916,8 +4898,7 @@ exact native blend/text/effects/audio profiles, genuine plugin mapping, complete
 array sort/delegates, original global/group/resume saves, AliceLogo2 animation,
 manual per-client presentation fencing and precise callback cadence still need
 work. Next-source order and exact reproduction are in the ignored System4
-HANDOFF.json; source audit is docs/system4-native-source-audit.json. No commit,
-push, CI/workflow or remote build automation was added.
+HANDOFF.json; source audit is docs/system4-native-source-audit.json. No commit or push was added.
 
 ### 2026-11-01 Alice DrawGraph prerequisite: shared alpha-channel copy
 
@@ -4937,7 +4918,7 @@ system4-copy-alpha-runtime.log. Source is frozen pending NNN's single shared API
 documentation regeneration. This source is newer than the frozen435040-
 instruction owner; it does not claim native DrawGraph/plugin/visual acceptance.
 DrawPluginManager.Load is still explicitly unsupported; the public reference's
-success stub is not used. No new desktop build, game rerun, commit or CI.
+success stub is not used. No new desktop build, game rerun, commit.
 
 ### 2026-11-01 — System-NNN native builtin persistence and visibility
 
@@ -5051,7 +5032,7 @@ Original media behavior remains separately frozen: e4201dab... owner executes
 System12 at pc0x1167e/SACT_MSG_SKIP_INIT; explicit1passed0ignored/0.56s. That
 artifact predates NativeFiles/MsgSkip and proves no title/render/gameplay result.
 The newer owner build is still pending at this entry. No Desktop rebuild,
-commit, push or CI. Public API shape unchanged since independently verified
+commit, push. Public API shape unchanged since independently verified
 42a8c3604407b796; private module changes need no fake script classes.
 
 ### 2026-11-01 — Shared byte text kernel API reference
@@ -5069,8 +5050,7 @@ commit, push or CI. Public API shape unchanged since independently verified
   fake Printf32 script class. git diff --check passed.
 - Independent shared Text validation has42passed/3ignored. Those source
   tests and Python tooling do not establish new owner-game/GUI acceptance.
-  This documentation batch changes no NNN/native source, Desktop, GPU, CI or
-  repository history.
+  This documentation batch changes no NNN/native source, Desktop, GPU, repository history.
 
 ### 2026-11-01 System4 original MsgSkip lifecycle acceptance
 
@@ -5117,7 +5097,7 @@ full native save or gameplay claim. Remaining DrawGraph/text/UI/effects/audio,
 AliceLogo seasonal animation, delegates and manual presentation fence require
 further full-source migration. No public API shape changes in these private
 modules; previous shared docs receipt remains separately verified. No commit,
-push or CI.
+push.
 
 ### 2026-11-01 — Shared audio decibel API documentation
 
@@ -5133,7 +5113,7 @@ push or CI.
   (`systemnnn/api-audio-levels-verify.log`); git diff --check passed.
 - Implementation evidence is separate: Audio owner's shared-audio-levels-tests
   has36passed/2ignored and actual public Audio tests3/3passed. This reference
-  update adds no new NNN/native source, Desktop/GPU run, CI, commit or hardware
+  update adds no new NNN/native source, Desktop/GPU run, commit or hardware
   claim.
 
 ### 2026-11-01 — Live isolated Canvas API reference
@@ -5152,7 +5132,7 @@ push or CI.
   totals66passed/0ignored; actual independent public Engine API1/1passed.
   These are CPU resource/state/geometry and typed-public-API checks, not GPU
   visual acceptance or a native-game completion claim. This documentation batch
-  changes no NNN/native/renderer code, Desktop, CI or repository history.
+  changes no NNN/native/renderer code, Desktop, repository history.
 
 ### 2026-11-01 — Independent stereo gain API reference
 
@@ -5172,8 +5152,7 @@ push or CI.
 - Implementation evidence remains separate: Audio8 targets78passed/2ignored
   and real Engine public audio4/4passed, including actual PCM and worker-lease
   behavior. These do not establish new device/native-game/GPU acceptance. This
-  documentation batch changes no other production code, NNN, Desktop, CI or
-  repository history.
+  documentation batch changes no other production code, NNN, Desktop, repository history.
 
 ### 2026-11-01 System4 shared finite audio transport and metadata source family
 
@@ -5206,7 +5185,7 @@ routing. Remaining native audio/sample/FFT, DrawGraph/text/effects, AliceLogo,
 delegates and original saves still need complete semantics. Original game/title
 receipt remains e0abb3... from before this batch. NNN joint API gen measured
 feb2ec9be29523ba; final no-bless verification is pending at this entry. No Desktop
-build by this child, GPU/gameplay claim, commit, push or CI.
+build by this child, GPU/gameplay claim, commit, push.
 
 ### Shared original-save staged restoration and unified API reference (2026-11-01)
 
@@ -5239,7 +5218,7 @@ pointerActivity, ActivityTimer/integer interpolation, Audio finite-loop/channel
 swap/gain completion and shared Alice metadata contracts. HG3 existing entry
 metadata is documented without inventing a native completion/API class.
 No-bless api_docs8/8 and api_coverage1/1 actually passed, exit0 in
-api-native-restore-audio-media-input-verify.log. No commit, push or CI.
+api-native-restore-audio-media-input-verify.log. No commit, push.
 
 ### Alice shared retained channel seek and native mixer source batch (2026-11-01)
 
@@ -5301,7 +5280,7 @@ revision and peer-commit isolation, real PCM controls and bit-exact peer reverb
 tails. The ignored cases were not run. This is a standalone shared audio result;
 NNN owns the still-pending Core/Runtime restore wrapper and next API regeneration.
 It does not yet establish original dataN or Alice native stop/replay/save support.
-No new game, Desktop executable, device/GPU run, commit, push or CI.
+No new game, Desktop executable, device/GPU run, commit, push.
 
 ### Shared resident pixel access and Alice stored-pixel queries (2026-11-01)
 
@@ -5583,7 +5562,7 @@ Actual original-data behavior and limits:
 
 ### 2026-11-01 — Unified seed, fixed-blend and source-crop public contracts
 
-Generated docs/api from the actual frozen public source: Core session seed material/query, six normalized/fixed RGBA blend types with the real qualified tuple payload, Bitmap.beginFixedBlend, and Scene source geometry cropping. The historical531a48a7ce30ee00 receipt is retained; this actual generated fingerprint is0154abd7b61f34df. The first generation correctly rejected the missing CHANGES entry and an authored test that expected an unqualified type instead of the real crate::image_blend::RgbaBlendState declaration. The declaration and coverage constraints were not weakened. After correcting the assertion and recording the generated hash, release no-bless api_docs passed8/8 and command coverage1/1 (systemnnn/api-seed-blend-crop-verify.log). The README now describes System4/System-NNN bounded native factories rather than the obsolete parser-only boundary; it explicitly does not claim complete compatibility. Underlying seed/blend/crop and GPU behavior are recorded in their owners’ separate receipts; no desktop build, commit or CI was produced here.
+Generated docs/api from the actual frozen public source: Core session seed material/query, six normalized/fixed RGBA blend types with the real qualified tuple payload, Bitmap.beginFixedBlend, and Scene source geometry cropping. The historical531a48a7ce30ee00 receipt is retained; this actual generated fingerprint is0154abd7b61f34df. The first generation correctly rejected the missing CHANGES entry and an authored test that expected an unqualified type instead of the real crate::image_blend::RgbaBlendState declaration. The declaration and coverage constraints were not weakened. After correcting the assertion and recording the generated hash, release no-bless api_docs passed8/8 and command coverage1/1 (systemnnn/api-seed-blend-crop-verify.log). The README now describes System4/System-NNN bounded native factories rather than the obsolete parser-only boundary; it explicitly does not claim complete compatibility. Underlying seed/blend/crop and GPU behavior are recorded in their owners’ separate receipts; no desktop build, commit was produced here.
 
 ### 2026-11-01 — System-NNN original dataN entry through shared atomic restore
 
@@ -5591,7 +5570,7 @@ Implemented: NativeAdapter and the installed first-class wrapper now admit origi
 
 Compilation/behavior: native-original-entry-check5.log releasecheck passed. Frozen native-original-entry/lib-89191493c4f8c016 (full SHA in artifacts-actual5.json) ordinary library regression passed70/0failed/2ignored. Explicit licensed system-font Runtime test passed1/1 (runtime-actual5.log), exercising both NativeAdapter and InstalledAdapter: Ready keeps old VM/Scene/clock/owner+peer playback unchanged, commit replaces target audio while preserving peer playback, first load click only arms the restored message wait, subsequent release/press advances the saved nextPC. The earlier authored test incorrectly waited for all VMs to halt despite native END restarting sys; diagnostic runs showed43million valid controller instructions, and only the test expectation/input trace changed. Earlier wrong authored factory-key and timeout logs remain failures, not counted as passes. Python205tests passed in native-original-entry/python-tests2.log.
 
-Limits: this is a synthetic original-format/runtime transaction, not a new real game/GPU/desktop receipt. Original slot-selection UI/export, Omake/Cutin/extensions, nonmessage/nonselection saved actors, active effect/window refresh while waiting, timed/special selection, nondefault native cursor/window variants and automatic-message consumers remain explicit incomplete boundaries. Full System-NNN migration remains active. Complete static InitLoadGame/effect-vtable audits record the actual old-module SUNA reset/global-RNG policy, distinct from the later public version. No commit, Desktop replacement or CI was produced.
+Limits: this is a synthetic original-format/runtime transaction, not a new real game/GPU/desktop receipt. Original slot-selection UI/export, Omake/Cutin/extensions, nonmessage/nonselection saved actors, active effect/window refresh while waiting, timed/special selection, nondefault native cursor/window variants and automatic-message consumers remain explicit incomplete boundaries. Full System-NNN migration remains active. Complete static InitLoadGame/effect-vtable audits record the actual old-module SUNA reset/global-RNG policy, distinct from the later public version. No commit, Desktop replacement was produced.
 
 ### 2026-11-01 Alice native font controls and atomic glyph-cell preparation
 
@@ -5657,10 +5636,10 @@ Compilation:
 - No Cargo/API generation/GPU/game run: documentation-only maintenance while parallel implementation is active.
 
 Validation:
-- Focused Python desktop/system/menu tooling:65 passed. Logs, checked counts and document hashes: target/verification/adr-cleanup-20261103/{python-focused.log,receipt.json}. No full-workspace success is claimed; the previous full-Python source-manifest/dependency failures were not rerun or resolved by this prose change. No commit/push/CI or subagents.
+- Focused Python desktop/system/menu tooling:65 passed. Logs, checked counts and document hashes: target/verification/adr-cleanup-20261103/{python-focused.log,receipt.json}. No full-workspace success is claimed; the previous full-Python source-manifest/dependency failures were not rerun or resolved by this prose change. No commit/push/subagents.
 
 ## 2026-11-03 — README capability/API/compatibility presentation
 
 Implementation: removed internal verification and repository-policy prose from the README. Kept the logo; presented engine features, direct Rust/JS/TS/MCP API links, twelve native engine families with explicit profile scope, and a short build/example entry.
 Compilation: not run; README prose only, no implementation changes.
-Validation: README file/image links resolve, the SVG parses, and its native-profile anchor exists. Internal AGENTS/verify/CI/evidence instructions are absent from the homepage. No new compatibility, runtime or hardware result is claimed.
+Validation: README file/image links resolve, the SVG parses, and its native-profile anchor exists. Internal AGENTS/verify/evidence instructions are absent from the homepage. No new compatibility, runtime or hardware result is claimed.

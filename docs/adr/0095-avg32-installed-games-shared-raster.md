@@ -1,12 +1,10 @@
 # ADR 0095: Installed AVG32 games over a shared raster device
 
-Status: implemented installed-game runtime profile; supersedes the runtime boundary of ADR 0062.
-
-Supersedes the runtime part of ADR 0062 (portable-vm profile).
+Status: implemented installed-game runtime profile.
 
 ## Context
 
-The ADR 0062 adapter linked the `codex/avg32-portable-vm` build of siglus_rs,
+The retired portable adapter linked the `codex/avg32-portable-vm` build of siglus_rs,
 which compiles out every graphics, transition, menu and save path; it could
 show only opaque full-screen pictures and single-line text from explicit
 TPC32 files. An installed AVG32 game (Kanon: PDT routing, `#WAKUPDT` window,

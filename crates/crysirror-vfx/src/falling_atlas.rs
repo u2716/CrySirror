@@ -105,6 +105,26 @@ impl SequenceRng {
         *state = state.wrapping_mul(*multiplier).wrapping_add(*increment);
         Ok((*state >> *output_shift) & *output_mask)
     }
+    /// Consume exactly `count` sequence transitions without materializing
+    /// their outputs. Affine exponentiation takes at most64 steps and retains
+    /// the same accumulator as repeated `next_u32`, including wrapping32 math.
+    pub fn advance(&mut self, mut count: u64) -> Result<()> {
+        self.validate()?;
+        let Self::Lcg32 { state, multiplier, increment, .. } = self;
+        let (mut step_mul, mut step_add) = (*multiplier, *increment);
+        let (mut total_mul, mut total_add) = (1u32, 0u32);
+        while count != 0 {
+            if count & 1 != 0 {
+                total_add = total_add.wrapping_mul(step_mul).wrapping_add(step_add);
+                total_mul = total_mul.wrapping_mul(step_mul);
+            }
+            step_add = step_add.wrapping_mul(step_mul.wrapping_add(1));
+            step_mul = step_mul.wrapping_mul(step_mul);
+            count >>= 1;
+        }
+        *state = state.wrapping_mul(total_mul).wrapping_add(total_add);
+        Ok(())
+    }
     fn modulo(&mut self, count: u32) -> Result<u32> {
         ensure!(count > 0, "VFX random modulo domain");
         Ok(self.next_u32()? % count)

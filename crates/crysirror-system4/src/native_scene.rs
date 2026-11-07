@@ -6,11 +6,11 @@ use crate::{
     assets::Class,
     native_cg::NativeCg,
     vm::{
-        external::{Argument, HllReturn},
         ExternalCall, ExternalTarget, Machine,
+        external::{Argument, HllReturn},
     },
 };
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use crysirror_core::{
     image_encoding::{ImageEncodingInfoQuery, ImageEncodingInfoState},
     image_processing::{
@@ -47,13 +47,65 @@ pub(crate) struct NativeScene {
     owner: ClientId,
     pending: Option<Pending>,
     wallpaper: Option<Published>,
+    clear_color: [u8; 3],
 }
 impl NativeScene {
+    ///Native05810 copies only the backdrop RGB, not sprites or glyphs. With
+    ///a smaller wallpaper, the initialized destination's tail is preserved.
+    pub(crate) fn apply_backdrop(
+        &self,
+        owner: ClientId,
+        size: [u32; 2],
+        base: ImageInput,
+    ) -> Result<ImageInput> {
+        ensure!(owner == self.owner, "native backdrop owner");
+        let (input, extent) = if let Some(wallpaper) = &self.wallpaper {
+            ensure!(
+                wallpaper.resource.client() == owner,
+                "native backdrop resource owner"
+            );
+            (
+                ImageInput::Resource(wallpaper.resource.clone()),
+                wallpaper.resource.size(),
+            )
+        } else {
+            (
+                ImageInput::Solid {
+                    size,
+                    color: [
+                        self.clear_color[0],
+                        self.clear_color[1],
+                        self.clear_color[2],
+                        255,
+                    ],
+                },
+                size,
+            )
+        };
+        Ok(base.with_composite_layer(ImageCompositeLayer {
+            input: Box::new(input),
+            source: [
+                0,
+                0,
+                size[0].min(extent[0]) as i32,
+                size[1].min(extent[1]) as i32,
+            ],
+            destination: [0, 0],
+            clip: None,
+            opacity: 255,
+            math: ImageCompositeMath::CopyRgb,
+        }))
+    }
+    pub(crate) fn published_path(&self) -> Option<&str> {
+        self.wallpaper.as_ref().map(|image| image.path.as_str())
+    }
+
     pub(crate) fn new(owner: ClientId) -> Self {
         Self {
             owner,
             pending: None,
             wallpaper: None,
+            clear_color: [0; 3],
         }
     }
     pub(crate) fn cancel_pending_for_shutdown(&mut self) {
@@ -90,7 +142,7 @@ impl NativeScene {
         let [w, h] = resource.size();
         let published = host.publish_image_resource(self.owner, WALLPAPER, resource.clone())?;
         let path = published.path.relative().to_owned();
-        let layer = json!({"layers":[{"op":"put","layer":{"id":WALLPAPER,"rect":[0,0,w,h],
+        let layer = json!({"layers":[{"op":"put","layer":{"id":WALLPAPER,"parent":crate::sact::BACK_SCENE,"rect":[0,0,w,h],
             "paint":{"kind":"image","asset":path,"tint":[255,255,255,255]},
             "order":[i32::MIN,i32::MIN+1]}}]});
         if let Err(error) = host.submit_engine(self.owner, 1, &serde_json::to_vec(&layer)?) {
@@ -158,8 +210,9 @@ impl NativeScene {
                         "System4 clear colour outside reviewed byte profile"
                     );
                     let [w, h] = sact.canvas;
-                    host.submit_engine(owner,1,&serde_json::to_vec(&json!({"layers":[{"op":"put","layer":{"id":1,"rect":[0,0,w,h],
+                    host.submit_engine(owner,1,&serde_json::to_vec(&json!({"layers":[{"op":"put","layer":{"id":1,"parent":crate::sact::BACK_SCENE,"rect":[0,0,w,h],
                         "paint":{"kind":"solid","color":[r,g,b,255]},"order":[i32::MIN,i32::MIN]}}]}))?)?;
+                    self.clear_color = [*r as u8, *g as u8, *b as u8];
                     machine.complete_hll(call, HllReturn::Scalar(1))?;
                     return Ok(Some(Dispatch::Completed));
                 }
@@ -211,7 +264,7 @@ impl NativeScene {
                             color: [0, 0, 0, 255],
                         }),
                         layers: vec![ImageCompositeLayer {
-                            input: Box::new(cg.sprite_input(owner, *number, bridge)?),
+                            input: Box::new(cg.scene_sprite_input(owner, *number, bridge)?),
                             source: [0, 0, size[0] as i32, size[1] as i32],
                             destination: [0, 0],
                             clip: None,
@@ -402,15 +455,19 @@ mod tests {
         assert!(r.host.engine.layers.get(ClientId(1), 2).is_none());
         let (mut m, c) = pending("SetWP_Color", &[7, 8, 256]);
         let before = serde_json::to_value(&r.host.engine).unwrap();
-        assert!(scene
-            .dispatch(ClientId(1), &mut m, &c, &b, &cg, &mut r.host)
-            .is_err());
+        assert!(
+            scene
+                .dispatch(ClientId(1), &mut m, &c, &b, &cg, &mut r.host)
+                .is_err()
+        );
         assert_eq!(m.pc, c.pc);
         assert_eq!(m.stack, [7, 8, 256]);
         assert_eq!(serde_json::to_value(&r.host.engine).unwrap(), before);
-        assert!(scene
-            .dispatch(ClientId(2), &mut m, &c, &b, &cg, &mut r.host)
-            .is_err());
+        assert!(
+            scene
+                .dispatch(ClientId(2), &mut m, &c, &b, &cg, &mut r.host)
+                .is_err()
+        );
     }
     #[test]
     fn native_sprite_wallpaper_is_opaque_rgb_snapshot_independent_of_source_lifetime() {

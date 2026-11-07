@@ -1359,7 +1359,7 @@ pub(crate) fn generate() -> api_doc::ApiDocs {
             ),
             (
                 "siglus",
-                config("crates/crysirror-siglus-vm/src/adapter.rs"),
+                config("crates/crysirror-siglus-integrated/src/adapter.rs"),
             ),
         ],
         items,

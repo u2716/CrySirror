@@ -56,7 +56,7 @@ impl Run {
             .and_then(|s| s.sprites.as_ref())
             .context("native filtered copy before SACT")?;
         let source = sprites
-            .get(*src)
+            .graphics(*src)
             .context("native filtered copy source absent")?;
         // The reviewed in-bounds cell profile never substitutes zero padding
         // for original source clipping. Further historical clip variants fail.
@@ -76,7 +76,7 @@ impl Run {
         );
         if alpha {
             ensure!(
-                source.alpha && sprites.get(*dst).is_some_and(|s| s.alpha),
+                source.alpha && sprites.graphics(*dst).is_some_and(|s| s.alpha),
                 "native filtered copy alpha plane absent"
             );
         }

@@ -1,0 +1,58 @@
+[package]
+name = "crysirror-siglus-integrated"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+publish = false
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
+
+[lib]
+test = false
+doctest = false
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+blake3.workspace = true
+crysirror-core.workspace = true
+crysirror-runtime.workspace = true
+crysirror-resource.workspace = true
+crysirror-tasks.workspace = true
+rustc-hash = "2"
+bytemuck.workspace = true
+image.workspace = true
+log = "0.4"
+env_logger = "0.11"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+clap = { version = "4.5", features = ["derive"] }
+ab_glyph = "0.2.32"
+ttf-parser = "0.25.1"
+encoding_rs = "0.8"
+hex = "0.4"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+lewton = "0.10"
+eluna = { package = "crysirror-codec-emote", path = "../crysirror-codec-emote" }
+siglus_omv_decoder = { package = "crysirror-codec-omv", path = "../crysirror-codec-omv" }
+na_mpeg2_decoder = { package = "crysirror-codec-mpeg", path = "../crysirror-codec-mpeg" }
+wmv_decoder = { package = "crysirror-codec-wmv", path = "../crysirror-codec-wmv", default-features = false, features = ["audio"] }
+kira = { version = "0.9", default-features = false, features = ["mp3", "ogg", "flac", "wav"] }
+wgpu = { version = "0.20", features = ["wgsl"] }
+winit = "=0.31.0-beta.3"
+pollster = "0.3"
+raw-window-handle = "0.6"
+egui = "0.28.1"
+egui-wgpu = "0.28.1"
+ureq = "2.10"
+
+[target.'cfg(target_os = "android")'.dependencies]
+ndk-context = "0.1.1"
+android_logger = "0.14"
+winit = { version = "=0.31.0-beta.3", features = ["android-native-activity"] }
+
+[lints.rust]
+unexpected_cfgs = "allow"
+dead_code = "allow"

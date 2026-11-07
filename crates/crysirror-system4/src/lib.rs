@@ -22,15 +22,30 @@ pub mod sprites;
 
 pub mod input;
 
+mod buffered_input;
 mod math;
 mod math_random;
 mod native_async;
 mod native_cg;
-mod buffered_input;
+mod native_csv;
+mod native_dialog;
 mod native_draw;
+mod native_effect;
+mod native_file;
 mod native_files;
+mod native_input_string;
+mod native_logo;
+mod native_logs;
+mod native_movie;
 mod native_msgskip;
+mod native_sact_intrinsics;
+mod native_sact_text;
+mod native_save;
+mod native_save_cg;
 mod native_scene;
+mod native_scene_present;
+mod native_system;
+mod native_wallpaper_get;
 
 // The whole SystemService mixer family is routed. SACT stream lifetime
 // operations remain unregistered until their complete source policy is ready.

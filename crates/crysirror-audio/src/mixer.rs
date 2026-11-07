@@ -5,6 +5,7 @@
 //! decoded PCM and decoder handles are derived playback resources, never saves.
 mod release;
 mod retained;
+mod gain_envelope;
 use crate::decoder::{AudioSource, Clip, SourceBufferStatus, SourceRead, StereoFrame};
 use crate::doppler::{DopplerInfo, DopplerSettings};
 use crate::envelope::Ramp;
@@ -218,6 +219,9 @@ pub struct LoopPoints {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct VoiceSpec {
+    /// Optional output-clock envelope attached at source publication.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gain_envelope: Option<crysirror_core::service::AudioGainEnvelopeSpec>,
     /// An existing client-scoped logical gain group; None bypasses groups.
     pub mix_group: Option<String>,
     /// Source bus; Master is a control bus and is rejected.
@@ -255,6 +259,7 @@ pub struct VoiceSpec {
 impl Default for VoiceSpec {
     fn default() -> Self {
         Self {
+            gain_envelope: None,
             mix_group: None,
             bus: Bus::Sfx,
             gain: 1.,
@@ -275,6 +280,7 @@ impl Default for VoiceSpec {
 }
 impl VoiceSpec {
     pub fn validate(&self) -> Result<()> {
+        if let Some(spec) = self.gain_envelope { spec.validate().map_err(|error| anyhow::anyhow!("{error}"))?; }
         if let Some(name) = &self.mix_group {
             crate::mix_groups::name(name)?;
         }
@@ -430,6 +436,8 @@ impl Cursor {
 }
 
 struct Voice {
+    stepped_gain: Option<crate::gain_envelope::Envelope>,
+    source_peak: f32,
     balance:crate::balance::Balance,
     doppler: Ramp,
     doppler_settings: Option<DopplerSettings>,
@@ -477,6 +485,7 @@ fn resume_now(v: &mut Voice, fade: u64, settings: AudioResumeSettings) {
     v.spec.paused = false;
     v.resume_after = None;
     if settings.reset_gain {
+        gain_envelope::cancel(v);
         v.gain_stop_after_fade = false;
         v.gain = Ramp::new(if fade == 0 { v.spec.gain } else { 0. });
         v.gain.to(v.spec.gain, fade);
@@ -500,15 +509,17 @@ pub struct SeekProgress {
 }
 // Transport deadlines use the output clock even when source PCM/preparation is
 // unavailable. Ordinary fade-in and source position remain frozen on starvation.
-fn silent_transport_tick(v: &mut Voice) {
+fn silent_transport_tick(v: &mut Voice) -> bool {
+    if gain_envelope::finished(v) { return true; }
     if !v.stop_after_fade && !v.pause_after_fade {
-        return;
+        return false;
     }
     v.envelope.step();
     if v.pause_after_fade && v.envelope.left == 0 {
         v.spec.paused = true;
         v.pause_after_fade = false;
     }
+    false
 }
 fn finish_source(v: &mut Voice) {
     v.resume_after = None;
@@ -629,6 +640,7 @@ impl Client {
     }
 }
 struct VoiceObservation {
+    stepped_gain: Option<crysirror_core::service::AudioGainEnvelopeInfo>,
     doppler: DopplerInfo,
     spec: VoiceSpec,
     info: crysirror_core::service::AudioPlaybackInfo,
@@ -718,6 +730,7 @@ impl Mixer {
             observations.insert(
                 h,
                 VoiceObservation {
+                    stepped_gain: v.stepped_gain.map(|envelope| envelope.info()),
                     doppler: self.doppler_info(h.client, h)?,
                     spec: v.spec.clone(),
                     info: self.playback_info(h.client, h)?,
@@ -1170,6 +1183,7 @@ impl Mixer {
         let n = frames(fade_ms, self.config.sample_rate);
         let v = self.voice(client, h)?;
         v.resume_after = None;
+        gain_envelope::cancel(v);
         if n == 0 {
             self.voices[h.slot as usize] = None
         } else {
@@ -1218,6 +1232,7 @@ impl Mixer {
             "voice gain must be 0..4"
         );
         let voice = self.voice(client, h)?;
+        gain_envelope::cancel(voice);
         voice.spec.gain = gain;
         voice.gain.to(gain, 0);
         voice.gain_stop_after_fade = false;
@@ -1241,6 +1256,7 @@ impl Mixer {
         let voice = self.voice(client, h)?;
         voice.spec.gain = gain;
         voice.gain.to(gain, count);
+        gain_envelope::cancel(voice);
         voice.gain_stop_after_fade = false;
         Ok(())
     }
@@ -1270,6 +1286,7 @@ impl Mixer {
     /// an active voice are idempotent; foreign/stale handles remain errors.
     pub fn finish_gain_fade(&mut self, client: u32, h: VoiceHandle) -> Result<()> {
         let voice = self.voice(client, h)?;
+        gain_envelope::cancel(voice);
         let stop = voice.gain_stop_after_fade;
         voice.gain.to(voice.gain.target, 0);
         voice.gain_stop_after_fade = false;
@@ -1830,6 +1847,7 @@ impl Mixer {
         self.spec(client, h)?;
         let voice = self.voices[h.slot as usize].as_ref().unwrap();
         Ok(crysirror_core::service::AudioPlaybackInfo {
+            source_peak: if voice.spec.paused || !voice.spec.transport_active || voice.source_ended {0.}else{voice.source_peak},
             balance:voice.balance.info(),
             age_frames: voice.age_frames,
             transport_frames: voice.transport_frames,
@@ -2155,6 +2173,7 @@ impl Mixer {
         let rate = self.config.sample_rate;
         for v in self.voices.iter_mut().flatten() {
             let settings = v.spec.spatial.as_ref().and_then(|s| s.doppler);
+            if !out.is_empty() {v.source_peak=0.;}
             let target = if let (Some(s), Some(settings)) = (&v.spec.spatial, settings) {
                 let l = self
                     .listeners
@@ -2253,6 +2272,20 @@ impl Mixer {
             }
             for (slot, (effect, step)) in self.voices.iter_mut().zip(spatial.iter().zip(&rates)) {
                 let Some(v) = slot else { continue };
+                if gain_envelope::finished(v) { *slot = None; continue; }
+                let stepped_sample_gain = v.stepped_gain.as_mut().map(|envelope| {
+                    let sample = envelope.gain;
+                    envelope.advance();
+                    if !envelope.info().active {
+                        // A completed control is now an ordinary held gain.
+                        // Keep its query receipt, but do not restart the initial
+                        // envelope from VoiceSpec or block generic snapshots.
+                        v.spec.gain_envelope = None;
+                    }
+                    v.spec.gain = envelope.gain;
+                    v.gain = Ramp::new(envelope.gain);
+                    sample
+                });
                 v.age_frames = v.age_frames.saturating_add(1);
                 let doppler = v.doppler.step();
                 if v.resume_after
@@ -2273,7 +2306,7 @@ impl Mixer {
                     v.transport_frames = v.transport_frames.saturating_add(1);
                 }
                 if v.spec.paused {
-                    silent_transport_tick(v);
+                    if silent_transport_tick(v) { *slot = None; }
                     continue;
                 }
                 if !v.spec.transport_active {
@@ -2286,7 +2319,7 @@ impl Mixer {
                         .as_ref()
                         .is_some_and(|s| s.pending || s.error.is_some())
                 {
-                    silent_transport_tick(v);
+                    if silent_transport_tick(v) { *slot = None; }
                     continue;
                 }
                 if v.source_ended
@@ -2333,7 +2366,7 @@ impl Mixer {
                         SampleRead::Pending => {
                             self.stats.underrun_frames =
                                 self.stats.underrun_frames.saturating_add(1);
-                            silent_transport_tick(v);
+                            if silent_transport_tick(v) { *slot = None; }
                             continue;
                         }
                         SampleRead::End if v.spec.looping => {
@@ -2357,7 +2390,7 @@ impl Mixer {
                                     SampleRead::Pending => {
                                         self.stats.underrun_frames =
                                             self.stats.underrun_frames.saturating_add(1);
-                                        silent_transport_tick(v);
+                                        if silent_transport_tick(v) { *slot = None; }
                                         continue;
                                     }
                                     SampleRead::End => {
@@ -2408,12 +2441,13 @@ impl Mixer {
                         SampleRead::Pending => {
                             self.stats.underrun_frames =
                                 self.stats.underrun_frames.saturating_add(1);
-                            silent_transport_tick(v);
+                            if silent_transport_tick(v) { *slot = None; }
                             continue;
                         }
                     }
                 };
                 let mut s = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+                if !v.source_ended {v.source_peak=v.source_peak.max(s[0].abs()).max(s[1].abs());}
                 if v.spec.swap_channels {
                     s.swap(0, 1);
                 }
@@ -2424,7 +2458,7 @@ impl Mixer {
                 };
                 let c = &self.clients[&v.handle.client];
                 let master_gain = c.level(Bus::Master);
-                let mut gain = v.gain.step()
+                let mut gain = stepped_sample_gain.unwrap_or_else(|| v.gain.step())
                     * v.envelope.step()
                     * c.level(v.spec.bus)
                     * self.groups.output(v.mix_group);
@@ -2506,6 +2540,7 @@ impl Mixer {
                     v.spec.paused = true;
                     v.pause_after_fade = false;
                 }
+                if gain_envelope::finished(v) { *slot = None; continue; }
                 if v.gain_stop_after_fade && v.gain.left == 0 {
                     if !retained::gain_finished(v) {*slot=None;}
                     continue;
@@ -2653,14 +2688,19 @@ fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
 fn new_voice(
     handle: VoiceHandle,
     source: Box<dyn AudioSource>,
-    spec: VoiceSpec,
+    mut spec: VoiceSpec,
     mix_group: Option<usize>,
     sequence: u64,
     rate: u32,
 ) -> Voice {
     let mut envelope = Ramp::new(if spec.fade_in_ms > 0. { 0. } else { 1. });
     envelope.to(1., frames(spec.fade_in_ms, rate));
+    let db100 = if spec.gain <= 0. { -10000 } else { (2000. * f64::from(spec.gain).log10()).round().clamp(-10000., 1204.) as i32 };
+    let stepped_gain = spec.gain_envelope.map(|envelope| crate::gain_envelope::Envelope::new(envelope, rate, db100, spec.gain));
+    if let Some(envelope) = stepped_gain { spec.gain = envelope.gain; }
     Voice {
+        stepped_gain,
+        source_peak: 0.,
         balance:Default::default(),
         doppler: Ramp::new(1.),
         doppler_settings: None,

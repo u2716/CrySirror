@@ -7,6 +7,7 @@
 //! association metadata. No VM policy, file parser or device lives here.
 use crate::ImageSurface;
 mod constant;
+mod ramps;
 pub use constant::ConstantByteBlend;
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};

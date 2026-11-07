@@ -1,11 +1,21 @@
 //! Native input-query policy composed from engine-owned modal TextField/UI.
 //! Text/IME admission, focus, editing, painting and events belong to shared UI.
 use super::*;
+mod choice;
+mod color;
+pub(super) use color::ColorDialog;
+mod file;
+pub(super) use file::FilePending;
+mod font;
+mod list;
+pub(super) use choice::ChoiceDialog;
 use crysirror_core::service::EngineQuery;
 pub(super) struct TextDialog {
     root: u32,
     field: u32,
     button: u32,
+    font: Option<font::FontPicker>,
+    list: Option<list::ListPicker>,
 }
 impl QlieVm {
     pub(super) fn dialog_method(
@@ -15,6 +25,21 @@ impl QlieVm {
         op: &str,
         a: &[Value],
     ) -> Result<bool> {
+        if op == "sl" {
+            return self.list_dialog(h, m, a);
+        }
+        if op == "f" {
+            return self.font_dialog(h, m, a);
+        }
+        if op == "c" {
+            return self.color_dialog_method(h, m, a);
+        }
+        if matches!(op, "o" | "s") {
+            return self.file_dialog_method(h, m, op, a);
+        }
+        if matches!(op, "d1" | "d2" | "d3" | "sd1" | "sd2" | "sd3") {
+            return self.choice_dialog_method(h, m, op, a);
+        }
         ensure!(op == "t", "unsupported QLIE desktop dialog \\{op}");
         if self.dialog.is_none() {
             ensure!(a.len() == 4, "QLIE text input dialog ABI");
@@ -37,6 +62,8 @@ impl QlieVm {
                 root,
                 field,
                 button,
+                font: None,
+                list: None,
             });
             return Ok(false);
         }

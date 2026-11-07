@@ -2,7 +2,7 @@
 
 Status: accepted service boundary; first-class native consumers now exist.
 Per-adapter implementation and acceptance are tracked in NATIVE_ADAPTERS.md;
-original engine hosting was retired by ADR 0047.
+`adopt` adapters follow ADR 0047; ADR 0102 defines the separate integrated mode.
 
 ## Decision
 

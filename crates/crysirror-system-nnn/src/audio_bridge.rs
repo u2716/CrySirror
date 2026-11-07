@@ -13,6 +13,7 @@ use crysirror_core::{
 };
 use crysirror_tasks::{Cancellation, Task, TaskPool};
 use std::sync::Arc;
+mod music_envelope;
 
 /// Resolves reviewed native precedence using scoped engine archive/VFS APIs.
 /// Never return a playlist/container as if it were decoded audio. Missing and
@@ -29,6 +30,11 @@ enum Pending {
         task: Task<crate::resource_bridge::ResolvedAudio>,
     },
     Prepare {
+        call: NativeCall,
+        plan: NativeAudioPlan,
+        ticket: u64,
+    },
+    VoiceResource {
         call: NativeCall,
         plan: NativeAudioPlan,
         ticket: u64,
@@ -81,10 +87,16 @@ pub struct AudioBridge {
     system_sounds: Option<SystemSoundPolicy>,
     system_pending: Option<SystemSoundPending>,
     restored_work: Option<crate::native_save_audio::SavedAudioWork>,
+    voice_lengths_ms: [Option<u32>; 8],
+    music_runtime: music_envelope::MusicRuntime,
+    pending_music_read: Option<i32>,
+    music_read_mark: Option<i32>,
+    message_voice_start: Option<(usize, u32)>,
 }
 /// Immutable native metadata/capability seed. Large name tables and workers
 /// are Arc/shared task capabilities rather than owner-loop deep copies.
 pub(crate) struct AudioRestoreSeed {
+    music_runtime: music_envelope::MusicRuntime,
     client: ClientId,
     policy: NativeAudioPolicy,
     music: Arc<Names>,
@@ -132,6 +144,10 @@ impl AudioRestoreSeed {
             "NNN saved audio component binding profile"
         );
         let replacement = prepared.replacement;
+        let mut music_runtime = self.music_runtime;
+        if prepared.original.music_number != -1 && prepared.policy.settings.music_enabled {
+            music_runtime.start_buffer();
+        }
         Ok((
             AudioBridge {
                 policy: prepared.policy,
@@ -146,6 +162,11 @@ impl AudioRestoreSeed {
                 system_sounds: self.system_sounds,
                 system_pending: None,
                 restored_work: Some(prepared.original),
+                voice_lengths_ms: [None; 8],
+                music_runtime,
+                pending_music_read: None,
+                music_read_mark: None,
+                message_voice_start: None,
             },
             replacement,
         ))
@@ -158,6 +179,7 @@ impl AudioBridge {
             "NNN audio restore seed requires drained native dependencies"
         );
         Ok(AudioRestoreSeed {
+            music_runtime: self.music_runtime.clone(),
             client: self.client,
             policy: self.policy.clone(),
             music: self.music.clone(),
@@ -226,11 +248,65 @@ impl AudioBridge {
             system_sounds: None,
             system_pending: None,
             restored_work: None,
+            voice_lengths_ms: [None; 8],
+            music_runtime: Default::default(),
+            pending_music_read: None,
+            music_read_mark: None,
+            message_voice_start: None,
             api_calls: 0,
         })
     }
     pub fn pending(&self) -> bool {
         self.pending.is_some() || self.outer_music.is_some() || self.system_pending.is_some()
+    }
+    /// Last fully decoded native voice duration, even when playback is muted.
+    /// It is a measured source fact, independent of current channel playback.
+    pub(crate) fn voice_length_ms(&self, channel: usize) -> Option<u32> {
+        self.voice_lengths_ms.get(channel).copied().flatten()
+    }
+    /// Completion observation for the most recently admitted callback, not a
+    /// test of stale decoder metadata or the current channel playing state.
+    pub fn take_message_voice_start(&mut self) -> Option<(usize, u32)> {
+        self.message_voice_start.take()
+    }
+    pub fn take_music_read_mark(&mut self) -> Option<i32> {
+        self.music_read_mark.take()
+    }
+    fn complete_callback(
+        &mut self,
+        machine: &mut Machine,
+        call: &NativeCall,
+        plan: NativeAudioPlan,
+    ) -> Result<bool> {
+        let voice = if plan
+            .source
+            .as_ref()
+            .is_some_and(|s| s.kind == crate::native_audio::SourceKind::Voice)
+        {
+            let channel = match plan.operation {
+                AudioOperation::Play { channel, .. } | AudioOperation::MeasureVoice { channel } => {
+                    channel
+                }
+                _ => bail!("NNN successful voice without voice operation"),
+            };
+            let index = usize::try_from(
+                channel
+                    .checked_sub(self.policy.bindings.voice_base)
+                    .ok_or_else(|| anyhow::anyhow!("NNN message voice base"))?,
+            )?;
+            Some((
+                index,
+                self.voice_length_ms(index)
+                    .ok_or_else(|| anyhow::anyhow!("NNN successful voice lacks measured length"))?,
+            ))
+        } else {
+            None
+        };
+        machine.acknowledge(call)?;
+        self.policy = plan.next;
+        self.message_voice_start = voice;
+        self.music_read_mark = self.pending_music_read.take();
+        Ok(true)
     }
     pub(crate) fn configure_system_sounds(
         &mut self,
@@ -423,10 +499,7 @@ impl AudioBridge {
                 if restart {
                     let playing = host.audio_playing(self.client, self.policy.bindings.music)?;
                     let plan = self.policy.music(&[-1], &self.music, playing)?;
-                    if let Some(request) = plan.control_request()? {
-                        host.submit_audio(self.client, request)?;
-                        self.api_calls += 1;
-                    }
+                    self.control_plan(host, &plan)?;
                     self.policy = plan.next;
                 }
                 return Ok(true);
@@ -437,10 +510,7 @@ impl AudioBridge {
             }
             let plan = self.policy.music(&words, &self.music, playing)?;
             let Some(source) = plan.source.clone() else {
-                if let Some(request) = plan.control_request()? {
-                    host.submit_audio(self.client, request)?;
-                    self.api_calls += 1;
-                }
+                self.control_plan(host, &plan)?;
                 self.policy = plan.next;
                 return Ok(true);
             };
@@ -475,14 +545,7 @@ impl AudioBridge {
                     });
                     return Ok(false);
                 };
-                let request = match source {
-                    crate::resource_bridge::ResolvedAudio::Asset(path) => {
-                        plan.asset_request(path)?
-                    }
-                    crate::resource_bridge::ResolvedAudio::Encoded(bytes) => {
-                        plan.encoded_request(bytes)?
-                    }
-                };
+                let request = self.source_request(host, &plan, source)?;
                 let ticket = host.begin_audio(self.client, request)?;
                 self.api_calls += 1;
                 self.outer_music = Some(OuterMusicPending::Prepare {
@@ -537,16 +600,42 @@ impl AudioBridge {
     /// then stop only this adapter's engine-owned channels. No VM receipt is
     /// acknowledged and another client's mixer/decoder state is untouched.
     pub(crate) fn shutdown(&mut self, host: &mut dyn HostServices) -> Result<()> {
-        if let Some(Pending::Prepare { ticket, .. }) = self.pending.take() {
-            host.release_audio(self.client, ticket)?;
+        // A ready voice preparation may already own a published resource even
+        // when the VM has not observed it. Retire both owners on cancellation.
+        // Keep cleaning the other channels if an individual cleanup fails.
+        let mut cleanup_error = None;
+        let mut record = |result: crysirror_core::Result<()>| {
+            if let Err(error) = result {
+                cleanup_error.get_or_insert_with(|| anyhow::Error::from(error));
+            }
+        };
+        match self.pending.take() {
+            Some(Pending::Prepare { ticket, .. }) => {
+                record(host.release_audio(self.client, ticket));
+            }
+            Some(Pending::VoiceResource { ticket, .. }) => {
+                let resource = match host.audio_resource_preparation(self.client, ticket) {
+                    Ok(state) => state.resource,
+                    Err(error) => {
+                        record(Err(error));
+                        None
+                    }
+                };
+                record(host.release_audio_resource_preparation(self.client, ticket));
+                if let Some(resource) = resource {
+                    record(host.release_audio_resource(self.client, resource));
+                }
+            }
+            // Dropping the scoped task cancels an outstanding name lookup.
+            Some(Pending::Resolve { .. }) | None => {}
         }
         if let Some(OuterMusicPending::Prepare { ticket, .. }) = self.outer_music.take() {
-            host.release_audio(self.client, ticket)?;
+            record(host.release_audio(self.client, ticket));
         }
         if let Some(SystemSoundPending::Prepare { ticket, .. }) = self.system_pending.take() {
-            host.release_audio(self.client, ticket)?;
+            record(host.release_audio(self.client, ticket));
         }
-        let mut channels = vec![self.policy.bindings.music];
+        let mut channels = vec![self.policy.bindings.music, self.tail_channel()?];
         for base in [
             self.policy.bindings.sound_base,
             self.policy.bindings.voice_base,
@@ -559,18 +648,21 @@ impl AudioBridge {
         channels.sort_unstable();
         channels.dedup();
         for channel in channels {
-            host.submit_audio(
+            record(host.submit_audio(
                 self.client,
                 crysirror_core::service::AudioRequest::Stop {
                     channel,
                     fade_ms: 0.,
                 },
-            )?;
+            ));
             self.api_calls += 1;
         }
         self.policy.music_number = None;
         self.policy.last_music_number = None;
-        Ok(())
+        self.pending_music_read = None;
+        self.music_read_mark = None;
+        self.message_voice_start = None;
+        cleanup_error.map_or(Ok(()), Err)
     }
     pub(crate) fn stop_for_outer_movie(&mut self, host: &mut dyn HostServices) -> Result<()> {
         ensure!(
@@ -579,10 +671,7 @@ impl AudioBridge {
         );
         let playing = host.audio_playing(self.client, self.policy.bindings.music)?;
         let plan = self.policy.music(&[-1], &self.music, playing)?;
-        if let Some(request) = plan.control_request()? {
-            host.submit_audio(self.client, request)?;
-            self.api_calls += 1;
-        }
+        self.control_plan(host, &plan)?;
         self.policy = plan.next;
         self.stop_script_slots(host)
     }
@@ -626,13 +715,50 @@ impl AudioBridge {
         call: &NativeCall,
         host: &mut dyn HostServices,
     ) -> Result<bool> {
+        self.try_commit_with_skip(
+            machine,
+            call,
+            host,
+            &crate::native_skip::NativeSkipPolicy::default(),
+            crate::native_audio::AudioCallbackContext::default(),
+        )
+    }
+    pub fn try_commit_with_skip(
+        &mut self,
+        machine: &mut Machine,
+        call: &NativeCall,
+        host: &mut dyn HostServices,
+        skip: &crate::native_skip::NativeSkipPolicy,
+        context: crate::native_audio::AudioCallbackContext,
+    ) -> Result<bool> {
         machine.validate_receipt(call)?;
         if self.outer_music.is_some() || self.system_pending.is_some() {
             return Ok(false);
         }
         if self.pending.is_none() {
             let playing = host.audio_playing(self.client, self.policy.bindings.music)?;
-            let plan = self.policy.plan(call, &self.music, &self.sound, playing)?;
+            let admission = self.policy.admit_with_skip(
+                call,
+                &self.music,
+                &self.sound,
+                playing,
+                skip,
+                context,
+            )?;
+            let plan = admission.plan;
+            self.pending_music_read = admission.music_mark;
+            self.music_read_mark = None;
+            self.message_voice_start = None;
+            if let Some(channel) = admission.stop_before {
+                host.submit_audio(
+                    self.client,
+                    crysirror_core::service::AudioRequest::Stop {
+                        channel,
+                        fade_ms: 0.,
+                    },
+                )?;
+                self.api_calls += 1;
+            }
             if let Some(source) = plan.source.clone() {
                 let resolver = self.resolver.clone();
                 let task = self.pool.spawn(move |cancel| {
@@ -647,13 +773,8 @@ impl AudioBridge {
                     task,
                 });
             } else {
-                if let Some(request) = plan.control_request()? {
-                    host.submit_audio(self.client, request)?;
-                    self.api_calls += 1;
-                }
-                machine.acknowledge(call)?;
-                self.policy = plan.next;
-                return Ok(true);
+                self.control_plan(host, &plan)?;
+                return self.complete_callback(machine, call, plan);
             }
         }
         let pending = self.pending.take().unwrap();
@@ -665,14 +786,38 @@ impl AudioBridge {
             } => {
                 ensure!(receipt == *call, "NNN audio lookup receipt changed");
                 if let Some(path) = task.try_take()? {
-                    let request = match path {
-                        crate::resource_bridge::ResolvedAudio::Asset(path) => {
-                            plan.asset_request(path)?
-                        }
-                        crate::resource_bridge::ResolvedAudio::Encoded(source) => {
-                            plan.encoded_request(source)?
-                        }
-                    };
+                    if plan
+                        .source
+                        .as_ref()
+                        .is_some_and(|source| source.kind == crate::native_audio::SourceKind::Voice)
+                    {
+                        let ticket = match path {
+                            crate::resource_bridge::ResolvedAudio::Asset(path) => host
+                                .begin_audio_resource(
+                                    self.client,
+                                    crysirror_core::service::AudioAsset {
+                                        path,
+                                        frame_limit: None,
+                                    },
+                                    true,
+                                )?,
+                            crate::resource_bridge::ResolvedAudio::Encoded(source) => host
+                                .begin_encoded_audio_resource(
+                                    self.client,
+                                    "NNN native voice",
+                                    source,
+                                    true,
+                                )?,
+                        };
+                        self.api_calls += 1;
+                        self.pending = Some(Pending::VoiceResource {
+                            call: receipt,
+                            plan,
+                            ticket,
+                        });
+                        return Ok(false);
+                    }
+                    let request = self.source_request(host, &plan, path)?;
                     let ticket = host.begin_audio(self.client, request)?;
                     self.api_calls += 1;
                     self.pending = Some(Pending::Prepare {
@@ -688,6 +833,97 @@ impl AudioBridge {
                     });
                 }
                 Ok(false)
+            }
+            Pending::VoiceResource {
+                call: receipt,
+                plan,
+                ticket,
+            } => {
+                ensure!(receipt == *call, "NNN voice resource receipt changed");
+                let state = host.audio_resource_preparation(self.client, ticket)?;
+                match state.phase {
+                    AudioPreparePhase::Pending => {
+                        self.pending = Some(Pending::VoiceResource {
+                            call: receipt,
+                            plan,
+                            ticket,
+                        });
+                        Ok(false)
+                    }
+                    AudioPreparePhase::Failed => {
+                        host.release_audio_resource_preparation(self.client, ticket)?;
+                        bail!(
+                            "NNN voice resource preparation failed: {}",
+                            state.error.as_deref().unwrap_or("no diagnostic")
+                        )
+                    }
+                    AudioPreparePhase::Ready => {
+                        // Release the receipt even if metadata validation or
+                        // playback admission fails. Published source ownership
+                        // is independent and is released after the attempt.
+                        let prepared = (|| -> Result<_> {
+                            host.release_audio_resource_preparation(self.client, ticket)?;
+                            let resource = state.resource.ok_or_else(|| {
+                                anyhow::anyhow!("NNN ready voice has no resource")
+                            })?;
+                            let info = state.info.ok_or_else(|| {
+                                anyhow::anyhow!("NNN ready voice has no metadata")
+                            })?;
+                            ensure!(
+                                resource.client == self.client.0 && info.source_rate != 0,
+                                "NNN voice resource owner/rate"
+                            );
+                            let frames = info.source_frames.ok_or_else(|| {
+                                anyhow::anyhow!("NNN voice has no measured length")
+                            })?;
+                            let duration = u32::try_from(
+                                frames.checked_mul(1000).ok_or_else(|| {
+                                    anyhow::anyhow!("NNN voice duration overflow")
+                                })? / u64::from(info.source_rate),
+                            )?;
+                            let channel = match &plan.operation {
+                                AudioOperation::Play { channel, .. }
+                                | AudioOperation::MeasureVoice { channel } => *channel,
+                                _ => bail!("NNN voice preparation without voice operation"),
+                            };
+                            let native_channel = usize::try_from(
+                                channel
+                                    .checked_sub(self.policy.bindings.voice_base)
+                                    .ok_or_else(|| anyhow::anyhow!("NNN voice channel base"))?,
+                            )?;
+                            ensure!(native_channel < 8, "NNN voice channel bounds");
+                            let preparation = match &plan.operation {
+                                AudioOperation::Play { .. } => host
+                                    .begin_audio(self.client, plan.resource_request(resource)?)
+                                    .map(Some),
+                                AudioOperation::MeasureVoice { .. } => Ok(None),
+                                _ => unreachable!(),
+                            }?;
+                            Ok((native_channel, duration, preparation))
+                        })();
+                        // Admitted playback owns its immutable source lease;
+                        // disabled playback never allocates a mixer voice.
+                        let released = state
+                            .resource
+                            .map(|resource| host.release_audio_resource(self.client, resource))
+                            .transpose();
+                        let (native_channel, duration, preparation) = prepared?;
+                        self.voice_lengths_ms[native_channel] = Some(duration);
+                        if let Some(ticket) = preparation {
+                            self.api_calls += 1;
+                            self.pending = Some(Pending::Prepare {
+                                call: receipt,
+                                plan,
+                                ticket,
+                            });
+                            released?;
+                            Ok(false)
+                        } else {
+                            released?;
+                            self.complete_callback(machine, call, plan)
+                        }
+                    }
+                }
             }
             Pending::Prepare {
                 call: receipt,
@@ -712,15 +948,16 @@ impl AudioBridge {
                         });
                         Ok(false)
                     }
-                    AudioPreparePhase::Failed => bail!(
-                        "NNN shared audio preparation failed: {}",
-                        state.error.as_deref().unwrap_or("no diagnostic")
-                    ),
+                    AudioPreparePhase::Failed => {
+                        host.release_audio(self.client, ticket)?;
+                        bail!(
+                            "NNN shared audio preparation failed: {}",
+                            state.error.as_deref().unwrap_or("no diagnostic")
+                        )
+                    }
                     AudioPreparePhase::Ready => {
                         host.release_audio(self.client, ticket)?;
-                        machine.acknowledge(call)?;
-                        self.policy = plan.next;
-                        Ok(true)
+                        self.complete_callback(machine, call, plan)
                     }
                 }
             }

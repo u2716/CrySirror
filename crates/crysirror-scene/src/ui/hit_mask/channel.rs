@@ -49,6 +49,8 @@ impl WidgetHitMask {
             coverage: Arc::from(coverage),
             threshold,
             strict_bounds: false,
+            source_from_local: None,
+            regions: Vec::new(),
         })
     }
 }

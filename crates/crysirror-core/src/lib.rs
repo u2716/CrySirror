@@ -15,10 +15,12 @@ pub mod integer_fields;
 pub mod path;
 pub mod save;
 pub mod service;
+pub mod scene_checkpoint;
 pub mod state;
 pub mod vfs;
 pub mod vm;
 pub mod native_restore;
+pub mod random;
 
 use core::fmt;
 
@@ -55,6 +57,8 @@ impl core::error::Error for Error {}
 
 pub mod deferred_dispatch;
 
+pub mod key_hold;
+pub mod pointer_swipe;
 pub mod region_map;
 
 pub mod image_processing;

@@ -7,16 +7,41 @@ use crysirror_scene::{
     animation::{ScalarOscillator, ScalarTween, SignalFade, Waveform},
     layer::{Easing, ExternalMotionStamp, MotionStatus},
 };
+#[derive(Clone, Serialize, Deserialize)]
 pub(super) struct Group {
     pub layer: u32,
     stamp: Option<ExternalMotionStamp>,
     pub waves: BTreeMap<u8, Generator>,
 }
 impl Group {
+    pub(super) fn resume_clock(&mut self, since: u64, now: u64) {
+        for generator in self.waves.values_mut() {
+            generator.started = generator
+                .started
+                .saturating_add(now.saturating_sub(since.max(generator.started)));
+        }
+    }
+    pub(super) fn delay_clock(&mut self, delta: u64) {
+        for generator in self.waves.values_mut() {
+            generator.started = generator.started.saturating_add(delta);
+        }
+    }
+    /// Saved generators keep elapsed ages, not session clock values.
+    pub(super) fn to_ages(&mut self, now: u64) {
+        for generator in self.waves.values_mut() {
+            generator.started = now.saturating_sub(generator.started);
+        }
+    }
+    pub(super) fn from_ages(&mut self, now: u64) {
+        for generator in self.waves.values_mut() {
+            generator.started = now.saturating_sub(generator.started);
+        }
+    }
     pub(super) fn retire_registration(&mut self) {
         self.stamp = None;
     }
 }
+#[derive(Clone, Serialize, Deserialize)]
 pub(super) struct Generator {
     signal: ScalarOscillator,
     started: u64,
@@ -248,7 +273,7 @@ impl QlieVm {
         let registrations: Vec<_> = self
             .objects
             .iter()
-            .filter(|(_, o)| o.created && !o.preparing)
+            .filter(|(_, o)| o.thread == self.host_thread && o.created && !o.preparing)
             .filter_map(|(id, o)| {
                 o.generator
                     .as_ref()
@@ -279,7 +304,15 @@ impl QlieVm {
                 .stamp = Some(stamp);
         }
         let mut commands = Vec::new();
-        for o in self.objects.values_mut() {
+        let paused = self.game_pause_ms.filter(|_| {
+            self.host_thread == ThreadKind::Game && self.input_thread() == ThreadKind::System
+        });
+        let now = h.now_ms();
+        for o in self
+            .objects
+            .values_mut()
+            .filter(|o| o.thread == self.host_thread)
+        {
             let Some(group) = &mut o.generator else {
                 continue;
             };
@@ -289,16 +322,22 @@ impl QlieVm {
             let mut values = [[0f32; 3]; 3];
             for (&slot, g) in &group.waves {
                 for axis in 0..3 {
-                    let elapsed = h.now_ms().saturating_sub(g.started);
+                    let elapsed = paused
+                        .map_or(now, |pause| pause.max(g.started))
+                        .saturating_sub(g.started);
                     values[g.target as usize][axis] += g.amplitude[axis]
                         * g.envelope(elapsed)?
                         * g.signal
                             .sample(elapsed, u32::from(slot) * 3 + axis as u32)?;
                 }
             }
-            group
-                .waves
-                .retain(|_, g| !g.signal.complete(h.now_ms().saturating_sub(g.started)));
+            group.waves.retain(|_, g| {
+                !g.signal.complete(
+                    paused
+                        .map_or(now, |pause| pause.max(g.started))
+                        .saturating_sub(g.started),
+                )
+            });
             stamp.revision = stamp
                 .revision
                 .checked_add(1)

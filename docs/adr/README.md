@@ -1,14 +1,13 @@
 # Architecture decision records
 
-ADRs record design choices, ownership boundaries and their evolution. IDs and
-filenames remain stable so source references, test receipts and later decisions
-continue to resolve. An implemented ADR remains useful design documentation.
+ADRs record design choices, ownership boundaries and their evolution. Retained
+IDs and filenames stay stable; removed obsolete IDs are not reused. An
+implemented ADR remains useful design documentation.
 
 - **Accepted**: the decision is binding; this does not by itself establish implementation.
 - **Implemented scope/profile**: the described slice has an implementation and its
   recorded validation; wider capabilities and current regressions remain separate.
 - **Partial/proposed**: required work or a design remains unimplemented.
-- **Superseded**: follow the named replacement; the old recipe is retired.
 - **Historical audit**: evidence for a dated source checkpoint, not a current backlog.
 
 The 2026-11-03 review reconciles old missing-feature claims with follow-up ADRs.
@@ -61,7 +60,7 @@ tracks remaining engine capabilities.
 | [0044](0044-archive-format-resource-plugins.md) | Capability archive resources and explicit format plugins | implemented initial archive contract; expanded migration and variant limits in 0065 |
 | [0045](0045-rapier-shared-physics.md) | Persistent shared Rapier physics | implemented bounded Rapier backend/API scope; CPU/runtime evidence recorded |
 | [0046](0046-native-image-resource-pipeline.md) | Native image resources through the shared engine | implemented named image-pipeline scope; per-variant limits in resource ledgers |
-| [0047](0047-engine-api-capability-extraction.md) | engine API capability extraction, no hosted engines | accepted active ownership rule; former hosted paths removed |
+| [0047](0047-engine-api-capability-extraction.md) | Engine API capability extraction | accepted for adopt; integrated mode and contracts in 0102 |
 | [0048](0048-reallive-vm-engine-apis.md) | original RealLive VM calls shared engine APIs | API bridge implemented; opening-profile evidence separate |
 | [0049](0049-multithreaded-tasks-and-async-assets.md) | Bounded engine workers and asynchronous resources | implemented stage-one workers; does not complete 0050 |
 | [0050](0050-engine-wide-async-execution.md) | Asynchronous, multithreaded execution across the entire engine | accepted engine-wide requirement; partially implemented |
@@ -108,30 +107,22 @@ tracks remaining engine capabilities.
 | [0092](0092-shared-documents-and-native-json-facade.md) | Shared document grammar and native JSON facade | implemented bounded document/JSON scope; synchronous read boundaries remain |
 | [0093](0093-shared-vector-and-native-draw-facade.md) | Shared vector geometry and native LayerExDraw facade | implemented solid-linear vector/native facade; full GDI semantics remain open |
 | [0094](0094-isolated-layer-subtree-crossfades.md) | Isolated retained-layer subtree crossfades | implemented bounded isolated subtree transitions; immutable-resource limits remain explicit |
-| [0095](0095-avg32-installed-games-shared-raster.md) | Installed AVG32 games over a shared raster device | implemented first-class installed-game AVG32 runtime; replaces 0062 runtime, not full compatibility |
+| [0095](0095-avg32-installed-games-shared-raster.md) | Installed AVG32 games over a shared raster device | implemented first-class installed-game AVG32 runtime; full compatibility remains partial |
 | [0096](0096-cxdec-xp3-content-filter-and-special-index.md) | CXDEC XP3 content filter and indirect Special filename index | implemented bounded static CXDEC/Special scope; interpreted filters remain proposed in 0097 |
 | [0097](0097-krkr-protection-interpreted-and-lifted-filters.md) | KiriKiri archive protection without JIT, brute force or bulk extraction | proposed interpreted/lifted filter design; static CXDEC/HXV4 remain the implemented paths |
 | [0098](0098-client-scoped-gpu-mesh-frame-history.md) | Client-scoped GPU mesh frame history | implemented client-scoped mesh-frame history profile; remaining async scope explicit |
 | [0099](0099-staged-original-save-restore.md) | Staged original-save restoration | implemented bounded original-restore coordinator; native consumers remain partial |
 
 | [0100](0100-browser-host-and-capability-runtime.md) | Browser host and injected Runtime capabilities | 2D/PBR host and shared CPU workers; native adapters and broader migration remain partial |
-
-## Superseded decisions
-
-| ADR | Decision | Status / follow-up |
-| --- | --- | --- |
-| [0008](0008-native-engine-integration.md) | Native engine platform-seam hosting (superseded) | superseded by 0047; hosted acceptance withdrawn |
-| [0009](0009-siglus-full-engine.md) | Siglus native renderer hosting (superseded) | superseded by 0047; original renderer/plugin recipe retired |
-| [0037](0037-bgi-local-runtime-trial.md) | local BGI trial and a device-free CPU embedding experiment | superseded by 0047; local hosting experiment retired |
-| [0039](0039-bgi-shared-service-adapter.md) | BGI as a native VM calling CrySirror services | superseded by 0047; old integration acceptance withdrawn |
-| [0062](0062-avg32-portable-vm-engine-apis.md) | Original AVG32 VM library with engine service commands | runtime superseded by 0095; shared arithmetic/source evidence retained |
+| [0101](0101-native-host-packages-and-console-seams.md) | Native packages and console host seams | mobile/macOS packaging and retained sessions; console device backends deferred |
+| [0102](0102-engine-adoption-and-runtime-integration.md) | Engine adoption and runtime integration | accepted two-mode policy; documentation, safe analysis, managed outputs and platform boundaries |
 
 ## Historical verification and source audits
 
 | ADR | Decision | Status / follow-up |
 | --- | --- | --- |
 | [0034](0034-siglus-runtime-verification.md) | Verify Siglus execution separately from shared engine features | historical verification checkpoint; later native messages in 0061 |
-| [0035](0035-native-family-coverage.md) | RealLive / AVG32 source coverage and integration boundary | historical source audit; later adapters in 0048/0062/0095 |
+| [0035](0035-native-family-coverage.md) | RealLive / AVG32 source coverage and integration boundary | historical source audit; later adapters in 0048/0095 |
 | [0036](0036-siglus-service-boundary-audit.md) | Siglus shared-service coverage must be verified through the native VM | historical boundary audit; later per-family native mappings in NATIVE_ADAPTERS |
 
 ## Requirement backlog
@@ -147,11 +138,9 @@ scope and its recorded behavior validation.
 | R4 | Engine lifecycle abstracted (init/start/update/fixed/late/pause/stop) | 0004 | implemented in crysirror-engine |
 | R5 | Not script-centric, but can export OOP API to scripts | 0004, 0005 | implemented for JS |
 | R6 | Default scripting: Rust-implemented TS/JS | 0005 | Boa runtime host + Oxc transpile |
-| R7 | Other VMs (siglus_rs SceneVm, RFVP) plug in as script hosts | 0005, 0008, 0048, 0061, 0062 | independent first-class native adapters; per-profile implementation and acceptance tracked in NATIVE_ADAPTERS |
+| R7 | Other VMs (siglus_rs SceneVm, RFVP) plug in as script hosts | 0005, 0047, 0048, 0061, 0095 | independent first-class native adapters; per-profile implementation and acceptance tracked in NATIVE_ADAPTERS |
 | R8 | Abstract filesystem; native engines keep their own FS semantics | 0006 | mount table + providers |
 | R9 | Load Blender models | 0007, 0010 | glTF 2.0 import incl. textured PBR; .blend via Blender CLI export |
 | R10 | Ray tracing | 0003, 0007, 0051, 0055–0060 | native primary/shadows, GGX reflections, probe and per-pixel GI; broader hit shading/denoising and multi-device validation remain |
 | R11 | DLSS-class upscaling | 0007 | capability contract only; vendor SDKs not distributed |
 | R12 | Asynchronous/multithreaded execution across every engine subsystem | 0049, 0050, 0052 | required; resource/pose/extraction, text/audio and staged restore worker paths exist; full subsystem migration remains partial |
-
-- [0101 Native packages and console seams](0101-native-host-packages-and-console-seams.md)

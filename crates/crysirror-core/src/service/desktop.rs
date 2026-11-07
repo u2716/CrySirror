@@ -42,9 +42,20 @@ pub struct DesktopDialogFilter {
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DesktopRequest {
+    /// Report one interval of display activity through the presenting host.
+    /// This does not change the user's screensaver or power preferences and
+    /// does not acquire an indefinitely held wake lock.
+    PulseDisplayActivity,
+    /// Ask the presenting host to open an HTTP(S) URL in its default viewer.
+    /// This grants no executable path, shell command or arbitrary URI scheme.
+    OpenUrl {
+        url: String,
+    },
     ClipboardWrite {
         text: String,
     },
+    /// Current plain-text clipboard contents (empty when it holds no text).
+    ClipboardRead,
     UserName,
     ComputerName,
     SpecialFolder {
@@ -69,6 +80,16 @@ impl DesktopRequest {
             }
         };
         match self {
+            Self::OpenUrl { url } => {
+                text(url, 8192)?;
+                let (scheme, rest) = url.split_once("://").ok_or(Error::Invalid("desktop URL"))?;
+                if !(scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https"))
+                    || url.chars().any(|c| c.is_control() || c.is_whitespace())
+                    || rest.split(['/', '?', '#']).next().is_none_or(str::is_empty)
+                {
+                    return Err(Error::Invalid("desktop HTTP(S) URL"));
+                }
+            }
             Self::ClipboardWrite { text: s } => text(s, 1024 * 1024)?,
             Self::FileDialog {
                 title,
@@ -100,6 +121,8 @@ impl DesktopRequest {
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DesktopResponse {
+    DisplayActivityPulsed,
+    Opened,
     ClipboardWritten,
     Text(String),
     Selection(Option<DesktopPath>),

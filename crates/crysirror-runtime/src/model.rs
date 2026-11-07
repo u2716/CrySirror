@@ -34,7 +34,7 @@ fn background() -> [u8; 4] {
 #[serde(deny_unknown_fields)]
 pub struct ClientSpec {
     pub name: String,
-    /// A factory name. "siglus" is built in; hosts register other original
+    /// A factory name. Hosts register original engine implementations;
     /// interpreters such as "rfvp" and "bgi" through their adapter crates.
     pub adapter: String,
     pub game: String,
@@ -287,9 +287,8 @@ impl Project {
                     c.program.is_empty(),
                     "Siglus uses original bytecode, not data VM actions"
                 );
-                let config: crysirror_siglus_vm::adapter::Config =
-                    serde_json::from_value(c.config.clone())?;
-                config.validate()?;
+                // Configuration belongs to the selected factory. The default player
+                // uses integrated Siglus; the reference VM has a different schema.
             }
             if c.adapter == "bgi" {
                 ensure!(c.program.is_empty(), "BGI uses original bytecode, not data VM actions");
@@ -322,7 +321,7 @@ impl Project {
     }
     pub fn require_builtin_adapters(&self) -> Result<()> {
         for c in &self.clients {
-            if !matches!(c.adapter.as_str(), "crysirror-script-v1" | "siglus") {
+            if c.adapter != "crysirror-script-v1" {
                 bail!("native adapter '{}' is not linked; fetching its repository does not connect its VM", c.adapter);
             }
         }

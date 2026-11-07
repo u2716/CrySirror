@@ -18,6 +18,7 @@ struct Pending {
     owner: ClientId,
     call: ExternalCall,
     task: Task<bool>,
+    owned_strings: usize,
 }
 pub(crate) struct NativeFiles {
     owner: ClientId,
@@ -33,6 +34,12 @@ impl NativeFiles {
     }
     pub(crate) fn io_pool(&self) -> TaskPool {
         self.pool.clone()
+    }
+    pub(crate) fn hll_path(&self, raw: &[u8], default: Mount) -> Result<(Mount, String)> {
+        let raw = raw.split(|byte| *byte == 0).next().unwrap();
+        ensure!(!raw.is_empty() && raw.len() < 260, "System4 File native filename extent");
+        let name = crysirror_resource::text_stream::decode_shift_jis(raw, 4096)?;
+        resolve(&self.folder, &name, default)
     }
     pub(crate) fn save_path(&self, bytes: &[u8]) -> Result<(VfsPath, VfsPath)> {
         let bytes = bytes.split(|b| *b == 0).next().unwrap();
@@ -93,7 +100,7 @@ impl NativeFiles {
             );
             return Ok(None);
         };
-        if !matches!(code, 10 | 12 | 14 | 16) {
+        if !matches!(code, 10 | 12 | 14 | 16 | 26 | 28) {
             ensure!(
                 self.pending.is_none(),
                 "System4 changed pending file syscall"
@@ -119,6 +126,62 @@ impl NativeFiles {
                     .clone(),
             )?;
             return Ok(Some(Dispatch::Completed));
+        }
+        if matches!(code, 26 | 28) && self.pending.is_none() {
+            machine.validate_system_owned_strings(call, if code == 28 { 2 } else { 1 })?;
+            let destination =
+                machine
+                    .heap
+                    .string(machine.stack_value(if code == 28 { 1 } else { 0 })?)?;
+            let (destination, _) = self.save_path(destination.as_slice())?;
+            let source = if code == 28 {
+                let source = machine.heap.string(machine.stack_value(0)?)?;
+                Some(self.save_path(source.as_slice())?)
+            } else {
+                None
+            };
+            let storage = host.storage(owner)?;
+            let task = self.pool.spawn(move |cancel| {
+                cancel.check()?;
+                let resolve = |path: &VfsPath| {
+                    crysirror_resource::capability_lookup::resolve_ascii_case_insensitive(
+                        storage.as_ref(),
+                        path,
+                    )
+                };
+                let existing = resolve(&destination)?;
+                if let Some((source, original)) = source {
+                    let source = if let Some(path) = resolve(&source)? {
+                        path
+                    } else if let Some(path) = resolve(&original)? {
+                        path
+                    } else {
+                        return Ok(false);
+                    };
+                    let reader = storage.open_read(&source)?;
+                    let length = reader.len()?;
+                    ensure!(length <= 64 * 1024 * 1024, "System4 save-copy byte budget");
+                    let bytes = crysirror_resource::read_all(reader.as_ref(), length)?;
+                    cancel.check()?;
+                    // The source is fully read before publication, including a
+                    // copy onto itself. Atomic writes belong to ClientStorage.
+                    native_io_bool(
+                        storage.write_atomic(existing.as_ref().unwrap_or(&destination), &bytes),
+                    )
+                } else {
+                    let Some(path) = existing else {
+                        return Ok(false);
+                    };
+                    cancel.check()?;
+                    native_io_bool(storage.remove(&path))
+                }
+            })?;
+            self.pending = Some(Pending {
+                owner,
+                call: call.clone(),
+                task,
+                owned_strings: if code == 28 { 2 } else { 1 },
+            });
         }
         if self.pending.is_none() {
             let raw = machine.heap.string(machine.stack_value(0)?)?;
@@ -157,6 +220,7 @@ impl NativeFiles {
                 owner,
                 call: call.clone(),
                 task,
+                owned_strings: 1,
             });
         }
         let pending = self.pending.as_mut().unwrap();
@@ -167,11 +231,25 @@ impl NativeFiles {
         let Some(found) = pending.task.try_take()? else {
             return Ok(Some(Dispatch::WaitUntil(host.now_ms().saturating_add(1))));
         };
-        machine.complete_system_owned_string(call, Some(i32::from(found)))?;
+        machine.complete_system_owned_strings(
+            call,
+            pending.owned_strings,
+            Some(i32::from(found)),
+        )?;
         self.pending = None;
         Ok(Some(Dispatch::Completed))
     }
 }
+// Original file_copy/delete return false for ordinary filesystem failure;
+// a missing host capability or violated validation budget remains a visible error.
+fn native_io_bool(result: crysirror_core::Result<()>) -> Result<bool> {
+    match result {
+        Ok(()) => Ok(true),
+        Err(Error::NotFound | Error::ReadOnly | Error::Io(_)) => Ok(false),
+        Err(error) => Err(error.into()),
+    }
+}
+
 fn cp932(text: &str) -> Result<Vec<u8>> {
     let (bytes, _, errors) = encoding_rs::SHIFT_JIS.encode(text);
     ensure!(

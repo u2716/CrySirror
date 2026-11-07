@@ -29,10 +29,9 @@ Regenerate without executing tests with
   `simulation.rs`. Shared native-resource limits, transforms, LZSS, file kinds, WAVE containers and bitmap operations come from `crysirror-resource` and `crysirror-image`. Descriptions come from their
   `///` comments. Defaults come from serde: a minimal value is parsed and
   then serialized again.
-- **Adapter configs.** The `Config` structs of the Siglus, native RealLive and
-  original AVG32 VM adapters. Siglus's explicit `MessageWindow` fields are also
-  exported as a data specification. Removed hosted-engine configurations are
-  not accepted.
+- **Adapter configs.** The default integrated Siglus `Config` and other native adapter
+  configurations. The retained reference Siglus `MessageWindow` fields remain
+  exported as a data specification; they are not default integrated settings.
 
 Native application embedding uses the [C/JNI host ABI](../NATIVE_PACKAGING.md)
 and `crysirror-console` Rust host traits. These do not register engine script

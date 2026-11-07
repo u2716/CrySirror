@@ -25,7 +25,7 @@ pub(super) fn gain_finished(voice: &mut Voice) -> bool {
 /// advance on the output clock. Explicit Pause/dependency policies are applied
 /// before choosing this path. Return true only when an ordinary voice retires.
 pub(super) fn tick_inactive(voice: &mut Voice) -> bool {
-    silent_transport_tick(voice);
+    if silent_transport_tick(voice) { return true; }
     voice.gain.step();
     voice.pan.step();
     for gain in &mut voice.stereo_gain {

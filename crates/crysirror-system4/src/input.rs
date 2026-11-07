@@ -11,6 +11,7 @@ pub struct Input {
     flags: u64,
     wheel: i32,
     journal_revision: Option<(u64, u64)>,
+    modal_held: u64,
 }
 impl Input {
     pub fn observe(&mut self, observation: InputObservation) {
@@ -31,7 +32,18 @@ impl Input {
         self.apply(sample.frame.buttons_down, sample.frame.buttons_pressed);
         self.journal_revision = Some((epoch, sample.sequence));
     }
+    pub(crate) fn suppress_modal_buttons(&mut self, down: u64) {
+        self.modal_held |= down;
+        self.flags = 0;
+        self.wheel = 0;
+        self.physical = 0;
+        self.revision = None;
+        self.journal_revision = None;
+    }
     fn apply(&mut self, down: u64, pressed: u64) {
+        self.modal_held &= down;
+        let down = down & !self.modal_held;
+        let pressed = pressed & !self.modal_held;
         self.flags = down & (self.flags | pressed | !self.physical);
         self.physical = down;
         if pressed & buttons::WHEEL_UP != 0 {

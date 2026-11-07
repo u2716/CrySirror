@@ -16,7 +16,7 @@ pub fn find_scene_pck_path_for_append(_: &Path, _: &str) -> Result<PathBuf> {
     bail!("Siglus append pack must be loaded through client capability")
 }
 pub fn load_scene_pck_decode_options(_: &Path) -> Result<crate::scene_pck::ScenePckDecodeOptions> {
-    bail!("Siglus decode options must be supplied explicitly; no bundled game keys")
+    bail!("Siglus append decode options must be prepared through the client capability")
 }
 
 pub struct GameFile(Cursor<Vec<u8>>);

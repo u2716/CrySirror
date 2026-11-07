@@ -36,7 +36,7 @@ fn coverage_passes_through_transparency_and_survives_saved_state_without_private
         size: [3, 2],
         coverage: vec![0, 1, 255, 255, 0, 255].into(),
         threshold: 1,
-        strict_bounds: false,
+        strict_bounds: false, source_from_local: None, regions: Vec::new(),
     };
     u.apply_batch(
         ClientId(1),
@@ -95,7 +95,7 @@ fn strict_local_edges_and_keyboard_are_separate_and_invalid_masks_are_atomic() {
         size: [3, 2],
         coverage: vec![255].into(),
         threshold: 1,
-        strict_bounds: false,
+        strict_bounds: false, source_from_local: None, regions: Vec::new(),
     };
     assert!(u
         .apply_batch(

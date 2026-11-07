@@ -153,6 +153,142 @@ impl NativeAdapter {
             restored_original: Some((original, profile)),
         })
     }
+    /// Pure logical producer for the pending native save boundary. Storage,
+    /// thumbnail composition and the remaining original actors are prepared
+    /// separately; capturing these fields never acknowledges PRINT/SELECT.
+    pub(crate) fn original_save_execution(&self) -> Result<crate::native_save::LiveExecution> {
+        anyhow::ensure!(
+            self.original_input_mode().is_some(),
+            "NNN original save requires a drained native PRINT/SELECT actor"
+        );
+        crate::native_save::LiveExecution::capture(
+            self.session
+                .as_ref()
+                .context("NNN original save session absent")?,
+            self.configuration
+                .as_ref()
+                .context("NNN original save configuration absent")?,
+            self.pending.as_ref(),
+        )
+    }
+    pub(crate) fn write_original_execution_effects(
+        &self,
+        file: &mut crate::native_save::NativeSaveFile,
+    ) -> Result<()> {
+        let state = self.original_save_execution()?;
+        let effects = self.bridge.original_effect_records()?;
+        let mode = self
+            .original_input_mode()
+            .context("NNN original save actor absent")?;
+        // Work on an original candidate: malformed sections cannot partly
+        // overwrite the caller's native slot when a later producer fails.
+        let mut candidate = file.clone();
+        candidate.replace_live_execution(&state, mode)?;
+        candidate.replace_effect_records(&effects)?;
+        self.bridge
+            .write_original_actor_state(&mut candidate, self.pending.as_ref())?;
+        *file = candidate;
+        Ok(())
+    }
+    pub(crate) fn begin_native_thumbnail(
+        &self,
+        host: &mut dyn HostServices,
+    ) -> Result<crate::native_thumbnail::ThumbnailJob> {
+        anyhow::ensure!(
+            self.original_input_mode().is_some(),
+            "NNN native save outside stable PRINT/SELECT"
+        );
+        let configuration = self
+            .configuration
+            .as_ref()
+            .context("NNN native save configuration absent")?;
+        crate::native_save::LegacySaveProfile::for_configuration(configuration)?
+            .validate_live_actors()?;
+        let policy = crate::native_thumbnail::ThumbnailPolicy::prepare(
+            &configuration.setup,
+            self.bridge.canvas_size(),
+        )?;
+        policy.begin(self.bridge.client(), self.pool.clone(), host)
+    }
+    pub(crate) fn produce_native_save(
+        &mut self,
+        thumbnail: crate::native_thumbnail::NativeThumbnail,
+        stamp: crate::native_system_file::SystemStamp,
+    ) -> Result<crate::native_save::NativeSaveFile> {
+        let configuration = self
+            .configuration
+            .clone()
+            .context("NNN native save configuration absent")?;
+        let profile = crate::native_save::LegacySaveProfile::for_configuration(&configuration)?;
+        let mut file = crate::native_save::NativeSaveFile::for_live(&profile, stamp, thumbnail)?;
+        self.write_original_execution_effects(&mut file)?;
+        let state = self
+            .session
+            .as_ref()
+            .context("NNN native save session absent")?;
+        let variables = if let Some(call) = self.pending.as_ref() {
+            state.machine().native_variables_candidate(call)?
+        } else {
+            state
+                .machine()
+                .variables()
+                .context("NNN native save variable bank absent")?
+                .clone()
+        };
+        let date = variables.read_calculated(
+            configuration
+                .variable_names
+                .index(b"date")
+                .unwrap_or(u16::MAX),
+        )?;
+        let year = if let Some(id) = configuration.variable_names.index(b"year") {
+            variables.read_calculated(id)?
+        } else {
+            2000
+        };
+        file.replace_status_word(16, date / 100)?;
+        file.replace_status_word(17, date % 100)?;
+        file.replace_status_word(
+            19,
+            crysirror_core::service::integer_weekday_wrapping(year, date / 100, date % 100),
+        )?;
+        let mut saved_remaining = None;
+        if configuration
+            .setup
+            .integer(b"specialNumberForSaveSetFlag")?
+            .unwrap_or(0)
+            != 0
+        {
+            let fallback = encoding_rs::SHIFT_JIS.encode("残り回数").0;
+            let name = configuration
+                .setup
+                .parameter(b"specialNumberForSaveVarName")
+                .unwrap_or(fallback.as_ref());
+            if let Some(id) = configuration.variable_names.index(name) {
+                let value = variables.read_calculated(id)?;
+                file.replace_status_word(46, value)?;
+                saved_remaining = Some(value);
+            }
+        }
+        file.validate(&profile)?;
+        //53ad20's GetVarData calls are live native reads (the configured
+        // special save number may even be rnd). Retain their shared RNG
+        // outcome without acknowledging or advancing the suspended wait.
+        let machine = self
+            .session
+            .as_mut()
+            .context("NNN native save session absent")?
+            .machine_mut();
+        if let Some(call) = self.pending.as_ref() {
+            machine.update_native_variables(call, variables)?;
+        } else {
+            machine.replace_variables(variables)?;
+        }
+        if let Some(value) = saved_remaining {
+            self.bridge.commit_saved_remaining(value);
+        }
+        Ok(file)
+    }
     pub(crate) fn original_restore_job(
         &self,
         bytes: Arc<[u8]>,
@@ -214,10 +350,7 @@ impl NativeAdapter {
             ),
             "NNN background native outer mode profile"
         );
-        anyhow::ensure!(
-            boot.project.index(&name).is_some(),
-            "NNN background program original membership"
-        );
+        boot.resources.script(&name)?;
         let allow_read_marks = boot.setup.integer(b"backScriptSetCGOkFlag")?.unwrap_or(0) != 0;
         let mut variables = boot
             .session
@@ -248,9 +381,10 @@ impl NativeAdapter {
             matches!(
                 mode,
                 crate::native_shell::NativeMode::Opening | crate::native_shell::NativeMode::Title
-            ) && state.configuration.project.index(&name).is_some(),
-            "NNN outer background original membership/mode"
+            ),
+            "NNN outer background original mode"
         );
+        state.configuration.resources.script(&name)?;
         let mut variables = state
             .machine
             .variables()
@@ -448,8 +582,10 @@ impl NativeAdapter {
         budget: u32,
         schedule_next: bool,
     ) -> Result<VmYield> {
+        self.bridge.set_frame_admission(schedule_next);
         if schedule_next {
             self.input_snapshot = input;
+            self.bridge.observe_message_keys(input);
         }
         if let Some(error) = &self.error {
             anyhow::bail!("System-NNN terminal error: {error}");
@@ -465,6 +601,9 @@ impl NativeAdapter {
             // waits precede the next original instruction; no fake callback is
             // acknowledged and no worker batch may run while they are active.
             if !schedule_next {
+                let session = self.session.as_mut().context("NNN saved session absent")?;
+                self.bridge
+                    .poll_saved_frame_dependency(session.machine_mut(), host)?;
                 return Ok(VmYield::WaitForInput);
             }
             anyhow::ensure!(
@@ -507,11 +646,13 @@ impl NativeAdapter {
             }
         }
         if let Some(call) = self.pending.as_ref() {
-            self.bridge.set_system_script(
-                self.configuration
-                    .as_ref()
-                    .and_then(|configuration| configuration.project.index(&self.observed_script)),
-            );
+            self.bridge
+                .set_system_script(self.configuration.as_ref().map(|configuration| {
+                    configuration
+                        .project
+                        .index(&self.observed_script)
+                        .unwrap_or(0)
+                }));
             let program = self.session.as_ref().unwrap().program().clone();
             if !self.bridge.try_commit_with_context(
                 self.session.as_mut().unwrap().machine_mut(),
@@ -699,8 +840,34 @@ impl NativeAdapter {
     pub fn configuration(&self) -> Option<&Arc<NativeConfiguration>> {
         self.configuration.as_ref()
     }
+    /// Original Load may interrupt a stable PRINT/SELECT actor, never a VM
+    /// worker or a half-published resource/native callback.
+    pub(crate) fn original_input_mode(&self) -> Option<i32> {
+        if self.worker.is_some()
+            || self.error.is_some()
+            || self.background_loop.is_some()
+            || self.session.is_none()
+            || self.bridge.scene_replay_active()
+            || self.bridge.dependency_pending()
+        {
+            return None;
+        }
+        match self.pending.as_ref().map(|call| &call.payload) {
+            Some(crate::machine::Payload::Message { .. }) => Some(10),
+            Some(crate::machine::Payload::Selection { .. }) => Some(9),
+            None => match self.bridge.wait_kind(None) {
+                "saved_message_input" => Some(10),
+                "saved_selection_input" => Some(9),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
 }
 impl VmAdapter for NativeAdapter {
+    fn presentation_pending(&self) -> bool {
+        self.bridge.presentation_pending()
+    }
     fn engine_id(&self) -> &'static str {
         "system-nnn"
     }

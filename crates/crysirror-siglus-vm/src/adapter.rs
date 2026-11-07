@@ -59,8 +59,8 @@ pub struct Config {
     /// Asset path of a UTF-8 Gameexe ini or encoded Gameexe.dat, if any.
     #[serde(default)]
     pub gameexe: Option<String>,
-    /// Capability-relative key.toml containing caller-owned scene/Gameexe
-    /// decode materials. Keys are never guessed or embedded in the adapter.
+    /// Optional capability-relative key.toml overrides. Native bootstrap uses
+    /// upstream fixed tables and resource-pair recovery when material is absent.
     #[serde(default)]
     pub key_file: Option<String>,
     /// Native resource path → asset path aliases (at most 4096).
@@ -138,6 +138,9 @@ pub struct SiglusVm {
     capture: capture::FrameCapture,
     catalog_job: Option<crysirror_tasks::Task<Arc<crysirror_resource::cg_catalog::CgCatalog>>>,
     catalog_pool: Option<crysirror_tasks::TaskPool>,
+    decode_job: Option<crysirror_tasks::Task<crate::key_toml::KeyTomlConfig>>,
+    decode_pool: Option<crysirror_tasks::TaskPool>,
+    decoded_materials: Option<crate::key_toml::KeyTomlConfig>,
 }
 fn err(e: impl std::fmt::Display) -> Error {
     Error::Io(format!("{e:#}"))
@@ -185,6 +188,9 @@ impl SiglusVm {
             capture: Default::default(),
             catalog_job: None,
             catalog_pool: None,
+            decode_job: None,
+            decode_pool: None,
+            decoded_materials: None,
         })
     }
     fn path(key: &str) -> Result<VfsPath> {
@@ -227,7 +233,12 @@ impl SiglusVm {
         }
         Ok(())
     }
-    fn boot(&mut self, host: &mut dyn HostServices) -> Result<()> {
+    fn boot(&mut self, host: &mut dyn HostServices) -> Result<bool> {
+        if let Some(job) = self.decode_job.as_mut() {
+            let Some(materials) = job.try_take()? else { return Ok(false) };
+            self.decoded_materials = Some(materials);
+            self.decode_job = None;
+        }
         let key = format!("asset/{}", self.state.config.scene);
         self.fetch(host, &key)?;
         let bytes = self
@@ -243,7 +254,7 @@ impl SiglusVm {
         } else {
             SceneStringCodec::Xor
         };
-        let materials = if let Some(path) = self.state.config.key_file.clone() {
+        let mut materials = if let Some(path) = self.state.config.key_file.clone() {
             let key = format!("asset/{path}");
             self.fetch(host, &key)?;
             let data = self
@@ -273,11 +284,28 @@ impl SiglusVm {
         } else {
             crate::key_toml::KeyTomlConfig::default()
         };
+        crate::decode_material::apply_defaults(&mut materials);
         let mut ctx = CommandContext::new(PathBuf::from("asset"));
         ctx.ui.window = self.state.config.message_window.clone();
         if let Some(name) = self.state.config.gameexe.clone() {
             let k = format!("asset/{name}");
             self.fetch(host, &k)?;
+            if self.state.config.format == "pck" {
+                if let Some(prepared) = self.decoded_materials.as_ref() {
+                    materials = prepared.clone();
+                } else {
+                    let game = self.state.io.files.get(&k).context("Gameexe resource missing")?.clone();
+                    let scene = self.state.io.files.get(&key).context("Scene resource missing")?.clone();
+                    let pool = self.decode_pool.get_or_insert(crysirror_tasks::TaskPool::new("siglus-decode-material", 1, 1)?);
+                    self.decode_job = Some(pool.spawn(move |cancel| {
+                        cancel.check()?;
+                        let result = crate::decode_material::resolve(&game, &scene, materials)?;
+                        cancel.check()?;
+                        Ok(result)
+                    })?);
+                    return Ok(false);
+                }
+            }
             let b = self
                 .state
                 .io
@@ -290,15 +318,7 @@ impl SiglusVm {
             {
                 text.to_owned()
             } else {
-                let options = crate::gameexe::GameexeDecodeOptions {
-                    exe_key16: materials.exe_key16,
-                    base_angou_code: materials.base_angou_code.clone(),
-                    game_angou_code: materials.game_angou_code.clone(),
-                    chain_order: materials.chain_order.clone().unwrap_or_else(|| {
-                        crate::gameexe::GameexeDecodeOptions::default().chain_order
-                    }),
-                    ..Default::default()
-                };
+                let options = crate::decode_material::game_options(&materials);
                 crate::gameexe::decode_gameexe_dat_bytes(b, &options)
                     .context("native Gameexe decode")?
                     .0
@@ -395,7 +415,8 @@ impl SiglusVm {
         vm.engine_validate()?;
         self.state.vm = Some(vm);
         self.begin_catalog(host)?;
-        Ok(())
+        self.decoded_materials = None;
+        Ok(true)
     }
     fn resolve_io(
         &mut self,
@@ -527,6 +548,11 @@ impl SiglusVm {
         platform_time::scoped(now, || -> Result<VmYield> {
             if self.state.vm.is_none() {
                 self.boot(host)?;
+                return Ok(VmYield::BudgetExhausted);
+            }
+            if self.catalog_job.is_some() {
+                self.poll_catalog()?;
+                return Ok(VmYield::BudgetExhausted);
             }
             if !self.poll_catalog()? {
                 return Ok(VmYield::BudgetExhausted);
@@ -905,6 +931,9 @@ impl SiglusVm {
     }
 }
 impl VmAdapter for SiglusVm {
+    fn preparation_pending(&self) -> bool {
+        self.state.vm.is_none() || self.decode_job.is_some() || self.catalog_job.is_some()
+    }
     fn engine_id(&self) -> &'static str {
         "siglus"
     }
@@ -920,6 +949,9 @@ impl VmAdapter for SiglusVm {
         self.execute(host, input, budget).map_err(err)
     }
     fn snapshot(&self) -> crysirror_core::Result<Vec<u8>> {
+        if self.decode_job.is_some() {
+            return Err(Error::Unsupported("Siglus decode material preparation snapshot"));
+        }
         if self.catalog_job.is_some() {
             return Err(Error::Unsupported("Siglus catalogue preparation snapshot"));
         }
@@ -1019,6 +1051,8 @@ impl VmAdapter for SiglusVm {
         }
         self.events.invalidate();
         self.catalog_job = None;
+        self.decode_job = None;
+        self.decoded_materials = None;
         self.state = state;
         self.pending_audio = None;
         self.object_strings = Default::default();

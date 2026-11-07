@@ -47,14 +47,15 @@ pub(super) fn key(assets: &Assets, owner: u32, paint: &Paint) -> Result<String> 
         baseline: phase(g.baseline),
     };
     Ok(format!(
-        "{}:{}",
+        "{}:{}:raster={:?}",
         text.glyph_cell_key(font, request)?,
         style_key(
             *bold,
             blur,
             outline,
             horizontal_scale(&text, font, g, *size)?
-        )
+        ),
+        g.style.map_or(Default::default(),|s|s.raster)
     ))
 }
 fn horizontal_scale(
@@ -113,6 +114,16 @@ pub(super) fn cache_keys(assets: &Assets, owner: u32, paint: &Paint, needed: &mu
                     if g.crop.is_some_and(|r| r[2] == 0. || r[3] == 0.) {
                         continue;
                     }
+                    if let Some(image) = &g.image {
+                        needed.insert(super::Renderer::image_key(assets, owner, &image.asset)?);
+                        needed.insert(super::Renderer::sampled_image_key(
+                            assets,
+                            owner,
+                            &image.asset,
+                            Default::default(),
+                        )?);
+                        continue;
+                    }
                     let font = g.font.as_deref().unwrap_or(font);
                     let request = GlyphRaster {
                         glyph_id: text.glyph_id(font, g.character)?,
@@ -120,6 +131,7 @@ pub(super) fn cache_keys(assets: &Assets, owner: u32, paint: &Paint, needed: &mu
                         baseline: phase(g.baseline),
                     };
                     let scale = horizontal_scale(&text, font, g, *size)?;
+                    let outline=g.style.map_or(*outline,|s|s.outline);
                     for pass in outline
                         .filter(|o| o.radius > 0)
                         .map(Some)
@@ -127,9 +139,10 @@ pub(super) fn cache_keys(assets: &Assets, owner: u32, paint: &Paint, needed: &mu
                         .chain(std::iter::once(None))
                     {
                         needed.insert(format!(
-                            "{}:{}",
+                            "{}:{}:raster={:?}",
                             text.glyph_cell_key(font, request)?,
-                            style_key(g.bold.unwrap_or(*bold), blur, &pass, scale)
+                            style_key(g.bold.unwrap_or(g.style.map_or(*bold,|s|s.bold)), blur, &pass, scale),
+                            g.style.map_or(Default::default(),|s|s.raster)
                         ));
                     }
                 }
@@ -174,14 +187,51 @@ impl Renderer {
                 "glyph runs do not take image UV crops"
             );
             let visible = p.paint.glyph_reveal_status().expect("glyph run").visible;
+            if p.coverage==crysirror_scene::layer::coverage::Operation::Write {
+                //Even an empty imported bitmap admits its ordered coverage
+                //scope. Preserve a zero-alpha marker before expanding glyphs.
+                let mut marker=p.clone();marker.paint=Paint::Solid{color:[0;4]};
+                marker.opacity=0;
+                expanded.push(marker);
+            }
             for g in glyphs.iter().take(visible) {
                 if g.crop.is_some_and(|r| r[2] == 0. || r[3] == 0.) {
+                    continue;
+                }
+                if let Some(image) = &g.image {
+                    if image.rect[2] <= 0. || image.rect[3] <= 0. {
+                        continue;
+                    }
+                    let Some(crop) =
+                        crysirror_scene::layer::crop::crop_rect(image.rect, g.crop, image.uv)?
+                    else {
+                        continue;
+                    };
+                    count = count.checked_add(1).context("glyph frame count overflow")?;
+                    ensure!(count <= 196_608, "positioned glyph face/outline frame budget");
+                    let mut draw = p.clone();
+                    draw.quad = local_quad(&p, crop.rect)?;
+                    draw.uv = crop.uv;
+                    draw.size = [
+                        (crop.rect[2].ceil() as u32).clamp(1, 16384),
+                        (crop.rect[3].ceil() as u32).clamp(1, 16384),
+                    ];
+                    draw.extent = [crop.rect[2].max(1e-3), crop.rect[3].max(1e-3)];
+                    draw.sampling = Default::default();
+                    draw.paint = Paint::Image {
+                        asset: image.asset.clone(),
+                        tint: image.tint,
+                    };
+                    expanded.push(draw);
                     continue;
                 }
                 let font = g.font.as_ref().unwrap_or(font);
                 let size = g.size.unwrap_or(*size);
                 let fill_color = g.color.unwrap_or(*color);
-                let bold = g.bold.unwrap_or(*bold);
+                let bold = g.bold.unwrap_or(g.style.map_or(*bold,|s|s.bold));
+                let raster=g.style.map_or(Default::default(),|s|s.raster);
+                let outline=g.style.map_or(*outline,|s|s.outline);
+                let shadow=g.style.and_then(|s|s.shadow);
                 let horizontal_scale = horizontal_scale(&text, font, g, size)?;
                 let center = g
                     .cell_width
@@ -196,18 +246,17 @@ impl Renderer {
                     })
                     .transpose()?
                     .unwrap_or(0.);
-                for outline_pass in outline
-                    .filter(|o| o.radius > 0)
-                    .map(Some)
-                    .into_iter()
-                    .chain(std::iter::once(None))
+                for (outline_pass,pass_color,pass_offset) in shadow
+                    .map(|s|(None,s.color,s.offset)).into_iter()
+                    .chain(outline.filter(|o|o.radius>0).map(|o|(Some(o),o.color,[0.;2])))
+                    .chain(std::iter::once((None,fill_color,[0.;2])))
                 {
                     count = count.checked_add(1).context("glyph frame count overflow")?;
                     ensure!(
-                        count <= 131_072,
+                        count <= 196_608,
                         "positioned glyph face/outline frame budget"
                     );
-                    let color = outline_pass.map_or(fill_color, |o| o.color);
+                    let color = pass_color;
                     let request = GlyphRaster {
                         glyph_id: text.glyph_id(font, g.character)?,
                         size,
@@ -220,7 +269,8 @@ impl Renderer {
                         color,
                         bold,
                         glyphs: vec![PositionedGlyph {
-                            font: None,
+                image: None,
+                            style: Some(crysirror_scene::layer::PositionedGlyphStyle{raster,..Default::default()}), font: None,
                             horizontal_scale: Some(horizontal_scale),
                             font_width: None,
                             cell_width: None,
@@ -237,7 +287,7 @@ impl Renderer {
                     let key = key(assets, p.owner, &paint)?;
                     if !self.glyph_cells.contains_key(&key) {
                         let cell =
-                            text.rasterize_glyph_cell_scaled(font, request, horizontal_scale)?;
+                            text.rasterize_glyph_cell_quality(font, request, horizontal_scale, raster)?;
                         let width = cell.width + u32::from(bold && cell.width > 0);
                         let length = width as usize * cell.height as usize * 4;
                         ensure!(
@@ -394,8 +444,8 @@ impl Renderer {
                         continue;
                     }
                     let origin = [
-                        g.baseline[0].floor() + center + cell.origin[0] as f32,
-                        g.baseline[1].floor() + cell.origin[1] as f32,
+                        g.baseline[0].floor() + center + cell.origin[0] as f32 + pass_offset[0],
+                        g.baseline[1].floor() + cell.origin[1] as f32 + pass_offset[1],
                     ];
                     let mut draw = p.clone();
                     let Some(crop) = crysirror_scene::layer::crop::crop_rect(
@@ -679,6 +729,7 @@ mod tests {
                 interval_ms: 20,
                 rate_per_second: None,
                 initial_visible: 0,
+                prefix_steps: None,
                 elapsed_ms: 0,
                 forced_complete: false,
                 paused: false,

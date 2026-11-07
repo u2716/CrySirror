@@ -569,7 +569,7 @@ fn shape_fragment(text: &mut TextObject, width: i32, host: &dyn HostServices, fo
             if text.indent && pen[0] == text.margin[0] && matches!(character, '「' | '『' | '（') {
                 hanging = true;
             }
-            glyphs.push(crysirror_scene::layer::PositionedGlyph { font: None, horizontal_scale:None,font_width:None, cell_width: None,
+            glyphs.push(crysirror_scene::layer::PositionedGlyph { image: None, style: None, font: None, horizontal_scale:None,font_width:None, cell_width: None,
                 crop: None,
                 character,
                 baseline: [pen[0], pen[1] + metrics.ascent],

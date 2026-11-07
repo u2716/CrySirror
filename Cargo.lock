@@ -199,6 +199,17 @@ checksum = "84521a3cf562bc62942e294181d9eef17eb38ceb8c68677bc49f144e4c3d4f8d"
 
 [[package]]
 name = "android_logger"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "05b07e8e73d720a1f2e4b6014766e6039fd2e96a4fa44e2a78d0e1fa2ff49826"
+dependencies = [
+ "android_log-sys",
+ "env_filter 0.1.4",
+ "log",
+]
+
+[[package]]
+name = "android_logger"
 version = "0.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dbb4e440d04be07da1f1bf44fb4495ebd58669372fe0cffa6e48595ac5bd88a3"
@@ -1177,7 +1188,7 @@ checksum = "a347dcabdae9c31b0825fd6a8bed285ec9c2acb89c47827126d52fa4f59cece3"
 dependencies = [
  "fnv",
  "uuid",
- "web-time",
+ "web-time 1.1.0",
 ]
 
 [[package]]
@@ -1945,6 +1956,7 @@ dependencies = [
  "crysirror-image",
  "crysirror-scene",
  "crysirror-tasks",
+ "encoding_rs",
  "flate2",
  "glam 0.27.0",
  "gltf",
@@ -2040,7 +2052,7 @@ dependencies = [
  "crysirror-runtime",
  "encoding_rs",
  "image 0.25.10",
- "kira",
+ "kira 0.8.7",
  "libc",
  "pelite",
  "pollster 0.3.0",
@@ -2054,7 +2066,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "wgpu 0.19.4",
- "winit 0.31.0-beta.4",
+ "winit 0.31.0-beta.3",
 ]
 
 [[package]]
@@ -2211,6 +2223,7 @@ dependencies = [
  "anyhow",
  "cap-std",
  "clap",
+ "core-foundation 0.10.1",
  "crysirror-audio",
  "crysirror-avg32",
  "crysirror-bgi-integrated",
@@ -2234,8 +2247,9 @@ dependencies = [
  "crysirror-scene",
  "crysirror-script-js",
  "crysirror-siglus",
- "crysirror-siglus-vm",
+ "crysirror-siglus-integrated",
  "crysirror-softpal",
+ "crysirror-sugarpot",
  "crysirror-system-nnn",
  "crysirror-system4",
  "crysirror-tasks",
@@ -2391,9 +2405,11 @@ dependencies = [
  "anyhow",
  "crysirror-core",
  "crysirror-formats-arc",
+ "crysirror-image",
  "crysirror-resource",
  "crysirror-runtime",
  "crysirror-tasks",
+ "crysirror-text-legacy",
  "crysirror-vfx",
  "encoding_rs",
  "serde",
@@ -2489,6 +2505,8 @@ name = "crysirror-qlie"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "crysirror-asset",
+ "crysirror-audio",
  "crysirror-core",
  "crysirror-formats-arc",
  "crysirror-image",
@@ -2652,7 +2670,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "toml_edit",
- "web-time",
+ "web-time 1.1.0",
 ]
 
 [[package]]
@@ -2662,6 +2680,7 @@ dependencies = [
  "anyhow",
  "bincode 1.3.3",
  "crysirror-core",
+ "crysirror-image",
  "crysirror-puppet",
  "crysirror-vfx",
  "glam 0.27.0",
@@ -2715,11 +2734,53 @@ dependencies = [
 ]
 
 [[package]]
+name = "crysirror-siglus-integrated"
+version = "0.2.0"
+dependencies = [
+ "ab_glyph",
+ "android_logger 0.14.1",
+ "anyhow",
+ "blake3",
+ "bytemuck",
+ "chrono",
+ "clap",
+ "crysirror-codec-emote",
+ "crysirror-codec-mpeg",
+ "crysirror-codec-omv",
+ "crysirror-codec-wmv",
+ "crysirror-core",
+ "crysirror-resource",
+ "crysirror-runtime",
+ "crysirror-tasks",
+ "egui",
+ "egui-wgpu",
+ "encoding_rs",
+ "env_logger",
+ "flate2",
+ "hex",
+ "image 0.24.9",
+ "kira 0.9.6",
+ "lewton",
+ "log",
+ "ndk-context",
+ "pollster 0.3.0",
+ "raw-window-handle",
+ "rustc-hash 2.1.3",
+ "serde",
+ "serde_json",
+ "ttf-parser",
+ "ureq",
+ "wgpu 0.20.1",
+ "winit 0.31.0-beta.3",
+]
+
+[[package]]
 name = "crysirror-siglus-vm"
 version = "0.2.0"
 dependencies = [
  "anyhow",
  "bincode 1.3.3",
+ "blake3",
  "chrono",
  "crysirror-audio",
  "crysirror-core",
@@ -2742,7 +2803,7 @@ name = "crysirror-softpal"
 version = "0.1.0"
 dependencies = [
  "ab_glyph",
- "android_logger",
+ "android_logger 0.15.1",
  "anyhow",
  "crysirror-codec-mpeg",
  "crysirror-codec-wmv",
@@ -2762,7 +2823,7 @@ dependencies = [
  "sha2 0.10.9",
  "symphonia",
  "wasm-bindgen",
- "web-time",
+ "web-time 1.1.0",
  "windows-sys 0.61.2",
 ]
 
@@ -2780,7 +2841,27 @@ dependencies = [
  "send_wrapper",
  "serde",
  "symphonia",
- "triple_buffer",
+ "triple_buffer 9.0.0",
+]
+
+[[package]]
+name = "crysirror-sugarpot"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "crysirror-audio",
+ "crysirror-core",
+ "crysirror-formats-arc",
+ "crysirror-image",
+ "crysirror-resource",
+ "crysirror-runtime",
+ "crysirror-scene",
+ "crysirror-tasks",
+ "crysirror-text",
+ "crysirror-vfx",
+ "encoding_rs",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -2809,11 +2890,13 @@ dependencies = [
  "anyhow",
  "crysirror-core",
  "crysirror-formats-arc",
+ "crysirror-image",
  "crysirror-resource",
  "crysirror-runtime",
  "crysirror-tasks",
  "crysirror-text",
  "crysirror-text-legacy",
+ "crysirror-vfx",
  "encoding_rs",
  "flate2",
  "serde",
@@ -2834,7 +2917,7 @@ dependencies = [
  "serde",
  "serde_json",
  "wasm-bindgen-futures",
- "web-time",
+ "web-time 1.1.0",
 ]
 
 [[package]]
@@ -2929,7 +3012,7 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasm-bindgen-rayon",
  "web-sys",
- "web-time",
+ "web-time 1.1.0",
  "wgpu 29.0.3",
 ]
 
@@ -3051,6 +3134,17 @@ name = "d3d12"
 version = "0.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3e3d747f100290a1ca24b752186f61f6637e1deffe3bf6320de6fcb29510a307"
+dependencies = [
+ "bitflags 2.13.2",
+ "libloading 0.8.9",
+ "winapi",
+]
+
+[[package]]
+name = "d3d12"
+version = "0.20.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b28bfe653d79bd16c77f659305b195b82bb5ce0c0eb2a4846b82ddbd77586813"
 dependencies = [
  "bitflags 2.13.2",
  "libloading 0.8.9",
@@ -3309,6 +3403,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ecolor"
+version = "0.28.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2e6b451ff1143f6de0f33fc7f1b68fecfd2c7de06e104de96c4514de3f5396f8"
+dependencies = [
+ "bytemuck",
+ "emath",
+]
+
+[[package]]
 name = "ed25519"
 version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3329,6 +3433,36 @@ dependencies = [
  "sha2 0.11.1",
  "subtle",
  "zeroize",
+]
+
+[[package]]
+name = "egui"
+version = "0.28.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "20c97e70a2768de630f161bb5392cbd3874fcf72868f14df0e002e82e06cb798"
+dependencies = [
+ "ahash",
+ "emath",
+ "epaint",
+ "nohash-hasher",
+]
+
+[[package]]
+name = "egui-wgpu"
+version = "0.28.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "47c7a7c707877c3362a321ebb4f32be811c0b91f7aebf345fb162405c0218b4c"
+dependencies = [
+ "ahash",
+ "bytemuck",
+ "document-features",
+ "egui",
+ "epaint",
+ "log",
+ "thiserror 1.0.69",
+ "type-map",
+ "web-time 0.2.4",
+ "wgpu 0.20.1",
 ]
 
 [[package]]
@@ -3357,6 +3491,15 @@ dependencies = [
  "sec1",
  "subtle",
  "zeroize",
+]
+
+[[package]]
+name = "emath"
+version = "0.28.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0a6a21708405ea88f63d8309650b4d77431f4bc28fb9d8e6f77d3963b51249e6"
+dependencies = [
+ "bytemuck",
 ]
 
 [[package]]
@@ -3466,6 +3609,21 @@ dependencies = [
  "env_filter 2.0.0",
  "jiff",
  "log",
+]
+
+[[package]]
+name = "epaint"
+version = "0.28.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f0dcc0a0771e7500e94cd1cb797bd13c9f23b9409bdc3c824e2cbc562b7fa01"
+dependencies = [
+ "ab_glyph",
+ "ahash",
+ "bytemuck",
+ "ecolor",
+ "emath",
+ "nohash-hasher",
+ "parking_lot",
 ]
 
 [[package]]
@@ -4119,6 +4277,15 @@ dependencies = [
 
 [[package]]
 name = "glam"
+version = "0.29.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8babf46d4c1c9d92deac9f7be466f76dfc4482b6452fc5024b5e8daf6ffeb3ee"
+dependencies = [
+ "mint",
+]
+
+[[package]]
+name = "glam"
 version = "0.33.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37bfe73dc8ec21f54d181e5a60554327ec3f1c600c455a75ccbfc65d2106a6c4"
@@ -4610,7 +4777,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tower-service",
- "webpki-roots",
+ "webpki-roots 1.0.11",
 ]
 
 [[package]]
@@ -5381,6 +5548,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "kira"
+version = "0.9.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fb5a9f9dff5e262540b628b00d5e1a772270a962d6869f8695bb24832ff3b394"
+dependencies = [
+ "glam 0.29.3",
+ "mint",
+ "paste",
+ "ringbuf 0.3.3",
+ "send_wrapper",
+ "symphonia",
+ "triple_buffer 8.1.1",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5737,6 +5919,21 @@ dependencies = [
 
 [[package]]
 name = "metal"
+version = "0.28.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5637e166ea14be6063a3f8ba5ccb9a4159df7d8f6d61c02fc3d480b1f90dcfcb"
+dependencies = [
+ "bitflags 2.13.2",
+ "block",
+ "core-graphics-types 0.1.3",
+ "foreign-types",
+ "log",
+ "objc",
+ "paste",
+]
+
+[[package]]
+name = "metal"
 version = "0.32.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "00c15a6f673ff72ddcc22394663290f870fb224c1bfce55734a75c414150e605"
@@ -5887,6 +6084,27 @@ version = "0.19.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "50e3524642f53d9af419ab5e8dd29d3ba155708267667c2f3f06c88c9e130843"
 dependencies = [
+ "bit-set 0.5.3",
+ "bitflags 2.13.2",
+ "codespan-reporting 0.11.1",
+ "hexf-parse",
+ "indexmap",
+ "log",
+ "num-traits",
+ "rustc-hash 1.1.0",
+ "spirv 0.3.0+sdk-1.3.268.0",
+ "termcolor",
+ "thiserror 1.0.69",
+ "unicode-xid",
+]
+
+[[package]]
+name = "naga"
+version = "0.20.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e536ae46fcab0876853bd4a632ede5df4b1c2527a58f6c5a4150fe86be858231"
+dependencies = [
+ "arrayvec",
  "bit-set 0.5.3",
  "bitflags 2.13.2",
  "codespan-reporting 0.11.1",
@@ -6131,6 +6349,12 @@ checksum = "418abd1b6d34fbf6cae440dc874771b0525a604428704c76e48b29a5e67b8003"
 dependencies = [
  "memchr",
 ]
+
+[[package]]
+name = "nohash-hasher"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2bf50223579dc7cdcfb3bfcacf7069ff68243f8c363f62ffa99cf000a6b9c451"
 
 [[package]]
 name = "nom"
@@ -8164,7 +8388,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
- "web-time",
+ "web-time 1.1.0",
 ]
 
 [[package]]
@@ -8186,7 +8410,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tinyvec",
  "tracing",
- "web-time",
+ "web-time 1.1.0",
 ]
 
 [[package]]
@@ -8555,7 +8779,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
- "webpki-roots",
+ "webpki-roots 1.0.11",
 ]
 
 [[package]]
@@ -8789,7 +9013,7 @@ dependencies = [
  "url",
  "wasm-bindgen-futures",
  "weak-table",
- "web-time",
+ "web-time 1.1.0",
 ]
 
 [[package]]
@@ -9020,7 +9244,7 @@ version = "1.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2f4925028c7eb5d1fcdaf196971378ed9d2c1c4efc7dc5d011256f76c99c0a96"
 dependencies = [
- "web-time",
+ "web-time 1.1.0",
  "zeroize",
 ]
 
@@ -10681,6 +10905,15 @@ dependencies = [
 
 [[package]]
 name = "triple_buffer"
+version = "8.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "420466259f9fa5decc654c490b9ab538400e5420df8237f84ecbe20368bcf72b"
+dependencies = [
+ "crossbeam-utils",
+]
+
+[[package]]
+name = "triple_buffer"
 version = "9.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e875ab7068a75b74f419da453927e05527c36f0001b3c7aad3ce443640683487"
@@ -10897,6 +11130,22 @@ name = "unty"
 version = "0.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6d49784317cd0d1ee7ec5c716dd598ec5b4483ea832a2dced265471cc0f690ae"
+
+[[package]]
+name = "ureq"
+version = "2.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "02d1a66277ed75f640d608235660df48c8e3c19f3b4edb6a263315626cc3c01d"
+dependencies = [
+ "base64 0.22.1",
+ "flate2",
+ "log",
+ "once_cell",
+ "rustls",
+ "rustls-pki-types",
+ "url",
+ "webpki-roots 0.26.11",
+]
 
 [[package]]
 name = "url"
@@ -11256,12 +11505,31 @@ dependencies = [
 
 [[package]]
 name = "web-time"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aa30049b1c872b72c89866d458eae9f20380ab280ffd1b1e18df2d3e2d98cfe0"
+dependencies = [
+ "js-sys",
+ "wasm-bindgen",
+]
+
+[[package]]
+name = "web-time"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5a6580f308b1fad9207618087a65c04e7a10bc77e02c8e84e9b00dd4b12fa0bb"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "webpki-roots"
+version = "0.26.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "521bc38abb08001b01866da9f51eb7c5d647a19260e00054a8c7fd5f9e57f7a9"
+dependencies = [
+ "webpki-roots 1.0.11",
 ]
 
 [[package]]
@@ -11302,6 +11570,32 @@ dependencies = [
  "wgpu-core 0.19.4",
  "wgpu-hal 0.19.5",
  "wgpu-types 0.19.2",
+]
+
+[[package]]
+name = "wgpu"
+version = "0.20.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "90e37c7b9921b75dfd26dd973fdcbce36f13dfa6e2dc82aece584e0ed48c355c"
+dependencies = [
+ "arrayvec",
+ "cfg-if",
+ "cfg_aliases 0.1.1",
+ "document-features",
+ "js-sys",
+ "log",
+ "naga 0.20.0",
+ "parking_lot",
+ "profiling",
+ "raw-window-handle",
+ "smallvec",
+ "static_assertions",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "wgpu-core 0.21.1",
+ "wgpu-hal 0.21.1",
+ "wgpu-types 0.20.0",
 ]
 
 [[package]]
@@ -11387,6 +11681,33 @@ dependencies = [
  "web-sys",
  "wgpu-hal 0.19.5",
  "wgpu-types 0.19.2",
+]
+
+[[package]]
+name = "wgpu-core"
+version = "0.21.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d50819ab545b867d8a454d1d756b90cd5f15da1f2943334ca314af10583c9d39"
+dependencies = [
+ "arrayvec",
+ "bit-vec 0.6.3",
+ "bitflags 2.13.2",
+ "cfg_aliases 0.1.1",
+ "codespan-reporting 0.11.1",
+ "document-features",
+ "indexmap",
+ "log",
+ "naga 0.20.0",
+ "once_cell",
+ "parking_lot",
+ "profiling",
+ "raw-window-handle",
+ "rustc-hash 1.1.0",
+ "smallvec",
+ "thiserror 1.0.69",
+ "web-sys",
+ "wgpu-hal 0.21.1",
+ "wgpu-types 0.20.0",
 ]
 
 [[package]]
@@ -11522,7 +11843,7 @@ dependencies = [
  "block",
  "cfg_aliases 0.1.1",
  "core-graphics-types 0.1.3",
- "d3d12",
+ "d3d12 0.19.0",
  "glow 0.13.1",
  "glutin_wgl_sys 0.5.0",
  "gpu-alloc",
@@ -11550,6 +11871,51 @@ dependencies = [
  "wasm-bindgen",
  "web-sys",
  "wgpu-types 0.19.2",
+ "winapi",
+]
+
+[[package]]
+name = "wgpu-hal"
+version = "0.21.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "172e490a87295564f3fcc0f165798d87386f6231b04d4548bca458cbbfd63222"
+dependencies = [
+ "android_system_properties",
+ "arrayvec",
+ "ash 0.37.3+1.3.251",
+ "bit-set 0.5.3",
+ "bitflags 2.13.2",
+ "block",
+ "cfg_aliases 0.1.1",
+ "core-graphics-types 0.1.3",
+ "d3d12 0.20.0",
+ "glow 0.13.1",
+ "glutin_wgl_sys 0.5.0",
+ "gpu-alloc",
+ "gpu-allocator 0.25.0",
+ "gpu-descriptor 0.3.2",
+ "hassle-rs",
+ "js-sys",
+ "khronos-egl",
+ "libc",
+ "libloading 0.8.9",
+ "log",
+ "metal 0.28.0",
+ "naga 0.20.0",
+ "ndk-sys 0.5.0+25.2.9519653",
+ "objc",
+ "once_cell",
+ "parking_lot",
+ "profiling",
+ "range-alloc",
+ "raw-window-handle",
+ "renderdoc-sys",
+ "rustc-hash 1.1.0",
+ "smallvec",
+ "thiserror 1.0.69",
+ "wasm-bindgen",
+ "web-sys",
+ "wgpu-types 0.20.0",
  "winapi",
 ]
 
@@ -11671,6 +12037,17 @@ name = "wgpu-types"
 version = "0.19.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b671ff9fb03f78b46ff176494ee1ebe7d603393f42664be55b64dc8d53969805"
+dependencies = [
+ "bitflags 2.13.2",
+ "js-sys",
+ "web-sys",
+]
+
+[[package]]
+name = "wgpu-types"
+version = "0.20.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1353d9a46bff7f955a680577f34c69122628cc2076e1d6f3a9be6ef00ae793ef"
 dependencies = [
  "bitflags 2.13.2",
  "js-sys",
@@ -12206,18 +12583,18 @@ dependencies = [
  "wayland-protocols",
  "wayland-protocols-plasma",
  "web-sys",
- "web-time",
+ "web-time 1.1.0",
  "windows-sys 0.52.0",
  "x11-dl",
- "x11rb 0.13.2",
+ "x11rb",
  "xkbcommon-dl",
 ]
 
 [[package]]
 name = "winit"
-version = "0.31.0-beta.4"
+version = "0.31.0-beta.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "453408a9f608e14c92c6c1b5ef0193e1699aee3bfb17b48cc5423c6ec2ae1806"
+checksum = "f431156a3e4f0f1b35eaaf37674e55838e3652908c8088f570466274d1902e2b"
 dependencies = [
  "bitflags 2.13.2",
  "cfg_aliases 0.2.2",
@@ -12242,9 +12619,9 @@ dependencies = [
 
 [[package]]
 name = "winit-android"
-version = "0.31.0-beta.4"
+version = "0.31.0-beta.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d356e863a4adda4a0309e34a0cafbb9dd57be61cca7c7ae3de95a285938959cd"
+checksum = "d5d60d944a564986b9311e325334cc22e7e4cf726dd0ff7475fd925404215af4"
 dependencies = [
  "android-activity",
  "bitflags 2.13.2",
@@ -12258,9 +12635,9 @@ dependencies = [
 
 [[package]]
 name = "winit-appkit"
-version = "0.31.0-beta.4"
+version = "0.31.0-beta.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dd77d5b64db1abaf4ba11d08c1da69695f9c4fdc3ee19a543479872ef79e05c0"
+checksum = "23343ec0ea7ac6aa72f38009a6ff66fb63bcf6395e0622fba72794d2a762ab42"
 dependencies = [
  "bitflags 2.13.2",
  "block2 0.6.2",
@@ -12281,9 +12658,9 @@ dependencies = [
 
 [[package]]
 name = "winit-common"
-version = "0.31.0-beta.4"
+version = "0.31.0-beta.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "93ef82b1146fc93e6f60755e851152d708ede1f845eb73e8fdefc3192458ccf5"
+checksum = "e90422ff1c04502aaaac1dad1d099791c2bbb3fbb3f823019e0ce5cdeee04025"
 dependencies = [
  "block2 0.6.2",
  "dpi",
@@ -12300,9 +12677,9 @@ dependencies = [
 
 [[package]]
 name = "winit-core"
-version = "0.31.0-beta.4"
+version = "0.31.0-beta.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "74158ad0526ab0f1e850b89f63a4513f4fee9178ef72b408bfb37f30a429d62e"
+checksum = "b8af6307236c51847199950c15cf80e0481a250bb96ce9132f5026df4ad3d0f9"
 dependencies = [
  "bitflags 2.13.2",
  "cursor-icon",
@@ -12310,14 +12687,15 @@ dependencies = [
  "keyboard-types 0.8.3",
  "raw-window-handle",
  "smol_str 0.3.7",
- "web-time",
+ "url",
+ "web-time 1.1.0",
 ]
 
 [[package]]
 name = "winit-orbital"
-version = "0.31.0-beta.4"
+version = "0.31.0-beta.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "321adbc811d8b15f34f6d6ec49afaff4cbc06c3e807e56de8eda6ec9d3466151"
+checksum = "278a8ae837902a3bc95dd2fd696d680da33f32130eecc29905358c9089cf6c50"
 dependencies = [
  "bitflags 2.13.2",
  "dpi",
@@ -12332,9 +12710,9 @@ dependencies = [
 
 [[package]]
 name = "winit-uikit"
-version = "0.31.0-beta.4"
+version = "0.31.0-beta.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ed4addb22374bc174e41143c22608ed125590962157bdcb02415377b41ef1b5a"
+checksum = "83315a3ea1739c8466cf23d35e3b0a2cb20c9515d8857666b633afef484740b5"
 dependencies = [
  "bitflags 2.13.2",
  "block2 0.6.2",
@@ -12353,9 +12731,9 @@ dependencies = [
 
 [[package]]
 name = "winit-wayland"
-version = "0.31.0-beta.4"
+version = "0.31.0-beta.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8352b11bc0d223a37bbbdb55d2250949917c313f3ee07a34da7d614d74fce69e"
+checksum = "8b64ceed06de0c45886eef05102106abe1413e703384e337bc57c7e95b71f803"
 dependencies = [
  "bitflags 2.13.2",
  "calloop 0.14.5",
@@ -12381,9 +12759,9 @@ dependencies = [
 
 [[package]]
 name = "winit-web"
-version = "0.31.0-beta.4"
+version = "0.31.0-beta.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1c38d83a15b854abe625a3db8144ad9a5094899d9a0bc976b4edc4c233197563"
+checksum = "f539be45f95cc297bdfb80569aef38d925d64aec4133852a4d3fc5cb3660f1c9"
 dependencies = [
  "atomic-waker",
  "bitflags 2.13.2",
@@ -12398,24 +12776,24 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
- "web-time",
+ "web-time 1.1.0",
  "winit-core",
 ]
 
 [[package]]
 name = "winit-win32"
-version = "0.31.0-beta.4"
+version = "0.31.0-beta.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf3b2326760dad4a8fe721a8c8a40fd4f7efb338ef468f340794ea1efcd5261e"
+checksum = "25fb480c41df01d351f656cbf3ad74013f8a9d22bb5b2dcab59f9167e7a0b6ec"
 dependencies = [
  "bitflags 2.13.2",
  "cursor-icon",
  "dpi",
- "percent-encoding",
  "raw-window-handle",
  "smol_str 0.3.7",
  "tracing",
  "unicode-segmentation",
+ "url",
  "windows-sys 0.61.2",
  "winit-common",
  "winit-core",
@@ -12423,9 +12801,9 @@ dependencies = [
 
 [[package]]
 name = "winit-x11"
-version = "0.31.0-beta.4"
+version = "0.31.0-beta.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eee2be0a6dce77b889b6f9040a349e8c2cea6c0c4257f0b61591d7e0d9a6dfaf"
+checksum = "bb5746cd907e514b7895491a1c6f7d0cb70077f9e16928cd74ae6f987ffd96aa"
 dependencies = [
  "bitflags 2.13.2",
  "bytemuck",
@@ -12441,7 +12819,7 @@ dependencies = [
  "winit-common",
  "winit-core",
  "x11-dl",
- "x11rb 0.14.0",
+ "x11rb",
  "xkbcommon-dl",
 ]
 
@@ -12520,22 +12898,7 @@ dependencies = [
  "libloading 0.8.9",
  "once_cell",
  "rustix 1.1.6",
- "x11rb-protocol 0.13.2",
-]
-
-[[package]]
-name = "x11rb"
-version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5a8885a854a8bfdf87a301e53e41b17c5f8f33639903131338b997b1eb614f44"
-dependencies = [
- "as-raw-xcb-connection",
- "gethostname",
- "libc",
- "libloading 0.8.9",
- "once_cell",
- "rustix 1.1.6",
- "x11rb-protocol 0.14.0",
+ "x11rb-protocol",
  "xcursor",
 ]
 
@@ -12544,12 +12907,6 @@ name = "x11rb-protocol"
 version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ea6fc2961e4ef194dcbfe56bb845534d0dc8098940c7e5c012a258bfec6701bd"
-
-[[package]]
-name = "x11rb-protocol"
-version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "acf4d1bc32aa46eec18caa634ec3cf4c05bfa151f12b93b510b15190f69a1ca8"
 
 [[package]]
 name = "x25519-dalek"

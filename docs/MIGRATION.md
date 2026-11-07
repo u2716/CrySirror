@@ -9,11 +9,23 @@ engine work.
 
 ## Ownership
 
-Keep original opcode/value/control-flow, resource selection, waits and save
-policy in the adapter. Reusable image, text, composition, UI, effects, codecs and
+Record `adopt` or `integrated` according to
+[ADR 0102](adr/0102-engine-adoption-and-runtime-integration.md) and
+[the onboarding contracts](ENGINE_ONBOARDING.md). Existing engines keep their
+mode unless explicitly migrated. Siglus, BGI and SoftPAL use `integrated`;
+their preserved extraction paths are inactive in the default player.
+
+For `adopt`, keep original opcode/value/control-flow, resource selection, waits
+and save policy in the adapter. Reusable image, text, composition, UI, effects, codecs and
 audio mechanisms belong in shared engine crates with independent APIs.
 An original engine core, private renderer/mixer or composed-screen upload is not
-an accepted integration boundary. Preserve source provenance and license notices.
+an accepted `adopt` boundary.
+
+For `integrated`, maintain complete runtime modules inside workspace crates
+behind a bounded frame/PCM and host-service seam. CrySirror owns windows, event
+loops and devices. Lifecycle, storage/NLS, input, saves and per-platform gaps
+must be documented and connected explicitly. Both modes preserve provenance
+and license notices; neither a wrapper nor a renamed package is completion.
 
 ## Resource and task boundaries
 
@@ -34,7 +46,8 @@ supply those automatically.
 
 Verify the shared capability without the VM, then verify real native calls,
 input edges, error retention and restore boundaries. Record implementation,
-release compilation and behavior separately in [STATUS.md](../STATUS.md).
+release compilation and behavior separately in the adapter's documentation;
+keep native field/operation evidence beside the corresponding source.
 A factory, parsed archive or screenshot is not complete integration. Run local
-release checks/tests; do not enable remote CI. Platform support requires actual
+release checks appropriate to the task. Platform support requires actual
 platform evidence; Switch/PS Vita remain deferred.

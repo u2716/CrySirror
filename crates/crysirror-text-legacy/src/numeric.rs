@@ -50,7 +50,140 @@ pub enum NumericCompaction {
     PreserveStoredTail,
 }
 
+/// Result of a bounded C-style unsigned32 conversion. No digits consumes zero
+/// bytes, even after whitespace/sign; overflow saturates before sign handling.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UnsignedInteger32 {
+    pub value: u32,
+    pub consumed: usize,
+    pub overflow: bool,
+}
+
 impl ByteStringContext<'_> {
+    /// ASCII decimal/octal/hexadecimal auto-base conversion, independent of
+    /// Unicode decoding and platform C `unsigned long` width.
+    pub fn unsigned_base0(&self, bytes: &[u8]) -> Result<UnsignedInteger32> {
+        let mut work = self.work()?;
+        work.input(bytes)?;
+        let mut at = 0;
+        while matches!(
+            bytes.get(at),
+            Some(b' ' | b'\t' | b'\r' | b'\n' | 0x0b | 0x0c)
+        ) {
+            work.visit(1)?;
+            at += 1;
+        }
+        let negative = bytes.get(at) == Some(&b'-');
+        if matches!(bytes.get(at), Some(b'+' | b'-')) {
+            at += 1;
+        }
+        let digit = |byte: u8| match byte {
+            b'0'..=b'9' => Some(u32::from(byte - b'0')),
+            b'a'..=b'f' => Some(u32::from(byte - b'a') + 10),
+            b'A'..=b'F' => Some(u32::from(byte - b'A') + 10),
+            _ => None,
+        };
+        let base = if bytes.get(at) == Some(&b'0') {
+            if matches!(bytes.get(at + 1), Some(b'x' | b'X'))
+                && bytes.get(at + 2).and_then(|b| digit(*b)).is_some()
+            {
+                at += 2;
+                16
+            } else {
+                8
+            }
+        } else {
+            10
+        };
+        let start = at;
+        let mut value = 0u32;
+        let mut overflow = false;
+        while let Some(number) = bytes.get(at).and_then(|b| digit(*b)).filter(|v| *v < base) {
+            work.visit(1)?;
+            if !overflow {
+                if let Some(next) = value.checked_mul(base).and_then(|v| v.checked_add(number)) {
+                    value = next;
+                } else {
+                    value = u32::MAX;
+                    overflow = true;
+                }
+            }
+            at += 1;
+        }
+        (self.check)()?;
+        if at == start {
+            return Ok(UnsignedInteger32 {
+                value: 0,
+                consumed: 0,
+                overflow: false,
+            });
+        }
+        Ok(UnsignedInteger32 {
+            value: if negative && !overflow {
+                value.wrapping_neg()
+            } else {
+                value
+            },
+            consumed: at,
+            overflow,
+        })
+    }
+
+    /// Minimum-width signed decimal formatting with explicit byte symbols.
+    /// A zero-padded sign precedes padding, while space padding precedes sign.
+    pub fn decimal_format(
+        &self,
+        value: i32,
+        minimum_width: usize,
+        zero_pad: bool,
+        symbols: ByteNumberSymbols,
+    ) -> Result<Vec<u8>> {
+        let mut work = self.work()?;
+        // unsigned_abs also defines INT_MIN without reproducing native signed
+        // negation overflow or an uninitialized digit buffer.
+        let digits = value.unsigned_abs().to_string();
+        let negative = value < 0;
+        let count = minimum_width.max(digits.len() + usize::from(negative));
+        let unit = if symbols == ByteNumberSymbols::Ascii {
+            1
+        } else {
+            2
+        };
+        let bytes = count
+            .checked_mul(unit)
+            .context("decimal formatting extent")?;
+        work.output(bytes)?;
+        work.visit(bytes)?;
+        let mut output = Vec::with_capacity(bytes);
+        let mut emit = |byte: u8| {
+            if let Some((lead, first)) = symbols.digit() {
+                let pair = match byte {
+                    b'0'..=b'9' => [lead, first + byte - b'0'],
+                    b'-' => symbols.minus().unwrap(),
+                    b' ' => symbols.space().unwrap(),
+                    _ => unreachable!(),
+                };
+                output.extend_from_slice(&pair);
+            } else {
+                output.push(byte);
+            }
+        };
+        if negative && zero_pad {
+            emit(b'-');
+        }
+        for _ in 0..count - digits.len() - usize::from(negative) {
+            emit(if zero_pad { b'0' } else { b' ' });
+        }
+        if negative && !zero_pad {
+            emit(b'-');
+        }
+        for digit in digits.bytes() {
+            emit(digit);
+        }
+        (self.check)()?;
+        Ok(output)
+    }
+
     pub fn decimal_integer(
         &self,
         bytes: &[u8],

@@ -1004,7 +1004,7 @@ mod tests {
             size: [2, 1],
             coverage: vec![0, 255].into(),
             threshold: 128,
-            strict_bounds: false,
+            strict_bounds: false, source_from_local: None, regions: Vec::new(),
         });
         put(&mut r, mask);
         put(&mut r, receiver(2, 0, None));
@@ -1070,7 +1070,7 @@ mod tests {
             size: [2, 2],
             coverage: vec![0; 4].into(),
             threshold: 128,
-            strict_bounds: false,
+            strict_bounds: false, source_from_local: None, regions: Vec::new(),
         });
         put(&mut r, a);
         put(&mut r, receiver(2, 0, Some([0, 0, 2, 2])));

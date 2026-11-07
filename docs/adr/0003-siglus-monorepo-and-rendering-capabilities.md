@@ -70,8 +70,11 @@ resource. Its name/output reports that fact. It is not a converted Siglus progra
 
 ## Desktop platforms
 
-The desktop targets are Windows, Linux and macOS. Mobile and Web are deferred;
-Switch and PS Vita remain deferred, with no other console scope.
+The desktop targets are Windows, Linux and macOS. Browser hosting and mobile
+packages are described in [ADR 0100](0100-browser-host-and-capability-runtime.md)
+and [ADR 0101](0101-native-host-packages-and-console-seams.md), with their own
+implementation and validation limits. Switch and PS Vita device backends remain
+deferred, with no other console scope.
 
 wgpu backend selection belongs to the host: DX12/Vulkan/Metal are desktop backend
 routes, not fields in VM state. The renderer remains independent of winit. This

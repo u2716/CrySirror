@@ -36,6 +36,23 @@ pub fn civil_weekday(year: i32, month: u8, day: u8) -> Option<u8> {
     let month_offset = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4][usize::from(month - 1)];
     Some(((year + year / 4 - year / 100 + year / 400 + month_offset + i64::from(day)) % 7) as u8)
 }
+/// Integer Zeller expression with signed32-bit wrapping and truncating
+/// division. Unlike `civil_weekday`, this accepts arithmetic month/day fields
+/// without calendar normalization and retains a negative signed remainder.
+/// This pure compatibility primitive samples neither host nor virtual time.
+pub fn integer_weekday_wrapping(year: i32, month: i32, day: i32) -> i32 {
+    let (year, month) = if month <= 2 {
+        (year.wrapping_sub(1), month.wrapping_add(12))
+    } else {
+        (year, month)
+    };
+    day.wrapping_add(year / 400)
+        .wrapping_add(year)
+        .wrapping_add(year / 4)
+        .wrapping_sub(year / 100)
+        .wrapping_add(month.wrapping_mul(13).wrapping_add(8) / 5)
+        % 7
+}
 /// Normalize signed Gregorian month/day fields, as a civil calendar operation.
 /// Month1/day1 denote January1; month0 and day0 refer to the preceding month
 /// and day. This does not apply a timezone, DST, or a host CRT timestamp range.
@@ -60,6 +77,32 @@ pub fn normalize_civil_date(year: i32, month: i32, day: i32) -> Option<(i32, u8,
     Some((i32::try_from(year).ok()?, month as u8, day as u8))
 }
 impl CivilTime {
+    /// Convert an instant using an explicit fixed offset sampled by a host.
+    /// This performs no clock/timezone lookup and does not infer historical
+    /// daylight-saving rules from the supplied present-day offset.
+    pub fn from_unix_ms(client: ClientId, unix_ms: i64, utc_offset_seconds: i32) -> Option<Self> {
+        if utc_offset_seconds.unsigned_abs() > 86400 {
+            return None;
+        }
+        let local = unix_ms
+            .div_euclid(1000)
+            .checked_add(i64::from(utc_offset_seconds))?;
+        let (year, month, day) =
+            normalize_civil_date(1970, 1, i32::try_from(local.div_euclid(86400) + 1).ok()?)?;
+        let second = local.rem_euclid(86400);
+        Some(Self {
+            client,
+            unix_ms,
+            utc_offset_seconds,
+            year,
+            month,
+            day,
+            hour: (second / 3600) as u8,
+            minute: ((second / 60) % 60) as u8,
+            second: (second % 60) as u8,
+            millisecond: unix_ms.rem_euclid(1000) as u16,
+        })
+    }
     /// Weekday of this already sampled local civil date. It performs no new
     /// clock sample and does not infer a value from unavailable/invalid fields.
     pub fn weekday(&self) -> Option<u8> {

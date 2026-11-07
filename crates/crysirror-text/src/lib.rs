@@ -11,6 +11,7 @@ use crysirror_core::{
 use std::{collections::BTreeMap, sync::Arc};
 
 pub mod dynamic;
+pub mod legacy_width;
 pub mod precomputed_font;
 pub mod format;
 pub mod byte_replace;
@@ -27,6 +28,7 @@ pub mod layout;
 pub mod markup;
 pub mod raster;
 mod styled_glyph;
+mod glyph_quality;
 pub mod reveal;
 pub mod rich;
 pub mod sdf;

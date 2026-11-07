@@ -228,7 +228,7 @@ pub fn publish(
                     ..Default::default()
                 };
                 needed.push(image);
-                layers.push(LayerSpec { source_crop: object_source_crop(b,[cx as f32,cy as f32]),
+                layers.push(LayerSpec { tie_order:None, clock_paused: false, source_crop: object_source_crop(b,[cx as f32,cy as f32]),
                     viewport_clip: object_viewport_clip(b),
                     id,
                     parent: None,
@@ -295,7 +295,7 @@ pub fn publish(
         const MOV_LAYER: u32 = 0xA000_0000;
         let mov = &ctx.globals.mov;
         ids.insert(MOV_LAYER);
-        layers.push(LayerSpec { source_crop: None,
+        layers.push(LayerSpec { tie_order:None, clock_paused: false, source_crop: None,
             viewport_clip: None,
             id: MOV_LAYER,
             parent: None,

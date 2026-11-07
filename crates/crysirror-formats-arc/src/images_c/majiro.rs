@@ -128,9 +128,10 @@ pub(super) fn rct(b: &[u8], ctx: &ImageDecodeContext<'_>) -> Result<ImageSurface
         let n = c.u16()? as usize;
         let name = c.take(n)?;
         let name = &name[..name.iter().position(|&x| x == 0).unwrap_or(name.len())];
-        let name = std::str::from_utf8(name).context(
-            "RCT base filename needs an explicit native-byte resolver; UTF-8 path expected",
-        )?;
+        //Native4470B0 exposes this stored filename as CP932 bytes, just like
+        //MJO asset operands; it is not a UTF-8 path.
+        let name = encoding_rs::SHIFT_JIS.decode_without_bom_handling_and_without_replacement(name)
+            .context("invalid RCT base filename CP932")?;
         if name.is_empty() {
             None
         } else {
@@ -147,7 +148,7 @@ pub(super) fn rct(b: &[u8], ctx: &ImageDecodeContext<'_>) -> Result<ImageSurface
             .with_bytes(|key| decrypt(&mut compressed, key));
     }
     let mut overlay = raw(w, h, &unpack(&compressed, w, h, true)?, Format::Bgr)?;
-    if version == b"01" {
+    if version == b"01" && base.is_some() {
         for p in overlay.rgba.chunks_exact_mut(4) {
             if p[0] == 255 && p[1] == 0 {
                 p[3] = 0;
@@ -162,7 +163,9 @@ pub(super) fn rct(b: &[u8], ctx: &ImageDecodeContext<'_>) -> Result<ImageSurface
     blit(&mut out, &overlay, 0, 0, true);
     let name = ctx.path.rsplit('/').next().unwrap_or(ctx.path);
     let stem = name.rsplit_once('.').map_or(name, |(s, _)| s);
-    for extension in ["rc8", "rct"] {
+    let load_mask=ctx.parameter("majiro/rct/load_mask").map(|value|
+        value.as_bool().context("RCT load_mask must be boolean")).transpose()?.unwrap_or(true);
+    for extension in ["rc8", "rct"].into_iter().filter(|_|load_mask) {
         let mask_name = format!("{stem}_.{extension}");
         if let Some(bytes) = ctx.try_read_relative(&mask_name)? {
             let mask = ctx.decode_embedded(&mask_name, &bytes)?;

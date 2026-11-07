@@ -285,7 +285,7 @@ impl Machine {
         self.pc = i.next;
         Ok(true)
     }
-    pub(super) fn release_string_now(&mut self, slot: i32) -> Result<()> {
+    pub(crate) fn release_string_now(&mut self, slot: i32) -> Result<()> {
         self.heap.string(slot)?;
         let references = self.heap.slot(slot)?.references;
         if references > 1 {

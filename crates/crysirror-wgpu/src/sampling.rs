@@ -1,7 +1,7 @@
 //! Per-image-layer sampler aliases. An alias owns a bind group and cheap GPU
 //! texture/view clones; pixel storage and its accounting remain on the base key.
 use super::{Renderer, Texture};
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use crysirror_runtime::assets::Assets;
 use crysirror_scene::layer::{ImageSampling, TextureAddressMode};
 
@@ -27,12 +27,22 @@ impl Renderer {
         asset: &str,
         sampling: ImageSampling,
     ) -> Result<String> {
+        Self::sampled_image_key_filter(assets, owner, asset, sampling, sampling.linear)
+    }
+    pub(super) fn sampled_image_key_filter(
+        assets: &Assets,
+        owner: u32,
+        asset: &str,
+        sampling: ImageSampling,
+        linear: bool,
+    ) -> Result<String> {
         let base = Self::image_key(assets, owner, asset)?;
-        Ok(if sampling == ImageSampling::default() {
+        Ok(if sampling == ImageSampling::default() && linear {
             base
         } else {
             format!(
-                "sampled:{}{}:{base}",
+                "sampled:{}{}{}:{base}",
+                if linear { 'l' } else { 'n' },
                 mode_key(sampling.address_u),
                 mode_key(sampling.address_v)
             )
@@ -48,11 +58,22 @@ impl Renderer {
         key: &str,
         sampling: ImageSampling,
     ) -> Result<bool> {
+        self.ensure_sampled_image_filter(assets, owner, asset, key, sampling, sampling.linear)
+    }
+    pub(super) fn ensure_sampled_image_filter(
+        &mut self,
+        assets: &mut Assets,
+        owner: u32,
+        asset: &str,
+        key: &str,
+        sampling: ImageSampling,
+        linear: bool,
+    ) -> Result<bool> {
         ensure!(
-            key == Self::sampled_image_key(assets, owner, asset, sampling)?,
+            key == Self::sampled_image_key_filter(assets, owner, asset, sampling, linear)?,
             "image sampler cache key differs from its asset/revision/state"
         );
-        if sampling == ImageSampling::default() {
+        if sampling == ImageSampling::default() && linear {
             return self.ensure_image(assets, owner, asset, key);
         }
         if self.textures.contains_key(key) {
@@ -72,8 +93,16 @@ impl Renderer {
             label: Some("retained image addressing"),
             address_mode_u: address(sampling.address_u),
             address_mode_v: address(sampling.address_v),
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
+            mag_filter: if linear {
+                wgpu::FilterMode::Linear
+            } else {
+                wgpu::FilterMode::Nearest
+            },
+            min_filter: if linear {
+                wgpu::FilterMode::Linear
+            } else {
+                wgpu::FilterMode::Nearest
+            },
             ..Default::default()
         });
         let bind = self

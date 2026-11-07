@@ -5,6 +5,7 @@
 //! Original Majiro MJO code and semantic boundary. No legacy renderer or mixer.
 pub mod machine;
 pub mod program;
+mod byte_policy;
 
 #[cfg(feature = "runtime")]
 pub mod adapter;

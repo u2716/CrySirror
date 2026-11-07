@@ -159,6 +159,28 @@ pub fn decode_shift_jis(bytes: &[u8], max_bytes: usize) -> Result<String> {
     Ok(text.into_owned())
 }
 
+/// Decode BOM-selected Unicode, otherwise Windows Shift_JIS. Unlike
+/// `decode_auto`, valid unmarked UTF-8 does not override the caller's legacy
+/// code page. Ciphered text streams are not part of this profile.
+pub fn decode_bom_or_shift_jis(bytes: &[u8], max_bytes: usize) -> Result<String> {
+    ensure!(bytes.len() <= max_bytes, "text stream byte limit");
+    if let Some(rest) = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]) {
+        return Ok(std::str::from_utf8(rest).context("invalid UTF-8 text")?.to_owned());
+    }
+    let unicode = bytes.strip_prefix(&[0xff, 0xfe]).map(|v| (v, true))
+        .or_else(|| bytes.strip_prefix(&[0xfe, 0xff]).map(|v| (v, false)));
+    if let Some((rest, little)) = unicode {
+        ensure!(rest.len() % 2 == 0, "odd UTF-16 text length");
+        let units = rest.chunks_exact(2).map(|c| if little {
+            u16::from_le_bytes([c[0], c[1]])
+        } else {
+            u16::from_be_bytes([c[0], c[1]])
+        }).collect::<Vec<_>>();
+        return String::from_utf16(&units).context("invalid UTF-16 text");
+    }
+    decode_shift_jis(bytes, max_bytes)
+}
+
 /// Decode a bounded legacy text resource: cipher/compressed streams and BOMs
 /// take precedence, followed by valid UTF-8 and finally strict Shift_JIS.
 /// This is a codec policy, independent of the syntax or VM consuming the text.

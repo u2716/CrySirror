@@ -3,7 +3,7 @@ use crysirror_scene::layer::{GlyphReveal,GlyphRevealUnit};
 #[test]
 fn optional_rate_keeps_sparse_json_and_complete_binary_fields() {
     for rate in [None,Some(60)] {
-        let reveal=GlyphReveal{unit:GlyphRevealUnit::UnicodeScalar,interval_ms:40,rate_per_second:rate,initial_visible:3,elapsed_ms:127,forced_complete:false,paused:true};
+        let reveal=GlyphReveal{unit:GlyphRevealUnit::UnicodeScalar,interval_ms:40,rate_per_second:rate,initial_visible:3,prefix_steps:None,elapsed_ms:127,forced_complete:false,paused:true};
         let json=serde_json::to_value(&reveal).unwrap();
         assert_eq!(json.get("rate_per_second").is_some(),rate.is_some());
         assert_eq!(serde_json::from_value::<GlyphReveal>(json).unwrap(),reveal);

@@ -341,10 +341,10 @@ impl PreparedNativeServices {
         advance_buttons: u64,
         name_window: Option<MessageWindow>,
     ) -> Result<MessageProfile> {
-        ensure!(
-            self.preferences.auto_mode == 0,
-            "NNN saved auto-message policy requires native voice/auto timing mapping"
-        );
+        // SYSTEM DATA164 is a retained preference. Bridge supplies its live
+        // value to Timing on each message update; script AUTOMESSAGE484 is a
+        // separate speed selector. Do not reject an existing user auto-mode
+        // preference now that voice/no-voice wait timing has a real consumer.
         if self
             .game_setup
             .integer(b"noMessageWindowFlag")?

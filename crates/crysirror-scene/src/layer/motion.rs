@@ -231,10 +231,11 @@ fn endpoints(property: MotionProperty, from: f32, to: f32, scale: bool) -> Resul
         MotionProperty::ScaleX | MotionProperty::ScaleY | MotionProperty::ScaleZ
     ) {
         ensure!(scale, "UI motion only supports rectangle X/Y");
+        // Linear scale tweens may cross zero (a mirroring flip); a zero
+        // endpoint was already admitted, so the collapse is not new.
         ensure!(
-            [from, to].iter().all(|v| v.abs() <= 4096.)
-                && (from == 0. || to == 0. || from.signum() == to.signum()),
-            "scale motion endpoints must share a sign or a collapsed endpoint"
+            [from, to].iter().all(|v| v.abs() <= 4096.),
+            "scale motion endpoint bounds"
         );
     }
     if property == MotionProperty::Opacity {
@@ -384,9 +385,13 @@ impl MotionTracks {
         }
     }
     pub(crate) fn tick(&mut self, delta: u64) -> Vec<(u32, u32, MotionProperty, f32)> {
+        self.tick_filtered(delta,|_,_|false)
+    }
+    pub(crate) fn tick_filtered(&mut self,delta:u64,paused:impl Fn(u32,u32)->bool)->Vec<(u32,u32,MotionProperty,f32)> {
         let mut values = Vec::new();
         for (&owner, targets) in &mut self.by_owner {
             for (&id, tracks) in targets {
+                if paused(owner,id) {continue;}
                 for (&property, t) in tracks {
                     if !t.external && !t.complete() {
                         t.elapsed = t.elapsed.saturating_add(delta).min(t.limit());
@@ -402,9 +407,13 @@ impl MotionTracks {
         owner: u32,
         delta: u64,
     ) -> Vec<(u32, u32, MotionProperty, f32)> {
+        self.tick_owner_filtered(owner,delta,|_|false)
+    }
+    pub(crate) fn tick_owner_filtered(&mut self,owner:u32,delta:u64,paused:impl Fn(u32)->bool)->Vec<(u32,u32,MotionProperty,f32)> {
         let mut values = Vec::new();
         if let Some(targets) = self.by_owner.get_mut(&owner) {
             for (&id, tracks) in targets {
+                if paused(id) {continue;}
                 for (&property, track) in tracks {
                     if !track.external && !track.complete() {
                         track.elapsed = track.elapsed.saturating_add(delta).min(track.limit());
@@ -444,5 +453,17 @@ impl MotionTracks {
         }
         ensure!(total <= 16384, "motion total limit");
         Ok(())
+    }
+}
+
+impl MotionTracks {
+    pub(crate) fn retain_checkpoint_scope(&mut self, client:u32, ids:&std::collections::BTreeSet<u32>) {
+        self.by_owner.retain(|owner,layers| { if *owner!=client{return false} layers.retain(|id,_|ids.contains(id)); !layers.is_empty() });
+        self.external.retain_checkpoint_scope(client,ids);
+    }
+    pub(crate) fn restore_checkpoint_scope(&mut self, client:u32, removed:&std::collections::BTreeSet<u32>, saved:&Self)->Result<()> {
+        if let Some(owner)=self.by_owner.get_mut(&client){owner.retain(|id,_|!removed.contains(id));}
+        if let Some(owner)=saved.by_owner.get(&client){ self.by_owner.entry(client).or_default().extend(owner.clone()); }
+        self.external.restore_checkpoint_scope(client,removed,&saved.external)
     }
 }

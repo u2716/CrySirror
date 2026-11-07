@@ -12,7 +12,7 @@ use crate::{
     native_save_images::SavedPictures,
     native_save_wait::{SavedWait, SavedWaitPreparation},
 };
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use crysirror_core::{
     image_processing::{ImageInput, ImageJob, ImageProcessState},
     native_restore::{
@@ -23,7 +23,7 @@ use crysirror_core::{
     state::ClientId,
 };
 use crysirror_tasks::{Task, TaskPool};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::Arc;
 struct Parsed {
     file: Arc<NativeSaveFile>,
@@ -41,6 +41,7 @@ struct Parsed {
     prepared_audio: Option<Arc<dyn AudioReplacementResource>>,
     layers: Vec<Value>,
     audio_done: bool,
+    windows_done: bool,
     pictures_done: bool,
     ui: Vec<Value>,
 }
@@ -55,6 +56,13 @@ pub(crate) struct PreparedNativeRestore {
 }
 impl Parsed {
     fn poll(&mut self, host: &mut dyn HostServices) -> Result<bool> {
+        if !self.windows_done {
+            if !self.seed.bridge.prepare_native_windows(host)? {
+                return Ok(false);
+            }
+            self.seed.bridge.sync_window_seed(&mut self.seed.text)?;
+            self.windows_done = true;
+        }
         if !self.audio_done {
             if !self.audio.as_mut().unwrap().poll(host)? {
                 return Ok(false);
@@ -160,7 +168,23 @@ impl Parsed {
                         .context("NNN saved variable bank absent")?
                         .random_state()
                         .context("NNN saved frame requires current original RNG")?;
-                    self.frame = Some(self.seed.bridge.begin_saved_frame(image, random, host)?);
+                    // Frozen SELECT0/1 Init fills/loads its own background;
+                    // it never Prints the retained effects. SUNA's original
+                    // InitParameter RNG above is real, but a hidden extra
+                    // Print/AdvancePrefix here would alter future native RNG.
+                    let frozen_selection = matches!(self.wait, Some(SavedWait::Selection { .. }))
+                        && !self.seed.selection.advances_effects();
+                    self.frame = Some(if frozen_selection {
+                        crate::native_presentation::NativeFrameWork::with_saved_base(
+                            self.seed.bridge.client(),
+                            image,
+                            Vec::new(),
+                            random,
+                            host,
+                        )?
+                    } else {
+                        self.seed.bridge.begin_saved_frame(image, random, host)?
+                    });
                     self.base = None;
                 }
             }
@@ -185,7 +209,12 @@ impl Parsed {
             self.frame = None;
         }
         if let Some(wait) = self.wait.take() {
-            self.seed.bridge.validate_saved_wait_effects()?;
+            let advancing =
+                matches!(wait, SavedWait::Message { .. }) || self.seed.selection.advances_effects();
+            self.seed.bridge.validate_saved_wait_effects(
+                advancing,
+                self.seed.selection.has_frozen_background(),
+            )?;
             self.wait_job = Some(
                 wait.begin(
                     Some(&self.seed.text),
@@ -319,14 +348,14 @@ impl NativeRestoreJob {
                 let wait=file.saved_wait()?.context("NNN saved native wait absent")?;
                 seed.bridge.restore_native_status(&file)?;
                 let latent=seed.text.dormant(file.messages(file.position()?.message_rows as usize)?,
-                    file.status_word(30)? as u32,file.status_word(476)? as u32,file.status_word(44)?!=0,file.status_word(485)?!=0)?;
+                    file.status_word(30)? as u32,seed.text.retained_serial(),file.status_word(44)?!=0,file.status_word(485)?!=0)?;
                 seed.bridge.configure_text(latent)?;seed.bridge.configure_selection(seed.selection.dormant()?)?;
                 let session=file.prepare_script_contexts(&profile,&config,&current,|name,cancel|loader(name,cancel),&cancel)?;
                 let pictures=SavedPictures::new(client,&file,&profile,&config,seed.bridge.image_resources()?)?;
                 let audio=seed.audio.as_ref().context("NNN saved audio seed absent")?.prepare(&file,&profile)?;cancel.check()?;
                 Ok(Parsed{file,profile,session,seed,pictures:Some(pictures),audio:Some(audio),wait:Some(wait),
                     wait_job:None,base:None,pattern_init:None,frame:None,frame_ready:None,prepared_audio:None,layers:vec![],
-                    audio_done:false,pictures_done:false,ui:vec![]})
+                    audio_done:false,windows_done:false,pictures_done:false,ui:vec![]})
             })?);
             return Ok(false);
         }
@@ -423,6 +452,7 @@ impl OriginalRestorePreparation for NativeRestoreJob {
 pub(crate) mod tests {
     use super::*;
     use crate::{
+        Program, XorProfile,
         adapter::NativeAdapter,
         bridge::{CallbackProfile, SceneBindings},
         config::Names,
@@ -433,17 +463,16 @@ pub(crate) mod tests {
         native_system_file::{NativeSystemFile, SystemLimits, SystemNames, SystemStamp},
         native_text::{MessageBindings, MessageProfile, NativeTextBridge},
         native_ui::{NativeSelectionBridge, SelectionProfile},
-        Program, XorProfile,
     };
     use crysirror_core::{
         native_restore::OriginalRestoreStatus,
-        service::{buttons, AudioParameters, AudioRequest, InputFrame, PcmAudio},
+        service::{AudioParameters, AudioRequest, InputFrame, PcmAudio, buttons},
         vm::VmAdapter,
     };
     use std::{
         sync::{
-            atomic::{AtomicUsize, Ordering},
             Mutex,
+            atomic::{AtomicUsize, Ordering},
         },
         time::{Duration, Instant},
     };
@@ -691,8 +720,8 @@ pub(crate) mod tests {
         }
     }
     #[test]
-    fn real_native_job_prepares_original_records_resources_audio_and_vm_without_live_scene_or_playback_changes(
-    ) {
+    fn real_native_job_prepares_original_records_resources_audio_and_vm_without_live_scene_or_playback_changes()
+     {
         let (_root, mut rt) = runtime();
         let (old, file, profile, reads) = native_fixture();
         let bytes = file.encode(&profile).unwrap();
@@ -804,8 +833,8 @@ pub(crate) mod tests {
     }
     #[test]
     #[ignore = "reads caller-supplied licensed runtime font; no font bundled"]
-    fn actual_runtime_original_transaction_keeps_old_state_until_commit_then_waits_and_continues_native_pc(
-    ) {
+    fn actual_runtime_original_transaction_keeps_old_state_until_commit_then_waits_and_continues_native_pc()
+     {
         for installed in [false, true] {
             let root = tempfile::tempdir().unwrap();
             std::fs::create_dir(root.path().join("game")).unwrap();
@@ -945,8 +974,11 @@ pub(crate) mod tests {
                 rt.inspect()["sessions"][0]["native"]["wait_kind"],
                 "saved_message_input"
             );
-            assert_eq!(rt.inspect()["sessions"][0]["native"]["effect_counters"]["3"], json!([8,99999]),
-                "static native fill still advances its original CountUp through the shared zero-lead scheduler");
+            assert_eq!(
+                rt.inspect()["sessions"][0]["native"]["effect_counters"]["3"],
+                json!([8, 99999]),
+                "static native fill still advances its original CountUp through the shared zero-lead scheduler"
+            );
             assert_eq!(
                 rt.inspect()["sessions"][0]["native"]["factory_registered"],
                 installed

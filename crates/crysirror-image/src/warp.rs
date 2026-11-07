@@ -53,6 +53,32 @@ pub fn validate_quad(quad: &[[f32; 2]; 4]) -> Result<()> {
     );
     Ok(())
 }
+/// Inverse projective map from a convex destination quad to the unit square.
+/// This constant-size geometry operation performs no pixel allocation or
+/// resampling; retained input coverage can share it with image transforms.
+pub fn inverse_quad_transform(quad: [[f32; 2]; 4]) -> Result<[f64; 9]> {
+    ensure!(
+        quad.iter()
+            .flatten()
+            .all(|value| value.is_finite() && value.abs() <= 1.0e12),
+        "projective inverse coordinate bounds"
+    );
+    let mut rows = vec![];
+    for ([s, t], [x, y]) in [[0., 0.], [1., 0.], [1., 1.], [0., 1.]]
+        .into_iter()
+        .zip(quad.map(|p| p.map(f64::from)))
+    {
+        rows.push(vec![s, t, 1., 0., 0., 0., -x * s, -x * t, x]);
+        rows.push(vec![0., 0., 0., s, t, 1., -y * s, -y * t, y]);
+    }
+    let h = solve::<8>(rows)?;
+    let m = solve::<3>(vec![
+        vec![h[0], h[1], h[2], 1., 0., 0.],
+        vec![h[3], h[4], h[5], 0., 1., 0.],
+        vec![h[6], h[7], 1., 0., 0., 1.],
+    ])?;
+    Ok(m.try_into().unwrap())
+}
 impl ImageSurface {
     pub fn perspective(&self, quad: [[f32; 2]; 4], check: &dyn Fn() -> Result<()>) -> Result<Self> {
         self.validate()?;
@@ -61,20 +87,7 @@ impl ImageSurface {
             u64::from(self.width) * u64::from(self.height) <= crate::effects::MAX_EFFECT_PIXELS,
             "perspective pixel budget"
         );
-        let mut rows = vec![];
-        for ([s, t], [x, y]) in [[0., 0.], [1., 0.], [1., 1.], [0., 1.]]
-            .into_iter()
-            .zip(quad.map(|p| p.map(f64::from)))
-        {
-            rows.push(vec![s, t, 1., 0., 0., 0., -x * s, -x * t, x]);
-            rows.push(vec![0., 0., 0., s, t, 1., -y * s, -y * t, y]);
-        }
-        let h = solve::<8>(rows)?;
-        let m = solve::<3>(vec![
-            vec![h[0], h[1], h[2], 1., 0., 0.],
-            vec![h[3], h[4], h[5], 0., 1., 0.],
-            vec![h[6], h[7], 1., 0., 0., 1.],
-        ])?;
+        let m = inverse_quad_transform(quad)?;
         let mut out = Self::filled(self.width, self.height, [0; 4])?;
         for y in 0..self.height {
             check()?;

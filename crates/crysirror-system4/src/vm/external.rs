@@ -40,6 +40,45 @@ impl Machine {
         self.complete_system(call, 1, value)?;
         self.release_string_now(slot)
     }
+    /// Validate syscall ownership before admitting filesystem/UI work.
+    pub(crate) fn validate_system_owned_strings(
+        &self,
+        call: &ExternalCall,
+        count: usize,
+    ) -> Result<Vec<i32>> {
+        self.validate_system(call)?;
+        ensure!(count <= 3, "System4 syscall owned-string arity");
+        let slots = (0..count)
+            .map(|n| {
+                let slot = self.peek(n)?;
+                self.heap.string(slot)?;
+                Ok(slot)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        for slot in &slots {
+            let count = slots.iter().filter(|other| *other == slot).count();
+            ensure!(
+                self.heap.slot(*slot)?.references as usize >= count,
+                "System4 syscall duplicate string ownership"
+            );
+        }
+        Ok(slots)
+    }
+    /// Consume exactly the original owned string operands after a completed
+    /// syscall. All references are checked before changing the stack.
+    pub(crate) fn complete_system_owned_strings(
+        &mut self,
+        call: &ExternalCall,
+        count: usize,
+        value: Option<i32>,
+    ) -> Result<()> {
+        let slots = self.validate_system_owned_strings(call, count)?;
+        self.complete_system(call, count, value)?;
+        for slot in slots {
+            self.release_string_now(slot)?;
+        }
+        Ok(())
+    }
     pub fn hll_arguments(&self, call: &ExternalCall) -> Result<Vec<Argument>> {
         ensure!(
             self.pending.as_ref() == Some(call),

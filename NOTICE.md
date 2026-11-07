@@ -5,6 +5,11 @@ by xmoezzz, uses MPL-2.0 except where component licenses state otherwise. Shared
 image, text, UI, animation, resource and audio capabilities are maintained in the
 engine workspace. The root LICENSE contains the MPL-2.0 text.
 
+The integrated Siglus runtime maintains siglus_rs source under MPL-2.0 at
+revision `5f358ef1360b0439e92aed2b749e8f25d8721954`. Original source paths and
+digests are recorded in [its provenance file](crates/crysirror-siglus-integrated/SOURCE.json);
+local host changes remain in the same maintained workspace crate.
+
 The tiny
 checkerboard/marker PNGs and tone.wav are self-authored test assets covered by
 the repository's MPL-2.0 license. They are not extracted game assets.
@@ -25,7 +30,7 @@ from vn-tools/arc_unpacker at commit
 They retain GPL-3.0-or-later attribution and the upstream license text in that
 crate. The desktop binary always links them; the complete registration
 inventory is a migration ledger, not a declaration that every decoder is ported.
-See crates/crysirror-formats-arc/UPSTREAM.md and docs/RESOURCES.md.
+See docs/RESOURCES.md.
 The shared physics backend depends on Rapier3D 0.22.0; source, checksum and
 reproducible behavior/performance evidence are recorded in ADR 0045.
 

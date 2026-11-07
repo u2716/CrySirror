@@ -69,12 +69,18 @@ impl Default for AdapterRegistry {
         };
         r.factories
             .insert("crysirror-script-v1".into(), Arc::new(ScriptFactory));
-        #[cfg(not(target_arch = "wasm32"))]
-        r.factories.insert("siglus".into(), Arc::new(SiglusFactory));
         r
     }
 }
 impl AdapterRegistry {
+    /// Explicit retained capability-fixture profile. Native player hosts
+    /// register their integrated Siglus factory instead of selecting this.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn with_reference_siglus() -> Self {
+        let mut registry=Self::default();
+        registry.factories.insert("siglus".into(),Arc::new(SiglusFactory));
+        registry
+    }
     pub fn register(&mut self, name: &str, factory: Arc<dyn VmFactory>) -> Result<()> {
         ensure!(
             crate::model::identity(name) && !self.factories.contains_key(name),
@@ -105,13 +111,16 @@ pub struct TraceEvent {
     pub commands: Vec<String>,
 }
 pub struct SharedHost {
+    host_information: crysirror_core::service::HostInformation,
     pub desktop_provider:Option<Arc<dyn crysirror_core::service::DesktopProvider>>,
     /// Canonical client-scoped log state, shared by App and native adapters.
     pub logs: crysirror_core::service::LogBook,
+    pub text_input: crate::text_input::TextInputBroker,
+    native_restore_requests: native_restore::Requests,
     host_tasks: crysirror_tasks::TaskPool,
     //Owner-only capabilities: never serialized from VM/project/save data.
     http_origins: BTreeMap<ClientId, BTreeSet<String>>,
-    published_images: crate::published_images::PublishedImages,
+    pub(crate) published_images: crate::published_images::PublishedImages,
     audio_loop_catalog: crysirror_audio::loop_catalog::AudioLoopCatalog,
     keyboard_locks: BTreeMap<ClientId, crysirror_core::service::KeyboardLockSnapshot>,
     /// Presenter capability, independent of VM/project data and snapshots.
@@ -135,7 +144,8 @@ pub struct SharedHost {
     image_dimensions: BTreeMap<(ClientId, String), ([u32; 2], bool)>,
     image_tasks: crysirror_tasks::TaskPool,
     image_memory: Arc<std::sync::atomic::AtomicUsize>,
-    pattern_owner: Arc<()>,
+    pub(crate) pattern_owner: Arc<()>,
+    pub(crate) scene_checkpoint_epochs: BTreeMap<ClientId, Arc<()>>,
     pub(crate) canvas_images: crate::canvas_images::Broker,
     pub(crate) capture_canvas: [u32; 2],
     pending_canvas_size: Option<[u32; 2]>,
@@ -260,6 +270,33 @@ impl FileSystem for SharedHost {
     }
 }
 impl HostServices for SharedHost {
+    fn open_text_input_session(&mut self,client:ClientId,spec:crysirror_core::service::TextInputSessionSpec)->crysirror_core::Result<crysirror_core::service::TextInputSessionHandle>{if !self.clients.contains(&client){return Err(Error::NotFound);}self.text_input.open(client,spec)}
+    fn configure_text_input_session(&mut self,client:ClientId,handle:crysirror_core::service::TextInputSessionHandle,spec:crysirror_core::service::TextInputSessionSpec)->crysirror_core::Result<()>{if !self.clients.contains(&client){return Err(Error::NotFound);}self.text_input.configure(client,handle,spec)}
+    fn text_input_session_info(&self,client:ClientId,handle:crysirror_core::service::TextInputSessionHandle)->crysirror_core::Result<crysirror_core::service::TextInputSessionInfo>{if !self.clients.contains(&client){return Err(Error::NotFound);}self.text_input.info(client,handle)}
+    fn take_text_input_committed(&mut self,client:ClientId,handle:crysirror_core::service::TextInputSessionHandle)->crysirror_core::Result<Arc<String>>{if !self.clients.contains(&client){return Err(Error::NotFound);}self.text_input.take(client,handle)}
+    fn replace_text_input_committed(&mut self,client:ClientId,handle:crysirror_core::service::TextInputSessionHandle,text:String)->crysirror_core::Result<()>{if !self.clients.contains(&client){return Err(Error::NotFound);}self.text_input.replace(client,handle,text)}
+    fn release_text_input_session(&mut self,client:ClientId,handle:crysirror_core::service::TextInputSessionHandle)->crysirror_core::Result<()>{if !self.clients.contains(&client){return Err(Error::NotFound);}self.text_input.release(client,handle)}
+    fn request_original_save_restore(&mut self, client: ClientId, bytes: Arc<[u8]>)
+        -> crysirror_core::Result<crysirror_core::native_restore::OriginalRestoreTicket> {
+        if !self.clients.contains(&client) { return Err(Error::NotFound); }
+        self.native_restore_requests.begin(client, bytes)
+    }
+    fn original_save_restore_request_status(&self, client: ClientId,
+        ticket: crysirror_core::native_restore::OriginalRestoreTicket)
+        -> crysirror_core::Result<crysirror_core::native_restore::OriginalRestoreStatus> {
+        self.native_restore_requests.status(client, ticket)
+    }
+    fn cancel_original_save_restore_request(&mut self, client: ClientId,
+        ticket: crysirror_core::native_restore::OriginalRestoreTicket) -> crysirror_core::Result<()> {
+        self.native_restore_requests.cancel(client, ticket)
+    }
+    fn release_original_save_restore_request(&mut self, client: ClientId,
+        ticket: crysirror_core::native_restore::OriginalRestoreTicket) -> crysirror_core::Result<()> {
+        self.native_restore_requests.release(client, ticket)
+    }
+    fn host_information(&self) -> crysirror_core::Result<crysirror_core::service::HostInformation> {
+        Ok(self.host_information.clone())
+    }
     fn request_canvas_size(
         &mut self,
         client: ClientId,
@@ -386,6 +423,21 @@ impl HostServices for SharedHost {
                 .ok_or(Error::Limit("prefix clear layer id"))?;
             let layer=serde_json::from_value(serde_json::json!({"id":id,"rect":[0,0,size[0],size[1]],"paint":{"kind":"solid","color":clear},"order":[i32::MIN,i32::MIN]})).map_err(|e|Error::Io(e.to_string()))?;
             layers.insert(0, layer);
+        }
+        // A materialized snapshot has exactly one local root. The prefix may
+        // hold several top-level layers (and the clear layer): group them
+        // under an identity root of the capture size.
+        if layers.iter().filter(|l| l.parent.is_none()).count() > 1 {
+            let root = (0..=layers.len() as u32 + 1)
+                .map(|n| u32::MAX - n)
+                .find(|id| layers.iter().all(|l| l.id != *id))
+                .ok_or(Error::Limit("prefix root layer id"))?;
+            for layer in layers.iter_mut().filter(|l| l.parent.is_none()) {
+                layer.parent = Some(root);
+            }
+            let group = serde_json::from_value(serde_json::json!({"id":root,"rect":[0,0,size[0],size[1]],"paint":{"kind":"group"}}))
+                .map_err(|e| Error::Io(e.to_string()))?;
+            layers.insert(0, group);
         }
         let request = crysirror_scene::canvas::MaterializeRequest {
             client: client.0,
@@ -886,6 +938,18 @@ impl HostServices for SharedHost {
             self.fs.storage(client)?,
             self.host_tasks.clone(),
         )
+    }
+    fn set_audio_gain_envelope(&mut self, client: ClientId, channel: u32,
+        spec: Option<crysirror_core::service::AudioGainEnvelopeSpec>) -> crysirror_core::Result<()> {
+        if !self.clients.contains(&client) { return Err(Error::NotFound); }
+        self.channel_audio.set_gain_envelope(client.0, channel, spec)
+            .map_err(|error| Error::Io(format!("stepped audio gain: {error:#}")))
+    }
+    fn audio_gain_envelope_info(&self, client: ClientId, channel: u32)
+        -> crysirror_core::Result<Option<crysirror_core::service::AudioGainEnvelopeInfo>> {
+        if !self.clients.contains(&client) { return Err(Error::NotFound); }
+        self.channel_audio.gain_envelope_info(client.0, channel)
+            .map_err(|error| Error::Io(format!("stepped audio gain status: {error:#}")))
     }
     fn begin_audio_seek(
         &mut self,
@@ -1445,6 +1509,19 @@ impl HostServices for SharedHost {
         }
         self.collect_retired_images()?;
         self.published_images.publish(client, id, image)
+    }
+    fn capture_scene_checkpoint(
+        &mut self, client:ClientId, scope:&crysirror_core::scene_checkpoint::SceneCheckpointScope,
+    )->crysirror_core::Result<Arc<dyn crysirror_core::scene_checkpoint::SceneCheckpoint>> {
+        if !self.clients.contains(&client){return Err(Error::NotFound)}
+        crate::scene_checkpoint::capture(self,client,scope)
+    }
+    fn restore_scene_checkpoint(
+        &mut self, client:ClientId, checkpoint:&dyn crysirror_core::scene_checkpoint::SceneCheckpoint,
+        remove:&crysirror_core::scene_checkpoint::SceneCheckpointScope,
+    )->crysirror_core::Result<()> {
+        if !self.clients.contains(&client){return Err(Error::NotFound)}
+        crate::scene_checkpoint::restore(self,client,checkpoint,remove)
     }
     fn published_image_resource(&mut self,client:ClientId,path:&str)->crysirror_core::Result<Option<Arc<dyn crysirror_core::image_processing::ImageResource>>>{
         if !self.clients.contains(&client){return Err(Error::NotFound)}
@@ -2034,8 +2111,21 @@ impl Runtime {
             vfx: Default::default(),
             project,
             host: SharedHost {
+                host_information: crysirror_core::service::HostInformation {
+                    os_name: std::env::consts::OS.into(),
+                    architecture: std::env::consts::ARCH.into(),
+                    logical_cpu_count: std::thread::available_parallelism().ok()
+                        .and_then(|n| u32::try_from(n.get()).ok()),
+                    locale: ["LC_ALL", "LC_MESSAGES", "LANG"]
+                        .iter()
+                        .filter_map(|k| std::env::var(k).ok())
+                        .find(|v| !v.is_empty() && v != "C" && v != "POSIX")
+                        .map(|v| v.split(['.', '@']).next().unwrap_or("").replace('_', "-")),
+                },
                 desktop_provider:None,
                 logs: Default::default(),
+                native_restore_requests: native_restore::Requests::new()?,
+                text_input: crate::text_input::TextInputBroker::default(),
                 host_tasks: assets.io_tasks(),
                 http_origins: BTreeMap::new(),
                 published_images,
@@ -2045,6 +2135,7 @@ impl Runtime {
                 image_tasks: assets.cpu_tasks(),
                 image_memory: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
                 pattern_owner: Arc::new(()),
+                scene_checkpoint_epochs: BTreeMap::new(),
                 canvas_images: crate::canvas_images::Broker::new(assets.store_id()),
                 capture_canvas,
                 pending_canvas_size: None,
@@ -2228,16 +2319,20 @@ impl Runtime {
     /// One nonblocking boot-dependency poll. Unlike tick, this does not advance
     /// clocks, input, world simulation or already-started peer VMs.
     pub fn poll_vm_preparations(&mut self) -> Result<bool> {
+        self.poll_original_save_restore_requests()?;
         self.host.decoders = self.assets.decoders.clone();
         self.host.fonts.advance()?;
         for session in &mut self.sessions {
-            if !self.native_restores.active(session.id) && session.vm.preparation_pending() {
+            if !self.native_restores.active(session.id)
+                && !self.host.native_restore_requests.active(session.id)
+                && session.vm.preparation_pending() {
                 session.yielded =
                     core(session.vm.step(&mut self.host, InputFrame::default(), 1024))
                         .with_context(|| format!("VM {} preparation", session.name))?;
             }
         }
-        Ok(self
+        let native_requests = self.poll_original_save_restore_requests()?;
+        Ok(native_requests || self
             .sessions
             .iter()
             .any(|session| session.vm.preparation_pending()))
@@ -2245,7 +2340,7 @@ impl Runtime {
     /// Keep displaying the last complete frame while a native callback awaits
     /// resources. This does not block internal image/canvas preparation.
     pub fn presentation_pending(&self) -> bool {
-        self.sessions
+        self.host.native_restore_requests.any_active() || self.sessions
             .iter()
             .any(|session| session.vm.presentation_pending())
     }
@@ -2254,6 +2349,7 @@ impl Runtime {
             self.audio_frame.is_none() && !self.host.channel_audio.mixer.is_rendering(),
             "audio frame pending before runtime tick"
         );
+        self.poll_original_save_restore_requests()?;
 
         let profile_frame = self.profiler.begin_frame();
         let _tick_span = self.profiler.span(profile_frame, "runtime.tick");
@@ -2334,7 +2430,8 @@ impl Runtime {
             }
         });
         for s in &mut self.sessions {
-            if s.yielded == VmYield::Halted || self.native_restores.active(s.id) {
+            if s.yielded == VmYield::Halted || self.native_restores.active(s.id)
+                || self.host.native_restore_requests.active(s.id) {
                 continue;
             }
             s.yielded = core(s.vm.step(&mut self.host, input, 1024))
@@ -2344,6 +2441,7 @@ impl Runtime {
             self.project.canvas = size;
         }
         drop(vm_span);
+        self.poll_original_save_restore_requests()?;
         let _outputs = self.profiler.span(profile_frame, "media.publish_audio");
         for (client, path, bytes) in std::mem::take(&mut self.host.generated) {
             self.assets.register_generated(client, &path, bytes)?;
@@ -2510,7 +2608,7 @@ impl Runtime {
         Ok(())
     }
     pub fn all_halted(&self) -> bool {
-        !self.native_restores.any_active()
+        !self.native_restores.any_active() && !self.host.native_restore_requests.any_active()
             && self.sessions.iter().all(|s| s.yielded == VmYield::Halted)
     }
     /// Every VM session (at least one) has halted: the games are done.
@@ -2522,6 +2620,7 @@ impl Runtime {
     /// should close now.
     pub fn request_close(&mut self) -> bool {
         self.native_restores.cancel_all();
+        self.host.native_restore_requests.invalidate();
         let mut handled = false;
         for s in &mut self.sessions {
             if s.yielded != VmYield::Halted {
@@ -2536,6 +2635,7 @@ impl Runtime {
     pub fn inspect(&self) -> serde_json::Value {
         serde_json::json!({"name":self.project.name,"frame":self.host.scene.frame(),"time_ms":self.host.clock_ms,
             "native_restore":self.native_restores.inspect(),
+            "native_restore_requests":self.host.native_restore_requests.inspect(),
             "published_images":self.host.published_images.inspect(),
             "visuals":self.host.scene.visuals().len(),"voices":self.host.scene.voices().len(),
             "profile":self.profiler.snapshot(),"tasks":self.assets.tasks_inspect(),"channel_audio":self.host.channel_audio.mixer.stats(),"audio_nonblocking":self.audio_is_nonblocking(),"media":self.host.media.inspect(),"vfx":self.vfx.inspect(None),
@@ -2564,12 +2664,16 @@ impl Runtime {
     }
     pub fn capture_snapshot(&self) -> Result<SnapshotCapture> {
         ensure!(
-            !self.native_restores.any_active(),
+            !self.native_restores.any_active() && !self.host.native_restore_requests.any_active(),
             "original restore preparation cannot be snapshotted"
         );
         ensure!(
             !self.host.channel_audio.has_release_state(),
             "engine audio release snapshot requires worker/decoder reconstruction support"
+        );
+        ensure!(
+            !self.host.channel_audio.mixer.has_gain_envelopes(),
+            "stepped audio envelope snapshot requires source/clock reconstruction"
         );
         ensure!(
             !self.host.audio_loop_catalog.has_resources(),
@@ -2757,6 +2861,7 @@ impl Runtime {
 
         let native_restore_epoch = self.native_restores.next_epoch()?;
         self.native_restores.invalidate(native_restore_epoch);
+        self.host.native_restore_requests.invalidate();
         scene.restore_frame(services.frame);
         self.sessions = staged_sessions;
         self.host.scene = scene;
@@ -2764,9 +2869,11 @@ impl Runtime {
         engine.ui.reset_input_after_restore();
         engine.input_routes.reset_input_after_restore();
         self.host.engine = engine;
+        self.host.scene_checkpoint_epochs.clear();
         // Lock state describes this live input session, never restored OS state.
         self.host.keyboard_locks.clear();
         self.host.input_observation = None;
+        self.host.text_input.invalidate();
         self.host.input_revision = next_input_revision;
         self.physics.invalidate();
         self.vfx.reset(self.host.clock_ms);
@@ -2803,14 +2910,18 @@ impl Runtime {
             core(self.sessions[i].vm.import_original_save(bytes))?;
             self.sessions[i].yielded = VmYield::BudgetExhausted;
             self.native_restores.invalidate(native_restore_epoch);
+            self.host.native_restore_requests.invalidate();
+            self.host.scene_checkpoint_epochs.remove(&client);
             return Ok(());
         }
         let mut vm = self.registry.create(client, &self.project.clients[i])?;
         core(vm.restore(&core(self.sessions[i].vm.snapshot())?))?;
         core(vm.import_original_save(bytes))?;
         self.sessions[i].vm = vm;
+        self.host.scene_checkpoint_epochs.remove(&client);
         self.sessions[i].yielded = VmYield::BudgetExhausted;
         self.native_restores.invalidate(native_restore_epoch);
+        self.host.native_restore_requests.invalidate();
         Ok(())
     }
     /// This frame's screen transition (ADR 0022). Pattern wipes get the
@@ -3405,7 +3516,7 @@ mod siglus_native_tests {
         let data = serde_json::json!({"schema":2,"name":"native-siglus-fixture","content_revision":"1","canvas":[320,180],"assets":"assets","clients":[{"name":"siglus","adapter":"siglus","game":"fixture","config":{"scene":"scene.scn","format":"scn","string_codec":"plain"}}]});
         let path = tmp.path().join("project.json");
         std::fs::write(&path, serde_json::to_vec(&data).unwrap()).unwrap();
-        let mut rt = Runtime::load(&path, &tmp.path().join("state")).unwrap();
+        let mut rt = Runtime::with_registry(Project::load(&path).unwrap(), &path, &tmp.path().join("state"), AdapterRegistry::with_reference_siglus()).unwrap();
         assert!(rt.registry.names().contains(&"siglus"));
         rt.tick(0, InputFrame::default()).unwrap();
         let info = rt.inspect();
@@ -3706,6 +3817,15 @@ impl crysirror_core::service::ImageMetadata for SharedImageMetadata {
             self.decoders.clone(),
             self.tasks.clone(),
             self.memory.clone(),
+        )
+    }
+    fn begin_scoped_encoding_info(
+        &self,
+        path: &crysirror_core::path::VfsPath,
+    ) -> crysirror_core::Result<Box<dyn crysirror_core::image_encoding::ImageEncodingInfoQuery>> {
+        crate::image_encoding::begin_scoped(
+            self.owner, path.clone(), self.storage.clone(), self.decoders.clone(),
+            self.tasks.clone(), self.memory.clone(),
         )
     }
     fn fingerprint(&self, asset: &str) -> crysirror_core::Result<[u8; 32]> {

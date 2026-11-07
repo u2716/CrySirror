@@ -51,13 +51,27 @@ pub(crate) fn begin(
     memory: Arc<AtomicUsize>,
 ) -> Result<Box<dyn ImageEncodingInfoQuery>> {
     let path = VfsPath::new(Mount::Asset, asset)?;
+    begin_scoped(owner, path, storage, decoders, pool, memory)
+}
+pub(crate) fn begin_scoped(
+    owner: ClientId,
+    path: VfsPath,
+    storage: Arc<dyn ClientStorage>,
+    decoders: DecoderRegistry,
+    pool: TaskPool,
+    memory: Arc<AtomicUsize>,
+) -> Result<Box<dyn ImageEncodingInfoQuery>> {
     let permit = pool
         .reserve()
         .map_err(|error| Error::Io(error.to_string()))?;
     let task = permit
         .spawn(move |cancel| {
             cancel.check()?;
-            let reader = storage.open_asset(&path)?;
+            let reader = if path.mount() == Mount::Asset {
+                storage.open_asset(&path)?
+            } else {
+                storage.open_read(&path)?
+            };
             let length = reader.len()?;
             anyhow::ensure!(
                 length <= crysirror_image::MAX_DECODED_BYTES as u64,

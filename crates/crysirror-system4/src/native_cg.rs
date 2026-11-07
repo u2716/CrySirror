@@ -2,6 +2,7 @@
 // (C) 2019 Nunuhara Cabbage; Rust (C) 2026 CrySirror contributors.
 // GPL-2.0-or-later. Parsing, decoding, immutable pixels and publication are
 // shared services; no VM-private image/compositor algorithm exists here.
+mod window;
 use crate::{
     adapter::{Bridge, Dispatch},
     assets::Class,
@@ -36,11 +37,13 @@ enum Phase {
 struct Pending {
     owner: ClientId,
     call: ExternalCall,
-    path: String,
+    path: VfsPath,
+    fallback: Option<VfsPath>,
     operation: Operation,
     metadata: Arc<dyn ImageMetadata>,
     phase: Phase,
 }
+#[derive(Clone)]
 struct Published {
     path: String,
     _resource: Arc<dyn ImageResource>,
@@ -49,10 +52,77 @@ struct Published {
 pub(crate) struct NativeCg {
     pending: Option<Pending>,
     images: BTreeMap<i32, Published>,
+    current_window: Option<Published>,
+    presented: Option<Published>,
+    retired: Vec<Published>,
 }
 impl NativeCg {
+    pub(crate) fn published_paths(&self) -> Vec<String> {
+        let paths = self
+            .images
+            .values()
+            .chain(self.current_window.iter())
+            .chain(self.presented.iter())
+            .chain(self.retired.iter())
+            .map(|image| image.path.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        paths.into_iter().collect()
+    }
+
     pub(crate) fn cancel_pending_for_shutdown(&mut self) {
         self.pending = None;
+    }
+    ///Native6630/66D0 call052A0 before attempting a new CG lookup. The
+    ///pre-clear is not an ACK and is not delayed until a successful decode.
+    pub(crate) fn sprite_clear_target(
+        &self,
+        m: &Machine,
+        call: &ExternalCall,
+    ) -> Result<Option<i32>> {
+        if self.pending.is_some() {
+            return Ok(None);
+        }
+        let ExternalTarget::Hll { library, function } = call.target else {
+            return Ok(None);
+        };
+        let library = &m.program.libraries[library];
+        let function = &library.functions[function];
+        if library.name != b"SACT2"
+            || !matches!(function.name.as_slice(), b"SP_SetCG" | b"SP_SetCGFromFile")
+        {
+            return Ok(None);
+        }
+        ensure!(function.return_kind == 10, "native CG preclear return ABI");
+        let args = m.hll_arguments(call)?;
+        let number = match (function.name.as_slice(), args.as_slice()) {
+            (
+                b"SP_SetCG",
+                [
+                    Argument::Scalar {
+                        kind: 10,
+                        bits: number,
+                    },
+                    Argument::Scalar { kind: 10, bits: id },
+                ],
+            ) => {
+                if *number < 1 || *id < 1 {
+                    return Ok(None);
+                }
+                *number
+            }
+            (
+                b"SP_SetCGFromFile",
+                [
+                    Argument::Scalar {
+                        kind: 10,
+                        bits: number,
+                    },
+                    Argument::String { .. },
+                ],
+            ) => *number,
+            _ => anyhow::bail!("native CG preclear argument ABI"),
+        };
+        Ok(Some(number))
     }
     /// Native sprite-number policy resolves only engine-owned immutable input.
     /// Shared workers perform every raster operation; no pixel buffer is kept
@@ -64,33 +134,65 @@ impl NativeCg {
         bridge: &Bridge,
     ) -> Result<ImageInput> {
         validate_sprite(bridge, number)?;
+        if number == -1 {
+            let sprites = bridge.sact.as_ref().unwrap().sprites.as_ref().unwrap();
+            sprites.require_owner(owner)?;
+            if let Some(window) = &self.current_window {
+                ensure!(
+                    window._resource.client() == owner,
+                    "native raw WindowSurface foreign lease"
+                );
+                return Ok(ImageInput::Resource(window._resource.clone()));
+            }
+            let window = sprites
+                .graphics(-1)
+                .context("native raw window metadata absent")?;
+            let Some(Surface::Solid(color)) = window.surface else {
+                anyhow::bail!("native raw WindowSurface binding absent")
+            };
+            return Ok(ImageInput::Solid {
+                size: window.size,
+                color,
+            });
+        }
+        self.scene_sprite_input(owner, number, bridge)
+    }
+    ///SactEngine's actual map lookup is distinct from GetSurface7A60's raw
+    ///window shortcut. In particular a FromFile/Create negative entry does
+    ///not replace physical WindowSurface bytes.
+    pub(crate) fn scene_sprite_input(
+        &self,
+        owner: ClientId,
+        number: i32,
+        bridge: &Bridge,
+    ) -> Result<ImageInput> {
+        validate_sprite(bridge, number)?;
         let sprites = bridge.sact.as_ref().unwrap().sprites.as_ref().unwrap();
         sprites.require_owner(owner)?;
         let sprite = sprites
             .get(number)
-            .context("System4 DrawGraph sprite absent")?;
+            .context("native sprite-map source absent")?;
         Ok(
             match sprite
                 .surface
                 .as_ref()
-                .context("System4 DrawGraph sprite has no surface")?
+                .context("native sprite has no base surface")?
             {
                 Surface::Solid(color) => ImageInput::Solid {
                     size: sprite.size,
                     color: *color,
                 },
                 Surface::Image(path) => {
-                    let publication = self
+                    let image = self
                         .images
                         .get(&number)
                         .filter(|p| p.path == *path)
-                        .context("System4 DrawGraph image binding absent")?;
+                        .context("native sprite-map resource binding absent")?;
                     ensure!(
-                        publication._resource.client() == owner
-                            && publication._resource.size() == sprite.size,
-                        "System4 DrawGraph foreign/stale image binding"
+                        image._resource.client() == owner && image._resource.size() == sprite.size,
+                        "native sprite-map stale/foreign lease"
                     );
-                    ImageInput::Resource(publication._resource.clone())
+                    ImageInput::Resource(image._resource.clone())
                 }
             },
         )
@@ -103,6 +205,20 @@ impl NativeCg {
         resource: Arc<dyn ImageResource>,
         bridge: &mut Bridge,
         host: &mut dyn HostServices,
+    ) -> Result<()> {
+        if number == -1 {
+            return self.write_window_result(owner, resource, bridge, host);
+        }
+        self.publish_result(owner, number, resource, bridge, host, false)
+    }
+    fn publish_result(
+        &mut self,
+        owner: ClientId,
+        number: i32,
+        resource: Arc<dyn ImageResource>,
+        bridge: &mut Bridge,
+        host: &mut dyn HostServices,
+        present: bool,
     ) -> Result<()> {
         validate_sprite(bridge, number)?;
         let sprites = bridge.sact.as_mut().unwrap().sprites.as_mut().unwrap();
@@ -124,7 +240,16 @@ impl NativeCg {
             resource.clone(),
         )?;
         let path = publication.path.relative().to_owned();
-        if let Err(error) = sprites.image(owner, number, path.clone(), size, alpha, host) {
+        let next_path = path.clone();
+        if let Err(error) = sprites.update(owner, number, host, move |sprite| {
+            sprite.size = size;
+            sprite.alpha = alpha;
+            sprite.surface = Some(Surface::Image(next_path));
+            if present {
+                sprite.visible = true;
+            }
+            Ok(())
+        }) {
             host.release_image_resource(owner, &path)
                 .context("System4 DrawGraph rollback publication")?;
             return Err(error);
@@ -136,9 +261,9 @@ impl NativeCg {
                 _resource: resource,
             },
         ) {
-            host.release_image_resource(owner, &old.path)?;
+            self.retired.push(old);
         }
-        Ok(())
+        self.drain_retired(owner, host)
     }
 
     pub(crate) fn surface_replacement(
@@ -170,6 +295,28 @@ impl NativeCg {
         bridge: &mut Bridge,
         host: &mut dyn HostServices,
     ) -> Result<Option<Dispatch>> {
+        self.dispatch_inner(owner, machine, call, bridge, None, host)
+    }
+    pub(crate) fn dispatch_with_files(
+        &mut self,
+        owner: ClientId,
+        machine: &mut Machine,
+        call: &ExternalCall,
+        bridge: &mut Bridge,
+        files: &crate::native_files::NativeFiles,
+        host: &mut dyn HostServices,
+    ) -> Result<Option<Dispatch>> {
+        self.dispatch_inner(owner, machine, call, bridge, Some(files), host)
+    }
+    fn dispatch_inner(
+        &mut self,
+        owner: ClientId,
+        machine: &mut Machine,
+        call: &ExternalCall,
+        bridge: &mut Bridge,
+        files: Option<&crate::native_files::NativeFiles>,
+        host: &mut dyn HostServices,
+    ) -> Result<Option<Dispatch>> {
         let ExternalTarget::Hll { library, function } = call.target else {
             ensure!(self.pending.is_none(), "System4 changed pending CG target");
             return Ok(None);
@@ -196,6 +343,7 @@ impl NativeCg {
         ensure!(function.return_kind == 10, "System4 SACT CG return ABI");
         let arguments = machine.hll_arguments(call)?;
         if self.pending.is_none() {
+            let mut file_paths = None;
             let (operation, path) = match (function.name.as_slice(), arguments.as_slice()) {
                 (b"CG_IsExist", [Argument::Scalar { kind: 10, bits: id }]) => {
                     let path = bridge
@@ -233,6 +381,10 @@ impl NativeCg {
                         Argument::Scalar { kind: 10, bits: id },
                     ],
                 ) => {
+                    if *number < 1 || *id < 1 {
+                        machine.complete_hll(call, HllReturn::Scalar(0))?;
+                        return Ok(Some(Dispatch::Completed));
+                    }
                     validate_sprite(bridge, *number)?;
                     (
                         Operation::SetSprite { number: *number },
@@ -255,10 +407,27 @@ impl NativeCg {
                 ) => {
                     validate_sprite(bridge, *number)?;
                     let prefix = bytes.split(|b| *b == 0).next().unwrap();
+                    if prefix.is_empty() {
+                        //66D0's native empty filename cannot open an image;
+                        //052A0 has still already cleared the existing record.
+                        machine.complete_hll(call, HllReturn::Scalar(0))?;
+                        return Ok(Some(Dispatch::Completed));
+                    }
                     let native = encoding_rs::SHIFT_JIS
                         .decode_without_bom_handling_and_without_replacement(prefix)
                         .context("System4 CG filename encoding")?;
                     let path = VfsPath::new(Mount::Asset, &native.replace('\\', "/"))?;
+                    if let Some(files) = files {
+                        let (mount, relative) = files.hll_path(bytes, Mount::Asset)?;
+                        file_paths = Some(if mount == Mount::Save {
+                            files.save_path(bytes)?
+                        } else {
+                            (
+                                VfsPath::new(Mount::Save, &relative)?,
+                                VfsPath::new(Mount::Asset, &relative)?,
+                            )
+                        });
+                    }
                     (
                         Operation::SetSprite { number: *number },
                         Some(path.relative().to_owned()),
@@ -271,7 +440,14 @@ impl NativeCg {
                 return Ok(Some(Dispatch::Completed));
             };
             let metadata = host.image_metadata(owner)?;
-            let query = metadata.begin_encoding_info(&path)?;
+            // Native files written into the isolated writable root shadow
+            // their original loose-file counterpart. Numbered archive CGs
+            // keep their own resource lookup policy.
+            let (path, fallback) = file_paths.map_or(
+                (VfsPath::new(Mount::Asset, &path)?, None),
+                |(saved, original)| (saved, Some(original)),
+            );
+            let query = metadata.begin_scoped_encoding_info(&path)?;
             ensure!(
                 query.client() == owner,
                 "System4 foreign encoded image query"
@@ -280,6 +456,7 @@ impl NativeCg {
                 owner,
                 call: call.clone(),
                 path,
+                fallback,
                 operation,
                 metadata,
                 phase: Phase::Header(query),
@@ -299,8 +476,19 @@ impl NativeCg {
                 match query.poll()? {
                     ImageEncodingInfoState::Pending => {}
                     ImageEncodingInfoState::Failed(crysirror_core::Error::NotFound) => {
-                        // Original asset/file lookup failure returns0 while
-                        // keeping the destination metrics/sprite unchanged.
+                        if let Some(original) = pending.fallback.take() {
+                            let query = pending.metadata.begin_scoped_encoding_info(&original)?;
+                            ensure!(
+                                query.client() == owner,
+                                "System4 foreign fallback CG header"
+                            );
+                            pending.path = original;
+                            pending.phase = Phase::Header(query);
+                            return Ok(Some(Dispatch::WaitUntil(host.now_ms().saturating_add(1))));
+                        }
+                        //Original lookup failure returns0. Metrics remain
+                        //unchanged; SetCG's earlier052A0 already cleared its
+                        //old base and retained glyphs before this lookup.
                         machine.complete_hll(call, HllReturn::Scalar(0))?;
                         self.pending = None;
                         return Ok(Some(Dispatch::Completed));
@@ -311,8 +499,8 @@ impl NativeCg {
                     ImageEncodingInfoState::Ready(header) => {
                         ensure!(
                             header.client == owner
-                                && header.asset.mount() == Mount::Asset
-                                && header.asset.relative() == pending.path,
+                                && matches!(header.asset.mount(), Mount::Asset | Mount::Save)
+                                && header.asset == pending.path,
                             "System4 foreign/stale encoded image receipt"
                         );
                         match pending.operation {
@@ -354,14 +542,22 @@ impl NativeCg {
                                     .encoding
                                     .has_alpha_plane
                                     .context("CG alpha-plane declaration unavailable")?;
-                                let job = pending.metadata.begin_process(
+                                let input = if pending.path.mount() == Mount::Asset {
                                     ImageInput::Asset {
+                                        path: pending.path.relative().to_owned(),
+                                        size: header.encoding.size,
+                                        fingerprint: Some(header.fingerprint),
+                                    }
+                                } else {
+                                    ImageInput::ScopedAsset {
                                         path: pending.path.clone(),
                                         size: header.encoding.size,
                                         fingerprint: Some(header.fingerprint),
-                                    },
-                                    b"[]".as_slice().into(),
-                                )?;
+                                    }
+                                };
+                                let job = pending
+                                    .metadata
+                                    .begin_process(input, b"[]".as_slice().into())?;
                                 pending.phase = Phase::Pixels { header, job };
                             }
                         }
@@ -415,8 +611,9 @@ impl NativeCg {
                             _resource: resource,
                         },
                     ) {
-                        host.release_image_resource(owner, &old.path)?;
+                        self.retired.push(old);
                     }
+                    self.drain_retired(owner, host)?;
                     machine.complete_hll(call, HllReturn::Scalar(1))?;
                     self.pending = None;
                     return Ok(Some(Dispatch::Completed));
@@ -435,14 +632,14 @@ impl NativeCg {
         host: &mut dyn HostServices,
     ) -> Result<()> {
         let sprites = bridge.sact.as_ref().and_then(|s| s.sprites.as_ref());
-        if let Some(image) = self.images.get(&number) {
-            if !sprites.and_then(|s| s.get(number)).is_some_and(
+        if self.images.get(&number).is_some_and(|image| {
+            !sprites.and_then(|s| s.get(number)).is_some_and(
                 |sprite| matches!(&sprite.surface,Some(Surface::Image(path))if path==&image.path),
-            ) {
-                host.release_image_resource(owner, &image.path)?;
-                self.images.remove(&number);
-            }
+            )
+        }) {
+            self.retired.push(self.images.remove(&number).unwrap());
         }
+        self.drain_retired(owner, host)?;
         Ok(())
     }
 }

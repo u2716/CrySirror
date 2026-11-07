@@ -3,7 +3,10 @@
 //! wrapper. Archive storage, budgets, transforms, keys and mounts are shared APIs.
 #![forbid(unsafe_code)]
 mod audio;
+pub mod lilim_animation;
 pub mod ald_catalog;
+pub mod alice_message_log;
+pub mod qnt;
 mod common;
 mod files;
 pub use audio::{audio_format_ids, register_audio};
@@ -25,6 +28,7 @@ pub use xp3::Xp3;
 /// Install concrete archive parsers. The reviewed inventory records native
 /// variant/evidence limits separately; an ID never substitutes for a parser.
 pub fn register(registry: &mut crysirror_resource::FormatRegistry) -> anyhow::Result<()> {
+    registry.register(std::sync::Arc::new(lilim_animation::AbmFrames))?;
     registry.register(std::sync::Arc::new(BgiArc))?;
     registry.register(std::sync::Arc::new(MajiroArc))?;
     registry.register(std::sync::Arc::new(Nscripter::sar()))?;

@@ -1,7 +1,9 @@
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+mod line;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Instruction {
     pub op: String,
     pub args: Vec<String>,
@@ -10,13 +12,19 @@ pub struct Instruction {
     pub alternate: Option<usize>,
     pub preprocess: bool,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Program {
     pub path: String,
     pub code: Vec<Instruction>,
     pub labels: BTreeMap<String, usize>,
     pub includes: Vec<String>,
     pub inline_includes: bool,
+    ///Native label origin in its physical source file (zero based). Native
+    ///saved positions are relative line plus a UTF16 command column.
+    #[serde(default)]
+    pub native_labels: BTreeMap<String, usize>,
+    #[serde(default)]
+    pub native_columns: BTreeMap<usize, [usize; 2]>,
 }
 pub fn decode_text(bytes: &[u8]) -> Result<String> {
     ensure!(bytes.len() <= 16 * 1024 * 1024, "QLIE text size limit");
@@ -132,20 +140,37 @@ impl Program {
         Self::parse_text(path, &decode_text(bytes)?)
     }
     pub fn parse_text(path: &str, text: &str) -> Result<Self> {
+        Self::parse_source(path, text, true)
+    }
+    pub(crate) fn parse_inline(path: &str, text: &str) -> Result<Self> {
+        Self::parse_source(path, text, false)
+    }
+    fn parse_source(path: &str, text: &str, file_admission: bool) -> Result<Self> {
+        ensure!(
+            text.len() <= line::MAX_TEXT_BYTES,
+            "QLIE parsed text size limit"
+        );
         let mut p = Self {
             path: canonical(path)?,
             code: Vec::new(),
             labels: BTreeMap::new(),
             includes: Vec::new(),
             inline_includes: false,
+            native_labels: BTreeMap::new(),
+            native_columns: BTreeMap::new(),
         };
         let mut blocks: Vec<(usize, Option<usize>)> = Vec::new();
         let mut preprocess = true;
-        for (line, source) in text.lines().enumerate() {
-            let source = source.trim();
-            if source.starts_with("//") || source.starts_with(';') {
-                continue;
-            }
+        let lines = if file_admission {
+            line::admit(text)?
+        } else {
+            line::split(text)?
+        };
+        for (line, admitted) in lines.iter().enumerate() {
+            let source = admitted.trim_matches(|c: char| c <= '\u{20}');
+            let leading =
+                admitted.len() - admitted.trim_start_matches(|c: char| c <= '\u{20}').len();
+            let source_column = admitted[..leading].encode_utf16().count();
             if source.is_empty() {
                 if preprocess {
                     p.code.push(Instruction {
@@ -178,6 +203,7 @@ impl Program {
             if source.starts_with("@@") {
                 preprocess = !source.starts_with("@@!");
                 p.labels.insert(source.to_ascii_lowercase(), p.code.len());
+                p.native_labels.insert(source.to_ascii_lowercase(), line);
                 continue;
             }
             // Editor profile marker at the beginning of a script, not dialogue.
@@ -196,16 +222,29 @@ impl Program {
                 }
                 starts.push(source.len());
                 for span in starts.windows(2) {
-                    let raw = source[span[0] + 1..span[1]]
-                        .trim()
-                        .trim_end_matches(',')
-                        .trim();
+                    let raw = source[span[0] + 1..span[1]].trim();
                     let mut a = arguments(raw)?;
+                    // A final comma terminates a native command, including
+                    // `\scp,sl,\?v,...`. Interior placeholders and quoted
+                    // empty strings remain actual argument fields.
+                    while a.last().is_some_and(|value| value.is_empty()) {
+                        a.pop();
+                    }
+                    if a.is_empty() {
+                        continue;
+                    }
                     let op = a.remove(0).to_ascii_lowercase();
                     if op == "then" {
                         continue;
                     }
                     let pc = p.code.len();
+                    p.native_columns.insert(
+                        pc,
+                        [
+                            source_column + source[..span[0]].encode_utf16().count(),
+                            source_column + source[..span[1]].encode_utf16().count(),
+                        ],
+                    );
                     if matches!(op.as_str(), "if" | "for" | "case") {
                         blocks.push((pc, None));
                     }
@@ -250,6 +289,16 @@ impl Program {
                 });
             }
             ensure!(p.code.len() <= 1_000_000, "QLIE instruction count limit");
+        }
+        for (pc, instruction) in p.code.iter().enumerate() {
+            p.native_columns.entry(pc).or_insert_with(|| {
+                [
+                    0,
+                    lines
+                        .get(instruction.line.saturating_sub(1))
+                        .map_or(0, |line| line.encode_utf16().count()),
+                ]
+            });
         }
         ensure!(blocks.is_empty(), "QLIE unclosed block in {path}");
         Ok(p)

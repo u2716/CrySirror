@@ -112,4 +112,4 @@ results. Verify delayed workers with advancing simulation, immutable snapshots,
 restore rejection, graph backpressure/errors, leased resource reclamation,
 cell hierarchy/collision/save behavior, moving/shared/removed RT instances and
 visible demo frames. Record hardware and sample loss; unavailable/ignored GPU
-tests are not passes. GitHub CI remains disabled.
+tests are not passes.

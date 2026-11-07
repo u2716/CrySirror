@@ -103,5 +103,10 @@ pub(super) fn compact_key(b: &[u8]) -> Result<[i32; 115]> {
     v[94] = 6;
     v[95] = 62;
     v[96] = 3;
+    // 59D214 seeds the native destination before 5B3EC0 writes packed
+    // fields. These later fields have no counterpart in the compact record.
+    v[103] = 50;
+    v[105] = 100;
+    v[106] = 255;
     Ok(v)
 }

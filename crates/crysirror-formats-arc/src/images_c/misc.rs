@@ -312,6 +312,10 @@ pub(super) fn abm(b: &[u8]) -> Result<ImageSurface> {
     } else {
         Vec::new()
     };
+    if depth == 32 {
+        let data = crate::lilim_animation::rgba_runs(c.rest(), n, false, &|| Ok(()))?;
+        return raw(w,h,&data,Format::Bgra);
+    }
     let mut data = Vec::new();
     let mut channel = 0;
     let expected = if depth == 32 { n * 4 } else { n };

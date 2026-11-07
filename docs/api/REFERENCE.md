@@ -6,7 +6,7 @@ Generated from the class registry, the command table, serde defaults and Rust do
 `CRYSIRROR_BLESS=1 cargo test --release -p crysirror-engine --test api_docs`.
 Policy and change log: [README](README.md), [CHANGES](CHANGES.md).
 
-API fingerprint: `7ae03e5812971428`
+API fingerprint: `9983e526641d9b01`
 
 The same classes are exposed to Rust (`EngineContext` calls), to JavaScript/TypeScript (bindings generated from the registry, [crysirror.d.ts](crysirror.d.ts)) and to inspection tools.
 
@@ -80,6 +80,10 @@ Script global: `audio`.
 | `cancelChannelSeek(ticket: number)` | `void` | Cancel a pending channel seek and realign its previous logical cursor, or release a terminal receipt. A later seek is unaffected. Pending final DSP must be collected before cancellation. |
 | `exchangeChannels(left: number, right: number)` | `void` | Atomically exchange this client's two shared native/media logical channels, moving a voice if the other side is empty. Retains source handle, fractional cursor, DSP history and gain/transport ramps; opens no decoder. Unpublished preparation intents, pending seeks/retirement actors or render leases reject before any change. Ready receipts remain historical observations of their earlier publication. This is separate from decoded left/right channel swap; pooled VoiceHandles remain unchanged. |
 | `nativeChannelInfo(channel: number)` | `any` | Shared native/media channel AudioPlaybackInfo or null when ended. Scoped to the caller; source frame units, output-clock fades/delays and source completion remain distinct from processing tails. |
+| `setChannelGainEnvelope(channel: number, envelope: any)` | `void` | Set a mixer-owned stepped dB100 envelope: interval_ms,steps,start_db100,end_db100, optional elapsed_steps/phase_ms/apply_initial/stop_at_end. The -10000 floor is silence. Output time advances through pause/starvation; null cancels at current gain. No decoder/source restart. |
+| `channelGainEnvelope(channel: number)` | `any` | Published stepped gain spec, elapsed_steps, phase_ms, current_db100 and active, or null for an absent voice/track. Foreign client state is inaccessible. |
+| `setVoiceGainEnvelope(handle: Record<string, any>, envelope: any)` | `void` | Apply the same stepped dB100 envelope to a scoped pooled voice. Null cancels it at the applied level; ordinary gain controls supersede this track. |
+| `voiceGainEnvelope(handle: Record<string, any>)` | `any` | Published stepped gain state of a scoped pooled voice, or null without an envelope. |
 | `beginVoiceRelease(spec: Record<string, any>)` | `Record<string, any>` | Retire a shared native channel decoder to a tail channel without reopening or seeking; admit an externally clocked stepped db100 release and return an owned operation handle. Pending is not transfer completion. |
 | `advanceVoiceRelease(handle: Record<string, any>, elapsedUpdates: any)` | `void` | Supply a monotonic exact update counter (integer or decimal string) for a channel release; repeated samples are idempotent. |
 | `voiceRelease(handle: Record<string, any>)` | `Record<string, any>` | Query actual owner-published release phase, completed counter, source position and stopped_at_update; requested counters alone are not completion. |
@@ -425,6 +429,7 @@ Script global: `layers`.
 | `remove(id: number)` | `void` | Remove a layer and its descendants. |
 | `setTransform(id: number, transform: Record<string, any>)` | `void` | Pivot/anchor/rotation/scale/z and optional column-major affine local_matrix, applied after local scale/YPR before the anchor. Shear is preserved; perspective, singular matrices and matrix billboards fail. |
 | `setVisible(id: number, visible: boolean)` | `void` | Inherited visibility. |
+| `setClockPaused(id: number, paused: boolean)` | `void` | Pause or resume automatic subtree motion, positioned-text reveal and crossfade clocks while retaining elapsed time; explicit external updates remain caller-owned. |
 | `revealStatus(id: number)` | `Record<string, any> \| null` | Engine-owned glyph reveal {visible,total,complete}, or null for an absent/non-glyph layer. |
 | `completeReveal(id: number)` | `void` | Show the complete positioned text run without a VM-private reveal clock. |
 | `setOpacity(id: number, opacity: number)` | `void` | Inherited opacity 0..255. |
@@ -445,7 +450,7 @@ Script global: `layers`.
 | `endCrossfade(id: number)` | `void` | Release a subtree crossfade; leaves original nodes intact. |
 | `setCrossfadeElapsed(id: number, elapsedMs: number)` | `void` | Set an externally clocked crossfade's progress (clamped to its duration). |
 | `endTransition(—)` | `void` | Finish this client's transition now (skip). |
-| `beginMotion(id: number, track: Record<string, any>)` | `void` | Animate layer position, scale, rotation (radians), pivot or opacity with shared MotionTrackSpec; opacity samples truncate to0..255 bytes, engine duration uses milliseconds, external duration uses caller units. |
+| `beginMotion(id: number, track: Record<string, any>)` | `void` | Animate layer position, scale, rotation (radians), pivot, opacity or filter RGB multiplication with shared MotionTrackSpec. Optional repeat counts additional passes; -1 repeats indefinitely. Opacity samples truncate to0..255 bytes; RGB multipliers use0..1. Engine duration uses milliseconds; external duration uses caller units. |
 | `beginSequence(id: number, spec: Record<string, any>)` | `void` | Create owned externally clocked incremental channels and Layer/filter bindings. Banked linear/oscillating queues retain activation, velocity, loop origins and capture/replay state. |
 | `sequence(id: number, operation: Record<string, any>)` | `void` | Enqueue, set, capture, replay, advance or finish an owned channel queue. Advance requires consecutive decimal-string generation/revision receipts; a pending worker never advances its clock. |
 | `sequenceStatus(id: number)` | `Record<string, any> \| null` | Retained owner-scoped sequence channels, queues, active/last records and exact generation/revision. Null means the owned layer has no sequence. |
@@ -461,7 +466,7 @@ Script global: `layers`.
 | `endMotion(id: number, property: string \| null, finish: boolean)` | `void` | Cancel one track or all tracks; finish optionally applies the target before removal. |
 | `motionStatus(id: number)` | `Record<string, any>` | Owned scalar tracks, external drivers with exact generation/revision stamps, and combined completion; a missing target fails. |
 
-Commands issued: `put` → `layer.put`, `remove` → `layer.remove`, `setTransform` → `layer.set_transform`, `setVisible` → `layer.set_visible`, `completeReveal` → `layer.complete_reveal`, `setOpacity` → `layer.set_opacity`, `setOrder` → `layer.set_order`, `setDepth` → `layer.set_depth`, `setSolidColor` → `layer.set_solid_color`, `setPaint` → `layer.set_paint`, `setParent` → `layer.set_parent`, `advanceTime` → `layer.advance_time`, `setClip` → `layer.set_clip`, `setViewportClip` → `layer.set_viewport_clip`, `setSourceCrop` → `layer.set_source_crop`, `setGlyphCrops` → `layer.set_glyph_crops`, `setFilter` → `layer.set_filter`, `rebindImage` → `layer.rebind_image`, `transition` → `layer.transition`, `endTransition` → `layer.end_transition`, `beginCrossfade` → `layer.begin_crossfade`, `beginCrossfadeEffect` → `layer.begin_crossfade_effect`, `endCrossfade` → `layer.end_crossfade`, `setCrossfadeElapsed` → `layer.set_crossfade_elapsed`, `beginMotion` → `layer.begin_motion`, `beginSequence` → `layer.begin_sequence`, `sequence` → `layer.sequence`, `beginExternalMotion` → `layer.begin_external_motion`, `commitExternalMotion` → `layer.commit_external_motion`, `requestExternalMotionSkip` → `layer.request_external_motion_skip`, `removeExternalMotion` → `layer.remove_external_motion`, `setRect` → `layer.set_rect`, `setMotionElapsed` → `layer.set_motion_elapsed`, `endMotion` → `layer.end_motion`.
+Commands issued: `put` → `layer.put`, `remove` → `layer.remove`, `setTransform` → `layer.set_transform`, `setVisible` → `layer.set_visible`, `setClockPaused` → `layer.set_clock_paused`, `completeReveal` → `layer.complete_reveal`, `setOpacity` → `layer.set_opacity`, `setOrder` → `layer.set_order`, `setDepth` → `layer.set_depth`, `setSolidColor` → `layer.set_solid_color`, `setPaint` → `layer.set_paint`, `setParent` → `layer.set_parent`, `advanceTime` → `layer.advance_time`, `setClip` → `layer.set_clip`, `setViewportClip` → `layer.set_viewport_clip`, `setSourceCrop` → `layer.set_source_crop`, `setGlyphCrops` → `layer.set_glyph_crops`, `setFilter` → `layer.set_filter`, `rebindImage` → `layer.rebind_image`, `transition` → `layer.transition`, `endTransition` → `layer.end_transition`, `beginCrossfade` → `layer.begin_crossfade`, `beginCrossfadeEffect` → `layer.begin_crossfade_effect`, `endCrossfade` → `layer.end_crossfade`, `setCrossfadeElapsed` → `layer.set_crossfade_elapsed`, `beginMotion` → `layer.begin_motion`, `beginSequence` → `layer.begin_sequence`, `sequence` → `layer.sequence`, `beginExternalMotion` → `layer.begin_external_motion`, `commitExternalMotion` → `layer.commit_external_motion`, `requestExternalMotionSkip` → `layer.request_external_motion_skip`, `removeExternalMotion` → `layer.remove_external_motion`, `setRect` → `layer.set_rect`, `setMotionElapsed` → `layer.set_motion_elapsed`, `endMotion` → `layer.end_motion`.
 
 ## Class Localization
 
@@ -721,6 +726,7 @@ Script global: `ui`.
 | `setEnabled(id: number, enabled: boolean)` | `void` | Enable/disable input. |
 | `setValue(id: number, value: number)` | `void` | Toggle/slider value. |
 | `setHitMask(id: number, mask: Record<string, any> \| null)` | `void` | Bind an immutable WidgetHitMask coverage grid to pointer input, or clear it with null; keyboard focus remains independent. |
+| `setHitMaskGeometry(id: number, geometry: Record<string, any>)` | `void` | Update retained source-coverage mappings and union rectangles without copying pixels or resetting input capture. |
 | `setCursorVisible(visible: boolean)` | `void` | Set engine cursor presentation visibility. |
 | `defineCursor(id: number, cursor: Record<string, any>)` | `void` | Define or replace a client cursor {frames:[{width,height,hotspot:[x,y],rgba:[bytes]}], steps:[[frame,ms]]} (edges 1..256, straight RGBA8; one 0 ms step for a still cursor). |
 | `setCursor(cursor: Record<string, any>)` | `void` | Select the pointer shape: {kind:'standard', shape:'default'\|'pointer'\|'text'\|'wait'\|...} or {kind:'custom', id} for a cursor this client defined. |
@@ -736,7 +742,7 @@ Script global: `ui`.
 | `endMotion(id: number, property: string \| null, finish: boolean)` | `void` | Cancel one or all widget motion tracks, optionally applying their targets. |
 | `motionStatus(id: number)` | `Record<string, any>` | Current owned widget motion tracks and completion; a missing target fails. |
 
-Commands issued: `setMenu` → `ui.set_menu`, `removeMenu` → `ui.remove_menu`, `openMenu` → `ui.open_menu`, `openDialog` → `ui.open_dialog`, `closeDialog` → `ui.close_dialog`, `warpPointer` → `ui.warp_pointer`, `movePointerStepped` → `ui.move_pointer_stepped`, `advancePointerMotion` → `ui.advance_pointer_motion`, `closeMenu` → `ui.close_menu`, `setMenuChecked` → `ui.set_menu_checked`, `setMenuEnabled` → `ui.set_menu_enabled`, `putTooltip` → `ui.put_tooltip`, `removeTooltip` → `ui.remove_tooltip`, `showTooltip` → `ui.show_tooltip`, `hideTooltip` → `ui.hide_tooltip`, `put` → `ui.put`, `remove` → `ui.remove`, `setRect` → `ui.set_rect`, `setVisible` → `ui.set_visible`, `setEnabled` → `ui.set_enabled`, `setValue` → `ui.set_value`, `setHitMask` → `ui.set_hit_mask`, `setText` → `ui.set_text`, `setTitle` → `ui.set_title`, `setWindowPolicy` → `ui.set_window_policy`, `setFullscreen` → `ui.set_fullscreen`, `setCursorVisible` → `ui.set_cursor_visible`, `defineCursor` → `ui.define_cursor`, `setCursor` → `ui.set_cursor`, `insertText` → `ui.insert_text`, `backspace` → `ui.backspace`, `focusTextField` → `ui.focus`, `beginMotion` → `ui.begin_motion`, `setMotionElapsed` → `ui.set_motion_elapsed`, `endMotion` → `ui.end_motion`.
+Commands issued: `setMenu` → `ui.set_menu`, `removeMenu` → `ui.remove_menu`, `openMenu` → `ui.open_menu`, `openDialog` → `ui.open_dialog`, `closeDialog` → `ui.close_dialog`, `warpPointer` → `ui.warp_pointer`, `movePointerStepped` → `ui.move_pointer_stepped`, `advancePointerMotion` → `ui.advance_pointer_motion`, `closeMenu` → `ui.close_menu`, `setMenuChecked` → `ui.set_menu_checked`, `setMenuEnabled` → `ui.set_menu_enabled`, `putTooltip` → `ui.put_tooltip`, `removeTooltip` → `ui.remove_tooltip`, `showTooltip` → `ui.show_tooltip`, `hideTooltip` → `ui.hide_tooltip`, `put` → `ui.put`, `remove` → `ui.remove`, `setRect` → `ui.set_rect`, `setVisible` → `ui.set_visible`, `setEnabled` → `ui.set_enabled`, `setValue` → `ui.set_value`, `setHitMask` → `ui.set_hit_mask`, `setHitMaskGeometry` → `ui.set_hit_mask_geometry`, `setText` → `ui.set_text`, `setTitle` → `ui.set_title`, `setWindowPolicy` → `ui.set_window_policy`, `setFullscreen` → `ui.set_fullscreen`, `setCursorVisible` → `ui.set_cursor_visible`, `defineCursor` → `ui.define_cursor`, `setCursor` → `ui.set_cursor`, `insertText` → `ui.insert_text`, `backspace` → `ui.backspace`, `focusTextField` → `ui.focus`, `beginMotion` → `ui.begin_motion`, `setMotionElapsed` → `ui.set_motion_elapsed`, `endMotion` → `ui.end_motion`.
 
 ## Class Vfx
 
@@ -848,6 +854,7 @@ Every typed engine command and the API member that issues it. `tests/api_coverag
 | layer | `remove` | `Layers.remove` |
 | layer | `set_transform` | `Layers.setTransform` |
 | layer | `set_visible` | `Layers.setVisible` |
+| layer | `set_clock_paused` | `Layers.setClockPaused` |
 | layer | `complete_reveal` | `Layers.completeReveal` |
 | layer | `set_opacity` | `Layers.setOpacity` |
 | layer | `set_order` | `Layers.setOrder` |
@@ -919,6 +926,7 @@ Every typed engine command and the API member that issues it. `tests/api_coverag
 | ui | `set_enabled` | `Ui.setEnabled` |
 | ui | `set_value` | `Ui.setValue` |
 | ui | `set_hit_mask` | `Ui.setHitMask` |
+| ui | `set_hit_mask_geometry` | `Ui.setHitMaskGeometry` |
 | ui | `set_text` | `Ui.setText` |
 | ui | `set_title` | `Ui.setTitle` |
 | ui | `set_window_policy` | `Ui.setWindowPolicy` |
@@ -970,6 +978,7 @@ Explicit byte arithmetic for immutable bitmap composition. These profiles operat
 | `MaskHoldAlphaScalar256` | — | MaskScalar256's RGB interpolation, keeping the destination alpha (krkr `_HDA` hold-destination-alpha blend). |
 | `MaskPiecewise256` | `weight: u16` | mask0 skips; mask255 uses weight/(256-weight), partial mask uses a=mask*weight>>8 and255-a; sum then/256, keeping destination alpha. Composite-layer opacity must be255; weight is0..=256. |
 | `MaskSeparate256` | — | Mask0 skips, mask255 copies RGB; partial RGB is floor(s*a/256) + floor(d*(256-a)/256). Retains destination alpha; opacity must be255. |
+| `MaskIncrement256` | — | Mask0 skips, mask255 copies RGB; partial mask uses source weight a+1 and destination weight255-a, then a single /256 truncation. Destination alpha is retained, and composite-layer opacity must be255. |
 | `OpaqueOnAlphaScalar256` | — | Opaque input over a straight-alpha destination with scalar /256 tables. |
 | `AlphaOnAlphaScalar256` | — | Straight-alpha input over straight-alpha destination, scalar /256 tables. |
 | `Ps` | `blend: PsBlend, hold_alpha: bool` | Photoshop-like colour blend (krkr `tvpps.c` tables); `hold_alpha` keeps the destination alpha, otherwise alpha is written as zero. |
@@ -1112,6 +1121,39 @@ Reusable image operations. All channels are straight RGBA bytes; RGB-only transf
 
 | Variant | Fields | Description |
 |---|---|---|
+| `alpha_lookup` | `table: Vec<u8>` | One checked lookup for the stored coverage byte; RGB remains unchanged. |
+| `coverage_reference_key` | `spec: crate::coverage_key::CoverageReferenceKey` | Binary alpha from a reference channel byte. Spec: reference[x,y], channel0..3, equal0..255, different0..255. RGB remains unchanged. |
+| `rect_map` | `spec: crate::rect_map::RectMap` | Ordered integer rectangle/scanline mapping with a defined clear plane. |
+| `dual_texture` | `spec: crate::dual_texture::DualTextureByte128` | Byte-accurate two-texture channel composition in a raster context. |
+| `affine_blend` | `spec: crate::affine_blend::AffineBlendByte128` | — |
+| `fixed_affine_nearest` | `spec: crate::fixed_affine::FixedAffineNearest` | — |
+| `scanline_affine_nearest` | `spec: crate::scanline_affine::ScanlineAffineNearest` | — |
+| `tile_reveal` | `spec: crate::tile_reveal::TileReveal` | — |
+| `radial_angle_lookup` | `spec: crate::radial_angle::RadialAngleLookup` | — |
+| `gradient_overlay` | `spec: crate::gradient_overlay::GradientOverlayByte` | — |
+| `linear_gradient` | `spec: crate::linear_gradient::LinearGradientByte` | — |
+| `sequential_box_blur` | `spec: crate::sequential_box_blur::SequentialBoxBlur` | — |
+| `masked_blur` | `spec: crate::masked_blur::MaskedBlur` | — |
+| `box_blur_clamped` | `spec: crate::box_blur_clamped::BoxBlurClamped` | — |
+| `box_blur_span` | `spec: crate::box_blur_span::BoxBlurSpan` | Repeat-edge average over an explicit half-open axis window. |
+| `cyclic_cell_sample` | `spec: crate::cyclic_cell_sample::CyclicCellSample` | Full-cell sample replication. Spec: region[x,y,w,h], cell[w,h], and offsets[[dx,dy],...]. Partial cells and the outside region remain intact. |
+| `nearest_cell_sample` | `spec: crate::nearest_cell_sample::NearestCellSample` | — |
+| `wave_displace` | `spec: crate::wave_displace::WaveDisplaceByte128` | — |
+| `resize_byte` | `spec: crate::resize_byte::ResizeByte128` | — |
+| `shape_mask` | `spec: crate::shape_mask::ShapeMask` | — |
+| `rect_resample` | `spec: crate::rect_resample::RectResample1024` | — |
+| `rect_resample_byte256` | `spec: crate::resample_byte256::RectResampleByte256` | Stored-byte8.8 rectangle sampling without a half-texel offset. |
+| `cosine_lens` | `spec: crate::cosine_lens::CosineLensByte128` | — |
+| `integer_color_matrix` | `spec: crate::integer_color::ColorMatrixFixed` | — |
+| `integer_color_modulation` | `spec: crate::integer_color::IntegerColorModulation` | — |
+| `luma_lookup` | `spec: crate::luma_lookup::LumaLookup` | RGBA colour table indexed by stored alpha or explicit integer luminance. |
+| `tiled_transform` | `spec: crate::tiled_transform::TiledTransform` | Source stretched to `size`, tiled and redrawn under a centred affine. |
+| `channel_range_stretch` | `spec: crate::tiled_transform::ChannelRangeStretch` | One channel's observed range mapped onto 0..=255. |
+| `block_average` | `cell: [u16; 2]` | Truncated straight RGBA means, one uniform colour per rectangular cell. |
+| `truncated_row_blur` | `spec: crate::truncated_row_blur::TruncatedRowBlur` | Horizontal mean over a row-truncated window (optionally one past). |
+| `random_runs` | `spec: crate::random_runs::RandomRuns` | Random-length horizontal runs filled from the source run. |
+| `box_reduce` | `spec: crate::box_reduce::BoxReduce` | Checked box-window reduction with explicit integer channel arithmetic. |
+| `canvas_margins` | `margins: [i32; 4], fill: [u8; 4]` | Signed left/top/right/bottom expansion or crop, preserving stored bytes. |
 | `alpha_mask_plane` | `spec: crate::alpha_mask::AlphaMaskPlane` | Modulate stored alpha using an immutable original-alpha plane. |
 | `alpha_stamps` | `spec: crate::alpha_stamps::AlphaStamps` | Ordered atlas alpha replacement, retaining stored destination RGB. |
 | `coverage_sum` | `spec: crate::coverage_sum::CoverageSum` | Saturating alpha neighborhoods with explicit sample offsets and edge colour. |
@@ -1126,7 +1168,8 @@ Reusable image operations. All channels are straight RGBA bytes; RGB-only transf
 | `piecewise_resample` | `spec: crate::piecewise_resample::PiecewiseResampleSpec` | Fixed16.16 piecewise nearest sampling and explicit /256 mixtures. |
 | `stripe_reveal` | `spec: crate::sprite_alpha::StripeReveal` | Bounded generic stripe/stagger mask for retained transitions. |
 | `sprite_alpha` | `spec: crate::sprite_alpha::SpriteAlpha` | Extract reusable sprite transparency from decoded resource pixels. |
-| `sine_row_copy` | `spec: crate::row_copy::SineRowCopy` | Two-input whole-pixel row copy; preserves uncovered destination pixels. |
+| `disc_copies` | `spec: crate::disc_copy::DiscCopies` | Two-input whole-pixel row copy; preserves uncovered destination pixels. Midpoint-circle discs copied from the raster source (second input). |
+| `sine_row_copy` | `spec: crate::row_copy::SineRowCopy` | — |
 | `alpha_clip_rect` | `spec: crate::alpha_clip::AlphaClipRect` | Two-input clipped coverage multiplication with optional exterior clear. |
 | `masked_pair_blend` | `spec: crate::masked_pair::MaskedPairBlend` | Three immutable inputs, two independent masks and exact14bit products. |
 | `transition` | `spec: crate::transition::ImageTransition` | — |
@@ -1805,6 +1848,7 @@ Test only the first byte. A native lead-byte mask can intentionally admit bytes 
 | `SingleByte` | — | — |
 | `MaskedBands` | `mask: u8, first: u8, second: u8` | — |
 | `InclusiveRange` | `first: u8, last: u8` | — |
+| `TwoRanges` | `ranges: [[u8; 2]; 2]` | — |
 
 ### ByteStringProfile
 
@@ -2156,10 +2200,18 @@ Variants are tagged by `"kind"`.
 
 | Variant | Fields | Description |
 |---|---|---|
+| `end` | — | A native immediate assignment, independent of intermediate progress. |
 | `linear` | — | — |
 | `quadratic_in` | — | — |
 | `square_root` | — | — |
 | `half_cosine` | `pi: f64` | — |
+| `b_spline` | `strength: f64` | Four-control B-spline with duplicate0/1 endpoints, blended with linear progress by an explicit tension. General controls use sample_four_point. |
+| `power` | `exponent: f64, direction: ProgressDirection` | General power curve. Both directions preserve overshoot-free endpoints. |
+| `square` | `segments: u32` | Alternating endpoint values over an even number of segments. |
+| `triangle` | `segments: u32` | Triangle wave, with an odd segment count ending at one. |
+| `cosine` | `radians: f64` | Cosine wave with caller-specified angular distance. |
+| `damped_cosine` | `exponent: f64, radians: f64, absolute: bool, reverse: bool` | Decaying cosine, optionally rectified, or time-reversed. Output may overshoot; preserving it is essential for spring/back animation. |
+| `steps` | `segments: u32` | Right-continuous quantized linear progress. |
 
 ### ProgressCurve
 
@@ -2356,6 +2408,7 @@ Used by: ImageMetadata.begin_process; scoped resources, encoded memory and immut
 | `Ternary` | `destination: Box<ImageInput>, first: Box<ImageInput>, second: Box<ImageInput>` | Root-only three-input context. The first effect must be MaskedPairBlend; all inputs use the same scope, graph, decode and memory admission rules. |
 | `Transition` | `from: Arc<dyn ImageResource>, to: Arc<dyn ImageResource>, mask: Option<Arc<dyn ImageResource>>` | — |
 | `Asset` | `path: String, size: [u32; 2], fingerprint: Option<[u8; 32]>` | Expected dimensions bound admission; the worker verifies the decoded size. |
+| `ScopedAsset` | `path: crate::path::VfsPath, size: [u32; 2], fingerprint: Option<[u8; 32]>` | A read through the current client's explicit capability mount, including images written to Save. It carries no OS path or authority of its own. |
 | `Resource` | — | — |
 
 ### GlyphImageSpec
@@ -2964,6 +3017,7 @@ Shared mixer playback parameters. Public Audio calls additionally accept an asse
 
 | Field | Rust type | Default | Description |
 |---|---|---|---|
+| `gain_envelope` | `Option<crysirror_core::service::AudioGainEnvelopeSpec>` | — | Optional output-clock envelope attached at source publication. |
 | `mix_group` | `Option<String>` | `null` | An existing client-scoped logical gain group; None bypasses groups. |
 | `bus` | `Bus` | `"sfx"` | Source bus; Master is a control bus and is rejected. |
 | `gain` | `f32` | `1.0` | Per-voice gain 0..4, default 1. |
@@ -3022,6 +3076,7 @@ Worker-prepared numeric transform, separate from source transport/pitch.
 | Variant | Fields | Description |
 |---|---|---|
 | `SiglusJitan` | `percent: u16` | Pinned mono PCM16 splice profile; 100..400 percent, 100 exact identity. |
+| `PcmFilters` | — | Ordered integer stereo filter chain applied to the decoded PCM16 (at most 16 stages); see [`PcmFilter`]. |
 
 ### AudioResourceInfo
 
@@ -3081,6 +3136,7 @@ Used by: Rust HostServices/ChannelAudio playback parameters.
 
 | Field | Rust type | Default | Description |
 |---|---|---|---|
+| `gain_envelope` | `Option<AudioGainEnvelopeSpec>` | — | Optional stepped attenuation installed atomically with the new source. Its clock starts at actual publication, not preparation-request time. |
 | `gain` | `f32` | — | Mixer voice gain, default 1. |
 | `decode_gain` | `f32` | — | Legacy amplitude applied by the shared decoded-source wrapper, default 1. |
 | `rate` | `f32` | — | Source playback rate, default 1. |
@@ -3144,6 +3200,7 @@ Shared source transport inspection. Processing tails do not prolong source compl
 
 | Field | Rust type | Default | Description |
 |---|---|---|---|
+| `source_peak` | `f32` | — | Peak absolute source PCM in the last completed mixer block, before gain, bus, pan and spatial processing. Paused/inactive sources report 0. |
 | `balance` | `AudioBalanceInfo` | — | Mixer-owner observation of the independent external dB balance track. |
 | `source_playing` | `bool` | — | Source has remaining input, even when paused; excludes processing tails. |
 | `paused` | `bool` | — | Source clock currently frozen by pause or a freezing scheduled resume. |
@@ -4352,6 +4409,7 @@ Used by: Bitmap.blit and Bitmap.stretch mode.
 | `mask_hold_alpha_scalar256` | — | MaskScalar256's RGB interpolation that keeps the destination alpha (krkr `TVPAlphaBlend_HDA`: sopa = s.a, or s.a*opacity>>8 below 255). |
 | `mask_piecewise256` | `weight: u16` | Explicit per-mask /256 profile: mask0 skips; mask255 uses weight and 256-weight; partial masks use a=mask*weight>>8 and 255-a. RGB products are summed then shifted. Destination alpha is retained. |
 | `mask_separate256` | — | Independent /256 floors for source-alpha RGB products. Mask0 skips; mask255 copies RGB. Destination alpha is retained; opacity must be255. |
+| `mask_increment256` | — | Mask0 skips, mask255 copies RGB; partial weights are a+1 /255-a. The sum is shifted once by8; destination alpha is retained. |
 | `ps` | `blend: PsBlend, hold_alpha: bool` | Photoshop-like blend (krkr `tvpps.c`): per channel `f(s, d)`, then d + ((f - d)·a >> 8) with a = s.a (·opacity >> 8 below 255). With `hold_alpha` the destination alpha is kept (`_HDA`), otherwise the result alpha is zero, as the native kernels write it. |
 | `opaque_on_alpha_scalar256` | — | Encoded-byte scalar opaque-source blend onto straight alpha. Full opacity copies RGB and writes alpha 255; partial opacity uses the scalar opacity-on-opacity lookup table, ignoring source alpha. |
 | `alpha_on_alpha_scalar256` | — | Encoded-byte scalar straight-alpha blend using the scalar lookup table. This deliberately preserves the scalar transparent-pixel quirks; it is not the SIMD or conventional /255 source-over profile. |
@@ -5612,12 +5670,14 @@ Used by: `Layers.put`, `ClientSpec.systems.layers`.
 
 | Field | Rust type | Default | Description |
 |---|---|---|---|
+| `clock_paused` | `bool` | — | Pause automatic motion, glyph reveal and subtree crossfade clocks. Descendants inherit the pause; explicit external samples still apply. |
 | `id` | `u32` | — | Client-local layer id. |
 | `parent` | `Option<u32>` | — | Parent layer id; transform, visibility, opacity and clip are inherited. |
 | `rect` | `[f32; 4]` | — | Rectangle [x, y, w, h] in canvas pixels. |
 | `paint` | `Paint` | — | Solid fill, image or text. |
 | `transform` | `SpriteTransform` | — | Pivot, anchor, rotation, scale and z. |
 | `order` | `[i32; 2]` | — | Explicit [major, minor] draw order. |
+| `tie_order` | `Option<u64>` | — | Optional stable admission rank within an equal flat [major,minor] bucket. None retains the layer-ID/subdraw rule. Geometry parents do not introduce sorting fences, and explicit depth scopes stay scoped. |
 | `clip` | `Option<[f32; 4]>` | — | Clip rectangle [x, y, w, h], or `null`. |
 | `viewport_clip` | `Option<[f32; 4]>` | — | Inherited clip [x,y,w,h] in logical render-target coordinates. Unlike `clip`, this rectangle is unaffected by this layer's/parents' transforms. Zero width or height clips the complete subtree. None adds no clip. |
 | `source_crop` | `Option<[f32; 4]>` | — | Non-inherited source geometry crop in layer-local [x,y,w,h] coordinates. Image/text content keeps its original size; UVs follow surviving geometry. Positioned glyph runs crop each expanded glyph in this same local space. |
@@ -5636,12 +5696,19 @@ Variants are tagged by `"kind"`.
 
 | Variant | Fields | Description |
 |---|---|---|
+| `coverage_write` | `paint: Box<Paint>` | Draw into this client's transient coverage plane. Later ordinary draws consume its blue byte as source alpha coverage; the color target is unchanged. The inner payload must not itself be a coverage command. |
+| `coverage_reset` | `value: u8` | Replace the client's coverage state with a uniform byte value. |
+| `glyph_view` | `source: u32, offset: [f32;2]` | A positioned-glyph source view. Geometry/filter/opacity belong to this layer; content and reveal state remain owned by the source layer. |
+| `group` | `tint: [u8;4], add: [f32;3]` | Transform/opacity carrier with no raster payload. |
+| `ordered_state` | `command: ordered_state::Command` | Global ordered composition command, consumed during frame extraction. |
 | `solid` | `color: [u8; 4]` | Solid RGBA8 fill. |
 | `image` | `asset: String, tint: [u8; 4]` | Image asset with an RGBA8 tint. |
 | `text` | `text: String, font: String, size: u16, color: [u8; 4], layout: String` | Text with an explicit project font alias, pixel size, color and layout. |
 | `glyph_run` | `font: String, size: f32, color: [u8; 4], bold: bool, glyphs: Vec<PositionedGlyph>, reveal: Option<GlyphReveal>, blur: Option<GlyphBlur>, outline: Option<GlyphOutline>` | Retained explicit glyph positions, rendered as independent cached glyph quads. No VM renderer or flattened text/screen image is involved. |
 | `snapshot` | `size: [u32; 2], layers: Arc<Vec<LayerSpec>>` | Frozen, source-local static scene, rasterized once at `size` before the outer Layer's transform, opacity, UV crop and filter are applied. Inputs contain no nested snapshots, external parents or dynamic state. |
+| `projected_mesh` | `frame: Arc<crate::projected_mesh::MeshFrame>, tint: [u8; 4]` | Immutable projected triangles drawn directly in retained order. Vertex depth and clip W survive to rasterization; no composed-screen texture. |
 | `backdrop` | `history: bool` | What has been drawn beneath this layer in the current frame, read back into a quad. With a filter's distortion this is a screen effect over a depth band: layers ordered above stay untouched. Only the top-level frame has such a backdrop; inside isolated targets the layer draws nothing. With `history` it shows what the previous frame had at this depth, then captures again: drawn with an opacity below 255 that is a feedback trail. |
+| `legacy_mesh` | `spec: Arc<crate::legacy_mesh::Spec>` | Logical fixed-function mesh resource. Shared frame extraction evaluates shading and projection against its real retained ancestor matrices. |
 | `mesh` | `frame: Arc<crysirror_puppet::PuppetFrame>, tint: [u8; 4]` | Immutable, validated engine mesh resource. Capturing an evaluated puppet freezes its completed geometry; textures remain client-scoped immutable image dependencies, with no rig/player or device handles. |
 | `puppet` | `asset: String, tint: [u8; 4]` | 2D deformable puppet (ADR 0029): an engine puppet rig JSON asset, fitted into the layer rect (aspect preserved). |
 
@@ -5671,10 +5738,10 @@ Rule-image wipe (KiriKiri `universal` transition): with phase `progress * (255 +
 
 Used by: `LayerSpec.sampling`; independently addressed image axes.
 
-Sampler state stored with a retained image layer, independent of a GPU.
-
 | Field | Rust type | Default | Description |
 |---|---|---|---|
+| `linear` | `bool` | `true` | Linear interpolation, or nearest-neighbour sampling when false. Defaults to true to preserve existing retained-image presentation. |
+| `profile` | `ImageSampleProfile` | `"hardware"` | — |
 | `address_u` | `TextureAddressMode` | `"repeat"` | Horizontal texture coordinate addressing. |
 | `address_v` | `TextureAddressMode` | `"clamp_to_edge"` | Vertical texture coordinate addressing. |
 
@@ -5698,6 +5765,8 @@ A glyph with an explicit baseline in its containing layer's local pixels. Layout
 
 | Field | Rust type | Default | Description |
 |---|---|---|---|
+| `style` | `Option<PositionedGlyphStyle>` | — | Explicit per-glyph coverage and decoration profile. None inherits the containing run; Some fully specifies this glyph's profile. |
+| `font` | `Option<String>` | — | Optional client-scoped font alias for this scalar. None uses the run's font; explicit aliases retain the same shared reveal clock and layout. |
 | `crop` | `Option<[f32; 4]>` | — | Optional geometry crop in the containing layer's local pixels. This clips each glyph after coverage/outline generation, without reshaping. |
 | `character` | `char` | `"あ"` | — |
 | `baseline` | `[f32; 2]` | `[0.0,20.0]` | — |
@@ -5707,12 +5776,13 @@ A glyph with an explicit baseline in its containing layer's local pixels. Layout
 | `horizontal_scale` | `Option<f32>` | — | Horizontal outline raster scale, preserving the supplied baseline and logical advance. This changes coverage, not the layer transform. |
 | `font_width` | `Option<f32>` | — | Requested average character width in pixels, using the authorized outline face's OS/2 average width. Multiplied by horizontal_scale. |
 | `cell_width` | `Option<u16>` | — | Center the rounded glyph advance in this integer logical cell, using truncation toward zero for the half-difference. Raster baseline y stays. |
+| `image` | `Option<GlyphImage>` | — | Draw an image cell instead of this scalar's outline. The scalar still counts as one reveal step; font, style and outline are unused. |
 
 ### GlyphRevealUnit
 
 Used by: `GlyphReveal.unit`.
 
-Unit of an explicitly positioned run. Each item contains one Unicode scalar; this deliberately does not reinterpret native scalar timing as grapheme timing. Other segmentation modes must be added explicitly.
+Unit of an explicitly positioned run. Each item contains one Unicode scalar. A caller may separately map native cells or shaped clusters onto positioned-glyph boundaries through GlyphReveal::prefix_steps.
 
 | Variant | Fields | Description |
 |---|---|---|
@@ -5727,9 +5797,10 @@ Engine-owned positioned-text clock. Layout, markup and wait policies are callers
 | Field | Rust type | Default | Description |
 |---|---|---|---|
 | `unit` | `GlyphRevealUnit` | `"unicode_scalar"` | — |
-| `interval_ms` | `u64` | `40` | Milliseconds per positioned scalar. Zero reveals the run instantly. |
+| `interval_ms` | `u64` | `40` | Milliseconds per positioned scalar, or per prefix step when supplied. Zero reveals the run instantly. |
 | `rate_per_second` | `Option<u32>` | — | Exact rational scalar clock. When present this overrides interval_ms; the engine retains fractional milliseconds through elapsed_ms. |
 | `initial_visible` | `usize` | `0` | Prefix already visible when new text is appended to a page. |
+| `prefix_steps` | `Option<Vec<usize>>` | — | Optional cumulative positioned-glyph prefixes for successive reveal ticks. Layout owners map clusters/native cells onto glyph boundaries; the engine owns timing. None retains one glyph per tick. Repeated prefixes intentionally spend a tick without exposing another glyph. |
 | `elapsed_ms` | `u64` | `0` | — |
 | `forced_complete` | `bool` | `false` | — |
 | `paused` | `bool` | `false` | — |
@@ -5940,6 +6011,7 @@ Per-layer 2D filter stack with the stage order and parameter meaning of the Sigl
 
 | Field | Rust type | Default | Description |
 |---|---|---|---|
+| `multiply` | `[f32; 3]` | `[1.0,1.0,1.0]` | Gamma-space RGB modulation before the effect stack, preserving alpha. Works for retained snapshots and other paints without image tint slots. |
 | `luma_weights` | `Option<[f32; 3]>` | `null` | Optional normalized RGB luminance coefficients. None preserves the established filter profile; adapters may declare a native color model. |
 | `rgb_alpha_power` | `f32` | `0.0` | Multiply filtered RGB by sampled alpha raised to this power (0..4), independently of the blend mode and without replacing stored alpha. |
 | `ignore_tint_alpha` | `bool` | `false` | Sampling effects may preserve source alpha without applying vertex tint alpha. Parent transform/clip ownership remains unchanged. |
@@ -5976,6 +6048,7 @@ Used by: `LayerSpec.blend`.
 | `inverse_destination` | — | (INVDESTCOLOR, ZERO): S·(1 - D) on every channel. |
 | `modulate_add` | — | (DESTCOLOR, ONE): S·D + D on every channel. |
 | `destination_in` | — | Keep the destination only under the source alpha: D·Sa, including alpha. Source RGB is ignored; use inside an isolated Canvas for masks. |
+| `stored_byte` | `mode: crysirror_image::rgb_lut::ConstantByteBlend, force_source_opaque: bool, force_output_opaque: bool` | Destination-reading stored-byte blend. Uses shared integer colour kernels in gamma-encoded RGB and /128 RGB tint quantization. The mode defines coverage and output alpha: legacy modes retain destination alpha; Scalar256 writes its effective source coverage. The flags may explicitly normalize an opaque source or an XRGB output target. |
 
 ### ToneCurve
 
@@ -6062,6 +6135,7 @@ Siglus wipe speed modes 0-3.
 | `ease_out_quart` | — | — |
 | `ease_in_out_quart` | — | — |
 | `ease_out_in_quart` | — | — |
+| `progress` | `shape: crysirror_image::progress_curve::ProgressShape` | Engine-owned parameterized progress families, including overshooting spring/back curves and periodic/quantized envelopes. |
 
 ### WidgetSpec
 
@@ -6072,6 +6146,7 @@ Used by: `Ui.put`, `ClientSpec.systems.widgets`.
 | `key_events` | `Vec<WidgetKeyEvent>` | `[]` | Optional retained key events. Only the topmost eligible binding widget receives them, within the current modal subtree and client owner. |
 | `key_event_scope` | `bool` | `false` | Keep key-edge ownership on this ancestor as focus moves within it. |
 | `slider_axis` | `SliderAxis` | `"horizontal"` | Slider pointer/value axis; other widgets retain the horizontal default. |
+| `slider_inset` | `[f32;2]` | `[0.0,0.0]` | Leading/trailing thumb-center insets along the slider axis. Pointer capture still covers the whole widget, including endpoint thumb halves. |
 | `slider_keyboard` | `bool` | `true` | Enable built-in arrow stepping. Retained key bindings can instead provide a native policy while shared UI keeps pointer capture/focus. |
 | `keyboard_navigation` | `bool` | `true` | Built-in focus traversal may be replaced by retained owner key events. |
 | `keyboard_activation` | `bool` | `true` | Built-in Enter/Space activation; pointer activation is independent. |
@@ -6441,6 +6516,7 @@ Variants are tagged by `"op"`.
 | Variant | Fields | Description |
 |---|---|---|
 | `advance_time` | `delta_ms: u64` | Advance this client's automatic motion, reveal and transition clocks. Other clients, physical input, external producers and global time stay on their own clocks. Bounded to one day per admitted operation. |
+| `set_clock_paused` | `id: u32, paused: bool` | Pause/resume a retained subtree without cancelling its clock state. |
 | `rebind_image` | `from: String, to: String` | Atomically retarget every live owned Image paint using one immutable generation. Frozen Snapshot paints and other clients retain their leases. |
 | `begin_sequence` | `id: u32, spec: LayerSequenceSpec` | Create an owner-scoped incremental channel sequence on an existing node. |
 | `sequence` | `id: u32, operation: LayerSequenceOperation` | Mutate or advance retained banked queues; Advance uses exact receipts. |
@@ -6522,6 +6598,7 @@ Variants are tagged by `"op"`.
 | `put` | `widget: WidgetSpec` | Issued by `Ui.put`. |
 | `remove` | `id: u32` | Issued by `Ui.remove`. |
 | `set_hit_mask` | `id: u32, mask: Option<WidgetHitMask>` | Replace or clear one owned widget's pointer coverage without repainting it. |
+| `set_hit_mask_geometry` | `id: u32, geometry: hit_mask::WidgetMaskGeometry` | Change only the mapping and union geometry of already owned coverage planes, preserving pixel resources, thresholds and the active gesture. |
 | `set_rect` | `id: u32, rect: [f32; 4]` | Update owned widget geometry, retaining its input and motion state. |
 | `set_visible` | `id: u32, visible: bool` | Issued by `Ui.setVisible`. |
 | `set_enabled` | `id: u32, enabled: bool` | Issued by `Ui.setEnabled`. |
@@ -6689,6 +6766,9 @@ Logical property controlled by one retained scalar motion track.
 | `pivot_y` | — | Local transform pivot Y coordinate in logical pixels. |
 | `pivot_z` | — | Local transform pivot Z coordinate in logical pixels. |
 | `opacity` | — | Inherited Layer opacity in0..255. Each applied sample truncates toward zero to a stored byte; status reports that same applied value. |
+| `multiply_red` | — | Gamma-space RGB modulation in the layer filter,0..1 per channel. |
+| `multiply_green` | — | — |
+| `multiply_blue` | — | — |
 
 ### MotionTrackSpec
 
@@ -6702,6 +6782,7 @@ One bounded scalar track. External time uses the caller's declared units; automa
 | `from` | `Option<f32>` | `null` | Explicit start, or the current property value when absent. |
 | `to` | `f32` | `100.0` | Finite final property value. |
 | `duration` | `u64` | `20` | Duration in engine milliseconds or external caller units; zero is immediate. |
+| `repeat` | `i32` | `0` | Additional passes after the first; -1 repeats indefinitely. A zero duration always completes immediately, including an infinite repeat. |
 | `external` | `bool` | `false` | Require explicit monotonic SetMotionElapsed instead of engine ticking. |
 | `easing` | `Easing` | `"linear"` | Shared scalar curve, applied to normalized progress. |
 
@@ -6719,6 +6800,7 @@ Read-only state of one engine-owned track.
 | `current` | `f32` | — | Current sampled value already applied to the target, including byte quantization for Layer opacity. |
 | `duration` | `u64` | — | Duration in the track's declared clock units. |
 | `elapsed` | `u64` | — | Last elapsed value in the same units. |
+| `repeat` | `i32` | — | — |
 | `external` | `bool` | — | Whether elapsed time is explicitly supplied by the caller. |
 | `complete` | `bool` | — | True once the endpoint has been applied. |
 
@@ -6742,6 +6824,7 @@ Finite generic Layer sample, independent of the producer's VM/program. Any omitt
 
 | Field | Rust type | Default | Description |
 |---|---|---|---|
+| `offset` | `Option<super::PoseOffset>` | `null` | Procedural additive channels, independent of retained base tracks. Publish a zero offset to return to the unmodified base pose. |
 | `rect` | `Option<[f32; 4]>` | `null` | — |
 | `transform` | `Option<super::SpriteTransform>` | `null` | — |
 | `opacity` | `Option<u8>` | `null` | — |
@@ -6778,6 +6861,8 @@ One byte per logical widget pixel. Transparent samples permit pointer input to r
 | `coverage` | `Arc<[u8]>` | `[255]` | Row-major immutable coverage bytes, shared across staged scene copies. |
 | `threshold` | `u8` | `1` | A pointer is eligible when its coverage is at least this byte. |
 | `strict_bounds` | `bool` | `false` | Exclude the local top and left edges as well as the normal right/bottom edges. |
+| `source_from_local` | `Option<[f32; 9]>` | — | Optional inverse affine map from logical widget-local coordinates to immutable source-coverage pixels as a row-major3x3 homogeneous matrix. Geometry can change without allocating or resampling the alpha plane. |
+| `regions` | `Vec<WidgetHitRegion>` | — | Additional leaf coverage regions, relative to this widget. A retained union shares each source plane instead of rasterizing a new bitmap. |
 
 ### MenuTemplate
 
@@ -6963,14 +7048,14 @@ Used by: UiEvent.widget client/local identity.
 
 | Field | Rust type | Description |
 |---|---|---|
-| `scene` | `String` | Asset path of the compiled scene: a `Scene.pck` or a single `.scn`. |
-| `format` | `String` | "pck" (scene pack, default) or "scn" (one scene stream). |
-| `scene_name` | `Option<String>` | Entry scene override; otherwise Gameexe START_SCENE (or _start), or scene 0 for an explicitly unconfigured fixture pack. |
-| `string_codec` | `String` | Scene string encryption: "xor" (default) or "plain". |
-| `gameexe` | `Option<String>` | Asset path of a UTF-8 Gameexe ini or encoded Gameexe.dat, if any. |
-| `key_file` | `Option<String>` | Capability-relative key.toml containing caller-owned scene/Gameexe decode materials. Keys are never guessed or embedded in the adapter. |
-| `resources` | `BTreeMap<String, String>` | Native resource path → asset path aliases (at most 4096). |
-| `message_window` | `Option<crate::MessageWindow>` | Explicit mapping for the bounded plain-text MWND profile. If omitted, supported horizontal Gameexe windows are translated on first use; unmapped rich/native profiles fail rather than guessing canvas geometry. |
+| `resource_root` | `PathBuf` | — |
+| `user_root` | `PathBuf` | — |
+| `scene` | `String` | — |
+| `gameexe` | `String` | — |
+| `key_file` | `Option<String>` | — |
+| `font_file` | `Option<PathBuf>` | — |
+| `font_face_index` | `u32` | — |
+| `font` | `Option<String>` | — |
 
 ## JavaScript/TypeScript asynchronous helpers
 

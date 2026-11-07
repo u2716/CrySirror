@@ -67,7 +67,7 @@ Runtime 已有 staged restore 和 schema/identity 校验；物理逻辑状态可
 
 ### 7. 把已跑通的本机切片变成桌面发布回归
 
-验证在本地执行，仓库不启用 GitHub CI。Windows/Linux/macOS 的支持分别需要实际运行证据。当前公开行为记录以本机 macOS/Metal 为主，声卡／手柄、长时间运行、device loss、打包后相对路径和资源恢复仍需实际结果。硬件 RT 仍是明确未支持能力；已有 compute raytrace prototype 不等同硬件 RT。
+Windows/Linux/macOS 的支持分别需要实际运行证据。当前公开行为记录以本机 macOS/Metal 为主，声卡／手柄、长时间运行、device loss、打包后相对路径和资源恢复仍需实际结果。硬件 RT 仍是明确未支持能力；已有 compute raytrace prototype 不等同硬件 RT。
 
 **验收：** 在三个实际 runner 上各跑同一自造 2D 原生服务切片与一个 3D playable slice，核对图像/输入/存档、声卡与注入 PCM 分别验证、无设备 headless 路径、renderer/device 重建和独立安装包。保留 ignored 与显式运行结果的区别，不把物理微基准或单张图片 capture 当作整机帧率。
 

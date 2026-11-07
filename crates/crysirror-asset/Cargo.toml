@@ -16,6 +16,7 @@ glam.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 image.workspace = true
+encoding_rs = "0.8"
 # Pure-Rust glTF parser. "import" is off: buffers resolve through the engine VFS.
 gltf = { version = "=1.4.1", default-features = false, features = ["utils", "names", "KHR_materials_emissive_strength", "KHR_materials_unlit", "KHR_lights_punctual", "extras"] }
 

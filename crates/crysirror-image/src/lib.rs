@@ -15,6 +15,7 @@ mod png;
 pub mod wipe_mask;
 pub use png::{encode_png_uncompressed, png_uncompressed_len};
 pub mod alpha_clip;
+pub mod resample_byte256;
 /// Longest decoded image edge. Original sprite sheets exceed 8192 (Little
 /// Busters! `EF_RPW_RP08.g00` is 1200x12000); `MAX_DECODED_BYTES` bounds memory
 /// and the renderer validates uploads against the actual device limit.
@@ -61,8 +62,14 @@ pub trait ImageDecoder: Send + Sync {
     /// resolved explicitly by their frontend before using this generic surface.
     fn decode(&self, bytes: &[u8]) -> Result<ImageSurface>;
 }
+pub mod affine_blend;
 pub mod associated;
 pub mod bitmap;
+pub mod box_blur_clamped;
+pub mod box_blur_span;
+pub mod nearest_cell_sample;
+pub mod box_downscale;
+pub mod tiled_transform;
 pub mod color;
 pub mod composition;
 pub mod crx;
@@ -70,16 +77,29 @@ pub mod crxd;
 pub mod cursor;
 pub mod cximage;
 mod dds;
+pub mod dual_texture;
 pub mod effects;
 pub mod fixed_mix;
+pub mod fixed_affine;
+pub mod scanline_affine;
+pub mod tile_reveal;
+pub mod radial_angle;
 pub mod fixed_projection;
+pub mod gradient_overlay;
+pub mod linear_gradient;
+pub mod sequential_box_blur;
 pub mod integer_raster;
+pub mod masked_blur;
 pub mod packed;
 pub mod packed_bitmap;
+pub mod procedural_instances;
 pub mod pyramid;
+pub mod resize_byte;
 pub mod rgb_lut;
 pub mod row_copy;
 pub mod sprite_alpha;
+pub mod coverage_key;
+pub mod cyclic_cell_sample;
 pub mod stored_mask;
 pub mod temporal_pattern;
 pub mod transition;
@@ -87,6 +107,7 @@ pub mod vector;
 pub mod vector_field;
 pub mod vector_scene;
 pub mod warp;
+pub mod wave_displace;
 /// Pixel size from a KiriKiri TLG5/TLG6 header, directly or in a TLG0 `sds` wrapper.
 /// Lets a caller size a surface before a shared decoder job runs.
 pub fn tlg_size(bytes: &[u8]) -> Option<[u32; 2]> {
@@ -264,9 +285,18 @@ mod tests {
 /// Encode a checked CPU surface as baseline JPEG; alpha is dropped.
 pub fn encode_jpeg(surface: &ImageSurface, quality: u8) -> Result<Vec<u8>> {
     surface.validate()?;
-    let rgb: Vec<u8> = surface.rgba.chunks_exact(4).flat_map(|pixel| [pixel[0], pixel[1], pixel[2]]).collect();
+    let rgb: Vec<u8> = surface
+        .rgba
+        .chunks_exact(4)
+        .flat_map(|pixel| [pixel[0], pixel[1], pixel[2]])
+        .collect();
     let mut out = Vec::new();
-    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, quality).encode(&rgb, surface.width, surface.height, image::ColorType::Rgb8)?;
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, quality).encode(
+        &rgb,
+        surface.width,
+        surface.height,
+        image::ColorType::Rgb8,
+    )?;
     Ok(out)
 }
 
@@ -305,10 +335,16 @@ pub mod buffer {
     };
 }
 
+pub mod byte_sampling;
+pub mod cosine_lens;
+pub mod coverage_sum;
 /// Grouped fixed-point luminance with exact integer colour mixing.
 pub mod fixed_luma;
+pub mod integer_color;
+pub mod luma_lookup;
+pub mod rect_resample;
+pub mod shape_mask;
 pub mod triangular_blur;
-pub mod coverage_sum;
 
 pub mod piecewise_resample;
 
@@ -325,6 +361,16 @@ pub mod packed_pixels;
 /// formats return None so the caller retains its conservative byte cap.
 /// Call on an I/O/CPU worker: parsing a container header can seek internally.
 pub fn encoded_dimensions_hint(bytes: &[u8]) -> Option<[u32; 2]> {
+    // Tiled QLIE DPNG: signature, version, tile count, then canvas width/height
+    // (crysirror-formats-arc qlie/dpng). Without this, admission falls back
+    // to the maximum decoded size and over-reserves shared decode memory.
+    if bytes.len() >= 20 && &bytes[..4] == b"DPNG" {
+        let word = |at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+        let (width, height) = (word(12), word(16));
+        if width > 0 && height > 0 {
+            return Some([width, height]);
+        }
+    }
     if let Ok(info) = cbg::probe_image(bytes) {
         if let (Some(width), Some(height)) = (info.width, info.height) {
             return Some([width, height]);
@@ -353,4 +399,10 @@ pub mod alpha_stamps;
 
 pub mod alpha_mask;
 pub mod block_average;
+pub mod box_reduce;
+pub mod random_runs;
+pub mod disc_copy;
+pub mod truncated_row_blur;
 pub mod canvas_margins;
+
+pub mod rect_map;

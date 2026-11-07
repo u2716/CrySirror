@@ -25,6 +25,7 @@ mod image_encoding;
 mod audio_replacement;
 
 pub mod text_storage;
+pub mod text_input;
 
 pub mod published_images;
 
@@ -35,3 +36,5 @@ mod pattern_resources;
 pub mod canvas_images;
 
 mod media_image;
+
+mod scene_checkpoint;

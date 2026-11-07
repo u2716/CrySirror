@@ -10,6 +10,7 @@ compilation and observed behavior are separate claims.
 | --- | --- |
 | Build, play an installed game, render a project or package data | [Desktop guide](DESKTOP_API.md) |
 | Understand native VM ownership and supported profiles | [Native adapters](NATIVE_ADAPTERS.md) |
+| Adopt/reverse-implement or integrate a native engine | [Engine onboarding](ENGINE_ONBOARDING.md) and [safe onboarding skill](../.agents/skills/crysirror-engine-onboarding/SKILL.md) |
 | Find classes, commands and JS/TS types | [Generated API reference](api/README.md) |
 | Connect local MCP project tools | [MCP](MCP.md) |
 | Generate project JSON from an offline recipe | [TS/JS authoring](AUTHORING.md) |

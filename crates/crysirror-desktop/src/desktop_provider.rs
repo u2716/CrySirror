@@ -11,11 +11,13 @@ use std::{
     sync::{Arc, Mutex},
     time::Duration,
 };
+mod display_activity;
 pub(crate) struct Provider {
     roots: Arc<BTreeMap<ClientId, DesktopStorageRoots>>,
     tasks: TaskPool,
     dialogs: Arc<Mutex<()>>,
     allow_ui: bool,
+    display_activity: Arc<display_activity::DisplayActivity>,
 }
 impl Provider {
     pub(crate) fn new(
@@ -27,6 +29,7 @@ impl Provider {
             tasks: TaskPool::new("desktop-platform", 2, 32)?,
             dialogs: Arc::new(Mutex::new(())),
             allow_ui,
+            display_activity: Arc::new(display_activity::DisplayActivity::default()),
         })
     }
 }
@@ -66,7 +69,11 @@ impl DesktopProvider for Provider {
         if !self.allow_ui
             && matches!(
                 &request,
-                DesktopRequest::FileDialog { .. } | DesktopRequest::ClipboardWrite { .. }
+                DesktopRequest::PulseDisplayActivity
+                    | DesktopRequest::FileDialog { .. }
+                    | DesktopRequest::ClipboardWrite { .. }
+                    | DesktopRequest::ClipboardRead
+                    | DesktopRequest::OpenUrl { .. }
             )
         {
             return Err(Error::Unsupported(
@@ -75,6 +82,7 @@ impl DesktopProvider for Provider {
         }
         let roots = self.roots.get(&client).cloned().ok_or(Error::NotFound)?;
         let dialogs = self.dialogs.clone();
+        let display_activity = self.display_activity.clone();
         let task = self
             .tasks
             .spawn(move |cancel| {
@@ -98,11 +106,11 @@ impl DesktopProvider for Provider {
                                 }
                             }
                         };
-                        let result = perform(request, &roots, &check);
+                        let result = perform(request, &roots, &display_activity, &check);
                         drop(guard);
                         result
                     }
-                    _ => perform(request, &roots, &check),
+                    _ => perform(request, &roots, &display_activity, &check),
                 };
                 Ok(result)
             })
@@ -243,13 +251,25 @@ fn map_selection(roots: &DesktopStorageRoots, path: &Path, save: bool) -> Result
 fn perform(
     request: DesktopRequest,
     roots: &DesktopStorageRoots,
+    display_activity: &display_activity::DisplayActivity,
     check: &dyn Fn() -> Result<()>,
 ) -> Result<DesktopResponse> {
     match request {
+        DesktopRequest::PulseDisplayActivity => {
+            check()?;
+            display_activity.pulse(check)?;
+            Ok(DesktopResponse::DisplayActivityPulsed)
+        }
+        DesktopRequest::OpenUrl { url } => {
+            crysirror_network::http::request_origin(&url)?;
+            open_url(&url, check)?;
+            Ok(DesktopResponse::Opened)
+        }
         DesktopRequest::ClipboardWrite { text } => {
             clipboard(&text, check)?;
             Ok(DesktopResponse::ClipboardWritten)
         }
+        DesktopRequest::ClipboardRead => Ok(DesktopResponse::Text(clipboard_read(check)?)),
         DesktopRequest::UserName => Ok(DesktopResponse::Text(
             std::env::var("USERNAME")
                 .or_else(|_| std::env::var("USER"))
@@ -340,6 +360,40 @@ fn perform(
     }
 }
 #[cfg(target_os = "macos")]
+fn open_url(url: &str, check: &dyn Fn() -> Result<()>) -> Result<()> {
+    let mut command = Command::new("/usr/bin/open");
+    command.arg("--").arg(url);
+    let output = run(command, None, check)?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(failure(&output))
+    }
+}
+#[cfg(target_os = "windows")]
+fn open_url(url: &str, check: &dyn Fn() -> Result<()>) -> Result<()> {
+    let mut command = powershell()?;
+    command.args(["-NoProfile", "-NonInteractive", "-Command",
+        "$ErrorActionPreference='Stop'; [Console]::InputEncoding=[System.Text.Encoding]::UTF8; Start-Process -FilePath ([Console]::In.ReadToEnd())"]);
+    let output = run(command, Some(url), check)?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(failure(&output))
+    }
+}
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn open_url(url: &str, check: &dyn Fn() -> Result<()>) -> Result<()> {
+    let mut command = Command::new("xdg-open");
+    command.arg(url);
+    let output = run(command, None, check)?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(failure(&output))
+    }
+}
+#[cfg(target_os = "macos")]
 fn clipboard(text: &str, check: &dyn Fn() -> Result<()>) -> Result<()> {
     let output = run(Command::new("/usr/bin/pbcopy"), Some(text), check)?;
     if output.status.success() {
@@ -347,6 +401,46 @@ fn clipboard(text: &str, check: &dyn Fn() -> Result<()>) -> Result<()> {
     } else {
         Err(failure(&output))
     }
+}
+#[cfg(target_os = "macos")]
+fn clipboard_read(check: &dyn Fn() -> Result<()>) -> Result<String> {
+    let output = run(Command::new("/usr/bin/pbpaste"), None, check)?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    } else {
+        Err(failure(&output))
+    }
+}
+#[cfg(target_os = "windows")]
+fn clipboard_read(check: &dyn Fn() -> Result<()>) -> Result<String> {
+    let mut command = powershell()?;
+    command.args(["-NoProfile","-NonInteractive","-Command",r#"[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $t = Get-Clipboard -Raw; if ($t) { [Console]::Write($t) }"#]);
+    let output = run(command, None, check)?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    } else {
+        Err(failure(&output))
+    }
+}
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn clipboard_read(check: &dyn Fn() -> Result<()>) -> Result<String> {
+    for (program, args) in [
+        ("wl-paste", vec!["--no-newline"]),
+        ("xclip", vec!["-selection", "clipboard", "-o"]),
+    ] {
+        let mut command = Command::new(program);
+        command.args(args);
+        match run(command, None, check) {
+            Ok(output) if output.status.success() => {
+                return Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+            }
+            Err(Error::Unsupported(_)) => continue,
+            // An empty clipboard is reported as a failure by both tools.
+            Ok(_) => return Ok(String::new()),
+            Err(error) => return Err(error),
+        }
+    }
+    Err(Error::Unsupported("system clipboard backend"))
 }
 #[cfg(target_os = "windows")]
 fn powershell() -> Result<Command> {

@@ -13,6 +13,8 @@
 use anyhow::{ensure, Context, Result};
 
 pub mod numeric;
+pub mod fields;
+mod ascii_case;
 pub use numeric::{ByteNumberSymbols, NumericCompaction};
 
 pub const MAX_BYTE_STRING: usize = 4_000_000;
@@ -25,6 +27,7 @@ pub enum ByteLeadProfile {
     SingleByte,
     MaskedBands { mask: u8, first: u8, second: u8 },
     InclusiveRange { first: u8, last: u8 },
+    TwoRanges { ranges: [[u8; 2]; 2] },
 }
 impl ByteLeadProfile {
     pub fn is_lead(self, byte: u8) -> bool {
@@ -39,6 +42,9 @@ impl ByteLeadProfile {
                 band == first || band == second
             }
             Self::InclusiveRange { first, last } => (first..=last).contains(&byte),
+            Self::TwoRanges { ranges } => ranges
+                .iter()
+                .any(|[first, last]| (*first..=*last).contains(&byte)),
         }
     }
     fn validate(self) -> Result<()> {
@@ -58,6 +64,12 @@ impl ByteLeadProfile {
                 )
             }
             Self::SingleByte => {}
+            Self::TwoRanges { ranges } => ensure!(
+                ranges
+                    .iter()
+                    .all(|[first, last]| *first != 0 && first <= last),
+                "invalid native byte lead ranges"
+            ),
         }
         ensure!(!self.is_lead(0), "native NUL cannot be a lead byte");
         Ok(())
@@ -84,6 +96,14 @@ impl ByteStringProfile {
         lead: ByteLeadProfile::InclusiveRange {
             first: 0x81,
             last: 0xfe,
+        },
+        signed_single_byte: true,
+    };
+    /// Windows code-page932 lead-byte bands, excluding the wider historical
+    /// VM bit-mask's80/fd/fe/ff bytes.
+    pub const SHIFT_JIS_CRT: Self = Self {
+        lead: ByteLeadProfile::TwoRanges {
+            ranges: [[0x81, 0x9f], [0xe0, 0xfc]],
         },
         signed_single_byte: true,
     };
@@ -397,6 +417,23 @@ impl<'a> ByteStringContext<'a> {
         output.extend_from_slice(&bytes[..at]);
         output.extend_from_slice(&bytes[at + count..]);
         Ok(output)
+    }
+    /// Split one leading native character over the explicit stored extent.
+    /// A dangling lead byte copies the available byte but retains the declared
+    /// width2, matching bounded substring/erase interfaces. NUL-prefix policy
+    /// belongs to the caller; embedded NUL is otherwise a one-byte character.
+    pub fn split_front(&self, bytes: &[u8]) -> Result<(Vec<u8>, Vec<u8>, usize)> {
+        let mut work = self.work()?;
+        work.input(bytes)?;
+        work.output(bytes.len())?;
+        work.visit(bytes.len())?;
+        let width = bytes
+            .first()
+            .map_or(0, |b| if self.profile.lead.is_lead(*b) { 2 } else { 1 });
+        let split = width.min(bytes.len());
+        let result = (bytes[..split].to_vec(), bytes[split..].to_vec(), width);
+        (self.check)()?;
+        Ok(result)
     }
 }
 

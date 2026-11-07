@@ -142,6 +142,7 @@ pub struct App {
     input: InputFrame,
     focused: bool,
     ime_composing: bool,
+    text_input: crate::text_input::Presenter,
     last_tick: Instant,
     remainder: Duration,
     presented: u64,
@@ -415,6 +416,7 @@ impl App {
             input: InputFrame::default(),
             focused: true,
             ime_composing: false,
+            text_input: Default::default(),
             last_tick: Instant::now(),
             remainder: Duration::ZERO,
             presented: 0,
@@ -455,8 +457,16 @@ impl App {
             None => Ok(()),
         }
     }
-    fn committed_text(&mut self, text: &str) -> Result<()> {
-        let rt = self.core.rt();
+    fn committed_text(rt: &mut Runtime, text: &str) -> Result<()> {
+        // winit KeyEvent.text also contains control-key text (Enter is "\r",
+        // Backspace is U+0008). Those keys are delivered through InputFrame;
+        // inserting them first would reject the UI batch and close the game.
+        // Apply the same boundary to IME commits without weakening the shared
+        // single-line UI contract or dropping printable text in a mixed commit.
+        let text: String = text.chars().filter(|c| !c.is_control()).collect();
+        if text.is_empty() {
+            return Ok(());
+        }
         if let Some(id) = rt.host.engine.ui.focus {
             if rt.host.engine.ui.focused_text_field() {
                 crysirror_core::service::HostServices::submit_engine(
@@ -468,8 +478,10 @@ impl App {
                     )?,
                 )
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
+                return Ok(());
             }
         }
+        rt.host.text_input.commit(&text)?;
         Ok(())
     }
     fn init(&mut self, el: &ActiveEventLoop) -> Result<()> {
@@ -499,6 +511,8 @@ impl App {
             )?,
         );
         window.set_ime_allowed(true);
+        self.core.rt().host.text_input.set_presenter_available(true);
+        self.core.rt().host.text_input.focus(self.focused);
         crate::desktop_provider::install(self.core.rt(),true)?;
         self.focused = window.has_focus();
         self.core.rt().host.window_focused = Some(self.focused);
@@ -724,6 +738,8 @@ impl App {
             self.input.buttons_pressed = 0;
         }
         materialize_canvases(&mut w.renderer, self.core.rt())?;
+        let canvas=self.core.rt().project.canvas;
+        self.text_input.sync(&w.window,&mut self.core.rt().host,canvas,[w.config.width,w.config.height])?;
         self.core.rt().host.engine.ui.pointer_surface=[w.config.width,w.config.height];
         self.core.rt().host.window_minimized=w.window.is_minimized();
         self.core.rt().host.window_fullscreen=Some(w.window.fullscreen().is_some());
@@ -933,6 +949,8 @@ impl App {
             }
             WindowEvent::Focused(focused) => {
                 self.focused = focused;
+                self.core.rt().host.text_input.focus(focused);
+                if !focused { self.ime_composing=false; }
                 self.core.rt().host.window_focused = Some(focused);
                 if let Some(w)=self.window.as_ref(){self.core.rt().host.window_minimized=w.window.is_minimized();}
                 self.input = InputFrame::default();
@@ -946,15 +964,22 @@ impl App {
                     actions.cancel_rebind();
                 }
             }
-            WindowEvent::Ime(winit::event::Ime::Preedit(text, _)) => {
+            WindowEvent::Ime(winit::event::Ime::Preedit(text, cursor)) => {
                 self.ime_composing = !text.is_empty();
+                let rt=self.core.rt();
+                if !rt.host.engine.ui.focused_text_field(){rt.host.text_input.preedit(&text,cursor)?;}else{rt.host.text_input.preedit("",None)?;}
             }
             WindowEvent::Ime(winit::event::Ime::Commit(text)) => {
-                self.committed_text(&text)?;
+                let rt=self.core.rt();
+                if rt.host.engine.ui.focused_text_field() || !rt.host.text_input.commit(&text)? {Self::committed_text(rt, &text)?;}
                 self.ime_composing = false;
+            }
+            WindowEvent::Ime(winit::event::Ime::Enabled) => {
+                self.core.rt().host.text_input.ime_enabled(true);
             }
             WindowEvent::Ime(winit::event::Ime::Disabled) => {
                 self.ime_composing = false;
+                self.core.rt().host.text_input.ime_enabled(false);
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 if !self.focused {
@@ -963,11 +988,13 @@ impl App {
                 let pressed = event.state == ElementState::Pressed;
                 if pressed && !self.ime_composing {
                     if let Some(text) = event.text.as_ref() {
-                        self.committed_text(text.as_str())?;
+                        Self::committed_text(self.core.rt(), text.as_str())?;
                     }
                 }
                 if let PhysicalKey::Code(code) = event.physical_key {
-                    if pressed && !event.repeat {
+                    // Siglus owns these keys (menu, native saves and native shortcuts).
+                    let siglus = self.core.rt().project.clients.iter().any(|client| client.adapter == "siglus");
+                    if pressed && !event.repeat && !siglus {
                         match code {
                             KeyCode::Escape => {
                                 if !self.core.rt().host.engine.ui.focused_text_field() {
@@ -1009,6 +1036,7 @@ impl App {
                         KeyCode::KeyD => Some(1 << 10),
                         KeyCode::ShiftLeft | KeyCode::ShiftRight => Some(1 << 11),
                         KeyCode::ControlLeft | KeyCode::ControlRight => Some(1 << 12),
+                        KeyCode::AltLeft | KeyCode::AltRight => Some(buttons::ALT),
                         KeyCode::KeyE => Some(1 << 13),
                         KeyCode::KeyQ => Some(1 << 14),
                         KeyCode::KeyF => Some(1 << 15),
@@ -1123,6 +1151,8 @@ impl ApplicationHandler for App {
         }
     }
     fn suspended(&mut self, el: &ActiveEventLoop) {
+        self.core.rt().host.text_input.set_presenter_available(false);
+        self.text_input.reset();
         self.window = None;
         self.core.rt().host.window_focused = None;
         if let Err(error)=crate::desktop_provider::install(self.core.rt(),false){self.fail(el,error);return;}
@@ -1193,6 +1223,34 @@ mod audio_frame_tests {
         std::fs::write(&path,serde_json::to_vec(&serde_json::json!({"schema":2,"name":"desktop-mix","content_revision":"1","canvas":[64,64],"assets":"assets","clients":[{"name":"game","adapter":"crysirror-script-v1","game":"test"}]})).unwrap()).unwrap();
         let rt = Runtime::load(&path, &dir.path().join("state")).unwrap();
         (dir, rt)
+    }
+    #[test]
+    fn committed_controls_do_not_abort_text_entry_or_replace_key_actions() {
+        use crysirror_scene::ui::{UiCommand, WidgetSpec};
+        let (_dir, mut rt) = runtime();
+        let client = ClientId(1);
+        let field: WidgetSpec = serde_json::from_value(serde_json::json!({
+            "id": 1, "kind": "text_field", "rect": [0, 0, 60, 20],
+            "text": "", "max_length": 32, "font": "project-font"
+        })).unwrap();
+        rt.host.engine.ui.install(client, &[field]).unwrap();
+        rt.host.engine.ui.apply_batch(client, &[UiCommand::Focus { id: 1 }]).unwrap();
+        App::committed_text(&mut rt, "太郎😀e\u{301}").unwrap();
+        for text in ["\r", "\n", "\r\n", "\u{8}", "\t", "\u{1b}", ""] {
+            App::committed_text(&mut rt, text).unwrap();
+        }
+        assert_eq!(rt.host.engine.ui.get(1, 1).unwrap().text, "太郎😀e\u{301}");
+        App::committed_text(&mut rt, "\r花\n子\t").unwrap();
+        assert_eq!(rt.host.engine.ui.get(1, 1).unwrap().text, "太郎😀e\u{301}花子");
+        rt.host.engine.ui.tick(InputFrame {
+            buttons_pressed: buttons::BACKSPACE, ..Default::default()
+        }, [64, 64]).unwrap();
+        assert_eq!(rt.host.engine.ui.get(1, 1).unwrap().text, "太郎😀e\u{301}花");
+        rt.host.engine.ui.tick(InputFrame::default(), [64, 64]).unwrap();
+        rt.host.engine.ui.tick(InputFrame {
+            buttons_pressed: buttons::ENTER, ..Default::default()
+        }, [64, 64]).unwrap();
+        assert_eq!(rt.host.engine.ui.events.last().unwrap().kind, "submit");
     }
     #[test]
     fn halted_data_scene_keeps_plain_and_scripted_windows_open() {

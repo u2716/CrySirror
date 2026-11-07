@@ -4,6 +4,168 @@ Newest first. Each entry is keyed by the API fingerprint printed in
 [REFERENCE.md](REFERENCE.md). `tests/api_docs.rs` fails until the current
 fingerprint appears here. Mark breaking changes with **Breaking**.
 
+
+## `079f7138a813b097` (2026-11-07): coverage keys and cyclic cell sampling
+
+- `ImageEffect::CoverageReferenceKey` derives binary coverage from a checked
+  reference texel and selected RGBA channel while preserving stored RGB.
+- `ImageEffect::CyclicCellSample` repeats bounded per-cell sample offsets over
+  full cells in a region, preserving partial cells and outside pixels.
+- Rust `ImageCompositeMath::MaskIncrement256` and `PixelMath::MaskIncrement256`
+  expose mask0 skip, mask255 copy and exact partial `(a+1)/256` RGB mixing.
+  Destination alpha is retained and extra layer opacity is rejected.
+- Regenerated the shared API reference. No test or game execution was performed.
+
+## `9983e526641d9b01` (2026-11-07): random runs, row blur, disc copies
+
+- `ImageEffect::RandomRuns` (`random_runs::RandomRuns`: `span`, `color`
+  `middle|mean`, `state`): rows cut into `rand() % span + 1` runs from an
+  MSVC-style stream, each filled from its source run;
+  `RandomRuns::state_after` reports the stream state without pixels.
+- `ImageEffect::TruncatedRowBlur` (`radius`, `row_overrun`): horizontal mean
+  over a row-truncated window, optionally one sample past the row end (the
+  next row's first pixel, zero after the last row).
+- `ImageEffect::DiscCopies` (raster input: destination + source): midpoint
+  circle discs copied from the source with their own centres and radii.
+- Rust-only: the shared prefix image capture groups several top-level
+  layers under one identity root before materialization.
+- Regenerated using the release example.
+
+## `11159237bd0ab027` (2026-11-07): picture glyphs, cell widths, onset scan
+
+- `PositionedGlyph.image` (`GlyphImage`: `asset`, `rect`, `uv`, `tint`)
+  draws an image cell instead of the scalar's outline; the scalar still
+  counts as one reveal step. The wgpu glyph expansion emits it as an
+  ordinary image draw.
+- `CellLayoutOptions.cell_widths` gives listed scalars an explicit cell
+  width in the shared fixed-cell layout (defaults to empty).
+- Rust-only additions without reference entries: `WidgetHitMask::hit` is
+  public, and `crysirror_audio::onset::{OnsetProbe, first_audible}` scans a
+  decoded source forward for the first probe above a mean-magnitude level.
+  `crysirror_text::legacy_width::{to_halfwidth, columns}` convert to
+  half-width forms and count single/double columns (added after the
+  regeneration; the fingerprint did not change).
+  `crysirror_scene::layer::local_to_parent` maps a layer-local point into
+  its parent's pixels through the extraction affine.
+- Regenerated using the release example.
+
+## `488cc60b60c63756` (2026-11-06): reference regenerated over pending work
+
+- Regenerated after the workspace built again. The new members in the
+  reference come from in-progress work already in the tree: audio gain
+  envelopes, `Layers.setClockPaused`, `Ui.setHitMaskGeometry` and image
+  effect specifications (`dual_texture`, `rect_map`, `tile_reveal`,
+  `sequential_box_blur` and others).
+- Rust-only additions without reference entries: `buttons::ALT` (Windows
+  VK 18), `DesktopRequest::ClipboardRead`, `HostInformation::locale`,
+  `crysirror_core::key_hold`, `checksum::sha256` and
+  `checksum::crc16_ccitt_serial`.
+- Regenerated using the release example; no tests ran for this entry.
+
+## `bb71826030da5aa3` (2026-11-06): asymmetric blur and nearest grid samples
+
+- Added `BoxBlurSpan`, retaining the phase of even or asymmetric averaging
+  windows, and `NearestCellSample`, sampling each grid cell's upper-left pixel.
+- Rectangle maps admit2048 regions with their existing pixel/write limits;
+  serialized image effect specifications remain bounded at256KiB.
+- Regenerated the reference using the release example; no tests or games ran.
+
+## `9e0fd03ab0f15bf7` (2026-11-06): image inputs through scoped storage
+
+- Added `ImageInput::ScopedAsset` for decoding images through an explicit
+  client storage mount, including images written to Save.
+- Image metadata queries accept scoped paths while retaining original encoded
+  properties and source identity through asynchronous preparation.
+- Regenerated the reference using the release example; no tests or games ran.
+
+## `7c7c6e8d8779b120` (2026-11-06): tiled affine redraw, channel range stretch, PCM filter chains
+
+- Added the `tiled_transform` image effect (source stretched to an output
+  size, tiled around the centre, redrawn under offset/scale/rotation with
+  bilinear or nearest sampling) and `channel_range_stretch` (one channel's
+  observed range mapped onto 0..=255).
+- `AudioResourceTransform` gained `PcmFilters`, an ordered stereo PCM16
+  filter chain (echo, reverb, chorus, volume, distortion, noise, 3-band EQ,
+  mono, pitch shift, AGC) of at most 16 stages.
+- Rust-only additions without script signatures: `pointer_swipe` gesture
+  queries and `box_downscale` integer reduction.
+- Legacy byte strings gained explicit two-band lead-byte classification,
+  unsigned32 auto-base conversion, decimal formatting and front splitting;
+  scoped byte tables preserve raw cell data independently of native VMs.
+- Regenerated the reference using the release example; the fingerprint also
+  covers concurrent workspace changes made since `c39454c495b3e405`.
+
+## `c39454c495b3e405` (2026-11-06): box reduction and explicit filter sampling
+
+- Added box-window reduction with grid or proportional anchors, explicit
+  integer arithmetic and alpha output policy.
+- Added linear byte-channel gradients and sequential box filtering for
+  overlapping source/destination regions.
+- Shared format services now include bounded QNT encoding with explicit
+  header versions and independent colour/alpha planes.
+- Regenerated the reference using the release example; no tests or games ran.
+
+## `a1e5b96ca19f37a1` (2026-11-06): grouped reveal and explicit byte composition
+
+- Added optional glyph reveal prefix steps for multiple glyphs per reveal tick.
+- Added distinct `Scalar256` and `OpaqueScalar256` stored-byte blend profiles
+  and the byte256 rectangle-resampling image effect.
+- Rust host services now expose scoped committed-text/IME sessions; shared
+  resources expose bounded record sequences and capability tree operations.
+- Regenerated the reference using the release example; no tests or games ran.
+
+## `1aba56991a2984b2` (2026-11-06): output-clock gain envelopes and native UI resources
+
+- Added channel and pooled-voice Audio gain-envelope setters and queries, with
+  stepped dB100 levels, output-clock phase, cancellation and completion state.
+- Added shared rectangle-mapping and alpha-lookup image effects and cyclic
+  atlas motion declarations; SugarPot configuration accepts its resource EXE.
+- Regenerated the reference using the release example; no tests or games ran.
+
+## `fdebedc6bde8a668` (2026-11-06): canvas perspective and explicit admission order
+
+- Added `CanvasLens` for canvas-centred perspective, declared near-plane
+  admission and screen-affine UV interpolation.
+- Added retained layer `tie_order` for explicit equal-priority ordering, and
+  legacy mesh post-transforms and face-culling policies.
+- Regenerated the reference with the release example; no tests or games ran.
+
+## `d14f5d69b7cf0edf` (2026-11-06): ordered composition and retained input geometry
+
+- Added shared projected/model mesh paints, ordered render-state and coverage
+  operations, glyph views sharing their source reveal clock, stored-byte blend
+  modes and the explicit seven-bit image sampling profile.
+- Added projective hit-mask region unions and `Ui.setHitMaskGeometry`, which
+  updates retained geometry without retransmitting immutable coverage pixels.
+- Shared host contracts expose scoped scene checkpoints and asynchronous audio
+  reconstruction. These source APIs do not establish complete native saves.
+- Regenerated the reference with the release example; no tests or games ran.
+
+## `20f7dc585b1b21b5` (2026-11-06): default integrated Siglus configuration
+
+- **Breaking:** the default `siglus` adapter now documents the integrated
+  runtime configuration: host-injected resource/save roots, native Gameexe/Scene
+  names, optional material override and host font selection.
+- Extracted `message_window`/resource mapping settings belong to the explicit
+  reference VM profile and are not accepted by the default integrated factory.
+
+## `beda65124bb4e01a` (2026-11-06): retained subtree clocks and glyph profiles
+
+- Added `Layers.setClockPaused` and `set_clock_paused` for inherited automatic
+  subtree motion, glyph reveal and crossfade clock suspension.
+- Added per-glyph coverage, outline and shadow profiles, including bounded
+  2/4/8 supersampling and monochrome coverage without flattening text runs.
+- Shared services expose cached authorized font aliases, host information and
+  source PCM peak observations. Two-texture byte operations use image workers.
+
+## `ff03c58bed4e9be5` (2026-11-05): shared stored-byte image operations
+
+- Added image-effect declarations for affine blending, byte resizing, wave
+  displacement, masked blur, spatial gradients, shape masks, rectangle
+  resampling, lens distortion and integer colour/lookup operations.
+- Refreshed the retained motion reference for repeats and filter RGB channels.
+  Reference generation did not execute game or test cases.
+
 ## `7ae03e5812971428` (2026-11-05): whole-surface Canvas presentation
 
 - Added `CanvasCommand::PresentTarget` (`present_target` via `Canvases.apply`)

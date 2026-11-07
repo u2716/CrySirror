@@ -1,7 +1,7 @@
 // Copyright (c) 2026 CrySirror contributors. MPL-2.0.
 //! Native effect arguments and lifecycle. Pixels and persistent pattern state
 //! belong to engine services; this module retains only native policy.
-use anyhow::{ensure, Result};
+use anyhow::{Result, ensure};
 use crysirror_core::service::PatternResource;
 use std::sync::Arc;
 
@@ -53,7 +53,32 @@ pub struct SunaState {
     pub count: i32,
 }
 impl SunaState {
+    pub(crate) fn validate_curve(&self) -> Result<()> {
+        let p = &self.parameters;
+        if p.transition {
+            p.start_percent
+                .checked_mul(256)
+                .ok_or_else(|| anyhow::anyhow!("SUNA native percent overflow profile"))?;
+            p.end_percent
+                .checked_mul(256)
+                .ok_or_else(|| anyhow::anyhow!("SUNA native percent overflow profile"))?;
+            crate::native_curve::validate(p.frames, p.subframe, p.easing)?;
+        }
+        Ok(())
+    }
     pub fn opacity256(&self) -> Result<u16> {
+        self.opacity256_with(None)
+    }
+    pub(crate) fn opacity256_with_random(
+        &self,
+        random: &mut crysirror_image::temporal_pattern::PatternRng,
+    ) -> Result<u16> {
+        self.opacity256_with(Some(random))
+    }
+    fn opacity256_with(
+        &self,
+        random: Option<&mut crysirror_image::temporal_pattern::PatternRng>,
+    ) -> Result<u16> {
         let p = &self.parameters;
         if !p.transition {
             return Ok(256);
@@ -68,10 +93,14 @@ impl SunaState {
             .checked_mul(256)
             .ok_or_else(|| anyhow::anyhow!("SUNA native percent overflow profile"))?
             / 100;
-        Ok(
+        let value = if let Some(random) = random {
+            crate::native_curve::value_with_random(
+                self.count, p.frames, start, end, p.subframe, p.easing, random,
+            )?
+        } else {
             crate::native_curve::value(self.count, p.frames, start, end, p.subframe, p.easing)?
-                .clamp(0, 256) as u16,
-        )
+        };
+        Ok(value.clamp(0, 256) as u16)
     }
 }
 
@@ -107,11 +136,7 @@ impl FadeInState {
     }
     pub fn command(&self) -> i32 {
         if self.fade_out {
-            if self.count >= self.frames {
-                54
-            } else {
-                11
-            }
+            if self.count >= self.frames { 54 } else { 11 }
         } else {
             10
         }
@@ -120,6 +145,25 @@ impl FadeInState {
     /// application remains the shared engine ImageEffect, including worker
     /// cancellation. The old high X byte is not engine display transparency.
     pub fn linear_image_effect(&self) -> Result<crysirror_image::effects::ImageEffect> {
+        ensure!(
+            self.easing == 0,
+            "linear FADEIN helper requires a linear native curve"
+        );
+        self.image_effect_with(None)
+    }
+    pub(crate) fn validate_curve(&self) -> Result<()> {
+        crate::native_curve::validate(self.frames, self.subframe, self.easing)
+    }
+    pub(crate) fn image_effect_with_random(
+        &self,
+        random: &mut crysirror_image::temporal_pattern::PatternRng,
+    ) -> Result<crysirror_image::effects::ImageEffect> {
+        self.image_effect_with(Some(random))
+    }
+    fn image_effect_with(
+        &self,
+        random: Option<&mut crysirror_image::temporal_pattern::PatternRng>,
+    ) -> Result<crysirror_image::effects::ImageEffect> {
         if self.command() == 54 {
             // Fill54 masks each original parameter independently. Its -1
             // bytes do not inherit another channel as the fade kernel does.
@@ -131,13 +175,20 @@ impl FadeInState {
             )?;
             return Ok(crysirror_image::effects::ImageEffect::RgbLookup { spec });
         }
-        ensure!(
-            self.easing == 0,
-            "FADEIN native non-linear curve requires shared curve mapping"
-        );
-        let max = self.frames.max(1);
-        let count = self.count.clamp(0, max);
-        let progress = ((f64::from(count) / f64::from(max)) * 100.0 + 0.5) as u32;
+        let progress = if let Some(random) = random {
+            crate::native_curve::value_with_random(
+                self.count,
+                self.frames,
+                0,
+                100,
+                self.subframe,
+                self.easing,
+                random,
+            )?
+        } else {
+            crate::native_curve::value(self.count, self.frames, 0, 100, self.subframe, self.easing)?
+        };
+        let progress = progress.clamp(0, 100) as u32;
         let percent = if self.fade_out {
             100 - progress
         } else {
@@ -190,19 +241,87 @@ impl LayerGreyState {
         );
         Ok(state)
     }
+    /// Legacy Nega31 /4a7270 uses signed MMX high products around128.
+    /// Native scalar policy maps exactly to a shared integer colour matrix;
+    /// no private LUT builder or pixel traversal is retained in this VM.
+    pub(crate) fn nega_image_effect_with_random(
+        &self,
+        random: &mut crysirror_image::temporal_pattern::PatternRng,
+    ) -> Result<crysirror_image::effects::ImageEffect> {
+        let endpoint = |percent: i32| -> Result<i32> {
+            Ok(percent
+                .checked_mul(-508)
+                .ok_or_else(|| anyhow::anyhow!("NNN NEGA endpoint overflow"))?
+                / 100
+                + 254)
+        };
+        let coefficient = crate::native_curve::value_with_random(
+            self.count,
+            self.frames,
+            endpoint(self.start_percent)?,
+            endpoint(self.end_percent)?,
+            self.subframe,
+            self.easing,
+            random,
+        )?
+        .clamp(-254, 254);
+        Ok(crysirror_image::effects::ImageEffect::IntegerColorMatrix {
+            spec: crysirror_image::integer_color::ColorMatrixFixed {
+                matrix: [
+                    [coefficient, 0, 0],
+                    [0, coefficient, 0],
+                    [0, 0, coefficient],
+                ],
+                offset: [128 * (256 - coefficient); 3],
+                divisor: 256,
+            },
+        })
+    }
     pub fn linear_image_effect(&self) -> Result<crysirror_image::effects::ImageEffect> {
         ensure!(
             self.easing == 0,
             "LAYERGREY native non-linear curve requires shared curve mapping"
         );
+        self.image_effect_with(None)
+    }
+    pub(crate) fn validate_curve(&self) -> Result<()> {
+        crate::native_curve::validate(self.frames, self.subframe, self.easing)
+    }
+    pub(crate) fn image_effect_with_random(
+        &self,
+        random: &mut crysirror_image::temporal_pattern::PatternRng,
+    ) -> Result<crysirror_image::effects::ImageEffect> {
+        self.image_effect_with(Some(random))
+    }
+    fn image_effect_with(
+        &self,
+        random: Option<&mut crysirror_image::temporal_pattern::PatternRng>,
+    ) -> Result<crysirror_image::effects::ImageEffect> {
         // Original calcu produces an integer first (biased +0.5, truncating
         // toward zero), then integer /100. Do not interpolate an already
         // quantized /100 endpoint: the two orders differ for small changes.
-        let max = i64::from(self.frames.max(1));
-        let count = i64::from(self.count.clamp(0, self.frames.max(1)));
-        let start = i64::from(self.start_percent) * 256;
-        let end = i64::from(self.end_percent) * 256;
-        let value = ((start * max + (end - start) * count) * 2 + max) / (2 * max);
+        let start = self.start_percent * 256;
+        let end = self.end_percent * 256;
+        let value = if let Some(random) = random {
+            crate::native_curve::value_with_random(
+                self.count,
+                self.frames,
+                start,
+                end,
+                self.subframe,
+                self.easing,
+                random,
+            )?
+        } else {
+            crate::native_curve::value(
+                self.count,
+                self.frames,
+                start,
+                end,
+                self.subframe,
+                self.easing,
+            )?
+        };
         let amount = (value / 100).clamp(0, 256) as u16;
         Ok(crysirror_image::effects::ImageEffect::FixedLuma {
             spec: crysirror_image::fixed_luma::FixedLumaSpec {

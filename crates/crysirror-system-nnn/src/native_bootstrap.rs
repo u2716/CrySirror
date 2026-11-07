@@ -2,14 +2,14 @@
 //! Worker-side original bootstrap. Capability reads are supplied by the host;
 //! this module never opens a process path, executes a PE, or decodes pictures.
 use crate::{
+    Program, XorProfile,
     config::{self, Names},
     expression::VariableProfile,
     machine::Machine,
     native_control::ScriptSession,
     native_resources::ResourceNames,
-    Program, XorProfile,
 };
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use crysirror_tasks::Cancellation;
 use std::sync::Arc;
 
@@ -246,10 +246,8 @@ impl PreparedBoot {
         cancel: &Cancellation,
     ) -> Result<Arc<Program>> {
         cancel.check()?;
-        ensure!(
-            self.project.index(name).is_some(),
-            "System-NNN script absent from original project table"
-        );
+        // 538530 loads this original filename independently of project index;
+        // an absent name only changes native metadata's index to zero.
         let path = self.resources.script(name)?;
         let bytes = read(&path, 16 << 20)?
             .with_context(|| format!("System-NNN original script absent: {path}"))?;

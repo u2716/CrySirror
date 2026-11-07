@@ -324,44 +324,44 @@
       "adapter": "siglus",
       "config": [
         {
-          "doc": "Asset path of the compiled scene: a `Scene.pck` or a single `.scn`.",
+          "doc": "",
+          "name": "resource_root",
+          "rust_type": "PathBuf"
+        },
+        {
+          "doc": "",
+          "name": "user_root",
+          "rust_type": "PathBuf"
+        },
+        {
+          "doc": "",
           "name": "scene",
           "rust_type": "String"
         },
         {
-          "doc": "\"pck\" (scene pack, default) or \"scn\" (one scene stream).",
-          "name": "format",
-          "rust_type": "String"
-        },
-        {
-          "doc": "Entry scene override; otherwise Gameexe START_SCENE (or _start), or scene 0 for an explicitly unconfigured fixture pack.",
-          "name": "scene_name",
-          "rust_type": "Option<String>"
-        },
-        {
-          "doc": "Scene string encryption: \"xor\" (default) or \"plain\".",
-          "name": "string_codec",
-          "rust_type": "String"
-        },
-        {
-          "doc": "Asset path of a UTF-8 Gameexe ini or encoded Gameexe.dat, if any.",
+          "doc": "",
           "name": "gameexe",
-          "rust_type": "Option<String>"
+          "rust_type": "String"
         },
         {
-          "doc": "Capability-relative key.toml containing caller-owned scene/Gameexe decode materials. Keys are never guessed or embedded in the adapter.",
+          "doc": "",
           "name": "key_file",
           "rust_type": "Option<String>"
         },
         {
-          "doc": "Native resource path → asset path aliases (at most 4096).",
-          "name": "resources",
-          "rust_type": "BTreeMap<String, String>"
+          "doc": "",
+          "name": "font_file",
+          "rust_type": "Option<PathBuf>"
         },
         {
-          "doc": "Explicit mapping for the bounded plain-text MWND profile. If omitted, supported horizontal Gameexe windows are translated on first use; unmapped rich/native profiles fail rather than guessing canvas geometry.",
-          "name": "message_window",
-          "rust_type": "Option<crate::MessageWindow>"
+          "doc": "",
+          "name": "font_face_index",
+          "rust_type": "u32"
+        },
+        {
+          "doc": "",
+          "name": "font",
+          "rust_type": "Option<String>"
         }
       ]
     }
@@ -1090,6 +1090,58 @@
             {
               "name": "channel",
               "type": "number"
+            }
+          ],
+          "returns": "any"
+        },
+        {
+          "doc": "Set a mixer-owned stepped dB100 envelope: interval_ms,steps,start_db100,end_db100, optional elapsed_steps/phase_ms/apply_initial/stop_at_end. The -10000 floor is silence. Output time advances through pause/starvation; null cancels at current gain. No decoder/source restart.",
+          "name": "setChannelGainEnvelope",
+          "params": [
+            {
+              "name": "channel",
+              "type": "number"
+            },
+            {
+              "name": "envelope",
+              "type": "any"
+            }
+          ],
+          "returns": "void"
+        },
+        {
+          "doc": "Published stepped gain spec, elapsed_steps, phase_ms, current_db100 and active, or null for an absent voice/track. Foreign client state is inaccessible.",
+          "name": "channelGainEnvelope",
+          "params": [
+            {
+              "name": "channel",
+              "type": "number"
+            }
+          ],
+          "returns": "any"
+        },
+        {
+          "doc": "Apply the same stepped dB100 envelope to a scoped pooled voice. Null cancels it at the applied level; ordinary gain controls supersede this track.",
+          "name": "setVoiceGainEnvelope",
+          "params": [
+            {
+              "name": "handle",
+              "type": "Record<string, any>"
+            },
+            {
+              "name": "envelope",
+              "type": "any"
+            }
+          ],
+          "returns": "void"
+        },
+        {
+          "doc": "Published stepped gain state of a scoped pooled voice, or null without an envelope.",
+          "name": "voiceGainEnvelope",
+          "params": [
+            {
+              "name": "handle",
+              "type": "Record<string, any>"
             }
           ],
           "returns": "any"
@@ -3841,6 +3893,21 @@
           "returns": "void"
         },
         {
+          "doc": "Pause or resume automatic subtree motion, positioned-text reveal and crossfade clocks while retaining elapsed time; explicit external updates remain caller-owned.",
+          "name": "setClockPaused",
+          "params": [
+            {
+              "name": "id",
+              "type": "number"
+            },
+            {
+              "name": "paused",
+              "type": "boolean"
+            }
+          ],
+          "returns": "void"
+        },
+        {
           "doc": "Engine-owned glyph reveal {visible,total,complete}, or null for an absent/non-glyph layer.",
           "name": "revealStatus",
           "params": [
@@ -4116,7 +4183,7 @@
           "returns": "void"
         },
         {
-          "doc": "Animate layer position, scale, rotation (radians), pivot or opacity with shared MotionTrackSpec; opacity samples truncate to0..255 bytes, engine duration uses milliseconds, external duration uses caller units.",
+          "doc": "Animate layer position, scale, rotation (radians), pivot, opacity or filter RGB multiplication with shared MotionTrackSpec. Optional repeat counts additional passes; -1 repeats indefinitely. Opacity samples truncate to0..255 bytes; RGB multipliers use0..1. Engine duration uses milliseconds; external duration uses caller units.",
           "name": "beginMotion",
           "params": [
             {
@@ -6159,6 +6226,21 @@
           "returns": "void"
         },
         {
+          "doc": "Update retained source-coverage mappings and union rectangles without copying pixels or resetting input capture.",
+          "name": "setHitMaskGeometry",
+          "params": [
+            {
+              "name": "id",
+              "type": "number"
+            },
+            {
+              "name": "geometry",
+              "type": "Record<string, any>"
+            }
+          ],
+          "returns": "void"
+        },
+        {
           "doc": "Set engine cursor presentation visibility.",
           "name": "setCursorVisible",
           "params": [
@@ -7098,6 +7180,11 @@
       "system": "layer"
     },
     {
+      "api": "Layers.setClockPaused",
+      "op": "set_clock_paused",
+      "system": "layer"
+    },
+    {
       "api": "Layers.completeReveal",
       "op": "complete_reveal",
       "system": "layer"
@@ -7453,6 +7540,11 @@
       "system": "ui"
     },
     {
+      "api": "Ui.setHitMaskGeometry",
+      "op": "set_hit_mask_geometry",
+      "system": "ui"
+    },
+    {
       "api": "Ui.setText",
       "op": "set_text",
       "system": "ui"
@@ -7615,6 +7707,12 @@
           "default": null,
           "doc": "Mask0 skips, mask255 copies RGB; partial RGB is floor(s*a/256) + floor(d*(256-a)/256). Retains destination alpha; opacity must be255.",
           "name": "MaskSeparate256",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "Mask0 skips, mask255 copies RGB; partial mask uses source weight a+1 and destination weight255-a, then a single /256 truncation. Destination alpha is retained, and composite-layer opacity must be255.",
+          "name": "MaskIncrement256",
           "rust_type": ""
         },
         {
@@ -8002,6 +8100,204 @@
       "fields": [
         {
           "default": null,
+          "doc": "One checked lookup for the stored coverage byte; RGB remains unchanged.",
+          "name": "alpha_lookup",
+          "rust_type": "table: Vec<u8>"
+        },
+        {
+          "default": null,
+          "doc": "Binary alpha from a reference channel byte. Spec: reference[x,y], channel0..3, equal0..255, different0..255. RGB remains unchanged.",
+          "name": "coverage_reference_key",
+          "rust_type": "spec: crate::coverage_key::CoverageReferenceKey"
+        },
+        {
+          "default": null,
+          "doc": "Ordered integer rectangle/scanline mapping with a defined clear plane.",
+          "name": "rect_map",
+          "rust_type": "spec: crate::rect_map::RectMap"
+        },
+        {
+          "default": null,
+          "doc": "Byte-accurate two-texture channel composition in a raster context.",
+          "name": "dual_texture",
+          "rust_type": "spec: crate::dual_texture::DualTextureByte128"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "affine_blend",
+          "rust_type": "spec: crate::affine_blend::AffineBlendByte128"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "fixed_affine_nearest",
+          "rust_type": "spec: crate::fixed_affine::FixedAffineNearest"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "scanline_affine_nearest",
+          "rust_type": "spec: crate::scanline_affine::ScanlineAffineNearest"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "tile_reveal",
+          "rust_type": "spec: crate::tile_reveal::TileReveal"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "radial_angle_lookup",
+          "rust_type": "spec: crate::radial_angle::RadialAngleLookup"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "gradient_overlay",
+          "rust_type": "spec: crate::gradient_overlay::GradientOverlayByte"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "linear_gradient",
+          "rust_type": "spec: crate::linear_gradient::LinearGradientByte"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "sequential_box_blur",
+          "rust_type": "spec: crate::sequential_box_blur::SequentialBoxBlur"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "masked_blur",
+          "rust_type": "spec: crate::masked_blur::MaskedBlur"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "box_blur_clamped",
+          "rust_type": "spec: crate::box_blur_clamped::BoxBlurClamped"
+        },
+        {
+          "default": null,
+          "doc": "Repeat-edge average over an explicit half-open axis window.",
+          "name": "box_blur_span",
+          "rust_type": "spec: crate::box_blur_span::BoxBlurSpan"
+        },
+        {
+          "default": null,
+          "doc": "Full-cell sample replication. Spec: region[x,y,w,h], cell[w,h], and offsets[[dx,dy],...]. Partial cells and the outside region remain intact.",
+          "name": "cyclic_cell_sample",
+          "rust_type": "spec: crate::cyclic_cell_sample::CyclicCellSample"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "nearest_cell_sample",
+          "rust_type": "spec: crate::nearest_cell_sample::NearestCellSample"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "wave_displace",
+          "rust_type": "spec: crate::wave_displace::WaveDisplaceByte128"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "resize_byte",
+          "rust_type": "spec: crate::resize_byte::ResizeByte128"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "shape_mask",
+          "rust_type": "spec: crate::shape_mask::ShapeMask"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "rect_resample",
+          "rust_type": "spec: crate::rect_resample::RectResample1024"
+        },
+        {
+          "default": null,
+          "doc": "Stored-byte8.8 rectangle sampling without a half-texel offset.",
+          "name": "rect_resample_byte256",
+          "rust_type": "spec: crate::resample_byte256::RectResampleByte256"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "cosine_lens",
+          "rust_type": "spec: crate::cosine_lens::CosineLensByte128"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "integer_color_matrix",
+          "rust_type": "spec: crate::integer_color::ColorMatrixFixed"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "integer_color_modulation",
+          "rust_type": "spec: crate::integer_color::IntegerColorModulation"
+        },
+        {
+          "default": null,
+          "doc": "RGBA colour table indexed by stored alpha or explicit integer luminance.",
+          "name": "luma_lookup",
+          "rust_type": "spec: crate::luma_lookup::LumaLookup"
+        },
+        {
+          "default": null,
+          "doc": "Source stretched to `size`, tiled and redrawn under a centred affine.",
+          "name": "tiled_transform",
+          "rust_type": "spec: crate::tiled_transform::TiledTransform"
+        },
+        {
+          "default": null,
+          "doc": "One channel's observed range mapped onto 0..=255.",
+          "name": "channel_range_stretch",
+          "rust_type": "spec: crate::tiled_transform::ChannelRangeStretch"
+        },
+        {
+          "default": null,
+          "doc": "Truncated straight RGBA means, one uniform colour per rectangular cell.",
+          "name": "block_average",
+          "rust_type": "cell: [u16; 2]"
+        },
+        {
+          "default": null,
+          "doc": "Horizontal mean over a row-truncated window (optionally one past).",
+          "name": "truncated_row_blur",
+          "rust_type": "spec: crate::truncated_row_blur::TruncatedRowBlur"
+        },
+        {
+          "default": null,
+          "doc": "Random-length horizontal runs filled from the source run.",
+          "name": "random_runs",
+          "rust_type": "spec: crate::random_runs::RandomRuns"
+        },
+        {
+          "default": null,
+          "doc": "Checked box-window reduction with explicit integer channel arithmetic.",
+          "name": "box_reduce",
+          "rust_type": "spec: crate::box_reduce::BoxReduce"
+        },
+        {
+          "default": null,
+          "doc": "Signed left/top/right/bottom expansion or crop, preserving stored bytes.",
+          "name": "canvas_margins",
+          "rust_type": "margins: [i32; 4], fill: [u8; 4]"
+        },
+        {
+          "default": null,
           "doc": "Modulate stored alpha using an immutable original-alpha plane.",
           "name": "alpha_mask_plane",
           "rust_type": "spec: crate::alpha_mask::AlphaMaskPlane"
@@ -8086,7 +8382,13 @@
         },
         {
           "default": null,
-          "doc": "Two-input whole-pixel row copy; preserves uncovered destination pixels.",
+          "doc": "Two-input whole-pixel row copy; preserves uncovered destination pixels. Midpoint-circle discs copied from the raster source (second input).",
+          "name": "disc_copies",
+          "rust_type": "spec: crate::disc_copy::DiscCopies"
+        },
+        {
+          "default": null,
+          "doc": "",
           "name": "sine_row_copy",
           "rust_type": "spec: crate::row_copy::SineRowCopy"
         },
@@ -9853,6 +10155,12 @@
           "doc": "",
           "name": "InclusiveRange",
           "rust_type": "first: u8, last: u8"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "TwoRanges",
+          "rust_type": "ranges: [[u8; 2]; 2]"
         }
       ],
       "name": "ByteLeadProfile",
@@ -10817,6 +11125,12 @@
       "fields": [
         {
           "default": null,
+          "doc": "A native immediate assignment, independent of intermediate progress.",
+          "name": "end",
+          "rust_type": ""
+        },
+        {
+          "default": null,
           "doc": "",
           "name": "linear",
           "rust_type": ""
@@ -10838,6 +11152,48 @@
           "doc": "",
           "name": "half_cosine",
           "rust_type": "pi: f64"
+        },
+        {
+          "default": null,
+          "doc": "Four-control B-spline with duplicate0/1 endpoints, blended with linear progress by an explicit tension. General controls use sample_four_point.",
+          "name": "b_spline",
+          "rust_type": "strength: f64"
+        },
+        {
+          "default": null,
+          "doc": "General power curve. Both directions preserve overshoot-free endpoints.",
+          "name": "power",
+          "rust_type": "exponent: f64, direction: ProgressDirection"
+        },
+        {
+          "default": null,
+          "doc": "Alternating endpoint values over an even number of segments.",
+          "name": "square",
+          "rust_type": "segments: u32"
+        },
+        {
+          "default": null,
+          "doc": "Triangle wave, with an odd segment count ending at one.",
+          "name": "triangle",
+          "rust_type": "segments: u32"
+        },
+        {
+          "default": null,
+          "doc": "Cosine wave with caller-specified angular distance.",
+          "name": "cosine",
+          "rust_type": "radians: f64"
+        },
+        {
+          "default": null,
+          "doc": "Decaying cosine, optionally rectified, or time-reversed. Output may overshoot; preserving it is essential for spring/back animation.",
+          "name": "damped_cosine",
+          "rust_type": "exponent: f64, radians: f64, absolute: bool, reverse: bool"
+        },
+        {
+          "default": null,
+          "doc": "Right-continuous quantized linear progress.",
+          "name": "steps",
+          "rust_type": "segments: u32"
         }
       ],
       "name": "ProgressShape",
@@ -11383,6 +11739,12 @@
           "doc": "Expected dimensions bound admission; the worker verifies the decoded size.",
           "name": "Asset",
           "rust_type": "path: String, size: [u32; 2], fingerprint: Option<[u8; 32]>"
+        },
+        {
+          "default": null,
+          "doc": "A read through the current client's explicit capability mount, including images written to Save. It carries no OS path or authority of its own.",
+          "name": "ScopedAsset",
+          "rust_type": "path: crate::path::VfsPath, size: [u32; 2], fingerprint: Option<[u8; 32]>"
         },
         {
           "default": null,
@@ -12916,6 +13278,12 @@
       "fields": [
         {
           "default": null,
+          "doc": "Optional output-clock envelope attached at source publication.",
+          "name": "gain_envelope",
+          "rust_type": "Option<crysirror_core::service::AudioGainEnvelopeSpec>"
+        },
+        {
+          "default": null,
           "doc": "An existing client-scoped logical gain group; None bypasses groups.",
           "name": "mix_group",
           "rust_type": "Option<String>"
@@ -13073,6 +13441,12 @@
           "doc": "Pinned mono PCM16 splice profile; 100..400 percent, 100 exact identity.",
           "name": "SiglusJitan",
           "rust_type": "percent: u16"
+        },
+        {
+          "default": null,
+          "doc": "Ordered integer stereo filter chain applied to the decoded PCM16 (at most 16 stages); see [`PcmFilter`].",
+          "name": "PcmFilters",
+          "rust_type": ""
         }
       ],
       "name": "AudioResourceTransform",
@@ -13205,6 +13579,12 @@
     {
       "doc": "",
       "fields": [
+        {
+          "default": null,
+          "doc": "Optional stepped attenuation installed atomically with the new source. Its clock starts at actual publication, not preparation-request time.",
+          "name": "gain_envelope",
+          "rust_type": "Option<AudioGainEnvelopeSpec>"
+        },
         {
           "default": null,
           "doc": "Mixer voice gain, default 1.",
@@ -13407,6 +13787,12 @@
     {
       "doc": "Shared source transport inspection. Processing tails do not prolong source completion. Frame positions are decoded-source units; fade/delay counts use output_rate. No device or executable pointers cross this boundary.",
       "fields": [
+        {
+          "default": null,
+          "doc": "Peak absolute source PCM in the last completed mixer block, before gain, bus, pan and spatial processing. Paused/inactive sources report 0.",
+          "name": "source_peak",
+          "rust_type": "f32"
+        },
         {
           "default": null,
           "doc": "Mixer-owner observation of the independent external dB balance track.",
@@ -16735,6 +17121,12 @@
           "default": null,
           "doc": "Independent /256 floors for source-alpha RGB products. Mask0 skips; mask255 copies RGB. Destination alpha is retained; opacity must be255.",
           "name": "mask_separate256",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "Mask0 skips, mask255 copies RGB; partial weights are a+1 /255-a. The sum is shifted once by8; destination alpha is retained.",
+          "name": "mask_increment256",
           "rust_type": ""
         },
         {
@@ -20826,6 +21218,12 @@
       "fields": [
         {
           "default": null,
+          "doc": "Pause automatic motion, glyph reveal and subtree crossfade clocks. Descendants inherit the pause; explicit external samples still apply.",
+          "name": "clock_paused",
+          "rust_type": "bool"
+        },
+        {
+          "default": null,
           "doc": "Client-local layer id.",
           "name": "id",
           "rust_type": "u32"
@@ -20859,6 +21257,12 @@
           "doc": "Explicit [major, minor] draw order.",
           "name": "order",
           "rust_type": "[i32; 2]"
+        },
+        {
+          "default": null,
+          "doc": "Optional stable admission rank within an equal flat [major,minor] bucket. None retains the layer-ID/subdraw rule. Geometry parents do not introduce sorting fences, and explicit depth scopes stay scoped.",
+          "name": "tie_order",
+          "rust_type": "Option<u64>"
         },
         {
           "default": null,
@@ -20923,6 +21327,36 @@
       "fields": [
         {
           "default": null,
+          "doc": "Draw into this client's transient coverage plane. Later ordinary draws consume its blue byte as source alpha coverage; the color target is unchanged. The inner payload must not itself be a coverage command.",
+          "name": "coverage_write",
+          "rust_type": "paint: Box<Paint>"
+        },
+        {
+          "default": null,
+          "doc": "Replace the client's coverage state with a uniform byte value.",
+          "name": "coverage_reset",
+          "rust_type": "value: u8"
+        },
+        {
+          "default": null,
+          "doc": "A positioned-glyph source view. Geometry/filter/opacity belong to this layer; content and reveal state remain owned by the source layer.",
+          "name": "glyph_view",
+          "rust_type": "source: u32, offset: [f32;2]"
+        },
+        {
+          "default": null,
+          "doc": "Transform/opacity carrier with no raster payload.",
+          "name": "group",
+          "rust_type": "tint: [u8;4], add: [f32;3]"
+        },
+        {
+          "default": null,
+          "doc": "Global ordered composition command, consumed during frame extraction.",
+          "name": "ordered_state",
+          "rust_type": "command: ordered_state::Command"
+        },
+        {
+          "default": null,
           "doc": "Solid RGBA8 fill.",
           "name": "solid",
           "rust_type": "color: [u8; 4]"
@@ -20953,9 +21387,21 @@
         },
         {
           "default": null,
+          "doc": "Immutable projected triangles drawn directly in retained order. Vertex depth and clip W survive to rasterization; no composed-screen texture.",
+          "name": "projected_mesh",
+          "rust_type": "frame: Arc<crate::projected_mesh::MeshFrame>, tint: [u8; 4]"
+        },
+        {
+          "default": null,
           "doc": "What has been drawn beneath this layer in the current frame, read back into a quad. With a filter's distortion this is a screen effect over a depth band: layers ordered above stay untouched. Only the top-level frame has such a backdrop; inside isolated targets the layer draws nothing. With `history` it shows what the previous frame had at this depth, then captures again: drawn with an opacity below 255 that is a feedback trail.",
           "name": "backdrop",
           "rust_type": "history: bool"
+        },
+        {
+          "default": null,
+          "doc": "Logical fixed-function mesh resource. Shared frame extraction evaluates shading and projection against its real retained ancestor matrices.",
+          "name": "legacy_mesh",
+          "rust_type": "spec: Arc<crate::legacy_mesh::Spec>"
         },
         {
           "default": null,
@@ -21012,8 +21458,20 @@
       "used_by": "Shared subtree rule image and soft-edge levels"
     },
     {
-      "doc": "Sampler state stored with a retained image layer, independent of a GPU.",
+      "doc": "",
       "fields": [
+        {
+          "default": true,
+          "doc": "Linear interpolation, or nearest-neighbour sampling when false. Defaults to true to preserve existing retained-image presentation.",
+          "name": "linear",
+          "rust_type": "bool"
+        },
+        {
+          "default": "hardware",
+          "doc": "",
+          "name": "profile",
+          "rust_type": "ImageSampleProfile"
+        },
         {
           "default": "repeat",
           "doc": "Horizontal texture coordinate addressing.",
@@ -21058,6 +21516,18 @@
     {
       "doc": "A glyph with an explicit baseline in its containing layer's local pixels. Layout, shaping and reveal policy remain with the producer; rendering is an engine service. Optional styles override the containing run's defaults.",
       "fields": [
+        {
+          "default": null,
+          "doc": "Explicit per-glyph coverage and decoration profile. None inherits the containing run; Some fully specifies this glyph's profile.",
+          "name": "style",
+          "rust_type": "Option<PositionedGlyphStyle>"
+        },
+        {
+          "default": null,
+          "doc": "Optional client-scoped font alias for this scalar. None uses the run's font; explicit aliases retain the same shared reveal clock and layout.",
+          "name": "font",
+          "rust_type": "Option<String>"
+        },
         {
           "default": null,
           "doc": "Optional geometry crop in the containing layer's local pixels. This clips each glyph after coverage/outline generation, without reshaping.",
@@ -21114,13 +21584,19 @@
           "doc": "Center the rounded glyph advance in this integer logical cell, using truncation toward zero for the half-difference. Raster baseline y stays.",
           "name": "cell_width",
           "rust_type": "Option<u16>"
+        },
+        {
+          "default": null,
+          "doc": "Draw an image cell instead of this scalar's outline. The scalar still counts as one reveal step; font, style and outline are unused.",
+          "name": "image",
+          "rust_type": "Option<GlyphImage>"
         }
       ],
       "name": "PositionedGlyph",
       "used_by": "`Paint.glyph_run.glyphs`"
     },
     {
-      "doc": "Unit of an explicitly positioned run. Each item contains one Unicode scalar; this deliberately does not reinterpret native scalar timing as grapheme timing. Other segmentation modes must be added explicitly.",
+      "doc": "Unit of an explicitly positioned run. Each item contains one Unicode scalar. A caller may separately map native cells or shaped clusters onto positioned-glyph boundaries through GlyphReveal::prefix_steps.",
       "fields": [
         {
           "default": null,
@@ -21143,7 +21619,7 @@
         },
         {
           "default": 40,
-          "doc": "Milliseconds per positioned scalar. Zero reveals the run instantly.",
+          "doc": "Milliseconds per positioned scalar, or per prefix step when supplied. Zero reveals the run instantly.",
           "name": "interval_ms",
           "rust_type": "u64"
         },
@@ -21158,6 +21634,12 @@
           "doc": "Prefix already visible when new text is appended to a page.",
           "name": "initial_visible",
           "rust_type": "usize"
+        },
+        {
+          "default": null,
+          "doc": "Optional cumulative positioned-glyph prefixes for successive reveal ticks. Layout owners map clusters/native cells onto glyph boundaries; the engine owns timing. None retains one glyph per tick. Repeated prefixes intentionally spend a tick without exposing another glyph.",
+          "name": "prefix_steps",
+          "rust_type": "Option<Vec<usize>>"
         },
         {
           "default": 0,
@@ -21801,6 +22283,16 @@
       "doc": "Per-layer 2D filter stack with the stage order and parameter meaning of the Siglus/tona3 sprite effect (ADR 0021). Color math runs on 8-bit gamma-encoded values like the original: distortion sampling → tint/alpha → tone curve → invert → mono → bright → dark → color rate → add → mask → gray-as-alpha → alpha test.",
       "fields": [
         {
+          "default": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "doc": "Gamma-space RGB modulation before the effect stack, preserving alpha. Works for retained snapshots and other paints without image tint slots.",
+          "name": "multiply",
+          "rust_type": "[f32; 3]"
+        },
+        {
           "default": null,
           "doc": "Optional normalized RGB luminance coefficients. None preserves the established filter profile; adapters may declare a native color model.",
           "name": "luma_weights",
@@ -21988,6 +22480,12 @@
           "doc": "Keep the destination only under the source alpha: D·Sa, including alpha. Source RGB is ignored; use inside an isolated Canvas for masks.",
           "name": "destination_in",
           "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "Destination-reading stored-byte blend. Uses shared integer colour kernels in gamma-encoded RGB and /128 RGB tint quantization. The mode defines coverage and output alpha: legacy modes retain destination alpha; Scalar256 writes its effective source coverage. The flags may explicitly normalize an opaque source or an XRGB output target.",
+          "name": "stored_byte",
+          "rust_type": "mode: crysirror_image::rgb_lut::ConstantByteBlend, force_source_opaque: bool, force_output_opaque: bool"
         }
       ],
       "name": "Blend",
@@ -22234,6 +22732,12 @@
           "doc": "",
           "name": "ease_out_in_quart",
           "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "Engine-owned parameterized progress families, including overshooting spring/back curves and periodic/quantized envelopes.",
+          "name": "progress",
+          "rust_type": "shape: crysirror_image::progress_curve::ProgressShape"
         }
       ],
       "name": "Easing",
@@ -22259,6 +22763,15 @@
           "doc": "Slider pointer/value axis; other widgets retain the horizontal default.",
           "name": "slider_axis",
           "rust_type": "SliderAxis"
+        },
+        {
+          "default": [
+            0.0,
+            0.0
+          ],
+          "doc": "Leading/trailing thumb-center insets along the slider axis. Pointer capture still covers the whole widget, including endpoint thumb halves.",
+          "name": "slider_inset",
+          "rust_type": "[f32;2]"
         },
         {
           "default": true,
@@ -23499,6 +24012,12 @@
         },
         {
           "default": null,
+          "doc": "Pause/resume a retained subtree without cancelling its clock state.",
+          "name": "set_clock_paused",
+          "rust_type": "id: u32, paused: bool"
+        },
+        {
+          "default": null,
           "doc": "Atomically retarget every live owned Image paint using one immutable generation. Frozen Snapshot paints and other clients retain their leases.",
           "name": "rebind_image",
           "rust_type": "from: String, to: String"
@@ -23935,6 +24454,12 @@
           "doc": "Replace or clear one owned widget's pointer coverage without repainting it.",
           "name": "set_hit_mask",
           "rust_type": "id: u32, mask: Option<WidgetHitMask>"
+        },
+        {
+          "default": null,
+          "doc": "Change only the mapping and union geometry of already owned coverage planes, preserving pixel resources, thresholds and the active gesture.",
+          "name": "set_hit_mask_geometry",
+          "rust_type": "id: u32, geometry: hit_mask::WidgetMaskGeometry"
         },
         {
           "default": null,
@@ -24425,6 +24950,24 @@
           "doc": "Inherited Layer opacity in0..255. Each applied sample truncates toward zero to a stored byte; status reports that same applied value.",
           "name": "opacity",
           "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "Gamma-space RGB modulation in the layer filter,0..1 per channel.",
+          "name": "multiply_red",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "multiply_green",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "multiply_blue",
+          "rust_type": ""
         }
       ],
       "name": "MotionProperty",
@@ -24456,6 +24999,12 @@
           "doc": "Duration in engine milliseconds or external caller units; zero is immediate.",
           "name": "duration",
           "rust_type": "u64"
+        },
+        {
+          "default": 0,
+          "doc": "Additional passes after the first; -1 repeats indefinitely. A zero duration always completes immediately, including an infinite repeat.",
+          "name": "repeat",
+          "rust_type": "i32"
         },
         {
           "default": false,
@@ -24514,6 +25063,12 @@
         },
         {
           "default": null,
+          "doc": "",
+          "name": "repeat",
+          "rust_type": "i32"
+        },
+        {
+          "default": null,
           "doc": "Whether elapsed time is explicitly supplied by the caller.",
           "name": "external",
           "rust_type": "bool"
@@ -24556,6 +25111,12 @@
     {
       "doc": "Finite generic Layer sample, independent of the producer's VM/program. Any omitted component retains its current value; filters/paint are unaffected.",
       "fields": [
+        {
+          "default": null,
+          "doc": "Procedural additive channels, independent of retained base tracks. Publish a zero offset to return to the unmodified base pose.",
+          "name": "offset",
+          "rust_type": "Option<super::PoseOffset>"
+        },
         {
           "default": null,
           "doc": "",
@@ -24659,6 +25220,18 @@
           "doc": "Exclude the local top and left edges as well as the normal right/bottom edges.",
           "name": "strict_bounds",
           "rust_type": "bool"
+        },
+        {
+          "default": null,
+          "doc": "Optional inverse affine map from logical widget-local coordinates to immutable source-coverage pixels as a row-major3x3 homogeneous matrix. Geometry can change without allocating or resampling the alpha plane.",
+          "name": "source_from_local",
+          "rust_type": "Option<[f32; 9]>"
+        },
+        {
+          "default": null,
+          "doc": "Additional leaf coverage regions, relative to this widget. A retained union shares each source plane instead of rasterizing a new bitmap.",
+          "name": "regions",
+          "rust_type": "Vec<WidgetHitRegion>"
         }
       ],
       "name": "WidgetHitMask",
@@ -24815,7 +25388,7 @@
       "used_by": "UiEvent.widget client/local identity"
     }
   ],
-  "fingerprint": "7ae03e5812971428",
+  "fingerprint": "9983e526641d9b01",
   "generated_by": "crysirror-engine api_doc (tests/api_docs.rs)",
   "globals": [
     {

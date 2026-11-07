@@ -5,6 +5,7 @@ use crysirror_core::service::{AssetReader, ClientStorage};
 pub(super) struct Prepared {
     pub programs: BTreeMap<String, Arc<Program>>,
     pub text: BTreeMap<String, String>,
+    pub pack_slots: BTreeSet<u32>,
 }
 pub(super) fn prepare(
     storage: Arc<dyn ClientStorage>,
@@ -14,7 +15,18 @@ pub(super) fn prepare(
     let mut programs = BTreeMap::new();
     let mut text = BTreeMap::new();
     let mut used = 0usize;
+    let mut pack_slots = BTreeSet::new();
+    let mut container_dirs = BTreeSet::from([String::new(), "GameData".into()]);
     for (logical, path) in assets {
+        cancel.check()?;
+        if let Some((source, _)) = storage.serving_container(&VfsPath::new(Mount::Asset, path)?) {
+            if let Some((dir, _)) = source.rsplit_once('/') {
+                container_dirs.insert(dir.into());
+            }
+            if let Some(slot) = pack_slot(&source) {
+                pack_slots.insert(slot);
+            }
+        }
         if !logical.ends_with(".s") && !logical.ends_with(".txt") {
             continue;
         }
@@ -39,7 +51,36 @@ pub(super) fn prepare(
         }
     }
     cancel.check()?;
-    Ok(Prepared { programs, text })
+    // A mounted but fully overridden data archive still occupies its native
+    // slot. Query retained mount metadata; do not reread a package's bytes.
+    for directory in container_dirs {
+        for slot in 0..32 {
+            for name in [format!("data{slot}.pack"), format!("Data{slot}.pack")] {
+                let source = if directory.is_empty() {
+                    name
+                } else {
+                    format!("{directory}/{name}")
+                };
+                if storage.container_mount(&source)?.is_some() {
+                    pack_slots.insert(slot);
+                }
+            }
+        }
+    }
+    Ok(Prepared {
+        programs,
+        text,
+        pack_slots,
+    })
+}
+fn pack_slot(source: &str) -> Option<u32> {
+    let source = source.rsplit('/').next()?.to_ascii_lowercase();
+    let slot = source
+        .strip_prefix("data")?
+        .strip_suffix(".pack")?
+        .parse::<u32>()
+        .ok()?;
+    (slot < 32).then_some(slot)
 }
 pub(super) struct Member {
     pub name: String,
@@ -47,6 +88,8 @@ pub(super) struct Member {
     pub metadata: serde_json::Value,
     pub slot: usize,
     pub nested: Option<Box<Bundle>>,
+    pub model: Option<Arc<crysirror_asset::tqmo::Model>>,
+    pub scene_model: Option<Arc<crysirror_scene::legacy_mesh::Model>>,
 }
 pub(super) struct Bundle {
     pub id: usize,
@@ -137,12 +180,39 @@ fn bundle(
             } else {
                 None
             };
+            let model = if e.metadata["kind"] == 8 && !bytes.is_empty() {
+                cancel.check()?;
+                let mut model = crysirror_asset::tqmo::Model::parse(&bytes)
+                    .with_context(|| format!("QLIE embedded model {}", e.path))?;
+                model.upgrade_legacy()?;
+                bytes = Arc::from([]);
+                Some(Arc::new(model))
+            } else { None };
+            let scene_model = if let Some(model) = &model {
+                let policies = model.materials.iter().map(|material| {
+                    use crysirror_image::rgb_lut::ConstantByteBlend as Mode;
+                    let mode = match material.native_render_flags[0].min(7) {
+                        0 => Mode::Normal, 1 => Mode::Screen, 2 => Mode::Multiply,
+                        3 => Mode::Difference, 4 => Mode::Lighten, 5 => Mode::Darken,
+                        6 => Mode::Add, _ => Mode::Subtract,
+                    };
+                    let blend=crysirror_scene::layer::Blend::StoredByte {
+                        mode,force_source_opaque:false,force_output_opaque:true,
+                    };
+                    // Native material sampler flags0/1 both select nearest;
+                    // the ABMP track selector may override during evaluation.
+                    Ok((blend,false))
+                }).collect::<Result<Vec<_>>>()?;
+                Some(Arc::new(model.to_scene_model(&policies)?))
+            } else { None };
             images.push(Member {
                 name: e.path.clone(),
                 bytes,
                 metadata: e.metadata.clone(),
                 slot,
                 nested,
+                model,
+                scene_model,
             });
         } else if e.metadata["section"] == "sound" {
             sounds.push(Member {
@@ -155,6 +225,8 @@ fn bundle(
                 metadata: e.metadata.clone(),
                 slot: usize::MAX,
                 nested: None,
+                model: None,
+                scene_model: None,
             });
         } else if e.size > 0 {
             bail!("unsupported ABMP member {} ({})", e.path, e.metadata);

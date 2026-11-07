@@ -408,7 +408,7 @@ impl NscripterVm {
         self.state.removed.remove(&id);
     }
     fn layout(&self) -> CellLayoutOptions {
-        CellLayoutOptions {
+        CellLayoutOptions { cell_widths: Vec::new(),
             bounds: [self.window_rect()[2], self.window_rect()[3]],
             size: i32::from(self.text_size()),
             spacing: self.state.native.spacing,

@@ -3,19 +3,23 @@
 //! Shared Text owns cell layout, font metrics and reveal; workers never borrow
 //! HostServices. Native encoded rows, names and mode policy remain here.
 use crate::{
-    config::{integer, Names},
+    config::{Names, integer},
     machine::{Machine, NativeCall, Payload},
 };
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use crysirror_core::{
     service::{EngineQuery, HostServices, InputFrame, TextMeasurement},
     state::ClientId,
 };
 use crysirror_scene::layer::LayerSpec;
 use crysirror_tasks::{Task, TaskPool};
-use crysirror_text::grid::{layout_cells, CellCursor, CellLayoutOptions};
-use serde_json::{json, Value};
+use crysirror_text::grid::{CellCursor, CellLayoutOptions, layout_cells};
+use serde_json::{Value, json};
 use std::{collections::BTreeMap, sync::Arc};
+mod background;
+mod draw;
+pub(crate) use draw::DrawView;
+mod timing;
 
 #[derive(Clone, Debug)]
 pub struct TextFace {
@@ -400,7 +404,7 @@ pub(crate) fn positioned(
     metrics: &dyn TextMeasurement,
 ) -> Result<Vec<Value>> {
     let extent = metrics.measure_simple(&face.font, f32::from(face.size), "")?;
-    let options = CellLayoutOptions {
+    let options = CellLayoutOptions { cell_widths: Vec::new(),
         bounds: [32767, 32767],
         size: i32::from(face.size),
         spacing: [face.spacing, 0],
@@ -640,15 +644,26 @@ pub struct NativeTextBridge {
     window_candidate_path: Option<String>,
     restored_wait_armed: bool,
     window_on: bool,
+    timing: timing::Timing,
+    disable_auto_requested: bool,
+    native_skip_allowed: bool,
+    wheel_down_click: bool,
+    window_variant: i32,
+    presented_reveal_complete: Option<bool>,
+    background_refresh: Option<background::Refresh>,
 }
 /// Immutable native layout/resource seed. It never owns the live message or
 /// asks a restore preparation host to mutate the Scene.
 #[derive(Clone)]
 pub(crate) struct TextRestoreSeed {
     profile: MessageProfile,
+    retained_serial: u32,
     pool: TaskPool,
     previous_window_path: Option<String>,
     window_on: bool,
+    timing: timing::Timing,
+    wheel_down_click: bool,
+    window_variant: i32,
 }
 pub(crate) struct SavedTextPreparation {
     bridge: NativeTextBridge,
@@ -659,6 +674,21 @@ pub(crate) struct PreparedSavedText {
     pub release_images: Vec<String>,
 }
 impl TextRestoreSeed {
+    pub(crate) fn retained_serial(&self) -> u32 {
+        self.retained_serial
+    }
+    pub(crate) fn window_variant(&self) -> i32 {
+        self.window_variant
+    }
+    pub(crate) fn bind_windows(&mut self, number: i32, windows: Vec<MessageWindow>) -> Result<()> {
+        let mut profile = self.profile.clone();
+        profile.window = windows.first().cloned();
+        profile.name_window = windows.get(1).cloned();
+        profile.validate()?;
+        self.profile = profile;
+        self.window_variant = number;
+        Ok(())
+    }
     pub(crate) fn dormant(
         &self,
         rows: Vec<Vec<u8>>,
@@ -676,6 +706,10 @@ impl TextRestoreSeed {
         let mut profile = self.profile.clone();
         profile.cannot_click = cannot_click;
         let mut bridge = NativeTextBridge::from_pool(profile, self.pool.clone())?;
+        bridge.timing = self.timing.clone();
+        bridge.wheel_down_click = self.wheel_down_click;
+        bridge.window_variant = self.window_variant;
+        bridge.timing.start(0, false, false, 7000)?;
         bridge.window_on = self.window_on;
         bridge.state = NativeMessageState {
             mode,
@@ -724,6 +758,10 @@ impl TextRestoreSeed {
             Ok(plan)
         })?;
         let mut bridge = NativeTextBridge::from_pool(profile, self.pool.clone())?;
+        bridge.timing = self.timing.clone();
+        bridge.wheel_down_click = self.wheel_down_click;
+        bridge.window_variant = self.window_variant;
+        bridge.timing.start(0, false, false, 7000)?;
         bridge.window_on = self.window_on;
         bridge.set_background(background)?;
         bridge.window_path = self.previous_window_path.clone();
@@ -807,6 +845,7 @@ impl NativeTextBridge {
     }
     fn from_pool(profile: MessageProfile, pool: TaskPool) -> Result<Self> {
         profile.validate()?;
+        let timing = timing::Timing::new(profile.reveal_per_second);
         Ok(Self {
             profile,
             state: NativeMessageState::default(),
@@ -826,6 +865,13 @@ impl NativeTextBridge {
             window_candidate_path: None,
             restored_wait_armed: false,
             window_on: true,
+            timing,
+            disable_auto_requested: false,
+            native_skip_allowed: false,
+            wheel_down_click: false,
+            window_variant: 0,
+            presented_reveal_complete: None,
+            background_refresh: None,
         })
     }
     pub(crate) fn restored_layer_ids(&self) -> Vec<u32> {
@@ -846,21 +892,104 @@ impl NativeTextBridge {
     }
     pub(crate) fn restore_seed(&self) -> Result<TextRestoreSeed> {
         ensure!(
-            self.worker.is_none() && self.ready.is_none() && self.window_job.is_none(),
+            self.worker.is_none()
+                && self.ready.is_none()
+                && self.window_job.is_none()
+                && self.background_refresh.is_none(),
             "NNN text restore requires drained preparation dependencies"
         );
         Ok(TextRestoreSeed {
             profile: self.profile.clone(),
+            retained_serial: self.state.serial,
             pool: self.pool.clone(),
             previous_window_path: self.window_path.clone(),
             window_on: self.window_on,
+            timing: self.timing.clone(),
+            wheel_down_click: self.wheel_down_click,
+            window_variant: self.window_variant,
         })
+    }
+    pub(crate) fn bind_windows(&mut self, number: i32, windows: Vec<MessageWindow>) -> Result<()> {
+        ensure!(
+            self.pending.is_none()
+                && self.worker.is_none()
+                && self.ready.is_none()
+                && self.window_job.is_none()
+                && self.background_refresh.is_none(),
+            "NNN window variant changed during native message preparation"
+        );
+        let mut profile = self.profile.clone();
+        profile.window = windows.first().cloned();
+        profile.name_window = windows.get(1).cloned();
+        profile.validate()?;
+        self.profile = profile;
+        self.window_variant = number;
+        self.window_prepared = false;
+        Ok(())
+    }
+    pub(crate) fn configure_native_timing(&mut self, setup: &Names) -> Result<()> {
+        ensure!(
+            self.pending.is_none(),
+            "NNN timing configuration during native message"
+        );
+        self.wheel_down_click = setup.integer(b"wheelDownIsClick")?.unwrap_or(0) != 0;
+        self.timing.configure(setup)
+    }
+    pub(crate) fn start_native_controls(
+        &mut self,
+        script_auto: i32,
+        system_auto: bool,
+        cannot_click: bool,
+        has_voice: bool,
+        voice_length_ms: u32,
+    ) -> Result<()> {
+        ensure!(
+            self.pending.is_none(),
+            "NNN native message controls changed during publication"
+        );
+        let rate = self
+            .timing
+            .start(script_auto, system_auto, has_voice, voice_length_ms)?;
+        self.profile.reveal_per_second = rate;
+        self.profile.cannot_click = cannot_click;
+        self.disable_auto_requested = false;
+        self.presented_reveal_complete = None;
+        Ok(())
+    }
+    pub(crate) fn system_auto(&mut self, enabled: bool) {
+        self.timing.set_automatic(enabled)
+    }
+    pub(crate) fn take_disable_auto_request(&mut self) -> bool {
+        std::mem::take(&mut self.disable_auto_requested)
+    }
+    pub(crate) fn shared_reveal_complete(&self, host: &mut dyn HostServices) -> Result<bool> {
+        let bytes = host.query_engine(
+            self.profile.client,
+            EngineQuery::Layer(self.profile.body_layer),
+        )?;
+        let layer: LayerSpec =
+            serde_json::from_slice(&bytes).context("NNN retained message layer absent")?;
+        Ok(layer
+            .paint
+            .glyph_reveal_status()
+            .context("NNN message shared reveal absent")?
+            .complete)
+    }
+    pub(crate) fn set_presented_reveal_complete(&mut self, complete: Option<bool>) {
+        self.presented_reveal_complete = complete;
+    }
+    pub(crate) fn accept_first_presentation(&mut self, now: u64) {
+        self.blocked_click_at = Some(now);
+        self.timing.arm(now);
+    }
+    pub(crate) fn set_native_skip(&mut self, allowed: bool) {
+        self.native_skip_allowed = allowed;
     }
     pub fn pending_message(&self) -> bool {
         self.pending.is_some()
     }
     pub fn dependency_pending(&self) -> bool {
-        self.worker.is_some() || self.window_job.is_some()
+        self.worker.is_some() || self.window_job.is_some() || self.background_refresh.is_some()
     }
     pub fn set_next_window_visibility(&mut self, visible: bool) -> Result<()> {
         ensure!(
@@ -895,9 +1024,7 @@ impl NativeTextBridge {
         Ok(())
     }
     fn prepare_windows(&mut self, host: &mut dyn HostServices) -> Result<bool> {
-        use crysirror_core::image_processing::{
-            ImageCompositeLayer, ImageCompositeMath, ImageInput, ImageProcessState,
-        };
+        use crysirror_core::image_processing::ImageProcessState;
         if self.window_prepared {
             return Ok(true);
         }
@@ -938,48 +1065,8 @@ impl NativeTextBridge {
                 .background
                 .clone()
                 .context("NNN native window requires completed engine background frame")?;
-            let mut layers = Vec::new();
-            for window in &windows {
-                let mut append = |source_y: i32, math: ImageCompositeMath| {
-                    layers.push(ImageCompositeLayer {
-                        input: Box::new(ImageInput::Resource(window.resource.clone().unwrap())),
-                        source: [0, source_y, window.rect[2], window.rect[3]],
-                        destination: [window.rect[0], window.rect[1]],
-                        clip: None,
-                        opacity: 255,
-                        math,
-                    });
-                };
-                // The actual window painter has three native phases. Pixel
-                // clipping/mask/fixed-point products all belong to the engine.
-                if window.stacked_planes & 2 != 0 {
-                    let rows = if window.stacked_planes & 1 != 0 { 2 } else { 1 };
-                    append(
-                        window.rect[3]
-                            .checked_mul(rows)
-                            .context("NNN window plane offset overflow")?,
-                        ImageCompositeMath::MaskSeparate256,
-                    );
-                }
-                if window.percent >= 100 {
-                    append(0, ImageCompositeMath::MaskSeparate256);
-                } else if window.percent > 0 {
-                    append(
-                        0,
-                        ImageCompositeMath::MaskPiecewise256 {
-                            weight: window.percent * 256 / 100,
-                        },
-                    );
-                }
-                if window.stacked_planes & 1 != 0 {
-                    append(window.rect[3], ImageCompositeMath::MaskSeparate256);
-                }
-            }
             self.window_job = Some(host.image_metadata(self.profile.client)?.begin_process(
-                ImageInput::Composite {
-                    base: Box::new(ImageInput::Resource(background)),
-                    layers,
-                },
+                background::composite_input(background, &windows)?,
                 b"[]".as_slice().into(),
             )?);
             self.api_calls += 1;
@@ -1082,14 +1169,23 @@ impl NativeTextBridge {
         }
         self.accept_clear()
     }
-    pub fn try_commit(
+    /// Publish original message GlyphRuns/window without consuming input or
+    /// advancing its receipt. The native screen-effect15 pass follows this
+    /// phase, and only its complete frame can deliver the pending input edge.
+    pub(crate) fn prepare_publication(
         &mut self,
-        machine: &mut Machine,
+        machine: &Machine,
         call: &NativeCall,
         host: &mut dyn HostServices,
-        input: InputFrame,
     ) -> Result<bool> {
         machine.validate_receipt(call)?;
+        if self.published {
+            ensure!(
+                self.pending.as_ref() == Some(call),
+                "NNN published message receipt changed"
+            );
+            return Ok(true);
+        }
         if self.pending.is_none() {
             ensure!(
                 matches!(call.payload, Payload::Message { .. }),
@@ -1139,6 +1235,109 @@ impl NativeTextBridge {
             self.windows_present =
                 self.profile.window.is_some() || self.profile.name_window.is_some();
             self.blocked_click_at = Some(host.now_ms());
+            self.timing.arm(host.now_ms());
+        }
+        Ok(self.published)
+    }
+    /// Native F4/F5 PRINT callbacks still update encoded rows, APPEND and
+    /// window policy (531f/5320 dispatch), but never enter the message mode or
+    /// publish a new screen. Layout is the same shared worker as ordinary
+    /// PRINT; its Layer DTO is deliberately not submitted.
+    pub(crate) fn try_commit_skipped(
+        &mut self,
+        machine: &mut Machine,
+        call: &NativeCall,
+        host: &mut dyn HostServices,
+    ) -> Result<bool> {
+        machine.validate_receipt(call)?;
+        ensure!(
+            !self.published,
+            "NNN script skip cannot replace a live message wait"
+        );
+        if self.pending.is_none() {
+            ensure!(
+                matches!(call.payload, Payload::Message { .. }),
+                "NNN skipped message payload"
+            );
+            let metrics = host.text_measurement(self.profile.client)?;
+            let permit = self.pool.reserve()?;
+            let profile = self.profile.clone();
+            let state = self.state.clone();
+            let record = call.clone();
+            self.worker = Some(permit.spawn(move |cancel| {
+                cancel.check()?;
+                let plan = state.prepare(&record, &profile, metrics.as_ref())?;
+                cancel.check()?;
+                Ok(plan)
+            })?);
+            self.pending = Some(call.clone());
+            return Ok(false);
+        }
+        ensure!(
+            self.pending.as_ref() == Some(call),
+            "NNN skipped message receipt changed"
+        );
+        if let Some(worker) = &mut self.worker {
+            let Some(plan) = worker.try_take()? else {
+                return Ok(false);
+            };
+            self.ready = Some(plan);
+            self.worker = None;
+        }
+        let next = &self
+            .ready
+            .as_ref()
+            .context("NNN skipped message plan absent")?
+            .next;
+        machine.acknowledge(call)?;
+        self.state = next.clone();
+        self.ready = None;
+        self.pending = None;
+        self.window_prepared = false;
+        self.presented_reveal_complete = None;
+        Ok(true)
+    }
+    /// WM_F4/F5's SetYoyaku ends an already published native wait. It neither
+    /// reveals hidden glyphs nor clears its rows: the next real Print owns
+    /// those presentation operations.
+    pub(crate) fn finish_native_action(
+        &mut self,
+        machine: &mut Machine,
+        call: Option<&NativeCall>,
+        now: u64,
+    ) -> Result<()> {
+        ensure!(
+            self.published && !self.dependency_pending() && self.ready.is_none(),
+            "NNN native key action requires published message boundary"
+        );
+        if let Some(call) = call {
+            ensure!(
+                self.pending.as_ref() == Some(call),
+                "NNN native key action message receipt changed"
+            );
+            machine.acknowledge(call)?;
+        } else {
+            ensure!(
+                self.pending.is_none(),
+                "NNN restored key action has live receipt"
+            );
+        }
+        self.pending = None;
+        self.published = false;
+        self.window_prepared = false;
+        self.blocked_click_at = Some(now);
+        self.restored_wait_armed = false;
+        Ok(())
+    }
+    pub fn try_commit(
+        &mut self,
+        machine: &mut Machine,
+        call: &NativeCall,
+        host: &mut dyn HostServices,
+        input: InputFrame,
+    ) -> Result<bool> {
+        if !self.prepare_publication(machine, call, host)? {
+            return Ok(false);
         }
         if !self.poll_message_input(host, input)? {
             return Ok(false);
@@ -1166,13 +1365,32 @@ impl NativeTextBridge {
             .paint
             .glyph_reveal_status()
             .context("NNN message layer has no shared reveal")?
-            .complete;
+            .complete
+            && self.presented_reveal_complete.unwrap_or(true);
+        if self.native_skip_allowed {
+            if !complete {
+                host.submit_engine(
+                    self.profile.client,
+                    1,
+                    &serde_json::to_vec(
+                        &json!({"layers":[{"op":"complete_reveal","id":self.profile.body_layer}]}),
+                    )?,
+                )?;
+                self.api_calls += 1;
+            }
+            return Ok(true);
+        }
+        if self.timing.poll(host.now_ms(), complete)? {
+            return Ok(true);
+        }
         let click = !self.profile.cannot_click
+            && !self.timing.script()
             && input.buttons_pressed & self.profile.advance_buttons != 0
             && self.blocked_click_at != Some(host.now_ms());
         if !click {
             return Ok(false);
         }
+        self.disable_auto_requested = true;
         if !complete {
             host.submit_engine(
                 self.profile.client,
@@ -1204,6 +1422,7 @@ impl NativeTextBridge {
         if !self.restored_wait_armed {
             self.restored_wait_armed = true;
             self.blocked_click_at = Some(host.now_ms());
+            self.timing.arm(host.now_ms());
             return Ok(false);
         }
         if !self.poll_message_input(host, input)? {

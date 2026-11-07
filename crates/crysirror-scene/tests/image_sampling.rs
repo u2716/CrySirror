@@ -43,6 +43,7 @@ fn default_contract_and_nonimage_rejection_remain_explicit() {
     let sampling = ImageSampling {
         address_u: TextureAddressMode::Repeat,
         address_v: TextureAddressMode::MirrorRepeat,
+        ..ImageSampling::default()
     };
     for uv in [
         [f32::NAN, 0., 1., 1.],

@@ -18,7 +18,14 @@ fn project(dir: &Path, extra_clients: serde_json::Value) -> Runtime {
     let p = serde_json::json!({"schema":2,"name":"engine-test","content_revision":"1","canvas":[320,180],"assets":"assets","clients":clients});
     let path = dir.join("project.json");
     std::fs::write(&path, serde_json::to_vec(&p).unwrap()).unwrap();
-    Runtime::load(&path, &dir.join("state")).unwrap()
+    let project = crysirror_runtime::model::Project::load(&path).unwrap();
+    // This fixture exercises the retained extraction API, not the default player.
+    let registry = if project.clients.iter().any(|c| c.adapter == "siglus") {
+        crysirror_runtime::AdapterRegistry::with_reference_siglus()
+    } else {
+        crysirror_runtime::AdapterRegistry::default()
+    };
+    Runtime::with_registry(project, &path, &dir.join("state"), registry).unwrap()
 }
 
 struct Recorder {

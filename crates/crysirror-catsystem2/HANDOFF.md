@@ -1,51 +1,9 @@
-# CatSystem2 continuation — 2026-11-01
+# CatSystem2 implementation notes
 
-Read repository AGENTS.md, STATUS.md, docs/ARCHITECTURE.md,
-docs/NATIVE_ADAPTERS.md, this file and SOURCE.json before editing.
-Native integration is first-class VM plus thin semantic adapter. Generic image,
-text, UI, input, layer, effects and audio work belongs reusable shared APIs.
-Never execute the original EXE/DLL, host another engine, upload a legacy composed
-screen, ACK unknown operations, distribute owner data/fonts, commit/push or add CI.
-Only release cargo validation is authorized.
-
-## Current actual frontier
-
-Owner resources: `/Users/xmoe/Downloads/game-nekopara-vol3/data`; startup chooses
-original `kcs.int/main.kcs`, virtual1280x720, heap1048576. Module SHA256:
-`f8a1fb4fed8a0c64c3fbc0bcf009f63e8f3181cfbc1a0dbd60f9ddefc8e25b3d`.
-This module is an ABI static-evidence guard, not a generic game hash lock.
-
-Latest completed actual behavior: native100-canonical-owner.log release1/1,
-one canonical Runtime mounts31originalINTs and executes20,292KCSinstructions.
-Pending native448 atPC0x1943,args[8],nextPC0x194e. Native100 genuinely updates
-Plane4 from original baseARGB0 to enabledFF000000 diffuse override through
-public shared SetSolidColor, retaining native parent and exact raw state. Original447 loaded
-flow (267lines/25sections/26aliases) into real player-local512DWORD bank8;
-FesTask8 has Interpreter3/INPUT1/SOUND2/raw-stringbank3/imageList6,first_tickfalse,
-lowbutton9,runningfalse,playerexecuted0,cursorUnknown. Main71 genuinely ticked
-this loaded-but-not-running FES before resuming KCS. Native117 then genuinely
-cleared global sparse texture pages through public engine ImageJobs and
-published292real256-square RGBA images,76,546,048bytes across logical3072x6656
-extent; every published page was resolved/checked zero in canonical Assets and
-rejected for foreign client2. It is not a framebuffer or the imageList CPU atlas.
-
-Four actual Runtime input admissions: click-down first leases Fes9HoverEnter,
-retaining the original physical press sample in the canonical journal. After
-explicit test-isolationCancel,click-up/Ctrl-down/Ctrl-up lease receiver5
-Release/Press/Release. Repeated polls retain exact receipts and original native
-PC/instruction count. Successful original callback delivery remains unsupported.
-
-Actual imageList6 separately owns3072x4096 transparent work image50,331,648bytes,
-page256x256/count192. Its basePlane7 has true1280x720 shared Image,hidden,Z1000;
-native task ancestry is distinct from graph ancestry. Transparent1x1 logical
-layer group never changes native empty rectangle/size semantics.
-No Cat title/gameplay/audio/text/CST/full FES task execution or GPU pixels claim.
-All actual new image checks are CPU resources in real Runtime. The immutable
-player26 still stops447 beforecapture; Root27 only added RealLive fix. Root is
-fixed unique player28 from the117production point (SHA256
-b6d6b7479ebad8d8d599b1a0a47c8251eb59daa204168864ad230979713dee8f).
-Current100+SetSolidColor source is frozen for unified29. Root owns builder
-and GPU; do not start a competing player/GPU run. No duplicate playerLTO.
+Current implementation entry points and supported profiles are indexed in
+[README.md](README.md). Native operation mappings and remaining gaps belong
+beside their source; source provenance is recorded in SOURCE.json.
+The dated notes below retain historical implementation and validation evidence.
 
 ## Implemented semantic boundaries
 
@@ -102,17 +60,6 @@ pure frame calculation plus accepted owner commit_frame_order; snapshots freeze
 effective order. Runtime hook and public Layers.setDepth were added by root.
 No automatic task parentZ inheritance for Cat flat native draw order.
 
-Shared InputRouting: client receivers, signed stable priority, source filters,
-half-open region/shared mask, press capture/release/repeat, per-receiver hover
-marker, explicit Drag origin broadcasts, single leased delivery, strict ACK,
-monotonic decimal-string receipt fields, restore fresh epoch/held baseline.
-Automatic hardware drag detection and actual controller observation unfinished.
-Core queries InputRouteDelivery/Receiver/Stats; Scene ServiceBatch.input_routes;
-Runtime submit/query/restore; Engine lifecycle owns raw-input isolation before
-behaviors and through async audio_frame/finish_frame. Mixed interactive UI/routes
-explicitly fails before journal/clock advance; registering mid-on_update never
-reoffers already observed edges. Root owns reflected InputRoutes facade/docs.
-
 Other shared extraction: Text byte_split and Resource zlib per-chunk/prepublish
 cancellation. Do not move these algorithms back into this VM.
 
@@ -125,15 +72,6 @@ true imageList bitmap dimensions/uploadXY. Native447331/332 creates real local
 bank and loads FES. It does not execute the player. Subsequent71 legitimately
 constructs FES lowbutton9 via shared InputRouting even while playerloaded;
 629850's!running branch does only758640(debugFPSdisabled0).
-
-Native448654B30 sends333, immediately forcing629850. Its input prelude is not
-mapped:62D3F0→INPUT152/125 and144(slot12). Field1316initial0 is updated every
-real InputTask tick from70F6D0/7106F0 active cursor. Background outside can release
-held keys/callbacks;676990 converts virtual coordinates. Native144 ORs original
-source masks across4players;80slots/player have source/held/repeat/handled order,
-initial30/interval5configurable counters. Do not use rawCorebit→slot guesses,
-private VM matching or fake pointer defaults. Root has the exact shared binding/
-focus-metadata gap. Fes9hover message64 also queries this input prelude.
 
 Standalone FES original VM is independently validated:4flag assignments then
 steam_isenable1002 atSTARTrow5/physical33/byte0x790. This is not integrated KCS
@@ -182,27 +120,12 @@ remain only in ignored verification paths.
 - Root/NNN generated API docs8/8, fingerprint bd71afbaa37a19da; independently
   recorded. No new engine facade is required for256/260/262 native state.
 
-Other immutable player artifacts:23 at
-`target/verification/krkr-ctrl-exits/player23`, SHA256
-`2c7a0ac497d068d207b846ddbaa63c0b4f173342a2d74a0077e28762c557caf8`.
-It stops before new256 support. Immutable24 now contains256/260/262 at
-`target/verification/krkr-ctrl-exits/player24`, SHA256
-`f6cc7fc86de4ed35650c510ecdda07cc2007900f0876500727295da611ef8d98`.
-24isfixed;25alsofixed(SHA4241833a6b0bfdfd9185df9277a7450264588403f7f52e2291da47b07106cab5).
-CatproductionnowfrozenforKRKRunique26untilitsSHAisfixed. New Cat preparation_pending/program-publication
-yield was added afterward; Runtime authored Cat+peer release test1/1passed
-(bootstrap-preparation-tests.log). It proves0instructions/PC/frame/time during
-source preparation andfirstnormalframeCtrl reachespeer. Actual owner regression
-for this hook passed1/1inbootstrap-owner.log:prepared0instructions/PC,then
-same20,218/class34frontier andfourretainedinputfailureprobes.
-Coordinate GPU with root/KRKR/NNN; do not duplicate full LTO/player builds.
-
 31 original INT mounted namespaces were previously validated, including26
 scene.int duplicate CSTL rows: scoped INT aliases are accepted only when entire
 stored payloads agree with known same archive key. Preserve actual ArchiveMount
 coverage, not only raw index parsing. No user game bytes were added to the repo.
 
-## Latest validation and freeze — 2026-11-01
+## Validation — 2026-11-01
 
 - native117-production-check.log: release check passed1m31s.
 - native117-lib-tests2.log:29passed/1owner ignored. The initial authored storage
@@ -220,15 +143,6 @@ coverage, not only raw index parsing. No user game bytes were added to the repo.
   fingerprint1171d6b86d446b00, includesText+Paged Rust-only APIs. No fake facade.
 - Python3.11 tooling201/201earlier; no Python tooling changed in this increment.
 
-Public paged API is frozen (crysirror-image/src/paged.rs+single lib export),
-4types/2constants, no Core/Runtime enum additions. Native117's explicit resource
-worker dependency defers callback drain only while the original synchronous
-operation is pending; canonical journal/lease staysowned. BudgetExhausted and71
-wait do not activate this gate. New pages remain undefined until full engine
-clear;16bpp/nonpowerof2/native device adjustment/explicitbitmap targets remain
-unsupported. Global texture cache upload/draw/filter/dither/capture are not
-inferred from clear. Current production is frozen forRoot28 until fixedSHA.
-
 ## Native100/SetSolidColor latest validation
 
 - native100-production-check.log passed5.43s before switching the final call from
@@ -244,12 +158,6 @@ inferred from clear. Current production is frozen forRoot28 until fixedSHA.
   final shared-solid-color-api-tests3.log passed1/1. Production API is frozen.
   NNN solid-color-api-docs-verify.log passed8/8+coverage1/1, fingerprint
   c8c180ba4ff65706. README/CHANGES/JSON/TypeScript are updated.
-
-All100phase validation is complete; current source staysfrozen until Root29SHA.
-Public facade1/1,Scene2/2,Cat lib30/1ignored,actualowner1/1,Python3.11tooling201/201
-and API docs8/8+coverage1/1 passed. No owned Cargo/GPU process remains. Root owns
-the unique29builder and GPU. Overall Cat integration remains incomplete at448.
-
 
 ## FES input/platform/config continuation — 2026-11-01
 
@@ -270,18 +178,6 @@ InputObservation/Platform APIs and desktop C/L/Z/middle mapping remain frozen;
 NNN owns unified docs generation. HostServices defaults fail Unsupported. Unknown
 pointer/focus metadata is not an invented coordinate or key state.
 
-**Implemented after that validated point, currently awaiting Root's next combined
-release:** original setconf/getconf scalar record family,32 auto presets from
-71C670 (10 initialized pairs, remaining0), play/sysplay indexing and persistence,
-legacy effective integer audio gains, SoundPolicy PART declarations/inheritance,
-label/id/type selectors, reset and user overlay, getsndconfex/setsndconfex. Shared
-AudioRequest::SetMixGroup owns actual gains/mute/control state. Native PART
-lookup ancestry is not gain ancestry: child inherited volume is applied once,
-not multiplied by its PART parent. Legacy713F40 wrapping integer product/100 is
-published before mixing (51*63 becomes32%). Added4 CPU policy tests; no result
-is claimed until Root completes validation. Font/window/language configuration
-mutations, extended sound playback and device controls still fail explicitly.
-
 Static source inventory `target/verification/catsystem2/fes-complete-static-inventory.json`
 records **131/131 FES native functions extracted**, not131 implemented commands.
 Actual getsndconfex address is783090;783490 is inside its body. Original FES
@@ -289,15 +185,6 @@ endfes77A7C0/endkcs77AAA0 each return1 even with no child, therefore yield a
 real one-frame boundary; do not silently continue the same tick. Execfes77A630
 queues event2/16 arguments and returns-3;629850 synchronously forces new child
 333 before retaining it. Original task children tick before parent script.
-
-Next independent work: integrate clock/wait/child coordinator, then typed
-DEFINE/OBJECT/MACRO resources into engine Layer/Canvas/Text/Audio APIs, then CST
-interaction/save. Ignored-target staged timer test1/1 and wait policy2/2 passed
-with rustc -O; these drafts are **not yet production integration**. No title,
-logo playback, gameplay, complete native table, complete source reverse or full
-CatSystem2 compatibility is claimed. Root remains sole Cargo/full-player builder;
-freeze source only once Root explicitly starts reading it. No commit/push/CI.
-
 
 ### CatSystem2 native FES clock/task phase — validated source batch (2026-11-01)
 
@@ -312,12 +199,6 @@ physical/object callback, nested child creation/destruction or typed resource
 execution; those still fail visibly. Huge diagnostics JSON was split into two
 identical-schema maps after an actual macro recursion compilation failure.
 
-Compilation: settings/sound batch Cat41 passed/1 ignored in
-next-native-tests3.log. New task/clock batch Cat47 passed/1 ignored in
-native-batch3-tests2.log; the combined command later failed an unrelated NNN
-precondition, so the whole command is not reported as passed. No own Cargo
-queues, GPU/game EXE execution or submission.
-
 Behavior: updated real-game owner test (native stillread0, shared bgvoice
 gain0.8 and foreign-client rejection) awaits explicit execution by Root. The
 previous47-FES/setconf frontier remains the latest verified real-game result
@@ -328,7 +209,6 @@ Next source is DEFINE/OBJECT/MACRO and nested task/resource publication.
 Original typed declaration tableB071A8 contains39 classes; OBJECT header table
 B07748 contains35 named groups covering66 numeric fields; motion/alias field
 tableB07A18 is separate. These are VM policy metadata, not a new renderer.
-
 
 ### CatSystem2 actual shared sound and FES task wait acceptance (2026-11-01)
 
@@ -347,18 +227,9 @@ foreign client999 cannot read it. No audio device or original engine/EXE was
 used. The1.01s duration is CPU verification time, not a rendered game benchmark.
 No title, logo playback, interactive gameplay or full compatibility claim.
 
-Next source review is complete task-result semantics (base task20 versus FES
-player519 versus parent's cached child108), nested FES/KCS resources and typed
-DEFINE/OBJECT/MACRO publication. Static main script has81 native IDs,41 present
-in the current dispatch and40 absent; dispatch presence does not establish
-complete per-ID profiles or runtime coverage. Staged typed declarations3/3 and
-task-result policy1/1 passed standalone rustc -O under ignored target, not yet
-linked. Production remains frozen for Root's unique player32 build.
-
 Official exit reference confirms exit only publishes the exit code; child keeps
 running until parent endfes. Do not halt the VM or close the application on it:
 https://cs2.suki.jp/manual/fes/reference/cn/exit.html
-
 
 ## Continuation: result, macro/declaration and civil/section families
 
@@ -392,7 +263,6 @@ are source evidence for completing shared object publication, not handlers.
 Next: finish real typed resource publication, child execfes/execkcs lifetimes,
 object/input/motion/audio bindings and CST/save execution as whole families.
 Never turn declarations or a native frontier into a completed integration.
-
 
 ## Current batch4 actual receipt and original motion role
 
@@ -559,16 +429,6 @@ second-argument lookup+destination are confirmed in x86; do not normalize it
 into a nicer guessed API. Empty copy/clear and zero-vararg literal strings
 retain original C-string semantics. Unsafe vararg profiles fail pending.
 
-Full evidence and gates: `docs/catsystem2-fes-lifecycle-source-audit.json`.
-Current actual game receipt remains unchanged cat-owner-batch4 KCS20360/FES53,
-pending execfes brandlogo; source95 is not title/GPU/gameplay acceptance.
-Next whole source: actual typed39 object resources/alias-to-motion binding;
-execkcs and auxiliary/owned-object lifecycle; constructor dynamic metadata;
-then CST/text/UI/audio/save. Do not run repeated game single-error loops.
-No new desktop artifact, commit, push or CI in this batch. Public Text shape
-sent to NNN for one unified measured docs regeneration;42a8 is prior verified
-history until the new generator/test result is reported.
-
 ### Native multi-Controller manager source, same checkpoint
 
 Private `motion_set.rs` now follows788AF0..789B40's whole bounded orchestration
@@ -734,7 +594,6 @@ Renderer source inspection confirms existing shared Paint::Snapshot takes an
 ordinary offscreen texture path; renderer was neither changed nor GPU-tested by
 this agent. Canvas93CPU/public1 remains exactly the recorded validation scope.
 
-
 ## 2026-11-01 resumed HG3 resource preparation family
 
 Shared `formats-arc` HG3 now lives in `legacy/e/images/hg3.rs`: real relative
@@ -762,13 +621,6 @@ then ran124pass/1ignored in `native-image-resource-all-lib-tests.log`. No owner
 media/GPU run, typed gate unchanged. Full Python initially200pass/1failure due
 to concurrent Siglus SOURCE hash registration; Root reports fixing it, final
 rerun still required. Current shared API hash belongs to NNN's unified docs.
-
-Next: actual FES typed bank and image-list Canvas/plane publisher, motion aliases
-and owner completion. Whole ImageList5F3AE0/743600/render dispatch +7590F0 typed
-apply source read; Native HG3 Surface origin/base mapping62B720/68FC80 needs
-continued source review, rather than guessing image center. Preserve resource
-flags/modes until actual interpretation. Root retains full desktop/GPU build.
-
 
 ## Typed bank + native index AST follow-up
 
@@ -804,11 +656,6 @@ texturedPlane profile until shared post-composition tint and full World matrix
 bindings. Native masks/path modes/multi-image/dynamic metadata/KEYBLOCK remain
 visible gates in draft. Resource readiness is not original native ACK.
 
-Root asked no new Cargo after Cat20029; current131/1 finished and lock released,
-consumer38249 gets priority. Do not race full desktop builds/GPU. NNN and Alice
-are active on Restore and audio; shared changes coordinated only. IDA is free
-after Cat native-image-origin-pivot-static.log; all DBs close(False)/exited.
-
 ## 2026-11-01 pending native HG3 profile + whole typed resource batch
 
 Current production source (not yet release-compiled/validated): shared HG3
@@ -818,16 +665,6 @@ JPEG defaultmode1/depth-specific alpha and WebP embedded alpha/mode. Archive
 profile remains the default. Ten authored shared tests exist; earlier5-test
 receipt does not cover this new source. Cat native_image_resource explicitly
 selects native profile; authored native segment row count is1, not reserved0.
-
-`fes_object_resources.rs` is now runtime-only production source with4 authored
-Runtime tests, replacing the old ignored draft. It prepares original declaration
-state on a cloned fresh bank and actual shared Image worker resources before
-owner Canvas/Layer publication. It retains original raw frames independently
-from flags0 opaque draw resources (engine CopyRgb), native signed-char name/index
-order, actual source/pivot, stable receipt retries and failed-publication rollback.
-The original Machine typed gate is unchanged. No game/title/alias/motion/SOUND/
-input/retirement completion is inferred. Profile limitations remain explicit.
-Root coordinates the next formats/Cat release command; no new Cargo queued here.
 
 ### Final receipt for preceding pending batch
 
@@ -877,15 +714,6 @@ native policies separately over the same shared Canvas API. New real Runtime
 fixture uses nonzero origin/base and checks PATHMODE0/1 positions. Literal
 multi-image filenames remain rejected in both path modes until the full source
 list policy is admitted. This new correction is not validated by135/1.
-
-The shared HG3 family now has a source-only cumulative frame work guard using
-max_resident_bytes plus tag/segment/run/bitplane/row cooperative cancellation.
-formats common DecodeFn forwards the active entry-open DecodeContext (the old
-2arg constructor stays wrapped/compatible); no stale index-worker token or
-resolver is captured inside archive closures. New generic forwarding test and
-HG3 overlapping-segment budget test await validation. Next expected Cat additions
-are6 (4alias+FIFO+placement); HG3frames11 and formats lib45 are only expected
-counts until actually run. Root has the ready command; no Cat Cargo queued.
 
 ### Latest actual release141/1; pending notes above are superseded only for validation
 
@@ -1129,7 +957,6 @@ behavior/API verification remains pending. No title/GPU/new original-game claim.
 ## 2026-11-02 gameplay frontier
 
 Nekopara vol3 reaches `kcs.int/sscript.kcs` and stops at native 342, PC 0xe6585. Tools: `owner_kcs_native_census` counts natives per script and, with `CRYSIRROR_CATSYSTEM2_DUMP_DIR`, dumps KCS code. The dispatch table is at A2DD38 (dword per id); FES natives are at 8F4A58 (36-byte entries, 32-byte name then handler); `noact` names the arrow-key default focus button, it never disarms a press. See STATUS.md for placeholders that still need real implementations.
-
 
 ## 2026-11-02 first gameplay screen
 
@@ -1572,7 +1399,6 @@ Remaining profiles, explicitly rejected rather than acknowledged:
 - Other native binaries with real class43 or additional bitmap setters need
   their own semantic profiles. These results do not establish complete games.
 
-
 ## Batch 14 — actual offscreen checks and live log/menu fixes (2026-11-04)
 
 Native698 now shares977 insertion; its absent eighth argument is history index-1.
@@ -1595,7 +1421,6 @@ Evidence is in target/verification/catsystem2/offscreen-current/summary.json.
 The lower-left color block observed in this batch is fixed by Batch15 below.
 Unresolved: final info-dialog line clipping and Ctrl stress performance dominated
 by repeated E-mote scene rebuilds. The Ctrl run was interrupted and must not be reported as a pass.
-
 
 ## Batch 15 — MASK4 destination-alpha composition (2026-11-04)
 

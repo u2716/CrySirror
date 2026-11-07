@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
-// `deny`, not `forbid`: only the Windows menu FFI (native_menu.rs) opts out.
+// `deny`, not `forbid`: native menu, display-activity and IME FFI boundaries
+// opt out within their own platform modules.
 #![deny(unsafe_code)]
 mod app;
 mod audio;
@@ -8,6 +9,7 @@ mod detect;
 mod source_path;
 mod integrated_roots;
 mod desktop_provider;
+mod text_input;
 #[cfg(feature = "gamepad")]
 mod gamepad;
 mod input_track;
@@ -257,6 +259,7 @@ fn state_dir_base() -> PathBuf {
 fn adapter_registry() -> Result<AdapterRegistry> {
     #[allow(unused_mut)]
     let mut registry = AdapterRegistry::default();
+    crysirror_siglus_integrated::register(&mut registry)?;
     crysirror_reallive::register(&mut registry)?;
     crysirror_krkr::register(&mut registry)?;
     crysirror_rfvp::register(&mut registry)?;
@@ -267,6 +270,7 @@ fn adapter_registry() -> Result<AdapterRegistry> {
     crysirror_catsystem2::register(&mut registry)?;
     crysirror_majiro::adapter::register(&mut registry)?;
     crysirror_qlie::adapter::register(&mut registry)?;
+    crysirror_sugarpot::register(&mut registry)?;
     crysirror_system_nnn::installed::register(&mut registry)?;
     crysirror_system4::factory::register(&mut registry)?;
     crysirror_avg32::register(&mut registry)?;
@@ -484,7 +488,7 @@ fn play(options: PlayOptions) -> Result<()> {
         integrated_roots::bind(&mut project,local,&state_dir,font.as_deref())?;
         local.to_path_buf()
     } else {
-        anyhow::ensure!(!project.clients.iter().any(|client| matches!(client.adapter.as_str(), "bgi" | "softpal")), "BGI/SoftPAL direct backends currently require local or OS-mounted game directories");
+        anyhow::ensure!(!project.clients.iter().any(|client| matches!(client.adapter.as_str(), "bgi" | "softpal" | "siglus")), "Integrated runtimes currently require local or OS-mounted game directories");
         // Only empty capability roots are local. Game bytes are never staged
         // here: every client is overlaid with its scoped network provider.
         let root = state_dir.join("network-assets");

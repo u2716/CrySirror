@@ -13,6 +13,9 @@ use crysirror_core::{
     service::{AudioAsset, AudioParameters, AudioRequest, AudioResourceHandle, PcmBus},
 };
 
+mod skip;
+pub use skip::AudioCallbackContext;
+
 #[derive(Clone, Copy, Debug)]
 pub struct AudioBindings {
     pub music: u32,
@@ -134,6 +137,11 @@ pub struct MusicFade {
 #[derive(Clone, Debug)]
 pub enum AudioOperation {
     None,
+    /// Native531370 always loads the voice and records its decoded duration,
+    /// even when its playback switch is off. This operation creates no voice.
+    MeasureVoice {
+        channel: u32,
+    },
     Stop {
         channel: u32,
         fade: Option<MusicFade>,
@@ -266,6 +274,21 @@ impl NativeAudioPolicy {
         match (&call.payload, call.code) {
             (Payload::Words { count, words }, 0x33330007) => {
                 ensure!(*count as usize == words.len(), "NNN music word count");
+                if !self.settings.music_enabled && words.first().is_some_and(|number| *number > 0) {
+                    ensure!(words.len() <= 256, "NNN music parameter count");
+                    //531170 records6822/6823 before the preference gate, but
+                    //does not call virtual PlayMusic840 when disabled.6821
+                    //therefore remains the last actually selected buffer.
+                    //53AD20 saves6822;53B630 directly replays virtual840.
+                    let mut next = self.clone();
+                    next.last_music_number = Some(words[0] - 1);
+                    next.music_repeat_count = words.get(1).copied().unwrap_or(0);
+                    return Ok(NativeAudioPlan {
+                        operation: AudioOperation::None,
+                        source: None,
+                        next,
+                    });
+                }
                 self.music(words, music, music_playing)
             }
             (Payload::Words { count, words }, 0x33330009) => {
@@ -289,7 +312,10 @@ impl NativeAudioPolicy {
         }
     }
     pub fn music(&self, words: &[i32], names: &Names, playing: bool) -> Result<NativeAudioPlan> {
-        ensure!((1..=5).contains(&words.len()), "NNN music parameter count");
+        ensure!(
+            (1..=256).contains(&words.len()),
+            "NNN music parameter count"
+        );
         let number = words[0];
         let mut next = self.clone();
         let mut plan = NativeAudioPlan {
@@ -330,7 +356,6 @@ impl NativeAudioPolicy {
             let name = table_name(names, number - 1)?;
             let filename = decoded_name(&name)?;
             let repeat = words.get(1).copied().unwrap_or(0);
-            ensure!(repeat >= 0, "NNN negative music repeat count");
             let delta = words.get(2).copied().unwrap_or(-9999);
             let percent = if delta == -9999 {
                 self.settings.music_volume
@@ -351,7 +376,10 @@ impl NativeAudioPolicy {
                     channel: self.bindings.music,
                     parameters: AudioParameters {
                         gain: legacy_gain(percent)?,
-                        looping: repeat != 1,
+                        //46C630 restarts at0 indefinitely; otherwise it
+                        //decrements and restarts only while positive. Negative
+                        //native counters therefore play one pass, not forever.
+                        looping: repeat == 0 || repeat > 1,
                         loop_passes: (repeat > 1).then_some(repeat as u32),
                         bus: PcmBus::Music,
                         ..AudioParameters::default()
@@ -433,7 +461,7 @@ impl NativeAudioPolicy {
         voice: bool,
         bound_received_name: bool,
     ) -> Result<NativeAudioPlan> {
-        ensure!((2..=12).contains(&words.len()), "NNN clip parameter count");
+        ensure!((2..=256).contains(&words.len()), "NNN clip parameter count");
         let channel = usize::try_from(words[1]).context("NNN negative native audio channel")?;
         ensure!(channel < 8, "NNN native audio channel bounds");
         let logical = (if voice {
@@ -518,7 +546,7 @@ impl NativeAudioPolicy {
             let percent = volume
                 .wrapping_add(words.get(2).copied().unwrap_or(0))
                 .clamp(0, 100);
-            if enabled {
+            if enabled || voice {
                 let candidates = if voice {
                     // Packed VPK precedence belongs to the resource mount. A
                     // path list never pretends a missing pack entry was found.
@@ -539,24 +567,23 @@ impl NativeAudioPolicy {
                     name,
                     candidates,
                 });
-                plan.operation = AudioOperation::Play {
-                    channel: logical,
-                    parameters: AudioParameters {
-                        gain: legacy_gain(percent)?,
-                        looping: words.get(3).copied().unwrap_or(0) != 0,
-                        bus,
-                        ..AudioParameters::default()
-                    },
-                    repeat_count: 1,
-                    spatial: s,
-                    fade_in: None,
-                    fade_out: None,
+                plan.operation = if enabled {
+                    AudioOperation::Play {
+                        channel: logical,
+                        parameters: AudioParameters {
+                            gain: legacy_gain(percent)?,
+                            looping: words.get(3).copied().unwrap_or(0) != 0,
+                            bus,
+                            ..AudioParameters::default()
+                        },
+                        repeat_count: 1,
+                        spatial: s,
+                        fade_in: None,
+                        fade_out: None,
+                    }
+                } else {
+                    AudioOperation::MeasureVoice { channel: logical }
                 };
-            } else if voice {
-                // The native voice loader still resolves/decodes for duration
-                // before checking the switch. Caller must retain this resource
-                // dependency; it is not a successful empty playback.
-                bail!("NNN disabled voice requires native duration/resource preparation");
             }
         }
         plan.next = next;
@@ -564,14 +591,49 @@ impl NativeAudioPolicy {
     }
 }
 impl NativeAudioPlan {
+    /// Prepare the new WaveMusic buffer independently of any live channel.
+    /// The same native100ms fade-in is required by normal PlayMusic and by
+    /// 53B630's detached original-slot replay. Retiring the old buffer is a
+    /// separate owner operation and must never run during slot preparation.
+    pub(crate) fn prepare_music_start(&mut self, music_channel: u32) -> Result<()> {
+        if let AudioOperation::Play {
+            channel,
+            parameters,
+            fade_in,
+            fade_out,
+            ..
+        } = &mut self.operation
+        {
+            if *channel == music_channel {
+                parameters.gain_envelope =
+                    (*fade_in).map(|fade| crysirror_core::service::AudioGainEnvelopeSpec {
+                        interval_ms: 100,
+                        steps: fade.ticks_100ms,
+                        start_db100: -10000,
+                        end_db100: fade.target_percent * 100 - 10000,
+                        elapsed_steps: 0,
+                        phase_ms: 0,
+                        apply_initial: true,
+                        stop_at_end: false,
+                    });
+                if let Some(spec) = parameters.gain_envelope {
+                    spec.validate()?;
+                }
+                *fade_in = None;
+                *fade_out = None;
+            }
+        }
+        Ok(())
+    }
+
     fn playback(&self) -> Result<(u32, AudioParameters)> {
         let AudioOperation::Play {
             channel,
             parameters,
-            repeat_count,
             spatial,
             fade_in,
             fade_out,
+            ..
         } = &self.operation
         else {
             bail!("NNN audio plan has no playback")
@@ -580,7 +642,6 @@ impl NativeAudioPlan {
             spatial.is_plain(),
             "NNN native spatial audio requires shared signed-coordinate/motion profile"
         );
-        ensure!(*repeat_count >= 0, "NNN negative native music repeat count");
         ensure!(
             fade_in.is_none() && fade_out.is_none(),
             "NNN native100ms stepped decibel envelope requires shared audio capability"
@@ -641,6 +702,9 @@ impl NativeAudioPlan {
                 fade_ms: 0.,
             }),
             AudioOperation::Play { .. } => bail!("NNN playback requires resource preparation"),
+            AudioOperation::MeasureVoice { .. } => {
+                bail!("NNN voice length requires resource preparation")
+            }
         })
     }
 }

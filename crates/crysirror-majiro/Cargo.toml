@@ -16,8 +16,11 @@ crysirror-tasks.workspace = true
 crysirror-vfx = {workspace=true,optional=true}
 crysirror-runtime = { workspace = true, optional = true }
 encoding_rs = "0.8"
+crysirror-text-legacy.workspace = true
+crysirror-image = { workspace = true, optional = true }
+crysirror-formats-arc = { workspace = true, optional = true }
 [features]
-runtime = ["dep:crysirror-runtime", "dep:crysirror-vfx"]
+runtime = ["dep:crysirror-runtime", "dep:crysirror-vfx", "dep:crysirror-image", "dep:crysirror-formats-arc"]
 [dev-dependencies]
 crysirror-formats-arc.workspace = true
 tempfile = "3"

@@ -1,7 +1,50 @@
 // SPDX-License-Identifier: MPL-2.0
 // Ported from xmoezzz/siglus_rs 5f358ef1360b0439e92aed2b749e8f25d8721954.
 // Source and changes recorded in ../UPSTREAM.md.
+pub use crate::canvas_lens::CanvasLens;
 use crate::layer::SpriteTransform as Sprite;
+use serde::{Deserialize,Serialize};
+
+/// Explicit geometric secondary ordering, evaluated before ordered
+/// composition transforms. It is independent of projection or GPU Z testing.
+#[derive(Clone,Copy,Debug,PartialEq,Serialize,Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GeometryOrder {
+    pub aggregate:DepthAggregate,
+    pub xy_weight:f32,
+    pub quantize:f32,
+    #[serde(default)]
+    pub negative_truncation_bias:bool,
+    /// A logical image/text carrier can share its computed key with payload
+    /// descendants, independently of those descendants' glyph/mesh bounds.
+    #[serde(default)]
+    pub apply_to_descendants:bool,
+}
+#[derive(Clone,Copy,Debug,PartialEq,Serialize,Deserialize)]
+#[serde(rename_all="snake_case")]
+pub enum DepthAggregate{Average,Minimum,Maximum}
+impl GeometryOrder {
+    pub fn validate(&self)->anyhow::Result<()> {
+        anyhow::ensure!(self.xy_weight.is_finite()&&self.xy_weight.abs()<=1_000_000.
+            &&self.quantize.is_finite()&&self.quantize>0.&&self.quantize<=1_000_000.,"geometry order parameters");
+        Ok(())
+    }
+    pub fn key(&self,points:impl IntoIterator<Item=[f32;3]>)->anyhow::Result<i32> {
+        let points=points.into_iter().map(|p|p[2]+self.xy_weight*(p[0].abs()+p[1].abs())).collect::<Vec<_>>();
+        anyhow::ensure!(!points.is_empty()&&points.iter().all(|v|v.is_finite()),"geometry order points");
+        let value=match self.aggregate {
+            DepthAggregate::Average=>{
+                let factor=1./points.len()as f32;
+                (points.iter().map(|v|f64::from(*v)).sum::<f64>()*f64::from(factor))as f32
+            },
+            DepthAggregate::Minimum=>points.into_iter().fold(f32::INFINITY,f32::min),
+            DepthAggregate::Maximum=>points.into_iter().fold(f32::NEG_INFINITY,f32::max),
+        }*self.quantize;
+        let quantized=if self.negative_truncation_bias&&value<0.{f64::from(value.trunc())-1.}else{f64::from(value).floor()};
+        anyhow::ensure!(quantized>=i32::MIN as f64&&quantized<=i32::MAX as f64,"geometry order overflow");
+        Ok(quantized as i32)
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct ProjectedPoint {
@@ -98,6 +141,95 @@ fn apply_local_matrix(sprite: &Sprite, p: Vec3) -> Vec3 {
     }
 }
 
+/// Affine model transform before camera projection. Keeping it in world
+/// space allows complete 3D ancestor chains without projecting a child twice.
+pub fn sprite_model_matrix(sprite: &Sprite, dst_x: f32, dst_y: f32) -> glam::Mat4 {
+    let (s, offset) = sprite.resolved();
+    let pivot = glam::Vec3::new(s.pivot_x, s.pivot_y, s.pivot_z);
+    let anchor = glam::Vec3::new(dst_x + offset[0], dst_y + offset[1], s.z + s.pivot_z)
+        + if s.object_anchor { glam::Vec3::ZERO } else { glam::Vec3::new(s.pivot_x, s.pivot_y, 0.) };
+    let centre = pivot + if s.object_anchor {
+        glam::Vec3::new(s.texture_center_x, s.texture_center_y, 0.)
+    } else { glam::Vec3::ZERO };
+    glam::Mat4::from_translation(anchor)
+        * s.local_matrix.map_or(glam::Mat4::IDENTITY, |m| glam::Mat4::from_cols_array(&m))
+        * glam::Mat4::from_rotation_y(s.rotate_y)
+        * glam::Mat4::from_rotation_x(s.rotate_x)
+        * glam::Mat4::from_rotation_z(s.rotate)
+        * glam::Mat4::from_scale(glam::Vec3::new(s.scale_x, s.scale_y, s.scale_z))
+        * glam::Mat4::from_translation(-centre)
+}
+
+/// Ancestor contribution for ordinary versus position-only inheritance.
+/// The latter transforms the anchor through the full parent matrix and keeps
+/// an identity linear basis, preserving the node's own local pose.
+pub fn sprite_parent_matrix(sprite: &Sprite, dst_x: f32, dst_y: f32, parent: glam::Mat4) -> glam::Mat4 {
+    let (s, offset) = sprite.resolved();
+    if s.inherit_parent_basis { return parent; }
+    let anchor = glam::Vec3::new(dst_x + offset[0], dst_y + offset[1], s.z + s.pivot_z)
+        + if s.object_anchor { glam::Vec3::ZERO } else { glam::Vec3::new(s.pivot_x, s.pivot_y, 0.) };
+    glam::Mat4::from_translation(parent.transform_point3(anchor) - anchor)
+}
+
+/// Project a point already transformed into world space. An inherited camera
+/// supplies only the view/projection; its model pose is part of the ancestry.
+pub fn project_world_point(camera: &Sprite, point: [f32; 3], canvas: [f32; 2]) -> Option<ProjectedPoint> {
+    project_point(camera, Vec3::new(point[0], point[1], point[2]), canvas[0], canvas[1])
+}
+/// Homogeneous projection for GPU-clipped polygons. Behind-camera vertices
+/// remain present with negative clip W so triangles crossing a camera plane
+/// are clipped rather than discarded as a whole.
+pub fn project_world_point_unclipped(camera:&Sprite,point:[f32;3],canvas:[f32;2])->Option<ProjectedPoint> {
+    if let Some(lens)=camera.canvas_projection{return lens.point(point,canvas)}
+    if !camera.camera_enabled{return project_world_point(camera,point,canvas)}
+    let (eye,forward,right,up)=camera_basis(camera);
+    let p=Vec3::new(point[0],point[1],point[2]).sub(eye);
+    let mut w=p.dot(forward);
+    // The Layer representation stores screen XY plus clip W. A signed tiny W
+    // preserves finite homogeneous coordinates for a vertex exactly on W=0;
+    // near-plane clipping removes it before any fragment is evaluated.
+    if w.abs()<1e-20{w=1e-20f32.copysign(w)}
+    let tan=(camera.camera_view_angle_deg.to_radians()*0.5).tan().max(1e-3);
+    let x=(p.dot(right)/(w*tan*canvas[0]/canvas[1])+1.)*0.5*canvas[0];
+    let y=(1.-p.dot(up)/(w*tan))*0.5*canvas[1];
+    let depth=10000./9999.-10000./(9999.*w);
+    [x,y,depth,w].iter().all(|v|v.is_finite()).then_some(ProjectedPoint{x,y,depth,clip_w:w})
+}
+
+/// Geometry under a full affine3D parent, with projection performed once after
+/// model composition. Used by retained layers and immutable captures alike.
+pub fn sprite_quad_geometry_in_hierarchy(
+    sprite: &Sprite, dst: [f32; 2], local: [f32; 4], canvas: [f32; 2],
+    parent: glam::Mat4, inherited_camera: Option<&Sprite>, inherited_3d: bool,
+) -> Option<SpriteQuadGeometry> {
+    let (s, offset) = sprite.resolved();
+    //The owner frame decides whether a collapsed ordinary leaf is visible.
+    //Ordered coverage commands still need an admission point for a degenerate
+    //quad, even though it contributes no rasterized pixels.
+    let camera = if s.camera_enabled||s.canvas_projection.is_some() { &s } else { inherited_camera.unwrap_or(&s) };
+    let corners = [[local[0],local[1]], [local[2],local[1]], [local[2],local[3]], [local[0],local[3]]];
+    let parent = sprite_parent_matrix(sprite, dst[0], dst[1], parent);
+    let model = parent * sprite_model_matrix(sprite, dst[0], dst[1]);
+    let world = corners.map(|p| {
+        let q = if s.billboard {
+            let mut facing=s.clone();
+            facing.camera_eye=camera.camera_eye;
+            facing.camera_target=camera.camera_target;
+            facing.camera_up=camera.camera_up;
+            let q=transform_billboard_point(&facing,p[0],p[1],dst[0]+offset[0],dst[1]+offset[1]);
+            parent.transform_point3(glam::Vec3::new(q.x,q.y,q.z))
+        } else { model.transform_point3(glam::Vec3::new(p[0],p[1],0.)) };
+        q.to_array()
+    });
+    let mut projected=[ProjectedPoint{x:0.,y:0.,depth:0.,clip_w:1.};4];
+    for i in 0..4 {
+        projected[i]=project_world_point_unclipped(camera,world[i],canvas)?;
+        if !inherited_3d && !uses_3d(&s) { projected[i].depth=0.; }
+    }
+    if s.culling && signed_area((projected[0].x,projected[0].y),(projected[1].x,projected[1].y),(projected[2].x,projected[2].y))<=0. { return None; }
+    Some(SpriteQuadGeometry{projected,world})
+}
+
 fn transform_local_point(sprite: &Sprite, px: f32, py: f32, dst_x: f32, dst_y: f32) -> Vec3 {
     let (anchor_x, anchor_y, mut p) = if sprite.object_anchor {
         (
@@ -171,6 +303,7 @@ fn transform_billboard_point(sprite: &Sprite, px: f32, py: f32, dst_x: f32, dst_
 }
 
 fn project_point(sprite: &Sprite, p: Vec3, win_w: f32, win_h: f32) -> Option<ProjectedPoint> {
+    if let Some(lens)=sprite.canvas_projection{return lens.point([p.x,p.y,p.z],[win_w,win_h])}
     if !sprite.camera_enabled {
         let depth = (0.5 - p.z / 100000.0).clamp(0.0, 1.0);
         return Some(ProjectedPoint {
@@ -423,5 +556,32 @@ mod tests {
         let far = project_point(&sprite, Vec3::new(0.0, 0.0, 10000.0), 640.0, 480.0).unwrap();
         assert!(near.depth.abs() < 1e-6);
         assert!((far.depth - 1.0).abs() < 1e-6);
+    }
+}
+
+/// Device-free retained ancestor state for projected geometry consumers such
+/// as input masks. It composes the same transforms and camera as Layer output.
+#[derive(Clone,Debug)]
+pub struct HierarchyFrame {
+    model: glam::Mat4,
+    camera: Option<Sprite>,
+    uses_3d: bool,
+}
+impl Default for HierarchyFrame {
+    fn default()->Self {Self{model:glam::Mat4::IDENTITY,camera:None,uses_3d:false}}
+}
+impl HierarchyFrame {
+    pub fn push(&mut self, transform:&Sprite, destination:[f32;2])->anyhow::Result<()> {
+        transform.validate()?;
+        self.model=sprite_parent_matrix(transform,destination[0],destination[1],self.model)
+            *sprite_model_matrix(transform,destination[0],destination[1]);
+        self.uses_3d|=uses_3d(transform);
+        if transform.camera_enabled||transform.canvas_projection.is_some() {self.camera=Some(transform.clone());}
+        Ok(())
+    }
+    pub fn quad(&self, transform:&Sprite, destination:[f32;2], local:[f32;4], canvas:[f32;2])->Option<[[f32;2];4]> {
+        sprite_quad_geometry_in_hierarchy(transform,destination,local,canvas,
+            self.model,self.camera.as_ref(),self.uses_3d)
+            .map(|geometry|geometry.projected.map(|point|[point.x,point.y]))
     }
 }

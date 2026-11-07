@@ -24,8 +24,8 @@ The shared engine's advanced text, audio, video, layers and shaders do not by
 themselves complete their native adapter hooks. Current `export.rs` explicitly
 rejects pending native messages/names, WIPE, masks/tone curves, child/button
 objects and some multi-stage/render state. The subset's audio/movie/UI modules
-also contain stubs. ADR 0009 documents the full-engine embedding work still
-needed. A whole original game is not claimed runnable by this verification.
+also contain stubs. A whole original game is not claimed runnable by this
+verification.
 
 New reproducible self-authored native fixtures:
 

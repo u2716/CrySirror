@@ -395,7 +395,7 @@ pub(crate) fn project(
         let mut visual = b.clone();
         visual.bright = (visual.bright + i64::from(pat[4])).clamp(0, 255);
         visual.dark = (visual.dark + i64::from(pat[5])).clamp(0, 255);
-        layers.push(LayerSpec { source_crop: None, viewport_clip: None,
+        layers.push(LayerSpec { tie_order:None, clock_paused: false, source_crop: None, viewport_clip: None,
             id: LAYER_BASE + index as u32,
             parent: None,
             rect,

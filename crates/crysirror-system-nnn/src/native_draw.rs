@@ -5,13 +5,51 @@ use crate::{
     machine::{Machine, NativeCall, Payload},
     native_presentation::{NativeFrameEffect, NativeFrameResult, NativeFrameWork},
 };
-use anyhow::{bail, ensure, Result};
+use anyhow::{Result, bail, ensure};
 use crysirror_core::{service::HostServices, state::ClientId};
 use std::collections::{BTreeMap, BTreeSet};
+pub(crate) fn ordered_draw_plan(
+    effects: &BTreeMap<i32, NativeFrameEffect>,
+    visible: &BTreeSet<i32>,
+    underlays: &BTreeMap<i32, crysirror_core::image_processing::ImageCompositeLayer>,
+    view: Option<&crate::native_text::DrawView>,
+) -> Vec<NativeFrameEffect> {
+    let Some(view) = view else {
+        return crate::native_presentation::ordered_frame_plan(effects, visible, underlays);
+    };
+    let before = effects
+        .iter()
+        .filter(|(slot, _)| **slot < 15)
+        .map(|(slot, effect)| (*slot, effect.clone()))
+        .collect();
+    let under = underlays
+        .iter()
+        .filter(|(slot, _)| **slot < 15)
+        .map(|(slot, layer)| (*slot, layer.clone()))
+        .collect();
+    let mut plan = crate::native_presentation::ordered_frame_plan(&before, visible, &under);
+    plan.push(NativeFrameEffect::MessageBackground);
+    plan.extend(view.paints.iter().cloned().map(NativeFrameEffect::Paint));
+    let after = effects
+        .iter()
+        .filter(|(slot, _)| **slot >= 15)
+        .map(|(slot, effect)| (*slot, effect.clone()))
+        .collect();
+    let under = underlays
+        .iter()
+        .filter(|(slot, _)| **slot >= 15)
+        .map(|(slot, layer)| (*slot, layer.clone()))
+        .collect();
+    plan.extend(crate::native_presentation::ordered_frame_plan(
+        &after, visible, &under,
+    ));
+    plan
+}
 pub struct DrawResult {
     pub frame: NativeFrameResult,
     pub effects: BTreeMap<i32, NativeFrameEffect>,
     pub display_path: Option<String>,
+    pub(crate) clock: Option<crate::native_draw_clock::DrawClock>,
 }
 pub struct NativeDraw {
     client: ClientId,
@@ -29,6 +67,8 @@ pub struct NativeDraw {
     visible: BTreeSet<i32>,
     underlays: BTreeMap<i32, crysirror_core::image_processing::ImageCompositeLayer>,
     display_path: Option<String>,
+    message_view: Option<crate::native_text::DrawView>,
+    adaptive: Option<crate::native_draw_clock::DrawClock>,
     pub api_calls: u64,
 }
 impl NativeDraw {
@@ -59,9 +99,10 @@ impl NativeDraw {
             _ => bail!("NNN native DRAW/background-frame receipt"),
         };
         ensure!(
-            effects
-                .values()
-                .all(|effect| !matches!(effect, NativeFrameEffect::Paint(_))),
+            effects.values().all(|effect| !matches!(
+                effect,
+                NativeFrameEffect::Paint(_) | NativeFrameEffect::MessageBackground
+            )),
             "NNN native state map cannot contain paint DTOs"
         );
         Ok(Self {
@@ -80,8 +121,26 @@ impl NativeDraw {
             visible,
             underlays,
             display_path,
+            message_view: None,
+            adaptive: None,
             api_calls: 0,
         })
+    }
+    pub(crate) fn set_clock(&mut self, clock: crate::native_draw_clock::DrawClock) -> Result<()> {
+        ensure!(
+            self.rendered == 0 && self.last.is_none(),
+            "NNN DRAW clock changed after admission"
+        );
+        self.adaptive = Some(clock);
+        Ok(())
+    }
+    pub(crate) fn set_message_view(&mut self, view: crate::native_text::DrawView) -> Result<()> {
+        ensure!(
+            self.rendered == 0 && self.last.is_none(),
+            "NNN DRAW view changed after publication"
+        );
+        self.message_view = Some(view);
+        Ok(())
     }
     pub(crate) fn presented_frame(
         &self,
@@ -103,7 +162,25 @@ impl NativeDraw {
                 host.publish_image_resource(self.client, self.display, frame.target.clone())?;
             self.api_calls += 1;
             let [w, h] = self.size;
-            if let Err(error)=host.submit_engine(self.client,1,&serde_json::to_vec(&serde_json::json!({"layers":[{"op":"put","layer":{"id":self.display,"rect":[0,0,w,h],"order":[self.order,0],"paint":{"kind":"image","asset":published.path.relative()}}}]}))?){let _=host.release_image_resource(self.client,published.path.relative());return Err(error.into())}
+            let mut node = serde_json::json!({"op":"put","layer":{"id":self.display,"rect":[0,0,w,h],"order":[self.order,0],"paint":{"kind":"image","asset":published.path.relative()}}});
+            let mut layers = Vec::new();
+            if let Some(view) = &self.message_view {
+                node["layer"]["parent"] = serde_json::json!(view.root);
+                layers.extend(
+                    view.hide
+                        .iter()
+                        .map(|id| serde_json::json!({"op":"set_visible","id":id,"visible":false})),
+                );
+            }
+            layers.push(node);
+            if let Err(error) = host.submit_engine(
+                self.client,
+                1,
+                &serde_json::to_vec(&serde_json::json!({"layers":layers}))?,
+            ) {
+                let _ = host.release_image_resource(self.client, published.path.relative());
+                return Err(error.into());
+            }
             self.api_calls += 1;
             if let Some(previous) = self
                 .display_path
@@ -124,59 +201,30 @@ impl NativeDraw {
                 }
             }
             for (slot, state) in &frame.move_updates {
+                if let Some(NativeFrameEffect::Picture(effect)) = self.effects.get_mut(slot) {
+                    effect.rectangles = state.rectangles.clone();
+                }
                 if let Some(NativeFrameEffect::Move(effect)) = self.effects.get_mut(slot) {
                     effect.state = state.clone();
                 }
             }
-            if self.total > 0 {
-                // CountUp is after Print. Reaching max disables picture-less
-                // FADEIN; SUNA intentionally remains active at its end count.
-                self.effects.retain(|_, effect| match effect {
-                    NativeFrameEffect::Paint(_) => {
-                        unreachable!("paint DTO is not persistent native effect state")
-                    }
-                    NativeFrameEffect::Move(frame) => {
-                        frame.state.count_up();
-                        true
-                    }
-                    NativeFrameEffect::Suna(state) => {
-                        if state.count < state.parameters.frames {
-                            state.count = (state.count + 1).min(state.parameters.frames);
-                        }
-                        true
-                    }
-                    NativeFrameEffect::Grey(state) => {
-                        if state.count < state.frames {
-                            state.count = state.count.saturating_add(1).min(state.frames);
-                        }
-                        true
-                    }
-                    NativeFrameEffect::Lamp(frame) => {
-                        frame.state.count = frame.state.count.saturating_add(1).min(999999);
-                        true
-                    }
-                    NativeFrameEffect::Bura(state) => {
-                        if state.count < state.frames {
-                            state.count = state.count.saturating_add(1).min(state.frames);
-                        }
-                        true
-                    }
-                    NativeFrameEffect::Chara(frame) => {
-                        if frame.state.count < frame.state.frames {
-                            frame.state.count =
-                                frame.state.count.saturating_add(1).min(frame.state.frames);
-                        }
-                        true
-                    }
-                    NativeFrameEffect::Fade(state) => {
-                        if state.count < state.frames {
-                            state.count = (state.count + 1).min(state.frames);
-                            state.fade_out || state.count != state.frames
-                        } else {
-                            true
-                        }
-                    }
-                });
+            for (slot, state) in &frame.shake_updates {
+                if let Some(NativeFrameEffect::Shake(effect)) = self.effects.get_mut(slot) {
+                    effect.state = state.clone();
+                }
+            }
+            for (slot, state) in &frame.scroll_updates {
+                if let Some(NativeFrameEffect::Scroll(effect)) = self.effects.get_mut(slot) {
+                    *effect = state.clone();
+                }
+            }
+            let steps = self
+                .adaptive
+                .as_ref()
+                .map_or(u32::from(self.total > 0), |clock| clock.steps);
+            crate::native_presentation::count_effect_states(&mut self.effects, steps);
+            if let Some(clock) = self.adaptive.as_mut() {
+                clock.complete_frame()?;
             }
             self.last = Some(frame);
             self.work = None;
@@ -205,6 +253,7 @@ impl NativeDraw {
                 .clone(),
             effects: self.effects.clone(),
             display_path: self.display_path.take(),
+            clock: self.adaptive.clone(),
         }))
     }
     pub fn poll(
@@ -213,9 +262,53 @@ impl NativeDraw {
         call: &NativeCall,
         host: &mut dyn HostServices,
     ) -> Result<Option<DrawResult>> {
+        self.poll_with_admission(machine, call, host, true, false)
+    }
+    pub(crate) fn poll_with_admission(
+        &mut self,
+        machine: &mut Machine,
+        call: &NativeCall,
+        host: &mut dyn HostServices,
+        admit: bool,
+        skip: bool,
+    ) -> Result<Option<DrawResult>> {
         machine.validate_receipt(call)?;
         ensure!(self.receipt == *call, "NNN DRAW receipt changed");
         if !self.poll_admitted_frame(host)? {
+            return Ok(None);
+        }
+        if self.adaptive.is_some() {
+            if self.adaptive.as_ref().unwrap().finished() {
+                let frame = self.last.as_ref().unwrap();
+                let mut vars = machine.native_variables_candidate(call)?;
+                vars.replace_random_state(frame.random.clone())?;
+                machine.acknowledge_with_variables(call, vars)?;
+                return Ok(Some(DrawResult {
+                    frame: frame.clone(),
+                    effects: self.effects.clone(),
+                    display_path: self.display_path.take(),
+                    clock: self.adaptive.clone(),
+                }));
+            }
+            if !admit || self.adaptive.as_ref().unwrap().at == Some(host.now_ms()) {
+                return Ok(None);
+            }
+            self.adaptive.as_mut().unwrap().admit(host.now_ms(), skip)?;
+            let previous = self.last.as_ref().unwrap();
+            let work = NativeFrameWork::with_base(
+                self.client,
+                previous.base.clone(),
+                ordered_draw_plan(
+                    &self.effects,
+                    &self.visible,
+                    &self.underlays,
+                    self.message_view.as_ref(),
+                ),
+                previous.random.clone(),
+                host,
+            )?;
+            self.api_calls += work.api_calls;
+            self.work = Some(work);
             return Ok(None);
         }
         let count = self.total.max(1);
@@ -232,9 +325,11 @@ impl NativeDraw {
                 frame: frame.clone(),
                 effects: self.effects.clone(),
                 display_path: self.display_path.take(),
+                clock: self.adaptive.clone(),
             }));
         }
-        if self.rendered < count
+        if admit
+            && self.rendered < count
             && host.now_ms().saturating_sub(self.started_ms)
                 >= u64::from(self.rendered) * self.frame_ms
         {
@@ -242,10 +337,11 @@ impl NativeDraw {
             let work = NativeFrameWork::with_base(
                 self.client,
                 previous.base.clone(),
-                crate::native_presentation::ordered_frame_plan(
+                ordered_draw_plan(
                     &self.effects,
                     &self.visible,
                     &self.underlays,
+                    self.message_view.as_ref(),
                 ),
                 previous.random.clone(),
                 host,
@@ -261,8 +357,8 @@ impl NativeDraw {
 mod outer_exit_tests {
     use super::*;
     use crate::{
-        expression::{VariableProfile, Variables},
         Program, XorProfile,
+        expression::{VariableProfile, Variables},
     };
     use crysirror_core::image_processing::{ImageInput, ImageProcessState};
     use crysirror_image::temporal_pattern::PatternRng;

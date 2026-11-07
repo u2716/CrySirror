@@ -237,6 +237,9 @@ struct ClientFonts {
     text: TextSystem,
 }
 impl FontLibrary for ClientFonts {
+    fn aliases(&self) -> crysirror_core::Result<Vec<String>> {
+        self.text.font_aliases().map_err(err)
+    }
     fn begin_glyph_bounds(&self,spec:GlyphBoundsSpec)->crysirror_core::Result<Box<dyn GlyphBoundsQuery>> {
         bounds::begin(self,spec)
     }

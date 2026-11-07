@@ -7,6 +7,7 @@ rust-version.workspace = true
 
 [dependencies]
 crysirror-core.workspace = true
+crysirror-image.workspace = true
 crysirror-vfx.workspace = true
 crysirror-puppet.workspace = true
 serde.workspace = true

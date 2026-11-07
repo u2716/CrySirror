@@ -12,7 +12,7 @@ impl QlieVm {
         for o in self
             .objects
             .values()
-            .filter(|o| o.visible && o.position[2] <= priority)
+            .filter(|o| o.thread == self.host_thread && o.visible && o.position[2] <= priority)
         {
             for media in o.embedded_media.values() {
                 let Some(frame) = h.media_frame(self.client, media.id)? else {
@@ -36,11 +36,9 @@ impl QlieVm {
         }
         ensure!(sources.len() <= 64, "QLIE captured media budget");
         let mut paints = Vec::new();
-        for o in self
-            .objects
-            .values()
-            .filter(|o| o.created && o.visible && o.position[2] <= priority)
-        {
+        for o in self.objects.values().filter(|o| {
+            o.created && o.thread == self.host_thread && o.visible && o.position[2] <= priority
+        }) {
             for id in &o.children {
                 let layer: serde_json::Value =
                     serde_json::from_slice(&h.query_engine(self.client, EngineQuery::Layer(*id))?)?;
@@ -73,20 +71,24 @@ impl QlieVm {
         }
         let mut bind = Vec::new();
         let mut restore = Vec::new();
+        let mut rebound = BTreeMap::new();
         for (id, path, original) in paints {
             let mut paint = original.clone();
             paint["asset"] = json!(frozen[&path].path.relative());
-            bind.push(json!({"op":"set_paint","id":id,"paint":paint}));
-            restore.push(json!({"op":"set_paint","id":id,"paint":original}));
+            rebound.insert(id, (paint, original));
         }
         // QLIE multiplies object/state alpha into each draw, before blend
         // (5A7BA4), rather than isolating the whole object's composed screen.
         // Express that native capture policy with ordinary engine operations:
-        // temporarily move inherited alpha from transparent structural nodes
-        // to their leaves. Canvas still freezes/renders every actual paint.
+        // temporarily move inherited alpha from structural nodes to each
+        // paint. Canvas still freezes/renders every actual paint.
         let mut tree = BTreeMap::<u32, serde_json::Value>::new();
-        let mut ids = vec![1];
-        for o in self.objects.values().filter(|o| o.created) {
+        let mut ids = vec![self.root_layer_for(self.host_thread)];
+        for o in self
+            .objects
+            .values()
+            .filter(|o| o.thread == self.host_thread && o.created)
+        {
             ids.push(o.layer);
             ids.extend(o.children.iter().copied());
             if let Some(message) = o.message.as_ref().filter(|m| m.created) {
@@ -113,43 +115,51 @@ impl QlieVm {
             let original = layer["opacity"]
                 .as_u64()
                 .context("QLIE capture layer alpha")?;
-            let target = if parents.contains(&id) {
+            let mut chain = Vec::new();
+            let mut parent = layer["parent"].as_u64();
+            while let Some(id) = parent {
+                ensure!(chain.len() < 30, "QLIE capture alpha ancestor budget");
+                let p = tree
+                    .get(&(id as u32))
+                    .context("QLIE capture alpha parent")?;
+                chain.push(p["opacity"].as_u64().context("QLIE ancestor alpha")?);
+                parent = p["parent"].as_u64();
+            }
+            // Match the engine's root-to-leaf byte multiplication order.
+            let mut inherited = 255;
+            for p in chain.into_iter().rev() {
+                inherited = inherited * p / 255;
+            }
+            let effective = inherited * original / 255;
+            if parents.contains(&id) {
+                // A structural node passes alpha to its leaves. When it also
+                // draws its own paint, that draw receives the same product
+                // through the paint's own colour/tint alpha byte.
+                if effective != 255 {
+                    let (current, saved) = rebound
+                        .remove(&id)
+                        .unwrap_or_else(|| (layer["paint"].clone(), layer["paint"].clone()));
+                    let scaled = scale_paint_alpha(current, effective)?;
+                    rebound.insert(id, (scaled, saved));
+                }
                 if original != 255 {
-                    ensure!(
-                        layer["paint"]["kind"] == "solid" && layer["paint"]["color"][3] == 0,
-                        "QLIE capture alpha parent has its own visible paint"
-                    );
+                    bind.push(json!({"op":"set_opacity","id":id,"opacity":255}));
+                    restore.push(json!({"op":"set_opacity","id":id,"opacity":original}));
                 }
-                255
-            } else {
-                let mut alpha = original;
-                let mut chain = Vec::new();
-                let mut parent = layer["parent"].as_u64();
-                while let Some(id) = parent {
-                    ensure!(chain.len() < 30, "QLIE capture alpha ancestor budget");
-                    let p = tree
-                        .get(&(id as u32))
-                        .context("QLIE capture alpha parent")?;
-                    chain.push(p["opacity"].as_u64().context("QLIE ancestor alpha")?);
-                    parent = p["parent"].as_u64();
-                }
-                // Match the engine's root-to-leaf byte multiplication order.
-                let mut inherited = 255;
-                for p in chain.into_iter().rev() {
-                    inherited = inherited * p / 255;
-                }
-                alpha = inherited * alpha / 255;
-                alpha
-            };
-            if target != original {
-                bind.push(json!({"op":"set_opacity","id":id,"opacity":target}));
+            } else if effective != original {
+                bind.push(json!({"op":"set_opacity","id":id,"opacity":effective}));
                 restore.push(json!({"op":"set_opacity","id":id,"opacity":original}));
             }
+        }
+        for (id, (paint, original)) in rebound {
+            bind.push(json!({"op":"set_paint","id":id,"paint":paint}));
+            restore.push(json!({"op":"set_paint","id":id,"paint":original}));
         }
         // Capture is below the native priority plane. Object selection is VM
         // policy; shared Layers/Canvas still own all sampling and composition.
         for o in self.objects.values().filter(|o| {
-            o.created
+            o.thread == self.host_thread
+                && o.created
                 && o.visible
                 && o.position[2] > priority
                 && matches!(
@@ -180,4 +190,21 @@ impl QlieVm {
         retired?;
         Ok(true)
     }
+}
+
+/// Multiply one retained paint's own alpha byte. Structural groups draw no
+/// raster; an unknown paint kind cannot silently lose its inherited alpha.
+fn scale_paint_alpha(mut paint: serde_json::Value, alpha: u64) -> Result<serde_json::Value> {
+    let field = match paint["kind"].as_str().unwrap_or("") {
+        "group" => return Ok(paint),
+        "solid" | "text" | "glyph_run" => "color",
+        "image" | "projected_mesh" => "tint",
+        kind => bail!("QLIE capture alpha for paint kind {kind}"),
+    };
+    if paint[field].is_null() {
+        paint[field] = json!([255, 255, 255, 255]);
+    }
+    let byte = paint[field][3].as_u64().context("QLIE capture paint alpha")?;
+    paint[field][3] = json!(byte * alpha / 255);
+    Ok(paint)
 }

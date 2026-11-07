@@ -54,6 +54,9 @@ pub enum PixelMath {
     /// Independent /256 floors for source-alpha RGB products. Mask0 skips;
     /// mask255 copies RGB. Destination alpha is retained; opacity must be255.
     MaskSeparate256,
+    /// Mask0 skips, mask255 copies RGB; partial weights are a+1 /255-a.
+    /// The sum is shifted once by8; destination alpha is retained.
+    MaskIncrement256,
     /// Photoshop-like blend (krkr `tvpps.c`): per channel `f(s, d)`, then
     /// d + ((f - d)·a >> 8) with a = s.a (·opacity >> 8 below 255). With
     /// `hold_alpha` the destination alpha is kept (`_HDA`), otherwise the
@@ -258,8 +261,8 @@ fn ps_pixel_channel(blend: PsBlend, s: u8, d: u8, a: i32) -> u8 {
 
 fn check_mode(mode: PixelMath, opacity: u8) -> Result<()> {
     ensure!(
-        mode != PixelMath::MaskSeparate256 || opacity == 255,
-        "mask_separate256 requires opacity255"
+        !matches!(mode, PixelMath::MaskSeparate256 | PixelMath::MaskIncrement256) || opacity == 255,
+        "exact mask blend requires opacity255"
     );
     if let PixelMath::MaskPiecewise256 { weight } = mode {
         ensure!(
@@ -289,6 +292,13 @@ fn combine(d: &mut [u8], s: &[u8], opacity: u8, mode: PixelMath) {
                 }
             }
         },
+        PixelMath::MaskIncrement256 => {
+            if s[3] == 0 { return; }
+            let a = u32::from(s[3]) + 1;
+            for c in 0..3 {
+                d[c] = ((u32::from(s[c]) * a + u32::from(d[c]) * (256-a)) >> 8) as u8;
+            }
+        }
         PixelMath::MaskPiecewise256 { weight } => {
             if weight == 0 || s[3] == 0 {
                 return;

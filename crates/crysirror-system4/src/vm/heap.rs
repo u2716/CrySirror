@@ -57,6 +57,31 @@ impl Heap {
             values: globals,
         })
     }
+    // Exclusive VM-worker preflight: no identity/value mutation precedes a
+    // compound native allocation. Free identities count toward slot capacity.
+    pub(crate) fn check_growth(&self, slots: usize, values: usize) -> Result<()> {
+        ensure!(
+            self.slots
+                .len()
+                .checked_add(slots.saturating_sub(self.free.len()))
+                .is_some_and(|n| n <= MAX_SLOTS),
+            "System4 heap identity budget"
+        );
+        ensure!(
+            self.values
+                .checked_add(values)
+                .is_some_and(|n| n <= MAX_VALUES),
+            "System4 heap value budget"
+        );
+        ensure!(
+            u32::try_from(slots)
+                .ok()
+                .and_then(|n| self.next_sequence.checked_add(n))
+                .is_some(),
+            "System4 heap sequence budget"
+        );
+        Ok(())
+    }
     pub fn slot(&self, id: i32) -> Result<&Slot> {
         self.slots
             .get(usize::try_from(id)?)
@@ -101,6 +126,59 @@ impl Heap {
         self.next_sequence += 1;
         self.values += added;
         Ok(index as i32)
+    }
+    pub(crate) fn original_slots(&self) -> &[Option<Slot>] {
+        &self.slots
+    }
+    pub(crate) fn original_next_sequence(&self) -> u32 {
+        self.next_sequence
+    }
+    pub(crate) fn from_original_slots(
+        slots: Vec<Option<Slot>>,
+        next_sequence: u32,
+    ) -> Result<Self> {
+        ensure!(
+            !slots.is_empty() && slots.len() <= MAX_SLOTS,
+            "System4 resume heap slot budget"
+        );
+        let mut values = 0usize;
+        let mut max_sequence = 0;
+        for slot in slots.iter().flatten() {
+            ensure!(
+                slot.references > 0,
+                "System4 resume heap live reference count"
+            );
+            max_sequence = max_sequence.max(slot.sequence);
+            values = values
+                .checked_add(match &slot.object {
+                    Object::String(s) => s.len().div_ceil(4),
+                    Object::Page(p) => p.as_ref().map_or(0, |p| p.values.len()),
+                })
+                .filter(|n| *n <= MAX_VALUES)
+                .context("System4 resume heap value budget")?;
+        }
+        ensure!(
+            next_sequence > max_sequence && next_sequence != u32::MAX,
+            "System4 resume heap sequence budget"
+        );
+        // resume.c::alloc_heap_slot rewrites the identity free stack while
+        // scanning INCREASING live indices. Its resulting hole order is not
+        // simply sorted (for live0,2,4 it reuses3,1).
+        let mut order = (0..slots.len()).collect::<Vec<_>>();
+        let mut used = 0;
+        for (index, slot) in slots.iter().enumerate() {
+            if slot.is_some() {
+                order[index] = order[used];
+                used += 1;
+            }
+        }
+        let free = order[used..].iter().rev().copied().collect();
+        Ok(Self {
+            slots,
+            free,
+            next_sequence,
+            values,
+        })
     }
     pub fn page_opt(&self, id: i32) -> Result<Option<&Page>> {
         match &self.slot(id)?.object {

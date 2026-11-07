@@ -254,3 +254,6 @@ impl PeData<'_> {
         Ok(rows)
     }
 }
+
+mod raw_resources;
+pub use raw_resources::PeRawResource;

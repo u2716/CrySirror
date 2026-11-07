@@ -22,12 +22,13 @@ acoustics-obvhs = ["crysirror-engine/acoustics-obvhs"]
 
 [dependencies]
 crysirror-qlie = {workspace=true,features=["runtime"]}
+crysirror-sugarpot = {workspace=true,features=["runtime"]}
 crysirror-reallive.workspace = true
 crysirror-avg32.workspace = true
 crysirror-krkr.workspace = true
 crysirror-rfvp.workspace = true
 crysirror-rfvp-vm.workspace = true
-crysirror-siglus-vm.workspace = true
+crysirror-siglus-integrated.workspace = true
 crysirror-nscripter.workspace = true
 crysirror-bgi-integrated.workspace = true
 crysirror-softpal.workspace = true
@@ -68,9 +69,10 @@ crysirror-scene.workspace = true
 # Linux needs a GTK window (not a winit surface), so Linux retains the visible engine menu fallback.
 [target.'cfg(target_os = "macos")'.dependencies]
 muda = { version = "=0.19.3", default-features = false }
+core-foundation = "=0.10.1"
 [target.'cfg(target_os = "windows")'.dependencies]
 muda = { version = "=0.19.3", default-features = false }
-windows-sys = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }
+windows-sys = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation", "Win32_System_Power", "Win32_UI_Input_Ime", "Win32_Graphics_Gdi"] }
 
 [dev-dependencies]
 tempfile = "3.12"

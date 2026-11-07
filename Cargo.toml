@@ -40,6 +40,7 @@ members = [
     "crates/crysirror-puppet",
     "crates/crysirror-puppet-eluna",
     "crates/crysirror-siglus-vm",
+    "crates/crysirror-siglus-integrated",
     "crates/crysirror-asset",
     "crates/crysirror-engine",
     "crates/crysirror-script-js",
@@ -64,6 +65,7 @@ members = [
     "crates/crysirror-system-nnn",
     "crates/crysirror-majiro",
     "crates/crysirror-qlie",
+    "crates/crysirror-sugarpot",
     "crates/crysirror-reallive-dll",
 ]
 exclude = [
@@ -79,6 +81,7 @@ license = "MPL-2.0"
 rust-version = "1.95"
 
 [workspace.dependencies]
+crysirror-sugarpot = { path = "crates/crysirror-sugarpot" }
 crysirror-qlie = { path = "crates/crysirror-qlie" }
 crysirror-network = { path = "crates/crysirror-network" }
 crysirror-io = { path = "crates/crysirror-io" }
@@ -104,6 +107,7 @@ crysirror-scene = { path = "crates/crysirror-scene" }
 crysirror-puppet = { path = "crates/crysirror-puppet" }
 crysirror-puppet-eluna = { path = "crates/crysirror-puppet-eluna" }
 crysirror-siglus-vm = { path = "crates/crysirror-siglus-vm" }
+crysirror-siglus-integrated = { path = "crates/crysirror-siglus-integrated" }
 crysirror-asset = { path = "crates/crysirror-asset" }
 crysirror-engine = { path = "crates/crysirror-engine" }
 crysirror-script-js = { path = "crates/crysirror-script-js" }

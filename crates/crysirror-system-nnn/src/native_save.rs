@@ -8,6 +8,9 @@ use crysirror_core::{
     service::{ClientStorage, StorageWrite},
 };
 use std::sync::Arc;
+mod fresh;
+mod live;
+pub(crate) use live::LiveExecution;
 const HEADER: usize = 32;
 const LIMIT: usize = 64 * 1024 * 1024;
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -202,7 +205,10 @@ impl NativeSaveFile {
         );
         ensure!(
             info.word(0)? as usize == n
-                && info.word(1)? == profile.version
+                // Actual Mugen2 4d9ae0 accepts older same-high versions.
+                // Later source's middle-version/message restriction is absent.
+                && info.word(1)? <= profile.version
+                && ((info.word(1)? >> 16)&255)>=((profile.version>>16)&255)
                 && info.word(2)? as usize == profile.extension_sizes.len()
                 && info.word(3)? == u32::from(profile.omake)
                 && info.word(4)? == u32::from(profile.cutin),
@@ -940,6 +946,35 @@ impl SavedEffect {
     }
 }
 impl NativeSaveFile {
+    pub(crate) fn replace_effect_records(&mut self, records: &[SavedEffect]) -> Result<()> {
+        ensure!(records.len() == 16, "NNN native save sixteen effects");
+        ensure!(
+            self.blocks
+                .get(5)
+                .is_some_and(|block| block.code == 5 && block.payload.len() == 16384)
+                && self
+                    .blocks
+                    .get(6)
+                    .is_some_and(|block| block.code == 6 && block.payload.len() == 4096),
+            "NNN native save EFFECT/FILENAME ABI"
+        );
+        let mut effects = Vec::with_capacity(16384);
+        let mut names = vec![0; 4096];
+        for (slot, record) in records.iter().enumerate() {
+            ensure!(
+                record.filename.len() <= 254 && !record.filename.contains(&0),
+                "NNN native save filename double-NUL ABI"
+            );
+            for word in record.words {
+                effects.extend(word.to_le_bytes());
+            }
+            let start = slot * 256;
+            names[start..start + record.filename.len()].copy_from_slice(&record.filename);
+        }
+        self.blocks[5].payload = effects;
+        self.blocks[6].payload = names;
+        Ok(())
+    }
     pub(crate) fn effect_records(&self) -> Result<Vec<SavedEffect>> {
         let effects = self
             .blocks

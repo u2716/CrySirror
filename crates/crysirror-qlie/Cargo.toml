@@ -17,10 +17,12 @@ crysirror-core.workspace = true
 crysirror-resource.workspace = true
 crysirror-tasks.workspace = true
 crysirror-runtime = {workspace=true,optional=true}
+crysirror-audio = {workspace=true,optional=true}
 crysirror-text = {workspace=true,optional=true}
 crysirror-image = {workspace=true,optional=true}
 crysirror-scene = {workspace=true,optional=true}
 crysirror-formats-arc = {workspace=true,optional=true}
+crysirror-asset = {workspace=true,optional=true}
 
 [features]
-runtime = ["dep:regex","dep:crysirror-image","dep:crysirror-text", "dep:crysirror-runtime", "dep:crysirror-scene", "dep:crysirror-formats-arc"]
+runtime = ["dep:regex","dep:crysirror-audio","dep:crysirror-image","dep:crysirror-text", "dep:crysirror-runtime", "dep:crysirror-scene", "dep:crysirror-formats-arc", "dep:crysirror-asset"]

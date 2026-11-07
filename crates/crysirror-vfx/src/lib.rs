@@ -19,3 +19,6 @@ pub mod fixed_particle;
 pub mod tile_mask;
 
 pub mod drifting_atlas;
+
+///Integer atlas pools independent of resources, VM and renderer.
+pub mod cyclic_atlas;

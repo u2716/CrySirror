@@ -543,7 +543,7 @@ impl Machine {
                 (0x66660007, 0x33330042) => {
                     Payload::DebugMessage(program.text(0, operand(0)?)?.to_vec())
                 }
-                (0x66660007, 0x33330019 | 0x3333001a | 0x33330028) => Payload::Words {
+                (0x66660007, 0x33330014 | 0x33330019 | 0x3333001a | 0x33330028) => Payload::Words {
                     count: 1,
                     words: vec![operand(1)? as i32],
                 },
@@ -569,8 +569,7 @@ impl Machine {
                 (0x66660007, 0x33330052..=0x33330060) => Payload::Scalar(operand(1)? as i32),
                 (
                     0x66660007,
-                    0x33330014
-                    | 0x33330007
+                    0x33330007
                     | 0x33330009
                     | 0x33330013
                     | 0x33330016
@@ -651,6 +650,18 @@ impl Machine {
             .or(self.variables.as_ref())
             .cloned()
             .context("System-NNN native variable bank absent")
+    }
+    /// Publish an admitted native actor frame without advancing its original
+    /// PRINT/SELECT instruction. Random draws belong to that exact pending
+    /// candidate and must survive subsequent frames until its one final ACK.
+    pub(crate) fn update_native_variables(
+        &mut self,
+        receipt: &NativeCall,
+        variables: Variables,
+    ) -> Result<()> {
+        self.validate_receipt(receipt)?;
+        self.pending_variables = Some(variables);
+        Ok(())
     }
     pub fn acknowledge_with_variables(
         &mut self,

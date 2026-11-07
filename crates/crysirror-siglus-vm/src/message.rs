@@ -65,7 +65,7 @@ impl MessageWindow {
     }
     fn layout(&self, name: bool) -> CellLayoutOptions {
         let rect = if name { self.name_rect } else { self.rect };
-        CellLayoutOptions {
+        CellLayoutOptions { cell_widths: Vec::new(),
             bounds: [rect[2], rect[3]],
             size: i32::from(if name { self.name_size } else { self.size }),
             spacing: if name {
@@ -270,6 +270,7 @@ pub fn append(ctx: &mut CommandContext, text: &str, read_flag: i64) -> Result<bo
         interval_ms,
         rate_per_second:None,
         initial_visible: ctx.ui.visible_chars,
+        prefix_steps: None,
         elapsed_ms: 0,
         forced_complete: false,
         paused: false,
@@ -532,7 +533,7 @@ pub fn project(ctx: &mut CommandContext, client:ClientId, host: &mut dyn HostSer
         let ascent=metrics.ascent;
         let glyphs = cells
             .iter()
-            .map(|cell| PositionedGlyph { font: None,horizontal_scale: None, font_width: None, cell_width: None,  crop: None,
+            .map(|cell| PositionedGlyph { image: None, style: None, font: None,horizontal_scale: None, font_width: None, cell_width: None,  crop: None,
                 character: cell.character,
                 baseline: [cell.position[0] as f32, cell.position[1] as f32 + ascent],
                 size: None,
@@ -540,7 +541,7 @@ pub fn project(ctx: &mut CommandContext, client:ClientId, host: &mut dyn HostSer
                 bold: None,
             })
             .collect();
-        let body = LayerSpec { source_crop: None, viewport_clip: None,
+        let body = LayerSpec { tie_order:None, clock_paused: false, source_crop: None, viewport_clip: None,
             id,
             parent: None,
             rect: [

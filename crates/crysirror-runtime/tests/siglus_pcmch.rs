@@ -52,7 +52,7 @@ fn fixture(s: SceneBuilder, extra: &str) -> (tempfile::TempDir, Runtime) {
     let project = json!({"schema":2,"name":"native PCMCH","content_revision":"1","canvas":[64,64],"assets":"assets","clients":[{"name":"a","adapter":"siglus","game":"authored","asset_prefix":"a","config":{"scene":"Scene.pck","format":"pck","string_codec":"plain","gameexe":"Gameexe.ini","resources":{"tone":"tone.wav","koe/12":"tone.wav"}}},{"name":"b","adapter":"crysirror-script-v1","game":"other","program":[]}]});
     let p = d.path().join("project.json");
     std::fs::write(&p, serde_json::to_vec(&project).unwrap()).unwrap();
-    let r = Runtime::load(&p, &d.path().join("state")).unwrap();
+    let r = siglus_reference::load(&p, &d.path().join("state")).unwrap();
     (d, r)
 }
 fn chain(ch: i32, op: i32) -> [i32; 4] {
@@ -610,3 +610,6 @@ fn native_volume_replaces_initial_play_fade_and_resume_restarts_latest_gain_targ
             .all(|x| (*x - expected).abs() < 1e-6)
     );
 }
+
+#[path = "support/siglus_reference.rs"]
+mod siglus_reference;

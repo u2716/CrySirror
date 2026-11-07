@@ -42,29 +42,22 @@ and engine-owned resources.
 | MCP inspection, validation, editing, shader checks, trace, capture and packaging | [MCP tools](docs/MCP.md) |
 | Offline TS/JS scene recipes | [Authoring guide](docs/AUTHORING.md) |
 
-## Native engine compatibility
+## Native engines
 
-Engine compatibility is provided by native adapters in the workspace.
-CrySirror supplies shared services and desktop presentation, input and audio
-output for the native runtimes. Adapter documentation describes each
-integration's instruction and resource formats.
-
-| Engine | Integration |
-| --- | --- |
-| Siglus | [Scene VM, native message/object/audio mappings](docs/NATIVE_ADAPTERS.md#siglus-portable-host-policy-and-shared-text-coverage-2026-10-30) |
-| RealLive | [Seen bytecode, graphics, text, selections, audio and media](docs/REALLIVE.md) |
-| AVG32 | [Original interpreter with shared PDT, text, audio and storage](docs/adr/0095-avg32-installed-games-shared-raster.md) |
-| KiriKiri 2 / Z · KAG3 | [TJS2/KAG adapters, shared layers/canvases and plugin facades](docs/adr/0088-kag3-semantic-adapter-and-shared-prerequisites.md) |
-| NScripter | [Native text scripts, SAR/NSA resources and command mappings](crates/crysirror-nscripter/README.md) |
-| RFVP | [HCB interpreter and native syscall adapter](docs/NATIVE_ADAPTERS.md) |
-| BGI / Ethornell | [BP interpreter, original archives, graphics, text, audio and native saves](docs/BGI.md) |
-| SoftPAL | [Sv20 scripts, PAC resources, sprites, text and audio](docs/NATIVE_ADAPTERS.md#bgi-and-softpal) |
-| Circus | [DC4 Plus Harmony MES adapter](crates/crysirror-circus/README.md) |
-| CatSystem2 | [KCS/FES adapter and shared resource mappings](crates/crysirror-catsystem2/README.md) |
-| QLIE | [Native `.s` scripts, FilePack resources and ABMP animation mappings](crates/crysirror-qlie/README.md) |
-| Majiro | [MJO bytecode adapter and resource loading](crates/crysirror-majiro/README.md) |
-| AliceSoft System 4 | [AIN bytecode adapter and native graphics/audio mappings](crates/crysirror-system4/README.md) |
-| System-NNN | [SPT bytecode adapter and native service mappings](crates/crysirror-system-nnn/README.md) |
+- [Siglus](crates/crysirror-siglus-integrated/README.md)
+- [RealLive](docs/REALLIVE.md)
+- [AVG32](docs/adr/0095-avg32-installed-games-shared-raster.md)
+- [KiriKiri 2 / Z · KAG3](docs/adr/0088-kag3-semantic-adapter-and-shared-prerequisites.md)
+- [NScripter](crates/crysirror-nscripter/README.md)
+- [RFVP](docs/NATIVE_ADAPTERS.md)
+- [BGI / Ethornell](docs/BGI.md)
+- [SoftPAL](docs/NATIVE_ADAPTERS.md#bgi-and-softpal)
+- [Circus](crates/crysirror-circus/README.md)
+- [CatSystem2](crates/crysirror-catsystem2/README.md)
+- [QLIE](crates/crysirror-qlie/README.md)
+- [Majiro](crates/crysirror-majiro/README.md)
+- [AliceSoft System 4](crates/crysirror-system4/README.md)
+- [System-NNN](crates/crysirror-system-nnn/README.md)
 
 ## Try CrySirror
 

@@ -16,10 +16,14 @@ pub(crate) mod glyph;
 pub(crate) mod glyph_batch;
 pub(crate) mod vector_scene;
 
-const BUDGET: usize = 512 * 1024 * 1024;
+/// Live decoded resources plus in-flight decode/effect scratch.
+const BUDGET: usize = 1024 * 1024 * 1024;
 /// Resource decoding/composition has a separate bounded budget from expensive
 /// image effects. Native sprite sheets routinely exceed a4MP effect target.
 const MAX_RESOURCE_PIXELS: u64 = 16 * 1024 * 1024;
+// Bounded scanline maps need more than64KiB even for a native600-row canvas.
+// Rectangle counts and total pixel writes retain their independent limits.
+const MAX_EFFECT_SPEC_BYTES: usize = 256 * 1024;
 pub(crate) struct Charge {
     memory: Arc<AtomicUsize>,
     bytes: usize,
@@ -140,7 +144,7 @@ pub(crate) fn begin(
     pool: TaskPool,
     memory: Arc<AtomicUsize>,
 ) -> Result<ImageJob> {
-    if effects.len() > 65536 {
+    if effects.len() > MAX_EFFECT_SPEC_BYTES {
         return Err(Error::Limit("image effect specification"));
     }
     let effects: Vec<ImageEffect> =
@@ -158,7 +162,7 @@ pub(crate) fn begin(
     let mut graph_bytes = 0;
     let input_extent = input_size(owner, &input, 0, &mut graph_nodes, &mut graph_bytes)?;
     let size = effect_output_size(input_extent, &effects)?;
-    let peak_bytes = effect_peak_bytes(input_extent, &effects)?;
+    let scratch_bytes = effect_scratch_bytes(input_extent, &effects)?;
     if !effects.is_empty()
         && u64::from(size[0]) * u64::from(size[1]) > crysirror_image::effects::MAX_EFFECT_PIXELS
     {
@@ -170,10 +174,9 @@ pub(crate) fn begin(
     let output = Charge::new(memory.clone(), bytes)?;
     // Effect jobs reserve Gaussian planes/products. Decode-only jobs reserve
     // decoded products and bounded encoded input, without nonexistent blur planes.
-    let scratch_factor = effect_scratch_factor(&effects);
     let scratch = Charge::new(
         memory.clone(),
-        peak_bytes * scratch_factor
+        scratch_bytes
             + graph_bytes
             + if matches!(
                 input,
@@ -213,7 +216,7 @@ pub(crate) fn begin(
 }
 
 fn parse_effect_chain(effects: &[u8]) -> Result<Vec<ImageEffect>> {
-    if effects.len() > 65536 {
+    if effects.len() > MAX_EFFECT_SPEC_BYTES {
         return Err(Error::Limit("image nested effect specification"));
     }
     let effects: Vec<ImageEffect> =
@@ -249,10 +252,37 @@ fn effect_scratch_factor(effects: &[ImageEffect]) -> usize {
 fn effect_output_size(mut size: [u32; 2], effects: &[ImageEffect]) -> Result<[u32; 2]> {
     for effect in effects {
         match effect {
-            ImageEffect::CanvasMargins{margins,..}=>size=crysirror_image::canvas_margins::output_size(size,*margins).map_err(|e|Error::Io(e.to_string()))?,
-            ImageEffect::TriangularBlur {spec}=>{
-                size[0]=size[0].checked_add(spec.padding[0]).and_then(|v|v.checked_add(spec.padding[2])).ok_or(Error::Limit("triangular blur output width"))?;
-                size[1]=size[1].checked_add(spec.padding[1]).and_then(|v|v.checked_add(spec.padding[3])).ok_or(Error::Limit("triangular blur output height"))?;
+            ImageEffect::RectMap { spec } => {
+                size = spec.output_size.unwrap_or(size);
+            }
+            ImageEffect::BoxReduce { spec } => {
+                size = spec
+                    .output_size(size)
+                    .map_err(|e| Error::Io(e.to_string()))?
+            }
+            ImageEffect::ResizeByte { spec } => {
+                size = spec
+                    .output_size(size)
+                    .map_err(|e| Error::Io(e.to_string()))?
+            }
+            ImageEffect::RectResampleByte256 { spec } => {
+                size = spec
+                    .output_size(size)
+                    .map_err(|e| Error::Io(e.to_string()))?
+            }
+            ImageEffect::CanvasMargins { margins, .. } => {
+                size = crysirror_image::canvas_margins::output_size(size, *margins)
+                    .map_err(|e| Error::Io(e.to_string()))?
+            }
+            ImageEffect::TriangularBlur { spec } => {
+                size[0] = size[0]
+                    .checked_add(spec.padding[0])
+                    .and_then(|v| v.checked_add(spec.padding[2]))
+                    .ok_or(Error::Limit("triangular blur output width"))?;
+                size[1] = size[1]
+                    .checked_add(spec.padding[1])
+                    .and_then(|v| v.checked_add(spec.padding[3]))
+                    .ok_or(Error::Limit("triangular blur output height"))?;
             }
             ImageEffect::Resize { width, height } => size = [*width, *height],
             ImageEffect::RowDeform { spec } => {
@@ -270,13 +300,56 @@ fn effect_output_size(mut size: [u32; 2], effects: &[ImageEffect]) -> Result<[u3
     }
     Ok(size)
 }
+fn effect_scratch_bytes(input: [u32; 2], effects: &[ImageEffect]) -> Result<usize> {
+    let peak = effect_peak_bytes(input, effects)?;
+    let mut size = input;
+    let mut columns = 0usize;
+    let mut retained_metadata = 0usize;
+    for effect in effects {
+        if let ImageEffect::ScanlineAffineNearest { spec } = effect {
+            retained_metadata = retained_metadata.checked_add(spec.row_origins.len() * std::mem::size_of::<[i64; 2]>())
+                .ok_or(Error::Limit("scanline affine metadata budget"))?;
+        }
+        if let ImageEffect::CyclicCellSample { spec } = effect {
+            retained_metadata = retained_metadata.checked_add(spec.offsets.len() * std::mem::size_of::<[u16;2]>())
+                .ok_or(Error::Limit("cyclic-cell metadata budget"))?;
+        }
+        if let ImageEffect::TileReveal { spec } = effect {
+            retained_metadata=retained_metadata.checked_add(spec.thresholds.len())
+                .ok_or(Error::Limit("tile reveal metadata budget"))?;
+        }
+        if let ImageEffect::RadialAngleLookup { spec } = effect {
+            retained_metadata=retained_metadata.checked_add(spec.auxiliary_bytes())
+                .ok_or(Error::Limit("radial angle metadata budget"))?;
+        }
+        if matches!(effect, ImageEffect::AffineBlend { .. }) {
+            columns = columns
+                .max(crysirror_image::affine_blend::AffineBlendByte128::auxiliary_bytes(size));
+        }
+        if matches!(
+            effect,
+            ImageEffect::BoxBlurClamped { .. } | ImageEffect::MaskedBlur { .. }
+        ) {
+            // Four u64 column sums per source column. A one-row texture
+            // needs more scratch per texel than a plane multiplier admits.
+            columns = columns.max(size[0] as usize * std::mem::size_of::<[u64; 4]>());
+        }
+        size = effect_output_size(size, std::slice::from_ref(effect))?;
+    }
+    peak.checked_mul(effect_scratch_factor(effects))
+        .and_then(|bytes| bytes.checked_add(columns))
+        .and_then(|bytes| bytes.checked_add(retained_metadata))
+        .ok_or(Error::Limit("image effect scratch budget"))
+}
 // Intermediate expansion still consumes memory when a later operation crops
 // back down. Reserve the largest admitted plane, not only the final output.
-fn effect_peak_bytes(size:[u32;2],effects:&[ImageEffect])->Result<usize> {
-    let mut peak=crysirror_image::rgba_len(size[0],size[1]).map_err(|e|Error::Io(e.to_string()))?;
+fn effect_peak_bytes(size: [u32; 2], effects: &[ImageEffect]) -> Result<usize> {
+    let mut peak =
+        crysirror_image::rgba_len(size[0], size[1]).map_err(|e| Error::Io(e.to_string()))?;
     for end in 1..=effects.len() {
-        let at=effect_output_size(size,&effects[..end])?;
-        peak=peak.max(crysirror_image::rgba_len(at[0],at[1]).map_err(|e|Error::Io(e.to_string()))?);
+        let at = effect_output_size(size, &effects[..end])?;
+        peak = peak
+            .max(crysirror_image::rgba_len(at[0], at[1]).map_err(|e| Error::Io(e.to_string()))?);
     }
     Ok(peak)
 }
@@ -288,10 +361,18 @@ fn validate_effect_context(input: &ImageInput, effects: &[ImageEffect]) -> Resul
     let pair_op = |e: &ImageEffect| {
         matches!(
             e,
-            ImageEffect::AlphaMaskPlane{..}|ImageEffect::AlphaStamps{..}|ImageEffect::AlphaPlanePair { .. }
+            ImageEffect::DualTexture { .. }
+                | ImageEffect::AffineBlend { .. }
+                | ImageEffect::FixedAffineNearest { .. }
+                | ImageEffect::ScanlineAffineNearest { .. }
+                | ImageEffect::TileReveal { .. }
+                | ImageEffect::AlphaMaskPlane { .. }
+                | ImageEffect::AlphaStamps { .. }
+                | ImageEffect::AlphaPlanePair { .. }
                 | ImageEffect::StoredMaskBlend { .. }
                 | ImageEffect::Transition { .. }
                 | ImageEffect::SineRowCopy { .. }
+                | ImageEffect::DiscCopies { .. }
                 | ImageEffect::AlphaClipRect { .. }
                 | ImageEffect::MaskedPairBlend { .. }
                 | ImageEffect::IntegerRaster { .. }
@@ -309,7 +390,14 @@ fn validate_effect_context(input: &ImageInput, effects: &[ImageEffect]) -> Resul
         && !matches!(
             effects.first(),
             Some(
-                ImageEffect::AlphaStamps{..}|ImageEffect::SineRowCopy { .. }
+                ImageEffect::DualTexture { .. }
+                    | ImageEffect::AffineBlend { .. }
+                    | ImageEffect::FixedAffineNearest { .. }
+                    | ImageEffect::ScanlineAffineNearest { .. }
+                    | ImageEffect::TileReveal { .. }
+                    | ImageEffect::AlphaStamps { .. }
+                    | ImageEffect::SineRowCopy { .. }
+                    | ImageEffect::DiscCopies { .. }
                     | ImageEffect::AlphaClipRect { .. }
                     | ImageEffect::IntegerRaster { .. }
             )
@@ -322,7 +410,7 @@ fn validate_effect_context(input: &ImageInput, effects: &[ImageEffect]) -> Resul
             effects.first(),
             Some(
                 ImageEffect::MaskedPairBlend { .. }
-                    | ImageEffect::AlphaMaskPlane{..}
+                    | ImageEffect::AlphaMaskPlane { .. }
                     | ImageEffect::StoredMaskBlend { .. }
                     | ImageEffect::AlphaPlanePair { .. }
             )
@@ -368,8 +456,36 @@ fn process_input(
     };
     for effect in effects {
         cancel.check()?;
-        image = if let ImageEffect::AlphaStamps{spec}=&effect {
-            spec.apply(&image,other.as_ref().ok_or_else(||anyhow::anyhow!("alpha stamp source absent"))?,&||cancel.check())?
+        image = if let ImageEffect::DualTexture { spec } = &effect {
+            spec.apply(
+                &image,
+                other
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("dual texture source absent"))?,
+                &|| cancel.check(),
+            )?
+        } else if let ImageEffect::AffineBlend { spec } = &effect {
+            spec.apply(
+                &image,
+                other
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("affine blend source absent"))?,
+                &|| cancel.check(),
+            )?
+        } else if let ImageEffect::FixedAffineNearest { spec } = &effect {
+            spec.apply(&image,other.as_ref().ok_or_else(||anyhow::anyhow!("fixed affine source absent"))?,&||cancel.check())?
+        } else if let ImageEffect::ScanlineAffineNearest { spec } = &effect {
+            spec.apply(&image,other.as_ref().ok_or_else(||anyhow::anyhow!("scanline affine source absent"))?,&||cancel.check())?
+        } else if let ImageEffect::TileReveal { spec } = &effect {
+            spec.apply(&image,other.as_ref().ok_or_else(||anyhow::anyhow!("tile reveal source absent"))?,&||cancel.check())?
+        } else if let ImageEffect::AlphaStamps { spec } = &effect {
+            spec.apply(
+                &image,
+                other
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("alpha stamp source absent"))?,
+                &|| cancel.check(),
+            )?
         } else if let ImageEffect::IntegerRaster { spec } = &effect {
             spec.apply(
                 &image,
@@ -379,7 +495,15 @@ fn process_input(
                 &|| cancel.check(),
             )?
         } else if let ImageEffect::AlphaMaskPlane { spec } = &effect {
-            spec.apply(&image,other.as_ref().ok_or_else(||anyhow::anyhow!("alpha baseline absent"))?,mask.as_ref().ok_or_else(||anyhow::anyhow!("alpha mask absent"))?,&||cancel.check())?
+            spec.apply(
+                &image,
+                other
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("alpha baseline absent"))?,
+                mask.as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("alpha mask absent"))?,
+                &|| cancel.check(),
+            )?
         } else if let ImageEffect::AlphaPlanePair { spec } = &effect {
             spec.apply(
                 &image,
@@ -416,6 +540,14 @@ fn process_input(
                 other
                     .as_ref()
                     .ok_or_else(|| anyhow::anyhow!("alpha clip source absent"))?,
+                &|| cancel.check(),
+            )?
+        } else if let ImageEffect::DiscCopies { spec } = &effect {
+            spec.apply(
+                &image,
+                other
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("disc copy source absent"))?,
                 &|| cancel.check(),
             )?
         } else if let ImageEffect::SineRowCopy { spec } = &effect {
@@ -527,7 +659,7 @@ pub(crate) fn input_size(
             let effects = parse_effect_chain(effects)?;
             validate_effect_context(input, &effects)?;
             let size = input_size(owner, input, depth + 1, nodes, bytes)?;
-            let peak = effect_peak_bytes(size,&effects)?;
+            let scratch = effect_scratch_bytes(size, &effects)?;
             let size = effect_output_size(size, &effects)?;
             if !effects.is_empty() {
                 if u64::from(size[0]) * u64::from(size[1])
@@ -536,11 +668,7 @@ pub(crate) fn input_size(
                     return Err(Error::Limit("nested image effect pixel budget"));
                 }
                 *bytes = bytes
-                    .checked_add(
-                        peak
-                            .checked_mul(effect_scratch_factor(&effects))
-                            .ok_or(Error::Limit("nested image scratch"))?,
-                    )
+                    .checked_add(scratch)
                     .filter(|n| *n <= 256 * 1024 * 1024)
                     .ok_or(Error::Limit("nested image scratch budget"))?;
             }
@@ -587,7 +715,7 @@ pub(crate) fn input_size(
                         return Err(Error::Invalid("normalized blend requires opacity255"));
                     }
                 }
-                if matches!(layer.math, ImageCompositeMath::MaskSeparate256) && layer.opacity != 255
+                if matches!(layer.math, ImageCompositeMath::MaskSeparate256 | ImageCompositeMath::MaskIncrement256) && layer.opacity != 255
                 {
                     return Err(Error::Invalid("mask_separate256 requires opacity255"));
                 }
@@ -635,6 +763,7 @@ pub(crate) fn input_size(
             crysirror_core::path::VfsPath::new(crysirror_core::path::Mount::Asset, path)?;
             *size
         }
+        ImageInput::ScopedAsset { size, .. } => *size,
         ImageInput::Solid { size, .. } => *size,
         ImageInput::Resource(r) => {
             if r.client() != owner {
@@ -695,7 +824,17 @@ pub(crate) fn input_size(
                 return Err(Error::Invalid("nested image input"));
             }
             let size = input_size(owner, destination, depth + 1, nodes, bytes)?;
-            input_size(owner, source, depth + 1, nodes, bytes)?;
+            let source_size = input_size(owner, source, depth + 1, nodes, bytes)?;
+            // A two-input worker may prepare successive half-size sample
+            //planes while retaining the immutable full source. Their live
+            //peak is bounded by half of the source plane's byte count.
+            let mip_bytes = crysirror_image::rgba_len(source_size[0], source_size[1])
+                .map_err(|e| Error::Io(e.to_string()))?
+                / 2;
+            *bytes = bytes
+                .checked_add(mip_bytes)
+                .filter(|v| *v <= 256 * 1024 * 1024)
+                .ok_or(Error::Limit("image source sampling scratch"))?;
             size
         }
     };
@@ -853,6 +992,7 @@ fn load_inner(
                     ImageCompositeMath::CopyRgb => PixelMath::CopyRgb,
                     ImageCompositeMath::CopyAlpha => PixelMath::CopyAlpha,
                     ImageCompositeMath::MaskSeparate256 => PixelMath::MaskSeparate256,
+                    ImageCompositeMath::MaskIncrement256 => PixelMath::MaskIncrement256,
                     ImageCompositeMath::OpaqueScalar256 => PixelMath::OpaqueScalar256,
                     ImageCompositeMath::MaskScalar256 => PixelMath::MaskScalar256,
                     ImageCompositeMath::MaskHoldAlphaScalar256 => PixelMath::MaskHoldAlphaScalar256,
@@ -926,43 +1066,60 @@ fn load_inner(
         } => {
             use crysirror_core::path::{Mount, VfsPath};
             let path = VfsPath::new(Mount::Asset, path).map_err(|e| anyhow::anyhow!("{e}"))?;
-            let reader = if encoded_memory.is_some() {
-                storage.open_read(&path)
-            } else {
-                storage.open_asset(&path)
-            }
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
-            let n = reader.len().map_err(|e| anyhow::anyhow!("{e}"))?;
-            anyhow::ensure!(n <= 64 * 1024 * 1024, "image encoded byte budget");
-            let _encoded_charge = encoded_memory
-                .map(|memory| Charge::new(memory.clone(), n as usize))
-                .transpose()?;
-            let mut bytes = vec![0; n as usize];
-            let mut at = 0;
-            while at < bytes.len() {
-                cancel.check()?;
-                let end = (at + 65536).min(bytes.len());
-                let n = reader
-                    .read_at(at as u64, &mut bytes[at..end])
-                    .map_err(|e| anyhow::anyhow!("{e}"))?;
-                anyhow::ensure!(n > 0 && n <= end - at, "truncated image asset");
-                at += n;
-            }
-            if let Some(hash) = fingerprint {
-                anyhow::ensure!(
-                    blake3::hash(&bytes).as_bytes() == hash,
-                    "image asset changed since native load"
-                );
-            }
-            let image = decoders.decode(path.relative(), &bytes)?;
-            anyhow::ensure!(
-                [image.width, image.height] == *size,
-                "image dimensions changed during processing"
-            );
-            Ok(image)
+            load_scoped_asset(&path, *size, fingerprint.as_ref(), storage, decoders, cancel, encoded_memory)
+        }
+        ImageInput::ScopedAsset {path,size,fingerprint} => {
+            load_scoped_asset(path, *size, fingerprint.as_ref(), storage, decoders, cancel, encoded_memory)
         }
         _ => anyhow::bail!("nested image input is not supported"),
     }
+}
+
+fn load_scoped_asset(
+    path: &crysirror_core::path::VfsPath,
+    size: [u32; 2],
+    fingerprint: Option<&[u8; 32]>,
+    storage: &Arc<dyn ClientStorage>,
+    decoders: &DecoderRegistry,
+    cancel: &crysirror_tasks::Cancellation,
+    encoded_memory: Option<&Arc<AtomicUsize>>,
+) -> anyhow::Result<ImageSurface> {
+    cancel.check()?;
+    let reader =
+        if encoded_memory.is_some() || path.mount() != crysirror_core::path::Mount::Asset {
+            storage.open_read(path)
+        } else {
+            storage.open_asset(path)
+        }
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let n = reader.len().map_err(|e| anyhow::anyhow!("{e}"))?;
+    anyhow::ensure!(n <= 64 * 1024 * 1024, "image encoded byte budget");
+    let _encoded_charge = encoded_memory
+        .map(|memory| Charge::new(memory.clone(), n as usize))
+        .transpose()?;
+    let mut bytes = vec![0; n as usize];
+    let mut at = 0;
+    while at < bytes.len() {
+        cancel.check()?;
+        let end = (at + 65536).min(bytes.len());
+        let n = reader
+            .read_at(at as u64, &mut bytes[at..end])
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        anyhow::ensure!(n > 0 && n <= end - at, "truncated image asset");
+        at += n;
+    }
+    if let Some(hash) = fingerprint {
+        anyhow::ensure!(
+            blake3::hash(&bytes).as_bytes() == hash,
+            "image asset changed since native load"
+        );
+    }
+    let image = decoders.decode(path.relative(), &bytes)?;
+    anyhow::ensure!(
+        [image.width, image.height] == size,
+        "image dimensions changed during processing"
+    );
+    Ok(image)
 }
 
 pub(crate) fn resource_from_surface(
@@ -1063,16 +1220,53 @@ mod budget_tests {
     }
     #[test]
     fn ordered_alpha_stamps_run_as_a_scoped_asynchronous_raster_job() {
-        let memory=Arc::new(AtomicUsize::new(0));
-        let stream=Arc::new(Stream{bytes:Arc::from([]),reads:Arc::new(AtomicUsize::new(0)),declared:None});
-        let input=ImageInput::Raster{destination:Box::new(ImageInput::Solid{size:[2,1],color:[10,20,30,255]}),source:Box::new(ImageInput::Solid{size:[1,1],color:[4,5,6,80]})};
-        let effects=serde_json::to_vec(&vec![ImageEffect::AlphaStamps{spec:crysirror_image::alpha_stamps::AlphaStamps{clear:Some(0),preserve_opaque:true,stamps:vec![crysirror_image::alpha_stamps::AlphaStamp{source:[0,0,1,1],position:[0,0]}]}}]).unwrap();
-        let mut job=begin(ClientId(7),input,Arc::from(effects),Arc::new(Storage(stream)),DecoderRegistry::default(),TaskPool::new("alpha-stamp-test",1,8).unwrap(),memory.clone()).unwrap();
-        let result=wait(&mut job);
-        let ImageProcessState::Ready(image)=&result else{panic!("{result:?}");};
-        assert_eq!(image.client(),ClientId(7));assert_eq!(image.size(),[2,1]);
-        assert_eq!(&*image.rgba(),&[10,20,30,80,10,20,30,0]);
-        drop(result);drop(job);assert_eq!(memory.load(Ordering::Acquire),0);
+        let memory = Arc::new(AtomicUsize::new(0));
+        let stream = Arc::new(Stream {
+            bytes: Arc::from([]),
+            reads: Arc::new(AtomicUsize::new(0)),
+            declared: None,
+        });
+        let input = ImageInput::Raster {
+            destination: Box::new(ImageInput::Solid {
+                size: [2, 1],
+                color: [10, 20, 30, 255],
+            }),
+            source: Box::new(ImageInput::Solid {
+                size: [1, 1],
+                color: [4, 5, 6, 80],
+            }),
+        };
+        let effects = serde_json::to_vec(&vec![ImageEffect::AlphaStamps {
+            spec: crysirror_image::alpha_stamps::AlphaStamps {
+                clear: Some(0),
+                preserve_opaque: true,
+                stamps: vec![crysirror_image::alpha_stamps::AlphaStamp {
+                    source: [0, 0, 1, 1],
+                    position: [0, 0],
+                }],
+            },
+        }])
+        .unwrap();
+        let mut job = begin(
+            ClientId(7),
+            input,
+            Arc::from(effects),
+            Arc::new(Storage(stream)),
+            DecoderRegistry::default(),
+            TaskPool::new("alpha-stamp-test", 1, 8).unwrap(),
+            memory.clone(),
+        )
+        .unwrap();
+        let result = wait(&mut job);
+        let ImageProcessState::Ready(image) = &result else {
+            panic!("{result:?}");
+        };
+        assert_eq!(image.client(), ClientId(7));
+        assert_eq!(image.size(), [2, 1]);
+        assert_eq!(&*image.rgba(), &[10, 20, 30, 80, 10, 20, 30, 0]);
+        drop(result);
+        drop(job);
+        assert_eq!(memory.load(Ordering::Acquire), 0);
     }
     #[test]
     fn asset_reserves_actual_encoded_bytes_without_flat_128_mib_penalty() {

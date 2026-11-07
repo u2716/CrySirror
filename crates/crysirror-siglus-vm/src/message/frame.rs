@@ -111,7 +111,7 @@ pub(crate) fn project(
         } else {
             ctx.tables.mwnd_render.filter_layer_rep
         };
-        out.push(LayerSpec { source_crop: None, viewport_clip: None,
+        out.push(LayerSpec { tie_order:None, clock_paused: false, source_crop: None, viewport_clip: None,
             id,
             parent: None,
             rect,

@@ -1,5 +1,6 @@
 //! QLIE camera priority selection; transforms and interpolation live in Layers.
 use super::*;
+use crysirror_core::service::EngineQuery;
 fn number(a: &[Value], i: usize, default: i32) -> Result<i32> {
     a.get(i)
         .map(Value::integer)
@@ -7,11 +8,11 @@ fn number(a: &[Value], i: usize, default: i32) -> Result<i32> {
         .map(|v| v.unwrap_or(default))
 }
 impl QlieVm {
-    pub(super) fn camera_parent(&self, priority: i32) -> u32 {
+    pub(super) fn camera_parent(&self, thread: ThreadKind, priority: i32) -> u32 {
         self.objects
             .values()
             .find(|o| {
-                o.kind == "camex" && o.created && {
+                o.thread == thread && o.kind == "camex" && o.created && {
                     let range = o.properties.get("pri");
                     let lo = range
                         .and_then(|a| a.first())
@@ -25,7 +26,7 @@ impl QlieVm {
                 }
             })
             .map(|o| o.generator.as_ref().map(|g| g.layer).unwrap_or(o.layer))
-            .unwrap_or(1)
+            .unwrap_or(self.root_layer_for(thread))
     }
     pub(super) fn camera_method(
         &mut self,
@@ -36,8 +37,9 @@ impl QlieVm {
         a: &[Value],
     ) -> Result<bool> {
         let layer = self.objects[id].layer;
+        let root = self.root_layer_for(self.objects[id].thread);
         if !self.objects[id].created {
-            self.submit(h,json!({"layers":[{"op":"put","layer":{"id":layer,"parent":1,"rect":[0,0,self.config.canvas[0],self.config.canvas[1]],"order":[-2000,0],"transform":{"pivot_x":self.config.canvas[0] as f32/2.,"pivot_y":self.config.canvas[1] as f32/2.},"paint":{"kind":"solid","color":[0,0,0,0]}}}]}))?;
+            self.submit(h,json!({"layers":[{"op":"put","layer":{"id":layer,"parent":root,"rect":[0,0,self.config.canvas[0],self.config.canvas[1]],"order":[-2000,0],"transform":{"pivot_x":self.config.canvas[0] as f32/2.,"pivot_y":self.config.canvas[1] as f32/2.},"paint":{"kind":"solid","color":[0,0,0,0]}}}]}))?;
             self.objects.get_mut(id).unwrap().created = true;
         }
         match op {
@@ -68,18 +70,12 @@ impl QlieVm {
                     json!({"layers":[{"op":"set_order","id":layer,"order":[number(a,0,0)?,0]}]}),
                 )?;
             }
-            "p" => {
+            // camex p (6E0974): full 3D pose; cam's 2D form is below.
+            "p" if self.objects[id].kind != "cam" => {
                 ensure!((9..=11).contains(&a.len()), "QLIE camera pose ABI");
                 let duration = number(a, 9, 0)?.max(0) as u64;
                 let repeat = animation::repeat(&self.objects[id], "pose_repeat", number(a, 10, 0)?);
-                let o = &self.objects[id];
-                let mode = o
-                    .properties
-                    .get("mm")
-                    .and_then(|a| a.first())
-                    .and_then(|v| v.integer().ok())
-                    .unwrap_or(3);
-                let easing = animation::easing(mode)?;
+                let easing = self.property_easing(id, "mm")?;
                 let properties = [
                     "x",
                     "y",
@@ -137,14 +133,7 @@ impl QlieVm {
                     .map(Value::integer)
                     .transpose()?
                     .unwrap_or(1);
-                let blend = match blend {
-                    0 | 1 => "normal",
-                    2 => "screen",
-                    3 => "multiply",
-                    7 => "add",
-                    8 => "subtract",
-                    _ => bail!("unsupported QLIE camera blend {blend}"),
-                };
+                let blend = animation::blend(blend as u8);
                 let previous: Option<serde_json::Value> =
                     if self.objects[id].properties.contains_key("col") {
                         Some(serde_json::from_slice(
@@ -162,16 +151,11 @@ impl QlieVm {
                     .map(|v| v["filter"]["multiply"].clone())
                     .filter(|v| v.is_array())
                     .unwrap_or(json!([1., 1., 1.]));
-                let easing = animation::easing(
-                    self.objects[id]
-                        .properties
-                        .get("mm")
-                        .and_then(|v| v.first())
-                        .and_then(|v| v.integer().ok())
-                        .unwrap_or(3),
-                )?;
+                //6A82C8 updates the camera colour/alpha with a linear ratio;
+                //the pose's mm setting does not participate in this channel.
+                let easing = crysirror_scene::layer::Easing::Linear;
                 let mut commands = vec![
-                    json!({"op":"put","layer":{"id":overlay,"parent":1,"rect":[0,0,self.config.canvas[0],self.config.canvas[1]],"order":[priority,1],"opacity":before,"blend":blend,"paint":{"kind":"solid","color":[255,255,255,255]},"filter":{"multiply":multiply}}}),
+                    json!({"op":"put","layer":{"id":overlay,"parent":root,"rect":[0,0,self.config.canvas[0],self.config.canvas[1]],"order":[priority,1],"opacity":before,"blend":blend,"paint":{"kind":"solid","color":[255,255,255,255]},"filter":{"multiply":multiply}}}),
                     json!({"op":"begin_motion","id":overlay,"track":{"property":"opacity","to":alpha,"duration":duration,"repeat":repeat,"easing":easing}}),
                 ];
                 if number(a, 1, 0)? != -1 {
@@ -201,7 +185,21 @@ impl QlieVm {
             "g2" => {
                 self.generator_method(h, id, op, a)?;
             }
-            "mm" | "tf" | "bm" => {
+            "mm" => {
+                ensure!((1..=2).contains(&a.len()), "QLIE camera mode ABI");
+                let strength = a
+                    .get(1)
+                    .map(Value::integer)
+                    .transpose()?
+                    .unwrap_or(100)
+                    .clamp(0, 200);
+                self.objects
+                    .get_mut(id)
+                    .unwrap()
+                    .properties
+                    .insert(op.into(), vec![a[0].clone(), Value::Int(strength)]);
+            }
+            "tf" | "bm" => {
                 self.objects
                     .get_mut(id)
                     .unwrap()
@@ -218,10 +216,68 @@ impl QlieVm {
                     m.result(i, v);
                 }
             }
+            // cam p/p2/p3 (6E03D0 -> 6C726C): centre-relative position with
+            // optional scale percent and rotation degrees, then a duration.
+            "p" | "p2" | "p3" if self.objects[id].kind == "cam" => {
+                let count = match op { "p" => 3, "p2" => 5, _ => 6 };
+                ensure!(a.len() == count, "QLIE camera position ABI");
+                let x = number(a, 0, 0)?;
+                let y = number(a, 1, 0)?;
+                let (sx, sy) = if count >= 5 { (number(a, 2, 100)?, number(a, 3, 100)?) } else { (100, 100) };
+                let rotation = if count == 6 { number(a, 4, 0)? } else { 0 };
+                let duration = number(a, count - 1, 0)?.max(0) as u64;
+                let easing = self.property_easing(id, "mm")?;
+                let (cx, cy) = (self.config.canvas[0] as i32 / 2, self.config.canvas[1] as i32 / 2);
+                let targets = [
+                    ("x", -((x - cx) as f32)),
+                    ("y", -((y - cy) as f32)),
+                    ("scale_x", sx.max(1) as f32 / 100.),
+                    ("scale_y", sy.max(1) as f32 / 100.),
+                    ("rotation_z", -(rotation as f32).to_radians()),
+                ];
+                let commands: Vec<_> = targets
+                    .into_iter()
+                    .map(|(property, to)| json!({"op":"begin_motion","id":layer,"track":{"property":property,"to":to,"duration":duration,"easing":easing}}))
+                    .collect();
+                self.submit(h, json!({ "layers": commands }))?;
+                let pose = vec![Value::Int(x), Value::Int(y), Value::Int(sx), Value::Int(sy), Value::Int(rotation)];
+                self.objects.get_mut(id).unwrap().properties.insert("cam_pose".into(), pose);
+            }
+            // ?p2/?p3: x, y, scale x/y percent, rotation degrees.
+            "?p2" | "?p3" => {
+                let pose = self.objects[id].properties.get("cam_pose").cloned().unwrap_or_else(|| {
+                    let (cx, cy) = (self.config.canvas[0] as i32 / 2, self.config.canvas[1] as i32 / 2);
+                    [cx, cy, 100, 100, 0].into_iter().map(Value::Int).collect()
+                });
+                for (i, v) in pose.into_iter().enumerate() {
+                    m.result(i, v);
+                }
+            }
+            "?mm" => {
+                let values = self.objects[id].properties.get("mm").cloned().unwrap_or_default();
+                if self.objects[id].kind == "cam" {
+                    m.result(0, values.first().cloned().unwrap_or(Value::Int(0)));
+                } else {
+                    for i in 0..2 {
+                        m.result(i, values.get(i).cloned().unwrap_or(Value::Int(if i == 0 { 0 } else { 100 })));
+                    }
+                }
+            }
+            // camex ?bm / ?col answer the stored blend and colour request.
+            "?bm" => {
+                let value = self.objects[id].properties.get("bm").and_then(|v| v.first()).cloned();
+                m.result(0, value.unwrap_or(Value::Int(0)));
+            }
+            "?col" => {
+                let values = self.objects[id].properties.get("col").cloned().unwrap_or_default();
+                for i in 0..4 {
+                    m.result(i, values.get(i).cloned().unwrap_or(Value::Int(0)));
+                }
+            }
             _ => bail!("unsupported QLIE camera method \\{op}"),
         }
         if matches!(op, "pri" | "i") {
-            let commands=self.objects.values().filter(|o|o.created && matches!(o.kind.as_str(),"img"|"btn"|"msg"|"theora"|"simg"|"sbtn")).map(|o|json!({"op":"set_parent","id":o.layer,"parent":self.camera_parent(o.position[2])})).collect::<Vec<_>>();
+            let commands=self.objects.values().filter(|o|o.created && matches!(o.kind.as_str(),"img"|"btn"|"msg"|"theora"|"simg"|"sbtn")).map(|o|json!({"op":"set_parent","id":o.layer,"parent":self.camera_parent(o.thread, o.position[2])})).collect::<Vec<_>>();
             if !commands.is_empty() {
                 self.submit(h, json!({"layers":commands}))?;
             }

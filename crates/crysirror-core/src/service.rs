@@ -15,6 +15,8 @@ mod audio_loop;
 pub use audio_loop::*;
 mod audio_release;
 pub use audio_release::*;
+mod audio_gain_envelope;
+pub use audio_gain_envelope::*;
 mod audio_balance;
 pub use audio_balance::*;
 mod audio_sequence;
@@ -43,6 +45,8 @@ mod frame_history;
 pub use frame_history::*;
 mod input_observation;
 pub use input_observation::*;
+mod text_input;
+pub use text_input::*;
 mod platform;
 pub use platform::*;
 mod desktop;
@@ -218,6 +222,9 @@ pub struct AudioMixGroupInfo {
 }
 #[derive(Clone, Debug)]
 pub struct AudioParameters {
+    /// Optional stepped attenuation installed atomically with the new source.
+    /// Its clock starts at actual publication, not preparation-request time.
+    pub gain_envelope: Option<AudioGainEnvelopeSpec>,
     /// Mixer voice gain, default 1.
     pub gain: f32,
     /// Legacy amplitude applied by the shared decoded-source wrapper, default 1.
@@ -270,6 +277,7 @@ impl Default for AudioParameters {
     fn default() -> Self {
         Self {
             mix_group: None,
+            gain_envelope: None,
             gain: 1.,
             decode_gain: 1.,
             rate: 1.,
@@ -297,6 +305,9 @@ impl Default for AudioParameters {
 /// output_rate. No device or executable pointers cross this boundary.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AudioPlaybackInfo {
+    /// Peak absolute source PCM in the last completed mixer block, before
+    /// gain, bus, pan and spatial processing. Paused/inactive sources report 0.
+    pub source_peak: f32,
     /// Mixer-owner observation of the independent external dB balance track.
     pub balance: AudioBalanceInfo,
     /// Source has remaining input, even when paused; excludes processing tails.
@@ -377,17 +388,87 @@ pub struct AudioAsset {
     pub frame_limit: Option<u64>,
 }
 /// Worker-prepared numeric transform, separate from source transport/pitch.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AudioResourceTransform {
     /// Pinned mono PCM16 splice profile; 100..400 percent, 100 exact identity.
     SiglusJitan { percent: u16 },
+    /// Ordered integer stereo filter chain applied to the decoded PCM16
+    /// (at most 16 stages); see [`PcmFilter`].
+    PcmFilters(alloc::sync::Arc<[PcmFilter]>),
 }
 impl AudioResourceTransform {
-    pub fn validate(self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         match self {
-            Self::SiglusJitan { percent } if (100..=400).contains(&percent) => Ok(()),
+            Self::SiglusJitan { percent } if (100..=400).contains(percent) => Ok(()),
+            Self::PcmFilters(chain) if !chain.is_empty() && chain.len() <= 16 => {
+                chain.iter().try_for_each(PcmFilter::validate)
+            }
             _ => Err(crate::Error::Invalid("audio transform parameters")),
         }
+    }
+}
+/// Wet routing of a delay/modulation stage (normal, stereo-inverted right,
+/// left-only, right-only wet signal); dry input is kept on both sides.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PcmFilterMix {
+    #[default]
+    Normal,
+    Stereo,
+    Left,
+    Right,
+}
+/// How generated noise combines with the input before the amount crossfade.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PcmNoiseBlend {
+    Replace,
+    Add,
+    #[default]
+    Multiply,
+}
+/// One integer stereo filter stage with native-range integer parameters
+/// (percentages, milliseconds, Hz). Algorithms live in crysirror-audio; the
+/// arithmetic follows the QLIE OggData TODFilter family.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PcmFilter {
+    Echo { decay: i32, delay_ms: i32, wet: i32, dry: i32, mix: PcmFilterMix },
+    Reverb { decay: i32, delay_ms: i32, wet: i32, dry: i32, mix: PcmFilterMix, room_hz: i32 },
+    Chorus { decay: i32, delay_ms: i32, wet: i32, dry: i32, mix: PcmFilterMix, rate: i32, depth: i32 },
+    Volume { volume: i32, range: i32, pan: i32 },
+    Distortion { volume: i32, range: i32, foldback: bool },
+    Noise { amount: i32, volume: i32, blend: PcmNoiseBlend },
+    ThreeBandEq { low: i32, mid: i32, high: i32, low_hz: i32, high_hz: i32 },
+    Mono { amount: i32 },
+    PitchShift { pitch: i32, wet: i32, dry: i32, mix: PcmFilterMix },
+    Agc { gain: i32, rate: i32, quiet: i32, target: i32 },
+}
+impl PcmFilter {
+    pub fn validate(&self) -> Result<()> {
+        let within = |v: i32, lo: i32, hi: i32| (lo..=hi).contains(&v);
+        let ok = match *self {
+            Self::Echo { decay, delay_ms, wet, dry, .. } => {
+                within(decay, 0, 100) && within(delay_ms, 5, 1000) && within(wet, 0, 1000) && within(dry, 0, 1000)
+            }
+            Self::Reverb { decay, delay_ms, wet, dry, room_hz, .. } => {
+                within(decay, 0, 100) && within(delay_ms, 5, 1000) && within(wet, 0, 1000) && within(dry, 0, 1000)
+                    && within(room_hz, 20, 40000)
+            }
+            Self::Chorus { decay, delay_ms, wet, dry, rate, depth, .. } => {
+                within(decay, 0, 100) && within(delay_ms, 5, 1000) && within(wet, 0, 1000) && within(dry, 0, 1000)
+                    && within(rate, 0, 2000) && within(depth, 0, 100)
+            }
+            Self::Volume { volume, range, pan } => within(volume, 0, 1000) && within(range, 10, 200) && within(pan, 0, 100),
+            Self::Distortion { volume, range, .. } => within(volume, 0, 1000) && within(range, 0, 400),
+            Self::Noise { amount, volume, .. } => within(amount, 0, 100) && within(volume, 0, 100),
+            Self::ThreeBandEq { low, mid, high, low_hz, high_hz } => {
+                [low, mid, high].iter().all(|v| within(*v, -1000, 1000)) && within(low_hz, 50, 24000) && within(high_hz, 50, 24000)
+            }
+            Self::Mono { amount } => within(amount, 0, 100),
+            Self::PitchShift { pitch, wet, dry, .. } => within(pitch, 10, 400) && within(wet, 0, 200) && within(dry, 0, 200),
+            Self::Agc { gain, rate, quiet, target } => {
+                within(gain, 10, 400) && within(rate, 10, 1000) && within(quiet, 0, 32700) && within(target, 0, 32700)
+            }
+        };
+        if ok { Ok(()) } else { Err(crate::Error::Invalid("PCM filter parameters")) }
     }
 }
 /// Ephemeral client-scoped immutable audio resource. IDs are not reused during
@@ -673,6 +754,17 @@ impl MediaRequest {
 pub struct DisplayInfo {
     pub screen: [u32; 2],
     pub work: [i32; 4],
+}
+/// Cached facts about the current runtime host, independent of legacy VM
+/// platform claims. No executable, driver or system-library probe is implied.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HostInformation {
+    pub os_name: String,
+    pub architecture: String,
+    /// Host-admitted parallelism; absent when the platform cannot report it.
+    pub logical_cpu_count: Option<u32>,
+    /// User interface locale as a BCP 47-style tag ("ja-JP"), when known.
+    pub locale: Option<String>,
 }
 /// Geometry in physical pixel units reported by the presenting window owner,
 /// including an explicitly virtual offscreen window model when installed.
@@ -1065,6 +1157,18 @@ pub trait ImageMetadata: Send + Sync {
     ) -> Result<alloc::boxed::Box<dyn crate::image_encoding::ImageEncodingInfoQuery>> {
         Err(crate::Error::Unsupported("encoded image metadata"))
     }
+    /// Read original image properties through an explicit client capability
+    /// mount. Non-Asset mounts require a provider implementation.
+    fn begin_scoped_encoding_info(
+        &self,
+        path: &VfsPath,
+    ) -> Result<alloc::boxed::Box<dyn crate::image_encoding::ImageEncodingInfoQuery>> {
+        if path.mount() == crate::path::Mount::Asset {
+            self.begin_encoding_info(path.relative())
+        } else {
+            Err(crate::Error::Unsupported("scoped encoded image metadata"))
+        }
+    }
     /// Encoded content identity observed by the metadata decode. Native retained
     /// image processing rejects a changed file rather than transforming new bytes.
     fn fingerprint(&self, _asset: &str) -> Result<[u8; 32]> {
@@ -1133,6 +1237,15 @@ pub enum PresentationScale {
 }
 
 pub trait HostServices: FileSystem {
+    fn open_text_input_session(&mut self,_client:ClientId,_spec:TextInputSessionSpec)->Result<TextInputSessionHandle>{Err(crate::Error::Unsupported("text input presenter"))}
+    fn configure_text_input_session(&mut self,_client:ClientId,_handle:TextInputSessionHandle,_spec:TextInputSessionSpec)->Result<()>{Err(crate::Error::Unsupported("text input presenter"))}
+    fn text_input_session_info(&self,_client:ClientId,_handle:TextInputSessionHandle)->Result<TextInputSessionInfo>{Err(crate::Error::Unsupported("text input presenter"))}
+    fn take_text_input_committed(&mut self,_client:ClientId,_handle:TextInputSessionHandle)->Result<Arc<String>>{Err(crate::Error::Unsupported("text input presenter"))}
+    fn replace_text_input_committed(&mut self,_client:ClientId,_handle:TextInputSessionHandle,_text:String)->Result<()>{Err(crate::Error::Unsupported("text input presenter"))}
+    fn release_text_input_session(&mut self,_client:ClientId,_handle:TextInputSessionHandle)->Result<()>{Err(crate::Error::Unsupported("text input presenter"))}
+    fn host_information(&self) -> Result<HostInformation> {
+        Err(crate::Error::Unsupported("host information"))
+    }
     /// Prepare bounded seed words for a client's game random streams. Sampling
     /// is an explicit worker dependency; no ambient/simulation clock fallback.
     fn begin_session_seed(
@@ -1481,6 +1594,17 @@ pub trait HostServices: FileSystem {
             "channel audio transport inspection",
         ))
     }
+    /// Replace this channel's gain track without moving or reopening its
+    /// source. Output time advances it even through pause/decoder starvation.
+    /// None cancels it at the last applied gain. An absent voice stays absent.
+    fn set_audio_gain_envelope(&mut self, _client: ClientId, _channel: u32,
+        _spec: Option<AudioGainEnvelopeSpec>) -> Result<()> {
+        Err(crate::Error::Unsupported("stepped audio gain envelope"))
+    }
+    fn audio_gain_envelope_info(&self, _client: ClientId, _channel: u32)
+        -> Result<Option<AudioGainEnvelopeInfo>> {
+        Err(crate::Error::Unsupported("stepped audio gain envelope status"))
+    }
     /// Seek an existing native/media channel without reopening its source or
     /// resetting gain, loop count, pause, fades or source identity. Completion
     /// remains pending until the real decoder cursor and owner publication.
@@ -1510,6 +1634,26 @@ pub trait HostServices: FileSystem {
     /// a terminal receipt. A newer seek cannot be cancelled by an older ID.
     fn release_audio_seek(&mut self, _client: ClientId, _ticket: u64) -> Result<()> {
         Err(crate::Error::Unsupported("channel audio seek receipt"))
+    }
+    /// Capture selected logical Layer/Canvas/widget subtrees and their exact
+    /// clocks. The capability pins generated image paths within this host.
+    fn capture_scene_checkpoint(
+        &mut self, _client:ClientId,
+        _scope:&crate::scene_checkpoint::SceneCheckpointScope,
+    )->Result<Arc<dyn crate::scene_checkpoint::SceneCheckpoint>> {
+        Err(crate::Error::Unsupported("scoped scene checkpoint"))
+    }
+    /// Atomically replace only the selected owned scopes, preserving peers,
+    /// host input observations and the host clock. External producers receive
+    /// fresh generations and must query/rebind before publishing another sample.
+    /// Removal roots/canvases must belong to the captured scope; runtime or
+    /// original-save replacement invalidates this client's old capabilities.
+    fn restore_scene_checkpoint(
+        &mut self, _client:ClientId,
+        _checkpoint:&dyn crate::scene_checkpoint::SceneCheckpoint,
+        _remove:&crate::scene_checkpoint::SceneCheckpointScope,
+    )->Result<()> {
+        Err(crate::Error::Unsupported("scoped scene checkpoint restore"))
     }
     fn query_engine(&mut self, _client: ClientId, _query: EngineQuery) -> Result<Vec<u8>> {
         Err(crate::Error::Unsupported("engine state query"))
@@ -1597,6 +1741,39 @@ pub trait HostServices: FileSystem {
     /// Providers distinguish unavailable capability, failure and user cancel.
     fn begin_desktop_request(&mut self,_client:ClientId,_request:DesktopRequest)->Result<alloc::boxed::Box<dyn DesktopRequestJob>>{
         Err(crate::Error::Unsupported("desktop host provider"))
+    }
+    /// Queue a client-owned original-save load without recursively borrowing
+    /// its executing VM. The runtime admits the detached preparation after
+    /// `step` returns and atomically installs it when ready. A successful load
+    /// replaces that VM; a failure leaves it available to observe the receipt.
+    /// Request tickets belong to a separate domain from host-issued restores.
+    fn request_original_save_restore(
+        &mut self,
+        _client: ClientId,
+        _bytes: Arc<[u8]>,
+    ) -> Result<crate::native_restore::OriginalRestoreTicket> {
+        Err(crate::Error::Unsupported("queued original save restore"))
+    }
+    fn original_save_restore_request_status(
+        &self,
+        _client: ClientId,
+        _ticket: crate::native_restore::OriginalRestoreTicket,
+    ) -> Result<crate::native_restore::OriginalRestoreStatus> {
+        Err(crate::Error::Unsupported("queued original save restore"))
+    }
+    fn cancel_original_save_restore_request(
+        &mut self,
+        _client: ClientId,
+        _ticket: crate::native_restore::OriginalRestoreTicket,
+    ) -> Result<()> {
+        Err(crate::Error::Unsupported("queued original save restore"))
+    }
+    fn release_original_save_restore_request(
+        &mut self,
+        _client: ClientId,
+        _ticket: crate::native_restore::OriginalRestoreTicket,
+    ) -> Result<()> {
+        Err(crate::Error::Unsupported("queued original save restore"))
     }
     fn platform_integration(
         &self,
@@ -1803,6 +1980,7 @@ pub mod buttons {
     pub const MOUSE_MIDDLE: u64 = 1 << 51;
     pub const KEY_Z: u64 = 1 << 52;
     pub const INSERT:u64=1<<53;
+    pub const ALT: u64 = 1 << 54;
     /// Logical names used by action maps, in bit order.
     pub const NAMES: &[(&str, u64)] = &[
         ("enter", ENTER),
@@ -1859,6 +2037,7 @@ pub mod buttons {
         ("l", KEY_L),
         ("mouse_middle", MOUSE_MIDDLE),
         ("z", KEY_Z),
+        ("alt", ALT),
     ];
     /// Checked legacy VK translation for this framed-button profile. None
     /// means unrepresented, not released. Distinct keypad/side-specific keys
@@ -1873,6 +2052,7 @@ pub mod buttons {
             13 => ENTER,
             16 => SHIFT,
             17 => CTRL,
+            18 => ALT,
             27 => ESCAPE,
             32 => SPACE,
             33 => PAGE_UP,

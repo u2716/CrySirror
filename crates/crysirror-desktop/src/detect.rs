@@ -11,6 +11,7 @@ mod system4;
 mod bgi;
 mod softpal;
 mod qlie;
+mod sugarpot;
 use anyhow::{bail, ensure, Context, Result};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -193,6 +194,7 @@ fn detect_layout(dir: &SourcePath) -> Result<Plan> {
     if let Some(plan) = bgi::detect(dir,&names,&name)? {return Ok(plan);}
     if let Some(plan) = softpal::detect(dir,&names,&name)? {return Ok(plan);}
     if let Some(plan) = qlie::detect(dir,&names,&name)? {return Ok(plan);}
+    if let Some(plan) = sugarpot::detect(dir,&names,&name)? {return Ok(plan);}
     if find(&names, "data.xp3").is_some() {
         return krkr(dir, &names, &name);
     }
@@ -959,8 +961,9 @@ fn rfvp(dir: &SourcePath, names: &[String], name: &str) -> Result<Plan> {
 }
 
 fn siglus(dir: &SourcePath, names: &[String], name: &str) -> Result<Plan> {
-    use crysirror_siglus_vm::{
-        gameexe::{decode_gameexe_dat_bytes, GameexeConfig, GameexeDecodeOptions},
+    use crysirror_siglus_integrated::{
+        gameexe::{decode_gameexe_dat_bytes, GameexeConfig},
+        decode_material,
         key_toml,
     };
     let scene = find(names, "Scene.pck").context("Siglus Scene.pck missing")?;
@@ -968,24 +971,19 @@ fn siglus(dir: &SourcePath, names: &[String], name: &str) -> Result<Plan> {
         .or_else(|| find(names, "Gameexe.ini"))
         .context("Siglus Gameexe.dat/ini missing")?;
     let key = find(names, "key.toml").or_else(|| find(names, ".crysirror-validation-key.toml"));
-    let options = if let Some(path) = key {
+    let materials = if let Some(path) = key {
         let bytes = read_bounded(dir, path, 64 * 1024)?;
-        let parsed = key_toml::parse_key_toml(std::str::from_utf8(&bytes)?)?;
-        GameexeDecodeOptions {
-            exe_key16: parsed.exe_key16,
-            base_angou_code: parsed.base_angou_code,
-            game_angou_code: parsed.game_angou_code,
-            chain_order: parsed
-                .chain_order
-                .unwrap_or_else(|| GameexeDecodeOptions::default().chain_order),
-            ..Default::default()
-        }
+        key_toml::parse_key_toml(std::str::from_utf8(&bytes)?)?
     } else {
-        GameexeDecodeOptions::default()
+        key_toml::KeyTomlConfig::default()
     };
     let bytes = read_bounded(dir, gameexe, 16 * 1024 * 1024)?;
+    let scene_bytes = read_bounded(dir, scene, 64 * 1024 * 1024)?;
+    let materials = decode_material::resolve(&bytes, &scene_bytes, materials)
+        .context("Siglus automatic Gameexe/Scene decode material")?;
+    let options = decode_material::game_options(&materials);
     let (text, _) = decode_gameexe_dat_bytes(&bytes, &options)
-        .context("Siglus Gameexe decode needs caller-owned material in key.toml")?;
+        .context("Siglus Gameexe decode after material resolution")?;
     let ini = GameexeConfig::from_text(&text);
     let size = ini
         .get_entry("SCREEN_SIZE")

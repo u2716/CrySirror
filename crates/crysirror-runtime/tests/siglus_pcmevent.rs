@@ -98,7 +98,7 @@ fn fixture(s: SceneBuilder) -> (tempfile::TempDir, Runtime) {
     std::fs::write(d.path().join("assets/a/b.wav"), wave(-16384)).unwrap();
     let p = d.path().join("project.json");
     std::fs::write(&p,serde_json::to_vec(&json!({"schema":2,"name":"PCMEVENT","content_revision":"1","canvas":[64,64],"assets":"assets","clients":[{"name":"a","adapter":"siglus","game":"authored","asset_prefix":"a","config":{"scene":"Scene.pck","string_codec":"plain","resources":{"a":"a.wav","b":"b.wav"}}}]})).unwrap()).unwrap();
-    let r = Runtime::load(&p, &d.path().join("state")).unwrap();
+    let r = siglus_reference::load(&p, &d.path().join("state")).unwrap();
     (d, r)
 }
 fn native(r: &Runtime) -> Value {
@@ -667,3 +667,6 @@ fn original_file_import_discards_preload_clicks_instead_of_replaying_them_into_t
         native(r)["int_stack"].as_array().unwrap().last() == Some(&json!(42))
     });
 }
+
+#[path = "support/siglus_reference.rs"]
+mod siglus_reference;

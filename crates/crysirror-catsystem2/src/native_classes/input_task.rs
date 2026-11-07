@@ -129,7 +129,7 @@ pub(crate) fn handle(cx: &mut Ctx) -> Result<bool> {
                             }
                         }
                     }
-                    spec.coverage = Some(crysirror_scene::ui::WidgetHitMask { size: [w, h], coverage: coverage.into(), threshold: 1, strict_bounds: false });
+                    spec.coverage = Some(crysirror_scene::ui::WidgetHitMask { size: [w, h], coverage: coverage.into(), threshold: 1, strict_bounds: false, source_from_local: None, regions: Vec::new() });
                 }
                 #[cfg(not(feature = "runtime"))]
                 anyhow::bail!("CatSystem2 button pixel mask needs runtime image handles");

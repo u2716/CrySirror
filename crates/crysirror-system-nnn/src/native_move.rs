@@ -1,7 +1,7 @@
 // Copyright (c) 2026 CrySirror contributors. MPL-2.0.
 //! Original MOVE52 rectangle/count policy. Shared Composite performs pixels.
 use crate::native_geometry::NativeRects;
-use anyhow::{ensure, Result};
+use anyhow::{Result, ensure};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NativeMoveState {
     pub count: i32,
@@ -24,11 +24,7 @@ impl NativeMoveState {
         })
     }
     pub fn command(&self) -> i32 {
-        if self.ended {
-            0
-        } else {
-            52
-        }
+        if self.ended { 0 } else { 52 }
     }
     /// CAllEffect::CalcuOnly runs even when Eye is off, but only when a picture
     /// is assigned. It interpolates XY; width/height stay From until the end.
@@ -59,16 +55,15 @@ impl NativeMoveState {
         }
         self.rectangles.destination = destination;
     }
-    /// Native CountUp is after Print; reaching max copies both current rects
-    /// and From endpoints to To, then changes command52 to ordinary NOP0.
+    /// Native CountUp is after Print. Actual4ac440 copies current source and
+    /// destination from their To endpoints and changes command52 to NOP0;
+    /// From endpoints remain the original motion/save history.
     pub fn count_up(&mut self) {
         if self.count < self.frames {
             self.count = self.count.saturating_add(1).min(self.frames);
             if self.count == self.frames {
                 self.rectangles.destination = self.rectangles.destination_to;
                 self.rectangles.source = self.rectangles.source_to;
-                self.rectangles.destination_from = self.rectangles.destination_to;
-                self.rectangles.source_from = self.rectangles.source_to;
                 self.ended = true;
             }
         }

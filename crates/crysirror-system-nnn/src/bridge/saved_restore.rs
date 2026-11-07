@@ -61,16 +61,42 @@ impl Bridge {
         bridge.system_file = self.system_file.clone();
         bridge.system_script = self.system_script;
         bridge.must_set_film = self.must_set_film;
+        bridge.must_set_cg = self.must_set_cg;
+        bridge.must_set_music = self.must_set_music;
+        bridge.off_layer_dont_set_cg = self.off_layer_dont_set_cg;
         bridge.system_result_extension = self.system_result_extension;
+        // Persistent results belong to the current process, not the old slot.
+        bridge.result_data = self.result_data.clone();
         bridge.skip = self.skip.clone();
+        bridge.legacy_demo_flag = self.legacy_demo_flag;
+        bridge.script_mouse_number = self.script_mouse_number;
+        bridge.script_cursor_number = self.script_cursor_number;
+        bridge.script_window_number = self.script_window_number;
+        bridge.configuration_mask = self.configuration_mask;
+        bridge.window_binding = self
+            .window_binding
+            .as_ref()
+            .map(|binding| binding.detached());
+        bridge.auto_kill_skip = self.auto_kill_skip;
+        bridge.cannot_kill_skip = self.cannot_kill_skip;
+        bridge.shift_message_only = self.shift_message_only;
+        bridge.f4_enabled = self.f4_enabled;
+        bridge.f5_enabled = self.f5_enabled;
+        bridge.mark_skipped_messages = self.mark_skipped_messages;
         bridge.skip.next_command = false;
         bridge.skip.effect_command = false;
         bridge.skip.film_end = false;
         bridge.option_off = self.option_off;
         bridge.launch_recorded = self.launch_recorded;
         bridge.frame_time_ms = self.frame_time_ms;
+        bridge.default_frame_time_ms = self.default_frame_time_ms;
         bridge.actor_clock = self.actor_clock.clone();
-        bridge.actor_clock_at = self.actor_clock_at;
+        bridge.last_native_steps = self.last_native_steps;
+        bridge.last_background_steps = self.last_background_steps;
+        bridge.background_maximum_steps = self.background_maximum_steps;
+        // Resource preparation consumes wall time, not native actor time.
+        // Re-anchor the retained scheduler on its first post-commit update.
+        bridge.actor_clock_at = None;
         bridge.overlap_captures = self.overlap_captures;
         bridge.frame_canvas_created = self.frame_canvas_created;
         bridge.overlap_frame = self.overlap_frame.clone();
@@ -90,11 +116,18 @@ impl Bridge {
         if self.display_path.is_some() {
             remove_layers.insert(self.bindings.effect_base + u32::from(self.bindings.layers));
         }
+        if self.post_text_path.is_some() {
+            remove_layers.insert(self.bindings.effect_base + u32::from(self.bindings.layers) + 1);
+        }
         remove_layers.extend(self.text.as_ref().unwrap().restored_layer_ids());
         let (selection_layers, remove_ui) = self.selection.as_ref().unwrap().restored_node_ids();
         remove_layers.extend(selection_layers);
         let mut release_images: BTreeSet<String> = self.image_paths.values().cloned().collect();
         release_images.extend(self.display_path.iter().cloned());
+        release_images.extend(self.post_text_path.iter().cloned());
+        if let Some(binding) = &self.window_binding {
+            release_images.extend(binding.owned_paths().iter().cloned());
+        }
         if let Some(path) = text.previous_window_path() {
             release_images.insert(path.to_owned());
         }
@@ -111,28 +144,36 @@ impl Bridge {
     pub(crate) fn restore_native_status(&mut self, file: &NativeSaveFile) -> Result<()> {
         // Older53b630 has none of later branch's volume/font/rename-layer
         // extensions. These native producer profiles need their real consumers.
-        ensure!(
-            file.status_word(180)? == 0,
-            "NNN saved nondefault window variant requires native resource rebinding"
-        );
-        ensure!(
-            file.status_word(181)? == 0 && file.status_word(182)? == 0,
-            "NNN saved cursor/mouse variant requires native pointer-resource consumer"
-        );
+        self.script_window_number = file.status_word(180)?;
+        self.configuration_mask = file.status_word(476)?;
         ensure!(
             file.status_word(484)? == 0,
             "NNN saved auto-message timing requires native consumer"
-        );
-        ensure!(
-            file.status_word(486)? == 0,
-            "NNN saved cannot-skip requires native skip consumer"
         );
         ensure!(
             file.status_word(477)? == 0,
             "NNN saved film-skip button requires native UI consumer"
         );
         self.message_window_visible = file.status_word(44)? != 0;
+        //53b630 restores these by calling52eea0/52eee0. Those legacy
+        //setters only retain the raw values; no pointer-resource operation.
+        self.script_cursor_number = file.status_word(181)?;
+        self.script_mouse_number = file.status_word(182)?;
+        self.auto_message = file.status_word(484)?;
+        self.cannot_click = Some(file.status_word(485)? != 0);
+        self.cannot_skip = file.status_word(486)?;
+        let position = file.position()?;
+        self.system_script = Some(match position.run_mode {
+            0 => 0,
+            1 => position.script_number,
+            2 => position.script_sub_number,
+            3 => position.script_sub_sub_number,
+            _ => bail!("NNN saved active reader index"),
+        });
         self.last_message_id = Some(file.status_word(28)?);
+        self.last_select_id = Some(file.status_word(32)?);
+        self.last_select_hero = file.status_word(47)?;
+        self.saved_remaining = file.status_word(46)?;
         let frame_ms = file.status_word(45)?;
         if frame_ms > 0 {
             self.set_frame_time(frame_ms as u64)?;
@@ -235,22 +276,29 @@ impl Bridge {
         );
         Ok(())
     }
-    pub(crate) fn validate_saved_wait_effects(&self) -> Result<()> {
+    pub(crate) fn validate_saved_wait_effects(
+        &self,
+        advancing: bool,
+        frozen_background: bool,
+    ) -> Result<()> {
         ensure!(
-            !self.active_effects.contains(&15),
+            !advancing
+                || !(self.active_effects.contains(&15) || self.frame_effects().contains_key(&15)),
             "NNN saved last screen effect requires post-text frame composition"
         );
         ensure!(
-            self.saved_suna.is_empty()
-                && self.patterns.is_empty()
-                && self.fades.is_empty()
-                && self.greys.is_empty()
-                && self.chara_trans.is_empty()
-                && self.old_lamps.is_empty()
-                && self.buras.is_empty()
-                && self.moves.is_empty(),
-            "NNN saved message/selection with active effects requires native actor frame/window dependency consumer"
+            self.saved_suna.is_empty(),
+            "NNN saved SUNA resource initialization incomplete"
         );
+        if advancing {
+            let effects = self.frame_effects();
+            self.visible_effects(&effects)?;
+        } else {
+            ensure!(
+                frozen_background || !self.has_animated_effects(),
+                "NNN frozen saved selection background requires its original mode0/1 background resource"
+            );
+        }
         Ok(())
     }
     pub(crate) fn begin_saved_frame(

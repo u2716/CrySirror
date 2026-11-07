@@ -32,6 +32,10 @@ pub struct DepthOrderKey {
 /// Common ordering for ordinary layers, retained depth scopes, UI, frozen
 /// sources and renderer merges. Ordinary-only inputs retain the original rule.
 pub fn compare_primitives(a: &Primitive, b: &Primitive) -> Ordering {
+    if a.depth_order.is_none()&&b.depth_order.is_none() {
+        return (a.order,a.owner,a.tie_order.unwrap_or(u64::from(a.id)),a.id,a.sub)
+            .cmp(&(b.order,b.owner,b.tie_order.unwrap_or(u64::from(b.id)),b.id,b.sub));
+    }
     compare_keys(
         a.order,
         a.owner,
@@ -463,5 +467,20 @@ mod tests {
         static_scene.install(ClientId(1), &frozen).unwrap();
         assert_eq!(ids(&static_scene), [100, 1, 9]);
         assert_eq!(ids(&s), [100, 9, 1]);
+    }
+}
+
+impl DepthOrders {
+    pub(super) fn retain_checkpoint_scope(&mut self, client:u32, ids:&BTreeSet<u32>) {
+        self.clients.retain(|owner,domain| {if *owner!=client{return false} domain.depths.retain(|id,_|ids.contains(id));domain.admissions.retain(|id|ids.contains(id));domain.history.retain(|id|ids.contains(id));!domain.admissions.is_empty()});
+    }
+    pub(super) fn restore_checkpoint_scope(&mut self, client:u32, removed:&BTreeSet<u32>, saved:&Self) {
+        if let Some(domain)=self.clients.get_mut(&client){domain.depths.retain(|id,_|!removed.contains(id));domain.admissions.retain(|id|!removed.contains(id));domain.history.retain(|id|!removed.contains(id));}
+        if let Some(source)=saved.clients.get(&client) {
+            let destination=self.clients.entry(client).or_default();
+            destination.depths.extend(source.depths.clone());
+            destination.admissions.extend(source.admissions.iter().copied());
+            destination.history.extend(source.history.iter().copied());
+        }
     }
 }

@@ -3,6 +3,7 @@
 // Loader identity/return policy checked against owner DrawPluginManager.dll,
 // see SOURCE.json. No original DLL, device, renderer or pixel loop is hosted.
 mod filtered_copy;
+mod filters;
 mod font_state;
 mod native_text;
 mod normalized;
@@ -11,11 +12,11 @@ use crate::{
     adapter::{Bridge, Dispatch},
     native_cg::NativeCg,
     vm::{
-        external::{Argument, HllReturn},
         ExternalCall, ExternalTarget, Machine,
+        external::{Argument, HllReturn},
     },
 };
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{Context, Result, bail, ensure};
 use crysirror_core::{
     image_processing::{
         ImageCompositeLayer, ImageCompositeMath, ImageInput, ImageJob, ImageProcessState,
@@ -293,6 +294,18 @@ impl NativeDraw {
                 cg,
                 self.native_tables,
             )?;
+            let normalized = if normalized.is_some() {
+                normalized
+            } else {
+                filters::operation(
+                    owner,
+                    &function.name,
+                    &values,
+                    bridge,
+                    cg,
+                    self.native_tables,
+                )?
+            };
             let (number, input, needs_alpha) = if let Some(operation) = normalized {
                 operation
             } else {
@@ -365,7 +378,7 @@ impl NativeDraw {
                         .sact
                         .as_ref()
                         .and_then(|s| s.sprites.as_ref())
-                        .and_then(|s| s.get(number))
+                        .and_then(|s| s.graphics(number))
                         .is_some_and(|s| s.alpha),
                     "System4 DrawGraph alpha-less destination plane policy is unsupported"
                 );
@@ -447,7 +460,7 @@ mod tests {
     use super::*;
     use crate::{
         ain::{Function, HllFunction, Library, Program},
-        vm::{heap::Object, Step},
+        vm::{Step, heap::Object},
     };
     use crysirror_runtime::Runtime;
     use std::time::{Duration, Instant};
@@ -677,15 +690,17 @@ mod tests {
             1
         );
         assert_eq!(draw.names.len(), 2);
-        assert!(manager(
-            &mut draw,
-            &mut cg,
-            &mut bridge,
-            &mut rt,
-            "Load",
-            b"Unknown.dll"
-        )
-        .is_err());
+        assert!(
+            manager(
+                &mut draw,
+                &mut cg,
+                &mut bridge,
+                &mut rt,
+                "Load",
+                b"Unknown.dll"
+            )
+            .is_err()
+        );
         assert_eq!(draw.names.len(), 2);
     }
     #[test]
@@ -721,18 +736,20 @@ mod tests {
             assert_eq!(resource.size(), [2, 1]);
             assert_eq!(&resource.rgba()[..4], &[10, 20, 30, 61]);
             assert_eq!(&resource.rgba()[4..], &expected);
-            assert!(rt
-                .host
-                .engine
-                .layers
-                .get(ClientId(1), 0x4100_0000)
-                .is_some());
-            assert!(rt
-                .host
-                .engine
-                .layers
-                .get(ClientId(2), 0x4100_0000)
-                .is_none());
+            assert!(
+                rt.host
+                    .engine
+                    .layers
+                    .get(ClientId(1), 0x4100_0000)
+                    .is_some()
+            );
+            assert!(
+                rt.host
+                    .engine
+                    .layers
+                    .get(ClientId(2), 0x4100_0000)
+                    .is_none()
+            );
         }
     }
     #[test]
@@ -793,15 +810,17 @@ mod tests {
         let (_root, mut rt, mut bridge) = runtime();
         let mut cg = NativeCg::default();
         let mut draw = NativeDraw::new(ClientId(1));
-        assert!(operation(
-            &mut draw,
-            &mut cg,
-            &mut bridge,
-            &mut rt,
-            "Fill",
-            &[0, 0, 0, 1, 1, 3, 4, 5]
-        )
-        .is_err());
+        assert!(
+            operation(
+                &mut draw,
+                &mut cg,
+                &mut bridge,
+                &mut rt,
+                "Fill",
+                &[0, 0, 0, 1, 1, 3, 4, 5]
+            )
+            .is_err()
+        );
         manager(
             &mut draw,
             &mut cg,
@@ -811,15 +830,17 @@ mod tests {
             b"DrawGraph.dll",
         )
         .unwrap();
-        assert!(operation(
-            &mut draw,
-            &mut cg,
-            &mut bridge,
-            &mut rt,
-            "NotImplemented",
-            &[]
-        )
-        .is_err());
+        assert!(
+            operation(
+                &mut draw,
+                &mut cg,
+                &mut bridge,
+                &mut rt,
+                "NotImplemented",
+                &[]
+            )
+            .is_err()
+        );
         bridge
             .sact
             .as_mut()
@@ -829,20 +850,22 @@ mod tests {
             .unwrap()
             .create(ClientId(1), 0, [2, 1], [1, 2, 3, -1], &mut rt.host)
             .unwrap();
-        assert!(operation(
-            &mut draw,
-            &mut cg,
-            &mut bridge,
-            &mut rt,
-            "FillAMap",
-            &[0, 0, 0, 1, 1, 99]
-        )
-        .is_err());
+        assert!(
+            operation(
+                &mut draw,
+                &mut cg,
+                &mut bridge,
+                &mut rt,
+                "FillAMap",
+                &[0, 0, 0, 1, 1, 99]
+            )
+            .is_err()
+        );
         let (mut m, call) = machine(1, "Fill", &[10; 8], 0);
         m.stack = vec![0, 0, 0, 1, 1, 9, 8, 7];
         enter(&mut m, &call);
-        assert!(draw
-            .dispatch(
+        assert!(
+            draw.dispatch(
                 ClientId(2),
                 &mut m,
                 &call,
@@ -850,7 +873,8 @@ mod tests {
                 &mut cg,
                 &mut rt.host
             )
-            .is_err());
+            .is_err()
+        );
         assert_eq!(m.pc, call.pc);
         assert_eq!(m.stack, [0, 0, 0, 1, 1, 9, 8, 7]);
         assert!(draw.pending.is_none());
@@ -903,21 +927,23 @@ mod tests {
         Ok((m.stack[0], m.heap.page(page)?.values.clone()))
     }
     #[test]
-    fn original_pixel_query_family_reads_shared_resident_bytes_and_retains_native_missing_alpha_policy(
-    ) {
+    fn original_pixel_query_family_reads_shared_resident_bytes_and_retains_native_missing_alpha_policy()
+     {
         let (_root, mut rt, mut bridge) = runtime();
         let mut draw = NativeDraw::new(ClientId(1));
         let mut cg = NativeCg::default();
-        assert!(pixel_call(
-            &mut draw,
-            &mut cg,
-            &mut bridge,
-            &mut rt,
-            "GetPixelColor",
-            [0, 0, 0],
-            3
-        )
-        .is_err());
+        assert!(
+            pixel_call(
+                &mut draw,
+                &mut cg,
+                &mut bridge,
+                &mut rt,
+                "GetPixelColor",
+                [0, 0, 0],
+                3
+            )
+            .is_err()
+        );
         manager(
             &mut draw,
             &mut cg,
@@ -1015,15 +1041,17 @@ mod tests {
             .unwrap(),
             (-1, vec![])
         );
-        assert!(bridge
-            .sact
-            .as_ref()
-            .unwrap()
-            .sprites
-            .as_ref()
-            .unwrap()
-            .get(99)
-            .is_none());
+        assert!(
+            bridge
+                .sact
+                .as_ref()
+                .unwrap()
+                .sprites
+                .as_ref()
+                .unwrap()
+                .get(99)
+                .is_none()
+        );
         assert_eq!(
             pixel_call(
                 &mut draw,
@@ -1037,15 +1065,17 @@ mod tests {
             .unwrap(),
             (0, vec![77])
         );
-        assert!(bridge
-            .sact
-            .as_ref()
-            .unwrap()
-            .sprites
-            .as_ref()
-            .unwrap()
-            .get(99)
-            .is_some());
+        assert!(
+            bridge
+                .sact
+                .as_ref()
+                .unwrap()
+                .sprites
+                .as_ref()
+                .unwrap()
+                .get(99)
+                .is_some()
+        );
         bridge
             .sact
             .as_mut()
@@ -1094,16 +1124,18 @@ mod tests {
             .unwrap(),
             (0, vec![77])
         );
-        assert!(pixel_call(
-            &mut draw,
-            &mut cg,
-            &mut bridge,
-            &mut rt,
-            "GetPixelColor",
-            [0, 2, 0],
-            3
-        )
-        .is_err());
+        assert!(
+            pixel_call(
+                &mut draw,
+                &mut cg,
+                &mut bridge,
+                &mut rt,
+                "GetPixelColor",
+                [0, 2, 0],
+                3
+            )
+            .is_err()
+        );
     }
     #[test]
     fn invalid_pixel_ref_or_foreign_owner_cannot_change_any_output_or_pending_call() {
@@ -1142,8 +1174,8 @@ mod tests {
             ];
             enter(&mut m, &call);
             let original = m.stack.clone();
-            assert!(draw
-                .dispatch(
+            assert!(
+                draw.dispatch(
                     ClientId(if foreign { 2 } else { 1 }),
                     &mut m,
                     &call,
@@ -1151,7 +1183,8 @@ mod tests {
                     &mut cg,
                     &mut rt.host
                 )
-                .is_err());
+                .is_err()
+            );
             assert_eq!(m.pc, call.pc);
             assert_eq!(m.stack, original);
             assert_eq!(m.heap.page(page).unwrap().values, vec![77; 3]);
@@ -1255,8 +1288,8 @@ mod tests {
             let (mut machine, call) = machine(1, name, &vec![10; args.len()], 0);
             machine.stack = args.clone();
             enter(&mut machine, &call);
-            assert!(draw
-                .dispatch(
+            assert!(
+                draw.dispatch(
                     ClientId(1),
                     &mut machine,
                     &call,
@@ -1264,7 +1297,8 @@ mod tests {
                     &mut cg,
                     &mut rt.host
                 )
-                .is_err());
+                .is_err()
+            );
             assert_eq!(machine.pc, call.pc);
             assert_eq!(machine.stack, args);
             assert!(Arc::ptr_eq(&before, &pixels(&cg, &bridge)));
@@ -1276,15 +1310,17 @@ mod tests {
         let mut cg = NativeCg::default();
         let mut draw = NativeDraw::new(ClientId(1));
         draw.configure_original_profile(false);
-        assert!(manager(
-            &mut draw,
-            &mut cg,
-            &mut bridge,
-            &mut rt,
-            "Load",
-            b"DrawGraph"
-        )
-        .is_err());
+        assert!(
+            manager(
+                &mut draw,
+                &mut cg,
+                &mut bridge,
+                &mut rt,
+                "Load",
+                b"DrawGraph"
+            )
+            .is_err()
+        );
         draw.configure_original_profile(true);
         manager(
             &mut draw,
@@ -1774,9 +1810,10 @@ mod tests {
         enter(&mut m, &call);
         let before = m.stack.clone();
         let pixels_before = pixels(&cg, &bridge);
-        assert!(draw
-            .dispatch(owner, &mut m, &call, &mut bridge, &mut cg, &mut rt.host)
-            .is_err());
+        assert!(
+            draw.dispatch(owner, &mut m, &call, &mut bridge, &mut cg, &mut rt.host)
+                .is_err()
+        );
         assert_eq!(m.pc, call.pc);
         assert_eq!(m.stack, before);
         assert!(Arc::ptr_eq(&pixels_before, &pixels(&cg, &bridge)));

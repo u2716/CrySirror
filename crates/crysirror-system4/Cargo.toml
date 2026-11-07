@@ -17,6 +17,8 @@ sha2 = "0.10"
 encoding_rs = "0.8"
 crysirror-tasks.workspace = true
 crysirror-text.workspace = true
+crysirror-image.workspace = true
+crysirror-vfx.workspace = true
 crysirror-text-legacy = { workspace = true, optional = true }
 serde_json.workspace = true
 

@@ -78,10 +78,15 @@ pub(crate) fn dispatch(
     // DrawGraph's GetAlphaColor uses sact_get_sprite (lazy allocation), while
     // the remaining three wrappers use sact_try_get_sprite. The empty logical
     // declaration has no Layer/texture until an actual surface is created.
-    if graph && alpha && sprites.get(number).is_none() {
+    if graph && alpha && sprites.graphics(number).is_none() {
         sprites.update(owner, number, host, |_| Ok(()))?;
     }
-    let Some(sprite) = sprites.get(number) else {
+    let sprite = if graph {
+        sprites.graphics(number)
+    } else {
+        sprites.get(number)
+    };
+    let Some(sprite) = sprite else {
         machine.complete_hll(call, HllReturn::Scalar(if alpha { -1 } else { 0 }))?;
         return Ok(Some(Dispatch::Completed));
     };
@@ -101,9 +106,13 @@ pub(crate) fn dispatch(
         None
     } else {
         Some(
-            cg.sprite_input(owner, number, bridge)?
-                .resident_pixel(owner, [x as u32, y as u32])?
-                .context("System4 resident pixel missing inside surface")?,
+            (if graph {
+                cg.sprite_input(owner, number, bridge)?
+            } else {
+                cg.scene_sprite_input(owner, number, bridge)?
+            })
+            .resident_pixel(owner, [x as u32, y as u32])?
+            .context("System4 resident pixel missing inside surface")?,
         )
     };
     let result = if alpha {

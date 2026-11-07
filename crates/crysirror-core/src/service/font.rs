@@ -119,6 +119,11 @@ pub trait GlyphBoundsQuery: Send {
 }
 /// Bounded font registration capability. Handles cannot cross clients.
 pub trait FontLibrary: Send + Sync {
+    /// Cached aliases currently authorized for this client. This enumerates
+    /// published faces only and performs no filesystem or system-font scan.
+    fn aliases(&self) -> Result<Vec<String>> {
+        Err(crate::Error::Unsupported("scoped font enumeration"))
+    }
     fn begin(&self, spec: FontLoadSpec) -> Result<FontJob>;
     fn status(&self, job: FontJob) -> Result<FontLoadState>;
     fn resolve(&self, name: &str) -> Result<Option<FontInfo>>;

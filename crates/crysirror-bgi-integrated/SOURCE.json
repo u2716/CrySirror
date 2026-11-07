@@ -1,0 +1,1004 @@
+{
+  "repository": "https://github.com/xmoezzz/ethornell-rs",
+  "revision": "3ee43dab43854e2f9c614dd1d26213e17911d877",
+  "license": "MPL-2.0",
+  "mode": "integrated",
+  "reconciliation_base": "0cfff1d274ecc4554d0af8af1c7b1c7908595e96",
+  "reconciliation_note": "The previous import had no pinned source record. This commit matched its normalized upstream files except the preserved host changes; it was used as the three-way merge base, not asserted as the original import revision.",
+  "normalization": "Map each upstream crate to native_* internal modules, lib.rs to mod.rs, crate/external paths to internal modules, wgpu to bgi_wgpu, and MPEG to the workspace codec; format Rust with edition 2024 and skip_children=true.",
+  "local_changes": [
+    "CrySirror-owned session worker, immutable completed CPU frames and session-owned 48 kHz stereo PCM.",
+    "Keep host-selected bootstrap, font, input/dialog handling and installed-resource view.",
+    "Primary-root native writes use the existing private user overlay; this subsumes the upstream BGI.gdb alias while keeping the resource directory read-only. The upstream narrow-write-whitelist-only test addition is not imported.",
+    "Keep existing GPU namespace, file-policy/platform seams and MPEG codec boundary; no standalone upstream launcher or audio device is enabled."
+  ],
+  "files": [
+    {
+      "source": "crates/ethornell-core/src/clock.rs",
+      "sha256": "3df0af878b2472d2fec9d1eb21e75475aff5ebd86ddc40031c963743b6738a61",
+      "local": "src/native_core/clock.rs",
+      "local_sha256": "3df0af878b2472d2fec9d1eb21e75475aff5ebd86ddc40031c963743b6738a61",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-core/src/lib.rs",
+      "sha256": "2ec9c568acd286f68d23ad25714dc265f5c18ef282125e049c83f38c2694f4de",
+      "local": "src/native_core/mod.rs",
+      "local_sha256": "87324e583ee8df8a931e4d4a242e4304fe632c9754cfd54f9854be87ccbdc4c1",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-archive/src/lib.rs",
+      "sha256": "d68db294090512e30bffecc1edc923e85f85884860552ec866415de202ff1bcf",
+      "local": "src/native_archive/mod.rs",
+      "local_sha256": "bd35d94c9e5b52621f2c2bcbac2aba1f99bd0f48a6a03370c65179fa24bef8a9",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-image/src/cbg/bf_movie.rs",
+      "sha256": "c256281a04edfdaad7da75be80cbfbbd73317671a4a8ed2c8debec19d8239211",
+      "local": "src/native_image/cbg/bf_movie.rs",
+      "local_sha256": "fc0c365c76ff0ed0702376ef2dd2d4efcff58668cb67f0db087c881fbc628e50",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-image/src/cbg.rs",
+      "sha256": "9fb5a16896e8e2cba87c08dd1a67a6f4bdab911d345b27a0eac92d4abc968cb6",
+      "local": "src/native_image/cbg.rs",
+      "local_sha256": "d060ab3d018a493f42273118aa0d09344a607a07c168c6bc259bfbfba046e5d6",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-image/src/cbg2_encode.rs",
+      "sha256": "777b2da9d707ff7868517c92ffa98582ad22d46401f024dc29e71f030b6e88ea",
+      "local": "src/native_image/cbg2_encode.rs",
+      "local_sha256": "c3d9337debdfb914fdcfaa8c76af4909599fd8b831d65aa57dfff0210b8dff0d",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-image/src/cbg_encode.rs",
+      "sha256": "0d30681b26c0f6f443d40030a7fe67c65e967299b757599241cf958cfd7ba69b",
+      "local": "src/native_image/cbg_encode.rs",
+      "local_sha256": "20c90a5a7dc4d86e2dea6729d36ce7d0393d15fd981903a3a3b5ca5c3c148fcd",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-image/src/lib.rs",
+      "sha256": "ca7c0f13f9846783d3db72db2ccfbd6d449413dad7e982ba78659f8fcd9acdd9",
+      "local": "src/native_image/mod.rs",
+      "local_sha256": "243838192e68cd9366bcc59bf3b0f7e82c6a920dedbb9434589c738b018787dd",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-script/src/bcs.rs",
+      "sha256": "5cebf1347d5cc0a60f2f5cb393c2edb26a726ef1306e1d0c9718a94a57dde968",
+      "local": "src/native_script/bcs.rs",
+      "local_sha256": "5cebf1347d5cc0a60f2f5cb393c2edb26a726ef1306e1d0c9718a94a57dde968",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-script/src/calls.rs",
+      "sha256": "5f755e59a2e8a34f912246e716d5cbc4a73800c394e32b179cabeefd737a845d",
+      "local": "src/native_script/calls.rs",
+      "local_sha256": "79d19c6d5b1f454d49f9bb473ea065117927c20d5a93eaf56e4768fdc28a5843",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-script/src/decompile.rs",
+      "sha256": "987051dde3d3f61f1d9d54f6d87d39e3cab0d4a942911bfc9b94e96c2abbe3e8",
+      "local": "src/native_script/decompile.rs",
+      "local_sha256": "8949bfc94c92d3dc3950d658a8c6c0fcbf187f12f944c3a5a33e7432ad443469",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-script/src/lib.rs",
+      "sha256": "59c17e148bd8bed35aa913afe04395778d72b2636080bc6a697113f8044b98fe",
+      "local": "src/native_script/mod.rs",
+      "local_sha256": "b8365b4424de23e6b846cf3cfb0d418bb91e679c18ac16620f6c4d79a0af1ab1",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-script/src/native_abi.rs",
+      "sha256": "22bf11c5c6ea85b34e5dbccec5e2f7e6dd5ab0dded6f272e6d31792c63eb0b20",
+      "local": "src/native_script/native_abi.rs",
+      "local_sha256": "f897e085d2b5850c58630743f3e43ca66aa430b70f3d0025d0da70eaf804a5c9",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-script/src/native_contract_reference.rs",
+      "sha256": "dece644294df0568327407fa0b83cb0c5ae731667da7b4c202a3c07bc3042f22",
+      "local": "src/native_script/native_contract_reference.rs",
+      "local_sha256": "70676a423640f09955981306d82bb37890aa3e345300d25a6ad671b7425c27d9",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-script/src/vm_opcode.rs",
+      "sha256": "b4762a04e09346d13a1527504f50e3a0e4e3174744ed03cef7d766e4a2bafe96",
+      "local": "src/native_script/vm_opcode.rs",
+      "local_sha256": "b4762a04e09346d13a1527504f50e3a0e4e3174744ed03cef7d766e4a2bafe96",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-vm/src/async_program.rs",
+      "sha256": "dd111359ae86ee376966b637e2fb8c9f510ca36753c1e5c54bbc75bae230118b",
+      "local": "src/native_vm/async_program.rs",
+      "local_sha256": "91f9606200006f95f479c533dd46db9946bdde7fe1fe0a039bec947444dc1d79",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-vm/src/child_thread.rs",
+      "sha256": "4bdf4899602a2994c72d727e70478311c2304821c5aa3019cfdc96052a39b4e4",
+      "local": "src/native_vm/child_thread.rs",
+      "local_sha256": "6562a79672a6dbd4180d331e57eca0d7734726994a61b721c61d3bdbd35ff826",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-vm/src/cpu_record.rs",
+      "sha256": "f5b6e24d224be4987643bc8b3d9908dcb407c6a15dfef681098ecdb7a840e332",
+      "local": "src/native_vm/cpu_record.rs",
+      "local_sha256": "8255bd4c9db322ba72a824f34e5ca55cbfec1d4d8825ef952ac001dbbe1c15f9",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-vm/src/debug.rs",
+      "sha256": "bd90d75ec35a0644e1bc455d8d70d7819573d5979aefdb3aff3fbac8e9304c13",
+      "local": "src/native_vm/debug.rs",
+      "local_sha256": "9e8a5a5fc9b0d93e2a1a4254e75f95e683598a7a579474098f1dbc2cd2241cd7",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-vm/src/extended_opcodes.rs",
+      "sha256": "b981438940434ff566f8ed974a001327ba557364343ed1f226b93f181627a533",
+      "local": "src/native_vm/extended_opcodes.rs",
+      "local_sha256": "b981438940434ff566f8ed974a001327ba557364343ed1f226b93f181627a533",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-vm/src/host_request.rs",
+      "sha256": "845c82d5e718a960b8da5f1049ae336aac047c95ae91f7448e764137998a383d",
+      "local": "src/native_vm/host_request.rs",
+      "local_sha256": "1e03f882bf53c148994c4cec6da109ec1b181e0c28834c43f8289156767a6e0e",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-vm/src/input.rs",
+      "sha256": "cec80bf963449683be6a30bc956fd746fd40c9ea2cc487eaccd6499a8f71d757",
+      "local": "src/native_vm/input.rs",
+      "local_sha256": "d3aee8783c78252cb11fd4f8ba6fd151b67f6d8d5114d8b649ed537e553e2bde",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-vm/src/lib.rs",
+      "sha256": "7043f2d60b87173dfbcf4cf3dcdc9f574f0adce8b491027aa07c57d409fb6cc9",
+      "local": "src/native_vm/mod.rs",
+      "local_sha256": "edb1cf3ff8e59e5db81a5de902887399fea880265a83db92e7a60a231ae585c9",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-vm/src/local_window.rs",
+      "sha256": "254a587a27bd5d30a5b1ecbfcc8e7d3f9ebf440f9076324be66e664ef7ae3fa6",
+      "local": "src/native_vm/local_window.rs",
+      "local_sha256": "7ecbef9f4fd731e54d682ac1a61f05cea04cbd9f431548e7c264d014d98ac094",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-vm/src/logic/grid.rs",
+      "sha256": "0b11f7c3bf862ab8d3a0b0f813e1d85bb43bb5b0efb93b5010d2124041583cb0",
+      "local": "src/native_vm/logic/grid.rs",
+      "local_sha256": "0b11f7c3bf862ab8d3a0b0f813e1d85bb43bb5b0efb93b5010d2124041583cb0",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-vm/src/logic/mod.rs",
+      "sha256": "e4024ab9c2036edab4cdc2ea3f93ffd860a9df0be79de3d5855c89202ce2809d",
+      "local": "src/native_vm/logic/mod.rs",
+      "local_sha256": "e4024ab9c2036edab4cdc2ea3f93ffd860a9df0be79de3d5855c89202ce2809d",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-vm/src/logic/msvc_qsort.rs",
+      "sha256": "959794117dbbad415f74b857eb3b3473ecf004e441c7f1582e3a7f8d1f8d9bfe",
+      "local": "src/native_vm/logic/msvc_qsort.rs",
+      "local_sha256": "959794117dbbad415f74b857eb3b3473ecf004e441c7f1582e3a7f8d1f8d9bfe",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-vm/src/logic/slg.rs",
+      "sha256": "7c221e8f91871a5def7bc9dd7969a9d94045e2c2b27eafd469beb58822aec666",
+      "local": "src/native_vm/logic/slg.rs",
+      "local_sha256": "8d5d37e0b7ca03974b71c3e88f3aa96f5fad6a3070035b65ce42a54360f55a8d",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-vm/src/logic/space.rs",
+      "sha256": "b9e88a5edc35a24b4afd847f597491bc68599bcba328e65e17103a5d63345687",
+      "local": "src/native_vm/logic/space.rs",
+      "local_sha256": "b9e88a5edc35a24b4afd847f597491bc68599bcba328e65e17103a5d63345687",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-vm/src/logic/spline.rs",
+      "sha256": "11f2d38b7be676fbc57486e6731ed16f54d6c8718c97f75be346f3403cb49fc6",
+      "local": "src/native_vm/logic/spline.rs",
+      "local_sha256": "11f2d38b7be676fbc57486e6731ed16f54d6c8718c97f75be346f3403cb49fc6",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-vm/src/native_call.rs",
+      "sha256": "e240c54d4f545d061d95a03f086246583cd96e3fe5358b7cca001f8ecde9afca",
+      "local": "src/native_vm/native_call.rs",
+      "local_sha256": "049441c1fb4b7ee895afee89d8fcefba96d4553561cb5dcfa17c813f6a071137",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-vm/src/native_input.rs",
+      "sha256": "ccf8048b2e15d9d76f08da4054ba5b263101e6ae6f98a2419863f2cf4ccbcdae",
+      "local": "src/native_vm/native_input.rs",
+      "local_sha256": "ccf8048b2e15d9d76f08da4054ba5b263101e6ae6f98a2419863f2cf4ccbcdae",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-vm/src/native_motion.rs",
+      "sha256": "084f11f3e56f8e4ff1b9cafbce321f2567590d99301c1ca5dc415b4c800e77d9",
+      "local": "src/native_vm/native_motion.rs",
+      "local_sha256": "084f11f3e56f8e4ff1b9cafbce321f2567590d99301c1ca5dc415b4c800e77d9",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-vm/src/native_ownership.rs",
+      "sha256": "169d342ec8342a60a4d673dba92802e5777626f1734df017b6695b698bbef825",
+      "local": "src/native_vm/native_ownership.rs",
+      "local_sha256": "9cb897d0c91efc552a82d95068beaada2f3eb1af32cd404a657886d633b97be8",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-vm/src/native_selection.rs",
+      "sha256": "7e0294258e281a956ffffa111540e3b04bfd17617cb13422e3d76725ebc85ab9",
+      "local": "src/native_vm/native_selection.rs",
+      "local_sha256": "b37a70aa5001a145dbdffa2f01fa740f95f578a9f1202a2ccefa164122de2c54",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-vm/src/native_strings.rs",
+      "sha256": "acf45107bb5f49c64a472b9e4e33eb7bb330bf7f7e07566f2fd6fc3cd9d63bd8",
+      "local": "src/native_vm/native_strings.rs",
+      "local_sha256": "acf45107bb5f49c64a472b9e4e33eb7bb330bf7f7e07566f2fd6fc3cd9d63bd8",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-vm/src/native_thread.rs",
+      "sha256": "d61c3302c0743634a6da37fa45c184460a0a474319caa67a3474ba60e65323f0",
+      "local": "src/native_vm/native_thread.rs",
+      "local_sha256": "b4791c04b7425e8a503c26f370c33d2b0499b1ca9fb9b8dcf6f925e69ac47f6f",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-vm/src/procedure_class_map.rs",
+      "sha256": "d2029b31e31f37c9aee600aca019fdb416b67cc8d4ce4a80eda5e2d06652098b",
+      "local": "src/native_vm/procedure_class_map.rs",
+      "local_sha256": "36bbbdedfed0317fedad8852bc032657616f63aae7428694483460c6e569c6b8",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-vm/src/profile.rs",
+      "sha256": "86f12b48f7b2c24be6c6416cab3e02224487be04e51a76c5e15293886b3916ff",
+      "local": "src/native_vm/profile.rs",
+      "local_sha256": "b307851a68dfff0d3d565f9b8df77d3c33a0dfa52e4df3ad3f94353735bd58c1",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-vm/src/program_thread.rs",
+      "sha256": "0506bd3a3151f83ba7e12b4b0fb808a029e6655b6e9f31f2287ef29ffabaeddb",
+      "local": "src/native_vm/program_thread.rs",
+      "local_sha256": "94c3bdf58b24315be86b59059107ff4b8afd245eb5cbc16784c2b0e0c0318628",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-vm/src/records.rs",
+      "sha256": "14d7598bee9fcc8e08d528dfa9df3ea33cab2b40e5ddc31bbe883cc96b97feda",
+      "local": "src/native_vm/records.rs",
+      "local_sha256": "03a9fd4174d219a48d8570c5b3e8e742a4c45c699237e26546658422c0c649d2",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-vm/src/resource_io.rs",
+      "sha256": "3dc721cc3f3e93413b99a42ea1a95471392932074de6e977e2b3315e963fe5ce",
+      "local": "src/native_vm/resource_io.rs",
+      "local_sha256": "8e4001aa4ad250b2fc8044157edb29062cf4b33f229c982a9ba028cdf1d98571",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-vm/src/scenario.rs",
+      "sha256": "cffcf4379f4889e3c3ad20651633a5cf7ecb3c42d5f8b1adfcfc8623723a0d6f",
+      "local": "src/native_vm/scenario.rs",
+      "local_sha256": "d8dd1c4485dab2bebc74fefd94a0a126a351b86c5bfb2a41bd4028553b29a90c",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-vm/src/scheduler.rs",
+      "sha256": "a378ad31dad9c1e100ce41212cbf0cbf0ac2477afbb0ccf194936b654fa1b076",
+      "local": "src/native_vm/scheduler.rs",
+      "local_sha256": "317dfcacaaabb8a712eb4f9705c8a4b4778da06266342237bac382c9560e4734",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-vm/src/sentence_table.rs",
+      "sha256": "4bbf661f3111c71182ffc749a42d176a205baa8e1bf0ac44f51d1be5d031b6a7",
+      "local": "src/native_vm/sentence_table.rs",
+      "local_sha256": "0e85aff49db71d6ae3fb32e2fd0d9953bdfae8ee86370426f85bd3d375f82dab",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-vm/src/stream_io.rs",
+      "sha256": "84fed620121e54d02f1f4c5ab2977fe585f46a6bc6c2246bc854f8b1518d82c8",
+      "local": "src/native_vm/stream_io.rs",
+      "local_sha256": "84fed620121e54d02f1f4c5ab2977fe585f46a6bc6c2246bc854f8b1518d82c8",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-vm/src/system80_state.rs",
+      "sha256": "6183f0c19448d5030557cdd7c034868b7f25e5f8b4bbc2f83d33f8e933f70d38",
+      "local": "src/native_vm/system80_state.rs",
+      "local_sha256": "6183f0c19448d5030557cdd7c034868b7f25e5f8b4bbc2f83d33f8e933f70d38",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-vm/src/system81_state.rs",
+      "sha256": "7b0a3ac8e47de139dd75acf11ee09a0e7ebd2d3bcbca62d1d61f336d0e2bf346",
+      "local": "src/native_vm/system81_state.rs",
+      "local_sha256": "53fb4e1a323d9d5e25afff19ae39e6489d675ed4a3cc6f09bcb9eaf3ea0de9f1",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-vm/src/target_heap.rs",
+      "sha256": "2f16a741de8af2c8ef750cffe151673d1cd6d35c53c9ce7800f4ea2890116b96",
+      "local": "src/native_vm/target_heap.rs",
+      "local_sha256": "9959cd335ebc9a0a0c90c52195df9934894cf565af646c01641522ae29633a9a",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-vm/src/target_thread.rs",
+      "sha256": "50bbf9cff4da3fb2a466fca59f723ca772723fe8d1f4b5fa928fbf274363efe4",
+      "local": "src/native_vm/target_thread.rs",
+      "local_sha256": "bf1220778dd1e860a9f67c0f42d6481a59bb65a651b083aaaf8c063380fd245b",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-vm/src/time.rs",
+      "sha256": "3ce88485dbb5520ef4f4ba50b85477c44dcb505dfa10a4f2cc70a7a57d5ceb78",
+      "local": "src/native_vm/time.rs",
+      "local_sha256": "3ce88485dbb5520ef4f4ba50b85477c44dcb505dfa10a4f2cc70a7a57d5ceb78",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-vm/src/user_data.rs",
+      "sha256": "6728fb3b19f8aca704a3d6ddef3427124ea2715f3fe770e7cf1e69096d4da1ee",
+      "local": "src/native_vm/user_data.rs",
+      "local_sha256": "9b74dde25cce06f2375a180bc76f5e3044f1c4d61ee73a52aac593c7ea1de2c0",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-vm/src/user_dialog.rs",
+      "sha256": "ffa555b3febfb49b33e37b2ed01da6e10e66a0f3a3ea2a92212ff023baa9d67f",
+      "local": "src/native_vm/user_dialog.rs",
+      "local_sha256": "78dc1c1ef7f808c717117c9c114f1a365c06a53ad7f208ab929fa2af23358aa2",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-audio/src/lib.rs",
+      "sha256": "8f63bf6f35a852f8e3514dfa6b615dd25b08c64f92a6bf9ef1d684aa30e4bfb6",
+      "local": "src/native_audio/mod.rs",
+      "local_sha256": "15b3ec69e33cbe32a677a57e09733d879673c7496eec23eb34337424d0c3ba1f",
+      "host_changes": true
+    },
+    {
+      "source": "crates/ethornell-audio/src/pump.rs",
+      "sha256": "87a6a01e68b656362600e61da2b89a303e9c4441797a8a1ff813a2cb512c4d01",
+      "local": "src/native_audio/pump.rs",
+      "local_sha256": "87a6a01e68b656362600e61da2b89a303e9c4441797a8a1ff813a2cb512c4d01",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-audio/src/streamed.rs",
+      "sha256": "38e3bde745773dac62f468de868048231d64c3cbdd37155d471988767fe024b9",
+      "local": "src/native_audio/streamed.rs",
+      "local_sha256": "142b92142b415766cf5f14d5493263ed16c726a9514867b2454f65d7d7a6dc18",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-render/src/font.rs",
+      "sha256": "544d4a5c5d1c02115253f5de365b0957810662118c7d800d8aa4a9f3ee6a61c0",
+      "local": "src/native_render/font.rs",
+      "local_sha256": "1d7817ea0cf08a625d1ec60f86feedbc10fd6e5b000f593ec8a1e3761a40a2bb",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-render/src/lib.rs",
+      "sha256": "8f1d2c89d71d4f71d1991798babc96da48abd350c40869965d540ddc6bc1875c",
+      "local": "src/native_render/mod.rs",
+      "local_sha256": "8f1d2c89d71d4f71d1991798babc96da48abd350c40869965d540ddc6bc1875c",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-render/src/native_gpu.rs",
+      "sha256": "b613c537353dd5c1c8bdf1b9c66d1c68bff209f252a6d5538d4d28409b08c08a",
+      "local": "src/native_render/native_gpu.rs",
+      "local_sha256": "1176f3673533b1540b42239d8fddd6f34f06f3c4eb2e32624a2210fc7983334f",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-render/src/shared.rs",
+      "sha256": "3ef4b0552ac398507489685382b9c8d8fbae6ab011f464261a3bd4e6a7040a2e",
+      "local": "src/native_render/shared.rs",
+      "local_sha256": "0c621276caa59452e92ec957006b51143f58ba488973beff619dd2410bc6d306",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-render/src/wgpu_renderer.rs",
+      "sha256": "514a64272f8ddbf839df3c00a83aa0c217af7a1f0c09e13a21e1395d2879bde4",
+      "local": "src/native_render/wgpu_renderer.rs",
+      "local_sha256": "48702919e6926b39b0d56ac876616aa15c1b95eb6f16a45359d4ae591136938a",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/animation.rs",
+      "sha256": "13a58e2c0f43d3f99f4478ac71471a750e572e61c78def0823d66e54471e87a5",
+      "local": "src/native_app/animation.rs",
+      "local_sha256": "f6f9e242d8357d125ed0977b22331e65d1c59664a7f673f3176a37e738941842",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/audio_runtime.rs",
+      "sha256": "680219c47fbe127f6ac4f7a172b1dca605b061021f7f47cc4a23929a12c227cf",
+      "local": "src/native_app/audio_runtime.rs",
+      "local_sha256": "2646df4ffd525db6c48273b43ebd2c9653ca31b3aad861457aff5a51bcc95545",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/auto_input.rs",
+      "sha256": "1bed584c83f0bb767606723f38c3930ed2e67c8704a7c4b56f87f2c0083248e2",
+      "local": "src/native_app/auto_input.rs",
+      "local_sha256": "1bed584c83f0bb767606723f38c3930ed2e67c8704a7c4b56f87f2c0083248e2",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/bitmap_blend.rs",
+      "sha256": "48ddccf1ee259f0aad3fed74a9d4cbab0d5397e443a9e276e1366f1928761179",
+      "local": "src/native_app/bitmap_blend.rs",
+      "local_sha256": "c0404112012a9887ed836f0cfa738149a60c2ec6a84d0eb58b0e3577a063b325",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/bitmap_kernels.rs",
+      "sha256": "068bfb33c4c2d4fa2f0181ccb701c4739954350528ba39fd7fccc879fde8f516",
+      "local": "src/native_app/bitmap_kernels.rs",
+      "local_sha256": "d588c99c6c96626c4276a45d09536695625fee7552dc3d50435ad606b4a87ba1",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/character_image.rs",
+      "sha256": "b6d27aa10b641b770e0b2beabae594654af4ca015ad711ae53f3a878a1ee2ae2",
+      "local": "src/native_app/character_image.rs",
+      "local_sha256": "2437ac8919811000ba69700f8f1ee4856262791ea50011bcf357f5de23e547d3",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/dc_cache.rs",
+      "sha256": "5b7ef6f229391ab8c5b24175aed7cf9abf8f9fbb4bf4c145d6f29637ba0fd099",
+      "local": "src/native_app/dc_cache.rs",
+      "local_sha256": "39c0c3ff5e1fcdebf9b9eaa858e4d84f8c6ffbbadc7334e2b822b95f1a871e70",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/debug_trace.rs",
+      "sha256": "d8c56d6511c1a9898c0d4df9c86b71b929b4fa233f434c3dfbdc1735f302b327",
+      "local": "src/native_app/debug_trace.rs",
+      "local_sha256": "d8c56d6511c1a9898c0d4df9c86b71b929b4fa233f434c3dfbdc1735f302b327",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/dialog_protocol.rs",
+      "sha256": "024de6ffa00c368851659441774e53e641cb504abe1741e0bc65ac6923db2362",
+      "local": "src/native_app/dialog_protocol.rs",
+      "local_sha256": "294d2163724c36bb50f0747c880b17006647888d1344813a393226b9535c9136",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/display_tree.rs",
+      "sha256": "5ca41960cb4957ebd53de6d1e4def3a84de85a0c5befb04cfea5e790c096aed8",
+      "local": "src/native_app/display_tree.rs",
+      "local_sha256": "5ca41960cb4957ebd53de6d1e4def3a84de85a0c5befb04cfea5e790c096aed8",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/effects.rs",
+      "sha256": "08ff9a66ddb765215e4d5302aba149bd1b3df3b7162a0ae0c5ab770b81af975d",
+      "local": "src/native_app/effects.rs",
+      "local_sha256": "92a8644a26631af9c526fa99d20bacdf98d9fbe001f3d12972b417de63e23021",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/file_policy/hosted.rs",
+      "sha256": "bd496dc84c5b9245381ad0eb6cef902f00843f22605d5061b482c96a1c8bb89e",
+      "local": "src/native_app/file_policy/hosted.rs",
+      "local_sha256": "60adf372bb073c88988c3aceb89d27d4da374d675c8b2cd90de46297f3187beb",
+      "host_changes": true
+    },
+    {
+      "source": "crates/ethornell-app/src/file_policy.rs",
+      "sha256": "f53644c9208f7db3e9ac90c92eecf3f94a3834a4bf095300e30be687ce10145c",
+      "local": "src/native_app/file_policy.rs",
+      "local_sha256": "81b93446b462f2d8029a53890dddc1880a5304b86f09e3097a8f4313e527320b",
+      "host_changes": true
+    },
+    {
+      "source": "crates/ethornell-app/src/frame_presenter.rs",
+      "sha256": "e412f4fdd6dcbe92d6f15512a44de0ad8993a0ae7e6502fc80209015e4910534",
+      "local": "src/native_app/frame_presenter.rs",
+      "local_sha256": "3e364073d0edea96b18d7dd00c4b404b5d3bb6cc38a6821d020f5fd0f67b5ae5",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/graph.rs",
+      "sha256": "c34919539bc9223133b05f85ff2377ae87294cded77bedaffc72e60d28a95f12",
+      "local": "src/native_app/graph.rs",
+      "local_sha256": "fd0a6e7b75a1849b8c6655bff0b7881e629764fdba8915964c76fc6fc8425d6e",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/graph_bitmap_nodes.rs",
+      "sha256": "a3e10670a633d849d42fb8bbb1f57a8f74ec477949601552cbdb3301c669e503",
+      "local": "src/native_app/graph_bitmap_nodes.rs",
+      "local_sha256": "1d6713878f61da0b846e8dca04880c6a5f33259685859eea1de67f773711657f",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/graph_color.rs",
+      "sha256": "5db953cfadfc9af7669a57fe73bb199b7156874665158d8de5fbb00904c713e6",
+      "local": "src/native_app/graph_color.rs",
+      "local_sha256": "4aad39af339056584b3020b21b891eaec5b8ab6cf49e17c28162d88e21fd980f",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/graph_config.rs",
+      "sha256": "31a69d4761d9b5ea76da580d19444a3cc56460936f0085189781d25478246a7b",
+      "local": "src/native_app/graph_config.rs",
+      "local_sha256": "31a69d4761d9b5ea76da580d19444a3cc56460936f0085189781d25478246a7b",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/graph_defaults.rs",
+      "sha256": "c93aa0ed2cd30671c3e0550a75af7d09dec10e05ffbde0c5e74e5a87f240c596",
+      "local": "src/native_app/graph_defaults.rs",
+      "local_sha256": "e6a011e86354c57a75948dfb060c3237d5faa2f69d7e520de39742a7e154f203",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/graph_effect.rs",
+      "sha256": "dc14d2147583b4345baec36f417ab83abb8d1daf3e58952ed850e37464d7a34b",
+      "local": "src/native_app/graph_effect.rs",
+      "local_sha256": "a683b30c8073d9910b41bed923d80cb3287db2db3f4d20440fddc8d69a759091",
+      "host_changes": true
+    },
+    {
+      "source": "crates/ethornell-app/src/graph_flash.rs",
+      "sha256": "d0af315ff801842efb4eb826451d256219728dd88b7c83b8d9ad4bef1cd8fb00",
+      "local": "src/native_app/graph_flash.rs",
+      "local_sha256": "9b5a282532c634dde790638ea3e1d05cbc554867c8f8abdd88c2db731df22fcc",
+      "host_changes": true
+    },
+    {
+      "source": "crates/ethornell-app/src/graph_flash_console.rs",
+      "sha256": "1c253ba4656c4db2cd5f0fdb33e3dfc0d91bc3e0dfe486da7dd873b0cace1baa",
+      "local": "src/native_app/graph_flash_console.rs",
+      "local_sha256": "71e4fa595cf8c8307e9b6c4319e6e285b5392413ba3f839ea953d204d1314007",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/graph_group.rs",
+      "sha256": "70aba20e75dfff51c14e32047a51e9b4aea98d2ed8c3743229a97e6431d622fa",
+      "local": "src/native_app/graph_group.rs",
+      "local_sha256": "70aba20e75dfff51c14e32047a51e9b4aea98d2ed8c3743229a97e6431d622fa",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/graph_input.rs",
+      "sha256": "4e21caa4d3a46ee56a78711756d288a5e5bd6d69cf242659a9c504ebbf764640",
+      "local": "src/native_app/graph_input.rs",
+      "local_sha256": "27680d729be924afbe5e8ba031b09c2689e04d1b77eb75a971ea1d330b5b5ebf",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/graph_knob.rs",
+      "sha256": "60f139648e391270eb0f67441bb0ed0c09b33bce6cdc4413596b7bbadebe87ce",
+      "local": "src/native_app/graph_knob.rs",
+      "local_sha256": "60f139648e391270eb0f67441bb0ed0c09b33bce6cdc4413596b7bbadebe87ce",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/graph_links.rs",
+      "sha256": "8227adc1cde454a3b1f638c5bb73adb9563e017b5db8560e88d2b90e14e62e28",
+      "local": "src/native_app/graph_links.rs",
+      "local_sha256": "8227adc1cde454a3b1f638c5bb73adb9563e017b5db8560e88d2b90e14e62e28",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/graph_movie.rs",
+      "sha256": "14dc275bb2e50a0e6c7737ebb837583993ba8d43a5e2fe0f79268328887d81c8",
+      "local": "src/native_app/graph_movie.rs",
+      "local_sha256": "435de9fa79fd8b1432bd6ef5b73f3ce148e070e01d3194c2271ffd33716167fa",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/graph_sprite_targets.rs",
+      "sha256": "852dd6347e88276f85e2e167da3bc0c8f7b8f5bf9e47b7671ff62a2a60230570",
+      "local": "src/native_app/graph_sprite_targets.rs",
+      "local_sha256": "852dd6347e88276f85e2e167da3bc0c8f7b8f5bf9e47b7671ff62a2a60230570",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/headless.rs",
+      "sha256": "4723871a97fc0481a8cc72891cfaeafe271c66c1e91e7a3af08f811a96fdb57c",
+      "local": "src/native_app/headless.rs",
+      "local_sha256": "10b540f1207427c08a683f493b41a6ace8ba1e1d1a7d5f5a9c6c4465019a1d7e",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/host_dialog.rs",
+      "sha256": "f32e6afc77b247aa7c34f20851263bbc253f460e6744953090642121505d13ec",
+      "local": "src/native_app/host_dialog.rs",
+      "local_sha256": "5b33a10b69e97f7074c09f96ebf965e334c365d90a0fea0208955188d7512b36",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/host_installer.rs",
+      "sha256": "19d83dbef9810ef4ca22193945cb3f9d79751d9fe32482bd7eb9c7d4155053fe",
+      "local": "src/native_app/host_installer.rs",
+      "local_sha256": "19d83dbef9810ef4ca22193945cb3f9d79751d9fe32482bd7eb9c7d4155053fe",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/host_runtime.rs",
+      "sha256": "f84e12f104818a27c256c15021cf41c53f649f6c32b5551764448037d15009ff",
+      "local": "src/native_app/host_runtime.rs",
+      "local_sha256": "45a37a37c040d5902eaf6c25bcb57c2c9d99614562b0814cc59c85dea4345cad",
+      "host_changes": true
+    },
+    {
+      "source": "crates/ethornell-app/src/input_state.rs",
+      "sha256": "8fc5eaff9c9c951affad52d2547df241dc6e73e05ab30d8bf9e863e6a5f281ae",
+      "local": "src/native_app/input_state.rs",
+      "local_sha256": "8fc5eaff9c9c951affad52d2547df241dc6e73e05ab30d8bf9e863e6a5f281ae",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/lib.rs",
+      "sha256": "f224e995ae8662ded940c06d3903136dea1422d6202f235710f7542880e47c07",
+      "local": "src/native_app/mod.rs",
+      "local_sha256": "3bb99c5ed7ecf4720665b5aaf2c7082628b9e5c4c6f57d052e07291a3cdcdfa0",
+      "host_changes": true
+    },
+    {
+      "source": "crates/ethornell-app/src/native_background.rs",
+      "sha256": "75a15bc0d3db7988f32e8271125a35077fb4789b86578349553c0e5f3394c2c7",
+      "local": "src/native_app/native_background.rs",
+      "local_sha256": "52538be6fb07433c4da5b63117bf7658ee817f6e42b3fe835d5b85d5832d02b6",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/native_background_effect.rs",
+      "sha256": "3cab04962eeefb0c9e95425c6d0a0191f2ad6a3e12f951262ff146f344b347cb",
+      "local": "src/native_app/native_background_effect.rs",
+      "local_sha256": "957840b5a34356dfaee60c9ccd59b069b7a186de8bc7c88c151920f36db6bc6e",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/native_backml.rs",
+      "sha256": "02735853ae99e1bbebb30898e507cc82d2f1f2ed00197743759dedce678003d6",
+      "local": "src/native_app/native_backml.rs",
+      "local_sha256": "5ecba029150696a2aa74812e366bfc59b6dd2bb6d20229d4b0500b6071e3fd7c",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/native_bitmap_transforms.rs",
+      "sha256": "854c9e723b1697e51408cb6dd1c6b0e8dbb255334088a6b663b7c6088f940925",
+      "local": "src/native_app/native_bitmap_transforms.rs",
+      "local_sha256": "7549c2f80643d11bf09b942bb0d16de7d7c2c16cc841594f55216136e28c2b8e",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/native_display.rs",
+      "sha256": "10aa1d4f28a7cfd3b007d32ef438232510a18cb51215204af9b07ba2248859e8",
+      "local": "src/native_app/native_display.rs",
+      "local_sha256": "10aa1d4f28a7cfd3b007d32ef438232510a18cb51215204af9b07ba2248859e8",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/native_effect.rs",
+      "sha256": "3b3ec7fdb660766a05353c843e8878c25522921eb81ccdacd9e27740aff61219",
+      "local": "src/native_app/native_effect.rs",
+      "local_sha256": "6366b7ae61ee4ad21bd746a64f719ccbcd9259908970f028ed1b0c3e4be98b26",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/native_effector.rs",
+      "sha256": "ceb9d9ced12a2c6a3852e5eac5ae15577dda953ea2f0031afac5be7cf9b4f42e",
+      "local": "src/native_app/native_effector.rs",
+      "local_sha256": "1afabf67ae071fcff373091812b114259eb8a2d8883a39ab8bdae558140dc324",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/native_graph.rs",
+      "sha256": "15327259a191eef614732178c492b45b70d58cccebe88bcba3d1494e2efa3976",
+      "local": "src/native_app/native_graph.rs",
+      "local_sha256": "3b20d9a2d2b08b6637539dfc9753b79c13a13a33cc7fe8f2958e553e1ccd76f6",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/native_graph_ext.rs",
+      "sha256": "8b9a25bd83ddde4a16b83992ca242ce9c671f5324c551b5ab2c8c708546ade44",
+      "local": "src/native_app/native_graph_ext.rs",
+      "local_sha256": "6cd33c80cc63e17fb163a58d1f51957986e6fbb866d98ed3a5aea216eee04416",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/native_graph_resource.rs",
+      "sha256": "be2a3705572ac1e0da929697142907ac71d71185187e08e92b5522ed66de3a13",
+      "local": "src/native_app/native_graph_resource.rs",
+      "local_sha256": "1c04568000ccb43df454dace842d8d2b6189a18cdc07d1cc0de1f7caec2ac3de",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/native_graph_sys91.rs",
+      "sha256": "bdfa7b1f4ec4e4392684778a229bcc4100abb50280bf6c49f3e401bad9e9502f",
+      "local": "src/native_app/native_graph_sys91.rs",
+      "local_sha256": "d285e7c308b7ae19b6915adfd2e0993022520026d24e78583a3fb099114ef6cb",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/native_graph_sys92.rs",
+      "sha256": "63ae53a12e7d6e50df9bc8e63fcd5db8f0e3fdc33be548542bf479b7192c517a",
+      "local": "src/native_app/native_graph_sys92.rs",
+      "local_sha256": "9798d56dccff50dccd19077c32d0cf5fe0ab0aafcdbd497d779dccfe96d863dd",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/native_input_chain.rs",
+      "sha256": "0a9a7e2dbc9a7e5933bf1276970284cd13627dc276696d33b6147686573bf8ec",
+      "local": "src/native_app/native_input_chain.rs",
+      "local_sha256": "7ebde7c7a62214c5e336513a5d32c66d3a416181a13d5513e75e001d290dfab2",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/native_landscape.rs",
+      "sha256": "70845bd57ded6180dc46b8888eaffada01f4959ee7f5be2b6ef7d4c3f6dfc4d6",
+      "local": "src/native_app/native_landscape.rs",
+      "local_sha256": "ff1b7aad851c03a8b2b8b5ada6c129c62bbd28e71bbe4be465adfbd5022fc277",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/native_map_filter.rs",
+      "sha256": "65ea34e2a842899501337e0f359fdf06c32a1becdbc623278fccf6e66a3f211b",
+      "local": "src/native_app/native_map_filter.rs",
+      "local_sha256": "ea0c9d93b41608427d05d4dcf659cb417c8b523ddffc072894e85cd87937ca98",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/native_particle.rs",
+      "sha256": "88e42e74a72135a929f661a2b86a149baf67d5c70fccb9958b6756d37124de61",
+      "local": "src/native_app/native_particle.rs",
+      "local_sha256": "d5fe3e596b2edf0956dc55c7b3811afb24454c5d671970f3e0f7333cdb99b3e9",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/native_projected_source.rs",
+      "sha256": "41c0fabf787375cde13d78c0e187bd531a0f12de651227575cc5dc20b49d38ea",
+      "local": "src/native_app/native_projected_source.rs",
+      "local_sha256": "2caa0149d65dd60573f17ba672a1beb1361ac47a98d6beac0facbd9c83c5a05c",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/native_selection.rs",
+      "sha256": "42d86d13544d214a8953f98eeb647dccad3eef0b4b10c8261e2361fde9e160bd",
+      "local": "src/native_app/native_selection.rs",
+      "local_sha256": "36bf831aa31db5ef4831f0e7408e5eba401892928d5eac2e0752d0277a08005e",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/native_sound.rs",
+      "sha256": "67bb2a76d25510c6ff384c4fa64d8e791606fadcc851f107508e333ebf6345f8",
+      "local": "src/native_app/native_sound.rs",
+      "local_sha256": "6aa15bc5c180e36214da1c3df2a7625424c45a4b056799bc9cccf05b100e186d",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/native_sprite_filters.rs",
+      "sha256": "e37e2e2c36a10394e596650f3425db675fb6a485b4dc12db043c51775f773c03",
+      "local": "src/native_app/native_sprite_filters.rs",
+      "local_sha256": "54512e74d5492d858e358217b9b35e843ac346d5adcf44a5b32f2e468b9f7ca8",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/native_sprite_mask.rs",
+      "sha256": "06b89c8553cf1e97c60fe5e1ace4cbc692444e0aa661b23157bf67d48e096f50",
+      "local": "src/native_app/native_sprite_mask.rs",
+      "local_sha256": "363ef096164202ddecddcbc6210831b5944bdff3830acdaf6a9ac622c10941b4",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/native_sprite_perspective.rs",
+      "sha256": "5cb8afb73b21cf52954caf7d1f8ff7900ac28b9479cc66b3164dbeca2eb21ee1",
+      "local": "src/native_app/native_sprite_perspective.rs",
+      "local_sha256": "176e77382956639e30c21adb2ceab73b6ac16c862717879c784a1f08ee301f7e",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/native_system.rs",
+      "sha256": "612e028723a1a5880f449f3447a20bb6c9d8dec448f2b9aa60521d42b90b8dc0",
+      "local": "src/native_app/native_system.rs",
+      "local_sha256": "f7438053aa80d82ac727220fbe09e34ad2c2b032b0f64b313eb40502fddddfd4",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/native_user.rs",
+      "sha256": "86dd96bc3a895ff1e4977c5f51acbb69270deb85f3a644d9d62a7a2f5b3cc108",
+      "local": "src/native_app/native_user.rs",
+      "local_sha256": "effcd809558890660139c12562632828886b18446a8b3658d14a1f097a03306c",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/perspective_blit.rs",
+      "sha256": "c155dc935a953420236dd1d0f024eb505b7056a6cfd3d46d70f2c3863519cdc6",
+      "local": "src/native_app/perspective_blit.rs",
+      "local_sha256": "dbbe8e46f91d31f67458180c199ef6fd880583110747b6f71debfef90b99b574",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/platform.rs",
+      "sha256": "3786ed5c91206f53be877a3d0f499e79130b666fdca3f1a11e0e11b64fe57c31",
+      "local": "src/native_app/platform.rs",
+      "local_sha256": "d182e65b3879015d91581fd5dbafc04b77b5bace0288e0cd4720e9cbf3567b2b",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/resource_lookup.rs",
+      "sha256": "62b3ca680604713e318e7a1f83933268305e637a608e9778e4f4c9ac10a4efe8",
+      "local": "src/native_app/resource_lookup.rs",
+      "local_sha256": "1722038aa4f7bf3654ec1c0d3c7ed6fd0c36a1e3b2cdc5abfcfe009671f775ff",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/ruby_registry.rs",
+      "sha256": "dac767bee0431d41afbb17428567ed70147596104e0223f9bc79bfedadd46dd9",
+      "local": "src/native_app/ruby_registry.rs",
+      "local_sha256": "dac767bee0431d41afbb17428567ed70147596104e0223f9bc79bfedadd46dd9",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/runtime_frontend.rs",
+      "sha256": "0152959bd5a59a6d6a073ba9fbee0520b1f00fa050e3ed10ce108663e979e4d3",
+      "local": "src/native_app/runtime_frontend.rs",
+      "local_sha256": "3fd25c667c0f3b4d6cb39a11cf83d4c1c29fe93ffdbc856a1302e1999507d113",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/save_repro.rs",
+      "sha256": "2d74e51da51870381abeda89c7db6a44b9c113c246ca7bc390ab238ceadde126",
+      "local": "src/native_app/save_repro.rs",
+      "local_sha256": "0802af3b9b6df4bea054477ba7237a2cb34976e0058fa7099dc4385cd7cf6f36",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/scenario.rs",
+      "sha256": "577a1ec7f721f00ee00bec7011e05353729c8a9b5b20beec2eebc7343db923d6",
+      "local": "src/native_app/scenario.rs",
+      "local_sha256": "ca152ecc629249658850b6616181e73f076c0f37c6366b150143b05a8f7427a0",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/scene.rs",
+      "sha256": "43850d799460ba61c2617f844fff88b1ff4f5af415e29951b8633e5f629f78b0",
+      "local": "src/native_app/scene.rs",
+      "local_sha256": "43850d799460ba61c2617f844fff88b1ff4f5af415e29951b8633e5f629f78b0",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/snapshot.rs",
+      "sha256": "7d59904aea7a81adf040856d46e23c3dcab1040a73246a78749348cfe3ef598c",
+      "local": "src/native_app/snapshot.rs",
+      "local_sha256": "a4fc6bfaa1339e51b0521d73bac0065b374b417d3507e96b1c18ac0f45ea5652",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/surface_controls.rs",
+      "sha256": "a9032545bfb735e65c8ec4159ea3dc4987a2983e3764d31c509ac555a384073c",
+      "local": "src/native_app/surface_controls.rs",
+      "local_sha256": "f2ac6899d096881459e4a623143c0d5034e13604f548dd05e7f80be22506aa20",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/target_checks.rs",
+      "sha256": "6ed597ebd111d922f59a81026deaa877b4f513b4ba7fe428f75bb15ed62abddc",
+      "local": "src/native_app/target_checks.rs",
+      "local_sha256": "f7fd3697b22bbc799c06cb650ba299a29a21511fcc8b5145aee413b3974c4be8",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/text.rs",
+      "sha256": "da78dbfb7816bd949de85d1afd00ebc906bb5c6841e1da391906323fb31199da",
+      "local": "src/native_app/text.rs",
+      "local_sha256": "21570833ea480b51f1ff77a7c230a9e4a2f8a0cd4aab8eb1d0264b162fb76373",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/text_anim.rs",
+      "sha256": "55b3c8f9755d8fa893e67ee33a2c2d7bbae5416bbaa06d87e876d757ca7515bb",
+      "local": "src/native_app/text_anim.rs",
+      "local_sha256": "d04d8636b9b449f177b13afd15e173a92c3fbbf1f0b97b13474105865fb8f135",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/text_encoding.rs",
+      "sha256": "43ec675e77306b0a93ed4d4e2a0ccd35c102c5463b196f4a429660b46f2ec03d",
+      "local": "src/native_app/text_encoding.rs",
+      "local_sha256": "dd8e6e79029ca022d07135c6c3cfd91cc7fd47fdcddbae1e78b93c4dac1f7ba9",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/text_layout.rs",
+      "sha256": "dcd9e888b090abc6ffe8e3893e33fc33429283670a715b6f9391cf64d5c23e02",
+      "local": "src/native_app/text_layout.rs",
+      "local_sha256": "afb077b03582e799b8af570b22f94abf6f246c38bec1250792f185b358b8990c",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/timeline.rs",
+      "sha256": "5ea7ac3fc2f1455c6332a3b283128bd8ece394b6244a9cfce4b7d9a3bfd5e522",
+      "local": "src/native_app/timeline.rs",
+      "local_sha256": "89eb7ce9d5be8af54637a243e14a42f4b6f3b748521aa64d799cbdf9fadb2b82",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/timing.rs",
+      "sha256": "afe1fa2d0e859b95a54aaf94bab23f7b4c80905f0e5cc4ea572aa0a3ead64be5",
+      "local": "src/native_app/timing.rs",
+      "local_sha256": "afe1fa2d0e859b95a54aaf94bab23f7b4c80905f0e5cc4ea572aa0a3ead64be5",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/title.rs",
+      "sha256": "71c46312a82f869cc7ea6dc2ccc9cbcbfbe285b665dc33bee1ef14473a685c04",
+      "local": "src/native_app/title.rs",
+      "local_sha256": "e1469e3b97bf242db76070b9229820f55e83c8e5849be60a24b51f1fe7c10da7",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/user_files.rs",
+      "sha256": "79ccfeb0a539eefd873e3850f7b8c86a38ef946e36925ce53c6af0a4dc8de284",
+      "local": "src/native_app/user_files.rs",
+      "local_sha256": "a523c33d2b6a6e8adfca260d973532d88282b22c2ae3675cae33518367fba6a5",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/window.rs",
+      "sha256": "dfa2123d25f78b4421dce65811044c5d99857fde978727532b6c7ec81ff480ad",
+      "local": "src/native_app/window.rs",
+      "local_sha256": "acb1c2d36d2926c3c2ae3ceab76ac436b717ff5de57b1a98b2a9b49011e0e548",
+      "host_changes": false
+    },
+    {
+      "source": "crates/ethornell-app/src/window_icon.rs",
+      "sha256": "e4dbe89cd473da53fb1450e9f19d3615d72954a6b5ae92471e5227cca4216fea",
+      "local": "src/native_app/window_icon.rs",
+      "local_sha256": "e4dbe89cd473da53fb1450e9f19d3615d72954a6b5ae92471e5227cca4216fea",
+      "host_changes": false
+    }
+  ],
+  "local_only": [
+    "src/adapter/dialog.rs",
+    "src/adapter.rs",
+    "src/lib.rs",
+    "src/native_app/file_policy/cap_io.rs",
+    "src/native_audio/session.rs"
+  ]
+}

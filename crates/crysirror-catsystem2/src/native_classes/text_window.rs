@@ -403,7 +403,7 @@ fn present(host: &mut dyn HostServices, client: ClientId, font: &str, tasks: &cr
         // 5E3F90 asks the cache for size h-2; GGO bitmaps sit on the cell's ascent.
         let size = (glyph.h - 2).max(1) as f32;
         let ascent = host.font_metrics(font, size, 'あ').context("CatSystem2 text window font metrics")?.ascent;
-        runs.push(crysirror_scene::layer::PositionedGlyph { font: None, horizontal_scale:None,font_width:None, cell_width: None, crop: None, character, baseline: [x as f32, y as f32 + ascent], size: Some(size), color: Some(rgba(glyph.colour)), bold: None });
+        runs.push(crysirror_scene::layer::PositionedGlyph { image: None, style: None, font: None, horizontal_scale:None,font_width:None, cell_width: None, crop: None, character, baseline: [x as f32, y as f32 + ascent], size: Some(size), color: Some(rgba(glyph.colour)), bold: None });
     }
     let [edge_layer, face_layer] = glyph_layers(id)?;
     let rect = [0., 0., config.width().max(1) as f32, config.height().max(1) as f32];

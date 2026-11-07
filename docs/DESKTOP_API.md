@@ -177,6 +177,16 @@ for prepared platform icon assets.
 ## Local validation
 
 `python3 tools/verify.py` runs Python tests plus release Cargo checks/tests.
-`--gpu` explicitly includes the ignored GPU smoke test. Use local checks; do not
-enable GitHub workflows. Test commands, failures, platform evidence and bounded
-game milestones belong in dated [STATUS.md](../STATUS.md) entries.
+`--gpu` explicitly includes the ignored GPU smoke test. Test commands, failures,
+platform evidence and bounded game milestones belong in focused
+[validation notes](validation).
+
+## GitHub build
+
+[The build workflow](../.github/workflows/build.yml) compiles and links the full
+desktop player on Linux, Windows and macOS for pushes, pull requests and manual
+runs. It uses `cargo build --release --locked -p crysirror-desktop --bin crysirror`
+with default audio/gamepad features. It does not run tests, games or demos.
+CI disables LTO and uses 16 codegen units to limit build memory; dependency
+sources are cached, while `target/` and game data are not cached or uploaded.
+Compilation does not establish device, rendering, audio or game compatibility.

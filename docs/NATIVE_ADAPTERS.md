@@ -50,9 +50,11 @@ checks loose files first, then configured containers. The mixed SAR/NSA profile
 uses higher-numbered NSA patches before the base NSA and SAR fallback; it is
 explicit and not a claim about every historical ONScripter variant. A local
 `default.ttf`/`default.otf` supplies the default font before a system fallback.
-Siglus still requires caller-owned decode material where applicable. Its original
-Windows optical-host check follows the explicit portable-host policy below;
-unknown native operations still fail at their actual command.
+Siglus uses the upstream fixed format tables and automatically recovers missing
+or mismatched executable material from the installed Gameexe/Scene pair.
+Explicit key.toml overrides remain supported. The default Siglus launch uses
+[the integrated runtime](../crates/crysirror-siglus-integrated/README.md); dated
+extraction-profile policies below do not select its default factory.
 
 Automatic KiriKiri player launches supply the native `-debugwin=no` startup
 argument before game scripts run. This selects the game's own production
@@ -69,34 +71,39 @@ See [the QLIE adapter](../crates/crysirror-qlie/README.md) for its supported
 resource profiles and remaining native operations.
 
 Reference engines provide native semantic requirements and test inputs.
-Reusable capabilities belong in CrySirror; native VMs call them through thin
-semantic/syscall adapters.
+In `adopt`, reusable capabilities belong in CrySirror and native VMs call them
+through thin semantic/syscall adapters. `integrated` has the host/output
+boundary described below.
 
 ## Integration boundaries
 
-BGI and SoftPAL retain complete native implementations inside their workspace
-crates. A session worker owns the native runtime; CrySirror supplies input and
-presents its frames and PCM. The default desktop does not register the preserved
-BGI capability-extraction implementation. Other adapters use shared engine APIs
-through semantic adapters. No fallback aliases to the data VM are provided.
+[ADR 0102](adr/0102-engine-adoption-and-runtime-integration.md) admits `adopt`
+and `integrated` as explicit modes. The [onboarding guide](ENGINE_ONBOARDING.md)
+defines their documentation, graphics, audio, lifecycle and platform contracts.
+Siglus, BGI and SoftPAL use complete workspace-internal runtimes: session
+workers own native state; CrySirror supplies input and presents frames/PCM.
+The default desktop does not register the preserved BGI extraction path.
+Other current adapters retain `adopt` and shared engine API mappings unless
+explicitly migrated. No fallback aliases to the data VM are provided.
 
 ## Current registry
 
 The desktop binary always registers `crysirror-script-v1`, `siglus`, `reallive`,
-`avg32`, `krkr`, `rfvp`, `nscripter`, `bgi`, `softpal`, `circus`, `catsystem2`, `majiro`,
+`avg32`, `krkr`, `rfvp`, `nscripter`, `bgi`, `softpal`, `circus`, `catsystem2`, `qlie`, `majiro`,
 `system-nnn` and `system4`; there is no per-engine build feature. Linking `krkr`
 (ADR 0053) makes a distributed binary AGPL; see NOTICE.md.
-The bare Runtime registers the first two; hosts explicitly register other VMs.
-`siglus` is the independent subset in crysirror-siglus-vm; it is not a full
-Siglus integration. Explicit `message_window` configuration enables the plain
-TEXT/NAME profile described below. Unconfigured or unmapped text fails visibly.
+The bare Runtime registers only `crysirror-script-v1`; hosts register native VMs.
+`siglus` selects [the integrated runtime](../crates/crysirror-siglus-integrated/README.md).
+Its complete native VM and compositor run on a session owner and publish frames
+and PCM to CrySirror. The old extracted VM is retained for explicit reference
+consumers; its dated plain TEXT/NAME profile below is not the player launch path.
 `avg32` runs installed AVG32 data through xmoezzz's workspace interpreter
 (ADR 0095); raster work is the shared `crysirror_image::avg32` device.
 
 ## Acceptance
 
-The extraction criteria below apply to semantic adapters. BGI and SoftPAL use
-the complete-runtime boundary described above.
+The extraction criteria below apply to `adopt`. `integrated` follows the
+host/output/platform acceptance contracts in [the onboarding guide](ENGINE_ONBOARDING.md#integrated-runtime-contracts).
 
 KiriKiri's menu.dll now names a facade over CrySirror MenuSpec/Ui operations.
 Explicit registration-only plugin shells are allowed through Config.plugin_shells;
@@ -190,27 +197,9 @@ rebuild after restore. Rewrite HF/Plus each contain a validated 20-frame 32x32
 default cursor. Auto-hide and exact physical host animation phase remain
 unverified; this cursor validation does not get either game past disk checking.
 
-## AVG32 original VM library (2026-10-26)
-
-`crysirror-avg32` depends on `siglus_rs` commit
-`256c398e06fbcbae8e956eb046c831b3d6c8a593`, with `portable-vm` enabled and
-default features disabled. The original Scenario/parser/control-flow source
-is compiled there; no interpreter source was copied into CrySirror. The
-portable boundary was added in the original repository on a separate branch.
-Its compiled dependency tree excludes the old renderer, painter and mixer.
-
-The bounded `plain-adv-v1` adapter translates image loads into engine Canvas,
-text into shared grid/GlyphRun state, choices into engine UI, and BGM/WAV/voice
-into shared channel audio. Original waits, pending native events and hidden
-choice ordinals are retained. Resource aliases stay inside client roots.
-Only opaque full-size image loads and the documented plain text profile are
-mapped initially. Other drawing/effect/layout/movie operations and both native
-saves and framework snapshots fail visibly. No commercial AVG32 game is
-claimed complete. See [ADR 0062](adr/0062-avg32-portable-vm-engine-apis.md).
-
 ## AVG32 installed games (2026-10-30)
 
-Superseding the runtime above: `crysirror-avg32` maintains xmoezzz's AVG32
+`crysirror-avg32` maintains xmoezzz's AVG32
 interpreter directly in `src/vm` and runs an
 installed game given `{root, font, encoding?}`. PDT buffers, copies and all
 transitions are `crysirror_image::avg32`; the presented screen is one engine

@@ -2,7 +2,7 @@
 //! Font-independent cell layout for terminals and fixed-cell message windows.
 //! Callers supply their line-break and indentation policy. Glyph rasterization
 //! and reveal clocks remain separate engine services.
-use anyhow::{ensure, Result};
+use anyhow::{ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -19,6 +19,10 @@ pub struct CellLayoutOptions {
     pub hanging: i32,
     pub forbidden_line_start: String,
     pub indent_pairs: Vec<[char; 2]>,
+    /// Explicit cell widths (before spacing) for listed scalars, such as
+    /// inline picture glyphs; they replace the full/half-width rule.
+    #[serde(default)]
+    pub cell_widths: Vec<(char, i32)>,
 }
 impl CellLayoutOptions {
     pub fn validate(&self) -> Result<()> {
@@ -37,6 +41,11 @@ impl CellLayoutOptions {
                 && self.forbidden_line_start.len() <= 4096
                 && self.indent_pairs.len() <= 32,
             "cell layout break policy"
+        );
+        ensure!(
+            self.cell_widths.len() <= 65536
+                && self.cell_widths.iter().all(|(_, w)| (0..=4096).contains(w)),
+            "cell layout width overrides"
         );
         Ok(())
     }
@@ -71,6 +80,146 @@ pub struct CellLayout {
     pub consumed: usize,
 }
 
+/// One indivisible cell with explicit glyph offsets and an independent
+/// signed cursor advance. A two-character cell can keep its internal pitch
+/// while applying spacing once to the complete group. Offsets are local to
+/// the current cursor; no shaping or byte-offset interpretation occurs here.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CellGroup {
+    pub glyphs: Vec<CellGlyph>,
+    pub advance: i32,
+    /// Optional local cursor positioning before this group (for example a
+    /// terminal address or an independently positioned name/header run).
+    pub reset_before: Option<[i32; 2]>,
+    /// Request an ordinary bounds-based wrap before this complete group.
+    /// False lets the caller provide explicit language-specific break hints.
+    pub automatic_wrap: bool,
+    pub break_before: bool,
+    pub break_after: bool,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GroupedCellLayout {
+    pub glyphs: Vec<CellGlyph>,
+    /// Number of complete input groups admitted; never a byte/glyph index.
+    pub consumed_groups: usize,
+}
+
+/// Place caller-defined cells with bounded offsets/advances, explicit break
+/// hints and optional cyclic vertical bounds. Empty groups may request a line
+/// break. Input is visited once, including zero/negative advances; neither can
+/// cause a retry loop. Existing scalar cell-layout APIs keep their semantics.
+pub fn layout_cell_groups(
+    groups: &[CellGroup],
+    options: &CellLayoutOptions,
+    cursor: &mut CellCursor,
+    cyclic: bool,
+) -> Result<GroupedCellLayout> {
+    options.validate()?;
+    ensure!(groups.len() <= 65536, "grouped cell group budget");
+    let mut total = 0usize;
+    for group in groups {
+        total = total
+            .checked_add(group.glyphs.len())
+            .context("grouped cell glyph count")?;
+        ensure!(
+            total <= 65536
+                && (-32767..=32767).contains(&group.advance)
+                && group
+                    .glyphs
+                    .iter()
+                    .all(|g| g.position.iter().all(|v| (-32767..=32767).contains(v))),
+            "grouped cell glyph/advance bounds"
+        );
+        ensure!(
+            group
+                .reset_before
+                .is_none_or(|p| p.iter().all(|v| (-32767..=32767).contains(v))),
+            "grouped cell cursor reset bounds"
+        );
+    }
+    ensure!(
+        cursor.position.iter().all(|v| (-32767..=32767).contains(v))
+            && (0..=32767).contains(&cursor.indent),
+        "grouped cell cursor bounds"
+    );
+    if cyclic && cursor.position[1] >= options.bounds[1] {
+        cursor.position[1] = 0;
+    }
+    let newline = |cursor: &mut CellCursor| -> Result<()> {
+        let y = cursor.position[1]
+            .checked_add(options.size + options.spacing[1])
+            .context("grouped cell vertical overflow")?;
+        cursor.position = [
+            cursor.indent,
+            if cyclic && y >= options.bounds[1] {
+                0
+            } else {
+                y
+            },
+        ];
+        cursor.line_head = true;
+        Ok(())
+    };
+    let mut glyphs = Vec::with_capacity(total);
+    for (index, group) in groups.iter().enumerate() {
+        if let Some(position) = group.reset_before {
+            cursor.position = position;
+            cursor.line_head = true;
+        }
+        let next = cursor.position[0]
+            .checked_add(group.advance)
+            .context("grouped cell advance overflow")?;
+        if group.break_before
+            || (group.automatic_wrap
+                && cursor.position[0] > cursor.indent
+                && next > options.bounds[0].saturating_add(options.hanging))
+        {
+            newline(cursor)?;
+        }
+        if cursor.position[1] >= options.bounds[1] {
+            return Ok(GroupedCellLayout {
+                glyphs,
+                consumed_groups: index,
+            });
+        }
+        for glyph in &group.glyphs {
+            let position = [
+                cursor.position[0].checked_add(glyph.position[0]),
+                cursor.position[1].checked_add(glyph.position[1]),
+            ];
+            let position = [
+                position[0].context("grouped glyph horizontal overflow")?,
+                position[1].context("grouped glyph vertical overflow")?,
+            ];
+            ensure!(
+                position.iter().all(|v| (-65535..=65535).contains(v)),
+                "grouped glyph coordinate bounds"
+            );
+            glyphs.push(CellGlyph {
+                character: glyph.character,
+                position,
+            });
+        }
+        cursor.position[0] = cursor.position[0]
+            .checked_add(group.advance)
+            .context("grouped cell horizontal overflow")?;
+        ensure!(
+            (-32767..=32767).contains(&cursor.position[0]),
+            "grouped cell horizontal bounds"
+        );
+        if !group.glyphs.is_empty() {
+            cursor.line_head = false;
+        }
+        if group.break_after {
+            newline(cursor)?;
+        }
+    }
+    Ok(GroupedCellLayout {
+        glyphs,
+        consumed_groups: groups.len(),
+    })
+}
+
 /// Append cells from an immutable policy and a caller-owned logical cursor.
 /// Returns overflow explicitly rather than truncating the caller's text.
 /// ASCII BEL is an explicit line break which suppresses hanging indentation.
@@ -85,6 +234,30 @@ pub fn layout_cells(
 /// Fixed-cell layout with an explicit set of characters forbidden at the end
 /// of an automatically wrapped line. Existing callers retain their profile.
 pub fn layout_cells_with_breaks(text:&str,options:&CellLayoutOptions,cursor:&mut CellCursor,forbidden_line_end:&str)->Result<CellLayout>{
+    layout_cells_impl(text, options, cursor, forbidden_line_end, false)
+}
+
+/// Append fixed cells, returning to the first row when the vertical cursor
+/// reaches the bottom. Older glyphs remain in draw order and may be covered
+/// by subsequent cells; this does not clear, rasterize or scroll a surface.
+/// Uses the same CR/LF, width, indentation and caller-supplied forbidden-break
+/// policy as the non-cyclic path. The existing 1MiB/65536-scalar bounds apply.
+pub fn layout_cells_cyclic(
+    text: &str,
+    options: &CellLayoutOptions,
+    cursor: &mut CellCursor,
+    forbidden_line_end: &str,
+) -> Result<CellLayout> {
+    layout_cells_impl(text, options, cursor, forbidden_line_end, true)
+}
+
+fn layout_cells_impl(
+    text: &str,
+    options: &CellLayoutOptions,
+    cursor: &mut CellCursor,
+    forbidden_line_end: &str,
+    cyclic: bool,
+) -> Result<CellLayout> {
     ensure!(forbidden_line_end.len()<=4096,"cell line-end policy limit");
     options.validate()?;
     ensure!(
@@ -97,12 +270,25 @@ pub fn layout_cells_with_breaks(text:&str,options:&CellLayoutOptions,cursor:&mut
             && cursor.nesting <= 65536,
         "cell cursor limit"
     );
-    let newline = |state: &mut CellCursor, indented: bool| {
+    if cyclic && cursor.position[1] >= options.bounds[1] {
+        cursor.position[1] = 0;
+    }
+    if cyclic {
+        ensure!(cursor.position[0] <= 32767, "cyclic cell horizontal cursor limit");
+    }
+    let newline = |state: &mut CellCursor, indented: bool| -> Result<()> {
+        let next_y = if cyclic {
+            state.position[1].checked_add(options.size + options.spacing[1])
+                .context("cyclic cell vertical cursor overflow")?
+        } else {
+            state.position[1].saturating_add(options.size + options.spacing[1])
+        };
         state.position = [
             if indented { state.indent } else { 0 },
-            state.position[1].saturating_add(options.size + options.spacing[1]),
+            if cyclic && next_y >= options.bounds[1] { 0 } else { next_y },
         ];
         state.line_head = true;
+        Ok(())
     };
     let mut glyphs = Vec::new();
     let mut input=text.char_indices().peekable();
@@ -111,22 +297,34 @@ pub fn layout_cells_with_breaks(text:&str,options:&CellLayoutOptions,cursor:&mut
             continue;
         }
         if character == '\n' || character == '\u{7}' {
-            newline(cursor, character == '\n');
+            newline(cursor, character == '\n')?;
             continue;
         }
         let half = options.half_width
             && (character.is_ascii() || ('\u{ff61}'..='\u{ff9f}').contains(&character));
-        let cell = if half {
+        let explicit = options
+            .cell_widths
+            .iter()
+            .find(|(c, _)| *c == character)
+            .map(|(_, w)| *w);
+        let cell = if let Some(width) = explicit {
+            width
+        } else if half {
             (options.size / 2).max(1)
         } else {
             options.size
         };
-        let advance = if half && options.half_spacing {
+        let advance = if explicit.is_none() && half && options.half_spacing {
             (options.size + options.spacing[0]) / 2
         } else {
             cell + options.spacing[0]
         };
-        let next = cursor.position[0].saturating_add(advance);
+        let next = if cyclic {
+            cursor.position[0].checked_add(advance)
+                .context("cyclic cell horizontal cursor overflow")?
+        } else {
+            cursor.position[0].saturating_add(advance)
+        };
         let end_wrap=cursor.position[0]>0 && forbidden_line_end.contains(character) && input.peek().is_some_and(|(_,next_character)| {
             let next_half=options.half_width&&(next_character.is_ascii()||('｡'..='ﾟ').contains(next_character));
             let next_advance=if next_half{(options.size/2).max(1)}else{options.size}+options.spacing[0];
@@ -135,7 +333,7 @@ pub fn layout_cells_with_breaks(text:&str,options:&CellLayoutOptions,cursor:&mut
         let wrap = end_wrap || next > options.bounds[0].saturating_add(options.hanging)
             || (next > options.bounds[0] && !options.forbidden_line_start.contains(character));
         if wrap {
-            newline(cursor, true);
+            newline(cursor, true)?;
             if character == ' ' || character == '\u{3000}' {
                 continue;
             }
@@ -150,7 +348,12 @@ pub fn layout_cells_with_breaks(text:&str,options:&CellLayoutOptions,cursor:&mut
             character,
             position: cursor.position,
         });
-        cursor.position[0] = cursor.position[0].saturating_add(advance.max(1));
+        cursor.position[0] = if cyclic {
+            cursor.position[0].checked_add(advance.max(1))
+                .context("cyclic cell horizontal cursor overflow")?
+        } else {
+            cursor.position[0].saturating_add(advance.max(1))
+        };
         if let Some(pair) = options
             .indent_pairs
             .iter()
@@ -188,7 +391,7 @@ pub fn layout_cells_with_breaks(text:&str,options:&CellLayoutOptions,cursor:&mut
 mod tests {
     use super::*;
     fn options() -> CellLayoutOptions {
-        CellLayoutOptions {
+        CellLayoutOptions { cell_widths: Vec::new(),
             bounds: [39, 60],
             size: 20,
             spacing: [-1, 10],
@@ -215,7 +418,7 @@ mod tests {
         let mut cursor = CellCursor::at_start();
         let result = layout_cells(
             "「あ\nい」\u{7}う",
-            &CellLayoutOptions {
+            &CellLayoutOptions { cell_widths: Vec::new(),
                 bounds: [100, 100],
                 ..options()
             },
@@ -232,7 +435,7 @@ mod tests {
         let input = "あいうえお";
         let result = layout_cells(
             input,
-            &CellLayoutOptions {
+            &CellLayoutOptions { cell_widths: Vec::new(),
                 bounds: [39, 30],
                 ..options()
             },

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Retained layers, parent transforms, clips and painter ordering. Derived from
 //! siglus_rs layer.rs storage/ordering and render_math.rs projection semantics.
+mod checkpoint;
 mod crossfade;
 mod depth_order;
 use depth_order::DepthOrders;
@@ -11,6 +12,7 @@ mod external_motion;
 mod image_dependencies;
 pub mod motion;
 pub mod queued;
+pub mod ordered_state;
 mod snapshot_opacity;
 mod viewport_clip;
 use crate::projection;
@@ -83,11 +85,23 @@ pub struct SpriteTransform {
     pub object_anchor: bool,
     pub texture_center_x: f32,
     pub texture_center_y: f32,
+    /// A canvas-centred perspective profile, independent of look-at cameras.
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    pub canvas_projection:Option<projection::CanvasLens>,
     pub camera_enabled: bool,
     pub camera_eye: [f32; 3],
     pub camera_target: [f32; 3],
     pub camera_up: [f32; 3],
     pub camera_view_angle_deg: f32,
+    /// If false, ancestors transform this node's anchor position but their
+    /// linear basis does not rotate, scale or shear its own geometry:
+    /// `world_point = parent(anchor) + own_point - anchor`.
+    /// Local scale/rotation/pivot and inherited opacity/clipping still apply.
+    #[serde(default = "yes")]
+    pub inherit_parent_basis: bool,
+    /// Optional geometric secondary order for this payload, never inherited.
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    pub geometry_order:Option<projection::GeometryOrder>,
     pub billboard: bool,
     pub culling: bool,
 }
@@ -109,11 +123,14 @@ impl Default for SpriteTransform {
             object_anchor: false,
             texture_center_x: 0.,
             texture_center_y: 0.,
+            canvas_projection:None,
             camera_enabled: false,
             camera_eye: eye(),
             camera_target: [0.; 3],
             camera_up: up(),
             camera_view_angle_deg: fov(),
+            inherit_parent_basis: true,
+            geometry_order:None,
             billboard: false,
             culling: false,
         }
@@ -143,6 +160,8 @@ impl SpriteTransform {
         self.scale_x+offset[0]==0.||self.scale_y+offset[1]==0.
     }
     pub fn validate(&self) -> Result<()> {
+        if let Some(order)=self.geometry_order {order.validate()?;}
+        if let Some(lens)=self.canvas_projection {lens.validate()?;}
         if let Some(offset)=&self.pose_offset {
             ensure!(offset.translation.iter().chain(&offset.scale).chain(&offset.rotation)
                 .all(|v|v.is_finite() && v.abs()<=1_000_000.),"invalid procedural pose offset");
@@ -247,6 +266,34 @@ pub enum Blend {
     /// Keep the destination only under the source alpha: D·Sa, including
     /// alpha. Source RGB is ignored; use inside an isolated Canvas for masks.
     DestinationIn,
+    /// Destination-reading stored-byte blend. Uses shared integer colour
+    /// kernels in gamma-encoded RGB and /128 RGB tint quantization. The mode
+    /// defines coverage and output alpha: legacy modes retain destination
+    /// alpha; Scalar256 writes its effective source coverage. The flags may
+    /// explicitly normalize an opaque source or an XRGB output target.
+    StoredByte {
+        mode: crysirror_image::rgb_lut::ConstantByteBlend,
+        #[serde(default)]
+        force_source_opaque: bool,
+        #[serde(default)]
+        force_output_opaque: bool,
+    },
+}
+// Zero coverage does not imply an identity operation for destination-reading
+// alpha policies. Keep this check shared by extraction and canvas pruning.
+fn blend_writes_at_zero_opacity(blend: Blend) -> bool {
+    matches!(blend, Blend::StoredByte {
+        mode: crysirror_image::rgb_lut::ConstantByteBlend::Scalar256, ..
+    } | Blend::StoredByte { force_output_opaque: true, .. })
+}
+pub(crate) fn writes_at_zero_opacity(paint: &Paint, blend: Blend) -> bool {
+    match paint {
+        Paint::ProjectedMesh { frame, .. } => frame.parts.iter()
+            .any(|part| blend_writes_at_zero_opacity(part.blend.unwrap_or(blend))),
+        Paint::LegacyMesh { spec } => spec.blend_override.map_or_else(
+            || spec.model.materials.iter().any(|material| blend_writes_at_zero_opacity(material.blend)), blend_writes_at_zero_opacity),
+        _ => blend_writes_at_zero_opacity(blend),
+    }
 }
 /// Per-layer 2D filter stack with the stage order and parameter meaning of
 /// the Siglus/tona3 sprite effect (ADR 0021). Color math runs on 8-bit
@@ -498,6 +545,10 @@ impl LayerFilter {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PositionedGlyph {
+    /// Explicit per-glyph coverage and decoration profile. None inherits the
+    /// containing run; Some fully specifies this glyph's profile.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<PositionedGlyphStyle>,
     /// Optional client-scoped font alias for this scalar. None uses the run's
     /// font; explicit aliases retain the same shared reveal clock and layout.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -526,6 +577,38 @@ pub struct PositionedGlyph {
     /// truncation toward zero for the half-difference. Raster baseline y stays.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cell_width:Option<u16>,
+    /// Draw an image cell instead of this scalar's outline. The scalar
+    /// still counts as one reveal step; font, style and outline are unused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<GlyphImage>,
+}
+
+/// Image cell of a [`PositionedGlyph`] (inline picture glyphs, gaiji).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GlyphImage {
+    /// Client-scoped image asset, as in [`Paint::Image`].
+    pub asset: String,
+    /// Destination x, y, width, height in the run's local pixels.
+    pub rect: [f32; 4],
+    /// Normalized source rectangle u0, v0, u1, v1 of the asset.
+    pub uv: [f32; 4],
+    #[serde(default = "white")]
+    pub tint: [u8; 4],
+}
+impl GlyphImage {
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            !self.asset.is_empty()
+                && self.asset.len() <= 4096
+                && self.rect.iter().all(|v| v.is_finite() && v.abs() <= 1_000_000.)
+                && self.rect[2] >= 0.
+                && self.rect[3] >= 0.
+                && self.uv.iter().all(|v| v.is_finite() && (0. ..=1.).contains(v)),
+            "invalid positioned glyph image"
+        );
+        Ok(())
+    }
 }
 
 #[derive(Clone,Copy,Debug,PartialEq,Eq,Serialize,Deserialize)]
@@ -534,10 +617,33 @@ pub enum GlyphOutlineKernel {Disk,Square}
 #[derive(Clone,Copy,Debug,PartialEq,Eq,Serialize,Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GlyphOutline {pub radius:u8,pub color:[u8;4],pub kernel:GlyphOutlineKernel}
+#[derive(Clone,Copy,Debug,PartialEq,Serialize,Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GlyphShadow {pub offset:[f32;2],pub color:[u8;4]}
+#[derive(Clone,Copy,Debug,Default,PartialEq,Serialize,Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PositionedGlyphStyle {
+    #[serde(default)]
+    pub bold:bool,
+    #[serde(default)]
+    pub raster:crysirror_core::image_processing::GlyphCoverageQuality,
+    #[serde(default)]
+    pub outline:Option<GlyphOutline>,
+    #[serde(default)]
+    pub shadow:Option<GlyphShadow>,
+}
+impl PositionedGlyphStyle {
+    fn validate(self)->Result<()> {
+        self.raster.validate()?;
+        ensure!(self.outline.is_none_or(|o|o.radius<=16),"glyph style outline radius");
+        ensure!(self.shadow.is_none_or(|s|s.offset.iter().all(|v|v.is_finite()&&v.abs()<=1024.)),"glyph style shadow offset");
+        Ok(())
+    }
+}
 
 /// Unit of an explicitly positioned run. Each item contains one Unicode
-/// scalar; this deliberately does not reinterpret native scalar timing as
-/// grapheme timing. Other segmentation modes must be added explicitly.
+/// scalar. A caller may separately map native cells or shaped clusters onto
+/// positioned-glyph boundaries through GlyphReveal::prefix_steps.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GlyphRevealUnit {
@@ -552,7 +658,8 @@ pub enum GlyphRevealUnit {
 pub struct GlyphReveal {
     #[serde(default)]
     pub unit: GlyphRevealUnit,
-    /// Milliseconds per positioned scalar. Zero reveals the run instantly.
+    /// Milliseconds per positioned scalar, or per prefix step when supplied.
+    /// Zero reveals the run instantly.
     pub interval_ms: u64,
     /// Exact rational scalar clock. When present this overrides interval_ms;
     /// the engine retains fractional milliseconds through elapsed_ms.
@@ -561,6 +668,12 @@ pub struct GlyphReveal {
     /// Prefix already visible when new text is appended to a page.
     #[serde(default)]
     pub initial_visible: usize,
+    /// Optional cumulative positioned-glyph prefixes for successive reveal
+    /// ticks. Layout owners map clusters/native cells onto glyph boundaries;
+    /// the engine owns timing. None retains one glyph per tick. Repeated
+    /// prefixes intentionally spend a tick without exposing another glyph.
+    #[serde(default)]
+    pub prefix_steps: Option<Vec<usize>>,
     #[serde(default)]
     pub elapsed_ms: u64,
     #[serde(default)]
@@ -578,13 +691,19 @@ impl Serialize for GlyphReveal {
         // positional binary format must always encode every field, including
         // the None tag, or its deserializer consumes the following field.
         let rate = !serializer.is_human_readable() || self.rate_per_second.is_some();
-        let mut out = serializer.serialize_struct("GlyphReveal", if rate { 7 } else { 6 })?;
+        let steps = !serializer.is_human_readable() || self.prefix_steps.is_some();
+        let mut out = serializer.serialize_struct(
+            "GlyphReveal", 6 + usize::from(rate) + usize::from(steps),
+        )?;
         out.serialize_field("unit", &self.unit)?;
         out.serialize_field("interval_ms", &self.interval_ms)?;
         if rate {
             out.serialize_field("rate_per_second", &self.rate_per_second)?;
         }
         out.serialize_field("initial_visible", &self.initial_visible)?;
+        if steps {
+            out.serialize_field("prefix_steps", &self.prefix_steps)?;
+        }
         out.serialize_field("elapsed_ms", &self.elapsed_ms)?;
         out.serialize_field("forced_complete", &self.forced_complete)?;
         out.serialize_field("paused", &self.paused)?;
@@ -609,23 +728,38 @@ impl GlyphReveal {
                 .is_none_or(|rate| (1..=1_000_000).contains(&rate)),
             "invalid glyph reveal rate"
         );
+        if let Some(steps) = &self.prefix_steps {
+            ensure!(
+                steps.len() <= 65_536
+                    && steps.iter().all(|prefix| *prefix >= self.initial_visible && *prefix <= total)
+                    && steps.windows(2).all(|pair| pair[0] <= pair[1])
+                    && steps.last().copied().unwrap_or(self.initial_visible) == total,
+                "invalid glyph reveal prefix steps"
+            );
+        }
         Ok(())
     }
     pub fn visible_count(&self, total: usize) -> usize {
         if self.forced_complete || (self.rate_per_second.is_none() && self.interval_ms == 0) {
             return total;
         }
-        self.initial_visible
-            .saturating_add(match self.rate_per_second {
-                Some(rate) => {
-                    usize::try_from(u128::from(self.elapsed_ms) * u128::from(rate) / 1000)
-                        .unwrap_or(usize::MAX)
-                }
-                None => usize::try_from(self.elapsed_ms / self.interval_ms).unwrap_or(usize::MAX),
-            })
-            .min(total)
+        let ticks = match self.rate_per_second {
+            Some(rate) => {
+                usize::try_from(u128::from(self.elapsed_ms) * u128::from(rate) / 1000)
+                    .unwrap_or(usize::MAX)
+            }
+            None => usize::try_from(self.elapsed_ms / self.interval_ms).unwrap_or(usize::MAX),
+        };
+        if let Some(steps) = &self.prefix_steps {
+            return if ticks == 0 {
+                self.initial_visible.min(total)
+            } else {
+                steps.get(ticks - 1).copied().unwrap_or(total).min(total)
+            };
+        }
+        self.initial_visible.saturating_add(ticks).min(total)
     }
-    /// Fractional scalar numerator retained by an exact rate clock, in 1/1000
+    /// Fractional scalar/step numerator retained by an exact rate clock, in 1/1000
     /// units. No rounded integer interval or per-frame truncation is used.
     pub fn rate_remainder(&self) -> u16 {
         self.rate_per_second.map_or(0, |rate| {
@@ -642,7 +776,10 @@ impl GlyphReveal {
     }
     fn advance(&mut self, total: usize, delta_ms: u64) {
         if !self.paused && !self.status(total).complete {
-            let remaining = total.saturating_sub(self.initial_visible) as u128;
+            let remaining = self.prefix_steps.as_ref().map_or_else(
+                || total.saturating_sub(self.initial_visible),
+                Vec::len,
+            ) as u128;
             let duration = match self.rate_per_second {
                 Some(0) => 0,
                 Some(rate) => {
@@ -658,6 +795,25 @@ impl GlyphReveal {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Paint {
+    /// Draw into this client's transient coverage plane. Later ordinary draws
+    /// consume its blue byte as source alpha coverage; the color target is
+    /// unchanged. The inner payload must not itself be a coverage command.
+    CoverageWrite { paint:Box<Paint> },
+    /// Replace the client's coverage state with a uniform byte value.
+    CoverageReset { value:u8 },
+    /// A positioned-glyph source view. Geometry/filter/opacity belong to this
+    /// layer; content and reveal state remain owned by the source layer.
+    GlyphView { source:u32, #[serde(default)] offset:[f32;2] },
+
+    /// Transform/opacity carrier with no raster payload.
+    Group {
+        #[serde(default = "white")]
+        tint:[u8;4],
+        #[serde(default)]
+        add:[f32;3],
+    },
+    /// Global ordered composition command, consumed during frame extraction.
+    OrderedState { command: ordered_state::Command },
     /// Solid RGBA8 fill.
     Solid {
         #[serde(default = "white")]
@@ -707,6 +863,13 @@ pub enum Paint {
         /// Shared, immutable frozen tree (cheap to clone with the system).
         layers: Arc<Vec<LayerSpec>>,
     },
+    /// Immutable projected triangles drawn directly in retained order. Vertex
+    /// depth and clip W survive to rasterization; no composed-screen texture.
+    ProjectedMesh {
+        frame: Arc<crate::projected_mesh::MeshFrame>,
+        #[serde(default = "white")]
+        tint: [u8; 4],
+    },
     /// What has been drawn beneath this layer in the current frame, read back into a quad.
     /// With a filter's distortion this is a screen effect over a depth band: layers ordered
     /// above stay untouched. Only the top-level frame has such a backdrop; inside isolated
@@ -715,6 +878,11 @@ pub enum Paint {
     Backdrop {
         #[serde(default)]
         history: bool,
+    },
+    /// Logical fixed-function mesh resource. Shared frame extraction evaluates
+    /// shading and projection against its real retained ancestor matrices.
+    LegacyMesh {
+        spec: Arc<crate::legacy_mesh::Spec>,
     },
     /// Immutable, validated engine mesh resource. Capturing an evaluated
     /// puppet freezes its completed geometry; textures remain client-scoped
@@ -738,7 +906,17 @@ fn layout() -> String {
 impl Paint {
     pub fn validate(&self) -> Result<()> {
         match self {
+            Self::CoverageWrite{paint}=>{
+                ensure!(!matches!(paint.as_ref(),Self::CoverageWrite{..}|Self::CoverageReset{..}|Self::Group{..}|Self::OrderedState{..}),"invalid nested coverage payload");
+                paint.validate()?;
+            },
+            Self::CoverageReset{..}=>{},
+            Self::GlyphView{offset,..}=>ensure!(offset.iter().all(|v|v.is_finite()&&v.abs()<=1_000_000.),"glyph view offset bounds"),
+            Self::Group {add,..} => ensure!(add.iter().all(|v|v.is_finite()&&v.abs()<=1.),"group additive color bounds"),
+            Self::OrderedState { command } => command.validate()?,
             Self::Backdrop { .. } => {}
+            Self::LegacyMesh { spec } => spec.validate()?,
+            Self::ProjectedMesh { frame, .. } => frame.validate()?,
             Self::Image { asset, .. } => {
                 VfsPath::new(Mount::Asset, asset).map_err(|e| anyhow::anyhow!("{e}"))?;
             }
@@ -818,6 +996,8 @@ impl Paint {
                     "invalid glyph-run size/budget"
                 );
                 for glyph in glyphs {
+                    if let Some(style)=glyph.style {style.validate()?;}
+                    if let Some(image)=&glyph.image {image.validate()?;}
                     ensure!(
                         !glyph.character.is_control()
                             && glyph
@@ -916,24 +1096,18 @@ fn validate_snapshot(size: [u32; 2], layers: &[LayerSpec]) -> Result<()> {
                     | Blend::AtopScreen
                     | Blend::AtopCopy
                     | Blend::DestinationIn
+                    | Blend::StoredByte { .. }
             ),
             "snapshot layer blend is unsupported"
         );
-        if parents.contains(&layer.id) {
+        if parents.contains(&layer.id) && !matches!(layer.paint,Paint::Group{..}) {
             ensure!(
                 layer.opacity == 255,
                 "snapshot group opacity requires isolated composition"
             );
         }
-        let (t,_) = layer.transform.resolved();
-        ensure!(
-            !t.camera_enabled
-                && !t.billboard
-                && t.rotate_x == 0.
-                && t.rotate_y == 0.
-                && t.matrix_is_2d(),
-            "snapshot requires 2D layer transforms"
-        );
+        // Immutable model poses are projected by the same shared hierarchy
+        // during capture. There is no separate2D-only snapshot renderer.
         let mut parent = layer.parent;
         let mut depth = 0;
         while let Some(id) = parent {
@@ -996,6 +1170,10 @@ pub enum GlyphCoverageKernel {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LayerSpec {
+    /// Pause automatic motion, glyph reveal and subtree crossfade clocks.
+    /// Descendants inherit the pause; explicit external samples still apply.
+    #[serde(default)]
+    pub clock_paused: bool,
     /// Client-local layer id.
     pub id: u32,
     /// Parent layer id; transform, visibility, opacity and clip are inherited.
@@ -1011,6 +1189,11 @@ pub struct LayerSpec {
     /// Explicit [major, minor] draw order.
     #[serde(default)]
     pub order: [i32; 2],
+    /// Optional stable admission rank within an equal flat [major,minor]
+    /// bucket. None retains the layer-ID/subdraw rule. Geometry parents do
+    /// not introduce sorting fences, and explicit depth scopes stay scoped.
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    pub tie_order:Option<u64>,
     /// Clip rectangle [x, y, w, h], or `null`.
     #[serde(default)]
     pub clip: Option<[f32; 4]>,
@@ -1049,6 +1232,8 @@ fn alpha() -> u8 {
 }
 #[derive(Clone, Debug)]
 pub struct Primitive {
+    pub coverage: coverage::Operation,
+    pub tie_order:Option<u64>,
     /// Derived client-scoped floating-depth scopes, inherited by child payloads.
     pub depth_order: Option<DepthOrderKey>,
     /// Engine-isolated subtree inputs; renderer composites once, after child draws.
@@ -1245,7 +1430,7 @@ pub enum TransitionEffect {
     },
 }
 /// Siglus wipe speed modes 0-3.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Easing {
     /// Siglus speed mode 0.
@@ -1262,12 +1447,20 @@ pub enum Easing {
     EaseOutQuart,
     EaseInOutQuart,
     EaseOutInQuart,
+    /// Engine-owned parameterized progress families, including overshooting
+    /// spring/back curves and periodic/quantized envelopes.
+    Progress { shape: crysirror_image::progress_curve::ProgressShape },
 }
 impl Easing {
+    pub fn validate(self) -> Result<()> {
+        if let Self::Progress { shape } = self { shape.validate()?; }
+        Ok(())
+    }
     /// siglus_rs `runtime/wipe.rs::eased_progress`.
     pub fn apply(self, raw: f32) -> f32 {
         let p = raw.clamp(0., 1.);
         match self {
+            Easing::Progress { shape } => shape.apply(f64::from(p)) as f32,
             Easing::Linear => p,
             Easing::EaseIn => p * p,
             Easing::EaseOut => 1. - (1. - p) * (1. - p),
@@ -1425,6 +1618,8 @@ pub enum LayerCommand {
     /// Other clients, physical input, external producers and global time stay
     /// on their own clocks. Bounded to one day per admitted operation.
     AdvanceTime { delta_ms: u64 },
+    /// Pause/resume a retained subtree without cancelling its clock state.
+    SetClockPaused {id:u32,paused:bool},
     /// Atomically retarget every live owned Image paint using one immutable
     /// generation. Frozen Snapshot paints and other clients retain their leases.
     RebindImage {from:String,to:String},
@@ -1743,23 +1938,31 @@ impl LayerSystem {
         let mut out = Vec::new();
         while let Some((id, depth)) = stack.pop() {
             let original = &owner[&id];
-            if id != root && (!original.visible || original.opacity == 0||original.transform.collapsed()||suppressed.contains(&id)) {
+            if id != root && (!original.visible ||suppressed.contains(&id)) {
                 continue;
             }
             ensure!(depth < 30, "snapshot subtree depth budget");
             ensure!(selected.insert(id), "snapshot subtree cycle");
             ensure!(selected.len() <= 4096, "snapshot subtree node budget");
             let mut layer = original.clone();
+            let (paint,operation)=coverage::payload(owner,&layer.paint,true)?;
+            layer.paint=match operation {
+                coverage::Operation::None=>paint,
+                coverage::Operation::Write=>Paint::CoverageWrite{paint:Box::new(paint)},
+                coverage::Operation::Reset{value}=>Paint::CoverageReset{value},
+            };
             if id == root {
                 layer.parent = None;
                 layer.rect[0] = 0.;
                 layer.rect[1] = 0.;
+                let lens=layer.transform.canvas_projection;
                 layer.transform = SpriteTransform::default();
+                if let Some(lens)=lens {layer.transform.canvas_projection=Some(lens);layer.transform.z=lens.plane;}
                 layer.visible = true;
                 layer.opacity = if suppressed.contains(&id){0}else{255};
             }
             ensure!(
-                matches!(layer.blend, Blend::Normal | Blend::Add | Blend::Subtract | Blend::Multiply | Blend::Screen | Blend::Atop | Blend::AtopMultiply | Blend::AtopScreen | Blend::AtopCopy | Blend::DestinationIn),
+                matches!(layer.blend, Blend::Normal | Blend::Add | Blend::Subtract | Blend::Multiply | Blend::Screen | Blend::Atop | Blend::AtopMultiply | Blend::AtopScreen | Blend::AtopCopy | Blend::DestinationIn | Blend::StoredByte { .. }),
                 "snapshot layer blend is unsupported"
             );
             if let Some(frame) = self.puppet_frames.get(&(client.0, id)) {
@@ -1788,15 +1991,6 @@ impl LayerSystem {
             ensure!(
                 layer.paint.glyph_reveal_status().is_none_or(|r| r.complete),
                 "snapshot of dynamic glyph reveal is unsupported"
-            );
-            let (t,_) = layer.transform.resolved();
-            ensure!(
-                !t.camera_enabled
-                    && !t.billboard
-                    && t.rotate_x == 0.
-                    && t.rotate_y == 0.
-                    && t.matrix_is_2d(),
-                "snapshot requires 2D layer transforms"
             );
             if let Some(ids) = children.get(&id).filter(|_|!suppressed.contains(&id)) {
                 // Partial group alpha is isolated after the complete visible
@@ -2339,6 +2533,7 @@ impl LayerSystem {
                         | LayerCommand::SetTransform { id, .. }
                         | LayerCommand::SetRect { id, .. }
                         | LayerCommand::SetVisible { id, .. }
+                        | LayerCommand::SetClockPaused { id, .. }
                         | LayerCommand::CompleteReveal { id }
                         | LayerCommand::SetOpacity { id, .. }
                         | LayerCommand::SetBlend { id, .. }
@@ -2366,6 +2561,7 @@ impl LayerSystem {
                             layer.transform = transform.clone()
                         }
                         LayerCommand::SetVisible { visible, .. } => layer.visible = *visible,
+                        LayerCommand::SetClockPaused { paused, .. } => layer.clock_paused = *paused,
                         LayerCommand::CompleteReveal { .. } => match &mut layer.paint {
                             Paint::GlyphRun { reveal, .. } => {
                                 if let Some(reveal) = reveal {
@@ -2495,20 +2691,36 @@ impl LayerSystem {
             .paint
             .glyph_reveal_status()
     }
+    fn paused_clock_nodes(&self)->BTreeSet<(u32,u32)> {
+        let mut paused=BTreeSet::new();
+        for (&owner,layers) in &self.clients {
+            let mut pending=layers.values().filter(|layer|layer.clock_paused).map(|layer|layer.id).collect::<Vec<_>>();
+            if pending.is_empty() {continue;}
+            let mut children=BTreeMap::<u32,Vec<u32>>::new();
+            for (&id,layer) in layers {if let Some(parent)=layer.parent {children.entry(parent).or_default().push(id);}}
+            while let Some(id)=pending.pop() {
+                if paused.insert((owner,id)) {if let Some(ids)=children.get(&id) {pending.extend(ids.iter().copied());}}
+            }
+        }
+        paused
+    }
     /// Advance engine-owned text and transition clocks.
     fn advance_owner_time(&mut self, client: ClientId, delta_ms: u64) {
-        for (owner, id, property, value) in self.motions.tick_owner(client.0, delta_ms) {
+        let paused=self.paused_clock_nodes();
+        for (owner, id, property, value) in self.motions.tick_owner_filtered(client.0, delta_ms,|id|paused.contains(&(client.0,id))) {
             if let Some(layer) = self.clients.get_mut(&owner).and_then(|o| o.get_mut(&id)) {
                 property.set_layer(layer, value);
             }
         }
         if let Some(fades) = self.crossfades.get_mut(&client.0) {
-            for fade in fades.values_mut().filter(|f| !f.external) {
+            for (&id,fade) in fades.iter_mut().filter(|(_,f)| !f.external) {
+                if paused.contains(&(client.0,id)) {continue;}
                 fade.elapsed_ms = fade.elapsed_ms.saturating_add(delta_ms).min(fade.duration_ms);
             }
         }
         if let Some(owner) = self.clients.get_mut(&client.0) {
             for layer in owner.values_mut() {
+                if paused.contains(&(client.0,layer.id)) {continue;}
                 if let Paint::GlyphRun { glyphs, reveal: Some(reveal), .. } = &mut layer.paint {
                     reveal.advance(glyphs.len(), delta_ms);
                 }
@@ -2523,7 +2735,8 @@ impl LayerSystem {
     }
     /// Advance engine-owned text and transition clocks.
     pub fn tick(&mut self, delta_ms: u64) {
-        for (owner, id, property, value) in self.motions.tick(delta_ms) {
+        let paused=self.paused_clock_nodes();
+        for (owner, id, property, value) in self.motions.tick_filtered(delta_ms,|owner,id|paused.contains(&(owner,id))) {
             if let Some(layer) = self.clients.get_mut(&owner).and_then(|o| o.get_mut(&id)) {
                 if let Some(txn) = self.txn.0.last_mut() {
                     txn.journal
@@ -2533,22 +2746,18 @@ impl LayerSystem {
                 property.set_layer(layer, value);
             }
         }
-        for fade in self
-            .crossfades
-            .values_mut()
-            .flat_map(|s| s.values_mut())
-            .filter(|f| !f.external)
-        {
+        for (&owner,fades) in &mut self.crossfades {
+          for (&id,fade) in fades.iter_mut().filter(|(_,f)|!f.external) {
+            if paused.contains(&(owner,id)) {continue;}
             fade.elapsed_ms = fade
                 .elapsed_ms
                 .saturating_add(delta_ms)
                 .min(fade.duration_ms);
+          }
         }
-        for layer in self
-            .clients
-            .values_mut()
-            .flat_map(|owner| owner.values_mut())
-        {
+        for (&owner,layers) in &mut self.clients {
+          for (&id,layer) in layers {
+            if paused.contains(&(owner,id)) {continue;}
             if let Paint::GlyphRun {
                 glyphs,
                 reveal: Some(reveal),
@@ -2557,6 +2766,7 @@ impl LayerSystem {
             {
                 reveal.advance(glyphs.len(), delta_ms);
             }
+          }
         }
         if let Some(t) = &mut self.transition {
             t.elapsed_ms = t.elapsed_ms.saturating_add(delta_ms);
@@ -2693,7 +2903,14 @@ impl LayerSystem {
         let depth_keys = self.depth_orders.keys(&self.clients)?;
         for (client, owner) in &self.clients {
             let suppressed=self.sequences.suppressed_layers(*client);
+            // Ordered state can replace a later leaf's blend. Its final
+            // effective zero-coverage policy is known only in resolve().
+            let ordered_blend_writes=owner.values().any(|s| matches!(&s.paint,
+                Paint::OrderedState { command: ordered_state::Command::Push { state } }
+                    if state.blend.is_some_and(blend_writes_at_zero_opacity)));
             for spec in owner.values() {
+                if matches!(&spec.paint,Paint::Group{..}){continue;}
+                let is_command=matches!(&spec.paint,Paint::OrderedState{..}|Paint::CoverageReset{..}|Paint::CoverageWrite{..});
                 let mut chain = vec![spec];
                 let mut p = spec.parent;
                 while let Some(id) = p {
@@ -2705,57 +2922,80 @@ impl LayerSystem {
                     p = parent.parent;
                 }
                 chain.reverse();
-                if chain.iter().any(|s| !s.visible || s.opacity == 0||s.transform.collapsed()||suppressed.contains(&s.id)) {
+                let zero_writes=ordered_blend_writes||writes_at_zero_opacity(&spec.paint,spec.blend);
+                if chain.iter().any(|s| !s.visible ||(!is_command&&((s.opacity==0&&!zero_writes)||s.transform.collapsed()))||suppressed.contains(&s.id)) {
                     continue;
                 }
-                let mut matrix = Mat3::IDENTITY;
+                let mut matrix = glam::Mat4::IDENTITY;
+                let mut inherited_camera = None;
+                let mut inherited_3d = false;
+                let mut inherited_order=None;
                 let mut clip = Some([0., 0., canvas[0] as f32, canvas[1] as f32]);
                 let mut opacity = 255u32;
+                let mut group_multiply=[1.;3];
+                let mut group_add=[0f32;3];
                 for s in chain.iter().take(chain.len() - 1) {
                     let (t,_) = s.transform.resolved();
+                    if let Some(policy)=t.geometry_order.filter(|p|p.apply_to_descendants) {
+                        if let Some(g)=projection::sprite_quad_geometry_in_hierarchy(&s.transform,
+                            [s.rect[0],s.rect[1]],[0.,0.,s.rect[2],s.rect[3]],
+                            canvas.map(|v|v as f32),matrix,inherited_camera,inherited_3d) {
+                            inherited_order=Some(policy.key(g.world)?);
+                        }
+                    }
                     ensure!(
-                        !t.camera_enabled
-                            && !t.billboard
-                            && t.rotate_x == 0.
-                            && t.rotate_y == 0.
-                            && t.matrix_is_2d(),
-                        "3D layer parents require a world hierarchy"
+                        !t.billboard,
+                        "camera-facing billboard parents require an explicit world hierarchy"
                     );
-                    matrix *= affine(s);
-                    opacity = opacity * u32::from(s.opacity) / 255;
                     if let Some(c) = s.clip {
-                        clip = clip.and_then(|old| intersect(old, transformed_bounds(matrix, c)));
+                        let geometry = projection::sprite_quad_geometry_in_hierarchy(
+                            &s.transform, [s.rect[0],s.rect[1]],
+                            [c[0],c[1],c[0]+c[2],c[1]+c[3]],
+                            [canvas[0] as f32,canvas[1] as f32], matrix,
+                            inherited_camera, inherited_3d,
+                        );
+                        clip = geometry.and_then(|g| {
+                            let points=g.projected.map(|p|Vec2::new(p.x,p.y));
+                            clip.and_then(|old|intersect(old,point_bounds(points)))
+                        });
                     }
                     if let Some(c) = s.viewport_clip {
                         clip = clip.and_then(|old| intersect(old, c));
+                    }
+                    matrix = projection::sprite_parent_matrix(&s.transform,s.rect[0],s.rect[1],matrix)
+                        * projection::sprite_model_matrix(&s.transform,s.rect[0],s.rect[1]);
+                    inherited_3d |= !t.matrix_is_2d() || t.camera_enabled || t.z!=0.
+                        ||t.pivot_z!=0. ||t.scale_z!=1.;
+                    if t.camera_enabled||t.canvas_projection.is_some() { inherited_camera=Some(&s.transform); }
+                    opacity = opacity * u32::from(s.opacity) / 255;
+                    if let Paint::Group{tint,add}=&s.paint {
+                        opacity=opacity*u32::from(tint[3])/255;
+                        for axis in 0..3 {
+                            group_multiply[axis]*=f32::from(tint[axis])/255.;
+                            group_add[axis]=(group_add[axis]+add[axis]).clamp(-1.,1.);
+                        }
                     }
                 }
                 if let Some(c) = spec.viewport_clip {
                     clip = clip.and_then(|old| intersect(old, c));
                 }
                 if let Some(c) = spec.clip {
-                    let projected = projection::sprite_quad_geometry_rect(
+                    let projected = projection::sprite_quad_geometry_in_hierarchy(
                         &spec.transform,
-                        spec.rect[0],
-                        spec.rect[1],
-                        c[0],
-                        c[1],
-                        c[0] + c[2],
-                        c[1] + c[3],
-                        canvas[0] as f32,
-                        canvas[1] as f32,
+                        [spec.rect[0],spec.rect[1]],
+                        [c[0],c[1],c[0]+c[2],c[1]+c[3]],
+                        [canvas[0] as f32,canvas[1] as f32],
+                        matrix,inherited_camera,inherited_3d,
                     );
                     clip = projected.and_then(|g| {
                         let points = g
                             .projected
-                            .map(|p| matrix.transform_point2(Vec2::new(p.x, p.y)));
+                            .map(|p| Vec2::new(p.x, p.y));
                         clip.and_then(|old| intersect(old, point_bounds(points)))
                     });
                 }
-                let Some(clip) = clip else {
-                    continue;
-                };
-                let mut paint = spec.paint.clone();
+                let clip=match clip {Some(clip)=>clip,None if is_command=>[0.,0.,0.,0.],None=>continue};
+                let (mut paint,coverage)=coverage::payload(owner,&spec.paint,false)?;
                 let (local, uv) = if let Paint::GlyphRun { glyphs, .. } = &mut paint {
                     if let Some(crop) = spec.source_crop {
                         if crop[2] == 0. || crop[3] == 0. {
@@ -2783,58 +3023,61 @@ impl LayerSystem {
                     };
                     (crop.rect, crop.uv)
                 };
-                let Some(geometry) = projection::sprite_quad_geometry_rect(
+                let geometry = if matches!(&paint,Paint::LegacyMesh{..}|Paint::OrderedState{..}) {
+                    // Model admission uses its vertices, never the carrier's
+                    // unit rectangle (which may lie behind the camera).
+                    Some(projection::SpriteQuadGeometry {
+                        projected: [projection::ProjectedPoint{x:0.,y:0.,depth:0.,clip_w:1.};4],
+                        world:[[0.;3];4],
+                    })
+                } else { projection::sprite_quad_geometry_in_hierarchy(
                     &spec.transform,
-                    spec.rect[0],
-                    spec.rect[1],
-                    local[0],
-                    local[1],
-                    local[0] + local[2],
-                    local[1] + local[3],
-                    canvas[0] as f32,
-                    canvas[1] as f32,
-                ) else {
+                    [spec.rect[0],spec.rect[1]],
+                    [local[0],local[1],local[0]+local[2],local[1]+local[3]],
+                    [canvas[0] as f32,canvas[1] as f32],
+                    matrix,inherited_camera,inherited_3d,
+                ) };
+                let Some(geometry) = geometry else {
                     continue;
                 };
-                let quad = geometry.projected.map(|p| {
-                    let v = matrix.transform_point2(Vec2::new(p.x, p.y));
-                    [v.x, v.y, p.depth, p.clip_w]
-                });
+                let mut quad = geometry.projected.map(|p| [p.x,p.y,p.depth,p.clip_w]);
+                let mut filter=spec.filter.clone();
+                if group_multiply!=[1.;3]||group_add!=[0.;3] {
+                    let filter=filter.get_or_insert_with(LayerFilter::default);
+                    for axis in 0..3 {
+                        filter.multiply[axis]*=group_multiply[axis];
+                        filter.add[axis]=(filter.add[axis]+group_add[axis]).clamp(-1.,1.);
+                    }
+                }
+                let mut mesh=None;
+                let camera = if spec.transform.camera_enabled||spec.transform.canvas_projection.is_some() { &spec.transform }
+                    else { inherited_camera.unwrap_or(&spec.transform) };
+                if let Paint::LegacyMesh { spec: model } = &paint {
+                    if model.ignore_coverage {
+                        if let Some(filter)=&mut filter {filter.mask=None;}
+                    }
+                    let model_matrix = projection::sprite_parent_matrix(&spec.transform,spec.rect[0],spec.rect[1],matrix)
+                        * projection::sprite_model_matrix(&spec.transform,spec.rect[0],spec.rect[1]);
+                    mesh=Some(crate::legacy_mesh::evaluate_world(model,model_matrix,camera,canvas)?);
+                    quad=[[0.,0.,0.,1.],[canvas[0]as f32,0.,0.,1.],
+                        [canvas[0]as f32,canvas[1]as f32,0.,1.],[0.,canvas[1]as f32,0.,1.]];
+                }
                 ensure!(
                     quad.iter().flatten().all(|v| v.is_finite()),
                     "non-finite layer geometry"
                 );
-                // Cull from the actual transformed quad, never its pivot or
-                // untransformed rectangle. Glyph runs expand to independent
-                // cells and meshes/puppets own their geometry later.
-                if quad.iter().all(|p| p[3] > 0.)
-                    && matches!(
-                        &paint,
-                        Paint::Solid { .. }
-                            | Paint::Image { .. }
-                            | Paint::Snapshot { .. }
-                            | Paint::Text { .. }
-                    )
-                {
-                    let min_x = quad.iter().map(|p| p[0]).fold(f32::INFINITY, f32::min);
-                    let min_y = quad.iter().map(|p| p[1]).fold(f32::INFINITY, f32::min);
-                    let max_x = quad.iter().map(|p| p[0]).fold(f32::NEG_INFINITY, f32::max);
-                    let max_y = quad.iter().map(|p| p[1]).fold(f32::NEG_INFINITY, f32::max);
-                    if max_x <= clip[0]
-                        || max_y <= clip[1]
-                        || min_x >= clip[0] + clip[2]
-                        || min_y >= clip[1] + clip[3]
-                    {
-                        continue;
-                    }
-                }
-                out.push(Primitive {
+                out.push(ordered_state::Pending { world:geometry.world,camera:camera.clone(),mesh,
+                    ordinary_2d:!inherited_3d&&spec.transform.matrix_is_2d()&&!spec.transform.camera_enabled,
+                    geometry_order:spec.transform.geometry_order,
+                    primitive:Primitive {
+                    coverage,
+                    tie_order:spec.tie_order,
                     depth_order: depth_keys.get(&(*client, spec.id)).cloned(),
                     composite: None,
                     owner: *client,
                     id: spec.id,
                     sub: 0,
-                    order: spec.order,
+                    order: [spec.order[0],spec.order[1].checked_add(if spec.transform.geometry_order.is_none(){inherited_order.unwrap_or(0)}else{0}).context("inherited geometry order overflow")?],
                     size: [spec.rect[2].ceil() as u32, spec.rect[3].ceil() as u32],
                     extent: [local[2], local[3]],
                     paint,
@@ -2844,16 +3087,15 @@ impl LayerSystem {
                     blend: spec.blend,
                     uv,
                     sampling: spec.sampling,
-                    filter: spec.filter.clone(),
+                    filter,
                     puppet: match &spec.paint {
                         Paint::Mesh { frame, .. } => Some(frame.clone()),
                         _ => self.puppet_frames.get(&(*client, spec.id)).cloned(),
                     },
-                });
+                }});
             }
         }
-        out.sort_by(compare_primitives);
-        Ok(out)
+        ordered_state::resolve(out,canvas)
     }
 }
 pub fn rectangle(
@@ -2867,6 +3109,8 @@ pub fn rectangle(
 ) -> Primitive {
     let [x, y, w, h] = rect;
     Primitive {
+        coverage:coverage::Operation::None,
+        tie_order:None,
         depth_order: None,
         composite: None,
         owner,
@@ -2912,6 +3156,13 @@ fn transformed_bounds(m: Mat3, r: [f32; 4]) -> [f32; 4] {
     [min.x, min.y, max.x - min.x, max.y - min.y]
 }
 
+/// Maps a point in a layer's local pixels into its parent's local pixels
+/// through the layer's 2D pose (rectangle anchor, pivot, rotation, scale and
+/// local matrix), the same affine used by frame extraction.
+pub fn local_to_parent(s: &LayerSpec, point: [f32; 2]) -> [f32; 2] {
+    affine(s).transform_point2(Vec2::from_array(point)).to_array()
+}
+
 fn affine(s: &LayerSpec) -> Mat3 {
     let (t,translation) = s.transform.resolved();
     let (anchor, offset) = if t.object_anchor {
@@ -2940,6 +3191,22 @@ fn affine(s: &LayerSpec) -> Mat3 {
         * Mat3::from_angle(t.rotate)
         * Mat3::from_scale(Vec2::new(t.scale_x, t.scale_y))
         * Mat3::from_translation(-offset)
+}
+/// Choose the inherited affine basis before composing this node's own pose.
+/// The same operation is used by live extraction and frozen-root rebasing.
+fn parent_basis(parent: Mat3, s: &LayerSpec) -> Mat3 {
+    let (t, translation) = s.transform.resolved();
+    if t.inherit_parent_basis {
+        return parent;
+    }
+    let anchor = Vec2::new(s.rect[0], s.rect[1])
+        + Vec2::from_array(translation)
+        + if t.object_anchor {
+            Vec2::ZERO
+        } else {
+            Vec2::new(t.pivot_x, t.pivot_y)
+        };
+    Mat3::from_translation(parent.transform_point2(anchor) - anchor)
 }
 fn point_bounds(corners: [Vec2; 4]) -> [f32; 4] {
     let min = corners
@@ -2999,7 +3266,7 @@ fn validate_layer(
         f.validate()?;
     }
     ensure!(
-        s.sampling == ImageSampling::default() || matches!(s.paint, Paint::Image { .. }),
+        s.sampling == ImageSampling::default() || matches!(s.paint, Paint::Image { .. }|Paint::ProjectedMesh{..}|Paint::LegacyMesh{..}|Paint::CoverageWrite{..}),
         "image sampling requires an image paint"
     );
     if let Some(uv) = s.uv {
@@ -3034,12 +3301,29 @@ pub enum TextureAddressMode {
 }
 /// Sampler state stored with a retained image layer, independent of a GPU.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all="snake_case")]
+pub enum ImageSampleProfile {
+    #[default]
+    Hardware,
+    /// Gamma-encoded byte RGBA, two separable 7-bit interpolation stages.
+    StoredByte128,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ImageSampling {
+    /// Linear interpolation, or nearest-neighbour sampling when false.
+    /// Defaults to true to preserve existing retained-image presentation.
+    pub linear: bool,
+    pub profile: ImageSampleProfile,
     /// Horizontal texture coordinate addressing.
     pub address_u: TextureAddressMode,
     /// Vertical texture coordinate addressing.
     pub address_v: TextureAddressMode,
+}
+impl Default for ImageSampling {
+    fn default() -> Self {
+        Self { linear: true, profile:ImageSampleProfile::default(), address_u: TextureAddressMode::default(), address_v: TextureAddressMode::default() }
+    }
 }
 impl ImageSampling {
     pub fn valid_uv(self, uv: [f32; 4]) -> bool {
@@ -3057,3 +3341,5 @@ impl ImageSampling {
         axis(self.address_u, uv[0], uv[2]) && axis(self.address_v, uv[1], uv[3])
     }
 }
+
+pub mod coverage;

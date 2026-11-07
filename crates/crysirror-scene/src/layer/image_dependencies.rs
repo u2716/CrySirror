@@ -4,6 +4,7 @@ impl LayerSpec {
     /// Visit retained font aliases, including frozen nested scene inputs.
     pub fn visit_font_dependencies(&self, visitor: &mut dyn FnMut(&str)) {
         match &self.paint {
+            Paint::CoverageWrite{paint}=>{let mut layer=self.clone();layer.paint=(**paint).clone();layer.visit_font_dependencies(visitor);},
             Paint::Text { font, .. } | Paint::GlyphRun { font, .. } => visitor(font),
             Paint::Snapshot { layers, .. } => {
                 for layer in layers.iter() {
@@ -24,6 +25,7 @@ impl LayerSpec {
             }
         }
         match &self.paint {
+            Paint::CoverageWrite{paint}=>{let mut layer=self.clone();layer.paint=(**paint).clone();layer.visit_image_dependencies(visitor);},
             Paint::Image { asset, .. } | Paint::Puppet { asset, .. } => visitor(asset),
             Paint::Snapshot { layers, .. } => {
                 for layer in layers.iter() {
@@ -35,7 +37,15 @@ impl LayerSpec {
                     visitor(asset);
                 }
             }
-            Paint::Solid { .. } | Paint::Text { .. } | Paint::GlyphRun { .. } | Paint::Backdrop { .. } => (),
+            Paint::ProjectedMesh { frame, .. } => {
+                for part in &frame.parts {
+                    if let Some(asset) = &part.texture { visitor(asset); }
+                }
+            }
+            Paint::LegacyMesh { spec } => {
+                for asset in spec.textures.iter().flatten() { visitor(asset); }
+            }
+            Paint::GlyphView{..}|Paint::CoverageReset{..}|Paint::Group { .. } | Paint::OrderedState { .. } | Paint::Solid { .. } | Paint::Text { .. } | Paint::GlyphRun { .. } | Paint::Backdrop { .. } => (),
         }
     }
 }

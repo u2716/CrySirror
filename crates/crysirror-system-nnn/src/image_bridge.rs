@@ -105,6 +105,9 @@ impl ImageBridge {
     pub fn client(&self) -> ClientId {
         self.client
     }
+    pub(crate) fn naming_policy(&self) -> (ResourceNames, u32) {
+        (self.names.clone(), self.levels)
+    }
     pub fn prepare(
         &mut self,
         machine: &Machine,

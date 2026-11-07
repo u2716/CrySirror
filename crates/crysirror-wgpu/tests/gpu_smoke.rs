@@ -5,7 +5,7 @@ use crysirror_wgpu::{Gpu, Renderer, RenderingPath};
 use std::{path::Path, sync::Arc};
 
 #[test]
-#[ignore = "requires a real wgpu adapter or Mesa software Vulkan; CI GPU job runs this explicitly"]
+#[ignore = "requires a real wgpu adapter or Mesa software Vulkan"]
 fn shared_scene_reaches_actual_pixels() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/desktop/project.json");
     let state = tempfile::tempdir().unwrap();
@@ -1130,7 +1130,7 @@ fn siglus_style_layer_filters_match_reference_arithmetic() {
 }
 
 #[test]
-#[ignore = "requires a real wgpu adapter or Mesa software Vulkan; CI GPU job runs this explicitly"]
+#[ignore = "requires a real wgpu adapter or Mesa software Vulkan"]
 fn screen_transitions_compose_old_and_new_frames_with_siglus_arithmetic() {
     use crysirror_scene::ServiceBatch;
     let tmp = tempfile::tempdir().unwrap();

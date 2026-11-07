@@ -7,7 +7,7 @@ nightly toolchain, and links imported shared memory with explicit TLS exports.
 wasm-bindgen-rayon is pinned to 1.3.0 and Rayon to the existing locked 1.12.0.
 Its Rust and bundlerless worker helper source were inspected before use.
 Native/default toolchains and the existing target directory remain unchanged.
-All builds and tests use release. There is no new CI or remote automation.
+All builds and tests use release.
 
 Shared TaskPool jobs use the global CPU pool with a bounded per-pool FIFO queue
 and configured concurrency limit. Cancellation and completion use the same

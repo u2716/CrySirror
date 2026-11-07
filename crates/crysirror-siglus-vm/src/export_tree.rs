@@ -72,7 +72,7 @@ impl Output<'_> {
         order: [i32; 2],
     ) -> Result<u32> {
         self.push(
-            LayerSpec { source_crop: None,
+            LayerSpec { tie_order:None, clock_paused: false, source_crop: None,
                 viewport_clip: None,
                 id: 0,
                 parent: None,
@@ -160,7 +160,7 @@ impl Output<'_> {
         // the parent's image-center/payload pivot. The transparent group keeps
         // those distinct while CrySirror composes the matrices and opacity.
         let group = self.push(
-            LayerSpec { source_crop: None,
+            LayerSpec { tie_order:None, clock_paused: false, source_crop: None,
                 viewport_clip: None,
                 id: 0,
                 parent,
@@ -300,7 +300,7 @@ impl Output<'_> {
         };
         if let Some((paint, w, h, cx, cy, image)) = payload {
             self.push(
-                LayerSpec { source_crop: super::object_source_crop(b,[cx as f32,cy as f32]),
+                LayerSpec { tie_order:None, clock_paused: false, source_crop: super::object_source_crop(b,[cx as f32,cy as f32]),
                     viewport_clip: super::object_viewport_clip(b),
                     id: 0,
                     parent: Some(group),

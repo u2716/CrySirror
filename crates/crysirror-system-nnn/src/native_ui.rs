@@ -78,6 +78,7 @@ struct SelectionPlan {
     batch: Value,
     choices: usize,
     messages: usize,
+    background_input: Option<crysirror_core::image_processing::ImageInput>,
 }
 fn prepare(
     call: &NativeCall,
@@ -159,10 +160,21 @@ fn prepare_records(
         batch: json!({"layers":layers,"ui":ui}),
         choices,
         messages,
+        background_input: None,
     })
 }
+type BackgroundLoader = Arc<
+    dyn Fn(&crysirror_tasks::Cancellation) -> Result<crysirror_core::image_processing::ImageInput>
+        + Send
+        + Sync,
+>;
 pub type SelectionProfileFactory =
     Arc<dyn Fn(usize, usize) -> Result<SelectionProfile> + Send + Sync>;
+#[derive(Clone)]
+enum NativeBackground {
+    Solid([u8; 3]),
+    Image { asset: String, size: [u32; 2] },
+}
 pub struct NativeSelectionBridge {
     pub profile: SelectionProfile,
     pub api_calls: u64,
@@ -174,10 +186,16 @@ pub struct NativeSelectionBridge {
     live: Option<(usize, usize)>,
     selected: Option<usize>,
     restored_wait_armed: bool,
+    back_print_mode: i32,
+    native_rows: Vec<Vec<u8>>,
+    background: Option<NativeBackground>,
+    background_name: Vec<u8>,
+    background_loader: Option<BackgroundLoader>,
+    background_job: Option<crysirror_core::image_processing::ImageJob>,
 }
 impl NativeSelectionBridge {
     pub fn dependency_pending(&self) -> bool {
-        self.worker.is_some()
+        self.worker.is_some() || self.background_job.is_some()
     }
     pub fn new(profile: SelectionProfile) -> Result<Self> {
         Self::from_pool(profile, TaskPool::new("nnn-native-selection", 1, 1)?)
@@ -195,7 +213,167 @@ impl NativeSelectionBridge {
             live: None,
             selected: None,
             restored_wait_armed: false,
+            back_print_mode: 0,
+            native_rows: Vec::new(),
+            background: None,
+            background_name: Vec::new(),
+            background_loader: None,
+            background_job: None,
         })
+    }
+    pub(crate) fn configure_native_background(
+        &mut self,
+        setup: &crate::config::Names,
+    ) -> Result<()> {
+        ensure!(
+            self.pending.is_none() && self.live.is_none(),
+            "NNN selection background change during native actor"
+        );
+        self.back_print_mode = setup.integer(b"backPrintMode")?.unwrap_or(0);
+        ensure!(
+            (0..=2).contains(&self.back_print_mode),
+            "NNN unknown selection native background mode"
+        );
+        self.background_name = setup
+            .parameter(b"backFileName")
+            .unwrap_or(b"sel_bg")
+            .to_vec();
+        self.background = if self.back_print_mode == 0 {
+            Some(NativeBackground::Solid([
+                setup.integer(b"backColorR")?.unwrap_or(0) as u8,
+                setup.integer(b"backColorG")?.unwrap_or(0) as u8,
+                setup.integer(b"backColorB")?.unwrap_or(0) as u8,
+            ]))
+        } else {
+            None
+        };
+        Ok(())
+    }
+    pub(crate) fn configure_background_resources(
+        &mut self,
+        resources: crate::resource_bridge::NativeResources,
+        names: crate::native_resources::ResourceNames,
+        levels: u32,
+    ) -> Result<()> {
+        if self.back_print_mode != 1 {
+            return Ok(());
+        }
+        ensure!(
+            resources.client() == self.profile.client,
+            "NNN selection background scope"
+        );
+        let mut name = b"sys/".to_vec();
+        name.extend(&self.background_name);
+        let lookup = names.picture(&name, levels)?;
+        self.background_loader = Some(Arc::new(move |cancel| {
+            cancel.check()?;
+            Ok(resources.image_source(&lookup, cancel)?.input)
+        }));
+        Ok(())
+    }
+    fn poll_background(&mut self, host: &mut dyn HostServices) -> Result<bool> {
+        use crysirror_core::image_processing::ImageProcessState;
+        if self.background_job.is_none() {
+            let input = self
+                .ready
+                .as_mut()
+                .and_then(|plan| plan.background_input.take());
+            if let Some(input) = input {
+                self.background_job = Some(
+                    host.image_metadata(self.profile.client)?.begin_process(
+                        input,
+                        serde_json::to_vec(&[
+                            crysirror_image::effects::ImageEffect::OverrideAlpha { alpha: 255 },
+                        ])?
+                        .into(),
+                    )?,
+                );
+                self.api_calls += 1;
+            }
+        }
+        let Some(job) = self.background_job.as_mut() else {
+            return Ok(true);
+        };
+        match job.poll()? {
+            ImageProcessState::Pending => Ok(false),
+            ImageProcessState::Failed(error) => {
+                anyhow::bail!("NNN original selection background: {error}")
+            }
+            ImageProcessState::Ready(image) => {
+                ensure!(
+                    image.client() == self.profile.client,
+                    "NNN native selection background resource scope"
+                );
+                let size = image.size();
+                let published = host.publish_image_resource(
+                    self.profile.client,
+                    self.profile.layer_base + 250,
+                    image,
+                )?;
+                self.api_calls += 1;
+                if let Some(NativeBackground::Image { asset, .. }) =
+                    self.background.replace(NativeBackground::Image {
+                        asset: published.path.relative().to_owned(),
+                        size,
+                    })
+                {
+                    host.release_image_resource(self.profile.client, &asset)?;
+                    self.api_calls += 1;
+                }
+                self.background_job = None;
+                Ok(true)
+            }
+        }
+    }
+    fn append_background(&self, batch: &mut Value) -> Result<()> {
+        let paint = match &self.background {
+            Some(NativeBackground::Solid([r, g, b])) => json!({"kind":"solid","color":[r,g,b,255]}),
+            Some(NativeBackground::Image { asset, .. }) => json!({"kind":"image","asset":asset}),
+            None => {
+                ensure!(
+                    self.back_print_mode != 1,
+                    "NNN original selection background resource not prepared"
+                );
+                return Ok(());
+            }
+        };
+        let size = match &self.background {
+            Some(NativeBackground::Image { size, .. }) => *size,
+            _ => self.profile.canvas,
+        };
+        let id = self
+            .profile
+            .layer_base
+            .checked_add(250)
+            .context("NNN selection background layer ID")?;
+        ensure!(
+            id != self.profile.root,
+            "NNN selection background/root identity collision"
+        );
+        let order = self
+            .profile
+            .order
+            .checked_sub(1)
+            .context("NNN selection background ordering")?;
+        batch["layers"].as_array_mut().context("NNN selection layer batch")?.insert(0,json!({"op":"put","layer":{"id":id,"parent":self.profile.root,"rect":[0,0,size[0],size[1]],"order":[order,0],"paint":paint}}));
+        Ok(())
+    }
+    pub(crate) fn advances_effects(&self) -> bool {
+        self.back_print_mode == 2
+    }
+    pub(crate) fn pending_selection(&self) -> bool {
+        self.pending.is_some()
+    }
+    pub(crate) fn published_selection(&self) -> bool {
+        self.live.is_some()
+    }
+    pub(crate) fn original_rows(&self) -> Result<(Vec<Vec<u8>>, usize, usize)> {
+        let (choices, messages) = self.live.context("NNN save selection is not published")?;
+        ensure!(
+            self.native_rows.len() == choices + messages,
+            "NNN original selection row ownership"
+        );
+        Ok((self.native_rows.clone(), choices, messages))
     }
     /// Original scripts determine choice counts at the pending opcode. Keep
     /// immutable native setup until that boundary, rather than guessing a menu
@@ -241,11 +419,29 @@ impl NativeSelectionBridge {
             );
             let metrics = host.text_measurement(self.profile.client)?;
             let permit = self.pool.reserve()?;
+            if let Payload::Selection { strings, .. } = &call.payload {
+                self.native_rows = strings
+                    .iter()
+                    .map(|row| row[..row.len().min(254)].to_vec())
+                    .collect();
+            }
+            let background_loader = if self.back_print_mode == 1 && self.background.is_none() {
+                Some(
+                    self.background_loader
+                        .clone()
+                        .context("NNN selection background reader absent")?,
+                )
+            } else {
+                None
+            };
             let record = call.clone();
             let profile = self.profile.clone();
             self.worker = Some(permit.spawn(move |cancel| {
                 cancel.check()?;
-                let plan = prepare(&record, &profile, metrics.as_ref())?;
+                let mut plan = prepare(&record, &profile, metrics.as_ref())?;
+                if let Some(loader) = background_loader {
+                    plan.background_input = Some(loader(&cancel)?);
+                }
                 cancel.check()?;
                 Ok(plan)
             })?);
@@ -263,12 +459,17 @@ impl NativeSelectionBridge {
             self.worker = None;
             self.ready = Some(plan);
         }
+        if self.ready.is_some() && !self.poll_background(host)? {
+            return Ok(false);
+        }
         if let Some(plan) = &self.ready {
             // The native selection is the exclusive UI consumer for this
             // client until it returns. Clear earlier native-mode events before
             // creating this new widget generation, never after an activation.
             let _ = host.query_engine(self.profile.client, EngineQuery::UiEvents)?;
-            host.submit_engine(self.profile.client, 1, &serde_json::to_vec(&plan.batch)?)?;
+            let mut batch = plan.batch.clone();
+            self.append_background(&mut batch)?;
+            host.submit_engine(self.profile.client, 1, &serde_json::to_vec(&batch)?)?;
             self.api_calls += 1;
             self.live = Some((plan.choices, plan.messages));
             self.ready = None;
@@ -313,9 +514,12 @@ impl NativeSelectionBridge {
     }
     fn retire_selection(&mut self, host: &mut dyn HostServices) -> Result<()> {
         let (choices, messages) = self.live.context("NNN selection UI not published")?;
-        let layers = (0..choices + messages)
+        let mut layers = (0..choices + messages)
             .map(|n| json!({"op":"remove","id":self.profile.layer_base+n as u32}))
             .collect::<Vec<_>>();
+        if self.background.is_some() {
+            layers.push(json!({"op":"remove","id":self.profile.layer_base+250}));
+        }
         let ui = (0..choices)
             .map(|n| json!({"op":"remove","id":self.profile.widget_base+n as u32}))
             .collect::<Vec<_>>();
@@ -334,6 +538,11 @@ impl NativeSelectionBridge {
         (
             (0..choices + messages)
                 .map(|n| self.profile.layer_base + n as u32)
+                .chain(
+                    self.background
+                        .as_ref()
+                        .map(|_| self.profile.layer_base + 250),
+                )
                 .collect(),
             (0..choices)
                 .map(|n| self.profile.widget_base + n as u32)
@@ -349,6 +558,10 @@ impl NativeSelectionBridge {
             profile: self.profile.clone(),
             factory: self.profile_factory.clone(),
             pool: self.pool.clone(),
+            back_print_mode: self.back_print_mode,
+            background: self.background.clone(),
+            background_name: self.background_name.clone(),
+            background_loader: self.background_loader.clone(),
         })
     }
     /// A loaded SELECT has already consumed its opcode; only the saved CASE
@@ -387,6 +600,10 @@ pub(crate) struct SelectionRestoreSeed {
     profile: SelectionProfile,
     factory: Option<SelectionProfileFactory>,
     pool: TaskPool,
+    back_print_mode: i32,
+    background: Option<NativeBackground>,
+    background_name: Vec<u8>,
+    background_loader: Option<BackgroundLoader>,
 }
 pub(crate) struct SavedSelectionPreparation {
     bridge: NativeSelectionBridge,
@@ -396,9 +613,22 @@ pub(crate) struct PreparedSavedSelection {
     pub batch: Value,
 }
 impl SelectionRestoreSeed {
+    pub(crate) fn has_frozen_background(&self) -> bool {
+        self.back_print_mode == 0 && self.background.is_some()
+            || self.back_print_mode == 1
+                && (self.background.is_some() || self.background_loader.is_some())
+    }
+    pub(crate) fn advances_effects(&self) -> bool {
+        self.back_print_mode == 2
+    }
+
     pub(crate) fn dormant(&self) -> Result<NativeSelectionBridge> {
         let mut bridge = NativeSelectionBridge::from_pool(self.profile.clone(), self.pool.clone())?;
         bridge.profile_factory = self.factory.clone();
+        bridge.back_print_mode = self.back_print_mode;
+        bridge.background = self.background.clone();
+        bridge.background_name = self.background_name.clone();
+        bridge.background_loader = self.background_loader.clone();
         Ok(bridge)
     }
 
@@ -435,22 +665,40 @@ impl SelectionRestoreSeed {
             "NNN saved selection changed capability bindings"
         );
         let metrics = host.text_measurement(profile.client)?;
+        let background_loader = if self.back_print_mode == 1 && self.background.is_none() {
+            Some(
+                self.background_loader
+                    .clone()
+                    .context("NNN saved selection background reader absent")?,
+            )
+        } else {
+            None
+        };
+        let original_rows = strings.clone();
         let worker_profile = profile.clone();
         let permit = self.pool.reserve()?;
         let worker = permit.spawn(move |cancel| {
             cancel.check()?;
-            let plan = prepare_records(
+            let mut plan = prepare_records(
                 &strings,
                 choices,
                 supplemental,
                 &worker_profile,
                 metrics.as_ref(),
             )?;
+            if let Some(loader) = background_loader {
+                plan.background_input = Some(loader(&cancel)?);
+            }
             cancel.check()?;
             Ok(plan)
         })?;
         let mut bridge = NativeSelectionBridge::from_pool(profile, self.pool.clone())?;
         bridge.profile_factory = self.factory.clone();
+        bridge.back_print_mode = self.back_print_mode;
+        bridge.background = self.background.clone();
+        bridge.background_name = self.background_name.clone();
+        bridge.background_loader = self.background_loader.clone();
+        bridge.native_rows = original_rows;
         bridge.worker = Some(worker);
         Ok(SavedSelectionPreparation { bridge })
     }
@@ -470,16 +718,23 @@ impl SavedSelectionPreparation {
         );
         Ok(true)
     }
+    pub(crate) fn poll_resources(&mut self, host: &mut dyn HostServices) -> Result<bool> {
+        if !self.poll()? {
+            return Ok(false);
+        }
+        self.bridge.poll_background(host)
+    }
     pub(crate) fn finish(mut self) -> Result<PreparedSavedSelection> {
         ensure!(
             self.bridge.worker.is_none(),
             "NNN saved selection is not ready"
         );
-        let plan = self
+        let mut plan = self
             .bridge
             .ready
             .take()
             .context("NNN saved selection plan absent")?;
+        self.bridge.append_background(&mut plan.batch)?;
         self.bridge.live = Some((plan.choices, plan.messages));
         self.bridge.restored_wait_armed = false;
         Ok(PreparedSavedSelection {

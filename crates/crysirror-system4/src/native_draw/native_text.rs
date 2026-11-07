@@ -49,7 +49,7 @@ impl Run {
                     .sact
                     .as_ref()
                     .and_then(|s| s.sprites.as_ref())
-                    .and_then(|s| s.get(*number))
+                    .and_then(|s| s.graphics(*number))
                     .is_some_and(|s| s.alpha),
                 "native glyph destination lacks alpha plane"
             );

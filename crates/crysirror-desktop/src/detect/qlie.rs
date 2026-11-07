@@ -123,7 +123,7 @@ pub(super) fn detect(dir: &SourcePath, names: &[String], name: &str) -> Result<O
             name,
             [width, height],
             "qlie",
-            json!({"script":"startup.s","assets":assets,"canvas":[width,height]}),
+            json!({"script":"startup.s","assets":assets,"canvas":[width,height],"executable":main_exe(dir,names)}),
         ),
         mounts,
         profiles: std::collections::BTreeMap::from([(

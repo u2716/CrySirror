@@ -10,7 +10,7 @@ pub(super) fn isolate(layers: &mut Vec<LayerSpec>) -> Result<()> {
         let mut groups = Vec::new();
         for layer in layers
             .iter()
-            .filter(|layer| layer.opacity != 255 && parents.contains(&layer.id))
+            .filter(|layer| layer.opacity != 255 && parents.contains(&layer.id) && !matches!(layer.paint,Paint::Group{..}))
         {
             let mut depth = 0;
             let mut parent = layer.parent;

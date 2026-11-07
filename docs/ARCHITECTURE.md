@@ -1,12 +1,13 @@
 # Desktop architecture and data ownership
 
-Engine integrations exist to expand CrySirror capabilities. Native VMs must
-translate their operations into engine APIs and engine-owned logical state.
-BGI and Softpal use complete integrated runtimes that publish frames and PCM
-through CrySirror. Their native state stays on a session owner worker; the
-desktop retains the event loop and output devices. Other adapters follow the
-capability-extraction boundary.
-The previous RFVP/BGI/RealLive hosting paths were removed on 2026-10-26.
+Engine onboarding follows [ADR 0102](adr/0102-engine-adoption-and-runtime-integration.md).
+`adopt` VMs translate native operations into shared APIs and engine-owned state.
+`integrated` runtimes may retain native composition/mixing and publish bounded
+frames/PCM through CrySirror-owned host services. Siglus, BGI and Softpal use this mode;
+their native state stays on a session owner worker, with event loops and output
+devices owned by the host. Other current adapters retain their `adopt` boundary
+unless explicitly migrated. See [the onboarding contracts](ENGINE_ONBOARDING.md)
+for documentation, output, lifecycle and platform requirements.
 
 Dated source/validation sections below describe their recorded profiles. Consult
 [the documentation index](README.md), current adapter crate docs and dated
@@ -29,7 +30,7 @@ Dated source/validation sections below describe their recorded profiles. Consult
 | crysirror-wgpu | GPU uploads, clipped/blended 2D/text, extracted dynamic 3D and readback |
 | crysirror-desktop | winit lifecycle/input, audio sink, CLI and persistent state location |
 | crysirror-author | Optional Oxc TS/JS compiler + Boa offline project builder; no player dependency |
-| crysirror-siglus | Native G00 resource frontend and metadata policies; independent VM lives in crysirror-siglus-vm |
+| crysirror-siglus | Native G00 resource frontend and metadata policies; default complete runtime lives in crysirror-siglus-integrated |
 | crysirror-acoustics | Device-free acoustic meshes/materials, default Parry and optional obvhs BVH2, volume visibility/direct propagation and SOFA/HRIR resources with worker-prepared convolution, standalone FunDSP late-reverb DSP, and worker-prepared first-order image-source paths/sparse echoes (ADR 0067/0068/0073/0074/0075) |
 | crysirror-audio | Engine voice scheduling/buses, shared canonical SceneState bridge, worker-owned buffered decoders, exact seek completion and client reverb bus sends/returns; worker-owned final DSP and PcmOutput lifecycle, optional CPAL and compatibility rodio output |
 | crysirror-text | Engine CPU fonts, shaping/bidi, rich layout/ruby/vertical text, fixed-cell layout, synchronous font-resource measurement handles, reveal and CPU SDF data |
@@ -44,9 +45,11 @@ Dated source/validation sections below describe their recorded profiles. Consult
 | crysirror-softpal | Complete SoftPAL implementation in one workspace crate; original asset/script/VM modules and native saves, session worker with frame/PCM output |
 | crysirror-bgi-vm / crysirror-bgi | Preserved capability-extraction implementation; not registered by the default desktop player |
 | crysirror-nscripter | GPL-2.0-or-later native text-script interpreter, linked by the desktop; shared Layer/GlyphRun/UI, resource workers, audio and cyclic XOR; no ONScripter runtime or renderer linked |
-| crysirror-circus | First-class bounded DC4PH MES native interpreter and semantic/resource/wait adapter, registered by the desktop binary for ABI0xabb6; shared Image/Layer/UI/Audio/VFX own presentation. ABI0xaab6 remains parse-only; original saves and later native operations remain unsupported |
+| crysirror-circus | First-class bounded DC4PH MES native interpreter and semantic/resource/wait adapter for ABI0xabb6; shared Image/Layer/UI/Audio/VFX own presentation. Bounded original save/checkpoint/restore paths exist; ABI0xaab6 remains parse-only and complete-game compatibility remains unverified |
 | crysirror-catsystem2 | First-class original KCS v2 and FES semantic/resource/wait policy; shared scoped INT/HG3/Image/Canvas/Layer/Input/Audio workers, real KCS pose/root completion and reviewed module/resource guards. Remaining native classes, complete CST/dialogue/input and original saves remain incomplete |
-| crysirror-siglus-vm | Independent original SceneVm subset registered as `siglus`; native operations call shared engine services, including the explicit plain TEXT/NAME profile (ADR 0061) |
+| crysirror-qlie | First-class native `.s` interpreter and FilePack/ABMP resource policy over shared image, text, UI, audio and media services; remaining profiles are documented in the adapter crate |
+| crysirror-siglus-integrated | Complete maintained Siglus VM/assets/renderer/runtime modules; a session worker publishes opaque frames and native mixed PCM through CrySirror. The player registers this as `siglus` |
+| crysirror-siglus-vm | Preserved capability-extraction VM for explicit reference consumers, including the plain TEXT/NAME profile (ADR 0061); not registered by the default player |
 | crysirror-engine | Unity-style public API: reflective classes/objects, App lifecycle, behaviours, plugins, ScriptHost contract (ADR 0004/0005) |
 | crysirror-script-js | Default JS/TS script host (Boa + Oxc) bound to the class registry; always linked by the desktop binary (ADR 0005) |
 | crysirror-asset | Device-free importers; glTF 2.0/GLB/VRM, binary FBX and PMX (converted to GLB in memory) into world entities and PBR models (ADR 0007, 0054) |
@@ -58,7 +61,8 @@ tools reach every service through one class registry. Native VMs stay
 providers mount per client (ADR 0006). Decisions and the requirement backlog
 are in [docs/adr](adr/README.md).
 
-The core has no external crate dependencies. Runtime can execute traces without
+The core depends on `serde` with alloc support and default features disabled;
+it remains safe `no_std + alloc`. Runtime can execute traces without
 creating a window/device. The renderer depends on the shared runtime's asset
 store and scene description, not on original engine VM internals. The desktop
 frontend alone creates windows and surfaces.
@@ -298,7 +302,7 @@ all engine subsystems, including World, physics, rendering, text/UI, audio/video
 scripts/native VMs, save/restore and MCP. The current worker pools and asset/pose
 paths are stage one. Present owner-thread limitations are migration work, not
 permanent exemptions. Thread affinity and native ordering remain explicit graph
-dependencies/commit boundaries. Validation runs locally; remote build automation is disabled.
+dependencies/commit boundaries.
 
 ## Frame pipeline, profiling and streamed cells (2026-10-26)
 

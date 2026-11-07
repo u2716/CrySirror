@@ -243,6 +243,8 @@ impl BgiVm {
                 transparency: alpha as u16,
                 control: control.clamp(0, 256) as u16,
                 mask_channel: 0,
+                threshold_phase: None,
+                preserve_alpha: false,
             });
         let (secondary_id, secondary_size, secondary_format, secondary_input) = match secondary {
             crate::native_background::NativeBackgroundSecondaryResource::Bitmap {

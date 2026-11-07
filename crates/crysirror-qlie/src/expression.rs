@@ -117,6 +117,7 @@ fn tokens(s: &str) -> Result<Vec<Token>> {
                     | ")"
                     | "["
                     | "]"
+                    | ","
                     | "=="
                     | "!="
                     | "<="
@@ -155,10 +156,23 @@ impl<F: FnMut(&str) -> Result<Value>> Parser<'_, F> {
             Token::Name(mut name) => {
                 if self.op("[") {
                     self.at += 1;
-                    let index = self.expression(0, evaluate)?.integer()?;
+                    let mut indices = Vec::new();
+                    loop {
+                        ensure!(indices.len() < 4, "QLIE array dimension limit");
+                        let value = if self.op(",") || self.op("]") {
+                            Value::Int(0)
+                        } else {
+                            self.expression(0, evaluate)?
+                        };
+                        indices.push(if evaluate { value.integer()? } else { 0 }.to_string());
+                        if !self.op(",") {
+                            break;
+                        }
+                        self.at += 1;
+                    }
                     ensure!(self.op("]"), "QLIE array index delimiter");
                     self.at += 1;
-                    name = format!("{name}[{index}]");
+                    name = format!("{name}[{}]", indices.join(","));
                 }
                 if !evaluate {
                     Value::Int(0)

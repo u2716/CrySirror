@@ -16,6 +16,9 @@ use std::{
         atomic::{AtomicU64, Ordering},
     },
 };
+/// Per-client resident CPU copies of published images. Visual-novel VMs keep
+/// whole ABMP frame sets resident (QLIE scenes exceed 256 MiB of members).
+const MAX_PUBLISHED_BYTES: usize = 512 * 1024 * 1024;
 static NEXT_IMAGE: AtomicU64 = AtomicU64::new(1);
 #[derive(Default)]
 struct State {
@@ -24,6 +27,8 @@ struct State {
     reserved_count: usize,
     reserved_bytes: usize,
     retired: BTreeSet<(ClientId, String)>,
+    /// Checkpoint capabilities retain catalog authority and its byte budget.
+    pins: BTreeMap<(ClientId, String), u32>,
 }
 #[derive(Clone, Default)]
 pub struct PublishedImages(Arc<Mutex<State>>);
@@ -74,7 +79,7 @@ impl PublishedImages {
                 .bytes
                 .checked_add(state.reserved_bytes)
                 .and_then(|n| n.checked_add(pixels.len()))
-                .is_none_or(|n| n > 256 * 1024 * 1024)
+                .is_none_or(|n| n > MAX_PUBLISHED_BYTES)
         {
             return Err(Error::Limit("uploaded resource leases"));
         }
@@ -122,7 +127,7 @@ impl PublishedImages {
             || s.bytes
                 .checked_add(s.reserved_bytes)
                 .and_then(|n| n.checked_add(bytes))
-                .is_none_or(|v| v > 256 * 1024 * 1024)
+                .is_none_or(|v| v > MAX_PUBLISHED_BYTES)
         {
             return Err(Error::Limit("published image resources"));
         }
@@ -169,7 +174,7 @@ impl PublishedImages {
         // is already satisfied; foreign or unknown keys still fail.
         if s.retired.contains(&key){return Ok(())}
         if !s.entries.contains_key(&key){return Err(Error::NotFound)}
-        if retained {
+        if retained || s.pins.contains_key(&key) {
             s.retired.insert(key);
             return Ok(());
         }
@@ -188,7 +193,7 @@ impl PublishedImages {
         let unused: Vec<_> = state
             .retired
             .iter()
-            .filter(|key| !referenced.contains(*key))
+            .filter(|key| !referenced.contains(*key) && !state.pins.contains_key(*key))
             .cloned()
             .collect();
         for key in unused {
@@ -264,7 +269,7 @@ impl PreparedImages {
                 .bytes
                 .checked_add(state.reserved_bytes)
                 .and_then(|n| n.checked_add(bytes))
-                .is_none_or(|n| n > 256 * 1024 * 1024)
+                .is_none_or(|n| n > MAX_PUBLISHED_BYTES)
         {
             return Err(Error::Limit("published image resources"));
         }
@@ -293,6 +298,12 @@ impl PreparedImages {
     }
     pub(crate) fn contains(&self, path: &str) -> bool {
         self.entries.iter().any(|(name, _)| name == path)
+    }
+    /// Read only this preparation's reserved immutable publications. They are
+    /// not yet present in the live catalog and grant no other VM's old leases.
+    pub(crate) fn resource(&self, path: &str) -> Option<Arc<dyn ImageResource>> {
+        self.entries.iter().find(|(name, _)| name == path)
+            .and_then(|(_, surface)| surface._resource.clone())
     }
     pub(crate) fn release(&mut self, path: &str) -> Result<()> {
         let at = self
@@ -342,7 +353,7 @@ impl PreparedImages {
             state.entries.insert((self.client, name), surface);
         }
         for key in unique {
-            if retain_all || retained.contains(&key) {
+            if retain_all || retained.contains(&key) || state.pins.contains_key(&key) {
                 state.retired.insert(key);
             } else if let Some(surface) = state.entries.remove(&key) {
                 state.bytes -= surface.rgba.len();
@@ -383,5 +394,33 @@ impl ImageResource for UploadedLease {
     }
     fn pixel_at(&self, point: [u32; 2]) -> Result<Option<[u8; 4]>> {
         crysirror_core::image_processing::rgba_pixel_at(self.size, &self.pixels, point)
+    }
+}
+
+/// Keeps original logical paths alive without releasing their shared budget.
+/// Dropping a snapshot removes only its pins; scene/other snapshot leases stay.
+pub(crate) struct CheckpointPins {
+    catalog: PublishedImages,
+    keys: Vec<(ClientId,String)>,
+}
+impl Drop for CheckpointPins {
+    fn drop(&mut self) {
+        if let Ok(mut state)=self.catalog.0.lock() {
+            for key in &self.keys {
+                if let Some(count)=state.pins.get_mut(key){*count-=1;if *count==0{state.pins.remove(key);}}
+            }
+        }
+    }
+}
+impl PublishedImages {
+    pub(crate) fn pin_checkpoint(&self,client:ClientId,paths:&BTreeSet<String>)->Result<CheckpointPins> {
+        let mut state=self.0.lock().map_err(|_|Error::Invalid("image checkpoint owner lock"))?;
+        let keys=paths.iter().map(|path|(client,path.clone())).collect::<Vec<_>>();
+        for key in &keys {
+            if !state.entries.contains_key(key){return Err(Error::NotFound)}
+            if state.pins.get(key)==Some(&u32::MAX){return Err(Error::Limit("image checkpoint leases"))}
+        }
+        for key in &keys{*state.pins.entry(key.clone()).or_default()+=1;}
+        Ok(CheckpointPins{catalog:self.clone(),keys})
     }
 }

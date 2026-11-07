@@ -13,18 +13,139 @@ pub const MAX_EFFECT_PIXELS: u64 = 4_194_304;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ImageEffect {
+    ///One checked lookup for the stored coverage byte; RGB remains unchanged.
+    AlphaLookup {
+        table: Vec<u8>,
+    },
+    /// Binary alpha from a reference channel byte. Spec: reference[x,y],
+    /// channel0..3, equal0..255, different0..255. RGB remains unchanged.
+    CoverageReferenceKey {
+        spec: crate::coverage_key::CoverageReferenceKey,
+    },
+    /// Ordered integer rectangle/scanline mapping with a defined clear plane.
+    RectMap {
+        spec: crate::rect_map::RectMap,
+    },
+    /// Byte-accurate two-texture channel composition in a raster context.
+    DualTexture {
+        spec: crate::dual_texture::DualTextureByte128,
+    },
+    AffineBlend {
+        spec: crate::affine_blend::AffineBlendByte128,
+    },
+    FixedAffineNearest {
+        spec: crate::fixed_affine::FixedAffineNearest,
+    },
+    ScanlineAffineNearest {
+        spec: crate::scanline_affine::ScanlineAffineNearest,
+    },
+    TileReveal {
+        spec: crate::tile_reveal::TileReveal,
+    },
+    RadialAngleLookup {
+        spec: crate::radial_angle::RadialAngleLookup,
+    },
+    GradientOverlay {
+        spec: crate::gradient_overlay::GradientOverlayByte,
+    },
+    LinearGradient {
+        spec: crate::linear_gradient::LinearGradientByte,
+    },
+    SequentialBoxBlur {
+        spec: crate::sequential_box_blur::SequentialBoxBlur,
+    },
+    MaskedBlur {
+        spec: crate::masked_blur::MaskedBlur,
+    },
+    BoxBlurClamped {
+        spec: crate::box_blur_clamped::BoxBlurClamped,
+    },
+    /// Repeat-edge average over an explicit half-open axis window.
+    BoxBlurSpan {
+        spec: crate::box_blur_span::BoxBlurSpan,
+    },
+    /// Full-cell sample replication. Spec: region[x,y,w,h], cell[w,h], and
+    /// offsets[[dx,dy],...]. Partial cells and the outside region remain intact.
+    CyclicCellSample {
+        spec: crate::cyclic_cell_sample::CyclicCellSample,
+    },
+    NearestCellSample {
+        spec: crate::nearest_cell_sample::NearestCellSample,
+    },
+    WaveDisplace {
+        spec: crate::wave_displace::WaveDisplaceByte128,
+    },
+    ResizeByte {
+        spec: crate::resize_byte::ResizeByte128,
+    },
+    ShapeMask {
+        spec: crate::shape_mask::ShapeMask,
+    },
+    RectResample {
+        spec: crate::rect_resample::RectResample1024,
+    },
+    /// Stored-byte8.8 rectangle sampling without a half-texel offset.
+    RectResampleByte256 {
+        spec: crate::resample_byte256::RectResampleByte256,
+    },
+    CosineLens {
+        spec: crate::cosine_lens::CosineLensByte128,
+    },
+    IntegerColorMatrix {
+        spec: crate::integer_color::ColorMatrixFixed,
+    },
+    IntegerColorModulation {
+        spec: crate::integer_color::IntegerColorModulation,
+    },
+    /// RGBA colour table indexed by stored alpha or explicit integer luminance.
+    LumaLookup {
+        spec: crate::luma_lookup::LumaLookup,
+    },
+    /// Source stretched to `size`, tiled and redrawn under a centred affine.
+    TiledTransform {
+        spec: crate::tiled_transform::TiledTransform,
+    },
+    /// One channel's observed range mapped onto 0..=255.
+    ChannelRangeStretch {
+        spec: crate::tiled_transform::ChannelRangeStretch,
+    },
     /// Truncated straight RGBA means, one uniform colour per rectangular cell.
-    BlockAverage { cell:[u16;2] },
+    BlockAverage {
+        cell: [u16; 2],
+    },
+    /// Horizontal mean over a row-truncated window (optionally one past).
+    TruncatedRowBlur {
+        spec: crate::truncated_row_blur::TruncatedRowBlur,
+    },
+    /// Random-length horizontal runs filled from the source run.
+    RandomRuns {
+        spec: crate::random_runs::RandomRuns,
+    },
+    /// Checked box-window reduction with explicit integer channel arithmetic.
+    BoxReduce {
+        spec: crate::box_reduce::BoxReduce,
+    },
     /// Signed left/top/right/bottom expansion or crop, preserving stored bytes.
-    CanvasMargins { margins:[i32;4], fill:[u8;4] },
+    CanvasMargins {
+        margins: [i32; 4],
+        fill: [u8; 4],
+    },
     /// Modulate stored alpha using an immutable original-alpha plane.
-    AlphaMaskPlane {spec:crate::alpha_mask::AlphaMaskPlane},
+    AlphaMaskPlane {
+        spec: crate::alpha_mask::AlphaMaskPlane,
+    },
     /// Ordered atlas alpha replacement, retaining stored destination RGB.
-    AlphaStamps {spec:crate::alpha_stamps::AlphaStamps},
+    AlphaStamps {
+        spec: crate::alpha_stamps::AlphaStamps,
+    },
     /// Saturating alpha neighborhoods with explicit sample offsets and edge colour.
-    CoverageSum { spec:crate::coverage_sum::CoverageSum },
+    CoverageSum {
+        spec: crate::coverage_sum::CoverageSum,
+    },
     /// Fixed-point alpha-aware triangular kernel; expands only explicit padding.
-    TriangularBlur { spec: crate::triangular_blur::TriangularBlur },
+    TriangularBlur {
+        spec: crate::triangular_blur::TriangularBlur,
+    },
     RowDeform {
         spec: crate::pyramid::RowDeform,
     },
@@ -64,6 +185,10 @@ pub enum ImageEffect {
         spec: crate::sprite_alpha::SpriteAlpha,
     },
     /// Two-input whole-pixel row copy; preserves uncovered destination pixels.
+    /// Midpoint-circle discs copied from the raster source (second input).
+    DiscCopies {
+        spec: crate::disc_copy::DiscCopies,
+    },
     SineRowCopy {
         spec: crate::row_copy::SineRowCopy,
     },
@@ -171,10 +296,47 @@ pub enum ImageEffect {
 impl ImageEffect {
     pub fn validate(&self) -> Result<()> {
         match self {
-            Self::BlockAverage{cell}=>ensure!(cell.iter().all(|v|(1..=1024).contains(v)),"block average cell must be1..1024"),
-            Self::CanvasMargins{margins,..}=>ensure!(margins.iter().all(|v|v.unsigned_abs()<=8192),"canvas margin bounds"),
-            Self::AlphaMaskPlane{spec}=>spec.validate()?,
-            Self::AlphaStamps{spec}=>spec.validate()?,
+            Self::AlphaLookup { table } => ensure!(table.len() == 256, "alpha lookup table length"),
+            Self::CoverageReferenceKey { spec } => spec.validate()?,
+            Self::RectMap { spec } => spec.validate()?,
+            Self::DualTexture { spec } => spec.validate()?,
+            Self::AffineBlend { spec } => spec.validate()?,
+            Self::FixedAffineNearest { spec } => spec.validate()?,
+            Self::ScanlineAffineNearest { spec } => spec.validate()?,
+            Self::TileReveal { spec } => spec.validate()?,
+            Self::RadialAngleLookup { spec } => spec.validate()?,
+            Self::GradientOverlay { spec } => spec.validate()?,
+            Self::LinearGradient { spec } => spec.validate()?,
+            Self::SequentialBoxBlur { spec } => spec.validate()?,
+            Self::MaskedBlur { spec } => spec.validate()?,
+            Self::BoxBlurClamped { spec } => spec.validate()?,
+            Self::BoxBlurSpan { spec } => spec.validate()?,
+            Self::CyclicCellSample { spec } => spec.validate()?,
+            Self::NearestCellSample { spec } => spec.validate()?,
+            Self::WaveDisplace { spec } => spec.validate()?,
+            Self::ResizeByte { spec } => spec.validate()?,
+            Self::ShapeMask { spec } => spec.validate()?,
+            Self::RectResample { spec } => spec.validate()?,
+            Self::RectResampleByte256 { spec } => spec.validate()?,
+            Self::CosineLens { spec } => spec.validate()?,
+            Self::IntegerColorMatrix { spec } => spec.validate()?,
+            Self::IntegerColorModulation { spec } => spec.validate()?,
+            Self::LumaLookup { spec } => spec.validate()?,
+            Self::BoxReduce { spec } => spec.validate()?,
+            Self::RandomRuns { spec } => spec.validate()?,
+            Self::TruncatedRowBlur { spec } => spec.validate()?,
+            Self::TiledTransform { spec } => spec.validate()?,
+            Self::ChannelRangeStretch { spec } => spec.validate()?,
+            Self::BlockAverage { cell } => ensure!(
+                cell.iter().all(|v| (1..=1024).contains(v)),
+                "block average cell must be1..1024"
+            ),
+            Self::CanvasMargins { margins, .. } => ensure!(
+                margins.iter().all(|v| v.unsigned_abs() <= 8192),
+                "canvas margin bounds"
+            ),
+            Self::AlphaMaskPlane { spec } => spec.validate()?,
+            Self::AlphaStamps { spec } => spec.validate()?,
             Self::RowDeform { spec } => spec.validate()?,
             Self::IntegerRaster { spec } => spec.validate()?,
             Self::StoredMaskBlend { spec } => spec.validate()?,
@@ -185,6 +347,7 @@ impl ImageEffect {
             Self::StripeReveal { spec } => spec.validate()?,
             Self::SpriteAlpha { spec } => spec.validate()?,
             Self::SineRowCopy { .. } => (),
+            Self::DiscCopies { spec } => spec.validate()?,
             Self::AlphaClipRect { spec } => spec.validate()?,
             Self::MaskedPairBlend { spec } => spec.validate()?,
             Self::Transition { spec } => spec.validate()?,
@@ -281,26 +444,118 @@ impl ImageSurface {
             "image effect pixel budget"
         );
         check()?;
+        if let ImageEffect::GradientOverlay { spec } = effect {
+            return spec.apply(self, check);
+        }
+        if let ImageEffect::LinearGradient { spec } = effect {
+            return spec.apply(self, check);
+        }
+        if let ImageEffect::SequentialBoxBlur { spec } = effect {
+            return spec.apply(self, check);
+        }
+        if let ImageEffect::MaskedBlur { spec } = effect {
+            return spec.apply(self, check);
+        }
+        if let ImageEffect::BoxBlurClamped { spec } = effect {
+            return spec.apply(self, check);
+        }
+        if let ImageEffect::BoxBlurSpan { spec } = effect {
+            return spec.apply(self, check);
+        }
+        if let ImageEffect::CyclicCellSample { spec } = effect {
+            return spec.apply(self, check);
+        }
+        if let ImageEffect::NearestCellSample { spec } = effect {
+            return spec.apply(self, check);
+        }
+        if let ImageEffect::RadialAngleLookup { spec } = effect {
+            return spec.apply(self, check);
+        }
+        if let ImageEffect::WaveDisplace { spec } = effect {
+            return spec.apply(self, check);
+        }
+        if let ImageEffect::ResizeByte { spec } = effect {
+            return spec.apply(self, check);
+        }
+        if let ImageEffect::RectResampleByte256 { spec } = effect {
+            return spec.apply(self, check);
+        }
         if matches!(
             effect,
-            ImageEffect::AlphaMaskPlane{..}|ImageEffect::AlphaStamps{..}|ImageEffect::AlphaPlanePair { .. }
+            ImageEffect::DualTexture { .. }
+                | ImageEffect::AffineBlend { .. }
+                | ImageEffect::FixedAffineNearest { .. }
+                | ImageEffect::ScanlineAffineNearest { .. }
+                | ImageEffect::TileReveal { .. }
+                | ImageEffect::AlphaMaskPlane { .. }
+                | ImageEffect::AlphaStamps { .. }
+                | ImageEffect::AlphaPlanePair { .. }
                 | ImageEffect::StoredMaskBlend { .. }
                 | ImageEffect::Transition { .. }
                 | ImageEffect::SineRowCopy { .. }
+                | ImageEffect::DiscCopies { .. }
                 | ImageEffect::AlphaClipRect { .. }
                 | ImageEffect::MaskedPairBlend { .. }
                 | ImageEffect::IntegerRaster { .. }
         ) {
             anyhow::bail!("image effect requires its multi-image context")
         }
+        if let ImageEffect::AlphaLookup { table } = effect {
+            ensure!(table.len() == 256, "alpha lookup table length");
+            let mut out = self.clone();
+            for row in out.rgba.chunks_mut(self.width as usize * 4) {
+                check()?;
+                for pixel in row.chunks_exact_mut(4) {
+                    pixel[3] = table[pixel[3] as usize];
+                }
+            }
+            check()?;
+            return Ok(out);
+        }
+        if let ImageEffect::RectMap { spec } = effect {
+            return spec.apply(self, check);
+        }
         if let ImageEffect::RowDeform { spec } = effect {
             return crate::pyramid::row_deform(self, spec, check);
         }
-        if let ImageEffect::BlockAverage {cell} = effect {
-            return self.block_average(*cell,check);
+        if let ImageEffect::ShapeMask { spec } = effect {
+            return spec.apply(self, check);
         }
-        if let ImageEffect::CanvasMargins {margins,fill} = effect {
-            return self.canvas_margins(*margins,*fill,check);
+        if let ImageEffect::RectResample { spec } = effect {
+            return spec.apply(self, check);
+        }
+        if let ImageEffect::CosineLens { spec } = effect {
+            return spec.apply(self, check);
+        }
+        if let ImageEffect::IntegerColorMatrix { spec } = effect {
+            return spec.apply(self, check);
+        }
+        if let ImageEffect::IntegerColorModulation { spec } = effect {
+            return spec.apply(self, check);
+        }
+        if let ImageEffect::LumaLookup { spec } = effect {
+            return spec.apply(self, check);
+        }
+        if let ImageEffect::BoxReduce { spec } = effect {
+            return spec.apply(self, check);
+        }
+        if let ImageEffect::RandomRuns { spec } = effect {
+            return spec.apply(self, check);
+        }
+        if let ImageEffect::TruncatedRowBlur { spec } = effect {
+            return spec.apply(self, check);
+        }
+        if let ImageEffect::TiledTransform { spec } = effect {
+            return spec.apply(self, check);
+        }
+        if let ImageEffect::ChannelRangeStretch { spec } = effect {
+            return spec.apply(self, check);
+        }
+        if let ImageEffect::BlockAverage { cell } = effect {
+            return self.block_average(*cell, check);
+        }
+        if let ImageEffect::CanvasMargins { margins, fill } = effect {
+            return self.canvas_margins(*margins, *fill, check);
         }
         if let ImageEffect::RgbLookup { spec } = effect {
             return spec.apply(self, check);
@@ -313,6 +568,9 @@ impl ImageSurface {
         }
         if let ImageEffect::StripeReveal { spec } = effect {
             return self.stripe_reveal(spec, check);
+        }
+        if let ImageEffect::CoverageReferenceKey { spec } = effect {
+            return self.coverage_reference_key(spec, check);
         }
         if let ImageEffect::SpriteAlpha { spec } = effect {
             return self.sprite_alpha(spec, check);
@@ -330,7 +588,7 @@ impl ImageSurface {
             return self.rotated(*degrees, check);
         }
         if let ImageEffect::CoverageSum { spec } = effect {
-            return spec.apply(self,check);
+            return spec.apply(self, check);
         }
         if let ImageEffect::TriangularBlur { spec } = effect {
             return spec.apply(self, check);
@@ -447,7 +705,8 @@ impl ImageSurface {
                     }
                     ImageEffect::ChannelScale { factors } => {
                         for c in 0..4 {
-                            out.rgba[at + c] = (u32::from(p[c]) * u32::from(factors[c]) / 255) as u8;
+                            out.rgba[at + c] =
+                                (u32::from(p[c]) * u32::from(factors[c]) / 255) as u8;
                         }
                     }
                     ImageEffect::Noise {

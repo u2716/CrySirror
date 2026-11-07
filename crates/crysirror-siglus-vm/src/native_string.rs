@@ -509,7 +509,7 @@ impl PreparedString {
                 *next = next
                     .checked_add(1)
                     .context("native STRING layer identity overflow")?;
-                out.push(LayerSpec { source_crop: None,
+                out.push(LayerSpec { tie_order:None, clock_paused: false, source_crop: None,
                     viewport_clip: None,
                     id,
                     parent,
@@ -519,7 +519,7 @@ impl PreparedString {
                         size: f32::from(glyph.size),
                         color,
                         bold: false,
-                        glyphs: vec![PositionedGlyph { font: None,horizontal_scale: None, font_width: None, cell_width: None,  crop,
+                        glyphs: vec![PositionedGlyph { image: None, style: None, font: None,horizontal_scale: None, font_width: None, cell_width: None,  crop,
                             character: glyph.character,
                             baseline: [
                                 glyph.position[0] as f32 + offset as f32,

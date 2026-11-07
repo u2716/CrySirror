@@ -196,7 +196,7 @@ impl ScenePckDecodeOptions {
             .unwrap_or(StringEncryptionOverride::Xor);
         Ok(Self {
             exe_angou_element: exe,
-            easy_angou_code: None,
+            easy_angou_code: Some(crate::keys::SCENE_KEY.to_vec()),
             string_encryption_override,
         })
     }

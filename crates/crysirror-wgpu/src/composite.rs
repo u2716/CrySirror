@@ -663,7 +663,8 @@ impl Renderer {
         }
         flatten(layers, &mut all);
         for layer in all {
-            match &layer.paint {
+            let paint=match &layer.paint {Paint::CoverageWrite{paint}=>paint.as_ref(),paint=>paint};
+            match paint {
                 Paint::Solid { .. } | Paint::Backdrop { .. } => {}
                 Paint::Image { asset, .. } => {
                     names.insert(asset.as_str());
@@ -683,6 +684,16 @@ impl Renderer {
                 Paint::Mesh { frame, .. } => {
                     for texture in &frame.textures {names.insert(texture.as_str());}
                 }
+                Paint::ProjectedMesh { frame, .. } => {
+                    for part in &frame.parts {
+                        if let Some(texture) = &part.texture { names.insert(texture.as_str()); }
+                    }
+                }
+                Paint::LegacyMesh { spec } => {
+                    for asset in spec.textures.iter().flatten() { names.insert(asset.as_str()); }
+                }
+                Paint::CoverageWrite{..}=>{},
+                Paint::CoverageReset{..}|Paint::GlyphView{..}|Paint::Group { .. } | Paint::OrderedState { .. } => {},
                 Paint::Puppet { .. } => anyhow::bail!("dynamic snapshot dependency"),
             }
             if let Some(filter) = &layer.filter {
@@ -999,6 +1010,8 @@ impl Renderer {
         }
         if !self.textures.contains_key(&key) {
             let probe = crysirror_scene::layer::Primitive {
+                coverage:crysirror_scene::layer::coverage::Operation::None,
+                tie_order:None,
                 depth_order:None,
                 composite: None,
                 owner,

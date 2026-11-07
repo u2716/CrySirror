@@ -30,6 +30,9 @@ static NEXT_OWNER: AtomicU64 = AtomicU64::new(1);
 const MAX_RECEIPTS: usize = 64;
 const MAX_INPUT: usize = 16 * 1024 * 1024;
 const MAX_PENDING_BYTES: usize = 64 * 1024 * 1024;
+#[path = "native_restore/requests.rs"]
+mod requests;
+pub(super) use requests::Requests;
 struct Entry {
     ticket: OriginalRestoreTicket,
     status: OriginalRestoreStatus,
@@ -312,6 +315,11 @@ impl HostServices for ResourceHost<'_> {
     fn release_image_resource(&mut self, c: ClientId, path: &str) -> crysirror_core::Result<()> {
         self.scope(c)?;
         self.images.release(path)
+    }
+    fn published_image_resource(&mut self, c: ClientId, path: &str)
+        -> crysirror_core::Result<Option<Arc<dyn ImageResource>>> {
+        self.scope(c)?;
+        Ok(self.images.resource(path))
     }
     fn begin_pattern(
         &mut self,
@@ -722,9 +730,12 @@ impl Runtime {
             }
             self.restored = restored;
             self.host.engine = engine;
+            self.host.scene_checkpoint_epochs.remove(&client);
+            self.host.text_input.retire_client(client);
             self.host.scene = scene;
             self.sessions[index].vm = plan.vm;
             self.sessions[index].yielded = VmYield::BudgetExhausted;
+            self.host.native_restore_requests.invalidate_except(Some(ticket));
             self.native_restores.committed(ticket);
             self.native_restores.invalidate(epoch);
             Ok(())

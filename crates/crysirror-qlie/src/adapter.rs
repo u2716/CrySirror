@@ -2,18 +2,18 @@
 //! media clocks and audio voices are owned by CrySirror's shared services.
 use crate::{
     expression::Value,
-    machine::Machine,
+    machine::{Machine, ThreadKind},
     program::{Instruction, Program},
 };
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{Context, Result, bail, ensure};
 use crysirror_core::{
+    Error,
     path::{Mount, VfsPath},
     service::{HostServices, InputFrame, UploadedImage},
     state::ClientId,
     vm::{VmAdapter, VmYield},
-    Error,
 };
-use crysirror_runtime::{model::ClientSpec, runtime::VmFactory, AdapterRegistry};
+use crysirror_runtime::{AdapterRegistry, model::ClientSpec, runtime::VmFactory};
 use crysirror_tasks::{Task, TaskPool};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -21,20 +21,47 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
 };
+mod abmp_native;
 mod animated_transition;
 mod animation;
 mod animation_clock;
 mod camera;
+mod clip;
+mod cfg_settings;
 mod capture;
 mod dialogs;
+mod files;
 mod filters;
 mod generator;
+mod glyph_pictures;
+mod image_native;
+mod gesture_guide;
+mod input_device;
+mod keys;
+mod math;
+mod minor_kinds;
+mod misc_native;
 mod message;
+mod native_motion;
+mod native_wait;
 mod objects;
+mod text_statements;
+mod pointer_pick;
 mod render;
 mod replacement;
+mod reset;
 mod resources;
 mod save_metadata;
+mod reg;
+mod save_state;
+mod sdat;
+mod rule_prepare;
+mod snd_native;
+mod sound_filters;
+mod sys_native;
+mod system_data;
+mod theora_native;
+mod thread;
 mod visual;
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -46,6 +73,9 @@ pub struct Config {
     /// Original script parameters, distinct from the desktop host CLI flags.
     #[serde(default)]
     pub parameters: Vec<String>,
+    /// The original executable in the game folder (ParamStr(0)), if found.
+    #[serde(default)]
+    pub executable: Option<String>,
 }
 #[derive(Default)]
 struct EmbeddedMedia {
@@ -56,6 +86,8 @@ struct EmbeddedMedia {
 }
 #[derive(Default)]
 struct Object {
+    thread: ThreadKind,
+    native_position: Option<native_motion::Position>,
     kind: String,
     layer: u32,
     created: bool,
@@ -65,6 +97,7 @@ struct Object {
     properties: BTreeMap<String, Vec<Value>>,
     lines: Vec<String>,
     table: BTreeMap<String, String>,
+    regex_rules: BTreeMap<String, regex::Regex>,
     asset: Option<String>,
     bundle: Option<resources::Bundle>,
     images: Vec<Option<UploadedImage>>,
@@ -89,7 +122,17 @@ struct Object {
     // cancel its decoder before it publishes a late, unwanted voice.
     audio_tickets: BTreeMap<u64, u32>,
     audio_channels: BTreeSet<u32>,
+    wave_channel: Option<u32>,
+    wave_multiplier: Option<f32>,
     hit_bounds: Option<[f32; 4]>,
+    hit_world_space: bool,
+    hit_mask: Option<crysirror_scene::ui::WidgetHitMask>,
+    hit_mask_job: Option<(String, Task<crysirror_scene::ui::WidgetHitMask>)>,
+    hit_mask_key: Option<String>,
+    hit_mask_plane_key: Option<String>,
+    hit_mask_sources: BTreeMap<String, crysirror_scene::ui::WidgetHitMask>,
+    hit_mask_bounds: Option<[f32; 4]>,
+    draw_images: BTreeMap<(usize, usize, usize), render::DrawImage>,
     button_state: (bool, bool, u32),
     ui_registered: bool,
     message: Option<message::Message>,
@@ -97,17 +140,28 @@ struct Object {
     capture_views: BTreeMap<usize, serde_json::Value>,
     colour: Option<[u8; 3]>,
 }
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 struct StopWait {
     label: String,
     deadline: Option<u64>,
 }
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 enum Wait {
     Clock(u64),
     Stop(StopWait),
     FixedClock(u64),
+    /// time,ms[,label]: absolute host deadline of the reader clock target.
+    Time { deadline: u64, label: String },
+    /// sndt,channel,ms[,label].
+    Sound { channel: i32, until: i32, label: String },
+    /// msg: any message of this thread still revealing.
+    Message,
+    /// btn[,ms].
+    Button { deadline: Option<u64> },
+    /// wav,channel.
+    Wave { channel: i32 },
 }
+#[derive(Clone, Serialize, Deserialize)]
 struct FrameEvent {
     depth: usize,
     wait: Option<Wait>,
@@ -117,6 +171,13 @@ struct FrameEvent {
     scope_next: usize,
 }
 pub struct QlieVm {
+    host_thread: ThreadKind,
+    suspended_host: Option<thread::HostContext>,
+    cross_host: Option<thread::HostContext>,
+    system_root: bool,
+    system_input_active: bool,
+    game_pause_ms: Option<u64>,
+    paused_random: Option<animation_clock::RandomTable>,
     client: ClientId,
     config: Config,
     pool: TaskPool,
@@ -128,6 +189,18 @@ pub struct QlieVm {
     next_image: u32,
     load: Option<(String, Task<resources::Loaded>)>,
     image_job: Option<crysirror_core::image_processing::ImageJob>,
+    glyph_sheet: Option<glyph_pictures::SheetJob>,
+    sound_scan: Option<(String, Task<f64>)>,
+    /// Reader clock origins (time), game and system readers.
+    script_clock: [u64; 2],
+    /// msd records of non-running frames, by stack index.
+    frame_waits: BTreeMap<usize, native_wait::Record>,
+    /// Button clicked while a btn wait runs.
+    button_clicked: Option<String>,
+    thread_image: Option<(String, u32, crysirror_core::image_processing::ImageJob)>,
+    file_hash: Option<(String, Task<Option<String>>)>,
+    pack_slots: BTreeSet<u32>,
+    filter_job: Option<filters::Preparation>,
     wait: Option<Wait>,
     input: InputFrame,
     initialized: bool,
@@ -138,7 +211,7 @@ pub struct QlieVm {
     capture_waiting: bool,
     effect_priority: i32,
     effect_clock: bool,
-    rule_fade: Option<(String, f32)>,
+    rule_fade: Option<(String, f32, bool)>,
     animated_fade: Option<u64>,
     audio_ticket: Option<u64>,
     audio_seek: Option<(String, u64)>,
@@ -147,13 +220,14 @@ pub struct QlieVm {
     stop_poll: Option<(usize, StopWait)>,
     media_ids: BTreeSet<u32>,
     file_query: Option<(String, Task<bool>)>,
+    file_operation: Option<files::Pending>,
+    list_io: Option<files::ListIo>,
     save_query: Option<(String, Task<save_metadata::ReadResult>)>,
     skip_until: u64,
     frame_event: Option<FrameEvent>,
     last_frame_event: Option<u64>,
     next_object_collection: u64,
     button_callbacks: std::collections::VecDeque<String>,
-    regex_rules: BTreeMap<String, regex::Regex>,
     last_tick_ms: Option<u64>,
     tick_ms: u64,
     selection: Vec<String>,
@@ -161,9 +235,45 @@ pub struct QlieVm {
     read_lines: BTreeSet<(String, usize)>,
     last_read: bool,
     dialog: Option<dialogs::TextDialog>,
+    choice: Option<dialogs::ChoiceDialog>,
+    file_dialog: Option<dialogs::FilePending>,
+    color_dialog: Option<dialogs::ColorDialog>,
     unavailable: BTreeSet<String>,
     random: Option<animation_clock::RandomTable>,
+    math_random: Option<[crysirror_core::random::Mt19937; 2]>,
     random_seed: Option<Box<dyn crysirror_core::service::SessionSeedQuery>>,
+    /// mdat/tdat memory-save stores (TImoObjectDataStackSave).
+    stacks: BTreeMap<String, save_state::StackStore>,
+    rebuild: Option<save_state::Rebuild>,
+    save_job: Option<save_metadata::SaveJob>,
+    system_data: system_data::State,
+    swipe: crysirror_core::pointer_swipe::SwipeTracker,
+    /// Config.txt pairs for engine settings read before cfg is first used.
+    boot_settings: Option<BTreeMap<String, String>>,
+    keys: keys::NativeKeys,
+    /// 708048 request byte: a system label call after the input pass.
+    system_request: Option<thread::Callback>,
+    halt_requested: bool,
+    /// sys\hdr output limiter [min, max, gain, attack, release].
+    limiter: Option<[i32; 5]>,
+    misc_io: Option<misc_native::MiscPending>,
+    sdat_io: Option<sdat::SdatPending>,
+    clip_io: Option<clip::ClipPending>,
+    registry: reg::Registry,
+    png_pool: BTreeSet<String>,
+    gesture_guide: gesture_guide::GestureGuide,
+    id_counter: u64,
+    /// Process-wide native strings (sys fc, form caption).
+    global_strings: BTreeMap<String, String>,
+    input_device: input_device::InputDevice,
+    /// Anchor object id -> proxy layer carrying only its transform (5D1644).
+    anchor_proxies: BTreeMap<String, u32>,
+    /// Transformed (filtered) sound preparation: ticket and owning object.
+    audio_resource: Option<(u64, String)>,
+    /// Running 6B9010 case-10 mosaic transition (its priority).
+    mosaic: Option<i32>,
+    rule_preparation: rule_prepare::RulePreparation,
+    colour_flash: bool,
 }
 impl QlieVm {
     pub fn new(client: ClientId, config: Config) -> Result<Self> {
@@ -184,6 +294,13 @@ impl QlieVm {
             VfsPath::new(Mount::Asset, value)?;
         }
         Ok(Self {
+            host_thread: ThreadKind::Game,
+            suspended_host: None,
+            cross_host: None,
+            system_root: false,
+            system_input_active: false,
+            game_pause_ms: None,
+            paused_random: None,
             client,
             config,
             pool: TaskPool::new("qlie-resource", 2, 8)?,
@@ -195,6 +312,15 @@ impl QlieVm {
             next_image: 0,
             load: None,
             image_job: None,
+            glyph_sheet: None,
+            sound_scan: None,
+            script_clock: [0; 2],
+            frame_waits: BTreeMap::new(),
+            button_clicked: None,
+            thread_image: None,
+            file_hash: None,
+            pack_slots: BTreeSet::new(),
+            filter_job: None,
             wait: None,
             input: InputFrame::default(),
             initialized: false,
@@ -212,13 +338,14 @@ impl QlieVm {
             stop_poll: None,
             media_ids: BTreeSet::new(),
             file_query: None,
+            file_operation: None,
+            list_io: None,
             save_query: None,
             skip_until: 0,
             frame_event: None,
             last_frame_event: None,
             next_object_collection: 0,
             button_callbacks: std::collections::VecDeque::new(),
-            regex_rules: BTreeMap::new(),
             last_tick_ms: None,
             tick_ms: 0,
             selection: vec![],
@@ -226,9 +353,37 @@ impl QlieVm {
             read_lines: BTreeSet::new(),
             last_read: false,
             dialog: None,
+            choice: None,
+            file_dialog: None,
+            color_dialog: None,
             unavailable: BTreeSet::new(),
             random: None,
+            math_random: None,
             random_seed: None,
+            stacks: BTreeMap::new(),
+            rebuild: None,
+            save_job: None,
+            system_data: Default::default(),
+            swipe: Default::default(),
+            boot_settings: None,
+            keys: Default::default(),
+            system_request: None,
+            halt_requested: false,
+            limiter: None,
+            misc_io: None,
+            sdat_io: None,
+            clip_io: None,
+            registry: Default::default(),
+            png_pool: BTreeSet::new(),
+            gesture_guide: Default::default(),
+            id_counter: 0,
+            global_strings: BTreeMap::new(),
+            input_device: Default::default(),
+            anchor_proxies: BTreeMap::new(),
+            audio_resource: None,
+            mosaic: None,
+            rule_preparation: Default::default(),
+            colour_flash: false,
         })
     }
     fn submit(&mut self, h: &mut dyn HostServices, batch: serde_json::Value) -> Result<()> {
@@ -237,19 +392,9 @@ impl QlieVm {
         Ok(())
     }
     fn resolve(&self, m: &Machine, name: &str) -> Result<String> {
-        let directory = m.frame.path.rsplit_once('/').map(|v| v.0).unwrap_or("");
-        for path in [
-            if directory.is_empty() {
-                name.to_owned()
-            } else {
-                format!("{directory}/{name}")
-            },
-            name.to_owned(),
-        ] {
-            if let Ok(logical) = crate::program::canonical(&path) {
-                if let Some(actual) = self.config.assets.get(&logical) {
-                    return Ok(actual.clone());
-                }
+        for logical in self.resource_candidates(m, name)? {
+            if let Some(actual) = self.config.assets.get(&logical) {
+                return Ok(actual.clone());
             }
         }
         bail!(
@@ -273,6 +418,9 @@ impl QlieVm {
                         "QLIE random seed ownership"
                     );
                     self.random = Some(animation_clock::RandomTable::new(seed.words[0]));
+                    self.math_random = Some(core::array::from_fn(|_| {
+                        crysirror_core::random::Mt19937::new(seed.words[0])
+                    }));
                     self.random_seed = None;
                 }
                 SessionSeedState::Failed(error) => bail!("QLIE random seed: {error}"),
@@ -293,32 +441,64 @@ impl QlieVm {
             };
             self.machine = Some(Machine::new(prepared.programs, &self.config.script)?);
             self.text = prepared.text;
+            self.pack_slots = prepared.pack_slots;
             self.boot = None;
             return Ok(VmYield::BudgetExhausted);
         }
+        if !self.system_data.loaded {
+            // 6E633C -> 6D5904 loads SystemData before startup.s executes.
+            let mut m = self.machine.take().unwrap();
+            let ready = self.poll_system_data_boot(h, &mut m);
+            self.machine = Some(m);
+            if !ready? {
+                return Ok(VmYield::WaitUntil(h.now_ms() + 1));
+            }
+        }
         if !self.initialized {
-            self.submit(h,json!({"layers":[{"op":"put","layer":{"id":1,"rect":[0,0,self.config.canvas[0],self.config.canvas[1]],"paint":{"kind":"solid","color":[0,0,0,0]}}}]}))?;
+            self.submit(h,json!({"layers":[{"op":"put","layer":{"id":1,"rect":[0,0,self.config.canvas[0],self.config.canvas[1]],"transform":{"z":1000,"canvas_projection":{"plane":1000,"near":50,"far":5000,"near_clamp":true,"affine_uv":true}},"paint":{"kind":"solid","color":[0,0,0,0]}}}]}))?;
+            self.put_thread_ui_root(h, ThreadKind::Game)?;
+            self.script_clock = [h.now_ms(); 2];
             self.initialized = true;
         }
         self.update_visuals(h)?;
         let mut m = self.machine.take().unwrap();
+        // A scheduler quantum can end after a pure control transfer, before
+        // the next syscall has refreshed the host's selected-object cache.
+        self.selection = m.frame.selection.clone();
+        m.scope = self
+            .selection
+            .get(self.scope_next)
+            .or_else(|| self.selection.first())
+            .cloned()
+            .unwrap_or_default();
         let result = (|| {
             if m.executed >= self.next_object_collection && m.object_types.len() > 256 {
                 self.collect_objects(h, &mut m)?;
                 self.next_object_collection = m.executed.saturating_add(16384);
             }
             if self.frame_event.is_none()
+                && self.cross_host.is_none()
                 && self.last_frame_event != Some(h.now_ms())
                 && self.load.is_none()
                 && self.image_job.is_none()
+                && self.glyph_sheet.is_none()
+                && self.sound_scan.is_none()
+                && self.thread_image.is_none()
+                && self.file_hash.is_none()
+                && self.filter_job.is_none()
                 && self.audio_ticket.is_none()
                 && self.audio_seek.is_none()
                 && self.save_query.is_none()
+                && self.file_operation.is_none()
+                && self.list_io.is_none()
+                && self.misc_io.is_none()
+                && self.sdat_io.is_none()
+                && self.clip_io.is_none()
             {
                 let callback = if let Some(id) = self.button_callbacks.pop_front() {
                     if let Some(o) = self.objects.get(&id) {
                         for i in 0..4 {
-                            m.globals.insert(
+                            m.thread_globals_mut().insert(
                                 format!("resultbtnstr[{i}]"),
                                 o.properties
                                     .get("us")
@@ -326,7 +506,7 @@ impl QlieVm {
                                     .cloned()
                                     .unwrap_or(Value::Text(String::new())),
                             );
-                            m.globals.insert(
+                            m.thread_globals_mut().insert(
                                 format!("resultbtnint[{i}]"),
                                 o.properties
                                     .get("ui")
@@ -348,36 +528,46 @@ impl QlieVm {
                                     .map(Value::text)
                                     .unwrap_or_default()
                             });
-                        Some(vec![Value::Text(label), Value::Text(file)])
+                        Some(thread::Callback {
+                            action: strings
+                                .first()
+                                .map(Value::text)
+                                .unwrap_or_default()
+                                .to_ascii_lowercase(),
+                            label,
+                            file,
+                            same_reader: strings
+                                .get(2)
+                                .map(Value::text)
+                                .is_some_and(|v| v.eq_ignore_ascii_case("self")),
+                        })
                     } else {
                         None
                     }
-                } else if let Some(callback) = self.key_callback()? {
+                } else if let Some(callback) = self.system_request.take() {
+                    if callback.action == "engine_reset" {
+                        self.reset_engine(h, &mut m, &callback.label, &callback.file)?;
+                    } else {
+                        self.dispatch_system_request(h, &mut m, callback)?;
+                    }
+                    None
+                } else if let Some(callback) = self.key_callback(&m)? {
+                    Some(callback)
+                } else if let Some(callback) = self.due_timer(&m) {
                     Some(callback)
                 } else {
                     self.objects
-                        .get("sys")
+                        .get(&Self::builtin("sys", m.thread_kind()))
                         .and_then(|o| o.properties.get("eve:onframe"))
-                        .cloned()
+                        .map(|event| thread::Callback {
+                            action: String::new(),
+                            label: event.first().map(Value::text).unwrap_or_default(),
+                            file: event.get(1).map(Value::text).unwrap_or_default(),
+                            same_reader: true,
+                        })
                 };
-                if let Some(callback) =
-                    callback.filter(|v| v.first().is_some_and(|v| !v.text().is_empty()))
-                {
-                    self.last_frame_event = Some(h.now_ms());
-                    let context = FrameEvent {
-                        depth: m.stack.len(),
-                        wait: self.wait.take(),
-                        poll: self.stop_poll.take(),
-                        scope: m.scope.clone(),
-                        selection: self.selection.clone(),
-                        scope_next: self.scope_next,
-                    };
-                    let label = callback[0].text();
-                    let file = callback[1].text();
-                    let resume = m.frame.pc;
-                    m.jump(&label, Some(&file), Some(vec![]), false)?;
-                    m.stack.last_mut().unwrap().pc = resume;
-                    self.frame_event = Some(context);
+                if let Some(callback) = callback.filter(thread::Callback::has_entry) {
+                    self.dispatch_callback(h, &mut m, callback)?;
                 }
             }
             if let Some(yielded) = self.poll_wait(h, &mut m)? {
@@ -386,6 +576,7 @@ impl QlieVm {
             for _ in 0..budget {
                 let Some(ins) = m.current()? else {
                     if m.return_call()? {
+                        self.finish_thread_call(h, &m)?;
                         if let Some(yielded) = self.finish_frame_event(h, &mut m)? {
                             return Ok(yielded);
                         }
@@ -398,6 +589,8 @@ impl QlieVm {
                     m.frame.path, ins.line, m.frame.pc, ins.op, ins.args
                 );
                 if m.control(&ins).with_context(|| context.clone())? {
+                    self.apply_frame_wait(h, &mut m)?;
+                    self.finish_thread_call(h, &m)?;
                     if let Some(yielded) = self.finish_frame_event(h, &mut m)? {
                         return Ok(yielded);
                     }
@@ -427,22 +620,160 @@ impl QlieVm {
                             VmYield::WaitUntil(t.min(h.now_ms() + 1))
                         }
                         Some(Wait::Stop(_)) => VmYield::WaitUntil(h.now_ms() + 1),
-                        _ => VmYield::WaitForInput,
+                        Some(Wait::Button { deadline: Some(t) }) => VmYield::WaitUntil(t.min(h.now_ms() + 1)),
+                        Some(Wait::Time { deadline, .. }) => VmYield::WaitUntil(deadline.min(h.now_ms() + 1)),
+                        _ => VmYield::WaitUntil(h.now_ms() + 1),
                     });
                 }
             }
             Ok(VmYield::BudgetExhausted)
         })();
+        let persisted = self.persist_system_data(h, &m, false);
         self.machine = Some(m);
+        persisted?;
         result
     }
-    fn key_callback(&self) -> Result<Option<Vec<Value>>> {
-        let Some(keys) = self.objects.get("skey").filter(|o| !o.locked) else {
+    /// 70A3CC applies the engine settings and the input thread's masks to
+    /// the device each frame: gesture mask = MouseGestureEnable & inp\mge,
+    /// swipe buttons = SwipeEnable & inp\swe (the setting alone without an
+    /// input object), SwipeIntense and SwipePermitFrame. TouchDeviceMode only
+    /// selects the Windows pointer source (5C7D48) and has no host analogue.
+    fn advance_swipe(&mut self, now: u64) {
+        use crysirror_core::{pointer_swipe::SwipeButtons, service::buttons as B};
+        let input = self
+            .objects
+            .get(&Self::builtin("inp", self.input_thread()))
+            .map(|o| (o.properties.get("swe").cloned().unwrap_or_default(), o.properties.get("mge").cloned()));
+        let gesture_setting = self.engine_setting("mge");
+        let swipe_setting = self.engine_setting("swe");
+        let (buttons, inertia, gesture) = match &input {
+            Some((swe, mge)) => {
+                let int = |i: usize, default: i32| {
+                    swe.get(i).and_then(|v| v.integer().ok()).unwrap_or(default)
+                };
+                let mge = mge
+                    .as_ref()
+                    .and_then(|v| v.first())
+                    .and_then(|v| v.integer().ok())
+                    .unwrap_or(0);
+                (swipe_setting & int(0, 0), int(1, 1) > 0, gesture_setting & mge)
+            }
+            None => (swipe_setting, false, gesture_setting),
+        };
+        self.swipe.config.buttons = (7 & buttons) as u8;
+        self.swipe.config.inertia = inertia;
+        self.swipe.config.intensity = self.engine_setting("swi");
+        self.swipe.config.permit_frames = self.engine_setting("swp");
+        let down = self.input.buttons_down;
+        let held = u8::from(down & B::MOUSE_LEFT != 0)
+            | (u8::from(down & B::MOUSE_RIGHT != 0) << 1)
+            | (u8::from(down & B::MOUSE_MIDDLE != 0) << 2);
+        // 5C7798: a modifier held with a plain button is a different code.
+        let held = if down & (B::SHIFT | B::CTRL | B::ALT) != 0 { 0 } else { held };
+        self.swipe.step(
+            [self.input.pointer_x, self.input.pointer_y],
+            SwipeButtons(held),
+            self.tick_ms.min(u64::from(u32::MAX)) as u32,
+        );
+        self.advance_keys(now, (7 & gesture) as u8);
+    }
+    /// 6AA598: an enabled timer whose group intersects its reader's System
+    /// input mask accumulates elapsed time; each due interval calls its label.
+    fn advance_timers(&mut self) {
+        let delta = self.tick_ms.min(i32::MAX as u64) as i32;
+        let masks: [i32; 2] = [ThreadKind::Game, ThreadKind::System].map(|thread| {
+            self.objects
+                .get(&Self::builtin("sys", thread))
+                .and_then(|s| s.properties.get("in"))
+                .and_then(|v| v.first())
+                .and_then(|v| v.integer().ok())
+                .unwrap_or(0xFFFFFFF)
+        });
+        let paused = self.game_pause_ms.is_some() && self.system_input_active;
+        for o in self.objects.values_mut().filter(|o| o.kind == "timer") {
+            let get = |o: &Object, key: &str, default: i32| {
+                o.properties
+                    .get(key)
+                    .and_then(|v| v.first())
+                    .and_then(|v| v.integer().ok())
+                    .unwrap_or(default)
+            };
+            let group = get(o, "timer/in", 255);
+            let active = o.properties.contains_key("timer/enabled")
+                && group & masks[usize::from(o.thread == ThreadKind::System)] != 0
+                && !(paused && o.thread == ThreadKind::Game);
+            if !active {
+                o.properties.remove("timer/acc");
+                continue;
+            }
+            let acc = get(o, "timer/acc", 0).saturating_add(delta);
+            o.properties.insert("timer/acc".into(), vec![Value::Int(acc)]);
+        }
+    }
+    fn due_timer(&mut self, m: &Machine) -> Option<thread::Callback> {
+        let thread = m.thread_kind();
+        let (id, label, file) = self.objects.iter().find_map(|(id, o)| {
+            if o.kind != "timer" || o.thread != thread {
+                return None;
+            }
+            let get = |key: &str| {
+                o.properties
+                    .get(key)
+                    .and_then(|v| v.first())
+                    .and_then(|v| v.integer().ok())
+            };
+            let interval = get("timer/interval").unwrap_or(0);
+            let acc = get("timer/acc")?;
+            (acc >= interval).then(|| {
+                let text = |key: &str| {
+                    o.properties
+                        .get(key)
+                        .and_then(|v| v.first())
+                        .map(Value::text)
+                        .unwrap_or_default()
+                };
+                (id.clone(), text("timer/label"), text("timer/file"))
+            })
+        })?;
+        let o = self.objects.get_mut(&id).unwrap();
+        let interval = o
+            .properties
+            .get("timer/interval")
+            .and_then(|v| v.first())
+            .and_then(|v| v.integer().ok())
+            .unwrap_or(0);
+        let acc = o
+            .properties
+            .get("timer/acc")
+            .and_then(|v| v.first())
+            .and_then(|v| v.integer().ok())
+            .unwrap_or(0);
+        // One call per dispatch opportunity; the remainder stays pending.
+        let rest = if interval >= 1 { acc - interval } else { 0 };
+        o.properties
+            .insert("timer/acc".into(), vec![Value::Int(rest.min(interval.max(1) * 256))]);
+        // 6AA528 only dispatches an @@ label.
+        if !label.starts_with("@@") {
+            return None;
+        }
+        Some(thread::Callback {
+            action: String::new(),
+            label,
+            file,
+            same_reader: true,
+        })
+    }
+    fn key_callback(&self, m: &Machine) -> Result<Option<thread::Callback>> {
+        let Some(keys) = self
+            .objects
+            .get(&Self::builtin("skey", m.thread_kind()))
+            .filter(|o| !o.locked)
+        else {
             return Ok(None);
         };
         let locks = self
             .objects
-            .get("sys")
+            .get(&Self::builtin("sys", m.thread_kind()))
             .and_then(|o| o.properties.get("lk"))
             .and_then(|v| v.first())
             .map(Value::integer)
@@ -452,9 +783,7 @@ impl QlieVm {
             let Ok(code) = key.parse::<i32>() else {
                 continue;
             };
-            let Some(label) = binding.get(1).map(Value::text).filter(|v| !v.is_empty()) else {
-                continue;
-            };
+            let label = binding.get(1).map(Value::text).unwrap_or_default();
             let action = binding
                 .first()
                 .map(Value::text)
@@ -476,24 +805,21 @@ impl QlieVm {
             if locks & lock != 0 {
                 continue;
             }
-            // Callback registrations are edge-triggered. Held Click/KeyClick
-            // bindings are consumed by native input/wait policy, not reentered
-            // as a fresh script call on every scheduler quantum.
-            if code & 0x10000 == 0 && !matches!(code & 0xffff, 0xf0 | 0xf1) {
-                continue;
-            }
+            // 6CB09C: the first registration whose code is active in its
+            // 5C8074 mode is dispatched. Click/KeyClick/SkipClick bindings
+            // have no script entry; native input/wait policy consumes them.
             if code & 0xffff == 0x120 {
                 continue;
             } // Gestures have a separate enabled-provider check.
-            let mask = objects::native_key(code)?;
-            if self.input.buttons_pressed & mask == 0 {
+            if !self.native_key_active(code)? {
                 continue;
             }
             // skey.a's fourth argument is numeric policy, not a filename.
             // Only the fifth argument selects the callback module. "self"
             // resolves at registration; an empty module keeps native lookup.
             let file = binding.get(3).map(Value::text).unwrap_or_default();
-            let file = if file.eq_ignore_ascii_case("self") {
+            let same_reader = file.eq_ignore_ascii_case("self");
+            let file = if same_reader {
                 keys.properties
                     .get(&format!("source/{code}"))
                     .and_then(|v| v.first())
@@ -502,7 +828,15 @@ impl QlieVm {
             } else {
                 file
             };
-            return Ok(Some(vec![Value::Text(label), Value::Text(file)]));
+            let callback = thread::Callback {
+                action,
+                label,
+                file,
+                same_reader,
+            };
+            if callback.has_entry() {
+                return Ok(Some(callback));
+            }
         }
         Ok(None)
     }
@@ -519,9 +853,20 @@ impl QlieVm {
                     self.wait = Some(Wait::FixedClock(t));
                     return Ok(Some(VmYield::WaitUntil(t.min(h.now_ms() + 1))));
                 }
+                wait @ (Wait::Time { .. }
+                | Wait::Sound { .. }
+                | Wait::Message
+                | Wait::Button { .. }
+                | Wait::Wave { .. }) => {
+                    if let Some(wait) = self.poll_native_wait(h, m, wait, pressed)? {
+                        self.wait = Some(wait);
+                        return Ok(Some(VmYield::WaitUntil(h.now_ms() + 1)));
+                    }
+                }
                 Wait::Stop(stop) => {
                     if stop.deadline.is_some_and(|t| h.now_ms() >= t) {
-                        m.globals.insert("resultstopint".into(), Value::Int(0));
+                        m.thread_globals_mut()
+                            .insert("resultstopint".into(), Value::Int(0));
                         return Ok(None);
                     }
                     self.stop_poll = Some((m.stack.len(), stop.clone()));
@@ -563,8 +908,30 @@ impl QlieVm {
         m: &mut Machine,
         ins: &Instruction,
     ) -> Result<bool> {
+        self.selection = m.frame.selection.clone();
+        m.scope = self
+            .selection
+            .get(self.scope_next)
+            .or_else(|| self.selection.first())
+            .cloned()
+            .unwrap_or_default();
         let a = &ins.args;
+        // 6D648C statements precede object dispatch.
+        if self.wait_statement(h, m, &ins.op, a)? || self.text_statement(m, &ins.op, a)? {
+            return Ok(true);
+        }
         match ins.op.as_str() {
+            "thrd" | "srct" | "tsub" => return self.thread_instruction(h, m, ins),
+            "fsha" => return self.file_hash(h, m, a),
+            "vget" | "vset" => {
+                ensure!(a.len() == 2, "QLIE cross-thread object value ABI");
+                let (destination, source) = if ins.op == "vget" {
+                    (m.value(&m.key(&a[0])?)?, m.game_value(&m.game_key(&a[1])?)?)
+                } else {
+                    (m.game_value(&m.game_key(&a[0])?)?, m.eval(&a[1])?)
+                };
+                self.copy_native_value_object(h, m, &destination.text(), &source.text())?;
+            }
             "scp" => {
                 ensure!(!a.is_empty() && a.len() <= 16, "QLIE object selection ABI");
                 let mut selection = Vec::new();
@@ -578,6 +945,7 @@ impl QlieVm {
                     selection.push(id);
                 }
                 m.scope = selection[0].clone();
+                m.frame.selection = selection.clone();
                 self.selection = selection;
                 self.scope_next = 0;
             }
@@ -596,8 +964,17 @@ impl QlieVm {
                     h,
                     json!({"layers":[{"op":"advance_time","delta_ms":duration}]}),
                 )?;
-                for o in self.objects.values_mut().filter(|o| o.visible) {
-                    o.offset = o.offset.saturating_add(duration);
+                for o in self
+                    .objects
+                    .values_mut()
+                    .filter(|o| o.thread == self.host_thread)
+                {
+                    if o.visible {
+                        o.offset = o.offset.saturating_add(duration);
+                    }
+                    if let Some(position) = &mut o.native_position {
+                        position.advance_clock(duration);
+                    }
                 }
                 self.skip_until = h.now_ms().saturating_add(1);
             }
@@ -620,18 +997,19 @@ impl QlieVm {
                     .map(|v| m.eval(v)?.integer())
                     .transpose()?
                     .unwrap_or(0);
-                m.globals.insert("resultstopint".into(), Value::Int(0));
+                m.thread_globals_mut()
+                    .insert("resultstopint".into(), Value::Int(0));
                 self.wait = Some(Wait::Stop(StopWait {
                     label,
                     deadline: (duration > 0).then(|| h.now_ms().saturating_add(duration as u64)),
                 }));
             }
             "play" => {
-                m.globals.insert("resultstopint".into(), Value::Int(1));
+                m.thread_globals_mut()
+                    .insert("resultstopint".into(), Value::Int(1));
                 self.wait = None;
                 self.stop_poll = None;
             }
-            "dbrk" => bail!("QLIE script debug break"),
             "derr" => bail!(
                 "QLIE script error: {}",
                 a.first()
@@ -639,6 +1017,7 @@ impl QlieVm {
                     .transpose()?
                     .unwrap_or_default()
             ),
+
             "del" => self.delete(h, m, a)?,
             "fexs" => {
                 let name = m
@@ -747,6 +1126,62 @@ impl QlieVm {
                 };
                 m.result(0, Value::Int(i32::try_from(position)?));
             }
+            "lowc" | "upc" => {
+                ensure!(a.len() == 1, "QLIE string case ABI");
+                let text = m.eval(&a[0])?.text();
+                m.result_text(
+                    0,
+                    if ins.op == "lowc" {
+                        text.to_lowercase()
+                    } else {
+                        text.to_uppercase()
+                    },
+                );
+            }
+            "elen" => {
+                ensure!(a.len() == 1, "QLIE scalar length ABI");
+                m.result(
+                    0,
+                    Value::Int(i32::try_from(m.eval(&a[0])?.text().chars().count())?),
+                );
+            }
+            "epos" => {
+                ensure!(a.len() == 2, "QLIE scalar position ABI");
+                let needle = m.eval(&a[0])?.text();
+                let text = m.eval(&a[1])?.text();
+                let position = if needle.is_empty() {
+                    0
+                } else {
+                    text.find(&needle)
+                        .map(|byte| text[..byte].chars().count() + 1)
+                        .unwrap_or(0)
+                };
+                m.result(0, Value::Int(i32::try_from(position)?));
+            }
+            "ecpy" => {
+                ensure!(a.len() == 3, "QLIE scalar substring ABI");
+                let text = m.eval(&a[0])?.text();
+                let start = m.eval(&a[1])?.integer()?.max(1) as usize - 1;
+                let length = m.eval(&a[2])?.integer()?;
+                let length = if length < 1 {
+                    text.len()
+                } else {
+                    length as usize
+                };
+                m.result_text(0, text.chars().skip(start).take(length).collect::<String>());
+            }
+            "lexs" => {
+                ensure!(a.len() == 1, "QLIE label existence ABI");
+                let label = m.call_parameter(&a[0])?.text();
+                m.result(0, Value::Int(i32::from(m.source_label_exists(&label)?)));
+            }
+            "char" => {
+                ensure!(a.len() == 1, "QLIE UTF16 character ABI");
+                let unit = m.eval(&a[0])?.integer()? as u16;
+                let character = char::from_u32(u32::from(unit))
+                    .context("QLIE isolated UTF16 surrogate character")?;
+                m.result_text(0, character.to_string());
+            }
             "trim" => {
                 let text = m.eval(a.first().context("QLIE trim argument")?)?.text();
                 m.result_text(0, text.trim());
@@ -783,7 +1218,7 @@ impl QlieVm {
                             let value = m.eval(&a[i])?;
                             i += 1;
                             use crysirror_text::printf32::{
-                                format_printf32_bytes, Printf32Argument,
+                                Printf32Argument, format_printf32_bytes,
                             };
                             let text = value.text();
                             let argument = if chars[at] == 's' {
@@ -837,7 +1272,7 @@ impl QlieVm {
                         .unwrap_or(0)
                         == 1;
                     let values = crate::program::split_native(&second, &first, strip_space, raw);
-                    for i in 0..64 {
+                    for i in 0..16 {
                         m.result_text(i, "");
                     }
                     if let Some(default) = a.get(4).filter(|s| !s.trim().is_empty()) {
@@ -859,6 +1294,41 @@ impl QlieVm {
                     for (i, s) in values.into_iter().take(16).enumerate() {
                         m.result_text(i, s);
                     }
+                }
+            }
+            // 6D648C: dthm and ddlg are explicit release-build no-ops.
+            "dthm" | "ddlg" => {}
+            // 6D648C/68B02C bmat,text,pattern: native reads argument 2 again
+            // as the mode integer, so mode 1 (all matches) is selected only
+            // when the pattern itself evaluates to 1. Mode 0 returns the
+            // first match's groups; a failed match has no groups.
+            "bmat" => {
+                ensure!(a.len() >= 2, "QLIE regex match ABI");
+                let text = m.eval(&a[0])?.text();
+                let pattern_value = m.eval(&a[1])?;
+                let pattern = pattern_value.text();
+                let all = crate::expression::parse_integer(&pattern) == Some(1);
+                let regex = regex::RegexBuilder::new(&pattern)
+                    .size_limit(1024 * 1024)
+                    .build()?;
+                let found: Vec<String> = if all {
+                    regex
+                        .find_iter(&text)
+                        .map(|m| m.as_str().to_owned())
+                        .collect()
+                } else {
+                    regex
+                        .captures(&text)
+                        .map(|c| {
+                            c.iter()
+                                .map(|g| g.map(|g| g.as_str().to_owned()).unwrap_or_default())
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                };
+                m.result(0, Value::Int(i32::try_from(found.len())?));
+                for (i, s) in found.into_iter().take(16).enumerate() {
+                    m.result_text(i, s);
                 }
             }
             "stid" => {
@@ -885,10 +1355,10 @@ impl QlieVm {
                 if self.selection.len() <= 1 {
                     return self.object_method(h, m, ins);
                 }
-                ensure!(
-                    !ins.op.starts_with('?'),
-                    "QLIE multi-object query result packing is not installed"
-                );
+                // Native 6D1B24 dispatches every selected object in order.
+                // Query handlers reset their own result-bank cursor (6EA550),
+                // so the final selected object owns the observable results;
+                // this is not an aggregate result-packing operation.
                 while self.scope_next < self.selection.len() {
                     m.scope = self.selection[self.scope_next].clone();
                     if !self.object_method(h, m, ins)? {
@@ -909,7 +1379,10 @@ impl VmAdapter for QlieVm {
         self.machine.is_none() && self.error.is_none()
     }
     fn presentation_pending(&self) -> bool {
-        self.load.is_some() || self.image_job.is_some()
+        self.load.is_some()
+            || self.image_job.is_some()
+            || self.thread_image.is_some()
+            || self.filter_job.is_some()
     }
     fn engine_id(&self) -> &'static str {
         "qlie"
@@ -927,12 +1400,23 @@ impl VmAdapter for QlieVm {
             return Err(Error::Io(error.clone()));
         }
         self.input = input;
-        if self.last_tick_ms != Some(h.now_ms()) {
+        let new_tick = self.last_tick_ms != Some(h.now_ms());
+        self.filter_input(h.now_ms(), new_tick);
+        if new_tick {
             self.tick_ms = self
                 .last_tick_ms
                 .map(|t| h.now_ms().saturating_sub(t))
                 .unwrap_or(0);
             self.last_tick_ms = Some(h.now_ms());
+            self.advance_timers();
+            self.advance_swipe(h.now_ms());
+            if let Err(e) = self.advance_cursor(h).and_then(|_| self.advance_gesture_guide(h)) {
+                self.error = Some(format!("{e:#}"));
+                return Err(Error::Io(format!("{e:#}")));
+            }
+        }
+        if self.halt_requested {
+            return Ok(VmYield::Halted);
         }
         self.run(h, budget).map_err(|e| {
             self.error = Some(format!("{e:#}"));
@@ -946,7 +1430,16 @@ impl VmAdapter for QlieVm {
         Err(Error::Unsupported("QLIE VM/resource checkpoint"))
     }
     fn diagnostics(&self) -> Vec<u8> {
-        serde_json::to_vec(&json!({"vm":"qlie","module":self.machine.as_ref().map(|m|&m.frame.path),"pc":self.machine.as_ref().map(|m|m.frame.pc),"line":self.machine.as_ref().and_then(|m|m.current().ok().flatten().map(|i|i.line)),"instructions":self.machine.as_ref().map(|m|m.executed),"call_depth":self.machine.as_ref().map(|m|m.stack.len()),"callers":self.machine.as_ref().map(|m|m.stack.iter().map(|f|json!({"module":f.path,"pc":f.pc,"line":m.programs.get(&f.path).and_then(|p|p.code.get(f.pc)).map(|i|i.line)})).collect::<Vec<_>>()),"objects":self.objects.len(),"unavailable_capabilities":self.unavailable,"engine_api_calls":self.api_calls,"interactive_objects":self.objects.iter().filter(|(_,o)|o.ui_registered&&o.visible).map(|(id,o)|json!({"id":id,"layer":o.layer,"asset":o.asset,"variables":self.machine.as_ref().map(|m|m.globals.iter().filter(|(_,v)|v.text()==*id).map(|(k,_)|k.clone()).collect::<Vec<_>>())})).collect::<Vec<_>>(),"error":self.error})).unwrap_or_default()
+        let messages = self.objects.iter().filter(|(_,o)|(o.created&&o.visible)||o.message.is_some())
+            .map(|(id,o)|json!({"id":id,"kind":o.kind,"thread":o.thread.native_name(),"layer":o.layer,
+                "asset":o.asset,"visible":o.visible,"created":o.created,"has_message":o.message.is_some(),
+                "text_layer":o.message.as_ref().map(|m|m.layer),
+                "text_created":o.message.as_ref().map(|m|m.created),
+                "text_parent":o.message.as_ref().and_then(|m|m.bound_parent),
+                "images":o.bundle.as_ref().map(|b|b.images.iter().map(|i|json!({
+                    "slot":i.slot,"name":i.name,"native_name":i.metadata["native_name"]})).collect::<Vec<_>>())}))
+            .collect::<Vec<_>>();
+        serde_json::to_vec(&json!({"vm":"qlie","thread":self.machine.as_ref().map(|m|m.thread_kind().native_name()),"source_thread":self.machine.as_ref().map(|m|m.source_thread_kind().native_name()),"game_paused":self.suspended_host.is_some(),"module":self.machine.as_ref().map(|m|&m.frame.path),"pc":self.machine.as_ref().map(|m|m.frame.pc),"line":self.machine.as_ref().and_then(|m|m.current().ok().flatten().map(|i|i.line)),"instructions":self.machine.as_ref().map(|m|m.executed),"call_depth":self.machine.as_ref().map(|m|m.stack.len()),"callers":self.machine.as_ref().map(|m|m.stack.iter().map(|f|json!({"module":f.path,"pc":f.pc,"line":m.programs.get(&f.path).and_then(|p|p.code.get(f.pc)).map(|i|i.line)})).collect::<Vec<_>>()),"objects":self.objects.len(),"visual_objects":messages,"unavailable_capabilities":self.unavailable,"engine_api_calls":self.api_calls,"interactive_objects":self.objects.iter().filter(|(_,o)|o.ui_registered&&o.visible).map(|(id,o)|json!({"id":id,"layer":o.layer,"asset":o.asset,"variables":self.machine.as_ref().map(|m|m.global_bindings().filter(|(_,v)|v.text()==*id).map(|(k,_)|k.clone()).collect::<Vec<_>>())})).collect::<Vec<_>>(),"error":self.error})).unwrap_or_default()
     }
 }
 struct Factory;

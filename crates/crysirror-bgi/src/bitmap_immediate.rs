@@ -100,6 +100,8 @@ impl BgiVm {
                             transparency: a[6] as u16,
                             control: 0,
                             mask_channel: 0,
+                            threshold_phase: None,
+                            preserve_alpha: false,
                         }),
                     ))
                 } else {

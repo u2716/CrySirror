@@ -6,6 +6,7 @@ pub mod ai;
 pub mod animation;
 pub mod animgraph;
 pub mod canvas;
+pub mod checkpoint;
 pub mod components;
 pub mod gameplay;
 pub mod input;
@@ -13,10 +14,12 @@ pub mod input_buffer;
 pub mod input_ledger;
 pub mod input_routes;
 pub mod layer;
+pub mod legacy_mesh;
 pub mod material;
 pub mod model;
 pub mod physics;
 pub mod projection;
+pub mod projected_mesh;
 pub mod reading_wait;
 pub mod sequence;
 pub mod strategy;
@@ -302,3 +305,5 @@ pub mod effect;
 
 /// Engine-clock sprite sheet sequences shared by retained UI/native adapters.
 pub mod sprite;
+
+pub mod canvas_lens;

@@ -55,7 +55,7 @@ fn fixture(scene: SceneBuilder, end: u32) -> (tempfile::TempDir, Runtime) {
     let project = json!({"schema":2,"name":"native audio","content_revision":"1","canvas":[64,64],"assets":"assets","clients":[{"name":"a","adapter":"siglus","game":"authored","asset_prefix":"a","config":{"scene":"Scene.pck","format":"pck","string_codec":"plain","gameexe":"Gameexe.ini","resources":{"native-music":"tone.wav"}}},{"name":"b","adapter":"crysirror-script-v1","game":"other","program":[]}]});
     let path = dir.path().join("project.json");
     std::fs::write(&path, serde_json::to_vec(&project).unwrap()).unwrap();
-    let runtime = Runtime::load(&path, &dir.path().join("state")).unwrap();
+    let runtime = siglus_reference::load(&path, &dir.path().join("state")).unwrap();
     (dir, runtime)
 }
 fn bgm(s: &mut SceneBuilder, operation: i32, args: &[i32], ret: i32) {
@@ -809,7 +809,7 @@ fn se_voice_number_uses_explicit_engine_alias_and_wait_key_keeps_native_zero_ret
     let mut project: Json = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     project["clients"][0]["config"]["resources"]["koe/7"] = json!("tone.wav");
     std::fs::write(&path, serde_json::to_vec(&project).unwrap()).unwrap();
-    let mut r = Runtime::load(&path, &dir.path().join("state")).unwrap();
+    let mut r = siglus_reference::load(&path, &dir.path().join("state")).unwrap();
     tick(&mut r, 0);
     r.tick(
         0,
@@ -947,7 +947,7 @@ fn original_koe_wait_uses_shared_resource_voice_bus_and_source_completion() {
     let mut project: Json = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     project["clients"][0]["config"]["resources"]["koe/12"] = json!("tone.wav");
     std::fs::write(&path, serde_json::to_vec(&project).unwrap()).unwrap();
-    let mut r = Runtime::load(&path, &dir.path().join("state")).unwrap();
+    let mut r = siglus_reference::load(&path, &dir.path().join("state")).unwrap();
     r.set_audio_nonblocking(true);
     let gate = Gate::block(r.assets.io_tasks());
     tick(&mut r, 0);
@@ -1016,7 +1016,7 @@ fn original_koe_jitan_config_prepares_transformed_resource_and_cache_replays_wit
     let mut p: Json = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     p["clients"][0]["config"]["resources"]["koe/12"] = json!("tone.wav");
     std::fs::write(&path, serde_json::to_vec(&p).unwrap()).unwrap();
-    let mut r = Runtime::load(&path, &dir.path().join("state")).unwrap();
+    let mut r = siglus_reference::load(&path, &dir.path().join("state")).unwrap();
     tick(&mut r, 0);
     assert_eq!(native(&r)["koe"]["compression_percent"], json!(200));
     assert_eq!(
@@ -1049,7 +1049,7 @@ fn koe_fixture(s: SceneBuilder) -> (tempfile::TempDir, Runtime) {
         p["clients"][0]["config"]["resources"][format!("koe/{n}")] = json!("tone.wav");
     }
     std::fs::write(&path, serde_json::to_vec(&p).unwrap()).unwrap();
-    let r = Runtime::load(&path, &dir.path().join("state")).unwrap();
+    let r = siglus_reference::load(&path, &dir.path().join("state")).unwrap();
     (dir, r)
 }
 fn config(s: &mut SceneBuilder, op: i32, args: &[i32]) {
@@ -1249,3 +1249,6 @@ fn koe_with_trailing_read_flag_fails_before_audio_instead_of_marking_unread_text
         assert_ne!(native(&r)["int_stack"], json!([42]));
     }
 }
+
+#[path = "support/siglus_reference.rs"]
+mod siglus_reference;

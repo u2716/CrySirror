@@ -41,8 +41,6 @@ ADR 0065 subsequently completed the named migration scope with per-variant
 limitations. Current support is defined by its ledgers, not this first batch.
 The often quoted source count 290 includes the registration helper's template
 definition. The inventory is a migration ledger, never a registration list.
-See `crates/crysirror-formats-arc/UPSTREAM.md` for exact variants, exceptions,
-metadata semantics and verification commands.
 
 ## Validation evidence
 

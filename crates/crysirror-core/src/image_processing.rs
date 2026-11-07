@@ -4,6 +4,23 @@
 //! Device-free immutable image leases and owner-polled processing completion.
 use crate::{Result, state::ClientId};
 use alloc::{boxed::Box, string::String, sync::Arc, vec::Vec};
+/// Device-free coverage quality for retained outline glyphs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag="kind",rename_all="snake_case",deny_unknown_fields)]
+pub enum GlyphCoverageQuality {
+    #[default]
+    Grayscale,
+    Binary { threshold:u8 },
+    Supersample { factor:u8 },
+}
+impl GlyphCoverageQuality {
+    pub fn validate(self)->Result<()> {
+        if let Self::Supersample{factor}=self {
+            if !matches!(factor,2|4|8) {return Err(crate::Error::Invalid("glyph supersampling factor"));}
+        }
+        Ok(())
+    }
+}
 /// Explicit positioned regular-face coverage rendered into an immutable image.
 /// White RGB is retained even outside glyphs; alpha is the rounded /255 union
 /// of coverage in request order. No native font weight, wrapping or bitmap
@@ -282,6 +299,10 @@ pub enum ImageCompositeMath {
     /// Mask0 skips, mask255 copies RGB; partial RGB is floor(s*a/256) +
     /// floor(d*(256-a)/256). Retains destination alpha; opacity must be255.
     MaskSeparate256,
+    /// Mask0 skips, mask255 copies RGB; partial mask uses source weight a+1
+    /// and destination weight255-a, then a single /256 truncation. Destination
+    /// alpha is retained, and composite-layer opacity must be255.
+    MaskIncrement256,
     /// Opaque input over a straight-alpha destination with scalar /256 tables.
     OpaqueOnAlphaScalar256,
     /// Straight-alpha input over straight-alpha destination, scalar /256 tables.
@@ -467,6 +488,13 @@ pub enum ImageInput {
     /// Expected dimensions bound admission; the worker verifies the decoded size.
     Asset {
         path: String,
+        size: [u32; 2],
+        fingerprint: Option<[u8; 32]>,
+    },
+    /// A read through the current client's explicit capability mount, including
+    /// images written to Save. It carries no OS path or authority of its own.
+    ScopedAsset {
+        path: crate::path::VfsPath,
         size: [u32; 2],
         fingerprint: Option<[u8; 32]>,
     },

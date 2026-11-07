@@ -81,8 +81,7 @@ Owner-requested validation uses `--release`, including tools/verify.py.
 Dev/test profiles disable incremental compilation and debug information, after
 target/debug grew to about 313 GB (165 GB incremental, 145 GB dependencies).
 Only rebuildable debug output was cleaned; release output, verification evidence
-and local game/reference assets were preserved. No GitHub workflows or remote
-build automation are introduced.
+and local game/reference assets were preserved.
 
 Edited sources use full license notices instead of SPDX-only headers. Existing
 third-party authors and licenses remain attributed. This is not a blanket

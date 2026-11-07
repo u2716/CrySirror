@@ -64,6 +64,7 @@ pub const COMMAND_API: &[(&str, &str, &str)] = &[
     ("layer", "remove", "Layers.remove"),
     ("layer", "set_transform", "Layers.setTransform"),
     ("layer", "set_visible", "Layers.setVisible"),
+    ("layer", "set_clock_paused", "Layers.setClockPaused"),
     ("layer", "complete_reveal", "Layers.completeReveal"),
     ("layer", "set_opacity", "Layers.setOpacity"),
     ("layer", "set_order", "Layers.setOrder"),
@@ -135,6 +136,7 @@ pub const COMMAND_API: &[(&str, &str, &str)] = &[
     ("ui", "set_enabled", "Ui.setEnabled"),
     ("ui", "set_value", "Ui.setValue"),
     ("ui", "set_hit_mask", "Ui.setHitMask"),
+    ("ui", "set_hit_mask_geometry", "Ui.setHitMaskGeometry"),
     ("ui", "set_text", "Ui.setText"),
     ("ui", "set_title", "Ui.setTitle"),
     ("ui", "set_window_policy", "Ui.setWindowPolicy"),
@@ -217,6 +219,7 @@ fn layers_info() -> &'static ClassInfo {
             m("remove", vec![("id", T::Int)], T::Void, "Remove a layer and its descendants."),
             m("setTransform", vec![("id", T::Int), ("transform", T::Map)], T::Void, "Pivot/anchor/rotation/scale/z and optional column-major affine local_matrix, applied after local scale/YPR before the anchor. Shear is preserved; perspective, singular matrices and matrix billboards fail."),
             m("setVisible", vec![("id", T::Int), ("visible", T::Bool)], T::Void, "Inherited visibility."),
+            m("setClockPaused",vec![("id",T::Int),("paused",T::Bool)],T::Void,"Pause or resume automatic subtree motion, positioned-text reveal and crossfade clocks while retaining elapsed time; explicit external updates remain caller-owned."),
             m("revealStatus", vec![("id", T::Int)], T::Optional(Box::new(T::Map)), "Engine-owned glyph reveal {visible,total,complete}, or null for an absent/non-glyph layer."),
             m("completeReveal", vec![("id", T::Int)], T::Void, "Show the complete positioned text run without a VM-private reveal clock."),
             m("setOpacity", vec![("id", T::Int), ("opacity", T::Int)], T::Void, "Inherited opacity 0..255."),
@@ -347,6 +350,7 @@ impl Class for LayersClass {
                 id: id(args)?,
                 visible: arg(args, 1, "visible")?.as_bool()?,
             },
+            "setClockPaused"=>LayerCommand::SetClockPaused{id:id(args)?,paused:arg(args,1,"paused")?.as_bool()?},
             "completeReveal" => LayerCommand::CompleteReveal { id: id(args)? },
             "setOpacity" => LayerCommand::SetOpacity {
                 id: id(args)?,
@@ -445,6 +449,7 @@ fn ui_info() -> &'static ClassInfo {
             m("setEnabled", vec![("id", T::Int), ("enabled", T::Bool)], T::Void, "Enable/disable input."),
             m("setValue", vec![("id", T::Int), ("value", T::Number)], T::Void, "Toggle/slider value."),
             m("setHitMask", vec![("id", T::Int), ("mask", T::Optional(Box::new(T::Map)))], T::Void, "Bind an immutable WidgetHitMask coverage grid to pointer input, or clear it with null; keyboard focus remains independent."),
+            m("setHitMaskGeometry", vec![("id",T::Int),("geometry",T::Map)],T::Void,"Update retained source-coverage mappings and union rectangles without copying pixels or resetting input capture."),
             m("setCursorVisible",vec![("visible",T::Bool)],T::Void,"Set engine cursor presentation visibility."),
             m("defineCursor",vec![("id",T::Int),("cursor",T::Map)],T::Void,"Define or replace a client cursor {frames:[{width,height,hotspot:[x,y],rgba:[bytes]}], steps:[[frame,ms]]} (edges 1..256, straight RGBA8; one 0 ms step for a still cursor)."),
             m("setCursor",vec![("cursor",T::Map)],T::Void,"Select the pointer shape: {kind:'standard', shape:'default'|'pointer'|'text'|'wait'|...} or {kind:'custom', id} for a cursor this client defined."),
@@ -588,6 +593,9 @@ impl Class for UiClass {
             "setHitMask" => UiCommand::SetHitMask {
                 id: id(args)?,
                 mask: json(arg(args,1,"mask")?,"widget hit mask")?,
+            },
+            "setHitMaskGeometry" => UiCommand::SetHitMaskGeometry {
+                id:id(args)?,geometry:json(arg(args,1,"geometry")?,"widget hit geometry")?,
             },
             "defineCursor" => UiCommand::DefineCursor {
                 id: id(args)?,

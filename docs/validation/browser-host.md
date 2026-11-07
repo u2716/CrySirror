@@ -21,8 +21,8 @@ await so WebAssembly memory growth cannot detach their admitted input.
 Core still declares `#![no_std]` and `#![forbid(unsafe_code)]`. No screen, window
 or microphone from the user's active desktop was inspected. Browser automation
 used a fresh, independent headless browser and original generated test assets.
-No game data or fonts were packaged. No debug build, separate target directory,
-CI workflow or remote build was used.
+No game data or fonts were packaged. No debug build or separate target directory
+was used.
 
 ## Compilation and local tests
 

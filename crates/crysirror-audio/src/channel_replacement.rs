@@ -105,7 +105,11 @@ fn recipe(request: &AudioRequest) -> Result<(u32, &AudioParameters)> {
             parameters,
             ..
         }
-        | AudioRequest::PlayResident {channel,parameters,..}
+        | AudioRequest::PlayResident {
+            channel,
+            parameters,
+            ..
+        }
         | AudioRequest::PlayAsset {
             channel,
             parameters,
@@ -151,7 +155,6 @@ impl ChannelAudio {
         let mut bytes = 0usize;
         let mut inputs = Vec::new();
         for request in requests {
-            ensure!(!matches!(&request,AudioRequest::PlayResident{..}),"resident client replacement requires a prepared PCM recipe");
             let (channel, p) = recipe(&request)?;
             ensure!(channels.insert(channel), "duplicate replacement channel");
             ensure!(
@@ -159,7 +162,8 @@ impl ChannelAudio {
                 "audio replacement cannot depend on old playback"
             );
             let input_bytes = match &request {
-                AudioRequest::Play { source, intro, .. } | AudioRequest::PlayResident {source,intro,..} => {
+                AudioRequest::Play { source, intro, .. }
+                | AudioRequest::PlayResident { source, intro, .. } => {
                     ensure!(
                         source.bytes.len() <= 64 * 1024 * 1024
                             && intro
@@ -179,6 +183,9 @@ impl ChannelAudio {
                 }
                 _ => 0,
             };
+            //Codec headers are opened on the worker. Reserve owner admission
+            //and encoded bytes now; resident output gets its actual bounded
+            //frame-count reservation before worker PCM allocation below.
             bytes = bytes
                 .checked_add(input_bytes + 4 * 1024 * 1024)
                 .context("replacement reservation overflow")?;
@@ -209,8 +216,15 @@ impl ChannelAudio {
             let mut out = Vec::with_capacity(inputs.len());
             for input in inputs {
                 cancel.check()?;
-                let (tail, intro, p) = match input.request {
+                let resident = matches!(&input.request, AudioRequest::PlayResident { .. });
+                let (mut tail, mut intro, p) = match input.request {
                     AudioRequest::Play {
+                        source: encoded,
+                        intro,
+                        parameters: p,
+                        ..
+                    }
+                    | AudioRequest::PlayResident {
                         source: encoded,
                         intro,
                         parameters: p,
@@ -260,8 +274,56 @@ impl ChannelAudio {
                     ),
                     _ => unreachable!(),
                 };
+                if resident {
+                    let extent = |source: &dyn crate::decoder::AudioSource| -> Result<usize> {
+                        let frames = source
+                            .frame_count()
+                            .unwrap_or(crysirror_core::service::MAX_PCM_FRAMES as u64);
+                        ensure!(
+                            frames <= crysirror_core::service::MAX_PCM_FRAMES as u64,
+                            "replacement resident PCM frame limit"
+                        );
+                        usize::try_from(frames)?
+                            .checked_mul(16)
+                            .context("replacement resident PCM reservation")
+                    };
+                    //Account for the temporary Vec-to-Arc publication peak,
+                    //including both actual segments; no maximum-size phantom
+                    //intro/source reservation rejects ordinary short SFX sets.
+                    let output = extent(tail.as_ref())?
+                        .checked_add(
+                            intro
+                                .as_ref()
+                                .map(|source| extent(source.as_ref()))
+                                .transpose()?
+                                .unwrap_or(0),
+                        )
+                        .context("replacement resident PCM sum")?;
+                    let budget = charge.budget.clone();
+                    budget
+                        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+                            used.checked_add(output)
+                                .filter(|used| *used <= 512 * 1024 * 1024)
+                        })
+                        .map_err(|_| {
+                            anyhow::anyhow!(
+                                "audio replacement resident shared memory reservation exceeded"
+                            )
+                        })?;
+                    let resident_charge = Arc::new(Charge {
+                        budget,
+                        bytes: output,
+                    });
+                    tail = crate::resident::decode(tail, &cancel, Some(resident_charge.clone()))?;
+                    intro = intro
+                        .map(|source| {
+                            crate::resident::decode(source, &cancel, Some(resident_charge.clone()))
+                        })
+                        .transpose()?;
+                }
+
                 let mut prepared = prepare(tail, intro, p)?;
-                if realtime {
+                if realtime && !resident {
                     let mut source = BufferedSource::prepare_at_cancellable(
                         prepared.source,
                         workers.clone(),
@@ -774,23 +836,79 @@ mod tests {
         }
     }
     #[test]
-    fn restore_clears_retained_eof_and_parked_owner_sources_and_seek_receipts_but_preserves_peers() {
-        let mut a=ChannelAudio::default();let mut reference=ChannelAudio::default();
-        let mut retained=PcmAudio::new(48000,vec![[0.125;2];48]).unwrap();
-        let lease=Arc::new(());let weak=Arc::downgrade(&lease);retained.retain_storage(lease.clone());drop(lease);
-        a.submit(1,AudioRequest::PlayPcm{channel:1,source:retained,parameters:AudioParameters{retain_on_finish:true,..Default::default()}}).unwrap();
-        a.submit(1,AudioRequest::PlayPcm{channel:2,source:PcmAudio::new(48000,vec![[0.5;2];1024]).unwrap(),parameters:AudioParameters{retain_on_finish:true,transport_active:false,..Default::default()}}).unwrap();
-        for output in [&mut a,&mut reference] {
-            output.submit(2,play(7,0.25)).unwrap();
-            output.submit(2,AudioRequest::PlayPcm{channel:8,source:PcmAudio::new(48000,vec![[0.0625;2];48]).unwrap(),parameters:AudioParameters{retain_on_finish:true,..Default::default()}}).unwrap();
-            output.render(2).unwrap();output.take_output();
+    fn restore_clears_retained_eof_and_parked_owner_sources_and_seek_receipts_but_preserves_peers()
+    {
+        let mut a = ChannelAudio::default();
+        let mut reference = ChannelAudio::default();
+        let mut retained = PcmAudio::new(48000, vec![[0.125; 2]; 48]).unwrap();
+        let lease = Arc::new(());
+        let weak = Arc::downgrade(&lease);
+        retained.retain_storage(lease.clone());
+        drop(lease);
+        a.submit(
+            1,
+            AudioRequest::PlayPcm {
+                channel: 1,
+                source: retained,
+                parameters: AudioParameters {
+                    retain_on_finish: true,
+                    ..Default::default()
+                },
+            },
+        )
+        .unwrap();
+        a.submit(
+            1,
+            AudioRequest::PlayPcm {
+                channel: 2,
+                source: PcmAudio::new(48000, vec![[0.5; 2]; 1024]).unwrap(),
+                parameters: AudioParameters {
+                    retain_on_finish: true,
+                    transport_active: false,
+                    ..Default::default()
+                },
+            },
+        )
+        .unwrap();
+        for output in [&mut a, &mut reference] {
+            output.submit(2, play(7, 0.25)).unwrap();
+            output
+                .submit(
+                    2,
+                    AudioRequest::PlayPcm {
+                        channel: 8,
+                        source: PcmAudio::new(48000, vec![[0.0625; 2]; 48]).unwrap(),
+                        parameters: AudioParameters {
+                            retain_on_finish: true,
+                            ..Default::default()
+                        },
+                    },
+                )
+                .unwrap();
+            output.render(2).unwrap();
+            output.take_output();
         }
-        let eof=a.playback_info(1,1).unwrap().unwrap();assert!(eof.retain_on_finish&&!eof.transport_active&&!eof.source_playing);assert!(weak.upgrade().is_some());
-        let own_seek=a.begin_channel_seek(1,1,0).unwrap();let peer_seek=a.begin_channel_seek(2,8,0).unwrap();
-        let peer=a.voices[&(2,7)];let held_peer=a.voices[&(2,8)];let held_before=a.mixer.playback_info(2,held_peer).unwrap();
-        let ready=prepare(&a,1,vec![]);a.stage_client_replacement(1,ready).unwrap().install();
-        assert!(a.playback_info(1,1).unwrap().is_none()&&a.playback_info(1,2).unwrap().is_none());assert!(a.channel_seek_preparation(1,own_seek).is_err());assert!(a.channel_seek_preparation(2,peer_seek).is_ok());assert_eq!(a.voices[&(2,7)],peer);assert_eq!(a.voices[&(2,8)],held_peer);assert_eq!(a.mixer.playback_info(2,held_peer).unwrap(),held_before);assert!(weak.upgrade().is_none());
-        a.render(2).unwrap();reference.render(2).unwrap();assert_eq!(a.take_output(),reference.take_output());
+        let eof = a.playback_info(1, 1).unwrap().unwrap();
+        assert!(eof.retain_on_finish && !eof.transport_active && !eof.source_playing);
+        assert!(weak.upgrade().is_some());
+        let own_seek = a.begin_channel_seek(1, 1, 0).unwrap();
+        let peer_seek = a.begin_channel_seek(2, 8, 0).unwrap();
+        let peer = a.voices[&(2, 7)];
+        let held_peer = a.voices[&(2, 8)];
+        let held_before = a.mixer.playback_info(2, held_peer).unwrap();
+        let ready = prepare(&a, 1, vec![]);
+        a.stage_client_replacement(1, ready).unwrap().install();
+        assert!(
+            a.playback_info(1, 1).unwrap().is_none() && a.playback_info(1, 2).unwrap().is_none()
+        );
+        assert!(a.channel_seek_preparation(1, own_seek).is_err());
+        assert!(a.channel_seek_preparation(2, peer_seek).is_ok());
+        assert_eq!(a.voices[&(2, 7)], peer);
+        assert_eq!(a.voices[&(2, 8)], held_peer);
+        assert_eq!(a.mixer.playback_info(2, held_peer).unwrap(), held_before);
+        assert!(weak.upgrade().is_none());
+        a.render(2).unwrap();
+        reference.render(2).unwrap();
+        assert_eq!(a.take_output(), reference.take_output());
     }
-
 }

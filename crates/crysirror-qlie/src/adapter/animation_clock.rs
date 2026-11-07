@@ -5,6 +5,7 @@ use super::*;
 /// The native ring (4FCBE0/4FCC3C), shared by all TABMPs in one VM. Its seed
 /// comes from the host's asynchronous session-seed service, never a frame
 /// timestamp. The original Delphi Random(range) uses the high product word.
+#[derive(Clone)]
 pub(super) struct RandomTable {
     words: Box<[u32; 1024]>,
     cursor: usize,
@@ -18,7 +19,7 @@ impl RandomTable {
         }
         Self { words, cursor: 0 }
     }
-    fn sample(&mut self, range: i64) -> i64 {
+    pub(super) fn sample(&mut self, range: i64) -> i64 {
         self.cursor = (self.cursor + 1) & 1023;
         if range == 0 {
             return 0;
@@ -30,16 +31,54 @@ impl RandomTable {
             value
         }
     }
+    pub(super) fn words(&self) -> &[u32; 1024] {
+        &self.words
+    }
+    pub(super) fn noise_words(&self) -> Vec<u16> {
+        self.words.iter().map(|word| *word as u16).collect()
+    }
 }
 
-#[derive(Default)]
+///59F6B0 observes actual source PCM, not the voice's volume setting. An
+///unbound or finished channel has zero level; pending mixer work exposes its
+///last completed observation without blocking the VM owner.
+pub(super) fn wave_level(
+    h: &dyn HostServices,
+    client: ClientId,
+    object: &Object,
+    channels: &BTreeMap<u32, u32>,
+) -> Result<i32> {
+    let Some(channel) = object
+        .wave_channel
+        .and_then(|native| channels.get(&native).copied())
+        .filter(|channel| *channel != 0)
+    else {
+        return Ok(0);
+    };
+    let peak = h
+        .audio_info(client, channel)?
+        .map_or(0., |info| info.source_peak);
+    let multiplier = object.wave_multiplier.unwrap_or(1.);
+    ensure!(
+        multiplier.is_finite() && multiplier >= 0.,
+        "QLIE wave multiplier"
+    );
+    Ok((peak as f64 * f64::from(multiplier) * 256.)
+        .round()
+        .clamp(f64::from(i32::MIN), f64::from(i32::MAX)) as i32)
+}
+
+#[derive(Clone, Default, Serialize, Deserialize)]
 struct TrackClock {
     time: i64,
     delay: i64,
     key: Option<usize>,
     visit: u64,
+    /// Renderer enable byte (+3276) after `lv`; None keeps track+45.
+    #[serde(default)]
+    enabled: Option<bool>,
 }
-#[derive(Default)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 pub(super) struct Clock {
     input: u64,
     motion: usize,
@@ -49,11 +88,74 @@ pub(super) struct Clock {
 pub(super) struct Frame {
     pub motion: usize,
     pub tracks: Vec<(u64, u64)>,
+    pub enabled: Vec<Option<bool>>,
 }
+/// Native TABMP keeps 256 per-track slots (+1228 time, +2252 delay, +3276
+/// enable); a motion has at most 255 tracks.
+pub(super) const TRACK_SLOTS: usize = 256;
 impl Clock {
+    /// Observe an already initialized paused reader without re-evaluating
+    /// control events, audio gates or random branches on an unchanged clock.
+    pub(super) fn frozen_frame(&self, requested_motion: usize) -> Option<Frame> {
+        (!self.tracks.is_empty() && self.requested == requested_motion).then(|| self.frame())
+    }
     fn reset(&mut self, motion: usize, count: usize) {
         self.motion = motion;
-        self.tracks = (0..count).map(|_| TrackClock::default()).collect();
+        self.tracks = (0..count.max(TRACK_SLOTS))
+            .map(|_| TrackClock::default())
+            .collect();
+    }
+    /// Initializes the slots for `motion` the way the next advance would.
+    pub(super) fn prepare(&mut self, bundle: &resources::Bundle, motion: usize) -> Result<()> {
+        if self.tracks.is_empty() || self.requested != motion {
+            let count = bundle
+                .animation
+                .motions
+                .get(motion)
+                .context("QLIE animation clock motion")?
+                .layers
+                .len();
+            self.reset(motion, count);
+            self.requested = motion;
+            self.input = 0;
+        }
+        Ok(())
+    }
+    pub(super) fn current_motion(&self) -> usize {
+        self.motion
+    }
+    /// 59F668: `slot` >= 256 addresses every slot.
+    pub(super) fn set_track_time(&mut self, slot: u32, time: f32) {
+        for (i, t) in self.tracks.iter_mut().enumerate() {
+            if slot as usize >= TRACK_SLOTS || i == slot as usize {
+                t.time = time.trunc() as i64;
+                t.delay = 0;
+            }
+        }
+    }
+    /// 5A150C.
+    pub(super) fn set_track_delay(&mut self, slot: u32, delay: f32) {
+        for (i, t) in self.tracks.iter_mut().enumerate() {
+            if slot as usize >= TRACK_SLOTS || i == slot as usize {
+                t.delay = delay.trunc() as i64;
+            }
+        }
+    }
+    pub(super) fn set_track_enabled(&mut self, slot: Option<usize>, enabled: bool) {
+        for (i, t) in self.tracks.iter_mut().enumerate() {
+            if slot.is_none_or(|s| s == i) {
+                t.enabled = Some(enabled);
+            }
+        }
+    }
+    pub(super) fn track_time(&self, slot: usize) -> i64 {
+        self.tracks.get(slot).map_or(0, |t| t.time)
+    }
+    pub(super) fn track_delay(&self, slot: usize) -> i64 {
+        self.tracks.get(slot).map_or(0, |t| t.delay)
+    }
+    pub(super) fn track_enabled(&self, slot: usize) -> Option<bool> {
+        self.tracks.get(slot).and_then(|t| t.enabled)
     }
     pub(super) fn seek(&mut self, time: u64) {
         self.input = time;
@@ -73,6 +175,7 @@ impl Clock {
         flags: &[bool; 32],
         targets: &BTreeMap<u8, u8>,
         random: &mut RandomTable,
+        audio_level: i32,
     ) -> Result<Frame> {
         if self.tracks.is_empty() || input < self.input || requested_motion != self.requested {
             let motion = bundle
@@ -158,7 +261,18 @@ impl Clock {
                     };
                     self.tracks[index].delay = random.sample(value(53)?.saturating_mul(scale));
                 }
-                4 => bail!("QLIE conditional animation jump requires audio-wave observation"),
+                4 => {
+                    let threshold = value(53)?;
+                    let threshold = if threshold == 0 { 32 } else { threshold };
+                    if threshold < i64::from(audio_level) {
+                        let target = usize::try_from(value(54)?)
+                            .ok()
+                            .filter(|i| *i < track.frames.len())
+                            .unwrap_or(0);
+                        self.tracks[index].time =
+                            i64::from(track.frames[target][0]).saturating_add(over);
+                    }
+                }
                 5 if entered => {
                     let target = usize::try_from(value(53)?)
                         .ok()
@@ -210,6 +324,7 @@ impl Clock {
                 .iter()
                 .map(|clock| (clock.time.max(0) as u64, clock.visit))
                 .collect(),
+            enabled: self.tracks.iter().map(|clock| clock.enabled).collect(),
         }
     }
 }

@@ -207,14 +207,21 @@ impl AudioResources {
         pool: Option<TaskPool>,
         nonblocking: bool,
     ) -> Result<u64> {
-        if let Some(t) = transform {
+        if let Some(t) = &transform {
             t.validate().map_err(|e| anyhow::anyhow!("{e}"))?;
+        }
+        enum Work {
+            Jitan(u16),
+            Filters(Arc<[crysirror_core::service::PcmFilter]>),
         }
         let compression = match transform {
             Some(crysirror_core::service::AudioResourceTransform::SiglusJitan { percent })
                 if percent != 100 =>
             {
-                Some(percent)
+                Some(Work::Jitan(percent))
+            }
+            Some(crysirror_core::service::AudioResourceTransform::PcmFilters(chain)) => {
+                Some(Work::Filters(chain))
             }
             _ => None,
         };
@@ -281,7 +288,7 @@ impl AudioResources {
             let rate = source.sample_rate();
             let mut frame_limit = asset.frame_limit;
             let mut stored_len = len;
-            if let Some(percent) = compression {
+            if let Some(work) = compression {
                 let channels = source
                     .channel_count()
                     .context("audio transform requires an explicit mono/stereo layout")?;
@@ -332,9 +339,16 @@ impl AudioResources {
                     }
                 }
                 drop(source);
-                let converted = crate::voice_compression::siglus_jitan_cancellable(
-                    &pcm, channels, rate, percent, &cancel,
-                )?;
+                let converted = match work {
+                    Work::Jitan(percent) => crate::voice_compression::siglus_jitan_cancellable(
+                        &pcm, channels, rate, percent, &cancel,
+                    )?,
+                    Work::Filters(chain) => crate::voice_compression::Pcm16 {
+                        rate,
+                        channels: 2,
+                        samples: crate::pcm_filters::apply(&chain, channels, &pcm, &cancel)?,
+                    },
+                };
                 drop(pcm);
                 let raw = converted
                     .samples

@@ -91,3 +91,29 @@ pub(crate) fn quad(p: &Primitive, canvas: [u32; 2], color: [u8; 4]) -> [LayerVer
         clip_rect,
     })
 }
+
+pub(crate) fn mesh_vertex(
+    p: &Primitive, canvas: [u32;2], size: [f32;2],
+    v: &crysirror_scene::projected_mesh::Vertex, tint: [f32;4], filter: f32,
+) -> LayerVertex {
+    let u = v.position[0]/size[0];
+    let t = v.position[1]/size[1];
+    let weights = [(1.-u)*(1.-t),u*(1.-t),u*t,(1.-u)*t];
+    let q: [f32;4] = std::array::from_fn(|axis| {
+        (0..4).map(|i| weights[i] * if axis < 3 {
+            p.quad[i][axis]*p.quad[i][3]
+        } else { p.quad[i][3] }).sum()
+    });
+    let w = q[3]*v.position[3];
+    let clip_rect = p.clip.map_or(UNBOUNDED,|c|[
+        c[0]/canvas[0] as f32,c[1]/canvas[1] as f32,
+        (c[0]+c[2])/canvas[0] as f32,(c[1]+c[3])/canvas[1] as f32]);
+    LayerVertex {
+        position: [(2.*q[0]/canvas[0] as f32-q[3])*v.position[3],
+            (q[3]-2.*q[1]/canvas[1] as f32)*v.position[3],
+            q[2]*v.position[3]+v.position[2]*w,w],
+        uv:v.uv,
+        color:std::array::from_fn(|i|v.color[i]*tint[i]),
+        filter, sample_bounds:UNBOUNDED, clip_rect,
+    }
+}

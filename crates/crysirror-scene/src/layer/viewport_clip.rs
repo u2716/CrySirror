@@ -26,7 +26,7 @@ pub(super) fn inverse_to_root(root: u32, owner: &BTreeMap<u32, &LayerSpec>) -> R
     }
     let mut matrix = Mat3::IDENTITY;
     for layer in chain.into_iter().rev() {
-        matrix *= affine(layer);
+        matrix = parent_basis(matrix, layer) * affine(layer);
     }
     let x = matrix.x_axis.truncate();
     let y = matrix.y_axis.truncate();

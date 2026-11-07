@@ -155,7 +155,7 @@ fn invalid_scale_and_ui_scale_do_not_commit_partial_changes() {
     .unwrap();
     assert!(e.ui.apply_batch(ClientId(1), &c).is_err());
     let c = serde_json::from_value::<Vec<LayerCommand>>(
-        json!([{"op":"begin_motion","id":1,"track":{"property":"scale_x","to":-1,"duration":10}}]),
+        json!([{"op":"begin_motion","id":1,"track":{"property":"scale_x","to":5000,"duration":10}}]),
     )
     .unwrap();
     assert!(e.layers.apply_batch(ClientId(1), &c).is_err());

@@ -68,10 +68,14 @@ struct LayerFilter {
     // Selected encoded mask byte (0 RGBA multiply), signed byte offset.
     g: vec4<f32>,
     h: vec4<f32>,
+    // Stored blend: mode+1, destination origin XY, source/output alpha bits.
+    i: vec4<f32>,
 };
 @group(1) @binding(0) var<storage, read> filters: array<LayerFilter>;
 @group(1) @binding(1) var mask_image: texture_2d<f32>;
 @group(1) @binding(2) var curve_image: texture_2d<f32>;
+@group(1) @binding(3) var destination_image: texture_2d<f32>;
+@group(2) @binding(0) var ordered_coverage: texture_2d<f32>;
 
 fn to_gamma(c: vec3<f32>) -> vec3<f32> {
     let x = clamp(c, vec3<f32>(0.0), vec3<f32>(1.0));
@@ -87,9 +91,44 @@ fn encoded_load(pixel:vec2<i32>,size:vec2<i32>)->vec4<f32> {
     let c=textureLoad(image,p,0);
     return vec4<f32>(to_gamma(c.rgb),c.a);
 }
+fn sample_axis(pixel:i32,size:i32,repeat:bool,mirror:bool)->i32 {
+    if mirror {
+        let period=2*size;let p=((pixel%period)+period)%period;
+        return select(p,period-1-p,p>=size);
+    }
+    if repeat {return ((pixel%size)+size)%size;}
+    return clamp(pixel,0,size-1);
+}
+fn encoded_byte_load(pixel:vec2<i32>,size:vec2<i32>,flags:u32)->vec4<i32> {
+    let p=vec2<i32>(sample_axis(pixel.x,size.x,(flags&256u)!=0u,(flags&512u)!=0u),
+        sample_axis(pixel.y,size.y,(flags&1024u)!=0u,(flags&2048u)!=0u));
+    let c=textureLoad(image,p,0);
+    return vec4<i32>(round(vec4<f32>(to_gamma(c.rgb),c.a)*255.0));
+}
 fn sample_color(uv:vec2<f32>,f:LayerFilter)->vec4<f32> {
+    let flags=u32(f.c.w);
+    if (flags&128u)!=0u {
+        let size=vec2<i32>(textureDimensions(image,0));
+        if (flags&64u)!=0u {
+            return vec4<f32>(encoded_byte_load(vec2<i32>(floor(uv*vec2<f32>(size))),size,flags))/255.0;
+        }
+        let p=uv*vec2<f32>(size)-vec2<f32>(0.5);
+        let base=vec2<i32>(floor(p));
+        let fraction=vec2<u32>(floor(fract(p)*65536.0));
+        let weight=(fraction+vec2<u32>(1u))>>vec2<u32>(9u);
+        let a=encoded_byte_load(base,size,flags);
+        let b=encoded_byte_load(base+vec2<i32>(1,0),size,flags);
+        let c=encoded_byte_load(base+vec2<i32>(0,1),size,flags);
+        let d=encoded_byte_load(base+vec2<i32>(1,1),size,flags);
+        let top=a+(((b-a)*i32(weight.x))>>vec4<u32>(7u));
+        let bottom=c+(((d-c)*i32(weight.x))>>vec4<u32>(7u));
+        return vec4<f32>(top+(((bottom-top)*i32(weight.y))>>vec4<u32>(7u)))/255.0;
+    }
     if (u32(f.c.w)&32u)!=0u {
         let size=vec2<i32>(textureDimensions(image,0));
+        if (u32(f.c.w)&64u)!=0u {
+            return encoded_load(vec2<i32>(floor(uv*vec2<f32>(size))),size);
+        }
         let p=uv*vec2<f32>(size)-vec2<f32>(0.5);
         let base=vec2<i32>(floor(p));let weight=fract(p);
         return mix(mix(encoded_load(base,size),encoded_load(base+vec2<i32>(1,0),size),weight.x),
@@ -216,11 +255,39 @@ fn source_mask_alpha(uv: vec2<f32>, channel: u32, f: LayerFilter) -> f32 {
     let d=source_mask_texel(base+vec2<i32>(1,1),channel,f);
     return mix(mix(a,b,phase.x),mix(c,d,phase.x),phase.y);
 }
+//The ordered coverage is sampled in destination pixel space, independently of
+//source UVs and LayerFilter rule masks. Stored byte arithmetic precedes tint.
+fn ordered_source_alpha(alpha:f32,in:Out,f:LayerFilter)->f32 {
+    if !flag(f,4096u) {return alpha;}
+    let dimensions=vec2<i32>(textureDimensions(ordered_coverage,0));
+    let at=clamp(vec2<i32>(floor(in.position.xy)),vec2<i32>(0),dimensions-vec2<i32>(1));
+    let coverage=i32(round(to_gamma(textureLoad(ordered_coverage,at,0).rgb).b*255.0));
+    let source_alpha=i32(round(clamp(alpha,0.0,1.0)*255.0));
+    return f32((source_alpha*((coverage+1)>>1u))>>7u)/255.0;
+}
 fn filtered(in: Out) -> vec4<f32> {
     if outside_clip(in) { discard; }
     let f = filters[in.filter_index];
     let tint = vec4<f32>(to_gamma(in.color.rgb), select(in.color.a,1.0,flag(f,16u)));
-    var color = distorted(bounded_uv(in.uv, in.sample_bounds), f) * tint;
+    var sampled = distorted(bounded_uv(in.uv, in.sample_bounds), f);
+    if (u32(f.i.w)&1u)!=0u { sampled.a=1.0; }
+    sampled.a=ordered_source_alpha(sampled.a,in,f);
+    var color = sampled * tint;
+    if f.i.x>0.5 {
+        let source_bytes=vec4<i32>(round(clamp(sampled,vec4<f32>(0.0),vec4<f32>(1.0))*255.0));
+        let tint_bytes=vec4<i32>(round(clamp(tint,vec4<f32>(0.0),vec4<f32>(1.0))*255.0));
+        let weight=(tint_bytes>>vec4<u32>(1u))+(tint_bytes>>vec4<u32>(7u));
+        color=vec4<f32>((source_bytes*weight)>>vec4<u32>(7u))/255.0;
+        if i32(f.i.x)==15 {
+            //Scalar256 shares the RGB tint contract, but coverage keeps the
+            //255 endpoint and uses an exact /256 product below that endpoint.
+            var alpha=source_bytes.a;
+            if tint_bytes.a<255 { alpha=(alpha*tint_bytes.a)>>8u; }
+            color.a=f32(alpha)/255.0;
+        } else if i32(f.i.x)==16 {
+            color.a=f32(tint_bytes.a)/255.0;
+        }
+    }
     color = vec4<f32>(color.rgb * f.h.yzw, color.a);
     let org_a = color.a;
     let mono_y = dot(color.rgb, f.f.xyz);
@@ -247,12 +314,16 @@ fn filtered(in: Out) -> vec4<f32> {
         } else {
             let channel=u32(f.g.x)-1u;
             if f.g.z>0.5 || f.g.w>0.5 {
-                color.a=source_mask_alpha(bounded_uv(in.uv,in.sample_bounds),channel,f)*tint.a;
-            } else {color.a=mask_alpha(in.uv,channel,f.g.y,f.h.x);}
+                let alpha=ordered_source_alpha(source_mask_alpha(bounded_uv(in.uv,in.sample_bounds),channel,f),in,f);
+                if f.i.x>0.5 {
+                    let tint_byte=i32(round(tint.a*255.0));
+                    color.a=f32((i32(round(alpha*255.0))*((tint_byte>>1u)+(tint_byte>>7u)))>>7u)/255.0;
+                }else{color.a=alpha*tint.a;}
+            } else {color.a=ordered_source_alpha(mask_alpha(in.uv,channel,f.g.y,f.h.x),in,f);}
         }
     }
     if flag(f, 4u) {
-        color.a = final_gray;
+        color.a = ordered_source_alpha(final_gray,in,f);
     }
     if flag(f, 8u) && color.a < 1.0 / 255.0 {
         discard;
@@ -266,4 +337,56 @@ fn filtered(in: Out) -> vec4<f32> {
 @fragment fn fs_filtered_premultiply(in: Out) -> @location(0) vec4<f32> {
     let c = filtered(in);
     return vec4<f32>(c.rgb * c.a, c.a);
+}
+
+// Integer equivalents of crysirror_image::ConstantByteBlend::channel.
+fn stored_channel(d:i32,s:i32,a:i32,mode:i32)->i32 {
+    let full=a+(a>>7u); let half=(a>>1u)+(a>>7u);
+    let positive=(s*full)>>8u;
+    let white=255+(((s-255)*half)>>7u);
+    let middle=128+(((s-128)*half)>>7u);
+    var value=d;
+    switch mode {
+        case 1: {value=d+(((s-d)*((a+1)>>1u))>>7u);}
+        case 2: {value=positive+d-((positive*d)>>8u);}
+        case 3: {value=((white+(white>>7u))*d)>>8u;}
+        case 4: {value=abs(positive-d);}
+        case 5: {value=max(positive,d);}
+        case 6: {value=min(white,d);}
+        case 7: {value=positive+d;}
+        case 8: {value=d-positive;}
+        case 9: {value=d-(((255-s)*full)>>8u);}
+        case 10,11: {
+            let high=select(middle>128,d>128,mode==10);
+            if high {value=max(2*(middle+d-((middle*d)>>8u))-255,0);}
+            else {value=(2*middle*d)>>8u;}
+        }
+        case 12: {value=positive+d-2*((positive*d)>>8u);}
+        case 13: {value=2*middle+d-255;}
+        case 14: {
+            if middle>128 {value=max(2*middle-255,d);}
+            else {value=min(2*middle,d);}
+        }
+        case 15: {value=d+(((s-d)*a)>>8u);}
+        case 16: {
+            if a==255 {value=s;} else {value=d+(((s-d)*a)>>8u);}
+        }
+        default: {}
+    }
+    return clamp(value,0,255);
+}
+@fragment fn fs_stored(in:Out)->@location(0) vec4<f32> {
+    let f=filters[in.filter_index];
+    let source=filtered(in);
+    let size=vec2<i32>(textureDimensions(destination_image,0));
+    let at=clamp(vec2<i32>(floor(in.position.xy))-vec2<i32>(f.i.yz),vec2<i32>(0),size-vec2<i32>(1));
+    let destination=textureLoad(destination_image,at,0);
+    let s=vec3<i32>(round(to_gamma(source.rgb)*255.0));
+    let d=vec3<i32>(round(to_gamma(destination.rgb)*255.0));
+    let alpha=i32(round(source.a*255.0));
+    let mode=i32(f.i.x);
+    let rgb=vec3<f32>(f32(stored_channel(d.r,s.r,alpha,mode)),
+        f32(stored_channel(d.g,s.g,alpha,mode)),f32(stored_channel(d.b,s.b,alpha,mode)))/255.0;
+    let output_alpha=select(destination.a,f32(alpha)/255.0,mode==15);
+    return vec4<f32>(to_linear(rgb),select(output_alpha,1.0,(u32(f.i.w)&2u)!=0u));
 }

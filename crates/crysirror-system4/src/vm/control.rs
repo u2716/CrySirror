@@ -6,11 +6,38 @@ impl Machine {
     pub(crate) fn peek_locked(&self) -> bool {
         self.peek_lock > 0
     }
+    pub(crate) fn complete_system_exit(
+        &mut self,
+        call: &ExternalCall,
+        words: usize,
+        status: i32,
+    ) -> Result<()> {
+        self.validate_system(call)?;
+        self.complete_system(call, words, None)?;
+        self.exit_status = Some(status);
+        self.halted = true;
+        Ok(())
+    }
     pub(super) fn complete_pure_control(&mut self, call: &ExternalCall) -> Result<bool> {
         let ExternalTarget::System(code) = call.target else {
             return Ok(false);
         };
         match code {
+            0 => {
+                // vm_exit consumes its result, then the session owner runs
+                // library teardown. The v5 interpreter never exits the host.
+                let status = self.peek(0)?;
+                self.complete_system_exit(call, 1, status)?;
+            }
+            0x11 => {
+                // Pinned non-debug host has no connected VM debugger. This is
+                // the original IsDebugMode branch, not an unknown-call ACK.
+                ensure!(
+                    self.stack.len() < MAX_STACK,
+                    "System4 debug-query stack budget"
+                );
+                self.complete_system(call, 0, Some(0))?;
+            }
             3 | 4 => {
                 self.validate_system(call)?;
                 ensure!(
@@ -43,9 +70,14 @@ impl Machine {
                 self.validate_system(call)?;
                 let slot = self.peek(0)?;
                 let name = self.heap.string(slot)?;
-                let found = self.program.functions.iter().any(|function| {
-                    function.name.as_slice() == name.split(|b| *b == 0).next().unwrap()
-                });
+                let found = self
+                    .program
+                    .functions
+                    .iter()
+                    .position(|function| {
+                        function.name.as_slice() == name.split(|b| *b == 0).next().unwrap()
+                    })
+                    .is_some_and(|index| index > 0);
                 self.consume(1)?;
                 self.release_string_now(slot)?;
                 self.push(i32::from(found))?;
