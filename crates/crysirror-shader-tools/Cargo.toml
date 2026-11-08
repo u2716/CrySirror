@@ -7,7 +7,7 @@ rust-version.workspace = true
 
 [dependencies]
 crysirror-shaders = { path = "../crysirror-shaders" }
-naga = { version = "=29.0.3", features = ["wgsl-in", "glsl-out", "hlsl-out", "spv-out"] }
+naga = { version = "=30.0.1", features = ["wgsl-in", "glsl-out", "hlsl-out", "spv-out"] }
 anyhow.workspace = true
 serde_json.workspace = true
 serde.workspace = true

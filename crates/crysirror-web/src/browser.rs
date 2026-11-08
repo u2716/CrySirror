@@ -228,6 +228,7 @@ impl BrowserPlayer {
             .context("browser surface has no texture format")?;
         let view_format = format.add_srgb_suffix();
         let config = wgpu::SurfaceConfiguration {
+            color_space: wgpu::SurfaceColorSpace::Auto,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
             width: runtime.project.canvas[0],
@@ -441,7 +442,7 @@ impl BrowserPlayer {
             Err(error) if error.is::<crysirror_wgpu::PreparationPending>() => return Ok(false),
             other => other?,
         }
-        frame.present();
+        self.renderer.gpu.queue.present(frame);
         self.presented += 1;
         Ok(true)
     }

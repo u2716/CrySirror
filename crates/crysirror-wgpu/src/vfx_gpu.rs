@@ -738,7 +738,7 @@ impl GpuSimulation {
             .map_err(|e| anyhow::anyhow!("VFX offline completion: {e}"))?;
         recv.recv_timeout(std::time::Duration::from_secs(20))
             .context("VFX offline map timeout")??;
-        let mapped = read.slice(..).get_mapped_range();
+        let mapped = read.slice(..).get_mapped_range()?;
         let particles =
             bytemuck::cast_slice::<u8, GpuParticle>(&mapped[..pbytes as usize]).to_vec();
         let all_indices =

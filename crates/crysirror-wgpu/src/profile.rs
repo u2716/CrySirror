@@ -165,7 +165,15 @@ impl GpuTimings {
             if let Some(ok) = ready {
                 s.pending = None;
                 if ok {
-                    let data = s.read.slice(..).get_mapped_range();
+                    let data = match s.read.slice(..).get_mapped_range() {
+                        Ok(data) => data,
+                        Err(_) => {
+                            self.failures += 1;
+                            s.sample = None;
+                            s.read.unmap();
+                            continue;
+                        }
+                    };
                     let a = u64::from_le_bytes(data[8..16].try_into().unwrap());
                     let b = u64::from_le_bytes(data[16..24].try_into().unwrap());
                     if let Some((p, frame)) = s.sample.take() {

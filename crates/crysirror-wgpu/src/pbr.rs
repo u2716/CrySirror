@@ -1061,7 +1061,7 @@ impl SurfacePipelines {
             ..Default::default()
         };
         let opaque_pipeline = |cull: Option<wgpu::Face>, skinned: bool, alpha: AlphaMode| {
-            let buffers = [vertex_layout(), skin_layout()];
+            let buffers = [Some(vertex_layout()), Some(skin_layout())];
             d.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 cache: None,
                 label: Some("pbr opaque"),
@@ -1119,7 +1119,7 @@ impl SurfacePipelines {
             }
         }
         let prepass_pipeline = |cull: Option<wgpu::Face>, skinned: bool| {
-            let buffers = [vertex_layout(), skin_layout()];
+            let buffers = [Some(vertex_layout()), Some(skin_layout())];
             d.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 cache: None,
                 label: Some("prepass"),
@@ -1158,7 +1158,7 @@ impl SurfacePipelines {
             immediate_size: 0,
         });
         let shadow_pipeline = |skinned: bool| {
-            let buffers = [vertex_layout(), skin_layout()];
+            let buffers = [Some(vertex_layout()), Some(skin_layout())];
             d.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 cache: None,
                 label: Some("shadow"),
@@ -2170,7 +2170,7 @@ impl PbrRenderer {
         });
         d.poll(wgpu::PollType::wait_indefinitely())?;
         rx.recv().context("readback")??;
-        let words: Vec<u32> = bytemuck::cast_slice(&staging.slice(..).get_mapped_range()).to_vec();
+        let words: Vec<u32> = bytemuck::cast_slice(&staging.slice(..).get_mapped_range()?).to_vec();
         Ok((0..draws)
             .map(|i| (words[i * 10], words[i * 10 + 5]))
             .collect())
@@ -2204,7 +2204,7 @@ impl PbrRenderer {
         });
         d.poll(wgpu::PollType::wait_indefinitely())?;
         rx.recv().context("readback")??;
-        let v: Vec<[f32; 4]> = bytemuck::cast_slice(&staging.slice(..).get_mapped_range()).to_vec();
+        let v: Vec<[f32; 4]> = bytemuck::cast_slice(&staging.slice(..).get_mapped_range()?).to_vec();
         Ok((0..probes as usize).map(|i| v[i * 4 + 3]).collect())
     }
     /// Reflection probe statistics of the last encoded frame.
@@ -3852,7 +3852,7 @@ impl PbrRenderer {
                 self.gpu.device.poll(wgpu::PollType::wait_indefinitely())?;
                 rx.recv().context("VSM readback callback missing")??;
                 let slice = self.vsm.staging.slice(..);
-                let marks: Vec<u32> = bytemuck::cast_slice(&slice.get_mapped_range()).to_vec();
+                let marks: Vec<u32> = bytemuck::cast_slice(&slice.get_mapped_range()?).to_vec();
                 self.vsm.staging.unmap();
                 self.vsm.requested = crate::vsm::decode_requests(&marks, &centers);
             }

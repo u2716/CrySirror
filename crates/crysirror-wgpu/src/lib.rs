@@ -126,6 +126,7 @@ impl Gpu {
         } else {
             instance
                 .request_adapter(&wgpu::RequestAdapterOptions {
+                    apply_limit_buckets: false,
                     power_preference: wgpu::PowerPreference::HighPerformance,
                     compatible_surface: surface,
                     force_fallback_adapter: false,
@@ -554,11 +555,11 @@ impl Renderer {
                     module: &quad_shader,
                     entry_point: Some("vs_main"),
                     compilation_options: Default::default(),
-                    buffers: &[wgpu::VertexBufferLayout {
+                    buffers: &[Some(wgpu::VertexBufferLayout {
                         array_stride: std::mem::size_of::<clip_sampling::LayerVertex>() as u64,
                         step_mode: wgpu::VertexStepMode::Vertex,
                         attributes: &LAYER_ATTR,
-                    }],
+                    })],
                 },
                 fragment: Some(wgpu::FragmentState {
                     module: &quad_shader,
@@ -609,11 +610,11 @@ impl Renderer {
                 module: &mesh_shader,
                 entry_point: Some("vs_main"),
                 compilation_options: Default::default(),
-                buffers: &[wgpu::VertexBufferLayout {
+                buffers: &[Some(wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<Vertex3d>() as u64,
                     step_mode: wgpu::VertexStepMode::Vertex,
                     attributes: &MESH_ATTR,
-                }],
+                })],
             },
             fragment: Some(wgpu::FragmentState {
                 module: &mesh_shader,
@@ -644,11 +645,11 @@ impl Renderer {
                 module: &quad_shader,
                 entry_point: Some("vs_plain"),
                 compilation_options: Default::default(),
-                buffers: &[wgpu::VertexBufferLayout {
+                buffers: &[Some(wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<Vertex2d>() as u64,
                     step_mode: wgpu::VertexStepMode::Vertex,
                     attributes: &QUAD_ATTR,
-                }],
+                })],
             },
             fragment: Some(wgpu::FragmentState {
                 module: &quad_shader,

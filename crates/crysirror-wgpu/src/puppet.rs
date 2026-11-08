@@ -85,7 +85,7 @@ impl PuppetRenderer {
             d.create_render_pipeline(&wgpu::RenderPipelineDescriptor { cache: None,
                 label: Some(label),
                 layout: Some(&layout),
-                vertex: wgpu::VertexState { module: &shader, entry_point: Some("vs_part"), buffers: &[vertex.clone()], compilation_options: Default::default() },
+                vertex: wgpu::VertexState { module: &shader, entry_point: Some("vs_part"), buffers: &[Some(vertex.clone())], compilation_options: Default::default() },
                 fragment: Some(wgpu::FragmentState { module: &shader, entry_point: Some(fs), targets: &[Some(target)], compilation_options: Default::default() }),
                 primitive: wgpu::PrimitiveState::default(),
                 depth_stencil: Some(ds),

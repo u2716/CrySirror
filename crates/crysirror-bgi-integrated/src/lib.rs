@@ -1,5 +1,6 @@
 //! Complete BGI runtime maintained inside the CrySirror workspace.
 //! The host owns the window, presentation device and PCM output device.
+extern crate wgpu as bgi_wgpu;
 mod adapter;
 mod native_app;
 mod native_archive;

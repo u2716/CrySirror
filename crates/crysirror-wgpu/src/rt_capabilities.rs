@@ -176,6 +176,7 @@ mod tests {
         device_type: wgpu::DeviceType,
     ) -> wgpu::AdapterInfo {
         wgpu::AdapterInfo {
+            limit_bucket: Default::default(),
             name: "synthetic capability input; not a hardware execution".into(),
             vendor,
             device: 123,
@@ -186,7 +187,7 @@ mod tests {
             driver_info: String::new(),
             subgroup_min_size: 4,
             subgroup_max_size: 32,
-            transient_saves_memory: false,
+            transient_saves_memory: Some(false),
         }
     }
     #[test]

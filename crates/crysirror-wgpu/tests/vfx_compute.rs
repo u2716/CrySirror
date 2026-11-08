@@ -510,7 +510,7 @@ fn resident_hundred_thousand_particle_update_has_valid_gpu_timestamps() {
         rx.recv_timeout(std::time::Duration::from_secs(20))
             .unwrap()
             .unwrap();
-        let data = read.slice(..).get_mapped_range();
+        let data = read.slice(..).get_mapped_range().unwrap();
         let t = bytemuck::cast_slice::<u8, u64>(&data);
         assert!(t[1] > 0 && t[2] > t[1], "invalid GPU timing: {t:?}");
         let us = (t[2] - t[1]) as f64 * f64::from(gpu.queue.get_timestamp_period()) / 1000.;

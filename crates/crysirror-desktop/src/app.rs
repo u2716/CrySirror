@@ -408,7 +408,9 @@ impl App {
         let mut app = Self {
             core,
             options,
-            instance: wgpu::Instance::default(),
+            instance: wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle(
+                Box::new(event_loop.owned_display_handle()),
+            )),
             window: None,
             audio,
             #[cfg(feature = "gamepad")]
@@ -565,6 +567,7 @@ impl App {
         // presented swapchain image of a `--frames` run.
         let surface_capture = std::env::var_os("CRYSIRROR_SURFACE_CAPTURE").is_some();
         let config = wgpu::SurfaceConfiguration {
+            color_space: wgpu::SurfaceColorSpace::Auto,
             usage: if surface_capture {
                 wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC
             } else {
@@ -884,7 +887,7 @@ impl App {
         w.window.pre_present_notify();
         {
             let _present_span = profiler.span(profiler.frame(), "desktop.present");
-            frame.present();
+            w.renderer.gpu.queue.present(frame);
         }
         if reconfigure {
             w.surface.configure(&w.renderer.gpu.device, &w.config);

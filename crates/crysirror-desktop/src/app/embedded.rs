@@ -638,7 +638,7 @@ fn run(options: Options, shared: &Shared) -> Result<()> {
                         rt.project.background,
                     )
                 })?;
-            frame.present();
+            renderer.gpu.queue.present(frame);
             frames += 1;
             shared.state.lock().unwrap().status.frames = frames;
         }

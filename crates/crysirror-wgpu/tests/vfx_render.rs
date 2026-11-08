@@ -176,7 +176,7 @@ fn read(g: &Gpu, mut encoder: wgpu::CommandEncoder, target: &wgpu::Texture) -> i
         })
         .expect("bounded GPU test completion");
     rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
-    let pixels = buffer.slice(..).get_mapped_range().to_vec();
+    let pixels = buffer.slice(..).get_mapped_range().unwrap().to_vec();
     buffer.unmap();
     image::RgbaImage::from_raw(128, 128, pixels).unwrap()
 }

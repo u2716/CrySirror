@@ -37,9 +37,9 @@ raw-window-handle = "0.6"
 kira = { version = "0.8", default-features = false, features = ["mp3", "ogg", "flac", "wav"] }
 symphonia = { version = "0.5.5", default-features = false, features = ["mp2"] }
 winit = { version = "0.31.0-beta.3", optional = true }
-bgi_wgpu = { package = "wgpu", version = "0.19", default-features = false, features = ["wgsl", "dx12", "metal", "webgpu"] }
-ruffle_core = { git = "https://github.com/ruffle-rs/ruffle.git", tag = "v0.4.1", features = ["default_font", "lzma", "mp3", "aac", "nellymoser"] }
-ruffle_render_wgpu = { git = "https://github.com/ruffle-rs/ruffle.git", tag = "v0.4.1" }
+wgpu.workspace = true
+ruffle_core = { git = "https://github.com/ruffle-rs/ruffle.git", rev = "f64085ef12bd3c01995105c5ca20fee310fc6d87", features = ["default_font", "lzma", "mp3", "aac", "nellymoser"] }
+ruffle_render_wgpu = { git = "https://github.com/ruffle-rs/ruffle.git", rev = "f64085ef12bd3c01995105c5ca20fee310fc6d87" }
 
 [target.'cfg(any(target_os="windows",target_os="macos",target_os="linux",target_os="freebsd",target_os="openbsd",target_os="netbsd",target_os="dragonfly",target_os="illumos",target_os="solaris",target_os="haiku"))'.dependencies]
 chardetng = "0.1.17"

@@ -71,6 +71,7 @@ fn surface_configuration(
         ));
     }
     Ok(bgi_wgpu::SurfaceConfiguration {
+        color_space: bgi_wgpu::SurfaceColorSpace::Auto,
         usage: bgi_wgpu::TextureUsages::RENDER_ATTACHMENT,
         format,
         width,
@@ -228,7 +229,9 @@ impl<'w> Renderer<'w> {
     #[cfg(feature = "desktop-window")]
     pub async fn new_with_font(window: std::sync::Arc<dyn Window>, font: FontArc) -> Result<Self> {
         let size = window.surface_size();
-        let instance = bgi_wgpu::Instance::default();
+        let instance = bgi_wgpu::Instance::new(
+            bgi_wgpu::InstanceDescriptor::new_with_display_handle(Box::new(window.clone())),
+        );
         let surface = instance
             .create_surface(window)
             .map_err(|err| EthornellError::Other(format!("create surface failed: {err}")))?;
@@ -247,24 +250,23 @@ impl<'w> Renderer<'w> {
         validate_surface_size(width, height, u32::MAX)?;
         let adapter = instance
             .request_adapter(&bgi_wgpu::RequestAdapterOptions {
+                apply_limit_buckets: false,
                 power_preference: bgi_wgpu::PowerPreference::HighPerformance,
                 compatible_surface: Some(&surface),
                 force_fallback_adapter: false,
             })
             .await
-            .ok_or_else(|| EthornellError::Other("no compatible wgpu adapter".into()))?;
+            .map_err(|err| EthornellError::Other(format!("no compatible wgpu adapter: {err}")))?;
         let adapter_name = adapter.get_info().name;
         let adapter_limits = adapter.limits();
         let required_limits = renderer_limits(&adapter_limits)?;
         let (device, queue) = adapter
-            .request_device(
-                &bgi_wgpu::DeviceDescriptor {
-                    label: Some("ethornell-device"),
-                    required_features: bgi_wgpu::Features::empty(),
-                    required_limits,
-                },
-                None,
-            )
+            .request_device(&bgi_wgpu::DeviceDescriptor {
+                label: Some("ethornell-device"),
+                required_features: bgi_wgpu::Features::empty(),
+                required_limits,
+                ..Default::default()
+            })
             .await
             .map_err(|err| EthornellError::Other(format!("request device failed: {err}")))?;
         let gpu_fault = std::sync::Arc::new(std::sync::Mutex::new(None));
@@ -275,7 +277,7 @@ impl<'w> Renderer<'w> {
             }
         });
         let validation_fault = gpu_fault.clone();
-        device.on_uncaptured_error(Box::new(move |error| {
+        device.on_uncaptured_error(std::sync::Arc::new(move |error| {
             if let Ok(mut fault) = validation_fault.lock() {
                 *fault = Some(format!("GPU error: {error}"));
             }
@@ -318,8 +320,8 @@ impl<'w> Renderer<'w> {
         });
         let pipeline_layout = device.create_pipeline_layout(&bgi_wgpu::PipelineLayoutDescriptor {
             label: Some("ethornell-2d-pipeline-layout"),
-            bind_group_layouts: &[&bind_group_layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&bind_group_layout)],
+            immediate_size: 0,
         });
         let create_pipeline = |label: &'static str, blend: Option<bgi_wgpu::BlendState>| {
             device.create_render_pipeline(&bgi_wgpu::RenderPipelineDescriptor {
@@ -327,12 +329,14 @@ impl<'w> Renderer<'w> {
                 layout: Some(&pipeline_layout),
                 vertex: bgi_wgpu::VertexState {
                     module: &shader,
-                    entry_point: "vs_main",
-                    buffers: &[Vertex::layout()],
+                    entry_point: Some("vs_main"),
+                    compilation_options: Default::default(),
+                    buffers: &[Some(Vertex::layout())],
                 },
                 fragment: Some(bgi_wgpu::FragmentState {
                     module: &shader,
-                    entry_point: "fs_main",
+                    entry_point: Some("fs_main"),
+                    compilation_options: Default::default(),
                     targets: &[Some(bgi_wgpu::ColorTargetState {
                         format,
                         blend,
@@ -342,7 +346,8 @@ impl<'w> Renderer<'w> {
                 primitive: bgi_wgpu::PrimitiveState::default(),
                 depth_stencil: None,
                 multisample: bgi_wgpu::MultisampleState::default(),
-                multiview: None,
+                multiview_mask: None,
+                cache: None,
             })
         };
         let alpha_pipeline = create_pipeline(
@@ -467,14 +472,14 @@ impl<'w> Renderer<'w> {
         }
         let instance = bgi_wgpu::Instance::new(bgi_wgpu::InstanceDescriptor {
             backends: backend,
-            ..Default::default()
+            ..bgi_wgpu::InstanceDescriptor::new_without_display_handle()
         });
         // SAFETY: the host guarantees the raw window lifetime as documented.
         let surface = unsafe {
             instance.create_surface_unsafe(bgi_wgpu::SurfaceTargetUnsafe::RawHandle {
-                raw_display_handle: raw_window_handle::RawDisplayHandle::Android(
+                raw_display_handle: Some(raw_window_handle::RawDisplayHandle::Android(
                     raw_window_handle::AndroidDisplayHandle::new(),
-                ),
+                )),
                 raw_window_handle: raw_window_handle::RawWindowHandle::AndroidNdk(
                     raw_window_handle::AndroidNdkWindowHandle::new(window),
                 ),
@@ -496,7 +501,7 @@ impl<'w> Renderer<'w> {
         validate_surface_size(width, height, u32::MAX)?;
         let instance = bgi_wgpu::Instance::new(bgi_wgpu::InstanceDescriptor {
             backends: bgi_wgpu::Backends::GL,
-            ..Default::default()
+            ..bgi_wgpu::InstanceDescriptor::new_without_display_handle()
         });
         let surface = instance
             .create_surface(bgi_wgpu::SurfaceTarget::OffscreenCanvas(canvas))
@@ -522,14 +527,14 @@ impl<'w> Renderer<'w> {
         validate_surface_size(width, height, u32::MAX)?;
         let instance = bgi_wgpu::Instance::new(bgi_wgpu::InstanceDescriptor {
             backends: bgi_wgpu::Backends::METAL,
-            ..Default::default()
+            ..bgi_wgpu::InstanceDescriptor::new_without_display_handle()
         });
         // SAFETY: the host guarantees the view's lifetime as documented.
         let surface = unsafe {
             instance.create_surface_unsafe(bgi_wgpu::SurfaceTargetUnsafe::RawHandle {
-                raw_display_handle: raw_window_handle::RawDisplayHandle::UiKit(
+                raw_display_handle: Some(raw_window_handle::RawDisplayHandle::UiKit(
                     raw_window_handle::UiKitDisplayHandle::new(),
-                ),
+                )),
                 raw_window_handle: raw_window_handle::RawWindowHandle::UiKit(
                     raw_window_handle::UiKitWindowHandle::new(view),
                 ),
@@ -669,7 +674,9 @@ impl<'w> Renderer<'w> {
     /// A lost device/validation/OOM fault is terminal for this renderer. The
     /// host must report it and stop, or drop/rebuild and re-upload all textures.
     pub fn check_gpu(&self) -> Result<()> {
-        self.device.poll(bgi_wgpu::Maintain::Poll);
+        self.device
+            .poll(bgi_wgpu::PollType::Poll)
+            .map_err(|error| EthornellError::Other(format!("GPU poll failed: {error}")))?;
         let fault = self
             .gpu_fault
             .lock()
@@ -738,14 +745,14 @@ impl<'w> Renderer<'w> {
 
     fn write_texture(&self, texture: &bgi_wgpu::Texture, image: &DecodedImage) {
         self.queue.write_texture(
-            bgi_wgpu::ImageCopyTexture {
+            bgi_wgpu::TexelCopyTextureInfo {
                 texture,
                 mip_level: 0,
                 origin: bgi_wgpu::Origin3d::ZERO,
                 aspect: bgi_wgpu::TextureAspect::All,
             },
             &image.rgba,
-            bgi_wgpu::ImageDataLayout {
+            bgi_wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(image.width * 4),
                 rows_per_image: Some(image.height),
@@ -799,13 +806,19 @@ impl<'w> Renderer<'w> {
             return Ok(());
         }
         let frame = match self.surface.get_current_texture() {
-            Ok(frame) => frame,
-            Err(bgi_wgpu::SurfaceError::Lost | bgi_wgpu::SurfaceError::Outdated) => {
+            bgi_wgpu::CurrentSurfaceTexture::Success(frame)
+            | bgi_wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
+            bgi_wgpu::CurrentSurfaceTexture::Lost | bgi_wgpu::CurrentSurfaceTexture::Outdated => {
                 self.surface.configure(&self.device, &self.config);
                 return Ok(());
             }
-            Err(bgi_wgpu::SurfaceError::Timeout) => return Ok(()),
-            Err(err) => return Err(EthornellError::Other(format!("surface error: {err}"))),
+            bgi_wgpu::CurrentSurfaceTexture::Timeout
+            | bgi_wgpu::CurrentSurfaceTexture::Occluded => {
+                return Ok(());
+            }
+            bgi_wgpu::CurrentSurfaceTexture::Validation => {
+                return Err(EthornellError::Other("surface validation failed".into()));
+            }
         };
         let view = frame
             .texture
@@ -1039,6 +1052,7 @@ impl<'w> Renderer<'w> {
                 color_attachments: &[Some(bgi_wgpu::RenderPassColorAttachment {
                     view: &view,
                     resolve_target: None,
+                    depth_slice: None,
                     ops: bgi_wgpu::Operations {
                         load: bgi_wgpu::LoadOp::Clear(self.clear_color),
                         store: bgi_wgpu::StoreOp::Store,
@@ -1047,6 +1061,7 @@ impl<'w> Renderer<'w> {
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
             if let Some(vertex_buffer) = frame_vertex_buffer.as_ref() {
                 pass.set_vertex_buffer(0, vertex_buffer.slice(..));
@@ -1090,7 +1105,7 @@ impl<'w> Renderer<'w> {
             }
         }
         self.queue.submit(Some(encoder.finish()));
-        frame.present();
+        self.queue.present(frame);
         Ok(())
     }
 
@@ -1320,6 +1335,7 @@ mod surface_tests {
 
     fn capabilities() -> bgi_wgpu::SurfaceCapabilities {
         bgi_wgpu::SurfaceCapabilities {
+            format_capabilities: Default::default(),
             formats: vec![
                 bgi_wgpu::TextureFormat::Rgba8Unorm,
                 bgi_wgpu::TextureFormat::Bgra8UnormSrgb,

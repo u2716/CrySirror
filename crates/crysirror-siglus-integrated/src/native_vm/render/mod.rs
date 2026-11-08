@@ -451,7 +451,7 @@ impl Renderer {
 
     pub async fn new_offscreen(width: u32, height: u32) -> Result<Self> {
         anyhow::ensure!(width > 0 && height > 0 && u64::from(width) * u64::from(height) * 4 <= 64 * 1024 * 1024, "Siglus host canvas budget");
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         Self::new_from_instance_surface(instance, None, width, height, 1.0).await
     }
     fn host_texture(device: &wgpu::Device, config: &wgpu::SurfaceConfiguration) -> wgpu::Texture {
@@ -468,7 +468,14 @@ impl Renderer {
 
     pub async fn new<W>(window: W) -> Result<Self>
     where
-        W: std::ops::Deref<Target = dyn Window> + Into<wgpu::SurfaceTarget<'static>>,
+        W: std::ops::Deref<Target = dyn Window>
+            + Into<wgpu::SurfaceTarget<'static>>
+            + raw_window_handle::HasDisplayHandle
+            + std::fmt::Debug
+            + Clone
+            + Send
+            + Sync
+            + 'static,
     {
         #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
         let backends = wgpu::Backends::GL;
@@ -477,7 +484,7 @@ impl Renderer {
 
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends,
-            ..Default::default()
+            ..wgpu::InstanceDescriptor::new_with_display_handle(Box::new(window.clone()))
         });
 
         let size = window.surface_size();
@@ -497,11 +504,11 @@ impl Renderer {
     ) -> Result<Self> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
-            ..Default::default()
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
         });
         let surface = instance
             .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
-                raw_display_handle,
+                raw_display_handle: Some(raw_display_handle),
                 raw_window_handle,
             })
             .context("create_surface_unsafe")?;
@@ -532,7 +539,7 @@ impl Renderer {
         let surface = unsafe {
             self.instance
                 .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
-                    raw_display_handle,
+                    raw_display_handle: Some(raw_display_handle),
                     raw_window_handle,
                 })
         }
@@ -580,6 +587,7 @@ impl Renderer {
     ) -> Result<Self> {
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
+                apply_limit_buckets: false,
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 compatible_surface: surface.as_ref(),
                 force_fallback_adapter: false,
@@ -588,17 +596,15 @@ impl Renderer {
             .context("request_adapter")?;
 
         let (device, queue) = adapter
-            .request_device(
-                &wgpu::DeviceDescriptor {
-                    label: Some("siglus-bg-device"),
-                    required_features: wgpu::Features::empty(),
-                    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
-                    required_limits: wgpu::Limits::downlevel_webgl2_defaults(),
-                    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
-                    required_limits: wgpu::Limits::default(),
-                },
-                None,
-            )
+            .request_device(&wgpu::DeviceDescriptor {
+                label: Some("siglus-bg-device"),
+                required_features: wgpu::Features::empty(),
+                #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+                required_limits: wgpu::Limits::downlevel_webgl2_defaults(),
+                #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+                required_limits: wgpu::Limits::default(),
+                ..Default::default()
+            })
             .await
             .context("request_device")?;
 
@@ -630,6 +636,7 @@ impl Renderer {
         let present_mode = surface_caps.as_ref().map(|c| present_mode_for_wait_display_vsync(true, &c.present_modes))
             .unwrap_or(wgpu::PresentMode::Fifo);
         let config = wgpu::SurfaceConfiguration {
+            color_space: wgpu::SurfaceColorSpace::Auto,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
             width,
@@ -806,8 +813,8 @@ impl Renderer {
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("siglus-sprite-pipeline-layout"),
-            bind_group_layouts: &[&bind_group_layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&bind_group_layout)],
+            immediate_size: 0,
         });
         let (wipe_bind_group_layout, wipe_pipeline) = create_wipe_pipeline(&device, config.format);
         let (page_wipe_bind_group_layout, page_wipe_pipeline) =
@@ -856,7 +863,7 @@ impl Renderer {
             address_mode_w: wgpu::AddressMode::ClampToEdge,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
             lod_min_clamp: 0.0,
             lod_max_clamp: 0.0,
             ..Default::default()
@@ -868,7 +875,7 @@ impl Renderer {
             address_mode_w: wgpu::AddressMode::ClampToEdge,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
             ..Default::default()
         });
         let normal_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -878,7 +885,7 @@ impl Renderer {
             address_mode_w: wgpu::AddressMode::ClampToEdge,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
             lod_min_clamp: 0.0,
             lod_max_clamp: 0.0,
             ..Default::default()
@@ -890,7 +897,7 @@ impl Renderer {
             address_mode_w: wgpu::AddressMode::ClampToEdge,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
             lod_min_clamp: 0.0,
             lod_max_clamp: 0.0,
             ..Default::default()
@@ -902,7 +909,7 @@ impl Renderer {
             address_mode_w: wgpu::AddressMode::ClampToEdge,
             mag_filter: wgpu::FilterMode::Nearest,
             min_filter: wgpu::FilterMode::Nearest,
-            mipmap_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
             lod_min_clamp: 0.0,
             lod_max_clamp: 0.0,
             ..Default::default()
@@ -1231,8 +1238,8 @@ impl Renderer {
 
     pub fn render_frame(&mut self, images: &ImageManager, frame_plan: &RenderFrame) -> Result<()> {
         let frame = if let Some(surface) = self.surface.as_ref() { Some(match surface.get_current_texture() {
-            Ok(frame) => frame,
-            Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+            wgpu::CurrentSurfaceTexture::Success(frame) | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
+            wgpu::CurrentSurfaceTexture::Lost | wgpu::CurrentSurfaceTexture::Outdated => {
                 // Android hands the app a new ANativeWindow whenever the activity
                 // stops, and a reconfigured surface can report Lost/Outdated for a
                 // frame. Recover in place: failing here would surface as an error
@@ -1241,11 +1248,12 @@ impl Renderer {
                 if let Some(surface) = self.surface.as_ref() { surface.configure(&self.device, &self.config); }
                 return Ok(());
             }
-            Err(wgpu::SurfaceError::OutOfMemory) => {
-                anyhow::bail!("surface out of memory");
+            wgpu::CurrentSurfaceTexture::Validation => {
+                anyhow::bail!("surface validation failed");
             }
-            Err(wgpu::SurfaceError::Timeout) => return Ok(()),
-            Err(err) => return Err(err).context("get_current_texture"),
+            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
+                return Ok(());
+            }
         }) } else { None };
         let view = if let Some(frame) = frame.as_ref() {
             frame.texture.create_view(&wgpu::TextureViewDescriptor::default())
@@ -1306,7 +1314,7 @@ impl Renderer {
             self.render_ordinary_frame_to_surface(images, &frame_plan.sprites, &view)?;
         }
 
-        if let Some(frame) = frame { frame.present(); } else {
+        if let Some(frame) = frame { self.queue.present(frame); } else {
             let target = self.host_output.as_ref().context("Siglus host output texture missing")?;
             let mut rgba = self.debug_read_texture_rgba(target, self.config.width, self.config.height, self.config.format)?;
             // The native final backbuffer is opaque; its alpha is not a scene layer.
@@ -1603,13 +1611,13 @@ impl Renderer {
                 label: Some("siglus-copy-internal-target"),
             });
         encoder.copy_texture_to_texture(
-            wgpu::ImageCopyTexture {
+            wgpu::TexelCopyTextureInfo {
                 texture: &src_tex._tex,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            wgpu::ImageCopyTexture {
+            wgpu::TexelCopyTextureInfo {
                 texture: &dst_tex._tex,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
@@ -1753,8 +1761,10 @@ impl Renderer {
             });
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: Some("siglus-wipe-composite-pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    depth_slice: None,
                     view: target_view,
                     resolve_target: None,
                     ops: wgpu::Operations {
@@ -1855,8 +1865,10 @@ impl Renderer {
             });
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: Some("siglus-page-wipe-pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    depth_slice: None,
                     view: target_view,
                     resolve_target: None,
                     ops: wgpu::Operations {
@@ -2295,15 +2307,15 @@ impl Renderer {
                 label: Some("siglus-debug-texture-readback-encoder"),
             });
         encoder.copy_texture_to_buffer(
-            wgpu::ImageCopyTexture {
+            wgpu::TexelCopyTextureInfo {
                 texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            wgpu::ImageCopyBuffer {
+            wgpu::TexelCopyBufferInfo {
                 buffer: &output_buffer,
-                layout: wgpu::ImageDataLayout {
+                layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(padded_bytes_per_row),
                     rows_per_image: Some(height),
@@ -2322,11 +2334,13 @@ impl Renderer {
         buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
             let _ = tx.send(result);
         });
-        self.device.poll(wgpu::Maintain::Wait);
+        self.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .context("GPU readback completion")?;
         rx.recv()
             .context("wait for debug texture readback")?
             .context("map debug texture readback")?;
-        let data = buffer_slice.get_mapped_range();
+        let data = buffer_slice.get_mapped_range()?;
         let mut rgba = vec![0u8; (width as usize) * (height as usize) * 4];
         for y in 0..height as usize {
             let src_offset = y * padded_bytes_per_row as usize;
@@ -2489,21 +2503,22 @@ impl Renderer {
         let pipeline = self
             .device
             .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                cache: None,
                 label: Some(label),
                 layout: Some(&self.pipeline_layout),
                 vertex: wgpu::VertexState {
                     module: &self.shader,
-                    entry_point: key.program.vertex_entry(),
-                    buffers: &[if key.program.uses_sprite2d_layout() {
+                    entry_point: Some(key.program.vertex_entry()),
+                    buffers: &[Some(if key.program.uses_sprite2d_layout() {
                         VertexSprite2d::layout()
                     } else {
                         Vertex::layout()
-                    }],
+                    })],
                     compilation_options: Default::default(),
                 },
                 fragment: Some(wgpu::FragmentState {
                     module: &self.shader,
-                    entry_point: key.program.fragment_entry(),
+                    entry_point: Some(key.program.fragment_entry()),
                     targets: &[Some(wgpu::ColorTargetState {
                         format: self.config.format,
                         blend: blend_state,
@@ -2533,17 +2548,17 @@ impl Renderer {
                     } else {
                         wgpu::TextureFormat::Depth32Float
                     },
-                    depth_write_enabled: depth.depth_write,
-                    depth_compare: if depth.use_depth {
+                    depth_write_enabled: Some(depth.depth_write),
+                    depth_compare: Some(if depth.use_depth {
                         wgpu::CompareFunction::LessEqual
                     } else {
                         wgpu::CompareFunction::Always
-                    },
+                    }),
                     stencil: wgpu::StencilState::default(),
                     bias: wgpu::DepthBiasState::default(),
                 }),
                 multisample: wgpu::MultisampleState::default(),
-                multiview: None,
+                multiview_mask: None,
             });
         self.pipelines.insert(key, pipeline);
     }
@@ -2636,8 +2651,10 @@ impl Renderer {
         let color_view = self.color_target_view(color_target);
         let depth_view = self.depth_target_view(depth_target);
         let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            multiview_mask: None,
             label: Some("siglus-sprite-pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                depth_slice: None,
                 view: color_view,
                 resolve_target: None,
                 ops: wgpu::Operations {
@@ -2913,8 +2930,10 @@ impl Renderer {
             ],
         });
         let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            multiview_mask: None,
             label: Some("siglus-copy-pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                depth_slice: None,
                 view: color_view,
                 resolve_target: None,
                 ops: wgpu::Operations {
@@ -3564,7 +3583,7 @@ fn create_gpu_texture(
         address_mode_w: wgpu::AddressMode::ClampToEdge,
         mag_filter: wgpu::FilterMode::Linear,
         min_filter: wgpu::FilterMode::Linear,
-        mipmap_filter: wgpu::FilterMode::Linear,
+        mipmap_filter: wgpu::MipmapFilterMode::Linear,
         ..Default::default()
     });
 
@@ -3584,14 +3603,14 @@ fn upload_texture_pixels(
     img: &crate::native_vm::assets::RgbaImage,
 ) {
     queue.write_texture(
-        wgpu::ImageCopyTexture {
+        wgpu::TexelCopyTextureInfo {
             texture,
             mip_level: 0,
             origin: wgpu::Origin3d::ZERO,
             aspect: wgpu::TextureAspect::All,
         },
         &img.rgba,
-        wgpu::ImageDataLayout {
+        wgpu::TexelCopyBufferLayout {
             offset: 0,
             bytes_per_row: Some(4 * img.width),
             rows_per_image: Some(img.height),
@@ -3636,7 +3655,7 @@ fn create_render_target_texture(
         address_mode_w: wgpu::AddressMode::ClampToEdge,
         mag_filter: wgpu::FilterMode::Linear,
         min_filter: wgpu::FilterMode::Linear,
-        mipmap_filter: wgpu::FilterMode::Nearest,
+        mipmap_filter: wgpu::MipmapFilterMode::Nearest,
         ..Default::default()
     });
     RenderTargetTexture {
@@ -3722,21 +3741,22 @@ fn create_wipe_pipeline(
     });
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("siglus-wipe-pipeline-layout"),
-        bind_group_layouts: &[&layout],
-        push_constant_ranges: &[],
+        bind_group_layouts: &[Some(&layout)],
+        immediate_size: 0,
     });
     let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        cache: None,
         label: Some("siglus-wipe-pipeline"),
         layout: Some(&pipeline_layout),
         vertex: wgpu::VertexState {
             module: &shader,
-            entry_point: "vs_main",
+            entry_point: Some("vs_main"),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             buffers: &[],
         },
         fragment: Some(wgpu::FragmentState {
             module: &shader,
-            entry_point: "fs_main",
+            entry_point: Some("fs_main"),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format,
@@ -3755,7 +3775,7 @@ fn create_wipe_pipeline(
         },
         depth_stencil: None,
         multisample: wgpu::MultisampleState::default(),
-        multiview: None,
+        multiview_mask: None,
     });
     (layout, pipeline)
 }
@@ -3774,17 +3794,18 @@ fn create_page_wipe_pipeline(
     });
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("siglus-page-wipe-pipeline-layout"),
-        bind_group_layouts: &[&layout],
-        push_constant_ranges: &[],
+        bind_group_layouts: &[Some(&layout)],
+        immediate_size: 0,
     });
     let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        cache: None,
         label: Some("siglus-page-wipe-pipeline"),
         layout: Some(&pipeline_layout),
         vertex: wgpu::VertexState {
             module: &shader,
-            entry_point: "vs_main",
+            entry_point: Some("vs_main"),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
-            buffers: &[wgpu::VertexBufferLayout {
+            buffers: &[Some(wgpu::VertexBufferLayout {
                 array_stride: std::mem::size_of::<PageWipeVertex>() as wgpu::BufferAddress,
                 step_mode: wgpu::VertexStepMode::Vertex,
                 attributes: &[
@@ -3799,11 +3820,11 @@ fn create_page_wipe_pipeline(
                         shader_location: 1,
                     },
                 ],
-            }],
+            })],
         },
         fragment: Some(wgpu::FragmentState {
             module: &shader,
-            entry_point: "fs_main",
+            entry_point: Some("fs_main"),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format,
@@ -3822,13 +3843,13 @@ fn create_page_wipe_pipeline(
         },
         depth_stencil: Some(wgpu::DepthStencilState {
             format: wgpu::TextureFormat::Depth32Float,
-            depth_write_enabled: true,
-            depth_compare: wgpu::CompareFunction::LessEqual,
+            depth_write_enabled: Some(true),
+            depth_compare: Some(wgpu::CompareFunction::LessEqual),
             stencil: wgpu::StencilState::default(),
             bias: wgpu::DepthBiasState::default(),
         }),
         multisample: wgpu::MultisampleState::default(),
-        multiview: None,
+        multiview_mask: None,
     });
     (layout, pipeline)
 }

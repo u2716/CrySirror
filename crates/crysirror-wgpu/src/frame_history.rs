@@ -328,7 +328,7 @@ pub(super) fn read_texture(
         .context("GPU readback completion timeout")?;
     rx.recv_timeout(std::time::Duration::from_secs(5))
         .context("GPU readback callback missing")??;
-    let data = slice.get_mapped_range();
+    let data = slice.get_mapped_range()?;
     let mut pixels = Vec::with_capacity(width as usize * height as usize * 4);
     for row in data.chunks_exact(stride as usize).take(height as usize) {
         pixels.extend_from_slice(&row[..width as usize * 4]);

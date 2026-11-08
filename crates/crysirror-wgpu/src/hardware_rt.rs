@@ -654,7 +654,7 @@ mod tests {
         rx.recv_timeout(std::time::Duration::from_secs(5))
             .unwrap()
             .unwrap();
-        let mapped = slice.get_mapped_range();
+        let mapped = slice.get_mapped_range().unwrap();
         let mut out = Vec::with_capacity((width * height) as usize);
         for row in mapped.chunks_exact(stride as usize) {
             for pixel in row[..width as usize * 8].chunks_exact(8) {

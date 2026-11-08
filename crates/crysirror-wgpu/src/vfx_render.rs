@@ -352,7 +352,7 @@ impl VfxRenderer {
                     attributes: &RIBBON_ATTRS,
                 }],
                 _ => vec![],
-            };
+            }.into_iter().map(Some).collect::<Vec<_>>();
             let layout = d.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("VFX render layout"),
                 bind_group_layouts: &[
@@ -1828,7 +1828,7 @@ mod tests {
             })
             .unwrap();
         rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
-        let bytes = output.slice(..).get_mapped_range();
+        let bytes = output.slice(..).get_mapped_range().unwrap();
         let args = bytes
             .chunks_exact(4)
             .map(|v| u32::from_le_bytes(v.try_into().unwrap()))
