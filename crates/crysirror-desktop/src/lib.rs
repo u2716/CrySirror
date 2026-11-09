@@ -262,7 +262,7 @@ fn adapter_registry() -> Result<AdapterRegistry> {
     crysirror_siglus_integrated::register(&mut registry)?;
     crysirror_reallive::register(&mut registry)?;
     crysirror_krkr::register(&mut registry)?;
-    crysirror_rfvp::register(&mut registry)?;
+    crysirror_rfvp_integrated::register(&mut registry)?;
     crysirror_nscripter::register(&mut registry)?;
     crysirror_bgi_integrated::register(&mut registry)?;
     crysirror_softpal::register(&mut registry)?;
@@ -288,7 +288,7 @@ fn load_project(path: &Path) -> Result<Project> {
         serde_json::from_value::<crysirror_krkr::Config>(c.config.clone())?.validate()?;
     }
     for c in project.clients.iter().filter(|c| c.adapter == "rfvp") {
-        serde_json::from_value::<crysirror_rfvp::Config>(c.config.clone())?.validate()?;
+        serde_json::from_value::<crysirror_rfvp_integrated::Config>(c.config.clone())?.validate()?;
     }
     for c in project.clients.iter().filter(|c| c.adapter == "reallive") {
         serde_json::from_value::<crysirror_reallive::Config>(c.config.clone())?.validate()?;
@@ -488,7 +488,7 @@ fn play(options: PlayOptions) -> Result<()> {
         integrated_roots::bind(&mut project,local,&state_dir,font.as_deref())?;
         local.to_path_buf()
     } else {
-        anyhow::ensure!(!project.clients.iter().any(|client| matches!(client.adapter.as_str(), "bgi" | "softpal" | "siglus")), "Integrated runtimes currently require local or OS-mounted game directories");
+        integrated_roots::bind_network(&mut project, &state_dir, font.as_deref(), &dir.to_string())?;
         // Only empty capability roots are local. Game bytes are never staged
         // here: every client is overlaid with its scoped network provider.
         let root = state_dir.join("network-assets");

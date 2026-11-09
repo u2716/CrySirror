@@ -81,6 +81,8 @@ const DIALOG: u32 = FRAME + 1;
 #[serde(deny_unknown_fields)]
 /// Host-injected configuration for the integrated Siglus runtime.
 pub struct Config {
+    #[serde(default)]
+    pub remote_root: Option<String>,
     pub resource_root: PathBuf,
     pub user_root: PathBuf,
     #[serde(default = "scene_default")]
@@ -156,12 +158,14 @@ impl NativeUiBackend for Ui {
     }
 }
 struct Worker {
+    storage: Option<mpsc::SyncSender<Arc<dyn crysirror_core::service::ClientStorage>>>,
     commands: mpsc::SyncSender<Control>,
     output: mpsc::Receiver<Output>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
 impl Worker {
     fn new(config: Config) -> Result<Self> {
+        let (storage, storage_rx) = mpsc::sync_channel::<Arc<dyn crysirror_core::service::ClientStorage>>(1);
         let (commands, incoming) = mpsc::sync_channel(2);
         let (outgoing, output) = mpsc::sync_channel(2);
         let thread = std::thread::Builder::new()
@@ -169,19 +173,29 @@ impl Worker {
             .spawn(move || {
                 let result =
                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<()> {
-                        let root = config.resource_root.canonicalize()?;
-                        ensure!(root.is_dir(), "Siglus resource root");
+                        let storage=storage_rx.recv().context("resource capability disconnected")?;
+                        #[cfg(any(feature="nfs",feature="smb"))]
+                        let _mount=if let Some(prefix)=&config.remote_root {
+                            Some(game_network::fs::Mount::from_directory(game_network::Directory::from_client_storage(storage.clone(),prefix)?,&config.user_root)?)
+                        } else {None};
+                        #[cfg(not(any(feature="nfs",feature="smb")))]
+                        ensure!(config.remote_root.is_none(),"enable this adapter's nfs or smb feature for remote resources");
+                        #[cfg(any(feature="nfs",feature="smb"))]
+                        let root=if let Some(mount)=&_mount {mount.path().to_path_buf()}else{config.resource_root.canonicalize()?};
+                        #[cfg(not(any(feature="nfs",feature="smb")))]
+                        let root=config.resource_root.canonicalize()?;
+                        ensure!(crate::native_vm::resource::fs::metadata(&root)?.is_dir(), "Siglus resource root");
                         let read = |name: &str, limit: u64| -> Result<Vec<u8>> {
-                            let path = root.join(name).canonicalize()?;
+                            let path = crate::native_vm::resource::fs::canonicalize(root.join(name))?;
                             ensure!(
                                 path.starts_with(&root),
                                 "Siglus bootstrap path escapes root"
                             );
                             ensure!(
-                                path.metadata()?.len() <= limit,
+                                crate::native_vm::resource::fs::metadata(&path)?.len() <= limit,
                                 "Siglus bootstrap size budget"
                             );
-                            Ok(std::fs::read(path)?)
+                            Ok(crate::native_vm::resource::fs::read(path)?)
                         };
                         let material = if let Some(key) = &config.key_file {
                             crate::key_toml::parse_key_toml(std::str::from_utf8(&read(
@@ -307,6 +321,7 @@ impl Worker {
                 }
             })?;
         Ok(Self {
+            storage: Some(storage),
             commands,
             output,
             thread: Some(thread),
@@ -315,9 +330,9 @@ impl Worker {
 }
 impl Drop for Worker {
     fn drop(&mut self) {
-        let _ = self.commands.send(Control::Stop);
+        let _ = self.commands.try_send(Control::Stop);
         if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
+            let _ = std::thread::Builder::new().name("siglus-retire".into()).spawn(move || { let _ = thread.join(); });
         }
     }
 }
@@ -469,6 +484,7 @@ impl VmAdapter for IntegratedVm {
         _budget: u32,
     ) -> crysirror_core::Result<VmYield> {
         let mut run = || -> Result<VmYield> {
+            if let Some(sender)=self.worker.storage.take(){sender.try_send(host.storage(self.client)?).map_err(|_|anyhow::anyhow!("resource capability delivery failed"))?;}
             let was_ready = self.ready;
             self.poll(host)?;
             self.ui(host)?;

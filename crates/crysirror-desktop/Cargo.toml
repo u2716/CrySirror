@@ -18,6 +18,8 @@ path = "src/main.rs"
 default = ["audio", "gamepad"]
 audio = ["crysirror-audio/cpal-output"]
 gamepad = ["dep:gilrs"]
+nfs = ["crysirror-siglus-integrated/nfs", "crysirror-bgi-integrated/nfs", "crysirror-softpal/nfs", "crysirror-rfvp-integrated/nfs"]
+smb = ["crysirror-siglus-integrated/smb", "crysirror-bgi-integrated/smb", "crysirror-softpal/smb", "crysirror-rfvp-integrated/smb"]
 acoustics-obvhs = ["crysirror-engine/acoustics-obvhs"]
 
 [dependencies]
@@ -27,6 +29,7 @@ crysirror-reallive.workspace = true
 crysirror-avg32.workspace = true
 crysirror-krkr.workspace = true
 crysirror-rfvp.workspace = true
+crysirror-rfvp-integrated = {path="../crysirror-rfvp-integrated"}
 crysirror-rfvp-vm.workspace = true
 crysirror-siglus-integrated.workspace = true
 crysirror-nscripter.workspace = true

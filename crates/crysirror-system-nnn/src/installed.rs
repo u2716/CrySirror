@@ -2,30 +2,30 @@
 //! Dormant installed-game factory. Only original VM policy is prepared here;
 //! image decoding, composition, font resources, audio and clocks are services.
 use crate::{
-    Program,
     adapter::{NativeAdapter, ScriptLoader},
     bridge::{Bridge, CallbackProfile, SceneBindings},
     native_audio::AudioBindings,
     native_bootstrap::{BootEntry, PreparedBoot},
     native_resources::ResourceNames,
     native_services_bootstrap::{
-        NativeWindowSource, PreparedNativeServices, resolved_window_resource,
+        resolved_window_resource, NativeWindowSource, PreparedNativeServices,
     },
     native_system_file::{NativeSystemFile, SystemLimits, SystemNames, SystemStamp, SystemWrite},
     native_text::{MessageBindings, MessageWindow, NativeTextBridge, TextFace},
     native_ui::SelectionProfile,
     resource_bridge::{NativeResources, SourceOpener},
+    Program,
 };
-use anyhow::{Context, Result, ensure};
+use anyhow::{ensure, Context, Result};
 use crysirror_core::{
-    Error,
     image_processing::{ImageInput, ImageJob, ImageProcessState},
     path::{Mount, VfsPath},
     service::{CivilTime, CivilTimeQuery, CivilTimeState, ClientStorage, HostServices, InputFrame},
     state::ClientId,
     vm::{VmAdapter, VmYield},
+    Error,
 };
-use crysirror_runtime::{AdapterRegistry, model::ClientSpec, runtime::VmFactory};
+use crysirror_runtime::{model::ClientSpec, runtime::VmFactory, AdapterRegistry};
 use crysirror_tasks::{Cancellation, Task, TaskPool};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -132,6 +132,7 @@ pub struct InstalledAdapter {
     native_exit_available: bool,
     title_newgame_requested: bool,
     title_restart_requested: Option<crate::native_shell::NativeMode>,
+    title_return: Option<crate::native_general::ExitFadePlayer>,
     opening_return_requested: bool,
     closing: bool,
     closed: bool,
@@ -249,6 +250,7 @@ impl InstalledAdapter {
             native_exit_available: false,
             title_newgame_requested: false,
             title_restart_requested: None,
+            title_return: None,
             opening_return_requested: false,
             closing: false,
             closed: false,
@@ -280,6 +282,9 @@ impl InstalledAdapter {
     pub fn dependency_pending(&self) -> bool {
         if self.failure.is_some() || !self.started {
             return false;
+        }
+        if let Some(fade) = &self.title_return {
+            return self.closing || fade.dependency_pending() || self.title_program_task.is_some();
         }
         (self.closing && !self.closed)
             || self.native_load.as_ref().is_some_and(|load| load.pending())
@@ -319,7 +324,8 @@ impl InstalledAdapter {
         } else if self.closing {
             self.poll_close(host).map(|_| ())
         } else if self.title_newgame_requested || self.title_restart_requested.is_some() {
-            self.poll_title_newgame(host).map(|_| ())
+            self.poll_title_newgame(host, false, InputFrame::default())
+                .map(|_| ())
         } else if self.opening_return_requested {
             self.poll_opening_return(host).map(|_| ())
         } else if self.title.is_some() {
@@ -375,6 +381,19 @@ impl InstalledAdapter {
     fn poll_close(&mut self, host: &mut dyn HostServices) -> Result<VmYield> {
         if self.closed {
             return Ok(VmYield::Halted);
+        }
+        if self.title_return.is_some() {
+            // Close drains admitted image work but never admits another fade
+            // step. A cancelled countdown cannot keep the host alive forever.
+            let _ = self.poll_title_return(host, false, InputFrame::default())?;
+            if self
+                .title_return
+                .as_ref()
+                .is_some_and(|fade| fade.dependency_pending())
+            {
+                return Ok(VmYield::BudgetExhausted);
+            }
+            self.title_return = None;
         }
         if let Some(vm) = self.vm.as_mut() {
             if !vm.poll_shutdown_ready(host)? {
@@ -726,27 +745,90 @@ impl InstalledAdapter {
         }
         Ok(true)
     }
-    fn begin_title_newgame(&mut self) -> Result<()> {
+    fn prepare_title_return(
+        &mut self,
+        host: &mut dyn HostServices,
+        target: Option<crate::native_shell::NativeMode>,
+    ) -> Result<()> {
         let profile = &self
             .shell
             .as_ref()
-            .context("NNN Title native profile absent")?
+            .context("NNN Title return profile absent")?
             .profile;
-        let returning = crate::native_general::ImmediateReturn::read(&profile.title, None)?;
-        if returning.capture_exit {
-            self.title_exit = Some(
+        let returning = crate::native_general::ModeReturn::read(&profile.title, target)?;
+        let capture = if returning.capture_exit {
+            Some(
                 self.title
                     .as_ref()
-                    .context("NNN Title selected actor absent")?
+                    .context("NNN Title return actor absent")?
                     .completed_frame()?,
-            );
-            self.native_exit_available = true;
+            )
         } else {
             ensure!(
                 self.native_exit_available,
                 "NNN Title return requires an initialized original exit-screen buffer"
             );
+            None
+        };
+        let fade = if let Some(spec) = returning.fade {
+            // A background SPT can change frameTime after bootstrap. Read
+            // the current native callback state, not the initial setup token.
+            let frame_ms = self
+                .vm
+                .as_ref()
+                .context("NNN Title return context absent")?
+                .frame_period_ms();
+            Some(crate::native_general::ExitFadePlayer::new(
+                host,
+                self.client,
+                capture.clone().context("NNN Title fade capture absent")?,
+                spec,
+                frame_ms,
+            )?)
+        } else {
+            None
+        };
+        if let Some(capture) = capture {
+            self.title_exit = Some(capture);
+            self.native_exit_available = true;
         }
+        self.title_return = fade;
+        Ok(())
+    }
+    fn poll_title_return(
+        &mut self,
+        host: &mut dyn HostServices,
+        admit: bool,
+        input: InputFrame,
+    ) -> Result<bool> {
+        let Some(fade) = self.title_return.as_mut() else {
+            return Ok(true);
+        };
+        let image = if admit {
+            use crysirror_core::service::buttons as B;
+            fade.note_skip(input.buttons_pressed & (B::MOUSE_LEFT | B::MOUSE_RIGHT) != 0);
+            fade.poll(host)?
+        } else {
+            fade.poll_dependency()?
+        };
+        let finished = fade.finished();
+        if let Some(image) = image {
+            if finished {
+                self.title_exit = Some(image);
+            } else {
+                self.title
+                    .as_mut()
+                    .context("NNN Title fade actor absent")?
+                    .present_return_frame(host, image)?;
+            }
+        }
+        if finished {
+            self.title_return = None;
+        }
+        Ok(finished)
+    }
+    fn begin_title_newgame(&mut self, host: &mut dyn HostServices) -> Result<()> {
+        self.prepare_title_return(host, None)?;
         let loader = self
             .vm
             .as_ref()
@@ -761,7 +843,11 @@ impl InstalledAdapter {
         self.title_newgame_requested = true;
         Ok(())
     }
-    fn begin_title_restart(&mut self, mode: crate::native_shell::NativeMode) -> Result<()> {
+    fn begin_title_restart(
+        &mut self,
+        host: &mut dyn HostServices,
+        mode: crate::native_shell::NativeMode,
+    ) -> Result<()> {
         use crate::native_shell::NativeMode;
         ensure!(
             matches!(
@@ -775,22 +861,8 @@ impl InstalledAdapter {
             .as_ref()
             .context("NNN Title restart setup absent")?
             .profile;
-        let returning = crate::native_general::ImmediateReturn::read(&profile.title, Some(mode))?;
-        if returning.capture_exit {
-            self.title_exit = Some(
-                self.title
-                    .as_ref()
-                    .context("NNN Title restart actor absent")?
-                    .completed_frame()?,
-            );
-            self.native_exit_available = true;
-        } else {
-            ensure!(
-                self.native_exit_available,
-                "NNN Title restart requires an initialized original exit-screen buffer"
-            );
-        }
         let name = profile.opening_script.clone();
+        self.prepare_title_return(host, Some(mode))?;
         let loader = self
             .vm
             .as_ref()
@@ -805,7 +877,12 @@ impl InstalledAdapter {
         self.title_restart_requested = Some(mode);
         Ok(())
     }
-    fn poll_title_newgame(&mut self, host: &mut dyn HostServices) -> Result<bool> {
+    fn poll_title_newgame(
+        &mut self,
+        host: &mut dyn HostServices,
+        admit: bool,
+        input: InputFrame,
+    ) -> Result<bool> {
         ensure!(
             self.title_newgame_requested || self.title_restart_requested.is_some(),
             "NNN Title return was not selected"
@@ -815,6 +892,9 @@ impl InstalledAdapter {
                 self.title_program = Some(program);
                 self.title_program_task = None;
             }
+        }
+        if !self.poll_title_return(host, admit, input)? {
+            return Ok(false);
         }
         if let Some(vm) = self.vm.as_mut() {
             if !vm.poll_outer_exit(host)? {
@@ -986,7 +1066,7 @@ impl InstalledAdapter {
             return Ok(VmYield::BudgetExhausted);
         }
         if self.title_newgame_requested || self.title_restart_requested.is_some() {
-            let _ = self.poll_title_newgame(host)?;
+            let _ = self.poll_title_newgame(host, true, input)?;
             return Ok(VmYield::BudgetExhausted);
         }
         if self.opening_return_requested {
@@ -1011,7 +1091,7 @@ impl InstalledAdapter {
                 .context("NNN Title engine background absent")?;
             if let Some(action) = title.poll(host, input, base, vm)? {
                 match action {
-                    0 => self.begin_title_newgame()?,
+                    0 => self.begin_title_newgame(host)?,
                     // Actual Game vtable+240 -> 534b00 posts WM_CLOSE, same
                     // as the complete public PostCloseMessage implementation.
                     // Enter the existing scoped host-close/save protocol.
@@ -1021,7 +1101,7 @@ impl InstalledAdapter {
                     ),
                 }
             } else if let Some(mode) = title.take_restart() {
-                self.begin_title_restart(mode)?;
+                self.begin_title_restart(host, mode)?;
             }
             return Ok(VmYield::BudgetExhausted);
         }
@@ -1037,9 +1117,14 @@ impl InstalledAdapter {
         }
         if let Some(vm) = &mut self.vm {
             if let Some(shell) = &mut self.shell {
-                let entered = shell.mode() != crate::native_shell::NativeMode::Opening;
                 if !shell.poll(host, input)? {
                     return Ok(VmYield::BudgetExhausted);
+                }
+                let incoming = shell.take_opening_entry_frame()?;
+                let entered = incoming.is_some();
+                if let Some(exit) = incoming {
+                    vm.inherit_outer_exit_frame(exit)?;
+                    self.native_exit_available = true;
                 }
                 // GeneralInit resets native mouse state. The click that
                 // finishes Logo must not also skip the newly entered Opening.
@@ -1439,6 +1524,7 @@ impl VmAdapter for InstalledAdapter {
                         .is_some_and(|title| title.dependency_pending())
             );
         }
+        value["title_return_fade"] = self.title_return.is_some().into();
         value["title_newgame_requested"] = self.title_newgame_requested.into();
         value["title_restart_requested"] =
             serde_json::json!(self.title_restart_requested.map(|m| format!("{m:?}")));
@@ -1454,11 +1540,11 @@ impl VmAdapter for InstalledAdapter {
 mod system_close_tests {
     use super::*;
     use crate::{
-        XorProfile,
         config::Names,
         expression::{VariableProfile, Variables},
         machine::Machine,
         native_bootstrap::NativeConfiguration,
+        XorProfile,
     };
     #[test]
     fn original_host_close_waits_for_both_scoped_system_writes_without_vm_clock_or_scene_work() {
@@ -1590,12 +1676,12 @@ mod system_close_tests {
 mod native_return_tests {
     use super::*;
     use crate::{
-        XorProfile,
         config::Names,
         expression::{VariableProfile, Variables},
         machine::Machine,
         native_bootstrap::NativeConfiguration,
         native_shell::{NativeMode, NativeStartupProfile, NativeStartupShell},
+        XorProfile,
     };
     use std::time::{Duration, Instant};
     fn names(text: &str) -> Names {
@@ -1770,6 +1856,33 @@ mod native_return_tests {
             executed: 0,
         });
         (dir, runtime, adapter)
+    }
+    #[test]
+    fn incoming_logo_exit_is_overlap_state_not_a_new_opening_frame() {
+        let (_dir, mut runtime, mut adapter) = fixture();
+        let exit = adapter.shell.as_ref().unwrap().exit_frame().unwrap();
+        let state = adapter.outer.take().unwrap();
+        let program = (state.loader)(b"back", &Cancellation::default()).unwrap();
+        let mut vm = NativeAdapter::from_outer_background(
+            state,
+            b"back".to_vec(),
+            program,
+            NativeMode::Opening,
+            false,
+        )
+        .unwrap();
+        let time = runtime.host.now_ms();
+        vm.inherit_outer_exit_frame(exit.clone()).unwrap();
+        assert!(
+            vm.presented_frame().is_none(),
+            "inherited exit cannot release the cover before Opening produces pixels"
+        );
+        assert!(vm.poll_outer_exit(&mut runtime.host).unwrap());
+        let state = vm.into_cancelled_outer_state().unwrap();
+        assert!(Arc::ptr_eq(&state.bridge.presented_frame().unwrap(), &exit));
+        assert_eq!(state.machine.variables().unwrap().read_stored(200), 55);
+        assert_eq!(runtime.host.now_ms(), time);
+        assert!(runtime.host.engine.layers.get(ClientId(1), 9001).is_some());
     }
     #[test]
     fn installed_title_auto_restart_reenters_nothing_without_varinit_or_clock_and_retires_ui() {

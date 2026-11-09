@@ -24,19 +24,104 @@
       "adapter": "bgi",
       "config": [
         {
-          "doc": "Capability-relative game root. Empty selects the client's own root.",
+          "doc": "",
+          "name": "remote_root",
+          "rust_type": "Option<String>"
+        },
+        {
+          "doc": "",
           "name": "root",
           "rust_type": "String"
         },
         {
-          "doc": "Native BP module. Buriko scenario scripts are a separate unsupported ABI.",
+          "doc": "",
           "name": "script",
           "rust_type": "String"
         },
         {
-          "doc": "Project font alias for native font slot zero in the plain text profile.",
+          "doc": "",
           "name": "font",
           "rust_type": "Option<String>"
+        },
+        {
+          "doc": "Canonical physical capability roots injected by the owning desktop host.",
+          "name": "resource_root",
+          "rust_type": "PathBuf"
+        },
+        {
+          "doc": "",
+          "name": "user_root",
+          "rust_type": "PathBuf"
+        },
+        {
+          "doc": "",
+          "name": "font_file",
+          "rust_type": "Option<PathBuf>"
+        },
+        {
+          "doc": "",
+          "name": "font_face_index",
+          "rust_type": "u32"
+        },
+        {
+          "doc": "",
+          "name": "gbk",
+          "rust_type": "bool"
+        },
+        {
+          "doc": "",
+          "name": "trace",
+          "rust_type": "bool"
+        },
+        {
+          "doc": "",
+          "name": "silent",
+          "rust_type": "bool"
+        }
+      ]
+    },
+    {
+      "adapter": "softpal",
+      "config": [
+        {
+          "doc": "",
+          "name": "remote_root",
+          "rust_type": "Option<String>"
+        },
+        {
+          "doc": "",
+          "name": "resource_root",
+          "rust_type": "PathBuf"
+        },
+        {
+          "doc": "",
+          "name": "user_root",
+          "rust_type": "PathBuf"
+        },
+        {
+          "doc": "",
+          "name": "font_file",
+          "rust_type": "Option<PathBuf>"
+        },
+        {
+          "doc": "",
+          "name": "nls",
+          "rust_type": "String"
+        },
+        {
+          "doc": "",
+          "name": "lang",
+          "rust_type": "String"
+        },
+        {
+          "doc": "",
+          "name": "audio",
+          "rust_type": "bool"
+        },
+        {
+          "doc": "Portable host policies for PAL's four retained aspect-mode indices. The VM retains the raw mode (including mode 3's sprite positioning). Callers can choose a different output policy without changing the VM.",
+          "name": "aspect_modes",
+          "rust_type": "[PresentationScale; 4]"
         }
       ]
     },
@@ -274,7 +359,7 @@
       "adapter": "rfvp",
       "config": [
         {
-          "doc": "Game directory inside the asset mount (\"\" = the mount root).",
+          "doc": "",
           "name": "root",
           "rust_type": "String"
         },
@@ -284,14 +369,19 @@
           "rust_type": "Nls"
         },
         {
-          "doc": "Asset path served as the core's required `default.ttf`.",
+          "doc": "",
           "name": "default_font",
           "rust_type": "String"
         },
         {
-          "doc": "Virtual screen size; the HCB header's size when absent.",
+          "doc": "",
           "name": "screen",
           "rust_type": "Option<[u32; 2]>"
+        },
+        {
+          "doc": "Set only by a host that has mounted a remote asset capability.",
+          "name": "remote",
+          "rust_type": "bool"
         }
       ]
     },
@@ -328,6 +418,11 @@
     {
       "adapter": "siglus",
       "config": [
+        {
+          "doc": "",
+          "name": "remote_root",
+          "rust_type": "Option<String>"
+        },
         {
           "doc": "",
           "name": "resource_root",
@@ -25399,7 +25494,7 @@
       "used_by": "UiEvent.widget client/local identity"
     }
   ],
-  "fingerprint": "4c6395d28206ec40",
+  "fingerprint": "25d0b1766c932638",
   "generated_by": "crysirror-engine api_doc (tests/api_docs.rs)",
   "globals": [
     {

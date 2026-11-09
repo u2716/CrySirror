@@ -1335,7 +1335,8 @@ pub(crate) fn generate() -> api_doc::ApiDocs {
         data,
         adapters: vec![
             ("avg32".into(), config("crates/crysirror-avg32/src/lib.rs")),
-            ("bgi", config("crates/crysirror-bgi/src/lib.rs")),
+            ("bgi", config("crates/crysirror-bgi-integrated/src/adapter.rs")),
+            ("softpal", config("crates/crysirror-softpal/src/adapter.rs")),
             ("circus", config("crates/crysirror-circus/src/adapter.rs")),
             (
                 "catsystem2",
@@ -1352,7 +1353,7 @@ pub(crate) fn generate() -> api_doc::ApiDocs {
                 config("crates/crysirror-system4/src/worker_adapter.rs"),
             ),
             ("nscripter", config("crates/crysirror-nscripter/src/lib.rs")),
-            ("rfvp", config("crates/crysirror-rfvp/src/adapter.rs")),
+            ("rfvp", config("crates/crysirror-rfvp-integrated/src/lib.rs")),
             (
                 "reallive",
                 config("crates/crysirror-reallive/src/adapter.rs"),

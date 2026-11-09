@@ -264,7 +264,10 @@ pub(super) struct SystemServices {
     pub(super) pointer_motion_ticks:u8,
     native_cursor_requested:bool,
     cursor_input_revision:Option<u64>,
-    cursor_position:Option<[i32;2]>,
+    cursor_activity:Option<u64>,
+    cursor_active:Option<bool>,
+    cursor_auto_hide:Option<bool>,
+    cursor_visible:Option<bool>,
     callback_idle_ms: u32,
     callback_idle_since: u32,
     callback_pointer: Option<[i32; 2]>,
@@ -815,33 +818,49 @@ impl Bridge<'_> {
         Ok(None)
     }
     ///442FF0 cursor/idle policy. This observes the owner's input capability,
-    ///never desktop pixels. Returned deadline keeps one pending auto-hide wake.
+    ///never desktop pixels. Physical activity is live even while a native
+    ///resource continuation retains the admitted input revision. Returned
+    ///deadline keeps one pending auto-hide wake.
     pub(super) fn update_native_cursor(&mut self,auto_hide:bool)->Result<Option<u64>> {
         let observation=self.host.input_observation(self.client)?;
         ensure!(observation.client==self.client,"Circus cursor foreign input owner");
         let now=self.host.now_ms();let tick=now as u32;
-        let focused=observation.focused.unwrap_or(true);
+        let focused=self.host.window_focused(self.client)?.or(observation.focused).unwrap_or(true);
+        let activity=self.host.pointer_activity(self.client)?;
+        let active=focused&&observation.pointer_inside!=Some(false);
+        let moved=activity.is_some()&&activity!=self.services.system.cursor_activity;
+        self.services.system.cursor_activity=activity;
+        let mut position_changed=false;
         if self.services.system.cursor_input_revision!=Some(observation.revision) {
             self.services.system.cursor_input_revision=Some(observation.revision);
-            let position=if focused {observation.pointer.unwrap_or([-1,-1])}
-                else {self.services.system.cursor_position.unwrap_or([-1,-1])};
-            if self.services.system.callback_pointer!=Some(position) {
-                self.services.system.callback_pointer=Some(position);
-                self.services.system.callback_idle_since=tick;
-                if auto_hide&&!self.services.system.native_cursor_requested {
-                    self.submit(vec![],vec![json!({"op":"set_cursor_visible","visible":true})])?;
-                    self.services.system.native_cursor_requested=true;
+            if focused {
+                if let Some(position)=observation.pointer {
+                    position_changed=self.services.system.callback_pointer!=Some(position);
+                    self.services.system.callback_pointer=Some(position);
                 }
             }
-            self.services.system.cursor_position=Some(if focused{position}else{[-1,-1]});
+        }
+        let policy_changed=self.services.system.cursor_auto_hide!=Some(auto_hide);
+        let reactivated=active&&self.services.system.cursor_active!=Some(true);
+        self.services.system.cursor_auto_hide=Some(auto_hide);
+        self.services.system.cursor_active=Some(active);
+        // The desktop owns cursor visibility. Restore it when auto-hide is
+        // disabled, focus is lost, or the pointer leaves the client, rather
+        // than carrying Win32's hidden ShowCursor state into the host.
+        if !auto_hide||!active||moved||position_changed||policy_changed||reactivated {
+            self.services.system.callback_idle_since=tick;
+            self.services.system.native_cursor_requested=true;
         }
         let elapsed=tick.wrapping_sub(self.services.system.callback_idle_since);
-        if auto_hide&&self.services.system.native_cursor_requested&&elapsed>5000 {
-            self.submit(vec![],vec![json!({"op":"set_cursor_visible","visible":!focused})])?;
+        if auto_hide&&active&&elapsed>5000 {
             self.services.system.native_cursor_requested=false;
-            if !focused {self.services.system.callback_idle_since=tick;}
         }
-        Ok((auto_hide&&self.services.system.native_cursor_requested).then(||now.saturating_add(u64::from(5001u32.saturating_sub(tick.wrapping_sub(self.services.system.callback_idle_since))))))
+        let visible=!auto_hide||!active||self.services.system.native_cursor_requested;
+        if self.services.system.cursor_visible!=Some(visible) {
+            self.submit(vec![],vec![json!({"op":"set_cursor_visible","visible":visible})])?;
+            self.services.system.cursor_visible=Some(visible);
+        }
+        Ok((auto_hide&&active&&visible).then(||now.saturating_add(u64::from(5001u32.saturating_sub(elapsed)))))
     }
     pub(super) fn native_system(&mut self, request: SystemRequest) -> Result<Option<SystemReply>> {
         match request {
@@ -1155,6 +1174,7 @@ impl Bridge<'_> {
                 if !self.services.system.native_cursor_requested {
                     self.submit(vec![],vec![json!({"op":"set_cursor_visible","visible":true})])?;
                     self.services.system.native_cursor_requested=true;
+                    self.services.system.cursor_visible=Some(true);
                     self.services.system.callback_idle_since=self.host.now_ms() as u32;
                 }
                 Ok(Some(SystemReply::Done))

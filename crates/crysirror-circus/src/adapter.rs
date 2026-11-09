@@ -561,6 +561,11 @@ impl Bridge<'_> {
         Ok(())
     }
     fn submit(&mut self, layers: Vec<Value>, ui: Vec<Value>) -> Result<()> {
+        // Empty native updates must not open a shared layer transaction (and
+        // clone its retained animation state) on every title/menu frame.
+        if layers.is_empty() && ui.is_empty() {
+            return Ok(());
+        }
         self.host.submit_engine(
             self.client,
             1,
@@ -1295,6 +1300,9 @@ impl VmAdapter for CircusVm {
                 input,
             };
             bridge.sample_callback_releases()?;
+            // Pointer activity is live host state, independent of native
+            // frame admission and asynchronous resource completion.
+            let mut cursor_deadline=bridge.update_native_cursor(self.machine.native_cursor_auto_hide())?;
             if !bridge.services.native_iteration_open {
                 //41BBE0/442830: catch up the rational 60Hz phase once. Buf39
                 //only bypasses admission while native skip is actually active.
@@ -1318,7 +1326,6 @@ impl VmAdapter for CircusVm {
                 return Ok(VmYield::BudgetExhausted);
             }
             bridge.complete_native_thumbnail()?;
-            let mut cursor_deadline=None;
             for n in 0..budget {
                 // Finish the current resource/save owner before40C110 starts
                 // its own preference write. Once started, only that close
@@ -1349,8 +1356,12 @@ impl VmAdapter for CircusVm {
                 // Ready input surfaces must remain presentable while their
                 // native call awaits a retained UI receipt. Resource workers
                 // and partial drawing callbacks still hold the frame fence.
-                if outcome!=Outcome::Advanced && bridge.callbacks_ready() && bridge.native_ui_waiting(){bridge.services.presentation_pending=false;}
-                let native_frame = self.machine.native_frame_ready(outcome)
+                let ready_ui_wait=outcome!=Outcome::Advanced && bridge.callbacks_ready() && bridge.native_ui_waiting();
+                if ready_ui_wait {bridge.services.presentation_pending=false;}
+                if outcome!=Outcome::Advanced {
+                    cursor_deadline=bridge.update_native_cursor(self.machine.native_cursor_auto_hide())?;
+                }
+                let native_frame = self.machine.native_frame_ready(outcome,ready_ui_wait)
                     && bridge.services.loading.is_none()
                     && bridge.services.audio.is_none()
                     && bridge.services.menu_image_job.is_none()
@@ -1363,7 +1374,6 @@ impl VmAdapter for CircusVm {
                     if !self.machine.prepare_effects_frame(&mut bridge)?{return Ok(VmYield::BudgetExhausted)}
                     if (bridge.services.frame_at!=Some(now)||bridge.services.native_force_admission)&&!bridge.prepare_packed_tick(bridge.native_effect_fast())? {return Ok(VmYield::BudgetExhausted)}
                     self.machine.capture_dialogue_checkpoint(&mut bridge)?;
-                    cursor_deadline=bridge.update_native_cursor(self.machine.native_cursor_auto_hide())?;
                     bridge.native_frame()?;
                     self.machine.sync_sprite_states(&mut bridge)?;
                     self.machine.sync_effect_frame(&bridge.effect_frame_samples()?)?;

@@ -22,6 +22,8 @@ const FRAME: u32 = 0xb610_0000;
 #[serde(deny_unknown_fields)]
 pub struct Config {
     #[serde(default)]
+    pub remote_root: Option<String>,
+    #[serde(default)]
     pub root: String,
     pub script: String,
     #[serde(default)]
@@ -116,11 +118,13 @@ enum WorkerOutput {
     Failed(String),
 }
 struct Worker {
+    storage: Option<mpsc::SyncSender<Arc<dyn crysirror_core::service::ClientStorage>>>,
     commands: mpsc::SyncSender<WorkerCommand>,
     output: mpsc::Receiver<WorkerOutput>,
 }
 impl Worker {
     fn new(config: Config) -> Result<Self> {
+        let (storage, storage_rx) = mpsc::sync_channel::<Arc<dyn crysirror_core::service::ClientStorage>>(1);
         let (commands, incoming) = mpsc::sync_channel(4);
         let (outgoing, output) = mpsc::sync_channel(2);
         std::thread::Builder::new()
@@ -130,14 +134,16 @@ impl Worker {
                 // driven and dropped on this worker. Only immutable products leave.
                 let result =
                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<()> {
+                        let storage=storage_rx.recv().context("resource capability disconnected")?;
+                        #[cfg(not(any(feature="nfs",feature="smb")))]
+                        ensure!(config.remote_root.is_none(),"enable this adapter's nfs or smb feature for remote resources");
                         let base = config.resource_root.canonicalize()?;
                         let resource_root = base.join(&config.root).canonicalize()?;
                         ensure!(
                             resource_root.starts_with(&base),
                             "BGI resource root escapes its host capability"
                         );
-                        let mut session = HostRuntime::create_with_bootstrap(
-                            HostConfig {
+                        let host_config = HostConfig {
                                 resource_root,
                                 user_root: config.user_root,
                                 font_path: config.font_file,
@@ -148,9 +154,13 @@ impl Worker {
                                 strict: true,
                                 trace: config.trace,
                                 silent: config.silent,
-                            },
-                            &config.script,
-                        )?;
+                            };
+                        #[cfg(all(any(fd_policy,windows),any(feature="nfs",feature="smb")))]
+                        let mut session=if let Some(prefix)=&config.remote_root {
+                            HostRuntime::create_with_resources(host_config,&config.script,game_network::Directory::from_client_storage(storage,prefix)?)?
+                        } else {HostRuntime::create_with_bootstrap(host_config,&config.script)?};
+                        #[cfg(not(all(any(fd_policy,windows),any(feature="nfs",feature="smb"))))]
+                        let mut session={ensure!(config.remote_root.is_none(),"BGI remote resources require a desktop policy backend");HostRuntime::create_with_bootstrap(host_config,&config.script)?};
                         outgoing
                             .send(WorkerOutput::Ready)
                             .map_err(|_| anyhow::anyhow!("BGI owner disconnected"))?;
@@ -230,7 +240,7 @@ impl Worker {
                 }
             })
             .context("start BGI session worker")?;
-        Ok(Self { commands, output })
+        Ok(Self { storage:Some(storage), commands, output })
     }
 }
 fn feed_input(
@@ -417,6 +427,7 @@ impl VmAdapter for IntegratedVm {
         _instruction_budget: u32,
     ) -> crysirror_core::Result<VmYield> {
         let mut run = || -> Result<VmYield> {
+            if let Some(sender)=self.worker.storage.take(){sender.try_send(host.storage(self.client)?).map_err(|_|anyhow::anyhow!("resource capability delivery failed"))?;}
             self.input = input;
             let was_ready = self.ready;
             self.poll(host)?;

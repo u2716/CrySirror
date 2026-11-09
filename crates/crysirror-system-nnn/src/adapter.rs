@@ -840,6 +840,25 @@ impl NativeAdapter {
     pub fn configuration(&self) -> Option<&Arc<NativeConfiguration>> {
         self.configuration.as_ref()
     }
+    pub(crate) fn frame_period_ms(&self) -> u64 {
+        self.bridge.frame_period_ms()
+    }
+    /// General's exit-screen buffer becomes the opening script's immutable
+    /// overlap source before any callback/worker is admitted. It is inherited
+    /// state, not a frame produced by that script, so keep the cover visible.
+    pub(crate) fn inherit_outer_exit_frame(
+        &mut self,
+        image: Arc<dyn crysirror_core::image_processing::ImageResource>,
+    ) -> Result<()> {
+        anyhow::ensure!(
+            self.background_loop.is_some() && self.worker.is_none() && self.pending.is_none()
+                && self.session.as_ref().is_some_and(|session| session.executed() == 0),
+            "NNN outer exit inheritance needs an unstarted background context"
+        );
+        self.bridge.set_outer_exit_frame(image.clone())?;
+        self.previous_mode_frame = Some(image);
+        Ok(())
+    }
     /// Original Load may interrupt a stable PRINT/SELECT actor, never a VM
     /// worker or a half-published resource/native callback.
     pub(crate) fn original_input_mode(&self) -> Option<i32> {

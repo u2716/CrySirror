@@ -107,3 +107,8 @@ impl crysirror_core::service::ClientStorage for Subdirectory {
         Err(crysirror_core::Error::ReadOnly)
     }
 }
+
+mod native_io;
+pub use native_io::{Directory, File};
+#[path="native_fs.rs"]
+pub mod fs;

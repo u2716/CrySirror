@@ -5,6 +5,15 @@ Newest first. Each entry is keyed by the API fingerprint printed in
 fingerprint appears here. Mark breaking changes with **Breaking**.
 
 
+## `25d0b1766c932638` (2026-11-09): integrated RFVP and optional remote resources
+
+- The default RFVP config now describes its integrated runtime and an injected
+  remote-resource capability marker. Original extraction crates remain available.
+- Siglus and BGI configs expose a host-bound `remote_root`; the reference now
+  reads the active BGI config and includes the integrated SoftPAL config.
+- Network backend features are default-off on the four integrated adapters.
+  Regenerated with the release API example; no API test suite was executed.
+
 ## `4c6395d28206ec40` (2026-11-07): stored channel copies and font fallback
 
 - `ImageEffect::CopyChannel` copies one stored byte channel into selected RGBA

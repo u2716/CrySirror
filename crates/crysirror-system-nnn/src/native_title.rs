@@ -59,7 +59,7 @@ impl NativeTitleSpec {
         configuration: &NativeConfiguration,
     ) -> Result<Self> {
         let table = &profile.title;
-        crate::native_general::ImmediateReturn::validate_entry(table)?;
+        crate::native_general::ModeReturn::validate_entry(table)?;
         let get = |key: &str, default: i32| integer(table, "", key, default);
         ensure!(
             get("extModeNumber", 0)? == 0,
@@ -1178,6 +1178,32 @@ impl NativeTitlePlayer {
         self.last_presented
             .clone()
             .ok_or_else(|| anyhow::anyhow!("NNN Title completed frame absent"))
+    }
+    /// GeneralPrint replaces the same retained title plane. A replacement is
+    /// published before releasing its predecessor, including worker retries.
+    pub(crate) fn present_return_frame(
+        &mut self,
+        host: &mut dyn HostServices,
+        image: Arc<dyn ImageResource>,
+    ) -> Result<()> {
+        let _ = self.completed_frame()?;
+        ensure!(
+            image.client() == self.client && image.size() == self.canvas,
+            "NNN Title return frame scope"
+        );
+        let publication = host.publish_image_resource(self.client, self.layer, image.clone())?;
+        let path = publication.path.relative().to_owned();
+        let [w, h] = self.canvas;
+        if let Err(error) = host.submit_engine(self.client, 1, &serde_json::to_vec(&serde_json::json!({"layers":[{"op":"put","layer":{"id":self.layer,"rect":[0,0,w,h],"order":[4000,0],"paint":{"kind":"image","asset":path}}}]}))?) {
+            let _ = host.release_image_resource(self.client, &path);
+            return Err(error.into());
+        }
+        self.api_calls += 2;
+        if let Some(old) = self.display_path.replace(path) {
+            host.release_image_resource(self.client, &old)?;
+        }
+        self.last_presented = Some(image);
+        Ok(())
     }
     pub(crate) fn retire(&mut self, host: &mut dyn HostServices) -> Result<()> {
         let _ = self.completed_frame()?;

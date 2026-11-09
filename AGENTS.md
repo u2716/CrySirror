@@ -7,7 +7,7 @@ Read STATUS.md, docs/ARCHITECTURE.md and docs/NATIVE_ADAPTERS.md before editing.
   `integrated` maintains a complete runtime behind CrySirror-owned host/output
   services. Record the chosen mode in the crate README. Existing modes do not
   change automatically; new unclassified work defaults to `adopt`.
-- Siglus, BGI and Softpal use `integrated` backends: retain their complete
+- Siglus, BGI, Softpal and RFVP use `integrated` backends: retain their complete
   implementations as internal modules of workspace crates and present their
   frame/PCM output through CrySirror. The host owns the window/event loop and
   output devices. Their existing capability-extraction code remains preserved,

@@ -3,7 +3,7 @@
 Engine onboarding follows [ADR 0102](adr/0102-engine-adoption-and-runtime-integration.md).
 `adopt` VMs translate native operations into shared APIs and engine-owned state.
 `integrated` runtimes may retain native composition/mixing and publish bounded
-frames/PCM through CrySirror-owned host services. Siglus, BGI and Softpal use this mode;
+frames/PCM through CrySirror-owned host services. Siglus, BGI, Softpal and RFVP use this mode;
 their native state stays on a session owner worker, with event loops and output
 devices owned by the host. Other current adapters retain their `adopt` boundary
 unless explicitly migrated. See [the onboarding contracts](ENGINE_ONBOARDING.md)
@@ -40,7 +40,8 @@ Dated source/validation sections below describe their recorded profiles. Consult
 | crysirror-avg32 | xmoezzz's AVG32 interpreter maintained in the workspace running installed games; PDT raster on shared `crysirror_image::avg32`, text/menus as engine GlyphRun/solid layers, audio channels, storage and save mount (ADR 0095) |
 | crysirror-rfvp-vm | First-class HCB interpreter and native syscall/primitive/wait/save policy; per-instance globals, shared text/font/image kernels, no original software renderer/mixer or private pixel-storage implementation |
 | crysirror-codec-{omv,theora,mpeg,wmv,emote} | First-class CPU format/codec libraries used by shared Video/Puppet services; no original standalone players, windows or renderers |
-| crysirror-rfvp | `rfvp` semantic adapter, linked by the desktop: scoped storage/surfaces/PuppetFrame declarations, shared CPU mesh capture, channel audio and Media; framework snapshots remain unsupported |
+| crysirror-rfvp | Preserved extraction adapter over shared image/text/mesh/audio services; not registered by the default desktop |
+| crysirror-rfvp-native / crysirror-rfvp-integrated | Complete maintained RFVP native modules with original software composition and mixing; the `rfvp` session worker publishes RGBA/PCM through host services, with scoped streaming resources and optional NFS/SMB |
 | crysirror-bgi-integrated | Complete BGI implementation in one workspace crate; session worker publishes native frames and PCM through CrySirror, which owns the window/input/output devices |
 | crysirror-softpal | Complete SoftPAL implementation in one workspace crate; original asset/script/VM modules and native saves, session worker with frame/PCM output |
 | crysirror-bgi-vm / crysirror-bgi | Preserved capability-extraction implementation; not registered by the default desktop player |

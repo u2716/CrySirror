@@ -1153,6 +1153,9 @@ impl Bridge {
         self.frame_time_ms = value;
         Ok(())
     }
+    pub(crate) fn frame_period_ms(&self) -> u64 {
+        self.frame_time_ms
+    }
     pub(crate) fn passive_effect_counts(&self) -> &BTreeMap<i32, (i32, i32)> {
         &self.passive_counts
     }
@@ -4307,10 +4310,10 @@ mod actor_clock_tests {
     fn saved_screen_layer_cannot_be_silently_moved_under_the_restored_text() {
         let mut b = bridge();
         b.active_effects.insert(15);
-        assert!(b.validate_saved_wait_effects().is_err());
+        assert!(b.validate_saved_wait_effects(true, false).is_err());
         b.active_effects.remove(&15);
         b.active_effects.insert(3);
         b.fill_effects.insert(3, [1, 2, 3]);
-        assert!(b.validate_saved_wait_effects().is_ok());
+        assert!(b.validate_saved_wait_effects(true, false).is_ok());
     }
 }

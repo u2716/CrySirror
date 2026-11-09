@@ -787,7 +787,7 @@ impl Machine {
     /// The original render loop resumes only after synchronous native I/O
     /// queued before a wait has finished. Instruction-budget yielding is not
     /// an original rendered frame.
-    pub(crate) fn native_frame_ready(&self, outcome: Outcome) -> bool {
+    pub(crate) fn native_frame_ready(&self, outcome: Outcome, ready_ui_wait: bool) -> bool {
         self.state.history_replay.is_none()
             && !self.state.history.previewing()
             && self.state.pending_audio.is_empty()
@@ -796,7 +796,11 @@ impl Machine {
             && !self.state.media.pending_controls()
             && (matches!(outcome, Outcome::WaitUntil(_) | Outcome::WaitForInput)
                 || outcome == Outcome::Pending
-                    && (self.state.wait_animations || self.state.wait_menu_motion || self.state.wait_audio_mask != 0 || self.framebuffer_waiting()))
+                    // A retained menu/modal receipt is a native input wait,
+                    // not unfinished I/O. It still runs the original input,
+                    // animation and dispatcher frame tail. The adapter only
+                    // sets this after all owning resource jobs are ready.
+                    && (ready_ui_wait || self.state.wait_animations || self.state.wait_menu_motion || self.state.wait_audio_mask != 0 || self.framebuffer_waiting()))
     }
     /// Dispatcher-local declarations end at an actual original frame boundary,
     /// never at a resource retry or instruction-budget yield.

@@ -80,9 +80,9 @@ boundary described below.
 [ADR 0102](adr/0102-engine-adoption-and-runtime-integration.md) admits `adopt`
 and `integrated` as explicit modes. The [onboarding guide](ENGINE_ONBOARDING.md)
 defines their documentation, graphics, audio, lifecycle and platform contracts.
-Siglus, BGI and SoftPAL use complete workspace-internal runtimes: session
+Siglus, BGI, SoftPAL and RFVP use complete workspace-internal runtimes: session
 workers own native state; CrySirror supplies input and presents frames/PCM.
-The default desktop does not register the preserved BGI extraction path.
+The default desktop does not register the preserved BGI or RFVP extraction paths.
 Other current adapters retain `adopt` and shared engine API mappings unless
 explicitly migrated. No fallback aliases to the data VM are provided.
 

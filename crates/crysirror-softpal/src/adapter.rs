@@ -33,6 +33,8 @@ const MAX_FRAME_PIXELS: u64 = 16 * 1024 * 1024;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
+    #[serde(default)]
+    pub remote_root: Option<String>,
     pub resource_root: PathBuf,
     pub user_root: PathBuf,
     #[serde(default)]
@@ -130,6 +132,7 @@ enum Response {
 }
 
 pub struct SoftpalVm {
+    storage: Option<SyncSender<Arc<dyn crysirror_core::service::ClientStorage>>>,
     client: ClientId,
     aspect_modes: [PresentationScale; 4],
     requests: Option<SyncSender<Request>>,
@@ -154,13 +157,14 @@ impl SoftpalVm {
     pub fn new(client: ClientId, config: Config) -> Result<Self> {
         config.validate()?;
         let aspect_modes = config.aspect_modes;
+        let (storage,storage_rx)=mpsc::sync_channel(1);
         let (requests, incoming) = mpsc::sync_channel(1);
         let (outgoing, responses) = mpsc::sync_channel(1);
         let worker = thread::Builder::new()
             .name(format!("softpal-{}", client.0))
             .spawn(move || {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    worker(config, incoming, &outgoing)
+                    worker(config, incoming, &outgoing, storage_rx)
                 }));
                 let failure = match result {
                     Ok(Ok(())) => None,
@@ -181,6 +185,7 @@ impl SoftpalVm {
         Ok(Self {
             client,
             aspect_modes,
+            storage:Some(storage),
             requests: Some(requests),
             responses,
             _worker: Some(worker),
@@ -388,6 +393,7 @@ impl VmAdapter for SoftpalVm {
         input: InputFrame,
         instruction_budget: u32,
     ) -> crysirror_core::Result<VmYield> {
+        if let Some(sender)=self.storage.take(){sender.try_send(host.storage(self.client)?).map_err(|_|Error::Io("SoftPAL resource capability delivery failed".into()))?;}
         self.observe(host, input)?;
         match self.responses.try_recv() {
             Ok(Response::Ready(size)) => {
@@ -475,13 +481,21 @@ fn worker(
     config: Config,
     requests: Receiver<Request>,
     responses: &SyncSender<Response>,
+    storage_rx:Receiver<Arc<dyn crysirror_core::service::ClientStorage>>,
 ) -> Result<()> {
+    let storage=storage_rx.recv().context("resource capability disconnected")?;
+    #[cfg(any(feature="nfs",feature="smb"))]
+    let _mount=if let Some(prefix)=&config.remote_root {Some(game_network::fs::Mount::from_directory(game_network::Directory::from_client_storage(storage,prefix)?,&config.user_root)?)}else{None};
+    #[cfg(not(any(feature="nfs",feature="smb")))]
+    ensure!(config.remote_root.is_none(),"enable SoftPAL nfs or smb feature for remote resources");
     let game_root = config
         .resource_root
         .canonicalize()
         .context("SoftPAL resource_root")?;
+    #[cfg(any(feature="nfs",feature="smb"))]
+    let game_root=_mount.as_ref().map_or(game_root.clone(),|mount|mount.path().to_path_buf());
     ensure!(
-        game_root.is_dir(),
+        crate::native_asset::vfs::directory_exists(&game_root),
         "SoftPAL resource_root is not a directory"
     );
     std::fs::create_dir_all(&config.user_root).context("SoftPAL user_root")?;

@@ -1,0 +1,16 @@
+{
+  "repository": "https://github.com/xmoezzz/rfvp",
+  "revision": "9f07adef2eb5d559777f9bf59a67b756875cb24f",
+  "license": "MPL-2.0",
+  "mode": "integrated",
+  "modules": "Complete Rust runtime source and native software raster/mixer; no bundled fonts, window or output devices in the active profile.",
+  "local_changes": [
+    "Thread-local globals and clock for one fixed owner thread per session.",
+    "Host movie, cursor and source-completion seams retained from the extraction implementation.",
+    "Original native composition and mixing; shared streaming audio codec provider and managed frame/PCM presentation.",
+    "Optional nfs/smb storage capability; native shutdown flushes global saves without executing another VM instruction.",
+    "Exit/legacy UI/text/config state and fallback RNG are session-local; unknown syscalls and audio output errors fail visibly in the host-session profile.",
+    "Movie sources retain the native BIN/loose-file VFS reader and are decoded through managed host media workers."
+  ],
+  "network_revision": "91ef488"
+}

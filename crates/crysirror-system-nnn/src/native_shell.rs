@@ -2,7 +2,7 @@
 //! Original outer modes. Configuration, counters and transitions remain native;
 //! resource reads, image transforms/composition, media and input are services.
 use crate::{config::Names, native_bootstrap::NativeConfiguration, native_resources::ImageLookup};
-use anyhow::{Context, Result, ensure};
+use anyhow::{ensure, Context, Result};
 use crysirror_core::{
     path::{Mount, VfsPath},
     service::ClientStorage,
@@ -58,6 +58,7 @@ pub struct NativeStartupProfile {
     pub logos: Vec<NativeLogoSpec>,
     pub logo_corner_colors: Vec<[bool; 2]>,
     pub logo_next: NativeMode,
+    pub(crate) logo_return: crate::native_general::ModeReturn,
     pub opening_next: NativeMode,
     pub opening_script: Vec<u8>,
     pub opening_loop: bool,
@@ -149,8 +150,8 @@ impl NativeStartupProfile {
             Ok(c)
         };
         let count = int(logo, "logoNumber", 2)?;
-        crate::native_general::ImmediateReturn::validate_entry(logo)?;
-        let _ = crate::native_general::ImmediateReturn::read(
+        crate::native_general::ModeReturn::validate_entry(logo)?;
+        let logo_return = crate::native_general::ModeReturn::read(
             logo,
             Some(mode(logo, "nextMode", NativeMode::Title)?),
         )?;
@@ -270,6 +271,7 @@ impl NativeStartupProfile {
             logos,
             logo_corner_colors,
             logo_next: mode(logo, "nextMode", NativeMode::Title)?,
+            logo_return,
             opening_next: mode(opening, "nextMode", NativeMode::Title)?,
             opening_script,
             opening_loop,
@@ -660,6 +662,10 @@ pub struct NativeStartupShell {
     probe: Option<crysirror_core::service::MediaProbeJob>,
     probe_info: Option<crysirror_core::service::MediaProbeInfo>,
     logo: NativeLogoPlayer,
+    logo_return_started: bool,
+    logo_fade: Option<crate::native_general::ExitFadePlayer>,
+    logo_exit: Option<Arc<dyn ImageResource>>,
+    opening_entry_pending: bool,
     nothing_job: Option<ImageJob>,
     nothing_frame: Option<Arc<dyn ImageResource>>,
     cover_frame: Option<Arc<dyn ImageResource>>,
@@ -703,6 +709,10 @@ impl NativeStartupShell {
             probe: None,
             probe_info: None,
             logo,
+            logo_return_started: false,
+            logo_fade: None,
+            logo_exit: None,
+            opening_entry_pending: false,
             nothing_job: None,
             nothing_frame: None,
             cover_frame: None,
@@ -716,7 +726,13 @@ impl NativeStartupShell {
             || (self.mode == NativeMode::Logo && self.logo.preparation_pending())
     }
     pub fn dependency_pending(&self) -> bool {
-        self.probe.is_some() || self.nothing_job.is_some() || self.logo.dependency_pending()
+        self.probe.is_some()
+            || self.nothing_job.is_some()
+            || self.logo.dependency_pending()
+            || self
+                .logo_fade
+                .as_ref()
+                .is_some_and(|fade| fade.dependency_pending())
     }
     pub fn mode(&self) -> NativeMode {
         self.mode
@@ -759,12 +775,32 @@ impl NativeStartupShell {
         };
         self.publish_cover(host, cover)?;
         self.logo = logo;
+        self.logo_return_started = false;
+        self.logo_fade = None;
+        self.logo_exit = None;
+        self.opening_entry_pending = mode == NativeMode::Opening;
         self.nothing_published = mode == NativeMode::Nothing;
         self.mode = mode;
         Ok(())
     }
     pub(crate) fn exit_frame(&self) -> Option<Arc<dyn ImageResource>> {
         self.cover_frame.clone()
+    }
+    /// Resource completion may finish Logo outside an ordinary input tick.
+    /// Retain the handoff until the opening VM owner actually consumes it.
+    pub(crate) fn take_opening_entry_frame(&mut self) -> Result<Option<Arc<dyn ImageResource>>> {
+        if !self.opening_entry_pending {
+            return Ok(None);
+        }
+        ensure!(
+            self.mode == NativeMode::Opening,
+            "NNN pending Opening entry mode changed"
+        );
+        let frame = self
+            .exit_frame()
+            .context("NNN Opening inherited exit buffer absent")?;
+        self.opening_entry_pending = false;
+        Ok(Some(frame))
     }
     fn publish_cover(
         &mut self,
@@ -816,6 +852,7 @@ impl NativeStartupShell {
             "NNN unreviewed native Title transition"
         );
         self.mode = NativeMode::Title;
+        self.opening_entry_pending = false;
         Ok(())
     }
     pub(crate) fn enter_movie(&mut self) -> Result<()> {
@@ -824,6 +861,7 @@ impl NativeStartupShell {
             "NNN unreviewed native Movie transition"
         );
         self.mode = NativeMode::Movie;
+        self.opening_entry_pending = false;
         Ok(())
     }
     pub fn diagnostics(&self) -> serde_json::Value {
@@ -889,10 +927,73 @@ impl NativeStartupShell {
             if !self.logo.poll(host, input)? {
                 return Ok(false);
             }
-            if let Some(image) = self.logo.final_frame.clone() {
-                self.publish_cover(host, image)?;
+            if !self.logo_return_started {
+                let frame = self
+                    .logo
+                    .final_frame
+                    .clone()
+                    .context("NNN Logo completed return frame absent")?;
+                let policy = self.profile.logo_return;
+                // Original ReturnFadeOut4f0cd0 captures Logo.Print's terminal
+                // page when requested, otherwise preserves the old exit buffer.
+                let exit = if policy.capture_exit {
+                    frame.clone()
+                } else {
+                    self.cover_frame
+                        .clone()
+                        .context("NNN Logo retained exit buffer absent")?
+                };
+                let fade = policy
+                    .fade
+                    .map(|spec| {
+                        crate::native_general::ExitFadePlayer::new(
+                            host,
+                            self.client,
+                            frame.clone(),
+                            spec,
+                            self.logo.frame_ms,
+                        )
+                    })
+                    .transpose()?;
+                // Keep the completed Logo on screen while the shared colour
+                // target is prepared. The old Nothing cover must not flash.
+                self.publish_cover(host, frame)?;
+                self.logo_exit = Some(exit);
+                self.logo_fade = fade;
+                self.logo_return_started = true;
+                if self.logo_fade.is_some() {
+                    // The mouse edge that ended Logo was already consumed by
+                    //503070. It must not also skip the new General countdown.
+                    return Ok(false);
+                }
             }
+            if let Some(fade) = self.logo_fade.as_mut() {
+                use crysirror_core::service::buttons as B;
+                fade.note_skip(input.buttons_pressed & (B::MOUSE_LEFT | B::MOUSE_RIGHT) != 0);
+                let image = fade.poll(host)?;
+                let finished = fade.finished();
+                if let Some(image) = image {
+                    if finished {
+                        self.logo_exit = Some(image);
+                    } else {
+                        self.publish_cover(host, image)?;
+                    }
+                }
+                if !finished {
+                    return Ok(false);
+                }
+                self.logo_fade = None;
+            }
+            // GeneralCalcu4f2ce0 returns before the terminal GeneralPrint.
+            // Preserve the last visible blend, but pass capture/FillExitScreen
+            // as the next mode's native exit buffer, not that visible blend.
+            self.cover_frame = Some(
+                self.logo_exit
+                    .take()
+                    .context("NNN Logo native exit buffer absent")?,
+            );
             self.mode = self.profile.logo_next;
+            self.opening_entry_pending = self.mode == NativeMode::Opening;
         }
         Ok(self.mode == NativeMode::Opening)
     }
@@ -901,13 +1002,22 @@ impl NativeStartupShell {
 #[cfg(test)]
 mod mode_reentry_tests {
     use super::*;
-    use crate::{XorProfile, expression::VariableProfile, native_resources::ResourceNames};
+    use crate::{expression::VariableProfile, native_resources::ResourceNames, XorProfile};
     use std::time::{Duration, Instant};
     fn names(text: &str) -> Names {
         Names::parse(text.as_bytes(), false).unwrap()
     }
     #[test]
     fn nothing_logo_reentry_uses_shared_immutable_cover_and_preserves_old_generation() {
+        check_reentry("", [255, 255, 255, 255], false);
+    }
+    #[test]
+    fn logo_general_return_fade_preserves_native_capture_fill_and_visible_frame_separately() {
+        check_reentry("exitFadeOutType 1 exitFadeOutTime 4 exitFadeOutColorR 20 exitFadeOutColorG 40 exitFadeOutColorB 60", [20, 40, 60, 255], true);
+        check_reentry("exitFadeOutType 1 exitFadeOutTime 4 exitFadeOutColorR 20 exitFadeOutColorG 40 exitFadeOutColorB 60 fillExitScreenFlag 0", [255, 255, 255, 255], true);
+        check_reentry("createExitScreenFlag 0", [7, 8, 9, 255], false);
+    }
+    fn check_reentry(logo_options: &str, expected_exit: [u8; 4], expect_fade: bool) {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join("game")).unwrap();
         let project:crysirror_runtime::Project=serde_json::from_value(serde_json::json!({"schema":2,"name":"native re-entry","content_revision":"1","assets":"game","canvas":[16,16],"clients":[{"name":"one","adapter":"crysirror-script-v1","game":"authored"}]})).unwrap();
@@ -933,7 +1043,7 @@ mod mode_reentry_tests {
             profile: VariableProfile::Legacy1000,
             scripts: XorProfile::default(),
         };
-        let profile=NativeStartupProfile::from_tables(&config,&names("fillColorR 7 fillColorG 8 fillColorB 9 nextMode logo"),&names("logoNumber 1 nextMode opening useCustomFileFlag 1 filename1 logo defaultFadeInTime 1 defaultKeepTime 1 defaultFadeOutTime 1"),&names("backScriptFlag 1 backScriptName back"),names("backScriptFlag 1 backScriptName back"),names("movieFileName a.mpg")).unwrap();
+        let profile=NativeStartupProfile::from_tables(&config,&names("fillColorR 7 fillColorG 8 fillColorB 9 nextMode logo"),&names(&format!("logoNumber 1 nextMode opening useCustomFileFlag 1 filename1 logo defaultFadeInTime 1 defaultKeepTime 1 defaultFadeOutTime 1 {logo_options}")),&names("backScriptFlag 1 backScriptName back"),names("backScriptFlag 1 backScriptName back"),names("movieFileName a.mpg")).unwrap();
         let image = crysirror_image::ImageSurface::filled(2, 1, [80, 90, 100, 255]).unwrap();
         let mut bytes = vec![b' '; 64];
         bytes[..4].copy_from_slice(b"PNG ");
@@ -956,20 +1066,46 @@ mod mode_reentry_tests {
         let mut shell =
             NativeStartupShell::new(ClientId(1), 1, [16, 16], 20, 0, profile, resources).unwrap();
         let deadline = Instant::now() + Duration::from_secs(5);
+        let mut saw_intermediate = false;
         while shell.mode() != NativeMode::Opening {
             shell.poll(&mut runtime.host, Default::default()).unwrap();
+            if shell.logo_fade.is_some() {
+                if let Some(frame) = &shell.cover_frame {
+                    let pixel = frame.pixel_at([0, 0]).unwrap().unwrap();
+                    saw_intermediate |= pixel != [255, 255, 255, 255] && pixel != [20, 40, 60, 255];
+                }
+            }
             if !shell.dependency_pending() {
                 runtime.tick(20, Default::default()).unwrap();
             }
             assert!(Instant::now() < deadline);
             std::thread::yield_now();
         }
+        assert_eq!(
+            saw_intermediate, expect_fade,
+            "nonzero return must produce an actual shared blend"
+        );
         let old = shell.exit_frame().unwrap();
+        let completed_at = runtime.host.now_ms();
+        for _ in 0..5 {
+            assert!(shell
+                .poll(&mut runtime.host, InputFrame::default())
+                .unwrap());
+        }
+        assert_eq!(runtime.host.now_ms(), completed_at);
+        assert!(Arc::ptr_eq(
+            &shell.take_opening_entry_frame().unwrap().unwrap(),
+            &old
+        ));
+        assert!(
+            shell.take_opening_entry_frame().unwrap().is_none(),
+            "the native entry is consumed only once even after completion-only polls"
+        );
         assert!(
             old.rgba()
                 .chunks_exact(4)
-                .all(|pixel| pixel == [255, 255, 255, 255]),
-            "completed Logo carries its exact terminal fill, not the prior partially faded image"
+                .all(|pixel| pixel == expected_exit),
+            "native capture/fill is distinct from the last displayed blend"
         );
         let saved = old.size();
         let fill = shell.nothing_frame.clone().unwrap();
@@ -1004,5 +1140,9 @@ mod mode_reentry_tests {
             .unwrap();
         assert!(Arc::ptr_eq(&shell.exit_frame().unwrap(), &old));
         assert_eq!(shell.mode(), NativeMode::Opening);
+        assert!(Arc::ptr_eq(
+            &shell.take_opening_entry_frame().unwrap().unwrap(),
+            &old
+        ));
     }
 }

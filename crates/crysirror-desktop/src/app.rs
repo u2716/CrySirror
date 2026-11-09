@@ -751,7 +751,14 @@ impl App {
             outer_size:[w.window.outer_size().width,w.window.outer_size().height],
             outer_position:w.window.outer_position().ok().map(|p|[p.x,p.y]),
         });
-        if !self.core.poll_tick(&mut self.audio)? {
+        let tick_ready=self.core.poll_tick(&mut self.audio)?;
+        // Cursor visibility/animation follows live input even when a native
+        // resource continuation is holding the scene presentation fence.
+        if let Some((_, visible)) = self.core.rt().host.engine.ui.cursor {
+            w.window.set_cursor_visible(visible);
+        }
+        self.cursor.sync(el, &w.window, &self.core.rt().host.engine.ui);
+        if !tick_ready {
             w.window.request_redraw();
             return Ok(());
         }
@@ -772,10 +779,6 @@ impl App {
                 log::warn!("pointer warp: {e}");
             }
         }
-        if let Some((_, visible)) = self.core.rt().host.engine.ui.cursor {
-            w.window.set_cursor_visible(visible);
-        }
-        self.cursor.sync(el, &w.window, &self.core.rt().host.engine.ui);
         if let Some((_, enabled)) = self.core.rt().host.engine.ui.fullscreen {
             if w.window.fullscreen().is_some()!=enabled{w.window.set_fullscreen(enabled.then_some(winit::window::Fullscreen::Borderless(None)));}
         }

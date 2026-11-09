@@ -6,7 +6,7 @@ Generated from the class registry, the command table, serde defaults and Rust do
 `CRYSIRROR_BLESS=1 cargo test --release -p crysirror-engine --test api_docs`.
 Policy and change log: [README](README.md), [CHANGES](CHANGES.md).
 
-API fingerprint: `4c6395d28206ec40`
+API fingerprint: `25d0b1766c932638`
 
 The same classes are exposed to Rust (`EngineContext` calls), to JavaScript/TypeScript (bindings generated from the registry, [crysirror.d.ts](crysirror.d.ts)) and to inspection tools.
 
@@ -6949,9 +6949,30 @@ Used by: UiEvent.widget client/local identity.
 
 | Field | Rust type | Description |
 |---|---|---|
-| `root` | `String` | Capability-relative game root. Empty selects the client's own root. |
-| `script` | `String` | Native BP module. Buriko scenario scripts are a separate unsupported ABI. |
-| `font` | `Option<String>` | Project font alias for native font slot zero in the plain text profile. |
+| `remote_root` | `Option<String>` | — |
+| `root` | `String` | — |
+| `script` | `String` | — |
+| `font` | `Option<String>` | — |
+| `resource_root` | `PathBuf` | Canonical physical capability roots injected by the owning desktop host. |
+| `user_root` | `PathBuf` | — |
+| `font_file` | `Option<PathBuf>` | — |
+| `font_face_index` | `u32` | — |
+| `gbk` | `bool` | — |
+| `trace` | `bool` | — |
+| `silent` | `bool` | — |
+
+### `softpal`
+
+| Field | Rust type | Description |
+|---|---|---|
+| `remote_root` | `Option<String>` | — |
+| `resource_root` | `PathBuf` | — |
+| `user_root` | `PathBuf` | — |
+| `font_file` | `Option<PathBuf>` | — |
+| `nls` | `String` | — |
+| `lang` | `String` | — |
+| `audio` | `bool` | — |
+| `aspect_modes` | `[PresentationScale; 4]` | Portable host policies for PAL's four retained aspect-mode indices. The VM retains the raw mode (including mode 3's sprite positioning). Callers can choose a different output policy without changing the VM. |
 
 ### `circus`
 
@@ -7031,10 +7052,11 @@ Used by: UiEvent.widget client/local identity.
 
 | Field | Rust type | Description |
 |---|---|---|
-| `root` | `String` | Game directory inside the asset mount ("" = the mount root). |
+| `root` | `String` | — |
 | `nls` | `Nls` | — |
-| `default_font` | `String` | Asset path served as the core's required `default.ttf`. |
-| `screen` | `Option<[u32; 2]>` | Virtual screen size; the HCB header's size when absent. |
+| `default_font` | `String` | — |
+| `screen` | `Option<[u32; 2]>` | — |
+| `remote` | `bool` | Set only by a host that has mounted a remote asset capability. |
 
 ### `reallive`
 
@@ -7050,6 +7072,7 @@ Used by: UiEvent.widget client/local identity.
 
 | Field | Rust type | Description |
 |---|---|---|
+| `remote_root` | `Option<String>` | — |
 | `resource_root` | `PathBuf` | — |
 | `user_root` | `PathBuf` | — |
 | `scene` | `String` | — |

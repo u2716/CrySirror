@@ -51,6 +51,8 @@ members = [
     "crates/crysirror-tjs2",
     "crates/crysirror-kag",
     "crates/crysirror-rfvp-vm",
+    "crates/crysirror-rfvp-native",
+    "crates/crysirror-rfvp-integrated",
     "crates/crysirror-krkr",
     "crates/crysirror-rfvp",
     "crates/crysirror-nscripter",

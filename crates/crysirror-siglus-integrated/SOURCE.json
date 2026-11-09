@@ -637,5 +637,9 @@
     "Inject host resource, writable-save and font roots; use upstream resource-pair material recovery without writing caller game data.",
     "Forward host keyboard, pointer, focus and modal message-box results; preserve native key policy and global/native save handling.",
     "Use the project icon and caller font fallback; no upstream font or proprietary game resources are copied."
-  ]
+  ],
+  "network_integration": {
+    "revision": "7555aaa",
+    "changes": "Ported optional nfs/smb resource readers; CrySirror injects existing client-scoped storage on the session worker; defaults unchanged."
+  }
 }

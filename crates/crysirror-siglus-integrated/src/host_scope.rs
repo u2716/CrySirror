@@ -24,7 +24,7 @@ pub fn material() -> Option<crate::native_assets::key_toml::KeyTomlConfig> {
 pub fn admit_read(path: &std::path::Path) -> anyhow::Result<()> {
     SCOPE.with(|scope| {
         if let Some(scope) = scope.borrow().as_ref() {
-            let path = path.canonicalize()?;
+            let path = crate::native_vm::resource::fs::canonicalize(path)?;
             anyhow::ensure!(
                 path.starts_with(&scope.resource_root)
                     || path.starts_with(&scope.user_root)

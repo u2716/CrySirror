@@ -9,6 +9,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "01c0457472c38ea5bd1c3b5ada5e368271cb550be7a4ca4a0b4634e9913f6cc2"
 dependencies = [
  "ab_glyph_rasterizer",
+ "libm",
  "owned_ttf_parser",
 ]
 
@@ -17,6 +18,9 @@ name = "ab_glyph_rasterizer"
 version = "0.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "366ffbaa4442f4684d91e2cd7c5ea7c4ed8add41959a31447066e279e432b618"
+dependencies = [
+ "libm",
+]
 
 [[package]]
 name = "accesskit"
@@ -1953,6 +1957,7 @@ dependencies = [
  "chardetng",
  "crysirror-codec-mpeg",
  "crysirror-core",
+ "crysirror-network",
  "crysirror-runtime",
  "encoding_rs",
  "image 0.25.10",
@@ -2146,6 +2151,7 @@ dependencies = [
  "crysirror-reallive",
  "crysirror-resource",
  "crysirror-rfvp",
+ "crysirror-rfvp-integrated",
  "crysirror-rfvp-vm",
  "crysirror-runtime",
  "crysirror-scene",
@@ -2514,6 +2520,51 @@ dependencies = [
 ]
 
 [[package]]
+name = "crysirror-rfvp-integrated"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "crysirror-audio",
+ "crysirror-core",
+ "crysirror-image",
+ "crysirror-rfvp",
+ "crysirror-rfvp-native",
+ "crysirror-runtime",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "crysirror-rfvp-native"
+version = "0.2.0"
+dependencies = [
+ "ab_glyph",
+ "anyhow",
+ "atomic_refcell",
+ "bitflags 2.13.2",
+ "bytemuck",
+ "byteorder",
+ "bytes 1.12.1",
+ "core_maths",
+ "crysirror-network",
+ "encoding_rs",
+ "enum-map",
+ "glam 0.27.0",
+ "hashbrown 0.14.5",
+ "hecs",
+ "itertools 0.12.1",
+ "lazy_static",
+ "log",
+ "miniz_oxide 0.7.4",
+ "petitset",
+ "postcard",
+ "serde",
+ "spin",
+ "twofloat",
+]
+
+[[package]]
 name = "crysirror-rfvp-vm"
 version = "0.2.0"
 dependencies = [
@@ -2653,6 +2704,7 @@ dependencies = [
  "crysirror-codec-omv",
  "crysirror-codec-wmv",
  "crysirror-core",
+ "crysirror-network",
  "crysirror-resource",
  "crysirror-runtime",
  "crysirror-tasks",
@@ -2712,6 +2764,7 @@ dependencies = [
  "crysirror-codec-mpeg",
  "crysirror-codec-wmv",
  "crysirror-core",
+ "crysirror-network",
  "crysirror-runtime",
  "crysirror-scene",
  "crysirror-softpal-kira",

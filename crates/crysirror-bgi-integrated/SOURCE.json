@@ -1000,5 +1000,9 @@
     "src/lib.rs",
     "src/native_app/file_policy/cap_io.rs",
     "src/native_audio/session.rs"
-  ]
+  ],
+  "network_integration": {
+    "revision": "fc0efa7",
+    "changes": "Ported optional nfs/smb resource readers; CrySirror injects existing client-scoped storage on the session worker; defaults unchanged."
+  }
 }
