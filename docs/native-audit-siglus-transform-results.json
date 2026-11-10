@@ -16,7 +16,6 @@
       "start": "2026-10-25T08:40:07.308870+00:00",
       "end": "2026-10-25T08:40:07.451352+00:00",
       "returncode": 0,
-      "log": "docs/native-audit-siglus-transform-targeted.txt",
       "passed": 1,
       "failed": 0,
       "ignored": 0
@@ -34,7 +33,6 @@
       "start": "2026-10-25T08:40:07.451385+00:00",
       "end": "2026-10-25T08:40:25.224645+00:00",
       "returncode": 0,
-      "log": "docs/native-audit-siglus-transform-suites.txt",
       "passed": 43,
       "failed": 0,
       "ignored": 0
@@ -52,8 +50,7 @@
       ],
       "start": "2026-10-25T08:40:40.725929+00:00",
       "end": "2026-10-25T08:40:48.287834+00:00",
-      "returncode": 0,
-      "log": "docs/native-audit-siglus-transform-check.txt"
+      "returncode": 0
     },
     {
       "command": [
@@ -68,7 +65,6 @@
       "start": "2026-10-25T08:40:48.288134+00:00",
       "end": "2026-10-25T08:40:57.784516+00:00",
       "returncode": 0,
-      "log": "docs/native-audit-siglus-transform-python.txt",
       "tests_run": 126
     }
   ],

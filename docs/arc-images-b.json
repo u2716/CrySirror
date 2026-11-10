@@ -260,7 +260,6 @@
         "start_utc": "2026-10-25T14:19:50.773497+00:00",
         "end_utc": "2026-10-25T14:19:56.083918+00:00",
         "exit_code": 0,
-        "log": "docs/arc-images-b-check.txt",
         "test_results": []
       },
       {
@@ -278,7 +277,6 @@
         "start_utc": "2026-10-25T14:19:56.084289+00:00",
         "end_utc": "2026-10-25T14:20:01.357303+00:00",
         "exit_code": 0,
-        "log": "docs/arc-images-b-tests.txt",
         "test_results": [
           "ok. 46 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.00s"
         ]
@@ -301,7 +299,6 @@
         "start_utc": "2026-10-25T14:20:01.357520+00:00",
         "end_utc": "2026-10-25T14:20:04.195845+00:00",
         "exit_code": 0,
-        "log": "docs/arc-images-b-corpus.txt",
         "test_results": [
           "ok. 3 passed; 0 failed; 0 ignored; 0 measured; 46 filtered out; finished in 2.68s"
         ]

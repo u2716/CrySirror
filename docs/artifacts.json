@@ -7,8 +7,7 @@
     "recloned": true,
     "default_checkout": "main",
     "restored_python_tests": 79,
-    "rust_executed": false,
-    "log": "docs/bundle-restore-tests.txt"
+    "rust_executed": false
   },
   "hashes": "external CrySirror-SHA256SUMS.txt; integrity checks are not compilation results"
 }

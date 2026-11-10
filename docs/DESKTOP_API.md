@@ -9,7 +9,7 @@ cargo build --release --locked
 
 All native VM adapters, scripting and resource providers are linked by this
 build. Desktop features now select device options: `audio`, `gamepad` (defaults)
-and optional `acoustics-obvhs`. `--no-default-features` disables audio output and
+and optional `acoustics-obvhs`, `smb` and `nfs`. `--no-default-features` disables audio output and
 gamepad support; it does not remove native adapters. The minimum Rust version is
 declared in the root Cargo.toml. OS graphics/input/audio libraries remain native
 build prerequisites. Windows calls the executable `crysirror.exe`.
@@ -27,8 +27,8 @@ The path may be a game directory or a file inside it. The player detects the
 native profile, builds its project and installs capability-scoped resource
 mounts internally. No hand-written bootstrap JSON or manual bulk extraction is
 needed for supported layouts. Unknown formats, protection profiles and native
-operations can still fail explicitly. See [native adapters](NATIVE_ADAPTERS.md)
-for profile and ownership boundaries.
+operations can still fail explicitly. See the [engine compatibility guide](NATIVE_ADAPTERS.md)
+for supported formats, plug-ins and save-file compatibility.
 
 `play` supports `--data-dir`, `--font`, `--no-audio`, `--input-track`, `--frames`,
 `--capture`, `--headless`, `--detect-only` and `--allow-borderless`. Headless mode
@@ -58,10 +58,22 @@ the player does not download the whole game. Game assets are read-only, while
 saves and cache remain local (`--data-dir` selects their location). A dropped
 connection reports an error; automatic reconnection is not implemented.
 
-BGI and SoftPAL's direct integration backends currently require a local or
-OS-mounted directory. HTTP, WebDAV and SFTP URLs are not supported by `play`.
+Siglus, BGI, SoftPAL and RFVP network access requires the player to be built
+with the matching optional feature:
+
+```sh
+cargo build --release --locked -p crysirror-desktop --features smb
+```
+
+HTTP, WebDAV and SFTP URLs are not supported by `play`.
 
 ### Games on an NFS export
+
+For Siglus, BGI, SoftPAL and RFVP, enable the optional NFS feature when building:
+
+```sh
+cargo build --release --locked -p crysirror-desktop --features nfs
+```
 
 `play` also accepts `nfs://` URLs. The pure Rust client reads NFSv3, NFSv4.1 or
 NFSv4.2 directly, without an operating-system mount or helper process:

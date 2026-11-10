@@ -6,8 +6,7 @@
     "failures": 0,
     "errors": 0,
     "skips": 0,
-    "executed": true,
-    "log": "docs/python-test-results.txt"
+    "executed": true
   },
   "rust": {
     "cargo": "1.98.1",
@@ -19,15 +18,12 @@
     "tests_passed": 78,
     "tests_failed": 0,
     "tests_ignored": 3,
-    "check_log": "docs/rust-check-results.txt",
-    "test_log": "docs/rust-test-results.txt",
     "no_default_features_check": true
   },
   "gpu": {
     "executed": true,
     "explicit_pixel_tests_passed": 2,
     "default_gpu_test_ignored": true,
-    "log": "docs/gpu-test-results.txt",
     "screenshot_produced": true,
     "capture": "dist/siglus-resource-raytrace.png",
     "capture_log": "docs/siglus-resource-render.json",
@@ -119,7 +115,6 @@
       "resource_owner": "Runtime Assets",
       "cpu_layout_glyph_raster_test_executed": true,
       "font_bundled": false,
-      "log": "docs/text-font-test-results.txt",
       "gpu_capture": "dist/engine-text-service.png"
     },
     "ui": {

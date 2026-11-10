@@ -18,7 +18,6 @@
       "finished_utc": "2026-10-25T08:26:50.393683+00:00",
       "seconds": 9.72,
       "exit_code": 0,
-      "log": "docs/native-audit-python-tests.txt",
       "ran": 126,
       "ok": true
     },
@@ -37,7 +36,6 @@
       "finished_utc": "2026-10-25T08:27:24.888608+00:00",
       "seconds": 34.493,
       "exit_code": 0,
-      "log": "docs/native-audit-rust-tests.txt",
       "counts": {
         "passed": 42,
         "failed": 0,
@@ -56,8 +54,7 @@
       "started_utc": "2026-10-25T08:27:24.889341+00:00",
       "finished_utc": "2026-10-25T08:27:38.664476+00:00",
       "seconds": 13.775,
-      "exit_code": 0,
-      "log": "docs/native-audit-workspace-check.txt"
+      "exit_code": 0
     }
   ],
   "source_checkpoint": {

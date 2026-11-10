@@ -10,7 +10,6 @@
     "exit_code": 0,
     "started_utc": "2026-10-25T09:43:23.644311+00:00",
     "seconds": 154.983,
-    "log": "docs/bgi-final-rust-tests.txt",
     "counts": {
       "passed": 291,
       "failed": 0,
@@ -28,8 +27,7 @@
     ],
     "exit_code": 101,
     "started_utc": "2026-10-25T09:45:58.630273+00:00",
-    "seconds": 24.141,
-    "log": "docs/bgi-final-workspace-check.txt"
+    "seconds": 24.141
   },
   {
     "name": "workspace-check-repaired",
@@ -41,8 +39,7 @@
       "--all-targets"
     ],
     "exit_code": 0,
-    "seconds": 9.032,
-    "log": "docs/bgi-final-workspace-check-repaired.txt"
+    "seconds": 9.032
   },
   {
     "name": "desktop-no-default",
@@ -55,7 +52,6 @@
       "--no-default-features"
     ],
     "exit_code": 0,
-    "seconds": 15.341,
-    "log": "docs/bgi-final-desktop-no-default.txt"
+    "seconds": 15.341
   }
 ]

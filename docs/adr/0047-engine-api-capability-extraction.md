@@ -12,7 +12,7 @@ BGI and SoftPAL use `integrated`, retaining complete implementations as internal
 workspace crates. Their session workers publish frames and PCM through
 CrySirror; the host owns the window, event loop and output devices. Their
 capability-extraction implementations remain preserved and inactive in the
-default player. See [integration boundaries](../NATIVE_ADAPTERS.md#integration-boundaries).
+default player. See [integration boundaries](../ENGINE_ONBOARDING.md#choose-and-record-the-boundary).
 
 `adopt` adapters follow the capability-extraction boundary. Preserving some
 shared helper calls while flattening a native scene into an uploaded frame

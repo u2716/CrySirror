@@ -42,22 +42,28 @@ and engine-owned resources.
 | MCP inspection, validation, editing, shader checks, trace, capture and packaging | [MCP tools](docs/MCP.md) |
 | Offline TS/JS scene recipes | [Authoring guide](docs/AUTHORING.md) |
 
-## Native engines
+## Supported game engines
 
-- [Siglus](crates/crysirror-siglus-integrated/README.md)
-- [RealLive](docs/REALLIVE.md)
-- [AVG32](docs/adr/0095-avg32-installed-games-shared-raster.md)
-- [KiriKiri 2 / Z · KAG3](docs/adr/0088-kag3-semantic-adapter-and-shared-prerequisites.md)
-- [NScripter](crates/crysirror-nscripter/README.md)
-- [RFVP](docs/NATIVE_ADAPTERS.md)
-- [BGI / Ethornell](docs/BGI.md)
-- [SoftPAL](docs/NATIVE_ADAPTERS.md#bgi-and-softpal)
-- [Circus](crates/crysirror-circus/README.md)
-- [CatSystem2](crates/crysirror-catsystem2/README.md)
-- [QLIE](crates/crysirror-qlie/README.md)
-- [Majiro](crates/crysirror-majiro/README.md)
-- [AliceSoft System 4](crates/crysirror-system4/README.md)
-- [System-NNN](crates/crysirror-system-nnn/README.md)
+Open original game data with `crysirror play /path/to/game`.
+See the [compatibility guide](docs/NATIVE_ADAPTERS.md) for features and save-file compatibility.
+
+| Engine | Game data |
+| --- | --- |
+| [KiriKiri 2 / Z · KAG3](docs/KIRIKIRI.md) | XP3, TJS/KAG and [supported plug-ins](docs/KIRIKIRI.md#plug-in-compatibility) |
+| [Siglus](docs/NATIVE_ADAPTERS.md#siglus) | Gameexe, Scene, G00 and voice banks |
+| [RealLive](docs/NATIVE_ADAPTERS.md#reallive) | Gameexe.ini, Seen, PDT/G00 |
+| [AVG32](docs/NATIVE_ADAPTERS.md#avg32) | Scenario data, PDT10/11, SAVE.INI |
+| [BGI / Ethornell](docs/BGI.md) | BP, ARC, CBG |
+| [SoftPAL](docs/NATIVE_ADAPTERS.md#bgi-and-softpal) | PAL resources and scenarios |
+| [RFVP](docs/NATIVE_ADAPTERS.md#rfvp) | HCB, BIN |
+| [NScripter](docs/NATIVE_ADAPTERS.md#nscripter) | Text scenarios, SAR/NSA |
+| [Circus](docs/NATIVE_ADAPTERS.md#circus) | DC4 Plus Harmony MES, PCK/DAT, CRXG/XPCM |
+| [CatSystem2](docs/NATIVE_ADAPTERS.md#catsystem2) | KCS/FES/CST, INT/FWP, HG3 |
+| [QLIE](docs/NATIVE_ADAPTERS.md#qlie) | FilePack, .s, ABMP/DPNG |
+| [Majiro](docs/NATIVE_ADAPTERS.md#majiro) | MJO, ARC, RCT/RC8 |
+| [AliceSoft System 4](docs/NATIVE_ADAPTERS.md#alicesoft-system-4) | AIN v5, ALD/ALK, QNT |
+| [System-NNN](docs/NATIVE_ADAPTERS.md#system-nnn) | SPT, Black Cyc archives, DWQ/VAW |
+| [SugarPot](docs/NATIVE_ADAPTERS.md#sugarpot) | Tsukumo no Tsuki AOS2/SCR, ABM/BMP |
 
 ## Try CrySirror
 

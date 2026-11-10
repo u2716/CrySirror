@@ -4,7 +4,7 @@
 > their original scope. The missing destination/source clipping described below
 > was subsequently addressed by shared Layer viewport_clip/source_crop and native
 > SET_CLIP/SET_SRC_CLIP mappings; see
-> [native clipping](NATIVE_ADAPTERS.md#shared-target-clipping-and-siglus-set_clip-2026-11-01).
+> [native clipping](api/REFERENCE.md).
 > The old unsupported-state paragraph is not the current feature inventory.
 
 Source: complete local `siglus_rs` checkout at pinned commit

@@ -578,8 +578,8 @@ affine Append math and bounds live in Image and its Runtime facade. json.dll and
 the solid-fill profile of layerExDraw.dll translate native values/lifetimes onto
 those APIs and shared image/atomic-write workers. Their presence does not mean
 all shipped native DLLs or every JSON/GDI convention is supported. Source pins,
-bounded native profiles and actual validation are recorded by ADR 0092/0093 and
-docs/krkr-plugin-audit.md. Core read-only streams and provider directory queries
+bounded native profiles and validation are recorded by ADR 0092/0093. Current
+user-facing plug-in compatibility is listed in docs/KIRIKIRI.md. Core read-only streams and provider directory queries
 are independent of VM, window and GPU dependencies.
 
 The game-kr continuation adds engine-owned isolated subtree transitions

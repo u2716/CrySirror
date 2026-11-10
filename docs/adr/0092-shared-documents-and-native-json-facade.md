@@ -47,11 +47,9 @@ async completion or hide this work inside an unrelated worker API.
 
 ## Plugin support claims
 
-`docs/krkr-plugin-audit.md` inventories the 39 DLL files in the local
-`game-kr` package. Those files are not an executed dependency list. At the time
-of inventory the real game startup was blocked by HXV4 resource processing.
-Shared vector/text/audio foundations and native plugin mappings are separate
-capabilities.
+The current user-facing plug-in compatibility list is in
+[the KiriKiri guide](../KIRIKIRI.md#plug-in-compatibility). A DLL distributed with
+a game does not by itself establish compatibility with that interface.
 
 This batch implements the bounded JSON facade. ADR 0093 separately records the
 solid-linear LayerExDraw mapping. No alternate software rasterizer is imported.

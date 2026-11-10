@@ -28,6 +28,6 @@
   "new_example_compiled_and_run": true,
   "new_example": "/Users/xmoe/Documents/CrySirror/crates/crysirror-siglus-vm/examples/native_fixture.rs",
   "old_resource_example_explicitly_data_vm": true,
-  "python_boundary_suite": "tests/test_siglus_native.py; included in native-audit-python-tests.txt",
-  "new_native_fixture_abi_tests": "crysirror-siglus-vm adapter::verification_tests; included in native-audit-rust-tests.txt"
+  "python_boundary_suite": "tests/test_siglus_native.py",
+  "new_native_fixture_abi_tests": "crysirror-siglus-vm adapter::verification_tests"
 }

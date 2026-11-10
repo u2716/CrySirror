@@ -22,7 +22,6 @@
   "passed": 55,
   "failed": 0,
   "ignored": 0,
-  "log": "docs/bgi-native-services-tests.txt",
   "followup": {
     "command": [
       "cargo",
@@ -37,7 +36,6 @@
     "passed": 4,
     "failed": 0,
     "ignored": 0,
-    "reason": "Added a two-block PCM cursor-continuity assertion for restart=false.",
-    "log": "docs/bgi-native-channels-final-tests.txt"
+    "reason": "Added a two-block PCM cursor-continuity assertion for restart=false."
   }
 }

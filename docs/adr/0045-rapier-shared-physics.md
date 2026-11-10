@@ -84,9 +84,8 @@ client is paused; paused fixed ticks still leave its pose unchanged.
 
 The separately executed integration command passes **13 tests**: six Runtime
 JSON simulations, two object-API tests and five existing character/camera/vehicle
-regressions. Exact command, timestamps, source hashes, outcome and raw output
-are in [physics-integration-validation.json](../physics-integration-validation.json)
-and [physics-integration-tests.txt](../physics-integration-tests.txt).
+regressions. Commands and outcomes are recorded in
+[physics-integration-validation.json](../physics-integration-validation.json).
 A further real TypeScript test passes through Oxc, Boa and the public API:
 a 2 kg body receives a 2 N·s impulse, reaches 1 m/s and moves 0.96 m in 60
 16 ms Runtime steps, with one body/collider creation. These results are separate
