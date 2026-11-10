@@ -33,6 +33,13 @@ impl NativeRects {
     /// Original unscaled Blt clips its source plane and keeps destination
     /// phase. The shared integer region mapper owns clipping arithmetic; this
     /// adapter only translates original six-rectangle semantics to Layer DTOs.
+    pub(crate) fn clipped_layer_with_source_bounds(&self,size:[u32;2],bounds:[i32;4])->Result<Option<([f32;4],[f32;4])>> {
+        let [x,y,w,h]=self.destination;
+        let [sx,sy,_,_]=self.source;
+        let Some((src,at))=crysirror_image::coverage_bounds::intersect_source_window([sx,sy,w,h],[x,y],bounds)? else{return Ok(None);};
+        let mut clipped=self.clone();clipped.source=src;clipped.destination=[at[0],at[1],src[2],src[3]];
+        clipped.clipped_layer(size)
+    }
     pub(crate) fn clipped_layer(&self, size: [u32; 2]) -> Result<Option<([f32; 4], [f32; 4])>> {
         let [sx, sy, _, _] = self.source;
         let [x, y, w, h] = self.destination;

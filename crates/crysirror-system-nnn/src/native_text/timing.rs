@@ -21,6 +21,10 @@ pub(super) struct Timing {
     previous: Option<u64>,
 }
 impl Timing {
+    pub(super) fn normal_speed(&mut self, index: usize) -> Result<u32> {
+        self.normal_rate = *self.rates.get(index).context("NNN message speed index")?;
+        Ok(self.normal_rate)
+    }
     pub(super) fn new(normal_rate: u32) -> Self {
         Self {
             rates: [20, 40, 60, 120, 10000],

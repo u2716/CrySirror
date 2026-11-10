@@ -322,6 +322,9 @@ impl NativeCg {
             return Ok(None);
         };
         if self.pending.is_none() {
+            if let Some(dispatch) = self.copy_sprite(owner, machine, call, bridge, host)? {
+                return Ok(Some(dispatch));
+            }
             if let Some(dispatch) =
                 crate::native_pixel::dispatch(owner, machine, call, bridge, self, host)?
             {
@@ -622,6 +625,126 @@ impl NativeCg {
         }
         Ok(Some(Dispatch::WaitUntil(host.now_ms().saturating_add(1))))
     }
+    /// Original SactEngine6AD0 replaces only the destination's base image.
+    /// Position/z/show/blend/text records are preserved. Engine images are
+    /// immutable, so independent scoped publications may share a frozen lease;
+    /// later source/destination writes replace their own resource generation.
+    fn copy_sprite(
+        &mut self,
+        owner: ClientId,
+        m: &mut Machine,
+        call: &ExternalCall,
+        bridge: &mut Bridge,
+        host: &mut dyn HostServices,
+    ) -> Result<Option<Dispatch>> {
+        let ExternalTarget::Hll { library, function } = call.target else {
+            return Ok(None);
+        };
+        let library = &m.program.libraries[library];
+        let f = &library.functions[function];
+        if library.name != b"SACT2" || f.name != b"SP_CreateCopy" {
+            return Ok(None);
+        }
+        ensure!(f.return_kind == 10, "native SP_CreateCopy result ABI");
+        let args = m.hll_arguments(call)?;
+        let [
+            Argument::Scalar {
+                kind: 10,
+                bits: dst,
+            },
+            Argument::Scalar {
+                kind: 10,
+                bits: src,
+            },
+        ] = args.as_slice()
+        else {
+            anyhow::bail!("native SP_CreateCopy argument ABI")
+        };
+        validate_sprite(bridge, *dst)?;
+        ensure!(
+            dst != src,
+            "native SP_CreateCopy self-copy frees its own source; undefined profile"
+        );
+        let sprites = bridge.sact.as_ref().unwrap().sprites.as_ref().unwrap();
+        sprites.require_owner(owner)?;
+        let source = sprites.get(*src).cloned();
+        let Some(source) = source else {
+            if sprites.get(*dst).is_none() {
+                bridge
+                    .sact
+                    .as_mut()
+                    .unwrap()
+                    .sprites
+                    .as_mut()
+                    .unwrap()
+                    .update(owner, *dst, host, |_| Ok(()))?;
+            }
+            m.complete_hll(call, HllReturn::Scalar(0))?;
+            return Ok(Some(Dispatch::Completed));
+        };
+        let surface = source
+            .surface
+            .as_ref()
+            .context("native SP_CreateCopy source has no pixel surface")?;
+        if let Surface::Solid(color) = surface {
+            let color = color.map(i32::from);
+            let color = [
+                color[0],
+                color[1],
+                color[2],
+                if source.alpha { color[3] } else { -1 },
+            ];
+            bridge
+                .sact
+                .as_mut()
+                .unwrap()
+                .sprites
+                .as_mut()
+                .unwrap()
+                .create(owner, *dst, source.size, color, host)?;
+            self.reconcile(owner, *dst, bridge, host)?;
+        } else {
+            let image = self
+                .images
+                .get(src)
+                .context("native SP_CreateCopy missing engine image lease")?
+                .clone();
+            let publication = host.publish_image_resource(
+                owner,
+                if *dst < 0 {
+                    16
+                } else {
+                    0x4100_0000 + *dst as u32
+                },
+                image._resource.clone(),
+            )?;
+            let path = publication.path.relative().to_owned();
+            if let Err(error) = bridge
+                .sact
+                .as_mut()
+                .unwrap()
+                .sprites
+                .as_mut()
+                .unwrap()
+                .image(owner, *dst, path.clone(), source.size, source.alpha, host)
+            {
+                host.release_image_resource(owner, &path)?;
+                return Err(error);
+            }
+            if let Some(old) = self.images.insert(
+                *dst,
+                Published {
+                    path,
+                    _resource: image._resource,
+                },
+            ) {
+                self.retired.push(old);
+            }
+            self.drain_retired(owner, host)?;
+        }
+        m.complete_hll(call, HllReturn::Scalar(1))?;
+        Ok(Some(Dispatch::Completed))
+    }
     /// Retire only our immutable publications when native delete/create changes
     /// the sprite. Frozen frame retention/reclamation remain shared services.
     pub(crate) fn reconcile(
@@ -702,7 +825,8 @@ mod tests {
         std::fs::create_dir(root.path().join("assets")).unwrap();
         let project = root.path().join("project.json");
         std::fs::write(&project,br#"{"schema":2,"name":"native CG","content_revision":"1","canvas":[1,1],"assets":"assets","clients":[{"name":"one","adapter":"crysirror-script-v1","game":"one"}]}"#).unwrap();
-        let runtime = Runtime::load(&project, &root.path().join("state")).unwrap();
+        let mut runtime = Runtime::load(&project, &root.path().join("state")).unwrap();
+        crate::sact::install_scene_fixture(&mut runtime.host, [1, 1]);
         (root, runtime)
     }
     fn op(code: &mut Vec<u8>, opcode: u16, args: &[i32]) {

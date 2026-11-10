@@ -2,6 +2,8 @@
 // (C) 2019 Nunuhara Cabbage; Rust (C) 2026 CrySirror contributors.
 // Resources, decoder/mixer/loops/faders and mix groups are CrySirror services.
 mod lifecycle;
+mod analysis;
+mod errors;
 
 use crate::{
     adapter::{Bridge, Dispatch},
@@ -142,6 +144,10 @@ pub(crate) struct NativeAudio {
     channels: BTreeMap<Key, Channel>,
     pending: Option<Pending>,
     reviewed_absent_calls: u64,
+    sample_read:Option<analysis::SampleRead>,
+    hann:crysirror_audio::analysis::HannWindow,
+    error_output:[u8;2],
+    error_notice:Option<errors::Notice>,
     // File lookup belongs on this shared IO pool; no ambient filesystem exists.
     _pool: TaskPool,
 }
@@ -156,6 +162,10 @@ impl NativeAudio {
             channels: BTreeMap::new(),
             pending: None,
             reviewed_absent_calls: 0,
+            sample_read:None,
+            hann:Default::default(),
+            error_output:[0;2],
+            error_notice:None,
             _pool: pool,
         }
     }
@@ -593,12 +603,14 @@ impl NativeAudio {
         Ok(Some(info))
     }
     pub(crate) fn diagnostics(&self) -> serde_json::Value {
-        serde_json::json!({"reviewed_music_profile":self.metadata.reviewed_music.map(|p|format!("{p:?}")),"reviewed_absent_calls":self.reviewed_absent_calls,"groups":self.groups.len(),"exposed_groups":self.exposed_groups,"groups_ready":self.groups_ready,"prepared":self.channels.len(),"pending":self.pending.is_some(),"music_metadata":self.metadata.music.as_ref().map_or(0,|m|m.entries.len()),"wave_metadata":self.metadata.wave.as_ref().map_or(0,|m|m.entries.len())})
+        serde_json::json!({"reviewed_music_profile":self.metadata.reviewed_music.map(|p|format!("{p:?}")),"reviewed_absent_calls":self.reviewed_absent_calls,"groups":self.groups.len(),"exposed_groups":self.exposed_groups,"groups_ready":self.groups_ready,"prepared":self.channels.len(),"pending":self.pending.is_some() || self.sample_read.is_some() || self.error_notice.is_some(),"error_output_bytes":self.error_output,"music_metadata":self.metadata.music.as_ref().map_or(0,|m|m.entries.len()),"wave_metadata":self.metadata.wave.as_ref().map_or(0,|m|m.entries.len())})
     }
     pub(crate) fn has_state(&self) -> bool {
-        !self.channels.is_empty() || self.pending.is_some()
+        !self.channels.is_empty() || self.pending.is_some() || self.sample_read.is_some() || self.error_notice.is_some()
     }
     pub(crate) fn close(&mut self, host: &mut dyn HostServices) -> Result<()> {
+        self.sample_read=None;
+        self.close_error(host)?;
         self.close_commands(host)?;
         for key in self.channels.keys().copied().collect::<Vec<_>>() {
             self.retire(key, host)?;
@@ -613,6 +625,8 @@ impl NativeAudio {
         bridge: &Bridge,
         host: &mut dyn HostServices,
     ) -> Result<Option<Dispatch>> {
+        if let Some(done)=self.configure_errors(owner,machine,call)? {return Ok(Some(done));}
+        if let Some(done)=self.dispatch_analysis(owner,machine,call,bridge,host)? {return Ok(Some(done));}
         let ExternalTarget::Hll { library, function } = call.target else {
             ensure!(
                 self.pending.is_none(),
@@ -634,10 +648,10 @@ impl NativeAudio {
             bridge.sact.as_ref().is_some_and(|s| s.initialized),
             "System4 audio before real SACT init"
         );
-        ensure!(function.return_kind == 10, "System4 SACT audio return ABI");
+        ensure!(function.return_kind == 10 || (function.name==b"Sound_PrepareFromFile" && function.return_kind==47), "System4 SACT audio return ABI");
         let arguments = machine.hll_arguments(call)?;
         self.ensure_groups(host)?;
-        if let Some(dispatch) = self.poll_command(machine, call, host)? {
+        if let Some(dispatch) = self.poll_command(machine, call, bridge, host)? {
             return Ok(Some(dispatch));
         }
         if function.name == b"Sound_PrepareFromFile" {

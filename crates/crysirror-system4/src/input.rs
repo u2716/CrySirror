@@ -2,8 +2,8 @@
 // GPL-2.0-or-later. xsystem4 a85467d src/input.c key-state policy.
 //! Native clearable key flags over CrySirror's client-owned input observation.
 //! Unrepresented keys/focus/pointer remain explicit unavailable capabilities.
-use anyhow::{ensure, Context, Result};
-use crysirror_core::service::{buttons, InputObservation};
+use anyhow::{Context, Result, ensure};
+use crysirror_core::service::{InputObservation, buttons};
 #[derive(Clone, Debug, Default)]
 pub struct Input {
     revision: Option<u64>,
@@ -63,6 +63,18 @@ impl Input {
     }
     pub fn clear(&mut self, no_ctrl: bool) {
         self.flags &= if no_ctrl { buttons::CTRL } else { 0 };
+    }
+    /// SACT2 Key_ClearFlagOne10100 routes one Windows-key index to the
+    /// original input interface. It clears the native delivery latch only;
+    /// the held physical state is retained until a new down edge.
+    pub fn clear_one(&mut self, code: i32) -> Result<()> {
+        if !(0..256).contains(&code) {
+            return Ok(());
+        }
+        let mask = buttons::windows_virtual_key(code as u32)
+            .context("System4 native key is not represented by shared input profile")?;
+        self.flags &= !mask;
+        Ok(())
     }
     pub fn clear_wheel(&mut self) {
         self.wheel = 0;

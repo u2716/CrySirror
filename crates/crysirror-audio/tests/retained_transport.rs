@@ -373,3 +373,36 @@ fn typed_channel_activity_reuses_the_same_pcm_cursor_and_survives_eof_until_expl
     .unwrap();
     assert!(a.playback_info(1, 7).unwrap().is_none());
 }
+
+#[test]
+fn first_pass_tracks_mixer_boundary_not_decoder_lookahead_or_pause() {
+    for passes in [None, Some(2)] {
+        let mut m = mixer(1);
+        let h = m.play(1, source(&[0.1, 0.2, 0.3, 0.4]), VoiceSpec {
+            looping: true, loop_points: Some(LoopPoints { start: 2, end: 4 }),
+            loop_passes: passes, ..Default::default()
+        }).unwrap();
+        assert!(!m.playback_info(1, h).unwrap().first_pass_complete);
+        render(&mut m, 1); // Cursor may decode the whole source in this read.
+        assert!(!m.playback_info(1, h).unwrap().first_pass_complete);
+        m.pause(1, h, true).unwrap();
+        render(&mut m, 16);
+        assert!(!m.playback_info(1, h).unwrap().first_pass_complete);
+        m.pause(1, h, false).unwrap();
+        render(&mut m, 2);
+        assert!(!m.playback_info(1, h).unwrap().first_pass_complete);
+        render(&mut m, 1);
+        let info = m.playback_info(1, h).unwrap();
+        assert!(info.first_pass_complete && info.source_playing);
+        m.seek(1, h, 0).unwrap();
+        assert!(m.playback_info(1, h).unwrap().first_pass_complete);
+        m.stop(1, h, 0.).unwrap();
+        let h = m.play(1, source(&[0.1; 4]), VoiceSpec {
+            retain_on_finish: true, ..Default::default()
+        }).unwrap();
+        assert!(!m.playback_info(1, h).unwrap().first_pass_complete);
+        render(&mut m, 4);
+        let info = m.playback_info(1, h).unwrap();
+        assert!(info.first_pass_complete && !info.source_playing);
+    }
+}

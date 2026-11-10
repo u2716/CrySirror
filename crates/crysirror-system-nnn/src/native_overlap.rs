@@ -6,17 +6,13 @@ use crate::{
 };
 use anyhow::{bail, ensure, Result};
 use crysirror_core::{
-    image_processing::{ImageInput, ImageJob, ImageProcessState},
+    image_processing::{ImageJob, ImageProcessState},
     service::HostServices,
     state::ClientId,
 };
-use crysirror_image::{
-    effects::ImageEffect,
-    fixed_mix::{FixedMixAlpha, FixedMixRounding, FixedMixSpec},
-    transition::ImageTransition,
-};
 pub struct OverlapResult {
     pub frame: NativeFrameResult,
+    pub(crate) tables: crate::native_simple_wipe::Tables,
     pub display_path: Option<String>,
 }
 pub struct NativeOverlap {
@@ -27,6 +23,8 @@ pub struct NativeOverlap {
     size: [u32; 2],
     frame_ms: u64,
     frames: u32,
+    wipe: i32,
+    tables: crate::native_simple_wipe::Tables,
     started_ms: u64,
     work: NativeFrameWork,
     frame: Option<NativeFrameResult>,
@@ -57,7 +55,7 @@ impl NativeOverlap {
             "NNN overlap parameter count"
         );
         ensure!(
-            words[0] == 0,
+            crate::native_simple_wipe::supported(words[0]),
             "NNN native wipe type {} requires shared exact profile",
             words[0]
         );
@@ -75,6 +73,8 @@ impl NativeOverlap {
             size,
             frame_ms,
             frames,
+            wipe: words[0],
+            tables: Default::default(),
             started_ms: now_ms,
             work,
             frame: None,
@@ -86,6 +86,7 @@ impl NativeOverlap {
             api_calls: 0,
         })
     }
+    pub(crate) fn bind_tables(&mut self,tables:crate::native_simple_wipe::Tables) {self.tables=tables;}
     pub(crate) fn presented_frame(
         &self,
     ) -> Option<std::sync::Arc<dyn crysirror_core::image_processing::ImageResource>> {
@@ -94,12 +95,18 @@ impl NativeOverlap {
     pub fn dependency_pending(&self) -> bool {
         self.frame.is_none() || self.blend.is_some()
     }
-    fn poll_admitted_frame(&mut self, host: &mut dyn HostServices) -> Result<bool> {
+    pub(crate) fn owned_path(&self)->Option<&str>{self.display_path.as_deref()}
+    pub(crate) fn reanchor_after_pause(&mut self,now:u64,paused:u64)->Result<()> {
+        let elapsed=now.checked_sub(paused).ok_or_else(||anyhow::anyhow!("NNN overlap pause clock reversed"))?;
+        self.started_ms=self.started_ms.checked_add(elapsed).ok_or_else(||anyhow::anyhow!("NNN overlap pause clock overflow"))?;Ok(())
+    }
+    pub(crate) fn poll_admitted_frame(&mut self, host: &mut dyn HostServices) -> Result<bool> {
         if self.frame.is_none() {
             let before = self.work.api_calls;
             let result = self.work.poll(host);
             self.api_calls += self.work.api_calls - before;
             self.frame = result?;
+            if let Some(frame)=&self.frame {self.tables=frame.buffers.wipe_tables.clone();}
             if self.frame.is_none() {
                 return Ok(false);
             }
@@ -163,6 +170,7 @@ impl NativeOverlap {
             .unwrap_or_else(|| frame.old.clone());
         Ok(Some(OverlapResult {
             frame,
+            tables: self.tables.clone(),
             display_path: self.display_path.take(),
         }))
     }
@@ -172,6 +180,9 @@ impl NativeOverlap {
         call: &NativeCall,
         host: &mut dyn HostServices,
     ) -> Result<Option<OverlapResult>> {
+        self.poll_with_skip(machine,call,host,false)
+    }
+    pub(crate) fn poll_with_skip(&mut self,machine:&mut Machine,call:&NativeCall,host:&mut dyn HostServices,skip:bool)->Result<Option<OverlapResult>> {
         ensure!(self.receipt == *call, "NNN overlap receipt changed");
         machine.validate_receipt(call)?;
         if !self.poll_admitted_frame(host)? {
@@ -184,39 +195,18 @@ impl NativeOverlap {
             machine.acknowledge_with_variables(call, candidate)?;
             return Ok(Some(OverlapResult {
                 frame: frame.clone(),
+                tables: self.tables.clone(),
                 display_path: self.display_path.take(),
             }));
         }
-        let count = (host.now_ms().saturating_sub(self.started_ms) / self.frame_ms)
-            .min(u64::from(self.frames)) as u32;
+        let count = if skip {self.frames} else {(host.now_ms().saturating_sub(self.started_ms) / self.frame_ms)
+            .min(u64::from(self.frames)) as u32};
         if self.presented_count == Some(count) {
             return Ok(None);
         }
-        let percent = u64::from(count) * 100 / u64::from(self.frames);
-        let frame = self.frame.as_ref().unwrap();
-        let effect = ImageEffect::Transition {
-            spec: ImageTransition {
-                progress: count as f32 / self.frames as f32,
-                softness: 0.,
-                blur: 0.,
-                rule_table: None,
-                fixed_weighted: Some(FixedMixSpec {
-                    left_weight: ((100 - percent) * 256 / 100) as u32,
-                    right_weight: (percent * 256 / 100) as u32,
-                    fractional_bits: 8,
-                    rounding: FixedMixRounding::SumThenShift,
-                    alpha: FixedMixAlpha::Opaque,
-                }),
-            },
-        };
-        self.blend = Some(host.image_metadata(self.client)?.begin_process(
-            ImageInput::Transition {
-                from: frame.old.clone(),
-                to: frame.target.clone(),
-                mask: None,
-            },
-            serde_json::to_vec(&[effect])?.into(),
-        )?);
+        let frame = self.frame.as_mut().unwrap();
+        let (input,effects) = crate::native_simple_wipe::plan_with_random(self.wipe,frame.old.clone(),frame.target.clone(),count,self.frames,&mut frame.random,&mut self.tables)?;
+        self.blend = Some(host.image_metadata(self.client)?.begin_process(input,serde_json::to_vec(&effects)?.into())?);
         self.api_calls += 1;
         self.rendering_count = count;
         Ok(None)

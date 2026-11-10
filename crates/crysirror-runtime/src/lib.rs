@@ -34,6 +34,7 @@ mod session_seed;
 
 mod pattern_resources;
 pub mod canvas_images;
+mod detached_layers;
 
 mod media_image;
 

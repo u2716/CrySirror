@@ -29,6 +29,7 @@ pub mod byte_json;
 pub mod byte_table;
 pub mod record_sequence;
 pub mod word_run_length;
+pub mod sentinel_runs;
 mod file;
 pub mod io;
 pub mod keys;

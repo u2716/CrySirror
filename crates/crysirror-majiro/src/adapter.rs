@@ -21,9 +21,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{collections::BTreeMap, sync::Arc};
 mod native_services;
+mod controllers;
+mod media;
+pub use media::MediaPolicy;
 mod libraries;
 mod text_buffer;
 mod native_audio;
+mod voice_pan;
+mod fast_mode;
+mod native_flags;
 mod continuations;
 mod input_files;
 mod font_policy;
@@ -47,7 +53,10 @@ pub struct Config {
     /// Explicit portable settings scope, distinct from the original Windows registry.
     #[serde(default)]
     pub settings_profile: MajiroSettingsProfile,
-    /// Optional caller-owned module inspected only to guard the reviewed native ABI.
+    /// Explicit original-optical or client-installed resource compatibility policy.
+    #[serde(default)]
+    pub media_policy:MediaPolicy,
+    /// Optional caller-owned PE data used to identify a reviewed native value/call layout.
     #[serde(default)]
     pub executable: Option<String>,
     /// Original startup mode. Release play is 1; native is_testplay is mode!=1.
@@ -73,6 +82,8 @@ pub struct MajiroVm {
     text_buffer: Vec<u8>,
     machine: Option<Machine>,
     native_abi: bool,
+    native_layout:crate::native_abi::NativeAbi,
+    media_check:Option<media::MediaCheck>,
     rng: Option<NativeRng>,
     settings: Option<NativeSettings>,
     settings_write: Option<PendingSettingsWrite>,
@@ -81,6 +92,8 @@ pub struct MajiroVm {
     auto_mode_config: i32,
     native_client_size: [i32; 2],
     fast_disable_depth: i32,
+    fast_mode: fast_mode::FastMode,
+    native_flags: native_flags::NativeFlags,
     wait: Option<native_services::NativeWait>,
     audio: native_audio::NativeAudio,
     picture_key: Option<crysirror_resource::KeyMaterial>,
@@ -120,6 +133,7 @@ struct Prepared {
     module_catalog: libraries::ModuleCatalog,
     program: Program,
     native_abi: bool,
+    native_layout:crate::native_abi::NativeAbi,
     seed: u32,
     settings: Option<NativeSettings>,
     native_client_size: [i32; 2],
@@ -174,6 +188,8 @@ impl MajiroVm {
             text_buffer: Vec::new(),
             machine: None,
             native_abi: false,
+            native_layout:crate::native_abi::NativeAbi::Classic,
+            media_check:None,
             rng: None,
             settings: None,
             settings_write: None,
@@ -182,6 +198,8 @@ impl MajiroVm {
             auto_mode_config: 0,
             native_client_size: [640,480],
             fast_disable_depth: 0,
+            fast_mode: fast_mode::FastMode::default(),
+            native_flags: native_flags::NativeFlags::default(),
             wait: None,
             audio: native_audio::NativeAudio::default(),
             picture_key: None,
@@ -247,18 +265,17 @@ impl MajiroVm {
             });
         }
         match *hash {
-   0xa62aa5eb=>{
-    ensure!(a.is_empty(),"Majiro is_fast_mode ABI");
-    //410060/40B1F0: all force/read/auto-mode flags start0 (40B0A0).
-    //Their mutating selectors and read-mark import are not yet admitted.
-    //With the supported flags zero, disabled or CapsLock-off is exactly0;
-    //a logical CapsLock-on needs the original read-conditioned branch.
-    if self.fast_disable_depth==0 {
-     ensure!(!h.keyboard_locks(self.client).map_err(core_error)?.logical.caps_lock,
-        "Majiro read-conditioned fast-mode profile is not connected");
-    }
-    Ok(Some(if *returns{vec![Value::Integer(0)]}else{vec![]}))
+   0xca30043a=>{
+    ensure!(a.len()==1,"Majiro joystick mode ABI");
+    let mode=a[0].integer()?;
+    // The source-aware host observation is mandatory; an aggregate frame
+    // cannot implement mode changes without leaking generic gamepad mapping.
+    let _=h.input_sources(self.client).map_err(core_error)?;
+    self.input.set_joystick_mode(mode);
+    Ok(Some(if *returns{vec![Value::Integer(mode)]}else{vec![]}))
    },
+   //YUKIIRO403950: retained media lookup with native Retry/Cancel.
+   0xdca7da63=>self.media_check(event,h),
    0x098399f2=>self.select_font(a,*returns,h),
    0x959b0a16=>{
     ensure!(a.len()==1,"Majiro abs ABI");
@@ -267,12 +284,22 @@ impl MajiroVm {
    },
    0xe4e3b40d=>self.open_input_file(event,h),
    0xd6333b3c|0x55232561|0x2539d212|0x6008bebb=>self.read_input_file(*hash,a,*returns),
-   0x266a3c79=>{
-    ensure!(a.len()==1,"Majiro string uppercase ABI");
+   // YUKIIRO403350, console PC4F8E/5054: symmetric tail-aligned ?/*.
+   // Preserve native -1/0 booleans; the shared byte context bounds unsafe
+   // native negative-pointer cases instead of reading before an allocation.
+   0x4f62152a=>{ensure!(a.len()==2,"Majiro tail wildcard ABI");let yes=crate::byte_policy::context()?.matches_tail_wildcards(a[0].bytes()?,a[1].bytes()?)?;Ok(Some(if *returns{vec![Value::Integer(if yes{-1}else{0})]}else{vec![]}))},
+   // YUKIIRO4037B0: release mode returns0 without reading42CE70's
+   // development-only message word. Other startup profiles remain explicit.
+   0x4b5ac64b=>{ensure!(a.is_empty(),"Majiro release message word ABI");ensure!(self.config.run_mode==1,"Majiro development message word host is not connected");Ok(Some(if *returns{vec![Value::Integer(0)]}else{vec![]}))},
+   0x266a3c79|0xad74d9ac=>{
+    ensure!(a.len()==1,"Majiro string casing ABI");
     let bytes=a[0].bytes()?;
-    ensure!(bytes.iter().position(|byte|*byte==0).unwrap_or(bytes.len())<=511,
-        "Majiro uppercase exceeds native512-byte buffer");
-    let value=crate::byte_policy::upper(bytes)?;
+    let capacity=self.native_layout.string_capacity();
+    ensure!(bytes.iter().position(|byte|*byte==0).unwrap_or(bytes.len())<capacity,
+        "Majiro casing exceeds native {capacity}-byte buffer");
+    //YUKIIRO403230/403270 copy into2048 bytes, call _mbslwr/_mbsupr,
+    //then construct a native string. DBCS tokenisation/casing is shared.
+    let value=if *hash==0xad74d9ac{crate::byte_policy::lower(bytes)?}else{crate::byte_policy::upper(bytes)?};
     Ok(Some(if *returns{vec![Value::native_string(&value)?]}else{vec![]}))
    },
    0x7a7b6ed4 => {
@@ -307,7 +334,7 @@ impl MajiroVm {
     self.fast_disable_depth=0;
     Ok(Some(if *returns {vec![Value::Integer(0)]} else {vec![]}))
    },
-   // Native executable SHA in SOURCE, sub_410060 branch0x0ebc053b stores
+   // Reviewed classic dispatcher410060 branch0x0ebc053b stores
    // the top integer in dword_49b020. This is native policy, not a fake service.
    0x0ebc053b=>{ensure!(!returns&&a.len()==1,"auto_mode_config ABI");self.auto_mode_config=a[0].integer()?;Ok(Some(vec![]))},
    0x6e6c641a=>{ensure!(*returns&&a.is_empty(),"is_testplay ABI");Ok(Some(vec![Value::Integer(i32::from(self.config.run_mode!=1))]))},
@@ -328,6 +355,15 @@ impl MajiroVm {
     let value=self.rng.as_mut().context("Majiro native RNG seed dependency is not published")?.rand_bound(bound)?;
     Ok(Some(vec![Value::Integer(value)]))
    },
+   // YUKIIRO443640 / classic435840: cached current VoicePanning setting.
+   // Native configuration initialisation resolves registry then ENV, not a
+   // hard-coded capability flag or an unconditional-success value.
+   0x13c305da=>{
+    ensure!(a.is_empty(),"Majiro VoicePanning getter ABI");
+    let value=self.settings.as_ref().context("Majiro VoicePanning requires published native settings")?.voice_panning;
+    Ok(Some(if *returns{vec![Value::Integer(value)]}else{vec![]}))
+   },
+   0xdf91cfc5=>self.native_voice_pan(a,*returns,h),
    0x111bd910|0xe5c70196|0xee154520=>{
     ensure!(a.is_empty(),"native speed getter ABI");
     let settings=self.settings.as_ref().context("Majiro speed getter requires original ENV and published portable settings")?;
@@ -430,21 +466,17 @@ impl MajiroVm {
                     cancel.check()?;
                     let p = Program::parse(&bytes)?;
                     cancel.check()?;
-                    let native_abi = if let Some(executable) = executable {
+                    let native_layout = if let Some(executable) = executable {
                         let path = VfsPath::new(Mount::Asset, &executable)?;
                         let reader = storage.open_asset(&path)?;
-                        let bytes =
-                            crysirror_resource::read_all(reader.as_ref(), 16 * 1024 * 1024)?;
+                        let bytes = crysirror_resource::read_all(reader.as_ref(),16*1024*1024)?;
                         cancel.check()?;
-                        let pe = crysirror_resource::pe::PeData::parse(&bytes)?;
-                        pe.sha256()
-                            == [
-                                0x75, 0xf2, 0x89, 0xd8, 0xd5, 0xb7, 0x30, 0xc6, 0xf3, 0x32, 0x48,
-                                0x8d, 0xf8, 0xfe, 0x48, 0x27, 0xd7, 0xe9, 0x5d, 0x1a, 0xf4, 0xa1,
-                                0x00, 0xbf, 0xd2, 0xa8, 0x80, 0xa0, 0xb9, 0xe8, 0x06, 0x02,
-                            ]
+                        let pe=crysirror_resource::pe::PeData::parse(&bytes)?;
+                        crate::native_abi::NativeAbi::inspect(&pe)?
                     } else {
-                        true
+                        // Explicit authored MJO consumers retain their classic
+                        // contract; installed-game detection supplies its EXE.
+                        crate::native_abi::NativeAbi::Classic
                     };
                     let mut native_client_size=[640,480];
                     let settings = if let Some(environment) = environment {
@@ -466,7 +498,8 @@ impl MajiroVm {
                     Ok(Prepared {
                         module_catalog,
                         program: p,
-                        native_abi,
+                        native_abi:true,
+                        native_layout,
                         seed,
                         settings,
                         native_client_size,
@@ -490,6 +523,7 @@ impl MajiroVm {
             self.machine=Some(machine);
             self.module_catalog=prepared.module_catalog;
             self.native_abi = prepared.native_abi;
+            self.native_layout=prepared.native_layout;
             self.rng = Some(rng);
             self.settings = prepared.settings;
             self.native_client_size = prepared.native_client_size;
@@ -505,7 +539,7 @@ impl MajiroVm {
         }
         let mut m = self.machine.take().unwrap();
         let result = (|| {
-            let now=h.now_ms();m.begin_tick(now);
+            let now=h.now_ms();if self.media_check.is_some(){m.preserve_budget_continuation();}m.begin_tick(now);
             let mut selected=false;let mut quantum=0;let mut rounds=0;
             let budget=budget.max(200_000);
             for _ in 0..budget {
@@ -629,9 +663,11 @@ impl MajiroVm {
                         )
                     })?;
                     let Some(output) = output else {
+                        if self.media_check.is_some(){m.preserve_budget_continuation();return Ok(VmYield::WaitUntil(now.saturating_add(1)));}
                         m.defer_current(now.saturating_add(1));selected=false;continue;
                     };
                     m.acknowledge(output)?;
+                    if self.exit_requested{return Ok(VmYield::Halted);}
                 }
                 quantum+=1;
                 if quantum>=256 {m.rotate_current(now)?;quantum=0;}
@@ -674,10 +710,26 @@ impl VmAdapter for MajiroVm {
         let now = h.now_ms();
         if self.input_tick != Some(now) {
             self.input_tick = Some(now);
-            self.input.update(&input);
-            if let Some(m) = self.machine.as_mut() {
-                let latch = self.input.latch();
-                if let Err(e) = m.deliver_clicks(latch) {
+            match h.input_sources(self.client){
+                Ok(observation)=>self.input.update_sources(&observation.sources,now),
+                Err(Error::Unsupported(_)) if self.input.joystick.mode==0=>self.input.update(&input),
+                Err(error)=>return Err(error),
+            }
+
+            if self.machine.is_some() && self.media_check.is_none() {
+                let delivered = (|| -> Result<()> {
+                    // Native window key transitions also update fast-mode
+                    // policy; a Ctrl hold is not only a middle-click alias.
+                    self.update_fast_mode_input(h)?;
+                    self.filter_native_clicks(h.now_ms() as u32);
+                    let read = self.machine.as_ref().unwrap().native_read_flag();
+                    self.refresh_fast_read_flag(read);
+                    let fast = self.fast_skip_active(h)?;
+                    let latch = self.input.latch();
+                    self.machine.as_mut().unwrap().deliver_input(latch, fast)?;
+                    Ok(())
+                })();
+                if let Err(e) = delivered {
                     self.last_error = Some(format!("{e:#}"));
                     return Err(Error::Io(format!("{e:#}")));
                 }
@@ -702,7 +754,7 @@ impl VmAdapter for MajiroVm {
         ))
     }
     fn diagnostics(&self) -> Vec<u8> {
-        serde_json::to_vec(&json!({"vm":"original-majiro-mjo","module":self.machine.as_ref().map(Machine::module_name),"module_load_pending":self.library.is_some(),"script_threads":self.machine.as_ref().map(Machine::thread_count),"event_hooks":self.machine.as_ref().map(Machine::hook_count),"suspended_native_calls":self.suspended_services.len(),"text_buffer_bytes":self.text_buffer.len(),"console":self.console.diagnostics(),"pc":self.machine.as_ref().map(|m|m.pc),"line":self.machine.as_ref().map(|m|m.line),"instructions":self.machine.as_ref().map(|m|m.executed),"engine_api_calls":self.api_calls,"pages":self.gfx.pages.len(),"primary":self.gfx.primary,"sprites":self.gfx.sprites.len(),"render_lock":self.gfx.lock,"warnings":self.gfx.warnings,"font":self.font.as_ref().map(|font|json!({"requested":font.requested,"alias":font.alias,"height":font.height,"half_width":font.half_width})),"native_profile_enabled":self.native_abi,"rng":self.rng.as_ref().map(NativeRng::snapshot),"settings":{"profile":self.config.settings_profile,"import_performed":false,"loaded":self.settings.is_some(),"source":self.settings.as_ref().map(|s|if s.loaded_portable_file{"portable_client_save"}else{"native_env_defaults"}),"entries":self.settings.as_ref().map(NativeSettings::entries),"pending_write":self.settings_write.is_some(),"commits":self.settings.as_ref().map(|s|s.commits)},"module_guard":if self.config.executable.is_some(){"sha256"}else{"not_requested"},"auto_mode_config":self.auto_mode_config,"native_client_size":self.native_client_size,"native_wait":{"pending":self.wait.is_some(),"pc":self.wait.as_ref().map(|wait|wait.pc),"deadline_ms":self.wait.as_ref().map(|wait|wait.deadline)},"fast_disable_depth":self.fast_disable_depth,"keyboard_locks":{"policy":self.config.keyboard_lock_policy,"physical_imported":false,"physical_control":false},"run_mode":self.config.run_mode,"error":self.last_error,"owns_framebuffer":false})).unwrap_or_default()
+        serde_json::to_vec(&json!({"vm":"original-majiro-mjo","module":self.machine.as_ref().map(Machine::module_name),"module_load_pending":self.library.is_some(),"script_threads":self.machine.as_ref().map(Machine::thread_count),"event_hooks":self.machine.as_ref().map(Machine::hook_count),"suspended_native_calls":self.suspended_services.len(),"text_buffer_bytes":self.text_buffer.len(),"console":self.console.diagnostics(),"pc":self.machine.as_ref().map(|m|m.pc),"line":self.machine.as_ref().map(|m|m.line),"instructions":self.machine.as_ref().map(|m|m.executed),"engine_api_calls":self.api_calls,"pages":self.gfx.pages.len(),"primary":self.gfx.primary,"sprites":self.gfx.sprites.len(),"render_lock":self.gfx.lock,"warnings":self.gfx.warnings,"font":self.font.as_ref().map(|font|json!({"requested":font.requested,"alias":font.alias,"height":font.height,"half_width":font.half_width})),"native_profile_enabled":self.native_abi,"rng":self.rng.as_ref().map(NativeRng::snapshot),"settings":{"profile":self.config.settings_profile,"import_performed":false,"loaded":self.settings.is_some(),"source":self.settings.as_ref().map(|s|if s.loaded_portable_file{"portable_client_save"}else{"native_env_defaults"}),"entries":self.settings.as_ref().map(NativeSettings::entries),"pending_write":self.settings_write.is_some(),"commits":self.settings.as_ref().map(|s|s.commits)},"native_layout":self.native_layout.name(),"module_guard":if self.config.executable.is_some(){"native_abi_structure"}else{"authored_classic_contract"},"auto_mode_config":self.auto_mode_config,"native_client_size":self.native_client_size,"native_wait":{"pending":self.wait.is_some(),"pc":self.wait.as_ref().map(|wait|wait.pc),"deadline_ms":self.wait.as_ref().map(|wait|wait.deadline)},"fast_disable_depth":self.fast_disable_depth,"fast_mode":self.fast_mode_diagnostics(),"keyboard_locks":{"policy":self.config.keyboard_lock_policy,"physical_imported":false,"physical_control":false},"run_mode":self.config.run_mode,"error":self.last_error,"owns_framebuffer":false})).unwrap_or_default()
     }
 }
 struct Factory;

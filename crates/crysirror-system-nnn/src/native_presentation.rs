@@ -40,6 +40,7 @@ pub enum NativeFrameEffect {
 }
 #[derive(Clone)]
 pub struct MoveFrame {
+    pub(crate) source_clip:Option<[i32;4]>,
     pub slot: i32,
     pub state: crate::native_move::NativeMoveState,
     pub source: Option<Arc<dyn ImageResource>>,
@@ -72,24 +73,19 @@ impl MoveFrame {
             }
         }
     }
-    fn paint(&self) -> Option<crysirror_core::image_processing::ImageCompositeLayer> {
-        if !self.visible {
-            return None;
-        }
-        let image = self.source.as_ref()?;
-        let [x, y, w, h] = self.state.rectangles.destination;
-        let [sx, sy, _, _] = self.state.rectangles.source;
-        if w <= 0 || h <= 0 {
-            return None;
-        }
-        Some(crysirror_core::image_processing::ImageCompositeLayer {
-            input: Box::new(ImageInput::Resource(image.clone())),
-            source: [sx, sy, w, h],
-            destination: [x, y],
-            clip: None,
-            opacity: 255,
-            math: self.math,
-        })
+    pub(crate) fn paint(&self) -> Result<Option<crysirror_core::image_processing::ImageCompositeLayer>> {
+        if !self.visible {return Ok(None);}
+        let Some(image) = self.source.as_ref() else{return Ok(None);};
+        let [x,y,w,h]=self.state.rectangles.destination;
+        let [sx,sy,_,_]=self.state.rectangles.source;
+        if w<=0||h<=0{return Ok(None);}
+        let (region,at)=if let Some(bounds)=self.source_clip {
+            let Some(mapping)=crysirror_image::coverage_bounds::intersect_source_window([sx,sy,w,h],[x,y],bounds)? else{return Ok(None);};mapping
+        }else{([sx,sy,w,h],[x,y])};
+        Ok(Some(crysirror_core::image_processing::ImageCompositeLayer {
+            input:Box::new(ImageInput::Resource(image.clone())),source:region,destination:at,
+            clip:None,opacity:255,math:self.math,
+        }))
     }
 }
 #[derive(Clone)]
@@ -154,6 +150,7 @@ pub fn ordered_frame_plan(
                         | NativeFrameEffect::Move(_)
                         | NativeFrameEffect::Scroll(_)
                         | NativeFrameEffect::Shake(_)
+                        | NativeFrameEffect::Picture(_)
                 )
             {
                 plan.push(effect.clone());
@@ -243,7 +240,7 @@ pub(crate) fn count_effect_states(effects: &mut BTreeMap<i32, NativeFrameEffect>
 fn calcu_effect(effect: &mut NativeFrameEffect, random: &mut PatternRng) -> Result<()> {
     match effect {
         NativeFrameEffect::Move(frame) => frame.state.calcu(frame.source.is_some()),
-        NativeFrameEffect::Picture(frame) => frame.calcu(),
+        NativeFrameEffect::Picture(frame) => frame.calcu(random)?,
         NativeFrameEffect::Scroll(frame) => frame.calcu(),
         NativeFrameEffect::Shake(frame) => frame.state.calcu(),
         NativeFrameEffect::Lamp(frame) => frame.state.calcu(random)?,
@@ -258,6 +255,9 @@ pub(crate) fn calcu_effect_states(
     for effect in effects.values_mut() {
         calcu_effect(effect, random)?;
     }
+    calcu_rainbows(effects.values_mut())?;
+    let points=effects.iter().filter_map(|(slot,e)|match e{NativeFrameEffect::Picture(f)=>Some((*slot,f.geometry())),NativeFrameEffect::Move(f)=>Some((*slot,f.state.clone())),NativeFrameEffect::Scroll(f)=>Some((*slot,f.normal.state.clone())),_=>None}).collect();
+    for effect in effects.values_mut(){if let NativeFrameEffect::Picture(frame)=effect{frame.resolve_points(&points);}}
     Ok(())
 }
 fn prepare_calcu(
@@ -269,7 +269,7 @@ fn prepare_calcu(
     shakes: &mut BTreeMap<i32, crate::native_effects_shake::ShakeState>,
 ) -> Result<BTreeMap<i32, crate::native_old_lamp::OldLampState>> {
     let mut updates = BTreeMap::new();
-    for effect in effects {
+    for effect in effects.iter_mut() {
         if calcu {
             calcu_effect(effect, random)?;
         }
@@ -289,7 +289,27 @@ fn prepare_calcu(
             updates.insert(frame.slot, frame.state.clone());
         }
     }
+    if calcu{calcu_rainbows(effects.iter_mut())?;}
+    for effect in effects.iter_mut(){if let NativeFrameEffect::Picture(frame)=effect{frame.resolve_points(moves);}}
     Ok(updates)
+}
+fn frame_palette(effects:&[NativeFrameEffect])->Option<Arc<crate::native_picture_rainbow::RainbowPalette>> {
+    effects.iter().find_map(|effect|if let NativeFrameEffect::Picture(frame)=effect{frame.rainbow_palette.clone()}else{None})
+}
+fn calcu_rainbows<'a>(effects:impl Iterator<Item=&'a mut NativeFrameEffect>)->Result<()> {
+    let mut frames=effects.filter_map(|effect|if let NativeFrameEffect::Picture(frame)=effect{Some(frame)}else{None}).collect::<Vec<_>>();
+    let Some(old)=frames.iter().find_map(|frame|frame.rainbow_palette.clone()) else{return Ok(());};
+    let mut palette=(*old).clone();
+    for frame in &frames {
+        if let crate::native_picture_effect::PictureEffectKind::Rainbow{parameters}=frame.state.kind {palette.calcu(&parameters)?;}
+    }
+    let palette=Arc::new(palette);
+    for frame in &mut frames {
+        if matches!(frame.state.kind,crate::native_picture_effect::PictureEffectKind::Rainbow{..}){frame.rainbow_palette=Some(palette.clone());}
+    }Ok(())
+}
+fn picture_states(effects:&[NativeFrameEffect])->BTreeMap<i32,crate::native_picture_effect::PictureEffectState>{
+    effects.iter().filter_map(|e|if let NativeFrameEffect::Picture(f)=e{Some((f.slot,f.state.clone()))}else{None}).collect()
 }
 enum Work {
     Old(ImageJob),
@@ -297,9 +317,13 @@ enum Work {
     Effect(ImageJob),
     Advance(PatternJob, SunaState),
     Pattern(PatternJob),
+    CaptureInit(ImageJob, crate::native_picture_effect::PictureEffectFrame),
+    WipeOld(ImageJob, crate::native_picture_effect::PictureEffectFrame, ImageInput),
+    WipeNew(ImageJob, crate::native_picture_effect::PictureEffectFrame, Arc<dyn ImageResource>),
 }
 #[derive(Clone)]
 pub struct NativeFrameResult {
+    pub(crate) buffers: crate::native_capture_effect::FrameBuffers,
     pub old: Arc<dyn ImageResource>,
     pub target: Arc<dyn ImageResource>,
     pub random: PatternRng,
@@ -312,6 +336,7 @@ pub struct NativeFrameResult {
     pub message_background: Option<Arc<dyn ImageResource>>,
 }
 pub struct NativeFrameWork {
+    buffers: crate::native_capture_effect::FrameBuffers,
     client: ClientId,
     base_canvas: u32,
     old: Option<Arc<dyn ImageResource>>,
@@ -357,6 +382,7 @@ impl NativeFrameWork {
             Work::Old(host.begin_canvas_image(client, old_canvas)?)
         };
         Ok(Self {
+            buffers: crate::native_capture_effect::FrameBuffers{picture_updates:picture_states(&effects),rainbow_palette:frame_palette(&effects),..Default::default()},
             client,
             base_canvas,
             old,
@@ -396,6 +422,7 @@ impl NativeFrameWork {
             &mut shake_updates,
         )?;
         Ok(Self {
+            buffers: crate::native_capture_effect::FrameBuffers{picture_updates:picture_states(&effects),rainbow_palette:frame_palette(&effects),..Default::default()},
             client,
             base_canvas,
             old: None,
@@ -435,12 +462,30 @@ impl NativeFrameWork {
     fn with_base_policy(
         client: ClientId,
         base: Arc<dyn ImageResource>,
-        mut effects: Vec<NativeFrameEffect>,
-        mut random: PatternRng,
+        effects: Vec<NativeFrameEffect>,
+        random: PatternRng,
         calcu: bool,
         host: &mut dyn HostServices,
     ) -> Result<Self> {
+        Self::with_context_base(client,base,effects,random,calcu,Default::default(),host)
+    }
+    pub(crate) fn with_context_base(
+        client:ClientId,
+        base:Arc<dyn ImageResource>,
+        mut effects:Vec<NativeFrameEffect>,
+        mut random:PatternRng,
+        calcu:bool,
+        buffers:crate::native_capture_effect::FrameBuffers,
+        host:&mut dyn HostServices,
+    )->Result<Self>{
         ensure!(base.client() == client, "NNN cached base resource scope");
+        if let Some(palette)=&buffers.rainbow_palette {
+            for effect in &mut effects {
+                if let NativeFrameEffect::Picture(frame)=effect {
+                    if matches!(frame.state.kind,crate::native_picture_effect::PictureEffectKind::Rainbow{..}) {frame.rainbow_palette=Some(palette.clone());}
+                }
+            }
+        }
         random.validate()?;
         let mut move_updates = BTreeMap::new();
         let mut scroll_updates = BTreeMap::new();
@@ -453,7 +498,11 @@ impl NativeFrameWork {
             &mut scroll_updates,
             &mut shake_updates,
         )?;
+        let mut buffers=buffers;
+        buffers.picture_updates=picture_states(&effects);
+        buffers.rainbow_palette=frame_palette(&effects).or(buffers.rainbow_palette);
         let mut job = Self {
+            buffers,
             client,
             base_canvas: 0,
             old: Some(base.clone()),
@@ -474,9 +523,16 @@ impl NativeFrameWork {
         job.next(host)?;
         Ok(job)
     }
+    pub(crate) fn with_buffers(mut self,mut buffers:crate::native_capture_effect::FrameBuffers)->Self{
+        buffers.picture_updates=self.buffers.picture_updates.clone();
+        buffers.rainbow_palette=self.buffers.rainbow_palette.clone().or(buffers.rainbow_palette);
+        self.buffers=buffers;
+        self
+    }
     fn next(&mut self, host: &mut dyn HostServices) -> Result<()> {
         let Some(effect) = self.effects.pop_front() else {
             self.ready = Some(NativeFrameResult {
+                buffers:self.buffers.clone(),
                 old: self.old.clone().unwrap(),
                 target: self.current.clone().unwrap(),
                 random: self.random.clone(),
@@ -496,7 +552,7 @@ impl NativeFrameWork {
                 return self.next(host);
             }
             NativeFrameEffect::Move(frame) => {
-                let Some(layer) = frame.paint() else {
+                let Some(layer) = frame.paint()? else {
                     return self.next(host);
                 };
                 Work::Effect(host.image_metadata(self.client)?.begin_process(
@@ -521,9 +577,8 @@ impl NativeFrameWork {
                 if !frame.visible {
                     return self.next(host);
                 }
-                let input = frame.state.image_input(
-                    ImageInput::Resource(self.current.clone().unwrap()),
-                    frame.canvas,
+                let input = frame.image_input(
+                    ImageInput::Resource(self.current.clone().unwrap()), &mut self.random,
                 )?;
                 Work::Effect(
                     host.image_metadata(self.client)?
@@ -546,7 +601,7 @@ impl NativeFrameWork {
                 }
                 let base = ImageInput::Resource(self.current.clone().unwrap());
                 let input = if frame.ended {
-                    let Some(layer) = frame.normal.paint() else {
+                    let Some(layer) = frame.normal.paint()? else {
                         return self.next(host);
                     };
                     ImageInput::Composite {
@@ -653,11 +708,55 @@ impl NativeFrameWork {
                 let Some(effect) = state.effect(current.size(), &mut self.random)? else { return self.next(host); };
                 Work::Effect(host.image_metadata(self.client)?.begin_process(ImageInput::Resource(current), serde_json::to_vec(&[effect])?.into())?)
             }
-            NativeFrameEffect::Picture(frame) => {
+            NativeFrameEffect::Picture(mut frame) => {
+                if !frame.visible{return self.next(host);}
+                if let crate::native_picture_effect::PictureEffectKind::OldFilm{parameters}= &mut frame.state.kind {
+                    // Native OLDFILM mutates its line state in Print, not Calcu.
+                    // Keep the candidate with the immutable render receipt, so
+                    // retries never repeat RNG draws or acknowledge early.
+                    let lines=crate::native_picture_old_film::print_plan(parameters,&mut self.random)?;
+                    let input=crate::native_picture_old_film::image_input(ImageInput::Resource(self.current.clone().unwrap()),frame.canvas,&lines)?;
+                    self.buffers.picture_updates.insert(frame.slot,frame.state.clone());
+                    self.work=Some(Work::Effect(host.image_metadata(self.client)?.begin_process(input,b"[]".as_slice().into())?));
+                    self.api_calls+=1;return Ok(());
+                }
+                if let Some((command,p))=frame.buffered_parameters(){
+                    if command==75{
+                        let paint=!self.buffers.once_printed.contains(&frame.slot)||(frame.state.count>=p[1]&&frame.state.count<p[1].wrapping_add(p[2]));
+                        self.buffers.once_printed.insert(frame.slot);
+                        let Some(layer)=frame.normal.as_ref().filter(|_|paint).map(|n|n.paint()).transpose()?.flatten() else{return self.next(host);};
+                        self.work=Some(Work::Effect(host.image_metadata(self.client)?.begin_process(ImageInput::Composite{base:Box::new(ImageInput::Resource(self.current.clone().unwrap())),layers:vec![layer]},b"[]".as_slice().into())?));
+                        self.api_calls+=1;return Ok(());
+                    }
+                    if command==66 {
+                        // CPicture::Shrink only reallocates tightly packed storage;
+                        // retaining the immutable engine resource preserves its pixels.
+                        return self.next(host);
+                    }
+                    if command==73 {
+                        self.buffers.capture=self.current.clone();
+                        return self.next(host);
+                    }
+                    if command==59&&!frame.wipe_can_print(){return self.next(host);}
+                    if frame.needs_capture()&&self.buffers.capture.is_none(){
+                        // Original GET allocates uninitialised screen RAM. Define
+                        // PUT/wipe-before-GET as black rather than exposing heap data.
+                        Work::CaptureInit(host.image_metadata(self.client)?.begin_process(ImageInput::Solid{size:frame.canvas,color:[0,0,0,255]},b"[]".as_slice().into())?,frame)
+                    }else if command==2{
+                        let input=if frame.state.count==0&&p[4]==0{
+                            frame.first_put_input(self.current.clone().unwrap())
+                        }else{ImageInput::Resource(self.buffers.capture.clone().unwrap())};
+                        Work::Effect(host.image_metadata(self.client)?.begin_process(input,b"[]".as_slice().into())?)
+                    }else{
+                        let (old,new)=frame.wipe_inputs(&self.buffers.capture)?;
+                        Work::WipeOld(host.image_metadata(self.client)?.begin_process(old,b"[]".as_slice().into())?,frame,new)
+                    }
+                }else{
                 let Some(input) = frame.image_input(ImageInput::Resource(self.current.clone().unwrap()), &mut self.random)? else {
                     return self.next(host);
                 };
                 Work::Effect(host.image_metadata(self.client)?.begin_process(input, b"[]".as_slice().into())?)
+                }
             }
             NativeFrameEffect::Chara(frame) => {
                 let Some(source) = frame.source else {
@@ -759,6 +858,35 @@ impl NativeFrameWork {
                     ImageProcessState::Ready(image) => {
                         self.current = Some(image);
                         self.next(host)?;
+                    }
+                },
+                Work::CaptureInit(mut job,frame)=>match job.poll()?{
+                    ImageProcessState::Pending=>{self.work=Some(Work::CaptureInit(job,frame));return Ok(None);}
+                    ImageProcessState::Failed(error)=>bail!("NNN initial GET buffer: {error}"),
+                    ImageProcessState::Ready(image)=>{
+                        ensure!(image.client()==self.client,"NNN foreign GET buffer");
+                        self.buffers.capture=Some(image);
+                        self.effects.push_front(NativeFrameEffect::Picture(frame));
+                        self.next(host)?;
+                    }
+                },
+                Work::WipeOld(mut job,frame,new)=>match job.poll()?{
+                    ImageProcessState::Pending=>{self.work=Some(Work::WipeOld(job,frame,new));return Ok(None);}
+                    ImageProcessState::Failed(error)=>bail!("NNN wipe start crop: {error}"),
+                    ImageProcessState::Ready(image)=>{
+                        ensure!(image.client()==self.client,"NNN foreign wipe source");
+                        self.work=Some(Work::WipeNew(host.image_metadata(self.client)?.begin_process(new,b"[]".as_slice().into())?,frame,image));self.api_calls+=1;
+                    }
+                },
+                Work::WipeNew(mut job,frame,old)=>match job.poll()?{
+                    ImageProcessState::Pending=>{self.work=Some(Work::WipeNew(job,frame,old));return Ok(None);}
+                    ImageProcessState::Failed(error)=>bail!("NNN wipe end crop: {error}"),
+                    ImageProcessState::Ready(new)=>{
+                        ensure!(new.client()==self.client,"NNN foreign wipe target");
+                        let (_,p)=frame.buffered_parameters().unwrap();
+                        let progress=crate::native_curve::value_with_random(frame.state.count,frame.state.frames,p[6].wrapping_mul(100),p[5].wrapping_mul(100),p[4],p[3],&mut self.random)?.clamp(0,10000) as u32;
+                        let (input,effects)=crate::native_simple_wipe::plan_with_random(p[1],old,new,progress,10000,&mut self.random,&mut self.buffers.wipe_tables)?;
+                        self.work=Some(Work::Effect(host.image_metadata(self.client)?.begin_process(input,serde_json::to_vec(&effects)?.into())?));self.api_calls+=1;
                     }
                 },
                 Work::Advance(mut job, state) => match job.poll()? {

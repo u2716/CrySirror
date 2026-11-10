@@ -12,12 +12,16 @@ pub(super) const SOUND: u32 = 2;
 pub(super) struct NativeAudio {
     pub instance_gain: [i32; 3],
     pub music_names: [Vec<u8>; 2],
+    /// YUKIIRO59EA68 / classic56E9F8: one-shot pan for the next ordinary
+    /// voice playback attempt. Active-instance pan changes do not replace it.
+    pub pending_voice_pan: i32,
 }
 impl Default for NativeAudio {
     fn default() -> Self {
         Self {
             instance_gain: [1000; 3],
             music_names: Default::default(),
+            pending_voice_pan: 0,
         }
     }
 }
@@ -54,16 +58,12 @@ impl MajiroVm {
                 paused: false,
                 fade_ms: 0.0,
             },
-            //438150/44D520 returns -1 during decoder preparation,1 during
-            //source playback and0 when absent/stopped. Preparation is tracked
-            //separately when the native play syscall is admitted.
+            // Shared source-clock observation; a completed first pass is
+            // distinct from both decoder preparation and the loop setting.
             0xf8d8925b => {
-                let playing = host
-                    .audio_info(self.client, MUSIC)
-                    .map_err(core_error)?
-                    .is_some_and(|info| info.source_playing);
+                let state = self.native_audio_state(host, MUSIC)?;
                 return Ok(Some(if returns {
-                    vec![Value::Integer(i32::from(playing))]
+                    vec![Value::Integer(state)]
                 } else {
                     vec![]
                 }));
@@ -80,6 +80,7 @@ impl MajiroVm {
             _ => None,
         };
         if let Some(channel) = stopped {
+            self.audio_names.remove(&channel);
             self.audio.instance_gain[channel as usize] = 1000;
             if channel == MUSIC {
                 self.audio.music_names.iter_mut().for_each(Vec::clear);

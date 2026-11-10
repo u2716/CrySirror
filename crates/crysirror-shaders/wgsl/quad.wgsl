@@ -5,7 +5,9 @@ struct Out {
     @location(2) @interpolate(flat) filter_index: u32,
     @location(3) @interpolate(flat) sample_bounds: vec4<f32>,
     @location(4) @interpolate(flat) clip_rect: vec4<f32>,
-    @location(5) @interpolate(linear) clip_position: vec2<f32>,
+    // GLSL ES has no portable noperspective qualifier. Perspective-interpolate
+    // (screen_position * clip_w, clip_w), then divide in the fragment stage.
+    @location(5) clip_position: vec3<f32>,
 }
 @group(0) @binding(0) var image: texture_2d<f32>;
 @group(0) @binding(1) var image_sampler: sampler;
@@ -17,7 +19,7 @@ fn vertex(position: vec4<f32>, uv: vec2<f32>, color: vec4<f32>, filter_slot: f32
     out.filter_index = u32(max(filter_slot, 0.0));
     out.sample_bounds = vec4<f32>(-1e20, -1e20, 1e20, 1e20);
     out.clip_rect = out.sample_bounds;
-    out.clip_position = position.xy / position.w * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5);
+    out.clip_position = vec3<f32>(position.xy * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5 * position.w), position.w);
     return out;
 }
 @vertex fn vs_main(@location(0) position: vec4<f32>, @location(1) uv: vec2<f32>, @location(2) color: vec4<f32>, @location(3) filter_slot: f32, @location(4) sample_bounds: vec4<f32>, @location(5) clip_rect: vec4<f32>) -> Out {
@@ -30,7 +32,10 @@ fn vertex(position: vec4<f32>, uv: vec2<f32>, color: vec4<f32>, filter_slot: f32
     return vertex(position, uv, color, filter_slot);
 }
 fn outside_clip(in: Out) -> bool {
-    return any(in.clip_position < in.clip_rect.xy) || any(in.clip_position >= in.clip_rect.zw);
+    // The common perspective divisor cancels, recovering screen-linear UV
+    // even for projective quads with different clip-space w at each vertex.
+    let screen_position = in.clip_position.xy / in.clip_position.z;
+    return any(screen_position < in.clip_rect.xy) || any(screen_position >= in.clip_rect.zw);
 }
 fn bounded_uv(uv: vec2<f32>, bounds: vec4<f32>) -> vec2<f32> {
     let half_texel = vec2<f32>(0.5) / vec2<f32>(textureDimensions(image, 0));
@@ -278,7 +283,7 @@ fn filtered(in: Out) -> vec4<f32> {
         let tint_bytes=vec4<i32>(round(clamp(tint,vec4<f32>(0.0),vec4<f32>(1.0))*255.0));
         let weight=(tint_bytes>>vec4<u32>(1u))+(tint_bytes>>vec4<u32>(7u));
         color=vec4<f32>((source_bytes*weight)>>vec4<u32>(7u))/255.0;
-        if i32(f.i.x)==15 {
+        if i32(f.i.x)==15 || i32(f.i.x)==19 || i32(f.i.x)==20 {
             //Scalar256 shares the RGB tint contract, but coverage keeps the
             //255 endpoint and uses an exact /256 product below that endpoint.
             var alpha=source_bytes.a;
@@ -286,6 +291,10 @@ fn filtered(in: Out) -> vec4<f32> {
             color.a=f32(alpha)/255.0;
         } else if i32(f.i.x)==16 {
             color.a=f32(tint_bytes.a)/255.0;
+        } else if i32(f.i.x)==17 || i32(f.i.x)==18 {
+            // Paint colour alpha belongs to the source (including solids).
+            // RGB-only profiles take their independent layer weight here.
+            color.a=f32((u32(f.i.w)>>8u)&255u)/255.0;
         }
     }
     color = vec4<f32>(color.rgb * f.h.yzw, color.a);
@@ -340,7 +349,7 @@ fn filtered(in: Out) -> vec4<f32> {
 }
 
 // Integer equivalents of crysirror_image::ConstantByteBlend::channel.
-fn stored_channel(d:i32,s:i32,a:i32,mode:i32)->i32 {
+fn stored_channel(d:i32,s:i32,a:i32,mode:i32,mask_weight:i32)->i32 {
     let full=a+(a>>7u); let half=(a>>1u)+(a>>7u);
     let positive=(s*full)>>8u;
     let white=255+(((s-255)*half)>>7u);
@@ -371,6 +380,22 @@ fn stored_channel(d:i32,s:i32,a:i32,mode:i32)->i32 {
         case 16: {
             if a==255 {value=s;} else {value=d+(((s-d)*a)>>8u);}
         }
+        case 17: {
+            let source=(s*a)/255;
+            value=255-((255-d)*(255-source))/255;
+        }
+        case 18: {value=(d*s)/255;}
+        case 19: {
+            if a==255 {value=s;}
+            else if a!=0 {value=((s*a)>>8u)+((d*(256-a))>>8u);}
+        }
+        case 20: {
+            if a!=0 && mask_weight!=0 {
+                var x=mask_weight; var y=256-x;
+                if a!=255 {x=(a*mask_weight)>>8u;y=255-x;}
+                value=(s*x+d*y)>>8u;
+            }
+        }
         default: {}
     }
     return clamp(value,0,255);
@@ -385,8 +410,9 @@ fn stored_channel(d:i32,s:i32,a:i32,mode:i32)->i32 {
     let d=vec3<i32>(round(to_gamma(destination.rgb)*255.0));
     let alpha=i32(round(source.a*255.0));
     let mode=i32(f.i.x);
-    let rgb=vec3<f32>(f32(stored_channel(d.r,s.r,alpha,mode)),
-        f32(stored_channel(d.g,s.g,alpha,mode)),f32(stored_channel(d.b,s.b,alpha,mode)))/255.0;
+    let mask_weight=i32(round(fract(f.i.x)*512.0));
+    let rgb=vec3<f32>(f32(stored_channel(d.r,s.r,alpha,mode,mask_weight)),
+        f32(stored_channel(d.g,s.g,alpha,mode,mask_weight)),f32(stored_channel(d.b,s.b,alpha,mode,mask_weight)))/255.0;
     let output_alpha=select(destination.a,f32(alpha)/255.0,mode==15);
     return vec4<f32>(to_linear(rgb),select(output_alpha,1.0,(u32(f.i.w)&2u)!=0u));
 }

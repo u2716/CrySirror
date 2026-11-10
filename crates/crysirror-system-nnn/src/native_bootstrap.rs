@@ -34,6 +34,8 @@ pub struct NativeConfiguration {
     pub setup: Names,
     /// Distinct native MainControl configuration; absence means its original defaults.
     pub main_control: Option<Names>,
+    /// Original SelectChart setup, prepared on the bootstrap resource worker.
+    pub chart_setup: Option<Names>,
     pub variable_names: Names,
     pub project: Names,
     pub commands: Names,
@@ -50,6 +52,8 @@ pub struct PreparedBoot {
     pub setup: Names,
     /// Distinct native MainControl configuration; absence means its original defaults.
     pub main_control: Option<Names>,
+    /// Original SelectChart setup, prepared on the bootstrap resource worker.
+    pub chart_setup: Option<Names>,
     pub variable_names: Names,
     pub project: Names,
     pub commands: Names,
@@ -65,6 +69,7 @@ impl PreparedBoot {
             resources: self.resources.clone(),
             setup: self.setup.clone(),
             main_control: self.main_control.clone(),
+            chart_setup: self.chart_setup.clone(),
             variable_names: self.variable_names.clone(),
             project: self.project.clone(),
             commands: self.commands.clone(),
@@ -203,6 +208,16 @@ impl PreparedBoot {
             None
         };
         drop(names);
+        let mut chart_required = false;
+        for index in 1..=256 {
+            let Some(mode) = setup.parameter(format!("autoExtDataMode{index}").as_bytes()) else { break; };
+            chart_required |= crate::native_mode::number(mode)? == 34;
+        }
+        let chart_setup = if let Some(bytes)=read(&resources.path("init2/selectchart.fxf")?,1<<20)? {
+            Some(Names::parse(&bytes,true)?)
+        } else if let Some(bytes)=read(&resources.path("init/selectchart.xtx")?,1<<20)? {
+            Some(Names::parse(&bytes,false)?)
+        } else if chart_required {Some(Names {tokens:vec![]})} else {None};
         let mut variables = config::configured_variables(profile, &variable_names, &setup)?;
         if variables.native_holidays_pending() {
             cancel.check()?;
@@ -227,6 +242,7 @@ impl PreparedBoot {
             resources,
             setup,
             main_control,
+            chart_setup,
             variable_names,
             project,
             commands,
@@ -281,6 +297,7 @@ mod host_configuration_tests {
             resources: ResourceNames::new("").unwrap(),
             setup: Names::parse(b"initRandomSeed 77", false).unwrap(),
             main_control: None,
+            chart_setup: None,
             variable_names: empty.clone(),
             project: empty.clone(),
             commands: empty.clone(),

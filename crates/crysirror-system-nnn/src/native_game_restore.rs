@@ -38,6 +38,10 @@ struct Parsed {
     pattern_init: Option<(i32, crysirror_core::service::PatternJob)>,
     frame: Option<crate::native_presentation::NativeFrameWork>,
     frame_ready: Option<crate::native_presentation::NativeFrameResult>,
+    post_enabled: bool,
+    post_snapshot: Option<ImageJob>,
+    post_work: Option<crate::native_presentation::NativeFrameWork>,
+    post_done: bool,
     prepared_audio: Option<Arc<dyn AudioReplacementResource>>,
     layers: Vec<Value>,
     audio_done: bool,
@@ -104,6 +108,17 @@ impl Parsed {
             );
         }
         if self.pattern_init.is_none() {
+            // Original InitParameter walks enabled slots in order. RAINBOW
+            // consumes three discarded draws; SUNA prepares its shared random
+            // surface asynchronously. Preserve their interleaving, rather than
+            // batching all discarded draws before/after every SUNA slot.
+            while let Some(slot)=self.seed.bridge.next_saved_rainbow() {
+                let mut variables=self.session.machine().variables().context("NNN saved RAINBOW variables absent")?.clone();
+                let mut random=variables.random_state().context("NNN saved RAINBOW RNG absent")?;
+                self.seed.bridge.initialize_saved_rainbow(slot,&mut random)?;
+                variables.replace_random_state(random)?;
+                self.session.machine_mut().replace_variables(variables)?;
+            }
             if let Some(slot) = self.seed.bridge.next_saved_suna() {
                 let random = self
                     .session
@@ -172,14 +187,16 @@ impl Parsed {
                     // it never Prints the retained effects. SUNA's original
                     // InitParameter RNG above is real, but a hidden extra
                     // Print/AdvancePrefix here would alter future native RNG.
-                    let frozen_selection = matches!(self.wait, Some(SavedWait::Selection { .. }))
-                        && !self.seed.selection.advances_effects();
+                    let frozen_selection = self.file.status_word(20)?==34 || (matches!(self.wait, Some(SavedWait::Selection { .. }))
+                        && !self.seed.selection.advances_effects());
                     self.frame = Some(if frozen_selection {
-                        crate::native_presentation::NativeFrameWork::with_saved_base(
+                        crate::native_presentation::NativeFrameWork::with_context_base(
                             self.seed.bridge.client(),
                             image,
                             Vec::new(),
                             random,
+                            false,
+                            self.seed.bridge.frame_buffers(),
                             host,
                         )?
                     } else {
@@ -216,7 +233,7 @@ impl Parsed {
                 self.seed.selection.has_frozen_background(),
             )?;
             self.wait_job = Some(
-                wait.begin(
+                wait.begin_with_variables(
                     Some(&self.seed.text),
                     Some(&self.seed.selection),
                     self.frame_ready
@@ -224,6 +241,10 @@ impl Parsed {
                         .context("NNN saved frame absent")?
                         .target
                         .clone(),
+                    self.session
+                        .machine()
+                        .variables()
+                        .context("NNN saved selection variable bank absent")?,
                     host,
                 )?,
             );
@@ -251,7 +272,76 @@ impl Parsed {
             self.ui = ui;
             self.seed.release_images.extend(releases);
         }
-        Ok(self.wait_job.is_none() && self.wait.is_none() && self.frame_ready.is_some())
+        if self.wait_job.is_none() && self.wait.is_none() && !self.post_done {
+            if !self.post_enabled {
+                self.post_done = true;
+            } else {
+                // CAllEffect's last-screen slot paints after the restored text
+                // and choice rows. Rasterize this detached candidate through
+                // the shared presenter; the running scene remains untouched.
+                let plan = self.seed.bridge.saved_post_text_plan()?;
+                if plan.is_empty() {
+                    self.post_done = true;
+                } else {
+                    if self.post_snapshot.is_none() && self.post_work.is_none() {
+                        let commands = self.seed.bridge.saved_scene_commands(&self.layers)?;
+                        self.post_snapshot = Some(host.begin_detached_layers_image(
+                            self.seed.bridge.client(),
+                            self.seed.bridge.canvas_size(),
+                            [i32::MAX - 1, 0],
+                            &commands,
+                        )?);
+                    }
+                    if let Some(job) = self.post_snapshot.as_mut() {
+                        match job.poll()? {
+                            ImageProcessState::Pending => return Ok(false),
+                            ImageProcessState::Failed(error) => {
+                                anyhow::bail!("NNN saved post-text snapshot: {error}")
+                            }
+                            ImageProcessState::Ready(image) => {
+                                self.post_work = Some(
+                                    crate::native_presentation::NativeFrameWork::with_context_base(
+                                        self.seed.bridge.client(),
+                                        image,
+                                        plan,
+                                        self.frame_ready
+                                            .as_ref()
+                                            .context("NNN saved pre-text frame absent")?
+                                            .random
+                                            .clone(),
+                                        false,
+                                        self.frame_ready.as_ref().unwrap().buffers.clone(),
+                                        host,
+                                    )?,
+                                );
+                                self.post_snapshot = None;
+                            }
+                        }
+                    }
+                    if let Some(work) = self.post_work.as_mut() {
+                        let Some(done) = work.poll(host)? else {
+                            return Ok(false);
+                        };
+                        let mut variables = self
+                            .session
+                            .machine()
+                            .variables()
+                            .context("NNN saved post-text variable bank absent")?
+                            .clone();
+                        variables.replace_random_state(done.random.clone())?;
+                        self.session.machine_mut().replace_variables(variables)?;
+                        self.layers
+                            .push(self.seed.bridge.install_saved_post_frame(&done, host)?);
+                        self.post_work = None;
+                        self.post_done = true;
+                    }
+                }
+            }
+        }
+        Ok(self.wait_job.is_none()
+            && self.wait.is_none()
+            && self.frame_ready.is_some()
+            && self.post_done)
     }
     fn encode(self, cancel: crysirror_tasks::Cancellation) -> Result<PreparedNativeRestore> {
         cancel.check()?;
@@ -341,20 +431,24 @@ impl NativeRestoreJob {
             let client = self.client;
             self.parse=Some(permit.spawn(move|cancel|{
                 cancel.check()?;let profile=LegacySaveProfile::for_configuration(&config)?;
-                ensure!(!profile.omake&&!profile.cutin&&profile.extension_sizes.is_empty(),
-                    "NNN native Omake/Cutin/extensions require complete saved actor consumers");
                 let file=Arc::new(NativeSaveFile::parse(&bytes,&profile)?);
-                ensure!(matches!(file.status_word(20)?,9|10),"NNN original restore requires saved message/selection actor; other native modes need their own wait consumers");
-                let wait=file.saved_wait()?.context("NNN saved native wait absent")?;
+                ensure!(matches!(file.status_word(20)?,9|10|34),"NNN original restore native mode has no actor consumer");
+                let wait=file.saved_wait()?;
+                ensure!(wait.is_some()||file.status_word(20)?==34,"NNN saved native wait absent");
                 seed.bridge.restore_native_status(&file)?;
+                seed.bridge.restore_original_auxiliary(&file,&profile)?;
+                seed.bridge.bind_saved_cutin(&mut seed.text)?;
+                seed.text.bind_message_storage(file.messages(64)?)?;
                 let latent=seed.text.dormant(file.messages(file.position()?.message_rows as usize)?,
                     file.status_word(30)? as u32,seed.text.retained_serial(),file.status_word(44)?!=0,file.status_word(485)?!=0)?;
                 seed.bridge.configure_text(latent)?;seed.bridge.configure_selection(seed.selection.dormant()?)?;
                 let session=file.prepare_script_contexts(&profile,&config,&current,|name,cancel|loader(name,cancel),&cancel)?;
                 let pictures=SavedPictures::new(client,&file,&profile,&config,seed.bridge.image_resources()?)?;
                 let audio=seed.audio.as_ref().context("NNN saved audio seed absent")?.prepare(&file,&profile)?;cancel.check()?;
-                Ok(Parsed{file,profile,session,seed,pictures:Some(pictures),audio:Some(audio),wait:Some(wait),
+                let post_enabled=matches!(&wait,Some(SavedWait::Message{..}))||(file.status_word(20)?==9&&seed.selection.advances_effects());
+                Ok(Parsed{file,profile,session,seed,pictures:Some(pictures),audio:Some(audio),wait,
                     wait_job:None,base:None,pattern_init:None,frame:None,frame_ready:None,prepared_audio:None,layers:vec![],
+                    post_enabled,post_snapshot:None,post_work:None,post_done:false,
                     audio_done:false,windows_done:false,pictures_done:false,ui:vec![]})
             })?);
             return Ok(false);
@@ -519,6 +613,7 @@ pub(crate) mod tests {
             resources: resources.clone(),
             setup: setup.clone(),
             main_control: None,
+            chart_setup: None,
             variable_names: empty.clone(),
             project: empty.clone(),
             commands: empty.clone(),
@@ -776,6 +871,82 @@ pub(crate) mod tests {
         let diag: Value = serde_json::from_slice(&commit.vm.diagnostics()).unwrap();
         assert_eq!(diag["original_save_restored"], true);
         assert_eq!(diag["instructions"], 0);
+    }
+    #[test]
+    fn saved_last_screen_effect_waits_for_detached_text_snapshot_without_advancing_native_counters()
+    {
+        struct Readback(Vec<u8>);
+        impl crysirror_core::service::AssetReader for Readback {
+            fn len(&self) -> crysirror_core::Result<u64> {
+                Ok(self.0.len() as u64)
+            }
+            fn read_at(&self, at: u64, out: &mut [u8]) -> crysirror_core::Result<usize> {
+                let at = usize::try_from(at).unwrap_or(usize::MAX);
+                let n = out.len().min(self.0.len().saturating_sub(at));
+                if n > 0 {
+                    out[..n].copy_from_slice(&self.0[at..at + n]);
+                }
+                Ok(n)
+            }
+        }
+        let (_root, mut rt) = runtime();
+        rt.set_canvas_image_presenter(true);
+        let (old, mut file, profile, _) = native_fixture();
+        for (index, value) in [
+            (0, 1),
+            (1, -1),
+            (2, 54),
+            (27, 7),
+            (28, 99999),
+            (30, 80),
+            (31, 90),
+            (32, 100),
+        ] {
+            let at = 15 * 1024 + index * 4;
+            file.blocks[5].payload[at..at + 4].copy_from_slice(&(value as i32).to_le_bytes());
+        }
+        let before = serde_json::to_value(&rt.host.engine).unwrap();
+        let mut job = old
+            .original_restore_job(file.encode(&profile).unwrap().into())
+            .unwrap();
+        let mut captures = 0;
+        spin(|| {
+            let ready = job.poll(&mut rt.host).unwrap() == OriginalRestoreProgress::Ready;
+            rt.prepare_canvas_images(|request, _| {
+                captures += 1;
+                assert_eq!(request.client, 1);
+                // The original wait's retained glyph layer is part of the
+                // candidate. This fake presenter tests the dependency seam,
+                // not font rasterization or real GPU behavior.
+                assert!(
+                    request
+                        .layers
+                        .iter()
+                        .any(|l| matches!(l.paint, crysirror_scene::layer::Paint::GlyphRun { .. }))
+                );
+                Ok(Some(Arc::new(Readback([1, 2, 3, 255].repeat(256)))))
+            })
+            .unwrap();
+            assert_eq!(serde_json::to_value(&rt.host.engine).unwrap(), before);
+            ready
+        });
+        assert_eq!(captures, 1);
+        let ready = job.ready.as_ref().unwrap();
+        assert_eq!(ready.bridge.effect_counter(15), Some((7, 99999)));
+        let batch: Value = serde_json::from_slice(&ready.batches[0].bytes).unwrap();
+        let layer = batch["layers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|l| l["layer"]["id"] == 117)
+            .unwrap();
+        assert_eq!(layer["layer"]["order"], json!([i32::MAX - 1, 0]));
+        let path = layer["layer"]["paint"]["asset"].as_str().unwrap();
+        assert_eq!(
+            &*rt.assets.surface(ClientId(1), path).unwrap().rgba,
+            [80, 90, 100, 255].repeat(256)
+        );
+        assert!(rt.assets.surface(ClientId(2), path).is_none());
     }
     #[test]
     fn invalid_original_profile_or_window_fails_before_source_admission_and_retains_original_vm() {

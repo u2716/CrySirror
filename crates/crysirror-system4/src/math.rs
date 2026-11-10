@@ -1,19 +1,83 @@
 // Copyright (C) 2019 Nunuhara Cabbage; Rust (C) 2026 CrySirror contributors.
 // GPL-2.0-or-later. xsystem4 a85467d src/hll/Math.c scalar ABI policy.
 //! Scalar HLL intrinsics use Rust's CPU math, as the VM opcodes do. Random
-//! streams, host-time seeding and geometry algorithms require shared facilities
-//! and are deliberately absent here; an unknown call returns None, not success.
+//! streams, host-time seeding and geometry algorithms use shared facilities;
+//! an unknown call returns None, not success.
 use crate::vm::{
-    external::{Argument, HllReturn},
     Machine,
+    external::{Argument, HllReturn},
 };
-use anyhow::{bail, ensure, Result};
+use anyhow::{Result, bail, ensure};
 pub(crate) fn scalar(
     m: &mut Machine,
     name: &[u8],
     kind: i32,
     args: &[Argument],
 ) -> Result<Option<HllReturn>> {
+    if name == b"BezierCurve" {
+        ensure!(kind == 47, "Math.BezierCurve return ABI");
+        let [
+            Argument::HeapReference { kind: 22, slot: xs },
+            Argument::HeapReference { kind: 22, slot: ys },
+            Argument::Scalar {
+                kind: 10,
+                bits: count,
+            },
+            Argument::Scalar {
+                kind: 11,
+                bits: progress,
+            },
+            Argument::Reference {
+                kind: 18,
+                page: xp,
+                index: xi,
+            },
+            Argument::Reference {
+                kind: 18,
+                page: yp,
+                index: yi,
+            },
+        ] = args
+        else {
+            anyhow::bail!("Math.BezierCurve argument ABI")
+        };
+        m.heap.get(*xp, *xi)?;
+        m.heap.get(*yp, *yi)?;
+        let xs = m.heap.page(*xs)?;
+        let ys = m.heap.page(*ys)?;
+        let count = (*count).max(0) as usize;
+        if count > xs.values.len() || count > ys.values.len() {
+            return Ok(Some(HllReturn::Scalar(0)));
+        }
+        ensure!(
+            count <= 13,
+            "native Bezier factorial-overflow degree is unsupported"
+        );
+        for page in [xs, ys] {
+            ensure!(
+                matches!(
+                    page.kind,
+                    super::vm::heap::PageKind::Array {
+                        kind: 14,
+                        rank: 1,
+                        ..
+                    }
+                ),
+                "native Bezier array element profile"
+            );
+        }
+        let points = (0..count)
+            .map(|n| [xs.values[n], ys.values[n]])
+            .collect::<Vec<_>>();
+        let [x, y] = crysirror_image::progress_curve::bernstein_i32_points(
+            &points,
+            f32::from_bits(*progress as u32),
+            &|| Ok(()),
+        )?;
+        m.heap.set(*xp, *xi, x)?;
+        m.heap.set(*yp, *yi, y)?;
+        return Ok(Some(HllReturn::Scalar(1)));
+    }
     let integers = || {
         args.iter()
             .map(|a| match a {
@@ -103,15 +167,18 @@ pub(crate) fn scalar(
     if matches!(name, b"Swap" | b"SwapF") {
         ensure!(kind == 0, "System4 Math.Swap return ABI");
         let expected = if name == b"Swap" { 18 } else { 19 };
-        let [Argument::Reference {
-            kind: a,
-            page: ap,
-            index: ai,
-        }, Argument::Reference {
-            kind: b,
-            page: bp,
-            index: bi,
-        }] = args
+        let [
+            Argument::Reference {
+                kind: a,
+                page: ap,
+                index: ai,
+            },
+            Argument::Reference {
+                kind: b,
+                page: bp,
+                index: bi,
+            },
+        ] = args
         else {
             bail!("System4 Math.Swap reference ABI")
         };
@@ -212,5 +279,57 @@ mod tests {
             [m.heap.get(0, 0).unwrap(), m.heap.get(0, 1).unwrap()],
             [47, 31]
         );
+    }
+    #[test]
+    fn native_bernstein_retains_array_inputs_and_alias_output_order() {
+        use crate::vm::heap::{Object, Page, PageKind};
+        let mut m = machine();
+        let xs = m
+            .heap
+            .alloc(Object::Page(Some(Page {
+                kind: PageKind::Array {
+                    kind: 14,
+                    structure: -1,
+                    rank: 1,
+                },
+                values: vec![0, 0, 100, 100],
+            })))
+            .unwrap();
+        let ys = m
+            .heap
+            .alloc(Object::Page(Some(Page {
+                kind: PageKind::Array {
+                    kind: 14,
+                    structure: -1,
+                    rank: 1,
+                },
+                values: vec![0, 100, 100, 0],
+            })))
+            .unwrap();
+        let args = [
+            Argument::HeapReference { kind: 22, slot: xs },
+            Argument::HeapReference { kind: 22, slot: ys },
+            Argument::Scalar { kind: 10, bits: 4 },
+            Argument::Scalar {
+                kind: 11,
+                bits: 0.5f32.to_bits() as i32,
+            },
+            Argument::Reference {
+                kind: 18,
+                page: xs,
+                index: 0,
+            },
+            Argument::Reference {
+                kind: 18,
+                page: xs,
+                index: 0,
+            },
+        ];
+        assert!(matches!(
+            scalar(&mut m, b"BezierCurve", 47, &args).unwrap(),
+            Some(HllReturn::Scalar(1))
+        ));
+        assert_eq!(m.heap.get(xs, 0).unwrap(), 75, "aliased y writes after x");
+        assert_eq!(m.heap.page(ys).unwrap().values, [0, 100, 100, 0]);
     }
 }

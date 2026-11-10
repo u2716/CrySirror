@@ -18,7 +18,9 @@ pub(super) fn detect(dir: &SourcePath, names: &[String], name: &str) -> Result<O
         let mut f = crate::source_path::SourceFile::open(full)?;
         let mut h = [0; 16];
         if f.read_exact(&mut h).is_ok()
-            && (h == *b"MajiroArcV2.000\0" || h == *b"MajiroArcV3.000\0")
+            && (h == *b"MajiroArcV1.000\0"
+                || h == *b"MajiroArcV2.000\0"
+                || h == *b"MajiroArcV3.000\0")
         {
             archives.push(file.clone());
         }
@@ -66,8 +68,12 @@ fn native_plan(dir: &SourcePath, name: &str, archives: Vec<String>) -> Result<Pl
     for (index, file) in archives.into_iter().enumerate() {
         let full = dir.join(&file).canonicalize()?;
         ensure!(full.starts_with(&root), "Majiro archive escapes game root");
-        let a = crysirror_formats_arc::MajiroArc
-            .open(Arc::new(File(Mutex::new(crate::source_path::SourceFile::open(full)?))), &cx)?;
+        let a = crysirror_formats_arc::MajiroArc.open(
+            Arc::new(File(Mutex::new(crate::source_path::SourceFile::open(
+                full,
+            )?))),
+            &cx,
+        )?;
         let target = format!("__majiro/{index}");
         for e in a.entries() {
             if e.path.eq_ignore_ascii_case("majiro.env")
@@ -90,7 +96,7 @@ fn native_plan(dir: &SourcePath, name: &str, archives: Vec<String>) -> Result<Pl
             }
         }
         mounts.push(ArchiveMount {
-            fallback:false,
+            fallback: false,
             source: file,
             target,
             options: json!({"format":"majiro/arc","profile":"game"}),
@@ -98,7 +104,7 @@ fn native_plan(dir: &SourcePath, name: &str, archives: Vec<String>) -> Result<Pl
     }
     let env = env.context("Majiro essential majiro.env absent from fastdata/update")?;
     let env = crysirror_majiro::environment::parse(&env)?;
-    let mut config = json!({"script":script.context("original Majiro start.mjo absent")?,"run_mode":1,"keyboard_lock_policy":"engine_logical","environment":environment.context("original Majiro ENV provider")?,"settings_profile":"portable_client","font_fallback":"default"});
+    let mut config = json!({"script":script.context("original Majiro start.mjo absent")?,"run_mode":1,"keyboard_lock_policy":"engine_logical","environment":environment.context("original Majiro ENV provider")?,"settings_profile":"portable_client","font_fallback":"default","media_policy":"installed_resources"});
     // Native program lookup may include bin/, as on original installation media.
     if let Some(exe) = env.get("EXENAME") {
         let candidates = [dir.join(exe), dir.join("bin").join(exe)];

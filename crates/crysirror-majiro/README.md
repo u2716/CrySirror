@@ -23,6 +23,23 @@ functions (static IDA analysis; see `SOURCE.json`).
 - `wait(-2)` yields one scheduler round inside the same update (49ADE4) instead
   of costing a frame. The adapter runs up to 64 such rounds per update.
 
+The optional executable is read as PE data to identify reviewed early,
+classic and extended x86 native layouts. Identification checks the hash/argc
+reader,16-byte typed stack records, integer return construction and registered
+page/mode/string call targets; later layouts also check their picture-password
+contract. Early engines do not require a password native they never registered.
+Executable renaming or unrelated file metadata does not select an ABI. Unknown
+or ambiguous layouts fail explicitly. Extended CRT string scratch holds2048
+bytes; early/classic hold512.
+
+Original ARC V1/V2/V3 archives are mounted through the shared resource reader.
+V1 derives entry lengths from the next record, including its terminal offset;
+it is not parsed using the later explicit-size record layout.
+
+MJO bytecode uses the fixed1024-byte CRC-table XOR. Encrypted RCT pictures use a
+separate password set by the game's `SetEncryptionKey` script call, from which
+the shared decoder derives the picture XOR table. These are distinct resources.
+
 ## Graphics (`adapter/gfx.rs`)
 
 Majiro is a software-composited engine: sprites draw *destructively* into
@@ -61,6 +78,11 @@ middle (skip) code, arrows as navigation. Hit regions (42F090/42F1B0) provide
 hover/leave/click callbacks, keyboard focus movement and background handlers.
 Music, four sound slots, voice and twenty voice channels use shared audio
 channels with the portable volume settings.
+Native channel-state queries use the shared mixer source clock: zero when
+stopped, one before the first endpoint, and minus one while still active after
+the first pass. A loop is not considered completed merely because looping was
+enabled. Stopped native handles remain absent while a retired mixer voice fades.
+
 
 ## Settings, saves and files
 
@@ -91,7 +113,16 @@ native PC rewind between records. Voice-history records are not replayed.
 
 Save-slot thumbnails, voice replay from the backlog, movie playback (`movie_play` is skipped with a visible warning),
 the exact 448750 rotation filter, auto/skip modes, and original save-file
-interchange. Unknown syscalls still fail visibly at their original PC.
+interchange. Physical optical-drive emulation is not provided. Unknown syscalls
+fail visibly at their original PC.
+
+Native joystick modes use source-separated host controller samples and retain
+their original two-controller key mappings. `media_policy: "installed_resources"`
+checks this client's original executable metadata, ENV and entry MJO through
+shared storage; missing/read-failed resources retain the native call while the
+shared UI offers Retry or Cancel. Automatic directory detection selects that
+portable installed-data policy; manually authored configs default to the explicit
+native-optical requirement.
 
 The desktop always links Majiro and detects original archive/ENV layouts
 without extraction; no per-engine feature flag is required. Original game

@@ -3,20 +3,24 @@
 //! engine owner submits scoped presentation/audio calls. Bootstrap resources
 //! are prepared before construction; this is not a registered/playable factory.
 use crate::{
-    Program,
     bridge::Bridge,
     machine::{Machine, NativeCall, Step},
     native_bootstrap::{NativeConfiguration, PreparedBoot},
     native_control::ScriptSession,
+    Program,
 };
-use anyhow::{Context, Result};
+use anyhow::{ensure, Context, Result};
 use crysirror_core::{
-    Error,
     service::{HostServices, InputFrame},
     vm::{VmAdapter, VmYield},
+    Error,
 };
 use crysirror_tasks::{Task, TaskPool};
 use std::sync::Arc;
+mod menu_context;
+mod scene;
+mod user_gaiji;
+use menu_context::MenuContext;
 
 pub type ScriptLoader =
     Arc<dyn Fn(&[u8], &crysirror_tasks::Cancellation) -> Result<Arc<Program>> + Send + Sync>;
@@ -38,6 +42,9 @@ pub struct NativeAdapter {
     pc: u32,
     executed: u64,
     halted: bool,
+    menu_context: Option<Box<MenuContext>>,
+    scene_context: Option<Box<scene::SceneContext>>,
+    user_gaiji: Option<user_gaiji::UserGaiji>,
     error: Option<String>,
     observed_script: Vec<u8>,
     observed_depth: usize,
@@ -52,6 +59,98 @@ pub struct NativeAdapter {
     )>,
 }
 impl NativeAdapter {
+    pub(crate) fn gallery_progress(&self) -> Result<crate::native_system_file::NativeSystemFile> {
+        self.bridge.gallery_progress()
+    }
+    pub(crate) fn apply_system_message_action(&mut self,
+        action:crate::native_message_control::SystemMessageAction,host:&mut dyn HostServices)->Result<()> {
+        ensure!(self.worker.is_none()&&self.menu_context.is_none(),
+            "NNN SystemMenu action before foreground restoration");
+        self.bridge.apply_system_message_action(action,host)
+    }
+    pub(crate) fn resume_after_menu(&mut self, host: &mut dyn HostServices) -> Result<()> {
+        self.bridge.resume_after_menu(host)
+    }
+    pub(crate) fn menu_thumbnail(
+        &self,
+        host: &mut dyn HostServices,
+        image: Arc<dyn crysirror_core::image_processing::ImageResource>,
+    ) -> Result<crate::native_thumbnail::ThumbnailJob> {
+        let config = self
+            .configuration
+            .as_ref()
+            .context("NNN menu save configuration absent")?;
+        crate::native_thumbnail::ThumbnailPolicy::prepare(&config.setup, self.bridge.canvas_size())?
+            .from_image(self.bridge.client(), self.pool.clone(), host, image)
+    }
+    pub(crate) fn menu_settings(&self) -> Result<Vec<(i32, i32)>> {
+        self.bridge.menu_settings()
+    }
+    pub(crate) fn apply_menu_setting(
+        &mut self,
+        id: i32,
+        value: i32,
+        host: &mut dyn HostServices,
+    ) -> Result<Option<[i32; 4]>> {
+        if let Some(config) = &self.configuration {
+            let ignored = match id {
+                103 | 203 => config.setup.integer(b"movieVolumeNotUse")?.unwrap_or(0) != 0,
+                104 | 204 => {
+                    config
+                        .setup
+                        .integer(b"soundVoiceVolumeNotUse")?
+                        .unwrap_or(0)
+                        != 0
+                }
+                _ => false,
+            };
+            if ignored {
+                return Ok(None);
+            }
+        }
+        self.bridge.apply_menu_setting(id, value, host)
+    }
+    pub(crate) fn begin_menu_settings_save(
+        &mut self,
+        host: &mut dyn HostServices,
+        stamp: crate::native_system_file::SystemStamp,
+    ) -> Result<crate::native_system_file::SystemWrite> {
+        anyhow::ensure!(
+            !self.dependency_pending(),
+            "NNN settings save during a native dependency"
+        );
+        let session = self
+            .session
+            .as_ref()
+            .context("NNN settings save session absent")?;
+        let variables = match self.pending.as_ref() {
+            Some(call) => session.machine().native_variables_candidate(call)?,
+            None => session
+                .machine()
+                .variables()
+                .context("NNN settings save variables absent")?
+                .clone(),
+        };
+        let config = self
+            .configuration
+            .as_ref()
+            .context("NNN settings save configuration absent")?;
+        let trial = config.setup.integer(b"taikenFlag")?.unwrap_or(0) != 0;
+        let storage = host.storage(self.bridge.client())?;
+        self.bridge.system_file_mut()?.begin_save(
+            storage.as_ref(),
+            &variables,
+            config.profile,
+            stamp,
+            trial,
+        )
+    }
+    pub(crate) fn poll_menu_settings_save(
+        &mut self,
+        write: &mut crate::native_system_file::SystemWrite,
+    ) -> Result<bool> {
+        write.poll(self.bridge.system_file_mut()?)
+    }
     /// Resource loading/decryption/initial values must be prepared on the
     /// caller's scoped resource workers. No filesystem access occurs here.
     pub fn from_prepared(
@@ -71,6 +170,9 @@ impl NativeAdapter {
             pool: TaskPool::new("nnn-native-vm", 1, 1)?,
             bridge,
             halted: false,
+            menu_context: None,
+            scene_context: None,
+            user_gaiji: None,
             error: None,
             observed_script: b"sys".to_vec(),
             observed_depth: 0,
@@ -96,6 +198,7 @@ impl NativeAdapter {
             boot.setup.integer(b"frameTime")?.unwrap_or(50),
         )?)?;
         bridge.configure_functions(boot.functions.clone())?;
+        bridge.configure_chart(&boot.configuration())?;
         let configuration = Some(Arc::new(boot.configuration()));
         let observed_script = boot.session.script_name().to_vec();
         let observed_depth = boot.session.depth();
@@ -110,6 +213,9 @@ impl NativeAdapter {
             pc,
             executed,
             halted: false,
+            menu_context: None,
+            scene_context: None,
+            user_gaiji: None,
             error: None,
             observed_script,
             observed_depth,
@@ -131,6 +237,10 @@ impl NativeAdapter {
         profile: crate::native_save::LegacySaveProfile,
     ) -> Result<Self> {
         bridge.enter_foreground_context();
+        if original.status_word(20)?==34 {
+            let execution=crate::native_save::LiveExecution::capture(&session,&configuration,None)?;
+            bridge.restore_chart_mode(crate::bridge::ChartContext {call:None,configuration:configuration.clone(),execution:Arc::new(execution),pool:pool.clone(),loader:loader.clone()})?;
+        }
         Ok(Self {
             pc: session.machine().pc(),
             executed: session.executed(),
@@ -144,6 +254,9 @@ impl NativeAdapter {
             pool,
             bridge,
             halted: false,
+            menu_context: None,
+            scene_context: None,
+            user_gaiji: None,
             error: None,
             background_loop: None,
             input_snapshot: InputFrame::default(),
@@ -161,15 +274,12 @@ impl NativeAdapter {
             self.original_input_mode().is_some(),
             "NNN original save requires a drained native PRINT/SELECT actor"
         );
-        crate::native_save::LiveExecution::capture(
-            self.session
-                .as_ref()
-                .context("NNN original save session absent")?,
-            self.configuration
-                .as_ref()
-                .context("NNN original save configuration absent")?,
-            self.pending.as_ref(),
-        )
+        let session=self.session.as_ref().context("NNN original save session absent")?;
+        let config=self.configuration.as_ref().context("NNN original save configuration absent")?;
+        if self.bridge.chart_mode_active() {
+            if let Some(call)=self.pending.as_ref() {return crate::native_save::LiveExecution::capture_general(session,config,call);}
+        }
+        crate::native_save::LiveExecution::capture(session,config,self.pending.as_ref())
     }
     pub(crate) fn write_original_execution_effects(
         &self,
@@ -187,6 +297,13 @@ impl NativeAdapter {
         candidate.replace_effect_records(&effects)?;
         self.bridge
             .write_original_actor_state(&mut candidate, self.pending.as_ref())?;
+        let profile = crate::native_save::LegacySaveProfile::for_configuration(
+            self.configuration
+                .as_ref()
+                .context("NNN original save configuration absent")?,
+        )?;
+        self.bridge
+            .write_original_auxiliary(&mut candidate, &profile)?;
         *file = candidate;
         Ok(())
     }
@@ -294,8 +411,11 @@ impl NativeAdapter {
         bytes: Arc<[u8]>,
     ) -> Result<crate::native_game_restore::NativeRestoreJob> {
         anyhow::ensure!(
-            self.worker.is_none() && self.error.is_none() && self.background_loop.is_none(),
-            "NNN original restore requires an idle healthy foreground VM"
+            self.worker.is_none()
+                && self.error.is_none()
+                && self.scene_context.is_none()
+                && !self.user_gaiji_pending(),
+            "NNN original restore requires an idle healthy VM outside scene replay"
         );
         anyhow::ensure!(
             self.pending.as_ref().is_none_or(|call| matches!(
@@ -320,7 +440,16 @@ impl NativeAdapter {
             .loader
             .clone()
             .context("NNN original scoped script loader unavailable")?;
-        let seed = self.bridge.original_restore_seed()?;
+        let mut seed = if self.background_loop.is_some() {
+            anyhow::ensure!(
+                self.pending.is_none() && self.native_background_mode()? == 4,
+                "NNN original load requires an idle Title or foreground actor"
+            );
+            self.bridge.idle_title_restore_seed()?
+        } else {
+            self.bridge.original_restore_seed()?
+        };
+        seed.release_images.extend(self.inactive_menu_images());
         Ok(crate::native_game_restore::NativeRestoreJob::new(
             self.bridge.client(),
             bytes,
@@ -417,6 +546,9 @@ impl NativeAdapter {
             pc: 0,
             executed: state.executed,
             halted: false,
+            menu_context: None,
+            scene_context: None,
+            user_gaiji: None,
             error: None,
             observed_script: name,
             observed_depth: 0,
@@ -441,6 +573,15 @@ impl NativeAdapter {
     /// Window-close stops future native batches, while already-admitted work
     /// reaches the same real resource/frame boundary. No unknown receipt is ACKed.
     pub(crate) fn poll_shutdown_ready(&mut self, host: &mut dyn HostServices) -> Result<bool> {
+        self.cancel_user_gaiji(host)?;
+        if self.scene_active()
+            && !self.poll_scene_replay(host, InputFrame::default(), false, true)?
+        {
+            return Ok(false);
+        }
+        if !self.end_menu_background(host)? {
+            return Ok(false);
+        }
         self.poll_native_exit(host, true)
     }
     fn poll_native_exit(&mut self, host: &mut dyn HostServices, shutdown: bool) -> Result<bool> {
@@ -449,6 +590,19 @@ impl NativeAdapter {
         }
         if let Some(error) = &self.error {
             anyhow::bail!("NNN cannot cancel failed original context: {error}");
+        }
+        if self.bridge.idle_background_pending() {
+            self.bridge.poll_background_idle(
+                self.session
+                    .as_mut()
+                    .context("NNN retained background session absent")?
+                    .machine_mut(),
+                host,
+                false,
+            )?;
+            if self.bridge.idle_background_pending() {
+                return Ok(false);
+            }
         }
         if let Some(mut task) = self.worker.take() {
             let Some((session, step)) = task.try_take()? else {
@@ -522,10 +676,19 @@ impl NativeAdapter {
         })
     }
     pub(crate) fn from_outer_newgame(
+        state: NativeOuterState,
+        controller: Arc<Program>,
+        host: &mut dyn HostServices,
+        exit: Arc<dyn crysirror_core::image_processing::ImageResource>,
+    ) -> Result<Self> {
+        Self::from_outer_newgame_return(state, controller, host, exit, None)
+    }
+    pub(crate) fn from_outer_newgame_return(
         mut state: NativeOuterState,
         controller: Arc<Program>,
         host: &mut dyn HostServices,
         exit: Arc<dyn crysirror_core::image_processing::ImageResource>,
+        script_return: Option<(Option<u16>, i32)>,
     ) -> Result<Self> {
         let mut variables = state
             .machine
@@ -537,6 +700,9 @@ impl NativeAdapter {
             state.configuration.profile,
             state.configuration.initial.as_ref(),
         )?;
+        if let Some((Some(variable), value)) = script_return {
+            variables.write_stored(variable, value);
+        }
         state.bridge.initialize_outer_newgame(host, exit)?;
         let mut vm =
             Self::from_prepared(controller, Machine::with_variables(variables), state.bridge)?;
@@ -545,6 +711,12 @@ impl NativeAdapter {
         vm.instruction_base = state.executed;
         vm.executed = state.executed;
         Ok(vm)
+    }
+    pub(crate) fn take_result_notices(&mut self) -> std::collections::VecDeque<i32> {
+        self.bridge.take_result_notices()
+    }
+    pub(crate) fn poll_system_voice(&mut self,host:&mut dyn HostServices,name:&[u8])->Result<bool> {
+        self.bridge.poll_system_voice(host,name)
     }
     pub(crate) fn poll_system_sound(
         &mut self,
@@ -560,6 +732,19 @@ impl NativeAdapter {
         restart: bool,
     ) -> Result<bool> {
         self.bridge.poll_outer_music(host, words, restart)
+    }
+    pub(crate) fn poll_listen_music(
+        &mut self,
+        host: &mut dyn HostServices,
+        music: Option<crate::native_audio::ListenMusic>,
+    ) -> Result<bool> {
+        self.bridge.poll_listen_music(host, music)
+    }
+    pub(crate) fn listen_music_playing(&self, host: &dyn HostServices) -> Result<bool> {
+        self.bridge.listen_music_playing(host)
+    }
+    pub(crate) fn poll_gallery_audio(&mut self, host: &mut dyn HostServices, event: &crate::native_cg::CgAudio) -> Result<bool> {
+        self.bridge.poll_gallery_audio(host,event)
     }
     pub(crate) fn presented_frame(
         &self,
@@ -582,6 +767,9 @@ impl NativeAdapter {
         budget: u32,
         schedule_next: bool,
     ) -> Result<VmYield> {
+        if self.user_gaiji_pending() && !self.poll_user_gaiji(host)? {
+            return Ok(VmYield::BudgetExhausted);
+        }
         self.bridge.set_frame_admission(schedule_next);
         if schedule_next {
             self.input_snapshot = input;
@@ -591,10 +779,23 @@ impl NativeAdapter {
             anyhow::bail!("System-NNN terminal error: {error}");
         }
         if self.halted {
+            if self.background_loop.is_some() {
+                self.bridge.poll_background_idle(
+                    self.session
+                        .as_mut()
+                        .context("NNN ended background reader absent")?
+                        .machine_mut(),
+                    host,
+                    schedule_next,
+                )?;
+            }
             return Ok(VmYield::Halted);
         }
         if budget == 0 {
             return Ok(VmYield::BudgetExhausted);
+        }
+        if self.bridge.chart_mode_active() && !self.menu_background_active() {
+            return Ok(VmYield::WaitForInput);
         }
         if self.bridge.saved_wait_pending() {
             // Dependency pumping never consumes a post-load input edge. These
@@ -635,6 +836,17 @@ impl NativeAdapter {
                     match step? {
                         Step::Halted => {
                             self.halted = true;
+                            if self.background_loop.is_some() {
+                                // NEXT finishes this admitted background batch,
+                                // including its final painter pass. Later pumps
+                                // can complete it without executing another SPT.
+                                self.bridge.request_background_repaint();
+                                self.bridge.poll_background_idle(
+                                    self.session.as_mut().unwrap().machine_mut(),
+                                    host,
+                                    true,
+                                )?;
+                            }
                             return Ok(VmYield::Halted);
                         }
                         Step::Budget => {}
@@ -645,7 +857,19 @@ impl NativeAdapter {
                 }
             }
         }
+        if self.try_scene_boundary(host)? {
+            return Ok(VmYield::BudgetExhausted);
+        }
         if let Some(call) = self.pending.as_ref() {
+            anyhow::ensure!(
+                !self.menu_background_active()
+                    || !matches!(
+                        call.payload,
+                        crate::machine::Payload::Message { .. }
+                            | crate::machine::Payload::Selection { .. }
+                    ),
+                "NNN menu background requested a foreground General-mode transfer"
+            );
             self.bridge
                 .set_system_script(self.configuration.as_ref().map(|configuration| {
                     configuration
@@ -654,6 +878,11 @@ impl NativeAdapter {
                         .unwrap_or(0)
                 }));
             let program = self.session.as_ref().unwrap().program().clone();
+            if self.bridge.chart_context_needed(call)? {
+                let configuration=self.configuration.as_ref().context("NNN ChartMenu configuration absent")?.clone();
+                let execution=crate::native_save::LiveExecution::capture_general(self.session.as_ref().unwrap(),&configuration,call)?;
+                self.bridge.bind_chart_context(crate::bridge::ChartContext {call:Some(call.clone()),configuration,execution:Arc::new(execution),pool:self.pool.clone(),loader:self.loader.clone().context("NNN ChartMenu native script loader absent")?})?;
+            }
             if !self.bridge.try_commit_with_context(
                 self.session.as_mut().unwrap().machine_mut(),
                 call,
@@ -773,6 +1002,9 @@ impl NativeAdapter {
     }
     /// Non-mutating readiness query for an offline host dependency fence.
     pub fn dependency_pending(&self) -> bool {
+        if self.user_gaiji_pending() {
+            return true;
+        }
         self.worker.is_some() || self.bridge.dependency_pending()
     }
     /// Poll only already-admitted work and commit its owner receipt. Never
@@ -843,6 +1075,7 @@ impl NativeAdapter {
     pub(crate) fn frame_period_ms(&self) -> u64 {
         self.bridge.frame_period_ms()
     }
+    pub(crate) fn retained_mode_exit_frame(&self)->Option<Arc<dyn crysirror_core::image_processing::ImageResource>> {self.bridge.retained_mode_exit_frame()}
     /// General's exit-screen buffer becomes the opening script's immutable
     /// overlap source before any callback/worker is admitted. It is inherited
     /// state, not a frame produced by that script, so keep the cover visible.
@@ -851,8 +1084,13 @@ impl NativeAdapter {
         image: Arc<dyn crysirror_core::image_processing::ImageResource>,
     ) -> Result<()> {
         anyhow::ensure!(
-            self.background_loop.is_some() && self.worker.is_none() && self.pending.is_none()
-                && self.session.as_ref().is_some_and(|session| session.executed() == 0),
+            self.background_loop.is_some()
+                && self.worker.is_none()
+                && self.pending.is_none()
+                && self
+                    .session
+                    .as_ref()
+                    .is_some_and(|session| session.executed() == 0),
             "NNN outer exit inheritance needs an unstarted background context"
         );
         self.bridge.set_outer_exit_frame(image.clone())?;
@@ -872,8 +1110,10 @@ impl NativeAdapter {
             return None;
         }
         match self.pending.as_ref().map(|call| &call.payload) {
+            Some(crate::machine::Payload::UserCall{command:true,..}) if self.bridge.chart_mode_active()=>Some(34),
             Some(crate::machine::Payload::Message { .. }) => Some(10),
             Some(crate::machine::Payload::Selection { .. }) => Some(9),
+            None if self.bridge.chart_mode_active()=>Some(34),
             None => match self.bridge.wait_kind(None) {
                 "saved_message_input" => Some(10),
                 "saved_selection_input" => Some(9),
@@ -881,6 +1121,35 @@ impl NativeAdapter {
             },
             _ => None,
         }
+    }
+    pub(crate) fn take_chart_mode_request(&mut self)->bool {self.bridge.take_chart_mode_request()}
+    pub(crate) fn chart_view(&self)->Result<(&crate::native_chart::ChartRuntime,&crate::native_chart::ChartState)> {self.bridge.chart_view()}
+    pub(crate) fn poll_chart_return(&mut self,slot:i32,host:&mut dyn HostServices)->Result<bool> {
+        anyhow::ensure!(self.worker.is_none()&&self.menu_context.is_none(),"NNN chart return requires its foreground reader");
+        let call=self.pending.as_ref();
+        match self.bridge.poll_chart_return(self.session.as_mut().unwrap().machine_mut(),call,slot,host)? {
+            crate::bridge::ChartReturn::Pending=>return Ok(false),
+            crate::bridge::ChartReturn::Continue=>{},
+            crate::bridge::ChartReturn::Restored(session)=>{
+                self.instruction_base=self.executed;
+                self.session=Some(session);
+                self.halted=false;
+                self.background_loop=None;
+            }
+        }
+        self.pending=None;
+        let session=self.session.as_ref().unwrap();
+        self.pc=session.machine().pc();
+        self.observed_script=session.script_name().to_vec();
+        self.observed_depth=session.depth();
+        self.executed=self.instruction_base.saturating_add(session.executed());
+        Ok(true)
+    }
+    pub(crate) fn publish_general_variables(&mut self,variables:crate::expression::Variables)->Result<()> {
+        ensure!(self.worker.is_none(),"NNN General variable publication while VM worker owns its reader");
+        let machine=self.session.as_mut().context("NNN General script reader absent")?.machine_mut();
+        if let Some(call)=self.pending.as_ref() {machine.update_native_variables(call,variables)?;} else {machine.replace_variables(variables)?;}
+        Ok(())
     }
 }
 impl VmAdapter for NativeAdapter {
@@ -935,7 +1204,7 @@ impl VmAdapter for NativeAdapter {
     fn diagnostics(&self) -> Vec<u8> {
         serde_json::to_vec(&serde_json::json!({
         "vm":"original-system-nnn-spt","background_loop":self.background_loop,"native_location":format!("pc={:#x}",self.pc),
-        "wait_kind":if self.worker.is_some(){"vm_worker"}else{self.bridge.wait_kind(self.pending.as_ref())},"dependency_pending":self.dependency_pending(),
+        "wait_kind":if self.worker.is_some(){"vm_worker"}else{self.bridge.wait_kind(self.pending.as_ref())},"pending_call":self.pending.as_ref().map(|call|format!("identify={:#x} code={:#x} {:?}",call.identify,call.code,call.payload).chars().take(512).collect::<String>()),"dependency_pending":self.dependency_pending(),"pending_dependencies":self.bridge.pending_dependencies(),
         "input_capabilities":{"left_right_mouse":true,"middle_mouse":true},"instructions":self.executed,"worker_pending":self.worker.is_some(),"resource_pending":self.pending.is_some(),"script":String::from_utf8_lossy(&self.observed_script),"script_depth":self.observed_depth,"error":self.error,
         "engine_api_calls":self.bridge.api_calls,"overlap_captures":self.bridge.overlap_captures,
         "story_name_bytes":self.bridge.metadata.story_name.len(),"film_name_bytes":self.bridge.metadata.film_name.len(),
@@ -948,12 +1217,12 @@ impl VmAdapter for NativeAdapter {
 mod outer_newgame_tests {
     use super::*;
     use crate::{
-        XorProfile,
         bridge::{CallbackProfile, SceneBindings},
         config::Names,
         expression::{VariableProfile, Variables},
         native_bootstrap::NativeConfiguration,
         native_resources::ResourceNames,
+        XorProfile,
     };
     use crysirror_core::image_processing::{ImageInput, ImageProcessState};
     use crysirror_core::state::ClientId;
@@ -1013,6 +1282,7 @@ mod outer_newgame_tests {
         let names = Names::parse(b"", false).unwrap();
         let config = Arc::new(NativeConfiguration {
             main_control: None,
+            chart_setup: None,
             resources: ResourceNames::new("").unwrap(),
             setup: names.clone(),
             variable_names: names.clone(),
@@ -1157,12 +1427,11 @@ mod outer_newgame_tests {
         assert!(vm.outer_exit_variables.is_none());
         vm.background_loop = None;
         vm.bridge.enter_foreground_context();
-        assert!(
-            vm.poll_shutdown_ready(&mut rt.host)
-                .unwrap_err()
-                .to_string()
-                .contains("unsupported")
-        );
+        assert!(vm
+            .poll_shutdown_ready(&mut rt.host)
+            .unwrap_err()
+            .to_string()
+            .contains("unsupported"));
         assert_eq!(vm.session.as_ref().unwrap().machine().pc(), 32);
         assert!(
             vm.outer_exit_variables.is_none(),

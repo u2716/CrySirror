@@ -205,7 +205,9 @@ impl NativeLogo {
                 machine.complete_hll(call, HllReturn::Void)?;
                 Ok(Some(Dispatch::Completed))
             }
-            (b"Init", []) => {
+            // Init0x10007310 is cdecl with no parameters. Rance7's AIN declares
+            // an IMainSystem(26) argument; the DLL never reads that word.
+            (b"Init", [] | [Argument::Scalar { kind: 26, .. }]) => {
                 ensure!(self.run.is_none(), "native Logo Init during Run");
                 ensure!(
                     machine.stack.len() < 65536,
@@ -315,8 +317,10 @@ impl NativeLogo {
                 Ok(Some(wait(host)))
             }
             _ => anyhow::bail!(
-                "unsupported native AliceLogo2 export/ABI {}",
-                String::from_utf8_lossy(name)
+                "unsupported native AliceLogo2 export/ABI {} args={:?} return_kind={}",
+                String::from_utf8_lossy(name),
+                args,
+                function.return_kind
             ),
         }
     }

@@ -112,6 +112,22 @@ impl SavedWait {
         background: Arc<dyn ImageResource>,
         host: &mut dyn HostServices,
     ) -> Result<SavedWaitPreparation> {
+        self.begin_with_variables(
+            text,
+            selection,
+            background,
+            &crate::expression::Variables::fresh(crate::expression::VariableProfile::Legacy1000),
+            host,
+        )
+    }
+    pub(crate) fn begin_with_variables(
+        self,
+        text: Option<&TextRestoreSeed>,
+        selection: Option<&SelectionRestoreSeed>,
+        background: Arc<dyn ImageResource>,
+        variables: &crate::expression::Variables,
+        host: &mut dyn HostServices,
+    ) -> Result<SavedWaitPreparation> {
         use anyhow::Context;
         Ok(match self {
             Self::Message {
@@ -135,7 +151,10 @@ impl SavedWait {
                     } else {
                         serial
                     },
-                    window_visible && text.current_window_on() && mode == 0x22220001,
+                    // STATUS44 and the live WindowOn flag are independent.
+                    // SavedTextPreparation projects window-off after retaining
+                    // the raw original window flag for a later click restore.
+                    window_visible && mode == 0x22220001,
                     cannot_click,
                     background,
                     host,
@@ -146,21 +165,23 @@ impl SavedWait {
                 total,
                 supplemental,
                 time_limit,
-                auto_select: _,
+                auto_select,
                 special,
             } => {
-                // Do not import timed/special data as an ordinary permanent
-                // menu. Their native timer/automatic choice policies require
-                // the corresponding complete consumer, just like live SELECT.
-                ensure!(
-                    time_limit == 0 && special == 0,
-                    "NNN saved timed/special selection requires native timer/layout consumer"
-                );
-                SavedWaitPreparation::Selection(
-                    selection
-                        .context("NNN saved selection component not configured")?
-                        .begin(rows, total, supplemental, host)?,
-                )
+                // Ordinary/timed CASE waits use the same live UI consumer.
+                // Active special layouts still require their native resources.
+                let mut preparation = selection
+                    .context("NNN saved selection component not configured")?
+                    .begin_with_controls(
+                        rows,
+                        total,
+                        supplemental,
+                        (time_limit, auto_select, special),
+                        variables,
+                        host,
+                    )?;
+                preparation.set_controls(time_limit, auto_select, special)?;
+                SavedWaitPreparation::Selection(preparation)
             }
         })
     }

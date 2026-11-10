@@ -2,6 +2,12 @@
 //! Original message/history/window triggers, separate from engine text layout.
 use crate::native_skip::NativeSkipPolicy;
 use anyhow::{Context, Result, ensure};
+/// Original SystemMenu actions affecting the suspended foreground actor.
+/// They are applied after its real context is restored, never to a modal
+/// background reader or by acknowledging its retained PRINT/SELECT receipt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SystemMessageAction { HideWindow, Skip, Automatic }
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NativeMessageControl {
     /// No original saved/read-message ID has been observed yet.

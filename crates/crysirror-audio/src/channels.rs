@@ -416,6 +416,7 @@ impl ChannelAudio {
             AudioRequest::ExchangeChannels { .. } => unreachable!("atomic exchange handled before single-channel controls"),
             AudioRequest::SetMixGroup { .. } | AudioRequest::SetMixGroupGain { .. } | AudioRequest::Balance { .. } | AudioRequest::SetRate{..} => None,
             AudioRequest::Play { channel, .. }
+            | AudioRequest::PlayPlaylist {channel,..}
             | AudioRequest::PlayResident {channel,..}
             | AudioRequest::PlayAsset { channel, .. }
             | AudioRequest::PlayPcm { channel, .. }
@@ -470,7 +471,7 @@ impl ChannelAudio {
                 )?;
                 self.publish(client, channel, ready)?;
             }
-            AudioRequest::PlayAsset { .. } | AudioRequest::PlayResource { .. } | AudioRequest::PlayResident{..} => {
+            AudioRequest::PlayPlaylist { .. } | AudioRequest::PlayAsset { .. } | AudioRequest::PlayResource { .. } | AudioRequest::PlayResident{..} => {
                 anyhow::bail!("asset channel playback requires begin preparation")
             }
             AudioRequest::Play {

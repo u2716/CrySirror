@@ -165,6 +165,7 @@ mod tests {
             resources: ResourceNames::new("").unwrap(),
             setup: empty.clone(),
             main_control: None,
+            chart_setup: None,
             variable_names: empty.clone(),
             project: empty.clone(),
             commands: empty.clone(),

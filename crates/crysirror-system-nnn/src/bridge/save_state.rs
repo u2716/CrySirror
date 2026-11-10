@@ -4,6 +4,21 @@
 use super::*;
 use crate::native_save::SavedEffect;
 impl Bridge {
+    pub(crate) fn configure_chart(&mut self, configuration: &crate::native_bootstrap::NativeConfiguration) -> Result<()> {
+        self.auxiliary.configure_chart(configuration)
+    }
+    pub(crate) fn write_original_auxiliary(
+        &self,
+        file: &mut crate::native_save::NativeSaveFile,
+        profile: &crate::native_save::LegacySaveProfile,
+    ) -> Result<()> {
+        let mut auxiliary=self.auxiliary.clone();
+        if let Some(text)=&self.text {
+            auxiliary.cutin_rows.fill([0;2]);
+            for (to,from) in auxiliary.cutin_rows.iter_mut().zip(&text.state.cutin_rows) {*to=*from;}
+        }
+        auxiliary.write(file, profile)
+    }
     pub(crate) fn commit_saved_remaining(&mut self, value: i32) {
         self.saved_remaining = value;
     }
@@ -43,8 +58,13 @@ impl Bridge {
                 auto_select,
                 special,
                 ..
-            }) => (*time_limit, *auto_select, *special),
-            None if matches!(self.restored_wait, Some(SavedWaitKind::Selection)) => (0, 0, 0),
+            }) => {
+                let _ = (time_limit, auto_select, special);
+                selection.original_controls()
+            }
+            None if matches!(self.restored_wait, Some(SavedWaitKind::Selection)) => {
+                selection.original_controls()
+            }
             _ => bail!("NNN save outside original message/selection actor"),
         };
         Ok(SavedWait::Selection {
@@ -61,7 +81,19 @@ impl Bridge {
         file: &mut crate::native_save::NativeSaveFile,
         call: Option<&NativeCall>,
     ) -> Result<()> {
+        if self.chart_mode_active() {
+            let text=self.text.as_ref().context("NNN chart save latent message actor absent")?;
+            file.replace_live_wait(&crate::native_save_wait::SavedWait::Message {
+                rows:text.state.rows.clone(),mode:text.state.mode,serial:text.state.serial,
+                window_number:self.script_window_number,window_visible:self.message_window_visible,
+                cannot_click:self.cannot_click.unwrap_or(text.profile.cannot_click),
+            })?;
+            return self.write_original_common_status(file);
+        }
         file.replace_live_wait(&self.original_wait_state(call)?)?;
+        self.write_original_common_status(file)
+    }
+    pub(crate) fn write_original_common_status(&self,file:&mut crate::native_save::NativeSaveFile)->Result<()> {
         let audio = self
             .audio
             .as_ref()
@@ -74,6 +106,12 @@ impl Bridge {
             file.replace_status_name(452, &names[1])?;
         }
         file.replace_status_word(45, i32::try_from(self.frame_time_ms)?)?;
+        file.replace_status_word(44, i32::from(self.message_window_visible))?;
+        file.replace_status_word(485, i32::from(self.cannot_click.unwrap_or_else(||self.text.as_ref().is_some_and(|text|text.profile.cannot_click))))?;
+        if let Some(text)=self.text.as_ref() {
+            file.replace_status_word(29, i32::try_from(text.state.rows.len())?)?;
+            file.replace_status_word(30, text.state.mode as i32)?;
+        }
         file.replace_status_word(180, self.script_window_number)?;
         file.replace_status_word(181, self.script_cursor_number)?;
         file.replace_status_word(182, self.script_mouse_number)?;
@@ -144,7 +182,7 @@ impl Bridge {
                     || self.passive_counts.contains_key(&slot),
             );
             words[1] = if self.picture_assignments.contains(&slot) {
-                slot
+                self.picture_numbers.get(&slot).copied().unwrap_or(slot)
             } else {
                 -1
             };
@@ -201,7 +239,7 @@ impl Bridge {
                 }
                 Some(NativeFrameEffect::Shake(frame)) => {
                     p.extend(frame.state.parameters());
-                    18
+                    frame.state.command()
                 }
                 Some(NativeFrameEffect::Fusuma(frame)) => {
                     p.extend(frame.state.parameters());
@@ -245,14 +283,8 @@ impl Bridge {
                     31
                 }
                 Some(NativeFrameEffect::Grey(state)) => {
-                    p.extend([
-                        state.frames,
-                        state.easing,
-                        state.subframe,
-                        state.end_percent,
-                        state.start_percent,
-                    ]);
-                    129
+                    p.extend(state.parameters());
+                    state.command()
                 }
                 Some(NativeFrameEffect::Mosaic(state)) => {
                     p.extend(state.parameters());

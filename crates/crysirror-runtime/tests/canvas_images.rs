@@ -44,6 +44,42 @@ struct WorkerReader {
     owner: std::thread::ThreadId,
     bytes: Arc<[u8]>,
 }
+#[test]
+fn detached_layers_freeze_candidate_coordinates_and_never_mutate_the_live_scene() {
+    let (_root, mut rt) = runtime();
+    // Exact nearest sampling is also used to prepare image glyphs for these
+    // candidates. The shared worker must reserve and publish the resized extent,
+    // including when no following operation supplies an explicit output size.
+    let mut resize = rt.host.image_metadata(ClientId(1)).unwrap().begin_process(
+        ImageInput::Solid { size:[1,1], color:[9,8,7,255] },
+        br#"[{"kind":"resize_nearest","width":4,"height":3}]"#.as_slice().into(),
+    ).unwrap();
+    let image = finish(&mut resize);
+    assert_eq!(image.size(), [4,3]);
+    assert_eq!(&*image.rgba(), [9,8,7,255].repeat(12));
+    rt.set_canvas_image_presenter(true);
+    let before = serde_json::to_value(&rt.host.engine).unwrap();
+    let commands = serde_json::to_vec(&serde_json::json!([
+        {"op":"put","layer":{"id":9,"rect":[1,2,2,1],"paint":{"kind":"solid","color":[1,2,3,255]}}}
+    ])).unwrap();
+    assert!(rt.host.begin_detached_layers_image(ClientId(99), [4,4], [i32::MAX;2], &commands).is_err());
+    let mut job = rt.host.begin_detached_layers_image(ClientId(1), [4,4], [i32::MAX;2], &commands).unwrap();
+    assert_eq!(serde_json::to_value(&rt.host.engine).unwrap(), before);
+    let pixels: Arc<[u8]> = [1,2,3,255].repeat(16).into();
+    rt.prepare_canvas_images(|request, _| {
+        assert_eq!(request.client, 1);
+        let node = request.layers.iter().find(|l| l.id == 9).unwrap();
+        assert_eq!(node.rect, [1.,2.,2.,1.]);
+        let root = request.layers.iter().find(|l| Some(l.id) == node.parent).unwrap();
+        assert_eq!(root.rect, [0.,0.,4.,4.]);
+        Ok(Some(Arc::new(WorkerReader { owner: std::thread::current().id(), bytes: pixels.clone() })))
+    }).unwrap();
+    let image = finish(&mut job);
+    assert_eq!(image.client(), ClientId(1));
+    assert_eq!(serde_json::to_value(&rt.host.engine).unwrap(), before);
+    let dynamic = br#"[{"op":"set_transform","id":9,"transform":{"translation":[1,1]}}]"#;
+    assert!(rt.host.begin_detached_layers_image(ClientId(1),[4,4],[i32::MAX;2],dynamic).is_err());
+}
 impl AssetReader for WorkerReader {
     fn len(&self) -> crysirror_core::Result<u64> {
         Ok(self.bytes.len() as u64)

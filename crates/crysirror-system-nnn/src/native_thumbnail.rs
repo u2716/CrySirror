@@ -26,6 +26,35 @@ pub(crate) struct NativeThumbnail {
     pub bgrx: Vec<u8>,
 }
 impl ThumbnailPolicy {
+    pub(crate) fn from_image(
+        &self,
+        client: ClientId,
+        pool: TaskPool,
+        host: &mut dyn HostServices,
+        image: Arc<dyn crysirror_core::image_processing::ImageResource>,
+    ) -> Result<ThumbnailJob> {
+        ensure!(
+            image.client() == client && image.size() == self.canvas,
+            "NNN saved menu background scope"
+        );
+        let effects = serde_json::to_vec(&vec![ImageEffect::BoxReduce {
+            spec: self.reduce.clone(),
+        }])?;
+        let reduce = host
+            .image_metadata(client)?
+            .begin_process(ImageInput::Resource(image), effects.into())?;
+        Ok(ThumbnailJob {
+            client,
+            pool,
+            policy: self.clone(),
+            capture: None,
+            reduce: Some(reduce),
+            encode: None,
+            civil: Some(host.begin_civil_time(client)?),
+            stamp: None,
+            thumbnail: None,
+        })
+    }
     pub(crate) fn prepare(setup: &Names, canvas: [u32; 2]) -> Result<Self> {
         // Actual542180 initializes6/132/100, then derives aligned dimensions
         // before explicit overrides.452a20 selects fit exactly as below.

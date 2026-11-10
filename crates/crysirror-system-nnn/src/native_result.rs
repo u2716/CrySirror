@@ -21,6 +21,7 @@ pub(crate) struct NativeResultData {
     notice_enabled: bool,
     revision: u64,
     saved_revision: Option<u64>,
+    notices: std::collections::VecDeque<i32>,
 }
 pub(crate) struct ResultWrite {
     ticket: Box<dyn StorageWrite>,
@@ -67,6 +68,7 @@ impl NativeResultData {
             notice_enabled: setup.integer(b"noticeFlag")?.unwrap_or(0) != 0,
             revision: 0,
             saved_revision: loaded.then_some(0),
+            notices: Default::default(),
         }))
     }
     pub(crate) fn apply(
@@ -87,16 +89,29 @@ impl NativeResultData {
                     "NNN setresult outside native1024-word record"
                 );
                 if self.words[index] == 0 {
-                    ensure!(
-                        !(self.auto_notice > 0 && self.notice_enabled),
-                        "NNN result notification requires the native Notice actor"
-                    );
+                    let notice = if self.auto_notice > 0 && self.notice_enabled {
+                        ensure!(
+                            self.notices.len() < 4096,
+                            "NNN pending result-notice budget"
+                        );
+                        Some(
+                            number
+                                .checked_add(self.auto_notice)
+                                .and_then(|n| n.checked_sub(2))
+                                .context("NNN result-notice index overflow")?,
+                        )
+                    } else {
+                        None
+                    };
                     let revision = self
                         .revision
                         .checked_add(1)
                         .context("NNN result revision exhausted")?;
                     self.words[index] = parameters.get(1).copied().unwrap_or(1);
                     self.revision = revision;
+                    if let Some(notice) = notice {
+                        self.notices.push_back(notice);
+                    }
                 }
             }
             return Ok(true);
@@ -120,6 +135,9 @@ impl NativeResultData {
             return Ok(true);
         }
         Ok(false)
+    }
+    pub(crate) fn take_notices(&mut self) -> std::collections::VecDeque<i32> {
+        std::mem::take(&mut self.notices)
     }
     pub(crate) fn begin_save(&self, storage: &dyn ClientStorage) -> Result<ResultWrite> {
         let bytes: Arc<[u8]> = self
@@ -151,5 +169,39 @@ impl ResultWrite {
                 Ok(true)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn first_result_transition_queues_original_notice_offset_without_repeating_an_unlock() {
+        let mut data = NativeResultData {
+            words: vec![0; 1024],
+            get_registered: true,
+            result_variable: Some(2),
+            auto_notice: 1,
+            notice_enabled: true,
+            revision: 0,
+            saved_revision: Some(0),
+            notices: Default::default(),
+        };
+        let mut variables = Variables::fresh(crate::expression::VariableProfile::Legacy1000);
+        assert!(data.apply(b"setresult", &[4, 2], &mut variables).unwrap());
+        assert!(data.apply(b"setresult", &[4, 99], &mut variables).unwrap());
+        assert_eq!(data.words[4], 2);
+        assert_eq!(data.take_notices().into_iter().collect::<Vec<_>>(), vec![3]);
+        assert!(data.apply(b"getresult", &[4, 2], &mut variables).unwrap());
+        assert_eq!(variables.read_stored(2), 1);
+        assert!(data.apply(b"getresult", &[4, 3], &mut variables).unwrap());
+        assert_eq!(variables.read_stored(2), 0);
+        let before = data.words.clone();
+        assert!(
+            data.apply(b"setresult", &[1024, 1], &mut variables)
+                .is_err()
+        );
+        assert_eq!(data.words, before);
+        assert!(data.take_notices().is_empty());
     }
 }

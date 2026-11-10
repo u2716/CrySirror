@@ -283,7 +283,9 @@ pub enum Blend {
 // alpha policies. Keep this check shared by extraction and canvas pruning.
 fn blend_writes_at_zero_opacity(blend: Blend) -> bool {
     matches!(blend, Blend::StoredByte {
-        mode: crysirror_image::rgb_lut::ConstantByteBlend::Scalar256, ..
+        mode: crysirror_image::rgb_lut::ConstantByteBlend::Scalar256
+            | crysirror_image::rgb_lut::ConstantByteBlend::OpaqueScreen255
+            | crysirror_image::rgb_lut::ConstantByteBlend::OpaqueMultiply255, ..
     } | Blend::StoredByte { force_output_opaque: true, .. })
 }
 pub(crate) fn writes_at_zero_opacity(paint: &Paint, blend: Blend) -> bool {
@@ -718,6 +720,22 @@ pub struct GlyphRevealStatus {
     pub complete: bool,
 }
 impl GlyphReveal {
+    /// Change a retained reveal rate without hiding or newly exposing glyphs
+    /// at admission. Already-spent native cluster steps are removed, so ruby,
+    /// shadows and image glyphs retain their common reveal boundaries.
+    pub fn change_rate(&mut self,total:usize,rate:u32)->Result<()> {
+        self.validate(total)?;
+        ensure!((1..=1_000_000).contains(&rate),"invalid glyph reveal rate");
+        let visible=self.visible_count(total);
+        let spent=match self.rate_per_second {
+            Some(old)=>usize::try_from(u128::from(self.elapsed_ms)*u128::from(old)/1000).unwrap_or(usize::MAX),
+            None if self.interval_ms>0=>usize::try_from(self.elapsed_ms/self.interval_ms).unwrap_or(usize::MAX),
+            _=>usize::MAX,
+        };
+        if let Some(steps)=self.prefix_steps.as_mut(){if visible==total {steps.clear();} else {steps.drain(..spent.min(steps.len()));}}
+        self.initial_visible=visible;self.elapsed_ms=0;self.rate_per_second=Some(rate);
+        self.validate(total)
+    }
     pub fn validate(&self, total: usize) -> Result<()> {
         ensure!(
             self.initial_visible <= total && self.interval_ms <= 86_400_000,
@@ -803,7 +821,14 @@ pub enum Paint {
     CoverageReset { value:u8 },
     /// A positioned-glyph source view. Geometry/filter/opacity belong to this
     /// layer; content and reveal state remain owned by the source layer.
-    GlyphView { source:u32, #[serde(default)] offset:[f32;2] },
+    GlyphView {
+        source:u32,
+        #[serde(default)] offset:[f32;2],
+        /// Half-open positioned-glyph range in the source run. Views retain
+        /// the source reveal phase, including ticks spent on earlier glyphs.
+        #[serde(default, skip_serializing_if="Option::is_none")]
+        range:Option<[usize;2]>,
+    },
 
     /// Transform/opacity carrier with no raster payload.
     Group {
@@ -911,7 +936,7 @@ impl Paint {
                 paint.validate()?;
             },
             Self::CoverageReset{..}=>{},
-            Self::GlyphView{offset,..}=>ensure!(offset.iter().all(|v|v.is_finite()&&v.abs()<=1_000_000.),"glyph view offset bounds"),
+            Self::GlyphView{offset,range,..}=>ensure!(offset.iter().all(|v|v.is_finite()&&v.abs()<=1_000_000.) && range.is_none_or(|[start,end]|start<=end&&end<=65536),"glyph view offset/range bounds"),
             Self::Group {add,..} => ensure!(add.iter().all(|v|v.is_finite()&&v.abs()<=1.),"group additive color bounds"),
             Self::OrderedState { command } => command.validate()?,
             Self::Backdrop { .. } => {}

@@ -40,6 +40,16 @@ classes or commands and do not change this schema fingerprint.
 Rust crate internals are not part of this reference. For those, use
 `cargo doc --workspace --no-deps`.
 
+`HostServices::begin_detached_layers_image(client, size, order_exclusive, commands)`
+prepares an immutable candidate through the shared Layer presenter without
+changing the live scene, UI or input registry. `commands` is a JSON array of
+Layer `put`/`remove` operations starting from an empty client-scoped scene;
+referenced ancestors must be supplied. Admission allows at most 4 MiB and 8192
+commands; ordinary capture geometry, 4096-node and image-memory limits also
+apply. Glyph reveal and image/font generations freeze at admission. The job
+requires a capture presenter and supports cancellation like prefix capture.
+This Rust host method adds no reflective script signature.
+
 `HostServices::media_reader` opens a client-scoped `AssetReader` with
 `MediaSourceOptions` through the ordinary media workers, surfaces and clocks.
 `MediaFrame::as_image(client)` retains a completed picture as an immutable image
@@ -1711,3 +1721,46 @@ pixels; `StraightColorKey { color }` preserves a declared RGB key. Both apply
 the existing per-channel lookup tables to other straight-RGBA pixels. Existing
 straight/premultiplied behavior is unchanged. The generated workspace reference
 fingerprint is `bddc750232fac763`; see CHANGES.md.
+
+
+`SharedHost::publish_input_sources(sources)` supplies a bounded keyboard/pointer
+and per-controller snapshot for the next owner admission. Device IDs, normalized
+button pressures and axes remain distinct from merged UI navigation.
+`HostServices::input_sources(client)` observes the admitted generation without
+polling hardware or consuming input edges. Hosts that do not publish source data
+leave it unavailable; an absent source observation does not mean a connected
+controller has no pressed buttons. Focus/modal routing and restore retire live
+observations. `ActionMap::controller_samples()` reads retained controller state.
+These Rust host methods add no reflective script signature.
+
+`ByteStringContext::matches_tail_wildcards(left, right)` compares NUL-terminated
+byte prefixes with `?` on either side and tail-aligned `*`. This is a bounded
+native byte-pattern operation; it does not use glob backtracking. Invalid
+before-start alignment fails explicitly.
+`transparency_planes::alpha_multiply(src, rect, dst, at)` multiplies clipped
+Index8 coverage as `dst * (src + 1) >> 8`. The `alpha_multiply_within` variant
+preserves forward read/write order for overlapping regions of one plane.
+These Rust image/text entry points add no reflective script signature.
+
+`transparency_planes::invert_bgr(plane, rect)` inverts the clipped Bgr24 colour
+region; it rejects an Index8 plane and does not mutate a separate alpha plane.
+
+`RgbLookup::low_word_affine(multiplier, offset)` builds reusable stored-byte RGB
+lookups with a low-word product, logical eight-bit shift and byte-wrapping
+addition. It preserves alpha; callers select composition separately.
+
+`transparency_planes::blend` also accepts Index8-to-Index8 byte blending.
+Colour-to-index conversion and a masked source targeting an index plane remain
+unsupported; those requests fail explicitly.
+
+`ByteStringContext::compare_windows932_crt_case(left, right)` provides the fixed
+Japanese CP932 CRT ordering: SBCS lowercase and DBCS uppercase with canonical
+encoded aliases. It stops at NUL or the first difference, so unrelated string
+tails are not decoded. It requires the explicit CP932 profile; host locale and
+Rust Unicode casing do not determine its result.
+
+`AudioPlaybackInfo.first_pass_complete` latches when mixer input reaches its
+first source or loop endpoint. Decoder read-ahead and pause do not count as
+completion; replacement starts a new flag and seek preserves the current flag.
+The same observation is returned by `Audio.playbackInfo` and
+`Audio.nativeChannelInfo`.

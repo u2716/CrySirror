@@ -40,6 +40,12 @@ pub(super) struct Console {
     pub speed: i32,
     pub suppress_history: i32,
     pub replay: bool,
+    ///4203F0 forces the next console voice to be skipped, then VOICESKIPDEF.
+    pub skip_voice: Option<i32>,
+    ///4203D0 marks the next console voice as male; normal default is female.
+    pub voice_male: bool,
+    ///420580 consumes this flag on the next control, including non-newlines.
+    pub suppress_next_newline: bool,
     indent: i32,
     clear_pending: bool,
     break_pending: bool,
@@ -66,6 +72,9 @@ impl Default for Console {
             speed: 0,
             suppress_history: 0,
             replay: false,
+            skip_voice: None,
+            voice_male: false,
+            suppress_next_newline: false,
             indent: 0,
             clear_pending: false,
             break_pending: false,
@@ -83,6 +92,8 @@ impl Console {
     pub(super) fn diagnostics(&self) -> serde_json::Value {
         json!({"page":self.page,"origin":self.origin,"extent":self.extent,"cursor":self.cursor,
             "visible":self.visible,"no_wait":self.no_wait,"speed":self.speed,
+            "skip_voice_override":self.skip_voice,"next_voice_male":self.voice_male,
+            "suppress_next_newline":self.suppress_next_newline,
             "history_suppression":self.suppress_history,"history_controls":self.history_controls,
             "last_history_record_bytes":u16::from_le_bytes(self.history[HISTORY-2..].try_into().unwrap()),
             "font":self.font.as_ref().map(|font|json!({"alias":font.alias,"height":font.height,
@@ -120,7 +131,10 @@ impl Console {
             return Ok(());
         }
         let size = bytes.len() + 3;
-        ensure!(size <= HISTORY && size <= u16::MAX as usize, "Majiro history text record");
+        ensure!(
+            size <= HISTORY && size <= u16::MAX as usize,
+            "Majiro history text record"
+        );
         let history = Arc::make_mut(&mut self.history);
         history.copy_within(size.., 0);
         let start = HISTORY - size;
@@ -224,6 +238,7 @@ impl MajiroVm {
                     | 0x1ec3c6bb
                     | 0x5b87a41d
                     | 0xba81ef8d
+                    | 0x32d0236c
             )
         {
             return Ok(false);
@@ -343,11 +358,31 @@ impl MajiroVm {
                         format!("c0x{:08x}0x{:08x}", first as u32, second as u32).into_bytes(),
                     );
                 }
+                0x32d0236c => {
+                    //447E00 is the console/history voice form.447D90's
+                    //90d5298a direct playback deliberately bypasses this state.
+                    ensure!(matches!(args.len(), 1 | 2), "Majiro console voice ABI");
+                    let name = args[0].bytes()?;
+                    let end = name
+                        .iter()
+                        .position(|byte| *byte == 0)
+                        .unwrap_or(name.len());
+                    ensure!(end <= 259, "Majiro native voice-name buffer");
+                    let force = args.get(1).map(Value::integer).transpose()?.unwrap_or(0);
+                    let mut bytes = format!("v{force:01}").into_bytes();
+                    bytes.extend_from_slice(&name[..end]);
+                    token = Some(bytes);
+                }
                 0xba81ef8d => {
                     //4160C0 formats an 'l' locate control through 4156E0.
                     ensure!(args.len() == 2, "Majiro console locate ABI");
                     token = Some(
-                        format!("l0x{:08x}0x{:08x}", args[0].integer()? as u32, args[1].integer()? as u32).into_bytes(),
+                        format!(
+                            "l0x{:08x}0x{:08x}",
+                            args[0].integer()? as u32,
+                            args[1].integer()? as u32
+                        )
+                        .into_bytes(),
                     );
                 }
                 0x924ee3eb => {
@@ -375,6 +410,7 @@ impl MajiroVm {
             }
         }
         if let Some(bytes) = token {
+            self.refresh_fast_read_flag(machine.native_read_flag());
             callback = self.console_token(&mut candidate, &bytes, host)?;
         }
         machine.complete_with_callback(output(result), callback)?;
@@ -394,25 +430,39 @@ impl MajiroVm {
     ) -> Result<Option<(u32, Vec<Value>)>> {
         let bytes = bytes.to_vec();
         let mut callback = None;
-            ensure!(
-                !bytes.is_empty() && bytes.len() <= 127 && !bytes.contains(&0),
-                "Majiro console control buffer"
-            );
-            let tag = bytes[0];
-            if tag == b'w' {
-                self.page_text.clear();
-                self.page_text_open = true;
-                if candidate.clear(&bytes)? {
-                    callback = Some((0x93b38a0b, vec![]));
-                }
-            } else {
-                let just_wrapped = candidate.just_wrapped;
-                candidate.just_wrapped = false;
-                if tag == b'n' && just_wrapped && candidate.cursor == candidate.origin {
-                    return Ok(None);
-                }
-                //Validate the entire native operation before committing history.
-                match tag {
+        ensure!(
+            !bytes.is_empty()
+                && bytes.len()
+                    <= if bytes.first() == Some(&b'v') {
+                        323
+                    } else {
+                        127
+                    }
+                && !bytes.contains(&0),
+            "Majiro console control buffer"
+        );
+        let tag = bytes[0];
+        //41DBA0 consumes519B38 before every token, even a non-newline.
+        //The one-shot only suppresses lowercase n at the empty origin;
+        //uppercase N is an explicit newline and must remain effective.
+        let suppress_newline = std::mem::take(&mut candidate.suppress_next_newline);
+        if tag == b'n' && suppress_newline && candidate.cursor == candidate.origin {
+            return Ok(None);
+        }
+        if tag == b'w' {
+            self.page_text.clear();
+            self.page_text_open = true;
+            if candidate.clear(&bytes)? {
+                callback = Some((0x93b38a0b, vec![]));
+            }
+        } else {
+            let just_wrapped = candidate.just_wrapped;
+            candidate.just_wrapped = false;
+            if tag == b'n' && just_wrapped && candidate.cursor == candidate.origin {
+                return Ok(None);
+            }
+            //Validate the entire native operation before committing history.
+            match tag {
                     b'c' => {
                         let v = hex_fields(&bytes, 2)?;
                         ensure!(bytes.len() == 21, "Majiro color control extent");
@@ -476,6 +526,17 @@ impl MajiroVm {
                         candidate.speed = v[0];
                     }
                     b'z' => candidate.no_wait = true,
+                    b'v' => {
+                        ensure!(bytes.len() >= 2, "Majiro short console voice control");
+                        let skip = candidate.skip_voice.unwrap_or_else(||
+                            self.settings.as_ref().map_or(0, |settings| settings.voice_skip_def));
+                        self.play_console_voice(&bytes[2..], i32::from(bytes[1]) - i32::from(b'0'),
+                            skip, candidate.voice_male, host)?;
+                        //41DBA0 resets these even for NW.447B80 itself leaves
+                        //the active voice and its pending pan/gain intact on NW.
+                        candidate.skip_voice = None;
+                        candidate.voice_male = false;
+                    }
                     b'N' | b'n' => {
                         let pitch = candidate
                             .font
@@ -523,9 +584,9 @@ impl MajiroVm {
                         char::from(tag)
                     ),
                 }
-                candidate.record(&bytes)?;
-            }
-        
+            candidate.record(&bytes)?;
+        }
+
         Ok(callback)
     }
 }

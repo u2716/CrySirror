@@ -50,6 +50,8 @@ impl MajiroVm {
     }
     pub(super) fn collect_service_contexts(&mut self, machine: &Machine) {
         let live = machine.live_contexts();
+        self.timed_waits.retain(|id, _| live.contains(id));
+        self.round_yields.retain(|id| live.contains(id));
         self.suspended_services.retain(|id, _| live.contains(id));
         if !live.contains(&self.service_context) {
             //Dropping a Task cancels unpublished work; no partial result is

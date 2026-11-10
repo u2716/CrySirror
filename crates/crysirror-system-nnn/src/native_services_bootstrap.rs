@@ -5,10 +5,10 @@ use crate::{
     config::Names,
     native_audio::{AudioBindings, AudioSettings, NativeAudioPolicy},
     native_resources::{ImageLookup, ResourceNames},
-    native_text::{mugen2_single_byte_map, MessageBindings, MessageProfile, MessageWindow},
+    native_text::{MessageBindings, MessageProfile, MessageWindow, mugen2_single_byte_map},
     native_ui::{SelectionProfile, SelectionRow},
 };
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use crysirror_tasks::Cancellation;
 use std::sync::Arc;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -141,6 +141,9 @@ pub struct NativeWindows {
 }
 #[derive(Clone, Debug)]
 pub struct PreparedNativeServices {
+    pub(crate) voice_policy:crate::native_voice_policy::VoicePolicy,
+    pub(crate) system_sounds:Option<Names>,
+    pub(crate) system_sound_disabled:bool,
     pub preferences: NativePreferences,
     pub audio: NativeAudioPolicy,
     pub music_names: Names,
@@ -150,6 +153,7 @@ pub struct PreparedNativeServices {
     pub window_setup: Names,
     pub name_colors: Names,
     pub character_map: Arc<[char]>,
+    pub inline: crate::native_text::InlineProfile,
     pub resources: ResourceNames,
     pub game_setup: Names,
 }
@@ -200,8 +204,8 @@ impl PreparedNativeServices {
         cancel: &Cancellation,
     ) -> Result<Self> {
         use crysirror_core::{
-            path::{Mount, VfsPath},
             Error,
+            path::{Mount, VfsPath},
         };
         ensure!(
             configuration.module_sha256 == crate::native_bootstrap::MUGEN2_MODULE_SHA256,
@@ -211,7 +215,7 @@ impl PreparedNativeServices {
             cancel.check()?;
             let path = VfsPath::new(mount, path)?;
             let source = match if mount == Mount::Asset {
-                storage.open_asset(&path)
+                crate::native_resources::open_installed_asset(storage, &path)
             } else {
                 storage.open_read(&path)
             } {
@@ -295,6 +299,17 @@ impl PreparedNativeServices {
             music_names.tokens.len() % 2 == 0 && sound_names.tokens.len() % 2 == 0,
             "NNN native audio table pairs"
         );
+        let config_setup=config(&mut read,&resources,"Config",cancel)?;
+        let character_names=if game.integer(b"noScriptFlag")?.unwrap_or(0)==0 {
+            let path=resources.path("spt/charaname.xtx")?;
+            read(&path,1<<20)?.map(|bytes|Names::parse(&bytes,false)).transpose()?.unwrap_or(Names{tokens:vec![]})
+        }else{Names{tokens:vec![]}};
+        let voice_policy=crate::native_voice_policy::VoicePolicy::read(&character_names,&config_setup,game)?;
+        let system_sound_disabled=game.integer(b"noSystemSeFlag")?.unwrap_or(0)!=0;
+        let system_sounds=if system_sound_disabled{None}else {
+            let path=resources.path("nya/systemse.xtx")?;
+            read(&path,1<<20)?.map(|bytes|Names::parse(&bytes,false)).transpose()?
+        };
         let print_setup = config(&mut read, &resources, "PrintMessage", cancel)?;
         let selection_setup = config(&mut read, &resources, "SelectMessage", cancel)?;
         let window_setup = config(&mut read, &resources, "messageWindow", cancel)?;
@@ -313,6 +328,9 @@ impl PreparedNativeServices {
         };
         cancel.check()?;
         Ok(Self {
+            voice_policy,
+            system_sounds,
+            system_sound_disabled,
             preferences,
             audio,
             music_names,
@@ -322,6 +340,7 @@ impl PreparedNativeServices {
             window_setup,
             name_colors,
             character_map,
+            inline: crate::native_text::InlineProfile::mugen2(module)?,
             resources,
             game_setup: game.clone(),
         })
@@ -372,6 +391,8 @@ impl PreparedNativeServices {
             advance_buttons,
         )?;
         profile.name_window = name_window;
+        profile.inline = self.inline.clone();
+        profile.ruby = crate::native_text::RubyProfile::from_game_setup(&self.game_setup)?;
         profile.validate()?;
         Ok(profile)
     }
@@ -469,8 +490,8 @@ impl PreparedNativeServices {
         let base = bindings.clone();
         crate::native_ui::NativeSelectionBridge::new_dynamic(
             bindings,
-            Arc::new(move |choices, messages| {
-                services.selection_profile(base.clone(), choices, messages)
+            Arc::new(move |choices, messages, special| {
+                services.selection_profile_for(base.clone(), choices, messages, special)
             }),
         )
     }
@@ -481,6 +502,15 @@ impl PreparedNativeServices {
         base: SelectionProfile,
         choices: usize,
         messages: usize,
+    ) -> Result<SelectionProfile> {
+        self.selection_profile_for(base, choices, messages, 0)
+    }
+    pub fn selection_profile_for(
+        &self,
+        base: SelectionProfile,
+        choices: usize,
+        messages: usize,
+        special: i32,
     ) -> Result<SelectionProfile> {
         let n = |key: &str, default: i32| -> Result<i32> {
             Ok(self
@@ -494,7 +524,8 @@ impl PreparedNativeServices {
         );
         ensure!(
             choices > 0
-                && choices <= usize::try_from(n("messagePrintGyo", 4)?)?
+                && (special != 0 && n("useSpecialNumber", 0)? > 0
+                    || choices <= usize::try_from(n("messagePrintGyo", 4)?)?)
                 && choices + messages <= 64,
             "NNN fixed selection row count"
         );

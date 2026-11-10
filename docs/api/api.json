@@ -239,7 +239,12 @@
           "rust_type": "MajiroSettingsProfile"
         },
         {
-          "doc": "Optional caller-owned module inspected only to guard the reviewed native ABI.",
+          "doc": "Explicit original-optical or client-installed resource compatibility policy.",
+          "name": "media_policy",
+          "rust_type": "MediaPolicy"
+        },
+        {
+          "doc": "Optional caller-owned PE data used to identify a reviewed native value/call layout.",
           "name": "executable",
           "rust_type": "Option<String>"
         },
@@ -8200,6 +8205,30 @@
       "fields": [
         {
           "default": null,
+          "doc": "Stored RGB neighbour differences with independently truncated weights.",
+          "name": "neighbor_relief",
+          "rust_type": "spec: crate::neighbor_relief::NeighborRelief"
+        },
+        {
+          "default": null,
+          "doc": "Three-input RGB-mask coverage with explicit packed-word arithmetic.",
+          "name": "packed_color_mask",
+          "rust_type": "spec: crate::packed_color_mask::PackedColorMask"
+        },
+        {
+          "default": null,
+          "doc": "Two independent alpha masks, optional RGB transform and packed products.",
+          "name": "packed_dual_mask",
+          "rust_type": "spec: crate::packed_dual_mask::PackedDualMask"
+        },
+        {
+          "default": null,
+          "doc": "Single-precision half-biased DDA with signed stored-colour interpolation.",
+          "name": "floating_lines",
+          "rust_type": "lines: Vec<crate::floating_lines::FloatingLine>"
+        },
+        {
+          "default": null,
           "doc": "One checked lookup for the stored coverage byte; RGB remains unchanged.",
           "name": "alpha_lookup",
           "rust_type": "table: Vec<u8>"
@@ -8356,6 +8385,24 @@
         },
         {
           "default": null,
+          "doc": "",
+          "name": "luma_offset_lookup",
+          "rust_type": "spec: crate::tonal_balance::LumaOffsetLookup"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "row_word_add",
+          "rust_type": "spec: crate::row_color::RowWordAdd"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "shift_rows",
+          "rust_type": "spec: crate::shift_rows::ShiftRows"
+        },
+        {
+          "default": null,
           "doc": "Source stretched to `size`, tiled and redrawn under a centred affine.",
           "name": "tiled_transform",
           "rust_type": "spec: crate::tiled_transform::TiledTransform"
@@ -8452,6 +8499,12 @@
         },
         {
           "default": null,
+          "doc": "Checked byte drawing and sampling over two immutable engine images.",
+          "name": "byte_raster",
+          "rust_type": "spec: crate::byte_raster::ByteRaster"
+        },
+        {
+          "default": null,
           "doc": "Replace coverage while retaining all stored RGB bytes. Useful for opaque XRGB resources and explicitly authored mask normalisation.",
           "name": "override_alpha",
           "rust_type": "alpha: u8"
@@ -8521,6 +8574,12 @@
           "doc": "Engine vector path on the existing image with source-over composition.",
           "name": "vector",
           "rust_type": "path: crate::vector::VectorPath"
+        },
+        {
+          "default": null,
+          "doc": "Stored RGBA integer DDA strokes with explicit signed half-bias rounding.",
+          "name": "integer_lines",
+          "rust_type": "lines: Vec<crate::integer_lines::IntegerLine>"
         },
         {
           "default": null,
@@ -8602,6 +8661,12 @@
         },
         {
           "default": null,
+          "doc": "Top-left proportional nearest sampling using exact integer quotients.",
+          "name": "resize_nearest",
+          "rust_type": "width: u32, height: u32"
+        },
+        {
+          "default": null,
           "doc": "Bilinear resize of straight RGBA to a new size.",
           "name": "resize",
           "rust_type": "width: u32, height: u32"
@@ -8621,6 +8686,1434 @@
       ],
       "name": "ImageEffect",
       "used_by": "Bitmap.applyEffectAsync; shared worker effects"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "geometry",
+          "rust_type": "IntegerWipeGeometry"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "count",
+          "rust_type": "u32"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "duration",
+          "rust_type": "u32"
+        }
+      ],
+      "name": "IntegerWipe",
+      "used_by": "ImageEffect::ByteRaster integer two-image reveal geometry with caller-owned native clocks"
+    },
+    {
+      "doc": "Variants are tagged by `\"kind\"`.",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "scale",
+          "rust_type": "spec: scale::ScaleWipe"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "shape",
+          "rust_type": "spec: shapes::ShapeWipe"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "scanline",
+          "rust_type": "spec: scanline::ScanlineWipe"
+        },
+        {
+          "default": null,
+          "doc": "Groups of equal bars begin in sequence; coverage grows by one texel in each bar per stage. `rounded_groups` permits a clipped final group.",
+          "name": "staggered_bars",
+          "rust_type": "rows: bool, bar: u16, repeat: u16, rounded_groups: bool"
+        },
+        {
+          "default": null,
+          "doc": "Alternating rows reveal from opposite ends, using strict comparisons against a descending pair counter, rather than a normalized gradient.",
+          "name": "interleaved_rows",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "Expand a circle whose maximum radius is the half-diagonal rounded up.",
+          "name": "circular",
+          "rust_type": "reverse: bool"
+        },
+        {
+          "default": null,
+          "doc": "Expand a circular centre using packed source strips, retaining the old image's outer strips as a continuous source sequence.",
+          "name": "packed_circular",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "Sweep a sampled edge across the old image, then uncover the new image behind that moving edge. Sampling uses the adjacent texel, not a blur.",
+          "name": "edge_sweep",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "Saturating old + scaled-new, followed by saturating new + scaled-old.",
+          "name": "additive_cross",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "Independently delayed strips roll through a periodic old/new pair; each strip uses a squared countdown and an odd turn multiplier.",
+          "name": "strip_roll",
+          "rust_type": "columns: bool, strips: u8, turns: [u8; 5]"
+        },
+        {
+          "default": null,
+          "doc": "A translated panel with three ballistic bounce phases. The trailing strip can retain its screen-relative samples or restart at source row 0.",
+          "name": "bouncing_panel",
+          "rust_type": "trailing_restarts: bool"
+        },
+        {
+          "default": null,
+          "doc": "Clockwise rotating two-interval reveal with rounded scanline cuts.",
+          "name": "clock",
+          "rust_type": "pi: f64"
+        },
+        {
+          "default": null,
+          "doc": "A diagonal seam: x < clamp(start-y,0,width) retains the old image. Translating the old strip takes its right edge instead of the left.",
+          "name": "diagonal",
+          "rust_type": "translate_old: bool"
+        },
+        {
+          "default": null,
+          "doc": "Translate the new panel over the stationary old image. Directions are up, right, down, left; reverse exchanges images and time before drawing.",
+          "name": "panel",
+          "rust_type": "direction: u8, reverse: bool"
+        },
+        {
+          "default": null,
+          "doc": "Two halves translate from opposite edges around a stationary centre.",
+          "name": "split_panels",
+          "rust_type": "columns: bool, reverse: bool"
+        }
+      ],
+      "name": "IntegerWipeGeometry",
+      "used_by": "Integer scanline, shapes, fragments, circular/clock, zoom, additive and rolling-panel transitions over two immutable images"
+    },
+    {
+      "doc": "Variants are tagged by `\"kind\"`.",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "wave_edge",
+          "rust_type": "reverse: bool, gradient: u16"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "chevron_edge",
+          "rust_type": "inverted: bool, gradient: u16"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "double_chevron",
+          "rust_type": "reverse: bool"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "slant_edge",
+          "rust_type": "orientation: u8, gradient: u16"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "accelerating_rows",
+          "rust_type": "origin: u8, reverse: bool"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "push_panels",
+          "rust_type": "direction: u8"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "cosine_warp",
+          "rust_type": "black_edges: bool"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "multiply_cross",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "fold_rows",
+          "rust_type": ""
+        }
+      ],
+      "name": "ScanlineWipe",
+      "used_by": "Wave, chevron, slanted, accelerated, cosine-warp, folding and panel scanline operations"
+    },
+    {
+      "doc": "Variants are tagged by `\"kind\"`.",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "star",
+          "rust_type": "reverse: bool"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "heart",
+          "rust_type": "reverse: bool"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "rotating_star",
+          "rust_type": "reverse: bool, slow: bool"
+        }
+      ],
+      "name": "ShapeWipe",
+      "used_by": "Integer star, heart and rotating-star reveal masks"
+    },
+    {
+      "doc": "Variants are tagged by `\"kind\"`.",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "centre_zoom",
+          "rust_type": "level: u8"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "expanding_panel",
+          "rust_type": "reverse: bool, blend: bool"
+        }
+      ],
+      "name": "ScaleWipe",
+      "used_by": "Fixed-point centred zoom and expanding panel sampling"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "vertices",
+          "rust_type": "Vec<[i32; 2]>"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "translation",
+          "rust_type": "[i32; 2]"
+        }
+      ],
+      "name": "ImageFragment",
+      "used_by": "Y-monotone integer polygon and translation for immutable image fragments"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "fragments",
+          "rust_type": "Vec<ImageFragment>"
+        }
+      ],
+      "name": "PolygonFragments",
+      "used_by": "Bounded clipped polygon fragments over an immutable image pair"
+    },
+    {
+      "doc": "Variants are tagged by `\"kind\"`.",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "ragged_edge",
+          "rust_type": "reverse: bool, gradient: u16"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "row_dissolve",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "mosaic",
+          "rust_type": ""
+        }
+      ],
+      "name": "RandomWipeGeometry",
+      "used_by": "Ragged edges, row dissolve and mosaic using explicit caller-owned samples"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "geometry",
+          "rust_type": "RandomWipeGeometry"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "count",
+          "rust_type": "u32"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "duration",
+          "rust_type": "u32"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "samples",
+          "rust_type": "Vec<u16>"
+        }
+      ],
+      "name": "RandomWipe",
+      "used_by": "Randomized image wipe with explicit count, duration and bounded random sample data"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "shifts",
+          "rust_type": "Vec<i32>"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "clear",
+          "rust_type": "[u8; 4]"
+        },
+        {
+          "default": null,
+          "doc": "Positive shifts first erase the source prefix before the overlapping copy. This retains defined results of destructive legacy row copying.",
+          "name": "erase_positive_source",
+          "rust_type": "bool"
+        }
+      ],
+      "name": "ShiftRows",
+      "used_by": "Bounded scanline translations with explicit clear pixels and optional source-prefix erase ordering"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "source",
+          "rust_type": "[i32; 4]"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "destination",
+          "rust_type": "[i32; 2]"
+        },
+        {
+          "default": null,
+          "doc": "Mask texel aligned with the upper-left source rectangle before clipping.",
+          "name": "mask",
+          "rust_type": "[i32; 2]"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "reverse",
+          "rust_type": "bool"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "multiplier",
+          "rust_type": "u16"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "offset",
+          "rust_type": "u16"
+        },
+        {
+          "default": null,
+          "doc": "Wrapping addition followed by unsigned saturated subtraction emulates a signed lower bound while retaining the full packed-word input domain.",
+          "name": "nonnegative_bias",
+          "rust_type": "u16"
+        },
+        {
+          "default": null,
+          "doc": "Upper coverage limit after the lower-bound operation;0..=256.",
+          "name": "limit",
+          "rust_type": "u16"
+        }
+      ],
+      "name": "PackedColorMask",
+      "used_by": "Three-input stored-channel coverage transforms with explicit low-word multiply and saturation"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "source",
+          "rust_type": "[i32; 4]"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "destination",
+          "rust_type": "[i32; 2]"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "mask",
+          "rust_type": "[i32; 2]"
+        },
+        {
+          "default": null,
+          "doc": "Independent low-word scale after alpha1*(alpha2+1)/256.",
+          "name": "weight",
+          "rust_type": "u16"
+        },
+        {
+          "default": null,
+          "doc": "Optional source RGB multiply/256 followed by packed-word addition. RGB lanes remain words until their final coverage product.",
+          "name": "source_color",
+          "rust_type": "Option<([u8; 3], [u16; 3])>"
+        }
+      ],
+      "name": "PackedDualMask",
+      "used_by": "Independent source/mask coverage and packed-word RGB fade over an immutable destination"
+    },
+    {
+      "doc": "Variants are tagged by `\"kind\"`.",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "stored",
+          "rust_type": "math: ByteRasterMath"
+        },
+        {
+          "default": null,
+          "doc": "Multiply stored source coverage by a32-bit wrapping weight, then take bits8..23. Source/destination products wrap to16bits and floor separately; the destination weight XORs the source weight's low byte with255.",
+          "name": "coverage_separate",
+          "rust_type": "weight: u32, opaque_copy: bool"
+        },
+        {
+          "default": null,
+          "doc": "Independent packed-word RGB weights; products floor separately and their sum saturates to255. Coverage is ignored, destination alpha is retained.",
+          "name": "constant_separate",
+          "rust_type": "weights: [u16; 2]"
+        }
+      ],
+      "name": "ScanlineMath",
+      "used_by": "Explicit stored-byte, coverage or independently weighted scanline RGB arithmetic"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "Destination x,y,width; the source advances once for each output pixel.",
+          "name": "destination",
+          "rust_type": "[i32; 3]"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "source_q16",
+          "rust_type": "[i64; 2]"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "source_step_q16",
+          "rust_type": "[i64; 2]"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "math",
+          "rust_type": "ScanlineMath"
+        }
+      ],
+      "name": "FixedSampleSpan",
+      "used_by": "Immutable16.16 source phase and per-pixel step for one destination scanline"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "spans",
+          "rust_type": "Vec<FixedSampleSpan>"
+        },
+        {
+          "default": null,
+          "doc": "Skip a sampled pixel when its RGB equals source(0,0), independently of a stored coverage plane. This comparison precedes pixel arithmetic.",
+          "name": "corner_rgb_key",
+          "rust_type": "bool"
+        },
+        {
+          "default": null,
+          "doc": "Saturating RGB addition/subtraction after key comparison, before blending. Source coverage remains unchanged.",
+          "name": "source_color",
+          "rust_type": "Option<([u8; 3], [u8; 3])>"
+        }
+      ],
+      "name": "FixedScanlines",
+      "used_by": "Clipped immutable fixed-point sampling with optional corner key and source colour adjustment"
+    },
+    {
+      "doc": "Variants are tagged by `\"kind\"`.",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "rectangle",
+          "rust_type": "bounds: [i32; 4]"
+        },
+        {
+          "default": null,
+          "doc": "Directed boundary: dy<0 retains the right side,dy>0 the inclusive left side. A horizontal vector retains bottom/top for dx>0/dx<0 respectively.",
+          "name": "half_plane",
+          "rust_type": "origin: [i32; 2], vector: [i32; 2]"
+        }
+      ],
+      "name": "ScanlineClip",
+      "used_by": "Directed half-plane or rectangle clipping independent of native VM state"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "source_q16",
+          "rust_type": "[i64; 2]"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "source_step_q16",
+          "rust_type": "[i64; 2]"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "clip",
+          "rust_type": "ScanlineClip"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "math",
+          "rust_type": "ByteRasterMath"
+        }
+      ],
+      "name": "ClippedScanlineSample",
+      "used_by": "Fixed-grid source sampling through independently supplied clipping geometry"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "from",
+          "rust_type": "[f32; 2]"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "to",
+          "rust_type": "[f32; 2]"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "color",
+          "rust_type": "[i32; 3]"
+        },
+        {
+          "default": null,
+          "doc": "Source weight=floor(percent*255/100), destination=255-source; the summed signed product shifts by8.100 percent retains native /256 loss.",
+          "name": "percent",
+          "rust_type": "i32"
+        }
+      ],
+      "name": "FloatingLine",
+      "used_by": "Single-precision half-biased DDA strokes with signed stored-colour interpolation"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "channel",
+          "rust_type": "u8"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "not_equal",
+          "rust_type": "u8"
+        }
+      ],
+      "name": "CoverageBounds",
+      "used_by": "Rust cancellable stored-channel extent queries and phase-preserving source-window intersection"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "Relief contribution in 1/256 units; the other contribution is 256-weight.",
+          "name": "weight",
+          "rust_type": "u16"
+        },
+        {
+          "default": null,
+          "doc": "Transform this many pixels of the linear image prefix. Each transformed pixel reads its original immediate successor, including across rows.",
+          "name": "pixels",
+          "rust_type": "u32"
+        },
+        {
+          "default": null,
+          "doc": "After filtering, copy each row's penultimate RGB into its last RGB. A one-pixel-wide row is left unchanged by this repair.",
+          "name": "copy_row_last",
+          "rust_type": "bool"
+        }
+      ],
+      "name": "NeighborRelief",
+      "used_by": "Stored RGB neighbour differences with independently truncated weights and optional row-end repair"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "RGB sums use one sample per covered pixel; floor(sum/2) is multiplied by min(32768/count,32767) and shifted by14.",
+          "name": "covered_rgb",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "RGB is first multiplied by source alpha. Normalisation reproduces separate packed-word products, then composites with the retained RGB.",
+          "name": "premultiplied_mask256",
+          "rust_type": ""
+        }
+      ],
+      "name": "NativeBoxBlurMath",
+      "used_by": "Explicit covered-RGB or premultiplied-mask packed-byte normalisation"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "Source position corresponding to the top-left destination pixel.",
+          "name": "source",
+          "rust_type": "[i32; 2]"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "destination",
+          "rust_type": "[i32; 4]"
+        },
+        {
+          "default": null,
+          "doc": "Half-open source coverage bounds [left,top,right,bottom].",
+          "name": "source_bounds",
+          "rust_type": "[u32; 4]"
+        },
+        {
+          "default": null,
+          "doc": "Window offsets are [-floor(size/2),size-floor(size/2)) on each axis.",
+          "name": "window",
+          "rust_type": "[u16; 2]"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "math",
+          "rust_type": "NativeBoxBlurMath"
+        },
+        {
+          "default": null,
+          "doc": "Initial sums truncate at bottom. Subsequent sliding updates beyond bottom read the last row instead; top and horizontal edges truncate.",
+          "name": "repeat_bottom_updates",
+          "rust_type": "bool"
+        }
+      ],
+      "name": "NativeBoxBlur",
+      "used_by": "Clipped immutable box sums with caller-supplied source bounds and edge-update policy"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "source",
+          "rust_type": "[i32; 4]"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "destination",
+          "rust_type": "[i32; 2]"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "colors",
+          "rust_type": "Vec<[u8; 3]>"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "weight",
+          "rust_type": "u16"
+        },
+        {
+          "default": null,
+          "doc": "A selected row colour omits the source RGB contribution. Kept explicit for packed native dispatchers which branch on colour, not on weight.",
+          "name": "source_bypass_color",
+          "rust_type": "Option<[u8; 3]>"
+        }
+      ],
+      "name": "RowTintBlend",
+      "used_by": "Per-row stored-RGB tint interpolation followed by independently truncated coverage composition"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "mask",
+          "rust_type": "[i32; 4]"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "destination",
+          "rust_type": "[i32; 2]"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "offset",
+          "rust_type": "[i32; 2]"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "channel",
+          "rust_type": "u8"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "threshold",
+          "rust_type": "u8"
+        }
+      ],
+      "name": "MaskedBackdropShift",
+      "used_by": "Thresholded displacement of an immutable backdrop through an independent channel mask"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "Source rectangle before destination clipping.",
+          "name": "source",
+          "rust_type": "[i32; 4]"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "destination",
+          "rust_type": "[i32; 2]"
+        },
+        {
+          "default": null,
+          "doc": "One horizontal destination displacement for each source-rectangle row.",
+          "name": "row_offsets",
+          "rust_type": "Vec<i32>"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "math",
+          "rust_type": "ByteRasterMath"
+        },
+        {
+          "default": null,
+          "doc": "Optional per-row byte arithmetic, indexed before clipping. Empty uses `math` for every row; otherwise one entry is required per source row.",
+          "name": "row_math",
+          "rust_type": "Vec<ByteRasterMath>"
+        }
+      ],
+      "name": "RowBlit",
+      "used_by": "Shared row-offset copy/blend over engine images with bounded clipping and worker cancellation"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "first_row",
+          "rust_type": "u32"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "columns",
+          "rust_type": "u32"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "offsets",
+          "rust_type": "Vec<[i32; 3]>"
+        }
+      ],
+      "name": "RowWordAdd",
+      "used_by": "Row-major packed-word RGB offsets with exclusive-end gradient construction"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "source",
+          "rust_type": "[i32; 4]"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "destination",
+          "rust_type": "[i32; 2]"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "scale",
+          "rust_type": "u16"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "subtract",
+          "rust_type": "bool"
+        }
+      ],
+      "name": "MaskedAddSubtract256",
+      "used_by": "Signed scaled saturated image arithmetic with separately truncated Q8 mask products"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "all",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "shadows",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "midtones",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "highlights",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "shadows_narrow",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "midtones_narrow",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "highlights_narrow",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "shadows_wide",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "midtones_wide",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "highlights_wide",
+          "rust_type": ""
+        }
+      ],
+      "name": "TonalBand",
+      "used_by": "Stored-byte shadows, midtones and highlights weight profiles"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "offsets",
+          "rust_type": "[i32; 3]"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "bands",
+          "rust_type": "[TonalBand; 3]"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "preserve_luminance",
+          "rust_type": "bool"
+        }
+      ],
+      "name": "TonalBalance",
+      "used_by": "RGB tonal offsets with optional fixed f32 luminance compensation"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "add",
+          "rust_type": "Vec<[u8; 3]>"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "subtract",
+          "rust_type": "Vec<[u8; 3]>"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "coefficients",
+          "rust_type": "[u16; 3]"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "fractional_bits",
+          "rust_type": "u8"
+        }
+      ],
+      "name": "LumaOffsetLookup",
+      "used_by": "Luminance-indexed additive and subtractive byte tables with separate saturating operations"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "floor",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "Nearest sampling with independently quantized source increments. None uses the exact rational phase; Some(n) floors the increment to n fractional bits before multiplying by the destination coordinate.",
+          "name": "floor_quantized",
+          "rust_type": "fractional_bits: [Option<u8>;2]"
+        },
+        {
+          "default": null,
+          "doc": "round(i*source_extent/destination_extent), clamped inside the rectangle. The clamp repairs the otherwise out-of-rectangle final upscale sample.",
+          "name": "nearest_round",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "Round the rational table without clipping to the source subrectangle. Coordinates address the complete immutable image in linear row order; a sample at X==image.width carries into the following row. Only an address outside the complete allocation clamps to its nearest endpoint. This bounded profile preserves initialized border samples of native table kernels without reproducing reads of uninitialized memory.",
+          "name": "nearest_round_linear",
+          "rust_type": ""
+        }
+      ],
+      "name": "RectMapSample",
+      "used_by": "Exact rational or independently quantized nearest-neighbour rectangle sampling"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "regions",
+          "rust_type": "Vec<RectMapRegion>"
+        },
+        {
+          "default": null,
+          "doc": "None retains source extent. An explicit extent changes only the output canvas, leaving all source coordinates and linear row addressing intact.",
+          "name": "output_size",
+          "rust_type": "Option<[u32; 2]>"
+        },
+        {
+          "default": null,
+          "doc": "A defined background for every pixel not written by a mapping.",
+          "name": "clear",
+          "rust_type": "[u8; 4]"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "sample",
+          "rust_type": "RectMapSample"
+        },
+        {
+          "default": null,
+          "doc": "False copies only RGB and retains the clear/staged destination alpha.",
+          "name": "copy_alpha",
+          "rust_type": "bool"
+        }
+      ],
+      "name": "RectMap",
+      "used_by": "Ordered clipped rectangle sampling on an immutable image"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "Source XYWH. Sampling is relative to this original rectangle, including when the destination is clipped by the output image.",
+          "name": "source",
+          "rust_type": "[i32; 4]"
+        },
+        {
+          "default": null,
+          "doc": "Destination XYWH; zero extents perform no writes.",
+          "name": "destination",
+          "rust_type": "[i32; 4]"
+        }
+      ],
+      "name": "RectMapRegion",
+      "used_by": "Original source and destination rectangles for phase-preserving sampling"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "control",
+          "rust_type": "[[f32; 3]; 3]"
+        }
+      ],
+      "name": "QuadraticBezierPath",
+      "used_by": "Caller-clock three-control quadratic Bezier positions for 2D and 3D animation"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "control",
+          "rust_type": "[[f32; 3]; 4]"
+        }
+      ],
+      "name": "CubicBezierPath",
+      "used_by": "Caller-clock cubic Bezier positions for 2D and 3D animation with explicit f32 evaluation"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "size",
+          "rust_type": "[u32; 2]"
+        },
+        {
+          "default": null,
+          "doc": "Source x/y/width/height. Windows must be wholly inside this crop; there is no implicit edge clamp or unchecked overread.",
+          "name": "source",
+          "rust_type": "Option<[u32; 4]>"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "window",
+          "rust_type": "[u16; 2]"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "anchors",
+          "rust_type": "BoxAnchors"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "arithmetic",
+          "rust_type": "BoxArithmetic"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "alpha",
+          "rust_type": "BoxAlpha"
+        }
+      ],
+      "name": "BoxReduce",
+      "used_by": "Checked grid, rational area or weighted quad reduction over stored channels"
+    },
+    {
+      "doc": "Variants are tagged by `\"kind\"`.",
+      "fields": [
+        {
+          "default": null,
+          "doc": "Wrap to16 bits, logically halve, signed high multiply, double the word, then signed-saturate to a byte. Describes native packed blur arithmetic.",
+          "name": "half_word_high_double",
+          "rust_type": "multiplier: u16"
+        },
+        {
+          "default": null,
+          "doc": "Unsigned full-precision sum divided by the complete window area.",
+          "name": "mean",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "Explicit row-major weights for a2x2 window. The unsigned sum is divided once and saturated to a byte; this also describes asymmetric filters.",
+          "name": "weighted_quad",
+          "rust_type": "weights: [u16; 4], divisor: u16"
+        },
+        {
+          "default": null,
+          "doc": "Wrap each channel sum to16 bits, interpret sum and multiplier as signed words, take the signed product's high word, then saturate to a byte. This is an explicit packed-integer contract, not a float approximation.",
+          "name": "signed_word_high",
+          "rust_type": "multiplier: u16"
+        }
+      ],
+      "name": "BoxArithmetic",
+      "used_by": "Full mean, packed high product/half-and-double, or explicitly weighted quad arithmetic"
+    },
+    {
+      "doc": "Variants are tagged by `\"kind\"`.",
+      "fields": [
+        {
+          "default": null,
+          "doc": "Window origins span every valid source start: floor((extent-window+1) * index/output). Uses bounded column sums instead of repeated taps.",
+          "name": "window_origins",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "The first window starts at the crop origin. Subsequent windows advance by an independent integer stride on each axis.",
+          "name": "grid",
+          "rust_type": "stride: [u32; 2]"
+        },
+        {
+          "default": null,
+          "doc": "Window starts are floor(crop_extent * output_index / output_extent).",
+          "name": "proportional",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "Exact area overlaps between rational source/output pixel boxes. The window is ignored; only Mean arithmetic is meaningful for this profile.",
+          "name": "area",
+          "rust_type": ""
+        }
+      ],
+      "name": "BoxAnchors",
+      "used_by": "Grid, valid-window origins, proportional or rational-area reduction windows"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "aggregate",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "opaque",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "zero",
+          "rust_type": ""
+        }
+      ],
+      "name": "BoxAlpha",
+      "used_by": "Aggregated, opaque or cleared reduction alpha"
+    },
+    {
+      "doc": "Variants are tagged by `\"operation\"`.",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "row_tint_blend",
+          "rust_type": "spec: crate::row_tint_blend::RowTintBlend"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "masked_backdrop_shift",
+          "rust_type": "spec: crate::masked_backdrop_shift::MaskedBackdropShift"
+        },
+        {
+          "default": null,
+          "doc": "Clipped box sums with an explicit packed-byte normalisation profile.",
+          "name": "native_box_blur",
+          "rust_type": "spec: crate::native_box_blur::NativeBoxBlur"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "fixed_scanlines",
+          "rust_type": "spec: crate::fixed_scanlines::FixedScanlines"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "clipped_scanline_sample",
+          "rust_type": "spec: crate::clipped_scanline_sample::ClippedScanlineSample"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "row_blit",
+          "rust_type": "spec: crate::row_blit::RowBlit"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "masked_add_subtract256",
+          "rust_type": "spec: crate::masked_add::MaskedAddSubtract256"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "random_wipe",
+          "rust_type": "spec: crate::integer_wipe::random::RandomWipe"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "polygon_fragments",
+          "rust_type": "spec: crate::integer_wipe::fragments::PolygonFragments"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "integer_wipe",
+          "rust_type": "spec: crate::integer_wipe::IntegerWipe"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "axis_projection",
+          "rust_type": "spec: crate::axis_projection::AxisProjection"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "triangle",
+          "rust_type": "spec: crate::triangle_raster::TriangleRaster"
+        },
+        {
+          "default": null,
+          "doc": "Inclusive line with sequential integer edge clipping, followed by a truncating8.8 DDA. The major axis is ordered ascending before drawing.",
+          "name": "line",
+          "rust_type": "points: [[i32; 2]; 2], color: [u8; 4], write_mask: [bool; 4]"
+        },
+        {
+          "default": null,
+          "doc": "Inverse centred rotation with per-row truncating16.16 starts and steps. Invalid samples clear coverage and retain destination hidden RGB.",
+          "name": "rotate_scale",
+          "rust_type": "source: [u32; 4], radians: f32, scale: f32, math: ByteRasterMath, opaque: bool"
+        },
+        {
+          "default": null,
+          "doc": "Scalar inverse rotation with centres, byte256 bilinear weights and repeated floating increments. All-zero source coverage retains hidden RGB.",
+          "name": "bilinear_rotation",
+          "rust_type": "destination_center: [f32; 2], source_center: [f32; 2], degrees: f32, scale: f32"
+        },
+        {
+          "default": null,
+          "doc": "Repeat a source window. `first_run`, when present, selects an absolute first source x and its pixel count before ordinary window repetition. Clipping the destination retains the original row/column phase.",
+          "name": "tile",
+          "rust_type": "source: [u32; 4], destination: [i32; 4], phase: [i32; 2], first_run: Option<[u32; 2]>, math: ByteRasterMath"
+        }
+      ],
+      "name": "ByteRaster",
+      "used_by": "ImageEffect::ByteRaster checked stored-byte drawing, sampling and two-image wipe operations"
+    },
+    {
+      "doc": "Variants are tagged by `\"kind\"`.",
+      "fields": [
+        {
+          "default": null,
+          "doc": "Independent saturated stored-RGB addition or subtraction; no coverage modulation and no alpha writes.",
+          "name": "saturated_rgb",
+          "rust_type": "subtract: bool"
+        },
+        {
+          "default": null,
+          "doc": "Scale stored coverage by weight/256. Zero coverage skips, 255 copies RGB; partial contributions are summed before one /256 truncation. Destination alpha is retained independently of the coverage source.",
+          "name": "alpha_weighted_rgb256",
+          "rust_type": "weight: u16"
+        },
+        {
+          "default": null,
+          "doc": "Scale source coverage by weight/256, then floor the two RGB products separately. Only source alpha255 plus weight256 copies RGB directly. Destination alpha is retained; weight is0..=256.",
+          "name": "alpha_weighted_separate_rgb256",
+          "rust_type": "weight: u16"
+        },
+        {
+          "default": null,
+          "doc": "Piecewise stored-mask blend with explicit low-word arithmetic. Mask0 skips; mask255 uses(weight,256-weight). Partial masks use the high byte of the wrapping mask*weight product and its255 complement. All RGB products/sums wrap to16bits before /256; destination alpha is retained.",
+          "name": "mask_piecewise_wrapping256",
+          "rust_type": "weight: u16"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "copy_rgb",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "Copy RGB when the stored source coverage reaches the inclusive threshold.",
+          "name": "alpha_threshold_rgb",
+          "rust_type": "threshold: u8"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "copy_alpha",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "copy_rgba",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "Two separate floor products /255; source coverage is ignored.",
+          "name": "constant_rgb255",
+          "rust_type": "opacity: u8"
+        },
+        {
+          "default": null,
+          "doc": "Two separate floor products /255, using stored source coverage.",
+          "name": "alpha_rgb255",
+          "rust_type": ""
+        }
+      ],
+      "name": "ByteRasterMath",
+      "used_by": "ByteRaster explicit stored-byte copy or alpha composition policy"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "from",
+          "rust_type": "[i32; 2]"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "to",
+          "rust_type": "[i32; 2]"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "color",
+          "rust_type": "[u8; 4]"
+        }
+      ],
+      "name": "IntegerLine",
+      "used_by": "ImageEffect::IntegerLines explicit signed half-biased integer DDA stroke; shared worker raster with clipped destination and cancellation"
     },
     {
       "doc": "",
@@ -9037,6 +10530,12 @@
         {
           "default": null,
           "doc": "",
+          "name": "draw_method",
+          "rust_type": "i32"
+        },
+        {
+          "default": null,
+          "doc": "",
           "name": "surface",
           "rust_type": "Option<System4SpriteSurface>"
         },
@@ -9214,6 +10713,301 @@
       ],
       "name": "InputObservation",
       "used_by": "Rust retained client input observation; Input.observation emits exact decimal strings for revision/time/button masks"
+    },
+    {
+      "doc": "Stable normalized button order for source-aware compatibility/input APIs.",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "South",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "East",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "West",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "North",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "LeftShoulder",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "RightShoulder",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "LeftTrigger",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "RightTrigger",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "Select",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "Start",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "Guide",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "LeftStick",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "RightStick",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "DpadUp",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "DpadDown",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "DpadLeft",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "DpadRight",
+          "rust_type": ""
+        }
+      ],
+      "name": "ControllerButton",
+      "used_by": "Rust normalized physical controller button ordering"
+    },
+    {
+      "doc": "Stick/hat Y uses positive-up, X uses positive-right; axes retain -1..1.",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "LeftX",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "LeftY",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "RightX",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "RightY",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "LeftTrigger",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "RightTrigger",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "DpadX",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "DpadY",
+          "rust_type": ""
+        }
+      ],
+      "name": "ControllerAxis",
+      "used_by": "Rust normalized physical controller axes; positive Y is up"
+    },
+    {
+      "doc": "One connected logical device; IDs and samples are host facts, never saves.",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "id",
+          "rust_type": "u32"
+        },
+        {
+          "default": null,
+          "doc": "Pressures in ControllerButton order, bounded0..1.",
+          "name": "buttons",
+          "rust_type": "[f32; 17]"
+        },
+        {
+          "default": null,
+          "doc": "Positions in ControllerAxis order, bounded-1..1.",
+          "name": "axes",
+          "rust_type": "[f32; 8]"
+        }
+      ],
+      "name": "ControllerInputSample",
+      "used_by": "Rust bounded source device sample with stable live ID, pressure buttons and axes"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "buttons_down",
+          "rust_type": "u64"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "buttons_pressed",
+          "rust_type": "u64"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "pointer_x",
+          "rust_type": "i32"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "pointer_y",
+          "rust_type": "i32"
+        }
+      ],
+      "name": "InputFrame",
+      "used_by": "Rust logical keyboard/pointer frame; independent from physical controller sources"
+    },
+    {
+      "doc": "Owner-published physical sources before generic UI/controller navigation is merged. Up to16 controllers; no OS handles or device pointers are exposed.",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "keyboard_pointer",
+          "rust_type": "super::InputFrame"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "controller_backend",
+          "rust_type": "bool"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "controllers",
+          "rust_type": "alloc::vec::Vec<ControllerInputSample>"
+        }
+      ],
+      "name": "InputSourcesFrame",
+      "used_by": "SharedHost.publish_input_sources next-admission source data before UI navigation is merged"
+    },
+    {
+      "doc": "Read-only sources for the last admitted owner tick, scoped like pointer observations. The query does not poll hardware, consume edges or advance time.",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "client",
+          "rust_type": "crate::state::ClientId"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "revision",
+          "rust_type": "u64"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "time_ms",
+          "rust_type": "u64"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "sources",
+          "rust_type": "InputSourcesFrame"
+        }
+      ],
+      "name": "InputSourcesObservation",
+      "used_by": "HostServices.input_sources client-scoped immutable owner observation; live IDs are not saved"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "Original optical-drive lookup requires a native-media backend.",
+          "name": "native_optical",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "Use this client's verified installed EXE, ENV and root MJO instead of requiring those same files to be repeated on physical optical media.",
+          "name": "installed_resources",
+          "rust_type": ""
+        }
+      ],
+      "name": "MediaPolicy",
+      "used_by": "Majiro explicit optical-media or verified installed-resource compatibility policy"
     },
     {
       "doc": "",
@@ -10864,6 +12658,12 @@
         },
         {
           "default": null,
+          "doc": "Transform a checked row-major prefix; retain all later pixels.",
+          "name": "straight_prefix",
+          "rust_type": "pixels: u32"
+        },
+        {
+          "default": null,
           "doc": "Preserve the complete stored pixel when alpha is zero. Visible RGB uses the tables; alpha and hidden transparent RGB remain unchanged.",
           "name": "straight_nonzero_alpha",
           "rust_type": ""
@@ -11202,6 +13002,12 @@
           "doc": "Luminance colour mix weight, in explicit /256 units.",
           "name": "amount256",
           "rust_type": "u16"
+        },
+        {
+          "default": null,
+          "doc": "Optional per-channel tint of the luminance target: `(luma*tint)>>8` before mixing (sepia-style toning). `None` mixes toward grey.",
+          "name": "tint",
+          "rust_type": "Option<[u8; 3]>"
         }
       ],
       "name": "FixedLumaSpec",
@@ -11830,7 +13636,7 @@
         },
         {
           "default": null,
-          "doc": "Root-only three-input context. The first effect must be MaskedPairBlend; all inputs use the same scope, graph, decode and memory admission rules.",
+          "doc": "Root-only three-input context. The first effect selects its typed source/mask or independent-two-source operation; all inputs use the same scope, graph, decode and memory admission rules.",
           "name": "Ternary",
           "rust_type": "destination: Box<ImageInput>, first: Box<ImageInput>, second: Box<ImageInput>"
         },
@@ -11963,6 +13769,12 @@
           "doc": "Symmetric disk maximum on working pixels0..16; same kernel as rich bold.",
           "name": "embolden_radius",
           "rust_type": "u8"
+        },
+        {
+          "default": null,
+          "doc": "Optional max-union stamps after morphology, in signed working pixels. Replaces the unstamped mask; include [0, 0] to preserve it. At most 256 offsets, each axis -64..64.",
+          "name": "coverage_offsets",
+          "rust_type": "Option<Arc<[[i16; 2]]>>"
         },
         {
           "default": null,
@@ -13913,6 +15725,12 @@
         },
         {
           "default": null,
+          "doc": "At least one source/loop endpoint has been reached by mixer transport. Latched until this voice is replaced; decoder read-ahead, pause, gain and wall time alone cannot set it. A joined intro belongs to the first pass; later passes begin at the configured loop start. Seek preserves it.",
+          "name": "first_pass_complete",
+          "rust_type": "bool"
+        },
+        {
+          "default": null,
           "doc": "Source clock currently frozen by pause or a freezing scheduled resume.",
           "name": "paused",
           "rust_type": "bool"
@@ -14537,6 +16355,12 @@
       "fields": [
         {
           "default": null,
+          "doc": "Bounded segmented source, decoded on the existing audio worker. Nested repeats do not expand encoded data or decoded PCM in memory.",
+          "name": "PlayPlaylist",
+          "rust_type": "channel: u32, source: AudioPlaylist, parameters: AudioParameters"
+        },
+        {
+          "default": null,
           "doc": "Decode all bounded input frames before publication. Playback, loops and exact seeks subsequently use resident PCM without a decoder/I/O worker.",
           "name": "PlayResident",
           "rust_type": "channel: u32, source: EncodedAudio, intro: Option<EncodedAudio>, parameters: AudioParameters"
@@ -14676,6 +16500,50 @@
       ],
       "name": "AudioRequest",
       "used_by": "Rust client-scoped HostServices audio commands; resource-bearing enum, not a JSON command or reflected class"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "clips",
+          "rust_type": "Vec<EncodedAudio>"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "program",
+          "rust_type": "AudioPlaylistNode"
+        }
+      ],
+      "name": "AudioPlaylist",
+      "used_by": "Rust AudioRequest::PlayPlaylist; immutable encoded clips and a bounded repeat program"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "Clip",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "Sequence",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "None repeats forever, Some(n) plays n complete iterations.",
+          "name": "Repeat",
+          "rust_type": "count: Option<u32>, body: Vec<AudioPlaylistNode>"
+        }
+      ],
+      "name": "AudioPlaylistNode",
+      "used_by": "Rust shared segmented-audio source; finite or infinite nested sequences"
     },
     {
       "doc": "Runtime-instance, client and epoch scoped handle. A released/stale handle never becomes authority for a later preparation.",
@@ -21447,7 +23315,7 @@
           "default": null,
           "doc": "A positioned-glyph source view. Geometry/filter/opacity belong to this layer; content and reveal state remain owned by the source layer.",
           "name": "glyph_view",
-          "rust_type": "source: u32, offset: [f32;2]"
+          "rust_type": "source: u32, range: Option<[usize;2]>"
         },
         {
           "default": null,
@@ -25494,7 +27362,7 @@
       "used_by": "UiEvent.widget client/local identity"
     }
   ],
-  "fingerprint": "25d0b1766c932638",
+  "fingerprint": "b963b04efb70ebdb",
   "generated_by": "crysirror-engine api_doc (tests/api_docs.rs)",
   "globals": [
     {

@@ -4,6 +4,109 @@ Newest first. Each entry is keyed by the API fingerprint printed in
 [REFERENCE.md](REFERENCE.md). `tests/api_docs.rs` fails until the current
 fingerprint appears here. Mark breaking changes with **Breaking**.
 
+## `b963b04efb70ebdb` (2026-11-10): directional glyph coverage stamps
+
+- `GlyphRasterOptions.coverage_offsets` max-unions the morphed glyph mask at caller-specified signed working-pixel offsets before reduction. An omitted value retains the existing coverage path; an explicit set includes `[0, 0]` when the original mask is required.
+- Offset count, per-axis displacement, expanded surface, worker cost and temporary memory are bounded before publication. This shared Rust image capability is independent of native VM state.
+- **Breaking (Rust struct literals):** complete `GlyphRasterOptions` literals must provide the new field or use `Default`. Regenerated the API reference from the current declarations.
+
+## `363e1b5338b4b802` (2026-11-10): row tint and masked backdrop displacement
+
+- `ByteRaster::RowTintBlend` composes caller-supplied row colours and immutable source RGB using separately truncated weights, followed by stored-coverage blending. An explicit colour branch supports packed dispatch policies; destination alpha remains intact.
+- `ByteRaster::MaskedBackdropShift` displaces an immutable backdrop through an independent thresholded channel mask. Coordinates, work and cancellation stay bounded.
+- Registered both typed specifications and regenerated API artifacts from the current code.
+
+## `363665633b82cc34` (2026-11-10): stored-channel extents and packed box sums
+
+- `CoverageBounds` queries tight nonmatching stored-channel extents with cancellation; source-window intersection preserves source-to-destination phase independently of physical image clipping.
+- `ImageEffect::NeighborRelief` provides immutable neighbour differences, independently truncated weights and optional row-end repair, retaining coverage alpha.
+- `ByteRaster::NativeBoxBlur` provides clipped sliding box sums with distinct covered-RGB and premultiplied-mask normalisation. Explicit source bounds and bottom-update policy preserve caller-selected edge semantics.
+- Registered typed specifications and regenerated API artifacts from the current code.
+
+## `41bca722ef33c7e0` (2026-11-10): stored-mask and fixed scanline image operations
+
+- Added `PackedColorMask` and `PackedDualMask` three-input operations with independent stored-channel/alpha coverage, low-word arithmetic, source-colour transformation and destination-alpha retention.
+- `ByteRaster::FixedScanlines` samples explicit16.16 source phases through bounded spans. Pixel profiles include separately quantized coverage products; source RGB adjustment follows corner-key comparison.
+- `ByteRaster::ClippedScanlineSample` combines fixed-grid sampling with directed half-plane or rectangle clips. Geometry and image leases remain independent of native VM state.
+- `FloatingLines` provides single-precision half-biased DDA strokes with ordered signed stored-colour interpolation and bounded cancellation.
+- Registered the corresponding typed specifications and regenerated API artifacts from the current code.
+
+## `dafe34bba251d36c` (2026-11-10): row-specific stored-byte coverage
+
+- `RowBlit.row_math` selects independent stored-byte arithmetic per source row. An omitted or empty array retains the existing uniform `math`; clipping preserves the original row index.
+- `ByteRasterMath::AlphaWeightedSeparateRgb256` scales coverage by a bounded /256 weight and floors the source and destination RGB terms separately, retaining destination alpha.
+- `ByteRasterMath::MaskPiecewiseWrapping256` exposes packed16-bit mask multiplication and RGB product/sum wrapping, with an explicit full-mask branch and unchanged destination alpha.
+- Regenerated API artifacts from the current code.
+
+## `ef6a03ea3de51950` (2026-11-10): source-pass completion and clipped scanline composition
+
+- `AudioPlaybackInfo.first_pass_complete` exposes a mixer-owned first-endpoint latch. Decoder read-ahead, pause and wall time do not set it; native channel queries can distinguish an initial pass from continuing loop playback.
+- `Audio.playbackInfo` and `Audio.nativeChannelInfo` return the same observation.
+- Shared `RowBlit` composes independent horizontal scanline offsets with bounded clipping and cancellation. Byte raster math adds weighted source-mask /256 blending with an opaque shortcut and saturated RGB add/subtract.
+- Regenerated API artifacts from the current code.
+
+## `14da84badb19e7e1` (2026-11-10): source-device input and shared image/path operations
+
+- Added bounded source-device observations: keyboard/pointer samples remain separate from normalized controller buttons and axes. The host publishes the next input generation; native adapters observe it without polling or consuming edges.
+- Added shared quadratic/cubic Bézier paths and per-row image displacement. Box reduction supports sliding window origins and explicit half-word arithmetic.
+- Documented reusable byte-pattern matching, clipped alpha-plane multiplication, index-plane blending, BGR inversion and low-word RGB lookup construction as Rust service entry points.
+- Rust byte-string services also expose fixed Windows CP932 CRT comparison, with reached-unit ordering and canonical encoded aliases.
+- Majiro configuration exposes an explicit native-optical or verified-installed-resources media policy.
+- Regenerated the API artifacts from the current schema without running tests.
+
+## `685454f030910411` (2026-11-10): shared wipe geometry and stored-byte colour operations
+
+- Added explicit scanline, star/heart, zoom, polygon-fragment and random-sample wipe specifications. Random inputs and clocks remain caller-owned; image workers own bounded rasterisation and cancellation.
+- Added luminance-indexed tonal offsets, masked scaled addition/subtraction and per-row packed-word colour offsets. RGB lookups can retain pixels beyond a checked prefix.
+- Rectangle sampling supports independent fixed-point phases on each axis; box reduction supports explicit weighted2x2 windows.
+- Regenerated public API artifacts from the current schema.
+
+## `a209e8a1ef60f853` (2026-11-10): shared integer strokes and image wipes
+
+- Added `ImageEffect::IntegerLines` and `IntegerLine`: clipped RGBA strokes with explicit signed half-biased rounding, aggregate work limits and worker cancellation.
+- `ByteRaster::IntegerWipe` exposes integer scanline, circular/clock, additive, bouncing and rolling-panel transitions over two immutable images. Callers own clocks and parameters; shared workers own pixels, clipping and cancellation.
+- Regenerated the API reference; the recorded schema fingerprint changed from `92012dee4a633ce5` to the value above.
+
+## `92012dee4a633ce5` (2026-11-10): glyph views and shared native drawing/audio
+
+- `Paint.glyph_view.range` selects a half-open positioned-glyph range while
+  retaining its source run's reveal phase and cluster steps. Separate rows can
+  interleave with other Layers without starting independent text clocks.
+- Stored-byte blending adds exact `MaskSeparate256` and
+  `MaskPiecewise256 { weight }` profiles, retaining destination alpha. Shared
+  CPU kernels and destination-reading shader paths use the same integer rules.
+- Shared image workers expose byte raster, axis projection and triangle raster
+  operations. Native surface ownership and clipping policy stay in adapters.
+- Rust audio services add asynchronous source-format/sample queries and reusable
+  PCM packing, spectrum analysis and source-layout inspection. Result leases
+  retain their byte-budget charge until the final reference is released.
+- `GlyphReveal::change_rate` preserves the visible prefix and remaining cluster
+  boundaries when changing an existing reveal clock.
+
+
+## `ad858c719a96dcc0` (2026-11-09): segmented audio and nearest image resize
+
+- Rust `AudioRequest::PlayPlaylist` accepts immutable encoded clips and a bounded
+  `AudioPlaylistNode` program with nested finite or infinite repeats. The shared
+  audio worker handles decoding, gapless segment boundaries and seeking; repeats
+  do not expand source bytes or PCM. Replacement preparation supports the same
+  source type for atomic native-save restoration.
+- `ImageEffect.resize_nearest` uses top-left proportional integer sampling and
+  preserves stored RGBA bytes, including hidden RGB. It is available through the
+  existing shared asynchronous image processing interface.
+- Rust `HostServices::begin_detached_layers_image` composes a bounded candidate
+  of shared Layers without installing it in the live scene. It uses the existing
+  capture presenter, scoped resource generations and asynchronous image jobs;
+  this method adds no reflective script signature.
+
+## `e021971b72099695` (2026-11-09): tinted fixed luminance
+
+- `FixedLumaSpec.tint` (optional `[r, g, b]`, default absent) scales the
+  grouped fixed-point luminance per channel, `(luma*tint)>>8`, before the
+  /256 mix. Absent keeps the grey target, so existing specs are unchanged.
+  System-NNN LAYERSEPIA128 uses it (MUGEN2 MMX kernel 0x4D7EF0).
+- Regenerated with the release API example; crysirror-image fixed_luma unit
+  tests passed. The API docs test suite was not run.
 
 ## `25d0b1766c932638` (2026-11-09): integrated RFVP and optional remote resources
 

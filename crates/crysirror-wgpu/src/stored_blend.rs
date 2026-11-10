@@ -11,7 +11,7 @@ pub(super) fn uses_stored(p: &Primitive) -> bool {
             _ => false,
         }
 }
-pub(super) fn configure(record: &mut FilterGpu, blend: Blend, origin: [f32;2]) {
+pub(super) fn configure(record: &mut FilterGpu, blend: Blend, origin: [f32; 2], opacity: u8) {
     if let Blend::StoredByte {
         mode,
         force_source_opaque,
@@ -36,11 +36,20 @@ pub(super) fn configure(record: &mut FilterGpu, blend: Blend, origin: [f32;2]) {
             M::PinLight => 14,
             M::Scalar256 => 15,
             M::OpaqueScalar256 => 16,
+            M::OpaqueScreen255 => 17,
+            M::OpaqueMultiply255 => 18,
+            M::MaskSeparate256 => 19,
+            M::MaskPiecewise256{..} => 20,
         };
+        // Exact binary fraction; do not overfill the packed flag/opacity word.
+        let kind=match mode {M::MaskPiecewise256{weight}=>id as f32+f32::from(weight)/512.,_=>id as f32};
         record.i = [
-            id as f32,
-            origin[0],origin[1],
-            (u32::from(force_source_opaque)|(u32::from(force_output_opaque)<<1)) as f32,
+            kind,
+            origin[0],
+            origin[1],
+            (u32::from(force_source_opaque)
+                | (u32::from(force_output_opaque) << 1)
+                | (u32::from(opacity) << 8)) as f32,
         ];
     }
 }

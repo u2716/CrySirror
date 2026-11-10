@@ -582,3 +582,55 @@ pub fn sample_scalar_jitter(
     let p = raw.clamp(0., 1.);
     Ok(start + (end - start) * shape.apply(p) + (unit_noise * 2. - 1.) * amplitude * (1. - p))
 }
+
+/// Evaluate an integer-control Bernstein curve with double-precision basis
+/// arithmetic and a single-precision accumulator rounded after each control.
+/// This explicit storage profile differs from De Casteljau interpolation near
+/// integer boundaries. Degree<=12 keeps every signed32-bit factorial defined.
+/// Progress is finite but may lie outside0..1; output truncates toward zero.
+/// The caller's cancellation hook runs before allocation and every coefficient.
+pub fn bernstein_i32_points(
+    controls: &[[i32; 2]], progress: f32, check: &dyn Fn() -> Result<()>,
+) -> Result<[i32; 2]> {
+    ensure!(controls.len() <= 13 && progress.is_finite(), "Bernstein control/progress profile");
+    check()?;
+    if controls.is_empty() { return Ok([0, 0]); }
+    let degree = controls.len()-1;
+    let mut factorial = [1u32; 13];
+    for n in 1..=degree { factorial[n] = factorial[n-1] * n as u32; }
+    let power = |mut base: f64, mut exponent: usize| {
+        let mut product = 1.;
+        while exponent != 0 {
+            if exponent & 1 != 0 { product *= base; }
+            exponent >>= 1;
+            if exponent != 0 { base *= base; }
+        }
+        product
+    };
+    let mut output = [0f32; 2];
+    for (n, control) in controls.iter().enumerate() {
+        check()?;
+        let weight = power(f64::from(progress), n)
+            * (f64::from(factorial[degree]) / (f64::from(factorial[degree-n]) * f64::from(factorial[n])))
+            * power(1.-f64::from(progress),degree-n);
+        for axis in 0..2 { output[axis] = (f64::from(control[axis])*weight+f64::from(output[axis])) as f32; }
+    }
+    ensure!(output.iter().all(|n| n.is_finite() && f64::from(*n)>=f64::from(i32::MIN) && f64::from(*n)<2147483648.),"Bernstein integer output range");
+    check()?;
+    Ok(output.map(|n|n as i32))
+}
+
+#[cfg(test)]
+mod bernstein_tests {
+    use super::*;
+    #[test]
+    fn stored_float_bernstein_preserves_extrapolation_and_truncation() {
+        let points = [[0,0],[0,100],[100,100],[100,0]];
+        assert_eq!(bernstein_i32_points(&points,0.5,&||Ok(())).unwrap(),[50,75]);
+        assert_eq!(bernstein_i32_points(&[[0,0],[3,-3]],0.5,&||Ok(())).unwrap(),[1,-1]);
+        assert_eq!(bernstein_i32_points(&[[10,20],[20,10]],2.,&||Ok(())).unwrap(),[30,0]);
+        assert_eq!(bernstein_i32_points(&[],0.,&||Ok(())).unwrap(),[0,0]);
+        assert!(bernstein_i32_points(&[[0;2];14],0.,&||Ok(())).is_err());
+        assert!(bernstein_i32_points(&points,0.5,&||anyhow::bail!("cancelled")).is_err());
+    }
+}

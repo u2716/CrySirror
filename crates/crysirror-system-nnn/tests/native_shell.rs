@@ -22,6 +22,7 @@ fn names(s: &str) -> Names {
 fn config() -> NativeConfiguration {
     NativeConfiguration {
         main_control: None,
+        chart_setup: None,
         resources: ResourceNames::new("").unwrap(),
         setup: names("dwqPackLevel 1"),
         variable_names: names(""),
@@ -243,6 +244,7 @@ fn original_background_context_uses_native_mode_and_next_without_running_sys() {
         resources: cfg.resources,
         setup: cfg.setup,
         main_control: cfg.main_control,
+        chart_setup: cfg.chart_setup,
         variable_names: cfg.variable_names,
         project: cfg.project,
         commands: cfg.commands,
@@ -405,6 +407,7 @@ fn background_control_returns_render_one_shared_frame_before_resuming_and_keep_s
         resources: cfg.resources,
         setup: cfg.setup,
         main_control: cfg.main_control,
+        chart_setup: cfg.chart_setup,
         variable_names: cfg.variable_names,
         project: cfg.project,
         commands: cfg.commands,

@@ -109,7 +109,12 @@ mod tests {
                 .unwrap();
         c.count = 2;
         assert_eq!(c.clip_rect(), Some([1, 3, 6, 8]));
-        assert!(CharaTransState::parse(&[1, 50, 100, 1], [800, 600]).is_err());
+        // Delayed progress with zero delay is defined by original482070.
+        let mut delayed=CharaTransState::parse(&[1,50,100,1],[800,600]).unwrap();
+        let mut random=crysirror_image::temporal_pattern::PatternRng::msvc(1);
+        assert_eq!(delayed.weight256_with_random(&mut random).unwrap(),256);
+        delayed.count=1;assert_eq!(delayed.weight256_with_random(&mut random).unwrap(),128);
+        assert_eq!(random.draws,0);
         assert!(CharaTransState::parse(&[0; 15], [800, 600]).is_err());
     }
 }

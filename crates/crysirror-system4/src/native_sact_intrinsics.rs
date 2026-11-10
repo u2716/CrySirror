@@ -7,6 +7,7 @@ use crate::{
     vm::{
         ExternalCall, ExternalTarget, Machine,
         external::{Argument, HllReturn},
+        heap::PageKind,
     },
 };
 use anyhow::{Context, Result, bail, ensure};
@@ -17,7 +18,7 @@ pub(crate) fn dispatch(
     owner: ClientId,
     m: &mut Machine,
     call: &ExternalCall,
-    _bridge: &Bridge,
+    bridge: &Bridge,
     host: &mut dyn HostServices,
 ) -> Result<Option<Dispatch>> {
     let ExternalTarget::Hll { library, function } = call.target else {
@@ -29,7 +30,8 @@ pub(crate) fn dispatch(
     if lib.name != b"SACT2"
         || !matches!(
             name.as_slice(),
-            b"GAME_MSG_Get"
+            b"SP_Enum"
+                | b"GAME_MSG_Get"
                 | b"IntToZenkaku"
                 | b"IntToHankaku"
                 | b"StringPopFront"
@@ -40,6 +42,40 @@ pub(crate) fn dispatch(
     }
     let kind = f.return_kind;
     let args = m.hll_arguments(call)?;
+    if name == b"SP_Enum" {
+        ensure!(kind == 10, "native SP_Enum return ABI");
+        let [Argument::HeapReference { kind: 22, slot }] = args.as_slice() else {
+            bail!("native SP_Enum integer array ABI")
+        };
+        let page = m.heap.page(*slot)?;
+        ensure!(
+            matches!(
+                page.kind,
+                PageKind::Array {
+                    kind: 14,
+                    rank: 1,
+                    ..
+                }
+            ),
+            "native SP_Enum array element profile"
+        );
+        let sprites = bridge
+            .sact
+            .as_ref()
+            .filter(|s| s.initialized)
+            .and_then(|s| s.sprites.as_ref())
+            .context("native SP_Enum before SACT")?;
+        sprites.require_owner(owner)?;
+        let numbers = sprites.numbers().collect::<Vec<_>>();
+        ensure!(
+            page.values.len() >= numbers.len(),
+            "native SP_Enum output too short"
+        );
+        let count = numbers.len();
+        m.heap.page_mut(*slot)?.values[..count].copy_from_slice(&numbers);
+        m.complete_hll(call, HllReturn::Scalar(count as i32))?;
+        return Ok(Some(Dispatch::Completed));
+    }
     if name == b"Mouse_SetPos" {
         ensure!(kind == 10, "SACT Mouse_SetPos return ABI");
         let [

@@ -32,6 +32,7 @@ struct Pending {
     work: Vec<Work>,
     paths: Vec<String>,
 }
+#[derive(Clone)]
 struct Policy {
     services: PreparedNativeServices,
     resources: NativeResources,
@@ -47,6 +48,17 @@ pub(crate) struct WindowBinding {
     pub(crate) api_calls: u64,
 }
 impl WindowBinding {
+    pub(crate) fn change_transparency(&mut self, transparency: i32) -> Result<()> {
+        ensure!(
+            self.pending.is_none(),
+            "NNN window preference changed during resource preparation"
+        );
+        Arc::make_mut(&mut self.policy)
+            .services
+            .preferences
+            .window_transparency = transparency;
+        Ok(())
+    }
     pub(crate) fn new(
         services: PreparedNativeServices,
         resources: NativeResources,

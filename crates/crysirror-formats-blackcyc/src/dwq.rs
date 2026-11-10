@@ -9,6 +9,8 @@ pub struct DwqInfo {
     pub size: [u32; 2],
     pub pack: u16,
     pub alpha_suffix: bool,
+    /// Header already-cut margins in native top/left/right/bottom order.
+    pub clip_insets: Option<[i32; 4]>,
     pub png_color_type: Option<u8>,
     pub png_transparency: bool,
 }
@@ -50,6 +52,10 @@ impl Dwq {
             size,
             pack: h.pack,
             alpha_suffix: h.alpha,
+            clip_insets: if h.alpha && matches!(h.pack, 2 | 3 | 7 | 8) {
+                Some([u32at(d, 16)? as i32, u32at(d, 20)? as i32,
+                      u32at(d, 24)? as i32, u32at(d, 28)? as i32])
+            } else { None },
             png_color_type,
             png_transparency,
         })
@@ -72,7 +78,10 @@ impl Dwq {
             ensure!(w > 0 && ht != i32::MIN, "DWQ IF-BMP dimensions");
             [w as u32, ht.unsigned_abs()]
         } else {
-            [u32at(d, 36)?, u32at(d, 40)?]
+            let width = u32at(d, 36)? as i32;
+            let height = u32at(d, 40)? as i32;
+            ensure!(width > 0 && height != i32::MIN, "DWQ signed header dimensions");
+            [width as u32, height.unsigned_abs()]
         };
         rgba_len(size[0], size[1])?;
         Ok(size)
@@ -99,12 +108,8 @@ fn bitmap(d: &[u8], size: [u32; 2], packed: bool, cx: &ImageDecodeContext<'_>) -
         [width as u32, height.unsigned_abs()] == size,
         "DWQ embedded BMP dimensions"
     );
-    if !packed {
-        ensure!(
-            height > 0,
-            "unsupported DWQ plain BMP signed-height profile"
-        );
-    }
+    // Native DWQ loaders retain encoded scanline order for either height
+    // sign. This is deliberately independent of standalone BMP orientation.
     rgba_len(size[0], size[1])?;
     ensure!(u16at(d, 26)? == 1, "DWQ BMP planes");
     let bpp = u16at(d, 28)?;
@@ -118,7 +123,7 @@ fn bitmap(d: &[u8], size: [u32; 2], packed: bool, cx: &ImageDecodeContext<'_>) -
     let mut palette = Vec::new();
     if bpp == 8 {
         let mut count = u32at(d, 46)? as usize;
-        if packed && count == 0 {
+        if count == 0 {
             count = 256;
         }
         ensure!(
@@ -269,7 +274,9 @@ impl ImageFormat for Dwq {
             [image.width, image.height] == size,
             "DWQ embedded codec dimension mismatch"
         );
-        if matches!(h.pack, 2 | 3 | 7) && (h.alpha || matches!(h.pack, 3 | 7)) {
+        // PACKTYPE2/3/7 always carries a mask. The A suffix marks stored
+        // trim margins, not mask existence (CPicture::LoadDWQHeader/LoadMask).
+        if matches!(h.pack, 2 | 3 | 7) {
             let mask = body
                 .get(packed..)
                 .filter(|d| !d.is_empty())
@@ -284,8 +291,8 @@ impl ImageFormat for Dwq {
                         .palette
                         .get(index)
                         .context("DWQ alpha palette index")?;
-                    image.rgba[(y * size[0] as usize + x) * 4 + 3] =
-                        ((u16::from(rgb[0]) + u16::from(rgb[1]) + u16::from(rgb[2])) / 3) as u8;
+                    // LoadMask reads rgbRed, even for a non-grey palette.
+                    image.rgba[(y * size[0] as usize + x) * 4 + 3] = rgb[0];
                 }
             }
         }

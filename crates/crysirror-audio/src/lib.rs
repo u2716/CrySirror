@@ -7,7 +7,9 @@ use crysirror_core::state::{AudioVoice, ObjectId, SceneState};
 use std::{collections::BTreeMap, sync::Arc};
 
 pub mod loop_catalog;
+mod playlist;
 pub mod levels;
+pub mod analysis;
 pub mod buffered;
 pub mod channels;
 mod channel_async;

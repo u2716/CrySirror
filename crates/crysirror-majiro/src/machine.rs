@@ -179,6 +179,12 @@ pub struct Machine {
     next_frame: u64,
     clicks: u8,
     initializer_finished: bool,
+    // Standard MJO read bits are independent of operand/thread contexts and
+    // survive in-process slot loads. Raw native MRK import is a separate,
+    // unsupported profile; these bounded tables start as a fresh session.
+    read_marks: BTreeMap<usize,Vec<u8>>,
+    read_marks_bytes:usize,
+    read_flag:Option<bool>,
 }
 impl Machine {
     pub fn new(program: Arc<Program>) -> Self {
@@ -207,7 +213,39 @@ impl Machine {
             halted: false,
             clicks: 0,
             initializer_finished: false,
+            read_marks:BTreeMap::new(),read_marks_bytes:0,read_flag:Some(false),
         }
+    }
+    /// Native49B00C (40FEF0): the previous value of the primary thread's
+    /// current line bit, before that line was marked read. None remains the
+    /// explicit seam for an unreviewed imported read-mark profile.
+    pub(crate) fn native_read_flag(&self)->Option<bool>{self.read_flag}
+    fn observe_read_line(&mut self,line:u16)->Result<()>{
+        if self.scheduler.current!=0{return Ok(());}
+        let capacity=self.program.read_mark_lines as usize;
+        if capacity==0{
+            // No module table: root-frame line clears the flag; nested frames
+            // preserve their caller's flag, as40FEF0's frame64==-1 branch.
+            if self.frames.len()==1{self.read_flag=Some(false);}
+            return Ok(());
+        }
+        ensure!(line<=i16::MAX as u16,"Majiro negative native read-mark line");
+        let line=line as usize;
+        // The MJO header stores the largest line ID inclusively (for
+        // exampleYUKIIRO先輩ルート060 declares736 and contains LINE736).
+        ensure!(line<=capacity,"Majiro read-mark line exceeds MJO bit capacity");
+        if !self.read_marks.contains_key(&self.active_module){
+            let bytes=capacity/8+1;
+            let total=self.read_marks_bytes.checked_add(bytes).context("Majiro read-mark allocation extent")?;
+            ensure!(total<=16*1024*1024,"Majiro session read-mark byte budget");
+            self.read_marks.insert(self.active_module,vec![0;bytes]);
+            self.read_marks_bytes=total;
+        }
+        let bits=self.read_marks.get_mut(&self.active_module).unwrap();
+        let mask=1u8<<(line&7);
+        self.read_flag=Some(bits[line/8]&mask!=0);
+        bits[line/8]|=mask;
+        Ok(())
     }
     pub fn pending(&self) -> Option<&Event> {
         self.pending.as_ref().map(|p| &p.0)
@@ -349,7 +387,7 @@ impl Machine {
    (0x800,Operand::Integer(n))=>self.push(Value::Integer(*n))?,
    (0x801,Operand::String(b))=>{let mut v=Vec::with_capacity(b.len()+1);v.extend_from_slice(b);v.push(0);self.push(Value::String(v))?},
    (0x803,Operand::Float(n))=>self.push(Value::Float(*n))?,
-   (0x83a,Operand::Line(n))=>self.line=*n,
+   (0x83a,Operand::Line(n))=>{self.observe_read_line(*n)?;self.line=*n;},
    (0x829,Operand::Types(types))=>{ensure!(self.frames.last().unwrap().locals.len()+types.len()<=MAX_LOCALS,"Majiro local budget");let v=types.iter().map(|t|Value::default_type(*t)).collect::<Result<Vec<_>>>()?;self.frames.last_mut().unwrap().locals.extend(v);},
    //40D390 checks the required leading arguments and retains variadic extras.
    (0x836,Operand::Types(types))=>{let a=&self.frames.last().unwrap().arguments;ensure!(types.len()<=a.len() && types.iter().zip(a.iter().rev()).all(|(t,v)|*t==v.kind()),"Majiro function argument signature");},
@@ -362,13 +400,13 @@ impl Machine {
    },
    (0x837,Operand::Variable{flags,hash,offset})=>self.load_element(*flags,*hash,*offset)?,
    (op,Operand::Variable{flags,hash,offset}) if (0x270..=0x322).contains(op)=>self.store_element(*op,*flags,*hash,*offset)?,
-   (0x843,Operand::Jump(target))=>{if let Some(jump)=self.bsel_set_click(*target){next=jump;}},
-   (0x83b,Operand::Jump(target))=>{if let Some(jump)=self.bsel_set_one(0,arrays::CLICK_LEFT,*target){next=jump;}},
-   (0x83d,Operand::Jump(target))=>{if let Some(jump)=self.bsel_set_one(1,arrays::CLICK_RIGHT,*target){next=jump;}},
-   (0x83c,Operand::Jump(target))=>{if let Some(jump)=self.bsel_set_one(2,arrays::CLICK_MIDDLE,*target){next=jump;}},
+   (0x843,Operand::Jump(target))=>{if let Some(jump)=self.bsel_set_click(*target)?{next=jump;}},
+   (0x83b,Operand::Jump(target))=>{if let Some(jump)=self.bsel_set_one(0,arrays::CLICK_LEFT,*target)?{next=jump;}},
+   (0x83d,Operand::Jump(target))=>{if let Some(jump)=self.bsel_set_one(1,arrays::CLICK_RIGHT,*target)?{next=jump;}},
+   (0x83c,Operand::Jump(target))=>{if let Some(jump)=self.bsel_set_one(2,arrays::CLICK_MIDDLE,*target)?{next=jump;}},
    (0x844,Operand::None)=>self.frames.last_mut().unwrap().bsel.click=[0;3],
    (0x845,Operand::Jump(target))=>self.frames.last_mut().unwrap().bsel.aip4=*target,
-   (0x846,Operand::None)=>{if let Some(jump)=self.bsel_aip4(){next=jump;}},
+   (0x846,Operand::None)=>{if let Some(jump)=self.bsel_aip4()?{next=jump;}},
    (0x847,Operand::Jump(target))=>self.frames.last_mut().unwrap().bsel.destructor=*target,
    (op,Operand::Variable{flags,hash,offset}) if (0x1b0..=0x265).contains(op)=>{
     let base=if *op>=0x210{0x210}else{0x1b0};let group=(*op-base)/8;let ty=((*op-base)%8) as u8;
@@ -397,11 +435,7 @@ impl Machine {
    (op @ (0x831..=0x833|0x838|0x839),Operand::Jump(target))=>{
     let value=&self.tail(1)?[0];
     let selector=self.banks[2].get(&0x11f91fd3).context("Majiro case selector absent")?;
-    let take=match (selector,value) {
-     (Value::Integer(a),Value::Integer(b))=>match *op {0x831=>a!=b,0x832=>a>=b,0x833=>a<=b,0x838=>a<b,_=>a>b},
-     (Value::Float(a),Value::Float(b))=>match *op {0x831=>a!=b,0x832=>a>=b,0x833=>a<=b,0x838=>a<b,_=>a>b},
-     _=>bail!("Majiro native case type not connected"),
-    };
+    let take=scalar::case_branch(*op,selector,value)?;
     //Actual40D670/40D710/40D790/40D810/40D890 only peek the
     //comparison value; contrary to the public opcode table they do not pop.
     if take {next=*target;}

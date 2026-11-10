@@ -16,6 +16,7 @@ pub(super) struct Policy {
     slot: i32,
     delayed: bool,
     notice: bool,
+    notice_number: i32,
     get_screen: bool,
     sound: i32,
     error_sound: i32,
@@ -81,6 +82,27 @@ pub(super) fn key_mask(code: i32) -> Result<u64> {
     })
 }
 impl Policy {
+    pub(super) fn selected(slot: i32, sound: i32, error_sound: i32) -> Result<Self> {
+        ensure!((0..10000).contains(&slot), "NNN selected load slot bounds");
+        Ok(Self {
+            key: 0,
+            slot,
+            delayed: false,
+            notice: false,
+            notice_number: 0,
+            get_screen: false,
+            sound,
+            error_sound,
+        })
+    }
+    pub(super) fn data_exists(&self, config: &NativeConfiguration, storage: &dyn ClientStorage) -> Result<bool> {
+        // CheckQuickLoadDataExist uses LoadHeaderAndPic's open-file flag, not
+        // CheckLoadOkVersion; opening the slot is sufficient for menu masking.
+        let path=crate::native_save::slot_path(config,usize::try_from(self.slot)?)?;
+        match storage.open_read(&path) {
+            Ok(_) => Ok(true), Err(Error::NotFound)=>Ok(false), Err(error)=>Err(error.into()),
+        }
+    }
     pub(super) fn prepare(
         config: &NativeConfiguration,
         storage: &dyn ClientStorage,
@@ -123,6 +145,7 @@ impl Policy {
             delayed: setup.integer(b"quickLoadDelay")?.unwrap_or(0) != 0,
             notice: setup.integer(b"noticeFlag")?.unwrap_or(0) != 0
                 && setup.integer(b"quickLoadPrint")?.unwrap_or(enabled) != 0,
+            notice_number: setup.integer(b"loadNoticeNumber")?.unwrap_or(1) - 1,
             get_screen: setup.integer(b"quickLoadGetScreen")?.unwrap_or(0) != 0,
             sound,
             error_sound: setup.integer(b"quickLoadErrorSound")?.unwrap_or(sound),
@@ -135,6 +158,9 @@ enum Slot {
     Ready(Arc<[u8]>),
 }
 struct Pending {
+    notice: Option<i32>,
+    capture: Option<ImageJob>,
+    exit_path: Option<String>,
     triggered: u64,
     read: Option<Task<Slot>>,
     ready: Option<Slot>,
@@ -145,6 +171,32 @@ pub(super) struct Controller {
     pending: Option<Pending>,
 }
 impl Controller {
+    /// An explicit native menu action shares the same controller as key input;
+    /// no synthetic key or VM receipt is created. Capture is admitted now.
+    pub(super) fn admit(policy: Policy, now: u64, client: ClientId, host: &mut dyn HostServices) -> Result<Self> {
+        let capture = if policy.get_screen {
+            Some(host.begin_layer_prefix_image_over(client,SIZE,[i32::MAX,i32::MAX],[0,0,0,255])?)
+        } else { None };
+        let mut controller = Self::selected(policy,now);
+        let pending=controller.pending.as_mut().unwrap();
+        pending.notice=controller.policy.notice.then_some(controller.policy.notice_number);
+        pending.capture=capture;
+        Ok(controller)
+    }
+    pub(super) fn selected(policy: Policy, now: u64) -> Self {
+        Self {
+            policy,
+            pending: Some(Pending {
+                notice: None,
+                capture: None,
+                exit_path: None,
+                triggered: now,
+                read: None,
+                ready: None,
+                request: None,
+            }),
+        }
+    }
     pub(super) fn new(policy: Policy) -> Self {
         Self {
             policy,
@@ -154,13 +206,26 @@ impl Controller {
     pub(super) fn pending(&self) -> bool {
         self.pending.is_some()
     }
+    pub(super) fn exit_path(&self) -> Option<&String> {
+        self.pending.as_ref().and_then(|p| p.exit_path.as_ref())
+    }
+    pub(super) fn restore_notice(&self) -> Option<i32> {
+        self.pending.as_ref().and_then(|p| p.notice)
+    }
     pub(super) fn request(&self) -> Option<OriginalRestoreTicket> {
         self.pending.as_ref().and_then(|pending| pending.request)
     }
-    pub(super) fn after_restore(policy: Policy, request: Option<OriginalRestoreTicket>) -> Self {
+    pub(super) fn after_restore(
+        policy: Policy,
+        request: Option<OriginalRestoreTicket>,
+        notice: Option<i32>,
+    ) -> Self {
         Self {
             policy,
             pending: request.map(|request| Pending {
+                notice,
+                capture: None,
+                exit_path: None,
                 triggered: 0,
                 read: None,
                 ready: None,
@@ -193,15 +258,20 @@ impl InstalledAdapter {
             let Some(_mode) = vm.original_input_mode() else {
                 return Ok(false);
             };
-            ensure!(
-                !load.policy.notice,
-                "NNN quick-load notification requires native Notice actor"
-            );
-            ensure!(
-                !load.policy.get_screen,
-                "NNN quick-load exit-screen capture requires native General capture ownership"
-            );
+            let capture = if load.policy.get_screen {
+                Some(host.begin_layer_prefix_image_over(
+                    self.client,
+                    [800, 600],
+                    [i32::MAX, i32::MAX],
+                    [0, 0, 0, 255],
+                )?)
+            } else {
+                None
+            };
             load.pending = Some(Pending {
+                notice: load.policy.notice.then_some(load.policy.notice_number),
+                capture,
+                exit_path: None,
                 triggered: host.now_ms(),
                 read: None,
                 ready: None,
@@ -216,6 +286,12 @@ impl InstalledAdapter {
                     // The replacement inherits this receipt, never the old
                     // worker/VM. Retire it after the atomic owner installation.
                     host.release_original_save_restore_request(self.client, ticket)?;
+                    if let Some(number) = pending.notice {
+                        self.notice
+                            .as_mut()
+                            .context("NNN quick load notice is not prepared")?
+                            .start(number);
+                    }
                     load.pending = None;
                     return Ok(true);
                 }
@@ -227,8 +303,28 @@ impl InstalledAdapter {
                 }
                 OriginalRestoreStatus::Cancelled => {
                     host.release_original_save_restore_request(self.client, ticket)?;
+                    if let Some(path) = pending.exit_path.take() {
+                        host.release_image_resource(self.client, &path)?;
+                    }
                     load.pending = None;
                     return Ok(true);
+                }
+            }
+        }
+        if let Some(capture) = pending.capture.as_mut() {
+            match capture.poll()? {
+                ImageProcessState::Pending => return Ok(true),
+                ImageProcessState::Failed(error) => {
+                    anyhow::bail!("NNN quick load exit capture: {error}")
+                }
+                ImageProcessState::Ready(image) => {
+                    pending.exit_path = Some(
+                        host.publish_image_resource(self.client, 0x66010001, image)?
+                            .path
+                            .relative()
+                            .to_owned(),
+                    );
+                    pending.capture = None;
                 }
             }
         }
@@ -251,7 +347,7 @@ impl InstalledAdapter {
                     .context("NNN slot worker pool absent")?
                     .spawn(move |cancel| {
                         cancel.check()?;
-                        let path = VfsPath::new(Mount::Save, &format!("data{slot}.sav"))?;
+                        let path = crate::native_save::slot_path(&config,usize::try_from(slot)?)?;
                         let source = match storage.open_read(&path) {
                             Ok(source) => source,
                             Err(Error::NotFound) => return Ok(Slot::Missing),
@@ -284,16 +380,22 @@ impl InstalledAdapter {
                 .vm
                 .as_mut()
                 .unwrap()
-                .poll_system_sound(host, sound - 1)?
+                .poll_system_sound(host, sound)?
         {
             return Ok(true);
         }
         match pending.ready.take().unwrap() {
             Slot::Missing => {
+                if let Some(path) = pending.exit_path.take() {
+                    host.release_image_resource(self.client, &path)?;
+                }
                 load.pending = None;
                 Ok(true)
             }
             Slot::Invalid(error) => {
+                if let Some(path) = pending.exit_path.take() {
+                    host.release_image_resource(self.client, &path)?;
+                }
                 host.append_log(
                     self.client,
                     &format!(

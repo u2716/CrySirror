@@ -19,6 +19,7 @@ pub(super) struct Input {
     pub virtual_cursor: Option<[i32; 2]>,
     pub last_key: i32,
     pub mouse_mode: bool,
+    pub joystick:super::controllers::Joystick,
     previous_down: u64,
     previous_pointer: [i32; 2],
 }
@@ -31,6 +32,7 @@ impl Default for Input {
             virtual_cursor: None,
             last_key: 0,
             mouse_mode: true,
+            joystick:Default::default(),
             previous_down: 0,
             previous_pointer: [0, 0],
         }
@@ -196,13 +198,13 @@ fn i(n: i32) -> Result<Out> {
 }
 
 impl MajiroVm {
-    fn read_audio_exists(&self, stem: &[u8]) -> bool {
+    pub(super) fn read_audio_exists(&self, stem: &[u8]) -> bool {
         let name = encoding_rs::SHIFT_JIS.decode(stem).0.into_owned();
         let base = name.rsplit(['/', '\\']).next().unwrap_or(&name).to_owned();
         let stem = base.rsplit_once('.').map_or(base.as_str(), |(s, _)| s);
         ["wav", "ogg"].iter().any(|ext| self.module_catalog.assets.contains_key(&format!("{stem}.{ext}").to_ascii_lowercase()))
     }
-    fn read_audio(&self, host: &mut dyn HostServices, stem: &[u8]) -> Result<Option<Arc<[u8]>>> {
+    pub(super) fn read_audio(&self, host: &mut dyn HostServices, stem: &[u8]) -> Result<Option<Arc<[u8]>>> {
         let name = encoding_rs::SHIFT_JIS
             .decode_without_bom_handling_and_without_replacement(stem)
             .context("Majiro audio name CP932")?;
@@ -271,6 +273,19 @@ impl MajiroVm {
             .flatten()
             .is_some_and(|info| info.source_playing)
     }
+    /// Shared mixer transport maps to original GetPlayState: active before
+    /// first endpoint=1, active after endpoint=-1, stopped/missing=0. This is
+    /// not a loop-mode query: a loop still reports1 throughout its first pass.
+    pub(super) fn native_audio_state(&self, host: &dyn HostServices, channel: u32) -> Result<i32> {
+        // Stop/fade clears the original native handle immediately, even while
+        // the shared mixer retains its outgoing voice through the fade tail.
+        if !self.audio_names.contains_key(&channel) { return Ok(0); }
+        let info = host.audio_info(self.client, channel).map_err(core_error)?;
+        Ok(match info {
+            Some(info) if info.source_playing => if info.first_pass_complete { -1 } else { 1 },
+            _ => 0,
+        })
+    }
     pub(super) fn music_gain(&self) -> f32 {
         self.volume("MusicVolume")
     }
@@ -292,6 +307,17 @@ impl MajiroVm {
         returns: bool,
         host: &mut dyn HostServices,
     ) -> Result<Option<Out>> {
+        if let Some(output) = self.native_flags_native(hash, a, returns)? {
+            m.acknowledge(output)?;
+            return Ok(Some(Out::Done));
+        }
+        // Native fast-mode and input-mask policies must be handled before
+        // the original utility dispatch. They own their state and result;
+        // successful synchronous controls acknowledge this exact VM call.
+        if let Some(output) = self.fast_mode_native(m, hash, a, returns, host)? {
+            m.acknowledge(output)?;
+            return Ok(Some(Out::Done));
+        }
         let now = host.now_ms() as u32;
         let out = match hash {
             // ---------------------------------------------------- arrays
@@ -324,16 +350,17 @@ impl MajiroVm {
             // ---------------------------------------------------- strings
             0x06906970 | 0x25401a1f => {
                 let bytes = cstr(a.first());
-                let n = int(a, 1).max(0) as usize;
-                let chars = mb_chars(&bytes);
-                if chars.len() <= n {
+                // YUKIIRO4023D0/402450 compare CRT size_t, not signed
+                // lengths. Native find('.')==-1 must preserve the whole
+                // extensionless image name instead of turning it into "".
+                let n = int(a, 1) as u32 as usize;
+                let context=crate::byte_policy::context()?;
+                let count=context.character_count(&bytes)?;
+                if count <= n {
                     return Ok(Some(s(bytes)?));
                 }
-                let part: Vec<u8> = if hash == 0x06906970 {
-                    chars[..n].concat()
-                } else {
-                    chars[chars.len() - n..].concat()
-                };
+                let start=if hash==0x06906970{0}else{count-n};
+                let part=context.substring(&bytes,start as i32,n as i32)?;
                 s(part)
             }
             0x8aef9167 => {
@@ -477,8 +504,7 @@ impl MajiroVm {
                 m.kill_thread(current)?;
                 Ok(Out::Done)
             }
-            0x818a4b92 | 0xfac4f361 | 0xb7e3e81c | 0x9ef1ddc3 | 0x86f0f608 | 0x4b306c5c | 0x3eabf498
-            | 0xaccf4004 | 0x0542e1b7 | 0x9143dc9e | 0x95ff28f2 => i(0),
+            0x9143dc9e | 0x95ff28f2 => i(0),
             0x307f28bc => {
                 if !self.replay_step(m, int(a, 0), returns, host)? {
                     return Ok(Some(Out::Wait));
@@ -524,9 +550,8 @@ impl MajiroVm {
                 }
                 i(0)
             }
-            0x777aa894 | 0x838de99b | 0xc9b362d0 => {
+            0x838de99b | 0xc9b362d0 => {
                 let channel = match hash {
-                    0x777aa894 => CH_SOUND,
                     0x838de99b => CH_SOUND + 2,
                     _ => CH_SOUND + 3,
                 };
@@ -552,7 +577,7 @@ impl MajiroVm {
                 }
                 i(0)
             }
-            0xc21f8b49 | 0x44bc7555 | 0xab13be44 | 0xbc42ca9a => i(0),
+            0xab13be44 => i(0),
             0x1204d7e8 => {
                 // Wait until click/skip inputs are released.
                 let held = [KEY_LEFT_CLICK, KEY_RIGHT_CLICK, KEY_MIDDLE].iter().any(|k| self.input.held[*k]);
@@ -576,7 +601,6 @@ impl MajiroVm {
                 let exists = self.read_audio_exists(&name);
                 i(i32::from(exists))
             }
-            0x60085fa4 => i(-1),
             // ---------------------------------------------------- input
             0x892e9b20 | 0x008acbc0 => {
                 let bits = i32::from(self.input.take(KEY_WHEEL_UP)) * 8
@@ -707,7 +731,7 @@ impl MajiroVm {
                 }
                 i(0)
             }
-            0x926c13e5 | 0x83a53ffa => {
+            0x926c13e5 => {
                 self.stop_audio(host, CH_SOUND, int(a, 0).max(0) as f32);
                 i(0)
             }
@@ -734,17 +758,30 @@ impl MajiroVm {
                 s(name)
             }
             // ---------------------------------------------------- voice
-            0x90d5298a | 0x32d0236c => {
+            0x90d5298a => {
+                ensure!(!a.is_empty(), "Majiro direct voice requires a filename");
                 let name = cstr(a.first());
-                self.stop_audio(host, CH_VOICE, 0.0);
-                if !name.is_empty() {
-                    let gain = self.volume("VoiceVolume");
-                    self.play_audio(host, CH_VOICE, &name, None, false, PcmBus::Voice, gain, 0.0)?;
-                    self.audio_names.insert(CH_VOICE, name);
-                }
+                let repeat = a.get(1).map(Value::integer).transpose()?.unwrap_or(0);
+                //447D90's direct voice bypasses console gender/skip policy;
+                //the shared native helper preserves NW, transport and gains.
+                self.play_native_voice(&name, repeat, None, host)?;
                 i(0)
             }
-            0xf1097a07 => i(i32::from(self.audio_playing(host, CH_VOICE))),
+            // YUKIIRO447AF0/448020/448870/449110/4499B0/44A550;
+            // classic43A790 and early4268B0 share the Sound3 wrapper.
+            // GetPlayState4614F0 uses active+first-pass-complete, not looping.
+            0xf8d8925b | 0xf1097a07 | 0x777aa894 | 0xa0b0fead | 0x77527ef5 | 0x3d6cf5be => {
+                ensure!(a.is_empty(), "Majiro channel playback state ABI");
+                let channel = match hash {
+                    0xf8d8925b => CH_MUSIC,
+                    0xf1097a07 => CH_VOICE,
+                    0x777aa894 => CH_SOUND,
+                    0xa0b0fead => CH_SOUND + 1,
+                    0x77527ef5 => CH_SOUND + 2,
+                    _ => CH_SOUND + 3,
+                };
+                i(self.native_audio_state(host, channel)?)
+            }
             0xd1f672c7 => {
                 if self.audio_playing(host, CH_VOICE) && m.take_clicks() == 0 {
                     return Ok(Some(Out::Wait));

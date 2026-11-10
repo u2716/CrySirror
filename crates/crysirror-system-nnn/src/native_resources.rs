@@ -2,6 +2,27 @@
 //! Original resource naming policy. Readers/codecs/mounts remain host-owned.
 use anyhow::{ensure, Result};
 
+/// Open an installed asset with the original Win32 name semantics: an exact
+/// name first, then the unique ASCII case-insensitive name within the same
+/// client capability (MUGEN2 ships `init2/printmessage.fxf` for the
+/// `PrintMessage` mode). Absence stays `NotFound`; ambiguity is an error.
+pub fn open_installed_asset(
+    storage: &dyn crysirror_core::service::ClientStorage,
+    path: &crysirror_core::path::VfsPath,
+) -> crysirror_core::Result<std::sync::Arc<dyn crysirror_core::service::AssetReader>> {
+    match storage.open_asset(path) {
+        Err(crysirror_core::Error::NotFound) => {
+            match crysirror_resource::capability_lookup::resolve_ascii_case_insensitive(storage, path)
+                .map_err(|error| crysirror_core::Error::Io(format!("{error:#}")))?
+            {
+                Some(found) if &found != path => storage.open_asset(&found),
+                _ => Err(crysirror_core::Error::NotFound),
+            }
+        }
+        other => other,
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ResourceNames {
     root: String,

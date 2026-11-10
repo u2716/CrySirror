@@ -36,6 +36,7 @@ impl NativeAudio {
         &mut self,
         machine: &mut Machine,
         call: &ExternalCall,
+        bridge: &Bridge,
         host: &mut dyn HostServices,
     ) -> Result<Option<Dispatch>> {
         let Some(pending) = self.pending.as_ref() else {
@@ -101,10 +102,8 @@ impl NativeAudio {
                 AudioPreparePhase::Pending => {
                     return Ok(Some(Dispatch::WaitUntil(host.now_ms().saturating_add(1))))
                 }
-                AudioPreparePhase::Failed => anyhow::bail!(
-                    "System4 shared audio resource: {}",
-                    status.error.as_deref().unwrap_or("missing failure")
-                ),
+                AudioPreparePhase::Failed if key.kind==Kind::Music => return self.failed_music(machine,call,key,status.error.as_deref().unwrap_or("missing failure"),bridge,host).map(Some),
+                AudioPreparePhase::Failed => anyhow::bail!("System4 shared audio resource: {}",status.error.as_deref().unwrap_or("missing failure")),
                 AudioPreparePhase::Ready => {}
             }
             let resource = status
@@ -167,10 +166,8 @@ impl NativeAudio {
                     AudioPreparePhase::Pending => {
                         return Ok(Some(Dispatch::WaitUntil(host.now_ms().saturating_add(1))))
                     }
-                    AudioPreparePhase::Failed => anyhow::bail!(
-                        "System4 canonical source preparation: {}",
-                        status.error.as_deref().unwrap_or("missing failure")
-                    ),
+                    AudioPreparePhase::Failed if key.kind==Kind::Music => return self.failed_music(machine,call,key,status.error.as_deref().unwrap_or("missing failure"),bridge,host).map(Some),
+                    AudioPreparePhase::Failed => anyhow::bail!("System4 canonical source preparation: {}",status.error.as_deref().unwrap_or("missing failure")),
                     AudioPreparePhase::Ready => {}
                 }
                 if let Some(Pending::Warm { ready, .. }) = self.pending.as_mut() {

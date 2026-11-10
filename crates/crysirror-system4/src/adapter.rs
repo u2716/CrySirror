@@ -40,6 +40,8 @@ pub struct Bridge {
     pub input: crate::input::Input,
     pub assets: Option<std::sync::Arc<crate::assets::Assets>>,
     pub(crate) buffered_input: bool,
+    /// Original System40.ini UseJoypad; None until bootstrap completes.
+    pub(crate) joypad_enabled: Option<bool>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Dispatch {
@@ -123,6 +125,26 @@ impl Bridge {
                 }
                 if l.name == b"SACT2" {
                     let client = client.context("SACT2 requires explicit client scope")?;
+                    if f.name.starts_with(b"Joypad") {
+                        // UseJoypad=false: the original engine has no pad
+                        // device, so there are no key states, sticks or
+                        // vibration. An enabled pad needs shared gamepad mapping.
+                        ensure!(
+                            self.joypad_enabled == Some(false),
+                            "System4 enabled-joypad profile requires shared gamepad mapping"
+                        );
+                        let returned = match (f.name.as_slice(), f.return_kind, args.as_slice()) {
+                            (b"Joypad_ClearKeyDownFlag", 0, [Argument::Scalar { kind: 10, .. }]) => HllReturn::Void,
+                            (b"Joypad_IsKeyDown", 10, [Argument::Scalar { kind: 10, .. }, Argument::Scalar { kind: 10, .. }]) => HllReturn::Scalar(0),
+                            (b"Joypad_GetNumof", 10, []) => HllReturn::Scalar(0),
+                            (b"Joypad_GetAnalogStickStatus", 47, [Argument::Scalar { kind: 10, .. }, Argument::Scalar { kind: 10, .. }, Argument::Reference { kind: 19, .. }, Argument::Reference { kind: 19, .. }]) => HllReturn::Scalar(0),
+                            (b"Joypad_GetDigitalStickStatus", 47, [Argument::Scalar { kind: 10, .. }, Argument::Scalar { kind: 10, .. }, Argument::Reference { kind: 51, .. }, Argument::Reference { kind: 51, .. }, Argument::Reference { kind: 51, .. }, Argument::Reference { kind: 51, .. }]) => HllReturn::Scalar(0),
+                            (b"JoypadQuake_Set", 0, [Argument::Scalar { kind: 10, .. }, Argument::Scalar { kind: 10, .. }, Argument::Scalar { kind: 10, .. }]) => HllReturn::Void,
+                            _ => bail!("unsupported no-joypad SACT2 {} ABI", String::from_utf8_lossy(&f.name)),
+                        };
+                        m.complete_hll(call, returned)?;
+                        return Ok(Dispatch::Completed);
+                    }
                     if f.return_kind == 10 {
                         let scalars = args
                             .iter()
@@ -152,6 +174,7 @@ impl Bridge {
                         b"Key_IsDown"
                             | b"Key_ClearFlag"
                             | b"Key_ClearFlagNoCtrl"
+                            | b"Key_ClearFlagOne"
                             | b"Mouse_GetPos"
                             | b"Mouse_GetWheel"
                             | b"Mouse_ClearWheel"
@@ -177,6 +200,10 @@ impl Bridge {
                             }
                             (b"Key_ClearFlagNoCtrl", 0, []) => {
                                 input.clear(true);
+                                HllReturn::Void
+                            }
+                            (b"Key_ClearFlagOne", 0, [Argument::Scalar {kind:10,bits:key}]) => {
+                                input.clear_one(*key)?;
                                 HllReturn::Void
                             }
                             (b"Mouse_ClearWheel", 0, []) => {

@@ -1,7 +1,7 @@
 //! Stored-byte ramps with explicit single-precision intermediates and
 //! half-away-from-zero byte rounding. Alpha stays owned by the source image.
 use super::{RgbLookup, RgbLookupProfile};
-use anyhow::{ensure, Result};
+use anyhow::{Result, ensure};
 impl RgbLookup {
     pub fn identity() -> Self {
         Self::uniform((0..=255u8).collect())

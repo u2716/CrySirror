@@ -66,6 +66,13 @@ pub(crate) struct NativeSettings {
     pub effect_speed: i32,
     pub moji_speed: i32,
     pub auto_speed: i32,
+    pub voice_panning: i32,
+    pub ctrl_keydef: i32,
+    pub neko_menu: i32,
+    pub voice_skip_def: i32,
+    pub voice_volume: i32,
+    pub talk_male: i32,
+    pub talk_female: i32,
     pub loaded_portable_file: bool,
     pub commits: u64,
 }
@@ -154,26 +161,48 @@ impl NativeSettings {
             );
         }
         registry.values = canonical;
-        let read = |name: &str, env_name: &str| -> Result<i32> {
+        let read = |name: &str, env_name: &str, fallback: i32| -> Result<i32> {
             let default = env
                 .get(env_name)
                 .map(|s| numeric(s))
                 .transpose()?
-                .unwrap_or(1000);
+                .unwrap_or(fallback);
             registry
                 .values
                 .get(name)
                 .map(|s| numeric(s))
                 .unwrap_or(Ok(default))
         };
-        let effect_speed = read("effectspeed", "EFFECTSPEED")?;
-        let moji_speed = read("mojispeed", "MOJISPEED")?;
-        let auto_speed = read("autospeed", "AUTOSPEED")?;
+        let effect_speed = read("effectspeed", "EFFECTSPEED", 1000)?;
+        let moji_speed = read("mojispeed", "MOJISPEED", 1000)?;
+        let auto_speed = read("autospeed", "AUTOSPEED", 1000)?;
+        // 4429A0 caches registry VoicePanning, falling back through42D5B0
+        // to ENV ISVOICEPANNING (default0). Generic registry writes retain
+        // their existing separate current-value policy, as for the speeds.
+        let voice_panning = read("voicepanning", "ISVOICEPANNING", 0)?;
+        let voice_volume = read("voicevolume", "VOICEVOL", 1000)?;
+        let talk_male = read("talkmale", "ISTALKMALE", 1)?;
+        let talk_female = read("talkfemale", "ISTALKFEMALE", 1)?;
+        // Classic423C30/423930 cache ENV directly, independently of REG_SZ
+        // settings. CTRLKEYDEF selects the original Ctrl mode1 versus4.
+        let environment_integer = |name: &str| -> Result<i32> {
+            env.get(name).map(|s| numeric(s)).transpose().map(|v| v.unwrap_or(0))
+        };
+        let ctrl_keydef = environment_integer("CTRLKEYDEF")?;
+        let neko_menu = environment_integer("NEKOMENU")?;
+        let voice_skip_def = environment_integer("VOICESKIPDEF")?;
         Ok(Self {
             registry,
             effect_speed,
             moji_speed,
             auto_speed,
+            voice_panning,
+            ctrl_keydef,
+            neko_menu,
+            voice_skip_def,
+            voice_volume,
+            talk_male,
+            talk_female,
             loaded_portable_file: bytes.is_some(),
             commits: 0,
         })

@@ -49,10 +49,9 @@ impl SavedAudioWork {
 }
 impl NativeSaveFile {
     pub(crate) fn audio_work(&self) -> Result<SavedAudioWork> {
-        let status = self
-            .blocks
-            .get(2)
-            .context("NNN saved audio status absent")?;
+        Self::status_audio_work(self.blocks.get(2).context("NNN saved audio status absent")?)
+    }
+    pub(crate) fn status_audio_work(status:&crate::native_save::SaveBlock)->Result<SavedAudioWork> {
         ensure!(
             status.code == 2 && status.payload.len() == 7056,
             "NNN saved audio original status ABI"
@@ -342,6 +341,7 @@ mod music_repetition_tests {
         for (count, looping, passes) in [
             (0, true, None),
             (1, false, None),
+            (-1, false, None),
             (2, true, Some(2)),
             (i32::MAX, true, Some(i32::MAX as u32)),
         ] {
@@ -361,7 +361,6 @@ mod music_repetition_tests {
                 (looping, passes)
             );
         }
-        assert!(policy.music(&[1, -1], &names, false).is_err());
     }
 }
 
@@ -520,6 +519,9 @@ impl SavedAudioPreparation {
                 let source = resolver(&source, &cancel)?;
                 cancel.check()?;
                 let request = match source {
+                    crate::resource_bridge::ResolvedAudio::Playlist(source) => {
+                        plan.playlist_request(source)?
+                    }
                     crate::resource_bridge::ResolvedAudio::Asset(path) => {
                         plan.asset_request(path)?
                     }

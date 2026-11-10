@@ -13,6 +13,14 @@ pub const MAX_EFFECT_PIXELS: u64 = 4_194_304;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ImageEffect {
+    /// Stored RGB neighbour differences with independently truncated weights.
+    NeighborRelief { spec: crate::neighbor_relief::NeighborRelief },
+    /// Three-input RGB-mask coverage with explicit packed-word arithmetic.
+    PackedColorMask { spec: crate::packed_color_mask::PackedColorMask },
+    /// Two independent alpha masks, optional RGB transform and packed products.
+    PackedDualMask { spec: crate::packed_dual_mask::PackedDualMask },
+    /// Single-precision half-biased DDA with signed stored-colour interpolation.
+    FloatingLines { lines:Vec<crate::floating_lines::FloatingLine> },
     ///One checked lookup for the stored coverage byte; RGB remains unchanged.
     AlphaLookup {
         table: Vec<u8>,
@@ -101,6 +109,11 @@ pub enum ImageEffect {
     LumaLookup {
         spec: crate::luma_lookup::LumaLookup,
     },
+    LumaOffsetLookup {
+        spec: crate::tonal_balance::LumaOffsetLookup,
+    },
+    RowWordAdd {spec:crate::row_color::RowWordAdd},
+    ShiftRows {spec:crate::shift_rows::ShiftRows},
     /// Source stretched to `size`, tiled and redrawn under a centred affine.
     TiledTransform {
         spec: crate::tiled_transform::TiledTransform,
@@ -167,6 +180,8 @@ pub enum ImageEffect {
     IntegerRaster {
         spec: crate::integer_raster::IntegerRaster,
     },
+    /// Checked byte drawing and sampling over two immutable engine images.
+    ByteRaster { spec: crate::byte_raster::ByteRaster },
     /// Replace coverage while retaining all stored RGB bytes. Useful for
     /// opaque XRGB resources and explicitly authored mask normalisation.
     OverrideAlpha {
@@ -215,6 +230,8 @@ pub enum ImageEffect {
     Vector {
         path: crate::vector::VectorPath,
     },
+    /// Stored RGBA integer DDA strokes with explicit signed half-bias rounding.
+    IntegerLines { lines:Vec<crate::integer_lines::IntegerLine> },
     /// Map the whole source into a convex quad, keeping canvas dimensions.
     Perspective {
         quad: [[f32; 2]; 4],
@@ -284,6 +301,8 @@ pub enum ImageEffect {
         horizontal: bool,
         vertical: bool,
     },
+    /// Top-left proportional nearest sampling using exact integer quotients.
+    ResizeNearest { width: u32, height: u32 },
     /// Bilinear resize of straight RGBA to a new size.
     Resize {
         width: u32,
@@ -334,6 +353,9 @@ impl ImageEffect {
             Self::IntegerColorMatrix { spec } => spec.validate()?,
             Self::IntegerColorModulation { spec } => spec.validate()?,
             Self::LumaLookup { spec } => spec.validate()?,
+            Self::LumaOffsetLookup { spec } => spec.validate()?,
+            Self::RowWordAdd{spec}=>spec.validate()?,
+            Self::ShiftRows{spec}=>spec.validate()?,
             Self::BoxReduce { spec } => spec.validate()?,
             Self::RandomRuns { spec } => spec.validate()?,
             Self::TruncatedRowBlur { spec } => spec.validate()?,
@@ -351,6 +373,11 @@ impl ImageEffect {
             Self::AlphaStamps { spec } => spec.validate()?,
             Self::RowDeform { spec } => spec.validate()?,
             Self::IntegerRaster { spec } => spec.validate()?,
+            Self::ByteRaster { spec } => spec.validate()?,
+            Self::PackedColorMask{spec}=>spec.validate()?,
+            Self::PackedDualMask{spec}=>spec.validate()?,
+            Self::FloatingLines{lines}=>crate::floating_lines::validate(lines)?,
+            Self::NeighborRelief{spec}=>spec.validate()?,
             Self::StoredMaskBlend { spec } => spec.validate()?,
             Self::AlphaPlanePair { spec } => spec.validate()?,
             Self::RgbLookup { spec } => spec.validate()?,
@@ -364,6 +391,7 @@ impl ImageEffect {
             Self::MaskedPairBlend { spec } => spec.validate()?,
             Self::Transition { spec } => spec.validate()?,
             Self::Vector { path } => path.validate()?,
+            Self::IntegerLines { lines } => crate::integer_lines::validate(lines)?,
             Self::Perspective { quad } => crate::warp::validate_quad(quad)?,
             Self::Gamma {
                 gamma,
@@ -409,7 +437,7 @@ impl ImageEffect {
                 );
                 ensure!(area.iter().all(|v| v.abs() <= 8192), "box blur area bounds");
             }
-            Self::Resize { width, height } => ensure!(
+            Self::Resize { width, height } | Self::ResizeNearest {width,height} => ensure!(
                 *width > 0
                     && *height > 0
                     && u64::from(*width) * u64::from(*height) <= MAX_EFFECT_PIXELS,
@@ -503,6 +531,8 @@ impl ImageSurface {
                 | ImageEffect::AlphaStamps { .. }
                 | ImageEffect::CopyChannel { .. }
                 | ImageEffect::AlphaPlanePair { .. }
+                | ImageEffect::PackedColorMask{..}
+                | ImageEffect::PackedDualMask{..}
                 | ImageEffect::StoredMaskBlend { .. }
                 | ImageEffect::Transition { .. }
                 | ImageEffect::SineRowCopy { .. }
@@ -510,6 +540,7 @@ impl ImageSurface {
                 | ImageEffect::AlphaClipRect { .. }
                 | ImageEffect::MaskedPairBlend { .. }
                 | ImageEffect::IntegerRaster { .. }
+                | ImageEffect::ByteRaster { .. }
         ) {
             anyhow::bail!("image effect requires its multi-image context")
         }
@@ -546,6 +577,11 @@ impl ImageSurface {
         if let ImageEffect::IntegerColorModulation { spec } = effect {
             return spec.apply(self, check);
         }
+        if let ImageEffect::LumaOffsetLookup { spec } = effect {
+            return spec.apply(self,check);
+        }
+        if let ImageEffect::RowWordAdd{spec}=effect{return spec.apply(self,check);}
+        if let ImageEffect::ShiftRows{spec}=effect{return spec.apply(self,check);}
         if let ImageEffect::LumaLookup { spec } = effect {
             return spec.apply(self, check);
         }
@@ -591,8 +627,24 @@ impl ImageSurface {
         if let ImageEffect::Vector { path } = effect {
             return self.draw_vector(path, check);
         }
+        if let ImageEffect::FloatingLines{lines}=effect{return self.floating_lines(lines,check);}
+        if let ImageEffect::NeighborRelief{spec}=effect{return spec.apply(self,check);}
+        if let ImageEffect::IntegerLines { lines } = effect { return self.integer_lines(lines,check); }
         if let ImageEffect::Perspective { quad } = effect {
             return self.perspective(*quad, check);
+        }
+        if let ImageEffect::ResizeNearest {width,height} = effect {
+            let mut output=ImageSurface::filled(*width,*height,[0;4])?;
+            for y in 0..*height {
+                check()?;let sy=u64::from(y)*u64::from(self.height)/u64::from(*height);
+                for x in 0..*width {
+                    let sx=u64::from(x)*u64::from(self.width)/u64::from(*width);
+                    let from=((sy*u64::from(self.width)+sx)*4) as usize;
+                    let to=((y as usize*(*width as usize)+x as usize)*4) as usize;
+                    output.rgba[to..to+4].copy_from_slice(&self.rgba[from..from+4]);
+                }
+            }
+            return Ok(output);
         }
         if let ImageEffect::Resize { width, height } = effect {
             return self.resized(*width, *height, check);
@@ -1006,5 +1058,18 @@ mod tests {
             .unwrap();
         // Mean alpha 127; premultiplied red 255*256>>8 = 255 -> 127 -> 255*127/127.
         assert_eq!(&out.rgba[0..4], &[255, 0, 0, 127]);
+    }
+}
+
+#[cfg(test)]
+mod nearest_resize_tests {
+    use super::*;
+    #[test]
+    fn proportional_nearest_keeps_top_left_phase_and_stored_alpha() {
+        let source=ImageSurface{width:3,height:1,rgba:vec![10,20,30,0,40,50,60,127,70,80,90,255]};
+        let result=source.apply_effect(&ImageEffect::ResizeNearest{width:5,height:2}).unwrap();
+        let row=vec![10,20,30,0,10,20,30,0,40,50,60,127,40,50,60,127,70,80,90,255];
+        assert_eq!(result.rgba,[row.clone(),row].concat());
+        assert!(source.apply_effect(&ImageEffect::ResizeNearest{width:0,height:2}).is_err());
     }
 }

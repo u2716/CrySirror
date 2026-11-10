@@ -15,6 +15,19 @@ pub(crate) struct BridgeRestoreSeed {
     pub release_images: Vec<String>,
 }
 impl Bridge {
+    pub(crate) fn restore_original_auxiliary(
+        &mut self,
+        file: &NativeSaveFile,
+        profile: &crate::native_save::LegacySaveProfile,
+    ) -> Result<()> {
+        let auxiliary = crate::native_save::AuxiliaryState::restore_using(file, profile, &self.auxiliary)?;
+        self.auxiliary = auxiliary;
+        Ok(())
+    }
+    pub(crate) fn bind_saved_cutin(&self,text:&mut TextRestoreSeed)->Result<()> {
+        if self.cutin_enabled {text.bind_cutin(self.auxiliary.cutin_mode,&self.auxiliary.cutin_rows)?;}
+        Ok(())
+    }
     pub(crate) fn client(&self) -> ClientId {
         self.client
     }
@@ -44,11 +57,20 @@ impl Bridge {
         Ok(())
     }
     pub(crate) fn original_restore_seed(&self) -> Result<BridgeRestoreSeed> {
+        self.original_restore_seed_at_boundary(false)
+    }
+    /// Called only after the adapter has verified an idle calculated TITLE
+    /// mode. The detached replacement becomes a foreground PRINT/SELECT actor;
+    /// it does not inherit the discarded Title reader or its read-mark policy.
+    pub(crate) fn idle_title_restore_seed(&self) -> Result<BridgeRestoreSeed> {
+        self.original_restore_seed_at_boundary(true)
+    }
+    fn original_restore_seed_at_boundary(&self, idle_title: bool) -> Result<BridgeRestoreSeed> {
         ensure!(
             !self.dependency_pending()
                 && self.draw_wait.is_none()
                 && self.overlap_wait.is_none()
-                && self.background_read_marks.is_none(),
+                && (idle_title || self.background_read_marks.is_none()),
             "NNN original restore requires an idle foreground resource boundary"
         );
         let text = self.text_restore_seed()?;
@@ -57,10 +79,20 @@ impl Bridge {
         // Bounded native RAM records and immutable tables/leases only. No live
         // task, VM, mixer, Scene or composed software screen is cloned.
         bridge.metadata = self.metadata.clone();
+        bridge.auxiliary = self.auxiliary.clone();
+        bridge.chart_runtime = self.chart_runtime.clone();
+        bridge.simple_wipe_tables = self.simple_wipe_tables.clone();
+        bridge.rainbow_palette=self.rainbow_palette.clone();
+        bridge.get_buffer = self.get_buffer.clone();
+        bridge.once_printed=self.once_printed.clone();
+        bridge.user_gaiji_paths=self.user_gaiji_paths.clone();
         bridge.functions = self.functions.clone();
         bridge.system_file = self.system_file.clone();
         bridge.system_script = self.system_script;
         bridge.must_set_film = self.must_set_film;
+        bridge.film_skip_button_configured=self.film_skip_button_configured;
+        bridge.film_button=self.film_button.as_ref().map(|button|button.detached()).transpose()?;
+        bridge.cutin_enabled=self.cutin_enabled;
         bridge.must_set_cg = self.must_set_cg;
         bridge.must_set_music = self.must_set_music;
         bridge.off_layer_dont_set_cg = self.off_layer_dont_set_cg;
@@ -99,7 +131,10 @@ impl Bridge {
         bridge.actor_clock_at = None;
         bridge.overlap_captures = self.overlap_captures;
         bridge.frame_canvas_created = self.frame_canvas_created;
+        bridge.voice_policy=self.voice_policy.clone();
         bridge.overlap_frame = self.overlap_frame.clone();
+        bridge.general_enter_frame=self.general_enter_frame.clone();
+        bridge.cg_difference_picture=self.cg_difference_picture.clone();
         bridge.pattern_cache = self.pattern_cache.clone();
         bridge.images = Some(
             self.images
@@ -120,11 +155,16 @@ impl Bridge {
             remove_layers.insert(self.bindings.effect_base + u32::from(self.bindings.layers) + 1);
         }
         remove_layers.extend(self.text.as_ref().unwrap().restored_layer_ids());
-        let (selection_layers, remove_ui) = self.selection.as_ref().unwrap().restored_node_ids();
+        let (selection_layers, mut remove_ui) = self.selection.as_ref().unwrap().restored_node_ids();
         remove_layers.extend(selection_layers);
         let mut release_images: BTreeSet<String> = self.image_paths.values().cloned().collect();
+        if let Some(button)=&self.film_button {
+            let (layers,ui)=button.cleanup_ids();remove_layers.extend(layers);remove_ui.extend(ui);
+            if let Some(path)=button.owned_path(){release_images.insert(path.to_owned());}
+        }
         release_images.extend(self.display_path.iter().cloned());
         release_images.extend(self.post_text_path.iter().cloned());
+        if let Some(path)=self.selection.as_ref().and_then(|s|s.owned_special_image()){release_images.insert(path.to_owned());}
         if let Some(binding) = &self.window_binding {
             release_images.extend(binding.owned_paths().iter().cloned());
         }
@@ -142,55 +182,62 @@ impl Bridge {
         })
     }
     pub(crate) fn restore_native_status(&mut self, file: &NativeSaveFile) -> Result<()> {
-        // Older53b630 has none of later branch's volume/font/rename-layer
-        // extensions. These native producer profiles need their real consumers.
-        self.script_window_number = file.status_word(180)?;
-        self.configuration_mask = file.status_word(476)?;
-        ensure!(
-            file.status_word(484)? == 0,
-            "NNN saved auto-message timing requires native consumer"
-        );
-        ensure!(
-            file.status_word(477)? == 0,
-            "NNN saved film-skip button requires native UI consumer"
-        );
-        self.message_window_visible = file.status_word(44)? != 0;
-        //53b630 restores these by calling52eea0/52eee0. Those legacy
-        //setters only retain the raw values; no pointer-resource operation.
-        self.script_cursor_number = file.status_word(181)?;
-        self.script_mouse_number = file.status_word(182)?;
-        self.auto_message = file.status_word(484)?;
-        self.cannot_click = Some(file.status_word(485)? != 0);
-        self.cannot_skip = file.status_word(486)?;
-        let position = file.position()?;
+        self.restore_native_status_block(&file.blocks[2])
+    }
+    /// Check the whole native policy before chart replay can change audible or
+    /// visible state. Full-slot loads use this on a detached bridge as well.
+    pub(crate) fn validate_native_status_block(&self, status: &crate::native_save::SaveBlock) -> Result<()> {
+        let saved = NativeStatus::new(status)?;
+        ensure!(saved.word(180) == 0 || self.window_binding.is_some(),
+            "NNN saved window variant capability not configured");
+        ensure!(saved.word(484) <= 5, "NNN saved automatic message speed table bounds");
+        ensure!(saved.word(477) == 0 || !self.film_skip_button_configured || self.film_button.is_some(),
+            "NNN saved film-skip button requires native UI consumer");
+        let position = NativeSaveFile::status_position(status)?;
+        ensure!((0..=3).contains(&position.run_mode), "NNN saved active reader index");
+        ensure!(saved.word(45) <= 60000, "NNN original frameTime range");
+        self.system_file.as_ref().context("NNN original SystemFile absent")?
+            .validate_player_names([saved.name(448)?, saved.name(452)?])?;
+        Ok(())
+    }
+    pub(crate) fn restore_native_status_block(&mut self, status: &crate::native_save::SaveBlock) -> Result<()> {
+        self.validate_native_status_block(status)?;
+        let saved = NativeStatus::new(status)?;
+        let position = NativeSaveFile::status_position(status)?;
+        // Revision exhaustion and both native C strings have been checked.
+        // Apply names before the remaining infallible policy assignments.
+        self.system_file.as_mut().unwrap()
+            .restore_player_names([saved.name(448)?, saved.name(452)?])?;
+        self.script_window_number = saved.word(180);
+        self.configuration_mask = saved.word(476);
+        self.skip_film_enabled = saved.word(477) != 0;
+        self.message_window_visible = saved.word(44) != 0;
+        // SetGameStatusByLoad calls SetEye for all native slots, including
+        // inactive ones; chart checkpoints contain these gates, not EFFECTs.
+        self.native_layer_off = saved.word(48) as u32;
+        for slot in 0..16 {
+            self.layer_visible.insert(slot, self.native_layer_off & (1 << slot) == 0);
+        }
+        // Legacy setters retain raw variants. The next window consumer prepares
+        // its sources asynchronously before using or acknowledging that call.
+        self.script_cursor_number = saved.word(181);
+        self.script_mouse_number = saved.word(182);
+        self.auto_message = saved.word(484);
+        self.cannot_click = Some(saved.word(485) != 0);
+        self.cannot_skip = saved.word(486);
         self.system_script = Some(match position.run_mode {
             0 => 0,
             1 => position.script_number,
             2 => position.script_sub_number,
             3 => position.script_sub_sub_number,
-            _ => bail!("NNN saved active reader index"),
+            _ => unreachable!(),
         });
-        self.last_message_id = Some(file.status_word(28)?);
-        self.last_select_id = Some(file.status_word(32)?);
-        self.last_select_hero = file.status_word(47)?;
-        self.saved_remaining = file.status_word(46)?;
-        let frame_ms = file.status_word(45)?;
-        if frame_ms > 0 {
-            self.set_frame_time(frame_ms as u64)?;
-        }
-        let name = |word: usize| -> Result<&[u8]> {
-            let start = (word - 8) * 4;
-            let raw = &file.blocks[2].payload[start..start + 16];
-            let end = raw
-                .iter()
-                .position(|byte| *byte == 0)
-                .context("NNN saved player name lacks native terminator")?;
-            Ok(&raw[..end])
-        };
-        self.system_file
-            .as_mut()
-            .context("NNN original SystemFile absent")?
-            .restore_player_names([name(448)?, name(452)?])?;
+        self.last_message_id = Some(saved.word(28));
+        self.last_select_id = Some(saved.word(32));
+        self.last_select_hero = saved.word(47);
+        self.saved_remaining = saved.word(46);
+        let frame_ms = saved.word(45);
+        if frame_ms > 0 { self.set_frame_time(frame_ms as u64)?; }
         Ok(())
     }
     /// Stage ordinary retained layers for future native captures, plus the
@@ -230,6 +277,7 @@ impl Bridge {
                     image.size(),
                     published.path.relative(),
                     rects,
+                    picture.source_clip,
                 )?);
             }
             if let Some(color) = self.fill_effects.get(&slot) {
@@ -245,6 +293,17 @@ impl Bridge {
             }
         }
         Ok(layers)
+    }
+    pub(crate) fn next_saved_rainbow(&self)->Option<i32> {
+        self.saved_rainbow.first().copied().filter(|slot|self.saved_suna.first_key_value().is_none_or(|(next,_)|slot<=next))
+    }
+    pub(crate) fn initialize_saved_rainbow(&mut self,slot:i32,random:&mut crysirror_image::temporal_pattern::PatternRng)->Result<()> {
+        ensure!(self.next_saved_rainbow()==Some(slot),"NNN saved RAINBOW initialization order changed");
+        let mut palette=(*self.rainbow_palette).clone();
+        palette.on_set(random)?;
+        self.rainbow_palette=Arc::new(palette);
+        self.saved_rainbow.remove(&slot);
+        Ok(())
     }
     pub(crate) fn next_saved_suna(&self) -> Option<i32> {
         self.saved_suna.keys().next().copied()
@@ -282,13 +341,8 @@ impl Bridge {
         frozen_background: bool,
     ) -> Result<()> {
         ensure!(
-            !advancing
-                || !(self.active_effects.contains(&15) || self.frame_effects().contains_key(&15)),
-            "NNN saved last screen effect requires post-text frame composition"
-        );
-        ensure!(
-            self.saved_suna.is_empty(),
-            "NNN saved SUNA resource initialization incomplete"
+            self.saved_suna.is_empty() && self.saved_rainbow.is_empty(),
+            "NNN saved effect resource/RNG initialization incomplete"
         );
         if advancing {
             let effects = self.frame_effects();
@@ -315,13 +369,70 @@ impl Bridge {
         let visible = self.visible_effects(&effects)?;
         // Include every ordinary native layer. Unlike a live capture there is
         // no earlier-layer Canvas: the base here is an engine-owned solid.
-        let underlays = self.frame_underlays(&effects, &BTreeSet::from([0]))?;
-        crate::native_presentation::NativeFrameWork::with_saved_base(
+        let underlays = self
+            .frame_underlays(&effects, &BTreeSet::from([0]))?
+            .into_iter()
+            .filter(|(slot, _)| *slot < 15)
+            .collect();
+        let effects = effects.into_iter().filter(|(slot, _)| *slot < 15).collect();
+        crate::native_presentation::NativeFrameWork::with_context_base(
             self.client,
             base,
             crate::native_presentation::ordered_frame_plan(&effects, &visible, &underlays),
             random,
+            false,
+            self.frame_buffers(),
             host,
+        )
+    }
+    pub(crate) fn saved_post_text_plan(
+        &self,
+    ) -> Result<Vec<crate::native_presentation::NativeFrameEffect>> {
+        let effects = self.frame_effects();
+        let visible = self.visible_effects(&effects)?;
+        let underlays = self
+            .frame_underlays(&effects, &BTreeSet::from([15]))?
+            .into_iter()
+            .filter(|(slot, _)| *slot == 15)
+            .collect();
+        let effects = effects
+            .into_iter()
+            .filter(|(slot, _)| *slot == 15)
+            .collect();
+        Ok(crate::native_presentation::ordered_frame_plan(
+            &effects, &visible, &underlays,
+        ))
+    }
+    pub(crate) fn saved_scene_commands(&self, layers: &[Value]) -> Result<Vec<u8>> {
+        let [w, h] = self.bindings.size;
+        let mut commands = vec![json!({"op":"put","layer":{
+            "id":self.bindings.root,"rect":[0,0,w,h],"paint":{"kind":"group"}
+        }})];
+        commands.extend_from_slice(layers);
+        Ok(serde_json::to_vec(&commands)?)
+    }
+    pub(crate) fn install_saved_post_frame(
+        &mut self,
+        frame: &crate::native_presentation::NativeFrameResult,
+        host: &mut dyn HostServices,
+    ) -> Result<Value> {
+        self.validate_frame_resource(frame.target.as_ref())?;
+        self.adopt_frame_buffers(&frame.buffers);
+        if let Some(pattern) = &frame.shared_pattern {
+            self.pattern_cache = Some(pattern.clone());
+            for state in self.patterns.values_mut() {
+                state.resource = pattern.clone();
+            }
+        }
+        let id = self.bindings.effect_base + u32::from(self.bindings.layers) + 1;
+        let image = host.publish_image_resource(self.client, id, frame.target.clone())?;
+        self.post_text_path = Some(image.path.relative().to_owned());
+        self.last_frame = Some(frame.target.clone());
+        let [w, h] = self.bindings.size;
+        Ok(
+            json!({"op":"put","layer":{"id":id,"parent":self.bindings.root,
+            "rect":[0,0,w,h],"order":[i32::MAX-1,0],
+            "paint":{"kind":"image","asset":image.path.relative()}}}),
         )
     }
     pub(crate) fn install_saved_frame(
@@ -330,6 +441,7 @@ impl Bridge {
         host: &mut dyn HostServices,
     ) -> Result<Value> {
         self.validate_frame_resource(frame.target.as_ref())?;
+        self.adopt_frame_buffers(&frame.buffers);
         if let Some(pattern) = &frame.shared_pattern {
             self.pattern_cache = Some(pattern.clone());
             for state in self.patterns.values_mut() {
@@ -347,5 +459,26 @@ impl Bridge {
             json!({"op":"put","layer":{"id":id,"rect":[0,0,w,h],"order":[self.bindings.layers,0],
             "paint":{"kind":"image","asset":image.path.relative()}}}),
         )
+    }
+}
+
+/// Legacy1000's GAMESTATUS record, with its eight-word header excluded from
+/// payload. Fixed offsets are checked once before any getter can index it.
+struct NativeStatus<'a>(&'a [u8]);
+impl<'a> NativeStatus<'a> {
+    fn new(status: &'a crate::native_save::SaveBlock) -> Result<Self> {
+        ensure!(status.code == 2 && status.payload.len() == 7056, "NNN native status ABI");
+        Ok(Self(&status.payload))
+    }
+    fn word(&self, native: usize) -> i32 {
+        let at = (native - 8) * 4;
+        i32::from_le_bytes(self.0[at..at + 4].try_into().unwrap())
+    }
+    fn name(&self, native: usize) -> Result<&[u8]> {
+        let at = (native - 8) * 4;
+        let raw = &self.0[at..at + 16];
+        let end = raw.iter().position(|byte| *byte == 0)
+            .context("NNN saved player name lacks native terminator")?;
+        Ok(&raw[..end])
     }
 }

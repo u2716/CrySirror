@@ -163,6 +163,7 @@ impl Machine {
             .map(|(k, v)| Ok((*k, load_value(v)?)))
             .collect::<Result<BTreeMap<_, _>>>()?;
         // Thread teardown: no destructors run on a load reset.
+        self.clear_thread_waits();
         self.scheduler.parked.clear();
         self.scheduler.order = vec![0];
         self.scheduler.ready.clear();

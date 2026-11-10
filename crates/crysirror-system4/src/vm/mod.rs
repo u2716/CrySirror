@@ -715,6 +715,10 @@ impl Machine {
             self.complete_hll(call, value)?;
             return Ok(true);
         }
+        if let Some(value) = self.random.dispatch_array_checked(&function.name, function.return_kind, &args, &mut self.heap, check)? {
+            self.complete_hll(call,value)?;
+            return Ok(true);
+        }
         if let Some(value) =
             self.random
                 .dispatch_checked(&function.name, function.return_kind, &args, check)?

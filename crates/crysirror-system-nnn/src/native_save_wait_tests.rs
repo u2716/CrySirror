@@ -92,6 +92,9 @@ impl HostServices for Host {
             EngineQuery::UiEvents => {
                 serde_json::to_value(self.engine.ui.drain_events(client.0, None)).unwrap()
             }
+            EngineQuery::UiInteraction(id) => {
+                serde_json::to_value(self.engine.ui.interaction(client.0, id)).unwrap()
+            }
             _ => return Err(crysirror_core::Error::Unsupported("fixture query")),
         };
         Ok(serde_json::to_vec(&value).unwrap())
@@ -498,4 +501,59 @@ fn original_selection_records_feed_real_vm_port_wait_without_executing_select_ag
     );
     assert_eq!(machine.variables().unwrap().read_stored(250), 123);
     assert!(host.engine.ui.get(1, 300).is_none());
+}
+
+#[test]
+fn saved_special_selection_rebuilds_count_indexed_windows_variable_cells_and_distinct_message_font()
+{
+    let mut host = Host::new();
+    let setup=Names::parse(b"useSpecialNumber 2 specialWindowSizeX 16 specialWindowSizeY 10 specialWindow2printX1 3 specialWindow2printY1 12 specialWindow2printX2 28 specialWindow2printY2 35 specialmessagePrintX 2 specialmessagePrintY 1 specialCursorDeltaX 0 specialCursorDeltaY 0 specialCursorSizeX 14 specialCursorSizeY 8 specialFontSize 4 centeringFlag 1 centerAreaSizeX 16 specialWindowVarName1 frame",false).unwrap();
+    let mut live = NativeSelectionBridge::new(selection_profile()).unwrap();
+    live.configure_native_background(&setup).unwrap();
+    live.configure_special(Arc::new(crate::native_ui::special::Policy {
+        setup,
+        variables: Names::parse(b"frame", false).unwrap(),
+        window: crate::native_ui::special::Atlas {
+            path: "authored-window.png".into(),
+            size: [32, 20],
+            image: None,
+        },
+        cursor: None,
+    }))
+    .unwrap();
+    let mut variables = Variables::fresh(VariableProfile::Legacy1000);
+    variables.write_stored(0, 4);
+    let seed = live.restore_seed().unwrap();
+    let mut extra = vec![b'#'];
+    extra.extend(raw("説明"));
+    let mut preparation = seed
+        .begin_with_controls(
+            vec![extra, raw("左"), raw("右")],
+            3,
+            1,
+            (50, 2, 1),
+            &variables,
+            &mut host,
+        )
+        .unwrap();
+    spin(|| preparation.poll_resources(&mut host).unwrap());
+    let ready = preparation.finish().unwrap();
+    assert_eq!(ready.bridge.original_controls(), (50, 2, 1));
+    assert_eq!(ready.bridge.profile.rows[0].hit_rect, [5, 13, 14, 8]);
+    assert_eq!(ready.bridge.profile.rows[1].hit_rect, [30, 36, 14, 8]);
+    let window = ready.batch["layers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|v| v["layer"]["id"] == 656)
+        .unwrap();
+    assert_eq!(window["layer"]["rect"], json!([3, 12, 16, 10]));
+    assert_eq!(window["layer"]["uv"], json!([0.5, 0.5, 1.0, 1.0]));
+    host.submit_engine(ClientId(1), 1, &serde_json::to_vec(&ready.batch).unwrap())
+        .unwrap();
+    assert!(host.engine.ui.interaction(1, 300).is_some());
+    let (layers, widgets) = ready.bridge.restored_node_ids();
+    assert!(layers.contains(&656));
+    assert!(layers.contains(&657));
+    assert_eq!(widgets, vec![300, 301]);
 }

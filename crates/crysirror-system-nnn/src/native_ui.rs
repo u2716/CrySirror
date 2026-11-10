@@ -13,6 +13,7 @@ use crysirror_core::{
 };
 use crysirror_tasks::{Task, TaskPool};
 use serde_json::{Value, json};
+pub(crate) mod special;
 use std::sync::Arc;
 
 #[derive(Clone, Debug)]
@@ -51,16 +52,17 @@ impl SelectionProfile {
             self.canvas.iter().all(|n| (1..=8192).contains(n)),
             "NNN selection canvas bounds"
         );
+        ensure!(self.order > i32::MIN, "NNN selection order underflow");
         let last = self
             .layer_base
-            .checked_add(250)
+            .checked_add(386)
             .context("NNN selection layer IDs")?;
         ensure!(
             !(self.layer_base..last).contains(&self.root),
             "NNN selection root/layer collision"
         );
         self.widget_base
-            .checked_add(250)
+            .checked_add(386)
             .context("NNN selection widget IDs")?;
         for row in &self.rows {
             ensure!(
@@ -94,21 +96,14 @@ fn prepare(
         choices,
         messages,
         strings,
-        time_limit,
+        time_limit: _,
         special,
         ..
     } = &call.payload
     else {
         anyhow::bail!("NNN selection callback payload")
     };
-    ensure!(
-        *special == 0,
-        "NNN special selection layout needs native profile"
-    );
-    ensure!(
-        *time_limit == 0,
-        "NNN timed selection needs native timeout/variable/timer profile"
-    );
+    let _ = special; // Active special layouts are checked by the owner before admission.
     prepare_records(
         strings,
         *choices as usize,
@@ -123,6 +118,16 @@ fn prepare_records(
     messages: usize,
     profile: &SelectionProfile,
     metrics: &dyn TextMeasurement,
+) -> Result<SelectionPlan> {
+    prepare_records_with_layout(strings, choices, messages, profile, metrics, None)
+}
+fn prepare_records_with_layout(
+    strings: &[Vec<u8>],
+    choices: usize,
+    messages: usize,
+    profile: &SelectionProfile,
+    metrics: &dyn TextMeasurement,
+    special: Option<&special::Layout>,
 ) -> Result<SelectionPlan> {
     profile.validate()?;
     ensure!(
@@ -144,13 +149,21 @@ fn prepare_records(
         };
         let raw = &raw[..raw.len().min(254)];
         let text = plain_cells(raw, profile.single_byte_map.as_deref())?;
-        let origin = if n < messages {
+        let mut origin = if n < messages {
             profile.message_origins[n]
         } else {
             profile.rows[n - messages].text_origin
         };
-        let glyphs = positioned(&text, &profile.face, origin, metrics)?;
-        layers.push(json!({"op":"put","layer":{"id":profile.layer_base+n as u32,"parent":profile.root,"rect":[0,0,profile.canvas[0],profile.canvas[1]],"order":[profile.order,n],"paint":{"kind":"glyph_run","font":profile.face.font,"size":profile.face.size,"color":profile.face.color,"glyphs":glyphs}}}));
+        let face = special
+            .map(|s| s.face(profile, n < messages))
+            .unwrap_or(&profile.face);
+        if n >= messages {
+            if let Some(special) = special {
+                special.center(&mut origin, &text, face.size)?;
+            }
+        }
+        let glyphs = positioned(&text, face, origin, metrics)?;
+        layers.push(json!({"op":"put","layer":{"id":profile.layer_base+n as u32,"parent":profile.root,"rect":[0,0,profile.canvas[0],profile.canvas[1]],"order":[profile.order,n],"paint":{"kind":"glyph_run","font":face.font,"size":face.size,"color":face.color,"glyphs":glyphs}}}));
         if n >= messages {
             let i = n - messages;
             ui.push(json!({"op":"put","widget":{"id":profile.widget_base+i as u32,"kind":"button","rect":profile.rows[i].hit_rect,"color":[0,0,0,0],"text":"","font":profile.face.font,"interaction_only":true,"keyboard_focusable":true}}));
@@ -169,7 +182,7 @@ type BackgroundLoader = Arc<
         + Sync,
 >;
 pub type SelectionProfileFactory =
-    Arc<dyn Fn(usize, usize) -> Result<SelectionProfile> + Send + Sync>;
+    Arc<dyn Fn(usize, usize, i32) -> Result<SelectionProfile> + Send + Sync>;
 #[derive(Clone)]
 enum NativeBackground {
     Solid([u8; 3]),
@@ -186,6 +199,15 @@ pub struct NativeSelectionBridge {
     live: Option<(usize, usize)>,
     selected: Option<usize>,
     restored_wait_armed: bool,
+    timer: Option<(i32, i32)>,
+    timer_at: Option<u64>,
+    timer_steps: u32,
+    controls: (i32, i32, i32),
+    special_layouts: bool,
+    special_policy: Option<Arc<special::Policy>>,
+    special_layout: Option<special::Layout>,
+    special_cursor: special::Presenter,
+    special_last: Option<Value>,
     back_print_mode: i32,
     native_rows: Vec<Vec<u8>>,
     background: Option<NativeBackground>,
@@ -194,8 +216,28 @@ pub struct NativeSelectionBridge {
     background_job: Option<crysirror_core::image_processing::ImageJob>,
 }
 impl NativeSelectionBridge {
+    pub(crate) fn resume_after_menu(&mut self, now: u64) {
+        self.timer_at = Some(now);
+    }
+    pub(crate) fn set_frame_steps(&mut self, steps: u32) {
+        self.timer_steps = steps;
+    }
+    fn set_timer(&mut self, limit: i32, automatic: i32) -> Result<()> {
+        ensure!(
+            (0..=86_400_000).contains(&limit) && (0..=u16::MAX as i32).contains(&automatic),
+            "NNN selection timer/CASE bounds"
+        );
+        self.controls.0 = limit;
+        self.controls.1 = automatic;
+        self.timer = (limit > 0).then_some((limit, automatic));
+        self.timer_at = None;
+        Ok(())
+    }
+    pub(crate) fn original_controls(&self) -> (i32, i32, i32) {
+        self.controls
+    }
     pub fn dependency_pending(&self) -> bool {
-        self.worker.is_some() || self.background_job.is_some()
+        self.worker.is_some() || self.background_job.is_some() || self.special_cursor.pending()
     }
     pub fn new(profile: SelectionProfile) -> Result<Self> {
         Self::from_pool(profile, TaskPool::new("nnn-native-selection", 1, 1)?)
@@ -213,6 +255,15 @@ impl NativeSelectionBridge {
             live: None,
             selected: None,
             restored_wait_armed: false,
+            timer: None,
+            timer_at: None,
+            timer_steps: 1,
+            controls: (0, 0, 0),
+            special_layouts: false,
+            special_policy: None,
+            special_layout: None,
+            special_cursor: Default::default(),
+            special_last: None,
             back_print_mode: 0,
             native_rows: Vec::new(),
             background: None,
@@ -229,6 +280,7 @@ impl NativeSelectionBridge {
             self.pending.is_none() && self.live.is_none(),
             "NNN selection background change during native actor"
         );
+        self.special_layouts = setup.integer(b"useSpecialNumber")?.unwrap_or(0) > 0;
         self.back_print_mode = setup.integer(b"backPrintMode")?.unwrap_or(0);
         ensure!(
             (0..=2).contains(&self.back_print_mode),
@@ -248,6 +300,34 @@ impl NativeSelectionBridge {
             None
         };
         Ok(())
+    }
+    pub(crate) fn configure_special(&mut self, policy: Arc<special::Policy>) -> Result<()> {
+        ensure!(
+            self.pending.is_none() && self.live.is_none(),
+            "NNN special selection policy change during an active actor"
+        );
+        self.special_policy = Some(policy);
+        Ok(())
+    }
+    pub(crate) fn refresh_special(
+        &mut self,
+        variables: &crate::expression::Variables,
+        host: &mut dyn HostServices,
+    ) -> Result<bool> {
+        if self.live.is_none() {
+            return Ok(true);
+        }
+        let Some(layout) = self.special_layout.as_mut() else {
+            return Ok(true);
+        };
+        let layers = layout.windows(&self.profile, variables)?;
+        let batch = json!({"layers":layers});
+        if self.special_last.as_ref() != Some(&batch) {
+            host.submit_engine(self.profile.client, 1, &serde_json::to_vec(&batch)?)?;
+            self.api_calls += 1;
+            self.special_last = Some(batch);
+        }
+        self.special_cursor.poll(layout, &self.profile, host)
     }
     pub(crate) fn configure_background_resources(
         &mut self,
@@ -344,7 +424,7 @@ impl NativeSelectionBridge {
         let id = self
             .profile
             .layer_base
-            .checked_add(250)
+            .checked_add(386)
             .context("NNN selection background layer ID")?;
         ensure!(
             id != self.profile.root,
@@ -397,12 +477,15 @@ impl NativeSelectionBridge {
         if self.pending.is_none() {
             if let Some(factory) = &self.profile_factory {
                 let Payload::Selection {
-                    choices, messages, ..
+                    choices,
+                    messages,
+                    special,
+                    ..
                 } = &call.payload
                 else {
                     anyhow::bail!("NNN dynamic selection payload")
                 };
-                let profile = factory(*choices as usize, *messages as usize)?;
+                let profile = factory(*choices as usize, *messages as usize, *special)?;
                 profile.validate()?;
                 ensure!(
                     profile.client == self.profile.client
@@ -417,6 +500,47 @@ impl NativeSelectionBridge {
                 matches!(call.payload, Payload::Selection { .. }),
                 "NNN selection requires native payload"
             );
+            if let Payload::Selection {
+                time_limit,
+                auto_select,
+                special,
+                choices,
+                ..
+            } = &call.payload
+            {
+                // CheckSpecial is false when the game has no special rows,
+                // even if the script retains a nonzero special flag.
+                ensure!(
+                    *special == 0 || !self.special_layouts || self.special_policy.is_some(),
+                    "NNN active special selection layout needs its native resources"
+                );
+                self.controls.2 = *special;
+                self.special_layout = if *special != 0 && self.special_layouts {
+                    Some(
+                        self.special_policy
+                            .as_ref()
+                            .unwrap()
+                            .layout(&mut self.profile, *choices as usize)?,
+                    )
+                } else {
+                    None
+                };
+                self.special_last = None;
+                let limit = if *time_limit < 0 {
+                    machine
+                        .variables()
+                        .context("NNN timed choice variable bank absent")?
+                        .read_calculated(u16::try_from(
+                            time_limit
+                                .checked_neg()
+                                .context("NNN timer variable overflow")?,
+                        )?)?
+                        .max(0)
+                } else {
+                    *time_limit
+                };
+                self.set_timer(limit, *auto_select)?;
+            }
             let metrics = host.text_measurement(self.profile.client)?;
             let permit = self.pool.reserve()?;
             if let Payload::Selection { strings, .. } = &call.payload {
@@ -436,9 +560,33 @@ impl NativeSelectionBridge {
             };
             let record = call.clone();
             let profile = self.profile.clone();
+            let layout = self.special_layout.clone();
+            let variables = machine.native_variables_candidate(call)?;
             self.worker = Some(permit.spawn(move |cancel| {
                 cancel.check()?;
-                let mut plan = prepare(&record, &profile, metrics.as_ref())?;
+                let Payload::Selection {
+                    choices,
+                    messages,
+                    strings,
+                    ..
+                } = &record.payload
+                else {
+                    anyhow::bail!("NNN selection payload");
+                };
+                let mut plan = prepare_records_with_layout(
+                    strings,
+                    *choices as usize,
+                    *messages as usize,
+                    &profile,
+                    metrics.as_ref(),
+                    layout.as_ref(),
+                )?;
+                if let Some(layout) = &layout {
+                    plan.batch["layers"]
+                        .as_array_mut()
+                        .unwrap()
+                        .extend(layout.windows(&profile, &variables)?);
+                }
                 if let Some(loader) = background_loader {
                     plan.background_input = Some(loader(&cancel)?);
                 }
@@ -472,8 +620,12 @@ impl NativeSelectionBridge {
             host.submit_engine(self.profile.client, 1, &serde_json::to_vec(&batch)?)?;
             self.api_calls += 1;
             self.live = Some((plan.choices, plan.messages));
+            self.timer_at = Some(host.now_ms());
             self.ready = None;
             self.selected = None;
+            return Ok(false);
+        }
+        if !self.refresh_special(&machine.native_variables_candidate(call)?, host)? {
             return Ok(false);
         }
         let Some(chosen) = self.poll_choice(host)? else {
@@ -510,6 +662,15 @@ impl NativeSelectionBridge {
                 }
             }
         }
+        if self.selected.is_none() && self.timer_at != Some(host.now_ms()) {
+            self.timer_at = Some(host.now_ms());
+            if let Some((remaining, automatic)) = self.timer.as_mut() {
+                *remaining = remaining.saturating_sub(i32::try_from(self.timer_steps)?);
+                if *remaining <= 0 {
+                    self.selected = Some(*automatic as usize);
+                }
+            }
+        }
         Ok(self.selected)
     }
     fn retire_selection(&mut self, host: &mut dyn HostServices) -> Result<()> {
@@ -520,6 +681,14 @@ impl NativeSelectionBridge {
         if self.background.is_some() {
             layers.push(json!({"op":"remove","id":self.profile.layer_base+250}));
         }
+        if let Some(layout) = &self.special_layout {
+            layers.extend(
+                layout
+                    .node_ids(&self.profile)
+                    .into_iter()
+                    .map(|id| json!({"op":"remove","id":id})),
+            );
+        }
         let ui = (0..choices)
             .map(|n| json!({"op":"remove","id":self.profile.widget_base+n as u32}))
             .collect::<Vec<_>>();
@@ -529,6 +698,7 @@ impl NativeSelectionBridge {
             &serde_json::to_vec(&json!({"layers":layers,"ui":ui}))?,
         )?;
         self.api_calls += 1;
+        self.special_cursor.release(&self.profile, host)?;
         Ok(())
     }
     pub(crate) fn restored_node_ids(&self) -> (Vec<u32>, Vec<u32>) {
@@ -543,6 +713,12 @@ impl NativeSelectionBridge {
                         .as_ref()
                         .map(|_| self.profile.layer_base + 250),
                 )
+                .chain(
+                    self.special_layout
+                        .as_ref()
+                        .into_iter()
+                        .flat_map(|l| l.node_ids(&self.profile)),
+                )
                 .collect(),
             (0..choices)
                 .map(|n| self.profile.widget_base + n as u32)
@@ -551,7 +727,7 @@ impl NativeSelectionBridge {
     }
     pub(crate) fn restore_seed(&self) -> Result<SelectionRestoreSeed> {
         ensure!(
-            self.worker.is_none() && self.ready.is_none(),
+            !self.dependency_pending() && self.ready.is_none(),
             "NNN selection restore requires drained dependencies"
         );
         Ok(SelectionRestoreSeed {
@@ -559,10 +735,15 @@ impl NativeSelectionBridge {
             factory: self.profile_factory.clone(),
             pool: self.pool.clone(),
             back_print_mode: self.back_print_mode,
+            special_layouts: self.special_layouts,
+            special_policy: self.special_policy.clone(),
             background: self.background.clone(),
             background_name: self.background_name.clone(),
             background_loader: self.background_loader.clone(),
         })
+    }
+    pub(crate) fn owned_special_image(&self) -> Option<&str> {
+        self.special_cursor.path()
     }
     /// A loaded SELECT has already consumed its opcode; only the saved CASE
     /// cursor is resumed after a real shared UI activation.
@@ -579,6 +760,15 @@ impl NativeSelectionBridge {
         if !self.restored_wait_armed {
             let _ = host.query_engine(self.profile.client, EngineQuery::UiEvents)?;
             self.restored_wait_armed = true;
+            self.timer_at = Some(host.now_ms());
+            return Ok(false);
+        }
+        if !self.refresh_special(
+            machine
+                .variables()
+                .context("NNN saved SELECT variables absent")?,
+            host,
+        )? {
             return Ok(false);
         }
         let Some(chosen) = self.poll_choice(host)? else {
@@ -601,6 +791,8 @@ pub(crate) struct SelectionRestoreSeed {
     factory: Option<SelectionProfileFactory>,
     pool: TaskPool,
     back_print_mode: i32,
+    special_layouts: bool,
+    special_policy: Option<Arc<special::Policy>>,
     background: Option<NativeBackground>,
     background_name: Vec<u8>,
     background_loader: Option<BackgroundLoader>,
@@ -626,6 +818,8 @@ impl SelectionRestoreSeed {
         let mut bridge = NativeSelectionBridge::from_pool(self.profile.clone(), self.pool.clone())?;
         bridge.profile_factory = self.factory.clone();
         bridge.back_print_mode = self.back_print_mode;
+        bridge.special_layouts = self.special_layouts;
+        bridge.special_policy = self.special_policy.clone();
         bridge.background = self.background.clone();
         bridge.background_name = self.background_name.clone();
         bridge.background_loader = self.background_loader.clone();
@@ -637,6 +831,24 @@ impl SelectionRestoreSeed {
         strings: Vec<Vec<u8>>,
         total: usize,
         supplemental: usize,
+        host: &mut dyn HostServices,
+    ) -> Result<SavedSelectionPreparation> {
+        self.begin_with_controls(
+            strings,
+            total,
+            supplemental,
+            (0, 0, 0),
+            &crate::expression::Variables::fresh(crate::expression::VariableProfile::Legacy1000),
+            host,
+        )
+    }
+    pub(crate) fn begin_with_controls(
+        &self,
+        strings: Vec<Vec<u8>>,
+        total: usize,
+        supplemental: usize,
+        controls: (i32, i32, i32),
+        variables: &crate::expression::Variables,
         host: &mut dyn HostServices,
     ) -> Result<SavedSelectionPreparation> {
         // Original native word33 is total, word34 the supplemental prefix;
@@ -651,10 +863,20 @@ impl SelectionRestoreSeed {
             "NNN saved selection fixed rows"
         );
         let choices = total - supplemental;
-        let profile = if let Some(factory) = &self.factory {
-            factory(choices, supplemental)?
+        let mut profile = if let Some(factory) = &self.factory {
+            factory(choices, supplemental, controls.2)?
         } else {
             self.profile.clone()
+        };
+        let layout = if controls.2 != 0 && self.special_layouts {
+            Some(
+                self.special_policy
+                    .as_ref()
+                    .context("NNN saved special selection resource policy absent")?
+                    .layout(&mut profile, choices)?,
+            )
+        } else {
+            None
         };
         profile.validate()?;
         ensure!(
@@ -676,16 +898,25 @@ impl SelectionRestoreSeed {
         };
         let original_rows = strings.clone();
         let worker_profile = profile.clone();
+        let worker_layout = layout.clone();
+        let variables = variables.clone();
         let permit = self.pool.reserve()?;
         let worker = permit.spawn(move |cancel| {
             cancel.check()?;
-            let mut plan = prepare_records(
+            let mut plan = prepare_records_with_layout(
                 &strings,
                 choices,
                 supplemental,
                 &worker_profile,
                 metrics.as_ref(),
+                worker_layout.as_ref(),
             )?;
+            if let Some(layout) = &worker_layout {
+                plan.batch["layers"]
+                    .as_array_mut()
+                    .unwrap()
+                    .extend(layout.windows(&worker_profile, &variables)?);
+            }
             if let Some(loader) = background_loader {
                 plan.background_input = Some(loader(&cancel)?);
             }
@@ -695,15 +926,28 @@ impl SelectionRestoreSeed {
         let mut bridge = NativeSelectionBridge::from_pool(profile, self.pool.clone())?;
         bridge.profile_factory = self.factory.clone();
         bridge.back_print_mode = self.back_print_mode;
+        bridge.special_layouts = self.special_layouts;
+        bridge.special_policy = self.special_policy.clone();
         bridge.background = self.background.clone();
         bridge.background_name = self.background_name.clone();
         bridge.background_loader = self.background_loader.clone();
         bridge.native_rows = original_rows;
+        bridge.special_layout = layout;
+        bridge.controls.2 = controls.2;
+        bridge.set_timer(controls.0, controls.1)?;
         bridge.worker = Some(worker);
         Ok(SavedSelectionPreparation { bridge })
     }
 }
 impl SavedSelectionPreparation {
+    pub(crate) fn set_controls(&mut self, limit: i32, automatic: i32, special: i32) -> Result<()> {
+        ensure!(
+            special == 0 || !self.bridge.special_layouts || self.bridge.special_layout.is_some(),
+            "NNN saved active special selection requires native layout resources"
+        );
+        self.bridge.controls.2 = special;
+        self.bridge.set_timer(limit, automatic)
+    }
     pub(crate) fn poll(&mut self) -> Result<bool> {
         if let Some(worker) = &mut self.bridge.worker {
             let Some(plan) = worker.try_take()? else {

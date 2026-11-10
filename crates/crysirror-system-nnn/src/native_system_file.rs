@@ -181,7 +181,7 @@ impl SystemLimits {
                 )
             };
             let path = VfsPath::new(Mount::Asset, &configuration.resources.path(&name)?)?;
-            match storage.open_asset(&path) {
+            match crate::native_resources::open_installed_asset(storage, &path) {
                 Ok(_) => count += 1,
                 Err(crysirror_core::Error::NotFound) => break,
                 Err(error) => return Err(error.into()),
@@ -421,6 +421,16 @@ impl NativeSystemFile {
         }
         Ok(())
     }
+    pub(crate) fn validate_player_names(&self, names: [&[u8]; 2]) -> Result<()> {
+        let mut record = self.records[1].clone();
+        for (offset, name) in [224, 240].into_iter().zip(names) {
+            record.copy_string(offset, 16, name)?;
+        }
+        if record.words != self.records[1].words {
+            self.revision.checked_add(1).context("NNN SystemFile revision exhausted")?;
+        }
+        Ok(())
+    }
     pub(crate) fn restore_player_names(&mut self, names: [&[u8]; 2]) -> Result<()> {
         let mut record = self.records[1].clone();
         for (offset, name) in [224, 240].into_iter().zip(names) {
@@ -443,6 +453,13 @@ impl NativeSystemFile {
     }
     pub fn system_word(&self, offset: usize) -> Result<i32> {
         self.records[1].word(offset)
+    }
+    pub(crate) fn set_setting_word(&mut self,offset:usize,value:i32)->Result<()> {
+        if self.records[1].word(offset)?!=value {
+            self.changed()?;
+            self.records[1].set_word(offset,value)?;
+        }
+        Ok(())
     }
     pub(crate) fn set_auto_mode(&mut self, enabled: bool) -> Result<()> {
         self.set_auto_mode_raw(i32::from(enabled))

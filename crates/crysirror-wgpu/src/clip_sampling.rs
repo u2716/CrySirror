@@ -9,7 +9,7 @@ const UNBOUNDED: [f32; 4] = [-1e20, -1e20, 1e20, 1e20];
 pub(crate) struct LayerVertex {
     position: [f32; 4],
     uv: [f32; 2],
-    color: [f32; 4],
+    pub(crate) color: [f32; 4],
     pub(crate) filter: f32,
     sample_bounds: [f32; 4],
     clip_rect: [f32; 4],

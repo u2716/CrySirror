@@ -98,7 +98,13 @@ impl Machine {
         };
         self.push(value)
     }
-    pub(super) fn store_element(&mut self, op: u16, flags: u16, hash: u32, offset: i16) -> Result<()> {
+    pub(super) fn store_element(
+        &mut self,
+        op: u16,
+        flags: u16,
+        hash: u32,
+        offset: i16,
+    ) -> Result<()> {
         let base = if op >= 0x2d0 { 0x2d0 } else { 0x270 };
         let group = (op - base) / 8;
         let ty = ((op - base) % 8) as u8;
@@ -137,8 +143,18 @@ impl Machine {
         }
         Ok(())
     }
+    /// 40B350 / 40D2C0 clear frame wait words68/72 on a forward branch.
+    /// Retire the old service identity, including a parent call parked beneath
+    /// a callback. No abandoned native event may resume at the branch target.
+    fn branch_frame(&mut self, index: usize, target: u32) -> Result<()> {
+        self.edit_thread_state(
+            self.scheduler.current,
+            "frame branch",
+            |state, next_frame| state.branch_frame(index, target, next_frame),
+        )
+    }
     /// 0x843 sets all three click targets; a latched click jumps immediately.
-    pub(super) fn bsel_set_click(&mut self, target: u32) -> Option<u32> {
+    pub(super) fn bsel_set_click(&mut self, target: u32) -> Result<Option<u32>> {
         let frame = self.frames.last_mut().unwrap();
         frame.bsel.click = [target; 3];
         let latch = self.clicks;
@@ -148,89 +164,77 @@ impl Machine {
                 let jump = frame.bsel.click[slot];
                 frame.bsel.click[slot] = 0;
                 self.clicks &= !bit;
-                return Some(jump);
+                self.branch_frame(self.frames.len() - 1, jump)?;
+                return Ok(Some(jump));
             }
         }
-        None
+        Ok(None)
     }
     /// 0x83B/0x83D/0x83C set one click target (left/right/middle).
-    pub(super) fn bsel_set_one(&mut self, slot: usize, bit: u8, target: u32) -> Option<u32> {
+    pub(super) fn bsel_set_one(
+        &mut self,
+        slot: usize,
+        bit: u8,
+        target: u32,
+    ) -> Result<Option<u32>> {
         self.frames.last_mut().unwrap().bsel.click[slot] = target;
         if self.clicks & bit != 0 {
             self.frames.last_mut().unwrap().bsel.click[slot] = 0;
             self.clicks &= !bit;
-            return Some(target);
+            self.branch_frame(self.frames.len() - 1, target)?;
+            return Ok(Some(target));
         }
-        None
+        Ok(None)
     }
     /// 0x846 resumes at the nearest frame whose AIP4 lies ahead of its PC.
-    pub(super) fn bsel_aip4(&mut self) -> Option<u32> {
+    pub(super) fn bsel_aip4(&mut self) -> Result<Option<u32>> {
         let top = self.frames.len() - 1;
         for i in (0..=top).rev() {
-            let pc = if i == top { self.pc } else { self.frames[i + 1].return_pc };
+            let pc = if i == top {
+                self.pc
+            } else {
+                self.frames[i + 1].return_pc
+            };
             let target = self.frames[i].bsel.aip4;
             if target > pc {
                 self.frames[i].bsel.aip4 = 0;
-                if i == top {
-                    return Some(target);
-                }
-                self.frames[i + 1].return_pc = target;
-                return None;
+                self.branch_frame(i, target)?;
+                return Ok((i == top).then_some(target));
             }
         }
-        None
+        Ok(None)
     }
-    /// 40B350 input pass for the current thread: an observed click jumps every
-    /// frame whose matching target lies ahead. A parked native call in the top
-    /// frame is abandoned (its wait deadline is cleared natively).
-    fn click_current(&mut self, latch: u8) -> bool {
-        self.clicks |= latch;
-        let mut jumped = false;
-        let top = self.frames.len() - 1;
-        for i in 0..=top {
-            for (bit, slot) in [(CLICK_LEFT, 0), (CLICK_RIGHT, 1), (CLICK_MIDDLE, 2)] {
-                if latch & bit == 0 {
-                    continue;
-                }
-                let pc = if i == top { self.pc } else { self.frames[i + 1].return_pc };
-                let target = self.frames[i].bsel.click[slot];
-                if target > pc {
-                    self.frames[i].bsel.click = [0; 3];
-                    if i == top {
-                        if let Some((_, _, consumed)) = self.pending.take() {
-                            let keep = self.stack.len().saturating_sub(consumed);
-                            self.stack.truncate(keep);
-                        }
-                        self.pc = target;
-                        self.clicks = 0;
-                        jumped = true;
-                    } else {
-                        self.frames[i + 1].return_pc = target;
-                    }
-                }
-            }
-        }
-        jumped
-    }
+    /// YUKIIRO411630/classic40B350 directly applies its427240/41E180 live
+    /// thread snapshot without selecting a running context. A click jumps each
+    /// frame whose target lies ahead and abandons its corresponding wait.
     /// Deliver one owner input observation to every live script thread.
     /// Returns the ids of threads whose current frame jumped.
     pub fn deliver_clicks(&mut self, latch: u8) -> Result<Vec<i32>> {
-        if latch == 0 {
+        self.deliver_input(latch, false)
+    }
+    /// Native fast-forward is a left-target condition, not a synthetic mouse
+    /// click: mk_read/WaitRelease must not observe a newly latched button.
+    pub fn deliver_fast_skip(&mut self) -> Result<Vec<i32>> {
+        self.deliver_input(0, true)
+    }
+    pub fn deliver_input(&mut self, latch: u8, fast: bool) -> Result<Vec<i32>> {
+        if latch == 0 && !fast {
             return Ok(vec![]);
         }
-        let caller = self.scheduler.current;
         let mut jumped = vec![];
         for id in self.scheduler.order.clone() {
             if !self.thread_alive(id) {
                 continue;
             }
-            self.switch_thread(id)?;
-            if self.click_current(latch) {
+            //40B350 applies its live-thread snapshot without41E040. A
+            // retired current cursor is not an event caller to restore.
+            if self.edit_thread_state(id, "input delivery", |state, next_frame| {
+                state.click_input(latch, fast, next_frame)
+            })? {
                 jumped.push(id);
                 self.wake_thread(id);
             }
         }
-        self.switch_thread(caller)?;
         for id in &jumped {
             self.scheduler.blocked.remove(id);
         }
@@ -239,5 +243,85 @@ impl Machine {
     /// mk_read consumes the current thread's latched clicks.
     pub fn take_clicks(&mut self) -> u8 {
         std::mem::take(&mut self.clicks)
+    }
+}
+
+impl super::threads::ThreadState {
+    fn branch_frame(&mut self, index: usize, target: u32, next_frame: &mut u64) -> Result<()> {
+        let top = self.frames.len() - 1;
+        let consumed = if index == top {
+            self.pending.as_ref().map(|pending| pending.2)
+        } else {
+            self.frames[index + 1]
+                .interrupted
+                .as_ref()
+                .map(|pending| pending.2)
+        };
+        let end = if index == top {
+            self.stack.len()
+        } else {
+            self.frames[index + 1].stack_base
+        };
+        let start = end
+            .checked_sub(consumed.unwrap_or(0))
+            .context("Majiro abandoned native stack receipt")?;
+        ensure!(
+            start >= self.frames[index].stack_base,
+            "Majiro abandoned call crosses frame stack base"
+        );
+        ensure!(
+            self.frames
+                .iter()
+                .skip(index + 1)
+                .all(|frame| frame.stack_base >= end),
+            "Majiro callback stack base precedes abandoned call"
+        );
+        let serial = super::threads::allocate_frame_serial(next_frame)?;
+        if index == top {
+            self.pending = None;
+            self.pc = target;
+        } else {
+            self.frames[index + 1].interrupted = None;
+            self.frames[index + 1].return_pc = target;
+        }
+        if let Some(consumed) = consumed {
+            self.stack.drain(start..end);
+            for frame in self.frames.iter_mut().skip(index + 1) {
+                frame.stack_base -= consumed;
+            }
+        }
+        self.frames[index].serial = serial;
+        Ok(())
+    }
+    fn click_input(&mut self, latch: u8, fast: bool, next_frame: &mut u64) -> Result<bool> {
+        ensure!(
+            !self.frames.is_empty(),
+            "Majiro live input target has no frame"
+        );
+        self.clicks |= latch;
+        let mut jumped = false;
+        let top = self.frames.len() - 1;
+        for i in 0..=top {
+            for (bit, slot) in [(CLICK_LEFT, 0), (CLICK_RIGHT, 1), (CLICK_MIDDLE, 2)] {
+                if latch & bit == 0 && !(fast && slot == 0) {
+                    continue;
+                }
+                let pc = if i == top {
+                    self.pc
+                } else {
+                    self.frames[i + 1].return_pc
+                };
+                let target = self.frames[i].bsel.click[slot];
+                if target > pc {
+                    self.frames[i].bsel.click = [0; 3];
+                    self.branch_frame(i, target, next_frame)?;
+                    if i == top {
+                        self.clicks = 0;
+                        jumped = true;
+                    }
+                }
+            }
+        }
+        Ok(jumped)
     }
 }

@@ -65,7 +65,7 @@ impl Renderer {
             let mut sampling=p.sampling;
             sampling.linear=part.linear;
             filter_sampling(&mut record,sampling);
-            stored_blend::configure(&mut record, part.blend.unwrap_or(p.blend),self.blend_origin);
+            stored_blend::configure(&mut record, part.blend.unwrap_or(p.blend),self.blend_origin,p.opacity);
             coverage::configure(&mut record,coverage_active);
             records.push(record);
             let start = vertices.len() as u32;

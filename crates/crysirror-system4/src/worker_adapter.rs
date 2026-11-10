@@ -94,6 +94,7 @@ pub struct NativeAdapter {
     native_dialog: crate::native_dialog::NativeDialog,
     native_movie: crate::native_movie::NativeMovie,
     native_logo: crate::native_logo::NativeLogo,
+    native_confirm: crate::native_confirm::NativeConfirm,
     native_text: crate::native_sact_text::NativeText,
     native_present:crate::native_scene_present::NativePresent,
     native_effect:crate::native_effect::NativeEffect,
@@ -132,6 +133,7 @@ impl NativeAdapter {
         let native_msgskip =
             crate::native_msgskip::NativeMsgSkip::new(client, native_files.io_pool());
         let native_logo=crate::native_logo::NativeLogo::new(client,native_files.io_pool(),config.ini.clone());
+        let native_confirm=crate::native_confirm::NativeConfirm::new(client,native_files.io_pool());
         Ok(Self {
             client,
             config,
@@ -149,6 +151,7 @@ impl NativeAdapter {
             native_audio: crate::native_audio::NativeAudio::new(client, native_files.io_pool()),
             native_movie: crate::native_movie::NativeMovie::new(client, native_files.io_pool()),
             native_logo,
+            native_confirm,
             native_text:crate::native_sact_text::NativeText::new(client,native_files.io_pool()),
             native_present:crate::native_scene_present::NativePresent::new(client),
             native_effect:crate::native_effect::NativeEffect::new(client),
@@ -188,6 +191,7 @@ impl NativeAdapter {
         if let Some(error) = self.last_error.as_ref().filter(|_| !self.close_requested) {
             anyhow::bail!("{error}")
         }
+        if !self.close_requested {self.native_system.poll_menu(self.client,h)?;}
         if !self.close_requested && !self.native_dialog.active() {
             let revision = match h.input_observation(self.client) {
                 Ok(observation) => {
@@ -352,6 +356,7 @@ impl NativeAdapter {
                     .audio_config
                     .context("System4 audio bootstrap configuration lost")?;
                 self.native_audio.configure(&bootstrap, volume, metadata)?;
+                self.bridge.joypad_enabled = Some(bootstrap.joypad);
                 self.bootstrap = Some(bootstrap);
             }
             if let Some(profile) = done.movie_profile {
@@ -413,7 +418,7 @@ impl NativeAdapter {
             self.native_effect.cancel();
             self.native_save_cg.cancel();
             self.native_csv.cancel();
-            self.native_system.cancel();
+            self.native_system.close(h)?;
             self.native_logs.cancel();
             self.native_audio.close(h)?;
             self.native_scene.cancel_pending_for_shutdown();
@@ -454,7 +459,7 @@ impl NativeAdapter {
             self.native_effect.cancel();
                 self.native_save_cg.cancel();
                 self.native_csv.cancel();
-                self.native_system.cancel();
+                self.native_system.close(h)?;
                 self.native_logs.cancel();
                 self.native_audio.close(h)?;
                 return match self.native_msgskip.flush(self.client, h)? {
@@ -595,6 +600,14 @@ impl NativeAdapter {
                     self.native_input_string
                         .dispatch(self.client, machine, &call, h)?
                 {
+                    dispatch
+                } else if let Some(dispatch) = self.native_confirm.dispatch(
+                    self.client,
+                    machine,
+                    &call,
+                    &self.native_files,
+                    h,
+                )? {
                     dispatch
                 } else if let Some(dispatch) = self.native_msgskip.dispatch(
                     self.client,
@@ -778,7 +791,7 @@ impl NativeAdapter {
             self.native_effect.cancel();
         self.native_save_cg.cancel();
         self.native_csv.cancel();
-        self.native_system.cancel();
+        self.native_system.close(host)?;
         self.native_logs.cancel();
         let error = self
             .deferred_error
@@ -807,6 +820,7 @@ impl VmAdapter for NativeAdapter {
             && !self.native_dialog.active()
             && !self.native_movie.has_state()
             && !self.native_logo.has_state()
+            && !self.native_confirm.has_state()
             && !self.native_text.has_state()
             && !self.native_present.has_pending()
             && !self.native_wp.has_pending()
@@ -851,6 +865,7 @@ impl VmAdapter for NativeAdapter {
                 || self.native_dialog.active()
                 || self.native_movie.has_state()
                 || self.native_logo.has_state()
+                || self.native_confirm.has_state()
                 || self.native_text.has_state()
                 || self.native_present.has_pending()
                 || self.native_wp.has_pending()

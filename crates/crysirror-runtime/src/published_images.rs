@@ -29,6 +29,9 @@ struct State {
     retired: BTreeSet<(ClientId, String)>,
     /// Checkpoint capabilities retain catalog authority and its byte budget.
     pins: BTreeMap<(ClientId, String), u32>,
+    /// Released raw-upload leases whose generated asset bytes the owner's
+    /// asset cache has not yet dropped.
+    dropped: Vec<(ClientId, String)>,
 }
 #[derive(Clone, Default)]
 pub struct PublishedImages(Arc<Mutex<State>>);
@@ -180,6 +183,9 @@ impl PublishedImages {
         }
         let item = s.entries.remove(&key).ok_or(Error::NotFound)?;
         s.bytes -= item.rgba.len();
+        if key.1.starts_with("__crysirror/") {
+            s.dropped.push(key);
+        }
         Ok(())
     }
     pub(crate) fn has_retired(&self) -> bool {
@@ -200,9 +206,20 @@ impl PublishedImages {
             state.retired.remove(&key);
             if let Some(surface) = state.entries.remove(&key) {
                 state.bytes -= surface.rgba.len();
+                if key.1.starts_with("__crysirror/") {
+                    state.dropped.push(key);
+                }
             }
         }
         Ok(())
+    }
+    /// Released generated paths that no live lease has republished since.
+    pub(crate) fn take_dropped(&self) -> Vec<(ClientId, String)> {
+        let Ok(mut state) = self.0.lock() else {
+            return Vec::new();
+        };
+        let dropped = std::mem::take(&mut state.dropped);
+        dropped.into_iter().filter(|key| !state.entries.contains_key(key)).collect()
     }
     pub(crate) fn get(&self, client: ClientId, path: &str) -> Option<Surface> {
         self.0

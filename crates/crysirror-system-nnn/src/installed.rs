@@ -30,8 +30,20 @@ use crysirror_tasks::{Cancellation, Task, TaskPool};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 const SIZE: [u32; 2] = [800, 600];
+use crate::native_gaiji as gaiji;
+mod cutin;
+mod chart;
+mod film_button;
+mod gallery;
+mod gallery_viewer;
+mod menu;
+mod menu_host;
+mod menu_return;
 mod native_load;
 mod native_save;
+mod notice;
+mod selection;
+mod system_menu;
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Entry {
@@ -93,8 +105,14 @@ struct Prepared {
     boot: PreparedBoot,
     system_file: NativeSystemFile,
     result_data: Option<crate::native_result::NativeResultData>,
+    chart_runtime: Option<crate::native_chart::ChartRuntime>,
     native_load: Option<native_load::Policy>,
     native_save: Option<native_save::Policy>,
+    notice: Option<notice::Notice>,
+    gaiji: Option<gaiji::Gaiji>,
+    special_selection: Option<selection::Special>,
+    cutin: Option<cutin::Cutin>,
+    film_button: Option<film_button::FilmButton>,
     loader: ScriptLoader,
     services: PreparedNativeServices,
     resources: NativeResources,
@@ -117,6 +135,11 @@ pub struct InstalledAdapter {
     failure: Option<String>,
     native_load: Option<native_load::Controller>,
     native_save: Option<native_save::Controller>,
+    notice: Option<notice::Notice>,
+    load_cover: Option<String>,
+    menu: Option<menu::Menu>,
+    menu_operation: Option<menu_host::Operation>,
+    chart: Option<chart::ChartPlayer>,
     published: Vec<String>,
     started: bool,
     shell: Option<crate::native_shell::NativeStartupShell>,
@@ -131,6 +154,7 @@ pub struct InstalledAdapter {
     title_exit: Option<Arc<dyn crysirror_core::image_processing::ImageResource>>,
     native_exit_available: bool,
     title_newgame_requested: bool,
+    title_script_return: Option<(Option<u16>, i32)>,
     title_restart_requested: Option<crate::native_shell::NativeMode>,
     title_return: Option<crate::native_general::ExitFadePlayer>,
     opening_return_requested: bool,
@@ -154,7 +178,12 @@ struct InstalledRestoreJob {
     native_exit_available: bool,
     native_load: Option<native_load::Policy>,
     native_save: Option<native_save::Controller>,
+    notice: Option<notice::Notice>,
+    cleanup: Option<crysirror_core::native_restore::OriginalRestoreBatch>,
+    cleanup_images: Vec<String>,
     load_request: Option<crysirror_core::native_restore::OriginalRestoreTicket>,
+    load_notice: Option<i32>,
+    load_cover: Option<String>,
 }
 impl crysirror_core::native_restore::OriginalRestorePreparation for InstalledRestoreJob {
     fn client(&self) -> ClientId {
@@ -170,7 +199,7 @@ impl crysirror_core::native_restore::OriginalRestorePreparation for InstalledRes
         self: Box<Self>,
     ) -> crysirror_core::Result<crysirror_core::native_restore::OriginalRestoreCommit> {
         let this = *self;
-        let (vm, engine_batches, audio, release_images) = this
+        let (vm, mut engine_batches, audio, mut release_images) = this
             .inner
             .finish_native()
             .map_err(|error| Error::Io(format!("NNN installed original restore: {error:#}")))?;
@@ -187,9 +216,18 @@ impl crysirror_core::native_restore::OriginalRestorePreparation for InstalledRes
         installed.title_resources = this.title_resources;
         installed.native_exit_available = this.native_exit_available;
         installed.native_save = this.native_save;
-        installed.native_load = this
-            .native_load
-            .map(|policy| native_load::Controller::after_restore(policy, this.load_request));
+        installed.notice = this.notice;
+        installed.load_cover = this.load_cover;
+        if let Some(path) = &installed.load_cover {
+            engine_batches.push(crysirror_core::native_restore::OriginalRestoreBatch {schema:1,bytes:serde_json::to_vec(&serde_json::json!({"layers":[{"op":"put","layer":{"id":0x66010001u32,"parent":1,"rect":[0,0,800,600],"order":[2147483646,1],"paint":{"kind":"image","asset":path}}}]})).map_err(|e|Error::Io(e.to_string()))?.into()});
+        }
+        if let Some(cleanup) = this.cleanup {
+            engine_batches.insert(0, cleanup);
+        }
+        release_images.extend(this.cleanup_images);
+        installed.native_load = this.native_load.map(|policy| {
+            native_load::Controller::after_restore(policy, this.load_request, this.load_notice)
+        });
         Ok(crysirror_core::native_restore::OriginalRestoreCommit {
             vm: Box::new(installed),
             commands: vec![],
@@ -208,7 +246,7 @@ fn read(
 ) -> Result<Option<Vec<u8>>> {
     cancel.check()?;
     let path = VfsPath::new(Mount::Asset, path)?;
-    let source = match storage.open_asset(&path) {
+    let source = match crate::native_resources::open_installed_asset(storage, &path) {
         Ok(source) => source,
         Err(Error::NotFound) => return Ok(None),
         Err(reason) => return Err(reason.into()),
@@ -235,6 +273,11 @@ impl InstalledAdapter {
             failure: None,
             native_load: None,
             native_save: None,
+            notice: None,
+            load_cover: None,
+            menu: None,
+            menu_operation: None,
+            chart: None,
             published: vec![],
             started: false,
             shell: None,
@@ -249,6 +292,7 @@ impl InstalledAdapter {
             title_exit: None,
             native_exit_available: false,
             title_newgame_requested: false,
+            title_script_return: None,
             title_restart_requested: None,
             title_return: None,
             opening_return_requested: false,
@@ -282,6 +326,9 @@ impl InstalledAdapter {
     pub fn dependency_pending(&self) -> bool {
         if self.failure.is_some() || !self.started {
             return false;
+        }
+        if self.menu.as_ref().is_some_and(|menu| menu.busy()) || self.menu_operation.as_ref().is_some_and(|operation|operation.dependency_pending()) || self.chart.as_ref().is_some_and(|chart|chart.dependency_pending()) {
+            return true;
         }
         if let Some(fade) = &self.title_return {
             return self.closing || fade.dependency_pending() || self.title_program_task.is_some();
@@ -317,7 +364,37 @@ impl InstalledAdapter {
         if !self.dependency_pending() {
             return Ok(());
         }
-        let result: Result<()> = if self.native_save.as_ref().is_some_and(|save| save.pending()) {
+        let result: Result<()> = if self.menu.is_some() && self.closing {
+            self.poll_menu_shutdown(host)
+        } else if self.menu.is_some() {
+            self.poll_menu(host, InputFrame::default(), false)
+                .map(|_| ())
+        } else if self.chart.is_some() && !self.closing {
+            (||->Result<()> {
+                if self.chart.as_ref().unwrap().selected.is_some() || self.chart.as_ref().unwrap().has_sound() {return self.poll_chart(host,InputFrame::default(),false);}
+                if let Some(vm)=self.vm.as_mut() {if vm.dependency_pending(){vm.poll_dependency(host)?;}}
+                self.chart.as_mut().unwrap().poll_dependencies(self.vm.as_ref().context("NNN chart completion VM absent")?,host,&self.config.font)
+            })()
+        } else if self
+            .notice
+            .as_ref()
+            .and_then(|n| n.pending_sound())
+            .is_some()
+        {
+            (|| -> Result<()> {
+                let notice = self.notice.as_mut().unwrap();
+                let sound = notice.pending_sound().unwrap();
+                if self
+                    .vm
+                    .as_mut()
+                    .context("NNN notice sound VM absent")?
+                    .poll_system_sound(host, sound)?
+                {
+                    notice.sound_done();
+                }
+                Ok(())
+            })()
+        } else if self.native_save.as_ref().is_some_and(|save| save.pending()) {
             self.poll_slot_save(host, InputFrame::default()).map(|_| ())
         } else if self.native_load.as_ref().is_some_and(|load| load.pending()) && !self.closing {
             self.poll_slot_load(host, InputFrame::default()).map(|_| ())
@@ -351,11 +428,13 @@ impl InstalledAdapter {
         } else if self.vm.is_none() {
             self.advance(host, InputFrame::default(), 1).map(|_| ())
         } else if self.shell.as_ref().is_some_and(|s| s.dependency_pending()) {
-            self.shell
-                .as_mut()
-                .unwrap()
-                .poll(host, InputFrame::default())
-                .map(|_| ())
+            (||->Result<()> {
+                let shell=self.shell.as_mut().unwrap();
+                if let Some(vm)=self.vm.as_ref() {shell.bind_wipe_context(vm)?;}
+                shell.poll(host,InputFrame::default())?;
+                if let Some(vm)=self.vm.as_mut() {shell.commit_wipe_context(vm)?;}
+                Ok(())
+            })()
         } else {
             self.vm
                 .as_mut()
@@ -395,6 +474,7 @@ impl InstalledAdapter {
             }
             self.title_return = None;
         }
+        if let Some(mut chart)=self.chart.take() {chart.remove(host)?;}
         if let Some(vm) = self.vm.as_mut() {
             if !vm.poll_shutdown_ready(host)? {
                 return Ok(VmYield::BudgetExhausted);
@@ -415,6 +495,9 @@ impl InstalledAdapter {
                 return Ok(VmYield::BudgetExhausted);
             }
             if !outer.bridge.poll_result_save(host)? {
+                return Ok(VmYield::BudgetExhausted);
+            }
+            if !outer.bridge.poll_chart_save(host)? {
                 return Ok(VmYield::BudgetExhausted);
             }
             self.close_write = None;
@@ -519,6 +602,7 @@ impl InstalledAdapter {
                 storage.as_ref(),
                 &cancel,
             )?;
+            let chart_runtime = crate::native_chart::ChartRuntime::prepare(&boot.configuration(),storage.as_ref(),&cancel)?;
             let mut variables = boot
                 .session
                 .machine()
@@ -530,7 +614,10 @@ impl InstalledAdapter {
             let io = storage.clone();
             let opener: SourceOpener = Arc::new(move |path, cancel| {
                 cancel.check()?;
-                match io.open_asset(&VfsPath::new(Mount::Asset, path)?) {
+                match crate::native_resources::open_installed_asset(
+                    io.as_ref(),
+                    &VfsPath::new(Mount::Asset, path)?,
+                ) {
                     Ok(source) => Ok(Some(source)),
                     Err(Error::NotFound) => Ok(None),
                     Err(reason) => Err(reason.into()),
@@ -578,6 +665,35 @@ impl InstalledAdapter {
                     });
                 }
             }
+            let mut gaiji =
+                gaiji::Gaiji::prepare(&boot.configuration(), &services, &resources, &cancel)?;
+            let cutin = cutin::Cutin::prepare(
+                &boot.configuration(),
+                &services,
+                storage.as_ref(),
+                &resources,
+                &cancel,
+            )?;
+            let film_button = film_button::FilmButton::prepare(
+                &boot.configuration(),
+                storage.as_ref(),
+                &resources,
+                client,
+                &cancel,
+            )?;
+            if let (Some(gaiji), Some(cutin)) = (&mut gaiji, &cutin) {
+                let body = services.print_setup.integer(b"fontSize")?.unwrap_or(24);
+                gaiji.include_sizes(cutin.font_sizes(body)?, &services)?;
+            }
+            let notice = notice::Notice::prepare(
+                &boot.configuration(),
+                storage.as_ref(),
+                &resources,
+                client,
+                &cancel,
+            )?;
+            let special_selection =
+                selection::Special::prepare(&boot.configuration(), &services, &resources, &cancel)?;
             let names = boot.resources.clone();
             let scripts = boot.scripts;
             let loader: ScriptLoader = Arc::new(move |name, cancel| {
@@ -591,8 +707,14 @@ impl InstalledAdapter {
                 boot,
                 system_file,
                 result_data,
+                chart_runtime,
                 native_load,
                 native_save,
+                notice,
+                gaiji,
+                special_selection,
+                cutin,
+                film_button,
                 loader,
                 services,
                 resources,
@@ -618,8 +740,20 @@ impl InstalledAdapter {
             .as_ref()
             .context("NNN Title original setup absent")?
             .profile;
-        let spec =
-            crate::native_title::NativeTitleSpec::from_profile(profile, &outer.configuration)?;
+        let variables = outer
+            .machine
+            .variables()
+            .context("NNN Title variables absent")?;
+        let variant = crate::native_title::NativeTitleSpec::selected_variant(
+            &profile.title,
+            &outer.configuration,
+            variables,
+        )?;
+        let spec = crate::native_title::NativeTitleSpec::from_table_variant(
+            &profile.title,
+            &outer.configuration,
+            variant,
+        )?;
         let loader = outer.loader.clone();
         let name = profile.title_script.clone();
         self.title_program_task = Some(
@@ -722,6 +856,10 @@ impl InstalledAdapter {
                 .outer
                 .take()
                 .context("NNN Title continuation owner absent")?;
+            // Movie/General FillExitScreen is the global overlap0 buffer,
+            // not only an Installed cover. Bind it before creating the Title
+            // reader so entry and a later exit share the actual handoff.
+            outer.bridge.set_outer_exit_frame(self.title_exit.clone().context("NNN Title inherited exit buffer absent")?)?;
             let shell = self.shell.as_mut().unwrap();
             let count = outer.bridge.initialize_outer_title(
                 host,
@@ -778,10 +916,11 @@ impl InstalledAdapter {
                 .as_ref()
                 .context("NNN Title return context absent")?
                 .frame_period_ms();
-            Some(crate::native_general::ExitFadePlayer::new(
+            Some(crate::native_general::ExitFadePlayer::new_with_enter(
                 host,
                 self.client,
                 capture.clone().context("NNN Title fade capture absent")?,
+                self.vm.as_ref().context("NNN Title retained enter owner absent")?.retained_general_enter_frame(),
                 spec,
                 frame_ms,
             )?)
@@ -804,6 +943,7 @@ impl InstalledAdapter {
         let Some(fade) = self.title_return.as_mut() else {
             return Ok(true);
         };
+        self.vm.as_ref().context("NNN Title wipe VM absent")?.bind_wipe_context(fade)?;
         let image = if admit {
             use crysirror_core::service::buttons as B;
             fade.note_skip(input.buttons_pressed & (B::MOUSE_LEFT | B::MOUSE_RIGHT) != 0);
@@ -811,6 +951,7 @@ impl InstalledAdapter {
         } else {
             fade.poll_dependency()?
         };
+        self.vm.as_mut().unwrap().commit_wipe_context(fade)?;
         let finished = fade.finished();
         if let Some(image) = image {
             if finished {
@@ -940,7 +1081,13 @@ impl InstalledAdapter {
             shell.restart(host, mode, exit)?;
             vm
         } else {
-            NativeAdapter::from_outer_newgame(outer, controller, host, exit)?
+            NativeAdapter::from_outer_newgame_return(
+                outer,
+                controller,
+                host,
+                exit,
+                self.title_script_return.take(),
+            )?
         };
         self.title
             .as_mut()
@@ -1042,6 +1189,72 @@ impl InstalledAdapter {
         input: InputFrame,
         budget: u32,
     ) -> Result<VmYield> {
+        if !self.closing {
+            if let Some(vm)=self.vm.as_mut() {
+                for number in vm.take_result_notices() {
+                    self.notice.as_mut().context("NNN result Notice actor absent")?.start(number);
+                }
+            }
+            if let Some(notice) = self.notice.as_mut() {
+                if let Some(sound) = notice.pending_sound() {
+                    if !self
+                        .vm
+                        .as_mut()
+                        .context("NNN notice sound VM absent")?
+                        .poll_system_sound(host, sound)?
+                    {
+                        return Ok(VmYield::BudgetExhausted);
+                    }
+                    notice.sound_done();
+                }
+                if !notice.poll(host)? {
+                    return Ok(VmYield::BudgetExhausted);
+                }
+            }
+        }
+        if self.menu.is_some() && self.closing {
+            self.poll_menu_shutdown(host)?;
+            return Ok(VmYield::BudgetExhausted);
+        }
+        if self.menu.is_some() && !self.closing {
+            self.poll_menu(host, input, true)?;
+            return Ok(VmYield::BudgetExhausted);
+        }
+        if !self.closing && self.menu.is_none() {
+            if self.chart.is_none() && self.vm.as_mut().is_some_and(|vm|vm.take_chart_mode_request()) {
+                self.chart=Some(chart::ChartPlayer::new(self.vm.as_ref().unwrap(),self.title_resources.clone().context("NNN chart resource capability absent")?,self.pool.clone().context("NNN chart worker pool absent")?,self.client,host)?);
+            }
+            if self.chart.is_some() {
+                self.poll_chart(host,input,true)?;
+                return Ok(VmYield::BudgetExhausted);
+            }
+        }
+        if self.menu.is_none()
+            && !self.closing
+            && self.shell.is_none()
+            && self.outer.is_none()
+            && self.title.is_none()
+            && self.movie.is_none()
+            && self
+                .vm
+                .as_ref()
+                .is_some_and(|vm| vm.original_input_mode().is_some())
+        {
+            use crysirror_core::service::buttons as B;
+            let kind = if input.buttons_pressed & B::KEY_L != 0 {
+                Some(menu::Kind::Load)
+            } else if input.buttons_pressed & B::KEY_S != 0 {
+                Some(menu::Kind::Save)
+            } else if input.buttons_pressed & B::KEY_C != 0 {
+                Some(menu::Kind::Config)
+            } else {
+                None
+            };
+            if let Some(kind) = kind {
+                self.open_menu(kind, host)?;
+                return Ok(VmYield::BudgetExhausted);
+            }
+        }
         if self.closing {
             if self.native_save.as_ref().is_some_and(|save| save.pending()) {
                 self.poll_slot_save(host, InputFrame::default())?;
@@ -1079,7 +1292,7 @@ impl InstalledAdapter {
             }
             let title = self.title.as_mut().unwrap();
             let vm = self.vm.as_mut().unwrap();
-            if title.music_ready() {
+            if title.music_ready() && !title.entry_blocks_update(host.now_ms()) {
                 let yielded = vm.step(host, input, budget)?;
                 if yielded == VmYield::Halted {
                     title.script_ended();
@@ -1092,13 +1305,31 @@ impl InstalledAdapter {
             if let Some(action) = title.poll(host, input, base, vm)? {
                 match action {
                     0 => self.begin_title_newgame(host)?,
+                    1 => self.open_menu(menu::Kind::Load, host)?,
+                    2 => self.open_menu(menu::Kind::Config, host)?,
+                    3 => self.open_menu(menu::Kind::Omake, host)?,
                     // Actual Game vtable+240 -> 534b00 posts WM_CLOSE, same
                     // as the complete public PostCloseMessage implementation.
                     // Enter the existing scoped host-close/save protocol.
                     4 => ensure!(self.request_close(), "NNN Title native close was refused"),
-                    _ => anyhow::bail!(
-                        "NNN Title native action {action} requires its original Load/Config/Omake mode"
-                    ),
+                    _ => {
+                        let table = &self.shell.as_ref().unwrap().profile.title;
+                        let configuration = self.vm.as_ref().unwrap().configuration().unwrap();
+                        match crate::native_title::extension_request(
+                            table,
+                            configuration,
+                            action,
+                            true,
+                        )? {
+                            crate::native_title::MenuRequest::Mode(mode) => {
+                                self.open_menu(menu::Kind::from_native(mode)?, host)?
+                            }
+                            crate::native_title::MenuRequest::Script { variable, value } => {
+                                self.title_script_return = Some((variable, value));
+                                self.begin_title_newgame(host)?;
+                            }
+                        }
+                    }
                 }
             } else if let Some(mode) = title.take_restart() {
                 self.begin_title_restart(host, mode)?;
@@ -1117,9 +1348,10 @@ impl InstalledAdapter {
         }
         if let Some(vm) = &mut self.vm {
             if let Some(shell) = &mut self.shell {
-                if !shell.poll(host, input)? {
-                    return Ok(VmYield::BudgetExhausted);
-                }
+                shell.bind_wipe_context(vm)?;
+                let ready=shell.poll(host,input)?;
+                shell.commit_wipe_context(vm)?;
+                if !ready {return Ok(VmYield::BudgetExhausted);}
                 let incoming = shell.take_opening_entry_frame()?;
                 let entered = incoming.is_some();
                 if let Some(exit) = incoming {
@@ -1159,7 +1391,18 @@ impl InstalledAdapter {
                 }
                 return Ok(yielded);
             }
-            return Ok(vm.step(host, input, budget)?);
+            let result = vm.step(host, input, budget)?;
+            if let Some(path) = self.load_cover.take() {
+                host.submit_engine(
+                    self.client,
+                    1,
+                    &serde_json::to_vec(
+                        &serde_json::json!({"layers":[{"op":"remove","id":0x66010001u32}]}),
+                    )?,
+                )?;
+                host.release_image_resource(self.client, &path)?;
+            }
+            return Ok(result);
         }
         if budget == 0 {
             return Ok(VmYield::BudgetExhausted);
@@ -1239,6 +1482,32 @@ impl InstalledAdapter {
         if pending {
             return Ok(VmYield::BudgetExhausted);
         }
+        if let Some(gaiji) = prepared.gaiji.as_mut() {
+            if !gaiji.poll(self.client, host, &mut self.published)? {
+                return Ok(VmYield::BudgetExhausted);
+            }
+            prepared.services.inline.images = gaiji.images.clone();
+        }
+        if let Some(notice) = prepared.notice.as_mut() {
+            if !notice.prepare_images(host)? {
+                return Ok(VmYield::BudgetExhausted);
+            }
+        }
+        if let Some(special) = prepared.special_selection.as_mut() {
+            if !special.poll(self.client, host, &mut self.published)? {
+                return Ok(VmYield::BudgetExhausted);
+            }
+        }
+        if let Some(cutin) = prepared.cutin.as_mut() {
+            if !cutin.poll(self.client, host, &mut self.published)? {
+                return Ok(VmYield::BudgetExhausted);
+            }
+        }
+        if let Some(button) = prepared.film_button.as_mut() {
+            if !button.poll(host, &mut self.published)? {
+                return Ok(VmYield::BudgetExhausted);
+            }
+        }
         // All fallible resource work has completed before publishing the scene.
         let mut prepared = self.prepared.take().unwrap();
         prepared.boot.initialize_random_state(self.clock, None)?;
@@ -1250,7 +1519,7 @@ impl InstalledAdapter {
             .windows
             .get(1)
             .and_then(|window| window.resolved.clone());
-        let profile = prepared.services.message_profile_with_windows(
+        let mut profile = prepared.services.message_profile_with_windows(
             MessageBindings {
                 client: self.client,
                 root: 1,
@@ -1264,6 +1533,13 @@ impl InstalledAdapter {
             crysirror_core::service::buttons::MOUSE_LEFT | crysirror_core::service::buttons::ENTER,
             name,
         )?;
+        profile.cutin = prepared
+            .cutin
+            .take()
+            .map(cutin::Cutin::finish)
+            .transpose()?;
+        profile.cutin_window_percent =
+            u16::try_from(100 - prepared.services.preferences.window_transparency)?;
         host.text_measurement(self.client)?.measure_simple(
             &self.config.font,
             profile.body.size as f32,
@@ -1287,6 +1563,9 @@ impl InstalledAdapter {
             single_byte_map: None,
         })?;
         selection.configure_native_background(&prepared.services.selection_setup)?;
+        if let Some(special) = prepared.special_selection.take() {
+            selection.configure_special(special.finish()?)?;
+        }
         let mut bridge = Bridge::new(
             self.client,
             CallbackProfile::Mugen2Legacy,
@@ -1307,9 +1586,14 @@ impl InstalledAdapter {
             prepared.system_file.set_auto_mode(false)?;
         }
         bridge.configure_system_file(prepared.system_file, &prepared.boot.setup)?;
+        if let Some(button) = prepared.film_button.take() {
+            bridge.configure_film_button(button.finish()?)?;
+        }
         bridge.configure_result_data(prepared.result_data)?;
+        bridge.configure_chart_runtime(prepared.chart_runtime)?;
         self.native_load = prepared.native_load.map(native_load::Controller::new);
         self.native_save = prepared.native_save.map(native_save::Controller::new);
+        self.notice = prepared.notice;
         let mut text = NativeTextBridge::new(profile)?;
         text.configure_native_timing(&prepared.services.print_setup)?;
         bridge.configure_text(text)?;
@@ -1330,6 +1614,7 @@ impl InstalledAdapter {
         )?;
         let resources = prepared.resources.clone();
         let names = prepared.services.resources.clone();
+        bridge.configure_voice_policy(prepared.services.voice_policy.clone())?;
         bridge.configure_audio(crate::audio_bridge::AudioBridge::new(
             self.client,
             prepared.services.audio,
@@ -1337,14 +1622,11 @@ impl InstalledAdapter {
             prepared.services.sound_names,
             Arc::new(move |source, cancel| resources.audio(source, &names, cancel)),
         )?)?;
-        if let Some(startup) = &prepared.startup {
-            bridge.configure_system_sounds(
-                startup.system_sounds.clone(),
-                startup.system_sound_disabled,
-                startup.system_sound_multi,
-                64,
-            )?;
-        }
+        // System channels belong to GameCallBack, including direct NewGame
+        // entry. They do not depend on constructing a Logo/Title shell.
+        bridge.configure_system_sounds(prepared.services.system_sounds.clone(),prepared.services.system_sound_disabled,false,64)?;
+        self.movie_preferences=Some(prepared.services.preferences.clone());
+        self.title_resources=Some(prepared.resources.clone());
         let vm = if let Some(startup) = prepared.startup.take() {
             let frame_ms = u64::try_from(frame_time)?;
             self.movie_preferences = Some(prepared.services.preferences.clone());
@@ -1383,11 +1665,15 @@ impl InstalledAdapter {
 impl VmAdapter for InstalledAdapter {
     fn presentation_pending(&self) -> bool {
         self.native_save.as_ref().is_some_and(|save| save.pending())
+            || self.chart.as_ref().is_some_and(|chart|chart.dependency_pending())
             || self.vm.as_ref().is_some_and(|vm| vm.presentation_pending())
     }
     fn preparation_pending(&self) -> bool {
         self.failure.is_none()
-            && (self.native_save.as_ref().is_some_and(|save| save.pending())
+            && (self.menu.as_ref().is_some_and(|menu| menu.busy())
+                || self.menu_operation.as_ref().is_some_and(|operation|operation.dependency_pending())
+                || self.chart.as_ref().is_some_and(|chart|chart.dependency_pending())
+                || self.native_save.as_ref().is_some_and(|save| save.pending())
                 || self.native_load.as_ref().is_some_and(|load| load.pending())
                 || (self.vm.is_none() && self.outer.is_none())
                 || self.shell.as_ref().is_some_and(|s| s.preparation_pending()))
@@ -1437,14 +1723,21 @@ impl VmAdapter for InstalledAdapter {
             || self.failure.is_some()
             || self.closing
             || self.closed
-            || self.shell.is_some()
+            || self.shell.is_some() && self.title.is_none()
             || self.outer.is_some()
             || self.movie.is_some()
-            || self.title.is_some()
+            || self
+                .title
+                .as_ref()
+                .is_some_and(|title| title.dependency_pending())
             || self.task.is_some()
             || self.prepared.is_some()
             || self.title_program_task.is_some()
             || self.title_exit_job.is_some()
+            || self
+                .menu
+                .as_ref()
+                .is_some_and(|menu| menu.busy() || menu.viewer_active())
         {
             return Err(Error::Unsupported(
                 "NNN original restore requires stable native gameplay; active outer modes need their own saved actor",
@@ -1464,8 +1757,46 @@ impl VmAdapter for InstalledAdapter {
                 "NNN installed original restore admission: {error:#}"
             ))
         })?;
+        let mut layers = Vec::new();
+        let mut ui = Vec::new();
+        let mut cleanup_images = Vec::new();
+        if let Some(chart)=&self.chart {
+            let (l,u,p)=chart.cleanup();layers.extend(l);ui.extend(u);cleanup_images.extend(p);
+        }
+        if let Some(menu) = &self.menu {
+            let (l, u, p) = menu.cleanup().map_err(|e| Error::Io(e.to_string()))?;
+            layers.extend(l);
+            ui.extend(u);
+            cleanup_images.extend(p);
+            layers.push(serde_json::json!({"op":"set_clock_paused","id":1,"paused":false}));
+        }
+        if let Some(title) = &self.title {
+            let (l, u, p) = title
+                .restore_cleanup()
+                .map_err(|e| Error::Io(e.to_string()))?;
+            layers.extend(l);
+            ui.extend(u);
+            cleanup_images.extend(p);
+            if let Some(shell) = &self.shell {
+                let (l, p) = shell.restore_cover_cleanup();
+                layers.extend(l);
+                cleanup_images.extend(p);
+            }
+        }
+        let cleanup = if layers.is_empty() && ui.is_empty() {
+            None
+        } else {
+            Some(crysirror_core::native_restore::OriginalRestoreBatch {
+                schema: 1,
+                bytes: serde_json::to_vec(&serde_json::json!({"layers":layers,"ui":ui}))
+                    .map_err(|e| Error::Io(e.to_string()))?
+                    .into(),
+            })
+        };
         Ok(Box::new(InstalledRestoreJob {
             inner,
+            cleanup,
+            cleanup_images,
             client: self.client,
             config: self.config.clone(),
             pool: self.pool.clone(),
@@ -1475,9 +1806,24 @@ impl VmAdapter for InstalledAdapter {
             movie_preferences: self.movie_preferences.clone(),
             title_resources: self.title_resources.clone(),
             native_exit_available: self.native_exit_available,
-            native_load: self.native_load.as_ref().map(|load| load.policy.clone()),
+            native_load: self.restored_quick_load_policy(),
             native_save: self.native_save.as_ref().map(|save| save.restore_copy()),
+            notice: self
+                .notice
+                .as_ref()
+                .map(|n| n.copy_ready())
+                .transpose()
+                .map_err(|e| Error::Io(e.to_string()))?,
             load_request: self.native_load.as_ref().and_then(|load| load.request()),
+            load_notice: self
+                .native_load
+                .as_ref()
+                .and_then(|load| load.restore_notice()),
+            load_cover: self
+                .native_load
+                .as_ref()
+                .and_then(|load| load.exit_path())
+                .cloned(),
         }))
     }
     fn snapshot(&self) -> crysirror_core::Result<Vec<u8>> {
@@ -1582,6 +1928,7 @@ mod system_close_tests {
             resources: ResourceNames::new("").unwrap(),
             setup: empty.clone(),
             main_control: None,
+            chart_setup: None,
             variable_names: empty.clone(),
             project: empty.clone(),
             commands: empty.clone(),
@@ -1706,6 +2053,7 @@ mod native_return_tests {
         runtime.tick(0, Default::default()).unwrap();
         let configuration = Arc::new(NativeConfiguration {
             main_control: None,
+            chart_setup: None,
             resources: ResourceNames::new("").unwrap(),
             setup: names("frameTime 20 dwqPackLevel 0"),
             variable_names: names(""),
@@ -1942,6 +2290,11 @@ mod native_return_tests {
             )
             .unwrap(),
         );
+        // Consume the Logo->Opening handoff before sending a fresh click.
+        // GeneralInit intentionally swallows the click that exited Logo.
+        adapter
+            .advance(&mut runtime.host, InputFrame::default(), 1)
+            .unwrap();
         adapter
             .advance(
                 &mut runtime.host,

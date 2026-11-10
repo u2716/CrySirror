@@ -312,6 +312,11 @@ pub struct AudioPlaybackInfo {
     pub balance: AudioBalanceInfo,
     /// Source has remaining input, even when paused; excludes processing tails.
     pub source_playing: bool,
+    /// At least one source/loop endpoint has been reached by mixer transport.
+    /// Latched until this voice is replaced; decoder read-ahead, pause, gain
+    /// and wall time alone cannot set it. A joined intro belongs to the first
+    /// pass; later passes begin at the configured loop start. Seek preserves it.
+    pub first_pass_complete: bool,
     /// Source clock currently frozen by pause or a freezing scheduled resume.
     pub paused: bool,
     /// Canonical source retention/protection policy of this allocated voice.
@@ -527,6 +532,9 @@ pub struct AudioPreparation {
 /// and decoder resources are not part of logical VM snapshots.
 #[derive(Clone, Debug)]
 pub enum AudioRequest {
+    /// Bounded segmented source, decoded on the existing audio worker. Nested
+    /// repeats do not expand encoded data or decoded PCM in memory.
+    PlayPlaylist { channel: u32, source: AudioPlaylist, parameters: AudioParameters },
     /// Decode all bounded input frames before publication. Playback, loops and
     /// exact seeks subsequently use resident PCM without a decoder/I/O worker.
     PlayResident {channel:u32,source:EncodedAudio,intro:Option<EncodedAudio>,parameters:AudioParameters},
@@ -1293,6 +1301,21 @@ pub trait HostServices: FileSystem {
     ) -> Result<crate::image_processing::ImageJob> {
         Err(crate::Error::Unsupported("layer prefix image capture"))
     }
+    /// Rasterize a detached candidate with the shared Layer presenter. Commands
+    /// are a JSON array of declarative Layer put/remove operations, starting
+    /// from an empty scoped scene; all referenced ancestors must be supplied.
+    /// The exclusive order freezes glyph reveal and resource generations just
+    /// like prefix capture. No live Layer/UI/input state is changed. Requires
+    /// the same installed presenter, image memory and cancellation budget.
+    fn begin_detached_layers_image(
+        &mut self,
+        _client: ClientId,
+        _size: [u32; 2],
+        _order_exclusive: [i32; 2],
+        _commands: &[u8],
+    ) -> Result<crate::image_processing::ImageJob> {
+        Err(crate::Error::Unsupported("detached Layer image capture"))
+    }
     fn begin_layer_prefix_image_over(
         &mut self,
         client: ClientId,
@@ -1568,6 +1591,10 @@ pub trait HostServices: FileSystem {
     ) -> Result<()> {
         Err(crate::Error::Unsupported("prepared audio resource receipt"))
     }
+    /// Inspect original source-layout PCM on a worker, without seeking playback.
+    fn begin_audio_samples(&mut self,_client:ClientId,_resource:AudioResourceHandle,_request:AudioSampleRequest)->Result<alloc::boxed::Box<dyn AudioSampleQuery>>{
+        Err(crate::Error::Unsupported("source-layout audio samples"))
+    }
     fn audio_resource_info(
         &self,
         _client: ClientId,
@@ -1729,6 +1756,13 @@ pub trait HostServices: FileSystem {
     fn input_observation(&self, _client: ClientId) -> Result<InputObservation> {
         Err(crate::Error::Unsupported("input observation"))
     }
+    /// Separate admitted keyboard/pointer and normalized per-device controller
+    /// samples. Unavailable host observations remain Unsupported, not invented
+    /// from an aggregate InputFrame. Shared modal UI masks source controls too.
+    fn input_sources(&self,_client:ClientId)->Result<InputSourcesObservation>{
+        Err(crate::Error::Unsupported("input source observation"))
+    }
+
     /// Whether shared UI owns the last admitted physical input frame. This
     /// owner fact belongs to the same routing frame as `input_observation`;
     /// it does not infer a physical key-up from buttons masked by a modal UI.
@@ -2112,3 +2146,10 @@ pub trait RenderBackend {
 pub trait AudioBackend {
     fn sync(&mut self, scene: &SceneState) -> Result<()>;
 }
+
+mod audio_playlist;
+pub use audio_playlist::{AudioPlaylist, AudioPlaylistNode};
+
+#[path = "audio_samples.rs"]
+pub mod audio_samples;
+pub use audio_samples::{AudioSampleFormat,AudioSampleRequest,AudioSampleReceipt,AudioSampleState,AudioSampleQuery};

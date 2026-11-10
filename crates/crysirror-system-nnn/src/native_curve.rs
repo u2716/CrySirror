@@ -1,6 +1,8 @@
 // Copyright (c) 2026 CrySirror contributors. MPL-2.0.
 //! Native0x482070 bit-field decoding and final integer ABI quantization. The
 //! reusable envelope/shape arithmetic is the engine's public ProgressCurve.
+mod source32;
+pub(crate) use source32::SourceCurveContext;
 use anyhow::{Result, ensure};
 use crysirror_image::progress_curve::{ProgressCurve, ProgressKnot, ProgressShape};
 pub fn curve(max: i32, subframe: i32, kind: i32) -> Result<ProgressCurve> {

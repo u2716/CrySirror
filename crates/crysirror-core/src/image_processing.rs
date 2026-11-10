@@ -79,6 +79,10 @@ pub struct GlyphRasterOptions {
     pub binary_cutoff: Option<u8>,
     /// Symmetric disk maximum on working pixels0..16; same kernel as rich bold.
     pub embolden_radius: u8,
+    /// Optional max-union stamps after morphology, in signed working pixels.
+    /// Replaces the unstamped mask; include [0, 0] to preserve it.
+    /// At most 256 offsets, each axis -64..64.
+    pub coverage_offsets: Option<Arc<[[i16; 2]]>>,
     /// Optional exact lookup indexed by binary hit count in a reduction block.
     /// Requires binary_cutoff and length supersample^2+1 (at most17 bytes).
     pub coverage_lut: Option<Arc<[u8]>>,
@@ -96,6 +100,7 @@ impl Default for GlyphRasterOptions {
             supersample: 1,
             binary_cutoff: None,
             embolden_radius: 0,
+            coverage_offsets: None,
             coverage_lut: None,
             downsample_nearest: true,
             underline: false,
@@ -107,6 +112,13 @@ impl GlyphRasterOptions {
     pub fn validate(&self) -> Result<()> {
         if !(1..=4).contains(&self.supersample) || self.embolden_radius > 16 {
             return Err(crate::Error::Invalid("styled glyph supersample/embolden"));
+        }
+        if self.coverage_offsets.as_ref().is_some_and(|offsets| {
+            offsets.is_empty()
+                || offsets.len() > 256
+                || offsets.iter().flatten().any(|v| v.unsigned_abs() > 64)
+        }) {
+            return Err(crate::Error::Invalid("styled glyph coverage offsets"));
         }
         if self.coverage_lut.as_ref().is_some_and(|t| {
             self.binary_cutoff.is_none() || t.len() != usize::from(self.supersample).pow(2) + 1
@@ -473,7 +485,8 @@ pub enum ImageInput {
         destination: Box<ImageInput>,
         source: Box<ImageInput>,
     },
-    /// Root-only three-input context. The first effect must be MaskedPairBlend;
+    /// Root-only three-input context. The first effect selects its typed
+    /// source/mask or independent-two-source operation;
     /// all inputs use the same scope, graph, decode and memory admission rules.
     Ternary {
         destination: Box<ImageInput>,

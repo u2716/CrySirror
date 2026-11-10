@@ -15,6 +15,10 @@ pub struct FixedLumaSpec {
     pub fractional_bits: u8,
     /// Luminance colour mix weight, in explicit /256 units.
     pub amount256: u16,
+    /// Optional per-channel tint of the luminance target: `(luma*tint)>>8`
+    /// before mixing (sepia-style toning). `None` mixes toward grey.
+    #[serde(default)]
+    pub tint: Option<[u8; 3]>,
 }
 impl FixedLumaSpec {
     pub fn validate(&self) -> Result<()> {
@@ -57,9 +61,13 @@ impl FixedLumaSpec {
                         u32::from(pixel[channel]) * self.coefficients[channel];
                 }
                 let luma = sums.iter().map(|v| *v >> self.fractional_bits).sum::<u32>();
-                for channel in pixel[..3].iter_mut() {
+                for (index, channel) in pixel[..3].iter_mut().enumerate() {
+                    let target = match self.tint {
+                        Some(tint) => (luma * u32::from(tint[index])) >> 8,
+                        None => luma,
+                    };
                     *channel = ((u32::from(*channel) * u32::from(256 - self.amount256)
-                        + luma * u32::from(self.amount256))
+                        + target * u32::from(self.amount256))
                         >> 8) as u8;
                 }
             }
@@ -87,6 +95,7 @@ mod tests {
             groups: [1, 0, 0],
             fractional_bits: 8,
             amount256: 256,
+            tint: None,
         };
         let out = spec.apply(&image(), &|| Ok(())).unwrap();
         assert_eq!(
@@ -122,12 +131,36 @@ mod tests {
         assert_eq!(&mixed.rgba[4..8], &[165, 37, 37, 13]);
     }
     #[test]
+    fn tinted_target_matches_grouped_mmx_sepia() {
+        // MMX LayerSepia: y=((G*150+B*29)>>8)+((R*76)>>8); t=(y*c)>>8;
+        // out=(t*ps+src*(256-ps))>>8.
+        let spec = FixedLumaSpec {
+            coefficients: [76, 150, 29],
+            groups: [1, 0, 0],
+            fractional_bits: 8,
+            amount256: 256,
+            tint: Some([107, 74, 43]),
+        };
+        let out = spec.apply(&image(), &|| Ok(())).unwrap();
+        // White: y=253 -> (253*107)>>8=105, (253*74)>>8=73, (253*43)>>8=42.
+        assert_eq!(&out.rgba[..4], &[105, 73, 42, 7]);
+        let half = FixedLumaSpec { amount256: 128, ..spec }.apply(&image(), &|| Ok(())).unwrap();
+        // Red: y=75 -> t=[31,21,12]; ((31*128+255*128)>>8)=143, (21*128)>>8=10, 6.
+        assert_eq!(&half.rgba[4..8], &[143, 10, 6, 13]);
+        // Older encoded specs without `tint` still mean grey.
+        let legacy: FixedLumaSpec = serde_json::from_str(
+            r#"{"coefficients":[76,150,29],"groups":[1,0,0],"fractional_bits":8,"amount256":256}"#,
+        ).unwrap();
+        assert_eq!(legacy.tint, None);
+    }
+    #[test]
     fn rejects_invalid_profiles_and_cancels_without_changing_input() {
         let base = FixedLumaSpec {
             coefficients: [76, 150, 29],
             groups: [1, 0, 0],
             fractional_bits: 8,
             amount256: 256,
+            tint: None,
         };
         assert!(
             FixedLumaSpec {

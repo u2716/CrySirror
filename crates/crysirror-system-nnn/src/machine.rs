@@ -168,6 +168,10 @@ impl Machine {
     pub fn pc(&self) -> u32 {
         self.pc
     }
+    pub(crate) fn seek_film(&mut self,program:&Program,film:i32)->Result<()> {
+        ensure!(self.pending.is_none(),"NNN film seek overlaps an unacknowledged instruction");
+        self.pc=program.film_pc(film)?;self.halted=false;Ok(())
+    }
     pub fn executed(&self) -> u64 {
         self.executed
     }

@@ -2,17 +2,26 @@
 //! Reviewed Mugen2 legacy save records. This is the original native binary
 //! envelope, not the framework snapshot format. Opaque status/effect sections
 //! retain their bytes; full VM/resource restoration requires separate mapping.
-use anyhow::{Context, Result, ensure};
+use anyhow::{ensure, Context, Result};
 use crysirror_core::{
     path::{Mount, VfsPath},
     service::{ClientStorage, StorageWrite},
 };
 use std::sync::Arc;
+pub(crate) fn slot_path(configuration:&crate::native_bootstrap::NativeConfiguration,slot:usize)->Result<crysirror_core::path::VfsPath> {
+    ensure!(slot<1_000_000,"NNN original save slot bounds");
+    let prefix=if configuration.setup.integer(b"taikenFlag")?.unwrap_or(0)!=0 {"tdata"}else{"data"};
+    Ok(crysirror_core::path::VfsPath::new(crysirror_core::path::Mount::Save,&format!("{prefix}{slot}.sav"))?)
+}
+mod auxiliary;
 mod fresh;
 mod live;
+pub(crate) use auxiliary::AuxiliaryState;
+pub use auxiliary::OmakeClasses;
 pub(crate) use live::LiveExecution;
 const HEADER: usize = 32;
 const LIMIT: usize = 64 * 1024 * 1024;
+pub(super) const MAX_EXTENSIONS: usize = 512;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SaveBlock {
     pub code: u32,
@@ -77,25 +86,38 @@ impl LegacySaveProfile {
         let [high, middle, low] = version;
         let version =
             (high? as u32).wrapping_shl(16) | (middle? as u32).wrapping_shl(8) | (low? as u32);
-        // Actual legacy constructor only has autoExtDataMode, not newer
-        // source autoExtDataSub/face/okikae auto classes. Its mode sizes come
-        // from the real mode actor; do not replace those consumers with0.
+        // Legacy542180 initializes one zero-size block per positive automatic
+        // mode, before the manually sized blocks. Static review of every
+        // CCommon actor's vtable+28/+32 in this module found the real empty
+        // 402700 callbacks, except ChartMenu (51ca90/51ca00), whose buffers
+        // are dynamically sized from the separately prepared SelectChart setup.
+        // This old module has no newer autoExtDataSub/face/okikae sections.
+        let mut automatic = Vec::new();
         for index in 1..=256 {
             let key = format!("autoExtDataMode{index}");
             let Some(name) = setup.parameter(key.as_bytes()) else {
                 break;
             };
             let mode = crate::native_mode::number(name)?;
-            ensure!(
-                mode <= 0,
-                "NNN native auto-extension mode {mode} requires its original state-size/data consumer"
-            );
+            if mode <= 0 {
+                continue;
+            }
+            if mode == 34 {
+                let table = config.chart_setup.as_ref().context("NNN ChartMenu setup was not prepared with its automatic EXT actor")?;
+                automatic.push(u32::try_from(crate::native_chart::ChartLayout::read(table)?.bytes())?);
+            } else {
+                ensure!(matches!(mode,1..=18|20|22..=27|29..=33|35|40),
+                    "NNN automatic extension mode {mode} has no reviewed native consumer");
+                automatic.push(0);
+            }
         }
         let count = usize::try_from(setup.integer(b"extSaveDataNumber")?.unwrap_or(0))
             .context("NNN native negative save extension count")?;
         ensure!(count <= 256, "NNN save extension count budget");
-        let mut extension_sizes = Vec::with_capacity(count);
-        let mut total = 0usize;
+        let mut extension_sizes = automatic;
+        extension_sizes.reserve(count);
+        let mut total: usize = extension_sizes.iter().map(|bytes|*bytes as usize).sum();
+        ensure!(total <= LIMIT, "NNN automatic extension byte budget");
         for index in 1..=count {
             let key = format!("extSaveDataSize{index}");
             let bytes = u32::try_from(setup.integer(key.as_bytes())?.unwrap_or(0))
@@ -178,7 +200,7 @@ impl NativeSaveFile {
     }
     pub fn validate(&self, profile: &LegacySaveProfile) -> Result<()> {
         ensure!(
-            profile.header_name.len() <= 128 && profile.extension_sizes.len() <= 256,
+            profile.header_name.len() <= 128 && profile.extension_sizes.len() <= MAX_EXTENSIONS,
             "NNN save profile budget"
         );
         let n = 8
@@ -300,7 +322,9 @@ impl NativeSaveFile {
         Ok(())
     }
     pub fn position(&self) -> Result<NativeSavePosition> {
-        let b = self.blocks.get(2).context("NNN status block absent")?;
+        Self::status_position(self.blocks.get(2).context("NNN status block absent")?)
+    }
+    pub(crate) fn status_position(b:&SaveBlock)->Result<NativeSavePosition> {
         ensure!(
             b.code == 2 && b.payload.len() == 7056,
             "NNN legacy status record"
@@ -526,21 +550,27 @@ impl NativeSaveFile {
     ) -> Result<crate::native_control::ScriptSession> {
         cancel.check()?;
         self.validate(profile)?;
-        ensure!(
-            configuration.profile == crate::expression::VariableProfile::Legacy1000,
-            "NNN native saved variable ABI"
-        );
-        let position = self.position()?;
+        let variables=self.prepare_stored_variables(current)?;
+        Self::prepare_status_contexts(&self.blocks[2],configuration,variables,load,cancel)
+    }
+    pub(crate) fn prepare_status_contexts(
+        status:&SaveBlock,
+        configuration:&crate::native_bootstrap::NativeConfiguration,
+        variables:crate::expression::Variables,
+        mut load:impl FnMut(&[u8],&crysirror_tasks::Cancellation)->Result<Arc<crate::Program>>,
+        cancel:&crysirror_tasks::Cancellation,
+    )->Result<crate::native_control::ScriptSession> {
+        cancel.check()?;
+        ensure!(configuration.profile==crate::expression::VariableProfile::Legacy1000,"NNN native saved variable ABI");
+        let position = Self::status_position(status)?;
         ensure!(
             (0..=3).contains(&position.run_mode),
             "NNN saved active script context bounds"
         );
-        let status = &self.blocks[2];
         let word = |native: usize| status.word(native - 8);
         let adjusted = word(22)?;
         ensure!(adjusted <= 1, "NNN unknown saved script-adjust version");
         let game_mode = word(20)? as i32;
-        let variables = self.prepare_stored_variables(current)?;
         let script_indices = [
             None,
             Some(position.script_number),
@@ -600,12 +630,12 @@ impl NativeSaveFile {
 mod script_context_tests {
     use super::*;
     use crate::{
-        Program, XorProfile,
         config::Names,
         expression::{VariableProfile, Variables},
         machine::{Payload, Step},
         native_bootstrap::NativeConfiguration,
         native_resources::ResourceNames,
+        Program, XorProfile,
     };
     fn program() -> Arc<Program> {
         let mut words = vec![0u32; 32];
@@ -673,6 +703,7 @@ mod script_context_tests {
             resources: ResourceNames::new("").unwrap(),
             setup: empty.clone(),
             main_control: None,
+            chart_setup: None,
             variable_names: empty.clone(),
             project: Names::parse(b"a b c", false).unwrap(),
             commands: empty.clone(),
@@ -702,8 +733,8 @@ mod script_context_tests {
         file.blocks[2].payload[at..at + 4].copy_from_slice(&value.to_le_bytes());
     }
     #[test]
-    fn adjusted_four_contexts_recover_native_return_and_parent_script_ids_without_losing_persistent_bank()
-     {
+    fn adjusted_four_contexts_recover_native_return_and_parent_script_ids_without_losing_persistent_bank(
+    ) {
         let (mut file, profile, cfg, current) = fixture();
         status(&mut file, 22, 1);
         status(&mut file, 24, 3);
@@ -766,6 +797,27 @@ mod script_context_tests {
         };
         assert_eq!(call.pc, 47);
         assert_eq!(call.code, 0x33330052);
+    }
+    #[test]
+    fn chart_checkpoint_restores_command_continuation_without_replaying_it_or_rewinding_globals() {
+        let (mut file,_,cfg,current)=fixture();
+        status(&mut file,20,34);status(&mut file,22,1);
+        status(&mut file,472,42); // adjusted command id below, not a raw next PC
+        status(&mut file,489+254,0);
+        let layout=crate::native_chart::ChartLayout::read(&Names{tokens:vec![]}).unwrap();
+        let mut saved=vec![0;1000];saved[0]=42;saved[200]=-1;saved[299]=-2;saved[300]=314;
+        let checkpoint=crate::native_chart::ChartCheckpoint {status:file.blocks[2].clone(),variables:saved,state:crate::native_chart::ChartState::fresh(layout)};
+        let bytes=checkpoint.encode(&||Ok(())).unwrap();
+        let checkpoint=crate::native_chart::ChartCheckpoint::parse(&bytes,layout,&||Ok(())).unwrap();
+        let source=program();let loader:crate::adapter::ScriptLoader=Arc::new(move|_,_|Ok(source.clone()));
+        let mut session=checkpoint.prepare_session(&cfg,&current,&loader,&Default::default()).unwrap();
+        assert_eq!(session.machine().pc(),47);
+        let variables=session.machine().variables().unwrap();
+        assert_eq!((variables.read_stored(0),variables.read_stored(200),variables.read_stored(299),variables.read_stored(300)),(42,99,51,314));
+        assert_eq!(variables.random_state(),current.random_state());
+        let Step::Native(call)=session.poll(1).unwrap() else {panic!("native instruction absent")};
+        assert_eq!((call.pc,call.code),(47,0x33330052));
+        assert!(!matches!(call.payload,Payload::UserCall{..}));
     }
     #[test]
     fn raw_returns_recover_call_ids_and_typed_ids_advance_only_on_original_acknowledgement() {
@@ -834,16 +886,15 @@ mod script_context_tests {
                 status(&mut file, 488, 1);
             }
             let bytes = file.encode(&profile).unwrap();
-            assert!(
-                file.prepare_script_contexts(
+            assert!(file
+                .prepare_script_contexts(
                     &profile,
                     &cfg,
                     &current,
                     |_, _| Ok(program.clone()),
                     &Default::default()
                 )
-                .is_err()
-            );
+                .is_err());
             assert_eq!(file.encode(&profile).unwrap(), bytes);
             assert_eq!(current.read_stored(200), 99);
             file = original;
@@ -851,8 +902,8 @@ mod script_context_tests {
         let cancel = crysirror_tasks::Cancellation::default();
         cancel.cancel();
         let mut reads = 0;
-        assert!(
-            file.prepare_script_contexts(
+        assert!(file
+            .prepare_script_contexts(
                 &profile,
                 &cfg,
                 &current,
@@ -862,23 +913,21 @@ mod script_context_tests {
                 },
                 &cancel
             )
-            .is_err()
-        );
+            .is_err());
         assert_eq!(reads, 0);
         status(&mut file, 22, 1);
         status(&mut file, 488, 1);
         let mut bad = (*program).clone();
         bad.words[59] = 0;
-        assert!(
-            file.prepare_script_contexts(
+        assert!(file
+            .prepare_script_contexts(
                 &profile,
                 &cfg,
                 &current,
                 |_, _| Ok(Arc::new(bad.clone())),
                 &Default::default()
             )
-            .is_err()
-        );
+            .is_err());
     }
 }
 
@@ -1020,11 +1069,11 @@ impl NativeSaveFile {
 mod original_profile_tests {
     use super::*;
     use crate::{
-        XorProfile,
         config::Names,
         expression::VariableProfile,
-        native_bootstrap::{MUGEN2_MODULE_SHA256, NativeConfiguration},
+        native_bootstrap::{NativeConfiguration, MUGEN2_MODULE_SHA256},
         native_resources::ResourceNames,
+        XorProfile,
     };
     fn config(text: &str) -> NativeConfiguration {
         let empty = Names::parse(b"", false).unwrap();
@@ -1032,6 +1081,7 @@ mod original_profile_tests {
             resources: ResourceNames::new("").unwrap(),
             setup: Names::parse(text.as_bytes(), false).unwrap(),
             main_control: None,
+            chart_setup: None,
             variable_names: empty.clone(),
             project: empty.clone(),
             commands: empty.clone(),
@@ -1053,8 +1103,10 @@ mod original_profile_tests {
         assert_eq!(profile.version, 0x010203);
         assert_eq!(profile.extension_sizes, [12, 0]);
         assert!(profile.omake && profile.cutin);
+        let automatic=LegacySaveProfile::for_configuration(&config("autoExtDataMode1 printmessage autoExtDataMode2 title extSaveDataNumber 1 extSaveDataSize1 12")).unwrap();
+        assert_eq!(automatic.extension_sizes, [0, 0, 12]);
         assert!(
-            LegacySaveProfile::for_configuration(&config("autoExtDataMode1 printmessage")).is_err()
+            LegacySaveProfile::for_configuration(&config("autoExtDataMode1 selectchart")).is_err()
         );
         assert!(
             LegacySaveProfile::for_configuration(&config("autoExtDataMode1 unknown")).is_ok(),
@@ -1074,5 +1126,38 @@ mod original_profile_tests {
         let mut wrong = config("");
         wrong.module_sha256 = "unreviewed".into();
         assert!(LegacySaveProfile::for_configuration(&wrong).is_err());
+    }
+    #[test]
+    fn native_chart_automatic_extensions_preserve_word_padding_road_bytes_and_last_load() {
+        let mut cfg = config("autoExtDataMode1 title autoExtDataMode2 selectchart autoExtDataMode3 selectchart extSaveDataNumber 1 extSaveDataSize1 12");
+        cfg.chart_setup = Some(Names::parse(b"chartListNumber 2 chartBlockSize 17 useSlotOnFunction 1 slotOnFunctionName allow_slot",false).unwrap());
+        let profile = LegacySaveProfile::for_configuration(&cfg).unwrap();
+        assert_eq!(profile.extension_sizes,[0,64,64,12]);
+        let mut state = AuxiliaryState::default(); state.configure_chart(&cfg).unwrap();
+        let fresh = state.chart.as_ref().unwrap().store();
+        assert_eq!(&fresh[..16],&[255;16]); assert_eq!(&fresh[16..],&[0;48]);
+        assert!(state.chart_function(b"sloton",&[33,0]).unwrap().is_none());
+        state.chart = state.chart_function(b"allow_slot",&[33,0]).unwrap();
+        let chart = state.chart.as_mut().unwrap(); chart.set_road(33,2).unwrap();
+        assert!(!chart.selection(33).unwrap()); assert!(chart.set_selection(34,false).is_err());
+        let mut file = NativeSaveFile::for_live(&profile,
+            crate::native_system_file::SystemStamp([2026,11,10,2,12,30,5,0]),
+            crate::native_thumbnail::NativeThumbnail{size:[1,1],bgrx:vec![1,2,3,0]}).unwrap();
+        state.write(&mut file,&profile).unwrap();
+        let first = 8+usize::from(profile.omake)+usize::from(profile.cutin);
+        assert_eq!(&file.blocks[first+1].payload[4..8],&[253,255,255,255]);
+        assert_eq!(file.blocks[first+1].payload[49],3);
+        assert_eq!(file.blocks[first+1].payload,file.blocks[first+2].payload);
+        assert_eq!(file.blocks[first+3].payload,vec![0;12]);
+        // Original callbacks consume repeated actor extensions in file order.
+        file.blocks[first+2].payload[4..8].fill(255);
+        let encoded = file.encode(&profile).unwrap();
+        let parsed = NativeSaveFile::parse(&encoded,&profile).unwrap();
+        let restored = AuxiliaryState::restore_using(&parsed,&profile,&state).unwrap();
+        assert!(restored.chart.as_ref().unwrap().selection(33).unwrap());
+        assert_eq!(restored.chart.as_ref().unwrap().store()[49],3);
+        let chart = state.chart.as_mut().unwrap(); let before = chart.store();
+        assert!(chart.load(&before[..63]).is_err()); assert_eq!(chart.store(),before);
+        chart.reset_roads(); assert_eq!(&chart.store()[16..],&[0;48]);
     }
 }

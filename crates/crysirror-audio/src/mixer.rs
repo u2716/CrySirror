@@ -443,6 +443,7 @@ struct Voice {
     doppler_settings: Option<DopplerSettings>,
     age_frames: u64,
     transport_frames: u64,
+    first_pass_complete: bool,
     mix_group: Option<usize>,
     handle: VoiceHandle,
     spec: VoiceSpec,
@@ -522,6 +523,7 @@ fn silent_transport_tick(v: &mut Voice) -> bool {
     false
 }
 fn finish_source(v: &mut Voice) {
+    v.first_pass_complete = true;
     v.resume_after = None;
     v.source_ended = true;
     v.tail_left = v
@@ -556,6 +558,7 @@ fn counted_boundary(v: &mut Voice, range: LoopPoints) {
     if v.source_ended || v.position < range.end as f64 {
         return;
     }
+    v.first_pass_complete = true;
     let extent = (range.end - range.start) as f64;
     let crossed = ((v.position - range.end as f64) / extent).floor() + 1.;
     if crossed >= f64::from(remaining) {
@@ -1851,6 +1854,7 @@ impl Mixer {
             balance:voice.balance.info(),
             age_frames: voice.age_frames,
             transport_frames: voice.transport_frames,
+            first_pass_complete: voice.first_pass_complete,
             stopping: voice.stop_after_fade || voice.gain_stop_after_fade,
             pausing: voice.pause_after_fade,
             source_playing: self.source_is_playing(client, h),
@@ -2353,6 +2357,7 @@ impl Mixer {
                             continue;
                         }
                     } else if v.position >= p.end as f64 {
+                        v.first_pass_complete = true;
                         v.position =
                             p.start as f64 + (v.position - p.end as f64) % (p.end - p.start) as f64;
                     }
@@ -2370,6 +2375,7 @@ impl Mixer {
                             continue;
                         }
                         SampleRead::End if v.spec.looping => {
+                            v.first_pass_complete = true;
                             if v.remaining_loop_passes == Some(1) {
                                 finish_source(v);
                                 if v.tail_left == 0 && !v.stop_after_fade && !v.gain_stop_after_fade
@@ -2401,6 +2407,7 @@ impl Mixer {
                             }
                         }
                         SampleRead::End => {
+                            v.first_pass_complete = true;
                             v.resume_after = None;
                             let tail = v
                                 .binaural
@@ -2516,6 +2523,10 @@ impl Mixer {
                     v.tail_elapsed = v.tail_elapsed.saturating_add(1);
                 } else {
                     v.position += step * f64::from(doppler);
+                    if loop_range.map(|range| range.end).or_else(|| v.cursor.source.frame_count())
+                        .is_some_and(|end| v.position >= end as f64) {
+                        v.first_pass_complete = true;
+                    }
                     if let Some(range) = loop_range.filter(|_| v.remaining_loop_passes.is_some()) {
                         counted_boundary(v, range);
                         if v.source_ended
@@ -2706,6 +2717,7 @@ fn new_voice(
         doppler_settings: None,
         age_frames: 0,
         transport_frames: 0,
+        first_pass_complete: false,
         mix_group,
         handle,
         gain: Ramp::new(spec.gain),

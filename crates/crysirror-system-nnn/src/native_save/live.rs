@@ -17,6 +17,7 @@ struct Context {
     depth: usize,
     calls: [u32; 255],
 }
+#[derive(Clone)]
 pub(crate) struct LiveExecution {
     contexts: Vec<Context>,
     adjusted: bool,
@@ -28,6 +29,12 @@ impl LiveExecution {
         configuration: &crate::native_bootstrap::NativeConfiguration,
         pending: Option<&NativeCall>,
     ) -> Result<Self> {
+        Self::capture_mode(session,configuration,pending,false)
+    }
+    pub(crate) fn capture_general(session:&ScriptSession,configuration:&crate::native_bootstrap::NativeConfiguration,pending:&NativeCall)->Result<Self> {
+        Self::capture_mode(session,configuration,Some(pending),true)
+    }
+    fn capture_mode(session:&ScriptSession,configuration:&crate::native_bootstrap::NativeConfiguration,pending:Option<&NativeCall>,general:bool)->Result<Self> {
         let frames: Vec<_> = session.contexts_for_save().collect();
         ensure!(
             (1..=4).contains(&frames.len()) && frames[0].0 == b"sys",
@@ -39,7 +46,7 @@ impl LiveExecution {
                 matches!(
                     call.payload,
                     Payload::Message { .. } | Payload::Selection { .. }
-                ),
+                ) || general && matches!(call.payload,Payload::UserCall{..}),
                 "NNN save requested outside an original PRINT/SELECT boundary"
             );
         }
@@ -78,6 +85,11 @@ impl LiveExecution {
             }
             calls[253] = continuation[0].unwrap_or(0);
             calls[254] = continuation[1].unwrap_or(0);
+            if index+1==frames.len() {
+                if let Some(NativeCall {payload:Payload::UserCall{command:true,resume_id:Some(id),..},..})=pending {
+                    calls[254]=*id;
+                }
+            }
             contexts.push(Context {
                 pc,
                 depth: returns.len(),
@@ -107,6 +119,10 @@ impl LiveExecution {
             variables: (0..1000).map(|i| variables.read_stored(i)).collect(),
         })
     }
+    pub(crate) fn with_variables(&self,variables:&crate::expression::Variables)->Result<Self> {
+        ensure!(variables.stored_word_count()==1000,"NNN general checkpoint variable ABI");
+        let mut out=self.clone();out.variables=(0..1000).map(|i|variables.read_stored(i)).collect();Ok(out)
+    }
 }
 impl NativeSaveFile {
     /// Replace only fields owned by the original script producer. Existing
@@ -118,7 +134,7 @@ impl NativeSaveFile {
         game_mode: i32,
     ) -> Result<()> {
         ensure!(
-            matches!(game_mode, 9 | 10),
+            matches!(game_mode, 4 | 9 | 10 | 34),
             "NNN live native save mode requires its own actor producer"
         );
         let variables = self.blocks.get(4).context("NNN save VARIABLE absent")?;

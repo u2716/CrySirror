@@ -30,6 +30,7 @@ impl NativeTextBridge {
         let mut hide = Vec::new();
         if self.layers_present {
             hide.extend([self.profile.body_layer, self.profile.name_layer]);
+            if self.profile.cutin.is_some() {hide.extend(cutin::node_ids(&self.profile)?);}
         }
         if self.windows_present {
             hide.extend(

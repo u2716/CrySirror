@@ -28,6 +28,7 @@ mod math_random;
 mod native_async;
 mod native_cg;
 mod native_csv;
+mod native_confirm;
 mod native_dialog;
 mod native_draw;
 mod native_effect;

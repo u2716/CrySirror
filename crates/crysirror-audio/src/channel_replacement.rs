@@ -105,6 +105,7 @@ fn recipe(request: &AudioRequest) -> Result<(u32, &AudioParameters)> {
             parameters,
             ..
         }
+        | AudioRequest::PlayPlaylist { channel, parameters, .. }
         | AudioRequest::PlayResident {
             channel,
             parameters,
@@ -173,6 +174,7 @@ impl ChannelAudio {
                     );
                     source.bytes.len() + intro.as_ref().map_or(0, |s| s.bytes.len())
                 }
+                AudioRequest::PlayPlaylist { source, .. } => source.encoded_bytes()?,
                 AudioRequest::PlayPcm { source, .. } => {
                     let n = source
                         .frame_count()
@@ -236,6 +238,9 @@ impl ChannelAudio {
                             intro.map(|s| source(s, gain)).transpose()?,
                             p,
                         )
+                    }
+                    AudioRequest::PlayPlaylist { source, parameters: p, .. } => {
+                        (crate::playlist::source(source, p.decode_gain, &cancel)?, None, p)
                     }
                     AudioRequest::PlayAsset {
                         source: encoded,

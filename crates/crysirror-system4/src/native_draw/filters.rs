@@ -57,6 +57,21 @@ pub(super) fn operation(
     cg: &NativeCg,
     native_tables: bool,
 ) -> Result<Option<(i32, ImageInput, bool)>> {
+    if matches!(name,b"FillOverlay"|b"FillOverlayAlpha") {
+        ensure!(native_tables,"original byte255 overlay requires the reviewed Graph/DrawGraph module profile");
+        let [dst,x,y,w,h,r,g,b,rest @ ..]=values else {bail!("native overlay argument ABI")};
+        ensure!(rest.len()==usize::from(name==b"FillOverlayAlpha"),"native overlay opacity arity");
+        ensure!((1..=8192).contains(w)&&(1..=8192).contains(h),"native overlay extent budget");
+        let color=[*r,*g,*b].map(|n|n.clamp(0,255) as u8);
+        // Original BD60 reads only the blue-indexed table for all three RGB
+        // lanes. Preserve the original FillOverlayAlpha export's scalar bug.
+        let color=if name==b"FillOverlayAlpha" {[color[2];3]}else{color};
+        let opacity=rest.first().map(|n|(*n).clamp(0,255) as u8);
+        let spec=crysirror_image::rgb_lut::RgbLookup::overlay_byte255(color,opacity);
+        let base=cg.sprite_input(owner,*dst,bridge)?;
+        let input=process(base.clone(),serde_json::json!({"kind":"rgb_lookup","spec":spec}))?;
+        return Ok(Some((*dst,composite(base,input,[*x,*y,*w,*h],[*x,*y],ImageCompositeMath::CopyRgb),false)));
+    }
     if !matches!(
         name,
         b"CopyWidthBlur"

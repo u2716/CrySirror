@@ -1,6 +1,8 @@
 // Copyright (c) 2026 CrySirror contributors. MPL-2.0.
 //! Native EFFECT state hydration. No SetParam callback, Calcu or CountUp is
-//! replayed: saved count/countMax and six rectangles are authoritative.
+//! replayed during raw hydration: saved counters and rectangles are
+//! authoritative. SUNA/RAINBOW enqueue their actual InitParameter work for
+//! ordered worker/RNG completion before restored presentation is admitted.
 use super::*;
 use crate::native_save::SavedEffect;
 impl Bridge {
@@ -69,7 +71,9 @@ impl Bridge {
                     "NNN saved effect slot{slot} requires its prepared or warm native picture"
                 );
                 // pic is a presence flag here; GetPicture(slot) is original.
+                ensure!((0..16).contains(&words[1]),"NNN saved native picture index");
                 self.picture_assignments.insert(slot);
+                self.picture_numbers.insert(slot,words[1]);
             }
             match words[2] {
                 0 => {
@@ -81,12 +85,76 @@ impl Bridge {
                     state.frames = frames;
                     self.mosaics.insert(slot, state);
                 }
-                8 | 90 | 99 | 124 => {
-                    let length = if words[2] == 8 { 2 } else if words[2] == 90 { 6 } else if words[2] == 124 { 5 } else { 10 };
-                    let mut state = crate::native_picture_effect::PictureEffectState::parse(words[2], &original_p[..length])?;
+                33|55|65|72|96|121|122|123|125|126|133=>{
+                    let kind=match words[2] {
+                        72=>crate::native_picture_effect::PictureEffectKind::Meisai{parameters:original_p[..16].try_into().unwrap()},
+                        96=>{self.saved_rainbow.insert(slot);crate::native_picture_effect::PictureEffectKind::Rainbow{parameters:original_p[..16].try_into().unwrap()}},
+                        33=>crate::native_picture_effect::PictureEffectKind::Relief{parameters:original_p[..16].try_into().unwrap()},
+                        55=>crate::native_picture_effect::PictureEffectKind::OldFilm{parameters:original_p[..56].try_into().unwrap()},
+                        125=>crate::native_picture_effect::PictureEffectKind::CharaBlur{parameters:original_p[..16].try_into().unwrap()},
+                        126=>crate::native_picture_effect::PictureEffectKind::BackgroundBlur{parameters:original_p[..16].try_into().unwrap()},
+                        65=>crate::native_picture_effect::PictureEffectKind::StretchBlit{parameters:original_p[..25].try_into().unwrap()},
+                        121=>crate::native_picture_effect::PictureEffectKind::DualMask{parameters:original_p[..12].try_into().unwrap()},
+                        122=>crate::native_picture_effect::PictureEffectKind::ClipZoom{parameters:original_p[..33].try_into().unwrap()},
+                        123=>crate::native_picture_effect::PictureEffectKind::MaskAppear{parameters:original_p[..8].try_into().unwrap()},
+                        133=>crate::native_picture_effect::PictureEffectKind::Sentence{parameters:original_p[..16].try_into().unwrap()},
+                        _=>unreachable!(),
+                    };
+                    // RAINBOW InitParameter calls SetParam without saving
+                    // count/countMax around it. This source32 class restarts
+                    // at0 with para0 as countMax; do not infer an empty hook
+                    // from the other picture classes' restore policy.
+                    let (frames,count)=if words[2]==96 {(original_p[0],0)}else{(frames,count)};
+                    let state=crate::native_picture_effect::PictureEffectState{kind,frames,count,parameter_frames:original_p[0]};
+                    state.validate()?;self.picture_effects.insert(slot,state);
+                }
+                63 | 110 => {
+                    // Both inherit empty InitParameter: saved parameter words
+                    // and count/countMax survive without rerunning SetParam.
+                    let parameters:[i32;16]=original_p[..16].try_into().unwrap();
+                    let kind=if words[2]==63 {
+                        crate::native_picture_effect::PictureEffectKind::Koma{parameters}
+                    }else{crate::native_picture_effect::PictureEffectKind::Ghost{parameters}};
+                    let state=crate::native_picture_effect::PictureEffectState {
+                        kind,frames,count,parameter_frames:parameters[0]};
+                    state.validate()?;self.picture_effects.insert(slot,state);
+                }
+                106=>{
+                    // InitParameter is empty: saved noise timers, band rows
+                    // and work words survive without another random resample.
+                    let parameters:[i32;144]=original_p[..144].try_into().unwrap();
+                    let state=crate::native_picture_effect::PictureEffectState{
+                        kind:crate::native_picture_effect::PictureEffectKind::Noise{parameters},
+                        frames,count,parameter_frames:parameters[0]};
+                    state.validate()?;self.picture_effects.insert(slot,state);
+                }
+                103=>{
+                    // TARGET1 inherits the empty InitParameter: hydrate the
+                    // saved words without replaying SetParam/clamping them.
+                    let parameters: [i32;16]=original_p[..16].try_into().unwrap();
+                    let state=crate::native_picture_effect::PictureEffectState{
+                        kind:crate::native_picture_effect::PictureEffectKind::Target{parameters},
+                        frames,count,parameter_frames:parameters[0]};
+                    state.validate()?;self.picture_effects.insert(slot,state);
+                }
+                94=>{
+                    let parameters: [i32;16]=original_p[..16].try_into().unwrap();
+                    let state=crate::native_picture_effect::PictureEffectState{kind:crate::native_picture_effect::PictureEffectKind::ScrollLoop{parameters},frames,count,parameter_frames:parameters[0]};
+                    state.validate()?;self.picture_effects.insert(slot,state);
+                }
+                132=>{
+                    let parameters: [i32;26]=original_p[..26].try_into().unwrap();
+                    let state=crate::native_picture_effect::PictureEffectState{kind:crate::native_picture_effect::PictureEffectKind::Jitter{parameters},frames,count,parameter_frames:parameters[0]};
+                    state.validate()?;
+                    self.picture_effects.insert(slot,state);
+                }
+                2 | 8 | 20 | 23 | 32 | 36 | 37 | 50 | 59 | 62 | 66 | 68 | 73 | 75 | 77 | 90 | 99 | 107 | 113 | 119 | 120 | 124 | 127 | 130 | 131 => {
+                    let length = if words[2]==130 {20} else if words[2]==113 {4} else if words[2]==32 {3} else if words[2]==23 {5} else if words[2]==119 {9} else if words[2]==62 {11} else if words[2]==37 {9} else if words[2]==50 {18} else if words[2]==20 {6} else if words[2]==131 {5} else if words[2]==36 {7} else if words[2]==120 {14} else if matches!(words[2],2|68|73|75|77|107) {16} else if words[2]==59 {9} else if words[2]==66 {3} else if words[2] == 8 { 2 } else if words[2] == 90 { 6 } else if words[2] == 124 { 5 } else if words[2] == 127 {8} else { 10 };
+                    let mut state = crate::native_picture_effect::PictureEffectState::parse_for_canvas(words[2], &original_p[..length],self.bindings.size)?;
                     state.count = count;
                     state.frames = frames;
                     state.validate()?;
+                    if words[2]==75{self.once_printed.remove(&slot);}
                     self.picture_effects.insert(slot, state);
                 }
                 9 => {
@@ -143,6 +211,16 @@ impl Bridge {
                     state.count = count;
                     self.flashes.insert(slot, state);
                 }
+                100 => {
+                    let mut state =
+                        crate::native_effects_shake::ShakeState::parse_yure(&original_p[..14])?;
+                    if let crate::native_effects_shake::ShakeKind::Yure { phase, .. } = &mut state.kind {
+                        phase.copy_from_slice(&original_p[14..16]);
+                    }
+                    state.frames = frames;
+                    state.count = count;
+                    self.shakes.insert(slot, state);
+                }
                 18 => {
                     let mut state =
                         crate::native_effects_shake::ShakeState::parse(&original_p[..3]);
@@ -192,8 +270,12 @@ impl Bridge {
                     state.validate_curve()?;
                     self.negas.insert(slot, state);
                 }
-                129 => {
-                    let mut state = crate::native_effects::LayerGreyState::parse(&p[..5])?;
+                128 | 129 => {
+                    let mut state = if words[2] == 128 {
+                        crate::native_effects::LayerGreyState::parse_sepia(&p[..8])?
+                    } else {
+                        crate::native_effects::LayerGreyState::parse(&p[..5])?
+                    };
                     state.frames = frames;
                     state.count = count;
                     state.validate_curve()?;

@@ -13,9 +13,14 @@ use crysirror_core::{
 };
 use crysirror_tasks::{Task, TaskPool};
 use std::{collections::BTreeMap, sync::Arc};
+mod detached;
+pub(crate) use detached::NativePictureViews;
 #[derive(Clone)]
 pub struct PreparedPicture {
     pub has_mask: bool,
+    /// Native half-open left/top/right/bottom source edges, independent of
+    /// the caller's mutable destination/source rectangles.
+    pub source_clip: [i32; 4],
     pub slot: i32,
     pub preload: bool,
     pub name: Vec<u8>,
@@ -37,6 +42,7 @@ pub(crate) struct PicturePreparation {
     stage: u8,
     opaque: Option<Arc<dyn ImageResource>>,
     has_mask: Option<bool>,
+    clip: crate::native_picture_preparation_clip::PictureClipPreparation,
     ready: Option<PreparedPicture>,
     pub api_calls: u64,
 }
@@ -206,6 +212,7 @@ impl PicturePreparation {
             stage: 0,
             opaque: None,
             has_mask: None,
+            clip: crate::native_picture_preparation_clip::PictureClipPreparation::new(pool.clone()),
             ready: None,
             api_calls: 0,
         })
@@ -219,6 +226,7 @@ impl PicturePreparation {
                 return Ok(None);
             };
             self.has_mask = Some(source.has_mask);
+            self.clip.configure(source.has_mask, source.clip_insets)?;
             self.job = Some(
                 host.image_metadata(self.client)?
                     .begin_process(source.input, b"[]".as_slice().into())?,
@@ -290,8 +298,12 @@ impl PicturePreparation {
                 } else {
                     keyed.clone()
                 };
+                let Some(source_clip) = self.clip.poll(self.raw.clone().unwrap())? else {
+                    return Ok(None);
+                };
                 let prepared = PreparedPicture {
                     has_mask: self.has_mask.unwrap(),
+                    source_clip: source_clip.bounds(),
                     slot: self.slot,
                     preload: self.preload,
                     name: self.name.clone(),

@@ -61,3 +61,27 @@ fn native_pointer_focus_and_wheel_use_real_owner_observation() {
     assert!(Input::pointer(unknown).is_err());
     assert!(Input::validate_scope(o, ClientId(2)).is_err());
 }
+
+#[test]
+fn clearing_one_delivery_latch_keeps_other_held_keys_and_physical_edges() {
+    let mut input = Input::default();
+    input.observe(observation(
+        1,
+        buttons::ENTER | buttons::CTRL,
+        buttons::ENTER | buttons::CTRL,
+    ));
+    input.clear_one(13).unwrap();
+    assert_eq!(input.key(13).unwrap(), 0);
+    assert_eq!(input.key(17).unwrap(), 1);
+    input.observe(observation(2, buttons::ENTER | buttons::CTRL, 0));
+    assert_eq!(input.key(13).unwrap(), 0);
+    input.observe(observation(3, buttons::CTRL, 0));
+    input.observe(observation(
+        4,
+        buttons::ENTER | buttons::CTRL,
+        buttons::ENTER,
+    ));
+    assert_eq!(input.key(13).unwrap(), 1);
+    assert!(input.clear_one(0x42).is_err());
+    assert!(input.clear_one(999).is_ok());
+}

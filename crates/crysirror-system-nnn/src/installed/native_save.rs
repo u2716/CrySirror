@@ -11,9 +11,21 @@ pub(super) struct Policy {
     slot: u32,
     sound: i32,
     notice: bool,
+    notice_number: i32,
     retained_comments: bool,
 }
 impl Policy {
+    pub(super) fn selected(slot: u32, sound: i32) -> Result<Self> {
+        ensure!(slot < 10000, "NNN selected save slot bounds");
+        Ok(Self {
+            key: 0,
+            slot,
+            sound,
+            notice: false,
+            notice_number: 0,
+            retained_comments: true,
+        })
+    }
     pub(super) fn prepare(
         config: &crate::native_bootstrap::NativeConfiguration,
         storage: &dyn ClientStorage,
@@ -42,7 +54,7 @@ impl Policy {
             .checked_sub(1)
             .context("NNN quick save slot overflow")?;
         ensure!(
-            (0..10000).contains(&slot),
+            (0..1_000_000).contains(&slot),
             "NNN quick save slot namespace budget"
         );
         Ok(Some(Self {
@@ -51,6 +63,7 @@ impl Policy {
             sound: setup.integer(b"quickSaveSound")?.unwrap_or(-1),
             notice: setup.integer(b"noticeFlag")?.unwrap_or(0) != 0
                 && setup.integer(b"quickSavePrint")?.unwrap_or(enabled) != 0,
+            notice_number: setup.integer(b"saveNoticeNumber")?.unwrap_or(2) - 1,
             retained_comments: setup.integer(b"quickSaveCommentFlag")?.unwrap_or(0) != 0,
         }))
     }
@@ -69,13 +82,35 @@ pub(super) struct Controller {
     /// the validated native bytes for that class catalogue, not an engine VM
     /// snapshot or a claim that this is a new live export after gameplay moves.
     pub last_file: Option<Arc<[u8]>>,
+    /// Live CGameCallBack comments are independent of a slot's catalogue.
+    comments: [Vec<u8>; 4],
 }
 impl Controller {
+    pub(super) fn selected(
+        policy: Policy,
+        thumbnail: crate::native_thumbnail::ThumbnailJob,
+        previous: Option<&Self>,
+    ) -> Self {
+        let mut controller = Self::new(policy);
+        if let Some(previous) = previous {
+            controller.comments = previous.comments.clone();
+            controller.last_file = previous.last_file.clone();
+        }
+        controller.pending = Some(Pending {
+            sound_done: false,
+            thumbnail: Some(thumbnail),
+            encode: None,
+            bytes: None,
+            write: None,
+        });
+        controller
+    }
     pub(super) fn new(policy: Policy) -> Self {
         Self {
             policy,
             pending: None,
             last_file: None,
+            comments: Default::default(),
         }
     }
     pub(super) fn pending(&self) -> bool {
@@ -86,6 +121,7 @@ impl Controller {
             policy: self.policy.clone(),
             pending: None,
             last_file: self.last_file.clone(),
+            comments: self.comments.clone(),
         }
     }
 }
@@ -116,14 +152,6 @@ impl InstalledAdapter {
             {
                 return Ok(false);
             }
-            ensure!(
-                !save.policy.notice,
-                "NNN quick-save Notice actor is not implemented"
-            );
-            ensure!(
-                !save.policy.retained_comments,
-                "NNN quick-save retained comment actor is not implemented"
-            );
             // Freeze the immutable Layer prefix at input admission. Audio
             // preparation may finish later; it cannot consume native reveal/
             // animation time or change which visible frame enters this slot.
@@ -147,7 +175,7 @@ impl InstalledAdapter {
                     .vm
                     .as_mut()
                     .context("NNN quick save VM absent")?
-                    .poll_system_sound(host, save.policy.sound - 1)?
+                    .poll_system_sound(host, save.policy.sound)?
             {
                 return Ok(true);
             }
@@ -167,7 +195,10 @@ impl InstalledAdapter {
                 return Ok(true);
             };
             let vm = self.vm.as_mut().context("NNN quick save VM absent")?;
-            let file = vm.produce_native_save(thumbnail, stamp)?;
+            let mut file = vm.produce_native_save(thumbnail, stamp)?;
+            if save.policy.retained_comments {
+                file.replace_comments(&save.comments)?;
+            }
             let profile = crate::native_save::LegacySaveProfile::for_configuration(
                 vm.configuration()
                     .context("NNN quick save configuration absent")?,
@@ -194,7 +225,7 @@ impl InstalledAdapter {
             pending.encode = None;
         }
         if pending.write.is_none() {
-            let path = VfsPath::new(Mount::Save, &format!("data{}.sav", save.policy.slot))?;
+            let path = crate::native_save::slot_path(self.vm.as_ref().unwrap().configuration().context("NNN save slot configuration absent")?,usize::try_from(save.policy.slot)?)?;
             let bytes = pending
                 .bytes
                 .clone()
@@ -211,6 +242,12 @@ impl InstalledAdapter {
                 // Legacy504f90 always calls LoadHeaderAndPic after Save and
                 // has none of later quickSetLastFlag/lastSaveSlot mutations.
                 save.last_file = pending.bytes.take();
+                if save.policy.notice {
+                    self.notice
+                        .as_mut()
+                        .context("NNN quick save notice is not prepared")?
+                        .start(save.policy.notice_number);
+                }
                 save.pending = None;
                 Ok(true)
             }

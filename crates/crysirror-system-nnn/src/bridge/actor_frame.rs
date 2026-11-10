@@ -17,6 +17,7 @@ pub(super) struct ActorFrame {
     windows: bool,
     selection: bool,
     pre_published: bool,
+    selection_refreshed: bool,
     post_plan: Vec<NativeFrameEffect>,
     post_capture: Option<crysirror_core::image_processing::ImageJob>,
     post_work: Option<NativeFrameWork>,
@@ -67,6 +68,32 @@ impl Bridge {
         host: &mut dyn HostServices,
     ) -> Result<bool> {
         use crysirror_core::image_processing::ImageProcessState;
+        // Special-window variables and the engine's retained pointer/focus
+        // state are read before the post-text capture, without draining input.
+        if selection
+            && self.actor_frame.is_none()
+            && !self.has_animated_effects()
+            && self
+                .selection
+                .as_ref()
+                .is_some_and(|s| s.published_selection())
+        {
+            let variables = match call {
+                Some(call) => machine.native_variables_candidate(call)?,
+                None => machine
+                    .variables()
+                    .context("NNN saved selection variable bank absent")?
+                    .clone(),
+            };
+            if !self
+                .selection
+                .as_mut()
+                .unwrap()
+                .refresh_special(&variables, host)?
+            {
+                return Ok(false);
+            }
+        }
         if self.actor_frame.is_none() && self.actor_ready_for_input {
             return Ok(true);
         }
@@ -155,7 +182,7 @@ impl Bridge {
                 random,
                 false,
                 host,
-            )?;
+            )?.with_buffers(self.frame_buffers());
             self.api_calls += work.api_calls;
             self.actor_frame = Some(ActorFrame {
                 admitted: now,
@@ -172,6 +199,7 @@ impl Bridge {
                         .as_ref()
                         .is_some_and(|text| text.published_message()),
                 pre_published: false,
+                selection_refreshed: false,
                 post_plan,
                 post_capture: None,
                 post_work: None,
@@ -262,6 +290,30 @@ impl Bridge {
             }
             frame.pre_published = true;
         }
+        if frame.selection
+            && !frame.selection_refreshed
+            && self
+                .selection
+                .as_ref()
+                .is_some_and(|s| s.published_selection())
+        {
+            let variables = match call {
+                Some(call) => machine.native_variables_candidate(call)?,
+                None => machine
+                    .variables()
+                    .context("NNN saved SELECT variables absent")?
+                    .clone(),
+            };
+            if !self
+                .selection
+                .as_mut()
+                .unwrap()
+                .refresh_special(&variables, host)?
+            {
+                return Ok(false);
+            }
+            frame.selection_refreshed = true;
+        }
         if !frame.post_plan.is_empty() {
             // Initial messages/menus first prepare their actual retained
             // GlyphRuns. This is a dependency phase, never an input wait or
@@ -310,11 +362,13 @@ impl Bridge {
                                 }
                             }
                         }
-                        let work = NativeFrameWork::with_saved_base(
+                        let work = NativeFrameWork::with_context_base(
                             self.client,
                             image,
                             plan,
                             pre.random.clone(),
+                            false,
+                            pre.buffers.clone(),
                             host,
                         )?;
                         self.api_calls += work.api_calls;
@@ -355,6 +409,11 @@ impl Bridge {
         let mut frame = self.actor_frame.take().unwrap();
         let mut result = frame.result.take().unwrap();
         if let Some(post) = frame.post_result {
+            let mut buffers=post.buffers;
+            let mut pictures=std::mem::take(&mut result.buffers.picture_updates);
+            pictures.extend(buffers.picture_updates);
+            buffers.picture_updates=pictures;
+            result.buffers=buffers;
             result.target = post.target;
             result.random = post.random;
             result.shared_pattern = post.shared_pattern.or(result.shared_pattern);
@@ -363,6 +422,7 @@ impl Bridge {
             result.scroll_updates.extend(post.scroll_updates);
             result.shake_updates.extend(post.shake_updates);
         }
+        self.adopt_frame_buffers(&result.buffers);
         let mut variables = match call {
             Some(call) => machine.native_variables_candidate(call)?,
             None => machine
@@ -399,11 +459,14 @@ impl Bridge {
                 effect.state = state.clone();
             }
         }
+        for (slot,state) in &result.buffers.picture_updates{
+            if let Some(NativeFrameEffect::Picture(effect))=frame.effects.get_mut(slot){effect.state=state.clone();}
+        }
         for (slot, state) in &result.move_updates {
             if let Some(NativeFrameEffect::Picture(effect)) = frame.effects.get_mut(slot) {
-                    effect.rectangles = state.rectangles.clone();
-                }
-                if let Some(NativeFrameEffect::Move(effect)) = frame.effects.get_mut(slot) {
+                effect.rectangles = state.rectangles.clone();
+            }
+            if let Some(NativeFrameEffect::Move(effect)) = frame.effects.get_mut(slot) {
                 effect.state = state.clone();
             }
         }

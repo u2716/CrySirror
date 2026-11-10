@@ -2,6 +2,7 @@
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. A copy is available at https://mozilla.org/MPL/2.0/.
 //! Immutable encoded resources and independent decoder leases, without devices.
+mod samples;
 use crate::decoder::{self, AudioSource, SourceBufferStatus, SourceRead, StereoFrame};
 use anyhow::{Context, Result, ensure};
 use crysirror_core::{

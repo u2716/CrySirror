@@ -127,6 +127,27 @@ pub struct NativeMoviePlayer {
     pub api_calls: u64,
 }
 impl NativeMoviePlayer {
+    pub(crate) fn cancel(&mut self, host: &mut dyn HostServices) -> Result<()> {
+        if self.visible {
+            host.submit_engine(
+                self.client,
+                1,
+                &serde_json::to_vec(
+                    &serde_json::json!({"layers":[{"op":"remove","id":self.layer}]}),
+                )?,
+            )?;
+            self.visible = false;
+            self.api_calls += 1;
+        }
+        if self.started && self.path.is_some() {
+            host.media_request(self.client, MediaRequest::Remove { id: self.media })?;
+            self.api_calls += 1;
+        }
+        self.path = None;
+        self.loading = false;
+        self.finished = true;
+        Ok(())
+    }
     pub fn new(
         client: ClientId,
         media: u32,

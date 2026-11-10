@@ -801,6 +801,13 @@ fn basename(bytes: &[u8]) -> Result<String> {
     let name = encoding_rs::SHIFT_JIS
         .decode_without_bom_handling_and_without_replacement(bytes)
         .context("Majiro picture filename CP932")?;
+    unicode_picture_stem(&name)
+}
+/// Resource readers already return decoded Unicode names. Keep that boundary
+/// separate from native VM CP932 byte arguments (notably differential RCT01).
+fn unicode_picture_stem(name: &str) -> Result<String> {
+    // A CP932 input byte can occupy up to three UTF8 bytes after decoding.
+    ensure!(!name.is_empty() && name.len() <= 3 * 4096, "Majiro decoded picture filename extent");
     let base = name.rsplit(['/', '\\']).next().unwrap();
     let stem = base.rsplit_once('.').map_or(base, |(stem, _)| stem);
     ensure!(!stem.is_empty() && !stem.contains(':'), "Majiro picture basename");
@@ -842,7 +849,9 @@ impl MajiroVm {
             };
             let mut plane = Plane::from_pixels(w, h, PlaneFormat::Bgr24, pixels, vec![])?;
             if let Some(base) = base {
-                let base_stem = basename(base.as_bytes())?;
+                // rct_bgr has decoded this CP932 metadata once already;
+                // interpreting its UTF8 bytes as CP932 corrupts Japanese names.
+                let base_stem = unicode_picture_stem(&base)?;
                 if let Ok(base) = self.load_picture(host, &base_stem) {
                     // Differential RCT: key colour (R=255, G=0) shows the base.
                     for i in 0..(w * h) as usize {
@@ -1086,9 +1095,20 @@ impl MajiroVm {
                 V(0)
             }
             0x56bbba3a | 0x87113971 | 0x30636d6e => {
+                // These leaves unconditionally read src,x,y,w,h,dst. There
+                // is no whole-page two-argument overload in422D40/422E80/
+                // 423000; reject missing required values instead of reading
+                // the native stack's uninitialized preceding records.
+                ensure!(a.len()>=6,"Majiro bitmap copy/swap requires src,x,y,w,h,dst");
+                for value in a.iter().take(if hash==0x30636d6e{9}else{8}){value.integer().context("Majiro bitmap copy/swap integer argument")?;}
                 let (src, dst) = (int(a, 0) as u32, int(a, 5) as u32);
                 let rect = [int(a, 1), int(a, 2), int(a, 3), int(a, 4)];
-                let at = [int(a, 6), int(a, 7)];
+                // YUKIIRO422D40/422E80/423000 default each omitted
+                // destination coordinate to its source coordinate. Six/seven
+                // argument calls patch a picture in place; zero defaults move
+                // route-selection buttons to the origin while their hitboxes
+                // correctly remain at the original script coordinates.
+                let at = [opt(a, 6, rect[0]), opt(a, 7, rect[1])];
                 let t = opt(a, 8, 0).clamp(0, 255) as u8;
                 let (Some(s), Some(d)) = (g.pages.get(&src), g.pages.get(&dst)) else {
                     g.warn(format!("bitmap copy with invalid page {src:#x}/{dst:#x}"));
@@ -1141,7 +1161,7 @@ impl MajiroVm {
                     }
                     _ => {
                         // 41A8C0: transparency copy (masked when the source has alpha).
-                        if d.plane.format == PlaneFormat::Index8 {
+                        if d.plane.format == PlaneFormat::Index8 && (s.plane.format!=PlaneFormat::Index8 || s.alpha.is_some()) {
                             g.warn("grp_extcopy into an indexed page".into());
                             return Ok(Some(V(0)));
                         }
@@ -1152,6 +1172,25 @@ impl MajiroVm {
                     }
                 }
                 g.invalidate(dst, [at[0], at[1], r[2], r[3]]);
+                V(0)
+            }
+            // YUKIIRO423150/458480: direct indexed/alpha-plane multiply.
+            // Page+16 is its Index8 flag (452D30), not page+28's linked alpha
+            // pointer. Callers already pass GetAlphaPage handles explicitly.
+            0xa361d9f7 => {
+                ensure!((6..=8).contains(&a.len()) && a.iter().all(|v|matches!(v,Value::Integer(_))),"Majiro alpha multiply ABI");
+                let(src,dst)=(int(a,0)as u32,int(a,5)as u32);
+                let rect=[int(a,1),int(a,2),int(a,3),int(a,4)];
+                let at=[opt(a,6,rect[0]),opt(a,7,rect[1])];
+                let(Some(s),Some(d))=(g.pages.get(&src),g.pages.get(&dst))else{
+                    g.warn("alpha multiply with invalid page".into());return Ok(Some(V(0)));
+                };
+                if s.plane.format==PlaneFormat::Index8 && d.plane.format==PlaneFormat::Index8{
+                    if src==dst{
+                        if let Some(page)=g.pages.get_mut(&src){planes::alpha_multiply_within(&mut page.plane,rect,at);}
+                    }else{g.with_pair(src,dst,|s,d,_,_|planes::alpha_multiply(s,rect,d,at));}
+                    g.invalidate(dst,[at[0],at[1],rect[2],rect[3]]);
+                }else{g.warn("alpha multiply requires indexed pages".into());}
                 V(0)
             }
             0xda675785 => {
@@ -1357,6 +1396,36 @@ impl MajiroVm {
                 V(0)
             }
             0xdcc706ef => V(i32::from(g.sprites.contains_key(&(int(a, 0) as u32)))),
+            // YUKIIRO44F9E0/44FA20 return the stored sprite width/height,
+            // not the current rotated/zoomed temporary bitmap dimensions.
+            0x63f660a2|0xfef981d4=>{
+                ensure!(a.len()==1,"Majiro sprite extent ABI");
+                let axis=if hash==0x63f660a2{2}else{3};
+                let id=int(a,0)as u32;
+                if let Some(s)=g.sprites.get(&id){V(s.src[axis])}else{g.warn("sprite extent for invalid sprite".into());V(0)}
+            }
+            // YUKIIRO44F920 enables per-cell cross-fade scratch (+916),
+            // distinct from affine rendering (+940,44DE00). 44C2E0 blends
+            // adjacent animation cells through its own timed scratch. Do not
+            // silently substitute rotation/zoom state for this separate API.
+            0x3f34d519=>{
+                ensure!(a.len()==1,"Majiro cell cross-fade enable ABI");
+                bail!("Majiro sprite cell cross-fade scratch/50ms update policy is not connected");
+            }
+            // YUKIIRO44DF60 sets sprite+32: release owns its source page
+            // (44DE70), independently of visibility nesting/transform state.
+            0x8838fd56=>{
+                ensure!(a.len()==1,"Majiro sprite page ownership ABI");
+                if let Some(s)=g.sprites.get_mut(&(int(a,0)as u32)){s.owns_page=true;}else{g.warn("page ownership for invalid sprite".into());}
+                V(0)
+            }
+            // YUKIIRO422730 complements the three colour channels only.
+            0x053fac99=>{
+                ensure!(a.len()==5,"Majiro bitmap invert ABI");
+                let id=int(a,0)as u32;let rect=[int(a,1),int(a,2),int(a,3),int(a,4)];
+                if let Some(page)=g.pages.get_mut(&id){planes::invert_bgr(&mut page.plane,rect);g.invalidate(id,rect);}else{g.warn("invert for invalid page".into());}
+                V(0)
+            }
             0x265e07d7 => V(g.sprites.get(&(int(a, 0) as u32)).map_or(0, |s| s.page as i32)),
             0x6b4a7873 | 0xf6459905 => {
                 let axis = usize::from(hash == 0xf6459905);

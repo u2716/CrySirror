@@ -353,13 +353,14 @@ mod tests {
         std::fs::create_dir(t.path().join("assets")).unwrap();
         let project=serde_json::from_value(json!({"schema":2,"name":"scene backgrounds","content_revision":"1","canvas":[3,2],"assets":"assets",
             "clients":[{"name":"data","adapter":"crysirror-script-v1","game":"test"}]})).unwrap();
-        let r = Runtime::with_asset_root(
+        let mut r = Runtime::with_asset_root(
             project,
             &t.path().join("assets"),
             &t.path().join("state"),
             Default::default(),
         )
         .unwrap();
+        crate::sact::install_scene_fixture(&mut r.host, [3, 2]);
         // Independent native scene precondition. Original Init itself is
         // separately verified with caller-selected OS fonts, never stubbed.
         let mut sact = Sact::new([3, 2], ["g".into(), "m".into()]).unwrap();

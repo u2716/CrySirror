@@ -28,6 +28,7 @@ impl TextSystem {
         if options.supersample == 1
             && options.binary_cutoff.is_none()
             && options.embolden_radius == 0
+            && options.coverage_offsets.is_none()
             && options.coverage_lut.is_none()
             && options.size_basis == GlyphSizeBasis::LineHeight
             && options.origin == GlyphImageOrigin::Baseline
@@ -199,6 +200,9 @@ impl TextSystem {
         drop(rgba);
         if radius != 0 {
             mask = dilate_cancellable(&mask, radius, check)?;
+        }
+        if let Some(offsets) = &options.coverage_offsets {
+            mask = crate::glyph_coverage_offsets::stamp(&mask, offsets, check)?;
         }
         let mut output = vec![255u8; canvas[0] as usize * canvas[1] as usize * 4];
         let divisor = factor * factor;

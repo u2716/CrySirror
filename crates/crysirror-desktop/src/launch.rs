@@ -167,6 +167,7 @@ pub fn offscreen(
                 && frame_input.pointer_x < rt.project.canvas[0] as i32
                 && frame_input.pointer_y < rt.project.canvas[1] as i32),
         };
+        rt.host.publish_input_sources(crysirror_core::service::InputSourcesFrame{keyboard_pointer:frame_input,controller_backend:false,controllers:Vec::new()})?;
         let step = match &mut core {
             app::Core::Plain(rt) => {
                 // Developer diagnostic: the window close button, without a window.

@@ -810,7 +810,7 @@ fn object_effects(state:&State,geometry:Option<&crate::native_image_resource::Ge
         1|2=>{
             // These Q16 coefficients reproduce all256 entries of the original
             // single-precision, separately truncated coefficient tables.
-            out.push(ImageEffect::FixedLuma{spec:FixedLumaSpec{coefficients:[19588,38444,7503],groups:[0,1,2],fractional_bits:16,amount256:256}});
+            out.push(ImageEffect::FixedLuma{spec:FixedLumaSpec{coefficients:[19588,38444,7503],groups:[0,1,2],fractional_bits:16,amount256:256,tint:None}});
             if v.filter==2 {
                 let table=|offset:i32|(0..256).map(|x|(x+offset).clamp(0,255) as u8).collect();
                 out.push(ImageEffect::RgbLookup{spec:RgbLookup{red:table(30),green:table(5),blue:table(-35),profile:RgbLookupProfile::StraightRgba}});

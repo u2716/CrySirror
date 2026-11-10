@@ -172,29 +172,32 @@ impl Machine {
         plan: Vec<(i32, (usize, u32))>,
         arguments: Vec<Value>,
     ) -> Result<()> {
-        let caller = self.scheduler.current;
+        //YUKIIRO40F670/40F830 (classic4094E0/409690) select each target to use native
+        //global stack helpers, then restore the real caller before executing
+        //any callback. Direct state mutation has exactly that result, and also
+        //supports owner-originated events after the previous cursor retired.
+        //No dead caller is resurrected or replaced with an arbitrary thread.
         for (id, target) in plan {
-            self.switch_thread(id)?;
             let serial = self.frame_serial()?;
-            let frame = Frame {
-                serial,
-                interrupted: self.pending.take(),
-                global_initializer: false,
-                return_pc: self.pc,
-                return_module: self.active_module,
-                stack_base: self.stack.len(),
-                arguments: arguments.clone(),
-                locals: vec![],
-                discard_return: true,
-                bsel: Bsel::default(),
-            };
-            self.frames.push(frame);
-            self.active_module = target.0;
-            self.program = self.modules[target.0].program.clone();
-            self.pc = target.1;
+            self.edit_thread_state(id, "event callback delivery", |state, _| {
+                state.frames.push(Frame {
+                    serial,
+                    interrupted: state.pending.take(),
+                    global_initializer: false,
+                    return_pc: state.pc,
+                    return_module: state.module,
+                    stack_base: state.stack.len(),
+                    arguments: arguments.clone(),
+                    locals: vec![],
+                    discard_return: true,
+                    bsel: Bsel::default(),
+                });
+                state.module = target.0;
+                state.pc = target.1;
+                Ok(())
+            })?;
             self.wake_thread(id);
         }
-        self.switch_thread(caller)?;
         //Dead nonpersistent bindings are pruned on dispatch in4094E0, even
         //when their callbacks never ran. Persistent startup bindings survive.
         let dead = self
@@ -219,7 +222,10 @@ impl Machine {
         function: u32,
         native_args: Vec<Value>,
     ) -> Result<()> {
-        ensure!(self.frames.len() < MAX_FRAMES, "Majiro callback depth budget");
+        ensure!(
+            self.frames.len() < MAX_FRAMES,
+            "Majiro callback depth budget"
+        );
         let target = self.resolve_function(function)?;
         self.acknowledge(output)?;
         let serial = self.frame_serial()?;
@@ -243,7 +249,11 @@ impl Machine {
     /// Dispatch an event while keeping the pending native call parked; it is
     /// re-delivered after the hooks return (native PC rewind). Returns false
     /// when no hook is registered for the event.
-    pub(crate) fn interrupt_with_event(&mut self, event: u32, native_args: Vec<Value>) -> Result<bool> {
+    pub(crate) fn interrupt_with_event(
+        &mut self,
+        event: u32,
+        native_args: Vec<Value>,
+    ) -> Result<bool> {
         let plan = self.event_plan(event, None, &native_args)?;
         if plan.is_empty() {
             return Ok(false);
@@ -253,19 +263,31 @@ impl Machine {
         Ok(true)
     }
     /// 409D90/41DD40: reset the current thread and enter a module's entry.
-    pub(crate) fn run_script(&mut self, name: String, program: Arc<Program>, native_args: Vec<Value>) -> Result<()> {
+    pub(crate) fn run_script(
+        &mut self,
+        name: String,
+        program: Arc<Program>,
+        native_args: Vec<Value>,
+    ) -> Result<()> {
         program.instruction(program.entry)?;
         let index = match self.modules.iter().position(|m| m.name == name) {
             Some(index) => index,
             None => {
-                ensure!(self.modules.len() < modules::MAX_MODULES, "Majiro linked module count budget");
-                self.modules.push(modules::LinkedModule { name, program: program.clone() });
+                ensure!(
+                    self.modules.len() < modules::MAX_MODULES,
+                    "Majiro linked module count budget"
+                );
+                self.modules.push(modules::LinkedModule {
+                    name,
+                    program: program.clone(),
+                });
                 self.modules.len() - 1
             }
         };
         let id = self.scheduler.current;
         if !self.initializing() {
-            self.hooks.retain(|hook| hook.owner != id || hook.persistent);
+            self.hooks
+                .retain(|hook| hook.owner != id || hook.persistent);
         }
         self.pending = None;
         self.stack.clear();
@@ -285,6 +307,7 @@ impl Machine {
         self.active_module = index;
         self.program = self.modules[index].program.clone();
         self.pc = self.program.entry;
+        self.reset_thread_waits(id);
         self.executed += 1;
         Ok(())
     }
@@ -301,53 +324,101 @@ impl Machine {
         if !self.thread_alive(id) {
             return Ok(());
         }
-        let caller = self.scheduler.current;
-        self.switch_thread(id)?;
-        let mut kept: Vec<Frame> = vec![];
-        let frames = std::mem::take(&mut self.frames);
-        let bodies: Vec<usize> = (0..frames.len())
-            .map(|i| if i + 1 == frames.len() { self.active_module } else { frames[i + 1].return_module })
-            .collect();
-        let mut resume: Vec<(u32, usize)> = vec![];
-        for (i, frame) in frames.into_iter().enumerate() {
-            if frame.bsel.destructor != 0 {
+        let self_kill = id == self.scheduler.current;
+        let terminating = self.scheduler.terminating.contains(&id);
+        //410060/416430: another thread cannot restart or bypass an existing
+        //destructor pass (native status2/3/4). A second kill by that same
+        //terminating thread changes its status to-1 and forces retirement.
+        if terminating && !self_kill {
+            return Ok(());
+        }
+        self.edit_thread_state(id, "thread termination", |state, next_frame| {
+            if terminating {
+                state.pending = None;
+                state.frames.clear();
+                state.stack.clear();
+                state.local.clear();
+                state.clicks = 0;
+                state.halted = true;
+                return Ok(());
+            }
+            let count = state
+                .frames
+                .iter()
+                .filter(|frame| frame.bsel.destructor != 0)
+                .count();
+            ensure!(
+                next_frame.checked_add(count as u64).is_some(),
+                "Majiro destructor epoch budget"
+            );
+            ensure!(
+                state
+                    .frames
+                    .iter()
+                    .filter(|frame| frame.bsel.destructor != 0)
+                    .all(|frame| frame.stack_base <= state.stack.len()),
+                "Majiro destructor stack base exceeds operands"
+            );
+            let epochs = (0..count)
+                .map(|_| super::threads::allocate_frame_serial(next_frame))
+                .collect::<Result<Vec<_>>>()?;
+            let frames = std::mem::take(&mut state.frames);
+            let bodies: Vec<usize> = (0..frames.len())
+                .map(|i| {
+                    if i + 1 == frames.len() {
+                        state.module
+                    } else {
+                        frames[i + 1].return_module
+                    }
+                })
+                .collect();
+            let mut kept = Vec::with_capacity(count);
+            let mut resume = Vec::with_capacity(count);
+            let mut epochs = epochs.into_iter();
+            for (i, mut frame) in frames.into_iter().enumerate() {
+                if frame.bsel.destructor == 0 {
+                    continue;
+                }
                 resume.push((frame.bsel.destructor, bodies[i]));
-                let mut frame = frame;
+                //40B350 clears wait words68/72 before entering each retained
+                //destructor. The abandoned body cannot own its new receipt.
+                frame.serial = epochs
+                    .next()
+                    .context("Majiro destructor epoch plan mismatch")?;
                 frame.bsel = Bsel::default();
                 frame.interrupted = None;
                 kept.push(frame);
             }
-        }
-        self.pending = None;
-        if kept.is_empty() {
-            self.halted = true;
-            self.frames = vec![];
-        } else {
-            // Re-link: each kept frame returns into the next lower kept frame
-            // at that frame's destructor; the top frame starts at its own.
-            for i in 1..kept.len() {
-                kept[i].return_pc = resume[i - 1].0;
-                kept[i].return_module = resume[i - 1].1;
+            state.pending = None;
+            if kept.is_empty() {
+                state.stack.clear();
+                state.local.clear();
+                state.clicks = 0;
+                state.halted = true;
+            } else {
+                for i in 1..kept.len() {
+                    kept[i].return_pc = resume[i - 1].0;
+                    kept[i].return_module = resume[i - 1].1;
+                }
+                let top = kept.len() - 1;
+                state.stack.truncate(kept[top].stack_base);
+                state.pc = resume[top].0;
+                state.module = resume[top].1;
+                state.frames = kept;
             }
-            let top = kept.len() - 1;
-            let base = kept[top].stack_base.min(self.stack.len());
-            self.stack.truncate(base);
-            self.pc = resume[top].0;
-            self.active_module = resume[top].1;
-            self.program = self.modules[self.active_module].program.clone();
-            self.frames = kept;
-        }
-        if id != caller && self.thread_alive(caller) {
-            self.switch_thread(caller)?;
-        } else if id != caller {
-            self.switch_thread(caller).ok();
-        }
+            Ok(())
+        })?;
         if !self.thread_alive(id) {
-            self.scheduler.order.retain(|x| *x != id);
-            self.scheduler.blocked.remove(&id);
+            self.scheduler.order.retain(|entry| *entry != id);
+            self.scheduler.ready.retain(|entry| *entry != id);
+            self.reset_thread_waits(id);
             self.scheduler.parked.remove(&id);
-            self.hooks.retain(|hook| hook.owner != id || hook.persistent);
+            if !self.initializing() {
+                self.hooks
+                    .retain(|hook| hook.owner != id || hook.persistent);
+            }
         } else {
+            self.scheduler.terminating.insert(id);
             self.wake_thread(id);
         }
         Ok(())
@@ -364,6 +435,8 @@ impl Machine {
 }
 impl Machine {
     pub(crate) fn hook_exists(&self, event: u32) -> bool {
-        self.hooks.iter().any(|hook| hook.event == event && self.thread_alive(hook.owner))
+        self.hooks
+            .iter()
+            .any(|hook| hook.event == event && self.thread_alive(hook.owner))
     }
 }

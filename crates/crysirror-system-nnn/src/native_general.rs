@@ -8,11 +8,6 @@ use crysirror_core::{
     service::HostServices,
     state::ClientId,
 };
-use crysirror_image::{
-    effects::ImageEffect,
-    fixed_mix::{FixedMixAlpha, FixedMixRounding, FixedMixSpec},
-    transition::ImageTransition,
-};
 use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -21,11 +16,13 @@ pub(crate) struct ModeReturn {
     pub fade: Option<ExitFade>,
 }
 
-/// Legacy4f29a0 PrintSimpleWipe(count, time-1, 0), not the -1 Overrap
-/// branch (which reuses a prior enter-screen buffer). Pixels are engine-owned.
+/// Positive selectors use PrintSimpleWipe(count,time-1,type-1); -1 reuses
+/// the global enter-screen buffer with Overrap's one-step offset. Other
+/// negative selectors spend the countdown without a Print branch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ExitFade {
     pub frames: u32,
+    pub wipe: i32,
     pub color: [u8; 4],
     pub fill_exit: Option<[u8; 4]>,
 }
@@ -41,6 +38,12 @@ fn color(table: &Names, prefix: &str) -> Result<[u8; 4]> {
 }
 
 impl ModeReturn {
+    pub(crate) fn validate_skinned_entry(table:&Names)->Result<()> {
+        crate::native_general_entry::ModeEntry::read(table)?;
+        ensure!(table.integer(b"enterExitVoiceFlag")?.unwrap_or(0)==0,
+            "NNN General delayed entry/exit voice requires its original trigger policy");
+        Ok(())
+    }
     pub(crate) fn validate_entry(table: &Names) -> Result<()> {
         ensure!(
             table.integer(b"enterFadeInType")?.unwrap_or(0) == 0,
@@ -82,8 +85,8 @@ impl ModeReturn {
         };
         let kind = table.integer(fade_key)?.unwrap_or(0);
         ensure!(
-            matches!(kind, 0 | 1),
-            "NNN General exit fade type {kind} requires its exact native wipe/retained enter-screen profile"
+            kind <= 0 || crate::native_simple_wipe::supported(kind-1),
+            "NNN General exit fade type {kind} requires its exact native wipe profile"
         );
         let fade = if kind == 0 {
             None
@@ -95,6 +98,7 @@ impl ModeReturn {
             );
             Some(ExitFade {
                 frames: frames as u32,
+                wipe: if kind>0 {kind-1}else{kind},
                 color: color(table, color_prefix)?,
                 // Legacy FillExitScreen4f0e90 always uses ordinary RGB even
                 // on the special branch. Do not substitute the fade colour.
@@ -133,8 +137,11 @@ pub(crate) struct ExitFadePlayer {
     next_ms: Option<u64>,
     count: u32,
     job: Option<ImageJob>,
+    preparing_target:bool,
     finished: bool,
     skip: bool,
+    random: Option<crysirror_image::temporal_pattern::PatternRng>,
+    tables: crate::native_simple_wipe::Tables,
 }
 impl ExitFadePlayer {
     pub fn new(
@@ -144,34 +151,55 @@ impl ExitFadePlayer {
         spec: ExitFade,
         frame_ms: u64,
     ) -> Result<Self> {
+        Self::new_with_enter(host,client,source,None,spec,frame_ms)
+    }
+    pub(crate) fn new_with_enter(host:&mut dyn HostServices,client:ClientId,source:Arc<dyn ImageResource>,enter:Option<Arc<dyn ImageResource>>,spec:ExitFade,frame_ms:u64)->Result<Self> {
         ensure!(
             source.client() == client
                 && (1..=60000).contains(&frame_ms)
-                && (1..=864000).contains(&spec.frames),
+                && (1..=864000).contains(&spec.frames)
+                && (spec.wipe<0 || crate::native_simple_wipe::supported(spec.wipe)),
             "NNN General exit fade scope/clock"
         );
-        let job = host.image_metadata(client)?.begin_process(
-            ImageInput::Solid {
-                size: source.size(),
-                color: spec.color,
-            },
-            b"[]".as_slice().into(),
-        )?;
+        if let Some(enter)=&enter {ensure!(enter.client()==client && enter.size()==source.size(),"NNN General retained enter buffer scope");}
+        let target=if spec.wipe==-1 {enter}else{None};
+        let job=if spec.wipe>=0 || spec.wipe==-1 && target.is_none() {
+            // A never-initialized global enter buffer was native heap data.
+            // Define it as black only when no retained buffer exists; a real
+            // previous entry/positive-exit target is always reused verbatim.
+            Some(host.image_metadata(client)?.begin_process(ImageInput::Solid{size:source.size(),color:if spec.wipe==-1{[0,0,0,255]}else{spec.color}},b"[]".as_slice().into())?)
+        }else{None};
         Ok(Self {
             client,
             source,
-            target: None,
+            target,
             spec,
             frame_ms,
             next_ms: None,
             count: 0,
-            job: Some(job),
+            preparing_target:job.is_some(),
+            job,
             finished: false,
             skip: false,
+            random: None,
+            tables: Default::default(),
         })
+    }
+    pub(crate) fn needs_random_context(&self)->bool {crate::native_simple_wipe::needs_random(self.spec.wipe)&&self.random.is_none()&&self.job.is_none()}
+    pub(crate) fn bind_random(&mut self,random:crysirror_image::temporal_pattern::PatternRng,tables:crate::native_simple_wipe::Tables) {
+        if self.random.is_none() {self.random=Some(random);self.tables=tables;}
+    }
+    pub(crate) fn take_random_state(&mut self)->Option<(crysirror_image::temporal_pattern::PatternRng,crate::native_simple_wipe::Tables)> {
+        // Commit an admitted draw once. Retaining and recommitting its RNG
+        // while a worker is pending would overwrite intervening background SPT
+        // draws. The next admitted frame binds the latest owner bank instead.
+        self.random.take().map(|random|(random,self.tables.clone()))
     }
     pub fn dependency_pending(&self) -> bool {
         self.job.is_some()
+    }
+    pub(crate) fn retained_enter_frame(&self)->Option<Arc<dyn ImageResource>> {
+        if self.spec.wipe>=-1 {self.target.clone()}else{None}
     }
     pub fn finished(&self) -> bool {
         self.finished
@@ -194,7 +222,8 @@ impl ExitFadePlayer {
                     "NNN General exit fade result scope"
                 );
                 self.job = None;
-                if self.target.is_none() {
+                if self.preparing_target {
+                    self.preparing_target=false;
                     self.target = Some(image);
                     return Ok(None);
                 }
@@ -225,6 +254,13 @@ impl ExitFadePlayer {
             self.finished = true;
             return Ok(Some(self.source.clone()));
         }
+        if !terminal && self.spec.wipe < -1 {
+            // PrintExitFadeOut defines no drawing branch for another
+            // negative selector, while GeneralCalcu still spends its ticks.
+            self.count=count;self.skip=false;
+            self.next_ms=Some(now.checked_add(self.frame_ms).context("NNN General exit clock overflow")?);
+            return Ok(None);
+        }
         let (input, effects) = if terminal {
             // GeneralCalcu returns before GeneralPrint on the terminal step.
             // The next mode receives the capture or FillExitScreen, never a
@@ -237,34 +273,15 @@ impl ExitFadePlayer {
                 vec![],
             )
         } else {
-            let percent = (u64::from(count) * 100
-                / u64::from(self.spec.frames.saturating_sub(1).max(1)))
-            .min(100);
-            (
-                ImageInput::Transition {
-                    from: self.source.clone(),
-                    to: self
-                        .target
-                        .clone()
-                        .context("NNN General exit target absent")?,
-                    mask: None,
-                },
-                vec![ImageEffect::Transition {
-                    spec: ImageTransition {
-                        progress: percent as f32 / 100.,
-                        softness: 0.,
-                        blur: 0.,
-                        rule_table: None,
-                        fixed_weighted: Some(FixedMixSpec {
-                            left_weight: ((100 - percent) * 256 / 100) as u32,
-                            right_weight: (percent * 256 / 100) as u32,
-                            fractional_bits: 8,
-                            rounding: FixedMixRounding::SumThenShift,
-                            alpha: FixedMixAlpha::Opaque,
-                        }),
-                    },
-                }],
-            )
+            let target=self.target.clone().context("NNN General exit target absent")?;
+            if self.spec.wipe==-1 {
+                // Overrap uses (elapsed-1)/(time-1), unlike positive simple
+                // wipes' elapsed/(time-1). The shared selector0 retains the
+                // intermediate integer percent and two /256 weights.
+                crate::native_simple_wipe::plan(0,self.source.clone(),target,count.saturating_sub(1),self.spec.frames.saturating_sub(1).max(1))?
+            } else if crate::native_simple_wipe::needs_random(self.spec.wipe) {
+                crate::native_simple_wipe::plan_with_random(self.spec.wipe,self.source.clone(),target,count,self.spec.frames.saturating_sub(1).max(1),self.random.as_mut().context("NNN General random wipe owner absent")?,&mut self.tables)?
+            }else{crate::native_simple_wipe::plan(self.spec.wipe,self.source.clone(),target,count,self.spec.frames.saturating_sub(1).max(1))?}
         };
         self.job = Some(
             host.image_metadata(self.client)?
@@ -290,7 +307,7 @@ mod tests {
     fn ordinary_special_and_newgame_returns_select_original_profile_before_mutation() {
         assert!(ModeReturn::read(&names(""), None).unwrap().capture_exit);
         let table = names(
-            "exitFadeOutType 2 exitFadeOutSpecialMode nothing exitFadeOutTypeSpecial 0 createExitScreenFlagSpecial 1",
+            "exitFadeOutType 97 exitFadeOutSpecialMode nothing exitFadeOutTypeSpecial 0 createExitScreenFlagSpecial 1",
         );
         assert!(
             !ModeReturn::read(&table, Some(NativeMode::Nothing))
@@ -300,7 +317,7 @@ mod tests {
         assert!(ModeReturn::read(&table, Some(NativeMode::Opening)).is_err());
         assert!(ModeReturn::read(&table, None).is_err());
         let numeric =
-            names("exitFadeOutType 2 exitFadeOutSpecialMode +1suffix exitFadeOutTypeSpecial 0");
+            names("exitFadeOutType 97 exitFadeOutSpecialMode +1suffix exitFadeOutTypeSpecial 0");
         assert!(
             !ModeReturn::read(&numeric, Some(NativeMode::Nothing))
                 .unwrap()
@@ -329,6 +346,7 @@ mod tests {
             ordinary.fade,
             Some(ExitFade {
                 frames: 10,
+                wipe: 0,
                 color: [4, 5, 6, 255],
                 fill_exit: Some([4, 5, 6, 255])
             })
@@ -402,6 +420,7 @@ mod tests {
                 source.clone(),
                 ExitFade {
                     frames: 3,
+                    wipe: 0,
                     color: [100, 20, 40, 255],
                     fill_exit,
                 },

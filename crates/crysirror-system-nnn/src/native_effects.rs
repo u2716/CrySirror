@@ -17,12 +17,13 @@ pub struct SunaParameters {
 }
 impl SunaParameters {
     pub fn parse(values: &[i32], size: [u32; 2]) -> Result<Self> {
-        // Legacy SetParam leaves start-percent uninitialized when fewer than
-        // four values are supplied. Never replace native undefined data with0.
-        ensure!(
-            values.len() >= 4 && values.len() <= 10,
-            "SUNA legacy argument count"
-        );
+        ensure!(values.len() <= 224 && size.iter().all(|n| (1..=16384).contains(n)),
+            "SUNA argument/canvas bounds");
+        // Deliberate repair of native undefined memory: SetParam assigns
+        // para[3]=para[6] before initializing the absent X parameter. Initialize
+        // the defaults first, so omitted start-percent deterministically uses
+        // the same default X=0. Source consumes only the first ten words; its
+        // InitParameter itself passes sixteen, so trailing words are ignored.
         let get = |i: usize, default: i32| values.get(i).copied().unwrap_or(default);
         let x = get(6, 0).max(0).min(size[0] as i32 - 1) as u32;
         let y = get(7, 0).max(0).min(size[1] as i32 - 1) as u32;
@@ -221,8 +222,38 @@ pub struct LayerGreyState {
     pub end_percent: i32,
     pub start_percent: i32,
     pub count: i32,
+    /// LAYERSEPIA128 target colour (para5..7); `None` is LAYERGREY129.
+    pub sepia: Option<[i32; 3]>,
 }
 impl LayerGreyState {
+    /// Legacy LAYERSEPIA128: Set4A7500 copies at most eight arguments with
+    /// default colour107,74,43; Print4A7630 uses the LAYERGREY curve and the
+    /// MMX kernel4D7EF0 ((y*c)>>8 per channel before the ps256 mix).
+    pub fn parse_sepia(values: &[i32]) -> Result<Self> {
+        let values = &values[..values.len().min(8)];
+        let mut state = Self::parse(&values[..values.len().min(5)])?;
+        let color = [
+            values.get(5).copied().unwrap_or(107),
+            values.get(6).copied().unwrap_or(74),
+            values.get(7).copied().unwrap_or(43),
+        ];
+        ensure!(
+            color.iter().all(|c| (0..=255).contains(c)),
+            "LAYERSEPIA native byte colour profile"
+        );
+        state.sepia = Some(color);
+        Ok(state)
+    }
+    pub fn command(&self) -> i32 {
+        if self.sepia.is_some() { 128 } else { 129 }
+    }
+    pub fn parameters(&self) -> Vec<i32> {
+        let mut p = vec![self.frames, self.easing, self.subframe, self.end_percent, self.start_percent];
+        if let Some(color) = self.sepia {
+            p.extend(color);
+        }
+        p
+    }
     pub fn parse(values: &[i32]) -> Result<Self> {
         ensure!(values.len() <= 5, "LAYERGREY native argument count");
         let state = Self {
@@ -232,6 +263,7 @@ impl LayerGreyState {
             end_percent: values.get(3).copied().unwrap_or(100),
             start_percent: values.get(4).copied().unwrap_or(0),
             count: 0,
+            sepia: None,
         };
         ensure!(
             [state.start_percent, state.end_percent]
@@ -329,6 +361,7 @@ impl LayerGreyState {
                 groups: [1, 0, 0],
                 fractional_bits: 8,
                 amount256: amount,
+                tint: self.sepia.map(|color| color.map(|c| c as u8)),
             },
         })
     }
@@ -384,5 +417,24 @@ mod tests {
         );
         state.easing = 1;
         assert!(state.linear_image_effect().is_err());
+    }
+}
+
+#[cfg(test)]
+mod default_tests {
+    use super::*;
+    #[test]
+    fn native_suna_omitted_defaults_are_initialized_and_trailing_words_are_ignored() {
+        let empty=SunaParameters::parse(&[],[800,600]).unwrap();
+        assert_eq!((empty.frames,empty.transition,empty.start_percent,empty.end_percent,empty.rect),
+            (0,false,0,100,[0,0,800,600]));
+        let three=SunaParameters::parse(&[20,1,75],[800,600]).unwrap();
+        assert_eq!((three.frames,three.transition,three.start_percent,three.end_percent),(20,true,0,75));
+        let mut values=vec![20,1,75,12,0,0,9,3,100,50];
+        let defined=SunaParameters::parse(&values,[800,600]).unwrap();
+        values.extend([i32::MAX;6]);
+        assert_eq!(SunaParameters::parse(&values,[800,600]).unwrap(),defined);
+        assert_eq!(defined.rect,[8,2,96,50]);
+        assert!(SunaParameters::parse(&[],[0,600]).is_err());
     }
 }

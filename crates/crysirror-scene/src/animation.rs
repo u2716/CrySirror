@@ -8,9 +8,11 @@
 //! - `cur_value` is the animated/interpolated value computed each frame.
 
 mod cubic_path;
+mod bezier_path;
 mod oscillator;
 mod scalar_steps;
 pub use cubic_path::NaturalCubicPath;
+pub use bezier_path::{CubicBezierPath,QuadraticBezierPath};
 pub use oscillator::{ScalarOscillator, SignalFade, Waveform};
 pub use scalar_steps::step_remaining_time_scalar;
 

@@ -88,4 +88,5 @@ impl DrawClock {
     pub(crate) fn finished(&self) -> bool {
         self.direct || self.remaining == 0
     }
+    pub(crate) fn skip_remaining(&mut self) {self.remaining=0;}
 }

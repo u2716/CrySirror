@@ -84,7 +84,7 @@ impl NativeStartupProfile {
             cancel.check()?;
             for (folder, ext, cipher) in [("init2", "fxf", true), ("init", "xtx", false)] {
                 let path = config.resources.path(&format!("{folder}/{name}.{ext}"))?;
-                let reader = match storage.open_asset(&VfsPath::new(Mount::Asset, &path)?) {
+                let reader = match crate::native_resources::open_installed_asset(storage, &VfsPath::new(Mount::Asset, &path)?) {
                     Ok(r) => r,
                     Err(crysirror_core::Error::NotFound) => continue,
                     Err(e) => return Err(e.into()),
@@ -103,7 +103,7 @@ impl NativeStartupProfile {
             read("printmovie")?,
         )?;
         let path = config.resources.path("spt/movielist.xtx")?;
-        profile.movie_names = match storage.open_asset(&VfsPath::new(Mount::Asset, &path)?) {
+        profile.movie_names = match crate::native_resources::open_installed_asset(storage, &VfsPath::new(Mount::Asset, &path)?) {
             Ok(reader) => Some(Names::parse(
                 &crysirror_resource::read_all(reader.as_ref(), 1 << 20)?,
                 false,
@@ -113,7 +113,7 @@ impl NativeStartupProfile {
         };
         if !profile.system_sound_disabled {
             let path = config.resources.path("nya/systemse.xtx")?;
-            profile.system_sounds = match storage.open_asset(&VfsPath::new(Mount::Asset, &path)?) {
+            profile.system_sounds = match crate::native_resources::open_installed_asset(storage, &VfsPath::new(Mount::Asset, &path)?) {
                 Ok(reader) => Some(Names::parse(
                     &crysirror_resource::read_all(reader.as_ref(), 1 << 20)?,
                     false,
@@ -664,6 +664,7 @@ pub struct NativeStartupShell {
     logo: NativeLogoPlayer,
     logo_return_started: bool,
     logo_fade: Option<crate::native_general::ExitFadePlayer>,
+    retained_enter:Option<Arc<dyn ImageResource>>,
     logo_exit: Option<Arc<dyn ImageResource>>,
     opening_entry_pending: bool,
     nothing_job: Option<ImageJob>,
@@ -674,6 +675,21 @@ pub struct NativeStartupShell {
     pub api_calls: u64,
 }
 impl NativeStartupShell {
+    pub(crate) fn bind_wipe_context(&mut self,vm:&crate::adapter::NativeAdapter)->Result<()> {
+        self.retained_enter=vm.retained_general_enter_frame();
+        if let Some(fade)=self.logo_fade.as_mut() {vm.bind_wipe_context(fade)?;}
+        Ok(())
+    }
+    pub(crate) fn commit_wipe_context(&mut self,vm:&mut crate::adapter::NativeAdapter)->Result<()> {
+        if let Some(fade)=self.logo_fade.as_mut() {vm.commit_wipe_context(fade)?;}
+        Ok(())
+    }
+
+    pub(crate) fn title_return(client:ClientId,root:u32,canvas:[u32;2],frame_ms:u64,launch_count:u32,profile:NativeStartupProfile,resources:crate::resource_bridge::NativeResources)->Result<Self> {
+        let mut shell=Self::new(client,root,canvas,frame_ms,launch_count,profile,resources)?;
+        shell.mode=NativeMode::Title;
+        Ok(shell)
+    }
     pub fn new(
         client: ClientId,
         root: u32,
@@ -711,6 +727,7 @@ impl NativeStartupShell {
             logo,
             logo_return_started: false,
             logo_fade: None,
+            retained_enter:None,
             logo_exit: None,
             opening_entry_pending: false,
             nothing_job: None,
@@ -827,6 +844,9 @@ impl NativeStartupShell {
         self.cover_frame = Some(image);
         self.api_calls += 2;
         Ok(())
+    }
+    pub(crate) fn restore_cover_cleanup(&self) -> (Vec<serde_json::Value>,Vec<String>) {
+        (self.cover_path.as_ref().map(|_|serde_json::json!({"op":"remove","id":9001})).into_iter().collect(), self.cover_path.iter().cloned().collect())
     }
     pub(crate) fn release_cover(&mut self, host: &mut dyn HostServices) -> Result<()> {
         if let Some(path) = self.cover_path.as_ref() {
@@ -946,10 +966,11 @@ impl NativeStartupShell {
                 let fade = policy
                     .fade
                     .map(|spec| {
-                        crate::native_general::ExitFadePlayer::new(
+                        crate::native_general::ExitFadePlayer::new_with_enter(
                             host,
                             self.client,
                             frame.clone(),
+                            self.retained_enter.clone(),
                             spec,
                             self.logo.frame_ms,
                         )
@@ -1032,6 +1053,7 @@ mod mode_reentry_tests {
         runtime.tick(0, Default::default()).unwrap();
         let config = NativeConfiguration {
             main_control: None,
+            chart_setup: None,
             resources: ResourceNames::new("").unwrap(),
             setup: names("dwqPackLevel 0"),
             variable_names: names(""),

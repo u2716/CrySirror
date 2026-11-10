@@ -7,6 +7,9 @@ mod filters;
 mod font_state;
 mod native_text;
 mod normalized;
+mod stretch;
+mod geometry;
+mod polygon;
 
 use crate::{
     adapter::{Bridge, Dispatch},
@@ -95,7 +98,8 @@ impl NativeDraw {
         let program = machine.program.clone();
         let library = &program.libraries[library];
         let function = &library.functions[function];
-        if library.name != b"DrawPluginManager" && library.name != b"DrawGraph" {
+        let sact_cg=library.name==b"SACT2" && matches!(function.name.as_slice(),b"CG_RotateRGB"|b"CG_BlendAMapBin");
+        if library.name != b"DrawPluginManager" && library.name != b"DrawGraph" && !sact_cg {
             ensure!(
                 self.pending.is_none() && self.text_run.is_none() && self.filtered_run.is_none(),
                 "System4 changed pending DrawGraph library"
@@ -159,18 +163,17 @@ impl NativeDraw {
             machine.complete_hll(call, HllReturn::Scalar(result))?;
             return Ok(Some(Dispatch::Completed));
         }
-        if library.name != b"DrawGraph" {
+        if library.name != b"DrawGraph" && !sact_cg {
             ensure!(
                 self.pending.is_none() && self.text_run.is_none() && self.filtered_run.is_none(),
                 "System4 changed pending DrawGraph library"
             );
             return Ok(None);
         }
-        let images = self
-            .images
-            .as_ref()
-            .context("System4 DrawGraph interface not bound by native Load")?
-            .clone();
+        let images = if sact_cg {
+            ensure!(bridge.sact.as_ref().is_some_and(|s|s.initialized),"native CG raster before SACT init");
+            host.image_metadata(owner)?
+        }else{self.images.as_ref().context("System4 DrawGraph interface not bound by native Load")?.clone()};
         if self.pending.is_none() && self.text_run.is_none() && self.filtered_run.is_none() {
             if let Some(done) = self.font.dispatch(
                 machine,
@@ -279,6 +282,18 @@ impl NativeDraw {
             "System4 DrawGraph void return ABI"
         );
         if self.pending.is_none() {
+            match polygon::operation(owner,&function.name,&arguments,bridge,cg,self.native_tables)? {
+                Some(polygon::Plan::Noop)=>{machine.complete_hll(call,HllReturn::Void)?;return Ok(Some(Dispatch::Completed));},
+                Some(polygon::Plan::Draw{number,input})=>{self.pending=Some(Pending{owner,call:call.clone(),number,job:images.begin_process(input,b"[]".as_slice().into())?});},
+                None=>(),
+            }
+        }
+        if self.pending.is_none() {
+            if let Some((number,input,_))=geometry::operation(owner,&function.name,&arguments,bridge,cg,self.native_tables)? {
+                self.pending=Some(Pending {owner,call:call.clone(),number,job:images.begin_process(input,b"[]".as_slice().into())?});
+            }
+        }
+        if self.pending.is_none() {
             let values = arguments
                 .iter()
                 .map(|arg| match arg {
@@ -294,6 +309,11 @@ impl NativeDraw {
                 cg,
                 self.native_tables,
             )?;
+            let normalized = if normalized.is_some() {
+                normalized
+            } else {
+                stretch::operation(owner, &function.name, &values, bridge, cg, self.native_tables)?
+            };
             let normalized = if normalized.is_some() {
                 normalized
             } else {
@@ -531,6 +551,7 @@ mod tests {
             Default::default(),
         )
         .unwrap();
+        crate::sact::install_scene_fixture(&mut runtime.host, [2, 1]);
         // Only declare the drawing precondition. Actual font/audio/Canvas SACT
         // initialization is separately accepted by the original owner test.
         let mut s = crate::sact::Sact::new([2, 1], ["unused".into(), "unused".into()]).unwrap();
@@ -1818,4 +1839,88 @@ mod tests {
         assert_eq!(m.stack, before);
         assert!(Arc::ptr_eq(&pixels_before, &pixels(&cg, &bridge)));
     }
+    #[test]
+    fn native_stretch_family_samples_shared_images_and_preserves_channel_masks() {
+        let (_root,mut rt,mut bridge)=runtime();let c=ClientId(1);
+        let mut cg=NativeCg::default();let mut draw=NativeDraw::new(c);
+        draw.configure_original_profile(true);
+        manager(&mut draw,&mut cg,&mut bridge,&mut rt,"Load",b"DrawGraph.dll").unwrap();
+        bridge.sact.as_mut().unwrap().sprites.as_mut().unwrap().create(c,1,[3,1],[0,30,60,90],&mut rt.host).unwrap();
+        operation(&mut draw,&mut cg,&mut bridge,&mut rt,"FillWithAlpha",&[1,1,0,1,1,90,60,30,0]).unwrap();
+        operation(&mut draw,&mut cg,&mut bridge,&mut rt,"FillWithAlpha",&[1,2,0,1,1,240,120,0,255]).unwrap();
+        for (name,expected) in [
+            ("CopyStretch",vec![0,30,60,61,90,60,30,61]),
+            ("CopyStretchInterp",vec![0,30,60,61,165,90,15,61]),
+            ("CopyReduce",vec![30,40,50,61,190,100,10,61]),
+            ("CopyStretchAMap",vec![10,20,30,90,10,20,30,0]),
+            ("CopyStretchAMapInterp",vec![10,20,30,90,10,20,30,127]),
+            ("CopyReduceAMap",vec![10,20,30,60,10,20,30,170]),
+            ("CopyStretchBlend",vec![4,24,44,61,49,39,29,61]),
+            ("CopyStretchBlendAMap",vec![6,22,40,61,10,20,30,61]),
+        ] {
+            bridge.sact.as_mut().unwrap().sprites.as_mut().unwrap().create(c,0,[2,1],[10,20,30,61],&mut rt.host).unwrap();
+            cg.reconcile(c,0,&bridge,&mut rt.host).unwrap();
+            let mut values=vec![0,0,0,2,1,1,0,0,3,1];if name=="CopyStretchBlend"{values.push(128);}
+            operation(&mut draw,&mut cg,&mut bridge,&mut rt,name,&values).unwrap();
+            assert_eq!(pixels(&cg,&bridge).rgba().as_ref(),expected.as_slice(),"{name}");
+        }
+        assert!(operation(&mut draw,&mut cg,&mut bridge,&mut rt,"CopyStretch",&[0,-1,0,2,1,1,0,0,3,1]).is_err());
+    }
+    #[test]
+    fn native_copy_surface_preserves_destination_properties_and_hit_queries_use_stored_alpha() {
+        let (_root,mut rt,mut bridge)=runtime();let c=ClientId(1);let mut cg=NativeCg::default();
+        bridge.sact.as_mut().unwrap().sprites.as_mut().unwrap().scalar(c,b"SP_SetZ",&[0,17],&mut rt.host).unwrap();
+        let (mut m,call)=machine(1,"SP_CreateCopy",&[10,10],10);
+        Arc::make_mut(&mut m.program).libraries[1].name=b"SACT2".to_vec();m.stack=vec![0,1];enter(&mut m,&call);
+        assert_eq!(cg.dispatch(c,&mut m,&call,&mut bridge,&mut rt.host).unwrap(),Some(Dispatch::Completed));
+        assert_eq!(m.stack,[1]);assert_eq!(bridge.sact.as_ref().unwrap().sprites.as_ref().unwrap().get(0).unwrap().z,17);
+        bridge.sact.as_mut().unwrap().sprites.as_mut().unwrap().create(c,1,[2,1],[255,0,0,0],&mut rt.host).unwrap();
+        assert_eq!(cg.scene_sprite_input(c,0,&bridge).unwrap().resident_pixel(c,[0,0]).unwrap().unwrap(),[111,122,133,202]);
+        for (name,number,x,expected) in [("SP_IsPtIn",0,1,1),("SP_IsPtIn",1,1,0),("SP_IsPtInRect",1,1,1),("SP_IsPtInRect",1,2,0)] {
+            let (mut m,call)=machine(1,name,&[10,10,10],10);Arc::make_mut(&mut m.program).libraries[1].name=b"SACT2".to_vec();
+            m.stack=vec![number,x,0];enter(&mut m,&call);
+            assert_eq!(cg.dispatch(c,&mut m,&call,&mut bridge,&mut rt.host).unwrap(),Some(Dispatch::Completed));assert_eq!(m.stack,[expected]);
+        }
+    }
+
+    fn typed_geometry(draw:&mut NativeDraw,cg:&mut NativeCg,bridge:&mut Bridge,rt:&mut Runtime,name:&str,kinds:&[i32],values:&[i32])->Result<()> {
+        let (mut m,call)=machine(1,name,kinds,0);m.stack=values.to_vec();enter(&mut m,&call);
+        let deadline=Instant::now()+Duration::from_secs(3);
+        loop {match draw.dispatch(ClientId(1),&mut m,&call,bridge,cg,&mut rt.host)?{
+            Some(Dispatch::Completed)=>break,
+            Some(Dispatch::WaitUntil(_))=>{ensure!(m.pc==call.pc&&m.stack==values,"typed geometry consumed pending operands");ensure!(Instant::now()<deadline,"typed geometry timeout");std::thread::yield_now();},
+            _=>bail!("typed geometry missing dispatcher")
+        }}
+        ensure!(m.stack.is_empty(),"typed geometry void completion");Ok(())
+    }
+    #[test]
+    fn native_geometry_and_polygon_dispatchers_publish_hidden_rgb_and_actual_planes() {
+        let (_root,mut rt,mut bridge)=runtime();let owner=ClientId(1);let mut cg=NativeCg::default();let mut draw=NativeDraw::new(owner);
+        draw.configure_original_profile(true);manager(&mut draw,&mut cg,&mut bridge,&mut rt,"Load",b"DrawGraph.dll").unwrap();
+        bridge.sact.as_mut().unwrap().sprites.as_mut().unwrap().create(owner,1,[4,4],[111,122,133,0],&mut rt.host).unwrap();
+        let reset=|cg:&mut NativeCg,bridge:&mut Bridge,rt:&mut Runtime|{
+            bridge.sact.as_mut().unwrap().sprites.as_mut().unwrap().create(owner,0,[4,4],[10,20,30,61],&mut rt.host).unwrap();cg.reconcile(owner,0,bridge,&mut rt.host).unwrap();
+        };
+        for name in ["CopyRotZoom","CopyRotZoomAMap","CopyRotZoomUseAMap","CopyRotateY","CopyRotateYUseAMap","CopyRotateYFixL","CopyRotateYFixR","CopyRotateYFixLUseAMap","CopyRotateYFixRUseAMap","CopyRotateX","CopyRotateXUseAMap","CopyRotateXFixU","CopyRotateXFixD","CopyRotateXFixUUseAMap","CopyRotateXFixDUseAMap"] {
+            reset(&mut cg,&mut bridge,&mut rt);
+            let (kinds,values)=if name.starts_with("CopyRotate") {(vec![10,10,10,10,10,10,10,11,11],vec![0,1,1,0,0,4,4,0,1f32.to_bits()as i32])}else{(vec![10,10,10,10,10,10,11,11],vec![0,1,0,0,4,4,0,1f32.to_bits()as i32])};
+            typed_geometry(&mut draw,&mut cg,&mut bridge,&mut rt,name,&kinds,&values).unwrap();
+            let expected=if name=="CopyRotZoomAMap" {[10,20,30,0]}else{[111,122,133,if name.ends_with("UseAMap"){0}else{255}]};
+            assert_eq!(pixels(&cg,&bridge).rgba().as_ref(),expected.repeat(16).as_slice(),"{name}");
+        }
+        reset(&mut cg,&mut bridge,&mut rt);
+        typed_geometry(&mut draw,&mut cg,&mut bridge,&mut rt,"CopyRotZoom2Bilinear",&[10,11,11,10,11,11,11,11],&[0,0,0,1,0,0,0,1f32.to_bits()as i32]).unwrap();
+        assert_eq!(pixels(&cg,&bridge).rgba().as_ref(),[10,20,30,0].repeat(16).as_slice());
+        reset(&mut cg,&mut bridge,&mut rt);
+        let positions=[[0f32,0.,1.],[3.,0.,1.],[0.,3.,1.]];
+        let mut kinds=vec![10,10];let mut values=vec![0,1];
+        for position in positions {for value in position.into_iter().chain([0.,0.]){kinds.push(11);values.push(value.to_bits()as i32);}}
+        typed_geometry(&mut draw,&mut cg,&mut bridge,&mut rt,"DrawPolygon",&kinds,&values).unwrap();
+        assert_eq!(&pixels(&cg,&bridge).rgba()[..4],&[111,122,133,0]);assert_eq!(&pixels(&cg,&bridge).rgba()[60..64],&[10,20,30,61]);
+        let mut kinds=vec![10];let mut values=vec![0];
+        for position in positions {for value in position{kinds.push(11);values.push(value.to_bits()as i32);}for value in [300,-1,50,128]{kinds.push(10);values.push(value);}}
+        typed_geometry(&mut draw,&mut cg,&mut bridge,&mut rt,"DrawColorPolygon",&kinds,&values).unwrap();
+        assert_eq!(&pixels(&cg,&bridge).rgba()[..4],&[255,0,50,128]);
+    }
+
 }

@@ -15,13 +15,43 @@ pub mod installed;
 pub mod machine;
 pub mod metadata;
 pub mod native_audio;
+mod native_voice_policy;
 pub mod native_bootstrap;
 mod native_calendar;
+mod native_cg;
+mod native_cg_difference;
+mod native_cg_composition;
+mod native_chart;
 pub mod native_control;
 pub mod native_draw;
 mod native_draw_clock;
 pub mod native_effects;
 mod native_picture_effect;
+mod native_picture_motion;
+mod native_picture_tone;
+mod native_picture_raster;
+mod native_picture_target;
+mod native_picture_noise;
+mod native_picture_koma;
+mod native_picture_ghost;
+mod native_picture_dual_mask;
+mod native_picture_mask_appear;
+mod native_picture_sentence;
+mod native_picture_stretch_blt;
+mod native_picture_clip_zoom;
+mod native_picture_clip;
+mod native_picture_preparation_clip;
+mod native_picture_releaf;
+mod native_picture_old_film;
+mod native_picture_chara_blur;
+mod native_picture_background_blur;
+mod native_picture_rainbow;
+mod native_picture_meisai;
+mod native_picture_sampling;
+mod native_stretch_blit;
+mod native_picture_blur;
+mod native_capture_effect;
+mod native_stretch;
 mod native_effects_mosaic;
 mod native_effects_flash;
 mod native_effects_fusuma;
@@ -29,6 +59,9 @@ mod native_effects_scroll;
 mod native_effects_shake;
 mod native_game_restore;
 mod native_general;
+mod native_general_entry;
+mod native_general_audio;
+mod native_simple_wipe;
 pub mod native_geometry;
 pub mod native_message_control;
 mod native_mode;
@@ -46,9 +79,12 @@ pub mod native_services_bootstrap;
 pub mod native_shell;
 pub mod native_skip;
 mod native_system_file;
+pub mod native_settings;
 pub mod native_text;
+mod native_gaiji;
 mod native_thumbnail;
 pub mod native_title;
+mod native_film_button;
 pub mod native_ui;
 mod native_windows;
 pub mod resource_bridge;
@@ -161,6 +197,16 @@ impl Program {
     pub fn word_count(&self) -> usize {
         self.words.len()
     }
+    /// CExecScript::SetPCByFilmNumber: film labels share the subroutine table
+    /// after header word10. Signed scene values have already been converted by
+    /// SceneList; validate both the table cell and its executable target.
+    pub(crate) fn film_pc(&self,film:i32)->Result<u32> {
+        let index=i64::from(self.words[10])+i64::from(film);
+        ensure!(index>=0&&index<i64::from(self.words[8]),"NNN film outside script label table");
+        let at=u64::from(self.words[9]).checked_add(index as u64).context("NNN film table overflow")?;
+        let pc=*self.words.get(usize::try_from(at)?).context("NNN film table outside script")?;
+        crate::control::target(self,pc)?;Ok(pc)
+    }
     pub fn message_count(&self, table: usize) -> Result<u32> {
         Ok(self
             .message_tables
@@ -222,3 +268,5 @@ pub mod native_bura;
 
 #[cfg(test)]
 mod native_save_wait_tests;
+
+mod native_mml;

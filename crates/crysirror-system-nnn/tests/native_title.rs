@@ -30,6 +30,7 @@ fn names(source: &str) -> Names {
 fn configuration() -> NativeConfiguration {
     NativeConfiguration {
         main_control: None,
+        chart_setup: None,
         resources: ResourceNames::new("").unwrap(),
         setup: names("dwqPackLevel 0"),
         variable_names: names(""),
@@ -258,6 +259,8 @@ fn until_counter(
 #[test]
 fn title_shared_workers_publish_exact_masked_frames_and_engine_widgets_own_pointer_hit() {
     let (_root, mut runtime, mut player, mut vm, background) = setup();
+    runtime.host.submit_engine(ClientId(1),1,&serde_json::to_vec(&serde_json::json!({"ui":[{"op":"put","widget":{"id":8000,"kind":"panel","rect":[0,0,16,16],"modal":true,"color":[0,0,0,0]}}]})).unwrap()).unwrap();
+    player.set_widget_parent(8000).unwrap();
     until_counter(&mut runtime, &mut player, &mut vm, &background, 1);
     let old = pixels(&runtime);
     let at = (1 * 16 + 1) * 4;

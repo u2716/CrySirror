@@ -15,6 +15,9 @@ use anyhow::{ensure, Context, Result};
 pub mod numeric;
 pub mod fields;
 mod ascii_case;
+mod windows932_crt;
+mod windows932_crt_tables;
+mod tail_wildcards;
 pub use numeric::{ByteNumberSymbols, NumericCompaction};
 
 pub const MAX_BYTE_STRING: usize = 4_000_000;

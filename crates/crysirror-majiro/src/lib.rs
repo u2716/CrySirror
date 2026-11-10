@@ -14,6 +14,9 @@ pub mod environment;
 #[cfg(feature = "runtime")]
 mod rng_policy;
 
+#[cfg(feature="runtime")]
+mod native_abi;
+
 #[cfg(feature = "runtime")]
 pub mod settings_policy;
 

@@ -387,7 +387,7 @@ fn method(
 }
 fn playback_json(info: crysirror_core::service::AudioPlaybackInfo) -> Value {
     Value::from_json(
-        serde_json::json!({"age_frames":info.age_frames,"transport_frames":info.transport_frames,"stopping":info.stopping,"pausing":info.pausing,"source_playing":info.source_playing,"paused":info.paused,"retain_on_finish":info.retain_on_finish,"transport_active":info.transport_active,"looping":info.looping,"loop_passes":info.loop_passes,"swap_channels":info.swap_channels,"gain":info.gain,"gain_target":info.gain_target,"gain_fade_frames":info.gain_fade_frames,"gain_stop_after_fade":info.gain_stop_after_fade,"position_frames":info.position_frames,"source_rate":info.source_rate,"source_frames":info.source_frames,"output_rate":info.output_rate,"fade_out_frames":info.fade_out_frames,"resume_delay_frames":info.resume_delay_frames}),
+        serde_json::json!({"age_frames":info.age_frames,"transport_frames":info.transport_frames,"stopping":info.stopping,"pausing":info.pausing,"source_playing":info.source_playing,"first_pass_complete":info.first_pass_complete,"paused":info.paused,"retain_on_finish":info.retain_on_finish,"transport_active":info.transport_active,"looping":info.looping,"loop_passes":info.loop_passes,"swap_channels":info.swap_channels,"gain":info.gain,"gain_target":info.gain_target,"gain_fade_frames":info.gain_fade_frames,"gain_stop_after_fade":info.gain_stop_after_fade,"position_frames":info.position_frames,"source_rate":info.source_rate,"source_frames":info.source_frames,"output_rate":info.output_rate,"fade_out_frames":info.fade_out_frames,"resume_delay_frames":info.resume_delay_frames}),
     )
 }
 fn info() -> &'static ClassInfo {

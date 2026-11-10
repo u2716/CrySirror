@@ -201,6 +201,7 @@ impl AudioBridge {
             }
         }
         match source {
+            crate::resource_bridge::ResolvedAudio::Playlist(source) => immediate.playlist_request(source),
             crate::resource_bridge::ResolvedAudio::Asset(path) => immediate.asset_request(path),
             crate::resource_bridge::ResolvedAudio::Encoded(source) => {
                 immediate.encoded_request(source)

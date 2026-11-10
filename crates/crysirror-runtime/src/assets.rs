@@ -137,13 +137,27 @@ impl Assets {
         self.decoders
             .decode_with(path, bytes, Some(&source), resources, format)
     }
+    /// Drop encoded bytes of generated uploads whose catalog lease was
+    /// released and collected: no retained layer, UI, canvas or checkpoint
+    /// can reference them any more. An identical later upload re-registers.
+    fn purge_released_generated(&mut self) {
+        for (client, path) in self.published_images.take_dropped() {
+            if let Ok(key) = self.key(client, &path) {
+                if let Some(bytes) = self.bytes.remove(&key) {
+                    self.total -= bytes.len();
+                }
+            }
+        }
+    }
     fn insert(&mut self, key: String, bytes: Vec<u8>) -> Result<Arc<[u8]>> {
-        ensure!(
-            self.total
-                .checked_add(bytes.len())
-                .is_some_and(|n| n <= self.limit),
-            "asset cache exceeds 256 MiB"
-        );
+        self.purge_released_generated();
+        if !self.total.checked_add(bytes.len()).is_some_and(|n| n <= self.limit) {
+            let generated = self.bytes.iter().filter(|(key, _)| key.contains(":__crysirror/")).map(|(_, b)| b.len()).sum::<usize>();
+            anyhow::bail!(
+                "asset cache exceeds 256 MiB ({} entries; generated {} MiB, file reads {} MiB; inserting {key} of {} bytes)",
+                self.bytes.len(), generated >> 20, (self.total - generated) >> 20, bytes.len()
+            );
+        }
         self.total += bytes.len();
         let bytes: Arc<[u8]> = Arc::from(bytes);
         self.bytes.insert(key, bytes.clone());
@@ -422,5 +436,26 @@ mod tests {
         assets.register(ClientId(1), "a").unwrap();
         assert!(assets.read("a/link").is_ok());
         assert!(assets.read_for(ClientId(1), "link").is_err());
+    }
+    #[test]
+    fn released_generated_upload_leaves_the_byte_cache() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("file"), b"plain").unwrap();
+        let mut assets = Assets::new(tmp.path()).unwrap();
+        let client = ClientId(1);
+        assets.register(client, "").unwrap();
+        let path = "__crysirror/1-1-1-test.png";
+        assets.published_images.retain_upload(client, path, [1, 1], Arc::from(vec![0u8; 4]), false).unwrap();
+        assets.register_generated(client, path, vec![7; 16]).unwrap();
+        assert!(assets.generated_for(client, path).unwrap().is_some());
+        assets.published_images.release(client, path).unwrap();
+        assets.read_for(client, "file").unwrap();
+        assert!(assets.generated_for(client, path).unwrap().is_none());
+        assert_eq!(assets.total, 5);
+        // An identical later upload publishes the same immutable name again.
+        assets.published_images.retain_upload(client, path, [1, 1], Arc::from(vec![0u8; 4]), false).unwrap();
+        assets.register_generated(client, path, vec![7; 16]).unwrap();
+        assets.read_for(client, "file").unwrap();
+        assert!(assets.generated_for(client, path).unwrap().is_some());
     }
 }

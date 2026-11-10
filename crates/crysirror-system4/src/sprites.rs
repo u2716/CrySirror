@@ -20,6 +20,7 @@ pub struct Sprite {
     pub visible: bool,
     pub alpha: bool,
     pub brightness: u8,
+    pub draw_method: i32,
     pub surface: Option<Surface>,
     pub text_home: [i32; 2],
     pub text_position: [i32; 2],
@@ -38,6 +39,7 @@ impl Default for Sprite {
             visible: true,
             alpha: false,
             brightness: 255,
+            draw_method: 0,
             surface: None,
             text_home: [0, 0],
             text_position: [0, 0],
@@ -69,7 +71,24 @@ impl Sprite {
                 && (self.surface.is_none() || self.size.iter().all(|n| *n > 0)),
             "System4 sprite surface dimensions"
         );
+        // Original SactEngine 5870 selects Graph RGB tables before its normal
+        // alpha path. Screen ignores brightness and source alpha; blend_rate is
+        // a floor /255 source prequantization. Multiply's nonopaque base-pixel
+        // branch is explicitly absent. Retained text children remain present.
+        let skip_pixels = self.draw_method == 2 && self.opacity != 255;
+        let blend = if self.surface.is_none() || skip_pixels {
+            json!("normal")
+        } else {
+            match self.draw_method {
+                0 => json!("normal"),
+                1 | 2 => json!({"stored_byte":{
+                    "mode":if self.draw_method==1 {"opaque_screen255"} else {"opaque_multiply255"}
+                }}),
+                _ => anyhow::bail!("unknown native sprite draw method {}", self.draw_method),
+            }
+        };
         let paint = match &self.surface {
+            _ if skip_pixels => json!({"kind":"solid","color":[0,0,0,0]}),
             Some(Surface::Solid(color)) => json!({"kind":"solid","color":color}),
             Some(Surface::Image(path)) => {
                 json!({"kind":"image","asset":path,"tint":[255,255,255,255]})
@@ -83,8 +102,18 @@ impl Sprite {
         //Native sprite metadata and its retained text are part of the
         //scene, not the physical WindowSurface presentation layer16.
         let parent = Some(crate::sact::BACK_SCENE);
+        // F080 -> engine7F20/get6FE0 owns field+32 (blend rate).
+        // F130 -> engine7FA0/get7000 owns field+36 (brightness). 5870 uses
+        // +32 for RGB screen strength and all glyph children; +36 affects
+        // only normal base pixels. Do not exchange their equal255 defaults.
+        let opacity = self.opacity;
+        let brightness = if self.draw_method == 0 {
+            f64::from(self.brightness) / 255.0
+        } else {
+            1.0
+        };
         Ok(Some(
-            json!({"op":"put","layer":{"id":layer(number)?,"parent":parent,"rect":[self.position[0],self.position[1],width,height],"paint":paint,"order":[self.z,number],"visible":self.visible,"opacity":self.opacity,"filter":{"dark":1.0-f64::from(self.brightness)/255.0}}}),
+            json!({"op":"put","layer":{"id":layer(number)?,"parent":parent,"rect":[self.position[0],self.position[1],width,height],"paint":paint,"order":[self.z,number],"visible":self.visible,"opacity":opacity,"blend":blend,"filter":{"multiply":[brightness,brightness,brightness]}}}),
         ))
     }
 }
@@ -142,7 +171,7 @@ impl Sprites {
         self.values.get(&number)
     }
     pub fn count(&self) -> i32 {
-        self.values.keys().filter(|n| **n >= 0).count() as i32
+        self.values.len() as i32
     }
     pub fn max_z(&self) -> i32 {
         self.values
@@ -154,7 +183,7 @@ impl Sprites {
             .max(0)
     }
     pub fn numbers(&self) -> impl Iterator<Item = i32> + '_ {
-        self.values.keys().copied().filter(|n| *n >= 0)
+        self.values.keys().copied()
     }
     pub fn unused(&mut self, min: i32) -> Result<i32> {
         ensure!(
@@ -312,10 +341,13 @@ impl Sprites {
                 s.z = *z;
                 Ok(())
             })?,
-            (b"SP_SetBlendRate", [n, a]) => self.update(client, *n, host, |s| {
-                s.opacity = (*a).clamp(0, 255) as u8;
-                Ok(())
-            })?,
+            (b"SP_SetBlendRate", [n, a]) => {
+                // Original SACT F080 rejects signed negatives/outside255 and
+                // n<1 before the lazy engine7F20 declaration is reached.
+                if *n<1 || !(0..=255).contains(a) {0}else{
+                    self.update(client,*n,host,|s|{s.opacity=*a as u8;Ok(())})?
+                }
+            },
             (b"SP_SetShow", [n, show]) => {
                 //Original F1E0 guards this one entry, unlike SP_Create and
                 //SP_SetCGFromFile. Do not forbid negative map keys globally.
@@ -329,13 +361,10 @@ impl Sprites {
                 }
             }
             (b"SP_SetBrightness", [n, b]) => {
-                if self.get(*n).is_none() {
-                    0
-                } else {
-                    self.update(client, *n, host, |s| {
-                        s.brightness = (*b).clamp(0, 255) as u8;
-                        Ok(())
-                    })?
+                // F130 has the same range guard; engine7FA0 calls5750(n,1)
+                // and therefore creates a real metadata record when absent.
+                if *n<1 || !(0..=255).contains(b) {0}else{
+                    self.update(client,*n,host,|s|{s.brightness=*b as u8;Ok(())})?
                 }
             }
             (b"SP_SetTextHome", [n, x, y]) => self.update(client, *n, host, |s| {
@@ -378,13 +407,20 @@ impl Sprites {
                 s.text_line_height = 0;
                 Ok(())
             })?,
-            (b"SP_GetDrawMethod", [_]) => 0,
+            (b"SP_GetDrawMethod", [n]) => get(*n, |s| s.draw_method),
             (b"SP_SetDrawMethod", [n, method]) => {
                 ensure!(
-                    *method == 0,
-                    "System4 native RGB-only multiply/screen requires exact shared blend profile"
+                    (0..=2).contains(method),
+                    "unknown System4 sprite draw method {method}"
                 );
-                self.update(client, *n, host, |_| Ok(()))?
+                if *n < 1 {
+                    0
+                } else {
+                    self.update(client, *n, host, |s| {
+                        s.draw_method = *method;
+                        Ok(())
+                    })?
+                }
             }
             _ => return Ok(None),
         };

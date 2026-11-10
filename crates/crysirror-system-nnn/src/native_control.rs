@@ -19,8 +19,14 @@ pub struct ScriptSession {
     frames: Vec<Frame>,
     retired_instructions: u64,
     background: bool,
+    background_origin: Option<(Vec<u8>, Arc<Program>)>,
 }
 impl ScriptSession {
+    pub(crate) fn scene(name:Vec<u8>,program:Arc<Program>,mut machine:Machine,film:i32)->Result<Self> {
+        ensure!(!name.is_empty()&&name.len()<=128&&!name.contains(&0),"NNN scene script identity");
+        machine.seek_film(&program,film)?;
+        Ok(Self{frames:vec![Frame{name,program,machine}],retired_instructions:0,background:false,background_origin:None})
+    }
     /// Context zero is the original sys.spt controller, including for NewGame.
     pub fn new(controller: Arc<Program>, machine: Machine) -> Self {
         Self {
@@ -31,6 +37,7 @@ impl ScriptSession {
             }],
             retired_instructions: 0,
             background: false,
+            background_origin: None,
         }
     }
     /// Construct all original saved contexts together on a worker. This does
@@ -63,6 +70,7 @@ impl ScriptSession {
                 .collect(),
             retired_instructions: 0,
             background: false,
+            background_origin: None,
         })
     }
     pub fn background(name: Vec<u8>, program: Arc<Program>, machine: Machine) -> Result<Self> {
@@ -71,6 +79,7 @@ impl ScriptSession {
             "NNN background original script name bounds"
         );
         Ok(Self {
+            background_origin: Some((name.clone(), program.clone())),
             frames: vec![Frame {
                 name,
                 program,
@@ -79,6 +88,22 @@ impl ScriptSession {
             retired_instructions: 0,
             background: true,
         })
+    }
+    /// GeneralInit's LoadBackScript returns to the configured script, even if
+    /// its suspended reader was inside a subscript or had jumped elsewhere.
+    pub(crate) fn reloaded_background(
+        &self,
+        variables: crate::expression::Variables,
+    ) -> Result<Self> {
+        let (name, program) = self
+            .background_origin
+            .as_ref()
+            .context("NNN background origin absent")?;
+        Self::background(
+            name.clone(),
+            program.clone(),
+            Machine::with_variables(variables),
+        )
     }
     /// Original CBackExecClass::ReStart resets its own PC and return stack;
     /// it does not restart sys or clear shared game variables.

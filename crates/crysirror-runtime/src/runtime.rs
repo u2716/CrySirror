@@ -164,6 +164,8 @@ pub struct SharedHost {
     pub pointer_activity: Option<u64>,
     input_observation: Option<crysirror_core::service::InputObservation>,
     input_revision: u64,
+    pending_input_sources:Option<crysirror_core::service::InputSourcesFrame>,
+    input_sources:Option<crysirror_core::service::InputSourcesObservation>,
     /// Optional backend owned by the host, never by a VM or save snapshot.
     pub platform_integration_provider:
         Option<Arc<dyn crysirror_core::service::PlatformIntegrationProvider>>,
@@ -171,6 +173,11 @@ pub struct SharedHost {
     pub(crate) vfx_sequences: BTreeMap<(u32, u32), serde_json::Value>,
 }
 impl SharedHost {
+    /// Supply a backend source snapshot for exactly the next owner admission.
+    /// Replacing it before a tick replaces unpublished hardware observations.
+    pub fn publish_input_sources(&mut self,mut sources:crysirror_core::service::InputSourcesFrame)->Result<()> {
+        sources.validate()?;sources.controllers.sort_by_key(|pad|pad.id);self.pending_input_sources=Some(sources);Ok(())
+    }
     /// Grant an existing client one exact HTTP(S) origin. Only the presenting
     /// host owner can call this; HostServices deliberately has no grant method.
     pub fn grant_http_origin(&mut self,client:ClientId,origin:&str)->crysirror_core::Result<()> {
@@ -452,6 +459,22 @@ impl HostServices for SharedHost {
             &self.text,
             &self.image_tasks,
             self.image_memory.clone(),
+        )
+    }
+    fn begin_detached_layers_image(
+        &mut self,
+        client: ClientId,
+        size: [u32; 2],
+        order_exclusive: [i32; 2],
+        commands: &[u8],
+    ) -> crysirror_core::Result<crysirror_core::image_processing::ImageJob> {
+        if !self.clients.contains(&client) {
+            return Err(Error::NotFound);
+        }
+        let request = crate::detached_layers::request(client, size, order_exclusive, commands)?;
+        self.canvas_images.begin(
+            client, request, self.published_images.snapshot(), &self.text,
+            &self.image_tasks, self.image_memory.clone(),
         )
     }
     fn begin_frame_capture(
@@ -833,6 +856,10 @@ impl HostServices for SharedHost {
             .resources
             .release_preparation(client.0, ticket)
             .map_err(|e| Error::Io(format!("audio resource receipt: {e:#}")))
+    }
+    fn begin_audio_samples(&mut self,client:ClientId,resource:crysirror_core::service::AudioResourceHandle,request:crysirror_core::service::AudioSampleRequest)->crysirror_core::Result<Box<dyn crysirror_core::service::AudioSampleQuery>>{
+        if !self.clients.contains(&client){return Err(Error::NotFound);}
+        self.channel_audio.resources.begin_samples(client.0,resource,request,&self.image_tasks).map_err(|e|Error::Io(format!("audio source samples: {e:#}")))
     }
     fn audio_resource_info(
         &self,
@@ -1256,6 +1283,16 @@ impl HostServices for SharedHost {
             return Err(Error::NotFound);
         }
         Ok(self.pointer_activity)
+    }
+    fn input_sources(&self,client:ClientId)->crysirror_core::Result<crysirror_core::service::InputSourcesObservation>{
+        if !self.clients.contains(&client){return Err(Error::NotFound);}
+        let mut observation=self.input_sources.clone().ok_or(Error::Unsupported("input sources have not been admitted by the host"))?;
+        observation.client=client;
+        if self.engine.input_routes.ui_owns_input(){
+            observation.sources.keyboard_pointer.buttons_down=0;observation.sources.keyboard_pointer.buttons_pressed=0;
+            for pad in &mut observation.sources.controllers{pad.buttons.fill(0.0);pad.axes.fill(0.0);}
+        }
+        Ok(observation)
     }
     fn input_observation(
         &self,
@@ -1741,6 +1778,15 @@ impl HostServices for RestoreResources<'_> {
     fn now_ms(&self) -> u64 {
         self.clock_ms
     }
+    fn begin_detached_layers_image(
+        &mut self,
+        client: ClientId,
+        size: [u32; 2],
+        order_exclusive: [i32; 2],
+        commands: &[u8],
+    ) -> crysirror_core::Result<crysirror_core::image_processing::ImageJob> {
+        self.source.begin_detached_layers_image(client, size, order_exclusive, commands)
+    }
     fn submit(
         &mut self,
         _: ClientId,
@@ -2148,6 +2194,8 @@ impl Runtime {
                 pointer_observation: Default::default(),
                 pointer_activity: None,
                 input_observation: None,
+                pending_input_sources:None,
+                input_sources:None,
                 input_revision: 0,
                 platform_integration_provider: None,
                 vfx_sequences: BTreeMap::new(),
@@ -2391,6 +2439,7 @@ impl Runtime {
         self.host.input_revision = input_revision;
         let observation = self.host.engine.input_routes.observation_frame(input);
         let ui_owns_input = self.host.engine.input_routes.ui_owns_input();
+        self.host.input_sources=self.host.pending_input_sources.take().map(|sources|crysirror_core::service::InputSourcesObservation{client:ClientId(0),revision:input_revision,time_ms:clock,sources});
         self.host.input_observation = Some(crysirror_core::service::InputObservation {
             client: ClientId(0),
             revision: input_revision,
@@ -2873,6 +2922,8 @@ impl Runtime {
         // Lock state describes this live input session, never restored OS state.
         self.host.keyboard_locks.clear();
         self.host.input_observation = None;
+        self.host.input_sources=None;
+        self.host.pending_input_sources=None;
         self.host.text_input.invalidate();
         self.host.input_revision = next_input_revision;
         self.physics.invalidate();

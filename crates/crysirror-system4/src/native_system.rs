@@ -7,23 +7,24 @@ use crate::{
     adapter::{Bridge, Dispatch},
     bootstrap::Bootstrap,
     vm::{
-        external::{Argument, HllReturn},
         ExternalCall, ExternalTarget, Machine,
+        external::{Argument, HllReturn},
     },
 };
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use crysirror_core::{
+    Error,
     path::{Mount, VfsPath},
     service::{
         CivilTimeQuery, CivilTimeState, DesktopRequest, DesktopRequestJob, DesktopRequestState,
         DesktopResponse, HostServices,
     },
     state::ClientId,
-    Error,
 };
 use crysirror_tasks::{Task, TaskPool};
 use serde_json::json;
 use std::sync::Arc;
+mod misc;
 enum Pending {
     Web {
         call: ExternalCall,
@@ -58,6 +59,7 @@ pub(crate) struct NativeSystem {
     pending: Option<Pending>,
     cursor_config: i32,
     last_display_pulse: u32,
+    misc: misc::Misc,
 }
 impl NativeSystem {
     pub(crate) fn new(owner: ClientId, pool: TaskPool) -> Self {
@@ -68,6 +70,7 @@ impl NativeSystem {
             pending: None,
             cursor_config: 0,
             last_display_pulse: 0,
+            misc: Default::default(),
         }
     }
     pub(crate) fn configure(&mut self, bootstrap: &Bootstrap) -> Result<()> {
@@ -76,11 +79,15 @@ impl NativeSystem {
         self.game_name = Some(encoded.into_owned());
         Ok(())
     }
-    pub(crate) fn cancel(&mut self) {
-        self.pending = None;
-    }
     pub(crate) fn has_pending(&self) -> bool {
-        self.pending.is_some()
+        self.pending.is_some() || self.misc.pending()
+    }
+    pub(crate) fn close(&mut self,host:&mut dyn HostServices)->Result<()> {
+        self.misc.close(self.owner,host)?;self.pending=None;Ok(())
+    }
+    pub(crate) fn poll_menu(&mut self,owner:ClientId,host:&mut dyn HostServices)->Result<()> {
+        ensure!(owner==self.owner,"System4 foreign native menu owner");
+        self.misc.poll_menu(owner,host)
     }
     pub(crate) fn dispatch(
         &mut self,
@@ -90,6 +97,8 @@ impl NativeSystem {
         bridge: &Bridge,
         host: &mut dyn HostServices,
     ) -> Result<Option<Dispatch>> {
+        ensure!(owner==self.owner,"System4 foreign native system owner");
+        if let Some(dispatch)=self.misc.dispatch(owner,m,call,bridge,host)? {return Ok(Some(dispatch));}
         if matches!(call.target, ExternalTarget::System(11)) {
             ensure!(owner == self.owner, "System4 foreign OpenWeb owner");
             let slots = m.validate_system_owned_strings(call, 1)?;
@@ -113,7 +122,7 @@ impl NativeSystem {
             ensure!(*pending == *call, "System4 stale OpenWeb receipt");
             match job.poll()? {
                 DesktopRequestState::Pending => {
-                    return Ok(Some(Dispatch::WaitUntil(host.now_ms().saturating_add(1))))
+                    return Ok(Some(Dispatch::WaitUntil(host.now_ms().saturating_add(1))));
                 }
                 DesktopRequestState::Ready(DesktopResponse::Opened) => {
                     m.complete_system_owned_strings(call, 1, None)?;
@@ -135,8 +144,20 @@ impl NativeSystem {
         let program = m.program.clone();
         let lib = &program.libraries[library];
         let function = &lib.functions[function];
-        let name = function.name.as_slice();
-        if lib.name != b"SystemService"
+        // Original SACT2 11200/11240 call GetLocalTime once and expose four
+        // output refs (including milliseconds). SystemService.GetTime has
+        // three refs. Both use the same scoped, worker-sampled civil clock.
+        let sact_civil = lib.name == b"SACT2"
+            && matches!(
+                function.name.as_slice(),
+                b"System_GetDate" | b"System_GetTime"
+            );
+        let name = match (sact_civil, function.name.as_slice()) {
+            (true, b"System_GetDate") => b"GetDate".as_slice(),
+            (true, b"System_GetTime") => b"GetTime".as_slice(),
+            _ => function.name.as_slice(),
+        };
+        if !(lib.name == b"SystemService" || sact_civil)
             || !matches!(
                 name,
                 b"IsResetOnce"
@@ -244,7 +265,7 @@ impl NativeSystem {
                 ensure!(*pending == *call, "System4 stale display pulse receipt");
                 match job.poll()? {
                     DesktopRequestState::Pending => {
-                        return Ok(Some(Dispatch::WaitUntil(host.now_ms().saturating_add(1))))
+                        return Ok(Some(Dispatch::WaitUntil(host.now_ms().saturating_add(1))));
                     }
                     DesktopRequestState::Ready(DesktopResponse::DisplayActivityPulsed) => {
                         self.last_display_pulse = *tick;
@@ -338,8 +359,10 @@ impl NativeSystem {
                 Some(1)
             }
             b"MoveMouseCursorPosImmediately" => {
-                let [Argument::Scalar { kind: 10, bits: x }, Argument::Scalar { kind: 10, bits: y }] =
-                    args.as_slice()
+                let [
+                    Argument::Scalar { kind: 10, bits: x },
+                    Argument::Scalar { kind: 10, bits: y },
+                ] = args.as_slice()
                 else {
                     anyhow::bail!("System4 pointer warp ABI")
                 };
@@ -347,10 +370,12 @@ impl NativeSystem {
                 Some(1)
             }
             b"SetHideMouseCursorByGame" => {
-                let [Argument::Scalar {
-                    kind: 47,
-                    bits: hide,
-                }] = args.as_slice()
+                let [
+                    Argument::Scalar {
+                        kind: 47,
+                        bits: hide,
+                    },
+                ] = args.as_slice()
                 else {
                     anyhow::bail!("System4 cursor visibility ABI")
                 };
@@ -364,13 +389,16 @@ impl NativeSystem {
                 Some(1)
             }
             b"SetMouseCursorConfig" => {
-                let [Argument::Scalar {
-                    kind: 10,
-                    bits: index,
-                }, Argument::Scalar {
-                    kind: 10,
-                    bits: value,
-                }] = args.as_slice()
+                let [
+                    Argument::Scalar {
+                        kind: 10,
+                        bits: index,
+                    },
+                    Argument::Scalar {
+                        kind: 10,
+                        bits: value,
+                    },
+                ] = args.as_slice()
                 else {
                     anyhow::bail!("System4 cursor config setter ABI")
                 };
@@ -382,14 +410,17 @@ impl NativeSystem {
                 }
             }
             b"GetMouseCursorConfig" => {
-                let [Argument::Scalar {
-                    kind: 10,
-                    bits: which,
-                }, Argument::Reference {
-                    kind: 18,
-                    page,
-                    index,
-                }] = args.as_slice()
+                let [
+                    Argument::Scalar {
+                        kind: 10,
+                        bits: which,
+                    },
+                    Argument::Reference {
+                        kind: 18,
+                        page,
+                        index,
+                    },
+                ] = args.as_slice()
                 else {
                     anyhow::bail!("System4 cursor config getter ABI")
                 };
@@ -404,7 +435,7 @@ impl NativeSystem {
             b"GetDate" | b"GetTime" => {
                 let date = name == b"GetDate";
                 ensure!(
-                    args.len() == if date { 4 } else { 3 },
+                    args.len() == if date || sact_civil { 4 } else { 3 },
                     "System4 civil output count"
                 );
                 let outputs = args
@@ -450,7 +481,7 @@ impl NativeSystem {
                 );
                 let sample = match query.poll()? {
                     CivilTimeState::Pending => {
-                        return Ok(Some(Dispatch::WaitUntil(host.now_ms().saturating_add(1))))
+                        return Ok(Some(Dispatch::WaitUntil(host.now_ms().saturating_add(1))));
                     }
                     CivilTimeState::Failed(e) => anyhow::bail!("System4 civil clock: {e}"),
                     CivilTimeState::Ready(sample) => sample,
@@ -459,10 +490,11 @@ impl NativeSystem {
                     sample.client == owner
                         && sample.hour < 24
                         && sample.minute < 60
-                        && sample.second < 60,
+                        && sample.second < 60
+                        && sample.millisecond < 1000,
                     "System4 invalid civil receipt"
                 );
-                let values = if date {
+                let mut values = if date {
                     vec![
                         sample.year,
                         i32::from(sample.month),
@@ -476,6 +508,9 @@ impl NativeSystem {
                         i32::from(sample.second),
                     ]
                 };
+                if !date && sact_civil {
+                    values.push(i32::from(sample.millisecond));
+                }
                 // All refs/types/receipt fields are validated before any write.
                 // Aliased outputs retain the native left-to-right assignment.
                 for ((page, index), value) in outputs.into_iter().zip(values) {
@@ -532,5 +567,160 @@ impl NativeSystem {
             },
         )?;
         Ok(Some(Dispatch::Completed))
+    }
+}
+
+#[cfg(test)]
+mod civil_tests {
+    use super::*;
+    use crate::{
+        ain::{Function, HllFunction, Library, Program, Variable},
+        vm::Step,
+    };
+    use crysirror_core::{
+        service::{CivilTime, FileSystem},
+        state::Command,
+    };
+    struct Query {
+        owner: ClientId,
+        pending: bool,
+    }
+    impl CivilTimeQuery for Query {
+        fn client(&self) -> ClientId {
+            self.owner
+        }
+        fn poll(&mut self) -> crysirror_core::Result<CivilTimeState> {
+            if self.pending {
+                self.pending = false;
+                return Ok(CivilTimeState::Pending);
+            }
+            Ok(CivilTimeState::Ready(CivilTime {
+                client: self.owner,
+                unix_ms: 0,
+                utc_offset_seconds: 0,
+                year: 2026,
+                month: 11,
+                day: 9,
+                hour: 12,
+                minute: 34,
+                second: 56,
+                millisecond: 789,
+            }))
+        }
+    }
+    struct Host {
+        begins: usize,
+    }
+    impl FileSystem for Host {
+        fn read(&mut self, _: ClientId, _: &VfsPath) -> crysirror_core::Result<Vec<u8>> {
+            Err(Error::Unsupported("test FS"))
+        }
+        fn write_atomic(
+            &mut self,
+            _: ClientId,
+            _: &VfsPath,
+            _: &[u8],
+        ) -> crysirror_core::Result<()> {
+            Err(Error::Unsupported("test FS"))
+        }
+    }
+    impl HostServices for Host {
+        fn submit(&mut self, _: ClientId, _: &[Command]) -> crysirror_core::Result<()> {
+            Err(Error::Unsupported("test submit"))
+        }
+        fn now_ms(&self) -> u64 {
+            50
+        }
+        fn begin_civil_time(
+            &mut self,
+            owner: ClientId,
+        ) -> crysirror_core::Result<Box<dyn CivilTimeQuery>> {
+            self.begins += 1;
+            Ok(Box::new(Query {
+                owner,
+                pending: true,
+            }))
+        }
+    }
+    fn pending(name: &[u8]) -> (Machine, ExternalCall) {
+        let mut code = Vec::new();
+        for n in 0i32..4 {
+            code.extend(4u16.to_le_bytes());
+            code.extend(0u16.to_le_bytes());
+            code.extend(n.to_le_bytes());
+        }
+        code.extend(0x5au16.to_le_bytes());
+        code.extend(0i32.to_le_bytes());
+        code.extend(0i32.to_le_bytes());
+        code.extend(0x2fu16.to_le_bytes());
+        let mut m = Machine::new(Arc::new(Program {
+            version: 5,
+            code,
+            globals: (0..4)
+                .map(|_| Variable {
+                    name: vec![],
+                    kind: 10,
+                    structure: -1,
+                    rank: 0,
+                    group: None,
+                })
+                .collect(),
+            functions: vec![Function {
+                name: b"main".to_vec(),
+                address: 0,
+                is_label: false,
+                return_kind: 0,
+                return_structure: -1,
+                arguments: 0,
+                crc: 0,
+                variables: vec![],
+            }],
+            libraries: vec![Library {
+                name: b"SACT2".to_vec(),
+                functions: vec![HllFunction {
+                    name: name.to_vec(),
+                    return_kind: 0,
+                    arguments: vec![(vec![], 18); 4],
+                }],
+            }],
+            ..Default::default()
+        }))
+        .unwrap();
+        for _ in 0..100 {
+            if let Step::External(call) = m.step().unwrap() {
+                return (m, call);
+            }
+        }
+        panic!("no civil call")
+    }
+    #[test]
+    fn sact_civil_outputs_wait_for_one_real_receipt_and_include_milliseconds() {
+        for (name, expected) in [
+            (b"System_GetDate".as_slice(), [2026, 11, 9, 1]),
+            (b"System_GetTime".as_slice(), [12, 34, 56, 789]),
+        ] {
+            let owner = ClientId(1);
+            let (mut m, call) = pending(name);
+            let mut host = Host { begins: 0 };
+            let mut system =
+                NativeSystem::new(owner, TaskPool::new("sact-civil-test", 1, 2).unwrap());
+            let bridge = Bridge::default();
+            assert!(matches!(
+                system
+                    .dispatch(owner, &mut m, &call, &bridge, &mut host)
+                    .unwrap(),
+                Some(Dispatch::WaitUntil(_))
+            ));
+            assert_eq!(m.pc, call.pc);
+            assert_eq!(m.heap.page(0).unwrap().values, [0; 4]);
+            assert_eq!(
+                system
+                    .dispatch(owner, &mut m, &call, &bridge, &mut host)
+                    .unwrap(),
+                Some(Dispatch::Completed)
+            );
+            assert_eq!(m.heap.page(0).unwrap().values, expected);
+            assert_eq!(host.begins, 1);
+        }
     }
 }

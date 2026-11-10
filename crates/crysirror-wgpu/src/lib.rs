@@ -1563,12 +1563,29 @@ impl Renderer {
             };
             let start = vertices.len() as u32;
             let mut quad = clip_sampling::quad(p, canvas, color);
+            // Transparent solid containers (common VM group roots) cannot
+            // change any pixel under these blends: the unfiltered shader
+            // emits white·colour, and each blend is the identity for it.
+            // Rasterising them anyway costs a full-target fill per layer.
+            if matches!(p.paint,Paint::Solid{..}) && !consume && p.filter.is_none()
+                && p.coverage==C::None
+                && p.sampling.profile!=crysirror_scene::layer::ImageSampleProfile::StoredByte128 {
+                let alpha_zero=quad.iter().all(|v|v.color[3]==0.);
+                let all_zero=quad.iter().all(|v|v.color==[0.;4]);
+                if match p.blend {
+                    Blend::Normal|Blend::Add|Blend::Subtract=>alpha_zero,
+                    Blend::SourceOver|Blend::Screen=>all_zero,
+                    _=>false,
+                } {
+                    continue;
+                }
+            }
             if consume || p.filter.is_some() || matches!(p.blend,Blend::StoredByte{..})
                 ||p.sampling.profile==crysirror_scene::layer::ImageSampleProfile::StoredByte128 {
                 let index = records.len() as f32;
                 let mut record=filter_gpu(&p.filter.clone().unwrap_or_default());
                 filter_sampling(&mut record,p.sampling);
-                stored_blend::configure(&mut record,p.blend,self.blend_origin);
+                stored_blend::configure(&mut record,p.blend,self.blend_origin,p.opacity);
                 coverage::configure(&mut record,consume);
                 records.push(record);
                 for v in &mut quad {
@@ -1917,9 +1934,17 @@ impl Renderer {
         if let Some(buffer) = &quad_buffer {
             use crysirror_scene::layer::coverage::Operation as C;
             let mut active=BTreeSet::new();
+            // Consecutive draws into the same attachment share one render
+            // pass. A pass per draw reloads/stores the whole target each time,
+            // which on tile-based GPUs costs full-frame bandwidth per sprite.
+            // Passes end only at ordering fences: coverage clears, backdrop
+            // copies and attachment changes. Target key: None = frame view,
+            // Some(owner) = that owner's coverage plane.
+            let mut open:Option<(Option<u32>,wgpu::RenderPass<'static>)>=None;
             for draw in &draws {
                 let writing=draw.coverage==C::Write;
                 if let C::Reset{value}=draw.coverage {
+                    open=None;
                     if value==255 {active.remove(&draw.owner);} else {
                         let view=&self.coverage_planes[&draw.owner].view;
                         let shade=geometry::tint([value,value,value,255]);
@@ -1930,6 +1955,7 @@ impl Renderer {
                     continue;
                 }
                 if writing&&active.insert(draw.owner) {
+                    open=None;
                     //A newly admitted coverage writer starts on zero. Later
                     //writers blend over the same plane until an ordered reset.
                     let _clear=encoder.begin_render_pass(&wgpu::RenderPassDescriptor{label:Some("initial ordered coverage"),multiview_mask:None,
@@ -1946,12 +1972,18 @@ impl Renderer {
                         encoder.copy_texture_to_texture(wgpu::TexelCopyTextureInfo{texture:&source,mip_level:0,origin:wgpu::Origin3d{x:origin[0],y:origin[1],z:0},aspect:wgpu::TextureAspect::All},wgpu::TexelCopyTextureInfo{texture:destination,mip_level:0,origin:wgpu::Origin3d::ZERO,aspect:wgpu::TextureAspect::All},copy);
                     }Ok(())
                 };
-                if draw.key==BACKDROP_KEY&&!draw.capture_after||matches!(draw.blend,Blend::StoredByte{..}){capture(&mut encoder)?;}
-                let view=if writing{&self.coverage_planes[&draw.owner].view}else{frame_view};
-                let mut pass=encoder.begin_render_pass(&wgpu::RenderPassDescriptor{label:Some("ordered 2D draw"),multiview_mask:None,
-                    color_attachments:&[Some(wgpu::RenderPassColorAttachment{view,depth_slice:None,resolve_target:None,ops:wgpu::Operations{load:wgpu::LoadOp::Load,store:wgpu::StoreOp::Store}})],depth_stencil_attachment:None,timestamp_writes:None,occlusion_query_set:None});
-                pass.set_viewport(vp.x,vp.y,vp.width,vp.height,0.,1.);
-                pass.set_vertex_buffer(0,buffer.slice(..));
+                if draw.key==BACKDROP_KEY&&!draw.capture_after||matches!(draw.blend,Blend::StoredByte{..}){open=None;capture(&mut encoder)?;}
+                let target_key=writing.then_some(draw.owner);
+                if open.as_ref().is_none_or(|(key,_)|*key!=target_key) {
+                    open=None;
+                    let view=if writing{&self.coverage_planes[&draw.owner].view}else{frame_view};
+                    let mut pass=encoder.begin_render_pass(&wgpu::RenderPassDescriptor{label:Some("ordered 2D draws"),multiview_mask:None,
+                        color_attachments:&[Some(wgpu::RenderPassColorAttachment{view,depth_slice:None,resolve_target:None,ops:wgpu::Operations{load:wgpu::LoadOp::Load,store:wgpu::StoreOp::Store}})],depth_stencil_attachment:None,timestamp_writes:None,occlusion_query_set:None}).forget_lifetime();
+                    pass.set_viewport(vp.x,vp.y,vp.width,vp.height,0.,1.);
+                    pass.set_vertex_buffer(0,buffer.slice(..));
+                    open=Some((target_key,pass));
+                }
+                let pass=&mut open.as_mut().context("ordered 2D pass")?.1;
                 let c = draw
                     .clip
                     .unwrap_or([0., 0., canvas[0] as f32, canvas[1] as f32]);
@@ -2018,10 +2050,10 @@ impl Renderer {
                     pass.set_bind_group(2,coverage,&[]);
                 }
                 pass.draw(draw.range.clone(), 0..1);
-                drop(pass);
 
-                if draw.key==BACKDROP_KEY&&draw.capture_after{capture(&mut encoder)?;}
+                if draw.key==BACKDROP_KEY&&draw.capture_after{open=None;capture(&mut encoder)?;}
             }
+            drop(open);
         }
         self.transitions.finish(
             &self.gpu.device,

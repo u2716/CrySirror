@@ -86,3 +86,59 @@ pub(super) fn convert_integer(value: &Value) -> Result<Value> {
     );
     Ok(Value::Integer((wide.trunc() as i64) as i32))
 }
+
+/// Scarlett409E80/409F00/409F70/409FE0/40A050; classic40D670..40D890.
+/// Case values are peeked, never popped. The operand tag selects how to read
+/// the selector's32-bit native payload; mixed numeric cases reinterpret bits.
+pub(super) fn case_branch(op: u16, selector: &Value, operand: &Value) -> Result<bool> {
+    let bits = |value: &Value| -> Result<u32> {
+        match value {
+            Value::Integer(value) => Ok(*value as u32),
+            Value::Float(value) => Ok(value.to_bits()),
+            _ => bail!("Majiro numeric case cannot reinterpret an object address"),
+        }
+    };
+    match operand {
+        Value::Integer(b) => {
+            let a = bits(selector)? as i32;
+            Ok(match op {
+                0x831 => a != *b, 0x832 => a >= *b, 0x833 => a <= *b,
+                0x838 => a < *b, 0x839 => a > *b,
+                _ => bail!("Majiro invalid native case opcode {op:#x}"),
+            })
+        }
+        Value::Float(b) => {
+            let a = f32::from_bits(bits(selector)?);
+            // x87 FCOMP C0/C3 tests: unordered takes832/839, not833/838.
+            let unordered = a.is_nan() || b.is_nan();
+            Ok(match op {
+                0x831 => a != *b, 0x832 => a >= *b || unordered,
+                0x833 => a <= *b, 0x838 => a < *b,
+                0x839 => a > *b || unordered,
+                _ => bail!("Majiro invalid native case opcode {op:#x}"),
+            })
+        }
+        Value::String(b) if op == 0x831 => {
+            let Value::String(a) = selector else {
+                bail!("Majiro string case selector is not a native string object");
+            };
+            Ok(crate::byte_policy::compare(b, a)? != std::cmp::Ordering::Equal)
+        }
+        Value::Array(b) if op == 0x831 => {
+            let Value::Array(a) = selector else {
+                bail!("Majiro array case cannot reinterpret a non-array address");
+            };
+            // Original subtracts opaque object pointers. Only identity is
+            // relevant to !=, so use native VM array identity without leaking
+            // or manufacturing a32-bit host address.
+            Ok(!std::sync::Arc::ptr_eq(&a.0, &b.0))
+        }
+        Value::String(_) | Value::Array(_) => {
+            // Ordered source helpers use an uninitialised BOOL for object
+            // tags: Scarlett reads stack scratch, later builds incoming ECX.
+            // No source-level object ordering is defined. Report that domain
+            // rather than inheriting scratch memory/register contents.
+            bail!("Majiro ordered object case {op:#x} has undefined native scratch-BOOL semantics")
+        }
+    }
+}

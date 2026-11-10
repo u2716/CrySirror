@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Layouts ported from arc_unpacker, Copyright (C) 2016 rr-.
 use crate::common::*;
-use anyhow::{ensure, Result};
+use anyhow::{ensure, Context, Result};
 use crysirror_core::service::AssetReader;
 use crysirror_resource::{Archive, ArchiveEntry, ArchiveFormat, DecodeContext, Probe};
 use std::sync::Arc;
@@ -99,7 +99,9 @@ impl ArchiveFormat for MajiroArc {
         let header = bytes(source.as_ref(), 0, 28, 28)?;
         let mut c = Cursor::new(&header);
         let magic = c.take(16)?;
-        let version = if magic == b"MajiroArcV2.000\0" {
+        let version = if magic == b"MajiroArcV1.000\0" {
+            1
+        } else if magic == b"MajiroArcV2.000\0" {
             2
         } else if magic == b"MajiroArcV3.000\0" {
             3
@@ -110,8 +112,20 @@ impl ArchiveFormat for MajiroArc {
         limits(context, count)?;
         let names = u64::from(c.le32()?);
         let data_offset = u64::from(c.le32()?);
-        let width = if version == 3 { 16u64 } else { 12 };
-        let table_size = count as u64 * width;
+        // V1 stores (CRC32, offset), including one terminal offset record;
+        // V2/V3 instead store an explicit byte length on each file record.
+        // Format layout also documented by GARbro ArcFormats/Majiro/ArcMajiro.cs.
+        let width = match version {
+            1 => 8u64,
+            2 => 12,
+            _ => 16,
+        };
+        let records = (count as u64)
+            .checked_add(u64::from(version == 1))
+            .context("Majiro record count overflow")?;
+        let table_size = records
+            .checked_mul(width)
+            .context("Majiro table size overflow")?;
         let source_size = length(source.as_ref())?;
         ensure!(
             names >= 28 + table_size && names <= source_size,
@@ -144,7 +158,16 @@ impl ArchiveFormat for MajiroArc {
                 u64::from(c.le32()?)
             };
             let offset = u64::from(c.le32()?);
-            let size = u64::from(c.le32()?);
+            let size = if version == 1 {
+                let next_at = (id + 1) * 8 + 4;
+                let next = u64::from(u32::from_le_bytes(
+                    table[next_at..next_at + 4].try_into().unwrap(),
+                ));
+                next.checked_sub(offset)
+                    .context("Majiro V1 descending file offsets")?
+            } else {
+                u64::from(c.le32()?)
+            };
             range(source_size, offset, size)?;
             ensure!(offset >= data_offset, "Majiro entry overlaps index");
             ensure!(

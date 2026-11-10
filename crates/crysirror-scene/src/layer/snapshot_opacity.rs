@@ -35,9 +35,43 @@ pub(super) fn isolate(layers: &mut Vec<LayerSpec>) -> Result<()> {
         );
         // The declared local clip bounds all child pixels. Refuse an unbounded
         // group instead of silently cropping descendants to the texture extent.
+        if root.clip.is_none() {
+            let selected = descendants_of(layers, id);
+            // Fully transparent group: no descendant pixel can survive the
+            // group alpha, so the frozen subtree is exactly empty.
+            if root.opacity == 0 {
+                layers.retain(|layer| layer.id == id || !selected.contains(&layer.id));
+                continue;
+            }
+            // A non-painting container around one normal painted layer has no
+            // overlap to isolate: group alpha equals that layer's own alpha.
+            let painted: Vec<_> = layers
+                .iter()
+                .filter(|layer| layer.id != id && selected.contains(&layer.id) && paints(&layer.paint))
+                .map(|layer| layer.id)
+                .collect();
+            let foldable = match painted[..] {
+                [only] if !paints(&root.paint) && root.blend == Blend::Normal && root.filter.is_none() => by_id
+                    .get(&only)
+                    .is_some_and(|child| child.blend == Blend::Normal && child.filter.as_ref().is_none_or(opacity_neutral))
+                    .then_some(only),
+                _ => None,
+            };
+            if let Some(only) = foldable {
+                let group_alpha = u16::from(root.opacity);
+                for layer in layers.iter_mut() {
+                    if layer.id == only {
+                        layer.opacity = ((u16::from(layer.opacity) * group_alpha + 127) / 255) as u8;
+                    } else if layer.id == id {
+                        layer.opacity = 255;
+                    }
+                }
+                continue;
+            }
+        }
         let clip = root
             .clip
-            .context("snapshot isolated group requires bounded local clip")?;
+            .with_context(|| format!("snapshot isolated group {id:#x} requires bounded local clip"))?;
         ensure!(
             clip[0] >= 0.
                 && clip[1] >= 0.
@@ -77,6 +111,23 @@ pub(super) fn isolate(layers: &mut Vec<LayerSpec>) -> Result<()> {
         output.filter = None;
         layers.retain(|layer| !selected.contains(&layer.id));
         layers.push(output);
+    }
+}
+
+/// A filter whose only setting is encoded (gamma-space) texel interpolation
+/// runs before tint/alpha, so scaling the layer's opacity commutes with it.
+fn opacity_neutral(filter: &LayerFilter) -> bool {
+    let mut base = filter.clone();
+    base.encoded_sampling = false;
+    base == LayerFilter::default()
+}
+
+/// Whether a frozen layer's own paint can produce any pixel.
+fn paints(paint: &Paint) -> bool {
+    match paint {
+        Paint::Solid { color } => color[3] != 0,
+        Paint::Group { .. } => false,
+        _ => true,
     }
 }
 
@@ -127,5 +178,42 @@ mod tests {
                 .to_string()
                 .contains("bounded local clip")
         );
+    }
+    #[test]
+    fn unbounded_transparent_group_freezes_empty() {
+        let mut input = specs();
+        input[1].clip = None;
+        input[1].opacity = 0;
+        let mut system = LayerSystem::default();
+        system.install(ClientId(1), &input).unwrap();
+        let frozen = system.snapshot_subtree_specs(ClientId(1), 1).unwrap();
+        assert_eq!(frozen.iter().map(|l| l.id).collect::<Vec<_>>(), [1, 2]);
+        assert_eq!(frozen.iter().find(|l| l.id == 2).unwrap().opacity, 0);
+    }
+    #[test]
+    fn unbounded_container_of_one_layer_folds_group_alpha() {
+        let mut input = specs();
+        input[1].clip = None;
+        input.truncate(3);
+        input[2].opacity = 200;
+        input[2].filter = Some(LayerFilter { encoded_sampling: true, ..Default::default() });
+        let mut system = LayerSystem::default();
+        system.install(ClientId(1), &input).unwrap();
+        let frozen = system.snapshot_subtree_specs(ClientId(1), 1).unwrap();
+        assert_eq!(frozen.iter().find(|l| l.id == 2).unwrap().opacity, 255);
+        // 200 * 128 / 255, rounded.
+        assert_eq!(frozen.iter().find(|l| l.id == 3).unwrap().opacity, 100);
+        assert!(frozen.iter().all(|l| !matches!(l.paint, Paint::Snapshot { .. })));
+        assert_eq!(system.get(ClientId(1), 3).unwrap().opacity, 200);
+    }
+    #[test]
+    fn unbounded_container_with_other_filter_still_fails() {
+        let mut input = specs();
+        input[1].clip = None;
+        input.truncate(3);
+        input[2].filter = Some(LayerFilter { mono: 1., ..Default::default() });
+        let mut system = LayerSystem::default();
+        system.install(ClientId(1), &input).unwrap();
+        assert!(system.snapshot_subtree_specs(ClientId(1), 1).unwrap_err().to_string().contains("bounded local clip"));
     }
 }

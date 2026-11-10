@@ -28,6 +28,7 @@ pub mod layout;
 pub mod markup;
 pub mod raster;
 mod styled_glyph;
+mod glyph_coverage_offsets;
 mod glyph_quality;
 pub mod reveal;
 pub mod rich;

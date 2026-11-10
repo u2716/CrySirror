@@ -83,6 +83,7 @@ impl Drop for Charge {
 fn channel(request: &AudioRequest) -> Result<u32> {
     match request {
         AudioRequest::Play { channel, .. }
+        | AudioRequest::PlayPlaylist {channel,..}
         | AudioRequest::PlayResident {channel,..}
         | AudioRequest::PlayAsset { channel, .. }
         | AudioRequest::PlayResource { channel, .. } => Ok(*channel),
@@ -158,6 +159,7 @@ impl ChannelAudio {
         self.admit_channel_operation(client)?;
         let p = match &request {
             AudioRequest::Play { parameters, .. }
+            | AudioRequest::PlayPlaylist {parameters,..}
             | AudioRequest::PlayResident {parameters,..}
             | AudioRequest::PlayAsset { parameters, .. }
             | AudioRequest::PlayResource { parameters, .. } => parameters,
@@ -195,6 +197,7 @@ impl ChannelAudio {
                 );
                 source.bytes.len() + intro.as_ref().map_or(0, |v| v.bytes.len())
             }
+            AudioRequest::PlayPlaylist { source, .. } => source.encoded_bytes()?,
             AudioRequest::PlayResource { .. } => 0,
             AudioRequest::PlayAsset { source, intro, .. } => {
                 ensure!(
@@ -245,6 +248,9 @@ impl ChannelAudio {
                     let tail=if resident{crate::resident::decode(tail,&cancel,Some(charge.clone()))?}else{tail};
                     let intro=intro.map(|v|->Result<_>{let source=source(v,gain)?;if resident{crate::resident::decode(source,&cancel,Some(charge.clone()))}else{Ok(source)}}).transpose()?;
                     (tail,intro,p)
+                }
+                AudioRequest::PlayPlaylist { source, parameters: p, .. } => {
+                    (crate::playlist::source(source, p.decode_gain, &cancel)?, None, p)
                 }
                 AudioRequest::PlayResource { parameters: p, .. } => {
                     let opened = resource.context("prepared resource missing")?.open()?;
@@ -407,7 +413,8 @@ impl ChannelAudio {
                 return Ok(());
             }
             AudioRequest::Play { channel, .. }
-            | AudioRequest::PlayResident {channel,..}
+            | AudioRequest::PlayPlaylist {channel,..}
+        | AudioRequest::PlayResident {channel,..}
             | AudioRequest::PlayAsset { channel, .. }
             | AudioRequest::PlayPcm { channel, .. }
             | AudioRequest::PlayResource { channel, .. } => (*channel, false),

@@ -267,8 +267,55 @@ pub fn copy(src: &Plane, rect: Rect, dst: &mut Plane, at: [i32; 2]) {
         _ => {}
     }
 }
-/// Global-transparency blend onto a BGR destination.
+/// Multiply indexed alpha values using `dst * (src + 1) >> 8`. Values255
+/// preserve the destination exactly; palettes and colour planes are unused.
+/// Both planes must be Index8. Coordinates are clipped as one source/destination
+/// pair, so callers may use native offscreen rectangles without slicing errors.
+pub fn alpha_multiply(src:&Plane,rect:Rect,dst:&mut Plane,at:[i32;2]){
+    if src.format!=PlaneFormat::Index8 || dst.format!=PlaneFormat::Index8{return;}
+    let Some((rect,at))=clip_pair([src.width,src.height],rect,[dst.width,dst.height],at)else{return;};
+    for (source,destination) in rows(src,rect,dst,at){
+        for (s,d) in source.iter().zip(destination){*d=((u16::from(*d)*(u16::from(*s)+1))>>8)as u8;}
+    }
+}
+/// Alpha multiplication within one indexed plane. Rows/pixels execute forward;
+/// an overlapping destination can therefore feed later source reads, as in
+/// native row-major pointer loops. This differs from snapshot-source copying.
+pub fn alpha_multiply_within(plane:&mut Plane,rect:Rect,at:[i32;2]){
+    if plane.format!=PlaneFormat::Index8{return;}
+    let size=[plane.width,plane.height];
+    let Some(([sx,sy,w,h],[dx,dy]))=clip_pair(size,rect,size,at)else{return;};
+    let stride=plane.stride();
+    for y in 0..h as usize{
+        for x in 0..w as usize{
+            let source=(sy as usize+y)*stride+sx as usize+x;
+            let destination=(dy as usize+y)*stride+dx as usize+x;
+            plane.pixels[destination]=((u16::from(plane.pixels[destination])*(u16::from(plane.pixels[source])+1))>>8)as u8;
+        }
+    }
+}
+/// Invert BGR colour bytes in a clipped rectangle. Indexed palettes/alpha
+/// bytes are intentionally left unchanged.
+pub fn invert_bgr(plane:&mut Plane,rect:Rect){
+    if plane.format!=PlaneFormat::Bgr24{return;}
+    let Some([x,y,w,h])=plane.clip(rect)else{return;};
+    let stride=plane.stride();
+    for row in y..y+h{
+        let begin=row as usize*stride+x as usize*3;
+        for byte in &mut plane.pixels[begin..begin+w as usize*3]{*byte=255-*byte;}
+    }
+}
+/// Global-transparency blend onto BGR, or bytewise between indexed planes.
+/// Indexed destinations accept only indexed sources, without palette expansion.
 pub fn blend(src: &Plane, rect: Rect, dst: &mut Plane, at: [i32; 2], transparency: u8) {
+    if src.format==PlaneFormat::Index8 && dst.format==PlaneFormat::Index8{
+        let keep=u32::from(transparency)+1;
+        let take=256-u32::from(transparency);
+        for (source,destination) in rows(src,rect,dst,at){
+            for (s,d) in source.iter().zip(destination){*d=((keep*u32::from(*d)+take*u32::from(*s))>>8)as u8;}
+        }
+        return;
+    }
     if dst.format != PlaneFormat::Bgr24 {
         return;
     }

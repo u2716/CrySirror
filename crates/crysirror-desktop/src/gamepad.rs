@@ -181,6 +181,7 @@ impl Backend {
         input.buttons_pressed |= pressed;
         input
     }
+    pub fn controller_samples(&self)->Vec<crysirror_core::service::ControllerInputSample>{self.navigation.controller_samples()}
     pub fn reset_navigation(&mut self) {
         self.navigation.reset_devices();
     }

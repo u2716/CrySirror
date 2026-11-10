@@ -28,16 +28,65 @@ pub(crate) fn dispatch(
     let name = function.name.as_slice();
     let graph = library.name == b"DrawGraph";
     if !(graph && matches!(name, b"GetPixelColor" | b"GetAlphaColor")
-        || library.name == b"SACT2" && matches!(name, b"SP_GetPixelValue" | b"SP_GetAMapValue"))
+        || library.name == b"SACT2"
+            && matches!(
+                name,
+                b"SP_GetPixelValue" | b"SP_GetAMapValue" | b"SP_IsPtIn" | b"SP_IsPtInRect"
+            ))
     {
         return Ok(None);
     }
     ensure!(
-        function.return_kind == 10
-            || (graph && name == b"GetAlphaColor" && function.return_kind == 47),
+        matches!(function.return_kind, 10 | 47),
         "System4 pixel query return ABI"
     );
     let args = machine.hll_arguments(call)?;
+    if matches!(name, b"SP_IsPtIn" | b"SP_IsPtInRect") {
+        let [
+            Argument::Scalar {
+                kind: 10,
+                bits: number,
+            },
+            Argument::Scalar { kind: 10, bits: x },
+            Argument::Scalar { kind: 10, bits: y },
+        ] = args.as_slice()
+        else {
+            anyhow::bail!("native sprite hit query ABI")
+        };
+        let sprites = bridge
+            .sact
+            .as_ref()
+            .filter(|s| s.initialized)
+            .and_then(|s| s.sprites.as_ref())
+            .context("native sprite hit before SACT")?;
+        sprites.require_owner(owner)?;
+        let inside = if let Some(sprite) = sprites.get(*number) {
+            let rect = [
+                i64::from(sprite.position[0]),
+                i64::from(sprite.position[1]),
+                i64::from(sprite.size[0]),
+                i64::from(sprite.size[1]),
+            ];
+            if !crysirror_core::region_map::contains_rect(rect, [i64::from(*x), i64::from(*y)]) {
+                false
+            } else if name == b"SP_IsPtInRect" || !sprite.alpha {
+                true
+            } else {
+                let point = [
+                    (i64::from(*x) - rect[0]) as u32,
+                    (i64::from(*y) - rect[1]) as u32,
+                ];
+                cg.scene_sprite_input(owner, *number, bridge)?
+                    .resident_pixel(owner, point)?
+                    .context("native hit source missing resident pixel")?[3]
+                    != 0
+            }
+        } else {
+            false
+        };
+        machine.complete_hll(call, HllReturn::Scalar(i32::from(inside)))?;
+        return Ok(Some(Dispatch::Completed));
+    }
     let alpha = matches!(name, b"GetAlphaColor" | b"SP_GetAMapValue");
     let count = if !alpha {
         6

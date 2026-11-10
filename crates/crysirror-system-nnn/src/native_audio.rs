@@ -182,6 +182,17 @@ pub struct NativeAudioPlan {
     pub source: Option<NativeSource>,
     pub next: NativeAudioPolicy,
 }
+/// CCommonListenBGM calls CMusicControl by basename, independently of the
+/// script BGM table and its enable switch. Keep this outer-mode policy out of
+/// the original script music-number/save fields.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ListenMusic {
+    pub name: Vec<u8>,
+    pub looping: bool,
+    pub volume: i32,
+    pub fade_in: i32,
+    pub fade_out: i32,
+}
 fn decoded_name(bytes: &[u8]) -> Result<String> {
     ensure!(
         !bytes.is_empty() && bytes.len() <= 128 && !bytes.contains(&0),
@@ -244,6 +255,16 @@ fn spatial(words: &[i32]) -> Result<SpatialPolicy> {
     })
 }
 impl NativeAudioPolicy {
+    pub(crate) fn replay_voice(&self, name: &[u8]) -> Result<NativeAudioPlan> {
+        if !self.settings.voice_enabled {
+            return Ok(NativeAudioPlan { operation: AudioOperation::None, source: None, next: self.clone() });
+        }
+        let mut plan = self.clip_with_name_policy(&[0,0,0,0],Some(name),&Names { tokens:vec![] },true,false)?;
+        // CGame::ReplayVoice replaces script voice channel zero but never
+        // rewrites the scenario's saved voice-name/loop-work records.
+        plan.next = self.clone();
+        Ok(plan)
+    }
     pub fn new(settings: AudioSettings, bindings: AudioBindings) -> Result<Self> {
         settings.validate()?;
         bindings.validate()?;
@@ -310,6 +331,49 @@ impl NativeAudioPolicy {
             }
             _ => bail!("NNN audio callback requires exact Music/Sound/Voice payload"),
         }
+    }
+    pub(crate) fn listen_music(
+        &self,
+        request: Option<&ListenMusic>,
+        playing: bool,
+    ) -> Result<NativeAudioPlan> {
+        let Some(request) = request else {
+            return self.music(&[-1], &Names { tokens: vec![] }, playing);
+        };
+        ensure!((0..=100).contains(&request.volume), "NNN ListenBGM volume bounds");
+        let filename = decoded_name(&request.name)?;
+        let mut next = self.clone();
+        // PlayBGM first calls CGame::StopMusic, then uses CMusicControl
+        // directly. A catalogue row is not a synthetic script music number.
+        next.music_number = None;
+        next.last_music_number = None;
+        next.music_repeat_count = 0;
+        next.music_percent = request.volume;
+        Ok(NativeAudioPlan {
+            source: Some(NativeSource {
+                kind: SourceKind::Music,
+                name: request.name.clone(),
+                candidates: vec![format!("wgq/{filename}.mml"), format!("wgq/{filename}.wgq")],
+            }),
+            operation: AudioOperation::Play {
+                channel: self.bindings.music,
+                parameters: AudioParameters {
+                    gain: legacy_gain(request.volume)?,
+                    looping: request.looping,
+                    bus: PcmBus::Music,
+                    ..AudioParameters::default()
+                },
+                repeat_count: if request.looping { 0 } else { 1 },
+                spatial: spatial(&[])?,
+                fade_in: fade(request.fade_in, self.default_music_fade_in, request.volume, true)?,
+                fade_out: if playing {
+                    fade(request.fade_out, self.default_music_fade_out, self.music_percent, false)?
+                } else {
+                    None
+                },
+            },
+            next,
+        })
     }
     pub fn music(&self, words: &[i32], names: &Names, playing: bool) -> Result<NativeAudioPlan> {
         ensure!(
@@ -671,6 +735,29 @@ impl NativeAudioPlan {
             channel,
             source,
             intro: None,
+            parameters,
+        })
+    }
+    pub fn playlist_request(
+        &self,
+        source: crysirror_core::service::AudioPlaylist,
+    ) -> Result<AudioRequest> {
+        let (channel, mut parameters) = self.playback()?;
+        fn infinite(n: &crysirror_core::service::AudioPlaylistNode) -> bool {
+            use crysirror_core::service::AudioPlaylistNode as N;
+            match n {
+                N::Clip(_) => false,
+                N::Sequence(v) => v.iter().any(infinite),
+                N::Repeat { count, body } => count.is_none() || body.iter().any(infinite),
+            }
+        }
+        if infinite(&source.program) {
+            parameters.looping = false;
+            parameters.loop_passes = None;
+        }
+        Ok(AudioRequest::PlayPlaylist {
+            channel,
+            source,
             parameters,
         })
     }

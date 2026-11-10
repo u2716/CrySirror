@@ -102,3 +102,15 @@ impl Sact {
         Ok(1)
     }
 }
+
+// Pixel/semantic tests deliberately bypass font and device initialization. They
+// must still install the real scene hierarchy that Sact::init owns, rather than
+// setting initialized=true and submitting children of a nonexistent parent.
+#[cfg(all(test, feature = "runtime"))]
+pub(crate) fn install_scene_fixture(host: &mut dyn HostServices, canvas: [u32; 2]) {
+    let [w, h] = canvas;
+    host.submit_engine(ClientId(1), 1, &serde_json::to_vec(&json!({"layers":[
+        {"op":"put","layer":{"id":BACK_SCENE,"rect":[0,0,w,h],"paint":{"kind":"solid","color":[0,0,0,0]},"visible":false}},
+        {"op":"put","layer":{"id":1,"parent":BACK_SCENE,"rect":[0,0,w,h],"paint":{"kind":"solid","color":[0,0,0,255]},"order":[-2147483648,-2147483648]}}
+    ]})).unwrap()).unwrap();
+}

@@ -227,7 +227,7 @@ fn mono(frames: &mut [[i32; 2]], amount: i32) {
     }
 }
 /// smbFft: in-place complex FFT over interleaved re/im pairs.
-fn fft(buffer: &mut [f32], size: usize, sign: f32) {
+pub(crate) fn fft(buffer: &mut [f32], size: usize, sign: f32) {
     let mut i = 2;
     while i < 2 * size - 2 {
         let mut j = 0;

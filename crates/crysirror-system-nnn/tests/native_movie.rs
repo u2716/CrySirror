@@ -20,6 +20,7 @@ fn names(text: &str) -> Names {
 fn configuration() -> NativeConfiguration {
     NativeConfiguration {
         main_control: None,
+        chart_setup: None,
         resources: ResourceNames::new("game").unwrap(),
         setup: names(""),
         variable_names: names("selector"),

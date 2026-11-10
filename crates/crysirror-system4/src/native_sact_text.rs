@@ -187,7 +187,7 @@ impl NativeText {
     }
     pub(crate) fn diagnostics(&self) -> Value {
         json!({"pending":self.pending.is_some(),"sprites":self.records.len(),
-        "glyphs":self.records.values().map(|v|v.len()).sum::<usize>(),"raster_profile":"mapped outline face with explicit3x coverage; native GDI identity not claimed"})
+        "glyphs":self.records.values().map(|v|v.len()).sum::<usize>(),"raster_profile":"mapped outline face with explicit4x SactEngine coverage/stamps; native GDI identity not claimed"})
     }
     pub(crate) fn dispatch(
         &mut self,
@@ -761,13 +761,15 @@ fn prepare_draw(
     images: &dyn crysirror_core::service::ImageMetadata,
 ) -> Result<(Draw, [i32; 2], i32)> {
     ensure!(
-        (1..=170).contains(&style.size),
-        "native SACT mapped3x font size profile"
+        (1..=128).contains(&style.size),
+        "native SACT mapped4x font size profile"
     );
-    ensure!(
-        style.weight <= 1000,
-        "native SACT heavy-font geometry profile not mapped"
-    );
+    // SACT2's B7B0 wrapper reads packed u16 metrics. SactEngine B370
+    // allocates one extra column/row for weight > 1000, but 7120 keeps
+    // the original full/half-cell cursor advance. Its 2160 font creation
+    // uses weight % 1000, not the encoded heavy flag as a GDI weight.
+    let heavy = style.weight > 1000;
+    let native_weight = style.weight % 1000;
     let font = fonts
         .resolve_alias(&aliases[usize::from(style.face == 1)])?
         .context("native SACT font not published")?;
@@ -775,31 +777,57 @@ fn prepare_draw(
         .face_style(&font)?
         .context("native SACT font lacks actual weight metadata")?;
     ensure!(!face.italic, "native SACT regular face profile");
-    let weight = if style.weight <= 550 || style.weight == 1000 {
-        400
-    } else {
-        700
-    };
+    let weight = if native_weight <= 550 { 400 } else { 700 };
     ensure!(
         weight == i32::from(face.weight) || (weight >= 600 && (350..=550).contains(&face.weight)),
         "native SACT mapped face weight profile"
     );
     let bold = if weight > i32::from(face.weight) {
-        ((f32::from(style.size) * 3. * 0.025).ceil() as u8).min(16)
+        ((f32::from(style.size) * 4. * 0.025).ceil() as u8).min(16)
     } else {
         0
     };
-    let edge = style.padding.iter().copied().max().unwrap_or(0);
-    ensure!(
-        edge <= 5 && u16::from(bold) + edge * 3 <= 16,
-        "native SACT outline worker radius profile"
-    );
+    let edge = style.padding.iter().any(|v| *v != 0);
+    let mut face_offsets = vec![[0i16, 0]];
+    if heavy {
+        face_offsets.push([2, 2]);
+    }
+    // Unlike DrawText2, this retained-text path uses a 4x binary DIB.
+    // SactEngine 2380 overlays a half-pixel diagonal for heavy face;
+    // 24B0 stamps each independently specified outline direction and
+    // two extra half-pixel border copies. Keep this native policy here;
+    // shared coverage_offsets owns the raster max-union operation.
+    let edge_offsets = if edge {
+        let [left, top, right, bottom] = style.padding.map(i32::from);
+        ensure!(
+            style.padding.iter().all(|v| *v <= 15)
+                && (left + right + 1) * (top + bottom + 1) + if heavy { 3 } else { 0 } <= 256,
+            "native SACT outline stamp budget"
+        );
+        let mut offsets = Vec::new();
+        for y in -top..=bottom {
+            for x in -left..=right {
+                offsets.push([(x * 4) as i16, (y * 4) as i16]);
+            }
+        }
+        if heavy {
+            if right == 0 && bottom == 0 {
+                offsets.push([2, 2]);
+            }
+            offsets.push([(right * 4 + 2) as i16, 2]);
+            offsets.push([2, (bottom * 4 + 2) as i16]);
+        }
+        Some(Arc::<[[i16; 2]]>::from(offsets))
+    } else {
+        None
+    };
     let raster = GlyphRasterOptions {
         size_basis: GlyphSizeBasis::Em,
         origin: GlyphImageOrigin::Top,
-        supersample: 3,
+        supersample: 4,
         binary_cutoff: Some(128),
-        coverage_lut: Some(Arc::from([0, 28, 56, 113, 141, 169, 198, 226, 254, 255])),
+        downsample_nearest: false,
+        coverage_offsets: Some(Arc::from(face_offsets)),
         embolden_radius: bold,
         ..Default::default()
     };
@@ -834,8 +862,14 @@ fn prepare_draw(
         ensure!(width > 0, "native SACT half-cell extent");
         let padding = [i32::from(style.padding[0]), i32::from(style.padding[1])];
         let size = [
-            width as u32 + u32::from(style.padding[0]) + u32::from(style.padding[2]),
-            u32::from(style.size) + u32::from(style.padding[1]) + u32::from(style.padding[3]),
+            width as u32
+                + u32::from(style.padding[0])
+                + u32::from(style.padding[2])
+                + u32::from(heavy),
+            u32::from(style.size)
+                + u32::from(style.padding[1])
+                + u32::from(style.padding[3])
+                + u32::from(heavy),
         ];
         cells.push(Cell {
             position: cursor,
@@ -867,9 +901,9 @@ fn prepare_draw(
         raster: raster.clone(),
     };
     let face = images.begin_glyph_image_batch(spec.clone())?;
-    let outline = if edge > 0 {
+    let outline = if let Some(offsets) = edge_offsets {
         let mut spec = spec;
-        spec.raster.embolden_radius = bold + edge as u8 * 3;
+        spec.raster.coverage_offsets = Some(offsets);
         Some(images.begin_glyph_image_batch(spec)?)
     } else {
         None

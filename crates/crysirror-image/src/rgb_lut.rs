@@ -8,14 +8,16 @@
 use crate::ImageSurface;
 mod constant;
 mod ramps;
-pub use constant::ConstantByteBlend;
 use anyhow::{Result, ensure};
+pub use constant::ConstantByteBlend;
 use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RgbLookupProfile {
     /// Lookup every straight RGB byte, including hidden RGB at zero alpha.
     StraightRgba,
+    /// Transform a checked row-major prefix; retain all later pixels.
+    StraightPrefix { pixels:u32 },
     /// Preserve the complete stored pixel when alpha is zero. Visible RGB
     ///uses the tables; alpha and hidden transparent RGB remain unchanged.
     StraightNonzeroAlpha,
@@ -35,6 +37,26 @@ pub struct RgbLookup {
     pub profile: RgbLookupProfile,
 }
 impl RgbLookup {
+    /// Multiply each byte by an unsigned word, retain the low product word,
+    /// shift right eight bits, add an unsigned byte, then retain the low byte.
+    /// Encoded RGB arithmetic only: alpha is preserved by the lookup worker.
+    pub fn low_word_affine(multiplier: [u16; 3], offset: [u8; 3]) -> Self {
+        let table = |channel: usize| (0u16..=255).map(|value| {
+            ((value.wrapping_mul(multiplier[channel]) >> 8)
+                .wrapping_add(u16::from(offset[channel]))) as u8
+        }).collect();
+        Self { red: table(0), green: table(1), blue: table(2),
+            profile: RgbLookupProfile::StraightRgba }
+    }
+    /// Wrap a signed offset into a16-bit word, add256, add the stored byte,
+    /// unsigned-saturating subtract256, then signed-word saturate to a byte.
+    pub fn packed_word_add(color:[i32;3])->Self{
+        let table=|offset:i32|(0..256).map(|v|{
+            let word=(v as u16).wrapping_add((offset as u16).wrapping_add(256)).saturating_sub(256);
+            (word as i16).clamp(0,255) as u8
+        }).collect();
+        Self{red:table(color[0]),green:table(color[1]),blue:table(color[2]),profile:RgbLookupProfile::StraightRgba}
+    }
     /// Constant-colour screen using encoded-byte /256 products. The constant
     /// RGB is first scaled by (alpha + (alpha >> 7))/256, then each channel is
     /// clamped from constant + destination - ((constant * destination) >> 8).
@@ -96,6 +118,9 @@ impl RgbLookup {
     ) -> Result<ImageSurface> {
         self.validate()?;
         input.validate()?;
+        if let RgbLookupProfile::StraightPrefix{pixels}=self.profile{
+            ensure!(u64::from(pixels)<=u64::from(input.width)*u64::from(input.height),"RGB lookup prefix extent");
+        }
         ensure!(
             u64::from(input.width) * u64::from(input.height) <= crate::effects::MAX_EFFECT_PIXELS,
             "RGB lookup pixel budget"
@@ -103,14 +128,17 @@ impl RgbLookup {
         check()?;
         let mut out = input.clone();
         let tables = [&self.red, &self.green, &self.blue];
-        for row in out.rgba.chunks_exact_mut(input.width as usize * 4) {
+        for (y,row) in out.rgba.chunks_exact_mut(input.width as usize * 4).enumerate() {
             check()?;
-            for p in row.chunks_exact_mut(4) {
+            for (x,p) in row.chunks_exact_mut(4).enumerate() {
                 if match self.profile {
-                    RgbLookupProfile::StraightNonzeroAlpha=>p[3]==0,
-                    RgbLookupProfile::StraightColorKey{color}=>p[..3]==color,
-                    _=>false,
-                } {continue;}
+                    RgbLookupProfile::StraightPrefix{pixels}=>y*input.width as usize+x>=pixels as usize,
+                    RgbLookupProfile::StraightNonzeroAlpha => p[3] == 0,
+                    RgbLookupProfile::StraightColorKey { color } => p[..3] == color,
+                    _ => false,
+                } {
+                    continue;
+                }
                 for c in 0..3 {
                     p[c] = tables[c][p[c] as usize];
                 }
@@ -224,5 +252,36 @@ mod tests {
         });
         assert!(r.is_err());
         assert_eq!(image.rgba, before);
+    }
+}
+
+impl RgbLookup {
+    /// Byte255 overlay table, with an optional signed-delta /256 opacity.
+    /// The high branch floors the product before doubling; this deliberately
+    /// differs from the packed /128 Photoshop and constant-byte profiles.
+    pub fn overlay_byte255(color: [u8; 3], opacity: Option<u8>) -> Self {
+        let table = |source: u8| {
+            (0..=255i32)
+                .map(|destination| {
+                    let source = i32::from(source);
+                    let overlay = if destination < 128 {
+                        2 * source * destination / 255
+                    } else {
+                        2 * (source + destination - source * destination / 255) - 255
+                    }
+                    .clamp(0, 255);
+                    (match opacity {
+                        None => overlay,
+                        Some(a) => destination + ((i32::from(a) * (overlay - destination)) >> 8),
+                    }) as u8
+                })
+                .collect()
+        };
+        Self {
+            red: table(color[0]),
+            green: table(color[1]),
+            blue: table(color[2]),
+            profile: RgbLookupProfile::StraightRgba,
+        }
     }
 }

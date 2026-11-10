@@ -228,6 +228,10 @@ mod tests {
             BuraState::parse(&[60, 400, 300, 201, 101, 0, 20, 30], [800, 600]).unwrap();
         native.count = 15;
         assert!(native.image_effect([800, 600]).is_ok());
-        assert!(BuraState::parse(&[20, 2, 2, 100, 100, 10, 10, 1], [4, 4]).is_err());
+        let delayed=BuraState::parse(&[20,2,2,100,100,10,10,1],[4,4]).unwrap();
+        let linear=BuraState::parse(&[20,2,2,100,100,10,10,0],[4,4]).unwrap();
+        // No-delay time map agrees with linear sampling at this native endpoint.
+        assert_eq!(input.apply_effect(&delayed.image_effect([4,4]).unwrap()).unwrap().rgba,
+            input.apply_effect(&linear.image_effect([4,4]).unwrap()).unwrap().rgba);
     }
 }

@@ -327,6 +327,15 @@ impl ActionMap {
         self.suppress_edges.clear();
         self.pressed_buttons.clear();
     }
+    /// Read-only connected device samples, in host-ID order. Native input
+    /// adapters can preserve source routing instead of reversing merged keys.
+    pub fn controller_samples(&self)->Vec<crysirror_core::service::ControllerInputSample>{
+        self.pads.iter().map(|(&id,pad)|crysirror_core::service::ControllerInputSample{
+            id,
+            buttons:[PadButton::South,PadButton::East,PadButton::West,PadButton::North,PadButton::LeftShoulder,PadButton::RightShoulder,PadButton::LeftTrigger,PadButton::RightTrigger,PadButton::Select,PadButton::Start,PadButton::Guide,PadButton::LeftStick,PadButton::RightStick,PadButton::DpadUp,PadButton::DpadDown,PadButton::DpadLeft,PadButton::DpadRight].map(|button|pad.buttons.get(&button).copied().unwrap_or(0.0)),
+            axes:[PadAxis::LeftX,PadAxis::LeftY,PadAxis::RightX,PadAxis::RightY,PadAxis::LeftTrigger,PadAxis::RightTrigger,PadAxis::DpadX,PadAxis::DpadY].map(|axis|pad.axes.get(&axis).copied().unwrap_or(0.0)),
+        }).collect()
+    }
     pub fn inject_gamepad(&mut self, event: GamepadEvent) -> Result<()> {
         match event {
             GamepadEvent::Connected { id, family } => {

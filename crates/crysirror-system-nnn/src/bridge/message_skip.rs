@@ -106,6 +106,7 @@ impl Bridge {
         self.fill_effects.clear();
         self.passive_counts.clear();
         self.picture_assignments.clear();
+        self.picture_numbers.clear();
         self.rectangles.clear();
         self.not_trans.clear();
         // Actual538760 ->4fe950 clears CutinWaitClick, not encoded rows or

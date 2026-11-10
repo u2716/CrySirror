@@ -3,17 +3,19 @@
 //! first cooperative execution. Resource workers never borrow these contexts.
 use super::*;
 use std::collections::{BTreeSet, VecDeque};
-const MAX_THREADS: usize = 32;
+// Native41DED0/426F90 uses a dynamic linked list, not32 slots. This is an
+// engine resource bound; per-call values/frames retain the64MiB budget below.
+const MAX_THREADS: usize = 1024;
 pub(super) struct ThreadState {
-    pc: u32,
-    line: u16,
-    stack: Vec<Value>,
-    frames: Vec<Frame>,
-    local: BTreeMap<u32, Value>,
-    pending: Option<(Event, u32, usize)>,
-    halted: bool,
-    module: usize,
-    clicks: u8,
+    pub(super) pc: u32,
+    pub(super) line: u16,
+    pub(super) stack: Vec<Value>,
+    pub(super) frames: Vec<Frame>,
+    pub(super) local: BTreeMap<u32, Value>,
+    pub(super) pending: Option<(Event, u32, usize)>,
+    pub(super) halted: bool,
+    pub(super) module: usize,
+    pub(super) clicks: u8,
 }
 pub(super) struct Scheduler {
     pub current: i32,
@@ -24,6 +26,7 @@ pub(super) struct Scheduler {
     pub(super) blocked: BTreeMap<i32, u64>,
     tick: Option<u64>,
     next_round: Vec<i32>,
+    pub(super) terminating: BTreeSet<i32>,
 }
 impl Default for Scheduler {
     fn default() -> Self {
@@ -36,6 +39,7 @@ impl Default for Scheduler {
             blocked: BTreeMap::new(),
             tick: None,
             next_round: Vec::new(),
+            terminating: BTreeSet::new(),
         }
     }
 }
@@ -60,7 +64,9 @@ impl Machine {
                 .map(|frame| values(&frame.arguments) + values(&frame.locals))
                 .sum()
         }
-        let mut bytes = values(&self.stack) + frames(&self.frames);
+        let mut bytes = self
+            .read_marks_bytes
+            .saturating_add(values(&self.stack) + frames(&self.frames));
         for bank in &self.banks {
             for value in bank.values() {
                 bytes = bytes.saturating_add(values(std::slice::from_ref(value)));
@@ -84,11 +90,7 @@ impl Machine {
         Ok(())
     }
     pub(super) fn frame_serial(&mut self) -> Result<u64> {
-        let serial = self.next_frame;
-        self.next_frame = serial
-            .checked_add(1)
-            .context("Majiro frame identity exhausted")?;
-        Ok(serial)
+        allocate_frame_serial(&mut self.next_frame)
     }
     pub(crate) fn seed_thread_ids(&mut self, seed: u32) {
         self.scheduler.next = seed.max(1);
@@ -219,20 +221,37 @@ impl Machine {
             clicks: std::mem::take(&mut self.clicks),
         }
     }
-    pub(super) fn switch_thread(&mut self, id: i32) -> Result<()> {
-        if id == self.scheduler.current {
-            return Ok(());
+    /// Owner input/event plans edit a live thread's data without selecting it
+    /// as the running VM.YUKIIRO411630 (classic40B350) writes its
+    ///427240/41E180 input snapshot directly;
+    /// the previously executed current thread may already have been retired.
+    /// Always put the context back, including on a failed receipt/branch check.
+    pub(super) fn edit_thread_state<R>(
+        &mut self,
+        id: i32,
+        phase: &'static str,
+        edit: impl FnOnce(&mut ThreadState, &mut u64) -> Result<R>,
+    ) -> Result<R> {
+        let current = self.scheduler.current;
+        ensure!(
+            self.thread_alive(id),
+            "Majiro {phase}: foreign/dead thread target={id} current={current}"
+        );
+        if id == current {
+            let mut state = self.take_thread();
+            let result = edit(&mut state, &mut self.next_frame);
+            self.restore_thread_state(state);
+            result.with_context(|| format!("Majiro {phase}: target={id} current={current}"))
+        } else {
+            let mut state = self.scheduler.parked.remove(&id).with_context(|| {
+                format!("Majiro {phase}: foreign/dead thread target={id} current={current}")
+            })?;
+            let result = edit(&mut state, &mut self.next_frame);
+            self.scheduler.parked.insert(id, state);
+            result.with_context(|| format!("Majiro {phase}: target={id} current={current}"))
         }
-        let thread = self
-            .scheduler
-            .parked
-            .remove(&id)
-            .context("Majiro foreign/dead thread")?;
-        let old = self.take_thread();
-        if !old.halted {
-            self.scheduler.parked.insert(self.scheduler.current, old);
-        }
-        self.scheduler.current = id;
+    }
+    fn restore_thread_state(&mut self, thread: ThreadState) {
         self.pc = thread.pc;
         self.line = thread.line;
         self.stack = thread.stack;
@@ -243,6 +262,28 @@ impl Machine {
         self.active_module = thread.module;
         self.clicks = thread.clicks;
         self.program = self.modules[thread.module].program.clone();
+    }
+    pub(super) fn switch_thread(&mut self, id: i32) -> Result<()> {
+        ensure!(
+            self.thread_alive(id),
+            "Majiro scheduler selection: foreign/dead thread target={id} current={}",
+            self.scheduler.current
+        );
+        if id == self.scheduler.current {
+            return Ok(());
+        }
+        let thread = self.scheduler.parked.remove(&id).with_context(|| {
+            format!(
+                "Majiro scheduler selection: foreign/dead thread target={id} current={}",
+                self.scheduler.current
+            )
+        })?;
+        let old = self.take_thread();
+        if !old.halted {
+            self.scheduler.parked.insert(self.scheduler.current, old);
+        }
+        self.scheduler.current = id;
+        self.restore_thread_state(thread);
         Ok(())
     }
     pub(super) fn wake_thread(&mut self, id: i32) {
@@ -276,8 +317,10 @@ impl Machine {
         );
         self.modules[target.0].program.instruction(target.1)?;
         let mut id = self.scheduler.next;
-        while self.scheduler.order.contains(&(id as i32)) || matches!(id, 0 | 0xffff_fffe) {
-            id = if id == 0xffff_fffd {
+        while self.scheduler.order.contains(&(id as i32))
+            || matches!(id, 0 | 0xffff_fffe | 0xffff_ffff)
+        {
+            id = if id >= 0xffff_fffd {
                 1
             } else {
                 id.wrapping_add(1)
@@ -320,21 +363,44 @@ impl Machine {
         //next owner update, rather than stealing its creator's current PC.
         Ok(id as i32)
     }
+    ///41DD40 resets frame wait words and termination state for RunScript;
+    /// thread-global variables live until41DE20 actually destroys the thread.
+    pub(super) fn clear_thread_waits(&mut self) {
+        self.scheduler.blocked.clear();
+        self.scheduler.next_round.clear();
+        self.scheduler.terminating.clear();
+    }
+    pub(super) fn reset_thread_waits(&mut self, id: i32) {
+        self.scheduler.blocked.remove(&id);
+        self.scheduler.next_round.retain(|entry| *entry != id);
+        self.scheduler.terminating.remove(&id);
+    }
     pub(crate) fn retire_current(&mut self) -> bool {
         let id = self.scheduler.current;
+        self.scheduler.ready.retain(|entry| *entry != id);
+        self.reset_thread_waits(id);
         self.scheduler.order.retain(|entry| *entry != id);
         self.scheduler.blocked.remove(&id);
         if !self.initializing() {
             self.hooks
                 .retain(|hook| hook.owner != id || hook.persistent);
         }
+        //41DE20 destroys its remaining operand/thread-global values now;
+        // retain only a terminal cursor until the owner selects another task.
+        self.stack.clear();
+        self.frames.clear();
+        self.banks[2].clear();
+        self.pending = None;
+        self.clicks = 0;
         if id == 0 {
             //40B350 closes remaining tasks when primary thread0 completes.
-            //Native finalizer opcodes remain explicitly unsupported, so no
-            //accepted task can have an unexecuted native destructor here.
+            //The primary thread has finished its own registered destructors.
             self.scheduler.parked.clear();
             self.scheduler.order.clear();
             self.scheduler.ready.clear();
+            self.scheduler.blocked.clear();
+            self.scheduler.next_round.clear();
+            self.scheduler.terminating.clear();
             return true;
         }
         self.scheduler.order.is_empty()
@@ -349,8 +415,20 @@ impl Machine {
         self.scheduler.order = vec![0];
         self.scheduler.ready.clear();
         self.scheduler.blocked.clear();
+        self.scheduler.next_round.clear();
+        self.scheduler.terminating.clear();
         self.scheduler.current = 0;
         self.banks[2].clear();
         self.initializer_finished = true;
     }
+}
+
+/// Global frame epochs are allocated even when an owner plan is mutating a
+/// parked thread. They never derive from the selected VM's operand state.
+pub(super) fn allocate_frame_serial(next: &mut u64) -> Result<u64> {
+    let serial = *next;
+    *next = serial
+        .checked_add(1)
+        .context("Majiro frame identity exhausted")?;
+    Ok(serial)
 }

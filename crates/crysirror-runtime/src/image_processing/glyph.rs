@@ -116,6 +116,23 @@ pub(super) fn admission_cell(
     {
         return Err(Error::Limit("styled glyph working/radius budget"));
     }
+    let (stamp_pixels, stamp_work) = if let Some(offsets) = &options.coverage_offsets {
+        // validate() has already bounded and rejected an empty stamp set.
+        let min_x = offsets.iter().map(|p| i32::from(p[0])).min().unwrap();
+        let min_y = offsets.iter().map(|p| i32::from(p[1])).min().unwrap();
+        let max_x = offsets.iter().map(|p| i32::from(p[0])).max().unwrap();
+        let max_y = offsets.iter().map(|p| i32::from(p[1])).max().unwrap();
+        let width = working_width + 2 * radius + (max_x - min_x) as u64;
+        let height = working_height + 2 * radius + (max_y - min_y) as u64;
+        let pixels = width * height;
+        let work = expanded * offsets.len() as u64;
+        if pixels > 8 * 1024 * 1024 || work > 64 * 1024 * 1024 {
+            return Err(Error::Limit("styled glyph stamp budget"));
+        }
+        (pixels, work)
+    } else {
+        (0, 0)
+    };
     let side = working_size;
     if (glyph_count as u64)
         .checked_mul(side * side * 4)
@@ -128,6 +145,7 @@ pub(super) fn admission_cell(
     let plain = options.supersample == 1
         && options.binary_cutoff.is_none()
         && options.embolden_radius == 0
+        && options.coverage_offsets.is_none()
         && options.coverage_lut.is_none()
         && options.size_basis == GlyphSizeBasis::LineHeight
         && options.origin == GlyphImageOrigin::Baseline
@@ -136,13 +154,13 @@ pub(super) fn admission_cell(
     let extra = if plain {
         0
     } else {
-        working as usize * 4 + expanded as usize * 2
+        working as usize * 4 + expanded as usize * 2 + stamp_pixels as usize
     };
     Ok(Admission {
         bytes: pixels as usize * 4,
         scratch: pixels as usize * 4 + 32 * 1024 * 1024 + extra + glyph_count * 64,
         pixels,
-        work: expanded * (2 * radius + 3) + (glyph_count as u64) * side * side * 4,
+        work: expanded * (2 * radius + 3) + stamp_work + (glyph_count as u64) * side * side * 4,
     })
 }
 

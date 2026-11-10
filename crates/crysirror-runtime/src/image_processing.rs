@@ -284,7 +284,9 @@ fn effect_output_size(mut size: [u32; 2], effects: &[ImageEffect]) -> Result<[u3
                     .and_then(|v| v.checked_add(spec.padding[3]))
                     .ok_or(Error::Limit("triangular blur output height"))?;
             }
-            ImageEffect::Resize { width, height } => size = [*width, *height],
+            ImageEffect::Resize { width, height } | ImageEffect::ResizeNearest { width, height } => {
+                size = [*width, *height];
+            }
             ImageEffect::RowDeform { spec } => {
                 size = spec
                     .output_size(size)
@@ -370,6 +372,8 @@ fn validate_effect_context(input: &ImageInput, effects: &[ImageEffect]) -> Resul
                 | ImageEffect::AlphaStamps { .. }
                 | ImageEffect::CopyChannel { .. }
                 | ImageEffect::AlphaPlanePair { .. }
+                | ImageEffect::PackedColorMask{..}
+                | ImageEffect::PackedDualMask{..}
                 | ImageEffect::StoredMaskBlend { .. }
                 | ImageEffect::Transition { .. }
                 | ImageEffect::SineRowCopy { .. }
@@ -377,6 +381,7 @@ fn validate_effect_context(input: &ImageInput, effects: &[ImageEffect]) -> Resul
                 | ImageEffect::AlphaClipRect { .. }
                 | ImageEffect::MaskedPairBlend { .. }
                 | ImageEffect::IntegerRaster { .. }
+                | ImageEffect::ByteRaster { .. }
         )
     };
     if effects.iter().skip(1).any(pair_op) || effects.first().is_some_and(pair_op) != pair {
@@ -402,6 +407,7 @@ fn validate_effect_context(input: &ImageInput, effects: &[ImageEffect]) -> Resul
                     | ImageEffect::DiscCopies { .. }
                     | ImageEffect::AlphaClipRect { .. }
                     | ImageEffect::IntegerRaster { .. }
+                    | ImageEffect::ByteRaster { .. }
             )
         )
     {
@@ -412,6 +418,8 @@ fn validate_effect_context(input: &ImageInput, effects: &[ImageEffect]) -> Resul
             effects.first(),
             Some(
                 ImageEffect::MaskedPairBlend { .. }
+                    | ImageEffect::PackedColorMask{..}
+                    | ImageEffect::PackedDualMask{..}
                     | ImageEffect::AlphaMaskPlane { .. }
                     | ImageEffect::StoredMaskBlend { .. }
                     | ImageEffect::AlphaPlanePair { .. }
@@ -493,6 +501,8 @@ fn process_input(
                     .ok_or_else(|| anyhow::anyhow!("alpha stamp source absent"))?,
                 &|| cancel.check(),
             )?
+        } else if let ImageEffect::ByteRaster { spec } = &effect {
+            spec.apply(&image,other.as_ref().ok_or_else(||anyhow::anyhow!("byte raster source absent"))?,&||cancel.check())?
         } else if let ImageEffect::IntegerRaster { spec } = &effect {
             spec.apply(
                 &image,
@@ -521,6 +531,12 @@ fn process_input(
                     .ok_or_else(|| anyhow::anyhow!("second channel plane absent"))?,
                 &|| cancel.check(),
             )?
+        } else if let ImageEffect::PackedColorMask{spec}=&effect {
+            spec.apply(&image,other.as_ref().ok_or_else(||anyhow::anyhow!("colour-mask source absent"))?,
+                mask.as_ref().ok_or_else(||anyhow::anyhow!("colour-mask plane absent"))?,&||cancel.check())?
+        } else if let ImageEffect::PackedDualMask{spec}=&effect {
+            spec.apply(&image,other.as_ref().ok_or_else(||anyhow::anyhow!("dual-mask source absent"))?,
+                mask.as_ref().ok_or_else(||anyhow::anyhow!("dual-mask plane absent"))?,&||cancel.check())?
         } else if let ImageEffect::StoredMaskBlend { spec } = &effect {
             spec.apply(
                 &image,

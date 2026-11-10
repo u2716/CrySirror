@@ -53,7 +53,7 @@ pub struct DrawResult {
 }
 pub struct NativeDraw {
     client: ClientId,
-    receipt: NativeCall,
+    receipt: Option<NativeCall>,
     display: u32,
     order: u16,
     size: [u32; 2],
@@ -107,7 +107,7 @@ impl NativeDraw {
         );
         Ok(Self {
             client,
-            receipt: call.clone(),
+            receipt: Some(call.clone()),
             display,
             order,
             size,
@@ -134,6 +134,57 @@ impl NativeDraw {
         self.adaptive = Some(clock);
         Ok(())
     }
+    /// A retained CBackExecClass painter after non-looping NEXT. There is no
+    /// guest instruction here and no synthetic callback to acknowledge.
+    pub(crate) fn begin_idle(
+        client: ClientId,
+        display: u32,
+        order: u16,
+        size: [u32; 2],
+        frame_ms: u64,
+        work: NativeFrameWork,
+        effects: BTreeMap<i32, NativeFrameEffect>,
+        visible: BTreeSet<i32>,
+        underlays: BTreeMap<i32, crysirror_core::image_processing::ImageCompositeLayer>,
+        display_path: Option<String>,
+        now: u64,
+    ) -> Self {
+        Self {
+            client,
+            receipt: None,
+            display,
+            order,
+            size,
+            frame_ms,
+            total: 1,
+            started_ms: now,
+            rendered: 0,
+            work: Some(work),
+            last: None,
+            effects,
+            visible,
+            underlays,
+            display_path,
+            message_view: None,
+            adaptive: None,
+            api_calls: 0,
+        }
+    }
+    pub(crate) fn poll_idle(&mut self, host: &mut dyn HostServices) -> Result<Option<DrawResult>> {
+        ensure!(
+            self.receipt.is_none(),
+            "NNN retained painter cannot consume a guest receipt"
+        );
+        if !self.poll_admitted_frame(host)? {
+            return Ok(None);
+        }
+        Ok(Some(DrawResult {
+            frame: self.last.as_ref().unwrap().clone(),
+            effects: self.effects.clone(),
+            display_path: self.display_path.take(),
+            clock: self.adaptive.clone(),
+        }))
+    }
     pub(crate) fn set_message_view(&mut self, view: crate::native_text::DrawView) -> Result<()> {
         ensure!(
             self.rendered == 0 && self.last.is_none(),
@@ -150,7 +201,28 @@ impl NativeDraw {
     pub fn dependency_pending(&self) -> bool {
         self.work.is_some()
     }
-    fn poll_admitted_frame(&mut self, host: &mut dyn HostServices) -> Result<bool> {
+    pub(crate) fn owned_path(&self) -> Option<&str> {
+        self.display_path.as_deref()
+    }
+    pub(crate) fn reanchor_after_pause(&mut self, now: u64, paused: u64) -> Result<()> {
+        let elapsed = now
+            .checked_sub(paused)
+            .ok_or_else(|| anyhow::anyhow!("NNN DRAW pause clock reversed"))?;
+        self.started_ms = self
+            .started_ms
+            .checked_add(elapsed)
+            .ok_or_else(|| anyhow::anyhow!("NNN DRAW pause clock overflow"))?;
+        if let Some(clock) = &mut self.adaptive {
+            if let Some(at) = clock.at {
+                clock.at = Some(
+                    at.checked_add(elapsed)
+                        .ok_or_else(|| anyhow::anyhow!("NNN DRAW native anchor overflow"))?,
+                );
+            }
+        }
+        Ok(())
+    }
+    pub(crate) fn poll_admitted_frame(&mut self, host: &mut dyn HostServices) -> Result<bool> {
         if let Some(work) = self.work.as_mut() {
             let before = work.api_calls;
             let result = work.poll(host);
@@ -200,6 +272,14 @@ impl NativeDraw {
                     effect.state = state.clone();
                 }
             }
+            if let Some(palette)=&frame.buffers.rainbow_palette {
+                for effect in self.effects.values_mut(){if let NativeFrameEffect::Picture(value)=effect {
+                    if matches!(value.state.kind,crate::native_picture_effect::PictureEffectKind::Rainbow{..}){value.rainbow_palette=Some(palette.clone());}
+                }}
+            }
+            for (slot,state) in &frame.buffers.picture_updates{
+                if let Some(NativeFrameEffect::Picture(effect))=self.effects.get_mut(slot){effect.state=state.clone();}
+            }
             for (slot, state) in &frame.move_updates {
                 if let Some(NativeFrameEffect::Picture(effect)) = self.effects.get_mut(slot) {
                     effect.rectangles = state.rectangles.clone();
@@ -232,6 +312,14 @@ impl NativeDraw {
         }
         Ok(true)
     }
+    /// Film skip drops only the remaining countdown, not effect advancement.
+    pub(crate) fn skip_film_remaining(&mut self) -> Result<()> {
+        self.adaptive
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("NNN film skip requires native DRAW clock"))?
+            .skip_remaining();
+        Ok(())
+    }
     /// An explicit outer-mode exit finishes at most the already admitted frame.
     /// It neither consumes the native receipt nor schedules another DRAW frame.
     pub(crate) fn cancel_at_frame(
@@ -241,7 +329,10 @@ impl NativeDraw {
         host: &mut dyn HostServices,
     ) -> Result<Option<DrawResult>> {
         machine.validate_receipt(call)?;
-        ensure!(self.receipt == *call, "NNN cancelled DRAW receipt changed");
+        ensure!(
+            self.receipt.as_ref() == Some(call),
+            "NNN cancelled DRAW receipt changed"
+        );
         if !self.poll_admitted_frame(host)? {
             return Ok(None);
         }
@@ -273,7 +364,10 @@ impl NativeDraw {
         skip: bool,
     ) -> Result<Option<DrawResult>> {
         machine.validate_receipt(call)?;
-        ensure!(self.receipt == *call, "NNN DRAW receipt changed");
+        ensure!(
+            self.receipt.as_ref() == Some(call),
+            "NNN DRAW receipt changed"
+        );
         if !self.poll_admitted_frame(host)? {
             return Ok(None);
         }
@@ -295,7 +389,7 @@ impl NativeDraw {
             }
             self.adaptive.as_mut().unwrap().admit(host.now_ms(), skip)?;
             let previous = self.last.as_ref().unwrap();
-            let work = NativeFrameWork::with_base(
+            let work = NativeFrameWork::with_context_base(
                 self.client,
                 previous.base.clone(),
                 ordered_draw_plan(
@@ -305,6 +399,8 @@ impl NativeDraw {
                     self.message_view.as_ref(),
                 ),
                 previous.random.clone(),
+                true,
+                previous.buffers.clone(),
                 host,
             )?;
             self.api_calls += work.api_calls;
@@ -334,7 +430,7 @@ impl NativeDraw {
                 >= u64::from(self.rendered) * self.frame_ms
         {
             let previous = self.last.as_ref().unwrap();
-            let work = NativeFrameWork::with_base(
+            let work = NativeFrameWork::with_context_base(
                 self.client,
                 previous.base.clone(),
                 ordered_draw_plan(
@@ -344,6 +440,8 @@ impl NativeDraw {
                     self.message_view.as_ref(),
                 ),
                 previous.random.clone(),
+                true,
+                previous.buffers.clone(),
                 host,
             )?;
             self.api_calls += work.api_calls;

@@ -733,6 +733,10 @@ impl App {
             if !self.focused {
                 frame_input = InputFrame::default();
             }
+            let mut sources=crysirror_core::service::InputSourcesFrame{keyboard_pointer:if self.focused{self.input}else{InputFrame::default()},..Default::default()};
+            #[cfg(feature="gamepad")]
+            if let Some(gamepad)=&self.gamepad{sources.controller_backend=true;sources.controllers=gamepad.controller_samples();}
+            self.core.rt().host.publish_input_sources(sources)?;
             self.core.begin_tick(
                 &mut self.audio,
                 if self.presented == 0 { 0 } else { ms },
