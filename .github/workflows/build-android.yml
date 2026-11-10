@@ -70,10 +70,44 @@ jobs:
         run: |
           python3 tools/package_platform.py android
 
+      - name: Sign APK with debug key
+        run: |
+          # 1. Generate a throwaway debug keystore
+          keytool -genkeypair -v \
+            -keystore "$RUNNER_TEMP/debug.keystore" \
+            -storepass android \
+            -alias androiddebugkey \
+            -keypass android \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US"
+
+          # 2. Find the latest build-tools
+          BUILD_TOOLS_DIR="$ANDROID_HOME/build-tools/$(ls $ANDROID_HOME/build-tools | sort -V | tail -1)"
+
+          # 3. Zipalign
+          UNSIGNED_APK="platform/android/app/build/outputs/apk/release/app-release-unsigned.apk"
+          ALIGNED_APK="platform/android/app/build/outputs/apk/release/app-release-aligned.apk"
+          "$BUILD_TOOLS_DIR/zipalign" -p -f 4 "$UNSIGNED_APK" "$ALIGNED_APK"
+
+          # 4. Sign with debug key
+          SIGNED_APK="platform/android/app/build/outputs/apk/release/app-release-signed.apk"
+          "$BUILD_TOOLS_DIR/apksigner" sign \
+            --ks "$RUNNER_TEMP/debug.keystore" \
+            --ks-key-alias androiddebugkey \
+            --ks-pass pass:android \
+            --key-pass pass:android \
+            --out "$SIGNED_APK" \
+            "$ALIGNED_APK"
+
+          # 5. Verify
+          "$BUILD_TOOLS_DIR/apksigner" verify --verbose --print-certs "$SIGNED_APK"
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@v7
         with:
           name: CrySirror-Android-APK
-          path: platform/android/app/build/outputs/apk/release/app-release-unsigned.apk
+          path: platform/android/app/build/outputs/apk/release/app-release-signed.apk
           if-no-files-found: error
           retention-days: 7
