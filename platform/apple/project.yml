@@ -57,3 +57,48 @@ targets:
       - sdk: Security.framework
       - sdk: SystemConfiguration.framework
       - sdk: libc++.tbd
+
+  CrySirror-macOS-Tests:
+    type: bundle.unit-test
+    platform: macOS
+    sources: [Tests]
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: org.crysirror.player.macos-tests
+        LIBRARY_SEARCH_PATHS: '$(inherited) $(PROJECT_DIR)/Vendor'
+        TEST_HOST: '$(BUILT_PRODUCTS_DIR)/CrySirror.app/Contents/MacOS/CrySirror'
+        BUNDLE_LOADER: '$(TEST_HOST)'
+        LD_RUNPATH_SEARCH_PATHS: '$(inherited) @loader_path/../Frameworks @executable_path/../Frameworks'
+    dependencies:
+      - target: CrySirror-macOS
+      - framework: Vendor/libcrysirror_mobile.dylib
+        embed: false
+  CrySirror-iOS-Tests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [Tests]
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: org.crysirror.player.ios-tests
+        TEST_HOST: '$(BUILT_PRODUCTS_DIR)/CrySirror.app/CrySirror'
+        BUNDLE_LOADER: '$(TEST_HOST)'
+        TARGETED_DEVICE_FAMILY: '1,2'
+    dependencies:
+      - target: CrySirror-iOS
+schemes:
+  CrySirror-macOS:
+    build:
+      targets:
+        CrySirror-macOS: all
+    test:
+      config: Release
+      targets: [CrySirror-macOS-Tests]
+  CrySirror-iOS:
+    build:
+      targets:
+        CrySirror-iOS: all
+    test:
+      config: Release
+      targets: [CrySirror-iOS-Tests]

@@ -80,10 +80,13 @@ def android(skip: bool, abis: list[str]) -> Path:
     output = OUT / 'android/jniLibs'
     targets = {'arm64-v8a':'aarch64-linux-android', 'x86_64':'x86_64-linux-android'}
     if not skip:
-        args = ['cargo', 'ndk']
+        # Native decoders use C++; request both its link dependency and APK runtime.
+        args = ['cargo', 'ndk', '--link-libcxx-shared']
         for abi in abis:
             args += ['-t', abi]
-        run(*args, '-P', '28', '-o', output, 'rustc', '--release', '-p', 'crysirror-mobile', '--lib', '--crate-type', 'cdylib', env=env)
+        # The explicit rustc argument also invalidates any older unlinked artifact.
+        run(*args, '-P', '28', '-o', output, 'rustc', '--release', '-p', 'crysirror-mobile',
+            '--lib', '--crate-type', 'cdylib', '--', '-l', 'dylib=c++_shared', env=env)
     for abi in abis:
         if not (output / abi / 'libcrysirror_mobile.so').is_file():
             raise RuntimeError(f'Missing Release library for {abi} ({targets[abi]})')
@@ -99,8 +102,9 @@ def android(skip: bool, abis: list[str]) -> Path:
     apk = ROOT / 'platform/android/app/build/outputs/apk/release/app-release-unsigned.apk'
     with zipfile.ZipFile(apk) as package:
         for abi in abis:
-            if f'lib/{abi}/libcrysirror_mobile.so' not in package.namelist():
-                raise RuntimeError(f'APK is missing its native library for {abi}')
+            for library in ('libcrysirror_mobile.so', 'libc++_shared.so'):
+                if f'lib/{abi}/{library}' not in package.namelist():
+                    raise RuntimeError(f'APK is missing {library} for {abi}')
     return apk
 
 def main() -> None:
