@@ -31,3 +31,13 @@ __pycache__/
 /platform/android/build/
 /platform/android/app/build/
 /platform/android/local.properties
+/platform/psv/siglus-shaderc/target/
+/platform/psv/siglus-shaderc/Cargo.lock
+platform/switch/runtime/build/
+platform/switch/runtime/romfs/
+platform/switch/runtime/crysirror.*
+platform/switch/siglus-shaderc/target/
+
+/platform/psv/shaderc/target/
+/platform/psv/shaderc/Cargo.lock
+/platform/psv/player/target/

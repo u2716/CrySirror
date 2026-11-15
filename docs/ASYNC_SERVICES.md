@@ -340,3 +340,25 @@ audio and remaining external motion producers stay explicit unsupported
 boundaries. No native load is acknowledged from a parsed file or ready helper
 alone. See [ADR 0099](adr/0099-staged-original-save-restore.md)
 and actual behavior receipts in STATUS.md.
+
+
+## Bounded native continuation quanta
+
+`VmAdapter::instruction_budget` defaults to 1024 operations. Runtime caps each
+request at 100000; System4 opts into that allowance together with a 4 ms owner
+quantum. A completed HLL handoff is not itself a display-frame boundary.
+
+`crysirror_tasks::with_completion_deadline` explicitly scopes that compatibility
+quantum. `Task::poll_owner` uses a completion waker and parks only until the
+remaining deadline; it never spins or joins an entire unfinished job. Nested
+scopes may shorten the deadline. A task cannot wait on its own executor.
+Outside the scope, and in browsers, polling stays nonblocking. Shared image,
+encoded-image, canvas readback, image-metadata and glyph-batch queries
+participate in the same deadline. A pending GPU capture still yields to the
+host that owns its completion.
+
+The adapter counts completed instructions across handoffs and submits each
+input observation only once. Native sleeps, resource/presentation waits and
+close/error completion retain their original typed state. This is a bounded
+compatibility transition under ADR 0050, not completion of event-driven native
+VM scheduling or a synchronous replacement for the shared worker pipeline.

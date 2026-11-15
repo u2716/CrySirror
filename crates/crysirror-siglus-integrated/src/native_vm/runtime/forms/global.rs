@@ -241,19 +241,30 @@ fn parse_selbtn_choices(
 }
 
 fn selbtn_text_extent(
+    font: &crate::native_vm::text_render::FontCache,
     text: &str,
     tmpl: &crate::native_vm::runtime::tables::SelBtnTemplate,
     vertical: bool,
 ) -> (i64, i64) {
+    let profile = font.layout_profile();
     let font_px = tmpl.moji_size.max(1);
     let mut advance_sum = 0i64;
-    for ch in text.chars() {
-        let advance = if ch.is_ascii() || matches!(ch as u32, 0xFF61..=0xFF9F) {
+    for display in profile.chars(text) {
+        let ch = display.ch;
+        let advance = if profile.uses_font_metrics(ch) {
+            font.display_cell_width(ch, font_px + tmpl.moji_space.0)
+        } else if profile.columns(ch) == 0 {
+            0
+        } else if profile.columns(ch) == 1 {
             (font_px + tmpl.moji_space.0) / 2
         } else {
             font_px + tmpl.moji_space.0
         };
-        advance_sum = advance_sum.saturating_add(advance.max(1));
+        advance_sum = advance_sum.saturating_add(if profile.columns(ch) == 0 {
+            0
+        } else {
+            advance.max(1)
+        });
     }
     if !text.is_empty() {
         advance_sum = advance_sum.saturating_sub(tmpl.moji_space.0);
@@ -292,8 +303,12 @@ fn selbtn_template_item_size(
     choices
         .first()
         .map(|choice| {
-            let (tw, th) =
-                selbtn_text_extent(&choice.text, tmpl, ctx.tables.mwnd_render.vertical_writing);
+            let (tw, th) = selbtn_text_extent(
+                &ctx.font_cache,
+                &choice.text,
+                tmpl,
+                ctx.tables.mwnd_render.vertical_writing,
+            );
             (
                 tw.saturating_add(tmpl.moji_pos.0.max(0)).max(1),
                 th.saturating_add(tmpl.moji_pos.1.max(0)).max(1),
@@ -618,14 +633,31 @@ fn make_selbtn_text_object(
     } else {
         let font_px = tmpl.moji_size.max(1);
         let mut cursor_x = 0i64;
-        for (index, ch) in choice.text.chars().enumerate() {
+        for (index, display) in ctx
+            .font_cache
+            .layout_profile()
+            .chars(&choice.text)
+            .into_iter()
+            .enumerate()
+        {
+            let ch = display.ch;
             placements.push((index, ch, cursor_x, 0, font_px));
-            let advance = if crate::native_vm::text_render::is_hankaku(ch) {
+            let advance = if ctx.font_cache.layout_profile().uses_font_metrics(ch) {
+                ctx.font_cache
+                    .display_cell_width(ch, font_px + tmpl.moji_space.0)
+            } else if ctx.font_cache.layout_profile().columns(ch) == 0 {
+                0
+            } else if ctx.font_cache.layout_profile().columns(ch) == 1 {
                 (font_px + tmpl.moji_space.0) / 2
             } else {
                 font_px + tmpl.moji_space.0
             };
-            cursor_x = cursor_x.saturating_add(advance.max(1));
+            cursor_x =
+                cursor_x.saturating_add(if ctx.font_cache.layout_profile().columns(ch) == 0 {
+                    0
+                } else {
+                    advance.max(1)
+                });
         }
         let total_x = cursor_x.saturating_sub(tmpl.moji_space.0).max(font_px);
         let total_y = font_px;
@@ -1036,7 +1068,10 @@ fn dispatch_selbtn_command(ctx: &mut CommandContext, form_id: u32, args: &[Value
     }
 
     if op != constants::elm_value::GLOBAL_SELBTN_START {
-        let (template_no, choices) = parse_selbtn_choices(args);
+        let (template_no, mut choices) = parse_selbtn_choices(args);
+        for choice in &mut choices {
+            choice.text = expand_name_flags(ctx, &choice.text);
+        }
         let capture_flag = named_i64(args, 1).unwrap_or(0) != 0;
         let sel_start_call_scn = args
             .iter()
@@ -1911,6 +1946,65 @@ fn namae_flag_element(ctx: &CommandContext, name: &str) -> Option<Vec<i32>> {
     Some(vec![list_form, elm_array, index])
 }
 
+/// C++ eng_message.cpp::tnm_msg_proc_expand_namae_flag (a24ea4b).
+/// Expand only at message presentation, never when reading string literals or
+/// assigning name flags. Inserted names are not recursively expanded.
+pub(super) fn expand_name_flags(ctx: &CommandContext, text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        let form = match ch {
+            '＊' => forms::codes::ELM_GLOBAL_NAMAE_GLOBAL,
+            '％' => forms::codes::ELM_GLOBAL_NAMAE_LOCAL,
+            _ => {
+                result.push(ch);
+                continue;
+            }
+        };
+        let Some(first) = chars.peek().copied().and_then(zenkaku_alpha_index) else {
+            result.push(ch);
+            continue;
+        };
+        chars.next();
+        let index = if let Some(second) = chars.peek().copied().and_then(zenkaku_alpha_index) {
+            chars.next();
+            26 + first * 26 + second
+        } else {
+            first
+        } as usize;
+        let name = ctx
+            .globals
+            .str_lists
+            .get(&(form as u32))
+            .and_then(|list| list.get(index))
+            .map(String::as_str)
+            .unwrap_or("");
+        let mut char_index = None;
+        while let Some(digit) = chars
+            .peek()
+            .copied()
+            .filter(|ch| ('０'..='９').contains(ch))
+        {
+            chars.next();
+            char_index = Some(
+                char_index
+                    .unwrap_or(0usize)
+                    .saturating_mul(10)
+                    .saturating_add((digit as u32 - '０' as u32) as usize),
+            );
+        }
+        if let Some(index) = char_index {
+            // The native TSTR suffix is a zero-based UTF-16 code-unit index.
+            if let Some(unit) = name.encode_utf16().nth(index) {
+                result.push_str(&String::from_utf16_lossy(&[unit]));
+            }
+        } else {
+            result.push_str(name);
+        }
+    }
+    result
+}
+
 fn dispatch_global_message_command(
     ctx: &mut CommandContext,
     form_id: u32,
@@ -2599,6 +2693,62 @@ mod koe_wait_return_tests {
 #[cfg(test)]
 mod namae_flag_tests {
     use super::{forms, namae_flag_target, zenkaku_alpha_index};
+
+    #[test]
+    fn name_flags_expand_before_message_history_and_save_summary() {
+        use super::{CommandContext, Value, expand_name_flags, stage};
+        use crate::native_vm::runtime::tables::NamaeEntry;
+        let mut ctx = CommandContext::new(std::path::PathBuf::from("."));
+        let local = forms::codes::ELM_GLOBAL_NAMAE_LOCAL as u32;
+        let global = forms::codes::ELM_GLOBAL_NAMAE_GLOBAL as u32;
+        ctx.globals
+            .str_lists
+            .insert(local, vec!["青木".into(), "春人".into()]);
+        let mut names = vec![String::new(); 27];
+        names[0] = "％Ｂ".into();
+        names[26] = "別名".into();
+        ctx.globals.str_lists.insert(global, names);
+        assert_eq!(
+            expand_name_flags(&ctx, "＊Ａ / ＊ＡＡ / ％Ｂ０ / ％Ｂ１ / ％Ｂ９"),
+            "％Ｂ / 別名 / 春 / 人 / "
+        );
+        assert_eq!(expand_name_flags(&ctx, "%A ％a ＊ ％１"), "%A ％a ＊ ％１");
+        let raw = "『％Ａ　％Ｂ』でよろしいですか？";
+        let expected = "『青木　春人』でよろしいですか？";
+        assert!(stage::cd_text_current_mwnd(&mut ctx, raw, 0));
+        assert_eq!(ctx.ui.message_text(), Some(expected));
+        assert_eq!(ctx.globals.syscom.current_save_message, expected);
+        assert!(ctx.globals.msgbk_forms.values().any(|history| {
+            history
+                .history
+                .iter()
+                .any(|entry| entry.msg_str == expected)
+        }));
+        ctx.tables.namae_entries.push(NamaeEntry {
+            source: "speaker".into(),
+            display: "％Ｂ".into(),
+            color_mod: 0,
+            moji_color_no: 0,
+            shadow_color_no: 0,
+            fuchi_color_no: 0,
+        });
+        assert!(stage::cd_name_current_mwnd(&mut ctx, "speaker"));
+        assert_eq!(ctx.ui.name_text(), Some("春人"));
+        ctx.globals.str_lists.get_mut(&local).unwrap()[1] = "夏樹".into();
+        // Stored strings and already-presented text do not change retroactively.
+        assert_eq!(ctx.ui.message_text(), Some(expected));
+        assert_eq!(
+            expand_name_flags(&ctx, raw),
+            "『青木　夏樹』でよろしいですか？"
+        );
+        assert_eq!(ctx.globals.str_lists[&global][0], "％Ｂ");
+        let op = crate::native_vm::runtime::constants::elm_value::GLOBAL_SELBTN_READY;
+        assert!(
+            super::dispatch_selbtn_command(&mut ctx, op as u32, &[Value::Str("％Ｂへ".into())])
+                .unwrap()
+        );
+        assert_eq!(ctx.globals.selbtn.choices[0].text, "夏樹へ");
+    }
 
     #[test]
     fn fullwidth_alpha_index_covers_a_to_z() {

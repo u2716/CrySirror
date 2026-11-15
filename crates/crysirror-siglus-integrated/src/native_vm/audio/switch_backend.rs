@@ -33,6 +33,21 @@ impl Backend for SwitchBackend {
     }
 }
 
+impl SwitchBackend {
+    /// Pull-mode PCM for a host that owns the audio device (the same
+    /// contract as the desktop host backend).
+    pub fn render(&mut self, frames: usize) -> anyhow::Result<Vec<[f32; 2]>> {
+        anyhow::ensure!(frames <= 96_000, "Siglus PCM frame budget");
+        let mut slot = renderer_slot().lock().map_err(|_| anyhow::anyhow!("audio renderer mutex poisoned"))?;
+        let renderer = slot.as_mut().ok_or_else(|| anyhow::anyhow!("Siglus PCM renderer is not ready"))?;
+        renderer.on_start_processing();
+        Ok((0..frames).map(|_| {
+            let f = renderer.process();
+            [f.left, f.right]
+        }).collect())
+    }
+}
+
 /// Fill interleaved signed 16-bit stereo samples for a native audio device.
 pub unsafe fn render_stereo_i16(dst: *mut i16, frames: usize) {
     if dst.is_null() || frames == 0 {

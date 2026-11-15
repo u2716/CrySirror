@@ -800,9 +800,9 @@ fn parse_target_color(argument: &str) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::{
-        normalize_message_text, parse_message_markup, parse_message_markup_styled,
-        parse_message_markup_with, RuntimeLinkSpan, RuntimeRubySpan, RuntimeTextStyle,
-        RuntimeTextStyleSpan, RuntimeTimelineMark, TextRuntime, MESSAGE_EVENT_CODE,
+        MESSAGE_EVENT_CODE, RuntimeLinkSpan, RuntimeRubySpan, RuntimeTextStyle,
+        RuntimeTextStyleSpan, RuntimeTimelineMark, TextRuntime, normalize_message_text,
+        parse_message_markup, parse_message_markup_styled, parse_message_markup_with,
     };
     use crate::message::ruby_registry::RubyRegistry;
 
@@ -945,12 +945,16 @@ mod tests {
             }]
         );
         // An empty reading or an empty base registers nothing.
-        assert!(parse_message_markup_styled("<r >神気</r>")
-            .ruby_spans
-            .is_empty());
-        assert!(parse_message_markup_styled("<r a><b>x")
-            .ruby_spans
-            .is_empty());
+        assert!(
+            parse_message_markup_styled("<r >神気</r>")
+                .ruby_spans
+                .is_empty()
+        );
+        assert!(
+            parse_message_markup_styled("<r a><b>x")
+                .ruby_spans
+                .is_empty()
+        );
     }
 
     #[test]
@@ -967,9 +971,11 @@ mod tests {
             }]
         );
         // Without a comma nothing is registered.
-        assert!(parse_message_markup_styled("<ruby 神>神")
-            .ruby_spans
-            .is_empty());
+        assert!(
+            parse_message_markup_styled("<ruby 神>神")
+                .ruby_spans
+                .is_empty()
+        );
     }
 
     #[test]

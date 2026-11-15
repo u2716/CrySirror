@@ -373,11 +373,16 @@ impl RuntimeTraceApi {
         kinsoku: bool,
         color: [f32; 4],
         shadow: Option<crate::native_app::snapshot::TextShadow>,
+        font: i32,
     ) -> Option<(i32, (i32, i32))> {
         let link_color = (self.system92_text_render_override != -1)
             .then(|| (self.system92_text_render_override as u32) & 0x00ff_ffff);
-        let parsed =
-            parse_message_markup_with(raw_text, &mut self.graph_defaults.ruby_registry, link_color);
+        let parsed = crate::native_app::text_anim::parse_message_markup_with_version(
+            raw_text,
+            &mut self.graph_defaults.ruby_registry,
+            link_color,
+            self.bp_profile == crate::native_vm::NativeAbiProfile::ModernFused,
+        );
         let mut image = self.graph_bitmap_image(bitmap)?;
         let params = crate::native_app::text_layout::LayoutParams {
             x: x as f32,
@@ -389,9 +394,39 @@ impl RuntimeTraceApi {
             kinsoku,
             indent_brackets: self.graph_defaults.text_layout.mode_flag != 0,
         };
-        let layout = crate::native_app::text_layout::layout_text(&parsed.text, &params, &|ch| {
-            crate::native_app::snapshot::glyph_advance(ch, size, horizontal_scale)
-        });
+        let transform = self.named_font_transform_for_id(font);
+        let advance = transform.map_or(0.0, |t| t.advance_adjustment(size));
+        let style_of = |index: usize| {
+            parsed
+                .style_spans
+                .iter()
+                .find(|span| span.start_char <= index && index < span.end_char)
+                .map(|span| span.style)
+                .unwrap_or_default()
+        };
+        let size_of = |index: usize| style_of(index).font_size.map_or(size, |n| n as f32);
+        let width_of =
+            |index: usize| horizontal_scale * (1u32 << style_of(index).width_power) as f32;
+        let capture = self
+            .graph_config
+            .text_global_properties
+            .get(&0x8000_0009)
+            .copied()
+            .unwrap_or(0)
+            != 0;
+        let (layout, line_heights) = crate::native_app::text_layout::layout_text_variable(
+            &parsed.text,
+            &params,
+            &|index, ch| {
+                let height = size_of(index);
+                let extra = transform.map_or(advance, |t| t.advance_adjustment(height));
+                (crate::native_app::snapshot::glyph_advance(ch, height, width_of(index)) + extra)
+                    .max(0.0)
+            },
+            &size_of,
+            &parsed.line_metrics,
+            capture,
+        );
         let spans = parsed.style_spans.clone();
         let color_of = move |index: usize| {
             spans
@@ -408,7 +443,7 @@ impl RuntimeTraceApi {
                 })
         };
         let format = self.bitmap_formats.get(&bitmap).copied().unwrap_or(2);
-        crate::native_app::snapshot::rasterize_placed_glyph_records(
+        crate::native_app::snapshot::rasterize_styled_glyph_records(
             &mut image,
             format,
             &layout.glyphs,
@@ -416,6 +451,16 @@ impl RuntimeTraceApi {
             color,
             &color_of,
             shadow,
+            transform,
+            &|index| {
+                let style = style_of(index);
+                (
+                    size_of(index),
+                    width_of(index) / 100.,
+                    style.bold,
+                    style.italic,
+                )
+            },
         );
         // `<l>` fragments feed Graph92:9E with the position the layout gave
         // the first glyph of each link.
@@ -435,8 +480,16 @@ impl RuntimeTraceApi {
             return None;
         }
         self.clear_bitmap_text(bitmap);
+        // 1.687 140074BC0 / 140077950: optional line-height capture
+        // returns a token instead of the line count. 92:94 can query its
+        // size without consuming it, then copy and remove the DWORDs.
+        let result = if capture {
+            self.store_line_height_record(line_heights)
+        } else {
+            layout.lines
+        };
         Some((
-            layout.lines,
+            result,
             (layout.end_x.round() as i32, layout.end_y.round() as i32),
         ))
     }
@@ -507,6 +560,7 @@ impl RuntimeTraceApi {
                     at(2) != 0,
                     color,
                     None,
+                    font,
                 )
                 .map_or(x, |(_, (end_x, _))| end_x),
             None => x,
@@ -1225,8 +1279,12 @@ impl RuntimeTraceApi {
         // `92:9F` stores dword_507650; -1 leaves link glyphs uncoloured.
         let link_color = (self.system92_text_render_override != -1)
             .then(|| (self.system92_text_render_override as u32) & 0x00ff_ffff);
-        let next =
-            parse_message_markup_with(text, &mut self.graph_defaults.ruby_registry, link_color);
+        let next = crate::native_app::text_anim::parse_message_markup_with_version(
+            text,
+            &mut self.graph_defaults.ruby_registry,
+            link_color,
+            self.bp_profile == crate::native_vm::NativeAbiProfile::ModernFused,
+        );
         let (page_chars, markup) = match self.message_pages.get(&window) {
             Some(page) => {
                 // window_text_state measured the room from the cursor; the
@@ -1249,6 +1307,9 @@ impl RuntimeTraceApi {
         let cursor = self.surface_text_states.entry(window).or_default();
         cursor.cursor_x = cursor_x;
         cursor.cursor_y = cursor_y;
+        if !parsed.text.is_empty() {
+            cursor.last_text_extent = cursor_x.wrapping_sub(state.x as i32);
+        }
         self.message_pages.insert(
             window,
             MessagePage {
@@ -2341,12 +2402,18 @@ fn wrap_parsed_message(
             },
         })
         .collect();
+    let line_metrics = parsed
+        .line_metrics
+        .into_iter()
+        .map(|(at, set, size)| (remap(at), set, size))
+        .collect();
     let wrapped = ParsedMessageMarkup {
         text: wrapped,
         ruby_spans,
         style_spans,
         link_spans,
         timeline,
+        line_metrics,
     };
     (wrapped, map)
 }
@@ -2363,6 +2430,11 @@ fn append_message_markup(
         ..page.clone()
     };
     out.text.push_str(&next.text);
+    out.line_metrics.extend(
+        next.line_metrics
+            .iter()
+            .map(|&(at, set, size)| (at + offset, set, size)),
+    );
     out.ruby_spans
         .extend(next.ruby_spans.into_iter().map(|span| RuntimeRubySpan {
             start_char: span.start_char + offset,

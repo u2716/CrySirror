@@ -135,6 +135,19 @@ impl Bridge {
             !self.dependency_pending(),
             "NNN effect save during native resource preparation"
         );
+        self.effect_metadata_records()
+    }
+    /// SetParam/ClearEffect overwrite only their explicit fields. Retain the
+    /// previous complete native parameter body before changing class owners;
+    /// this is bounded metadata, with no save admission, I/O or pixel work.
+    pub(super) fn freeze_effect_backing(&mut self)->Result<()> {
+        let records=self.effect_metadata_records()?;
+        for (slot,record) in records.into_iter().enumerate() {self.effect_backing.insert(slot as i32,record.words);}
+        Ok(())
+    }
+    /// A pure view of committed native metadata, without imposing the SAVE
+    /// admission boundary on setters that preserve untouched parameter words.
+    pub(crate) fn effect_metadata_records(&self)->Result<Vec<SavedEffect>> {
         let effects = self.frame_effects();
         let mut out = Vec::with_capacity(16);
         for slot in 0..16 {
@@ -175,7 +188,7 @@ impl Bridge {
                     continue;
                 }
             }
-            let mut words = [0; 256];
+            let mut words = self.effect_backing.get(&slot).copied().unwrap_or([0;256]);
             words[0] = i32::from(
                 self.active_effects.contains(&slot)
                     || effects.contains_key(&slot)
@@ -211,7 +224,7 @@ impl Bridge {
             words[254] = self.previous_effects.get(&slot).copied().unwrap_or(-1);
             let mut p = Vec::new();
             words[2] = match effects.get(&slot) {
-                Some(NativeFrameEffect::MessageBackground | NativeFrameEffect::Paint(_)) => {
+                Some(NativeFrameEffect::Slot(_)|NativeFrameEffect::Underlay{..}|NativeFrameEffect::MessageBackground | NativeFrameEffect::Paint(_)) => {
                     bail!("NNN save found a transient paint DTO")
                 }
                 Some(NativeFrameEffect::Move(frame)) => {
@@ -292,6 +305,7 @@ impl Bridge {
                 }
                 Some(NativeFrameEffect::Picture(frame)) => {
                     p.extend(frame.state.parameters());
+                    if frame.state.inactive(){words[0]=0;}
                     frame.state.command()
                 }
                 Some(NativeFrameEffect::Chara(frame)) => {
@@ -340,21 +354,21 @@ impl Bridge {
                 }
                 None => {
                     if let Some(color) = self.fill_effects.get(&slot) {
-                        p.extend([
-                            0,
-                            i32::from(color[0]),
-                            i32::from(color[1]),
-                            i32::from(color[2]),
-                        ]);
+                        // Fill only reads RGB bytes; preserve its reserved
+                        // para0 and signed high bits retained by native saves.
+                        let mut raw:[i32;4]=words[29..33].try_into().unwrap();
+                        for c in 0..3 {if raw[c+1] as u8!=color[c] {raw[c+1]=i32::from(color[c]);}}
+                        p.extend(raw);
                         54
                     } else {
                         0
                     }
                 }
             };
-            // Initialized canonical parameter storage replaces irrelevant native
-            // uninitialized padding; every known SetParam/InitLoad consumer's
-            // fields and live phase are produced explicitly above.
+            // Overlay only fields owned by this class. Original SetParam never
+            // clears the rest of EFFECT.para, and original saves preserve those
+            // words across class changes, NOP/FILL and explicit clear calls.
+            // Only a fresh, previously uninitialized backing starts as zero.
             words[29..29 + p.len()].copy_from_slice(&p);
             let filename = self
                 .images

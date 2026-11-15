@@ -11,7 +11,7 @@ use crysirror_core::{
     state::ClientId,
 };
 use crysirror_video::{
-    amv, asf, isobmff, theora,
+    amv, asf, imoavi, isobmff, theora,
     mpeg::{self, VideoFrame},
 };
 use serde::{Deserialize, Serialize};
@@ -379,6 +379,9 @@ impl Workers {
                                 break;
                             }
                         }
+                    } else if imoavi::is_input(&mut video_reader)? {
+                        imoavi::decode_video_with_metadata(video_reader,
+                            ||stop.load(Ordering::Acquire), publish_metadata, publish)?;
                     } else if asf::is_asf(&mut video_reader)? {
                         asf::decode_video_with_metadata(video_reader, || stop.load(Ordering::Acquire), publish_metadata, publish)?;
                     } else if theora::is_input(&mut video_reader)? {
@@ -434,6 +437,12 @@ impl Workers {
                             let decoder = isobmff::Mp4Stream::new(reader)?;
                             ensure!(!decoder.has_audio(),
                                 "MP4 audio tracks are not supported by Media yet; explicitly disable audio for video-only playback");
+                            let _ = tx.send(None);
+                            return Ok(());
+                        }
+                        if imoavi::is_input(&mut reader)? {
+                            ensure!(!imoavi::info(&mut reader)?.has_audio,
+                                "IMOAVI audio decoding is not implemented; explicitly disable audio for video-only playback");
                             let _ = tx.send(None);
                             return Ok(());
                         }

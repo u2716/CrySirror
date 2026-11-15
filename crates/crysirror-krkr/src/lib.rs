@@ -19,6 +19,9 @@
 #![forbid(unsafe_code)]
 // TjsError is the vendored VM's error type; its size is not ours to change.
 #![allow(clippy::result_large_err)]
+mod province;
+mod native_pad;
+mod fftgraph;
 pub mod adapter;
 mod constants;
 mod async_trigger;
@@ -61,9 +64,14 @@ mod audio_plugin;
 mod kaicho_plugin;
 mod psbfile_plugin;
 
-mod kirakira;
+mod plugin_ports;
 
 mod surfaces;
+mod system_plugins;
+mod offline_plugins;
+mod get_sample;
+mod http_plugin;
+mod wrapper_plugins;
 
 mod storage_plugins;
 

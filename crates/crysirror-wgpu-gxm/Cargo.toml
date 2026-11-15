@@ -1,0 +1,16 @@
+[package]
+name = "crysirror-wgpu-gxm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "GXM driver (PS Vita) under the shared wgpu custom backend; the shared CrySirror renderer runs unchanged on it"
+
+[dependencies]
+crysirror-wgpu-deko3d.workspace = true
+crysirror-shaders = { path = "../crysirror-shaders" }
+serde.workspace = true
+serde_json.workspace = true
+
+[target.'cfg(target_os = "vita")'.dependencies]
+vitasdk-sys = { version = "=0.3.3", default-features = false, features = ["SceGxm_stub", "SceSysmem_stub"] }

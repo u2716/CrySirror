@@ -420,6 +420,7 @@ pub trait ImageResource: Send + Sync + core::fmt::Debug {
     }
 }
 mod composition;
+pub use composition::{IMAGE_GRAPH_MAX_DEPTH, IMAGE_GRAPH_MAX_NODES};
 mod pyramid;
 pub use pyramid::{ImagePyramidLevel, ImagePyramidResource};
 
@@ -571,6 +572,44 @@ impl ImageInput {
         }
     }
 }
+/// Immutable row-major RGBA pixels shared with their producer. Publishing it
+/// (`HostServices::publish_image_resource`) moves no pixels and encodes
+/// nothing; the producer's `Arc` is the only copy.
+#[derive(Debug)]
+pub struct RgbaImage {
+    client: ClientId,
+    size: [u32; 2],
+    pixels: Arc<[u8]>,
+    opaque: bool,
+}
+impl RgbaImage {
+    pub fn new(client: ClientId, size: [u32; 2], pixels: Arc<[u8]>) -> Result<Self> {
+        let expected = u64::from(size[0]) * u64::from(size[1]) * 4;
+        if size[0] == 0 || size[1] == 0 || pixels.len() as u64 != expected {
+            return Err(crate::Error::Invalid("RGBA image layout"));
+        }
+        let opaque = pixels.chunks_exact(4).all(|p| p[3] == 255);
+        Ok(Self { client, size, pixels, opaque })
+    }
+}
+impl ImageResource for RgbaImage {
+    fn client(&self) -> ClientId {
+        self.client
+    }
+    fn size(&self) -> [u32; 2] {
+        self.size
+    }
+    fn rgba(&self) -> Arc<[u8]> {
+        self.pixels.clone()
+    }
+    fn opaque(&self) -> bool {
+        self.opaque
+    }
+    fn pixel_at(&self, point: [u32; 2]) -> Result<Option<[u8; 4]>> {
+        rgba_pixel_at(self.size, &self.pixels, point)
+    }
+}
+
 #[cfg(test)]
 mod resident_pixel_tests {
     use super::*;

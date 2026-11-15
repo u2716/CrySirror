@@ -44,7 +44,10 @@ Read STATUS.md, docs/ARCHITECTURE.md and docs/NATIVE_ADAPTERS.md before editing.
   Asset loading and pose workers in ADR 0049 are only stage one; every subsystem
   needs explicit task/dependency, completion and ownership boundaries.
 
-- Default host: wgpu + winit. Switch and PS Vita are deferred; no other console.
+- Default host: wgpu + winit. Switch and PS Vita are active targets (owner,
+  2026-11-13): one shared console code path (crysirror-console host contract
+  plus shared engine/render extraction), native graphics APIs only (Vita GXM,
+  Switch deko3d/NVN), never OpenGL/vitaGL. No other console.
 - RFVP and Siglus remain separate original VMs, never aliases for the data VM.
 - Preserve opcode, value, wait, resource and original-save semantics in adapters.
 - Inspect complete upstream source at pinned commits before implementing hooks.
@@ -69,3 +72,36 @@ Read STATUS.md, docs/ARCHITECTURE.md and docs/NATIVE_ADAPTERS.md before editing.
 Use `.agents/skills/crysirror-engine-onboarding/SKILL.md` for native engine
 adoption/reverse implementation or integrated-runtime host work. It supplies
 safe analysis boundaries and routes to the mode-specific contracts.
+
+For contributors who need tool installation or an initial native analysis
+workflow, use `.agents/skills/crysirror-reverse-engineering/SKILL.md` first.
+It covers local IDA/Ghidra setup and leads back to the onboarding skill.
+
+Use `.agents/skills/crysirror-engine-research/SKILL.md` to find and assess
+external engine/format references. Without matching official material, native
+behavior follows reverse evidence from the original program; unofficial
+implementations are not guaranteed equivalent.
+
+Use `.agents/skills/crysirror-archive-onboarding/SKILL.md` for shared archive,
+transform and mounted-resource integration through the existing Resources APIs.
+
+Use `.agents/skills/crysirror-engine-semantics/SKILL.md` for native ABI/profile,
+opcode and syscall work. Maintain and document these contracts before capability
+mapping, and assess breaking changes before modifying shared APIs.
+
+Use `.agents/skills/crysirror-memory-management/SKILL.md` for CPU/GPU budgets,
+resource lifetimes and allocation failures. Follow docs/MEMORY_MANAGEMENT.md
+and the affected PSV/Switch PLATFORM.md; platform constants and emulator results
+are not universal application budgets or hardware acceptance.
+
+Use `.agents/skills/crysirror-network-storage/SKILL.md` for NFS/SMB paths and
+remote resource I/O. Preserve provider scope through detection/runtime reads,
+bounded caches, credential-free diagnostics and separate local save authority.
+
+Use `.agents/skills/crysirror-native-save/SKILL.md` for original save versions,
+native import/export and complete resource-dependent restore. Protect original
+user data and preserve live state until a validated replacement can commit.
+
+Use `.agents/skills/crysirror-platform-host/SKILL.md` for platform lifecycle,
+bridges, packaging and signing. Keep CI compilation/package-only; distinguish
+build, signing, installation, emulator and physical-device behavior.

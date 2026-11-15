@@ -8,6 +8,14 @@ pub(super) fn alias(object: u16) -> u32 {
         })
 }
 impl Bridge<'_> {
+    ///CRXG canvas origin a DC3 slot image is drawn at inside its object.
+    pub(in crate::adapter) fn dc3_image_origin(&self, slot: u8) -> [i32; 2] {
+        if self.services.native_profile == Some(crate::Profile::Dc3WithYou) {
+            self.services.image_origins.get(&slot).copied().unwrap_or([0, 0])
+        } else {
+            [0, 0]
+        }
+    }
     pub(in crate::adapter) fn native_primary_visible(&self,object:u16,visible:bool)->bool {
         visible&&!self.services.effect_control.particle_wrapper(object)
     }
@@ -93,7 +101,12 @@ impl Bridge<'_> {
                 .get(&binding.object)
                 .cloned()
                 .unwrap_or_else(|| json!({"encoded_sampling":true}));
-            commands.push(json!({"op":"put","layer":{"id":alias(binding.object),"parent":root,"rect":[0,0,size[0],size[1]],"uv":uv,"visible":quad.is_some(),"sampling":{"address_u":"repeat","address_v":"repeat"},"filter":filter,"paint":{"kind":"image","asset":image.path.relative()}}}));
+            let order=self.dc3_leaf_order(binding.object)?;
+            //D.C.III/DC3WY CRM parts (BST portraits, FACE) carry their CRXG
+            //canvas origin; 401AA0 adds the record origin to the script
+            //position, so 0x6B/0x81 x = 0 centres a part stored at x 309.
+            let origin=self.dc3_image_origin(binding.slot);
+            commands.push(json!({"op":"put","layer":{"id":alias(binding.object),"parent":root,"rect":[origin[0],origin[1],size[0],size[1]],"uv":uv,"visible":quad.is_some(),"sampling":{"address_u":"repeat","address_v":"repeat"},"filter":filter,"paint":{"kind":"image","asset":image.path.relative()},"order":order}}));
             dimensions.insert(binding.object, Some((image.size, logical)));
             resources.insert(binding.object, (Some(binding.slot), crop));
         }

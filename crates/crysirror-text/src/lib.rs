@@ -33,6 +33,34 @@ mod glyph_quality;
 pub mod reveal;
 pub mod rich;
 pub mod sdf;
+pub mod decoration;
+
+/// One process-wide copy of each distinct font file (by content). Outline
+/// faces borrow it as `'static` data and shaping sources share the same
+/// `Arc`, so a file is resident once however many aliases, faces or text
+/// systems use it. `ab_glyph::FontVec` owned a private copy per face and
+/// callers kept their own bytes as well: a 7.8 MB Japanese TTC cost ~30 MB
+/// on PS Vita's 300 MiB heap, and a KiriKiri title's eight 3.8 MB fonts
+/// cost 61 MB. Font files are immutable; the number of entries is bounded
+/// by the distinct font files a process loads.
+fn intern(key: [u8; 32], make: impl FnOnce() -> Arc<[u8]>) -> &'static Arc<[u8]> {
+    use std::sync::{Mutex, OnceLock};
+    static FONTS: OnceLock<Mutex<std::collections::HashMap<[u8; 32], &'static Arc<[u8]>>>> = OnceLock::new();
+    let mut fonts = FONTS.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+    fonts.entry(key).or_insert_with(|| Box::leak(Box::new(make())))
+}
+/// The shared copy of `bytes`, copying them only when the file is new.
+pub(crate) fn intern_font(bytes: &[u8]) -> &'static Arc<[u8]> {
+    intern(*blake3::hash(bytes).as_bytes(), || Arc::from(bytes))
+}
+/// The shared copy of `bytes`, adopting the caller's buffer when new.
+pub(crate) fn intern_font_arc(bytes: Arc<[u8]>) -> &'static Arc<[u8]> {
+    let key = *blake3::hash(&bytes).as_bytes();
+    intern(key, || bytes)
+}
+pub(crate) fn font_arc(bytes: &'static [u8], face_index: u32) -> Result<FontArc, ab_glyph::InvalidFont> {
+    Ok(FontArc::new(ab_glyph::FontRef::try_from_slice_and_index(bytes, face_index)?))
+}
 
 #[derive(Clone, Default)]
 pub struct TextSystem {
@@ -174,11 +202,11 @@ impl TextSystem {
         let face=rustybuzz::Face::from_slice(&bytes, face_index).context("invalid shaping face/index")?;
         let families=dynamic::family_names(&face)?;
         let style=dynamic::face_style(&face);
-        let font: FontArc = ab_glyph::FontVec::try_from_vec_and_index(bytes.clone(), face_index)
-            .map_err(|e| anyhow::anyhow!("font {alias}: {e}"))?
-            .into();
+        let shared = intern_font(&bytes);
+        drop(bytes);
+        let font = font_arc(shared, face_index).map_err(|e| anyhow::anyhow!("font {alias}: {e}"))?;
         Arc::make_mut(&mut self.font_sources)
-            .insert(alias.into(), (Arc::from(bytes), face_index));
+            .insert(alias.into(), (shared.clone(), face_index));
         Arc::make_mut(&mut self.fonts).insert(alias.into(), (font, digest));
         Arc::make_mut(&mut self.font_families).insert(alias.into(),families);
         Arc::make_mut(&mut self.font_styles).insert(alias.into(),style);
@@ -428,6 +456,9 @@ impl TextSystem {
 
 }
 impl crysirror_core::service::TextMeasurement for TextSystem {
+    fn ink_bounds_simple(&self,font:&str,size:f32,text:&str,bold:bool,underline:bool,strikeout:bool)->crysirror_core::Result<[i32;4]>{
+        TextSystem::ink_bounds_simple(self,font,size,text,bold,underline,strikeout).map_err(|e|crysirror_core::Error::Io(e.to_string()))
+    }
     fn position_simple(
         &self,
         font: &str,

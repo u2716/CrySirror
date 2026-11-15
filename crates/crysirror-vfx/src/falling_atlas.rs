@@ -160,6 +160,7 @@ pub struct FallingAtlasSpec {
     /// Fixed ticks per second, defining published velocity/age units.
     pub tick_hz: u32,
     /// Chosen x-band offsets in multiples of canvas width, in sequence order.
+    /// Empty: no band draw is consumed and the offset is zero.
     pub x_bands: Vec<i32>,
     /// Inclusive integer speed numerator sampled once per birth/reset.
     pub fall_range: [u32; 2],
@@ -196,7 +197,8 @@ pub struct FallingAtlasSpec {
     pub alpha_base: f32,
     /// Discrete alpha step.
     pub alpha_step: f32,
-    /// Number of discrete alpha choices.
+    /// Number of discrete alpha choices. Zero consumes no draw: the alpha
+    /// is base + offset.
     pub alpha_count: u32,
     /// Final alpha offset, useful for authored depth attenuation.
     pub alpha_offset: f32,
@@ -214,7 +216,6 @@ impl FallingAtlasSpec {
         );
         ensure!(
             self.canvas.iter().all(|&n| (1..=16384).contains(&n))
-                && !self.x_bands.is_empty()
                 && self.x_bands.len() <= 32
                 && self.x_bands.iter().all(|n| n.unsigned_abs() <= 16),
             "VFX falling spawn domain"
@@ -284,13 +285,13 @@ impl FallingAtlasSpec {
             );
         }
         ensure!(
-            (1..=256).contains(&self.alpha_count)
+            self.alpha_count <= 256
                 && [self.alpha_base, self.alpha_step, self.alpha_offset]
                     .iter()
                     .all(|n| n.is_finite()),
             "VFX falling alpha domain"
         );
-        for choice in [0, self.alpha_count - 1] {
+        for choice in [0, self.alpha_count.saturating_sub(1)] {
             ensure!(
                 (0.0..=1.).contains(
                     &(self.alpha_base + self.alpha_step * choice as f32 + self.alpha_offset)
@@ -583,7 +584,11 @@ impl CompiledFallingAtlas {
     ) -> Result<FallingAtlasState> {
         let s = &self.spec;
         let x = rng.modulo(s.canvas[0])? as f32;
-        let band = s.x_bands[rng.modulo(s.x_bands.len() as u32)? as usize];
+        let band = if s.x_bands.is_empty() {
+            0
+        } else {
+            s.x_bands[rng.modulo(s.x_bands.len() as u32)? as usize]
+        };
         let mut x = x + band as f32 * s.canvas[0] as f32;
         let y = -(rng.modulo(s.canvas[1])? as f32);
         if let Some(window) = &s.spawn_window {
@@ -604,8 +609,8 @@ impl CompiledFallingAtlas {
         let row = s.rows[rng.modulo(s.rows.len() as u32)? as usize];
         let phase = rng.modulo(s.phase_modulus)? as f32;
         let frame = rng.modulo(s.row_frames[row as usize])?;
-        let alpha = ((f64::from(s.alpha_base)
-            + f64::from(s.alpha_step) * f64::from(rng.modulo(s.alpha_count)?))
+        let choice = if s.alpha_count == 0 { 0 } else { rng.modulo(s.alpha_count)? };
+        let alpha = ((f64::from(s.alpha_base) + f64::from(s.alpha_step) * f64::from(choice))
             as f32)
             + s.alpha_offset;
         particle.position = [x, y, 0.];

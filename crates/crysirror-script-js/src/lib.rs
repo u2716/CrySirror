@@ -52,14 +52,19 @@ fn with_engine<T>(
             async_jobs::CALLS.with(|slot| std::mem::swap(self.1, &mut slot.borrow_mut()));
         }
     }
+    log::debug!("js: with_engine state");
     let previous = cx.state_ref().ok().map(|state| state.client);
+    log::debug!("js: with_engine tls");
     ENGINE.with(|slot| {
+        log::debug!("js: with_engine swap");
         std::mem::swap(cx, &mut slot.borrow_mut());
         if let Ok(state) = slot.borrow_mut().state() {
             state.client = owner;
         }
     });
+    log::debug!("js: with_engine calls");
     async_jobs::CALLS.with(|slot| std::mem::swap(calls, &mut slot.borrow_mut()));
+    log::debug!("js: with_engine ready");
     let guard = Guard(cx, calls, previous);
     let out = f();
     drop(guard);
@@ -273,6 +278,7 @@ impl JsHost {
         let pending = std::mem::take(&mut self.pending);
         with_engine(cx, &mut self.calls, self.owner.unwrap(), || {
             for (unit, js) in pending {
+                log::debug!("js: eval {unit} ({} bytes)", js.len());
                 ctx.eval(Source::from_bytes(js.as_bytes()))
                     .map_err(|e| Self::report(e, ctx))
                     .with_context(|| format!("script '{unit}'"))?;
@@ -379,13 +385,18 @@ impl Lifecycle for JsHost {
     }
     fn on_init(&mut self, cx: &mut EngineContext) -> Result<()> {
         self.owner = Some(cx.state_ref()?.client);
-        let mut ctx = Context::builder()
+        log::debug!("js: context build");
+        let builder = Context::builder();
+        log::debug!("js: builder created");
+        let mut ctx = builder
             .job_queue(self.jobs.clone())
             .build()
             .map_err(|e| anyhow!("{e}"))?;
+        log::debug!("js: context built");
         ctx.runtime_limits_mut()
             .set_loop_iteration_limit(self.loop_limit);
         ctx.runtime_limits_mut().set_recursion_limit(512);
+        log::debug!("js: limits set");
         for (name, len, f) in [
             (
                 "__cs_call",
@@ -398,14 +409,18 @@ impl Lifecycle for JsHost {
             ("__cs_async_poll", 1, async_jobs::poll),
             ("__cs_async_cancel", 1, async_jobs::cancel),
         ] {
+            log::debug!("js: register {name}");
             ctx.register_global_callable(js_string!(name), len, NativeFunction::from_fn_ptr(f))
                 .map_err(|e| anyhow!("{e}"))?;
         }
+        log::debug!("js: bindings");
         let prelude = bindings(cx)?;
+        log::debug!("js: evaluate {} units", self.pending.len() + 1);
         self.pending
             .insert(0, ("<crysirror bindings>".into(), prelude));
         self.context = Some(ctx);
         self.run_pending(cx)?;
+        log::debug!("js: onInit");
         self.hook(cx, "onInit", None)
     }
     fn on_start(&mut self, cx: &mut EngineContext) -> Result<()> {

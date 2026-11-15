@@ -101,7 +101,7 @@ impl NativeDraw {
         ensure!(
             effects.values().all(|effect| !matches!(
                 effect,
-                NativeFrameEffect::Paint(_) | NativeFrameEffect::MessageBackground
+                NativeFrameEffect::Slot(_)|NativeFrameEffect::Underlay{..}|NativeFrameEffect::Paint(_) | NativeFrameEffect::MessageBackground
             )),
             "NNN native state map cannot contain paint DTOs"
         );
@@ -198,8 +198,15 @@ impl NativeDraw {
     ) -> Option<std::sync::Arc<dyn crysirror_core::image_processing::ImageResource>> {
         self.last.as_ref().map(|frame| frame.target.clone())
     }
+    pub(crate) fn stage(&self)->&'static str {self.work.as_ref().map(|w|w.stage()).unwrap_or("idle")}
     pub fn dependency_pending(&self) -> bool {
         self.work.is_some()
+    }
+    pub(crate) fn presentation_pending(&self) -> bool {
+        // DRAW publishes each completed image before starting its next worker.
+        // That next immutable candidate must not hide the already published
+        // image for the rest of a multi-frame DRAW countdown.
+        self.work.is_some() && self.last.is_none()
     }
     pub(crate) fn owned_path(&self) -> Option<&str> {
         self.display_path.as_deref()

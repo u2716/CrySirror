@@ -436,6 +436,15 @@ pub fn normalize_psb_input(
     data: &[u8],
     options: &PsbNormalizeOptions,
 ) -> Result<Vec<u8>, PsbError> {
+    normalize_psb_owned(data.to_vec(), options)
+}
+
+/// [`normalize_psb_input`] taking ownership: a plain PSB is returned in its
+/// own buffer instead of a copy (motion files reach tens of MiB).
+pub fn normalize_psb_owned(
+    data: Vec<u8>,
+    options: &PsbNormalizeOptions,
+) -> Result<Vec<u8>, PsbError> {
     let mut plain = decode_wrappers(data, options)?;
     apply_psb_decryption(&mut plain, options.decrypt_key)?;
     Ok(plain)
@@ -481,7 +490,7 @@ pub fn bruteforce_emote_key(
         decode_mdf: options.decode_mdf,
         decode_lz4: options.decode_lz4,
     };
-    let encrypted = Arc::new(decode_wrappers(data, &normalize)?);
+    let encrypted = Arc::new(decode_wrappers(data.to_vec(), &normalize)?);
     let initial_header = PsbHeader::read(&encrypted)?;
 
     if !initial_header.has_encryption_flag()
@@ -599,7 +608,15 @@ impl PsbFile {
         data: &[u8],
         options: &PsbNormalizeOptions,
     ) -> Result<(Vec<u8>, Self), PsbError> {
-        let plain = normalize_psb_input(data, options)?;
+        Self::parse_normalized_owned(data.to_vec(), options)
+    }
+
+    /// [`Self::parse_normalized`] taking ownership of the input bytes.
+    pub fn parse_normalized_owned(
+        data: Vec<u8>,
+        options: &PsbNormalizeOptions,
+    ) -> Result<(Vec<u8>, Self), PsbError> {
+        let plain = normalize_psb_owned(data, options)?;
         let psb = Self::parse(&plain)?;
         Ok((plain, psb))
     }
@@ -615,8 +632,8 @@ impl PsbFile {
     }
 }
 
-fn decode_wrappers(data: &[u8], options: &PsbNormalizeOptions) -> Result<Vec<u8>, PsbError> {
-    let mut current = data.to_vec();
+fn decode_wrappers(data: Vec<u8>, options: &PsbNormalizeOptions) -> Result<Vec<u8>, PsbError> {
+    let mut current = data;
 
     for _ in 0..MAX_WRAPPER_DEPTH {
         if starts_with_psb(&current) {

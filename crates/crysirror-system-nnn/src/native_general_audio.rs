@@ -13,7 +13,7 @@ pub(crate) enum GeneralAudioEvent {
     /// system-sound channels, but VOICESWITCH/VOICEVOLUME and voice-name gates.
     Voice(Vec<u8>),
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct GeneralAudioPolicy {
     enter_sound: i32,
     exit_sound: i32,
@@ -24,6 +24,25 @@ pub(crate) struct GeneralAudioPolicy {
     exit_wait: i32,
 }
 impl GeneralAudioPolicy {
+    /// Only these constructors call GetEnterExitVoiceFileName. In particular
+    /// PrintMessage, SelectMessage and SystemMenu keep the base defaults even
+    /// if their setup happens to contain similarly named keys.
+    pub(crate) fn for_mode(mode: i32, table: &Names) -> Result<Self> {
+        match mode {
+            4 | 5 | 6 | 8 | 12 | 15 | 16 | 17 | 18 | 20 | 22 | 26 | 29 | 31 | 32 | 35 | 36 | 38
+            | 39 | 41 | 42 | 43 | 44 | 46 | 47 | 48 | 49 => Self::read(table),
+            1 | 2 | 3 | 7 | 9 | 10 | 13 | 23 | 24 | 25 | 27 | 33 | 34 | 40 | 45 => Ok(Self {
+                enter_sound: -1,
+                exit_sound: -1,
+                voices: false,
+                enter_voice: None,
+                exit_voice: None,
+                enter_wait: 20,
+                exit_wait: 20,
+            }),
+            _ => anyhow::bail!("NNN General audio constructor profile {mode} is not mapped"),
+        }
+    }
     pub(crate) fn read(table: &Names) -> Result<Self> {
         let voices = table.integer(b"enterExitVoiceFlag")?.unwrap_or(0) != 0;
         let name = |key: &[u8]| -> Result<Option<Vec<u8>>> {
@@ -206,8 +225,14 @@ pub(crate) struct GeneralAudioOwner {
     queue: std::collections::VecDeque<GeneralAudioEvent>,
     global_update: Option<u64>,
     mode_update: Option<(u64, i32)>,
+    primary: Option<i32>,
+    primary_ticket: Option<u64>,
+    serial: u64,
 }
 impl GeneralAudioOwner {
+    pub(crate) fn primary_mode(&self) -> Option<i32> {
+        self.primary
+    }
     pub(crate) fn read(setup: &Names) -> Result<Self> {
         Ok(Self {
             delays: GeneralAudioDelays::read(setup)?,
@@ -215,7 +240,74 @@ impl GeneralAudioOwner {
             queue: Default::default(),
             global_update: None,
             mode_update: None,
+            primary: None,
+            primary_ticket: None,
+            serial: 0,
         })
+    }
+    /// ChangeMode calls the old object's GeneralEndMode before the new
+    /// GeneralInit. Mode objects and global delayed slots survive that change.
+    pub(crate) fn begin_primary(&mut self, mode: i32, policy: GeneralAudioPolicy) -> Result<()> {
+        ensure!(
+            self.queue.is_empty(),
+            "NNN General change during an audio dependency"
+        );
+        if let Some(existing) = self.modes.get(&mode) {
+            ensure!(
+                existing.policy == policy,
+                "NNN General constructor audio policy changed"
+            );
+        } else {
+            self.install(mode, policy)?;
+        }
+        if let Some(old) = self.primary {
+            self.end(old, false)?;
+        }
+        self.begin(mode, false)?;
+        self.primary = Some(mode);
+        self.primary_ticket = None;
+        Ok(())
+    }
+    pub(crate) fn end_primary(&mut self, mode: i32) -> Result<()> {
+        if self.primary.is_none() {
+            return Ok(());
+        }
+        ensure!(
+            self.primary == Some(mode) && self.queue.is_empty(),
+            "NNN General end mode identity/dependency"
+        );
+        self.end(mode, false)?;
+        self.primary = None;
+        self.primary_ticket = None;
+        Ok(())
+    }
+    pub(crate) fn end_current_primary(&mut self) -> Result<()> {
+        if let Some(mode) = self.primary {
+            self.end_primary(mode)?;
+        }
+        Ok(())
+    }
+    pub(crate) fn admit_primary(&mut self, mode: i32, ticket: u64) -> Result<bool> {
+        ensure!(
+            self.primary == Some(mode),
+            "NNN General Calcu before matching Init"
+        );
+        if self.primary_ticket == Some(ticket) {
+            return Ok(false);
+        }
+        ensure!(
+            self.queue.is_empty(),
+            "NNN General Calcu before audio completion"
+        );
+        let serial = self
+            .serial
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("NNN General update identity exhausted"))?;
+        self.admit_global(serial)?;
+        self.admit_mode(serial, mode, false)?;
+        self.serial = serial;
+        self.primary_ticket = Some(ticket);
+        Ok(true)
     }
     pub(crate) fn install(&mut self, mode: i32, policy: GeneralAudioPolicy) -> Result<()> {
         ensure!((0..=256).contains(&mode), "NNN General mode audio identity");

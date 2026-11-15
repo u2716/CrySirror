@@ -256,6 +256,9 @@ pub fn install(rt: &mut Rt) {
         )?;
         Ok(Variant::Void)
     });
+    rt.register_object_native_property(c,"useVisBuffer",
+        |rt,t|{let h=this_of(rt,t,"WaveSoundBuffer.useVisBuffer")?;Ok(Variant::Integer(i64::from(rt.object_member(h,"__wave_vis_buffer").is_truthy())))},
+        |rt,t,v|{let h=this_of(rt,t,"WaveSoundBuffer.useVisBuffer")?;rt.set_object_member(h,"__wave_vis_buffer",Variant::Integer(i64::from(v.is_truthy())));Ok(())});
     install_phase_vocoder(rt, c);
     methods(
         rt,
@@ -377,6 +380,7 @@ pub fn install(rt: &mut Rt) {
             ("finalize", |rt, t, _| {
                 let (h, _) = buffer(rt, t)?;
                 rt.host_mut().sounds.invalidate(h.0);
+                rt.host_mut().get_sample.invalidate(h.0);
                 Ok(Variant::Void)
             }),
             ("onStatusChanged", |_, _, _| Ok(Variant::Void)),
@@ -810,4 +814,14 @@ impl Sounds {
             out.push(ObjectHandle(*object));
         }
     }
+}
+
+/// Playing source and cursor frame of a WaveSoundBuffer, `None` when stopped.
+pub(crate) fn sample_source(rt:&Rt,object:ObjectHandle)->crysirror_tjs2::Result<Option<(AudioResourceHandle,u64)>>{
+    let buffer=rt.host().sounds.buffers.get(&object.0).ok_or_else(||TjsError::runtime("getSample source is not a WaveSoundBuffer"))?;
+    Ok(if buffer.status=="play" {buffer.resource.map(|r|(r,buffer.start))}else{None})
+}
+pub(crate) fn visualization_source(rt:&Rt,object:ObjectHandle)->crysirror_tjs2::Result<(Option<AudioResourceHandle>,u64)>{
+    let buffer=rt.host().sounds.buffers.get(&object.0).ok_or_else(||TjsError::runtime("spectrum source is not a WaveSoundBuffer"))?;
+    Ok((if buffer.status=="play" && rt.object_member(object,"__wave_vis_buffer").is_truthy() {buffer.resource}else{None},buffer.start))
 }

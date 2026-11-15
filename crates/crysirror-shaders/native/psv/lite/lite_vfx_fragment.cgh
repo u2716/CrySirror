@@ -1,0 +1,47 @@
+// SPDX-License-Identifier: MPL-2.0
+// vfx_render.wgsl rgba(). Reduction: soft-particle depth fade is not
+// evaluated (the PSV tier has no opaque depth texture); everything else,
+// including flipbook cell clamping, radial coverage and fog, is unchanged.
+uniform float4 lite_mode;        // renderer (0 sprite), facing, columns, rows
+uniform float4 lite_animation;   // frames, fps, soft distance (ignored), radial
+uniform float4 lite_camera;      // eye xyz
+uniform float4 lite_image;       // texture width, height
+uniform float4 lite_fog_color;
+uniform float4 lite_fog_params;  // density, height falloff, base height, start distance
+
+float4 lite_vfx_rgba(sampler2D image, float2 uv_in, float4 color_in, float3 world, float4 tile)
+{
+    float2 uv = uv_in;
+    if (lite_mode.x < 0.5 && lite_animation.w < 0.5) {
+        float2 half_texel = 0.5 / lite_image.xy;
+        uv = clamp(uv, tile.xy + half_texel, tile.zw - half_texel);
+    }
+    float4 color = tex2D(image, uv) * color_in;
+    if (lite_animation.w > 0.5) {
+        float2 xy = uv_in * 2.0 - 1.0;
+        float r2 = dot(xy, xy);
+        color.a *= r2 < 1.0 ? (1.0 - r2) * (1.0 - r2) : 0.0;
+    }
+    if (lite_fog_params.x > 0.0) {
+        float distance = max(length(world - lite_camera.xyz) - lite_fog_params.w, 0.0);
+        float density = lite_fog_params.x * exp(clamp(-lite_fog_params.y * (world.y - lite_fog_params.z), -40.0, 40.0));
+        float amount = 1.0 - exp(-density * distance);
+        color = float4(lerp(color.rgb, lite_fog_color.rgb, amount), color.a);
+    }
+    return color;
+}
+
+float4 main(float2 uv : TEXCOORD0, float4 color : TEXCOORD1, float3 world : TEXCOORD2, float4 tile : TEXCOORD3,
+            uniform sampler2D image : TEXUNIT0) : COLOR
+{
+    float4 c = lite_vfx_rgba(image, uv, color, world, tile);
+#if defined(LITE_VFX_PREMULTIPLIED)
+    return float4(c.rgb * c.a, c.a);
+#elif defined(LITE_VFX_ADDITIVE)
+    return float4(c.rgb * c.a, 0.0);
+#elif defined(LITE_VFX_MULTIPLY)
+    return float4(lerp(float3(1.0, 1.0, 1.0), c.rgb, c.a), 0.0);
+#else
+    return c;
+#endif
+}

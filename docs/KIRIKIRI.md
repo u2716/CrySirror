@@ -1,5 +1,7 @@
 # KiriKiri 2 / KiriKiri Z / KAG3
 
+[TJS2 opcodes, native APIs and KAG control tags](native-api/krkr.md).
+
 ```sh
 ./target/release/crysirror play "/path/to/game"
 ```
@@ -20,7 +22,10 @@ filters; additional game-specific filters may require their accompanying files.
 - Crossfade, rule-image transitions, and Kaicho blur/dim transitions.
 
 Plug-in names below describe the interfaces built into CrySirror. They do not
-imply every export of a similarly named DLL is available.
+imply every export of a similarly named DLL is available. The corresponding
+`.tpm` names use the same built-in interfaces. TPM modules in the game,
+`system` and native-bitness `plugin`/`plugin64` directories register automatically
+before startup scripts, in filename order.
 
 ## Plug-in compatibility
 
@@ -57,11 +62,13 @@ imply every export of a similarly named DLL is available.
 
 | Plug-in | Available features | Restrictions |
 | --- | --- | --- |
+| `fftgraph.dll` | Fire and LCD spectrum graphs from playing audio, with peak hold and decay. | Source decoding and rasterization run on shared workers. |
 | `krmovie.dll` | VideoOverlay movie playback. | Playback depends on the movie's supported container and codecs. |
 | `AlphaMovie.dll` | AJPM alpha-video playback. | Other alpha-video layouts are not implied. |
 | `layerExMovie.dll` | RGB movies rendered into layers, looping and playback status. | Side-by-side alpha and resized-image modes are unavailable. |
 | `motionplayer.dll`, `motionplayer_nod3d.dll` | M2 motion resources, timeline playback and layer attachment. | Single-timeline playback; advanced masks, actions and physics are unavailable. |
 | `wuvorbis.dll` | Vorbis playback and seeking. | Native gain, ReplayGain and PCM-format command-line overrides are unavailable. |
+| `wumsadp.dll` | Microsoft ADPCM WAVE playback through the shared decoder. | Other ADPCM formats are not implied. |
 | `kropus.dll` | Opus playback and seeking. | Native gain and PCM-format command-line overrides are unavailable. |
 
 ### Transitions and windows
@@ -97,6 +104,11 @@ A DLL being present in the game folder does not add that functionality.
 The player uses the game's normal startup scripts and disables the optional
 Windows developer console by default. You do not need to extract XP3 archives
 or write a bootstrap project.
+
+For installed-game launches, the selected game directory is published as virtual
+media labelled with the executable's stem. `Storages.searchCD` can find this
+label; its returned drive routes back into that scoped game directory. This
+mapping does not require an optical drive. Unregistered labels remain absent.
 
 Fonts, save locations, window behaviour and SMB/NFS game paths are described in
 the [desktop guide](DESKTOP_API.md). See [all supported engines](NATIVE_ADAPTERS.md)

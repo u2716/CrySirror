@@ -1,0 +1,19 @@
+// SPDX-License-Identifier: MPL-2.0
+// bloom.wgsl fs_bloom_up: 9-tap tent upsample, additively blended by the host.
+uniform float4 lite_bloom;   // xy source texel size
+
+float3 lite_tap(sampler2D src, float2 uv)
+{
+    return tex2Dlod(src, float4(uv, 0.0, 0.0)).rgb;
+}
+
+float4 main(float2 uv : TEXCOORD0, uniform sampler2D src : TEXUNIT0) : COLOR
+{
+    float2 t = lite_bloom.xy;
+    float3 c = lite_tap(src, uv) * 4.0;
+    c += (lite_tap(src, uv + t * float2(-1.0, 0.0)) + lite_tap(src, uv + t * float2(1.0, 0.0))
+        + lite_tap(src, uv + t * float2(0.0, -1.0)) + lite_tap(src, uv + t * float2(0.0, 1.0))) * 2.0;
+    c += lite_tap(src, uv + t * float2(-1.0, -1.0)) + lite_tap(src, uv + t * float2(1.0, -1.0))
+        + lite_tap(src, uv + t * float2(-1.0, 1.0)) + lite_tap(src, uv + t * float2(1.0, 1.0));
+    return float4(c / 16.0, 1.0);
+}

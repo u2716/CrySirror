@@ -1,0 +1,271 @@
+// SPDX-License-Identifier: MPL-2.0
+// pbr.wgsl fs_main for the PSV tier (crysirror-render-tier Tier::Vita).
+// Kept terms: glTF metallic-roughness with the shared GGX/Smith/Schlick BRDF,
+// sun with cascaded shadows, four shared-format local lights (point, spot,
+// rect closest-point, directional and ambient volumes), split-sum IBL, SH9
+// diffuse, box-projected reflection probes, irradiance volume and height fog.
+// Reductions (each reported by the tier policy): two cascades with a 4-tap
+// bilinear compare instead of 3x3 hardware PCF and no seam blend; lights and
+// the irradiance volume are selected/sampled per draw on the CPU; two probes;
+// no SSAO/SSR/RT/VSM inputs; no depth-faded blending; no per-material
+// effect hooks (surface presets resolve to their glTF factors).
+#include "lite_common.cgh"
+
+uniform float4 lite_camera;        // eye xyz, w 1/shadow atlas height
+uniform float4 lite_sun_dir;       // travel direction xyz, w illuminance
+uniform float4 lite_sun_color;     // linear rgb, w 1 when shadows are enabled
+uniform float4 lite_env;           // x IBL intensity, y rotation rad, z prefiltered max mip
+uniform float4 lite_splits;        // x cascade 0 far, y cascade 1 far (view depth)
+uniform float4 lite_sh[9];         // pbr_common.wgsl Frame.sh, pre-convolved
+uniform float4 lite_gi;            // x volume weight (0 none, fade), y volume intensity
+uniform float4 lite_gi_sh[3];      // volume L1 irradiance r, g, b: dot(row, (1, n))
+uniform float4 lite_fog_color;
+uniform float4 lite_fog_params;
+uniform float4 lite_fog_sun;
+uniform float4 lite_probes[6];     // Frame.probes packing, two slots
+uniform float4 lite_lights[24];    // four lights::GpuLight records (6 x float4)
+uniform float4 lite_light_count;   // x active lights 0..4
+uniform float4 lite_material[6];   // material.wgsl Material fields 0..5
+
+float lite_shadow_tap(sampler2D shadow, float2 texel, float c, float depth)
+{
+    // Cascade c occupies [c/2, (c+1)/2) horizontally in the F32_R atlas.
+    float2 uv = float2((c + texel.x) * 0.5, texel.y);
+    return tex2Dlod(shadow, float4(uv, 0.0, 0.0)).r >= depth ? 1.0 : 0.0;
+}
+float lite_cascade(sampler2D shadow, float4 p, float c, float nl)
+{
+    float3 ndc = p.xyz / p.w;
+    float2 uv = ndc.xy * float2(0.5, -0.5) + float2(0.5, 0.5);
+    if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0 || ndc.z > 1.0) {
+        return 1.0;
+    }
+    float size = 1.0 / lite_camera.w;
+    float bias = max(0.0015 * (1.0 - nl), 0.0002) * (c + 1.0);
+    float depth = ndc.z - bias;
+    float2 st = uv * size - 0.5;
+    float2 f = frac(st);
+    float2 b = (floor(st) + 0.5) / size;
+    float d = 1.0 / size;
+    float s00 = lite_shadow_tap(shadow, b, c, depth);
+    float s10 = lite_shadow_tap(shadow, b + float2(d, 0.0), c, depth);
+    float s01 = lite_shadow_tap(shadow, b + float2(0.0, d), c, depth);
+    float s11 = lite_shadow_tap(shadow, b + float2(d, d), c, depth);
+    return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+}
+
+float3 lite_sh9(float3 n)
+{
+    float3 r = lite_rotate_y(normalize(n), -lite_env.y);
+    float x = r.x;
+    float y = r.y;
+    float z = r.z;
+    float3 e = lite_sh[0].xyz
+        + lite_sh[1].xyz * y + lite_sh[2].xyz * z + lite_sh[3].xyz * x
+        + lite_sh[4].xyz * (x * y) + lite_sh[5].xyz * (y * z)
+        + lite_sh[6].xyz * (3.0 * z * z - 1.0)
+        + lite_sh[7].xyz * (x * z) + lite_sh[8].xyz * (x * x - y * y);
+    return max(e, float3(0.0, 0.0, 0.0));
+}
+
+float3 lite_probe(sampler2D map, int k, float3 p, float3 r, float roughness, inout float wsum)
+{
+    float4 a = lite_probes[3 * k];
+    float4 b = lite_probes[3 * k + 1];
+    float3 rel = p - a.xyz;
+    float3 inside = b.xyz - abs(rel);
+    if (inside.x <= 0.0 || inside.y <= 0.0 || inside.z <= 0.0) {
+        return float3(0.0, 0.0, 0.0);
+    }
+    float w = clamp(min(inside.x, min(inside.y, inside.z)) / max(b.w, 1e-4), 0.0, 1.0);
+    float3 dir = r;
+    if (lite_probes[3 * k + 2].x > 0.5) {
+        float3 rr = float3(abs(r.x) < 1e-6 ? 1e-6 : r.x, abs(r.y) < 1e-6 ? 1e-6 : r.y, abs(r.z) < 1e-6 ? 1e-6 : r.z);
+        float3 far = max((b.xyz - rel) / rr, (-b.xyz - rel) / rr);
+        dir = normalize(rel + r * min(far.x, min(far.y, far.z)));
+    }
+    wsum += w;
+    return tex2Dlod(map, float4(lite_dir_uv(dir), 0.0, roughness * lite_env.z)).rgb * a.w * w;
+}
+
+float3 lite_brdf(float3 n, float3 v, float3 l, float3 base, float metallic, float3 f0, float a, float nv, float spec_weight)
+{
+    float nl = max(dot(n, l), 0.0);
+    if (nl <= 0.0) {
+        return float3(0.0, 0.0, 0.0);
+    }
+    float3 h = normalize(v + l);
+    float3 f = lite_f_schlick(max(dot(v, h), 0.0), f0) * spec_weight;
+    float3 spec = lite_d_ggx(max(dot(n, h), 0.0), a) * lite_v_smith(nv, nl, a) * f;
+    float3 kd = (float3(1.0, 1.0, 1.0) - f) * (1.0 - metallic);
+    return (kd * base / LITE_PI + spec) * nl;
+}
+
+// pbr.wgsl local_lights loop body over the CPU-selected records.
+float3 lite_local(int k, float3 world, float3 n, float3 v, float3 base, float metallic, float3 f0, float a, float nv, float spec_weight)
+{
+    float4 pr = lite_lights[6 * k];
+    float4 dk = lite_lights[6 * k + 1];
+    float4 inten = lite_lights[6 * k + 2];
+    float4 cone = lite_lights[6 * k + 3];
+    float4 right = lite_lights[6 * k + 4];
+    float4 up = lite_lights[6 * k + 5];
+    float kind = dk.w;
+    float r = pr.w;
+    float3 p = pr.xyz;
+    float3 center = world - p;
+    float dc2 = dot(center, center);
+    if (dc2 >= r * r) {
+        return float3(0.0, 0.0, 0.0);
+    }
+    float exponent = cone.z;
+    if (kind > 2.5) {
+        float shape = lite_range_window(dc2, r);
+        if (exponent > 0.0) {
+            shape = pow(clamp(1.0 - dc2 / (r * r), 0.0, 1.0), exponent);
+        }
+        float3 e = inten.rgb * shape;
+        if (kind > 3.5) {
+            return base * (1.0 - metallic) * e / LITE_PI;
+        }
+        return lite_brdf(n, v, -dk.xyz, base, metallic, f0, a, nv, spec_weight) * e;
+    }
+    if (kind > 1.5) {
+        float hx = max(length(right.xyz), 1e-5);
+        float hy = max(length(up.xyz), 1e-5);
+        float3 ax = right.xyz / hx;
+        float3 ay = up.xyz / hy;
+        p = p + ax * clamp(dot(center, ax), -hx, hx) + ay * clamp(dot(center, ay), -hy, hy);
+    }
+    float3 to = p - world;
+    float d2 = max(dot(to, to), 1e-4);
+    float3 l = to * rsqrt(d2);
+    float emission = 1.0;
+    if (kind > 1.5) {
+        emission = max(dot(dk.xyz, -l), 0.0);
+    } else if (kind > 0.5) {
+        float t = clamp((dot(dk.xyz, -l) - cone.x) * cone.y, 0.0, 1.0);
+        emission = t * t;
+    }
+    if (emission <= 0.0) {
+        return float3(0.0, 0.0, 0.0);
+    }
+    float atten = lite_range_window(d2, r) / d2;
+    if (exponent > 0.0) {
+        atten = pow(clamp(1.0 - d2 / (r * r), 0.0, 1.0), exponent);
+    }
+    return lite_brdf(n, v, l, base, metallic, f0, a, nv, spec_weight) * inten.rgb * (emission * atten);
+}
+
+float4 main(float4 world_depth : TEXCOORD0,
+            float3 normal : TEXCOORD1,
+            float2 uv_in : TEXCOORD2,
+            float4 tangent : TEXCOORD3,
+            float4 shadow0 : TEXCOORD4,
+            float4 shadow1 : TEXCOORD5,
+            uniform sampler2D t_base : TEXUNIT0,
+            uniform sampler2D t_mr : TEXUNIT1,
+            uniform sampler2D t_normal : TEXUNIT2,
+            uniform sampler2D t_occlusion : TEXUNIT3,
+            uniform sampler2D t_emissive : TEXUNIT4,
+            uniform sampler2D env_prefiltered : TEXUNIT5,
+            uniform sampler2D brdf_lut : TEXUNIT6,
+            uniform sampler2D shadow_atlas : TEXUNIT7,
+            uniform sampler2D probe0 : TEXUNIT8,
+            uniform sampler2D probe1 : TEXUNIT9,
+            uniform sampler2D t_opacity : TEXUNIT10,
+            uniform sampler2D t_specular : TEXUNIT11) : COLOR
+{
+    float4 m_base = lite_material[0];
+    float4 m_emissive = lite_material[1];
+    float4 m_params = lite_material[2];
+    float4 m_alpha = lite_material[3];
+    float4 m_uv = lite_material[4];
+    float4 m_surface = lite_material[5];
+    float3 world = world_depth.xyz;
+    float2 uv = uv_in * m_uv.xy + m_uv.zw;
+    float4 base = tex2D(t_base, uv) * m_base;
+    float4 op = tex2D(t_opacity, uv);
+    base = float4(clamp(base.rgb, 0.0, 65504.0), clamp(base.a * (m_alpha.w > 0.5 ? op.a : op.r), 0.0, 1.0));
+    float4 mr = tex2D(t_mr, uv);
+    float4 nt = tex2D(t_normal, uv);
+    float occ_tex = tex2D(t_occlusion, uv).r;
+    float3 specular_color = tex2D(t_specular, uv).rgb * m_surface.w;
+    float3 emissive = clamp(tex2D(t_emissive, uv).rgb * m_emissive.rgb * m_emissive.a, 0.0, 65504.0);
+    if (m_alpha.x == 1.0 && base.a < m_alpha.y) {
+        discard;
+    }
+    float alpha = m_alpha.x >= 2.0 ? clamp(base.a, 0.0, 1.0) : 1.0;
+    if (m_alpha.z > 0.5) {
+        float3 color = base.rgb + emissive;
+        return m_alpha.x == 4.0 ? float4(color * alpha, alpha) : float4(color, alpha);
+    }
+    // material.wgsl decode_normal
+    float3 tn;
+    if (m_surface.z < 0.5) {
+        tn = nt.xyz * 2.0 - 1.0;
+    } else {
+        float2 xy = (m_surface.z > 1.5 ? nt.ag : nt.rg) * 2.0 - 1.0;
+        tn = float3(xy, sqrt(max(1.0 - dot(xy, xy), 0.0)));
+    }
+    float roughness = clamp(mr.g * m_params.y, 0.045, 1.0);
+    float metallic = clamp(mr.b * m_params.x, 0.0, 1.0);
+    // Double-sided materials are drawn once per facing by the host with the
+    // normal flipped in lite_normal; GXM's front-face state selects the pass.
+    float3 ng = normalize(normal);
+    float3 t = normalize(tangent.xyz - ng * dot(ng, tangent.xyz));
+    float3 b = cross(ng, t) * tangent.w;
+    float3 ts = float3(tn.xy * m_params.z, tn.z);
+    float3 n = normalize(t * ts.x + b * ts.y + ng * ts.z);
+    float3 v = normalize(lite_camera.xyz - world);
+    float nv = max(dot(n, v), 1e-4);
+    float spec_weight = lerp(m_surface.w, 1.0, metallic);
+    float3 f0 = lerp(min(float3(0.04, 0.04, 0.04) * specular_color, float3(1.0, 1.0, 1.0)), base.rgb, metallic);
+    float a = roughness * roughness;
+
+    // Direct sun.
+    float3 l = normalize(-lite_sun_dir.xyz);
+    float nl = max(dot(n, l), 0.0);
+    float visibility = 1.0;
+    if (lite_sun_color.w > 0.5 && nl > 0.0) {
+        float depth = world_depth.w;
+        float ngl = max(dot(ng, l), 0.0);
+        if (depth <= lite_splits.x) {
+            visibility = lite_cascade(shadow_atlas, shadow0, 0.0, ngl);
+        } else if (depth <= lite_splits.y) {
+            visibility = lite_cascade(shadow_atlas, shadow1, 1.0, ngl);
+        }
+    }
+    float3 direct = lite_brdf(n, v, l, base.rgb, metallic, f0, a, nv, spec_weight)
+        * lite_sun_color.rgb * lite_sun_dir.w * visibility;
+
+    // Split-sum IBL + SH9, probes over the environment.
+    float3 fr = lite_f_schlick_roughness(nv, f0, roughness) * spec_weight;
+    float3 kd_ibl = (float3(1.0, 1.0, 1.0) - fr) * (1.0 - metallic);
+    float3 r = reflect(-v, n);
+    float3 prefiltered = tex2Dlod(env_prefiltered, float4(lite_equirect_uv(r, lite_env.y), 0.0, roughness * lite_env.z)).rgb * lite_env.x;
+    float wsum = 0.0;
+    float3 acc = lite_probe(probe0, 0, world, r, roughness, wsum) + lite_probe(probe1, 1, world, r, roughness, wsum);
+    prefiltered = wsum >= 1.0 ? acc / wsum : acc + prefiltered * (1.0 - wsum);
+    float2 lut = tex2Dlod(brdf_lut, float4(nv, roughness, 0.0, 0.0)).rg;
+    float3 specular_ibl = prefiltered * (fr * lut.x + lut.y * spec_weight);
+    float occlusion = lerp(1.0, occ_tex, m_params.w);
+    float3 diffuse_irr = lite_sh9(n) * lite_env.x;
+    if (lite_gi.x > 0.0) {
+        float4 nn = float4(1.0, n);
+        float3 e = max(float3(dot(lite_gi_sh[0], nn), dot(lite_gi_sh[1], nn), dot(lite_gi_sh[2], nn)), 0.0);
+        diffuse_irr = lerp(diffuse_irr, e * lite_gi.y, lite_gi.x);
+    }
+    float3 ambient = (kd_ibl * base.rgb * diffuse_irr / LITE_PI + specular_ibl) * occlusion;
+
+    float3 local = float3(0.0, 0.0, 0.0);
+    float aa = max(a, 0.002);
+    for (int k = 0; k < 4; k++) {
+        if (k < (int)lite_light_count.x) {
+            local += lite_local(k, world, n, v, base.rgb, metallic, f0, aa, nv, spec_weight);
+        }
+    }
+    float4 fog = lite_height_fog(world, lite_camera.xyz, lite_fog_color, lite_fog_params, lite_fog_sun, lite_sun_dir, lite_sun_color.rgb);
+    float3 color = lerp(direct + local + ambient + emissive, fog.rgb, fog.a);
+    return m_alpha.x == 4.0 ? float4(color * alpha, alpha) : float4(color, alpha);
+}

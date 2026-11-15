@@ -19,9 +19,46 @@ fn js_error(error: impl std::fmt::Display) -> JsValue {
 }
 /// Dedicated-worker browser host. GPU objects and Runtime ownership never
 /// leave this worker; messages contain only input, imported bytes and PCM.
+/// The project's runtime, driven directly (data projects) or by the engine
+/// App with its JS script host (scripted projects such as the library
+/// launcher). Dereferences to the runtime either way.
+enum Core {
+    Plain(Runtime),
+    Scripted(Box<crysirror_engine::App>),
+}
+impl Core {
+    fn tick(&mut self, elapsed: u64, input: InputFrame) -> Result<()> {
+        match self {
+            Self::Plain(rt) => rt.tick_control(elapsed, input),
+            Self::Scripted(app) => app.frame(elapsed, input),
+        }
+    }
+    fn quit_requested(&self) -> bool {
+        matches!(self, Self::Scripted(app) if app.quit_requested())
+    }
+}
+impl std::ops::Deref for Core {
+    type Target = Runtime;
+    fn deref(&self) -> &Runtime {
+        match self {
+            Self::Plain(rt) => rt,
+            // The App owns its runtime until into_runtime, never called here.
+            Self::Scripted(app) => app.runtime().expect("engine runtime"),
+        }
+    }
+}
+impl std::ops::DerefMut for Core {
+    fn deref_mut(&mut self) -> &mut Runtime {
+        match self {
+            Self::Plain(rt) => rt,
+            Self::Scripted(app) => app.runtime_mut().expect("engine runtime"),
+        }
+    }
+}
+
 #[wasm_bindgen]
 pub struct BrowserPlayer {
-    runtime: Runtime,
+    runtime: Core,
     snapshot_storage: Arc<BrowserStorage>,
     scene_audio: crysirror_audio::scene::SceneAudio,
     mixer: crysirror_audio::mixer::Mixer,
@@ -43,6 +80,9 @@ pub struct BrowserPlayer {
 impl BrowserPlayer {
     /// Files are imported completely before construction; no synchronous fetch
     /// or native filesystem emulation is used by engine storage calls.
+    /// `scripts` names imported JS/TS files run by the engine App as
+    /// `script_client` (empty for data projects); `font` is an optional
+    /// owner font registered as "default".
     #[wasm_bindgen(js_name = create)]
     pub async fn create(
         canvas: OffscreenCanvas,
@@ -50,10 +90,25 @@ impl BrowserPlayer {
         names: js_sys::Array,
         data: js_sys::Array,
         save_key: &str,
+        scripts: js_sys::Array,
+        script_client: &str,
+        font: Option<Vec<u8>>,
     ) -> std::result::Result<BrowserPlayer, JsValue> {
-        Self::create_inner(canvas, project_json, names, data, save_key)
+        Self::create_inner(canvas, project_json, names, data, save_key, scripts, script_client, font)
             .await
             .map_err(js_error)
+    }
+    /// Whether a scripted project asked to stop (the launcher after a choice).
+    #[wasm_bindgen(js_name = quitRequested)]
+    pub fn quit_requested(&self) -> bool {
+        self.runtime.quit_requested()
+    }
+    /// Read a UTF-8 save file of the first client, or null.
+    #[wasm_bindgen(js_name = readSave)]
+    pub fn read_save(&mut self, path: &str) -> Option<String> {
+        use crysirror_core::{path::{Mount, VfsPath}, service::FileSystem};
+        let path = VfsPath::new(Mount::Save, path).ok()?;
+        String::from_utf8(self.runtime.host.fs.read(ClientId(1), &path).ok()?).ok()
     }
     /// One owner poll, not a join. Input edges remain queued until audio permits
     /// the next simulation tick; incomplete drawing retains the last snapshot.
@@ -135,12 +190,16 @@ impl BrowserPlayer {
     }
 }
 impl BrowserPlayer {
+    #[allow(clippy::too_many_arguments)]
     async fn create_inner(
         canvas: OffscreenCanvas,
         json: &str,
         names: js_sys::Array,
         data: js_sys::Array,
         save_key: &str,
+        scripts: js_sys::Array,
+        script_client: &str,
+        font: Option<Vec<u8>>,
     ) -> Result<Self> {
         ensure!(
             json.len() <= crysirror_runtime::model::MAX_PROJECT_BYTES,
@@ -208,6 +267,30 @@ impl BrowserPlayer {
         )?;
         runtime.assets.set_nonblocking(true);
         runtime.set_audio_nonblocking(true);
+        if let Some(font) = font {
+            runtime.host.text.add_font("default", font.clone())?;
+            runtime.assets.text.add_font("default", font)?;
+        }
+        let mut sources = Vec::new();
+        for i in 0..scripts.length() {
+            let name = scripts.get(i).as_string().context("browser script name")?;
+            let bytes = imported.read_file(&name).with_context(|| format!("script {name}"))?;
+            sources.push((name, String::from_utf8(bytes).context("script is not UTF-8")?));
+        }
+        let runtime = if sources.is_empty() {
+            Core::Plain(runtime)
+        } else {
+            let mut app = crysirror_engine::App::new(runtime, script_client)?;
+            use crysirror_engine::ScriptHost as _;
+            let mut host = crysirror_script_js::JsHost::new("scripts");
+            for (name, source) in &sources {
+                host.add_source(name, source)?;
+            }
+            app.add_script_host(Box::new(host))?;
+            app.init()?;
+            app.start()?;
+            Core::Scripted(Box::new(app))
+        };
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::BROWSER_WEBGPU,
             ..wgpu::InstanceDescriptor::new_without_display_handle()
@@ -359,7 +442,7 @@ impl BrowserPlayer {
                 pointer_y: y,
             };
             let elapsed = std::mem::take(&mut self.elapsed);
-            self.runtime.tick_control(elapsed, input)?;
+            self.runtime.tick(elapsed, input)?;
             self.begin_audio(elapsed)?;
             self.pressed = 0;
         }
@@ -423,6 +506,7 @@ impl BrowserPlayer {
             format: Some(self.config.format.add_srgb_suffix()),
             ..Default::default()
         });
+        let (canvas, background) = (self.runtime.project.canvas, self.runtime.project.background);
         let rendered =
             self.runtime
                 .assets
@@ -434,8 +518,8 @@ impl BrowserPlayer {
                             view: &view,
                             size: [width, height],
                         },
-                        self.runtime.project.canvas,
-                        self.runtime.project.background,
+                        canvas,
+                        background,
                     )
                 });
         match rendered {
@@ -452,4 +536,51 @@ impl Drop for BrowserPlayer {
     fn drop(&mut self) {
         self.cancel_audio();
     }
+}
+
+/// The shared game library launcher project (crysirror-library) for the
+/// page's entries: `entries` is JSON `[{id, name, detail}]`, `covers` holds
+/// an optional image file (PNG/JPEG bytes) per entry. Returns `[names,
+/// files]` for `BrowserPlayer.create`, with `launcher.js` as the script.
+#[wasm_bindgen(js_name = libraryProject)]
+pub fn library_project(
+    entries: &str,
+    covers: js_sys::Array,
+    width: u32,
+    height: u32,
+    font: Option<Vec<u8>>,
+) -> std::result::Result<js_sys::Array, JsValue> {
+    use crysirror_library::{cover, library};
+    let list: Vec<serde_json::Value> = serde_json::from_str(entries).map_err(js_error)?;
+    let mut items = Vec::new();
+    for (i, entry) in list.iter().enumerate() {
+        let text = |key: &str| entry[key].as_str().unwrap_or_default().to_owned();
+        let image = covers
+            .get(i as u32)
+            .dyn_into::<js_sys::Uint8Array>()
+            .ok()
+            .and_then(|bytes| image::load_from_memory(&bytes.to_vec()).ok());
+        items.push(library::Entry {
+            id: text("id"),
+            name: text("name"),
+            detail: text("detail"),
+            cover: image.map(|image| cover::Cover {
+                image: image.to_rgba8(),
+                kind: cover::CoverKind::Image,
+                source: Default::default(),
+            }),
+        });
+    }
+    let style = library::Style {
+        confirm: "Enter",
+        cross: false,
+        add_hint: "Open a project folder to add it here".into(),
+    };
+    let files = library::build(&items, (width, height), font.as_deref(), &style).map_err(js_error)?;
+    let (names, data) = (js_sys::Array::new(), js_sys::Array::new());
+    for (name, bytes) in files {
+        names.push(&JsValue::from_str(&name));
+        data.push(&js_sys::Uint8Array::from(bytes.as_slice()));
+    }
+    Ok(js_sys::Array::of2(&names, &data))
 }

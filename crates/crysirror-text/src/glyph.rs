@@ -97,16 +97,23 @@ impl TextSystem {
         request: GlyphRaster,
         horizontal_scale: f32,
     ) -> Result<GlyphCell> {
-        self.rasterize_glyph_cell_scaled_limit(font,request,horizontal_scale,1024.)
+        self.rasterize_glyph_cell_scaled_limit(font, request, horizontal_scale, 1024.)
     }
     pub(crate) fn rasterize_glyph_cell_scaled_limit(
-        &self,font:&str,request:GlyphRaster,horizontal_scale:f32,max_size:f32,
-    )->Result<GlyphCell> {
+        &self,
+        font: &str,
+        request: GlyphRaster,
+        horizontal_scale: f32,
+        max_size: f32,
+    ) -> Result<GlyphCell> {
         ensure!(
             horizontal_scale.is_finite() && (0.03125..=32.).contains(&horizontal_scale),
             "glyph horizontal scale"
         );
-        ensure!(request.size.is_finite()&&request.size>0.&&request.size<=max_size,"invalid glyph raster size");
+        ensure!(
+            request.size.is_finite() && request.size > 0. && request.size <= max_size,
+            "invalid glyph raster size"
+        );
         self.glyph_metrics(font, request.glyph_id, request.size.min(1024.))?;
         ensure!(
             request

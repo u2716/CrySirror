@@ -2,8 +2,7 @@
 // Distributed under the GNU Affero General Public License, version 3 or later.
 //! CPU-only M2 motion resources and sampling into engine-owned puppet meshes.
 //!
-//! Format evidence: Kirakira c451918023477620ff9055a2eb8a6714b947d9c1,
-//! krkr-emote/{normalize,decode,model,motion}.rs. No upstream renderer is used.
+//! No upstream renderer is used.
 //! Callers may load/sample immutable models on workers; only the owner publishes
 //! the returned textures and PuppetFrame. No VM, filesystem or device is owned here.
 use anyhow::{bail, ensure, Context, Result};
@@ -12,7 +11,7 @@ use eluna::{
     EmoteDrawPass, EmoteModelSchema, EmoteStaticScene, PsbFile, PsbNormalizeOptions, PsbValue,
 };
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     sync::Arc,
 };
 
@@ -43,14 +42,25 @@ impl MotionModel {
             bytes.len() <= MAX_BYTES,
             "motion exceeds 256 MiB input limit"
         );
-        let (plain, mut psb) = PsbFile::parse_normalized(bytes, &PsbNormalizeOptions::default())?;
+        Self::from_vec(bytes.to_vec())
+    }
+    /// [`Self::from_bytes`] taking ownership: a plain PSB is parsed in place,
+    /// and only its non-pixel resources (meshes) stay resident once the
+    /// textures are decoded. Peak memory is the input plus one texture.
+    pub fn from_vec(bytes: Vec<u8>) -> Result<Self> {
+        ensure!(
+            bytes.len() <= MAX_BYTES,
+            "motion exceeds 256 MiB input limit"
+        );
+        let (plain, mut psb) = PsbFile::parse_normalized_owned(bytes, &PsbNormalizeOptions::default())?;
         ensure!(plain.len() <= MAX_BYTES, "normalized motion exceeds limit");
         let mut budget = 2_000_000usize;
         check_tree(&psb.root, 0, &mut budget)?;
         // The first profile does not dispatch authored per-layer action tags.
         // Reject such archives instead of silently losing script events.
         reject_action_tags(&psb.root)?;
-        let textures = texture_resources(&psb, &plain)?;
+        let (textures, consumed) = texture_resources(&psb, &plain)?;
+        let plain = retain_resources(&mut psb, plain, &consumed)?;
         normalize(&mut psb.root)?;
         let schema = EmoteModelSchema::from_psb(&psb)?;
         ensure!(
@@ -525,7 +535,36 @@ fn rewrite(value: &mut PsbValue, aliases: &BTreeMap<String, (String, String)>) -
     }
     Ok(())
 }
-fn texture_resources(psb: &PsbFile, plain: &[u8]) -> Result<Vec<MotionTexture>> {
+/// Copy the resources sampling still reads (meshes, extra resources) into a
+/// compact buffer and point `psb` at it. Decoded pixel/palette resources
+/// (`consumed`) become empty ranges; sampling never reads them.
+fn retain_resources(psb: &mut PsbFile, plain: Vec<u8>, consumed: &BTreeSet<u32>) -> Result<Vec<u8>> {
+    let keep = |out: &mut Vec<u8>, range: &mut eluna::PsbResourceRange| -> Result<()> {
+        let start = usize::try_from(range.offset).context("motion resource offset")?;
+        let end = start
+            .checked_add(usize::try_from(range.length).context("motion resource length")?)
+            .filter(|end| *end <= plain.len())
+            .context("motion resource range")?;
+        range.offset = out.len() as u64;
+        out.extend_from_slice(&plain[start..end]);
+        Ok(())
+    };
+    let mut out = Vec::new();
+    for (index, range) in psb.resources.iter_mut().enumerate() {
+        if consumed.contains(&(index as u32)) {
+            *range = eluna::PsbResourceRange { offset: 0, length: 0 };
+        } else {
+            keep(&mut out, range)?;
+        }
+    }
+    for range in &mut psb.extra_resources {
+        keep(&mut out, range)?;
+    }
+    Ok(out)
+}
+/// Decoded textures and the pixel/palette resource indices they consumed.
+fn texture_resources(psb: &PsbFile, plain: &[u8]) -> Result<(Vec<MotionTexture>, BTreeSet<u32>)> {
+    let mut consumed = BTreeSet::new();
     let sources = psb
         .root
         .field("source")
@@ -563,19 +602,25 @@ fn texture_resources(psb: &PsbFile, plain: &[u8]) -> Result<Vec<MotionTexture>> 
             let raw = psb
                 .resource_bytes(plain, resource as usize)
                 .context("missing motion pixel resource")?;
-            let palette = icon
-                .field_u32("pal")
+            let palette_index = icon.field_u32("pal");
+            let palette = palette_index
                 .map(|p| {
                     psb.resource_bytes(plain, p as usize)
                         .context("missing motion palette")
                 })
                 .transpose()?;
-            let mut rgba = decode_pixels(raw, palette, width, height, icon.field_str("compress"))?;
+            // Decode straight into the shared buffer (one allocation, no
+            // Vec-to-Arc copy of a texture that can reach 64 MiB).
+            let mut rgba: Arc<[u8]> = std::iter::repeat_n(0u8, width as usize * height as usize * 4).collect();
+            let out = Arc::get_mut(&mut rgba).context("motion texture buffer is shared")?;
+            decode_pixels_into(raw, palette, width, height, icon.field_str("compress"), out)?;
             if bgra && palette.is_none() {
-                for p in rgba.chunks_exact_mut(4) {
+                for p in out.chunks_exact_mut(4) {
                     p.swap(0, 2);
                 }
             }
+            consumed.insert(resource);
+            consumed.extend(palette_index);
             // Diagnostic: CRYSIRROR_MOTION_DUMP_TEXTURES=<dir> writes each
             // decoded texture as raw bytes (`<resource>-<w>x<h>.rgba`).
             if let Some(dir) = std::env::var_os("CRYSIRROR_MOTION_DUMP_TEXTURES") {
@@ -588,12 +633,12 @@ fn texture_resources(psb: &PsbFile, plain: &[u8]) -> Result<Vec<MotionTexture>> 
                     resource,
                     width,
                     height,
-                    rgba: rgba.into(),
+                    rgba,
                 },
             );
         }
     }
-    Ok(textures.into_values().collect())
+    Ok((textures.into_values().collect(), consumed))
 }
 /// Bounded RL decoder; malformed runs cannot allocate beyond declared image size.
 pub fn decode_pixels(
@@ -610,16 +655,44 @@ pub fn decode_pixels(
         pixels > 0 && pixels <= MAX_BYTES / 4,
         "invalid motion texture size"
     );
+    let mut out = vec![0; pixels * 4];
+    decode_pixels_into(raw, palette, width, height, compression, &mut out)?;
+    Ok(out)
+}
+/// [`decode_pixels`] into a caller-owned RGBA buffer of `width*height*4` bytes.
+pub fn decode_pixels_into(
+    raw: &[u8],
+    palette: Option<&[u8]>,
+    width: u32,
+    height: u32,
+    compression: Option<&str>,
+    out: &mut [u8],
+) -> Result<()> {
+    let pixels = (width as usize)
+        .checked_mul(height as usize)
+        .context("texture size overflow")?;
+    ensure!(
+        pixels > 0 && pixels <= MAX_BYTES / 4 && out.len() == pixels * 4,
+        "invalid motion texture size"
+    );
     let stride = if palette.is_some() { 1 } else { 4 };
     let expected = pixels * stride;
-    let mut data = Vec::with_capacity(expected);
+    // Palette indices are expanded afterwards; direct pixels land in `out`.
+    let mut indices = Vec::new();
+    let data: &mut [u8] = if palette.is_some() {
+        indices.resize(expected, 0);
+        &mut indices
+    } else {
+        out
+    };
     match compression {
         None | Some("") => {
             ensure!(raw.len() == expected, "motion raw texture size mismatch");
-            data.extend_from_slice(raw)
+            data.copy_from_slice(raw)
         }
         Some("RL") => {
             let mut cursor = 0;
+            let mut at = 0;
             while cursor < raw.len() {
                 let command = raw[cursor];
                 cursor += 1;
@@ -630,24 +703,22 @@ pub fn decode_pixels(
                     command as usize + 1
                 };
                 let bytes = count * stride;
-                ensure!(
-                    data.len() + bytes <= expected,
-                    "motion RL exceeds declared size"
-                );
+                ensure!(at + bytes <= expected, "motion RL exceeds declared size");
                 let take = if repeat { stride } else { bytes };
                 let unit = raw
                     .get(cursor..cursor + take)
                     .context("truncated motion RL stream")?;
                 cursor += take;
                 if repeat {
-                    for _ in 0..count {
-                        data.extend_from_slice(unit)
+                    for chunk in data[at..at + bytes].chunks_exact_mut(stride) {
+                        chunk.copy_from_slice(unit)
                     }
                 } else {
-                    data.extend_from_slice(unit)
+                    data[at..at + bytes].copy_from_slice(unit)
                 }
+                at += bytes;
             }
-            ensure!(data.len() == expected, "motion RL size mismatch");
+            ensure!(at == expected, "motion RL size mismatch");
         }
         Some(codec) => bail!("unsupported motion texture compression {codec:?}"),
     }
@@ -656,15 +727,12 @@ pub fn decode_pixels(
             palette.len() >= 1024,
             "motion palette is shorter than 256 ARGB entries"
         );
-        let mut rgba = Vec::with_capacity(pixels * 4);
-        for index in data {
-            let p = &palette[index as usize * 4..index as usize * 4 + 4];
-            rgba.extend_from_slice(&[p[2], p[1], p[0], p[3]])
+        for (index, rgba) in indices.iter().zip(out.chunks_exact_mut(4)) {
+            let p = &palette[*index as usize * 4..*index as usize * 4 + 4];
+            rgba.copy_from_slice(&[p[2], p[1], p[0], p[3]])
         }
-        Ok(rgba)
-    } else {
-        Ok(data)
     }
+    Ok(())
 }
 #[cfg(test)]
 mod tests {
@@ -761,7 +829,7 @@ impl MotionWorkers {
     pub fn load(&self, bytes: Vec<u8>) -> Result<MotionJob<Arc<MotionModel>>> {
         self.0.spawn(move |cancel| {
             cancel.check()?;
-            let model = MotionModel::from_bytes(&bytes)?;
+            let model = MotionModel::from_vec(bytes)?;
             cancel.check()?;
             Ok(Arc::new(model))
         })

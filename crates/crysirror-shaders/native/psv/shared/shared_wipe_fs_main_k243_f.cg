@@ -1,0 +1,219 @@
+// SPDX-License-Identifier: MPL-2.0
+// Generated from canonical WGSL by crysirror-shader-tools.
+int min(int a,int b){return a<b?a:b;}
+int max(int a,int b){return a>b?a:b;}
+int clamp(int a,int lo,int hi){return min(max(a,lo),hi);}
+int2 min(int2 a,int2 b){return a<b?a:b;}
+int2 max(int2 a,int2 b){return a>b?a:b;}
+int2 clamp(int2 a,int2 lo,int2 hi){return min(max(a,lo),hi);}
+int3 min(int3 a,int3 b){return a<b?a:b;}
+int3 max(int3 a,int3 b){return a>b?a:b;}
+int3 clamp(int3 a,int3 lo,int3 hi){return min(max(a,lo),hi);}
+int4 min(int4 a,int4 b){return a<b?a:b;}
+int4 max(int4 a,int4 b){return a>b?a:b;}
+int4 clamp(int4 a,int4 lo,int4 hi){return min(max(a,lo),hi);}
+
+
+// SGX has no general integer divide. Bias a full-width float estimate
+// below the quotient, refine its small remainder, then correct in integers.
+// The 2^-20 bias dominates f32 conversion/division error (all inputs normal).
+// The refinement quotient is below 2048, so three corrections are sufficient.
+int cg_div_positive(int a,int b){
+ if(b==1)return a;
+ bool negative=a<0;
+ int n=negative?-(a+1):a;
+ float estimate=float(n)/float(b);
+ int q=int(max(floor(estimate-max(estimate*0.00000095367431640625,2.0)),0.0));
+ int r=n-q*b;
+ int correction=max(int(floor(float(r)/float(b)))-2,0);
+ q+=correction;r-=correction*b;
+ if(r>=b){r-=b;q+=1;}
+ if(r>=b){r-=b;q+=1;}
+ if(r>=b){r-=b;q+=1;}
+ if(negative)return -q-int(r==b-1);
+ return q;
+}
+int cg_div(int a,int b){
+ if(b==0)return a;
+ if(b==(-2147483647-1))return a==b?1:0;
+ if(a==(-2147483647-1)&&b==-1)return a;
+ return b<0?-cg_div_positive(a,-b):cg_div_positive(a,b);
+}
+int2 cg_div(int2 a,int2 b){return int2(cg_div(a.x,b.x),cg_div(a.y,b.y));}
+int3 cg_div(int3 a,int3 b){return int3(cg_div(a.x,b.x),cg_div(a.y,b.y),cg_div(a.z,b.z));}
+int4 cg_div(int4 a,int4 b){return int4(cg_div(a.x,b.x),cg_div(a.y,b.y),cg_div(a.z,b.z),cg_div(a.w,b.w));}
+float4 cg_load(sampler2D tex,int3 p,float4 size){
+ if(any(p.xy<0)||any(p.xy>=int2(size.xy))||p.z!=0)return float4(0,0,0,0);
+ return tex2Dlod(tex,float4((float2(p.xy)+0.5)*size.zw,0,0));
+}
+// Naga uses these for signed/unsigned integer wrapping, never float bitcasts.
+int asint(int v){return int(v);} int2 asint(int2 v){return int2(v);}
+int3 asint(int3 v){return int3(v);} int4 asint(int4 v){return int4(v);}
+int asuint(int v){return int(v);} int2 asuint(int2 v){return int2(v);}
+int3 asuint(int3 v){return int3(v);} int4 asuint(int4 v){return int4(v);}
+
+struct WipeUniform {
+    float4 kind_progress;
+    float4 option0_;
+    float4 option1_;
+    float4 option2_;
+    float4 option3_;
+};
+
+struct VsOut {
+    float4 pos : WPOS;
+    float2 uv : TEXCOORD0;
+    float2 random_center : TEXCOORD1;
+};
+
+uniform sampler2D under_tex : TEXUNIT0;
+uniform float4 cg_size_under_tex;
+uniform sampler2D current_tex : TEXUNIT1;
+uniform float4 cg_size_current_tex;
+uniform sampler2D next_tex : TEXUNIT2;
+uniform float4 cg_size_next_tex;
+uniform WipeUniform wipe;
+uniform int4 cg_loop_limits;
+
+struct FragmentInput_fs_main {
+    float2 uv_2 : TEXCOORD0;
+    float2 random_center_1 : TEXCOORD1;
+    float4 pos : WPOS;
+};
+
+float option(int index)
+{
+    if ((index < int(4))) {
+        float _e6 = wipe.option0_[index];
+        return _e6;
+    }
+    if ((index < int(8))) {
+        float _e14 = wipe.option1_[asint(asuint(index) - asuint(int(4)))];
+        return _e14;
+    }
+    if ((index < int(12))) {
+        float _e22 = wipe.option2_[asint(asuint(index) - asuint(int(8)))];
+        return _e22;
+    }
+    float _e28 = wipe.option3_[asint(asuint(index) - asuint(int(12)))];
+    return _e28;
+}
+
+float4 alpha_over(float4 dst_, float4 src)
+{
+    float _e8 = (src.w + (dst_.w * (1.0 - src.w)));
+    if ((_e8 <= 1e-6)) {
+        return (0.0).xxxx;
+    }
+    return float4((((src.xyz * src.w) + ((dst_.xyz * dst_.w) * (1.0 - src.w))) / (_e8).xxx), _e8);
+}
+
+float4 explosion(sampler2D tex, float4 cg_size_tex, float2 uv, float2 center_, float power)
+{
+    float4 sum = (0.0).xxxx;
+    int i = int(0);
+
+    bool loop_init = true;
+    while(true) {
+        if (!loop_init) {
+            int _e33 = i;
+            i = asint(asuint(_e33) + asuint(int(1)));
+        }
+        loop_init = false;
+        int _e15 = i;
+        int _e18 = cg_loop_limits.w;
+        if ((_e15 < int(_e18))) {
+        } else {
+            break;
+        }
+        {
+            float4 _e21 = sum;
+            int _e22 = i;
+            float4 _e31 = tex2D(tex,clamp((uv + ((((center_ - uv) * power) / (16.0).xx) * float(_e22))), (0.0).xx, (1.0).xx));
+            sum = (_e21 + _e31);
+        }
+    }
+    float4 _e36 = sum;
+    return (_e36 / (16.0).xxxx);
+}
+
+float triangular_parameter(int kind, bool reverse, float progress)
+{
+    float value = 0.0;
+
+    if ((kind == int(0))) {
+        value = (1.0 - progress);
+    } else {
+        if ((kind == int(10))) {
+            value = progress;
+        } else {
+            float _e16 = clamp((float(kind) / 10.0), 1e-6, 0.999999);
+            value = ((progress < _e16) ? (progress / _e16) : ((1.0 - progress) / (1.0 - _e16)));
+        }
+    }
+    float _e25 = value;
+    float _e26 = value;
+    return clamp((reverse ? (1.0 - _e26) : _e25), 0.0, 1.0);
+}
+
+int naga_f2i32(float value) {
+    return int(clamp(value, -2147483600.0, 2147483500.0));
+}
+
+float4 affected_color(float2 uv_1, float2 random_center)
+{
+    bool base_is_current = false;
+    float2 center_1 = (0.5).xx;
+    float2 muv = (float2)0;
+    float mask_value = 1.0;
+    bool local = (bool)0;
+    bool local_1 = (bool)0;
+    bool local_2 = (bool)0;
+    bool local_3 = (bool)0;
+
+    float _e5 = wipe.kind_progress.y;
+    float _e8 = clamp(_e5, 0.0, 1.0);
+    float4 _e11 = tex2D(current_tex,uv_1);
+    float4 _e14 = tex2D(next_tex,uv_1);
+    if ((_e8 <= 0.0)) {
+        return _e11;
+    }
+    if ((_e8 >= 1.0)) {
+        return _e14;
+    }
+    const float _e22 = option(int(5));
+    base_is_current = (naga_f2i32(_e22) == int(0));
+    bool _e26 = base_is_current;
+    bool _e27 = base_is_current;
+    const float _e31 = option(int(0));
+    const float _e33 = option(int(2));
+    const float _e38 = option(int(1));
+    const float _e40 = option(int(3));
+    const float _e46 = triangular_parameter(naga_f2i32((false ? _e33 : _e31)), (naga_f2i32((false ? _e40 : _e38)) != int(0)), _e8);
+    const float _e50 = option(int(2));
+    const float _e52 = option(int(4));
+    const float _e57 = option(int(3));
+    const float _e59 = option(int(5));
+    const float _e65 = triangular_parameter(naga_f2i32((false ? _e52 : _e50)), (naga_f2i32((false ? _e59 : _e57)) != int(0)), _e8);
+    const float _e67 = option(int(4));
+    const float _e69 = option(int(6));
+    float _e73 = max((false ? _e69 : _e67), 0.0);
+    const float _e78 = option(int(15));
+    center_1 = random_center;
+    float2 _e81 = center_1;
+    const float4 _e83 = explosion(current_tex, cg_size_current_tex, uv_1, _e81, (_e65 * _e73));
+    float2 _e86 = center_1;
+    const float4 _e88 = explosion(next_tex, cg_size_next_tex, uv_1, _e86, (_e65 * _e73));
+    const float4 _e94 = alpha_over((_e27 ? _e11 : _e14), float4((_e26 ? _e88 : _e83).xyz, ((_e26 ? _e14 : _e11).w * (1.0 - _e46))));
+    return _e94;
+}
+
+float4 main(FragmentInput_fs_main fragmentinput_fs_main) : COLOR
+{
+    VsOut in_ = { fragmentinput_fs_main.pos, fragmentinput_fs_main.uv_2, fragmentinput_fs_main.random_center_1 };
+    float2 _e6 = clamp(in_.uv, (0.0).xx, (1.0).xx);
+    float4 _e9 = tex2D(under_tex,_e6);
+    const float4 _e11 = affected_color(_e6, in_.random_center);
+    const float4 _e12 = alpha_over(_e9, _e11);
+    return _e12;
+}

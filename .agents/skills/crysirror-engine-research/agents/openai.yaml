@@ -1,0 +1,4 @@
+interface:
+  display_name: "CrySirror Engine Research"
+  short_description: "Find engine references and assess original-behavior evidence"
+  default_prompt: "Use $crysirror-engine-research to find existing material for this engine or format, distinguish unofficial claims and map them to original behavior."

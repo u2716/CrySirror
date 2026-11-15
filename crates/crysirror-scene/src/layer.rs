@@ -155,9 +155,14 @@ impl SpriteTransform {
         self.pose_offset.as_ref().is_none_or(|o|o.translation[2]==0. && o.rotation[0]==0. && o.rotation[1]==0. && o.scale[2]==0.) && self.local_matrix
             .is_none_or(|m| m[2] == 0. && m[6] == 0. && m[8] == 0. && m[9] == 0. && m[14] == 0.)
     }
+    /// A zero X/Y scale empties the subtree only for a flat 2D basis. With
+    /// an X/Y rotation (or a 3D local matrix) the zeroed local axis becomes
+    /// depth while local Z remains visible: QLIE titles flatten a curved
+    /// model with scale_y=0 under rotate_x=-90 to obtain a screen-facing sheet.
     pub fn collapsed(&self)->bool {
-        let offset=self.pose_offset.as_ref().map_or([0.;3],|o|o.scale);
-        self.scale_x+offset[0]==0.||self.scale_y+offset[1]==0.
+        let (offset,rotation)=self.pose_offset.as_ref().map_or(([0.;3],[0.;3]),|o|(o.scale,o.rotation));
+        let flat=self.rotate_x+rotation[0]==0.&&self.rotate_y+rotation[1]==0.&&self.matrix_is_2d();
+        flat&&(self.scale_x+offset[0]==0.||self.scale_y+offset[1]==0.)
     }
     pub fn validate(&self) -> Result<()> {
         if let Some(order)=self.geometry_order {order.validate()?;}
@@ -625,6 +630,10 @@ pub struct GlyphShadow {pub offset:[f32;2],pub color:[u8;4]}
 #[derive(Clone,Copy,Debug,Default,PartialEq,Serialize,Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PositionedGlyphStyle {
+    #[serde(default)]
+    pub underline:bool,
+    #[serde(default)]
+    pub strikeout:bool,
     #[serde(default)]
     pub bold:bool,
     #[serde(default)]
@@ -3091,6 +3100,14 @@ impl LayerSystem {
                     quad.iter().flatten().all(|v| v.is_finite()),
                     "non-finite layer geometry"
                 );
+                // Coverage commands expose their inner paint during extraction.
+                // Only textured payloads retain the wrapper's image sampler;
+                // a solid or glyph coverage write has no image to sample.
+                let sampling = if matches!(&paint, Paint::Image { .. } | Paint::ProjectedMesh { .. } | Paint::LegacyMesh { .. }) {
+                    spec.sampling
+                } else {
+                    ImageSampling::default()
+                };
                 out.push(ordered_state::Pending { world:geometry.world,camera:camera.clone(),mesh,
                     ordinary_2d:!inherited_3d&&spec.transform.matrix_is_2d()&&!spec.transform.camera_enabled,
                     geometry_order:spec.transform.geometry_order,
@@ -3111,7 +3128,7 @@ impl LayerSystem {
                     opacity: (opacity * u32::from(spec.opacity) / 255) as u8,
                     blend: spec.blend,
                     uv,
-                    sampling: spec.sampling,
+                    sampling,
                     filter,
                     puppet: match &spec.paint {
                         Paint::Mesh { frame, .. } => Some(frame.clone()),
@@ -3368,3 +3385,15 @@ impl ImageSampling {
 }
 
 pub mod coverage;
+#[cfg(test)]
+mod collapse_tests {
+    use super::SpriteTransform;
+    #[test]
+    fn zero_scale_collapses_only_flat_bases() {
+        let flat = SpriteTransform { scale_y: 0., ..Default::default() };
+        assert!(flat.collapsed());
+        // QLIE title sheet: local Y flattened, then turned to face the camera.
+        let turned = SpriteTransform { scale_y: 0., rotate_x: -std::f32::consts::FRAC_PI_2, ..Default::default() };
+        assert!(!turned.collapsed());
+    }
+}

@@ -1,5 +1,7 @@
 # System-NNN
 
+[Opcode and syscall implementation list](../../docs/native-api/system-nnn.md).
+
 Mode: `adopt`. The word-addressed SPT VM and native game policies are maintained
 in this workspace crate. Graphics, text, UI, resources, audio and storage use
 CrySirror services. There is no hosted original executable or private renderer.
@@ -29,6 +31,22 @@ storage. The current native profile is MUGEN2 / Legacy1000 with 16 effect slots.
   and scoped channels. MML supports segment sequences and nested finite/infinite
   repeats without expanding the program into PCM. Playlist clips must share a
   sample rate and provide measured durations.
+  System SE keeps its configured preload snapshot and two alternating channels;
+  button voices have separate channels, duplicate suppression and character
+  volume rules. Logo audio follows the original per-page timing and one-shot
+  flags; replay voices retain packed-before-loose lookup and character gates.
+  Connected primary General actors preserve delayed entry/exit sounds and
+  voices across mode changes. PrintMovie, PrintCG and ChartMenu share their
+  native frame admission with General; resource/audio completion does not
+  consume an extra update. Movie exit waits count native frames.
+- Default user commands follow the legacy `<name>IsDefault` registration over
+  `spt/command.xtx`. Their receipt stays pending while the mode actor runs and is
+  acknowledged at its SetYoyaku point. `printmovie` plays the movielist entry
+  through shared Media and `lastWait` native frames. `selectplace` is a modal
+  CCommonButtonGroup over its background SPT, with exist/enable words read
+  through native GetVarData. It writes `selectedPlaceVarName` = place + 1.
+  Unregistered commands go to the game's own override, which is not reviewed
+  and fails explicitly.
 - Configured quick-save/load uses original `dataN.sav` slots, native thumbnails,
   retained comment fields, notice queues and optional pre-load screen capture.
   Notice animation uses shared image resources and Layers.
@@ -117,6 +135,107 @@ storage. The current native profile is MUGEN2 / Legacy1000 with 16 effect slots.
   updates precede every Print, and native restore preserves its random draws
   relative to other initialized effects. Shared image operations own row tint
   blending and masked backdrop sampling.
+  ANIME (19) selects original bank pictures after native Calcu, preserving the
+  selected slot's geometry and its distinct opaque, mask and translucent paths.
+  CHANGE (40) composes independently weighted source generations through shared
+  packed pair blending; its original endpoint parameter mutations remain native.
+  SPECIALMOVE (61) retains independent Print clocks for movement, transparency,
+  scale and colour while shared scanline operations draw every branch. TACLIP
+  (136) uses shared directed mask clipping, packed fade arithmetic and strokes.
+  BOSSDEATH (48) preserves native per-row jitter and its disabled NOP endpoint,
+  including original save flags and background-layer transparency reset.
+  ZANTETSU (86) splits a masked source in left/right painter order through
+  shared fixed scanlines and byte-truncated coverage. CHARAMOZAIC (139) uses a
+  shared cancellable block sampler: mask-dependent random search, image and
+  resulting RNG state complete together; the VM never scans source pixels.
+  GEOCIRCLE (87/115), GEOTORUS (89/116), GEOBOX (114/118) and GEOPOLYGON
+  (88/117) retain their ordinary picture pass before shared geometry painting.
+  Ellipse spans, cutout policies, stored-byte mixing and colour offsets are
+  reusable engine operations. The source's box-add ellipse call, polygon-add
+  whole-screen fill and torus row/cutout behavior remain explicit native policy.
+  FULLANIME (79) reads numbered frame files through the session's scoped
+  file view, then prepares index and palette image jobs asynchronously. Its
+  last-print cache belongs to the effect container across slots; missing frames
+  retain the existing image and still advance that native cache. Raw restore
+  preserves its sixteen parameter words without replaying SetParam.
+  RAIN (13) retains one shared particle bank per native effect container:
+  ordered setters, Calcu and save initializers preserve the original random
+  stream while shared integer lines draw the rain.
+  KONOHA (104) emits ordered atlas sprites through bounded shared composition
+  batches. WATER (24) retains its cross-slot Print clock and uses shared row
+  sampling; its restore hook resets effect counters as in the native setter.
+  WATERDROP (95) retains the original full-screen colour-fill behavior.
+  RAIN2 (56) repeats natural-size particle planes through shared tile sampling.
+  KAGEROU (22), WATERFALL (91), GRASSPLANE (93) and SOYOSOYO (92) use
+  shared displaced scanlines with their distinct stored-mask arithmetic.
+  FISH (111), KE (27), HAE (108) and blink/lip animation (98) retain native
+  per-object timers, atlas coordinates and random order. Lip animation follows
+  the measured voice-duration countdown rather than a guessed mixer flag.
+  REMEMBER (26) uses reusable quantized row-edge offsets; TAIYO (51) uses
+  shared squared-radius circular offsets. PERS (67), TURN (64), TURNNEW (140)
+  and MOVIE_WARP (105) use shared wrapping fixed-point, double affine and
+  radial samplers. MASKWIPE (60) and MOVEMASKWIPE (101) compose full-canvas
+  picture/capture pairs with shared RGB-mask coverage and signed two-axis
+  mask displacement, retaining native crop, endpoint and low-word arithmetic.
+  CIRCLE (28) retains its integer aperture boundaries and native end-of-count
+  transition into Fill or NOP, including the original Fill parameter indexing.
+  SLASH (76) uses shared sliding-window sampling with native packed-word
+  normalization and delayed line/column phase changes.
+  KIRA (42) loads its constructor-owned system bitmap through shared resource
+  workers, retaining the shared star bank, per-Print random order and original
+  save reinitialization; colour extraction and saturated addition use engine jobs.
+  RAIN4 (102) retains ordered depth planes and per-slot motion. Shared repeated
+  scaling samples virtual tiles in canvas-sized work, with the native clipped
+  starting phase and separately quantized16.16 steps.
+  SPEEDLINE (85) keeps its shared line bank, ordered Calcu updates and save
+  reinitialization. Shared RGB spans provide the native saturating gradient
+  weights, including its distinct lower-row overlap.
+  SAN (15) retains seven global light-band counters and ordered Print/RNG
+  updates. Shared stored-word RGB spans perform its two-sided additive ramps,
+  retaining native signed phase, clipping and low-word saturation.
+  KOMOREBI (78) uses shared dual-mask RGB offsets with native independent
+  linear strides and full-coverage identity. CHARAMETAL (112) uses shared
+  spatial RGB bands with packed colour, native diagonal phase and retained
+  mask allocation; original picture assignment and mask-exists flags do not
+  replace the helpers' own resource checks.
+  Source32 ANIMATION (137) uses one depth-selected RGB/indexed image bank for
+  effect Print and CG preload/display. File reads, palette expansion, blank
+  planes and paired transitions use retained shared jobs; native filenames,
+  loadOk, cached failures, lastAnime and the original17 parameter words remain
+  native state. The class is admitted explicitly through
+  `Bridge::poll_source32_animation_configuration`; it does not change MUGEN2
+  Legacy, whose constructor has no137 class. The live native tag and off flag
+  have separate setters. Palette observations from ordinary pictures, STAFF,
+  CG and animation commit in native read order.
+  HAHEN (81) retains partition files, procedural grid jobs, class-wide caches
+  and RNG candidates until the native setter completes. Shared floating-edge
+  polygon raster jobs draw its translated fragments; original-save initialization
+  rebuilds class data in native slot order.
+  BATHWINDOW (97) plans ordered Calcu/RNG updates and completes retained-mask
+  brush jobs before the first Print, including the post-text screen layer.
+  Filename flushing, mask capacity and native source trim remain independent
+  of the displayed image; zero-write updates preserve the original metadata.
+  BEACH (83) updates its shared wave table for all active slots before Print.
+  HANABIRA (70) maps single-cell, translucent and paired-frame sprites to shared
+  image batches; HOTARU (71) uses shared signed radial brushes. HOTARUNEW (138)
+  keeps its distinct Source32 constructor/profile and stored-mask sprite math;
+  the MUGEN2 profile does not invent this originally absent class or its RNG.
+  CLOUD (82) retains its class-wide Print clock and packed repeating-row
+  sampling, including signed high-word wrapping and explicit coverage math.
+  FLOWER (12), SNOW (14) and SNOW2 (57) use constructor-owned shared images,
+  indexed fallback resources and class-wide particle banks. Constructor work
+  is asynchronous, and its random-state candidate commits with the prepared
+  images; native setters and original-save hooks retain their distinct rules.
+  HAMON (69) keeps its class-wide radial field as an engine data-image lease.
+  Setters and original-save restoration await cancellable field construction;
+  shared two-source sampling preserves packed radius offsets, signed-vector
+  arithmetic, capture selection and independently positioned picture origins.
+  Native picture mask storage retains its capacity and byte
+  history independently of the current file's mask-exists flag, through
+  cancellable shared channel-buffer image operations.
+  Title and film-button animation select their current/next cells through the
+  shared integer sprite sampler; native Print retains clock advancement and
+  percentage quantisation.
 - DWQ picture metadata retains native source trim independently of mutable
   effect rectangles. Mask bounds are queried on a cancellable image worker;
   stored already-cut margins and mask-palette red coverage retain native
@@ -135,6 +254,8 @@ storage. The current native profile is MUGEN2 / Legacy1000 with 16 effect slots.
   Cursor mattes use shared prefix capture and exact masked-pair image jobs.
 - Original saves restore message and ordinary/timed selection waits, images,
   effects, native script contexts and audio in a single staged transaction.
+  Effect records retain untouched parameter tails and padding across setters,
+  clear operations and raw restore; Fill also retains signed parameter words.
   An idle title can be replaced without first changing the visible title or UI.
   Last-screen effects retain their native post-text ordering through detached
   shared Layer composition; preparation does not advance native effect counters.
@@ -147,14 +268,36 @@ and ignore them on load. Reviewed automatic mode callbacks that are genuinely
 empty retain their original zero-sized blocks before manual EXT blocks.
 ChartMenu's selection words and road bytes retain their original EXT layout,
 alignment and initialization; NewGame clears roads while retaining permissions.
-Chart map tabs/replay confirmation currently use shared controls rather than the
-complete native skins. The map editor's persistence, Chart new-mark animation,
+Chart grow tabs use the original dual-state skins and masked hit regions;
+new-mark animation retains its native Print clock and selected-map acknowledgement.
+Replay confirmation and option controls still use shared controls rather than
+complete native skins. Source SystemFile profiles retain the14/16-record
+layouts, old/expanded system-variable banks and the independent SYSTEMFLAG2
+record; VERSION2 button voices read its live catalogue preference. These
+explicit source layouts do not identify a new executable ABI: the installed
+bootstrap remains the reviewed Mugen2 profile. The map editor's persistence,
+Source32 executable bootstrap and its native preference controls,
 other saved outer actors beyond PRINT/SELECT/Chart,
-Custom animation tags, character-specific replay-voice controls, unconnected
+Native script callbacks for custom animation tags, character-specific replay-voice controls, unconnected
 special modes and debug all-on controls remain unsupported.
 Load/Save/Config and catalogue controls use shared modal UI; their full original
-skins, other General-mode entry profiles and General-mode entry/exit voices
-are not reproduced.
+skins and unconnected General-mode/secondary-actor entry profiles remain
+unavailable. The primary actors' connected General audio policy is separate
+from those missing skins and mode profiles.
+Explicit Source32 character-volume controls
+(`Bridge::configure_source32_character_volume_controls`) use shared sliders and
+toggles; old Config setup keys do not activate a class absent from MUGEN2. Their
+signed five-bit volume fields and transposed voice switches write the original
+SystemFile; released sliders prepare typed system-sound previews through the
+existing audio owner. These shared controls use paged layout independently of
+the native skin pages. Reviewed MUGEN2 Config entry stops its8 script-sound and4
+voice channels while retaining BGM and loop-work. Native Config reset-button wiring, dynamic character
+labels/voice substitutions and complete native Config skins remain separate
+work.
+SelectPlace character overlays, autoPicLoad, hover variables, keyboard
+movement and the in-mode option buttons/game keys are not connected; the first
+three fail explicitly. Other default user-command modes (selectheroin,
+printcalendar, printresult, nameinput, selectplace2, selectzukan) have no actor.
 Menu background scripts that request a foreground Message/Selection mode transfer
 remain unsupported. Film-skip button profiles outside the reviewed common-button
 parameters fail explicitly.

@@ -297,7 +297,10 @@ impl Machine {
         {
             return Ok(Value::Text(token.to_owned()));
         }
-        match self.eval(s) {
+        if token.is_empty() {
+            return Ok(Value::Text(String::new()));
+        }
+        match expression::evaluate_checked(s, |name| self.value(name)) {
             Ok(value) => Ok(value),
             Err(_) => Ok(Value::Text(s.to_owned())),
         }
@@ -414,6 +417,19 @@ impl Machine {
             self.frame.locals.contains_key(&key) || self.global_contains(&key),
             "assignment to undefined QLIE variable {key}"
         );
+        //532DA0 preserves the destination declaration kind before storing a
+        //calculator record. This applies to scalar cells as well as arrays.
+        let base = key.split_once('[').map_or(key.as_str(), |(base, _)| base);
+        let kind = if self.frame.locals.contains_key(&key) {
+            self.frame.array_types.get(base)
+        } else {
+            self.global_array_kind(base)
+        };
+        let value = match kind.map(String::as_str) {
+            Some("int") => Value::Int(value.integer()?),
+            Some("str") => Value::Text(value.text()),
+            _ => value,
+        };
         if self.frame.locals.contains_key(&key) {
             self.frame.locals.insert(key, value);
         } else {
@@ -495,6 +511,21 @@ impl Machine {
             } else {
                 (declaration.to_ascii_lowercase(), None)
             };
+            //The existing serialized type map also retains scalar types.
+            //Native scalars own element0; omitting array syntax must not erase
+            //their int/str/obj declaration or make later assignment dynamic.
+            if global {
+                let types = if op == "svar" {
+                    &mut self.shared_bank.array_types
+                } else if self.thread_kind() == ThreadKind::System {
+                    &mut self.system_bank.array_types
+                } else {
+                    &mut self.array_types
+                };
+                types.entry(name.clone()).or_insert_with(|| kind.clone());
+            } else {
+                self.frame.array_types.entry(name.clone()).or_insert_with(|| kind.clone());
+            }
             if let Some(n) = count {
                 if global {
                     if op == "svar" {
@@ -593,16 +624,30 @@ impl Machine {
         &self.frame.path
     }
     pub fn resolve_file(&self, file: &str) -> Result<String> {
-        let direct = program::canonical(file)?;
-        if self.programs.contains_key(&direct) {
-            return Ok(direct);
+        self.resolve_file_from(self.reader_path(), file)
+    }
+    fn resolve_file_from(&self, source: &str, file: &str) -> Result<String> {
+        // Validate the request before joining, but resolve parent components
+        // only after the reader directory is known. `..\\value.s` from
+        // scenario/ks_01/start.s stays inside the asset capability.
+        ensure!(
+            !file.is_empty() && file.len() <= 65536
+                && !file.starts_with(['/', '\\'])
+                && !file.contains(':') && !file.contains('\0'),
+            "QLIE relative script path"
+        );
+        if let Ok(direct) = program::canonical(file) {
+            if self.programs.contains_key(&direct) {
+                return Ok(direct);
+            }
         }
-        let prefix = self
-            .reader_path()
+        let prefix = source
             .rsplit_once('/')
             .map(|(p, _)| p)
             .unwrap_or("");
-        let relative = program::canonical(&format!("{prefix}/{file}"))?;
+        let joined = if prefix.is_empty() { file.to_owned() }
+            else { format!("{prefix}/{file}") };
+        let relative = program::canonical(&joined)?;
         ensure!(
             self.programs.contains_key(&relative),
             "QLIE script module absent: {file}"
@@ -627,17 +672,7 @@ impl Machine {
             return Ok(Some((path.into(), *pc)));
         }
         for inc in &p.includes {
-            let root = program::canonical(inc)?;
-            let relative = program::canonical(&format!(
-                "{}/{}",
-                path.rsplit_once('/').map(|x| x.0).unwrap_or(""),
-                inc
-            ))?;
-            let resolved = if self.programs.contains_key(&root) {
-                root
-            } else {
-                relative
-            };
+            let resolved = self.resolve_file_from(path, inc)?;
             if let Some(found) = self.find_label(&resolved, label, seen)? {
                 return Ok(Some(found));
             }
@@ -696,8 +731,20 @@ impl Machine {
         };
         let label = if label.is_empty() { "@@top" } else { label };
         let mut seen = BTreeSet::new();
+        // `@@@file` is textual inclusion: a label declared inside an inline
+        // module is a position in the including reader. Entering it resumes
+        // the includer after that `@@@` line when the module ends, and never
+        // executes the module's preceding text (BIMAN1 header.s @@Top sits
+        // after `@@@AvgSystem.s`, whose body begins with routine labels).
+        let chain = if self.programs[&path].labels.contains_key(&label.to_ascii_lowercase()) {
+            None
+        } else {
+            self.inline_label_chain(&path, label, 0)?
+        };
         let p = &self.programs[&path];
-        let mut found = if p.inline_includes
+        let mut found = if let Some(chain) = &chain {
+            Some(chain[0].clone())
+        } else if p.inline_includes
             && label.eq_ignore_ascii_case("@@top")
             && !p.labels.contains_key("@@top")
         {
@@ -774,6 +821,58 @@ impl Machine {
             self.frame.loops.clear();
             self.frame.cases.clear();
         }
+        for (path, pc) in chain.into_iter().flatten().skip(1) {
+            self.push_inline(path, pc)?;
+        }
+        Ok(())
+    }
+    /// Inline `@@@` modules leading from `path` to the module declaring
+    /// `label`: each element is (reader, pc after its include, or the label pc
+    /// for the final module).
+    fn inline_label_chain(
+        &self,
+        path: &str,
+        label: &str,
+        depth: usize,
+    ) -> Result<Option<Vec<(String, usize)>>> {
+        ensure!(depth < 32, "QLIE inline include depth limit");
+        let key = label.to_ascii_lowercase();
+        let p = self.programs.get(path).context("QLIE included module absent")?;
+        for (index, ins) in p.code.iter().enumerate() {
+            if ins.op != "include" {
+                continue;
+            }
+            let Some(file) = ins.args.first() else { continue };
+            let Ok(module) = self.resolve_file_from(path, file) else { continue };
+            let Some(m) = self.programs.get(&module) else { continue };
+            if let Some(pc) = m.labels.get(&key) {
+                return Ok(Some(vec![(path.into(), index + 1), (module, *pc)]));
+            }
+            if let Some(mut rest) = self.inline_label_chain(&module, label, depth + 1)? {
+                rest.insert(0, (path.into(), index + 1));
+                return Ok(Some(rest));
+            }
+        }
+        Ok(None)
+    }
+    fn push_inline(&mut self, path: String, pc: usize) -> Result<()> {
+        ensure!(self.stack.len() < 256, "QLIE inline include stack limit");
+        let frame = Frame {
+            reader_path: self.reader_path().to_owned(),
+            path,
+            pc,
+            locals: self.frame.locals.clone(),
+            arrays: self.frame.arrays.clone(),
+            array_types: self.frame.array_types.clone(),
+            array_shapes: self.frame.array_shapes.clone(),
+            inline: true,
+            thread: self.thread_kind(),
+            source_thread: self.frame.source_thread,
+            selection: self.frame.selection.clone(),
+            call_label: self.frame.call_label.clone(),
+            ..Default::default()
+        };
+        self.stack.push(std::mem::replace(&mut self.frame, frame));
         Ok(())
     }
     pub(crate) fn capture_call_results(&self) -> BTreeMap<String, Value> {
@@ -859,6 +958,18 @@ impl Machine {
         // Discard its runtime control record before another for/brk/case
         // observes it, while retaining records at their own loop header.
         let pc = self.frame.pc;
+        if trace_enabled() {
+            eprintln!(
+                "QLIE {:?} {}:{} d={}{} \\{} {:?}",
+                self.thread_kind(),
+                self.frame.path,
+                ins.line + 1,
+                self.stack.len(),
+                if self.frame.inline { " inline" } else { "" },
+                ins.op,
+                ins.args
+            );
+        }
         let program = self
             .programs
             .get(&self.frame.path)
@@ -942,24 +1053,8 @@ impl Machine {
             }
             "include" => {
                 let path = self.resolve_file(a.first().context("QLIE inline module")?)?;
-                ensure!(self.stack.len() < 256, "QLIE inline include stack limit");
-                let frame = Frame {
-                    reader_path: self.reader_path().to_owned(),
-                    path,
-                    pc: 0,
-                    locals: self.frame.locals.clone(),
-                    arrays: self.frame.arrays.clone(),
-                    array_types: self.frame.array_types.clone(),
-                    array_shapes: self.frame.array_shapes.clone(),
-                    inline: true,
-                    thread: self.thread_kind(),
-                    source_thread: self.frame.source_thread,
-                    selection: self.frame.selection.clone(),
-                    call_label: self.frame.call_label.clone(),
-                    ..Default::default()
-                };
                 self.frame.pc += 1;
-                self.stack.push(std::mem::replace(&mut self.frame, frame));
+                self.push_inline(path, 0)?;
                 return Ok(true);
             }
             "if" => {
@@ -1276,4 +1371,9 @@ fn assignment_parts(source: &str) -> Option<(&str, &str)> {
         }
     }
     None
+}
+/// `QLIE_TRACE=1` prints every interpreted instruction with its call depth.
+fn trace_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("QLIE_TRACE").is_some())
 }

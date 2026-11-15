@@ -46,6 +46,9 @@ and engine-owned resources.
 
 Open original game data with `crysirror play /path/to/game`.
 See the [compatibility guide](docs/NATIVE_ADAPTERS.md) for features and save-file compatibility.
+See the [opcode and syscall lists](docs/native-api/README.md) for per-engine implementation entries and gaps.
+For Siglus, BGI, SoftPAL and RFVP updates, see the
+[upstream versions, integration changes and rendering paths](docs/INTEGRATED_ENGINES.md).
 
 | Engine | Game data |
 | --- | --- |

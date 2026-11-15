@@ -26,7 +26,7 @@ pub struct Assets {
     pub decoders: crysirror_image::DecoderRegistry,
     root: Arc<dyn ClientStorage>,
     #[cfg(not(target_arch = "wasm32"))]
-    native_root: Option<cap_std::fs::Dir>,
+    native_root: Option<crysirror_capfs::fs::Dir>,
     clients: BTreeMap<ClientId, Arc<dyn ClientStorage>>,
     storage: BTreeMap<ClientId, Arc<dyn ClientStorage>>,
     bytes: BTreeMap<String, Arc<[u8]>>,
@@ -73,7 +73,7 @@ impl Assets {
     }
     #[cfg(not(target_arch = "wasm32"))]
     pub fn new(path: &Path) -> Result<Self> {
-        let dir = cap_std::fs::Dir::open_ambient_dir(path, cap_std::ambient_authority()).context("open asset root")?;
+        let dir = crysirror_capfs::fs::Dir::open_ambient_dir(path, crysirror_capfs::ambient_authority()).context("open asset root")?;
         let mut assets = Self::from_storage(crate::vfs::asset_storage_from_dir(dir.try_clone()?))?;
         assets.native_root = Some(dir);
         Ok(assets)

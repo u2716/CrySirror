@@ -448,12 +448,14 @@ fn decode_pgd_ge(bytes: &[u8]) -> anyhow::Result<DecodedImage> {
 }
 
 fn image_allocation_begin(bytes: usize) {
-    #[cfg(target_os = "vita")]
+    // The diagnostic lives in the retained GXM output driver, which is only
+    // linked when that driver is (`vita-gxm`).
+    #[cfg(all(target_os = "vita", feature = "vita-gxm"))]
     if bytes >= 8 * 1024 * 1024 {
         unsafe extern "C" { fn sena_vita_image_allocation(bytes: usize); }
         unsafe { sena_vita_image_allocation(bytes); }
     }
-    #[cfg(not(target_os = "vita"))]
+    #[cfg(not(all(target_os = "vita", feature = "vita-gxm")))]
     let _ = bytes;
 }
 

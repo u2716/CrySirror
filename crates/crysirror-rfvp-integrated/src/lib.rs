@@ -24,6 +24,8 @@ use std::{
 mod audio;
 use audio::Audio;
 pub use crysirror_rfvp::Nls;
+#[cfg(feature = "switch-framebuffer")]
+pub use crysirror_rfvp_native::host_api::horizon;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {

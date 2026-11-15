@@ -12,6 +12,7 @@ use crysirror_core::{service::HostServices, state::ClientId};
 use crysirror_tasks::TaskPool;
 
 pub(crate) struct SavedPictures {
+    png_headers:Vec<crysirror_image::png_header::PngHeader>,
     client: ClientId,
     effects: Vec<SavedEffect>,
     requests: Vec<(i32, Vec<u8>)>,
@@ -23,6 +24,7 @@ pub(crate) struct SavedPictures {
     resources: NativeResources,
     pool: TaskPool,
     failure: Option<String>,
+    mask_histories:std::collections::BTreeMap<i32,crate::native_mask_storage::MaskStorage>,
     pub api_calls: u64,
 }
 impl SavedPictures {
@@ -53,6 +55,7 @@ impl SavedPictures {
             }
         }
         Ok(Self {
+            png_headers:Vec::new(),
             client,
             effects,
             requests,
@@ -64,9 +67,11 @@ impl SavedPictures {
             resources,
             pool: TaskPool::new("nnn-native-saved-pictures", 1, 1)?,
             failure: None,
+            mask_histories:Default::default(),
             api_calls: 0,
         })
     }
+    pub(crate) fn with_mask_histories(mut self,histories:std::collections::BTreeMap<i32,crate::native_mask_storage::MaskStorage>)->Self{self.mask_histories=histories;self}
     pub fn poll(&mut self, host: &mut dyn HostServices) -> Result<bool> {
         if let Some(reason) = &self.failure {
             anyhow::bail!("NNN saved picture preparation: {reason}");
@@ -92,19 +97,21 @@ impl SavedPictures {
                 self.levels,
                 self.resources.clone(),
                 &self.pool,
-            )?);
+            )?.with_mask_history(self.mask_histories.get(slot).cloned()));
         }
         let active = self.active.as_mut().unwrap();
         let before = active.api_calls;
         let result = active.poll(host);
         self.api_calls += active.api_calls - before;
         if let Some(picture) = result? {
+            if let Some(header)=active.png_header(){self.png_headers.push(header.clone());}
             self.prepared.push(picture);
             self.active = None;
             self.next += 1;
         }
         Ok(self.next == self.requests.len())
     }
+    pub(crate) fn png_headers(&self)->&[crysirror_image::png_header::PngHeader]{&self.png_headers}
     pub fn effects(&self) -> &[SavedEffect] {
         &self.effects
     }

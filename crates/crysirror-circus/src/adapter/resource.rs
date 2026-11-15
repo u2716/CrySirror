@@ -70,6 +70,37 @@ impl Bridge<'_> {
         request: &ResourceRequest,
     ) -> Result<Option<ResourceReply>> {
         match request {
+            ResourceRequest::MusicIndex { index } => {
+                if self.services.names.is_none() {
+                    let Some(Prepared::Names(names)) = self.services.prepare(Work::Names, self.client)? else {return Ok(None);};
+                    self.services.names = Some(names);
+                }
+                return Ok(Some(ResourceReply::Index((*index < self.services.names.as_ref().unwrap().music.len()).then_some(*index))));
+            }
+            ResourceRequest::ProfileSlotReadable{profile,slot}=>{
+                let Some(Prepared::SaveReadable(readable))=self.services.prepare(Work::ProfileSlotReadable(*profile,*slot),self.client)? else{return Ok(None)};
+                return Ok(Some(ResourceReply::Readable(readable)))
+            }
+            ResourceRequest::ProfileSlotFull{profile,slot,bytes}=>{
+                let Some(Prepared::SaveReadable(full))=self.services.prepare(Work::ProfileSlotFull(*profile,*slot,*bytes),self.client)? else{return Ok(None)};
+                return Ok(Some(ResourceReply::Readable(full)))
+            }
+            ResourceRequest::CaptureScreen{slot}=>{
+                return Ok(self.capture_screen(*slot)?.then_some(ResourceReply::Done));
+            }
+            ResourceRequest::ReadProfileSlot{profile,slot}=>{
+                let Some(Prepared::SlotBytes(bytes))=self.services.prepare(Work::ProfileSlotRead(*profile,*slot),self.client)? else{return Ok(None)};
+                return Ok(Some(ResourceReply::Bytes(bytes)))
+            }
+            ResourceRequest::WriteProfileSlot{profile,slot,bytes}=>{
+                let Some(prepared)=self.services.prepare(Work::ProfileSlotWrite(*profile,*slot,bytes.clone()),self.client)? else{return Ok(None)};
+                ensure!(matches!(prepared,Prepared::SystemSaved),"Circus slot write completion type");
+                return Ok(Some(ResourceReply::Done))
+            }
+            ResourceRequest::ReadPreferences{profile}=>{
+                let Some(Prepared::ProfilePreferences(bytes))=self.services.prepare(Work::ProfilePreferences(*profile),self.client)? else{return Ok(None)};
+                return Ok(Some(ResourceReply::Preferences(bytes)))
+            }
             ResourceRequest::CgIndex { name } => {
                 if self.services.names.is_none() {
                     let Some(Prepared::Names(names))=self.services.prepare(Work::Names,self.client)? else{return Ok(None)};
@@ -161,7 +192,8 @@ impl Bridge<'_> {
                     //for UV normalization, not that texture's current slot.
                     let quad=crysirror_scene::layer::crop::texel_center_quad(*allocation,*reference,[l as f32,t as f32,r as f32,b as f32],[0.,0.])?;
                     let size=quad.map(|quad|quad.size).unwrap_or([1.,1.]);
-                    layer["rect"]=json!([0,0,size[0],size[1]]);
+                    let origin=crate::machine::visual_ops::object_resource(*object).filter(|_|id==super::sprite_resources::alias(*object)).map_or([0,0],|slot|self.dc3_image_origin(slot));
+                    layer["rect"]=json!([origin[0],origin[1],size[0],size[1]]);
                     layer["uv"]=json!(quad.map(|quad|quad.uv));
                     layer["visible"]=json!(quad.is_some());
                     layer["sampling"]=json!({"address_u":"repeat","address_v":"repeat"});
@@ -223,7 +255,9 @@ impl Bridge<'_> {
                     self.services.primary.resources.remove(&object);
                 }
                 self.submit(commands, vec![])?;
-                if held && (4..=8).contains(slot) {
+                if held && (4..=8).contains(slot)
+                    && self.services.native_profile != Some(crate::Profile::Dc2PlusCommunication)
+                {
                     if self
                         .native_resource(&ResourceRequest::Unload { slot: *slot + 5 })?
                         .is_none()
@@ -277,5 +311,43 @@ impl Bridge<'_> {
             }
         }
         Ok(Some(ResourceReply::Done))
+    }
+}
+
+impl Bridge<'_> {
+    ///Draw the scene root into an offscreen canvas and publish it as the
+    ///image of `slot` (logical extent = canvas). Shared Canvas/Image
+    ///services do the rendering; the adapter only owns the slot binding.
+    pub(super) fn capture_screen(&mut self, slot: u8) -> Result<bool> {
+        use crysirror_core::image_processing::ImageProcessState;
+        const CANVAS: u32 = 0x3300_0010;
+        let [width, height] = self.native_canvas();
+        if self.services.screen_capture.as_ref().is_none_or(|(owner, _)| *owner != slot) {
+            ensure!(self.services.screen_capture.is_none(), "Circus screen capture owner changed");
+            self.host.submit_engine(self.client, 1, &serde_json::to_vec(&json!({"canvases":[
+                {"op":"create","id":CANVAS,"width":width,"height":height},
+                {"op":"clear","id":CANVAS,"color":[0,0,0,255]},
+                {"op":"draw_subtree","source":SCENE_ROOT,"destination":CANVAS},
+            ]}))?)?;
+            let job = self.host.begin_canvas_image(self.client, CANVAS)?;
+            self.services.screen_capture = Some((slot, job));
+        }
+        let (_, job) = self.services.screen_capture.as_mut().unwrap();
+        let resource = match job.poll()? {
+            ImageProcessState::Pending => return Ok(false),
+            ImageProcessState::Failed(error) => bail!("Circus screen capture failed: {error}"),
+            ImageProcessState::Ready(resource) => resource,
+        };
+        self.services.screen_capture = None;
+        let image = self.host.publish_image_resource(self.client, 0x3503_0000 + u32::from(slot), resource)?;
+        if let Some(previous) = self.services.images.insert(slot, image.clone()) {
+            if previous.path != image.path && !self.services.images.values().any(|other| other.path == previous.path) {
+                self.host.release_image_resource(self.client, previous.path.relative())?;
+            }
+        }
+        self.services.image_extents.insert(slot, [width, height]);
+        self.services.image_names.insert(slot, format!("*capture{slot}"));
+        self.services.image_scales.remove(&slot);
+        Ok(true)
     }
 }

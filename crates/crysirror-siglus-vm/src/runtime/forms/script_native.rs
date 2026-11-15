@@ -1,7 +1,7 @@
 // Copyright (c) 2026 CrySirror contributors. MPL-2.0.
 // Native policy adopted from xmoezzz/siglus_rs commit
 // 5f358ef1360b0439e92aed2b749e8f25d8721954, crates/siglus_scene_vm/src/runtime/forms/script.rs.
-// See UPSTREAM.md, SOURCE.json and upstream-files.json for source/licence notices.
+// See SOURCE.json, SOURCE.json and upstream-files.json for source/licence notices.
 //! Complete original SCRIPT/EXCALL.SCRIPT policy. The public native dispatch
 //! boundary validates signatures and gates consumers not yet extracted.
 use anyhow::Result;

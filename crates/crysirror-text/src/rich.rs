@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Explicit rich text data and bounded, strict bracket markup.
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use unicode_segmentation::UnicodeSegmentation;
 

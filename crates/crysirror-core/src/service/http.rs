@@ -6,6 +6,9 @@ use alloc::{string::String, vec::Vec};
 pub enum HttpMethod {
     Get,
     Post,
+    Put,
+    Delete,
+    Head,
 }
 /// Request admission is limited to an exact origin granted by the host owner.
 /// Bodies and URL query strings must not be copied to diagnostics.
@@ -23,12 +26,15 @@ pub struct HttpRequest {
 #[derive(Clone)]
 pub struct HttpResponse {
     pub status: u16,
+    /// Final response header fields in arrival order; names are lower-case.
+    pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
 }
 impl core::fmt::Debug for HttpResponse {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("HttpResponse")
             .field("status", &self.status)
+            .field("header_count", &self.headers.len())
             .field("body_bytes", &self.body.len())
             .finish()
     }

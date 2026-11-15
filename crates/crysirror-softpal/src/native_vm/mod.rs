@@ -14,8 +14,10 @@ pub mod debug;
 pub mod effect;
 pub mod engine;
 pub mod event;
-// Original C ABI source is retained, but the adapter uses the safe Engine port.
-// No exported C host or platform shell is installed.
+// The default adapter uses the safe Engine port. The optional Vita GXM driver
+// consumes the original borrowed-scene C ABI; it installs no platform launcher.
+#[cfg(all(target_os = "vita", feature = "vita-gxm"))]
+pub mod ffi;
 pub mod font;
 pub mod fx;
 pub mod image;

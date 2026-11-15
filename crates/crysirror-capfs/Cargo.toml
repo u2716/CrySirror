@@ -1,0 +1,16 @@
+[package]
+name = "crysirror-capfs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Capability-rooted directory handles: cap-std on desktop, a canonical-path std::fs backend on consoles"
+
+[target.'cfg(not(any(target_os = "horizon", target_os = "vita")))'.dependencies]
+cap-std.workspace = true
+
+[target.'cfg(target_os = "vita")'.dependencies]
+crysirror-vita-io.workspace = true
+
+[dev-dependencies]
+tempfile = "3.12"

@@ -1,0 +1,20 @@
+// SPDX-License-Identifier: MPL-2.0
+// exposure.wgsl adaptation into a 1x1 F32_R target from the 2x2 reduction.
+uniform float4 lite_exposure_range;   // x min log2, y max log2, z speed up, w speed down (1/s)
+uniform float4 lite_exposure_time;    // x dt seconds, y 1 when the previous state is valid
+
+float4 main(float2 uv : TEXCOORD0,
+            uniform sampler2D reduced : TEXUNIT0,
+            uniform sampler2D previous : TEXUNIT1) : COLOR
+{
+    float2 s = tex2Dlod(reduced, float4(0.25, 0.25, 0.0, 0.0)).xy + tex2Dlod(reduced, float4(0.75, 0.25, 0.0, 0.0)).xy
+             + tex2Dlod(reduced, float4(0.25, 0.75, 0.0, 0.0)).xy + tex2Dlod(reduced, float4(0.75, 0.75, 0.0, 0.0)).xy;
+    float target_log = clamp(s.x / s.y, lite_exposure_range.x, lite_exposure_range.y);
+    if (lite_exposure_time.y < 0.5) {
+        return float4(target_log, 0.0, 0.0, 1.0);
+    }
+    float prev = tex2Dlod(previous, float4(0.5, 0.5, 0.0, 0.0)).r;
+    float speed = target_log > prev ? lite_exposure_range.z : lite_exposure_range.w;
+    float k = 1.0 - exp(-lite_exposure_time.x * speed);
+    return float4(prev + (target_log - prev) * k, 0.0, 0.0, 1.0);
+}

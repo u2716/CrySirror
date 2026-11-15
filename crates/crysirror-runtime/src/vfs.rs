@@ -7,7 +7,7 @@ mod fallback;
 mod no_replace;
 mod desktop_roots;
 pub use desktop_roots::DesktopStorageRoots;
-use cap_std::{
+use crysirror_capfs::{
     ambient_authority,
     fs::{Dir, OpenOptions},
 };
@@ -43,6 +43,53 @@ fn io(e: std::io::Error) -> Error {
 pub fn read_limited(dir: &Dir, path: impl AsRef<Path>) -> Result<Vec<u8>> {
     read_limited_virtual(dir,path,false)
 }
+/// No supported filesystem stores a path component longer than 255 bytes.
+/// Archive indexes can still name one (for example XP3 protection dummies),
+/// and some hosts fail on such a lookup instead of reporting it absent
+/// (Vita3K raises an uncaught exception), so it is not passed to the disk.
+fn impossible_component(relative: &str) -> bool {
+    relative.split('/').any(|part| part.len() > 255)
+}
+/// Game data authored for Windows (and stored on exFAT on PS Vita) is looked
+/// up case-insensitively; a case-sensitive host (Linux, Vita3K on Linux)
+/// would otherwise miss `char/circus2.CRX` stored as `char/Circus2.CRX`.
+/// Only for the read-only asset mount and only after an exact lookup missed:
+/// each component is matched ASCII-case-insensitively. An exact name wins, and
+/// two case-folded matches in one directory resolve to nothing rather than
+/// to an arbitrary file.
+fn fold_asset_case(dir: &Dir, relative: &str) -> Option<String> {
+    let mut resolved = String::new();
+    for part in relative.split('/').filter(|p| !p.is_empty()) {
+        let entries = if resolved.is_empty() { dir.entries() } else { dir.read_dir(&resolved) }.ok()?;
+        let mut found: Option<String> = None;
+        for entry in entries.flatten().take(MAX_DIRECTORY_ENTRIES + 1) {
+            let Ok(name) = entry.file_name().into_string() else { continue };
+            if name == part {
+                found = Some(name);
+                break;
+            }
+            if name.eq_ignore_ascii_case(part) {
+                if found.is_some() {
+                    return None;
+                }
+                found = Some(name);
+            }
+        }
+        if !resolved.is_empty() {
+            resolved.push('/');
+        }
+        resolved.push_str(&found?);
+    }
+    Some(resolved)
+}
+/// The on-disk spelling of an asset path: the path itself when it exists,
+/// else its case-folded match.
+fn asset_spelling<'a>(dir: &Dir, relative: &'a str) -> std::borrow::Cow<'a, str> {
+    if relative.is_empty() || dir.symlink_metadata(relative).is_ok() {
+        return relative.into();
+    }
+    fold_asset_case(dir, relative).map_or(relative.into(), Into::into)
+}
 fn read_limited_virtual(dir:&Dir,path:impl AsRef<Path>,virtual_directory:bool)->Result<Vec<u8>> {
     let file=dir.open(path).map_err(|e|if virtual_directory&&e.kind()==std::io::ErrorKind::NotADirectory {Error::NotFound}else{io(e)})?;
     if !file.metadata().map_err(io)?.is_file() {
@@ -70,7 +117,7 @@ fn write_atomic_with_parent_policy(dir:&Dir,relative:&str,bytes:&[u8],create_par
     if create_parent && !parent.as_os_str().is_empty() {
         dir.create_dir_all(parent).map_err(io)?;
     }
-    let mut selected: Option<(PathBuf, cap_std::fs::File)> = None;
+    let mut selected: Option<(PathBuf, crysirror_capfs::fs::File)> = None;
     for _ in 0..32 {
         let id = TEMP_ID.fetch_add(1, Ordering::Relaxed);
         let temp = parent.join(format!(".crysirror-{}-{id}.tmp", std::process::id()));
@@ -291,7 +338,7 @@ struct CapStorage {
     providers: ProviderMounts,
 }
 struct CapAssetReader {
-    file: Mutex<cap_std::fs::File>,
+    file: Mutex<crysirror_capfs::fs::File>,
     len: u64,
 }
 struct CapStorageLease {
@@ -382,13 +429,17 @@ impl ClientStorage for CapStorage {
                 }
             }
         }
-        let metadata = match self.dir(mount).metadata(if relative.is_empty() { "." } else { relative }) {
+        if impossible_component(relative) {
+            return Ok(None);
+        }
+        let spelled = if mount == Mount::Asset { asset_spelling(self.dir(mount), relative) } else { relative.into() };
+        let metadata = match self.dir(mount).metadata(if spelled.is_empty() { "." } else { spelled.as_ref() }) {
             Ok(m) => m,
             Err(e) if e.kind()==std::io::ErrorKind::NotFound || virtual_directory&&e.kind()==std::io::ErrorKind::NotADirectory=>return Ok(None),
             Err(e) => return Err(io(e)),
         };
         if !metadata.is_file() && !metadata.is_dir() { return Err(Error::Unsupported("special storage metadata")); }
-        let millis = |t: std::io::Result<cap_std::time::SystemTime>| t.ok().and_then(|t| {
+        let millis = |t: std::io::Result<crysirror_capfs::time::SystemTime>| t.ok().and_then(|t| {
             let t = t.into_std();
             let n = match t.duration_since(std::time::UNIX_EPOCH) {
                 Ok(d) => i128::try_from(d.as_millis()).ok()?,
@@ -532,7 +583,10 @@ impl ClientStorage for CapStorage {
                 Err(error) => return Err(error),
             }
         }
-        let file = self.asset.open(path.relative()).map_err(|e|if virtual_directory&&e.kind()==std::io::ErrorKind::NotADirectory {Error::NotFound}else{io(e)})?;
+        if impossible_component(path.relative()) {
+            return Err(Error::NotFound);
+        }
+        let file = self.asset.open(asset_spelling(&self.asset, path.relative()).as_ref()).map_err(|e|if virtual_directory&&e.kind()==std::io::ErrorKind::NotADirectory {Error::NotFound}else{io(e)})?;
         let metadata = file.metadata().map_err(io)?;
         if !metadata.is_file() {
             return Err(Error::Invalid("asset stream must be a file"));
@@ -544,6 +598,7 @@ impl ClientStorage for CapStorage {
     }
     fn open_read(&self, path: &VfsPath) -> Result<Arc<dyn AssetReader>> {
         if path.mount()==Mount::Asset {return self.open_asset(path)}
+        if impossible_component(path.relative()) {return Err(Error::NotFound)}
         let file=self.dir(path.mount()).open(path.relative()).map_err(io)?;
         let metadata=file.metadata().map_err(io)?;
         if !metadata.is_file(){return Err(Error::Invalid("read stream must be a file"))}
@@ -564,7 +619,12 @@ impl ClientStorage for CapStorage {
                 }
             }
         }
-        read_limited_virtual(self.dir(path.mount()), path.relative(),virtual_directory)
+        if impossible_component(path.relative()) {
+            return Err(Error::NotFound);
+        }
+        let dir = self.dir(path.mount());
+        let relative = if path.mount() == Mount::Asset { asset_spelling(dir, path.relative()) } else { path.relative().into() };
+        read_limited_virtual(dir, relative.as_ref(), virtual_directory)
     }
     fn write_atomic(&self, path: &VfsPath, data: &[u8]) -> Result<()> {
         if path.mount() == Mount::Asset {
@@ -632,6 +692,8 @@ impl ClientStorage for CapStorage {
         let d = self.dir(mount);
         let entries = if rel.is_empty() {
             d.entries()
+        } else if mount == Mount::Asset {
+            d.read_dir(asset_spelling(d, &rel).as_ref())
         } else {
             d.read_dir(&rel)
         };
@@ -697,6 +759,25 @@ impl FileSystem for DiskVfs {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn asset_lookup_folds_case_like_windows_game_data() {
+        let assets = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        std::fs::create_dir(assets.path().join("Char")).unwrap();
+        std::fs::write(assets.path().join("Char/Circus2.CRX"), b"crx").unwrap();
+        let mut fs = DiskVfs::new(assets.path(), state.path()).unwrap();
+        fs.register(ClientId(1), "test", "one").unwrap();
+        let one = fs.storage(ClientId(1)).unwrap();
+        let wanted = VfsPath::new(Mount::Asset, "char/circus2.CRX").unwrap();
+        assert_eq!(one.read(&wanted).unwrap(), b"crx");
+        assert_eq!(one.open_asset(&wanted).unwrap().len().unwrap(), 3);
+        assert_eq!(one.metadata(Mount::Asset, "char/circus2.CRX").unwrap().unwrap().size, Some(3));
+        assert_eq!(one.list(Mount::Asset, "char").unwrap(), vec!["Circus2.CRX".to_string()]);
+        assert!(one.read(&VfsPath::new(Mount::Asset, "char/absent.crx").unwrap()).is_err());
+        let long = format!("data/{}", "x".repeat(300));
+        assert!(matches!(one.read(&VfsPath::new(Mount::Asset, &long).unwrap()), Err(Error::NotFound)));
+        assert!(one.metadata(Mount::Asset, &long).unwrap().is_none());
+    }
     #[test]
     fn metadata_preserves_capabilities_and_does_not_invent_archive_timestamps() {
         use crysirror_core::vfs::MemoryProvider;

@@ -2,7 +2,7 @@
 //! Bounded first-compatible byte formatting, independent of any VM or font.
 //! ASCII format syntax does not reinterpret surrounding encoded text. This
 //! deliberately differs from printf's escaping/multiple-argument contract.
-use anyhow::{bail, ensure, Result};
+use anyhow::{Result, bail, ensure};
 pub const MAX_BYTE_FORMAT_BYTES: usize = 1024 * 1024;
 pub const MAX_BYTE_FORMAT_FIELD: usize = 510;
 #[derive(Clone, Copy, Debug)]
@@ -185,10 +185,12 @@ mod tests {
         }
         let source = [vec![b'a'; MAX_BYTE_FORMAT_BYTES - 2], b"%s".to_vec()].concat();
         assert!(format_one_bytes(&source, ByteFormatValue::Bytes(b"abc")).is_err());
-        assert!(format_one_bytes(
-            &vec![b'a'; MAX_BYTE_FORMAT_BYTES + 1],
-            ByteFormatValue::Integer(1)
-        )
-        .is_err());
+        assert!(
+            format_one_bytes(
+                &vec![b'a'; MAX_BYTE_FORMAT_BYTES + 1],
+                ByteFormatValue::Integer(1)
+            )
+            .is_err()
+        );
     }
 }

@@ -266,6 +266,42 @@ impl crate::ImageFormat for Format {
     fn decode(&self, bytes: &[u8], _: &crate::ImageDecodeContext<'_>) -> Result<ImageSurface> {
         Ok(decode(bytes)?.surface)
     }
+    /// CRXG header: native origin, extent and colour depth. Payload checksums
+    /// and pixels are not examined here; decoding remains separate.
+    fn encoding_info(
+        &self,
+        bytes: &[u8],
+        _: &crate::ImageDecodeContext<'_>,
+    ) -> Result<Option<crysirror_core::image_encoding::ImageEncodingInfo>> {
+        let mut input = Reader { bytes, pos: 0 };
+        ensure!(input.take(4)? == b"CRXG", "CRX signature");
+        let offset = [input.u16()? as i16, input.u16()? as i16];
+        let width = u32::from(input.u16()?);
+        let height = u32::from(input.u16()?);
+        rgba_len(width, height)?;
+        let compression = input.u16()?;
+        ensure!((1..=3).contains(&compression), "unsupported CRX compression {compression}");
+        let _flags = input.u16()?;
+        let colors = input.u16()?;
+        let mode = input.u16()?;
+        ensure!(mode <= 2, "unsupported CRX pixel mode {mode}");
+        let (bits, pixel, alpha) = match colors {
+            0 => (24u16, 3u32, Some(false)),
+            1 => (32, 4, Some(true)),
+            2..=258 => (8, 1, None),
+            _ => bail!("CRX palette size"),
+        };
+        Ok(Some(crysirror_core::image_encoding::ImageEncodingInfo {
+            format: "circus/crx".into(),
+            size: [width, height],
+            source_origin: Some([i32::from(offset[0]), i32::from(offset[1])]),
+            color_bits: Some(bits),
+            has_color_plane: Some(true),
+            has_alpha_plane: alpha,
+            color_row_bytes: Some(width.checked_mul(pixel).context("CRX row extent")?),
+            alpha_sample_bytes: None,
+        }))
+    }
 }
 
 #[cfg(test)]

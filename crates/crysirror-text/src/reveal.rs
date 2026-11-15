@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Font-independent, saved grapheme reveal clock and VN event delivery.
 use crate::rich::{RichNode, RichText};
-use anyhow::{ensure, Result};
+use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;

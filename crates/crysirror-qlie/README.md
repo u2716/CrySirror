@@ -1,5 +1,7 @@
 # QLIE
 
+[Opcode and syscall implementation list](../../docs/native-api/qlie.md).
+
 The native `.s` interpreter calls CrySirror's resource, Layer, Canvas, UI,
 image-processing, Media and Audio services. The desktop host owns the window,
 input and output devices. No original engine executable or DLL is loaded.

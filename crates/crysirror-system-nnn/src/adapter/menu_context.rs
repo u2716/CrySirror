@@ -333,6 +333,19 @@ impl NativeAdapter {
     pub(crate) fn gallery_variables(&self) -> Result<Variables> {
         self.modal_variables()
     }
+    /// Native SetVarData from a modal mode (e.g. SelectPlace FinalExitRoutine).
+    pub(crate) fn write_modal_variable(&mut self, id: u16, value: i32) -> Result<()> {
+        ensure!(self.worker.is_none(), "NNN modal variable write requires the owned reader");
+        let mut variables = self.modal_variables()?;
+        variables.write_stored(id, value);
+        let machine = self.session.as_mut().context("NNN modal reader absent")?.machine_mut();
+        if let Some(call) = self.pending.as_ref() {
+            machine.update_native_variables(call, variables)?;
+        } else {
+            machine.replace_variables(variables)?;
+        }
+        Ok(())
+    }
     pub(crate) fn set_listen_state(&mut self, mode: i32, number: i32) -> Result<()> {
         ensure!(self.worker.is_none(), "NNN ListenBGM variables require the owned reader");
         let configuration = self.configuration.as_ref().context("NNN ListenBGM configuration absent")?;
@@ -422,7 +435,7 @@ impl NativeAdapter {
         host: &mut dyn HostServices,
     ) -> Result<bool> {
         ensure!(
-            matches!(mode, 5 | 6 | 7 | 8 | 12 | 13 | 15..=18 | 20 | 26 | 34),
+            matches!(mode, 5 | 6 | 7 | 8 | 12 | 13 | 15..=18 | 20 | 22 | 26 | 34),
             "NNN modal background native mode"
         );
         ensure!(

@@ -61,7 +61,7 @@ impl Bridge<'_> {
                     .context("Circus flat fade duration overflow")?
             },
         )?;
-        self.submit(vec![json!({"op":"put","layer":{"id":0x3b01_0003u32,"rect":[0,0,1280,720],"paint":{"kind":"solid","color":[color[0],color[1],color[2],255]},"opacity":if out{0}else{255},"order":[3,0]}})],vec![])?;
+        self.submit(vec![json!({"op":"put","layer":{"id":0x3b01_0003u32,"rect":[0,0,self.native_canvas()[0],self.native_canvas()[1]],"paint":{"kind":"solid","color":[color[0],color[1],color[2],255]},"opacity":if out{0}else{255},"order":[3,0]}})],vec![])?;
         self.services.effect_control.framebuffer.flat = Some(Flat {
             image: None,
             ramp,
@@ -84,7 +84,7 @@ impl Bridge<'_> {
                 .checked_mul(2)
                 .context("Circus restore fade duration overflow")?,
         )?;
-        self.submit(vec![json!({"op":"put","layer":{"id":0x3b01_0003u32,"rect":[0,0,1280,720],"paint":{"kind":"image","asset":image.path.relative()},"filter":{"encoded_sampling":true},"opacity":255,"order":[3,0]}})],vec![])?;
+        self.submit(vec![json!({"op":"put","layer":{"id":0x3b01_0003u32,"rect":[0,0,self.native_canvas()[0],self.native_canvas()[1]],"paint":{"kind":"image","asset":image.path.relative()},"filter":{"encoded_sampling":true},"opacity":255,"order":[3,0]}})],vec![])?;
         self.services.effect_control.framebuffer.flat = Some(Flat {
             image: Some(image),
             ramp,
@@ -122,7 +122,7 @@ impl Bridge<'_> {
             )?;
         } else if out {
             self.services.effect_control.framebuffer.background = true;
-            self.submit(vec![json!({"op":"set_visible","id":SCENE_ROOT,"visible":false}),json!({"op":"put","layer":{"id":COLOUR_ROOT,"rect":[0,0,1280,720],"paint":{"kind":"solid","color":[0,0,0,255]},"order":[1,0]}}),json!({"op":"set_opacity","id":0x3b01_0003u32,"opacity":255})],vec![])?;
+            self.submit(vec![json!({"op":"set_visible","id":SCENE_ROOT,"visible":false}),json!({"op":"put","layer":{"id":COLOUR_ROOT,"rect":[0,0,self.native_canvas()[0],self.native_canvas()[1]],"paint":{"kind":"solid","color":[0,0,0,255]},"order":[1,0]}}),json!({"op":"set_opacity","id":0x3b01_0003u32,"opacity":255})],vec![])?;
         } else {
             let old = self.services.effect_control.framebuffer.flat.take();
             self.submit(vec![json!({"op":"remove","id":0x3b01_0003u32})], vec![])?;
@@ -140,6 +140,9 @@ impl Bridge<'_> {
                 priority: if object == 0 { 0 } else { 50 },
             })?;
         }
+        //Native system texture slots survive the clear (DC4PH 37..44,
+        //DC3WY/D.C.III 28..34: MESWIN, ADVMENU chips, ...).
+        let system_slots = if self.services.native_profile == Some(crate::Profile::Dc3WithYou) { 28..=34 } else { 37..=44 };
         if !protected {
             self.native_text(&crate::machine::text_ops::TextRequest::Clear)?;
             self.clear_packed_presentation()?;
@@ -152,20 +155,20 @@ impl Bridge<'_> {
                 .images
                 .keys()
                 .copied()
-                .filter(|slot| !(37..=44).contains(slot))
+                .filter(|slot| !system_slots.contains(slot))
                 .collect::<Vec<_>>();
             self.submit(
                 self.services
                     .displayed
                     .iter()
-                    .filter(|slot| !(37..=44).contains(*slot))
+                    .filter(|slot| !system_slots.contains(*slot))
                     .map(|slot| json!({"op":"remove","id":0x3700_0000+u32::from(*slot)}))
                     .collect(),
                 vec![],
             )?;
             self.services
                 .displayed
-                .retain(|slot| (37..=44).contains(slot));
+                .retain(|slot| system_slots.contains(slot));
             for slot in slots {
                 if let Some(image) = self.services.images.remove(&slot) {
                     self.host
@@ -285,6 +288,8 @@ impl Bridge<'_> {
             10 => P::RandomDelay,
             _ => P::Base,
         };
+        let canvas = self.native_canvas();
+        let dc3 = self.services.native_profile == Some(crate::Profile::Dc3WithYou);
         let rng = self
             .services
             .sequence_rng
@@ -292,9 +297,11 @@ impl Bridge<'_> {
             .context("Circus tile mask random sequence missing")?;
         let field = TileMaskField::new(
             TileMaskSpec {
-                grid: [41, 24],
+                //DC4PH 41x24 on 1280x720; DC3WY 406A30 loops 33x19 on
+                //1024x576 (627 records) with the same per-pattern formulas.
+                grid: if dc3 { [33, 19] } else { [41, 24] },
                 spacing: [32, 32],
-                canvas: [1280, 720],
+                canvas,
                 pattern,
             },
             rng,
@@ -370,13 +377,14 @@ impl Bridge<'_> {
             ImageProcessState::Ready(image) => image,
         };
         ensure!(
-            image.client() == self.client && image.size() == [1280, 720],
+            image.client() == self.client && image.size() == self.native_canvas(),
             "Circus foreign tile mask image"
         );
         let image = self
             .host
             .publish_image_resource(self.client, 0x3508_0001, image)?;
-        self.submit(vec![json!({"op":"put","layer":{"id":0x3b01_0002u32,"rect":[0,0,1280,720],"paint":{"kind":"image","asset":image.path.relative()},"visible":!self.services.effect_control.framebuffer.detached,"order":[3,0]}})],vec![])?;
+        let [width,height]=self.native_canvas();
+        self.submit(vec![json!({"op":"put","layer":{"id":0x3b01_0002u32,"rect":[0,0,width,height],"paint":{"kind":"image","asset":image.path.relative()},"visible":!self.services.effect_control.framebuffer.detached,"order":[3,0]}})],vec![])?;
         if let Some(old) = self
             .services
             .effect_control
@@ -426,7 +434,7 @@ impl Bridge<'_> {
         let atlas = self
             .services
             .image_extents
-            .get(&45)
+            .get(&tile_atlas_slot(self.services.native_profile))
             .copied()
             .context("Circus effbreak atlas dimensions missing")?;
         let spec = crysirror_image::alpha_stamps::AlphaStamps {
@@ -442,7 +450,7 @@ impl Bridge<'_> {
         };
         let input = crysirror_core::image_processing::ImageInput::Raster {
             destination: Box::new(crysirror_core::image_processing::ImageInput::Solid {
-                size: [1280, 720],
+                size: self.native_canvas(),
                 color: [color[0], color[1], color[2], 0],
             }),
             source: Box::new(crysirror_core::image_processing::ImageInput::Asset {
@@ -519,12 +527,14 @@ impl Bridge<'_> {
         ticks: i32,
         color: [u8; 3],
     ) -> Result<bool> {
-        let Some(image) = self.services.images.get(&21) else {
+        //DC4PH 407D60 reads mask slot 21; DC3WY 406770 slot 16 (this+1652).
+        let slot = if self.services.native_profile == Some(crate::Profile::Dc3WithYou) { 16 } else { 21 };
+        let Some(image) = self.services.images.get(&slot) else {
             return Ok(true);
         };
         let (size, asset) = (image.size, image.path.relative().to_owned());
         self.replace_framebuffer_color()?;
-        if size != [1280, 720] {
+        if size != self.native_canvas() {
             return Ok(true);
         } //407D60 dimension mismatch completes its effect.
         let (start, end) = if reverse {
@@ -534,7 +544,8 @@ impl Bridge<'_> {
         };
         let ramp = crysirror_core::service::SteppedRamp::new(start, end, ticks)?;
         self.root()?;
-        self.submit(vec![json!({"op":"put","layer":{"id":0x3b01_0001u32,"rect":[0,0,1280,720],"paint":{"kind":"solid","color":[color[0],color[1],color[2],255]},"order":[3,0],"filter":{"mask":{"asset":asset,"gray_alpha":false,"channel":"blue","offset":start}}}})],vec![])?;
+        let [width, height] = self.native_canvas();
+        self.submit(vec![json!({"op":"put","layer":{"id":0x3b01_0001u32,"rect":[0,0,width,height],"paint":{"kind":"solid","color":[color[0],color[1],color[2],255]},"order":[3,0],"filter":{"mask":{"asset":asset,"gray_alpha":false,"channel":"blue","offset":start}}}})],vec![])?;
         self.services.effect_control.framebuffer.mask = Some(Mask {
             ramp,
             asset,
@@ -739,4 +750,9 @@ impl Bridge<'_> {
         self.services.effect_control.framebuffer.capture_crop = None;
         Ok(true)
     }
+}
+
+///Texture slot holding system\\effbreak: DC4PH 45, DC3WY 35 (this+1728).
+fn tile_atlas_slot(profile: Option<crate::Profile>) -> u8 {
+    if profile == Some(crate::Profile::Dc3WithYou) { 35 } else { 45 }
 }

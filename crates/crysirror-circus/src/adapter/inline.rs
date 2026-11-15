@@ -39,6 +39,10 @@ impl Bridge<'_> {
                 } else {
                     self.services.image_extents.remove(&target);
                 }
+                match self.services.image_origins.get(&source).copied() {
+                    Some(origin) => self.services.image_origins.insert(target, origin),
+                    None => self.services.image_origins.remove(&target),
+                };
                 self.services.image_names.insert(target, name);
                 let object = crate::machine::visual_ops::resource_object(target).unwrap();
                 ensure!(

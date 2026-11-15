@@ -47,7 +47,7 @@ pub(super) fn key(assets: &Assets, owner: u32, paint: &Paint) -> Result<String> 
         baseline: phase(g.baseline),
     };
     Ok(format!(
-        "{}:{}:raster={:?}",
+        "{}:{}:raster={:?}:decorations={:?}",
         text.glyph_cell_key(font, request)?,
         style_key(
             *bold,
@@ -55,7 +55,8 @@ pub(super) fn key(assets: &Assets, owner: u32, paint: &Paint) -> Result<String> 
             outline,
             horizontal_scale(&text, font, g, *size)?
         ),
-        g.style.map_or(Default::default(),|s|s.raster)
+        g.style.map_or(Default::default(),|s|s.raster),
+        (g.style.is_some_and(|s|s.underline),g.style.is_some_and(|s|s.strikeout))
     ))
 }
 fn horizontal_scale(
@@ -139,10 +140,11 @@ pub(super) fn cache_keys(assets: &Assets, owner: u32, paint: &Paint, needed: &mu
                         .chain(std::iter::once(None))
                     {
                         needed.insert(format!(
-                            "{}:{}:raster={:?}",
+                            "{}:{}:raster={:?}:decorations={:?}",
                             text.glyph_cell_key(font, request)?,
                             style_key(g.bold.unwrap_or(g.style.map_or(*bold,|s|s.bold)), blur, &pass, scale),
-                            g.style.map_or(Default::default(),|s|s.raster)
+                            g.style.map_or(Default::default(),|s|s.raster),
+                            (g.style.is_some_and(|s|s.underline),g.style.is_some_and(|s|s.strikeout))
                         ));
                     }
                 }
@@ -230,6 +232,8 @@ impl Renderer {
                 let fill_color = g.color.unwrap_or(*color);
                 let bold = g.bold.unwrap_or(g.style.map_or(*bold,|s|s.bold));
                 let raster=g.style.map_or(Default::default(),|s|s.raster);
+                let underline=g.style.is_some_and(|s|s.underline);
+                let strikeout=g.style.is_some_and(|s|s.strikeout);
                 let outline=g.style.map_or(*outline,|s|s.outline);
                 let shadow=g.style.and_then(|s|s.shadow);
                 let horizontal_scale = horizontal_scale(&text, font, g, size)?;
@@ -270,7 +274,7 @@ impl Renderer {
                         bold,
                         glyphs: vec![PositionedGlyph {
                 image: None,
-                            style: Some(crysirror_scene::layer::PositionedGlyphStyle{raster,..Default::default()}), font: None,
+                            style: Some(crysirror_scene::layer::PositionedGlyphStyle{raster,underline,strikeout,..Default::default()}), font: None,
                             horizontal_scale: Some(horizontal_scale),
                             font_width: None,
                             cell_width: None,
@@ -288,6 +292,7 @@ impl Renderer {
                     if !self.glyph_cells.contains_key(&key) {
                         let cell =
                             text.rasterize_glyph_cell_quality(font, request, horizontal_scale, raster)?;
+                        let cell=text.decorate_glyph_cell(font,request,horizontal_scale,cell,underline,strikeout)?;
                         let width = cell.width + u32::from(bold && cell.width > 0);
                         let length = width as usize * cell.height as usize * 4;
                         ensure!(

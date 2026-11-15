@@ -6,7 +6,7 @@
     "checked": "2026-10-27"
   },
   "implementation": "CrySirror immutable per-mesh local BVHs, shared snapshots and Parry Qbvh instance bounds; no handwritten BVH builder/refitter. Obvhs applies to local mesh BVHs; the top-level index uses Parry in both modes.",
-  "prior_audit": "crates/crysirror-acoustics/UPSTREAM.md",
+  "prior_audit": "crates/crysirror-acoustics/SOURCE_NOTES.md",
   "scope": "Affine transforms and enabled flags over stable mesh topology; not deformation, prototype sharing across distinct IDs, TLAS refit, diffraction or Steam Audio integration",
   "libraries": [
     {

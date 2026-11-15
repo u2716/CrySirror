@@ -1,16 +1,27 @@
 //! Disassemble one original AIN function (names resolved for calls):
 //! `cargo run -p crysirror-system4 --example ain_function -- GAME.ain NAME`.
+//! NAME `--all` disassembles every function, each headed by `== name`.
 use anyhow::{Context, Result};
 fn main() -> Result<()> {
     let path = std::env::args().nth(1).context("ain_function GAME.ain NAME")?;
     let wanted = std::env::args().nth(2).context("function name")?;
     let program = crysirror_system4::ain::Program::parse(&std::fs::read(path)?)?;
+    if wanted == "--all" {
+        for function in &program.functions {
+            println!("== {}", String::from_utf8_lossy(&function.name));
+            disassemble(&program, function.address)?;
+        }
+        return Ok(());
+    }
     let start = program
         .functions
         .iter()
         .find(|f| String::from_utf8_lossy(&f.name) == wanted)
         .context("function not found")?
         .address;
+    disassemble(&program, start)
+}
+fn disassemble(program: &crysirror_system4::ain::Program, start: u32) -> Result<()> {
     let mut pc = start;
     loop {
         let i = program.instruction(pc)?;

@@ -128,6 +128,7 @@ pub struct SharedHost {
     pub scene: SceneState,
     pub engine: crysirror_scene::EngineSystems,
     pub fs: RuntimeStorage,
+    mounted_media: BTreeMap<ClientId, crysirror_core::service::MountedMediaCatalog>,
     clock_ms: u64,
     clients: BTreeSet<ClientId>,
     pub trace: VecDeque<TraceEvent>,
@@ -173,6 +174,15 @@ pub struct SharedHost {
     pub(crate) vfx_sequences: BTreeMap<(u32, u32), serde_json::Value>,
 }
 impl SharedHost {
+    /// Owner-only media publication. Aliases grant no authority beyond the
+    /// client's existing asset capability and are never restored from VM saves.
+    pub fn publish_mounted_media(&mut self, client: ClientId, volumes: Vec<crysirror_core::service::MountedMedia>) -> crysirror_core::Result<()> {
+        if !self.clients.contains(&client) { return Err(Error::NotFound); }
+        let catalog=crysirror_core::service::MountedMediaCatalog::new(client, volumes)?;
+        self.mounted_media.insert(client,catalog);
+        Ok(())
+    }
+
     /// Supply a backend source snapshot for exactly the next owner admission.
     /// Replacing it before a tick replaces unpublished hardware observations.
     pub fn publish_input_sources(&mut self,mut sources:crysirror_core::service::InputSourcesFrame)->Result<()> {
@@ -277,6 +287,12 @@ impl FileSystem for SharedHost {
     }
 }
 impl HostServices for SharedHost {
+    fn mounted_media(&mut self, client: ClientId) -> crysirror_core::Result<crysirror_core::service::MountedMediaCatalog> {
+        if !self.clients.contains(&client) { return Err(Error::NotFound); }
+        self.mounted_media.get(&client).cloned().map(Ok)
+            .unwrap_or_else(|| crysirror_core::service::MountedMediaCatalog::new(client, Vec::new()))
+    }
+
     fn open_text_input_session(&mut self,client:ClientId,spec:crysirror_core::service::TextInputSessionSpec)->crysirror_core::Result<crysirror_core::service::TextInputSessionHandle>{if !self.clients.contains(&client){return Err(Error::NotFound);}self.text_input.open(client,spec)}
     fn configure_text_input_session(&mut self,client:ClientId,handle:crysirror_core::service::TextInputSessionHandle,spec:crysirror_core::service::TextInputSessionSpec)->crysirror_core::Result<()>{if !self.clients.contains(&client){return Err(Error::NotFound);}self.text_input.configure(client,handle,spec)}
     fn text_input_session_info(&self,client:ClientId,handle:crysirror_core::service::TextInputSessionHandle)->crysirror_core::Result<crysirror_core::service::TextInputSessionInfo>{if !self.clients.contains(&client){return Err(Error::NotFound);}self.text_input.info(client,handle)}
@@ -857,6 +873,11 @@ impl HostServices for SharedHost {
             .release_preparation(client.0, ticket)
             .map_err(|e| Error::Io(format!("audio resource receipt: {e:#}")))
     }
+    fn begin_spectrum_graph(&mut self,client:ClientId,source:Option<crysirror_core::service::AudioResourceHandle>,position:u64,destination:crysirror_core::image_processing::ImageInput,spec:crysirror_core::service::SpectrumGraphSpec,state:crysirror_core::service::SpectrumGraphState)->crysirror_core::Result<crysirror_core::service::SpectrumGraphJob>{
+        if !self.clients.contains(&client){return Err(Error::NotFound);}
+        let sound=source.map(|h|self.channel_audio.resources.capture(client.0,h).map_err(|e|Error::Io(e.to_string()))).transpose()?;
+        crate::image_processing::spectrum::begin(client,sound,position,destination,spec,state,self.fs.storage(client)?,self.decoders.clone(),self.image_tasks.clone(),self.image_memory.clone())
+    }
     fn begin_audio_samples(&mut self,client:ClientId,resource:crysirror_core::service::AudioResourceHandle,request:crysirror_core::service::AudioSampleRequest)->crysirror_core::Result<Box<dyn crysirror_core::service::AudioSampleQuery>>{
         if !self.clients.contains(&client){return Err(Error::NotFound);}
         self.channel_audio.resources.begin_samples(client.0,resource,request,&self.image_tasks).map_err(|e|Error::Io(format!("audio source samples: {e:#}")))
@@ -1268,6 +1289,15 @@ impl HostServices for SharedHost {
     fn window_fullscreen(&self, client: ClientId) -> crysirror_core::Result<Option<bool>> {
         if !self.clients.contains(&client) { return Err(Error::NotFound); }
         Ok(self.window_fullscreen)
+    }
+    // Native SetCursorPos-style warps use the same scoped UI command as
+    // script `Ui.warpPointer`: the window host moves the OS pointer, the
+    // offline host keeps its explicit track. No input event is fabricated.
+    fn warp_pointer(&mut self, client: ClientId, x: i32, y: i32) -> crysirror_core::Result<()> {
+        if !self.clients.contains(&client) { return Err(Error::NotFound); }
+        let bytes = serde_json::to_vec(&serde_json::json!({"ui":[{"op":"warp_pointer","position":[x,y]}]}))
+            .map_err(|e| Error::Io(e.to_string()))?;
+        self.submit_engine(client, 1, &bytes).map(|_| ())
     }
     fn ui_input_owned(&self, client: ClientId) -> crysirror_core::Result<bool> {
         if !self.clients.contains(&client) {
@@ -1775,6 +1805,14 @@ impl crysirror_core::service::FileSystem for RestoreResources<'_> {
     }
 }
 impl HostServices for RestoreResources<'_> {
+    fn begin_spectrum_graph(&mut self,client:ClientId,source:Option<crysirror_core::service::AudioResourceHandle>,position:u64,destination:crysirror_core::image_processing::ImageInput,spec:crysirror_core::service::SpectrumGraphSpec,state:crysirror_core::service::SpectrumGraphState)->crysirror_core::Result<crysirror_core::service::SpectrumGraphJob>{
+        self.source.begin_spectrum_graph(client,source,position,destination,spec,state)
+    }
+
+    fn mounted_media(&mut self, client: ClientId) -> crysirror_core::Result<crysirror_core::service::MountedMediaCatalog> {
+        self.source.mounted_media(client)
+    }
+
     fn now_ms(&self) -> u64 {
         self.clock_ms
     }
@@ -2169,6 +2207,7 @@ impl Runtime {
                         .map(|v| v.split(['.', '@']).next().unwrap_or("").replace('_', "-")),
                 },
                 desktop_provider:None,
+                mounted_media: BTreeMap::new(),
                 logs: Default::default(),
                 native_restore_requests: native_restore::Requests::new()?,
                 text_input: crate::text_input::TextInputBroker::default(),
@@ -2483,7 +2522,8 @@ impl Runtime {
                 || self.host.native_restore_requests.active(s.id) {
                 continue;
             }
-            s.yielded = core(s.vm.step(&mut self.host, input, 1024))
+            let budget = s.vm.instruction_budget().clamp(1, 100_000);
+            s.yielded = core(s.vm.step(&mut self.host, input, budget))
                 .with_context(|| format!("VM {}", s.name))?;
         }
         if let Some(size) = self.host.pending_canvas_size.take() {
@@ -3761,6 +3801,13 @@ struct SharedImageMetadata {
     sizes: std::sync::Mutex<BTreeMap<String, ([u32; 2], bool, [u8; 32])>>,
 }
 impl crysirror_core::service::ImageMetadata for SharedImageMetadata {
+    fn begin_region_map(
+        &self,
+        path:&crysirror_core::path::VfsPath,
+        minimum:Option<[u32;2]>,
+    )->crysirror_core::Result<Box<dyn crysirror_core::region_map::RegionMapQuery>> {
+        crate::region_resources::begin(self.owner,path.clone(),minimum,self.storage.clone(),self.tasks.clone(),self.memory.clone())
+    }
     fn begin_packed_pixels(
         &self,
         spec: crysirror_core::image_processing::PackedImageSpec,

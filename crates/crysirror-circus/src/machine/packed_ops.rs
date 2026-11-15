@@ -6,6 +6,13 @@ pub enum PackedRequest {
         slot: u8,
         name: String,
     },
+    ///Show frame `frame` of the pack bound to `slot` on `object`'s retained
+    ///layer (a still image; DC3WY 42E3B0 + 436F60). Out of range hides it.
+    Frame {
+        slot: u8,
+        object: u16,
+        frame: u32,
+    },
     Play {
         slot: u8,
         seed: sprite_ops::SpriteSeed,

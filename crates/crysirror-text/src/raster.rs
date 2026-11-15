@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 //! CPU rich glyph rasterization with straight sRGB RGBA output.
 use crate::{
-    layout::{GlyphPlacement, Layout},
     TextSystem,
+    layout::{GlyphPlacement, Layout},
 };
-use ab_glyph::{point, Font, Glyph, GlyphId, PxScale};
-use anyhow::{ensure, Context, Result};
+use ab_glyph::{Font, Glyph, GlyphId, PxScale, point};
+use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -118,9 +118,13 @@ fn compose(
     }
 }
 pub(crate) fn dilate(m: &GlyphMask, radius: usize) -> GlyphMask {
-    dilate_cancellable(m,radius,&|| Ok(())).expect("infallible rich glyph dilation")
+    dilate_cancellable(m, radius, &|| Ok(())).expect("infallible rich glyph dilation")
 }
-pub(crate) fn dilate_cancellable(m:&GlyphMask,radius:usize,check:&dyn Fn()->Result<()>)->Result<GlyphMask> {
+pub(crate) fn dilate_cancellable(
+    m: &GlyphMask,
+    radius: usize,
+    check: &dyn Fn() -> Result<()>,
+) -> Result<GlyphMask> {
     check()?;
     if radius == 0 {
         return Ok(m.clone());

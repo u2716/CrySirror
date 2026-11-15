@@ -2,7 +2,7 @@
 //! Font-independent cell layout for terminals and fixed-cell message windows.
 //! Callers supply their line-break and indentation policy. Glyph rasterization
 //! and reveal clocks remain separate engine services.
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -223,17 +223,24 @@ pub fn layout_cell_groups(
 /// Append cells from an immutable policy and a caller-owned logical cursor.
 /// Returns overflow explicitly rather than truncating the caller's text.
 /// ASCII BEL is an explicit line break which suppresses hanging indentation.
+/// Non-cyclic cursors may begin up to 32767 pixels before either origin.
+/// Negative glyph positions remain signed; the destination owns clipping.
 pub fn layout_cells(
     text: &str,
     options: &CellLayoutOptions,
     cursor: &mut CellCursor,
 ) -> Result<CellLayout> {
-    layout_cells_with_breaks(text,options,cursor,"")
+    layout_cells_with_breaks(text, options, cursor, "")
 }
 
 /// Fixed-cell layout with an explicit set of characters forbidden at the end
 /// of an automatically wrapped line. Existing callers retain their profile.
-pub fn layout_cells_with_breaks(text:&str,options:&CellLayoutOptions,cursor:&mut CellCursor,forbidden_line_end:&str)->Result<CellLayout>{
+pub fn layout_cells_with_breaks(
+    text: &str,
+    options: &CellLayoutOptions,
+    cursor: &mut CellCursor,
+    forbidden_line_end: &str,
+) -> Result<CellLayout> {
     layout_cells_impl(text, options, cursor, forbidden_line_end, false)
 }
 
@@ -258,15 +265,19 @@ fn layout_cells_impl(
     forbidden_line_end: &str,
     cyclic: bool,
 ) -> Result<CellLayout> {
-    ensure!(forbidden_line_end.len()<=4096,"cell line-end policy limit");
+    ensure!(
+        forbidden_line_end.len() <= 4096,
+        "cell line-end policy limit"
+    );
     options.validate()?;
     ensure!(
         text.len() <= 1024 * 1024 && text.chars().count() <= 65536,
         "cell text limit"
     );
+    let minimum = if cyclic { 0 } else { -32767 };
     ensure!(
-        cursor.position.iter().all(|v| *v >= 0)
-            && (0..=32767).contains(&cursor.indent)
+        cursor.position.iter().all(|v| *v >= minimum)
+            && (minimum..=32767).contains(&cursor.indent)
             && cursor.nesting <= 65536,
         "cell cursor limit"
     );
@@ -274,25 +285,33 @@ fn layout_cells_impl(
         cursor.position[1] = 0;
     }
     if cyclic {
-        ensure!(cursor.position[0] <= 32767, "cyclic cell horizontal cursor limit");
+        ensure!(
+            cursor.position[0] <= 32767,
+            "cyclic cell horizontal cursor limit"
+        );
     }
     let newline = |state: &mut CellCursor, indented: bool| -> Result<()> {
         let next_y = if cyclic {
-            state.position[1].checked_add(options.size + options.spacing[1])
+            state.position[1]
+                .checked_add(options.size + options.spacing[1])
                 .context("cyclic cell vertical cursor overflow")?
         } else {
             state.position[1].saturating_add(options.size + options.spacing[1])
         };
         state.position = [
             if indented { state.indent } else { 0 },
-            if cyclic && next_y >= options.bounds[1] { 0 } else { next_y },
+            if cyclic && next_y >= options.bounds[1] {
+                0
+            } else {
+                next_y
+            },
         ];
         state.line_head = true;
         Ok(())
     };
     let mut glyphs = Vec::new();
-    let mut input=text.char_indices().peekable();
-    while let Some((byte,character))=input.next() {
+    let mut input = text.char_indices().peekable();
+    while let Some((byte, character)) = input.next() {
         if character == '\r' {
             continue;
         }
@@ -320,17 +339,26 @@ fn layout_cells_impl(
             cell + options.spacing[0]
         };
         let next = if cyclic {
-            cursor.position[0].checked_add(advance)
+            cursor.position[0]
+                .checked_add(advance)
                 .context("cyclic cell horizontal cursor overflow")?
         } else {
             cursor.position[0].saturating_add(advance)
         };
-        let end_wrap=cursor.position[0]>0 && forbidden_line_end.contains(character) && input.peek().is_some_and(|(_,next_character)| {
-            let next_half=options.half_width&&(next_character.is_ascii()||('｡'..='ﾟ').contains(next_character));
-            let next_advance=if next_half{(options.size/2).max(1)}else{options.size}+options.spacing[0];
-            next.saturating_add(next_advance)>options.bounds[0]
-        });
-        let wrap = end_wrap || next > options.bounds[0].saturating_add(options.hanging)
+        let end_wrap = cursor.position[0] > 0
+            && forbidden_line_end.contains(character)
+            && input.peek().is_some_and(|(_, next_character)| {
+                let next_half = options.half_width
+                    && (next_character.is_ascii() || ('｡'..='ﾟ').contains(next_character));
+                let next_advance = if next_half {
+                    (options.size / 2).max(1)
+                } else {
+                    options.size
+                } + options.spacing[0];
+                next.saturating_add(next_advance) > options.bounds[0]
+            });
+        let wrap = end_wrap
+            || next > options.bounds[0].saturating_add(options.hanging)
             || (next > options.bounds[0] && !options.forbidden_line_start.contains(character));
         if wrap {
             newline(cursor, true)?;
@@ -349,7 +377,8 @@ fn layout_cells_impl(
             position: cursor.position,
         });
         cursor.position[0] = if cyclic {
-            cursor.position[0].checked_add(advance.max(1))
+            cursor.position[0]
+                .checked_add(advance.max(1))
                 .context("cyclic cell horizontal cursor overflow")?
         } else {
             cursor.position[0].saturating_add(advance.max(1))
@@ -391,7 +420,8 @@ fn layout_cells_impl(
 mod tests {
     use super::*;
     fn options() -> CellLayoutOptions {
-        CellLayoutOptions { cell_widths: Vec::new(),
+        CellLayoutOptions {
+            cell_widths: Vec::new(),
             bounds: [39, 60],
             size: 20,
             spacing: [-1, 10],
@@ -418,7 +448,8 @@ mod tests {
         let mut cursor = CellCursor::at_start();
         let result = layout_cells(
             "「あ\nい」\u{7}う",
-            &CellLayoutOptions { cell_widths: Vec::new(),
+            &CellLayoutOptions {
+                cell_widths: Vec::new(),
                 bounds: [100, 100],
                 ..options()
             },
@@ -435,7 +466,8 @@ mod tests {
         let input = "あいうえお";
         let result = layout_cells(
             input,
-            &CellLayoutOptions { cell_widths: Vec::new(),
+            &CellLayoutOptions {
+                cell_widths: Vec::new(),
                 bounds: [39, 30],
                 ..options()
             },
@@ -489,19 +521,33 @@ pub fn encoded_ruby_run(
     reading_offset_y: i32,
     encoding: &'static encoding_rs::Encoding,
 ) -> Result<(Vec<CellGlyph>, Vec<CellGlyph>, i32)> {
-    ensure!(!base.is_empty() && !reading.is_empty(), "encoded ruby requires base and reading");
-    ensure!(!base.contains(['\n','\r']) && !reading.contains(['\n','\r']), "encoded ruby requires single lines");
+    ensure!(
+        !base.is_empty() && !reading.is_empty(),
+        "encoded ruby requires base and reading"
+    );
+    ensure!(
+        !base.contains(['\n', '\r']) && !reading.contains(['\n', '\r']),
+        "encoded ruby requires single lines"
+    );
     let (mut base_cells, base_width) = encoded_cell_run(base, origin, base_size, encoding)?;
-    let reading_y = origin[1].checked_add(reading_offset_y).ok_or_else(|| anyhow::anyhow!("encoded ruby vertical overflow"))?;
-    let (mut reading_cells, reading_width) = encoded_cell_run(reading, [origin[0],reading_y], reading_size, encoding)?;
+    let reading_y = origin[1]
+        .checked_add(reading_offset_y)
+        .ok_or_else(|| anyhow::anyhow!("encoded ruby vertical overflow"))?;
+    let (mut reading_cells, reading_width) =
+        encoded_cell_run(reading, [origin[0], reading_y], reading_size, encoding)?;
     let advance = base_width.max(reading_width);
-    for (cells, width) in [(&mut base_cells,base_width),(&mut reading_cells,reading_width)] {
-        let offset = (advance-width)/2;
+    for (cells, width) in [
+        (&mut base_cells, base_width),
+        (&mut reading_cells, reading_width),
+    ] {
+        let offset = (advance - width) / 2;
         for cell in cells {
-            cell.position[0] = cell.position[0].checked_add(offset).ok_or_else(|| anyhow::anyhow!("encoded ruby horizontal overflow"))?;
+            cell.position[0] = cell.position[0]
+                .checked_add(offset)
+                .ok_or_else(|| anyhow::anyhow!("encoded ruby horizontal overflow"))?;
         }
     }
-    Ok((base_cells,reading_cells,advance))
+    Ok((base_cells, reading_cells, advance))
 }
 
 #[cfg(test)]
@@ -509,18 +555,23 @@ mod ruby_tests {
     use super::*;
     #[test]
     fn encoded_ruby_centers_shorter_run_and_preserves_odd_integer_remainder() {
-        let (base,reading,advance)=encoded_ruby_run("A","あいう",[4,20],22,12,-9,encoding_rs::SHIFT_JIS).unwrap();
-        assert_eq!(advance,36);
-        assert_eq!(base[0].position,[16,20]);
-        assert_eq!(reading[0].position,[4,11]);
-        assert_eq!(reading[2].position,[28,11]);
+        let (base, reading, advance) =
+            encoded_ruby_run("A", "あいう", [4, 20], 22, 12, -9, encoding_rs::SHIFT_JIS).unwrap();
+        assert_eq!(advance, 36);
+        assert_eq!(base[0].position, [16, 20]);
+        assert_eq!(reading[0].position, [4, 11]);
+        assert_eq!(reading[2].position, [28, 11]);
     }
     #[test]
     fn encoded_ruby_rejects_bad_geometry_and_keeps_halfwidth_encoding() {
-        assert!(encoded_ruby_run("","x",[0,0],22,12,-9,encoding_rs::SHIFT_JIS).is_err());
-        assert!(encoded_ruby_run("a\nb","x",[0,0],22,12,-9,encoding_rs::SHIFT_JIS).is_err());
-        assert!(encoded_ruby_run("a","x",[0,i32::MIN],22,12,-9,encoding_rs::SHIFT_JIS).is_err());
-        let (_,reading,advance)=encoded_ruby_run("あ","ｱA",[0,0],22,12,-9,encoding_rs::SHIFT_JIS).unwrap();
-        assert_eq!(advance,22);assert_eq!(reading[1].position[0]-reading[0].position[0],6);
+        assert!(encoded_ruby_run("", "x", [0, 0], 22, 12, -9, encoding_rs::SHIFT_JIS).is_err());
+        assert!(encoded_ruby_run("a\nb", "x", [0, 0], 22, 12, -9, encoding_rs::SHIFT_JIS).is_err());
+        assert!(
+            encoded_ruby_run("a", "x", [0, i32::MIN], 22, 12, -9, encoding_rs::SHIFT_JIS).is_err()
+        );
+        let (_, reading, advance) =
+            encoded_ruby_run("あ", "ｱA", [0, 0], 22, 12, -9, encoding_rs::SHIFT_JIS).unwrap();
+        assert_eq!(advance, 22);
+        assert_eq!(reading[1].position[0] - reading[0].position[0], 6);
     }
 }

@@ -87,7 +87,7 @@ fn actual_rotating_adler_archives_verify() {
         let entries = archive.entries();
         let protected = entries
             .iter()
-            .filter(|e| e.metadata.get("adler_xor").is_some())
+            .filter(|e| archive.entry_metadata(e.id).get("adler_xor").is_some())
             .count();
         let (mut ok, mut bad, mut bytes) = (0, 0, 0u64);
         for e in entries.iter().step_by(stride.max(1)) {
@@ -137,8 +137,7 @@ fn actual_rotating_adler_archives_verify() {
         }
         let report = entries
             .iter()
-            .find_map(|e| e.metadata.get("adler_xor"))
-            .cloned();
+            .find_map(|e| archive.entry_metadata(e.id).get("adler_xor").cloned());
         println!(
             "{name}: entries={} protected={protected} sampled_ok={ok} sampled_failed={bad} bytes={bytes} open={:.2}s adler_xor={}",
             entries.len(),

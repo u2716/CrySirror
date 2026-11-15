@@ -1,0 +1,60 @@
+[package]
+name = "crysirror-launch"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Window-independent CrySirror player: engine detection, launch plans, runtime bootstrap and frame materialization (shared by the desktop and console hosts)"
+
+[features]
+nfs = ["crysirror-network/nfs", "crysirror-siglus-integrated/nfs", "crysirror-bgi-integrated/nfs", "crysirror-softpal/nfs", "crysirror-rfvp-integrated/nfs"]
+smb = ["crysirror-network/smb", "crysirror-siglus-integrated/smb", "crysirror-bgi-integrated/smb", "crysirror-softpal/smb", "crysirror-rfvp-integrated/smb"]
+
+[dependencies]
+crysirror-vita-io.workspace = true
+crysirror-qlie = {workspace=true,features=["runtime"]}
+crysirror-sugarpot = {workspace=true,features=["runtime"]}
+crysirror-reallive.workspace = true
+crysirror-avg32.workspace = true
+crysirror-krkr.workspace = true
+crysirror-rfvp.workspace = true
+crysirror-rfvp-integrated = {path="../crysirror-rfvp-integrated"}
+crysirror-rfvp-vm.workspace = true
+crysirror-siglus-integrated.workspace = true
+crysirror-nscripter.workspace = true
+crysirror-bgi-integrated.workspace = true
+crysirror-softpal.workspace = true
+crysirror-circus = {workspace=true,features=["runtime"]}
+crysirror-catsystem2 = {workspace=true,features=["runtime"]}
+crysirror-majiro = {workspace=true,features=["runtime"]}
+crysirror-system-nnn = {workspace=true,features=["runtime"]}
+crysirror-system4 = {path="../crysirror-system4",features=["runtime"]}
+crysirror-core.workspace = true
+crysirror-tasks.workspace = true
+crysirror-willplus.workspace = true
+crysirror-resource.workspace = true
+crysirror-network = { workspace = true, default-features = false, features = ["http"] }
+crysirror-formats-arc.workspace = true
+crysirror-tjs2.workspace = true
+crysirror-runtime = { workspace = true, features = ["arc-formats", "blackcyc-formats"] }
+crysirror-wgpu.workspace = true
+crysirror-audio.workspace = true
+crysirror-siglus.workspace = true
+crysirror-engine = { workspace = true, features = ["arc-formats", "blackcyc-formats"] }
+crysirror-puppet.workspace = true
+crysirror-puppet-eluna = { path = "../crysirror-puppet-eluna" }
+crysirror-script-js.workspace = true
+crysirror-scene.workspace = true
+anyhow.workspace = true
+serde_json.workspace = true
+serde.workspace = true
+image.workspace = true
+log = "0.4"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "=0.10.1"
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation", "Win32_System_Power", "Win32_UI_Input_Ime", "Win32_Graphics_Gdi"] }
+
+[dev-dependencies]
+tempfile = "3.12"

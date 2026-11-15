@@ -2,8 +2,7 @@
 // (at your option) any later version, https://www.gnu.org/licenses/agpl-3.0.html.
 //! KiriKiri native classes as thin translations onto engine services.
 //!
-//! Member names, defaults and argument conventions follow KiriKiri Z (as
-//! inspected in Kirakira's `krkr-engine` at the pinned commit). Members whose
+//! Member names, defaults and argument conventions follow KiriKiri Z. Members whose
 //! semantics need an engine capability CrySirror does not offer yet throw a
 //! TJS exception naming that capability; nothing is silently stubbed.
 use crate::host::{KrkrHost, LayerState, TimerState, WindowState};
@@ -16,6 +15,8 @@ use serde_json::json;
 pub type Rt = Runtime<KrkrHost>;
 #[path = "font_class.rs"]
 mod font_class;
+#[path = "native_extra.rs"]
+pub(crate) mod native_extra;
 
 pub fn install(rt: &mut Rt) {
     crate::constants::install_tvp_constants(rt);
@@ -24,8 +25,8 @@ pub fn install(rt: &mut Rt) {
     install_debug(rt);
     install_storages(rt);
     install_scripts(rt);
-    // PackinOne tjsDataPack + Storages octet I/O (vendored from Kirakira).
-    crate::kirakira::packinone::install(rt);
+    // PackinOne tjsDataPack + Storages octet I/O.
+    crate::plugin_ports::packinone::install(rt);
     install_plugins(rt);
     install_timer(rt);
     crate::async_trigger::install(rt);
@@ -33,6 +34,10 @@ pub fn install(rt: &mut Rt) {
     install_window(rt);
     font_class::install(rt);
     install_layer(rt);
+    if let Some(layer)=rt.global_member("Layer").object_handle(){native_extra::install_layer(rt,layer);}
+    if let Some(window)=rt.global_member("Window").object_handle(){native_extra::install_window(rt,window);}
+    native_extra::bitmap::install(rt);
+    crate::native_pad::install(rt);
     // KRKR2 ScriptMgnIntf.cpp registers the real KAGParser as a builtin.
     // Explicit later plugin links can still replace it (including ExtKAG).
     crate::kag::install(rt);
@@ -399,7 +404,16 @@ fn install_system(rt: &mut Rt) {
         h,
         &[
             ("getTickCount", |rt, _, _| {
-                Ok(Variant::Integer(rt.host().now as i64))
+                let host=rt.host_mut();
+                let now=host.now;
+                if host.clock_poll_tick!=now {
+                    host.clock_poll_tick=now;host.clock_poll_reads=0;
+                }
+                host.clock_poll_reads=host.clock_poll_reads.saturating_add(1);
+                let yield_read=host.can_suspend && host.clock_poll_reads>=256;
+                if yield_read {host.clock_yield_tick=Some(now);}
+                if yield_read {rt.request_suspend();}
+                Ok(Variant::Integer(now as i64))
             }),
             // krkrz SystemIntf.cpp createUUID: 128 random bits as a version-4
             // UUID string. Bits come from a splitmix64 stream over a process
@@ -482,7 +496,16 @@ fn install_system(rt: &mut Rt) {
             }),
             ("removeContinuousHandler", |rt, _, a| {
                 let f = a.first().cloned().unwrap_or_default();
-                continuous(rt).retain(|g| !g.discern_eq(&f));
+                // EventIntf.cpp:1091-1102 clears the live slot immediately.
+                // Erasing it would shift the next callback underneath the
+                // current delivery cursor; a frame snapshot would still call
+                // a mover whose finalize() has just removed this handler.
+                let mut handlers = continuous(rt);
+                let mut items = handlers.list();
+                if let Some(item) = items.iter_mut().find(|g| g.discern_eq(&f)) {
+                    *item = Variant::Void;
+                    handlers.store(items);
+                }
                 Ok(Variant::Void)
             }),
             ("createAppLock", |_, _, _| Ok(Variant::Integer(1))),
@@ -664,6 +687,22 @@ pub fn continuous_handlers(rt: &mut Rt) -> Vec<Variant> {
     continuous(rt).list()
 }
 
+pub(crate) fn continuous_handler_at(rt: &Rt, index: usize) -> Option<Variant> {
+    let system = object_arg(&rt.global_member("System"))?;
+    let array = object_arg(&rt.object_member(system, CONTINUOUS))?;
+    rt.array_elements(array)?.get(index).cloned()
+}
+
+pub(crate) fn compact_continuous_handlers(rt: &mut Rt) {
+    let has_empty = object_arg(&rt.global_member("System"))
+        .and_then(|s| object_arg(&rt.object_member(s, CONTINUOUS)))
+        .and_then(|a| rt.array_elements(a))
+        .is_some_and(|items| items.iter().any(|v| matches!(v, Variant::Void)));
+    if has_empty {
+        continuous(rt).retain(|v| !matches!(v, Variant::Void));
+    }
+}
+
 // ------------------------------------------------------------------ Debug
 
 fn install_debug(rt: &mut Rt) {
@@ -712,6 +751,7 @@ fn install_storages(rt: &mut Rt) {
             }),
             ("isExistentStorage", |rt, _, a| {
                 let name = string(&a, 0, "Storages.isExistentStorage")?;
+                crate::wrapper_plugins::sync_proxy(rt)?;
                 let found = if crate::varfile_plugin::is_uri(&name) {
                     crate::varfile_plugin::exists(rt,&name)?
                 } else { rt.host().storage()?.resolve(&name).is_some() };
@@ -722,6 +762,7 @@ fn install_storages(rt: &mut Rt) {
             }),
             ("getPlacedPath", |rt, _, a| {
                 let name = string(&a, 0, "Storages.getPlacedPath")?;
+                crate::wrapper_plugins::sync_proxy(rt)?;
                 if crate::varfile_plugin::is_uri(&name) {
                     return Ok(Variant::String(if crate::varfile_plugin::exists(rt,&name)? {name} else {String::new()}));
                 }
@@ -749,6 +790,7 @@ fn install_storages(rt: &mut Rt) {
             }),
             ("addAutoPath", |rt, _, a| {
                 let path = string(&a, 0, "Storages.addAutoPath")?;
+                crate::wrapper_plugins::sync_proxy(rt)?;
                 if crate::protect_plugin::auto_path_hook(rt, &path, true)? == Some(true) {
                     return Ok(Variant::Void);
                 }
@@ -797,8 +839,19 @@ fn install_storages(rt: &mut Rt) {
                     None => n,
                 }))
             }),
-            // No optical media exists on this host: no volume matches.
-            ("searchCD", |_, _, _| Ok(Variant::String(String::new()))),
+            // StorageImpl::TVPSearchCD returns a matching drive letter. The
+            // host publishes installed/mounted media explicitly; no ambient
+            // optical probing and no unconditional success/failure here.
+            ("searchCD", |rt, _, a| {
+                let label=string(&a,0,"Storages.searchCD")?;
+                let storage=rt.host().storage()?;
+                let drive=match &storage.media {
+                    Some(media)=>media.find_label(crysirror_core::state::ClientId(rt.host().client),&label)
+                        .map_err(|e|TjsError::runtime(e.to_string()))?.map(|v|v.drive.to_string()),
+                    None=>None,
+                };
+                Ok(Variant::String(drive.unwrap_or_default()))
+            }),
         ],
     );
 }
@@ -1062,7 +1115,7 @@ fn timer_mut(rt: &mut Rt, t: Option<ObjectHandle>) -> Result<&mut TimerState> {
 /// BasicDrawDevice members, on the class and on every instance. `recreate`
 /// has nothing to rebuild (presentation is the engine's); the native
 /// `interface` pointer is never exposed.
-fn draw_device_members(rt: &mut Rt, h: ObjectHandle) {
+pub(crate) fn draw_device_members(rt: &mut Rt, h: ObjectHandle) {
     rt.register_object_native_property(
         h,
         "interface",
@@ -1083,18 +1136,19 @@ fn install_window(rt: &mut Rt) {
         if rt.host().windows.contains_key(&h.0) {
             return Ok(Variant::Void);
         }
-        if !rt.host().windows.is_empty() {
-            return Err(unsupported(
-                "a second Window",
-                "multiple engine output windows",
-            ));
-        }
+        // Games also derive invisible controller classes from Window. Those
+        // objects retain native state without requiring another OS output.
+        // Presentation of a second Window remains an explicit host boundary.
+        if rt.host().windows.len()>=1024 {return Err(TjsError::runtime("native Window object limit exceeded"));}
+        let output=!rt.host().windows.values().any(|window|window.output);
         let [w, height] = rt.host().canvas;
         rt.host_mut().windows.insert(
             h.0,
             WindowState {
+                output,
                 primary: None,
                 inner: [w as i64, height as i64],
+                layer_pos:[0,0],
                 visible: false,
                 menu: None,
             },
@@ -1105,7 +1159,7 @@ fn install_window(rt: &mut Rt) {
         rt.set_object_member(h, "__caption", Variant::String(String::new()));
         // Class objects may be stored bound; act on the object identity.
         if let Some(class) = rt.global_member("Window").object_handle() {
-            rt.set_object_member(class, "mainWindow", Variant::self_bound(h));
+            if output {rt.set_object_member(class, "mainWindow", Variant::self_bound(h));}
             // krkrz: every Window starts with a Window.BasicDrawDevice, which
             // here is the engine's retained-layer presentation path.
             if let Some(device) = rt.object_member(class, "BasicDrawDevice").object_handle() {
@@ -1230,6 +1284,16 @@ fn install_window(rt: &mut Rt) {
             set_focus(rt, h, layer, true)
         },
     );
+    methods(rt,class,&[("setLayerPos",|rt,t,a|{
+        let h=this_of(rt,t,"Window.setLayerPos")?;
+        let p=[need_int(&a,0,"Window.setLayerPos")?,need_int(&a,1,"Window.setLayerPos")?];
+        rt.host_mut().set_layer_position(h.0,p)?;Ok(Variant::Void)
+    })]);
+    for (name,axis) in [("layerLeft",0),("layerTop",1)] {
+        rt.register_object_native_property(class,name,
+            move|rt,t|{let h=this_of(rt,t,"Window layer position")?;let w=rt.host().windows.get(&h.0).ok_or_else(||TjsError::runtime("Window not constructed"))?;Ok(Variant::Integer(w.layer_pos[axis]))},
+            move|rt,t,v|{let h=this_of(rt,t,"Window layer position")?;let mut p=rt.host().windows.get(&h.0).ok_or_else(||TjsError::runtime("Window not constructed"))?.layer_pos;p[axis]=v.to_integer()?;rt.host_mut().set_layer_position(h.0,p)});
+    }
     // Display zoom of the primary layer. The engine already presents the
     // canvas scaled to the host window; the ratio is recorded for scripts.
     methods(
@@ -1294,7 +1358,7 @@ fn install_window(rt: &mut Rt) {
         |rt, t, v| {
             let h = this_of(rt, t, "Window.caption")?;
             let text = v.to_tjs_string()?;
-            rt.host_mut().ui_op(json!({"op":"set_title","text":text}));
+            if is_output_window(rt,h) {rt.host_mut().ui_op(json!({"op":"set_title","text":text}));}
             rt.set_object_member(h, "__caption", Variant::String(text));
             Ok(())
         },
@@ -1312,8 +1376,8 @@ fn install_window(rt: &mut Rt) {
             let h = this_of(rt, t, "Window.fullScreen")?;
             let enabled = v.is_truthy();
             rt.host_mut().push_log(format!("Window.fullScreen = {enabled}"));
-            rt.host_mut()
-                .ui_op(json!({"op":"set_fullscreen","enabled":enabled}));
+            if is_output_window(rt,h) {rt.host_mut()
+                .ui_op(json!({"op":"set_fullscreen","enabled":enabled}));}
             rt.set_object_member(h, "__fullscreen", Variant::Integer(enabled as i64));
             Ok(())
         },
@@ -1337,9 +1401,9 @@ fn install_window(rt: &mut Rt) {
             };
             rt.set_object_member(h, "__borderStyle", Variant::Integer(n));
             rt.host_mut().push_log(format!("Window.borderStyle = {n}"));
-            rt.host_mut().ui_op(
+            if is_output_window(rt,h) {rt.host_mut().ui_op(
                 json!({"op":"set_window_policy","decorated":decorated,"resizable":resizable}),
-            );
+            );}
             Ok(())
         },
     );
@@ -1385,8 +1449,8 @@ fn install_window(rt: &mut Rt) {
             ("hideMouseCursor", |rt, t, _| {
                 let h = this_of(rt, t, "Window.hideMouseCursor")?;
                 rt.set_object_member(h, "__temporary_cursor_hide", Variant::Integer(1));
-                rt.host_mut()
-                    .ui_op(json!({"op":"set_cursor_visible","visible":false}));
+                if is_output_window(rt,h) {rt.host_mut()
+                    .ui_op(json!({"op":"set_cursor_visible","visible":false}));}
                 Ok(Variant::Void)
             }),
             // Hot keys are recorded per window. The host has no system-wide
@@ -1439,20 +1503,37 @@ fn install_window(rt: &mut Rt) {
             // `super.onCloseQuery(b)` decides; only an accepted query closes.
             ("close", |rt, t, _| {
                 let h = this_of(rt, t, "Window.close")?;
+                if crate::adapter::modal_window::contains(rt.host(),h.0) {
+                    crate::adapter::modal_window::close(rt,h)?;
+                    return Ok(Variant::Void);
+                }
+                if !is_output_window(rt,h) {
+                    return Err(unsupported("secondary Window.close","per-window close-query ownership"));
+                }
                 // A program close supersedes an unanswered user close.
                 rt.host_mut().closing_by_user = false;
                 rt.host_mut().close_decision = true;
+                rt.host_mut().program_close_pending = true;
                 rt.call_object_method(h, "onCloseQuery", vec![Variant::Integer(1)])?;
-                if rt.host().close_decision {
-                    rt.host_mut().exit_requested = true;
+                if !rt.is_suspended() && rt.host().modal_windows.is_empty() {
+                    rt.host_mut().program_close_pending = false;
+                    if rt.host().close_decision {
+                        rt.host_mut().exit_requested = true;
+                    }
                 }
                 Ok(Variant::Void)
             }),
             // The native default handler (`OnCloseQueryCalled`): a user close
             // closes on `true` and is cancelled on `false`; a program close
             // records the answer for `close()`.
-            ("onCloseQuery", |rt, _, a| {
+            ("onCloseQuery", |rt, t, a| {
+                let h=this_of(rt,t,"Window.onCloseQuery")?;
                 let allow = a.first().is_some_and(Variant::is_truthy);
+                if !is_output_window(rt,h) {
+                    rt.set_object_member(h,"__closeDecision",Variant::Integer(allow as i64));
+                    crate::adapter::modal_window::answer_close(rt,h,allow);
+                    return Ok(Variant::Void);
+                }
                 let host = rt.host_mut();
                 if host.closing_by_user {
                     host.closing_by_user = false;
@@ -1464,9 +1545,12 @@ fn install_window(rt: &mut Rt) {
                 }
                 Ok(Variant::Void)
             }),
-            ("showModal", |_, _, _| {
-                Err(unsupported("Window.showModal", "a nested modal event loop"))
-            }),
+            ("showModal", crate::adapter::modal_window::begin),
+            // WindowIntf.cpp:750-751 declares an empty native finalize.
+            // Engine resources are released separately by invalidate_object;
+            // KAG's derived finalize invokes this base method after its own
+            // layer/plugin cleanup.
+            ("finalize", |_, _, _| Ok(Variant::Void)),
             // The host window stays rectangular; a shaped-window request has no state.
             ("setMaskRegion", |_, _, _| Ok(Variant::Void)),
         ],
@@ -1512,12 +1596,18 @@ fn install_window(rt: &mut Rt) {
                 |rt, t| Ok(Variant::Integer(window_of(rt, t)?.visible as i64)),
                 |rt, t, v| {
                     let h = this_of(rt, t, "Window")?;
+                    if boolean(&v) && !is_output_window(rt,h) && !crate::adapter::modal_window::contains(rt.host(),h.0) {
+                        return Err(unsupported("secondary Window.visible=true","multiple engine output windows"));
+                    }
                     let w = window_mut(rt, h)?;
                     w.visible = boolean(&v);
                     if let Some(p) = w.primary {
                         if let Some(l) = rt.host_mut().layers.get_mut(&p) {
                             l.dirty = true;
                         }
+                    }
+                    if !boolean(&v) {
+                        if let Some(modal)=rt.host_mut().modal_windows.iter_mut().find(|m|m.window==h.0){modal.closed=true;}
                     }
                     Ok(())
                 },
@@ -1534,6 +1624,10 @@ fn install_window(rt: &mut Rt) {
             ),
         ],
     );
+}
+
+fn is_output_window(rt:&Rt,h:ObjectHandle)->bool {
+    rt.host().windows.get(&h.0).is_some_and(|window|window.output)
 }
 
 /// The inner size is script state for the displayed size. The desktop host owns
@@ -1577,6 +1671,9 @@ const FONT_SLOTS: &[(&str, &str)] = &[
     ("bold", "__font_bold"),
     ("italic", "__font_italic"),
     ("angle", "__font_angle"),
+    ("underline", "__font_underline"),
+    ("strikeout", "__font_strikeout"),
+    ("faceIsFileName", "__font_faceIsFileName"),
 ];
 
 fn font_properties(rt: &mut Rt, font: ObjectHandle) {
@@ -1605,13 +1702,20 @@ fn font_properties(rt: &mut Rt, font: ObjectHandle) {
 }
 
 fn font_size(rt: &mut Rt, font: ObjectHandle) -> Result<u64> {
-    for property in ["italic", "angle"] {
+    for property in ["angle"] {
         if rt.resolve_object_member(font, property)?.to_integer()? != 0 {
             return Err(unsupported(
                 &format!("Font.{property}"),
                 "matching engine canvas text style and metrics",
             ));
         }
+    }
+    font_metric_size(rt, font)
+}
+
+fn font_metric_size(rt: &mut Rt, font: ObjectHandle) -> Result<u64> {
+    if rt.resolve_object_member(font, "italic")?.to_integer()? != 0 {
+        return Err(unsupported("Font.italic", "matching engine canvas text style and metrics"));
     }
     let size = rt
         .resolve_object_member(font, "height")?
@@ -1626,7 +1730,7 @@ fn font_size(rt: &mut Rt, font: ObjectHandle) -> Result<u64> {
 fn font_text_width(rt: &mut Rt, t: Option<ObjectHandle>, a: Vec<Variant>) -> Result<Variant> {
     let font = this_of(rt, t, "Font.getTextWidth")?;
     let text = string(&a, 0, "Font.getTextWidth")?;
-    let size = font_size(rt, font)?;
+    let size = font_metric_size(rt, font)?;
     let alias=crate::font_resources::alias(rt,font)?;
     let host = rt.host();
     let metrics = host
@@ -1643,7 +1747,9 @@ fn font_text_height(rt: &mut Rt, t: Option<ObjectHandle>, a: Vec<Variant>) -> Re
     // KiriKiri returns abs(Font.height), even for the empty string. It does
     // not return the glyph ink box or the engine's line pitch.
     let _ = string(&a, 0, "Font.getTextHeight")?;
-    Ok(Variant::Integer(font_size(rt, font)? as i64))
+    let height = rt.resolve_object_member(font, "height")?.to_integer()?.checked_abs()
+        .ok_or_else(|| TjsError::runtime("Font.height magnitude overflow"))?;
+    Ok(Variant::Integer(height))
 }
 
 /// Native Layer default focus handlers forward event dictionaries to the
@@ -1661,10 +1767,53 @@ fn layer_focus_action(rt:&mut Rt,this:Option<ObjectHandle>,args:Vec<Variant>,foc
     rt.call_object_method(owner,"action",vec![Variant::self_bound(event)])
 }
 
+// Native Layer instances exist before a derived script constructor runs
+// (tjsNative::FuncCall). Some scripts construct their child before their own
+// named Layer constructor. Keep a bounded, invisible default instance and bind
+// the tree when that constructor arrives. In particular, never dereference a
+// not-yet-bound layer manager or invent a primary layer for it.
+fn layer_instance_defaults(rt: &mut Rt, h: ObjectHandle, window: ObjectHandle) -> Result<()> {
+    for key in ["__preLeft", "__preTop"] {
+        if let Variant::Integer(x) = rt.object_member(h, key) {
+            let l = rt.host_mut().layer_mut(h)?;
+            if key == "__preLeft" { l.left = x; } else { l.top = x; }
+            rt.delete_object_member(h, key);
+        }
+    }
+    let font = rt.alloc_ordinary_object();
+    font_class::initialize(rt, font);
+    // Self-bound like krkr (`tTJSVariant(dsp, dsp)`): writes through
+    // `layer.font.x` act on the Font, not the caller (property hooks).
+    rt.set_object_member(h, "font", Variant::self_bound(font));
+    rt.set_object_member(h, "__window", Variant::self_bound(window));
+    rt.set_object_member(h, "name", Variant::String(String::new()));
+    for (k, v) in [
+        ("__lp_hitThreshold", 16),
+        ("__lp_hitType", 0),
+        ("__lp_showParentHint", 1),
+        ("__lp_focusable", 0),
+        ("__lp_enabled", 1),
+        ("__lp_face", 128),
+        ("__lp_holdAlpha", 0),
+        ("__lp_neutralColor", 0),
+        ("__lp_joinFocusChain", 1),
+    ] {
+        rt.set_object_member(h, k, Variant::Integer(v));
+    }
+    Ok(())
+}
 fn install_layer(rt: &mut Rt) {
     let class = native_class(rt, "Layer", |rt, this, a| {
         let h = this_of(rt, this, "Layer")?;
-        if a.is_empty() || rt.host().layers.contains_key(&h.0) {
+        if a.is_empty() {
+            if !rt.host().layer_instances.contains(&h.0)
+                && rt.host().layer_instances.len() >= crate::host::MAX_LAYERS as usize {
+                return Err(TjsError::runtime("native Layer instance limit"));
+            }
+            rt.host_mut().layer_instances.insert(h.0);
+            return Ok(Variant::Void);
+        }
+        if rt.host().layers.get(&h.0).is_some_and(|l| l.constructed) {
             return Ok(Variant::Void);
         }
         let window = object_arg(&a[0])
@@ -1673,60 +1822,41 @@ fn install_layer(rt: &mut Rt) {
             .ok_or_else(|| TjsError::runtime("Layer: first argument must be a Window"))?;
         let parent = match a.get(1) {
             None | Some(Variant::Void | Variant::Null) => None,
-            Some(v) => Some(
-                object_arg(v)
-                    .map(|p| rt.bound_this(p).unwrap_or(p))
-                    .filter(|p| rt.host().layers.contains_key(&p.0))
-                    .ok_or_else(|| TjsError::runtime("Layer: parent must be a Layer"))?
-                    .0,
-            ),
+            Some(v) => {
+                let parent=object_arg(v).map(|p|rt.bound_this(p).unwrap_or(p))
+                    .ok_or_else(||TjsError::runtime("Layer: parent must be a Layer"))?;
+                if !rt.host().layers.contains_key(&parent.0) {
+                    if !rt.object_valid(parent) || !rt.host().layer_instances.contains(&parent.0) {
+                        return Err(TjsError::runtime("Layer: parent must be a Layer"));
+                    }
+                    rt.host_mut().reserve_layer(parent,window.0)?;
+                    layer_instance_defaults(rt,parent,window)?;
+                }
+                let state=rt.host().layer(parent)?;
+                if state.window!=window.0 || !state.attached || parent==h {
+                    return Err(TjsError::runtime("Layer: invalid parent scope or cycle"));
+                }
+                Some(parent.0)
+            }
         };
         if parent.is_none() && rt.host().windows[&window.0].primary.is_some() {
             return Err(TjsError::runtime("Window already has a primary layer"));
         }
-        rt.host_mut().create_layer(h, window.0, parent)?;
-        for key in ["__preLeft", "__preTop"] {
-            if let Variant::Integer(x) = rt.object_member(h, key) {
-                let l = rt.host_mut().layer_mut(h)?;
-                if key == "__preLeft" {
-                    l.left = x
-                } else {
-                    l.top = x
-                }
-                rt.delete_object_member(h, key);
-            }
+        if rt.host().layers.contains_key(&h.0) {
+            rt.host_mut().bind_reserved_layer(h,window.0,parent)?;
+        } else {
+            rt.host_mut().create_layer(h,window.0,parent)?;
+            layer_instance_defaults(rt,h,window)?;
         }
         if parent.is_none() {
-            // The primary layer is the render resolution, i.e. the canvas.
-            let [w, height] = rt.host().canvas.map(i64::from);
-            rt.host_mut().windows.get_mut(&window.0).unwrap().primary = Some(h.0);
-            let l = rt.host_mut().layer_mut(h)?;
-            l.width = w;
-            l.height = height;
-            rt.host_mut().reset_surface(h, w, height, [0, 0, 0, 255])?;
-            rt.host_mut().layer_mut(h)?.kind = 1;
+            let [w,height]=rt.host().windows[&window.0].inner;
+            rt.host_mut().windows.get_mut(&window.0).unwrap().primary=Some(h.0);
+            let l=rt.host_mut().layer_mut(h)?;
+            l.width=w;l.height=height;
+            rt.host_mut().reset_surface(h,w,height,[0,0,0,255])?;
+            rt.host_mut().layer_mut(h)?.kind=1;
         } else {
-            rt.host_mut().layer_mut(h)?.kind = 2;
-        }
-        let font = rt.alloc_ordinary_object();
-        font_class::initialize(rt, font);
-        // Self-bound like krkr (`tTJSVariant(dsp, dsp)`): writes through
-        // `layer.font.x` act on the Font, not the caller (property hooks).
-        rt.set_object_member(h, "font", Variant::self_bound(font));
-        rt.set_object_member(h, "__window", Variant::self_bound(window));
-        rt.set_object_member(h, "name", Variant::String(String::new()));
-        for (k, v) in [
-            ("__lp_hitThreshold", 16),
-            ("__lp_hitType", 0),
-            ("__lp_showParentHint", 1),
-            ("__lp_focusable", 0),
-            ("__lp_enabled", 1),
-            ("__lp_face", 0),
-            ("__lp_holdAlpha", 0),
-            ("__lp_neutralColor", 0),
-            ("__lp_joinFocusChain", 1),
-        ] {
-            rt.set_object_member(h, k, Variant::Integer(v));
+            rt.host_mut().layer_mut(h)?.kind=2;
         }
         Ok(Variant::Void)
     });
@@ -1989,6 +2119,7 @@ fn install_layer(rt: &mut Rt) {
                 Ok(Variant::Void)
             }),
             ("loadImages", layer_load_images),
+            ("loadProvinceImage", crate::province::load),
             ("adjustGamma", crate::image_api::gamma),
             ("clipAlphaRect",crate::image_api::clip_alpha),
             // krkrz tTJSNI_BaseLayer::DoBoxBlur (LayerIntf.cpp): a box blur
@@ -2008,7 +2139,7 @@ fn install_layer(rt: &mut Rt) {
                 if x == 0 && y == 0 {
                     return Ok(Variant::Void);
                 }
-                let face = rt.object_member(h, "__lp_face").to_integer().unwrap_or(0);
+                let face = raw_draw_face(rt, h);
                 let l = rt.host().layer(h)?.clone();
                 let alpha_weighted = match face {
                     0 => true,
@@ -2497,7 +2628,7 @@ fn install_layer(rt: &mut Rt) {
             ),
             (
                 "isPrimary",
-                |rt, t| layer_get(rt, t, |l| l.parent.is_none() as i64),
+                |rt, t| layer_get(rt, t, |l| (l.constructed && l.parent.is_none()) as i64),
                 read_only,
             ),
         ],
@@ -2663,7 +2794,7 @@ fn layer_get_layer_at(rt: &mut Rt, t: Option<ObjectHandle>, a: Vec<Variant>) -> 
 }
 
 /// krkrz GetMainPixel: the colour channels without alpha. Resident images read
-/// directly; a composed canvas has no synchronous CPU sample.
+/// directly; composed canvases prepare a shared image before retrying this call.
 fn layer_get_main_pixel(rt: &mut Rt, t: Option<ObjectHandle>, a: Vec<Variant>) -> Result<Variant> {
     let h = this_of(rt, t, "Layer.getMainPixel")?;
     let (x, y) = (need_int(&a, 0, "Layer.getMainPixel")?, need_int(&a, 1, "Layer.getMainPixel")?);
@@ -2671,24 +2802,28 @@ fn layer_get_main_pixel(rt: &mut Rt, t: Option<ObjectHandle>, a: Vec<Variant>) -
     if x < 0 || y < 0 || x >= l.image_width || y >= l.image_height {
         return Err(TjsError::runtime("Layer.getMainPixel: pixel out of range"));
     }
-    if l.blank {
-        return Ok(Variant::Integer(0x00ff_ffff));
+    native_extra::prepare(rt,h)?;
+    let source=crate::image_api::input(rt,h)?;
+    let [r,g,b,_]=source.resident_pixel(crysirror_core::state::ClientId(rt.host().client),[x as u32,y as u32])
+        .map_err(|e|TjsError::runtime(e.to_string()))?.ok_or_else(||TjsError::runtime("pixel out of rectangle"))?;
+    Ok(Variant::Integer(i64::from(r)<<16|i64::from(g)<<8|i64::from(b)))
+}
+
+/// Some legacy KAG classes declare an ordinary `face` field for their font,
+/// shadowing the native accessor, then explicitly assign dfAuto/dfProvince to
+/// that same field around bitmap operations. Retain the script field (and its
+/// font strings), but honour its numeric draw-plane selections at the semantic
+/// boundary. Otherwise a province clear paints opaque black into the image.
+fn raw_draw_face(rt: &Rt, h: ObjectHandle) -> i64 {
+    if let Variant::Integer(face) = rt.object_member(h, "face") {
+        return face;
     }
-    match &l.image_source {
-        Some(crysirror_core::image_processing::ImageInput::Resource(image)) => {
-            let [r, g, b, _] = image
-                .pixel_at([x as u32, y as u32])
-                .map_err(|e| TjsError::runtime(e.to_string()))?
-                .ok_or_else(|| TjsError::runtime("Layer.getMainPixel: pixel out of range"))?;
-            Ok(Variant::Integer(i64::from(r) << 16 | i64::from(g) << 8 | i64::from(b)))
-        }
-        _ => Err(unsupported("Layer.getMainPixel", "CPU pixel readback of composed canvases")),
-    }
+    rt.object_member(h, "__lp_face").to_integer().unwrap_or(128)
 }
 
 /// krkrz UpdateDrawFace: dfAuto resolves through the layer's display type.
 fn draw_face(rt: &Rt, h: ObjectHandle) -> i64 {
-    let face = rt.object_member(h, "__lp_face").to_integer().unwrap_or(0);
+    let face = raw_draw_face(rt, h);
     if face != 128 {
         return face;
     }
@@ -2700,7 +2835,7 @@ fn draw_face(rt: &Rt, h: ObjectHandle) -> i64 {
 }
 
 fn check_face(rt: &Rt, h: ObjectHandle, member: &str) -> Result<()> {
-    let face = rt.object_member(h, "__lp_face").to_integer().unwrap_or(0);
+    let face = raw_draw_face(rt, h);
     let hold = rt
         .object_member(h, "__lp_holdAlpha")
         .to_integer()
@@ -2822,7 +2957,7 @@ fn fill_province(rt:&mut Rt,h:ObjectHandle,owner:u32,rect:[i64;4],region:u32)->R
 
 fn layer_fill_rect(rt: &mut Rt, t: Option<ObjectHandle>, a: Vec<Variant>) -> Result<Variant> {
     let h = this_of(rt, t, "Layer.fillRect")?;
-    if rt.object_member(h, "__lp_face").to_integer()? == 3 {
+    if raw_draw_face(rt, h) == 3 {
         let owner = rt.host().client;
         let rect = [
             need_int(&a, 0, "province x")?,
@@ -2901,12 +3036,25 @@ fn filled_source(rt: &Rt, h: ObjectHandle, rect: [i64;4], color: [u8;4], keep_al
         source:[0,0,w,height],destination:[x,y],clip:None,opacity:255,
         math:if keep_alpha {ImageCompositeMath::CopyRgb} else {ImageCompositeMath::Copy},
     };
-    Some(base.with_composite_layer(layer))
+    bounded(base.with_composite_layer(layer))
+}
+
+/// A retained CPU history past the shared worker's graph bound can never be
+/// evaluated, and self-copies grow it geometrically. Drop it; a later read
+/// recovers the layer's CPU source through the canvas capture path.
+fn bounded(input: crysirror_core::image_processing::ImageInput) -> Option<crysirror_core::image_processing::ImageInput> {
+    if input.within_graph_bound() {
+        return Some(input);
+    }
+    if std::env::var_os("CRYSIRROR_KRKR_TRACE_SOURCE").is_some() {
+        eprintln!("[source] composite history exceeds the shared graph bound; released");
+    }
+    None
 }
 
 fn layer_color_rect(rt: &mut Rt, t: Option<ObjectHandle>, a: Vec<Variant>) -> Result<Variant> {
     let h = this_of(rt, t, "Layer.colorRect")?;
-    if rt.object_member(h, "__lp_face").to_integer()? == 3 {
+    if raw_draw_face(rt, h) == 3 {
         let rect = [
             need_int(&a, 0, "province x")?,
             need_int(&a, 1, "province y")?,
@@ -3010,7 +3158,7 @@ fn layer_copy(
     let h = this_of(rt, t, member)?;
     // holdAlpha with a colour face: operateRect blends onto the colour and
     // keeps the destination alpha (source-atop; PSD clipping layers).
-    let face = rt.object_member(h, "__lp_face").to_integer().unwrap_or(0);
+    let face = raw_draw_face(rt, h);
     let hold = rt.object_member(h, "__lp_holdAlpha").to_integer().unwrap_or(0) != 0;
     // copyRect on dfOpaque with holdAlpha copies only the colour plane
     // (krkrz CopyRect: TVP_BB_COPY_MAIN).
@@ -3332,7 +3480,7 @@ pub(crate) fn composite_with(
         opacity,
         math,
     };
-    Some(base.with_composite_layer(layer))
+    bounded(base.with_composite_layer(layer))
 }
 
 fn layer_assign_images(rt: &mut Rt, t: Option<ObjectHandle>, a: Vec<Variant>) -> Result<Variant> {
@@ -3406,7 +3554,10 @@ fn layer_draw_text(rt: &mut Rt, t: Option<ObjectHandle>, a: Vec<Variant>) -> Res
     // A mapped precomputed face already contains the native Font style.
     let bold = rt.resolve_object_member(font, "bold")?.is_truthy()
         && !crate::font_resources::is_mapped(rt,font)?;
-    if !bold && shadow_level == 0 {
+    let mapped=crate::font_resources::is_mapped(rt,font)?;
+    let underline=!mapped&&rt.resolve_object_member(font,"underline")?.is_truthy();
+    let strikeout=!mapped&&rt.resolve_object_member(font,"strikeout")?.is_truthy();
+    if !bold && shadow_level == 0 && !underline && !strikeout {
         let host = rt.host_mut();
         if host.layer(h)?.full_alpha != Some(255) {
             host.layer_mut(h)?.full_alpha = None;
@@ -3430,7 +3581,7 @@ fn layer_draw_text(rt: &mut Rt, t: Option<ObjectHandle>, a: Vec<Variant>) -> Res
         .map_err(|e| TjsError::runtime(e.to_string()))?;
     let glyphs = placements
         .into_iter()
-        .map(|g| json!({"character":g.character.to_string(),"baseline":g.baseline}))
+        .map(|g| json!({"character":g.character.to_string(),"baseline":g.baseline,"style":{"bold":bold,"underline":underline,"strikeout":strikeout}}))
         .collect::<Vec<_>>();
     let host = rt.host_mut();
     if host.layer(h)?.full_alpha != Some(255) {

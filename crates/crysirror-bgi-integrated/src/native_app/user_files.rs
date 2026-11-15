@@ -3,6 +3,45 @@ use std::path::{Path, PathBuf};
 
 use super::find_runtime_resource;
 
+/// Reads through immutable archive indices only. Native composite members
+/// contain install-relative paths, not just basenames; virtual resource roots
+/// select the same held archive descriptors and never authorize loose host IO.
+pub(crate) fn indexed_archive_entry(
+    manager: &ResourceManager,
+    archive: &str,
+    entry: &str,
+) -> Option<crate::native_archive::ResourceEntry> {
+    if named_archive(archive) {
+        return find_runtime_resource(manager, archive, entry);
+    }
+    let normalized = archive.replace('\\', "/");
+    let relative = normalized
+        .strip_prefix("bgi-resource/")
+        .unwrap_or(&normalized);
+    if relative.is_empty()
+        || relative
+            .split('/')
+            .any(|part| part.is_empty() || matches!(part, "." | "..") || part.contains([':', '\0']))
+        || relative.starts_with("bgi-user/")
+    {
+        return None;
+    }
+    if normalized.starts_with("bgi-resource/") && named_archive(relative) {
+        return find_runtime_resource(manager, relative, entry);
+    }
+    let index = manager.archives().archives.iter().find(|index| {
+        index
+            .path
+            .strip_prefix(&manager.archives().root)
+            .is_ok_and(|path| {
+                path.to_string_lossy()
+                    .replace('\\', "/")
+                    .eq_ignore_ascii_case(relative)
+            })
+    })?;
+    manager.find_in_archive_path(&index.path, entry)
+}
+
 pub(crate) fn authorized_archive_arg(archive: &str) -> bool {
     let normalized = archive.replace('\\', "/");
     is_empty_archive_arg(archive)
@@ -39,6 +78,85 @@ pub(crate) fn game_root_path(manager: &ResourceManager) -> PathBuf {
     std::env::current_dir()
         .map(|cwd| cwd.join(root))
         .unwrap_or_else(|_| root.to_path_buf())
+}
+
+/// Native archive discovery is a read of the install tree, while ordinary
+/// save-file enumeration retains the private-user root. Explicit capability
+/// roots are authoritative; FilePolicy still validates every path component.
+pub(crate) fn native_enumeration_pattern(pattern: &str) -> String {
+    let normalized = pattern.replace('\\', "/");
+    if !normalized.starts_with("bgi-")
+        && Path::new(&normalized)
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("arc"))
+    {
+        format!("bgi-resource/{normalized}")
+    } else {
+        normalized
+    }
+}
+
+/// Sys81:39 consumes an already indexed archive directory, not loose files
+/// or an arbitrary path to reopen. Preserve original member spelling/order.
+pub(crate) fn archive_directory_names(
+    manager: &ResourceManager,
+    native_root: &Path,
+    archive: &str,
+) -> Option<Vec<String>> {
+    let normalized = archive.replace('\\', "/");
+    let path = if let Some(relative) = normalized.strip_prefix("bgi-resource/") {
+        PathBuf::from(relative)
+    } else {
+        normalize_runtime_native_path(native_root, archive)
+    };
+    let relative = if path.is_absolute() {
+        path.strip_prefix(native_root).ok()?
+    } else {
+        path.as_path()
+    };
+    let parts = relative
+        .components()
+        .filter_map(|part| match part {
+            std::path::Component::CurDir => None,
+            other => Some(other),
+        })
+        .collect::<Vec<_>>();
+    if parts.is_empty() || parts.iter().any(|part| {
+        !matches!(part, std::path::Component::Normal(name) if !name.to_string_lossy().contains([':', '\0']))
+    }) {
+        return None;
+    }
+    let name = parts
+        .iter()
+        .map(|part| part.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/");
+    let index = manager.archives().archives.iter().find(|index| {
+        if parts.len() == 1 {
+            index
+                .path
+                .file_name()
+                .is_some_and(|leaf| leaf.to_string_lossy().eq_ignore_ascii_case(&name))
+        } else {
+            index
+                .path
+                .strip_prefix(&manager.archives().root)
+                .is_ok_and(|relative| {
+                    relative
+                        .to_string_lossy()
+                        .replace('\\', "/")
+                        .eq_ignore_ascii_case(&name)
+                })
+        }
+    })?;
+    Some(
+        index
+            .entries
+            .iter()
+            .map(|entry| entry.name.clone())
+            .collect(),
+    )
 }
 
 pub(crate) fn script_game_root(native_root: &Path) -> String {
@@ -268,7 +386,7 @@ pub(crate) fn runtime_file_exists_from_root(
         let Some(name) = scoped_name(archive, file) else {
             return false;
         };
-        if policy.metadata(&name).is_some_and(|m| m.is_file()) {
+        if policy.user_metadata(&name).is_some_and(|m| m.is_file()) {
             return true;
         }
         if name.replace('\\', "/").starts_with("bgi-") {
@@ -346,7 +464,9 @@ pub(crate) fn read_runtime_bytes(
             let entry = find_runtime_resource(manager, archive, file)?;
             return manager.read_by_entry_decoded(&entry).ok();
         }
-        let file = scoped_name(archive, file)?;
+        // Native file reads share the user-data aliases used by writes,
+        // existence and size queries. Original installed saves stay separate.
+        let file = super::file_policy::user_data_alias(&scoped_name(archive, file)?);
         let file = file.as_str();
         match policy.read_loose(file) {
             Ok(bytes) => return Some(bytes),

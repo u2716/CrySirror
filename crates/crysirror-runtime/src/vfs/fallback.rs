@@ -26,7 +26,7 @@ impl LooseFirst {
         }
         Ok(path)
     }
-    fn metadata(&self, path: &str) -> Result<Option<cap_std::fs::Metadata>> {
+    fn metadata(&self, path: &str) -> Result<Option<crysirror_capfs::fs::Metadata>> {
         match self
             .asset
             .metadata(if path.is_empty() { "." } else { path })

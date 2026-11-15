@@ -4,37 +4,112 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CrySirror Web</title>
 <style>
-:root { color-scheme: light dark; font-family: system-ui, sans-serif; background: #10151b; color: #edf0f4; }
-body { margin: 0; padding: 32px; }
-main { max-width: 1000px; margin: auto; }
-header { display: flex; align-items: baseline; gap: 16px; margin-bottom: 16px; }
-h1 { font-size: 24px; letter-spacing: -.5px; margin: 0; }
-header span, p { color: #aab5c2; font-size: 14px; }
-nav { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
-button, .file { border: 1px solid #445365; background: #233143; border-radius: 7px; padding: 9px 14px; color: inherit; font: inherit; cursor: pointer; }
-button:disabled { opacity: .4; cursor: default; }
-button:hover:enabled, .file:hover { background: #30455d; }
-#viewport { width: 640px; height: 360px; max-width: 100%; resize: both; overflow: hidden; min-width: 240px; min-height: 135px; background: #05070a; border: 1px solid #344357; border-radius: 8px; }
+:root {
+  color-scheme: dark;
+  --bg: #0a0c1c; --bg-glow-a: rgba(108, 92, 231, .30); --bg-glow-b: rgba(20, 150, 190, .18);
+  --surface: rgba(255, 255, 255, .055); --surface-hover: rgba(255, 255, 255, .09); --surface-strong: rgba(255, 255, 255, .12);
+  --border: rgba(255, 255, 255, .10); --text: #eef0ff; --muted: #a3a9d0; --faint: #6f76a3;
+  --accent: #8b9cff; --accent-strong: #6d7dff; --ok: #4ade9b; --danger: #ff8f8f;
+  --shadow: 0 24px 60px rgba(0, 0, 0, .45); --radius: 18px;
+  font-family: Inter, "SF Pro Text", "Segoe UI", system-ui, -apple-system, "Hiragino Sans", "Noto Sans CJK JP", sans-serif;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    color-scheme: light;
+    --bg: #f4f5fb; --bg-glow-a: rgba(108, 92, 231, .16); --bg-glow-b: rgba(20, 150, 190, .10);
+    --surface: rgba(255, 255, 255, .78); --surface-hover: #fff; --surface-strong: #fff;
+    --border: rgba(20, 24, 60, .10); --text: #151833; --muted: #555b85; --faint: #8a8fb3;
+    --accent: #5b6cff; --accent-strong: #4453f0; --ok: #12a46a; --danger: #d43c3c;
+    --shadow: 0 20px 50px rgba(30, 36, 90, .14);
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; min-height: 100%; }
+body {
+  background: radial-gradient(1200px 600px at 85% -10%, var(--bg-glow-a), transparent 60%),
+              radial-gradient(900px 500px at -10% 110%, var(--bg-glow-b), transparent 60%), var(--bg);
+  background-attachment: fixed; color: var(--text); font-size: 15px; line-height: 1.5;
+}
+.shell { max-width: 1120px; margin: 0 auto; padding: 28px 24px 48px; }
+.topbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 24px; }
+.logo { width: 34px; height: 34px; border-radius: 10px; background: conic-gradient(from 210deg, #8b9cff, #c084fc, #38bdf8, #8b9cff); box-shadow: 0 6px 20px rgba(139, 156, 255, .45); display: grid; place-items: center; }
+.logo::after { content: ""; width: 12px; height: 12px; border-radius: 3px; background: rgba(255, 255, 255, .92); transform: rotate(45deg); }
+.brand { font-size: 19px; font-weight: 650; letter-spacing: -.3px; }
+.chip { font-size: 12px; font-weight: 600; color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); padding: 3px 10px; border-radius: 999px; }
+.topbar .spacer { flex: 1; }
+.topbar a { color: var(--muted); text-decoration: none; font-size: 14px; }
+.stage-wrap { border-radius: calc(var(--radius) + 6px); border: 1px solid var(--border); background: var(--surface); backdrop-filter: blur(18px); box-shadow: var(--shadow); padding: 14px; }
+#viewport {
+  position: relative; width: 100%; max-width: 100%; aspect-ratio: 16 / 9; margin: 0 auto; border-radius: var(--radius); overflow: hidden;
+  background: radial-gradient(400px 220px at 50% 40%, rgba(139, 156, 255, .10), transparent 70%), #05060e;
+}
+#viewport.playing .placeholder { display: none; }
+.placeholder { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; color: #9aa0c8; pointer-events: none; padding: 16px; }
+.placeholder strong { display: block; color: #e8eaff; font-size: 18px; font-weight: 620; margin-bottom: 4px; }
 canvas { width: 100%; height: 100%; object-fit: contain; display: block; outline: none; }
-#status { min-height: 24px; margin-top: 16px; white-space: pre-wrap; }
-#status.error { color: #ffb2a9; }
+#viewport:fullscreen { border-radius: 0; background: #000; }
 input[type=file] { display: none; }
-footer { margin-top: 28px; border-top: 1px solid #293543; padding-top: 12px; }
+.toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+.toolbar .spacer { flex: 1; }
+button.tool {
+  display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--border); background: var(--surface-strong); color: var(--text);
+  border-radius: 11px; padding: 8px 14px; font: inherit; font-size: 14px; font-weight: 560; cursor: pointer; transition: background .15s, border-color .15s, opacity .15s;
+}
+button.tool:hover:enabled { border-color: color-mix(in srgb, var(--accent) 50%, transparent); }
+button.tool:disabled { opacity: .38; cursor: default; }
+label.tool { display: inline-flex; align-items: center; border: 1px solid var(--border); background: var(--surface-strong); color: var(--text); border-radius: 11px; padding: 8px 14px; font-size: 14px; font-weight: 560; cursor: pointer; }
+label.tool:hover, label.tool:focus-visible { border-color: color-mix(in srgb, var(--accent) 50%, transparent); outline: none; }
+body.dragging .stage-wrap { outline: 2px dashed var(--accent); outline-offset: 6px; }
+.topbar .tool { margin-left: 4px; }
+button.tool.primary { background: linear-gradient(135deg, var(--accent), var(--accent-strong)); border-color: transparent; color: #fff; }
+.status { display: flex; align-items: center; gap: 9px; color: var(--muted); font-size: 14px; min-height: 24px; }
+.status::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--faint); flex: none; }
+.status.running::before { background: var(--ok); box-shadow: 0 0 0 4px color-mix(in srgb, var(--ok) 20%, transparent); }
+.status.error { color: var(--danger); }
+.status.error::before { background: var(--danger); }
+#status { white-space: pre-wrap; }
+.hints { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 18px; color: var(--muted); font-size: 13.5px; }
+kbd { font: 600 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace; padding: 4px 7px; border-radius: 6px; border: 1px solid var(--border); border-bottom-width: 2px; background: var(--surface-strong); color: var(--text); }
+footer { margin-top: 40px; color: var(--faint); font-size: 13px; }
+@media (max-width: 640px) {
+  .shell { padding: 20px 16px 36px; }
+  .topbar { margin-bottom: 24px; }
+  .stage-wrap { padding: 10px; }
+}
 </style>
-<main>
-<header><h1>CrySirror</h1><span>Web · Browser host for the shared engine</span></header>
-<nav>
-<button id="demo">2D demo</button>
-<button id="demo3d">3D demo</button>
-<label class="file">Open project folder<input id="folder" type="file" webkitdirectory multiple></label>
-<button id="pause" disabled>Pause</button>
-<button id="save" disabled>Save</button>
-<button id="load" disabled>Load</button>
-</nav>
-<div id="viewport"><canvas id="game" width="640" height="360" tabindex="0" aria-label="Game canvas"></canvas></div>
-<div id="status" role="status">Start the demo or choose a project folder containing project.json.</div>
-<p>Click the canvas or press Enter to advance. Drag the lower-right corner to resize; the game keeps its original resolution.</p>
-<footer><p>Runs projects through the shared engine. Imported files stay in your browser; saves use this site's browser storage.</p></footer>
-</main>
+<div class="shell">
+  <header class="topbar">
+    <div class="logo" aria-hidden="true"></div>
+    <span class="brand">CrySirror</span><span class="chip">Web</span>
+    <span class="spacer"></span>
+    <button class="tool" id="home">Library</button>
+    <label class="tool file" id="drop" tabindex="0">Open project<input id="folder" type="file" webkitdirectory multiple></label>
+    <label class="tool file" tabindex="0">Font<input id="font" type="file" accept=".ttf,.otf,.ttc"></label>
+  </header>
+
+  <section class="stage-wrap">
+    <div id="viewport">
+      <div class="placeholder"><div><strong id="placeholder-title">Starting…</strong><span id="placeholder-text">The library runs on the shared CrySirror engine.</span></div></div>
+      <canvas id="game" width="1280" height="720" tabindex="0" aria-label="Game canvas"></canvas>
+    </div>
+    <div class="toolbar">
+      <div class="status" id="status-line"><span id="status" role="status">Ready.</span></div>
+      <span class="spacer"></span>
+      <button class="tool" id="pause" disabled>Pause</button>
+      <button class="tool" id="save" disabled>Save</button>
+      <button class="tool" id="load" disabled>Load</button>
+      <button class="tool" id="fullscreen" disabled>Fullscreen</button>
+    </div>
+  </section>
+
+  <div class="hints">
+    <span><kbd>←</kbd><kbd>→</kbd> browse</span>
+    <span><kbd>Enter</kbd> / click: play, advance</span>
+    <span><kbd>Ctrl</kbd> skip</span>
+    <span><kbd>Esc</kbd> menu</span>
+    <span>Drop a project folder anywhere to add it.</span>
+  </div>
+  <footer>The library and every project run through the shared CrySirror engine in your browser. Imported files and fonts never leave this device; saves and the chosen font use this site's browser storage.</footer>
+</div>
 <script type="module" src="./main.js"></script>
 </html>

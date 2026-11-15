@@ -124,6 +124,13 @@ impl Clock {
     pub(super) fn current_motion(&self) -> usize {
         self.motion
     }
+    /// The root object publishes an internal motion event back to its native
+    /// motion property. That feedback is not a fresh playback request: retain
+    /// the input clock, track times and event visits. Nested readers keep their
+    /// caller's requested motion instead, since their parent key still owns it.
+    pub(super) fn accept_published_motion(&mut self) {
+        self.requested = self.motion;
+    }
     /// 59F668: `slot` >= 256 addresses every slot.
     pub(super) fn set_track_time(&mut self, slot: u32, time: f32) {
         for (i, t) in self.tracks.iter_mut().enumerate() {
@@ -231,16 +238,19 @@ impl Clock {
             match key[52] {
                 0 | 2 | 8 | 11 => {} //2 has no handler in the original switch.
                 1 => {
-                    let flag = value(53)?;
+                    // BIMAN3 4F1CA8: +216 is the skip-flag slot, +220 the
+                    // indirect-target slot, and +212 the fallback key index.
+                    // Swapping these made a jump to key1 replay key0 instead.
+                    let flag = value(54)?;
                     if !(1..32).contains(&flag) || !flags[flag as usize] {
-                        let selector = value(54)?;
+                        let selector = value(55)?;
                         let selected = if (1..32).contains(&selector) {
                             i64::from(targets.get(&(selector as u8)).copied().unwrap_or(255))
                         } else {
                             255
                         };
                         let selected = if selected >= track.frames.len() as i64 {
-                            value(55)?
+                            value(53)?
                         } else {
                             selected
                         };
@@ -262,10 +272,12 @@ impl Clock {
                     self.tracks[index].delay = random.sample(value(53)?.saturating_mul(scale));
                 }
                 4 => {
-                    let threshold = value(53)?;
+                    // The same native switch reads the threshold at +216
+                    // and destination key at +212 for the audio-level branch.
+                    let threshold = value(54)?;
                     let threshold = if threshold == 0 { 32 } else { threshold };
                     if threshold < i64::from(audio_level) {
-                        let target = usize::try_from(value(54)?)
+                        let target = usize::try_from(value(53)?)
                             .ok()
                             .filter(|i| *i < track.frames.len())
                             .unwrap_or(0);

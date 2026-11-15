@@ -119,6 +119,8 @@ pub trait GlyphBoundsQuery: Send {
 }
 /// Bounded font registration capability. Handles cannot cross clients.
 pub trait FontLibrary: Send + Sync {
+    /// Actual metadata of the authorized, currently published font catalogue.
+    fn catalog(&self)->Result<Vec<FontCatalogFace>> {Err(crate::Error::Unsupported("font catalogue metadata"))}
     /// Cached aliases currently authorized for this client. This enumerates
     /// published faces only and performs no filesystem or system-font scan.
     fn aliases(&self) -> Result<Vec<String>> {
@@ -154,4 +156,13 @@ pub trait FontLibrary: Send + Sync {
     fn is_loaded(&self, alias: &str) -> Result<bool>;
     fn release_job(&self, job: FontJob) -> Result<()>;
     fn release_font(&self, handle: FontHandle) -> Result<()>;
+}
+/// Portable face metadata, without GDI handles or invented installed fonts.
+#[derive(Clone,Debug)]
+pub struct FontCatalogFace {
+    pub alias:String,
+    pub names:Vec<String>,
+    pub fixed_pitch:bool,
+    pub outline:bool,
+    pub code_pages:Option<[u32;2]>,
 }

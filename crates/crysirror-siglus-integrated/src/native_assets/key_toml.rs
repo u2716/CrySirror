@@ -9,6 +9,15 @@ use anyhow::{Context, Result, bail};
 use crate::native_assets::angou::{self, AngouStepKind};
 
 fn find_case_insensitive_child(parent: &Path, name: &str) -> Result<Option<PathBuf>> {
+    #[cfg(any(feature="nfs",feature="smb"))]
+    if game_network::fs::is_remote(parent) {
+        let path=parent.join(name);
+        return match game_network::fs::metadata(&path) {
+            Ok(m)=>Ok(m.is_file().then_some(path)),
+            Err(e) if e.kind()==std::io::ErrorKind::NotFound=>Ok(None),
+            Err(e)=>Err(e.into()),
+        };
+    }
     let exact = parent.join(name);
     #[cfg(any(feature="nfs",feature="smb"))]
     if game_network::fs::is_remote(parent) {
@@ -771,7 +780,9 @@ fn collect_rhs_for_key(text: &str, key: &str) -> Option<String> {
             }
             collecting = true;
             out.push_str(rhs.trim());
-            if rhs.contains(']') {
+            // Only arrays span lines. A scalar key must not consume the
+            // following assignments as part of its hexadecimal value.
+            if !rhs.trim_start().starts_with('[') || rhs.contains(']') {
                 break;
             }
         } else {

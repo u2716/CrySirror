@@ -8,9 +8,13 @@ use crate::{
 use anyhow::{ensure, Context, Result};
 mod system_intro;
 mod general_entry;
+mod minigame;
 #[derive(Clone, Debug)]
 pub struct NativeButtonSpec {
-    pub source: ImageLookup,
+    /// Native filename availability is independent of the assigned CPicture
+    /// object's existence/load state. No filename must not become a fake asset.
+    pub source: Option<ImageLookup>,
+    pub(crate) filename:Option<Vec<u8>>,
     pub size: [i32; 2],
     pub origin: [i32; 2],
     pub states: [[i32; 2]; 4],
@@ -22,6 +26,8 @@ pub struct NativeButtonSpec {
     pub types: [u8; 4],
     pub vertical_first: bool,
     pub print_mode: u8,
+    pub voices: [i32;4],
+    pub volume_type:i32,
     pub sounds: [i32; 4], // click, cannot-click, enter, exit
     pub sound_waits: [u32; 2],
     pub click_frames: u32,
@@ -31,7 +37,9 @@ pub struct NativeButtonSpec {
 }
 #[derive(Clone, Debug)]
 pub struct NativeTitleSpec {
+    mini_game:Option<minigame::Setup>,
     pub(crate) entry:Option<crate::native_general_entry::ModeEntry>,
+    pub(crate) audio:Arc<Names>,
     pub buttons: Vec<NativeButtonSpec>,
     pub menu_wait: u32,
     pub menu_anime_adjust: bool,
@@ -133,16 +141,15 @@ impl NativeTitleSpec {
         let variants = usize::try_from(get("extModeNumber", 0)?)?;
         ensure!(variants <= 64, "NNN menu variant budget");
         let variant = variant.min(variants);
-        ensure!(
-            get("miniGameFlag", 0)? == 0
-                && get("htmlButtonEnable", 0)? == 0
-                && get("lastLoadButtonEnable", 0)? == 0,
-            "NNN Title additional native controls require their original action policy"
-        );
-        ensure!(
-            get("NoSaveDataToMaskMenu", 0)? == 0,
-            "NNN Title save-presence menu masking requires original save catalogue"
-        );
+        // miniGameFlag also requests a full repaint, which this painter
+        // already performs. The optional overlay is checked asynchronously
+        // against its actual area catalogue before the first Init frame.
+        let mini_game=(get("miniGameFlag",0)?!=0).then(|| -> Result<_> {Ok(minigame::Setup{paths:[configuration.resources.path("init2/miniGame.fxf")?,configuration.resources.path("init/miniGame.xtx")?],configuration:Arc::new(configuration.clone())})}).transpose()?;
+        ensure!(get("EnableHtmlButton",0)?<=0 && get("EnableLastLoadButton",0)?<=0,
+            "NNN Title HTML/last-load controls require native action consumers");
+        // NoSaveDataToMaskMenu is applied by Installed Title's asynchronous
+        // original-save catalogue before the first Init/Print, not guessed
+        // from SystemFile progress or file-extension presence here.
         let basic = get("basicButtonNumber", 5)?;
         let extra = if variants > 0 {
             get("extButtonNumber", 1)?
@@ -203,9 +210,43 @@ impl NativeTitleSpec {
             }
             previous = buttons;
         }
-        let buttons = previous;
+        Self::assemble(table, mini_game, previous)
+    }
+    /// CCommonButtonGroup(setup, count, bg, prefix): button N reads
+    /// `<prefix>N` through CSuperButtonSetup, chained to button N-1 without
+    /// a positional delta. Used by modes such as SelectPlace ("place").
+    pub(crate) fn from_button_group(
+        table: &Names,
+        configuration: &NativeConfiguration,
+        prefix: &str,
+        count: usize,
+    ) -> Result<Self> {
+        crate::native_general::ModeReturn::validate_skinned_entry(table)?;
+        ensure!((1..=64).contains(&count), "NNN button group count");
+        let mut buttons: Vec<NativeButtonSpec> = Vec::with_capacity(count);
+        for index in 0..count {
+            let button = read_menu_button(
+                table,
+                &format!("{prefix}{}", index + 1),
+                configuration,
+                buttons.last(),
+                [0, 0],
+            )?;
+            buttons.push(button);
+        }
+        Self::assemble(table, None, buttons)
+    }
+    fn assemble(
+        table: &Names,
+        mini_game: Option<minigame::Setup>,
+        buttons: Vec<NativeButtonSpec>,
+    ) -> Result<Self> {
+        let get = |key: &str, default: i32| integer(table, "", key, default);
+        let effect = get("menuStartEffectType", 0)?;
         Ok(Self {
+            mini_game,
             entry:crate::native_general_entry::ModeEntry::read(table)?,
+            audio:Arc::new(table.clone()),
             buttons,
             menu_wait: nonnegative(get("menuStartWaitTime", 0)?, "menu wait")?,
             menu_anime_adjust: get("menuAnimeAdjustFlag", 0)? != 0,
@@ -231,7 +272,7 @@ impl NativeTitleSpec {
 // subsequent variants copy the same column of the preceding variant, without
 // positional deltas. CSuperButtonSetup deliberately does not inherit accel keys
 // and copies EnterWait into both waits; retain those source details here.
-fn read_menu_button(
+pub(crate) fn read_menu_button(
     table: &Names,
     prefix: &str,
     configuration: &NativeConfiguration,
@@ -253,14 +294,8 @@ fn read_menu_button(
             && origin.iter().all(|n| (-32767..=32767).contains(n)),
         "NNN Title button geometry"
     );
-    let inherited = old.map(|v| v.source.clone());
-    let source = if let Some(file) = table.parameter(format!("{prefix}FileName").as_bytes()) {
-        configuration
-            .resources
-            .picture(&[b"sys\\".as_slice(), file].concat(), levels)?
-    } else {
-        inherited.context("NNN Title original button filename absent")?
-    };
+    let filename=table.parameter(format!("{prefix}FileName").as_bytes()).map(|name|name.to_vec()).or_else(||old.and_then(|old|old.filename.clone()));
+    let source=filename.as_ref().map(|file|configuration.resources.picture(&[b"sys\\".as_slice(),file].concat(),levels)).transpose()?;
     let mut states = old.map(|v| v.states).unwrap_or([[0; 2]; 4]);
     let mut patterns = old.map(|v| v.patterns).unwrap_or([1; 4]);
     let mut speeds = old.map(|v| v.speeds).unwrap_or([1; 4]);
@@ -291,8 +326,11 @@ fn read_menu_button(
         let kind = get(&format!("AnimeType{}", mode + 1), i32::from(types[mode]))?;
         ensure!((1..=8).contains(&kind), "NNN Title animation type");
         types[mode] = kind as u8;
+        // CalcuPicParam with one reversed cell: unlimited types 3/7 always
+        // select cell 0 (the shared sampler's one-cell ping-pong). Only the
+        // limited types 4/8 reach the original's negative index -1.
         ensure!(
-            !matches!(kind, 3 | 4 | 7 | 8) || patterns[mode] >= 2,
+            !matches!(kind, 4 | 8) || patterns[mode] >= 2,
             "NNN Title degenerate reverse animation needs signed native index policy"
         );
         let span = if matches!(kind, 3 | 4 | 7 | 8) {
@@ -333,12 +371,10 @@ fn read_menu_button(
         // configuration sentinels have no audio request, just like zero.
         if sounds[i] < 0 { sounds[i]=0; }
     }
+    let mut voices=old.map(|v|v.voices).unwrap_or([0;4]);
+    for (i,key) in ["ClickVoice","BadVoice","EnterVoice","ExitVoice"].iter().enumerate(){voices[i]=get(key,voices[i])?;}
+    let volume_type=get("VolumeType",old.map(|v|v.volume_type).unwrap_or(0))?;
     for key in [
-        "ClickVoice",
-        "BadVoice",
-        "EnterVoice",
-        "ExitVoice",
-        "VolumeType",
         "IsCancelButton",
         "IsUpButton",
         "IsDownButton",
@@ -374,6 +410,7 @@ fn read_menu_button(
     ensure!((0..=2).contains(&print_mode), "NNN Title print mode");
     Ok(NativeButtonSpec {
         source,
+        filename,
         size,
         origin,
         states,
@@ -389,6 +426,8 @@ fn read_menu_button(
                 .unwrap_or(0),
         )? == 0,
         print_mode: print_mode as u8,
+        voices,
+        volume_type,
         sounds,
         sound_waits,
         click_frames: nonnegative(
@@ -429,7 +468,7 @@ impl NativeButtonState {
     }
     /// CCommonButton::Calcu(NULL) suspends its timer and resets only the
     /// mode/other animation cells. It is not an ordinary unhover event.
-    fn calcu_without_input(&mut self, spec: &NativeButtonSpec) {
+    pub(crate) fn calcu_without_input(&mut self, spec: &NativeButtonSpec) {
         if !spec.exists { return; }
         self.mode = if spec.enabled {0} else {3};
         for (mode,count) in self.animation.iter_mut().enumerate() {
@@ -449,7 +488,7 @@ impl NativeButtonState {
         if !spec.enabled {
             self.mode = 3;
             self.animation.iter_mut().take(3).for_each(|n| *n = 0);
-            return if pressed && spec.sounds[1] > 0 {NativeButtonSignal::Sound(spec.sounds[1])} else {NativeButtonSignal::None};
+            return if pressed && (spec.sounds[1] > 0 || spec.voices[1]>0) {NativeButtonSignal::Sound(spec.sounds[1])} else {NativeButtonSignal::None};
         }
         let signal = if self.mode == 2 {
             self.count = self.count.saturating_add(1);
@@ -481,8 +520,8 @@ impl NativeButtonState {
                     self.exited = true;
                     NativeButtonSignal::Exited
                 }
-                (1, true) if self.entered && self.count == spec.sound_waits[0] && spec.sounds[2] > 0 => NativeButtonSignal::Sound(spec.sounds[2]),
-                (0, false) if self.exited && self.count == spec.sound_waits[1] && spec.sounds[3] > 0 => NativeButtonSignal::Sound(spec.sounds[3]),
+                (1, true) if self.entered && self.count == spec.sound_waits[0] && (spec.sounds[2] > 0 || spec.voices[2]>0) => NativeButtonSignal::Sound(spec.sounds[2]),
+                (0, false) if self.exited && self.count == spec.sound_waits[1] && (spec.sounds[3] > 0 || spec.voices[3]>0) => NativeButtonSignal::Sound(spec.sounds[3]),
                 _ => NativeButtonSignal::None,
             }
         };
@@ -494,62 +533,40 @@ impl NativeButtonState {
         signal
     }
     pub fn frame(&self, spec: &NativeButtonSpec) -> ([u32; 2], u16) {
-        let mode = self.mode;
-        let kind = spec.types[mode];
-        let speed = spec.speeds[mode].max(1);
-        let pattern = spec.patterns[mode];
-        let reverse = matches!(kind, 3 | 4 | 7 | 8);
-        let hold = matches!(kind, 2 | 4 | 6 | 8);
-        let span = if reverse {
-            (pattern - 1).saturating_mul(2).max(1)
-        } else {
-            pattern
-        };
-        let mut a = self.animation[mode] / speed;
-        let mut b = a + 1;
-        if hold {
-            let last = if reverse { span } else { span - 1 };
-            if a >= span {
-                a = last
-            }
-            if b >= span {
-                b = last
-            }
-        }
-        b %= span;
-        if reverse {
-            if a >= pattern {
-                a = (pattern - 1) * 2 - a
-            }
-            if b >= pattern {
-                b = (pattern - 1) * 2 - b
-            }
-        }
-        let percent = if kind >= 5 {
-            100 * (speed - self.animation[mode] % speed) / speed
-        } else {
-            100
-        };
-        ([a, b], percent as u16)
+        // Preparation validates the original positive period and the public
+        // counter-free helper. Keep the infallible native API's existing
+        // invariant: invalid hand-built specifications fail visibly.
+        let sequence = spec.animation_sequence(self.mode)
+            .expect("prepared native button animation specification");
+        let sample = sequence.sample(u64::from(self.animation[self.mode]))
+            .expect("prepared native button animation sample");
+        let percent = if spec.types[self.mode] >= 5 {
+            (u64::from(sample.ticks_per_cell - sample.fraction_ticks) * 100
+                / u64::from(sample.ticks_per_cell)) as u16
+        } else { 100 };
+        ([sample.current, sample.next], percent)
     }
     pub fn printed(&mut self, spec: &NativeButtonSpec) {
-        let kind = spec.types[self.mode];
-        let pattern = spec.patterns[self.mode];
-        let reverse = matches!(kind, 3 | 4 | 7 | 8);
-        let frames = if reverse {
-            (pattern - 1).saturating_mul(2).max(1)
-        } else {
-            pattern
-        } * spec.speeds[self.mode].max(1);
+        let sequence = spec.animation_sequence(self.mode)
+            .expect("prepared native button animation specification");
+        let frames = u32::try_from(sequence.cycle_ticks()
+            .expect("prepared native button animation period"))
+            .expect("native button period fits original counter");
         let next = self.animation[self.mode].saturating_add(1);
-        self.animation[self.mode] = if matches!(kind, 2 | 4 | 6 | 8) {
-            next.min(frames)
-        } else {
-            next % frames
-        };
+        self.animation[self.mode] = if sequence.hold { next.min(frames) } else { next % frames };
     }
 }
 impl NativeButtonSpec {
+    pub(crate) fn animation_sequence(&self, mode: usize) -> Result<crysirror_scene::sprite_samples::SpriteSamples> {
+        ensure!(mode<4,"NNN native button animation state");
+        let kind=self.types[mode];
+        let sequence=crysirror_scene::sprite_samples::SpriteSamples {
+            cells:self.patterns[mode],ticks_per_cell:self.speeds[mode].max(1),
+            ping_pong:matches!(kind,3|4|7|8),hold:matches!(kind,2|4|6|8),
+        };
+        sequence.validate()?;Ok(sequence)
+    }
+
     pub(crate) fn from_named_setup(
         table: &Names,
         prefix: &str,
@@ -644,20 +661,27 @@ struct TitleImage {
     mask: Option<Arc<[u8]>>,
 }
 struct TitleFrame {
+    mini_scheduled:bool,
     background: Arc<dyn ImageResource>,
     counter: u32,
     states: Vec<NativeButtonState>,
     jobs: Vec<(usize, ImageJob)>,
     ready: Vec<(usize, Arc<dyn ImageResource>)>,
     final_job: Option<ImageJob>,
-    sounds: std::collections::VecDeque<i32>,
+    sounds: std::collections::VecDeque<crate::bridge::ButtonAudioEvent>,
     system_intro:Option<system_intro::SystemIntro>,
 }
 /// A native title retains configuration/counters and resource handles only.
 /// Shared workers produce each cropped button and the immutable complete frame;
 /// shared widgets own pointer coverage and event delivery.
 pub struct NativeTitlePlayer {
+    mini_game_task:Option<Task<minigame::Overlay>>,
+    mini_game:Option<minigame::Overlay>,
+    mini_game_initialized:bool,
+    base_buttons:usize,
     general_entry:Option<general_entry::GeneralEntry>,
+    general_mode:i32,
+    general_started:bool,
     client: ClientId,
     layer: u32,
     widget_base: u32,
@@ -689,6 +713,21 @@ pub struct NativeTitlePlayer {
     system_intro:Option<system_intro::SystemIntro>,
 }
 impl NativeTitlePlayer {
+    pub(crate) fn set_load_presence(&mut self,present:bool)->Result<()> {
+        ensure!(!self.prepared && !self.widgets && self.inflight.is_none(),"NNN Title save mask changed after Init");
+        if let Some(button)=self.spec.buttons.get_mut(1){
+            // Init's presence branch overrides DisableLoadFlag in both
+            // directions, exactly as the ordered original branches do.
+            button.enabled=present;
+            self.states[1]=NativeButtonState::new(button);
+        }
+        Ok(())
+    }
+    pub(crate) fn set_general_mode(&mut self,mode:i32)->Result<()> {
+        ensure!(!self.general_started && (1..=256).contains(&mode),"NNN General mode changed after Init");
+        self.general_mode=mode;Ok(())
+    }
+    pub(crate) fn general_mode(&self)->i32 {self.general_mode}
     pub(crate) fn configure_system_intro(&mut self,table:&Names,random:&mut crysirror_image::temporal_pattern::PatternRng)->Result<()> {
         ensure!(!self.widgets&&self.inflight.is_none(),"NNN system intro changed after button publication");
         self.system_intro=Some(system_intro::SystemIntro::new(table,self.spec.buttons.len(),random)?);Ok(())
@@ -712,11 +751,12 @@ impl NativeTitlePlayer {
             .iter()
             .map(|_| serde_json::json!({"op":"set_visible","id":self.layer,"visible":false}))
             .collect();
-        let ui: Vec<_> = if self.widgets {
+        let mut ui: Vec<_> = if self.widgets {
             (0..self.spec.buttons.len()).map(|index|serde_json::json!({"op":"set_visible","id":self.widget_base+index as u32,"visible":false})).collect()
         } else {
             vec![]
         };
+        ui.extend(self.mini_game_widget_ids().into_iter().map(|id|serde_json::json!({"op":"set_visible","id":id,"visible":false})));
         host.submit_engine(
             self.client,
             1,
@@ -726,6 +766,8 @@ impl NativeTitlePlayer {
         Ok(())
     }
     pub(crate) fn resume_after_menu(&mut self, host: &mut dyn HostServices) -> Result<()> {
+        self.mini_game_initialized=false;
+        if let Some(overlay)=self.mini_game.as_mut(){overlay.wait_ready=false;overlay.buttons_initialized=false;}
         self.states = self
             .spec
             .buttons
@@ -741,6 +783,7 @@ impl NativeTitlePlayer {
         self.restart_entry();
         self.script_ended = false;
         self.music_ready = false;
+        self.general_started = false;
         if self.display_path.is_some() {
             host.submit_engine(self.client,1,&serde_json::to_vec(&serde_json::json!({"layers":[{"op":"set_visible","id":self.layer,"visible":true}]}))?)?;
             self.api_calls += 1;
@@ -799,12 +842,15 @@ impl NativeTitlePlayer {
                 );
             }
         }
+        let base_buttons=spec.buttons.len();
+        let mini_game_initialized=spec.mini_game.is_none();
         let states = spec.buttons.iter().map(NativeButtonState::new).collect();
         let general_entry=spec.entry.map(general_entry::GeneralEntry::new);
-        let pool = TaskPool::new("nnn-title-source", 2, 64)?;
+        let pool = TaskPool::new("nnn-title-source", 2, 130)?;
+        let mini_game_task=if let Some(setup)=spec.mini_game.clone(){let open=resources.file_view();Some(pool.spawn(move |cancel|setup.read(&open,&cancel))?)}else{None};
         let mut images = Vec::with_capacity(spec.buttons.len());
         for button in &spec.buttons {
-            let lookup = button.source.clone();
+            let lookup = button.source.clone().context("NNN Title button without filename requires its original picture-slot owner")?;
             let resources = resources.clone();
             let task = pool.spawn(move |cancel| resources.image_source(&lookup, &cancel))?;
             images.push(TitleImage {
@@ -815,7 +861,13 @@ impl NativeTitlePlayer {
             });
         }
         Ok(Self {
+            mini_game_task,
+            mini_game:None,
+            mini_game_initialized,
+            base_buttons,
             general_entry,
+            general_mode:4,
+            general_started:false,
             client,
             layer,
             widget_base,
@@ -866,13 +918,12 @@ impl NativeTitlePlayer {
         host: &mut dyn HostServices,
         vm: Option<&mut crate::adapter::NativeAdapter>,
     ) -> Result<()> {
-        self.prepare(host)?;
-        if let Some(vm) = vm {
-            if self.prepared {
-                self.poll_music(host, vm)?;
-            }
-            self.poll_frame_sounds(host, vm)?;
-        }
+        if let Some(vm)=vm {
+            if !self.prepare_mini_game(host,vm)? {return Ok(());}
+            self.prepare(host)?;
+            if self.prepared{self.poll_music(host,vm)?;}
+            self.poll_frame_sounds(host,vm)?;
+        }else{self.prepare(host)?;}
         self.complete_frame(host)?;
         self.poll_entry_dependency(host)?;
         Ok(())
@@ -908,8 +959,8 @@ impl NativeTitlePlayer {
         let Some(frame) = &mut self.inflight else {
             return Ok(true);
         };
-        while let Some(number) = frame.sounds.front().copied() {
-            if !vm.poll_system_sound(host, number)? {
+        while let Some(event) = frame.sounds.front_mut() {
+            if !vm.poll_button_event(host, event)? {
                 return Ok(false);
             }
             frame.sounds.pop_front();
@@ -932,7 +983,7 @@ impl NativeTitlePlayer {
         Ok(destination)
     }
     pub fn dependency_pending(&self) -> bool {
-        if self.entry_dependency_pending(){return true;}
+        if self.entry_dependency_pending() || !self.mini_game_initialized{return true;}
         self.images
             .iter()
             .any(|v| v.source_task.is_some() || v.job.is_some())
@@ -944,6 +995,7 @@ impl NativeTitlePlayer {
         if self.prepared {
             return Ok(true);
         }
+        if !self.mini_game_initialized{return Ok(false);}
         for (index, slot) in self.images.iter_mut().enumerate() {
             let spec = &self.spec.buttons[index];
             if let Some(task) = &mut slot.source_task {
@@ -993,7 +1045,7 @@ impl NativeTitlePlayer {
                 }
             }
             if slot.image.is_none() && slot.job.is_none() && slot.source_task.is_none() {
-                let lookup = spec.source.clone();
+                let lookup = spec.source.clone().context("NNN Title reload requires its original picture-slot owner")?;
                 let resources = self.resources.clone();
                 slot.source_task = Some(
                     self.pool
@@ -1025,7 +1077,7 @@ impl NativeTitlePlayer {
         self.widgets = true;
         Ok(())
     }
-    fn poll_input(&mut self, host: &mut dyn HostServices, input: InputFrame) -> Result<()> {
+    pub(crate) fn retain_input(&mut self,input:InputFrame) {
         self.held_keys = input.buttons_down;
         self.pressed_buttons |= input.buttons_pressed
             & (crysirror_core::service::buttons::MOUSE_LEFT
@@ -1035,6 +1087,9 @@ impl NativeTitlePlayer {
                 } else {
                     0
                 });
+    }
+    fn poll_input(&mut self,host:&mut dyn HostServices,input:InputFrame)->Result<()> {
+        self.retain_input(input);
         if !self.widgets {
             return Ok(());
         }
@@ -1044,7 +1099,15 @@ impl NativeTitlePlayer {
             .unwrap_or(EngineQuery::UiEvents);
         let events: Vec<serde_json::Value> =
             serde_json::from_slice(&host.query_engine(self.client, query)?)?;
+        let child_cancelled=events.iter().any(|event|event["kind"]=="cancel" && event["widget"]["id"].as_u64()!=self.widget_parent.map(u64::from));
         for event in events {
+            // The engine's modal subtree consumes raw keys. Its owner-scoped
+            // retained cancel event follows the same native click countdown
+            // as the configured cancel control, including asynchronous frames.
+            if !child_cancelled && event["kind"]=="nnn_menu_cancel" && self.cancel_button.is_some()
+                && event["widget"]["id"].as_u64()==self.widget_parent.map(u64::from) {
+                self.pressed_buttons|=crysirror_core::service::buttons::ESCAPE;
+            }
             if event["kind"] == "activate" {
                 if let Some(id) = event["widget"]["id"].as_u64() {
                     let first = u64::from(self.widget_base);
@@ -1146,6 +1209,8 @@ impl NativeTitlePlayer {
     }
     fn complete_frame(&mut self, host: &mut dyn HostServices) -> Result<bool> {
         let capture_only=self.capture_only_for_entry();
+        if !self.prepared{return Ok(false);}
+        self.schedule_mini_game_print(host)?;
         let Some(frame) = &mut self.inflight else {
             return Ok(true);
         };
@@ -1181,7 +1246,7 @@ impl NativeTitlePlayer {
                 let spec = &self.spec.buttons[*index];
                 let [w, h] = spec.size;
                 let mut destination = spec.origin;
-                if frame.counter < end {
+                if frame.counter < end && *index<self.base_buttons {
                     let remainder = i64::from(end - frame.counter);
                     let divisor = i64::from(self.spec.menu_fade.max(1));
                     for axis in 0..2 {
@@ -1258,10 +1323,19 @@ impl NativeTitlePlayer {
             background.client() == self.client && background.size() == self.canvas,
             "NNN Title background scope"
         );
+        if !self.prepare_mini_game(host,vm)?{return Ok(None);}
         self.poll_input(host,input)?;
+        // Retain input first. Drain the exact previous General request before
+        // BGM or button audio, so an outstanding system voice cannot deadlock
+        // their shared resource preparation pool.
+        if !vm.poll_general_audio(host)? {return Ok(None);}
         if self.entry_blocks_update(host.now_ms()){self.pressed_buttons=0;self.held_keys=0;self.activated.clear();}
         if !self.prepare(host)? {
             return Ok(None);
+        }
+        if !self.general_started {
+            vm.begin_general_audio(self.general_mode,crate::native_general_audio::GeneralAudioPolicy::for_mode(self.general_mode,&self.spec.audio)?)?;
+            self.general_started=true;
         }
         if !self.poll_music(host, vm)? {
             return Ok(None);
@@ -1295,12 +1369,16 @@ impl NativeTitlePlayer {
         if now - origin < u64::from(self.counter) * self.frame_ms {
             return Ok(None);
         }
+        if !vm.poll_general_update(host,self.general_mode,u64::from(self.counter))? {return Ok(None);}
         let end = self.spec.menu_wait + self.spec.menu_fade;
         let mut counter = self.counter.saturating_add(1);
         let mut states = self.states.clone();
         let mut system_intro=self.system_intro.clone();
         let mut selected = None;
         let mut sounds = std::collections::VecDeque::new();
+        self.update_mini_game_areas(host,vm,self.counter>=end)?;
+        if let Some(event)=self.calcu_mini_game(host,vm,&mut states,self.counter>=end)?{sounds.push_back(event);}
+
         if let Some(intro)=system_intro.as_mut().filter(|intro|!intro.finished) {
             intro.advance(self.pressed_buttons & (crysirror_core::service::buttons::MOUSE_LEFT|crysirror_core::service::buttons::MOUSE_RIGHT)!=0);
             for (state,spec) in states.iter_mut().zip(&self.spec.buttons){state.calcu_without_input(spec);}
@@ -1315,9 +1393,9 @@ impl NativeTitlePlayer {
             // input to every other button. It returns one last non-NOTHING
             // event, not a separate sound/action for every hovered button.
             let mut locked = states.iter().position(|state| state.mode == 2);
-            let mut group_sound = None;
+            let mut group_audio = None;
             let mut reset_animation = false;
-            for (index, state) in states.iter_mut().enumerate() {
+            for (index, state) in states.iter_mut().enumerate().take(self.base_buttons) {
                 let accepts_input = locked.is_none_or(|active| active == index);
                 let interaction: serde_json::Value = serde_json::from_slice(&host.query_engine(
                     self.client,
@@ -1346,19 +1424,23 @@ impl NativeTitlePlayer {
                                 .any(|bit| self.held_keys & bit != 0)),
                 );
                 self.activated.remove(&index);
-                let sound = match signal {
-                    NativeButtonSignal::ClickStarted => self.spec.buttons[index].sounds[0],
-                    NativeButtonSignal::Selected if previous_mode != 2 => {
-                        self.spec.buttons[index].sounds[0]
-                    }
-                    NativeButtonSignal::Selected => 0,
-                    NativeButtonSignal::Entered if self.spec.buttons[index].sound_waits[0] == 0 => self.spec.buttons[index].sounds[2],
-                    NativeButtonSignal::Exited if self.spec.buttons[index].sound_waits[1] == 0 => self.spec.buttons[index].sounds[3],
-                    NativeButtonSignal::Sound(sound) => sound,
-                    _ => 0,
+                let audio_index=match signal {
+                    NativeButtonSignal::ClickStarted=>Some(0),
+                    NativeButtonSignal::Selected if previous_mode!=2=>Some(0),
+                    NativeButtonSignal::Entered if self.spec.buttons[index].sound_waits[0]==0=>Some(2),
+                    NativeButtonSignal::Exited if self.spec.buttons[index].sound_waits[1]==0=>Some(3),
+                    NativeButtonSignal::Sound(_)=>Some(match state.mode{3=>1,1=>2,_=>3}),
+                    _=>None,
                 };
+                let spec=&self.spec.buttons[index];
+                let (sound,voice)=audio_index.map(|i|(spec.sounds[i],spec.voices[i])).unwrap_or((0,0));
+                // MakeButtonStatus uses seven sound bits, six voice bits and
+                // two volume bits. -1 means ordinary sound volume. Omake's
+                // original Calcu calls PlaySystemSound without the type field.
+                let volume=if sound>0 && spec.volume_type!=-1 && self.general_mode!=15 {spec.volume_type&3}else{0};
+                let event=crate::bridge::ButtonAudioEvent::new(if sound>0{sound&0x7f}else{0},if voice>0{voice&0x3f}else{0},volume);
                 if accepts_input && signal != NativeButtonSignal::None {
-                    group_sound = Some(sound);
+                    group_audio = Some(event);
                     if matches!(
                         signal,
                         NativeButtonSignal::ClickStarted | NativeButtonSignal::Selected
@@ -1382,14 +1464,13 @@ impl NativeTitlePlayer {
                     state.animation = [0; 4];
                 }
             }
-            // Native MakeButtonStatus carries a seven-bit one-based sound
-            // number. Keep zero silent after masking (e.g. source ID 128).
-            if let Some(sound) = group_sound.filter(|sound| *sound > 0).map(|sound|sound & 0x7f).filter(|sound|*sound>0) {
-                sounds.push_back(sound);
-            }
+            if let Some(event)=group_audio.filter(|event|event.sound>0||event.voice>0){sounds.push_back(event);}
+
         }
+        self.admit_mini_game_wait_end(host,vm,counter)?;
         self.pressed_buttons = 0;
         let mut frame = TitleFrame {
+            mini_scheduled:false,
             background: background.clone(),
             counter,
             states: states.clone(),
@@ -1400,8 +1481,8 @@ impl NativeTitlePlayer {
             system_intro,
         };
         if counter >= self.spec.menu_wait {
-            for (index, state) in states.iter_mut().enumerate() {
-                if !self.spec.buttons[index].exists {
+            for (index, state) in states.iter_mut().enumerate().take(self.base_buttons) {
+                if !self.spec.buttons[index].exists || index>=self.base_buttons && counter<end {
                     continue;
                 }
                 let input = self.button_input(index, background.clone(), state, counter,frame.system_intro.as_ref())?;
@@ -1505,13 +1586,14 @@ impl NativeTitlePlayer {
             !self.dependency_pending(),
             "NNN title restore while a frame is pending"
         );
-        let widgets = if self.widgets {
+        let mut widgets:Vec<serde_json::Value> = if self.widgets {
             (0..self.spec.buttons.len())
                 .map(|n| serde_json::json!({"op":"remove","id":self.widget_base+n as u32}))
                 .collect()
         } else {
             vec![]
         };
+        widgets.extend(self.mini_game_widget_ids().into_iter().map(|id|serde_json::json!({"op":"remove","id":id})));
         let layers = self
             .display_path
             .as_ref()
@@ -1522,7 +1604,7 @@ impl NativeTitlePlayer {
     }
     pub(crate) fn retire(&mut self, host: &mut dyn HostServices) -> Result<()> {
         let _ = self.completed_frame()?;
-        let widgets: Vec<_> = if self.widgets {
+        let mut widgets: Vec<_> = if self.widgets {
             (0..self.spec.buttons.len())
                 .map(
                     |index| serde_json::json!({"op":"remove","id":self.widget_base + index as u32}),
@@ -1531,6 +1613,7 @@ impl NativeTitlePlayer {
         } else {
             vec![]
         };
+        widgets.extend(self.mini_game_widget_ids().into_iter().map(|id|serde_json::json!({"op":"remove","id":id})));
         let layers: Vec<_> = self
             .display_path
             .as_ref()
@@ -1550,7 +1633,7 @@ impl NativeTitlePlayer {
         Ok(())
     }
     pub fn diagnostics(&self) -> serde_json::Value {
-        serde_json::json!({"mode":"Title","prepared":self.prepared,"music_ready":self.music_ready,"counter":self.counter,"widgets":self.widgets,"frame_pending":self.inflight.is_some(),"engine_api_calls":self.api_calls,"shared_accelerators_mapped":true,"background_ended":self.script_ended,"pending_action":self.pending_action,"pending_restart":self.pending_restart.map(|mode|format!("{mode:?}")),"restart_ready":self.restart_ready.map(|mode|format!("{mode:?}"))})
+        serde_json::json!({"mode":match self.general_mode{4=>"Title",15=>"Omake",13=>"SystemMenu",_=>"Menu"},"native_mode":self.general_mode,"general_started":self.general_started,"retained_pressed":self.pressed_buttons,"mini_game_initialized":self.mini_game_initialized,"mini_game_areas":self.mini_game.as_ref().map(|m|m.areas.len()),"mini_game_buttons":self.mini_game.as_ref().map(|m|m.buttons.len()),"prepared":self.prepared,"music_ready":self.music_ready,"counter":self.counter,"widgets":self.widgets,"frame_pending":self.inflight.is_some(),"engine_api_calls":self.api_calls,"shared_accelerators_mapped":true,"background_ended":self.script_ended,"pending_action":self.pending_action,"pending_restart":self.pending_restart.map(|mode|format!("{mode:?}")),"restart_ready":self.restart_ready.map(|mode|format!("{mode:?}"))})
     }
 }
 #[cfg(test)]

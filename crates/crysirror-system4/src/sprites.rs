@@ -99,6 +99,12 @@ impl Sprite {
         };
         let width = self.size[0].max(1);
         let height = self.size[1].max(1);
+        // SactEngine 5870 bounds both the base draw and its retained text
+        // callback (9A80) by the base surface extent intersected with the
+        // destination viewport. Keep that local bound explicit so shared
+        // group-opacity isolation includes the text without inventing a
+        // clip for custom sprites that have no native pixel surface.
+        let clip = self.surface.as_ref().map(|_| [0, 0, width, height]);
         //Native sprite metadata and its retained text are part of the
         //scene, not the physical WindowSurface presentation layer16.
         let parent = Some(crate::sact::BACK_SCENE);
@@ -106,6 +112,9 @@ impl Sprite {
         // F130 -> engine7FA0/get7000 owns field+36 (brightness). 5870 uses
         // +32 for RGB screen strength and all glyph children; +36 affects
         // only normal base pixels. Do not exchange their equal255 defaults.
+        // Geometry parents do not form a shared Layer ordering fence. Reserve
+        // rank zero in this native sprite's flat [z, number] bucket for its
+        // base; retained text uses the subsequent explicit admission ranks.
         let opacity = self.opacity;
         let brightness = if self.draw_method == 0 {
             f64::from(self.brightness) / 255.0
@@ -113,7 +122,7 @@ impl Sprite {
             1.0
         };
         Ok(Some(
-            json!({"op":"put","layer":{"id":layer(number)?,"parent":parent,"rect":[self.position[0],self.position[1],width,height],"paint":paint,"order":[self.z,number],"visible":self.visible,"opacity":opacity,"blend":blend,"filter":{"multiply":[brightness,brightness,brightness]}}}),
+            json!({"op":"put","layer":{"id":layer(number)?,"parent":parent,"rect":[self.position[0],self.position[1],width,height],"clip":clip,"paint":paint,"order":[self.z,number],"tie_order":0,"visible":self.visible,"opacity":opacity,"blend":blend,"filter":{"multiply":[brightness,brightness,brightness]}}}),
         ))
     }
 }

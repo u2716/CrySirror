@@ -1,5 +1,11 @@
 # Native application packages
 
+Use the [platform-host skill](../.agents/skills/crysirror-platform-host/SKILL.md)
+for session/view lifecycle, bridges, NLS/input, packaging, signing and build-only
+CI. Compilation, package creation, signing and device behavior are separate
+results. Native save reconstruction follows the
+[native-save skill](../.agents/skills/crysirror-native-save/SKILL.md).
+
 CrySirror's native application frontends use the shared player library and
 `crysirror-mobile` C/JNI boundary. `crysirror-desktop` still supplies the
 `crysirror` CLI; its reusable library is named `crysirror_player`.
@@ -134,7 +140,10 @@ Platform references:
 
 ## Console seams
 
-PS Vita and Switch have SDK-free host scaffolds, not playable ports. See
+PS Vita and Switch share an SDK-free host contract, with separate native device
+drivers and player/package source. See
 [`platform/psv`](../platform/psv/README.md) and
-[`platform/switch`](../platform/switch/README.md). Their device backends, full
-Runtime portability and packages remain separate work.
+[`platform/switch`](../platform/switch/README.md), the
+[memory contract](MEMORY_MANAGEMENT.md) and their platform characteristics.
+Source implementation, package compilation, emulator behavior and physical
+hardware validation remain separate evidence for each session/backend.

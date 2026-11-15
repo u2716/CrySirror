@@ -1,5 +1,5 @@
 // Copyright (c) 2026 CrySirror contributors. MPL-2.0.
-//! Reviewed Mugen2 legacy SystemFile data and save policy. Original record
+//! Mugen2 and explicitly selected source SystemFile data/save policy. Record
 //! layouts remain native; bit operations and asynchronous atomic writes use
 //! CrySirror Core. No original host, renderer or filesystem is embedded.
 use crate::expression::{VariableProfile, Variables};
@@ -25,6 +25,86 @@ const RECORDS: [(u32, usize, &[u8]); 10] = [
     (12, 1056, b"MUSICFLAG      "),
 ];
 const FILE_BYTES: usize = 58432;
+mod source_records;
+/// Explicit serialization ABI. The installed Mugen2 profile remains legacy;
+/// neither a variable-name count nor a newer save silently changes its ABI.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SystemFileLayout {
+    Mugen2,
+    Source {
+        variables: VariableProfile,
+        version2: bool,
+    },
+}
+impl SystemFileLayout {
+    fn records(self) -> Vec<(u32, usize, &'static [u8])> {
+        let mut records = RECORDS.to_vec();
+        if let Self::Source { variables, .. } = self {
+            if variables == VariableProfile::Expanded2200 {
+                records[3].1 = 4128;
+            }
+            // CreateInitData initializes all six extensions even in the build
+            // that writes only fourteen records. Load can read all sixteen.
+            records.extend(source_records::RECORDS);
+        }
+        records
+    }
+    fn saved_records(self) -> usize {
+        match self {
+            Self::Mugen2 => 10,
+            Self::Source {
+                version2: false, ..
+            } => 14,
+            Self::Source { version2: true, .. } => 16,
+        }
+    }
+    fn variable_profile(self) -> VariableProfile {
+        match self {
+            Self::Mugen2 => VariableProfile::Legacy1000,
+            Self::Source { variables, .. } => variables,
+        }
+    }
+    fn variable_count(self) -> usize {
+        match self.variable_profile() {
+            VariableProfile::Legacy1000 => 100,
+            VariableProfile::Expanded2200 => 1000,
+        }
+    }
+    fn save_name(self, trial: bool) -> &'static str {
+        match (trial, self) {
+            (
+                false,
+                Self::Source {
+                    variables: VariableProfile::Expanded2200,
+                    version2: true,
+                },
+            ) => "sysfile3.sav",
+            (
+                true,
+                Self::Source {
+                    variables: VariableProfile::Expanded2200,
+                    version2: true,
+                },
+            ) => "tsysfile3.sav",
+            (
+                false,
+                Self::Source {
+                    variables: VariableProfile::Expanded2200,
+                    version2: false,
+                },
+            ) => "sysfile2.sav",
+            (
+                true,
+                Self::Source {
+                    variables: VariableProfile::Expanded2200,
+                    version2: false,
+                },
+            ) => "tsysfile2.sav",
+            (false, _) => "sysfile.sav",
+            (true, _) => "tsysfile.sav",
+        }
+    }
+}
 
 /// Exact native SYSTEMTIME ordering; weekday is Sunday0. The host supplies
 /// civil time, never the simulation clock or an invented Unix-zero date.
@@ -277,9 +357,14 @@ impl Record {
 /// Validate the complete present prefix before a caller overlays it onto the
 /// proven constructor state. Native labels/padding are preserved, not invented.
 fn decode_prefix(bytes: &[u8]) -> Result<Vec<Record>> {
+    decode_layout(bytes, SystemFileLayout::Mugen2)
+}
+fn decode_layout(bytes: &[u8], layout: SystemFileLayout) -> Result<Vec<Record>> {
+    let specs = layout.records();
+    let max_bytes = specs.iter().map(|(_, size, _)| *size).sum::<usize>();
     ensure!(
-        (64..=FILE_BYTES).contains(&bytes.len()),
-        "NNN legacy SystemFile byte budget"
+        (64..=max_bytes).contains(&bytes.len()),
+        "NNN SystemFile byte budget"
     );
     let word = |at: usize| -> Result<u32> {
         Ok(u32::from_le_bytes(
@@ -295,12 +380,12 @@ fn decode_prefix(bytes: &[u8]) -> Result<Vec<Record>> {
     );
     let count = usize::try_from(word(32)?)?;
     ensure!(
-        (1..=RECORDS.len()).contains(&count),
-        "NNN legacy SystemFile record count"
+        (1..=specs.len()).contains(&count),
+        "NNN SystemFile record count"
     );
     let mut at = 0usize;
     let mut records = Vec::with_capacity(count);
-    for (code, size, _) in &RECORDS[..count] {
+    for (code, size, _) in &specs[..count] {
         ensure!(
             word(at)? as usize == *size && word(at + 4)? == *code,
             "NNN legacy SystemFile record layout/code at {at}"
@@ -324,6 +409,7 @@ fn decode_prefix(bytes: &[u8]) -> Result<Vec<Record>> {
 }
 #[derive(Clone, Debug)]
 pub(crate) struct NativeSystemFile {
+    layout: SystemFileLayout,
     records: Vec<Record>,
     pub limits: SystemLimits,
     revision: u64,
@@ -344,6 +430,7 @@ impl NativeSystemFile {
         }
         records[0].set_word(32, 10)?;
         let mut out = Self {
+            layout: SystemFileLayout::Mugen2,
             records,
             limits,
             revision: 0,
@@ -388,7 +475,11 @@ impl NativeSystemFile {
         Ok(out)
     }
     pub fn load(bytes: &[u8], defaults: &Self) -> Result<Self> {
-        let present = decode_prefix(bytes)?;
+        let present = if defaults.layout == SystemFileLayout::Mugen2 {
+            decode_prefix(bytes)?
+        } else {
+            decode_layout(bytes, defaults.layout)?
+        };
         let mut candidate = defaults.clone();
         for (index, record) in present.into_iter().enumerate() {
             candidate.records[index] = record;
@@ -427,7 +518,9 @@ impl NativeSystemFile {
             record.copy_string(offset, 16, name)?;
         }
         if record.words != self.records[1].words {
-            self.revision.checked_add(1).context("NNN SystemFile revision exhausted")?;
+            self.revision
+                .checked_add(1)
+                .context("NNN SystemFile revision exhausted")?;
         }
         Ok(())
     }
@@ -454,10 +547,10 @@ impl NativeSystemFile {
     pub fn system_word(&self, offset: usize) -> Result<i32> {
         self.records[1].word(offset)
     }
-    pub(crate) fn set_setting_word(&mut self,offset:usize,value:i32)->Result<()> {
-        if self.records[1].word(offset)?!=value {
+    pub(crate) fn set_setting_word(&mut self, offset: usize, value: i32) -> Result<()> {
+        if self.records[1].word(offset)? != value {
             self.changed()?;
-            self.records[1].set_word(offset,value)?;
+            self.records[1].set_word(offset, value)?;
         }
         Ok(())
     }
@@ -654,10 +747,18 @@ impl NativeSystemFile {
         profile: VariableProfile,
     ) -> Result<()> {
         ensure!(
-            profile == VariableProfile::Legacy1000,
-            "NNN legacy SystemFile variable profile"
+            profile == self.layout.variable_profile(),
+            "NNN SystemFile variable profile"
         );
-        for index in 0..100 {
+        ensure!(
+            variables.stored_word_count()
+                == match profile {
+                    VariableProfile::Legacy1000 => 1000,
+                    VariableProfile::Expanded2200 => 2200,
+                },
+            "NNN SystemFile restore variable bank size"
+        );
+        for index in 0..self.layout.variable_count() {
             variables.write_stored(200 + index as u16, self.records[3].word(32 + index * 4)?);
         }
         Ok(())
@@ -668,10 +769,18 @@ impl NativeSystemFile {
         profile: VariableProfile,
     ) -> Result<()> {
         ensure!(
-            profile == VariableProfile::Legacy1000,
-            "NNN legacy SystemFile variable profile"
+            profile == self.layout.variable_profile(),
+            "NNN SystemFile variable profile"
         );
-        for index in 0..100 {
+        ensure!(
+            variables.stored_word_count()
+                == match profile {
+                    VariableProfile::Legacy1000 => 1000,
+                    VariableProfile::Expanded2200 => 2200,
+                },
+            "NNN SystemFile capture variable bank size"
+        );
+        for index in 0..self.layout.variable_count() {
             if self.records[3]
                 .set_word(32 + index * 4, variables.read_stored(200 + index as u16))?
             {
@@ -680,21 +789,29 @@ impl NativeSystemFile {
         }
         Ok(())
     }
-    /// The original Save always writes the complete ten constructor records,
-    /// even if Load overlaid an older partial prefix. Opaque words are retained.
+    /// Save writes this ABI's complete record prefix even after a partial
+    /// Load. Unknown words/padding remain retained in their original records.
     pub fn encode(&self) -> Result<Arc<[u8]>> {
-        let mut bytes = Vec::with_capacity(FILE_BYTES);
-        for (index, record) in self.records.iter().enumerate() {
+        let count = self.layout.saved_records();
+        let expected = self.layout.records()[..count]
+            .iter()
+            .map(|(_, size, _)| *size)
+            .sum::<usize>();
+        if self.layout == SystemFileLayout::Mugen2 {
+            ensure!(expected == FILE_BYTES, "NNN legacy SystemFile ABI size");
+        }
+        let mut bytes = Vec::with_capacity(expected);
+        for (index, record) in self.records[..count].iter().enumerate() {
             for (word, value) in record.words.iter().enumerate() {
                 let value = if index == 0 && word == 8 {
-                    10
+                    count as i32
                 } else {
                     *value as i32
                 };
                 bytes.extend(value.to_le_bytes());
             }
         }
-        ensure!(bytes.len() == FILE_BYTES, "NNN SystemFile encoded size");
+        ensure!(bytes.len() == expected, "NNN SystemFile encoded size");
         Ok(bytes.into())
     }
     /// Native Save updates its local timestamp/counter before attempting file
@@ -711,16 +828,13 @@ impl NativeSystemFile {
         let mut candidate = self.clone();
         candidate.update_variables(variables, profile)?;
         candidate.set_stamp_raw(stamp)?;
-        candidate.records[0].set_word(32, 10)?;
+        candidate.records[0].set_word(32, candidate.layout.saved_records() as i32)?;
         let count = candidate.records[1].word(92)?.wrapping_add(1);
         candidate.records[1].set_word(92, count)?;
         candidate.changed()?;
         let bytes = candidate.encode()?;
         *self = candidate;
-        let path = VfsPath::new(
-            Mount::Save,
-            if trial { "tsysfile.sav" } else { "sysfile.sav" },
-        )?;
+        let path = VfsPath::new(Mount::Save, self.layout.save_name(trial))?;
         let ticket = storage.begin_write_atomic(&path, bytes)?;
         Ok(SystemWrite {
             ticket,

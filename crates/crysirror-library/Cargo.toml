@@ -1,0 +1,14 @@
+[package]
+name = "crysirror-library"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Game library launcher shared by the desktop, web and console hosts: cover art discovery and the launcher project"
+
+[dependencies]
+anyhow.workspace = true
+crysirror-resource.workspace = true
+crysirror-text.workspace = true
+image.workspace = true
+serde_json.workspace = true

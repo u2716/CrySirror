@@ -49,6 +49,10 @@ mod text_input;
 pub use text_input::*;
 mod platform;
 pub use platform::*;
+mod spectrum_graph;
+pub use spectrum_graph::*;
+mod mounted_media;
+pub use mounted_media::*;
 mod desktop;
 pub use desktop::*;
 
@@ -1092,6 +1096,16 @@ pub struct UploadedImage {
 }
 
 pub trait ImageMetadata: Send + Sync {
+    /// Decode an integer-label image on workers. Source palette indices are
+    /// preserved independently of display colours/alpha. A minimum extent
+    /// repeats smaller source axes; larger decoded axes are retained.
+    fn begin_region_map(
+        &self,
+        _path: &VfsPath,
+        _minimum_size: Option<[u32; 2]>,
+    ) -> Result<alloc::boxed::Box<dyn crate::region_map::RegionMapQuery>> {
+        Err(crate::Error::Unsupported("integer label-image resources"))
+    }
     fn begin_packed_pixels(
         &self,
         _spec: crate::image_processing::PackedImageSpec,
@@ -1222,6 +1236,11 @@ pub struct SimpleTextPlacement {
 /// synchronously on any thread without borrowing the owner host or a renderer.
 /// This is the simple-horizontal-v1 layout, not a native layout substitution.
 pub trait TextMeasurement: Send + Sync {
+    /// Font ink bounds for the shared simple layout; no I/O or pixel raster is
+    /// performed. Decorations use the selected outline's design metrics.
+    fn ink_bounds_simple(&self,_font:&str,_size:f32,_text:&str,_bold:bool,_underline:bool,_strikeout:bool)->Result<[i32;4]>{
+        Err(crate::Error::Unsupported("simple text ink bounds"))
+    }
     fn measure_simple(&self, font: &str, size: f32, text: &str) -> Result<TextExtent>;
     fn position_simple(
         &self,
@@ -1591,6 +1610,11 @@ pub trait HostServices: FileSystem {
     ) -> Result<()> {
         Err(crate::Error::Unsupported("prepared audio resource receipt"))
     }
+    /// Prepare a spectrum bitmap from an independent source decoder and an
+    /// immutable destination. None is the native stopped-source silence case.
+    fn begin_spectrum_graph(&mut self,_client:ClientId,_source:Option<AudioResourceHandle>,_position:u64,_destination:crate::image_processing::ImageInput,_spec:SpectrumGraphSpec,_state:SpectrumGraphState)->Result<SpectrumGraphJob>{
+        Err(crate::Error::Unsupported("source audio spectrum visualization"))
+    }
     /// Inspect original source-layout PCM on a worker, without seeking playback.
     fn begin_audio_samples(&mut self,_client:ClientId,_resource:AudioResourceHandle,_request:AudioSampleRequest)->Result<alloc::boxed::Box<dyn AudioSampleQuery>>{
         Err(crate::Error::Unsupported("source-layout audio samples"))
@@ -1923,6 +1947,10 @@ pub trait HostServices: FileSystem {
     fn text_measurement(&mut self, _client: ClientId) -> Result<Arc<dyn TextMeasurement>> {
         Err(crate::Error::Unsupported("text measurement handle"))
     }
+    /// Immutable host-published media aliases; querying performs no device I/O.
+    fn mounted_media(&mut self, client: ClientId) -> Result<MountedMediaCatalog> {
+        MountedMediaCatalog::new(client, Vec::new())
+    }
     /// Thread-safe storage handle for this client (ADR 0008).
     fn storage(&mut self, _client: ClientId) -> Result<Arc<dyn ClientStorage>> {
         Err(crate::Error::Unsupported("client storage handle"))
@@ -2015,6 +2043,12 @@ pub mod buttons {
     pub const KEY_Z: u64 = 1 << 52;
     pub const INSERT:u64=1<<53;
     pub const ALT: u64 = 1 << 54;
+    pub const DELETE: u64 = 1 << 55;
+    pub const KEY_H: u64 = 1 << 56;
+    pub const KEY_I: u64 = 1 << 57;
+    pub const KEY_J: u64 = 1 << 58;
+    pub const KEY_M: u64 = 1 << 59;
+    pub const KEY_V: u64 = 1 << 60;
     /// Logical names used by action maps, in bit order.
     pub const NAMES: &[(&str, u64)] = &[
         ("enter", ENTER),
@@ -2072,6 +2106,12 @@ pub mod buttons {
         ("mouse_middle", MOUSE_MIDDLE),
         ("z", KEY_Z),
         ("alt", ALT),
+        ("delete", DELETE),
+        ("h", KEY_H),
+        ("i", KEY_I),
+        ("j", KEY_J),
+        ("m", KEY_M),
+        ("v", KEY_V),
     ];
     /// Checked legacy VK translation for this framed-button profile. None
     /// means unrepresented, not released. Distinct keypad/side-specific keys
@@ -2098,16 +2138,22 @@ pub mod buttons {
             39 => RIGHT,
             40 => DOWN,
             45 => INSERT,
+            46 => DELETE,
             0x30..=0x39 => KEY_0 << (code - 0x30),
             0x41 => KEY_A,
             0x43 => KEY_C,
             0x44 => KEY_D,
             0x45 => KEY_E,
             0x46 => KEY_F,
+            0x48 => KEY_H,
+            0x49 => KEY_I,
+            0x4a => KEY_J,
             0x4c => KEY_L,
+            0x4d => KEY_M,
             0x51 => KEY_Q,
             0x52 => KEY_R,
             0x53 => KEY_S,
+            0x56 => KEY_V,
             0x57 => KEY_W,
             0x5a => KEY_Z,
             0x70..=0x7b => F1 << (code - 0x70),

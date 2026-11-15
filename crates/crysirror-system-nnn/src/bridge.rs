@@ -22,9 +22,21 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 mod actor_frame;
+mod button_audio;
+mod kira;
+mod hamon;
+mod hahen;
+mod animation;
+mod character_volume;
+mod general_audio;
+pub(crate) use button_audio::ButtonAudioEvent;
 mod chart;
+mod user_command;
+pub(crate) use user_command::default_user_commands;
 pub(crate) use chart::{ChartContext, ChartReturn};
 mod settings;
+mod config_ui;
+pub(crate) use config_ui::ContextData as ConfigUiContext;
 mod scene;
 mod user_gaiji;
 mod menu_visual;
@@ -35,6 +47,18 @@ mod save_state;
 mod saved_effects;
 mod saved_restore;
 pub(crate) use saved_restore::BridgeRestoreSeed;
+
+/// Out of line so the formatting does not enlarge `commit`'s hot frame.
+#[cold]
+#[inline(never)]
+fn unmapped_callback(call: &NativeCall) -> anyhow::Error {
+    anyhow::anyhow!(
+        "System-NNN callback needs another semantic mapping: identify={:#x} code={:#x} payload={:?}",
+        call.identify,
+        call.code,
+        call.payload
+    )
+}
 
 /// Explicit reviewed legacy callback ABI, not inferred from an arbitrary SPT.
 /// The reviewed original module SHA and complete callback evidence are in SOURCE.
@@ -62,6 +86,8 @@ pub struct Bridge {
     chart_runtime: Option<crate::native_chart::ChartRuntime>,
     pending_chart: Option<chart::ChartOperation>,
     chart_wait: Option<chart::ChartWait>,
+    user_commands: Option<Arc<BTreeMap<u32, i32>>>,
+    user_mode: Option<Box<user_command::UserModeWait>>,
     chart_context: Option<chart::ChartContext>,
     pending_chart_progress: Option<crate::native_chart::ChartWrite>,
     auxiliary:crate::native_save::AuxiliaryState,
@@ -80,6 +106,7 @@ pub struct Bridge {
     /// Native callback members179/180/181, not STATUS window words180/181.
     pub message_voice_length_ms: u32,
     load_voice_length_ms: u32,
+    voice_speak:crate::native_voice_speak::VoiceSpeakClock,
     auto_message: i32,
     legacy_demo_flag: i32,
     script_cursor_number: i32,
@@ -104,12 +131,45 @@ pub struct Bridge {
     active_effects: BTreeSet<i32>,
     previous_effects: BTreeMap<i32, i32>,
     inactive_effect_records: BTreeMap<i32, crate::native_save::SavedEffect>,
+    /// Raw EFFECT words not written by the current native class. Fresh native
+    /// storage was uninitialized; zero only that fresh backing, retaining every
+    /// supplied original-save word (including padding) thereafter.
+    effect_backing: BTreeMap<i32,[i32;256]>,
     profile: CallbackProfile,
     patterns: BTreeMap<i32, SunaState>,
     pattern_cache: Option<Arc<dyn crysirror_core::service::PatternResource>>,
     saved_suna: BTreeMap<i32, SunaParameters>,
     saved_rainbow:BTreeSet<i32>,
+    saved_rain:BTreeSet<i32>,
+    saved_hae:BTreeSet<i32>,
+    saved_grass:BTreeSet<i32>,
+    saved_taiyo:BTreeSet<i32>,
+    saved_kira:BTreeSet<i32>,
+    pending_hamon:Option<hamon::PendingSet>,
+    animation:Option<crate::native_animation_session::Bank>,
+    animation_creation:Option<crate::native_animation_session::Creation>,
+    animation_off:i32,
+    pending_hahen:Option<hahen::PendingSet>,
+    saved_hahen:BTreeSet<i32>,
+    saved_hahen_work:Option<(i32,crate::native_hahen_set::Preparation)>,
+    saved_hamon:BTreeSet<i32>,
+    saved_hamon_work:Option<(i32,crate::native_hamon_vectors::Preparation)>,
+    hamon_field:Option<crate::native_hamon_vectors::Field>,
+    saved_sun_rays:BTreeSet<i32>,
+    saved_particles:BTreeMap<i32,i32>,
+    particle_classes:Option<crate::native_particle_classes::Classes>,
+    cloud_class:crate::native_cloud::CloudClass,
+    sun_rays_class:crate::native_sun_rays::SunRaysClass,
+    saved_speed_line:BTreeSet<i32>,
+    speed_line_class:Arc<crate::native_speed_line::SpeedLineClass>,
+    kira_class:crate::native_kira::KiraClass,
+    rain_class:Option<Arc<crate::native_rain::RainClass>>,
+    grass_class:Option<Arc<crate::native_grass_plane::GrassClass>>,
+    taiyo_class:Arc<crate::native_taiyo::TaiyoClass>,
     rainbow_palette:Arc<crate::native_picture_rainbow::RainbowPalette>,
+    full_anime:crate::native_full_anime::FullAnimeClass,
+    water_class:crate::native_water::WaterClass,
+    remember_class:crate::native_remember::RememberClass,
     not_trans: BTreeMap<i32, bool>,
     pending_pattern: Option<(NativeCall, i32, SunaParameters, PatternJob)>,
     layer_visible: BTreeMap<i32, bool>,
@@ -127,7 +187,11 @@ pub struct Bridge {
     mosaics: BTreeMap<i32, crate::native_effects_mosaic::MosaicState>,
     picture_effects: BTreeMap<i32, crate::native_picture_effect::PictureEffectState>,
     audio: Option<crate::audio_bridge::AudioBridge>,
+    character_volume:Option<Arc<crate::native_character_volume::Profile>>,
     voice_policy:Option<Arc<crate::native_voice_policy::VoicePolicy>>,
+    button_audio:Option<button_audio::ButtonAudioPolicy>,
+    general_audio:Option<crate::native_general_audio::GeneralAudioOwner>,
+    general_foreground:Option<general_audio::ForegroundAudio>,
     text: Option<crate::native_text::NativeTextBridge>,
     selection: Option<crate::native_ui::NativeSelectionBridge>,
     restored_wait: Option<SavedWaitKind>,
@@ -227,6 +291,7 @@ impl Bridge {
         self.option_off = 0;
         self.next_window_mode = 0;
         self.chart_wait=None;
+        self.user_mode=None;
         self.chart_context=None;
         Ok(count)
     }
@@ -248,9 +313,30 @@ impl Bridge {
         Ok(())
     }
     pub(crate) fn frame_buffers(&self)->crate::native_capture_effect::FrameBuffers {
-        crate::native_capture_effect::FrameBuffers{capture:self.get_buffer.clone(),wipe_tables:self.simple_wipe_tables.clone(),once_printed:self.once_printed.clone(),picture_updates:Default::default(),rainbow_palette:Some(self.rainbow_palette.clone())}
+        crate::native_capture_effect::FrameBuffers{png_palette:self.images.as_ref().map(|i|i.png_palette.clone()).unwrap_or_default(),animation:self.animation.clone(),animation_off:self.animation_off,animation_previous_nops:Default::default(),bath_updates:Vec::new(),particle_classes:self.particle_classes.clone(),cloud_class:self.cloud_class.clone(),hamon_field:self.hamon_field.clone(),sun_rays_class:self.sun_rays_class.clone(),staff_context:self.images.as_ref().map(|i|i.staff_context()),staff_bank:self.images.as_ref().map(|i|i.retained_native_caches().clone()).unwrap_or_default(),staff_touched:Default::default(),staff_geometry:Default::default(),speed_line_class:Some(self.speed_line_class.clone()),kira_class:self.kira_class.clone(),rain_class:self.rain_class.clone(),grass_class:self.grass_class.clone(),taiyo_class:Some((*self.taiyo_class).clone()),water_class:self.water_class.clone(),remember_class:self.remember_class.clone(),full_anime:self.full_anime.clone(),full_anime_context:self.images.as_ref().map(|images|images.full_anime_context()),capture:self.get_buffer.clone(),wipe_tables:self.simple_wipe_tables.clone(),once_printed:self.once_printed.clone(),picture_updates:Default::default(),circle_ends:Default::default(),rainbow_palette:Some(self.rainbow_palette.clone())}
+    }
+    pub(crate) fn configure_particle_classes(&mut self,classes:crate::native_particle_classes::Classes)->Result<()> {
+        ensure!(classes.brush_atlas.client()==self.client && self.particle_classes.is_none(),"NNN particle class ownership");
+        if let Some(images)=self.images.as_mut(){images.png_palette=classes.palette.clone();}
+        self.particle_classes=Some(classes);Ok(())
     }
     fn adopt_frame_buffers(&mut self,buffers:&crate::native_capture_effect::FrameBuffers){
+        if let Some(images)=self.images.as_mut(){images.adopt_native_caches(&buffers.staff_bank,&buffers.staff_touched,&self.not_trans);}
+        self.kira_class=buffers.kira_class.clone();
+        self.hamon_field=buffers.hamon_field.clone();
+        self.sun_rays_class=buffers.sun_rays_class.clone();
+        self.cloud_class=buffers.cloud_class.clone();
+        self.particle_classes=buffers.particle_classes.clone();
+        self.animation=buffers.animation.clone();
+        if let Some(images)=self.images.as_mut(){images.png_palette=buffers.png_palette.clone();}
+        for slot in &buffers.animation_previous_nops {self.previous_effects.insert(*slot,0);}
+        if let Some(class)=&buffers.speed_line_class {self.speed_line_class=class.clone();}
+        if let Some(class)=&buffers.rain_class {self.rain_class=Some(class.clone());}
+        self.grass_class=buffers.grass_class.clone().or(self.grass_class.clone());
+        if let Some(class)=&buffers.taiyo_class{self.taiyo_class=Arc::new(class.clone());}
+        self.water_class=buffers.water_class.clone();
+        self.remember_class=buffers.remember_class.clone();
+        self.full_anime=buffers.full_anime.clone();
         self.get_buffer=buffers.capture.clone();
         self.once_printed=buffers.once_printed.clone();
         self.simple_wipe_tables=buffers.wipe_tables.clone();
@@ -604,6 +690,28 @@ impl Bridge {
         let before=audio.api_calls;let result=audio.poll_system_voice(host,name);
         self.api_calls+=audio.api_calls-before;result
     }
+    pub(crate) fn poll_system_wave_filename(&mut self, host:&mut dyn HostServices, name:&[u8], delta:i32)->Result<bool> {
+        let names = self.voice_policy.as_ref().context("NNN system wave preference policy absent")?;
+        let file = self.system_file.as_ref().context("NNN system wave SystemFile absent")?;
+        if names.total_off(file)? { return Ok(true); }
+        let audio=self.audio.as_mut().context("NNN system wave audio owner absent")?;
+        let before=audio.api_calls;
+        let result=audio.poll_system_wave_filename(host,name,delta);
+        self.api_calls+=audio.api_calls-before;result
+    }
+    pub(crate) fn poll_replay_voice(&mut self, host:&mut dyn HostServices, name:&[u8])->Result<bool> {
+        let names = self.voice_policy.as_ref().context("NNN replay voice character policy absent")?;
+        let file = self.system_file.as_ref().context("NNN replay voice SystemFile absent")?;
+        let p = self.button_audio.as_ref().context("NNN replay voice volume policy absent")?;
+        if names.total_off(file)? || file.system_word(196)? == 0 || !names.allows_with_config(name,file,p.config_present)? {
+            return Ok(true);
+        }
+        let percent=file.system_word(180)?.wrapping_add(names.volume_delta(name,file,p.scale,p.config_present)?).clamp(0,100);
+        let audio=self.audio.as_mut().context("NNN replay voice audio owner absent")?;
+        let before=audio.api_calls;
+        let result=audio.poll_replay_voice_with_percent(host,name.to_vec(),percent);
+        self.api_calls+=audio.api_calls-before;result
+    }
     pub(crate) fn poll_system_sound(
         &mut self,
         host: &mut dyn HostServices,
@@ -653,6 +761,7 @@ impl Bridge {
     }
     pub(crate) fn poll_gallery_audio(&mut self, host: &mut dyn HostServices, event: &crate::native_cg::CgAudio) -> Result<bool> {
         use crate::native_cg::CgAudio;
+        if let CgAudio::Voice(name)=event { return self.poll_replay_voice(host,name); }
         let audio = self.audio.as_mut().context("NNN gallery audio owner absent")?;
         let before = audio.api_calls;
         let result = match event {
@@ -678,11 +787,9 @@ impl Bridge {
     fn retire_post_text(&mut self, host: &mut dyn HostServices) -> Result<()> {
         if let Some(path) = self.post_text_path.as_ref() {
             let id = self.bindings.effect_base + u32::from(self.bindings.layers) + 1;
-            host.submit_engine(
-                self.client,
-                1,
-                &serde_json::to_vec(&json!({"layers":[{"op":"remove","id":id}]}))?,
-            )?;
+            if let Some(op)=Self::native_layer_removal(self.client,host,id)?{
+                host.submit_engine(self.client,1,&serde_json::to_vec(&json!({"layers":[op]}))?)?;
+            }
             host.release_image_resource(self.client, path)?;
             self.api_calls += 2;
             self.post_text_path = None;
@@ -712,16 +819,13 @@ impl Bridge {
             !self.dependency_pending() && self.draw_wait.is_none() && self.overlap_wait.is_none(),
             "NNN NewGame requires quiescent background dependencies"
         );
-        let mut ops = self
-            .active_effects
-            .iter()
-            .map(|slot| Ok(json!({"op":"remove","id":self.layer_id(*slot)?})))
-            .collect::<Result<Vec<_>>>()?;
+        self.freeze_effect_backing()?;
+        let mut ops = self.native_effect_layer_removals(host)?;
         if self.display_path.is_some() {
-            ops.push(json!({"op":"remove","id":self.bindings.effect_base + u32::from(self.bindings.layers)}));
+            if let Some(op)=Self::native_layer_removal(self.client,host,self.bindings.effect_base+u32::from(self.bindings.layers))?{ops.push(op);}
         }
         if self.post_text_path.is_some() {
-            ops.push(json!({"op":"remove","id":self.bindings.effect_base+u32::from(self.bindings.layers)+1}));
+            if let Some(op)=Self::native_layer_removal(self.client,host,self.bindings.effect_base+u32::from(self.bindings.layers)+1)?{ops.push(op);}
         }
         if let Some(text) = &self.text {
             ops.extend(text.hide_operations()?);
@@ -816,6 +920,8 @@ impl Bridge {
             chart_runtime: None,
             pending_chart: None,
             chart_wait: None,
+            user_commands: None,
+            user_mode: None,
             chart_context: None,
             pending_chart_progress: None,
             metadata: Metadata::default(),
@@ -833,6 +939,7 @@ impl Bridge {
             message_have_voice: false,
             message_voice_length_ms: 7000,
             load_voice_length_ms: 7000,
+            voice_speak:Default::default(),
             auto_message: 0,
             legacy_demo_flag: 0,
             // The legacy constructor omitted these members' initialization.
@@ -858,12 +965,35 @@ impl Bridge {
             active_effects: BTreeSet::new(),
             previous_effects: BTreeMap::new(),
             inactive_effect_records: BTreeMap::new(),
+            effect_backing: BTreeMap::new(),
             profile,
             patterns: BTreeMap::new(),
             pattern_cache: None,
             saved_suna: BTreeMap::new(),
             saved_rainbow:BTreeSet::new(),
+            saved_rain:BTreeSet::new(),
+            saved_hae:BTreeSet::new(),
+            saved_grass:BTreeSet::new(),
+            saved_taiyo:BTreeSet::new(),
+            saved_kira:BTreeSet::new(),
+            animation:None,animation_creation:None,animation_off:0,
+            pending_hahen:None,saved_hahen:BTreeSet::new(),saved_hahen_work:None,
+            pending_hamon:None,saved_hamon:BTreeSet::new(),saved_hamon_work:None,hamon_field:None,
+            saved_sun_rays:BTreeSet::new(),
+            saved_particles:BTreeMap::new(),
+            particle_classes:None,
+            cloud_class:Default::default(),
+            sun_rays_class:Default::default(),
+            saved_speed_line:BTreeSet::new(),
+            speed_line_class:Arc::new(Default::default()),
+            kira_class:Default::default(),
+            rain_class:None,
+            grass_class:None,
+            taiyo_class:Arc::new(Default::default()),
             rainbow_palette:Arc::new(crate::native_picture_rainbow::RainbowPalette::new(bindings.size[1])?),
+            full_anime:Default::default(),
+            water_class:Default::default(),
+            remember_class:Default::default(),
             not_trans: BTreeMap::new(),
             pending_pattern: None,
             layer_visible: BTreeMap::new(),
@@ -881,7 +1011,11 @@ impl Bridge {
             picture_effects: BTreeMap::new(),
             mosaics: BTreeMap::new(),
             audio: None,
+            character_volume:None,
             voice_policy:None,
+            button_audio:None,
+            general_audio:None,
+            general_foreground:None,
             text: None,
             selection: None,
             restored_wait: None,
@@ -1207,9 +1341,13 @@ impl Bridge {
     /// wait. This query never polls a receipt, executes code or consumes input.
     pub fn dependency_pending(&self) -> bool {
         self.chart_dependency_pending() || self.actor_frame.is_some()
+            || self.general_audio.as_ref().is_some_and(|owner|owner.pending().is_some())
             || self.idle_background.as_ref().is_some_and(|idle|idle.dependency_pending())
             || self.film_button.as_ref().is_some_and(|button|button.pending())
             || !self.saved_suna.is_empty()
+            || self.animation_creation.is_some()
+            || self.pending_hahen.is_some()||!self.saved_hahen.is_empty()||self.saved_hahen_work.is_some()
+            || self.pending_hamon.is_some() || !self.saved_hamon.is_empty() || self.saved_hamon_work.is_some()
             || self.pending_pattern.is_some()
             || self
                 .window_binding
@@ -1234,6 +1372,15 @@ impl Bridge {
                 .is_some_and(|s| s.dependency_pending())
     }
     pub(crate) fn presentation_pending(&self) -> bool {
+        // A multi-frame DRAW/overlap owns the complete display image. The
+        // source-layer refresh latch is only adopted at the end of the whole
+        // instruction; it must not hide frames already published in between.
+        if let Some(draw) = &self.draw_wait {
+            return draw.presentation_pending();
+        }
+        if let Some(overlap) = &self.overlap_wait {
+            return overlap.presentation_pending();
+        }
         self.actor_refresh_required
             || self.idle_background.as_ref().is_some_and(|idle|idle.dependency_pending())
             || self.film_button.as_ref().is_some_and(|button|button.pending())
@@ -1246,14 +1393,6 @@ impl Bridge {
                 .selection
                 .as_ref()
                 .is_some_and(|selection| selection.dependency_pending())
-            || self
-                .draw_wait
-                .as_ref()
-                .is_some_and(|draw| draw.dependency_pending())
-            || self
-                .overlap_wait
-                .as_ref()
-                .is_some_and(|overlap| overlap.dependency_pending())
     }
     /// Names of the owners currently holding `dependency_pending`.
     pub fn pending_dependencies(&self) -> Vec<&'static str> {
@@ -1261,14 +1400,19 @@ impl Bridge {
             ("actor_frame", self.actor_frame.is_some()),
             ("saved_suna", !self.saved_suna.is_empty()),
             ("pattern", self.pending_pattern.is_some()),
+            ("hahen",self.pending_hahen.is_some()||!self.saved_hahen.is_empty()||self.saved_hahen_work.is_some()),
+            ("hamon",self.pending_hamon.is_some()||!self.saved_hamon.is_empty()||self.saved_hamon_work.is_some()),
             ("window", self.window_binding.as_ref().is_some_and(|b| b.pending())),
             ("system_save", self.pending_system_save.is_some()),
             ("result_save", self.pending_result_save.is_some()),
             ("images", self.images.as_ref().is_some_and(|s| s.dependency_pending())),
-            ("audio", self.audio.as_ref().is_some_and(|s| s.pending())),
+            ("audio_callback", self.audio.as_ref().is_some_and(|s| s.callback_pending())),
+            ("audio_outer_music", self.audio.as_ref().is_some_and(|s| s.outer_music_pending())),
+            ("audio_system", self.audio.as_ref().is_some_and(|s| s.system_sound_pending())),
+            ("audio_button_voice", self.audio.as_ref().is_some_and(|s| s.button_voice_busy())),
             ("text", self.text.as_ref().is_some_and(|s| s.dependency_pending())),
             ("selection", self.selection.as_ref().is_some_and(|s| s.dependency_pending())),
-            ("draw", self.draw_wait.as_ref().is_some_and(|s| s.dependency_pending())),
+            (self.draw_wait.as_ref().map(|s|s.stage()).map(|s|match s {"base"=>"draw:base","old"=>"draw:old","effect"=>"draw:effect","layer_sequence"=>"draw:layer_sequence","start"=>"draw:start","ready"=>"draw:ready","none"=>"draw:none",_=>"draw:other"}).unwrap_or("draw"), self.draw_wait.as_ref().is_some_and(|s| s.dependency_pending())),
             ("overlap", self.overlap_wait.as_ref().is_some_and(|s| s.dependency_pending())),
         ]
         .into_iter()
@@ -1725,7 +1869,10 @@ impl Bridge {
         host: &mut dyn HostServices,
     ) -> Result<bool> {
         machine.validate_receipt(call)?;
+        if self.pending_hahen.is_some(){return self.try_hahen_set(machine,call,host);}
+        if self.pending_hamon.is_some(){return self.try_hamon_set(machine,call,host);}
         if let Some(complete)=self.try_chart_operation(machine,call,host)? {return Ok(complete);}
+        if let Some(complete)=self.try_user_command(machine,call)? {return Ok(complete);}
         if self.skip.next_command
             && self.skip.effect_command
             && ((call.identify == 0x66660007
@@ -1750,6 +1897,8 @@ impl Bridge {
             machine.acknowledge(call)?;
             return Ok(true);
         }
+        if call.identify==0x66660007&&call.code==0x33330013&&matches!(&call.payload,Payload::Words{count,words} if *count>=2&&words.get(1)==Some(&69)){return self.try_hamon_set(machine,call,host);}
+        if call.identify==0x66660007&&call.code==0x33330013&&matches!(&call.payload,Payload::Words{count,words} if *count>=2&&words.get(1)==Some(&81)){return self.try_hahen_set(machine,call,host);}
         if let Some(work) = &self.pending_system_save {
             ensure!(
                 work.matches(call),
@@ -1851,6 +2000,7 @@ impl Bridge {
                             self.message_have_voice = true;
                             self.load_voice_length_ms = length;
                             self.message_voice_length_ms = length;
+                            self.voice_speak.started(length);
                         }
                     }
                     if let Some(number) = audio.take_music_read_mark() {
@@ -1866,6 +2016,7 @@ impl Bridge {
         if self.pending_pattern.is_none() {
             if let Payload::Words { count, words } = &call.payload {
                 if call.code == 0x33330013 && *count >= 2 && words[1] == 29 {
+                    self.freeze_effect_backing()?;
                     let slot = words[0];
                     self.layer_id(slot)?;
                     let parameters = SunaParameters::parse(&words[2..], self.bindings.size)?;
@@ -2121,7 +2272,7 @@ impl Bridge {
             self.submit(host, json!({"layers":[op]}))?;
             self.active_effects.insert(slot);
         } else if self.active_effects.contains(&slot) {
-            self.submit(host, json!({"layers":[{"op":"remove","id":id}]}))?;
+            if let Some(op)=Self::native_layer_removal(self.client,host,id)?{self.submit(host,json!({"layers":[op]}))?;}
             self.active_effects.remove(&slot);
         }
         Ok(())
@@ -2136,7 +2287,7 @@ impl Bridge {
         let picture = self
             .images
             .as_ref()
-            .and_then(|images| images.pictures.get(&slot))
+            .and_then(|images| images.pictures.get(&slot).filter(|_|images.native_load_ok(slot)))
             .filter(|_| self.picture_assignments.contains(&slot));
         let opaque = self
             .not_trans
@@ -2153,6 +2304,7 @@ impl Bridge {
             }
         });
         crate::native_presentation::MoveFrame {
+            geometry_assigned:self.picture_assignments.contains(&slot),
             source_clip:picture.map(|p|p.source_clip),
             slot,
             state: crate::native_move::NativeMoveState {
@@ -2192,7 +2344,7 @@ impl Bridge {
             let picture = self
                 .images
                 .as_ref()
-                .and_then(|images| images.pictures.get(slot))
+                .and_then(|images| images.pictures.get(slot).filter(|_|images.native_load_ok(*slot)))
                 .filter(|_| self.picture_assignments.contains(slot));
             let background = self
                 .not_trans
@@ -2211,6 +2363,7 @@ impl Bridge {
             effects.insert(
                 *slot,
                 NativeFrameEffect::Move(crate::native_presentation::MoveFrame {
+                    geometry_assigned:self.picture_assignments.contains(slot),
                     source_clip:picture.map(|p|p.source_clip),
                     slot: *slot,
                     state: state.clone(),
@@ -2228,21 +2381,34 @@ impl Bridge {
         for (slot, state) in &self.mosaics {
             effects.insert(*slot, NativeFrameEffect::Mosaic(state.clone()));
         }
+        let picture_bank=crate::native_picture_bank::FramePictureBank {
+            pictures:Arc::new(self.images.as_ref().map(|images|images.pictures.iter().map(|(slot,picture)|(*slot,crate::native_picture_bank::BankPicture {
+                load_ok:images.native_load_ok(*slot),picture:picture.clone(),rectangles:self.rectangles.get(slot).cloned().unwrap_or_else(||crate::native_geometry::NativeRects::natural(self.bindings.size)),
+                assigned:self.picture_assignments.contains(slot),
+            })).collect()).unwrap_or_default()),geometry:None,
+        };
         for (slot, state) in &self.picture_effects {
             let background = self.not_trans.get(slot).copied().unwrap_or(*slot < 4 || *slot == 14);
             let uses_mask = state.uses_mask(background);
             let picture = self.images.as_ref().and_then(|images| images.pictures.get(slot))
-                .filter(|_| self.picture_assignments.contains(slot)||matches!(state.command(),62|72|77|94|96|106|107|110|119|121|123|125|126|131|132|133));
+                .filter(|_| self.picture_assignments.contains(slot)||matches!(state.command(),62|72|77|94|96|104|106|107|110|119|121|123|125|126|131|132|133));
             // ADDSUB131's original null-mask dereference is repaired by full
             // coverage for maskless pictures; their RGB never becomes a key.
             let source = picture
                 // Actual 4D7380 uses mask helper4D72B0 when present and
                 // RGB-key helper4CB1B0 otherwise. The later public branch
                 // instead calls mask-only TransLucentBlt3; do not copy it.
-                .map(|p| if !uses_mask || ((matches!(state.command(),65|124|125|127|131) || matches!(state.kind,crate::native_picture_effect::PictureEffectKind::Koma{parameters} if parameters[8]==2)) && !p.has_mask) { p.opaque.clone() } else if p.has_mask { p.raw.clone() } else { p.keyed.clone() });
+                .map(|p| if !uses_mask || ((matches!(state.command(),65|124|125|127|131|136) || matches!(state.kind,crate::native_picture_effect::PictureEffectKind::Koma{parameters} if parameters[8]==2)) && !p.has_mask) { p.opaque.clone() } else if p.has_mask { p.raw.clone() } else { p.keyed.clone() });
             effects.insert(*slot, NativeFrameEffect::Picture(crate::native_picture_effect::PictureEffectFrame {
-                slot: *slot, state: state.clone(), source, canvas: self.bindings.size, has_mask: picture.is_some_and(|p| p.has_mask),
+                bath_class:(state.command()==97).then(||self.particle_classes.as_ref().map(|c|Arc::new(c.bath.clone()))).flatten(),
+                bath_update:None,bath_mouse:[self.native_input.pointer_x,self.native_input.pointer_y],
+                bank:picture_bank.clone(),bank_limit:i32::from(self.bindings.layers),voice_speaking:self.voice_speak.speaking(),
+                slot: *slot, state: state.clone(), source, canvas: self.bindings.size, source_uses_mask:uses_mask, has_mask: picture.is_some_and(|p| p.has_mask),
                 source_clip:picture.map(|p|p.source_clip),
+                speed_line_class:(state.command()==85).then(||self.speed_line_class.clone()),
+                rain_class:(state.command()==13).then(||self.rain_class.clone()).flatten(),
+                grass_class:(state.command()==93).then(||self.grass_class.clone()).flatten(),
+                taiyo_class:(state.command()==51).then(||self.taiyo_class.clone()),
                 rainbow_palette:(state.command()==96).then(||self.rainbow_palette.clone()),
                 second_clip:state.companion_slot(self.bindings.layers).and_then(|(slot,_)|self.images.as_ref().and_then(|i|i.pictures.get(&slot))).map(|p|p.source_clip),
                 rectangles: self.rectangles.get(slot).cloned().unwrap_or_else(||crate::native_geometry::NativeRects::natural(self.bindings.size)),
@@ -2402,7 +2568,7 @@ impl Bridge {
             .collect();
         for slot in &visible {
             match &effects[slot] {
-                NativeFrameEffect::MessageBackground | NativeFrameEffect::Paint(_) => {
+                NativeFrameEffect::Slot(_)|NativeFrameEffect::Underlay{..}|NativeFrameEffect::MessageBackground | NativeFrameEffect::Paint(_) => {
                     bail!("NNN paint DTO in persistent effect state")
                 }
                 NativeFrameEffect::Suna(state) => {
@@ -2460,7 +2626,7 @@ impl Bridge {
                             | NativeFrameEffect::Fusuma(_)
                     )
                 )
-                || matches!(effects.get(slot),Some(NativeFrameEffect::Picture(frame)) if !matches!(frame.state.command(),20|23|32|33|50|55|68|73|103))
+                || matches!(effects.get(slot),Some(NativeFrameEffect::Picture(frame)) if !matches!(frame.state.kind,crate::native_picture_effect::PictureEffectKind::Circle{command:0,active:true,..})&&!matches!(frame.state.command(),12|13|14|15|57|71|83|20|22|23|78|24|26|28|32|33|42|50|51|55|68|73|85|87|88|89|103|114|115|116|117|118))
             {
                 continue;
             }
@@ -2478,6 +2644,7 @@ impl Bridge {
                     math: ImageCompositeMath::CopyRgb,
                 }
             } else if self.picture_assignments.contains(slot) {
+                if self.images.as_ref().is_some_and(|images|!images.native_load_ok(*slot)){continue;}
                 let picture = self
                     .images
                     .as_ref()
@@ -2803,7 +2970,7 @@ impl Bridge {
         self.mosaics.clear();
         for (slot, effect) in result.effects {
             match effect {
-                NativeFrameEffect::MessageBackground | NativeFrameEffect::Paint(_) => {
+                NativeFrameEffect::Slot(_)|NativeFrameEffect::Underlay{..}|NativeFrameEffect::MessageBackground | NativeFrameEffect::Paint(_) => {
                     bail!("NNN paint DTO returned as semantic state")
                 }
                 NativeFrameEffect::Move(frame) => {
@@ -2852,6 +3019,13 @@ impl Bridge {
                     self.mosaics.insert(slot, state);
                 }
                 NativeFrameEffect::Picture(frame) => {
+                    if frame.state.inactive(){
+                        // One terminal dirty edge, not a perpetual redraw on
+                        // later receipts which retain this disabled record.
+                        self.actor_refresh_required |= self.active_effects.remove(&slot);
+                        self.passive_counts.remove(&slot);
+                        if !matches!(frame.state.kind,crate::native_picture_effect::PictureEffectKind::Circle{..}){self.not_trans.insert(slot,frame.motion_background);}
+                    }
                     self.rectangles.insert(slot, frame.rectangles);
                     self.picture_effects.insert(slot, frame.state);
                 }
@@ -2938,6 +3112,7 @@ impl Bridge {
             let Some(result) = result? else {
                 return Ok(None);
             };
+            self.adopt_frame_buffers(&result.frame.buffers);
             self.get_buffer=result.frame.buffers.capture.clone();
             self.once_printed=result.frame.buffers.once_printed.clone();
             self.simple_wipe_tables=result.tables.clone();
@@ -3040,6 +3215,7 @@ impl Bridge {
         let result = wait.poll_with_skip(machine, call, host,skip);
         self.api_calls += wait.api_calls - before;
         if let Some(result) = result? {
+            self.adopt_frame_buffers(&result.frame.buffers);
             self.get_buffer=result.frame.buffers.capture.clone();
             self.once_printed=result.frame.buffers.once_printed.clone();
             self.simple_wipe_tables=result.tables;
@@ -3098,6 +3274,7 @@ impl Bridge {
         }
         if call.identify == 0x66660007
             && call.code == 0x33330013
+            && self.pending_hamon.is_none() && self.pending_hahen.is_none()
             && self.skip.next_command
             && self.skip.effect_command
         {
@@ -3197,10 +3374,10 @@ impl Bridge {
                 String::from_utf8_lossy(&name)
             );
         }
-        ensure!(
-            call.identify == 0x66660007,
-            "System-NNN callback needs another semantic mapping"
-        );
+        if call.identify != 0x66660007 {
+            return Err(unmapped_callback(call));
+        }
+        if matches!(call.code,0x33330013|0x33330014) {self.freeze_effect_backing()?;}
         match (self.profile, call.code, &call.payload) {
             (_, 0x33330028, Payload::Words { count: 1, words }) if words.len() == 1 => {
                 // Actual530c70 branches >0 / ==0 / <0. SetFrameRate's
@@ -3484,10 +3661,8 @@ impl Bridge {
             {
                 let id = self.layer_id(words[0])?;
                 let ops = if self.active_effects.contains(&words[0]) {
-                    vec![json!({"op":"remove","id":id})]
-                } else {
-                    vec![]
-                };
+                    Self::native_layer_removal(self.client,host,id)?.into_iter().collect::<Vec<_>>()
+                } else {vec![]};
                 self.submit(host, json!({"layers":ops}))?;
                 self.active_effects.remove(&words[0]);
                 self.inactive_effect_records.remove(&words[0]);
@@ -3514,20 +3689,107 @@ impl Bridge {
                     .insert(words[0], words[0] < 4 || words[0] == 14);
                 self.actor_refresh_required = true;
             }
-            (_,0x33330013,Payload::Words{count,words}) if *count>=2 && words[1]==123 && words.len()<4=>{
-                ensure!(*count as usize==words.len(),"NNN CHARAmaskAppear argument span");
+            (_,0x33330013,Payload::Words{count,words}) if *count>=2 && (matches!(words[1],40|123) && words.len()<4 || matches!(words[1],60|101) && words.len()<5)=>{
+                ensure!(*count as usize==words.len(),"NNN rejected effect argument span");
                 self.layer_id(words[0])?;
                 // SetParam returns FALSE before writing EFFECT with fewer
-                // than two arguments; CAllEffect still changes previousEffect.
-                self.previous_effects.insert(words[0],123);
+                // than two arguments (or three for mask wipes); CAllEffect
+                // still changes previousEffect.
+                self.previous_effects.insert(words[0],words[1]);
             }
-            (_, 0x33330013, Payload::Words { count, words }) if *count >= 2 && matches!(words[1], 2 | 8 | 20 | 23 | 32 | 33 | 36 | 37 | 43 | 50 | 55 | 59 | 62 | 63 | 65 | 66 | 68 | 72 | 73 | 75 | 77 | 90 | 94 | 96 | 99 | 103 | 106 | 107 | 110 | 113 | 119 | 120 | 121 | 122 | 123 | 124 | 125 | 126 | 127 | 130 | 131 | 132 | 133) => {
+            (_, 0x33330013, Payload::Words { count, words }) if *count >= 2 && matches!(words[1], 2 | 8 | 12 | 13 | 14 | 15 | 19 | 20 | 22 | 23 | 24 | 26 | 27 | 28 | 32 | 33 | 36 | 37 | 40 | 42 | 43 | 48 | 50 | 51 | 55 | 56 | 57 | 59 | 60 | 61 | 62 | 63 | 64 | 65 | 66 | 67 | 68 | 69 | 70 | 71 | 72 | 73 | 75 | 76 | 77 | 78 | 79 | 80 | 81 | 82 | 83 | 85 | 86 | 87 | 88 | 89 | 90 | 91 | 92 | 93 | 94 | 95 | 96 | 97 | 98 | 99 | 101 | 102 | 103 | 104 | 105 | 106 | 107 | 108 | 110 | 111 | 112 | 113 | 114 | 115 | 116 | 117 | 118 | 119 | 120 | 121 | 122 | 123 | 124 | 125 | 126 | 127 | 130 | 131 | 132 | 133 | 136 | 137 | 138 | 139 | 140) => {
                 ensure!(*count as usize == words.len(), "NNN picture-effect parameter span");
                 let slot = words[0];
                 self.layer_id(slot)?;
+                if words[1]==137{ensure!(self.animation.is_some(),"NNN ANIMATION137 requires the explicit Source32 class configuration; it is absent from MUGEN2 Legacy");}
+                if words[1]==81{ensure!(self.pending_hahen.as_ref().is_some_and(|p|p.matches(call)&&p.ready.is_some()),"NNN HAHEN requires its retained partition receipt");}
+                if words[1]==69{ensure!(self.pending_hamon.as_ref().is_some_and(|p|p.matches(call)),"NNN HAMON requires its retained native field delivery");}
                 let mosaic = if words[1] == 43 { Some(crate::native_effects_mosaic::MosaicState::parse(&words[2..], self.bindings.size)?) } else { None };
                 let mut state = if words[1] != 43 { Some(crate::native_picture_effect::PictureEffectState::parse_for_canvas(words[1], &words[2..],self.bindings.size)?) } else { None };
+                if words[1]==137 {
+                    let previous=self.previous_effects.get(&slot).copied().unwrap_or(0);
+                    let last=self.animation.as_ref().context("NNN ANIMATION class absent")?.last_anime();
+                    let p=crate::native_animation::parameters(&words[2..],previous,last);
+                    state=Some(crate::native_picture_effect::PictureEffectState{frames:p[0],count:0,parameter_frames:p[0],kind:crate::native_picture_effect::PictureEffectKind::Animation{parameters:p}});
+                }
+                if words[1]==82 {
+                    let retained=self.effect_metadata_records()?[slot as usize].words[43];
+                    if let Some(crate::native_picture_effect::PictureEffectState{kind:crate::native_picture_effect::PictureEffectKind::Cloud{parameters},..})=&mut state {parameters[14]=retained;}
+                }
+                if words[1]==26 {
+                    // REMEMBER SetParam does not write ANY para words. Copy
+                    // the actual prior slot record, not its ignored arguments.
+                    let records=self.effect_metadata_records()?;
+                    let parameters:[i32;224]=records[slot as usize].words[29..253].try_into().unwrap();
+                    state=Some(crate::native_picture_effect::PictureEffectState{kind:crate::native_picture_effect::PictureEffectKind::Remember{parameters},frames:99999,count:0,parameter_frames:parameters[0]});
+                }
                 let mut random_variables=None;
+                let mut kira_candidate=None;
+                let mut speed_candidate=None;
+                let mut sun_candidate=None;
+                let mut particle_candidate=None;
+                if words[1]==81 {
+                    let ready=self.pending_hahen.as_ref().and_then(|p|p.ready.as_ref()).context("NNN HAHEN partition candidate absent")?;
+                    let mut variables=machine.native_variables_candidate(call)?;variables.replace_random_state(ready.random.clone())?;
+                    let mut classes=self.particle_classes.clone().context("NNN HAHEN constructor absent")?;
+                    classes.hahen=Arc::new(ready.class.clone());particle_candidate=Some(classes);random_variables=Some(variables);
+                }
+                if matches!(words[1],14|57|70|71|138) {
+                    let mut variables=machine.native_variables_candidate(call)?;
+                    let mut random=variables.random_state().context("NNN SNOW native random state")?;
+                    let mut classes=self.particle_classes.clone().context("NNN SNOW constructor state absent")?;
+                    let parameters=state.as_ref().context("NNN natural setter state absent")?.parameters();
+                    classes.set(words[1],&parameters,slot,self.bindings.size,&mut random)?;
+                    variables.replace_random_state(random)?;
+                    random_variables=Some(variables);particle_candidate=Some(classes);
+                }
+                if words[1]==15 {
+                    let parameters=crate::native_sun_rays::parameters(&words[2..]);
+                    let mut variables=machine.native_variables_candidate(call)?;
+                    let mut random=variables.random_state().context("NNN SAN requires native random state")?;
+                    let mut class=self.sun_rays_class.clone();class.initialize(parameters[1],self.bindings.size,&mut random)?;
+                    variables.replace_random_state(random)?;random_variables=Some(variables);sun_candidate=Some(class);
+                }
+                if words[1]==85 {
+                    let parameters=crate::native_speed_line::parameters(&words[2..],self.bindings.size);
+                    let mut variables=machine.native_variables_candidate(call)?;
+                    let mut random=variables.random_state().context("NNN SPEEDLINE requires native random state")?;
+                    let mut class=(*self.speed_line_class).clone();class.initialize(&parameters,&mut random)?;
+                    variables.replace_random_state(random)?;random_variables=Some(variables);speed_candidate=Some(Arc::new(class));
+                }
+                if words[1]==42 {
+                    let parameters=crate::native_kira::parameters(&words[2..],self.bindings.size);
+                    let candidate=self.prepare_kira_set(machine,call,&parameters)?;
+                    random_variables=Some(candidate.variables);kira_candidate=Some(candidate.class);
+                }
+                if words[1]==98 {
+                    let mut variables=machine.native_variables_candidate(call)?;
+                    let mut random=variables.random_state().context("NNN face animation requires original RNG")?;
+                    if let Some(crate::native_picture_effect::PictureEffectState{kind:crate::native_picture_effect::PictureEffectKind::FaceAnimation{parameters},..})=state.as_mut(){crate::native_picture_face_animation::restart(parameters,&mut random)?;}
+                    variables.replace_random_state(random)?;random_variables=Some(variables);
+                }
+                if words[1]==51 {
+                    let mut variables=machine.native_variables_candidate(call)?;
+                    let mut random=variables.random_state().context("NNN TAIYO requires original RNG")?;
+                    let parameters=crate::native_taiyo::parameters(&words[2..],self.bindings.size);
+                    let mut class=(*self.taiyo_class).clone();class.set(&parameters,&mut random)?;self.taiyo_class=Arc::new(class);
+                    variables.replace_random_state(random)?;random_variables=Some(variables);
+                }
+                if words[1]==93 {
+                    let mut variables=machine.native_variables_candidate(call)?;
+                    let mut random=variables.random_state().context("NNN GRASSPLANE requires original RNG")?;
+                    let parameters=crate::native_grass_plane::parameters(&words[2..],self.bindings.size);
+                    self.grass_class=Some(Arc::new(crate::native_grass_plane::GrassClass::set(&parameters,&mut random)?));
+                    variables.replace_random_state(random)?;random_variables=Some(variables);
+                }
+                if words[1]==13 {
+                    let mut variables=machine.native_variables_candidate(call)?;
+                    let mut random=variables.random_state().context("NNN RAIN requires original RNG")?;
+                    let parameters=crate::native_rain::parameters(&words[2..]);
+                    let class=crate::native_rain::RainClass::set(parameters,self.bindings.size,&mut random)?;
+                    self.rain_class=Some(Arc::new(class));variables.replace_random_state(random)?;
+                    random_variables=Some(variables);
+                }
                 if words[1]==96 {
                     let mut variables=machine.native_variables_candidate(call)?;
                     let mut random=variables.random_state().ok_or_else(||anyhow::anyhow!("NNN RAINBOW requires initialized RNG"))?;
@@ -3539,6 +3801,21 @@ impl Bridge {
                     let mut variables=machine.native_variables_candidate(call)?;
                     let mut random=variables.random_state().ok_or_else(||anyhow::anyhow!("NNN OLDFILM requires initialized native RNG"))?;
                     if let Some(crate::native_picture_effect::PictureEffectState{kind:crate::native_picture_effect::PictureEffectKind::OldFilm{parameters},..})=state.as_mut(){crate::native_picture_old_film::initialize(parameters,&mut random)?;}
+                    variables.replace_random_state(random)?;random_variables=Some(variables);
+                }
+                if matches!(words[1],27|108) {
+                    let mut variables=machine.native_variables_candidate(call)?;
+                    let mut random=variables.random_state().context("NNN sprite swarm requires original RNG")?;
+                    if let Some(state)=state.as_mut(){match &mut state.kind {
+                        crate::native_picture_effect::PictureEffectKind::Hae{parameters}=>crate::native_picture_hae::initialize(parameters,self.bindings.size,&mut random)?,
+                        crate::native_picture_effect::PictureEffectKind::Ke{parameters}=>crate::native_picture_ke::initialize(parameters,self.bindings.size,&mut random)?,_=>unreachable!(),
+                    }}
+                    variables.replace_random_state(random)?;random_variables=Some(variables);
+                }
+                if words[1]==111 {
+                    let mut variables=machine.native_variables_candidate(call)?;
+                    let mut random=variables.random_state().context("NNN FISH requires original RNG")?;
+                    if let Some(crate::native_picture_effect::PictureEffectState{kind:crate::native_picture_effect::PictureEffectKind::Fish{parameters},..})=state.as_mut(){crate::native_picture_fish::initialize(parameters,&mut random)?;}
                     variables.replace_random_state(random)?;random_variables=Some(variables);
                 }
                 if words[1]==106 {
@@ -3583,9 +3860,18 @@ impl Bridge {
                 self.picture_effects.remove(&slot);
                 self.mosaics.remove(&slot);
                 if words[1]==75{self.once_printed.remove(&slot);}
+                if words[1]==79{self.full_anime.set_param();}
                 if let Some(state) = state { self.picture_effects.insert(slot, state); }
                 if let Some(state) = mosaic { self.mosaics.insert(slot, state); }
-                if let Some(variables)=random_variables{return machine.acknowledge_with_variables(call,variables);}
+                if words[1]==82 {self.cloud_class.reset();}
+                if let Some(variables)=random_variables {
+                    machine.acknowledge_with_variables(call,variables)?;
+                    if let Some(class)=kira_candidate {self.kira_class=class;}
+                    if let Some(class)=speed_candidate {self.speed_line_class=class;}
+                    if let Some(class)=sun_candidate {self.sun_rays_class=class;}
+                    if let Some(classes)=particle_candidate {self.particle_classes=Some(classes);}
+                    return Ok(());
+                }
             }
             (_, 0x33330013, Payload::Words { count, words }) if *count >= 2 && words[1] == 52 => {
                 ensure!(
@@ -3623,6 +3909,9 @@ impl Bridge {
                 let id = self.layer_id(slot)?;
                 // EFFECT_FILL's first parameter is reserved. Absent RGB uses0;
                 // green inherits red, blue inherits green; stored bytes wrap.
+                let raw_red=words.get(3).copied().unwrap_or(0);
+                let raw_green=words.get(4).copied().unwrap_or(raw_red);
+                let raw_blue=words.get(5).copied().unwrap_or(raw_green);
                 let red = words.get(3).copied().unwrap_or(0) as u8;
                 let green = words.get(4).copied().unwrap_or(i32::from(red)) as u8;
                 let blue = words.get(5).copied().unwrap_or(i32::from(green)) as u8;
@@ -3644,6 +3933,7 @@ impl Bridge {
                 self.flashes.remove(&slot);
                 self.picture_effects.remove(&slot);
                 self.mosaics.remove(&slot);
+                self.effect_backing.entry(slot).or_insert([0;256])[29..33].copy_from_slice(&[words.get(2).copied().unwrap_or(20),raw_red,raw_green,raw_blue]);
                 self.fill_effects.insert(slot, [red, green, blue]);
                 self.passive_counts.insert(slot, (0, 9999));
             }
@@ -4569,6 +4859,45 @@ mod builtin_function_tests {
             assert!(!bridge.auxiliary.chart.as_ref().unwrap().selection(33).unwrap());
         }
         assert_eq!(bridge.api_calls,0);
+    }
+    #[test]
+    fn default_user_command_retains_receipt_until_mode_returns() {
+        let (_dir,mut runtime) = runtime();
+        let mut bridge = bridge();
+        let names = Names { tokens:vec![] };
+        let cfg = crate::native_bootstrap::NativeConfiguration {
+            resources:crate::native_resources::ResourceNames::new("").unwrap(),
+            setup:Names::parse(b"printMovieIsDefault 1 selectplaceIsDefault 1",false).unwrap(),main_control:None,chart_setup:None,
+            variable_names:names.clone(),project:names.clone(),
+            commands:Names::parse(b"selectplace a printdate b printmovie c",false).unwrap(),functions:names,
+            initial:None,module_sha256:"authored".into(),profile:VariableProfile::Legacy1000,scripts:crate::XorProfile::default(),
+        };
+        let table = crate::bridge::default_user_commands(&cfg).unwrap();
+        assert_eq!(table.into_iter().collect::<Vec<_>>(), vec![(0,22),(2,27)]);
+        bridge.configure_user_commands(&cfg).unwrap();
+        // printmovie 1: retained until the actor returns, then one ACK.
+        let p = program(&[6,0x66660003,2,1,0x90000001,0]);
+        let mut machine = Machine::with_variables(Variables::fresh(VariableProfile::Legacy1000));
+        let crate::machine::Step::Native(call) = machine.poll(&p,100).unwrap() else { panic!() };
+        let pc = machine.pc();
+        assert!(!bridge.try_commit(&mut machine,&call,&mut runtime.host).unwrap());
+        assert_eq!(bridge.take_user_command_mode(),Some((27,1)));
+        assert_eq!(bridge.take_user_command_mode(),None);
+        assert_eq!(bridge.user_command_mode(),Some(27));
+        assert!(!bridge.try_commit(&mut machine,&call,&mut runtime.host).unwrap());
+        assert_eq!(machine.pc(),pc);
+        bridge.finish_user_command_mode().unwrap();
+        assert_eq!(bridge.user_command_mode(),None);
+        assert!(bridge.try_commit(&mut machine,&call,&mut runtime.host).unwrap());
+        assert_eq!(machine.pc(),pc+6);
+        // printdate is not registered: the game override is not reviewed.
+        let p = program(&[5,0x66660003,1,0,0]);
+        let mut machine = Machine::with_variables(Variables::fresh(VariableProfile::Legacy1000));
+        let crate::machine::Step::Native(call) = machine.poll(&p,100).unwrap() else { panic!() };
+        let pc = machine.pc();
+        assert!(bridge.try_commit(&mut machine,&call,&mut runtime.host).is_err());
+        assert_eq!(machine.pc(),pc);
+        machine.validate_receipt(&call).unwrap();
     }
     #[test]
     fn result_extension_is_not_acknowledged_as_an_ordinary_system_file_save() {

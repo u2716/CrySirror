@@ -1,6 +1,6 @@
 //! Engine-owned integer glyph-record rasterization with explicit font leases.
-use ab_glyph::{point, Font, FontArc, PxScale, ScaleFont};
-use anyhow::{ensure, Result};
+use ab_glyph::{Font, FontArc, PxScale, ScaleFont, point};
+use anyhow::{Result, ensure};
 use crysirror_core::image_processing::BitmapTextSpec;
 use crysirror_image::ImageSurface as DecodedImage;
 fn valid_position(x: f32, y: f32) -> bool {

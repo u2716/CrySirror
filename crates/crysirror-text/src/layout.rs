@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Shaped rich layout. UTF-8 clusters and logical grapheme ranges survive bidi.
 use crate::{
-    rich::{RichNode, RichText, TextStyle},
     TextSystem,
+    rich::{RichNode, RichText, TextStyle},
 };
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
     ops::Range,
 };
 use unicode_bidi::{BidiInfo, Level};
-use unicode_linebreak::{linebreaks, BreakOpportunity};
+use unicode_linebreak::{BreakOpportunity, linebreaks};
 use unicode_script::{Script, UnicodeScript};
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -306,8 +306,8 @@ pub fn wrap_ranges(
 impl TextSystem {
     fn choose_font<'a>(&self, text: &str, style: &'a TextStyle) -> Result<&'a str> {
         for alias in &style.fonts {
-            let (bytes,index) = self.font_source(alias)?;
-            let f = rustybuzz::Face::from_slice(&bytes,index).context("shaping face")?;
+            let (bytes, index) = self.font_source(alias)?;
+            let f = rustybuzz::Face::from_slice(&bytes, index).context("shaping face")?;
             if text
                 .chars()
                 .all(|c| ignorably_missing(c) || f.glyph_index(c).is_some())
@@ -359,8 +359,8 @@ impl TextSystem {
             ..Default::default()
         };
         for (range, font, s) in groups {
-            let (bytes,index) = self.font_source(&font)?;
-            let face = rustybuzz::Face::from_slice(&bytes,index).context("shaping face")?;
+            let (bytes, index) = self.font_source(&font)?;
+            let face = rustybuzz::Face::from_slice(&bytes, index).context("shaping face")?;
             let scale = style.size / face.units_per_em() as f32;
             shaped.ascent = shaped.ascent.max(face.ascender() as f32 * scale);
             let mut buffer = rustybuzz::UnicodeBuffer::new();

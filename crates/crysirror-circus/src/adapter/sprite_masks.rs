@@ -59,7 +59,9 @@ impl Bridge<'_> {
             seed.object < 150,
             "Circus shader target has no retained bitmap drawable"
         );
-        let Some(mask) = self.services.images.get(&21).cloned() else {
+        //DC4PH 4478E0 reads rule slot 21; DC3WY 43B6A0 this+1652 (slot 16).
+        let rule = if self.services.native_profile == Some(crate::Profile::Dc3WithYou) { 16 } else { 21 };
+        let Some(mask) = self.services.images.get(&rule).cloned() else {
             return Ok(true);
         };
         if !self.native_sprite(&SpriteRequest {
@@ -579,12 +581,19 @@ impl Bridge<'_> {
     pub(in crate::adapter) fn prepare_sprite_mask_frame(&mut self) -> Result<bool> {
         self.prepare_mask_states(true)
     }
+    ///A sequence command can start a mask lane whose first committed sample
+    ///needs a new immutable worker result. The command is acknowledged once;
+    ///its generation is published through the owner gate below, before the
+    ///next native instruction or frame, instead of retrying the command.
     pub(in crate::adapter) fn refresh_sprite_masks(&mut self) -> Result<()> {
-        ensure!(
-            self.prepare_mask_states(false)?,
-            "Circus committed mask tick has an unprepared image dependency"
-        );
+        self.services.primary.mask_commit_pending=!self.prepare_mask_states(false)?;
         Ok(())
+    }
+    pub(in crate::adapter) fn committed_sprite_masks_ready(&mut self)->Result<bool> {
+        if !self.services.primary.mask_commit_pending {return Ok(true)}
+        let ready=self.prepare_mask_states(false)?;
+        self.services.primary.mask_commit_pending=!ready;
+        Ok(ready)
     }
     ///444A4C0/447060 can drain several banks in one call. Each bank snapshots
     ///the preceding completed generation before its own immutable worker runs.

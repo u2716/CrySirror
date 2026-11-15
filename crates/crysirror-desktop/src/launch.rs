@@ -1,86 +1,12 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Installed-game bootstrap uses the same public engine operations as other
 //! clients. It neither executes a launcher script nor extracts an archive.
-use crate::{app, detect::Plan, input_track::InputTrack};
+use crate::{app, input_track::InputTrack};
+pub use crysirror_launch::core::{bootstrap, bootstrap_interruptible};
 use anyhow::{bail, ensure, Context, Result};
 use crysirror_runtime::Runtime;
 use crysirror_wgpu::{Gpu, RenderingPath};
 use std::{path::Path, sync::Arc};
-
-pub fn bootstrap(rt: Runtime, plan: &Plan) -> Result<app::Core> {
-    bootstrap_interruptible(rt, plan, || false)
-}
-pub fn bootstrap_interruptible(rt: Runtime, plan: &Plan, cancelled: impl Fn() -> bool) -> Result<app::Core> {
-    ensure!(!cancelled(), "native launch cancelled");
-    if plan.mounts.is_empty() {
-        return Ok(app::Core::Plain(rt));
-    }
-    {
-        use crysirror_engine::Value;
-        let mut engine = crysirror_engine::App::new(rt, "game")?;
-        engine.init()?;
-        let cx = engine.context();
-        let resources = cx.singleton("Resources")?;
-        for (name, profile) in &plan.profiles {
-            cx.call(
-                resources,
-                "defineProfile",
-                &[Value::Str(name.clone()), Value::from_json(profile.clone())],
-            )?;
-        }
-        for mount in &plan.mounts {
-            ensure!(!cancelled(), "native launch cancelled");
-            let ticket = cx
-                .call(
-                    resources,
-                    "beginDecode",
-                    &[
-                        Value::Str(mount.source.clone()),
-                        Value::Str("archive".into()),
-                        Value::from_json(mount.options.clone()),
-                    ],
-                )
-                .with_context(|| format!("index archive {}", mount.source))?;
-            let started = std::time::Instant::now();
-            let result = (|| -> Result<()> {
-                loop {
-                    ensure!(!cancelled(), "native launch cancelled");
-                    let status = cx
-                        .call(resources, "decodeStatus", &[ticket.clone()])?
-                        .to_json();
-                    match status["state"].as_str() {
-                        Some("ready") => break,
-                        Some("failed") => bail!("archive {}: {}", mount.source, status["error"]),
-                        Some("pending") => {}
-                        _ => bail!("invalid resource completion state: {status}"),
-                    }
-                    ensure!(
-                        started.elapsed().as_secs() < 120,
-                        "archive indexing timeout: {}",
-                        mount.source
-                    );
-                    // Boot has not started the VM/event loop. CPU/index work
-                    // belongs to the engine pool; this owner only polls and
-                    // publishes its bounded completion. No decoder runs here.
-                    std::thread::sleep(std::time::Duration::from_millis(1));
-                }
-                cx.call(
-                    resources,
-                    "mountDecode",
-                    &[ticket.clone(), Value::Str(mount.target.clone()),Value::Bool(mount.fallback)],
-                )?;
-                Ok(())
-            })();
-            let release = cx.call(resources, "cancelDecode", &[ticket]);
-            result?;
-            release?;
-            log::info!("mounted {} at {}", mount.source, mount.target);
-        }
-        ensure!(!cancelled(), "native launch cancelled");
-        engine.start()?;
-        Ok(app::Core::Scripted(Box::new(engine)))
-    }
-}
 
 fn runtime(core: &mut app::Core) -> Result<&mut Runtime> {
     match core {
@@ -141,6 +67,11 @@ pub fn offscreen(
     }
     runtime(&mut core)?.set_canvas_image_presenter(true);
     app::settle_vm_preparations(runtime(&mut core)?)?;
+    // Developer diagnostic: also write `<output>-<frame>.png` every N frames.
+    let capture_every = std::env::var("CRYSIRROR_HEADLESS_CAPTURE_EVERY")
+        .ok()
+        .and_then(|n| n.parse::<u32>().ok())
+        .filter(|n| *n > 0);
     let close_frame = std::env::var("CRYSIRROR_HEADLESS_CLOSE_FRAME")
         .ok()
         .and_then(|frame| frame.parse::<u32>().ok());
@@ -199,6 +130,15 @@ pub fn offscreen(
             .menus
             .set_native_bars(external_bar);
         app::materialize_canvases(&mut materializer, runtime(&mut core)?)?;
+        if let Some(every) = capture_every.filter(|n| frame > 0 && frame % n == 0) {
+            let _ = every;
+            if let app::Core::Scripted(engine) = &mut core {
+                engine.prepare_render_offline()?;
+            }
+            let stem = output.with_extension("");
+            let path = std::path::PathBuf::from(format!("{}-{frame:06}.png", stem.display()));
+            app::capture_existing(&mut materializer, runtime(&mut core)?, font, &path)?;
+        }
         if wall_pacing_ms != 0 {
             std::thread::sleep(std::time::Duration::from_millis(wall_pacing_ms));
         }
@@ -229,7 +169,7 @@ pub fn offscreen(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::detect::ArchiveMount;
+    use crate::detect::{ArchiveMount, Plan};
     use crysirror_core::{
         path::{Mount, VfsPath},
         service::FileSystem,

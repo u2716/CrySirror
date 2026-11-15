@@ -6,7 +6,7 @@ use crysirror_core::service::InputFrame;
 use crysirror_runtime::{AdapterRegistry, Runtime};
 use serde_json::json;
 // Same authored replay reader as the real desktop frontend; test-only reuse.
-#[path = "../../crysirror-desktop/src/input_track.rs"]
+#[path = "../../crysirror-launch/src/input_track.rs"]
 mod input_track;
 fn fixture(source: &str) -> (tempfile::TempDir, Runtime) {
     let d = tempfile::tempdir().unwrap();

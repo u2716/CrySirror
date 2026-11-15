@@ -11,6 +11,7 @@ pub(super) struct RestoreResources {
     cursor: usize,
     images: BTreeMap<u8, UploadedImage>,
     extents: BTreeMap<u8, [u32; 2]>,
+    origins: BTreeMap<u8, [i32; 2]>,
     publish_wait: bool,
     queues_done: bool,
     audio_cursor: usize,
@@ -146,6 +147,7 @@ impl Bridge<'_> {
                 cursor: 0,
                 images: BTreeMap::new(),
                 extents: BTreeMap::new(),
+                origins: BTreeMap::new(),
                 publish_wait: false,
                 queues_done: false,
                 audio_cursor: 0,
@@ -249,7 +251,7 @@ impl Bridge<'_> {
             else {
                 return Ok(None);
             };
-            let Prepared::Image(surface, logical) = prepared else {
+            let Prepared::Image(surface, logical, origin) = prepared else {
                 bail!("Circus restored image worker receipt mismatch")
             };
             let path = self.host.upload_rgba(
@@ -267,6 +269,7 @@ impl Bridge<'_> {
             let restore = self.services.saves.restore.as_mut().unwrap();
             restore.images.insert(image.slot, resource);
             restore.extents.insert(image.slot, logical);
+            restore.origins.insert(image.slot, origin);
             restore.cursor += 1;
             // GPU/resource publication belongs to the end-of-tick owner fence.
             return Ok(None);
@@ -339,7 +342,8 @@ impl Bridge<'_> {
             let content = super::visual::content_layer(native as u16);
             layers.push(json!({"op":"put","layer":{"id":object,"parent":SCENE_ROOT,"opacity":match native{88=>if self.services.native_status_visible{255}else{0},75|76=>if self.services.native_window_visible{255}else{0},_=>255},"visible":self.native_primary_visible(native as u16,true),"rect":[pos[0],pos[1],1280,720],"paint":{"kind":"solid","color":[0,0,0,0]},"order":order,"transform":{"scale_x":scale[0],"scale_y":scale[1],"pivot_x":pivot[0],"pivot_y":pivot[1],"rotate":rotation,"local_matrix":offset_matrix}}}));
             layers.push(json!({"op":"put","layer":{"id":content,"parent":object,"rect":[0,0,1280,720],"opacity":opacity,"paint":{"kind":"solid","color":[0,0,0,0]},"order":[0,0]}}));
-            layers.push(json!({"op":"put","layer":{"id":0x37000000+u32::from(image.slot),"parent":content,"rect":[0,0,size[0],size[1]],"paint":{"kind":"image","asset":resource.path.relative()},"filter":filter,"sampling":{"address_u":"repeat","address_v":"repeat"},"uv":uv,"visible":false,"order":[0,0]}}));
+            let origin=if self.services.native_profile==Some(crate::Profile::Dc3WithYou){restore.origins.get(&image.slot).copied().unwrap_or([0,0])}else{[0,0]};
+            layers.push(json!({"op":"put","layer":{"id":0x37000000+u32::from(image.slot),"parent":content,"rect":[origin[0],origin[1],size[0],size[1]],"paint":{"kind":"image","asset":resource.path.relative()},"filter":filter,"sampling":{"address_u":"repeat","address_v":"repeat"},"uv":uv,"visible":false,"order":[0,0]}}));
         }
         let mut ui_ids = self
             .services
@@ -376,6 +380,8 @@ impl Bridge<'_> {
             .image_extents
             .retain(|slot, _| (37..=44).contains(slot));
         self.services.image_extents.extend(restore.extents.clone());
+        self.services.image_origins.retain(|slot, _| (37..=44).contains(slot));
+        self.services.image_origins.extend(restore.origins.clone());
         self.services
             .image_names
             .retain(|slot, _| (37..=44).contains(slot));

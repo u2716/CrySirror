@@ -57,6 +57,7 @@ impl TitleReturn {
         })
     }
     pub fn poll(&mut self, host: &mut dyn HostServices, admit: bool,vm:&mut NativeAdapter) -> Result<bool> {
+        if !vm.poll_general_audio(host)? {return Ok(false);}
         if let Some(task) = self.task.as_mut() {
             if let Some(profile) = task.try_take()? {
                 self.profile = Some(profile);
@@ -92,6 +93,11 @@ impl TitleReturn {
             self.fade_started = true;
         }
         if let Some(fade) = self.fade.as_mut() {
+            if admit {
+                if let (Some(ticket),Some(mode))=(fade.audio_ticket(host.now_ms()),vm.general_audio_mode()) {
+                    if !vm.poll_general_update(host,mode,ticket)? {return Ok(false);}
+                }
+            }
             vm.bind_wipe_context(fade)?;
             let image = if admit {
                 fade.poll(host)?

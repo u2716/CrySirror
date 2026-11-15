@@ -35,6 +35,12 @@ pub enum EffectRequest {
         color: Option<[u8; 3]>,
     },
     CancelColor,
+    ///Fade out a texture slot's image laid over the screen at half rate
+    ///(406690 mode 1 over a captured screen, DC3WY 0x1B).
+    SlotFade {
+        slot: u8,
+        ticks: i32,
+    },
     ResetColor,
     ClearFrame {
         protected: bool,
@@ -76,6 +82,44 @@ pub enum EffectRequest {
         operations: Vec<StageOperation>,
         ticks: i32,
         references: Vec<StageReference>,
+    },
+    ///D.C.III (0x8a71) process state 14 screen frames (dc3_original_effects).
+    OriginalScreen(OriginalScreen),
+}
+///One presented frame of a D.C.III 0x0E effect. The VM owns timing, the
+///integer progress, thresholds and random state; the bridge composes the
+///frame with shared Canvas/Layer/image-worker services. "Frozen" is the
+///presented screen (original 4E89D0) captured before the frame's script
+///changes; the live scene is the next screen (486DE0).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum OriginalScreen {
+    ///Capture the scene as currently presented.
+    Freeze,
+    ///Keep the current frozen capture if it is of the last presented frame,
+    ///otherwise capture now.
+    Hold,
+    ///Remove every overlay and release the frozen capture.
+    Clear,
+    ///Frozen screen over the live scene at opacity/255 (411FB0 crossfade).
+    Frozen { opacity: u8 },
+    ///Solid colour over the live scene at opacity/255.
+    Solid { color: [u8; 3], opacity: u8 },
+    ///Frozen screen at an offset over a solid background (4218B0 mode 1).
+    Shifted { offset: [i32; 2], background: [u8; 3] },
+    ///Frozen screen with alpha 255 - table[offset + x*step0 + y*step1]
+    ///over the live scene (413850 lookup wipe).
+    Lookup { table: Vec<u8>, offset: i64, step: [i32; 2] },
+    ///Frozen screen alpha scaled by weights[mask byte] (0..=256) of the
+    ///image in `slot`, over the live scene (407F20 rule wipe).
+    Rule { slot: u8, weights: Vec<u16> },
+    ///407A80/4079C0 tile break: crack strip frames of `overlay` punched into
+    ///the frozen screen (FF00FF texels, cumulative), then live tiles
+    ///(origin, destination, alpha 0..16) over `fill`.
+    Tiles {
+        overlay: u8,
+        cracks: Vec<([i32; 2], i32)>,
+        tiles: Vec<([i32; 2], [i32; 2], u8)>,
+        fill: [u8; 3],
     },
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]

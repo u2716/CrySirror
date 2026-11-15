@@ -1,0 +1,27 @@
+// SPDX-License-Identifier: MPL-2.0
+// bloom.wgsl fs_bloom_down: 13-tap dual-filter downsample (identical taps).
+uniform float4 lite_bloom;   // xy source texel size, z 1 on the first downsample
+
+float3 lite_tap(sampler2D src, float2 uv)
+{
+    return tex2Dlod(src, float4(uv, 0.0, 0.0)).rgb;
+}
+
+float4 main(float2 uv : TEXCOORD0, uniform sampler2D src : TEXUNIT0) : COLOR
+{
+    float2 t = lite_bloom.xy;
+    float3 c = lite_tap(src, uv) * 0.125;
+    c += (lite_tap(src, uv + t * float2(-1.0, -1.0)) + lite_tap(src, uv + t * float2(1.0, -1.0))
+        + lite_tap(src, uv + t * float2(-1.0, 1.0)) + lite_tap(src, uv + t * float2(1.0, 1.0))) * 0.125;
+    c += (lite_tap(src, uv + t * float2(-2.0, -2.0)) + lite_tap(src, uv + t * float2(2.0, -2.0))
+        + lite_tap(src, uv + t * float2(-2.0, 2.0)) + lite_tap(src, uv + t * float2(2.0, 2.0))) * 0.03125;
+    c += (lite_tap(src, uv + t * float2(-2.0, 0.0)) + lite_tap(src, uv + t * float2(2.0, 0.0))
+        + lite_tap(src, uv + t * float2(0.0, -2.0)) + lite_tap(src, uv + t * float2(0.0, 2.0))) * 0.0625;
+    if (lite_bloom.z > 0.5) {
+        c = float3(c.r == c.r && c.r <= 60000.0 ? c.r : 0.0,
+                   c.g == c.g && c.g <= 60000.0 ? c.g : 0.0,
+                   c.b == c.b && c.b <= 60000.0 ? c.b : 0.0);
+        c = c / (1.0 + max(c.r, max(c.g, c.b)));
+    }
+    return float4(c, 1.0);
+}

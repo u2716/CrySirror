@@ -523,7 +523,9 @@ impl Bridge<'_> {
         let same_revision=state.callback_input_revision==Some(input.revision);
         let blocked = (ui_owned&&!own_menu_eligible)
             || input.focused == Some(false)
-            || state.license.is_some()
+            // A retained (mounted-resource) validation record is not a modal:
+            // only an open installation-key dialog owns the key stock.
+            || state.license.as_ref().is_some_and(|license| license.ui_waiting())
             || state.account.is_some()
             || state.ending.is_some()
             || state.panel_started.is_some();
@@ -947,7 +949,7 @@ impl Bridge<'_> {
                     },
                 ))
             }
-            SystemRequest::LocalHour => {
+            SystemRequest::LocalHour | SystemRequest::LocalTime => {
                 if self.services.system.clock.is_none() {
                     self.services.system.clock = Some(self.host.begin_civil_time(self.client)?);
                 }
@@ -965,7 +967,11 @@ impl Bridge<'_> {
                     CivilTimeState::Ready(time) => {
                         ensure!(time.client == self.client, "Circus foreign civil time");
                         self.services.system.clock = None;
-                        Ok(Some(SystemReply::Hour(time.hour)))
+                        Ok(Some(if matches!(request, SystemRequest::LocalTime) {
+                            SystemReply::LocalTime([time.year, time.month.into(), time.day.into(), time.hour.into(), time.minute.into(), time.second.into()])
+                        } else {
+                            SystemReply::Hour(time.hour)
+                        }))
                     }
                 }
             }
@@ -977,6 +983,8 @@ impl Bridge<'_> {
                 Ok(Some(SystemReply::Done))
             }
             SystemRequest::NativeFullscreenMode(mode) => {
+                let dc2_recreate=self.services.native_profile==Some(crate::Profile::Dc2PlusCommunication)
+                    &&(self.services.system.native_fullscreen_mode!=0)!=(mode!=0);
                 if let Some(expected) = self.services.system.pending_native_fullscreen_mode {
                     ensure!(
                         expected == mode,
@@ -1009,6 +1017,11 @@ impl Bridge<'_> {
                     //only the platform operation itself is a boolean.
                     self.services.system.native_fullscreen_mode = mode;
                     self.services.system.pending_native_fullscreen_mode = None;
+                    if dc2_recreate {
+                        //DC2 40ACA0 recreates4092B0, which calls srand again.
+                        ensure!(self.services.effects.is_none(),"DC2 window recreation with a live shared random consumer requires its native exchange fence");
+                        self.services.sequence_rng=Some(crysirror_vfx::falling_atlas::SequenceRng::msvc(self.host.now_ms() as u32));
+                    }
                 }
                 Ok(result)
             }

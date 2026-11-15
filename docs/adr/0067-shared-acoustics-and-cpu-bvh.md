@@ -22,7 +22,7 @@ backends share the same validated geometry and query contract. Neither a GPU
 nor a native SDK is needed; this is unrelated to renderer hardware-RT support.
 Microbenchmarks choose no universal winner; defaults require correctness and
 representative workload measurements. Source pins and semantic corrections are
-in `crates/crysirror-acoustics/UPSTREAM.md`.
+in `crates/crysirror-acoustics/SOURCE_NOTES.md`.
 
 The current model provides per-triangle three-band surface transmission,
 exponential air absorption, weighted-dipole directivity, deterministic volume

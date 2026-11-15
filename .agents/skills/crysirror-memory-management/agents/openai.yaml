@@ -1,0 +1,4 @@
+interface:
+  display_name: "CrySirror Memory Management"
+  short_description: "Maintain CPU/GPU lifetimes and Vita/Switch memory budgets"
+  default_prompt: "Use $crysirror-memory-management to trace this resource's CPU and GPU ownership, assess platform budgets and fix the affected lifetime or allocation boundary."

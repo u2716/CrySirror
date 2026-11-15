@@ -138,6 +138,12 @@ impl Bridge {
             // including the screen layer15. SELECT additionally counts before
             // Print; PRINT counts only after both passes and its glyphs.
             crate::native_presentation::calcu_effect_states(&mut effects, &mut random)?;
+            let mut class_buffers=self.frame_buffers();
+            class_buffers.animation_previous_nops.extend(crate::native_presentation::animation_nops(effects.values()));
+            class_buffers.bath_updates=crate::native_bath_frames::mutations(effects.values());
+            if let Some(classes)=class_buffers.particle_classes.as_mut() {
+                crate::native_natural_frames::calcu_beach(classes,effects.values());
+            }
             if selection {
                 crate::native_presentation::count_effect_states(&mut effects, 1);
             }
@@ -182,7 +188,7 @@ impl Bridge {
                 random,
                 false,
                 host,
-            )?.with_buffers(self.frame_buffers());
+            )?.with_buffers(class_buffers);
             self.api_calls += work.api_calls;
             self.actor_frame = Some(ActorFrame {
                 admitted: now,
@@ -259,7 +265,7 @@ impl Bridge {
                 );
             }
             if frame.post_plan.is_empty() && self.post_text_path.is_some() {
-                layers.push(json!({"op":"remove","id":display+1}));
+                if let Some(op)=Self::native_layer_removal(self.client,host,display+1)?{layers.push(op);}
             }
             host.submit_engine(
                 self.client,
@@ -370,7 +376,7 @@ impl Bridge {
                             false,
                             pre.buffers.clone(),
                             host,
-                        )?;
+                        )?.continue_print_scope();
                         self.api_calls += work.api_calls;
                         frame.post_work = Some(work);
                         frame.post_capture = None;

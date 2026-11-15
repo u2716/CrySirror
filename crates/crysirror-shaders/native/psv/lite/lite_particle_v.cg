@@ -1,0 +1,22 @@
+// SPDX-License-Identifier: MPL-2.0
+// particle.wgsl vs_main. GXM has no vertex index: the CPU particle path
+// writes four vertices per particle with the corner as an attribute.
+#include "lite_common.cgh"
+
+uniform float4 lite_view_proj[4];
+uniform float4 lite_view_right;   // camera right (view matrix row 0)
+uniform float4 lite_view_up;      // camera up (view matrix row 1)
+
+void main(float3 position : POSITION,
+          float2 corner : TEXCOORD0,
+          float size : TEXCOORD1,
+          float4 color : COLOR,
+          out float4 clip : POSITION,
+          out float2 o_uv : TEXCOORD0,
+          out float4 o_color : TEXCOORD1)
+{
+    float3 world = position + (lite_view_right.xyz * corner.x + lite_view_up.xyz * corner.y) * size;
+    clip = lite_xform(lite_view_proj[0], lite_view_proj[1], lite_view_proj[2], lite_view_proj[3], float4(world, 1.0));
+    o_uv = corner;
+    o_color = color;
+}

@@ -11,6 +11,42 @@ pub(crate) struct VoicePolicy {
     total_switch: bool,
 }
 impl VoicePolicy {
+    pub(crate) fn button_voice_used(&self,file:&NativeSystemFile,index:usize)->Result<bool>{
+        if let Some(group)=self.button_groups.get(index){for character in group{if file.voice(*character)?{return Ok(true);}}Ok(false)}else{file.voice(index as i32+1)}
+    }
+
+    pub(crate) fn volume_delta(
+        &self,
+        name: &[u8],
+        file: &NativeSystemFile,
+        scale: i32,
+        config_present: bool,
+    ) -> Result<i32> {
+        let prefix = [
+            name.first().copied().unwrap_or(0) | 0x20,
+            name.get(1).copied().unwrap_or(0) | 0x20,
+        ];
+        let Some(character) = self
+            .prefixes
+            .iter()
+            .enumerate()
+            .skip(1)
+            .find_map(|(index, value)| (*value == prefix).then_some(index as i32))
+        else {
+            return Ok(0);
+        };
+        let button = if config_present {
+            self.button_groups
+                .iter()
+                .enumerate()
+                .find_map(|(index, group)| group.contains(&character).then_some(index as i32 + 1))
+                .unwrap_or(character)
+                .wrapping_sub(1)
+        } else {
+            character
+        };
+        Ok(character_slider(file, button)?.wrapping_mul(scale))
+    }
     pub(crate) fn read(character_names: &Names, config: &Names, game: &Names) -> Result<Self> {
         ensure!(
             character_names.tokens.len() <= 8192 && character_names.tokens.len() % 2 == 0,
@@ -73,6 +109,14 @@ impl VoicePolicy {
         Ok(self.total_switch && file.system_word(1972)? == 0)
     }
     pub(crate) fn allows(&self, name: &[u8], file: &NativeSystemFile) -> Result<bool> {
+        self.allows_with_config(name, file, true)
+    }
+    pub(crate) fn allows_with_config(
+        &self,
+        name: &[u8],
+        file: &NativeSystemFile,
+        config_present: bool,
+    ) -> Result<bool> {
         let prefix = [
             name.first().copied().unwrap_or(0) | 0x20,
             name.get(1).copied().unwrap_or(0) | 0x20,
@@ -88,13 +132,16 @@ impl VoicePolicy {
         else {
             return Ok(true);
         };
-        let button = self
-            .button_groups
-            .iter()
-            .enumerate()
-            .find_map(|(index, group)| group.contains(&character).then_some(index as i32 + 1))
-            .unwrap_or(character)
-            .wrapping_sub(1);
+        let button = if config_present {
+            self.button_groups
+                .iter()
+                .enumerate()
+                .find_map(|(index, group)| group.contains(&character).then_some(index as i32 + 1))
+                .unwrap_or(character)
+                .wrapping_sub(1)
+        } else {
+            character
+        };
         let row = (button & 31) as usize;
         let shift = if button >= 32 {
             (button / 32) as u32 & 31
@@ -108,4 +155,30 @@ impl VoicePolicy {
         let off = crysirror_core::integer_fields::get(&words, 1, i64::from(shift));
         Ok(off == Some(0))
     }
+}
+
+/// SYSTEM DATA1424..1471 stores twelve native words, each holding SIX signed
+/// five-bit sliders and two unused high bits (not a continuous5-bit bitstream).
+/// This is original save packing policy, independent of decoded/mixed audio.
+pub(crate) fn character_slider(file: &NativeSystemFile, character: i32) -> Result<i32> {
+    if !(0..72).contains(&character) {
+        return Ok(0);
+    }
+    let word = file.system_word(1424 + (character as usize / 6) * 4)?;
+    let value = (word >> ((character % 6) * 5)) & 31;
+    Ok(if value & 16 != 0 { value | !31 } else { value })
+}
+pub(crate) fn set_character_slider(
+    file: &mut NativeSystemFile,
+    character: i32,
+    value: i32,
+) -> Result<()> {
+    if !(0..72).contains(&character) {
+        return Ok(());
+    }
+    let at = 1424 + (character as usize / 6) * 4;
+    let shift = (character % 6) * 5;
+    let old = file.system_word(at)?;
+    let next = (old & !(31 << shift)) | ((value.wrapping_shl(shift as u32)) & (31 << shift));
+    file.set_setting_word(at, next)
 }

@@ -120,7 +120,13 @@ impl Machine {
         }
     }
     pub(crate) fn remove_global_array(&mut self, name: &str) {
-        if self.global_arrays().contains_key(name) {
+        let thread_has_type = match self.thread_kind() {
+            ThreadKind::Game => self.array_types.contains_key(name),
+            ThreadKind::System => self.system_bank.array_types.contains_key(name),
+        };
+        //The type map includes scalar declarations. Their value may already
+        //have been removed by del, but its owner must still be retired here.
+        if self.global_arrays().contains_key(name) || thread_has_type {
             match self.thread_kind() {
                 ThreadKind::Game => {
                     self.arrays.remove(name);

@@ -3,7 +3,7 @@
 `crysirror-reallive-dll` is a maintained CrySirror workspace crate, adopted from
 https://github.com/xmoezzz/siglus_rs at
 `5f358ef1360b0439e92aed2b749e8f25d8721954`, `crates/reallive/src/dll.rs`,
-`pt00/` and `dt00/`. The licence is MPL-2.0; `LICENSE` is preserved.
+`pt00/` and `dt00/`. The licence is MPL-2.0; the full text is retained in the [workspace LICENSE](../../LICENSE).
 `PRE_ADOPTION_SOURCE.json` preserves the earlier adoption inventory;
 `SOURCE.json` records the current seams, original and maintained-file hashes.
 

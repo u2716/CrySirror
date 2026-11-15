@@ -138,12 +138,9 @@ pub(super) fn open(
             engine::GeneratorKind::Cabbage{..} => "cabbage",
         }, "prefix8": p.prefix8.is_some(), "source": src, "validated_samples": samples.len()})
     });
-    for e in &mut base.entries {
-        if protected.contains(&e.id) {
-            e.metadata["cxdec"] =
-                serde_json::json!({"special": special_report, "content": engine_report});
-        }
-    }
+    // One shared report; `CxArchive::entry_metadata` attaches it to every
+    // protected entry instead of a JSON copy per entry.
+    let report = serde_json::json!({"special": special_report, "content": engine_report});
     let mut embedded = BTreeMap::new();
     let target = ctx
         .parameters
@@ -186,6 +183,7 @@ pub(super) fn open(
         protected,
         engine: engine.map(|(e, _)| Arc::new(e)),
         embedded,
+        report,
     }))
 }
 
@@ -332,15 +330,17 @@ fn apply_special_names(
         // the native storage never serves (e.g. a placeholder startup.tjs).
         let mut dropped = 0usize;
         let (mut entries, mut plans) = (Vec::new(), Vec::new());
-        for ((mut e, plan), name) in std::mem::take(&mut base.entries)
+        for ((mut e, mut plan), name) in std::mem::take(&mut base.entries)
             .into_iter()
             .zip(std::mem::take(&mut base.plans))
             .zip(renamed)
         {
             match name {
                 Some(n) => {
-                    e.metadata["visible_name"] = serde_json::json!(e.path);
-                    e.path = n;
+                    let visible = std::mem::replace(&mut e.path, n);
+                    if let EntryPlan::Segments { facts, .. } = &mut plan {
+                        facts.visible_name = Some(visible.into_boxed_str());
+                    }
                 }
                 None if real.contains(&e.path) => {
                     dropped += 1;
@@ -374,7 +374,7 @@ fn plain_member(a: &ParsedArchive, member: &str, ctx: &DecodeContext) -> Result<
         .iter()
         .find(|e| e.path == member)
         .with_context(|| format!("startup member {member:?} absent"))?;
-    let EntryPlan::Segments { segments, .. } = &a.plans[e.id as usize] else {
+    let EntryPlan::Segments { segments, facts, .. } = &a.plans[e.id as usize] else {
         bail!("startup member plan");
     };
     let plain = ParsedArchive {
@@ -384,11 +384,12 @@ fn plain_member(a: &ParsedArchive, member: &str, ctx: &DecodeContext) -> Result<
         plans: vec![EntryPlan::Segments {
             segments: segments.clone(),
             encrypted: false,
+            facts: facts.clone(),
         }],
     };
     let data = read_all(plain.open(0, ctx)?.as_ref(), 16 * 1024 * 1024)?;
     ensure!(
-        Some(u64::from(adler32(&data))) == e.metadata["adler32"].as_u64(),
+        adler32(&data) == facts.adler32,
         "startup member is not plaintext"
     );
     Ok(data)
@@ -415,7 +416,7 @@ fn samples(
         if out.len() >= SAMPLE_COUNT * 4 || total + e.size > SAMPLE_BYTES {
             break;
         }
-        let hash = e.metadata["adler32"].as_u64().context("XP3 adlr absent")? as u32;
+        let hash = base.xp3(e.id).context("XP3 adlr absent")?.adler32;
         let data = read_all(base.open(e.id, ctx)?.as_ref(), SAMPLE_BYTES)?;
         if adler32(&data) == hash {
             continue;
@@ -482,10 +483,19 @@ struct CxArchive {
     engine: Option<Arc<CxdecEngine>>,
     /// Derived, labelled resources (the validated bootstrap profile).
     embedded: BTreeMap<u32, Arc<[u8]>>,
+    /// `cxdec` facts shared by every protected entry.
+    report: serde_json::Value,
 }
 impl Archive for CxArchive {
     fn entries(&self) -> &[ArchiveEntry] {
         &self.base.entries
+    }
+    fn entry_metadata(&self, id: u32) -> serde_json::Value {
+        let mut out = self.base.entry_metadata(id);
+        if self.protected.contains(&id) {
+            out["cxdec"] = self.report.clone();
+        }
+        out
     }
     fn open(&self, id: u32, ctx: &DecodeContext) -> Result<Arc<dyn AssetReader>> {
         if let Some(data) = self.embedded.get(&id) {
@@ -500,7 +510,7 @@ impl Archive for CxArchive {
             .entries
             .get(id as usize)
             .context("CXDEC entry id")?;
-        let hash = e.metadata["adler32"].as_u64().context("XP3 adlr absent")? as u32;
+        let hash = self.base.xp3(id).context("XP3 adlr absent")?.adler32;
         // Verify before publication; already-plain protected entries pass raw.
         let (mut original, mut decoded) = (Adler::default(), Adler::default());
         let mut chunk = vec![0; 65536];

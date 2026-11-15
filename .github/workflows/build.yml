@@ -112,3 +112,163 @@ jobs:
           path: target/cargo-timings/*.html
           if-no-files-found: ignore
           retention-days: 7
+
+  # Browser host (crates/crysirror-web): threaded wasm32 build with
+  # shared-memory Workers, bindings from the wasm-bindgen release pinned in
+  # Cargo.lock. The artifact is the static site served by tools/web_host.py.
+  web:
+    name: Web (wasm32)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CRYSIRROR_NIGHTLY: nightly-2026-09-17
+      SCCACHE_GHA_ENABLED: 'true'
+      SCCACHE_GHA_VERSION: crysirror-web-v1
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install "$CRYSIRROR_NIGHTLY" --profile minimal \
+            --component rust-src --target wasm32-unknown-unknown
+          rustc +"$CRYSIRROR_NIGHTLY" --version
+
+      - name: Cache dependency sources
+        continue-on-error: true
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/registry/src
+            ~/.cargo/git/db
+            ~/.cargo/git/checkouts
+            target/wasm-tools
+          key: cargo-web-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-web-
+
+      - name: Install wasm-bindgen matching Cargo.lock
+        run: |
+          version=$(awk '/^name = "wasm-bindgen"$/{getline; gsub(/version = |"/, ""); print; exit}' Cargo.lock)
+          root="target/wasm-tools/wasm-bindgen-$version-cli"
+          if [ ! -x "$root/wasm-bindgen" ]; then
+            cargo install wasm-bindgen-cli --version "$version" --locked --root "$root/install"
+            cp "$root/install/bin/wasm-bindgen" "$root/wasm-bindgen"
+          fi
+          "$root/wasm-bindgen" --version
+
+      - name: Build browser host
+        run: python3 tools/web_host.py build
+
+      - name: Upload site
+        uses: actions/upload-artifact@v7
+        with:
+          name: crysirror-web
+          path: target/web
+          retention-days: 14
+
+  # PS Vita player VPK (platform/psv/player): VitaSDK from vdpm, cargo-vita
+  # with -Zbuild-std. GXP programs are the committed catalog; no SDK shader
+  # compiler or proprietary module is used or uploaded.
+  psv:
+    name: PS Vita (VPK)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      VITASDK: /usr/local/vitasdk
+      CRYSIRROR_NIGHTLY: nightly-2026-09-17
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Cache VitaSDK
+        id: vitasdk
+        continue-on-error: true
+        uses: actions/cache@v5
+        with:
+          path: /usr/local/vitasdk
+          key: vitasdk-${{ runner.os }}-v1
+
+      - name: Install VitaSDK
+        if: steps.vitasdk.outputs.cache-hit != 'true'
+        run: |
+          sudo mkdir -p "$VITASDK" && sudo chown "$USER" "$VITASDK"
+          git clone --depth 1 https://github.com/vitasdk/vdpm /tmp/vdpm
+          cd /tmp/vdpm && ./bootstrap-vitasdk.sh && ./install-all.sh
+
+      - name: Install Rust and cargo-vita
+        run: |
+          echo "$VITASDK/bin" >> "$GITHUB_PATH"
+          rustup toolchain install "$CRYSIRROR_NIGHTLY" --profile minimal --component rust-src
+          cargo +stable install cargo-vita --version 0.2.2 --locked
+
+      - name: Cache dependency sources
+        continue-on-error: true
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/registry/src
+            ~/.cargo/git/db
+          key: cargo-psv-${{ hashFiles('platform/psv/player/Cargo.lock') }}
+          restore-keys: cargo-psv-
+
+      - name: Build VPK
+        working-directory: platform/psv/player
+        run: cargo +"$CRYSIRROR_NIGHTLY" vita build vpk --release
+
+      - name: Upload VPK
+        uses: actions/upload-artifact@v7
+        with:
+          name: crysirror-psv
+          path: platform/psv/player/target/armv7-sony-vita-newlibeabihf/release/*.vpk
+          retention-days: 14
+
+  # Nintendo Switch NRO (platform/switch/runtime): devkitA64/libnx/deko3d from
+  # the devkitPro image, Rust std rebuilt for Horizon with the pinned libc
+  # layout patches, adopted-engine shaders captured and compiled by uam.
+  switch:
+    name: Nintendo Switch (NRO)
+    runs-on: ubuntu-24.04
+    container: devkitpro/devkita64:latest
+    timeout-minutes: 120
+    env:
+      DEVKITPRO: /opt/devkitpro
+      TOOLCHAIN: nightly-2026-09-17
+    steps:
+      - name: Install build tools
+        run: |
+          apt-get update
+          apt-get install --no-install-recommends -y curl ca-certificates git python3 patch \
+            build-essential pkg-config librsvg2-bin imagemagick
+          dkp-pacman -Syu --noconfirm --needed switch-dev deko3d uam
+          # Debian's ImageMagick 6 names the CLI `convert`; the recipe calls `magick`.
+          command -v magick || ln -s "$(command -v convert)" /usr/local/bin/magick
+
+      - name: Check out source
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        run: |
+          curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          "$HOME/.cargo/bin/rustup" toolchain install "$TOOLCHAIN" --profile minimal --component rust-src
+
+      - name: Build NRO
+        working-directory: platform/switch/runtime
+        run: make TOOLCHAIN="$TOOLCHAIN" -j"$(nproc)"
+
+      - name: Upload NRO
+        uses: actions/upload-artifact@v7
+        with:
+          name: crysirror-switch
+          path: platform/switch/runtime/crysirror.nro
+          retention-days: 14

@@ -133,8 +133,6 @@ fn begin(rt: &mut Rt, t: Option<ObjectHandle>, args: Vec<Variant>) -> Result<Var
     // page layer with its back page twin under another parent).
     if with_children
         && (dest == source
-            || a.parent.is_none()
-            || b.parent.is_none()
             || a.width != b.width
             || a.height != b.height)
     {
@@ -144,7 +142,7 @@ fn begin(rt: &mut Rt, t: Option<ObjectHandle>, args: Vec<Variant>) -> Result<Var
                 "Layer.beginTransition({name}) dest `{}` {}x{} parent {:?} / source `{}` {}x{} parent {:?}",
                 label(dest), a.width, a.height, a.parent, label(source), b.width, b.height, b.parent
             ),
-            "equally sized non-primary subtree endpoints",
+            "equally sized subtree endpoints",
         ));
     }
     // krkrz: without children both layers must have an image; only the
@@ -154,14 +152,15 @@ fn begin(rt: &mut Rt, t: Option<ObjectHandle>, args: Vec<Variant>) -> Result<Var
             || !a.has_image
             || !b.has_image
             || a.image_width != b.image_width
-            || a.image_height != b.image_height
-            || a.parent.is_none()
-            || b.parent.is_none())
+            || a.image_height != b.image_height)
     {
         return Err(unsupported(
             "Layer.beginTransition without children",
-            "equally sized images on non-primary layers",
+            "equally sized images",
         ));
+    }
+    if a.window!=b.window || !a.constructed || !b.constructed || rt.host().is_ancestor_or_self(dest.0,source.0) {
+        return Err(unsupported("Layer.beginTransition topology","bound same-window endpoints whose source does not contain the destination"));
     }
     if rt
         .host()
@@ -215,37 +214,7 @@ fn finish(rt: &mut Rt, dest: ObjectHandle) -> Result<()> {
     }
     rt.host_mut()
         .layer_op(json!({"op":"end_crossfade","id":a.container()}));
-    // krkrz Exchange (InternalStopTransition, without keepchildren): the two
-    // layers trade places in the tree, across parents when they differ.
-    let (pa, pb) = (a.parent, b.parent);
-    for (parent, from, to) in [(pa, dest.0, source.0), (pb, source.0, dest.0)] {
-        let Some(parent) = parent else { continue };
-        let p = rt.host_mut().layer_mut(ObjectHandle(parent))?;
-        if pa == pb {
-            for child in &mut p.children {
-                if *child == dest.0 {
-                    *child = source.0
-                } else if *child == source.0 {
-                    *child = dest.0
-                }
-            }
-            p.dirty = true;
-            break;
-        }
-        if let Some(c) = p.children.iter_mut().find(|c| **c == from) {
-            *c = to;
-        }
-        p.dirty = true;
-    }
-    if pa != pb {
-        rt.host_mut().layer_mut(dest)?.parent = pb;
-        rt.host_mut().layer_mut(source)?.parent = pa;
-        for h in [dest, source] {
-            let l = rt.host_mut().layer_mut(h)?;
-            l.dirty = true;
-            l.presented = None;
-        }
-    }
+    exchange_tree(rt,dest,source,false)?;
     completed(rt, dest, source, &a, &b)
 }
 /// Exchange position/visibility (krkrz InternalStopTransition) and fire the
@@ -274,48 +243,68 @@ fn completed(
 }
 /// krkrz `Swap` (Exchange with keepchildren): the two layers trade places in
 /// the tree; each place keeps its children, which re-parent to the newcomer.
-fn swap_keep_children(rt: &mut Rt, dest: ObjectHandle, source: ObjectHandle) -> Result<()> {
-    let host = rt.host_mut();
-    let (pa, pb) = (host.layer(dest)?.parent, host.layer(source)?.parent);
-    let (Some(pa), Some(pb)) = (pa, pb) else {
-        return Err(unsupported("transition Swap of the primary layer", "non-primary endpoints"));
-    };
-    if [pa, pb].contains(&dest.0) || [pa, pb].contains(&source.0) {
-        return Err(unsupported("transition Swap of parent and child", "unrelated endpoints"));
-    }
-    for (p, from, to) in [(pa, dest.0, source.0), (pb, source.0, dest.0)] {
-        let parent = host.layer_mut(ObjectHandle(p))?;
-        if pa == pb {
-            for c in &mut parent.children {
-                if *c == dest.0 {
-                    *c = source.0
-                } else if *c == source.0 {
-                    *c = dest.0
+fn swap_keep_children(rt:&mut Rt,dest:ObjectHandle,source:ObjectHandle)->Result<()> {
+    exchange_tree(rt,dest,source,true)
+}
+/// LayerIntf::Exchange: both root ownership and ancestor/descendant joins are
+/// native semantic state. Rendering remains shared Layer/Canvas operations.
+fn exchange_tree(rt:&mut Rt,a:ObjectHandle,b:ObjectHandle,keep:bool)->Result<()> {
+    use std::collections::BTreeMap;
+    let host=rt.host_mut();
+    let la=host.layer(a)?;let lb=host.layer(b)?;
+    if a==b{return Ok(());}
+    if la.window!=lb.window{return Err(unsupported("Layer exchange","one layer manager"));}
+    let old:BTreeMap<usize,(Option<usize>,Vec<usize>)>=host.layers.iter().map(|(id,l)|(*id,(l.parent,l.children.clone()))).collect();
+    let swap=|id|if id==a.0 {b.0}else if id==b.0 {a.0}else{id};
+    let mut next=old.clone();
+    if keep {
+        // Exchanging vertex identities preserves the children at each place,
+        // including direct-parent and deeper ancestor relationships.
+        for (&id,entry) in &mut next {
+            let original=&old[&swap(id)];
+            *entry=(original.0.map(swap),original.1.iter().copied().map(swap).collect());
+        }
+    } else {
+        let ancestor_child=|ancestor:usize,descendant:usize|->Result<Option<usize>>{
+            let mut child=descendant;
+            for _ in 0..64 {
+                match old.get(&child).and_then(|v|v.0) {
+                    Some(parent) if parent==ancestor=>return Ok(Some(child)),
+                    Some(parent)=>child=parent,
+                    None=>return Ok(None),
                 }
             }
-            parent.dirty = true;
-            break;
+            Err(TjsError::runtime("Layer exchange ancestry limit"))
+        };
+        let (pa,pb)=(old[&a.0].0,old[&b.0].0);
+        let mut moved=vec![a.0,b.0];
+        if let Some(child)=ancestor_child(a.0,b.0)? {
+            next.get_mut(&a.0).unwrap().0=if pb==Some(a.0){Some(b.0)}else{pb};
+            next.get_mut(&b.0).unwrap().0=pa;
+            if child!=b.0 {next.get_mut(&child).unwrap().0=Some(b.0);moved.push(child);}
+        } else if let Some(child)=ancestor_child(b.0,a.0)? {
+            next.get_mut(&a.0).unwrap().0=pb;
+            next.get_mut(&b.0).unwrap().0=if pa==Some(b.0){Some(a.0)}else{pa};
+            if child!=a.0 {next.get_mut(&child).unwrap().0=Some(a.0);moved.push(child);}
+        } else {
+            next.get_mut(&a.0).unwrap().0=pb;next.get_mut(&b.0).unwrap().0=pa;
         }
-        if let Some(c) = parent.children.iter_mut().find(|c| **c == from) {
-            *c = to;
+        for (&id,original) in &old {
+            let mut children=Vec::with_capacity(original.1.len()+3);
+            for &child in &original.1 {
+                let replaced=swap(child);
+                let chosen=if next[&replaced].0==Some(id){Some(replaced)}else if next[&child].0==Some(id){Some(child)}else{None};
+                if let Some(child)=chosen {if !children.contains(&child){children.push(child);}}
+            }
+            for &child in &moved {if next[&child].0==Some(id)&&!children.contains(&child){children.push(child);}}
+            next.get_mut(&id).unwrap().1=children;
         }
-        parent.dirty = true;
     }
-    host.layer_mut(dest)?.parent = Some(pb);
-    host.layer_mut(source)?.parent = Some(pa);
-    let ca = std::mem::take(&mut host.layer_mut(dest)?.children);
-    let cb = std::mem::take(&mut host.layer_mut(source)?.children);
-    for (owner, kids) in [(dest, &cb), (source, &ca)] {
-        for c in kids.iter() {
-            let l = host.layer_mut(ObjectHandle(*c))?;
-            l.parent = Some(owner.0);
-            l.dirty = true;
-        }
+    for (id,(parent,children)) in next {
+        let l=host.layers.get_mut(&id).unwrap();
+        if l.parent!=parent||l.children!=children {l.parent=parent;l.children=children;l.dirty=true;l.presented=None;}
     }
-    host.layer_mut(dest)?.children = cb;
-    host.layer_mut(source)?.children = ca;
-    host.layer_mut(dest)?.dirty = true;
-    host.layer_mut(source)?.dirty = true;
+    for window in host.windows.values_mut(){window.primary=window.primary.map(swap);}
     Ok(())
 }
 pub fn poll(rt: &mut Rt, host: &mut dyn HostServices, client: ClientId) -> anyhow::Result<()> {

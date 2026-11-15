@@ -1,5 +1,11 @@
 # AliceSoft System 4 native work
 
+[Opcode and syscall implementation list](../../docs/native-api/system4.md).
+
+Mode: `adopt`. Current source/parameter coverage and remaining limits:
+[developer reference](../../docs/native-api/system4.md). Rance7's351 declared HLL names have
+semantic routes; this is not full-parameter or complete-game acceptance.
+
 `crysirror-system4` reads original AIN v5 and executes a bounded native VM
 subset. It is a first-class Rust workspace crate under GPL-2.0-or-later. No
 original C engine, renderer, SDL loop, font renderer, mixer or composed screen
@@ -78,8 +84,8 @@ opcodes, complete HLL lifecycle/settings, rendering, UI, text, audio, saves stil
 Original CP932 INI/bootstrap, ALD native class/one-based-number policy, array
 reallocation/list/fill/copy operations and42 shorthand operations are present.
 Sprite properties use engine Layers; clearable keys use shared InputObservation.
-Unavailable keys/pointer/focus and native RGB-only screen/multiply profiles fail
-explicitly. No native pixel loop or composed framebuffer is hosted.
+Unavailable keys/pointer/focus and unreviewed native arithmetic profiles fail
+explicitly. Reviewed RGB-only screen/multiply modes use shared byte tables. No native pixel loop or composed framebuffer is hosted.
 
 The optional `native-text` feature (enabled by default and by `runtime`) maps
 eleven string/character/numeric opcodes to `crysirror-text-legacy`, a separate
@@ -181,3 +187,14 @@ system4-native-array-sort-guards.log. Bundled Python ran201tests OK(1skip);
 the default XcodePython3.9 attempt failed6 imports and is retained separately.
 This source postdates frozen e0abb3... owner and immutable desktop player33;
 no newer original-game/desktop/render/title result is implied.
+
+Release/headless validation on 2026-11-13 (`--no-audio`, input track with
+long presses — the VM samples input slower than headless frames, so a short
+press and release can both land between two samples):
+Rance7 runs the AliceLogo2 logo and opening movie, renders the title, starts a
+new game, and reaches and plays the first battle (attacks resolve, HP update).
+Two shared gaps were filled for this: Windows keys Delete/H/I/J/M/V in the
+shared input profile (Rance7 polls them), and AJP encoded-image metadata
+(libsys4 `ajp_init_metrics`). This is not complete-game acceptance.
+Diagnostics: `SYSTEM4_TRACE` logs HLL calls and input returns;
+`SYSTEM4_TRACE_CALLS=<substring>` logs matching script calls.

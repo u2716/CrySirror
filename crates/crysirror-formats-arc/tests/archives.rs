@@ -275,7 +275,7 @@ fn xp3_versions_zlib_indices_and_multisegment_entries_use_shared_transforms() {
             let mut p = [0; 4];
             assert_eq!(reader.read_at(4, &mut p).unwrap(), 4);
             assert_eq!(&p, b"t-se");
-            assert_eq!(archive.entries()[0].metadata["adler32"], 0x33445566u32);
+            assert_eq!(archive.entry_metadata(0)["adler32"], 0x33445566u32);
         }
     }
 }

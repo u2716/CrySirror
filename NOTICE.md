@@ -3,10 +3,10 @@
 CrySirror, including the AVG32, RealLive and Siglus VM implementations maintained
 by xmoezzz, uses MPL-2.0 except where component licenses state otherwise. Shared
 image, text, UI, animation, resource and audio capabilities are maintained in the
-engine workspace. The root LICENSE contains the MPL-2.0 text.
+engine workspace. The root LICENSE contains the MPL-2.0 text. MPL-2.0 workspace crates reference that shared text through Cargo metadata; source-level author and copyright notices retain their scope.
 
 The integrated Siglus runtime maintains siglus_rs source under MPL-2.0 at
-revision `5f358ef1360b0439e92aed2b749e8f25d8721954`. Original source paths and
+revision `bef39ea90c745a4888a92a09d18be1eecfdd10ca`. Original source paths and
 digests are recorded in [its provenance file](crates/crysirror-siglus-integrated/SOURCE.json);
 local host changes remain in the same maintained workspace crate.
 

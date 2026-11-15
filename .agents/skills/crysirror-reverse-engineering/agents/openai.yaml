@@ -1,0 +1,4 @@
+interface:
+  display_name: "CrySirror Reverse Engineering"
+  short_description: "Guide engine research from tool setup to native API mapping"
+  default_prompt: "Use $crysirror-reverse-engineering to help me prepare local analysis tools, identify this game engine and map its native behavior for CrySirror."

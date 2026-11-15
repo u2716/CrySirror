@@ -11,7 +11,7 @@
 //! evaluation and labels are delegated to [`MarkupHost`]; nothing is drawn here.
 //! Unimplemented profiles (vertical ruby, graphical characters, word break,
 //! width-time scaling, uneven ruby) return errors instead of approximations.
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{Context, Result, bail, ensure};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -113,7 +113,10 @@ impl Format {
     }
 }
 fn style_field(key: &str) -> bool {
-    matches!(key, "Align" | "Valign" | "Pitch" | "LineSize" | "LineSpacing")
+    matches!(
+        key,
+        "Align" | "Valign" | "Pitch" | "LineSize" | "LineSpacing"
+    )
 }
 /// Validate and normalise a value for field `name` (`kind` conversion).
 pub fn convert(kind: Kind, value: Value) -> Result<Value> {
@@ -422,7 +425,11 @@ impl MarkupLayout {
             .map(|c| c.size)
             .fold(self.current.number("LineSize") * self.font_scale, f32::max);
         let y = self.offset();
-        let limit = if self.vertical { self.width } else { self.height };
+        let limit = if self.vertical {
+            self.width
+        } else {
+            self.height
+        };
         if limit > 0.0 && y + h > limit {
             self.over = true;
             self.pending.clear();
@@ -430,9 +437,17 @@ impl MarkupLayout {
         }
         let space_size = self.current.number("FontSize") * self.font_scale;
         let measured_space = host.text_width(&[0x3000], space_size)?;
-        let space = if self.vertical { space_size } else { measured_space };
+        let space = if self.vertical {
+            space_size
+        } else {
+            measured_space
+        };
         let size = self.pending_width();
-        let limit = if self.vertical { self.height } else { self.width };
+        let limit = if self.vertical {
+            self.height
+        } else {
+            self.width
+        };
         let align = self.current.number("Align");
         let mut x = if align == 0.0 {
             ((limit - size) / 2.0).trunc()
@@ -441,7 +456,11 @@ impl MarkupLayout {
         } else {
             self.line_indent
         };
-        let spaces = if space > 0.0 { (x / space).max(0.0) as usize } else { 0 };
+        let spaces = if space > 0.0 {
+            (x / space).max(0.0) as usize
+        } else {
+            0
+        };
         ensure!(spaces <= 100_000, "TextRender indentation limit exceeded");
         self.render_text.extend(std::iter::repeat_n(0x3000, spaces));
         let mut characters = std::mem::take(&mut self.pending);
@@ -477,7 +496,10 @@ impl MarkupLayout {
         self.finish_line(host, false)
     }
     fn require(&self) -> Result<()> {
-        ensure!(self.initialized, "TextRender layout requires clear or setRenderSize");
+        ensure!(
+            self.initialized,
+            "TextRender layout requires clear or setRenderSize"
+        );
         Ok(())
     }
 
@@ -485,7 +507,11 @@ impl MarkupLayout {
     pub fn done(&mut self, host: &mut dyn MarkupHost) -> Result<()> {
         self.require()?;
         self.finish_line(host, false)?;
-        self.published = self.lines.iter().flat_map(|l| l.characters.clone()).collect();
+        self.published = self
+            .lines
+            .iter()
+            .flat_map(|l| l.characters.clone())
+            .collect();
         self.left = if self.vertical { self.width } else { 0.0 };
         self.right = self.left.max(self.replay_extent);
         self.top = 0.0;
@@ -568,7 +594,12 @@ impl MarkupLayout {
         let total = finite(total)?;
         if !same {
             let n = self.published.len();
-            for ch in self.lines.iter_mut().flat_map(|l| &mut l.characters).take(n) {
+            for ch in self
+                .lines
+                .iter_mut()
+                .flat_map(|l| &mut l.characters)
+                .take(n)
+            {
                 ch.delay = 0.0;
             }
         }
@@ -632,7 +663,9 @@ impl MarkupLayout {
                 }
             }
             if !escaped && unit == u16::from(b'%') {
-                let command = *units.get(i).context("unterminated TextRender format command")?;
+                let command = *units
+                    .get(i)
+                    .context("unterminated TextRender format command")?;
                 i += 1;
                 match command {
                     98 | 105 | 115 | 101 /* b i s e */ => {
@@ -734,7 +767,8 @@ impl MarkupLayout {
                 let token = terminated(&units, &mut i, 59)?;
                 let color = u32::from_str_radix(&String::from_utf16(&token)?, 16)
                     .context("invalid TextRender color")?;
-                self.current.set("ChColor", Value::Int(i64::from(color | 0xff00_0000)));
+                self.current
+                    .set("ChColor", Value::Int(i64::from(color | 0xff00_0000)));
                 continue;
             }
             if !escaped && unit == u16::from(b'$') {
@@ -755,7 +789,10 @@ impl MarkupLayout {
                 continue;
             }
             if !escaped && unit == u16::from(b'[') {
-                ensure!(!self.vertical, "TextRender vertical ruby is not implemented");
+                ensure!(
+                    !self.vertical,
+                    "TextRender vertical ruby is not implemented"
+                );
                 let mut ruby = terminated(&units, &mut i, 93)?;
                 let count = if let Some(comma) = ruby.iter().rposition(|u| *u == 44) {
                     let n = String::from_utf16(&ruby[comma + 1..])?
@@ -797,7 +834,8 @@ impl MarkupLayout {
             let width = finite(host.text_width(&text, size)?)?;
             ensure!(width >= 0.0, "TextRender width must be nonnegative");
             let ruby = if let Some((rt, count, index)) = &mut ruby_pending {
-                let chunk = rt[*index * rt.len() / *count..(*index + 1) * rt.len() / *count].to_vec();
+                let chunk =
+                    rt[*index * rt.len() / *count..(*index + 1) * rt.len() / *count].to_vec();
                 let rs = self.current.number("RubySize") * self.font_scale;
                 let offset = self.current.number("RubyOffset") * self.font_scale;
                 let rw = host.text_width(&chunk, rs)?;
@@ -825,7 +863,11 @@ impl MarkupLayout {
                 y: 0.0,
                 ruby,
             };
-            let limit = if self.vertical { self.height } else { self.width };
+            let limit = if self.vertical {
+                self.height
+            } else {
+                self.width
+            };
             if auto_indent < 0
                 && self.count == start_count
                 && self.pending.is_empty()
@@ -856,7 +898,9 @@ impl MarkupLayout {
                         normal != Some(0),
                         "TextRender kinsoku reflow of a complete narrow line is not implemented"
                     );
-                    let mut carry = normal.map(|index| self.pending.split_off(index)).unwrap_or_default();
+                    let mut carry = normal
+                        .map(|index| self.pending.split_off(index))
+                        .unwrap_or_default();
                     // The temporary replay pen counts in renderRight even when
                     // the hanging glyphs stay on the previous line.
                     if carry.is_empty() && !self.vertical {
@@ -871,7 +915,11 @@ impl MarkupLayout {
                             .replay_extent
                             .max(self.line_indent + self.pending_width() + hanging);
                     }
-                    let replay = if carry.is_empty() { self.hanging_count } else { carry.len() };
+                    let replay = if carry.is_empty() {
+                        self.hanging_count
+                    } else {
+                        carry.len()
+                    };
                     let extra = replay as f32 * step;
                     for c in &mut carry {
                         c.delay += extra;
@@ -897,7 +945,9 @@ impl MarkupLayout {
                 let mut carry = vec![];
                 while self.pending.len() > 1
                     && self.pending.last().is_some_and(|c| {
-                        c.text.first().is_some_and(|u| self.option_contains("leading", *u))
+                        c.text
+                            .first()
+                            .is_some_and(|u| self.option_contains("leading", *u))
                     })
                 {
                     carry.push(self.pending.pop().expect("nonempty line"));
@@ -926,10 +976,17 @@ impl MarkupLayout {
             self.count += 1;
             self.delay = delay + base_delay;
             delay += step;
-            ensure!(self.count <= MAX_CHARACTERS, "TextRender character limit exceeded");
+            ensure!(
+                self.count <= MAX_CHARACTERS,
+                "TextRender character limit exceeded"
+            );
         }
         if total > 0.0 {
-            let factor = if self.delay != 0.0 { total / self.delay } else { 0.0 };
+            let factor = if self.delay != 0.0 {
+                total / self.delay
+            } else {
+                0.0
+            };
             for (index, c) in self
                 .lines
                 .iter_mut()
@@ -993,7 +1050,10 @@ mod tests {
     fn wraps_aligns_and_reveals() {
         let mut l = MarkupLayout::default();
         l.set_render_size(100.0, 200.0, &mut Fixed).unwrap();
-        assert!(l.render(&text("abcdef"), 0, 10.0, 0.0, false, &mut Fixed).unwrap());
+        assert!(
+            l.render(&text("abcdef"), 0, 10.0, 0.0, false, &mut Fixed)
+                .unwrap()
+        );
         l.done(&mut Fixed).unwrap();
         let c = l.characters(0, 0);
         assert_eq!(c.len(), 6);
@@ -1008,7 +1068,15 @@ mod tests {
     fn markup_commands_and_errors() {
         let mut l = MarkupLayout::default();
         l.set_render_size(1000.0, 200.0, &mut Fixed).unwrap();
-        l.render(&text("%b1#ff0000;x$y;[r]z\\%"), 0, 0.0, 0.0, false, &mut Fixed).unwrap();
+        l.render(
+            &text("%b1#ff0000;x$y;[r]z\\%"),
+            0,
+            0.0,
+            0.0,
+            false,
+            &mut Fixed,
+        )
+        .unwrap();
         l.done(&mut Fixed).unwrap();
         let c = l.characters(0, 0);
         assert_eq!(c.len(), 4);
@@ -1016,10 +1084,14 @@ mod tests {
         assert_eq!(c[0].format.get("ChColor"), Some(&Value::Int(0xffff0000)));
         assert!(c[2].ruby.is_some());
         assert_eq!(c[3].text, text("%"));
-        assert!(l.render(&text("&g;"), 0, 0.0, 0.0, false, &mut Fixed).is_err());
+        assert!(
+            l.render(&text("&g;"), 0, 0.0, 0.0, false, &mut Fixed)
+                .is_err()
+        );
         let mut n = MarkupLayout::default();
         n.set_render_size(1000.0, 200.0, &mut Fixed).unwrap();
-        n.render(&text("x%n;ab%n2;c"), 0, 0.0, 0.0, false, &mut Fixed).unwrap();
+        n.render(&text("x%n;ab%n2;c"), 0, 0.0, 0.0, false, &mut Fixed)
+            .unwrap();
         n.done(&mut Fixed).unwrap();
         let c = n.characters(0, 0);
         assert_eq!(c.len(), 4);
@@ -1027,6 +1099,10 @@ mod tests {
         // x, one blank line, "ab", two blank lines, "c".
         assert!(c[1].y > c[0].y && c[3].y > c[2].y);
         assert_eq!(n.line_count(), 6);
-        assert!(MarkupLayout::default().render(&text("a"), 0, 0.0, 0.0, false, &mut Fixed).is_err());
+        assert!(
+            MarkupLayout::default()
+                .render(&text("a"), 0, 0.0, 0.0, false, &mut Fixed)
+                .is_err()
+        );
     }
 }

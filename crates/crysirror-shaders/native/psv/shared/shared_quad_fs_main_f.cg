@@ -1,0 +1,112 @@
+// SPDX-License-Identifier: MPL-2.0
+// Generated from canonical WGSL by crysirror-shader-tools.
+int min(int a,int b){return a<b?a:b;}
+int max(int a,int b){return a>b?a:b;}
+int clamp(int a,int lo,int hi){return min(max(a,lo),hi);}
+int2 min(int2 a,int2 b){return a<b?a:b;}
+int2 max(int2 a,int2 b){return a>b?a:b;}
+int2 clamp(int2 a,int2 lo,int2 hi){return min(max(a,lo),hi);}
+int3 min(int3 a,int3 b){return a<b?a:b;}
+int3 max(int3 a,int3 b){return a>b?a:b;}
+int3 clamp(int3 a,int3 lo,int3 hi){return min(max(a,lo),hi);}
+int4 min(int4 a,int4 b){return a<b?a:b;}
+int4 max(int4 a,int4 b){return a>b?a:b;}
+int4 clamp(int4 a,int4 lo,int4 hi){return min(max(a,lo),hi);}
+
+
+// SGX has no general integer divide. Bias a full-width float estimate
+// below the quotient, refine its small remainder, then correct in integers.
+// The 2^-20 bias dominates f32 conversion/division error (all inputs normal).
+// The refinement quotient is below 2048, so three corrections are sufficient.
+int cg_div_positive(int a,int b){
+ if(b==1)return a;
+ bool negative=a<0;
+ int n=negative?-(a+1):a;
+ float estimate=float(n)/float(b);
+ int q=int(max(floor(estimate-max(estimate*0.00000095367431640625,2.0)),0.0));
+ int r=n-q*b;
+ int correction=max(int(floor(float(r)/float(b)))-2,0);
+ q+=correction;r-=correction*b;
+ if(r>=b){r-=b;q+=1;}
+ if(r>=b){r-=b;q+=1;}
+ if(r>=b){r-=b;q+=1;}
+ if(negative)return -q-int(r==b-1);
+ return q;
+}
+int cg_div(int a,int b){
+ if(b==0)return a;
+ if(b==(-2147483647-1))return a==b?1:0;
+ if(a==(-2147483647-1)&&b==-1)return a;
+ return b<0?-cg_div_positive(a,-b):cg_div_positive(a,b);
+}
+int2 cg_div(int2 a,int2 b){return int2(cg_div(a.x,b.x),cg_div(a.y,b.y));}
+int3 cg_div(int3 a,int3 b){return int3(cg_div(a.x,b.x),cg_div(a.y,b.y),cg_div(a.z,b.z));}
+int4 cg_div(int4 a,int4 b){return int4(cg_div(a.x,b.x),cg_div(a.y,b.y),cg_div(a.z,b.z),cg_div(a.w,b.w));}
+float4 cg_load(sampler2D tex,int3 p,float4 size){
+ if(any(p.xy<0)||any(p.xy>=int2(size.xy))||p.z!=0)return float4(0,0,0,0);
+ return tex2Dlod(tex,float4((float2(p.xy)+0.5)*size.zw,0,0));
+}
+// Naga uses these for signed/unsigned integer wrapping, never float bitcasts.
+int asint(int v){return int(v);} int2 asint(int2 v){return int2(v);}
+int3 asint(int3 v){return int3(v);} int4 asint(int4 v){return int4(v);}
+int asuint(int v){return int(v);} int2 asuint(int2 v){return int2(v);}
+int3 asuint(int3 v){return int3(v);} int4 asuint(int4 v){return int4(v);}
+
+struct Out {
+    float4 position : WPOS;
+    float2 uv : TEXCOORD0;
+    float4 color : TEXCOORD1;
+    float filter_index : TEXCOORD2;
+    float4 sample_bounds : TEXCOORD3;
+    float4 clip_rect : TEXCOORD4;
+    float3 clip_position : TEXCOORD5;
+};
+
+uniform sampler2D image : TEXUNIT0;
+uniform float4 cg_size_image;
+
+struct FragmentInput_fs_main {
+    float2 uv_1 : TEXCOORD0;
+    float4 color : TEXCOORD1;
+    float filter_index : TEXCOORD2;
+    float4 sample_bounds : TEXCOORD3;
+    float4 clip_rect : TEXCOORD4;
+    float3 clip_position : TEXCOORD5;
+    float4 position : WPOS;
+};
+
+bool outside_clip(Out in_1)
+{
+    bool local = (bool)0;
+
+    float2 _e6 = (in_1.clip_position.xy / (in_1.clip_position.z).xx);
+    if (!(any((_e6 < in_1.clip_rect.xy)))) {
+        local = any((_e6 >= in_1.clip_rect.zw));
+    } else {
+        local = true;
+    }
+    bool _e19 = local;
+    return _e19;
+}
+
+
+float2 bounded_uv(float2 uv, float4 bounds)
+{
+    float2 _e8 = ((0.5).xx / float2(int2(cg_size_image.xy)));
+    float2 _e10 = (bounds.xy + _e8);
+    float2 _e12 = (bounds.zw - _e8);
+    float2 _e15 = ((_e10 + _e12) * 0.5);
+    return clamp(uv, min(_e10, _e15), max(_e12, _e15));
+}
+
+float4 main(FragmentInput_fs_main fragmentinput_fs_main) : COLOR
+{
+    Out in_ = { fragmentinput_fs_main.position, fragmentinput_fs_main.uv_1, fragmentinput_fs_main.color, fragmentinput_fs_main.filter_index, fragmentinput_fs_main.sample_bounds, fragmentinput_fs_main.clip_rect, fragmentinput_fs_main.clip_position };
+    const bool _e1 = outside_clip(in_);
+    if (_e1) {
+        discard;
+    }
+    const float2 _e6 = bounded_uv(in_.uv, in_.sample_bounds);
+    float4 _e8 = tex2Dlod(image,float4(_e6,0,0.0));
+    return (_e8 * in_.color);
+}

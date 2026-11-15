@@ -1,4 +1,4 @@
-#[cfg(all(any(fd_policy,windows), any(feature="nfs", feature="smb")))]
+#[cfg(all(any(fd_policy, windows), any(feature = "nfs", feature = "smb")))]
 mod network;
 // A scoped per-session policy. Desktop calls have no policy. Host calls install
 // it with an RAII guard, including during bootstrap and all native dispatch.
@@ -56,8 +56,8 @@ pub(crate) type WriterLock = ();
 
 #[derive(Clone, Debug)]
 pub(crate) struct FilePolicy {
-    #[cfg(all(any(fd_policy,windows), any(feature="nfs",feature="smb")))]
-    network:Option<std::sync::Arc<network::NetworkRoot>>,
+    #[cfg(all(any(fd_policy, windows), any(feature = "nfs", feature = "smb")))]
+    network: Option<std::sync::Arc<network::NetworkRoot>>,
     pub resource: PathBuf,
     pub user: PathBuf,
     media_marker: Option<String>,
@@ -357,40 +357,69 @@ fn case_component(
     ));
 }
 
-#[cfg(all(any(fd_policy,windows),any(feature="nfs",feature="smb")))]
+#[cfg(all(any(fd_policy, windows), any(feature = "nfs", feature = "smb")))]
 impl FilePolicy {
-    #[cfg(any(feature="nfs",feature="smb"))]
-    pub(crate) fn from_network_directory(directory:game_network::Directory,user:&Path)->io::Result<Self> {
-        Self::from_network_root(std::sync::Arc::new(network::NetworkRoot::from_directory(directory)?),user)
+    #[cfg(any(feature = "nfs", feature = "smb"))]
+    pub(crate) fn from_network_directory(
+        directory: game_network::Directory,
+        user: &Path,
+    ) -> io::Result<Self> {
+        Self::from_network_root(
+            std::sync::Arc::new(network::NetworkRoot::from_directory(directory)?),
+            user,
+        )
     }
-    #[cfg(any(feature="nfs",feature="smb"))]
-    fn from_network_root(network:std::sync::Arc<network::NetworkRoot>,user:&Path)->io::Result<Self> {
-        let parent=user.parent().ok_or_else(||io::Error::other("network game user root needs a parent"))?;
-        let anchor=parent.join(".ethornell-network-resources");
+    #[cfg(any(feature = "nfs", feature = "smb"))]
+    fn from_network_root(
+        network: std::sync::Arc<network::NetworkRoot>,
+        user: &Path,
+    ) -> io::Result<Self> {
+        let parent = user
+            .parent()
+            .ok_or_else(|| io::Error::other("network game user root needs a parent"))?;
+        let anchor = parent.join(".ethornell-network-resources");
         std::fs::create_dir_all(&anchor)?;
         std::fs::create_dir_all(user)?;
-        let mut policy=Self::new(&anchor,user)?;
-        policy.resource=network.mount.path().to_owned();
-        policy.network=Some(network);
+        let mut policy = Self::new(&anchor, user)?;
+        policy.resource = network.mount.path().to_owned();
+        policy.network = Some(network);
         Ok(policy)
     }
     // Native resource reads keep local user overrides and media-sentinel
     // policy before falling back to the remote read-only resource directory.
-    fn read_network_resource(&self,name:&str,limit:u64)->io::Result<Vec<u8>> {
-        let budget=||io::Error::new(io::ErrorKind::InvalidData,"network user resource byte budget");
-        use std::io::Read;
-        let file=match self.open_resource(name) {
-            Ok(file)=>file,
-            Err(e) if e.kind()==io::ErrorKind::NotFound=>{
-                if self.hidden_resource(name){return Err(e);}
-                let normalized=name.replace('\\',"/");
-                return self.network.as_ref().unwrap().read(normalized.strip_prefix("bgi-resource/").unwrap_or(&normalized),limit);
-            },
-            Err(e)=>return Err(e),
+    fn read_network_resource(&self, name: &str, limit: u64) -> io::Result<Vec<u8>> {
+        let budget = || {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "network user resource byte budget",
+            )
         };
-        if file.metadata()?.len()>limit{return Err(budget());}
-        let mut bytes=Vec::new();file.take(limit.saturating_add(1)).read_to_end(&mut bytes)?;
-        if bytes.len() as u64>limit{return Err(budget());}Ok(bytes)
+        use std::io::Read;
+        let file = match self.open_resource(name) {
+            Ok(file) => file,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                if self.hidden_resource(name) {
+                    return Err(e);
+                }
+                let normalized = name.replace('\\', "/");
+                return self.network.as_ref().unwrap().read(
+                    normalized
+                        .strip_prefix("bgi-resource/")
+                        .unwrap_or(&normalized),
+                    limit,
+                );
+            }
+            Err(e) => return Err(e),
+        };
+        if file.metadata()?.len() > limit {
+            return Err(budget());
+        }
+        let mut bytes = Vec::new();
+        file.take(limit.saturating_add(1)).read_to_end(&mut bytes)?;
+        if bytes.len() as u64 > limit {
+            return Err(budget());
+        }
+        Ok(bytes)
     }
 }
 #[cfg(fd_policy)]
@@ -438,8 +467,10 @@ impl FilePolicy {
     }
     /// A resource-root file of at most `limit` bytes.
     pub fn read_resource(&self, name: &str, limit: u64) -> io::Result<Vec<u8>> {
-        #[cfg(any(feature="nfs",feature="smb"))]
-        if self.network.is_some() {return self.read_network_resource(name,limit);}
+        #[cfg(any(feature = "nfs", feature = "smb"))]
+        if self.network.is_some() {
+            return self.read_network_resource(name, limit);
+        }
 
         use std::io::Read;
         let file = self.open_resource(name)?;
@@ -510,6 +541,11 @@ impl FilePolicy {
     pub fn open_manager(
         &self,
     ) -> crate::native_core::Result<crate::native_archive::ResourceManager> {
+        #[cfg(any(feature = "nfs", feature = "smb"))]
+        if let Some(net) = &self.network {
+            return net.manager(&self.resource);
+        }
+
         use std::io::{Read, Seek, SeekFrom};
         let mut files = Vec::new();
         walk_directory(
@@ -549,10 +585,11 @@ impl FilePolicy {
         )
     }
     pub fn new(resource: &Path, user: &Path) -> io::Result<Self> {
-        #[cfg(any(feature="nfs",feature="smb"))]
+        #[cfg(any(feature = "nfs", feature = "smb"))]
         if resource.to_string_lossy().contains("://") {
-            let network=std::sync::Arc::new(network::NetworkRoot::connect(&resource.to_string_lossy())?);
-            return Self::from_network_root(network,user);
+            let network =
+                std::sync::Arc::new(network::NetworkRoot::connect(&resource.to_string_lossy())?);
+            return Self::from_network_root(network, user);
         }
         fn open_root(path: &Path, stage: u32) -> io::Result<(PathBuf, std::fs::File)> {
             use std::{
@@ -641,11 +678,11 @@ impl FilePolicy {
             ));
         }
         Ok(Self {
+            #[cfg(any(feature = "nfs", feature = "smb"))]
+            network: None,
             resource,
             user,
             media_marker: None,
-            #[cfg(any(feature="nfs",feature="smb"))]
-            network:None,
             resource_dir: std::sync::Arc::new(resource_dir),
             user_dir: std::sync::Arc::new(user_dir),
         })
@@ -653,8 +690,10 @@ impl FilePolicy {
     /// ResourceManager caches archive descriptors. Reject links before opening
     /// its index so a game cannot smuggle an outside archive into that cache.
     pub fn validate_resource_tree(&self) -> io::Result<()> {
-        #[cfg(any(feature="nfs",feature="smb"))]
-        if let Some(net)=&self.network {return net.validate();}
+        #[cfg(any(feature = "nfs", feature = "smb"))]
+        if let Some(net) = &self.network {
+            return net.validate();
+        }
 
         walk_directory(
             &self.resource_dir,
@@ -666,6 +705,19 @@ impl FilePolicy {
         )
     }
     pub fn metadata(&self, name: &str) -> Option<PolicyMetadata> {
+        #[cfg(any(feature = "nfs", feature = "smb"))]
+        if let Some(net) = &self.network {
+            let normalized = name.replace('\\', "/");
+            if let Some(name) = normalized.strip_prefix("bgi-resource/") {
+                return net.metadata(name);
+            }
+            if !normalized.starts_with("bgi-user/") {
+                return self
+                    .metadata(&format!("bgi-user/{normalized}"))
+                    .or_else(|| net.metadata(&normalized));
+            }
+        }
+
         let normalized = name.replace('\\', "/");
         if self.hidden_resource(&normalized) {
             return if normalized.starts_with("bgi-resource/") {
@@ -674,13 +726,17 @@ impl FilePolicy {
                 self.metadata(&format!("bgi-user/{normalized}"))
             };
         }
-        #[cfg(any(feature="nfs",feature="smb"))]
-        if let Some(net)=&self.network {
-            if let Some(name)=normalized.strip_prefix("bgi-resource/") {
-                return self.metadata(&format!("bgi-user/{name}")).or_else(||net.metadata(name));
+        #[cfg(any(feature = "nfs", feature = "smb"))]
+        if let Some(net) = &self.network {
+            if let Some(name) = normalized.strip_prefix("bgi-resource/") {
+                return self
+                    .metadata(&format!("bgi-user/{name}"))
+                    .or_else(|| net.metadata(name));
             }
             if !normalized.starts_with("bgi-user/") {
-                return self.metadata(&format!("bgi-user/{normalized}")).or_else(||net.metadata(&normalized));
+                return self
+                    .metadata(&format!("bgi-user/{normalized}"))
+                    .or_else(|| net.metadata(&normalized));
             }
         }
         if let Some(name) = normalized.strip_prefix("bgi-resource/") {
@@ -728,13 +784,34 @@ impl FilePolicy {
         self.enumerate(&user_data_alias(pattern), recursive, max_count, directories)
     }
     pub fn read_loose(&self, name: &str) -> io::Result<Vec<u8>> {
+        #[cfg(any(feature = "nfs", feature = "smb"))]
+        if self.network.is_some() {
+            let normalized = name.replace('\\', "/");
+            if let Some(name) = normalized.strip_prefix("bgi-resource/") {
+                return self.read_resource(name, 256 * 1024 * 1024);
+            }
+            if !normalized.starts_with("bgi-user/")
+                && self
+                    .open_relative(&self.user_dir, &normalized, false)
+                    .is_err_and(|e| e.kind() == io::ErrorKind::NotFound)
+            {
+                return self.read_resource(&normalized, 256 * 1024 * 1024);
+            }
+        }
+
         use std::io::Read;
         let normalized = name.replace('\\', "/");
-        #[cfg(any(feature="nfs",feature="smb"))]
+        #[cfg(any(feature = "nfs", feature = "smb"))]
         if self.network.is_some() {
-            if let Some(name)=normalized.strip_prefix("bgi-resource/") {return self.read_resource(name,256*1024*1024);}
-            if !normalized.starts_with("bgi-user/") && self.open_relative(&self.user_dir,&normalized,false).is_err_and(|e|e.kind()==io::ErrorKind::NotFound) {
-                return self.read_resource(&normalized,256*1024*1024);
+            if let Some(name) = normalized.strip_prefix("bgi-resource/") {
+                return self.read_resource(name, 256 * 1024 * 1024);
+            }
+            if !normalized.starts_with("bgi-user/")
+                && self
+                    .open_relative(&self.user_dir, &normalized, false)
+                    .is_err_and(|e| e.kind() == io::ErrorKind::NotFound)
+            {
+                return self.read_resource(&normalized, 256 * 1024 * 1024);
             }
         }
         let (file, limit) = if let Some(name) = normalized.strip_prefix("bgi-resource/") {
@@ -776,9 +853,11 @@ impl FilePolicy {
         max_count: usize,
         directories: bool,
     ) -> io::Result<Vec<String>> {
-        #[cfg(any(feature="nfs",feature="smb"))]
-        if let Some(net)=&self.network {
-            if let Some(name)=pattern.replace('\\',"/").strip_prefix("bgi-resource/") {return net.enumerate(name,recursive,max_count,directories);}
+        #[cfg(any(feature = "nfs", feature = "smb"))]
+        if let Some(net) = &self.network {
+            if let Some(name) = pattern.replace('\\', "/").strip_prefix("bgi-resource/") {
+                return net.enumerate(name, recursive, max_count, directories);
+            }
         }
         let normalized = pattern.replace('\\', "/");
         let (base, name) = if let Some(name) = normalized.strip_prefix("bgi-resource/") {
@@ -1056,8 +1135,6 @@ impl FilePolicy {
             resource: resource.canonicalize()?,
             user: user.canonicalize()?,
             media_marker: None,
-            #[cfg(any(feature="nfs",feature="smb"))]
-            network:None,
             windows: std::sync::Arc::new(roots),
         })
     }
@@ -1074,20 +1151,26 @@ impl FilePolicy {
         if self.hidden_resource(name) {
             return Err(io::ErrorKind::NotFound.into());
         }
-        #[cfg(any(feature="nfs",feature="smb"))]
-        if self.network.is_some(){return self.read_network_resource(name,limit);}
+        #[cfg(any(feature = "nfs", feature = "smb"))]
+        if self.network.is_some() {
+            return self.read_network_resource(name, limit);
+        }
         self.windows.read_resource(name, limit)
     }
     pub fn open_manager(
         &self,
     ) -> crate::native_core::Result<crate::native_archive::ResourceManager> {
-        #[cfg(any(feature="nfs",feature="smb"))]
-        if let Some(net)=&self.network{return net.manager(&self.resource);}
+        #[cfg(any(feature = "nfs", feature = "smb"))]
+        if let Some(net) = &self.network {
+            return net.manager(&self.resource);
+        }
         self.windows.open_manager()
     }
     pub fn validate_resource_tree(&self) -> io::Result<()> {
-        #[cfg(any(feature="nfs",feature="smb"))]
-        if let Some(net)=&self.network{return net.validate();}
+        #[cfg(any(feature = "nfs", feature = "smb"))]
+        if let Some(net) = &self.network {
+            return net.validate();
+        }
         self.windows.validate_resource_tree()
     }
     pub fn metadata(&self, name: &str) -> Option<PolicyMetadata> {
@@ -1098,12 +1181,17 @@ impl FilePolicy {
                 self.windows.metadata(&format!("bgi-user/{name}"))
             };
         }
-        #[cfg(any(feature="nfs",feature="smb"))]
-        if let Some(net)=&self.network {
-            let normalized=name.replace('\\',"/");
+        #[cfg(any(feature = "nfs", feature = "smb"))]
+        if let Some(net) = &self.network {
+            let normalized = name.replace('\\', "/");
             if !normalized.starts_with("bgi-user/") {
-                let relative=normalized.strip_prefix("bgi-resource/").unwrap_or(&normalized);
-                return self.windows.metadata(&format!("bgi-user/{relative}")).or_else(||net.metadata(relative));
+                let relative = normalized
+                    .strip_prefix("bgi-resource/")
+                    .unwrap_or(&normalized);
+                return self
+                    .windows
+                    .metadata(&format!("bgi-user/{relative}"))
+                    .or_else(|| net.metadata(relative));
             }
         }
         self.windows.metadata(name)
@@ -1128,10 +1216,12 @@ impl FilePolicy {
                 self.windows.read_user(name)
             };
         }
-        #[cfg(any(feature="nfs",feature="smb"))]
+        #[cfg(any(feature = "nfs", feature = "smb"))]
         if self.network.is_some() {
-            let normalized=name.replace('\\',"/");
-            if !normalized.starts_with("bgi-user/"){return self.read_network_resource(&normalized,256*1024*1024);}
+            let normalized = name.replace('\\', "/");
+            if !normalized.starts_with("bgi-user/") {
+                return self.read_network_resource(&normalized, 256 * 1024 * 1024);
+            }
         }
         self.windows.read_loose(name)
     }
@@ -1142,9 +1232,11 @@ impl FilePolicy {
         max: usize,
         dirs: bool,
     ) -> io::Result<Vec<String>> {
-        #[cfg(any(feature="nfs",feature="smb"))]
-        if let Some(net)=&self.network {
-            if let Some(pattern)=name.replace('\\',"/").strip_prefix("bgi-resource/"){return net.enumerate(pattern,recursive,max,dirs);}
+        #[cfg(any(feature = "nfs", feature = "smb"))]
+        if let Some(net) = &self.network {
+            if let Some(pattern) = name.replace('\\', "/").strip_prefix("bgi-resource/") {
+                return net.enumerate(pattern, recursive, max, dirs);
+            }
         }
         self.windows.enumerate(name, recursive, max, dirs)
     }
@@ -1233,6 +1325,71 @@ impl FilePolicy {
 #[cfg(all(test, fd_policy))]
 mod tests {
     use super::*;
+    #[test]
+    fn hosted_archive_members_preserve_raw_bytes_and_exact_paths() {
+        use crate::native_vm::SysApi;
+        let (base, policy) = roots("raw-archive-members");
+        let write_arc = |name: &str, payload: &[u8]| {
+            let path = policy.resource.join(name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let mut bytes = b"BURIKO ARC20".to_vec();
+            bytes.extend_from_slice(&1u32.to_le_bytes());
+            let mut entry = [0u8; 0x60];
+            entry[..5].copy_from_slice(b"entry");
+            bytes.extend_from_slice(&entry);
+            bytes.extend_from_slice(&0u32.to_le_bytes());
+            bytes.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+            bytes.extend_from_slice(&[0u8; 24]);
+            bytes.extend_from_slice(payload);
+            std::fs::write(path, bytes).unwrap();
+        };
+        // Raw reads must not interpret even a malformed compressed payload:
+        // the native VM owns decoding and its error/status policy.
+        let packed = b"DSC FORMAT 1.00\0native decoder input";
+        write_arc("system.arc", packed);
+        write_arc("Archive/data01000.arc", packed);
+        write_arc("Other/data01000.arc", b"other member");
+        let manager = policy.open_manager().unwrap();
+        let mut api =
+            super::super::RuntimeTraceApi::new_with_native_root(manager, policy.resource.clone());
+        scope(&policy, || {
+            for archive in [
+                "system.arc",
+                "bgi-resource/system.arc",
+                "Archive\\data01000.arc",
+                "bgi-resource\\archive/DATA01000.arc",
+            ] {
+                assert!(api.archive_entry_exists(archive, "entry"), "{archive}");
+                assert_eq!(
+                    api.read_archive_entry_raw(archive, "entry").unwrap(),
+                    packed,
+                    "{archive}"
+                );
+            }
+            assert_eq!(
+                api.read_archive_entry_raw("Other/data01000.arc", "entry")
+                    .unwrap(),
+                b"other member"
+            );
+            for denied in [
+                "../Archive/data01000.arc",
+                "bgi-resource/Archive/../Archive/data01000.arc",
+                "bgi-user/Archive/data01000.arc",
+                "/Archive/data01000.arc",
+                "C:/Archive/data01000.arc",
+                "Missing/data01000.arc",
+                "",
+            ] {
+                assert!(!api.archive_entry_exists(denied, "entry"), "{denied}");
+                assert!(
+                    api.read_archive_entry_raw(denied, "entry").is_none(),
+                    "{denied}"
+                );
+            }
+        });
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
     #[test]
     fn rejects_escape_forms() {
         for p in [
@@ -1388,6 +1545,65 @@ mod tests {
         std::fs::remove_dir_all(base).unwrap();
     }
     #[test]
+    fn archive_discovery_and_directory_use_resource_root_and_index_order() {
+        use crate::native_vm::SysApi;
+        let (base, p) = roots("archive-enumeration");
+        std::fs::create_dir(p.resource.join("Archive")).unwrap();
+        std::fs::create_dir(p.user.join("Archive")).unwrap();
+        let names = ["AnimationSet000", "Animation000"];
+        let mut arc = b"BURIKO ARC20".to_vec();
+        arc.extend_from_slice(&(names.len() as u32).to_le_bytes());
+        for name in names {
+            let mut record = [0; 128];
+            record[..name.len()].copy_from_slice(name.as_bytes());
+            arc.extend_from_slice(&record);
+        }
+        std::fs::write(p.resource.join("Archive/data06000.arc"), arc).unwrap();
+        std::fs::write(p.user.join("Archive/data06999.arc"), b"user decoy").unwrap();
+        std::fs::write(p.user.join("slot.sav"), b"save").unwrap();
+        let manager = p.open_manager().unwrap();
+        let mut api =
+            super::super::RuntimeTraceApi::new_with_native_root(manager, p.resource.clone());
+        scope(&p, || {
+            assert_eq!(
+                api.enumerate_user_files("Archive\\data06???.arc", false, 0),
+                ["data06000.arc"]
+            );
+            assert_eq!(
+                api.enumerate_native_paths("Archive\\data06???.arc", false, 0, false),
+                ["data06000.arc"]
+            );
+            assert_eq!(
+                api.enumerate_user_files("bgi-user/Archive/*.arc", false, 0),
+                ["data06999.arc"]
+            );
+            assert_eq!(api.enumerate_user_files("*.sav", false, 0), ["slot.sav"]);
+            for archive in [
+                "data06000.arc",
+                "Archive\\DATA06000.arc",
+                "bgi-resource/Archive/data06000.arc",
+            ] {
+                assert_eq!(api.archive_entry_names(archive).unwrap(), names);
+            }
+            for denied in [
+                "absent.arc",
+                "../data06000.arc",
+                "/outside/data06000.arc",
+                "bgi-user/Archive/data06000.arc",
+            ] {
+                assert!(api.archive_entry_names(denied).is_none(), "{denied}");
+            }
+            for denied in ["../*.arc", "/outside/*.arc", "C:\\outside\\*.arc"] {
+                assert!(
+                    api.enumerate_user_files(denied, false, 0).is_empty(),
+                    "{denied}"
+                );
+            }
+        });
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
     fn overlay_case_virtual_roots_and_native_file_calls_are_consistent() {
         use crate::native_vm::{NativeCallFrame, NativeOpcode, SysApi, Value};
         let (base, p) = roots("full-chain");
@@ -1430,9 +1646,9 @@ mod tests {
             assert_eq!(
                 api.load_file_bytes("bgi-resource\\", "UserData/Slot.sud")
                     .unwrap(),
-                b"resource"
+                b"user overlay"
             );
-            assert_eq!(api.file_size("bgi-resource\\", "UserData/Slot.sud"), 8);
+            assert_eq!(api.file_size("bgi-resource\\", "UserData/Slot.sud"), 12);
             assert!(api.load_file_bytes("bgi-user\\", "missing").is_none());
             assert!(
                 api.load_file_bytes("/outside", "UserData/Slot.sud")

@@ -141,7 +141,7 @@ impl RuntimeTraceApi {
                     && sx == 65536
                     && sy == 65536;
                 if native_fast {
-                    crate::native_app::bitmap_blend::blit_mode(
+                    crate::native_app::bitmap_blend::blit_mode_with_options(
                         &mut out,
                         df,
                         &image,
@@ -150,6 +150,7 @@ impl RuntimeTraceApi {
                         0,
                         5,
                         record.blend_parameter,
+                        self.native_additive_coverage,
                     );
                 } else if sf == df {
                     if record.blend_parameter as u32 >= 256 {
@@ -211,7 +212,7 @@ impl RuntimeTraceApi {
                         }
                     }
                 } else {
-                    crate::native_app::bitmap_blend::blit_mode(
+                    crate::native_app::bitmap_blend::blit_mode_with_options(
                         &mut out,
                         df,
                         &image,
@@ -220,10 +221,11 @@ impl RuntimeTraceApi {
                         0,
                         1,
                         record.blend_parameter,
+                        self.native_additive_coverage,
                     );
                 }
             } else {
-                crate::native_app::bitmap_blend::blit_mode(
+                crate::native_app::bitmap_blend::blit_mode_with_options(
                     &mut out,
                     df,
                     &image,
@@ -232,6 +234,7 @@ impl RuntimeTraceApi {
                     0,
                     record.blend_mode,
                     record.blend_parameter,
+                    self.native_additive_coverage,
                 );
             }
         }

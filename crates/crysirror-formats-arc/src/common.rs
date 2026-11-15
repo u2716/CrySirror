@@ -118,6 +118,7 @@ pub(crate) enum EntryPlan {
     Segments {
         segments: Vec<Segment>,
         encrypted: bool,
+        facts: Xp3Facts,
     },
     NsaLzss {
         offset: u64,
@@ -139,15 +140,73 @@ pub(crate) enum EntryPlan {
 }
 pub(crate) type DecodeFn =
     Arc<dyn Fn(&[u8], &ArchiveEntry, &DecodeContext) -> Result<Vec<u8>> + Send + Sync>;
+/// XP3 index facts of one entry, kept typed: a JSON object per entry costs
+/// about 1.9 KiB, which made a 45k-entry voice index exceed 100 MiB.
+/// [`Xp3Facts::metadata`] builds the published JSON view on request.
+#[derive(Clone, Default)]
+pub(crate) struct Xp3Facts {
+    pub version: u8,
+    pub flags: u32,
+    pub adler32: u32,
+    pub timestamp: Option<u64>,
+    pub declared_size: u64,
+    pub declared_stored_size: u64,
+    /// Original `info` name when the published path came from an inline
+    /// (M2/KrkrZ) filename record.
+    pub info_name: Option<Box<str>>,
+    /// Name the plain index exposed before CXDEC filename recovery renamed it.
+    pub visible_name: Option<Box<str>>,
+    /// Authenticated HXV4 hashed-path record id.
+    pub hxv4_id: Option<u64>,
+}
+impl Xp3Facts {
+    pub fn metadata(&self, entry: &ArchiveEntry, segment_count: usize) -> serde_json::Value {
+        let mut out = serde_json::json!({"format":"kirikiri/xp3","version":self.version,"flags":self.flags,"adler32":self.adler32,"timestamp":self.timestamp,"segment_count":segment_count,"declared_size":self.declared_size,"declared_stored_size":self.declared_stored_size});
+        if let Some(info) = &self.info_name {
+            out["xp3_inline_name"] = serde_json::json!(entry.path);
+            out["xp3_info_name"] = serde_json::json!(info);
+        }
+        if let Some(name) = &self.visible_name {
+            out["visible_name"] = serde_json::json!(name);
+        }
+        if let Some(id) = self.hxv4_id {
+            out["hxv4"] = serde_json::json!({"authenticated":true,"name":"hashed","id":id});
+        }
+        if let Some(extra) = entry.metadata.as_object() {
+            for (k, v) in extra {
+                out[k] = v.clone();
+            }
+        }
+        out
+    }
+}
 pub(crate) struct ParsedArchive {
     pub format: &'static str,
     pub source: Arc<dyn AssetReader>,
     pub entries: Vec<ArchiveEntry>,
     pub plans: Vec<EntryPlan>,
 }
+impl ParsedArchive {
+    /// Typed XP3 facts of entry `id`.
+    pub fn xp3(&self, id: u32) -> Option<&Xp3Facts> {
+        match self.plans.get(id as usize)? {
+            EntryPlan::Segments { facts, .. } => Some(facts),
+            _ => None,
+        }
+    }
+}
 impl Archive for ParsedArchive {
     fn entries(&self) -> &[ArchiveEntry] {
         &self.entries
+    }
+    fn entry_metadata(&self, id: u32) -> serde_json::Value {
+        let Some(entry) = self.entries.get(id as usize).filter(|e| e.id == id) else {
+            return serde_json::Value::Null;
+        };
+        match self.plans.get(id as usize) {
+            Some(EntryPlan::Segments { facts, segments, .. }) => facts.metadata(entry, segments.len()),
+            _ => entry.metadata.clone(),
+        }
     }
     fn open(&self, id: u32, context: &DecodeContext) -> Result<Arc<dyn AssetReader>> {
         let entry = self
@@ -171,6 +230,7 @@ impl Archive for ParsedArchive {
             EntryPlan::Segments {
                 segments,
                 encrypted,
+                ..
             } => {
                 let mut readers = Vec::with_capacity(segments.len());
                 for segment in segments {

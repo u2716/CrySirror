@@ -6,11 +6,18 @@ use crate::{
     native_services_bootstrap::NativePreferences,
     native_shell::{NativeMode, NativeStartupProfile},
 };
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use crysirror_core::{
     service::{HostServices, InputFrame, MediaPhase, MediaRequest},
     state::ClientId,
 };
+
+/// Client-scoped shared Media identities (the runtime admits ids < 1024).
+/// The three PrintMovie owners are mutually exclusive but kept distinct.
+pub const OPENING_MEDIA: u32 = 1;
+pub const GALLERY_MEDIA: u32 = 2;
+pub const SCRIPT_MEDIA: u32 = 3;
+const MEDIA_LIMIT: u32 = 1024;
 
 #[derive(Clone, Debug)]
 pub struct NativeMovieSpec {
@@ -66,6 +73,42 @@ impl NativeMovieSpec {
                     .encoded_path(&[b"movie\\".as_slice(), candidate].concat())?,
             )
         };
+        Self::with_asset(profile, chosen, preferences)
+    }
+    /// PrintMovie started by the `printmovie` user command (4fdfb0 ->
+    /// SetMovie(GetMovieName(n))): Init then uses the selected name rather
+    /// than the selectByVar/default branch.
+    pub fn for_script(
+        profile: &NativeStartupProfile,
+        configuration: &NativeConfiguration,
+        number: i32,
+        preferences: &NativePreferences,
+    ) -> Result<Self> {
+        // 52f2b0 returns NULL without a list or outside 1..=count; the native
+        // wsprintf would then format a NULL name. Fail visibly instead.
+        let name = usize::try_from(number)
+            .ok()
+            .filter(|n| *n > 0)
+            .and_then(|n| {
+                profile
+                    .movie_names
+                    .as_ref()
+                    .and_then(|list| list.tokens.get((n - 1) * 2))
+            })
+            .with_context(|| format!("NNN printmovie {number} has no movielist entry"))?;
+        let asset = configuration
+            .resources
+            .encoded_path(&[b"movie\\".as_slice(), name].concat())?;
+        Self::with_asset(profile, Some(asset), preferences)
+    }
+    fn with_asset(
+        profile: &NativeStartupProfile,
+        chosen: Option<String>,
+        preferences: &NativePreferences,
+    ) -> Result<Self> {
+        let table = &profile.movie;
+        let int =
+            |key: &[u8], default| -> Result<i32> { Ok(table.integer(key)?.unwrap_or(default)) };
         let last_wait = u32::try_from(int(b"lastWait", 5)?)?;
         ensure!(last_wait <= 864000, "NNN movie lastWait bounds");
         // The reviewed legacy constructor has no fixed-size hook. Do not
@@ -123,10 +166,16 @@ pub struct NativeMoviePlayer {
     loading: bool,
     path: Option<String>,
     exit_ms: Option<u64>,
+    exit_remaining: Option<u32>,
+    admission: crate::native_mode_audio::ModeAudioAdmission,
+    pressed: u64,
     finished: bool,
     pub api_calls: u64,
 }
 impl NativeMoviePlayer {
+    pub(crate) fn retain_input(&mut self, input: InputFrame) {
+        self.pressed |= input.buttons_pressed;
+    }
     pub(crate) fn cancel(&mut self, host: &mut dyn HostServices) -> Result<()> {
         if self.visible {
             host.submit_engine(
@@ -159,6 +208,7 @@ impl NativeMoviePlayer {
         ensure!(
             client.0 != 0
                 && media != 0
+                && media < MEDIA_LIMIT
                 && layer != 0
                 && size.iter().all(|n| (1..=8192).contains(n))
                 && (1..=10000).contains(&frame_ms),
@@ -176,22 +226,54 @@ impl NativeMoviePlayer {
             loading: false,
             path: None,
             exit_ms: None,
+            exit_remaining: None,
+            admission: crate::native_mode_audio::ModeAudioAdmission::new(27)?,
+            pressed: 0,
             finished: false,
             api_calls: 0,
         })
     }
     pub fn dependency_pending(&self) -> bool {
-        self.loading && self.exit_ms.is_none() && !self.finished
+        !self.finished && (self.admission.pending() || (self.loading && self.exit_ms.is_none()))
     }
     pub fn poll(
         &mut self,
         host: &mut dyn HostServices,
         input: InputFrame,
     ) -> Result<Option<NativeMode>> {
+        self.poll_with_admission(host, input, true, None)
+    }
+    pub(crate) fn poll_owned(
+        &mut self,
+        host: &mut dyn HostServices,
+        input: InputFrame,
+        admit: bool,
+        bridge: &mut crate::bridge::Bridge,
+    ) -> Result<Option<NativeMode>> {
+        self.poll_with_admission(host, input, admit, Some(bridge))
+    }
+    fn poll_with_admission(
+        &mut self,
+        host: &mut dyn HostServices,
+        input: InputFrame,
+        admit: bool,
+        mut bridge: Option<&mut crate::bridge::Bridge>,
+    ) -> Result<Option<NativeMode>> {
         if self.finished {
             return Ok(Some(self.spec.next));
         }
+        if admit {
+            self.retain_input(input);
+        }
+        if let Some(owner) = bridge.as_deref_mut() {
+            if !self.admission.begin(host, owner, admit)? {
+                return Ok(None);
+            }
+        }
         if !self.started {
+            if !admit {
+                return Ok(None);
+            }
             if let Some(asset) = &self.spec.asset {
                 let path = host.media_request(
                     self.client,
@@ -210,15 +292,22 @@ impl NativeMoviePlayer {
             self.started = true;
         }
         if self.spec.asset.is_none() {
+            if !self.admission.poll(host, bridge, admit, self.frame_ms)? {
+                return Ok(None);
+            }
+            self.pressed = 0;
             self.finished = true;
             return Ok(Some(self.spec.next));
         }
-        if let Some(start) = self.exit_ms {
-            ensure!(
-                host.now_ms() >= start,
-                "NNN movie exit clock moved backwards"
-            );
-            if host.now_ms() - start >= u64::from(self.spec.last_wait.max(1)) * self.frame_ms {
+        if let Some(remaining) = self.exit_remaining.as_mut() {
+            if !self.admission.poll(host, bridge, admit, self.frame_ms)? {
+                return Ok(None);
+            }
+            self.pressed = 0;
+            // PrintMovie::Calcu decrements lastCount once per admitted native
+            // frame. Media/audio completion and host wall time do not spend it.
+            *remaining = remaining.saturating_sub(1);
+            if *remaining == 0 {
                 self.finished = true;
                 return Ok(Some(self.spec.next));
             }
@@ -245,9 +334,13 @@ impl NativeMoviePlayer {
             self.api_calls += 1;
             self.visible = true;
         }
+        if self.loading || !self.admission.poll(host, bridge, admit, self.frame_ms)? {
+            return Ok(None);
+        }
+        let pressed = std::mem::take(&mut self.pressed);
         if info.phase == MediaPhase::Ended
             || (!self.spec.no_skip
-                && input.buttons_pressed
+                && pressed
                     & (crysirror_core::service::buttons::MOUSE_LEFT
                         | crysirror_core::service::buttons::MOUSE_RIGHT)
                     != 0)
@@ -267,6 +360,7 @@ impl NativeMoviePlayer {
             self.api_calls += 1;
             self.path = None;
             self.exit_ms = Some(host.now_ms());
+            self.exit_remaining = Some(self.spec.last_wait.max(1));
         }
         Ok(None)
     }

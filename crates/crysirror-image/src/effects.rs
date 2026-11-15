@@ -13,9 +13,28 @@ pub const MAX_EFFECT_PIXELS: u64 = 4_194_304;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ImageEffect {
+    /// Remove alpha-marked border and resize nine retained image cells.
+    NinePatch {width:u32,height:u32},
+    /// Import bounded monochrome coverage or packed BGRA glyph bytes.
+    CoverageBitmap {spec:crate::coverage_bitmap::CoverageBitmap},
+    /// Native-compatible circular coverage blur, preserving stored RGB.
+    GlyphCoverageBlur {radius:u32,level:i32},
+    RadialRgbBrushes{spec:crate::radial_rgb_brushes::RadialRgbBrushes},
+    PackedPairBatch{spec:crate::packed_pair_batch::PackedPairBatch},
+    RadialWavePair{spec:crate::radial_wave_pair::RadialWavePair},
+    LinearMaskOffset{spec:crate::linear_mask_offset::LinearMaskOffset},
+    StoredWordSpans{spec:crate::stored_word_spans::StoredWordSpans},
+    StoredGradientSpans{spec:crate::stored_gradient_spans::StoredGradientSpans},
+    /// Saturated RGB offsets over squared-distance circular/cutout spans.
+    CircularOffset{spec:crate::circular_offset::CircularOffset},
+    /// Quantized outward channel lifts from independently positioned row edges.
+    RowEdgeLift{spec:crate::row_edge_lift::RowEdgeLift},
+    /// Inclusive ellipse/cutout spans with explicit stored-byte RGB arithmetic.
+    EllipticPaint { spec: crate::elliptic_paint::EllipticPaint },
     /// Stored RGB neighbour differences with independently truncated weights.
     NeighborRelief { spec: crate::neighbor_relief::NeighborRelief },
     /// Three-input RGB-mask coverage with explicit packed-word arithmetic.
+    MaskFieldPair { spec: crate::mask_field_pair::MaskFieldPair },
     PackedColorMask { spec: crate::packed_color_mask::PackedColorMask },
     /// Two independent alpha masks, optional RGB transform and packed products.
     PackedDualMask { spec: crate::packed_dual_mask::PackedDualMask },
@@ -58,6 +77,10 @@ pub enum ImageEffect {
     },
     LinearGradient {
         spec: crate::linear_gradient::LinearGradientByte,
+    },
+    /// Alpha from a byte table indexed by offset + x*step0 + y*step1.
+    LinearAlphaLookup {
+        spec: crate::linear_alpha_lookup::LinearAlphaLookup,
     },
     SequentialBoxBlur {
         spec: crate::sequential_box_blur::SequentialBoxBlur,
@@ -220,6 +243,7 @@ pub enum ImageEffect {
         spec: crate::alpha_clip::AlphaClipRect,
     },
     /// Three immutable inputs, two independent masks and exact14bit products.
+    PackedPairBlend {spec:crate::packed_pair_blend::PackedPairBlend},
     MaskedPairBlend {
         spec: crate::masked_pair::MaskedPairBlend,
     },
@@ -323,6 +347,9 @@ pub enum ImageEffect {
 impl ImageEffect {
     pub fn validate(&self) -> Result<()> {
         match self {
+            Self::NinePatch{width,height}=>{crate::rgba_len(*width,*height)?;ensure!(u64::from(*width)*u64::from(*height)<=MAX_EFFECT_PIXELS,"nine-patch output");},
+            Self::CoverageBitmap{spec}=>spec.validate()?,
+            Self::GlyphCoverageBlur{radius,level}=>ensure!(*radius<=64&&(0..=65535).contains(level),"glyph coverage blur"),
             Self::CopyChannel { source_channel, destination_channels, .. } => ensure!(
                 *source_channel < 4 && (1..=15).contains(destination_channels),
                 "stored channel copy selection"
@@ -338,6 +365,7 @@ impl ImageEffect {
             Self::RadialAngleLookup { spec } => spec.validate()?,
             Self::GradientOverlay { spec } => spec.validate()?,
             Self::LinearGradient { spec } => spec.validate()?,
+            Self::LinearAlphaLookup { spec } => spec.validate()?,
             Self::SequentialBoxBlur { spec } => spec.validate()?,
             Self::MaskedBlur { spec } => spec.validate()?,
             Self::BoxBlurClamped { spec } => spec.validate()?,
@@ -374,10 +402,18 @@ impl ImageEffect {
             Self::RowDeform { spec } => spec.validate()?,
             Self::IntegerRaster { spec } => spec.validate()?,
             Self::ByteRaster { spec } => spec.validate()?,
+            Self::StoredGradientSpans{spec}=>spec.validate()?,
+            Self::StoredWordSpans{spec}=>spec.validate()?,
+            Self::MaskFieldPair{spec}=>spec.validate()?,
             Self::PackedColorMask{spec}=>spec.validate()?,
             Self::PackedDualMask{spec}=>spec.validate()?,
+            Self::LinearMaskOffset{spec}=>spec.validate()?,
+            Self::RadialWavePair{spec}=>spec.validate()?,
             Self::FloatingLines{lines}=>crate::floating_lines::validate(lines)?,
             Self::NeighborRelief{spec}=>spec.validate()?,
+            Self::CircularOffset{spec}=>spec.validate()?,
+            Self::RowEdgeLift{spec}=>spec.validate()?,
+            Self::EllipticPaint{spec}=>spec.validate()?,
             Self::StoredMaskBlend { spec } => spec.validate()?,
             Self::AlphaPlanePair { spec } => spec.validate()?,
             Self::RgbLookup { spec } => spec.validate()?,
@@ -388,6 +424,9 @@ impl ImageEffect {
             Self::SineRowCopy { .. } => (),
             Self::DiscCopies { spec } => spec.validate()?,
             Self::AlphaClipRect { spec } => spec.validate()?,
+            Self::PackedPairBlend{spec}=>spec.validate()?,
+            Self::PackedPairBatch{spec}=>spec.validate()?,
+            Self::RadialRgbBrushes{spec}=>spec.validate()?,
             Self::MaskedPairBlend { spec } => spec.validate()?,
             Self::Transition { spec } => spec.validate()?,
             Self::Vector { path } => path.validate()?,
@@ -490,6 +529,9 @@ impl ImageSurface {
         if let ImageEffect::LinearGradient { spec } = effect {
             return spec.apply(self, check);
         }
+        if let ImageEffect::LinearAlphaLookup { spec } = effect {
+            return spec.apply(self, check);
+        }
         if let ImageEffect::SequentialBoxBlur { spec } = effect {
             return spec.apply(self, check);
         }
@@ -531,19 +573,27 @@ impl ImageSurface {
                 | ImageEffect::AlphaStamps { .. }
                 | ImageEffect::CopyChannel { .. }
                 | ImageEffect::AlphaPlanePair { .. }
+                | ImageEffect::MaskFieldPair{..}
                 | ImageEffect::PackedColorMask{..}
+                | ImageEffect::RadialWavePair{..}
+                | ImageEffect::LinearMaskOffset{..}
                 | ImageEffect::PackedDualMask{..}
                 | ImageEffect::StoredMaskBlend { .. }
                 | ImageEffect::Transition { .. }
                 | ImageEffect::SineRowCopy { .. }
                 | ImageEffect::DiscCopies { .. }
                 | ImageEffect::AlphaClipRect { .. }
+                | ImageEffect::PackedPairBatch{..}
+                | ImageEffect::PackedPairBlend{..}
                 | ImageEffect::MaskedPairBlend { .. }
                 | ImageEffect::IntegerRaster { .. }
                 | ImageEffect::ByteRaster { .. }
         ) {
             anyhow::bail!("image effect requires its multi-image context")
         }
+        if let ImageEffect::RadialRgbBrushes{spec}=effect{return spec.apply(self,check);}
+        if let ImageEffect::StoredGradientSpans{spec}=effect{return spec.apply(self,check);}
+        if let ImageEffect::StoredWordSpans{spec}=effect{return spec.apply(self,check);}
         if let ImageEffect::AlphaLookup { table } = effect {
             ensure!(table.len() == 256, "alpha lookup table length");
             let mut out = self.clone();
@@ -629,6 +679,9 @@ impl ImageSurface {
         }
         if let ImageEffect::FloatingLines{lines}=effect{return self.floating_lines(lines,check);}
         if let ImageEffect::NeighborRelief{spec}=effect{return spec.apply(self,check);}
+        if let ImageEffect::CircularOffset{spec}=effect{return spec.apply(self,check);}
+        if let ImageEffect::RowEdgeLift{spec}=effect{return spec.apply(self,check);}
+        if let ImageEffect::EllipticPaint{spec}=effect{return spec.apply(self,check);}
         if let ImageEffect::IntegerLines { lines } = effect { return self.integer_lines(lines,check); }
         if let ImageEffect::Perspective { quad } = effect {
             return self.perspective(*quad, check);
@@ -646,6 +699,9 @@ impl ImageSurface {
             }
             return Ok(output);
         }
+        if let ImageEffect::NinePatch{width,height}=effect{return crate::nine_patch::resize(self,[*width,*height],check);}
+        if let ImageEffect::CoverageBitmap{spec}=effect{return spec.apply(check);}
+        if let ImageEffect::GlyphCoverageBlur{radius,level}=effect{return crate::coverage_blur::blur_image(self,*radius,*level,check);}
         if let ImageEffect::Resize { width, height } = effect {
             return self.resized(*width, *height, check);
         }

@@ -1,0 +1,4 @@
+interface:
+  display_name: "CrySirror Native Saves"
+  short_description: "Maintain original save versions and transactional restore"
+  default_prompt: "Use $crysirror-native-save to analyze this original save profile, preserve user data and implement its complete restore or export contract."

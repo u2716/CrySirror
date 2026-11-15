@@ -12,7 +12,34 @@
 
 use anyhow::{Context, Result, ensure};
 use crysirror_core::service::AssetReader;
+#[cfg(not(any(target_os = "horizon", target_os = "vita")))]
 use pure_magic::MagicDb;
+#[cfg(any(target_os = "horizon", target_os = "vita"))]
+/// Console targets cannot link the embedded rule database; a reduced
+/// built-in signature table identifies the common container/media types
+/// that detection records as evidence.
+#[derive(Debug)]
+pub struct MagicDb;
+#[cfg(any(target_os = "horizon", target_os = "vita"))]
+const CONSOLE_SIGNATURES: &[(&[u8], usize, &str, &str)] = &[
+    (b"\x89PNG\r\n\x1a\n", 0, "image/png", "PNG image data"),
+    (b"\xff\xd8\xff", 0, "image/jpeg", "JPEG image data"),
+    (b"GIF8", 0, "image/gif", "GIF image data"),
+    (b"BM", 0, "image/bmp", "PC bitmap"),
+    (b"OggS", 0, "audio/ogg", "Ogg data"),
+    (b"RIFF", 0, "application/octet-stream", "RIFF data"),
+    (b"ID3", 0, "audio/mpeg", "Audio file with ID3"),
+    (b"fLaC", 0, "audio/flac", "FLAC audio"),
+    (b"PK\x03\x04", 0, "application/zip", "Zip archive data"),
+    (b"7z\xbc\xaf\x27\x1c", 0, "application/x-7z-compressed", "7-zip archive data"),
+    (b"Rar!\x1a\x07", 0, "application/x-rar", "RAR archive data"),
+    (b"MZ", 0, "application/x-dosexec", "MS-DOS executable"),
+    (b"\x7fELF", 0, "application/x-executable", "ELF"),
+    (b"\x1a\x45\xdf\xa3", 0, "video/x-matroska", "Matroska data"),
+    (b"\x00\x00\x01\xba", 0, "video/mpeg", "MPEG sequence"),
+    (b"ftyp", 4, "video/mp4", "ISO Media"),
+    (b"\x30\x26\xb2\x75\x8e\x66\xcf\x11", 0, "video/x-ms-asf", "Microsoft ASF"),
+];
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, OnceLock};
 
@@ -60,6 +87,12 @@ impl std::fmt::Debug for FileDetector {
 // mutable singleton. No asset, VM, file or task handles enter this global cache.
 static DATABASE: OnceLock<std::result::Result<Arc<MagicDb>, String>> = OnceLock::new();
 
+#[cfg(any(target_os = "horizon", target_os = "vita"))]
+fn load_database() -> Result<Arc<MagicDb>> {
+    Ok(Arc::new(MagicDb))
+}
+
+#[cfg(not(any(target_os = "horizon", target_os = "vita")))]
 fn load_database() -> Result<Arc<MagicDb>> {
     let mut db = magic_db::load().context("load embedded Rust magic database")?;
     db.verify().context("verify embedded Rust magic rules")?;
@@ -89,7 +122,10 @@ impl FileDetector {
 
     /// Number of loaded top-level rules (not a count of supported file formats).
     pub fn rule_count(&self) -> usize {
-        self.db.rules().len()
+        #[cfg(not(any(target_os = "horizon", target_os = "vita")))]
+        return self.db.rules().len();
+        #[cfg(any(target_os = "horizon", target_os = "vita"))]
+        return CONSOLE_SIGNATURES.len();
     }
 
     /// Read at most 64 KiB from a caller-owned capability, handling partial reads.
@@ -126,20 +162,40 @@ impl FileDetector {
         if bytes.is_empty() {
             return Ok(None);
         }
-        let identity = self
-            .db
-            .first_magic_slice(bytes, None)
-            .context("identify resource prefix using embedded Rust magic rules")?;
-        if identity.is_default() {
-            return Ok(None);
+        #[cfg(any(target_os = "horizon", target_os = "vita"))]
+        {
+            let _ = &self.db;
+            for (magic, at, mime, description) in CONSOLE_SIGNATURES {
+                if bytes.len() >= at + magic.len() && &bytes[*at..at + magic.len()] == *magic {
+                    return Ok(Some(FileIdentity {
+                        mime_type: (*mime).into(),
+                        description: (*description).into(),
+                        rule_source: Some("crysirror-console-signatures".into()),
+                        strength: 50,
+                        bytes_examined: bytes.len() as u32,
+                        prefix_truncated,
+                    }));
+                }
+            }
+            Ok(None)
         }
-        Ok(Some(FileIdentity {
-            mime_type: identity.mime_type().to_owned(),
-            description: identity.message(),
-            rule_source: identity.source().map(str::to_owned),
-            strength: identity.strength(),
-            bytes_examined: bytes.len() as u32,
-            prefix_truncated,
-        }))
+        #[cfg(not(any(target_os = "horizon", target_os = "vita")))]
+        {
+            let identity = self
+                .db
+                .first_magic_slice(bytes, None)
+                .context("identify resource prefix using embedded Rust magic rules")?;
+            if identity.is_default() {
+                return Ok(None);
+            }
+            Ok(Some(FileIdentity {
+                mime_type: identity.mime_type().to_owned(),
+                description: identity.message(),
+                rule_source: identity.source().map(str::to_owned),
+                strength: identity.strength(),
+                bytes_examined: bytes.len() as u32,
+                prefix_truncated,
+            }))
+        }
     }
 }

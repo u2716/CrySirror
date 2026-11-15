@@ -558,7 +558,7 @@ impl Bridge<'_> {
                 if self.services.text.active {
                     layers.push(json!({"op":"remove","id":ROOT}));
                 }
-                layers.push(json!({"op":"put","layer":{"id":ROOT,"parent":SCENE_ROOT,"visible":self.services.native_window_visible,"rect":[0,0,1280,720],"paint":{"kind":"solid","color":[0,0,0,0]},"order":[110,0]}}));
+                layers.push(json!({"op":"put","layer":{"id":ROOT,"parent":SCENE_ROOT,"visible":self.services.native_window_visible,"rect":[0,0,self.native_canvas()[0],self.native_canvas()[1]],"paint":{"kind":"solid","color":[0,0,0,0]},"order":message_window_order(self.services.native_profile)}}));
                 let mut widths = Vec::new();
                 let mut rows = Vec::new();
                 let mut row_heights = Vec::new();
@@ -634,6 +634,7 @@ impl Bridge<'_> {
                     curtain.finish();
                 }
                 self.root()?;
+                dc3_window_orders(self.services.native_profile, &mut layers);
                 self.submit(layers, vec![])?;
                 self.services.text = NativeText {
                     controls_refreshing:false,
@@ -899,7 +900,7 @@ impl Bridge<'_> {
                 .map(|line| line.width)
                 .max()
                 .unwrap_or(4);
-            layers.push(json!({"op":"put","layer":{"id":base+n as u32,"parent":parent,"rect":[x,y,width,720],"visible":part.state==99||part.state==0,"paint":{"kind":"glyph_run","font":self.font,"size":22,"color":[255,255,255,255],"glyphs":glyphs,"outline":outline},"order":[order,0]}}));
+            layers.push(json!({"op":"put","layer":{"id":base+n as u32,"parent":parent,"rect":[x,y,width,self.native_canvas()[1]],"visible":part.state==99||part.state==0,"paint":{"kind":"glyph_run","font":self.font,"size":22,"color":[255,255,255,255],"glyphs":glyphs,"outline":outline},"order":[order,0]}}));
         }
         Ok(())
     }
@@ -945,5 +946,34 @@ mod tests {
         assert!(tokens("@cmd5台詞").is_err());
         assert!(tokens("@mu3台詞").is_err());
         assert!(tokens("@c").is_err());
+    }
+}
+
+///DC3WY 41E360 draws the message templates at object 60's turn: after the
+///priority-sorted objects 10..51 and before objects 61..119 (the face
+///object 65 lies above the window). DC4PH keeps its topmost window.
+fn message_window_order(profile: Option<crate::Profile>) -> serde_json::Value {
+    if profile == Some(crate::Profile::Dc3WithYou) {
+        json!([1, 101 * 64 + 60])
+    } else {
+        json!([110, 0])
+    }
+}
+
+///DC3WY: the window's images ([109, k]) and glyphs ([110, k]) take object
+///60's place in the flat global order, above the class-1 objects (minor up
+///to 100*64+63) and below class-2 objects such as the face (65).
+fn dc3_window_orders(profile: Option<crate::Profile>, layers: &mut [serde_json::Value]) {
+    if profile != Some(crate::Profile::Dc3WithYou) {
+        return;
+    }
+    for command in layers {
+        let Some(order) = command.get_mut("layer").and_then(|layer| layer.get_mut("order")) else { continue };
+        let (Some(major), Some(minor)) = (order.get(0).and_then(|v| v.as_i64()), order.get(1).and_then(|v| v.as_i64())) else { continue };
+        match major {
+            109 => *order = json!([1, 6500 + (minor & 0xff)]),
+            110 => *order = json!([1, 6800 + minor.min(1000)]),
+            _ => {}
+        }
     }
 }

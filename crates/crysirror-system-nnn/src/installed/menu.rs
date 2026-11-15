@@ -3,6 +3,9 @@
 //! Native dataN slot identities/layout and SYSTEM DATA settings stay native;
 //! widget hit testing, focus, text, images and input ownership stay in the engine.
 use super::*;
+mod general_entry;
+pub(super) mod native_config;
+mod native_config_owner;
 use crate::native_save::{LegacySaveProfile, NativeSaveFile};
 use crysirror_core::{
     image_processing::ImageResource,
@@ -23,6 +26,8 @@ pub(super) enum Kind {
     Music,
     Movies,
     System,
+    /// CCommonSelectPlace, entered only from the `selectplace` user command.
+    SelectPlace,
 }
 impl Kind {
     pub(super) fn name(self) -> &'static str {
@@ -38,6 +43,7 @@ impl Kind {
             Self::Music => "listenBGM",
             Self::Movies => "selectMovie",
             Self::System => "SystemMenu",
+            Self::SelectPlace => "selectPlace",
         }
     }
     pub(super) fn native_mode(self) -> i32 {
@@ -53,6 +59,7 @@ impl Kind {
             Self::Music => 8,
             Self::Movies => 26,
             Self::System => 13,
+            Self::SelectPlace => 22,
         }
     }
     pub(super) fn gallery(self) -> bool {
@@ -93,6 +100,7 @@ pub(super) enum Action {
     Load(i32),
     Save(u32),
     Setting(i32, i32),
+    CharacterSetting{i:i32,value:i32,captured:bool},
     Navigate(Kind),
     Picture {
         group: usize,
@@ -109,6 +117,8 @@ pub(super) enum Action {
     PlayMovie(String),
     GalleryAudio(crate::native_cg::CgAudio),
     System(usize),
+    /// SelectPlace button index; FinalExitRoutine writes index + 1.
+    SelectPlace(usize),
     SystemCommand(i32),
     ReturnTitle,
 }
@@ -134,6 +144,16 @@ pub(super) struct Page {
     pub(super) table: Option<crate::config::Names>,
 }
 pub(super) struct Menu {
+    pub stage:&'static str,
+    pub(super) native_config: Option<native_config::ConfigMenu>,
+    config_catalogues: Option<crate::native_config_catalogues::Preparation>,
+    config_next_ms: Option<u64>,
+    entry: Option<general_entry::PlainEntry>,
+    entry_initialized: bool,
+    settings_page:usize,
+    general_kind:Option<Kind>,
+    general_counter:u64,
+    general_next_ms:Option<u64>,
     pub return_mode:i32,
     system_initialized:bool,
     pub listen_number: i32,
@@ -167,6 +187,30 @@ pub(super) struct Menu {
     pub back_script_started: bool,
 }
 impl Menu {
+    pub(super) fn retain_viewer_input(&mut self,input:InputFrame) {
+        // Keyboard/mouse edges belong to the foreground menu even while
+        // its background SPT is finishing a shared DRAW. Retain before any
+        // audio/resource early return, exactly as the viewer/movie owners do.
+        if let Some(skin)=self.skin.as_mut(){skin.retain_input(input);}
+        if let Some(viewer)=self.viewer.as_mut(){viewer.retain_input(input);}
+        if let Some(movie)=self.movie.as_mut(){movie.retain_input(input);}
+    }
+    pub(super) fn poll_general_audio(&mut self,host:&mut dyn HostServices,vm:&mut NativeAdapter,admit:bool)->Result<bool> {
+        if !vm.poll_general_audio(host)? {return Ok(false);}
+        if self.skin.is_some() {self.general_kind=None;return Ok(true);}
+        if self.general_kind!=Some(self.kind) || vm.general_audio_mode()!=Some(self.kind.native_mode()) {
+            if !admit {return Ok(false);}
+            vm.begin_general_audio(self.kind.native_mode(),crate::native_general_audio::GeneralAudioPolicy::for_mode(self.kind.native_mode(),self.native_table()?)?)?;
+            self.general_kind=Some(self.kind);self.general_counter=0;self.general_next_ms=None;
+        }
+        if !admit || self.entry.is_some() {return Ok(true);}
+        let now=host.now_ms();
+        if self.general_next_ms.is_some_and(|next|now<next) {return Ok(true);}
+        if !vm.poll_general_update(host,self.kind.native_mode(),self.general_counter)? {return Ok(false);}
+        self.general_counter=self.general_counter.checked_add(1).context("NNN menu General update exhausted")?;
+        self.general_next_ms=Some(now.checked_add(vm.frame_period_ms()).context("NNN menu General deadline overflow")?);
+        Ok(true)
+    }
     pub(super) fn initialize_system_menu(&mut self,variables:&mut crate::expression::Variables)->Result<bool> {
         if self.kind!=Kind::System || self.system_initialized {return Ok(false)}
         let mut random=variables.random_state().context("NNN SystemMenu original random state absent")?;
@@ -217,6 +261,16 @@ impl Menu {
             None
         };
         Ok(Self {
+            stage:"new",
+            native_config: None,
+            config_catalogues: None,
+            config_next_ms: None,
+            entry: None,
+            entry_initialized: false,
+            settings_page:0,
+            general_kind:None,
+            general_counter:0,
+            general_next_ms:None,
             return_mode:10,
             system_initialized:false,
             listen_number: 1,
@@ -318,7 +372,13 @@ impl Menu {
         host: &mut dyn HostServices,
     ) -> Result<()> {
         self.remove(client, host)?;
+        self.native_config = None;
+        self.config_catalogues = None;
+        self.config_next_ms = None;
         self.kind = kind;
+        self.entry_initialized=false;
+        self.entry=None;
+        self.settings_page=0;
         self.listen_number = 1;
         self.listen_initialized = false;
         self.listen_playing = false;
@@ -358,11 +418,27 @@ impl Menu {
         self.viewer = Some(viewer);
         Ok(())
     }
+    pub(super) fn diagnostics(&self)->Value {
+        json!({"stage":self.stage,"native_config":self.native_config.as_ref().map(|c|json!({"page":c.session.page,"ready":c.ready,"printing":c.print_in_flight(),"effects":c.effects.len(),"published":c.published_page,"calcu":c.counter,"locked":c.session.locked_navigation})),"mode":self.kind.native_mode(),"name":self.kind.name(),"prepared":self.ready.is_some(),"published":self.published,"background_started":self.back_script_started,"skin":self.skin.as_ref().map(|skin|skin.diagnostics()),"entry_active":self.entry.is_some()})
+    }
+    pub(super) fn poll_skin_dependencies(&mut self,host:&mut dyn HostServices,vm:&mut NativeAdapter)->Result<()> {
+        if let Some(skin)=self.skin.as_mut(){skin.poll_existing_dependencies(host,Some(vm))?;}
+        Ok(())
+    }
     pub(super) fn poll_native_viewer(&mut self,host:&mut dyn HostServices,input:InputFrame,admit:bool,vm:&mut NativeAdapter)->Result<Option<Action>> {
         let viewer=self.viewer.as_mut().context("NNN native picture viewer absent")?;
         let finished=viewer.poll_native(host,input,admit,vm)?;
         if let Some(audio)=viewer.take_audio(){return Ok(Some(Action::GalleryAudio(audio)));}
-        if finished{viewer.remove(host)?;self.viewer=None;self.published=false;}
+        if finished{viewer.remove(host)?;self.viewer=None;self.published=false;if let Some(skin)=self.skin.as_mut(){skin.resume_after_menu(host)?;}}
+        Ok(None)
+    }
+    pub(super) fn poll_native_movie(&mut self,host:&mut dyn HostServices,input:InputFrame,admit:bool,vm:&mut NativeAdapter)->Result<Option<Action>> {
+        let movie=self.movie.as_mut().context("NNN gallery movie actor absent")?;
+        if vm.poll_movie(movie,host,input,admit)?.is_some() {
+            self.movie=None;
+            self.published=false;
+            if let Some(skin)=self.skin.as_mut(){skin.resume_after_menu(host)?;}
+        }
         Ok(None)
     }
     pub(super) fn picture_viewer_active(&self)->bool{self.viewer.is_some()}
@@ -389,7 +465,7 @@ impl Menu {
             gain,
         };
         let movie = crate::native_movie::NativeMoviePlayer::new(
-            client, 0x66049000, 0x66049001, SIZE, frame_ms, spec,
+            client, crate::native_movie::GALLERY_MEDIA, 0x66049001, SIZE, frame_ms, spec,
         )?;
         let layers = self
             .nodes
@@ -407,7 +483,8 @@ impl Menu {
         Ok(())
     }
     pub fn busy(&self) -> bool {
-        self.skin_job.is_some()
+        self.entry.as_ref().is_some_and(|entry|entry.dependency_pending())
+            || self.skin_job.is_some()
             || self.skin.as_ref().is_some_and(|s| s.dependency_pending())
             || self.movie.as_ref().is_some_and(|m| m.dependency_pending())
             || self.viewer.as_ref().is_some_and(|v| v.pending())
@@ -451,6 +528,7 @@ impl Menu {
         if let Some(mut skin) = self.skin.take() {
             skin.retire(host)?;
         }
+        if let Some(mut entry)=self.entry.take(){entry.remove(client,host)?;}
         self.skin_job = None;
         self.skin_base = None;
         if let Some(mut movie) = self.movie.take() {
@@ -459,7 +537,9 @@ impl Menu {
         if let Some(mut viewer) = self.viewer.take() {
             viewer.remove(host)?;
         }
-        let (layers, ui, paths) = self.cleanup()?;
+        let (layers, mut ui, paths) = self.cleanup()?;
+        let root:Value=serde_json::from_slice(&host.query_engine(client,EngineQuery::UiWidget(ROOT))?)?;
+        if root.is_null(){ui.retain(|command|command["id"]!=ROOT);}
         host.submit_engine(
             client,
             1,
@@ -511,10 +591,10 @@ impl Menu {
                 let n = |name: &[u8], default| -> Result<i32> {
                     Ok(table.integer(name)?.unwrap_or(default))
                 };
-                // Title/Omake/SystemMenu own the exact shared entry lifecycle.
-                // Other mode actors retain their explicit unsupported gate.
+                // Skinned and plain menus share the exact General countdown;
+                // their Init/Print capture owners remain independent.
                 if !matches!(kind,Kind::Omake|Kind::System) {
-                    crate::native_general::ModeReturn::validate_entry(&table)?;
+                    crate::native_general::ModeReturn::validate_plain_menu_entry(&table,kind.native_mode())?;
                 }
                 let background = if prepare_script && n(b"backScriptFlag", 0)? != 0 {
                     let name = table
@@ -532,6 +612,16 @@ impl Menu {
                 } else {
                     None
                 };
+                if kind == Kind::SelectPlace {
+                    let mut page = super::select_place::prepare(
+                        &table,
+                        &config,
+                        variables.as_ref().context("NNN SelectPlace variables absent")?,
+                    )?;
+                    page.background = background;
+                    page.table = Some(table);
+                    return Ok(page);
+                }
                 if kind.gallery() {
                     let mut page = super::gallery::prepare(
                         kind,
@@ -626,8 +716,8 @@ impl Menu {
                             }
                         }
                         page.skin = Some(spec);
-                        page.table = Some(table);
                     }
+                    page.table=Some(table);
                     return Ok(page);
                 }
                 ensure!(
@@ -647,7 +737,7 @@ impl Menu {
                         error_sound: -1,
                         skin: None,
                         image: None,
-                        table: None,
+                        table: Some(table),
                     });
                 }
                 let pages = usize::try_from(n(b"page", 10)?)?;
@@ -756,7 +846,7 @@ impl Menu {
                     error_sound: n(b"cannotLoadSound", -1)?,
                     skin: None,
                     image: None,
-                    table: None,
+                    table: Some(table),
                 })
             })?);
         }
@@ -771,6 +861,12 @@ impl Menu {
         }
         let image = page.image.clone();
         let skin = page.skin.clone();
+        if !self.entry_initialized {
+            self.entry_initialized=true;
+            if skin.is_none() {
+                self.entry=page.table.as_ref().map(crate::native_general_entry::ModeEntry::read).transpose()?.flatten().map(general_entry::PlainEntry::new);
+            }
+        }
         self.ready = Some(page);
         if let Some(image) = image {
             self.skin_job = Some(
@@ -791,23 +887,37 @@ impl Menu {
                     .context("NNN Omake image capability absent")?,
             )?;
             player.set_widget_parent(ROOT)?;
-            player.set_cancel_button(if self.kind==Kind::System{7}else{3});
+            player.set_general_mode(self.kind.native_mode())?;
+            // SelectPlace has no cancel button; right click goes through
+            // the native game keys, not a modal cancel.
+            if self.kind!=Kind::SelectPlace {player.set_cancel_button(if self.kind==Kind::System{7}else{3});}
             self.skin = Some(player);
         }
         self.prepare_skin()
     }
+    fn replace_controls(&self,client:ClientId,host:&mut dyn HostServices,ui:Vec<Value>)->Result<Vec<Value>> {
+        // Shared UI Remove is deliberately strict. Init has no previous
+        // panel, while pagination/confirmation replaces the existing subtree.
+        let current:Value=serde_json::from_slice(&host.query_engine(client,EngineQuery::UiWidget(ROOT))?)?;
+        let mut commands=Vec::new();
+        if !current.is_null(){commands.push(json!({"op":"remove","id":ROOT}));}
+        commands.extend(ui);Ok(commands)
+    }
     fn build(&mut self, client: ClientId, font: &str, host: &mut dyn HostServices) -> Result<()> {
+        if self.native_config.is_some() {
+            return self.publish_native_config(client, font, host, true);
+        }
         let mut ui = vec![
-            json!({"op":"put","widget":{"id":ROOT,"kind":"panel","rect":[0,0,SIZE[0],SIZE[1]],"modal":true,"z":1000,"color":[0,0,0,0],"font":font}}),
+            json!({"op":"put","widget":{"id":ROOT,"kind":"panel","rect":[0,0,SIZE[0],SIZE[1]],"modal":true,"key_event_scope":true,"key_events":[{"buttons":buttons::ESCAPE|buttons::MOUSE_RIGHT,"edge":"press","event":"nnn_menu_cancel"}],"z":1000,"color":[0,0,0,0],"font":font}}),
         ];
         if self.skin.is_some() && self.confirm.is_some() {
             // Keep the native painter's completed frame. Replacing it with the
             // generic catalogue background would erase the original buttons.
-            ui.push(json!({"op":"put","widget":{"id":ROOT+8,"parent":ROOT,"kind":"panel","rect":[210,230,390,140],"modal":true,"z":1001,"color":[20,24,32,255],"font":font}}));
+            ui.push(json!({"op":"put","widget":{"id":ROOT+8,"parent":ROOT,"kind":"panel","rect":[210,230,390,140],"modal":true,"key_event_scope":true,"key_events":[{"buttons":buttons::ESCAPE|buttons::MOUSE_RIGHT,"edge":"press","event":"nnn_menu_confirm_cancel"}],"z":1001,"color":[20,24,32,255],"font":font}}));
             for (id,kind,rect,text) in [(ROOT+5,"label",[15,10,360,40],"タイトルに戻りますか？"),(ROOT+6,"button",[30,65,140,36],"はい"),(ROOT+7,"button",[200,65,140,36],"いいえ")] {
                 ui.push(json!({"op":"put","widget":{"id":id,"parent":ROOT+8,"kind":kind,"rect":rect,"text":text,"font":font,"text_size":18,"color":if kind=="label"{[0,0,0,0]}else{[48,62,80,255]}}}));
             }
-            let mut commands=vec![json!({"op":"remove","id":ROOT})];commands.extend(ui);
+            let commands=self.replace_controls(client,host,ui)?;
             host.submit_engine(client,1,&serde_json::to_vec(&json!({"ui":commands}))?)?;
             self.published=true;return Ok(())
         }
@@ -850,15 +960,20 @@ impl Menu {
         }
         let mut nodes = vec![ROOT];
         if self.kind == Kind::Config {
-            for (i, (id, value)) in self.settings.iter().enumerate() {
-                let s = crate::native_settings::setting(*id)?;
-                let x = 24 + (i / 8) as i32 * 388;
-                let y = 75 + (i % 8) as i32 * 61;
+            let pages=self.settings.len().div_ceil(14).max(1);
+            if pages>1{
+                ui.push(widget(ROOT+3,"button",[420,15,110,36],"Previous".into(),self.settings_page>0));
+                ui.push(widget(ROOT+4,"button",[536,15,100,36],"Next".into(),self.settings_page+1<pages));
+            }
+            for (i, (id, value)) in self.settings.iter().enumerate().skip(self.settings_page*14).take(14) {
+                let s = crate::native_settings::menu_setting(*id)?;
+                let x = 24 + ((i%14) / 7) as i32 * 388;
+                let y = 75 + (i % 7) as i32 * 68;
                 ui.push(widget(
                     ROOT + 100 + i as u32 * 2,
                     "label",
                     [x, y, 360, 22],
-                    s.name.into(),
+                    crate::native_settings::setting_label(*id)?,
                     true,
                 ));
                 let mut control = widget(
@@ -868,7 +983,16 @@ impl Menu {
                     String::new(),
                     true,
                 );
-                control["widget"]["value"] = json!(*value as f32 / s.maximum as f32);
+                // The native Init retains out-of-range packed data. The
+                // shared finite slider displays a bounded thumb; the original
+                // word is only changed after a real user gesture.
+                control["widget"]["value"] = json!((*value as f32 / s.maximum as f32).clamp(0.,1.));
+                if let Some(setting)=crate::native_character_setting::Setting::decode(*id){
+                    if !setting.toggle{
+                        let enabled_id=crate::native_character_setting::Setting{toggle:true,..setting}.id()?;
+                        control["widget"]["enabled"]=json!(self.settings.iter().find(|v|v.0==enabled_id).is_some_and(|v|v.1!=0));
+                    }
+                }
                 ui.push(control);
             }
         } else {
@@ -914,7 +1038,7 @@ impl Menu {
             }
         }
         if self.confirm.is_some() {
-            ui.push(json!({"op":"put","widget":{"id":ROOT+8,"parent":ROOT,"kind":"panel","rect":[210,230,390,140],"modal":true,"z":1001,"color":[20,24,32,255],"font":font}}));
+            ui.push(json!({"op":"put","widget":{"id":ROOT+8,"parent":ROOT,"kind":"panel","rect":[210,230,390,140],"modal":true,"key_event_scope":true,"key_events":[{"buttons":buttons::ESCAPE|buttons::MOUSE_RIGHT,"edge":"press","event":"nnn_menu_confirm_cancel"}],"z":1001,"color":[20,24,32,255],"font":font}}));
             for mut command in [
                 widget(
                     ROOT + 5,
@@ -946,8 +1070,7 @@ impl Menu {
         remove.extend(layers);
         // Recreate this modal subtree as one batch. Unrelated native wait
         // widgets and their retained activation receipts remain untouched.
-        let mut commands = vec![json!({"op":"remove","id":ROOT})];
-        commands.extend(ui);
+        let commands = self.replace_controls(client,host,ui)?;
         host.submit_engine(
             client,
             1,
@@ -974,7 +1097,7 @@ impl Menu {
         Ok(true)
     }
     pub(super) fn entry_blocks_update(&self,now_ms:u64)->bool {
-        self.skin.as_ref().is_some_and(|skin|skin.entry_blocks_update(now_ms))
+        self.entry.is_some() || self.skin.as_ref().is_some_and(|skin|skin.entry_blocks_update(now_ms))
     }
     pub(super) fn has_skin(&self) -> bool {
         self.skin.is_some()
@@ -1015,6 +1138,7 @@ impl Menu {
             .and_then(|p| p.table.as_ref())
             .context("NNN Omake native setup absent")?;
         if self.kind==Kind::System {return Ok(Some(Action::System(index)));}
+        if self.kind==Kind::SelectPlace {return Ok(Some(Action::SelectPlace(index)));}
         Ok(Some(match index {
             0 => Action::Navigate(if table.integer(b"autoCGCharaFlag")?.unwrap_or(0) != 0 {
                 Kind::Cg(0)
@@ -1084,7 +1208,12 @@ impl Menu {
         let events: Vec<Value> = serde_json::from_slice(
             &host.query_engine(client, EngineQuery::UiSubtreeEvents(ROOT))?,
         )?;
+        let child_cancelled=events.iter().any(|event|event["kind"]=="cancel" && event["widget"]["id"]!=ROOT);
         for event in events {
+            if event["kind"]=="nnn_menu_confirm_cancel" && event["widget"]["id"]==ROOT+8 && self.confirm.is_some() {
+                self.confirm=None;self.published=false;return Ok(None);
+            }
+            if !child_cancelled && event["kind"]=="nnn_menu_cancel" && event["widget"]["id"]==ROOT {return Ok(Some(Action::Close));}
             let Some(id) = event["widget"]["id"]
                 .as_u64()
                 .and_then(|id| u32::try_from(id).ok())
@@ -1100,7 +1229,7 @@ impl Menu {
                     let index = (id - ROOT - 101) / 2;
                     if (id - ROOT - 101) % 2 == 0 {
                         if let Some((parameter, _)) = self.settings.get(index as usize) {
-                            let setting = crate::native_settings::setting(*parameter)?;
+                            let setting = crate::native_settings::menu_setting(*parameter)?;
                             let state: Value = serde_json::from_slice(
                                 &host.query_engine(client, EngineQuery::UiWidget(id))?,
                             )?;
@@ -1111,6 +1240,10 @@ impl Menu {
                             ensure!(v.is_finite(), "NNN settings slider is not finite");
                             let value =
                                 (v.clamp(0., 1.) * f64::from(setting.maximum)).round() as i32;
+                            if crate::native_character_setting::Setting::decode(*parameter).is_some(){
+                                let interaction:Value=serde_json::from_slice(&host.query_engine(client,EngineQuery::UiInteraction(id))?)?;
+                                return Ok(Some(Action::CharacterSetting{i:*parameter,value,captured:interaction["pressed"].as_bool().unwrap_or(false)}));
+                            }
                             return Ok(Some(Action::Setting(*parameter, value)));
                         }
                     }
@@ -1133,6 +1266,8 @@ impl Menu {
                     }
                     return Ok(None);
                 }
+                3 if self.kind==Kind::Config&&self.settings_page>0=>{self.settings_page-=1;self.published=false;return Ok(None);}
+                4 if self.kind==Kind::Config&&(self.settings_page+1)*14<self.settings.len()=>{self.settings_page+=1;self.published=false;return Ok(None);}
                 3 if self.kind != Kind::Config && self.page > 0 => {
                     self.page -= 1;
                     self.refresh();
@@ -1180,6 +1315,7 @@ impl Menu {
     pub fn update_setting(&mut self, id: i32, value: i32) {
         if let Some(pair) = self.settings.iter_mut().find(|v| v.0 == id) {
             pair.1 = value;
+            if crate::native_character_setting::Setting::decode(id).is_some_and(|s|s.toggle){self.published=false;}
         }
     }
 }

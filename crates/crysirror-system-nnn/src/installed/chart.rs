@@ -16,6 +16,7 @@ use crysirror_image::{
 };
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, VecDeque};
+mod skin;
 pub(super) const ROOT: u32 = 0x66050000;
 const LAYER: u32 = ROOT + 1;
 const ORDER: i32 = 2_000_000_002;
@@ -45,6 +46,13 @@ enum Drag {
     Node(i32, [i32; 2], [i32; 2]),
 }
 pub(super) struct ChartPlayer {
+    entry:Option<super::actor_entry::ActorEntry>,
+    entry_print_started:bool,
+    mode_audio: crate::native_mode_audio::ModeAudioAdmission,
+    frame_admitted: bool,
+    background_frame_started: bool,
+    pending_system: bool,
+    skin: skin::Skin,
     config: Arc<crate::native_bootstrap::NativeConfiguration>,
     resources: NativeResources,
     pool: TaskPool,
@@ -60,8 +68,6 @@ pub(super) struct ChartPlayer {
     scroll: i32,
     horizontal: i32,
     ticks: u64,
-    last_ms: u64,
-    remainder: u64,
     hovered: Option<i32>,
     description: Option<i32>,
     description_up: bool,
@@ -71,6 +77,7 @@ pub(super) struct ChartPlayer {
     confirmed: Option<i32>,
     pub selected: Option<i32>,
     sounds: VecDeque<i32>,
+    button_audio:VecDeque<crate::bridge::ButtonAudioEvent>,
     sheet: [i32; 2],
     back_height: i32,
     line_job: Option<ImageJob>,
@@ -112,14 +119,15 @@ impl ChartPlayer {
         self.queued_input.pointer_y = input.pointer_y;
     }
     pub fn has_sound(&self) -> bool {
-        !self.sounds.is_empty()
+        !self.sounds.is_empty()||!self.button_audio.is_empty()
     }
     pub fn dependency_pending(&self) -> bool {
         self.task.is_some()
             || self.loading.is_some()
             || self.line_job.is_some()
+            || self.skin.pending()
             || self.selected.is_some()
-            || !self.sounds.is_empty()
+            || !self.sounds.is_empty()||!self.button_audio.is_empty()
     }
     /// Complete admitted asset/raster work only. No input drain, native clock
     /// step, background-script batch or new graph frame is scheduled here.
@@ -131,6 +139,11 @@ impl ChartPlayer {
     ) -> Result<()> {
         if !self.prepare(host)? {
             return Ok(());
+        }
+        if self.skin.poll_paint(self.client, host)? {
+            let (runtime, state) = vm.chart_view()?;
+            let mut variables = vm.gallery_variables()?;
+            self.draw(runtime, state, &mut variables, host, font)?;
         }
         if let Some(job) = self.line_job.as_mut() {
             match job.poll()? {
@@ -168,7 +181,7 @@ impl ChartPlayer {
             .configuration()
             .cloned()
             .context("NNN chart configuration absent")?;
-        let (runtime, _) = vm.chart_view()?;
+        let (runtime, state) = vm.chart_view()?;
         let mut variables = vm.gallery_variables()?;
         let current = runtime.slot(&mut variables)?;
         let group = if let Some(id) = runtime.definition.print_variable {
@@ -182,7 +195,16 @@ impl ChartPlayer {
         );
         let scroll = (runtime.definition.node(current)?.position[1] - 300)
             .clamp(0, scroll_height(runtime, group)? - 600);
+        let skin = skin::Skin::new(&config, runtime, state, current, group, &mut variables)?;
+        let entry=crate::native_general_entry::ModeEntry::read(&runtime.definition.setup)?
+            .map(|spec|super::actor_entry::ActorEntry::new(spec,34,ROOT+4800,Some(ROOT),vm,host,client)).transpose()?;
         let mut this = Self {
+            entry,entry_print_started:false,
+            mode_audio: crate::native_mode_audio::ModeAudioAdmission::new(34)?,
+            frame_admitted: false,
+            background_frame_started: false,
+            pending_system: false,
+            skin,
             config,
             resources,
             pool,
@@ -198,8 +220,6 @@ impl ChartPlayer {
             scroll,
             horizontal: 0,
             ticks: 0,
-            last_ms: host.now_ms(),
-            remainder: 0,
             hovered: None,
             description: None,
             description_up: false,
@@ -209,6 +229,7 @@ impl ChartPlayer {
             confirmed: None,
             selected: None,
             sounds: VecDeque::new(),
+            button_audio:VecDeque::new(),
             sheet: [800, 600],
             back_height: 1200,
             line_job: None,
@@ -223,6 +244,13 @@ impl ChartPlayer {
     }
     fn load(&mut self, runtime: &ChartRuntime, host: &mut dyn HostServices) -> Result<()> {
         self.line_job = None;
+        self.skin.reload(
+            &self.config,
+            self.resources.clone(),
+            self.pool.clone(),
+            self.client,
+            self.group,
+        )?;
         let config = self.config.clone();
         let resources = self.resources.clone();
         let pool = self.pool.clone();
@@ -231,7 +259,7 @@ impl ChartPlayer {
         let group = self.group;
         self.task = Some(pool.spawn(move |cancel| {
             let table = &definition.setup;
-            crate::native_general::ModeReturn::validate_entry(table)?;
+            crate::native_general_entry::ModeEntry::read(table)?;
             let levels = u32::try_from(config.setup.integer(b"dwqPackLevel")?.unwrap_or(0))?;
             let width = size(table, "slotSizeX", 200)?;
             let height = size(table, "slotSizeY", 50)?;
@@ -247,7 +275,9 @@ impl ChartPlayer {
                 };
                 let size = source.size;
                 budget = budget
-                    .checked_add(u64::from(size[0]) * u64::from(size[1]) * 4 + source.encoded_len as u64)
+                    .checked_add(
+                        u64::from(size[0]) * u64::from(size[1]) * 4 + source.encoded_len as u64,
+                    )
                     .context("NNN chart asset budget overflow")?;
                 ensure!(
                     budget <= 256 << 20 && inputs.len() < 2048,
@@ -432,6 +462,9 @@ impl ChartPlayer {
         Ok(())
     }
     pub fn prepare(&mut self, host: &mut dyn HostServices) -> Result<bool> {
+        if !self.skin.prepare(host)? {
+            return Ok(false);
+        }
         if let Some(task) = self.task.as_mut() {
             let Some(prepared) = task.try_take()? else {
                 return Ok(false);
@@ -492,10 +525,36 @@ impl ChartPlayer {
             self.background = loading.prepared.background;
             self.sheet = loading.prepared.sheet;
             self.back_height = loading.prepared.back_height;
-            self.last_ms = host.now_ms();
+            self.mode_audio.resume_clock(host.now_ms());
             self.dirty = true;
         }
         Ok(true)
+    }
+    fn poll_entry(&mut self,vm:&mut NativeAdapter,host:&mut dyn HostServices,font:&str,input:InputFrame,admit:bool)->Result<bool>{
+        if self.entry.is_none(){return Ok(true)}
+        if !self.prepare(host)?{return Ok(false)}
+        if !self.entry_print_started {
+            if !admit || !self.entry.as_mut().unwrap().prepare_old()?{return Ok(false)}
+            let(runtime,state)=vm.chart_view()?;
+            let mut variables=vm.gallery_variables()?;
+            let lines=self.lines(runtime,state,&mut variables)?;
+            self.line_job=Some(host.image_metadata(self.client)?.begin_process(ImageInput::Solid{size:SIZE,color:[0;4]},serde_json::to_vec(&vec![ImageEffect::IntegerLines{lines}])?.into())?);
+            self.dirty=false;
+            self.entry_print_started=true;
+        }
+        self.poll_dependencies(vm,host,font)?;
+        if self.line_job.is_some()||self.skin.pending(){return Ok(false)}
+        if self.ui_nodes.is_empty(){
+            let(runtime,state)=vm.chart_view()?;
+            let mut variables=vm.gallery_variables()?;
+            self.draw(runtime,state,&mut variables,host,font)?;
+        }
+        if self.skin.pending() || self.ui_nodes.is_empty(){return Ok(false)}
+        if !self.entry.as_mut().unwrap().poll(host,self.client,vm,input,admit)?{return Ok(false)}
+        self.entry=None;
+        self.queued_input.buttons_pressed=0;
+        self.resume_clock(host.now_ms());
+        Ok(false)
     }
     fn area(&self) -> Result<[i32; 4]> {
         let t = self.config.chart_setup.as_ref().unwrap();
@@ -574,6 +633,12 @@ impl ChartPlayer {
         let runtime = &runtime;
         let state = &state;
         let mut variables = vm.gallery_variables()?;
+        if self.skin.poll_paint(self.client, host)? {
+            self.draw(runtime, state, &mut variables, host, font)?;
+        }
+        if self.skin.pending() {
+            return Ok(None);
+        }
         if let Some(job) = self.line_job.as_mut() {
             match job.poll()? {
                 ImageProcessState::Pending => return Ok(None),
@@ -593,18 +658,16 @@ impl ChartPlayer {
                 }
             }
         }
-        let input = self.queued_input;
-        self.queued_input.buttons_pressed = 0;
         let t = &runtime.definition.setup;
-        let now = host.now_ms();
-        let period = vm.frame_period_ms().max(1);
-        self.remainder = self
-            .remainder
-            .saturating_add(now.saturating_sub(self.last_ms));
-        self.last_ms = now;
-        let ticks = self.remainder / period;
-        self.remainder %= period;
+        ensure!(self.frame_admitted,"NNN ChartMenu Calcu without General admission");
+        self.frame_admitted=false;
+        self.background_frame_started=false;
+        let ticks=1;
         self.ticks = self.ticks.saturating_add(ticks);
+        // Dependency pumps and extra host ticks are not native Calcu calls.
+        // Keep queued edge input until the next admitted native menu frame.
+        let input=self.queued_input;
+        self.queued_input.buttons_pressed=0;
         self.horizontal = (i64::from(self.horizontal)
             - i64::from(n(t, &format!("scrollSpeedX{}", self.group + 1), -1)?)
                 * (ticks % 800) as i64)
@@ -615,6 +678,7 @@ impl ChartPlayer {
         if self.confirmed.is_none() && input.buttons_pressed & buttons::ESCAPE != 0 {
             return Ok(Some(Event::System));
         }
+        let mut grow_activated = std::collections::BTreeSet::new();
         for event in events {
             let Some(id) = event["widget"]["id"]
                 .as_u64()
@@ -642,27 +706,39 @@ impl ChartPlayer {
                 continue;
             }
             if id >= ROOT + 100 && id < ROOT + 100 + runtime.definition.maps.len() as u32 {
-                let group = (id - ROOT - 100) as usize;
-                if group != self.group && runtime.open(group, &mut variables)? {
-                    self.group = group;
-                    self.scroll = if group == runtime.definition.chart(self.current)? {
-                        (runtime.definition.node(self.current)?.position[1] - 300)
-                            .clamp(0, scroll_height(runtime, group)? - 600)
-                    } else {
-                        0
-                    };
-                    self.hovered = None;
-                    self.drag = None;
-                    if let Some(id) = runtime.definition.print_variable {
-                        variables.write_native(id, group as i32)?;
-                    }
-                    vm.publish_general_variables(variables)?;
-                    self.load(runtime, host)?;
-                    return Ok(None);
-                }
+                grow_activated.insert((id - ROOT - 100) as usize);
             }
         }
-        if self.confirmed.is_none() {
+        let grow = self.skin.calcu(
+            self.client,
+            host,
+            input,
+            &grow_activated,
+            self.confirmed.is_none(),
+        )?;
+        if grow.sound>0||grow.voice>0 {
+            self.button_audio.push_back(crate::bridge::ButtonAudioEvent::new(grow.sound,grow.voice,grow.volume_type));
+        }
+        if let Some(group) = grow.group {
+            if group != self.group {
+                self.group = group;
+                self.scroll = if group == runtime.definition.chart(self.current)? {
+                    (runtime.definition.node(self.current)?.position[1] - 300)
+                        .clamp(0, scroll_height(runtime, group)? - 600)
+                } else {
+                    0
+                };
+                self.hovered = None;
+                self.drag = None;
+                if let Some(id) = runtime.definition.print_variable {
+                    variables.write_native(id, group as i32)?;
+                }
+                vm.publish_general_variables(variables)?;
+                self.load(runtime, host)?;
+                return Ok(None);
+            }
+        }
+        if self.confirmed.is_none() && !grow.blocking {
             let a = self.area()?;
             let mini = self.mini()?;
             let map = &runtime.definition.maps[self.group];
@@ -951,6 +1027,14 @@ impl ChartPlayer {
             count += 1;
         }
 
+        let Some(skin_path) =
+            self.skin
+                .print_prefix(self.client, host, layers.clone(), count as i32)?
+        else {
+            return Ok(());
+        };
+        layers.push(json!({"op":"put","layer":{"id":LAYER+count,"rect":[0,0,800,600],"order":[ORDER,count],"blend":{"stored_byte":{"mode":"opaque_scalar256","force_output_opaque":true}},"paint":{"kind":"image","asset":skin_path}}}));
+        count += 1;
         let w = size(t, "slotSizeX", 200)?;
         let h = size(t, "slotSizeY", 50)?;
         let cols = self.sheet[0] / w;
@@ -1199,8 +1283,12 @@ impl ChartPlayer {
             put(
                 "now",
                 [
-                    n(t, &format!("grow{group}Button{state}PrintX"), 0)?,
-                    n(t, &format!("grow{group}Button{state}PrintY"), 0)?,
+                    self.skin.radio.spec.buttons[group - 1][state - 1]
+                        .button
+                        .origin[0],
+                    self.skin.radio.spec.buttons[group - 1][state - 1]
+                        .button
+                        .origin[1],
                     asset.size[0] as i32,
                     asset.size[1] as i32,
                 ],
@@ -1273,17 +1361,16 @@ impl ChartPlayer {
             ui.push(json!({"op":"put","widget":{"id":id,"parent":ROOT,"kind":kind,"rect":rect,"text":text,"enabled":enabled,"font":font,"text_size":20}}));
         };
         widget(ROOT + 1, "button", [0, 0, 180, 30], "システム".into(), true);
-        for group in 0..runtime.definition.maps.len() {
-            if runtime.open(group, variables)? {
-                widget(
-                    ROOT + 100 + group as u32,
-                    "button",
-                    [0, 60 + group as i32 * 30, 180, 28],
-                    format!("{}  {}%", group + 1, runtime.percent(group as i32 + 1)?),
-                    true,
-                );
-            }
+        // All hit geometry/coverage is owned by scoped engine UI widgets.
+        drop(widget);
+        for command in self.skin.widgets()? {
+            ids.push(command["widget"]["id"].as_u64().unwrap() as u32);
+            ui.push(command);
         }
+        let mut widget = |id: u32, kind: &str, rect: [i32; 4], text: String, enabled: bool| {
+            ids.push(id);
+            ui.push(json!({"op":"put","widget":{"id":id,"parent":ROOT,"kind":kind,"rect":rect,"text":text,"enabled":enabled,"font":font,"text_size":20}}));
+        };
         if let Some(slot) = self.description {
             let node = runtime.definition.node(slot)?;
             let unseen = usize::from(!runtime.seen(slot)? && !node.descriptions[1].is_empty());
@@ -1351,12 +1438,15 @@ impl ChartPlayer {
             1,
             &serde_json::to_vec(&json!({"layers":layers,"ui":ui}))?,
         )?;
+        self.skin.published();
+        self.retired_paths.append(&mut self.skin.retired);
         for path in std::mem::take(&mut self.retired_paths) {
             host.release_image_resource(self.client, &path)?;
         }
         Ok(())
     }
     fn remove_layers(&mut self, host: &mut dyn HostServices) -> Result<()> {
+        self.skin.forget_widgets();
         let layers = (0..self.layer_count)
             .map(|i| json!({"op":"remove","id":LAYER+i}))
             .collect::<Vec<_>>();
@@ -1375,7 +1465,7 @@ impl ChartPlayer {
         Ok(())
     }
     pub fn resume_clock(&mut self, now: u64) {
-        self.last_ms = now;
+        self.mode_audio.resume_clock(now);
     }
     pub fn cleanup(&self) -> (Vec<Value>, Vec<Value>, Vec<String>) {
         (
@@ -1387,11 +1477,13 @@ impl ChartPlayer {
                 .values()
                 .map(|asset| asset.path.clone())
                 .chain(self.line_path.iter().cloned())
+                .chain(self.skin.cleanup())
                 .chain(self.retired_paths.iter().cloned())
                 .collect(),
         )
     }
     pub fn remove(&mut self, host: &mut dyn HostServices) -> Result<()> {
+        if let Some(mut entry)=self.entry.take(){entry.remove(host,self.client)?;}
         self.task = None;
         self.loading = None;
         self.line_job = None;
@@ -1401,6 +1493,9 @@ impl ChartPlayer {
         }
         for (_, asset) in std::mem::take(&mut self.assets) {
             host.release_image_resource(self.client, &asset.path)?;
+        }
+        for path in self.skin.cleanup() {
+            host.release_image_resource(self.client, &path)?;
         }
         if let Some(path) = self.line_path.take() {
             host.release_image_resource(self.client, &path)?;
@@ -1417,6 +1512,13 @@ impl InstalledAdapter {
     ) -> Result<()> {
         let vm = self.vm.as_mut().context("NNN ChartMenu VM absent")?;
         let chart = self.chart.as_mut().unwrap();
+        if admit {chart.queue_input(input);}
+        if !vm.poll_general_audio(host)? {return Ok(());}
+        if !chart.poll_entry(vm,host,&self.config.font,input,admit)?{return Ok(())}
+        if let Some(event)=chart.button_audio.front_mut() {
+            if vm.poll_button_event(host,event)? {chart.button_audio.pop_front();}
+            return Ok(());
+        }
         if let Some(number) = chart.sounds.front().copied() {
             if vm.poll_system_sound(host, number)? {
                 chart.sounds.pop_front();
@@ -1424,6 +1526,13 @@ impl InstalledAdapter {
             return Ok(());
         }
         if let Some(slot) = chart.selected {
+            if let Some(mark) = chart.skin.mark.as_ref() {
+                let (runtime, _) = vm.chart_view()?;
+                let group = runtime.definition.chart(slot)?;
+                let mut variables = vm.gallery_variables()?;
+                mark.acknowledge_choice(group, &mut variables)?;
+                vm.publish_general_variables(variables)?;
+            }
             if !vm.end_menu_background(host)? {
                 return Ok(());
             }
@@ -1432,6 +1541,14 @@ impl InstalledAdapter {
                 self.chart = None;
                 vm.resume_after_menu(host)?;
             }
+            return Ok(());
+        }
+        if chart.pending_system {
+            if !vm.end_menu_background(host)? {return Ok(());}
+            chart.pending_system=false;
+            chart.background_started=false;
+            self.open_menu(menu::Kind::System,host)?;
+            self.chart.as_mut().unwrap().hide(host)?;
             return Ok(());
         }
         // Never start a background VM batch, sample input or advance native
@@ -1451,6 +1568,11 @@ impl InstalledAdapter {
         if !chart.prepare(host)? {
             return Ok(());
         }
+        if !chart.frame_admitted {
+            let period=vm.frame_period_ms();
+            if !vm.poll_mode_audio(&mut chart.mode_audio,host,true,period)? {return Ok(());}
+            chart.frame_admitted=true;
+        }
         if !chart.background_started {
             if let Some(script) = chart.background.clone() {
                 if !vm.start_menu_background(
@@ -1465,21 +1587,20 @@ impl InstalledAdapter {
             }
             chart.background_started = true;
         }
-        if vm.has_menu_background() {
+        if vm.has_menu_background() && !chart.background_frame_started {
             if !vm.switch_menu_background(true, host)? {
                 return Ok(());
             }
             vm.tick_menu_background(host, input)?;
+            chart.background_frame_started=true;
+            if vm.dependency_pending() {return Ok(());}
         }
         let event = chart.poll(vm, host, input, &self.config.font)?;
         match event {
             Some(Event::System) => {
-                if !vm.end_menu_background(host)? {
-                    return Ok(());
-                }
-                chart.background_started = false;
-                self.open_menu(menu::Kind::System, host)?;
-                self.chart.as_mut().unwrap().hide(host)?;
+                // Preserve the native return across background cancellation;
+                // another Calcu must not be required to click System again.
+                chart.pending_system=true;
             }
             Some(Event::Choice) | None => (),
         }

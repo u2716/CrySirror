@@ -200,6 +200,7 @@ impl Bridge<'_> {
     }
 
     pub(super) fn begin_menu(&mut self, group: &Group) -> Result<bool> {
+        let [canvas_width,canvas_height]=self.native_canvas();
         if self.services.menu.as_ref().is_some_and(|m| m.active&&m.declaration==*group) {
             return Ok(true);
         }
@@ -285,10 +286,10 @@ impl Bridge<'_> {
         self.root()?;
         let [x, y] = group.position;
         let mut layers = vec![
-            json!({"op":"put","layer":{"id":self.menu_root(),"parent":SCENE_ROOT,"opacity":if self.services.native_dialogue_visible || self.services.menu_scope==0&&self.services.native_paint_signature.is_some_and(|signature|signature.0&&signature.3){255}else{0},"rect":[x,y,1280,720],"paint":{"kind":"solid","color":[0,0,0,0]},"order":[100,0]}}),
+            json!({"op":"put","layer":{"id":self.menu_root(),"parent":SCENE_ROOT,"opacity":if self.services.native_dialogue_visible || self.services.menu_scope==0&&self.services.native_paint_signature.is_some_and(|signature|signature.0&&signature.3){255}else{0},"rect":[x,y,canvas_width,canvas_height],"paint":{"kind":"solid","color":[0,0,0,0]},"order":[100,0]}}),
         ];
         let mut ui = vec![
-            json!({"op":"put","widget":{"id":self.menu_ui_root(),"rect":[x,y,1280,720],"kind":"button","keyboard_focusable":false,"keyboard_navigation":false,"keyboard_activation":false,"key_event_scope":true,"key_events":keyboard::bindings(None,self.services.menu_scope,vec![]),"interaction_only":true}}),
+            json!({"op":"put","widget":{"id":self.menu_ui_root(),"rect":[x,y,canvas_width,canvas_height],"kind":"button","keyboard_focusable":false,"keyboard_navigation":false,"keyboard_activation":false,"key_event_scope":true,"key_events":keyboard::bindings(None,self.services.menu_scope,vec![]),"interaction_only":true}}),
         ];
         for (n, part) in group.images.iter().enumerate() {
             let id = self.menu_base() + n as u32;
@@ -547,7 +548,8 @@ impl Bridge<'_> {
             self.submit(vec![json!({"op":"sequence","id":id,"operation":{"kind":"advance","generation":state.generation,"revision":state.revision.checked_add(1).context("Circus group shift revision")?,"rate":if self.native_effect_fast(){2.}else{1.},"fast":false}})],vec![])?;
             let state:crysirror_scene::layer::queued::SequenceStatus=serde_json::from_slice(&self.host.query_engine(self.client,EngineQuery::LayerSequence(id))?)?;
             let position=[state.values[0],state.values[1]];
-            self.submit(vec![],vec![json!({"op":"set_rect","id":self.menu_ui_root(),"rect":[position[0],position[1],1280,720]})])?;
+            let [width,height]=self.native_canvas();
+            self.submit(vec![],vec![json!({"op":"set_rect","id":self.menu_ui_root(),"rect":[position[0],position[1],width,height]})])?;
             if state.complete {menu.shifting=false;if let Some(action)=menu.shift_action.take().filter(|action|!action.is_empty()){menu.pending_action=Some(action);}}
         }
         self.update_native_slider_paints(&menu)?;

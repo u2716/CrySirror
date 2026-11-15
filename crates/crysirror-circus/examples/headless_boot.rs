@@ -11,8 +11,10 @@ fn main() -> Result<()> {
         .nth(2)
         .context("private writable directory required")?;
     let confirm_empty = std::env::args().any(|a| a == "--confirm-empty-profile");
+    let profile=std::env::args().position(|argument|argument=="--profile").map(|index|std::env::args().nth(index+1).context("--profile needs dc4ph or dc3wy")).transpose()?.unwrap_or_else(||"dc4ph".into());
+    let (canvas,abi,game_id)=match profile.as_str(){"dc4ph"=>([1280,720],"dc4ph-abb6","DC4PHDL"),"dc3wy"=>([1024,576],"dc3wy-a09f","DC3WY"),"dc2pc"=>([800,600],"dc2pc-5769","DC2PC"),_=>anyhow::bail!("unsupported explicit Circus native profile {profile}")};
     let project: Project = serde_json::from_value(
-        json!({"schema":2,"name":"Circus native headless verification","content_revision":"dc4ph-abb6","canvas":[1280,720],"assets":"Advdata","clients":[{"name":"native","adapter":"circus","game":"DC4PHDL","config":{"script":"start","font":"native-font"}}]}),
+        json!({"schema":2,"name":"Circus native headless verification","content_revision":abi,"canvas":canvas,"assets":"Advdata","clients":[{"name":"native","adapter":"circus","game":game_id,"config":{"script":"start","font":"native-font","abi":abi}}]}),
     )?;
     let mut registry = AdapterRegistry::default();
     crysirror_circus::register(&mut registry)?;
@@ -31,12 +33,14 @@ fn main() -> Result<()> {
         runtime.host.text.add_font("native-font",bytes.clone())?;
         runtime.assets.text.add_font("native-font",bytes)?;
     }
+    let timing=std::env::args().any(|argument|argument=="--timing");
     let dialogue_clicks=std::env::args().any(|argument|argument=="--dialogue-clicks");
     let mut profile_input = 0;
     let activate_title=std::env::args().any(|a|a=="--activate-title");
     let mut title_wait=0;
     let mut title_clicked=false;
-    for frame in 0..10000 {
+    let frame_limit=std::env::args().position(|argument|argument=="--frames").and_then(|i|std::env::args().nth(i+1)).map(|v|v.parse::<u32>()).transpose()?.unwrap_or(10000);
+    for frame in 0..frame_limit {
         // Runtime's offline mixer advances audio transport without opening a
         // device; native voice/SE completion must share this engine clock.
         let mut input = InputFrame::default();
@@ -100,10 +104,15 @@ fn main() -> Result<()> {
                 input.pointer_x=widget.rect[0] as i32+(index%mask.size[0] as usize) as i32;input.pointer_y=widget.rect[1] as i32+(index/mask.size[0] as usize) as i32;
             }
         }
-        if dialogue_clicks&&title_clicked&&frame%120==0&&runtime.host.engine.layers.get(owner,0x39000000).is_some(){
+        if dialogue_clicks&&title_clicked&&frame%120==0&&runtime.host.engine.layers.get(crysirror_core::state::ClientId(owner),0x39000000).is_some(){
             input.buttons_down|=buttons::MOUSE_LEFT;input.buttons_pressed|=buttons::MOUSE_LEFT;
         }
+        let tick_started = std::time::Instant::now();
         let result = runtime.tick(16, input);
+        let tick_ms = tick_started.elapsed().as_secs_f64() * 1000.0;
+        if timing && tick_ms >= 8.0 {
+            eprintln!("slow tick: frame {frame} {tick_ms:.2} ms");
+        }
         if let Err(e) = result {
             let effects = runtime.vfx.frame();
             eprintln!(

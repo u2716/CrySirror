@@ -1,0 +1,30 @@
+// SPDX-License-Identifier: MPL-2.0
+// tonemap.wgsl fs_tonemap. Writes linear values; the host enables the GXM
+// color surface gamma mode (SCE_GXM_COLOR_SURFACE_GAMMA_BGR) for sRGB output.
+#include "lite_common.cgh"
+
+uniform float4 lite_post;    // x exposure multiplier, y tonemap (0 neutral, 1 ACES, 2 none), z bloom
+uniform float4 lite_adapt;   // x auto exposure enabled, y compensation (stops)
+
+float4 main(float2 uv : TEXCOORD0,
+            uniform sampler2D hdr : TEXUNIT0,
+            uniform sampler2D bloom : TEXUNIT1,
+            uniform sampler2D adapted : TEXUNIT2) : COLOR
+{
+    float3 c = tex2Dlod(hdr, float4(uv, 0.0, 0.0)).rgb;
+    c = lerp(c, tex2Dlod(bloom, float4(uv, 0.0, 0.0)).rgb, lite_post.z);
+    c = lite_finite(c) * lite_post.x;
+    if (lite_adapt.x > 0.5) {
+        float avg_log = tex2Dlod(adapted, float4(0.5, 0.5, 0.0, 0.0)).r;
+        c = c * (0.18 * exp2(lite_adapt.y - avg_log));
+    }
+    float3 o;
+    if (lite_post.y < 0.5) {
+        o = lite_pbr_neutral(c);
+    } else if (lite_post.y < 1.5) {
+        o = lite_aces(c);
+    } else {
+        o = clamp(c, 0.0, 1.0);
+    }
+    return float4(o, 1.0);
+}

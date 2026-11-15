@@ -57,7 +57,7 @@ pub(crate) fn begin(
 impl EncodedJob {
     fn poll_inner(&mut self) -> anyhow::Result<()> {
         if let Some(header) = &mut self.header {
-            let Some(size) = header.try_take()? else {
+            let Some(size) = header.poll_owner()? else {
                 return Ok(());
             };
             self.header = None;
@@ -95,7 +95,7 @@ impl EncodedJob {
             })?);
         }
         if let Some(decode) = &mut self.decode {
-            if let Some(image) = decode.try_take()? {
+            if let Some(image) = decode.poll_owner()? {
                 self.decode = None;
                 self.bytes = Arc::from([]);
                 self.state = ImageProcessState::Ready(image);

@@ -45,7 +45,7 @@ impl FilmButton {
         );
         let levels = u32::try_from(config.setup.integer(b"dwqPackLevel")?.unwrap_or(0))?;
         let mut sources = vec![(
-            spec.source.clone(),
+            spec.source.clone().context("NNN film button without filename requires its original picture-slot owner")?,
             [spec.origin[0], spec.origin[1], spec.size[0], spec.size[1]],
         )];
         for i in 1..=count {

@@ -1,4 +1,4 @@
-// Derived from liulifox233/Kirakira (AGPL-3.0-or-later); see LICENSE.
+// AGPL-3.0-or-later; see LICENSE.
 mod error;
 mod parser;
 mod source;

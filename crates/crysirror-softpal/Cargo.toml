@@ -1,4 +1,5 @@
 [package]
+license-file.workspace = true
 name = "crysirror-softpal"
 version = "0.1.0"
 edition = "2021"
@@ -18,6 +19,7 @@ nfs = ["dep:game-network", "game-network/nfs"]
 smb = ["dep:game-network", "game-network/smb"]
 default = ["host-audio"]
 host-audio = []
+vita-gxm = ["host-audio"]
 
 [dependencies]
 game-network = { package = "crysirror-network", path = "../crysirror-network", optional = true, default-features = false }

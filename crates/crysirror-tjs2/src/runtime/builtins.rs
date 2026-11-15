@@ -21,6 +21,7 @@ pub(crate) fn install<H: TjsHost + 'static>(runtime: &mut Runtime<H>) {
     let regexp = runtime.register_global_native("RegExp", native_regexp::<H>);
     install_empty_finalize(runtime, regexp);
     let date = runtime.register_global_native("Date", native_date::<H>);
+    super::date_api::install_class(runtime,date);
     install_empty_finalize(runtime, date);
     let exception = runtime.register_global_native("Exception", native_exception::<H>);
     install_empty_finalize(runtime, exception);
@@ -47,7 +48,7 @@ pub(crate) fn install<H: TjsHost + 'static>(runtime: &mut Runtime<H>) {
 /// (`tjsNative.cpp:340-364`); a script subclass that defines its own
 /// `finalize` keeps it, exactly as the engine-side registrations do
 /// (`crates/krkr-engine/src/native/classes.rs`, M146).
-fn install_empty_finalize<H: TjsHost + 'static>(runtime: &mut Runtime<H>, handle: ObjectHandle) {
+pub(super) fn install_empty_finalize<H: TjsHost + 'static>(runtime: &mut Runtime<H>, handle: ObjectHandle) {
     if matches!(
         runtime.object_member(handle, "finalize"),
         Variant::Closure(_)
@@ -135,26 +136,7 @@ fn native_date<H: TjsHost + 'static>(
     _this_obj: Option<ObjectHandle>,
     args: Vec<Variant>,
 ) -> Result<Variant> {
-    let timestamp = args
-        .first()
-        .map(Variant::to_integer)
-        .transpose()?
-        .unwrap_or_else(|| runtime.host_mut().now_millis());
-    let handle = runtime.alloc_object(Object::default());
-    runtime.heap[handle.0].set("timestamp", Variant::Integer(timestamp));
-    runtime.register_object_native(handle, "getTime", date_get_time::<H>);
-    runtime.register_object_native(handle, "setTime", date_set_time::<H>);
-    runtime.register_object_native(handle, "getTimezoneOffset", date_zero::<H>);
-    runtime.register_object_native(handle, "getYear", date_zero::<H>);
-    runtime.register_object_native(handle, "getMonth", date_zero::<H>);
-    runtime.register_object_native(handle, "getDate", date_zero::<H>);
-    runtime.register_object_native(handle, "getDay", date_zero::<H>);
-    runtime.register_object_native(handle, "getHours", date_zero::<H>);
-    runtime.register_object_native(handle, "getMinutes", date_zero::<H>);
-    runtime.register_object_native(handle, "getSeconds", date_zero::<H>);
-    runtime.register_object_native(handle, "parse", date_parse::<H>);
-    install_empty_finalize(runtime, handle);
-    Ok(Variant::Object(handle))
+    super::date_api::construct(runtime,args)
 }
 
 fn native_exception<H: TjsHost + 'static>(
@@ -2115,51 +2097,6 @@ pub(crate) fn regexp_regex<H: TjsHost>(
         .dot_matches_new_line(flags.contains('s'))
         .build()
         .map_err(|error| TjsError::runtime(format!("RegExp compile failed: {error}")))
-}
-
-fn date_get_time<H: TjsHost + 'static>(
-    runtime: &mut Runtime<H>,
-    this_obj: Option<ObjectHandle>,
-    _args: Vec<Variant>,
-) -> Result<Variant> {
-    let handle = require_this(this_obj, "Date.getTime")?;
-    Ok(runtime.heap[handle.0].get("timestamp"))
-}
-
-fn date_set_time<H: TjsHost + 'static>(
-    runtime: &mut Runtime<H>,
-    this_obj: Option<ObjectHandle>,
-    args: Vec<Variant>,
-) -> Result<Variant> {
-    let handle = require_this(this_obj, "Date.setTime")?;
-    let timestamp = args
-        .first()
-        .map(Variant::to_integer)
-        .transpose()?
-        .unwrap_or(0);
-    runtime.heap[handle.0].set("timestamp", Variant::Integer(timestamp));
-    Ok(Variant::Integer(timestamp))
-}
-
-fn date_zero<H: TjsHost + 'static>(
-    _runtime: &mut Runtime<H>,
-    _this_obj: Option<ObjectHandle>,
-    _args: Vec<Variant>,
-) -> Result<Variant> {
-    Ok(Variant::Integer(0))
-}
-
-fn date_parse<H: TjsHost + 'static>(
-    _runtime: &mut Runtime<H>,
-    _this_obj: Option<ObjectHandle>,
-    args: Vec<Variant>,
-) -> Result<Variant> {
-    let value = args
-        .first()
-        .map(Variant::to_integer)
-        .transpose()?
-        .unwrap_or(0);
-    Ok(Variant::Integer(value))
 }
 
 fn random_generator_random<H: TjsHost + 'static>(

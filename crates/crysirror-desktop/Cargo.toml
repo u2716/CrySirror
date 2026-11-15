@@ -14,15 +14,18 @@ path = "src/main.rs"
 
 [features]
 # Every native VM and format provider is linked unconditionally: a plain
-# `cargo build` is the complete player. Only host-device choices remain optional.
-default = ["audio", "gamepad"]
+# `cargo build` is the complete player, including nfs:// and smb:// game
+# sources on the host. Only host-device choices remain optional.
+default = ["audio", "gamepad", "nfs", "smb"]
 audio = ["crysirror-audio/cpal-output"]
 gamepad = ["dep:gilrs"]
-nfs = ["crysirror-siglus-integrated/nfs", "crysirror-bgi-integrated/nfs", "crysirror-softpal/nfs", "crysirror-rfvp-integrated/nfs"]
-smb = ["crysirror-siglus-integrated/smb", "crysirror-bgi-integrated/smb", "crysirror-softpal/smb", "crysirror-rfvp-integrated/smb"]
+nfs = ["crysirror-launch/nfs", "crysirror-siglus-integrated/nfs", "crysirror-bgi-integrated/nfs", "crysirror-softpal/nfs", "crysirror-rfvp-integrated/nfs"]
+smb = ["crysirror-launch/smb", "crysirror-siglus-integrated/smb", "crysirror-bgi-integrated/smb", "crysirror-softpal/smb", "crysirror-rfvp-integrated/smb"]
 acoustics-obvhs = ["crysirror-engine/acoustics-obvhs"]
 
 [dependencies]
+crysirror-launch.workspace = true
+crysirror-library.workspace = true
 crysirror-qlie = {workspace=true,features=["runtime"]}
 crysirror-sugarpot = {workspace=true,features=["runtime"]}
 crysirror-reallive.workspace = true
@@ -42,8 +45,9 @@ crysirror-system-nnn = {workspace=true,features=["runtime"]}
 crysirror-system4 = {path="../crysirror-system4",features=["runtime"]}
 crysirror-core.workspace = true
 crysirror-tasks.workspace = true
+crysirror-willplus.workspace = true
 crysirror-resource.workspace = true
-crysirror-network.workspace = true
+crysirror-network = { workspace = true, features = ["smb", "nfs", "http"] }
 crysirror-formats-arc.workspace = true
 crysirror-tjs2.workspace = true
 crysirror-runtime = { workspace = true, features = ["arc-formats", "blackcyc-formats"] }
@@ -61,6 +65,7 @@ anyhow.workspace = true
 serde_json.workspace = true
 serde.workspace = true
 image.workspace = true
+glam.workspace = true
 clap = { version = "4.5", features = ["derive"] }
 log = "0.4"
 env_logger = "0.11"

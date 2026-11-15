@@ -1,0 +1,19 @@
+// SPDX-License-Identifier: MPL-2.0
+// shadow.wgsl fs_main: masked coverage, then the caster depth (F32_R).
+// The host clears the atlas to 1.0 and uses a LESS depth test.
+uniform float4 lite_material[6];
+
+float4 main(float3 uv_depth : TEXCOORD0,
+            uniform sampler2D t_base : TEXUNIT0,
+            uniform sampler2D t_opacity : TEXUNIT1) : COLOR
+{
+    if (lite_material[3].x == 1.0) {
+        float2 uv = uv_depth.xy * lite_material[4].xy + lite_material[4].zw;
+        float4 op = tex2D(t_opacity, uv);
+        float a = tex2D(t_base, uv).a * lite_material[0].a * (lite_material[3].w > 0.5 ? op.a : op.r);
+        if (a < lite_material[3].y) {
+            discard;
+        }
+    }
+    return float4(uv_depth.z, 0.0, 0.0, 1.0);
+}

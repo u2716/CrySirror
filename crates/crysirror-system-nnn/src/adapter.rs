@@ -20,6 +20,8 @@ use std::sync::Arc;
 mod menu_context;
 mod scene;
 mod user_gaiji;
+mod animation;
+mod character_volume;
 use menu_context::MenuContext;
 
 pub type ScriptLoader =
@@ -110,6 +112,18 @@ impl NativeAdapter {
         }
         self.bridge.apply_menu_setting(id, value, host)
     }
+    pub(crate) fn apply_config_parameter(
+        &mut self,
+        policy: &crate::native_source_parameters::Policy,
+        id: i32,
+        value: i32,
+        host: &mut dyn HostServices,
+    ) -> Result<Option<[i32; 4]>> {
+        self.bridge.apply_config_parameter(policy, id, value, host)
+    }
+    pub(crate) fn set_config_voice_flag(&mut self, slot: usize, flag: bool) -> Result<()> {
+        self.bridge.set_config_voice_flag(slot, flag)
+    }
     pub(crate) fn begin_menu_settings_save(
         &mut self,
         host: &mut dyn HostServices,
@@ -199,6 +213,7 @@ impl NativeAdapter {
         )?)?;
         bridge.configure_functions(boot.functions.clone())?;
         bridge.configure_chart(&boot.configuration())?;
+        bridge.configure_user_commands(&boot.configuration())?;
         let configuration = Some(Arc::new(boot.configuration()));
         let observed_script = boot.session.script_name().to_vec();
         let observed_depth = boot.session.depth();
@@ -237,6 +252,7 @@ impl NativeAdapter {
         profile: crate::native_save::LegacySaveProfile,
     ) -> Result<Self> {
         bridge.enter_foreground_context();
+        bridge.configure_user_commands(&configuration)?;
         if original.status_word(20)?==34 {
             let execution=crate::native_save::LiveExecution::capture(&session,&configuration,None)?;
             bridge.restore_chart_mode(crate::bridge::ChartContext {call:None,configuration:configuration.clone(),execution:Arc::new(execution),pool:pool.clone(),loader:loader.clone()})?;
@@ -585,6 +601,7 @@ impl NativeAdapter {
         self.poll_native_exit(host, true)
     }
     fn poll_native_exit(&mut self, host: &mut dyn HostServices, shutdown: bool) -> Result<bool> {
+        if !self.bridge.poll_general_audio(host)? {return Ok(false);}
         if self.outer_exit_variables.is_some() {
             return Ok(true);
         }
@@ -704,6 +721,7 @@ impl NativeAdapter {
             variables.write_stored(variable, value);
         }
         state.bridge.initialize_outer_newgame(host, exit)?;
+        state.bridge.configure_user_commands(&state.configuration)?;
         let mut vm =
             Self::from_prepared(controller, Machine::with_variables(variables), state.bridge)?;
         vm.loader = Some(state.loader);
@@ -715,8 +733,32 @@ impl NativeAdapter {
     pub(crate) fn take_result_notices(&mut self) -> std::collections::VecDeque<i32> {
         self.bridge.take_result_notices()
     }
+    pub(crate) fn poll_button_event(&mut self,host:&mut dyn HostServices,event:&mut crate::bridge::ButtonAudioEvent)->Result<bool>{self.bridge.poll_button_event(host,event)}
     pub(crate) fn poll_system_voice(&mut self,host:&mut dyn HostServices,name:&[u8])->Result<bool> {
         self.bridge.poll_system_voice(host,name)
+    }
+    pub(crate) fn begin_general_audio(&mut self,mode:i32,policy:crate::native_general_audio::GeneralAudioPolicy)->Result<()> {
+        self.bridge.begin_general_audio(mode,policy)
+    }
+    pub(crate) fn end_general_audio(&mut self,mode:i32)->Result<()> {self.bridge.end_general_audio(mode)}
+    pub(crate) fn end_current_general_audio(&mut self)->Result<()> {self.bridge.end_current_general_audio()}
+    pub(crate) fn general_audio_mode(&self)->Option<i32> {self.bridge.general_audio_mode()}
+    pub(crate) fn pause_foreground_general_audio(&mut self,paused:bool) {self.bridge.pause_foreground_general_audio(paused)}
+    pub(crate) fn poll_general_audio(&mut self,host:&mut dyn HostServices)->Result<bool> {self.bridge.poll_general_audio(host)}
+    pub(crate) fn poll_movie(&mut self,movie:&mut crate::native_movie::NativeMoviePlayer,host:&mut dyn HostServices,input:InputFrame,admit:bool)->Result<Option<crate::native_shell::NativeMode>> {
+        movie.poll_owned(host,input,admit,&mut self.bridge)
+    }
+    pub(crate) fn poll_mode_audio(&mut self,clock:&mut crate::native_mode_audio::ModeAudioAdmission,host:&mut dyn HostServices,admit:bool,period:u64)->Result<bool> {
+        clock.poll(host,Some(&mut self.bridge),admit,period)
+    }
+    pub(crate) fn poll_general_update(&mut self,host:&mut dyn HostServices,mode:i32,ticket:u64)->Result<bool> {
+        self.bridge.poll_general_update(host,mode,ticket)
+    }
+    pub(crate) fn poll_system_wave_filename(&mut self,host:&mut dyn HostServices,name:&[u8],delta:i32)->Result<bool> {
+        self.bridge.poll_system_wave_filename(host,name,delta)
+    }
+    pub(crate) fn poll_replay_voice(&mut self,host:&mut dyn HostServices,name:&[u8])->Result<bool> {
+        self.bridge.poll_replay_voice(host,name)
     }
     pub(crate) fn poll_system_sound(
         &mut self,
@@ -778,6 +820,7 @@ impl NativeAdapter {
         if let Some(error) = &self.error {
             anyhow::bail!("System-NNN terminal error: {error}");
         }
+        if !self.bridge.poll_general_audio(host)? {return Ok(VmYield::BudgetExhausted);}
         if self.halted {
             if self.background_loop.is_some() {
                 self.bridge.poll_background_idle(
@@ -798,6 +841,7 @@ impl NativeAdapter {
             return Ok(VmYield::WaitForInput);
         }
         if self.bridge.saved_wait_pending() {
+            if !self.bridge.poll_foreground_general_audio(host,None,schedule_next)? {return Ok(VmYield::BudgetExhausted);}
             // Dependency pumping never consumes a post-load input edge. These
             // waits precede the next original instruction; no fake callback is
             // acknowledged and no worker batch may run while they are active.
@@ -860,6 +904,7 @@ impl NativeAdapter {
         if self.try_scene_boundary(host)? {
             return Ok(VmYield::BudgetExhausted);
         }
+        if !self.bridge.poll_foreground_general_audio(host,self.pending.as_ref(),schedule_next)? {return Ok(VmYield::BudgetExhausted);}
         if let Some(call) = self.pending.as_ref() {
             anyhow::ensure!(
                 !self.menu_background_active()
@@ -1010,6 +1055,7 @@ impl NativeAdapter {
     /// Poll only already-admitted work and commit its owner receipt. Never
     /// samples input, advances a clock, or schedules the next VM batch.
     pub fn poll_dependency(&mut self, host: &mut dyn HostServices) -> crysirror_core::Result<()> {
+        if !self.bridge.poll_general_audio(host).map_err(|e|Error::Io(e.to_string()))? {return Ok(());}
         if !self.dependency_pending() {
             return Ok(());
         }
@@ -1111,6 +1157,7 @@ impl NativeAdapter {
         }
         match self.pending.as_ref().map(|call| &call.payload) {
             Some(crate::machine::Payload::UserCall{command:true,..}) if self.bridge.chart_mode_active()=>Some(34),
+            Some(crate::machine::Payload::UserCall{command:true,..}) if self.bridge.user_command_mode().is_some()=>self.bridge.user_command_mode(),
             Some(crate::machine::Payload::Message { .. }) => Some(10),
             Some(crate::machine::Payload::Selection { .. }) => Some(9),
             None if self.bridge.chart_mode_active()=>Some(34),
@@ -1123,6 +1170,9 @@ impl NativeAdapter {
         }
     }
     pub(crate) fn take_chart_mode_request(&mut self)->bool {self.bridge.take_chart_mode_request()}
+    pub(crate) fn take_user_command_mode(&mut self)->Option<(i32,i32)> {self.bridge.take_user_command_mode()}
+    pub(crate) fn finish_user_command_mode(&mut self)->Result<()> {self.bridge.finish_user_command_mode()}
+    pub(crate) fn stop_for_outer_movie(&mut self,host:&mut dyn HostServices)->Result<()> {self.bridge.stop_for_outer_movie(host)}
     pub(crate) fn chart_view(&self)->Result<(&crate::native_chart::ChartRuntime,&crate::native_chart::ChartState)> {self.bridge.chart_view()}
     pub(crate) fn poll_chart_return(&mut self,slot:i32,host:&mut dyn HostServices)->Result<bool> {
         anyhow::ensure!(self.worker.is_none()&&self.menu_context.is_none(),"NNN chart return requires its foreground reader");
@@ -1145,6 +1195,8 @@ impl NativeAdapter {
         self.executed=self.instruction_base.saturating_add(session.executed());
         Ok(true)
     }
+    pub(crate) fn config_ui_context(&self)->Result<crate::bridge::ConfigUiContext>{self.bridge.config_ui_context()}
+    pub(crate) fn commit_config_pictures(&mut self,pictures:&std::collections::BTreeMap<crate::native_config_layout::pictures::Key,crate::native_config_layout::pictures::Picture>)->Result<()> {self.bridge.commit_config_pictures(pictures)}
     pub(crate) fn publish_general_variables(&mut self,variables:crate::expression::Variables)->Result<()> {
         ensure!(self.worker.is_none(),"NNN General variable publication while VM worker owns its reader");
         let machine=self.session.as_mut().context("NNN General script reader absent")?.machine_mut();

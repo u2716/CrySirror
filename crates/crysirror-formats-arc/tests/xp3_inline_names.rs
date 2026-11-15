@@ -164,9 +164,8 @@ fn owner_inline_data_archive_profiles() {
     let profile = a
         .entries()
         .iter()
-        .find_map(|e| e.metadata.get("hash_fold_xor"))
-        .unwrap()
-        .clone();
+        .find_map(|e| a.entry_metadata(e.id).get("hash_fold_xor").cloned())
+        .unwrap();
     println!("entries={} profile={profile}", a.entries().len());
     let startup = a
         .entries()
@@ -174,11 +173,12 @@ fn owner_inline_data_archive_profiles() {
         .find(|e| e.path == "startup.tjs")
         .unwrap();
     assert_eq!(
-        startup.metadata["xp3_shadowed_native_ids"],
+        a.entry_metadata(startup.id)["xp3_shadowed_native_ids"],
         serde_json::json!([1])
     );
     assert_ne!(startup.id, 1);
-    let native_info = startup.metadata["xp3_info_name"].as_str().unwrap();
+    let startup_metadata = a.entry_metadata(startup.id);
+    let native_info = startup_metadata["xp3_info_name"].as_str().unwrap();
     assert_eq!(a.resolve(native_info), Some(startup.id));
     assert!(read_all(a.open(1, &cx).unwrap().as_ref(), 1024)
         .unwrap()
@@ -226,13 +226,13 @@ fn owner_inline_data_archive_profiles() {
         let protected: Vec<_> = archive
             .entries()
             .iter()
-            .filter(|e| e.metadata.get("hash_fold_xor").is_some())
+            .filter(|e| archive.entry_metadata(e.id).get("hash_fold_xor").is_some())
             .collect();
         let mut ids = std::collections::BTreeSet::new();
         ids.insert(protected.iter().min_by_key(|e| e.size).unwrap().id);
         ids.insert(protected.iter().max_by_key(|e| e.size).unwrap().id);
         if let Some(entry) = protected.iter().find(|e| {
-            let h = e.metadata["adler32"].as_u64().unwrap() as u32;
+            let h = archive.entry_metadata(e.id)["adler32"].as_u64().unwrap() as u32;
             ((h ^ (h >> 8) ^ (h >> 16) ^ (h >> 24)) as u8)
                 == profile["key_bias"].as_u64().unwrap() as u8
         }) {

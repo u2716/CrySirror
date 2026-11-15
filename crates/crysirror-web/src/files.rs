@@ -50,6 +50,11 @@ impl ImportedFiles {
         self.files.insert(name, bytes.into());
         Ok(())
     }
+    /// Bytes of one imported file (project-relative name), e.g. a script.
+    pub fn read_file(&self, relative: &str) -> Result<Vec<u8>> {
+        let name = VfsPath::new(Mount::Asset, relative)?.relative().to_owned();
+        self.files.get(&name).map(|b| b.to_vec()).ok_or(Error::NotFound)
+    }
     pub fn scoped(self: &Arc<Self>, prefix: &str) -> Result<Arc<dyn ClientStorage>> {
         let prefix = if prefix.is_empty() {
             String::new()

@@ -6,6 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+png = "0.18"
 anyhow.workspace = true
 serde.workspace = true
 image.workspace = true

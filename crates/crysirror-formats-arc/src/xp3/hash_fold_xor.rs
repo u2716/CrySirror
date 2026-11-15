@@ -31,13 +31,8 @@ fn checksum(input: &[u8]) -> u32 {
     adler.update(input);
     adler.finish()
 }
-fn hash(entry: &ArchiveEntry) -> Result<u32> {
-    u32::try_from(
-        entry.metadata["adler32"]
-            .as_u64()
-            .context("XP3 adlr absent")?,
-    )
-    .context("XP3 adlr range")
+fn hash(base: &ParsedArchive, entry: &ArchiveEntry) -> Result<u32> {
+    Ok(base.xp3(entry.id).context("XP3 adlr absent")?.adler32)
 }
 #[derive(Clone, Copy)]
 struct Profile {
@@ -68,7 +63,7 @@ fn recover_sample(
     let temporary = ctx.decode_with(entry.size, || {
         let data = read_all(raw.as_ref(), SAMPLE_BYTES)?;
         candidates =
-            single_byte_xor_adler32_candidates(&data, hash(entry)?, &|| ctx.check_cancelled())?;
+            single_byte_xor_adler32_candidates(&data, hash(base, entry)?, &|| ctx.check_cancelled())?;
         Ok(data)
     })?;
     drop(temporary);
@@ -147,7 +142,7 @@ pub(super) fn open(mut base: ParsedArchive, ctx: &DecodeContext) -> Result<Box<d
             if keys.contains(&0) {
                 continue;
             } // Authenticated plaintext bootstrap, no cipher evidence.
-            samples.push((hash(entry)?, keys));
+            samples.push((hash(&base, entry)?, keys));
             if let Some(p) = infer(&samples) {
                 recovered = Some(p);
                 break;
@@ -161,7 +156,7 @@ pub(super) fn open(mut base: ParsedArchive, ctx: &DecodeContext) -> Result<Box<d
         let bias = profile.bias;
         for entry in ordered
             .iter()
-            .filter(|e| hash(e).is_ok_and(|h| fold(h) == bias))
+            .filter(|e| hash(&base, e).is_ok_and(|h| fold(h) == bias))
             .take(MAX_SAMPLES)
         {
             ctx.check_cancelled()?;
@@ -182,14 +177,6 @@ pub(super) fn open(mut base: ParsedArchive, ctx: &DecodeContext) -> Result<Box<d
             profile.zero = Some(keys[0]);
             break;
         }
-    }
-    for entry in base
-        .entries
-        .iter_mut()
-        .filter(|e| protected.contains(&e.id))
-    {
-        entry.metadata["hash_fold_xor"] =
-            serde_json::json!({"key_bias":profile.bias,"zero_key":profile.zero});
     }
     let archive = FoldArchive {
         base,
@@ -218,6 +205,14 @@ impl Archive for FoldArchive {
     fn entries(&self) -> &[ArchiveEntry] {
         &self.base.entries
     }
+    fn entry_metadata(&self, id: u32) -> serde_json::Value {
+        let mut out = self.base.entry_metadata(id);
+        if self.protected.contains(&id) {
+            out["hash_fold_xor"] =
+                serde_json::json!({"key_bias":self.profile.bias,"zero_key":self.profile.zero});
+        }
+        out
+    }
     fn open(&self, id: u32, ctx: &DecodeContext) -> Result<Arc<dyn AssetReader>> {
         ctx.check_cancelled()?;
         let raw = self.base.open(id, ctx)?;
@@ -229,7 +224,7 @@ impl Archive for FoldArchive {
             .entries
             .get(id as usize)
             .context("hash-fold entry id")?;
-        let expected = hash(entry)?;
+        let expected = hash(&self.base, entry)?;
         let folded = fold(expected) ^ self.profile.bias;
         let key = if folded != 0 {
             Some(folded)
@@ -332,7 +327,7 @@ mod tests {
                 path: format!("resource/{id}"),
                 size: plain.len() as u64,
                 stored_size: plain.len() as u64,
-                metadata: serde_json::json!({"adler32":hash}),
+                metadata: serde_json::Value::Null,
             });
             plans.push(EntryPlan::Segments {
                 segments: vec![Segment {
@@ -342,6 +337,7 @@ mod tests {
                     compressed: false,
                 }],
                 encrypted: true,
+                facts: Xp3Facts { adler32: hash, ..Default::default() },
             });
         }
         let mut ctx = DecodeContext::new(ClientId(71));
@@ -365,7 +361,7 @@ mod tests {
         let (base, ctx, plain) = fixture(false);
         let archive = open(base, &ctx).unwrap();
         assert_eq!(
-            archive.entries()[0].metadata["hash_fold_xor"],
+            archive.entry_metadata(0)["hash_fold_xor"],
             serde_json::json!({"key_bias":210,"zero_key":208})
         );
         assert_eq!(ctx.resident_bytes(), 0);

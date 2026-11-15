@@ -350,9 +350,13 @@ fn utf16z(c: &mut Cursor) -> Result<String> {
     utf16(&raw)
 }
 fn pulltop_probe(s: &dyn AssetReader) -> Result<bool> {
-    let rows = pulltop(s, &probe_context())?;
-    let last = rows.last().context("empty")?;
-    Ok(last.offset + last.stored == length(s)?)
+    // Voice banks index ~20k UTF-16 names (~1 MiB); the probe still reads
+    // only the index, never entry bodies.
+    let mut cx = probe_context();
+    cx.limits.max_index_size = 8 * 1024 * 1024;
+    let rows = pulltop(s, &cx)?;
+    let end = rows.iter().map(|row| row.offset + row.stored).max().context("empty")?;
+    Ok(end == length(s)?)
 }
 fn pulltop(s: &dyn AssetReader, cx: &DecodeContext) -> Result<Vec<Row>> {
     let h = bytes(s, 0, 8, 8)?;

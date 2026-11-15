@@ -1,5 +1,7 @@
 # NScripter native adapter
 
+[Opcode and syscall implementation list](../../docs/native-api/nscripter.md).
+
 `crysirror-nscripter` is a first-class Rust native text-script interpreter. Native
 commands call CrySirror Layer, Canvas, Text/GlyphRun, UI, Image, Media, Audio and
 storage services. ONScripter, SDL and an original engine renderer are not hosted.

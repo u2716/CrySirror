@@ -197,33 +197,39 @@ pub fn poll(rt: &mut Rt, host: &mut dyn HostServices, client: ClientId) -> anyho
         }
         ImageProcessState::Failed(e) => anyhow::bail!("native image processing failed: {e}"),
         ImageProcessState::Ready(image) => {
-            anyhow::ensure!(image.client() == client, "foreign image result");
-            let h = ObjectHandle(id);
-            let l = rt
-                .host()
-                .layer(h)
-                .map_err(|e| anyhow::anyhow!("{e}"))?
-                .clone();
-            let [w, height] = image.size();
-            if publish_surface {
-                let uploaded=host.publish_image_resource(client,l.slot,image.clone())?;
-                rt.host_mut().retired_images.push(uploaded.path.relative().to_owned());
-                rt.host_mut().canvas_op(json!({"op":"set","id":l.slot,"layer":{"id":0,"rect":[0,0,w,height],"paint":{"kind":"image","asset":uploaded.path.relative()}}}));
-            }
-            let l = rt
-                .host_mut()
-                .layer_mut(h)
-                .map_err(|e| anyhow::anyhow!("{e}"))?;
-            l.regions
-                .flip(client.0, flip[0], flip[1])
-                .map_err(|e| anyhow::anyhow!("{e}"))?;
-            l.image_source = Some(ImageInput::Resource(image.clone()));
-            l.full_alpha = image.opaque().then_some(255);
-            l.blank = false;
-            rt.host_mut().api_calls += 1;
+            commit_result(rt,host,client,id,image,flip,publish_surface)?;
             Ok(true)
         }
     }
+}
+
+pub(crate) fn commit_result(rt:&mut Rt,host:&mut dyn HostServices,client:ClientId,id:usize,image:std::sync::Arc<dyn crysirror_core::image_processing::ImageResource>,flip:[bool;2],publish_surface:bool)->anyhow::Result<()> {
+    anyhow::ensure!(image.client() == client, "foreign image result");
+    let h = ObjectHandle(id);
+    let l = rt
+        .host()
+        .layer(h)
+        .map_err(|e| anyhow::anyhow!("{e}"))?
+        .clone();
+    let [w, height] = image.size();
+    if publish_surface {
+        let uploaded=host.publish_image_resource(client,l.slot,image.clone())?;
+        rt.host_mut().retired_images.push(uploaded.path.relative().to_owned());
+        rt.host_mut().canvas_op(json!({"op":"set","id":l.slot,"layer":{"id":0,"rect":[0,0,w,height],"paint":{"kind":"image","asset":uploaded.path.relative()}}}));
+    }
+    let l = rt
+        .host_mut()
+        .layer_mut(h)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    l.regions
+        .flip(client.0, flip[0], flip[1])
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    l.image_source = Some(ImageInput::Resource(image.clone()));
+    l.full_alpha = image.opaque().then_some(255);
+    l.blank = false;
+    if publish_surface {l.image_modified=true;}
+    rt.host_mut().api_calls += 1;
+    Ok(())
 }
 
 /// `Layer.saveLayerImage` (krkrz TVPSaveImage): a loaded image goes through a

@@ -37,7 +37,28 @@ an optional read-only directory/filesystem with separately injected save storage
 | macOS | Release compiled; scoped offscreen evidence is recorded separately |
 | Windows / Linux | Portable worker/CPU/storage source connected; not compiled in this session |
 | iOS / Android / browser | Native packaging, worker lifecycle and host output not connected by this change |
-| Vita / Switch | Deferred |
+| Vita | Original native GXM renderer and vita2d shader bindings retained behind optional `vita-gxm`; integrated console session/output selection remains incomplete |
+| Switch | Original RFVP software renderer retained behind optional `switch-framebuffer`, with host-selected output dimensions; full console session/output connection remains incomplete |
+
+`vita-gxm` forwards to the maintained native crate's
+[original Vita output](../crysirror-rfvp-native/native/vita/README.md). It is off
+by default and does not replace the current software-rendered worker session.
+
+`switch-framebuffer` exposes the original Switch renderer through `horizon`.
+It is off by default and does not change the desktop worker. The console host
+creates `HorizonRenderer::new(width, height)` with its actual output surface
+size, and calls `resize_output` between completed presentations when that size
+changes, including dock/undock. There is no fixed 720p output or assumed dock
+resolution. Native game coordinates and textures survive output resizing.
+The output admission limit is 8,388,608 pixels.
+
+After native frame completion, `copy_to_framebuffer` copies RGBA_8888 words
+into a host-borrowed linear framebuffer using libnx's byte pitch. It checks
+the target size and preserves row padding; it retains no device/buffer pointer.
+The host owns framebuffer acquisition/release, vblank, input, audio and the
+common console lifecycle. This path reuses RFVP's software rasterizer and
+requires no shader or OpenGL. The original standalone Switch app is not linked.
+The source migration has not been compiled or executed in CrySirror.
 
 Hardware presentation, audible playback, real-server latency and whole-game
 compatibility require their own execution evidence. Software composition is an

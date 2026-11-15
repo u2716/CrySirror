@@ -141,9 +141,13 @@ pub struct NativeWindows {
 }
 #[derive(Clone, Debug)]
 pub struct PreparedNativeServices {
-    pub(crate) voice_policy:crate::native_voice_policy::VoicePolicy,
-    pub(crate) system_sounds:Option<Names>,
-    pub(crate) system_sound_disabled:bool,
+    pub(crate) voice_policy: crate::native_voice_policy::VoicePolicy,
+    pub(crate) system_sounds: Option<Names>,
+    pub(crate) system_sound_disabled: bool,
+    pub(crate) button_voice_catalogues: Vec<Arc<Names>>,
+    pub(crate) button_voice_number: i32,
+    pub(crate) chara_voice_volume_delta: i32,
+    pub(crate) enable_button_voice_chara_volume: bool,
     pub preferences: NativePreferences,
     pub audio: NativeAudioPolicy,
     pub music_names: Names,
@@ -243,6 +247,7 @@ impl PreparedNativeServices {
             cancel,
         )?;
         prepared.resources = configuration.resources.clone();
+
         Ok(prepared)
     }
     /// `saved_system` must come from this game's Save capability. If absent,
@@ -299,17 +304,61 @@ impl PreparedNativeServices {
             music_names.tokens.len() % 2 == 0 && sound_names.tokens.len() % 2 == 0,
             "NNN native audio table pairs"
         );
-        let config_setup=config(&mut read,&resources,"Config",cancel)?;
-        let character_names=if game.integer(b"noScriptFlag")?.unwrap_or(0)==0 {
-            let path=resources.path("spt/charaname.xtx")?;
-            read(&path,1<<20)?.map(|bytes|Names::parse(&bytes,false)).transpose()?.unwrap_or(Names{tokens:vec![]})
-        }else{Names{tokens:vec![]}};
-        let voice_policy=crate::native_voice_policy::VoicePolicy::read(&character_names,&config_setup,game)?;
-        let system_sound_disabled=game.integer(b"noSystemSeFlag")?.unwrap_or(0)!=0;
-        let system_sounds=if system_sound_disabled{None}else {
-            let path=resources.path("nya/systemse.xtx")?;
-            read(&path,1<<20)?.map(|bytes|Names::parse(&bytes,false)).transpose()?
+        let config_setup = config(&mut read, &resources, "Config", cancel)?;
+        let character_names = if game.integer(b"noScriptFlag")?.unwrap_or(0) == 0 {
+            let path = resources.path("spt/charaname.xtx")?;
+            read(&path, 1 << 20)?
+                .map(|bytes| Names::parse(&bytes, false))
+                .transpose()?
+                .unwrap_or(Names { tokens: vec![] })
+        } else {
+            Names { tokens: vec![] }
         };
+        let voice_policy =
+            crate::native_voice_policy::VoicePolicy::read(&character_names, &config_setup, game)?;
+        let system_sound_disabled = game.integer(b"noSystemSeFlag")?.unwrap_or(0) != 0;
+        let system_sounds = if system_sound_disabled {
+            None
+        } else {
+            let path = resources.path("nya/systemse.xtx")?;
+            read(&path, 1 << 20)?
+                .map(|bytes| Names::parse(&bytes, false))
+                .transpose()?
+        };
+        // CGameCallBack constructs buttonVoice0..N independently from the
+        // noSystemSeFlag branch. CNameList::LoadFile leaves an empty table on
+        // absence; inaccessible/malformed data still fails through the reader.
+        let use_system_voice = game.integer(b"useSystemVoice")?.unwrap_or(0);
+        ensure!(
+            (0..=256).contains(&use_system_voice),
+            "NNN system voice catalogue allocation budget"
+        );
+        let mut button_voice_catalogues = Vec::with_capacity(use_system_voice as usize + 1);
+        let mut catalogue_bytes = 0usize;
+        for i in 0..=use_system_voice {
+            cancel.check()?;
+            let path = resources.path(&format!("nya/buttonVoice{i}.xtx"))?;
+            let names = if let Some(bytes) = read(&path, 1 << 20)? {
+                catalogue_bytes = catalogue_bytes
+                    .checked_add(bytes.len())
+                    .context("NNN button voice catalogue extent overflow")?;
+                ensure!(
+                    bytes.len() <= 1 << 20 && catalogue_bytes <= 4 << 20,
+                    "NNN button voice catalogue byte budget"
+                );
+                Names::parse(&bytes, false)?
+            } else {
+                Names { tokens: Vec::new() }
+            };
+            button_voice_catalogues.push(Arc::new(names));
+        }
+        let button_voice_number = game.integer(b"buttonVoiceNumber")?.unwrap_or(2);
+        // This reviewed legacy callback profile uses DirectSound policy. A
+        // CrySirror output backend is not the native __USE_XAUDIO2__ switch;
+        // do not select charaVoiceVolumeDeltaXAudio2 just because CPAL is used.
+        let chara_voice_volume_delta = game.integer(b"charaVoiceVolumeDelta")?.unwrap_or(2);
+        let enable_button_voice_chara_volume =
+            game.integer(b"enableButtonVoiceCharaVolume")?.unwrap_or(0) != 0;
         let print_setup = config(&mut read, &resources, "PrintMessage", cancel)?;
         let selection_setup = config(&mut read, &resources, "SelectMessage", cancel)?;
         let window_setup = config(&mut read, &resources, "messageWindow", cancel)?;
@@ -331,6 +380,10 @@ impl PreparedNativeServices {
             voice_policy,
             system_sounds,
             system_sound_disabled,
+            button_voice_catalogues,
+            button_voice_number,
+            chara_voice_volume_delta,
+            enable_button_voice_chara_volume,
             preferences,
             audio,
             music_names,

@@ -3,7 +3,25 @@ use super::*;
 use crysirror_scene::layer::queued::{SequenceOperation, SequenceStatus};
 #[derive(Clone, Debug)]
 pub enum ResourceRequest {
+    ///The original profile's open/readability probe, independent of a full
+    ///slot parser. DC3WY40B8D0 does not validate body length or contents.
+    ProfileSlotReadable {profile:Profile,slot:u16},
+    ///DC3WY 40B960: open, then one read of `bytes`; readable only when the
+    ///read returns all of them. Contents are not parsed.
+    ProfileSlotFull {profile:Profile,slot:u16,bytes:u32},
+    ///DC3WY 40B6A0: replace DC3WY%02d.dat with the original slot body.
+    WriteProfileSlot {profile:Profile,slot:u16,bytes:Vec<u8>},
+    ///DC3WY 40BA30: the whole original slot file, None when absent.
+    ReadProfileSlot {profile:Profile,slot:u16},
+    ///DC3WY 43C5B0 + 41E360(1) + 43DE10: render the current logical scene
+    ///into a canvas-sized texture held by `slot`.
+    CaptureScreen { slot: u8 },
+    ///Original per-profile system.dat bytes, read through the worker/storage
+    ///seam. None in the reply means a genuinely absent save-root file.
+    ReadPreferences { profile:Profile },
     ImageName { index: usize },
+    ///Original NAMES music row presence; empty-but-present rows remain valid.
+    MusicIndex { index: usize },
     CgIndex { name: String },
     BackgroundOverlay { name: String },
     PrepareLoad { slot: u8, name: String },
@@ -20,9 +38,12 @@ pub enum ResourceRequest {
 }
 #[derive(Clone, Debug)]
 pub enum ResourceReply {
+    Readable(bool),
+    Preferences(Option<Vec<u8>>),
     Done,
     Name(String),
     Index(Option<usize>),
+    Bytes(Option<Vec<u8>>),
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub(super) struct ResourceState {

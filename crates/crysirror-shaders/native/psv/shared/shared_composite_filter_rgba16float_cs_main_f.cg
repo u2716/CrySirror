@@ -1,0 +1,253 @@
+// SPDX-License-Identifier: MPL-2.0
+// Generated from canonical WGSL by crysirror-shader-tools.
+int min(int a,int b){return a<b?a:b;}
+int max(int a,int b){return a>b?a:b;}
+int clamp(int a,int lo,int hi){return min(max(a,lo),hi);}
+int2 min(int2 a,int2 b){return a<b?a:b;}
+int2 max(int2 a,int2 b){return a>b?a:b;}
+int2 clamp(int2 a,int2 lo,int2 hi){return min(max(a,lo),hi);}
+int3 min(int3 a,int3 b){return a<b?a:b;}
+int3 max(int3 a,int3 b){return a>b?a:b;}
+int3 clamp(int3 a,int3 lo,int3 hi){return min(max(a,lo),hi);}
+int4 min(int4 a,int4 b){return a<b?a:b;}
+int4 max(int4 a,int4 b){return a>b?a:b;}
+int4 clamp(int4 a,int4 lo,int4 hi){return min(max(a,lo),hi);}
+
+
+// SGX has no general integer divide. Bias a full-width float estimate
+// below the quotient, refine its small remainder, then correct in integers.
+// The 2^-20 bias dominates f32 conversion/division error (all inputs normal).
+// The refinement quotient is below 2048, so three corrections are sufficient.
+int cg_div_positive(int a,int b){
+ if(b==1)return a;
+ bool negative=a<0;
+ int n=negative?-(a+1):a;
+ float estimate=float(n)/float(b);
+ int q=int(max(floor(estimate-max(estimate*0.00000095367431640625,2.0)),0.0));
+ int r=n-q*b;
+ int correction=max(int(floor(float(r)/float(b)))-2,0);
+ q+=correction;r-=correction*b;
+ if(r>=b){r-=b;q+=1;}
+ if(r>=b){r-=b;q+=1;}
+ if(r>=b){r-=b;q+=1;}
+ if(negative)return -q-int(r==b-1);
+ return q;
+}
+int cg_div(int a,int b){
+ if(b==0)return a;
+ if(b==(-2147483647-1))return a==b?1:0;
+ if(a==(-2147483647-1)&&b==-1)return a;
+ return b<0?-cg_div_positive(a,-b):cg_div_positive(a,b);
+}
+int2 cg_div(int2 a,int2 b){return int2(cg_div(a.x,b.x),cg_div(a.y,b.y));}
+int3 cg_div(int3 a,int3 b){return int3(cg_div(a.x,b.x),cg_div(a.y,b.y),cg_div(a.z,b.z));}
+int4 cg_div(int4 a,int4 b){return int4(cg_div(a.x,b.x),cg_div(a.y,b.y),cg_div(a.z,b.z),cg_div(a.w,b.w));}
+float4 cg_load(sampler2D tex,int3 p,float4 size){
+ if(any(p.xy<0)||any(p.xy>=int2(size.xy))||p.z!=0)return float4(0,0,0,0);
+ return tex2Dlod(tex,float4((float2(p.xy)+0.5)*size.zw,0,0));
+}
+// Naga uses these for signed/unsigned integer wrapping, never float bitcasts.
+int asint(int v){return int(v);} int2 asint(int2 v){return int2(v);}
+int3 asint(int3 v){return int3(v);} int4 asint(int4 v){return int4(v);}
+int asuint(int v){return int(v);} int2 asuint(int2 v){return int2(v);}
+int3 asuint(int3 v){return int3(v);} int4 asuint(int4 v){return int4(v);}
+
+struct Params {
+    int4 config;
+    float4 rect;
+    int4 extra;
+};
+
+uniform sampler2D source : TEXUNIT0;
+uniform float4 cg_size_source;
+uniform Params params;
+uniform sampler2D horizontal_ba : TEXUNIT1;
+uniform float4 cg_size_horizontal_ba;
+
+struct FragmentInput_fs_main {
+    float4 position_1 : WPOS;
+};
+
+float3 gamma(float3 v)
+{
+    float3 _e5 = clamp(v, (0.0).xxx, (1.0).xxx);
+    return ((_e5 <= (0.0031308).xxx) ? (_e5 * 12.92) : ((1.055 * pow(_e5, (0.41666666).xxx)) - (0.055).xxx));
+}
+
+int2 naga_f2i32(float2 value) {
+    return int2(clamp(value, -2147483600.0, 2147483500.0));
+}
+
+
+float4 input_value(int2 pixel)
+{
+    int2 _e3 = int2(int2(cg_size_source.xy));
+    int _e7 = params.config.w;
+    if ((_e7 == 2)) {
+        float4 _e13 = params.rect;
+        float4 _e18 = params.rect;
+        float4 _e34 = cg_load(source,int3(naga_f2i32(clamp(floor((((float2(pixel) - _e13.xy) / _e18.zw) * float2(_e3))), (0.0).xx, (float2(_e3) - (1.0).xx))), int(0)),cg_size_source);
+        const float3 _e36 = gamma(_e34.xyz);
+        return float4((floor((dot(floor(((_e36 * 255.0) + (0.5).xxx)), float3(54.0, 183.0, 19.0)) / 256.0))).xxx, 255.0);
+    }
+    float4 _e56 = params.rect;
+    int2 _e66 = naga_f2i32(clamp(floor(_e56.xy), (0.0).xx, (float2(_e3) - (1.0).xx)));
+    float4 _e69 = params.rect;
+    float4 _e73 = params.rect;
+    float4 _e92 = cg_load(source,int3(clamp(pixel, _e66, max(_e66, naga_f2i32(clamp((ceil((_e69.xy + _e73.zw)) - (1.0).xx), (0.0).xx, (float2(_e3) - (1.0).xx))))), int(0)),cg_size_source);
+    if ((_e7 == 1)) {
+        const float3 _e101 = gamma((_e92.xyz / (max(_e92.w, 1e-6)).xxx));
+        return floor(((float4((_e101 * _e92.w), _e92.w) * 255.0) + (0.5).xxxx));
+    }
+    return _e92;
+}
+
+void box_fix(inout float4 q_1, inout float4 r_1, float a)
+{
+    float4 _e3 = r_1;
+    bool4 _e6 = (_e3 < (0.0).xxxx);
+    float4 _e7 = q_1;
+    float4 _e8 = q_1;
+    q_1 = (_e6 ? (_e8 - (1.0).xxxx) : _e7);
+    float4 _e13 = r_1;
+    float4 _e14 = r_1;
+    r_1 = (_e6 ? (_e14 + (a).xxxx) : _e13);
+    float4 _e18 = r_1;
+    bool4 _e20 = (_e18 >= (a).xxxx);
+    float4 _e21 = q_1;
+    float4 _e22 = q_1;
+    q_1 = (_e20 ? (_e22 + (1.0).xxxx) : _e21);
+    float4 _e27 = r_1;
+    float4 _e28 = r_1;
+    r_1 = (_e20 ? (_e28 - (a).xxxx) : _e27);
+    return;
+}
+
+float4 main(FragmentInput_fs_main fragmentinput_fs_main) : COLOR
+{
+    float4 position = fragmentinput_fs_main.position_1;
+    bool local = (bool)0;
+    float4 sum = (0.0).xxxx;
+    int n = 0;
+    float4 high = (0.0).xxxx;
+    float4 low = (0.0).xxxx;
+    int n_1 = 0;
+    float4 q = (float4)0;
+    float4 r = (float4)0;
+    float4 qe = (float4)0;
+    float4 re = (float4)0;
+    float4 qf = (float4)0;
+    float4 rf = (float4)0;
+    float4 average = (float4)0;
+
+    int2 _e2 = naga_f2i32(position.xy);
+    float2 _e6 = (float2(_e2) + (0.5).xx);
+    float4 _e9 = params.rect;
+    if (!(any((_e6 < _e9.xy)))) {
+        float4 _e18 = params.rect;
+        float4 _e22 = params.rect;
+        local = any((_e6 >= (_e18.xy + _e22.zw)));
+    } else {
+        local = true;
+    }
+    bool _e28 = local;
+    if (_e28) {
+        return (0.0).xxxx;
+    }
+    int _e34 = params.config.y;
+    int _e38 = params.config.x;
+    if ((_e38 == 0)) {
+        bool loop_init = true;
+        while(true) {
+            if (!loop_init) {
+                int _e62 = n;
+                n = (_e62 + 1);
+            }
+            loop_init = false;
+            int _e46 = n;
+            if ((_e46 < ((2 * _e34) + 1))) {
+            } else {
+                break;
+            }
+            {
+                float4 _e52 = sum;
+                int _e53 = n;
+                const float4 _e60 = input_value(asint(asuint(_e2) + asuint(int2(asint(asuint(int(_e53)) - asuint(int(_e34))), int(0)))));
+                sum = (_e52 + _e60);
+            }
+        }
+        float4 _e65 = sum;
+        float4 _e67 = sum;
+        int _e72 = params.extra.y;
+        float2 _e75 = ((_e72 != 0) ? _e67.zw : _e65.xy);
+        float2 _e79 = floor((_e75 / (256.0).xx));
+        float2 _e82 = (_e75 - (_e79 * 256.0));
+        return (float4(_e79.x, _e82.x, _e79.y, _e82.y) / (255.0).xxxx);
+    }
+    float2 _e93 = float2(int2(cg_size_source.xy));
+    float4 _e96 = params.rect;
+    float2 _e104 = clamp(floor(_e96.xy), (0.0).xx, (_e93 - (1.0).xx));
+    float4 _e107 = params.rect;
+    float4 _e111 = params.rect;
+    bool loop_init_1 = true;
+    while(true) {
+        if (!loop_init_1) {
+            int _e186 = n_1;
+            n_1 = (_e186 + 1);
+        }
+        loop_init_1 = false;
+        int _e133 = n_1;
+        if ((_e133 < ((2 * _e34) + 1))) {
+        } else {
+            break;
+        }
+        {
+            int _e142 = n_1;
+            int2 _e153 = naga_f2i32((clamp(((_e6 - (0.5).xx) + float2(0.0, (float(_e142) - float(_e34)))), _e104, max(_e104, clamp((ceil((_e107.xy + _e111.zw)) - (1.0).xx), (0.0).xx, (_e93 - (1.0).xx)))) + (0.5).xx));
+            float4 _e156 = cg_load(source,int3(_e153, int(0)),cg_size_source);
+            float4 _e162 = floor(((_e156 * 255.0) + (0.5).xxxx));
+            float4 _e165 = cg_load(horizontal_ba,int3(_e153, int(0)),cg_size_horizontal_ba);
+            float4 _e171 = floor(((_e165 * 255.0) + (0.5).xxxx));
+            float4 _e172 = high;
+            high = (_e172 + float4(_e162.x, _e162.z, _e171.x, _e171.z));
+            float4 _e179 = low;
+            low = (_e179 + float4(_e162.y, _e162.w, _e171.y, _e171.w));
+        }
+    }
+    int _e198 = params.config.z;
+    float _e203 = (float(((2 * _e34) + 1)) * float(((2 * _e198) + 1)));
+    float4 _e204 = low;
+    float4 _e208 = floor((_e204 / (256.0).xxxx));
+    float4 _e209 = low;
+    float4 _e212 = (_e209 - (_e208 * 256.0));
+    float4 _e216 = floor((_e212 / (16.0).xxxx));
+    float4 _e220 = high;
+    q = floor(((_e220 + _e208) / (_e203).xxxx));
+    float4 _e226 = high;
+    float4 _e228 = q;
+    r = ((_e226 + _e208) - (_e228 * _e203));
+    box_fix(q, r, _e203);
+    float4 _e232 = r;
+    float4 _e235 = ((_e232 * 16.0) + _e216);
+    qe = floor((_e235 / (_e203).xxxx));
+    float4 _e240 = qe;
+    re = (_e235 - (_e240 * _e203));
+    box_fix(qe, re, _e203);
+    float4 _e244 = re;
+    float4 _e247 = ((_e244 * 16.0) + (_e212 - (_e216 * 16.0)));
+    qf = floor((_e247 / (_e203).xxxx));
+    float4 _e252 = qf;
+    rf = (_e247 - (_e252 * _e203));
+    box_fix(qf, rf, _e203);
+    float4 _e256 = q;
+    float4 _e259 = qe;
+    float4 _e263 = qf;
+    average = ((((_e256 * 256.0) + (_e259 * 16.0)) + _e263) / (255.0).xxxx);
+    int _e272 = params.extra.x;
+    if ((_e272 != 0)) {
+        float _e276 = average.x;
+        average = float4(((1.0 - _e276)).xxx, 1.0);
+    }
+    float4 _e282 = average;
+    return _e282;
+}

@@ -28,6 +28,12 @@ enum Arithmetic {
         source: String,
         destination: String,
     },
+    Byte255Sum {
+        rounding: String,
+    },
+    ByteShiftSum {
+        shift: u8,
+    },
 }
 #[derive(Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -42,6 +48,7 @@ struct State {
     source_alpha_range: [f32; 2],
     source_color_key: Option<[u8; 3]>,
     source_alpha_key: Option<u8>,
+    source_color_key_invert: bool,
 }
 impl Default for State {
     fn default() -> Self {
@@ -56,6 +63,7 @@ impl Default for State {
             source_alpha_range: [0., 1.],
             source_color_key: None,
             source_alpha_key: None,
+            source_color_key_invert: false,
         }
     }
 }
@@ -130,6 +138,10 @@ pub(crate) fn input(
                 source: rounding(&source)?,
                 destination: rounding(&destination)?,
             },
+            Arithmetic::Byte255Sum { rounding: r } => RgbaBlendArithmetic::Byte255Sum {
+                rounding: rounding(&r)?,
+            },
+            Arithmetic::ByteShiftSum { shift } => RgbaBlendArithmetic::ByteShiftSum { shift },
         },
         color: component(s.color)?,
         alpha: component(s.alpha)?,
@@ -140,6 +152,7 @@ pub(crate) fn input(
         source_alpha_range: s.source_alpha_range,
         source_color_key: s.source_color_key,
         source_alpha_key: s.source_alpha_key,
+        source_color_key_invert: s.source_color_key_invert,
     };
     state
         .validate()

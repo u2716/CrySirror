@@ -21,6 +21,7 @@ pub use pipeline::PreparationPending;
 mod puppet;
 mod ray_geometry;
 mod raytrace;
+mod ray_lite;
 pub mod rt_capabilities;
 mod rt_pbr;
 mod sampling;
@@ -64,13 +65,17 @@ impl Gpu {
     pub fn capabilities(&self) -> GraphicsCapabilities {
         GraphicsCapabilities {
             raster: true,
-            compute_raytrace: self
+            // Compute profile, or the lite fragment profile where compute
+            // storage is absent (ray_lite.rs).
+            compute_raytrace: (self
                 .adapter
                 .get_downlevel_capabilities()
                 .flags
                 .contains(wgpu::DownlevelFlags::COMPUTE_SHADERS)
                 && self.device.limits().max_storage_buffers_per_shader_stage >= 1
-                && self.device.limits().max_storage_textures_per_shader_stage >= 1,
+                && self.device.limits().max_storage_textures_per_shader_stage >= 1
+                && !ray_lite::preferred(self))
+                || ray_lite::supported(self),
             hardware_raytrace: rt_capabilities::report(&self.adapter, Some(&self.device)).enabled,
         }
     }
@@ -286,6 +291,10 @@ fn filter_sampling(record:&mut FilterGpu,sampling:crysirror_scene::layer::ImageS
     record.c[3]=flags as f32;
 }
 pub struct Renderer {
+    /// Consecutive-frame capture (movies): temporal history carries over from
+    /// the previous capture, so only the first capture accumulates warm-up passes.
+    movie_capture: bool,
+    movie_warmed: bool,
     coverage_layout:wgpu::BindGroupLayout,
     coverage_planes:BTreeMap<u32,coverage::Plane>,
     coverage_white:wgpu::BindGroup,
@@ -332,6 +341,7 @@ pub struct Renderer {
     depth: Option<Depth>,
     path: RenderingPath,
     raytracer: Option<raytrace::RayTracer>,
+    ray_lite: Option<ray_lite::RayLite>,
     hardware_rt: Option<hardware_rt::HardwareRt>,
     /// Physically based path (ADR 0010); created on first use.
     pbr: Option<pbr::PbrRenderer>,
@@ -341,6 +351,12 @@ pub struct Renderer {
     puppets: puppet::PuppetRenderer,
 }
 impl Renderer {
+    /// Captures are consecutive movie frames: keep temporal history between
+    /// captures instead of re-accumulating warm-up passes for each one.
+    pub fn set_movie_capture(&mut self, enabled: bool) {
+        self.movie_capture = enabled;
+        self.movie_warmed = false;
+    }
     pub fn new(gpu: Arc<Gpu>, format: wgpu::TextureFormat) -> Self {
         let d = &gpu.device;
         let texture_layout = d.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -687,8 +703,10 @@ impl Renderer {
             ..Default::default()
         });
         let puppets =
-            puppet::PuppetRenderer::new(d, &texture_layout, wgpu::TextureFormat::Rgba8UnormSrgb);
+            puppet::PuppetRenderer::new(d, &texture_layout, wgpu::TextureFormat::Rgba8UnormSrgb, puppet::premultiplied_format(&gpu.adapter));
         Self {
+            movie_capture: false,
+            movie_warmed: false,
             presentation_scale:Default::default(),
             blend_origin: [0.;2],
             histories: frame_history::Provider::new(gpu.clone()),
@@ -726,6 +744,7 @@ impl Renderer {
             depth: None,
             path: RenderingPath::Raster,
             raytracer: None,
+            ray_lite: None,
             hardware_rt: None,
             pbr: None,
             transitions: transition::Transitions::new(&gpu.device, &gpu.queue, format),
@@ -846,10 +865,23 @@ impl Renderer {
         if let Some(p) = &mut self.pbr {
             p.set_hardware_rt(path == RenderingPath::HardwareRaytrace)?;
         }
-        if path == RenderingPath::ComputeRaytrace && self.raytracer.is_none() {
-            self.raytracer = Some(raytrace::RayTracer::new(&self.gpu));
+        if path == RenderingPath::ComputeRaytrace && self.raytracer.is_none() && self.ray_lite.is_none() {
+            if ray_lite::preferred(&self.gpu) {
+                self.ray_lite = Some(ray_lite::RayLite::new(&self.gpu));
+            } else {
+                self.raytracer = Some(raytrace::RayTracer::new(&self.gpu));
+            }
         }
         self.path = path;
+        Ok(())
+    }
+    /// Trace `ComputeRaytrace` scenes through the lite fragment profile even
+    /// where compute is available: previews the console profile on desktop
+    /// (it is chosen automatically on GPUs without compute storage).
+    pub fn use_lite_rays(&mut self) -> Result<()> {
+        ensure!(ray_lite::supported(&self.gpu), "GPU cannot run the lite ray profile");
+        self.raytracer = None;
+        self.ray_lite = Some(ray_lite::RayLite::new(&self.gpu));
         Ok(())
     }
     pub fn set_scene3d(&mut self, scene: Option<&Scene3d>) -> Result<()> {
@@ -920,8 +952,14 @@ impl Renderer {
             p.paint.validate()?;
             if p.sampling != crysirror_scene::layer::ImageSampling::default() {
                 ensure!(
-                    matches!(p.paint, Paint::Image { .. }) && p.sampling.valid_uv(p.uv),
-                    "invalid extracted image sampling"
+                    // Shared extraction evaluates retained LegacyMesh into
+                    // ProjectedMesh; that raster path already consumes the
+                    // same sampler (projected_mesh.rs). Rejecting it here
+                    // discarded a valid scene contract before preparation.
+                    matches!(p.paint, Paint::Image { .. } | Paint::ProjectedMesh { .. })
+                        && p.sampling.valid_uv(p.uv),
+                    "invalid extracted image sampling: owner={} layer={} projected_mesh={} uv={:?} sampling={:?}",
+                    p.owner, p.id, matches!(p.paint, Paint::ProjectedMesh { .. }), p.uv, p.sampling
                 );
             }
             ensure!(
@@ -1804,6 +1842,14 @@ impl Renderer {
                         &mut encoder,
                     )?,
             )
+        } else if let (RenderingPath::ComputeRaytrace, Some(lite)) = (self.path, &self.ray_lite) {
+            Some(lite.encode(
+                &self.gpu,
+                self.scene3d.as_ref().context("compute raytrace requires a 3D scene")?,
+                canvas,
+                background,
+                &mut encoder,
+            )?)
         } else if self.path == RenderingPath::ComputeRaytrace {
             Some(
                 self.raytracer
@@ -2122,11 +2168,15 @@ impl Renderer {
         });
         let view = texture.create_view(&Default::default());
         // TAA needs history: a still capture accumulates jittered frames.
-        let passes = self
-            .pbr
-            .as_ref()
-            .filter(|p| p.active())
-            .map_or(1, |p| p.warmup_frames());
+        let passes = if self.movie_capture && self.movie_warmed {
+            1
+        } else {
+            self.pbr
+                .as_ref()
+                .filter(|p| p.active())
+                .map_or(1, |p| p.warmup_frames())
+        };
+        self.movie_warmed = self.pbr.as_ref().is_some_and(|p| p.active());
         for _ in 0..passes {
             self.render(
                 scene,

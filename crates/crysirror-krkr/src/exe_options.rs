@@ -49,6 +49,29 @@ pub fn pe_bits(exe: &[u8]) -> Option<i64> {
     }
 }
 
+/// Lines of a `<exe>.cf` / `<datapath>/<exe>.cfu` configuration file
+/// (krkrz `TVPGetConfigFileOptions` + `PushConfigFileOptions`): each line
+/// not starting with `;` is one `name=value` option, parsed like a command
+/// line option (`TVPParseCommandLineOne`); a bare name means `yes`.
+/// `(name, value)` pairs, names without the leading `-`, in file order.
+pub fn parse_config(bytes: &[u8]) -> Result<Vec<(String, String)>> {
+    let text = crate::storage::decode_text(bytes)?;
+    let mut out = Vec::new();
+    for line in text.lines().map(|l| l.trim_end_matches(['\r', '\n'])) {
+        if line.is_empty() || line.starts_with(';') {
+            continue;
+        }
+        ensure!(out.len() < MAX_OPTIONS, "configuration option limit");
+        let (name, value) = line.split_once('=').unwrap_or((line, "yes"));
+        let name = name.trim_start_matches('-');
+        // TVPGetCommandLine answers the first stocked match.
+        if !out.iter().any(|(n, _): &(String, String)| n == name) {
+            out.push((name.to_owned(), unquote(value)?));
+        }
+    }
+    Ok(out)
+}
+
 /// A TJS string literal (`"..."` or `'...'` with backslash escapes), or a
 /// bare value as written.
 fn unquote(v: &str) -> Result<String> {
@@ -115,6 +138,19 @@ mod tests {
         assert_eq!(pe_bits(&pe(0x8664)), Some(64));
         assert_eq!(pe_bits(&pe(0x01c0)), None);
         assert_eq!(pe_bits(b"MZ truncated"), None);
+    }
+
+    #[test]
+    fn configuration_files_skip_comments_and_unquote_values() {
+        let options = parse_config(b"; comment\r\nfullscreenmode=\"\\x31\"\r\nforcelog\r\nvomstyle=layer\n").unwrap();
+        assert_eq!(
+            options,
+            [
+                ("fullscreenmode".into(), "1".into()),
+                ("forcelog".into(), "yes".into()),
+                ("vomstyle".into(), "layer".into())
+            ]
+        );
     }
 
     #[test]

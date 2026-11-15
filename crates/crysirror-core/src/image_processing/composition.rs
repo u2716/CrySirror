@@ -51,6 +51,47 @@ impl ImageInput {
     }
 }
 
+/// Largest operation graph the shared image worker admits (nodes, nesting).
+/// Adapters that retain a layer's history as a graph must not keep one past
+/// this bound: it can never be evaluated, and repeated self-copies would grow
+/// it geometrically.
+pub const IMAGE_GRAPH_MAX_NODES: usize = 1024;
+pub const IMAGE_GRAPH_MAX_DEPTH: usize = 32;
+
+impl ImageInput {
+    /// Whether the shared worker's graph admission bound holds. Stops counting
+    /// at the bound, so the check is O(bound) for any graph.
+    pub fn within_graph_bound(&self) -> bool {
+        fn walk(input: &ImageInput, depth: usize, nodes: &mut usize) -> bool {
+            *nodes += 1;
+            if depth > IMAGE_GRAPH_MAX_DEPTH || *nodes > IMAGE_GRAPH_MAX_NODES {
+                return false;
+            }
+            let d = depth + 1;
+            match input {
+                ImageInput::FieldWarp { source, .. } => walk(source, d, nodes),
+                ImageInput::Process { input, .. } => walk(input, d, nodes),
+                ImageInput::Composite { base, layers } => {
+                    walk(base, d, nodes) && layers.iter().all(|l| walk(&l.input, d, nodes))
+                }
+                ImageInput::Raster { destination, source } => walk(destination, d, nodes) && walk(source, d, nodes),
+                ImageInput::Ternary { destination, first, second } => {
+                    walk(destination, d, nodes) && walk(first, d, nodes) && walk(second, d, nodes)
+                }
+                ImageInput::ParticlePlane { .. }
+                | ImageInput::PyramidLevel { .. }
+                | ImageInput::Encoded { .. }
+                | ImageInput::Solid { .. }
+                | ImageInput::Transition { .. }
+                | ImageInput::Asset { .. }
+                | ImageInput::ScopedAsset { .. }
+                | ImageInput::Resource(_) => true,
+            }
+        }
+        walk(self, 0, &mut 0)
+    }
+}
+
 fn append(base: ImageInput, layer: ImageCompositeLayer) -> ImageInput {
     match base {
         ImageInput::Composite { base, mut layers } if layers.len() < 64 => {
@@ -118,6 +159,22 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn repeated_self_copies_leave_the_graph_bound() {
+        // A partial copy of a graph onto itself duplicates its history in
+        // both branches, doubling the node count each time.
+        let mut a = solid(1);
+        let mut steps = 0;
+        while a.within_graph_bound() {
+            let mut layer = copy(a.clone());
+            layer.source = [0, 0, 1, 1];
+            a = a.with_composite_layer(layer);
+            steps += 1;
+            assert!(steps < 64, "bound never reached");
+        }
+        assert!(steps <= 11);
     }
 
     #[test]

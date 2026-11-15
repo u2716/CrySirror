@@ -1,9 +1,10 @@
-# Native console shader sources
+# Native console shaders
 
-This is source work, not a completed console renderer. GXP/DKSH compilation and
-device behavior are separate requirements. No new compilation or execution was
-performed after native compilation was deferred. In particular, the current
-source revision has not passed Rust, Naga, SceShaccCg or UAM validation.
+The shared shader library supplies canonical WGSL, native console sources and
+compiled program catalogs. Compilation and renderer/device behavior are separate
+requirements. The PSV shader ABI is documented beside its
+[programs](../crates/crysirror-shaders/native/psv/README.md); validation evidence
+belongs in [focused notes](validation/psv-shared-shaders-2026-11-15.md).
 
 ## Source ownership
 
@@ -15,10 +16,9 @@ with deko3d resource namespaces and binding reflection. This is compiler input,
 not an OpenGL runtime. The exporter records translation failures and exits with
 an error for an incomplete export. It does not invoke UAM or create DKSH.
 
-The PSV exporter currently writes the native Lite ray sources but reports the
-remaining WGSL raster/compute entries as unported. It must not be described as a
-complete Cg translation backend. The Switch exporter also has unresolved source
-translation cases. Hardware ray-query programs are recorded as requiring that
+The PSV exporter lowers the shared 2D entries through Naga's typed HLSL
+representation to native GXM Cg and supplies reduced 3D/BVH programs. HLSL is
+only a build intermediate. Hardware ray-query programs are recorded as requiring that
 capability; Lite primary rays are not equivalent replacements for glossy
 reflection, GI, alpha-tested material baking or hardware AS operations.
 
@@ -102,29 +102,137 @@ The VP takes POSITION float2 and TEXCOORD0 float2; supply an oversized fullscree
 triangle with UV orientation matching top-left screen coordinates. Use native
 FP/VP compiler profiles and preserve full float precision.
 
+### PSV host (renderer)
+
+`crysirror-wgpu` runs this profile for `RenderingPath::ComputeRaytrace` on
+GPUs without `Rgba16Float` storage (`ray_lite.rs`, `ray_lite.wgsl`). It is the
+reduced tier of the compute profile, not an equivalent:
+
+- **Data**: it builds the PackedScene from the 3D scene's triangles (at most
+  1024 triangles) and uploads both textures as `Rg32Float`, 256 texels wide.
+- **Pass**: it draws one fullscreen triangle into an `Rgba8UnormSrgb` target.
+- **Lighting**: the constants are those of `raytrace.wgsl`: sun
+  (0.45, 0.85, 0.3), direct 0.82, ambient 0.18, sky = background.
+- **Desktop preview**: `Renderer::use_lite_rays` selects the same profile on
+  desktop.
+
+`cook-vita` joins `ray_lite.wgsl` to `ray_lite_v`/`ray_lite_f`:
+
+- Vertex attributes are bound by parameter name (`position`, `uv`).
+- Uniforms are bare `ray_*` names.
+- 32-bit float textures are always point-sampled.
+- The GXM `F32F32_GR` swizzle returns the packed pair as `.xy`. It was verified
+  by reading back every node and triangle texel of a 15-node, 26-triangle
+  scene.
+
+`ray_lite_f` is compiled at optimization level 1. Under Vita3K 0.2.1, the
+same source compiled at level 2 drew wrong primary hits (the floor missing,
+shapes distorted), level 3 lost direct light, and level 0 failed in
+SceShaccCg (internal error 403).
+
 On Switch samplers occupy 0/1, output RGBA16F image occupies image slot 0, and
 the eleven vec4 uniforms occupy std140 UBO slot 0 in the order above (176 bytes).
 Dispatch ceil(width/8), ceil(height/8), 1 and provide image/texture ownership
 barriers in the native renderer before composition. These binding namespaces
 are distinct. The host has not yet been implemented.
 
+## Switch UAM compilation, 2026-11-13
+
+Release `crysirror-shader-tools switch` exported 95 entries with no
+translation failure: 89 translated raster/compute entries, the native
+ray_lite compute source and 5 hardware ray-query entries (not exported).
+UAM 1.1.0 (`/opt/devkitpro/tools/bin/uam`) compiled all 90 exported
+sources to DKSH. Two vfx vertex entries first failed because Naga emulated
+WGSL `instance_index` with a `naga_vs_first_instance` driver constant
+buffer uniform; the exporter now selects `WriterFlags::DRAW_PARAMETERS`
+(`gl_InstanceID + gl_BaseInstanceARB`). Eight modules compile only with
+UAM's floating-point emulation of non-constant integer division/modulo
+(quad fs_filtered/fs_filtered_premultiply/fs_stored, ordered_dither,
+vfx_render vs_sprite, gi_project, both composite_filter variants); their
+results can lose precision for large operands and need native integer
+replacements before device acceptance. This is shader compilation evidence,
+separate from host pipeline and game validation.
+
+## Platform render tiers (2026-11-14)
+
+`crysirror-render-tier` reduces the shared 3D extraction for each console
+tier. It reports every native, reduced, substituted or disabled feature. VN
+composition is outside its input type and is never reduced. The substitution
+table and budgets are in that crate's README. The integrated runtimes keep their
+own console shaders (`crysirror-siglus-integrated/src/native_vm/render/vita`,
+`.../render/horizon`, `crysirror-bgi-integrated/native/vita`). Those shaders
+are not part of this tier.
+
+### Switch
+
+Switch runs the same exported WGSL entries through UAM/deko3d. Its reductions
+are parameters only: steps, resolutions, counts and substituted features. They
+need no separate shader source. On 2026-11-14, `crysirror-shader-tools switch`
+exported 95 entries with 0 failures. UAM 1.1.0 then compiled all 90 exported
+sources to DKSH (90/90; the 5 hardware ray-query entries are not exported).
+The earlier note about float-emulated integer division still applies. This
+result covers compilation only.
+
+### PSV tier programs
+
+`crysirror-shaders/native/psv/lite` holds native Cg VP/FP sources for GXM, with
+no OpenGL/vitaGL. `native::psv_lite_sources()` expands their engine-owned
+includes. Each program cites the desktop WGSL entry it ports. The shared math
+(`lite_common.cgh`) ports GGX/Smith/Schlick, height fog, PBR Neutral/ACES and
+the equirect mapping line for line.
+
+| Desktop | PSV | Reduction |
+|---|---|---|
+| pbr vs_main/vs_skinned/fs_main | lite_mesh_v, lite_skinned_v, lite_mesh_f | 2 cascades with 4-tap compare, 4 CPU-selected lights, 2 probes, per-draw volume L1, glTF factors only |
+| shadow | lite_shadow_v/_skinned_v/_f | depth written to an F32_R atlas |
+| sky, bloom, tonemap, copy_hdr | lite_sky_f, lite_bloom_down/up_f, lite_tonemap_f, lite_copy_f | none |
+| exposure | lite_luminance_f → lite_reduce_f ×2 → lite_exposure_f | same metering and adaptation in fragment passes |
+| prefilter | lite_prefilter_f | 64 instead of 256 samples, CPU Hammersley |
+| probe | lite_probe_capture_f | faces in a 6x1 strip (GXM has no 2D arrays) |
+| particle, vfx_render | lite_particle_*, lite_vfx_* | CPU-expanded corners, no soft-particle depth fade |
+| mesh (legacy Scene3d) | lite_legacy_mesh_v/f | exact |
+| brdf, gi_project | `crysirror_render_tier::derived` | CPU, exact except moments |
+
+Matrices are uploaded as four column float4s (glam order), as in the Siglus
+Vita shaders. The host provides the conventions these programs assume: GXM
+color-surface gamma for sRGB output, texture gamma for sRGB material inputs,
+4x MSAA on the 3D target, an atlas cleared to 1.0 with a LESS test, and a
+0..1 clip depth matching the wgpu matrices.
+
+`crysirror-shader-tools psv` records routes for desktop 3D entries and exports
+the 23 canonical shared 2D entries: quad, wipe, composite, composite_filter,
+ordered_dither, present and puppet. Three quad filter fragments specialize
+eleven distortions and five sampling policies. Transitions have 22 kind
+variants. Together these produce 206 native 2D programs, preserving sample
+counts and byte-space rules. The box-filter
+compute entry becomes three fragment passes with two F32x2 sum targets.
+
+The native catalog also contains 29 reduced raster/effect programs and two BVH
+ray stages. `native::psv_program` resolves a compiled program by name;
+`native::psv_quad_filter_program` and `native::psv_wipe_program` select
+filter/transition variants without allocating.
+The [ABI reference](../crates/crysirror-shaders/native/psv/README.md) describes
+uniforms, batch boundaries, texture roles, lifetime and pass requirements.
+
+The standalone [compiler utility](../platform/psv/shaderc/README.md) invokes
+the local SceShaccCg module with full-precision options. It records exact
+compiler input, versions, options, hashes and sizes before importing GXP.
+The module and SDK binaries are not distributed with the project.
+On 2026-11-15 all 237 programs compiled to GXP and were imported with matching
+source/precision receipts. The shader library and tools passed release checks.
+This establishes compilation, not shared GXM renderer or pixel validation.
+
 ## Work remaining
 
-1. Finish native Cg raster/material/effect equivalents and explicit fragment/CPU
-   alternatives for compute passes. Do not label their absence a working fallback.
-2. Resolve Switch source translation failures, then compile source with UAM.
-3. Supply the owner-provided native compiler module for GXP compilation. The
-   inspected Vita3K filesystem did not contain libshacccg.suprx. No module or SDK
-   binary is distributed here; no emulator is automatically launched.
-4. Compile/check the current Rust and shader source revisions, run meaningful
-   CPU BVH tests, then validate native bindings, pixels and cost separately.
-5. Implement native GXM/deko3d renderer ownership and integration with shared
-   scene extraction. No console application, VPK/NRO or measured FPS exists yet.
-
-The CPU BVH tests are authored but have not been compiled or run for this source
-revision. Shader tools and a local host UAM executable were built during earlier
-exploration; that does not validate these later source changes. Moving shared
-shader files also needs a subsequent desktop release check.
+1. Connect the shared GXM renderer to the compiled catalog and validate
+   pipeline linkage, resource bindings, pass ordering and pixels against desktop.
+2. Replace the eight float-emulated integer division sites with native
+   integer code and validate the DKSH binaries on a deko3d pipeline.
+3. Validate the shared 3D/BVH native pipelines and their cost on each device.
+   Shader compiler success alone establishes neither visual parity nor FPS.
+4. Finish shared GXM renderer ownership and integration with shared scene
+   extraction. Existing integrated-runtime console players and their own
+   renderers do not establish this shared-renderer boundary.
 
 These are lower-level Rust/source APIs, not additions to the reflective public
 class registry; no docs/api class-schema fingerprint change is claimed.

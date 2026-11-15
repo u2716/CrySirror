@@ -23,6 +23,12 @@ function animate(time) {
       self.postMessage({ type: 'present', bitmap }, [bitmap]);
     }
     input.pressed = 0;
+    if (player.quitRequested()) {
+      // The launcher wrote its choice and asked to stop.
+      failed = true;
+      self.postMessage({ type: 'quit', save: player.readSave('launch.json') });
+      return;
+    }
     const pcm = player.takeAudio();
     if (pcm.length) audio?.postMessage(pcm, [pcm.buffer]);
   } catch (error) {
@@ -45,10 +51,22 @@ async function handle(data) {
       }
       audio = data.audio;
       audio.onmessage = ({ data }) => { audioStats = data; };
-      const [width, height] = JSON.parse(data.project).canvas;
+      let { project, names, bytes, scripts = [], scriptClient = 'game' } = data;
+      if (data.library) {
+        // The shared game library launcher (crysirror-library), built here
+        // in wasm and run as a scripted project.
+        const { entries, covers, size } = data.library;
+        const [libNames, libFiles] = wasm.libraryProject(JSON.stringify(entries), covers, size[0], size[1], data.font);
+        names = [...libNames];
+        bytes = [...libFiles];
+        project = new TextDecoder().decode(bytes[names.indexOf('project.json')]);
+        scripts = ['launcher.js'];
+        scriptClient = 'launcher';
+      }
+      const [width, height] = JSON.parse(project).canvas;
       canvas = new OffscreenCanvas(width, height);
-      player = await BrowserPlayer.create(canvas, data.project, data.names, data.bytes, data.saveKey);
-      [input.width, input.height] = JSON.parse(data.project).canvas;
+      player = await BrowserPlayer.create(canvas, project, names, bytes, data.saveKey, scripts, scriptClient, data.font);
+      [input.width, input.height] = [width, height];
       self.requestAnimationFrame(animate);
       self.postMessage({ type: 'started', state: JSON.parse(player.inspect()) });
     } else if (data.type === 'input' && player) {

@@ -222,10 +222,7 @@ impl Renderer {
             .any(|(_, _, frame)| frame.effect.is_some())
             && c.filter.is_none()
         {
-            for format in [
-                wgpu::TextureFormat::Rgba32Float,
-                wgpu::TextureFormat::Rgba16Float,
-            ] {
+            for format in [wgpu::TextureFormat::Rgba32Float, filter::product_format(&self.gpu)] {
                 let usages = self
                     .gpu
                     .adapter

@@ -32,6 +32,9 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 clap = { version = "4.5", features = ["derive"] }
 ab_glyph = "0.2.32"
 ttf-parser = "0.25.1"
+unicode-normalization = "0.1"
+unicode-segmentation = "1.13.3"
+unicode-width = "0.1.14"
 encoding_rs = "0.8"
 hex = "0.4"
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
@@ -40,6 +43,8 @@ eluna = { package = "crysirror-codec-emote", path = "../crysirror-codec-emote" }
 siglus_omv_decoder = { package = "crysirror-codec-omv", path = "../crysirror-codec-omv" }
 na_mpeg2_decoder = { package = "crysirror-codec-mpeg", path = "../crysirror-codec-mpeg" }
 wmv_decoder = { package = "crysirror-codec-wmv", path = "../crysirror-codec-wmv", default-features = false, features = ["audio"] }
+
+[target.'cfg(not(any(target_os = "horizon", target_os = "vita")))'.dependencies]
 kira = { version = "0.9", default-features = false, features = ["mp3", "ogg", "flac", "wav"] }
 wgpu.workspace = true
 winit = "=0.31.0-beta.3"
@@ -49,10 +54,20 @@ egui = "=0.36.1"
 egui-wgpu = "=0.36.1"
 ureq = "2.10"
 
+# Console hosts: Kira with its default cpal backend disabled (the host feeds
+# the native audio device), GXM on Vita, deko3d (C glue) on Horizon.
+[target.'cfg(target_os = "horizon")'.dependencies]
+getrandom_03 = { package = "getrandom", version = "0.3.4" }
+kira = { version = "0.9", default-features = false, features = ["mp3", "ogg", "flac", "wav"] }
+
 [target.'cfg(target_os = "android")'.dependencies]
 ndk-context = "0.1.1"
 android_logger = "0.14"
 winit = { version = "=0.31.0-beta.3", features = ["android-native-activity"] }
+
+[target.'cfg(target_os = "vita")'.dependencies]
+kira = { version = "0.9", default-features = false, features = ["mp3", "ogg", "flac", "wav"] }
+vitasdk-sys = { version = "=0.3.3", default-features = false, features = ["SceGxm_stub", "SceSysmem_stub"] }
 
 [lints.rust]
 unexpected_cfgs = "allow"

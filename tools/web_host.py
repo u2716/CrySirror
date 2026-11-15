@@ -79,7 +79,8 @@ def build(output, bindgen=None, threaded=True):
     command = ['cargo']
     env = dict(os.environ)
     if threaded:
-        command += ['+nightly']
+        # CRYSIRROR_NIGHTLY pins the toolchain (CI uses a dated nightly).
+        command += ['+' + os.environ.get('CRYSIRROR_NIGHTLY', 'nightly')]
         env['RUSTFLAGS'] = env.get('RUSTFLAGS', '') + ' -C target-feature=+atomics,+bulk-memory,+mutable-globals'
     command += ['rustc' if threaded else 'build', '--release', '--target', 'wasm32-unknown-unknown', '-p', 'crysirror-web']
     if threaded:

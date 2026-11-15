@@ -1,6 +1,4 @@
-// Copyright (c) 2026 CrySirror contributors (CrySirror adapter).
-// Native MenuItem conventions inspected in Kirakira c451918023477620ff9055a2eb8a6714b947d9c1,
-// native/classes.rs; original Kirakira authors retain their copyright.
+// Copyright (c) 2026 CrySirror contributors.
 // This file is distributed under the GNU Affero General Public License,
 // version 3 or (at your option) any later version, https://www.gnu.org/licenses/agpl-3.0.html.
 //! Native handles/properties only; layout, radio groups, drawing and input are
@@ -235,7 +233,7 @@ pub fn sync(host: &mut KrkrHost) -> Result<()> {
     let windows: Vec<(usize, bool)> = host
         .windows
         .iter()
-        .filter(|(_, w)| w.menu.is_some())
+        .filter(|(_, w)| w.output && w.menu.is_some())
         .map(|(id, w)| (*id, w.visible))
         .collect();
     let key = (host.menus_revision, windows, host.canvas);
@@ -246,10 +244,14 @@ pub fn sync(host: &mut KrkrHost) -> Result<()> {
     let specs = host
         .windows
         .values()
+        // Invisible Window-derived controller objects retain native menu data
+        // but do not allocate menu bars on the single presenting host.
+        .filter(|w| w.output)
         .filter_map(|w| w.menu)
         .map(|root| spec(host, root, false))
         .collect::<Result<Vec<_>>>();
-    let specs = specs?;
+    let mut specs = specs?;
+    if !host.modal_windows.is_empty(){for menu in &mut specs {for item in &mut menu.items {item.enabled=false;}}}
     let value = json!(specs);
     if host.menus_last.as_ref() != Some(&value) {
         let old = host
@@ -279,7 +281,9 @@ pub fn sync(host: &mut KrkrHost) -> Result<()> {
 pub fn dispatch(rt: &mut Rt, bytes: &[u8]) -> Result<()> {
     let events: Vec<crysirror_scene::ui::UiEvent> =
         serde_json::from_slice(bytes).map_err(|e| TjsError::runtime(e.to_string()))?;
-    for event in events {
+    rt.host_mut().pending_menu_events.extend(events);
+    if !rt.host().modal_windows.is_empty(){return Ok(());}
+    while let Some(event)=rt.host_mut().pending_menu_events.pop_front() {
         let h = rt
             .host()
             .menus
@@ -289,6 +293,7 @@ pub fn dispatch(rt: &mut Rt, bytes: &[u8]) -> Result<()> {
         if let Some(h) = h {
             checked(rt, h, event.value > 0.5)?;
             rt.call_object_method(h, "onClick", vec![])?;
+            if rt.is_suspended(){break;}
         }
     }
     Ok(())

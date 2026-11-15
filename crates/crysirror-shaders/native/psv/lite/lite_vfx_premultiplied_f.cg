@@ -1,0 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
+// vfx_render.wgsl fs_premultiplied
+#define LITE_VFX_PREMULTIPLIED
+#include "lite_vfx_fragment.cgh"

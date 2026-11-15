@@ -439,10 +439,11 @@ pub(crate) mod tests {
             .relative()
             .to_owned();
         let spec = NativeButtonSpec {
-            source: crate::native_resources::ImageLookup {
+            filename:Some(b"unused".to_vec()),
+            source: Some(crate::native_resources::ImageLookup {
                 packed: vec![],
                 loose: "unused".into(),
-            },
+            }),
             size: [1, 1],
             origin: [1, 1],
             states: [[0, 0], [0, 1], [0, 2], [0, 3]],
@@ -454,6 +455,8 @@ pub(crate) mod tests {
             types: [1; 4],
             vertical_first: true,
             print_mode: 2,
+            voices:[0;4],
+            volume_type:0,
             sounds: [0; 4],
             sound_waits: [0; 2],
             click_frames: 2,

@@ -348,3 +348,5 @@ pub mod seek_receipt;
 mod channel_seek;
 
 pub mod channel_replacement;
+
+pub mod spectrum_graph;

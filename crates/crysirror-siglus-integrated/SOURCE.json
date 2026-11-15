@@ -1,9 +1,137 @@
 {
   "repository": "https://github.com/xmoezzz/siglus_rs",
-  "revision": "5f358ef1360b0439e92aed2b749e8f25d8721954",
+  "revision": "bef39ea90c745a4888a92a09d18be1eecfdd10ca",
   "license": "MPL-2.0",
   "mode": "integrated",
   "files": [
+    {
+      "source": "crates/shion-xfile/src/binary.rs",
+      "sha256": "68afda2e71a5af7a62d83a29d631edaa19ce3dfd2ea67556449f4c20a0d0b035"
+    },
+    {
+      "source": "crates/shion-xfile/src/builtin_templates.rs",
+      "sha256": "a434487c25f552ce63add9d2cf96ed5e4f1b19e00db76beba42c72019175805a"
+    },
+    {
+      "source": "crates/shion-xfile/src/compression.rs",
+      "sha256": "ccb05cf75d9844d7e8df8bb399a49129de2ce3997764ba335ff831ca504aa3cc"
+    },
+    {
+      "source": "crates/shion-xfile/src/error.rs",
+      "sha256": "a5f3e05213099baf64321dbda6313005b5a9e164137fe2c92df5b2a8a76f71dc"
+    },
+    {
+      "source": "crates/shion-xfile/src/guid.rs",
+      "sha256": "878051f7de6e45cdb6d0783b4bae4e82a7cd507ebfd7bd5bc0e853a1e2b431cf"
+    },
+    {
+      "source": "crates/shion-xfile/src/header.rs",
+      "sha256": "53f0ba10c84dd6a5def10f4f29a818402aada7085cf6f3140ea084d5c856e58e"
+    },
+    {
+      "source": "crates/shion-xfile/src/lib.rs",
+      "sha256": "3d698c01e6a3945b21e9d5427493b8b8a5029cf608877e398c1e25db716b28be"
+    },
+    {
+      "source": "crates/shion-xfile/src/model.rs",
+      "sha256": "55396635520f79327bfb7bd3619f5b32e3149fe3819535c026ff6ac6ce0a073e"
+    },
+    {
+      "source": "crates/shion-xfile/src/repair.rs",
+      "sha256": "f3dfe0424d22e50e813d187eea417b5db60c521865f694de9db3af1481d68adf"
+    },
+    {
+      "source": "crates/shion-xfile/src/semantic.rs",
+      "sha256": "138cdbf9ac91d6744d9883523206c57d93cc22dd0bb2664768a8c4ff95e3a2a1"
+    },
+    {
+      "source": "crates/shion-xfile/src/text_lexer.rs",
+      "sha256": "9f73f8f7dc3b995a5ddcf154af3e151a41df014b2996a2e3d2aed52517a2a9f3"
+    },
+    {
+      "source": "crates/shion-xfile/src/text_parser.rs",
+      "sha256": "074b7be4167061af7b1ef5b11662031843d3536248b4051f1fff2585d11e27b7"
+    },
+    {
+      "source": "crates/shion-xfile/src/validation.rs",
+      "sha256": "edbc2bd76f2ca0650347def7f29c3e5bce8b8aed0b29cb882df1eacac47505be"
+    },
+    {
+      "source": "crates/siglus_assets/src/angou.rs",
+      "sha256": "4f6088ca9b8c2b5cfc5a5ab01ab9461bc42e6cac83322aa4f0ec7007fcc572ad"
+    },
+    {
+      "source": "crates/siglus_assets/src/cgm.rs",
+      "sha256": "52e9e353147ed4bdee498440779d1c0f79f98d9c16a5636dac0e3b75b6fb9bb6"
+    },
+    {
+      "source": "crates/siglus_assets/src/dbs.rs",
+      "sha256": "5deecfd55e8d943ef871084593390f1ca99f3df117e04798a429e47203eee854"
+    },
+    {
+      "source": "crates/siglus_assets/src/g00.rs",
+      "sha256": "78b6f7243e969a4bc9a75f5fbfb89afba842d090636d6e763cf509fa7d4dff92"
+    },
+    {
+      "source": "crates/siglus_assets/src/gameexe.rs",
+      "sha256": "631b294a641debccb42d614b499f25eff4e7ce410f8e2e7a706a7963dd1e16dd"
+    },
+    {
+      "source": "crates/siglus_assets/src/key_toml.rs",
+      "sha256": "fc937260dbdd4e613c8b5f980082021cd018399941a1803e370630084baa88fc"
+    },
+    {
+      "source": "crates/siglus_assets/src/keys.rs",
+      "sha256": "e6109338021220159bb7466a4939fcd52aa32c389dea1a4f0923bc81003d9e11"
+    },
+    {
+      "source": "crates/siglus_assets/src/lib.rs",
+      "sha256": "b084abeb682301c12c09fcd64134852a645169272e9753d4400d58bd5c47c09a"
+    },
+    {
+      "source": "crates/siglus_assets/src/lzss.rs",
+      "sha256": "45f4202821f6d953eff3bec37da30e1ea07840a001783b26a22edef017925c06"
+    },
+    {
+      "source": "crates/siglus_assets/src/mpeg2.rs",
+      "sha256": "3a31c09c82f580f63f5f8cbea6f1831ee5a7566141838f26d8e98d961978abe2"
+    },
+    {
+      "source": "crates/siglus_assets/src/nwa.rs",
+      "sha256": "7da833837fdf9aad4e0220c68ec4cc3d3722a80eb1994a88d9d02267bd280dd1"
+    },
+    {
+      "source": "crates/siglus_assets/src/ogg_xor.rs",
+      "sha256": "840804ca88642a2e13d73649999c6604224ebe73ba902fe8686363289fbe5489"
+    },
+    {
+      "source": "crates/siglus_assets/src/omv.rs",
+      "sha256": "6dc5b7a973097e6cc7214c10908d63d74692d983f7c30efda7111c4b8317a53f"
+    },
+    {
+      "source": "crates/siglus_assets/src/ovk.rs",
+      "sha256": "7ead803ddac035e95e918273ceef94cb5f553290765ac280cc8c9b9643c5524b"
+    },
+    {
+      "source": "crates/siglus_assets/src/scene_pck.rs",
+      "sha256": "6d2c835f22eb84a6ec874537ef640465b4d75120ad86cc41a829f0e887b6e64e"
+    },
+    {
+      "source": "crates/siglus_assets/src/thumb_table.rs",
+      "sha256": "00aa7bd7f6cea7de122ee48d2c52f1b9823b43d77480c54a889d1a6087a94805"
+    },
+    {
+      "source": "crates/siglus_assets/src/util.rs",
+      "sha256": "8871beca030354f1dfc8a64a2d4ccb79e179224af97437590d894889d9eeebdd"
+    },
+    {
+      "source": "crates/siglus_assets/src/vorbis.rs",
+      "sha256": "472fee5661f773c27957ef94d99cd93f60de0334f86aa3d0d2689a77cd75bad1"
+    },
+    {
+      "source": "crates/siglus_key_recovery/src/lib.rs",
+      "sha256": "64a7a5bcb6fb245965fadf4e9d418445f944cb2371abce0245d1d3df3ce04412"
+    },
     {
       "source": "crates/siglus_scene_vm/src/android_host.rs",
       "sha256": "c6901c073ffb12926a8ab593550fb816d8950b925a18673279539766b9347596"
@@ -22,7 +150,7 @@
     },
     {
       "source": "crates/siglus_scene_vm/src/audio/bgm.rs",
-      "sha256": "6ca352b418678e2040ad2c56b31ea73a00865ccbf967886288d96c4669a0db2e"
+      "sha256": "8e457c74cb7dd02130ba80747b3b5a40af2a96bab6156f998372fe708672fe92"
     },
     {
       "source": "crates/siglus_scene_vm/src/audio/engine.rs",
@@ -46,7 +174,7 @@
     },
     {
       "source": "crates/siglus_scene_vm/src/audio/sfx_engine.rs",
-      "sha256": "48d732ae36d1e5876cd71d4e52b9dd578d4a311adff18fe05dcef9b8e376deea"
+      "sha256": "a2e546ff841e8152f8c1726d42bc4eaaf23b8d4d14e71aa9d5eee525609a816e"
     },
     {
       "source": "crates/siglus_scene_vm/src/audio/switch_backend.rs",
@@ -54,11 +182,11 @@
     },
     {
       "source": "crates/siglus_scene_vm/src/desktop_chihaya_bench.rs",
-      "sha256": "aff6ae40a48e528218a9e074bbe1547c8224d2de01139c03f49acf432e248acc"
+      "sha256": "461beb0d9ee1ce2bc97623eb6c2d91904b983fe2b1a74feb9f07d7d7b3cd0d82"
     },
     {
       "source": "crates/siglus_scene_vm/src/desktop_config.rs",
-      "sha256": "8f05ed42cbab66493ebadcae30a654ce20ebf43897180c561a995efe4d15418d"
+      "sha256": "10522ef0a81853ca5754ca3f1af627693ffb2009ed84d6b54a18cce93bd9702f"
     },
     {
       "source": "crates/siglus_scene_vm/src/desktop_icon.rs",
@@ -66,11 +194,15 @@
     },
     {
       "source": "crates/siglus_scene_vm/src/desktop_messagebox.rs",
-      "sha256": "85d871b0449ba56ca58587977acf7845b31632fd79d5119c374a42a6e1d6157a"
+      "sha256": "b3347824637230000e99912bba59b689d0f5c1115a6b9dd71fd6f0c3d69382c4"
     },
     {
       "source": "crates/siglus_scene_vm/src/desktop_twitter.rs",
-      "sha256": "3904805530bbaf60bdcd1a0bd94ef04ef45289870186b4c2d9bf3c54b2c35748"
+      "sha256": "bdcac047896e6bdd809c97f1c515ef8095e427023de7d5e257793ee363fcb87a"
+    },
+    {
+      "source": "crates/siglus_scene_vm/src/desktop_viewport.rs",
+      "sha256": "8a8885d13ebf48d95d2683eb3e760e39a7a72a058c1ac7d726184ad06aaf3d16"
     },
     {
       "source": "crates/siglus_scene_vm/src/display_ffi.rs",
@@ -90,15 +222,15 @@
     },
     {
       "source": "crates/siglus_scene_vm/src/emote_key.rs",
-      "sha256": "4fe458a2c358e4eda26b4d64972c395049f30936978bb662948649198e77f279"
+      "sha256": "00dc96d59e6d2ebd80e8eb295815ebe56e2dd872b6414deb56a7d9fe3dd1dea3"
     },
     {
       "source": "crates/siglus_scene_vm/src/host.rs",
-      "sha256": "0b9af6fa829d72621b9d05ac0532eb59e48efb7d8d900a39d7fad57487df18df"
+      "sha256": "2813e11c220e9423ca249b9b242e2677c6da6e5efa4951e7ac72fedcb0fcbada"
     },
     {
       "source": "crates/siglus_scene_vm/src/image_manager.rs",
-      "sha256": "dfc0478eefb9cdb86890e48aead31f36661657e3c71d01636b2455c1017e3359"
+      "sha256": "5ea35596416464ed295a186bc7f5b7cc48b82b65fefdc2455bd907d6e601be5a"
     },
     {
       "source": "crates/siglus_scene_vm/src/ime.rs",
@@ -118,7 +250,7 @@
     },
     {
       "source": "crates/siglus_scene_vm/src/lib.rs",
-      "sha256": "75b6f9d9c011744b48622d3877810ecfab1ff430ff2c9215757c31e28e3d2c8d"
+      "sha256": "de9ba2089d508b9512f37a6a9cc697a4472bdd99baeb57c93e2fafe894decb80"
     },
     {
       "source": "crates/siglus_scene_vm/src/mesh3d.rs",
@@ -126,11 +258,11 @@
     },
     {
       "source": "crates/siglus_scene_vm/src/movie/mod.rs",
-      "sha256": "993bf6124599fd25e103d5dabeb6a383ee5ad7df792dad87fd6f3908323214da"
+      "sha256": "f06a724d33ca0096893d015db5122827f85d8608cdbc3829c516246d985d7f18"
     },
     {
       "source": "crates/siglus_scene_vm/src/original_save.rs",
-      "sha256": "55cf639d5671c5ee9f00e02aaa4efcc7aee7a3a53ea3e63c45f84a162bb6406a"
+      "sha256": "6cd0393c9bc02ffce85c826e93deab69fbf7678e5cb2f6385f4897c4dad4dc88"
     },
     {
       "source": "crates/siglus_scene_vm/src/platform_time.rs",
@@ -138,11 +270,11 @@
     },
     {
       "source": "crates/siglus_scene_vm/src/pump_host.rs",
-      "sha256": "3efffab842245d5aa8ac535ae4eb19dd09deb45edbc944580e3615bc41a509df"
+      "sha256": "3eaf35952a9bd29d3f3aae19f8689bc7a3d394e5584d4c26cdaefb7e8d3b3b19"
     },
     {
       "source": "crates/siglus_scene_vm/src/render/emote.rs",
-      "sha256": "ff092703e06b658f11989829f58e8fa27119544078060d993d66755af3797b1b"
+      "sha256": "d6be798a7a8fa5fb6a92db513effe466cf061c7309db6afc801a9cb915cf236f"
     },
     {
       "source": "crates/siglus_scene_vm/src/render/horizon/gpu.rs",
@@ -154,7 +286,7 @@
     },
     {
       "source": "crates/siglus_scene_vm/src/render/mipmap.rs",
-      "sha256": "fbcd2072e8d25fb9a5d93f2f9b58da1ad30d48c7ebe83348379761dd1bb0ab47"
+      "sha256": "e9cb1503c3b72c73b924437af15d67f5b64ac68442d0a04f26a5fde225afd7b7"
     },
     {
       "source": "crates/siglus_scene_vm/src/render/mipmap.wgsl",
@@ -162,7 +294,7 @@
     },
     {
       "source": "crates/siglus_scene_vm/src/render/mod.rs",
-      "sha256": "635b8c0e7e688df9fd3dbe3be7480cbb5f1b1859f323995e3c1831ca68a1b69d"
+      "sha256": "792b87cbc93df1683495af806b408770d6975e1639d8657da34be170eec681c2"
     },
     {
       "source": "crates/siglus_scene_vm/src/render/shaders/emote.wgsl",
@@ -189,6 +321,138 @@
       "sha256": "64b811303edeb63c723d4ed7d174ca1622851a3b767702875d687cfdc0ac0292"
     },
     {
+      "source": "crates/siglus_scene_vm/src/render/vita/shaders/emote_f.cg",
+      "sha256": "55f021a9059f9b81d2b553748cf9f81d23e333dc31d19a69c025fa6285b867d5"
+    },
+    {
+      "source": "crates/siglus_scene_vm/src/render/vita/shaders/emote_v.cg",
+      "sha256": "456cc6c781cca86d3b9ef8d2e0b333eefea8d14ce82191e730d34f273378b7e2"
+    },
+    {
+      "source": "crates/siglus_scene_vm/src/render/vita/shaders/gxp/emote_f.gxp",
+      "sha256": "b23de6155bb7858b50071a879648388de412a354c89cd1cee2d007dd5333cc0c"
+    },
+    {
+      "source": "crates/siglus_scene_vm/src/render/vita/shaders/gxp/emote_v.gxp",
+      "sha256": "38113056b84984c56ef542c959895f600316dea4e36954a31c1b01d7b218884c"
+    },
+    {
+      "source": "crates/siglus_scene_vm/src/render/vita/shaders/gxp/mesh_f.gxp",
+      "sha256": "a69edbb2fa6191ab827df3b9e6f6b264e6766e719a49df6bedf1c9fdb3eb9dfb"
+    },
+    {
+      "source": "crates/siglus_scene_vm/src/render/vita/shaders/gxp/mesh_v.gxp",
+      "sha256": "1ebaa68f82e5cb19cd7b9f30fca4bc446d83d530ab3272be8ea6a6b7c2cb082d"
+    },
+    {
+      "source": "crates/siglus_scene_vm/src/render/vita/shaders/gxp/page_f.gxp",
+      "sha256": "1ae03c3334f355d6268042644a2483ac40d02420a9da3dd47c6176f4953b89d5"
+    },
+    {
+      "source": "crates/siglus_scene_vm/src/render/vita/shaders/gxp/page_v.gxp",
+      "sha256": "6b3d9a1541ffa79cbd8162d578a5e539285f1d9c5eeb68f4ca05fe8d161756de"
+    },
+    {
+      "source": "crates/siglus_scene_vm/src/render/vita/shaders/gxp/plain_f.gxp",
+      "sha256": "974faea143af6c29357b2d9471a5a860fd99609fbdc0cd194c3cc5cac57a3c33"
+    },
+    {
+      "source": "crates/siglus_scene_vm/src/render/vita/shaders/gxp/shadow_f.gxp",
+      "sha256": "33d70238ca34316e1ed51ba848b8f876444bff8048eec7a13204f2bfb85c8a8d"
+    },
+    {
+      "source": "crates/siglus_scene_vm/src/render/vita/shaders/gxp/shadow_v.gxp",
+      "sha256": "12140299a2ae5e8881ef8ede8b3c4fd1339afde4aa993b96fab1392a361fb39e"
+    },
+    {
+      "source": "crates/siglus_scene_vm/src/render/vita/shaders/gxp/solid_f.gxp",
+      "sha256": "31c7635ba65c96da2435764999cddea8dc5d122a0884b7c3cc02db90ccc2171a"
+    },
+    {
+      "source": "crates/siglus_scene_vm/src/render/vita/shaders/gxp/solid_v.gxp",
+      "sha256": "e34313e05a8f929a2d684733c5381d22e8d70b6ce1ae89898dd31337993614ee"
+    },
+    {
+      "source": "crates/siglus_scene_vm/src/render/vita/shaders/gxp/sprite_f.gxp",
+      "sha256": "71ad1e2f839f03a1310af610b3bb7d752c9d1b22b19f1cc329491e8871ecd0d1"
+    },
+    {
+      "source": "crates/siglus_scene_vm/src/render/vita/shaders/gxp/sprite_v.gxp",
+      "sha256": "5a47e3afe6c371bf48e40500833f7301f8930726a25f350fbeb381410123cd3a"
+    },
+    {
+      "source": "crates/siglus_scene_vm/src/render/vita/shaders/gxp/wipe_f.gxp",
+      "sha256": "4ed495711d4a56f493121f4586f71d5b2dbb9ec12ad357c09418f73f684e2d8e"
+    },
+    {
+      "source": "crates/siglus_scene_vm/src/render/vita/shaders/gxp/wipe_v.gxp",
+      "sha256": "4fca849c0f8599465fb96aa117e948df3d60a8f28d061281d58e7668ffa2ffe6"
+    },
+    {
+      "source": "crates/siglus_scene_vm/src/render/vita/shaders/mesh.cgh",
+      "sha256": "f259f959b9ceda08ac46e8dc079c410d53a59e95ec776770de5c2aecd14d6d5f"
+    },
+    {
+      "source": "crates/siglus_scene_vm/src/render/vita/shaders/mesh_f.cg",
+      "sha256": "341dfa2435f699a1f804b4f72b8b55f6d71c56b3434a95b964a6247058a768f5"
+    },
+    {
+      "source": "crates/siglus_scene_vm/src/render/vita/shaders/mesh_v.cg",
+      "sha256": "517e5376b8d0dbc045cd0efa91f0d424834fe191430c9a03dcb85982bbdb447c"
+    },
+    {
+      "source": "crates/siglus_scene_vm/src/render/vita/shaders/mesh_vertex.cgh",
+      "sha256": "67d32987b2d2f9667007a590b896d0af9ac31403dd62c567c88ad03d6d771f85"
+    },
+    {
+      "source": "crates/siglus_scene_vm/src/render/vita/shaders/page_f.cg",
+      "sha256": "32622ecc13541133d2ccc6821fbc164cd169918a05bda34f6e2986b6b97fbc05"
+    },
+    {
+      "source": "crates/siglus_scene_vm/src/render/vita/shaders/page_v.cg",
+      "sha256": "c5ccfebafb7122ba187a5d761ca1fa1cbcda0b02c3929140a8520d313be570cd"
+    },
+    {
+      "source": "crates/siglus_scene_vm/src/render/vita/shaders/plain_f.cg",
+      "sha256": "46c5fae6b87834d10fc50284ad7775e44628226b99e9dadb9d4c7928d438ddbb"
+    },
+    {
+      "source": "crates/siglus_scene_vm/src/render/vita/shaders/shadow_f.cg",
+      "sha256": "f8ac779be6faccdf0125a8b4312c879b41d5fc493fe6f1ca37edbfdfe9fe0853"
+    },
+    {
+      "source": "crates/siglus_scene_vm/src/render/vita/shaders/shadow_v.cg",
+      "sha256": "624412dff4bd68e8cc9cf443b6d5fe2bd838773aa1b776d575cd17798f046c74"
+    },
+    {
+      "source": "crates/siglus_scene_vm/src/render/vita/shaders/solid_f.cg",
+      "sha256": "a6bb600f4da74c9070f7895aaecac3bd72ceed0b95392aa4c7944cf454f246f2"
+    },
+    {
+      "source": "crates/siglus_scene_vm/src/render/vita/shaders/solid_v.cg",
+      "sha256": "314041f1f2620ea1baabf2e026e490400a3b13fea67ee2cfc5b2de978dfffda3"
+    },
+    {
+      "source": "crates/siglus_scene_vm/src/render/vita/shaders/sprite.cgh",
+      "sha256": "fc5de2e980f1b7212b8082f10f45f11f073661a3efe266af098bba8795eb3a5a"
+    },
+    {
+      "source": "crates/siglus_scene_vm/src/render/vita/shaders/sprite_f.cg",
+      "sha256": "63d12b06be68500918aae200aa984d701d5fbfcf2d490e537869c052dc1f36f2"
+    },
+    {
+      "source": "crates/siglus_scene_vm/src/render/vita/shaders/sprite_v.cg",
+      "sha256": "a18558f192e099adc762bb1b38beef97398e468fe7403e14f17d76f6255b2561"
+    },
+    {
+      "source": "crates/siglus_scene_vm/src/render/vita/shaders/wipe_f.cg",
+      "sha256": "56f3b401a59db9fbe0547310eaa93d3b6468f8f6a2b71c000757833633cc4b41"
+    },
+    {
+      "source": "crates/siglus_scene_vm/src/render/vita/shaders/wipe_v.cg",
+      "sha256": "bddcf69bb937f939f2319f865f2a603d32fcf198012e2449437abe76caab1670"
+    },
+    {
       "source": "crates/siglus_scene_vm/src/render/vita/vita_stats.rs",
       "sha256": "de6f4509a9c3c986f1dadc57f07a16f77f20fc3850acf98b9dff6f1cf4c6125c"
     },
@@ -206,7 +470,7 @@
     },
     {
       "source": "crates/siglus_scene_vm/src/resource.rs",
-      "sha256": "24a2bfef2c8931cf4915807eecca6f6ad23a41f19b2a7a0e32e4b45fdba85e44"
+      "sha256": "b77b074b5b93759ffdb28e1ef89ea33fd8a7c3ea2ac7f5979e49df475725089b"
     },
     {
       "source": "crates/siglus_scene_vm/src/runtime/constants.rs",
@@ -238,7 +502,7 @@
     },
     {
       "source": "crates/siglus_scene_vm/src/runtime/forms/editbox.rs",
-      "sha256": "7144bce7277bc1df1dd3bbace72864cb8b93236c6220c51160956f6e0a1f90bc"
+      "sha256": "0f478c0ef3c15a37aa31c23692d05bdf816def7bf700e471de64298460d8485e"
     },
     {
       "source": "crates/siglus_scene_vm/src/runtime/forms/excall.rs",
@@ -262,7 +526,7 @@
     },
     {
       "source": "crates/siglus_scene_vm/src/runtime/forms/global.rs",
-      "sha256": "932ea4aab87291357319275d9c6b40e9dafc45516dd85932ee23fa3a91bd9258"
+      "sha256": "77c6b0cfd524f08757c1b10b82ea5eb669cbb1f2c0908b2faa8daf00f6db21a0"
     },
     {
       "source": "crates/siglus_scene_vm/src/runtime/forms/input.rs",
@@ -350,7 +614,7 @@
     },
     {
       "source": "crates/siglus_scene_vm/src/runtime/forms/stage.rs",
-      "sha256": "970a4807b63db2893379e1ccb3a03ab71c383325d3952d31796d42ffea8d2d02"
+      "sha256": "05819b82c7c1a66b010e5fb7d97f326848ddc2c7ea8395a01f5d396046ba34c4"
     },
     {
       "source": "crates/siglus_scene_vm/src/runtime/forms/steam.rs",
@@ -362,7 +626,7 @@
     },
     {
       "source": "crates/siglus_scene_vm/src/runtime/forms/syscom.rs",
-      "sha256": "9a6eab7ce406cacdbd649018e549b1a5e1be9d432063d06296d14bf60dab0445"
+      "sha256": "228eb148c0056ffb6aaa63513802ff0b80a73139c91be9a8701720f20270e1f5"
     },
     {
       "source": "crates/siglus_scene_vm/src/runtime/forms/syscom/save_versions.rs",
@@ -390,7 +654,7 @@
     },
     {
       "source": "crates/siglus_scene_vm/src/runtime/globals.rs",
-      "sha256": "b00eb432bf4c005e5a64c95e544faa4e0c65ab890a4c24f5944bf5268958f7dd"
+      "sha256": "8d9129dac044203ce8fa6e0b3249e62f6108e3ddb4eee46236eb54eabab8a662"
     },
     {
       "source": "crates/siglus_scene_vm/src/runtime/graphics.rs",
@@ -406,7 +670,7 @@
     },
     {
       "source": "crates/siglus_scene_vm/src/runtime/mod.rs",
-      "sha256": "6e2826deddcdc22d3cd146dc12e3ab2052b1c16fa417f380b517e689585d87e0"
+      "sha256": "a72b47ec58707add9176d5e1240c6dfe9866f550c34f7719e77d03822f95bc30"
     },
     {
       "source": "crates/siglus_scene_vm/src/runtime/native_ui.rs",
@@ -415,6 +679,10 @@
     {
       "source": "crates/siglus_scene_vm/src/runtime/net.rs",
       "sha256": "d12e0dafb1efb20838ba6598fd52e551c853fe8b0ca2dbfa4242fc8677856d4a"
+    },
+    {
+      "source": "crates/siglus_scene_vm/src/runtime/object_mask_tests.rs",
+      "sha256": "3098da6cc85561f56d3601ab25e49960d84a04e2df08e698bd887cc920ef4156"
     },
     {
       "source": "crates/siglus_scene_vm/src/runtime/opcode.rs",
@@ -442,7 +710,7 @@
     },
     {
       "source": "crates/siglus_scene_vm/src/runtime/ui.rs",
-      "sha256": "507acf5afd6ba2bb18fb68ff8b0e7e9980b18e5e90894fb063ac0551ead512e2"
+      "sha256": "927243fb7f772e8b96bb7f9d3016ea25c2780e897c5c5861ec541fb36c0e36e5"
     },
     {
       "source": "crates/siglus_scene_vm/src/runtime/unknown.rs",
@@ -466,15 +734,19 @@
     },
     {
       "source": "crates/siglus_scene_vm/src/switch_host.rs",
-      "sha256": "18b9b0325c84abcc2c2bdf8e46e02cf95f4e0bf0092d20c89f538423181e093b"
+      "sha256": "0a658a59c79177c6db1324007d118245a7b27ff7bea010e66e050aba18d6c2d4"
+    },
+    {
+      "source": "crates/siglus_scene_vm/src/text_layout.rs",
+      "sha256": "c31c119f263927a16c246d53b8d9014a97c9c42bf31a801e08d210331cd4db80"
     },
     {
       "source": "crates/siglus_scene_vm/src/text_render.rs",
-      "sha256": "5375c80a6a6c94796cc3039097e816de8cf7cd21fe75c0befa4fbe85fc6afc49"
+      "sha256": "a1e31fb6516179cd9dfb94cc742b853d989db6a94482fc1d8dd225bd0894bd55"
     },
     {
       "source": "crates/siglus_scene_vm/src/vm.rs",
-      "sha256": "e0bbd6546ef6e1375c36ceadbd321ce8f7af8d180c61f011ef28da60e2db8d62"
+      "sha256": "bceb40ba083f219808eb844649c16b4f68e0a0dfe172b1b82cae047eca50d399"
     },
     {
       "source": "crates/siglus_scene_vm/src/vm/close.rs",
@@ -490,7 +762,7 @@
     },
     {
       "source": "crates/siglus_scene_vm/src/vm/short_save.rs",
-      "sha256": "0d1e675466fe411d11dd3f690f2ef47a6c205a691d93316062427b03339d19c8"
+      "sha256": "189e28c53f0ea361d0841a68f1e0ed4890229e915b94d0af9cac0fb913af5d58"
     },
     {
       "source": "crates/siglus_scene_vm/src/wasm_entry.rs",
@@ -499,134 +771,6 @@
     {
       "source": "crates/siglus_scene_vm/src/wasm_vfs.rs",
       "sha256": "52c58ee041b3c8bfda01ab0fcd7a5626bb07e7ffd30bc8e9a4201271c52e5923"
-    },
-    {
-      "source": "crates/siglus_assets/src/angou.rs",
-      "sha256": "4f6088ca9b8c2b5cfc5a5ab01ab9461bc42e6cac83322aa4f0ec7007fcc572ad"
-    },
-    {
-      "source": "crates/siglus_assets/src/cgm.rs",
-      "sha256": "ae4799ac22ccade8cbf06c686d3c53e9ca4a6ba07947ec0c185f190aface0396"
-    },
-    {
-      "source": "crates/siglus_assets/src/dbs.rs",
-      "sha256": "26477f7da618e014bc989188cc70e7668a8135f57e97b71113d62edeb057e4bf"
-    },
-    {
-      "source": "crates/siglus_assets/src/g00.rs",
-      "sha256": "78b6f7243e969a4bc9a75f5fbfb89afba842d090636d6e763cf509fa7d4dff92"
-    },
-    {
-      "source": "crates/siglus_assets/src/gameexe.rs",
-      "sha256": "631b294a641debccb42d614b499f25eff4e7ce410f8e2e7a706a7963dd1e16dd"
-    },
-    {
-      "source": "crates/siglus_assets/src/key_toml.rs",
-      "sha256": "c959a40c1c0f9150bd566dd2197cccd6f55c3593a502b963764c952b95114afa"
-    },
-    {
-      "source": "crates/siglus_assets/src/keys.rs",
-      "sha256": "e6109338021220159bb7466a4939fcd52aa32c389dea1a4f0923bc81003d9e11"
-    },
-    {
-      "source": "crates/siglus_assets/src/lib.rs",
-      "sha256": "b084abeb682301c12c09fcd64134852a645169272e9753d4400d58bd5c47c09a"
-    },
-    {
-      "source": "crates/siglus_assets/src/lzss.rs",
-      "sha256": "45f4202821f6d953eff3bec37da30e1ea07840a001783b26a22edef017925c06"
-    },
-    {
-      "source": "crates/siglus_assets/src/mpeg2.rs",
-      "sha256": "65d330ff143460a33e9a7776652d12f9bb957ea25447c403fb4eddb30e3ec582"
-    },
-    {
-      "source": "crates/siglus_assets/src/nwa.rs",
-      "sha256": "82dd88d1ded47c3fbe38de9a0540a5d077fab59d33dfd824402f4a73f986d3b5"
-    },
-    {
-      "source": "crates/siglus_assets/src/ogg_xor.rs",
-      "sha256": "7d04ac6b5eba2c6b97b5284cdef428671232675c98737bc9f9aef11fdeb3b6ee"
-    },
-    {
-      "source": "crates/siglus_assets/src/omv.rs",
-      "sha256": "b613197c87b18a6fbec85931993cb56793298feb8a5c9d457c02e3095a8d6c85"
-    },
-    {
-      "source": "crates/siglus_assets/src/ovk.rs",
-      "sha256": "4817a1187e557da42360b2fbb765df9d767d824b1594fe2088911762300a7872"
-    },
-    {
-      "source": "crates/siglus_assets/src/scene_pck.rs",
-      "sha256": "9cdb654a45262fffbb202c713c4c2a65c1636998b117e2f1796c56ccd022617a"
-    },
-    {
-      "source": "crates/siglus_assets/src/thumb_table.rs",
-      "sha256": "02a1e246d604233751901400d0644ed1a456d023f80a0e33fc239cc7ac6882ce"
-    },
-    {
-      "source": "crates/siglus_assets/src/util.rs",
-      "sha256": "8871beca030354f1dfc8a64a2d4ccb79e179224af97437590d894889d9eeebdd"
-    },
-    {
-      "source": "crates/siglus_assets/src/vorbis.rs",
-      "sha256": "472fee5661f773c27957ef94d99cd93f60de0334f86aa3d0d2689a77cd75bad1"
-    },
-    {
-      "source": "crates/shion-xfile/src/binary.rs",
-      "sha256": "68afda2e71a5af7a62d83a29d631edaa19ce3dfd2ea67556449f4c20a0d0b035"
-    },
-    {
-      "source": "crates/shion-xfile/src/builtin_templates.rs",
-      "sha256": "a434487c25f552ce63add9d2cf96ed5e4f1b19e00db76beba42c72019175805a"
-    },
-    {
-      "source": "crates/shion-xfile/src/compression.rs",
-      "sha256": "ccb05cf75d9844d7e8df8bb399a49129de2ce3997764ba335ff831ca504aa3cc"
-    },
-    {
-      "source": "crates/shion-xfile/src/error.rs",
-      "sha256": "a5f3e05213099baf64321dbda6313005b5a9e164137fe2c92df5b2a8a76f71dc"
-    },
-    {
-      "source": "crates/shion-xfile/src/guid.rs",
-      "sha256": "878051f7de6e45cdb6d0783b4bae4e82a7cd507ebfd7bd5bc0e853a1e2b431cf"
-    },
-    {
-      "source": "crates/shion-xfile/src/header.rs",
-      "sha256": "53f0ba10c84dd6a5def10f4f29a818402aada7085cf6f3140ea084d5c856e58e"
-    },
-    {
-      "source": "crates/shion-xfile/src/lib.rs",
-      "sha256": "3d698c01e6a3945b21e9d5427493b8b8a5029cf608877e398c1e25db716b28be"
-    },
-    {
-      "source": "crates/shion-xfile/src/model.rs",
-      "sha256": "55396635520f79327bfb7bd3619f5b32e3149fe3819535c026ff6ac6ce0a073e"
-    },
-    {
-      "source": "crates/shion-xfile/src/repair.rs",
-      "sha256": "f3dfe0424d22e50e813d187eea417b5db60c521865f694de9db3af1481d68adf"
-    },
-    {
-      "source": "crates/shion-xfile/src/semantic.rs",
-      "sha256": "138cdbf9ac91d6744d9883523206c57d93cc22dd0bb2664768a8c4ff95e3a2a1"
-    },
-    {
-      "source": "crates/shion-xfile/src/text_lexer.rs",
-      "sha256": "9f73f8f7dc3b995a5ddcf154af3e151a41df014b2996a2e3d2aed52517a2a9f3"
-    },
-    {
-      "source": "crates/shion-xfile/src/text_parser.rs",
-      "sha256": "074b7be4167061af7b1ef5b11662031843d3536248b4051f1fff2585d11e27b7"
-    },
-    {
-      "source": "crates/shion-xfile/src/validation.rs",
-      "sha256": "edbc2bd76f2ca0650347def7f29c3e5bce8b8aed0b29cb882df1eacac47505be"
-    },
-    {
-      "source": "crates/siglus_key_recovery/src/lib.rs",
-      "sha256": "64a7a5bcb6fb245965fadf4e9d418445f944cb2371abce0245d1d3df3ce04412"
     }
   ],
   "local_changes": [
@@ -636,10 +780,18 @@
     "Use a session-owned Kira pull backend producing stereo float PCM at 48000 Hz; CrySirror owns the output device.",
     "Inject host resource, writable-save and font roots; use upstream resource-pair material recovery without writing caller game data.",
     "Forward host keyboard, pointer, focus and modal message-box results; preserve native key policy and global/native save handling.",
-    "Use the project icon and caller font fallback; no upstream font or proprietary game resources are copied."
+    "Use the project icon and caller font fallback; no upstream font or proprietary game resources are copied.",
+    "Preserve CrySirror host roots, injected file/byte fonts and face index, native UI/PCM hooks, offscreen output and native console adaptations during upstream three-way synchronization."
   ],
   "network_integration": {
     "revision": "7555aaa",
     "changes": "Ported optional nfs/smb resource readers; CrySirror injects existing client-scoped storage on the session worker; defaults unchanged."
+  },
+  "normalization": {
+    "crates/siglus_scene_vm/src": "src/native_vm (lib.rs becomes mod.rs, standalone bins excluded)",
+    "crates/siglus_assets/src": "src/native_assets (lib.rs becomes mod.rs)",
+    "crates/shion-xfile/src": "src/native_xfile (lib.rs becomes mod.rs)",
+    "crates/siglus_key_recovery/src/lib.rs": "src/native_assets/key_recovery.rs",
+    "paths": "Rewrite crate-relative and sibling-crate references to internal modules."
   }
 }

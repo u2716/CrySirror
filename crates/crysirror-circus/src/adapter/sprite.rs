@@ -18,6 +18,9 @@ pub(super) struct PrimarySprites {
     pub(super) resources: BTreeMap<u16, (Option<u8>, [i32; 4])>,
     blur_seen: BTreeMap<u16, (Vec<u8>, bool)>,
     masks:BTreeMap<u16,masks::MaskQueues>,
+    ///A committed sequence tick whose mask generation is still in a worker.
+    ///The VM owner publishes it before executing any further instruction.
+    mask_commit_pending:bool,
 }
 fn actor(object: u16) -> u32 {
     0x3a04_0000 + u32::from(object)

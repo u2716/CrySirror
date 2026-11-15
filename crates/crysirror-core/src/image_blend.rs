@@ -64,6 +64,14 @@ pub enum RgbaBlendArithmetic {
         source: RgbaByteRounding,
         destination: RgbaByteRounding,
     },
+    /// Byte255 transforms and factors, but the signed sum of both unscaled
+    /// products is divided by255 once: `round((s*fs +/- d*fd)/255)`. Native
+    /// integer alpha blitters (e.g. Circus DC2 40B5F0) divide the whole sum.
+    Byte255Sum { rounding: RgbaByteRounding },
+    /// Integer power-of-two weights: `(s*fs +/- d*fd) >> shift`, where only
+    /// One/Zero/Constant*/OneMinusConstant* factors are admitted and constants
+    /// are rounded to multiples of `1/(1<<shift)` (e.g. 16-level native blits).
+    ByteShiftSum { shift: u8 },
 }
 /// CPU encoded-UNORM8 profile. Raw source keys and inclusive alpha range discard
 /// a whole fragment before the source transform. The fragment is then
@@ -87,6 +95,9 @@ pub struct RgbaBlendState {
     /// Exact original encoded RGB/alpha keys, before source transformation.
     pub source_color_key: Option<[u8; 3]>,
     pub source_alpha_key: Option<u8>,
+    /// Invert `source_color_key`: only fragments equal to the key are kept
+    /// (native "copy key colour only" hole punches).
+    pub source_color_key_invert: bool,
 }
 impl Default for RgbaBlendState {
     fn default() -> Self {
@@ -101,6 +112,7 @@ impl Default for RgbaBlendState {
             source_alpha_range: [0., 1.],
             source_color_key: None,
             source_alpha_key: None,
+            source_color_key_invert: false,
         }
     }
 }
@@ -130,6 +142,29 @@ impl RgbaBlendState {
             || self.source_alpha_range[0] > self.source_alpha_range[1]
         {
             return Err(Error::Invalid("RGBA source alpha range"));
+        }
+        if self.source_color_key_invert && self.source_color_key.is_none() {
+            return Err(Error::Invalid("RGBA inverted colour key requires a key"));
+        }
+        if let RgbaBlendArithmetic::ByteShiftSum { shift } = self.arithmetic {
+            use RgbaBlendFactor as F;
+            let admitted = |f: RgbaBlendFactor| {
+                matches!(
+                    f,
+                    F::One | F::Zero | F::ConstantColor | F::OneMinusConstantColor
+                        | F::ConstantAlpha | F::OneMinusConstantAlpha
+                )
+            };
+            if !(1..=8).contains(&shift)
+                || ![self.color, self.alpha].iter().all(|c| {
+                    admitted(c.source) && admitted(c.destination)
+                        && matches!(c.equation, RgbaBlendEquation::Add | RgbaBlendEquation::Subtract | RgbaBlendEquation::ReverseSubtract)
+                })
+                || self.source_scale != [1.; 4]
+                || self.source_bias != [0.; 4]
+            {
+                return Err(Error::Invalid("RGBA shift arithmetic admits constant factors only"));
+            }
         }
         Ok(())
     }

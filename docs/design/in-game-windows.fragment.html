@@ -1,0 +1,157 @@
+<div id="cw-design">
+  <div class="viz-carousel" aria-label="Game child-window design" data-previous-label="上一个布局" data-next-label="下一个布局">
+    <section data-variant="Desktop" aria-label="Desktop floating game windows">
+      <div class="cw-stage"><div class="cw-game cw-desktop" data-device="desktop" aria-label="Game canvas with child windows">
+        <div class="cw-scenery" aria-hidden="true"><div class="cw-sun"></div><div class="cw-far"></div><div class="cw-near"></div></div>
+        <header class="cw-game-header"><span class="cw-brand"><i data-lucide="clover" aria-hidden="true"></i>CrySirror</span><span class="cw-chapter">CHAPTER 02 · THE RIVER PATH</span><button type="button" class="cw-icon cursor-interaction" data-action="theme" aria-label="Switch appearance"><i data-lucide="sun-moon" aria-hidden="true"></i></button></header>
+        <div class="cw-game-content">
+          <div class="cw-story"><span class="cw-speaker">TRAVELER</span><p data-story>We could stay a little longer.<br>The last train hasn’t left yet.</p><button type="button" class="cw-advance cursor-interaction" data-action="advance" aria-label="Advance dialogue"><i data-lucide="chevron-right" aria-hidden="true"></i></button></div>
+          <nav class="cw-toolbar" aria-label="Game menu"><button type="button" class="cw-tool cursor-interaction" data-open="history"><i data-lucide="messages-square" aria-hidden="true"></i>History</button><button type="button" class="cw-tool cursor-interaction" data-open="audio"><i data-lucide="volume-2" aria-hidden="true"></i>Audio</button><button type="button" class="cw-tool cursor-interaction" data-open="confirm"><i data-lucide="log-out" aria-hidden="true"></i>Return to title</button></nav>
+        </div>
+        <section class="cw-window" data-window="history" role="region" aria-label="Message history window">
+          <header class="cw-titlebar"><button type="button" class="cw-drag cursor-interaction" aria-label="Move History window" aria-describedby="cw-drag-help"><i data-lucide="messages-square" aria-hidden="true"></i><span>History</span></button><button type="button" class="cw-chrome cursor-interaction" data-action="minimize" aria-label="Collapse History window"><i data-lucide="minus" aria-hidden="true"></i></button><button type="button" class="cw-chrome cursor-interaction" data-action="close-window" aria-label="Close History window"><i data-lucide="x" aria-hidden="true"></i></button></header>
+          <div class="cw-window-content"><div class="cw-log-entry"><span class="cw-speaker">GUIDE</span><p>The river is quiet at this hour.</p></div><div class="cw-log-entry cw-current"><span class="cw-speaker">TRAVELER</span><p>We could stay a little longer.<br>The last train hasn’t left yet.</p></div><div class="cw-window-footer"><i data-lucide="grip-horizontal" aria-hidden="true"></i><span>Message history</span><button type="button" class="cw-text-button cursor-interaction" data-action="close-window">Close</button></div></div>
+        </section>
+        <section class="cw-window cw-audio" data-window="audio" role="region" aria-label="Audio window">
+          <header class="cw-titlebar"><button type="button" class="cw-drag cursor-interaction" aria-label="Move Audio window" aria-describedby="cw-drag-help"><i data-lucide="volume-2" aria-hidden="true"></i><span>Audio</span></button><button type="button" class="cw-chrome cursor-interaction" data-action="minimize" aria-label="Collapse Audio window"><i data-lucide="minus" aria-hidden="true"></i></button><button type="button" class="cw-chrome cursor-interaction" data-action="close-window" aria-label="Close Audio window"><i data-lucide="x" aria-hidden="true"></i></button></header>
+          <div class="cw-window-content"><label class="cw-volume"><span>Music<output data-value="music">60%</output></span><input type="range" min="0" max="100" value="60" data-volume="music" aria-label="Music volume"></label><label class="cw-volume"><span>Voice<output data-value="voice">85%</output></span><input type="range" min="0" max="100" value="85" data-volume="voice" aria-label="Voice volume"></label><div class="cw-window-footer"><span>Changes apply immediately</span><button type="button" class="cw-text-button cursor-interaction" data-action="close-window">Done</button></div></div>
+        </section>
+        <div class="cw-modal-shade" hidden></div>
+        <section class="cw-window cw-confirm" data-window="confirm" role="dialog" aria-modal="true" aria-label="Return to title confirmation" hidden>
+          <header class="cw-titlebar"><button type="button" class="cw-drag cursor-interaction" aria-label="Move confirmation window" aria-describedby="cw-drag-help"><i data-lucide="circle-help" aria-hidden="true"></i><span>Return to title</span></button><button type="button" class="cw-chrome cursor-interaction" data-action="cancel" aria-label="Cancel and close confirmation"><i data-lucide="x" aria-hidden="true"></i></button></header>
+          <div class="cw-window-content"><h3>Leave this scene?</h3><p class="cw-confirm-copy">Return to the title screen?<br>Your unsaved progress will be lost.</p><div class="cw-confirm-buttons"><button type="button" class="cw-primary cursor-interaction" data-action="cancel">Keep playing</button><button type="button" class="cw-secondary cursor-interaction" data-action="confirm">Return to title</button></div></div>
+        </section>
+      </div></div>
+    </section>
+    <section data-variant="Phone · portrait" aria-label="Phone floating game windows" hidden><div class="cw-stage viz-dotted-background"><div data-mount="phone"></div></div></section>
+    <section data-variant="Phone · landscape" aria-label="Landscape phone floating game windows" hidden><div class="cw-stage viz-dotted-background"><div data-mount="landscape"></div></div></section>
+    <section data-variant="Handheld" aria-label="Handheld child windows" hidden><div class="cw-stage viz-dotted-background"><div data-mount="handheld"></div></div></section>
+  </div>
+  <span id="cw-drag-help" class="cw-accessible">Drag the title bar with mouse or touch. When the title bar is focused, arrow keys move the window. Escape closes the current window.</span>
+  <span class="cw-accessible" role="status" aria-live="polite" data-announcement></span>
+</div>
+<style>
+#cw-design{color-scheme:light dark;--cw-bg:light-dark(#e8efea,#142123);--cw-surface:light-dark(#fcfcf8,#222f32);--cw-raised:light-dark(#f1f4ef,#2c3b3e);--cw-fg:light-dark(#203b35,#eef1e8);--cw-muted:light-dark(#61736c,#adbbb2);--cw-line:light-dark(#d7e1d8,#425452);--cw-accent:light-dark(#246d61,#a2dcc9);--cw-accent-ink:light-dark(#fff,#183d32);--cw-tint:light-dark(#e0eee5,#344c43);--cw-land:light-dark(#8fa69b,#658579);--cw-mountain:light-dark(#5c8271,#3d6354);--cw-shadow:light-dark(#142c2530,#0000004d);--cw-veil:light-dark(#1e362943,#050e1066);font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--cw-fg);width:100%}
+#cw-design *{box-sizing:border-box}
+#cw-design [hidden]{display:none!important}
+#cw-design button,#cw-design input{font:inherit;color:inherit;touch-action:manipulation;-webkit-tap-highlight-color:transparent}
+#cw-design button{border:0;background:transparent;display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:48px;font-size:13px;font-weight:500;border-radius:10px;padding:0 14px}
+#cw-design button:focus-visible,#cw-design input:focus-visible{outline:3px solid var(--cw-accent);outline-offset:3px}
+#cw-design button:active{filter:brightness(.96)}
+#cw-design i,#cw-design svg{width:17px;height:17px;flex-shrink:0}
+#cw-design h3,#cw-design p{margin:0}
+#cw-design .cw-stage{min-height:744px;display:flex;align-items:center;justify-content:center;width:100%;padding:18px 0 26px}
+#cw-design [data-mount]{width:100%;display:flex;justify-content:center}
+#cw-design .cw-game{position:relative;width:100%;height:610px;border-radius:20px;overflow:hidden;background:var(--cw-bg);box-shadow:0 12px 44px var(--cw-shadow);isolation:isolate}
+#cw-design .cw-scenery{position:absolute;inset:0;background:linear-gradient(150deg,var(--cw-bg),var(--cw-land));pointer-events:none}
+#cw-design .cw-sun{position:absolute;inset:0;background:radial-gradient(ellipse at 75% 15%,light-dark(#fff4cfbb,#bdd7aa3b),transparent 42%)}
+#cw-design .cw-far{position:absolute;inset:19% -5% 0;background:var(--cw-mountain);opacity:.55;clip-path:polygon(0 50%,20% 34%,36% 42%,62% 6%,81% 26%,100% 12%,100% 100%,0 100%)}
+#cw-design .cw-near{position:absolute;inset:54% -5% 0;background:var(--cw-mountain);opacity:.8;clip-path:polygon(0 21%,26% 45%,55% 13%,78% 38%,100% 22%,100% 100%,0 100%)}
+#cw-design .cw-game-header{position:absolute;inset:0 0 auto;display:flex;align-items:center;gap:20px;min-height:66px;padding:8px 20px;z-index:2}
+#cw-design .cw-brand{display:inline-flex;align-items:center;gap:8px;font-size:13px;font-weight:500}
+#cw-design .cw-brand i,#cw-design .cw-brand svg{color:var(--cw-accent);width:20px;height:20px}
+#cw-design .cw-chapter{font-size:10px;letter-spacing:1.4px;color:var(--cw-muted);margin-left:auto}
+#cw-design .cw-icon{min-width:48px;padding:0;background:var(--cw-surface)}
+#cw-design .cw-game-content{position:absolute;inset:0;z-index:2;pointer-events:none}
+#cw-design .cw-story{pointer-events:auto;position:absolute;bottom:88px;left:6%;right:6%;padding:22px 64px 22px 24px;border-radius:14px;background:var(--cw-surface);border:1px solid var(--cw-line);box-shadow:0 8px 28px var(--cw-shadow)}
+#cw-design .cw-speaker{display:block;color:var(--cw-accent);font-size:10px;letter-spacing:1.6px;font-weight:500;margin-bottom:8px}
+#cw-design .cw-story p{font-family:Georgia,serif;font-size:21px;line-height:1.6}
+#cw-design .cw-advance{position:absolute;right:12px;bottom:15px;width:44px;padding:0;color:var(--cw-accent)}
+#cw-design .cw-toolbar{pointer-events:auto;position:absolute;bottom:20px;left:6%;right:6%;display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap}
+#cw-design .cw-tool{background:var(--cw-surface);border:1px solid var(--cw-line);box-shadow:0 2px 9px var(--cw-shadow)}
+#cw-design .cw-tool:hover{background:var(--cw-tint)}
+#cw-design .cw-window{position:absolute;left:36px;top:102px;width:360px;max-width:calc(100% - 20px);border:1px solid var(--cw-line);border-radius:13px;background:var(--cw-surface);box-shadow:0 16px 45px var(--cw-shadow);overflow:hidden;z-index:10;transition:box-shadow .15s,border-color .15s}
+#cw-design .cw-window[data-active=true]{border-color:var(--cw-accent);box-shadow:0 0 0 1px var(--cw-accent),0 18px 50px var(--cw-shadow)}
+#cw-design .cw-titlebar{display:flex;align-items:center;min-height:52px;border-bottom:1px solid var(--cw-line);background:var(--cw-raised);padding:2px 4px 2px 8px;gap:0}
+#cw-design .cw-drag{flex:1;min-width:0;justify-content:flex-start;padding:0 7px;min-height:48px;border-radius:6px;touch-action:none;cursor:grab;user-select:none;text-align:left}
+#cw-design .cw-drag>span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#cw-design .cw-drag:active{cursor:grabbing;filter:none}
+#cw-design .cw-drag>i,#cw-design .cw-drag>svg{color:var(--cw-accent);width:15px;height:15px}
+#cw-design .cw-chrome{width:44px;min-height:44px;padding:0;border-radius:7px;color:var(--cw-muted)}
+#cw-design .cw-chrome:hover{background:var(--cw-tint);color:var(--cw-fg)}
+#cw-design .cw-chrome i,#cw-design .cw-chrome svg{width:16px;height:16px}
+#cw-design .cw-window-content{padding:20px 20px 0}
+#cw-design .cw-log-entry p{font-size:14px;line-height:1.65}
+#cw-design .cw-log-entry{padding:0 0 17px}
+#cw-design .cw-log-entry+.cw-log-entry{padding-top:17px;border-top:1px solid var(--cw-line)}
+#cw-design .cw-current p{font-weight:500}
+#cw-design .cw-window-footer{display:flex;align-items:center;justify-content:flex-end;gap:8px;border-top:1px solid var(--cw-line);margin-top:3px;min-height:58px;color:var(--cw-muted);font-size:11px}
+#cw-design .cw-window-footer>i,#cw-design .cw-window-footer>svg{width:14px;height:14px;margin-right:auto}
+#cw-design .cw-window-footer>span{margin-right:auto}
+#cw-design .cw-text-button{padding:0 10px;color:var(--cw-accent)}
+#cw-design .cw-text-button:hover{background:var(--cw-tint)}
+#cw-design .cw-audio{width:320px;left:425px;top:174px}
+#cw-design .cw-volume{display:block;margin-bottom:12px;font-size:13px}
+#cw-design .cw-volume>span{display:flex;justify-content:space-between;gap:12px;align-items:center}
+#cw-design output{font-size:12px;color:var(--cw-muted);font-variant-numeric:tabular-nums}
+#cw-design .cw-volume input{width:100%;height:48px;margin:2px 0 0;accent-color:var(--cw-accent)}
+#cw-design .cw-modal-shade{position:absolute;inset:0;z-index:100;background:var(--cw-veil)}
+#cw-design .cw-confirm{z-index:101;left:30%;top:150px;width:390px}
+#cw-design .cw-confirm h3{font-size:21px;font-weight:500;letter-spacing:-.3px;margin-bottom:10px}
+#cw-design .cw-confirm-copy{font-size:14px;line-height:1.7;color:var(--cw-muted)}
+#cw-design .cw-confirm .cw-window-content{padding-bottom:20px}
+#cw-design .cw-confirm-buttons{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:9px;margin-top:22px}
+#cw-design .cw-primary{background:var(--cw-accent);color:var(--cw-accent-ink);padding:0 17px}
+#cw-design .cw-secondary{background:var(--cw-raised);padding:0 17px}
+#cw-design .cw-primary:hover{box-shadow:0 0 0 3px var(--cw-tint)}
+#cw-design .cw-secondary:hover{background:var(--cw-tint)}
+#cw-design .cw-window[data-collapsed=true] .cw-titlebar{border-bottom:0}
+#cw-design .cw-window[data-collapsed=true] .cw-window-content{display:none}
+#cw-design .cw-accessible{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+#cw-design .cw-phone{max-width:360px;height:690px;border:5px solid var(--cw-fg);border-radius:31px}
+#cw-design .cw-phone .cw-game-header{padding:8px 13px;gap:8px}
+#cw-design .cw-phone .cw-chapter{display:none}
+#cw-design .cw-phone .cw-icon{margin-left:auto}
+#cw-design .cw-phone .cw-story{left:14px;right:14px;bottom:151px;padding:20px 48px 20px 18px}
+#cw-design .cw-phone .cw-story p{font-size:20px}
+#cw-design .cw-phone .cw-toolbar{left:14px;right:14px;bottom:23px;justify-content:center;gap:8px}
+#cw-design .cw-phone .cw-tool{flex:1;min-width:118px}
+#cw-design .cw-phone .cw-tool[data-open=confirm]{flex-basis:100%}
+#cw-design .cw-phone .cw-window{width:calc(100% - 24px);max-width:340px}
+#cw-design .cw-phone .cw-chrome,#cw-design .cw-landscape .cw-chrome{width:48px;min-height:48px}
+#cw-design .cw-phone .cw-log-entry p,#cw-design .cw-phone .cw-confirm-copy{font-size:16px}
+#cw-design .cw-phone .cw-drag,#cw-design .cw-phone .cw-volume{font-size:15px}
+#cw-design .cw-phone .cw-confirm-buttons{display:grid;grid-template-columns:1fr}
+#cw-design .cw-phone .cw-confirm-buttons button{width:100%}
+#cw-design .cw-landscape{height:440px;border:5px solid var(--cw-fg);border-radius:26px}
+#cw-design .cw-landscape .cw-story{bottom:76px;padding-top:14px;padding-bottom:14px}
+#cw-design .cw-landscape .cw-story p{font-size:18px;line-height:1.45}
+#cw-design .cw-landscape .cw-toolbar{bottom:13px}
+#cw-design .cw-handheld{height:544px}
+#cw-design .cw-handheld .cw-window:focus-within{box-shadow:0 0 0 3px var(--cw-accent),0 14px 40px var(--cw-shadow)}
+@media(max-width:600px){#cw-design .cw-game-header{padding:8px 12px;gap:8px}#cw-design .cw-chapter{display:none}#cw-design .cw-icon{margin-left:auto}#cw-design .cw-desktop{height:680px}#cw-design .cw-window-content{padding-left:16px;padding-right:16px}#cw-design .cw-titlebar{padding-left:5px}#cw-design .cw-window-footer{font-size:11px}#cw-design .cw-tool{padding:0 10px;font-size:12px;gap:5px}#cw-design .cw-tool>i,#cw-design .cw-tool>svg{width:15px;height:15px}#cw-design .cw-toolbar{left:12px;right:12px;bottom:18px;justify-content:center}#cw-design .cw-story{left:12px;right:12px;bottom:132px;padding:18px 46px 18px 16px}#cw-design .cw-story p{font-size:18px}#cw-design .cw-landscape{height:570px}#cw-design .cw-handheld{height:610px}#cw-design .cw-confirm-buttons{display:grid;grid-template-columns:1fr}#cw-design .cw-confirm-buttons button{width:100%}#cw-design .cw-volume{font-size:14px}#cw-design .cw-stage{min-height:744px}}
+@media(prefers-reduced-motion:reduce){#cw-design *{transition:none!important}}
+</style>
+<script>
+(function(){
+ const root=document.getElementById('cw-design');
+ const initial=root.querySelector('.cw-desktop');
+ ['phone','landscape','handheld'].forEach(function(device){const copy=initial.cloneNode(true);copy.className='cw-game cw-'+device;copy.dataset.device=device;copy.setAttribute('aria-label',device+' game canvas with child windows');root.querySelector('[data-mount="'+device+'"]').appendChild(copy);});
+ const games=Array.from(root.querySelectorAll('.cw-game'));
+ const states=new Map();const global={theme:'auto',radius:13};
+ const lines=['We could stay a little longer.\nThe last train hasn’t left yet.','The lights across the river\nare beginning to come on.','Then let’s take the long way home.'];
+ const announce=root.querySelector('[data-announcement]');let drag=null;
+ function id(game){return game.dataset.device;}
+ function st(game){return states.get(game);}
+ games.forEach(function(game){const narrow=game.dataset.device==='phone';states.set(game,{order:['history','audio'],line:0,modal:false,positions:{history:{x:narrow?12:42,y:narrow?126:96},audio:{x:narrow?25:405,y:narrow?190:171},confirm:{x:160,y:150}},visible:{history:true,audio:!narrow,confirm:false},collapsed:{history:false,audio:false}});});
+ function restore(snapshot){const incoming=snapshot&&(snapshot.privateContent||snapshot);if(!incoming||incoming.windowDesign!==1)return;if(['auto','light','dark'].includes(incoming.theme))global.theme=incoming.theme;games.forEach(function(game){const saved=incoming.windows&&incoming.windows[id(game)];if(!saved)return;const s=st(game);['history','audio'].forEach(function(k){const p=saved.positions&&saved.positions[k];if(p&&Number.isFinite(p.x)&&Number.isFinite(p.y))s.positions[k]={x:p.x,y:p.y};if(saved.visible&&typeof saved.visible[k]==='boolean')s.visible[k]=saved.visible[k];});});}
+ if(window.openai)restore(window.openai.widgetState);
+ function save(){if(!window.openai||!window.openai.setWidgetState)return;const windows={};games.forEach(function(g){windows[id(g)]={positions:st(g).positions,visible:st(g).visible};});window.openai.setWidgetState({modelContent:{design:'Game child windows',behavior:'Draggable in-game windows with scoped modal input',appearance:global.theme},privateContent:{windowDesign:1,theme:global.theme,windows:windows}}).catch(function(){});}
+ function bounds(game,win,pos){const gap=game.dataset.device==='phone'?10:12;const width=game.clientWidth,height=game.clientHeight;if(!width||!win.getClientRects().length)return pos;const w=win.offsetWidth,h=win.offsetHeight;return{x:Math.round(Math.max(gap,Math.min(pos.x,Math.max(gap,width-w-gap)))),y:Math.round(Math.max(66,Math.min(pos.y,Math.max(66,height-h-gap))))};}
+ function place(game,key){const win=game.querySelector('[data-window="'+key+'"]');const s=st(game);if(win.hidden||!game.offsetWidth)return;const p=bounds(game,win,s.positions[key]);s.positions[key]=p;win.style.left=p.x+'px';win.style.top=p.y+'px';}
+ function draw(game){const s=st(game);game.querySelectorAll('[data-window]').forEach(function(win){const key=win.dataset.window;win.hidden=!s.visible[key];win.dataset.collapsed=String(Boolean(s.collapsed[key]));win.dataset.active=String(key==='confirm'?s.modal:s.order[s.order.length-1]===key);if(key!=='confirm')win.style.zIndex=String(10+s.order.indexOf(key));win.inert=s.modal&&key!=='confirm';place(game,key);});game.querySelector('.cw-modal-shade').hidden=!s.modal;game.querySelector('.cw-game-content').inert=s.modal;game.querySelector('.cw-game-header').inert=s.modal;const text=game.querySelector('[data-story]');text.textContent=lines[s.line%lines.length];text.style.whiteSpace='pre-line';}
+ function theme(){root.style.colorScheme=global.theme==='auto'?'light dark':global.theme;root.querySelectorAll('.cw-window').forEach(function(w){w.style.borderRadius=global.radius+'px';});}
+ function raise(game,key){const s=st(game);if(s.modal&&key!=='confirm')return;if(key!=='confirm')s.order=s.order.filter(function(k){return k!==key;}).concat([key]);draw(game);}
+ function dismiss(game,confirmed){const s=st(game);s.modal=false;s.visible.confirm=false;draw(game);game.querySelector('[data-open="confirm"]').focus();announce.textContent=confirmed?'Return to title selected.':'Continue playing selected.';if(confirmed)game.querySelector('[data-story]').textContent='Return to title selected.';save();}
+ root.addEventListener('pointerdown',function(e){const game=e.target.closest('.cw-game');if(!game)return;const win=e.target.closest('[data-window]');if(win)raise(game,win.dataset.window);const bar=e.target.closest('.cw-drag');if(!bar||e.button!==0)return;const key=win.dataset.window;if(st(game).modal&&key!=='confirm')return;bar.setPointerCapture(e.pointerId);bar.focus({preventScroll:true});const pos=st(game).positions[key];drag={pointer:e.pointerId,bar:bar,game:game,key:key,startX:e.clientX,startY:e.clientY,x:pos.x,y:pos.y};e.preventDefault();});
+ root.addEventListener('pointermove',function(e){if(!drag||e.pointerId!==drag.pointer)return;e.preventDefault();const s=st(drag.game);s.positions[drag.key]={x:drag.x+e.clientX-drag.startX,y:drag.y+e.clientY-drag.startY};place(drag.game,drag.key);});
+ function stopDrag(e){if(!drag||e.pointerId!==drag.pointer)return;const old=drag;drag=null;if(old.bar.hasPointerCapture(e.pointerId))old.bar.releasePointerCapture(e.pointerId);save();}
+ root.addEventListener('pointerup',stopDrag);root.addEventListener('pointercancel',stopDrag);
+ root.addEventListener('click',function(e){const game=e.target.closest('.cw-game');if(!game)return;const s=st(game);const open=e.target.closest('[data-open]');if(open){const key=open.dataset.open;s.visible[key]=true;if(key==='confirm'){s.modal=true;const w=game.querySelector('.cw-confirm');w.hidden=false;s.positions.confirm={x:(game.clientWidth-w.offsetWidth)/2,y:Math.max(66,(game.clientHeight-w.offsetHeight)/2)};}else{s.collapsed[key]=false;raise(game,key);}draw(game);const focus=key==='confirm'?game.querySelector('.cw-confirm [data-action="cancel"]'):game.querySelector('[data-window="'+key+'"] .cw-drag');focus.focus({preventScroll:true});save();return;}const b=e.target.closest('[data-action]');if(!b)return;const action=b.dataset.action;const win=b.closest('[data-window]');if(action==='theme'){const dark=matchMedia('(prefers-color-scheme: dark)').matches;global.theme=global.theme==='auto'?(dark?'light':'dark'):global.theme==='dark'?'light':'dark';theme();save();}if(action==='advance'&&!s.modal){s.line++;draw(game);}if(action==='close-window'&&win){s.visible[win.dataset.window]=false;draw(game);game.querySelector('[data-open="'+win.dataset.window+'"]').focus();save();}if(action==='minimize'&&win){const key=win.dataset.window;s.collapsed[key]=!s.collapsed[key];b.setAttribute('aria-label',(s.collapsed[key]?'Expand ':'Collapse ')+(key==='history'?'History':'Audio')+' window');draw(game);save();}if(action==='cancel')dismiss(game,false);if(action==='confirm')dismiss(game,true);});
+ root.addEventListener('input',function(e){if(!e.target.matches('[data-volume]'))return;const volume=e.target.dataset.volume;e.target.closest('.cw-window').querySelector('[data-value="'+volume+'"]').textContent=e.target.value+'%';});
+ root.addEventListener('keydown',function(e){const game=e.target.closest('.cw-game');if(!game)return;const s=st(game);const win=e.target.closest('[data-window]');if(e.target.matches('.cw-drag')&&['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.key)){e.preventDefault();const key=win.dataset.window;const p=s.positions[key];const n=e.shiftKey?24:8;s.positions[key]={x:p.x+(e.key==='ArrowRight'?n:e.key==='ArrowLeft'?-n:0),y:p.y+(e.key==='ArrowDown'?n:e.key==='ArrowUp'?-n:0)};place(game,key);save();return;}if(e.key==='Escape'){if(s.modal){e.preventDefault();dismiss(game,false);}else if(win){e.preventDefault();win.querySelector('[data-action="close-window"]').click();}return;}if(s.modal&&e.key==='Tab'){const modal=game.querySelector('.cw-confirm');const controls=Array.from(modal.querySelectorAll('button,input')).filter(function(x){return!x.disabled&&x.getClientRects().length;});if(!controls.length)return;const first=controls[0],last=controls[controls.length-1];if(e.shiftKey&&(e.target===first||!modal.contains(e.target))){e.preventDefault();last.focus();}else if(!e.shiftKey&&(e.target===last||!modal.contains(e.target))){e.preventDefault();first.focus();}}});
+ const observer=new ResizeObserver(function(entries){entries.forEach(function(entry){const game=entry.target;if(game.clientWidth)draw(game);});});games.forEach(function(game){observer.observe(game);draw(game);});theme();
+ window.addEventListener('openai:set_globals',function(e){if(e.detail&&e.detail.globals){restore(e.detail.globals.widgetState);games.forEach(draw);theme();}});
+ if(globalThis.Tweak){const tweak=new Tweak({container:root,onChange:function(){theme();save();}});tweak.addSelect(global,'theme',{label:'Appearance',options:[{label:'Follow system',value:'auto'},{label:'Light',value:'light'},{label:'Dark',value:'dark'}]});tweak.addSlider(global,'radius',{label:'Window corners',min:6,max:20,step:1,unit:'px'});}
+})();
+</script>

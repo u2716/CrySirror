@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 // Ported from xmoezzz/siglus_rs 5f358ef1360b0439e92aed2b749e8f25d8721954.
-// Source and changes recorded in ../UPSTREAM.md.
+// Source and changes recorded in ../SOURCE_NOTES.md.
 //! Integer event (linear interpolation / loop / turn) used by a few engine subsystems.
 //!
 //! This follows the original Siglus behavior:

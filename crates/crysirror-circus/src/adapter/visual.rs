@@ -9,6 +9,8 @@ pub(super) struct NativeVisual {
     tracks: BTreeSet<u32>,
     pub(super) filters:BTreeMap<u16,Value>,
     blur:Option<(crysirror_scene::animation::ScalarTween,u64,i16)>,
+    ///DC3WY 437850 zoom per object: (percent, center).
+    zooms:BTreeMap<u16,(f32,[f32;2])>,
 }
 impl NativeVisual {
     pub(super) fn mark_restore_roots(&mut self,objects:impl Iterator<Item=u16>){self.roots.extend(objects);}
@@ -36,6 +38,10 @@ pub(super) fn painter_order(object: u16, priority: i16) -> [i32; 2] {
         [2, i32::from(object)]
     }
 }
+///Transparent parent applying a 437850 screen-space zoom to one object.
+fn zoom_layer(object: u16) -> u32 {
+    0x3a07_0000 + u32::from(object)
+}
 pub(super) fn object_layer(object: u16) -> u32 {
     object_resource(object).map_or(0x3a00_0000 + u32::from(object), |slot| {
         0x3501_0000 + u32::from(slot)
@@ -47,10 +53,25 @@ impl Bridge<'_> {
         self.root()?;
         let id = object_layer(object);
         if !self.services.visual.roots.contains(&object) {
-            self.submit(vec![json!({"op":"put","layer":{"id":id,"parent":SCENE_ROOT,"visible":!self.services.effect_control.particle_wrapper(object),"opacity":match object {88=>if self.services.native_status_visible{255}else{0},75|76=>if self.services.native_window_visible{255}else{0},_=>255},"rect":[0,0,1280,720],"paint":{"kind":"solid","color":[0,0,0,0]},"order":painter_order(object,50)}}),json!({"op":"put","layer":{"id":content_layer(object),"parent":id,"rect":[0,0,1280,720],"paint":{"kind":"solid","color":[0,0,0,0]},"order":[0,0]}})],vec![])?;
+            let [width,height]=self.native_canvas();
+            let parent=if let Some((scale,center))=self.services.visual.zooms.get(&object).copied() {self.zoom_wrapper(object,scale,center)?;zoom_layer(object)}else{SCENE_ROOT};
+            self.submit(vec![json!({"op":"put","layer":{"id":id,"parent":parent,"visible":!self.services.effect_control.particle_wrapper(object),"opacity":match object {88=>if self.services.native_status_visible{255}else{0},75|76=>if self.services.native_window_visible{255}else{0},_=>255},"rect":[0,0,width,height],"paint":{"kind":"solid","color":[0,0,0,0]},"order":painter_order(object,50)}}),json!({"op":"put","layer":{"id":content_layer(object),"parent":id,"rect":[0,0,width,height],"paint":{"kind":"solid","color":[0,0,0,0]},"order":[0,0]}})],vec![])?;
             self.services.visual.roots.insert(object);
         }
         Ok(id)
+    }
+    ///Create or update the zoom parent of `object` (scale percent about
+    ///the screen point `center`).
+    fn zoom_wrapper(&mut self, object: u16, scale: f32, center: [f32; 2]) -> Result<()> {
+        let wrapper = zoom_layer(object);
+        let existing: Value = serde_json::from_slice(&self.host.query_engine(self.client, EngineQuery::Layer(wrapper))?)?;
+        let mut commands = Vec::new();
+        if existing.is_null() {
+            let [width, height] = self.native_canvas();
+            commands.push(json!({"op":"put","layer":{"id":wrapper,"parent":SCENE_ROOT,"rect":[0,0,width,height],"paint":{"kind":"solid","color":[0,0,0,0]},"order":painter_order(object,50)}}));
+        }
+        commands.push(json!({"op":"set_transform","id":wrapper,"transform":{"scale_x":scale/100.,"scale_y":scale/100.,"pivot_x":center[0],"pivot_y":center[1]}}));
+        self.submit(commands, vec![])
     }
     fn visual_track(&mut self, id: u32, property: &str, to: f32, ticks: u32) -> Result<()> {
         self.submit(vec![json!({"op":"begin_motion","id":id,"track":{"property":property,"to":to,"duration":ticks,"external":true}})],vec![])?;
@@ -138,14 +159,35 @@ impl Bridge<'_> {
                 self.visual_track(id, "x", position[0] as f32, *ticks)?;
                 self.visual_track(id, "y", position[1] as f32, *ticks)?;
             }
+            VisualRequest::Zoom { object, scale, center } => {
+                ensure!(scale.is_finite() && *scale > 0. && center.iter().all(|value| value.is_finite()), "DC3WY zoom operands");
+                let id = self.visual_root(*object)?;
+                let wrapper = zoom_layer(*object);
+                if *scale == 100. {
+                    self.services.visual.zooms.remove(object);
+                    let existing: Value = serde_json::from_slice(&self.host.query_engine(self.client, EngineQuery::Layer(wrapper))?)?;
+                    if !existing.is_null() {
+                        self.submit(vec![json!({"op":"set_parent","id":id,"parent":SCENE_ROOT}), json!({"op":"remove","id":wrapper})], vec![])?;
+                    }
+                } else {
+                    self.zoom_wrapper(*object, *scale, *center)?;
+                    self.submit(vec![json!({"op":"set_parent","id":id,"parent":wrapper})], vec![])?;
+                    self.services.visual.zooms.insert(*object, (*scale, *center));
+                }
+            }
             VisualRequest::Priority { object, priority } => {
                 let id = self.visual_root(*object)?;
-                self.submit(
-                    vec![
-                        json!({"op":"set_order","id":id,"order":painter_order(*object,*priority)}),
-                    ],
-                    vec![],
-                )?;
+                let mut commands = vec![json!({"op":"set_order","id":id,"order":painter_order(*object,*priority)})];
+                //DC3WY sorts its image leaves by their object's order.
+                if self.services.native_profile == Some(crate::Profile::Dc3WithYou) {
+                    for leaf in [super::sprite_resources::alias(*object), 0x3e00_0000 + u32::from(*object)] {
+                        let layer: Value = serde_json::from_slice(&self.host.query_engine(self.client, EngineQuery::Layer(leaf))?)?;
+                        if !layer.is_null() {
+                            commands.push(json!({"op":"set_order","id":leaf,"order":painter_order(*object,*priority)}));
+                        }
+                    }
+                }
+                self.submit(commands, vec![])?;
             }
             VisualRequest::Track {
                 object,
@@ -304,4 +346,18 @@ pub(super) fn native_filter(pass:u8,frequency:f32)->Result<Value>{
         4=>{ensure!(frequency.is_finite()&&frequency!=0.,"Circus native blur sample frequency");json!({"distortion":{"kind":"nine_tap","offset":[1./frequency,1./frequency],"center_weight":0.2,"neighbor_weight":0.1},"ignore_tint_alpha":true,"encoded_sampling":true})},
         _=>bail!("Circus native shader pass {pass}"),
     })
+}
+
+impl Bridge<'_> {
+    ///DC3WY 41E360 draws objects in painter order, so an object's image leaf
+    ///takes its root's order (the flat sort reads only leaves). Other
+    ///profiles keep the leaf default.
+    pub(super) fn dc3_leaf_order(&mut self, object: u16) -> Result<Value> {
+        if self.services.native_profile != Some(crate::Profile::Dc3WithYou) {
+            return Ok(json!([0, 0]));
+        }
+        let id = self.visual_root(object)?;
+        let root: Value = serde_json::from_slice(&self.host.query_engine(self.client, EngineQuery::Layer(id))?)?;
+        Ok(root.get("order").cloned().unwrap_or_else(|| json!(painter_order(object, 50))))
+    }
 }

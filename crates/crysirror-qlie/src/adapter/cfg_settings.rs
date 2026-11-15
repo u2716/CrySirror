@@ -84,11 +84,16 @@ pub(super) fn load(o: &mut Object, settings: &BTreeMap<String, String>) {
 }
 
 impl QlieVm {
+    /// FilePack3.0's game.dat is the same CP932 INI settings resource as
+    /// later game.txt. Keep its native name in the resource catalogue.
+    pub(super) fn game_settings(&self) -> Option<&str> {
+        self.text.get("system/etc/game.txt")
+            .or_else(|| self.text.get("system/etc/game.dat"))
+            .map(String::as_str)
+    }
     /// Game.txt boolean (4E7010): "true"/"false" ignoring case, else default.
     fn game_bool(&self, key: &str, default: bool) -> bool {
-        match self
-            .text
-            .get("system/etc/game.txt")
+        match self.game_settings()
             .into_iter()
             .flat_map(|s| s.lines())
             .filter_map(|line| line.split_once('='))
@@ -102,8 +107,7 @@ impl QlieVm {
         }
     }
     fn game_text(&self, key: &str) -> Option<String> {
-        self.text
-            .get("system/etc/game.txt")
+        self.game_settings()
             .into_iter()
             .flat_map(|s| s.lines())
             .filter_map(|line| line.split_once('='))

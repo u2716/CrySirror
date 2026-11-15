@@ -696,5 +696,34 @@
     "ownership": "Generated paths are bounded shared Image publications, with explicit current/display/map ownership and retryable retirement. Logo pre-Init output is retained through SACT initialization. Reset still removes hidden BACK_SCENE plus display16 and retires all exact image paths; peers/window/input are not replaced. No VM-private pixel plane, compositor, font rasterizer or device pointer.",
     "acceptance": "Source registered, concentrated parent release check pending. No tests, games, window/GPU behavior or repaired original-file roundtrip executed.",
     "surface_lifecycle": "Complete052A0/6630/66D0/69B0 inspected in original SactEngine C and raw assembly. Numeric SetCG (after its positive wrapper guard) and FromFile clear an existing map record base and complete glyph vector BEFORE lookup, including ordinary failed/empty-file return0; native text home/position/style and show/opacity/brightness/position remain. One shared parent/glyph-removal batch clears the retained scene, then immutable map/glyph paths retire. Create69B0 deliberately preserves glyph records while replacing only the base; it does not use this preclear. Raw provider(-1), last-presented frame and an independent negative map entry remain distinct."
+  },
+  "completion_2026_11_09": {
+    "mode": "adopt",
+    "public_research": [
+      {
+        "repository": "https://github.com/nunuhara/alice-tools",
+        "commit": "f05d332bb9c9db14af6690fcd822de063d580dba",
+        "license": "GPL-2.0-or-later",
+        "use": "Complete public source inspected as tooling reference; no runtime/code imported."
+      },
+      {
+        "repository": "https://github.com/kichikuou/sys4lang",
+        "commit": "355035d6c55587a8231da9a064daef8551807f9b",
+        "license": "GPL-2.0-or-later",
+        "language": "OCaml",
+        "use": "Format/compiler research only; not an independent Rust runtime."
+      }
+    ],
+    "native_evidence": "NATIVE_SEMANTICS.md; reviewed module identities above; original files read only, never executed or distributed. Complete wrapper/helper paths and corrected Graph indirect-call stack frames inspected before geometry adoption.",
+    "shared_capabilities": [
+      "RGB-only screen/multiply byte tables and destination-reading wgpu modes",
+      "rational area reduction and stored Bernstein progress",
+      "ByteRaster line/wrap/rotation, AxisProjection and TriangleRaster",
+      "PCM analysis, positive-sign RDFT, cached Hann window",
+      "source-layout PCM queries with scoped handles, worker cancellation, retained result budget"
+    ],
+    "coverage": "351 declared HLL names have scoped semantic routes, not all parameter domains. AINv5 layout metadata273,29 names without executor routes; CODE126 distinct names includes ENDFUNC/EOF metadata markers.",
+    "not_claimed": "GPU execution, original code execution, complete gameplay, x87/MMX/SSE bit identity, compressed-source original PCM inspection, enabled gamepads, all clipping/alias domains, original save completeness.",
+    "final_field_review": "2026-11-10 complete SACT F080/F130 to SactEngine7F20/7FA0 and getters6FE0/7000 proves+32 blend_rate,+36 brightness. 5870 Screen uses blend_rate/ignores brightness; Multiply draws only at blend_rate255 and ignores brightness. Corrected earlier swapped projection. Invalid wrapper range returns0 before lazy declaration; valid brightness creates native metadata."
   }
 }

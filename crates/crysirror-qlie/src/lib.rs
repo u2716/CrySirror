@@ -5,6 +5,8 @@
 #![forbid(unsafe_code)]
 #[cfg(feature = "runtime")]
 pub mod adapter;
+#[cfg(feature = "runtime")]
+pub mod bregexp;
 pub mod expression;
 pub mod machine;
 pub mod program;

@@ -321,7 +321,7 @@ impl MajiroVm {
             }
             0xc102bcc3 => {
                 if self.fast_mode.allow_special {
-                    self.synthesize_native_middle(host.now_ms() as u32);
+                    self.synthesize_native_middle(self.native_now());
                     self.fast_mode.mode(6, neko_menu);
                 }
                 0

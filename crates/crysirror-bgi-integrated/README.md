@@ -28,18 +28,17 @@ selectors. No game data, game-specific key or font is bundled.
 
 ## Upstream synchronization
 
-The current source pin is `3ee43dab43854e2f9c614dd1d26213e17911d877`.
-The synchronization includes source-curve property `0x8E`, sprite primary-bitmap getter
-property `0x10` handling, profile-selected 64/128 SE channels and main-thread memory
-regions, resource stream read/write/seek completion, composition backing-image
-selection, text styling, path/encoding and empty-record fixes. Native semantics
-remain upstream's; source presence does not establish whole-game coverage.
+The current source pin is `2f8a9272a8f7ca075d82ac88fb802fa7247b3a99`.
+It includes newer BP instruction profiles and native buffer/operation handling,
+linked sprite masks, bitmap animation lifetime, raw image and knob-input fixes,
+localized archive views, game-directory fonts and substitute-font metrics.
+Scene and global movie samples retain independent presentation schedules.
 
-The previous import had no pinned source record. Its normalized sources matched
-`0cfff1d274ecc4554d0af8af1c7b1c7908595e96` except the retained host changes, so that
-revision was used for a three-way reconciliation. It is not claimed as the
-original import revision. The host-specific frame/PCM, bootstrap, file policy
-and installed-view changes were preserved.
+CrySirror preserves its existing frame/PCM, custom bootstrap, private storage,
+network capability, input/dialog and console output seams. Bootstrap detection
+uses the retained runtime's declared image bounds (including trailing bytes)
+and language tags. Explicit loose/custom BP startup remains available.
+Previous complete-runtime pin: `3ee43dab43854e2f9c614dd1d26213e17911d877`.
 
 ## Platform evidence
 
@@ -49,11 +48,15 @@ and installed-view changes were preserved.
 | Windows / Linux | Shared desktop source retained; this update did not compile or run these targets. |
 | iOS / Android | Retained native session/platform paths; this update did not validate target compilation or device lifecycle. |
 | Browser | Upstream hosted-file/output modules retained; CrySirror integrated browser support is not established by this update. |
-| Vita / Switch | Deferred CrySirror backends; original native GPU modules are source only here. |
+| Vita | Original GXM driver, two Cg/GXP programs and callback bridge retained behind optional `vita-gxm`; full console host/output connection remains incomplete. |
+| Switch | Original native GPU modules retained; CrySirror host/output connection remains incomplete. |
+
+The [Vita output module](native/vita/README.md) reuses the original shaders and
+native draw implementation. It is not enabled by the default desktop player.
 
 The current default host profile uses local or OS-mounted directories. Remote
 provider integration and other target/device behavior require their own work
-and evidence. See [the update validation](../../docs/validation/bgi-upstream-sync.md)
+and evidence. See [the update validation](../../docs/validation/bgi-upstream-sync-2026-11-15.md)
 and [the engine guide](../../docs/BGI.md).
 
 ## Optional network resources

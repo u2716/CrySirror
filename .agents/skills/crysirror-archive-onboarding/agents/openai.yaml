@@ -1,0 +1,4 @@
+interface:
+  display_name: "CrySirror Archive Onboarding"
+  short_description: "Connect archive formats to shared resource and VFS APIs"
+  default_prompt: "Use $crysirror-archive-onboarding to add this archive profile through CrySirror's shared Resources pipeline and verify its mounted reads."

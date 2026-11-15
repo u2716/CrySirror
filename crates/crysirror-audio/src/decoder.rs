@@ -31,6 +31,7 @@ pub fn codec_supported(codec: &str) -> bool {
     let codec = match codec {
         "opus" => symphonia::core::codecs::CODEC_TYPE_OPUS,
         "vorbis" => symphonia::core::codecs::CODEC_TYPE_VORBIS,
+        "ms-adpcm" => symphonia::core::codecs::CODEC_TYPE_ADPCM_MS,
         _ => return false,
     };
     crate::opus::codecs().get_codec(codec).is_some()

@@ -1,0 +1,659 @@
+// SPDX-License-Identifier: MPL-2.0
+// Generated from canonical WGSL by crysirror-shader-tools.
+int min(int a,int b){return a<b?a:b;}
+int max(int a,int b){return a>b?a:b;}
+int clamp(int a,int lo,int hi){return min(max(a,lo),hi);}
+int2 min(int2 a,int2 b){return a<b?a:b;}
+int2 max(int2 a,int2 b){return a>b?a:b;}
+int2 clamp(int2 a,int2 lo,int2 hi){return min(max(a,lo),hi);}
+int3 min(int3 a,int3 b){return a<b?a:b;}
+int3 max(int3 a,int3 b){return a>b?a:b;}
+int3 clamp(int3 a,int3 lo,int3 hi){return min(max(a,lo),hi);}
+int4 min(int4 a,int4 b){return a<b?a:b;}
+int4 max(int4 a,int4 b){return a>b?a:b;}
+int4 clamp(int4 a,int4 lo,int4 hi){return min(max(a,lo),hi);}
+
+
+// SGX has no general integer divide. Bias a full-width float estimate
+// below the quotient, refine its small remainder, then correct in integers.
+// The 2^-20 bias dominates f32 conversion/division error (all inputs normal).
+// The refinement quotient is below 2048, so three corrections are sufficient.
+int cg_div_positive(int a,int b){
+ if(b==1)return a;
+ bool negative=a<0;
+ int n=negative?-(a+1):a;
+ float estimate=float(n)/float(b);
+ int q=int(max(floor(estimate-max(estimate*0.00000095367431640625,2.0)),0.0));
+ int r=n-q*b;
+ int correction=max(int(floor(float(r)/float(b)))-2,0);
+ q+=correction;r-=correction*b;
+ if(r>=b){r-=b;q+=1;}
+ if(r>=b){r-=b;q+=1;}
+ if(r>=b){r-=b;q+=1;}
+ if(negative)return -q-int(r==b-1);
+ return q;
+}
+int cg_div(int a,int b){
+ if(b==0)return a;
+ if(b==(-2147483647-1))return a==b?1:0;
+ if(a==(-2147483647-1)&&b==-1)return a;
+ return b<0?-cg_div_positive(a,-b):cg_div_positive(a,b);
+}
+int2 cg_div(int2 a,int2 b){return int2(cg_div(a.x,b.x),cg_div(a.y,b.y));}
+int3 cg_div(int3 a,int3 b){return int3(cg_div(a.x,b.x),cg_div(a.y,b.y),cg_div(a.z,b.z));}
+int4 cg_div(int4 a,int4 b){return int4(cg_div(a.x,b.x),cg_div(a.y,b.y),cg_div(a.z,b.z),cg_div(a.w,b.w));}
+float4 cg_load(sampler2D tex,int3 p,float4 size){
+ if(any(p.xy<0)||any(p.xy>=int2(size.xy))||p.z!=0)return float4(0,0,0,0);
+ return tex2Dlod(tex,float4((float2(p.xy)+0.5)*size.zw,0,0));
+}
+// Naga uses these for signed/unsigned integer wrapping, never float bitcasts.
+int asint(int v){return int(v);} int2 asint(int2 v){return int2(v);}
+int3 asint(int3 v){return int3(v);} int4 asint(int4 v){return int4(v);}
+int asuint(int v){return int(v);} int2 asuint(int2 v){return int2(v);}
+int3 asuint(int3 v){return int3(v);} int4 asuint(int4 v){return int4(v);}
+
+struct Out {
+    float4 position : WPOS;
+    float2 uv : TEXCOORD0;
+    float4 color : TEXCOORD1;
+    float filter_index : TEXCOORD2;
+    float4 sample_bounds : TEXCOORD3;
+    float4 clip_rect : TEXCOORD4;
+    float3 clip_position : TEXCOORD5;
+};
+
+struct LayerFilter {
+    float4 a;
+    float4 b;
+    float4 c;
+    float4 d;
+    float4 e;
+    float4 f;
+    float4 g;
+    float4 h;
+    float4 i;
+};
+
+uniform sampler2D image : TEXUNIT0;
+uniform float4 cg_size_image;
+uniform LayerFilter selected_filter;
+uniform sampler2D mask_image : TEXUNIT1;
+uniform float4 cg_size_mask_image;
+uniform sampler2D curve_image : TEXUNIT2;
+uniform float4 cg_size_curve_image;
+uniform sampler2D destination_image : TEXUNIT3;
+uniform float4 cg_size_destination_image;
+uniform sampler2D ordered_coverage : TEXUNIT4;
+uniform float4 cg_size_ordered_coverage;
+uniform int4 cg_loop_limits;
+
+struct FragmentInput_fs_stored {
+    float2 uv_6 : TEXCOORD0;
+    float4 color_1 : TEXCOORD1;
+    float filter_index : TEXCOORD2;
+    float4 sample_bounds : TEXCOORD3;
+    float4 clip_rect : TEXCOORD4;
+    float3 clip_position : TEXCOORD5;
+    float4 position : WPOS;
+};
+
+bool outside_clip(Out in_1)
+{
+    bool local = (bool)0;
+
+    float2 _e6 = (in_1.clip_position.xy / (in_1.clip_position.z).xx);
+    if (!(any((_e6 < in_1.clip_rect.xy)))) {
+        local = any((_e6 >= in_1.clip_rect.zw));
+    } else {
+        local = true;
+    }
+    bool _e19 = local;
+    return _e19;
+}
+
+
+float2 bounded_uv(float2 uv, float4 bounds)
+{
+    float2 _e8 = ((0.5).xx / float2(int2(cg_size_image.xy)));
+    float2 _e10 = (bounds.xy + _e8);
+    float2 _e12 = (bounds.zw - _e8);
+    float2 _e15 = ((_e10 + _e12) * 0.5);
+    return clamp(uv, min(_e10, _e15), max(_e12, _e15));
+}
+
+float3 to_gamma(float3 c)
+{
+    float3 _e5 = clamp(c, (0.0).xxx, (1.0).xxx);
+    return ((_e5 <= (0.0031308).xxx) ? (_e5 * 12.92) : ((1.055 * pow(_e5, (0.41666666).xxx)) - (0.055).xxx));
+}
+
+float3 to_linear(float3 c_1)
+{
+    float3 _e5 = clamp(c_1, (0.0).xxx, (1.0).xxx);
+    return ((_e5 <= (0.04045).xxx) ? (_e5 / (12.92).xxx) : pow(((_e5 + (0.055).xxx) / (1.055).xxx), (2.4).xxx));
+}
+
+int2 naga_mod(int2 lhs,int2 rhs) {
+ int2 overflow=int2(lhs==int2(-2147483647-1)) & int2(rhs==int2(-1));
+ int2 invalid=overflow | int2(rhs==int2(0));
+ int2 divisor=invalid?int2(1):rhs;
+ return lhs-cg_div(lhs,divisor)*divisor;
+}
+
+
+int cg_wrap(int pixel,int size){
+ int value=pixel-cg_div(pixel,size)*size;
+ return value<0?value+size:value;
+}
+
+float4 cg_encoded_at(int2 p){
+ float4 c=cg_load(image,int3(p,0),cg_size_image);
+ return float4(to_gamma(c.rgb),c.a);
+}
+float4 encoded_load(int2 pixel,int2 size){
+ return cg_encoded_at(int2(cg_wrap(pixel.x,size.x),cg_wrap(pixel.y,size.y)));
+}
+
+int2 naga_f2i32(float2 value) {
+    return int2(clamp(value, -2147483600.0, 2147483500.0));
+}
+
+float4 sample_color(float2 uv){
+ int2 size=int2(cg_size_image.xy);
+ float2 p=uv*float2(size)-0.5;
+ int2 base=naga_f2i32(floor(p));
+ float2 phase=frac(p);
+ int2 a=int2(cg_wrap(base.x,size.x),cg_wrap(base.y,size.y));
+ int2 b=int2(a.x+1==size.x?0:a.x+1,a.y+1==size.y?0:a.y+1);
+ return lerp(lerp(cg_encoded_at(a),cg_encoded_at(int2(b.x,a.y)),phase.x),
+             lerp(cg_encoded_at(int2(a.x,b.y)),cg_encoded_at(b),phase.x),phase.y);
+}
+
+int naga_f2u32(float value) {
+    return int(clamp(value, 0.0, 2147483500.0));
+}
+
+float4 tap(float2 uv_2)
+{
+    bool local_1 = (bool)0;
+    bool local_2 = (bool)0;
+
+    const float4 _e2 = sample_color(uv_2);
+    if (!(((naga_f2u32(selected_filter.c.w) & 32) != 0))) {
+        if (all((uv_2 >= (0.0).xx))) {
+            local_2 = all((uv_2 <= (1.0).xx));
+        } else {
+            local_2 = false;
+        }
+        bool _e24 = local_2;
+        local_1 = _e24;
+    } else {
+        local_1 = true;
+    }
+    bool _e26 = local_1;
+    return (_e26 ? _e2 : (0.0).xxxx);
+}
+
+
+float4 distorted(float2 uv_3)
+{
+    float4 c_2 = (float4)0;
+    int y = int(-1);
+    int x = (int)0;
+    bool local_3 = (bool)0;
+    float4 c_3 = (float4)0;
+    float t = (float)0;
+    float2 dir = (float2)0;
+    bool local_4 = (bool)0;
+    float w[10] = { 0.19, 0.17, 0.15, 0.13, 0.11, 0.09, 0.07, 0.05, 0.03, 0.01 };
+    float4 c_4 = (0.0).xxxx;
+    int i = int(0);
+    float4 c_5 = (float4)0;
+
+    float2 _e14 = float2(int2(cg_size_image.xy));
+    dir = (float2(selected_filter.d.w, selected_filter.e.x) - uv_3);
+    float2 _e25 = dir;
+    float _e26 = length(_e25);
+    if (!((_e26 <= 1e-5))) {
+        local_4 = (selected_filter.e.y <= 1e-5);
+    } else {
+        local_4 = true;
+    }
+    bool _e35 = local_4;
+    if (_e35) {
+        const float4 _e36 = tap(uv_3);
+        return _e36;
+    }
+    float2 _e37 = dir;
+    dir = ((((normalize(_e37) * (1.0 / max(max(_e14.x, _e14.y), 1.0))) * selected_filter.e.y) * _e26) * max(selected_filter.e.z, 0.0));
+    bool loop_init = true;
+    while(true) {
+        if (!loop_init) {
+            int _e80 = i;
+            i = asint(asuint(_e80) + asuint(int(1)));
+        }
+        loop_init = false;
+        int _e62 = i;
+        int _e65 = cg_loop_limits.x;
+        if ((_e62 < int(_e65))) {
+        } else {
+            break;
+        }
+        {
+            float4 _e68 = c_4;
+            float2 _e69 = dir;
+            int _e70 = i;
+            const float4 _e74 = tap((uv_3 + (_e69 * float(_e70))));
+            int _e75 = i;
+            float _e77 = w[_e75];
+            c_4 = (_e68 + (_e74 * _e77));
+        }
+    }
+    c_4.w = 1.0;
+    float4 _e85 = c_4;
+    return _e85;
+}
+
+bool flag(int bit)
+{
+    return ((naga_f2u32(selected_filter.c.w) & bit) != 0);
+}
+
+
+float selected_mask_alpha(int2 point_, int channel, float offset, float scale)
+{
+    float4 _e15 = cg_load(mask_image,int3(clamp(point_, (int(0)).xx, asint(asuint(int2(int2(cg_size_mask_image.xy))) - asuint((int(1)).xx))), int(0)),cg_size_mask_image);
+    const float3 _e17 = to_gamma(_e15.xyz);
+    return (trunc(clamp(((round((float4(_e17, _e15.w) * 255.0))[channel] * scale) + offset), 0.0, 255.0)) / 255.0);
+}
+
+float mask_alpha(float2 uv_4, int channel_1, float offset_1, float scale_1)
+{
+    float2 _e10 = ((uv_4 * float2(int2(cg_size_mask_image.xy))) - (0.5).xx);
+    int2 _e12 = naga_f2i32(floor(_e10));
+    float2 _e13 = frac(_e10);
+    const float _e14 = selected_mask_alpha(_e12, channel_1, offset_1, scale_1);
+    const float _e19 = selected_mask_alpha(asint(asuint(_e12) + asuint(int2(int(1), int(0)))), channel_1, offset_1, scale_1);
+    const float _e24 = selected_mask_alpha(asint(asuint(_e12) + asuint(int2(int(0), int(1)))), channel_1, offset_1, scale_1);
+    const float _e29 = selected_mask_alpha(asint(asuint(_e12) + asuint(int2(int(1), int(1)))), channel_1, offset_1, scale_1);
+    return lerp(lerp(_e14, _e19, _e13.x), lerp(_e24, _e29, _e13.x), _e13.y);
+}
+
+float source_mask_texel(int2 point_1, int channel_2)
+{
+    int2 mask_point = (int2)0;
+    bool local_5 = (bool)0;
+
+    int2 _e6 = int2(int2(cg_size_image.xy));
+    int2 _e12 = clamp(point_1, (int(0)).xx, asint(asuint(_e6) - asuint((int(1)).xx)));
+    float4 _e15 = cg_load(image,int3(_e12, int(0)),cg_size_image);
+    int2 _e19 = int2(int2(cg_size_mask_image.xy));
+    mask_point = naga_f2i32(floor((((float2(_e12) + (0.5).xx) * float2(_e19)) / float2(_e6))));
+    if ((selected_filter.g.w > 0.5)) {
+        mask_point = _e12;
+        int2 _e35 = mask_point;
+        if (!(any((_e35 < (int(0)).xx)))) {
+            int2 _e43 = mask_point;
+            local_5 = any((_e43 >= _e19));
+        } else {
+            local_5 = true;
+        }
+        bool _e47 = local_5;
+        if (_e47) {
+            return _e15.w;
+        }
+    }
+    int2 _e48 = mask_point;
+    const float _e53 = selected_mask_alpha(_e48, channel_2, selected_filter.g.y, selected_filter.h.x);
+    if ((selected_filter.g.z > 0.5)) {
+        return (floor((round((_e15.w * 255.0)) * _e53)) / 255.0);
+    }
+    return _e53;
+}
+
+float source_mask_alpha(float2 uv_5, int channel_3)
+{
+    float2 _e10 = ((uv_5 * float2(int2(cg_size_image.xy))) - (0.5).xx);
+    int2 _e12 = naga_f2i32(floor(_e10));
+    float2 _e13 = frac(_e10);
+    const float _e14 = source_mask_texel(_e12, channel_3);
+    const float _e19 = source_mask_texel(asint(asuint(_e12) + asuint(int2(int(1), int(0)))), channel_3);
+    const float _e24 = source_mask_texel(asint(asuint(_e12) + asuint(int2(int(0), int(1)))), channel_3);
+    const float _e29 = source_mask_texel(asint(asuint(_e12) + asuint(int2(int(1), int(1)))), channel_3);
+    return lerp(lerp(_e14, _e19, _e13.x), lerp(_e24, _e29, _e13.x), _e13.y);
+}
+
+int naga_f2i32(float value) {
+    return int(clamp(value, -2147483600.0, 2147483500.0));
+}
+
+float ordered_source_alpha(float alpha, Out in_2)
+{
+    const bool _e4 = flag(4096);
+    if (!(_e4)) {
+        return alpha;
+    }
+    float4 _e22 = cg_load(ordered_coverage,int3(clamp(naga_f2i32(floor(in_2.position.xy)), (int(0)).xx, asint(asuint(int2(int2(cg_size_ordered_coverage.xy))) - asuint((int(1)).xx))), int(0)),cg_size_ordered_coverage);
+    const float3 _e24 = to_gamma(_e22.xyz);
+    return (float((asint(asuint(naga_f2i32(round((clamp(alpha, 0.0, 1.0) * 255.0)))) * asuint((asint(asuint(naga_f2i32(round((_e24.z * 255.0)))) + asuint(int(1))) >> 1))) >> 7)) / 255.0);
+}
+
+int4 naga_f2i32(float4 value) {
+    return int4(clamp(value, -2147483600.0, 2147483500.0));
+}
+
+float4 filtered(Out in_3)
+{
+    float4 sampled = (float4)0;
+    float4 color = (float4)0;
+    bool local_6 = (bool)0;
+    bool local_7 = (bool)0;
+    int alpha_1 = (int)0;
+    bool local_8 = (bool)0;
+    float3 g = (float3)0;
+    bool local_9 = (bool)0;
+    bool local_10 = (bool)0;
+
+    const bool _e1 = outside_clip(in_3);
+    if (_e1) {
+        discard;
+    }
+    
+    const float3 _e6 = to_gamma(in_3.color.xyz);
+    const bool _e10 = flag(16);
+    float4 _e13 = float4(_e6, (_e10 ? 1.0 : in_3.color.w));
+    const float2 _e16 = bounded_uv(in_3.uv, in_3.sample_bounds);
+    const float4 _e17 = distorted(_e16);
+    sampled = _e17;
+    if (((naga_f2u32(selected_filter.i.w) & 1) != 0)) {
+        sampled.w = 1.0;
+    }
+    float _e30 = sampled.w;
+    const float _e31 = ordered_source_alpha(_e30, in_3);
+    sampled.w = _e31;
+    float4 _e32 = sampled;
+    color = (_e32 * _e13);
+    if ((selected_filter.i.x > 0.5)) {
+        float4 _e39 = sampled;
+        int4 _e48 = naga_f2i32(round((clamp(_e39, (0.0).xxxx, (1.0).xxxx) * 255.0)));
+        int4 _e57 = naga_f2i32(round((clamp(_e13, (0.0).xxxx, (1.0).xxxx) * 255.0)));
+        color = (float4((asint(asuint(_e48) * asuint(asint(asuint((_e57 >> (1).xxxx)) + asuint((_e57 >> (7).xxxx))))) >> (7).xxxx)) / (255.0).xxxx);
+        if (!((naga_f2i32(selected_filter.i.x) == int(15)))) {
+            local_6 = (naga_f2i32(selected_filter.i.x) == int(19));
+        } else {
+            local_6 = true;
+        }
+        bool _e87 = local_6;
+        if (!(_e87)) {
+            local_7 = (naga_f2i32(selected_filter.i.x) == int(20));
+        } else {
+            local_7 = true;
+        }
+        bool _e97 = local_7;
+        if (_e97) {
+            alpha_1 = _e48.w;
+            if ((_e57.w < int(255))) {
+                int _e103 = alpha_1;
+                alpha_1 = (asint(asuint(_e103) * asuint(_e57.w)) >> 8);
+            }
+            int _e109 = alpha_1;
+            color.w = (float(_e109) / 255.0);
+        } else {
+            if ((naga_f2i32(selected_filter.i.x) == int(16))) {
+                color.w = (float(_e57.w) / 255.0);
+            } else {
+                if (!((naga_f2i32(selected_filter.i.x) == int(17)))) {
+                    local_8 = (naga_f2i32(selected_filter.i.x) == int(18));
+                } else {
+                    local_8 = true;
+                }
+                bool _e137 = local_8;
+                if (_e137) {
+                    color.w = (float(((naga_f2u32(selected_filter.i.w) >> 8) & 255)) / 255.0);
+                }
+            }
+        }
+    }
+    float4 _e149 = color;
+    float _e155 = color.w;
+    color = float4((_e149.xyz * selected_filter.h.yzw), _e155);
+    float _e158 = color.w;
+    float4 _e159 = color;
+    float _e163 = dot(_e159.xyz, selected_filter.f.xyz);
+    const bool _e165 = flag(1);
+    if (_e165) {
+        float4 _e166 = color;
+        g = lerp(_e166.xyz, (_e163).xxx, selected_filter.d.y);
+        float3 _e173 = g;
+        g = clamp(_e173, (0.0).xxx, (1.0).xxx);
+        float _e184 = g.x;
+        float4 _e187 = tex2Dlod(curve_image,float4(float2(_e184, selected_filter.d.x),0,0.0));
+        const float3 _e189 = to_gamma(_e187.xyz);
+        float _e194 = g.y;
+        float4 _e197 = tex2Dlod(curve_image,float4(float2(_e194, selected_filter.d.x),0,0.0));
+        const float3 _e199 = to_gamma(_e197.xyz);
+        float _e204 = g.z;
+        float4 _e207 = tex2Dlod(curve_image,float4(float2(_e204, selected_filter.d.x),0,0.0));
+        const float3 _e209 = to_gamma(_e207.xyz);
+        float _e212 = color.w;
+        color = float4(_e189.x, _e199.y, _e209.z, _e212);
+    }
+    float4 _e214 = color;
+    float4 _e218 = color;
+    float _e225 = color.w;
+    color = float4(lerp(_e214.xyz, ((1.0).xxx - _e218.xyz), selected_filter.a.y), _e225);
+    float4 _e227 = color;
+    float _e234 = color.w;
+    color = float4(lerp(_e227.xyz, (_e163).xxx, selected_filter.a.x), _e234);
+    float4 _e236 = color;
+    float _e247 = color.w;
+    color = float4(((_e236.xyz + (selected_filter.a.z).xxx) - (selected_filter.a.w).xxx), _e247);
+    float4 _e249 = color;
+    float _e257 = color.w;
+    color = float4(lerp(_e249.xyz, selected_filter.b.yzw, selected_filter.b.x), _e257);
+    float4 _e259 = color;
+    color = float4((_e259.xyz + selected_filter.c.xyz), _e158);
+    float4 _e265 = color;
+    const bool _e273 = flag(2);
+    if (_e273) {
+        float4 _e278 = tex2Dlod(mask_image,float4(in_3.uv,0,0.0));
+        const float3 _e280 = to_gamma(_e278.xyz);
+        if ((selected_filter.g.x < 0.5)) {
+            float4 _e287 = color;
+            color = (_e287 * float4(_e280, _e278.w));
+        } else {
+            int _e293 = (naga_f2u32(selected_filter.g.x) - 1);
+            if (!((selected_filter.g.z > 0.5))) {
+                local_9 = (selected_filter.g.w > 0.5);
+            } else {
+                local_9 = true;
+            }
+            bool _e306 = local_9;
+            if (_e306) {
+                const float2 _e309 = bounded_uv(in_3.uv, in_3.sample_bounds);
+                const float _e310 = source_mask_alpha(_e309, _e293);
+                const float _e311 = ordered_source_alpha(_e310, in_3);
+                if ((selected_filter.i.x > 0.5)) {
+                    int _e320 = naga_f2i32(round((_e13.w * 255.0)));
+                    color.w = (float((asint(asuint(naga_f2i32(round((_e311 * 255.0)))) * asuint(asint(asuint((_e320 >> 1)) + asuint((_e320 >> 7))))) >> 7)) / 255.0);
+                } else {
+                    color.w = (_e311 * _e13.w);
+                }
+            } else {
+                const float _e346 = mask_alpha(in_3.uv, _e293, selected_filter.g.y, selected_filter.h.x);
+                const float _e347 = ordered_source_alpha(_e346, in_3);
+                color.w = _e347;
+            }
+        }
+    }
+    const bool _e349 = flag(4);
+    if (_e349) {
+        const float _e351 = ordered_source_alpha(dot(_e265.xyz, float3(0.2989, 0.5886, 0.1145)), in_3);
+        color.w = _e351;
+    }
+    const bool _e353 = flag(8);
+    if (_e353) {
+        float _e357 = color.w;
+        local_10 = (_e357 < 0.003921569);
+    } else {
+        local_10 = false;
+    }
+    bool _e361 = local_10;
+    if (_e361) {
+        discard;
+    }
+    if ((selected_filter.f.w > 0.0)) {
+        float4 _e366 = color;
+        float _e369 = color.w;
+        float _e378 = color.w;
+        color = float4((_e366.xyz * pow(clamp(_e369, 0.0, 1.0), selected_filter.f.w)), _e378);
+    }
+    float4 _e380 = color;
+    const float3 _e382 = to_linear(_e380.xyz);
+    float _e384 = color.w;
+    return float4(_e382, clamp(_e384, 0.0, 1.0));
+}
+
+int naga_abs(int val) {
+    return val >= 0 ? val : asint(-asuint(val));
+}
+
+int naga_div(int lhs,int rhs){return cg_div(lhs,rhs);}
+
+int stored_channel(int d, int s, int a, int mode, int mask_weight)
+{
+    int value = (int)0;
+    bool local_11 = (bool)0;
+    int x_1 = (int)0;
+    int y_1 = (int)0;
+
+    int _e7 = asint(asuint(a) + asuint((a >> 7)));
+    int _e12 = asint(asuint((a >> 1)) + asuint((a >> 7)));
+    int _e15 = (asint(asuint(s) * asuint(_e7)) >> 8);
+    int _e22 = asint(asuint(int(255)) + asuint((asint(asuint(asint(asuint(s) - asuint(int(255)))) * asuint(_e12)) >> 7)));
+    int _e29 = asint(asuint(int(128)) + asuint((asint(asuint(asint(asuint(s) - asuint(int(128)))) * asuint(_e12)) >> 7)));
+    value = d;
+    { int cg_switch_0=mode;
+if(cg_switch_0==1){
+            value = asint(asuint(d) + asuint((asint(asuint(asint(asuint(s) - asuint(d))) * asuint((asint(asuint(a) + asuint(int(1))) >> 1))) >> 7)));
+            }
+else if(cg_switch_0==2){
+            value = asint(asuint(asint(asuint(_e15) + asuint(d))) - asuint((asint(asuint(_e15) * asuint(d)) >> 8)));
+            }
+else if(cg_switch_0==3){
+            value = (asint(asuint(asint(asuint(_e22) + asuint((_e22 >> 7)))) * asuint(d)) >> 8);
+            }
+else if(cg_switch_0==4){
+            value = naga_abs(asint(asuint(_e15) - asuint(d)));
+            }
+else if(cg_switch_0==5){
+            value = max(_e15, d);
+            }
+else if(cg_switch_0==6){
+            value = min(_e22, d);
+            }
+else if(cg_switch_0==7){
+            value = asint(asuint(_e15) + asuint(d));
+            }
+else if(cg_switch_0==8){
+            value = asint(asuint(d) - asuint(_e15));
+            }
+else if(cg_switch_0==9){
+            value = asint(asuint(d) - asuint((asint(asuint(asint(asuint(int(255)) - asuint(s))) * asuint(_e7)) >> 8)));
+            }
+else if(cg_switch_0==10||cg_switch_0==11){
+            if (((mode == int(10)) ? (d > int(128)) : (_e29 > int(128)))) {
+                value = max(asint(asuint(asint(asuint(int(2)) * asuint(asint(asuint(asint(asuint(_e29) + asuint(d))) - asuint((asint(asuint(_e29) * asuint(d)) >> 8)))))) - asuint(int(255))), int(0));
+            } else {
+                value = (asint(asuint(asint(asuint(int(2)) * asuint(_e29))) * asuint(d)) >> 8);
+            }
+            }
+else if(cg_switch_0==12){
+            value = asint(asuint(asint(asuint(_e15) + asuint(d))) - asuint(asint(asuint(int(2)) * asuint((asint(asuint(_e15) * asuint(d)) >> 8)))));
+            }
+else if(cg_switch_0==13){
+            value = asint(asuint(asint(asuint(asint(asuint(int(2)) * asuint(_e29))) + asuint(d))) - asuint(int(255)));
+            }
+else if(cg_switch_0==14){
+            if ((_e29 > int(128))) {
+                value = max(asint(asuint(asint(asuint(int(2)) * asuint(_e29))) - asuint(int(255))), d);
+            } else {
+                value = min(asint(asuint(int(2)) * asuint(_e29)), d);
+            }
+            }
+else if(cg_switch_0==15){
+            value = asint(asuint(d) + asuint((asint(asuint(asint(asuint(s) - asuint(d))) * asuint(a)) >> 8)));
+            }
+else if(cg_switch_0==16){
+            if ((a == int(255))) {
+                value = s;
+            } else {
+                value = asint(asuint(d) + asuint((asint(asuint(asint(asuint(s) - asuint(d))) * asuint(a)) >> 8)));
+            }
+            }
+else if(cg_switch_0==17){
+            value = asint(asuint(int(255)) - asuint(naga_div(asint(asuint(asint(asuint(int(255)) - asuint(d))) * asuint(asint(asuint(int(255)) - asuint(naga_div(asint(asuint(s) * asuint(a)), int(255)))))), int(255))));
+            }
+else if(cg_switch_0==18){
+            value = naga_div(asint(asuint(d) * asuint(s)), int(255));
+            }
+else if(cg_switch_0==19){
+            if ((a == int(255))) {
+                value = s;
+            } else {
+                if ((a != int(0))) {
+                    value = asint(asuint((asint(asuint(s) * asuint(a)) >> 8)) + asuint((asint(asuint(d) * asuint(asint(asuint(int(256)) - asuint(a)))) >> 8)));
+                }
+            }
+            }
+else if(cg_switch_0==20){
+            if ((a != int(0))) {
+                local_11 = (mask_weight != int(0));
+            } else {
+                local_11 = false;
+            }
+            bool _e155 = local_11;
+            if (_e155) {
+                x_1 = mask_weight;
+                int _e157 = x_1;
+                y_1 = asint(asuint(int(256)) - asuint(_e157));
+                if ((a != int(255))) {
+                    x_1 = (asint(asuint(a) * asuint(mask_weight)) >> 8);
+                    int _e166 = x_1;
+                    y_1 = asint(asuint(int(255)) - asuint(_e166));
+                }
+                int _e169 = x_1;
+                int _e171 = y_1;
+                value = (asint(asuint(asint(asuint(s) * asuint(_e169))) + asuint(asint(asuint(d) * asuint(_e171)))) >> 8);
+            }
+            }
+else {
+            }
+}
+    int _e176 = value;
+    return clamp(_e176, int(0), int(255));
+}
+
+int3 naga_f2i32(float3 value) {
+    return int3(clamp(value, -2147483600.0, 2147483500.0));
+}
+
+float4 main(FragmentInput_fs_stored fragmentinput_fs_stored) : COLOR
+{
+    Out in_ = { fragmentinput_fs_stored.position, fragmentinput_fs_stored.uv_6, fragmentinput_fs_stored.color_1, fragmentinput_fs_stored.filter_index, fragmentinput_fs_stored.sample_bounds, fragmentinput_fs_stored.clip_rect, fragmentinput_fs_stored.clip_position };
+    
+    const float4 _e3 = filtered(in_);
+    float4 _e24 = cg_load(destination_image,int3(clamp(asint(asuint(naga_f2i32(floor(in_.position.xy))) - asuint(naga_f2i32(selected_filter.i.yz))), (int(0)).xx, asint(asuint(int2(int2(cg_size_destination_image.xy))) - asuint((int(1)).xx))), int(0)),cg_size_destination_image);
+    const float3 _e26 = to_gamma(_e3.xyz);
+    int3 _e30 = naga_f2i32(round((_e26 * 255.0)));
+    const float3 _e32 = to_gamma(_e24.xyz);
+    int3 _e36 = naga_f2i32(round((_e32 * 255.0)));
+    int _e41 = naga_f2i32(round((_e3.w * 255.0)));
+    int _e44 = naga_f2i32(selected_filter.i.x);
+    int _e51 = naga_f2i32(round((frac(selected_filter.i.x) * 512.0)));
+    const int _e54 = stored_channel(_e36.x, _e30.x, _e41, _e44, _e51);
+    const int _e58 = stored_channel(_e36.y, _e30.y, _e41, _e44, _e51);
+    const int _e62 = stored_channel(_e36.z, _e30.z, _e41, _e44, _e51);
+    const float3 _e75 = to_linear((float3(float(_e54), float(_e58), float(_e62)) / (255.0).xxx));
+    return float4(_e75, (((naga_f2u32(selected_filter.i.w) & 2) != 0) ? 1.0 : ((_e44 == int(15)) ? (float(_e41) / 255.0) : _e24.w)));
+}

@@ -6,6 +6,10 @@ pub mod fs;
 pub mod host;
 pub mod render;
 pub mod soft_raster;
+#[cfg(feature = "switch-framebuffer")]
+pub mod horizon;
+#[cfg(all(target_os = "vita", feature = "vita-gxm"))]
+pub mod vita;
 mod srgb_tables;
 #[cfg(all(
     any(not(feature = "no_std"), test),

@@ -1,0 +1,31 @@
+// SPDX-License-Identifier: MPL-2.0
+// probe.wgsl fs_cube_to_equirect. GXM has no 2D array textures: the six
+// faces (captured with lite_mesh at Budget::probe_width / 2) sit in a 6x1
+// horizontal strip, face k at u in [k/6, (k+1)/6).
+#include "lite_common.cgh"
+
+uniform float4 lite_faces[12];   // forward xyz, up xyz per face
+
+float4 main(float2 uv : TEXCOORD0, uniform sampler2D face_strip : TEXUNIT0) : COLOR
+{
+    float phi = (uv.x - 0.5) * 2.0 * LITE_PI;
+    float theta = uv.y * LITE_PI;
+    float3 d = float3(sin(theta) * cos(phi), cos(theta), sin(theta) * sin(phi));
+    float best = 0.0;
+    float bd = -2.0;
+    float3 f = float3(0.0, 0.0, 1.0);
+    float3 u = float3(0.0, 1.0, 0.0);
+    for (int k = 0; k < 6; k++) {
+        float s = dot(d, lite_faces[2 * k].xyz);
+        if (s > bd) {
+            bd = s;
+            best = (float)k;
+            f = lite_faces[2 * k].xyz;
+            u = lite_faces[2 * k + 1].xyz;
+        }
+    }
+    float3 r = cross(f, u);
+    float2 fuv = float2(dot(d, r) / bd * 0.5 + 0.5, 0.5 - dot(d, u) / bd * 0.5);
+    float2 strip = float2((best + clamp(fuv.x, 0.0, 1.0)) / 6.0, fuv.y);
+    return float4(tex2Dlod(face_strip, float4(strip, 0.0, 0.0)).rgb, 1.0);
+}

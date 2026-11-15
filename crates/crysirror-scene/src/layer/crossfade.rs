@@ -84,10 +84,6 @@ impl LayerSystem {
             "crossfade needs equally sized roots"
         );
         ensure!(
-            a.parent.is_some() == b.parent.is_some(),
-            "crossfade roots must both be children or both roots"
-        );
-        ensure!(
             a.blend == Blend::Normal && b.blend == Blend::Normal,
             "crossfade root blend"
         );
@@ -103,7 +99,9 @@ impl LayerSystem {
                 "overlapping crossfades"
             );
         }
-        ensure!(aa.is_disjoint(&bb), "overlapping crossfade endpoints");
+        // A hidden back page may descend from the primary fore page. Isolate
+        // it from the old input; reparenting it to the fore position is acyclic.
+        ensure!(!bb.contains(&id), "crossfade source contains destination");
         self.transition_serial = self
             .transition_serial
             .checked_add(1)
@@ -174,12 +172,12 @@ impl LayerSystem {
                     .get(&fade.source)
                     .context("crossfade source missing")?;
                 ensure!(
-                    a.parent.is_some() == b.parent.is_some() && a.rect[2..] == b.rect[2..],
+                    a.rect[2..] == b.rect[2..],
                     "crossfade needs equally sized roots"
                 );
                 let aa = descendants(owner, *id);
                 let bb = descendants(owner, fade.source);
-                ensure!(aa.is_disjoint(&bb), "overlapping crossfade endpoints");
+                ensure!(!bb.contains(id), "crossfade source contains destination");
                 for child in aa.union(&bb) {
                     ensure!(
                         owner[child].blend == Blend::Normal,
@@ -276,7 +274,7 @@ impl LayerSystem {
                 .as_ref()
                 .unwrap_or(&out)
                 .iter()
-                .filter(|p| p.owner == client && aa.contains(&p.id))
+                .filter(|p| p.owner == client && aa.contains(&p.id) && !bb.contains(&p.id))
                 .cloned()
                 .collect();
             let mut next = self.clone();

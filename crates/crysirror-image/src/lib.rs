@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MPL-2.0
 //! CPU-only image surfaces and decoder dispatch. No GPU, window or VM policy.
 #![forbid(unsafe_code)]
+pub mod label_image;
+pub mod png_rows;
+pub mod pna;
 use anyhow::{Result, ensure};
 use std::{collections::BTreeMap, io::Cursor, sync::Arc};
 mod fixed_blend;
@@ -70,6 +73,7 @@ pub mod box_blur_span;
 pub mod nearest_cell_sample;
 pub mod box_downscale;
 pub mod tiled_transform;
+pub mod tile_scatter;
 pub mod color;
 pub mod composition;
 pub mod crx;
@@ -79,13 +83,28 @@ pub mod cximage;
 mod dds;
 pub mod dual_texture;
 pub mod effects;
+pub mod nine_patch;
+pub mod coverage_bitmap;
+pub mod coverage_blur;
 pub mod fixed_mix;
 pub mod fixed_affine;
 pub mod byte_raster;
 pub mod row_blit;
 pub mod packed_color_mask;
+pub mod mask_field_pair;
+pub mod axis_box_sample;
+pub mod repeat_scale_sample;
+pub mod stored_gradient_spans;
+pub mod stored_word_spans;
+pub mod linear_mask_offset;
+pub mod spatial_color_band;
+pub mod packed_radial_field;
+pub mod radial_wave_pair;
 pub mod packed_dual_mask;
 pub mod fixed_scanlines;
+pub mod masked_block_sample;
+pub mod elliptic_paint;
+pub mod indexed_plane;
 pub mod clipped_scanline_sample;
 pub mod floating_lines;
 pub mod coverage_bounds;
@@ -93,6 +112,8 @@ pub mod neighbor_relief;
 pub mod native_box_blur;
 pub mod row_tint_blend;
 pub mod masked_backdrop_shift;
+pub mod masked_clip_blit;
+pub mod packed_pair_blend;
 pub mod integer_wipe;
 pub mod axis_projection;
 pub mod triangle_raster;
@@ -102,6 +123,7 @@ pub mod radial_angle;
 pub mod fixed_projection;
 pub mod gradient_overlay;
 pub mod linear_gradient;
+pub mod linear_alpha_lookup;
 pub mod sequential_box_blur;
 pub mod integer_raster;
 pub mod masked_blur;
@@ -427,3 +449,27 @@ pub mod canvas_margins;
 
 pub mod rect_map;
 pub mod transparency_planes;
+
+pub mod row_edge_lift;
+
+pub mod circular_offset;
+
+pub mod affine_sample_blend;
+pub mod linear_channel_transfer;
+
+pub mod radial_twist_sample;
+
+pub mod spectrum_graph;
+
+pub mod png_header;
+pub mod linear_byte_storage;
+pub mod radial_noise_atlas;
+pub mod alpha_brushes;
+pub mod packed_repeat_rows;
+pub mod radial_rgb_brushes;
+pub mod packed_pair_batch;
+pub mod fragment_grid;
+
+pub mod floating_polygon_fragments;
+pub mod overlap_resample;
+pub mod keyed_over;

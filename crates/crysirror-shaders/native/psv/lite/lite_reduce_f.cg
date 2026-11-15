@@ -1,0 +1,15 @@
+// SPDX-License-Identifier: MPL-2.0
+// 4x4 box average of an F32F32 (sum, weight) target: 32x32 -> 8x8 -> 2x2.
+uniform float4 lite_reduce;   // xy source texel size
+
+float4 main(float2 uv : TEXCOORD0, uniform sampler2D src : TEXUNIT0) : COLOR
+{
+    float2 acc = float2(0.0, 0.0);
+    for (int y = 0; y < 4; y++) {
+        for (int x = 0; x < 4; x++) {
+            float2 o = (float2(x, y) - 1.5) * lite_reduce.xy;
+            acc += tex2Dlod(src, float4(uv + o, 0.0, 0.0)).xy;
+        }
+    }
+    return float4(acc / 16.0, 0.0, 1.0);
+}

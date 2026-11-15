@@ -1234,6 +1234,7 @@ mod tests {
             labels: Vec::new(),
             label_metadata: Vec::new(),
             raw_strings: Default::default(),
+            original: None,
             instructions,
         }
     }

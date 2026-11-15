@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
-// Migrated from pinned siglus_rs; see UPSTREAM.md and upstream-files.json.
+// Migrated from pinned siglus_rs; see SOURCE.json and upstream-files.json.
 //! Oldest split-file layout: 15-code elements, scalar cameras, and 20-byte groups.
 //! Keep its wire records separate from later generations; only primitives and
 //! records with identical field order are shared.

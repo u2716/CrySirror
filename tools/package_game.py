@@ -54,7 +54,7 @@ def package(project: Path, output: Path, *, executable: Path | None = None,
         # Include our current engine sources, never third-party/SDK/font binaries.
         source_paths = [ROOT / "Cargo.toml", ROOT / "rust-toolchain.toml", ROOT / "LICENSE"]
         source_paths += sorted(p for p in (ROOT / "crates").rglob("*")
-                               if p.is_file() and (p.suffix in (".rs", ".toml", ".wgsl") or p.name in ("UPSTREAM.md", "upstream-files.json")))
+                               if p.is_file() and (p.suffix in (".rs", ".toml", ".wgsl") or p.name in ("UPSTREAM.md", "SOURCE_NOTES.md", "HRTF_SOURCES.md", "REVERB_SOURCES.md", "SOURCE.json", "upstream-files.json")))
         if (ROOT / "Cargo.lock").is_file():
             source_paths.append(ROOT / "Cargo.lock")
         for source in source_paths:

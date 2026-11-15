@@ -255,7 +255,7 @@ checksum = "b2a5b0a5ab8561c603f16c3b78c24a386b1f70e7fc1b1b1e8c15738828e4a176"
 dependencies = [
  "anstyle",
  "memchr",
- "unicode-width",
+ "unicode-width 0.2.2",
 ]
 
 [[package]]
@@ -1379,7 +1379,7 @@ checksum = "af491d569909a7e4dee0ad7db7f5341fef5c614d5b8ec8cf765732aba3cff681"
 dependencies = [
  "serde",
  "termcolor",
- "unicode-width",
+ "unicode-width 0.2.2",
 ]
 
 [[package]]
@@ -1885,6 +1885,7 @@ dependencies = [
  "crysirror-io",
  "crysirror-resource",
  "crysirror-tasks",
+ "flate2",
  "opus-decoder",
  "rodio",
  "serde",
@@ -1953,13 +1954,14 @@ dependencies = [
  "anyhow",
  "bytemuck",
  "byteorder",
- "cap-std",
  "chardetng",
+ "crysirror-capfs",
  "crysirror-codec-mpeg",
  "crysirror-core",
  "crysirror-network",
  "crysirror-runtime",
  "encoding_rs",
+ "getrandom 0.3.4",
  "image 0.25.10",
  "kira 0.8.7",
  "libc",
@@ -1974,6 +1976,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tracing",
  "tracing-subscriber",
+ "vitasdk-sys",
  "wgpu",
  "winit 0.31.0-beta.3",
 ]
@@ -1993,6 +1996,15 @@ dependencies = [
  "serde_json",
  "thiserror 1.0.69",
  "tracing",
+]
+
+[[package]]
+name = "crysirror-capfs"
+version = "0.2.0"
+dependencies = [
+ "cap-std",
+ "crysirror-vita-io",
+ "tempfile",
 ]
 
 [[package]]
@@ -2029,6 +2041,7 @@ dependencies = [
  "crysirror-resource",
  "crysirror-runtime",
  "crysirror-scene",
+ "crysirror-tasks",
  "crysirror-text",
  "crysirror-vfx",
  "encoding_rs",
@@ -2119,6 +2132,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "crysirror-console-player"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "boa_engine",
+ "crysirror-bgi-integrated",
+ "crysirror-console",
+ "crysirror-core",
+ "crysirror-engine",
+ "crysirror-launch",
+ "crysirror-library",
+ "crysirror-raytrace",
+ "crysirror-render-tier",
+ "crysirror-runtime",
+ "crysirror-scene",
+ "crysirror-script-js",
+ "crysirror-siglus",
+ "crysirror-siglus-integrated",
+ "crysirror-text",
+ "crysirror-wgpu",
+ "crysirror-wgpu-deko3d",
+ "crysirror-wgpu-gxm",
+ "image 0.24.9",
+ "log",
+ "pollster 0.3.0",
+ "serde_json",
+ "wgpu",
+]
+
+[[package]]
 name = "crysirror-core"
 version = "0.2.0"
 dependencies = [
@@ -2142,6 +2185,8 @@ dependencies = [
  "crysirror-engine",
  "crysirror-formats-arc",
  "crysirror-krkr",
+ "crysirror-launch",
+ "crysirror-library",
  "crysirror-majiro",
  "crysirror-network",
  "crysirror-nscripter",
@@ -2165,8 +2210,10 @@ dependencies = [
  "crysirror-tasks",
  "crysirror-tjs2",
  "crysirror-wgpu",
+ "crysirror-willplus",
  "env_logger",
  "gilrs",
+ "glam 0.27.0",
  "image 0.24.9",
  "log",
  "muda",
@@ -2265,6 +2312,7 @@ dependencies = [
  "encoding_rs",
  "image 0.24.9",
  "miniz_oxide 0.7.4",
+ "png 0.18.1",
  "serde",
  "serde_json",
  "tiny-skia 0.12.0",
@@ -2287,6 +2335,7 @@ name = "crysirror-krkr"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "crysirror-codec-emote",
  "crysirror-core",
  "crysirror-formats-arc",
@@ -2306,6 +2355,72 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+]
+
+[[package]]
+name = "crysirror-launch"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "core-foundation 0.10.1",
+ "crysirror-audio",
+ "crysirror-avg32",
+ "crysirror-bgi-integrated",
+ "crysirror-catsystem2",
+ "crysirror-circus",
+ "crysirror-core",
+ "crysirror-engine",
+ "crysirror-formats-arc",
+ "crysirror-krkr",
+ "crysirror-majiro",
+ "crysirror-network",
+ "crysirror-nscripter",
+ "crysirror-puppet",
+ "crysirror-puppet-eluna",
+ "crysirror-qlie",
+ "crysirror-reallive",
+ "crysirror-resource",
+ "crysirror-rfvp",
+ "crysirror-rfvp-integrated",
+ "crysirror-rfvp-vm",
+ "crysirror-runtime",
+ "crysirror-scene",
+ "crysirror-script-js",
+ "crysirror-siglus",
+ "crysirror-siglus-integrated",
+ "crysirror-softpal",
+ "crysirror-sugarpot",
+ "crysirror-system-nnn",
+ "crysirror-system4",
+ "crysirror-tasks",
+ "crysirror-tjs2",
+ "crysirror-vita-io",
+ "crysirror-wgpu",
+ "crysirror-willplus",
+ "image 0.24.9",
+ "log",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "crysirror-library"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "crysirror-resource",
+ "crysirror-text",
+ "image 0.24.9",
+ "serde_json",
+]
+
+[[package]]
+name = "crysirror-lua"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
 ]
 
 [[package]]
@@ -2426,6 +2541,8 @@ dependencies = [
  "crysirror-tasks",
  "crysirror-text",
  "encoding_rs",
+ "icu_normalizer 2.4.0",
+ "log",
  "regex",
  "serde",
  "serde_json",
@@ -2466,6 +2583,16 @@ dependencies = [
  "crysirror-resource",
  "crysirror-vfx",
  "encoding_rs",
+]
+
+[[package]]
+name = "crysirror-render-tier"
+version = "0.2.0"
+dependencies = [
+ "crysirror-console",
+ "crysirror-scene",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -2598,11 +2725,11 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "blake3",
- "cap-std",
  "chrono",
  "crysirror-acoustics",
  "crysirror-asset",
  "crysirror-audio",
+ "crysirror-capfs",
  "crysirror-core",
  "crysirror-formats-arc",
  "crysirror-formats-blackcyc",
@@ -2655,6 +2782,7 @@ dependencies = [
  "crysirror-image",
  "crysirror-runtime",
  "crysirror-tasks",
+ "log",
  "serde_json",
  "tempfile",
 ]
@@ -2713,6 +2841,7 @@ dependencies = [
  "encoding_rs",
  "env_logger",
  "flate2",
+ "getrandom 0.3.4",
  "hex",
  "image 0.24.9",
  "kira 0.9.6",
@@ -2725,7 +2854,11 @@ dependencies = [
  "serde",
  "serde_json",
  "ttf-parser",
+ "unicode-normalization",
+ "unicode-segmentation",
+ "unicode-width 0.1.14",
  "ureq",
+ "vitasdk-sys",
  "wgpu",
  "winit 0.31.0-beta.3",
 ]
@@ -2908,6 +3041,7 @@ dependencies = [
 name = "crysirror-tjs2"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "regex",
 ]
 
@@ -2953,16 +3087,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "crysirror-vita-io"
+version = "0.2.0"
+dependencies = [
+ "vitasdk-sys",
+]
+
+[[package]]
 name = "crysirror-web"
 version = "0.2.0"
 dependencies = [
  "anyhow",
  "crysirror-audio",
  "crysirror-core",
+ "crysirror-engine",
+ "crysirror-library",
  "crysirror-runtime",
+ "crysirror-script-js",
  "crysirror-tasks",
  "crysirror-wgpu",
  "gloo-timers",
+ "image 0.24.9",
  "js-sys",
  "rayon",
  "serde_json",
@@ -2985,6 +3130,7 @@ dependencies = [
  "crysirror-core",
  "crysirror-image",
  "crysirror-puppet",
+ "crysirror-raytrace",
  "crysirror-runtime",
  "crysirror-scene",
  "crysirror-shaders",
@@ -3003,6 +3149,50 @@ dependencies = [
  "serde_json",
  "tempfile",
  "wgpu",
+]
+
+[[package]]
+name = "crysirror-wgpu-deko3d"
+version = "0.2.0"
+dependencies = [
+ "blake3",
+ "crysirror-core",
+ "crysirror-runtime",
+ "crysirror-wgpu",
+ "pollster 0.3.0",
+ "serde",
+ "serde_json",
+ "wgpu",
+]
+
+[[package]]
+name = "crysirror-wgpu-gxm"
+version = "0.2.0"
+dependencies = [
+ "crysirror-shaders",
+ "crysirror-wgpu-deko3d",
+ "serde",
+ "serde_json",
+ "vitasdk-sys",
+]
+
+[[package]]
+name = "crysirror-willplus"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "crysirror-core",
+ "crysirror-formats-arc",
+ "crysirror-image",
+ "crysirror-lua",
+ "crysirror-resource",
+ "crysirror-runtime",
+ "crysirror-tasks",
+ "crysirror-text",
+ "crysirror-vfx",
+ "encoding_rs",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -6920,7 +7110,7 @@ dependencies = [
  "textwrap",
  "thiserror 2.0.18",
  "unicode-segmentation",
- "unicode-width",
+ "unicode-width 0.2.2",
 ]
 
 [[package]]
@@ -10309,7 +10499,7 @@ checksum = "6ecfad6c3abc80a577f2b91c1e412ee57e7a060d430b553c1b0c940974ebcd49"
 dependencies = [
  "icu_segmenter",
  "smawk",
- "unicode-width",
+ "unicode-width 0.2.2",
 ]
 
 [[package]]
@@ -10891,6 +11081,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3b09c83c3c29d37506a3e260c08c03743a6bb66a9cd432c6934ab501a190571f"
 
 [[package]]
+name = "unicode-normalization"
+version = "0.1.26"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75cd3fb03d5288b3ba9a1ee103ac7e9cbb59f0b03d64f8ddfcc04dd42758a85d"
+dependencies = [
+ "tinyvec",
+]
+
+[[package]]
 name = "unicode-properties"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10907,6 +11106,12 @@ name = "unicode-segmentation"
 version = "1.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c6f5d3c3b1bf09027a88a6bc961fc00497d651009560b5463668dc81b0fa87a8"
+
+[[package]]
+name = "unicode-width"
+version = "0.1.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7dd6e30e90baa6f72411720665d41d89b9a3d039dc45b8faea1ddd07f617f6af"
 
 [[package]]
 name = "unicode-width"
@@ -11065,6 +11270,12 @@ dependencies = [
  "quote",
  "syn 2.0.119",
 ]
+
+[[package]]
+name = "vitasdk-sys"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "665d8a491ad572e0ebc103846c4a51e66b641c942391b7241f91c413a3a301a9"
 
 [[package]]
 name = "voracious_radix_sort"

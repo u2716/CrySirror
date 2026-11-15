@@ -1,6 +1,7 @@
 # Native DLL semantics adopted from siglus_rs 5f358ef (MPL-2.0).
 # First-class workspace maintenance; provenance/patches: SOURCE.json.
 [package]
+license-file.workspace = true
 name = "crysirror-reallive-dll"
 version.workspace = true
 edition.workspace = true

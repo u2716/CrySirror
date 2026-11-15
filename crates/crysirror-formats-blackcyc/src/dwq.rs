@@ -300,3 +300,5 @@ impl ImageFormat for Dwq {
         Ok(image)
     }
 }
+
+mod indexed;

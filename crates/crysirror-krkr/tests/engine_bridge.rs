@@ -218,17 +218,8 @@ fn failure(r: &mut Runtime) -> String {
 
 #[test]
 fn unsupported_natives_fail_visibly() {
-    let (_t, mut r) = fixture(
-        r#"var win = new Window(); var base = new Layer(win, null);
-           var l = new Layer(win, base); l.loadImages("image/chara");
-           l.fillRect(1, 1, 4, 4, 0x80ffffff); l.getMainPixel(0, 0);"#,
-        &[],
-    );
-    // Partial translucent fillRect is a shared canvas replace-fill now; a
-    // still-unmapped native fails visibly after it.
-    let e = failure(&mut r);
-    assert!(e.contains("Layer.getMainPixel"), "{e}");
-
+    // Layer.getMainPixel is mapped (shared resident pixel lookup), so it no
+    // longer serves as the unmapped-native example.
     let (_t, mut r) = fixture(r#"Plugins.link("nosuchplugin.dll");"#, &[]);
     let e = failure(&mut r);
     assert!(e.contains("native DLLs are never loaded"), "{e}");

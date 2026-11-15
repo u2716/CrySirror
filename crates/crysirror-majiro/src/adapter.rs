@@ -30,6 +30,8 @@ mod native_audio;
 mod voice_pan;
 mod fast_mode;
 mod native_flags;
+mod audio_wait;
+mod clock_policy;
 mod continuations;
 mod input_files;
 mod font_policy;
@@ -94,6 +96,7 @@ pub struct MajiroVm {
     fast_disable_depth: i32,
     fast_mode: fast_mode::FastMode,
     native_flags: native_flags::NativeFlags,
+    clock: clock_policy::NativeClock,
     wait: Option<native_services::NativeWait>,
     audio: native_audio::NativeAudio,
     picture_key: Option<crysirror_resource::KeyMaterial>,
@@ -200,6 +203,7 @@ impl MajiroVm {
             fast_disable_depth: 0,
             fast_mode: fast_mode::FastMode::default(),
             native_flags: native_flags::NativeFlags::default(),
+            clock: clock_policy::NativeClock::default(),
             wait: None,
             audio: native_audio::NativeAudio::default(),
             picture_key: None,
@@ -319,12 +323,6 @@ impl MajiroVm {
     //with native defaults640/480, independently of the physical host window.
     let value=self.native_client_size[usize::from(*hash==0x8c283f7f)];
     Ok(Some(if *returns {vec![Value::Integer(value)]} else {vec![]}))
-   },
-   0x6584f13e => {
-    ensure!(a.is_empty(),"Majiro timer ABI");
-    //401CB0 ->40A6A0 returns the update's cached timeGetTime word.
-    //Use the shared owner clock and preserve the original low32-bit wrap.
-    Ok(Some(if *returns {vec![Value::Integer(h.now_ms() as u32 as i32)]} else {vec![]}))
    },
    0xcf35f0e3 => self.native_wait(*pc,a,*returns,h),
    0x8c7f4c1e => {
@@ -539,7 +537,7 @@ impl MajiroVm {
         }
         let mut m = self.machine.take().unwrap();
         let result = (|| {
-            let now=h.now_ms();if self.media_check.is_some(){m.preserve_budget_continuation();}m.begin_tick(now);
+            let now=u64::from(self.native_now());if self.media_check.is_some(){m.preserve_budget_continuation();}m.begin_tick(h.now_ms());
             let mut selected=false;let mut quantum=0;let mut rounds=0;
             let budget=budget.max(200_000);
             for _ in 0..budget {
@@ -549,7 +547,7 @@ impl MajiroVm {
                         rounds+=1;
                         selected=m.select_ready(now)?;
                     }
-                    if !selected {return Ok(VmYield::WaitUntil(now.saturating_add(1)));}
+                    if !selected {return Ok(VmYield::WaitUntil(h.now_ms().saturating_add(1)));}
                     quantum=0;
                 }
                 if m.take_initializer_finished() {
@@ -589,7 +587,7 @@ impl MajiroVm {
                         let ready=self.try_library(&mut m,&event,h).with_context(|| format!(
                             "Majiro {} pc={:#x} line={} load_library",m.module_name(),m.pc,m.line))?;
                         if !ready {
-                            m.defer_current(now.saturating_add(1));selected=false;
+                            m.defer_owner_update();selected=false;
                         }
                         continue;
                     }
@@ -597,9 +595,11 @@ impl MajiroVm {
                         if arguments.first() == Some(&Value::Integer(-2)) {
                             let id = m.context_id();
                             if self.round_yields.remove(&id) {
+                                self.clock.frozen=false;
                                 m.acknowledge(if *returns { vec![Value::Integer(0)] } else { vec![] })?;
                             } else {
                                 self.round_yields.insert(id);
+                                self.clock.frozen=true;
                                 m.defer_round();
                                 selected = false;
                             }
@@ -610,7 +610,7 @@ impl MajiroVm {
                         let done = self.process_text(&mut m, h).with_context(|| format!(
                             "Majiro {} pc={:#x} line={} PROC", m.module_name(), m.pc, m.line))?;
                         if !done {
-                            m.defer_current(now.saturating_add(1));
+                            m.defer_owner_update();
                             selected = false;
                         }
                         continue;
@@ -649,7 +649,7 @@ impl MajiroVm {
                                 continue;
                             }
                             Some(None) => {
-                                m.defer_current(now.saturating_add(1));
+                                m.defer_owner_update();
                                 selected = false;
                                 continue;
                             }
@@ -663,8 +663,11 @@ impl MajiroVm {
                         )
                     })?;
                     let Some(output) = output else {
-                        if self.media_check.is_some(){m.preserve_budget_continuation();return Ok(VmYield::WaitUntil(now.saturating_add(1)));}
-                        m.defer_current(now.saturating_add(1));selected=false;continue;
+                        if self.media_check.is_some(){m.preserve_budget_continuation();return Ok(VmYield::WaitUntil(h.now_ms().saturating_add(1)));}
+                        if matches!(&event,Event::Native{hash:0xe4e3b40d,..}) {
+                            m.defer_owner_update();
+                        } else { m.defer_current(now.saturating_add(1)); }
+                        selected=false;continue;
                     };
                     m.acknowledge(output)?;
                     if self.exit_requested{return Ok(VmYield::Halted);}
@@ -680,7 +683,7 @@ impl MajiroVm {
         if result.is_ok() {
             self.flush_settings(h)?;
             self.poll_save_writes();
-            self.gfx.render(h.now_ms() as u32);
+            self.gfx.render(self.native_now());
             self.gfx.present(self.client, h)?;
         }
         result
@@ -709,9 +712,14 @@ impl VmAdapter for MajiroVm {
         }
         let now = h.now_ms();
         if self.input_tick != Some(now) {
+            self.publish_native_clock(now).map_err(|error| {
+                self.last_error = Some(format!("{error:#}"));
+                Error::Io(format!("{error:#}"))
+            })?;
             self.input_tick = Some(now);
+            let game_now=u64::from(self.native_now());
             match h.input_sources(self.client){
-                Ok(observation)=>self.input.update_sources(&observation.sources,now),
+                Ok(observation)=>self.input.update_sources(&observation.sources,game_now),
                 Err(Error::Unsupported(_)) if self.input.joystick.mode==0=>self.input.update(&input),
                 Err(error)=>return Err(error),
             }
@@ -721,7 +729,7 @@ impl VmAdapter for MajiroVm {
                     // Native window key transitions also update fast-mode
                     // policy; a Ctrl hold is not only a middle-click alias.
                     self.update_fast_mode_input(h)?;
-                    self.filter_native_clicks(h.now_ms() as u32);
+                    self.filter_native_clicks(self.native_now());
                     let read = self.machine.as_ref().unwrap().native_read_flag();
                     self.refresh_fast_read_flag(read);
                     let fast = self.fast_skip_active(h)?;
@@ -754,7 +762,7 @@ impl VmAdapter for MajiroVm {
         ))
     }
     fn diagnostics(&self) -> Vec<u8> {
-        serde_json::to_vec(&json!({"vm":"original-majiro-mjo","module":self.machine.as_ref().map(Machine::module_name),"module_load_pending":self.library.is_some(),"script_threads":self.machine.as_ref().map(Machine::thread_count),"event_hooks":self.machine.as_ref().map(Machine::hook_count),"suspended_native_calls":self.suspended_services.len(),"text_buffer_bytes":self.text_buffer.len(),"console":self.console.diagnostics(),"pc":self.machine.as_ref().map(|m|m.pc),"line":self.machine.as_ref().map(|m|m.line),"instructions":self.machine.as_ref().map(|m|m.executed),"engine_api_calls":self.api_calls,"pages":self.gfx.pages.len(),"primary":self.gfx.primary,"sprites":self.gfx.sprites.len(),"render_lock":self.gfx.lock,"warnings":self.gfx.warnings,"font":self.font.as_ref().map(|font|json!({"requested":font.requested,"alias":font.alias,"height":font.height,"half_width":font.half_width})),"native_profile_enabled":self.native_abi,"rng":self.rng.as_ref().map(NativeRng::snapshot),"settings":{"profile":self.config.settings_profile,"import_performed":false,"loaded":self.settings.is_some(),"source":self.settings.as_ref().map(|s|if s.loaded_portable_file{"portable_client_save"}else{"native_env_defaults"}),"entries":self.settings.as_ref().map(NativeSettings::entries),"pending_write":self.settings_write.is_some(),"commits":self.settings.as_ref().map(|s|s.commits)},"native_layout":self.native_layout.name(),"module_guard":if self.config.executable.is_some(){"native_abi_structure"}else{"authored_classic_contract"},"auto_mode_config":self.auto_mode_config,"native_client_size":self.native_client_size,"native_wait":{"pending":self.wait.is_some(),"pc":self.wait.as_ref().map(|wait|wait.pc),"deadline_ms":self.wait.as_ref().map(|wait|wait.deadline)},"fast_disable_depth":self.fast_disable_depth,"fast_mode":self.fast_mode_diagnostics(),"keyboard_locks":{"policy":self.config.keyboard_lock_policy,"physical_imported":false,"physical_control":false},"run_mode":self.config.run_mode,"error":self.last_error,"owns_framebuffer":false})).unwrap_or_default()
+        serde_json::to_vec(&json!({"vm":"original-majiro-mjo","module":self.machine.as_ref().map(Machine::module_name),"module_load_pending":self.library.is_some(),"script_threads":self.machine.as_ref().map(Machine::thread_count),"event_hooks":self.machine.as_ref().map(Machine::hook_count),"suspended_native_calls":self.suspended_services.len(),"text_buffer_bytes":self.text_buffer.len(),"console":self.console.diagnostics(),"pc":self.machine.as_ref().map(|m|m.pc),"line":self.machine.as_ref().map(|m|m.line),"instructions":self.machine.as_ref().map(|m|m.executed),"engine_api_calls":self.api_calls,"pages":self.gfx.pages.len(),"primary":self.gfx.primary,"sprites":self.gfx.sprites.len(),"render_lock":self.gfx.lock,"warnings":self.gfx.warnings,"font":self.font.as_ref().map(|font|json!({"requested":font.requested,"alias":font.alias,"height":font.height,"half_width":font.half_width})),"native_profile_enabled":self.native_abi,"rng":self.rng.as_ref().map(NativeRng::snapshot),"settings":{"profile":self.config.settings_profile,"import_performed":false,"loaded":self.settings.is_some(),"source":self.settings.as_ref().map(|s|if s.loaded_portable_file{"portable_client_save"}else{"native_env_defaults"}),"entries":self.settings.as_ref().map(NativeSettings::entries),"pending_write":self.settings_write.is_some(),"commits":self.settings.as_ref().map(|s|s.commits)},"native_layout":self.native_layout.name(),"module_guard":if self.config.executable.is_some(){"native_abi_structure"}else{"authored_classic_contract"},"auto_mode_config":self.auto_mode_config,"native_client_size":self.native_client_size,"native_wait":{"pending":self.wait.is_some(),"pc":self.wait.as_ref().map(|wait|wait.pc),"deadline_ms":self.wait.as_ref().map(|wait|wait.deadline)},"fast_disable_depth":self.fast_disable_depth,"fast_mode":self.fast_mode_diagnostics(),"clock":self.clock.diagnostics(),"keyboard_locks":{"policy":self.config.keyboard_lock_policy,"physical_imported":false,"physical_control":false},"run_mode":self.config.run_mode,"error":self.last_error,"owns_framebuffer":false})).unwrap_or_default()
     }
 }
 struct Factory;

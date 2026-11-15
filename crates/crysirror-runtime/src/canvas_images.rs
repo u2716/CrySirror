@@ -333,7 +333,7 @@ impl ImageProcess for Job {
             }
         }
         if let Some(task) = &mut self.task {
-            match task.try_take() {
+            match task.poll_owner() {
                 Ok(None) => (),
                 Ok(Some(resource)) => {
                     self.state = ImageProcessState::Ready(resource);

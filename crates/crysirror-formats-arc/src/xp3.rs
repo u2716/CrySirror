@@ -34,6 +34,17 @@ impl ArchiveFormat for Xp3 {
         context: &DecodeContext,
     ) -> Result<Box<dyn Archive>> {
         let index = parse_index(source, context)?;
+        let info_names: BTreeMap<u32, Box<str>> = index
+            .archive
+            .plans
+            .iter()
+            .enumerate()
+            .filter_map(|(id, plan)| match plan {
+                EntryPlan::Segments { facts, .. } => Some((id as u32, facts.info_name.clone()?)),
+                _ => None,
+            })
+            .collect();
+        let renumbered = !index.specials.is_empty();
         let archive: Box<dyn Archive> = if let Some(d) = index.hxv4 {
             ensure!(
                 index.specials.is_empty(),
@@ -58,7 +69,21 @@ impl ArchiveFormat for Xp3 {
         } else {
             Box::new(index.archive)
         };
-        inline_names::publish(archive)
+        // CXDEC filename recovery renumbers entries; rebuild the table from
+        // the published view in that (rare) case.
+        let info_names = if renumbered && !info_names.is_empty() {
+            archive
+                .entries()
+                .iter()
+                .filter_map(|e| {
+                    let m = archive.entry_metadata(e.id);
+                    Some((e.id, m["xp3_info_name"].as_str()?.into()))
+                })
+                .collect()
+        } else {
+            info_names
+        };
+        inline_names::publish(archive, &info_names)
     }
 }
 // Bound-XP3 address and continuation rules follow krkrz
@@ -375,9 +400,7 @@ fn file_entry(
         size <= context.limits.max_entry_size,
         "XP3 decoded entry byte limit"
     );
-    let native_name = name.clone();
-    let has_inline = inline_name.is_some();
-    let path = if let Some(inline) = inline_name {
+    let (path, info_name) = if let Some(inline) = inline_name {
         ensure!(
             inline.hash == hash,
             "XP3 inline filename hash does not match File adlr"
@@ -390,26 +413,33 @@ fn file_entry(
             direct || token,
             "XP3 inline filename does not match original info name/token"
         );
-        inline.name.replace('\\', "/")
+        (inline.name.replace('\\', "/"), Some(name.into_boxed_str()))
     } else {
-        names.get(&hash).cloned().unwrap_or(name)
+        (names.get(&hash).cloned().unwrap_or(name), None)
     };
-    let mut entry = ArchiveEntry {
+    let entry = ArchiveEntry {
         id,
         path,
         size,
         stored_size,
-        metadata: serde_json::json!({"format":"kirikiri/xp3","version":version,"flags":flags,"adler32":hash,"timestamp":timestamp,"segment_count":segments.len(),"declared_size":declared_size,"declared_stored_size":declared_stored_size}),
+        metadata: serde_json::Value::Null,
     };
-    if has_inline {
-        entry.metadata["xp3_inline_name"] = serde_json::json!(entry.path);
-        entry.metadata["xp3_info_name"] = serde_json::json!(native_name);
-    }
     Ok((
         entry,
         EntryPlan::Segments {
             segments,
             encrypted: flags & 0x8000_0000 != 0,
+            facts: Xp3Facts {
+                version: version as u8,
+                flags,
+                adler32: hash,
+                timestamp,
+                declared_size,
+                declared_stored_size,
+                info_name,
+                visible_name: None,
+                hxv4_id: None,
+            },
         },
     ))
 }

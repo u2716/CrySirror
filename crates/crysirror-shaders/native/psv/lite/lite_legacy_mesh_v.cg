@@ -1,0 +1,13 @@
+// SPDX-License-Identifier: MPL-2.0
+// mesh.wgsl vs_main (shared Scene3d legacy meshes): exact port, not reduced.
+#include "lite_common.cgh"
+
+uniform float4 lite_view_proj[4];
+
+void main(float3 position : POSITION, float3 normal : NORMAL, float4 color : COLOR,
+          out float4 clip : POSITION, out float3 o_normal : TEXCOORD0, out float4 o_color : TEXCOORD1)
+{
+    clip = lite_xform(lite_view_proj[0], lite_view_proj[1], lite_view_proj[2], lite_view_proj[3], float4(position, 1.0));
+    o_normal = normal;
+    o_color = color;
+}

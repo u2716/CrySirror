@@ -41,7 +41,9 @@ pub fn is_single_column(c: char) -> bool {
 /// Column count: one per single-column character, two otherwise (a
 /// surrogate pair counts two).
 pub fn columns(text: &str) -> usize {
-    text.chars().map(|c| if is_single_column(c) { 1 } else { 2 }).sum()
+    text.chars()
+        .map(|c| if is_single_column(c) { 1 } else { 2 })
+        .sum()
 }
 
 #[cfg(test)]
@@ -49,7 +51,10 @@ mod tests {
     #[test]
     fn tables_are_paired() {
         assert_eq!(super::FULL.chars().count(), super::HALF.chars().count());
-        assert_eq!(super::VOICED.chars().count() * 2, super::VOICED_HALF.chars().count());
+        assert_eq!(
+            super::VOICED.chars().count() * 2,
+            super::VOICED_HALF.chars().count()
+        );
     }
     #[test]
     fn converts_and_counts() {

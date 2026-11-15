@@ -1,8 +1,8 @@
 // Copyright (c) 2026 CrySirror contributors. MPL-2.0.
-//! Native EFFECT state hydration. No SetParam callback, Calcu or CountUp is
-//! replayed during raw hydration: saved counters and rectangles are
-//! authoritative. SUNA/RAINBOW enqueue their actual InitParameter work for
-//! ordered worker/RNG completion before restored presentation is admitted.
+//! Native EFFECT hydration follows each class's InitParameter. Empty hooks
+//! preserve counters and raw work; setters restart exactly their own fields.
+//! SUNA/RAIN/RAINBOW/HAE queue actual InitParameter work for ordered worker/RNG
+//! completion before any restored presentation is admitted.
 use super::*;
 use crate::native_save::SavedEffect;
 impl Bridge {
@@ -35,6 +35,7 @@ impl Bridge {
         for (slot, record) in records.iter().enumerate() {
             let slot = slot as i32;
             let words = &record.words;
+            self.effect_backing.insert(slot,*words);
             // Disabled native records must not invoke a stale/unknown class,
             // but their real raw parameter/counter/previous-effect state still
             // belongs to this native slot and must survive another save.
@@ -76,6 +77,82 @@ impl Bridge {
                 self.picture_numbers.insert(slot,words[1]);
             }
             match words[2] {
+                137=>{ensure!(self.animation.is_some(),"NNN saved ANIMATION requires its Source32 class");let mut state=crate::native_picture_effect::PictureEffectState::parse(137,&original_p[..17])?;state.kind=crate::native_picture_effect::PictureEffectKind::Animation{parameters:original_p[..17].try_into().unwrap()};state.frames=frames;state.count=count;state.parameter_frames=original_p[0];state.validate()?;self.picture_effects.insert(slot,state);}
+                81=>{let state=crate::native_picture_effect::PictureEffectState::parse_for_canvas(81,&original_p[..18],self.bindings.size)?;self.picture_effects.insert(slot,state);self.saved_hahen.insert(slot);}
+                97=>{
+                    let parameters:[i32;9]=original_p[..9].try_into().unwrap();
+                    let state=crate::native_picture_effect::PictureEffectState{kind:crate::native_picture_effect::PictureEffectKind::BathWindow{parameters},frames,count,parameter_frames:parameters[0]};state.validate()?;self.picture_effects.insert(slot,state);
+                }
+                83=>{
+                    let parameters:[i32;15]=original_p[..15].try_into().unwrap();
+                    let state=crate::native_picture_effect::PictureEffectState{kind:crate::native_picture_effect::PictureEffectKind::Beach{parameters},frames,count,parameter_frames:parameters[0]};state.validate()?;self.picture_effects.insert(slot,state);
+                }
+                command @ (70|71|138)=>{
+                    let mut state=if command==138 {
+                        let raw:[i32;32]=original_p[..32].try_into().unwrap();
+                        let parameters=crate::native_hotaru_new::restored(&raw,self.bindings.size);
+                        crate::native_picture_effect::PictureEffectState::parse_for_canvas(command,&parameters,self.bindings.size)?
+                    } else {crate::native_picture_effect::PictureEffectState::parse_for_canvas(command,&original_p[..if command==70 {24}else{20}],self.bindings.size)?};
+                    state.count=0;self.picture_effects.insert(slot,state);self.saved_particles.insert(slot,command);
+                }
+                12=>{
+                    let parameters:[i32;4]=original_p[..4].try_into().unwrap();
+                    let state=crate::native_picture_effect::PictureEffectState{kind:crate::native_picture_effect::PictureEffectKind::Flower{parameters},frames,count,parameter_frames:parameters[0]};state.validate()?;self.picture_effects.insert(slot,state);
+                }
+                command @ (14|57)=>{
+                    let state=crate::native_picture_effect::PictureEffectState::parse_for_canvas(command,&original_p[..3],self.bindings.size)?;
+                    self.picture_effects.insert(slot,state);self.saved_particles.insert(slot,command);
+                }
+                82=>{
+                    // CLOUD inherits the empty InitParameter hook: all16
+                    // words/count/countMax and warm class XY survive restore.
+                    let parameters:[i32;16]=original_p[..16].try_into().unwrap();
+                    let state=crate::native_picture_effect::PictureEffectState{kind:crate::native_picture_effect::PictureEffectKind::Cloud{parameters},frames,count,parameter_frames:parameters[0]};state.validate()?;self.picture_effects.insert(slot,state);
+                }
+                80=>{let state=crate::native_picture_effect::PictureEffectState::parse_for_canvas(80,&original_p[..16],self.bindings.size)?;self.picture_effects.insert(slot,state);}
+                69=>{
+                    // InitParameter replays all32 words, including resetting
+                    // counters and the shared class field's final setter key.
+                    let state=crate::native_picture_effect::PictureEffectState::parse_for_canvas(69,&original_p[..32],self.bindings.size)?;
+                    self.picture_effects.insert(slot,state);self.saved_hamon.insert(slot);
+                }
+                112=>{
+                    // No InitParameter override: retain original native words
+                    // and both counters independently of parameter0.
+                    let parameters:[i32;16]=original_p[..16].try_into().unwrap();
+                    let state=crate::native_picture_effect::PictureEffectState{kind:crate::native_picture_effect::PictureEffectKind::CharaMetal{parameters},frames,count,parameter_frames:parameters[0]};state.validate()?;self.picture_effects.insert(slot,state);
+                }
+                78=>{
+                    // Inherited InitParameter is empty: keep all saved words,
+                    // authoritative count/countMax and class-independent state.
+                    let parameters:[i32;16]=original_p[..16].try_into().unwrap();
+                    let state=crate::native_picture_effect::PictureEffectState{kind:crate::native_picture_effect::PictureEffectKind::Komorebi{parameters},frames,count,parameter_frames:parameters[0]};state.validate()?;self.picture_effects.insert(slot,state);
+                }
+                15=>{
+                    // Raw InitParameter replays the three-word setter and
+                    // restarts all seven global counters in native slot order.
+                    let state=crate::native_picture_effect::PictureEffectState::parse_for_canvas(15,&original_p[..3],self.bindings.size)?;
+                    self.picture_effects.insert(slot,state);self.saved_sun_rays.insert(slot);
+                }
+                85=>{
+                    // Raw InitParameter initializes the class buffer, not the
+                    // EFFECT counters or its already stored parameter words.
+                    let parameters:[i32;12]=original_p[..12].try_into().unwrap();
+                    let state=crate::native_picture_effect::PictureEffectState{kind:crate::native_picture_effect::PictureEffectKind::SpeedLine{parameters},frames,count,parameter_frames:parameters[0]};state.validate()?;
+                    self.picture_effects.insert(slot,state);self.saved_speed_line.insert(slot);
+                }
+                102=>{
+                    // InitParameter replays the nine-word setter and resets
+                    // its per-slot class distance, independent of saved count.
+                    let state=crate::native_picture_effect::PictureEffectState::parse_for_canvas(102,&original_p[..9],self.bindings.size)?;
+                    self.picture_effects.insert(slot,state);
+                }
+                42=>{
+                    // Source InitParameter copies6words and replays SetParam,
+                    // including class-wide stars and original random order.
+                    let state=crate::native_picture_effect::PictureEffectState::parse_for_canvas(42,&original_p[..6],self.bindings.size)?;
+                    self.picture_effects.insert(slot,state);self.saved_kira.insert(slot);
+                }
                 0 => {
                     self.passive_counts.insert(slot, (count, frames));
                 }
@@ -85,8 +162,81 @@ impl Bridge {
                     state.frames = frames;
                     self.mosaics.insert(slot, state);
                 }
-                33|55|65|72|96|121|122|123|125|126|133=>{
+                13=>{
+                    // InitParameter invokes SetParam (including its random
+                    // particle bank). Defer that class operation in slot order.
+                    let state=crate::native_picture_effect::PictureEffectState::parse(13,&original_p[..8])?;
+                    self.picture_effects.insert(slot,state);self.saved_rain.insert(slot);
+                }
+                26=>{
+                    // REMEMBER's setter leaves ALL raw parameter words intact
+                    // while restarting EFFECT count/max; class Printclock stays.
+                    let state=crate::native_picture_effect::PictureEffectState{kind:crate::native_picture_effect::PictureEffectKind::Remember{parameters:original_p.try_into().unwrap()},frames:99999,count:0,parameter_frames:original_p[0]};
+                    self.picture_effects.insert(slot,state);
+                }
+                51=>{
+                    // InitParameter copies32 words to SetParam, whose broken
+                    //10-word copy leaves word10 undefined. Typed setter defines
+                    // that word0, resetscount/max and queues shared bank RNG.
+                    let state=crate::native_picture_effect::PictureEffectState::parse_for_canvas(51,&original_p[..32],self.bindings.size)?;
+                    self.picture_effects.insert(slot,state);self.saved_taiyo.insert(slot);
+                }
+                93=>{
+                    // InitParameter updates class constants/20solitons without
+                    // running SetParam, preserving original EFFECT count/max.
+                    let parameters:[i32;12]=original_p[..12].try_into().unwrap();
+                    let state=crate::native_picture_effect::PictureEffectState{kind:crate::native_picture_effect::PictureEffectKind::GrassPlane{parameters},frames,count,parameter_frames:original_p[0]};state.validate()?;
+                    self.picture_effects.insert(slot,state);self.saved_grass.insert(slot);
+                }
+                108=>{
+                    let state=crate::native_picture_effect::PictureEffectState::parse(108,&original_p[..16])?;
+                    self.picture_effects.insert(slot,state);self.saved_hae.insert(slot);
+                }
+                56=>{
+                    // RAIN2 InitParameter reruns SetParam: only eight raw
+                    // words persist; all per-slot motion and initRnd restart.
+                    let state=crate::native_picture_effect::PictureEffectState::parse(56,&original_p[..8])?;
+                    self.picture_effects.insert(slot,state);
+                }
+                24=>{
+                    // WATER InitParameter reruns its four-word setter, resetting
+                    // EFFECT counters but preserving its class-global Print clock.
+                    let state=crate::native_picture_effect::PictureEffectState::parse_for_canvas(24,&original_p[..4],self.bindings.size)?;
+                    self.picture_effects.insert(slot,state);
+                }
+                87|88|89|114|115|116|117|118=>{
+                    let parameters=crate::native_picture_geo::GeoParameters::from_saved(words[2],original_p)?;
+                    let parameter_frames=parameters.parameter0();
+                    let state=crate::native_picture_effect::PictureEffectState{kind:crate::native_picture_effect::PictureEffectKind::Geometry{parameters},frames,count,parameter_frames};
+                    state.validate()?;self.picture_effects.insert(slot,state);
+                }
+                19|22|27|28|33|40|48|55|60|61|64|65|67|72|76|79|86|91|92|95|96|98|101|104|105|111|121|122|123|125|126|133|136|139|140=>{
                     let kind=match words[2] {
+                        76=>crate::native_picture_effect::PictureEffectKind::Slash{parameters:original_p[..6].try_into().unwrap()},
+                        28=>crate::native_picture_effect::PictureEffectKind::Circle{parameters:original_p[..8].try_into().unwrap(),command:28,active:true},
+                        60|101=>crate::native_picture_effect::PictureEffectKind::MaskWipe{command:words[2],parameters:original_p[..10].try_into().unwrap()},
+                        92=>crate::native_picture_effect::PictureEffectKind::Soyosoyo{parameters:original_p[..13].try_into().unwrap()},
+                        105=>crate::native_picture_effect::PictureEffectKind::MovieWarp{parameters:original_p[..16].try_into().unwrap()},
+                        98=>crate::native_picture_effect::PictureEffectKind::FaceAnimation{parameters:original_p[..15].try_into().unwrap()},
+                        64=>crate::native_picture_effect::PictureEffectKind::Turn{parameters:original_p[..36].try_into().unwrap()},
+                        140=>crate::native_picture_effect::PictureEffectKind::TurnNew{parameters:original_p[..36].try_into().unwrap()},
+                        67=>crate::native_picture_effect::PictureEffectKind::Perspective{parameters:original_p[..16].try_into().unwrap()},
+                        27=>crate::native_picture_effect::PictureEffectKind::Ke{parameters:original_p[..144].try_into().unwrap()},
+                        111=>crate::native_picture_effect::PictureEffectKind::Fish{parameters:original_p[..176].try_into().unwrap()},
+                        91=>crate::native_picture_effect::PictureEffectKind::Waterfall{parameters:original_p[..8].try_into().unwrap()},
+                        22=>crate::native_picture_effect::PictureEffectKind::Kagerou{parameters:original_p[..17].try_into().unwrap()},
+                        95=>crate::native_picture_effect::PictureEffectKind::WaterDrop{parameters:original_p[..3].try_into().unwrap()},
+                        104=>crate::native_picture_effect::PictureEffectKind::Konoha{parameters:original_p[..16].try_into().unwrap()},
+                        79=>crate::native_picture_effect::PictureEffectKind::FullAnime{parameters:original_p[..16].try_into().unwrap()},
+                        139=>crate::native_picture_effect::PictureEffectKind::CharaMosaic{parameters:original_p[..16].try_into().unwrap()},
+                        48=>crate::native_picture_effect::PictureEffectKind::BossDeath{parameters:original_p[..11].try_into().unwrap()},
+                        86=>crate::native_picture_effect::PictureEffectKind::Zantetsu{parameters:original_p[..13].try_into().unwrap()},
+                        // Empty InitParameter preserves all64 saved words,
+                        // including17/18/62/63 Print clocks, without SetParam.
+                        61=>crate::native_picture_effect::PictureEffectKind::SpecialMove{parameters:original_p[..64].try_into().unwrap()},
+                        19=>crate::native_picture_effect::PictureEffectKind::BankAnimation{parameters:original_p[..17].try_into().unwrap()},
+                        40=>crate::native_picture_effect::PictureEffectKind::Change{parameters:original_p[..8].try_into().unwrap()},
+                        136=>crate::native_picture_effect::PictureEffectKind::TaClip{parameters:original_p[..35].try_into().unwrap()},
                         72=>crate::native_picture_effect::PictureEffectKind::Meisai{parameters:original_p[..16].try_into().unwrap()},
                         96=>{self.saved_rainbow.insert(slot);crate::native_picture_effect::PictureEffectKind::Rainbow{parameters:original_p[..16].try_into().unwrap()}},
                         33=>crate::native_picture_effect::PictureEffectKind::Relief{parameters:original_p[..16].try_into().unwrap()},

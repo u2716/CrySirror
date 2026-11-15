@@ -34,7 +34,7 @@ resource checkpoint; current dependencies are defined by workspace manifests.
 The port derives from the actual runtime decoder at siglus_rs commit
 `5f358ef1360b0439e92aed2b749e8f25d8721954`. Complete relevant resource source files
 were inspected; source hashes, provenance and port changes are recorded in
-crates/crysirror-siglus/UPSTREAM.md and upstream-files.json.
+crates/crysirror-siglus/SOURCE_NOTES.md and upstream-files.json.
 
 The original runtime and the format-tool G00 decoders are different. The runtime
 preserves empty PATNO slots and signed reused-cut lengths and crops by the display

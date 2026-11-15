@@ -71,7 +71,7 @@ struct Decoration {
     fade: bool,
     ticks: u32,
 }
-fn linear(
+pub(crate) fn linear(
     channels: Vec<u8>,
     target: Vec<f32>,
     ticks: u32,

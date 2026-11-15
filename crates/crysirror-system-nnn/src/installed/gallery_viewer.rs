@@ -9,19 +9,27 @@ use crysirror_image::{effects::ImageEffect, sprite_alpha::SpriteAlpha};
 use std::{collections::VecDeque, sync::Arc};
 mod draw_work;
 mod difference;
+mod native_animation;
 use crate::native_cg_difference::{DifferenceProfile,DifferenceState,OldDifferenceImage};
 use crate::image_bridge::{NativePictureViews,PicturePreparation};
 const ROOT: u32 = 0x66047fff;
 const LAYER: u32 = ROOT + 1;
 struct Prepared {
+    general_entry:Option<crate::native_general_entry::ModeEntry>,
     profile: CgProfile,
     entry: CgEntry,
     inputs: VecDeque<(crate::resource_bridge::NativeImageSource, SpriteAlpha)>,
+    animation_names:VecDeque<Vec<u8>>,
     difference:DifferenceProfile,
     background: bool,
     voice: Option<Vec<u8>>,
 }
 struct Loading {
+    animation_load:Option<crate::native_animation_session::BufferLoad>,
+    animation_read:Option<Task<crate::resource_bridge::NativeImageSource>>,
+    animation_native:Option<bool>,
+    animation_count:usize,
+    animation_loaded:Vec<bool>,
     prepared: Prepared,
     images: Vec<(NativePictureViews,SpriteAlpha)>,
     job: Option<PicturePreparation>,
@@ -32,6 +40,7 @@ struct Live {
     entry: CgEntry,
     paths: Vec<String>,
     views:Vec<NativePictureViews>,
+    loaded:Vec<bool>,
     sizes: Vec<[u32; 2]>,
     background: bool,
     motion: CgMotion,
@@ -42,6 +51,10 @@ struct Live {
     pose: Option<([i64; 2], usize)>,
 }
 pub(super) struct PictureViewer {
+    entry:Option<super::actor_entry::ActorEntry>,
+    entry_initialized:bool,
+    mode_audio: Option<crate::native_mode_audio::ModeAudioAdmission>,
+    queued_input: InputFrame,
     difference:Option<DifferenceState>,
     old_difference:Option<Arc<dyn ImageResource>>,
     difference_base_job:Option<ImageJob>,
@@ -67,6 +80,12 @@ pub(super) struct PictureViewer {
     voice_remaining: Option<u64>,
 }
 impl PictureViewer {
+    pub(super) fn retain_input(&mut self,input:InputFrame) {
+        self.queued_input.buttons_pressed |= input.buttons_pressed;
+        self.queued_input.buttons_down=input.buttons_down;
+        self.queued_input.pointer_x=input.pointer_x;
+        self.queued_input.pointer_y=input.pointer_y;
+    }
     pub fn new(
         pictures: Arc<[CgChoice]>,
         index: usize,
@@ -82,6 +101,9 @@ impl PictureViewer {
             "NNN CG unlocked catalogue extent"
         );
         let mut this = Self {
+            entry:None,entry_initialized:false,
+            mode_audio: None,
+            queued_input: InputFrame::default(),
             difference:None,old_difference:None,difference_base_job:None,difference_frame:None,
             difference_draw:None,difference_pose:None,difference_path:None,difference_retired_paths:Vec::new(),
             pictures,
@@ -112,12 +134,13 @@ impl PictureViewer {
         let storage = self.storage.clone();
         self.task = Some(self.pool.spawn(move |cancel| {
             let table = super::native_load::table(&config, storage.as_ref(), "printCG", &cancel)?;
-            crate::native_general::ModeReturn::validate_entry(&table)?;
+            let general_entry=crate::native_general_entry::ModeEntry::read(&table)?;
             let difference=DifferenceProfile::read(&table)?;
             let profile = CgProfile::read(&table, &config.setup, group)?;
             let entry = CgEntry::parse(&name, profile.code_byte)?;
             let levels = u32::try_from(config.setup.integer(b"dwqPackLevel")?.unwrap_or(0))?;
             let mut inputs = VecDeque::new();
+            let mut animation_names=VecDeque::new();
             let mut budget = 0u64;
             let mut push = |source: crate::resource_bridge::NativeImageSource, alpha: SpriteAlpha| -> Result<()> {
                 // Native policy may wrap an encoded image in a shared alpha
@@ -133,14 +156,7 @@ impl PictureViewer {
             if let Some((start, count)) = entry.animation {
                 for frame in start..start + count {
                     cancel.check()?;
-                    // CEffectAnimation's original default tag. The base VM
-                    // does not admit an unimplemented custom-tag callback.
-                    let path = format!("bg/bganime{frame}");
-                    push(
-                        resources
-                            .image_source(&config.resources.picture(path.as_bytes(), levels)?, &cancel)?,
-                        SpriteAlpha::Opaque,
-                    )?;
+                    animation_names.push_back(format!("bg\\bganime{frame}").into_bytes());
                 }
             } else {
                 let [x, y] = entry.tiles();
@@ -184,6 +200,8 @@ impl PictureViewer {
             .transpose()?
             .flatten();
             Ok(Prepared {
+                general_entry,
+                animation_names,
                 difference,
                 profile,
                 entry,
@@ -195,7 +213,7 @@ impl PictureViewer {
         Ok(())
     }
     pub fn pending(&self) -> bool {
-        self.task.is_some() || self.loading.is_some() || self.difference_base_job.is_some() || self.difference_draw.is_some()
+        self.entry.as_ref().is_some_and(|entry|entry.pending()) || self.task.is_some() || self.loading.is_some() || self.difference_base_job.is_some() || self.difference_draw.is_some() || self.mode_audio.as_ref().is_some_and(|clock|clock.pending())
     }
     pub fn paths(&self) -> Vec<String> {
         self.live
@@ -221,6 +239,9 @@ impl PictureViewer {
         if self.closing {
             return Ok(true);
         }
+        if vm.is_some() && admit {
+            self.retain_input(input);
+        }
         if !self.poll_difference(host,vm.as_deref_mut())? {return Ok(false);}
         if self.old_difference.is_none() {
             if let Some(owner)=vm.as_deref_mut(){self.old_difference=owner.retained_cg_difference_picture();}
@@ -230,16 +251,26 @@ impl PictureViewer {
                 return Ok(false);
             };
             self.task = None;
+            if !self.entry_initialized {
+                if let Some(spec)=prepared.general_entry {
+                    let owner=vm.as_deref().context("NNN CG entry requires native General owner")?;
+                    self.entry=Some(super::actor_entry::ActorEntry::new(spec,23,ROOT+4800,None,owner,host,self.client)?);
+                }
+                self.entry_initialized=true;
+            }
             self.loading = Some(Loading {
+                animation_count:prepared.animation_names.len(),animation_load:None,animation_read:None,animation_native:None,animation_loaded:Vec::new(),
                 prepared,
                 images: vec![],
                 job: None,
                 alpha:None,
             });
         }
+        if self.loading.is_some() && !self.poll_animation_buffers(host,vm.as_deref_mut())? {return Ok(false);}
         if let Some(loading) = self.loading.as_mut() {
             if let Some(job)=loading.job.as_mut() {
                 let Some(image)=job.poll_detached(host)? else{return Ok(false);};
+                if let Some(header)=job.png_header(){if let Some(owner)=vm.as_deref_mut(){owner.observe_png_header(header)?;}}
                 loading.images.push((image,loading.alpha.take().context("NNN CG picture alpha policy absent")?));
                 loading.job=None;
             }
@@ -247,19 +278,42 @@ impl PictureViewer {
                 loading.job=Some(PicturePreparation::detached(self.client,source,&self.pool,host)?);
                 loading.alpha=Some(alpha);return Ok(false);
             }
+            if let Some(entry)=self.entry.as_mut(){if !entry.prepare_old()?{return Ok(false)}}
             let loading = self.loading.take().unwrap();
             self.publish(host, loading)?;
         }
-        let live = self.live.as_mut().context("NNN CG ready frame absent")?;
-        let now = host.now_ms();
-        let dt = now.saturating_sub(live.last_ms);
-        live.last_ms = now;
-        if !admit {
+        if let Some(entry)=self.entry.as_mut() {
+            let owner=vm.as_deref_mut().context("NNN CG entry owner absent")?;
+            if !entry.poll(host,self.client,owner,input,admit)? {return Ok(false)}
+            self.entry=None;
+            self.queued_input.buttons_pressed=0;
+            self.resume_clock(host.now_ms());
+            // GeneralCalcu completing entry does not also run PrintCG::Calcu.
             return Ok(false);
         }
-        live.remainder = live.remainder.saturating_add(dt);
-        let ticks = live.remainder / live.profile.frame_ms;
-        live.remainder %= live.profile.frame_ms;
+        let now = host.now_ms();
+        let (ticks,input) = if let Some(owner) = vm.as_deref_mut() {
+            let period = self.live.as_ref().context("NNN CG ready frame absent")?.profile.frame_ms;
+            if self.mode_audio.is_none() {
+                self.mode_audio=Some(crate::native_mode_audio::ModeAudioAdmission::new(23)?);
+            }
+            if !owner.poll_mode_audio(self.mode_audio.as_mut().unwrap(),host,admit,period)? {return Ok(false);}
+            // PrintCG's input/scroll/voice Calcu and GeneralCalcu share one
+            // native ticket. Resource retries cannot repeat either half.
+            let input=self.queued_input;
+            self.queued_input.buttons_pressed=0;
+            (1,input)
+        } else {
+            let live=self.live.as_mut().context("NNN CG ready frame absent")?;
+            let dt=now.saturating_sub(live.last_ms);
+            live.last_ms=now;
+            if !admit {return Ok(false);}
+            live.remainder=live.remainder.saturating_add(dt);
+            let ticks=live.remainder/live.profile.frame_ms;
+            live.remainder%=live.profile.frame_ms;
+            (ticks,input)
+        };
+        let live = self.live.as_mut().context("NNN CG ready frame absent")?;
         live.ticks = live.ticks.saturating_add(ticks);
         live.motion.elapsed = live.motion.elapsed.saturating_add(ticks);
         if input.buttons_pressed & (buttons::ESCAPE | buttons::MOUSE_RIGHT) != 0 {
@@ -329,9 +383,9 @@ impl PictureViewer {
             if let Some(state)=self.difference.as_mut() {
                 let old_kind=state.navigate(self.pictures[next].block==self.pictures[self.index].block,
                     next_entry.animation.is_some(),next!=self.index,live.entry.animation.is_some());
-                if let Some(kind)=old_kind {
-                    let index=match kind {OldDifferenceImage::FirstTile=>0,OldDifferenceImage::LastAnimationFrame=>live.views.len()-usize::from(live.background)-1};
-                    let image=live.views[index].raw.clone();
+                if let Some(kind)=old_kind.filter(|_|!live.views.is_empty()) {
+                    let index=match kind {OldDifferenceImage::FirstTile=>0,OldDifferenceImage::LastAnimationFrame=>live.views.len().saturating_sub(usize::from(live.background)+1)};
+                    let image=live.views.get(index).map(|v|v.raw.clone()).context("NNN CG retained difference picture absent")?;
                     if let Some(owner)=vm.as_deref_mut(){owner.retain_cg_difference_picture(image.clone())?;}
                     self.old_difference=Some(image);
                 }
@@ -365,10 +419,10 @@ impl PictureViewer {
             .iter()
             .map(|(image,_)| image.raw.size())
             .collect::<Vec<_>>();
-        ensure!(!sizes.is_empty(), "NNN CG ready image list empty");
+        ensure!(!sizes.is_empty()||entry.animation.is_some(), "NNN CG ready image list empty");
         let [nx, ny] = entry.tiles();
         let size = if entry.animation.is_some() {
-            sizes[0]
+            sizes.first().copied().unwrap_or(SIZE)
         } else {
             [
                 (0..nx as usize).map(|i| sizes[i][0]).sum(),
@@ -401,10 +455,12 @@ impl PictureViewer {
             }
         }
         let old = self.live.take();
+        let animated=entry.animation.is_some();
         self.live = Some(Live {
             profile,
             entry,
             paths,
+            loaded:{let mut loaded=if loading.animation_native==Some(true){loading.animation_loaded}else{vec![true;views.len()]};if animated{for (ok,v) in loaded.iter_mut().zip(&views){*ok &= v.source_clip[2]>v.source_clip[0]&&v.source_clip[3]>v.source_clip[1];}}loaded},
             views,
             sizes,
             background,
@@ -474,13 +530,17 @@ impl PictureViewer {
         for i in 0..count {
             let [w, h] = live.sizes[i];
             let animated = live.entry.animation.is_some();
+            let [left,top,right,bottom]=live.views[i].source_clip;
+            let clipped=right>left&&bottom>top;
             let crop = if !animated {
                 Some([0, 0, w.min(live.sizes[0][0]), h.min(live.sizes[0][1])])
-            } else {
-                None
-            };
-            let rect = if animated {
-                [0, 0, i64::from(w), i64::from(h)]
+            } else if clipped {
+                Some([left as u32,top as u32,(right-left) as u32,(bottom-top) as u32])
+            } else {None};
+            let rect = if animated && clipped {
+                [i64::from(left),i64::from(top),i64::from(right-left),i64::from(bottom-top)]
+            } else if animated {
+                [0,0,i64::from(w),i64::from(h)]
             } else {
                 [
                     (i as i64 % nx as i64) * i64::from(live.sizes[0][0]) - position[0],
@@ -490,7 +550,7 @@ impl PictureViewer {
                 ]
             };
             let masked = !animated && live.entry.name[..2].eq_ignore_ascii_case(b"ta");
-            commands.push(serde_json::json!({"op":"put","layer":{"id":LAYER+i as u32,"parent":ROOT,"rect":rect,"source_crop":crop,"visible":!animated||i==0,"order":[2000000001,2+i],
+            commands.push(serde_json::json!({"op":"put","layer":{"id":LAYER+i as u32,"parent":ROOT,"rect":rect,"source_crop":crop,"visible":(!animated||i==0)&&live.loaded[i],"order":[2000000001,2+i],
                 "blend":{"stored_byte":{"mode":if masked {"mask_separate256"} else {"opaque_scalar256"},"force_output_opaque":true}},
                 "paint":{"kind":"image","asset":live.paths[i]}}}));
         }
@@ -509,7 +569,7 @@ impl PictureViewer {
             live.profile
                 .anime_hold
                 .map(|hold| {
-                    (live.ticks.saturating_sub(1) / u64::from(hold) % count as u64) as usize
+                    (live.ticks.saturating_sub(1) / u64::from(hold) % count.max(1) as u64) as usize
                 })
                 .unwrap_or(0)
         } else {
@@ -527,7 +587,7 @@ impl PictureViewer {
         if live.entry.animation.is_some() {
             for i in 0..count {
                 commands.push(
-                    serde_json::json!({"op":"set_visible","id":LAYER+i as u32,"visible":i==frame}),
+                    serde_json::json!({"op":"set_visible","id":LAYER+i as u32,"visible":i==frame&&live.loaded[i]}),
                 );
             }
         } else {
@@ -557,6 +617,7 @@ impl PictureViewer {
         }
     }
     pub fn remove(&mut self, host: &mut dyn HostServices) -> Result<()> {
+        if let Some(mut entry)=self.entry.take(){entry.remove(host,self.client)?;}
         self.task = None;
         self.loading = None;
         self.difference_draw=None;self.difference_base_job=None;self.difference_frame=None;
@@ -628,6 +689,9 @@ mod tests {
         .unwrap();
         let entry = CgEntry::parse(raw, 1).unwrap();
         PictureViewer {
+            entry:None,entry_initialized:true,
+            mode_audio: None,
+            queued_input: InputFrame::default(),
             difference:None,old_difference:None,difference_base_job:None,difference_frame:None,
             difference_draw:None,difference_pose:None,difference_path:None,difference_retired_paths:Vec::new(),
             pictures: vec![CgChoice {
@@ -640,13 +704,16 @@ mod tests {
             group: 0,
             task: None,
             loading: Some(Loading {
+                animation_load:None,animation_read:None,animation_native:Some(false),animation_count:0,animation_loaded:Vec::new(),
                 prepared: Prepared {
+                    general_entry:None,
+                    animation_names:VecDeque::new(),
                     profile,
                     entry,
                     inputs: inputs
                         .into_iter()
                         .map(|input| {let size=match &input{ImageInput::Solid{size,..}=>*size,_=>panic!("authored CG fixture extent")};
-                            (crate::resource_bridge::NativeImageSource{input,has_mask:false,size,encoded_len:0,clip_insets:None},SpriteAlpha::Opaque)})
+                            (crate::resource_bridge::NativeImageSource{input,has_mask:false,size,encoded_len:0,clip_insets:None,png_header:None},SpriteAlpha::Opaque)})
                         .collect(),
                     background: false,
                     voice: None,

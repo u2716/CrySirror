@@ -28,7 +28,19 @@ pub(super) fn rename(source: &Dir, from: &str, target: &Dir, to: &str) -> Result
         )
         .map_err(|error| io(std::io::Error::from(error)))
     }
-    #[cfg(not(any(target_os = "linux", target_os = "android", target_vendor = "apple")))]
+    // Console hosts run one engine process over FAT/exFAT roots, with no
+    // renameat2: the existence check cannot race another writer.
+    #[cfg(any(target_os = "horizon", target_os = "vita"))]
+    {
+        let _ = (old_name, new_name);
+        if new_dir.exists(new.file_name().unwrap()) {
+            return Err(io(std::io::Error::from(std::io::ErrorKind::AlreadyExists)));
+        }
+        old_dir
+            .rename(old.file_name().unwrap(), &new_dir, new.file_name().unwrap())
+            .map_err(io)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "android", target_vendor = "apple", target_os = "horizon", target_os = "vita")))]
     {
         let _ = (old_dir, new_dir, old_name, new_name);
         Err(Error::Unsupported("atomic no-replace rename on this host"))

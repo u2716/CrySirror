@@ -1,0 +1,23 @@
+// SPDX-License-Identifier: MPL-2.0
+// sky.wgsl fs_main, drawn at the far plane after opaque geometry.
+#include "lite_common.cgh"
+
+uniform float4 lite_inv_view_proj[4];
+uniform float4 lite_camera;      // eye xyz, w far distance
+uniform float4 lite_env;         // x intensity, y rotation rad
+uniform float4 lite_sun_dir;
+uniform float4 lite_sun_color;
+uniform float4 lite_fog_color;
+uniform float4 lite_fog_params;
+uniform float4 lite_fog_sun;
+
+float4 main(float2 uv : TEXCOORD0, float2 ndc : TEXCOORD1,
+            uniform sampler2D env_source : TEXUNIT0) : COLOR
+{
+    float4 far = lite_xform(lite_inv_view_proj[0], lite_inv_view_proj[1], lite_inv_view_proj[2], lite_inv_view_proj[3], float4(ndc, 1.0, 1.0));
+    float3 dir = far.xyz / far.w - lite_camera.xyz;
+    float3 c = tex2Dlod(env_source, float4(lite_equirect_uv(dir, lite_env.y), 0.0, 0.0)).rgb;
+    float4 fog = lite_height_fog(lite_camera.xyz + normalize(dir) * lite_camera.w, lite_camera.xyz,
+        lite_fog_color, lite_fog_params, lite_fog_sun, lite_sun_dir, lite_sun_color.rgb);
+    return float4(lerp(c * lite_env.x, fog.rgb, fog.a), 1.0);
+}

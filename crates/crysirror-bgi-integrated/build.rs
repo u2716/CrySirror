@@ -1,4 +1,8 @@
 // Platform cfg aliases for file access and desktop text detection.
+#[cfg(feature = "vita-gxm")]
+#[path = "../../platform/psv/native_build.rs"]
+mod vita_build;
+
 fn main() {
     println!("cargo::rustc-check-cfg=cfg(fd_policy)");
     println!("cargo::rustc-check-cfg=cfg(desktop_host)");
@@ -31,4 +35,28 @@ fn main() {
     } else if unix {
         println!("cargo::rustc-cfg=fd_policy");
     }
+    #[cfg(feature = "vita-gxm")]
+    if os == "vita" {
+        build_vita_gpu();
+    }
+}
+
+#[cfg(feature = "vita-gxm")]
+fn build_vita_gpu() {
+    use std::{fmt::Write, path::PathBuf};
+    let out = PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR"));
+    let mut header = String::new();
+    for name in ["emote_v", "emote_f"] {
+        let path = format!("native/vita/shaders/{name}.gxp");
+        println!("cargo:rerun-if-changed={path}");
+        write!(header, "static const unsigned char {name}[] __attribute__((aligned(16))) = {{").unwrap();
+        for byte in std::fs::read(path).expect("embedded GXP") {
+            write!(header, "{byte},").unwrap();
+        }
+        header.push_str("};\n");
+    }
+    std::fs::write(out.join("shaders.h"), header).expect("generated GXP header");
+    println!("cargo:rerun-if-changed=../../platform/psv/native_build.rs");
+    println!("cargo:rerun-if-changed=native/vita/ethornell_console.h");
+    vita_build::compile("crysirror_bgi_vita_gpu", &["native/vita/gpu.c"], &["native/vita".into(), out]);
 }

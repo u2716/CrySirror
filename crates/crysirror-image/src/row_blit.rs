@@ -64,6 +64,18 @@ impl RowBlit {
         );
         check()?;
         let mut out = destination.clone();
+        self.apply_to(&mut out, source, check)?;
+        Ok(out)
+    }
+    /// Private in-place executor for a validated ordered batch. Both surfaces
+    /// were validated at admission; source always remains immutable, including
+    /// when both logical operands refer to the same initial resource lease.
+    pub(crate) fn apply_to(
+        &self,
+        out: &mut ImageSurface,
+        source: &ImageSurface,
+        check: &dyn Fn() -> Result<()>,
+    ) -> Result<()> {
         let [sx, sy, width, height] = self.source.map(i64::from);
         let [dx, dy] = self.destination.map(i64::from);
         let y0 = 0.max(-sy).max(-dy);
@@ -78,6 +90,9 @@ impl RowBlit {
                 .min(i64::from(source.width) - sx)
                 .min(i64::from(out.width) - dx);
             for x in x0..x1 {
+                if (x - x0) % 4096 == 0 {
+                    check()?;
+                }
                 let si = (((sy + y) * i64::from(source.width) + sx + x) * 4) as usize;
                 let di = (((dy + y) * i64::from(out.width) + dx + x) * 4) as usize;
                 self.row_math
@@ -88,6 +103,57 @@ impl RowBlit {
             }
         }
         check()?;
-        Ok(out)
+        Ok(())
+    }
+}
+
+/// Ordered sprite/scanline operations sharing one immutable source and one
+/// output allocation. Overlapping entries observe preceding destination writes.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RowBlitBatch {
+    pub operations: Vec<RowBlit>,
+}
+impl RowBlitBatch {
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            self.operations.len() <= 4096,
+            "row blit batch operation budget"
+        );
+        let mut samples = 0u64;
+        let mut metadata = 0usize;
+        for op in &self.operations {
+            op.validate()?;
+            samples += op.source[2] as u64 * op.source[3] as u64;
+            metadata += op.row_offsets.len() + op.row_math.len();
+            ensure!(
+                samples <= MAX_EFFECT_PIXELS * 4 && metadata <= 1_048_576,
+                "row blit batch sample/metadata budget"
+            );
+        }
+        Ok(())
+    }
+    pub fn apply(
+        &self,
+        destination: &ImageSurface,
+        source: &ImageSurface,
+        check: &dyn Fn() -> Result<()>,
+    ) -> Result<ImageSurface> {
+        self.validate()?;
+        for image in [destination, source] {
+            image.validate()?;
+            ensure!(
+                u64::from(image.width) * u64::from(image.height) <= MAX_EFFECT_PIXELS,
+                "row blit batch image budget"
+            );
+        }
+        check()?;
+        let mut output = destination.clone();
+        for op in &self.operations {
+            check()?;
+            op.apply_to(&mut output, source, check)?;
+        }
+        check()?;
+        Ok(output)
     }
 }

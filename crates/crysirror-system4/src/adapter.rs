@@ -80,6 +80,9 @@ impl Bridge {
                 let l = &program.libraries[library];
                 let f = &l.functions[function];
                 let args = m.hll_arguments(call)?;
+                if std::env::var_os("SYSTEM4_TRACE").is_some() {
+                    eprintln!("S4 HLL {}.{} {:?}", String::from_utf8_lossy(&l.name), String::from_utf8_lossy(&f.name), args);
+                }
                 if l.name == b"SACT2" && args.is_empty() && f.return_kind == 10 {
                     let value = match f.name.as_slice() {
                         b"GetScreenWidth" => Some(
@@ -249,6 +252,9 @@ impl Bridge {
                             }
                             _ => bail!("unsupported native SACT2 input ABI"),
                         };
+                        if std::env::var_os("SYSTEM4_TRACE").is_some() {
+                            eprintln!("S4 RET {} {:?} obs={:?}", String::from_utf8_lossy(&f.name), returned, observation.map(|o| (o.pointer, o.pointer_inside, o.focused, o.buttons_down, o.buttons_pressed, o.revision)));
+                        }
                         m.complete_hll(call, returned)?;
                         self.input = input;
                         return Ok(Dispatch::Completed);

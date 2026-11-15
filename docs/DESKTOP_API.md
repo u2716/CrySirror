@@ -8,9 +8,9 @@ cargo build --release --locked
 ```
 
 All native VM adapters, scripting and resource providers are linked by this
-build. Desktop features now select device options: `audio`, `gamepad` (defaults)
-and optional `acoustics-obvhs`, `smb` and `nfs`. `--no-default-features` disables audio output and
-gamepad support; it does not remove native adapters. The minimum Rust version is
+build. Default features include `audio`, `gamepad`, `smb` and `nfs`;
+`acoustics-obvhs` is optional. `--no-default-features` disables these defaults;
+it does not remove native adapters. The minimum Rust version is
 declared in the root Cargo.toml. OS graphics/input/audio libraries remain native
 build prerequisites. Windows calls the executable `crysirror.exe`.
 
@@ -58,8 +58,8 @@ the player does not download the whole game. Game assets are read-only, while
 saves and cache remain local (`--data-dir` selects their location). A dropped
 connection reports an error; automatic reconnection is not implemented.
 
-Siglus, BGI, SoftPAL and RFVP network access requires the player to be built
-with the matching optional feature:
+The default desktop build enables SMB, including Siglus, BGI, SoftPAL and RFVP.
+For a custom feature selection, enable the matching `smb` feature:
 
 ```sh
 cargo build --release --locked -p crysirror-desktop --features smb
@@ -69,7 +69,8 @@ HTTP, WebDAV and SFTP URLs are not supported by `play`.
 
 ### Games on an NFS export
 
-For Siglus, BGI, SoftPAL and RFVP, enable the optional NFS feature when building:
+The default desktop build enables NFS, including Siglus, BGI, SoftPAL and RFVP.
+For a custom feature selection, enable `nfs` when building:
 
 ```sh
 cargo build --release --locked -p crysirror-desktop --features nfs
@@ -104,8 +105,10 @@ if the host account cannot bind one. `:port` selects the NFS TCP service port;
 Reads use four concurrent operations, a bounded queue and a shared 32 MiB block
 cache. Files remain on the server; archives use random access. Game assets are
 read-only, saves remain local, and symlinks/special files fail explicitly. An
-operation timeout retires the connection; reopen the game to reconnect. As with
-SMB, BGI and SoftPAL currently require a local or OS-mounted directory.
+operation timeout retires the connection; reopen the game to reconnect.
+Integrated runtimes use their network I/O seam and local user overlay; they do
+not require an OS-mounted share. See [network storage](NETWORK_STORAGE.md) for
+provider ownership and platform validation boundaries.
 
 Windowed games retain their OS title bar unless borderless behavior is allowed.
 macOS menus use the screen menu bar; Windows uses native window menus; Linux

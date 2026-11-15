@@ -24,6 +24,7 @@ pub(super) struct Scheduler {
     pub(super) order: Vec<i32>,
     pub(super) ready: VecDeque<i32>,
     pub(super) blocked: BTreeMap<i32, u64>,
+    owner_deferred: BTreeSet<i32>,
     tick: Option<u64>,
     next_round: Vec<i32>,
     pub(super) terminating: BTreeSet<i32>,
@@ -37,6 +38,7 @@ impl Default for Scheduler {
             order: vec![0],
             ready: VecDeque::new(),
             blocked: BTreeMap::new(),
+            owner_deferred: BTreeSet::new(),
             tick: None,
             next_round: Vec::new(),
             terminating: BTreeSet::new(),
@@ -132,6 +134,11 @@ impl Machine {
     }
     pub(crate) fn begin_tick(&mut self, now: u64) {
         if self.scheduler.tick != Some(now) {
+            //The owner tick is real host time; async service completions must
+            //remain observable while the native game clock is paused/reversed.
+            for id in std::mem::take(&mut self.scheduler.owner_deferred) {
+                self.scheduler.blocked.remove(&id);
+            }
             for id in &self.scheduler.order {
                 if !self.scheduler.ready.contains(id) {
                     self.scheduler.ready.push_back(*id);
@@ -152,11 +159,14 @@ impl Machine {
     pub(crate) fn select_ready(&mut self, now: u64) -> Result<bool> {
         while let Some(id) = self.scheduler.ready.pop_front() {
             if self.thread_alive(id)
-                && !self
-                    .scheduler
-                    .blocked
-                    .get(&id)
-                    .is_some_and(|deadline| *deadline > now)
+                && !self.scheduler.blocked.get(&id).is_some_and(|deadline| {
+                    if *deadline == u64::MAX {
+                        return true;
+                    }
+                    let (now, deadline) = (now as u32, *deadline as u32);
+                    now < deadline
+                        && (now.wrapping_sub(deadline) as i32).wrapping_abs() <= 43_200_000
+                })
             {
                 self.switch_thread(id)?;
                 return Ok(true);
@@ -185,8 +195,19 @@ impl Machine {
         }
         true
     }
+    ///Suspend an external resource/glyph operation until another host update,
+    ///independently of the native simulation-clock deadline domain.
+    pub(crate) fn defer_owner_update(&mut self) {
+        let id = self.scheduler.current;
+        self.scheduler.owner_deferred.insert(id);
+        self.scheduler.blocked.insert(id, u64::MAX);
+    }
     pub(crate) fn defer_current(&mut self, until: u64) {
-        self.scheduler.blocked.insert(self.scheduler.current, until);
+        //Native wait words wrap32 bits; u64::MAX is reserved internally
+        //for owner/round suspension and is inserted by those methods directly.
+        self.scheduler
+            .blocked
+            .insert(self.scheduler.current, u64::from(until as u32));
     }
     pub(crate) fn rotate_current(&mut self, now: u64) -> Result<bool> {
         if self.scheduler.ready.is_empty() {
@@ -287,6 +308,7 @@ impl Machine {
         Ok(())
     }
     pub(super) fn wake_thread(&mut self, id: i32) {
+        self.scheduler.owner_deferred.remove(&id);
         self.scheduler.blocked.remove(&id);
         if id != self.scheduler.current && !self.scheduler.ready.contains(&id) {
             self.scheduler.ready.push_back(id);
@@ -367,10 +389,12 @@ impl Machine {
     /// thread-global variables live until41DE20 actually destroys the thread.
     pub(super) fn clear_thread_waits(&mut self) {
         self.scheduler.blocked.clear();
+        self.scheduler.owner_deferred.clear();
         self.scheduler.next_round.clear();
         self.scheduler.terminating.clear();
     }
     pub(super) fn reset_thread_waits(&mut self, id: i32) {
+        self.scheduler.owner_deferred.remove(&id);
         self.scheduler.blocked.remove(&id);
         self.scheduler.next_round.retain(|entry| *entry != id);
         self.scheduler.terminating.remove(&id);
@@ -399,6 +423,7 @@ impl Machine {
             self.scheduler.order.clear();
             self.scheduler.ready.clear();
             self.scheduler.blocked.clear();
+            self.scheduler.owner_deferred.clear();
             self.scheduler.next_round.clear();
             self.scheduler.terminating.clear();
             return true;
@@ -415,6 +440,7 @@ impl Machine {
         self.scheduler.order = vec![0];
         self.scheduler.ready.clear();
         self.scheduler.blocked.clear();
+        self.scheduler.owner_deferred.clear();
         self.scheduler.next_round.clear();
         self.scheduler.terminating.clear();
         self.scheduler.current = 0;

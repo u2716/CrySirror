@@ -685,6 +685,11 @@ struct RtCoverage {
 struct CachedMaterial {
     material: GpuMaterial,
     _textures: Vec<wgpu::Texture>,
+    /// Revisions of live surface textures (`__surface/N`, published images)
+    /// this material sampled; a newer revision rebuilds the material.
+    live: Vec<(String, u64)>,
+    /// Shared decoded-texture keys (`override_textures`) this material holds.
+    texture_keys: Vec<String>,
 }
 struct GpuModel {
     /// CPU node/skin/animation data (images dropped) for posing scenes.
@@ -777,6 +782,9 @@ pub struct PbrRenderer {
     step_bgl: wgpu::BindGroupLayout,
     copy_hdr: wgpu::RenderPipeline,
     overrides: HashMap<String, CachedMaterial>,
+    /// Decoded static override textures shared by materials that differ only
+    /// in factors, so animating a factor never re-decodes an image.
+    override_textures: HashMap<String, (wgpu::Texture, wgpu::TextureView)>,
     palette_buf: wgpu::Buffer,
     palette_capacity: u64,
     prev_palettes: HashMap<u64, Vec<[[f32; 4]; 4]>>,
@@ -1885,6 +1893,7 @@ impl PbrRenderer {
             step_bgl,
             copy_hdr,
             overrides: HashMap::new(),
+            override_textures: HashMap::new(),
             palette_buf,
             palette_capacity,
             prev_palettes: HashMap::new(),
@@ -2477,16 +2486,61 @@ impl PbrRenderer {
     ) -> Result<()> {
         m.validate_paths()?;
         let key = Self::override_key(client, m)?;
-        if self.overrides.contains_key(&key) {
+        let live_revisions = |assets: &Assets| -> Result<Vec<(String, u64)>> {
+            m.textures()
+                .into_iter()
+                .flatten()
+                .filter(|p| Self::is_live_texture(p))
+                .map(|p| {
+                    let surface = assets
+                        .surface(ClientId(client), p)
+                        .with_context(|| format!("material surface texture {p} is not published"))?;
+                    Ok((p.to_string(), surface.revision))
+                })
+                .collect()
+        };
+        let live = live_revisions(assets)?;
+        if self.overrides.get(&key).is_some_and(|cached| cached.live == live) {
             return Ok(());
         }
         let shader = self.load_effect(assets, client, m.effect.as_ref())?;
         let mut textures = Vec::new();
         let mut views = Vec::new();
+        let mut texture_keys = Vec::new();
         for (i, path) in m.textures().into_iter().enumerate() {
             if let Some(path) = path {
-                let surface =
-                    crysirror_image::decode_standard(&assets.read_for(ClientId(client), path)?)?;
+                let srgb = matches!(i, 0 | 4 | 6);
+                if !Self::is_live_texture(path) {
+                    let shared = format!("{client}@{}:{srgb}:{path}", assets.revision(ClientId(client)));
+                    if let Some((t, v)) = self.override_textures.get(&shared) {
+                        textures.push(t.clone());
+                        views.push(Some(v.clone()));
+                        texture_keys.push(shared);
+                        continue;
+                    }
+                    let surface =
+                        crysirror_image::decode_standard(&assets.read_for(ClientId(client), path)?)?;
+                    let levels = cpu::mip_chain(surface.width, surface.height, surface.rgba, srgb);
+                    let (t, v) =
+                        Self::upload_rgba(&self.gpu, surface.width, surface.height, &levels, srgb);
+                    self.override_textures.insert(shared.clone(), (t.clone(), v.clone()));
+                    textures.push(t);
+                    views.push(Some(v));
+                    texture_keys.push(shared);
+                    continue;
+                }
+                let surface = if Self::is_live_texture(path) {
+                    let live = assets
+                        .surface(ClientId(client), path)
+                        .with_context(|| format!("material surface texture {path} is not published"))?;
+                    crysirror_image::ImageSurface {
+                        width: live.width,
+                        height: live.height,
+                        rgba: live.rgba.to_vec(),
+                    }
+                } else {
+                    crysirror_image::decode_standard(&assets.read_for(ClientId(client), path)?)?
+                };
                 let srgb = matches!(i, 0 | 4 | 6);
                 let levels = cpu::mip_chain(surface.width, surface.height, surface.rgba, srgb);
                 let (t, v) =
@@ -2519,9 +2573,16 @@ impl PbrRenderer {
                     rt: Self::rt_coverage(m),
                 },
                 _textures: textures,
+                live,
+                texture_keys,
             },
         );
         Ok(())
+    }
+    /// Dynamic engine images: canvas surfaces and published image resources.
+    fn is_live_texture(path: &str) -> bool {
+        path.starts_with(crysirror_runtime::assets::SURFACE_PREFIX)
+            || path.starts_with("__image_resource/")
     }
     fn load_model(&mut self, assets: &mut Assets, client: u32, asset: &str) -> Result<bool> {
         let _span = self.profiler.span(self.profile_frame, "pbr.model_upload");
@@ -3011,6 +3072,12 @@ impl PbrRenderer {
                 self.load_override(assets, *client, material)?;
             }
         }
+        let held: std::collections::HashSet<&String> = self
+            .overrides
+            .values()
+            .flat_map(|m| m.texture_keys.iter())
+            .collect();
+        self.override_textures.retain(|k, _| held.contains(k));
         for pipelines in self.custom_pipelines.values_mut() {
             if !pipelines.validation.ready()? { return Err(crate::pipeline::PreparationPending.into()); }
         }

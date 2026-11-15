@@ -54,6 +54,9 @@ impl AudioBridge {
                     && !self.system_sounds.as_ref().is_some_and(|policy| {
                         (*channel >= policy.base) && (*channel <= policy.base + 1)
                     })
+                    && !self.button_voices.as_ref().is_some_and(|owner| {
+                        (*channel >= owner.base) && (*channel <= owner.base + 1)
+                    })
             })
             .context("NNN native music tail channel unavailable")
     }
@@ -201,7 +204,9 @@ impl AudioBridge {
             }
         }
         match source {
-            crate::resource_bridge::ResolvedAudio::Playlist(source) => immediate.playlist_request(source),
+            crate::resource_bridge::ResolvedAudio::Playlist(source) => {
+                immediate.playlist_request(source)
+            }
             crate::resource_bridge::ResolvedAudio::Asset(path) => immediate.asset_request(path),
             crate::resource_bridge::ResolvedAudio::Encoded(source) => {
                 immediate.encoded_request(source)

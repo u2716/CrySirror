@@ -281,7 +281,7 @@ wait/selection policies, rather than a second general-purpose engine. Unsupporte
 operations fail instead of reviving a private engine implementation. Native
 save files/snapshots, DLLs, complete-game behavior and other platform/device
 results remain outside current claims. See [ADR 0048](adr/0048-reallive-vm-engine-apis.md)
-and [REALLIVE.md](REALLIVE.md) for current limits and separated evidence.
+and [native-api/reallive.md](native-api/reallive.md) for current limits and separated evidence.
 
 ## Multithreaded tasks and asynchronous loading (2026-10-26)
 

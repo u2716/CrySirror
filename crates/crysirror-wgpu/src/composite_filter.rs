@@ -5,6 +5,9 @@
 use super::*;
 use wgpu::util::DeviceExt;
 pub(super) struct Filter {
+    /// Format of the filtered pixels: each is an integer average / 255, so
+    /// `Rgba8Unorm` holds it exactly where `Rgba16Float` storage is absent.
+    product: wgpu::TextureFormat,
     horizontal: wgpu::ComputePipeline,
     vertical: wgpu::ComputePipeline,
     h_layout: wgpu::BindGroupLayout,
@@ -34,6 +37,16 @@ pub(super) fn target(
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING,
         view_formats: &[],
     })
+}
+/// The filtered-pixel format: `Rgba16Float` where the GPU writes it as a
+/// storage image, else `Rgba8Unorm` (exact for byte averages).
+pub(super) fn product_format(gpu: &Gpu) -> wgpu::TextureFormat {
+    let wide = wgpu::TextureFormat::Rgba16Float;
+    if gpu.adapter.get_texture_format_features(wide).allowed_usages.contains(wgpu::TextureUsages::STORAGE_BINDING) {
+        wide
+    } else {
+        wgpu::TextureFormat::Rgba8Unorm
+    }
 }
 impl Filter {
     pub fn new(gpu: &Gpu) -> Self {
@@ -103,8 +116,10 @@ impl Filter {
             (pipeline, layout)
         };
         let (horizontal, h_layout) = make(wgpu::TextureFormat::Rgba32Float, "rgba32float");
-        let (vertical, v_layout) = make(wgpu::TextureFormat::Rgba16Float, "rgba16float");
+        let product = product_format(gpu);
+        let (vertical, v_layout) = make(product, if product == wgpu::TextureFormat::Rgba16Float { "rgba16float" } else { "rgba8unorm" });
         Self {
+            product,
             horizontal,
             vertical,
             h_layout,
@@ -206,7 +221,7 @@ impl Filter {
             let texture = target(
                 gpu,
                 canvas,
-                wgpu::TextureFormat::Rgba16Float,
+                self.product,
                 "transition filtered pixels",
             );
             let view = texture.create_view(&Default::default());

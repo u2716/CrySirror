@@ -16,12 +16,29 @@ use std::sync::{
 
 mod async_program;
 mod child_thread;
+mod compact_bp;
+mod modern_bp;
+mod native_buffers;
+mod native_diagnostics;
+mod native_extension;
+mod native_inspector;
+mod native_memory_guard;
+mod native_version;
+mod parallel_call;
+mod version_system;
+pub use native_extension::{NativeExtension, NativeExtensionArgument};
+pub use native_inspector::{
+    NativeInspectorEvent, NativeInspectorRow, NativeInspectorTab, NativeInspectorView,
+    NativeObjectInspector, NativeObjectInspectorProperty,
+};
 pub mod cpu_record;
 mod debug;
 mod extended_opcodes;
+mod fused_bp;
 mod host_request;
 mod input;
 mod local_window;
+mod native_buffer_format;
 pub use local_window::VmMemory;
 mod logic;
 pub mod native_call;
@@ -71,11 +88,14 @@ pub(crate) const FRAME_SEGMENT: u32 = 0x0800_0000;
 pub(crate) const CODE_SEGMENT: u32 = 0x0400_0000;
 /// Where the code region sits in the thread's local window (after the data
 /// region), and its largest size.
-const CODE_WINDOW_OFFSET: u32 = 0x0010_0000;
-const CODE_WINDOW_SIZE: u32 = HEAP_OFFSET_BASE - CODE_WINDOW_OFFSET;
-const HEAP_OFFSET_BASE: u32 = 0x0020_0000;
+// Physical capacity covers the recovered newer 4 MiB data / 8 MiB code
+// profiles. Per-thread reservations still enforce each revision's smaller
+// logical limits; neither region may alias the other or the heap.
+const CODE_WINDOW_OFFSET: u32 = 0x0040_0000;
+const CODE_WINDOW_SIZE: u32 = 0x0080_0000;
+const HEAP_OFFSET_BASE: u32 = CODE_WINDOW_OFFSET + CODE_WINDOW_SIZE;
 const HEAP_MEMORY_BASE: usize = (LOCAL_MEMORY_BASE + HEAP_OFFSET_BASE) as usize;
-const INITIAL_MEMORY_SIZE: usize = 16 * 1024 * 1024;
+const INITIAL_MEMORY_SIZE: usize = 32 * 1024 * 1024;
 const MAX_MEMORY_SIZE: usize = 256 * 1024 * 1024;
 const OPERAND_STACK_CAPACITY: usize = 4096;
 
@@ -389,6 +409,48 @@ pub struct ShortcutInstallerWorkflowRequest {
 }
 
 pub trait SysApi {
+    fn inspect_native_display_object(&self, _object: i32) -> Result<NativeObjectInspector, i32> {
+        Err(7)
+    }
+    fn edit_native_display_object(&mut self, _object: i32, _key: u8, _value: i32) -> VmResult<()> {
+        Err(VmError::Runtime(
+            "native object inspector edits are unavailable".into(),
+        ))
+    }
+    fn native_worker_count(&self) -> usize {
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1)
+    }
+    fn publish_native_inspector(&mut self, _view: &NativeInspectorView) -> VmResult<bool> {
+        Ok(false)
+    }
+    fn close_native_inspector(&mut self, _handle: u32) -> VmResult<()> {
+        Ok(())
+    }
+    fn take_native_inspector_events(
+        &mut self,
+        _handle: u32,
+    ) -> VmResult<Vec<NativeInspectorEvent>> {
+        Ok(Vec::new())
+    }
+
+    /// Load a maintained portable extension, not the game's executable DLL.
+    /// Native failure statuses are 1 (not found) and 2 (missing entry point).
+    /// An existing library without a portable implementation fails visibly.
+    fn load_native_extension(
+        &mut self,
+        path: &str,
+    ) -> VmResult<Result<Box<dyn NativeExtension>, i32>> {
+        if self.path_exists(path) || self.path_exists(&format!("{path}.dll")) {
+            Err(VmError::Runtime(format!(
+                "native extension {path:?} has no portable host implementation"
+            )))
+        } else {
+            Ok(Err(1))
+        }
+    }
+
     /// Legacy desktop System81 helpers may use std::fs as a fallback. Sandboxed
     /// hosts MUST return false so denied reads cannot bypass their IO policy.
     /// This does not replace checks in all host filesystem/installer methods.
@@ -437,6 +499,19 @@ pub trait SysApi {
 
     fn next_native_crt_rand(&mut self) -> Option<i32> {
         None
+    }
+
+    /// Main-loop wall-clock deltas, newest first, padded to the native ring's
+    /// 600 entries. Independent of the pause-adjusted engine clock.
+    fn native_frame_history(&self, _count: usize) -> Option<Vec<i32>> {
+        None
+    }
+
+    /// rand_s equivalent; must not consume the deterministic CRT rand stream.
+    fn secure_random_u32(&mut self) -> VmResult<u32> {
+        Err(VmError::Runtime(
+            "secure random source is unavailable".into(),
+        ))
     }
 
     fn observe_dispatch(&mut self, _opcode: NativeOpcode) {}
@@ -518,6 +593,13 @@ pub trait SysApi {
     /// Whether the archive file `archive` holds `entry`.
     fn archive_entry_exists(&mut self, archive: &str, entry: &str) -> bool {
         self.file_exists(archive, entry)
+    }
+
+    /// Sys81:39: names in the archive's directory order, including an empty
+    /// directory. None means the requested archive is unavailable. This is
+    /// distinct from filesystem globbing and must use authorized archives.
+    fn archive_entry_names(&mut self, _archive: &str) -> Option<Vec<String>> {
+        None
     }
 
     /// sub_465F80 once a media root exists: MessageBox(title, text,
@@ -737,7 +819,21 @@ pub trait SysApi {
 
     fn configure_screen_size(&mut self, _width: i32, _height: i32) {}
 
+    /// Logical host-owned window identity. Never an HWND or GPU pointer;
+    /// windowless/embedded hosts return zero.
+    fn portable_window_identity(&self) -> u64 {
+        0
+    }
+    fn configure_window_resizable(&mut self, _enabled: bool) {}
+    /// Presentation client dimensions, independent of the native game canvas.
+    fn configure_presentation_size(&mut self, _width: i32, _height: i32) -> bool {
+        false
+    }
+
     fn register_display_mode(&mut self, _index: usize, _width: i32, _height: i32) {}
+    fn display_mode_capacity(&self) -> usize {
+        8
+    }
 
     fn set_window_monitor_adapter_mode(&mut self, mode: i32) -> bool {
         (0..=1).contains(&mode)
@@ -1109,8 +1205,25 @@ pub trait SysApi {
         false
     }
 
+    fn user_ui_language(&mut self) -> i32 {
+        0x0409
+    }
+
     fn launcher_mode(&mut self) -> i32 {
         0
+    }
+    /// Portable host registration for BP 0x73's company/product InstalledFolder.
+    /// It must persist metadata in the authorized user store, without requiring
+    /// access to a machine-wide Windows registry on other platforms.
+    fn register_installation(
+        &mut self,
+        _company: &str,
+        _product: &str,
+        _folder: &str,
+    ) -> VmResult<()> {
+        Err(VmError::Runtime(
+            "installation metadata host is not connected".into(),
+        ))
     }
 
     fn take_frame_yield(&mut self) -> bool {
@@ -1152,6 +1265,48 @@ pub trait GraphApi {
 
     fn call_graph(&mut self, call: &mut NativeCallFrame) -> VmResult<Value>;
 
+    /// 1.687 91:04 receives an already decoded guest-memory image, optionally
+    /// binds a bitmap and stores it in the native two-key resource/cache registry.
+    fn blend_native_bitmap_sources(
+        &mut self,
+        _destination: i32,
+        _first: i32,
+        _second: i32,
+        _mix: i32,
+        _transparency: i32,
+    ) -> VmResult<()> {
+        Err(VmError::Runtime(
+            "native two-source bitmap blending is unavailable".into(),
+        ))
+    }
+    fn register_decoded_graph_bitmap(
+        &mut self,
+        _bitmap: i32,
+        _bytes: &[u8],
+        _namespace: Option<&str>,
+        _name: Option<&str>,
+        _bg_store: bool,
+    ) -> i32 {
+        1
+    }
+
+    /// 1.687 Graph92:94: peek/drain line-height DWORDs by layout token.
+    fn text_line_height_record(&mut self, _token: i32, _drain: bool) -> Vec<i32> {
+        Vec::new()
+    }
+    /// 1.687 Graph91:BD: configure one EEx item's natural-cubic path.
+    fn configure_icon_path(&mut self, _args: [i32; 10], _points: &[[i32; 4]]) -> VmResult<i32> {
+        Err(VmError::Runtime(
+            "extended icon path host is not connected".into(),
+        ))
+    }
+
+    /// 92:3D: topmost native object at the pointer, returning handle/type.
+    /// The VM writes the handle only when an object was hit.
+    fn pointer_graph_object(&self) -> Option<(i32, i32)> {
+        None
+    }
+
     /// Graph90:A1 (sub_492090 -> sub_43BA30): clear a Window's text layer
     /// and draw `items` row by row across `columns` equal columns, centred
     /// in each column or at its left edge, in packed RGB `color`. Returns
@@ -1165,6 +1320,24 @@ pub trait GraphApi {
         _color: i32,
     ) -> bool {
         false
+    }
+
+    /// Register a native named-font coverage transform and tracking descriptor.
+    fn register_named_font_transform(&mut self, _name: &str, _values: [i32; 5]) -> VmResult<()> {
+        Err(VmError::Runtime(
+            "named font transform host is not connected".into(),
+        ))
+    }
+    fn set_named_font_tracking(&mut self, _name: &str, _tracking: i32) -> VmResult<()> {
+        Err(VmError::Runtime(
+            "named font tracking host is not connected".into(),
+        ))
+    }
+
+    /// Last glyph's horizontal extent relative to the message's start,
+    /// stored by CDspObjWindow+0x3A0 (FD Graph92:95).
+    fn window_last_text_extent(&self, _window: i32) -> Option<i32> {
+        None
     }
 
     /// Returns the two DWORD globals written by target helper sub_434410
@@ -1207,6 +1380,18 @@ pub trait GraphApi {
     /// even though the current renderer may share one animation registry.
     fn native_graph_procedure_is_active(&self, _opcode: NativeOpcode) -> bool {
         false
+    }
+
+    /// Poll a host-owned native procedure. None keeps its BP thread waiting;
+    /// Some publishes exactly one deferred native result.
+    fn poll_native_graph_result(
+        &mut self,
+        _opcode: NativeOpcode,
+        _cancel: bool,
+    ) -> VmResult<Option<i32>> {
+        Err(VmError::Runtime(
+            "native graph result procedure is not connected".into(),
+        ))
     }
 
     /// Base CProcedure cancellation hook for procedure families without an
@@ -1909,6 +2094,10 @@ pub trait SoundApi {
         Ok(None)
     }
 
+    fn native_child_window_property(&self, _handle: i32, _property: i32) -> Result<i32, i32> {
+        Err(-1)
+    }
+
     fn current_user_text(&self) -> String {
         String::new()
     }
@@ -1917,6 +2106,16 @@ pub trait SoundApi {
     /// Keep the list stable between the size query and the buffer write.
     fn user_font_families(&self) -> Vec<String> {
         Vec::new()
+    }
+
+    /// B0:C5: GDI charset-filtered enumeration. Portable hosts may expose
+    /// their substituted stock CJK faces for DEFAULT/SHIFTJIS charsets only.
+    fn user_font_families_for_charset(&self, charset: u8) -> Vec<String> {
+        if matches!(charset, 1 | 128) {
+            self.user_font_families()
+        } else {
+            Vec::new()
+        }
     }
 
     fn show_user_dialog(&mut self, _request: UserDialogRequest) -> Option<UserDialogResponse> {
@@ -2338,7 +2537,9 @@ fn placeholder_loaded_program(
 
 #[derive(Debug, Default)]
 pub struct Vm {
+    parallel_worker_index: Option<i32>,
     native_abi_profile: NativeAbiProfile,
+    modern_pointer_tags: bool,
     trace_id: u64,
     pending_host_request: Option<host_request::PendingHostRequest>,
     ready_host_response: Option<HostResponse>,
@@ -2632,7 +2833,7 @@ impl Vm {
             native_abi_profile: NativeAbiProfile::default(),
             memory: memory.into(),
             parked_local: None,
-            heap_ptr: 0x0020_0000,
+            heap_ptr: HEAP_OFFSET_BASE,
             rng_seed: 1,
             system_wait_state: 1,
             next_indexed_record_handle: 1,
@@ -2646,6 +2847,7 @@ impl Vm {
             ..Self::default()
         };
         vm.thread.set_thread_id(MAIN_THREAD_ID);
+        vm.sync_region_reservations(0);
         vm
     }
 
@@ -2657,6 +2859,7 @@ impl Vm {
         let mut vm = Self::new();
         vm.thread
             .set_region_sizes(code_bytes, data_bytes, operand_slots);
+        vm.sync_region_reservations(0);
         vm
     }
 
@@ -3233,7 +3436,7 @@ impl Vm {
             }
             BpOpcode::Known { code: 0x04, .. } => {
                 self.push_value(Value::Ptr(
-                    FRAME_SEGMENT | self.mem_ptr.saturating_sub(read_op_u32(instruction)),
+                    self.bp_frame_tag() | self.mem_ptr.saturating_sub(read_op_u32(instruction)),
                 ));
             }
             BpOpcode::Known { code: 0x05, .. } => {
@@ -3261,7 +3464,7 @@ impl Vm {
                             .copied()
                             .unwrap_or_default();
                         self.push_value(Value::Ptr(
-                            CODE_SEGMENT | base.wrapping_add(target - start),
+                            self.bp_code_tag() | base.wrapping_add(target - start),
                         ));
                     } else {
                         self.push_value(Value::Str(text.clone()));
@@ -3277,7 +3480,7 @@ impl Vm {
                     let address = base.wrapping_add(
                         offset.wrapping_sub(Self::program_parser_code_start(program)),
                     );
-                    self.push_value(Value::Ptr(CODE_SEGMENT | address));
+                    self.push_value(Value::Ptr(self.bp_code_tag() | address));
                 }
             }
             BpOpcode::Known { code: 0x06, .. } => {
@@ -3285,6 +3488,62 @@ impl Vm {
                 // `insn_start + disp`, without a segment tag.
                 let code = self.code_offset_of(program_index, read_op_u32(instruction));
                 self.push_value(Value::Int(code as i32));
+            }
+            BpOpcode::Known {
+                code:
+                    0xd4..=0xd8
+                    | 0xda..=0xdf
+                    | 0xe2
+                    | 0xe8..=0xea
+                    | 0xf0..=0xf2
+                    | 0xf4..=0xf5
+                    | 0xf7..=0xfb,
+                ..
+            } => {
+                if let Some(target) = self.execute_fused_bp(instruction)? {
+                    let dest = self.code_offset_of(program_index, target);
+                    let (target_program, parser_offset) =
+                        self.resolve_code_target(program_index, dest);
+                    self.current_program = target_program;
+                    next_pc = self.jump_target_index(target_program, parser_offset)?;
+                }
+            }
+            BpOpcode::Known {
+                code:
+                    0x03
+                    | 0x0d
+                    | 0x0e
+                    | 0x13
+                    | 0x36
+                    | 0x37
+                    | 0x3e
+                    | 0x3f
+                    | 0x45..=0x47
+                    | 0x55
+                    | 0xe3..=0xe7
+                    | 0xec
+                    | 0xed,
+                ..
+            } => {
+                if let Some(target) = self.execute_modern_bp(instruction)? {
+                    let dest = self.code_offset_of(program_index, target);
+                    let (target_program, parser_offset) =
+                        self.resolve_code_target(program_index, dest);
+                    self.current_program = target_program;
+                    next_pc = self.jump_target_index(target_program, parser_offset)?;
+                }
+            }
+            BpOpcode::Known {
+                code: 0x0f | 0x12 | 0x18..=0x1f | 0x2c..=0x2f | 0x3b | 0x3c,
+                ..
+            } => {
+                if let Some(target) = self.execute_compact_bp(instruction)? {
+                    let dest = self.code_offset_of(program_index, target);
+                    let (target_program, parser_offset) =
+                        self.resolve_code_target(program_index, dest);
+                    self.current_program = target_program;
+                    next_pc = self.jump_target_index(target_program, parser_offset)?;
+                }
             }
             BpOpcode::Known { code: 0x10, .. } => {
                 // sub_473880 pushes the raw frame-memory offset. Only opcode
@@ -3294,12 +3553,13 @@ impl Vm {
             BpOpcode::Known { code: 0x11, .. } => {
                 let previous = self.mem_ptr;
                 let next = self.pop_int()? as u32;
-                // sub_4738A0: the new frame pointer must stay below the data
-                // region limit.
-                if next >= self.thread.data_region_size() {
+                // sub_4738A0 -> sub_444C40: SP is owner-relative, so a
+                // child's bound is base + length. The owner must also stop
+                // before blocks reserved for its children.
+                let limit = self.data_region_limit();
+                if next >= limit {
                     return Err(VmError::Runtime(format!(
-                        "store_base: SP 0x{next:08X} outside the {}-byte data region",
-                        self.thread.data_region_size()
+                        "store_base: SP 0x{next:08X} outside data region ending at 0x{limit:08X}"
                     )));
                 }
                 if next > previous {
@@ -3336,6 +3596,7 @@ impl Vm {
                 let width = read_op_u8(instruction);
                 let value = self.pop_value()?;
                 let ptr = self.pop_ptr()?;
+                self.check_native_guarded_write(api, ptr, 1 << width.min(2));
                 self.write_value(ptr, width, &value)?;
                 // sub_473710 writes through the pointer and calls sub_4450D0
                 // to return the assigned value on the operand ring.
@@ -3368,6 +3629,7 @@ impl Vm {
                         "TRACE_SCRMAIN_DISPATCH result"
                     );
                 }
+                self.check_native_guarded_write(api, ptr, 1 << width.min(2));
                 self.write_value(ptr, width, &value)?;
             }
             BpOpcode::Known { code: 0x0b, .. } => {
@@ -3405,7 +3667,9 @@ impl Vm {
                 }
                 let stride = 1u32 << width.min(2);
                 for (idx, value) in values.into_iter().rev().enumerate() {
-                    self.write_value(dst.wrapping_add(stride * idx as u32), width, &value)?;
+                    let destination = dst.wrapping_add(stride * idx as u32);
+                    self.check_native_guarded_write(api, destination, stride as usize);
+                    self.write_value(destination, width, &value)?;
                 }
             }
             BpOpcode::Known { code: 0x14, .. } => {
@@ -3424,16 +3688,24 @@ impl Vm {
             }
             BpOpcode::Known { code: 0x15, .. } => {
                 let kind = read_op_u8(instruction);
-                let dest = self.pop_int()? as u32;
+                let dest = if kind & 8 != 0 {
+                    self.code_offset_of(program_index, compact_bp::inline_target(instruction)?)
+                } else {
+                    self.pop_int()? as u32
+                };
                 let value = self.pop_int()?;
-                let take = match kind {
+                let take = match kind & 7 {
                     0 => value != 0,
                     1 => value == 0,
                     2 => value > 0,
                     3 => value >= 0,
                     4 => value <= 0,
                     5 => value < 0,
-                    _ => true,
+                    _ => {
+                        return Err(VmError::Runtime(format!(
+                            "invalid BP branch predicate {kind:#x}"
+                        )));
+                    }
                 };
                 if trace_vm_branches_enabled() {
                     tracing::debug!(
@@ -3458,8 +3730,18 @@ impl Vm {
                     next_pc = self.jump_target_index(target_program, parser_offset)?;
                 }
             }
-            BpOpcode::Known { code: 0x16, .. } => match {
-                let target = self.pop_value()?;
+            BpOpcode::Known {
+                code: 0x16 | 0xee | 0xef,
+                ..
+            } => match {
+                let target = if code == 0xee {
+                    Value::Int(self.code_offset_of(program_index, read_op_u32(instruction)) as i32)
+                } else if code == 0xef {
+                    let packed = read_op_u32(instruction);
+                    self.read_value(packed & 0x3fff_ffff, compact_bp::width(packed >> 30))?
+                } else {
+                    self.pop_value()?
+                };
                 if std::env::var_os("TRACE_SCRMAIN_DISPATCH").is_some()
                     && instruction.offset == 0x3f0
                     && self.program_name(program_index).contains("scrmain._bp")
@@ -3768,6 +4050,7 @@ impl Vm {
                 let dst = self.pop_ptr()?;
                 let src = self.normalize_scenario_descriptor_src(src, size);
                 let src_range = self.resolve_range(src, size)?;
+                self.check_native_guarded_write(api, dst, size);
                 let dst_range = self.resolve_write_range(dst, size)?;
                 let tmp = self.memory[src_range].to_vec();
                 self.memory[dst_range].copy_from_slice(&tmp);
@@ -3777,6 +4060,7 @@ impl Vm {
             BpOpcode::Known { code: 0x61, .. } => {
                 let size = self.pop_int()?.max(0) as usize;
                 let ptr = self.pop_ptr()?;
+                self.check_native_guarded_write(api, ptr, size);
                 let range = self.resolve_write_range(ptr, size)?;
                 self.memory[range].fill(0);
                 self.trace_watch_write(ptr, size, 0, "memclr");
@@ -3787,6 +4071,7 @@ impl Vm {
                 let value = self.pop_int()? as u8;
                 let size = self.pop_int()?.max(0) as usize;
                 let ptr = self.pop_ptr()?;
+                self.check_native_guarded_write(api, ptr, size);
                 let range = self.resolve_write_range(ptr, size)?;
                 self.memory[range].fill(value);
                 self.trace_watch_write(ptr, size, value as u32, "memset");
@@ -3880,6 +4165,12 @@ impl Vm {
             BpOpcode::Known { code: 0x6a, .. } => {
                 let right = self.pop_value()?;
                 let left = self.pop_ptr()?;
+                let text = self.value_as_string_lossy(right.clone())?;
+                self.check_native_guarded_write(
+                    api,
+                    left,
+                    self.encode_native_string(&text).len() + 1,
+                );
                 self.copy_c_string_value(left, right)?;
             }
             BpOpcode::Known { code: 0x6b, .. } => {
@@ -3919,6 +4210,12 @@ impl Vm {
                 let dst = self.pop_ptr()?;
                 let rendered = self.render_sprintf(&fmt);
                 self.write_c_string(dst, &rendered)?;
+                // EE7E0 performs its check after printf has written the bytes.
+                self.check_native_guarded_write(
+                    api,
+                    dst,
+                    self.encode_native_string(&rendered).len() + 1,
+                );
             }
             BpOpcode::Known { code: 0x70, .. } => {
                 let size = self.pop_int()?.max(0) as u32;
@@ -3930,14 +4227,19 @@ impl Vm {
                 let freed = self.free_heap(ptr);
                 self.push_value(Value::Int(i32::from(freed)));
             }
+            BpOpcode::Known { code: 0x73, .. } => {
+                let folder = self.pop_string_lossy()?;
+                let product = self.pop_string_lossy()?;
+                let company = self.pop_string_lossy()?;
+                api.register_installation(&company, &product, &folder)?;
+                self.push_value(Value::Int(1));
+            }
             BpOpcode::Known { code: 0x74, .. } => {
                 self.execute_set_memory_mode()?;
             }
             BpOpcode::Known { code: 0x75, .. } => {
-                let _name = self.pop_string_lossy()?;
-                let _size = self.pop_int()?;
-                let _start = self.pop_int()?;
-                self.push_value(Value::Int(1));
+                let result = self.register_native_memory_guard()?;
+                self.push_value(Value::Int(result));
             }
             BpOpcode::Known { code: 0x77, .. } => {
                 let selector = self.pop_int()?;
@@ -4010,14 +4312,52 @@ impl Vm {
                 self.push_value(Value::Int(result));
             }
             BpOpcode::Known { code: 0x7d, .. } => {
-                self.execute_resource_transform()?;
+                self.execute_resource_transform(api)?;
             }
             BpOpcode::Known { code: 0x7e, .. } => {
                 let result = self.execute_clipboard_set()?;
                 self.push_value(Value::Int(result));
             }
             BpOpcode::Known { code: 0x7f, .. } => {
-                self.execute_resource_blend()?;
+                if self.native_abi_profile == NativeAbiProfile::ModernFused {
+                    let id =
+                        instruction.raw.get(1).copied().ok_or_else(|| {
+                            VmError::Runtime("missing native buffer selector".into())
+                        })?;
+                    self.note_call("buffer", 0x7f, id as u16);
+                    api.observe_dispatch(NativeOpcode {
+                        group: 0x7f,
+                        id: id as u16,
+                    });
+                    let result = self.execute_buffer_extension(id)?;
+                    self.push_value(Value::Int(result));
+                } else if self.native_abi_profile == NativeAbiProfile::Anipani {
+                    // 47F9E0 is a formatted message box in 1.653, not the
+                    // older five-argument resource-blend operation.
+                    let argument = self.pop_string_lossy()?;
+                    let format = self.pop_string_lossy()?;
+                    // printf receives one C argument, not arbitrary values
+                    // below it on the BP operand stack. Preserve that boundary.
+                    let saved_stack =
+                        std::mem::replace(&mut self.stack, vec![Value::Str(argument)]);
+                    let formatted = self.render_buffer_format(&format);
+                    self.stack = saved_stack;
+                    let bytes = formatted?;
+                    let message = self.decode_native_string_lossy(&bytes);
+                    if self.begin_host_continuation(
+                        api,
+                        HostRequest::Message {
+                            text: message.clone(),
+                        },
+                        0,
+                    )? {
+                        self.pc = next_pc;
+                        return Ok(());
+                    }
+                    api.message_box("", &message);
+                } else {
+                    self.execute_resource_blend(api)?;
+                }
             }
             BpOpcode::Known {
                 code: 0x80 | 0x81, ..
@@ -4166,6 +4506,14 @@ impl Vm {
                             .system_mode_flag = mode as u32;
                     }
                     Value::Int(i32::from(valid))
+                } else if (code, id) == (0x81, 0x48)
+                    && matches!(
+                        self.native_abi_profile,
+                        NativeAbiProfile::Anipani | NativeAbiProfile::ModernFused
+                    )
+                {
+                    self.execute_parallel_call(api)?;
+                    Value::None
                 } else if let Some(result) = self.try_builtin_sys_with_api(api, code, id)? {
                     if trace_events
                         && matches!(id, 0x47 | 0x48 | 0x9d | 0xac | 0xd0 | 0xd2 | 0xd4 | 0xdd)
@@ -4355,7 +4703,56 @@ impl Vm {
                     self.note_stub("graph", code, id);
                     return Err(VmError::UnknownDispatch { group: code, id });
                 }
-                let result = if self.native_abi_profile == NativeAbiProfile::Amachoco
+                let direct_version_result = self.try_version_graph(api, code, id, trace_events)?;
+                let result = if let Some(result) = direct_version_result {
+                    result
+                } else if (code, id) == (0x92, 0x0e)
+                    && matches!(
+                        self.native_abi_profile,
+                        NativeAbiProfile::HoukagoFd
+                            | NativeAbiProfile::Modern
+                            | NativeAbiProfile::ModernFused
+                    )
+                {
+                    let pointer = self.pop_ptr()?;
+                    let count = self.pop_int()?;
+                    let name = self.pop_string_lossy()?;
+                    if !matches!(count, 4 | 5) {
+                        return Err(VmError::Runtime(format!(
+                            "無効なパラメータ数 [ {count} ] が指定されました"
+                        )));
+                    }
+                    let mut values = [0; 5];
+                    for index in 0..count as usize {
+                        values[index] =
+                            self.read_int(pointer.wrapping_add(index as u32 * 4), 2)? as i32;
+                    }
+                    api.register_named_font_transform(&name, values)?;
+                    Value::None
+                } else if (code, id) == (0x92, 0x0f)
+                    && matches!(
+                        self.native_abi_profile,
+                        NativeAbiProfile::Modern | NativeAbiProfile::ModernFused
+                    )
+                {
+                    let tracking = self.pop_int()?;
+                    let name = self.pop_string_lossy()?;
+                    api.set_named_font_tracking(&name, tracking)?;
+                    Value::None
+                } else if (code, id) == (0x92, 0x95)
+                    && matches!(
+                        self.native_abi_profile,
+                        NativeAbiProfile::HoukagoFd
+                            | NativeAbiProfile::Modern
+                            | NativeAbiProfile::ModernFused
+                    )
+                {
+                    let window = self.pop_int()?;
+                    let value = api.window_last_text_extent(window).ok_or_else(|| {
+                        VmError::Runtime("無効なウィンドウハンドルが指定されました".into())
+                    })?;
+                    Value::Int(value)
+                } else if self.native_abi_profile != NativeAbiProfile::Tayutama
                     && (code, id) == (0x91, 0x09)
                 {
                     // amachoco.exe sub_48AB80 -> sub_464380.
@@ -4368,8 +4765,14 @@ impl Vm {
                             .graph91_resource_mode = mode;
                     }
                     Value::Int(i32::from(valid))
-                } else if self.native_abi_profile == NativeAbiProfile::Amachoco
-                    && (code, id) == (0x92, 0x99)
+                } else if matches!(
+                    self.native_abi_profile,
+                    NativeAbiProfile::Amachoco
+                        | NativeAbiProfile::Anipani
+                        | NativeAbiProfile::HoukagoFd
+                        | NativeAbiProfile::Modern
+                        | NativeAbiProfile::ModernFused
+                ) && (code, id) == (0x92, 0x99)
                 {
                     self.handle_character_widths_call(api)?
                 } else if (code, id) == (0x90, 0xa1) {
@@ -5583,8 +5986,7 @@ impl Vm {
                         "VM sound callsite"
                     );
                 }
-                if fail_on_stub
-                    && !native_call::is_strictly_supported(NativeOpcode { group: code, id })
+                if fail_on_stub && !self.effective_strict_support(NativeOpcode { group: code, id })
                 {
                     self.note_stub("snd", code, id);
                     return Err(VmError::UnknownDispatch { group: code, id });
@@ -5731,8 +6133,7 @@ impl Vm {
                 let id = instruction.raw.get(1).copied().unwrap_or_default() as u16;
                 self.note_call("user", code, id);
                 api.observe_dispatch(NativeOpcode { group: code, id });
-                if fail_on_stub
-                    && !native_call::is_strictly_supported(NativeOpcode { group: code, id })
+                if fail_on_stub && !self.effective_strict_support(NativeOpcode { group: code, id })
                 {
                     self.note_stub("user", code, id);
                     return Err(VmError::UnknownDispatch { group: code, id });
@@ -5744,13 +6145,44 @@ impl Vm {
                     return Ok(());
                 }
                 self.normalize_user_string_args(code, id)?;
-                let direct_result = if (code, id) == (0xb0, 0xc4) {
+                let inspector_result = if code == 0xb0 {
+                    self.try_native_inspector(api, id)?
+                } else {
+                    None
+                };
+                let direct_result = if inspector_result.is_some() {
+                    inspector_result
+                } else if (code, id) == (0xb0, 0x1f)
+                    && self.native_abi_profile == NativeAbiProfile::ModernFused
+                {
+                    let property = self.pop_int()?;
+                    let handle = self.pop_int()?;
+                    let output = self.pop_ptr()?;
+                    match api.native_child_window_property(handle, property) {
+                        Ok(value) => {
+                            self.write_int(output, 2, value as u32)?;
+                            Some(Value::Int(0))
+                        }
+                        Err(status) => {
+                            return Err(VmError::Runtime(format!(
+                                "native child-window property {property} for {handle:#x}: status {status:#x}"
+                            )));
+                        }
+                    }
+                } else if code == 0xb0 && matches!(id, 0xc4 | 0xc5) {
                     // sub_479D60 -> sub_4694B0 -> sub_42DEB0/sub_42F030:
                     // null queries the byte count, including each terminator.
                     // A buffer receives consecutive C strings and returns
                     // the family count, without an extra list terminator.
+                    let charset = if id == 0xc5 {
+                        Some(self.pop_int()? as u8)
+                    } else {
+                        None
+                    };
                     let destination = self.pop_ptr()?;
-                    let families = api.user_font_families();
+                    let families = charset
+                        .map(|c| api.user_font_families_for_charset(c))
+                        .unwrap_or_else(|| api.user_font_families());
                     let mut bytes = Vec::new();
                     for family in &families {
                         bytes.extend_from_slice(&encoding_rs::SHIFT_JIS.encode(family).0);
@@ -6092,19 +6524,19 @@ impl Vm {
             BpOpcode::Known { code: 0xe0, .. } => {
                 let id = instruction.raw.get(1).copied().unwrap_or_default();
                 self.note_call("debug", code, u16::from(id));
-                self.execute_debug_inspect(id)?;
+                if id == 0x20 && self.native_abi_profile == NativeAbiProfile::ModernFused {
+                    self.execute_native_object_inspector(api)?;
+                } else if !self.execute_version_diagnostic(api, id)? {
+                    self.execute_debug_inspect(id)?;
+                }
             }
             BpOpcode::Unknown(code) => {
                 self.note_stub("opcode", code, 0);
-                if fail_on_stub {
-                    return Err(VmError::UnsupportedInstruction(code));
-                }
+                return Err(VmError::UnsupportedInstruction(code));
             }
             BpOpcode::Known { code, .. } => {
                 self.note_stub("opcode", code, 0);
-                if fail_on_stub {
-                    return Err(VmError::UnsupportedInstruction(code));
-                }
+                return Err(VmError::UnsupportedInstruction(code));
             }
         }
         self.trim_operand_stack();
@@ -6258,6 +6690,9 @@ impl Vm {
                     | "CProcSelectIcon"
                     | "CProcSelectIconEx" => Some(native_thread::NativeGraphProcedureMode::Select),
                     "CProcShakeScreen" => Some(native_thread::NativeGraphProcedureMode::Shake),
+                    "DCProcPlayMovieByMF" => {
+                        Some(native_thread::NativeGraphProcedureMode::HostResult)
+                    }
                     "CProcShakeDspObj" => Some(native_thread::NativeGraphProcedureMode::Control),
                     "CProcCtrlDspObj" | "CProcCtrlDspObjBC" | "CProcCtrlDspObjSp" => {
                         Some(native_thread::NativeGraphProcedureMode::Control)
@@ -6654,6 +7089,19 @@ impl Vm {
                             && callback[0].as_i32() == 512
                     });
                 match procedure.mode {
+                    native_thread::NativeGraphProcedureMode::HostResult => {
+                        match api.poll_native_graph_result(installed.source_opcode, cancelled) {
+                            Ok(None) => return Some(VmStopReason::WaitingForProcedure),
+                            Ok(Some(value)) => self.push_value(Value::Int(value)),
+                            Err(error) => {
+                                self.push_trace(format!("native host procedure: {error}"));
+                                self.halted = true;
+                                self.thread.clear_current_procedure();
+                                return Some(VmStopReason::Error);
+                            }
+                        }
+                    }
+
                     native_thread::NativeGraphProcedureMode::Select => {
                         if let Some(selection_id) = procedure.control_id {
                             let callbacks = callbacks
@@ -6850,6 +7298,26 @@ impl Vm {
         }
         Ok(args)
     }
+    /// 2024+ BP uses code/data segment tags 0x10000000/0x20000000.
+    /// Call before start, together with the original runtime ABI profile.
+    pub fn set_modern_pointer_tags(&mut self, enabled: bool) {
+        self.modern_pointer_tags = enabled;
+    }
+    fn bp_frame_tag(&self) -> u32 {
+        if self.modern_pointer_tags {
+            0x2000_0000
+        } else {
+            FRAME_SEGMENT
+        }
+    }
+    fn bp_code_tag(&self) -> u32 {
+        if self.modern_pointer_tags {
+            0x1000_0000
+        } else {
+            CODE_SEGMENT
+        }
+    }
+
     pub fn set_native_abi_profile(&mut self, profile: NativeAbiProfile) {
         self.native_abi_profile = profile;
         for task in &mut self.async_tasks {
@@ -6875,6 +7343,71 @@ impl Vm {
             .unwrap_or_else(|| native_abi::installs_procedure(group, id))
     }
     fn effective_strict_support(&self, opcode: NativeOpcode) -> bool {
+        if matches!(
+            self.native_abi_profile,
+            NativeAbiProfile::Anipani | NativeAbiProfile::ModernFused
+        ) && opcode.group == 0xb0
+            && matches!(opcode.id, 0x2a | 0xc5)
+        {
+            return true;
+        }
+        if self.native_abi_profile == NativeAbiProfile::ModernFused
+            && opcode.group == 0xb0
+            && matches!(opcode.id,0x12|0x1b|0x1e|0x1f|0x60..=0x63|0x66..=0x68|0x6a|0x6c|0x6d|0x6f|0xc8|0xcf)
+        {
+            return true;
+        }
+
+        if matches!(
+            self.native_abi_profile,
+            NativeAbiProfile::Anipani | NativeAbiProfile::ModernFused
+        ) && matches!(
+            (opcode.group, opcode.id),
+            (0x80, 0x03 | 0x9f | 0xec | 0xed | 0xee)
+                | (
+                    0x81,
+                    0x00 | 0x20 | 0x21 | 0x27 | 0x48 | 0x80 | 0xb8 | 0xb9 | 0xd8 | 0xda
+                )
+        ) {
+            return true;
+        }
+        if self.native_abi_profile == NativeAbiProfile::ModernFused
+            && opcode.group == 0x81
+            && matches!(opcode.id, 0x06 | 0x34 | 0x66 | 0x67 | 0x6c | 0x8c..=0x8f)
+        {
+            return true;
+        }
+
+        if matches!(
+            (opcode.group, opcode.id),
+            (0x90, 0xc1 | 0xcf) | (0x92, 0x31 | 0x3d)
+        ) {
+            return true;
+        }
+
+        if self.native_abi_profile == NativeAbiProfile::ModernFused
+            && opcode.group == 0x91
+            && matches!(opcode.id, 0x04 | 0xbc | 0xbd | 0xf8..=0xfb)
+        {
+            return true;
+        }
+        if self.native_abi_profile == NativeAbiProfile::ModernFused
+            && (opcode.group, opcode.id) == (0x92, 0x94)
+        {
+            return true;
+        }
+
+        if self.native_abi_profile != NativeAbiProfile::Tayutama
+            && (opcode.group, opcode.id) == (0x91, 0)
+        {
+            return true;
+        }
+        if self.native_abi_profile == NativeAbiProfile::Anipani
+            && (opcode.group, opcode.id) == (0x92, 0x99)
+        {
+            return true;
+        }
+
         if self.native_abi_profile == NativeAbiProfile::Amachoco
             && matches!(
                 (opcode.group, opcode.id),
@@ -6886,6 +7419,28 @@ impl Vm {
         if self.native_abi_profile == NativeAbiProfile::Amachoco
             && opcode.group == 0x81
             && matches!(opcode.id, 0x21 | 0xD8 | 0xDA)
+        {
+            return true;
+        }
+        if self.native_abi_profile == NativeAbiProfile::Anipani
+            && opcode.group == 0x91
+            && matches!(opcode.id, 0x09 | 0x0a)
+        {
+            return true;
+        }
+        if matches!(
+            self.native_abi_profile,
+            NativeAbiProfile::HoukagoFd | NativeAbiProfile::Modern | NativeAbiProfile::ModernFused
+        ) && matches!(
+            (opcode.group, opcode.id),
+            (0x81, 0x00..=0x03) | (0x91, 0x05 | 0x09..=0x0a) | (0x92, 0x0e | 0x95 | 0x99)
+        ) {
+            return true;
+        }
+        if matches!(
+            self.native_abi_profile,
+            NativeAbiProfile::Modern | NativeAbiProfile::ModernFused
+        ) && (opcode.group, opcode.id) == (0x92, 0x0f)
         {
             return true;
         }
@@ -7525,7 +8080,46 @@ impl Vm {
         ))
     }
 
+    /// Validate the complete local span, not only its first byte. A store
+    /// crossing the data/code seam must not touch another native region.
+    fn check_local_span(&self, ptr: u32, size: usize) -> VmResult<()> {
+        if self.native_abi_profile == NativeAbiProfile::ModernFused
+            && ptr < 0x1000_0000
+            && ptr & 0x0fff_0000 == 0x0fff_0000
+        {
+            let buffer = self
+                .native_buffer(ptr)
+                .ok_or_else(|| Self::invalid_pointer(ptr))?;
+            if size > buffer.size as usize {
+                return Err(Self::invalid_pointer(ptr));
+            }
+        }
+
+        let region = if self.modern_pointer_tags && matches!(ptr >> 28, 1 | 2) {
+            Some((ptr >> 28, ptr & 0x0fff_ffff))
+        } else if matches!(ptr >> 26, 1 | 2) {
+            Some((ptr >> 26, ptr & 0x03ff_ffff))
+        } else {
+            None
+        };
+        if let Some((segment, offset)) = region {
+            let limit = if segment == 1 {
+                CODE_WINDOW_SIZE
+            } else {
+                CODE_WINDOW_OFFSET
+            };
+            if (offset as usize)
+                .checked_add(size)
+                .is_none_or(|end| end > limit as usize)
+            {
+                return Err(Self::invalid_pointer(ptr));
+            }
+        }
+        Ok(())
+    }
+
     fn resolve_range(&self, ptr: u32, size: usize) -> VmResult<std::ops::Range<usize>> {
+        self.check_local_span(ptr, size)?;
         let addr = self.memory_addr(ptr);
         if addr == u32::MAX {
             return Err(Self::invalid_pointer(ptr));
@@ -7545,6 +8139,7 @@ impl Vm {
         ptr: u32,
         size: usize,
     ) -> VmResult<std::ops::Range<usize>> {
+        self.check_local_span(ptr, size)?;
         let addr = self.memory_addr(ptr);
         if addr == u32::MAX {
             return Err(Self::invalid_pointer(ptr));
@@ -9444,8 +10039,20 @@ impl Vm {
         group: u8,
         id: u16,
     ) -> VmResult<Option<Value>> {
+        if let Some(result) = self.try_version_system(api, group, id)? {
+            return Ok(Some(result));
+        }
         let result = match (group, id) {
-            (0x81, 0x00) if self.native_abi_profile == NativeAbiProfile::Amachoco => {
+            (0x81, 0x00)
+                if matches!(
+                    self.native_abi_profile,
+                    NativeAbiProfile::Amachoco
+                        | NativeAbiProfile::Anipani
+                        | NativeAbiProfile::HoukagoFd
+                        | NativeAbiProfile::Modern
+                        | NativeAbiProfile::ModernFused
+                ) =>
+            {
                 // sub_494EF0 -> sub_49EA60: 0 selects CP932, 1 selects UTF-8.
                 let mode = self.pop_int()?;
                 let valid = (0..=1).contains(&mode);
@@ -9456,6 +10063,40 @@ impl Vm {
                         .native_utf8_override = Some(mode == 1);
                 }
                 Value::Int(i32::from(valid))
+            }
+            (0x81, 0x01..=0x03)
+                if matches!(
+                    self.native_abi_profile,
+                    NativeAbiProfile::HoukagoFd
+                        | NativeAbiProfile::Modern
+                        | NativeAbiProfile::ModernFused
+                ) =>
+            {
+                let requested = if id == 0x02 {
+                    Some(self.pop_int()?)
+                } else {
+                    None
+                };
+                let current = self
+                    .system81_shared
+                    .lock()
+                    .expect("system81 state poisoned")
+                    .ui_language;
+                let language = if requested == Some(0) || current.is_none() {
+                    api.user_ui_language()
+                } else {
+                    current.unwrap()
+                };
+                let language = requested.filter(|value| *value != 0).unwrap_or(language);
+                self.system81_shared
+                    .lock()
+                    .expect("system81 state poisoned")
+                    .ui_language = Some(language);
+                Value::Int(if id == 0x01 {
+                    i32::from(language & 0x3ff == 17)
+                } else {
+                    language
+                })
             }
             (0x80, 0x53) => {
                 // sub_489070 -> sub_48D190 arms the one-shot global gate.
@@ -9909,25 +10550,38 @@ impl Vm {
                 }
             }
             (0x81, 0x39) => {
-                let destination = self.pop_ptr()?;
+                // BGI 1.610.1 (Pure Connect): 480E60 -> 45EAB0 -> 4063A0;
+                // 1.622: 48C8C0 -> 467FC0. Pop archive, size_out, buffer.
+                // A null buffer queries packed bytes; otherwise size_out
+                // receives the member count, preserving archive order.
+                let archive = self.pop_string_lossy()?;
                 let required_destination = self.pop_ptr()?;
-                let pattern = self.pop_string_lossy()?;
-                let entries = api.enumerate_user_files(&pattern, true, usize::MAX);
-                let mut packed = Vec::new();
-                for entry in &entries {
-                    let (bytes, _, _) = encoding_rs::SHIFT_JIS.encode(entry);
-                    packed.extend_from_slice(&bytes);
-                    packed.push(0);
+                let destination = self.pop_ptr()?;
+                if let Some(entries) = api.archive_entry_names(&archive) {
+                    let mut packed = Vec::new();
+                    for entry in &entries {
+                        let (bytes, _, _) = encoding_rs::SHIFT_JIS.encode(entry);
+                        packed.extend_from_slice(&bytes);
+                        packed.push(0);
+                    }
+                    let output = if destination == 0 {
+                        packed.len()
+                    } else {
+                        entries.len()
+                    };
+                    let output = u32::try_from(output)
+                        .map_err(|_| VmError::Runtime("archive directory size overflow".into()))?;
+                    if destination != 0 && !packed.is_empty() {
+                        let range = self.resolve_write_range(destination, packed.len())?;
+                        self.memory[range].copy_from_slice(&packed);
+                        self.clear_shadow_values(destination, packed.len());
+                    }
+                    self.write_int(required_destination, 2, output)?;
+                    Value::Int(required_destination as i32)
+                } else {
+                    // Native failure returns before touching either output.
+                    Value::Int(1)
                 }
-                if required_destination != 0 {
-                    self.write_int(required_destination, 2, packed.len() as u32)?;
-                }
-                if destination != 0 && !packed.is_empty() {
-                    let range = self.resolve_range(destination, packed.len())?;
-                    self.memory[range].copy_from_slice(&packed);
-                    self.clear_shadow_values(destination, packed.len());
-                }
-                Value::Int(entries.len().min(i32::MAX as usize) as i32)
             }
             (0x81, 0x3a) => {
                 let root = self.pop_int()?;
@@ -10005,7 +10659,7 @@ impl Vm {
                 let height = self.pop_int()?;
                 let width = self.pop_int()?;
                 let index = self.pop_int()?;
-                let status = if index as u32 >= 8 {
+                let status = if index as u32 as usize >= api.display_mode_capacity() {
                     1
                 } else if width == 0 || height == 0 {
                     2
@@ -11069,6 +11723,7 @@ impl Vm {
                 if ptr == 0 {
                     return Err(VmError::Runtime("グローバル領域に空きがありません".into()));
                 }
+                self.record_native_allocation(ptr, size);
                 Value::Int(ptr as i32)
             }
             (0x80, 0x21) => {
@@ -11080,6 +11735,7 @@ impl Vm {
                         "グローバルメモリの解放の対象に不正なアドレス [ ${ptr:08X} ] が指定されました"
                     )));
                 }
+                self.forget_native_allocation(ptr);
                 Value::Int(1)
             }
             (0x80, 0x33) => self.sys80_33_delete_file(api)?,
@@ -12008,6 +12664,7 @@ impl Vm {
             // GraphLoadResource has the same (target, archive, resource)
             // string contract as preload; both strings may live in frame slots.
             (0x90, 0x10) => &[0, 1],
+            (0x91, 0xf8) => &[1, 2],
             // System90:C0 consumes target, namespace/archive and file in BP
             // order; C4/C5 use one filesystem string; C6/C7 use two cache keys.
             (0x90, 0xC0) => &[0, 1],
@@ -12075,12 +12732,12 @@ impl Vm {
             } else {
                 encoding_rs::SHIFT_JIS
             };
-            // A text slot holds a `char *`, not a descriptor: an integer
-            // addressing an empty string is empty text. Searching around it
-            // picks up unrelated strings (Wonderful Everyday showed the tail
-            // of a sprite name for lines whose text part was empty).
-            if text_slot
-                && let Value::Int(value) = original
+            // Every declared string slot holds a `char *`, including image
+            // names. Preserve an integer-computed address of an empty string
+            // before descriptor fallback can read adjacent bytes. Pure
+            // Connect places "\0AutoSave\0" here: searching at +4 invented
+            // the image name "oSave" from a deliberately empty thumbnail.
+            if let Value::Int(value) = original
                 && value != 0
                 && self
                     .read_c_string_bytes(value as u32)
@@ -12090,9 +12747,9 @@ impl Vm {
                 self.replace_operand(operand, Value::Str(String::new()));
                 continue;
             }
-            // sub_48DF50 turns a script pointer into a native `char *`; it does
-            // not look for a string elsewhere. Only untyped integers keep the
-            // descriptor fallback.
+            // Known text arguments are native char pointers (sub_48DF50),
+            // including control-only messages. Never reject them by a text
+            // plausibility heuristic or search neighbouring descriptor bytes.
             // A script may cut a double-byte character in half to make a
             // string fit (usdtwnd's save-slot excerpt loop); the lone lead
             // byte is not damage and must not send a valid pointer into the
@@ -12100,6 +12757,9 @@ impl Vm {
             let text = match original {
                 Value::Ptr(ptr) if ptr != 0 && self.shadow_string_at(ptr).is_some() => {
                     self.shadow_string_at(ptr).unwrap_or_default()
+                }
+                Value::Ptr(ptr) if ptr != 0 && text_slot => {
+                    self.value_as_string_with_encoding(original.clone(), encoding)?
                 }
                 Value::Ptr(ptr) if ptr != 0 => {
                     let direct = self.value_as_string_with_encoding(original.clone(), encoding)?;
@@ -12135,7 +12795,9 @@ impl Vm {
             // pointer that a renderer would draw as "0x...". Integers keep the
             // plausibility test because they may be plain numbers.
             let non_null_pointer = matches!(original, Value::Ptr(ptr) if ptr != 0);
-            if non_null_pointer && !text.starts_with("0x") {
+            if non_null_pointer && text_slot {
+                self.replace_operand(operand, Value::Str(text));
+            } else if non_null_pointer && !text.starts_with("0x") {
                 let cleaned = text.trim_matches('\0').trim_end_matches('\u{fffd}');
                 self.replace_operand(operand, Value::Str(cleaned.to_string()));
             } else if is_plausible_text_payload(&text) {
@@ -12620,6 +13282,11 @@ impl Vm {
     }
 
     fn note_call(&mut self, kind: &str, group: u8, id: u16) {
+        self.system81_shared
+            .lock()
+            .expect("system81 state poisoned")
+            .diagnostics
+            .count(self.native_abi_profile, group, id);
         if !self.collect_diagnostics {
             return;
         }
@@ -12664,6 +13331,26 @@ impl Vm {
     /// Segment 0 is the global window, 2 the thread's frames, 0x10..0x3F
     /// heap blocks; an unmapped address returns `u32::MAX` (out of range).
     pub(crate) fn memory_addr(&self, ptr: u32) -> u32 {
+        if self.native_abi_profile == NativeAbiProfile::ModernFused
+            && ptr < 0x1000_0000
+            && ptr & 0x0fff_0000 == 0x0fff_0000
+        {
+            return self
+                .native_buffer(ptr)
+                .filter(|buffer| buffer.pointer != 0)
+                .map_or(u32::MAX, |buffer| self.memory_addr(buffer.pointer));
+        }
+
+        if self.modern_pointer_tags && matches!(ptr >> 28, 1 | 2) {
+            let offset = ptr & 0x0fff_ffff;
+            return match ptr >> 28 {
+                1 if offset < CODE_WINDOW_SIZE => LOCAL_MEMORY_BASE + CODE_WINDOW_OFFSET + offset,
+                2 if offset < CODE_WINDOW_OFFSET => LOCAL_MEMORY_BASE + offset,
+                _ => u32::MAX,
+            };
+        }
+        // Internal frame/code operations retain their canonical tags. Heap
+        // addresses are bit-identical across the 26- and 28-bit layouts.
         if ptr >> 26 == 2 {
             // The data region shares the local window with the code region.
             let offset = ptr & 0x03FF_FFFF;
@@ -14576,6 +15263,82 @@ mod tests {
     impl SoundApi for ResourceSearchApi {
         fn call_sound(&mut self, _call: &mut NativeCallFrame) -> super::VmResult<Value> {
             Ok(Value::None)
+        }
+    }
+
+    #[test]
+    fn archive_enumeration_queries_bytes_then_writes_names_and_count() {
+        struct ArchiveApi;
+        impl SysApi for ArchiveApi {
+            fn call_sys(&mut self, _: &mut NativeCallFrame) -> super::VmResult<Value> {
+                Ok(Value::None)
+            }
+            fn archive_entry_names(&mut self, archive: &str) -> Option<Vec<String>> {
+                match archive {
+                    "animation.arc" => Some(vec!["AnimationSet000".into(), "Animation000".into()]),
+                    "empty.arc" => Some(Vec::new()),
+                    _ => None,
+                }
+            }
+            fn enumerate_user_files(&mut self, _: &str, _: bool, _: usize) -> Vec<String> {
+                panic!("archive directories must not use loose-file enumeration")
+            }
+        }
+        impl GraphApi for ArchiveApi {
+            fn call_graph(&mut self, _: &mut NativeCallFrame) -> super::VmResult<Value> {
+                Ok(Value::None)
+            }
+        }
+        impl SoundApi for ArchiveApi {
+            fn call_sound(&mut self, _: &mut NativeCallFrame) -> super::VmResult<Value> {
+                Ok(Value::None)
+            }
+        }
+        let op = test_instruction(0, 0x81, "sys2", vec![0x81, 0x39], Vec::new());
+        let mut vm = Vm::new();
+        let mut api = ArchiveApi;
+        let packed = b"AnimationSet000\0Animation000\0";
+        vm.stack.extend([
+            Value::Ptr(0),
+            Value::Ptr(0x100),
+            Value::Str("animation.arc".into()),
+        ]);
+        vm.dispatch(&op, &mut api).unwrap();
+        assert_eq!(vm.stack.pop(), Some(Value::Int(0x100)));
+        assert_eq!(vm.read_int(0x100, 2).unwrap(), packed.len() as u32);
+
+        vm.memory[0x200..0x240].fill(0xa5);
+        vm.stack.extend([
+            Value::Ptr(0x200),
+            Value::Ptr(0x100),
+            Value::Str("animation.arc".into()),
+        ]);
+        vm.dispatch(&op, &mut api).unwrap();
+        assert_eq!(vm.stack.pop(), Some(Value::Int(0x100)));
+        assert_eq!(vm.read_int(0x100, 2).unwrap(), 2);
+        assert_eq!(&vm.memory[0x200..0x200 + packed.len()], packed);
+        assert_eq!(vm.memory[0x200 + packed.len()], 0xa5);
+
+        for destination in [0, 0x200] {
+            vm.write_int(0x100, 2, 0x1234).unwrap();
+            vm.stack.extend([
+                Value::Ptr(destination),
+                Value::Ptr(0x100),
+                Value::Str("absent.arc".into()),
+            ]);
+            vm.dispatch(&op, &mut api).unwrap();
+            assert_eq!(vm.stack.pop(), Some(Value::Int(1)));
+            assert_eq!(vm.read_int(0x100, 2).unwrap(), 0x1234);
+            assert_eq!(&vm.memory[0x200..0x200 + packed.len()], packed);
+
+            vm.stack.extend([
+                Value::Ptr(destination),
+                Value::Ptr(0x100),
+                Value::Str("empty.arc".into()),
+            ]);
+            vm.dispatch(&op, &mut api).unwrap();
+            assert_eq!(vm.stack.pop(), Some(Value::Int(0x100)));
+            assert_eq!(vm.read_int(0x100, 2).unwrap(), 0);
         }
     }
 
@@ -16887,6 +17650,24 @@ mod tests {
     }
 
     #[test]
+    fn graph_resource_empty_string_does_not_consume_adjacent_autosave() {
+        let mut vm = Vm::new();
+        let empty = vm.alloc_heap(64);
+        vm.write_c_string_raw(empty, "").unwrap();
+        vm.write_c_string_raw(empty + 1, "AutoSave").unwrap();
+        for pointer in [Value::Int(empty as i32), Value::Ptr(empty)] {
+            vm.stack = vec![
+                Value::Int(3790),
+                Value::Str("data02xxx.arc".into()),
+                pointer,
+            ];
+            vm.normalize_graph_string_args(0x90, 0x10).unwrap();
+            assert_eq!(vm.stack.last(), Some(&Value::Str(String::new())));
+        }
+        assert_eq!(vm.read_c_string(empty + 1).unwrap(), "AutoSave");
+    }
+
+    #[test]
     fn graph_load_skips_a_damaged_direct_string_for_nested_descriptor_text() {
         let mut vm = Vm::new();
         let descriptor = 0x0800_3000;
@@ -17224,6 +18005,60 @@ mod tests {
         assert_eq!(args[6], Value::Str("auxiliary text".into()));
         assert_eq!(args[20], Value::Int(20));
         assert_eq!(args[0], Value::Int(0));
+    }
+
+    #[test]
+    fn graph_text_control_pointer_does_not_read_adjacent_literals() {
+        let mut vm = Vm::new();
+        let pointer = crate::native_vm::FRAME_SEGMENT | 0x3000;
+        for text in [
+            "\u{c}",
+            "\t",
+            "\r\n",
+            "\u{b}",
+            "",
+            "<ns>line</ns>",
+            "0x1234",
+        ] {
+            vm.write_c_string_raw(pointer, text).unwrap();
+            let neighbour = pointer + text.len() as u32 + 1;
+            vm.write_c_string_raw(neighbour, "</ns>").unwrap();
+            vm.write_c_string_raw(neighbour + 6, "<NS>").unwrap();
+            let range = vm.resolve_range(pointer, text.len() + 12).unwrap();
+            let original = vm.memory[range.clone()].to_vec();
+            for (group, id, from_top) in [
+                (0x90, 0x90, 4),
+                (0x91, 0x91, 3),
+                (0x91, 0x93, 4),
+                (0x91, 0x9c, 8),
+                (0x91, 0x9c, 10),
+                (0x91, 0x9d, 9),
+                (0x91, 0x9d, 11),
+                (0x92, 0x1c, 6),
+                (0x92, 0x1d, 7),
+                (0x92, 0x1e, 5),
+                (0x92, 0x1f, 0),
+                (0x92, 0x90, 13),
+                (0x92, 0x91, 9),
+                (0x92, 0x9c, 14),
+                (0x92, 0x9c, 17),
+            ] {
+                let count = super::documented_opcode(super::NativeOpcode { group, id })
+                    .unwrap()
+                    .parameters
+                    .len();
+                vm.stack = vec![Value::Int(0); count];
+                let index = count - 1 - from_top;
+                vm.stack[index] = Value::Ptr(pointer);
+                vm.normalize_graph_string_args(group, id).unwrap();
+                assert_eq!(
+                    vm.stack[index],
+                    Value::Str(text.into()),
+                    "{group:02x}:{id:02x} slot {from_top}"
+                );
+                assert_eq!(&vm.memory[range.clone()], original.as_slice());
+            }
+        }
     }
 
     #[test]
@@ -19331,6 +20166,90 @@ mod tests {
             VmStopReason::InterpreterTerminated,
             "{report:?}"
         );
+    }
+
+    #[test]
+    fn frame_updates_use_the_child_block_end_not_its_length() {
+        let program =
+            crate::native_script::parse_bp_program(Some("frame-owner._bp".into()), &[0x17]);
+        let mut owner = Vm::new();
+        owner.start(&program);
+        owner
+            .start_child_thread(16, 0x100, 0x100, 0, false)
+            .unwrap();
+        let mut task = owner.async_tasks.remove(0);
+        super::child_thread::lend_local_window(&mut owner, &mut task.vm);
+        let child = &mut task.vm;
+        let base = child.mem_ptr;
+        assert_eq!(base, 0x3ff00);
+        let store = test_instruction(0, 0x11, "store_base", vec![0x11], Vec::new());
+        for next in [base + 184, 0x3ffff, base] {
+            child.stack.push(Value::Int(next as i32));
+            child.dispatch(&store, &mut TraceApi).unwrap();
+            assert_eq!(child.mem_ptr, next);
+        }
+        for rejected in [0x40000, u32::MAX] {
+            child.stack.push(Value::Int(rejected as i32));
+            assert!(child.dispatch(&store, &mut TraceApi).is_err());
+            assert_eq!(child.mem_ptr, base, "a failed update must preserve SP");
+        }
+        super::child_thread::lend_local_window(&mut owner, &mut task.vm);
+    }
+
+    #[test]
+    fn frame_updates_cannot_enter_a_reserved_child_block() {
+        let program =
+            crate::native_script::parse_bp_program(Some("frame-owner._bp".into()), &[0x17]);
+        let mut owner = Vm::new();
+        owner.start(&program);
+        owner
+            .start_child_thread(16, 0x100, 0x100, 0, false)
+            .unwrap();
+        let limit = 0x3ff00;
+        owner
+            .write_int(crate::native_vm::FRAME_SEGMENT | limit, 2, 0x12345678)
+            .unwrap();
+        let store = test_instruction(0, 0x11, "store_base", vec![0x11], Vec::new());
+        owner.stack.push(Value::Int(limit as i32 - 1));
+        owner.dispatch(&store, &mut TraceApi).unwrap();
+        for rejected in [limit, limit + 184, 0x40000, u32::MAX] {
+            owner.stack.push(Value::Int(rejected as i32));
+            assert!(owner.dispatch(&store, &mut TraceApi).is_err());
+            assert_eq!(owner.mem_ptr, limit - 1);
+            assert_eq!(
+                owner
+                    .read_int(crate::native_vm::FRAME_SEGMENT | limit, 2)
+                    .unwrap(),
+                0x12345678
+            );
+        }
+    }
+
+    #[test]
+    fn frame_limits_are_initialized_before_direct_dispatch_and_after_resizing() {
+        let store = test_instruction(0, 0x11, "store_base", vec![0x11], Vec::new());
+        let mut default = Vm::new();
+        default.stack.push(Value::Int(184));
+        default.dispatch(&store, &mut TraceApi).unwrap();
+        assert_eq!(default.mem_ptr, 184);
+        for size in [0x100, 0x80000] {
+            let mut vm = Vm::with_main_thread_regions(0x80000, size, 16);
+            vm.stack.push(Value::Int(size as i32 - 1));
+            vm.dispatch(&store, &mut TraceApi).unwrap();
+            vm.stack.push(Value::Int(size as i32));
+            assert!(vm.dispatch(&store, &mut TraceApi).is_err());
+            assert_eq!(vm.mem_ptr, size - 1);
+        }
+        let program =
+            crate::native_script::parse_bp_program(Some("frame-worker._bp".into()), &[0x17]);
+        default
+            .start_async_program_with_args(Value::Program(Arc::new(program)), Vec::new(), false)
+            .unwrap();
+        default.set_newest_async_thread_regions(0x100, 0x80, 16);
+        let worker = &mut default.async_tasks.last_mut().unwrap().vm;
+        worker.stack.push(Value::Int(0x80));
+        assert!(worker.dispatch(&store, &mut TraceApi).is_err());
+        assert_eq!(worker.mem_ptr, 0);
     }
 
     #[test]

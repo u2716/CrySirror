@@ -8,7 +8,7 @@
 //! ends with two further NULs. Thus a trailing delimiter leaves three NULs.
 //! This explicit layout is useful for native multi-string buffers; it is not
 //! an implicit text encoding or a replacement for Unicode word segmentation.
-use anyhow::{ensure, Result};
+use anyhow::{Result, ensure};
 use std::ops::Range;
 
 pub const MAX_BYTE_SPLIT_INPUT: usize = 1024 * 1024;
@@ -190,32 +190,38 @@ mod tests {
                 Ok(())
             })
         };
-        assert!(run(
-            b"a,b",
-            ByteSplitLimits {
-                max_output_bytes: 4,
-                ..Default::default()
-            }
-        )
-        .unwrap_err()
-        .to_string()
-        .contains("capacity"));
-        assert!(run(
-            b"a,b",
-            ByteSplitLimits {
-                max_tokens: 1,
-                ..Default::default()
-            }
-        )
-        .is_err());
-        assert!(run(
-            b"ab",
-            ByteSplitLimits {
-                max_input_bytes: 1,
-                ..Default::default()
-            }
-        )
-        .is_err());
+        assert!(
+            run(
+                b"a,b",
+                ByteSplitLimits {
+                    max_output_bytes: 4,
+                    ..Default::default()
+                }
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("capacity")
+        );
+        assert!(
+            run(
+                b"a,b",
+                ByteSplitLimits {
+                    max_tokens: 1,
+                    ..Default::default()
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            run(
+                b"ab",
+                ByteSplitLimits {
+                    max_input_bytes: 1,
+                    ..Default::default()
+                }
+            )
+            .is_err()
+        );
         assert!(run(b"a\0b", Default::default()).is_err());
         let calls = std::cell::Cell::new(0);
         let check = || {
@@ -224,15 +230,17 @@ mod tests {
             ensure!(count < 3, "cancelled split");
             Ok(())
         };
-        assert!(split_delimited_bytes(
-            &vec![b'x'; 8192],
-            b",",
-            ByteSplitBoundary::ShiftJis,
-            Default::default(),
-            &check
-        )
-        .unwrap_err()
-        .to_string()
-        .contains("cancelled"));
+        assert!(
+            split_delimited_bytes(
+                &vec![b'x'; 8192],
+                b",",
+                ByteSplitBoundary::ShiftJis,
+                Default::default(),
+                &check
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("cancelled")
+        );
     }
 }

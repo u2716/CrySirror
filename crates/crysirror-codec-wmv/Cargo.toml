@@ -1,4 +1,5 @@
 [package]
+license-file.workspace = true
 license.workspace = true
 publish = false
 autobins = false

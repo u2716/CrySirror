@@ -89,17 +89,17 @@ struct ByteTransform {
     constant: [i32; 4],
     source: RgbaByteRounding,
     destination: RgbaByteRounding,
+    sum: Option<RgbaByteRounding>,
 }
 impl ByteTransform {
     fn prepare(state: &RgbaBlendState) -> Option<Self> {
-        let RgbaBlendArithmetic::Byte255 {
-            source,
-            destination,
-        } = state.arithmetic
-        else {
-            return None;
+        let (source, destination, sum) = match state.arithmetic {
+            RgbaBlendArithmetic::Byte255 { source, destination } => (source, destination, None),
+            RgbaBlendArithmetic::Byte255Sum { rounding } => (rounding, rounding, Some(rounding)),
+            RgbaBlendArithmetic::FloatNearest | RgbaBlendArithmetic::ByteShiftSum { .. } => return None,
         };
         Some(Self {
+            sum,
             scale: state.source_scale.map(|v| (v * 255.).round() as i32),
             bias: state.source_bias.map(|v| (v * 255.).round() as i32),
             constant: state.constant.map(|v| (v * 255.).round() as i32),
@@ -125,6 +125,17 @@ fn combine_bytes(dst: &mut [u8], source: &[u8], state: &RgbaBlendState, transfor
         let value = match mode.equation {
             E::Min => s[c].min(d[c]),
             E::Max => s[c].max(d[c]),
+            eq if transform.sum.is_some() => {
+                let source = s[c] * byte_factor(mode.source, c, &s, &d, &k);
+                let destination = d[c] * byte_factor(mode.destination, c, &s, &d, &k);
+                let total = match eq {
+                    E::Add => source + destination,
+                    E::Subtract => source - destination,
+                    E::ReverseSubtract => destination - source,
+                    _ => unreachable!(),
+                };
+                if total < 0 { 0 } else { byte_product(total, transform.sum.unwrap()) }
+            }
             eq => {
                 let source = byte_product(
                     s[c] * byte_factor(mode.source, c, &s, &d, &k),
@@ -145,10 +156,55 @@ fn combine_bytes(dst: &mut [u8], source: &[u8], state: &RgbaBlendState, transfor
         dst[c] = value.clamp(0, 255) as u8;
     }
 }
+fn combine_shift(dst: &mut [u8], source: &[u8], state: &RgbaBlendState, shift: u8) {
+    let unit = 1i32 << shift;
+    let k = state.constant.map(|v| (v * unit as f32).round() as i32);
+    let factor = |f: F, c: usize| match f {
+        F::One => unit,
+        F::Zero => 0,
+        F::ConstantColor => k[c],
+        F::OneMinusConstantColor => unit - k[c],
+        F::ConstantAlpha => k[3],
+        F::OneMinusConstantAlpha => unit - k[3],
+        _ => 0,
+    };
+    for c in 0..4 {
+        if !state.write_mask[c] {
+            continue;
+        }
+        let mode = if c == 3 { state.alpha } else { state.color };
+        let s = i32::from(source[c]) * factor(mode.source, c);
+        let d = i32::from(dst[c]) * factor(mode.destination, c);
+        let total = match mode.equation {
+            E::Add => s + d,
+            E::Subtract => s - d,
+            E::ReverseSubtract => d - s,
+            _ => s + d,
+        };
+        dst[c] = (total.max(0) >> shift).clamp(0, 255) as u8;
+    }
+}
 fn combine(dst: &mut [u8], source: &[u8], state: &RgbaBlendState, bytes: Option<&ByteTransform>) {
     let alpha = f32::from(source[3]) / 255.;
-    if state.source_color_key.is_some_and(|key| source[..3] == key)
-        || state.source_alpha_key == Some(source[3])
+    let keyed = state.source_color_key.is_some_and(|key| source[..3] == key);
+    if state.source_color_key_invert {
+        if !keyed {
+            return;
+        }
+    } else if keyed {
+        return;
+    }
+    if let RgbaBlendArithmetic::ByteShiftSum { shift } = state.arithmetic {
+        if state.source_alpha_key == Some(source[3])
+            || alpha < state.source_alpha_range[0]
+            || alpha > state.source_alpha_range[1]
+        {
+            return;
+        }
+        combine_shift(dst, source, state, shift);
+        return;
+    }
+    if state.source_alpha_key == Some(source[3])
         || alpha < state.source_alpha_range[0]
         || alpha > state.source_alpha_range[1]
     {

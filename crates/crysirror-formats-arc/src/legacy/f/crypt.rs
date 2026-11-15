@@ -3,6 +3,7 @@
 // supplied by the client key provider; no upstream title key tables are copied.
 use super::*;
 mod qlie31;
+mod qlie_keys;
 
 pub(super) fn leafpack(s: &dyn AssetReader, cx: &DecodeContext) -> Result<Vec<Row>> {
     let key = key_bytes(cx, "leaf/leafpack")?;
@@ -851,22 +852,21 @@ pub(super) fn pack(s: &dyn AssetReader, cx: &DecodeContext) -> Result<Vec<Row>> 
         let ns = c.le16()? as usize;
         c.take(ns + 28)?;
     }
-    c.take(28)?;
+    let hash_header = c.take(28)?;
+    let hash14 = hash_header.starts_with(b"HashVer1.4\0");
+    ensure!(hash14 || hash_header.starts_with(b"HashVer1.3\0"), "unsupported QLiE hash directory version");
     let extra = c.le32()? as usize;
-    c.take(extra + 36)?;
-    let seed = derive_seed(c.take(256)?) & 0x0fffffff;
+    c.take(extra)?;
+    // HashVer1.4 adds36 bytes before the1024-byte key table. BIMAN3's
+    // native487FFC reads its trailer from EOF-1088, then derives the seed
+    // from the first256 bytes at EOF-1052. Names and payloads still use
+    // FilePack3.0's original CP932/cipher rules; no encoding fallback applies.
+    let seed_at = table.len().checked_sub(1024).context("QLiE key table")?;
+    ensure!(c.at.checked_add(if hash14 { 72 } else { 36 }) == Some(seed_at), "QLiE hash/key trailer layout");
+    let seed = derive_seed(&table[seed_at..seed_at + 256]) & 0x0fffffff;
     c.at = 0;
     let p = cx.parameters.get("qlie/pack");
-    let mut key1 = if let Some(alias) = p.and_then(|p| p["key1_id"].as_str()) {
-        Some(cx.keys.key(cx.client, alias)?)
-    } else {
-        None
-    };
-    let key2 = if let Some(alias) = p.and_then(|p| p["key2_id"].as_str()) {
-        Some(cx.keys.key(cx.client, alias)?)
-    } else {
-        None
-    };
+    let (mut key1, key2) = qlie_keys::companions(cx)?;
     let basic = p.and_then(|p| p["basic"].as_bool()) == Some(true);
     ensure!(
         !basic || (key1.is_none() && key2.is_none()),

@@ -79,12 +79,24 @@ impl Bridge {
         self.native_skip_key = None;
         Ok(true)
     }
+    /// Logical EFFECT slots survive materialization into a single display
+    /// image. Their former Layer proxy need not still exist. Query the scoped
+    /// scene before deleting a proxy, while clearing native state regardless.
+    /// Query and mutation failures still propagate; this is not Remove-or-ignore.
+    pub(super) fn native_layer_removal(client:ClientId,host:&mut dyn HostServices,id:u32)->Result<Option<Value>> {
+        let layer:Value=serde_json::from_slice(&host.query_engine(client,crysirror_core::service::EngineQuery::Layer(id))?)?;
+        Ok((!layer.is_null()).then(||json!({"op":"remove","id":id})))
+    }
+    pub(super) fn native_effect_layer_removals(&self,host:&mut dyn HostServices)->Result<Vec<Value>> {
+        let mut ops=Vec::new();
+        for slot in &self.active_effects {
+            if let Some(op)=Self::native_layer_removal(self.client,host,self.layer_id(*slot)?)?{ops.push(op);}
+        }
+        Ok(ops)
+    }
     pub(super) fn clear_all_native_effects(&mut self, host: &mut dyn HostServices) -> Result<()> {
-        let ops = self
-            .active_effects
-            .iter()
-            .map(|slot| Ok(json!({"op":"remove","id":self.layer_id(*slot)?})))
-            .collect::<Result<Vec<_>>>()?;
+        self.freeze_effect_backing()?;
+        let ops = self.native_effect_layer_removals(host)?;
         self.submit(host, json!({"layers":ops}))?;
         self.obsolete_message_exp_wait = false;
         self.active_effects.clear();

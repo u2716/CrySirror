@@ -1,0 +1,659 @@
+{
+  "source": "https://github.com/AtomCrafty/MajiroTools/blob/e0261df508b6c8065865bb51b4059263cef84394/src/MajiroLib/Script/Opcode.cs",
+  "licence": "MIT",
+  "copyright": "2021 Mario Welzig, Robert Jordan",
+  "opcodes": {
+    "0x100": {
+      "name": "mul.i",
+      "operator": "*"
+    },
+    "0x101": {
+      "name": "mul.r",
+      "operator": "*"
+    },
+    "0x108": {
+      "name": "div.i",
+      "operator": "/"
+    },
+    "0x109": {
+      "name": "div.r",
+      "operator": "/"
+    },
+    "0x110": {
+      "name": "rem",
+      "operator": "%"
+    },
+    "0x118": {
+      "name": "add.i",
+      "operator": "+"
+    },
+    "0x119": {
+      "name": "add.r",
+      "operator": "+"
+    },
+    "0x11A": {
+      "name": "add.s",
+      "operator": "+"
+    },
+    "0x120": {
+      "name": "sub.i",
+      "operator": "-"
+    },
+    "0x121": {
+      "name": "sub.r",
+      "operator": "-"
+    },
+    "0x128": {
+      "name": "shr",
+      "operator": ">>"
+    },
+    "0x130": {
+      "name": "shl",
+      "operator": "<<"
+    },
+    "0x138": {
+      "name": "cle.i",
+      "operator": "<="
+    },
+    "0x139": {
+      "name": "cle.r",
+      "operator": "<="
+    },
+    "0x13A": {
+      "name": "cle.s",
+      "operator": "<="
+    },
+    "0x140": {
+      "name": "clt.i",
+      "operator": "<"
+    },
+    "0x141": {
+      "name": "clt.r",
+      "operator": "<"
+    },
+    "0x142": {
+      "name": "clt.s",
+      "operator": "<"
+    },
+    "0x148": {
+      "name": "cge.i",
+      "operator": ">="
+    },
+    "0x149": {
+      "name": "cge.r",
+      "operator": ">="
+    },
+    "0x14A": {
+      "name": "cge.s",
+      "operator": ">="
+    },
+    "0x150": {
+      "name": "cgt.i",
+      "operator": ">"
+    },
+    "0x151": {
+      "name": "cgt.r",
+      "operator": ">"
+    },
+    "0x152": {
+      "name": "cgt.s",
+      "operator": ">"
+    },
+    "0x158": {
+      "name": "ceq.i",
+      "operator": "=="
+    },
+    "0x159": {
+      "name": "ceq.r",
+      "operator": "=="
+    },
+    "0x15A": {
+      "name": "ceq.s",
+      "operator": "=="
+    },
+    "0x15B": {
+      "name": "ceq.iarr",
+      "operator": "=="
+    },
+    "0x15C": {
+      "name": "ceq.rarr",
+      "operator": "=="
+    },
+    "0x15D": {
+      "name": "ceq.sarr",
+      "operator": "=="
+    },
+    "0x160": {
+      "name": "cne.i",
+      "operator": "!="
+    },
+    "0x161": {
+      "name": "cne.r",
+      "operator": "!="
+    },
+    "0x162": {
+      "name": "cne.s",
+      "operator": "!="
+    },
+    "0x163": {
+      "name": "cne.iarr",
+      "operator": "!="
+    },
+    "0x164": {
+      "name": "cne.rarr",
+      "operator": "!="
+    },
+    "0x165": {
+      "name": "cne.sarr",
+      "operator": "!="
+    },
+    "0x168": {
+      "name": "xor",
+      "operator": "^"
+    },
+    "0x170": {
+      "name": "andl",
+      "operator": "&&"
+    },
+    "0x178": {
+      "name": "orl",
+      "operator": "||"
+    },
+    "0x180": {
+      "name": "and",
+      "operator": "&"
+    },
+    "0x188": {
+      "name": "or",
+      "operator": "|"
+    },
+    "0x190": {
+      "name": "notl",
+      "operator": "!"
+    },
+    "0x191": {
+      "name": "nop.191",
+      "operator": null
+    },
+    "0x198": {
+      "name": "not",
+      "operator": "~"
+    },
+    "0x1A0": {
+      "name": "neg.i",
+      "operator": "-"
+    },
+    "0x1A1": {
+      "name": "neg.r",
+      "operator": "-"
+    },
+    "0x1A8": {
+      "name": "nop.1a8",
+      "operator": null
+    },
+    "0x1A9": {
+      "name": "nop.1a9",
+      "operator": null
+    },
+    "0x1B0": {
+      "name": "st.i",
+      "operator": "="
+    },
+    "0x1B1": {
+      "name": "st.r",
+      "operator": "="
+    },
+    "0x1B2": {
+      "name": "st.s",
+      "operator": "="
+    },
+    "0x1B3": {
+      "name": "st.iarr",
+      "operator": "="
+    },
+    "0x1B4": {
+      "name": "st.rarr",
+      "operator": "="
+    },
+    "0x1B5": {
+      "name": "st.sarr",
+      "operator": "="
+    },
+    "0x1B8": {
+      "name": "st.mul.i",
+      "operator": "*="
+    },
+    "0x1B9": {
+      "name": "st.mul.r",
+      "operator": "*="
+    },
+    "0x1C0": {
+      "name": "st.div.i",
+      "operator": "/="
+    },
+    "0x1C1": {
+      "name": "st.div.r",
+      "operator": "/="
+    },
+    "0x1C8": {
+      "name": "st.rem",
+      "operator": "%="
+    },
+    "0x1D0": {
+      "name": "st.add.i",
+      "operator": "+="
+    },
+    "0x1D1": {
+      "name": "st.add.r",
+      "operator": "+="
+    },
+    "0x1D2": {
+      "name": "st.add.s",
+      "operator": "+="
+    },
+    "0x1D8": {
+      "name": "st.sub.i",
+      "operator": "-="
+    },
+    "0x1D9": {
+      "name": "st.sub.r",
+      "operator": "-="
+    },
+    "0x1E0": {
+      "name": "st.shl",
+      "operator": "<<="
+    },
+    "0x1E8": {
+      "name": "st.shr",
+      "operator": ">>="
+    },
+    "0x1F0": {
+      "name": "st.and",
+      "operator": "&="
+    },
+    "0x1F8": {
+      "name": "st.xor",
+      "operator": "^="
+    },
+    "0x200": {
+      "name": "st.or",
+      "operator": "|="
+    },
+    "0x210": {
+      "name": "stp.i",
+      "operator": "="
+    },
+    "0x211": {
+      "name": "stp.r",
+      "operator": "="
+    },
+    "0x212": {
+      "name": "stp.s",
+      "operator": "="
+    },
+    "0x213": {
+      "name": "stp.iarr",
+      "operator": "="
+    },
+    "0x214": {
+      "name": "stp.rarr",
+      "operator": "="
+    },
+    "0x215": {
+      "name": "stp.sarr",
+      "operator": "="
+    },
+    "0x218": {
+      "name": "stp.mul.i",
+      "operator": "*="
+    },
+    "0x219": {
+      "name": "stp.mul.r",
+      "operator": "*="
+    },
+    "0x220": {
+      "name": "stp.div.i",
+      "operator": "/="
+    },
+    "0x221": {
+      "name": "stp.div.r",
+      "operator": "/="
+    },
+    "0x228": {
+      "name": "stp.rem",
+      "operator": "%="
+    },
+    "0x230": {
+      "name": "stp.add.i",
+      "operator": "+="
+    },
+    "0x231": {
+      "name": "stp.add.r",
+      "operator": "+="
+    },
+    "0x232": {
+      "name": "stp.add.s",
+      "operator": "+="
+    },
+    "0x238": {
+      "name": "stp.sub.i",
+      "operator": "-="
+    },
+    "0x239": {
+      "name": "stp.sub.r",
+      "operator": "-="
+    },
+    "0x240": {
+      "name": "stp.shl",
+      "operator": "<<="
+    },
+    "0x248": {
+      "name": "stp.shr",
+      "operator": ">>="
+    },
+    "0x250": {
+      "name": "stp.and",
+      "operator": "&="
+    },
+    "0x258": {
+      "name": "stp.xor",
+      "operator": "^="
+    },
+    "0x260": {
+      "name": "stp.or",
+      "operator": "|="
+    },
+    "0x270": {
+      "name": "stelem.i",
+      "operator": "="
+    },
+    "0x271": {
+      "name": "stelem.r",
+      "operator": "="
+    },
+    "0x272": {
+      "name": "stelem.s",
+      "operator": "="
+    },
+    "0x278": {
+      "name": "stelem.mul.i",
+      "operator": "*="
+    },
+    "0x279": {
+      "name": "stelem.mul.r",
+      "operator": "*="
+    },
+    "0x280": {
+      "name": "stelem.div.i",
+      "operator": "/="
+    },
+    "0x281": {
+      "name": "stelem.div.r",
+      "operator": "/="
+    },
+    "0x288": {
+      "name": "stelem.rem",
+      "operator": "%="
+    },
+    "0x290": {
+      "name": "stelem.add.i",
+      "operator": "+="
+    },
+    "0x291": {
+      "name": "stelem.add.r",
+      "operator": "+="
+    },
+    "0x292": {
+      "name": "stelem.add.s",
+      "operator": "+="
+    },
+    "0x298": {
+      "name": "stelem.sub.i",
+      "operator": "-="
+    },
+    "0x299": {
+      "name": "stelem.sub.r",
+      "operator": "-="
+    },
+    "0x2A0": {
+      "name": "stelem.shl",
+      "operator": "<<="
+    },
+    "0x2A8": {
+      "name": "stelem.shr",
+      "operator": ">>="
+    },
+    "0x2B0": {
+      "name": "stelem.and",
+      "operator": "&="
+    },
+    "0x2B8": {
+      "name": "stelem.xor",
+      "operator": "^="
+    },
+    "0x2C0": {
+      "name": "stelem.or",
+      "operator": "|="
+    },
+    "0x2D0": {
+      "name": "stelemp.i",
+      "operator": "="
+    },
+    "0x2D1": {
+      "name": "stelemp.r",
+      "operator": "="
+    },
+    "0x2D2": {
+      "name": "stelemp.s",
+      "operator": "="
+    },
+    "0x2D8": {
+      "name": "stelemp.mul.i",
+      "operator": "*="
+    },
+    "0x2D9": {
+      "name": "stelemp.mul.r",
+      "operator": "*="
+    },
+    "0x2E0": {
+      "name": "stelemp.div.i",
+      "operator": "/="
+    },
+    "0x2E1": {
+      "name": "stelemp.div.r",
+      "operator": "/="
+    },
+    "0x2E8": {
+      "name": "stelemp.rem",
+      "operator": "%="
+    },
+    "0x2F0": {
+      "name": "stelemp.add.i",
+      "operator": "+="
+    },
+    "0x2F1": {
+      "name": "stelemp.add.r",
+      "operator": "+="
+    },
+    "0x2F2": {
+      "name": "stelemp.add.s",
+      "operator": "+="
+    },
+    "0x2F8": {
+      "name": "stelemp.sub.i",
+      "operator": "-="
+    },
+    "0x2F9": {
+      "name": "stelemp.sub.r",
+      "operator": "-="
+    },
+    "0x300": {
+      "name": "stelemp.shl",
+      "operator": "<<="
+    },
+    "0x308": {
+      "name": "stelemp.shr",
+      "operator": ">>="
+    },
+    "0x310": {
+      "name": "stelemp.and",
+      "operator": "&="
+    },
+    "0x318": {
+      "name": "stelemp.xor",
+      "operator": "^="
+    },
+    "0x320": {
+      "name": "stelemp.or",
+      "operator": "|="
+    },
+    "0x800": {
+      "name": "ldc.i",
+      "operator": null
+    },
+    "0x801": {
+      "name": "ldstr",
+      "operator": null
+    },
+    "0x802": {
+      "name": "ld",
+      "operator": null
+    },
+    "0x803": {
+      "name": "ldc.r",
+      "operator": null
+    },
+    "0x80F": {
+      "name": "call",
+      "operator": null
+    },
+    "0x810": {
+      "name": "callp",
+      "operator": null
+    },
+    "0x829": {
+      "name": "alloca",
+      "operator": null
+    },
+    "0x82B": {
+      "name": "ret",
+      "operator": null
+    },
+    "0x82C": {
+      "name": "br",
+      "operator": null
+    },
+    "0x82D": {
+      "name": "brtrue",
+      "operator": null
+    },
+    "0x82E": {
+      "name": "brfalse",
+      "operator": null
+    },
+    "0x82F": {
+      "name": "pop",
+      "operator": null
+    },
+    "0x830": {
+      "name": "br.case",
+      "operator": null
+    },
+    "0x831": {
+      "name": "bne.case",
+      "operator": null
+    },
+    "0x832": {
+      "name": "bge.case",
+      "operator": null
+    },
+    "0x833": {
+      "name": "ble.case",
+      "operator": null
+    },
+    "0x834": {
+      "name": "syscall",
+      "operator": null
+    },
+    "0x835": {
+      "name": "syscallp",
+      "operator": null
+    },
+    "0x836": {
+      "name": "argcheck",
+      "operator": null
+    },
+    "0x837": {
+      "name": "ldelem",
+      "operator": null
+    },
+    "0x838": {
+      "name": "blt.case",
+      "operator": null
+    },
+    "0x839": {
+      "name": "bgt.case",
+      "operator": null
+    },
+    "0x83A": {
+      "name": "line",
+      "operator": null
+    },
+    "0x83B": {
+      "name": "bsel.1",
+      "operator": null
+    },
+    "0x83C": {
+      "name": "bsel.3",
+      "operator": null
+    },
+    "0x83D": {
+      "name": "bsel.2",
+      "operator": null
+    },
+    "0x83E": {
+      "name": "conv.i",
+      "operator": null
+    },
+    "0x83F": {
+      "name": "conv.r",
+      "operator": null
+    },
+    "0x840": {
+      "name": "text",
+      "operator": null
+    },
+    "0x841": {
+      "name": "proc",
+      "operator": null
+    },
+    "0x842": {
+      "name": "ctrl",
+      "operator": null
+    },
+    "0x843": {
+      "name": "bsel.x",
+      "operator": null
+    },
+    "0x844": {
+      "name": "bsel.clr",
+      "operator": null
+    },
+    "0x845": {
+      "name": "bsel.4",
+      "operator": null
+    },
+    "0x846": {
+      "name": "bsel.jmp.4",
+      "operator": null
+    },
+    "0x847": {
+      "name": "bsel.5",
+      "operator": null
+    },
+    "0x850": {
+      "name": "switch",
+      "operator": null
+    }
+  }
+}

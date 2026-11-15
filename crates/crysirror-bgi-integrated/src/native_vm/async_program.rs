@@ -27,6 +27,8 @@ impl Vm {
     pub(crate) fn set_newest_async_thread_regions(&mut self, code: u32, data: u32, slots: u32) {
         if let Some(task) = self.async_tasks.last_mut() {
             task.vm.thread.set_region_sizes(code, data, slots);
+            task.vm
+                .sync_region_reservations(task.vm.active_code_used_end());
         }
     }
 
@@ -86,6 +88,7 @@ impl Vm {
         // an idle thread must not keep another 1 MiB snapshot of it.
         let mut vm = Vm::with_buffers(Vec::new(), Vec::new());
         vm.native_abi_profile = self.native_abi_profile;
+        vm.modern_pointer_tags = self.modern_pointer_tags;
         vm.graph_text_encoding = self.graph_text_encoding;
         vm.system80_shared = Arc::clone(&self.system80_shared);
         vm.system81_shared = Arc::clone(&self.system81_shared);
@@ -537,7 +540,7 @@ impl Vm {
         None
     }
 
-    fn refresh_thread_links(&mut self) {
+    pub(super) fn refresh_thread_links(&mut self) {
         let thread_ids = self
             .async_tasks
             .iter()
@@ -692,7 +695,7 @@ pub(crate) fn local_byte(vm: &Vm, addr: usize) -> u8 {
 
 /// Exchange a parked local window with the active process buffer, including
 /// the write bounds. Child threads borrow their owner's window this way so a
-/// compact snapshot need not expand to 2 MiB merely to lend it for one pass.
+/// compact snapshot need not expand to the full window merely to lend it for one pass.
 pub(crate) fn exchange_saved_local(vm: &mut Vm, window: &mut LocalWindow) {
     if vm.memory.len() < HEAP_MEMORY_BASE {
         vm.memory.resize(HEAP_MEMORY_BASE, 0);
@@ -718,7 +721,7 @@ pub(crate) fn local_window_mut(vm: &mut Vm) -> &mut [u8] {
     }
 }
 
-fn transfer_async_shared_state(source: &mut Vm, destination: &mut Vm) {
+pub(crate) fn transfer_async_shared_state(source: &mut Vm, destination: &mut Vm) {
     let trace_records = std::env::var_os("TRACE_ASYNC_RECORDS").is_some();
     if trace_records {
         tracing::info!(
@@ -743,6 +746,10 @@ fn transfer_async_shared_state(source: &mut Vm, destination: &mut Vm) {
         &mut destination.heap_free_blocks,
     );
     std::mem::swap(&mut source.target_heap, &mut destination.target_heap);
+    // D0 managers live in native process globals (4A14E0 / 1400FB030),
+    // not in CThread. Move their ownership with the heap/global window.
+    std::mem::swap(&mut source.logic, &mut destination.logic);
+
     std::mem::swap(&mut source.record_tables, &mut destination.record_tables);
     std::mem::swap(
         &mut source.next_record_table_handle,
@@ -892,6 +899,60 @@ fn read_u32(memory: &[u8], addr: usize) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_buffers_and_logic_handles_follow_cooperative_thread_handover() {
+        let mut root = Vm::new();
+        let mut child = Vm::new();
+        for vm in [&mut root, &mut child] {
+            vm.set_native_abi_profile(crate::native_vm::NativeAbiProfile::ModernFused);
+        }
+        child.system81_shared = Arc::clone(&root.system81_shared);
+        root.stack = vec![Value::Ptr(128), Value::Str("shared".into())];
+        assert_eq!(root.execute_buffer_extension(0x88).unwrap(), 0);
+        let buffer = root.read_int(128, 2).unwrap();
+        root.stack = vec![Value::Ptr(132)];
+        assert_eq!(root.execute_legacy_3d(0x40).unwrap(), Some(Value::Int(0)));
+        let space = root.read_int(132, 2).unwrap();
+        root.stack = [
+            space as i32,
+            0,
+            0,
+            0,
+            0,
+            65536,
+            0,
+            0,
+            65536,
+            65536,
+            65536,
+            1,
+            0,
+        ]
+        .into_iter()
+        .map(Value::Int)
+        .collect();
+        assert_eq!(root.execute_legacy_3d(0x60).unwrap(), Some(Value::Int(0)));
+        transfer_async_shared_state(&mut root, &mut child);
+        assert_eq!(child.read_shadowed_c_string(buffer).unwrap(), "shared");
+        child.stack = vec![
+            Value::Int(space as i32),
+            Value::Int(0),
+            Value::Int(4),
+            Value::Int(99),
+        ];
+        assert_eq!(child.execute_legacy_3d(0x62).unwrap(), Some(Value::Int(0)));
+        transfer_async_shared_state(&mut child, &mut root);
+        root.stack = vec![
+            Value::Ptr(256),
+            Value::Int(space as i32),
+            Value::Int(0),
+            Value::Int(4),
+        ];
+        assert_eq!(root.execute_legacy_3d(0x63).unwrap(), Some(Value::Int(0)));
+        assert_eq!(root.read_int(256, 2).unwrap(), 99);
+        assert_eq!(root.read_shadowed_c_string(buffer).unwrap(), "shared");
+    }
 
     #[test]
     fn shadow_transfer_replaces_globals_but_preserves_local_and_heap_values() {

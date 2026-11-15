@@ -4,7 +4,7 @@
 // Licensed under the Apache License, Version 2.0, http://www.apache.org/licenses/LICENSE-2.0.
 // Distributed on an AS IS BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND.
 //! Directivity, air absorption and volumetric visibility adapted from phonon_rs
-//! 87c392a3e605f9df30abe6e291f0bbc5e86f54ad. See UPSTREAM.md for semantic corrections.
+//! 87c392a3e605f9df30abe6e291f0bbc5e86f54ad. See SOURCE_NOTES.md for semantic corrections.
 use crate::{AcousticQuery, AcousticScene, geometry::epsilon};
 use anyhow::{Result, ensure};
 use glam::Vec3;

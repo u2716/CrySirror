@@ -25,7 +25,7 @@ impl GlyphImageBatchQuery for Query {
     }
     fn poll(&mut self) -> Result<GlyphImageBatchState> {
         if let Some(task) = &mut self.task {
-            match task.try_take() {
+            match task.poll_owner() {
                 Ok(None) => {}
                 Ok(Some(batch)) => {
                     self.task = None;

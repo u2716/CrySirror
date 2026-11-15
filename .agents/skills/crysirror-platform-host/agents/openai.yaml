@@ -1,0 +1,4 @@
+interface:
+  display_name: "CrySirror Platform Hosts"
+  short_description: "Maintain host lifecycle, packaging, signing and build CI"
+  default_prompt: "Use $crysirror-platform-host to maintain this platform's session lifecycle and produce the requested verifiable Release artifact within the existing signing and execution scope."

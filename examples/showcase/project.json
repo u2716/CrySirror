@@ -1,0 +1,11 @@
+{
+  "schema": 2,
+  "name": "CrySirror Showcase",
+  "content_revision": "showcase-1",
+  "canvas": [3840, 2160],
+  "background": [0, 0, 0, 255],
+  "assets": "assets",
+  "clients": [
+    { "name": "game", "adapter": "crysirror-script-v1", "game": "crysirror-showcase" }
+  ]
+}

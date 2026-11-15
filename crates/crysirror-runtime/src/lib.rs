@@ -22,6 +22,7 @@ pub use runtime::{AdapterRegistry, Runtime};
 
 mod image_processing;
 mod image_encoding;
+mod region_resources;
 mod audio_replacement;
 
 pub mod text_storage;

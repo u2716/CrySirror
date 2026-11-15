@@ -1,0 +1,34 @@
+diff --color -ru a/src/unix/newlib/mod.rs b/src/unix/newlib/mod.rs
+--- a/src/unix/newlib/mod.rs	2026-11-13 17:14:17
++++ b/src/unix/newlib/mod.rs	2026-11-13 17:14:27
+@@ -1,7 +1,15 @@
+ use crate::prelude::*;
+ 
+-pub type blkcnt_t = i32;
+-pub type blksize_t = i32;
++cfg_if! {
++    // devkitA64's newlib (Nintendo Switch): 64-bit block counts.
++    if #[cfg(all(target_os = "horizon", target_arch = "aarch64"))] {
++        pub type blkcnt_t = c_long;
++        pub type blksize_t = c_long;
++    } else {
++        pub type blkcnt_t = i32;
++        pub type blksize_t = i32;
++    }
++}
+ 
+ cfg_if! {
+     if #[cfg(target_os = "rtems")] {
+@@ -16,6 +24,12 @@
+         pub type dev_t = c_short;
+         pub type ino_t = c_ushort;
+         pub type off_t = c_long;
++    } else if #[cfg(all(target_os = "horizon", target_arch = "aarch64"))] {
++        // devkitA64's newlib (Nintendo Switch): 16-bit device and inode
++        // numbers, as in its `struct stat` and `struct dirent`.
++        pub type dev_t = c_short;
++        pub type ino_t = c_ushort;
++        pub type off_t = i64;
+     } else if #[cfg(target_os = "rtems")] {
+         pub type dev_t = u64;
+         pub type ino_t = u64;

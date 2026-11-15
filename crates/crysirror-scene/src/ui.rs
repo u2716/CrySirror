@@ -1,7 +1,7 @@
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. A copy is available at https://mozilla.org/MPL/2.0/.
 //! Retained widgets/layout/focus/input and rendering. Button capture/release and
-//! letterbox mapping are ported from RFVP exit_confirm_ui.rs (see UPSTREAM.md).
+//! letterbox mapping are ported from RFVP exit_confirm_ui.rs (see SOURCE_NOTES.md).
 pub mod cursor;
 pub mod dialog;
 pub mod hit_mask;
@@ -178,6 +178,18 @@ pub struct WidgetSpec {
     /// Maximum Unicode scalar count for TextField committed text.
     #[serde(default = "max_length")]
     pub max_length: u32,
+    /// Permit newline/tab in a text field; Enter inserts a newline.
+    #[serde(default)]
+    pub multiline:bool,
+    /// Display committed text without accepting edits.
+    #[serde(default)]
+    pub read_only:bool,
+    /// Disable automatic line wrapping while retaining explicit newlines.
+    #[serde(default)]
+    pub no_wrap:bool,
+    /// First explicit text line displayed in a multiline editor.
+    #[serde(default)]
+    pub scroll_lines:u32,
     /// A Button activates on pointer press instead of matching release.
     /// Keyboard activation keeps its normal semantics; other kinds reject it.
     #[serde(default)]
@@ -481,6 +493,12 @@ pub enum UiCommand {
     SetWindowSize {
         size: [u32; 2],
     },
+    /// Enter the presenting host's native pointer-driven window move loop.
+    BeginWindowDrag {},
+    /// Restore the ordinary opaque rectangular native window shape.
+    ResetWindowShape {},
+    /// IME candidate origin/extent in logical canvas pixels.
+    SetImeCursorArea { rect:[i32;4] },
     SetPresentationScale {
         mode: crysirror_core::service::PresentationScale,
     },
@@ -670,10 +688,6 @@ impl UiSystem {
                     staged.menus.enabled(client.0, *id, *item, *enabled)?
                 }
                 UiCommand::InsertText { text } => {
-                    ensure!(
-                        text.len() <= 1024 * 1024 && !text.chars().any(char::is_control),
-                        "UI committed text must be single-line Unicode"
-                    );
                     let id = staged.focus.context("no focused text field")?;
                     ensure!(
                         id.owner == client.0,
@@ -681,6 +695,7 @@ impl UiSystem {
                     );
                     ensure!(editable(owner, id.id), "focused text field is not editable");
                     let w = owner.get_mut(&id.id).unwrap();
+                    ensure!(text.len()<=1024*1024&&!text.chars().any(|c|c.is_control()&&!(w.spec.multiline&&matches!(c,'\n'|'\r'|'\t'))),"invalid committed text for field mode");
                     let available =
                         (w.spec.max_length as usize).saturating_sub(w.spec.text.chars().count());
                     w.spec.text.extend(text.chars().take(available));
@@ -688,7 +703,7 @@ impl UiSystem {
                 UiCommand::Backspace { id } => {
                     let w = owner.get_mut(id).context("widget missing")?;
                     ensure!(
-                        w.spec.kind == WidgetKind::TextField,
+                        w.spec.kind == WidgetKind::TextField&&!w.spec.read_only,
                         "widget is not a text field"
                     );
                     w.spec.text.pop();
@@ -780,6 +795,12 @@ impl UiSystem {
                 }
                 UiCommand::SetWindowSize { size } => {
                     staged.window_requests.set_size(client.0, *size)?
+                }
+                UiCommand::BeginWindowDrag {} => {staged.window_requests.drag=Some(client.0);}
+                UiCommand::ResetWindowShape {} => {staged.window_requests.reset_shape=Some(client.0);}
+                UiCommand::SetImeCursorArea {rect} => {
+                    ensure!(rect.iter().all(|v|v.unsigned_abs()<=1_000_000)&&rect[2]>0&&rect[3]>0,"IME cursor rectangle");
+                    staged.window_requests.ime_cursor_area=Some((client.0,*rect));
                 }
                 UiCommand::SetWindowPosition { position } => {
                     staged.window_requests.set_position(client.0, *position)?
@@ -956,6 +977,7 @@ impl UiSystem {
                 .is_some_and(|owner| editable(owner, id.id))
         })
     }
+    pub fn focused_multiline_field(&self)->bool{self.focus.is_some_and(|id|self.get(id.owner,id.id).is_some_and(|w|w.multiline&&!w.read_only))}
     pub fn reset_input_after_restore(&mut self) {
         self.widget_pointer=None;
         self.text_actions.clear();
@@ -1010,6 +1032,9 @@ impl UiSystem {
             .chain(self.window_requests.position.as_ref().map(|v| v.0))
             .chain(self.window_requests.visible.as_ref().map(|v| v.0))
             .chain(self.window_requests.minimized.as_ref().map(|v| v.0))
+            .chain(self.window_requests.drag)
+            .chain(self.window_requests.reset_shape)
+            .chain(self.window_requests.ime_cursor_area.as_ref().map(|v|v.0))
             .chain(self.menus.client_ids())
             .chain(self.dialogs.client_ids())
             .chain(self.tooltips.client_ids())
@@ -1104,7 +1129,9 @@ impl UiSystem {
             );
             for (id, widget) in owner {
                 let s = &widget.spec;
-                ensure!(s.key_events.len()<=64 && s.key_events.iter().all(|event|event.buttons!=0&&!event.event.is_empty()&&event.event.len()<=128),"invalid widget key events");
+                // A retained viewport can bind press/release/held separately
+                // for every control in the engine's 64-bit input namespace.
+                ensure!(s.key_events.len()<=3*64 && s.key_events.iter().all(|event|event.buttons!=0&&!event.event.is_empty()&&event.event.len()<=128),"invalid widget key events");
                 if let Some(mask) = &s.hit_mask {
                     mask.validate(s.rect)?;
                 }
@@ -1140,7 +1167,7 @@ impl UiSystem {
                     ensure!(
                         s.max_length <= 65536
                             && s.text.chars().count() <= s.max_length as usize
-                            && !s.text.chars().any(char::is_control),
+                            && !s.text.chars().any(|c|c.is_control()&&!(s.multiline&&matches!(c,'\n'|'\r'|'\t'))),
                         "invalid text field length or committed text"
                     );
                 }
@@ -1437,13 +1464,13 @@ impl UiSystem {
         }
         let text_tab = self
             .focus
-            .filter(|_| self.input.vk_down_stock(0x09) && self.focused_text_field());
+            .filter(|_| self.input.vk_down_stock(0x09) && self.focused_text_field()&&!self.focused_multiline_field());
         let axis = self.focus.and_then(|id| {
             let spec = &self.clients[&id.owner][&id.id].spec;
             (spec.kind == WidgetKind::Slider).then_some(spec.slider_axis)
         });
         let text_field = self.focused_text_field();
-        let forward = self.input.vk_down_stock(0x09)
+        let forward = self.input.vk_down_stock(0x09)&&!self.focused_multiline_field()
             || self.input.vk_down_stock(0x28) && axis != Some(SliderAxis::Vertical)
             || self.input.vk_down_stock(0x27) && axis.is_none() && !text_field;
         let backward = self.input.vk_down_stock(0x26) && axis != Some(SliderAxis::Vertical)
@@ -1570,7 +1597,11 @@ impl UiSystem {
         let mut actions = Vec::new();
         if let Some(id) = self.focus.filter(|_| self.focused_text_field()) {
             let backspace = self.input.vk_down_stock(0x08);
-            let submit = self.input.vk_down_stock(0x0d);
+            let mut submit = self.input.vk_down_stock(0x0d);
+            let multiline=self.clients[&id.owner][&id.id].spec.multiline;
+            let newline=submit&&multiline;
+            let tab=self.input.vk_down_stock(0x09)&&multiline;
+            if multiline{submit=false;}
             let cancel = self.input.vk_down_stock(0x1b);
             if submit || cancel {
                 self.record_text_action(
@@ -1591,6 +1622,8 @@ impl UiSystem {
             if backspace {
                 w.spec.text.pop();
             }
+            if newline&&w.spec.text.chars().count()<(w.spec.max_length as usize){w.spec.text.push('\n');}
+            if tab&&w.spec.text.chars().count()<(w.spec.max_length as usize){w.spec.text.push('\t');}
             if submit && !w.spec.text.is_empty() || cancel {
                 if self.events.len() == 256 {
                     self.events.remove(0);
@@ -1780,7 +1813,7 @@ impl UiSystem {
                 r[2] = (r[2] - 2. * f32::from(s.text_inset[0])).max(1.);
                 r[3] = (r[3] - 2. * f32::from(s.text_inset[1])).max(1.);
                 let text = if s.kind == WidgetKind::TextField {
-                    s.text.clone()
+                    if s.multiline{s.text.split('\n').skip(s.scroll_lines as usize).collect::<Vec<_>>().join("\n")}else{s.text.clone()}
                 } else {
                     s.text.replace("{value}", &format!("{:.2}", w.value))
                 };
@@ -1794,7 +1827,7 @@ impl UiSystem {
                         font: s.font.clone().context("UI font missing")?,
                         size: s.text_size,
                         color: s.text_color,
-                        layout: crysirror_core::service::SIMPLE_TEXT_LAYOUT.into(),
+                        layout: if s.no_wrap{crysirror_core::service::UNWRAPPED_TEXT_LAYOUT}else{crysirror_core::service::SIMPLE_TEXT_LAYOUT}.into(),
                     },
                     Some(if s.kind == WidgetKind::TextField {
                         intersect(l.clip, l.rect).unwrap_or([0.; 4])
@@ -1819,7 +1852,7 @@ fn editable(owner: &BTreeMap<u32, Widget>, id: u32) -> bool {
     let Some(w) = owner.get(&id) else {
         return false;
     };
-    if w.spec.kind != WidgetKind::TextField || !w.spec.keyboard_focusable {
+    if w.spec.kind != WidgetKind::TextField || !w.spec.keyboard_focusable || w.spec.read_only {
         return false;
     }
     let mut current = Some(id);

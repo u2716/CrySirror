@@ -5,13 +5,13 @@ use crate::{
     native_audio::{NativeAudioLookup, NativeSource},
     native_resources::{ImageLookup, PackedMember, ResourceNames},
 };
-use anyhow::{Context, Result, ensure};
+use anyhow::{ensure, Context, Result};
 use crysirror_core::{
     image_processing::ImageInput,
     service::{AssetReader, EncodedAudio},
     state::ClientId,
 };
-use crysirror_resource::{DecodeContext, FileRegistry, FormatRegistry, read_all};
+use crysirror_resource::{read_all, DecodeContext, FileRegistry, FormatRegistry};
 use crysirror_tasks::Cancellation;
 use std::sync::Arc;
 pub type SourceOpener =
@@ -29,6 +29,7 @@ pub struct NativeImageSource {
     pub size: [u32; 2],
     pub encoded_len: usize,
     pub clip_insets: Option<[i32; 4]>,
+    pub png_header:Option<crysirror_image::png_header::PngHeader>,
 }
 #[derive(Clone)]
 pub struct NativeResources {
@@ -38,8 +39,46 @@ pub struct NativeResources {
     files: Arc<FileRegistry>,
 }
 impl NativeResources {
+    /// ReplayVoice probes the packed bank before the loose voice. Both missing
+    /// is its native FALSE/no-play result; damaged containers still fail.
+    pub(crate) fn optional_replay_voice(&self, names: &ResourceNames, name: &[u8], cancel: &Cancellation) -> Result<Option<ResolvedAudio>> {
+        cancel.check()?;
+        let packed = names.packed_voice(name)?;
+        let loose = names.loose_voice(name)?;
+        let (path, reader) = if let Some(reader) = self.packed(&packed, "black-cyc/vpk", cancel)? {
+            (packed.member, reader)
+        } else if let Some(reader) = (self.open)(&loose, cancel)? {
+            (loose, reader)
+        } else { return Ok(None); };
+        let audio = self.decode_audio(&path, reader, cancel)?;
+        cancel.check()?;
+        Ok(Some(ResolvedAudio::Encoded(audio)))
+    }
+    /// CWaveData::LoadSystemWave's optional file read. Absence means FALSE
+    /// after the caller's Stop/filename prefix; corrupt data remains an error.
+    pub(crate) fn optional_system_wave(
+        &self,
+        names: &ResourceNames,
+        name: &[u8],
+        cancel: &Cancellation,
+    ) -> Result<Option<ResolvedAudio>> {
+        cancel.check()?;
+        let path = names.system_wave(Some(b"sys"), name)?;
+        let Some(reader) = (self.open)(&path, cancel)? else {
+            return Ok(None);
+        };
+        let audio = self.decode_audio(&path, reader, cancel)?;
+        cancel.check()?;
+        Ok(Some(ResolvedAudio::Encoded(audio)))
+    }
     pub(crate) fn client(&self) -> ClientId {
         self.client
+    }
+    /// Clone only this client's installed file-view capability. Native direct
+    /// CMyFile reads bypass script-image/GPK lookup; the injected opener still
+    /// determines local/network/packed-install policy and cancellation.
+    pub(crate) fn file_view(&self) -> SourceOpener {
+        self.open.clone()
     }
     pub fn blackcyc(client: ClientId, open: SourceOpener) -> Result<Self> {
         ensure!(client.0 != 0, "NNN resource client identity");
@@ -139,6 +178,7 @@ impl NativeResources {
         let info = crysirror_formats_blackcyc::Dwq::metadata(&bytes)?;
         let has_mask = matches!(info.pack, 2 | 3 | 7)
             || (info.pack == 8 && matches!(info.png_color_type, Some(4 | 6)));
+        let png_header=if info.pack==8 {Some(crysirror_image::png_header::PngHeader::read(bytes.get(64..).context("NNN PNG payload")?,&||cancel.check())?)}else{None};
         let encoded_len = bytes.len();
         let mut input = ImageInput::Encoded {
             name,
@@ -153,11 +193,13 @@ impl NativeResources {
             input = ImageInput::Process {
                 input: Box::new(input),
                 effects: serde_json::to_vec(&[
-                    crysirror_image::effects::ImageEffect::OverrideAlpha { alpha: 255 }
-                ])?.into(),
+                    crysirror_image::effects::ImageEffect::OverrideAlpha { alpha: 255 },
+                ])?
+                .into(),
             };
         }
         Ok(Some(NativeImageSource {
+            png_header,
             has_mask,
             size: info.size,
             encoded_len,

@@ -15,6 +15,9 @@ pub(super) struct KeyboardState {
     revision: Option<u64>,
     pressed: Option<usize>,
     eligible: bool,
+    ///A left release, Enter or Page Down that no control took: the click
+    ///went to the message window under an inline control menu.
+    pub(super) free_release: bool,
 }
 pub(super) struct KeyboardFrame {
     pub(super) events: Vec<Value>,
@@ -46,6 +49,10 @@ pub(super) fn bindings(button: Option<&Button>, scope:u8, mut existing:Vec<Value
 }
 
 impl Bridge<'_> {
+    ///Take a release that the scope-0 menu received outside every control.
+    pub(in crate::adapter) fn take_menu_free_release(&mut self)->bool {
+        self.services.menu.as_mut().is_some_and(|menu|std::mem::take(&mut menu.keyboard.free_release))
+    }
     ///4177E0 explicitly assigns the native control cursor; unlike arbitrary
     ///shared Ui focus this participates in414BC0's hover/Enter policy.
     pub(in crate::adapter) fn select_native_menu_cursor(&mut self,ordinal:usize)->Result<()> {
@@ -93,6 +100,7 @@ impl Bridge<'_> {
         let target=menu.keyboard.selected.or(hovered);
         menu.keyboard.effective=target;
         frame.selected=target;
+        if target.is_none()&&(release||event_kind("menu_activate")||event_kind("menu_advance")) {menu.keyboard.free_release=true;}
         let mouse_down=root["pointer_buttons_down"].as_u64().unwrap_or(0)&buttons::MOUSE_LEFT!=0;
         let enter_press=event_kind("menu_press");
         let enter_release=event_kind("menu_activate");

@@ -10,8 +10,10 @@ impl Value {
     pub fn integer(&self) -> Result<i32> {
         match self {
             Self::Int(n) => Ok(*n),
-            Self::Text(s) if s.is_empty() => Ok(0),
-            Self::Text(s) => parse_integer(s).context("QLIE integer conversion"),
+            // Native52EB78 keeps an integer observation beside every string,
+            // initialized with Delphi StrToIntDef(text,0). A valid string is
+            // not an expression fault merely because it is nonnumeric.
+            Self::Text(s) => Ok(parse_integer(s).unwrap_or(0)),
         }
     }
     pub fn text(&self) -> String {
@@ -236,11 +238,21 @@ impl<F: FnMut(&str) -> Result<Value>> Parser<'_, F> {
             left = match op.as_str() {
                 "&&" => Value::Int(i32::from(left.truth() && right.truth())),
                 "||" => Value::Int(i32::from(left.truth() || right.truth())),
-                "+" if matches!(left, Value::Text(_)) || matches!(right, Value::Text(_)) => {
+                //52E564/52E624 retain the LEFT operand's native kind. Mixed
+                //int/string expressions must not turn an integer into text.
+                "+" | "&" if matches!(left, Value::Text(_)) => {
                     Value::Text(left.text() + &right.text())
                 }
-                "==" => Value::Int(i32::from(left == right)),
-                "!=" => Value::Int(i32::from(left != right)),
+                // 50C8E4/50C9B0: the LEFT kind selects the comparison. Text
+                // compares both AnsiLowerCase strings (BIMAN1 registers effect
+                // "Ex1" and scenarios run `ex1`); integers compare values.
+                "==" | "!=" => {
+                    let equal = match &left {
+                        Value::Text(a) => a.to_ascii_lowercase() == right.text().to_ascii_lowercase(),
+                        Value::Int(a) => *a == right.integer()?,
+                    };
+                    Value::Int(i32::from(equal == (op == "==")))
+                }
                 _ => {
                     let a = left.integer()?;
                     let b = right.integer()?;
@@ -249,12 +261,12 @@ impl<F: FnMut(&str) -> Result<Value>> Parser<'_, F> {
                         "-" => a.wrapping_sub(b),
                         "*" => a.wrapping_mul(b),
                         "/" => {
-                            ensure!(b != 0, "QLIE division by zero");
-                            a.wrapping_div(b)
+                            //52E698 explicitly writes0 for a zero divisor.
+                            if b == 0 { 0 } else { a.wrapping_div(b) }
                         }
                         "%" => {
-                            ensure!(b != 0, "QLIE remainder by zero");
-                            a.wrapping_rem(b)
+                            //52E6F4 follows the same explicit zero case.
+                            if b == 0 { 0 } else { a.wrapping_rem(b) }
                         }
                         "&" => a & b,
                         "|" => a | b,
@@ -277,20 +289,86 @@ impl<F: FnMut(&str) -> Result<Value>> Parser<'_, F> {
         matches!(&self.tokens[self.at],Token::Op(s) if s==op)
     }
 }
-pub fn evaluate(s: &str, mut lookup: impl FnMut(&str) -> Result<Value>) -> Result<Value> {
+pub fn evaluate(s: &str, lookup: impl FnMut(&str) -> Result<Value>) -> Result<Value> {
+    match evaluate_checked(s, lookup) {
+        Err(Fault::Syntax(error)) => {
+            log::warn!("QLIE calculator error record for {s:?}: {error:#}");
+            Ok(Value::Int(0))
+        }
+        Err(Fault::Lookup(error)) => Err(error),
+        Ok(value) => Ok(value),
+    }
+}
+/// Calculator outcome distinguishing rejected syntax from variable faults.
+/// Plain-string call parameters keep the raw token on either.
+pub enum Fault {
+    Syntax(anyhow::Error),
+    Lookup(anyhow::Error),
+}
+pub fn evaluate_checked(
+    s: &str,
+    mut lookup: impl FnMut(&str) -> Result<Value>,
+) -> std::result::Result<Value, Fault> {
     if s.trim().is_empty() {
         return Ok(Value::Int(0));
     }
-    let mut p = Parser {
-        tokens: tokens(s)?,
-        at: 0,
-        lookup: &mut lookup,
-        depth: 0,
-    };
-    let value = p.expression(0, true)?;
-    ensure!(
-        matches!(p.tokens[p.at], Token::End),
-        "QLIE extra expression tokens: {s}"
-    );
-    Ok(value)
+    // Native 50D650 converts to RPN and checks the operand stack. A rejected
+    // expression or operand underflow is logged and yields the error record
+    // (kind 4, integer 0, empty string) instead of halting the script, e.g.
+    // BIMAN2.5 imoscripter_custom.s `\if,ResultInt[0]==!`. Variable lookup
+    // faults are not syntax and still propagate.
+    let mut lookup_failed = false;
+    let result = (|| {
+        let mut wrapped = |name: &str| {
+            let value = lookup(name);
+            lookup_failed |= value.is_err();
+            value
+        };
+        let mut p = Parser {
+            tokens: tokens(s)?,
+            at: 0,
+            lookup: &mut wrapped,
+            depth: 0,
+        };
+        let value = p.expression(0, true)?;
+        ensure!(
+            matches!(p.tokens[p.at], Token::End),
+            "QLIE extra expression tokens: {s}"
+        );
+        Ok(value)
+    })();
+    result.map_err(|error| {
+        if lookup_failed {
+            Fault::Lookup(error)
+        } else {
+            Fault::Syntax(error)
+        }
+    })
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn eval(s: &str) -> Value {
+        evaluate(s, |name| match name {
+            "t" => Ok(Value::Text("Ex1".into())),
+            "n" => Ok(Value::Int(7)),
+            _ => anyhow::bail!("undefined {name}"),
+        })
+        .unwrap()
+    }
+    #[test]
+    fn native_comparison_and_error_records() {
+        // 50C8E4: text equality lowers both sides; the left kind decides.
+        assert_eq!(eval(r#"t=="ex1""#), Value::Int(1));
+        assert_eq!(eval(r#"t!="EX1""#), Value::Int(0));
+        assert_eq!(eval(r#"n=="7""#), Value::Int(1));
+        // 52E564: left text concatenates; left int adds.
+        assert_eq!(eval(r#"t+n"#), Value::Text("Ex17".into()));
+        assert_eq!(eval(r#"n+"3""#), Value::Int(10));
+        // 50D650: rejected syntax is an error record (integer 0).
+        assert_eq!(eval("n==!"), Value::Int(0));
+        // Undefined variables still propagate.
+        assert!(evaluate("missing+1", |_| anyhow::bail!("undefined")).is_err());
+        assert!(matches!(evaluate_checked("n==!", |_| Ok(Value::Int(1))), Err(Fault::Syntax(_))));
+    }
 }

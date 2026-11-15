@@ -50,7 +50,7 @@ impl<H: TjsHost + 'static> Runtime<H> {
             roots.extend(file.code_handles.iter().copied());
         }
         roots.extend(self.native_caller_this);
-        if let Some(suspended) = &self.suspended_call {
+        for suspended in self.suspended_call.iter().chain(self.parked_calls.iter()) {
             let (mut from_values, mut handles) = (Vec::new(), Vec::new());
             suspended.for_each_root(&mut |v| value_handles(v, &mut from_values), &mut |h| handles.push(h));
             roots.extend(from_values);

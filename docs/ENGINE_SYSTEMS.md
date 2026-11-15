@@ -25,7 +25,7 @@ update does not establish a new whole-engine or hardware validation result.
 
 The shared CPU package contains real migrated source, not an alias for a native
 VM. Exact commits, source SHA256 and changes are recorded in
-[crysirror-scene/UPSTREAM.md](../crates/crysirror-scene/UPSTREAM.md). Original
+[crysirror-scene/SOURCE_NOTES.md](../crates/crysirror-scene/SOURCE_NOTES.md). Original
 algorithms are compiled in a temporary differential driver; the port is compared
 against them rather than only against newly authored expected values.
 

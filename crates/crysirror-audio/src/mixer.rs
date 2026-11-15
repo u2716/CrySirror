@@ -2230,12 +2230,20 @@ impl Mixer {
                 })
             })
             .collect();
+        // Voices are never admitted during a render block; only removed. Walk
+        // the occupied slots instead of the whole slot table on every sample.
+        let live: Vec<usize> = self
+            .voices
+            .iter()
+            .enumerate()
+            .filter_map(|(i, v)| v.is_some().then_some(i))
+            .collect();
         for sample in out.iter_mut() {
             self.groups.step();
             for c in self.clients.values_mut() {
                 c.dialogue_voices = 0;
             }
-            for v in self.voices.iter().flatten() {
+            for v in live.iter().filter_map(|&i| self.voices[i].as_ref()) {
                 let c = self
                     .clients
                     .get_mut(&v.handle.client)
@@ -2274,7 +2282,9 @@ impl Mixer {
                 }
                 c.duck_output = c.duck.step();
             }
-            for (slot, (effect, step)) in self.voices.iter_mut().zip(spatial.iter().zip(&rates)) {
+            for &live_index in &live {
+                let slot = &mut self.voices[live_index];
+                let (effect, step) = (&spatial[live_index], &rates[live_index]);
                 let Some(v) = slot else { continue };
                 if gain_envelope::finished(v) { *slot = None; continue; }
                 let stepped_sample_gain = v.stepped_gain.as_mut().map(|envelope| {
@@ -2572,7 +2582,8 @@ impl Mixer {
             // Apply deadlines after this output frame. Preserve mode consumes
             // the last waiting frame using the old fade/paused state; both modes
             // start resumed PCM on the next frame, including at chunk boundaries.
-            for slot in &mut self.voices {
+            for &live_index in &live {
+                let slot = &mut self.voices[live_index];
                 let Some(v) = slot else { continue };
                 if v.stop_after_fade {
                     v.stop_remaining = v.stop_remaining.saturating_sub(1);

@@ -3,6 +3,9 @@
 use anyhow::{Result, ensure};
 #[derive(Clone, Debug, Default)]
 pub struct WindowRequests {
+    pub drag: Option<u32>,
+    pub reset_shape: Option<u32>,
+    pub ime_cursor_area: Option<(u32,[i32;4])>,
     pub size: Option<(u32, [u32; 2])>,
     pub position: Option<(u32, [i32; 2])>,
     pub visible: Option<(u32, bool)>,

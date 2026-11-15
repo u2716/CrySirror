@@ -112,8 +112,14 @@ fn source(resource: &Arc<dyn PatternResource>, owner: ClientId, host: &Arc<()>) 
     })
 }
 enum Work {
+    SampleBlocks {
+        spec: crysirror_image::masked_block_sample::MaskedBlockSample,
+        destination: crysirror_core::image_processing::ImageInput,
+        source: crysirror_core::image_processing::ImageInput,
+        random: PatternRng,
+    },
     Create(TemporalPatternSpec, PatternRng),
-    Advance(Held, PatternRng,Option<usize>),
+    Advance(Held, PatternRng, Option<usize>),
     Restore(Arc<[u8]>, PatternRng),
     Render(
         Held,
@@ -133,6 +139,63 @@ pub(crate) struct Context {
 impl Context {
     pub fn begin(self, request: PatternRequest) -> Result<PatternJob> {
         let (work, output_bytes, scratch_bytes) = match request {
+            PatternRequest::SampleBlocks {
+                destination,
+                source,
+                spec,
+                rng: state,
+            } => {
+                if spec.len() > 8192 {
+                    return Err(Error::Limit("block sampling specification"));
+                }
+                let spec: crysirror_image::masked_block_sample::MaskedBlockSample =
+                    serde_json::from_slice(&spec).map_err(io)?;
+                spec.validate().map_err(io)?;
+                let random = rng(&state)?;
+                let mut nodes = 0;
+                let mut bytes = 0;
+                let output_size = image_processing::input_size(
+                    self.owner,
+                    &destination,
+                    0,
+                    &mut nodes,
+                    &mut bytes,
+                )?;
+                let source_size =
+                    image_processing::input_size(self.owner, &source, 0, &mut nodes, &mut bytes)?;
+                for size in [output_size, source_size] {
+                    if u64::from(size[0]) * u64::from(size[1]) > MAX_PIXELS {
+                        return Err(Error::Limit("block sampling pixels"));
+                    }
+                }
+                for axis in 0..2 {
+                    if u64::from(spec.source[axis]) + u64::from(spec.source[axis + 2])
+                        > u64::from(source_size[axis])
+                    {
+                        return Err(Error::Invalid("block sampling source rectangle"));
+                    }
+                }
+                let output =
+                    crysirror_image::rgba_len(output_size[0], output_size[1]).map_err(io)?;
+                let input =
+                    crysirror_image::rgba_len(source_size[0], source_size[1]).map_err(io)?;
+                let scratch = output
+                    .checked_add(input)
+                    .and_then(|n| n.checked_mul(3))
+                    .and_then(|n| n.checked_add(bytes))
+                    .and_then(|n| n.checked_add(128 * 1024 * 1024))
+                    .ok_or(Error::Limit("block sampling scratch budget"))?;
+                (
+                    Work::SampleBlocks {
+                        spec,
+                        destination,
+                        source,
+                        random,
+                    },
+                    output + 1024,
+                    scratch,
+                )
+            }
             PatternRequest::Create { spec, rng: state } => {
                 if spec.len() > 4096 {
                     return Err(Error::Limit("pattern specification"));
@@ -152,16 +215,26 @@ impl Context {
                 let pattern = source(&input, self.owner, &self.host)?;
                 let bytes = validate_spec(pattern.spec())?;
                 (
-                    Work::Advance(pattern, rng(&state)?,None),
+                    Work::Advance(pattern, rng(&state)?, None),
                     bytes * 4 + 4096,
                     bytes * 4 + 4096,
                 )
             }
-            PatternRequest::AdvancePrefix{source:input,rng:state,words}=>{
-                let pattern=source(&input,self.owner,&self.host)?;
-                let bytes=validate_spec(pattern.spec())?;
-                if words>bytes/4{return Err(Error::Invalid("pattern prefix bounds"));}
-                (Work::Advance(pattern,rng(&state)?,Some(words)),bytes*4+4096,bytes*4+4096)
+            PatternRequest::AdvancePrefix {
+                source: input,
+                rng: state,
+                words,
+            } => {
+                let pattern = source(&input, self.owner, &self.host)?;
+                let bytes = validate_spec(pattern.spec())?;
+                if words > bytes / 4 {
+                    return Err(Error::Invalid("pattern prefix bounds"));
+                }
+                (
+                    Work::Advance(pattern, rng(&state)?, Some(words)),
+                    bytes * 4 + 4096,
+                    bytes * 4 + 4096,
+                )
             }
             PatternRequest::Restore {
                 snapshot,
@@ -221,13 +294,47 @@ impl Context {
                 let _scratch = scratch;
                 cancel.check()?;
                 let (pattern, state) = match work {
+                    Work::SampleBlocks {
+                        spec,
+                        destination,
+                        source,
+                        mut random,
+                    } => {
+                        let base = image_processing::load(
+                            owner,
+                            &destination,
+                            &self.storage,
+                            &self.decoders,
+                            &cancel,
+                        )?;
+                        let source = image_processing::load(
+                            owner,
+                            &source,
+                            &self.storage,
+                            &self.decoders,
+                            &cancel,
+                        )?;
+                        let image = spec.apply(&base, &source, &mut random, &|| cancel.check())?;
+                        cancel.check()?;
+                        let rng_after = serde_json::to_vec(&random)?.into();
+                        let image =
+                            image_processing::resource_from_surface(owner, image, output, &|| {
+                                cancel.check()
+                            })?;
+                        cancel.check()?;
+                        return Ok(PatternOutput::ImageWithRng { image, rng_after });
+                    }
                     Work::Create(spec, mut state) => {
                         let pattern = TemporalPattern::new(spec, &mut state, &|| cancel.check())?;
                         (pattern, state)
                     }
-                    Work::Advance(old, mut state,prefix) => {
+                    Work::Advance(old, mut state, prefix) => {
                         let mut pattern = (*old).clone();
-                        if let Some(prefix)=prefix{pattern.advance_prefix(prefix,&mut state,&||cancel.check())?;}else{pattern.advance(&mut state, &|| cancel.check())?;}
+                        if let Some(prefix) = prefix {
+                            pattern.advance_prefix(prefix, &mut state, &|| cancel.check())?;
+                        } else {
+                            pattern.advance(&mut state, &|| cancel.check())?;
+                        }
                         (pattern, state)
                     }
                     Work::Restore(data, state) => {

@@ -329,6 +329,11 @@ fn process(a: &[Variant], i: usize) -> bool {
 /// PrimaryKeyDown/Up/Press, LayerManager.cpp:1012-1033): the focused layer
 /// receives the event, otherwise the primary layer's default behaviour runs.
 pub(crate) fn primary_key(rt: &mut Rt, window: ObjectHandle, event: &'static str, key: i64, shift: i64) -> Result<()> {
+    if event=="onKeyPress"{
+        let target=focused_layer(rt,window).or_else(||rt.host().windows.get(&window.0).and_then(|w|w.primary).map(ObjectHandle));
+        if let Some(target)=target{if has_member(rt,target,event){rt.call_object_method(target,event,vec![Variant::String(char::from_u32(key as u32).unwrap_or('\u{fffd}').to_string()),Variant::Integer(1)])?;}}
+        return Ok(());
+    }
     if let Some(f) = focused_layer(rt, window) {
         if has_member(rt, f, event) {
             rt.call_object_method(f, event, vec![Variant::Integer(key), Variant::Integer(shift), Variant::Integer(1)])?;
@@ -383,6 +388,13 @@ fn install_layer(rt: &mut Rt) {
             }),
             // Native event defaults: action dispatch, then the default
             // behaviour when `process` is true (LayerIntf.cpp:7945-8440).
+            ("onClick", |rt, t, a| {
+                // LayerIntf.cpp TVP_ACTION_INVOKE_BEGIN(2, "onClick"):
+                // plain ButtonLayer subclasses rely on the native owner
+                // action callback rather than KAGLayer's script handlers.
+                layer_action(rt, t, "onClick", &["x", "y"], &a)?;
+                Ok(Variant::Void)
+            }),
             ("onKeyDown", |rt, t, a| {
                 let h = layer_action(rt, t, "onKeyDown", &["key", "shift", "process"], &a)?;
                 if process(&a, 2) {

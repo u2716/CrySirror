@@ -7,8 +7,7 @@
 //! Nothing reports false success.
 //!
 //! Sources: UTF-16 registration strings of the shipped DLLs (inspected
-//! 2026-10-28; no code executed), cross-checked with Kirakira c451918
-//! `krkr-plugins` reference notes (window_ex.rs, win32_dialog.rs, k2compat.rs).
+//! 2026-10-28; no code executed).
 use crate::natives::{Rt, unsupported};
 use crysirror_tjs2::runtime::{Closure, ObjectHandle, Variant};
 
@@ -23,18 +22,6 @@ use Kind::*;
 /// with a `new:` prefix, a class this plugin defines (`new:Window.TouchMouse`).
 pub const SURFACES: &[(&str, &str, Kind, &[&str])] = &[
     ("layerstwcopy.dll", "Layer", Method, &["stitchWrappedCopy"]),
-    (
-        "k2compat.dll",
-        "new:Window.TouchMouse",
-        Method,
-        &[
-            "onTouchMouseDown", "onTouchMouseMove", "onTouchMouseUp", "onTouchMouseClick",
-            "onTouchMouseDblClick",
-        ],
-    ),
-    ("k2compat.dll", "new:Window.TouchMouse", Property, &["enabled"]),
-    ("k2compat.dll", "new:System.ModelessOwnerWindow", Method, &["show", "registerMessageReceiver"]),
-    ("k2compat.dll", "new:System.ModelessOwnerWindow", Property, &["stayOnTop"]),
 ];
 
 pub fn known(name: &str) -> bool {

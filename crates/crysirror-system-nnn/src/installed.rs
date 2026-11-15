@@ -33,7 +33,9 @@ const SIZE: [u32; 2] = [800, 600];
 use crate::native_gaiji as gaiji;
 mod cutin;
 mod chart;
+mod actor_entry;
 mod film_button;
+mod effect_assets;
 mod gallery;
 mod gallery_viewer;
 mod menu;
@@ -43,6 +45,7 @@ mod native_load;
 mod native_save;
 mod notice;
 mod selection;
+mod select_place;
 mod system_menu;
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -113,8 +116,10 @@ struct Prepared {
     special_selection: Option<selection::Special>,
     cutin: Option<cutin::Cutin>,
     film_button: Option<film_button::FilmButton>,
+    effect_assets:effect_assets::Assets,
     loader: ScriptLoader,
     services: PreparedNativeServices,
+    system_preloads: Vec<Option<crate::resource_bridge::ResolvedAudio>>,
     resources: NativeResources,
     windows: Vec<WindowInput>,
     startup: Option<crate::native_shell::NativeStartupProfile>,
@@ -143,11 +148,17 @@ pub struct InstalledAdapter {
     published: Vec<String>,
     started: bool,
     shell: Option<crate::native_shell::NativeStartupShell>,
+    shell_pressed:u64,
     outer: Option<crate::adapter::NativeOuterState>,
     movie: Option<crate::native_movie::NativeMoviePlayer>,
+    /// PrintMovie started by an in-game `printmovie` user command.
+    script_movie: Option<crate::native_movie::NativeMoviePlayer>,
+    /// PrintMovie setup/movielist retained after the startup shell retires.
+    script_movie_profile: Option<Arc<crate::native_shell::NativeStartupProfile>>,
     movie_preferences: Option<crate::native_services_bootstrap::NativePreferences>,
     title: Option<crate::native_title::NativeTitlePlayer>,
     title_resources: Option<NativeResources>,
+    title_save_presence:Option<Task<bool>>,
     title_program_task: Option<Task<Arc<Program>>>,
     title_program: Option<Arc<Program>>,
     title_exit_job: Option<ImageJob>,
@@ -174,6 +185,7 @@ struct InstalledRestoreJob {
     civil_sample: Option<CivilTime>,
     published: Vec<String>,
     movie_preferences: Option<crate::native_services_bootstrap::NativePreferences>,
+    script_movie_profile: Option<Arc<crate::native_shell::NativeStartupProfile>>,
     title_resources: Option<NativeResources>,
     native_exit_available: bool,
     native_load: Option<native_load::Policy>,
@@ -213,6 +225,7 @@ impl crysirror_core::native_restore::OriginalRestorePreparation for InstalledRes
         installed.vm = Some(vm);
         installed.published = this.published;
         installed.movie_preferences = this.movie_preferences;
+        installed.script_movie_profile = this.script_movie_profile;
         installed.title_resources = this.title_resources;
         installed.native_exit_available = this.native_exit_available;
         installed.native_save = this.native_save;
@@ -281,11 +294,15 @@ impl InstalledAdapter {
             published: vec![],
             started: false,
             shell: None,
+            shell_pressed:0,
             outer: None,
             movie: None,
+            script_movie: None,
+            script_movie_profile: None,
             movie_preferences: None,
             title: None,
             title_resources: None,
+            title_save_presence:None,
             title_program_task: None,
             title_program: None,
             title_exit_job: None,
@@ -349,6 +366,7 @@ impl InstalledAdapter {
                 .as_ref()
                 .is_some_and(|movie| movie.dependency_pending())
             || self.title_program_task.is_some()
+            || self.title_save_presence.is_some()
             || self.title_exit_job.is_some()
             || self
                 .title
@@ -420,18 +438,19 @@ impl InstalledAdapter {
             .as_ref()
             .is_some_and(|movie| movie.dependency_pending())
         {
-            self.movie
+            (||->Result<()> {self.movie
                 .as_mut()
                 .unwrap()
-                .poll(host, InputFrame::default())
-                .map(|_| ())
+                .poll_owned(host, InputFrame::default(), false, &mut self.outer.as_mut().context("NNN Movie General owner absent")?.bridge)
+                .map(|_| ())})()
         } else if self.vm.is_none() {
             self.advance(host, InputFrame::default(), 1).map(|_| ())
         } else if self.shell.as_ref().is_some_and(|s| s.dependency_pending()) {
             (||->Result<()> {
                 let shell=self.shell.as_mut().unwrap();
+                if let Some(vm)=self.vm.as_mut() {if !shell.poll_logo_audio(host,vm,false)? {return Ok(());}}
                 if let Some(vm)=self.vm.as_ref() {shell.bind_wipe_context(vm)?;}
-                shell.poll(host,InputFrame::default())?;
+                shell.poll_with_admission(host,InputFrame::default(),false)?;
                 if let Some(vm)=self.vm.as_mut() {shell.commit_wipe_context(vm)?;}
                 Ok(())
             })()
@@ -624,6 +643,13 @@ impl InstalledAdapter {
                 }
             });
             let resources = NativeResources::blackcyc(client, opener)?;
+            let system_preloads = crate::audio_bridge::system_audio::prepare_preloaded_waves(
+                &resources,
+                &services.resources,
+                services.system_sounds.as_ref(),
+                boot.setup.integer(b"systemSoundLoadNumber")?.unwrap_or(4),
+                &cancel,
+            )?;
             let startup = if matches!(config.entry, Entry::Controller) {
                 Some(crate::native_shell::NativeStartupProfile::read(
                     &boot.configuration(),
@@ -643,6 +669,7 @@ impl InstalledAdapter {
                 None
             };
             let levels = u32::try_from(boot.setup.integer(b"dwqPackLevel")?.unwrap_or(0))?;
+            let effect_assets=effect_assets::Assets::prepare(&boot.configuration(),&resources,&cancel)?;
             let mut windows = vec![];
             if let Some(native) = services.windows(0, levels)? {
                 for source in std::iter::once(native.body).chain(native.name) {
@@ -715,8 +742,10 @@ impl InstalledAdapter {
                 special_selection,
                 cutin,
                 film_button,
+                effect_assets,
                 loader,
                 services,
+                system_preloads,
                 resources,
                 windows,
                 startup,
@@ -754,6 +783,14 @@ impl InstalledAdapter {
             &outer.configuration,
             variant,
         )?;
+        // CCommonTitle::Init checks CheckExistSaveData before any button
+        // Calcu/Print. Directory I/O remains in the resource worker, including
+        // remote storage; the scoped original Load catalogue is reused.
+        self.title_save_presence=if profile.title.integer(b"NoSaveDataToMaskMenu")?.unwrap_or(0)!=0 {
+            let config=outer.configuration.clone();
+            let storage=host.storage(self.client)?;
+            Some(self.pool.as_ref().context("NNN Title save catalogue worker absent")?.spawn(move |cancel|system_menu::has_save(&config,storage.as_ref(),&cancel))?)
+        }else{None};
         let loader = outer.loader.clone();
         let name = profile.title_script.clone();
         self.title_program_task = Some(
@@ -817,6 +854,11 @@ impl InstalledAdapter {
         Ok(())
     }
     fn prepare_title_context(&mut self, host: &mut dyn HostServices) -> Result<bool> {
+        if let Some(task)=self.title_save_presence.as_mut(){
+            let Some(present)=task.try_take()?else{return Ok(false)};
+            self.title_save_presence=None;
+            self.title.as_mut().context("NNN Title save mask actor absent")?.set_load_presence(present)?;
+        }
         if let Some(task) = &mut self.title_program_task {
             if let Some(program) = task.try_take()? {
                 self.title_program = Some(program);
@@ -943,6 +985,15 @@ impl InstalledAdapter {
         let Some(fade) = self.title_return.as_mut() else {
             return Ok(true);
         };
+        let vm=self.vm.as_mut().context("NNN Title General audio VM absent")?;
+        if !vm.poll_general_audio(host)? {return Ok(false);}
+        if admit {
+            if let Some(ticket)=fade.audio_ticket(host.now_ms()) {
+                if let Some(mode)=vm.general_audio_mode() {
+                    if !vm.poll_general_update(host,mode,ticket)? {return Ok(false);}
+                }
+            }
+        }
         self.vm.as_ref().context("NNN Title wipe VM absent")?.bind_wipe_context(fade)?;
         let image = if admit {
             use crysirror_core::service::buttons as B;
@@ -1103,6 +1154,57 @@ impl InstalledAdapter {
         self.title_restart_requested = None;
         Ok(true)
     }
+    /// Modes entered by an in-game default user command (535980). The VM
+    /// keeps the retained receipt until the mode's SetYoyaku equivalent.
+    fn poll_script_movie(&mut self, host: &mut dyn HostServices, input: InputFrame) -> Result<bool> {
+        let Some(vm) = self.vm.as_mut() else {
+            return Ok(false);
+        };
+        if self.script_movie.is_none() {
+            let Some((mode, number)) = vm.take_user_command_mode() else {
+                return Ok(false);
+            };
+            if mode == 22 {
+                self.open_menu(menu::Kind::SelectPlace, host)?;
+                return Ok(true);
+            }
+            ensure!(mode == 27, "NNN user-command mode {mode} has no actor");
+            let profile = self
+                .script_movie_profile
+                .as_ref()
+                .context("NNN PrintMovie setup/movielist absent")?;
+            let preferences = self
+                .movie_preferences
+                .as_ref()
+                .context("NNN PrintMovie native preferences absent")?;
+            let configuration = vm
+                .configuration()
+                .context("NNN PrintMovie configuration absent")?;
+            let spec = crate::native_movie::NativeMovieSpec::for_script(
+                profile,
+                configuration,
+                number,
+                preferences,
+            )?;
+            // Init: StopMusic and StopScriptSoundAndVoice.
+            vm.stop_for_outer_movie(host)?;
+            let frame_ms = vm.frame_period_ms();
+            self.script_movie = Some(crate::native_movie::NativeMoviePlayer::new(
+                self.client,
+                crate::native_movie::SCRIPT_MEDIA,
+                9005,
+                SIZE,
+                frame_ms,
+                spec,
+            )?);
+        }
+        let movie = self.script_movie.as_mut().unwrap();
+        if vm.poll_movie(movie, host, input, true)?.is_some() {
+            self.script_movie = None;
+            vm.finish_user_command_mode()?;
+        }
+        Ok(true)
+    }
     fn poll_opening_return(&mut self, host: &mut dyn HostServices) -> Result<bool> {
         use crate::native_shell::NativeMode;
         ensure!(
@@ -1166,7 +1268,7 @@ impl InstalledAdapter {
             outer.bridge.stop_for_outer_movie(host)?;
             self.movie = Some(crate::native_movie::NativeMoviePlayer::new(
                 self.client,
-                9002,
+                crate::native_movie::OPENING_MEDIA,
                 9003,
                 [800, 600],
                 u64::try_from(
@@ -1226,6 +1328,9 @@ impl InstalledAdapter {
             }
             if self.chart.is_some() {
                 self.poll_chart(host,input,true)?;
+                return Ok(VmYield::BudgetExhausted);
+            }
+            if self.poll_script_movie(host, input)? {
                 return Ok(VmYield::BudgetExhausted);
             }
         }
@@ -1337,7 +1442,7 @@ impl InstalledAdapter {
             return Ok(VmYield::BudgetExhausted);
         }
         if let Some(movie) = &mut self.movie {
-            if let Some(next) = movie.poll(host, input)? {
+            if let Some(next) = movie.poll_owned(host, input, true, &mut self.outer.as_mut().context("NNN Movie General owner absent")?.bridge)? {
                 ensure!(
                     next == crate::native_shell::NativeMode::Title,
                     "NNN unreviewed original Movie next mode {next:?}"
@@ -1348,10 +1453,19 @@ impl InstalledAdapter {
         }
         if let Some(vm) = &mut self.vm {
             if let Some(shell) = &mut self.shell {
+                self.shell_pressed|=input.buttons_pressed;
+                if !shell.poll_logo_audio(host,vm,true)? {return Ok(VmYield::BudgetExhausted);}
+                let input=InputFrame{buttons_pressed:std::mem::take(&mut self.shell_pressed),..input};
                 shell.bind_wipe_context(vm)?;
                 let ready=shell.poll(host,input)?;
                 shell.commit_wipe_context(vm)?;
-                if !ready {return Ok(VmYield::BudgetExhausted);}
+                if !ready {
+                    //CCommonOpening::Calcu reads the mouse every frame. A
+                    //frame held for async work is not a native frame, so an
+                    //Opening press stays latched until Calcu actually runs.
+                    if shell.mode()==crate::native_shell::NativeMode::Opening {self.shell_pressed|=input.buttons_pressed;}
+                    return Ok(VmYield::BudgetExhausted);
+                }
                 let incoming = shell.take_opening_entry_frame()?;
                 let entered = incoming.is_some();
                 if let Some(exit) = incoming {
@@ -1508,9 +1622,21 @@ impl InstalledAdapter {
                 return Ok(VmYield::BudgetExhausted);
             }
         }
+        if prepared.effect_assets.needs_start() {
+            // Native CheckSystem::InitRandomSeed precedes GeneralCreate's
+            // CEffect/CAllEffect construction. Seed once, then retain the
+            // constructor's complete dependency/RNG candidate across polls.
+            prepared.boot.initialize_random_state(self.clock,None)?;
+            let random=prepared.boot.session.machine().variables()
+                .and_then(|v|v.random_state()).context("NNN constructor random state absent")?;
+            prepared.effect_assets.start(self.client,self.pool.as_ref()
+                .context("NNN effect asset task pool absent")?,SIZE,random)?;
+        }
+        if !prepared.effect_assets.poll(host)? {
+            return Ok(VmYield::BudgetExhausted);
+        }
         // All fallible resource work has completed before publishing the scene.
         let mut prepared = self.prepared.take().unwrap();
-        prepared.boot.initialize_random_state(self.clock, None)?;
         let body = prepared
             .windows
             .first()
@@ -1612,24 +1738,31 @@ impl InstalledAdapter {
             prepared.boot.resources.clone(),
             u32::try_from(prepared.boot.setup.integer(b"dwqPackLevel")?.unwrap_or(0))?,
         )?;
+        prepared.effect_assets.finish(&mut bridge,prepared.boot.session.machine_mut())?;
         let resources = prepared.resources.clone();
         let names = prepared.services.resources.clone();
         bridge.configure_voice_policy(prepared.services.voice_policy.clone())?;
-        bridge.configure_audio(crate::audio_bridge::AudioBridge::new(
+        bridge.configure_general_audio(&prepared.boot.setup)?;
+        bridge.configure_foreground_general_audio(&prepared.services.print_setup,&prepared.services.selection_setup)?;
+        let mut audio = crate::audio_bridge::AudioBridge::new(
             self.client,
             prepared.services.audio,
             prepared.services.music_names,
             prepared.services.sound_names,
             Arc::new(move |source, cancel| resources.audio(source, &names, cancel)),
-        )?)?;
+        )?;
+        audio.configure_system_sounds(prepared.services.system_sounds.clone(),prepared.services.system_sound_disabled,prepared.boot.setup.integer(b"systemSoundMulti")?.unwrap_or(0)!=0,64)?;
+        audio.configure_preloaded_system_waves(prepared.system_preloads)?;
+        bridge.configure_audio(audio)?;
         // System channels belong to GameCallBack, including direct NewGame
         // entry. They do not depend on constructing a Logo/Title shell.
-        bridge.configure_system_sounds(prepared.services.system_sounds.clone(),prepared.services.system_sound_disabled,false,64)?;
+        bridge.configure_button_audio(prepared.services.button_voice_catalogues.clone(),prepared.services.button_voice_number,66,prepared.resources.clone(),prepared.services.resources.clone(),prepared.services.chara_voice_volume_delta,prepared.services.enable_button_voice_chara_volume,true)?;
         self.movie_preferences=Some(prepared.services.preferences.clone());
         self.title_resources=Some(prepared.resources.clone());
         let vm = if let Some(startup) = prepared.startup.take() {
             let frame_ms = u64::try_from(frame_time)?;
             self.movie_preferences = Some(prepared.services.preferences.clone());
+            self.script_movie_profile = Some(Arc::new(startup.clone()));
             self.title_resources = Some(prepared.resources.clone());
             let shell = crate::native_shell::NativeStartupShell::new(
                 self.client,
@@ -1804,6 +1937,7 @@ impl VmAdapter for InstalledAdapter {
             civil_sample: self.civil_sample,
             published: self.published.clone(),
             movie_preferences: self.movie_preferences.clone(),
+            script_movie_profile: self.script_movie_profile.clone(),
             title_resources: self.title_resources.clone(),
             native_exit_available: self.native_exit_available,
             native_load: self.restored_quick_load_policy(),
@@ -1845,6 +1979,7 @@ impl VmAdapter for InstalledAdapter {
             value["native_title"] = title.diagnostics();
             value["phase"] = "outer_title".into();
         }
+        if let Some(menu)=self.menu.as_ref(){value["native_menu"]=menu.diagnostics();value["native_menu"]["operation"]=self.menu_operation.as_ref().map(|op|op.name()).into();value["phase"]="outer_menu".into();}
         if let Some(movie) = &self.movie {
             value["native_movie"] = movie.diagnostics();
             value["phase"] = "outer_movie".into();
@@ -2315,5 +2450,14 @@ mod native_return_tests {
         assert!(!adapter.opening_return_requested);
         assert_eq!(runtime.host.now_ms(), 0);
         assert!(adapter.outer.as_ref().unwrap().machine.executed() <= 1);
+    }
+}
+#[cfg(test)]
+mod prepared_size {
+    /// `Prepared` moves by value through task results and channels; keep it
+    /// small enough for console thread stacks.
+    #[test]
+    fn prepared_stays_small_for_console_stacks() {
+        assert!(std::mem::size_of::<super::Prepared>() < 16 * 1024, "{}", std::mem::size_of::<super::Prepared>());
     }
 }

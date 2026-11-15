@@ -40,7 +40,7 @@ struct Record {
     planes: Vec<Plane>,
 }
 impl Record {
-    fn puts(&self, number: i32, index: usize, brightness: u8) -> Vec<Value> {
+    fn puts(&self, number: i32, index: usize, brightness: u8, z: i32) -> Vec<Value> {
         let parent = if number == -1 {
             crate::sact::MAIN_SPRITE
         } else {
@@ -49,7 +49,7 @@ impl Record {
         self.planes.iter().enumerate().map(|(n,p)|json!({"op":"put","layer":{"id":p.id,"parent":parent,
             "rect":[self.position[0]-self.padding[0],self.position[1]-self.padding[1],self.size[0],self.size[1]],
             "paint":{"kind":"image","asset":p.path,"tint":[p.color[0],p.color[1],p.color[2],255]},
-            "order":[0,index*2+n],"filter":{"dark":1.0-f64::from(brightness)/255.0}}})).collect()
+            "order":[z,number],"tie_order":1+index*2+n,"filter":{"dark":1.0-f64::from(brightness)/255.0}}})).collect()
     }
 }
 struct Cell {
@@ -216,6 +216,7 @@ impl NativeText {
                     | b"SP_TextNewLine"
                     | b"SP_SetTextPos"
                     | b"SP_SetBrightness"
+                    | b"SP_SetZ"
             );
         if !known {
             ensure!(self.pending.is_none(), "native SACT text HLL changed");
@@ -411,6 +412,7 @@ impl NativeText {
                     let (x, y) = (*x, *y);
                     let count = records.len();
                     let brightness = sprite.brightness;
+                    let z = sprite.z;
                     let permit = self.pool.reserve()?;
                     let task = permit.spawn(move |cancel| {
                         let mut next = Vec::with_capacity(count);
@@ -430,7 +432,7 @@ impl NativeText {
                                 r.position.iter().all(|v| v.unsigned_abs() <= 1_000_000),
                                 "native text scroll position budget"
                             );
-                            ops.extend(r.puts(number, index, brightness));
+                            ops.extend(r.puts(number, index, brightness, z));
                             next.push(r);
                         }
                         Ok((next, ops))
@@ -480,13 +482,25 @@ impl NativeText {
                 sprite.text_position = [*x, *y];
                 1
             }
+            (b"SP_SetZ", _, Some([_, value])) => {
+                // SactEngine draws a sprite's base followed by its retained
+                // text at that sprite's current z. Shared Layer parents carry
+                // geometry, not draw order: publish every child in the same
+                // native bucket, atomically with the base's changed order.
+                // Keep the native setter's lazy sprite declaration behavior.
+                sprite.z = *value;
+                for (index, record) in records.iter().enumerate() {
+                    operations.extend(record.puts(number, index, sprite.brightness, sprite.z));
+                }
+                1
+            }
             (b"SP_SetBrightness", _, Some([_, value])) => {
                 if original.is_none() {
                     0
                 } else {
                     sprite.brightness = (*value).clamp(0, 255) as u8;
                     for (index, record) in records.iter().enumerate() {
-                        operations.extend(record.puts(number, index, sprite.brightness));
+                        operations.extend(record.puts(number, index, sprite.brightness, sprite.z));
                     }
                     1
                 }
@@ -647,7 +661,7 @@ impl NativeText {
         }
         let base = if p.replace { 0 } else { previous.len() };
         for (index, record) in p.staged.iter().enumerate() {
-            operations.extend(record.puts(p.number, base + index, p.sprite.brightness));
+            operations.extend(record.puts(p.number, base + index, p.sprite.brightness, p.sprite.z));
         }
         submit(self.owner, operations, host)?;
         let mut next = if p.replace {
@@ -777,12 +791,21 @@ fn prepare_draw(
         .face_style(&font)?
         .context("native SACT font lacks actual weight metadata")?;
     ensure!(!face.italic, "native SACT regular face profile");
-    let weight = if native_weight <= 550 { 400 } else { 700 };
+    // The alias is an explicit portable face binding, not a request that its
+    // OS/2 number equal GDI's nominal 400. In particular the desktop default
+    // Hiragino W3 is weight 300 and is a valid regular face. Preserve native
+    // regular/bold intent separately from the extra-heavy stamp flag; never
+    // try to turn a supplied bold face into a regular face by thinning it.
+    let requested_bold = native_weight > 550;
+    let selected_regular = (1..=550).contains(&face.weight);
     ensure!(
-        weight == i32::from(face.weight) || (weight >= 600 && (350..=550).contains(&face.weight)),
-        "native SACT mapped face weight profile"
+        (1..=1000).contains(&face.weight) && (requested_bold || selected_regular),
+        "native SACT mapped face weight profile: native={} GDI={} selected={}",
+        style.weight,
+        native_weight,
+        face.weight,
     );
-    let bold = if weight > i32::from(face.weight) {
+    let bold = if requested_bold && selected_regular {
         ((f32::from(style.size) * 4. * 0.025).ceil() as u8).min(16)
     } else {
         0

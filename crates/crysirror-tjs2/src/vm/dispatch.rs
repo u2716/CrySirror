@@ -556,7 +556,7 @@ impl<'bc, 'rt, H: TjsHost + 'static> Vm<'bc, 'rt, H> {
         // (`tTJSInterCodeContext::CreateNew`, `tjsInterCodeExec.cpp:3211`), so
         // in KRKR a class-provided member *is* an own member: `Find` sees it
         // and `missing` is never consulted for it (`tTJSCustomObject::PropSet`,
-        // `tjsObject.cpp:1475`).  Kirakira installs only part of that copy --
+        // `tjsObject.cpp:1475`).  The native class setup installs only part of that copy --
         // `install_methods` skips whatever the class chain already supplies --
         // so a chain-provided name has to count as present here too, or a
         // script write routes through `missing` into the script parent
@@ -1787,7 +1787,7 @@ impl<'bc, 'rt, H: TjsHost + 'static> Vm<'bc, 'rt, H> {
             return Ok(Some(member));
         }
 
-        // Source compiled by older Kirakira versions does not retain the
+        // Source compiled by older CrySirror versions does not retain the
         // bytecode entry offsets above. Preserve its existing equivalent
         // fallback while parsed KRKR2/KRKRZ bytecode takes the exact path.
         let qualifier_names = self.runtime.heap[qualifier.0].class_infos.clone();
@@ -2010,7 +2010,7 @@ impl<'bc, 'rt, H: TjsHost + 'static> Vm<'bc, 'rt, H> {
         // krkrz native classes publish their constructor as a member named
         // after the class, so `KAGLayer.Layer(win, par)` from a class that
         // never declared its own constructor reaches Layer's initializer via
-        // KAGLayer's superclass proxy. Kirakira runs a native initializer by
+        // KAGLayer's superclass proxy. The VM runs a native initializer by
         // calling the class object with the instance bound.
         if self.handle_class_name_matches(class_handle, name) {
             return Ok(Some(Variant::Closure(Closure::new(
@@ -2915,6 +2915,14 @@ impl<'bc, 'rt, H: TjsHost + 'static> Vm<'bc, 'rt, H> {
                     .map(Variant::to_tjs_string)
                     .transpose()?
                     .unwrap_or_default();
+                // tjsInterCodeExec::ProcessStringFunction returns -1 for a
+                // null native string (including void and an empty needle).
+                // Returning JS-style 0 makes native config scanners match an
+                // out-of-range array entry before their sentinel branch.
+                // Also precedes conversion of the optional start argument.
+                if needle.is_empty() {
+                    return Ok(Variant::Integer(-1));
+                }
                 let start = args
                     .get(1)
                     .map(Variant::to_integer)

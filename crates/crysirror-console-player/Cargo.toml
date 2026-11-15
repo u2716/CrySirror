@@ -1,0 +1,44 @@
+[package]
+name = "crysirror-console-player"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "CrySirror console player: game selection, engine dispatch and the native host ABI for Switch and PS Vita"
+
+[lib]
+crate-type = ["rlib", "staticlib"]
+
+[dependencies]
+anyhow.workspace = true
+crysirror-console.workspace = true
+crysirror-core.workspace = true
+crysirror-launch.workspace = true
+crysirror-library.workspace = true
+crysirror-runtime.workspace = true
+crysirror-scene.workspace = true
+crysirror-text.workspace = true
+crysirror-siglus.workspace = true
+crysirror-wgpu.workspace = true
+crysirror-wgpu-deko3d.workspace = true
+serde_json.workspace = true
+wgpu.workspace = true
+image.workspace = true
+log = "0.4"
+boa_engine = "=0.20.0"
+crysirror-engine.workspace = true
+crysirror-render-tier = { path = "../crysirror-render-tier" }
+crysirror-script-js.workspace = true
+
+[target.'cfg(any(target_os = "horizon", target_os = "vita"))'.dependencies]
+crysirror-siglus-integrated.workspace = true
+
+[target.'cfg(target_os = "vita")'.dependencies]
+# BGI's retained original GXM driver presents its integrated frames on Vita.
+crysirror-bgi-integrated = { workspace = true, features = ["vita-gxm"] }
+# Adopted engines: the shared renderer over GXM.
+crysirror-wgpu-gxm.workspace = true
+
+[dev-dependencies]
+crysirror-raytrace = { path = "../crysirror-raytrace" }
+pollster.workspace = true

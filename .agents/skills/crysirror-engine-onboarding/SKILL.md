@@ -13,6 +13,59 @@ Use the owner's selected mode and existing authorization. Continue an existing
 engine's mode; new unclassified work defaults to `adopt`. Do not silently switch
 to a hosted runtime to get past a missing native operation.
 
+When a contributor needs help identifying an unfamiliar engine, installing IDA
+or Ghidra, or beginning binary analysis, start with
+[reverse engineering from first setup](../crysirror-reverse-engineering/SKILL.md),
+then return here for implementation and host contracts.
+
+Use [engine research](../crysirror-engine-research/SKILL.md) to locate and assess
+existing online material. When matching official material is absent, use the
+original program's recovered semantics as the basis. Unofficial implementations,
+including our own, are references rather than guaranteed original parity.
+Use [archive onboarding](../crysirror-archive-onboarding/SKILL.md) for shared
+container/decoder registration instead of private unpackers in an `adopt` VM.
+
+Before capability mapping or shared API changes, use
+[engine semantics](../crysirror-engine-semantics/SKILL.md): establish ABI/profile
+differences, maintain and document opcode/syscall/subselector contracts, then
+assess existing capabilities and API compatibility. Keep this order for new
+work and changes to existing native handlers.
+
+For resource ownership, caches, asynchronous allocation and CPU/GPU pressure,
+use [memory management](../crysirror-memory-management/SKILL.md). Read the affected
+console's platform notes before assuming desktop limits or synchronization.
+
+For NFS/SMB paths use [network storage](../crysirror-network-storage/SKILL.md).
+Network-aware detection must continue through runtime readers, archive/resource
+access and the native user overlay; a local-path fallback is an explicit gap.
+
+Use [native saves](../crysirror-native-save/SKILL.md) for versioned original
+slots and transactional restoration, and
+[platform hosts](../crysirror-platform-host/SKILL.md) for lifecycle, bridges,
+packaging, signing and build-only CI. Preserve the engine's native save policy.
+
+## Common player integration route
+
+Read the actual [VM port](../../../crates/crysirror-core/src/vm.rs),
+[factory registry](../../../crates/crysirror-runtime/src/runtime.rs) and
+[installed-game detection](../../../crates/crysirror-launch/src/detect.rs)
+before wiring a new engine. Use the existing complete adapter as a reference
+only after checking its mode and native evidence.
+
+| Boundary | Required connection |
+| --- | --- |
+| Identity/launch | Detect native content/profile, build scoped configuration and retain the original game/resource layout. |
+| Factory/session | Register one correct engine identity; construct a dormant session, then perform startup through owned preparation. |
+| Execution | Implement the VM/session port with explicit instruction/time budgets, waits, cancellation, close and error behavior. |
+| Shared host/output | Connect graphics, text, input, audio, storage and original-save policy according to the selected mode. |
+| Resources | Reuse shared archive/image/audio services, or retain the documented integrated resource boundary; avoid extraction-to-temp requirements. |
+| Platforms | Declare the actual desktop, mobile, browser and native console paths and remaining services separately. |
+| Acceptance | Maintain readable opcode/syscall or host-contract tables and distinguish registration, source implementation, compilation and observed behavior. |
+
+A factory, detection match or frame upload alone does not complete this route.
+Use the detailed [onboarding guide](../../../docs/ENGINE_ONBOARDING.md) for the
+mode-specific graphics/audio, lifecycle, storage and documentation contracts.
+
 ## Adopt: recover and implement native semantics
 
 - Identify the authorized source/binary, revision/digest, native profile and
