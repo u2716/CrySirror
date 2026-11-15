@@ -1,5 +1,30 @@
 # Native application packages
 
+## Console CI images
+
+The build workflow uses CrySirror-owned GHCR images:
+
+| Target | Image | Build definition |
+| --- | --- | --- |
+| PS Vita | `ghcr.io/xmoezzz/crysirror/psv-build` | [Dockerfile](../platform/psv/docker/Dockerfile): VitaSDK, libvita2d, cargo-vita and nightly with rust-src. |
+| Switch | `ghcr.io/xmoezzz/crysirror/switch-build` | [Dockerfile](../platform/switch/docker/Dockerfile): devkitA64, libnx, deko3d, uam, host image tools and stable/nightly Rust. |
+
+The [image workflow](../.github/workflows/console-image.yml) hashes each
+Dockerfile, reuses the corresponding image when present, and otherwise builds
+and publishes it using the repository's `GITHUB_TOKEN`. VPK/NRO jobs consume
+that exact hash tag, not `latest`. Changing a toolchain or SDK recipe requires
+updating its Dockerfile; keep the build workflow's Rust pin in sync. A manual
+image workflow run can prepare either environment ahead of the next build.
+
+The recipes follow Siglus's console build-environment approach; their source
+blob identities are recorded in the Dockerfiles. CrySirror does not consume
+Siglus's published images. Build contexts contain only tooling definitions,
+not game data, fonts or proprietary SDK modules. CI builds and packages; it
+does not run tests, games or emulators. Image publication alone does not
+establish a successful player build or device compatibility.
+
+## Apple and Android frontends
+
 Use the [platform-host skill](../.agents/skills/crysirror-platform-host/SKILL.md)
 for session/view lifecycle, bridges, NLS/input, packaging, signing and build-only
 CI. Compilation, package creation, signing and device behavior are separate
