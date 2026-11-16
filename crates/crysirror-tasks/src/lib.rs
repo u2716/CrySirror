@@ -243,7 +243,7 @@ impl TaskPool {
     pub fn reserve(&self) -> Result<TaskPermit> {
         let c = &self.0.counts;
         if c.outstanding
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |n| {
                 (n < self.0.capacity).then_some(n + 1)
             })
             .is_err()

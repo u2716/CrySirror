@@ -13,7 +13,7 @@ use std::{
 static NEXT: AtomicU64 = AtomicU64::new(1);
 /// Shared numeric namespace for service-operation tickets.
 pub fn next_operation_id() -> Result<u64> {
-    NEXT.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
+    NEXT.try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
         .map_err(|_| anyhow::anyhow!("operation IDs exhausted"))
 }
 
