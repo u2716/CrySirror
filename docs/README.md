@@ -34,7 +34,6 @@
 - [NFS/SMB storage, readers and cache ownership](NETWORK_STORAGE.md)
 - [PS Vita characteristics](../platform/psv/PLATFORM.md) / [Switch characteristics](../platform/switch/PLATFORM.md)
 - [Engine onboarding and research/archive skills](ENGINE_ONBOARDING.md)
-- [Planned engines and existing implementation references](ENGINE_CANDIDATES.md)
 - [Native opcode and syscall implementation lists](native-api/README.md)
 - [Integrated engines: upstream versions, local changes and rendering](INTEGRATED_ENGINES.md)
 - [Framework saves](SAVE_FORMAT.md)

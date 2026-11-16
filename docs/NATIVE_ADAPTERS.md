@@ -43,9 +43,6 @@ The [desktop guide](DESKTOP_API.md) lists the available launch options.
 | [N-System](#n-system) | MSD scenarios, FJSYS banks, MGD graphics, text, choices, transitions, title/option/extras screens, original saves. |
 | [WillPlus / AdvHD](native-api/willplus.md) | WS2 V3 scenarios, ARC/PNA resources, Lua system scripts, layers, text, audio and movies. |
 
-Planned additions and external references are listed separately in
-[planned engine support](ENGINE_CANDIDATES.md).
-
 ## KiriKiri
 
 KiriKiri 2, KiriKiri Z and KAG3 games use their original TJS scripts and XP3
