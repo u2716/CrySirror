@@ -1,6 +1,6 @@
 // Copyright (c) 2026 CrySirror contributors.
-// Distributed under the GNU Affero General Public License, version 3 or
-// (at your option) any later version, https://www.gnu.org/licenses/agpl-3.0.html.
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. A copy is available at https://mozilla.org/MPL/2.0/.
 //! Native Layer/Window/System/WaveSoundBuffer members that an inventory
 //! against krkrz (fd5c4baa6a2ef5978db1bd043634351f48667daf, `visual/LayerIntf.cpp`,
 //! `visual/LayerManager.cpp`, `visual/WindowIntf.cpp`, `base/SystemIntf.cpp`,

@@ -256,13 +256,72 @@ fn affected_color(uv: vec2<f32>) -> vec4<f32> {
     // behavior for the other effect families until each of those families is
     // audited independently against eng_disp_wipe.cpp.
     let old_to_new_family =
-        (kind >= 5 && kind < 200) || kind == 900 || kind == 901 || kind == 220 || kind == 221;
+        (kind >= 5 && kind < 200) || kind == 900 || kind == 901 || kind == 220 || kind == 221 || (kind >= 910 && kind <= 912);
     if (old_to_new_family) {
         if (p <= 0.0) { return next; }
         if (p >= 1.0) { return current; }
     } else {
         if (p <= 0.0) { return current; }
         if (p >= 1.0) { return next; }
+    }
+    // N-System CDIBOverlap geometric kinds; NEXT is the old scene and
+    // CURRENT the new one, as for the mask family above.
+    if (kind >= 910 && kind <= 912) {
+        let size = max(wipe.kind_progress.zw, vec2<f32>(1.0));
+        let px = uv * size;
+        let centre = size * 0.5;
+        if (kind == 910) {
+            // DrawRotate: scale p, angle p·2π (or (1 − p)·2π), y-up rotation.
+            let a = select(p, 1.0 - p, i32(option(0)) != 0) * 6.2831855;
+            let d = vec2<f32>(px.x - centre.x, centre.y - px.y);
+            let e = vec2<f32>(cos(a) * d.x + sin(a) * d.y, -sin(a) * d.x + cos(a) * d.y);
+            let src = (centre + vec2<f32>(e.x, -e.y) / max(p, 0.0001)) / size;
+            return alpha_over(next, sample_or_zero(current_tex, current_smp, src));
+        }
+        if (kind == 911) {
+            // DrawBound: triangle wave of `count` round trips along v.
+            let v = vec2<f32>(option(1), option(2));
+            let len = length(v);
+            var off = vec2<f32>(0.0);
+            if (len > 0.0) {
+                let d = 2.0 * option(0) * len * p;
+                let n = floor(d / len);
+                var r = d - n * len;
+                if (i32(n) % 2 == 1) { r = len - r; }
+                off = v / len * r;
+                if (i32(option(3)) != 0) { off = off * (1.0 - p * 0.5); }
+            }
+            var src = (px - off) / size;
+            if (i32(option(4)) != 0) { src = (px + off * 0.5) / (size + off); }
+            return alpha_over(next, sample_or_zero(current_tex, current_smp, src));
+        }
+        // MoveRotDoor: θ = p·π; the old page until π/2, then the new page at
+        // θ + π, projected through a pinhole at distance f over black.
+        let first = p < 0.5;
+        var a = p * 3.1415927;
+        if (!first) { a = a + 3.1415927; }
+        let f = max(option(1), 1.0);
+        let axis = i32(option(0));
+        var q = px - centre;
+        var ok = true;
+        if (axis == 2) {
+            q = vec2<f32>(cos(a) * q.x + sin(a) * q.y, -sin(a) * q.x + cos(a) * q.y);
+        } else {
+            // Rotating about one screen axis: the other coordinate u is
+            // foreshortened, u_s = u·cosθ·f / (f + u·sinθ).
+            let us = select(q.x, q.y, axis == 1);
+            let den = f * cos(a) - us * sin(a);
+            ok = abs(den) > 0.0001;
+            let u = us * f / select(1.0, den, ok);
+            let w = f + u * sin(a);
+            ok = ok && w > 0.1 * f;
+            let other = select(q.y, q.x, axis == 1) * w / f;
+            q = select(vec2<f32>(u, other), vec2<f32>(other, u), axis == 1);
+        }
+        if (!ok) { return vec4<f32>(0.0, 0.0, 0.0, 1.0); }
+        let src = (centre + q) / size;
+        let page = select(sample_or_zero(current_tex, current_smp, src), sample_or_zero(next_tex, next_smp, src), first);
+        return alpha_over(vec4<f32>(0.0, 0.0, 0.0, 1.0), page);
     }
     if (kind == 200) {
         let direction = i32(option(0)) % 4;
@@ -424,7 +483,10 @@ fn affected_color(uv: vec2<f32>) -> vec4<f32> {
     }
     if (kind == 900 || (kind >= 5 && kind < 200)) {
         let mask_value = luminance(textureSample(mask_tex, mask_smp, uv));
-        let reveal = mask_reveal(p, 1.0 - mask_value, mask_fade(i32(option(0))));
+        // option(1) > 0: continuous edge of `vague` rule levels, f = V/(V+255).
+        let vague = select(0.0, option(1), kind == 900);
+        let fade = select(mask_fade(i32(option(0))), vague / (vague + 255.0), vague > 0.0);
+        let reveal = mask_reveal(p, 1.0 - mask_value, fade);
         // After C_elm_stage_list::wipe(), FRONT is the prepared/new scene and
         // NEXT is the saved pre-wipe/old scene. C++ disp_proc_wipe_for_mask()
         // draws NEXT first, then draws FRONT into wipe buffer 0 and reveals

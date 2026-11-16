@@ -21165,7 +21165,7 @@
       "stage": "vertex",
       "status": "gxp_compiled",
       "uniforms": [],
-      "wgsl_blake3": "c607631d6ed0b424b2b040105ed508f008b410f186afca9261c75c3d8c82c740",
+      "wgsl_blake3": "7518ae2925c6ad23c30502121042ac7747a461203306d21dd2663fb064340607",
       "wipe_variant": null
     },
     {
@@ -21192,7 +21192,7 @@
           "texture_unit": 2
         }
       ],
-      "cg_blake3": "d9601a388565f45136293b9a252f08fe39d6bf9b7702c50d69116e14164bc26e",
+      "cg_blake3": "b8aba73b5e55dcc07621bc2a07576654f1ea8f33c92f8d71a2cb030b8804e782",
       "compiler_optimization": 3,
       "compiler_options": {
         "compiler": "libshacccg_version: SDK 3.0.0, graphics/release_branches/release_03.000/shacc r13225, sys/release_branches/release_03.000 r85995",
@@ -21256,7 +21256,7 @@
           "name": "wipe"
         }
       ],
-      "wgsl_blake3": "c607631d6ed0b424b2b040105ed508f008b410f186afca9261c75c3d8c82c740",
+      "wgsl_blake3": "7518ae2925c6ad23c30502121042ac7747a461203306d21dd2663fb064340607",
       "wipe_variant": -1
     },
     {
@@ -21340,7 +21340,7 @@
           "name": "wipe"
         }
       ],
-      "wgsl_blake3": "c607631d6ed0b424b2b040105ed508f008b410f186afca9261c75c3d8c82c740",
+      "wgsl_blake3": "7518ae2925c6ad23c30502121042ac7747a461203306d21dd2663fb064340607",
       "wipe_variant": 0
     },
     {
@@ -21424,7 +21424,7 @@
           "name": "wipe"
         }
       ],
-      "wgsl_blake3": "c607631d6ed0b424b2b040105ed508f008b410f186afca9261c75c3d8c82c740",
+      "wgsl_blake3": "7518ae2925c6ad23c30502121042ac7747a461203306d21dd2663fb064340607",
       "wipe_variant": 1
     },
     {
@@ -21508,7 +21508,7 @@
           "name": "wipe"
         }
       ],
-      "wgsl_blake3": "c607631d6ed0b424b2b040105ed508f008b410f186afca9261c75c3d8c82c740",
+      "wgsl_blake3": "7518ae2925c6ad23c30502121042ac7747a461203306d21dd2663fb064340607",
       "wipe_variant": 2
     },
     {
@@ -21535,7 +21535,7 @@
           "texture_unit": 2
         }
       ],
-      "cg_blake3": "b5ffa8d0dbbb2befb6c6cf31e96d511a1b64a46662208d4cdeefe297aec1e609",
+      "cg_blake3": "1a67e314ba25818a7d80aa513abe9d8678ea65e7ea8ef79d8112e7abb3247b5f",
       "compiler_optimization": 3,
       "compiler_options": {
         "compiler": "libshacccg_version: SDK 3.0.0, graphics/release_branches/release_03.000/shacc r13225, sys/release_branches/release_03.000 r85995",
@@ -21599,7 +21599,7 @@
           "name": "wipe"
         }
       ],
-      "wgsl_blake3": "c607631d6ed0b424b2b040105ed508f008b410f186afca9261c75c3d8c82c740",
+      "wgsl_blake3": "7518ae2925c6ad23c30502121042ac7747a461203306d21dd2663fb064340607",
       "wipe_variant": 50
     },
     {
@@ -21626,7 +21626,7 @@
           "texture_unit": 2
         }
       ],
-      "cg_blake3": "169f1b98da28199b039f0a2dee774d3630fd2514dee8e0307d2e6dff8f1c4301",
+      "cg_blake3": "87fa542b55a2b2c979d8b7c2848fb17d792617ddcbc4376aae4de374e6a84db2",
       "compiler_optimization": 3,
       "compiler_options": {
         "compiler": "libshacccg_version: SDK 3.0.0, graphics/release_branches/release_03.000/shacc r13225, sys/release_branches/release_03.000 r85995",
@@ -21690,7 +21690,7 @@
           "name": "wipe"
         }
       ],
-      "wgsl_blake3": "c607631d6ed0b424b2b040105ed508f008b410f186afca9261c75c3d8c82c740",
+      "wgsl_blake3": "7518ae2925c6ad23c30502121042ac7747a461203306d21dd2663fb064340607",
       "wipe_variant": 200
     },
     {
@@ -21717,7 +21717,7 @@
           "texture_unit": 2
         }
       ],
-      "cg_blake3": "fed007c78d0ea98a4db8a230b4855cfb317797ba9feff0d285eeb93e8acd546e",
+      "cg_blake3": "5d1d28a3eb46620a9ef33e27e972fa3edda05ad64049378f1ddb79a1c89b4fa0",
       "compiler_optimization": 3,
       "compiler_options": {
         "compiler": "libshacccg_version: SDK 3.0.0, graphics/release_branches/release_03.000/shacc r13225, sys/release_branches/release_03.000 r85995",
@@ -21781,7 +21781,7 @@
           "name": "wipe"
         }
       ],
-      "wgsl_blake3": "c607631d6ed0b424b2b040105ed508f008b410f186afca9261c75c3d8c82c740",
+      "wgsl_blake3": "7518ae2925c6ad23c30502121042ac7747a461203306d21dd2663fb064340607",
       "wipe_variant": 210
     },
     {
@@ -21808,7 +21808,7 @@
           "texture_unit": 2
         }
       ],
-      "cg_blake3": "c8a4fc6799213f9c26f4c55b87262e656da37ae704ccc279fe4d983bf6c9ba46",
+      "cg_blake3": "3b31adc110b142c56281d0309702d3991441e6f0ba6fa4ec2ea587e11ad93c1a",
       "compiler_optimization": 3,
       "compiler_options": {
         "compiler": "libshacccg_version: SDK 3.0.0, graphics/release_branches/release_03.000/shacc r13225, sys/release_branches/release_03.000 r85995",
@@ -21872,7 +21872,7 @@
           "name": "wipe"
         }
       ],
-      "wgsl_blake3": "c607631d6ed0b424b2b040105ed508f008b410f186afca9261c75c3d8c82c740",
+      "wgsl_blake3": "7518ae2925c6ad23c30502121042ac7747a461203306d21dd2663fb064340607",
       "wipe_variant": 211
     },
     {
@@ -21899,7 +21899,7 @@
           "texture_unit": 2
         }
       ],
-      "cg_blake3": "4fc495492747f4bef01fbbc4f1e0347dd0c49f1fcbc701e290c12f02d57696bd",
+      "cg_blake3": "57d87324e7a5574bd775a41189e47b501e9b629dc046ffd1e9011a09bdaa4c77",
       "compiler_optimization": 3,
       "compiler_options": {
         "compiler": "libshacccg_version: SDK 3.0.0, graphics/release_branches/release_03.000/shacc r13225, sys/release_branches/release_03.000 r85995",
@@ -21963,7 +21963,7 @@
           "name": "wipe"
         }
       ],
-      "wgsl_blake3": "c607631d6ed0b424b2b040105ed508f008b410f186afca9261c75c3d8c82c740",
+      "wgsl_blake3": "7518ae2925c6ad23c30502121042ac7747a461203306d21dd2663fb064340607",
       "wipe_variant": 212
     },
     {
@@ -21990,7 +21990,7 @@
           "texture_unit": 2
         }
       ],
-      "cg_blake3": "b6991ee493ccfd2a7114854f755017f872b226f16ab77ee2caf9265fe540d3b5",
+      "cg_blake3": "28a9aa2c5ebc83f72ab56647564c1497f8e8a2ce041ecdc7f6010d11d88f0edb",
       "compiler_optimization": 3,
       "compiler_options": {
         "compiler": "libshacccg_version: SDK 3.0.0, graphics/release_branches/release_03.000/shacc r13225, sys/release_branches/release_03.000 r85995",
@@ -22054,7 +22054,7 @@
           "name": "wipe"
         }
       ],
-      "wgsl_blake3": "c607631d6ed0b424b2b040105ed508f008b410f186afca9261c75c3d8c82c740",
+      "wgsl_blake3": "7518ae2925c6ad23c30502121042ac7747a461203306d21dd2663fb064340607",
       "wipe_variant": 213
     },
     {
@@ -22081,7 +22081,7 @@
           "texture_unit": 2
         }
       ],
-      "cg_blake3": "ca776368e1b80a72785316904253d4d3aa490582522d2454e2c43161ee11cd63",
+      "cg_blake3": "0636590338e2061cbcbe0b89688bee87e415e802bd0f7055f588c7fc1bc8183d",
       "compiler_optimization": 3,
       "compiler_options": {
         "compiler": "libshacccg_version: SDK 3.0.0, graphics/release_branches/release_03.000/shacc r13225, sys/release_branches/release_03.000 r85995",
@@ -22145,7 +22145,7 @@
           "name": "wipe"
         }
       ],
-      "wgsl_blake3": "c607631d6ed0b424b2b040105ed508f008b410f186afca9261c75c3d8c82c740",
+      "wgsl_blake3": "7518ae2925c6ad23c30502121042ac7747a461203306d21dd2663fb064340607",
       "wipe_variant": 214
     },
     {
@@ -22172,7 +22172,7 @@
           "texture_unit": 2
         }
       ],
-      "cg_blake3": "9ff2e1f7e5252b324168ade64ee5c13c46d7e8d74323c09351819f979dfb3af0",
+      "cg_blake3": "2a8a6269505c531b51c9e05da42280b1f1c19733c8f9e368563cbb3df4387c6c",
       "compiler_optimization": 3,
       "compiler_options": {
         "compiler": "libshacccg_version: SDK 3.0.0, graphics/release_branches/release_03.000/shacc r13225, sys/release_branches/release_03.000 r85995",
@@ -22236,7 +22236,7 @@
           "name": "wipe"
         }
       ],
-      "wgsl_blake3": "c607631d6ed0b424b2b040105ed508f008b410f186afca9261c75c3d8c82c740",
+      "wgsl_blake3": "7518ae2925c6ad23c30502121042ac7747a461203306d21dd2663fb064340607",
       "wipe_variant": 215
     },
     {
@@ -22263,7 +22263,7 @@
           "texture_unit": 2
         }
       ],
-      "cg_blake3": "1be8d0b7fdaa135661ebd102c167489b3840e8166ad2f4268829eb6debce8bff",
+      "cg_blake3": "a00f79667dd3ca6ad2b4bcd4d6ccff1128b57b0162af653aa2a9afe55c43d836",
       "compiler_optimization": 3,
       "compiler_options": {
         "compiler": "libshacccg_version: SDK 3.0.0, graphics/release_branches/release_03.000/shacc r13225, sys/release_branches/release_03.000 r85995",
@@ -22327,7 +22327,7 @@
           "name": "wipe"
         }
       ],
-      "wgsl_blake3": "c607631d6ed0b424b2b040105ed508f008b410f186afca9261c75c3d8c82c740",
+      "wgsl_blake3": "7518ae2925c6ad23c30502121042ac7747a461203306d21dd2663fb064340607",
       "wipe_variant": 220
     },
     {
@@ -22354,7 +22354,7 @@
           "texture_unit": 2
         }
       ],
-      "cg_blake3": "d8bc28427b8cba58a6342ab467fb5bc18d3e278230c01570c9abed087ae89b24",
+      "cg_blake3": "31b02207ce06b0a2b843fb9c045c2db99046aaad7c33beabea6f0bf445d79dee",
       "compiler_optimization": 3,
       "compiler_options": {
         "compiler": "libshacccg_version: SDK 3.0.0, graphics/release_branches/release_03.000/shacc r13225, sys/release_branches/release_03.000 r85995",
@@ -22418,7 +22418,7 @@
           "name": "wipe"
         }
       ],
-      "wgsl_blake3": "c607631d6ed0b424b2b040105ed508f008b410f186afca9261c75c3d8c82c740",
+      "wgsl_blake3": "7518ae2925c6ad23c30502121042ac7747a461203306d21dd2663fb064340607",
       "wipe_variant": 221
     },
     {
@@ -22445,7 +22445,7 @@
           "texture_unit": 2
         }
       ],
-      "cg_blake3": "240154bebc50f98724d8ea5d5e9a368e29eed881b24a20ffa1bea3c64a712592",
+      "cg_blake3": "6279c47d59d1d07805b1545df27bc2fda4e5ec733781568e867de2ffa137bb06",
       "compiler_optimization": 3,
       "compiler_options": {
         "compiler": "libshacccg_version: SDK 3.0.0, graphics/release_branches/release_03.000/shacc r13225, sys/release_branches/release_03.000 r85995",
@@ -22509,7 +22509,7 @@
           "name": "wipe"
         }
       ],
-      "wgsl_blake3": "c607631d6ed0b424b2b040105ed508f008b410f186afca9261c75c3d8c82c740",
+      "wgsl_blake3": "7518ae2925c6ad23c30502121042ac7747a461203306d21dd2663fb064340607",
       "wipe_variant": 230
     },
     {
@@ -22536,7 +22536,7 @@
           "texture_unit": 2
         }
       ],
-      "cg_blake3": "1e5d16ba0f694f9043310bedace20e24bcf0755f48bf882180cdce8409decfe6",
+      "cg_blake3": "9ca318353fdbc9a08e0b82ad612dc235285b7f66d0642b83cffda5821b1fb6d5",
       "compiler_optimization": 3,
       "compiler_options": {
         "compiler": "libshacccg_version: SDK 3.0.0, graphics/release_branches/release_03.000/shacc r13225, sys/release_branches/release_03.000 r85995",
@@ -22600,7 +22600,7 @@
           "name": "wipe"
         }
       ],
-      "wgsl_blake3": "c607631d6ed0b424b2b040105ed508f008b410f186afca9261c75c3d8c82c740",
+      "wgsl_blake3": "7518ae2925c6ad23c30502121042ac7747a461203306d21dd2663fb064340607",
       "wipe_variant": 231
     },
     {
@@ -22627,7 +22627,7 @@
           "texture_unit": 2
         }
       ],
-      "cg_blake3": "05fcffb497f56ce1b6ae07ae1db865ed3a6905c2470ecc8422684d4651fcf729",
+      "cg_blake3": "83a88454102b97f1f66025201abe70626ca4c118f653b53e27d270e34d3b1ccc",
       "compiler_optimization": 3,
       "compiler_options": {
         "compiler": "libshacccg_version: SDK 3.0.0, graphics/release_branches/release_03.000/shacc r13225, sys/release_branches/release_03.000 r85995",
@@ -22643,7 +22643,7 @@
       "file": "shared_wipe_fs_main_k240_f.cg",
       "filter_record": "one LayerFilter per draw, split batches by flat filter index",
       "gxp": "gxp/shared_wipe_fs_main_k240_f.gxp",
-      "gxp_blake3": "2c6f9f867e1fdf157f9983f67ca6a472965343dc0fedaa5b2a0bd84f26a60d5c",
+      "gxp_blake3": "99259ae6db696889ec1972e9b1f208d20664f22808996095308bb7be1a45299d",
       "loop_limits": [
         10,
         3,
@@ -22697,7 +22697,7 @@
           "name": "cg_loop_limits"
         }
       ],
-      "wgsl_blake3": "c607631d6ed0b424b2b040105ed508f008b410f186afca9261c75c3d8c82c740",
+      "wgsl_blake3": "7518ae2925c6ad23c30502121042ac7747a461203306d21dd2663fb064340607",
       "wipe_variant": 240
     },
     {
@@ -22724,7 +22724,7 @@
           "texture_unit": 2
         }
       ],
-      "cg_blake3": "194143f0a1d7de225a22cf9804c239c53690a4fa5b0182fcc80520d5cffac27e",
+      "cg_blake3": "9c87a95a152b8caa812c1d280ef06016aa625406b28cc5b219bac0518edd1beb",
       "compiler_optimization": 3,
       "compiler_options": {
         "compiler": "libshacccg_version: SDK 3.0.0, graphics/release_branches/release_03.000/shacc r13225, sys/release_branches/release_03.000 r85995",
@@ -22794,7 +22794,7 @@
           "name": "cg_loop_limits"
         }
       ],
-      "wgsl_blake3": "c607631d6ed0b424b2b040105ed508f008b410f186afca9261c75c3d8c82c740",
+      "wgsl_blake3": "7518ae2925c6ad23c30502121042ac7747a461203306d21dd2663fb064340607",
       "wipe_variant": 241
     },
     {
@@ -22821,7 +22821,7 @@
           "texture_unit": 2
         }
       ],
-      "cg_blake3": "f5fb45f41bf1b20729461ca39fb1e80a1f40a69efdb2ace03a97ef18b4c49af6",
+      "cg_blake3": "2689a4ea31a8f5c39cf4a51d7e8cacd78d493eb915eb373a5a213b4d0ec24df6",
       "compiler_optimization": 3,
       "compiler_options": {
         "compiler": "libshacccg_version: SDK 3.0.0, graphics/release_branches/release_03.000/shacc r13225, sys/release_branches/release_03.000 r85995",
@@ -22837,7 +22837,7 @@
       "file": "shared_wipe_fs_main_k242_f.cg",
       "filter_record": "one LayerFilter per draw, split batches by flat filter index",
       "gxp": "gxp/shared_wipe_fs_main_k242_f.gxp",
-      "gxp_blake3": "9639631990b86c5d65eeb38144ef732770e02f6fa795487403b5b5341af7b86b",
+      "gxp_blake3": "d8f6983072af9841c4a338a2a8f732c15fa1ec40e407796ef74d674551dbcf22",
       "loop_limits": [
         10,
         3,
@@ -22891,7 +22891,7 @@
           "name": "cg_loop_limits"
         }
       ],
-      "wgsl_blake3": "c607631d6ed0b424b2b040105ed508f008b410f186afca9261c75c3d8c82c740",
+      "wgsl_blake3": "7518ae2925c6ad23c30502121042ac7747a461203306d21dd2663fb064340607",
       "wipe_variant": 242
     },
     {
@@ -22918,7 +22918,7 @@
           "texture_unit": 2
         }
       ],
-      "cg_blake3": "f4599c511d1062851a9c6b2a9b3418511340eab931c30d51e940b3435c8cc16b",
+      "cg_blake3": "36cc2eaa02909e45d631a0b65d66364f83d610b020f951f6857c2bdce3ae036e",
       "compiler_optimization": 3,
       "compiler_options": {
         "compiler": "libshacccg_version: SDK 3.0.0, graphics/release_branches/release_03.000/shacc r13225, sys/release_branches/release_03.000 r85995",
@@ -22988,7 +22988,7 @@
           "name": "cg_loop_limits"
         }
       ],
-      "wgsl_blake3": "c607631d6ed0b424b2b040105ed508f008b410f186afca9261c75c3d8c82c740",
+      "wgsl_blake3": "7518ae2925c6ad23c30502121042ac7747a461203306d21dd2663fb064340607",
       "wipe_variant": 243
     },
     {
@@ -23022,7 +23022,7 @@
           "texture_unit": 3
         }
       ],
-      "cg_blake3": "d2e88ca9595af7961fdd3038f390e435a4a93d9e35c1e1899b4d7a001e7e8283",
+      "cg_blake3": "0a4f6fe15b873b0dd733f3fbaee55d3a4d71144f6234d678282f67695a2d8a1a",
       "compiler_optimization": 3,
       "compiler_options": {
         "compiler": "libshacccg_version: SDK 3.0.0, graphics/release_branches/release_03.000/shacc r13225, sys/release_branches/release_03.000 r85995",
@@ -23030,7 +23030,7 @@
         "fastmath": "0",
         "fastprecision": "0",
         "optimization": "3",
-        "program_bytes": "1496"
+        "program_bytes": "1552"
       },
       "compute_lowering": null,
       "distortion_variant": null,
@@ -23038,7 +23038,7 @@
       "file": "shared_wipe_fs_main_k900_f.cg",
       "filter_record": "one LayerFilter per draw, split batches by flat filter index",
       "gxp": "gxp/shared_wipe_fs_main_k900_f.gxp",
-      "gxp_blake3": "78201af5687158ff904d2c110b744e756883637f285474248585ed152dd03ab1",
+      "gxp_blake3": "ab9f76c2d38f0a212d57f46b9599116353dafe0a45ebfc690a0920751d570e5e",
       "loop_limits": [
         10,
         3,
@@ -23086,7 +23086,7 @@
           "name": "wipe"
         }
       ],
-      "wgsl_blake3": "c607631d6ed0b424b2b040105ed508f008b410f186afca9261c75c3d8c82c740",
+      "wgsl_blake3": "7518ae2925c6ad23c30502121042ac7747a461203306d21dd2663fb064340607",
       "wipe_variant": 900
     },
     {
@@ -23120,7 +23120,7 @@
           "texture_unit": 3
         }
       ],
-      "cg_blake3": "d72c6d631b0986813c6f5a80afef57b51c39759a5e45b7160e205877d75ab51f",
+      "cg_blake3": "db8afc73196d82a8ef87d8e230eeed9d8b80d4a28bb275652afd2beb4d38567d",
       "compiler_optimization": 3,
       "compiler_options": {
         "compiler": "libshacccg_version: SDK 3.0.0, graphics/release_branches/release_03.000/shacc r13225, sys/release_branches/release_03.000 r85995",
@@ -23184,8 +23184,281 @@
           "name": "wipe"
         }
       ],
-      "wgsl_blake3": "c607631d6ed0b424b2b040105ed508f008b410f186afca9261c75c3d8c82c740",
+      "wgsl_blake3": "7518ae2925c6ad23c30502121042ac7747a461203306d21dd2663fb064340607",
       "wipe_variant": 901
+    },
+    {
+      "bindings": [
+        {
+          "binding": 0,
+          "dimensions": "cg_size_under_tex",
+          "group": 0,
+          "name": "under_tex",
+          "texture_unit": 0
+        },
+        {
+          "binding": 2,
+          "dimensions": "cg_size_current_tex",
+          "group": 0,
+          "name": "current_tex",
+          "texture_unit": 1
+        },
+        {
+          "binding": 4,
+          "dimensions": "cg_size_next_tex",
+          "group": 0,
+          "name": "next_tex",
+          "texture_unit": 2
+        }
+      ],
+      "cg_blake3": "4f5f23f87815de65ad836a77169788bcba53dd8e27c8a1595ebae9d18fb36979",
+      "compiler_optimization": 3,
+      "compiler_options": {
+        "compiler": "libshacccg_version: SDK 3.0.0, graphics/release_branches/release_03.000/shacc r13225, sys/release_branches/release_03.000 r85995",
+        "fastint": "0",
+        "fastmath": "0",
+        "fastprecision": "0",
+        "optimization": "3",
+        "program_bytes": "1676"
+      },
+      "compute_lowering": null,
+      "distortion_variant": null,
+      "entry": "fs_main",
+      "file": "shared_wipe_fs_main_k910_f.cg",
+      "filter_record": "one LayerFilter per draw, split batches by flat filter index",
+      "gxp": "gxp/shared_wipe_fs_main_k910_f.gxp",
+      "gxp_blake3": "75c2d01ede7b0b844d690da3c6f918c491dcba0fe86a652027d12dd39e692d6c",
+      "loop_limits": [
+        10,
+        3,
+        3,
+        16
+      ],
+      "module": "wipe",
+      "name": "wipe-fs_main_k910",
+      "native_entry": "main",
+      "position": "vertex attributes / fragment WPOS, top-left pixel centers",
+      "sampling_variant": null,
+      "stage": "fragment",
+      "status": "gxp_compiled",
+      "uniforms": [
+        {
+          "binding": 8,
+          "group": 0,
+          "members": [
+            {
+              "byte_offset": 0,
+              "name": "kind_progress",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 16,
+              "name": "option0",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 32,
+              "name": "option1",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 48,
+              "name": "option2",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 64,
+              "name": "option3",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            }
+          ],
+          "name": "wipe"
+        }
+      ],
+      "wgsl_blake3": "7518ae2925c6ad23c30502121042ac7747a461203306d21dd2663fb064340607",
+      "wipe_variant": 910
+    },
+    {
+      "bindings": [
+        {
+          "binding": 0,
+          "dimensions": "cg_size_under_tex",
+          "group": 0,
+          "name": "under_tex",
+          "texture_unit": 0
+        },
+        {
+          "binding": 2,
+          "dimensions": "cg_size_current_tex",
+          "group": 0,
+          "name": "current_tex",
+          "texture_unit": 1
+        },
+        {
+          "binding": 4,
+          "dimensions": "cg_size_next_tex",
+          "group": 0,
+          "name": "next_tex",
+          "texture_unit": 2
+        }
+      ],
+      "cg_blake3": "9e19a10c5b913506413b886e9df2d707529cf3c323746915715629c34462ae60",
+      "compiler_optimization": 3,
+      "compiler_options": {
+        "compiler": "libshacccg_version: SDK 3.0.0, graphics/release_branches/release_03.000/shacc r13225, sys/release_branches/release_03.000 r85995",
+        "fastint": "0",
+        "fastmath": "0",
+        "fastprecision": "0",
+        "optimization": "3",
+        "program_bytes": "2556"
+      },
+      "compute_lowering": null,
+      "distortion_variant": null,
+      "entry": "fs_main",
+      "file": "shared_wipe_fs_main_k911_f.cg",
+      "filter_record": "one LayerFilter per draw, split batches by flat filter index",
+      "gxp": "gxp/shared_wipe_fs_main_k911_f.gxp",
+      "gxp_blake3": "f8feafe82fc6d02d7f9bc95130f006887193883da8ac31a12234f96219a4680c",
+      "loop_limits": [
+        10,
+        3,
+        3,
+        16
+      ],
+      "module": "wipe",
+      "name": "wipe-fs_main_k911",
+      "native_entry": "main",
+      "position": "vertex attributes / fragment WPOS, top-left pixel centers",
+      "sampling_variant": null,
+      "stage": "fragment",
+      "status": "gxp_compiled",
+      "uniforms": [
+        {
+          "binding": 8,
+          "group": 0,
+          "members": [
+            {
+              "byte_offset": 0,
+              "name": "kind_progress",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 16,
+              "name": "option0",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 32,
+              "name": "option1",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 48,
+              "name": "option2",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 64,
+              "name": "option3",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            }
+          ],
+          "name": "wipe"
+        }
+      ],
+      "wgsl_blake3": "7518ae2925c6ad23c30502121042ac7747a461203306d21dd2663fb064340607",
+      "wipe_variant": 911
+    },
+    {
+      "bindings": [
+        {
+          "binding": 0,
+          "dimensions": "cg_size_under_tex",
+          "group": 0,
+          "name": "under_tex",
+          "texture_unit": 0
+        },
+        {
+          "binding": 2,
+          "dimensions": "cg_size_current_tex",
+          "group": 0,
+          "name": "current_tex",
+          "texture_unit": 1
+        },
+        {
+          "binding": 4,
+          "dimensions": "cg_size_next_tex",
+          "group": 0,
+          "name": "next_tex",
+          "texture_unit": 2
+        }
+      ],
+      "cg_blake3": "1f29d9e98307adee636991de46857c4b7f55baad0482670f5b7863e2527cf9ec",
+      "compiler_optimization": 3,
+      "compiler_options": {
+        "compiler": "libshacccg_version: SDK 3.0.0, graphics/release_branches/release_03.000/shacc r13225, sys/release_branches/release_03.000 r85995",
+        "fastint": "0",
+        "fastmath": "0",
+        "fastprecision": "0",
+        "optimization": "3",
+        "program_bytes": "2252"
+      },
+      "compute_lowering": null,
+      "distortion_variant": null,
+      "entry": "fs_main",
+      "file": "shared_wipe_fs_main_k912_f.cg",
+      "filter_record": "one LayerFilter per draw, split batches by flat filter index",
+      "gxp": "gxp/shared_wipe_fs_main_k912_f.gxp",
+      "gxp_blake3": "a2bdfaa3ba49a6605c315ecd058eae1e260b3c0fa6f5044097cd3b2352be2302",
+      "loop_limits": [
+        10,
+        3,
+        3,
+        16
+      ],
+      "module": "wipe",
+      "name": "wipe-fs_main_k912",
+      "native_entry": "main",
+      "position": "vertex attributes / fragment WPOS, top-left pixel centers",
+      "sampling_variant": null,
+      "stage": "fragment",
+      "status": "gxp_compiled",
+      "uniforms": [
+        {
+          "binding": 8,
+          "group": 0,
+          "members": [
+            {
+              "byte_offset": 0,
+              "name": "kind_progress",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 16,
+              "name": "option0",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 32,
+              "name": "option1",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 48,
+              "name": "option2",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 64,
+              "name": "option3",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            }
+          ],
+          "name": "wipe"
+        }
+      ],
+      "wgsl_blake3": "7518ae2925c6ad23c30502121042ac7747a461203306d21dd2663fb064340607",
+      "wipe_variant": 912
     },
     {
       "bindings": [],
@@ -23340,7 +23613,7 @@
       "stage": "vertex",
       "status": "gxp_compiled",
       "uniforms": [],
-      "wgsl_blake3": "20e96d794ea45690538ca489d402e4ef1485874e6cd389f7392c80827bf52413",
+      "wgsl_blake3": "193b714efe10a8890c52621755ce3987646973bb5ebec6067655420f100403ff",
       "wipe_variant": null
     },
     {
@@ -23367,7 +23640,7 @@
           "texture_unit": 2
         }
       ],
-      "cg_blake3": "b7f9578dd4315bfe90ff195e2dece75683089cf3803d98ba835668d561182e19",
+      "cg_blake3": "e5985a5aae2913b6fe8f9aebb3c5e3559a6d4c46136f2c5bd1a812e65633d4ac",
       "compiler_optimization": 3,
       "compiler_options": {
         "compiler": "libshacccg_version: SDK 3.0.0, graphics/release_branches/release_03.000/shacc r13225, sys/release_branches/release_03.000 r85995",
@@ -23375,7 +23648,7 @@
         "fastmath": "0",
         "fastprecision": "0",
         "optimization": "3",
-        "program_bytes": "4064"
+        "program_bytes": "23800"
       },
       "compute_lowering": null,
       "distortion_variant": null,
@@ -23383,7 +23656,7 @@
       "file": "shared_composite_fs_main_f.cg",
       "filter_record": "one LayerFilter per draw, split batches by flat filter index",
       "gxp": "gxp/shared_composite_fs_main_f.gxp",
-      "gxp_blake3": "e341b62030f8bb703aab70d96d74355d9b85ad71073d56f68aeb0b0e06bf2a8b",
+      "gxp_blake3": "5ec6ca8f4ccaef1a1a0e9738c8b8ec7603b9abddd95b8f88ccac90f957574f42",
       "loop_limits": [
         10,
         3,
@@ -23416,7 +23689,7 @@
           "name": "params"
         }
       ],
-      "wgsl_blake3": "20e96d794ea45690538ca489d402e4ef1485874e6cd389f7392c80827bf52413",
+      "wgsl_blake3": "193b714efe10a8890c52621755ce3987646973bb5ebec6067655420f100403ff",
       "wipe_variant": null
     },
     {
@@ -24143,7 +24416,7 @@
   ],
   "errors": [],
   "native_compiled": true,
-  "native_program_count": 237,
+  "native_program_count": 240,
   "source_files": [
     {
       "blake3": "2cbc66f931ee0e9ecd46bdf1ce00b461c56031147419f54866024627dc4504f5",
@@ -24154,7 +24427,7 @@
       "name": "brdf.wgsl"
     },
     {
-      "blake3": "20e96d794ea45690538ca489d402e4ef1485874e6cd389f7392c80827bf52413",
+      "blake3": "193b714efe10a8890c52621755ce3987646973bb5ebec6067655420f100403ff",
       "name": "composite.wgsl"
     },
     {
@@ -24330,7 +24603,7 @@
       "name": "vsm_mark.wgsl"
     },
     {
-      "blake3": "c607631d6ed0b424b2b040105ed508f008b410f186afca9261c75c3d8c82c740",
+      "blake3": "7518ae2925c6ad23c30502121042ac7747a461203306d21dd2663fb064340607",
       "name": "wipe.wgsl"
     }
   ],

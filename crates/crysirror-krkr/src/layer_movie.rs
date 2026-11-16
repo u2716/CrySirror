@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-License-Identifier: MPL-2.0
 //! layerExMovie native policy over engine Media; no DirectShow or pixel loop.
 //! Reference: krkrz 49c4d53506edecb824cd7b2cff8d32959b1f1b70,
 //! src/plugins/win32/layerExMovie. Original W.Dee/Watanabe notices retained.

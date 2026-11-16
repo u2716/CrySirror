@@ -1,4 +1,5 @@
-// Distributed under the GNU Affero General Public License, version3 or later.
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. A copy is available at https://mozilla.org/MPL/2.0/.
 //! LayerIntf LoadProvinceImage policy over shared integer-label resources.
 //! Palette indices are interaction IDs, unrelated to visible image colours.
 use crate::natives::{Rt, string, this_of, unsupported};

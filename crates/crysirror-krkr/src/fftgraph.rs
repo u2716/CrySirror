@@ -1,4 +1,5 @@
-// Distributed under the GNU Affero General Public License, version 3 or later.
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. A copy is available at https://mozilla.org/MPL/2.0/.
 //! fftgraph's native argument/continuation policy. Shared services own source
 //! decoding, the sine spectrum/envelopes and bitmap rasterization.
 //! Reference: krkrz/fftgraph Main.cpp (GetVisBuffer/DoFFT/GetBandSpectrum).

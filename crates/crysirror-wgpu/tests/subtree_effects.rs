@@ -226,3 +226,42 @@ fn gpu_box_byte_quantization_dim_max_radius_and_static_live_inputs() {
         );
     }
 }
+#[test]
+#[ignore = "requires a real GPU; execute explicitly; no display or game data"]
+fn gpu_glitch_matches_the_cpu_reference_frame() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("assets")).unwrap();
+    std::fs::write(root.path().join("project.json"),serde_json::to_vec(&json!({"schema":2,"name":"shared glitch","content_revision":"1","assets":"assets","canvas":[8,4],"clients":[{"name":"app","adapter":"crysirror-script-v1","game":"fixture"}]})).unwrap()).unwrap();
+    let mut rt = Runtime::load(&root.path().join("project.json"), &root.path().join("state")).unwrap();
+    let gpu = Arc::new(pollster::block_on(Gpu::request(&wgpu::Instance::default(), None)).unwrap());
+    let mut renderer = Renderer::new(gpu, wgpu::TextureFormat::Rgba8UnormSrgb);
+    let mut nodes = vec![
+        node(1, None, 0, [0, 0, 8, 4], [255; 4], true),
+        node(10, None, 20, [0, 0, 8, 4], [0, 0, 0, 255], false),
+    ];
+    for x in 0..8u32 {
+        let v = x as u8 * 30;
+        nodes.push(node(2 + x, Some(1), 1 + x as i32, [x, 0, 1, 4 - x % 2], [v, 255 - v, 40 + v / 2, 255], true));
+        nodes.push(node(11 + x, Some(10), 21 + x as i32, [x, x % 3, 1, 2], [200, v, 255 - v, 255], true));
+    }
+    submit(&mut rt, json!(nodes));
+    let old = capture(&mut renderer, &mut rt);
+    submit(&mut rt, json!([{"op":"put","layer":{"id":10,"order":[0,20],"rect":[0,0,8,4],"paint":{"kind":"solid","color":[0,0,0,255]},"visible":true}}]));
+    let new = capture(&mut renderer, &mut rt);
+    submit(&mut rt, json!([{"op":"put","layer":{"id":10,"order":[0,20],"rect":[0,0,8,4],"paint":{"kind":"solid","color":[0,0,0,255]},"visible":false}}]));
+    let surface = |i: &image::RgbaImage| crysirror_image::ImageSurface { width: 8, height: 4, rgba: i.as_raw().clone() };
+    for effect in [
+        json!({"kind":"glitch","params":{"noise":3.,"shift":[6.,2.,1.],"probability":[0.9,0.6,0.7],"reset":0.05,"block":2},"mode":{"kind":"exchange","gamma_in":1.,"gamma_out":1.},"seed":9}),
+        json!({"kind":"glitch","params":{"noise":2.,"shift":[5.,3.,2.],"probability":[0.8,0.5,0.9],"reset":0.0,"block":3},"mode":{"kind":"fade","fade_in":true,"gamma":0.5,"color":[255,0,64]},"seed":4}),
+    ] {
+        begin(&mut rt, effect.clone(), 500);
+        let gpu_frame = capture(&mut renderer, &mut rt);
+        let parsed: crysirror_scene::layer::SubtreeTransitionEffect = serde_json::from_value(effect).unwrap();
+        let frame = parsed.glitch_frame(500, 1000, [8, 4]).unwrap();
+        let cpu = frame.render(&surface(&old), &surface(&new)).unwrap();
+        for (i, (g, c)) in gpu_frame.as_raw().iter().zip(&cpu.rgba).enumerate() {
+            assert!((*g as i32 - *c as i32).abs() <= 1, "byte {i}: gpu {g} cpu {c}\ngpu {:?}\ncpu {:?}", gpu_frame.as_raw(), cpu.rgba);
+        }
+        submit(&mut rt, json!([{"op":"end_crossfade","id":1}]));
+    }
+}

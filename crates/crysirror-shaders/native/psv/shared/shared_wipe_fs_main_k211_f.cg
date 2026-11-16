@@ -200,14 +200,22 @@ int naga_f2i32(float value) {
 
 float4 affected_color(float2 uv_3, float2 random_center)
 {
+    bool local_1 = (bool)0;
+    float2 off = (0.0).xx;
+    float r = (float)0;
+    float2 src_1 = (float2)0;
+    float a = (float)0;
+    float2 q = (float2)0;
+    bool ok = true;
+    bool local_2 = (bool)0;
     bool base_is_current = false;
     float2 center_ = (0.5).xx;
     float2 muv = (float2)0;
     float mask_value = 1.0;
-    bool local_1 = (bool)0;
-    bool local_2 = (bool)0;
     bool local_3 = (bool)0;
     bool local_4 = (bool)0;
+    bool local_5 = (bool)0;
+    bool local_6 = (bool)0;
 
     float _e4 = wipe.kind_progress.y;
     float _e7 = clamp(_e4, 0.0, 1.0);
@@ -219,15 +227,78 @@ float4 affected_color(float2 uv_3, float2 random_center)
     if ((_e7 >= 1.0)) {
         return _e13;
     }
-    const float _e21 = option(int(0));
-    const float4 _e26 = scale_rect(naga_f2i32(_e21), (false ? _e7 : (1.0 - _e7)));
-    const float _e30 = option(int(1));
-    const float _e37 = option(int(1));
-    float _e43 = (false ? ((naga_f2i32(_e37) == int(1)) ? _e7 : 1.0) : ((naga_f2i32(_e30) == int(1)) ? (1.0 - _e7) : 1.0));
-    const float4 _e46 = rect_sample(current_tex, cg_size_current_tex, uv_3, _e26, _e43);
-    const float4 _e49 = rect_sample(next_tex, cg_size_next_tex, uv_3, _e26, _e43);
-    const float4 _e51 = alpha_over((false ? _e13 : _e10), (false ? _e49 : _e46));
-    return _e51;
+    local_1 = false;
+    bool _e21 = local_1;
+    if (_e21) {
+        float4 _e24 = wipe.kind_progress;
+        float2 _e28 = max(_e24.zw, (1.0).xx);
+        float2 _e31 = (_e28 * 0.5);
+        bool _e35 = (_e7 < 0.5);
+        a = (_e7 * 3.1415927);
+        if (!(_e35)) {
+            float _e40 = a;
+            a = (_e40 + 3.1415927);
+        }
+        const float _e44 = option(int(1));
+        float _e46 = max(_e44, 1.0);
+        const float _e48 = option(int(0));
+        int _e49 = naga_f2i32(_e48);
+        q = ((uv_3 * _e28) - _e31);
+        if ((_e49 == int(2))) {
+            float _e56 = a;
+            float _e59 = q.x;
+            float _e61 = a;
+            float _e64 = q.y;
+            float _e67 = a;
+            float _e71 = q.x;
+            float _e73 = a;
+            float _e76 = q.y;
+            q = float2(((cos(_e56) * _e59) + (sin(_e61) * _e64)), ((-(sin(_e67)) * _e71) + (cos(_e73) * _e76)));
+        } else {
+            float _e81 = q.x;
+            float _e83 = q.y;
+            float _e86 = ((_e49 == int(1)) ? _e83 : _e81);
+            float _e87 = a;
+            float _e90 = a;
+            float _e93 = ((_e46 * cos(_e87)) - (_e86 * sin(_e90)));
+            ok = (abs(_e93) > 0.0001);
+            bool _e98 = ok;
+            float _e101 = ((_e86 * _e46) / (_e98 ? _e93 : 1.0));
+            float _e102 = a;
+            float _e105 = (_e46 + (_e101 * sin(_e102)));
+            bool _e106 = ok;
+            if (_e106) {
+                local_2 = (_e105 > (0.1 * _e46));
+            } else {
+                local_2 = false;
+            }
+            bool _e113 = local_2;
+            ok = _e113;
+            float _e115 = q.y;
+            float _e117 = q.x;
+            float _e122 = ((((_e49 == int(1)) ? _e117 : _e115) * _e105) / _e46);
+            q = ((_e49 == int(1)) ? float2(_e122, _e101) : float2(_e101, _e122));
+        }
+        bool _e128 = ok;
+        if (!(_e128)) {
+            return float4(0.0, 0.0, 0.0, 1.0);
+        }
+        float2 _e135 = q;
+        float2 _e137 = ((_e31 + _e135) / _e28);
+        const float4 _e140 = sample_or_zero(current_tex, cg_size_current_tex, _e137);
+        const float4 _e143 = sample_or_zero(next_tex, cg_size_next_tex, _e137);
+        const float4 _e150 = alpha_over(float4(0.0, 0.0, 0.0, 1.0), (_e35 ? _e143 : _e140));
+        return _e150;
+    }
+    const float _e154 = option(int(0));
+    const float4 _e159 = scale_rect(naga_f2i32(_e154), (false ? _e7 : (1.0 - _e7)));
+    const float _e163 = option(int(1));
+    const float _e170 = option(int(1));
+    float _e176 = (false ? ((naga_f2i32(_e170) == int(1)) ? _e7 : 1.0) : ((naga_f2i32(_e163) == int(1)) ? (1.0 - _e7) : 1.0));
+    const float4 _e179 = rect_sample(current_tex, cg_size_current_tex, uv_3, _e159, _e176);
+    const float4 _e182 = rect_sample(next_tex, cg_size_next_tex, uv_3, _e159, _e176);
+    const float4 _e184 = alpha_over((false ? _e13 : _e10), (false ? _e182 : _e179));
+    return _e184;
 }
 
 float4 main(FragmentInput_fs_main fragmentinput_fs_main) : COLOR

@@ -445,6 +445,7 @@ impl App {
             )?,
         );
         window.set_ime_allowed(true);
+        crysirror_scene::ui::theme::set_dark(window.theme() == Some(winit::window::Theme::Dark));
         self.core.rt().host.text_input.set_presenter_available(true);
         self.core.rt().host.text_input.focus(self.focused);
         crate::desktop_provider::install(self.core.rt(),true)?;
@@ -900,6 +901,10 @@ impl App {
                 }
                 self.last_tick = Instant::now();
                 self.remainder = Duration::ZERO;
+            }
+            WindowEvent::ThemeChanged(theme) => {
+                crysirror_scene::ui::theme::set_dark(theme == winit::window::Theme::Dark);
+                if let Some(w) = self.window.as_ref() { w.window.request_redraw(); }
             }
             WindowEvent::Focused(focused) => {
                 self.focused = focused;

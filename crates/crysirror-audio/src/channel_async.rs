@@ -284,7 +284,18 @@ impl ChannelAudio {
                 let retained=usize::try_from(frames)?.checked_mul(8).and_then(|bytes|bytes.checked_add(4096)).context("resident reservation overflow")?;
                 charge.shrink_to(retained)?;
             }
-            if realtime && !resident {
+            if realtime && !resident && prepared.source.track_count() > 0 {
+                // Each stem gets its own worker buffer; the mixer mixes them.
+                let (loop_start, start) = (prepared.spec.loop_points.map(|p| p.start), prepared.start);
+                crate::multitrack::buffer_tracks(
+                    &mut prepared.source,
+                    workers.context("audio worker pool")?,
+                    loop_start,
+                    start,
+                    &cancel,
+                    charge,
+                )?;
+            } else if realtime && !resident {
                 let mut source = BufferedSource::prepare_at_cancellable(
                     prepared.source,
                     workers.context("audio worker pool")?,
@@ -472,7 +483,8 @@ impl ChannelAudio {
             | AudioRequest::FinishGainFade { channel, .. }
             | AudioRequest::SetPan { channel, .. }
             | AudioRequest::SetLooped { channel, .. }
-            | AudioRequest::SetChannelSwap { channel, .. } => (*channel, false),
+            | AudioRequest::SetChannelSwap { channel, .. }
+            | AudioRequest::SetTrackGains { channel, .. } => (*channel, false),
         };
         if !stop {
             self.poll_preparations()?;

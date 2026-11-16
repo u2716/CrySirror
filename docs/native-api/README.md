@@ -15,7 +15,8 @@ Each reference contains the native ABI, dispatch/return and wait contracts, shar
 | System-NNN | [system-nnn](system-nnn.md) | 120 | 630 |
 | SugarPot | [sugarpot](sugarpot.md) | 184 | 451 |
 | WillPlus / AdvHD | [willplus](willplus.md) | 519 | 74 |
-| KiriKiri / TJS2 / KAG | [krkr](krkr.md) | 917 | 418 |
+| KiriKiri / TJS2 / KAG | [krkr](krkr.md) | 1003 | 449 |
+| N-System | [nsystem](nsystem.md) | 134 | 128 |
 
 ## Status
 

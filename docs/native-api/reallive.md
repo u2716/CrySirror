@@ -198,25 +198,25 @@ Module routing uses `(modtype, module)` IDs. Command tables keep opcode/overload
 
 | ID / API | Purpose | Status | Gap / condition | Source |
 | --- | --- | --- | --- | --- |
-| `0x03 0x03 par` | br: the next line (upstream `hard_break`); par: a new line only when the current one has text (upstream `paragraph`) | Handled | — | [commands.rs:953](../../crates/crysirror-reallive/src/adapter/commands.rs#L953) |
-| `0x0F 0x0F spause3` | spause3 | Handled | — | [commands.rs:909](../../crates/crysirror-reallive/src/adapter/commands.rs#L909) |
-| `0x11 0x11 pause` | Wait for input | Handled | — | [commands.rs:909](../../crates/crysirror-reallive/src/adapter/commands.rs#L909) |
-| `0x64 0x64 SetFontColour` | Set Font Colour | Handled | — | [commands.rs:918](../../crates/crysirror-reallive/src/adapter/commands.rs#L918) |
-| `0x65 0x65 FontSize` | FontSize([size]): no size returns to the window's default | Handled | — | [commands.rs:920](../../crates/crysirror-reallive/src/adapter/commands.rs#L920) |
-| `0x66 0x66 TextWindow` | Text Window | Handled | — | [commands.rs:904](../../crates/crysirror-reallive/src/adapter/commands.rs#L904) |
-| `0x67 0x67 FastText` | Fast Text | Handled | — | [commands.rs:916](../../crates/crysirror-reallive/src/adapter/commands.rs#L916) |
-| `0x68 0x68 NormalText` | Normal Text | Handled | — | [commands.rs:917](../../crates/crysirror-reallive/src/adapter/commands.rs#L917) |
-| `0x69 0x69 FontColour` | Font Colour | Handled | — | [commands.rs:918](../../crates/crysirror-reallive/src/adapter/commands.rs#L918) |
-| `0x97 0x97 msgHide` | Upstream msg: 151 closes the active window (frame included), 152 clears its text, 161 closes every window, 162 clears a… | Handled | — | [commands.rs:932](../../crates/crysirror-reallive/src/adapter/commands.rs#L932) |
-| `0x98 0x98 msgClear` | msg Clear | Handled | — | [commands.rs:936](../../crates/crysirror-reallive/src/adapter/commands.rs#L936) |
-| `0xA1 0xA1 msgHideAll` | msg Hide All | Handled | — | [commands.rs:940](../../crates/crysirror-reallive/src/adapter/commands.rs#L940) |
-| `0xA2 0xA2 msgClearAll` | msg Clear All | Handled | — | [commands.rs:944](../../crates/crysirror-reallive/src/adapter/commands.rs#L944) |
-| `0xC9 0xC9 br` | br: the next line (upstream `hard_break`); par: a new line only when the current one has text (upstream `paragraph`) | Handled | — | [commands.rs:953](../../crates/crysirror-reallive/src/adapter/commands.rs#L953) |
-| `0xCA 0xCA par2` | br: the next line (upstream `hard_break`); par: a new line only when the current one has text (upstream `paragraph`) | Handled | — | [commands.rs:953](../../crates/crysirror-reallive/src/adapter/commands.rs#L953) |
-| `0xCD 0xCD spause` | spause | Handled | — | [commands.rs:909](../../crates/crysirror-reallive/src/adapter/commands.rs#L909) |
-| `0xCE 0xCE spause2` | spause2 | Handled | — | [commands.rs:909](../../crates/crysirror-reallive/src/adapter/commands.rs#L909) |
-| `0xCF 0xCF pause_all` | pause all | Handled | — | [commands.rs:909](../../crates/crysirror-reallive/src/adapter/commands.rs#L909) |
-| `0xD2 0xD2 page` | page | Handled | — | [commands.rs:909](../../crates/crysirror-reallive/src/adapter/commands.rs#L909) |
+| `0x03 par` | br: the next line (upstream `hard_break`); par: a new line only when the current one has text (upstream `paragraph`) | Handled | — | [commands.rs:953](../../crates/crysirror-reallive/src/adapter/commands.rs#L953) |
+| `0x0F spause3` | spause3 | Handled | — | [commands.rs:909](../../crates/crysirror-reallive/src/adapter/commands.rs#L909) |
+| `0x11 pause` | Wait for input | Handled | — | [commands.rs:909](../../crates/crysirror-reallive/src/adapter/commands.rs#L909) |
+| `0x64 SetFontColour` | Set Font Colour | Handled | — | [commands.rs:918](../../crates/crysirror-reallive/src/adapter/commands.rs#L918) |
+| `0x65 FontSize` | FontSize([size]): no size returns to the window's default | Handled | — | [commands.rs:920](../../crates/crysirror-reallive/src/adapter/commands.rs#L920) |
+| `0x66 TextWindow` | Text Window | Handled | — | [commands.rs:904](../../crates/crysirror-reallive/src/adapter/commands.rs#L904) |
+| `0x67 FastText` | Fast Text | Handled | — | [commands.rs:916](../../crates/crysirror-reallive/src/adapter/commands.rs#L916) |
+| `0x68 NormalText` | Normal Text | Handled | — | [commands.rs:917](../../crates/crysirror-reallive/src/adapter/commands.rs#L917) |
+| `0x69 FontColour` | Font Colour | Handled | — | [commands.rs:918](../../crates/crysirror-reallive/src/adapter/commands.rs#L918) |
+| `0x97 msgHide` | Upstream msg: 151 closes the active window (frame included), 152 clears its text, 161 closes every window, 162 clears a… | Handled | — | [commands.rs:932](../../crates/crysirror-reallive/src/adapter/commands.rs#L932) |
+| `0x98 msgClear` | msg Clear | Handled | — | [commands.rs:936](../../crates/crysirror-reallive/src/adapter/commands.rs#L936) |
+| `0xA1 msgHideAll` | msg Hide All | Handled | — | [commands.rs:940](../../crates/crysirror-reallive/src/adapter/commands.rs#L940) |
+| `0xA2 msgClearAll` | msg Clear All | Handled | — | [commands.rs:944](../../crates/crysirror-reallive/src/adapter/commands.rs#L944) |
+| `0xC9 br` | br: the next line (upstream `hard_break`); par: a new line only when the current one has text (upstream `paragraph`) | Handled | — | [commands.rs:953](../../crates/crysirror-reallive/src/adapter/commands.rs#L953) |
+| `0xCA par2` | br: the next line (upstream `hard_break`); par: a new line only when the current one has text (upstream `paragraph`) | Handled | — | [commands.rs:953](../../crates/crysirror-reallive/src/adapter/commands.rs#L953) |
+| `0xCD spause` | spause | Handled | — | [commands.rs:909](../../crates/crysirror-reallive/src/adapter/commands.rs#L909) |
+| `0xCE spause2` | spause2 | Handled | — | [commands.rs:909](../../crates/crysirror-reallive/src/adapter/commands.rs#L909) |
+| `0xCF pause_all` | pause all | Handled | — | [commands.rs:909](../../crates/crysirror-reallive/src/adapter/commands.rs#L909) |
+| `0xD2 page` | page | Handled | — | [commands.rs:909](../../crates/crysirror-reallive/src/adapter/commands.rs#L909) |
 
 ## Module commands / adapter/commands / movie
 
@@ -331,26 +331,26 @@ Module routing uses `(modtype, module)` IDs. Command tables keep opcode/overload
 
 | ID / API | Purpose | Status | Gap / condition | Source |
 | --- | --- | --- | --- | --- |
-| `0x6A 0x6A SetFontColourAll` | SetFontColourAll / FontColour for every window | Handled | — | [extended.rs:925](../../crates/crysirror-reallive/src/adapter/extended.rs#L925) |
-| `0x6B 0x6B FontSizeAll` | FontSizeAll([size]) | Handled | — | [extended.rs:927](../../crates/crysirror-reallive/src/adapter/extended.rs#L927) |
+| `0x6A SetFontColourAll` | SetFontColourAll / FontColour for every window | Handled | — | [extended.rs:925](../../crates/crysirror-reallive/src/adapter/extended.rs#L925) |
+| `0x6B FontSizeAll` | FontSizeAll([size]) | Handled | — | [extended.rs:927](../../crates/crysirror-reallive/src/adapter/extended.rs#L927) |
 | `0x6C` | MESSAGE_SPEED(speed): this message's speed | Handled | — | [extended.rs:939](../../crates/crysirror-reallive/src/adapter/extended.rs#L939) |
 | `0x6D` | Text and message windows (message_extended) | Handled | — | [extended.rs:940](../../crates/crysirror-reallive/src/adapter/extended.rs#L940) |
 | `0x6E` | Text and message windows (message_extended) | Handled | — | [extended.rs:941](../../crates/crysirror-reallive/src/adapter/extended.rs#L941) |
 | `0x6F` | Text and message windows (message_extended) | Handled | — | [extended.rs:942](../../crates/crysirror-reallive/src/adapter/extended.rs#L942) |
 | `0x70` | MULTI_MESSAGE(window...): the text goes to the first window named | Handled | — | [extended.rs:944](../../crates/crysirror-reallive/src/adapter/extended.rs#L944) |
-| `0x78 0x78 __doruby` | doruby | Handled | Guard: Machine::param_count(c) == 0 | [extended.rs:950](../../crates/crysirror-reallive/src/adapter/extended.rs#L950) |
-| `0xAA 0xAA msgHideAllTemp` | msgHideAllTemp: hide until a click | Handled | — | [extended.rs:961](../../crates/crysirror-reallive/src/adapter/extended.rs#L961) |
-| `0x12C 0x12C SetIndent` | SetIndent / ClearIndent | Handled | — | [extended.rs:966](../../crates/crysirror-reallive/src/adapter/extended.rs#L966) |
-| `0x12D 0x12D ClearIndent` | Clear Indent | Handled | — | [extended.rs:970](../../crates/crysirror-reallive/src/adapter/extended.rs#L970) |
-| `0x136 0x136 TextPos` | TextPos(x, y) / TextPosX / TextPosY, TextOffset (relative) | Handled | — | [extended.rs:974](../../crates/crysirror-reallive/src/adapter/extended.rs#L974) |
-| `0x137 0x137 TextPosX` | TextPos(x, y) / TextPosX / TextPosY, TextOffset (relative) | Handled | — | [extended.rs:974](../../crates/crysirror-reallive/src/adapter/extended.rs#L974) |
-| `0x138 0x138 TextPosY` | TextPos(x, y) / TextPosX / TextPosY, TextOffset (relative) | Handled | — | [extended.rs:974](../../crates/crysirror-reallive/src/adapter/extended.rs#L974) |
-| `0x140 0x140 TextOffset` | TextPos(x, y) / TextPosX / TextPosY, TextOffset (relative) | Handled | — | [extended.rs:974](../../crates/crysirror-reallive/src/adapter/extended.rs#L974) |
-| `0x141 0x141 TextOffsetX` | TextPos(x, y) / TextPosX / TextPosY, TextOffset (relative) | Handled | — | [extended.rs:974](../../crates/crysirror-reallive/src/adapter/extended.rs#L974) |
-| `0x142 0x142 TextOffsetY` | TextPos(x, y) / TextPosX / TextPosY, TextOffset (relative) | Handled | — | [extended.rs:974](../../crates/crysirror-reallive/src/adapter/extended.rs#L974) |
-| `0x14A 0x14A GetTextPos` | GetTextPos(x, y) / GetTextPos(y) | Handled | — | [extended.rs:989](../../crates/crysirror-reallive/src/adapter/extended.rs#L989) |
-| `0x154 0x154 WindowLen` | Characters shown in a window / all windows | Handled | — | [extended.rs:1003](../../crates/crysirror-reallive/src/adapter/extended.rs#L1003) |
-| `0x155 0x155 WindowLenAll` | Window Len All | Handled | — | [extended.rs:1007](../../crates/crysirror-reallive/src/adapter/extended.rs#L1007) |
+| `0x78 __doruby` | doruby | Handled | Guard: Machine::param_count(c) == 0 | [extended.rs:950](../../crates/crysirror-reallive/src/adapter/extended.rs#L950) |
+| `0xAA msgHideAllTemp` | msgHideAllTemp: hide until a click | Handled | — | [extended.rs:961](../../crates/crysirror-reallive/src/adapter/extended.rs#L961) |
+| `0x12C SetIndent` | SetIndent / ClearIndent | Handled | — | [extended.rs:966](../../crates/crysirror-reallive/src/adapter/extended.rs#L966) |
+| `0x12D ClearIndent` | Clear Indent | Handled | — | [extended.rs:970](../../crates/crysirror-reallive/src/adapter/extended.rs#L970) |
+| `0x136 TextPos` | TextPos(x, y) / TextPosX / TextPosY, TextOffset (relative) | Handled | — | [extended.rs:974](../../crates/crysirror-reallive/src/adapter/extended.rs#L974) |
+| `0x137 TextPosX` | TextPos(x, y) / TextPosX / TextPosY, TextOffset (relative) | Handled | — | [extended.rs:974](../../crates/crysirror-reallive/src/adapter/extended.rs#L974) |
+| `0x138 TextPosY` | TextPos(x, y) / TextPosX / TextPosY, TextOffset (relative) | Handled | — | [extended.rs:974](../../crates/crysirror-reallive/src/adapter/extended.rs#L974) |
+| `0x140 TextOffset` | TextPos(x, y) / TextPosX / TextPosY, TextOffset (relative) | Handled | — | [extended.rs:974](../../crates/crysirror-reallive/src/adapter/extended.rs#L974) |
+| `0x141 TextOffsetX` | TextPos(x, y) / TextPosX / TextPosY, TextOffset (relative) | Handled | — | [extended.rs:974](../../crates/crysirror-reallive/src/adapter/extended.rs#L974) |
+| `0x142 TextOffsetY` | TextPos(x, y) / TextPosX / TextPosY, TextOffset (relative) | Handled | — | [extended.rs:974](../../crates/crysirror-reallive/src/adapter/extended.rs#L974) |
+| `0x14A GetTextPos` | GetTextPos(x, y) / GetTextPos(y) | Handled | — | [extended.rs:989](../../crates/crysirror-reallive/src/adapter/extended.rs#L989) |
+| `0x154 WindowLen` | Characters shown in a window / all windows | Handled | — | [extended.rs:1003](../../crates/crysirror-reallive/src/adapter/extended.rs#L1003) |
+| `0x155 WindowLenAll` | Window Len All | Handled | — | [extended.rs:1007](../../crates/crysirror-reallive/src/adapter/extended.rs#L1007) |
 | `0x190` | SYSBTN_OPEN / _CLOSE and the button pattern switches: the original's floating system buttons, remembered as set | Handled | — | [extended.rs:1016](../../crates/crysirror-reallive/src/adapter/extended.rs#L1016) |
 | `0x191` | SYSBTN_OPEN / _CLOSE and the button pattern switches: the original's floating system buttons, remembered as set | Handled | — | [extended.rs:1016](../../crates/crysirror-reallive/src/adapter/extended.rs#L1016) |
 | `0x192` | Text and message windows (message_extended) | Handled | — | [extended.rs:1019](../../crates/crysirror-reallive/src/adapter/extended.rs#L1019) |
@@ -369,19 +369,19 @@ Module routing uses `(modtype, module)` IDs. Command tables keep opcode/overload
 | `0x1FB` | Text and message windows (message_extended) | Handled | — | [extended.rs:1019](../../crates/crysirror-reallive/src/adapter/extended.rs#L1019) |
 | `0x1FC` | Text and message windows (message_extended) | Handled | — | [extended.rs:1019](../../crates/crysirror-reallive/src/adapter/extended.rs#L1019) |
 | `0x1FD` | Text and message windows (message_extended) | Handled | — | [extended.rs:1019](../../crates/crysirror-reallive/src/adapter/extended.rs#L1019) |
-| `0x3E8 0x3E8 FaceOpen` | Face Open | Handled | — | [extended.rs:1043](../../crates/crysirror-reallive/src/adapter/extended.rs#L1043) |
-| `0x3E9 0x3E9 FaceClear` | Face Clear | Handled | — | [extended.rs:1048](../../crates/crysirror-reallive/src/adapter/extended.rs#L1048) |
+| `0x3E8 FaceOpen` | Face Open | Handled | — | [extended.rs:1043](../../crates/crysirror-reallive/src/adapter/extended.rs#L1043) |
+| `0x3E9 FaceClear` | Face Clear | Handled | — | [extended.rs:1048](../../crates/crysirror-reallive/src/adapter/extended.rs#L1048) |
 | `0x7D0` | FLAGINDEX(var): a debugging aid of the original's window | Empty handler | Original no-op status not established | [extended.rs:1053](../../crates/crysirror-reallive/src/adapter/extended.rs#L1053) |
 
 ## Module commands / adapter/extended / message_extended / c.op.opcode=310 \| 311 \| 312 \| 320 \| 321 \| 322
 
 | ID / API | Purpose | Status | Gap / condition | Source |
 | --- | --- | --- | --- | --- |
-| `0x136 0x136 TextPos` | Text Pos | Handled | — | [extended.rs:980](../../crates/crysirror-reallive/src/adapter/extended.rs#L980) |
-| `0x137 0x137 TextPosX` | Text Pos X | Handled | — | [extended.rs:981](../../crates/crysirror-reallive/src/adapter/extended.rs#L981) |
-| `0x138 0x138 TextPosY` | Text Pos Y | Handled | — | [extended.rs:982](../../crates/crysirror-reallive/src/adapter/extended.rs#L982) |
-| `0x140 0x140 TextOffset` | Text Offset | Handled | — | [extended.rs:983](../../crates/crysirror-reallive/src/adapter/extended.rs#L983) |
-| `0x141 0x141 TextOffsetX` | Text Offset X | Handled | — | [extended.rs:984](../../crates/crysirror-reallive/src/adapter/extended.rs#L984) |
+| `0x136 TextPos` | Text Pos | Handled | — | [extended.rs:980](../../crates/crysirror-reallive/src/adapter/extended.rs#L980) |
+| `0x137 TextPosX` | Text Pos X | Handled | — | [extended.rs:981](../../crates/crysirror-reallive/src/adapter/extended.rs#L981) |
+| `0x138 TextPosY` | Text Pos Y | Handled | — | [extended.rs:982](../../crates/crysirror-reallive/src/adapter/extended.rs#L982) |
+| `0x140 TextOffset` | Text Offset | Handled | — | [extended.rs:983](../../crates/crysirror-reallive/src/adapter/extended.rs#L983) |
+| `0x141 TextOffsetX` | Text Offset X | Handled | — | [extended.rs:984](../../crates/crysirror-reallive/src/adapter/extended.rs#L984) |
 
 ## Module commands / adapter/extended / os
 
@@ -555,15 +555,15 @@ Module routing uses `(modtype, module)` IDs. Command tables keep opcode/overload
 
 | ID / API | Purpose | Status | Gap / condition | Source |
 | --- | --- | --- | --- | --- |
-| `(0x0A, _) (0x0A, _) ret` | Return from a call | Handled | — | [jmp.rs:116](../../crates/crysirror-reallive/src/vm/modules/jmp.rs#L116) |
-| `(0x0B, _) (0x0B, _) jump` | Transfer to another scenario | Handled | — | [jmp.rs:130](../../crates/crysirror-reallive/src/vm/modules/jmp.rs#L130) |
-| `(0x0C, _) (0x0C, _) farcall` | Call another scenario | Handled | — | [jmp.rs:137](../../crates/crysirror-reallive/src/vm/modules/jmp.rs#L137) |
-| `(0x0D, _) (0x0D, _) rtl` | rtl / rtl_with | Handled | — | [jmp.rs:144](../../crates/crysirror-reallive/src/vm/modules/jmp.rs#L144) |
-| `(0x11, _) (0x11, _) ret_with` | ret with | Handled | — | [jmp.rs:120](../../crates/crysirror-reallive/src/vm/modules/jmp.rs#L120) |
-| `(0x12, _) (0x12, _) farcall_with` | farcall_with | Handled | — | [jmp.rs:158](../../crates/crysirror-reallive/src/vm/modules/jmp.rs#L158) |
-| `(0x13, _) (0x13, _) rtl_with` | rtl with | Handled | — | [jmp.rs:148](../../crates/crysirror-reallive/src/vm/modules/jmp.rs#L148) |
+| `(0x0A, _) ret` | Return from a call | Handled | — | [jmp.rs:116](../../crates/crysirror-reallive/src/vm/modules/jmp.rs#L116) |
+| `(0x0B, _) jump` | Transfer to another scenario | Handled | — | [jmp.rs:130](../../crates/crysirror-reallive/src/vm/modules/jmp.rs#L130) |
+| `(0x0C, _) farcall` | Call another scenario | Handled | — | [jmp.rs:137](../../crates/crysirror-reallive/src/vm/modules/jmp.rs#L137) |
+| `(0x0D, _) rtl` | rtl / rtl_with | Handled | — | [jmp.rs:144](../../crates/crysirror-reallive/src/vm/modules/jmp.rs#L144) |
+| `(0x11, _) ret_with` | ret with | Handled | — | [jmp.rs:120](../../crates/crysirror-reallive/src/vm/modules/jmp.rs#L120) |
+| `(0x12, _) farcall_with` | farcall_with | Handled | — | [jmp.rs:158](../../crates/crysirror-reallive/src/vm/modules/jmp.rs#L158) |
+| `(0x13, _) rtl_with` | rtl with | Handled | — | [jmp.rs:148](../../crates/crysirror-reallive/src/vm/modules/jmp.rs#L148) |
 | `(0x64, _)` | RETURN_L_FLAG_SET(index, value) | Handled | — | [jmp.rs:167](../../crates/crysirror-reallive/src/vm/modules/jmp.rs#L167) |
-| `(0x65, _) (0x65, _) pushStringValueUp` | pushStringValueUp | Handled | — | [jmp.rs:196](../../crates/crysirror-reallive/src/vm/modules/jmp.rs#L196) |
+| `(0x65, _) pushStringValueUp` | pushStringValueUp | Handled | — | [jmp.rs:196](../../crates/crysirror-reallive/src/vm/modules/jmp.rs#L196) |
 | `(0x66, _)` | RETURN_L_FLAG_SETS((index, value)...), RETURN_K_FLAG_SETS((index, string)... or (index, value)...) | Handled | — | [jmp.rs:175](../../crates/crysirror-reallive/src/vm/modules/jmp.rs#L175) |
 | `(0x67, _)` | RETURN_L_FLAG_SETS((index, value)...), RETURN_K_FLAG_SETS((index, string)... or (index, value)...) | Handled | — | [jmp.rs:175](../../crates/crysirror-reallive/src/vm/modules/jmp.rs#L175) |
 
@@ -571,13 +571,13 @@ Module routing uses `(modtype, module)` IDs. Command tables keep opcode/overload
 
 | ID / API | Purpose | Status | Gap / condition | Source |
 | --- | --- | --- | --- | --- |
-| `(0x00, _) (0x00, _) setarray` | setarray(origin, values+) | Handled | — | [mem.rs:14](../../crates/crysirror-reallive/src/vm/modules/mem.rs#L14) |
-| `(0x01, _) (0x01, _) setrng` | setrng(first, last[, value]) | Handled | — | [mem.rs:25](../../crates/crysirror-reallive/src/vm/modules/mem.rs#L25) |
-| `(0x02, _) (0x02, _) cpyrng` | cpyrng(source, dest, count) | Handled | — | [mem.rs:34](../../crates/crysirror-reallive/src/vm/modules/mem.rs#L34) |
-| `(0x03, _) (0x03, _) setarray_stepped` | setarray_stepped(origin, step, values+) | Handled | — | [mem.rs:47](../../crates/crysirror-reallive/src/vm/modules/mem.rs#L47) |
-| `(0x04, _) (0x04, _) setrng_stepped` | setrng_stepped(origin, step, count[, value]) | Handled | — | [mem.rs:56](../../crates/crysirror-reallive/src/vm/modules/mem.rs#L56) |
+| `(0x00, _) setarray` | setarray(origin, values+) | Handled | — | [mem.rs:14](../../crates/crysirror-reallive/src/vm/modules/mem.rs#L14) |
+| `(0x01, _) setrng` | setrng(first, last[, value]) | Handled | — | [mem.rs:25](../../crates/crysirror-reallive/src/vm/modules/mem.rs#L25) |
+| `(0x02, _) cpyrng` | cpyrng(source, dest, count) | Handled | — | [mem.rs:34](../../crates/crysirror-reallive/src/vm/modules/mem.rs#L34) |
+| `(0x03, _) setarray_stepped` | setarray_stepped(origin, step, values+) | Handled | — | [mem.rs:47](../../crates/crysirror-reallive/src/vm/modules/mem.rs#L47) |
+| `(0x04, _) setrng_stepped` | setrng_stepped(origin, step, count[, value]) | Handled | — | [mem.rs:56](../../crates/crysirror-reallive/src/vm/modules/mem.rs#L56) |
 | `(0x05, _)` | FLAGCOPY_INDEX(source, source offset, dest, dest offset, count) | Handled | — | [mem.rs:153](../../crates/crysirror-reallive/src/vm/modules/mem.rs#L153) |
-| `(0x06, _) (0x06, _) cpyvars` | cpyvars(dest, offset, sources+) | Handled | — | [mem.rs:66](../../crates/crysirror-reallive/src/vm/modules/mem.rs#L66) |
+| `(0x06, _) cpyvars` | cpyvars(dest, offset, sources+) | Handled | — | [mem.rs:66](../../crates/crysirror-reallive/src/vm/modules/mem.rs#L66) |
 | `(0x12C, _)` | Execute dispatch branch | Handled | — | [mem.rs:162](../../crates/crysirror-reallive/src/vm/modules/mem.rs#L162) |
 | `(0x12D, _)` | Execute dispatch branch | Handled | — | [mem.rs:162](../../crates/crysirror-reallive/src/vm/modules/mem.rs#L162) |
 | `(0x12E, _)` | Execute dispatch branch | Handled | — | [mem.rs:162](../../crates/crysirror-reallive/src/vm/modules/mem.rs#L162) |
@@ -586,8 +586,8 @@ Module routing uses `(modtype, module)` IDs. Command tables keep opcode/overload
 | `(0x131, _)` | Execute dispatch branch | Handled | — | [mem.rs:162](../../crates/crysirror-reallive/src/vm/modules/mem.rs#L162) |
 | `(0x132, _)` | Execute dispatch branch | Handled | — | [mem.rs:162](../../crates/crysirror-reallive/src/vm/modules/mem.rs#L162) |
 | `(0x133, _)` | Execute dispatch branch | Handled | — | [mem.rs:162](../../crates/crysirror-reallive/src/vm/modules/mem.rs#L162) |
-| `(0x64, _) (0x64, _) sum` | sum(first, last) | Handled | — | [mem.rs:82](../../crates/crysirror-reallive/src/vm/modules/mem.rs#L82) |
-| `(0x65, _) (0x65, _) sums` | sums((first, last)+) | Handled | — | [mem.rs:88](../../crates/crysirror-reallive/src/vm/modules/mem.rs#L88) |
+| `(0x64, _) sum` | sum(first, last) | Handled | — | [mem.rs:82](../../crates/crysirror-reallive/src/vm/modules/mem.rs#L82) |
+| `(0x65, _) sums` | sums((first, last)+) | Handled | — | [mem.rs:88](../../crates/crysirror-reallive/src/vm/modules/mem.rs#L88) |
 | `(0xC8, overload)` | FLAGSORT_LARGE / FLAGSORT_SMALL(count, keys, values...): sorts the keys (descending / ascending) and reorders the value… | Handled | — | [mem.rs:103](../../crates/crysirror-reallive/src/vm/modules/mem.rs#L103) |
 | `(0xC9, overload)` | FLAGSORT_LARGE / FLAGSORT_SMALL(count, keys, values...): sorts the keys (descending / ascending) and reorders the value… | Handled | — | [mem.rs:103](../../crates/crysirror-reallive/src/vm/modules/mem.rs#L103) |
 | `(0xD2, _)` | FLAGINDEXSORT_LARGE / _SMALL(count, keys[, dest[, first index]]): the key indices in sorted order | Handled | — | [mem.rs:138](../../crates/crysirror-reallive/src/vm/modules/mem.rs#L138) |
@@ -875,43 +875,43 @@ Module routing uses `(modtype, module)` IDs. Command tables keep opcode/overload
 
 | ID / API | Purpose | Status | Gap / condition | Source |
 | --- | --- | --- | --- | --- |
-| `(0x00, overload) (0x00, overload) strcpy` | Copy a string | Handled | — | [str.rs:82](../../crates/crysirror-reallive/src/vm/modules/str.rs#L82) |
-| `(0x01, 0) (0x01, 0) strclear` | Clear a string | Handled | — | [str.rs:92](../../crates/crysirror-reallive/src/vm/modules/str.rs#L92) |
-| `(0x01, _) (0x01, _) strclear` | Clear a string | Handled | — | [str.rs:96](../../crates/crysirror-reallive/src/vm/modules/str.rs#L96) |
-| `(0x02, _) (0x02, _) strcat` | Append a string | Handled | — | [str.rs:107](../../crates/crysirror-reallive/src/vm/modules/str.rs#L107) |
-| `(0x03, _) (0x03, _) strlen` | String length | Handled | — | [str.rs:114](../../crates/crysirror-reallive/src/vm/modules/str.rs#L114) |
-| `(0x04, _) (0x04, _) strcmp` | Compare strings | Handled | — | [str.rs:119](../../crates/crysirror-reallive/src/vm/modules/str.rs#L119) |
-| `(0x05, overload) (0x05, overload) strsub` | strsub(dest, src, offset[, length]) / strrsub | Handled | — | [str.rs:130](../../crates/crysirror-reallive/src/vm/modules/str.rs#L130) |
-| `(0x06, overload) (0x06, overload) strrsub` | strsub(dest, src, offset[, length]) / strrsub | Handled | — | [str.rs:130](../../crates/crysirror-reallive/src/vm/modules/str.rs#L130) |
-| `(0x07, _) (0x07, _) strcharlen` | strcharlen(s) | Handled | — | [str.rs:152](../../crates/crysirror-reallive/src/vm/modules/str.rs#L152) |
-| `(0x08, _) (0x08, _) strtrunc` | strtrunc(dest, chars) | Handled | — | [str.rs:157](../../crates/crysirror-reallive/src/vm/modules/str.rs#L157) |
-| `(0x0A, overload) (0x0A, overload) hantozen` | hantozen / zentohan / Uppercase / Lowercase: (dest) or (src, dest) | Handled | — | [str.rs:164](../../crates/crysirror-reallive/src/vm/modules/str.rs#L164) |
-| `(0x0B, overload) (0x0B, overload) zentohan` | hantozen / zentohan / Uppercase / Lowercase: (dest) or (src, dest) | Handled | — | [str.rs:164](../../crates/crysirror-reallive/src/vm/modules/str.rs#L164) |
-| `(0x0C, overload) (0x0C, overload) Uppercase` | hantozen / zentohan / Uppercase / Lowercase: (dest) or (src, dest) | Handled | — | [str.rs:164](../../crates/crysirror-reallive/src/vm/modules/str.rs#L164) |
-| `(0x0D, overload) (0x0D, overload) Lowercase` | hantozen / zentohan / Uppercase / Lowercase: (dest) or (src, dest) | Handled | — | [str.rs:164](../../crates/crysirror-reallive/src/vm/modules/str.rs#L164) |
-| `(0x0E, overload) (0x0E, overload) itoa_ws` | itoa_ws / itoa_s / itoa_w / itoa: (value, dest[, length]) | Handled | — | [str.rs:183](../../crates/crysirror-reallive/src/vm/modules/str.rs#L183) |
-| `(0x0F, overload) (0x0F, overload) itoa_s` | itoa_ws / itoa_s / itoa_w / itoa: (value, dest[, length]) | Handled | — | [str.rs:183](../../crates/crysirror-reallive/src/vm/modules/str.rs#L183) |
-| `(0x10, overload) (0x10, overload) itoa_w` | itoa_ws / itoa_s / itoa_w / itoa: (value, dest[, length]) | Handled | — | [str.rs:183](../../crates/crysirror-reallive/src/vm/modules/str.rs#L183) |
-| `(0x11, overload) (0x11, overload) itoa` | itoa_ws / itoa_s / itoa_w / itoa: (value, dest[, length]) | Handled | — | [str.rs:183](../../crates/crysirror-reallive/src/vm/modules/str.rs#L183) |
-| `(0x12, _) (0x12, _) atoi` | atoi(s) | Handled | — | [str.rs:203](../../crates/crysirror-reallive/src/vm/modules/str.rs#L203) |
-| `(0x13, _) (0x13, _) digits` | digits(n) | Handled | — | [str.rs:208](../../crates/crysirror-reallive/src/vm/modules/str.rs#L208) |
-| `(0x14, _) (0x14, _) digit` | digit(n, dest, index): the index-th digit from the right | Handled | — | [str.rs:213](../../crates/crysirror-reallive/src/vm/modules/str.rs#L213) |
-| `(0x1E, _) (0x1E, _) strpos` | strpos / strlpos | Handled | — | [str.rs:226](../../crates/crysirror-reallive/src/vm/modules/str.rs#L226) |
-| `(0x1F, _) (0x1F, _) strlpos` | strpos / strlpos | Handled | — | [str.rs:226](../../crates/crysirror-reallive/src/vm/modules/str.rs#L226) |
+| `(0x00, overload) strcpy` | Copy a string | Handled | — | [str.rs:82](../../crates/crysirror-reallive/src/vm/modules/str.rs#L82) |
+| `(0x01, 0) strclear` | Clear a string | Handled | — | [str.rs:92](../../crates/crysirror-reallive/src/vm/modules/str.rs#L92) |
+| `(0x01, _) strclear` | Clear a string | Handled | — | [str.rs:96](../../crates/crysirror-reallive/src/vm/modules/str.rs#L96) |
+| `(0x02, _) strcat` | Append a string | Handled | — | [str.rs:107](../../crates/crysirror-reallive/src/vm/modules/str.rs#L107) |
+| `(0x03, _) strlen` | String length | Handled | — | [str.rs:114](../../crates/crysirror-reallive/src/vm/modules/str.rs#L114) |
+| `(0x04, _) strcmp` | Compare strings | Handled | — | [str.rs:119](../../crates/crysirror-reallive/src/vm/modules/str.rs#L119) |
+| `(0x05, overload) strsub` | strsub(dest, src, offset[, length]) / strrsub | Handled | — | [str.rs:130](../../crates/crysirror-reallive/src/vm/modules/str.rs#L130) |
+| `(0x06, overload) strrsub` | strsub(dest, src, offset[, length]) / strrsub | Handled | — | [str.rs:130](../../crates/crysirror-reallive/src/vm/modules/str.rs#L130) |
+| `(0x07, _) strcharlen` | strcharlen(s) | Handled | — | [str.rs:152](../../crates/crysirror-reallive/src/vm/modules/str.rs#L152) |
+| `(0x08, _) strtrunc` | strtrunc(dest, chars) | Handled | — | [str.rs:157](../../crates/crysirror-reallive/src/vm/modules/str.rs#L157) |
+| `(0x0A, overload) hantozen` | hantozen / zentohan / Uppercase / Lowercase: (dest) or (src, dest) | Handled | — | [str.rs:164](../../crates/crysirror-reallive/src/vm/modules/str.rs#L164) |
+| `(0x0B, overload) zentohan` | hantozen / zentohan / Uppercase / Lowercase: (dest) or (src, dest) | Handled | — | [str.rs:164](../../crates/crysirror-reallive/src/vm/modules/str.rs#L164) |
+| `(0x0C, overload) Uppercase` | hantozen / zentohan / Uppercase / Lowercase: (dest) or (src, dest) | Handled | — | [str.rs:164](../../crates/crysirror-reallive/src/vm/modules/str.rs#L164) |
+| `(0x0D, overload) Lowercase` | hantozen / zentohan / Uppercase / Lowercase: (dest) or (src, dest) | Handled | — | [str.rs:164](../../crates/crysirror-reallive/src/vm/modules/str.rs#L164) |
+| `(0x0E, overload) itoa_ws` | itoa_ws / itoa_s / itoa_w / itoa: (value, dest[, length]) | Handled | — | [str.rs:183](../../crates/crysirror-reallive/src/vm/modules/str.rs#L183) |
+| `(0x0F, overload) itoa_s` | itoa_ws / itoa_s / itoa_w / itoa: (value, dest[, length]) | Handled | — | [str.rs:183](../../crates/crysirror-reallive/src/vm/modules/str.rs#L183) |
+| `(0x10, overload) itoa_w` | itoa_ws / itoa_s / itoa_w / itoa: (value, dest[, length]) | Handled | — | [str.rs:183](../../crates/crysirror-reallive/src/vm/modules/str.rs#L183) |
+| `(0x11, overload) itoa` | itoa_ws / itoa_s / itoa_w / itoa: (value, dest[, length]) | Handled | — | [str.rs:183](../../crates/crysirror-reallive/src/vm/modules/str.rs#L183) |
+| `(0x12, _) atoi` | atoi(s) | Handled | — | [str.rs:203](../../crates/crysirror-reallive/src/vm/modules/str.rs#L203) |
+| `(0x13, _) digits` | digits(n) | Handled | — | [str.rs:208](../../crates/crysirror-reallive/src/vm/modules/str.rs#L208) |
+| `(0x14, _) digit` | digit(n, dest, index): the index-th digit from the right | Handled | — | [str.rs:213](../../crates/crysirror-reallive/src/vm/modules/str.rs#L213) |
+| `(0x1E, _) strpos` | strpos / strlpos | Handled | — | [str.rs:226](../../crates/crysirror-reallive/src/vm/modules/str.rs#L226) |
+| `(0x1F, _) strlpos` | strpos / strlpos | Handled | — | [str.rs:226](../../crates/crysirror-reallive/src/vm/modules/str.rs#L226) |
 | `(0x20, _)` | Update store | Handled | — | [str.rs:242](../../crates/crysirror-reallive/src/vm/modules/str.rs#L242) |
 | `(0x21, _)` | Update store | Handled | — | [str.rs:242](../../crates/crysirror-reallive/src/vm/modules/str.rs#L242) |
 | `(0x28, _)` | STRCOPY_BUFSIZE(dest, src, size) / STRSET_BUFSIZE(buf, size): as if through a C buffer of `size` bytes (terminator incl… | Handled | — | [str.rs:270](../../crates/crysirror-reallive/src/vm/modules/str.rs#L270) |
 | `(0x29, _)` | STRCOPY_BUFSIZE(dest, src, size) / STRSET_BUFSIZE(buf, size): as if through a C buffer of `size` bytes (terminator incl… | Handled | — | [str.rs:270](../../crates/crysirror-reallive/src/vm/modules/str.rs#L270) |
-| `(0x64, _) (0x64, _) strout` | Text output is an external engine operation. Keep the original command/overload and PC until the semantic adapter ackno… | Handled | — | [str.rs:296](../../crates/crysirror-reallive/src/vm/modules/str.rs#L296) |
-| `(0xC8, _) (0xC8, _) strused` | strused(s) | Handled | — | [str.rs:298](../../crates/crysirror-reallive/src/vm/modules/str.rs#L298) |
+| `(0x64, _) strout` | Text output is an external engine operation. Keep the original command/overload and PC until the semantic adapter ackno… | Handled | — | [str.rs:296](../../crates/crysirror-reallive/src/vm/modules/str.rs#L296) |
+| `(0xC8, _) strused` | strused(s) | Handled | — | [str.rs:298](../../crates/crysirror-reallive/src/vm/modules/str.rs#L298) |
 
 ## Module commands / vm/modules/str / dispatch / (op.opcode, op.overload)=(10..=13, overload)
 
 | ID / API | Purpose | Status | Gap / condition | Source |
 | --- | --- | --- | --- | --- |
-| `0x0A 0x0A hantozen` | hantozen | Handled | — | [str.rs:175](../../crates/crysirror-reallive/src/vm/modules/str.rs#L175) |
-| `0x0B 0x0B zentohan` | zentohan | Handled | — | [str.rs:176](../../crates/crysirror-reallive/src/vm/modules/str.rs#L176) |
-| `0x0C 0x0C Uppercase` | Uppercase | Handled | — | [str.rs:177](../../crates/crysirror-reallive/src/vm/modules/str.rs#L177) |
+| `0x0A hantozen` | hantozen | Handled | — | [str.rs:175](../../crates/crysirror-reallive/src/vm/modules/str.rs#L175) |
+| `0x0B zentohan` | zentohan | Handled | — | [str.rs:176](../../crates/crysirror-reallive/src/vm/modules/str.rs#L176) |
+| `0x0C Uppercase` | Uppercase | Handled | — | [str.rs:177](../../crates/crysirror-reallive/src/vm/modules/str.rs#L177) |
 
 ## Module commands / vm/modules/sys / dispatch
 

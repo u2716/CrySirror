@@ -9,6 +9,7 @@ pub mod menu;
 pub mod navigation;
 pub mod pointer_motion;
 pub mod snapshot;
+pub mod theme;
 pub mod tooltip;
 pub mod window_requests;
 use crate::layer::motion::{MotionProperty, MotionStatus, MotionTrackSpec, MotionTracks};

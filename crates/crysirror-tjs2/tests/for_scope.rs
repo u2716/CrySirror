@@ -1,4 +1,6 @@
-// Derived VM licence: AGPL-3.0-or-later; authored scope regressions.
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. A copy is available at https://mozilla.org/MPL/2.0/.
+// Authored scope regressions.
 use crysirror_tjs2::{compile_source_to_bytecode, runtime::{Runtime, Variant}};
 
 fn run(source: &str) -> Variant {

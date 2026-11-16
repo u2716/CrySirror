@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-License-Identifier: MPL-2.0
 //! Native hint strings and front-most native hit policy over shared passive UI.
 use crate::natives::*;
 use crysirror_tjs2::{

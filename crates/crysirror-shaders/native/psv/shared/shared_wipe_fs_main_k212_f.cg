@@ -75,7 +75,7 @@ uniform float4 cg_size_next_tex;
 uniform WipeUniform wipe;
 
 struct FragmentInput_fs_main {
-    float2 uv_2 : TEXCOORD0;
+    float2 uv_4 : TEXCOORD0;
     float2 random_center_1 : TEXCOORD1;
     float4 pos : WPOS;
 };
@@ -96,6 +96,29 @@ float option(int index)
     }
     float _e28 = wipe.option3_[asint(asuint(index) - asuint(int(12)))];
     return _e28;
+}
+
+bool inside(float2 uv)
+{
+    bool local = (bool)0;
+
+    if (all((uv >= (0.0).xx))) {
+        local = all((uv <= (1.0).xx));
+    } else {
+        local = false;
+    }
+    bool _e12 = local;
+    return _e12;
+}
+
+float4 sample_or_zero(sampler2D tex, float4 cg_size_tex, float2 uv_1)
+{
+    const bool _e3 = inside(uv_1);
+    if (!(_e3)) {
+        return (0.0).xxxx;
+    }
+    float4 _e12 = tex2D(tex,clamp(uv_1, (0.0).xx, (1.0).xx));
+    return _e12;
 }
 
 float4 alpha_over(float4 dst_, float4 src)
@@ -197,9 +220,9 @@ else {
 }
 }
 
-float4 sample_uv_box(sampler2D tex, float4 cg_size_tex, float2 uv, float4 box, float alpha)
+float4 sample_uv_box(sampler2D tex_1, float4 cg_size_tex_1, float2 uv_2, float4 box, float alpha)
 {
-    float4 _e14 = tex2D(tex,clamp((box.xy + (uv * box.zw)), (0.0).xx, (1.0).xx));
+    float4 _e14 = tex2D(tex_1,clamp((box.xy + (uv_2 * box.zw)), (0.0).xx, (1.0).xx));
     return float4(_e14.xyz, (_e14.w * alpha));
 }
 
@@ -207,42 +230,113 @@ int naga_f2i32(float value) {
     return int(clamp(value, -2147483600.0, 2147483500.0));
 }
 
-float4 affected_color(float2 uv_1, float2 random_center)
+float4 affected_color(float2 uv_3, float2 random_center)
 {
+    bool local_1 = (bool)0;
+    float2 off = (0.0).xx;
+    float r = (float)0;
+    float2 src_1 = (float2)0;
+    float a = (float)0;
+    float2 q = (float2)0;
+    bool ok = true;
+    bool local_2 = (bool)0;
     bool base_is_current = false;
     float2 center_ = (0.5).xx;
     float2 muv = (float2)0;
     float mask_value = 1.0;
-    bool local = (bool)0;
-    bool local_1 = (bool)0;
-    bool local_2 = (bool)0;
     bool local_3 = (bool)0;
+    bool local_4 = (bool)0;
+    bool local_5 = (bool)0;
+    bool local_6 = (bool)0;
 
     float _e4 = wipe.kind_progress.y;
     float _e7 = clamp(_e4, 0.0, 1.0);
-    float4 _e10 = tex2D(current_tex,uv_1);
-    float4 _e13 = tex2D(next_tex,uv_1);
+    float4 _e10 = tex2D(current_tex,uv_3);
+    float4 _e13 = tex2D(next_tex,uv_3);
     if ((_e7 <= 0.0)) {
         return _e10;
     }
     if ((_e7 >= 1.0)) {
         return _e13;
     }
-    if ((_e7 < 0.5)) {
-        const float _e23 = option(int(0));
-        const float4 _e30 = scale_uv(naga_f2i32(_e23), lerp(1.0, 0.001, (_e7 * 2.0)));
-        const float4 _e32 = sample_uv_box(current_tex, cg_size_current_tex, uv_1, _e30, 1.0);
-        return _e32;
+    local_1 = false;
+    bool _e21 = local_1;
+    if (_e21) {
+        float4 _e24 = wipe.kind_progress;
+        float2 _e28 = max(_e24.zw, (1.0).xx);
+        float2 _e31 = (_e28 * 0.5);
+        bool _e35 = (_e7 < 0.5);
+        a = (_e7 * 3.1415927);
+        if (!(_e35)) {
+            float _e40 = a;
+            a = (_e40 + 3.1415927);
+        }
+        const float _e44 = option(int(1));
+        float _e46 = max(_e44, 1.0);
+        const float _e48 = option(int(0));
+        int _e49 = naga_f2i32(_e48);
+        q = ((uv_3 * _e28) - _e31);
+        if ((_e49 == int(2))) {
+            float _e56 = a;
+            float _e59 = q.x;
+            float _e61 = a;
+            float _e64 = q.y;
+            float _e67 = a;
+            float _e71 = q.x;
+            float _e73 = a;
+            float _e76 = q.y;
+            q = float2(((cos(_e56) * _e59) + (sin(_e61) * _e64)), ((-(sin(_e67)) * _e71) + (cos(_e73) * _e76)));
+        } else {
+            float _e81 = q.x;
+            float _e83 = q.y;
+            float _e86 = ((_e49 == int(1)) ? _e83 : _e81);
+            float _e87 = a;
+            float _e90 = a;
+            float _e93 = ((_e46 * cos(_e87)) - (_e86 * sin(_e90)));
+            ok = (abs(_e93) > 0.0001);
+            bool _e98 = ok;
+            float _e101 = ((_e86 * _e46) / (_e98 ? _e93 : 1.0));
+            float _e102 = a;
+            float _e105 = (_e46 + (_e101 * sin(_e102)));
+            bool _e106 = ok;
+            if (_e106) {
+                local_2 = (_e105 > (0.1 * _e46));
+            } else {
+                local_2 = false;
+            }
+            bool _e113 = local_2;
+            ok = _e113;
+            float _e115 = q.y;
+            float _e117 = q.x;
+            float _e122 = ((((_e49 == int(1)) ? _e117 : _e115) * _e105) / _e46);
+            q = ((_e49 == int(1)) ? float2(_e122, _e101) : float2(_e101, _e122));
+        }
+        bool _e128 = ok;
+        if (!(_e128)) {
+            return float4(0.0, 0.0, 0.0, 1.0);
+        }
+        float2 _e135 = q;
+        float2 _e137 = ((_e31 + _e135) / _e28);
+        const float4 _e140 = sample_or_zero(current_tex, cg_size_current_tex, _e137);
+        const float4 _e143 = sample_or_zero(next_tex, cg_size_next_tex, _e137);
+        const float4 _e150 = alpha_over(float4(0.0, 0.0, 0.0, 1.0), (_e35 ? _e143 : _e140));
+        return _e150;
     }
-    const float _e36 = option(int(0));
-    const float4 _e45 = scale_uv(naga_f2i32(_e36), lerp(0.001, 1.0, ((_e7 - 0.5) * 2.0)));
-    const float4 _e47 = sample_uv_box(next_tex, cg_size_next_tex, uv_1, _e45, 1.0);
-    return _e47;
+    if ((_e7 < 0.5)) {
+        const float _e156 = option(int(0));
+        const float4 _e163 = scale_uv(naga_f2i32(_e156), lerp(1.0, 0.001, (_e7 * 2.0)));
+        const float4 _e165 = sample_uv_box(current_tex, cg_size_current_tex, uv_3, _e163, 1.0);
+        return _e165;
+    }
+    const float _e169 = option(int(0));
+    const float4 _e178 = scale_uv(naga_f2i32(_e169), lerp(0.001, 1.0, ((_e7 - 0.5) * 2.0)));
+    const float4 _e180 = sample_uv_box(next_tex, cg_size_next_tex, uv_3, _e178, 1.0);
+    return _e180;
 }
 
 float4 main(FragmentInput_fs_main fragmentinput_fs_main) : COLOR
 {
-    VsOut in_ = { fragmentinput_fs_main.pos, fragmentinput_fs_main.uv_2, fragmentinput_fs_main.random_center_1 };
+    VsOut in_ = { fragmentinput_fs_main.pos, fragmentinput_fs_main.uv_4, fragmentinput_fs_main.random_center_1 };
     float2 _e6 = clamp(in_.uv, (0.0).xx, (1.0).xx);
     float4 _e9 = tex2D(under_tex,_e6);
     const float4 _e11 = affected_color(_e6, in_.random_center);

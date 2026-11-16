@@ -18,7 +18,7 @@ upstream release. Selected later imports are listed separately.
 | Engine | Upstream | Recorded base | Later selected imports | Source record |
 | --- | --- | --- | --- | --- |
 | Siglus | [siglus_rs](https://github.com/xmoezzz/siglus_rs) | [`bef39ea9`](https://github.com/xmoezzz/siglus_rs/commit/bef39ea90c745a4888a92a09d18be1eecfdd10ca) | Included in the recorded baseline | [SOURCE.json](../crates/crysirror-siglus-integrated/SOURCE.json) |
-| BGI | [ethornell-rs](https://github.com/xmoezzz/ethornell-rs) | [`2f8a9272`](https://github.com/xmoezzz/ethornell-rs/commit/2f8a9272a8f7ca075d82ac88fb802fa7247b3a99) | Included in the recorded baseline | [SOURCE.json](../crates/crysirror-bgi-integrated/SOURCE.json) |
+| BGI | [ethornell-rs](https://github.com/xmoezzz/ethornell-rs) | [`0bc6d1c0`](https://github.com/xmoezzz/ethornell-rs/commit/0bc6d1c0d5b662acc9006be94896324600ad05f1) | Included in the recorded baseline | [SOURCE.json](../crates/crysirror-bgi-integrated/SOURCE.json) |
 | SoftPAL | [sena-rs](https://github.com/xmoezzz/sena-rs) | **Complete-runtime revision not recorded** | Vita driver: `7f633dbb89408297827d6c1857eb8e97dc363dff`. This is not a verified baseline for the complete runtime. | [Vita driver provenance](../crates/crysirror-softpal/native/vita/README.md) |
 | RFVP | [rfvp](https://github.com/xmoezzz/rfvp) | [`9f07adef`](https://github.com/xmoezzz/rfvp/commit/9f07adef2eb5d559777f9bf59a67b756875cb24f) | Network readers: `91ef488` | [SOURCE.json](../crates/crysirror-rfvp-native/SOURCE.json) |
 
@@ -81,7 +81,7 @@ Source synchronization and compilation: [2026-11-14 update](validation/siglus-up
 | Files/configuration | Host-selected bootstrap/font/GBK policy and `Install/` resource view. Native primary-root writes use a private writable overlay, read before installed resources. | [Host runtime](../crates/crysirror-bgi-integrated/src/native_app/host_runtime.rs), [capability I/O](../crates/crysirror-bgi-integrated/src/native_app/file_policy/cap_io.rs) |
 | Saves | Native saves stay runtime-owned. CrySirror framework snapshots are rejected. | [Adapter](../crates/crysirror-bgi-integrated/src/adapter.rs) |
 
-Behavior evidence: [BGI update validation](validation/bgi-upstream-sync.md).
+Behavior evidence: [BGI update validation](validation/bgi-upstream-sync-2026-11-16.md).
 
 ## SoftPAL: changes made during integration
 

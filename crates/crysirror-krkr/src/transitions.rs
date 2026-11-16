@@ -1,4 +1,5 @@
-// Distributed under the GNU Affero General Public License, version 3 or later.
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. A copy is available at https://mozilla.org/MPL/2.0/.
 //! KiriKiri exchange semantics over engine-owned isolated subtree crossfades.
 //! Reference: krkrz fd5c4baa, visual/LayerIntf.cpp Start/InternalStopTransition.
 use crate::natives::*;
@@ -12,14 +13,19 @@ use crysirror_tjs2::{
 };
 use serde_json::json;
 use std::collections::BTreeMap;
-/// Active transitions: destination → source, the destinations whose
-/// transition excludes children (only the destination's own image changes),
-/// and destinations clocked by a script `callback` → (callback, time ms).
+/// Active transitions: destination → source (the destination itself for a
+/// simple transition without source), the destinations whose transition
+/// excludes children (only the destination's own image changes),
+/// destinations clocked by a script `callback` → (callback, time ms),
+/// simple (ttSimple, no exchange) destinations, and destinations whose
+/// handler finishes at its first update.
 #[derive(Default)]
 pub struct State(
     pub BTreeMap<usize, usize>,
     pub std::collections::BTreeSet<usize>,
     pub BTreeMap<usize, (Variant, u64)>,
+    pub std::collections::BTreeSet<usize>,
+    pub std::collections::BTreeSet<usize>,
 );
 
 /// Engine layer id of the source image presented beside a destination's own
@@ -58,7 +64,8 @@ fn begin(rt: &mut Rt, t: Option<ObjectHandle>, args: Vec<Variant>) -> Result<Var
     let dest = this_of(rt, t, "Layer.beginTransition")?;
     let name = string(&args, 0, "Layer.beginTransition")?;
     let kaicho=matches!(name.as_str(),"blur"|"dim");
-    if name != "crossfade" && name != "universal" && !kaicho {
+    let glitch = matches!(name.as_str(), "glitch" | "fadeglitch" | "loopglitch");
+    if name != "crossfade" && name != "universal" && !kaicho && !glitch {
         return Err(unsupported(
             &format!("transition {name}"),
             "an engine transition implementation",
@@ -70,16 +77,36 @@ fn begin(rt: &mut Rt, t: Option<ObjectHandle>, args: Vec<Variant>) -> Result<Var
         None | Some(Variant::Void) => true,
         Some(v) => v.is_truthy(),
     };
-    let source = args
+    let given_source = args
         .get(2)
         .and_then(object_arg)
-        .map(|h| rt.bound_this(h).unwrap_or(h))
-        .ok_or_else(|| TjsError::runtime("transition source Layer required"))?;
+        .map(|h| rt.bound_this(h).unwrap_or(h));
     let options = args
         .get(3)
         .and_then(object_arg)
         .ok_or_else(|| TjsError::runtime("transition options required"))?;
-    let effect=if kaicho {Some(crate::kaicho_plugin::effect(rt,&name,options)?)}else{None};
+    let glitch = if glitch {
+        Some(crate::layer_ex::glitch_transition(rt, &name, options, given_source.is_some())?)
+    } else {
+        None
+    };
+    // ttSimple providers take an optional source; ttExchange needs one
+    // (krkrz TVPSpecifyTransitionSource).
+    let simple = matches!(glitch, Some(crate::layer_ex::GlitchStart::Immediate)
+        | Some(crate::layer_ex::GlitchStart::Effect { exchange: false, .. }));
+    let source = match given_source {
+        Some(h) => h,
+        None if simple => dest,
+        None => return Err(TjsError::runtime("transition source Layer required")),
+    };
+    let single = source == dest;
+    let immediate = matches!(glitch, Some(crate::layer_ex::GlitchStart::Immediate));
+    let (effect, glitch_time) = match glitch {
+        Some(crate::layer_ex::GlitchStart::Effect { effect, time, .. }) => (Some(effect), Some(time)),
+        Some(crate::layer_ex::GlitchStart::Immediate) => (None, None),
+        None if kaicho => (Some(crate::kaicho_plugin::effect(rt, &name, options)?), None),
+        None => (None, None),
+    };
     // krkrz `callback`: the transition's tick source (GetTransTick calls it
     // each update; the handler phase is tick / time, starting at tick 0).
     // `selfupdate` alone (updates only on script Update calls) is not mapped.
@@ -121,7 +148,11 @@ fn begin(rt: &mut Rt, t: Option<ObjectHandle>, args: Vec<Variant>) -> Result<Var
     } else {
         None
     };
-    let requested_duration = rt.resolve_object_member(options, "time")?.to_integer()?;
+    let requested_duration = match glitch_time {
+        Some(time) => time,
+        None if immediate => 1,
+        None => rt.resolve_object_member(options, "time")?.to_integer()?,
+    };
     if kaicho && requested_duration<0 {return Err(TjsError::runtime("negative Kaicho transition duration"));}
     let duration=if kaicho {requested_duration.max(2)}else{requested_duration};
     if !(1..=600_000).contains(&duration) {
@@ -132,7 +163,8 @@ fn begin(rt: &mut Rt, t: Option<ObjectHandle>, args: Vec<Variant>) -> Result<Var
     // krkrz allows endpoints anywhere in the tree (KAG transitions a fore
     // page layer with its back page twin under another parent).
     if with_children
-        && (dest == source
+        && !immediate
+        && ((dest == source && !single)
             || a.width != b.width
             || a.height != b.height)
     {
@@ -148,7 +180,8 @@ fn begin(rt: &mut Rt, t: Option<ObjectHandle>, args: Vec<Variant>) -> Result<Var
     // krkrz: without children both layers must have an image; only the
     // destination's own image is transitioned (children draw normally).
     if !with_children
-        && (dest == source
+        && !immediate
+        && ((dest == source && !single)
             || !a.has_image
             || !b.has_image
             || a.image_width != b.image_width
@@ -159,7 +192,7 @@ fn begin(rt: &mut Rt, t: Option<ObjectHandle>, args: Vec<Variant>) -> Result<Var
             "equally sized images",
         ));
     }
-    if a.window!=b.window || !a.constructed || !b.constructed || rt.host().is_ancestor_or_self(dest.0,source.0) {
+    if a.window!=b.window || !a.constructed || !b.constructed || (!single && rt.host().is_ancestor_or_self(dest.0,source.0)) {
         return Err(unsupported("Layer.beginTransition topology","bound same-window endpoints whose source does not contain the destination"));
     }
     if rt
@@ -172,7 +205,26 @@ fn begin(rt: &mut Rt, t: Option<ObjectHandle>, args: Vec<Variant>) -> Result<Var
         return Err(TjsError::runtime("transition endpoint is already active"));
     }
     rt.host_mut().sync()?;
-    let (id, src) = if with_children {
+    if simple {
+        rt.host_mut().transitions.3.insert(dest.0);
+    }
+    if immediate {
+        if !with_children {
+            rt.host_mut().transitions.1.insert(dest.0);
+        }
+        rt.host_mut().transitions.4.insert(dest.0);
+        rt.host_mut().transitions.0.insert(dest.0, source.0);
+        return Ok(Variant::Void);
+    }
+    let (id, src) = if single {
+        let a = rt.host().layer(dest)?.clone();
+        if with_children {
+            (a.container(), a.container())
+        } else {
+            rt.host_mut().transitions.1.insert(dest.0);
+            (a.presentation(), a.presentation())
+        }
+    } else if with_children {
         (a.container(), b.container())
     } else {
         // Present the source image as a sibling of the destination's own
@@ -203,9 +255,31 @@ fn finish(rt: &mut Rt, dest: ObjectHandle) -> Result<()> {
         return Ok(());
     };
     rt.host_mut().transitions.2.remove(&dest.0);
+    let simple = rt.host_mut().transitions.3.remove(&dest.0);
+    let immediate = rt.host_mut().transitions.4.remove(&dest.0);
     let source = ObjectHandle(source);
     let a = rt.host().layer(dest)?.clone();
     let b = rt.host().layer(source)?.clone();
+    if simple {
+        // krkrz InternalStopTransition: no exchange for ttSimple; the
+        // completion event needs a (live) transition source.
+        let surface_only = rt.host_mut().transitions.1.remove(&dest.0);
+        if !immediate {
+            let id = if surface_only { a.presentation() } else { a.container() };
+            rt.host_mut().layer_op(json!({"op":"end_crossfade","id":id}));
+            if surface_only && source != dest {
+                rt.host_mut().canvas_op(json!({"op":"hide","layer":temp_presentation(a.slot)}));
+            }
+        }
+        if source != dest {
+            rt.call_variant_method(
+                Variant::Object(dest),
+                "onTransitionCompleted",
+                vec![Variant::Closure(Closure::new(dest, Some(dest))), Variant::Closure(Closure::new(source, Some(source)))],
+            )?;
+        }
+        return Ok(());
+    }
     if rt.host_mut().transitions.1.remove(&dest.0) {
         rt.host_mut().layer_op(json!({"op":"end_crossfade","id":a.presentation()}));
         rt.host_mut().canvas_op(json!({"op":"hide","layer":temp_presentation(a.slot)}));
@@ -317,6 +391,10 @@ pub fn poll(rt: &mut Rt, host: &mut dyn HostServices, client: ClientId) -> anyho
             rt.host_mut().transitions.0.remove(&dest);
             continue;
         };
+        if rt.host().transitions.4.contains(&dest) {
+            finish(rt, ObjectHandle(dest)).map_err(|e| anyhow::anyhow!("transition completion: {e}"))?;
+            continue;
+        }
         let id = if rt.host().transitions.1.contains(&dest) {
             layer.presentation()
         } else {

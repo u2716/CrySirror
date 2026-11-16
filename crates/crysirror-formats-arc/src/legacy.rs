@@ -114,8 +114,10 @@ fn finish(
     let mut plans = Vec::with_capacity(rows.len());
     for (id, row) in rows.into_iter().enumerate() {
         range(source_size, row.offset, row.stored)?;
+        // Raw rows are zero-copy source ranges; only decoded entries are
+        // bounded by the decoded-entry limit (see issue #5).
         ensure!(
-            row.size <= context.limits.max_entry_size,
+            matches!(row.plan, Plan::Raw) || row.size <= context.limits.max_entry_size,
             "{format} entry byte limit"
         );
         let mut metadata = serde_json::json!({"format": format, "offset": row.offset});

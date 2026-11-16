@@ -36,7 +36,7 @@ Dated source/validation sections below describe their recorded profiles. Consult
 | crysirror-text | Engine CPU fonts, shaping/bidi, rich layout/ruby/vertical text, fixed-cell layout, synchronous font-resource measurement handles, reveal and CPU SDF data |
 | crysirror-scene | Safe CPU World/Layer/UI state, migrated input/animation/projection, transactional mutations and frame extraction |
 | crysirror-reallive | Original RealLive bytecode VM and thin semantic/syscall adapter; retained Canvas/Layer/GlyphRun/UI and engine audio/Media services, no hosted renderer |
-| crysirror-krkr | AGPL KiriKiri adapter, linked by the desktop: CrySirror TJS2 VM (crysirror-tjs2) and KAG parser (crysirror-kag), with native KAG3 classes mapped onto shared Layer/Canvas/Text/UI/audio/clock/storage (ADR 0053/0088) |
+| crysirror-krkr | KiriKiri adapter, linked by the desktop: CrySirror TJS2 VM (crysirror-tjs2) and KAG parser (crysirror-kag), with native KAG3 classes mapped onto shared Layer/Canvas/Text/UI/audio/clock/storage (ADR 0053/0088) |
 | crysirror-avg32 | xmoezzz's AVG32 interpreter maintained in the workspace running installed games; PDT raster on shared `crysirror_image::avg32`, text/menus as engine GlyphRun/solid layers, audio channels, storage and save mount (ADR 0095) |
 | crysirror-rfvp-vm | First-class HCB interpreter and native syscall/primitive/wait/save policy; per-instance globals, shared text/font/image kernels, no original software renderer/mixer or private pixel-storage implementation |
 | crysirror-codec-{omv,theora,mpeg,wmv,emote} | First-class CPU format/codec libraries used by shared Video/Puppet services; no original standalone players, windows or renderers |

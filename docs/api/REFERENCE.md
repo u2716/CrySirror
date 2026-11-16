@@ -6,7 +6,7 @@ Generated from the class registry, the command table, serde defaults and Rust do
 `CRYSIRROR_BLESS=1 cargo test --release -p crysirror-engine --test api_docs`.
 Policy and change log: [README](README.md), [CHANGES](CHANGES.md).
 
-API fingerprint: `53f4100163bef8b4`
+API fingerprint: `730548bc6fc7fb95`
 
 The same classes are exposed to Rust (`EngineContext` calls), to JavaScript/TypeScript (bindings generated from the registry, [crysirror.d.ts](crysirror.d.ts)) and to inspection tools.
 
@@ -1203,6 +1203,13 @@ Reusable image operations. All channels are straight RGBA bytes; RGB-only transf
 | `disc_copies` | `spec: crate::disc_copy::DiscCopies` | Two-input whole-pixel row copy; preserves uncovered destination pixels. Midpoint-circle discs copied from the raster source (second input). |
 | `sine_row_copy` | `spec: crate::row_copy::SineRowCopy` | — |
 | `alpha_clip_rect` | `spec: crate::alpha_clip::AlphaClipRect` | Two-input clipped coverage multiplication with optional exterior clear. |
+| `blue_to_alpha` | `spec: crate::layer_ex::BlueToAlpha` | Second-half blue into first-half alpha (layerExBTOA). |
+| `fill_alpha` | `spec: crate::layer_ex::FillAlpha` | Opaque alpha inside a rectangle (layerExBTOA fillAlpha). |
+| `shrink_fast` | `spec: crate::layer_ex::ShrinkFast` | Integer box shrink to an opaque image (shrinkCopyFast). |
+| `shrink_copy` | `spec: crate::layer_ex::ShrinkCopy` | Two-input area-average shrink onto a fractional rectangle (shrinkCopy). |
+| `overwrap_rect` | `spec: crate::layer_ex::OverwrapRect` | Two-input threshold overwrite (layerExBTOA overwrapRect). |
+| `stitch_wrapped_copy` | `spec: crate::layer_ex::StitchWrappedCopy` | Two-input horizontally wrapped row copy (layerStwCopy). |
+| `glitch_copy` | `spec: crate::layer_ex::GlitchCopy` | Two-input block/line displacement with channel splitting (GlitchEffect). |
 | `packed_pair_blend` | `spec: crate::packed_pair_blend::PackedPairBlend` | Three immutable inputs, two independent masks and exact14bit products. |
 | `masked_pair_blend` | `spec: crate::masked_pair::MaskedPairBlend` | — |
 | `transition` | `spec: crate::transition::ImageTransition` | — |
@@ -4174,6 +4181,8 @@ Worker-prepared numeric transform, separate from source transport/pitch.
 |---|---|---|
 | `SiglusJitan` | `percent: u16` | Pinned mono PCM16 splice profile; 100..400 percent, 100 exact identity. |
 | `PcmFilters` | — | Ordered integer stereo filter chain applied to the decoded PCM16 (at most 16 stages); see [`PcmFilter`]. |
+| `WaveFilters` | — | Ordered floating-point WaveFilter chain (at most 16 stages) applied to the decoded PCM at its own rate; see [`WaveFilter`]. |
+| `MultiTrack` | — | Independently gained stereo stems (1..=64) of one voice, mixed in lockstep; see [`MultiTrackStem`] and `AudioRequest::SetTrackGains`. |
 
 ### AudioResourceInfo
 
@@ -4505,6 +4514,7 @@ Client-scoped channel commands for the shared decoder/mixer. Encoded bytes and d
 | `SetPan` | `channel: u32, pan: f32, fade_ms: f32` | — |
 | `SetStereoGain` | `channel: u32, gains: [f32; 2], fade_ms: f32` | Independent post-processing left/right amplitude controls, each0..4. Unity preserves the current pan/spatial law. This is not equal-power pan. |
 | `SetLoopSchedule` | `channel: u32, start: u64, end: Option<u64>, passes: Option<u32>` | Replace the decoded-frame loop range and remaining-pass schedule while retaining the current fractional cursor. None passes repeats unbounded; Some must be positive, including the current pass. None end uses EOF. |
+| `SetTrackGains` | `channel: u32, positions: Option<alloc::vec::Vec<u64>>, changes: alloc::vec::Vec<AudioTrackGain>` | Retarget track gains of a multi-track voice from its current source frame, or (with `positions`) at the first listed source frame reached; a new deferred request replaces an unapplied one. |
 | `SetChannelSwap` | `channel: u32, swapped: bool` | Exchange decoded left/right channels without restarting transport. |
 | `SetLooped` | `channel: u32, looping: bool, loop_start: Option<u64>` | Change loop mode at the current source position; never restart/seek. Enabling restores unbounded repeats, clearing a prior counted schedule. |
 
@@ -6934,6 +6944,7 @@ A scoped, renderer-owned transition between two isolated subtree inputs. Filters
 |---|---|---|
 | `blur` | `before: [u32; 2], after: [u32; 2], dynamic: bool` | Increasing blur of the old input and decreasing blur of the new one, followed by gamma-space byte-weight blending. Static inputs are GPU snapshots; dynamic inputs are recaptured each frame. |
 | `dim` | `rule: RuleWipe, blur: [u32; 2], negative: bool, acceleration: f64` | Grayscale, clamped-edge box-blurred rule image, optionally inverted, controlling a rule wipe. Acceleration matches the legacy pow curve. |
+| `glitch` | `params: GlitchParams, mode: GlitchTransition, seed: u64` | Block/line displacement with channel splitting (KiriKiri GlitchEffect `glitch`/`fadeglitch`). Each frame regenerates its field from `seed + elapsed_ms`; inputs are recaptured every frame. A `fade` transition may use its destination as its own source. |
 
 ### RuleWipe
 
@@ -7325,9 +7336,12 @@ Variants are tagged by `"kind"`.
 | Variant | Fields | Description |
 |---|---|---|
 | `crossfade` | — | Plain cross-dissolve. |
-| `mask` | `asset: String, fade: u8` | Grayscale mask image: bright pixels reveal first; `fade` 0..=8 is the Siglus soft-edge step (0 = hard edge). |
+| `mask` | `asset: String, fade: u8, vague: Option<u16>` | Grayscale mask image: bright pixels reveal first; `fade` 0..=8 is the Siglus soft-edge step (0 = hard edge). |
 | `slide` | `direction: u8` | direction 0 down, 1 up, 2 right, 3 left (Siglus type 200, both scenes move). |
 | `mosaic` | `size: u32` | Mosaic out of the old scene and into the new one (type 230). |
+| `spin_zoom` | `reverse: bool` | The new scene grows from the canvas centre (scale 0→1) while turning one revolution, counter-clockwise or `reverse`d, over the old scene (N-System CDIBOverlap Rotate, DrawRotate 0x42BC50). |
+| `bounce` | `count: u16, vector: [i16; 2], damped: bool, stretch: bool` | The new scene offset along `vector` (px) by a triangle wave of `count` round trips, uncovered pixels keeping the old scene; `damped` scales the offset by 1 − t/2; `stretch` grows the scene by the offset about its centre instead of moving it (N-System Bound, DrawBound 0x42CA60, modes 0/1 and +10). |
+| `door_flip` | `axis: u8, focal: u16` | A perspective page flip over black: the old scene turns away about `axis` (0 vertical, 1 horizontal, 2 the view axis) through a quarter turn, then the new scene turns in; `focal` is the pinhole distance in px (N-System RotDoor, MoveRotDoor 0x42E000). |
 | `ordered_dither` | `cell: [u32; 2], diagonal: bool, steps: u32` | Ordered Bayer-4 fade in logical canvas pixels. This is a shared engine effect with an independent code, not an alias for a Siglus wipe type. |
 | `siglus` | `code: i32, options: Vec<i32>, mask: Option<String>` | A raw Siglus wipe type with its option list. Pattern types (5..=199) without `mask` use the original generated masks. |
 

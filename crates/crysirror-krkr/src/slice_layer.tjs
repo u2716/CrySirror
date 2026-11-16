@@ -1,0 +1,133 @@
+// Copyright (c) 2026 CrySirror contributors.
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. A copy is available at https://mozilla.org/MPL/2.0/.
+//
+// PackinOne `SliceLayer`: a layer whose image is held by child layers of at
+// most `SliceLayer.Config.height` rows each. Member surface as the class
+// PackinOne.dll defines (SliceLayer, SliceLayer.SliceLoader, Config); the
+// rows are distributed with copyRect from one decoded image.
+class SliceLayer extends Layer {
+	var sliceLoader = void;
+	function SliceLayer() {
+		super.Layer(...);
+		sliceLoader = new SliceLoader(this);
+		hasImage = false;
+	}
+	function finalize() {
+		if (isvalid this && sliceLoader) {
+			invalidate sliceLoader;
+			sliceLoader = void;
+		}
+		super.finalize(...);
+	}
+	property sliceConfig {
+		getter { return sliceLoader ? sliceLoader.sliceConfig : void; }
+		setter(v) { if (sliceLoader) sliceLoader.sliceConfig = v; }
+	}
+	function loadImages(storage) {
+		return sliceLoader ? sliceLoader.loadImages(...) : super.loadImages(...);
+	}
+	function foreachSlice() {
+		if (sliceLoader) return sliceLoader.foreachSlice(...);
+	}
+	function setSliceProp() {
+		if (sliceLoader) return sliceLoader.setSliceProp(...);
+	}
+}
+class __SliceLoader {
+	var sliced = void;
+	var sliceParent = void;
+	var sliceConfig = void;
+	function __SliceLoader(owner, config) {
+		if (!(typeof owner == "Object" && owner && owner instanceof "Layer"))
+			throw new Exception("SliceLoader(<error>):invalid owner type");
+		sliceParent = owner;
+		sliceConfig = config === void ? global.SliceLayer.Config : config;
+	}
+	function finalize() {
+		if (isvalid this) clearSlice();
+	}
+	function error(message) {
+		throw new Exception("SliceLoader(" + (string)sliceTarget.name + "):" + (string)message);
+	}
+	property sliceTarget {
+		getter { return sliceParent; }
+	}
+	function clearSlice() {
+		while (sliced && sliced.count > 0) {
+			var lay = sliced.pop();
+			if (lay && isvalid lay) invalidate lay;
+		}
+	}
+	function createSliceLayer(w, h, x, y, cls, parent, name) {
+		if (cls === void) cls = global.Layer;
+		if (parent === void) parent = sliceTarget;
+		if (name === void) name = parent.name + ":" + y;
+		var lay = new cls(parent.window, parent);
+		lay.name = name;
+		lay.hitType = htMask;
+		lay.hitThreshold = 256;
+		lay.setImageSize(w, h);
+		lay.setPos(x, y, w, h);
+		lay.visible = true;
+		return lay;
+	}
+	function createSlice(count, w, h, last) {
+		if (last === void) last = h;
+		if (!sliced) sliced = [];
+		var cls = sliceConfig.layer, parent = sliceTarget, y = 0;
+		for (var i = 1; i <= count; i++) {
+			sliced.add(createSliceLayer(w, i < count ? h : last, 0, y, cls, parent, "%02d/%02d".sprintf(i, count)));
+			y += h;
+		}
+	}
+	function foreachSlice(func, *) {
+		if (sliced) for (var i = 0, n = sliced.count; i < n; i++) func(sliced[i], *);
+	}
+	function setSliceProp(name, value) {
+		if (sliced) for (var i = 0, n = sliced.count; i < n; i++) sliced[i][name] = value;
+	}
+	function loadImages(storage, key, extra) {
+		var ext = Storages.extractStorageExt(storage).toLowerCase();
+		if (ext == "") storage += ".tlg";
+		else if (ext.substr(0, 4) != ".tlg") error("supported tlg format only:" + storage);
+		if (!Storages.isExistentStorage(storage)) error("not found:" + storage);
+		var config = sliceConfig;
+		var size = global.Layer.fetchImageSize(storage);
+		var w, h, sh = config.height;
+		if (size) { w = size[0]; h = size[1]; }
+		if (!(w > 0 && h > 0)) error("invalid tlg format:" + storage);
+		if (!(sh > 0)) error("invalid slice config:" + sliceTarget.name);
+		clearSlice();
+		sliceTarget.setSize(w, h);
+		var n = h \ sh, rest = h - sh * n;
+		if (n > 0 && rest < config.minimal) {
+			n--;
+			sh = (h + n) \ (n + 1);
+			rest = h - sh * n;
+		}
+		createSlice(n + 1, w, sh, rest);
+		return loadSlicedImage(storage, sh, sliced, extra);
+	}
+	function loadSlicedImage(storage, sliceHeight, layers, key) {
+		var parent = sliceTarget;
+		var temp = new global.Layer(parent.window, parent);
+		var tags;
+		try {
+			temp.visible = false;
+			tags = temp.loadImages(storage, key);
+			for (var i = 0, n = layers.count; i < n; i++) {
+				var lay = layers[i];
+				lay.copyRect(0, 0, temp, 0, i * sliceHeight, lay.imageWidth, lay.imageHeight);
+			}
+		} catch (e) {
+			invalidate temp;
+			throw e;
+		}
+		invalidate temp;
+		return tags;
+	}
+}
+SliceLayer.SliceLoader = __SliceLoader;
+global.SliceLoader = __SliceLoader;
+SliceLayer.Config = %[ height: 256, minimal: 32, layer: global.Layer ];

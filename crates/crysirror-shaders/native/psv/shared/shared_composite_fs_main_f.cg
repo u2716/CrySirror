@@ -66,7 +66,7 @@ uniform sampler2D rule : TEXUNIT2;
 uniform float4 cg_size_rule;
 
 struct FragmentInput_fs_main {
-    float4 pos_2 : WPOS;
+    float4 pos_3 : WPOS;
 };
 
 float3 gamma(float3 c)
@@ -148,9 +148,109 @@ float rule_weight(float2 pos_1)
     return (_e129 / 256.0);
 }
 
+float glitch_value(int x, int y)
+{
+    float4 _e5 = cg_load(rule,int3(int2(x, y), int(0)),cg_size_rule);
+    float4 _e11 = floor(((_e5 * 255.0) + (0.5).xxxx));
+    return (((_e11.x + (_e11.y * 256.0)) + (_e11.z * 65536.0)) - 8388608.0);
+}
+
+float4 glitch_bytes(float4 p)
+{
+    const float3 _e7 = gamma((p.xyz / (max(p.w, 1e-6)).xxx));
+    return float4(floor(((_e7 * 255.0) + (0.5).xxx)), floor(((p.w * 255.0) + 0.5)));
+}
+
+int naga_mod(int lhs,int rhs) {
+ int overflow=int(lhs==int(-2147483647-1)) & int(rhs==int(-1));
+ int invalid=overflow | int(rhs==int(0));
+ int divisor=invalid?int(1):rhs;
+ return lhs-cg_div(lhs,divisor)*divisor;
+}
+
+int naga_div(int lhs,int rhs){return cg_div(lhs,rhs);}
+
+float4 glitch_source(int index, int width, bool use_new)
+{
+    float4 _e5 = params.rect;
+    int2 _e11 = asint(asuint(naga_f2i32(_e5.xy)) + asuint(int2(naga_mod(index, width), naga_div(index, width))));
+    float4 _e14 = cg_load(before,int3(_e11, int(0)),cg_size_before);
+    float4 _e17 = cg_load(after,int3(_e11, int(0)),cg_size_after);
+    const float4 _e19 = glitch_bytes((use_new ? _e17 : _e14));
+    return _e19;
+}
+
+int naga_f2i32(float value) {
+    return int(clamp(value, -2147483600.0, 2147483500.0));
+}
+
+float4 glitch(float2 pos_2, float4 a_1)
+{
+    bool local_3 = (bool)0;
+    float3 rgb = (float3)0;
+
+    float4 _e4 = params.rect;
+    int2 _e6 = naga_f2i32(_e4.zw);
+    float4 _e9 = params.rect;
+    int2 _e13 = naga_f2i32(floor((pos_2 - _e9.xy)));
+    if (!(any((_e13 < (int(0)).xx)))) {
+        local_3 = any((_e13 >= _e6));
+    } else {
+        local_3 = true;
+    }
+    bool _e24 = local_3;
+    if (_e24) {
+        return float4((a_1.xyz / (max(a_1.w, 1e-6)).xxx), a_1.w);
+    }
+    float _e36 = params.a.w;
+    int _e39 = max(naga_f2i32(_e36), int(1));
+    int _e41 = naga_div(_e13.x, _e39);
+    int _e42 = asint(asuint(_e41) * asuint(_e39));
+    int _e44 = asint(asuint(_e13.x) - asuint(_e42));
+    int _e50 = asint(asuint(_e13.y) * asuint(int(3)));
+    const float _e51 = glitch_value(_e41, _e50);
+    const float _e55 = glitch_value(_e41, asint(asuint(_e50) + asuint(int(1))));
+    const float _e59 = glitch_value(_e41, asint(asuint(_e50) + asuint(int(2))));
+    float4 _e63 = cg_load(rule,int3(int2(_e41, _e50), int(0)),cg_size_rule);
+    bool _e66 = (_e63.w > 0.5);
+    int _e72 = max(asint(asuint(asint(asuint(_e6.x) * asuint(_e6.y))) - asuint(min(_e39, asint(asuint(_e6.x) - asuint(_e42))))), int(0));
+    int _e78 = asint(asuint(asint(asuint(asint(asuint(asint(asuint(_e13.y) + asuint(naga_f2i32(_e55)))) * asuint(_e6.x))) + asuint(_e42))) + asuint(naga_f2i32(_e51)));
+    int _e81 = asint(asuint(naga_f2i32(_e59)) * asuint(int(4)));
+    const float4 _e86 = glitch_source(asint(asuint(clamp(_e78, int(0), _e72)) + asuint(_e44)), _e6.x, _e66);
+    const float4 _e92 = glitch_source(asint(asuint(clamp(asint(asuint(_e78) - asuint(_e81)), int(0), _e72)) + asuint(_e44)), _e6.x, _e66);
+    const float4 _e98 = glitch_source(asint(asuint(clamp(asint(asuint(_e78) + asuint(_e81)), int(0), _e72)) + asuint(_e44)), _e6.x, _e66);
+    float _e104 = (_e59 - (4.0 * floor((_e59 / 4.0))));
+    rgb = _e86.xyz;
+    if ((_e59 != 0.0)) {
+        if ((_e104 < 0.5)) {
+            rgb = float3(_e98.x, _e86.y, _e92.z);
+        } else {
+            if ((_e104 < 1.5)) {
+                rgb = float3(_e98.z, _e86.y, _e92.x);
+            } else {
+                if ((_e104 < 2.5)) {
+                    rgb = float3(_e98.x, _e86.z, _e92.y);
+                } else {
+                    rgb = float3(_e98.y, _e86.x, _e92.z);
+                }
+            }
+        }
+    }
+    float _e134 = params.a.y;
+    if ((_e134 >= 0.0)) {
+        float _e139 = floor((_e134 / 65536.0));
+        float _e145 = floor(((_e134 - (_e139 * 65536.0)) / 256.0));
+        float3 _e152 = rgb;
+        rgb = clamp((_e152 + (2.0 * (float3(_e139, _e145, ((_e134 - (_e139 * 65536.0)) - (_e145 * 256.0))) - (128.0).xxx))), (0.0).xxx, (255.0).xxx);
+    }
+    float3 _e165 = rgb;
+    const float3 _e169 = linear_((_e165 / (255.0).xxx));
+    return float4(_e169, (_e86.w / 255.0));
+}
+
 float4 main(FragmentInput_fs_main fragmentinput_fs_main) : COLOR
 {
-    float4 pos = fragmentinput_fs_main.pos_2;
+    float4 pos = fragmentinput_fs_main.pos_3;
     float4 a = (float4)0;
     float4 b = (float4)0;
     float w = (float)0;
@@ -162,60 +262,66 @@ float4 main(FragmentInput_fs_main fragmentinput_fs_main) : COLOR
     a = _e5;
     float4 _e11 = cg_load(after,int3(naga_f2i32(pos.xy), int(0)),cg_size_after);
     b = _e11;
-    float _e16 = params.a.x;
-    w = _e16;
-    float _e21 = params.a.z;
-    if ((_e21 > 1.5)) {
-        float _e29 = params.a.z;
-        local = (_e29 < 2.5);
+    float _e16 = params.a.z;
+    if ((_e16 > 3.5)) {
+        float4 _e20 = a;
+        const float4 _e21 = glitch(pos.xy, _e20);
+        return _e21;
+    }
+    float _e25 = params.a.x;
+    w = _e25;
+    float _e30 = params.a.z;
+    if ((_e30 > 1.5)) {
+        float _e38 = params.a.z;
+        local = (_e38 < 2.5);
     } else {
         local = false;
     }
-    bool _e33 = local;
-    if (_e33) {
-        float4 _e34 = a;
-        a = (floor(((_e34 * 255.0) + (0.5).xxxx)) / (255.0).xxxx);
-        float4 _e44 = b;
-        b = (floor(((_e44 * 255.0) + (0.5).xxxx)) / (255.0).xxxx);
-        float _e54 = w;
-        float _e60 = w;
-        w = ((_e60 >= 1.0) ? 1.0 : (floor((_e54 * 255.0)) / 256.0));
+    bool _e42 = local;
+    if (_e42) {
+        float4 _e43 = a;
+        a = (floor(((_e43 * 255.0) + (0.5).xxxx)) / (255.0).xxxx);
+        float4 _e53 = b;
+        b = (floor(((_e53 * 255.0) + (0.5).xxxx)) / (255.0).xxxx);
+        float _e63 = w;
+        float _e69 = w;
+        w = ((_e69 >= 1.0) ? 1.0 : (floor((_e63 * 255.0)) / 256.0));
     } else {
-        float _e68 = params.a.z;
-        if ((_e68 > 0.5)) {
-            const float _e72 = rule_weight(pos.xy);
-            w = _e72;
+        float _e77 = params.a.z;
+        if ((_e77 > 0.5)) {
+            const float _e81 = rule_weight(pos.xy);
+            w = _e81;
         }
     }
-    float _e74 = a.w;
-    float _e76 = b.w;
-    float _e77 = w;
-    float _e78 = lerp(_e74, _e76, _e77);
-    float4 _e79 = a;
-    float _e82 = a.w;
-    const float3 _e87 = gamma((_e79.xyz / (max(_e82, 1e-6)).xxx));
-    float _e89 = a.w;
-    float4 _e91 = b;
-    float _e94 = b.w;
-    const float3 _e99 = gamma((_e91.xyz / (max(_e94, 1e-6)).xxx));
-    float _e101 = b.w;
-    float _e103 = w;
-    color = lerp((_e87 * _e89), (_e99 * _e101), _e103);
-    float _e109 = params.a.z;
-    if ((_e109 > 1.5)) {
-        float _e117 = params.a.z;
-        local_1 = (_e117 < 2.5);
+    float _e83 = a.w;
+    float _e85 = b.w;
+    float _e86 = w;
+    float _e87 = lerp(_e83, _e85, _e86);
+    float4 _e88 = a;
+    float _e91 = a.w;
+    const float3 _e96 = gamma((_e88.xyz / (max(_e91, 1e-6)).xxx));
+    float _e98 = a.w;
+    float4 _e100 = b;
+    float _e103 = b.w;
+    const float3 _e108 = gamma((_e100.xyz / (max(_e103, 1e-6)).xxx));
+    float _e110 = b.w;
+    float _e112 = w;
+    color = lerp((_e96 * _e98), (_e108 * _e110), _e112);
+    float _e118 = params.a.z;
+    if ((_e118 > 1.5)) {
+        float _e126 = params.a.z;
+        local_1 = (_e126 < 2.5);
     } else {
         local_1 = false;
     }
-    bool _e121 = local_1;
-    if (_e121) {
-        float4 _e122 = a;
-        float4 _e124 = b;
-        float _e126 = w;
-        color = (floor(((lerp(_e122.xyz, _e124.xyz, _e126) * 255.0) + (0.0001).xxx)) / (255.0).xxx);
+    bool _e130 = local_1;
+    if (_e130) {
+        float4 _e131 = a;
+        float4 _e133 = b;
+        float _e135 = w;
+        color = (floor(((lerp(_e131.xyz, _e133.xyz, _e135) * 255.0) + (0.0001).xxx)) / (255.0).xxx);
     }
-    float3 _e137 = color;
-    const float3 _e142 = linear_((_e137 / (max(_e78, 1e-6)).xxx));
-    return float4(_e142, _e78);
+    float3 _e146 = color;
+    const float3 _e151 = linear_((_e146 / (max(_e87, 1e-6)).xxx));
+    return float4(_e151, _e87);
 }

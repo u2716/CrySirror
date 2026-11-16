@@ -397,13 +397,47 @@ pub struct AudioAsset {
     pub frame_limit: Option<u64>,
 }
 /// Worker-prepared numeric transform, separate from source transport/pitch.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum AudioResourceTransform {
     /// Pinned mono PCM16 splice profile; 100..400 percent, 100 exact identity.
     SiglusJitan { percent: u16 },
     /// Ordered integer stereo filter chain applied to the decoded PCM16
     /// (at most 16 stages); see [`PcmFilter`].
     PcmFilters(alloc::sync::Arc<[PcmFilter]>),
+    /// Ordered floating-point WaveFilter chain (at most 16 stages) applied to
+    /// the decoded PCM at its own rate; see [`WaveFilter`].
+    WaveFilters(alloc::sync::Arc<[WaveFilter]>),
+    /// Independently gained stereo stems (1..=64) of one voice, mixed in
+    /// lockstep; see [`MultiTrackStem`] and `AudioRequest::SetTrackGains`.
+    MultiTrack(alloc::sync::Arc<[MultiTrackStem]>),
+}
+/// One stem of a multi-track resource: the resource's own asset or another
+/// asset of the same client and rate, optionally a stereo pick of its decoded
+/// channels (`None` entries are silent; up to 32 channels), at a start gain.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MultiTrackStem {
+    pub asset: Option<crate::path::VfsPath>,
+    pub pick: Option<[Option<u16>; 2]>,
+    pub gain: f32,
+}
+impl MultiTrackStem {
+    pub fn validate(&self) -> Result<()> {
+        if !self.gain.is_finite()
+            || !(0.0..=16.).contains(&self.gain)
+            || self.pick.is_some_and(|p| p.iter().flatten().any(|c| *c >= 32))
+        {
+            return Err(crate::Error::Invalid("multi-track stem"));
+        }
+        Ok(())
+    }
+}
+/// Gain change for some tracks of a multi-track voice (`None`: all tracks),
+/// reached linearly over `fade_ms` milliseconds of source time.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AudioTrackGain {
+    pub tracks: Option<alloc::vec::Vec<u32>>,
+    pub gain: f32,
+    pub fade_ms: u32,
 }
 impl AudioResourceTransform {
     pub fn validate(&self) -> Result<()> {
@@ -411,6 +445,12 @@ impl AudioResourceTransform {
             Self::SiglusJitan { percent } if (100..=400).contains(percent) => Ok(()),
             Self::PcmFilters(chain) if !chain.is_empty() && chain.len() <= 16 => {
                 chain.iter().try_for_each(PcmFilter::validate)
+            }
+            Self::WaveFilters(chain) if !chain.is_empty() && chain.len() <= 16 => {
+                chain.iter().try_for_each(WaveFilter::validate)
+            }
+            Self::MultiTrack(stems) if !stems.is_empty() && stems.len() <= 64 => {
+                stems.iter().try_for_each(MultiTrackStem::validate)
             }
             _ => Err(crate::Error::Invalid("audio transform parameters")),
         }
@@ -478,6 +518,245 @@ impl PcmFilter {
             }
         };
         if ok { Ok(()) } else { Err(crate::Error::Invalid("PCM filter parameters")) }
+    }
+}
+/// Response family of a [`WaveFilter::Iir`] design (DSPFilters families).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IirFamily {
+    Rbj,
+    Butterworth,
+    ChebyshevI,
+    ChebyshevII,
+    Elliptic,
+    Bessel,
+    Legendre,
+    Custom,
+}
+/// Response kind of a [`WaveFilter::Iir`] design. `BandPass` is the pole
+/// families' band pass and RBJ's constant-skirt band pass; `BandPass2` is
+/// RBJ's constant-peak band pass.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IirKind {
+    LowPass,
+    HighPass,
+    BandPass,
+    BandPass2,
+    BandStop,
+    LowShelf,
+    HighShelf,
+    BandShelf,
+    AllPass,
+    TwoPole,
+    OnePole,
+}
+/// Biquad realisation of a [`WaveFilter::Iir`] cascade.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum IirStructure {
+    DirectFormI,
+    #[default]
+    DirectFormII,
+    TransposedDirectFormI,
+    TransposedDirectFormII,
+}
+/// One DSPFilters design parameter (`ParamInfo`). `min`/`max` are the
+/// upstream `toNativeValue(0)`/`toNativeValue(1)` of its control mapping.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct IirParamInfo {
+    /// Short name (`szLabel`, e.g. `Fc`).
+    pub label: &'static str,
+    /// Long name (`szName`, e.g. `Cutoff Frequency`).
+    pub name: &'static str,
+    pub default: f64,
+    pub min: f64,
+    pub max: f64,
+}
+const fn param(label: &'static str, name: &'static str, min: f64, max: f64, default: f64) -> IirParamInfo {
+    IirParamInfo { label, name, default, min, max }
+}
+// Log-mapped frequencies: 1.5^(log(10)/log(1.5)) evaluates to 10.000000000000004.
+const LOG_MIN: f64 = 10.000000000000004;
+const P_FS: IirParamInfo = param("Fs", "Sample Rate", 11025., 192000., 44100.);
+const P_FC: IirParamInfo = param("Fc", "Cutoff Frequency", LOG_MIN, 22040., 2000.);
+const P_FCENT: IirParamInfo = param("Fc", "Center Frequency", LOG_MIN, 22040., 2000.);
+const P_Q: IirParamInfo = param("Q", "Resonance", 0.0625, 16., 1.);
+const P_BW: IirParamInfo = param("BW", "Bandwidth (Octaves)", 0.0625, 16., 1.);
+const P_BWHZ: IirParamInfo = param("BW", "Bandwidth (Hz)", LOG_MIN, 22040., 1720.);
+const P_GAIN: IirParamInfo = param("Gain", "Gain", -24., 24., -6.);
+const P_SLOPE: IirParamInfo = param("Slope", "Slope", 0.25, 4., 1.);
+const P_RIPPLE: IirParamInfo = param("Ripple", "Ripple dB", 0.001, 12., 0.01);
+const P_STOP: IirParamInfo = param("Stop", "Stopband dB", 3., 60., 48.);
+const P_ROLLOFF: IirParamInfo = param("W", "Transition Width", -16., 4., 0.);
+const P_POLE_RHO: IirParamInfo = param("Pd", "Pole Distance", 0., 1., 0.5);
+const P_POLE_THETA: IirParamInfo = param("Pa", "Pole Angle", 0., core::f64::consts::PI, core::f64::consts::FRAC_PI_2);
+// Upstream reuses the pole labels for the zero parameters.
+const P_ZERO_RHO: IirParamInfo = param("Pd", "Zero Distance", 0., 1., 0.5);
+const P_ZERO_THETA: IirParamInfo = param("Pa", "Zero Angle", 0., core::f64::consts::PI, core::f64::consts::FRAC_PI_2);
+const P_POLE_REAL: IirParamInfo = param("A1", "Pole Real", -1., 1., 0.25);
+const P_ZERO_REAL: IirParamInfo = param("B1", "Zero Real", -1., 1., -0.25);
+/// Highest order of a pole family as the shipped designs instantiate it.
+pub fn iir_max_order(family: IirFamily) -> usize {
+    match family {
+        IirFamily::Bessel | IirFamily::Legendre => 25,
+        _ => 50,
+    }
+}
+/// A design's parameter list (element 0 is the sample rate), `None` for a
+/// kind the family does not implement.
+pub fn iir_params(kind: IirKind, family: IirFamily) -> Option<alloc::vec::Vec<IirParamInfo>> {
+    use IirFamily as F;
+    use IirKind as K;
+    use alloc::vec;
+    let order = param("Order", "Order", 1., iir_max_order(family) as f64, 2.);
+    let extra: &[IirParamInfo] = match family {
+        F::ChebyshevI => &[P_RIPPLE],
+        F::ChebyshevII => &[P_STOP],
+        F::Elliptic => &[P_RIPPLE, P_ROLLOFF],
+        _ => &[],
+    };
+    let pole = |base: &[IirParamInfo]| {
+        let mut v = vec![P_FS, order];
+        v.extend_from_slice(base);
+        v.extend_from_slice(extra);
+        Some(v)
+    };
+    match (family, kind) {
+        (F::Rbj, K::LowPass | K::HighPass | K::AllPass) => Some(vec![P_FS, P_FC, P_Q]),
+        (F::Rbj, K::BandPass | K::BandPass2 | K::BandStop) => Some(vec![P_FS, P_FCENT, P_BW]),
+        (F::Rbj, K::LowShelf | K::HighShelf) => Some(vec![P_FS, P_FC, P_GAIN, P_SLOPE]),
+        (F::Rbj, K::BandShelf) => Some(vec![P_FS, P_FCENT, P_GAIN, P_BW]),
+        (F::Custom, K::OnePole) => Some(vec![P_FS, P_GAIN, P_POLE_REAL, P_ZERO_REAL]),
+        (F::Custom, K::TwoPole) => Some(vec![P_FS, P_GAIN, P_POLE_RHO, P_POLE_THETA, P_ZERO_RHO, P_ZERO_THETA]),
+        (F::Rbj | F::Custom, _) => None,
+        (F::Elliptic | F::Legendre, K::LowShelf | K::HighShelf | K::BandShelf) => None,
+        (F::Bessel, K::HighShelf | K::BandShelf) => None,
+        (_, K::LowPass | K::HighPass) => pole(&[P_FC]),
+        (_, K::BandPass | K::BandStop) => pole(&[P_FCENT, P_BWHZ]),
+        (_, K::LowShelf | K::HighShelf) => pole(&[P_FC, P_GAIN]),
+        (_, K::BandShelf) => pole(&[P_FCENT, P_BWHZ, P_GAIN]),
+        (_, K::BandPass2 | K::AllPass | K::TwoPole | K::OnePole) => None,
+    }
+}
+/// `getDefaultParams()`: every parameter's default, unused slots zero.
+pub fn iir_default_params(kind: IirKind, family: IirFamily) -> Option<[f64; 8]> {
+    let list = iir_params(kind, family)?;
+    let mut out = [0.; 8];
+    for (o, p) in out.iter_mut().zip(&list) {
+        *o = p.default;
+    }
+    Some(out)
+}
+/// One floating-point WaveFilter stage over decoded PCM. Algorithms live in
+/// crysirror-audio (`wave_filters`). `extend_ms` stages keep running on
+/// silence after the input ends, so their tail is part of the resource.
+#[derive(Clone, Debug, PartialEq)]
+pub enum WaveFilter {
+    /// Per-channel feedback delay: `d = line[t - time]`,
+    /// `line[t] = (x + d) * feedback`, `y = x + d * mix`.
+    Delay { time_ms: u32, feedback: f32, mix: f32, extend_ms: u32 },
+    /// Jezar FreeVerb in the STK formulation (stereo output).
+    FreeVerb { effect_mix: f64, room_size: f64, damping: f64, width: f64, frozen: bool, extend_ms: u32 },
+    /// Ten-band allpass-section graphic equalizer, linear band gains.
+    GraphicEq { gains: [f32; 10] },
+    /// DSPFilters-style cascade. `params[0]` is replaced by the stream rate;
+    /// the rest follow the design's parameter order.
+    Iir { kind: IirKind, family: IirFamily, structure: IirStructure, params: [f64; 8] },
+    /// Linear gain, then by `mode`: 0 nothing, 1..=4 a sigmoid soft limit
+    /// above `threshold` (x/(1+|x|), 2·atan(πx/2)/π, x/√(1+x²), tanh), any
+    /// other value a hard clip to ±`threshold`.
+    GainLimit { gain: f32, threshold: f32, mode: i8 },
+    /// KiriKiri phase vocoder: `pitch` frequency scale, `time` duration
+    /// scale, FFT `window` (power of two) and `overlap` (0 automatic).
+    PhaseVocoder { pitch: f32, time: f32, window: u32, overlap: u32 },
+    /// `|x|`.
+    Abs,
+    /// `x + value`.
+    Add { value: f32 },
+    /// `x · value`.
+    Mul { value: f32 },
+    /// Every channel multiplied by a mono carrier.
+    RingMod { carrier: Oscillator },
+    /// Channel vocoder (voclib): the mono-mixed input shapes the carrier.
+    Vocoder { carrier: Oscillator, formant_shift: f32, reaction_time: f32, bands: u8, filters_per_band: u8 },
+}
+/// Mono carrier generator of [`WaveFilter::RingMod`] / [`WaveFilter::Vocoder`].
+/// Frequencies are in Hz at the stream rate.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Oscillator {
+    Const { value: f32 },
+    /// 2048-point table sine (STK SineWave).
+    Sine { gain: f32, freq: f32 },
+    /// xoshiro128+ white noise in ±gain; `seed` None uses a fixed seed.
+    Noise { gain: f32, seed: Option<u64> },
+    /// STK band-limited impulse train; `harmonics` 0 means up to Nyquist.
+    Blit { gain: f32, freq: f32, harmonics: u32 },
+    BlitSaw { gain: f32, freq: f32, harmonics: u32 },
+    BlitSquare { gain: f32, freq: f32, harmonics: u32 },
+    /// STK Modulate: vibrato sine plus low-passed random drift.
+    Modulate { gain: f32, vibrato_rate: f32, vibrato_gain: f64, random_gain: f64 },
+    /// Sum of generators.
+    Mix { sources: alloc::vec::Vec<Oscillator> },
+    /// A generator run through filter stages as a mono signal.
+    Filter { source: alloc::boxed::Box<Oscillator>, filters: alloc::vec::Vec<WaveFilter> },
+    /// Mono samples looped end to start, read at `pitch` with linear steps.
+    Loop { samples: alloc::sync::Arc<[f32]>, pitch: f64 },
+}
+impl Oscillator {
+    fn validate(&self, depth: u32) -> Result<()> {
+        let fin = |v: &[f32]| v.iter().all(|x| x.is_finite());
+        let ok = depth < 8
+            && match self {
+                Self::Const { value } => fin(&[*value]),
+                Self::Sine { gain, freq } => fin(&[*gain, *freq]),
+                Self::Noise { gain, .. } => fin(&[*gain]),
+                Self::Blit { gain, freq, .. } | Self::BlitSaw { gain, freq, .. } | Self::BlitSquare { gain, freq, .. } => {
+                    fin(&[*gain, *freq]) && *freq > 0.
+                }
+                Self::Modulate { gain, vibrato_rate, vibrato_gain, random_gain } => {
+                    fin(&[*gain, *vibrato_rate]) && vibrato_gain.is_finite() && random_gain.is_finite()
+                }
+                Self::Mix { sources } => sources.len() <= 32 && sources.iter().all(|s| s.validate(depth + 1).is_ok()),
+                Self::Filter { source, filters } => {
+                    filters.len() <= 16
+                        && source.validate(depth + 1).is_ok()
+                        && filters.iter().all(|f| f.validate_at(depth + 1).is_ok())
+                }
+                Self::Loop { samples, pitch } => !samples.is_empty() && pitch.is_finite() && *pitch > 0.,
+            };
+        if ok { Ok(()) } else { Err(crate::Error::Invalid("oscillator parameters")) }
+    }
+}
+impl WaveFilter {
+    pub fn validate(&self) -> Result<()> {
+        self.validate_at(0)
+    }
+    fn validate_at(&self, depth: u32) -> Result<()> {
+        let ok = match self {
+            Self::Delay { time_ms, feedback, mix, extend_ms } => {
+                (1..=10_000).contains(time_ms) && feedback.is_finite() && mix.is_finite() && *extend_ms <= 60_000
+            }
+            Self::FreeVerb { effect_mix, room_size, damping, width, extend_ms, .. } => {
+                [effect_mix, room_size, damping, width].iter().all(|v| v.is_finite()) && *extend_ms <= 60_000
+            }
+            Self::GraphicEq { gains } => gains.iter().all(|g| g.is_finite()),
+            Self::Iir { params, .. } => params.iter().all(|v| v.is_finite()),
+            Self::GainLimit { gain, threshold, .. } => gain.is_finite() && threshold.is_finite(),
+            Self::PhaseVocoder { pitch, time, window, overlap } => {
+                pitch.is_finite() && *pitch > 0. && time.is_finite() && *time > 0.
+                    && window.is_power_of_two() && (64..=32768).contains(window)
+                    && matches!(overlap, 0 | 2 | 4 | 8 | 16 | 32)
+            }
+            Self::Abs => true,
+            Self::Add { value } | Self::Mul { value } => value.is_finite(),
+            Self::RingMod { carrier } => carrier.validate(depth).is_ok(),
+            Self::Vocoder { carrier, formant_shift, reaction_time, bands, filters_per_band } => {
+                carrier.validate(depth).is_ok()
+                    && (0.25..=4.).contains(formant_shift)
+                    && (0.002..=2.).contains(reaction_time)
+                    && (4..=96).contains(bands)
+                    && (1..=8).contains(filters_per_band)
+            }
+        };
+        if ok { Ok(()) } else { Err(crate::Error::Invalid("wave filter parameters")) }
     }
 }
 /// Ephemeral client-scoped immutable audio resource. IDs are not reused during
@@ -666,6 +945,14 @@ pub enum AudioRequest {
         start: u64,
         end: Option<u64>,
         passes: Option<u32>,
+    },
+    /// Retarget track gains of a multi-track voice from its current source
+    /// frame, or (with `positions`) at the first listed source frame reached;
+    /// a new deferred request replaces an unapplied one.
+    SetTrackGains {
+        channel: u32,
+        positions: Option<alloc::vec::Vec<u64>>,
+        changes: alloc::vec::Vec<AudioTrackGain>,
     },
     /// Exchange decoded left/right channels without restarting transport.
     SetChannelSwap {

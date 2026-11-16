@@ -76,6 +76,7 @@ members = [
     "crates/crysirror-majiro",
     "crates/crysirror-qlie",
     "crates/crysirror-sugarpot",
+    "crates/crysirror-nsystem",
     "crates/crysirror-willplus",
     "crates/crysirror-lua",
     "crates/crysirror-reallive-dll",
@@ -97,6 +98,7 @@ rust-version = "1.95"
 crysirror-willplus = { path = "crates/crysirror-willplus" }
 crysirror-lua = { path = "crates/crysirror-lua" }
 crysirror-sugarpot = { path = "crates/crysirror-sugarpot" }
+crysirror-nsystem = { path = "crates/crysirror-nsystem" }
 crysirror-qlie = { path = "crates/crysirror-qlie" }
 crysirror-network = { path = "crates/crysirror-network", default-features = false }
 crysirror-io = { path = "crates/crysirror-io" }

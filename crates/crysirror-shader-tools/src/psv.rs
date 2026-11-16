@@ -22,7 +22,7 @@ pub fn is_shared_2d(module: &str) -> bool {
 }
 const WIPE_KINDS: &[i32] = &[
     -1, 0, 1, 2, 50, 200, 210, 211, 212, 213, 214, 215, 220, 221, 230, 231, 240, 241, 242, 243,
-    900, 901,
+    900, 901, 910, 911, 912,
 ];
 // GXM has no compute stage. Accumulate the original ordered taps per pixel.
 // Each horizontal sum is an exact integer <= 255 * 257 (16 bits). Two
@@ -895,7 +895,7 @@ fn export_one(
             .find("fn affected_color(")
             .context("wipe effect function")?;
         let mut body = lowered[start..].to_owned();
-        let old_to_new = (5..200).contains(&kind) || matches!(kind, 900 | 901 | 220 | 221);
+        let old_to_new = (5..200).contains(&kind) || matches!(kind, 900 | 901 | 220 | 221 | 910..=912);
         body = Regex::new(r"let old_to_new_family\s*=\s*[^;]+;")?
             .replace(&body, format!("let old_to_new_family = {old_to_new};"))
             .into_owned();

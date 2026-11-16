@@ -227,7 +227,7 @@ impl<'a> CbgV2Decoder<'a> {
         for _ in 0..=y_blocks {
             offsets.push(self.input.read_i32()?);
         }
-        let input = self.input.data[base_offset..].to_vec();
+        let input = &self.input.data[base_offset..];
         let pad_skip = ((width >> 3) + 7) >> 3;
         let mut output = vec![0u8; (width * height * 4) as usize];
         let block_decoder = BlockDecoder {
@@ -269,22 +269,23 @@ impl<'a> CbgV2Decoder<'a> {
             }
         }
 
-        let mut rgba = vec![0u8; self.header.width as usize * self.header.height as usize * 4];
+        let row_bytes = self.header.width as usize * 4;
+        let decoded_bytes = row_bytes * self.header.height as usize;
+        let padded_row_bytes = width as usize * 4;
         for y in 0..self.header.height as usize {
-            for x in 0..self.header.width as usize {
-                let src = (y * width as usize + x) * 4;
-                let dst = (y * self.header.width as usize + x) * 4;
-                rgba[dst] = output[src + 2];
-                rgba[dst + 1] = output[src + 1];
-                rgba[dst + 2] = output[src];
-                rgba[dst + 3] = output[src + 3];
-            }
+            let src = y * padded_row_bytes;
+            let dst = y * row_bytes;
+            output.copy_within(src..src + row_bytes, dst);
+        }
+        output.truncate(decoded_bytes);
+        for pixel in output.chunks_exact_mut(4) {
+            pixel.swap(0, 2);
         }
 
         Ok(DecodedImage {
             width: self.header.width,
             height: self.header.height,
-            rgba,
+            rgba: output,
         })
     }
 

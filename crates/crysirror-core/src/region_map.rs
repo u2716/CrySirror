@@ -87,6 +87,43 @@ impl RegionMap {
         });
         Ok(map)
     }
+    /// Row-major labels of a rectangle inside the map.
+    pub fn labels(&self, client: u32, rect: [u32; 4]) -> Result<Vec<u32>> {
+        let [x, y, w, h] = rect;
+        if x.checked_add(w).is_none_or(|r| r > self.size[0]) || y.checked_add(h).is_none_or(|b| b > self.size[1]) {
+            return Err(Error::Invalid("region label rectangle"));
+        }
+        let mut out = Vec::with_capacity(w as usize * h as usize);
+        for py in y..y + h {
+            for px in x..x + w {
+                out.push(self.get(client, [px.into(), py.into()])?);
+            }
+        }
+        Ok(out)
+    }
+    /// Paint a whole plane with its top-left at `at` (clipped to the map).
+    pub fn paint_plane(&mut self, client: u32, at: [i64; 2], plane: Arc<dyn RegionPlane>) -> Result<()> {
+        if client != self.client || plane.client() != client {
+            return Err(Error::Invalid("foreign region plane"));
+        }
+        let size = plane.size();
+        let [l, t] = [at[0].max(0), at[1].max(0)];
+        let r = (at[0] + i64::from(size[0])).min(self.size[0].into());
+        let b = (at[1] + i64::from(size[1])).min(self.size[1].into());
+        if r <= l || b <= t {
+            return Ok(());
+        }
+        if self.operations.len() >= 4096 {
+            // Flatten so long sequences of plane paints stay within budget.
+            let all = self.labels(client, [0, 0, self.size[0], self.size[1]])?;
+            let flat = LabelPlane::new(client, self.size, all.iter().map(|v| *v as u8).collect())?;
+            *self = Self::from_plane(client, Arc::new(flat))?;
+        }
+        self.push(Operation {
+            rect: [l, t, r, b],
+            paint: Paint::Plane { resource: plane, origin: [l - at[0], t - at[1]], step: [1, 1] },
+        })
+    }
     fn push(&mut self, operation: Operation) -> Result<()> {
         if self.operations.len() >= 4096 {
             return Err(Error::Limit("region map fill budget"));
@@ -347,4 +384,64 @@ mod copy_tests {
         assert!(clip_region_copy(None, [4, 2], [i64::MAX, 0, 1, 1], [0, 0], None).is_err());
         assert!(clip_region_copy(None, [4, 2], [0, 0, 1, 1], [0, 0], Some([0, 0, -1, 1])).is_err());
     }
+}
+
+/// Owned row-major byte labels (KiriKiri province images are 8-bit).
+#[derive(Debug)]
+pub struct LabelPlane {
+    client: u32,
+    size: [u32; 2],
+    labels: Vec<u8>,
+}
+impl LabelPlane {
+    pub fn new(client: u32, size: [u32; 2], labels: Vec<u8>) -> Result<Self> {
+        if size[0] == 0 || size[1] == 0 || labels.len() as u64 != u64::from(size[0]) * u64::from(size[1]) {
+            return Err(Error::Invalid("label plane layout"));
+        }
+        Ok(Self { client, size, labels })
+    }
+}
+impl RegionPlane for LabelPlane {
+    fn client(&self) -> u32 {
+        self.client
+    }
+    fn size(&self) -> [u32; 2] {
+        self.size
+    }
+    fn value_at(&self, point: [u32; 2]) -> Result<Option<u32>> {
+        let [x, y] = point;
+        Ok((x < self.size[0] && y < self.size[1]).then(|| u32::from(self.labels[(y * self.size[0] + x) as usize])))
+    }
+}
+/// layerExBTOA `copyAlphaToProvince(threshold, matched, otherwise)` over one
+/// clip rectangle: `alpha` and `old` are row-major, the result replaces
+/// `old`. `None` means the call changes nothing.
+pub fn alpha_to_labels(alpha: &[u8], old: &[u32], threshold: Option<i64>, matched: i64, otherwise: i64) -> Option<Vec<u8>> {
+    let byte = |v: i64| (0..256).contains(&v);
+    let (th, on, off) = (threshold.unwrap_or(-1) as u8, matched as u8, otherwise as u8);
+    let mode = match threshold {
+        Some(t) if (0..256).contains(&t) => match (byte(matched), byte(otherwise)) {
+            (false, false) => return None,
+            (true, true) => 1,
+            (true, false) => 3,
+            (false, true) => 4,
+        },
+        Some(t) if t >= 256 => {
+            if byte(otherwise) { 2 } else { return None }
+        }
+        _ => 0,
+    };
+    Some(
+        alpha
+            .iter()
+            .zip(old)
+            .map(|(a, o)| match mode {
+                0 => *a,
+                1 => if *a >= th { on } else { off },
+                2 => off,
+                3 => if *a >= th { on } else { *o as u8 },
+                _ => if *a < th { off } else { *o as u8 },
+            })
+            .collect(),
+    )
 }

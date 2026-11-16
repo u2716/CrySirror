@@ -1,5 +1,5 @@
-// Distributed under the GNU Affero General Public License, version 3 or
-// (at your option) any later version, https://www.gnu.org/licenses/agpl-3.0.html.
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. A copy is available at https://mozilla.org/MPL/2.0/.
 //! `krkr` VmAdapter: runs original TJS2 scripts through `crysirror-tjs2`
 //! and translates KiriKiri native objects onto engine Layer/Canvas services.
 use crate::{
@@ -675,6 +675,7 @@ impl KrkrVm {
             if !crate::fftgraph::poll(self.rt.as_mut().unwrap(),h,self.client)? {return Ok(false);}
             natives::native_extra::poll(self.rt.as_mut().unwrap(),h,self.client)?;
             crate::get_sample::poll(self.rt.as_mut().unwrap(),h,self.client)?;
+            if !crate::wv_decoder::poll(self.rt.as_mut().unwrap(),h,self.client)? {return Ok(false);}
             crate::http_plugin::poll(self.rt.as_mut().unwrap(),h,self.client)?;
             crate::native_pad::poll(self.rt.as_mut().unwrap(),h,self.client)?;
             if !crate::image_api::poll(self.rt.as_mut().unwrap(), h, self.client)? {

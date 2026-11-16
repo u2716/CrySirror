@@ -1,4 +1,5 @@
-// Distributed under the GNU Affero General Public License, version 3 or later.
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. A copy is available at https://mozilla.org/MPL/2.0/.
 //! Native tree bookkeeping is non-owning; script references and active work own it.
 use crysirror_core::{image_processing::{ImageInput,ImageResource},state::ClientId};
 use crysirror_krkr::{host::KrkrHost,natives};

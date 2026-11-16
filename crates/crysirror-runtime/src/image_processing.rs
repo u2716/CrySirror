@@ -434,6 +434,10 @@ fn validate_effect_context(input: &ImageInput, effects: &[ImageEffect]) -> Resul
                 | ImageEffect::SineRowCopy { .. }
                 | ImageEffect::DiscCopies { .. }
                 | ImageEffect::AlphaClipRect { .. }
+                | ImageEffect::ShrinkCopy { .. }
+                | ImageEffect::OverwrapRect { .. }
+                | ImageEffect::StitchWrappedCopy { .. }
+                | ImageEffect::GlitchCopy { .. }
                 | ImageEffect::PackedPairBatch{..} | ImageEffect::PackedPairBlend{..}
                 | ImageEffect::MaskedPairBlend { .. }
                 | ImageEffect::IntegerRaster { .. }
@@ -462,6 +466,10 @@ fn validate_effect_context(input: &ImageInput, effects: &[ImageEffect]) -> Resul
                     | ImageEffect::SineRowCopy { .. }
                     | ImageEffect::DiscCopies { .. }
                     | ImageEffect::AlphaClipRect { .. }
+                    | ImageEffect::ShrinkCopy { .. }
+                    | ImageEffect::OverwrapRect { .. }
+                | ImageEffect::StitchWrappedCopy { .. }
+                | ImageEffect::GlitchCopy { .. }
                     | ImageEffect::IntegerRaster { .. }
                     | ImageEffect::ByteRaster { .. }
             )
@@ -644,6 +652,18 @@ fn process_input(
                     .ok_or_else(|| anyhow::anyhow!("alpha clip source absent"))?,
                 &|| cancel.check(),
             )?
+        } else if let ImageEffect::ShrinkCopy { spec } = &effect {
+            cancel.check()?;
+            spec.apply(&image, other.as_ref().ok_or_else(|| anyhow::anyhow!("shrinkCopy source absent"))?)?
+        } else if let ImageEffect::GlitchCopy { spec } = &effect {
+            cancel.check()?;
+            spec.apply(&image, other.as_ref().ok_or_else(|| anyhow::anyhow!("glitchCopy source absent"))?)?
+        } else if let ImageEffect::StitchWrappedCopy { spec } = &effect {
+            cancel.check()?;
+            spec.apply(&image, other.as_ref().ok_or_else(|| anyhow::anyhow!("stitchWrappedCopy source absent"))?)?
+        } else if let ImageEffect::OverwrapRect { spec } = &effect {
+            cancel.check()?;
+            spec.apply(&image, other.as_ref().ok_or_else(|| anyhow::anyhow!("overwrapRect source absent"))?)?
         } else if let ImageEffect::DiscCopies { spec } = &effect {
             spec.apply(
                 &image,

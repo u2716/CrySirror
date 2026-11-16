@@ -328,7 +328,17 @@ impl ChannelAudio {
                 }
 
                 let mut prepared = prepare(tail, intro, p)?;
-                if realtime && !resident {
+                if realtime && !resident && prepared.source.track_count() > 0 {
+                    let (loop_start, start) = (prepared.spec.loop_points.map(|p| p.start), prepared.start);
+                    crate::multitrack::buffer_tracks(
+                        &mut prepared.source,
+                        workers.clone(),
+                        loop_start,
+                        start,
+                        &cancel,
+                        charge.clone(),
+                    )?;
+                } else if realtime && !resident {
                     let mut source = BufferedSource::prepare_at_cancellable(
                         prepared.source,
                         workers.clone(),
@@ -397,6 +407,20 @@ struct ChargedSource {
     _charge: Arc<Charge>,
 }
 impl crate::decoder::AudioSource for ChargedSource {
+    fn track_count(&self) -> usize {
+        self.inner.track_count()
+    }
+    fn take_tracks(&mut self) -> Option<Vec<(Box<dyn crate::decoder::AudioSource>, f32)>> {
+        let charge = self._charge.clone();
+        self.inner.take_tracks().map(|tracks| {
+            tracks
+                .into_iter()
+                .map(|(inner, g)| {
+                    (Box::new(ChargedSource { inner, _charge: charge.clone() }) as Box<dyn crate::decoder::AudioSource>, g)
+                })
+                .collect()
+        })
+    }
     fn sample_rate(&self) -> u32 {
         self.inner.sample_rate()
     }

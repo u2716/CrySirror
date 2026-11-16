@@ -22,6 +22,8 @@ ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "docs/native-api"
 PARSER = Parser(Language(tree_sitter_rust.language()))
 MAJIRO = json.loads((ROOT / "tools/native-api/majiro-opcodes.json").read_text())
+NSYSTEM = {n: int(v) for n, v in re.findall(
+    r"pub const ([A-Z0-9_]+): u16 = (\d+);", (ROOT / "crates/crysirror-nsystem/src/adapter.rs").read_text())}
 REALLIVE_NAMES = {(int(t), int(m), int(o)): n for t, m, o, n in re.findall(
     r'\((\d+),\s*(\d+),\s*(\d+),\s*"([^"]+)"\)',
     (ROOT / "crates/crysirror-reallive/src/vm/opcodes.rs").read_text())}
@@ -39,6 +41,7 @@ TITLES = {
     "avg32": "AVG32", "catsystem2": "CatSystem2", "majiro": "Majiro",
     "nscripter": "NScripter", "qlie": "QLIE", "system-nnn": "System-NNN",
     "sugarpot": "SugarPot", "willplus": "WillPlus / AdvHD", "krkr": "KiriKiri / TJS2 / KAG",
+    "nsystem": "N-System",
 }
 PURPOSE = {
     "PUSH": "Push an immediate value", "POP": "Pop a stack value",
@@ -488,9 +491,16 @@ class Inventory:
                 if bounds:
                     lo, hi = (int(v, 16) for v in bounds.groups())
                     keys = [int(v, 16) for v in MAJIRO["opcodes"] if lo <= int(v, 16) <= hi]
+            named = {}
+            if self.engine == "nsystem" and not keys:
+                # MSD command arms name the opcodes module constants.
+                for ident in re.findall(r"\b[A-Z][A-Z0-9_]+\b", text(arm["pattern"]).split(" if ", 1)[0]):
+                    if ident in NSYSTEM:
+                        keys.append(NSYSTEM[ident])
+                        named[NSYSTEM[ident]] = ident
             for key in keys:
                 name = short_id(key) if numeric else key
-                native_name = None
+                native_name = named.get(key)
                 if self.engine == "reallive" and numeric:
                     module = REALLIVE_MODULES.get((record["file"].name, record["fn"]))
                     if module:
@@ -603,6 +613,11 @@ def choose(engine, r):
             return "Lua host API / " + rel.removesuffix(".rs") + " / " + fn, False, None
         if file == "vm.rs" and fn == "method" and value == "(class, name)":
             return "Lua class dispatch", False, 1
+    elif engine == "nsystem":
+        if file == "adapter.rs" and fn == "execute" and value == "c.id":
+            return "MSD commands", True, None
+        if value in ("picked", "picked.or(cancel.then_some(0))", "picked.or(cancel.then_some(18))", "i") and rel.startswith("adapter"):
+            return "Native screen controls / " + rel.removesuffix(".rs") + " / " + fn, True, None
     elif engine == "tjs2":
         if fn == "execute_instruction" and value == "inst.opcode":
             return "TJS2 VM opcodes", True, None
@@ -860,7 +875,7 @@ def render(inv):
                 return 1, row["id"]
         lines += ["", "## " + section, "", "| ID / API | Purpose | Status | Gap / condition | Source |", "| --- | --- | --- | --- | --- |"]
         for row in sorted(rows, key=key):
-            identity = row["id"] + (" " + row["name"] if row["name"] != row["id"] else "")
+            identity = row["id"] + (" " + row["name"].removeprefix(row["id"] + " ") if row["name"] != row["id"] else "")
             gap = row["gap"]
             if row["condition"]:
                 gap = ("" if gap == "—" else gap + "; ") + "Guard: " + row["condition"]

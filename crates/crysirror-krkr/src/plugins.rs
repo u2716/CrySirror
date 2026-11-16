@@ -1,6 +1,6 @@
 // Copyright (c) 2026 CrySirror contributors.
-// Distributed under the GNU Affero General Public License, version 3 or
-// (at your option) any later version, https://www.gnu.org/licenses/agpl-3.0.html.
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. A copy is available at https://mozilla.org/MPL/2.0/.
 //! Native module registration, never an OS DLL loader. A registration-only
 //! shell has no native exports and cannot masquerade as an implemented API.
 use crate::natives::{Rt, methods, string, unsupported};
@@ -74,11 +74,10 @@ const FACADES: &[Facade] = &[
     facade!("varfile.dll", "dynamic global octet namespace through portable storage media and shared image decoding", |rt, _| crate::varfile_plugin::install(rt)),
     facade!("psbfile.dll", "PSB via shared eluna_rs; psb:// images via the shared decoder registry", |rt, _| { crate::psbfile_plugin::install(rt); Ok(()) }),
     facade!("toml.dll", "Scripts.tomlDecodeFromStorage via shared structured_text TOML", |rt, _| { crate::json_plugin::install_toml(rt); Ok(()) }),
-    // msdfrender.dll: its members are feature-detected by the scripts
-    // (`typeof Layer.makeGlyphSDF == "Object"`). The SDF glyph
-    // generators are not mapped, so linking installs none of them and
-    // PreRenderFontEx takes its atlas stretchCopy path.
-    facade!("msdfrender.dll", "linked without SDF members (feature-detected); atlas glyph path"),
+    // msdfrender.dll: scripts feature-detect its members
+    // (`typeof Layer.makeGlyphSDF == "Object"`) and switch PreRenderFontEx
+    // to the SDF glyph path when they exist.
+    facade!("msdfrender.dll", "Layer glyph bitmaps from rendered layers (SDF/MSDF contrast, province glyph compositing, font ascent)", |rt, _| { crate::msdf_plugin::install(rt); Ok(()) }),
     facade!("scriptsex.dll", "Scripts reflection/struct helpers", |rt, _| { crate::plugin_ports::scripts_ex::install_scripts_ex(rt); Ok(()) }),
     facade!("addfont.dll", "System.addFont asynchronous shared client font registration, portable outline measurement and rendering", |rt, _| { crate::natives::install_add_font(rt); Ok(()) }),
     facade!("windowex.dll", "windowEx virtual-window profile", |rt, _| { crate::plugin_ports::window_ex::install(rt); Ok(()) }),
@@ -102,6 +101,15 @@ const FACADES: &[Facade] = &[
     facade!("drawdeviced2dv2.dll", "DrawDeviceD2D as the shared retained-layer presentation device", |rt, _| { crate::offline_plugins::install_draw_device(rt, "DrawDeviceD2D"); Ok(()) }),
     facade!("steamdrawdevice.dll", "DualDrawDevice_2/_Z as the shared retained-layer presentation device", |rt, _| { crate::offline_plugins::install_draw_device(rt, "DualDrawDevice_2"); crate::offline_plugins::install_draw_device(rt, "DualDrawDevice_Z"); Ok(()) }),
     facade!("win32ole.dll", "WIN32OLE/ActiveX script plumbing; no OLE automation transport exists (objects fail like an unregistered ProgID)", |rt, _| { crate::offline_plugins::install_win32ole(rt); Ok(()) }),
+    facade!("wfbasiceffect.dll", "WaveSoundBuffer.DelayEffect/StkFreeVerb/GraphicEqualizer as shared crysirror_audio::wave_filters stages", |rt, _| crate::wf_plugins::install_basic(rt)),
+    facade!("wftypicaldsp.dll", "WaveSoundBuffer.WaveDSPFilter as shared crysirror_audio::iir_design cascades", |rt, _| crate::wf_plugins::install_dsp(rt)),
+    facade!("layerstwcopy.dll", "Layer.stitchWrappedCopy over the shared StitchWrappedCopy image pair", |rt, _| { crate::layer_ex::install_stw_copy(rt); Ok(()) }),
+    facade!("gamepad.dll", "GamepadPort with no controller devices (the engine exposes none)", |rt, _| { crate::offline_plugins::install_gamepad(rt); Ok(()) }),
+    facade!("wumultitrack.dll", ".mtrk/.mchx multi-track music over the shared multi-track voice; mask, delayed mask, rebind and gain-callback members", |rt, _| crate::multitrack::install(rt)),
+    facade!("glitcheffect.dll", "Layer.glitchCopy/doGlitch over the shared GlitchCopy image pair; glitch/fadeglitch/loopglitch transitions", |rt, _| { crate::layer_ex::install_glitch(rt); Ok(()) }),
+    facade!("wvdecoder.dll", "WaveSoundData.F32/S16 sample buffers through the shared audio resource and source-sample services", |rt, _| { crate::wv_decoder::install(rt); Ok(()) }),
+    facade!("packinone.dll", "bundled layer/system/storage members (installed at startup) and the SliceLayer class", |rt, _| crate::system_ex::install_slice_layer(rt)),
+    facade!("psd.dll", "PSD class and psd:// layer media over the shared crysirror_image::psd decoder", |rt, _| crate::psd_plugin::install(rt)),
     facade!("httprequest.dll", "HttpRequest over the engine's owner-authorized HTTP service", |rt, _| { crate::http_plugin::install(rt); Ok(()) }),
     facade!("kaichotrans.dll", "shared GPU subtree byte-domain blur and grayscale/blur/negative rule dim transitions"),
 ];

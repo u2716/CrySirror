@@ -44,6 +44,18 @@ struct Source {
     gain: f32,
 }
 impl AudioSource for Source {
+    fn track_count(&self) -> usize {
+        self.inner.track_count()
+    }
+    fn take_tracks(&mut self) -> Option<Vec<(Box<dyn AudioSource>, f32)>> {
+        let (limit, at, gain) = (self.limit, self.at, self.gain);
+        self.inner.take_tracks().map(|tracks| {
+            tracks
+                .into_iter()
+                .map(|(inner, g)| (Box::new(Source { inner, limit, at, gain }) as Box<dyn AudioSource>, g))
+                .collect()
+        })
+    }
     fn has_replay_gain(&self) -> bool {
         self.inner.has_replay_gain()
     }
@@ -432,6 +444,7 @@ impl ChannelAudio {
             | AudioRequest::SetLooped { channel, .. }
             | AudioRequest::SetLoopSchedule { channel, .. }
             | AudioRequest::SetChannelSwap { channel, .. }
+            | AudioRequest::SetTrackGains { channel, .. }
             | AudioRequest::SetPan { channel, .. }
             | AudioRequest::SetStereoGain { channel, .. } => Some(*channel),
         };
@@ -606,6 +619,15 @@ impl ChannelAudio {
                 {
                     self.mixer
                         .set_loop_schedule(client, h, start, end, passes)?;
+                }
+            }
+            AudioRequest::SetTrackGains { channel, positions, changes } => {
+                if let Some(&h) = self
+                    .voices
+                    .get(&(client, channel))
+                    .filter(|h| self.mixer.is_playing(client, **h))
+                {
+                    self.mixer.set_track_gains(client, h, positions, &changes)?;
                 }
             }
             AudioRequest::SetChannelSwap { channel, swapped } => {

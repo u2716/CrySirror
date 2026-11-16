@@ -1,6 +1,6 @@
 // Copyright (c) 2026 CrySirror contributors.
-// Distributed under the GNU Affero General Public License, version 3 or
-// (at your option) any later version, https://www.gnu.org/licenses/agpl-3.0.html.
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. A copy is available at https://mozilla.org/MPL/2.0/.
 // Behaviour notes: install is `install`; writes go through the adapter's
 // resumable atomic storage writes (`write_pack`); layer thumbnails are not
 // captured (the engine's layers have no CPU bitmap), so makeDataPackThumb
@@ -26,7 +26,7 @@ fn ensure_global_object(runtime: &mut Runtime<KrkrHost>, name: &'static str) -> 
 
 /// CrySirror: storage writes are atomic jobs completed by the engine; the
 /// calling script resumes once the write is published.
-fn write_pack(runtime: &mut Runtime<KrkrHost>, name: &str, bytes: Vec<u8>) -> Result<()> {
+pub(crate) fn write_pack(runtime: &mut Runtime<KrkrHost>, name: &str, bytes: Vec<u8>) -> Result<()> {
     if !runtime.host().can_suspend {
         return Err(crate::natives::unsupported(
             &format!("data pack write `{name}` in this callback"),

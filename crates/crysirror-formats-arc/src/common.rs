@@ -214,8 +214,11 @@ impl Archive for ParsedArchive {
             .get(id as usize)
             .filter(|e| e.id == id)
             .context("archive entry id does not exist")?;
+        // Raw entries stay zero-copy ranges of the source; only decoded
+        // entries are bounded by the decoded-entry limit.
         ensure!(
-            entry.size <= context.limits.max_entry_size,
+            matches!(self.plans[id as usize], EntryPlan::Raw { .. })
+                || entry.size <= context.limits.max_entry_size,
             "archive entry decoded byte limit"
         );
         let (data, required) = match &self.plans[id as usize] {

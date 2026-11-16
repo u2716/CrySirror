@@ -1,8 +1,8 @@
 // Copyright (c) 2026 CrySirror contributors.
-// Distributed under the GNU Affero General Public License, version 3 or
-// (at your option) any later version, https://www.gnu.org/licenses/agpl-3.0.html.
-// Behaviour notes: wrapper replaced by `install`; `open` and `messageBox` fail
-// visibly (no modal dialog service) instead of returning immediately.
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. A copy is available at https://mozilla.org/MPL/2.0/.
+// Behaviour notes: wrapper replaced by `install`; `open` shows nothing and
+// answers 0; `messageBox` uses the engine dialog service.
 //! No-op stub of the KRKR plugin `win32dialog.dll` (wtnbgo/win32dialog).
 //!
 //! Surface-compatible only: every class, method, property and constant the
@@ -129,9 +129,16 @@ fn install_dialog_members(runtime: &mut Runtime<KrkrHost>, handle: ObjectHandle)
             zero,
         );
     }
-    // CrySirror change: no modal dialog service; opening fails visibly.
-    runtime.register_object_native(handle, "open", |_: &mut Runtime<KrkrHost>, _, _| {
-        Err(crate::natives::unsupported("WIN32Dialog.open", "a modal dialog service"))
+    // No template dialog is shown (owner decision): `open` answers 0, the
+    // result of a dialog dismissed without a choice, and logs once per
+    // runtime so the missing dialog is visible in the log.
+    runtime.register_object_native(handle, "open", |rt: &mut Runtime<KrkrHost>, _, _| {
+        let global = rt.global_handle();
+        if !matches!(rt.object_member(global, "__win32dialog_logged"), Variant::Integer(1)) {
+            rt.set_object_member(global, "__win32dialog_logged", Variant::Integer(1));
+            rt.host_mut().push_log("WIN32Dialog.open: template dialogs are not shown; answering 0".into());
+        }
+        Ok(Variant::Integer(0))
     });
 
     // `Method(...)` members at their PMF parameter count. One argument:

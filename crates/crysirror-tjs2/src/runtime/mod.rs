@@ -1371,6 +1371,14 @@ impl<H: TjsHost + 'static> Runtime<H> {
         vm.call_object_method(object, name, args)
     }
 
+    /// Assign a member as script does: native and script property setters
+    /// run, and an absent member is created on the object.
+    pub fn put_object_member(&mut self, object: ObjectHandle, name: &str, value: Variant) -> Result<()> {
+        let file_id = self.call_context_file_id();
+        let mut vm = Vm::new(file_id, self)?;
+        vm.put_object_member(object, name, value)
+    }
+
     /// Dispatches a host callback while a VM call is suspended. The callback
     /// must be allowed to mutate host state (for example, closing a modal
     /// window) without consuming the suspended caller; the caller is resumed

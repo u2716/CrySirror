@@ -1,5 +1,5 @@
-// Distributed under the GNU Affero General Public License, version 3 or
-// (at your option) any later version, https://www.gnu.org/licenses/agpl-3.0.html.
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. A copy is available at https://mozilla.org/MPL/2.0/.
 //! KiriKiri (吉里吉里) adapter over CrySirror services (ADR 0053).
 //!
 //! Original TJS2 scripts execute through `crysirror-tjs2`; KAG scenarios use
@@ -63,6 +63,14 @@ mod varfile_plugin;
 mod audio_plugin;
 mod kaicho_plugin;
 mod psbfile_plugin;
+mod psd_plugin;
+mod wf_plugins;
+mod layer_ex;
+mod province_ex;
+mod system_ex;
+mod wv_decoder;
+mod multitrack;
+mod msdf_plugin;
 
 mod plugin_ports;
 

@@ -4,6 +4,7 @@
 pub mod label_image;
 pub mod png_rows;
 pub mod pna;
+pub mod psd;
 use anyhow::{Result, ensure};
 use std::{collections::BTreeMap, io::Cursor, sync::Arc};
 mod fixed_blend;
@@ -18,6 +19,7 @@ mod png;
 pub mod wipe_mask;
 pub use png::{encode_png_uncompressed, png_uncompressed_len};
 pub mod alpha_clip;
+pub mod layer_ex;
 pub mod resample_byte256;
 /// Longest decoded image edge. Original sprite sheets exceed 8192 (Little
 /// Busters! `EF_RPW_RP08.g00` is 1200x12000); `MAX_DECODED_BYTES` bounds memory

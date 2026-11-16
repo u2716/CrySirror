@@ -6,6 +6,18 @@ not implemented engine support, a new public API or device acceptance.
 [Interactive design](in-game-windows.html) ·
 [Editable fragment](in-game-windows.fragment.html)
 
+## Implemented style (engine chrome)
+
+Engine-drawn dialogs and menus (`crysirror-scene` `ui::dialog`, `ui::menu`)
+use `crates/crysirror-scene/style/ui.css`: CSS custom properties under
+`:root` and `@media (prefers-color-scheme: dark)`. `build.rs` compiles them to
+the const `LIGHT`/`DARK` tables in `ui::theme`, so no stylesheet is parsed or
+retained at run time. The desktop host follows the window theme
+(`WindowEvent::ThemeChanged`). Panels are low-contrast neutral greys with a
+hairline border, soft shadow and rounded corners (banded solid fills, no
+anti-aliasing); focus uses one muted accent. Tooltip colours stay per-request
+(`TooltipSpec`). The child-window behaviour below is still a draft.
+
 ## Purpose and presentation
 
 Games can request message boxes, auxiliary panels and separate child windows.

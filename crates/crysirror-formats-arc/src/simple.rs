@@ -61,11 +61,9 @@ impl ArchiveFormat for BgiArc {
             let offset = data_start + u64::from(c.le32()?);
             let size = u64::from(c.le32()?);
             c.take(skip)?;
+            // Raw entries are zero-copy source ranges; the decoded-size
+            // limit does not apply to them (issue #5: large BGI packs).
             range(source_size, offset, size)?;
-            ensure!(
-                size <= context.limits.max_entry_size,
-                "BGI entry byte limit"
-            );
             entries.push(ArchiveEntry{id:id as u32,path,size,stored_size:size,metadata:serde_json::json!({"format":self.id(),"variant":if name_len==16{"packfile"}else{"arc20"},"offset":offset})});
             plans.push(EntryPlan::Raw { offset });
         }
@@ -170,10 +168,6 @@ impl ArchiveFormat for MajiroArc {
             };
             range(source_size, offset, size)?;
             ensure!(offset >= data_offset, "Majiro entry overlaps index");
-            ensure!(
-                size <= context.limits.max_entry_size,
-                "Majiro entry byte limit"
-            );
             entries.push(ArchiveEntry{id:id as u32,path:sjis(names.zero()?)?,size,stored_size:size,metadata:serde_json::json!({"format":self.id(),"version":version,"hash":hash,"offset":offset})});
             plans.push(EntryPlan::Raw { offset });
         }

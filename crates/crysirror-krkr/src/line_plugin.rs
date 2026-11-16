@@ -1,6 +1,6 @@
 // Copyright (c) 2026 CrySirror contributors.
-// Distributed under the GNU Affero General Public License, version 3 or
-// (at your option) any later version, https://www.gnu.org/licenses/agpl-3.0.html.
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. A copy is available at https://mozilla.org/MPL/2.0/.
 //! `lineParser.dll` semantic adapter onto shared resource LineCursor.
 //! Interface reviewed against wamsoft/lineParser revision
 //! d8b6ec56810f1332f3d5e322986203630559791d (complete Main.cpp/manual.tjs).

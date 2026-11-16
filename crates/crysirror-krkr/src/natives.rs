@@ -1,5 +1,5 @@
-// Distributed under the GNU Affero General Public License, version 3 or
-// (at your option) any later version, https://www.gnu.org/licenses/agpl-3.0.html.
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. A copy is available at https://mozilla.org/MPL/2.0/.
 //! KiriKiri native classes as thin translations onto engine services.
 //!
 //! Member names, defaults and argument conventions follow KiriKiri Z. Members whose
@@ -48,6 +48,8 @@ pub fn install(rt: &mut Rt) {
     crate::pointer::install(rt);
     // Members found missing by the krkrz native-member inventory.
     crate::native_members::install(rt);
+    // PackinOne-bundled systemEx members (needs System and Layer).
+    crate::system_ex::install(rt);
 }
 
 // ---------------------------------------------------------------- helpers
@@ -1701,7 +1703,7 @@ fn font_properties(rt: &mut Rt, font: ObjectHandle) {
     }
 }
 
-fn font_size(rt: &mut Rt, font: ObjectHandle) -> Result<u64> {
+pub(crate) fn font_size(rt: &mut Rt, font: ObjectHandle) -> Result<u64> {
     for property in ["angle"] {
         if rt.resolve_object_member(font, property)?.to_integer()? != 0 {
             return Err(unsupported(
@@ -2122,6 +2124,15 @@ fn install_layer(rt: &mut Rt) {
             ("loadProvinceImage", crate::province::load),
             ("adjustGamma", crate::image_api::gamma),
             ("clipAlphaRect",crate::image_api::clip_alpha),
+            ("copyRightBlueToLeftAlpha", crate::layer_ex::copy_right_blue_to_left_alpha),
+            ("copyBottomBlueToTopAlpha", crate::layer_ex::copy_bottom_blue_to_top_alpha),
+            ("fillAlpha", crate::layer_ex::fill_alpha),
+            ("overwrapRect", crate::layer_ex::overwrap_rect),
+            ("shrinkCopy", crate::layer_ex::shrink_copy),
+            ("shrinkCopyFast", crate::layer_ex::shrink_copy_fast),
+            ("copyAlphaToProvince", crate::province_ex::copy_alpha_to_province),
+            ("fillToProvince", crate::province_ex::fill_to_province),
+            ("fillByProvince", crate::province_ex::fill_by_province),
             // krkrz tTJSNI_BaseLayer::DoBoxBlur (LayerIntf.cpp): a box blur
             // of the clip rect over (-xblur,-yblur)..(xblur,yblur); the alpha
             // face (dfAlpha, or dfAuto on an alpha layer) weights colour by
@@ -2875,6 +2886,9 @@ fn layer_load_images(rt: &mut Rt, t: Option<ObjectHandle>, a: Vec<Variant>) -> R
     }
     if name.to_lowercase().starts_with("psb://") {
         return crate::psbfile_plugin::load_image(rt, h, &name);
+    }
+    if crate::psd_plugin::psd_uri(&name).is_some() && rt.host().storage()?.wrappers.psd.is_some() {
+        return crate::psd_plugin::load_image(rt, h, &name);
     }
     let resolved = rt
         .host()

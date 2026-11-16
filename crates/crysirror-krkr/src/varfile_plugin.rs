@@ -1,5 +1,6 @@
 // Copyright (c) 2026 CrySirror contributors.
-// Distributed under the GNU Affero General Public License, version 3 or later.
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. A copy is available at https://mozilla.org/MPL/2.0/.
 //! varfile's native namespace/URI policy over portable TJS media hooks.
 //! Reviewed complete wamsoft/varfile Main.cpp and readme at
 //! e8742b4d4a8f9d5744ed91116d00ffa93f265001. No COM/Win32 stream is hosted.

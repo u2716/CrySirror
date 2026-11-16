@@ -40,6 +40,7 @@ The [desktop guide](DESKTOP_API.md) lists the available launch options.
 | [AliceSoft System 4](#alicesoft-system-4) | System40.ini, AIN v5 scenarios, ALD/ALK resources and QNT graphics. |
 | [System-NNN](#system-nnn) | SPT scenarios, Black Cyc archives, DWQ graphics, VAW audio, text, choices and picture effects. |
 | [SugarPot](#sugarpot) | The Tsukumo no Tsuki format: AOS2/SCR resources, ABM/BMP graphics, sprites, text, choices, audio, movies and the H-scene gallery. |
+| [N-System](#n-system) | MSD scenarios, FJSYS banks, MGD graphics, text, choices, transitions, title/option/extras screens, original saves. |
 | [WillPlus / AdvHD](native-api/willplus.md) | WS2 V3 scenarios, ARC/PNA resources, Lua system scripts, layers, text, audio and movies. |
 
 ## KiriKiri
@@ -184,6 +185,20 @@ background music, sound, voice, movies, screen fades and the H-scene gallery.
 Settings, global flags and read-history files use their original formats.
 Save-slot restoration is unavailable. Other games using similar LiLiM/AOS2
 containers may use a different scenario language.
+
+## N-System
+
+Supports the 2015 *その花びらにくちづけを にゅーじぇね！* build (HANANYU.EXE).
+Features include MSD decryption with the build's title key, layers, the
+original transitions (fade, rule wipe, rotate, bound, door flip), message
+window with name plates and glyph images, choices, scroll actions, BGM, voice,
+sound effects, the logo/opening-movie/title sequence and route endings.
+
+Save/load (including quick save), options, the extras screen (CG viewer,
+scene replay, music), backlog, skip and auto use the original screens.
+GAMEnn.SAV, CONFIG.SAV and Novel.ini keep their original formats in
+CrySirror's save directory; copy existing files there to use them. Other
+N-System builds need their own profile. See [native-api/nsystem.md](native-api/nsystem.md).
 
 ## Network storage
 

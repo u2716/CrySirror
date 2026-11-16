@@ -1,5 +1,5 @@
-// Distributed under the GNU Affero General Public License, version 3 or
-// (at your option) any later version, https://www.gnu.org/licenses/agpl-3.0.html.
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. A copy is available at https://mozilla.org/MPL/2.0/.
 //! Original-style TJS2 scripts -> public engine services. Self-authored
 //! scripts and generated images only; no game data, fonts or GPU.
 use crysirror_core::{

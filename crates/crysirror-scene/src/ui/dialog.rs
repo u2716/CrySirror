@@ -255,30 +255,49 @@ impl DialogSystem {
         let s = d.spec.text_size;
         // Primitive identity apart from widgets and menus (`bar << 16 | item`).
         let pid = 0xFFFF_0000 | d.spec.id;
-        let mut out = vec![
-            rectangle(
-                owner,
-                pid,
-                210,
-                l.backdrop,
-                Paint::Solid {
-                    color: [0, 0, 0, 128],
-                },
-                clip,
-                order(0),
-            ),
-            rectangle(
-                owner,
-                pid,
-                211,
-                l.panel,
-                Paint::Solid {
-                    color: [36, 40, 48, 255],
-                },
-                clip,
-                order(1),
-            ),
-        ];
+        let t = super::theme::current();
+        let mut out = vec![rectangle(
+            owner,
+            pid,
+            210,
+            l.backdrop,
+            Paint::Solid { color: t.backdrop },
+            clip,
+            order(0),
+        )];
+        // Soft drop shadow, hairline border, then the panel (subs 100..130).
+        let [px, py, pw, ph] = l.panel;
+        let n = super::theme::ROUNDED_SUBS;
+        out.extend(super::theme::rounded(
+            owner,
+            pid,
+            100,
+            [px - 1., py + 3., pw + 2., ph + 2.],
+            t.radius + 1.,
+            t.shadow,
+            clip,
+            order(1),
+        ));
+        out.extend(super::theme::rounded(
+            owner,
+            pid,
+            100 + n,
+            [px - 1., py - 1., pw + 2., ph + 2.],
+            t.radius + 1.,
+            t.panel_border,
+            clip,
+            order(1),
+        ));
+        out.extend(super::theme::rounded(
+            owner,
+            pid,
+            100 + 2 * n,
+            l.panel,
+            t.radius,
+            t.panel,
+            clip,
+            order(1),
+        ));
         let text = |text: &str, size: u16, color, layout: &str| Paint::Text {
             text: text.to_owned(),
             font: d.spec.font.clone(),
@@ -292,12 +311,7 @@ impl DialogSystem {
                 pid,
                 212,
                 l.title,
-                text(
-                    &d.spec.title,
-                    s,
-                    [200, 210, 230, 255],
-                    UNWRAPPED_TEXT_LAYOUT,
-                ),
+                text(&d.spec.title, s, t.title, UNWRAPPED_TEXT_LAYOUT),
                 Some(l.title),
                 order(2),
             ));
@@ -307,25 +321,20 @@ impl DialogSystem {
             pid,
             213,
             l.message,
-            text(&d.spec.message, s, [245, 245, 245, 255], SIMPLE_TEXT_LAYOUT),
+            text(&d.spec.message, s, t.text, SIMPLE_TEXT_LAYOUT),
             Some(l.message),
             order(3),
         ));
+        // Buttons: rounded fills at 140 + 10·i (≤ 8 buttons), labels at 215 + 2·i.
         for (i, (b, r)) in d.spec.buttons.iter().zip(&l.buttons).enumerate() {
             let focused = i == d.focus;
-            let sub = 214 + i as u8 * 2;
-            out.push(rectangle(
+            out.extend(super::theme::rounded(
                 owner,
                 pid,
-                sub,
+                140 + i as u8 * 10,
                 *r,
-                Paint::Solid {
-                    color: if focused {
-                        [65, 85, 120, 255]
-                    } else {
-                        [60, 64, 72, 255]
-                    },
-                },
+                t.control_radius,
+                if focused { t.accent } else { t.control },
                 clip,
                 order(4),
             ));
@@ -339,9 +348,14 @@ impl DialogSystem {
             out.push(rectangle(
                 owner,
                 pid,
-                sub + 1,
+                215 + i as u8 * 2,
                 label,
-                text(&b.label, s, [245, 245, 245, 255], UNWRAPPED_TEXT_LAYOUT),
+                text(
+                    &b.label,
+                    s,
+                    if focused { t.accent_text } else { t.control_text },
+                    UNWRAPPED_TEXT_LAYOUT,
+                ),
                 Some(*r),
                 order(5),
             ));

@@ -40,6 +40,7 @@ pub fn adapter_registry() -> Result<AdapterRegistry> {
     crysirror_majiro::adapter::register(&mut registry)?;
     crysirror_qlie::adapter::register(&mut registry)?;
     crysirror_sugarpot::register(&mut registry)?;
+    crysirror_nsystem::register(&mut registry)?;
     crysirror_system_nnn::installed::register(&mut registry)?;
     crysirror_system4::factory::register(&mut registry)?;
     crysirror_avg32::register(&mut registry)?;

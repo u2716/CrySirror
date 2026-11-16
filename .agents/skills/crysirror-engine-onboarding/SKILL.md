@@ -125,7 +125,9 @@ relevant source comments. Put dated behavior evidence in focused validation
 notes. Do not turn STATUS.md/HANDOFF into implementation specifications or save
 temporary build freezes/agent ownership as lasting instructions.
 
-Use targeted local release validation consistent with the current task; add no
-superficial tests or routine full regressions. Authorized offscreen execution
-does not authorize reading the user's screen. Report source implementation,
+Default validation is `cargo check --release -p <crate>` plus the touched
+crate's unit tests. Do not launch game, offscreen or route runs, or
+whole-workspace regressions, unless the owner asks for them; add no superficial
+tests. Authorized offscreen execution does not authorize reading the user's
+screen. Report source implementation,
 compilation and observed paths separately, with actual remaining boundaries.

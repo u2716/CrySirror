@@ -8709,6 +8709,48 @@
         },
         {
           "default": null,
+          "doc": "Second-half blue into first-half alpha (layerExBTOA).",
+          "name": "blue_to_alpha",
+          "rust_type": "spec: crate::layer_ex::BlueToAlpha"
+        },
+        {
+          "default": null,
+          "doc": "Opaque alpha inside a rectangle (layerExBTOA fillAlpha).",
+          "name": "fill_alpha",
+          "rust_type": "spec: crate::layer_ex::FillAlpha"
+        },
+        {
+          "default": null,
+          "doc": "Integer box shrink to an opaque image (shrinkCopyFast).",
+          "name": "shrink_fast",
+          "rust_type": "spec: crate::layer_ex::ShrinkFast"
+        },
+        {
+          "default": null,
+          "doc": "Two-input area-average shrink onto a fractional rectangle (shrinkCopy).",
+          "name": "shrink_copy",
+          "rust_type": "spec: crate::layer_ex::ShrinkCopy"
+        },
+        {
+          "default": null,
+          "doc": "Two-input threshold overwrite (layerExBTOA overwrapRect).",
+          "name": "overwrap_rect",
+          "rust_type": "spec: crate::layer_ex::OverwrapRect"
+        },
+        {
+          "default": null,
+          "doc": "Two-input horizontally wrapped row copy (layerStwCopy).",
+          "name": "stitch_wrapped_copy",
+          "rust_type": "spec: crate::layer_ex::StitchWrappedCopy"
+        },
+        {
+          "default": null,
+          "doc": "Two-input block/line displacement with channel splitting (GlitchEffect).",
+          "name": "glitch_copy",
+          "rust_type": "spec: crate::layer_ex::GlitchCopy"
+        },
+        {
+          "default": null,
           "doc": "Three immutable inputs, two independent masks and exact14bit products.",
           "name": "packed_pair_blend",
           "rust_type": "spec: crate::packed_pair_blend::PackedPairBlend"
@@ -16860,6 +16902,18 @@
           "doc": "Ordered integer stereo filter chain applied to the decoded PCM16 (at most 16 stages); see [`PcmFilter`].",
           "name": "PcmFilters",
           "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "Ordered floating-point WaveFilter chain (at most 16 stages) applied to the decoded PCM at its own rate; see [`WaveFilter`].",
+          "name": "WaveFilters",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "Independently gained stereo stems (1..=64) of one voice, mixed in lockstep; see [`MultiTrackStem`] and `AudioRequest::SetTrackGains`.",
+          "name": "MultiTrack",
+          "rust_type": ""
         }
       ],
       "name": "AudioResourceTransform",
@@ -17979,6 +18033,12 @@
           "doc": "Replace the decoded-frame loop range and remaining-pass schedule while retaining the current fractional cursor. None passes repeats unbounded; Some must be positive, including the current pass. None end uses EOF.",
           "name": "SetLoopSchedule",
           "rust_type": "channel: u32, start: u64, end: Option<u64>, passes: Option<u32>"
+        },
+        {
+          "default": null,
+          "doc": "Retarget track gains of a multi-track voice from its current source frame, or (with `positions`) at the first listed source frame reached; a new deferred request replaces an unapplied one.",
+          "name": "SetTrackGains",
+          "rust_type": "channel: u32, positions: Option<alloc::vec::Vec<u64>>, changes: alloc::vec::Vec<AudioTrackGain>"
         },
         {
           "default": null,
@@ -25126,6 +25186,12 @@
           "doc": "Grayscale, clamped-edge box-blurred rule image, optionally inverted, controlling a rule wipe. Acceleration matches the legacy pow curve.",
           "name": "dim",
           "rust_type": "rule: RuleWipe, blur: [u32; 2], negative: bool, acceleration: f64"
+        },
+        {
+          "default": null,
+          "doc": "Block/line displacement with channel splitting (KiriKiri GlitchEffect `glitch`/`fadeglitch`). Each frame regenerates its field from `seed + elapsed_ms`; inputs are recaptured every frame. A `fade` transition may use its destination as its own source.",
+          "name": "glitch",
+          "rust_type": "params: GlitchParams, mode: GlitchTransition, seed: u64"
         }
       ],
       "name": "SubtreeTransitionEffect",
@@ -26345,7 +26411,7 @@
           "default": null,
           "doc": "Grayscale mask image: bright pixels reveal first; `fade` 0..=8 is the Siglus soft-edge step (0 = hard edge).",
           "name": "mask",
-          "rust_type": "asset: String, fade: u8"
+          "rust_type": "asset: String, fade: u8, vague: Option<u16>"
         },
         {
           "default": null,
@@ -26358,6 +26424,24 @@
           "doc": "Mosaic out of the old scene and into the new one (type 230).",
           "name": "mosaic",
           "rust_type": "size: u32"
+        },
+        {
+          "default": null,
+          "doc": "The new scene grows from the canvas centre (scale 0→1) while turning one revolution, counter-clockwise or `reverse`d, over the old scene (N-System CDIBOverlap Rotate, DrawRotate 0x42BC50).",
+          "name": "spin_zoom",
+          "rust_type": "reverse: bool"
+        },
+        {
+          "default": null,
+          "doc": "The new scene offset along `vector` (px) by a triangle wave of `count` round trips, uncovered pixels keeping the old scene; `damped` scales the offset by 1 − t/2; `stretch` grows the scene by the offset about its centre instead of moving it (N-System Bound, DrawBound 0x42CA60, modes 0/1 and +10).",
+          "name": "bounce",
+          "rust_type": "count: u16, vector: [i16; 2], damped: bool, stretch: bool"
+        },
+        {
+          "default": null,
+          "doc": "A perspective page flip over black: the old scene turns away about `axis` (0 vertical, 1 horizontal, 2 the view axis) through a quarter turn, then the new scene turns in; `focal` is the pinhole distance in px (N-System RotDoor, MoveRotDoor 0x42E000).",
+          "name": "door_flip",
+          "rust_type": "axis: u8, focal: u16"
         },
         {
           "default": null,
@@ -29160,7 +29244,7 @@
       "used_by": "UiEvent.widget client/local identity"
     }
   ],
-  "fingerprint": "53f4100163bef8b4",
+  "fingerprint": "730548bc6fc7fb95",
   "generated_by": "crysirror-engine api_doc (tests/api_docs.rs)",
   "globals": [
     {

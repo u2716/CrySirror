@@ -1,0 +1,46 @@
+/* SPDX-License-Identifier: MPL-2.0
+ * Engine-owned UI chrome (dialogs, menus). A CSS subset: custom properties
+ * only, `:root` plus one `@media (prefers-color-scheme: dark)` block. build.rs
+ * compiles it into two const tables, so nothing is parsed or allocated at run
+ * time. Colours: #rgb, #rrggbb, #rrggbbaa, rgb()/rgba(); lengths: px.
+ * Every property must appear in both blocks; unknown names fail the build.
+ */
+:root {
+  --backdrop: rgba(0, 0, 0, 0.18);
+  --shadow: rgba(0, 0, 0, 0.10);
+  --panel: rgba(246, 246, 248, 0.97);
+  --panel-border: rgba(0, 0, 0, 0.08);
+  --title: #1d1d1f;
+  --text: #3a3a3c;
+  --disabled: #a1a1a6;
+  --control: #e6e6eb;
+  --control-text: #1d1d1f;
+  --accent: #4a80d4;
+  --accent-text: #ffffff;
+  --menu: rgba(244, 244, 246, 0.97);
+  --separator: rgba(0, 0, 0, 0.09);
+  --radius: 12px;
+  --control-radius: 7px;
+  --menu-radius: 5px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --backdrop: rgba(0, 0, 0, 0.34);
+    --shadow: rgba(0, 0, 0, 0.28);
+    --panel: rgba(44, 44, 46, 0.97);
+    --panel-border: rgba(255, 255, 255, 0.07);
+    --title: #f5f5f7;
+    --text: #d1d1d6;
+    --disabled: #6e6e73;
+    --control: #3a3a3c;
+    --control-text: #f5f5f7;
+    --accent: #3a6fbf;
+    --accent-text: #ffffff;
+    --menu: rgba(40, 40, 42, 0.97);
+    --separator: rgba(255, 255, 255, 0.09);
+    --radius: 12px;
+    --control-radius: 7px;
+    --menu-radius: 5px;
+  }
+}

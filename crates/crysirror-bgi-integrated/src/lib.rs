@@ -1,6 +1,7 @@
 //! Complete BGI runtime maintained inside the CrySirror workspace.
 //! The host owns the window, presentation device and PCM output device.
 extern crate wgpu as bgi_wgpu;
+#[cfg(feature = "crysirror-host")]
 mod adapter;
 #[cfg(all(target_os = "vita", feature = "vita-gxm"))]
 pub mod console;
@@ -14,6 +15,7 @@ mod native_script;
 mod native_vm;
 #[cfg(all(target_os = "vita", feature = "vita-gxm"))]
 pub mod vita;
+#[cfg(feature = "crysirror-host")]
 pub use adapter::{Config, register};
 pub use native_app::host_runtime::{HostConfig, HostEvent, HostFrame, HostRuntime};
 

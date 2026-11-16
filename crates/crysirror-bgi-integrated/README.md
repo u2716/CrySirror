@@ -28,23 +28,28 @@ selectors. No game data, game-specific key or font is bundled.
 
 ## Upstream synchronization
 
-The current source pin is `2f8a9272a8f7ca075d82ac88fb802fa7247b3a99`.
-It includes newer BP instruction profiles and native buffer/operation handling,
-linked sprite masks, bitmap animation lifetime, raw image and knob-input fixes,
-localized archive views, game-directory fonts and substitute-font metrics.
-Scene and global movie samples retain independent presentation schedules.
+The current source pin is `0bc6d1c0d5b662acc9006be94896324600ad05f1`.
+It includes native string/formatting and multilingual text fixes, NVL page and
+paragraph retention, native version/ABI selection, background transitions and
+camera panning. Movie playback now includes MP4/H.264, VP9 and AV1 with AAC-LC
+audio, and BGM intro/loop streams can use different sampling rates. Scene and
+global movie samples retain independent presentation schedules.
 
 CrySirror preserves its existing frame/PCM, custom bootstrap, private storage,
 network capability, input/dialog and console output seams. Bootstrap detection
 uses the retained runtime's declared image bounds (including trailing bytes)
 and language tags. Explicit loose/custom BP startup remains available.
-Previous complete-runtime pin: `3ee43dab43854e2f9c614dd1d26213e17911d877`.
+Previous complete-runtime pin: `2f8a9272a8f7ca075d82ac88fb802fa7247b3a99`.
+The optional non-host mobile backend retains upstream audio route recovery;
+`crysirror-host` still uses session PCM and CrySirror-owned output devices.
+The frame/PCM adapter is compiled only with `crysirror-host`; non-host consumers
+retain the direct `HostRuntime` entry point.
 
 ## Platform evidence
 
 | Target | Current boundary / evidence |
 | --- | --- |
-| macOS desktop | Default integrated player; this update's release compilation is recorded separately. |
+| macOS desktop | Release checks for integrated/network and optional native desktop output are recorded separately. |
 | Windows / Linux | Shared desktop source retained; this update did not compile or run these targets. |
 | iOS / Android | Retained native session/platform paths; this update did not validate target compilation or device lifecycle. |
 | Browser | Upstream hosted-file/output modules retained; CrySirror integrated browser support is not established by this update. |
@@ -56,7 +61,7 @@ native draw implementation. It is not enabled by the default desktop player.
 
 The current default host profile uses local or OS-mounted directories. Remote
 provider integration and other target/device behavior require their own work
-and evidence. See [the update validation](../../docs/validation/bgi-upstream-sync-2026-11-15.md)
+and evidence. See [the update validation](../../docs/validation/bgi-upstream-sync-2026-11-16.md)
 and [the engine guide](../../docs/BGI.md).
 
 ## Optional network resources

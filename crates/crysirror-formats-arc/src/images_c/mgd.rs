@@ -80,15 +80,25 @@ fn sgd(b: &[u8], n: usize) -> Result<Vec<u8>> {
     }
     Ok(out)
 }
-pub(super) fn decode(b: &[u8], ctx: &ImageDecodeContext<'_>) -> Result<ImageSurface> {
+/// Header fields and the byte range of the pixel payload.
+struct Header {
+    w: u32,
+    h: u32,
+    size: usize,
+    kind: u16,
+    data: std::ops::Range<usize>,
+}
+fn header(b: &[u8]) -> Result<Header> {
     let mut c = Cursor::at(b, 12)?;
     let w = c.u16()? as u32;
     let h = c.u16()? as u32;
-    let n = pixels(w, h)?;
     let size = bounded(c.u32()? as usize)?;
     let total = c.u32()? as usize;
-    let kind = c.u32()?;
-    c.skip(64)?;
+    // HANANYU.EXE `CDIBSprite::DecodeMain` 0x43C2F0 switches on the u16 at
+    // +24 (0 none, 1 SGD, 2 PNG); the following u16 is not the compression
+    // (N-System 2015 builds store 0x020A there for raw images).
+    let kind = c.u16()?;
+    c.skip(2 + 64)?;
     let comp = c.u32()? as usize;
     ensure!(
         total
@@ -97,8 +107,45 @@ pub(super) fn decode(b: &[u8], ctx: &ImageDecodeContext<'_>) -> Result<ImageSurf
                 .ok_or_else(|| anyhow::anyhow!("MGD size overflow"))?,
         "MGD compressed size mismatch"
     );
-    let bytes = c.take(comp)?;
-    let image = match kind {
+    let start = b.len() - c.rest().len();
+    c.take(comp)?;
+    Ok(Header { w, h, size, kind, data: start..start + comp })
+}
+/// The sprite region table after the pixel payload: `[x, y, w, h]` cells in
+/// image pixels (format 4, eight bytes each), as `CDIBSprite` exposes it at
+/// +82512 to region/vertex calls (HANANYU.EXE `CDIBMesWnd::UpdateWndImage`
+/// 0x404180, `MoveWaitAnime` 0x403E50). Images without one return empty.
+pub fn regions(b: &[u8]) -> Result<Vec<[u16; 4]>> {
+    ensure!(b.starts_with(b"MGD "), "not an MGD image");
+    let head = header(b)?;
+    let mut c = Cursor::at(b, head.data.end)?;
+    let mut out = Vec::new();
+    while !c.rest().is_empty() {
+        c.skip(4)?;
+        let size = c.u32()? as usize;
+        let count = c.u16()? as usize;
+        ensure!(c.u16()? == 4, "unknown MGD region format");
+        ensure!(size == c.rest().len(), "MGD region size mismatch");
+        ensure!(out.len() + count <= 65536, "MGD region count");
+        for _ in 0..count {
+            // Not every entry is an in-image cell (window_P.MGD entry 1 is
+            // (20,425,170,465) on an 800x600 sheet); callers bound their use.
+            let r = [c.u16()?, c.u16()?, c.u16()?, c.u16()?];
+            out.push(r);
+        }
+        if c.rest().len() < 4 {
+            break;
+        }
+        c.skip(4)?;
+    }
+    Ok(out)
+}
+pub(super) fn decode(b: &[u8], ctx: &ImageDecodeContext<'_>) -> Result<ImageSurface> {
+    let head = header(b)?;
+    let (w, h, size) = (head.w, head.h, head.size);
+    let n = pixels(w, h)?;
+    let bytes = &b[head.data.clone()];
+    let image = match head.kind {
         0 => raw(w, h, bytes, Format::Bgra)?,
         1 => {
             ensure!(size == n * 4, "SGD decoded size mismatch");
@@ -107,17 +154,6 @@ pub(super) fn decode(b: &[u8], ctx: &ImageDecodeContext<'_>) -> Result<ImageSurf
         2 => ctx.decode_embedded("image.png", bytes)?,
         _ => bail!("unknown MGD compression"),
     };
-    while !c.rest().is_empty() {
-        c.skip(4)?;
-        let size = c.u32()? as usize;
-        let count = c.u16()? as usize;
-        ensure!(c.u16()? == 4, "unknown MGD region format");
-        ensure!(size == c.rest().len(), "MGD region size mismatch");
-        c.skip(count * 8)?;
-        if c.rest().len() < 4 {
-            break;
-        }
-        c.skip(4)?;
-    }
+    regions(b)?;
     Ok(image)
 }

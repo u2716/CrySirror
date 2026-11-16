@@ -14,5 +14,5 @@ target/release/crysirror render examples/krkr-vector/project.json \
 
 The first panel shows ordered brushes, offsets and a polygon; the second uses
 an even-odd path and Append matrices. See ADR 0093 for the explicit profile and
-unsupported pen/gradient/text/metafile/GDI edge-coverage semantics. The optional
-krkr build retains its existing AGPL distribution boundary (ADR 0053).
+unsupported pen/gradient/text/metafile/GDI edge-coverage semantics. The krkr
+crates are MPL-2.0.

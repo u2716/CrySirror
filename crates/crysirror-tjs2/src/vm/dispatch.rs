@@ -2071,6 +2071,12 @@ impl<'bc, 'rt, H: TjsHost + 'static> Vm<'bc, 'rt, H> {
         self.call_member_direct(Variant::Object(object), name, args, 1)
     }
 
+    /// `object.name = value` with script assignment semantics (property
+    /// setters run, missing members are created).
+    pub fn put_object_member(&mut self, object: ObjectHandle, name: &str, value: Variant) -> Result<()> {
+        self.prop_set_handle(object, name, value, DispatchFlags::ensure(), Some(object))
+    }
+
     pub(crate) fn call_secondary_class_method(
         &mut self,
         object: ObjectHandle,

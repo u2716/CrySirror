@@ -1,6 +1,6 @@
 // Copyright (c) 2026 CrySirror contributors.
-// Distributed under the GNU Affero General Public License, version 3 or
-// (at your option) any later version, https://www.gnu.org/licenses/agpl-3.0.html.
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. A copy is available at https://mozilla.org/MPL/2.0/.
 //! Store-launcher and draw-device plug-ins whose external service is absent.
 //!
 //! Member names are the shipped DLLs' UTF-16 registration strings
@@ -301,4 +301,30 @@ fn ole_members(rt: &mut Rt, h: ObjectHandle, activex: bool) {
         |rt, this| { instance(rt, this)?; Ok(Variant::Integer(0)) },
         |_, _, _| Err(TjsError::runtime("ActiveX.isValidWindow is read-only")),
     );
+}
+
+/// gamepad.dll (`GamepadPort`): XInput controller ports. The engine exposes
+/// no controller devices, so a port enumerates none: `count` is 0,
+/// `getController` answers null and `update` has nothing to poll, as on a
+/// machine with no pad connected. Member names from the shipped DLL's
+/// registration strings (game-kr `plugin/gamepad.dll`).
+pub(crate) fn install_gamepad(rt: &mut Rt) {
+    if rt.global_member("GamepadPort").object_handle().is_some() {
+        return;
+    }
+    fn members(rt: &mut Rt, h: ObjectHandle) {
+        for name in ["initialize", "update", "finalize"] {
+            rt.register_object_native(h, name, |_: &mut Rt, _, _| Ok(Variant::Void));
+        }
+        rt.register_object_native(h, "getController", |_: &mut Rt, _, _| Ok(Variant::Null));
+        rt.set_object_member(h, "count", Variant::Integer(0));
+    }
+    let class = rt.alloc_native_constructor(|rt: &mut Rt, this: Option<ObjectHandle>, _| {
+        let instance = bound_instance(rt, this, "GamepadPort");
+        members(rt, instance);
+        Ok(Variant::Object(instance))
+    });
+    rt.add_object_class_info(class, "GamepadPort");
+    members(rt, class);
+    rt.set_global_member("GamepadPort", Variant::Object(class));
 }

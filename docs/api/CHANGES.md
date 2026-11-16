@@ -1,5 +1,29 @@
 # API change log
 
+## `730548bc6fc7fb95` (2026-11-16): N-System transitions and MGD regions
+
+- `TransitionEffect::Mask` adds `vague` (1..=4096): a continuous soft edge in rule levels, weight (r + t·(vague+255) − 255)/vague, replacing the discrete `fade` step when set.
+- `TransitionEffect` adds `spin_zoom` (`reverse`), `bounce` (`count`, `vector`, `damped`, `stretch`) and `door_flip` (`axis`, `focal`), wipe codes 910–912 in the shared wipe shader (old→new family). PSV `shared_wipe_fs_main_k*` GXPs are recompiled, with new k910–k912 variants; Switch programs were not recompiled.
+- The committed artifacts were still at `53f4100163bef8b4`: the `9a5bbadd4d94916a` entry below was logged without regenerating them, so this fingerprint also covers its declarations.
+- Rust-only, not in the script reference:
+  - `crysirror_formats_arc::images_c::mgd::regions` returns an MGD sprite region table. The MGD compression field is now read as a u16 (N-System `DecodeMain` 0x43C2F0); files whose following u16 is non-zero now decode instead of failing.
+  - Legacy archive indexes no longer apply `max_entry_size` to Raw (stored) members.
+  - New crate `crysirror-nsystem` (`NSystemVm`, `Config`, `register`, `script`, `message`), registered as engine `nsystem`.
+
+## `9a5bbadd4d94916a` (2026-11-16): layer utility effects, glitch transitions, multi-track voices, WaveFilter transforms, carrier generators
+
+- `ImageEffect` adds `blue_to_alpha`, `fill_alpha`, `shrink_fast` (one image) and `shrink_copy`, `overwrap_rect`, `stitch_wrapped_copy`, `glitch_copy` (two images), specified by `crysirror_image::layer_ex`.
+- `SubtreeTransitionEffect` adds `glitch` (`params`, `mode` `exchange`/`fade`, `seed`). An old-image `fade` may name its destination as `begin_crossfade_effect` source (a single-subtree transition).
+- Rust-only, not in the script reference:
+  - Multi-track voices: `AudioResourceTransform::MultiTrack(Arc<[MultiTrackStem]>)` (stems: the resource's own or another asset, an optional stereo pick of up to 32 decoded channels, a start gain) and `AudioRequest::SetTrackGains { channel, positions, changes: Vec<AudioTrackGain> }` (linear per-track gain ramps in source time, optionally waiting for a source frame). New `crysirror_audio::multitrack` (`TrackSet`, `GainLine`, `TrackGains`), `AudioSource::{track_count, take_tracks}`, `Mixer::{set_track_gains, track_count}`, `decoder::open_asset_picked` and `Stream::open_picked`. The mixer reads each stem in lockstep after its own worker buffer.
+  - `crysirror_image::layer_ex` adds `GlitchParams`, `GlitchField`, `GlitchTransition`, `GlitchFrame` (CPU reference `render`), `glitch_pick`, `glitch_tint` and `apply_glitch_tint`; `crysirror_scene::layer` re-exports the first four and `SubtreeTransitionEffect::{allows_self_source, glitch_frame}`.
+  - The shared composite shader adds mode 4 (glitch). The PSV `shared_composite_fs_main_f` GXP is recompiled; Switch programs were not recompiled.
+  - `crysirror_core::service::AudioResourceTransform` adds `WaveFilters(Arc<[WaveFilter]>)` and no longer derives `Eq` (`WaveFilter` holds floats). `WaveFilter` is `Delay`, `FreeVerb`, `GraphicEq`, `Iir`, `GainLimit`, `PhaseVocoder`, `Abs`, `Add`, `Mul`, `RingMod` or `Vocoder`; `Oscillator` describes mono carriers. `IirKind`, `IirFamily`, `IirStructure`, `IirParamInfo`, `iir_params`, `iir_default_params` and `iir_max_order` describe the DSPFilters designs.
+  - New: `crysirror_audio::iir_design`, `crysirror_audio::wave_filters::apply` and `crysirror_audio::carriers` (`generate`, `Vocoder`) and `crysirror_audio::phase_vocoder::process`.
+  - `crysirror_core::region_map` adds `RegionMap::labels`, `RegionMap::paint_plane`, `LabelPlane` and `alpha_to_labels`.
+  - `crysirror_image::psd` (PSD/PSB documents, layer pixels and descriptors) and `crysirror_tjs2::runtime::Runtime::put_object_member` (assignment that runs property setters).
+- Migration: Rust code that requires `AudioResourceTransform: Eq` uses `PartialEq`.
+
 ## `53f4100163bef8b4` (2026-11-16): showcase recorder, live material surfaces, HTTP verbs/headers
 
 - PBR material texture paths (`base_color_texture`, `emissive_texture`, …) may name a live engine surface (`__surface/<slot>`) or a published image (`__image_resource/…`). The renderer rebuilds the material when the surface revision changes. Static override textures are decoded once and shared across materials that differ only in factors.

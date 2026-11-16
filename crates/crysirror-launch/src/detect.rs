@@ -12,6 +12,7 @@ mod bgi;
 mod softpal;
 mod qlie;
 mod sugarpot;
+mod nsystem;
 mod willplus;
 use anyhow::{bail, ensure, Context, Result};
 use serde_json::{json, Value};
@@ -196,6 +197,7 @@ fn detect_layout(dir: &SourcePath) -> Result<Plan> {
     if let Some(plan) = softpal::detect(dir,&names,&name)? {return Ok(plan);}
     if let Some(plan) = qlie::detect(dir,&names,&name)? {return Ok(plan);}
     if let Some(plan) = sugarpot::detect(dir,&names,&name)? {return Ok(plan);}
+    if let Some(plan) = nsystem::detect(dir,&names,&name)? {return Ok(plan);}
     if let Some(plan) = willplus::detect(dir,&names,&name)? {return Ok(plan);}
     if find(&names, "data.xp3").is_some() {
         return krkr(dir, &names, &name);
@@ -533,6 +535,11 @@ pub fn kirikiri_script_search(dir: &Path, needle: &str, limit: usize) -> Result<
                 }
                 continue;
             }
+            // `file:path` prints one whole entry instead of searching.
+            let whole = needle.strip_prefix("file:");
+            if whole.is_some_and(|f| !lower.ends_with(&f.to_ascii_lowercase())) {
+                continue;
+            }
             let named = [".tjs", ".ks", ".txt", ".csv", ".ini", ".json", ".func", ".scn"].iter().any(|e| lower.ends_with(e));
             // Hash-named archives (HXV4) carry no extension: sniff content.
             let hashed = !lower.contains('.') && entry.size <= 8 << 20;
@@ -546,10 +553,23 @@ pub fn kirikiri_script_search(dir: &Path, needle: &str, limit: usize) -> Result<
             }
             let text = if bytes.starts_with(b"TJS2") {
                 let decompiled = crysirror_tjs2::bytecode::BytecodeFile::parse(&bytes).ok().and_then(|file| {
-                    crysirror_tjs2::decompile::decompile(&file, &Default::default()).ok()
+                    // KRKR_GREP_OBJECTS lists code objects; KRKR_GREP_OBJECT=n
+                    // decompiles only object n.
+                    if whole.is_some() && std::env::var_os("KRKR_GREP_OBJECTS").is_some() {
+                        let text = file.objects.iter().enumerate().map(|(i, o)| format!(
+                            "#{i} parent={:?} {:?} {}", o.parent, o.context_type, o.name(&file).unwrap_or(""),
+                        )).collect::<Vec<_>>().join("\n");
+                        return Some(text);
+                    }
+                    let object_index = std::env::var("KRKR_GREP_OBJECT").ok().and_then(|v| v.parse().ok());
+                    if let (Some(n), Some(_)) = (object_index, std::env::var_os("KRKR_GREP_DISASM")) {
+                        return file.disassemble_object_full(n).ok();
+                    }
+                    crysirror_tjs2::decompile::decompile(&file, &crysirror_tjs2::decompile::DecompileOptions { object_index, ..Default::default() }).ok()
+                        .map(|out| out.sources.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join("\n"))
                 });
                 match decompiled {
-                    Some(out) => out.sources.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join("\n"),
+                    Some(text) => text,
                     None => continue,
                 }
             } else {
@@ -557,6 +577,10 @@ pub fn kirikiri_script_search(dir: &Path, needle: &str, limit: usize) -> Result<
                 text
             };
             let lines: Vec<&str> = text.lines().collect();
+            if whole.is_some() {
+                out.extend(lines.iter().enumerate().map(|(k, l)| format!("{name}:{}:{}: {}", entry.path, k + 1, l.trim_end())));
+                return Ok(out);
+            }
             for (line_no, line) in lines.iter().enumerate() {
                 if line.contains(needle) {
                     for (k, shown) in lines.iter().enumerate().skip(line_no).take(context + 1) {

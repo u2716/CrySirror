@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-License-Identifier: MPL-2.0
 //! KiriKiri storage naming over the client's engine-owned capability storage.
 //!
 //! KiriKiri resolves bare storage names through an ordered "auto path" list
@@ -51,6 +51,8 @@ pub(crate) struct WrapperMedia {
     /// Nested wrapper resolutions in progress (proxy targets found through a
     /// proxy auto path); bounded so a cyclic map is a miss, not a hang.
     depth: std::sync::atomic::AtomicUsize,
+    /// psd.dll's `psd` media; `None` until the plug-in is linked.
+    pub psd: Option<crate::psd_plugin::PsdMedia>,
 }
 
 impl WrapperMedia {
@@ -448,6 +450,11 @@ impl Storage {
 
     /// Resolve a storage name to an asset-relative path, or `None`.
     pub fn resolve(&self, name: &str) -> Option<String> {
+        if let Some(media) = &self.wrappers.psd {
+            if let Some(rest) = crate::psd_plugin::psd_uri(name) {
+                return media.exists(self, &rest).then(|| format!("psd://{rest}"));
+            }
+        }
         if let Some(inner) = self.wrappers.inner(name) {
             use std::sync::atomic::Ordering::Relaxed;
             let (scheme, inner) = inner.ok()?;
@@ -561,6 +568,11 @@ impl Storage {
     }
     /// Enforce the byte limit before allocating or reading the stream.
     pub fn read_limited(&self, path: &str, max_bytes: usize) -> Result<Vec<u8>> {
+        if let Some(bytes) = self.psd_read(path) {
+            let bytes = bytes?;
+            ensure!(bytes.len() <= max_bytes, "native storage byte limit");
+            return Ok(bytes);
+        }
         let path =
             save_path(path)?.map_or_else(|| VfsPath::new(Mount::Asset, path).map_err(err), Ok)?;
         let reader = self.files.open_read(&path).map_err(err)?;
@@ -590,6 +602,11 @@ impl Storage {
     /// The first `len` bytes of an asset, streamed (container probing
     /// without reading a whole movie).
     pub fn read_prefix(&self, path: &str, len: usize) -> Result<Vec<u8>> {
+        if let Some(bytes) = self.psd_read(path) {
+            let mut bytes = bytes?;
+            bytes.truncate(len);
+            return Ok(bytes);
+        }
         let reader = self
             .files
             .open_asset(&VfsPath::new(Mount::Asset, path).map_err(err)?)
@@ -607,7 +624,16 @@ impl Storage {
         Ok(out)
     }
 
+    /// Layer images of the `psd` media (`psd://<file>/root/…/<layer>.bmp`).
+    fn psd_read(&self, path: &str) -> Option<Result<Vec<u8>>> {
+        let media = self.wrappers.psd.as_ref()?;
+        let rest = crate::psd_plugin::psd_uri(path)?;
+        Some(media.open(self, &rest))
+    }
     pub fn read(&self, path: &str) -> Result<Vec<u8>> {
+        if let Some(bytes) = self.psd_read(path) {
+            return bytes;
+        }
         if let Some(path) = save_path(path)? {
             return self.files.read(&path).map_err(err);
         }

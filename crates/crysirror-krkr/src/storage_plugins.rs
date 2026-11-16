@@ -1,5 +1,6 @@
 // Copyright (c) 2026 CrySirror contributors.
-// Distributed under the GNU Affero General Public License, version 3 or later.
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. A copy is available at https://mozilla.org/MPL/2.0/.
 //! saveStruct/fstat native semantics over CrySirror's client storage services.
 //! saveStruct reference: wtnbgo/saveStruct f03a81a46018d89d20d1e4614006fc502fd12d2c.
 use crate::natives::{Rt, int, methods, string, this_of, unsupported};

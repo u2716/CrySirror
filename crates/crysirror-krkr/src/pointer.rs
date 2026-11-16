@@ -1,6 +1,6 @@
 // Copyright (c) 2026 CrySirror contributors.
-// Distributed under the GNU Affero General Public License, version 3 or
-// (at your option) any later version, https://www.gnu.org/licenses/agpl-3.0.html.
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. A copy is available at https://mozilla.org/MPL/2.0/.
 //! Coordinate/key naming over logical engine input, and krkr mouse cursors
 //! over the shared UI cursor service: the `cr*` constants select standard
 //! shapes, cursor files (`.cur`/`.ani`) are decoded by the shared image

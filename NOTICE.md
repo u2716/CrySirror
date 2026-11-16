@@ -40,12 +40,11 @@ in this source export. No fonts may be added to an
 assistant-generated delivery merely because they happen to be installed locally.
 
 The KiriKiri integration consists of the first-class workspace crates
-`crysirror-tjs2`, `crysirror-kag` and `crysirror-krkr`, each distributed under
-AGPL-3.0-or-later. License texts are supplied in the corresponding crate
-LICENSE files; existing source-level notices retain their applicable scope.
-The desktop binary links them unconditionally, so a distributed `crysirror`
-binary is covered by the AGPL, including its section 13 network clause, and
-must meet the source obligations of every linked licence (AGPL-3.0-or-later
-KiriKiri, GPL-3.0-or-later Circus and formats-arc, GPL-2.0-or-later NScripter
-and System4). The MPL-2.0 engine crates remain usable without the binary.
+`crysirror-tjs2`, `crysirror-kag` and `crysirror-krkr`, distributed under
+MPL-2.0 like the engine crates. License texts are supplied in the corresponding
+crate LICENSE files; third-party notices beside their code retain their scope.
+The desktop binary links them unconditionally; a distributed `crysirror`
+binary must meet the source obligations of every linked licence
+(GPL-3.0-or-later Circus and formats-arc, GPL-2.0-or-later NScripter and
+System4). The MPL-2.0 engine crates remain usable without the binary.
 The krkr-demo images and scripts are self-authored.

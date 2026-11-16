@@ -236,6 +236,9 @@ Program { name: "shared_wipe_fs_main_k2_f", stage: "fragment", gxp: &AlignedGxp(
 Program { name: "shared_wipe_fs_main_k50_f", stage: "fragment", gxp: &AlignedGxp(*include_bytes!("../native/psv/gxp/shared_wipe_fs_main_k50_f.gxp")).0 },
 Program { name: "shared_wipe_fs_main_k900_f", stage: "fragment", gxp: &AlignedGxp(*include_bytes!("../native/psv/gxp/shared_wipe_fs_main_k900_f.gxp")).0 },
 Program { name: "shared_wipe_fs_main_k901_f", stage: "fragment", gxp: &AlignedGxp(*include_bytes!("../native/psv/gxp/shared_wipe_fs_main_k901_f.gxp")).0 },
+Program { name: "shared_wipe_fs_main_k910_f", stage: "fragment", gxp: &AlignedGxp(*include_bytes!("../native/psv/gxp/shared_wipe_fs_main_k910_f.gxp")).0 },
+Program { name: "shared_wipe_fs_main_k911_f", stage: "fragment", gxp: &AlignedGxp(*include_bytes!("../native/psv/gxp/shared_wipe_fs_main_k911_f.gxp")).0 },
+Program { name: "shared_wipe_fs_main_k912_f", stage: "fragment", gxp: &AlignedGxp(*include_bytes!("../native/psv/gxp/shared_wipe_fs_main_k912_f.gxp")).0 },
 Program { name: "shared_wipe_fs_main_kdefault_f", stage: "fragment", gxp: &AlignedGxp(*include_bytes!("../native/psv/gxp/shared_wipe_fs_main_kdefault_f.gxp")).0 },
 Program { name: "shared_wipe_vs_main_v", stage: "vertex", gxp: &AlignedGxp(*include_bytes!("../native/psv/gxp/shared_wipe_vs_main_v.gxp")).0 },
 ]

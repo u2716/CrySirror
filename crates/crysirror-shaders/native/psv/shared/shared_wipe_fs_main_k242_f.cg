@@ -76,7 +76,7 @@ uniform WipeUniform wipe;
 uniform int4 cg_loop_limits;
 
 struct FragmentInput_fs_main {
-    float2 uv_2 : TEXCOORD0;
+    float2 uv_4 : TEXCOORD0;
     float2 random_center_1 : TEXCOORD1;
     float4 pos : WPOS;
 };
@@ -99,6 +99,29 @@ float option(int index)
     return _e28;
 }
 
+bool inside(float2 uv)
+{
+    bool local = (bool)0;
+
+    if (all((uv >= (0.0).xx))) {
+        local = all((uv <= (1.0).xx));
+    } else {
+        local = false;
+    }
+    bool _e12 = local;
+    return _e12;
+}
+
+float4 sample_or_zero(sampler2D tex, float4 cg_size_tex, float2 uv_1)
+{
+    const bool _e3 = inside(uv_1);
+    if (!(_e3)) {
+        return (0.0).xxxx;
+    }
+    float4 _e12 = tex2D(tex,clamp(uv_1, (0.0).xx, (1.0).xx));
+    return _e12;
+}
+
 float4 alpha_over(float4 dst_, float4 src)
 {
     float _e8 = (src.w + (dst_.w * (1.0 - src.w)));
@@ -108,7 +131,7 @@ float4 alpha_over(float4 dst_, float4 src)
     return float4((((src.xyz * src.w) + ((dst_.xyz * dst_.w) * (1.0 - src.w))) / (_e8).xxx), _e8);
 }
 
-float4 explosion(sampler2D tex, float4 cg_size_tex, float2 uv, float2 center_, float power)
+float4 explosion(sampler2D tex_1, float4 cg_size_tex_1, float2 uv_2, float2 center_, float power)
 {
     float4 sum = (0.0).xxxx;
     int i = int(0);
@@ -129,7 +152,7 @@ float4 explosion(sampler2D tex, float4 cg_size_tex, float2 uv, float2 center_, f
         {
             float4 _e21 = sum;
             int _e22 = i;
-            float4 _e31 = tex2D(tex,clamp((uv + ((((center_ - uv) * power) / (16.0).xx) * float(_e22))), (0.0).xx, (1.0).xx));
+            float4 _e31 = tex2D(tex_1,clamp((uv_2 + ((((center_ - uv_2) * power) / (16.0).xx) * float(_e22))), (0.0).xx, (1.0).xx));
             sum = (_e21 + _e31);
         }
     }
@@ -160,55 +183,126 @@ int naga_f2i32(float value) {
     return int(clamp(value, -2147483600.0, 2147483500.0));
 }
 
-float4 affected_color(float2 uv_1, float2 random_center)
+float4 affected_color(float2 uv_3, float2 random_center)
 {
+    bool local_1 = (bool)0;
+    float2 off = (0.0).xx;
+    float r = (float)0;
+    float2 src_1 = (float2)0;
+    float a = (float)0;
+    float2 q = (float2)0;
+    bool ok = true;
+    bool local_2 = (bool)0;
     bool base_is_current = false;
     float2 center_1 = (0.5).xx;
     float2 muv = (float2)0;
     float mask_value = 1.0;
-    bool local = (bool)0;
-    bool local_1 = (bool)0;
-    bool local_2 = (bool)0;
     bool local_3 = (bool)0;
+    bool local_4 = (bool)0;
+    bool local_5 = (bool)0;
+    bool local_6 = (bool)0;
 
     float _e5 = wipe.kind_progress.y;
     float _e8 = clamp(_e5, 0.0, 1.0);
-    float4 _e11 = tex2D(current_tex,uv_1);
-    float4 _e14 = tex2D(next_tex,uv_1);
+    float4 _e11 = tex2D(current_tex,uv_3);
+    float4 _e14 = tex2D(next_tex,uv_3);
     if ((_e8 <= 0.0)) {
         return _e11;
     }
     if ((_e8 >= 1.0)) {
         return _e14;
     }
-    bool _e21 = base_is_current;
-    bool _e22 = base_is_current;
-    const float _e26 = option(int(0));
-    const float _e28 = option(int(2));
-    const float _e33 = option(int(1));
-    const float _e35 = option(int(3));
-    const float _e41 = triangular_parameter(naga_f2i32((false ? _e28 : _e26)), (naga_f2i32((false ? _e35 : _e33)) != int(0)), _e8);
-    const float _e45 = option(int(2));
-    const float _e47 = option(int(4));
-    const float _e52 = option(int(3));
-    const float _e54 = option(int(5));
-    const float _e60 = triangular_parameter(naga_f2i32((false ? _e47 : _e45)), (naga_f2i32((false ? _e54 : _e52)) != int(0)), _e8);
-    const float _e62 = option(int(4));
-    const float _e64 = option(int(6));
-    float _e68 = max((false ? _e64 : _e62), 0.0);
-    const float _e73 = option(int(15));
+    local_1 = false;
+    bool _e22 = local_1;
+    if (_e22) {
+        float4 _e25 = wipe.kind_progress;
+        float2 _e29 = max(_e25.zw, (1.0).xx);
+        float2 _e32 = (_e29 * 0.5);
+        bool _e36 = (_e8 < 0.5);
+        a = (_e8 * 3.1415927);
+        if (!(_e36)) {
+            float _e41 = a;
+            a = (_e41 + 3.1415927);
+        }
+        const float _e45 = option(int(1));
+        float _e47 = max(_e45, 1.0);
+        const float _e49 = option(int(0));
+        int _e50 = naga_f2i32(_e49);
+        q = ((uv_3 * _e29) - _e32);
+        if ((_e50 == int(2))) {
+            float _e57 = a;
+            float _e60 = q.x;
+            float _e62 = a;
+            float _e65 = q.y;
+            float _e68 = a;
+            float _e72 = q.x;
+            float _e74 = a;
+            float _e77 = q.y;
+            q = float2(((cos(_e57) * _e60) + (sin(_e62) * _e65)), ((-(sin(_e68)) * _e72) + (cos(_e74) * _e77)));
+        } else {
+            float _e82 = q.x;
+            float _e84 = q.y;
+            float _e87 = ((_e50 == int(1)) ? _e84 : _e82);
+            float _e88 = a;
+            float _e91 = a;
+            float _e94 = ((_e47 * cos(_e88)) - (_e87 * sin(_e91)));
+            ok = (abs(_e94) > 0.0001);
+            bool _e99 = ok;
+            float _e102 = ((_e87 * _e47) / (_e99 ? _e94 : 1.0));
+            float _e103 = a;
+            float _e106 = (_e47 + (_e102 * sin(_e103)));
+            bool _e107 = ok;
+            if (_e107) {
+                local_2 = (_e106 > (0.1 * _e47));
+            } else {
+                local_2 = false;
+            }
+            bool _e114 = local_2;
+            ok = _e114;
+            float _e116 = q.y;
+            float _e118 = q.x;
+            float _e123 = ((((_e50 == int(1)) ? _e118 : _e116) * _e106) / _e47);
+            q = ((_e50 == int(1)) ? float2(_e123, _e102) : float2(_e102, _e123));
+        }
+        bool _e129 = ok;
+        if (!(_e129)) {
+            return float4(0.0, 0.0, 0.0, 1.0);
+        }
+        float2 _e136 = q;
+        float2 _e138 = ((_e32 + _e136) / _e29);
+        const float4 _e141 = sample_or_zero(current_tex, cg_size_current_tex, _e138);
+        const float4 _e144 = sample_or_zero(next_tex, cg_size_next_tex, _e138);
+        const float4 _e151 = alpha_over(float4(0.0, 0.0, 0.0, 1.0), (_e36 ? _e144 : _e141));
+        return _e151;
+    }
+    bool _e154 = base_is_current;
+    bool _e155 = base_is_current;
+    const float _e159 = option(int(0));
+    const float _e161 = option(int(2));
+    const float _e166 = option(int(1));
+    const float _e168 = option(int(3));
+    const float _e174 = triangular_parameter(naga_f2i32((false ? _e161 : _e159)), (naga_f2i32((false ? _e168 : _e166)) != int(0)), _e8);
+    const float _e178 = option(int(2));
+    const float _e180 = option(int(4));
+    const float _e185 = option(int(3));
+    const float _e187 = option(int(5));
+    const float _e193 = triangular_parameter(naga_f2i32((false ? _e180 : _e178)), (naga_f2i32((false ? _e187 : _e185)) != int(0)), _e8);
+    const float _e195 = option(int(4));
+    const float _e197 = option(int(6));
+    float _e201 = max((false ? _e197 : _e195), 0.0);
+    const float _e206 = option(int(15));
     center_1 = random_center;
-    float2 _e76 = center_1;
-    const float4 _e78 = explosion(current_tex, cg_size_current_tex, uv_1, _e76, (_e60 * _e68));
-    float2 _e81 = center_1;
-    const float4 _e83 = explosion(next_tex, cg_size_next_tex, uv_1, _e81, (_e60 * _e68));
-    const float4 _e89 = alpha_over((_e22 ? _e11 : _e14), float4((_e21 ? _e83 : _e78).xyz, ((_e21 ? _e14 : _e11).w * (1.0 - _e41))));
-    return _e89;
+    float2 _e209 = center_1;
+    const float4 _e211 = explosion(current_tex, cg_size_current_tex, uv_3, _e209, (_e193 * _e201));
+    float2 _e214 = center_1;
+    const float4 _e216 = explosion(next_tex, cg_size_next_tex, uv_3, _e214, (_e193 * _e201));
+    const float4 _e222 = alpha_over((_e155 ? _e11 : _e14), float4((_e154 ? _e216 : _e211).xyz, ((_e154 ? _e14 : _e11).w * (1.0 - _e174))));
+    return _e222;
 }
 
 float4 main(FragmentInput_fs_main fragmentinput_fs_main) : COLOR
 {
-    VsOut in_ = { fragmentinput_fs_main.pos, fragmentinput_fs_main.uv_2, fragmentinput_fs_main.random_center_1 };
+    VsOut in_ = { fragmentinput_fs_main.pos, fragmentinput_fs_main.uv_4, fragmentinput_fs_main.random_center_1 };
     float2 _e6 = clamp(in_.uv, (0.0).xx, (1.0).xx);
     float4 _e9 = tex2D(under_tex,_e6);
     const float4 _e11 = affected_color(_e6, in_.random_center);

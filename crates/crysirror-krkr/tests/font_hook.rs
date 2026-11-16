@@ -1,6 +1,6 @@
 // Copyright (c) 2026 CrySirror contributors.
-// Distributed under the GNU Affero General Public License, version 3 or
-// (at your option) any later version, https://www.gnu.org/licenses/agpl-3.0.html.
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. A copy is available at https://mozilla.org/MPL/2.0/.
 //! Self-authored Yuzusoft-style property hook on `Layer.font` (Utils.tjs
 //! objectHookInjection + msghack shape): the hook rebinds to the Font object,
 //! where the script stored a helper. No game data.

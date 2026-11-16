@@ -242,6 +242,20 @@ pub enum ImageEffect {
     AlphaClipRect {
         spec: crate::alpha_clip::AlphaClipRect,
     },
+    /// Second-half blue into first-half alpha (layerExBTOA).
+    BlueToAlpha { spec: crate::layer_ex::BlueToAlpha },
+    /// Opaque alpha inside a rectangle (layerExBTOA fillAlpha).
+    FillAlpha { spec: crate::layer_ex::FillAlpha },
+    /// Integer box shrink to an opaque image (shrinkCopyFast).
+    ShrinkFast { spec: crate::layer_ex::ShrinkFast },
+    /// Two-input area-average shrink onto a fractional rectangle (shrinkCopy).
+    ShrinkCopy { spec: crate::layer_ex::ShrinkCopy },
+    /// Two-input threshold overwrite (layerExBTOA overwrapRect).
+    OverwrapRect { spec: crate::layer_ex::OverwrapRect },
+    /// Two-input horizontally wrapped row copy (layerStwCopy).
+    StitchWrappedCopy { spec: crate::layer_ex::StitchWrappedCopy },
+    /// Two-input block/line displacement with channel splitting (GlitchEffect).
+    GlitchCopy { spec: crate::layer_ex::GlitchCopy },
     /// Three immutable inputs, two independent masks and exact14bit products.
     PackedPairBlend {spec:crate::packed_pair_blend::PackedPairBlend},
     MaskedPairBlend {
@@ -424,6 +438,9 @@ impl ImageEffect {
             Self::SineRowCopy { .. } => (),
             Self::DiscCopies { spec } => spec.validate()?,
             Self::AlphaClipRect { spec } => spec.validate()?,
+            Self::ShrinkCopy { spec } => spec.validate()?,
+            Self::ShrinkFast { spec } => ensure!(spec.step[0] > 0 && spec.step[1] > 0, "shrink factor"),
+            Self::BlueToAlpha { .. } | Self::FillAlpha { .. } | Self::OverwrapRect { .. } | Self::StitchWrappedCopy { .. } | Self::GlitchCopy { .. } => {}
             Self::PackedPairBlend{spec}=>spec.validate()?,
             Self::PackedPairBatch{spec}=>spec.validate()?,
             Self::RadialRgbBrushes{spec}=>spec.validate()?,
@@ -583,6 +600,10 @@ impl ImageSurface {
                 | ImageEffect::SineRowCopy { .. }
                 | ImageEffect::DiscCopies { .. }
                 | ImageEffect::AlphaClipRect { .. }
+                | ImageEffect::ShrinkCopy { .. }
+                | ImageEffect::OverwrapRect { .. }
+                | ImageEffect::StitchWrappedCopy { .. }
+                | ImageEffect::GlitchCopy { .. }
                 | ImageEffect::PackedPairBatch{..}
                 | ImageEffect::PackedPairBlend{..}
                 | ImageEffect::MaskedPairBlend { .. }
@@ -592,6 +613,9 @@ impl ImageSurface {
             anyhow::bail!("image effect requires its multi-image context")
         }
         if let ImageEffect::RadialRgbBrushes{spec}=effect{return spec.apply(self,check);}
+        if let ImageEffect::BlueToAlpha { spec } = effect { check()?; return spec.apply(self); }
+        if let ImageEffect::FillAlpha { spec } = effect { check()?; return spec.apply(self); }
+        if let ImageEffect::ShrinkFast { spec } = effect { check()?; return spec.apply(self); }
         if let ImageEffect::StoredGradientSpans{spec}=effect{return spec.apply(self,check);}
         if let ImageEffect::StoredWordSpans{spec}=effect{return spec.apply(self,check);}
         if let ImageEffect::AlphaLookup { table } = effect {

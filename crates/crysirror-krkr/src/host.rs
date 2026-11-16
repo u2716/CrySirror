@@ -1,5 +1,5 @@
-// Distributed under the GNU Affero General Public License, version 3 or
-// (at your option) any later version, https://www.gnu.org/licenses/agpl-3.0.html.
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. A copy is available at https://mozilla.org/MPL/2.0/.
 //! Handle translation between KiriKiri native objects and engine services.
 //!
 //! A KiriKiri `Layer` is one engine Layer node (position, size, clip,
@@ -136,6 +136,7 @@ pub struct KrkrHost {
     pub(crate) csv: crate::csv_plugin::State,
     pub(crate) line_parser: crate::line_plugin::State,
     pub(crate) psbfile: crate::psbfile_plugin::State,
+    pub(crate) psd: crate::psd_plugin::Psd,
     pub(crate) draws: crate::draw_plugin::State,
     /// Target, owner-polled job, native flips, whether to replace Canvas paint.
     /// Unmodified Asset preparation retains its original immutable paint.
@@ -159,6 +160,8 @@ pub struct KrkrHost {
     pub exe_bits: i64,
     pub sounds: crate::sound::Sounds,
     pub(crate) get_sample: crate::get_sample::GetSample,
+    pub(crate) wave_data: crate::wv_decoder::State,
+    pub(crate) multitrack: crate::multitrack::Registry,
     pub(crate) http: crate::http_plugin::Http,
     pub videos: crate::video::Videos,
     pub alpha_movies: crate::alpha_movie::AlphaMovies,
@@ -247,6 +250,7 @@ impl KrkrHost {
             csv: Default::default(),
             line_parser: Default::default(),
             psbfile: Default::default(),
+            psd: Default::default(),
             image_job: None,
             composite_pending: Vec::new(),
             bitmap_batch: None,
@@ -262,6 +266,8 @@ impl KrkrHost {
             exe_bits: 32,
             sounds: Default::default(),
             get_sample: Default::default(),
+            wave_data: Default::default(),
+            multitrack: Default::default(),
             http: Default::default(),
             videos: Default::default(),
             alpha_movies: Default::default(),
@@ -677,16 +683,21 @@ impl KrkrHost {
             .filter(|(dest, source)| **dest == h || **source == h)
             .map(|(&dest, _)| dest).collect();
         for dest in cancelled {
-            self.transitions.0.remove(&dest);
+            let source = self.transitions.0.remove(&dest);
             self.transitions.2.remove(&dest);
+            self.transitions.3.remove(&dest);
+            let immediate = self.transitions.4.remove(&dest);
             let surface_only = self.transitions.1.remove(&dest);
+            if immediate {
+                continue;
+            }
             if let Some(layer) = self.layers.get(&dest) {
                 let (id, temp) = (
                     if surface_only { layer.presentation() } else { layer.container() },
                     crate::transitions::temp_presentation(layer.slot),
                 );
                 self.layer_op(json!({"op":"end_crossfade", "id":id}));
-                if surface_only {
+                if surface_only && source != Some(dest) {
                     self.canvas_op(json!({"op":"hide","layer":temp}));
                 }
             }
@@ -915,6 +926,7 @@ impl TjsHost for KrkrHost {
     /// Layer ever constructed. Script fields and suspended frames trace theirs.
     fn gc_roots(&self, out: &mut Vec<ObjectHandle>) {
         self.extra.roots(out);
+        self.wave_data.roots(out);
         self.pads.roots(out);
         self.fftgraph.roots(out);
         self.http.roots(out);
@@ -960,6 +972,7 @@ impl TjsHost for KrkrHost {
             self.invalidate_layer(handle.0);
         }
         self.psbfile.invalidate(handle.0);
+        self.psd.invalidate(handle.0, self.storage.as_ref());
         self.csv.invalidate(handle.0);
         self.line_parser.invalidate(handle.0);
         self.text_render.invalidate(handle.0);
@@ -974,6 +987,8 @@ impl TjsHost for KrkrHost {
         self.motion.invalidate(handle.0);
         self.sounds.invalidate(handle.0);
         self.get_sample.invalidate(handle.0);
+        self.wave_data.invalidate(handle.0);
+        self.multitrack.retire(handle.0);
         self.http.invalidate(handle.0);
         self.draws.invalidate(handle.0);
         self.object_collected(handle);

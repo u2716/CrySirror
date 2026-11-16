@@ -79,12 +79,63 @@ pub struct PreparedSound {
     extension: Option<String>,
     frame_limit: Option<u64>,
     info: AudioResourceInfo,
+    /// Multi-track stems; `open` then yields a [`crate::multitrack::TrackSet`].
+    stems: Option<Vec<PreparedStem>>,
+}
+struct PreparedStem {
+    snapshot: Arc<Snapshot>,
+    extension: Option<String>,
+    pick: Option<[Option<usize>; 2]>,
+    gain: f32,
+}
+fn open_stem(stem: &PreparedStem) -> Result<Box<dyn AudioSource>> {
+    match stem.pick {
+        Some(pick) => decoder::open_asset_picked(stem.snapshot.clone(), stem.extension.as_deref(), pick),
+        None => decoder::open_asset(stem.snapshot.clone(), stem.extension.as_deref()),
+    }
+}
+fn read_snapshot(
+    storage: &dyn ClientStorage,
+    path: &crysirror_core::path::VfsPath,
+    budget: &Arc<AtomicUsize>,
+    cancel: &Cancellation,
+) -> Result<Arc<Snapshot>> {
+    ensure!(path.mount() == Mount::Asset, "prepared audio requires asset authority");
+    let reader = storage.open_asset(path).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let len = usize::try_from(reader.len().map_err(|e| anyhow::anyhow!("{e}"))?)?;
+    ensure!(len > 0 && len <= RESOURCE_BYTES, "prepared audio snapshot exceeds 128 MiB or is empty");
+    let charge = Charge::new(budget.clone(), len)?;
+    let mut bytes = vec![0; len];
+    let mut at = 0;
+    while at < len {
+        cancel.check()?;
+        let end = (at + 65536).min(len);
+        let n = reader
+            .read_at(at as u64, &mut bytes[at..end])
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        ensure!(n > 0 && n <= end - at, "prepared audio snapshot truncated/invalid read");
+        at += n;
+    }
+    Ok(Arc::new(Snapshot { bytes, _charge: charge }))
+}
+fn extension_of(path: &crysirror_core::path::VfsPath) -> Option<String> {
+    path.relative().rsplit_once('.').map(|v| v.1.to_owned())
 }
 impl PreparedSound {
     pub fn info(&self) -> AudioResourceInfo {
         self.info
     }
     pub fn open(self: &Arc<Self>) -> Result<Box<dyn AudioSource>> {
+        if let Some(stems) = &self.stems {
+            let tracks = stems
+                .iter()
+                .map(|stem| Ok((open_stem(stem)?, stem.gain)))
+                .collect::<Result<Vec<_>>>()?;
+            return Ok(Box::new(Instance {
+                inner: Box::new(crate::multitrack::TrackSet::new(tracks)?),
+                _resource: self.clone(),
+            }));
+        }
         let inner = decoder::open_asset(self.snapshot.clone(), self.extension.as_deref())?;
         let inner =
             crate::channels::wrap_source(inner, self.info.source_frames.or(self.frame_limit), 1.)?;
@@ -99,6 +150,18 @@ struct Instance {
     _resource: Arc<PreparedSound>,
 }
 impl AudioSource for Instance {
+    fn track_count(&self) -> usize {
+        self.inner.track_count()
+    }
+    fn take_tracks(&mut self) -> Option<Vec<(Box<dyn AudioSource>, f32)>> {
+        let resource = self._resource.clone();
+        self.inner.take_tracks().map(|tracks| {
+            tracks
+                .into_iter()
+                .map(|(inner, g)| (Box::new(Instance { inner, _resource: resource.clone() }) as Box<dyn AudioSource>, g))
+                .collect()
+        })
+    }
     fn has_replay_gain(&self) -> bool {
         self._resource.info.has_replay_gain
     }
@@ -214,7 +277,12 @@ impl AudioResources {
         enum Work {
             Jitan(u16),
             Filters(Arc<[crysirror_core::service::PcmFilter]>),
+            Wave(Arc<[crysirror_core::service::WaveFilter]>),
         }
+        let multitrack = match &transform {
+            Some(crysirror_core::service::AudioResourceTransform::MultiTrack(stems)) => Some(stems.clone()),
+            _ => None,
+        };
         let compression = match transform {
             Some(crysirror_core::service::AudioResourceTransform::SiglusJitan { percent })
                 if percent != 100 =>
@@ -223,6 +291,9 @@ impl AudioResources {
             }
             Some(crysirror_core::service::AudioResourceTransform::PcmFilters(chain)) => {
                 Some(Work::Filters(chain))
+            }
+            Some(crysirror_core::service::AudioResourceTransform::WaveFilters(chain)) => {
+                Some(Work::Wave(chain))
             }
             _ => None,
         };
@@ -284,6 +355,80 @@ impl AudioResources {
                 .relative()
                 .rsplit_once('.')
                 .map(|v| v.1.to_owned());
+            if let Some(stems) = multitrack {
+                if let Some(s) = Arc::get_mut(&mut snapshot) {
+                    s._charge.shrink(len + 8192);
+                }
+                // Each distinct stem asset is snapshotted once; every stem is
+                // probed for rate and length and opened again per voice.
+                let mut snapshots: BTreeMap<String, Arc<Snapshot>> = BTreeMap::new();
+                let mut prepared = Vec::with_capacity(stems.len());
+                let mut rate = None;
+                let mut longest = 0u64;
+                let mut encoded = len;
+                for stem in stems.iter() {
+                    cancel.check()?;
+                    let (snap, ext) = match &stem.asset {
+                        None => (snapshot.clone(), extension.clone()),
+                        Some(path) => {
+                            let key = path.relative().to_owned();
+                            let snap = match snapshots.get(&key) {
+                                Some(s) => s.clone(),
+                                None => {
+                                    let s = read_snapshot(storage.as_ref(), path, &budget, &cancel)?;
+                                    encoded += s.bytes.len();
+                                    snapshots.insert(key, s.clone());
+                                    s
+                                }
+                            };
+                            (snap, extension_of(path))
+                        }
+                    };
+                    let stem = PreparedStem {
+                        snapshot: snap,
+                        extension: ext,
+                        pick: stem.pick.map(|p| p.map(|c| c.map(usize::from))),
+                        gain: stem.gain,
+                    };
+                    let mut probe = open_stem(&stem)?;
+                    let r = probe.sample_rate();
+                    ensure!(rate.is_none_or(|x| x == r), "multi-track stems differ in sample rate");
+                    rate = Some(r);
+                    let frames = match probe.frame_count() {
+                        Some(n) => n,
+                        None => {
+                            let mut count = 0u64;
+                            let mut block = vec![[0.; 2]; 4096];
+                            loop {
+                                cancel.check()?;
+                                let n = probe.read(&mut block)?;
+                                if n == 0 {
+                                    break;
+                                }
+                                count += n as u64;
+                            }
+                            count
+                        }
+                    };
+                    longest = longest.max(frames);
+                    prepared.push(stem);
+                }
+                let rate = rate.context("multi-track resource without stems")?;
+                ensure!((8000..=192000).contains(&rate), "prepared audio sample rate");
+                ensure!(longest > 0, "empty prepared audio source");
+                return Ok(Product::Prepared(Arc::new(PreparedSound {
+                    snapshot,
+                    extension,
+                    frame_limit: None,
+                    info: AudioResourceInfo {
+                        source_rate: rate,
+                        source_frames: Some(longest),
+                        encoded_bytes: encoded as u64,
+                        has_replay_gain: false,
+                    },
+                    stems: Some(prepared),
+                })));
+            }
             let mut source = decoder::open_asset(snapshot.clone(), extension.as_deref())?;
             let mut has_replay_gain = source.has_replay_gain();
             let rate = source.sample_rate();
@@ -308,7 +453,9 @@ impl AudioResources {
                         "audio transform decoded-frame budget"
                     );
                 }
+                let float = matches!(work, Work::Wave(_));
                 let mut pcm = Vec::new();
+                let mut wide = Vec::new();
                 let mut block = vec![[0.; 2]; 4096];
                 let mut total = 0usize;
                 loop {
@@ -331,6 +478,10 @@ impl AudioResources {
                     for frame in &block[..n] {
                         for &sample in &frame[..channels as usize] {
                             ensure!(sample.is_finite(), "nonfinite transform input");
+                            if float {
+                                wide.push(sample);
+                                continue;
+                            }
                             pcm.push(
                                 (sample.clamp(-1., 1.) * 32768.)
                                     .round()
@@ -349,6 +500,25 @@ impl AudioResources {
                         channels: 2,
                         samples: crate::pcm_filters::apply(&chain, channels, &pcm, &cancel)?,
                     },
+                    Work::Wave(chain) => {
+                        let (channels, out) = crate::wave_filters::apply(
+                            &chain,
+                            rate,
+                            channels,
+                            std::mem::take(&mut wide),
+                            &cancel,
+                        )?;
+                        crate::voice_compression::Pcm16 {
+                            rate,
+                            channels,
+                            samples: out
+                                .iter()
+                                .map(|s| {
+                                    (s.clamp(-1., 1.) * 32768.).round().clamp(-32768., 32767.) as i16
+                                })
+                                .collect(),
+                        }
+                    }
                 };
                 drop(pcm);
                 let raw = converted
@@ -423,6 +593,7 @@ impl AudioResources {
                     encoded_bytes: stored_len as u64,
                     has_replay_gain,
                 },
+                stems: None,
             })))
         };
         let ticket = if nonblocking {
