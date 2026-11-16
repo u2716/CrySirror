@@ -184,6 +184,10 @@ impl ArchiveMount {
     pub fn entries(&self) -> &[ArchiveEntry] {
         self.archive.entries()
     }
+    /// Complete JSON facts of one entry (see [`Archive::entry_metadata`]).
+    pub fn entry_metadata(&self, entry_id: u32) -> serde_json::Value {
+        self.archive.entry_metadata(entry_id)
+    }
     fn entry_id(&self, path: &str) -> Option<u32> {
         let checked = VfsPath::new(Mount::Asset, path).ok()?;
         if checked.relative() != path {

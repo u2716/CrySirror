@@ -9,6 +9,7 @@ use crate::error::{Result, TjsError};
 use crate::vm::{JumpTable, SuspendedCallStack, Vm};
 
 pub(crate) mod builtins;
+mod date_api;
 mod gc;
 pub mod object;
 pub(crate) mod symbol_table;
@@ -339,6 +340,7 @@ pub struct Runtime<H: TjsHost = NoHost> {
     /// it as objthis to static native members such as scriptsEx functions).
     pub(crate) native_caller_this: Option<ObjectHandle>,
     pub(crate) suspended_call: Option<SuspendedCallStack>,
+    pub(crate) parked_calls: Vec<SuspendedCallStack>,
     /// CrySirror addition: the result a suspended native call returns when
     /// its caller resumes (see [`Runtime::set_resume_value`]).
     pub(crate) resume_value: Option<Variant>,
@@ -406,6 +408,7 @@ impl<H: TjsHost + 'static> Runtime<H> {
             suspend_requested: false,
             native_caller_this: None,
             suspended_call: None,
+            parked_calls: Vec::new(),
             resume_value: None,
             debugger: None,
             debug_ui: None,
@@ -1324,6 +1327,25 @@ impl<H: TjsHost + 'static> Runtime<H> {
         self.suspended_call.is_some()
     }
 
+    /// Park a blocking script caller while the host runs a nested asynchronous
+    /// event scope. Parked frames remain GC roots; they are never replayed.
+    pub fn park_suspended_call(&mut self) -> Result<()> {
+        if self.parked_calls.len() >= 8 {return Err(TjsError::runtime("nested native event scope limit"));}
+        let stack=self.suspended_call.take().ok_or_else(||TjsError::runtime("no suspended native caller to park"))?;
+        self.parked_calls.push(stack);
+        Ok(())
+    }
+
+    /// Restore the most recent blocking caller after its event scope closes.
+    /// The native result is supplied explicitly before resuming that stack.
+    pub fn restore_parked_call(&mut self,value:Variant) -> Result<()> {
+        if self.suspended_call.is_some() {return Err(TjsError::runtime("nested callback has not completed"));}
+        let stack=self.parked_calls.pop().ok_or_else(||TjsError::runtime("no parked native caller"))?;
+        self.suspended_call=Some(stack);
+        self.resume_value=Some(value);
+        Ok(())
+    }
+
     pub fn resume_suspended(&mut self) -> Result<Option<Variant>> {
         let Some(call_stack) = self.suspended_call.take() else {
             return Ok(None);
@@ -1347,6 +1369,14 @@ impl<H: TjsHost + 'static> Runtime<H> {
         let file_id = self.call_context_file_id();
         let mut vm = Vm::new(file_id, self)?;
         vm.call_object_method(object, name, args)
+    }
+
+    /// Assign a member as script does: native and script property setters
+    /// run, and an absent member is created on the object.
+    pub fn put_object_member(&mut self, object: ObjectHandle, name: &str, value: Variant) -> Result<()> {
+        let file_id = self.call_context_file_id();
+        let mut vm = Vm::new(file_id, self)?;
+        vm.put_object_member(object, name, value)
     }
 
     /// Dispatches a host callback while a VM call is suspended. The callback

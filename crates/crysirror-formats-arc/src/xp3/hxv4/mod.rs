@@ -100,8 +100,9 @@ pub(super) fn open(
     let mut protected_ids = std::collections::BTreeSet::new();
     for entry in &mut base.entries {
         let fake = fake_id(&entry.path);
-        let protected = entry.metadata["flags"].as_u64().unwrap_or(0) & 0x8000_0000 != 0;
-        if let EntryPlan::Segments { encrypted, .. } = &mut base.plans[entry.id as usize] {
+        let plan = &mut base.plans[entry.id as usize];
+        let protected = matches!(plan, EntryPlan::Segments { facts, .. } if facts.flags & 0x8000_0000 != 0);
+        if let EntryPlan::Segments { encrypted, .. } = plan {
             *encrypted = false;
         }
         if protected {
@@ -118,8 +119,9 @@ pub(super) fn open(
                     .is_none(),
                 "duplicate HXV4 hashed path"
             );
-            entry.metadata["hxv4"] =
-                serde_json::json!({"authenticated":true,"name":"hashed","id":r.id});
+            if let EntryPlan::Segments { facts, .. } = &mut base.plans[entry.id as usize] {
+                facts.hxv4_id = Some(r.id);
+            }
         } else if protected && fake.is_some() {
             anyhow::bail!(
                 "HXV4 protected entry {} ({:?}, lookup {:?}) missing authenticated Special record",
@@ -252,6 +254,9 @@ impl Archive for HxArchive {
     fn entries(&self) -> &[ArchiveEntry] {
         &self.base.entries
     }
+    fn entry_metadata(&self, id: u32) -> serde_json::Value {
+        self.base.entry_metadata(id)
+    }
     fn resolve(&self, path: &str) -> Option<u32> {
         let path = path.replace('\\', "/");
         let path = match &self.hashed_root {
@@ -289,9 +294,7 @@ impl Archive for HxArchive {
             .entries
             .get(id as usize)
             .context("HXV4 entry id")?;
-        let expected = e.metadata["adler32"]
-            .as_u64()
-            .context("HXV4 checksum absent")? as u32;
+        let expected = self.base.xp3(id).context("HXV4 checksum absent")?.adler32;
         let state = self
             .filters
             .get(&id)

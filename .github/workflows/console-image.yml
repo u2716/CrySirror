@@ -1,0 +1,88 @@
+name: Console build image
+
+on:
+  workflow_call:
+    inputs:
+      platform:
+        description: Console build environment (psv or switch)
+        required: true
+        type: string
+    outputs:
+      image:
+        description: CrySirror's Dockerfile-hash-tagged build image
+        value: ${{ jobs.image.outputs.image }}
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Console build environment
+        required: true
+        type: choice
+        options: [psv, switch]
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: console-image-${{ github.repository }}-${{ inputs.platform }}
+  cancel-in-progress: false
+
+jobs:
+  image:
+    name: ${{ inputs.platform }} build image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      PLATFORM: ${{ inputs.platform }}
+    outputs:
+      image: ${{ steps.ref.outputs.image }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Compute image reference
+        id: ref
+        run: |
+          set -euo pipefail
+          case "$PLATFORM" in psv|switch) ;; *) exit 1 ;; esac
+          hash="$(sha256sum "platform/$PLATFORM/docker/Dockerfile" | cut -c1-16)"
+          name="ghcr.io/${GITHUB_REPOSITORY,,}/$PLATFORM-build"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "image=$name:$hash" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check for an existing image
+        id: exists
+        run: |
+          if docker manifest inspect "${{ steps.ref.outputs.image }}" >/dev/null 2>&1; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up image builder
+        if: steps.exists.outputs.found != 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and publish image
+        if: steps.exists.outputs.found != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: platform/${{ inputs.platform }}/docker
+          push: true
+          tags: |
+            ${{ steps.ref.outputs.image }}
+            ${{ steps.ref.outputs.name }}:latest
+          cache-from: type=gha,scope=crysirror-${{ inputs.platform }}-image
+          cache-to: type=gha,mode=max,scope=crysirror-${{ inputs.platform }}-image
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.description=CrySirror ${{ inputs.platform }} build environment

@@ -70,6 +70,7 @@ pub(crate) struct NativeSettings {
     pub ctrl_keydef: i32,
     pub neko_menu: i32,
     pub voice_skip_def: i32,
+    pub no_update_on_wait: i32,
     pub voice_volume: i32,
     pub talk_male: i32,
     pub talk_female: i32,
@@ -191,6 +192,7 @@ impl NativeSettings {
         let ctrl_keydef = environment_integer("CTRLKEYDEF")?;
         let neko_menu = environment_integer("NEKOMENU")?;
         let voice_skip_def = environment_integer("VOICESKIPDEF")?;
+        let no_update_on_wait = environment_integer("NOUPDATEONWAIT")?;
         Ok(Self {
             registry,
             effect_speed,
@@ -200,6 +202,7 @@ impl NativeSettings {
             ctrl_keydef,
             neko_menu,
             voice_skip_def,
+            no_update_on_wait,
             voice_volume,
             talk_male,
             talk_female,

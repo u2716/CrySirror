@@ -18,7 +18,7 @@ mod viewport_clip;
 use crate::projection;
 use anyhow::{Context, Result, bail, ensure};
 pub use crossfade::{CompositeFrame, RuleWipe, SubtreeCrossfade};
-pub use crossfade_effect::{MAX_TRANSITION_BLUR_RADIUS, SubtreeTransitionEffect};
+pub use crossfade_effect::{GlitchFrame, GlitchParams, GlitchTransition, MAX_TRANSITION_BLUR_RADIUS, SubtreeTransitionEffect};
 use crysirror_core::{
     path::{Mount, VfsPath},
     state::ClientId,
@@ -155,9 +155,14 @@ impl SpriteTransform {
         self.pose_offset.as_ref().is_none_or(|o|o.translation[2]==0. && o.rotation[0]==0. && o.rotation[1]==0. && o.scale[2]==0.) && self.local_matrix
             .is_none_or(|m| m[2] == 0. && m[6] == 0. && m[8] == 0. && m[9] == 0. && m[14] == 0.)
     }
+    /// A zero X/Y scale empties the subtree only for a flat 2D basis. With
+    /// an X/Y rotation (or a 3D local matrix) the zeroed local axis becomes
+    /// depth while local Z remains visible: QLIE titles flatten a curved
+    /// model with scale_y=0 under rotate_x=-90 to obtain a screen-facing sheet.
     pub fn collapsed(&self)->bool {
-        let offset=self.pose_offset.as_ref().map_or([0.;3],|o|o.scale);
-        self.scale_x+offset[0]==0.||self.scale_y+offset[1]==0.
+        let (offset,rotation)=self.pose_offset.as_ref().map_or(([0.;3],[0.;3]),|o|(o.scale,o.rotation));
+        let flat=self.rotate_x+rotation[0]==0.&&self.rotate_y+rotation[1]==0.&&self.matrix_is_2d();
+        flat&&(self.scale_x+offset[0]==0.||self.scale_y+offset[1]==0.)
     }
     pub fn validate(&self) -> Result<()> {
         if let Some(order)=self.geometry_order {order.validate()?;}
@@ -625,6 +630,10 @@ pub struct GlyphShadow {pub offset:[f32;2],pub color:[u8;4]}
 #[derive(Clone,Copy,Debug,Default,PartialEq,Serialize,Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PositionedGlyphStyle {
+    #[serde(default)]
+    pub underline:bool,
+    #[serde(default)]
+    pub strikeout:bool,
     #[serde(default)]
     pub bold:bool,
     #[serde(default)]
@@ -1431,11 +1440,42 @@ pub enum TransitionEffect {
         asset: String,
         #[serde(default)]
         fade: u8,
+        /// Continuous soft-edge width in rule levels (1..=4096), replacing the
+        /// discrete `fade` step: a pixel of rule level r (0..=255) is new at
+        /// weight (r + t·(vague+255) − 255) / vague, clamped (N-System
+        /// CDIBOverlap Alpha mode 2).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        vague: Option<u16>,
     },
     /// direction 0 down, 1 up, 2 right, 3 left (Siglus type 200, both scenes move).
     Slide { direction: u8 },
     /// Mosaic out of the old scene and into the new one (type 230).
     Mosaic { size: u32 },
+    /// The new scene grows from the canvas centre (scale 0→1) while turning
+    /// one revolution, counter-clockwise or `reverse`d, over the old scene
+    /// (N-System CDIBOverlap Rotate, DrawRotate 0x42BC50).
+    SpinZoom {
+        #[serde(default)]
+        reverse: bool,
+    },
+    /// The new scene offset along `vector` (px) by a triangle wave of
+    /// `count` round trips, uncovered pixels keeping the old scene;
+    /// `damped` scales the offset by 1 − t/2; `stretch` grows the scene by
+    /// the offset about its centre instead of moving it (N-System Bound,
+    /// DrawBound 0x42CA60, modes 0/1 and +10).
+    Bounce {
+        count: u16,
+        vector: [i16; 2],
+        #[serde(default)]
+        damped: bool,
+        #[serde(default)]
+        stretch: bool,
+    },
+    /// A perspective page flip over black: the old scene turns away about
+    /// `axis` (0 vertical, 1 horizontal, 2 the view axis) through a quarter
+    /// turn, then the new scene turns in; `focal` is the pinhole distance in
+    /// px (N-System RotDoor, MoveRotDoor 0x42E000).
+    DoorFlip { axis: u8, focal: u16 },
     /// Ordered Bayer-4 fade in logical canvas pixels. This is a shared engine
     /// effect with an independent code, not an alias for a Siglus wipe type.
     OrderedDither {
@@ -1500,7 +1540,7 @@ impl Easing {
 /// Transition codes implemented by shared GPU pipelines. Engine-owned effects
 /// use their own range; Siglus page curls (300/301) remain unsupported.
 pub fn transition_code_supported(code: i32) -> bool {
-    matches!(code, 0..=2 | 5..=199 | 200 | 210..=215 | 220 | 221 | 230 | 231 | 240..=243 | 900 | 901 | ORDERED_DITHER_TRANSITION_CODE)
+    matches!(code, 0..=2 | 5..=199 | 200 | 210..=215 | 220 | 221 | 230 | 231 | 240..=243 | 900 | 901 | 910..=912 | ORDERED_DITHER_TRANSITION_CODE)
 }
 pub const ORDERED_DITHER_TRANSITION_CODE: i32 = 1000;
 /// Types whose mask comes from `wipe_mask::generate` when none is given.
@@ -1513,8 +1553,9 @@ impl TransitionSpec {
         let mut o = [0; 16];
         match &self.effect {
             TransitionEffect::Crossfade => (0, o, None),
-            TransitionEffect::Mask { asset, fade } => {
+            TransitionEffect::Mask { asset, fade, vague } => {
                 o[0] = i32::from(*fade);
+                o[1] = vague.map_or(0, i32::from);
                 (900, o, Some(asset.clone()))
             }
             TransitionEffect::Slide { direction } => {
@@ -1526,6 +1567,23 @@ impl TransitionSpec {
             TransitionEffect::Mosaic { size } => {
                 o[0] = *size as i32;
                 (230, o, None)
+            }
+            TransitionEffect::SpinZoom { reverse } => {
+                o[0] = i32::from(*reverse);
+                (910, o, None)
+            }
+            TransitionEffect::Bounce { count, vector, damped, stretch } => {
+                o[0] = i32::from(*count);
+                o[1] = i32::from(vector[0]);
+                o[2] = i32::from(vector[1]);
+                o[3] = i32::from(*damped);
+                o[4] = i32::from(*stretch);
+                (911, o, None)
+            }
+            TransitionEffect::DoorFlip { axis, focal } => {
+                o[0] = i32::from(*axis);
+                o[1] = i32::from(*focal);
+                (912, o, None)
             }
             TransitionEffect::OrderedDither {
                 cell,
@@ -1556,14 +1614,20 @@ impl TransitionSpec {
             "transition duration must be 1..=600000 ms"
         );
         match &self.effect {
-            TransitionEffect::Mask { asset, fade } => {
+            TransitionEffect::Mask { asset, fade, vague } => {
                 ensure!(*fade <= 8 && !asset.is_empty(), "invalid mask transition");
+                ensure!(vague.is_none_or(|v| (1..=4096).contains(&v)), "mask vague 1..=4096");
             }
             TransitionEffect::Slide { direction } => {
                 ensure!(*direction < 4, "slide direction 0..=3")
             }
             TransitionEffect::Mosaic { size } => {
                 ensure!((1..=1024).contains(size), "mosaic size 1..=1024")
+            }
+            TransitionEffect::SpinZoom { .. } => {}
+            TransitionEffect::Bounce { count, .. } => ensure!(*count <= 1024, "bounce count 0..=1024"),
+            TransitionEffect::DoorFlip { axis, focal } => {
+                ensure!(*axis < 3 && *focal >= 1, "door flip axis 0..=2, focal >= 1")
             }
             TransitionEffect::OrderedDither { cell, steps, .. } => {
                 ensure!(
@@ -2400,6 +2464,7 @@ impl LayerSystem {
                         *duration_ms,
                         rule.clone(),
                         *external,
+                        false,
                     )?;
                     continue;
                 }
@@ -2411,7 +2476,15 @@ impl LayerSystem {
                     external,
                 } => {
                     effect.validate()?;
-                    staged.begin_crossfade(client, *id, *source, *duration_ms, None, *external)?;
+                    staged.begin_crossfade(
+                        client,
+                        *id,
+                        *source,
+                        *duration_ms,
+                        None,
+                        *external,
+                        effect.allows_self_source(),
+                    )?;
                     staged
                         .crossfades
                         .get_mut(&client.0)
@@ -3091,6 +3164,14 @@ impl LayerSystem {
                     quad.iter().flatten().all(|v| v.is_finite()),
                     "non-finite layer geometry"
                 );
+                // Coverage commands expose their inner paint during extraction.
+                // Only textured payloads retain the wrapper's image sampler;
+                // a solid or glyph coverage write has no image to sample.
+                let sampling = if matches!(&paint, Paint::Image { .. } | Paint::ProjectedMesh { .. } | Paint::LegacyMesh { .. }) {
+                    spec.sampling
+                } else {
+                    ImageSampling::default()
+                };
                 out.push(ordered_state::Pending { world:geometry.world,camera:camera.clone(),mesh,
                     ordinary_2d:!inherited_3d&&spec.transform.matrix_is_2d()&&!spec.transform.camera_enabled,
                     geometry_order:spec.transform.geometry_order,
@@ -3111,7 +3192,7 @@ impl LayerSystem {
                     opacity: (opacity * u32::from(spec.opacity) / 255) as u8,
                     blend: spec.blend,
                     uv,
-                    sampling: spec.sampling,
+                    sampling,
                     filter,
                     puppet: match &spec.paint {
                         Paint::Mesh { frame, .. } => Some(frame.clone()),
@@ -3368,3 +3449,15 @@ impl ImageSampling {
 }
 
 pub mod coverage;
+#[cfg(test)]
+mod collapse_tests {
+    use super::SpriteTransform;
+    #[test]
+    fn zero_scale_collapses_only_flat_bases() {
+        let flat = SpriteTransform { scale_y: 0., ..Default::default() };
+        assert!(flat.collapsed());
+        // QLIE title sheet: local Y flattened, then turned to face the camera.
+        let turned = SpriteTransform { scale_y: 0., rotate_x: -std::f32::consts::FRAC_PI_2, ..Default::default() };
+        assert!(!turned.collapsed());
+    }
+}

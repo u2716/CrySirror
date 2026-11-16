@@ -11,8 +11,31 @@ use std::sync::Arc;
 
 #[derive(Clone, Default)]
 pub(crate) struct FrameBuffers {
+    pub png_palette:crate::native_png_palette::PngPalette,
+    pub animation:Option<crate::native_animation_session::Bank>,
+    pub animation_off:i32,
+    pub animation_previous_nops:std::collections::BTreeSet<i32>,
+    pub bath_updates:Vec<crate::native_bath_updates::Mutation>,
+    pub particle_classes:Option<crate::native_particle_classes::Classes>,
+    pub cloud_class:crate::native_cloud::CloudClass,
+    pub staff_context:Option<crate::native_picture_reload::ContextData>,
+    pub staff_bank:crate::native_staff_bank::Bank,
+    pub staff_touched:std::collections::BTreeSet<i32>,
+    pub staff_geometry:std::collections::BTreeMap<i32,crate::native_geometry::NativeRects>,
+    pub hamon_field:Option<crate::native_hamon_vectors::Field>,
+    pub sun_rays_class:crate::native_sun_rays::SunRaysClass,
+    pub kira_class:crate::native_kira::KiraClass,
+    pub speed_line_class:Option<Arc<crate::native_speed_line::SpeedLineClass>>,
+    pub rain_class:Option<Arc<crate::native_rain::RainClass>>,
+    pub grass_class:Option<Arc<crate::native_grass_plane::GrassClass>>,
+    pub taiyo_class:Option<crate::native_taiyo::TaiyoClass>,
+    pub water_class:crate::native_water::WaterClass,
+    pub remember_class:crate::native_remember::RememberClass,
+    pub full_anime: crate::native_full_anime::FullAnimeClass,
+    pub full_anime_context: Option<crate::native_full_anime::PreparationContext>,
     pub capture: Option<Arc<dyn ImageResource>>,
     pub wipe_tables: crate::native_simple_wipe::Tables,
+    pub circle_ends:std::collections::BTreeMap<i32,([u32;2],bool)>,
     pub picture_updates:std::collections::BTreeMap<i32,crate::native_picture_effect::PictureEffectState>,
     pub once_printed: std::collections::BTreeSet<i32>,
     pub rainbow_palette:Option<Arc<crate::native_picture_rainbow::RainbowPalette>>,
@@ -191,13 +214,21 @@ mod tests {
     use std::time::{Duration, Instant};
     fn frame(command: i32, p: &[i32]) -> PictureEffectFrame {
         PictureEffectFrame {
+            bath_class:None,bath_update:None,bath_mouse:[0,0],
+            bank:Default::default(),bank_limit:16,
             slot: 0,
             state: PictureEffectState::parse(command, p).unwrap(),
             source: None,
             rectangles: NativeRects::natural([2, 1]),
             canvas: [2, 1],
             has_mask: false,
+            source_uses_mask:false,
             source_clip:None,
+            voice_speaking:false,
+            speed_line_class:None,
+            rain_class:None,
+            grass_class:None,
+            taiyo_class:None,
             rainbow_palette:None,
             second_clip:None,
             motion_background:false,
@@ -338,6 +369,7 @@ mod tests {
         );
         let mut once = frame(75, &[2, 1, 1]);
         once.normal = Some(crate::native_presentation::MoveFrame {
+            geometry_assigned:true,
             source_clip:None,
             slot: 0,
             state: once.geometry(),

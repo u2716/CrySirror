@@ -979,7 +979,10 @@ impl<'a> OriginalStreamReader<'a> {
 }
 
 pub fn save_dir(project_dir: &Path) -> PathBuf {
-    crate::host_scope::user_root().unwrap_or_else(|| project_dir.join("savedata"))
+    if let Some(user) = crate::host_scope::user_root() { return user; }
+    #[cfg(any(feature="nfs",feature="smb"))]
+    if let Ok(Some(user))=game_network::fs::user_root(project_dir) {return user;}
+    project_dir.join("savedata")
 }
 
 pub fn original_save_no(

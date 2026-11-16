@@ -1,12 +1,12 @@
 // Copyright (c) 2026 CrySirror contributors.
-// Distributed under the GNU Affero General Public License, version 3 or
-// (at your option) any later version, https://www.gnu.org/licenses/agpl-3.0.html.
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. A copy is available at https://mozilla.org/MPL/2.0/.
 //! Native LineParser calls the shared, VM-independent LineCursor.
 use crysirror_core::service::InputFrame;
 use crysirror_runtime::{AdapterRegistry, Runtime};
 use serde_json::json;
 // Same authored replay reader as the real desktop frontend; test-only reuse.
-#[path = "../../crysirror-desktop/src/input_track.rs"]
+#[path = "../../crysirror-launch/src/input_track.rs"]
 mod input_track;
 fn fixture(source: &str) -> (tempfile::TempDir, Runtime) {
     let d = tempfile::tempdir().unwrap();
@@ -292,6 +292,72 @@ fn kaicho_options_publish_shared_effects_and_preserve_native_override_rules() {
             assert_eq!(effect["acceleration"], 2.);
         }
     }
+}
+
+#[test]
+fn glitch_transitions_publish_shared_effects_and_simple_completion() {
+    let (_dir, mut runtime) = fixture(
+        r#"
+        Plugins.link('GlitchEffect.dll');
+        var w=new Window();var root=new Layer(w,null);root.setSize(64,32);
+        var before=new Layer(w,root);var after=new Layer(w,root);var solo=new Layer(w,root);var loop=new Layer(w,root);var other=new Layer(w,root);
+        with(before){.setSize(8,4);.visible=true;.fillRect(0,0,8,4,0xff000000);}
+        with(after){.setSize(8,4);.visible=false;.fillRect(0,0,8,4,0xffffffff);}
+        with(solo){.setSize(8,4);.left=10;.visible=true;.fillRect(0,0,8,4,0xff00ff00);}
+        with(loop){.setSize(8,4);.left=20;.visible=true;}
+        with(other){.setSize(8,4);.left=30;.visible=false;}
+        var bad=false;try{solo.beginTransition('fadeglitch',true,null,%[time:10,fadein:1]);}catch(e){bad=true;}
+        if(!bad)throw new Exception('fadein without source');
+        bad=false;try{solo.beginTransition('glitch',true,null,%[time:10]);}catch(e){bad=true;}
+        if(!bad)throw new Exception('exchange without source');
+        bad=false;try{solo.beginTransition('fadeglitch',true,null,%[]);}catch(e){bad=true;}
+        if(!bad)throw new Exception('missing time');
+        before.beginTransition('glitch',true,after,%[time:1,gamma_in:2,block:4,noise:0]);
+        solo.beginTransition('fadeglitch',true,null,%[time:500,color:0x123456,block:-3]);
+        global.completed=[];
+        loop.onTransitionCompleted=function(d,s){Debug.message('loop-completed '+(s===global.other)+' '+other.left+' '+global.loop.inTransition);};
+        global.other=other;global.loop=loop;
+        loop.beginTransition('loopglitch',true,other,%[]);
+        if(!loop.inTransition)throw new Exception('loop not started');
+        Debug.message('glitch-ready');
+    "#,
+    );
+    runtime.tick(0, InputFrame::default()).unwrap();
+    let layers = serde_json::to_value(&runtime.host.engine.layers).unwrap();
+    let fades = layers["crossfades"]["1"].as_object().unwrap();
+    assert_eq!(fades.len(), 2, "{fades:?}");
+    let mut seen = 0;
+    for (id, fade) in fades {
+        let effect = &fade["effect"];
+        assert_eq!(effect["kind"], "glitch");
+        match effect["mode"]["kind"].as_str().unwrap() {
+            "exchange" => {
+                assert_eq!(fade["duration_ms"], 2);
+                assert_eq!(effect["mode"]["gamma_in"], 2.);
+                assert_eq!(effect["mode"]["gamma_out"], 1.);
+                assert_eq!(effect["params"]["block"], 4);
+                assert_eq!(effect["params"]["noise"], 0.);
+                assert_ne!(fade["source"].to_string(), *id);
+                seen |= 1;
+            }
+            "fade" => {
+                assert_eq!(fade["duration_ms"], 500);
+                assert_eq!(effect["mode"]["color"], json!([0x12, 0x34, 0x56]));
+                assert_eq!(effect["mode"]["fade_in"], false);
+                assert_eq!(effect["params"]["block"], 16);
+                assert_eq!(effect["params"]["shift"], json!([16., 8., 8.]));
+                assert_eq!(fade["source"].to_string(), *id);
+                seen |= 2;
+            }
+            other => panic!("{other}"),
+        }
+    }
+    assert_eq!(seen, 3);
+    runtime.tick(16, InputFrame::default()).unwrap();
+    let log = runtime.inspect()["sessions"][0]["native"]["log_tail"].to_string();
+    assert!(log.contains("glitch-ready"), "{log}");
+    // LoopGlitch ends at its first update, without exchanging (left kept).
+    assert!(log.contains("loop-completed 1 30 0"), "{log}");
 }
 
 #[test]

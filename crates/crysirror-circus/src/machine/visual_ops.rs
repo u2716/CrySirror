@@ -18,6 +18,13 @@ pub enum VisualRequest {
         object: u16,
         priority: i16,
     },
+    ///DC3WY 437850: screen-space zoom (percent) about `center`, applied by
+    ///436950 after the object's own transform; 100 removes it.
+    Zoom {
+        object: u16,
+        scale: f32,
+        center: [f32; 2],
+    },
     Track {
         object: u16,
         property: VisualProperty,
@@ -180,6 +187,7 @@ impl Machine {
                 VisualRequest::Finish => {},
                 VisualRequest::Shader{pass}=>{self.state.sprite_shader=pass;self.state.native_live.shader_mode(pass)?;},
                 VisualRequest::Blur{..}=>{},
+                VisualRequest::Zoom{..}=>bail!("DC4PH has no 437850 zoom producer"),
             }
         }
         Ok(Some(CommandResult::Complete {

@@ -4,20 +4,24 @@
 // Wrappers supply load_node/load_triangle and the ray_* uniform vectors.
 
 bool lite_slab(float o, float d, float lo, float hi, inout float near_t, inout float far_t) {
-    if (abs(d) < 1.0e-20) return o >= lo && o <= hi;
-    float a = (lo - o) / d;
-    float b = (hi - o) / d;
-    near_t = max(near_t, min(a, b));
-    far_t = min(far_t, max(a, b));
-    return near_t <= far_t;
+    bool valid = o >= lo && o <= hi;
+    if (abs(d) >= 1.0e-20) {
+        float a = (lo - o) / d;
+        float b = (hi - o) / d;
+        near_t = max(near_t, min(a, b));
+        far_t = min(far_t, max(a, b));
+        valid = near_t <= far_t;
+    }
+    return valid;
 }
 
 bool lite_box(float3 origin, float3 direction, float3 lo, float3 hi, float limit) {
     float near_t = ray_eye.w;
     float far_t = limit;
-    return lite_slab(origin.x, direction.x, lo.x, hi.x, near_t, far_t)
-        && lite_slab(origin.y, direction.y, lo.y, hi.y, near_t, far_t)
-        && lite_slab(origin.z, direction.z, lo.z, hi.z, near_t, far_t);
+    bool x = lite_slab(origin.x, direction.x, lo.x, hi.x, near_t, far_t);
+    bool y = lite_slab(origin.y, direction.y, lo.y, hi.y, near_t, far_t);
+    bool z = lite_slab(origin.z, direction.z, lo.z, hi.z, near_t, far_t);
+    return x && y && z;
 }
 
 bool lite_triangle(float3 origin, float3 direction, float index, float limit,
@@ -39,19 +43,26 @@ bool lite_triangle(float3 origin, float3 direction, float index, float limit,
     distance = limit;
     normal = float3(0.0, 0.0, 0.0);
     color = float3(a1.y, b1.y, c1.y);
-    if (area2 < 1.0e-30 || abs(det) < 1.0e-7 * sqrt(area2)) return false;
-    float inverse = 1.0 / det;
-    float3 offset = origin - a;
-    float u = dot(offset, p) * inverse;
-    if (u < 0.0 || u > 1.0) return false;
-    float3 q = cross(offset, e1);
-    float v = dot(direction, q) * inverse;
-    if (v < 0.0 || u + v > 1.0) return false;
-    distance = dot(e2, q) * inverse;
-    if (distance <= ray_eye.w || distance >= limit) return false;
-    normal = n / sqrt(area2);
-    if (dot(normal, direction) > 0.0) normal = -normal;
-    return true;
+    bool valid = false;
+    if (area2 >= 1.0e-30 && abs(det) >= 1.0e-7 * sqrt(area2)) {
+        float inverse = 1.0 / det;
+        float3 offset = origin - a;
+        float u = dot(offset, p) * inverse;
+        if (u >= 0.0 && u <= 1.0) {
+            float3 q = cross(offset, e1);
+            float v = dot(direction, q) * inverse;
+            if (v >= 0.0 && u + v <= 1.0) {
+                float candidate = dot(e2, q) * inverse;
+                if (candidate > ray_eye.w && candidate < limit) {
+                    distance = candidate;
+                    normal = n / sqrt(area2);
+                    if (dot(normal, direction) > 0.0) normal = -normal;
+                    valid = true;
+                }
+            }
+        }
+    }
+    return valid;
 }
 
 bool lite_trace(float3 origin, float3 direction, bool any_hit,
@@ -61,39 +72,40 @@ bool lite_trace(float3 origin, float3 direction, bool any_hit,
     color = float3(0.0, 0.0, 0.0);
     bool hit = false;
     float index = 0.0;
-    // Valid immutable scenes have strictly increasing preorder/escape links.
-    // The exact node_count bound covers a complete traversal, never a quality cap.
-    for (float visit = 0.0; visit < ray_nodes.z && index < ray_nodes.z; visit += 1.0) {
+    // Preserve the complete monotonic stackless traversal. Structured control
+    // flow keeps the loop exits explicit for native Cg compilation.
+    // Float counters: every bound is a small exact integer, and the PSV
+    // build avoids integer loop/compare sequences (Vita3K 0.2.1 misran them).
+    for (float visit = 0.0; visit < ray_nodes.z && index < ray_nodes.z && !(any_hit && hit); visit += 1.0) {
         float base = index * 4.0;
         float2 n0 = load_node(base);
         float2 n1 = load_node(base + 1.0);
         float2 n2 = load_node(base + 2.0);
         float2 n3 = load_node(base + 3.0);
-        if (!lite_box(origin, direction, float3(n0, n1.x), float3(n2, n3.x), distance)) {
-            index = n1.y;
-            continue;
-        }
+        bool intersects = lite_box(origin, direction, float3(n0, n1.x), float3(n2, n3.x), distance);
         float first = floor(n3.y / 5.0);
         float count = n3.y - first * 5.0;
-        if (count == 0.0) {
+        if (intersects && count == 0.0) {
             index += 1.0;
-            continue;
-        }
-        for (int item = 0; item < 4; item += 1) {
-            if (float(item) >= count) break;
-            float candidate;
-            float3 candidate_normal;
-            float3 candidate_color;
-            if (lite_triangle(origin, direction, first + float(item), distance,
-                              candidate, candidate_normal, candidate_color)) {
-                hit = true;
-                distance = candidate;
-                normal = candidate_normal;
-                color = candidate_color;
-                if (any_hit) return true;
+        } else {
+            if (intersects) {
+                for (float item = 0.0; item < 4.0; item += 1.0) {
+                    if (item < count && !(any_hit && hit)) {
+                        float candidate;
+                        float3 candidate_normal;
+                        float3 candidate_color;
+                        if (lite_triangle(origin, direction, first + item, distance,
+                                          candidate, candidate_normal, candidate_color)) {
+                            hit = true;
+                            distance = candidate;
+                            normal = candidate_normal;
+                            color = candidate_color;
+                        }
+                    }
+                }
             }
+            index = n1.y;
         }
-        index = n1.y;
     }
     return hit;
 }
@@ -109,12 +121,14 @@ float4 lite_pixel(float2 uv) {
     }
     float3 light = normalize(ray_light.xyz);
     float lambert = max(dot(normal, light), 0.0);
-    if (lambert > 0.0) {
-        float ignored_distance;
-        float3 ignored_normal;
-        float3 ignored_color;
-        float3 origin = ray_eye.xyz + direction * distance + normal * (ray_eye.w * 2.0);
-        if (lite_trace(origin, light, true, ignored_distance, ignored_normal, ignored_color)) lambert = 0.0;
-    }
-    return float4(color * (ray_ambient.xyz + ray_sun.xyz * lambert), 1.0);
+    if (lambert <= 0.0) return float4(color * ray_ambient.xyz, 1.0);
+    float ignored_distance;
+    float3 ignored_normal;
+    float3 ignored_color;
+    float3 origin = ray_eye.xyz + direction * distance + normal * (ray_eye.w * 2.0);
+    bool occluded = lite_trace(origin, light, true, ignored_distance, ignored_normal, ignored_color);
+    // Keep the primary lighting value immutable across the secondary trace.
+    // This avoids the nested conditional register merge in native Cg/USSE.
+    float3 direct = occluded ? float3(0.0, 0.0, 0.0) : ray_sun.xyz * lambert;
+    return float4(color * (ray_ambient.xyz + direct), 1.0);
 }

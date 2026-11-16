@@ -679,29 +679,40 @@ impl MenuSystem {
     pub fn frame(&self, canvas: [u32; 2]) -> Result<Vec<Primitive>> {
         let mut out = vec![];
         let clip = Some([0., 0., canvas[0] as f32, canvas[1] as f32]);
+        let t = super::theme::current();
         for (order, c) in self.layout(canvas).into_iter().enumerate() {
             let spec = &self.clients[&c.owner][&c.bar].spec;
             let id = (c.bar << 16) | c.item;
             let order = [i32::MAX - 1, order as i32];
+            let focused = self.focus == Some((c.owner, c.bar, c.item));
             out.push(rectangle(
                 c.owner,
                 id,
                 200,
                 c.rect,
-                Paint::Solid {
-                    color: if self.focus == Some((c.owner, c.bar, c.item)) {
-                        [65, 85, 120, 255]
-                    } else {
-                        [36, 40, 48, 255]
-                    },
-                },
+                Paint::Solid { color: t.menu },
                 clip,
                 order,
             ));
+            if focused && !c.separator {
+                // Inset rounded highlight (subs 210..219).
+                let r = c.rect;
+                out.extend(super::theme::rounded(
+                    c.owner,
+                    id,
+                    210,
+                    [r[0] + 3., r[1] + 1., (r[2] - 6.).max(1.), (r[3] - 2.).max(1.)],
+                    t.menu_radius,
+                    t.accent,
+                    clip,
+                    order,
+                ));
+            }
             if c.separator {
                 let mut r = c.rect;
                 r[1] += r[3] / 2.;
-                r[2] -= 4.;
+                r[0] += 8.;
+                r[2] = (r[2] - 16.).max(1.);
                 r[3] = 1.;
                 out.push(rectangle(
                     c.owner,
@@ -709,7 +720,7 @@ impl MenuSystem {
                     201,
                     r,
                     Paint::Solid {
-                        color: [100, 100, 100, 255],
+                        color: t.separator,
                     },
                     clip,
                     order,
@@ -717,9 +728,9 @@ impl MenuSystem {
                 continue;
             }
             let mut rect = c.rect;
-            rect[0] += 6.;
+            rect[0] += 10.;
             rect[1] += 2.;
-            rect[2] = (rect[2] - 12.).max(1.);
+            rect[2] = (rect[2] - 20.).max(1.);
             rect[3] = (rect[3] - 4.).max(1.);
             let label = format!(
                 "{}{}{}",
@@ -740,10 +751,12 @@ impl MenuSystem {
                     text: label,
                     font: spec.font.clone(),
                     size: spec.text_size,
-                    color: if c.enabled {
-                        [245, 245, 245, 255]
+                    color: if !c.enabled {
+                        t.disabled
+                    } else if focused {
+                        t.accent_text
                     } else {
-                        [128, 128, 128, 255]
+                        t.control_text
                     },
                     layout: crysirror_core::service::UNWRAPPED_TEXT_LAYOUT.into(),
                 },

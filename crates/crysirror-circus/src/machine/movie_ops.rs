@@ -219,6 +219,7 @@ mod tests {
             labels: vec![],
             label_metadata: vec![],
             raw_strings: Default::default(),
+            original: None,
             instructions: vec![Instruction {
                 opcode: 0x52,
                 offset: 3,

@@ -17,6 +17,10 @@ pub use simulation::*;
 pub mod fixed_particle;
 
 pub mod tile_mask;
+/// Stateless falling streaks (rain) for redraw-every-frame callers.
+pub mod streaks;
+/// Marsaglia xorshift128 sequence with explicit serializable state.
+pub mod xorshift;
 
 pub mod drifting_atlas;
 

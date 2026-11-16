@@ -1,5 +1,7 @@
 # SugarPot / Tsukumo-2012
 
+[Opcode and syscall implementation list](../../docs/native-api/sugarpot.md).
+
 Mode: **adopt**. This is a first-class workspace implementation of the text
 language observed in the original 2012 *Tsukumo no Tsuki* executable. SugarPot
 identifies this observed native profile; AOS2's LiLiM resource-family attribution

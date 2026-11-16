@@ -1,0 +1,23 @@
+[package]
+name = "crysirror-willplus"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT"
+publish = false
+description = "WillPlus/AdvHD native script and scoped resource initialization"
+
+[dependencies]
+anyhow.workspace = true
+encoding_rs = "0.8"
+serde.workspace = true
+crysirror-core.workspace = true
+crysirror-resource.workspace = true
+crysirror-formats-arc.workspace = true
+crysirror-tasks.workspace = true
+crysirror-image.workspace = true
+crysirror-lua.workspace = true
+crysirror-text.workspace = true
+crysirror-vfx.workspace = true
+crysirror-runtime.workspace = true
+serde_json.workspace = true

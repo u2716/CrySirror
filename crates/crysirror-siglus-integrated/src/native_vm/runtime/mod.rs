@@ -793,7 +793,7 @@ impl CommandContext {
         // populated but the snapshot omits would survive across the load.
         self.layers.clear_all();
         self.gfx = graphics::GfxRuntime::default();
-        self.ui = ui::UiRuntime::default();
+        self.ui = ui::UiRuntime::with_layout_profile(self.font_cache.layout_profile());
         self.wait = wait::VmWait::default();
         self.stack.clear();
         self.render_object_keys_scratch.clear();
@@ -833,6 +833,10 @@ impl CommandContext {
         self.globals.syscom.fallback_origin = None;
         self.globals.syscom.msg_back_open = false;
         self.globals.syscom.msg_back_proc_initialized = false;
+        // The menu hides the game message window before EXCALL. A load replaces
+        // that scene without running its cleanup, and native saves only store
+        // hide_mwnd's availability flags, not this transient on/off state.
+        self.globals.syscom.hide_mwnd.onoff = false;
         self.globals.system.messagebox_modal = None;
         self.globals.system.messagebox_modal_result = None;
         self.globals.finish_wipe();
@@ -1346,6 +1350,21 @@ impl CommandContext {
     }
 
     fn sync_editbox_runtime(&mut self) {
+        self.prepare_text_font();
+        let text: String = self
+            .globals
+            .editbox_lists
+            .values()
+            .flat_map(|l| l.boxes.iter())
+            .flat_map(|e| [e.text.as_str(), e.composition_text.as_str()])
+            .collect();
+        let metrics = self.font_cache.cell_metrics(&text);
+        for list in self.globals.editbox_lists.values_mut() {
+            for eb in &mut list.boxes {
+                eb.cell_metrics = metrics.clone();
+            }
+        }
+
         let sw = self.screen_w as i32;
         let sh = self.screen_h as i32;
         let display_cnt = self.globals.change_display_mode_proc_cnt;
@@ -1537,8 +1556,12 @@ impl CommandContext {
             ids,
             int_vec_pool: IntVecPool::default(),
             gfx: graphics::GfxRuntime::default(),
-            ui: ui::UiRuntime::default(),
-            font_cache: FontCache::new(),
+            ui: ui::UiRuntime::with_layout_profile(
+                crate::native_vm::text_layout::TextLayoutProfile::UnicodeCells,
+            ),
+            font_cache: FontCache::with_layout_profile(
+                crate::native_vm::text_layout::TextLayoutProfile::UnicodeCells,
+            ),
             input: input::InputState::default(),
             script_input: input::InputState::default(),
             wait: wait::VmWait::default(),
@@ -1592,6 +1615,7 @@ impl CommandContext {
         };
         ctx.set_active_append(initial_append.dir, initial_append.name);
         ctx.apply_gameexe_runtime_defaults();
+        ctx.prepare_text_font();
         ctx
     }
 
@@ -1670,6 +1694,12 @@ impl CommandContext {
         // C_jitan_cnv itself defensively clamps 100..400.  Preserve the latter
         // for values loaded from legacy config data.
         cfg(GET_JITAN_SPEED, original.jitan_speed).clamp(100, 400) as u16
+    }
+
+    pub(crate) fn prepare_text_font(&mut self) {
+        let name = self.effective_font_name().to_owned();
+        self.font_cache
+            .load_for_project_named(&self.project_dir, &name);
     }
 
     pub(crate) fn effective_font_name(&self) -> &str {
@@ -2225,8 +2255,8 @@ impl CommandContext {
         self.solid_white = self.images.solid_rgba((255, 255, 255, 255));
         self.layers.clear_all();
         self.gfx = graphics::GfxRuntime::default();
-        self.ui = ui::UiRuntime::default();
-        self.font_cache = FontCache::new();
+        self.ui = ui::UiRuntime::with_layout_profile(self.font_cache.layout_profile());
+        self.font_cache = FontCache::with_layout_profile(self.font_cache.layout_profile());
         self.wait = wait::VmWait::default();
         self.stack.clear();
 
@@ -3770,6 +3800,8 @@ impl CommandContext {
     }
 
     pub fn on_text_input(&mut self, text: &str) {
+        self.prepare_text_font();
+        let metrics = self.font_cache.cell_metrics(text);
         if self.globals.system.messagebox_modal.is_some() {
             return;
         }
@@ -3785,10 +3817,13 @@ impl CommandContext {
         if !eb.created || !eb.visible {
             return;
         }
+        eb.cell_metrics.extend(metrics);
         eb.commit_text(text);
     }
 
     pub fn on_ime_preedit(&mut self, text: &str, cursor: Option<(usize, usize)>) {
+        self.prepare_text_font();
+        let metrics = self.font_cache.cell_metrics(text);
         if self.globals.system.messagebox_modal.is_some() {
             return;
         }
@@ -3806,6 +3841,7 @@ impl CommandContext {
         if !eb.created || !eb.visible {
             return;
         }
+        eb.cell_metrics.extend(metrics);
         eb.set_ime_preedit(text, cursor);
     }
 
@@ -4976,6 +5012,7 @@ impl CommandContext {
                         obj,
                         &mask_info,
                         &resolved_masks,
+                        -1,
                     );
                 }
             }
@@ -5476,10 +5513,6 @@ impl CommandContext {
             .max(1)
     }
 
-    fn msg_back_is_hankaku(ch: char) -> bool {
-        ch.is_ascii() || matches!(ch as u32, 0xFF61..=0xFF9F)
-    }
-
     fn msg_back_is_kinsoku_moji(ch: char) -> bool {
         matches!(
             ch,
@@ -5552,6 +5585,7 @@ impl CommandContext {
     }
 
     fn msg_back_measure_entry_text(
+        &self,
         entry: &globals::MsgBackEntry,
         moji_cnt: (i64, i64),
         moji_size: i32,
@@ -5584,7 +5618,8 @@ impl CommandContext {
             *y = (*y).saturating_add(line_step);
         };
 
-        for ch in text.chars() {
+        for display in self.font_cache.layout_profile().chars(&text) {
+            let ch = display.ch;
             if ch == '\r' {
                 continue;
             }
@@ -5600,12 +5635,20 @@ impl CommandContext {
                 continue;
             }
 
-            let this_moji_size = if Self::msg_back_is_hankaku(ch) {
+            let this_moji_size = if self.font_cache.layout_profile().uses_font_metrics(ch) {
+                self.font_cache.display_cell_width(ch, moji_size as i64) as i32
+            } else if self.font_cache.layout_profile().columns(ch) == 0 {
+                0
+            } else if self.font_cache.layout_profile().columns(ch) == 1 {
                 (moji_size / 2).max(1)
             } else {
                 moji_size.max(1)
             };
-            let this_check_size = this_moji_size.saturating_add(space_x);
+            let this_check_size = if this_moji_size == 0 {
+                0
+            } else {
+                this_moji_size.saturating_add(space_x)
+            };
             let mut auto_indent = false;
             if x.saturating_add(this_check_size) > msg_w.saturating_add(moji_size)
                 || (x.saturating_add(this_check_size) > msg_w
@@ -5621,7 +5664,7 @@ impl CommandContext {
                 break;
             }
 
-            x = x.saturating_add(this_moji_size).saturating_add(space_x);
+            x = x.saturating_add(this_check_size);
 
             if ch == '「' || ch == '『' || ch == '（' {
                 if line_head {
@@ -5738,7 +5781,7 @@ impl CommandContext {
                 last_margin = 0;
             } else {
                 let (text, height) =
-                    Self::msg_back_measure_entry_text(entry, moji_cnt, moji_size, moji_space);
+                    self.msg_back_measure_entry_text(entry, moji_cnt, moji_size, moji_space);
                 let total_pos = total_height.saturating_add(last_margin);
                 out.entries.push(MsgBackLayoutEntry {
                     history_index: *history_index,
@@ -6015,6 +6058,7 @@ impl CommandContext {
         }
         self.globals.syscom.read_skip.onoff = false;
         self.globals.syscom.msg_back_open = true;
+        self.prepare_text_font();
         self.globals.syscom.pending_proc = Some(globals::SyscomPendingProc {
             kind: globals::SyscomPendingProcKind::MsgBack,
             warning: false,
@@ -9188,6 +9232,9 @@ fn object_backend_sprite_local_offset(
     let Some(sprite_id) = sprite_id else {
         return (0, 0);
     };
+    if obj.object_type == 1 {
+        return (obj.rect_param.left, obj.rect_param.top);
+    }
     if let globals::ObjectBackend::Number { sprite_ids, .. } = &obj.backend {
         return sprite_ids
             .iter()
@@ -9217,6 +9264,23 @@ fn object_backend_sprite_local_offset(
         }
     }
     (0, 0)
+}
+
+fn apply_object_backend_sprite_local_offset(
+    obj: &globals::ObjectState,
+    sprite_id: Option<SpriteId>,
+    sprite: &mut Sprite,
+) {
+    let (local_x, local_y) = object_backend_sprite_local_offset(obj, sprite_id);
+    if local_x == 0 && local_y == 0 {
+        return;
+    }
+    sprite.x = (sprite.x as i64 + local_x).clamp(i32::MIN as i64, i32::MAX as i64) as i32;
+    sprite.y = (sprite.y as i64 + local_y).clamp(i32::MIN as i64, i32::MAX as i64) as i32;
+    // Rectangle edges, glyphs and digits use the object's transform origin.
+    // Moving a backend quad requires the inverse pivot adjustment.
+    sprite.pivot_x -= local_x as f32;
+    sprite.pivot_y -= local_y as f32;
 }
 
 fn object_backend_owns_sprite(
@@ -10668,6 +10732,7 @@ fn object_button_hit_sort_key_from_render(
     let mut bound = fetch_bound_render_sprites_for_hit(layers, gfx, stage_idx, runtime_slot, obj);
     for rs in &mut bound {
         apply_button_object_render_info_to_sprite(&mut rs.sprite, &info);
+        apply_object_backend_sprite_local_offset(obj, rs.sprite_id, &mut rs.sprite);
         if let Some(parent) = parent_state.clone() {
             let dummy = ObjectRenderInfo::default();
             apply_parent_render_state_to_sprite(&mut rs.sprite, &dummy, &parent);
@@ -12425,11 +12490,19 @@ fn apply_object_masks_recursive(
     obj: &mut globals::ObjectState,
     mask_info: &[Option<(String, i32, i32)>],
     resolved_masks: &HashMap<String, ImageHandle>,
+    inherited_mask_no: i64,
 ) {
     let mask_no = if ids.obj_mask_no != 0 {
         obj.lookup_int_prop(ids, ids.obj_mask_no).unwrap_or(-1)
     } else {
         -1
+    };
+    // C++ tnm_add_parent_trp inherits only TNM_MASK_NONE (-1), before
+    // resolving the texture. An explicit invalid/empty mask blocks inheritance.
+    let mask_no = if mask_no == -1 {
+        inherited_mask_no
+    } else {
+        mask_no
     };
     let mask_binding = usize::try_from(mask_no)
         .ok()
@@ -12442,6 +12515,10 @@ fn apply_object_masks_recursive(
                 .map(|mask_image_id| (mask_image_id, *mask_x, *mask_y))
         });
 
+    // A container can own a mask without having a drawable sprite. Carry its
+    // effective mask number down the tree instead of relying on the parent
+    // render state's first sprite. A child's explicit mask takes priority;
+    // mask coordinates remain in screen space, independent of object transforms.
     let targets: Vec<(LayerId, SpriteId)> = match &obj.backend {
         globals::ObjectBackend::Gfx => gfx
             .object_sprite_binding(stage_i64, obj_i64)
@@ -12478,6 +12555,7 @@ fn apply_object_masks_recursive(
             child,
             mask_info,
             resolved_masks,
+            mask_no,
         );
     }
 }
@@ -13296,6 +13374,20 @@ fn append_object_tree_nodes(
         return;
     }
 
+    // The mask pass already selected this object's effective native mask.
+    // Do not let the drawable-parent fallback restore an ancestor's texture
+    // when this object explicitly selected an invalid or empty mask instead.
+    let parent_state = parent_state.map(|mut parent| {
+        if ctx.ids.obj_mask_no != 0
+            && obj.lookup_int_prop(&ctx.ids, ctx.ids.obj_mask_no).unwrap_or(-1) != -1
+        {
+            parent.mask_image_id = None;
+            parent.mask_offset_x = 0;
+            parent.mask_offset_y = 0;
+        }
+        parent
+    });
+
     let debug_enabled = sg_render_tree_debug_enabled();
     let info =
         precomputed_info.unwrap_or_else(|| effective_object_info(ctx, stage_idx, obj_idx, obj));
@@ -13607,20 +13699,7 @@ fn append_object_tree_nodes(
             let bound_len_for_trace = bound.len();
             for mut rs in bound.drain(..) {
                 apply_object_render_info_to_sprite(&mut rs.sprite, &info);
-                let (local_x, local_y) = object_backend_sprite_local_offset(obj, rs.sprite_id);
-                if local_x != 0 || local_y != 0 {
-                    rs.sprite.x = (rs.sprite.x as i64 + local_x)
-                        .clamp(i32::MIN as i64, i32::MAX as i64)
-                        as i32;
-                    rs.sprite.y = (rs.sprite.y as i64 + local_y)
-                        .clamp(i32::MIN as i64, i32::MAX as i64)
-                        as i32;
-                    // All glyph and digit quads share the object's transform origin.
-                    // Moving the individual quad requires the inverse pivot
-                    // adjustment, matching C++ rp.center -= glyph.pos.
-                    rs.sprite.pivot_x -= local_x as f32;
-                    rs.sprite.pivot_y -= local_y as f32;
-                }
+                apply_object_backend_sprite_local_offset(obj, rs.sprite_id, &mut rs.sprite);
                 let sprite_layer = total_layer.saturating_add(object_backend_sprite_layer_offset(
                     ctx,
                     &obj.backend,
@@ -15365,6 +15444,7 @@ fn trace_codes_enabled() -> bool {
 }
 
 pub fn dispatch_form_code(ctx: &mut CommandContext, form_id: u32, args: &[Value]) -> Result<bool> {
+    ctx.prepare_text_font();
     let append_dir = ctx.globals.append_dir.as_str();
     ctx.images.set_current_append_dir_ref(append_dir);
     ctx.movie.set_current_append_dir_ref(append_dir);
@@ -15609,6 +15689,168 @@ fn collect_button_visuals_recursive(
 
     for (child_idx, child) in obj.runtime.child_objects.iter().enumerate() {
         collect_button_visuals_recursive(ctx, st, stage_idx, child_idx, child, map, None);
+    }
+}
+
+#[cfg(test)]
+mod rectangle_button_tests {
+    use super::*;
+
+    fn gallery_buttons() -> CommandContext {
+        let mut ctx = CommandContext::new(PathBuf::from("."));
+        let layer_id = ctx.layers.create_layer();
+        let image_id = ctx.images.solid_rgba((255, 255, 255, 0));
+        let mut parent = globals::ObjectState::default();
+        parent.init_param_like();
+        parent.used = true;
+        parent.set_int_prop(&ctx.ids, ctx.ids.obj_disp, 1);
+        for (i, button_no) in [14, 13, 11, 12, 15, 16].into_iter().enumerate() {
+            let sprite_id = ctx.layers.layer_mut(layer_id).unwrap().create_sprite();
+            let sprite = ctx
+                .layers
+                .layer_mut(layer_id)
+                .unwrap()
+                .sprite_mut(sprite_id)
+                .unwrap();
+            sprite.image_id = Some(image_id.clone());
+            sprite.size_mode = SpriteSizeMode::Explicit {
+                width: 100,
+                height: 570,
+            };
+            let mut obj = globals::ObjectState::default();
+            obj.init_param_like();
+            obj.used = true;
+            obj.object_type = 1;
+            obj.nested_runtime_slot = Some(100_000 + i);
+            obj.backend = globals::ObjectBackend::Rect {
+                layer_id,
+                sprite_id,
+                width: 100,
+                height: 570,
+            };
+            obj.rect_param.left = 43 + i as i64 * 100;
+            obj.rect_param.top = 88;
+            obj.rect_param.right = obj.rect_param.left + 100;
+            obj.rect_param.bottom = 658;
+            obj.set_int_prop(&ctx.ids, ctx.ids.obj_disp, 1);
+            obj.button.enabled = true;
+            obj.button.button_no = button_no;
+            obj.button.group_no = 0;
+            obj.button.action_no = 0;
+            parent.runtime.child_objects.push(obj);
+        }
+        let stage = ctx
+            .globals
+            .stage_forms
+            .entry(ctx.ids.form_global_stage)
+            .or_default();
+        stage.object_lists.insert(1, vec![parent]);
+        stage.ensure_group_list(1, 1);
+        stage.group_lists.get_mut(&1).unwrap()[0].start();
+        ctx
+    }
+
+    #[test]
+    fn transparent_gallery_rectangles_select_the_character_under_the_mouse() {
+        let mut ctx = gallery_buttons();
+        let form = ctx.ids.form_global_stage;
+        for (i, expected) in [14, 13, 11, 12, 15, 16].into_iter().enumerate() {
+            for y in [88, 300, 657] {
+                ctx.globals
+                    .stage_forms
+                    .get_mut(&form)
+                    .unwrap()
+                    .group_lists
+                    .get_mut(&1)
+                    .unwrap()[0]
+                    .start();
+                ctx.on_mouse_move(93 + i as i32 * 100, y);
+                assert_eq!(
+                    ctx.globals.stage_forms[&form].group_lists[&1][0].hit_button_no,
+                    expected
+                );
+                ctx.on_mouse_down(input::VmMouseButton::Left);
+                ctx.on_mouse_up(input::VmMouseButton::Left);
+                assert_eq!(
+                    ctx.globals.stage_forms[&form].group_lists[&1][0].decided_button_no,
+                    expected
+                );
+            }
+        }
+        ctx.globals
+            .stage_forms
+            .get_mut(&form)
+            .unwrap()
+            .group_lists
+            .get_mut(&1)
+            .unwrap()[0]
+            .start();
+        for (x, y) in [(42, 300), (643, 300), (93, 87), (93, 658)] {
+            ctx.on_mouse_move(x, y);
+            assert_eq!(
+                ctx.globals.stage_forms[&form].group_lists[&1][0].hit_button_no,
+                -1
+            );
+        }
+    }
+
+    #[test]
+    fn rectangle_edges_use_the_same_transform_for_rendering_and_hit_testing() {
+        let mut ctx = gallery_buttons();
+        let form = ctx.ids.form_global_stage;
+        let parent = &mut ctx
+            .globals
+            .stage_forms
+            .get_mut(&form)
+            .unwrap()
+            .object_lists
+            .get_mut(&1)
+            .unwrap()[0];
+        parent.runtime.child_objects.truncate(1);
+        parent.set_int_prop(&ctx.ids, ctx.ids.obj_x, 200);
+        parent.set_int_prop(&ctx.ids, ctx.ids.obj_y, 100);
+        let child = &mut parent.runtime.child_objects[0];
+        child.set_int_prop(&ctx.ids, ctx.ids.obj_x, 10);
+        child.set_int_prop(&ctx.ids, ctx.ids.obj_y, 20);
+        child.set_int_prop(&ctx.ids, ctx.ids.obj_scale_x, 2000);
+        child.set_int_prop(&ctx.ids, ctx.ids.obj_scale_y, 500);
+        let frame = ctx.render_frame_with_effects();
+        let sprite = &frame
+            .sprites
+            .iter()
+            .find(|rs| {
+                rs.sprite.size_mode
+                    == SpriteSizeMode::Explicit {
+                        width: 100,
+                        height: 570,
+                    }
+            })
+            .unwrap()
+            .sprite;
+        let quad = crate::native_vm::render_math::sprite_quad_points(
+            sprite,
+            sprite.x as f32,
+            sprite.y as f32,
+            100.0,
+            570.0,
+            1280.0,
+            720.0,
+        )
+        .unwrap();
+        assert_eq!((quad[0].x, quad[0].y), (296.0, 164.0));
+        assert_eq!((quad[2].x, quad[2].y), (496.0, 449.0));
+        for (x, y, expected) in [
+            (296, 164, 14),
+            (495, 448, 14),
+            (295, 164, -1),
+            (496, 449, -1),
+        ] {
+            ctx.on_mouse_move(x, y);
+            assert_eq!(
+                ctx.globals.stage_forms[&form].group_lists[&1][0].hit_button_no,
+                expected
+            );
+        }
     }
 }
 
@@ -17265,3 +17507,21 @@ mod emote_continuous_frame_tests {
         assert!(!ctx.needs_continuous_frame());
     }
 }
+
+#[cfg(test)]
+mod load_message_window_tests {
+    use super::*;
+
+    #[test]
+    fn loading_discards_menu_message_window_hide_state() {
+        let mut ctx = CommandContext::new(std::env::temp_dir().join("siglus-load-menu-reset"));
+        ctx.globals.syscom.hide_mwnd.onoff = true;
+        ctx.globals.syscom.hide_mwnd.enable = false;
+        ctx.begin_runtime_load_apply();
+        assert!(!ctx.globals.syscom.hide_mwnd.onoff);
+        assert!(!ctx.globals.syscom.hide_mwnd.enable);
+    }
+}
+
+#[cfg(test)]
+mod object_mask_tests;

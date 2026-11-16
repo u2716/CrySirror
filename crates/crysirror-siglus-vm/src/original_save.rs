@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
-// Migrated from pinned siglus_rs; see UPSTREAM.md and upstream-files.json.
+// Migrated from pinned siglus_rs; see SOURCE.json and upstream-files.json.
 use crate::io_fs as fs;
 use anyhow::{Context, Result, anyhow, bail};
 #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]

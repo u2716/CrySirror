@@ -5,18 +5,19 @@
 mod app;
 mod audio;
 mod cursor;
-mod detect;
-mod source_path;
-mod integrated_roots;
-mod desktop_provider;
+pub(crate) use crysirror_launch::detect;
+pub(crate) use crysirror_launch::source_path;
+pub(crate) use crysirror_launch::integrated_roots;
+pub(crate) use crysirror_launch::desktop_provider;
 mod text_input;
 #[cfg(feature = "gamepad")]
 mod gamepad;
-mod input_track;
+pub(crate) use crysirror_launch::input_track;
 mod launch;
-mod virtual_window;
+pub(crate) use crysirror_launch::virtual_window;
 mod native_menu;
-pub mod nls;
+mod showcase;
+pub use crysirror_launch::nls;
 pub use app::embedded;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -99,6 +100,19 @@ enum Command {
     /// Detect the engine of an installed game and run it in place: the
     /// game folder (or a file inside it, such as its executable).
     Play(PlayOptions),
+    /// Show the game library launcher for the game folders under ROOT, then
+    /// play the chosen game; the launcher returns when the game exits.
+    Library {
+        /// Folder holding one subfolder per installed game.
+        root: PathBuf,
+        #[arg(long)]
+        data_dir: Option<PathBuf>,
+        /// Font for the launcher and games (default: a system CJK font).
+        #[arg(long)]
+        font: Option<PathBuf>,
+        #[arg(long)]
+        no_audio: bool,
+    },
     /// Bake local E-mote PSB files into an engine puppet (rig JSON + PNG
     /// textures + report). The output never contains PSB data structures.
     PuppetImport {
@@ -223,6 +237,28 @@ enum Command {
     },
     /// Inspect source data and actually registered adapter factories.
     Inspect { project: PathBuf },
+    /// Record a scripted 3D scene whose screens show live headless games
+    /// (video via ffmpeg; game PCM is spatially mixed into the file, never played).
+    Showcase {
+        manifest: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long)]
+        width: Option<u32>,
+        #[arg(long)]
+        height: Option<u32>,
+        #[arg(long)]
+        seconds: Option<f64>,
+        /// Simulate from 0 but only record from this time (previews).
+        #[arg(long, default_value_t = 0.)]
+        start_seconds: f64,
+        #[arg(long)]
+        preview_dir: Option<PathBuf>,
+        #[arg(long, default_value_t = 0)]
+        preview_every: u32,
+        #[arg(long)]
+        keep_work: bool,
+    },
     /// Probe actual adapter features separately from implemented renderer paths.
     GpuInfo,
 }
@@ -256,60 +292,7 @@ fn state_dir_base() -> PathBuf {
     }
     .unwrap_or_else(|| PathBuf::from(".crysirror-state"))
 }
-fn adapter_registry() -> Result<AdapterRegistry> {
-    #[allow(unused_mut)]
-    let mut registry = AdapterRegistry::default();
-    crysirror_siglus_integrated::register(&mut registry)?;
-    crysirror_reallive::register(&mut registry)?;
-    crysirror_krkr::register(&mut registry)?;
-    crysirror_rfvp_integrated::register(&mut registry)?;
-    crysirror_nscripter::register(&mut registry)?;
-    crysirror_bgi_integrated::register(&mut registry)?;
-    crysirror_softpal::register(&mut registry)?;
-    crysirror_circus::register(&mut registry)?;
-    crysirror_catsystem2::register(&mut registry)?;
-    crysirror_majiro::adapter::register(&mut registry)?;
-    crysirror_qlie::adapter::register(&mut registry)?;
-    crysirror_sugarpot::register(&mut registry)?;
-    crysirror_system_nnn::installed::register(&mut registry)?;
-    crysirror_system4::factory::register(&mut registry)?;
-    crysirror_avg32::register(&mut registry)?;
-    Ok(registry)
-}
-fn load_project(path: &Path) -> Result<Project> {
-    let project = Project::load(path)?;
-    for client in project.clients.iter().filter(|client|client.adapter=="system4") {
-        serde_json::from_value::<crysirror_system4::worker_adapter::Config>(client.config.clone())?.validate()?;
-    }
-    for client in project.clients.iter().filter(|client|client.adapter=="system-nnn") {
-        serde_json::from_value::<crysirror_system_nnn::installed::Config>(client.config.clone())?.validate()?;
-    }
-    for c in project.clients.iter().filter(|c| c.adapter == "krkr") {
-        serde_json::from_value::<crysirror_krkr::Config>(c.config.clone())?.validate()?;
-    }
-    for c in project.clients.iter().filter(|c| c.adapter == "rfvp") {
-        serde_json::from_value::<crysirror_rfvp_integrated::Config>(c.config.clone())?.validate()?;
-    }
-    for c in project.clients.iter().filter(|c| c.adapter == "reallive") {
-        serde_json::from_value::<crysirror_reallive::Config>(c.config.clone())?.validate()?;
-    }
-    for c in project.clients.iter().filter(|c| c.adapter == "nscripter") {
-        serde_json::from_value::<crysirror_nscripter::Config>(c.config.clone())?.validate()?;
-    }
-    for c in project.clients.iter().filter(|c| c.adapter == "circus") {
-        serde_json::from_value::<crysirror_circus::Config>(c.config.clone())?.validate()?;
-    }
-    for c in project.clients.iter().filter(|c| c.adapter == "catsystem2") {
-        serde_json::from_value::<crysirror_catsystem2::Config>(c.config.clone())?.validate()?;
-    }
-    for c in project.clients.iter().filter(|c| c.adapter == "majiro") {
-        serde_json::from_value::<crysirror_majiro::adapter::Config>(c.config.clone())?.validate()?;
-    }
-    for c in project.clients.iter().filter(|c| c.adapter == "avg32") {
-        serde_json::from_value::<crysirror_avg32::Config>(c.config.clone())?.validate()?;
-    }
-    Ok(project)
-}
+use crysirror_launch::core::{adapter_registry, load_project};
 fn load_runtime(path: &Path, dir: &Path) -> Result<Runtime> {
     let registry = adapter_registry()?;
     let mut project=load_project(path)?;
@@ -401,6 +384,41 @@ fn engine_core(rt: Runtime, scripts: &[PathBuf], client: &str) -> Result<app::Co
     app.init()?;
     app.start()?;
     Ok(app::Core::Scripted(Box::new(app)))
+}
+/// Boot an installed local game headless, exactly as `play --headless` does,
+/// with an explicit state directory. Returns the core and the font in use.
+pub(crate) fn boot_headless_game(
+    game: &Path,
+    state_dir: &Path,
+    font: Option<PathBuf>,
+    nls: Option<&str>,
+) -> Result<(app::Core, Option<PathBuf>)> {
+    let mut dir = source_path::SourcePath::from_input(game)?;
+    if dir.metadata()?.is_file() {
+        dir = dir.parent().context("game file without a folder")?;
+    }
+    let dir = dir.canonicalize().context("game source directory")?;
+    let local = dir.local_path().context("showcase games must be local folders")?.to_path_buf();
+    let mut plan = detect::detect_source(&dir)?;
+    log::info!("showcase: detected {} game in {}", plan.engine, local.display());
+    nls::apply(&mut plan.project, nls)?;
+    let mut project: Project = serde_json::from_value(plan.project.clone())?;
+    std::fs::create_dir_all(state_dir)?;
+    integrated_roots::bind(&mut project, &local, state_dir, font.as_deref())?;
+    let mut rt = Runtime::with_asset_root(project, &local, state_dir, adapter_registry()?)?;
+    desktop_provider::install(&mut rt, false)?;
+    rt.assets
+        .decoders
+        .register("g00", Arc::new(crysirror_siglus::SiglusImageDecoder))?;
+    rt.set_audio_nonblocking(false);
+    let font = font.or_else(|| {
+        (!rt.project.fonts.contains_key("default"))
+            .then(detect::system_font)
+            .flatten()
+    });
+    app::load_fonts(&mut rt, font.as_deref())?;
+    virtual_window::VirtualWindow::new(rt.project.canvas).publish(&mut rt);
+    Ok((launch::bootstrap(rt, &plan)?, font))
 }
 /// `crysirror play`: engine detection, then the ordinary scripted host with
 /// the game folder as the explicit asset root.
@@ -558,6 +576,56 @@ fn play(options: PlayOptions) -> Result<()> {
         },
     )
 }
+/// The shared library launcher (crysirror-launch `library`) as a desktop
+/// supervisor. winit allows one event loop per process, so the launcher and
+/// each game run as child processes of this binary (`run` / `play`).
+fn library(root: &Path, data_dir: Option<PathBuf>, font: Option<PathBuf>, no_audio: bool) -> Result<()> {
+    use crysirror_library::library;
+    let base = data_dir.unwrap_or_else(|| state_dir_base().join("CrySirror"));
+    let font = font.or_else(crysirror_launch::detect::system_font);
+    let font_bytes = font.as_deref().map(std::fs::read).transpose()?;
+    let exe = std::env::current_exe()?;
+    let project_dir = base.join("launcher");
+    let state = base.join("launcher-state");
+    loop {
+        let mut games: Vec<PathBuf> = std::fs::read_dir(root)
+            .with_context(|| format!("list {}", root.display()))?
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_dir() && !p.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.')))
+            .collect();
+        games.sort();
+        let entries: Vec<library::Entry> = games.iter().map(|dir| library::Entry::folder(dir, Some(&base.join("covers")))).collect();
+        let style = library::Style {
+            confirm: "Enter",
+            cross: false,
+            add_hint: format!("Copy each game folder to {}", root.display()),
+        };
+        library::write(&project_dir, &library::build(&entries, (1280, 720), font_bytes.as_deref(), &style)?)?;
+        let mut launcher = std::process::Command::new(&exe);
+        launcher.arg("run").arg(project_dir.join("project.json")).arg("--script").arg(project_dir.join("launcher.js"));
+        launcher.args(["--script-client", library::CLIENT]).arg("--data-dir").arg(&state).arg("--no-audio");
+        if let Some(font) = &font {
+            launcher.arg("--font").arg(font);
+        }
+        let status = launcher.status().context("start the launcher")?;
+        anyhow::ensure!(status.success(), "launcher exited with {status}");
+        let Some(id) = library::take_choice(&state) else { return Ok(()) };
+        let Some(dir) = games.iter().find(|g| g.file_name().is_some_and(|n| n.to_string_lossy() == id)) else { continue };
+        let mut game = std::process::Command::new(&exe);
+        game.arg("play").arg(dir);
+        if let Some(font) = &font {
+            game.arg("--font").arg(font);
+        }
+        if no_audio {
+            game.arg("--no-audio");
+        }
+        let status = game.status().context("start the game")?;
+        if !status.success() {
+            log::warn!("{} exited with {status}", dir.display());
+        }
+    }
+}
 fn run() -> Result<()> {
     let args = Args::parse();
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
@@ -568,6 +636,7 @@ fn run() -> Result<()> {
         .unwrap_or(Command::Play(PlayOptions::default()));
     match command {
         Command::Play(options) => play(options),
+        Command::Library { root, data_dir, font, no_audio } => library(&root, data_dir, font, no_audio),
         Command::Run {
             project,
             data_dir,
@@ -606,6 +675,9 @@ fn run() -> Result<()> {
                     allow_borderless,
                 },
             )
+        }
+        Command::Showcase { manifest, output, width, height, seconds, start_seconds, preview_dir, preview_every, keep_work } => {
+            showcase::run(showcase::Options { manifest, output, width, height, seconds, start_seconds, preview_dir, preview_every, keep_work })
         }
         Command::Render {
             project,

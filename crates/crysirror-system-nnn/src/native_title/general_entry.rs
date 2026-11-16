@@ -108,6 +108,7 @@ impl NativeTitlePlayer {
                 state.calcu_without_input(spec);
             }
             let mut frame = TitleFrame {
+                mini_scheduled:true,
                 background: background.clone(),
                 counter: 0,
                 states: states.clone(),
@@ -120,7 +121,7 @@ impl NativeTitlePlayer {
             if self.spec.menu_wait == 0 {
                 let end = self.spec.menu_wait.saturating_add(self.spec.menu_fade);
                 for (index, state) in states.iter_mut().enumerate() {
-                    if !self.spec.buttons[index].exists {
+                    if index>=self.base_buttons || !self.spec.buttons[index].exists {
                         continue;
                     }
                     let input = self.button_input(
@@ -202,6 +203,12 @@ impl NativeTitlePlayer {
             )?);
         }
         let fade = entry.fade.as_mut().unwrap();
+        if let Some(ticket)=fade.audio_ticket(host.now_ms()) {
+            if !vm.poll_general_update(host,self.general_mode,ticket)? {
+                self.general_entry=Some(entry);
+                return Ok(false);
+            }
+        }
         vm.bind_entry_wipe_context(fade)?;
         let skip = input.buttons_pressed
             & (crysirror_core::service::buttons::MOUSE_LEFT

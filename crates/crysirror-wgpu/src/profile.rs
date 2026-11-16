@@ -30,14 +30,33 @@ pub(crate) struct GpuTimings {
     marker: Option<(wgpu::ComputePipeline, wgpu::BindGroup)>,
     pub dropped: u64,
     pub failures: u64,
+    admitted: bool,
+}
+const MAX_TIMING_RENDERERS: usize = 4;
+static TIMING_RENDERERS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+impl Drop for GpuTimings {
+    fn drop(&mut self) {
+        if self.admitted {
+            TIMING_RENDERERS.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+        }
+    }
 }
 impl GpuTimings {
     pub fn new(gpu: &Gpu) -> Self {
+        // Timestamp counter buffers are a small per-process budget (Metal
+        // fails beyond a few dozen). Only the first renderers get timings;
+        // further renderers run without GPU timestamps.
+        let admitted = TIMING_RENDERERS
+            .fetch_update(std::sync::atomic::Ordering::AcqRel, std::sync::atomic::Ordering::Acquire, |n| {
+                (n < MAX_TIMING_RENDERERS).then_some(n + 1)
+            })
+            .is_ok();
         let mut slots = vec![];
-        if gpu
-            .device
-            .features()
-            .contains(wgpu::Features::TIMESTAMP_QUERY)
+        if admitted
+            && gpu
+                .device
+                .features()
+                .contains(wgpu::Features::TIMESTAMP_QUERY)
         {
             for _ in 0..4 {
                 slots.push(Slot {
@@ -95,6 +114,7 @@ impl GpuTimings {
             Some((pipeline, bind))
         };
         Self {
+            admitted,
             marker,
             slots,
             dropped: 0,

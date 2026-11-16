@@ -88,6 +88,7 @@ impl Parsed {
             }
             let pictures = self.pictures.take().unwrap();
             let effects = pictures.effects().to_vec();
+            for header in pictures.png_headers(){self.seed.bridge.observe_png_header(header)?;}
             for picture in pictures.into_prepared()? {
                 self.seed.bridge.insert_saved_picture(picture)?;
             }
@@ -107,18 +108,27 @@ impl Parsed {
                     )?,
             );
         }
+        if !self.seed.bridge.poll_saved_hamon(host)? {return Ok(false);}
         if self.pattern_init.is_none() {
+            if let Some(slot)=self.seed.bridge.next_saved_hahen() {
+                let mut variables=self.session.machine().variables().context("NNN saved HAHEN variables")?.clone();
+                let random=variables.random_state().context("NNN saved HAHEN random state")?;
+                let Some(random)=self.seed.bridge.poll_saved_hahen(slot,&random)? else{return Ok(false);};
+                variables.replace_random_state(random)?;self.session.machine_mut().replace_variables(variables)?;
+                return Ok(false);
+            }
             // Original InitParameter walks enabled slots in order. RAINBOW
             // consumes three discarded draws; SUNA prepares its shared random
             // surface asynchronously. Preserve their interleaving, rather than
             // batching all discarded draws before/after every SUNA slot.
-            while let Some(slot)=self.seed.bridge.next_saved_rainbow() {
+            while let Some((slot,command))=self.seed.bridge.next_saved_cpu_effect() {
                 let mut variables=self.session.machine().variables().context("NNN saved RAINBOW variables absent")?.clone();
                 let mut random=variables.random_state().context("NNN saved RAINBOW RNG absent")?;
-                self.seed.bridge.initialize_saved_rainbow(slot,&mut random)?;
+                self.seed.bridge.initialize_saved_cpu_effect(slot,command,&mut random)?;
                 variables.replace_random_state(random)?;
                 self.session.machine_mut().replace_variables(variables)?;
             }
+            if self.seed.bridge.next_saved_hahen().is_some(){return Ok(false);}
             if let Some(slot) = self.seed.bridge.next_saved_suna() {
                 let random = self
                     .session
@@ -312,7 +322,7 @@ impl Parsed {
                                         false,
                                         self.frame_ready.as_ref().unwrap().buffers.clone(),
                                         host,
-                                    )?,
+                                    )?.continue_print_scope(),
                                 );
                                 self.post_snapshot = None;
                             }
@@ -443,7 +453,7 @@ impl NativeRestoreJob {
                     file.status_word(30)? as u32,seed.text.retained_serial(),file.status_word(44)?!=0,file.status_word(485)?!=0)?;
                 seed.bridge.configure_text(latent)?;seed.bridge.configure_selection(seed.selection.dormant()?)?;
                 let session=file.prepare_script_contexts(&profile,&config,&current,|name,cancel|loader(name,cancel),&cancel)?;
-                let pictures=SavedPictures::new(client,&file,&profile,&config,seed.bridge.image_resources()?)?;
+                let pictures=SavedPictures::new(client,&file,&profile,&config,seed.bridge.image_resources()?)?.with_mask_histories(seed.bridge.image_mask_histories());
                 let audio=seed.audio.as_ref().context("NNN saved audio seed absent")?.prepare(&file,&profile)?;cancel.check()?;
                 let post_enabled=matches!(&wait,Some(SavedWait::Message{..}))||(file.status_word(20)?==9&&seed.selection.advances_effects());
                 Ok(Parsed{file,profile,session,seed,pictures:Some(pictures),audio:Some(audio),wait,

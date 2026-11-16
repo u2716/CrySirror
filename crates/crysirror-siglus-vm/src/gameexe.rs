@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
-// Migrated from pinned siglus_rs; see UPSTREAM.md and upstream-files.json.
+// Migrated from pinned siglus_rs; see SOURCE.json and upstream-files.json.
 //! Gameexe.dat decoding and INI-like parsing.
 //!
 //! In the original Siglus engine, `Gameexe.dat` is treated as a TCHAR text

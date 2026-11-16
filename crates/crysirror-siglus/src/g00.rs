@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 // Derived from xmoezzz/siglus_rs at 5f358ef1360b0439e92aed2b749e8f25d8721954.
-// Original path: crates/siglus_scene_vm/src/assets/g00.rs. See UPSTREAM.md.
+// Original path: crates/siglus_scene_vm/src/assets/g00.rs. See SOURCE_NOTES.md.
 //! G00 decoder.
 //!
 //! Implemented based on the the original implementation extractor logic provided by the user.

@@ -5,11 +5,11 @@ Copyright (c) 2026 CrySirror contributors.
 
 Air absorption, weighted dipole directivity and deterministic volumetric
 visibility are adapted from phonon_rs and its Steam Audio-derived code.
-Licensed under the Apache License, Version 2.0; see LICENSE and UPSTREAM.md.
+Licensed under the Apache License, Version 2.0; see LICENSE and SOURCE_NOTES.md.
 
 Parry and optional obvhs are external Cargo dependencies, with their own
 upstream notices and licenses. They are not relicensed by this package.
 
 Parametric late reverberation uses the external FunDSP 0.23.0 Cargo dependency,
 Copyright Sami Perttu and FunDSP contributors, under upstream MIT OR Apache-2.0
-terms. Its original notices remain in the dependency; see REVERB_UPSTREAM.md.
+terms. Its original notices remain in the dependency; see REVERB_SOURCE_NOTES.md.

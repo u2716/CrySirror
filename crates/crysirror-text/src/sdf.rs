@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MPL-2.0
 //! CPU R8 signed-distance atlas. Derived pixels/UVs only, no GPU objects/fonts.
 use crate::{
-    layout::{IconPlacement, Layout},
     TextSystem,
+    layout::{IconPlacement, Layout},
 };
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, ops::Range};
 

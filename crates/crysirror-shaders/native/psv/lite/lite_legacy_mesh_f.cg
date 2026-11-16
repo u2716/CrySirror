@@ -1,0 +1,8 @@
+// SPDX-License-Identifier: MPL-2.0
+// mesh.wgsl fs_main: exact port, not reduced.
+float4 main(float3 normal : TEXCOORD0, float4 color : TEXCOORD1) : COLOR
+{
+    float3 light = normalize(float3(0.35, 0.8, 0.5));
+    float intensity = 0.25 + 0.75 * max(dot(normalize(normal), light), 0.0);
+    return float4(color.rgb * intensity, color.a);
+}

@@ -1,6 +1,6 @@
 // Copyright (c) 2026 CrySirror contributors.
-// Distributed under the GNU Affero General Public License, version 3 or
-// (at your option) any later version, https://www.gnu.org/licenses/agpl-3.0.html.
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. A copy is available at https://mozilla.org/MPL/2.0/.
 //! Native parameter/value mapping only. Pixels and algorithms belong to shared
 //! engine resources; alpha clips prepare composed inputs through shared Canvases.
 // Native image lifetime and dependency policy:
@@ -197,33 +197,39 @@ pub fn poll(rt: &mut Rt, host: &mut dyn HostServices, client: ClientId) -> anyho
         }
         ImageProcessState::Failed(e) => anyhow::bail!("native image processing failed: {e}"),
         ImageProcessState::Ready(image) => {
-            anyhow::ensure!(image.client() == client, "foreign image result");
-            let h = ObjectHandle(id);
-            let l = rt
-                .host()
-                .layer(h)
-                .map_err(|e| anyhow::anyhow!("{e}"))?
-                .clone();
-            let [w, height] = image.size();
-            if publish_surface {
-                let uploaded=host.publish_image_resource(client,l.slot,image.clone())?;
-                rt.host_mut().retired_images.push(uploaded.path.relative().to_owned());
-                rt.host_mut().canvas_op(json!({"op":"set","id":l.slot,"layer":{"id":0,"rect":[0,0,w,height],"paint":{"kind":"image","asset":uploaded.path.relative()}}}));
-            }
-            let l = rt
-                .host_mut()
-                .layer_mut(h)
-                .map_err(|e| anyhow::anyhow!("{e}"))?;
-            l.regions
-                .flip(client.0, flip[0], flip[1])
-                .map_err(|e| anyhow::anyhow!("{e}"))?;
-            l.image_source = Some(ImageInput::Resource(image.clone()));
-            l.full_alpha = image.opaque().then_some(255);
-            l.blank = false;
-            rt.host_mut().api_calls += 1;
+            commit_result(rt,host,client,id,image,flip,publish_surface)?;
             Ok(true)
         }
     }
+}
+
+pub(crate) fn commit_result(rt:&mut Rt,host:&mut dyn HostServices,client:ClientId,id:usize,image:std::sync::Arc<dyn crysirror_core::image_processing::ImageResource>,flip:[bool;2],publish_surface:bool)->anyhow::Result<()> {
+    anyhow::ensure!(image.client() == client, "foreign image result");
+    let h = ObjectHandle(id);
+    let l = rt
+        .host()
+        .layer(h)
+        .map_err(|e| anyhow::anyhow!("{e}"))?
+        .clone();
+    let [w, height] = image.size();
+    if publish_surface {
+        let uploaded=host.publish_image_resource(client,l.slot,image.clone())?;
+        rt.host_mut().retired_images.push(uploaded.path.relative().to_owned());
+        rt.host_mut().canvas_op(json!({"op":"set","id":l.slot,"layer":{"id":0,"rect":[0,0,w,height],"paint":{"kind":"image","asset":uploaded.path.relative()}}}));
+    }
+    let l = rt
+        .host_mut()
+        .layer_mut(h)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    l.regions
+        .flip(client.0, flip[0], flip[1])
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    l.image_source = Some(ImageInput::Resource(image.clone()));
+    l.full_alpha = image.opaque().then_some(255);
+    l.blank = false;
+    if publish_surface {l.image_modified=true;}
+    rt.host_mut().api_calls += 1;
+    Ok(())
 }
 
 /// `Layer.saveLayerImage` (krkrz TVPSaveImage): a loaded image goes through a
@@ -360,6 +366,18 @@ pub fn clip_alpha(rt:&mut Rt,t:Option<ObjectHandle>,args:Vec<Variant>)->Result<V
     let clear=match args.get(7){None|Some(Variant::Void)=>None,Some(v)=>{let n=v.to_integer()? as i32;(0..=255).contains(&n).then_some(n as u8)}};
     let spec=crysirror_image::alpha_clip::AlphaClipRect{destination,source:source_rect,clip,clear,multiply_rgb:d.kind==12,self_source:target==source,clear_empty_alpha_only:true};
     let effects=serde_json::to_vec(&[crysirror_image::effects::ImageEffect::AlphaClipRect{spec}]).map_err(|e|TjsError::runtime(e.to_string()))?;
+    rt.host_mut().image_pair=Some(PairPreparation{target:target.0,source:source.0,inputs:[d.image_source,s.image_source],captures:[None,None],effects:effects.into()});
+    rt.request_suspend();Ok(Variant::Void)
+}
+
+/// Queue a two-layer shared effect (target image as destination, `source`
+/// layer image as the second input) and suspend until it commits.
+pub(crate) fn begin_pair(rt:&mut Rt,target:ObjectHandle,source:ObjectHandle,effect:crysirror_image::effects::ImageEffect,what:&str)->Result<Variant>{
+    if !rt.host().can_suspend{return Err(unsupported(what,"a resumable native boundary"));}
+    if rt.host().image_job.is_some()||rt.host().image_pair.is_some(){return Err(TjsError::runtime("native image operation already pending"));}
+    let d=rt.host().layer(target)?.clone();let s=rt.host().layer(source)?.clone();
+    if !d.has_image||!s.has_image{return Err(TjsError::runtime(format!("{what} requires drawable images")));}
+    let effects=serde_json::to_vec(&[effect]).map_err(|e|TjsError::runtime(e.to_string()))?;
     rt.host_mut().image_pair=Some(PairPreparation{target:target.0,source:source.0,inputs:[d.image_source,s.image_source],captures:[None,None],effects:effects.into()});
     rt.request_suspend();Ok(Variant::Void)
 }

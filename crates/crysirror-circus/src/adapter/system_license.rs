@@ -1,6 +1,8 @@
 //! Native installation-key UI policy. This validates a supplied installation
 //! key; it neither generates keys nor claims online activation succeeded.
 use super::*;
+#[path = "portable_installation.rs"]
+mod portable;
 const ROOT: u32 = 0x38f0_0000;
 const FIELD: u32 = ROOT + 1;
 const OK: u32 = ROOT + 2;
@@ -47,6 +49,7 @@ fn validate_install_key(bytes: &[u8], product: i32) -> std::result::Result<i32, 
 }
 #[derive(Default)]
 pub(super) struct LicenseDialog {
+    portable: portable::Validation,
     worker: Option<Receiver<std::result::Result<Option<String>, String>>>,
     loaded: bool,
     opened: bool,
@@ -61,12 +64,25 @@ impl Bridge<'_> {
     pub(super) fn native_license(&mut self) -> Result<Option<SystemReply>> {
         let mut state = self.services.system.license.take().unwrap_or_default();
         let result = self.tick_native_license(&mut state);
-        if !matches!(result, Ok(Some(_))) {
+        if self.services.installation_policy == InstallationPolicy::MountedResources
+            || !matches!(result, Ok(Some(_)))
+        {
             self.services.system.license = Some(state);
         }
         result
     }
     fn tick_native_license(&mut self, state: &mut LicenseDialog) -> Result<Option<SystemReply>> {
+        if self.services.installation_policy == InstallationPolicy::MountedResources {
+            return portable::tick(self, &mut state.portable);
+        }
+        //DC3WY43E9C0 uses the same permutation/base36/CRC verifier as
+        //44D1F0, with its own original product identifier160 instead of171.
+        //DC2 426020/425FD0 use the same verifier/permutation, product87.
+        let product = match self.services.native_profile {
+            Some(crate::Profile::Dc2PlusCommunication) => 87,
+            Some(crate::Profile::Dc3WithYou) => 160,
+            _ => 171,
+        };
         if let Some(worker) = &state.worker {
             match worker.try_recv() {
                 Err(TryRecvError::Empty) => return Ok(None),
@@ -83,7 +99,7 @@ impl Bridge<'_> {
                     state.loaded = true;
                     if key
                         .as_ref()
-                        .is_some_and(|key| validate_install_key(key.as_bytes(), 171).is_ok())
+                        .is_some_and(|key| validate_install_key(key.as_bytes(), product).is_ok())
                     {
                         return Ok(Some(SystemReply::Done));
                     }
@@ -140,8 +156,13 @@ impl Bridge<'_> {
                     return Ok(None);
                 }
             }
+            let canvas = self.native_canvas();
+            let origin = [
+                canvas[0].saturating_sub(600) / 2,
+                canvas[1].saturating_sub(280) / 2,
+            ];
             self.submit(vec![],vec![
-                json!({"op":"put","widget":{"id":ROOT,"rect":[340,220,600,280],"modal":true,"clip_children":true,"color":[24,24,30,255]}}),
+                json!({"op":"put","widget":{"id":ROOT,"rect":[origin[0],origin[1],600,280],"modal":true,"clip_children":true,"color":[24,24,30,255]}}),
                 json!({"op":"put","widget":{"id":FIELD,"parent":ROOT,"rect":[35,50,530,50],"kind":"text_field","text":"","font":self.font,"text_size":30,"color":[255,255,255,255],"text_color":[0,0,0,255],"max_length":11}}),
                 json!({"op":"put","widget":{"id":ERROR,"parent":ROOT,"rect":[35,110,530,50],"text":"Enter the installation key supplied with your game.","font":self.font,"text_size":20,"text_color":[255,255,255,255]}}),
                 json!({"op":"put","widget":{"id":OK,"parent":ROOT,"rect":[300,200,125,45],"kind":"button","text":"OK","font":self.font,"text_size":24}}),
@@ -183,7 +204,7 @@ impl Bridge<'_> {
                         .as_str()
                         .context("Circus installation-key control missing")?;
                     let validation = if key.is_ascii() {
-                        validate_install_key(key.as_bytes(), 171)
+                        validate_install_key(key.as_bytes(), product)
                     } else {
                         Err(-4)
                     };

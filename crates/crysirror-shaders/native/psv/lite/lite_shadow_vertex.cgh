@@ -1,0 +1,35 @@
+// SPDX-License-Identifier: MPL-2.0
+// shadow.wgsl vs_main / vs_skinned for the PSV tier. Depth is written to an
+// F32_R color atlas because the fragment program samples it as a texture.
+#include "lite_common.cgh"
+
+uniform float4 lite_model[4];
+uniform float4 lite_light_clip[4];
+#ifdef LITE_SKINNED
+uniform float4 lite_palette[256] : BUFFER[0];
+float4 lite_joint(float j, float4 p)
+{
+    int b = (int)clamp(j, 0.0, 63.0) * 4;
+    return lite_palette[b] * p.x + lite_palette[b + 1] * p.y + lite_palette[b + 2] * p.z + lite_palette[b + 3] * p.w;
+}
+#endif
+
+void main(float3 position : POSITION,
+          float2 uv : TEXCOORD0,
+#ifdef LITE_SKINNED
+          float4 joints : BLENDINDICES,
+          float4 weights : BLENDWEIGHT,
+#endif
+          out float4 clip : POSITION,
+          out float3 o_uv_depth : TEXCOORD0)
+{
+    float4 p = float4(position, 1.0);
+#ifdef LITE_SKINNED
+    p = lite_joint(joints.x, p) * weights.x + lite_joint(joints.y, p) * weights.y
+      + lite_joint(joints.z, p) * weights.z + lite_joint(joints.w, p) * weights.w;
+#endif
+    float4 world = lite_xform(lite_model[0], lite_model[1], lite_model[2], lite_model[3], p);
+    clip = lite_xform(lite_light_clip[0], lite_light_clip[1], lite_light_clip[2], lite_light_clip[3], world);
+    // z/w is linear in screen space under the orthographic sun projection.
+    o_uv_depth = float3(uv, clip.z / clip.w);
+}

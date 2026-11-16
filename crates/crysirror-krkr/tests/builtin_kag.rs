@@ -1,4 +1,5 @@
-// Distributed under the GNU Affero General Public License, version 3 or later.
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. A copy is available at https://mozilla.org/MPL/2.0/.
 //! Legacy built-in parser registration uses the original VM, not a plugin shell.
 use crysirror_core::service::InputFrame;
 use crysirror_runtime::{AdapterRegistry, Runtime};

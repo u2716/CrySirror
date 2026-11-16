@@ -1,5 +1,5 @@
-// Distributed under the GNU Affero General Public License, version 3 or
-// (at your option) any later version, https://www.gnu.org/licenses/agpl-3.0.html.
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. A copy is available at https://mozilla.org/MPL/2.0/.
 //! `krkr` VmAdapter: runs original TJS2 scripts through `crysirror-tjs2`
 //! and translates KiriKiri native objects onto engine Layer/Canvas services.
 use crate::{
@@ -50,6 +50,10 @@ pub struct Config {
     /// player values override executable-embedded defaults before startup.
     #[serde(default)]
     pub arguments: BTreeMap<String, String>,
+    /// User locale reported by getLangName.dll (`ja-JP`, `en-US`). Absent,
+    /// the process locale environment is used, then `en-US`.
+    #[serde(default)]
+    pub locale: Option<String>,
 }
 fn startup() -> String {
     "startup.tjs".into()
@@ -94,16 +98,27 @@ impl Config {
                 "KiriKiri executable must be a basename"
             );
         }
+        if let Some(locale) = &self.locale {
+            ensure!(
+                (2..=35).contains(&locale.len()) && locale.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '@')),
+                "KiriKiri locale must be a BCP-47 or POSIX language tag"
+            );
+        }
         for name in &self.plugin_shells {
             let name = crate::plugins::canonical(name).map_err(|e| anyhow::anyhow!("{e}"))?;
             ensure!(
-                !matches!(name.as_str(), "savestruct.dll" | "fstat.dll" | "menu.dll" | "kagparser.dll" | "layerexraster.dll" | "json.dll" | "layerexdraw.dll" | "krmovie.dll" | "layereximage.dll" | "layerexbtoa.dll" | "layerexmovie.dll" | "kagparserex.dll" | "extkagparser.dll" | "kropus.dll" | "wuvorbis.dll" | "textrender.dll" | "motionplayer.dll" | "motionplayer_nod3d.dll" | "csvparser.dll" | "lineparser.dll" | "varfile.dll" | "dirlist.dll" | "scriptsex.dll" | "addfont.dll" | "windowex.dll" | "win32dialog.dll" | "extrans.dll" | "extnagano.dll" | "kaichotrans.dll"),
+                !crate::plugins::is_facade(&name),
                 "engine facade cannot be replaced by a plugin shell"
             );
         }
         Ok(())
     }
 }
+
+#[path = "input_delivery.rs"]
+mod input_delivery;
+#[path = "modal_window.rs"]
+pub(crate) mod modal_window;
 
 struct FramePass {
     fence: u64,
@@ -121,6 +136,8 @@ pub struct KrkrVm {
     rt: Option<Rt>,
     inbox: crysirror_core::input_buffer::InputBuffer,
     pass: Option<FramePass>,
+    input_delivery: Option<input_delivery::Delivery>,
+    modal_passes: Vec<modal_window::ParkedPass>,
     last_down: u64,
     last_pointer: [i32; 2],
     last_focus: Option<bool>,
@@ -148,6 +165,8 @@ impl KrkrVm {
             return;
         }
         let mut extra: Vec<Variant> = self.pass.as_ref().map(|p| p.handlers.clone()).unwrap_or_default();
+        if let Some(delivery) = &self.input_delivery { delivery.roots(&mut extra); }
+        for scope in &self.modal_passes {scope.roots(&mut extra);}
         if let Some(pass) = &self.pass {
             if let Some(paints) = &pass.paints {
                 extra.extend(paints.iter().skip(pass.paint).map(|id| Variant::Object(ObjectHandle(*id))));
@@ -171,6 +190,8 @@ impl KrkrVm {
             rt: None,
             inbox: crysirror_core::input_buffer::InputBuffer::new(client.0, 1, 256)?,
             pass: None,
+            input_delivery: None,
+            modal_passes: Vec::new(),
             last_down: 0,
             last_pointer: [-1, -1],
             last_focus: None,
@@ -184,7 +205,8 @@ impl KrkrVm {
 
     fn boot(&mut self, h: &mut dyn HostServices, input: InputFrame) -> Result<()> {
         let files = h.storage(self.client).map_err(err)?;
-        let storage = Storage::new(files, &self.config.root)?;
+        let mut storage = Storage::new(files, &self.config.root)?;
+        storage.media = Some(h.mounted_media(self.client).map_err(err)?);
         ensure!(
             storage.resolve(&self.config.startup).is_some(),
             "KiriKiri startup script `{}` absent",
@@ -192,10 +214,11 @@ impl KrkrVm {
         );
         let mut host = KrkrHost::new(self.config.canvas, self.config.font_alias.clone());
         host.client = self.client.0;
-        for codec in ["opus","vorbis"] {
+        for codec in ["opus","vorbis","ms-adpcm"] {
             if h.audio_codec_supported(self.client,codec).map_err(err)? { host.audio_codecs.insert(codec.into()); }
         }
         host.input = input;
+        host.locale = self.config.locale.clone();
         host.plugin_shells = self
             .config
             .plugin_shells
@@ -233,8 +256,20 @@ impl KrkrVm {
             if let Some(bits) = crate::exe_options::pe_bits(&bytes) {
                 rt.host_mut().exe_bits = bits;
             }
-            let options = crate::exe_options::parse(&bytes)
+            let mut options = crate::exe_options::parse(&bytes)
                 .with_context(|| format!("{exe}: embedded options"))?;
+            // krkrz option stock priority: command line, then the per-user
+            // `<datapath>/<exe>.cfu` (written by KAGEX changeUserConf and the
+            // kagexopt option set), then `<exe>.cf` beside the executable,
+            // then the embedded area. Later entries here override earlier.
+            let stem = exe.rsplit_once('.').map_or(exe.as_str(), |(stem, _)| stem).to_owned();
+            let leaf = stem.rsplit('/').next().unwrap_or(&stem).to_owned();
+            for (name, label) in [(format!("{stem}.cf"), "configuration"), (format!("file://./savedata/{leaf}.cfu"), "user configuration")] {
+                let storage = rt.host().storage.as_ref().unwrap();
+                let Some(path) = storage.resolve(&name) else { continue };
+                let bytes = storage.read_limited(&path, 1 << 20)?;
+                options.extend(crate::exe_options::parse_config(&bytes).with_context(|| format!("{name}: {label} options"))?);
+            }
             if !options.is_empty() {
                 let table = rt.alloc_dictionary_object();
                 for (name, value) in options {
@@ -253,6 +288,7 @@ impl KrkrVm {
             }
             rt.set_global_member("__crysirror_arguments", Variant::Object(table));
         }
+        crate::plugins::autoload(&mut rt)?;
         // Developer diagnostic: on the first runtime exception, log the paused
         // frame's registers and evaluate `;;`-separated expressions in it.
         if let Ok(exprs) = std::env::var("CRYSIRROR_KRKR_EXCEPTION_EVAL") {
@@ -369,6 +405,8 @@ impl KrkrVm {
     /// Submit queued engine commands in the order TJS issued them.
     fn flush(&mut self, h: &mut dyn HostServices) -> Result<()> {
         let rt = self.rt.as_mut().context("KiriKiri runtime absent")?;
+        natives::native_extra::sync_attention(rt).map_err(|e|anyhow::anyhow!("{e}"))?;
+        crate::native_pad::sync(rt).map_err(|e|anyhow::anyhow!("{e}"))?;
         rt.host_mut().sync().map_err(|e| anyhow::anyhow!("{e}"))?;
         let batches = std::mem::take(&mut rt.host_mut().batches);
         for batch in batches {
@@ -437,7 +475,8 @@ impl KrkrVm {
         let result=if callback.object_handle().is_some() {rt.call_function(callback,Vec::new()).map(|_|())}else{Ok(())};
         rt.host_mut().can_suspend=old;
         result.map_err(|e|anyhow::anyhow!("TJS System focus event {event}: {e}"))?;
-        let windows=rt.host().windows.keys().copied().collect::<Vec<_>>();
+        let windows=rt.host().windows.iter().filter(|(_,window)|window.visible)
+            .map(|(handle,_)|*handle).collect::<Vec<_>>();
         for window in windows {
             self.rt.as_mut().unwrap().host_mut().can_suspend=false;
             let result=self.call(ObjectHandle(window),event,Vec::new());
@@ -556,7 +595,9 @@ impl KrkrVm {
         if let Some(id)=capture {
             let rt=self.rt.as_ref().unwrap();
             if rt.host().layers.get(&id).is_some_and(|l|l.attached) {
-                let mut point=[x,y];let mut node=Some(id);let mut depth=0;
+                let mut point=[x,y];
+                if let Some(w)=rt.host().layers.get(&id).and_then(|l|rt.host().windows.get(&l.window)) {point[0]-=w.layer_pos[0];point[1]-=w.layer_pos[1];}
+                let mut node=Some(id);let mut depth=0;
                 while let Some(h)=node {
                     let layer=rt.host().layer(ObjectHandle(h))?;
                     point[0]-=layer.left;point[1]-=layer.top;node=layer.parent;
@@ -567,170 +608,6 @@ impl KrkrVm {
             crate::native_mouse::release(self.rt.as_mut().unwrap());
         }
         self.pointer_hit(x,y)
-    }
-
-    /// krkrz LayerManager::PrimaryMouseMove, including its single bounded
-    /// recheck after Enter handlers mutate the tree.
-    fn primary_mouse_move(&mut self,x:i64,y:i64,flags:i64,moved:bool)
-        -> Result<Option<(usize,i64,i64)>> {
-        let mut hit=self.mouse_target(x,y)?;
-        let previous=self.rt.as_ref().unwrap().host().mouse.hover;
-        if previous!=hit.map(|h|h.0) {
-            if let Some(old)=previous {self.call(ObjectHandle(old),"onMouseLeave",Vec::new())?;}
-            hit=self.mouse_target(x,y)?;
-            if let Some((id,_,_))=hit {
-                self.call(ObjectHandle(id),"onMouseEnter",Vec::new())?;
-                let rechecked=self.mouse_target(x,y)?;
-                if hit.map(|h|h.0)!=rechecked.map(|h|h.0) {
-                    self.call(ObjectHandle(id),"onMouseLeave",Vec::new())?;
-                    hit=rechecked;
-                    if let Some((next,_,_))=hit {self.call(ObjectHandle(next),"onMouseEnter",Vec::new())?;}
-                }
-            }
-            self.rt.as_mut().unwrap().host_mut().mouse.hover=hit.map(|h|h.0);
-        }
-        if moved {
-            if let Some((id,lx,ly))=hit {
-                self.call(ObjectHandle(id),"onMouseMove",vec![Variant::Integer(lx),Variant::Integer(ly),Variant::Integer(flags)])?;
-            }
-        }
-        Ok(hit)
-    }
-
-    fn input(&mut self, input: InputFrame) -> Result<()> {
-        self.rt.as_mut().unwrap().host_mut().input = input;
-        self.rt.as_mut().unwrap().host_mut().input.buttons_down |= input.buttons_pressed;
-        // System.eventDisabled: TVPPostInputEvent discards input events
-        // (EventIntf.cpp:778); the device state itself stays current.
-        if self.rt.as_ref().unwrap().host().event_disabled {
-            self.last_down = input.buttons_down;
-            self.last_pointer = [input.pointer_x, input.pointer_y];
-            return Ok(());
-        }
-        let rt = self.rt.as_mut().context("KiriKiri runtime absent")?;
-        let window = rt
-            .host()
-            .windows
-            .iter()
-            .find(|(_, w)| w.visible)
-            .map(|(h, _)| ObjectHandle(*h));
-        let Some(window) = window else {
-            self.rt.as_mut().unwrap().host_mut().hint_hover=None;
-            self.rt.as_mut().unwrap().host_mut().ui_op(json!({"op":"hide_tooltip"}));
-            self.rt.as_mut().unwrap().host_mut().input = input;
-            self.last_down = input.buttons_down;
-            return Ok(());
-        };
-        let (x, y) = (i64::from(input.pointer_x), i64::from(input.pointer_y));
-        let shift = |bits: u64| -> i64 {
-            i64::from(bits & buttons::SHIFT != 0)
-                | (i64::from(bits & buttons::CTRL != 0) << 2)
-                | (i64::from(bits & buttons::MOUSE_LEFT != 0) << 3)
-                | (i64::from(bits & buttons::MOUSE_RIGHT != 0) << 4)
-        };
-        let flags = shift(input.buttons_down | input.buttons_pressed);
-        let mouse_mask = buttons::MOUSE_LEFT | buttons::MOUSE_RIGHT;
-        let pointer_active = [input.pointer_x, input.pointer_y] != self.last_pointer
-            || ((input.buttons_down ^ self.last_down) | input.buttons_pressed) & mouse_mask != 0;
-        let moved=[input.pointer_x,input.pointer_y]!=self.last_pointer;
-        let previous_hover=self.rt.as_ref().unwrap().host().mouse.hover;
-        let now=self.rt.as_ref().unwrap().host().now;
-        let recheck=now.saturating_sub(self.rt.as_ref().unwrap().host().mouse.last_recheck)>1000;
-        if recheck {self.rt.as_mut().unwrap().host_mut().mouse.last_recheck=now;}
-        if moved {
-            self.rt.as_mut().unwrap().set_object_member(window,"__temporary_cursor_hide",Variant::Integer(0));
-            self.last_pointer=[input.pointer_x,input.pointer_y];
-            self.call(window,"onMouseMove",vec![Variant::Integer(x),Variant::Integer(y),Variant::Integer(flags)])?;
-        }
-        let hit=if moved||recheck {self.primary_mouse_move(x,y,flags,moved)?}
-            else if pointer_active {self.mouse_target(x,y)?}else{None};
-        if pointer_active || previous_hover!=self.rt.as_ref().unwrap().host().mouse.hover {
-            crate::tooltip::pointer(self.rt.as_mut().unwrap(),hit.map(|h|h.0),
-                [x as f32,y as f32],(input.buttons_down|input.buttons_pressed)&mouse_mask!=0)
-                .map_err(|e|anyhow::anyhow!("{e}"))?;
-            crate::pointer::apply(self.rt.as_mut().unwrap(),hit.map_or(window,|h|ObjectHandle(h.0)));
-        }
-        for (bit,button) in [(buttons::MOUSE_LEFT,0),(buttons::MOUSE_RIGHT,1)] {
-            let down=input.buttons_down&bit!=0;let was=self.last_down&bit!=0;
-            let pressed=(down&&!was)||(input.buttons_pressed&bit!=0&&!was);
-            let released=!down&&(was||input.buttons_pressed&bit!=0);
-            let args=|px,py|vec![Variant::Integer(px),Variant::Integer(py),Variant::Integer(button),Variant::Integer(flags)];
-            if pressed {
-                self.rt.as_mut().unwrap().host_mut().mouse.down_point=Some([x,y]);
-                self.call(window,"onMouseDown",args(x,y))?;
-                self.primary_mouse_move(x,y,flags,false)?;
-                let target=self.mouse_target(x,y)?;
-                if let Some((id,lx,ly))=target {
-                    self.rt.as_mut().unwrap().host_mut().mouse.release_called=false;
-                    self.call(ObjectHandle(id),"onMouseDown",args(lx,ly))?;
-                    let mouse=&mut self.rt.as_mut().unwrap().host_mut().mouse;
-                    if mouse.capture!=Some(id) {
-                        let no_capture=mouse.release_called;
-                        mouse.capture=None;mouse.release_called=true;
-                        if !no_capture {mouse.capture=Some(id);}
-                    }
-                } else {crate::native_mouse::release(self.rt.as_mut().unwrap());}
-            }
-            if released {
-                self.rt.as_mut().unwrap().host_mut().input.buttons_down&=!bit;
-                // TVPWindow posts Click before Up and supplies the last Down
-                // coordinates, even when the captured pointer was dragged out.
-                if button==0 {
-                    let [cx,cy]=self.rt.as_ref().unwrap().host().mouse.down_point.unwrap_or([x,y]);
-                    self.call(window,"onClick",vec![Variant::Integer(cx),Variant::Integer(cy)])?;
-                    if let Some((id,lx,ly))=self.pointer_hit(cx,cy)? {
-                        if self.rt.as_ref().unwrap().host().mouse.capture==Some(id) {
-                            self.call(ObjectHandle(id),"onClick",vec![Variant::Integer(lx),Variant::Integer(ly)])?;
-                        }
-                    }
-                }
-                self.call(window,"onMouseUp",args(x,y))?;
-                if let Some((id,lx,ly))=self.mouse_target(x,y)? {
-                    self.call(ObjectHandle(id),"onMouseUp",args(lx,ly))?;
-                    if input.buttons_down&mouse_mask==0 {
-                        crate::native_mouse::release(self.rt.as_mut().unwrap());
-                        self.primary_mouse_move(x,y,flags,false)?;
-                    }
-                }
-            }
-        }
-        for &(bit, key) in crate::pointer::KEYS {
-            if input.buttons_pressed & bit != 0 {
-                self.call(
-                    window,
-                    "onKeyDown",
-                    vec![Variant::Integer(key), Variant::Integer(flags)],
-                )?;
-                // tTJSNI_BaseWindow::OnKeyDown then hands the key to the
-                // layer manager (focused layer, else primary default).
-                self.layer_key(window, "onKeyDown", key, flags)?;
-            }
-            if input.buttons_down & bit == 0 && (self.last_down | input.buttons_pressed) & bit != 0
-            {
-                self.rt.as_mut().unwrap().host_mut().input.buttons_down &= !bit;
-                self.call(
-                    window,
-                    "onKeyUp",
-                    vec![Variant::Integer(key), Variant::Integer(flags)],
-                )?;
-                self.layer_key(window, "onKeyUp", key, flags)?;
-            }
-        }
-        // WM_MOUSEWHEEL: one WHEEL_DELTA (120) notch per engine wheel press,
-        // positive away from the user (tTJSNI_BaseWindow::OnMouseWheel).
-        for (bit, delta) in [(buttons::WHEEL_UP, 120), (buttons::WHEEL_DOWN, -120)] {
-            if input.buttons_pressed & bit != 0 {
-                self.call(window, "onMouseWheel",
-                    [flags, delta, x, y].map(Variant::Integer).to_vec())?;
-                if self.rt.as_ref().unwrap().object_valid(window) {
-                    crate::native_members::primary_wheel(self.rt.as_mut().unwrap(), window, flags, delta, x, y)
-                        .map_err(|e| anyhow::anyhow!("{e}")).context("TJS event onMouseWheel")?;
-                }
-            }
-        }
-        self.rt.as_mut().unwrap().host_mut().input = input;
-        self.last_down = input.buttons_down;
-        Ok(())
     }
 
     fn enqueue_timers(&mut self, now: u64) -> Result<()> {
@@ -778,18 +655,36 @@ impl KrkrVm {
     fn drive_sound(&mut self, h: &mut dyn HostServices) -> Result<bool> {
         for _ in 0..128 {
             self.flush(h)?;
+            if self.modal_boundary()? {return Ok(false);}
+            {
+                let rt=self.rt.as_mut().unwrap();
+                if let Some(tick)=rt.host().clock_yield_tick {
+                    let now=rt.host().now;
+                    if now==tick {return Ok(false);}
+                    rt.host_mut().clock_yield_tick=None;
+                    rt.host_mut().clock_poll_reads=0;
+                    rt.set_resume_value(Variant::Integer(now as i64));
+                }
+            }
             crate::transitions::poll(self.rt.as_mut().unwrap(), h, self.client)?;
             if !crate::motion_plugin::poll(self.rt.as_mut().unwrap(), h, self.client)? {
                 return Ok(false);
             }
             if !crate::font_resources::poll(self.rt.as_mut().unwrap())? {return Ok(false);}
+            if !crate::province::poll(self.rt.as_mut().unwrap())? {return Ok(false);}
+            if !crate::fftgraph::poll(self.rt.as_mut().unwrap(),h,self.client)? {return Ok(false);}
+            natives::native_extra::poll(self.rt.as_mut().unwrap(),h,self.client)?;
+            crate::get_sample::poll(self.rt.as_mut().unwrap(),h,self.client)?;
+            if !crate::wv_decoder::poll(self.rt.as_mut().unwrap(),h,self.client)? {return Ok(false);}
+            crate::http_plugin::poll(self.rt.as_mut().unwrap(),h,self.client)?;
+            crate::native_pad::poll(self.rt.as_mut().unwrap(),h,self.client)?;
             if !crate::image_api::poll(self.rt.as_mut().unwrap(), h, self.client)? {
                 return Ok(false);
             }
             if !crate::psbfile_plugin::poll(self.rt.as_mut().unwrap(), h, self.client)? {
                 return Ok(false);
             }
-            if !crate::kirakira::win32_dialog::poll(self.rt.as_mut().unwrap(), h, self.client)? {
+            if !crate::plugin_ports::win32_dialog::poll(self.rt.as_mut().unwrap(), h, self.client)? {
                 return Ok(false);
             }
             if !crate::save_struct::poll(self.rt.as_mut().unwrap())? {
@@ -805,6 +700,15 @@ impl KrkrVm {
             if rt.is_suspended() {
                 rt.resume_suspended().map_err(|e| anyhow::anyhow!("{e}"))?;
             } else {
+                // A program close may have suspended in onCloseQuery's save
+                // or confirmation. Decide only after its entire caller stack
+                // resumes, never while a modal event scope is running.
+                if rt.host().modal_windows.is_empty()
+                    && std::mem::take(&mut rt.host_mut().program_close_pending)
+                    && rt.host().close_decision
+                {
+                    rt.host_mut().exit_requested = true;
+                }
                 rt.host_mut().bitmap_redraw_pending = false;
                 self.flush(h)?;
                 return Ok(true);
@@ -824,12 +728,17 @@ impl KrkrVm {
             return Ok(VmYield::Halted);
         }
         let now = h.now_ms();
-        self.inbox.push(self.client.0, now, input)?;
         if self.rt.is_none() {
             self.boot(h, input)?;
         }
+        if let Some(rt) = self.rt.as_mut() {
+            crate::wrapper_plugins::sync_proxy(rt).map_err(|e| anyhow::anyhow!("{e}"))?;
+        }
         self.rt.as_mut().unwrap().host_mut().now = now;
         self.rt.as_mut().unwrap().host_mut().display = h.display_info();
+        let input=self.modal_input(h,input)?;
+        let input=crate::native_pad::filter_input(self.rt.as_ref().unwrap(),input);
+        self.inbox.push(self.client.0,now,input)?;
         if !self.drive_sound(h)? {
             return Ok(VmYield::BudgetExhausted);
         }
@@ -838,6 +747,9 @@ impl KrkrVm {
             crate::video::observe(self.rt.as_mut().unwrap(), h, self.client)?;
             crate::alpha_movie::observe(self.rt.as_mut().unwrap(), h, self.client)?;
             crate::layer_movie::observe(self.rt.as_mut().unwrap(),h,self.client)?;
+            while let Some((target, method, args)) = self.rt.as_mut().unwrap().host_mut().http.events.pop_front() {
+                self.call(target, method, args)?;
+            }
             let callbacks = crate::sound::observations(self.rt.as_mut().unwrap(), h, self.client)?;
             for (id, event) in callbacks {
                 let kind = if event == "onStatusChanged" { 2 } else { 3 };
@@ -855,13 +767,16 @@ impl KrkrVm {
             // script suspended (a confirmation dialog) before answering.
             let rt = self.rt.as_mut().unwrap();
             if std::mem::take(&mut rt.host_mut().user_close_pending) {
-                match rt.host().windows.keys().next().copied() {
+                let modal=rt.host().modal_windows.last().map(|m|m.window);
+                if let Some(modal)=modal {
+                    modal_window::close(rt,ObjectHandle(modal))?;
+                } else { match rt.host().windows.iter().find(|(_,window)|window.output).map(|(handle,_)|*handle) {
                     Some(main) => {
                         rt.host_mut().closing_by_user = true;
                         self.call(ObjectHandle(main), "onCloseQuery", vec![Variant::Integer(1)])?;
                     }
                     None => rt.host_mut().exit_requested = true,
-                }
+                }}
             }
             let menus = h
                 .query_engine(
@@ -870,7 +785,7 @@ impl KrkrVm {
                 )
                 .map_err(err)?;
             let rt = self.rt.as_mut().unwrap();
-            rt.host_mut().can_suspend = false;
+            rt.host_mut().can_suspend = true;
             let menu = crate::menus::dispatch(rt, &menus);
             rt.host_mut().can_suspend = true;
             menu?;
@@ -942,26 +857,36 @@ impl KrkrVm {
                 continue;
             }
             if phase == 1 {
-                let batch = self.inbox.read(self.client.0, 1)?;
-                let frame = batch.samples.first().map_or(input, |s| s.frame);
-                if !crate::image_api::prepare_hit_images(self.rt.as_mut().unwrap(), h, self.client, frame)? {
+                if self.input_delivery.is_none(){
+                    if let Some((pad,notify))=self.rt.as_mut().unwrap().host_mut().pads.closes.pop_front(){
+                        self.input_delivery=Some(input_delivery::Delivery::pad_close(input,pad,notify));
+                    }else if let Some((window,method,key,shift))=self.rt.as_mut().unwrap().host_mut().extra.posted.pop_front(){
+                        self.input_delivery=Some(input_delivery::Delivery::posted(input,window,method,key,shift));
+                    }
+                }
+                let (frame,receipt)=if self.input_delivery.is_none() {
+                    let batch=self.inbox.read(self.client.0,1)?;
+                    (batch.samples.first().map_or(input,|s|s.frame),batch.receipt)
+                } else {(input,None)};
+                let posted=self.input_delivery.as_ref().is_some_and(|d|d.is_posted());
+                let Some(receipt)=self.deliver_input(h,frame,receipt)? else {
                     return Ok(VmYield::BudgetExhausted);
-                }
-                self.pass.as_mut().unwrap().phase = 2;
-                self.rt.as_mut().unwrap().host_mut().can_suspend = false;
-                let result = self.input(frame);
-                self.rt.as_mut().unwrap().host_mut().can_suspend = true;
-                result?;
-                if let Some(receipt) = batch.receipt {
-                    self.inbox.acknowledge(self.client.0, receipt)?;
-                }
+                };
+                if let Some(receipt)=receipt {self.inbox.acknowledge(self.client.0,receipt)?;}
+                if posted{continue;}
+                self.pass.as_mut().unwrap().phase=2;
                 continue;
             }
             if phase == 3 {
                 let p = self.pass.as_mut().unwrap();
-                if let Some(f) = p.handlers.get(p.handler).cloned() {
+                // Read the live slot: an earlier timer, input callback or
+                // continuous handler can remove a later mover this same pass.
+                // Native EventIntf keeps tombstones until traversal completes;
+                // registrations appended during delivery remain observable.
+                if let Some(f) = natives::continuous_handler_at(self.rt.as_ref().unwrap(), p.handler) {
                     p.handler += 1;
                     let time = p.now;
+                    if matches!(f, Variant::Void) { continue; }
                     self.rt
                         .as_mut()
                         .unwrap()
@@ -969,6 +894,7 @@ impl KrkrVm {
                         .map_err(|e| anyhow::anyhow!("{e}"))?;
                     continue;
                 }
+                natives::compact_continuous_handlers(self.rt.as_mut().unwrap());
                 p.phase = 4;
                 continue;
             }
@@ -1105,7 +1031,7 @@ impl VmAdapter for KrkrVm {
             json!({"click_waiting":r.object_member(k,"clickWaiting").is_truthy(),"sleeping":r.object_member(k,"inSleep").is_truthy(),"last_tag":conductor.map(|c|r.object_member(c,"lastTagName").to_tjs_string().unwrap_or_default())})
         });
         serde_json::to_vec(&json!({
-            "vm": "kirakira-tjs2",
+            "vm": "crysirror-tjs2",
             "parser_positions":host.map(|h|h.parsers.iter().map(|(id,p)|json!({"object":id,"storage":p.parser.cur_storage(),"label":p.parser.cur_label(),"line":p.parser.cur_line(),"call_depth":p.parser.call_stack_depth()})).collect::<Vec<_>>()),
             "script_state": std::env::var_os("CRYSIRROR_KRKR_DUMP_STATE").and_then(|_|self.rt.as_ref().map(|r|{
                 let mut out=serde_json::Map::new();
@@ -1133,6 +1059,10 @@ impl VmAdapter for KrkrVm {
             "queued_input":self.inbox.len(),
             "frame_pass":self.pass.as_ref().map(|p|p.phase),
             "suspended":self.rt.as_ref().is_some_and(|r|r.is_suspended()),
+            "modal_scopes":self.modal_passes.len(),
+            "modal_windows_opened":host.map(|h|h.modal_serial),
+            "input_delivery_pending":self.input_delivery.is_some(),
+            "clock_waiting":host.and_then(|h|h.clock_yield_tick),
             "layers": host.map(|h| h.layers.len()),
             "timers": host.map(|h| h.timers.len()),
             "plugins": host.map(|h| &h.loaded_plugins),

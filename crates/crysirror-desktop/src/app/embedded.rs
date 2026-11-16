@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Native view host. The session thread exclusively owns VM, renderer and audio;
 //! UIKit/Android/SwiftUI submit bounded state, never touch a Runtime or GPU.
-use super::{materialize_canvases, Audio, Core};
+use super::{materialize_canvases, Audio, Core, CoreHost as _};
 use anyhow::{Context, Result};
 use crysirror_core::service::{DisplayInfo, InputFrame};
 use crysirror_runtime::{Project, Runtime};

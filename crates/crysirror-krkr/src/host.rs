@@ -1,5 +1,5 @@
-// Distributed under the GNU Affero General Public License, version 3 or
-// (at your option) any later version, https://www.gnu.org/licenses/agpl-3.0.html.
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. A copy is available at https://mozilla.org/MPL/2.0/.
 //! Handle translation between KiriKiri native objects and engine services.
 //!
 //! A KiriKiri `Layer` is one engine Layer node (position, size, clip,
@@ -36,6 +36,9 @@ const MAX_LOG: usize = 4096;
 
 #[derive(Clone, Debug)]
 pub struct LayerState {
+    /// Native instance allocation precedes the script constructor. Unbound
+    /// instances can own child resources but cannot be presented or hit-tested.
+    pub constructed: bool,
     /// Original tooltip string; engine UI owns its display and lifecycle.
     pub hint: String,
     pub show_parent_hint: bool,
@@ -87,9 +90,13 @@ impl LayerState {
 
 #[derive(Clone, Debug, Default)]
 pub struct WindowState {
+    /// The desktop output is selected at construction, independently of heap
+    /// handle ordering (GC may reuse a lower handle for a hidden helper).
+    pub output: bool,
     pub menu: Option<usize>,
     pub primary: Option<usize>,
     pub inner: [i64; 2],
+    pub layer_pos: [i64;2],
     pub visible: bool,
 }
 
@@ -110,10 +117,15 @@ pub enum Batch {
 }
 
 pub struct KrkrHost {
+    pub(crate) pads:crate::native_pad::State,
+    pub(crate) extra: crate::natives::native_extra::State,
+    pub(crate) attention_dirty: bool,
     pub(crate) transitions: crate::transitions::State,
     pub(crate) protect: crate::protect_plugin::State,
     /// Companion executable name reported as `System.exeName`.
     pub executable: Option<String>,
+    /// Configured user locale for getLangName.dll.
+    pub locale: Option<String>,
     /// KAGParserEx linked: new parsers use the extended format.
     pub kag_ex: bool,
     /// Decoder capability names validated against this client's shared host.
@@ -124,6 +136,7 @@ pub struct KrkrHost {
     pub(crate) csv: crate::csv_plugin::State,
     pub(crate) line_parser: crate::line_plugin::State,
     pub(crate) psbfile: crate::psbfile_plugin::State,
+    pub(crate) psd: crate::psd_plugin::Psd,
     pub(crate) draws: crate::draw_plugin::State,
     /// Target, owner-polled job, native flips, whether to replace Canvas paint.
     /// Unmodified Asset preparation retains its original immutable paint.
@@ -146,6 +159,10 @@ pub struct KrkrHost {
     /// the classic 32-bit executable.
     pub exe_bits: i64,
     pub sounds: crate::sound::Sounds,
+    pub(crate) get_sample: crate::get_sample::GetSample,
+    pub(crate) wave_data: crate::wv_decoder::State,
+    pub(crate) multitrack: crate::multitrack::Registry,
+    pub(crate) http: crate::http_plugin::Http,
     pub videos: crate::video::Videos,
     pub alpha_movies: crate::alpha_movie::AlphaMovies,
     pub layer_movies: crate::layer_movie::LayerMovies,
@@ -153,6 +170,7 @@ pub struct KrkrHost {
     pub client: u32,
     pub storage: Option<Storage>,
     pub images: Option<Arc<dyn ImageMetadata>>,
+    pub(crate) province_load: Option<crate::province::Pending>,
     pub text_measurement: Option<Arc<dyn TextMeasurement>>,
     pub(crate) fonts:crate::font_resources::Fonts,
     pub(crate) hint_hover: Option<usize>,
@@ -169,6 +187,8 @@ pub struct KrkrHost {
     pub log: Vec<String>,
     pub batches: Vec<Batch>,
     pub layers: BTreeMap<usize, LayerState>,
+    pub(crate) layer_instances: BTreeSet<usize>,
+    pub(crate) fftgraph:crate::fftgraph::Graph,
     pub windows: BTreeMap<usize, WindowState>,
     pub timers: BTreeMap<usize, TimerState>,
     pub deferred: crysirror_core::deferred_dispatch::DeferredDispatch,
@@ -194,18 +214,33 @@ pub struct KrkrHost {
     /// krkrz `CanCloseWork`: the answer `Window.onCloseQuery` gives to a
     /// script `close()` (set by the native handler, `super.onCloseQuery`).
     pub close_decision: bool,
+    /// Program close awaits the complete onCloseQuery script, including a
+    /// parked modal caller. Opening a confirmation is not an accepted close.
+    pub(crate) program_close_pending: bool,
     /// A user close (window close button) waiting for its onCloseQuery.
     pub user_close_pending: bool,
     /// The onCloseQuery being answered is a user close (`!ProgramClosing`).
     pub closing_by_user: bool,
     pub api_calls: u64,
+    /// Bound polling of the simulation clock without spinning inside a TJS
+    /// timer. A parked native read resumes only after the host clock advances.
+    pub clock_poll_tick: u64,
+    pub clock_poll_reads: u16,
+    pub clock_yield_tick: Option<u64>,
+    pub(crate) modal_windows: Vec<crate::adapter::modal_window::Modal>,
+    pub(crate) modal_serial: u32,
+    pub(crate) pending_menu_events: std::collections::VecDeque<crysirror_scene::ui::UiEvent>,
 }
 
 impl KrkrHost {
     pub fn new(canvas: [u32; 2], font: String) -> Self {
         Self {
+            extra: Default::default(),
+            pads:Default::default(),
+            attention_dirty: false,
             protect: Default::default(),
             executable: None,
+            locale: None,
             kag_ex: false,
             audio_codecs: BTreeSet::new(),
             ext_kag: false,
@@ -215,6 +250,7 @@ impl KrkrHost {
             csv: Default::default(),
             line_parser: Default::default(),
             psbfile: Default::default(),
+            psd: Default::default(),
             image_job: None,
             composite_pending: Vec::new(),
             bitmap_batch: None,
@@ -229,6 +265,10 @@ impl KrkrHost {
             event_disabled: false,
             exe_bits: 32,
             sounds: Default::default(),
+            get_sample: Default::default(),
+            wave_data: Default::default(),
+            multitrack: Default::default(),
+            http: Default::default(),
             videos: Default::default(),
             alpha_movies: Default::default(),
             layer_movies: Default::default(),
@@ -236,6 +276,7 @@ impl KrkrHost {
             client: 1,
             storage: None,
             images: None,
+            province_load: None,
             text_measurement: None,
             fonts:Default::default(),
             hint_hover: None,
@@ -249,6 +290,8 @@ impl KrkrHost {
             log: Vec::new(),
             batches: Vec::new(),
             layers: BTreeMap::new(),
+            layer_instances: BTreeSet::new(),
+            fftgraph:Default::default(),
             windows: BTreeMap::new(),
             timers: BTreeMap::new(),
             parsers: BTreeMap::new(),
@@ -268,9 +311,16 @@ impl KrkrHost {
             exit_requested: false,
             modal_layers: Vec::new(),
             close_decision: false,
+            program_close_pending: false,
             user_close_pending: false,
             closing_by_user: false,
             api_calls: 0,
+            clock_poll_tick: 0,
+            clock_poll_reads: 0,
+            clock_yield_tick: None,
+            modal_windows: Vec::new(),
+            modal_serial: 0,
+            pending_menu_events: Default::default(),
         }
     }
 
@@ -395,7 +445,7 @@ impl KrkrHost {
     }
     /// krkrz `IsDisabledByMode`: outside the current modal layer's subtree.
     pub fn disabled_by_mode(&self, h: usize) -> bool {
-        self.modal_layers
+        self.modal_windows.last().is_some_and(|modal|self.layers.get(&h).is_none_or(|layer|layer.window!=modal.window)) || self.modal_layers
             .last()
             .is_some_and(|current| !self.is_ancestor_or_self(h, *current))
     }
@@ -411,6 +461,16 @@ impl KrkrHost {
             .ok_or_else(|| TjsError::runtime("object is not a constructed Layer"))
     }
 
+    /// WindowIntf's obsolete setLayerPos is a presentation offset, not a
+    /// mutation of the native primary layer's position or its bitmap.
+    pub(crate) fn set_layer_position(&mut self,window:usize,position:[i64;2])->TjsResult<()> {
+        if position.iter().any(|n|i32::try_from(*n).is_err()){return Err(TjsError::runtime("native layer viewport range"));}
+        let w=self.windows.get_mut(&window).ok_or_else(||TjsError::runtime("Window not constructed"))?;
+        if w.layer_pos==position{return Ok(());}
+        w.layer_pos=position;
+        if let Some(layer)=w.primary.and_then(|id|self.layers.get_mut(&id)){layer.dirty=true;}
+        Ok(())
+    }
     /// Register a layer and create its engine container, surface and
     /// presentation. The parent's container already exists, so the queued
     /// order of these commands is valid.
@@ -420,6 +480,36 @@ impl KrkrHost {
         window: usize,
         parent: Option<usize>,
     ) -> TjsResult<()> {
+        self.allocate_layer(handle, window, parent, true)
+    }
+    pub(crate) fn reserve_layer(&mut self, handle: ObjectHandle, window: usize) -> TjsResult<()> {
+        self.allocate_layer(handle, window, None, false)
+    }
+    pub(crate) fn bind_reserved_layer(&mut self, handle: ObjectHandle, window: usize, parent: Option<usize>) -> TjsResult<()> {
+        let layer=self.layer(handle)?;
+        if layer.constructed || layer.window != window {
+            return Err(TjsError::runtime("invalid pending Layer binding"));
+        }
+        if let Some(parent)=parent {
+            let mut cursor=Some(parent);
+            for _ in 0..64 {
+                let Some(id)=cursor else {break;};
+                if id==handle.0 {return Err(TjsError::runtime("native parent cycle"));}
+                let node=self.layers.get(&id).ok_or_else(||TjsError::runtime("Layer parent absent"))?;
+                if node.window!=window || !node.attached {return Err(TjsError::runtime("invalid Layer parent scope"));}
+                cursor=node.parent;
+            }
+            if cursor.is_some() {return Err(TjsError::runtime("native parent depth"));}
+            self.layers.get_mut(&parent).unwrap().children.push(handle.0);
+        }
+        let layer=self.layer_mut(handle)?;
+        layer.parent=parent;
+        layer.constructed=true;
+        layer.dirty=true;
+        layer.presented=None;
+        Ok(())
+    }
+    fn allocate_layer(&mut self, handle: ObjectHandle, window: usize, parent: Option<usize>, constructed: bool) -> TjsResult<()> {
         let slot = match self.free_slots.pop_first() {
             Some(slot) => slot,
             None => {
@@ -432,9 +522,10 @@ impl KrkrHost {
                 self.next_slot - 1
             }
         };
-        let primary = parent.is_none();
+        let primary = constructed && parent.is_none();
         let size = DEFAULT_LAYER_SIZE as i64;
         let state = LayerState {
+            constructed,
             hint: String::new(),
             show_parent_hint: true,
             ignore_hint_sensing: false,
@@ -486,17 +577,17 @@ impl KrkrHost {
             parent_container = Some(parent_state.container());
         }
         let shown = self.windows.get(&window).is_some_and(|w| w.visible) || !primary;
-        self.layer_op(
+        if window!=0{self.layer_op(
             json!({"op":"put","layer":container_spec(&state, 0, parent_container, shown)}),
-        );
+        );}
         self.canvas_op(json!({"op":"create","id":slot,"width":size,"height":size}));
         self.canvas_op(json!({"op":"clear","id":slot,"color":[255,255,255,0]}));
-        self.canvas_op(
+        if window!=0{self.canvas_op(
             json!({"op":"present","id":slot,"layer":state.presentation(),
             "order":0,"parent":state.container(),"position":[0,0]}),
-        );
+        );}
         let mut state = state;
-        state.presented = Some((0, [0, 0]));
+        state.presented = (window!=0).then_some((0, [0, 0]));
         self.layers.insert(handle.0, state);
         Ok(())
     }
@@ -564,6 +655,7 @@ impl KrkrHost {
             l.regions = regions;
             l.province_allocated = false;
             l.full_alpha = Some(fill[3]);
+            l.image_source=Some(crysirror_core::image_processing::ImageInput::Solid{size:[w as u32,height as u32],color:fill});
             l.has_image = true;
             l.image_modified = true;
             l.image_width = w;
@@ -591,16 +683,21 @@ impl KrkrHost {
             .filter(|(dest, source)| **dest == h || **source == h)
             .map(|(&dest, _)| dest).collect();
         for dest in cancelled {
-            self.transitions.0.remove(&dest);
+            let source = self.transitions.0.remove(&dest);
             self.transitions.2.remove(&dest);
+            self.transitions.3.remove(&dest);
+            let immediate = self.transitions.4.remove(&dest);
             let surface_only = self.transitions.1.remove(&dest);
+            if immediate {
+                continue;
+            }
             if let Some(layer) = self.layers.get(&dest) {
                 let (id, temp) = (
                     if surface_only { layer.presentation() } else { layer.container() },
                     crate::transitions::temp_presentation(layer.slot),
                 );
                 self.layer_op(json!({"op":"end_crossfade", "id":id}));
-                if surface_only {
+                if surface_only && source != Some(dest) {
                     self.canvas_op(json!({"op":"hide","layer":temp}));
                 }
             }
@@ -689,7 +786,10 @@ impl KrkrHost {
     pub fn sync(&mut self) -> TjsResult<()> {
         crate::menus::sync(self)?;
         crate::tooltip::sync_liveness(self)?;
-        let roots: Vec<usize> = self.windows.values().filter_map(|w| w.primary).collect();
+        let mut roots: Vec<usize> = self.windows.iter()
+            .filter(|(id,_)|!self.modal_windows.iter().any(|m|m.window==**id))
+            .filter_map(|(_,w)| w.primary).collect();
+        roots.extend(self.modal_windows.iter().filter_map(|m|self.windows.get(&m.window).and_then(|w|w.primary)));
         let mut order = Vec::new();
         for root in roots {
             let mut stack = vec![root];
@@ -725,7 +825,18 @@ impl KrkrHost {
                 .and_then(|p| self.layers.get(&p))
                 .map(LayerState::container);
             let shown = parent.is_some() || self.windows.get(&window).is_some_and(|w| w.visible);
-            let spec = container_spec(l, major, parent_container, shown);
+            let mut spec = container_spec(l, major, parent_container, shown);
+            if parent.is_none() {
+                if let Some(w)=self.windows.get(&window){
+                    spec["rect"][0]=json!(l.left+w.layer_pos[0]);
+                    spec["rect"][1]=json!(l.top+w.layer_pos[1]);
+                }
+                if let Some(modal)=self.modal_windows.iter().find(|m|m.window==window){
+                    spec["rect"][0]=json!(modal.offset[0]+(l.left as f32)*modal.scale);
+                    spec["rect"][1]=json!(modal.offset[1]+(l.top as f32)*modal.scale);
+                    spec["transform"]=json!({"scale_x":modal.scale,"scale_y":modal.scale});
+                }
+            }
             let l = self.layers.get_mut(&h).unwrap();
             let placement = (major + 1, [l.image_left, l.image_top]);
             // krkrz ltBinder (type 0) blits nothing of its own; its children
@@ -786,9 +897,9 @@ impl KrkrHost {
             }
         }
         let mut out = vec![];
-        for w in self.windows.values().filter(|w| w.visible) {
+        for (_,w) in self.windows.iter().filter(|(id,w)|w.visible&&self.modal_windows.last().is_none_or(|m|m.window==**id)) {
             if let Some(root) = w.primary {
-                visit(self, root, [0, 0], [x, y], &mut out)
+                visit(self, root, w.layer_pos, [x, y], &mut out)
             }
         }
         out.sort_by_key(|v| std::cmp::Reverse(v.0));
@@ -805,7 +916,7 @@ pub fn container_spec(l: &LayerState, major: i32, parent: Option<u32>, shown: bo
         "order": [major, -2],
         "clip": [0, 0, l.width.max(1), l.height.max(1)],
         "opacity": l.opacity.clamp(0, 255),
-        "visible": l.visible && shown,
+        "visible": l.constructed && l.visible && shown,
     })
 }
 
@@ -814,6 +925,12 @@ impl TjsHost for KrkrHost {
     /// index (krkrz AddChild/ObjectList::Add), not a reference to every script
     /// Layer ever constructed. Script fields and suspended frames trace theirs.
     fn gc_roots(&self, out: &mut Vec<ObjectHandle>) {
+        self.extra.roots(out);
+        self.wave_data.roots(out);
+        self.pads.roots(out);
+        self.fftgraph.roots(out);
+        self.http.roots(out);
+        if let Some(pending)=&self.province_load {out.push(crate::province::target(pending));}
         let ids = self.windows.keys()
             .chain(self.timers.keys())
             .chain(self.parsers.keys())
@@ -848,20 +965,31 @@ impl TjsHost for KrkrHost {
     }
 
     fn object_collected(&mut self, handle: ObjectHandle) {
+        if let Some(widget)=self.pads.remove(handle){self.ui_op(json!({"op":"remove","id":widget}));}
+        self.layer_instances.remove(&handle.0);
         // Registries that do not root their instances (see gc_roots).
         if self.layers.contains_key(&handle.0) {
             self.invalidate_layer(handle.0);
         }
         self.psbfile.invalidate(handle.0);
+        self.psd.invalidate(handle.0, self.storage.as_ref());
         self.csv.invalidate(handle.0);
         self.line_parser.invalidate(handle.0);
         self.text_render.invalidate(handle.0);
     }
 
     fn invalidate_object(&mut self, handle: ObjectHandle) {
+        self.extra.invalidate(handle);
+        self.fftgraph.invalidate(handle);
+        self.layer_instances.remove(&handle.0);
+        if self.province_load.as_ref().is_some_and(|pending|crate::province::target(pending)==handle) {self.province_load=None;}
         self.modal_layers.retain(|l| *l != handle.0);
         self.motion.invalidate(handle.0);
         self.sounds.invalidate(handle.0);
+        self.get_sample.invalidate(handle.0);
+        self.wave_data.invalidate(handle.0);
+        self.multitrack.retire(handle.0);
+        self.http.invalidate(handle.0);
         self.draws.invalidate(handle.0);
         self.object_collected(handle);
         self.timers.remove(&handle.0);

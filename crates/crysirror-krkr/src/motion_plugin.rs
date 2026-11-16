@@ -1,13 +1,12 @@
 // Copyright (c) 2026 CrySirror contributors.
-// Distributed under the GNU Affero General Public License, version 3 or
-// (at your option) any later version, https://www.gnu.org/licenses/agpl-3.0.html.
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. A copy is available at https://mozilla.org/MPL/2.0/.
 //! `motionplayer.dll` / `motionplayer_nod3d.dll` `Motion` namespace, first
 //! profile: resource, clock and worker-handle mapping onto the engine-owned
 //! motion sampler and dynamic puppet mesh publication. Unsupported native
 //! features fail visibly; no private rasterizer or composed screen is used.
 //!
-//! Member names and constant values follow Kirakira c451918
-//! (`krkr-plugins/src/motion_player.rs`, recovered from the reference DLL).
+//! Member names and constant values are those the reference DLL registers.
 use crate::natives::{int, object_arg, read_only};
 use crate::natives::{methods, string, this_of, unsupported, Rt};
 use crysirror_core::{service::HostServices, state::ClientId};
@@ -876,16 +875,18 @@ pub fn poll(rt: &mut Rt, host: &mut dyn HostServices, client: ClientId) -> anyho
                     rt.host_mut().motion.next_texture = counter
                         .checked_add(1)
                         .ok_or_else(|| anyhow::anyhow!("motion texture counter overflow"))?;
+                    // Publish the model's own pixels: no copy and no PNG
+                    // encoding (the motion texture budget above covers them).
+                    let image = crysirror_core::image_processing::RgbaImage::new(
+                        client,
+                        [texture.width, texture.height],
+                        texture.rgba.clone(),
+                    )?;
                     textures.push(
-                        host.upload_rgba(
-                            client,
-                            slot,
-                            texture.width,
-                            texture.height,
-                            &texture.rgba,
-                        )?
-                        .relative()
-                        .to_owned(),
+                        host.publish_image_resource(client, slot, Arc::new(image))?
+                            .path
+                            .relative()
+                            .to_owned(),
                     );
                 }
                 if let Some(dir) = std::env::var_os("CRYSIRROR_KRKR_DUMP_MOTION") {

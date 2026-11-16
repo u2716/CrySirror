@@ -372,9 +372,26 @@ struct Cursor {
     count: usize,
     next: u64,
     edge: Option<(u64, StereoFrame)>,
+    /// Further stems of a multi-track source (the primary is track 0), read
+    /// in lockstep and mixed through `gains`.
+    tracks: Vec<Cursor>,
+    gains: Option<crate::multitrack::TrackGains>,
 }
 impl Cursor {
-    fn new(source: Box<dyn AudioSource>) -> Self {
+    fn new(mut source: Box<dyn AudioSource>) -> Self {
+        let mut tracks = Vec::new();
+        let mut gains = None;
+        if source.track_count() > 0 {
+            if let Some(list) = source.take_tracks() {
+                let initial: Vec<f32> = list.iter().map(|t| t.1).collect();
+                gains = Some(crate::multitrack::TrackGains::new(&initial));
+                let mut list = list.into_iter();
+                if let Some((first, _)) = list.next() {
+                    source = first;
+                }
+                tracks = list.map(|(t, _)| Cursor::new(t)).collect();
+            }
+        }
         Self {
             source,
             buffer: vec![[0.; 2]; 1024],
@@ -382,9 +399,75 @@ impl Cursor {
             count: 0,
             next: 0,
             edge: None,
+            tracks,
+            gains,
         }
     }
+    fn seek_all(&mut self, frame: u64) -> Result<()> {
+        self.source.seek(frame)?;
+        self.tracks.iter_mut().try_for_each(|t| t.source.seek(frame))
+    }
+    fn poll_seek_all(&mut self, frame: u64) -> Result<bool> {
+        let mut ready = self.source.poll_seek(frame)?;
+        for t in &mut self.tracks {
+            ready &= t.source.poll_seek(frame)?;
+        }
+        Ok(ready)
+    }
+    fn service_all(&mut self) -> Result<()> {
+        self.source.service()?;
+        self.tracks.iter_mut().try_for_each(|t| t.source.service())
+    }
+    /// Track-gain change on a multi-track voice at source frame `at`.
+    fn change_tracks(
+        &mut self,
+        at: u64,
+        positions: Option<Vec<u64>>,
+        changes: Vec<crate::multitrack::TrackGainChange>,
+    ) -> Result<()> {
+        let gains = self.gains.as_mut().context("voice has no tracks")?;
+        for c in &changes {
+            gains.validate(c)?;
+        }
+        match positions {
+            None => changes.iter().for_each(|c| gains.apply(at, c)),
+            Some(mut positions) => {
+                positions.retain(|p| *p >= at);
+                positions.sort_unstable();
+                gains.positions = positions;
+                gains.deferred = if gains.positions.is_empty() { Vec::new() } else { changes };
+            }
+        }
+        Ok(())
+    }
     fn sample(&mut self, index: u64) -> Result<SampleRead> {
+        let Some(gains) = self.gains.as_mut() else {
+            return self.sample_one(index);
+        };
+        gains.advance(index);
+        let lines = gains.lines.clone();
+        let mut sum = [0.; 2];
+        let mut any = false;
+        let first = self.sample_one(index)?;
+        let mut reads = vec![first];
+        for t in &mut self.tracks {
+            reads.push(t.sample_one(index)?);
+        }
+        for (read, line) in reads.into_iter().zip(lines) {
+            match read {
+                SampleRead::Pending => return Ok(SampleRead::Pending),
+                SampleRead::Frame(f) => {
+                    let g = line.at(index);
+                    sum[0] += f[0] * g;
+                    sum[1] += f[1] * g;
+                    any = true;
+                }
+                SampleRead::End => {}
+            }
+        }
+        Ok(if any { SampleRead::Frame(sum) } else { SampleRead::End })
+    }
+    fn sample_one(&mut self, index: u64) -> Result<SampleRead> {
         if self.source.frame_count().is_some_and(|n| index >= n) {
             return Ok(SampleRead::End);
         }
@@ -1418,6 +1501,34 @@ impl Mixer {
         voice.remaining_loop_passes = passes;
         Ok(())
     }
+    /// Retarget track gains of a multi-track voice from its current source
+    /// frame (`positions`: wait for the first of these source frames).
+    pub fn set_track_gains(
+        &mut self,
+        client: u32,
+        h: VoiceHandle,
+        positions: Option<Vec<u64>>,
+        changes: &[crysirror_core::service::AudioTrackGain],
+    ) -> Result<()> {
+        let v = self.voice(client, h)?;
+        let at = v.position.max(0.) as u64;
+        let rate = u64::from(v.cursor.source.sample_rate());
+        let changes = changes
+            .iter()
+            .map(|c| crate::multitrack::TrackGainChange {
+                tracks: c.tracks.clone(),
+                gain: c.gain,
+                // wumultitrack 0x1000E380: ms * rate / 1000, truncated.
+                fade_frames: u64::from(c.fade_ms) * rate / 1000,
+            })
+            .collect();
+        v.cursor.change_tracks(at, positions, changes)
+    }
+    /// Track count of a voice (0 for an ordinary source).
+    pub fn track_count(&mut self, client: u32, h: VoiceHandle) -> Result<usize> {
+        let v = self.voice(client, h)?;
+        Ok(v.cursor.gains.as_ref().map_or(0, |g| g.lines.len()))
+    }
     /// Decoded-channel exchange before pan/spatial processing, with no seek.
     pub fn set_channel_swap(&mut self, client: u32, h: VoiceHandle, swapped: bool) -> Result<()> {
         self.voice(client, h)?.spec.swap_channels = swapped;
@@ -1897,7 +2008,7 @@ impl Mixer {
     }
     pub fn seek(&mut self, client: u32, h: VoiceHandle, source_frame: u64) -> Result<()> {
         let v = self.voice(client, h)?;
-        v.cursor.source.seek(source_frame)?;
+        v.cursor.seek_all(source_frame)?;
         if let Some(sender) = v.seek_sender.take() {
             sender.complete(crate::seek_receipt::SourceSeekState::Cancelled);
         }
@@ -1929,7 +2040,7 @@ impl Mixer {
             .seek_sequence
             .checked_add(1)
             .context("seek sequence exhausted")?;
-        let ready = v.cursor.source.poll_seek(frame)?;
+        let ready = v.cursor.poll_seek_all(frame)?;
         // Completing/dropping the old producer cancels only an unresolved
         // previous seek. Ready results remain retained and immutable.
         v.seek_sender = None;
@@ -2003,7 +2114,7 @@ impl Mixer {
             sender.complete(crate::seek_receipt::SourceSeekState::Cancelled);
         }
         let frame = v.position.floor() as u64;
-        let ready = v.cursor.source.poll_seek(frame)?;
+        let ready = v.cursor.poll_seek_all(frame)?;
         v.seek = Some(SeekProgress {
             sequence: 0,
             frame,
@@ -2112,7 +2223,7 @@ impl Mixer {
     pub fn service_sources(&mut self) -> Result<()> {
         self.idle()?;
         for v in self.voices.iter_mut().flatten() {
-            if let Err(error) = v.cursor.source.service() {
+            if let Err(error) = v.cursor.service_all() {
                 if let Some(sender) = &v.seek_sender {
                     sender.complete(crate::seek_receipt::SourceSeekState::Failed(format!(
                         "{error:#}"
@@ -2121,7 +2232,7 @@ impl Mixer {
                 return Err(error);
             }
             if let Some(seek) = v.seek.as_mut().filter(|s| s.pending) {
-                match v.cursor.source.poll_seek(seek.frame) {
+                match v.cursor.poll_seek_all(seek.frame) {
                     Ok(false) => {}
                     Ok(true) => {
                         let frame = seek.frame;
@@ -2230,12 +2341,20 @@ impl Mixer {
                 })
             })
             .collect();
+        // Voices are never admitted during a render block; only removed. Walk
+        // the occupied slots instead of the whole slot table on every sample.
+        let live: Vec<usize> = self
+            .voices
+            .iter()
+            .enumerate()
+            .filter_map(|(i, v)| v.is_some().then_some(i))
+            .collect();
         for sample in out.iter_mut() {
             self.groups.step();
             for c in self.clients.values_mut() {
                 c.dialogue_voices = 0;
             }
-            for v in self.voices.iter().flatten() {
+            for v in live.iter().filter_map(|&i| self.voices[i].as_ref()) {
                 let c = self
                     .clients
                     .get_mut(&v.handle.client)
@@ -2274,7 +2393,9 @@ impl Mixer {
                 }
                 c.duck_output = c.duck.step();
             }
-            for (slot, (effect, step)) in self.voices.iter_mut().zip(spatial.iter().zip(&rates)) {
+            for &live_index in &live {
+                let slot = &mut self.voices[live_index];
+                let (effect, step) = (&spatial[live_index], &rates[live_index]);
                 let Some(v) = slot else { continue };
                 if gain_envelope::finished(v) { *slot = None; continue; }
                 let stepped_sample_gain = v.stepped_gain.as_mut().map(|envelope| {
@@ -2572,7 +2693,8 @@ impl Mixer {
             // Apply deadlines after this output frame. Preserve mode consumes
             // the last waiting frame using the old fade/paused state; both modes
             // start resumed PCM on the next frame, including at chunk boundaries.
-            for slot in &mut self.voices {
+            for &live_index in &live {
+                let slot = &mut self.voices[live_index];
                 let Some(v) = slot else { continue };
                 if v.stop_after_fade {
                     v.stop_remaining = v.stop_remaining.saturating_sub(1);

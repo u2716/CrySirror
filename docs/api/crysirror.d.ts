@@ -945,11 +945,17 @@ declare class Ui {
   setFullscreen(enabled: boolean): void;
   /** Request desktop decorations and resizing through engine-owned client state. Headless hosts retain the request; the desktop applies it at frame publication. */
   setWindowPolicy(decorated: boolean, resizable: boolean): void;
+  /** Request a native pointer-driven move of the presenting window; requires an active pointer gesture. */
+  beginWindowDrag(): void;
+  /** Restore the native window to its ordinary opaque rectangle. */
+  resetWindowShape(): void;
+  /** Set IME candidate geometry in logical canvas pixels. */
+  setImeCursorArea(rect: number[]): void;
   /** Set engine presentation title. */
   setTitle(text: string): void;
   /** Focus an enabled, visible text field owned by this client. */
   focusTextField(id: number): void;
-  /** Append committed single-line Unicode to the focused text field, up to max_length Unicode scalars. */
+  /** Append committed Unicode up to max_length scalars. Multiline fields also accept newline and tab; single-line fields reject controls. */
   insertText(text: string): void;
   /** Remove the final Unicode scalar from a client-owned text field. */
   backspace(id: number): void;

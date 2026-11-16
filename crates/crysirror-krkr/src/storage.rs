@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-License-Identifier: MPL-2.0
 //! KiriKiri storage naming over the client's engine-owned capability storage.
 //!
 //! KiriKiri resolves bare storage names through an ordered "auto path" list
@@ -23,6 +23,7 @@ pub struct Storage {
     files: Arc<dyn ClientStorage>,
     root: String,
     current_uri: String,
+    pub(crate) media: Option<crysirror_core::service::MountedMediaCatalog>,
     /// Lowercased path relative to `root` → provider spelling relative to the
     /// asset mount.
     index: BTreeMap<String, String>,
@@ -32,9 +33,71 @@ pub struct Storage {
     pub compound: Option<(String, crysirror_resource::compound::CompoundStorage)>,
     /// Directory inside each routed container that answers hashed names.
     pub hashed_root: Option<String>,
+    /// Name-rewriting media registered by linked plug-ins.
+    pub(crate) wrappers: WrapperMedia,
+}
+
+/// Media that own no files and rewrite a name onto the ordinary search:
+/// lzfs.dll's `lzfs` (LZ4-frame passthrough of the same name) and yuzuex.dll's
+/// `proxy` (exact lower-cased `ProxyStorageMap` key to a target storage name).
+#[derive(Default)]
+pub(crate) struct WrapperMedia {
+    pub lzfs: bool,
+    /// String values of `ProxyStorageMap`, mirrored from the TJS dictionary;
+    /// `None` until yuzuex.dll is linked.
+    pub proxy: Option<BTreeMap<String, String>>,
+    /// Asset paths reached through `lzfs`, read with LZ4 frame passthrough.
+    lz4: std::sync::Mutex<std::collections::BTreeSet<String>>,
+    /// Nested wrapper resolutions in progress (proxy targets found through a
+    /// proxy auto path); bounded so a cyclic map is a miss, not a hang.
+    depth: std::sync::atomic::AtomicUsize,
+    /// psd.dll's `psd` media; `None` until the plug-in is linked.
+    pub psd: Option<crate::psd_plugin::PsdMedia>,
+}
+
+impl WrapperMedia {
+    fn scheme<'a>(&self, name: &'a str) -> Option<(&'static str, &'a str)> {
+        let (scheme, rest) = name.split_once("://")?;
+        if self.lzfs && scheme.eq_ignore_ascii_case("lzfs") {
+            Some(("lzfs", rest))
+        } else if self.proxy.is_some() && scheme.eq_ignore_ascii_case("proxy") {
+            Some(("proxy", rest))
+        } else {
+            None
+        }
+    }
+    /// The ordinary storage name a wrapper URI stands for.
+    fn inner(&self, name: &str) -> Option<Result<(&'static str, String)>> {
+        let (scheme, rest) = self.scheme(name)?;
+        Some((|| {
+            let rest = rest.replace('\\', "/");
+            ensure!(rest.starts_with("./"), "{scheme} media supports only the root domain `.`");
+            if scheme == "lzfs" {
+                return Ok((scheme, rest[2..].to_owned()));
+            }
+            // proxyfs: the media-relative name, ASCII lower-cased, is one exact key.
+            let key = rest.to_ascii_lowercase();
+            let target = self.proxy.as_ref().and_then(|map| map.get(&key)).cloned()
+                .with_context(|| format!("cannot open proxyfile:{rest}"))?;
+            ensure!(self.scheme(&target).is_none(), "proxy target cannot be another wrapper media");
+            Ok((scheme, target))
+        })())
+    }
 }
 
 impl Storage {
+    pub(crate) fn autoload_modules(&self, is_64: bool) -> Result<Vec<String>> {
+        let plugin_dir = if is_64 { "plugin64" } else { "plugin" };
+        let mut modules: Vec<_> = self.index.keys().filter(|name| {
+            let (parent, base) = name.rsplit_once('/').unwrap_or(("", name));
+            (parent.is_empty() || parent == "system" || parent == plugin_dir)
+                && base.ends_with(".tpm")
+        }).cloned().collect();
+        ensure!(modules.len() <= 128, "native autoload module limit");
+        modules.sort_by(|a,b| a.rsplit('/').next().cmp(&b.rsplit('/').next()).then(a.cmp(b)));
+        Ok(modules)
+    }
+
     fn scoped_location(&self, name: &str) -> Result<(Mount, String)> {
         let full = self.full_name(name)?;
         ensure!(!full.contains("://"), "compound metadata is not supported");
@@ -68,10 +131,12 @@ impl Storage {
             files,
             root: root.trim_matches('/').to_owned(),
             current_uri: "file://./".into(),
+            media: None,
             index: BTreeMap::new(),
             auto: Vec::new(),
             compound: None,
             hashed_root: None,
+            wrappers: WrapperMedia::default(),
         };
         let mut stack = vec![this.root.clone()];
         while let Some(dir) = stack.pop() {
@@ -106,6 +171,23 @@ impl Storage {
     /// Qualify native names without allowing host paths or arbitrary media.
     pub fn full_uri(&self, name: &str) -> Result<String> {
         let name = name.replace('\\', "/");
+        if let Some((scheme, rest)) = self.wrappers.scheme(&name) {
+            ensure!(rest.starts_with("./"), "{scheme} media supports only the root domain `.`");
+            return Ok(format!("{scheme}://{rest}"));
+        }
+        let name = if name.as_bytes().get(1) == Some(&b':') {
+            let drive = name.chars().next().unwrap().to_ascii_uppercase();
+            let volume = self.media.as_ref().and_then(|m| m.volumes().iter().find(|v| v.drive == drive))
+                .context("unmounted native drive")?;
+            let tail=name.get(2..).context("native drive path")?;
+            ensure!(tail.is_empty() || tail.starts_with('/'), "drive-relative native paths unsupported");
+            let relative_root=if self.root.is_empty() {volume.root.as_str()}
+                else if volume.root == self.root {""}
+                else {volume.root.strip_prefix(&format!("{}/",self.root)).context("media outside native root")?};
+            let joined=if relative_root.is_empty() {tail.trim_start_matches('/').to_owned()}
+                else {format!("{}/{}",relative_root,tail.trim_start_matches('/'))};
+            format!("file://./{joined}")
+        } else { name };
         if let Some(rest) = self.compound_relative(&name) {
             return Ok(format!("{}://./{}", self.compound_media().unwrap(), rest?));
         }
@@ -290,7 +372,7 @@ impl Storage {
     /// Resolve native container syntax only to an already mounted shared provider.
     pub fn full_name(&self, name: &str) -> Result<String> {
         let uri = self.full_uri(name)?;
-        if self.compound_relative(&uri).is_some() {
+        if self.compound_relative(&uri).is_some() || self.wrappers.scheme(&uri).is_some() {
             // Compound media are routed per lookup; keep the logical URI.
             return Ok(uri);
         }
@@ -368,6 +450,26 @@ impl Storage {
 
     /// Resolve a storage name to an asset-relative path, or `None`.
     pub fn resolve(&self, name: &str) -> Option<String> {
+        if let Some(media) = &self.wrappers.psd {
+            if let Some(rest) = crate::psd_plugin::psd_uri(name) {
+                return media.exists(self, &rest).then(|| format!("psd://{rest}"));
+            }
+        }
+        if let Some(inner) = self.wrappers.inner(name) {
+            use std::sync::atomic::Ordering::Relaxed;
+            let (scheme, inner) = inner.ok()?;
+            if self.wrappers.depth.fetch_add(1, Relaxed) >= 4 {
+                self.wrappers.depth.fetch_sub(1, Relaxed);
+                return None;
+            }
+            let found = self.resolve(&inner);
+            self.wrappers.depth.fetch_sub(1, Relaxed);
+            let found = found?;
+            if scheme == "lzfs" {
+                self.wrappers.lz4.lock().ok()?.insert(found.clone());
+            }
+            return Some(found);
+        }
         if let Ok(Some(path)) = save_path(name) {
             return self
                 .files
@@ -392,6 +494,12 @@ impl Storage {
         }
         let base = key.rsplit('/').next().unwrap_or(&key);
         for dir in self.auto.iter().rev() {
+            if self.wrappers.scheme(dir).is_some() {
+                if let Some(found) = self.resolve(&format!("{}/{base}", dir.trim_end_matches('/'))) {
+                    return Some(found);
+                }
+                continue;
+            }
             let candidate = if dir.is_empty() {
                 base.to_owned()
             } else {
@@ -460,6 +568,11 @@ impl Storage {
     }
     /// Enforce the byte limit before allocating or reading the stream.
     pub fn read_limited(&self, path: &str, max_bytes: usize) -> Result<Vec<u8>> {
+        if let Some(bytes) = self.psd_read(path) {
+            let bytes = bytes?;
+            ensure!(bytes.len() <= max_bytes, "native storage byte limit");
+            return Ok(bytes);
+        }
         let path =
             save_path(path)?.map_or_else(|| VfsPath::new(Mount::Asset, path).map_err(err), Ok)?;
         let reader = self.files.open_read(&path).map_err(err)?;
@@ -473,11 +586,27 @@ impl Storage {
             ensure!(n > 0 && n <= end - at, "short native storage read");
             at += n;
         }
-        Ok(out)
+        Ok(self.lz4_passthrough(&path, out, max_bytes))
+    }
+    /// Bytes of an asset reached through `lzfs`: a complete LZ4 frame decoded.
+    fn lz4_passthrough(&self, path: &VfsPath, bytes: Vec<u8>, limit: usize) -> Vec<u8> {
+        if path.mount() == Mount::Asset
+            && crysirror_resource::lz4_frame::has_frame_magic(&bytes)
+            && self.wrappers.lz4.lock().is_ok_and(|paths| paths.contains(path.relative()))
+            && let Some(decoded) = crysirror_resource::lz4_frame::decode_complete_frame(&bytes, limit)
+        {
+            return decoded;
+        }
+        bytes
     }
     /// The first `len` bytes of an asset, streamed (container probing
     /// without reading a whole movie).
     pub fn read_prefix(&self, path: &str, len: usize) -> Result<Vec<u8>> {
+        if let Some(bytes) = self.psd_read(path) {
+            let mut bytes = bytes?;
+            bytes.truncate(len);
+            return Ok(bytes);
+        }
         let reader = self
             .files
             .open_asset(&VfsPath::new(Mount::Asset, path).map_err(err)?)
@@ -495,14 +624,22 @@ impl Storage {
         Ok(out)
     }
 
+    /// Layer images of the `psd` media (`psd://<file>/root/…/<layer>.bmp`).
+    fn psd_read(&self, path: &str) -> Option<Result<Vec<u8>>> {
+        let media = self.wrappers.psd.as_ref()?;
+        let rest = crate::psd_plugin::psd_uri(path)?;
+        Some(media.open(self, &rest))
+    }
     pub fn read(&self, path: &str) -> Result<Vec<u8>> {
+        if let Some(bytes) = self.psd_read(path) {
+            return bytes;
+        }
         if let Some(path) = save_path(path)? {
             return self.files.read(&path).map_err(err);
         }
-        self.files
-            .read(&VfsPath::new(Mount::Asset, path).map_err(err)?)
-            .map_err(err)
-            .with_context(|| format!("read storage `{path}`"))
+        let path = VfsPath::new(Mount::Asset, path).map_err(err)?;
+        let bytes = self.files.read(&path).map_err(err).with_context(|| format!("read storage `{}`", path.relative()))?;
+        Ok(self.lz4_passthrough(&path, bytes, 256 << 20))
     }
 
     /// fstat `deleteFile`: only the scoped save mount is writable; a missing

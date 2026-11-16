@@ -3724,7 +3724,18 @@ fn evaluate_frame_list(
     // checks through frame+16; retain the prior channels but publish the new
     // cursor/type metadata.
     if current_type == 0 {
-        let mut held = previous_state.cloned().unwrap_or(state);
+        // The held channels are those of the preceding key, reached in
+        // order. A seek or skip (e.g. a title skipped to lastTime) arrives
+        // without stepping through it; decode that key as stepping would.
+        let stepped = previous_state.filter(|p| p.frame_index.is_some_and(|i| i + 1 >= current_index && i <= current_index));
+        let reached = match (stepped, current_index.checked_sub(1)) {
+            (None, Some(previous)) => {
+                let previous_time = frame_list[previous].field_f32("time").unwrap_or(0.0);
+                Some(evaluate_frame_list(&frame_list[..current_index], previous_time, easing_table, coordinate_plane, previous_state))
+            }
+            _ => None,
+        };
+        let mut held = stepped.cloned().or(reached).unwrap_or(state);
         held.frame_index = Some(current_index);
         held.next_frame_index = frame_list.get(current_index + 1).map(|_| current_index + 1);
         held.frame_start_ticks = current_time;
@@ -7871,6 +7882,25 @@ mod tests {
         assert_eq!(held.coord, Some([2.0, 3.0, 4.0]));
         assert!((held.rotation_degrees - 15.0).abs() < 1.0e-6);
         assert_eq!(held.opa, 200.0);
+    }
+
+    #[test]
+    fn type_zero_end_frame_reached_by_seek_holds_the_skipped_key() {
+        // LIMELIGHT LEMONADE JAM title: the illustration appears at 60/119
+        // and the timeline ends with a type-0 key at lastTime 180. Skipping
+        // the intro seeks from before 60 straight to 180.
+        let frames = vec![
+            test_frame(0.0, 0, test_content(vec![])),
+            test_frame(60.0, 3, test_content(vec![("opa", PsbValue::Int(64))])),
+            test_frame(119.0, 3, test_content(vec![("opa", PsbValue::Int(255))])),
+            test_frame(180.0, 0, test_content(vec![])),
+        ];
+        let before = evaluate_frame_list(&frames, 17.0, None, 0, None);
+        let skipped = evaluate_frame_list(&frames, 180.0, None, 0, Some(&before));
+        assert_eq!(skipped.opa, 255.0);
+        assert_eq!(skipped.frame_index, Some(3));
+        let fresh = evaluate_frame_list(&frames, 180.0, None, 0, None);
+        assert_eq!(fresh.opa, 255.0);
     }
 
     #[test]

@@ -1,0 +1,112 @@
+// SPDX-License-Identifier: MPL-2.0
+// Shared math of the PSV reduced 3D tier. Each function is a direct port of
+// the desktop WGSL term named beside it (crysirror-shaders/wgsl), so the
+// reduced tier differs from desktop only in which terms it evaluates.
+// Matrices are uploaded as four column float4s (glam/WGSL column order).
+#define LITE_PI 3.14159265359
+
+float4 lite_xform(float4 c0, float4 c1, float4 c2, float4 c3, float4 p)
+{
+    return c0 * p.x + c1 * p.y + c2 * p.z + c3 * p.w;
+}
+
+// pbr_common.wgsl rotate_y / equirect_uv
+float3 lite_rotate_y(float3 d, float a)
+{
+    float c = cos(a);
+    float s = sin(a);
+    return float3(c * d.x + s * d.z, d.y, -s * d.x + c * d.z);
+}
+float2 lite_dir_uv(float3 r)
+{
+    return float2(atan2(r.z, r.x) / (2.0 * LITE_PI) + 0.5, acos(clamp(r.y, -1.0, 1.0)) / LITE_PI);
+}
+float2 lite_equirect_uv(float3 d, float rotation)
+{
+    return lite_dir_uv(lite_rotate_y(normalize(d), -rotation));
+}
+
+// pbr.wgsl d_ggx / v_smith_ggx_correlated / f_schlick / f_schlick_roughness
+float lite_d_ggx(float nh, float a)
+{
+    float a2 = a * a;
+    float d = nh * nh * (a2 - 1.0) + 1.0;
+    return a2 / (LITE_PI * d * d);
+}
+float lite_v_smith(float nv, float nl, float a)
+{
+    float a2 = a * a;
+    float gv = nl * sqrt(nv * nv * (1.0 - a2) + a2);
+    float gl = nv * sqrt(nl * nl * (1.0 - a2) + a2);
+    return 0.5 / max(gv + gl, 1e-5);
+}
+float3 lite_f_schlick(float c, float3 f0)
+{
+    return f0 + (float3(1.0, 1.0, 1.0) - f0) * pow(1.0 - c, 5.0);
+}
+float3 lite_f_schlick_roughness(float c, float3 f0, float r)
+{
+    return f0 + (max(float3(1.0 - r, 1.0 - r, 1.0 - r), f0) - f0) * pow(1.0 - c, 5.0);
+}
+// pbr.wgsl range_window
+float lite_range_window(float d2, float r)
+{
+    float q = d2 / (r * r);
+    float w = clamp(1.0 - q * q, 0.0, 1.0);
+    return w * w;
+}
+
+// pbr_common.wgsl height_fog. fog_color rgb+density, fog_params falloff,
+// base height, start distance, max opacity (0 off), fog_sun scattering,
+// exponent; sun_dir xyz travel direction, w illuminance.
+float4 lite_height_fog(float3 world, float3 cam, float4 fog_color, float4 fog_params,
+                       float4 fog_sun, float4 sun_dir, float3 sun_color)
+{
+    if (fog_params.w <= 0.0) {
+        return float4(0.0, 0.0, 0.0, 0.0);
+    }
+    float3 ray = world - cam;
+    float len = length(ray);
+    float dist = max(len - fog_params.z, 0.0);
+    float falloff = fog_params.x;
+    float dy = ray.y * dist / max(len, 1e-4);
+    float integral = fog_color.a * dist * exp(-falloff * (cam.y - fog_params.y));
+    float k = falloff * dy;
+    if (abs(k) > 1e-4) {
+        integral = integral * (1.0 - exp(-k)) / k;
+    }
+    float opacity = min(1.0 - exp(-max(integral, 0.0)), fog_params.w);
+    float3 color = fog_color.rgb;
+    if (fog_sun.x > 0.0 && sun_dir.w > 0.0) {
+        float cos_sun = max(dot(ray / max(len, 1e-4), -sun_dir.xyz), 0.0);
+        color = color + sun_color * fog_sun.x * pow(cos_sun, fog_sun.y);
+    }
+    return float4(color, opacity);
+}
+
+// tonemap.wgsl pbr_neutral / aces
+float3 lite_pbr_neutral(float3 c)
+{
+    float start = 0.8 - 0.04;
+    float desat = 0.15;
+    float x = min(c.r, min(c.g, c.b));
+    float offset = x < 0.08 ? x - 6.25 * x * x : 0.04;
+    c = c - float3(offset, offset, offset);
+    float peak = max(c.r, max(c.g, c.b));
+    if (peak < start) {
+        return c;
+    }
+    float d = 1.0 - start;
+    float new_peak = 1.0 - d * d / (peak + d - start);
+    c = c * (new_peak / peak);
+    float g = 1.0 - 1.0 / (desat * (peak - new_peak) + 1.0);
+    return lerp(c, float3(new_peak, new_peak, new_peak), g);
+}
+float3 lite_aces(float3 x)
+{
+    return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
+}
+float3 lite_finite(float3 c)
+{
+    return float3(c.r == c.r ? c.r : 0.0, c.g == c.g ? c.g : 0.0, c.b == c.b ? c.b : 0.0);
+}

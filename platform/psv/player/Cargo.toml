@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: MPL-2.0
+# CrySirror PS Vita player (VPK). Built with cargo-vita; its own workspace so
+# the desktop workspace never selects the Vita SDK.
+cargo-features = ["profile-rustflags"]
+
+[package]
+name = "crysirror_vita_player"
+version = "0.2.0"
+edition = "2024"
+license = "MPL-2.0"
+build = "build.rs"
+
+[workspace]
+
+# LLVM's SLP vectorizer pairs 64-bit saturating ops into NEON vqadd/vqsub.s64,
+# which Vita3K computes wrongly (siglus_rs finding); loop vectorization stays.
+[profile.release]
+rustflags = ["-C", "no-vectorize-slp"]
+[profile.dev]
+rustflags = ["-C", "no-vectorize-slp"]
+
+[package.metadata.vita]
+title_id = "CRYS00001"
+title_name = "CrySirror"
+assets = "static"
+build_std = "std,panic_abort"
+
+[target.'cfg(target_os = "vita")'.dependencies]
+crysirror-console-player = { path = "../../../crates/crysirror-console-player" }
+vitasdk-sys = { version = "=0.3.3", default-features = false, features = ["SceAudio_stub", "SceCtrl_stub", "SceSysmem_stub", "SceTouch_stub", "SceCommonDialog_stub"] }
+
+# Same vendored sofar as the desktop workspace: upstream pins thiserror ^2.0.21,
+# which conflicts with ruffle flash-lso's =2.0.18 (vendor/sofar/SOURCE.json).
+[patch.crates-io]
+sofar = { path = "../../../vendor/sofar" }

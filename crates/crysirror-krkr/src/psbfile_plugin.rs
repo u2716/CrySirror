@@ -1,6 +1,6 @@
 // Copyright (c) 2026 CrySirror contributors.
-// Distributed under the GNU Affero General Public License, version 3 or
-// (at your option) any later version, https://www.gnu.org/licenses/agpl-3.0.html.
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. A copy is available at https://mozilla.org/MPL/2.0/.
 //! `psbfile.dll` PSBFile: PSB parsed by the shared eluna_rs reader, `root`
 //! exposed as plain TJS data, and `psb://<storage name>/<key>` image loads
 //! served from the loaded file's resources. Embedded images are decoded by the
@@ -226,6 +226,24 @@ fn load_encoded_deferred(rt: &mut Rt, layer: ObjectHandle, uri: &str, bytes: Vec
     l.full_alpha = opaque.then_some(255);
     host.psbfile.deferred.push((layer, input));
     Ok(Variant::Void)
+}
+
+/// Give `layer` an RGBA image of `size` now (its image surface is resized and
+/// marked drawn) and publish the pixels through the shared image job at the
+/// next boundary, like a deferred encoded load.
+pub(crate) fn defer_rgba(rt: &mut Rt, layer: ObjectHandle, size: [u32; 2], rgba: Vec<u8>) -> Result<()> {
+    let client = crysirror_core::state::ClientId(rt.host().client);
+    let image = crysirror_core::image_processing::RgbaImage::new(client, size, rgba.into()).map_err(err)?;
+    let opaque = crysirror_core::image_processing::ImageResource::opaque(&image);
+    let input = crysirror_core::image_processing::ImageInput::Resource(std::sync::Arc::new(image));
+    let host = rt.host_mut();
+    host.reset_surface(layer, i64::from(size[0]), i64::from(size[1]), [255, 255, 255, 0])?;
+    let l = host.layer_mut(layer)?;
+    l.blank = false;
+    l.image_source = Some(input.clone());
+    l.full_alpha = opaque.then_some(255);
+    host.psbfile.deferred.push((layer, input));
+    Ok(())
 }
 
 pub fn poll(rt: &mut Rt, host: &mut dyn HostServices, client: ClientId) -> anyhow::Result<bool> {

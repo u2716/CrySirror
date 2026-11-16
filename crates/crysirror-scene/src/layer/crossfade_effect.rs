@@ -3,6 +3,7 @@
 // License, v. 2.0. https://mozilla.org/MPL/2.0/.
 //! Reusable GPU subtree transition descriptions, independent of any native VM.
 use super::*;
+pub use crysirror_image::layer_ex::{GlitchFrame, GlitchParams, GlitchTransition};
 /// Maximum per-axis radius supported by the bounded GPU tile filter.
 pub const MAX_TRANSITION_BLUR_RADIUS: u32 = 128;
 /// A scoped, renderer-owned transition between two isolated subtree inputs.
@@ -36,6 +37,16 @@ pub enum SubtreeTransitionEffect {
         #[serde(default = "default_acceleration")]
         acceleration: f64,
     },
+    /// Block/line displacement with channel splitting (KiriKiri
+    /// GlitchEffect `glitch`/`fadeglitch`). Each frame regenerates its
+    /// field from `seed + elapsed_ms`; inputs are recaptured every frame.
+    /// A `fade` transition may use its destination as its own source.
+    Glitch {
+        params: GlitchParams,
+        mode: GlitchTransition,
+        #[serde(default)]
+        seed: u64,
+    },
 }
 fn default_acceleration() -> f64 {
     1.
@@ -52,6 +63,10 @@ impl SubtreeTransitionEffect {
                     "transition blur radius limit"
                 );
                 return Ok(());
+            }
+            Self::Glitch { params, mode, .. } => {
+                params.validate()?;
+                return mode.validate();
             }
             Self::Dim {
                 rule,
@@ -97,7 +112,19 @@ impl SubtreeTransitionEffect {
                 after.map(|n| (f64::from(n) * (1. - t)).floor() as u32),
             ),
             Self::Dim { blur, .. } => (*blur, [0, 0]),
+            Self::Glitch { .. } => ([0, 0], [0, 0]),
         }
+    }
+    /// A transition of one subtree (no exchange input) is allowed to name its
+    /// destination as source; only an old-image fade can.
+    pub fn allows_self_source(&self) -> bool {
+        matches!(self, Self::Glitch { mode: GlitchTransition::Fade { fade_in: false, .. }, .. })
+    }
+    /// The glitch field and row choices of a frame over a `size` root.
+    pub fn glitch_frame(&self, elapsed_ms: u64, duration_ms: u64, size: [u32; 2]) -> Option<GlitchFrame> {
+        let Self::Glitch { params, mode, seed } = self else { return None };
+        let t = self.progress(elapsed_ms, duration_ms);
+        Some(mode.frame(params, size, t, seed.wrapping_add(elapsed_ms)))
     }
 }
 #[cfg(test)]

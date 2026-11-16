@@ -1,0 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
+// vfx_render.wgsl vs_sprite
+#define LITE_VFX_SPRITE
+#include "lite_vfx_vertex.cgh"

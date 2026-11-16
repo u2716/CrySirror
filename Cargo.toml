@@ -20,6 +20,13 @@ members = [
     "crates/crysirror-desktop",
     "crates/crysirror-mobile",
     "crates/crysirror-console",
+    "crates/crysirror-render-tier",
+    "crates/crysirror-capfs",
+    "crates/crysirror-console-player",
+    "crates/crysirror-launch",
+    "crates/crysirror-wgpu-deko3d",
+    "crates/crysirror-wgpu-gxm",
+    "crates/crysirror-vita-io",
     "crates/crysirror-shader-tools",
     "crates/crysirror-shaders",
     "crates/crysirror-raytrace",
@@ -32,6 +39,7 @@ members = [
     "crates/crysirror-formats-blackcyc",
     "crates/crysirror-physics",
     "crates/crysirror-siglus",
+    "crates/crysirror-library",
     "crates/crysirror-text",
     "crates/crysirror-text-legacy",
     "crates/crysirror-audio",
@@ -68,6 +76,9 @@ members = [
     "crates/crysirror-majiro",
     "crates/crysirror-qlie",
     "crates/crysirror-sugarpot",
+    "crates/crysirror-nsystem",
+    "crates/crysirror-willplus",
+    "crates/crysirror-lua",
     "crates/crysirror-reallive-dll",
 ]
 exclude = [
@@ -79,13 +90,17 @@ default-members = ["crates/crysirror-desktop"]
 version = "0.2.0"
 edition = "2021"
 license = "MPL-2.0"
+license-file = "LICENSE"
 # Storage leases require Rust 1.89; the workspace is tested on 1.98.1.
 rust-version = "1.95"
 
 [workspace.dependencies]
+crysirror-willplus = { path = "crates/crysirror-willplus" }
+crysirror-lua = { path = "crates/crysirror-lua" }
 crysirror-sugarpot = { path = "crates/crysirror-sugarpot" }
+crysirror-nsystem = { path = "crates/crysirror-nsystem" }
 crysirror-qlie = { path = "crates/crysirror-qlie" }
-crysirror-network = { path = "crates/crysirror-network" }
+crysirror-network = { path = "crates/crysirror-network", default-features = false }
 crysirror-io = { path = "crates/crysirror-io" }
 crysirror-tasks = { path = "crates/crysirror-tasks" }
 crysirror-vfx = { path = "crates/crysirror-vfx" }
@@ -106,6 +121,12 @@ crysirror-text-legacy = { path = "crates/crysirror-text-legacy" }
 crysirror-audio = { path = "crates/crysirror-audio" }
 crysirror-acoustics = { path = "crates/crysirror-acoustics" }
 crysirror-scene = { path = "crates/crysirror-scene" }
+crysirror-console = { path = "crates/crysirror-console" }
+crysirror-capfs = { path = "crates/crysirror-capfs" }
+crysirror-launch = { path = "crates/crysirror-launch" }
+crysirror-wgpu-deko3d = { path = "crates/crysirror-wgpu-deko3d" }
+crysirror-wgpu-gxm = { path = "crates/crysirror-wgpu-gxm" }
+crysirror-vita-io = { path = "crates/crysirror-vita-io" }
 crysirror-puppet = { path = "crates/crysirror-puppet" }
 crysirror-puppet-eluna = { path = "crates/crysirror-puppet-eluna" }
 crysirror-siglus-vm = { path = "crates/crysirror-siglus-vm" }
@@ -117,6 +138,7 @@ crysirror-reallive = { path = "crates/crysirror-reallive" }
 crysirror-rfvp = { path = "crates/crysirror-rfvp" }
 crysirror-nscripter = { path = "crates/crysirror-nscripter" }
 crysirror-bgi-vm = { path = "crates/crysirror-bgi-vm" }
+crysirror-library = { path = "crates/crysirror-library" }
 crysirror-bgi = { path = "crates/crysirror-bgi" }
 crysirror-bgi-integrated = { path = "crates/crysirror-bgi-integrated" }
 crysirror-softpal = { path = "crates/crysirror-softpal" }

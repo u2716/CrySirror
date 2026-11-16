@@ -7,6 +7,7 @@ use crysirror_core::{
     state::ClientId,
 };
 use crysirror_tasks::{Task, TaskPool};
+#[cfg(not(any(target_os = "horizon", target_os = "vita")))]
 use std::{
     io::Read,
     time::{Duration, Instant},
@@ -101,6 +102,15 @@ pub fn begin(
     {
         return Err(Error::Limit("HTTP request"));
     }
+    #[cfg(any(target_os = "horizon", target_os = "vita"))]
+    let task = pool
+        .spawn(move |cancel| -> anyhow::Result<HttpResponse> {
+            cancel.check()?;
+            let _ = request;
+            anyhow::bail!("HTTP transport is unavailable on this console target")
+        })
+        .map_err(|_| Error::Limit("HTTP task admission"))?;
+    #[cfg(not(any(target_os = "horizon", target_os = "vita")))]
     let task = pool
         .spawn(move |cancel| {
             cancel.check()?;
@@ -142,6 +152,9 @@ pub fn begin(
                 let verb = match method {
                     HttpMethod::Get => reqwest::Method::GET,
                     HttpMethod::Post => reqwest::Method::POST,
+                    HttpMethod::Put => reqwest::Method::PUT,
+                    HttpMethod::Delete => reqwest::Method::DELETE,
+                    HttpMethod::Head => reqwest::Method::HEAD,
                 };
                 let mut response = client
                     .request(verb, url.clone())
@@ -184,6 +197,12 @@ pub fn begin(
                         "HTTP response exceeds limit"
                     );
                 }
+                let response_headers: Vec<(String, String)> = response
+                    .headers()
+                    .iter()
+                    .take(128)
+                    .filter_map(|(name, value)| Some((name.as_str().to_owned(), value.to_str().ok()?.to_owned())))
+                    .collect();
                 let mut bytes = Vec::new();
                 let mut chunk = [0u8; 16 * 1024];
                 loop {
@@ -204,6 +223,7 @@ pub fn begin(
                 cancel.check()?;
                 return Ok(HttpResponse {
                     status,
+                    headers: response_headers,
                     body: bytes,
                 });
             }

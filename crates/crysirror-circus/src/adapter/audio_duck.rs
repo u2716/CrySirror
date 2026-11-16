@@ -24,7 +24,7 @@ impl Bridge<'_> {
         if let Some(controls)=self.services.mixer_controls.as_mut(){controls.gain[0]=gain;}
         Ok(())
     }
-    pub(super) fn advance_native_duck(&mut self)->Result<()> {
+    pub(in crate::adapter) fn advance_native_duck(&mut self)->Result<()> {
         if self.host.audio_info(self.client,0)?.is_none(){return self.cancel_native_duck()}
         if let Some(status)=self.native_duck_status()?.filter(|status|!status.complete) {
             let operation=Op::Advance{generation:status.generation,revision:status.revision.checked_add(1).context("Circus music level clock overflow")?,rate:1.,fast:false};
@@ -48,6 +48,12 @@ impl Bridge<'_> {
         let target=if policy.master!=0&&volume!=0&&policy.global_enabled {
             5000i32.wrapping_mul(volume.wrapping_mul(policy.master)/100)/100-5000
         }else{-10000};
+        self.declare_native_music_level(target)
+    }
+    ///The same shared stored-f32 scalar track also implements DC3WY431E60.
+    ///Callers own native eligibility; the target is DirectSound db100.
+    pub(in crate::adapter) fn declare_native_music_level(&mut self,target:i32)->Result<()> {
+        if self.native_duck_active()? {return Ok(())}
         let gain=self.services.mixer_controls.context("Circus music level mixer missing")?.gain[0];
         let current=if gain<=0.00001{-10000}else{(2000.*f64::from(gain).log10()).round().clamp(-10000.,0.) as i32};
         if current==target{return Ok(())}

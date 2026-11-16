@@ -29,7 +29,7 @@ RealLive uses straight RGBA with rounded division by 255; AVG32 uses separate
 mask/premultiplied RGB with truncating division by 256 and alpha-preserving
 copies. The API exposes explicit PixelMath choices instead of silently equating
 these behaviors. Native numbered buffers, inclusive endpoints, fade arguments
-and presentation rules remain adapter policies. See crysirror-image/UPSTREAM.md
+and presentation rules remain adapter policies. See crysirror-image/SOURCE_NOTES.md
 and docs/BITMAPS.md for the precise implemented boundary.
 
 Operations stage their result before updating a retained surface. Parse,
@@ -57,13 +57,11 @@ does not claim that the RealLive/AVG32/BGI VM adapters have been ported.
 
 ## Limits
 
-The existing Siglus adapter's shared-transform call was also corrected: native
-CENTER_REP shifts the XY anchor as well as pivot, and native 3D configuration
-resets pivot Z before the final anchor adjustment. An actual native setter
-fixture now verifies unchanged unit-scale XY and correctly shifted scaled
-geometry/depth through EngineSystems. Evidence and source references are in
-native-audit-siglus-transform.md. Native screen-space destination clipping still
-needs a separate engine contract; it must not be treated as local object clip.
+The preserved Siglus extraction adapter retains native CENTER_REP anchor,
+pivot and depth policy in [export.rs](../../crates/crysirror-siglus-vm/src/export.rs).
+Destination scissoring uses screen-space `viewport_clip`; source cropping and
+transformed local clipping remain separate operations. The default Siglus player
+uses the [integrated runtime](../INTEGRATED_ENGINES.md).
 
 Bitmaps are transient render products, subject to existing surface budgets and
 a 64 MiB per-image processing limit. Runtime snapshots do not serialize them;
@@ -71,5 +69,5 @@ native adapters must preserve/reconstruct bitmap state from validated native
 save semantics before declaring save compatibility. The explicit AVG32-style
 premultiplied mode interprets source RGB as already premultiplied and alpha as
 its mask; it preserves destination alpha. This is not automatic conversion to
-straight-alpha display storage. Bilinear, external mask planes, native AVG32
-fade, and complete native effect stacks remain separate capabilities to add.
+straight-alpha display storage. Current sampling, mask and effect profiles are documented in
+[bitmap operations](../BITMAPS.md) and the [API reference](../api/REFERENCE.md).

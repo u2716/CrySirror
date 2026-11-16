@@ -1,0 +1,323 @@
+// SPDX-License-Identifier: MPL-2.0
+// Generated from canonical WGSL by crysirror-shader-tools.
+int min(int a,int b){return a<b?a:b;}
+int max(int a,int b){return a>b?a:b;}
+int clamp(int a,int lo,int hi){return min(max(a,lo),hi);}
+int2 min(int2 a,int2 b){return a<b?a:b;}
+int2 max(int2 a,int2 b){return a>b?a:b;}
+int2 clamp(int2 a,int2 lo,int2 hi){return min(max(a,lo),hi);}
+int3 min(int3 a,int3 b){return a<b?a:b;}
+int3 max(int3 a,int3 b){return a>b?a:b;}
+int3 clamp(int3 a,int3 lo,int3 hi){return min(max(a,lo),hi);}
+int4 min(int4 a,int4 b){return a<b?a:b;}
+int4 max(int4 a,int4 b){return a>b?a:b;}
+int4 clamp(int4 a,int4 lo,int4 hi){return min(max(a,lo),hi);}
+
+
+// SGX has no general integer divide. Bias a full-width float estimate
+// below the quotient, refine its small remainder, then correct in integers.
+// The 2^-20 bias dominates f32 conversion/division error (all inputs normal).
+// The refinement quotient is below 2048, so three corrections are sufficient.
+int cg_div_positive(int a,int b){
+ if(b==1)return a;
+ bool negative=a<0;
+ int n=negative?-(a+1):a;
+ float estimate=float(n)/float(b);
+ int q=int(max(floor(estimate-max(estimate*0.00000095367431640625,2.0)),0.0));
+ int r=n-q*b;
+ int correction=max(int(floor(float(r)/float(b)))-2,0);
+ q+=correction;r-=correction*b;
+ if(r>=b){r-=b;q+=1;}
+ if(r>=b){r-=b;q+=1;}
+ if(r>=b){r-=b;q+=1;}
+ if(negative)return -q-int(r==b-1);
+ return q;
+}
+int cg_div(int a,int b){
+ if(b==0)return a;
+ if(b==(-2147483647-1))return a==b?1:0;
+ if(a==(-2147483647-1)&&b==-1)return a;
+ return b<0?-cg_div_positive(a,-b):cg_div_positive(a,b);
+}
+int2 cg_div(int2 a,int2 b){return int2(cg_div(a.x,b.x),cg_div(a.y,b.y));}
+int3 cg_div(int3 a,int3 b){return int3(cg_div(a.x,b.x),cg_div(a.y,b.y),cg_div(a.z,b.z));}
+int4 cg_div(int4 a,int4 b){return int4(cg_div(a.x,b.x),cg_div(a.y,b.y),cg_div(a.z,b.z),cg_div(a.w,b.w));}
+float4 cg_load(sampler2D tex,int3 p,float4 size){
+ if(any(p.xy<0)||any(p.xy>=int2(size.xy))||p.z!=0)return float4(0,0,0,0);
+ return tex2Dlod(tex,float4((float2(p.xy)+0.5)*size.zw,0,0));
+}
+// Naga uses these for signed/unsigned integer wrapping, never float bitcasts.
+int asint(int v){return int(v);} int2 asint(int2 v){return int2(v);}
+int3 asint(int3 v){return int3(v);} int4 asint(int4 v){return int4(v);}
+int asuint(int v){return int(v);} int2 asuint(int2 v){return int2(v);}
+int3 asuint(int3 v){return int3(v);} int4 asuint(int4 v){return int4(v);}
+
+struct WipeUniform {
+    float4 kind_progress;
+    float4 option0_;
+    float4 option1_;
+    float4 option2_;
+    float4 option3_;
+};
+
+struct VsOut {
+    float4 pos : WPOS;
+    float2 uv : TEXCOORD0;
+    float2 random_center : TEXCOORD1;
+};
+
+uniform sampler2D under_tex : TEXUNIT0;
+uniform float4 cg_size_under_tex;
+uniform sampler2D current_tex : TEXUNIT1;
+uniform float4 cg_size_current_tex;
+uniform sampler2D next_tex : TEXUNIT2;
+uniform float4 cg_size_next_tex;
+uniform WipeUniform wipe;
+
+struct FragmentInput_fs_main {
+    float2 uv_4 : TEXCOORD0;
+    float2 random_center_1 : TEXCOORD1;
+    float4 pos : WPOS;
+};
+
+float option(int index)
+{
+    if ((index < int(4))) {
+        float _e6 = wipe.option0_[index];
+        return _e6;
+    }
+    if ((index < int(8))) {
+        float _e14 = wipe.option1_[asint(asuint(index) - asuint(int(4)))];
+        return _e14;
+    }
+    if ((index < int(12))) {
+        float _e22 = wipe.option2_[asint(asuint(index) - asuint(int(8)))];
+        return _e22;
+    }
+    float _e28 = wipe.option3_[asint(asuint(index) - asuint(int(12)))];
+    return _e28;
+}
+
+bool inside(float2 uv)
+{
+    bool local = (bool)0;
+
+    if (all((uv >= (0.0).xx))) {
+        local = all((uv <= (1.0).xx));
+    } else {
+        local = false;
+    }
+    bool _e12 = local;
+    return _e12;
+}
+
+float4 sample_or_zero(sampler2D tex, float4 cg_size_tex, float2 uv_1)
+{
+    const bool _e3 = inside(uv_1);
+    if (!(_e3)) {
+        return (0.0).xxxx;
+    }
+    float4 _e12 = tex2D(tex,clamp(uv_1, (0.0).xx, (1.0).xx));
+    return _e12;
+}
+
+float4 alpha_over(float4 dst_, float4 src)
+{
+    float _e8 = (src.w + (dst_.w * (1.0 - src.w)));
+    if ((_e8 <= 1e-6)) {
+        return (0.0).xxxx;
+    }
+    return float4((((src.xyz * src.w) + ((dst_.xyz * dst_.w) * (1.0 - src.w))) / (_e8).xxx), _e8);
+}
+
+float4 rect_sample(sampler2D tex_1, float4 cg_size_tex_1, float2 uv_2, float4 rect, float alpha)
+{
+    const float4 _e12 = sample_or_zero(tex_1, cg_size_tex_1, ((uv_2 - rect.xy) / max(rect.zw, (1e-6).xx)));
+    return float4(_e12.xyz, (_e12.w * alpha));
+}
+
+float4 move_rect(int direction, int mode, float progress, bool incoming)
+{
+    float2 start = (0.0).xx;
+    float2 end = (0.0).xx;
+    float4 rect_1 = float4(0.0, 0.0, 1.0, 1.0);
+
+    if ((mode == int(0))) {
+        return float4(0.0, 0.0, 1.0, 1.0);
+    }
+    if ((mode == int(1))) {
+        if (incoming) {
+            if ((direction == int(0))) {
+                start.y = -1.0;
+            } else {
+                if ((direction == int(1))) {
+                    start.y = 1.0;
+                } else {
+                    if ((direction == int(2))) {
+                        start.x = -1.0;
+                    } else {
+                        start.x = 1.0;
+                    }
+                }
+            }
+        } else {
+            if ((direction == int(0))) {
+                end.y = 1.0;
+            } else {
+                if ((direction == int(1))) {
+                    end.y = -1.0;
+                } else {
+                    if ((direction == int(2))) {
+                        end.x = 1.0;
+                    } else {
+                        end.x = -1.0;
+                    }
+                }
+            }
+        }
+        float2 _e47 = start;
+        float2 _e48 = end;
+        return float4(lerp(_e47, _e48, progress), 1.0, 1.0);
+    }
+    float _e57 = max((incoming ? progress : (1.0 - progress)), 1e-6);
+    if ((direction <= int(1))) {
+        rect_1.w = _e57;
+        if ((direction == int(1))) {
+            rect_1.y = (1.0 - _e57);
+        }
+    } else {
+        rect_1.z = _e57;
+        if ((direction == int(3))) {
+            rect_1.x = (1.0 - _e57);
+        }
+    }
+    float4 _e78 = rect_1;
+    return _e78;
+}
+
+int naga_mod(int lhs,int rhs) {
+ int overflow=int(lhs==int(-2147483647-1)) & int(rhs==int(-1));
+ int invalid=overflow | int(rhs==int(0));
+ int divisor=invalid?int(1):rhs;
+ return lhs-cg_div(lhs,divisor)*divisor;
+}
+
+int naga_f2i32(float value) {
+    return int(clamp(value, -2147483600.0, 2147483500.0));
+}
+
+float4 affected_color(float2 uv_3, float2 random_center)
+{
+    bool local_1 = (bool)0;
+    float2 off = (0.0).xx;
+    float r = (float)0;
+    float2 src_1 = (float2)0;
+    float a = (float)0;
+    float2 q = (float2)0;
+    bool ok = true;
+    bool local_2 = (bool)0;
+    bool base_is_current = false;
+    float2 center_ = (0.5).xx;
+    float2 muv = (float2)0;
+    float mask_value = 1.0;
+    bool local_3 = (bool)0;
+    bool local_4 = (bool)0;
+    bool local_5 = (bool)0;
+    bool local_6 = (bool)0;
+
+    float _e4 = wipe.kind_progress.y;
+    float _e7 = clamp(_e4, 0.0, 1.0);
+    float4 _e10 = tex2D(current_tex,uv_3);
+    float4 _e13 = tex2D(next_tex,uv_3);
+    if ((_e7 <= 0.0)) {
+        return _e10;
+    }
+    if ((_e7 >= 1.0)) {
+        return _e13;
+    }
+    local_1 = false;
+    bool _e21 = local_1;
+    if (_e21) {
+        float4 _e24 = wipe.kind_progress;
+        float2 _e28 = max(_e24.zw, (1.0).xx);
+        float2 _e31 = (_e28 * 0.5);
+        bool _e35 = (_e7 < 0.5);
+        a = (_e7 * 3.1415927);
+        if (!(_e35)) {
+            float _e40 = a;
+            a = (_e40 + 3.1415927);
+        }
+        const float _e44 = option(int(1));
+        float _e46 = max(_e44, 1.0);
+        const float _e48 = option(int(0));
+        int _e49 = naga_f2i32(_e48);
+        q = ((uv_3 * _e28) - _e31);
+        if ((_e49 == int(2))) {
+            float _e56 = a;
+            float _e59 = q.x;
+            float _e61 = a;
+            float _e64 = q.y;
+            float _e67 = a;
+            float _e71 = q.x;
+            float _e73 = a;
+            float _e76 = q.y;
+            q = float2(((cos(_e56) * _e59) + (sin(_e61) * _e64)), ((-(sin(_e67)) * _e71) + (cos(_e73) * _e76)));
+        } else {
+            float _e81 = q.x;
+            float _e83 = q.y;
+            float _e86 = ((_e49 == int(1)) ? _e83 : _e81);
+            float _e87 = a;
+            float _e90 = a;
+            float _e93 = ((_e46 * cos(_e87)) - (_e86 * sin(_e90)));
+            ok = (abs(_e93) > 0.0001);
+            bool _e98 = ok;
+            float _e101 = ((_e86 * _e46) / (_e98 ? _e93 : 1.0));
+            float _e102 = a;
+            float _e105 = (_e46 + (_e101 * sin(_e102)));
+            bool _e106 = ok;
+            if (_e106) {
+                local_2 = (_e105 > (0.1 * _e46));
+            } else {
+                local_2 = false;
+            }
+            bool _e113 = local_2;
+            ok = _e113;
+            float _e115 = q.y;
+            float _e117 = q.x;
+            float _e122 = ((((_e49 == int(1)) ? _e117 : _e115) * _e105) / _e46);
+            q = ((_e49 == int(1)) ? float2(_e122, _e101) : float2(_e101, _e122));
+        }
+        bool _e128 = ok;
+        if (!(_e128)) {
+            return float4(0.0, 0.0, 0.0, 1.0);
+        }
+        float2 _e135 = q;
+        float2 _e137 = ((_e31 + _e135) / _e28);
+        const float4 _e140 = sample_or_zero(current_tex, cg_size_current_tex, _e137);
+        const float4 _e143 = sample_or_zero(next_tex, cg_size_next_tex, _e137);
+        const float4 _e150 = alpha_over(float4(0.0, 0.0, 0.0, 1.0), (_e35 ? _e143 : _e140));
+        return _e150;
+    }
+    const float _e152 = option(int(0));
+    int _e155 = naga_mod(naga_f2i32(_e152), int(4));
+    const float _e157 = option(int(1));
+    int _e158 = naga_f2i32(_e157);
+    const float _e160 = option(int(2));
+    const float4 _e165 = move_rect(_e155, _e158, _e7, false);
+    const float4 _e167 = rect_sample(current_tex, cg_size_current_tex, uv_3, _e165, 1.0);
+    const float4 _e171 = move_rect(_e155, naga_f2i32(_e160), _e7, true);
+    const float4 _e173 = rect_sample(next_tex, cg_size_next_tex, uv_3, _e171, 1.0);
+    const float4 _e174 = alpha_over(_e173, _e167);
+    const float4 _e175 = alpha_over(_e167, _e173);
+    return ((_e158 == int(0)) ? _e175 : _e174);
+}
+
+float4 main(FragmentInput_fs_main fragmentinput_fs_main) : COLOR
+{
+    VsOut in_ = { fragmentinput_fs_main.pos, fragmentinput_fs_main.uv_4, fragmentinput_fs_main.random_center_1 };
+    float2 _e6 = clamp(in_.uv, (0.0).xx, (1.0).xx);
+    float4 _e9 = tex2D(under_tex,_e6);
+    const float4 _e11 = affected_color(_e6, in_.random_center);
+    const float4 _e12 = alpha_over(_e9, _e11);
+    return _e12;
+}

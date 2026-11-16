@@ -144,10 +144,23 @@ impl Bridge {
             native_layer_off,
             message_window_visible
         );
+        // TaihiAllEffect keeps a copy of every effect record active for the
+        // background reader, so its effect Layers stay as that copy's live
+        // presentation (DRAW copies them by id). The suspended snapshot keeps
+        // its own specs/paths and replaces these on swap. Text/selection
+        // nodes belong only to the suspended foreground and are removed.
+        let effects = self.bindings.effect_base
+            ..self.bindings.effect_base + u32::from(self.bindings.layers) + 2;
         let mut layer_ops = snapshot
             .layers
             .iter()
             .filter(|s| s["id"] != self.bindings.root)
+            .filter(|s| {
+                !s["id"]
+                    .as_u64()
+                    .and_then(|id| u32::try_from(id).ok())
+                    .is_some_and(|id| effects.contains(&id))
+            })
             .map(|s| json!({"op":"remove","id":s["id"]}))
             .collect::<Vec<_>>();
         layer_ops.push(json!({"op":"set_clock_paused","id":self.bindings.root,"paused":false}));

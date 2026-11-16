@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 pub mod amv;
 pub mod avi;
+pub mod imoavi;
 pub mod isobmff;
 pub mod mpeg;
 pub mod mpeg_probe;
@@ -31,6 +32,8 @@ pub enum Container {
     Amv,
     /// Video-for-Windows RIFF/AVI with Cinepak video (AVG32 movies).
     Avi,
+    /// IMOAVI100: indexed Motion-JPEG/raw pictures with native redirects.
+    ImoAvi,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -74,6 +77,9 @@ pub fn sniff(bytes: &[u8]) -> Result<Container> {
         0x30, 0x26, 0xB2, 0x75, 0x8E, 0x66, 0xCF, 0x11, 0xA6, 0xD9, 0x00, 0xAA, 0x00, 0x62, 0xCE,
         0x6C,
     ];
+    if bytes.starts_with(b"IMOAVI\0\0") {
+        return Ok(Container::ImoAvi);
+    }
     if isobmff::is_mp4(bytes) {
         return Ok(Container::Mp4);
     }
@@ -112,6 +118,7 @@ pub fn open(bytes: Vec<u8>) -> Result<Box<dyn VideoStream>> {
         Container::Mp4 => Box::new(isobmff::Mp4Stream::new(Cursor::new(bytes))?),
         Container::Amv => Box::new(AmvStream::new(bytes)?),
         Container::Avi => Box::new(avi::AviStream::new(bytes)?),
+        Container::ImoAvi => Box::new(imoavi::Movie::new(Cursor::new(bytes))?),
     })
 }
 

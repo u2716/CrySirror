@@ -6,6 +6,17 @@ The format plugins have no CLI, renderer, window, audio device or native VM.
 Archive entries become normal client asset VFS paths. This work does not replace
 or re-register the existing BGI VM adapter (ADR 0039).
 
+For adding a format, use the
+[archive-onboarding skill](../.agents/skills/crysirror-archive-onboarding/SKILL.md).
+For existing specifications or parser implementations, start with
+[engine research](../.agents/skills/crysirror-engine-research/SKILL.md). Matching
+official material is preferred; without it, original-program reverse evidence
+governs rather than an unverified third-party unpacker's behavior.
+
+For remote archives, use the [network storage contract](NETWORK_STORAGE.md)
+and its skill. Parsers consume the same scoped `AssetReader` across local,
+NFS and SMB providers; a local filesystem path or extracted copy is not required.
+
 The optional plugin implements all **289 named upstream decoder IDs**: 152
 archives, 96 images, 16 audio decoders and 25 encoded-file converters. The
 reviewed inventory records **258 ported and 31 partial** implementations;
@@ -95,6 +106,14 @@ The `resources` global is generated from the live class registry. `probe` reads
 bounded prefixes/index data; ambiguity needs an explicit `format`. `list` pages
 metadata only (default 128 entries, maximum 1024 per response). Unknown formats,
 unsupported layouts/codecs and missing keys return errors.
+
+Pages carry each entry's complete facts from `Archive::entry_metadata`. A JSON
+object per entry costs 1-2 KiB of heap, so formats with large indexes keep
+per-entry facts typed and build the JSON on request; `ArchiveEntry::metadata`
+then holds only facts the format stores as JSON. XP3 keeps its index facts
+(adler32, flags, timestamps, inline/info names, protection markers) typed:
+Sabbat of the Witch's eight archives (45,773 entries) index in 30.0 MiB
+instead of 104.5 MiB (`crysirror-desktop` example `archive_memory`).
 
 Mounted providers open `AssetReader` streams. Subranges and concatenated segments
 support random reads without copying the entire archive. Compressed entries

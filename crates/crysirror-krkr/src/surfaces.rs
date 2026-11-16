@@ -1,14 +1,13 @@
 // Copyright (c) 2026 CrySirror contributors.
-// Distributed under the GNU Affero General Public License, version 3 or
-// (at your option) any later version, https://www.gnu.org/licenses/agpl-3.0.html.
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. A copy is available at https://mozilla.org/MPL/2.0/.
 //! Native plugins whose member surface is known but whose behaviour is not yet
 //! mapped onto engine services. Linking installs exactly those members; every
 //! one fails visibly when called/read/written, naming plugin and member.
 //! Nothing reports false success.
 //!
 //! Sources: UTF-16 registration strings of the shipped DLLs (inspected
-//! 2026-10-28; no code executed), cross-checked with Kirakira c451918
-//! `krkr-plugins` reference notes (window_ex.rs, win32_dialog.rs, k2compat.rs).
+//! 2026-10-28; no code executed).
 use crate::natives::{Rt, unsupported};
 use crysirror_tjs2::runtime::{Closure, ObjectHandle, Variant};
 
@@ -22,19 +21,6 @@ use Kind::*;
 /// `target` is an existing global (`Window`, `System`, `Debug.console`) or,
 /// with a `new:` prefix, a class this plugin defines (`new:Window.TouchMouse`).
 pub const SURFACES: &[(&str, &str, Kind, &[&str])] = &[
-    ("layerstwcopy.dll", "Layer", Method, &["stitchWrappedCopy"]),
-    (
-        "k2compat.dll",
-        "new:Window.TouchMouse",
-        Method,
-        &[
-            "onTouchMouseDown", "onTouchMouseMove", "onTouchMouseUp", "onTouchMouseClick",
-            "onTouchMouseDblClick",
-        ],
-    ),
-    ("k2compat.dll", "new:Window.TouchMouse", Property, &["enabled"]),
-    ("k2compat.dll", "new:System.ModelessOwnerWindow", Method, &["show", "registerMessageReceiver"]),
-    ("k2compat.dll", "new:System.ModelessOwnerWindow", Property, &["stayOnTop"]),
 ];
 
 pub fn known(name: &str) -> bool {

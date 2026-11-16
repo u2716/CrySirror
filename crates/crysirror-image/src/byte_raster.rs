@@ -7,6 +7,12 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ByteRasterMath {
+    /// Signed packed-word RGB scaling, saturated add/subtract, then separate
+    /// mask products /256, including full255 coverage without a shortcut.
+    SignedScaledMaskedRgb256{scale:i16,subtract:bool},
+    /// Scale stored coverage by an integer percent /100, then sum RGB
+    /// products before /256. Coverage0 skips; scaled255 copies RGB.
+    AlphaPercentRgb256{percent:u8},
     /// Independent saturated stored-RGB addition or subtraction; no coverage
     /// modulation and no alpha writes.
     SaturatedRgb { subtract: bool },
@@ -39,6 +45,7 @@ pub enum ByteRasterMath {
 }
 impl ByteRasterMath {
     pub(crate) fn validate(self) -> Result<()> {
+        if let Self::AlphaPercentRgb256{percent}=self{ensure!(percent<=100,"byte coverage percent bounds");}
         if let Self::AlphaWeightedRgb256 { weight } | Self::AlphaWeightedSeparateRgb256 { weight } = self {
             ensure!(weight <= 256, "byte coverage weight bounds");
         }
@@ -46,6 +53,13 @@ impl ByteRasterMath {
     }
     pub(crate) fn pixel(self, d: &mut [u8], s: &[u8]) {
         match self {
+            Self::SignedScaledMaskedRgb256{scale,subtract}=>crate::masked_add::pixel(d,s,scale as u16,subtract),
+            Self::AlphaPercentRgb256{percent}=>{
+                if s[3]==0{return;}
+                let coverage=u32::from(s[3])*u32::from(percent)/100;
+                if coverage==255{d[..3].copy_from_slice(&s[..3]);}
+                else{for c in 0..3{d[c]=((u32::from(s[c])*coverage+u32::from(d[c])*(256-coverage))>>8) as u8;}}
+            },
             Self::SaturatedRgb { subtract } => {
                 for c in 0..3 {
                     d[c] = if subtract { d[c].saturating_sub(s[c]) }
@@ -108,12 +122,28 @@ impl ByteRasterMath {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ByteRaster {
+    FloatingPolygonFragments{spec:crate::floating_polygon_fragments::FloatingPolygonFragments},
+    AlphaBrushes{spec:crate::alpha_brushes::AlphaBrushes},
+    PackedRepeatRows{spec:crate::packed_repeat_rows::PackedRepeatRows},
+    /// Radius-scaled angular samples with independently quantized twist.
+    RepeatScaleSample{spec:crate::repeat_scale_sample::RepeatScaleSample},
+    AxisBoxSample {spec:crate::axis_box_sample::AxisBoxSample},
+    RadialTwistSample{spec:crate::radial_twist_sample::RadialTwistSample},
+    /// Explicit double affine samples and optional scale-distance neighbours.
+    AffineSampleBlend{spec:crate::affine_sample_blend::AffineSampleBlendByte},
+    /// Copy one selected channel between linear pixel streams of any shape.
+    LinearChannelTransfer{spec:crate::linear_channel_transfer::LinearChannelTransfer},
+    MaskedClipBlit {spec:crate::masked_clip_blit::MaskedClipBlit},
     RowTintBlend{spec:crate::row_tint_blend::RowTintBlend},
     MaskedBackdropShift{spec:crate::masked_backdrop_shift::MaskedBackdropShift},
     /// Clipped box sums with an explicit packed-byte normalisation profile.
     NativeBoxBlur { spec: crate::native_box_blur::NativeBoxBlur },
     FixedScanlines { spec: crate::fixed_scanlines::FixedScanlines },
+    /// Signed16.16 origins/steps accumulated with explicit32-bit wrapping.
+    FixedScanlinesWrapping32 { spec: crate::fixed_scanlines::FixedScanlines },
     ClippedScanlineSample { spec: crate::clipped_scanline_sample::ClippedScanlineSample },
+    RowBlitBatch{spec:crate::row_blit::RowBlitBatch},
+    SpatialColorBand{spec:crate::spatial_color_band::SpatialColorBand},
     RowBlit { spec: crate::row_blit::RowBlit },
     MaskedAddSubtract256 {spec:crate::masked_add::MaskedAddSubtract256},
     RandomWipe {
@@ -169,9 +199,21 @@ pub enum ByteRaster {
 impl ByteRaster {
     pub fn validate(&self) -> Result<()> {
         match self {
+            Self::FloatingPolygonFragments{spec}=>spec.validate()?,
+            Self::AlphaBrushes{spec}=>spec.validate()?,
+            Self::PackedRepeatRows{spec}=>spec.validate()?,
+            Self::RepeatScaleSample{spec}=>spec.validate()?,
+            Self::AxisBoxSample{spec}=>spec.validate()?,
+            Self::RadialTwistSample{spec}=>spec.validate()?,
+            Self::AffineSampleBlend{spec}=>spec.validate()?,
+            Self::LinearChannelTransfer{spec}=>spec.validate()?,
+            Self::FixedScanlinesWrapping32{spec}=>spec.validate_wrapping32()?,
             Self::FixedScanlines {spec}=>spec.validate()?,
             Self::ClippedScanlineSample {spec}=>spec.validate()?,
+            Self::RowBlitBatch{spec}=>spec.validate()?,
+            Self::SpatialColorBand{spec}=>spec.validate()?,
             Self::RowBlit { spec } => spec.validate()?,
+            Self::MaskedClipBlit{spec}=>spec.validate()?,
             Self::NativeBoxBlur { spec } => spec.validate()?,
             Self::RowTintBlend{spec}=>spec.validate()?,
             Self::MaskedBackdropShift{spec}=>spec.validate()?,
@@ -266,9 +308,21 @@ impl ByteRaster {
         check: &dyn Fn() -> Result<()>,
     ) -> Result<ImageSurface> {
         self.validate()?;
+        if let Self::RepeatScaleSample{spec}=self{return spec.apply(destination,source,check);}
+        if let Self::AxisBoxSample{spec}=self{return spec.apply(destination,source,check);}
+        if let Self::RadialTwistSample{spec}=self{return spec.apply(destination,source,check);}
+        if let Self::AffineSampleBlend{spec}=self{return spec.apply(destination,source,check);}
+        if let Self::LinearChannelTransfer{spec}=self{return spec.apply(destination,source,check);}
+        if let Self::FixedScanlinesWrapping32{spec}=self{return spec.apply_wrapping32(destination,source,check);}
         if let Self::FixedScanlines{spec}=self{return spec.apply(destination,source,check);}
         if let Self::ClippedScanlineSample{spec}=self{return spec.apply(destination,source,check);}
+        if let Self::FloatingPolygonFragments{spec}=self{return spec.apply(destination,source,check);}
+        if let Self::AlphaBrushes{spec}=self{return spec.apply(destination,source,check);}
+        if let Self::PackedRepeatRows{spec}=self{return spec.apply(destination,source,check);}
+        if let Self::RowBlitBatch{spec}=self{return spec.apply(destination,source,check);}
+        if let Self::SpatialColorBand{spec}=self{return spec.apply(destination,source,check);}
         if let Self::RowBlit { spec } = self { return spec.apply(destination,source,check); }
+        if let Self::MaskedClipBlit{spec}=self{return spec.apply(destination,source,check);}
         if let Self::NativeBoxBlur { spec } = self { return spec.apply(destination,source,check); }
         if let Self::RowTintBlend{spec}=self{return spec.apply(destination,source,check);}
         if let Self::MaskedBackdropShift{spec}=self{return spec.apply(destination,source,check);}
@@ -299,8 +353,8 @@ impl ByteRaster {
         check()?;
         let mut output = destination.clone();
         match *self {
-            Self::FixedScanlines{..}|Self::ClippedScanlineSample{..}=>unreachable!(),
-            Self::RowBlit { .. } | Self::NativeBoxBlur {..} | Self::RowTintBlend{..} | Self::MaskedBackdropShift{..} => unreachable!(),
+            Self::RepeatScaleSample{..}|Self::AxisBoxSample{..}|Self::RadialTwistSample{..}|Self::AffineSampleBlend{..}|Self::LinearChannelTransfer{..}|Self::FixedScanlinesWrapping32{..}|Self::FixedScanlines{..}|Self::ClippedScanlineSample{..}=>unreachable!(),
+            Self::FloatingPolygonFragments{..}|Self::AlphaBrushes{..}|Self::PackedRepeatRows{..}|Self::RowBlitBatch{..}|Self::SpatialColorBand{..}|Self::MaskedClipBlit{..} | Self::RowBlit { .. } | Self::NativeBoxBlur {..} | Self::RowTintBlend{..} | Self::MaskedBackdropShift{..} => unreachable!(),
             Self::MaskedAddSubtract256{..}=>unreachable!(),
             Self::RandomWipe { .. }
             | Self::PolygonFragments { .. }

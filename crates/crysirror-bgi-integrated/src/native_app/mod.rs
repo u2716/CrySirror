@@ -1,13 +1,20 @@
 use crate::native_archive::{MagicKind, ResourceManager, detect_magic, scan_game_root};
 use crate::native_audio::AudioSystem;
 use crate::native_core::{EthornellError, GameRoot, Result};
-use crate::native_image::{DecodedImage, decode_image, parse_cbg_metadata};
+use crate::native_image::{
+    DecodedImage, decode_image, parse_cbg_metadata, raw_bgi_embedded_point,
+    raw_bgi_native_bitmap_format,
+};
 use crate::native_render::{RenderCommand, Renderer, TextStyleSpan, TextureHandle};
 use crate::native_script::calls::known_call_arg_count;
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+
+// Host-private process identity, outside the native bitmap-slot range
+// 0..0x4000. Global movie selectors expose duration/state, never this handle.
+
 mod animation;
 mod audio_runtime;
 mod auto_input;
@@ -19,11 +26,16 @@ mod display_tree;
 mod effects;
 mod file_policy;
 mod frame_presenter;
+mod native_profile;
+mod presentation;
+mod version_graph;
 /// File roots for hosts without directory descriptors (web, consoles).
 #[cfg(hosted_files)]
 pub use file_policy::hosted as hosted_files;
 mod dc_cache;
 mod dialog_protocol;
+mod font_transform;
+mod game_font;
 mod graph;
 mod graph_bitmap_nodes;
 mod graph_color;
@@ -46,6 +58,7 @@ mod host_dialog;
 mod host_installer;
 pub mod host_runtime;
 mod input_state;
+mod mp4_movie;
 mod native_background;
 mod native_background_effect;
 mod native_backml;
@@ -66,12 +79,15 @@ mod native_projected_source;
 mod native_selection;
 mod native_sound;
 mod native_sprite_filters;
+mod native_sprite_link;
 mod native_sprite_mask;
 mod native_sprite_perspective;
 mod native_system;
 mod native_user;
+mod object_inspector;
 mod perspective_blit;
 mod platform;
+mod property_inspector;
 mod resource_lookup;
 mod ruby_registry;
 mod runtime_frontend;
@@ -138,8 +154,9 @@ use user_files::{
 #[cfg(feature = "desktop-window")]
 use winit::keyboard::KeyCode;
 #[cfg(not(feature = "desktop-window"))]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum KeyCode {
+    Escape,
     ArrowLeft,
     ArrowUp,
     ArrowRight,
@@ -229,6 +246,9 @@ fn configured_game_id(manager: &ResourceManager) -> (String, &'static str) {
 struct NativeRuntimeProfile {
     abi: crate::native_vm::NativeAbiProfile,
     se_channels: usize,
+    modern_gradient_blur: bool,
+    modern_pointer_tags: bool,
+    display_modes: Option<[(i32, i32); 16]>,
     main_code_bytes: u32,
     main_data_bytes: u32,
 }
@@ -238,14 +258,26 @@ impl Default for NativeRuntimeProfile {
         Self {
             abi: crate::native_vm::NativeAbiProfile::Tayutama,
             se_channels: 64,
+            modern_gradient_blur: false,
+            modern_pointer_tags: false,
+            display_modes: None,
             main_code_bytes: 0x80000,
             main_data_bytes: 0x40000,
         }
     }
 }
 
-fn confirmed_native_profile(manager: &ResourceManager, bootstrap: &[u8]) -> NativeRuntimeProfile {
-    // Session version detection uses two exact code-resource fingerprints,
+fn confirmed_native_profile(
+    manager: &ResourceManager,
+    bootstrap: &[u8],
+) -> Result<NativeRuntimeProfile> {
+    let mut profile = resource_native_profile(manager, bootstrap);
+    native_profile::apply(manager, &mut profile)?;
+    Ok(profile)
+}
+
+fn resource_native_profile(manager: &ResourceManager, bootstrap: &[u8]) -> NativeRuntimeProfile {
+    // Session version detection uses confirmed code-resource pairs,
     // never graph encoding, Android target, an arbitrary ID or .exe execution.
     // FNV64 is an identity/version hint, not a security signature; IO remains
     // restricted regardless of this profile.
@@ -262,6 +294,16 @@ fn confirmed_native_profile(manager: &ResourceManager, bootstrap: &[u8]) -> Nati
         (10176, CONFIRMED_BOOTSTRAP_FNV) => {
             Some((CONFIRMED_TITLE_LEN, CONFIRMED_TITLE_FNV, amachoco))
         }
+        // Animal Panic 48A5E0 -> 498990 -> 464000: the resource-mode
+        // selector matches, without importing unrelated later text signatures.
+        (7664, 0x8ba4d6240ac73523) => Some((
+            26064,
+            0xec4630efb73656f1,
+            NativeRuntimeProfile {
+                abi: crate::native_vm::NativeAbiProfile::Anipani,
+                ..NativeRuntimeProfile::default()
+            },
+        )),
         // Japanese retail release, system.arc dated 2019-12-10.
         (7536, 0xaa1f17da017b7c27) => Some((24368, 0xe221d8b4be4f097a, amachoco)),
         // Houkago Cinderella FD's validator sub_4A6C30 accepts SE 0..128.
@@ -271,6 +313,50 @@ fn confirmed_native_profile(manager: &ResourceManager, bootstrap: &[u8]) -> Nati
             0x603c84fe0ba8bc49,
             NativeRuntimeProfile {
                 se_channels: 128,
+                main_code_bytes: 0x800000,
+                main_data_bytes: 0x400000,
+                ..NativeRuntimeProfile::default()
+            },
+        )),
+        // Houkago Cinderella 2 FD: sub_4ADB30 validates SE indices <128;
+        // startup sub_4A0DD0 allocates 8 MiB code / 4 MiB data.
+        (10144, 0x93e09e85cc7cc4b2) => Some((
+            14864,
+            0x2ae5953033ee96e5,
+            NativeRuntimeProfile {
+                se_channels: 128,
+                abi: crate::native_vm::NativeAbiProfile::HoukagoFd,
+                modern_gradient_blur: true,
+                main_code_bytes: 0x800000,
+                main_data_bytes: 0x400000,
+                ..NativeRuntimeProfile::default()
+            },
+        )),
+        // lovepical: original pointer resolver uses code/data tags 1/2 <<28;
+        // native startup still allocates 8 MiB code / 4 MiB data, 128 SE slots.
+        (14320, 0xce17f41f47bd9ebd) => Some((
+            13200,
+            0xe03d3384de352602,
+            NativeRuntimeProfile {
+                se_channels: 128,
+                abi: crate::native_vm::NativeAbiProfile::Modern,
+                modern_gradient_blur: true,
+                modern_pointer_tags: true,
+                main_code_bytes: 0x800000,
+                main_data_bytes: 0x400000,
+                ..NativeRuntimeProfile::default()
+            },
+        )),
+        // dokai: original pointer resolver uses code/data tags 1/2 <<28;
+        // native startup still allocates 8 MiB code / 4 MiB data, 128 SE slots.
+        (14320, 0xc2ea2dbd2a040102) => Some((
+            13200,
+            0x23b31f6761fd962c,
+            NativeRuntimeProfile {
+                se_channels: 128,
+                abi: crate::native_vm::NativeAbiProfile::Modern,
+                modern_gradient_blur: true,
+                modern_pointer_tags: true,
                 main_code_bytes: 0x800000,
                 main_data_bytes: 0x400000,
                 ..NativeRuntimeProfile::default()
@@ -323,8 +409,6 @@ pub fn show_error(title: &str, text: &str) {
 }
 
 pub fn run(config: AppConfig) -> Result<()> {
-    let font = snapshot::load_default_font()?;
-    let _font_session = snapshot::enter_font_session(&font);
     let headless = config.headless || std::env::var_os("ETHORNELL_GUI_HEADLESS").is_some();
     // A full recursive magic probe opens every loose file in the game tree and
     // is diagnostic work, not runtime initialization. Keep it behind --trace;
@@ -341,6 +425,11 @@ pub fn run(config: AppConfig) -> Result<()> {
         );
     }
     let manager = ResourceManager::open_game(config.game_root.path())?;
+    let manager = if config.script.is_none() {
+        manager.for_native_bootstrap(None)?
+    } else {
+        manager
+    };
     tracing::info!(
         archives = manager.archives().archives.len(),
         resources = manager.resource_count(),
@@ -357,6 +446,8 @@ pub fn run(config: AppConfig) -> Result<()> {
     };
     #[cfg(not(desktop_host))]
     let encoding = encoding_rs::SHIFT_JIS;
+    let font = snapshot::load_game_font(config.game_root.path(), encoding == encoding_rs::GBK)?;
+    let _font_session = snapshot::enter_font_session(&font);
     let bgm = load_runtime_bgm(&manager);
     let native_root = game_root_path(&manager);
     tracing::info!(
@@ -374,30 +465,24 @@ pub fn run(config: AppConfig) -> Result<()> {
         manager.read_decoded_from_archive("system.arc", "ipl._bp")
     };
     tracing::info!(script = startup_script, "selected runtime bootstrap script");
-    let runtime = match Some(startup_script) {
-        Some(script) => match startup_bytes {
-            Ok(bytes) => Some(RuntimeEngine::new(
-                script,
-                &bytes,
-                manager.clone(),
-                native_root,
-                config.trace,
-                config.fail_on_stub,
-                !headless,
-                encoding,
-            )),
-            Err(err) => {
-                tracing::warn!(script, %err, "startup script unavailable");
-                None
-            }
-        },
-        None => None,
-    };
-    let image = if runtime.is_some() {
-        None
-    } else {
-        Some(load_runtime_image(&manager)?)
-    };
+    // A title bitmap cannot substitute for a running interpreter: it has no
+    // native button objects, input handlers or title script state.
+    let bytes = startup_bytes.map_err(|error| {
+        EthornellError::Other(format!(
+            "native bootstrap {startup_script} could not be loaded: {error}"
+        ))
+    })?;
+    let runtime = Some(RuntimeEngine::new(
+        startup_script,
+        &bytes,
+        manager.clone(),
+        native_root,
+        config.trace,
+        config.fail_on_stub,
+        !headless,
+        encoding,
+    )?);
+    let image: Option<DecodedImage> = None;
     if config.trace
         && let Some(image) = image.as_ref()
     {
@@ -658,6 +743,7 @@ struct NativeControlInputLatch {
 }
 
 const MOVIE_READ_BUFFER_SIZE: usize = 12 * 1024 * 1024;
+const IMAGE_DECODE_BUFFER_MAX_CAPACITY: usize = 16 * 1024 * 1024;
 
 /// Storage for a compressed MPEG program stream while its decoder is built.
 /// Vita's CDRAM is separate from the 320 MiB user heap used by scene images.
@@ -667,7 +753,7 @@ enum MovieReadBuffer {
     Cdram(Option<VitaMovieReadBuffer>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) enum MovieBytes {
     Heap(std::sync::Arc<[u8]>),
     #[cfg(target_os = "vita")]
@@ -688,6 +774,12 @@ impl MovieBytes {
             #[cfg(target_os = "vita")]
             Self::Cdram { buffer, len } => &buffer.as_slice()[..*len],
         }
+    }
+}
+
+impl AsRef<[u8]> for MovieBytes {
+    fn as_ref(&self) -> &[u8] {
+        self.as_slice()
     }
 }
 
@@ -742,6 +834,17 @@ struct VitaMovieReadBuffer {
     ptr: *mut u8,
     len: usize,
 }
+
+// SAFETY: this buffer exclusively owns a CPU-accessible kernel memory block,
+// with no thread-affine device state. Mutable access requires &mut self; once
+// published behind Arc<MovieBytes>, readers only receive immutable slices.
+// Arc retains the allocation until the last reader has finished, and Drop frees
+// it once. The kernel allocation/free operations do not require the creator thread.
+#[cfg(target_os = "vita")]
+unsafe impl Send for VitaMovieReadBuffer {}
+// SAFETY: shared references expose only immutable bytes, as described above.
+#[cfg(target_os = "vita")]
+unsafe impl Sync for VitaMovieReadBuffer {}
 
 #[cfg(target_os = "vita")]
 impl VitaMovieReadBuffer {
@@ -816,7 +919,8 @@ struct RuntimeTraceApi {
     window_mode: i32,
     screen_width: i32,
     screen_height: i32,
-    display_mode_sizes: [Option<(i32, i32)>; 8],
+    display_mode_sizes: [Option<(i32, i32)>; 16],
+    display_mode_limit: usize,
     /// dword_506B88 / dword_518614: the Sys80:60 size index and pixel mode.
     display_size_index: i32,
     /// GetAdapterDisplayMode width/height (dword_5177C0/C4); 0 when unknown.
@@ -835,6 +939,8 @@ struct RuntimeTraceApi {
     windowed_client_size: (i32, i32),
     windowed_size_follows_mode: bool,
     window_surface_width: i32,
+    /// Console hosts scale the canvas to their panel (`HostRuntime::use_virtual_display`).
+    pub(crate) virtual_display: bool,
     window_surface_height: i32,
     engine_time_ms: u64,
     presentation_state: i32,
@@ -851,6 +957,9 @@ struct RuntimeTraceApi {
     /// Reusable storage for the next MPEG program stream.  On Vita it lives in
     /// CDRAM, preserving the constrained user heap for scene images.
     movie_read_buffer: MovieReadBuffer,
+    /// Reused for sequential archive-image reads; oversized assets are dropped
+    /// after decode so one resource cannot pin an unbounded source buffer.
+    image_decode_buffer: Vec<u8>,
     graph_images: BTreeMap<String, DecodedImage>,
     /// Native bitmap format associated with decoded resource images. Resource
     /// pixels are cached independently of concrete bitmap handles, so the
@@ -947,7 +1056,9 @@ struct RuntimeTraceApi {
     /// Target dword_565FD0 is a prepend-only linked watch list. Duplicate
     /// registrations are permitted and 90:DF removes the first matching node.
     graph_knob_watches: VecDeque<i32>,
-    graph_knob_input_mode: i32,
+    /// Graph90:DD swaps the WM_MOUSEWHEEL-to-Knob gate only. Native startup
+    /// sub_496390 sets it to 1; left/right pointer capture is independent.
+    graph_knob_wheel_mode: i32,
     /// Target CDspObjGroup registry: 8 slots, handles 0xF1000000 | slot.
     graph_groups: BTreeMap<i32, GraphGroupState>,
     graph_native_owners: BTreeMap<i32, i32>,
@@ -975,6 +1086,9 @@ struct RuntimeTraceApi {
     graph_dc_cache: Option<dc_cache::DcCache>,
     /// dword_566714 / dword_506BD0: a pending redraw, Some(full).
     graph_redraw_requested: Option<bool>,
+    /// Graph91:00 / 1400B6190: force presentation even without a due redraw.
+    graph_force_present: i32,
+    version_graph: version_graph::VersionGraphState,
     graph_global_offset: (f32, f32),
     /// SystemB0:08 CProcShakeScreen transient screen displacement.
     screen_shake_offset: (f32, f32),
@@ -1014,6 +1128,7 @@ struct RuntimeTraceApi {
     /// Sprite+0x154 raised by a 91:55 link (sub_4290F0) rather than by a
     /// 90:55 grayscale bitmap.
     graph91_sprite_link_masks: BTreeSet<i32>,
+    linked_sprite_draws: BTreeMap<i32, native_sprite_link::LinkedSpriteDraw>,
     /// Target System91:60-69 CDspObjEffector registry: 8 tagged slots.
     graph91_effectors: BTreeMap<i32, native_graph_sys91::Graph91EffectorState>,
     /// Target System91:70-7F CDspObjLandscape registry: 4 tagged slots.
@@ -1224,7 +1339,11 @@ struct RuntimeTraceApi {
     auto_user_click_hovered_frames: u32,
     frame_yield_requested: bool,
     native_dialog_presentation: bool,
+    modern_gradient_blur: bool,
+    native_additive_coverage: bool,
     pending_transition_destination: Option<i32>,
+    portable_window_identity: u64,
+    pending_window_resizable: Option<bool>,
     pending_window_title: Option<String>,
     pending_window_position: Option<(i32, i32)>,
     pending_window_size: Option<(u32, u32)>,
@@ -1245,6 +1364,9 @@ struct RuntimeTraceApi {
     /// dword_566778 / dword_56677C: the last left/right press went to a Knob.
     left_press_captured: bool,
     right_press_captured: bool,
+    /// Keep icon ownership until physical release, even if activation replaces
+    /// the input processor or the per-tick pending edge has been drained.
+    graph_icon_press_consumed: bool,
     /// IsIconic(hWndParent), refreshed by the window frontend.
     window_iconic: bool,
     /// dword_566708: set by Sys80:65, cleared when the window is activated
@@ -1263,6 +1385,7 @@ struct RuntimeTraceApi {
     system_config_input_mode: i32,
     shader_effect_enabled: bool,
     native_system: native_system::NativeSystemState,
+    bp_profile: crate::native_vm::NativeAbiProfile,
     native_user: native_user::NativeUserState,
     native_effect: native_effect::NativeEffectState,
     /// Portable backend for Windows-only registry/installer metadata. Native
@@ -1310,16 +1433,22 @@ impl RuntimeTraceApi {
             screen_width: 1280,
             screen_height: 720,
             // dword_506B8C / dword_506BAC.
-            display_mode_sizes: [
-                Some((320, 240)),
-                Some((640, 480)),
-                Some((800, 600)),
-                Some((1024, 768)),
-                Some((1024, 576)),
-                Some((1024, 600)),
-                Some((1280, 720)),
-                Some((1920, 1080)),
-            ],
+            display_mode_sizes: std::array::from_fn(|i| {
+                [
+                    Some((320, 240)),
+                    Some((640, 480)),
+                    Some((800, 600)),
+                    Some((1024, 768)),
+                    Some((1024, 576)),
+                    Some((1024, 600)),
+                    Some((1280, 720)),
+                    Some((1920, 1080)),
+                ]
+                .get(i)
+                .copied()
+                .flatten()
+            }),
+            display_mode_limit: 8,
             display_size_index: 2,
             desktop_display_size: (0, 0),
             display_adapter_description: String::new(),
@@ -1331,6 +1460,7 @@ impl RuntimeTraceApi {
             windowed_client_size: (0, 0),
             windowed_size_follows_mode: true,
             window_surface_width: 0,
+            virtual_display: false,
             window_surface_height: 0,
             engine_time_ms: 0,
             presentation_state: 0,
@@ -1341,6 +1471,7 @@ impl RuntimeTraceApi {
             trace_render_tree: std::env::var_os("TRACE_RENDER_TREE").is_some(),
             graph_trace: VecDeque::new(),
             movie_read_buffer: MovieReadBuffer::new(),
+            image_decode_buffer: Vec::new(),
             graph_images: BTreeMap::from([(
                 native_background::BACK_INACTIVE_FILL_KEY.to_string(),
                 DecodedImage {
@@ -1412,7 +1543,7 @@ impl RuntimeTraceApi {
             display_changes: 0,
             graph_knob_states: BTreeMap::new(),
             graph_knob_watches: VecDeque::new(),
-            graph_knob_input_mode: 0,
+            graph_knob_wheel_mode: 1,
             graph_groups: BTreeMap::new(),
             graph_native_owners: BTreeMap::new(),
             surface_controls: SurfaceControlRegistry::default(),
@@ -1429,6 +1560,8 @@ impl RuntimeTraceApi {
             graph_memory_limit: 0,
             graph_dc_cache: None,
             graph_redraw_requested: None,
+            graph_force_present: 0,
+            version_graph: Default::default(),
             graph_global_offset: (0.0, 0.0),
             screen_shake_offset: (0.0, 0.0),
             graph_special_watches: BTreeSet::new(),
@@ -1450,6 +1583,7 @@ impl RuntimeTraceApi {
                 native_graph_sys91::Graph91MultiLayerBackgroundState::default(),
             graph91_sprite_relations: BTreeMap::new(),
             graph91_sprite_link_masks: BTreeSet::new(),
+            linked_sprite_draws: BTreeMap::new(),
             graph91_effectors: BTreeMap::new(),
             graph91_landscapes: BTreeMap::new(),
             queued_system_events: VecDeque::new(),
@@ -1620,7 +1754,11 @@ impl RuntimeTraceApi {
             auto_user_click_hovered_frames: 0,
             frame_yield_requested: false,
             native_dialog_presentation: false,
+            modern_gradient_blur: false,
+            native_additive_coverage: false,
             pending_transition_destination: None,
+            portable_window_identity: 0,
+            pending_window_resizable: None,
             pending_window_title: None,
             pending_window_position: None,
             pending_window_size: None,
@@ -1637,6 +1775,7 @@ impl RuntimeTraceApi {
             window_focused: true,
             left_press_captured: false,
             right_press_captured: false,
+            graph_icon_press_consumed: false,
             window_iconic: false,
             window_minimize_latch: false,
             window_center_lock: 0,
@@ -1647,6 +1786,7 @@ impl RuntimeTraceApi {
             system_config_input_mode: 0,
             shader_effect_enabled: false,
             native_system: native_system::NativeSystemState::default(),
+            bp_profile: crate::native_vm::NativeAbiProfile::Tayutama,
             native_user: native_user::NativeUserState::default(),
             native_effect: native_effect::NativeEffectState::default(),
             platform_store: platform::PortablePlatformStore::from_environment(),
@@ -1777,8 +1917,23 @@ impl RuntimeTraceApi {
 
     fn store_movie_frame(&mut self, update: graph_effect::MovieFrameUpdate) {
         let bitmap = update.bitmap;
+        // Global renderers never publish bitmap-slot samples (DCTraditionalVR
+        // and Media Foundation both own a distinct output surface).
+        if matches!(
+            bitmap,
+            version_graph::DS_MOVIE_HANDLE | version_graph::MF_MOVIE_HANDLE
+        ) {
+            self.store_graph_image(format!("runtime:movie:{bitmap}"), update.image);
+            return;
+        }
         let width = update.image.width;
         let height = update.image.height;
+        if self.global_movie_handle == Some(bitmap) {
+            // DCTraditionalVR owns a video surface, not a bitmap-registry
+            // slot. Its host handle can numerically equal a script bitmap.
+            self.store_graph_image(format!("runtime:movie:{bitmap}"), update.image);
+            return;
+        }
         // A 92:F2 slot was created at the picture size when the graph
         // connected; sub_45C260 copies each sample into that same descriptor.
         // Keep its resource (and generation) so projected sprites bound to it
@@ -1818,11 +1973,41 @@ impl RuntimeTraceApi {
         self.refresh_bitmap_nodes(bitmap);
     }
 
+    fn close_global_movie(&mut self) {
+        if let Some(handle) = self.global_movie_handle.take() {
+            self.graph_effects.release(handle);
+            self.graph_process_handles.remove(&handle);
+            let key = format!("runtime:movie:{handle}");
+            self.graph_images.remove(&key);
+            self.graph_image_revisions.remove(&key);
+            self.sync_movie_audio();
+        }
+    }
+
     fn open_runtime_movie(
         &mut self,
         archive: &str,
         resource: &str,
         size: (i32, i32),
+    ) -> Option<(i32, i32)> {
+        self.close_global_movie();
+        let result = self.open_movie_process(
+            archive,
+            resource,
+            self.global_movie_volume,
+            version_graph::DS_MOVIE_HANDLE,
+        )?;
+        self.global_movie_handle = Some(result.0);
+        self.global_movie_size = size;
+        Some(result)
+    }
+
+    fn open_movie_process(
+        &mut self,
+        archive: &str,
+        resource: &str,
+        volume: i32,
+        handle: i32,
     ) -> Option<(i32, i32)> {
         #[cfg(feature = "console")]
         let bytes = {
@@ -1834,7 +2019,6 @@ impl RuntimeTraceApi {
         };
         #[cfg(not(feature = "console"))]
         let bytes = MovieBytes::from_vec(read_runtime_bytes(&self.manager, archive, resource)?);
-        let handle = self.alloc_object();
         if self.graph_effects.configure_media(
             handle,
             archive.to_string(),
@@ -1849,12 +2033,8 @@ impl RuntimeTraceApi {
             self.graph_effects.release(handle);
             return None;
         }
-        let _ = self
-            .graph_effects
-            .set_volume(handle, self.global_movie_volume);
+        let _ = self.graph_effects.set_volume(handle, volume);
         self.graph_process_handles.insert(handle);
-        self.global_movie_handle = Some(handle);
-        self.global_movie_size = size;
         Some((handle, invocation.duration_ms))
     }
 
@@ -1866,14 +2046,28 @@ impl RuntimeTraceApi {
     /// `runtime:movie:<handle>`, and the renderers draw them through this
     /// item on top of the frame. Once the movie has ended the scripts don't
     /// always close it, so a finished movie is not drawn.
+    pub(crate) fn active_global_movie_handle(&self) -> Option<i32> {
+        self.version_graph
+            .mf_handle
+            .filter(|&h| self.graph_effects.state(h) == 0)
+            .or_else(|| {
+                self.global_movie_handle
+                    .filter(|&h| self.graph_effects.state(h) == 0)
+            })
+    }
+
     pub(crate) fn directshow_movie_draw_item(&self) -> Option<RuntimeGraphDrawItem> {
-        let handle = self.global_movie_handle?;
+        let handle = self.active_global_movie_handle()?;
         if self.graph_effects.state(handle) != 0 {
             return None;
         }
         let key = format!("runtime:movie:{handle}");
         let image = self.graph_images.get(&key)?;
-        let (width, height) = match self.global_movie_size {
+        let (width, height) = match if self.version_graph.mf_handle == Some(handle) {
+            (0, 0)
+        } else {
+            self.global_movie_size
+        } {
             (width, height) if width > 0 && height > 0 => (width as f32, height as f32),
             _ => (self.screen_width as f32, self.screen_height as f32),
         };
@@ -1912,6 +2106,7 @@ impl RuntimeTraceApi {
         // sub_442EE0 (CreateWorkBitmap) copies the whole current back buffer
         // into the new bitmap; sub_442F80 (CreatePrioritizedWorkBitmap)
         // renders the display tree up to the given priority into it.
+        self.refresh_linked_sprite_masks();
         self.refresh_native_sprite_filters();
         self.refresh_native_filters();
         let captured = snapshot::compose_runtime_frame_through_priority(self, true, priority);
@@ -2347,7 +2542,11 @@ impl RuntimeTraceApi {
             return program.clone();
         }
         let program = match self.manager.read_decoded_from_archive(archive, file) {
-            Ok(bytes) => crate::native_script::parse_bp_program(Some(key.clone()), &bytes),
+            Ok(bytes) => crate::native_script::parse_bp_program_profile(
+                Some(key.clone()),
+                &bytes,
+                self.bp_profile,
+            ),
             Err(err) => {
                 if file_policy::restricted() {
                     self.host
@@ -2409,7 +2608,7 @@ impl RuntimeTraceApi {
                 return -1;
             };
             let explicit = name.replace('\\', "/").starts_with("bgi-");
-            let metadata = policy.metadata(&name).or_else(|| {
+            let metadata = policy.user_metadata(&name).or_else(|| {
                 if explicit {
                     None
                 } else {
@@ -2521,7 +2720,7 @@ impl RuntimeTraceApi {
                                 .map(|pair| (pair[0], pair[1]))
                         })
                         .unwrap_or((0, 0));
-                    bitmap_blend::blit_mode(
+                    bitmap_blend::blit_mode_with_options(
                         base,
                         *base_format,
                         &image,
@@ -2530,6 +2729,7 @@ impl RuntimeTraceApi {
                         y,
                         element.mode,
                         element.parameter,
+                        self.native_additive_coverage,
                     );
                 }
             }
@@ -2591,9 +2791,22 @@ impl RuntimeTraceApi {
         let Some(entry) = find_runtime_resource(&self.manager, archive_name, resource_name) else {
             return false;
         };
-        let Ok(bytes) = self.manager.read_by_entry_decoded(&entry) else {
+        let mut bytes = std::mem::take(&mut self.image_decode_buffer);
+        if bytes.capacity() > IMAGE_DECODE_BUFFER_MAX_CAPACITY {
+            bytes = Vec::new();
+        }
+        if self
+            .manager
+            .read_by_entry_decoded_into(&entry, &mut bytes)
+            .is_err()
+        {
+            self.image_decode_buffer = if bytes.capacity() <= IMAGE_DECODE_BUFFER_MAX_CAPACITY {
+                bytes
+            } else {
+                Vec::new()
+            };
             return false;
-        };
+        }
 
         // Target sub_469EE0 copies CBG +0x10..+0x1F into the internal image
         // header. sub_401EF0 accepts embedded-point flags 0/1 and, for flag 1,
@@ -2633,8 +2846,10 @@ impl RuntimeTraceApi {
                 return false;
             };
             (native_format, None, None)
+        } else if let Some(native_format) = raw_bgi_native_bitmap_format(&bytes) {
+            (native_format, raw_bgi_embedded_point(&bytes), None)
         } else {
-            // Portable PNG/JPEG/raw-image compatibility resources have no
+            // Portable PNG/JPEG compatibility resources have no
             // target CBG subtype to recover. Keep the historical RGBA
             // format-2 interpretation for those non-CBG paths.
             (2, None, None)
@@ -2651,6 +2866,11 @@ impl RuntimeTraceApi {
                 );
                 return false;
             }
+        };
+        self.image_decode_buffer = if bytes.capacity() <= IMAGE_DECODE_BUFFER_MAX_CAPACITY {
+            bytes
+        } else {
+            Vec::new()
         };
         self.graph_image_formats
             .insert(key.clone(), native_bitmap_format);
@@ -3056,6 +3276,12 @@ impl RuntimeTraceApi {
     }
 
     fn alloc_object(&mut self) -> i32 {
+        while matches!(
+            self.next_object_handle,
+            version_graph::DS_MOVIE_HANDLE | version_graph::MF_MOVIE_HANDLE
+        ) {
+            self.next_object_handle += 1;
+        }
         let handle = self.next_object_handle;
         self.next_object_handle += 1;
         self.display_tree
@@ -3727,7 +3953,7 @@ impl RuntimeTraceApi {
         }
         let now = self.clock_base_ms.wrapping_add(self.engine_time_ms as u32);
         if self.graph_next_present_ms > now {
-            return false;
+            return self.graph_force_present != 0;
         }
         let interval = self.graph_frame_interval_ms.max(1);
         self.graph_redraw_requested = None;
@@ -3737,6 +3963,32 @@ impl RuntimeTraceApi {
         true
     }
 
+    /// BGI 1.652 Sys81:0E (0x494B70 -> 0x467430) reads the initialized
+    /// adapter dimensions, not an unavailable `(0, 0)` display. Hosted mobile
+    /// and web sessions use their full-screen surface; a CPU/headless session
+    /// uses the native canvas as its virtual display until a host supplies one.
+    /// Returning zero makes scripts exhaust their resolution choices and can
+    /// select an unrelated legacy mode. Do not constrain Sys80:60 mode changes.
+    fn available_display_size(&self) -> (u32, u32) {
+        match self.desktop_display_size {
+            (width, height) if width > 0 && height > 0 => (width, height),
+            // A console GPU surface is scaled to fit; like the CPU host it
+            // offers the native canvas, not the physical panel, as display.
+            _ if self.virtual_display => (
+                self.screen_width.max(1) as u32,
+                self.screen_height.max(1) as u32,
+            ),
+            _ if self.window_surface_width > 0 && self.window_surface_height > 0 => (
+                self.window_surface_width as u32,
+                self.window_surface_height as u32,
+            ),
+            _ => (
+                self.screen_width.max(1) as u32,
+                self.screen_height.max(1) as u32,
+            ),
+        }
+    }
+
     /// sub_45EDE0: mode 2 falls back to 0 when the adjusted desktop
     /// (sub_45EAE0(.., 1)) is narrower or lower than the display mode.
     pub(crate) fn effective_fullscreen_scale_mode(&self) -> i32 {
@@ -3744,7 +3996,7 @@ impl RuntimeTraceApi {
         if mode != 2 {
             return mode;
         }
-        let (mut width, mut height) = self.desktop_display_size;
+        let (mut width, mut height) = self.available_display_size();
         if height != 0 && 4u32.wrapping_mul(width) / height >= 10 {
             width >>= 1;
         }
@@ -3897,9 +4149,7 @@ impl RuntimeTraceApi {
         removed |= self.graph91_object_transforms.remove(&object).is_some();
         removed |= self.graph91_effectors.remove(&object).is_some();
         removed |= self.graph91_landscapes.remove(&object).is_some();
-        self.graph91_sprite_relations
-            .retain(|sprite, linked| *sprite != object && *linked != object);
-        self.graph91_sprite_link_masks.remove(&object);
+        self.release_sprite_relations(object);
         removed |= self.graph_input_objects.remove(&object).is_some();
         removed |= self.graph_object_properties.remove(&object).is_some();
         removed |= self.graph_mode5_render_states.remove(&object).is_some();
@@ -4462,10 +4712,12 @@ impl RuntimeTraceApi {
                 if point.0 < x || point.1 < y || point.0 >= x + width || point.1 >= y + height {
                     return None;
                 }
-                Some((
-                    self.graph90_native_sort_key(handle).unwrap_or_default(),
-                    handle,
-                ))
+                // SenmomoFD sub_46CBC0 queries vtable+0x1c, then
+                // sub_477650 checks the full pointer-scope chain. A higher
+                // icon/modal input scope must prevent a Knob from capturing.
+                let scope = self.graph90_native_sort_key(handle).unwrap_or_default();
+                native_pointer_scope_eligible_at(self, scope as i32, Some(point))
+                    .then_some((scope, handle))
             })
             .max()
             .map(|(_, handle)| handle)
@@ -4594,6 +4846,9 @@ impl RuntimeTraceApi {
     /// list is independent of hover/capture: its first node consumes the wheel
     /// and changes the watched Knob's logical Y coordinate by exactly one.
     fn process_graph_knob_mouse_wheel(&mut self, delta_y: f32) -> bool {
+        if self.graph_knob_wheel_mode == 0 {
+            return false;
+        }
         let Some(&handle) = self.graph_knob_watches.front() else {
             return false;
         };
@@ -5779,6 +6034,49 @@ impl RuntimeTraceApi {
         self.registered_pointer_input_scopes.unregister_one(packed);
     }
 
+    /// CProcCtrlDspObj reads virtual position/alpha getters. BackML's
+    /// overrides address the selected layer (Itsusora 410680/4106C0).
+    /// BackF likewise returns its source origin (KiraKira 410870), not the
+    /// unused CDspObj coordinates. Reading the base zero turns a 600->0
+    /// camera pan into a stationary 0->0 control (issue #144).
+    fn graph_control_origin(&self, object: i32) -> ((i32, i32), i32) {
+        if self
+            .graph_object_properties
+            .get(&object)
+            .and_then(|p| p.background)
+            .is_some_and(|b| b.class == NativeBackgroundClass::BackMl)
+        {
+            let layer = &self.graph91_multilayer_background.layers
+                [self.graph91_multilayer_background.selected_layer];
+            return ((layer.x_16_16, layer.y_16_16), layer.blend_parameter);
+        }
+        let position = self
+            .graph_object_properties
+            .get(&object)
+            .and_then(|p| p.background)
+            .and_then(|background| match background.position {
+                native_background::NativeBackgroundPosition::BackFSource { x, y } => Some((x, y)),
+                _ => None,
+            })
+            .or_else(|| self.graph_native_base_position(object))
+            .unwrap_or_else(|| {
+                let (x, y) = self.graph_object_position(object);
+                (x.round() as i32, y.round() as i32)
+            });
+        // Sprite mode 1 overrides GetAlpha with its transition value.
+        let alpha = self
+            .graph_transition_nodes
+            .get(&object)
+            .filter(|t| t.blend_selector == 1)
+            .map(|t| t.alpha_multiplier.clamp(0, 256))
+            .unwrap_or_else(|| {
+                self.graph_object_properties
+                    .get(&object)
+                    .map_or(0, |p| p.alpha_parameter())
+            });
+        (position, alpha)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn schedule_native_cdspobj_control(
         &mut self,
@@ -5812,31 +6110,8 @@ impl RuntimeTraceApi {
             ));
         }
 
-        let native_position = self
-            .graph_object_properties
-            .get(&object)
-            .map(|properties| (properties.native.position_x, properties.native.position_y))
-            .unwrap_or_else(|| {
-                let (x, y) = self.graph_object_position(object);
-                (x.round() as i32, y.round() as i32)
-            });
+        let (native_position, from_transparency) = self.graph_control_origin(object);
         let target_position = target_position.unwrap_or(native_position);
-        // CProcCtrlDspObj captures vtable +76 (GetAlpha).  CDspObjSprite
-        // overrides it: selector 1 returns the mode-1 transition value at
-        // +0x240, while the other recovered selectors return base CDspObj
-        // transparency (+0xAC).  Reading only portable base properties here
-        // caused mode-1 Sprite transitions to jump to the wrong start value.
-        let from_transparency = self
-            .graph_transition_nodes
-            .get(&object)
-            .filter(|transition| transition.blend_selector == 1)
-            .map(|transition| transition.alpha_multiplier.clamp(0, 256))
-            .unwrap_or_else(|| {
-                self.graph_object_properties
-                    .entry(object)
-                    .or_default()
-                    .alpha_parameter()
-            });
         // sub_41B740 calls selector -1 of sub_41B750, which reads the
         // WORD at CDspObj+0xBA: only the integer/high half of +0xB8 survives
         // when a control starts. The native updater then reconstructs 16.16
@@ -5928,25 +6203,7 @@ impl RuntimeTraceApi {
             )));
         }
 
-        let native_position = self
-            .graph_object_properties
-            .get(&object)
-            .map(|properties| (properties.native.position_x, properties.native.position_y))
-            .unwrap_or_else(|| {
-                let (x, y) = self.graph_object_position(object);
-                (x.round() as i32, y.round() as i32)
-            });
-        let from_transparency = self
-            .graph_transition_nodes
-            .get(&object)
-            .filter(|transition| transition.blend_selector == 1)
-            .map(|transition| transition.alpha_multiplier.clamp(0, 256))
-            .unwrap_or_else(|| {
-                self.graph_object_properties
-                    .entry(object)
-                    .or_default()
-                    .alpha_parameter()
-            });
+        let (native_position, from_transparency) = self.graph_control_origin(object);
 
         let Some(control_id) = self.layer_animations.schedule_native_special_path_control(
             object,
@@ -6140,6 +6397,8 @@ impl RuntimeTraceApi {
             return false;
         }
         self.graph_layers.remove(&target);
+        self.refresh_linked_sprite_masks();
+        self.refresh_native_sprite_filters();
         self.refresh_native_filters();
         let source = snapshot::compose_runtime_frame(self, false);
         let image = match displacement {
@@ -6525,12 +6784,18 @@ impl RuntimeTraceApi {
             // every delivered sample is a native event; sysmsg._bp posts it
             // to moviemngr._bp, which counts frames at record +52 and
             // refreshes the sprite showing the slot.
-            self.queued_system_events
-                .push_back([0x10000, update.bitmap, 0]);
+            if !matches!(
+                update.bitmap,
+                version_graph::DS_MOVIE_HANDLE | version_graph::MF_MOVIE_HANDLE
+            ) {
+                self.queued_system_events
+                    .push_back([0x10000, update.bitmap, 0]);
+            }
             self.store_movie_frame(update);
         }
         self.sync_movie_audio();
         self.drain_graph_input_messages();
+        self.tick_eex_icon_paths();
         self.tick_icon_input_actions();
         // Target sub_496430 samples each registered Sprite once per main-loop
         // pass and stores only bit zero of the primary-input query. The portable
@@ -7153,6 +7418,8 @@ impl RuntimeTraceApi {
 
     fn render_graph_object_to_bitmap(&mut self, object_id: i32, bitmap_id: i32) -> bool {
         let target_size = self.bitmap_dimensions.get(&bitmap_id).copied();
+        self.refresh_linked_sprite_masks();
+        self.refresh_native_sprite_filters();
         let Some(image) = snapshot::compose_graph_object(self, object_id, target_size) else {
             return false;
         };
@@ -7508,7 +7775,7 @@ impl RuntimeTraceApi {
         // kernel does not implement leaves the destination unchanged.
         // Bitmaps whose format is unknown keep the portable compositor.
         let native = match (source_format, destination_format) {
-            (Some(sf), Some(df)) => Some(bitmap_blend::blit_mode(
+            (Some(sf), Some(df)) => Some(bitmap_blend::blit_mode_with_options(
                 &mut destination_image,
                 df,
                 &source_image,
@@ -7517,6 +7784,7 @@ impl RuntimeTraceApi {
                 y,
                 mode,
                 alpha_parameter,
+                self.native_additive_coverage,
             )),
             _ => None,
         };
@@ -7548,13 +7816,25 @@ impl RuntimeTraceApi {
             }
         }
         self.store_graph_image(composite_key.clone(), destination_image);
-        self.graph_resources.insert(
-            destination,
-            RuntimeGraphResource::whole(composite_key.clone()),
-        );
+        // sub_40A9E0 writes the existing bitmap's pixels; it does not allocate
+        // another descriptor. Keep the binding generation, just as 90:15
+        // does, so eye/mouth blits do not invalidate live projected sprites.
+        // SugarStyle's 484020 -> 402980 likewise resolves the existing
+        // descriptors via 4085F0 before 40AC60, without allocating a slot.
+        // Keep the writable copy separate from shared decoded archive images.
+        if let Some(binding) = self.graph_resources.get_mut(&destination) {
+            binding.key = composite_key.clone();
+            binding.source_rect = None;
+        } else {
+            self.graph_resources.insert(
+                destination,
+                RuntimeGraphResource::whole(composite_key.clone()),
+            );
+        }
         if let Some(surface) = self.graph_surfaces.get_mut(&destination) {
             surface.resource_id = Some(destination);
         }
+        self.refresh_bitmap_nodes(destination);
         Some(composite_key)
     }
 
@@ -8140,6 +8420,18 @@ impl RuntimeTraceApi {
     }
 
     fn graph_draw_items(&self) -> Vec<RuntimeGraphDrawItem> {
+        self.graph_draw_items_with_link_masks(false)
+    }
+
+    fn graph_draw_items_with_link_masks(&self, include_masks: bool) -> Vec<RuntimeGraphDrawItem> {
+        let mask_owners = if include_masks {
+            self.graph91_sprite_relations
+                .values()
+                .copied()
+                .collect::<BTreeSet<_>>()
+        } else {
+            BTreeSet::new()
+        };
         let mut items = Vec::new();
         // Compatibility-only title items are added only when the target graph
         // scripts have loaded resources but have not yet materialized matching
@@ -8150,7 +8442,8 @@ impl RuntimeTraceApi {
         let mut inactive_backgrounds = BTreeSet::new();
         let mut backf_secondaries = Vec::new();
         for (layer_id, layer) in &self.graph_layers {
-            if !self.should_draw_graph_layer(*layer_id, layer) {
+            let is_link_mask = mask_owners.contains(&layer.owner_object.unwrap_or(*layer_id));
+            if !is_link_mask && !self.should_draw_graph_layer(*layer_id, layer) {
                 continue;
             }
             let owner_background = layer
@@ -8325,14 +8618,31 @@ impl RuntimeTraceApi {
                 .map(|surface| self.surface_display_opacity(surface))
                 .unwrap_or(1.0)
                 * opacity;
-            if opacity <= 0.001 {
+            if opacity <= 0.001 && !is_link_mask {
                 continue;
             }
-            if layer.target_surface.is_some_and(|surface| {
-                self.graph_surfaces
-                    .get(&surface)
-                    .is_some_and(|record| !self.surface_display_chain_visible(surface, record))
-            }) {
+            if !is_link_mask
+                && layer.target_surface.is_some_and(|surface| {
+                    self.graph_surfaces
+                        .get(&surface)
+                        .is_some_and(|record| !self.surface_display_chain_visible(surface, record))
+                })
+            {
+                continue;
+            }
+            // A bitmap mutation may move an archive-backed slot to a runtime
+            // image without reconfiguring its sprites (e.g. Graph90:13).
+            // Resolve raw primary bindings live; retain generated mode rasters.
+            let raw_sprite = self
+                .display_tree
+                .kind(layer.owner_object.unwrap_or(*layer_id))
+                == Some(NativeDisplayKind::Sprite)
+                && (!layer.key.starts_with("runtime:") || layer.key.starts_with("runtime:bitmap:"));
+            let primary = node_properties
+                .or(owner_properties)
+                .and_then(|p| p.format_resource);
+            let primary_key = primary.and_then(|bitmap| self.resolve_resource_key(bitmap));
+            if raw_sprite && primary.is_some() && primary_key.is_none() {
                 continue;
             }
             let draw_key = self
@@ -8340,6 +8650,7 @@ impl RuntimeTraceApi {
                 .get(layer_id)
                 .map(|(key, _)| key.as_str())
                 .or_else(|| self.message_control_layer_draw_key(*layer_id, layer))
+                .or_else(|| raw_sprite.then_some(primary_key).flatten())
                 .unwrap_or(layer.key.as_str());
             let Some(image) = self.graph_images.get(draw_key) else {
                 continue;
@@ -8514,8 +8825,11 @@ impl RuntimeTraceApi {
         // Native CObjectManager inserts equal-depth objects after existing
         // entries. Preserve that chain order; the old reversed order is only
         // available through ETHORNELL_LEGACY_REVERSE_EQUAL_DEPTH.
+        items.retain_mut(|item| include_masks || self.apply_linked_sprite_draw(item));
         for item in &mut items {
-            self.apply_filtered_sprite_draw(item);
+            if !include_masks {
+                self.apply_filtered_sprite_draw(item);
+            }
             if let Some(object) = item.owner_object {
                 let key = if item.key.starts_with("runtime:landscape:") {
                     item.key
@@ -8648,6 +8962,14 @@ impl RuntimeTraceApi {
     fn push_surface_draw_items(&self, items: &mut Vec<RuntimeGraphDrawItem>) {
         for surface in self.graph_surfaces.values() {
             if !surface.display_attached || !self.surface_display_chain_visible(surface.id, surface)
+            {
+                continue;
+            }
+            if self
+                .graph_object_properties
+                .get(&surface.id)
+                .and_then(|p| p.properties.get(&0x88))
+                .is_some_and(|v| v.0 == 0)
             {
                 continue;
             }
@@ -9545,22 +9867,33 @@ impl RuntimeEngine {
         fail_on_stub: bool,
         native_dialog_presentation: bool,
         encoding: &'static encoding_rs::Encoding,
-    ) -> Self {
-        let program = crate::native_script::parse_bp_program(Some(script.to_string()), bytes);
-        let profile = confirmed_native_profile(&manager, bytes);
+    ) -> Result<Self> {
+        let profile = confirmed_native_profile(&manager, bytes)?;
+        let program = crate::native_script::parse_bp_program_profile(
+            Some(script.to_string()),
+            bytes,
+            profile.abi,
+        );
         let mut vm = crate::native_vm::Vm::with_main_thread_regions(
             profile.main_code_bytes,
             profile.main_data_bytes,
             4096,
         );
         vm.set_native_abi_profile(profile.abi);
+        vm.set_modern_pointer_tags(profile.modern_pointer_tags);
         vm.set_graph_text_encoding(encoding);
         vm.start(&program);
-        Self {
+        Ok(Self {
             vm,
             api: {
                 let mut api = RuntimeTraceApi::new_with_native_root(manager, native_root);
                 api.configure_native_sound_channels(profile.se_channels);
+                api.bp_profile = profile.abi;
+                api.modern_gradient_blur = profile.modern_gradient_blur;
+                if let Some(sizes) = profile.display_modes {
+                    api.display_mode_sizes = sizes.map(Some);
+                    api.display_mode_limit = 16;
+                }
                 api.native_dialog_presentation = native_dialog_presentation;
                 api
             },
@@ -9572,7 +9905,7 @@ impl RuntimeEngine {
                 collect_diagnostics: trace || fail_on_stub,
             },
             last_report: None,
-        }
+        })
     }
 
     /// Sys80:6B status 5: sub_48D480 leaves its main loop and initializes the
@@ -9592,7 +9925,9 @@ impl RuntimeEngine {
             }
             None => self.api.native_root.clone(),
         };
-        let manager = match ResourceManager::open_game(&native_root) {
+        let manager = match ResourceManager::open_game(&native_root)
+            .and_then(|manager| manager.for_native_bootstrap(self.api.manager.archive_language()))
+        {
             Ok(manager) => manager,
             Err(err) => {
                 tracing::warn!(%err, root = %native_root.display(), "bootstrap root unusable");
@@ -9615,7 +9950,9 @@ impl RuntimeEngine {
             self.options.fail_on_stub,
             self.api.native_dialog_presentation,
             self.vm.graph_text_encoding(),
-        );
+        )
+        .map_err(|error| tracing::warn!(%error, "bootstrap native profile rejected"))
+        .ok()?;
         if self.api.host_realtime_clock {
             engine.use_host_clock();
         }
@@ -9732,14 +10069,29 @@ impl RuntimeEngine {
         // rule. Do not replay missed VM frames after a delayed redraw.
         self.api.advance_audio_clocks(audio_elapsed_ms);
         if self.api.native_user.has_blocking_message() {
+            // A native MessageBox suspends the host loop. The last VM report
+            // can still describe an unrelated bitmap procedure installed in
+            // that pass; it is not the reason this frame makes no progress.
+            let last_report = self.last_report.clone().map(|mut report| {
+                report.steps = 0;
+                report.stop_reason = crate::native_vm::VmStopReason::WaitingForHost;
+                report
+            });
             return RuntimeFrameReport {
-                last_report: self.last_report.clone(),
+                last_report,
                 total_steps: 0,
                 scheduler_passes: 0,
                 yields: 0,
             };
         }
 
+        // Performance history samples the host loop's elapsed time, before
+        // engine pause/jump filtering. Modal-host waits do not add records.
+        self.api
+            .native_system
+            .frame_history
+            .push_front(audio_elapsed_ms as u32 as i32);
+        self.api.native_system.frame_history.truncate(600);
         let mut changes = self.api.display_changes;
         let mut report = self.run_native_pass(pacing, elapsed_ms);
         // Input edges are visible for one cooperative main-loop pass.
@@ -9776,6 +10128,7 @@ impl RuntimeEngine {
         }
         self.api.sync_display_tree_from_runtime();
         self.api.refresh_aux_masked_sprites();
+        self.api.refresh_linked_sprite_masks();
         self.api.refresh_native_sprite_filters();
         self.api.refresh_native_filters();
         self.api.sweep_unreferenced_archive_images();
@@ -10155,6 +10508,122 @@ mod directshow_movie_tests {
             [0, 0, 0]
         );
     }
+
+    #[test]
+    fn global_samples_present_independently_and_restore_the_frozen_scene() {
+        use super::presentation::CpuPresenter;
+        use crate::native_vm::{GraphApi, NativeCallFrame, NativeOpcode, Value};
+        let manager =
+            crate::native_archive::ResourceManager::open_game(env!("CARGO_MANIFEST_DIR")).unwrap();
+        let mut api = RuntimeTraceApi::new(manager);
+        api.screen_width = 4;
+        api.screen_height = 3;
+        let solid = |rgb: [u8; 3]| DecodedImage {
+            width: 4,
+            height: 3,
+            rgba: [rgb[0], rgb[1], rgb[2], 255].repeat(12),
+        };
+        let pixel = |f: &snapshot::RuntimeFrameComposition| f.framebuffer.rgba[..3].to_vec();
+        api.store_runtime_bitmap(10, solid([0, 0, 200]), 2);
+        let mut create = NativeCallFrame::new(
+            NativeOpcode {
+                group: 0x90,
+                id: 0x50,
+            },
+            Vec::new(),
+        );
+        let Value::Int(sprite) = GraphApi::call_graph(&mut api, &mut create).unwrap() else {
+            panic!("sprite")
+        };
+        api.graph90_replace_sprite_primary(sprite, 10).unwrap();
+        api.set_graph_object_draw_enabled(sprite, true);
+        let mut presenter = CpuPresenter::default();
+        assert_eq!(pixel(presenter.frame(&mut api)), [0, 0, 200]);
+        api.graph_scheduler_enabled = false;
+        let deadline = api.graph_next_present_ms;
+        api.replace_graph_bitmap_pixels(10, solid([0, 200, 0]));
+
+        let handle = 10; // Deliberate collision with the scene bitmap slot.
+        assert_eq!(
+            api.graph_effects.configure_media(
+                handle,
+                String::new(),
+                "m".into(),
+                MovieBytes::from_vec(tiny_movie())
+            ),
+            0
+        );
+        assert_eq!(api.graph_effects.invoke(handle).status, 0);
+        assert_eq!(
+            api.graph_effects.configure_media(
+                20,
+                String::new(),
+                "bitmap".into(),
+                MovieBytes::from_vec(tiny_movie())
+            ),
+            0
+        );
+        assert_eq!(api.graph_effects.invoke(20).status, 0);
+        api.global_movie_handle = Some(handle);
+        api.global_movie_size = (4, 3);
+        assert_eq!(
+            pixel(presenter.frame(&mut api)),
+            [0, 0, 0],
+            "opening has no sample yet"
+        );
+        api.store_movie_frame(graph_effect::MovieFrameUpdate {
+            bitmap: handle,
+            image: solid([200, 0, 0]),
+        });
+        assert_eq!(pixel(presenter.frame(&mut api)), [200, 0, 0]);
+        assert_eq!(&api.graph_bitmap_image(10).unwrap().rgba[..3], &[0, 200, 0]);
+        let retained = presenter.frame(&mut api).framebuffer.rgba.as_ptr();
+        api.engine_time_ms += 16;
+        assert_eq!(
+            presenter.frame(&mut api).framebuffer.rgba.as_ptr(),
+            retained,
+            "no duplicate composition without a new sample"
+        );
+        assert_eq!(api.graph_next_present_ms, deadline);
+
+        api.store_movie_frame(graph_effect::MovieFrameUpdate {
+            bitmap: handle,
+            image: solid([200, 100, 0]),
+        });
+        assert_eq!(pixel(presenter.frame(&mut api)), [200, 100, 0]);
+        api.global_movie_size = (2, 3);
+        let frame = presenter.frame(&mut api);
+        assert_eq!(
+            &frame.framebuffer.rgba[12..15],
+            &[0, 0, 0],
+            "geometry changes repaint without a new sample"
+        );
+        api.close_global_movie();
+        assert_eq!(api.graph_effects.state(handle), 4);
+        assert_eq!(
+            api.graph_effects.state(20),
+            0,
+            "closing a global movie leaves bitmap video running"
+        );
+        assert_eq!(
+            pixel(presenter.frame(&mut api)),
+            [0, 0, 200],
+            "restore the submitted scene, not unpresented green pixels"
+        );
+
+        // A bitmap movie still follows the script's scene gate and keeps its
+        // existing binding generation, unlike a global video sample.
+        let generation = api.graph_resources[&10].generation;
+        api.store_movie_frame(graph_effect::MovieFrameUpdate {
+            bitmap: 10,
+            image: solid([200, 200, 0]),
+        });
+        assert_eq!(api.graph_resources[&10].generation, generation);
+        assert_eq!(pixel(presenter.frame(&mut api)), [0, 0, 200]);
+        api.graph_scheduler_enabled = true;
+        api.engine_time_ms += 1000;
+        assert_eq!(pixel(presenter.frame(&mut api)), [200, 200, 0]);
+    }
 }
 
 #[cfg(test)]
@@ -10294,6 +10763,56 @@ mod input_tests {
             raw: Vec::new().into(),
             warning: None,
         }
+    }
+
+    #[test]
+    fn unknown_native_host_calls_fail_without_acknowledgement() {
+        use crate::native_vm::{NativeCallFrame, NativeOpcode, VmError};
+        let manager =
+            crate::native_archive::ResourceManager::open_game(env!("CARGO_MANIFEST_DIR")).unwrap();
+        let mut api = super::RuntimeTraceApi::new(manager);
+        let mut call = NativeCallFrame::new(
+            NativeOpcode {
+                group: 0x80,
+                id: u16::MAX,
+            },
+            vec![],
+        );
+        assert!(matches!(
+            crate::native_vm::SysApi::call_sys(&mut api, &mut call),
+            Err(VmError::UnknownDispatch {
+                group: 0x80,
+                id: u16::MAX
+            })
+        ));
+        let mut call = NativeCallFrame::new(
+            NativeOpcode {
+                group: 0x91,
+                id: u16::MAX,
+            },
+            vec![],
+        );
+        assert!(matches!(
+            crate::native_vm::GraphApi::call_graph(&mut api, &mut call),
+            Err(VmError::UnknownDispatch {
+                group: 0x91,
+                id: u16::MAX
+            })
+        ));
+        let mut call = NativeCallFrame::new(
+            NativeOpcode {
+                group: 0xa0,
+                id: u16::MAX,
+            },
+            vec![],
+        );
+        assert!(matches!(
+            crate::native_vm::SoundApi::call_sound(&mut api, &mut call),
+            Err(VmError::UnknownDispatch {
+                group: 0xa0,
+                id: u16::MAX
+            })
+        ));
     }
 
     #[test]
@@ -10555,6 +11074,44 @@ mod input_tests {
         assert_eq!(
             crate::native_vm::SoundApi::user_font_families(&api),
             families
+        );
+        assert_eq!(
+            crate::native_vm::SoundApi::user_font_families_for_charset(&api, 0),
+            families
+        );
+    }
+
+    #[test]
+    fn native_caret_status_preserves_legacy_and_fused_contracts() {
+        let manager =
+            crate::native_archive::ResourceManager::open_game(env!("CARGO_MANIFEST_DIR")).unwrap();
+        let mut api = super::RuntimeTraceApi::new(manager);
+        api.bp_profile = crate::native_vm::NativeAbiProfile::Modern;
+        let mut args = vec![Value::Int(1), Value::Int(20), Value::Int(30)];
+        assert_eq!(
+            call_graph(&mut api, 0x90, 0x9a, &mut args).unwrap(),
+            Value::None
+        );
+        assert!(args.is_empty());
+        api.bp_profile = crate::native_vm::NativeAbiProfile::ModernFused;
+        let mut args = vec![Value::Int(4), Value::Int(40), Value::Int(50)];
+        assert_eq!(
+            call_graph(&mut api, 0x90, 0x9a, &mut args).unwrap(),
+            Value::Int(1)
+        );
+        assert!(args.is_empty());
+        let mut args = vec![Value::Int(-1), Value::Int(100), Value::Int(200)];
+        assert_eq!(
+            call_graph(&mut api, 0x90, 0x9a, &mut args).unwrap(),
+            Value::Int(1)
+        );
+        assert_eq!(
+            (
+                api.graph_defaults.caret_mode,
+                api.graph_defaults.caret_x,
+                api.graph_defaults.caret_y
+            ),
+            (0, 40, 50)
         );
     }
 
@@ -12674,6 +13231,35 @@ mod input_tests {
 
         let captured = &api.graph_images["runtime:priority-bitmap:128"];
         assert_eq!(&captured.rgba[..4], &[200, 100, 50, 255]);
+
+        // Newer Graph91:05 draws into an existing destination, keeping its
+        // dimensions and resource identity, rather than creating screen size.
+        api.recreate_native_bitmap(129, 2, 1, 1);
+        let mut capture = [129, 0, 0, 71].map(Value::Int).to_vec();
+        assert_eq!(
+            call_graph(&mut api, 0x91, 0x05, &mut capture).unwrap(),
+            Value::Int(0)
+        );
+        let captured = api.graph_bitmap_image(129).unwrap();
+        assert_eq!((captured.width, captured.height), (2, 1));
+        assert_eq!(&captured.rgba[..4], &[200, 100, 50, 255]);
+        let mut outside = [129, -1, 0, 71].map(Value::Int).to_vec();
+        call_graph(&mut api, 0x91, 0x05, &mut outside).unwrap();
+        assert_eq!(
+            &api.graph_bitmap_image(129).unwrap().rgba[..4],
+            &[0, 0, 0, 255]
+        );
+        let mut missing = [130, 0, 0, 71].map(Value::Int).to_vec();
+        assert_eq!(
+            call_graph(&mut api, 0x91, 0x05, &mut missing).unwrap(),
+            Value::Int(2)
+        );
+        api.recreate_native_bitmap(130, 1, 1, 2);
+        let mut incompatible = [130, 0, 0, 71].map(Value::Int).to_vec();
+        assert_eq!(
+            call_graph(&mut api, 0x91, 0x05, &mut incompatible).unwrap(),
+            Value::Int(1)
+        );
     }
 
     #[test]
@@ -12736,6 +13322,51 @@ mod input_tests {
             api.graph_images["runtime:bitmap:1086"].rgba,
             pixel.repeat(4 * 2)
         );
+    }
+
+    #[test]
+    fn graph90_23_pans_backf_from_its_source_origin_to_the_top_of_a_tall_image() {
+        let manager =
+            crate::native_archive::ResourceManager::open_game(env!("CARGO_MANIFEST_DIR")).unwrap();
+        let mut api = super::RuntimeTraceApi::new(manager);
+        api.screen_width = 4;
+        api.screen_height = 2;
+        activate_backgrounds(&mut api);
+        api.store_runtime_bitmap(
+            128,
+            DecodedImage {
+                width: 4,
+                height: 4,
+                rgba: [10, 20, 30, 40]
+                    .into_iter()
+                    .flat_map(|red| [red, 0, 0, 0].repeat(4))
+                    .collect(),
+            },
+            1,
+        );
+        let mut configure = [0, 2, 128, 0, 0, 0x7000, -1, 0, 0]
+            .into_iter()
+            .map(Value::Int)
+            .collect();
+        call_graph(&mut api, 0x90, 0x43, &mut configure).unwrap();
+        let frame =
+            |api: &super::RuntimeTraceApi| super::snapshot::compose_runtime_frame(api, false).rgba;
+        assert_eq!(frame(&api)[0], 30, "initial viewport shows the lower half");
+        assert_eq!(api.graph_native_base_position(0), Some((0, 0)));
+
+        let mut control = [0, 0, 0, 0, 0, 1000, 1000, 0, 0, 113]
+            .into_iter()
+            .map(Value::Int)
+            .collect();
+        call_graph(&mut api, 0x90, 0x23, &mut control).unwrap();
+        let events = api.layer_animations.tick_native_object_controls(500);
+        api.apply_native_control_events(events);
+        assert_eq!(api.graph_control_origin(0).0, (0, 1));
+        assert_eq!(frame(&api)[0], 20, "midpoint actually moves the viewport");
+        let events = api.layer_animations.tick_native_object_controls(500);
+        api.apply_native_control_events(events);
+        assert_eq!(api.graph_control_origin(0).0, (0, 0));
+        assert_eq!(frame(&api)[0], 10, "endpoint reaches the upper half");
     }
 
     #[test]
@@ -15008,6 +15639,30 @@ mod input_tests {
             Value::Int(0)
         );
 
+        // 90:DD disables only Knob wheel routing. The physical wheel still
+        // reaches the ordinary input records, and the old gate is returned.
+        let mut disable_wheel = vec![Value::Int(0)];
+        assert_eq!(
+            call_graph(&mut api, 0x90, 0xdd, &mut disable_wheel).unwrap(),
+            Value::Int(1)
+        );
+        super::apply_runtime_input_event(
+            &mut api,
+            super::RuntimeInputEvent::MouseWheel { delta_y: 1.0 },
+        );
+        assert_eq!(api.graph_knob_states[&knob].y, 4);
+        assert_eq!(
+            api.pending_input_descriptor,
+            Some(super::INPUT_DESCRIPTOR_MOUSE_WHEEL_UP)
+        );
+        assert!(!api.pending_input_consumed);
+        let mut enable_wheel = vec![Value::Int(7)];
+        assert_eq!(
+            call_graph(&mut api, 0x90, 0xdd, &mut enable_wheel).unwrap(),
+            Value::Int(0)
+        );
+        assert_eq!(api.graph_knob_wheel_mode, 7);
+
         let mut zero = vec![Value::Int(knob), Value::Int(0), Value::Int(0)];
         call_graph(&mut api, 0x90, 0xd6, &mut zero).unwrap();
         super::apply_runtime_input_event(
@@ -15181,6 +15836,7 @@ mod input_tests {
         let manager =
             crate::native_archive::ResourceManager::open_game(env!("CARGO_MANIFEST_DIR")).unwrap();
         let mut api = super::RuntimeTraceApi::new(manager);
+        api.input_configuration_enabled = 1;
         let target = 604;
         api.graph_layers.insert(
             target,
@@ -15207,6 +15863,8 @@ mod input_tests {
                 clip: None,
             },
         );
+        api.graph_object_layers
+            .insert(target, [target].into_iter().collect());
         let mut create = vec![Value::Int(target)];
         let handle = match call_graph(&mut api, 0x90, 0xd0, &mut create).unwrap() {
             Value::Int(handle) => handle,
@@ -15220,6 +15878,21 @@ mod input_tests {
         call_graph(&mut api, 0x90, 0xd6, &mut initial).unwrap();
         let mut enable = vec![Value::Int(handle), Value::Int(1)];
         call_graph(&mut api, 0x90, 0xd4, &mut enable).unwrap();
+
+        // Like sub_46CBC0 -> sub_477650, a higher input scope blocks the
+        // wrapper even when its rectangle contains the pointer.
+        let scope = api.graph90_native_sort_key(handle).unwrap_or_default();
+        api.registered_pointer_input_scopes
+            .register((scope + 1) as i32);
+        assert_eq!(api.graph_knob_at_point((110.0, 210.0)), None);
+        api.registered_pointer_input_scopes
+            .unregister_one((scope + 1) as i32);
+        let mut disable_wheel = vec![Value::Int(0)];
+        assert_eq!(
+            call_graph(&mut api, 0x90, 0xdd, &mut disable_wheel).unwrap(),
+            Value::Int(1)
+        );
+        assert_eq!(api.graph_knob_at_point((110.0, 210.0)), Some(handle));
 
         super::apply_runtime_input_event(
             &mut api,
@@ -16366,6 +17039,73 @@ mod input_tests {
     }
 
     #[test]
+    fn issue141_window_background_fill_and_gate_preserve_text() {
+        let manager =
+            crate::native_archive::ResourceManager::open_game(env!("CARGO_MANIFEST_DIR")).unwrap();
+        let mut api = super::RuntimeTraceApi::new(manager);
+        let mut create = vec![Value::Int(800), Value::Int(600)];
+        let Value::Int(window) = call_graph(&mut api, 0x90, 0x80, &mut create).unwrap() else {
+            panic!("window");
+        };
+        api.draw_window_text_at_once(window, "kept");
+        let mut fill = vec![Value::Int(window), Value::Int(0x80123456_u32 as i32)];
+        call_graph(&mut api, 0x92, 0x8a, &mut fill).unwrap();
+        assert_eq!(
+            &api.graph_bitmap_image(window).unwrap().rgba[..4],
+            &[0x12, 0x34, 0x56, 0x80]
+        );
+        assert!(api.text_nodes.values().any(|n| n.text == "kept"));
+        api.graph_config.window_buffer = (1, 0);
+        let mut enabled = vec![Value::Int(window), Value::Int(1)];
+        call_graph(&mut api, 0x92, 0x88, &mut enabled).unwrap();
+        let mut items = Vec::new();
+        api.push_surface_draw_items(&mut items);
+        assert!(items.iter().any(|i| i.owner_object == Some(window)));
+        let mut disabled = vec![Value::Int(window), Value::Int(0)];
+        call_graph(&mut api, 0x92, 0x88, &mut disabled).unwrap();
+        items.clear();
+        api.push_surface_draw_items(&mut items);
+        assert!(!items.iter().any(|i| i.owner_object == Some(window)));
+        assert!(api.text_nodes.values().any(|n| n.text == "kept"));
+    }
+
+    #[test]
+    fn issue141_message_alignment_is_per_line_and_stable_during_reveal() {
+        let manager =
+            crate::native_archive::ResourceManager::open_game(env!("CARGO_MANIFEST_DIR")).unwrap();
+        let mut api = super::RuntimeTraceApi::new(manager);
+        let window = 0xb0000000_u32 as i32;
+        let mut surface = super::RuntimeSurface::display(window, 800.0, 600.0);
+        surface.valid_left = 40;
+        surface.valid_right = 759;
+        api.graph_surfaces.insert(window, surface);
+        let cursor = api.surface_text_states.entry(window).or_default();
+        cursor.font_size = 24;
+        cursor.cursor_x = 40;
+        cursor.cursor_y = 246;
+        cursor.text_layout_mode = 1;
+        cursor.alignment_reserve_cell = true;
+        cursor.message_style = Some(
+            crate::native_app::graph_defaults::MessageTextStyle::from_operands(
+                0xffffff,
+                [1, 5, 5, 0, 192],
+                24,
+            ),
+        );
+        api.start_native_message("　だるい。\n空".into(), Some(window));
+        let node_id = api.text_runtime.target_node.unwrap();
+        let mut node = api.text_nodes[&node_id].clone();
+        node.text = "　だ".into();
+        let partial = api.presentation_text_nodes(&node)[0].x;
+        node.text = "　だるい。\n空".into();
+        let lines = api.presentation_text_nodes(&node);
+        assert_eq!(partial, lines[0].x);
+        assert_eq!(lines.len(), 2);
+        assert!(lines[1].x > lines[0].x);
+        assert!((lines[0].x - 328.0).abs() <= 1.0);
+    }
+
+    #[test]
     fn window_configuration_uses_cdspobj_alpha_without_surface_double_application() {
         let manager =
             crate::native_archive::ResourceManager::open_game(env!("CARGO_MANIFEST_DIR")).unwrap();
@@ -16818,6 +17558,75 @@ mod input_tests {
         api.start_native_message("Third line.".into(), Some(window));
         api.tick_text(10_000);
         assert_eq!(shown_message(&api), "Third line.");
+    }
+
+    #[test]
+    fn graph91_window_text_preserves_nvl_paragraphs_and_cursor() {
+        for selector in [0x91, 0x93] {
+            let manager =
+                crate::native_archive::ResourceManager::open_game(env!("CARGO_MANIFEST_DIR"))
+                    .unwrap();
+            let mut api = super::RuntimeTraceApi::new(manager);
+            let window = message_window(&mut api);
+            api.surface_text_states.entry(window).or_default().font_size = 24;
+            api.graph_defaults.shadow_enabled = true;
+            api.graph_defaults.configure_shadow(5, 5, 192);
+            let home = api.surface_text_states[&window];
+            api.start_native_message("First sentence.".into(), Some(window));
+            api.tick_text(10_000);
+            // H2O scrmsg._bp:91:91(window, "\n", colour, 1, 1).
+            // The extended 91:93 has a shadow-disable operand after colour.
+            let mut args = vec![
+                Value::Int(window),
+                Value::Str("\n".into()),
+                Value::Int(0xffffff),
+            ];
+            if selector == 0x93 {
+                args.push(Value::Int(1));
+            }
+            args.extend([Value::Int(1), Value::Int(1)]);
+            call_graph(&mut api, 0x91, selector, &mut args).unwrap();
+            assert_eq!(
+                shown_message(&api),
+                "First sentence.\n",
+                "selector {selector:x}"
+            );
+            let cursor = api.surface_text_states[&window];
+            assert_eq!(cursor.cursor_x, home.cursor_x);
+            assert!(cursor.cursor_y > home.cursor_y);
+            api.start_native_message("Second sentence.".into(), Some(window));
+            api.tick_text(10_000);
+            assert_eq!(shown_message(&api), "First sentence.\nSecond sentence.");
+            // A skipped paragraph is drawn at the same window cursor too.
+            let mut args = vec![
+                Value::Int(window),
+                Value::Str(" More text.".into()),
+                Value::Int(0x112233),
+            ];
+            if selector == 0x93 {
+                args.push(Value::Int(1));
+            }
+            args.extend([Value::Int(1), Value::Int(1)]);
+            call_graph(&mut api, 0x91, selector, &mut args).unwrap();
+            assert_eq!(
+                shown_message(&api),
+                "First sentence.\nSecond sentence. More text."
+            );
+            assert_eq!(
+                api.text_nodes[&api.text_runtime.target_node.unwrap()].target_surface,
+                Some(window)
+            );
+            assert!(!api.text_nodes[&api.text_runtime.target_node.unwrap()].screen_attached);
+            let node = &api.text_nodes[&api.text_runtime.target_node.unwrap()];
+            assert_eq!(node.color, [17.0 / 255.0, 34.0 / 255.0, 51.0 / 255.0, 1.0]);
+            let super::snapshot::TextNodeShadow::Message(shadow) = api.text_node_shadow(node)
+            else {
+                panic!("window text style");
+            };
+            assert_eq!(shadow.is_none(), selector == 0x93);
+            call_graph(&mut api, 0x92, 0x8e, &mut vec![Value::Int(window)]).unwrap();
+            assert!(api.text_runtime.current_visible_text().is_empty());
+        }
     }
 
     fn draw_at_once(api: &mut super::RuntimeTraceApi, window: i32, text: &str) {
@@ -19859,6 +20668,42 @@ mod input_tests {
             [0; 3],
             "base DCIPIcon must not synthesize DCIPIconEx 0x10000006/07 events"
         );
+
+        // The activated button may replace its processor before the host
+        // delivers UP. Per-tick consumption must not lose gesture ownership.
+        api.finish_native_tick_input();
+        api.graph_input_objects.remove(&77);
+        super::apply_runtime_input_event(
+            &mut api,
+            super::RuntimeInputEvent::MouseRelease { x: 21.0, y: 31.0 },
+        );
+        assert!(api.pending_input_consumed);
+        assert_eq!(api.pending_click, None);
+        assert!(!api.mouse_pressed);
+        assert!(
+            !api.input_physically_held
+                .contains(&super::INPUT_DESCRIPTOR_MOUSE_LEFT)
+        );
+        assert!(
+            !api.input_down_descriptors
+                .contains(&super::INPUT_DESCRIPTOR_MOUSE_LEFT)
+        );
+        assert_eq!(
+            SysApi::read_input_state(&mut api, super::INPUT_DESCRIPTOR_MOUSE_LEFT),
+            0
+        );
+
+        api.finish_native_tick_input();
+        super::apply_runtime_input_event(
+            &mut api,
+            super::RuntimeInputEvent::MousePress { x: 200.0, y: 200.0 },
+        );
+        super::apply_runtime_input_event(
+            &mut api,
+            super::RuntimeInputEvent::MouseRelease { x: 200.0, y: 200.0 },
+        );
+        assert!(!api.pending_input_consumed);
+        assert_eq!(api.pending_click, Some((200.0, 200.0)));
     }
 
     #[test]
@@ -20615,6 +21460,7 @@ fn apply_runtime_input_event(api: &mut RuntimeTraceApi, event: RuntimeInputEvent
             api.pending_input_state = Some(0x1000_0002);
             api.pending_input_descriptor = Some(INPUT_DESCRIPTOR_MOUSE_LEFT);
             api.pending_input_consumed = false;
+            api.graph_icon_press_consumed = false;
             // WM_LBUTTONDOWN: a Knob under the pointer (sub_463CE0) captures
             // the press and only the activation accumulator moves
             // (sub_46E080); otherwise the record takes the press
@@ -20631,6 +21477,7 @@ fn apply_runtime_input_event(api: &mut RuntimeTraceApi, event: RuntimeInputEvent
             } {
                 // DCIPIcon participates in the same native input-descriptor
                 // drain as CProcDspMsg. Preserve that one-owner consumption.
+                api.graph_icon_press_consumed = true;
                 api.pending_input_consumed = true;
             }
             push_runtime_window_message(api, 0x0201, pack_window_message_point(x, y), 1);
@@ -20646,23 +21493,30 @@ fn apply_runtime_input_event(api: &mut RuntimeTraceApi, event: RuntimeInputEvent
             let point = Some((x, y));
             api.mouse_pos = point;
             api.mouse_pressed = false;
+            let icon_press_consumed = std::mem::take(&mut api.graph_icon_press_consumed);
             let knob_consumed = api.process_graph_knob_mouse_release((x, y));
             let graph_input_consumed = if knob_consumed {
                 true
             } else {
                 api.process_graph_input_mouse_release((x, y))
             };
+            // Run deferred icon release handling before combining ownership:
+            // an immediately activated icon may already have closed its UI.
+            let graph_input_consumed = graph_input_consumed || icon_press_consumed;
             api.pending_click = if graph_input_consumed { None } else { point };
             api.pending_click_age_frames = 0;
             api.pending_input_state = Some(0x1000_0006);
             api.pending_input_descriptor = Some(INPUT_DESCRIPTOR_MOUSE_LEFT);
-            // A captured Knob or release-triggered DCIPIconEx item consumes the
+            // A captured Knob or press/release-triggered icon consumes the
             // complete physical gesture. Do not expose it to CProcDspMsg as a
             // second "advance text" action.
             api.pending_input_consumed = graph_input_consumed;
             push_runtime_window_message(api, 0x0202, pack_window_message_point(x, y), 0);
         }
         RuntimeInputEvent::MouseWheel { delta_y } => {
+            if api.native_user.inspectors.wheel(delta_y) || api.handle_native_child_wheel(delta_y) {
+                return;
+            }
             if delta_y == 0.0 {
                 return;
             }
@@ -21671,6 +22525,10 @@ impl RuntimeTraceApi {
                     }
                     continue;
                 }
+                if input.extra_extended && words.first() == Some(&0x3000_0000) {
+                    refresh |= self.trigger_eex_icon_path(object, &words);
+                    continue;
+                }
                 refresh |= input.handle_message(&words, &pointer_local);
             }
             if refresh {
@@ -22107,7 +22965,7 @@ impl crate::native_vm::SysApi for RuntimeTraceApi {
 
     fn read_disk_file(&mut self, path: &str) -> Option<Vec<u8>> {
         if let Some(policy) = file_policy::active() {
-            return policy.read_loose(path).ok();
+            return policy.read_loose(&file_policy::user_data_alias(path)).ok();
         }
         let host = find_runtime_file_from_root(&self.manager, &self.native_root, "", path)?;
         host.is_file().then(|| std::fs::read(&host).ok()).flatten()
@@ -22115,7 +22973,9 @@ impl crate::native_vm::SysApi for RuntimeTraceApi {
 
     fn disk_file_exists(&mut self, path: &str) -> bool {
         if let Some(policy) = file_policy::active() {
-            return policy.metadata(path).is_some_and(|meta| !meta.is_dir());
+            return policy
+                .user_metadata(path)
+                .is_some_and(|meta| !meta.is_dir());
         }
         find_runtime_file_from_root(&self.manager, &self.native_root, "", path)
             .is_some_and(|host| host.is_file())
@@ -22126,15 +22986,28 @@ impl crate::native_vm::SysApi for RuntimeTraceApi {
             return None;
         }
         if file_policy::active().is_some() {
-            return read_runtime_bytes(&self.manager, archive, entry);
+            // The VM owns DSC/SDC decoding and native archive status codes.
+            // Return packed bytes from an indexed descriptor, including for
+            // composite members named Archive\\data01000.arc.
+            let found = user_files::indexed_archive_entry(&self.manager, archive, entry)?;
+            return self.manager.read_by_entry_raw(&found).ok();
         }
         let found = find_runtime_resource(&self.manager, archive, entry)?;
         self.manager.read_by_entry_raw(&found).ok()
     }
 
     fn archive_entry_exists(&mut self, archive: &str, entry: &str) -> bool {
+        if file_policy::restricted() {
+            return user_files::indexed_archive_entry(&self.manager, archive, entry).is_some();
+        }
         !is_empty_archive_arg(archive)
             && find_runtime_resource(&self.manager, archive, entry).is_some()
+    }
+
+    fn archive_entry_names(&mut self, archive: &str) -> Option<Vec<String>> {
+        let names = user_files::archive_directory_names(&self.manager, &self.native_root, archive);
+        tracing::debug!(archive, count = ?names.as_ref().map(Vec::len), "EnumerateArchiveDirectory");
+        names
     }
 
     fn media_prompt(&mut self, title: &str, text: &str) -> bool {
@@ -22324,6 +23197,61 @@ impl crate::native_vm::SysApi for RuntimeTraceApi {
         self.disk_file_exists(path) || self.directory_exists(path)
     }
 
+    fn user_ui_language(&mut self) -> i32 {
+        use crate::native_archive::ArchiveLanguage;
+        if let Some(language) = self.manager.archive_language() {
+            return match language {
+                ArchiveLanguage::Japanese => 0x0411,
+                ArchiveLanguage::English => 0x0409,
+                ArchiveLanguage::SimplifiedChinese => 0x0804,
+                ArchiveLanguage::TraditionalChinese => 0x0404,
+                ArchiveLanguage::Korean => 0x0412,
+            };
+        }
+        let locale = std::env::var("LC_ALL")
+            .or_else(|_| std::env::var("LC_MESSAGES"))
+            .or_else(|_| std::env::var("LANG"))
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if locale.starts_with("ja") {
+            0x0411
+        } else if locale.starts_with("zh_tw") || locale.starts_with("zh_hk") {
+            0x0404
+        } else if locale.starts_with("zh") {
+            0x0804
+        } else if locale.starts_with("ko") {
+            0x0412
+        } else {
+            0x0409
+        }
+    }
+
+    fn register_installation(
+        &mut self,
+        company: &str,
+        product: &str,
+        folder: &str,
+    ) -> crate::native_vm::VmResult<()> {
+        // BP 0x73 / FD sub_486710: a persistent company/product folder record.
+        // Keep this in the host-owned user capability instead of HKLM.
+        const PATH: &str = "bgi-user/installations.json";
+        let mut records: BTreeMap<String, String> = match self.read_user_file_bytes(PATH) {
+            Some(bytes) => serde_json::from_slice(&bytes).map_err(|error| {
+                crate::native_vm::VmError::Runtime(format!("installation metadata: {error}"))
+            })?,
+            None => BTreeMap::new(),
+        };
+        let key = serde_json::to_string(&(company, product)).expect("strings serialize");
+        records.insert(key, format!("\"{folder}\""));
+        let bytes = serde_json::to_vec(&records).expect("string records serialize");
+        if !self.write_file_bytes(PATH, &bytes) {
+            return Err(crate::native_vm::VmError::Runtime(
+                "cannot persist installation metadata".into(),
+            ));
+        }
+        Ok(())
+    }
+
     fn message_box(&mut self, caption: &str, text: &str) {
         // An empty caption is sub_46BC80's default (sub_46C1E0 with no
         // caption), as for script errors.
@@ -22332,6 +23260,14 @@ impl crate::native_vm::SysApi for RuntimeTraceApi {
         } else {
             caption.to_string()
         };
+        if !self.native_dialog_presentation {
+            tracing::warn!(
+                caption,
+                message = text,
+                "native message (offscreen; dialog suppressed)"
+            );
+            return;
+        }
         host_dialog::show_message(
             host_dialog::MessageDialogKind::Information,
             &caption,
@@ -22362,8 +23298,10 @@ impl crate::native_vm::SysApi for RuntimeTraceApi {
             self.file_exists_cache.clear();
             self.file_size_cache.clear();
             if !ok {
-                self.host
-                    .unsupported(&format!("native file write {path:?}: {}", result.unwrap_err()));
+                self.host.unsupported(&format!(
+                    "native file write {path:?}: {}",
+                    result.unwrap_err()
+                ));
             }
             return ok;
         }
@@ -22433,7 +23371,12 @@ impl crate::native_vm::SysApi for RuntimeTraceApi {
     ) -> Vec<String> {
         if let Some(policy) = file_policy::active() {
             return policy
-                .enumerate_user(pattern, recursive, max_count, false)
+                .enumerate_user(
+                    &user_files::native_enumeration_pattern(pattern),
+                    recursive,
+                    max_count,
+                    false,
+                )
                 .unwrap_or_default();
         }
         let normalized = pattern.replace('\\', "/");
@@ -22561,13 +23504,7 @@ impl crate::native_vm::SysApi for RuntimeTraceApi {
     /// spanned dual monitor) against the display mode's size, both as
     /// (int)(10000.0 * w / h) in double precision.
     fn display_aspect_mismatch(&mut self) -> bool {
-        let (mut width, mut height) = match self.desktop_display_size {
-            (0, _) | (_, 0) => (
-                self.window_surface_width.max(0) as u32,
-                self.window_surface_height.max(0) as u32,
-            ),
-            size => size,
-        };
+        let (mut width, mut height) = self.available_display_size();
         let (mode_width, mode_height) = self.display_mode_size();
         if width == 0 || height == 0 || mode_width <= 0 || mode_height <= 0 {
             return false;
@@ -22648,7 +23585,7 @@ impl crate::native_vm::SysApi for RuntimeTraceApi {
     }
 
     fn desktop_display_size(&mut self) -> (u32, u32) {
-        self.desktop_display_size
+        self.available_display_size()
     }
 
     fn fullscreen_scale_mode(&mut self) -> i32 {
@@ -22770,6 +23707,10 @@ impl crate::native_vm::SysApi for RuntimeTraceApi {
             self.apply_windowed_client_size();
         }
         tracing::info!(width, height, explicit, "native window size requested");
+    }
+
+    fn display_mode_capacity(&self) -> usize {
+        self.display_mode_limit
     }
 
     fn register_display_mode(&mut self, index: usize, width: i32, height: i32) {
@@ -22917,6 +23858,70 @@ impl crate::native_vm::SysApi for RuntimeTraceApi {
         }
         tracing::debug!(root, file, path = %path.display(), ok, "DeleteFile");
         ok
+    }
+
+    fn inspect_native_display_object(
+        &self,
+        object: i32,
+    ) -> std::result::Result<crate::native_vm::NativeObjectInspector, i32> {
+        self.native_object_inspector(object)
+    }
+    fn edit_native_display_object(
+        &mut self,
+        object: i32,
+        key: u8,
+        value: i32,
+    ) -> crate::native_vm::VmResult<()> {
+        self.edit_native_object_inspector(object, key, value)
+    }
+    fn publish_native_inspector(
+        &mut self,
+        view: &crate::native_vm::NativeInspectorView,
+    ) -> crate::native_vm::VmResult<bool> {
+        if !self
+            .graph_resources
+            .contains_key(&property_inspector::PANEL_BITMAP)
+        {
+            self.store_runtime_bitmap(
+                property_inspector::PANEL_BITMAP,
+                DecodedImage {
+                    width: 1,
+                    height: 1,
+                    rgba: vec![32, 36, 44, 255],
+                },
+                1,
+            );
+        }
+        self.native_user.inspectors.publish(view)
+    }
+    fn close_native_inspector(&mut self, handle: u32) -> crate::native_vm::VmResult<()> {
+        self.native_user.inspectors.close(handle);
+        Ok(())
+    }
+    fn take_native_inspector_events(
+        &mut self,
+        handle: u32,
+    ) -> crate::native_vm::VmResult<Vec<crate::native_vm::NativeInspectorEvent>> {
+        Ok(self.native_user.inspectors.take_events(handle))
+    }
+
+    fn portable_window_identity(&self) -> u64 {
+        self.portable_window_identity
+    }
+
+    fn configure_window_resizable(&mut self, enabled: bool) {
+        self.pending_window_resizable = Some(enabled);
+    }
+
+    fn configure_presentation_size(&mut self, width: i32, height: i32) -> bool {
+        if width <= 0 || height <= 0 {
+            return false;
+        }
+        self.windowed_client_size = (width, height);
+        if self.window_mode == 0 {
+            self.pending_window_size = Some((width as u32, height as u32));
+        }
+        true
     }
 
     fn user_data_root(&mut self, kind: i32) -> Option<String> {
@@ -23921,6 +24926,33 @@ impl crate::native_vm::SysApi for RuntimeTraceApi {
         std::mem::take(&mut self.frame_yield_requested)
     }
 
+    fn native_frame_history(&self, count: usize) -> Option<Vec<i32>> {
+        (count <= 600).then(|| {
+            self.native_system
+                .frame_history
+                .iter()
+                .copied()
+                .chain(std::iter::repeat(0))
+                .take(count)
+                .collect()
+        })
+    }
+
+    fn secure_random_u32(&mut self) -> crate::native_vm::VmResult<u32> {
+        #[cfg(not(any(target_os = "vita", target_os = "horizon")))]
+        {
+            let mut bytes = [0; 4];
+            getrandom::fill(&mut bytes).map_err(|error| {
+                crate::native_vm::VmError::Runtime(format!("OS random source: {error}"))
+            })?;
+            return Ok(u32::from_ne_bytes(bytes));
+        }
+        #[cfg(any(target_os = "vita", target_os = "horizon"))]
+        Err(crate::native_vm::VmError::Runtime(
+            "secure random source is unavailable on this host".into(),
+        ))
+    }
+
     fn call_sys(
         &mut self,
         call: &mut crate::native_vm::NativeCallFrame,
@@ -23955,9 +24987,11 @@ impl crate::native_vm::SysApi for RuntimeTraceApi {
                 )));
             }
             (0x80, 0x41) => {
-                let program = stack.pop();
-                tracing::info!(program = ?program.as_ref().map(value_summary), "FreeProgram");
-                return Ok(crate::native_vm::Value::None);
+                // The VM owns the LIFO module chain and its root-release
+                // error. Never consume a phantom host-side argument here.
+                return Err(crate::native_vm::VmError::Runtime(
+                    "FreeLastProgramModule bypassed VM module dispatch".into(),
+                ));
             }
             (0x80, 0x34) => {
                 // Target sub_4888C0 pops file first and archive/root second,
@@ -24046,14 +25080,9 @@ impl crate::native_vm::SysApi for RuntimeTraceApi {
             }
             (0x80, 0x2a) => {
                 let path = pop_string_value(stack).unwrap_or_else(|| "<unknown>".into());
-                if let Some(policy) = file_policy::active() {
-                    return Ok(crate::native_vm::Value::Int(i32::from(
-                        policy.metadata(&path).is_some_and(|m| m.is_dir()),
-                    )));
-                }
-                let exists = runtime_file_path_from_root(&self.manager, &self.native_root, &path)
-                    .map(|path| path.is_dir())
-                    .unwrap_or(false);
+                // Match validated user-root checks (80:68) and directory
+                // creation: resource/UserData is a private storage alias.
+                let exists = crate::native_vm::SysApi::directory_exists(self, &path);
                 tracing::info!(path, exists, "DirectoryExists");
                 return Ok(crate::native_vm::Value::Int(i32::from(exists)));
             }
@@ -24230,7 +25259,7 @@ impl crate::native_vm::SysApi for RuntimeTraceApi {
                         "無効なピクセルモードが設定されました".into(),
                     ));
                 }
-                if !(0..8).contains(&mode) {
+                if mode < 0 || mode as usize >= self.display_mode_limit {
                     return Err(crate::native_vm::VmError::Runtime(
                         "無効なスクリーンサイズが設定されました".into(),
                     ));
@@ -24521,7 +25550,7 @@ impl crate::native_vm::SysApi for RuntimeTraceApi {
             stack_top = ?stack_top_summary(stack, 8),
             "runtime syscall stub"
         );
-        Ok(crate::native_vm::Value::None)
+        Err(crate::native_vm::VmError::UnknownDispatch { group, id })
     }
 }
 
@@ -24535,6 +25564,34 @@ impl crate::native_vm::GraphApi for RuntimeTraceApi {
         color: i32,
     ) -> bool {
         self.draw_window_item_grid(window, items, columns, centered, color)
+    }
+
+    fn poll_native_graph_result(
+        &mut self,
+        opcode: crate::native_vm::NativeOpcode,
+        cancel: bool,
+    ) -> crate::native_vm::VmResult<Option<i32>> {
+        if (opcode.group, opcode.id) != (0x91, 0xf8) {
+            return Err(crate::native_vm::VmError::UnknownDispatch {
+                group: opcode.group,
+                id: opcode.id,
+            });
+        }
+        if cancel {
+            self.close_mf_movie();
+            return Ok(Some(-1));
+        }
+        Ok(
+            if self
+                .version_graph
+                .mf_handle
+                .is_some_and(|h| self.graph_effects.state(h) == 0)
+            {
+                None
+            } else {
+                Some(0)
+            },
+        )
     }
 
     fn native_graph_procedure_is_active(&self, opcode: crate::native_vm::NativeOpcode) -> bool {
@@ -24861,6 +25918,66 @@ impl crate::native_vm::GraphApi for RuntimeTraceApi {
         true
     }
 
+    fn register_decoded_graph_bitmap(
+        &mut self,
+        bitmap: i32,
+        bytes: &[u8],
+        namespace: Option<&str>,
+        name: Option<&str>,
+        bg_store: bool,
+    ) -> i32 {
+        self.register_decoded_bitmap(bitmap, bytes, namespace, name, bg_store)
+    }
+
+    fn text_line_height_record(&mut self, token: i32, drain: bool) -> Vec<i32> {
+        self.get_line_height_record(token, drain)
+    }
+    fn configure_icon_path(
+        &mut self,
+        args: [i32; 10],
+        points: &[[i32; 4]],
+    ) -> crate::native_vm::VmResult<i32> {
+        self.configure_eex_icon_path(args, points)
+    }
+
+    fn pointer_graph_object(&self) -> Option<(i32, i32)> {
+        if !self.window_restored || self.window_iconic {
+            return None;
+        }
+        for &object in self.display_tree.chain_handles().iter().rev() {
+            if !self
+                .graph_object_enabled
+                .get(&object)
+                .copied()
+                .unwrap_or(true)
+            {
+                continue;
+            }
+            let scope = self.graph90_native_sort_key(object).unwrap_or_default();
+            if !native_pointer_scope_eligible_at(self, scope as i32, self.mouse_pos) {
+                continue;
+            }
+            if self.graph_object_pointer_hit(object).unwrap_or(0) == 0 {
+                continue;
+            }
+            let kind = match self.display_tree.kind(object)? {
+                NativeDisplayKind::Sprite => 2,
+                NativeDisplayKind::Filter => 7,
+                NativeDisplayKind::Map => 1,
+                NativeDisplayKind::Effector => 6,
+                NativeDisplayKind::Window => 3,
+                NativeDisplayKind::Landscape => 8,
+                NativeDisplayKind::ParticleScreen => 4,
+                NativeDisplayKind::RainScreen => 5,
+                NativeDisplayKind::Knob => 9,
+                NativeDisplayKind::Group => 10,
+                _ => 1,
+            };
+            return Some((object, kind));
+        }
+        None
+    }
+
     fn query_graph_window_valid_region(&self, window: i32) -> Option<[i32; 4]> {
         if !Self::is_window_surface_handle(window) {
             return None;
@@ -24873,6 +25990,36 @@ impl crate::native_vm::GraphApi for RuntimeTraceApi {
                 surface.valid_bottom,
             ]
         })
+    }
+
+    fn blend_native_bitmap_sources(
+        &mut self,
+        destination: i32,
+        first: i32,
+        second: i32,
+        mix: i32,
+        transparency: i32,
+    ) -> crate::native_vm::VmResult<()> {
+        if self.bitmap_formats.get(&destination) != Some(&1)
+            || self.bitmap_formats.get(&first) != Some(&2)
+            || self.bitmap_formats.get(&second) != Some(&2)
+        {
+            return Ok(());
+        }
+        let (Some(mut d), Some(a), Some(b)) = (
+            self.graph_bitmap_image(destination),
+            self.graph_bitmap_image(first),
+            self.graph_bitmap_image(second),
+        ) else {
+            return Ok(());
+        };
+        bitmap_blend::blend_two_sources_over_rgb(&mut d, &a, &b, mix, transparency);
+        if !self.replace_graph_bitmap_pixels(destination, d) {
+            return Err(crate::native_vm::VmError::Runtime(
+                "native bitmap blend destination was retired".into(),
+            ));
+        }
+        Ok(())
     }
 
     fn query_graph91_object_property(
@@ -24890,6 +26037,50 @@ impl crate::native_vm::GraphApi for RuntimeTraceApi {
         }
         let (x, y) = self.graph_native_composite_position(object)?;
         Some([x, y])
+    }
+
+    fn register_named_font_transform(
+        &mut self,
+        name: &str,
+        values: [i32; 5],
+    ) -> crate::native_vm::VmResult<()> {
+        self.register_native_named_font_transform(name, values)
+    }
+    fn set_named_font_tracking(
+        &mut self,
+        name: &str,
+        tracking: i32,
+    ) -> crate::native_vm::VmResult<()> {
+        if !(-65536..=65536).contains(&tracking) {
+            return Err(crate::native_vm::VmError::Runtime(format!(
+                "無効な値 [ {} ] が指定されました",
+                tracking as f32 / 65536.0
+            )));
+        }
+        let transform = self
+            .graph91_font_transforms
+            .get_mut(&name.to_ascii_lowercase())
+            .ok_or_else(|| {
+                crate::native_vm::VmError::Runtime(format!(
+                    "未登録のフォント名 [ {name} ] が指定されました"
+                ))
+            })?;
+        transform.tracking = tracking;
+        Ok(())
+    }
+
+    fn window_last_text_extent(&self, window: i32) -> Option<i32> {
+        if self.display_tree.kind(window)
+            != Some(crate::native_app::display_tree::NativeDisplayKind::Window)
+        {
+            return None;
+        }
+        self.graph_surfaces.get(&window)?;
+        Some(
+            self.surface_text_states
+                .get(&window)
+                .map_or(0, |state| state.last_text_extent),
+        )
     }
 
     fn native_font_registered(&self, font: i32) -> bool {
@@ -25247,6 +26438,9 @@ impl crate::native_vm::GraphApi for RuntimeTraceApi {
         object: i32,
         mut descriptor: crate::native_vm::GraphInputDescriptor,
     ) {
+        self.version_graph
+            .icon_paths
+            .retain(|(owner, _, _), _| *owner != object);
         if descriptor.compact_uses_valid_region_origin {
             for region in &mut descriptor.regions {
                 if region.width > 0 && region.height > 0 {
@@ -25656,6 +26850,9 @@ impl crate::native_vm::GraphApi for RuntimeTraceApi {
         &mut self,
         call: &mut crate::native_vm::NativeCallFrame,
     ) -> crate::native_vm::VmResult<crate::native_vm::Value> {
+        if let Some(result) = self.call_version_graph(call) {
+            return result;
+        }
         if let Some(result) = self.dispatch_native_graph(call) {
             return result;
         }
@@ -25863,8 +27060,7 @@ impl crate::native_vm::GraphApi for RuntimeTraceApi {
             (0x90, 0xf1) => {
                 // sub_480260 releases the process owned by the global
                 // DirectShow movie slot.
-                self.graph_effects.stop_all_movies();
-                self.global_movie_handle = None;
+                self.close_global_movie();
                 tracing::info!("MovieStop");
             }
             (0x90, 0xf2) => {
@@ -26596,8 +27792,15 @@ impl crate::native_vm::GraphApi for RuntimeTraceApi {
                             rgba,
                         },
                     );
-                    self.graph_resources
-                        .insert(bitmap_id, RuntimeGraphResource::whole(key));
+                    // Clear/fill mutates the existing bitmap, unlike 90:11.
+                    // Keep its generation so live sprite bindings remain valid.
+                    if let Some(binding) = self.graph_resources.get_mut(&bitmap_id) {
+                        binding.key = key;
+                        binding.source_rect = None;
+                    } else {
+                        self.graph_resources
+                            .insert(bitmap_id, RuntimeGraphResource::whole(key));
+                    }
                     if let Some(surface) = self.graph_surfaces.get_mut(&bitmap_id) {
                         surface.resource_id = Some(bitmap_id);
                     }
@@ -27353,8 +28556,10 @@ impl crate::native_vm::GraphApi for RuntimeTraceApi {
             }
             (0x90, 0xdd) => {
                 let value = pop_int_value(stack).unwrap_or_default();
-                let previous = std::mem::replace(&mut self.graph_knob_input_mode, value);
-                tracing::info!(value, previous, "GraphSwapKnobInputMode");
+                // SenmomoFD 48A050 -> 46CC70/46CC60: preserve and return
+                // the previous integer; only WM_MOUSEWHEEL tests this gate.
+                let previous = std::mem::replace(&mut self.graph_knob_wheel_mode, value);
+                tracing::info!(value, previous, "GraphSwapKnobWheelMode");
                 return Ok(crate::native_vm::Value::Int(previous));
             }
             (0x90, 0xde) => {
@@ -27902,61 +29107,15 @@ impl crate::native_vm::GraphApi for RuntimeTraceApi {
                         [int(4), int(3), int(2), int(1), int(0)],
                     );
                 }
-                let state = self.window_text_state(Some(target));
-                if let Some(text) = text.as_deref().filter(|text| !text.is_empty()) {
-                    // sub_486500 and the message procedure both enter
-                    // sub_42B710, so direct formatted draws must preserve the
-                    // same ruby spans and kinsoku wrapping as 92:90.
-                    if self.graph_surfaces.contains_key(&target)
-                        && self.message_text_node_is_free_for(target)
-                    {
-                        // Into the window's text bitmap, at its cursor, as
-                        // a message draws. It is laid out on the window's
-                        // page: from a cursor in mid-line it goes on to the
-                        // window's right edge and wraps to its left edge.
-                        let drawn = self.draw_window_text_at_once(target, text);
-                        self.surface_text_buffers
-                            .entry(target)
-                            .or_default()
-                            .push_str(&drawn);
-                    } else {
-                        let parsed = text::parse_and_wrap_styled_message(text, &state);
-                        self.surface_text_buffers
-                            .entry(target)
-                            .or_default()
-                            .push_str(&parsed.text);
-                        let x = state.x;
-                        let y = state.y;
-                        // The window composes this text into its own
-                        // surface, so it is drawn at the window's priority,
-                        // as a 92:90 message is. The handle is not a
-                        // priority: 0xB0000000 put the text under the whole
-                        // scene.
-                        let z = self
-                            .graph_surfaces
-                            .get(&target)
-                            .map(|surface| surface.z)
-                            .unwrap_or(target);
-                        self.store_bitmap_text_run(
-                            target,
-                            RuntimeTextNode {
-                                text: parsed.text.clone(),
-                                enabled: true,
-                                owner_object: Some(target),
-                                screen_attached: false,
-                                target_surface: Some(target),
-                                x,
-                                y,
-                                size: state.font_size,
-                                line_height: state.line_height,
-                                formatted_layout: true,
-                                color: state.color,
-                                z,
-                                ruby_spans: parsed.ruby_spans,
-                                style_spans: parsed.style_spans,
-                            },
-                        );
-                    }
+                // 444EA0 -> 416C30: final formatter flag reserves one
+                // font cell for centred text, including immediate skip draws.
+                self.surface_text_states
+                    .entry(target)
+                    .or_default()
+                    .alignment_reserve_cell =
+                    args.get(5).map(value_to_i32).unwrap_or_default() != 0;
+                if let Some(text) = text.as_deref() {
+                    self.draw_formatted_window_text(target, text);
                 }
                 tracing::debug!(
                     target,
@@ -28022,6 +29181,13 @@ impl crate::native_vm::GraphApi for RuntimeTraceApi {
                         [int(8), int(7), int(6), int(5), int(4)],
                     );
                 }
+                // Itsusora 444D60 -> 44B9A0 -> 41DAA0: the operand
+                // after the ruby controls reserves the alignment end cell.
+                self.surface_text_states
+                    .entry(target)
+                    .or_default()
+                    .alignment_reserve_cell =
+                    args.get(9).map(value_to_i32).unwrap_or_default() != 0;
                 if let Some(text) = text.as_ref() {
                     // sub_4863E0 always enters sub_491220 for a valid
                     // CDspObjWindow. The target has no title-departure or
@@ -28172,6 +29338,7 @@ impl crate::native_vm::GraphApi for RuntimeTraceApi {
                             kinsoku,
                             color,
                             shadow,
+                            font,
                         )
                         .unwrap_or((1, (x, y))),
                     None => (1, (x, y)),
@@ -28435,6 +29602,18 @@ impl crate::native_vm::GraphApi for RuntimeTraceApi {
                 let y = pop_int_value(stack).unwrap_or_default();
                 let x = pop_int_value(stack).unwrap_or_default();
                 let mode = pop_int_value(stack).unwrap_or_default();
+                if self.bp_profile == crate::native_vm::NativeAbiProfile::ModernFused {
+                    // NSM 1.686.4 sub_1400721C0 / Triple 1.687
+                    // sub_140071F90 return 0x80000008; their BP wrappers
+                    // translate it to success 1. An unsigned mode >4 resets
+                    // mode to zero while retaining the previous coordinates.
+                    if mode as u32 > 4 {
+                        self.graph_defaults.caret_mode = 0;
+                    } else {
+                        self.graph_defaults.configure_caret_position(mode, x, y);
+                    }
+                    return Ok(crate::native_vm::Value::Int(1));
+                }
                 self.graph_defaults.configure_caret_position(mode, x, y);
                 tracing::info!(mode, x, y, "GraphSetCaretPosition");
             }
@@ -28644,6 +29823,7 @@ impl crate::native_vm::GraphApi for RuntimeTraceApi {
                     stack_top = ?stack_top_summary(stack, 8),
                     "runtime graphcall stub"
                 );
+                return Err(crate::native_vm::VmError::UnknownDispatch { group, id });
             }
         }
         Ok(crate::native_vm::Value::None)
@@ -29063,6 +30243,14 @@ impl crate::native_vm::SoundApi for RuntimeTraceApi {
         self.query_native_cd_audio_mode()
     }
 
+    fn native_child_window_property(
+        &self,
+        handle: i32,
+        property: i32,
+    ) -> std::result::Result<i32, i32> {
+        self.native_child_property(handle, property)
+    }
+
     fn current_user_text(&self) -> String {
         self.native_user.text.clone()
     }
@@ -29256,7 +30444,7 @@ impl crate::native_vm::SoundApi for RuntimeTraceApi {
             stack_top = ?stack_top_summary(stack, 8),
             "runtime sndcall stub"
         );
-        Ok(crate::native_vm::Value::None)
+        Err(crate::native_vm::VmError::UnknownDispatch { group, id })
     }
 }
 
@@ -29723,7 +30911,7 @@ fn windows_wildcard_matches(pattern: &str, value: &str) -> bool {
 fn runtime_file_attributes(manager: &ResourceManager, file: &str) -> i32 {
     if let Some(policy) = file_policy::active() {
         return policy
-            .metadata(file)
+            .user_metadata(file)
             .map(|m| (if m.readonly() { 1 } else { 0 }) | if m.is_dir() { 0x10 } else { 0x20 })
             .unwrap_or(-1);
     }
@@ -29940,7 +31128,7 @@ fn run_headless(
         .map(|runtime| runtime.api.total_native_calls)
         .unwrap_or_default();
     let mut next_frame = Instant::now();
-    let mut last_composition: Option<snapshot::RuntimeFrameComposition> = None;
+    let mut presenter = presentation::CpuPresenter::default();
     let mut runtime_failure = None;
     for frame in 0..max_frames {
         if let Some(runtime) = runtime.as_mut() {
@@ -29968,21 +31156,9 @@ fn run_headless(
                 .total_native_calls
                 .wrapping_sub(previous_native_calls);
             previous_native_calls = runtime.api.total_native_calls;
-            // Headless differs from the window frontend only at final
-            // presentation: every logical frame still traverses the shared
-            // render tree and produces a complete offscreen framebuffer.
-            // sub_462100: a frame that is not due shows the last one again.
-            let frame_composition = if runtime.api.take_present_due() || last_composition.is_none()
-            {
-                runtime.api.performance_profile.begin();
-                let composition =
-                    snapshot::compose_runtime_frame_with_diagnostics(&runtime.api, true);
-                runtime.api.performance_profile.end(true);
-                last_composition = Some(composition.clone());
-                composition
-            } else {
-                last_composition.clone().expect("checked above")
-            };
+            // Use the same scene/sample scheduling as GPU frontends; a global
+            // movie never causes a traversal of the suspended display tree.
+            let frame_composition = presenter.frame(&mut runtime.api).clone();
             if snapshot_frames.contains(&frame)
                 && let Some(base_path) = snapshot_path.as_ref()
             {

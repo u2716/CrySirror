@@ -1,4 +1,5 @@
-// Derived from liulifox233/Kirakira (AGPL-3.0-or-later); see LICENSE.
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. A copy is available at https://mozilla.org/MPL/2.0/.
 #![forbid(unsafe_code)]
 
 //! TJS2 compatibility crate.

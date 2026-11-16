@@ -22,6 +22,37 @@ pub enum ScanlineMath {
     ConstantSeparate {
         weights: [u16; 2],
     },
+    /// Multiply stored RGB by independent low-word weights, add with16-bit
+    /// wrapping, then shift once by8. Coverage is ignored; alpha is retained.
+    ConstantSummed {
+        weights: [u16; 2],
+    },
+    /// Skip zero coverage; otherwise multiply it by a wrapping32-bit weight,
+    /// take bits8..15, and copy at255. Partial RGB uses that byte and its255
+    /// complement, with one final shift after the16-bit wrapping sum.
+    CoverageSummed {
+        weight: u32,
+    },
+    /// Scale coverage with a low-word product /256, use its wrapping
+    /// complement, sum low-word RGB products before one /256 truncation.
+    /// Every coverage value participates, including0 and255; alpha is retained.
+    CoverageRawSummed {
+        weight: u16,
+        complement: u16,
+    },
+    /// Low-word scaled coverage and explicit complement with separate product floors.
+    CoverageWordSeparate {
+        weight: u16,
+        complement: u16,
+        opaque_copy: bool,
+    },
+    /// Skip original coverage0. Scale coverage by a wrapping32-bit weight and
+    /// shift by8; the complete result255 copies RGB. Otherwise use the low
+    /// bytes of that result and256-result as weights, floor each product by256
+    /// independently and saturate their sum. A scaled result0 paints black.
+    CoverageByteSeparate {
+        weight: u32,
+    },
 }
 impl ScanlineMath {
     fn validate(self) -> Result<()> {
@@ -30,8 +61,69 @@ impl ScanlineMath {
         }
         Ok(())
     }
-    fn pixel(self, d: &mut [u8], s: &[u8]) {
+    pub(crate) fn pixel(self, d: &mut [u8], s: &[u8]) {
+        if let Self::CoverageByteSeparate { weight } = self {
+            if s[3] == 0 {
+                return;
+            }
+            let coverage = u32::from(s[3]).wrapping_mul(weight) >> 8;
+            if coverage == 255 {
+                d[..3].copy_from_slice(&s[..3]);
+                return;
+            }
+            let a = u16::from(coverage as u8);
+            let b = u16::from(256u32.wrapping_sub(coverage) as u8);
+            for c in 0..3 {
+                let source = u16::from(s[c]) * a >> 8;
+                let destination = u16::from(d[c]) * b >> 8;
+                d[c] = source.saturating_add(destination).min(255) as u8;
+            }
+            return;
+        }
+        let summed = match self {
+            Self::ConstantSummed { weights } => Some(weights),
+            Self::CoverageRawSummed { weight, complement } => {
+                let coverage = u16::from(s[3]).wrapping_mul(weight) >> 8;
+                Some([coverage, complement.wrapping_sub(coverage)])
+            }
+            Self::CoverageSummed { weight } => {
+                if s[3] == 0 {
+                    return;
+                }
+                let a = (u32::from(s[3]).wrapping_mul(weight) >> 8) as u8;
+                if a == 255 {
+                    d[..3].copy_from_slice(&s[..3]);
+                    return;
+                }
+                Some([u16::from(a), u16::from(a ^ 255)])
+            }
+            _ => None,
+        };
+        if let Some([a, b]) = summed {
+            for c in 0..3 {
+                d[c] = (u16::from(s[c])
+                    .wrapping_mul(a)
+                    .wrapping_add(u16::from(d[c]).wrapping_mul(b))
+                    >> 8) as u8;
+            }
+            return;
+        }
         let (a, b) = match self {
+            Self::CoverageWordSeparate {
+                weight,
+                complement,
+                opaque_copy,
+            } => {
+                if s[3] == 0 {
+                    return;
+                }
+                let coverage = u16::from(s[3]).wrapping_mul(weight) >> 8;
+                if opaque_copy && coverage == 255 {
+                    d[..3].copy_from_slice(&s[..3]);
+                    return;
+                }
+                (coverage, complement.wrapping_sub(coverage))
+            }
             Self::Stored { math } => {
                 math.pixel(d, s);
                 return;
@@ -51,6 +143,10 @@ impl ScanlineMath {
                 (a, a ^ 255)
             }
             Self::ConstantSeparate { weights } => (weights[0], weights[1]),
+            Self::ConstantSummed { .. }
+            | Self::CoverageRawSummed { .. }
+            | Self::CoverageSummed { .. }
+            | Self::CoverageByteSeparate { .. } => unreachable!(),
         };
         for c in 0..3 {
             let source = u16::from(s[c]).wrapping_mul(a) >> 8;
@@ -127,6 +223,12 @@ impl FixedScanlines {
         Ok(spec)
     }
     pub fn validate(&self) -> Result<()> {
+        self.validate_phase(false)
+    }
+    pub(crate) fn validate_wrapping32(&self) -> Result<()> {
+        self.validate_phase(true)
+    }
+    fn validate_phase(&self, wrapping32: bool) -> Result<()> {
         ensure!(self.spans.len() <= 16384, "fixed scanline span budget");
         let mut work = 0u64;
         for span in &self.spans {
@@ -142,6 +244,14 @@ impl FixedScanlines {
                 .context("fixed scanline work overflow")?;
             ensure!(work <= MAX_EFFECT_PIXELS * 4, "fixed scanline work budget");
             for axis in 0..2 {
+                if wrapping32 {
+                    ensure!(
+                        i32::try_from(span.source_q16[axis]).is_ok()
+                            && i32::try_from(span.source_step_q16[axis]).is_ok(),
+                        "wrapping scanline source word bounds"
+                    );
+                    continue;
+                }
                 let end = span.source_step_q16[axis]
                     .checked_mul(i64::from(span.destination[2].saturating_sub(1)))
                     .and_then(|v| span.source_q16[axis].checked_add(v))
@@ -163,7 +273,24 @@ impl FixedScanlines {
         source: &ImageSurface,
         check: &dyn Fn() -> Result<()>,
     ) -> Result<ImageSurface> {
-        self.validate()?;
+        self.apply_phase(destination, source, check, false)
+    }
+    pub(crate) fn apply_wrapping32(
+        &self,
+        destination: &ImageSurface,
+        source: &ImageSurface,
+        check: &dyn Fn() -> Result<()>,
+    ) -> Result<ImageSurface> {
+        self.apply_phase(destination, source, check, true)
+    }
+    fn apply_phase(
+        &self,
+        destination: &ImageSurface,
+        source: &ImageSurface,
+        check: &dyn Fn() -> Result<()>,
+        wrapping32: bool,
+    ) -> Result<ImageSurface> {
+        self.validate_phase(wrapping32)?;
         for image in [destination, source] {
             image.validate()?;
             ensure!(
@@ -182,8 +309,19 @@ impl FixedScanlines {
             let left = 0.max(-dx);
             let right = width.min(i64::from(destination.width) - dx);
             for x in left..right {
-                let sx = (span.source_q16[0] + span.source_step_q16[0] * x) >> 16;
-                let sy = (span.source_q16[1] + span.source_step_q16[1] * x) >> 16;
+                let phase = |axis: usize| {
+                    if wrapping32 {
+                        i64::from(
+                            (span.source_q16[axis] as i32).wrapping_add(
+                                (span.source_step_q16[axis] as i32).wrapping_mul(x as i32),
+                            ) >> 16,
+                        )
+                    } else {
+                        (span.source_q16[axis] + span.source_step_q16[axis] * x) >> 16
+                    }
+                };
+                let sx = phase(0);
+                let sy = phase(1);
                 if sx < 0
                     || sy < 0
                     || sx >= i64::from(source.width)

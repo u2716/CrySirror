@@ -6,7 +6,7 @@ Status: implemented bounded HXV4/bootstrap profile; other protection families re
 ## Follow-up bootstrap boundary
 
 The validated native HXV4 bootstrap now proceeds beyond the initial linkZ
-frontier; see [bootstrap research updates](../krkr-bootstrap-gap.md) and dated
+frontier; see [native API reference](../native-api/krkr.md) and dated
 [STATUS.md](../../STATUS.md) entries. This does not complete arbitrary protection
 callbacks; the interpreted/lifted approach in ADR 0097 remains proposed.
 
@@ -120,7 +120,7 @@ path and container origin without a VM.
 The actual embedded startup now passes its archive-directory request and reaches
 Plugins.linkZ, a separate compressed-PE/bootstrap registration protocol. It is not
 aliased to Plugins.link or replaced by a success stub. See
-krkr-bootstrap-gap.md for signature and CompoundStorage requirements; neither
+[the native API reference](../native-api/krkr.md) and `crysirror_resource::compound` for the admitted signature and CompoundStorage requirements; neither
 resource authentication nor a rendered sentinel is a completed native boot.
 
 Compilation, unit/contract behavior, external 32-sample validation and actual

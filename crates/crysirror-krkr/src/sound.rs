@@ -1,6 +1,6 @@
 // Copyright (c) 2026 CrySirror contributors.
-// Distributed under the GNU Affero General Public License, version 3 or
-// (at your option) any later version, https://www.gnu.org/licenses/agpl-3.0.html.
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. A copy is available at https://mozilla.org/MPL/2.0/.
 //! Native sound declarations/continuations over shared prepared audio resources.
 use crate::natives::*;
 use crysirror_core::{
@@ -35,6 +35,10 @@ pub struct Buffer {
     /// Script-set playback frequency (krkrz `frequency`), applied at play as
     /// a rate relative to the source sample rate.
     frequency: Option<i64>,
+    /// The `filters` chain the open resource was prepared with.
+    filtered: Vec<WaveFilter>,
+    /// wumultitrack stems the open resource was prepared with.
+    multitrack: Option<std::sync::Arc<[crysirror_core::service::MultiTrackStem]>>,
 }
 impl Buffer {
     fn group(&self) -> String {
@@ -91,13 +95,17 @@ fn buffer(rt: &Rt, t: Option<ObjectHandle>) -> crysirror_tjs2::Result<(ObjectHan
             .ok_or_else(|| err("WaveSoundBuffer not constructed"))?,
     ))
 }
-fn control(rt: &mut Rt, r: AudioRequest) -> crysirror_tjs2::Result<()> {
+pub(crate) fn control(rt: &mut Rt, r: AudioRequest) -> crysirror_tjs2::Result<()> {
     let s = &mut rt.host_mut().sounds;
     if s.ops.len() >= 4096 {
         return Err(err("native audio operation budget"));
     }
     s.ops.push_back(Op::Control(r));
     Ok(())
+}
+/// The engine channel of an open WaveSoundBuffer.
+pub(crate) fn channel(rt: &Rt, object: usize) -> Option<u32> {
+    rt.host().sounds.buffers.get(&object).map(|b| b.channel)
 }
 /// Queue an operation that needs host completion. At a resumable boundary the
 /// VM waits for it; inside a non-resumable callback (input events) it is
@@ -127,27 +135,19 @@ fn notify(rt: &mut Rt, t: Option<ObjectHandle>, name: &str) -> crysirror_tjs2::R
     }
     rt.call_object_method(h, name, vec![])
 }
-/// Filters change the decoded signal; one that is not an identity must be
-/// applied by a shared DSP stage, which is not mapped yet.
+/// Filters are prepared into the resource at open (the native chain is
+/// rebuilt then). A chain changed after open would play unfiltered.
 fn active_filter_check(rt: &Rt, h: crysirror_tjs2::runtime::ObjectHandle) -> crysirror_tjs2::Result<()> {
-    let Some(list) = rt.object_member(h, "filters").object_handle() else {
+    let chain = crate::wf_plugins::chain(rt, h)?;
+    let b = &rt.host().sounds.buffers[&h.0];
+    if b.opening || chain == b.filtered {
         return Ok(());
-    };
-    for f in rt.array_elements(list).unwrap_or(&[]).to_vec() {
-        let Some(f) = crate::natives::object_arg(&f) else { continue };
-        let identity = matches!(rt.object_member(f, "__vocoder"), Variant::Integer(1))
-            && rt.object_member(f, "pitch").to_real().unwrap_or(0.) == 1.
-            && rt.object_member(f, "time").to_real().unwrap_or(0.) == 1.;
-        if !identity {
-            return Err(unsupported(
-                "WaveSoundBuffer filter",
-                "shared DSP stages for KiriKiri WaveFilters (phase vocoder time/pitch)",
-            ));
-        }
     }
-    Ok(())
+    Err(unsupported(
+        "WaveSoundBuffer.filters changed after open",
+        "re-preparing an open sound resource with a new filter chain",
+    ))
 }
-
 /// `WaveSoundBuffer.PhaseVocoder`: krkrz's built-in WaveFilter parameters.
 fn install_phase_vocoder(rt: &mut Rt, wave: crysirror_tjs2::runtime::ObjectHandle) {
     let c = rt.alloc_native_constructor(|rt: &mut Rt, this: Option<crysirror_tjs2::runtime::ObjectHandle>, _| {
@@ -156,10 +156,16 @@ fn install_phase_vocoder(rt: &mut Rt, wave: crysirror_tjs2::runtime::ObjectHandl
             .filter(|h| *h != rt.global_handle())
             .unwrap_or_else(|| rt.alloc_ordinary_object());
         rt.add_object_class_info(h, "PhaseVocoder");
+        // Instances resolve `window`/`overlap` through the class object.
+        let class = rt.object_member(rt.global_handle(), "WaveSoundBuffer").object_handle()
+            .and_then(|w| rt.object_member(w, "PhaseVocoder").object_handle());
+        if let Some(class) = class.filter(|c| *c != h && rt.object_super_class(h).is_none()) {
+            rt.set_object_super_class(h, class);
+        }
         rt.set_object_member(h, "__vocoder", Variant::Integer(1));
-        // krkrz defaults: window 4096, overlap 8, pitch 1, time 1.
+        // krkrz defaults: window 4096, overlap 0 (automatic), pitch 1, time 1.
         rt.set_object_member(h, "__window", Variant::Integer(4096));
-        rt.set_object_member(h, "__overlap", Variant::Integer(8));
+        rt.set_object_member(h, "__overlap", Variant::Integer(0));
         rt.set_object_member(h, "pitch", Variant::Real(1.));
         rt.set_object_member(h, "time", Variant::Real(1.));
         Ok(Variant::Object(h))
@@ -186,8 +192,8 @@ fn install_phase_vocoder(rt: &mut Rt, wave: crysirror_tjs2::runtime::ObjectHandl
         |rt, t, v| {
             let h = this_of(rt, t, "PhaseVocoder.overlap")?;
             let n = v.to_integer()?;
-            if !matches!(n, 2 | 4 | 8 | 16 | 32) {
-                return Err(err("PhaseVocoder.overlap must be 2, 4, 8, 16 or 32"));
+            if !matches!(n, 0 | 2 | 4 | 8 | 16 | 32) {
+                return Err(err("PhaseVocoder.overlap must be 0, 2, 4, 8, 16 or 32"));
             }
             rt.set_object_member(h, "__overlap", Variant::Integer(n));
             Ok(())
@@ -234,6 +240,8 @@ pub fn install(rt: &mut Rt) {
             sli: None,
             opening: false,
             frequency: None,
+            filtered: vec![],
+            multitrack: None,
         };
         let group = b.group();
         rt.host_mut().sounds.buffers.insert(h.0, b);
@@ -256,6 +264,9 @@ pub fn install(rt: &mut Rt) {
         )?;
         Ok(Variant::Void)
     });
+    rt.register_object_native_property(c,"useVisBuffer",
+        |rt,t|{let h=this_of(rt,t,"WaveSoundBuffer.useVisBuffer")?;Ok(Variant::Integer(i64::from(rt.object_member(h,"__wave_vis_buffer").is_truthy())))},
+        |rt,t,v|{let h=this_of(rt,t,"WaveSoundBuffer.useVisBuffer")?;rt.set_object_member(h,"__wave_vis_buffer",Variant::Integer(i64::from(v.is_truthy())));Ok(())});
     install_phase_vocoder(rt, c);
     methods(
         rt,
@@ -276,6 +287,31 @@ pub fn install(rt: &mut Rt) {
                         "audio preparation from the Save mount",
                     ));
                 }
+                // The filter chain is read now, as the native open connects it.
+                let chain = crate::wf_plugins::chain(rt, h)?;
+                rt.host_mut().sounds.buffers.get_mut(&h.0).unwrap().filtered = chain;
+                rt.host_mut().multitrack.retire(h.0);
+                if crate::multitrack::handles(rt, &name) {
+                    let d = crate::multitrack::describe(rt, &name)?;
+                    if !rt.host().sounds.buffers[&h.0].filtered.is_empty() {
+                        return Err(unsupported(
+                            "WaveSoundBuffer.filters on multi-track music",
+                            "an unfiltered multi-track resource",
+                        ));
+                    }
+                    let b = rt.host_mut().sounds.buffers.get_mut(&h.0).unwrap();
+                    b.sli = None;
+                    b.multitrack = Some(d.stems.clone().into());
+                    crate::multitrack::opened(rt, h.0, &name, &d)?;
+                    return park(
+                        rt,
+                        Op::Open {
+                            object: h.0,
+                            path: VfsPath::new(Mount::Asset, &d.main).map_err(err)?,
+                        },
+                    );
+                }
+                rt.host_mut().sounds.buffers.get_mut(&h.0).unwrap().multitrack = None;
                 let storage = rt.host().storage()?;
                 let path = storage
                     .resolve(&name)
@@ -308,7 +344,9 @@ pub fn install(rt: &mut Rt) {
                     return Err(err("WaveSoundBuffer.play requires open"));
                 }
                 active_filter_check(rt, h)?;
-                park(rt, Op::Play(h.0))
+                let result = park(rt, Op::Play(h.0))?;
+                crate::multitrack::replay(rt, h.0)?;
+                Ok(result)
             }),
             ("stop", |rt, t, _| {
                 let (h, b) = buffer(rt, t)?;
@@ -377,6 +415,7 @@ pub fn install(rt: &mut Rt) {
             ("finalize", |rt, t, _| {
                 let (h, _) = buffer(rt, t)?;
                 rt.host_mut().sounds.invalidate(h.0);
+                rt.host_mut().get_sample.invalidate(h.0);
                 Ok(Variant::Void)
             }),
             ("onStatusChanged", |_, _, _| Ok(Variant::Void)),
@@ -661,14 +700,18 @@ pub fn drive(rt: &mut Rt, h: &mut dyn HostServices, client: ClientId) -> anyhow:
                     h.release_audio_resource(client, old)?;
                 }
                 b.status = "unload";
-                let ticket = h.begin_audio_resource(
-                    client,
-                    AudioAsset {
-                        path,
-                        frame_limit: None,
-                    },
-                    true,
-                )?;
+                let asset = AudioAsset {
+                    path,
+                    frame_limit: None,
+                };
+                let ticket = if let Some(stems) = b.multitrack.clone() {
+                    h.begin_transformed_audio_resource(client, asset, AudioResourceTransform::MultiTrack(stems))?
+                } else if b.filtered.is_empty() {
+                    h.begin_audio_resource(client, asset, true)?
+                } else {
+                    let chain = b.filtered.clone().into();
+                    h.begin_transformed_audio_resource(client, asset, AudioResourceTransform::WaveFilters(chain))?
+                };
                 rt.host_mut().sounds.pending = Some(Pending::Resource { object, ticket });
             }
             Op::Play(object) => {
@@ -723,6 +766,7 @@ pub fn drive(rt: &mut Rt, h: &mut dyn HostServices, client: ClientId) -> anyhow:
                 rt.host_mut().sounds.pending = Some(Pending::Voice { object, ticket });
             }
             Op::Release(object) => {
+                rt.host_mut().multitrack.retire(object);
                 if let Some(b) = rt.host_mut().sounds.buffers.remove(&object) {
                     h.submit_audio(
                         client,
@@ -810,4 +854,14 @@ impl Sounds {
             out.push(ObjectHandle(*object));
         }
     }
+}
+
+/// Playing source and cursor frame of a WaveSoundBuffer, `None` when stopped.
+pub(crate) fn sample_source(rt:&Rt,object:ObjectHandle)->crysirror_tjs2::Result<Option<(AudioResourceHandle,u64)>>{
+    let buffer=rt.host().sounds.buffers.get(&object.0).ok_or_else(||TjsError::runtime("getSample source is not a WaveSoundBuffer"))?;
+    Ok(if buffer.status=="play" {buffer.resource.map(|r|(r,buffer.start))}else{None})
+}
+pub(crate) fn visualization_source(rt:&Rt,object:ObjectHandle)->crysirror_tjs2::Result<(Option<AudioResourceHandle>,u64)>{
+    let buffer=rt.host().sounds.buffers.get(&object.0).ok_or_else(||TjsError::runtime("spectrum source is not a WaveSoundBuffer"))?;
+    Ok((if buffer.status=="play" && rt.object_member(object,"__wave_vis_buffer").is_truthy() {buffer.resource}else{None},buffer.start))
 }

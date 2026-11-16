@@ -6,7 +6,9 @@ pub mod graph;
 pub mod profile;
 pub mod table;
 use anyhow::{Result, ensure};
-use crossbeam_channel::{Sender, bounded};
+use crossbeam_channel::{Sender, unbounded};
+#[cfg(test)]
+use crossbeam_channel::bounded;
 use futures::channel::oneshot;
 use serde::Serialize;
 use std::{
@@ -20,6 +22,34 @@ use std::{
     task::{Context, Poll},
     thread::{self, JoinHandle},
 };
+
+thread_local! {
+    static COMPLETION_DEADLINE: Cell<Option<std::time::Instant>> = const { Cell::new(None) };
+}
+
+/// Opt an owner into a bounded completion quantum. Nested scopes can shorten
+/// the deadline but cannot extend it. Workers do not inherit this scope.
+pub fn with_completion_deadline<T>(deadline: std::time::Instant, run: impl FnOnce() -> T) -> T {
+    struct Reset(Option<std::time::Instant>);
+    impl Drop for Reset {
+        fn drop(&mut self) { COMPLETION_DEADLINE.with(|d| d.set(self.0)); }
+    }
+    let previous = COMPLETION_DEADLINE.with(|d| {
+        let previous = d.get();
+        d.set(Some(previous.map_or(deadline, |old| old.min(deadline))));
+        previous
+    });
+    let _reset = Reset(previous);
+    run()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+struct CompletionWake(thread::Thread);
+#[cfg(not(target_arch = "wasm32"))]
+impl std::task::Wake for CompletionWake {
+    fn wake(self: Arc<Self>) { self.0.unpark(); }
+    fn wake_by_ref(self: &Arc<Self>) { self.0.unpark(); }
+}
 /// Backpressure: retry submission after queued/running work completes.
 #[derive(Debug)]
 pub struct CapacityExceeded;
@@ -172,7 +202,10 @@ impl TaskPool {
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
-        let (tx, rx) = bounded::<Job>(capacity);
+        // `reserve` admits at most `capacity` outstanding jobs, so the queue
+        // needs no preallocated slots of its own (a bounded channel reserves
+        // all of them up front: ~2 MiB for a 65536-job pool).
+        let (tx, rx) = unbounded::<Job>();
         let counts = Arc::new(Counters::default());
         let mut handles = vec![];
         for index in 0..workers {
@@ -210,7 +243,7 @@ impl TaskPool {
     pub fn reserve(&self) -> Result<TaskPermit> {
         let c = &self.0.counts;
         if c.outstanding
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |n| {
                 (n < self.0.capacity).then_some(n + 1)
             })
             .is_err()
@@ -366,6 +399,28 @@ impl<T> Task<T> {
                 anyhow::bail!("task worker disconnected")
             }
         }
+    }
+    /// Outside an explicit owner quantum this is `try_take`. Inside one,
+    /// completion wakes the parked owner immediately, up to the shared
+    /// deadline. No spin, worker-side self-wait or browser blocking occurs.
+    pub fn poll_owner(&mut self) -> Result<Option<T>> {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(deadline) = COMPLETION_DEADLINE.with(Cell::get) {
+            ensure!(!WORKER.with(|v| v.get() == self.pool), "cannot block a worker on its own task pool");
+            let waker = std::task::Waker::from(Arc::new(CompletionWake(thread::current())));
+            let mut context = Context::from_waker(&waker);
+            loop {
+                match Pin::new(&mut *self).poll(&mut context) {
+                    Poll::Ready(result) => return result.map(Some),
+                    Poll::Pending => {
+                        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                        if remaining.is_zero() { return Ok(None); }
+                        thread::park_timeout(remaining);
+                    }
+                }
+            }
+        }
+        self.try_take()
     }
     pub fn wait(self) -> Result<T> {
         ensure!(

@@ -26,9 +26,6 @@ base64 = "0.22.1"
 blake2 = "=0.10.6"
 lz4_flex = "=0.11.6"
 xxhash-rust = { version = "0.8", features = ["xxh32"] }
-# Pure Rust content identification; embedded rules, no libmagic runtime/FFI.
-pure-magic = "=0.4.1"
-magic-db = "=0.6.0"
 encoding_rs = "0.8"
 quick-xml = "0.41"
 msi = "=0.10.0"
@@ -41,3 +38,14 @@ tempfile = "3.12"
 # RSA's rand_core dependency uses the browser Web Crypto entropy source.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "=0.2.17", features = ["js"] }
+
+# Horizon (Switch): the console host registers libnx's kernel entropy source.
+[target.'cfg(target_os = "horizon")'.dependencies]
+getrandom = { version = "=0.2.17", features = ["custom"] }
+
+# Pure Rust content identification; embedded rules, no libmagic runtime/FFI.
+# pure-magic unconditionally links tar/filetime/memmap2, which have no Horizon
+# or Vita backend; console FileDetector construction fails visibly instead.
+[target.'cfg(not(any(target_os = "horizon", target_os = "vita")))'.dependencies]
+pure-magic = "=0.4.1"
+magic-db = "=0.6.0"

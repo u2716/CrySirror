@@ -5,7 +5,8 @@
 //! draw here sets its own state (programs, blending, depth, stencil,
 //! viewport, textures, uniforms), so nothing depends on what vita2d or an
 //! earlier draw left behind. The shaders are the desktop renderer's WGSL
-//! ported to Cg (`shaders/*.cg`), compiled to GXP by `platform/vita/shaderc`
+//! ported to Cg (`shaders/*.cg`), compiled to GXP by
+//! `platform/psv/siglus-shaderc`
 //! and embedded: no shader compiler is needed on the device.
 
 use std::collections::HashMap;
@@ -60,7 +61,10 @@ unsafe extern "C" {
 }
 
 /// vita2d's display buffers: 960x544, rows 1024 pixels apart.
-const DISPLAY_STRIDE_PIXELS: usize = 1024;
+// libvita2d's display surface and display callback both use a 960-pixel
+// pitch. A 1024-pixel pitch belongs to other GXM sample framebuffers; using
+// it here shears captures and reads beyond the last display row.
+const DISPLAY_STRIDE_PIXELS: usize = 960;
 
 /// vita2d's own per-frame pool (its clear and clip rectangles); ours is
 /// `VERTEX_RING_BYTES`.
@@ -90,8 +94,7 @@ macro_rules! gxp {
         #[repr(C, align(16))]
         struct Aligned<T: ?Sized>(T);
         static DATA: &Aligned<[u8]> = &Aligned(*include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/src/render/vita/shaders/gxp/",
+            "shaders/gxp/",
             $name,
             ".gxp"
         )));

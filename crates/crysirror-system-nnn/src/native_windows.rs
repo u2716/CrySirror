@@ -80,6 +80,15 @@ impl WindowBinding {
             api_calls: 0,
         }
     }
+    /// CGameCallBack::GetWindowShurui (configured window variants).
+    pub(crate) fn config_variants(&self) -> Result<i32> {
+        Ok(self
+            .policy
+            .services
+            .window_setup
+            .integer(b"windowNumberConfig")?
+            .unwrap_or(1))
+    }
     pub(crate) fn detached(&self) -> Self {
         Self {
             policy: self.policy.clone(),

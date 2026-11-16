@@ -1,6 +1,6 @@
 // Copyright (c) 2026 CrySirror contributors.
-// Distributed under the GNU Affero General Public License, version 3 or
-// (at your option) any later version, https://www.gnu.org/licenses/agpl-3.0.html.
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. A copy is available at https://mozilla.org/MPL/2.0/.
 //! Self-authored native solid-brush paths -> shared vector worker -> resources.
 use crysirror_core::{service::InputFrame, state::ClientId};
 use crysirror_runtime::{AdapterRegistry, Runtime};

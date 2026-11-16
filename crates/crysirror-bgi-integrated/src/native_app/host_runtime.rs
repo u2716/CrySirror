@@ -192,6 +192,7 @@ pub struct HostRuntime {
     _writer_lock: file_policy::WriterLock,
     renderer: Option<Renderer<'static>>,
     textures: BTreeMap<String, CachedGraphTexture>,
+    presenter: frame_presenter::GpuPresenter,
     font: FontArc,
     audio: Option<AudioSystem>,
     backend: u32,
@@ -208,6 +209,8 @@ pub struct HostRuntime {
     vm_budget: crate::native_vm::VmResourceBudget,
     #[cfg(feature = "crysirror-host")]
     cpu_frame: Option<HostFrame>,
+    #[cfg(feature = "crysirror-host")]
+    cpu_presenter: presentation::CpuPresenter,
     #[cfg(feature = "crysirror-host")]
     pcm: Vec<[f32; 2]>,
     #[cfg(feature = "crysirror-host")]
@@ -226,12 +229,23 @@ impl HostRuntime {
         let policy = file_policy::FilePolicy::new(&config.resource_root, &config.user_root)?;
         Self::create_with_policy(config, bootstrap, policy)
     }
-    #[cfg(all(any(fd_policy,windows),any(feature="nfs",feature="smb")))]
-    pub fn create_with_resources(config: HostConfig, bootstrap:&str, resources:game_network::Directory)->Result<Self>{
-        let policy=file_policy::FilePolicy::from_network_directory(resources,&config.user_root)?;
-        Self::create_with_policy(config,bootstrap,policy)
+    #[cfg(all(any(fd_policy, windows), any(feature = "nfs", feature = "smb")))]
+    pub fn create_with_resources(
+        config: HostConfig,
+        bootstrap: &str,
+        resources: game_network::Directory,
+    ) -> Result<Self> {
+        if config.backend > 2 {
+            return Err(EthornellError::Other("invalid GPU backend".into()));
+        }
+        let policy = file_policy::FilePolicy::from_network_directory(resources, &config.user_root)?;
+        Self::create_with_policy(config, bootstrap, policy)
     }
-    fn create_with_policy(config:HostConfig,bootstrap:&str,mut policy:file_policy::FilePolicy)->Result<Self>{
+    fn create_with_policy(
+        config: HostConfig,
+        bootstrap: &str,
+        mut policy: file_policy::FilePolicy,
+    ) -> Result<Self> {
         let writer_lock = policy.lock_writer()?;
         policy.validate_resource_tree().map_err(|e| {
             EthornellError::Other(format!("host_policy:301:{}", e.raw_os_error().unwrap_or(0)))
@@ -244,14 +258,21 @@ impl HostRuntime {
                 crate::native_render::FontProvider::load_file(path, config.font_face_index)?
             }
             (None, None) => {
-                crate::native_render::FontProvider::load_system_for_text(if config.gbk {
+                let required = if config.gbk {
                     "A日本語中文简体繁體"
                 } else {
                     "A日本語中文"
-                })?
+                };
+                match file_policy::scope(&policy, || game_font::load(&policy.resource, required)) {
+                    Some(font) => font,
+                    None => crate::native_render::FontProvider::load_system_for_text(required)?,
+                }
             }
         };
-        let manager = policy.open_manager()?;
+        let mut manager = policy.open_manager()?;
+        if bootstrap.eq_ignore_ascii_case("system.arc:ipl._bp") {
+            manager = manager.for_native_bootstrap(None)?;
+        }
         policy.installed_view(&manager);
         let bytes = if let Some((archive, file)) = bootstrap.split_once(':') {
             manager.read_decoded_from_archive(archive, file)?
@@ -272,7 +293,7 @@ impl HostRuntime {
                     } else {
                         encoding_rs::SHIFT_JIS
                     },
-                );
+                )?;
                 if let Some(error) = snapshot::take_raster_error() {
                     return Err(EthornellError::Other(error));
                 }
@@ -317,6 +338,7 @@ impl HostRuntime {
             _writer_lock: writer_lock,
             renderer: None,
             textures: BTreeMap::new(),
+            presenter: frame_presenter::GpuPresenter::default(),
             font,
             audio,
             backend: config.backend,
@@ -333,6 +355,8 @@ impl HostRuntime {
             #[cfg(feature = "crysirror-host")]
             cpu_frame: None,
             #[cfg(feature = "crysirror-host")]
+            cpu_presenter: presentation::CpuPresenter::default(),
+            #[cfg(feature = "crysirror-host")]
             pcm: Vec::new(),
             #[cfg(feature = "crysirror-host")]
             pcm_remainder: 0,
@@ -347,6 +371,11 @@ impl HostRuntime {
     #[cfg(feature = "crysirror-host")]
     pub fn take_pcm(&mut self) -> Vec<[f32; 2]> {
         std::mem::take(&mut self.pcm)
+    }
+    /// The attached surface is a fixed console panel the renderer scales
+    /// into: display queries see the native canvas, as on the CPU host.
+    pub fn use_virtual_display(&mut self) {
+        self.runtime.api.virtual_display = true;
     }
     pub fn logical_size(&self) -> [u32; 2] {
         [
@@ -363,7 +392,12 @@ impl HostRuntime {
         file_policy::scope(&policy, || snapshot::with_font(&font, || f(self)))
     }
     fn sync_audio(&mut self) -> Result<()> {
-        let suspended = self.paused != 0
+        let output_ready = match self.audio.as_mut() {
+            Some(audio) => audio.output_ready()?,
+            None => true,
+        };
+        let suspended = !output_ready
+            || self.paused != 0
             || (!cfg!(feature = "crysirror-host") && self.renderer.is_none())
             || !self.runtime.api.host.pending.is_empty()
             || self.closed;
@@ -476,7 +510,8 @@ impl HostRuntime {
     pub fn diagnostics(&self) -> String {
         let report = self.runtime.last_report.as_ref();
         format!(
-            "stop={:?} pc={} steps={} time_ms={} screen={}x{} surfaces={} textures={} renderer={} pending={} program={:?} vm={:?} image_bytes={} blob_bytes={} program_cache={} cached_instructions={} vm_programs={} vm_instructions={} movies={:?} engine_frames={}",
+            "abi={:?} stop={:?} pc={} steps={} time_ms={} screen={}x{} surfaces={} textures={} renderer={} pending={} program={:?} vm={:?} image_bytes={} blob_bytes={} program_cache={} cached_instructions={} vm_programs={} vm_instructions={} movies={:?} engine_frames={}",
+            self.runtime.vm.native_abi_profile(),
             report.map(|r| r.stop_reason),
             report.map_or(0, |r| r.pc),
             report.map_or(0, |r| r.steps),
@@ -562,6 +597,7 @@ impl HostRuntime {
             Ok(())
         })?;
         self.generation = generation;
+        self.presenter = frame_presenter::GpuPresenter::default();
         Ok(())
     }
     pub fn detach_surface(&mut self, generation: u64) -> Result<()> {
@@ -596,6 +632,7 @@ impl HostRuntime {
         self.runtime.api.input_down_descriptors.clear();
         self.runtime.api.input_down_reported.clear();
         self.runtime.api.mouse_pressed = false;
+        self.runtime.api.graph_icon_press_consumed = false;
         self.runtime.api.last_button_press = None;
         self.runtime.api.suppress_message_mouse_release = false;
         for input in self.runtime.api.graph_input_objects.values_mut() {
@@ -892,7 +929,7 @@ impl HostRuntime {
                 });
             }
         }
-        if self.runtime.api.quit_requested {
+        if self.runtime.api.quit_requested || self.runtime.normal_root_completion() {
             self.close();
             return Ok(());
         }
@@ -901,9 +938,18 @@ impl HostRuntime {
         }
         #[cfg(feature = "crysirror-host")]
         {
-            if self.runtime.api.take_present_due() {
-                self.runtime.api.performance_profile.begin();
-                let frame = snapshot::compose_runtime_frame(&self.runtime.api, true);
+            // Console hosts attach a native GPU renderer: compose every layer
+            // with GPU draws there and never build a CPU framebuffer.
+            let (changed, composition) = if self.renderer.is_some() {
+                self.render_native_gpu()?;
+                (false, None)
+            } else {
+                let (changed, composition) =
+                    self.cpu_presenter.frame_with_change(&mut self.runtime.api);
+                (changed, Some(composition))
+            };
+            if let Some(composition) = composition.filter(|_| changed) {
+                let frame = &composition.framebuffer;
                 if let Some(error) = snapshot::take_raster_error() {
                     return Err(EthornellError::Other(error));
                 }
@@ -924,9 +970,8 @@ impl HostRuntime {
                     sequence: self.engine_frames,
                     width: frame.width,
                     height: frame.height,
-                    rgba: frame.rgba.into(),
+                    rgba: frame.rgba.clone().into(),
                 });
-                self.runtime.api.performance_profile.end(true);
                 self.runtime.api.presentation_state = self
                     .runtime
                     .api
@@ -953,6 +998,13 @@ impl HostRuntime {
         }
         #[cfg(not(feature = "crysirror-host"))]
         {
+            self.render_native_gpu()?;
+            self.sync_audio()
+        }
+    }
+    /// Submit the frame's native layer commands to the attached GPU renderer.
+    fn render_native_gpu(&mut self) -> Result<()> {
+        {
             let Some(renderer) = self.renderer.as_mut() else {
                 return Ok(());
             };
@@ -961,27 +1013,31 @@ impl HostRuntime {
                 self.runtime.api.screen_width.max(1) as f32,
                 self.runtime.api.screen_height.max(1) as f32,
             );
-            // sub_462100: present a newly composed frame only when one is due.
-            if self.runtime.api.take_present_due() {
-                self.runtime.api.performance_profile.begin();
-                let commands = frame_presenter::prepare_frame(
-                    renderer,
-                    &self.runtime.api,
-                    &mut self.textures,
-                )?;
+            self.runtime.api.performance_profile.begin();
+            let commands = frame_presenter::prepare_frame(
+                renderer,
+                &mut self.runtime.api,
+                &mut self.textures,
+                &mut self.presenter,
+            )?;
+            let changed = commands.is_some();
+            if let Some(commands) = commands {
                 renderer.submit(&commands);
-                self.runtime.api.performance_profile.end(true);
             }
+            self.runtime.api.performance_profile.end(changed);
             renderer.render()?;
             self.runtime.api.presentation_state =
                 self.runtime
                     .api
                     .clock_base_ms
                     .wrapping_add(self.runtime.api.engine_time_ms as u32) as i32;
-            self.sync_audio()
+            Ok(())
         }
     }
     fn close(&mut self) {
+        if self.closed {
+            return;
+        }
         self.closed = true;
         self.runtime.vm.cancel_host_requests();
         self.runtime.api.host.pending.clear();
@@ -1093,6 +1149,19 @@ impl HostRuntime {
 }
 
 impl RuntimeEngine {
+    fn normal_root_completion(&self) -> bool {
+        self.vm.halted
+            && self.api.native_system.restart.is_none()
+            && self.api.native_system.bootstrap_request.is_none()
+            && self.last_report.as_ref().is_some_and(|report| {
+                matches!(
+                    report.stop_reason,
+                    crate::native_vm::VmStopReason::Completed
+                        | crate::native_vm::VmStopReason::InterpreterTerminated
+                )
+            })
+    }
+
     fn new_explicit(
         script: &str,
         bytes: &[u8],
@@ -1101,22 +1170,30 @@ impl RuntimeEngine {
         trace: bool,
         strict: bool,
         encoding: &'static encoding_rs::Encoding,
-    ) -> Self {
-        let program = crate::native_script::parse_bp_program(Some(script.into()), bytes);
-        let profile = confirmed_native_profile(&manager, bytes);
+    ) -> Result<Self> {
+        let profile = confirmed_native_profile(&manager, bytes)?;
+        let program =
+            crate::native_script::parse_bp_program_profile(Some(script.into()), bytes, profile.abi);
         let mut vm = crate::native_vm::Vm::with_main_thread_regions(
             profile.main_code_bytes,
             profile.main_data_bytes,
             4096,
         );
         vm.set_native_abi_profile(profile.abi);
+        vm.set_modern_pointer_tags(profile.modern_pointer_tags);
         vm.set_graph_text_encoding(encoding);
         vm.start(&program);
-        Self {
+        Ok(Self {
             vm,
             api: {
                 let mut api = RuntimeTraceApi::new_with_native_root(manager, root);
                 api.configure_native_sound_channels(profile.se_channels);
+                api.bp_profile = profile.abi;
+                if let Some(sizes) = profile.display_modes {
+                    api.display_mode_sizes = sizes.map(Some);
+                    api.display_mode_limit = 16;
+                }
+                api.modern_gradient_blur = profile.modern_gradient_blur;
                 api
             },
             options: crate::native_vm::VmRunOptions {
@@ -1126,7 +1203,7 @@ impl RuntimeEngine {
                 collect_diagnostics: true,
             },
             last_report: None,
-        }
+        })
     }
 }
 
@@ -1142,6 +1219,49 @@ mod tests {
         api.host.enabled = true;
         api
     }
+    #[test]
+    fn normal_root_completion_respects_children_yields_and_restarts() {
+        let create = |bytes: &[u8]| {
+            RuntimeEngine::new_explicit(
+                "root",
+                bytes,
+                ResourceManager::open_game(env!("CARGO_MANIFEST_DIR")).unwrap(),
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+                false,
+                false,
+                encoding_rs::SHIFT_JIS,
+            )
+            .unwrap()
+        };
+        let advance = |runtime: &mut RuntimeEngine| {
+            runtime.last_report = Some(runtime.vm.run_loaded(&mut runtime.api, &runtime.options));
+        };
+        for bytes in [&[0x80, 0x6a][..], &[0x17][..]] {
+            let mut runtime = create(bytes);
+            advance(&mut runtime);
+            assert!(runtime.normal_root_completion());
+            runtime.api.native_system.restart = Some(("".into(), "".into(), None));
+            assert!(!runtime.normal_root_completion());
+            runtime.api.native_system.restart = None;
+            runtime.api.native_system.bootstrap_request =
+                Some((None, "system.arc".into(), "ipl._bp".into()));
+            assert!(!runtime.normal_root_completion());
+        }
+        let mut yielding = create(&[0x80, 0x5f, 0x17]);
+        advance(&mut yielding);
+        assert!(!yielding.normal_root_completion());
+        // Child entry at 0x1a returns while the root keeps yielding at 0x14.
+        let mut parent = create(&[
+            0x02, 4, 0, 0, 0, 0x02, 0, 1, 0, 0, 0x02, 0, 1, 0, 0, 0x06, 0x0b, 0, 0x81, 0x44, 0x80,
+            0x5f, 0x06, 0xfe, 0xff, 0x14, 0x17,
+        ]);
+        for _ in 0..4 {
+            advance(&mut parent);
+            assert!(!parent.last_report.as_ref().unwrap().stop_reason.is_fatal());
+            assert!(!parent.normal_root_completion());
+        }
+    }
+
     #[test]
     fn user_dialog_requests_become_kind_five_events_with_json_payloads() {
         let mut api = api();
@@ -1242,11 +1362,21 @@ mod tests {
         crate::native_core::init_tracing();
         let resource =
             PathBuf::from(std::env::var_os("ETHORNELL_RESTRICTED_REPRO_GAME").expect("game copy"));
-        let user = std::env::temp_dir().join(format!(
-            "ethornell-restricted-startup-{}",
-            std::process::id(),
-        ));
-        std::fs::create_dir(&user).unwrap();
+        // An explicitly supplied private user root permits cross-session
+        // save/load repros. The default remains a disposable fresh root.
+        let retained_user =
+            std::env::var_os("ETHORNELL_RESTRICTED_REPRO_USER_ROOT").map(PathBuf::from);
+        let user = retained_user.clone().unwrap_or_else(|| {
+            std::env::temp_dir().join(format!(
+                "ethornell-restricted-startup-{}",
+                std::process::id(),
+            ))
+        });
+        if retained_user.is_some() {
+            std::fs::create_dir_all(&user).unwrap();
+        } else {
+            std::fs::create_dir(&user).unwrap();
+        }
         let outcome = (|| -> Result<()> {
             let mut host = HostRuntime::create(HostConfig {
                 resource_root: resource,
@@ -1325,13 +1455,15 @@ mod tests {
                 Ok(())
             })
         })();
-        std::fs::remove_dir_all(user).unwrap();
+        if retained_user.is_none() {
+            std::fs::remove_dir_all(user).unwrap();
+        }
         outcome.unwrap();
     }
 
     #[test]
     #[ignore = "requires an authorized read-only sample via ETHORNELL_RESTRICTED_REPRO_GAME; private temporary user root"]
-    #[cfg(unix)]
+    #[cfg(all(unix, debug_assertions))]
     fn authorized_sample_restricted_vm_baseline() {
         if std::env::var_os("ETHORNELL_RESTRICTED_TRACE").is_some() {
             crate::native_core::init_tracing();

@@ -950,7 +950,7 @@ impl MajiroVm {
         host: &mut dyn HostServices,
     ) -> Result<Option<GfxOut>> {
         use GfxOut::Value as V;
-        let now = host.now_ms() as u32;
+        let now = self.native_now();
         let g = &mut self.gfx;
         let out = match hash {
             // ---- pages

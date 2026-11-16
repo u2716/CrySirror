@@ -720,15 +720,14 @@ Decisions and backlog: docs/adr/README.md (ADR 0004–0007 new).
   core `VfsProvider` + per-client provider mounts in DiskVfs/Runtime;
   crysirror-asset glTF/GLB importer and `world.importModel`;
   tools/blender_export_gltf.py; core `Upscaler`/`UpscalerSupport` contract.
-- Compilation: `cargo check --workspace --all-targets` passed
-  (docs/engine-api-cargo-check.txt); `cargo check -p crysirror-desktop
-  --no-default-features` passed (docs/engine-api-no-default-check.txt);
+- Compilation: `cargo check --workspace --all-targets` passed; `cargo check -p crysirror-desktop
+  --no-default-features` passed ;
   clippy reports no warnings in the three new crates.
 - Behavior: `cargo test --workspace` **131 passed, 0 failed, 5 ignored**
-  (docs/engine-api-rust-tests.txt; ignored = 4 GPU + 1 caller-font test,
+  (ignored = 4 GPU + 1 caller-font test,
   not counted as passes). Explicit GPU run `cargo test -p crysirror-wgpu --
-  --ignored`: **4 passed** (docs/engine-api-gpu-tests.txt). Python tools:
-  **97 passed** (docs/engine-api-python-tests.txt).
+  --ignored`: **4 passed**. Python tools:
+  **97 passed**.
 - Executed end to end on Apple M5/Metal: Blender 5.2.2 headless exported
   examples/engine/assets/lantern.glb; `crysirror render
   examples/engine/project.json --script examples/engine/game.ts` ran a TS
@@ -780,15 +779,12 @@ Local host: macOS arm64, Apple M5 Metal; Rust/cargo 1.98.1 and Python 3.11.
 Desktop targets remain Windows/Linux/macOS. A minimum Rust 1.88 is declared from
 resolved requirements; it was not independently tested here.
 
-- `cargo check --workspace --all-targets`: passed;
-  docs/engine-systems-cargo-check.txt.
-- `cargo check -p crysirror-desktop --no-default-features`: passed;
-  docs/engine-systems-no-default-check.txt.
+- `cargo check --workspace --all-targets`: passed.
+- `cargo check -p crysirror-desktop --no-default-features`: passed.
 - `cargo test --workspace`: **103 passed, 4 ignored**, no failures;
-  docs/engine-systems-rust-tests.txt. Ignored tests are three GPU tests and one
+  ignored tests are three GPU tests and one
   caller-supplied font test; those are not counted as passes in this run.
-- Python tools: **91 passed**;
-  docs/engine-systems-python-tests.txt.
+- Python tools: **91 passed**.
 - Cargo reports the existing block 0.1.6 future-incompatibility warning.
   No successful Windows/Linux build or hardware-RT execution is claimed.
 
@@ -799,11 +795,11 @@ resolved requirements; it was not independently tested here.
   time, UI capture/release/focus/modal/slider, engine mutation rollback, input
   consumption, post-halt simulation and transactional engine restore.
 - Explicit GPU run: **3 passed, 0 ignored**;
-  docs/engine-systems-gpu-tests.txt. Tests check actual legacy/native-image
+  tests check actual legacy/native-image
   pixels, dynamic World extraction on raster AND compute paths, UI preservation,
   scissor exclusion, and all five blend equations in linear color.
 - Explicit local-font CPU run: **1 passed, 0 ignored**;
-  docs/engine-systems-font-test.txt. Arial was supplied from the local OS for
+  Arial was supplied from the local OS for
   this run only. No font binary was copied into the repository or packages.
 - Real GPU captures: dist/engine-systems-raster.png and
   dist/engine-systems-raytrace.png. The latter includes actual Text/UI services
@@ -861,7 +857,7 @@ retain their original checkpoint meaning.
   `git@github.com:xmoezzz/CrySirror.git`; SSH read succeeded, with no remote
   branches at configuration. No commit or push was performed on parallel work.
   Fonts are excluded by Git patterns; no font files were added.
-- Evidence: docs/codex-services-results.json, codex-services-*.txt, and
+- Evidence: docs/codex-services-results.json and
   ADR 0030–0033. Actual CPU typography/SDF previews remain under
   ~/.cache/crysirror/codex-text, outside the source export.
 

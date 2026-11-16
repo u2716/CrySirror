@@ -66,6 +66,7 @@ impl Config {
 }
 struct Completed {
     machine: Machine,
+    instructions_used: u32,
     stop: std::result::Result<Step, String>,
     debug_log: Option<AbsentDebugLog>,
     assets: Option<Arc<crate::assets::Assets>>,
@@ -115,6 +116,7 @@ pub struct NativeAdapter {
     factory_created: bool,
     last_location: String,
     last_error: Option<String>,
+    completed_instructions: u64,
 }
 fn core_error(e: anyhow::Error) -> Error {
     Error::Io(format!("{e:#}"))
@@ -174,6 +176,7 @@ impl NativeAdapter {
             factory_created: false,
             last_location: String::new(),
             last_error: None,
+            completed_instructions: 0,
         })
     }
     #[cfg(feature = "runtime")]
@@ -187,12 +190,14 @@ impl NativeAdapter {
         h: &mut dyn HostServices,
         input: InputFrame,
         budget: u32,
+        offer_input: bool,
     ) -> Result<VmYield> {
+        let before = self.completed_instructions;
         if let Some(error) = self.last_error.as_ref().filter(|_| !self.close_requested) {
             anyhow::bail!("{error}")
         }
         if !self.close_requested {self.native_system.poll_menu(self.client,h)?;}
-        if !self.close_requested && !self.native_dialog.active() {
+        if offer_input && !self.close_requested && !self.native_dialog.active() {
             let revision = match h.input_observation(self.client) {
                 Ok(observation) => {
                     crate::input::Input::validate_scope(observation, self.client)?;
@@ -327,6 +332,7 @@ impl NativeAdapter {
                 let machine = Machine::new(Arc::new(p))?;
                 Ok(Completed {
                     machine,
+                    instructions_used: 0,
                     stop: Ok(Step::Advanced),
                     debug_log: profile,
                     assets: Some(assets),
@@ -340,10 +346,11 @@ impl NativeAdapter {
             self.started = true;
         }
         if let Some(job) = &mut self.job {
-            let Some(done) = job.try_take()? else {
+            let Some(done) = job.poll_owner()? else {
                 return Ok(VmYield::WaitUntil(h.now_ms().saturating_add(1)));
             };
             self.job = None;
+            self.completed_instructions = self.completed_instructions.saturating_add(done.instructions_used as u64);
             self.last_location = done.machine.location();
             self.machine = Some(done.machine);
             if let Some(assets) = done.assets {
@@ -739,8 +746,14 @@ impl NativeAdapter {
                 .machine
                 .take()
                 .ok_or_else(|| anyhow::anyhow!("System4 missing worker state"))?;
-            let count = budget.clamp(1, 100_000);
+            let used = self.completed_instructions.saturating_sub(before).min(u32::MAX as u64) as u32;
+            let count = budget.saturating_sub(used).min(100_000);
+            if count == 0 {
+                self.machine = Some(m);
+                return Ok(VmYield::BudgetExhausted);
+            }
             self.job = Some(permit.spawn(move |cancel| {
+                let before = m.instructions;
                 let mut stop = Ok(Step::Advanced);
                 for n in 0..count {
                     if n % 256 == 0 {
@@ -762,6 +775,7 @@ impl NativeAdapter {
                     }
                 }
                 Ok(Completed {
+                    instructions_used: m.instructions.saturating_sub(before).min(u32::MAX as u64) as u32,
                     machine: m,
                     stop,
                     debug_log: None,
@@ -845,6 +859,9 @@ impl VmAdapter for NativeAdapter {
     fn engine_id(&self) -> &'static str {
         "system4"
     }
+    fn instruction_budget(&self) -> u32 {
+        100_000
+    }
     fn snapshot_schema(&self) -> u32 {
         0
     }
@@ -857,7 +874,25 @@ impl VmAdapter for NativeAdapter {
         let mut result = if self.deferred_error.is_some() {
             self.flush_deferred_error(h)
         } else {
-            self.advance(h, input, budget)
+            // HLL dispatch is an owner/worker handoff, not a display-frame
+            // boundary. Drain ready completions within one bounded quantum;
+            // real sleeps, resource waits and presentation still yield.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(4);
+            let start = self.completed_instructions;
+            let mut first = true;
+            crysirror_tasks::with_completion_deadline(deadline, || {
+                loop {
+                    let used = self.completed_instructions.saturating_sub(start).min(u32::MAX as u64) as u32;
+                    let remaining = budget.max(1).saturating_sub(used);
+                    if remaining == 0 { return Ok(VmYield::BudgetExhausted); }
+                    let result = self.advance(h, input, remaining, first)?;
+                    first = false;
+                    if result != VmYield::BudgetExhausted || self.job.is_none()
+                        || !self.boot_ready || std::time::Instant::now() >= deadline {
+                        return Ok(result);
+                    }
+                }
+            })
         };
         if let Err(error) = &result {
             if (self.native_msgskip.needs_flush()

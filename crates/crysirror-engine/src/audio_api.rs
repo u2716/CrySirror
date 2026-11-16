@@ -117,13 +117,17 @@ fn source(cx: &mut EngineContext, client: u32, path: &str) -> Result<Box<dyn Aud
     ensure!(p.relative() == path, "non-canonical audio asset path");
     let s = cx.state()?;
     let extension = path.rsplit_once('.').map(|(_, x)| x);
-    let stream = match s
+    // Browser storage has no seekable disk files; assets are read whole.
+    #[cfg(not(target_arch = "wasm32"))]
+    let file = s
         .runtime
         .host
         .fs
         .open_asset_file(ClientId(client), &p)
-        .map_err(|e| anyhow::anyhow!("audio asset {path}: {e}"))?
-    {
+        .map_err(|e| anyhow::anyhow!("audio asset {path}: {e}"))?;
+    #[cfg(target_arch = "wasm32")]
+    let file: Option<std::fs::File> = None;
+    let stream = match file {
         Some(file) => decoder::open_reader(Box::new(file), extension)?,
         None => {
             let bytes = s

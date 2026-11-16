@@ -141,7 +141,7 @@ impl RuntimeTraceApi {
                     && sx == 65536
                     && sy == 65536;
                 if native_fast {
-                    crate::native_app::bitmap_blend::blit_mode(
+                    crate::native_app::bitmap_blend::blit_mode_with_options(
                         &mut out,
                         df,
                         &image,
@@ -150,6 +150,7 @@ impl RuntimeTraceApi {
                         0,
                         5,
                         record.blend_parameter,
+                        self.native_additive_coverage,
                     );
                 } else if sf == df {
                     if record.blend_parameter as u32 >= 256 {
@@ -211,7 +212,7 @@ impl RuntimeTraceApi {
                         }
                     }
                 } else {
-                    crate::native_app::bitmap_blend::blit_mode(
+                    crate::native_app::bitmap_blend::blit_mode_with_options(
                         &mut out,
                         df,
                         &image,
@@ -220,10 +221,11 @@ impl RuntimeTraceApi {
                         0,
                         1,
                         record.blend_parameter,
+                        self.native_additive_coverage,
                     );
                 }
             } else {
-                crate::native_app::bitmap_blend::blit_mode(
+                crate::native_app::bitmap_blend::blit_mode_with_options(
                     &mut out,
                     df,
                     &image,
@@ -232,6 +234,7 @@ impl RuntimeTraceApi {
                     0,
                     record.blend_mode,
                     record.blend_parameter,
+                    self.native_additive_coverage,
                 );
             }
         }
@@ -308,6 +311,58 @@ impl RuntimeTraceApi {
 mod tests {
     use super::*;
     use crate::native_vm::{GraphApi, NativeCallFrame, NativeOpcode, Value};
+    #[test]
+    fn backml_control_captures_selected_anchor_instead_of_base_zero() {
+        let manager = ResourceManager::open_game(env!("CARGO_MANIFEST_DIR")).unwrap();
+        let mut api = RuntimeTraceApi::new(manager);
+        api.screen_width = 4;
+        api.screen_height = 2;
+        api.store_runtime_bitmap(
+            100,
+            DecodedImage {
+                width: 4,
+                height: 2,
+                rgba: [100, 0, 0, 255].repeat(8),
+            },
+            1,
+        );
+        GraphApi::call_graph(
+            &mut api,
+            &mut NativeCallFrame::new(
+                NativeOpcode {
+                    group: 0x91,
+                    id: 0x40,
+                },
+                [2 << 16, 1 << 16, 100, 2 << 16, 1 << 16, 0, 65536, 65536, 0]
+                    .into_iter()
+                    .map(Value::Int)
+                    .collect(),
+            ),
+        )
+        .unwrap();
+        assert_eq!(api.graph_control_origin(0), ((2 << 16, 1 << 16), 0));
+        api.schedule_native_cdspobj_control(
+            0,
+            Some((2 << 16, 1 << 16)),
+            0,
+            0,
+            0,
+            Some(256),
+            1000,
+            1000,
+            0,
+            false,
+            0,
+            "test",
+        )
+        .unwrap();
+        let events = api.layer_animations.tick_native_object_controls(500);
+        api.apply_native_control_events(events);
+        let layer = api.graph91_multilayer_background.layers[0];
+        assert_eq!((layer.x_16_16, layer.y_16_16), (2 << 16, 1 << 16));
+        assert_eq!(api.graph_images["runtime:backml:0"].rgba[0], 100);
+    }
+
     #[test]
     fn backml_source_curve_changes_pixels_and_only_updates_the_selected_layer() {
         let manager = ResourceManager::open_game(env!("CARGO_MANIFEST_DIR")).unwrap();

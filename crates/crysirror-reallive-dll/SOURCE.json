@@ -3,7 +3,7 @@
   "repository": "https://github.com/xmoezzz/siglus_rs.git",
   "commit": "5f358ef1360b0439e92aed2b749e8f25d8721954",
   "license": "MPL-2.0",
-  "license_file": "LICENSE",
+  "license_file": "../../LICENSE",
   "previous_adoption_manifest": "PRE_ADOPTION_SOURCE.json",
   "source_sha256": {
     "dll.rs": "e14d4580bf88848ec7af6d95d60bbbcdb84ca00d77174f1bb55fc935b6730fc1",

@@ -27,7 +27,12 @@ pub(super) fn prepare(
                 pack_slots.insert(slot);
             }
         }
-        if !logical.ends_with(".s") && !logical.ends_with(".txt") {
+        // Older installed profiles use .dat for these same text catalogs.
+        // Keep the allowlist explicit: image/movie .dat payloads are binary.
+        let native_text_catalog = matches!(logical.as_str(),
+            "system/etc/game.dat" | "system/voice/voicedata.dat" | "system/font/fontdata.dat");
+        if !logical.ends_with(".s") && !logical.ends_with(".txt")
+            && !native_text_catalog {
             continue;
         }
         cancel.check()?;
@@ -90,6 +95,16 @@ pub(super) struct Member {
     pub nested: Option<Box<Bundle>>,
     pub model: Option<Arc<crysirror_asset::tqmo::Model>>,
     pub scene_model: Option<Arc<crysirror_scene::legacy_mesh::Model>>,
+}
+impl Member {
+    pub(super) fn is_video(&self) -> bool {
+        // Older ABMP image type4 owns a TMotionMovie/TARGB8888Movie (BIMAN
+        // 4DCB00/4DDD7C), whose payload is IMOAVI100. Newer resources use
+        // type7 for Theora. Keep the native kind and raw encoded bytes; both
+        // are decoded and clocked by the shared Media service, never Image.
+        self.metadata["kind"] == 7
+            || (self.metadata["kind"] == 4 && self.bytes.starts_with(b"IMOAVI\0\0"))
+    }
 }
 pub(super) struct Bundle {
     pub id: usize,

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
-// Migrated from pinned siglus_rs; see UPSTREAM.md and upstream-files.json.
+// Migrated from pinned siglus_rs; see SOURCE.json and upstream-files.json.
 use crate::io_fs as fs;
 use std::collections::HashMap;
 use std::io::Write;
@@ -541,6 +541,7 @@ fn resolve_scene_string_codec(
 fn read_scene_pck_bytes(path: &Path) -> Result<Vec<u8>> {
     #[cfg(target_os = "horizon")]
     {
+        use std::io::Read as _;
         // `std::fs::read` reserves metadata().len() up front. fsdev metadata
         // is not reliable on this custom target, so read the pack in bounded
         // chunks and grow the Vec from actual bytes received.

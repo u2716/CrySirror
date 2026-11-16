@@ -13,8 +13,22 @@ pub struct Audio {
     remainder: u64,
     frame: Option<(u64, crysirror_audio::render_job::MixFrame)>,
     pause_pending: Option<bool>,
+    /// Offline recording: mixed PCM is appended here instead of reaching an
+    /// output device (nothing is played).
+    capture: Option<Vec<[f32; 2]>>,
 }
 impl Audio {
+    /// Mix exactly as the desktop does, but keep the 48 kHz stereo result for
+    /// an offline recording instead of opening an output device.
+    pub fn capturing() -> Self {
+        let mut audio = Self::new(false);
+        audio.capture = Some(Vec::new());
+        audio
+    }
+    /// Drain the PCM recorded since the previous call.
+    pub fn take_captured(&mut self) -> Vec<[f32; 2]> {
+        self.capture.as_mut().map(std::mem::take).unwrap_or_default()
+    }
     pub fn new(muted: bool) -> Self {
         Self {
             muted,
@@ -30,6 +44,7 @@ impl Audio {
             remainder: 0,
             frame: None,
             pause_pending: None,
+            capture: None,
         }
     }
     #[cfg(all(test, feature = "audio"))]
@@ -39,6 +54,9 @@ impl Audio {
         audio
     }
     pub fn device_opening(&self) -> bool {
+        if self.capture.is_some() {
+            return false;
+        }
         #[cfg(feature = "audio")]
         {
             !self.muted
@@ -51,6 +69,9 @@ impl Audio {
         }
     }
     pub fn poll_device(&self) -> Result<()> {
+        if self.capture.is_some() {
+            return Ok(());
+        }
         #[cfg(feature = "audio")]
         if !self.muted {
             self.mixer_output.poll()?;
@@ -173,6 +194,14 @@ impl Audio {
         restored: u64,
     ) -> Result<()> {
         if self.muted {
+            return Ok(());
+        }
+        if let Some(capture) = &mut self.capture {
+            anyhow::ensure!(
+                capture.len() + frames.len() <= 48_000 * 60 * 30,
+                "recorded audio exceeds 30 minutes"
+            );
+            capture.extend(frames.iter().map(|f| [f[0].clamp(-4., 4.), f[1].clamp(-4., 4.)]));
             return Ok(());
         }
         #[cfg(feature = "audio")]

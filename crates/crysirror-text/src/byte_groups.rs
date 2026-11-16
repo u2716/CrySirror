@@ -6,7 +6,7 @@
 //! cursor width. Thus a quoted group can end visible token enumeration early.
 //! `(:...)` and `":..."` retain the exact historical copy/unwrap byte behavior.
 //! This is intentionally distinct from byte_split's delimiter-only contract.
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use std::ops::Range;
 
 pub const MAX_BYTE_GROUP_INPUT: usize = 1024 * 1024;
@@ -294,10 +294,12 @@ mod tests {
         );
         let mut limit = ByteGroupSplitLimits::default();
         limit.max_output_bytes = 5;
-        assert!(split_grouped_bytes(b"(:abc)", b" ", limit, &|| Ok(()))
-            .unwrap_err()
-            .to_string()
-            .contains("capacity"));
+        assert!(
+            split_grouped_bytes(b"(:abc)", b" ", limit, &|| Ok(()))
+                .unwrap_err()
+                .to_string()
+                .contains("capacity")
+        );
         let mut limit = ByteGroupSplitLimits::default();
         limit.max_depth = 1;
         assert!(split_grouped_bytes(b"((x))", b" ", limit, &|| Ok(())).is_err());
@@ -314,12 +316,14 @@ mod tests {
             .is_err()
         );
         let calls = std::cell::Cell::new(0);
-        assert!(split_grouped_bytes(b"abc", b" ", Default::default(), &|| {
-            calls.set(calls.get() + 1);
-            // Five checks complete preflight; this cancels during output fill.
-            anyhow::ensure!(calls.get() < 7, "second pass cancelled");
-            Ok(())
-        })
-        .is_err());
+        assert!(
+            split_grouped_bytes(b"abc", b" ", Default::default(), &|| {
+                calls.set(calls.get() + 1);
+                // Five checks complete preflight; this cancels during output fill.
+                anyhow::ensure!(calls.get() < 7, "second pass cancelled");
+                Ok(())
+            })
+            .is_err()
+        );
     }
 }

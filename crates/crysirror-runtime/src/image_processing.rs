@@ -15,6 +15,7 @@ pub(crate) mod frame_image;
 pub(crate) mod glyph;
 pub(crate) mod glyph_batch;
 pub(crate) mod vector_scene;
+pub(crate) mod spectrum;
 
 /// Live decoded resources plus in-flight decode/effect scratch.
 const BUDGET: usize = 1024 * 1024 * 1024;
@@ -29,7 +30,7 @@ pub(crate) struct Charge {
     bytes: usize,
 }
 impl Charge {
-    fn shrink(&mut self, bytes: usize) {
+    pub(crate) fn shrink(&mut self, bytes: usize) {
         assert!(bytes <= self.bytes);
         self.memory.fetch_sub(self.bytes - bytes, Ordering::AcqRel);
         self.bytes = bytes;
@@ -120,7 +121,7 @@ pub(crate) fn begin_packed(
 impl ImageProcess for Job {
     fn poll(&mut self) -> Result<ImageProcessState> {
         if let Some(t) = &mut self.task {
-            match t.try_take() {
+            match t.poll_owner() {
                 Ok(None) => (),
                 Ok(Some(r)) => {
                     self.task = None;
@@ -252,6 +253,12 @@ fn effect_scratch_factor(effects: &[ImageEffect]) -> usize {
 fn effect_output_size(mut size: [u32; 2], effects: &[ImageEffect]) -> Result<[u32; 2]> {
     for effect in effects {
         match effect {
+            ImageEffect::NinePatch{width,height}=>{size=[*width,*height];}
+            ImageEffect::CoverageBitmap{spec}=>{size=spec.size;}
+            ImageEffect::GlyphCoverageBlur{radius,..}=>{
+                size=[size[0].checked_add(radius*2).ok_or(Error::Limit("coverage width"))?,size[1].checked_add(radius*2).ok_or(Error::Limit("coverage height"))?];
+            }
+            ImageEffect::RadialWavePair{spec}=>{size=spec.canvas;}
             ImageEffect::RectMap { spec } => {
                 size = spec.output_size.unwrap_or(size);
             }
@@ -308,6 +315,51 @@ fn effect_scratch_bytes(input: [u32; 2], effects: &[ImageEffect]) -> Result<usiz
     let mut columns = 0usize;
     let mut retained_metadata = 0usize;
     for effect in effects {
+        if let ImageEffect::RadialRgbBrushes{spec}=effect {
+            retained_metadata=retained_metadata.checked_add(spec.scratch_bytes().map_err(|e|Error::Io(e.to_string()))?+spec.positions.len()*std::mem::size_of::<[i32;2]>()).ok_or(Error::Limit("radial RGB brush scratch budget"))?;
+        }
+        if let ImageEffect::PackedPairBatch{spec}=effect {
+            retained_metadata=retained_metadata.checked_add(spec.operations.len()*std::mem::size_of::<crysirror_image::packed_pair_blend::PackedPairBlend>()).ok_or(Error::Limit("packed pair batch scratch budget"))?;
+        }
+        if let ImageEffect::RadialWavePair{spec}=effect {
+            let count=spec.radius_count().map_err(|error|Error::Io(error.to_string()))?;
+            retained_metadata=retained_metadata.checked_add(count*std::mem::size_of::<i16>()).ok_or(Error::Limit("radial wave table scratch budget"))?;
+        }
+        if let ImageEffect::StoredWordSpans{spec}=effect {
+            retained_metadata=retained_metadata.checked_add(spec.spans.len()*std::mem::size_of::<crysirror_image::stored_word_spans::StoredWordSpan>())
+                .ok_or(Error::Limit("stored word metadata scratch budget"))?;
+        }
+        if let ImageEffect::StoredGradientSpans{spec}=effect {
+            retained_metadata=retained_metadata.checked_add(spec.spans.len()*std::mem::size_of::<crysirror_image::stored_gradient_spans::StoredGradientSpan>())
+                .ok_or(Error::Limit("stored gradient metadata scratch budget"))?;
+        }
+        if let ImageEffect::ByteRaster{spec}=effect {
+            match spec {
+                crysirror_image::byte_raster::ByteRaster::FloatingPolygonFragments{spec}=>{
+                    let bytes=spec.scratch_bytes().map_err(|e|Error::Io(e.to_string()))?+spec.fragments.iter().map(|f|f.vertices.len()*std::mem::size_of::<[i32;2]>()+std::mem::size_of::<crysirror_image::integer_wipe::fragments::ImageFragment>()).sum::<usize>();
+                    retained_metadata=retained_metadata.checked_add(bytes).ok_or(Error::Limit("floating polygon scratch budget"))?;
+                }
+                crysirror_image::byte_raster::ByteRaster::AlphaBrushes{spec}=>{
+                    retained_metadata=retained_metadata.checked_add(spec.brushes.len()*std::mem::size_of::<crysirror_image::alpha_brushes::AlphaBrush>()).ok_or(Error::Limit("alpha brush metadata scratch budget"))?;
+                }
+                crysirror_image::byte_raster::ByteRaster::PackedRepeatRows{spec}=>{
+                    retained_metadata=retained_metadata.checked_add(spec.rows.len()*std::mem::size_of::<crysirror_image::packed_repeat_rows::PackedRepeatRow>()).ok_or(Error::Limit("packed repeat row metadata scratch budget"))?;
+                }
+                crysirror_image::byte_raster::ByteRaster::RowBlitBatch{spec}=>{
+                    let bytes=spec.operations.iter().map(|op|std::mem::size_of::<crysirror_image::row_blit::RowBlit>()+op.row_offsets.len()*std::mem::size_of::<i32>()+op.row_math.len()*std::mem::size_of::<crysirror_image::byte_raster::ByteRasterMath>()).sum::<usize>();
+                    retained_metadata=retained_metadata.checked_add(bytes).ok_or(Error::Limit("row blit batch metadata scratch budget"))?;
+                }
+                crysirror_image::byte_raster::ByteRaster::AxisBoxSample{spec}=>{
+                    let cross=if spec.vertical {size[0]}else{size[1]} as usize;
+                    columns=columns.max(cross*std::mem::size_of::<[u16;3]>());
+                }
+                crysirror_image::byte_raster::ByteRaster::RepeatScaleSample{..}=>{
+                    retained_metadata=retained_metadata.checked_add((size[0] as usize+size[1] as usize)*std::mem::size_of::<i64>())
+                        .ok_or(Error::Limit("repeated scale index scratch budget"))?;
+                }
+                _=>(),
+            }
+        }
         if let ImageEffect::ScanlineAffineNearest { spec } = effect {
             retained_metadata = retained_metadata.checked_add(spec.row_origins.len() * std::mem::size_of::<[i64; 2]>())
                 .ok_or(Error::Limit("scanline affine metadata budget"))?;
@@ -372,13 +424,21 @@ fn validate_effect_context(input: &ImageInput, effects: &[ImageEffect]) -> Resul
                 | ImageEffect::AlphaStamps { .. }
                 | ImageEffect::CopyChannel { .. }
                 | ImageEffect::AlphaPlanePair { .. }
+                | ImageEffect::MaskFieldPair{..}
                 | ImageEffect::PackedColorMask{..}
+                | ImageEffect::RadialWavePair{..}
+                | ImageEffect::LinearMaskOffset{..}
                 | ImageEffect::PackedDualMask{..}
                 | ImageEffect::StoredMaskBlend { .. }
                 | ImageEffect::Transition { .. }
                 | ImageEffect::SineRowCopy { .. }
                 | ImageEffect::DiscCopies { .. }
                 | ImageEffect::AlphaClipRect { .. }
+                | ImageEffect::ShrinkCopy { .. }
+                | ImageEffect::OverwrapRect { .. }
+                | ImageEffect::StitchWrappedCopy { .. }
+                | ImageEffect::GlitchCopy { .. }
+                | ImageEffect::PackedPairBatch{..} | ImageEffect::PackedPairBlend{..}
                 | ImageEffect::MaskedPairBlend { .. }
                 | ImageEffect::IntegerRaster { .. }
                 | ImageEffect::ByteRaster { .. }
@@ -406,6 +466,10 @@ fn validate_effect_context(input: &ImageInput, effects: &[ImageEffect]) -> Resul
                     | ImageEffect::SineRowCopy { .. }
                     | ImageEffect::DiscCopies { .. }
                     | ImageEffect::AlphaClipRect { .. }
+                    | ImageEffect::ShrinkCopy { .. }
+                    | ImageEffect::OverwrapRect { .. }
+                | ImageEffect::StitchWrappedCopy { .. }
+                | ImageEffect::GlitchCopy { .. }
                     | ImageEffect::IntegerRaster { .. }
                     | ImageEffect::ByteRaster { .. }
             )
@@ -417,9 +481,13 @@ fn validate_effect_context(input: &ImageInput, effects: &[ImageEffect]) -> Resul
         && !matches!(
             effects.first(),
             Some(
-                ImageEffect::MaskedPairBlend { .. }
-                    | ImageEffect::PackedColorMask{..}
-                    | ImageEffect::PackedDualMask{..}
+                ImageEffect::PackedPairBatch{..} | ImageEffect::PackedPairBlend{..}
+                    | ImageEffect::MaskedPairBlend { .. }
+                    | ImageEffect::MaskFieldPair{..}
+                | ImageEffect::PackedColorMask{..}
+                    | ImageEffect::RadialWavePair{..}
+                | ImageEffect::LinearMaskOffset{..}
+                | ImageEffect::PackedDualMask{..}
                     | ImageEffect::AlphaMaskPlane { .. }
                     | ImageEffect::StoredMaskBlend { .. }
                     | ImageEffect::AlphaPlanePair { .. }
@@ -531,9 +599,18 @@ fn process_input(
                     .ok_or_else(|| anyhow::anyhow!("second channel plane absent"))?,
                 &|| cancel.check(),
             )?
+        } else if let ImageEffect::MaskFieldPair{spec}=&effect {
+            spec.apply(&image,other.as_ref().ok_or_else(||anyhow::anyhow!("mask-field second image absent"))?,
+                mask.as_ref().ok_or_else(||anyhow::anyhow!("mask-field image absent"))?,&||cancel.check())?
         } else if let ImageEffect::PackedColorMask{spec}=&effect {
             spec.apply(&image,other.as_ref().ok_or_else(||anyhow::anyhow!("colour-mask source absent"))?,
                 mask.as_ref().ok_or_else(||anyhow::anyhow!("colour-mask plane absent"))?,&||cancel.check())?
+        } else if let ImageEffect::RadialWavePair{spec}=&effect {
+            spec.apply(&image,other.as_ref().ok_or_else(||anyhow::anyhow!("radial wave first image absent"))?,
+                mask.as_ref().ok_or_else(||anyhow::anyhow!("radial wave second image absent"))?,&||cancel.check())?
+        } else if let ImageEffect::LinearMaskOffset{spec}=&effect {
+            spec.apply(&image,other.as_ref().ok_or_else(||anyhow::anyhow!("linear mask first input absent"))?,
+                mask.as_ref().ok_or_else(||anyhow::anyhow!("linear mask second input absent"))?,&||cancel.check())?
         } else if let ImageEffect::PackedDualMask{spec}=&effect {
             spec.apply(&image,other.as_ref().ok_or_else(||anyhow::anyhow!("dual-mask source absent"))?,
                 mask.as_ref().ok_or_else(||anyhow::anyhow!("dual-mask plane absent"))?,&||cancel.check())?
@@ -547,6 +624,16 @@ fn process_input(
                     .ok_or_else(|| anyhow::anyhow!("stored mask resource absent"))?,
                 &|| cancel.check(),
             )?
+        } else if let ImageEffect::PackedPairBatch {spec}=&effect {
+            spec.apply(&image,
+                other.as_ref().ok_or_else(||anyhow::anyhow!("packed pair batch first input absent"))?,
+                mask.as_ref().ok_or_else(||anyhow::anyhow!("packed pair batch second input absent"))?,
+                &||cancel.check())?
+        } else if let ImageEffect::PackedPairBlend {spec}=&effect {
+            spec.apply(&image,
+                other.as_ref().ok_or_else(||anyhow::anyhow!("packed pair first input absent"))?,
+                mask.as_ref().ok_or_else(||anyhow::anyhow!("packed pair second input absent"))?,
+                &||cancel.check())?
         } else if let ImageEffect::MaskedPairBlend { spec } = &effect {
             spec.apply(
                 &image,
@@ -565,6 +652,18 @@ fn process_input(
                     .ok_or_else(|| anyhow::anyhow!("alpha clip source absent"))?,
                 &|| cancel.check(),
             )?
+        } else if let ImageEffect::ShrinkCopy { spec } = &effect {
+            cancel.check()?;
+            spec.apply(&image, other.as_ref().ok_or_else(|| anyhow::anyhow!("shrinkCopy source absent"))?)?
+        } else if let ImageEffect::GlitchCopy { spec } = &effect {
+            cancel.check()?;
+            spec.apply(&image, other.as_ref().ok_or_else(|| anyhow::anyhow!("glitchCopy source absent"))?)?
+        } else if let ImageEffect::StitchWrappedCopy { spec } = &effect {
+            cancel.check()?;
+            spec.apply(&image, other.as_ref().ok_or_else(|| anyhow::anyhow!("stitchWrappedCopy source absent"))?)?
+        } else if let ImageEffect::OverwrapRect { spec } = &effect {
+            cancel.check()?;
+            spec.apply(&image, other.as_ref().ok_or_else(|| anyhow::anyhow!("overwrapRect source absent"))?)?
         } else if let ImageEffect::DiscCopies { spec } = &effect {
             spec.apply(
                 &image,
@@ -634,7 +733,11 @@ pub(crate) fn input_size(
     bytes: &mut usize,
 ) -> Result<[u32; 2]> {
     *nodes += 1;
-    if depth > 32 || *nodes > 256 {
+    // A full 800x600 tile grid (25x19 layers plus its base) is one ordinary
+    // composition; byte budgets still bound the work.
+    if depth > crysirror_core::image_processing::IMAGE_GRAPH_MAX_DEPTH
+        || *nodes > crysirror_core::image_processing::IMAGE_GRAPH_MAX_NODES
+    {
         return Err(Error::Limit("image composition graph"));
     }
 
@@ -715,6 +818,9 @@ pub(crate) fn input_size(
         }
         ImageInput::Composite { base, layers } => {
             let size = input_size(owner, base, depth + 1, nodes, bytes)?;
+            //Repeated layers over one immutable resident resource share its
+            //pixels; they are separate graph nodes but not separate bytes.
+            let mut resident = std::collections::BTreeSet::new();
             for layer in layers {
                 if let ImageCompositeMath::IntegerStored {
                     destination_format,
@@ -769,6 +875,19 @@ pub(crate) fn input_size(
                         | ImageInput::Ternary { .. }
                 ) {
                     return Err(Error::Invalid("composite pair-effect input"));
+                }
+                if let ImageInput::Resource(r) = layer.input.as_ref() {
+                    let key = std::sync::Arc::as_ptr(r) as *const () as usize;
+                    if !resident.insert(key) {
+                        *nodes += 1;
+                        if *nodes > 1024 {
+                            return Err(Error::Limit("image composition graph"));
+                        }
+                        if r.client() != owner {
+                            return Err(Error::Invalid("foreign image resource"));
+                        }
+                        continue;
+                    }
                 }
                 input_size(owner, &layer.input, depth + 1, nodes, bytes)?;
             }

@@ -7,6 +7,9 @@ pub struct Scope {
     pub font: Option<PathBuf>,
     pub font_face_index: u32,
     pub material: crate::native_assets::key_toml::KeyTomlConfig,
+    /// Host system font in memory (console shared font), used after game and
+    /// configured fonts. Never copied to storage.
+    pub system_font: Option<&'static [u8]>,
 }
 thread_local! {static SCOPE:RefCell<Option<Scope>>=const {RefCell::new(None)};}
 pub fn install(scope: Scope) {
@@ -34,6 +37,10 @@ pub fn admit_read(path: &std::path::Path) -> anyhow::Result<()> {
         }
         Ok(())
     })
+}
+
+pub fn system_font() -> Option<&'static [u8]> {
+    SCOPE.with(|s| s.borrow().as_ref().and_then(|s| s.system_font))
 }
 
 pub fn font_face_index() -> u32 {

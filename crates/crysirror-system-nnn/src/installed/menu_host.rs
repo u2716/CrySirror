@@ -4,6 +4,7 @@
 use super::menu::{Action, Kind, Menu};
 use super::*;
 pub(super) enum Operation {
+    ConfigInit,
     ReturnTitle(super::menu_return::TitleReturn),
     SceneSetup {
         task: Option<Task<Arc<Program>>>,
@@ -14,10 +15,14 @@ pub(super) enum Operation {
     Activate(Action),
     Close,
     CloseMessage(crate::native_message_control::SystemMessageAction),
+    /// SelectPlace FinalExitRoutine: close, then SetYoyaku (ACK the command).
+    CloseUserCommand,
     Save { previous: Option<native_save::Controller>, close: bool },
     Load { previous: Option<native_load::Policy>, close: bool },
     Music([i32; 4]),
     GalleryAudio(crate::native_cg::CgAudio),
+    CharacterSound(crate::bridge::ButtonAudioEvent),
+    ConfigSound(crate::native_config_catalogues::AudioRequest),
     ListenMusic { music: Option<crate::native_audio::ListenMusic>, number: i32 },
     CloseConfig {
         civil: Option<Box<dyn CivilTimeQuery>>,
@@ -25,6 +30,7 @@ pub(super) enum Operation {
     },
 }
 impl Operation {
+    pub(super) fn name(&self)->&'static str {match self {Self::ConfigInit=>"config_init",Self::ReturnTitle(_)=>"return_title",Self::SceneSetup{..}=>"scene_setup",Self::Activate(_)=>"activate",Self::Close=>"close",Self::CloseMessage(_)=>"close_message",Self::CloseUserCommand=>"close_user_command",Self::Save{..}=>"save",Self::Load{..}=>"load",Self::Music(_)=>"music",Self::GalleryAudio(_)=>"gallery_audio",Self::CharacterSound(_)=>"character_sound",Self::ConfigSound(_)=>"config_sound",Self::ListenMusic{..}=>"listen_music",Self::CloseConfig{..}=>"close_config"}}
     pub(super) fn dependency_pending(&self)->bool {match self {Self::ReturnTitle(work)=>work.dependency_pending(),_=>true}}
 }
 impl InstalledAdapter {
@@ -54,6 +60,8 @@ impl InstalledAdapter {
             self.menu.is_none() && self.menu_operation.is_none(),
             "NNN modal mode already active"
         );
+        self.vm.as_mut().context("NNN modal mode VM absent")?.end_current_general_audio()?;
+        self.vm.as_mut().unwrap().pause_foreground_general_audio(true);
         let vm = self.vm.as_ref().context("NNN modal mode VM absent")?;
         if kind == Kind::Save {
             ensure!(
@@ -92,6 +100,7 @@ impl InstalledAdapter {
             )?,
         )?;
         self.vm.as_mut().unwrap().set_modal_mode(kind.native_mode())?;
+        if kind==Kind::Config{self.menu_operation=Some(Operation::ConfigInit);}
         Ok(())
     }
     fn finish_menu(&mut self, host: &mut dyn HostServices) -> Result<bool> {
@@ -106,6 +115,7 @@ impl InstalledAdapter {
         if let Some(mut menu) = self.menu.take() {
             menu.remove(self.client, host)?;
         }
+        self.vm.as_mut().unwrap().end_current_general_audio()?;
         self.vm
             .as_mut()
             .context("NNN menu return VM absent")?
@@ -198,6 +208,14 @@ impl InstalledAdapter {
                         self.menu_operation = Some(Operation::Close);
                     }
                 }
+                Operation::CloseUserCommand=>{
+                    if !self.finish_menu(host)? {
+                        self.menu_operation=Some(Operation::CloseUserCommand);
+                    }else{
+                        self.vm.as_mut().context("NNN user command foreground absent")?
+                            .finish_user_command_mode()?;
+                    }
+                }
                 Operation::CloseMessage(action)=>{
                     if !self.finish_menu(host)? {
                         self.menu_operation=Some(Operation::CloseMessage(action));
@@ -229,6 +247,33 @@ impl InstalledAdapter {
                     } else {
                         self.native_load = previous.map(native_load::Controller::new);
                         if close { self.menu_operation = Some(Operation::Close); }
+                    }
+                }
+                Operation::ConfigInit=>{
+                    let vm=self.vm.as_mut().context("NNN Config Init VM absent")?;
+                    // Legacy vtable5655a4+56 points at51b3e0. Its FIRST
+                    // action is52f4c0: stop8 script sounds/4 voices, retaining
+                    // loop-work rows and BGM. Never reuse Title's ClearWork.
+                    if !vm.poll_general_audio(host)?||!vm.poll_gallery_audio(host,&crate::native_cg::CgAudio::StopScripts)?{
+                        self.menu_operation=Some(Operation::ConfigInit);
+                    }
+                }
+                Operation::ConfigSound(request)=>{
+                    use crate::native_config_catalogues::AudioRequest;
+                    let vm=self.vm.as_mut().unwrap();
+                    let done=match &request {
+                        AudioRequest::SystemWave{name,delta}=>vm.poll_system_wave_filename(host,name,*delta)?,
+                        AudioRequest::SystemVoice{name,..}=>vm.poll_system_voice(host,name)?,
+                        AudioRequest::NumberedButtonVoice(number)=>{
+                            let mut event=crate::bridge::ButtonAudioEvent::new(0,*number,0);
+                            vm.poll_button_event(host,&mut event)?
+                        }
+                    };
+                    if !done {self.menu_operation=Some(Operation::ConfigSound(request));}
+                }
+                Operation::CharacterSound(mut event)=>{
+                    if !self.vm.as_mut().unwrap().poll_button_event(host,&mut event)?{
+                        self.menu_operation=Some(Operation::CharacterSound(event));
                     }
                 }
                 Operation::GalleryAudio(event) => {
@@ -301,7 +346,11 @@ impl InstalledAdapter {
             }
             return Ok(true);
         }
+        // Preserve edges before the shared General/audio owner can yield.
+        // Decoder completion never resamples input or creates a second click.
+        if admit {self.menu.as_mut().unwrap().retain_viewer_input(input);}
         let vm = self.vm.as_mut().context("NNN modal mode VM absent")?;
+        if !vm.poll_general_audio(host)? {self.menu.as_mut().unwrap().stage="vm_general_audio";return Ok(true);}
         if vm.scene_active() {
             let cancel =
                 admit && input.buttons_pressed & crysirror_core::service::buttons::ESCAPE != 0;
@@ -311,17 +360,23 @@ impl InstalledAdapter {
             }
             return Ok(true);
         }
+        // Skin/source/image work is independent of the background SPT's
+        // pending DRAW/presentation fence. Drain admitted child work before
+        // waiting for that fence; otherwise Menu::busy can prevent the very
+        // host frame needed by the background, starving both owners forever.
+        // This does not admit a new menu Calcu or resample its input.
+        self.menu.as_mut().unwrap().poll_skin_dependencies(host,vm)?;
         if vm.dependency_pending() {
             vm.poll_dependency(host)?;
             if vm.dependency_pending() {
-                return Ok(true);
+                self.menu.as_mut().unwrap().stage="vm_dependency";return Ok(true);
             }
         }
         if let Some(title) = self.title.as_mut() {
             if title.dependency_pending() {
                 title.poll_existing_dependencies(host, Some(vm))?;
                 if title.dependency_pending() {
-                    return Ok(true);
+                    self.menu.as_mut().unwrap().stage="title_dependency";return Ok(true);
                 }
             }
         }
@@ -331,15 +386,18 @@ impl InstalledAdapter {
             .context("NNN modal mode worker pool absent")?;
         if self.title.is_some() && !self.menu.as_ref().unwrap().owner_paused {
             if !vm.pause_title_for_menu(host)? {
-                return Ok(true);
+                self.menu.as_mut().unwrap().stage="pause_title";return Ok(true);
             }
             self.menu.as_mut().unwrap().owner_paused = true;
         }
         if self.menu.as_ref().unwrap().viewer_active() {
+            // Child PrintCG23/PrintMovie27 own General while displayed.
+            // Advancing the catalogue's General here would reinitialize both
+            // modes every frame and lose their native delayed-audio cadence.
             if vm.dependency_pending(){vm.poll_dependency(host)?;if vm.dependency_pending(){return Ok(true);}}
             let action=if self.menu.as_ref().unwrap().picture_viewer_active() {
                 self.menu.as_mut().unwrap().poll_native_viewer(host,input,admit,vm)?
-            }else{self.menu.as_mut().unwrap().poll(self.client,&self.config.font,pool,host,input,admit)?};
+            }else{self.menu.as_mut().unwrap().poll_native_movie(host,input,admit,vm)?};
             if let Some(action) = action { self.menu_operation = Some(Operation::Activate(action)); }
             return Ok(true);
         }
@@ -349,8 +407,12 @@ impl InstalledAdapter {
             .unwrap()
             .prepare_page(self.client, pool, host)?
         {
-            return Ok(true);
+            self.menu.as_mut().unwrap().stage="prepare_page";return Ok(true);
         }
+        if self.menu.as_ref().unwrap().native_config_wanted() {
+            self.menu.as_mut().unwrap().begin_native_config(vm, self.title_resources.as_ref(), pool)?;
+        }
+        if !self.menu.as_mut().unwrap().poll_general_audio(host,vm,admit)? {self.menu.as_mut().unwrap().stage="menu_general_audio";return Ok(true);}
         if self.menu.as_ref().unwrap().kind == Kind::Music {
             let menu = self.menu.as_mut().unwrap();
             if !menu.listen_initialized {
@@ -385,6 +447,19 @@ impl InstalledAdapter {
             }
             self.menu.as_mut().unwrap().back_script_started = true;
         }
+        if self.menu.as_ref().unwrap().native_config.is_some() {
+            let effect=self.menu.as_mut().unwrap().poll_native_config(self.client,&self.config.font,host,input,admit,vm)?;
+            if let Some(effect)=effect {
+                self.apply_config_effect(effect,host)?;
+                return Ok(true);
+            }
+            if !self.menu.as_ref().unwrap().native_config_published() {
+                self.menu.as_mut().unwrap().stage="config_first_print";
+                return Ok(true);
+            }
+        }
+        let vm = self.vm.as_mut().context("NNN modal mode VM absent")?;
+        if !self.menu.as_mut().unwrap().poll_plain_entry(self.client,&self.config.font,host,input,admit,vm)? {return Ok(true);}
         if vm.has_menu_background() {
             if !vm.switch_menu_background(true, host)? {
                 return Ok(true);
@@ -393,7 +468,9 @@ impl InstalledAdapter {
                 vm.tick_menu_background(host, input)?;
             }
         }
-        let action = if self.menu.as_ref().unwrap().has_skin() {
+        let action = if self.menu.as_ref().unwrap().native_config.is_some() {
+            None
+        } else if self.menu.as_ref().unwrap().has_skin() {
             self.menu.as_mut().unwrap().poll_skin(
                 self.client,
                 &self.config.font,
@@ -451,6 +528,14 @@ impl InstalledAdapter {
                     _=>anyhow::bail!("NNN SystemMenu option {index} requires its native action consumer"),
                 };
                 self.activate_menu_action(next,host)?;
+            }
+            Action::SelectPlace(index)=>{
+                let menu=self.menu.as_ref().unwrap();
+                let id=super::select_place::result_variable(menu.native_table()?,self.vm.as_ref().unwrap().configuration().context("NNN SelectPlace configuration absent")?);
+                if let Some(id)=id {
+                    self.vm.as_mut().unwrap().write_modal_variable(id,i32::try_from(index)?+1)?;
+                }
+                self.menu_operation=Some(Operation::CloseUserCommand);
             }
             Action::ResumeMessage(action)=>{
                 ensure!(self.menu.as_ref().is_some_and(|menu|matches!(menu.return_mode,9|10)),
@@ -567,6 +652,7 @@ impl InstalledAdapter {
                         .as_mut()
                         .unwrap()
                         .navigate(kind, progress, self.client, host)?;
+                    if kind==Kind::Config{self.menu_operation=Some(Operation::ConfigInit);}
                 }
             }
             Action::PlayMusic { music, number } => {
@@ -676,6 +762,11 @@ impl InstalledAdapter {
                 ));
                 self.menu_operation = Some(Operation::Save { previous, close: false });
             }
+            Action::CharacterSetting{i:id,value,captured}=>{
+                let sound=self.vm.as_mut().unwrap().apply_character_setting(id,value,captured)?;
+                self.menu.as_mut().unwrap().update_setting(id,value);
+                if let Some(sound)=sound{self.menu_operation=Some(Operation::CharacterSound(sound));}
+            }
             Action::Setting(id, value) => {
                 let restart = self
                     .vm
@@ -693,6 +784,82 @@ impl InstalledAdapter {
                 if let Some(words) = restart {
                     self.menu_operation = Some(Operation::Music(words));
                 }
+            }
+        }
+        Ok(())
+    }
+    fn apply_config_effect(
+        &mut self,
+        effect: super::menu::native_config::Effect,
+        host: &mut dyn HostServices,
+    ) -> Result<()> {
+        use super::menu::native_config::Effect;
+        let vm = self.vm.as_mut().context("NNN Config VM absent")?;
+        let menu = self.menu.as_mut().context("NNN Config menu absent")?;
+        let config = menu.native_config.as_mut().context("NNN native Config owner absent")?;
+        match effect {
+            Effect::Parameter(id, value) => {
+                let policy = config.policy.clone();
+                let restart = vm.apply_config_parameter(&policy, id, value, host)?;
+                config.update_file(vm.gallery_progress()?);
+                if let Some(preferences) = self.movie_preferences.as_mut() {
+                    match id {
+                        103 => preferences.movie_volume = value,
+                        203 => preferences.movie_enabled = value != 0,
+                        _ => (),
+                    }
+                }
+                if let Some(words) = restart {
+                    self.menu_operation = Some(Operation::Music(words));
+                }
+            }
+            Effect::Voice { slot, flag } => {
+                vm.set_config_voice_flag(slot, flag)?;
+                config.update_file(vm.gallery_progress()?);
+            }
+            Effect::SystemVoice(number) => anyhow::bail!(
+                "NNN Config SetUseSystemVoice({number})/ReLoadSystemSound requires the system-voice owner"
+            ),
+            Effect::Gore(value) => anyhow::bail!(
+                "NNN Config SetGoreFlag({value})/SetGoreLayer requires the gore-layer owner"
+            ),
+            Effect::Audio(event) => self.menu_operation = Some(Operation::CharacterSound(event)),
+            Effect::Preview(preview) => {
+                let system_voice = if config.file().source_version2() {
+                    config.file().flag2_word(6)?
+                } else {
+                    0
+                };
+                let Some(catalogues) = menu.config_catalogues()? else {
+                    menu.native_config.as_mut().unwrap().effects.push_front(Effect::Preview(preview));
+                    return Ok(());
+                };
+                if let Some(request) = catalogues.resolve(preview, system_voice)? {
+                    self.menu_operation = Some(Operation::ConfigSound(request));
+                }
+            }
+            Effect::Variable(id, value) => {
+                vm.write_modal_variable(id, value)?;
+                config.update_variables(vm.gallery_variables()?);
+            }
+            Effect::RestartBackground => {
+                if !vm.end_menu_background(host)? {
+                    config.effects.push_front(Effect::RestartBackground);
+                    return Ok(());
+                }
+                menu.back_script_started = false;
+            }
+            Effect::Return => {
+                if vm.dependency_pending() {
+                    config.effects.push_front(Effect::Return);
+                    return Ok(());
+                }
+                // FuqueAllEffectYoyaku + FinalExitRoutine's outSetVar.
+                vm.commit_config_pictures(&config.restore_pictures())?;
+                if let Some((id, value)) = config.out_variable() {
+                    vm.write_modal_variable(id, value)?;
+                }
+                self.activate_menu_action(Action::Close, host)?;
             }
         }
         Ok(())

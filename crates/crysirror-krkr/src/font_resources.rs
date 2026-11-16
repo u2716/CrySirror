@@ -25,7 +25,7 @@ pub(crate) fn add(rt: &mut Rt, name: String) -> Result<Variant> {
 }
 fn signature(rt: &mut Rt, font: ObjectHandle) -> Result<String> {
     let mut values = Vec::new();
-    for member in ["face", "height", "bold", "italic", "angle"] {
+    for member in ["face", "height", "bold", "italic", "angle", "underline", "strikeout", "faceIsFileName"] {
         values.push(rt.resolve_object_member(font, member)?.to_tjs_string()?);
     }
     let key = serde_json::to_string(&values).map_err(|e| TjsError::runtime(e.to_string()))?;
@@ -58,6 +58,9 @@ pub(crate) fn unmap(rt: &mut Rt, font: ObjectHandle) -> Result<Variant> {
     Ok(Variant::Void)
 }
 fn begin(rt: &mut Rt, source_name: String, mapping: Option<(String, u16)>) -> Result<Variant> {
+    begin_mode(rt,source_name,mapping,true)
+}
+fn begin_mode(rt: &mut Rt, source_name: String, mapping: Option<(String, u16)>,suspend:bool) -> Result<Variant> {
     let name = match &mapping {
         Some((_, size)) => format!("precomputed:{size}:{source_name}"),
         None => source_name.clone(),
@@ -126,7 +129,7 @@ fn begin(rt: &mut Rt, source_name: String, mapping: Option<(String, u16)>) -> Re
         .map_err(|e| TjsError::runtime(format!("System.addFont: {e}")))?;
     rt.host_mut().fonts.pending_binding = mapping.map(|(binding, _)| binding);
     rt.host_mut().fonts.pending = Some((name, ticket));
-    rt.request_suspend();
+    if suspend {rt.request_suspend();}
     Ok(Variant::Integer(1))
 }
 pub(crate) fn poll(rt: &mut Rt) -> anyhow::Result<bool> {
@@ -184,6 +187,13 @@ pub(crate) fn alias(rt: &mut Rt, font: ObjectHandle) -> Result<String> {
         return Ok(alias.clone());
     }
     let face = rt.resolve_object_member(font, "face")?.to_tjs_string()?;
+    if rt.resolve_object_member(font,"faceIsFileName")?.is_truthy(){
+        if face.is_empty(){return Err(TjsError::runtime("Font.faceIsFileName requires a resource filename"));}
+        if let Some(info)=rt.host().fonts.loaded.get(&face){return Ok(info.alias.clone());}
+        if rt.host().fonts.pending.is_some(){return Err(TjsError::resource_pending("font file preparation"));}
+        begin_mode(rt,face,None,false)?;
+        return Err(TjsError::resource_pending("font file preparation"));
+    }
     if let Some(lib) = &rt.host().fonts.library {
         for name in face.split(',').map(str::trim).filter(|s| !s.is_empty()) {
             if name.starts_with('@') {

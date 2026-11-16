@@ -342,6 +342,13 @@ impl Machine {
             .get(function)
             .context("System4 function index")?
             .clone();
+        //Diagnostic: SYSTEM4_TRACE_CALLS=<name substring> logs matching calls.
+        if let Some(filter) = std::env::var_os("SYSTEM4_TRACE_CALLS") {
+            let name = String::from_utf8_lossy(&f.name);
+            if name.contains(&*filter.to_string_lossy()) {
+                eprintln!("S4 CALL {name}");
+            }
+        }
         let argc = f.arguments as usize;
         ensure!(
             argc <= f.variables.len() && argc <= self.stack.len(),

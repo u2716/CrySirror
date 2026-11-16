@@ -8,7 +8,7 @@ mod gwd;
 mod leaf;
 mod liar;
 pub mod majiro;
-mod mgd;
+pub mod mgd;
 mod misc;
 mod pgd;
 mod wbm;

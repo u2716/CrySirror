@@ -5,7 +5,7 @@
 // (C) 1997-1998 Masaki Chikama; (C) 2019-2020 Nunuhara Cabbage;
 // (C) 2020 KichikuouChrome@gmail.com; GPL-2.0-or-later, used under GPLv3+.
 use super::common::*;
-use anyhow::{ensure, Result};
+use anyhow::{ensure, Context, Result};
 use crysirror_image::{ImageDecodeContext, ImageSurface};
 // QNT plane lengths are encoded in the header. Require the complete zlib
 // stream/checksum so a truncated plane cannot become an implicit black image.
@@ -307,6 +307,28 @@ pub fn dcf(bytes: &[u8], ctx: &ImageDecodeContext<'_>) -> Result<ImageSurface> {
     ensure!(c.take(4)? == b"dcgd", "DCF dcgd chunk");
     let n = c.u32()? as usize;
     ctx.decode_embedded("embedded.qnt", c.take(n)?)
+}
+///libsys4 ajp_init_metrics: 24-bit pixels, pitch w*3, one-byte alpha;
+///plane presence from the JPEG/mask sizes. The header has no origin field
+///(the zero-initialised cg_metrics keeps 0,0).
+pub(crate) fn ajp_encoding_info(
+    bytes: &[u8],
+) -> Result<crysirror_core::image_encoding::ImageEncodingInfo> {
+    let mut c = C::new(bytes);
+    ensure!(c.take(4)? == b"AJP\0", "AJP magic");
+    c.skip(8)?;
+    let (w, h) = (c.u32()?, c.u32()?);
+    let (_jpeg_offset, jpeg_size, _mask_offset, mask_size) = (c.u32()?, c.u32()?, c.u32()?, c.u32()?);
+    Ok(crysirror_core::image_encoding::ImageEncodingInfo {
+        format: "alice-soft/ajp".into(),
+        size: [w, h],
+        source_origin: Some([0, 0]),
+        color_bits: Some(24),
+        has_color_plane: Some(jpeg_size > 0),
+        has_alpha_plane: Some(mask_size > 0),
+        color_row_bytes: Some(w.checked_mul(3).context("AJP pixel pitch")?),
+        alpha_sample_bytes: Some(1),
+    })
 }
 pub fn ajp(bytes: &[u8]) -> Result<ImageSurface> {
     let mut c = C::new(bytes);

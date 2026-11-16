@@ -56,9 +56,10 @@ impl LayerSystem {
         duration_ms: u64,
         rule: Option<RuleWipe>,
         external: bool,
+        self_source: bool,
     ) -> Result<()> {
         ensure!(
-            id != source && (1..=600_000).contains(&duration_ms),
+            (id != source || self_source) && (1..=600_000).contains(&duration_ms),
             "crossfade endpoints/duration"
         );
         if let Some(r) = &rule {
@@ -84,10 +85,6 @@ impl LayerSystem {
             "crossfade needs equally sized roots"
         );
         ensure!(
-            a.parent.is_some() == b.parent.is_some(),
-            "crossfade roots must both be children or both roots"
-        );
-        ensure!(
             a.blend == Blend::Normal && b.blend == Blend::Normal,
             "crossfade root blend"
         );
@@ -95,15 +92,18 @@ impl LayerSystem {
             self.crossfade(client, id).is_none(),
             "crossfade already active"
         );
-        let aa = descendants(owner, id);
-        let bb = descendants(owner, source);
         for (&other, fade) in self.crossfades.get(&client.0).into_iter().flatten() {
             ensure!(
                 nested_or_disjoint(owner, (id, source), (other, fade.source)),
                 "overlapping crossfades"
             );
         }
-        ensure!(aa.is_disjoint(&bb), "overlapping crossfade endpoints");
+        // A hidden back page may descend from the primary fore page. Isolate
+        // it from the old input; reparenting it to the fore position is acyclic.
+        ensure!(
+            id == source || !descendants(owner, source).contains(&id),
+            "crossfade source contains destination"
+        );
         self.transition_serial = self
             .transition_serial
             .checked_add(1)
@@ -163,8 +163,12 @@ impl LayerSystem {
                         "effect and plain rule cannot both be present"
                     );
                 }
+                let self_source = fade
+                    .effect
+                    .as_ref()
+                    .is_some_and(SubtreeTransitionEffect::allows_self_source);
                 ensure!(
-                    *id != fade.source
+                    (*id != fade.source || self_source)
                         && (1..=600_000).contains(&fade.duration_ms)
                         && fade.elapsed_ms <= fade.duration_ms,
                     "invalid crossfade state"
@@ -174,12 +178,15 @@ impl LayerSystem {
                     .get(&fade.source)
                     .context("crossfade source missing")?;
                 ensure!(
-                    a.parent.is_some() == b.parent.is_some() && a.rect[2..] == b.rect[2..],
+                    a.rect[2..] == b.rect[2..],
                     "crossfade needs equally sized roots"
                 );
                 let aa = descendants(owner, *id);
                 let bb = descendants(owner, fade.source);
-                ensure!(aa.is_disjoint(&bb), "overlapping crossfade endpoints");
+                ensure!(
+                    *id == fade.source || !bb.contains(id),
+                    "crossfade source contains destination"
+                );
                 for child in aa.union(&bb) {
                     ensure!(
                         owner[child].blend == Blend::Normal,
@@ -272,30 +279,21 @@ impl LayerSystem {
             } else {
                 Some(self.compose(canvas, &nested)?)
             };
+            // A single-subtree transition (source = destination) uses its
+            // own subtree as both inputs.
+            let single = fade.source == id;
             let before: Vec<_> = inner_frame
                 .as_ref()
                 .unwrap_or(&out)
                 .iter()
-                .filter(|p| p.owner == client && aa.contains(&p.id))
+                .filter(|p| p.owner == client && aa.contains(&p.id) && (single || !bb.contains(&p.id)))
                 .cloned()
                 .collect();
-            let mut next = self.clone();
-            let target = next
-                .clients
-                .get_mut(&client)
-                .unwrap()
-                .get_mut(&fade.source)
-                .unwrap();
-            target.visible = a.visible;
-            target.rect[0] = a.rect[0];
-            target.rect[1] = a.rect[1];
-            // Rendered in the destination's place: under its parent too.
-            target.parent = a.parent;
-            let after = next
-                .compose(canvas, &nested)?
-                .into_iter()
-                .filter(|p| p.owner == client && bb.contains(&p.id))
-                .collect();
+            let after = if single {
+                before.clone()
+            } else {
+                self.place_source(canvas, client, id, fade.source, &nested, &bb)?
+            };
             out.retain(|p| p.owner != client || (!aa.contains(&p.id) && !bb.contains(&p.id)));
             let mut p = rectangle(
                 client,
@@ -336,6 +334,35 @@ impl LayerSystem {
         }
         out.sort_by(compare_primitives);
         Ok(out)
+    }
+    /// The source subtree rendered in the destination's place.
+    fn place_source(
+        &self,
+        canvas: [u32; 2],
+        client: u32,
+        id: u32,
+        source: u32,
+        nested: &[(u32, u32)],
+        bb: &BTreeSet<u32>,
+    ) -> Result<Vec<Primitive>> {
+        let a = self.clients[&client][&id].clone();
+        let mut next = self.clone();
+        let target = next
+            .clients
+            .get_mut(&client)
+            .unwrap()
+            .get_mut(&source)
+            .unwrap();
+        target.visible = a.visible;
+        target.rect[0] = a.rect[0];
+        target.rect[1] = a.rect[1];
+        // Rendered in the destination's place: under its parent too.
+        target.parent = a.parent;
+        Ok(next
+            .compose(canvas, nested)?
+            .into_iter()
+            .filter(|p| p.owner == client && bb.contains(&p.id))
+            .collect())
     }
 }
 /// Two crossfades are compatible when their endpoint subtrees are disjoint or
@@ -470,6 +497,26 @@ mod tests {
                 .iter()
                 .all(|p| p.composite.is_none())
         );
+    }
+    #[test]
+    fn single_subtree_glitch_fade_uses_its_own_inputs() {
+        let mut layers = fixture();
+        let fade = |fade_in| SubtreeTransitionEffect::Glitch {
+            params: GlitchParams { noise: 1., shift: [1.; 3], probability: [0.5; 3], reset: 0.1, block: 4 },
+            mode: GlitchTransition::Fade { fade_in, gamma: 1., color: None },
+            seed: 3,
+        };
+        let begin = |effect| LayerCommand::BeginCrossfadeEffect { id: 1, source: 1, duration_ms: 100, effect, external: false };
+        assert!(layers.apply_batch(ClientId(1), &[begin(fade(true))]).is_err());
+        layers.apply_batch(ClientId(1), &[begin(fade(false))]).unwrap();
+        layers.validate().unwrap();
+        let frame = layers.frame([32, 32]).unwrap();
+        let fade = frame.iter().find_map(|p| p.composite.as_ref()).unwrap();
+        assert_eq!(fade.before.iter().map(|p| p.id).collect::<Vec<_>>(), vec![1, 2]);
+        assert_eq!(fade.after.iter().map(|p| p.id).collect::<Vec<_>>(), vec![1, 2]);
+        let (effect, rect) = fade.effect.as_ref().unwrap();
+        let glitch = effect.glitch_frame(50, 100, [rect[2] as u32, rect[3] as u32]).unwrap();
+        assert_eq!(glitch.rows.len(), 8);
     }
     #[test]
     fn malformed_restored_state_and_incompatible_mutations_fail_transactionally() {

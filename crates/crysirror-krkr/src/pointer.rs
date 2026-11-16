@@ -1,6 +1,6 @@
 // Copyright (c) 2026 CrySirror contributors.
-// Distributed under the GNU Affero General Public License, version 3 or
-// (at your option) any later version, https://www.gnu.org/licenses/agpl-3.0.html.
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. A copy is available at https://mozilla.org/MPL/2.0/.
 //! Coordinate/key naming over logical engine input, and krkr mouse cursors
 //! over the shared UI cursor service: the `cr*` constants select standard
 //! shapes, cursor files (`.cur`/`.ani`) are decoded by the shared image
@@ -96,6 +96,7 @@ pub fn install(rt: &mut Rt) {
             &[("setCursorPos", |rt, t, a| {
                 let h = this_of(rt, t, "Layer.setCursorPos")?;
                 let (mut x, mut y) = (need_int(&a, 0, "Layer.setCursorPos")?, need_int(&a, 1, "Layer.setCursorPos")?);
+                if let Some(w)=rt.host().layers.get(&h.0).and_then(|l|rt.host().windows.get(&l.window)){x+=w.layer_pos[0];y+=w.layer_pos[1];}
                 let mut node = Some(h.0);
                 let mut depth = 0;
                 while let Some(id) = node {
@@ -123,6 +124,7 @@ pub fn install(rt: &mut Rt) {
                     } else {
                         f.pointer_y as i64
                     };
+                    if let Some(w)=rt.host().layers.get(&h.0).and_then(|l|rt.host().windows.get(&l.window)){v-=w.layer_pos[axis];}
                     let mut node = Some(h.0);
                     let mut depth = 0;
                     while let Some(id) = node {
@@ -148,6 +150,7 @@ pub fn install(rt: &mut Rt) {
                         return Ok(());
                     }
                     let (mut x, mut y) = (rt.object_member(h, "__cursor_x_work").to_integer().unwrap_or(0), value);
+                    if let Some(w)=rt.host().layers.get(&h.0).and_then(|l|rt.host().windows.get(&l.window)){x+=w.layer_pos[0];y+=w.layer_pos[1];}
                     let mut node = Some(h.0);
                     let mut depth = 0;
                     while let Some(id) = node {

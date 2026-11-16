@@ -8,6 +8,28 @@ pub(super) fn load_image(
     client: ClientId,
     name: &str,
 ) -> Result<ImageSurface> {
+    load_profile_image(storage, client, name, None)
+}
+///`profile` selects the generation's modifier tables: DC2 402FE0 calls
+///404110 ('@') and 404240 ('*'); other generations use 44F1D0's.
+pub(super) fn load_profile_image(
+    storage: &dyn ClientStorage,
+    client: ClientId,
+    name: &str,
+    profile: Option<crate::Profile>,
+) -> Result<ImageSurface> {
+    load_profile_image_origin(storage, client, name, profile).map(|(surface, _)| surface)
+}
+///As `load_profile_image`, also returning the CRXG header origin: the
+///position of the stored pixels inside the CRM canvas (DC3 BST/FACE parts).
+///D.C.III 401AA0 draws each portrait at its record's origin plus the script
+///position; the other Circus files used so far store (0, 0).
+pub(super) fn load_profile_image_origin(
+    storage: &dyn ClientStorage,
+    client: ClientId,
+    name: &str,
+    profile: Option<crate::Profile>,
+) -> Result<(ImageSurface, [i32; 2])> {
     ensure!(
         !name.is_empty() && name.len() < 260 && !name.contains('\0'),
         "Circus image resource name"
@@ -111,24 +133,31 @@ pub(super) fn load_image(
         }
         Ok(data)
     })?;
+    let origin=decoded.offset.map(i32::from);
     let surface=decoded.surface;
     //44F1D0@44F4AA..44F4CD dispatches only mode1(@) and2(*): mode3(?)
     //strips for resource identity but requests no colour transform.
-    if !matches!(modifier,b'@'|b'*'){return Ok(surface)}
+    if !matches!(modifier,b'@'|b'*'){return Ok((surface,origin))}
     //44F1D0 finishes differential composition before44E130/44E260. The
     //VM supplies exact encoded-byte lookup tables; the shared image worker
     //owns pixel traversal, bounds, immutable output and transparency policy.
     use crysirror_image::rgb_lut::{RgbLookup,RgbLookupProfile};
+    let dc2=profile==Some(crate::Profile::Dc2PlusCommunication);
     let profile=match pixel_format.context("Circus image modifier lacks source pixel format")? {
         0=>RgbLookupProfile::StraightColorKey{color:[255,0,255]},
         1=>RgbLookupProfile::StraightNonzeroAlpha,
         other=>bail!("Circus image modifier indexed native format {other} needs an explicit palette-conversion policy"),
     };
-    let (weight,divisor,offset)=if modifier==b'@'{(3u16,4u16,[0u16,0,16])}else{(7,8,[32,8,0])};
+    //[red, green, blue] offsets. DC2 404240: B*3/4, G*3/4+16, R*3/4+48.
+    let (weight,divisor,offset)=match (modifier,dc2) {
+        (b'@',_)=>(3u16,4u16,[0u16,0,16]),
+        (_,true)=>(3,4,[48,16,0]),
+        _=>(7,8,[32,8,0]),
+    };
     let table=|offset:u16|(0u16..=255).map(|value|((value*weight/divisor)+offset) as u8).collect();
-    RgbLookup{red:table(offset[0]),green:table(offset[1]),blue:table(offset[2]),profile}.apply(&surface,&||Ok(()))
+    Ok((RgbLookup{red:table(offset[0]),green:table(offset[1]),blue:table(offset[2]),profile}.apply(&surface,&||Ok(()))?,origin))
 }
-fn native_image_variant(name:&str)->Result<(String,u8)> {
+pub(super) fn native_image_variant(name:&str)->Result<(String,u8)> {
     let at=name.rfind(['.','\\','/']).filter(|at|name.as_bytes()[*at]==b'.').unwrap_or(name.len());
     let modifier=at.checked_sub(1).map(|at|name.as_bytes()[at]).filter(|byte|matches!(*byte,b'@'|b'*'|b'?'));
     let mut result=name.to_owned();
@@ -195,6 +224,15 @@ mod tests {
         } else {
             Err(crysirror_core::Error::ReadOnly)
         }
+    }
+    #[test]
+    #[ignore = "requires an owner's installation via CIRCUS_IMAGE_ROOT/CIRCUS_IMAGE_NAME"]
+    fn installed_image_decodes() {
+        let root = std::env::var_os("CIRCUS_IMAGE_ROOT").expect("CIRCUS_IMAGE_ROOT");
+        let name = std::env::var("CIRCUS_IMAGE_NAME").expect("CIRCUS_IMAGE_NAME");
+        let started = std::time::Instant::now();
+        let image = load_image(&ReadOnly(root.into()), ClientId(77), &name).unwrap();
+        eprintln!("{name}: {}x{} in {:?}", image.width, image.height, started.elapsed());
     }
     #[test]
     #[ignore = "requires owner's licensed DC4PH assets via CIRCUS_ASSET_ROOT"]

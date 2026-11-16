@@ -121,7 +121,7 @@ dependencies = [
  "getrandom 0.3.4",
  "once_cell",
  "version_check",
- "zerocopy",
+ "zerocopy 0.8.63",
 ]
 
 [[package]]
@@ -255,7 +255,7 @@ checksum = "b2a5b0a5ab8561c603f16c3b78c24a386b1f70e7fc1b1b1e8c15738828e4a176"
 dependencies = [
  "anstyle",
  "memchr",
- "unicode-width",
+ "unicode-width 0.2.2",
 ]
 
 [[package]]
@@ -383,6 +383,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "assert_matches"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9b34d609dfbaf33d6889b2b7106d3ca345eacad44200913df5ba02bfd31d2ba9"
+
+[[package]]
 name = "assert_no_alloc"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -460,6 +466,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "21e4227379beff4205943696e6c3e0cd809bacdf3f0edd6e3dd153e2269571a4"
 
 [[package]]
+name = "atomig"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cd0f41f4bb89f5c6450325e283fb78c4a3d042181b54f3855ee2f872919f9863"
+dependencies = [
+ "atomig-macro",
+]
+
+[[package]]
+name = "atomig-macro"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "49c98dba06b920588de7d63f6acc23f1e6a9fade5fd6198e564506334fb5a4f5"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "audio-codec-algorithms"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -497,6 +523,19 @@ name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
+
+[[package]]
+name = "av-data"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fca67ba5d317924c02180c576157afd54babe48a76ebc66ce6d34bb8ba08308e"
+dependencies = [
+ "byte-slice-cast",
+ "bytes 1.12.1",
+ "num-derive",
+ "num-rational",
+ "num-traits",
+]
 
 [[package]]
 name = "base16ct"
@@ -941,6 +980,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "byte-slice-cast"
+version = "1.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7575182f7272186991736b70173b0ea045398f984bf5ebbb3804736ce1330c9d"
+
+[[package]]
 name = "bytemuck"
 version = "1.25.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1379,7 +1424,7 @@ checksum = "af491d569909a7e4dee0ad7db7f5341fef5c614d5b8ec8cf765732aba3cff681"
 dependencies = [
  "serde",
  "termcolor",
- "unicode-width",
+ "unicode-width 0.2.2",
 ]
 
 [[package]]
@@ -1885,6 +1930,7 @@ dependencies = [
  "crysirror-io",
  "crysirror-resource",
  "crysirror-tasks",
+ "flate2",
  "opus-decoder",
  "rodio",
  "serde",
@@ -1953,27 +1999,36 @@ dependencies = [
  "anyhow",
  "bytemuck",
  "byteorder",
- "cap-std",
  "chardetng",
+ "cpal 0.15.3",
+ "crysirror-capfs",
  "crysirror-codec-mpeg",
  "crysirror-core",
  "crysirror-network",
  "crysirror-runtime",
  "encoding_rs",
+ "getrandom 0.3.4",
  "image 0.25.10",
  "kira 0.8.7",
  "libc",
  "pelite",
  "pollster 0.3.0",
  "raw-window-handle",
+ "rff-core",
+ "rff-format",
+ "rff-format-mp4",
  "ruffle_core",
  "ruffle_render_wgpu",
+ "rust_h264",
+ "rusty_av1d",
+ "rusty_vp9",
  "serde",
  "serde_json",
  "symphonia",
  "thiserror 1.0.69",
  "tracing",
  "tracing-subscriber",
+ "vitasdk-sys",
  "wgpu",
  "winit 0.31.0-beta.3",
 ]
@@ -1993,6 +2048,15 @@ dependencies = [
  "serde_json",
  "thiserror 1.0.69",
  "tracing",
+]
+
+[[package]]
+name = "crysirror-capfs"
+version = "0.2.0"
+dependencies = [
+ "cap-std",
+ "crysirror-vita-io",
+ "tempfile",
 ]
 
 [[package]]
@@ -2029,6 +2093,7 @@ dependencies = [
  "crysirror-resource",
  "crysirror-runtime",
  "crysirror-scene",
+ "crysirror-tasks",
  "crysirror-text",
  "crysirror-vfx",
  "encoding_rs",
@@ -2119,6 +2184,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "crysirror-console-player"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "boa_engine",
+ "crysirror-bgi-integrated",
+ "crysirror-console",
+ "crysirror-core",
+ "crysirror-engine",
+ "crysirror-launch",
+ "crysirror-library",
+ "crysirror-raytrace",
+ "crysirror-render-tier",
+ "crysirror-runtime",
+ "crysirror-scene",
+ "crysirror-script-js",
+ "crysirror-siglus",
+ "crysirror-siglus-integrated",
+ "crysirror-text",
+ "crysirror-wgpu",
+ "crysirror-wgpu-deko3d",
+ "crysirror-wgpu-gxm",
+ "image 0.24.9",
+ "log",
+ "pollster 0.3.0",
+ "serde_json",
+ "wgpu",
+]
+
+[[package]]
 name = "crysirror-core"
 version = "0.2.0"
 dependencies = [
@@ -2142,6 +2237,8 @@ dependencies = [
  "crysirror-engine",
  "crysirror-formats-arc",
  "crysirror-krkr",
+ "crysirror-launch",
+ "crysirror-library",
  "crysirror-majiro",
  "crysirror-network",
  "crysirror-nscripter",
@@ -2165,8 +2262,10 @@ dependencies = [
  "crysirror-tasks",
  "crysirror-tjs2",
  "crysirror-wgpu",
+ "crysirror-willplus",
  "env_logger",
  "gilrs",
+ "glam 0.27.0",
  "image 0.24.9",
  "log",
  "muda",
@@ -2265,6 +2364,7 @@ dependencies = [
  "encoding_rs",
  "image 0.24.9",
  "miniz_oxide 0.7.4",
+ "png 0.18.1",
  "serde",
  "serde_json",
  "tiny-skia 0.12.0",
@@ -2287,6 +2387,7 @@ name = "crysirror-krkr"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "crysirror-codec-emote",
  "crysirror-core",
  "crysirror-formats-arc",
@@ -2306,6 +2407,73 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+]
+
+[[package]]
+name = "crysirror-launch"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "core-foundation 0.10.1",
+ "crysirror-audio",
+ "crysirror-avg32",
+ "crysirror-bgi-integrated",
+ "crysirror-catsystem2",
+ "crysirror-circus",
+ "crysirror-core",
+ "crysirror-engine",
+ "crysirror-formats-arc",
+ "crysirror-krkr",
+ "crysirror-majiro",
+ "crysirror-network",
+ "crysirror-nscripter",
+ "crysirror-nsystem",
+ "crysirror-puppet",
+ "crysirror-puppet-eluna",
+ "crysirror-qlie",
+ "crysirror-reallive",
+ "crysirror-resource",
+ "crysirror-rfvp",
+ "crysirror-rfvp-integrated",
+ "crysirror-rfvp-vm",
+ "crysirror-runtime",
+ "crysirror-scene",
+ "crysirror-script-js",
+ "crysirror-siglus",
+ "crysirror-siglus-integrated",
+ "crysirror-softpal",
+ "crysirror-sugarpot",
+ "crysirror-system-nnn",
+ "crysirror-system4",
+ "crysirror-tasks",
+ "crysirror-tjs2",
+ "crysirror-vita-io",
+ "crysirror-wgpu",
+ "crysirror-willplus",
+ "image 0.24.9",
+ "log",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "crysirror-library"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "crysirror-resource",
+ "crysirror-text",
+ "image 0.24.9",
+ "serde_json",
+]
+
+[[package]]
+name = "crysirror-lua"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
 ]
 
 [[package]]
@@ -2377,6 +2545,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "crysirror-nsystem"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "crysirror-core",
+ "crysirror-formats-arc",
+ "crysirror-image",
+ "crysirror-resource",
+ "crysirror-runtime",
+ "crysirror-tasks",
+ "encoding_rs",
+ "md-5",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "crysirror-physics"
 version = "0.2.0"
 dependencies = [
@@ -2426,6 +2611,8 @@ dependencies = [
  "crysirror-tasks",
  "crysirror-text",
  "encoding_rs",
+ "icu_normalizer 2.4.0",
+ "log",
  "regex",
  "serde",
  "serde_json",
@@ -2466,6 +2653,16 @@ dependencies = [
  "crysirror-resource",
  "crysirror-vfx",
  "encoding_rs",
+]
+
+[[package]]
+name = "crysirror-render-tier"
+version = "0.2.0"
+dependencies = [
+ "crysirror-console",
+ "crysirror-scene",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -2598,11 +2795,11 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "blake3",
- "cap-std",
  "chrono",
  "crysirror-acoustics",
  "crysirror-asset",
  "crysirror-audio",
+ "crysirror-capfs",
  "crysirror-core",
  "crysirror-formats-arc",
  "crysirror-formats-blackcyc",
@@ -2655,6 +2852,7 @@ dependencies = [
  "crysirror-image",
  "crysirror-runtime",
  "crysirror-tasks",
+ "log",
  "serde_json",
  "tempfile",
 ]
@@ -2713,6 +2911,7 @@ dependencies = [
  "encoding_rs",
  "env_logger",
  "flate2",
+ "getrandom 0.3.4",
  "hex",
  "image 0.24.9",
  "kira 0.9.6",
@@ -2725,7 +2924,11 @@ dependencies = [
  "serde",
  "serde_json",
  "ttf-parser",
+ "unicode-normalization",
+ "unicode-segmentation",
+ "unicode-width 0.1.14",
  "ureq",
+ "vitasdk-sys",
  "wgpu",
  "winit 0.31.0-beta.3",
 ]
@@ -2908,6 +3111,7 @@ dependencies = [
 name = "crysirror-tjs2"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "regex",
 ]
 
@@ -2953,16 +3157,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "crysirror-vita-io"
+version = "0.2.0"
+dependencies = [
+ "vitasdk-sys",
+]
+
+[[package]]
 name = "crysirror-web"
 version = "0.2.0"
 dependencies = [
  "anyhow",
  "crysirror-audio",
  "crysirror-core",
+ "crysirror-engine",
+ "crysirror-library",
  "crysirror-runtime",
+ "crysirror-script-js",
  "crysirror-tasks",
  "crysirror-wgpu",
  "gloo-timers",
+ "image 0.24.9",
  "js-sys",
  "rayon",
  "serde_json",
@@ -2985,6 +3200,7 @@ dependencies = [
  "crysirror-core",
  "crysirror-image",
  "crysirror-puppet",
+ "crysirror-raytrace",
  "crysirror-runtime",
  "crysirror-scene",
  "crysirror-shaders",
@@ -3003,6 +3219,50 @@ dependencies = [
  "serde_json",
  "tempfile",
  "wgpu",
+]
+
+[[package]]
+name = "crysirror-wgpu-deko3d"
+version = "0.2.0"
+dependencies = [
+ "blake3",
+ "crysirror-core",
+ "crysirror-runtime",
+ "crysirror-wgpu",
+ "pollster 0.3.0",
+ "serde",
+ "serde_json",
+ "wgpu",
+]
+
+[[package]]
+name = "crysirror-wgpu-gxm"
+version = "0.2.0"
+dependencies = [
+ "crysirror-shaders",
+ "crysirror-wgpu-deko3d",
+ "serde",
+ "serde_json",
+ "vitasdk-sys",
+]
+
+[[package]]
+name = "crysirror-willplus"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "crysirror-core",
+ "crysirror-formats-arc",
+ "crysirror-image",
+ "crysirror-lua",
+ "crysirror-resource",
+ "crysirror-runtime",
+ "crysirror-tasks",
+ "crysirror-text",
+ "crysirror-vfx",
+ "encoding_rs",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -4434,7 +4694,7 @@ dependencies = [
  "cfg-if",
  "crunchy",
  "num-traits",
- "zerocopy",
+ "zerocopy 0.8.63",
 ]
 
 [[package]]
@@ -6920,7 +7180,7 @@ dependencies = [
  "textwrap",
  "thiserror 2.0.18",
  "unicode-segmentation",
- "unicode-width",
+ "unicode-width 0.2.2",
 ]
 
 [[package]]
@@ -8042,7 +8302,7 @@ version = "0.2.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "85eae3c4ed2f50dcfe72643da4befc30deadb458a9b590d720cde2f2b1e97da9"
 dependencies = [
- "zerocopy",
+ "zerocopy 0.8.63",
 ]
 
 [[package]]
@@ -8391,6 +8651,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "raw-cpuid"
+version = "11.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "498cd0dc59d73224351ee52a95fee0f1a617a2eae0e7d9d720cc622c73a54186"
+dependencies = [
+ "bitflags 2.13.2",
+]
+
+[[package]]
 name = "raw-window-handle"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8619,6 +8888,34 @@ checksum = "9935425142ac6e252364413291d96c8bc9898d0876a801824c7af4eae397b689"
 dependencies = [
  "ctutils",
  "hmac",
+]
+
+[[package]]
+name = "rff-core"
+version = "0.4.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b1a63a47ef6a5c69088872a321f6ecfd453c8516bb72fcfad6a2020b3b21f3ca"
+dependencies = [
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "rff-format"
+version = "0.4.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f9ee5654012f7d2976d08214ef8207e5c84a077ffe9f89e29b4e4e78f2170a97"
+dependencies = [
+ "rff-core",
+]
+
+[[package]]
+name = "rff-format-mp4"
+version = "0.4.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ae9b0ce9a678f1e810ad56f5fcec4b9c36ac15aae99e36813be93eb7960e3fab"
+dependencies = [
+ "rff-core",
+ "rff-format",
 ]
 
 [[package]]
@@ -8915,6 +9212,12 @@ version = "0.5.0"
 source = "git+https://github.com/ruffle-rs/ruffle.git?rev=f64085ef12bd3c01995105c5ca20fee310fc6d87#f64085ef12bd3c01995105c5ca20fee310fc6d87"
 
 [[package]]
+name = "rust_h264"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "49a852e1544c48fba7d072620420c602f195092e3774655584ef5e4e6fd056a9"
+
+[[package]]
 name = "rustc-hash"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9085,6 +9388,33 @@ name = "rustversion"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
+
+[[package]]
+name = "rusty_av1d"
+version = "1.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9af56536f07b275509d08654be29737c2b4f911cf74dbaa35d68b662fe15b35f"
+dependencies = [
+ "assert_matches",
+ "atomig",
+ "av-data",
+ "bitflags 2.13.2",
+ "cc",
+ "cfg-if",
+ "parking_lot",
+ "paste",
+ "raw-cpuid",
+ "static_assertions",
+ "strum",
+ "to_method",
+ "zerocopy 0.7.35",
+]
+
+[[package]]
+name = "rusty_vp9"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d5c0fb525d16b81e73da6a384541f06a5ecfcdb661fb13fbcf453aff6ff9c465"
 
 [[package]]
 name = "rustybuzz"
@@ -9931,6 +10261,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
+name = "strum"
+version = "0.27.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "af23d6f6c1a224baef9d3f61e287d2761385a5b88fdab4eb4c6f11aeb54c4bcf"
+dependencies = [
+ "strum_macros",
+]
+
+[[package]]
+name = "strum_macros"
+version = "0.27.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7695ce3845ea4b33927c055a39dc438a45b059f7c1b3d91d38d10355fb8cbca7"
+dependencies = [
+ "heck",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "subtle"
 version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10309,7 +10660,7 @@ checksum = "6ecfad6c3abc80a577f2b91c1e412ee57e7a060d430b553c1b0c940974ebcd49"
 dependencies = [
  "icu_segmenter",
  "smawk",
- "unicode-width",
+ "unicode-width 0.2.2",
 ]
 
 [[package]]
@@ -10540,6 +10891,12 @@ name = "tinyvec"
 version = "1.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
+
+[[package]]
+name = "to_method"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7c4ceeeca15c8384bbc3e011dbd8fccb7f068a440b752b7d9b32ceb0ca0e2e8"
 
 [[package]]
 name = "tokio"
@@ -10891,6 +11248,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3b09c83c3c29d37506a3e260c08c03743a6bb66a9cd432c6934ab501a190571f"
 
 [[package]]
+name = "unicode-normalization"
+version = "0.1.26"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75cd3fb03d5288b3ba9a1ee103ac7e9cbb59f0b03d64f8ddfcc04dd42758a85d"
+dependencies = [
+ "tinyvec",
+]
+
+[[package]]
 name = "unicode-properties"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10907,6 +11273,12 @@ name = "unicode-segmentation"
 version = "1.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c6f5d3c3b1bf09027a88a6bc961fc00497d651009560b5463668dc81b0fa87a8"
+
+[[package]]
+name = "unicode-width"
+version = "0.1.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7dd6e30e90baa6f72411720665d41d89b9a3d039dc45b8faea1ddd07f617f6af"
 
 [[package]]
 name = "unicode-width"
@@ -11065,6 +11437,12 @@ dependencies = [
  "quote",
  "syn 2.0.119",
 ]
+
+[[package]]
+name = "vitasdk-sys"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "665d8a491ad572e0ebc103846c4a51e66b641c942391b7241f91c413a3a301a9"
 
 [[package]]
 name = "voracious_radix_sort"
@@ -12412,11 +12790,32 @@ dependencies = [
 
 [[package]]
 name = "zerocopy"
+version = "0.7.35"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1b9b4fd18abc82b8136838da5d50bae7bdea537c574d8dc1a34ed098d6c166f0"
+dependencies = [
+ "byteorder",
+ "zerocopy-derive 0.7.35",
+]
+
+[[package]]
+name = "zerocopy"
 version = "0.8.63"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e5fe1f8f1b06191a00962174c61aa5005e0bb391a6d80d07e24d115c01a92ed8"
 dependencies = [
- "zerocopy-derive",
+ "zerocopy-derive 0.8.63",
+]
+
+[[package]]
+name = "zerocopy-derive"
+version = "0.7.35"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fa4f8080344d4671fb4e831a13ad1e68092748387dfc4f55e356242fae12ce3e"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]

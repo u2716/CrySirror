@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
-// Migrated from pinned siglus_rs; see UPSTREAM.md and upstream-files.json.
+// Migrated from pinned siglus_rs; see SOURCE.json and upstream-files.json.
 use anyhow::{Result, bail};
 
 pub fn read_u16_le(buf: &[u8], off: &mut usize) -> Result<u16> {

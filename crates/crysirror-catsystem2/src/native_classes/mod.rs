@@ -37,8 +37,11 @@ pub(crate) mod particles;
 mod particle_plugins;
 #[cfg(feature="runtime")]
 mod particle_rain;
+#[cfg(feature="runtime")]
 mod particle_dash;
+#[cfg(feature="runtime")]
 mod particle_effects;
+#[cfg(feature="runtime")]
 mod particle_cmn;
 
 /// Everything one native call may touch. Fields are disjoint adapter borrows.

@@ -102,6 +102,7 @@ fn encoded_bytes_use_shared_decoder_then_exact_pair_worker() {
                 rounding: FixedMixRounding::SumThenShift,
                 alpha: FixedMixAlpha::Opaque,
             }),
+            rule_table: None,
         },
     };
     let mixed = finish(

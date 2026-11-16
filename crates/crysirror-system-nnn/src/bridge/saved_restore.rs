@@ -41,6 +41,9 @@ impl Bridge {
             .context("NNN image capability absent")?
             .resources())
     }
+    pub(crate) fn image_mask_histories(&self)->std::collections::BTreeMap<i32,crate::native_mask_storage::MaskStorage>{
+        self.images.as_ref().map(|images|images.pictures.iter().filter_map(|(slot,picture)|picture.mask_storage.clone().map(|mask|(*slot,mask))).collect()).unwrap_or_default()
+    }
     pub(crate) fn insert_saved_picture(
         &mut self,
         picture: crate::image_bridge::PreparedPicture,
@@ -79,10 +82,26 @@ impl Bridge {
         // Bounded native RAM records and immutable tables/leases only. No live
         // task, VM, mixer, Scene or composed software screen is cloned.
         bridge.metadata = self.metadata.clone();
+        bridge.voice_speak=self.voice_speak.clone();
         bridge.auxiliary = self.auxiliary.clone();
         bridge.chart_runtime = self.chart_runtime.clone();
         bridge.simple_wipe_tables = self.simple_wipe_tables.clone();
         bridge.rainbow_palette=self.rainbow_palette.clone();
+        // Empty FULLANIME InitParameter does not reset its class-global cache.
+        bridge.full_anime=self.full_anime.clone();
+        bridge.character_volume=self.character_volume.clone();
+        bridge.animation=self.animation.clone();bridge.animation_off=self.animation_off;
+        bridge.water_class=self.water_class.clone();
+        bridge.remember_class=self.remember_class.clone();
+        bridge.rain_class=self.rain_class.clone();
+        bridge.kira_class=self.kira_class.clone();
+        bridge.hamon_field=self.hamon_field.clone();
+        bridge.sun_rays_class=self.sun_rays_class.clone();
+        bridge.cloud_class=self.cloud_class.clone();
+        bridge.particle_classes=self.particle_classes.clone();
+        bridge.speed_line_class=self.speed_line_class.clone();
+        bridge.grass_class=self.grass_class.clone();
+        bridge.taiyo_class=self.taiyo_class.clone();
         bridge.get_buffer = self.get_buffer.clone();
         bridge.once_printed=self.once_printed.clone();
         bridge.user_gaiji_paths=self.user_gaiji_paths.clone();
@@ -132,6 +151,9 @@ impl Bridge {
         bridge.overlap_captures = self.overlap_captures;
         bridge.frame_canvas_created = self.frame_canvas_created;
         bridge.voice_policy=self.voice_policy.clone();
+        bridge.button_audio=self.button_audio.clone();
+        bridge.general_audio=self.general_audio.clone();
+        bridge.general_foreground=self.general_foreground.as_ref().map(|driver|driver.detached());
         bridge.overlap_frame = self.overlap_frame.clone();
         bridge.general_enter_frame=self.general_enter_frame.clone();
         bridge.cg_difference_picture=self.cg_difference_picture.clone();
@@ -294,6 +316,65 @@ impl Bridge {
         }
         Ok(layers)
     }
+    pub(crate) fn next_saved_cpu_effect(&self)->Option<(i32,i32)> {
+        let candidate=self.saved_rain.first().map(|s|(*s,13)).into_iter().chain(self.saved_rainbow.first().map(|s|(*s,96))).chain(self.saved_hae.first().map(|s|(*s,108))).chain(self.saved_grass.first().map(|s|(*s,93))).chain(self.saved_taiyo.first().map(|s|(*s,51))).chain(self.saved_kira.first().map(|s|(*s,42))).chain(self.saved_speed_line.first().map(|s|(*s,85))).chain(self.saved_sun_rays.first().map(|s|(*s,15))).chain(self.saved_particles.first_key_value().map(|(slot,command)|(*slot,*command))).min_by_key(|p|p.0)?;
+        (self.saved_suna.first_key_value().is_none_or(|(slot,_)|candidate.0<*slot)&&self.saved_hahen.first().is_none_or(|slot|candidate.0<*slot)).then_some(candidate)
+    }
+    pub(crate) fn initialize_saved_cpu_effect(&mut self,slot:i32,command:i32,random:&mut PatternRng)->Result<()> {
+        ensure!(self.next_saved_cpu_effect()==Some((slot,command)),"NNN saved class RNG initialization order changed");
+        match command {
+            14|57|70|71|138=>{
+                let state=self.picture_effects.get(&slot).context("NNN saved particle state absent")?;
+                self.particle_classes.as_mut().context("NNN saved particle constructor absent")?
+                    .restore_setter(command,&state.parameters(),slot,self.bindings.size,random)?;
+                self.saved_particles.remove(&slot);Ok(())
+            }
+            15=>{
+                let state=self.picture_effects.get(&slot).context("NNN saved SAN state absent")?;
+                let crate::native_picture_effect::PictureEffectKind::SunRays{parameters}=state.kind else{bail!("NNN saved SAN class changed");};
+                self.sun_rays_class.initialize(parameters[1],self.bindings.size,random)?;
+                self.saved_sun_rays.remove(&slot);Ok(())
+            }
+            85=>{
+                let state=self.picture_effects.get(&slot).context("NNN saved SPEEDLINE state absent")?;
+                let crate::native_picture_effect::PictureEffectKind::SpeedLine{parameters}=state.kind else{bail!("NNN saved SPEEDLINE class changed");};
+                let mut class=(*self.speed_line_class).clone();class.initialize(&parameters,random)?;
+                self.speed_line_class=Arc::new(class);self.saved_speed_line.remove(&slot);Ok(())
+            }
+            42=>{
+                let state=self.picture_effects.get(&slot).context("NNN saved KIRA state absent")?;
+                let crate::native_picture_effect::PictureEffectKind::Kira{parameters}=state.kind else{bail!("NNN saved KIRA class changed");};
+                let mut class=self.kira_class.clone();class.set(&parameters,self.bindings.size,random)?;
+                self.kira_class=class;self.saved_kira.remove(&slot);Ok(())
+            }
+            13=>{
+                let state=self.picture_effects.get(&slot).context("NNN saved RAIN state absent")?;
+                let crate::native_picture_effect::PictureEffectKind::Rain{parameters}=state.kind else{bail!("NNN saved RAIN class changed");};
+                self.rain_class=Some(Arc::new(crate::native_rain::RainClass::set(parameters,self.bindings.size,random)?));
+                self.saved_rain.remove(&slot);Ok(())
+            }
+            51=>{
+                let state=self.picture_effects.get(&slot).context("NNN saved TAIYO state absent")?;
+                let crate::native_picture_effect::PictureEffectKind::Taiyo{parameters}=state.kind else{bail!("NNN saved TAIYO class changed");};
+                let mut class=(*self.taiyo_class).clone();class.set(&parameters,random)?;self.taiyo_class=Arc::new(class);
+                self.saved_taiyo.remove(&slot);Ok(())
+            }
+            93=>{
+                let state=self.picture_effects.get(&slot).context("NNN saved GRASSPLANE state absent")?;
+                let crate::native_picture_effect::PictureEffectKind::GrassPlane{parameters}=state.kind else{bail!("NNN saved GRASSPLANE class changed");};
+                self.grass_class=Some(Arc::new(crate::native_grass_plane::GrassClass::set(&parameters,random)?));
+                self.saved_grass.remove(&slot);Ok(())
+            }
+            108=>{
+                let state=self.picture_effects.get_mut(&slot).context("NNN saved HAE state absent")?;
+                let crate::native_picture_effect::PictureEffectKind::Hae{parameters}=&mut state.kind else{bail!("NNN saved HAE class changed");};
+                crate::native_picture_hae::initialize(parameters,self.bindings.size,random)?;
+                self.saved_hae.remove(&slot);Ok(())
+            }
+            96=>self.initialize_saved_rainbow(slot,random),
+            _=>bail!("NNN unknown queued native RNG class {command}"),
+        }
+    }
     pub(crate) fn next_saved_rainbow(&self)->Option<i32> {
         self.saved_rainbow.first().copied().filter(|slot|self.saved_suna.first_key_value().is_none_or(|(next,_)|slot<=next))
     }
@@ -306,7 +387,8 @@ impl Bridge {
         Ok(())
     }
     pub(crate) fn next_saved_suna(&self) -> Option<i32> {
-        self.saved_suna.keys().next().copied()
+        let slot = *self.saved_suna.keys().next()?;
+        self.saved_hahen.first().is_none_or(|next|slot < *next).then_some(slot)
     }
     pub(crate) fn complete_saved_suna(
         &mut self,
@@ -341,7 +423,7 @@ impl Bridge {
         frozen_background: bool,
     ) -> Result<()> {
         ensure!(
-            self.saved_suna.is_empty() && self.saved_rainbow.is_empty(),
+            self.saved_suna.is_empty() && self.saved_rainbow.is_empty() && self.saved_rain.is_empty() && self.saved_hae.is_empty() && self.saved_grass.is_empty() && self.saved_taiyo.is_empty() && self.saved_kira.is_empty() && self.saved_speed_line.is_empty() && self.saved_sun_rays.is_empty() && self.saved_particles.is_empty() && self.saved_hamon.is_empty() && self.saved_hamon_work.is_none() && self.saved_hahen.is_empty() && self.saved_hahen_work.is_none(),
             "NNN saved effect resource/RNG initialization incomplete"
         );
         if advancing {
@@ -362,8 +444,8 @@ impl Bridge {
         host: &mut dyn HostServices,
     ) -> Result<crate::native_presentation::NativeFrameWork> {
         ensure!(
-            self.saved_suna.is_empty(),
-            "NNN saved SUNA class initialization is incomplete"
+            self.saved_suna.is_empty() && self.saved_rain.is_empty() && self.saved_rainbow.is_empty() && self.saved_hae.is_empty() && self.saved_grass.is_empty() && self.saved_taiyo.is_empty() && self.saved_kira.is_empty() && self.saved_speed_line.is_empty() && self.saved_sun_rays.is_empty() && self.saved_particles.is_empty() && self.saved_hamon.is_empty() && self.saved_hamon_work.is_none() && self.saved_hahen.is_empty() && self.saved_hahen_work.is_none(),
+            "NNN saved effect class initialization is incomplete"
         );
         let effects = self.frame_effects();
         let visible = self.visible_effects(&effects)?;

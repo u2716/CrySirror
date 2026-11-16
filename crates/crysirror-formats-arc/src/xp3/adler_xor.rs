@@ -98,16 +98,16 @@ pub(super) fn open(mut base: ParsedArchive, ctx: &DecodeContext) -> Result<Box<d
         "no supported rotating Adler XOR callback evidence in supplied modules"
     );
     let mut protected = BTreeSet::new();
-    for (entry, plan) in base.entries.iter_mut().zip(base.plans.iter_mut()) {
+    for (entry, plan) in base.entries.iter().zip(base.plans.iter_mut()) {
         if let EntryPlan::Segments { encrypted, .. } = plan {
             if *encrypted {
                 protected.insert(entry.id);
-                entry.metadata["adler_xor"] = serde_json::json!({"period":31,"modules":recognized});
             }
             *encrypted = false;
         }
     }
-    let archive = AdlerArchive { base, protected };
+    let report = serde_json::json!({"period":31,"modules":recognized});
+    let archive = AdlerArchive { base, protected, report };
     // Prove the selected family restores actual protected data before the
     // archive is accepted. Each subsequent open independently checks adlr.
     let sample = archive
@@ -123,10 +123,19 @@ pub(super) fn open(mut base: ParsedArchive, ctx: &DecodeContext) -> Result<Box<d
 struct AdlerArchive {
     base: ParsedArchive,
     protected: BTreeSet<u32>,
+    /// `adler_xor` facts shared by every protected entry.
+    report: serde_json::Value,
 }
 impl Archive for AdlerArchive {
     fn entries(&self) -> &[ArchiveEntry] {
         &self.base.entries
+    }
+    fn entry_metadata(&self, id: u32) -> serde_json::Value {
+        let mut out = self.base.entry_metadata(id);
+        if self.protected.contains(&id) {
+            out["adler_xor"] = self.report.clone();
+        }
+        out
     }
     fn open(&self, id: u32, ctx: &DecodeContext) -> Result<Arc<dyn AssetReader>> {
         let raw = self.base.open(id, ctx)?;
@@ -138,9 +147,7 @@ impl Archive for AdlerArchive {
             .entries
             .get(id as usize)
             .context("rotating XOR entry id")?;
-        let hash = entry.metadata["adler32"]
-            .as_u64()
-            .context("XP3 adlr absent")? as u32;
+        let hash = self.base.xp3(id).context("XP3 adlr absent")?.adler32;
         let reader = FilterReader {
             source: raw,
             key: key(hash),
@@ -244,7 +251,7 @@ mod tests {
                 path: "test.bin".into(),
                 size: plain.len() as u64,
                 stored_size: stored.len() as u64,
-                metadata: serde_json::json!({"adler32":hash}),
+                metadata: serde_json::Value::Null,
             }],
             plans: vec![EntryPlan::Segments {
                 segments: vec![crate::common::Segment {
@@ -254,6 +261,7 @@ mod tests {
                     compressed: false,
                 }],
                 encrypted: true,
+                facts: crate::common::Xp3Facts { adler32: hash, ..Default::default() },
             }],
         };
         let mut ctx = DecodeContext::new(ClientId(3));

@@ -116,14 +116,7 @@ tracks remaining engine capabilities.
 | [0100](0100-browser-host-and-capability-runtime.md) | Browser host and injected Runtime capabilities | 2D/PBR host and shared CPU workers; native adapters and broader migration remain partial |
 | [0101](0101-native-host-packages-and-console-seams.md) | Native packages and console host seams | mobile/macOS packaging and retained sessions; console device backends deferred |
 | [0102](0102-engine-adoption-and-runtime-integration.md) | Engine adoption and runtime integration | accepted two-mode policy; documentation, safe analysis, managed outputs and platform boundaries |
-
-## Historical verification and source audits
-
-| ADR | Decision | Status / follow-up |
-| --- | --- | --- |
-| [0034](0034-siglus-runtime-verification.md) | Verify Siglus execution separately from shared engine features | historical verification checkpoint; later native messages in 0061 |
-| [0035](0035-native-family-coverage.md) | RealLive / AVG32 source coverage and integration boundary | historical source audit; later adapters in 0048/0095 |
-| [0036](0036-siglus-service-boundary-audit.md) | Siglus shared-service coverage must be verified through the native VM | historical boundary audit; later per-family native mappings in NATIVE_ADAPTERS |
+| [0103](0103-game-space-ui.md) | Game-space UI, controls and presentation boundaries | accepted design; shared layout, skins, interaction and lifecycle separate from OS windows |
 
 ## Requirement backlog
 

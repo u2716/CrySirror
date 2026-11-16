@@ -12,6 +12,15 @@ pub(crate) struct SentenceTable {
 }
 impl SentenceTable {
     pub(crate) fn parse(bytes: &[u8]) -> Option<Self> {
+        Self::parse_with_replacements(bytes, false)
+    }
+    pub(crate) fn parse_native(bytes: &[u8]) -> Option<Self> {
+        Self::parse_with_replacements(bytes, true)
+    }
+    pub(crate) fn merge(&mut self, other: Self) {
+        self.groups.extend(other.groups);
+    }
+    fn parse_with_replacements(bytes: &[u8], replace: bool) -> Option<Self> {
         if bytes.len() > MAX_BYTES {
             return None;
         }
@@ -52,11 +61,11 @@ impl SentenceTable {
             for _ in 0..count {
                 let key = r.text()?;
                 let text = r.text()?;
-                if entries.insert(key, text).is_some() {
+                if entries.insert(key, text).is_some() && !replace {
                     return None;
                 }
             }
-            if table.groups.insert(group, entries).is_some() {
+            if table.groups.insert(group, entries).is_some() && !replace {
                 return None;
             }
         }

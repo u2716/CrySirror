@@ -318,7 +318,14 @@ impl MajiroVm {
             m.acknowledge(output)?;
             return Ok(Some(Out::Done));
         }
-        let now = host.now_ms() as u32;
+        if let Some(output) = self.native_audio_wait(m, hash, host)? {
+            return Ok(Some(output));
+        }
+        if let Some(output) = self.clock_native(hash, a, returns, host)? {
+            m.acknowledge(output)?;
+            return Ok(Some(Out::Done));
+        }
+        let now = self.native_now();
         let out = match hash {
             // ---------------------------------------------------- arrays
             0x96b07aee | 0x1f57b724 => {
@@ -538,17 +545,11 @@ impl MajiroVm {
                         d
                     }
                 };
-                if (now as i32).wrapping_sub(deadline) < 0 && ((now as i32).wrapping_sub(deadline)).abs() <= 43_200_000 {
+                if now < deadline as u32 && (now.wrapping_sub(deadline as u32) as i32).wrapping_abs() <= 43_200_000 {
                     return Ok(Some(Out::Wait));
                 }
                 self.timed_waits.remove(&key);
                 i(deadline.max(now as i32 - 10))
-            }
-            0x804ff66d => {
-                if self.audio_playing(host, CH_SOUND + 1) {
-                    return Ok(Some(Out::Wait));
-                }
-                i(0)
             }
             0x838de99b | 0xc9b362d0 => {
                 let channel = match hash {
@@ -743,7 +744,6 @@ impl MajiroVm {
                 self.stop_audio(host, CH_SOUND + 2, int(a, 0).max(0) as f32);
                 i(0)
             }
-            0x1d93fd7e => i(i32::from(self.audio_playing(host, CH_SOUND + 3))),
             0x5bf8f175 | 0xe712fec1 | 0xf03a9a01 => {
                 let channel = match hash {
                     0x5bf8f175 => CH_SOUND,
@@ -781,12 +781,6 @@ impl MajiroVm {
                     _ => CH_SOUND + 3,
                 };
                 i(self.native_audio_state(host, channel)?)
-            }
-            0xd1f672c7 => {
-                if self.audio_playing(host, CH_VOICE) && m.take_clicks() == 0 {
-                    return Ok(Some(Out::Wait));
-                }
-                i(0)
             }
             0x801d7af9 => {
                 let gain = self.volume("VoiceVolume") * int(a, 0) as f32 / 1000.0;

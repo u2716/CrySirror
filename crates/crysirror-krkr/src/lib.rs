@@ -1,5 +1,5 @@
-// Distributed under the GNU Affero General Public License, version 3 or
-// (at your option) any later version, https://www.gnu.org/licenses/agpl-3.0.html.
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. A copy is available at https://mozilla.org/MPL/2.0/.
 //! KiriKiri (吉里吉里) adapter over CrySirror services (ADR 0053).
 //!
 //! Original TJS2 scripts execute through `crysirror-tjs2`; KAG scenarios use
@@ -19,6 +19,9 @@
 #![forbid(unsafe_code)]
 // TjsError is the vendored VM's error type; its size is not ours to change.
 #![allow(clippy::result_large_err)]
+mod province;
+mod native_pad;
+mod fftgraph;
 pub mod adapter;
 mod constants;
 mod async_trigger;
@@ -60,10 +63,23 @@ mod varfile_plugin;
 mod audio_plugin;
 mod kaicho_plugin;
 mod psbfile_plugin;
+mod psd_plugin;
+mod wf_plugins;
+mod layer_ex;
+mod province_ex;
+mod system_ex;
+mod wv_decoder;
+mod multitrack;
+mod msdf_plugin;
 
-mod kirakira;
+mod plugin_ports;
 
 mod surfaces;
+mod system_plugins;
+mod offline_plugins;
+mod get_sample;
+mod http_plugin;
+mod wrapper_plugins;
 
 mod storage_plugins;
 

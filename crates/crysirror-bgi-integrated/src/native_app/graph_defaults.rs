@@ -3,8 +3,10 @@ use crate::native_app::ruby_registry::RubyRegistry;
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct SurfaceTextState {
     pub(crate) text_layout_mode: i32,
+    pub(crate) alignment_reserve_cell: bool,
     pub(crate) cursor_x: i32,
     pub(crate) cursor_y: i32,
+    pub(crate) last_text_extent: i32,
     pub(crate) font: i32,
     pub(crate) font_size: i32,
     pub(crate) scale_percent: i32,
@@ -21,6 +23,7 @@ pub(crate) struct SurfaceTextState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct MessageTextStyle {
     pub(crate) packed_rgb: u32,
+    pub(crate) alignment_dx: i32,
     pub(crate) effect: Option<crate::native_app::snapshot::TextShadow>,
 }
 
@@ -44,6 +47,11 @@ impl MessageTextStyle {
         });
         Self {
             packed_rgb: packed_rgb as u32 & 0x00ff_ffff,
+            alignment_dx: if effect.is_some() {
+                font_size * x_percent / 100
+            } else {
+                0
+            },
             effect,
         }
     }

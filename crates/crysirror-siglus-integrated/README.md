@@ -4,6 +4,8 @@ Mode: `integrated`. The default player registers this crate as `siglus`.
 The maintained upstream VM, native resources, text, composition, effects,
 audio, proc flow and original saves live in its internal modules. Source
 revision/digests are recorded in [SOURCE.json](SOURCE.json).
+The current complete-runtime baseline is `bef39ea90c745a4888a92a09d18be1eecfdd10ca`;
+[UPSTREAM.md](UPSTREAM.md) lists the source mapping and retained host changes.
 
 ## Host boundary
 
@@ -34,7 +36,13 @@ configured game font is unavailable.
 | Desktop | Registered integrated factory, offscreen native renderer, native PCM and host input/message-box bridge; validation is recorded separately. |
 | iOS / Android | Reuse the player registration and retained host sessions; target compilation, lifecycle and device behavior require separate validation. |
 | Browser | No connected integrated Siglus host; no fallback to the old extracted VM. |
-| Vita / Switch | Original platform source is retained; CrySirror console device backends remain deferred. |
+| Vita | Original GXM renderer retained, with all 15 native Cg/GXP programs and three includes restored; CrySirror console device/output integration remains incomplete. |
+| Switch | Original platform source is retained; CrySirror console device/output integration remains incomplete. |
+
+The [Vita shader set](src/native_vm/render/vita/shaders/README.md) reuses the
+original compiled programs. Its optional rebuild tool is
+[`platform/psv/siglus-shaderc`](../../platform/psv/siglus-shaderc/README.md).
+Importing those programs does not establish a complete CrySirror Vita build.
 
 The initial host profile requires a local or OS-mounted game directory. Remote
 storage providers, native desktop configuration/tool windows, full raw gamepad/

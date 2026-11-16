@@ -94,7 +94,9 @@ pub(super) fn load_music_loops(storage: &dyn ClientStorage) -> Result<AudioMetad
 }
 impl Bridge<'_> {
     pub(super) fn release_native_group(&mut self,kind:u8,forced:bool,steps:u32)->Result<bool>{
+        if crate::trace_enabled()&&self.services.sound_stop_group.is_none(){eprintln!("circus release group kind={kind} forced={forced} steps={steps}");}
         let (first,last)=match kind{0=>(0,1),1=>(2,5),2=>(8,11),_=>bail!("Circus audio stop category")};
+        if kind==0&&!forced&&self.services.sound_stop_group.is_none()&&self.services.native_profile==Some(crate::Profile::Dc3WithYou){self.stop_dc3_music()?;return Ok(true)}
         if self.services.sound_stop_group.is_none(){self.services.sound_stop_group=Some((kind,forced,steps,first));}
         loop {
             let (expected,expected_forced,expected_steps,channel)=self.services.sound_stop_group.unwrap();
@@ -110,11 +112,13 @@ impl Bridge<'_> {
         }
     }
     pub(super) fn release_native_sound(&mut self,channel:u32,steps:u32)->Result<bool> {
+        if crate::trace_enabled()&&self.services.sound_release_pending.is_none(){eprintln!("circus release sound channel={channel} steps={steps}");}
         use crysirror_core::service::{AudioReleaseSpec,AudioReleasePhase as Phase};
         let handle=if let Some((expected,expected_steps,handle))=self.services.sound_release_pending {
             ensure!(expected==channel&&expected_steps==steps,"Circus sound release continuation changed");handle
         }else{
-            let handle=self.host.begin_audio_release(self.client,AudioReleaseSpec{source_channel:channel,tail_channel:channel,threshold_db100:-3000,target_above_db100:-3000,target_below_db100:-10000,steps,pan:None,playback_rate:None,freeze_group_gain:true,release_tail_when_source_missing:true})?;
+            let dc3=self.services.native_profile==Some(crate::Profile::Dc3WithYou);
+            let handle=self.host.begin_audio_release(self.client,AudioReleaseSpec{source_channel:channel,tail_channel:channel,threshold_db100:if dc3{-10000}else{-3000},target_above_db100:if dc3{-10000}else{-3000},target_below_db100:-10000,steps,pan:None,playback_rate:None,freeze_group_gain:true,release_tail_when_source_missing:true})?;
             self.services.sound_release_pending=Some((channel,steps,handle));handle
         };
         let receipt=self.host.audio_release_info(self.client,handle)?;
@@ -150,16 +154,11 @@ impl Bridge<'_> {
             let mut selected=if declaration.name.contains("silent") {
                 if declaration.voice {(8..=11).collect()}else{(2..=7).collect()}
             }else{Vec::new()};
-            let channel=if declaration.voice {
-                let mut free=11;
-                for channel in 8..11 {if !self.native_channel_playing(channel)? {free=channel;break}}
-                free
-            }else if declaration.looping {2}else{
-                let mut free=5;
-                for channel in 3..5 {if !self.native_channel_playing(channel)? {free=channel;break}}
-                free
-            };
-            selected.push(channel);
+            //DC3WY432F20 warms every silent buffer before432E90 chooses
+            //the final free channel. Choosing before asynchronous warm-up
+            //can observe a different pool. Retain that source fence explicitly.
+            let deferred=self.services.native_profile==Some(crate::Profile::Dc3WithYou)&&declaration.name.contains("silent");
+            if !deferred {selected.push(self.select_native_sound_channel(declaration)?);}
             if !declaration.voice {
                 for channel in &mut selected {
                     if (2..=5).contains(channel) {
@@ -170,16 +169,35 @@ impl Bridge<'_> {
                 }
             }
             self.services.sound_starting=Some((declaration.clone(),selected,0));
+            self.services.sound_finish_select=deferred;
         }
         loop {
             let (expected,channels,index)=self.services.sound_starting.as_ref().unwrap().clone();
             ensure!(&expected==declaration,"Circus sound preparation continuation changed");
             let Some(&channel)=channels.get(index) else {
+                if self.services.sound_finish_select {
+                    let mut channel=self.select_native_sound_channel(declaration)?;
+                    if !declaration.voice&&(2..=5).contains(&channel) {
+                        if let Some(index)=self.services.sound_prefixes.as_ref().context("Circus native SFX prefixes")?.iter().position(|prefix|declaration.name.get(..prefix.len()).is_some_and(|name|name.eq_ignore_ascii_case(prefix))) {channel=if index==0{7}else{6};}
+                    }
+                    self.services.sound_starting.as_mut().unwrap().1.push(channel);
+                    self.services.sound_finish_select=false;
+                    continue
+                }
                 self.services.sound_starting=None;
                 return Ok(Some(AudioPublication{channels}));
             };
             if !self.play_audio(channel,&declaration.name,declaration.voice,declaration.looping,0,None)? {return Ok(None)}
             self.services.sound_starting.as_mut().unwrap().2+=1;
+        }
+    }
+    fn select_native_sound_channel(&mut self,declaration:&crate::machine::media_ops::AudioDeclaration)->Result<u32> {
+        if declaration.voice {
+            for channel in 8..11 {if !self.native_channel_playing(channel)? {return Ok(channel)}}
+            Ok(11)
+        }else if declaration.looping {Ok(2)}else {
+            for channel in 3..5 {if !self.native_channel_playing(channel)? {return Ok(channel)}}
+            Ok(5)
         }
     }
     pub(super) fn native_channel_playing(&mut self,channel:u32)->Result<bool> {
@@ -196,6 +214,7 @@ impl Bridge<'_> {
         Ok(info.source_playing)
     }
     pub(super) fn release_music(&mut self, forced: bool, steps: u32) -> Result<bool> {
+        if crate::trace_enabled(){eprintln!("circus release music forced={forced} steps={steps}");}
         if forced{self.cancel_native_duck()?;}
         use crysirror_core::service::{AudioReleasePhase as Phase, AudioReleaseSpec};
         if forced {
@@ -256,13 +275,20 @@ impl Bridge<'_> {
     ///43D010 is called before the next native process, independently of PCM
     ///frames or the200ms stream-refill timer. Resource/budget retries never tick.
     pub(super) fn native_audio_update(&mut self,policy:crate::machine::media_ops::NativeAudioFramePolicy) -> Result<()> {
-        use crysirror_core::service::AudioReleasePhase as Phase;
         if !self.services.audio_update_due {
             return Ok(());
         }
         self.services.audio_update_due = false;
         self.advance_native_balance()?;
         self.advance_native_duck()?;
+        self.advance_native_release_queues()?;
+        self.declare_native_duck(policy)?;
+        Ok(())
+    }
+    ///Advance engine-owned releases once per admitted native frame, without
+    ///borrowing another generation's auto-dialogue/duck policy.
+    pub(super) fn advance_native_release_queues(&mut self)->Result<()> {
+        use crysirror_core::service::AudioReleasePhase as Phase;
         let mut active = Vec::new();
         for (handle, updates) in self.services.music_releases.drain(..) {
             let info = self.host.audio_release_info(self.client, handle)?;
@@ -281,7 +307,6 @@ impl Bridge<'_> {
             }
         }
         self.services.music_releases = active;
-        self.declare_native_duck(policy)?;
         Ok(())
     }
 
@@ -365,7 +390,7 @@ impl Bridge<'_> {
             loop_start: 0,
             loop_end: None,
         };
-        if looping {
+        if looping && self.services.native_profile != Some(crate::Profile::Dc3WithYou) {
             if self.services.music_loops.is_none() {
                 let Some(Prepared::MusicLoops(records)) =
                     self.services.prepare(Work::MusicLoops, self.client)?
@@ -512,6 +537,10 @@ impl Bridge<'_> {
 
 impl Bridge<'_> {
     pub(super) fn play_native_music(&mut self,asset:&crate::machine::MusicAsset,looping:bool,resident:bool)->Result<bool>{
+        if self.services.native_profile == Some(crate::Profile::Dc3WithYou) {
+            ensure!(!resident, "DC3 native forced-resident music publication is not connected");
+            return self.play_dc3_music(asset, looping);
+        }
         if resident{self.services.resident_next_music=true;}
         if asset.name.is_empty(){return Ok(true)}
         if self.services.music_starting.is_none(){

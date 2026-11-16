@@ -1,8 +1,178 @@
 # API change log
 
+## `730548bc6fc7fb95` (2026-11-16): N-System transitions and MGD regions
+
+- `TransitionEffect::Mask` adds `vague` (1..=4096): a continuous soft edge in rule levels, weight (r + t·(vague+255) − 255)/vague, replacing the discrete `fade` step when set.
+- `TransitionEffect` adds `spin_zoom` (`reverse`), `bounce` (`count`, `vector`, `damped`, `stretch`) and `door_flip` (`axis`, `focal`), wipe codes 910–912 in the shared wipe shader (old→new family). PSV `shared_wipe_fs_main_k*` GXPs are recompiled, with new k910–k912 variants; Switch programs were not recompiled.
+- The committed artifacts were still at `53f4100163bef8b4`: the `9a5bbadd4d94916a` entry below was logged without regenerating them, so this fingerprint also covers its declarations.
+- Rust-only, not in the script reference:
+  - `crysirror_formats_arc::images_c::mgd::regions` returns an MGD sprite region table. The MGD compression field is now read as a u16 (N-System `DecodeMain` 0x43C2F0); files whose following u16 is non-zero now decode instead of failing.
+  - Legacy archive indexes no longer apply `max_entry_size` to Raw (stored) members.
+  - New crate `crysirror-nsystem` (`NSystemVm`, `Config`, `register`, `script`, `message`), registered as engine `nsystem`.
+
+## `9a5bbadd4d94916a` (2026-11-16): layer utility effects, glitch transitions, multi-track voices, WaveFilter transforms, carrier generators
+
+- `ImageEffect` adds `blue_to_alpha`, `fill_alpha`, `shrink_fast` (one image) and `shrink_copy`, `overwrap_rect`, `stitch_wrapped_copy`, `glitch_copy` (two images), specified by `crysirror_image::layer_ex`.
+- `SubtreeTransitionEffect` adds `glitch` (`params`, `mode` `exchange`/`fade`, `seed`). An old-image `fade` may name its destination as `begin_crossfade_effect` source (a single-subtree transition).
+- Rust-only, not in the script reference:
+  - Multi-track voices: `AudioResourceTransform::MultiTrack(Arc<[MultiTrackStem]>)` (stems: the resource's own or another asset, an optional stereo pick of up to 32 decoded channels, a start gain) and `AudioRequest::SetTrackGains { channel, positions, changes: Vec<AudioTrackGain> }` (linear per-track gain ramps in source time, optionally waiting for a source frame). New `crysirror_audio::multitrack` (`TrackSet`, `GainLine`, `TrackGains`), `AudioSource::{track_count, take_tracks}`, `Mixer::{set_track_gains, track_count}`, `decoder::open_asset_picked` and `Stream::open_picked`. The mixer reads each stem in lockstep after its own worker buffer.
+  - `crysirror_image::layer_ex` adds `GlitchParams`, `GlitchField`, `GlitchTransition`, `GlitchFrame` (CPU reference `render`), `glitch_pick`, `glitch_tint` and `apply_glitch_tint`; `crysirror_scene::layer` re-exports the first four and `SubtreeTransitionEffect::{allows_self_source, glitch_frame}`.
+  - The shared composite shader adds mode 4 (glitch). The PSV `shared_composite_fs_main_f` GXP is recompiled; Switch programs were not recompiled.
+  - `crysirror_core::service::AudioResourceTransform` adds `WaveFilters(Arc<[WaveFilter]>)` and no longer derives `Eq` (`WaveFilter` holds floats). `WaveFilter` is `Delay`, `FreeVerb`, `GraphicEq`, `Iir`, `GainLimit`, `PhaseVocoder`, `Abs`, `Add`, `Mul`, `RingMod` or `Vocoder`; `Oscillator` describes mono carriers. `IirKind`, `IirFamily`, `IirStructure`, `IirParamInfo`, `iir_params`, `iir_default_params` and `iir_max_order` describe the DSPFilters designs.
+  - New: `crysirror_audio::iir_design`, `crysirror_audio::wave_filters::apply` and `crysirror_audio::carriers` (`generate`, `Vocoder`) and `crysirror_audio::phase_vocoder::process`.
+  - `crysirror_core::region_map` adds `RegionMap::labels`, `RegionMap::paint_plane`, `LabelPlane` and `alpha_to_labels`.
+  - `crysirror_image::psd` (PSD/PSB documents, layer pixels and descriptors) and `crysirror_tjs2::runtime::Runtime::put_object_member` (assignment that runs property setters).
+- Migration: Rust code that requires `AudioResourceTransform: Eq` uses `PartialEq`.
+
+## `53f4100163bef8b4` (2026-11-16): showcase recorder, live material surfaces, HTTP verbs/headers
+
+- PBR material texture paths (`base_color_texture`, `emissive_texture`, …) may name a live engine surface (`__surface/<slot>`) or a published image (`__image_resource/…`). The renderer rebuilds the material when the surface revision changes. Static override textures are decoded once and shared across materials that differ only in factors.
+- Regeneration also picks up declaration changes since `daf54ba690642f95` that had not been regenerated (`Ui.beginWindowDrag`, `Ui.resetWindowShape`, `Ui.setImeCursorArea`, multiline committed text).
+- Rust-only, not in the script reference:
+  - `crysirror_core::service::HttpMethod` adds `Put`, `Delete` and `Head`, and `HttpResponse` adds `headers` (names lower-cased, at most 128 entries).
+  - New: `crysirror_resource::lz4_frame` (`decode_complete_frame`, `has_frame_magic`), `crysirror_launch::detect::kirikiri_script_search` (the `krkr_grep` example) and `crysirror_wgpu::Renderer::set_movie_capture` (consecutive captures keep temporal history instead of re-accumulating warm-up passes).
+  - GPU timestamp queries are limited to four renderers per process.
+  - The KRKR adapter configuration adds `locale`.
+- Desktop CLI: `crysirror showcase <manifest> --output <mp4>` records a scripted scene whose screens show headless native games, with spatially mixed game PCM written only to the file (see `examples/showcase/README.md`). `play --headless` honours `CRYSIRROR_HEADLESS_CAPTURE_EVERY=N`.
+
+## `daf54ba690642f95` (2026-11-13): linear alpha lookup, xorshift128, D.C.III screen frames
+
+- `ImageEffect` adds `linear_alpha_lookup` (`LinearAlphaLookup`: alpha from a byte table indexed by `offset + x*step[0] + y*step[1]`, optional complement, out-of-table value `outside`).
+- Rust-only, not in the script reference: `crysirror_vfx::xorshift::Xorshift128` (Marsaglia xorshift128 with serializable state), and the Circus `EffectRequest::OriginalScreen` / `OriginalScreen` frame requests used by D.C.III (0x8a71) 0x0E.
+- Regeneration from `7cb560d0edb00d9a` also includes other uncommitted declaration changes in the working tree that had not been regenerated.
+- Rust-only, not in the script reference (fingerprint unchanged, 2026-11-14): `crysirror_vfx::streaks` (stateless falling-streak field, `StreakField`/`Streak`) used by WillPlus 0x56 weather.
+- Rust-only, not in the script reference (fingerprint unchanged, 2026-11-15): `crysirror_core::image_processing::RgbaImage` (zero-copy shared RGBA `ImageResource`), `IMAGE_GRAPH_MAX_NODES`/`IMAGE_GRAPH_MAX_DEPTH` with `ImageInput::within_graph_bound` (the worker's graph admission bound, now shared), `crysirror_wgpu_deko3d::driver::Driver::{renderable, blendable, storage_format}` (per-format capabilities reported through adapter format features; `storage_format` replaces the earlier whole-device `compute`), `crysirror_console_player::set_log_sink`, `crysirror_console_player::selftest` (renderer self-test without game data: box filter, lite rays), `crysirror_wgpu_gxm::gxm::trace` and `crysirror_wgpu::Renderer::use_lite_rays` (the lite fragment ray profile, chosen automatically for `ComputeRaytrace` on GPUs without compute storage).
+- Rust-only, not in the script reference (fingerprint unchanged, 2026-11-15): `crysirror_resource::Archive::entry_metadata` and `ArchiveMount::entry_metadata` return an entry's complete JSON facts. Formats with large indexes keep per-entry facts typed and build them on request, so `ArchiveEntry::metadata` may hold only part of them (XP3 entries now store `Null`). `Resources.list` publishes the complete view as before. Migration: Rust callers that read XP3 keys (`adler32`, `flags`, `xp3_info_name`, `cxdec`, `hxv4`, `hash_fold_xor`, `adler_xor`, `visible_name`, `xp3_shadowed_native_ids`) from `entries()[i].metadata` call `entry_metadata(id)` instead.
+- Rust-only, not in the script reference (fingerprint unchanged): the new `crysirror-lua` crate (Lua 5.3 binary chunk loader and interpreter, `Lua`/`Host`/`Value`) and `crysirror_image::pna` (WillPlus PNAP layered images).
+
+## `7cb560d0edb00d9a` (2026-11-13): drifting-atlas streak cells
+
+- `VfxDriftingAtlasSpec` adds optional `streak_cell` `[width, height step, row base]` for the streak motion (default `[2, 24, 1]`); DC3WY rain uses `[1, 56, 0]`.
+- Rust-only, not in the script reference: `crysirror_circus::Program.original` and `dc3_original` (D.C.III to DC3WY opcode translation), and the Circus `VisualRequest::Zoom` request.
+- API artifacts were regenerated from the current declarations.
+
+## `62e8043e2e182acc` (2026-11-12): regenerated reference; exact resampling and keyed stamping
+
+- API artifacts were regenerated from the current declarations, including declaration changes made since `bdc9bef9fbf234c4` that had not been regenerated.
+- `crysirror-image` adds `overlap_resample::{overlap_resample, stepped_nearest}` (exact-overlap area resampling with an optional colour key, and stepped nearest stretching) and `keyed_over::keyed_over` (exact integer source-over between keyed and straight-alpha RGBA). These are Rust functions and do not appear in the script reference.
+
+## `bdc9bef9fbf234c4` (2026-11-11): native window requests, editor fields and bitmap text
+
+- `Ui.beginWindowDrag`, `Ui.resetWindowShape` and `Ui.setImeCursorArea` submit client-owned requests to the presenting host.
+- Text fields support explicit multiline, read-only, no-wrap and line-scroll modes. Positioned glyph styles add underline and strikeout using the selected font's design metrics.
+- `ImageEffect` adds alpha-border nine-patch resizing, checked external glyph coverage and circular coverage blur. `CoverageBitmap` and `NinePatchLayout` describe their data; image workers reserve output and temporary memory before execution.
+- `FontCatalogFace` describes authorized font names, pitch, outline format and declared code pages. Rust text measurement exposes simple-layout ink bounds.
+- Shared floating-point polygon-fragment raster declarations are included in the regenerated reference.
+
+## `3192c2516eb8d6cc` (2026-11-11): shared natural-effect resources and batches
+
+- `PngHeader` observes bounded PNG metadata independently of row decoding; `LinearByteStorage` preserves retained allocation tails. DWQ exposes preserved indexed planes and original BMP sample depth.
+- `RadialNoiseAtlas` and `FragmentGrid` prepare brush data and image partitions with transactional random state. `AlphaBrushes` updates retained coverage through ordered rationally scaled brushes.
+- `PackedRepeatRows` retains explicit packed coordinate and byte-blend profiles. `RadialRgbBrushes` and `PackedPairBatch` execute sprite batches with one output allocation; runtime admission includes their temporary tables and metadata.
+- API artifacts were regenerated from the current declarations.
+
+## `8159f272408687b5` (2026-11-11): retained radial displacement fields
+
+- `PackedRadialField` prepares bounded signed direction and radius-offset data for publication as a client-scoped immutable image resource, with explicit lane and squared-distance profiles.
+- `ImageEffect::RadialWavePair` samples two independently positioned pictures through that retained field using signed-word multiply-high offsets and low-word RGB weights. Its output extent and temporary radial table are included in runtime admission budgets.
+- Native HAMON uses retained field preparation for setters and original-save restoration. API artifacts were regenerated from the current declarations.
+
+## `7e7fb3db3c803f31` (2026-11-11): packed RGB spans and sprite batches
+
+- `StoredWordSpans` provides ordered wrapping affine RGB spans and signed additive ramps, preserving clipping phase and destination alpha.
+- `LinearMaskOffset` composes RGB offsets through independently strided linear mask buffers. `ByteRaster::SpatialColorBand` adds quantized spatial highlights before stored-mask composition.
+- `ByteRaster::RowBlitBatch` runs ordered sprite/scanline writes with one output allocation. `SignedScaledMaskedRgb256` exposes packed signed-word scaling and separately truncated coverage products.
+- Native SAN, KOMOREBI and CHARAMETAL call these shared image operations; API artifacts were regenerated from the current declarations.
+
+## `20f2722a04d4b13f` (2026-11-11): worker spectrum visualization
+
+- `HostServices.begin_spectrum_graph` prepares a client-scoped image and retained spectrum history from an independent audio decoder, without seeking a playing voice.
+- `SpectrumGraphSpec` selects fire or LCD bars. The shared audio and image modules implement the sine window/transform, logarithmic bands, decay, peak hold and bounded rasterization.
+- `SpectrumGraphReceipt` commits the image and next history together; dropping a query cancels pending worker work.
+- Subtree crossfades accept a destination containing its source back page. The old image excludes that source branch; the source is isolated in the destination position. A source containing the destination remains unsupported.
+
+## `afcc01d161cccaa1` (2026-11-11): stored byte-gradient spans
+
+- `ImageEffect::StoredGradientSpans` exposes ordered solid RGB spans and independently saturating byte-weight ramps with low-word summed products, clipping and retained destination alpha.
+- Native SPEEDLINE maps its shared line-bank geometry onto the engine operation, including the lower-row solid/ramp overlap.
+- Regenerated API artifacts from the current declarations.
+
+## `fcd36b9afb3dd835` (2026-11-11): repeated fixed-point sampling and mounted media
+
+- `ByteRaster::RepeatScaleSample` repeats scaled source windows in destination-sized work, retaining independent clipped-tile starting phases, quantized16.16 steps and stored RGB/coverage profiles. Native RAIN4 maps its depth planes onto this shared operation.
+- `HostServices.mounted_media` exposes a client-scoped `MountedMediaCatalog` of host-published labels, legacy drive identities and asset roots; `SharedHost.publish_mounted_media` supplies those mappings explicitly.
+- Regenerated API artifacts from the current declarations.
+
+## `371babf82b229087` (2026-11-11): resident interaction label planes
+
+- `ImageMetadata.begin_region_map` prepares client-scoped PNG/BMP label images on workers, retaining charged immutable results and typed errors. Palette indices remain separate from visible colours.
+- `RegionMap` composes resident plane views and bounded fills; clipped copies, resize and reflection keep snapshot and zero-hole semantics without copying image pixels on the owner.
+- `LabelImage` and `PngRows` expose bounded source-index decoding. The same generation includes `AxisBoxSample` for delayed one-axis raster sampling.
+- Regenerated API artifacts from the current declarations.
+
 Newest first. Each entry is keyed by the API fingerprint printed in
 [REFERENCE.md](REFERENCE.md). `tests/api_docs.rs` fails until the current
 fingerprint appears here. Mark breaking changes with **Breaking**.
+
+## `7da35e89980fd41c` (2026-11-11): RGB-mask pair composition
+
+- `ImageEffect::MaskFieldPair` composes two equally sized immutable images using per-channel low-word RGB-mask weights or bounded signed blue/green displacement.
+- Colour coverage retains the packed-word lower clamp and the 255 upper endpoint; displacement retains independent /128 contribution floors. Both retain destination alpha and execute in the scoped cancellable image worker.
+- Regenerated API artifacts from the current declarations.
+
+## `09d7148b9cc5c678` (2026-11-11): radial twist image sampling
+
+- `ByteRaster::RadialTwistSample` samples an immutable source through independently quantized radial scale and angular twist, with an explicit field origin, source centre and coverage percentage.
+- `ByteRasterMath::AlphaPercentRgb256` scales source alpha by an integer percentage before summed RGB composition and preserves destination coverage.
+- Regenerated API artifacts from the current declarations.
+
+## `3fa1b8c90f54de5e` (2026-11-11): affine samples and linear channel buffers
+
+- `ByteRaster::AffineSampleBlend` exposes staged double affine mapping, nearest or scale-distance neighbour sampling, signed RGB offsets and coverage-aware normal/add/subtract composition.
+- `ByteRaster::LinearChannelTransfer` copies a bounded channel span between linear pixel streams independently of their image widths.
+- `ScanlineMath::CoverageWordSeparate` exposes low-word scaled coverage, explicit complement and independently truncated RGB products.
+- Regenerated API artifacts from the current declarations.
+
+## `e3b1ea9eda1cda76` (2026-11-11): wrapping scanline sampling
+
+- `ByteRaster::FixedScanlinesWrapping32` samples signed16.16 origins and steps with explicit32-bit wrapping; the existing checked64-bit scanline operation retains its own contract.
+- `ScanlineMath::CoverageRawSummed` exposes low-word coverage/complement RGB composition without zero/opaque endpoint shortcuts.
+- Regenerated API artifacts from the current declarations.
+
+## `1cb18cdf5bd33b2f` (2026-11-11): circular colour offsets
+
+- `ImageEffect::CircularOffset` applies bounded saturated channel offsets inside integer-radius circles and toruses, with explicit row endpoint policy. Circle spans use the squared-radius formula rather than normalized ellipse sampling.
+- Regenerated API artifacts from the current declarations.
+
+## `d7252ee23e23aac8` (2026-11-11): quantized row-edge image offsets
+
+- `ImageEffect::RowEdgeLift` applies caller-provided row boundaries, grouped pixel widths and quantized saturated channel offsets through a bounded shared image operation.
+- Regenerated API artifacts from the current declarations.
+
+## `2c4c24949bb58563` (2026-11-10): palette-indexed image plans
+
+- `IndexedPlane` validates a bounded linear index plane and exposes existing `Red8` packed-pixel preparation followed by integer channel replication and RGB palette lookup. Indices and palette remain ordinary owned data; processing uses scoped engine image jobs.
+- Regenerated API artifacts from the current declarations.
+
+## `78becb9bba7a93d2` (2026-11-10): elliptic paint and integer sprite samples
+
+- `ImageEffect::EllipticPaint` paints bounded inclusive ellipse spans with explicit packed-byte RGB mixing or saturated offsets. `EllipticCutout` selects inner-span intersection and padding; optional row bounds retain caller-selected endpoint policy.
+- `SpriteSamples` returns current/next cells and an exact integer fraction for forward or ping-pong sequences with repeat or hold behavior. Callers retain clock advancement and choose byte or floating-point quantisation. Native menu and film-button animation use this shared sampler.
+- Regenerated API artifacts from the current declarations.
+
+## `aa85a05cf400745e` (2026-11-10): stochastic block image and RNG receipts
+
+- `PatternRequest::SampleBlocks` admits scoped immutable source/destination graphs, a bounded `MaskedBlockSample` specification and caller-owned RNG state. The cancellable worker returns the ready image and its actual post-sampling RNG together as `PatternOutput::ImageWithRng`.
+- `BlockSamplePaint` selects per-pixel coverage or flat sampled coverage, including an optional explicit percentage. Search, graph, temporary memory and random-draw costs are bounded before publication.
+- `ScanlineMath::CoverageByteSeparate` retains explicit byte-truncated covered weights and separately floored RGB contributions, distinct from the existing complemented-word profiles.
+- Regenerated API artifacts from the current declarations.
+
+## `5b67e8f325ba4b84` (2026-11-10): directed mask clips and packed pair composition
+
+- `ByteRaster::MaskedClipBlit` combines directed scanline clipping with explicit incremented-mask, wrapping packed-word scale/add and covered RGB products while retaining destination alpha.
+- `ImageEffect::PackedPairBlend` composes two immutable image sources with independent weights, optional coverage and an explicit signed destination residual. The unmasked profile omits destination RGB.
+- `ScanlineMath::ConstantSummed` and `CoverageSummed` expose stored-byte summed-product rounding independently from the existing separately truncated profiles.
+- Regenerated API artifacts from the current declarations.
 
 ## `b963b04efb70ebdb` (2026-11-10): directional glyph coverage stamps
 

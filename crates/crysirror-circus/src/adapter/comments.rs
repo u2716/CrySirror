@@ -632,7 +632,7 @@ impl Bridge<'_> {
             if c.assets.contains_key(name) {
                 continue;
             }
-            let Some(Prepared::Image(image, _)) = self
+            let Some(Prepared::Image(image, _, _)) = self
                 .services
                 .prepare(Work::Image(name.into()), self.client)?
             else {

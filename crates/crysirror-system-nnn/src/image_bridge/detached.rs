@@ -6,6 +6,7 @@ use super::*;
 #[derive(Clone)]
 pub(crate) struct NativePictureViews {
     pub has_mask: bool,
+    pub(crate) mask_storage:Option<crate::native_mask_storage::MaskStorage>,
     pub source_clip: [i32; 4],
     pub raw: Arc<dyn ImageResource>,
     pub opaque: Arc<dyn ImageResource>,
@@ -26,6 +27,7 @@ impl PicturePreparation {
             .image_metadata(client)?
             .begin_process(source.input, b"[]".as_slice().into())?;
         Ok(Self {
+            png_header:source.png_header,
             client,
             // The detached wrapper never exposes this internal staging tag as
             // a picture-bank identity; poll_detached returns only image views.
@@ -40,6 +42,8 @@ impl PicturePreparation {
             has_mask: Some(source.has_mask),
             clip,
             ready: None,
+            mask_history:None,
+            mask_preparation:None,
             api_calls: 1,
         })
     }
@@ -49,6 +53,7 @@ impl PicturePreparation {
     ) -> Result<Option<NativePictureViews>> {
         Ok(self.poll(host)?.map(|picture| NativePictureViews {
             has_mask: picture.has_mask,
+            mask_storage:picture.mask_storage,
             source_clip: picture.source_clip,
             raw: picture.raw,
             opaque: picture.opaque,

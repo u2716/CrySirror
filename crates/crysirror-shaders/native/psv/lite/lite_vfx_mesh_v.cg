@@ -1,0 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
+// vfx_render.wgsl vs_mesh
+#define LITE_VFX_MESH
+#include "lite_vfx_vertex.cgh"

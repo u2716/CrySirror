@@ -7,7 +7,19 @@ use crysirror_puppet::{PartBlend, PuppetFrame};
 use std::collections::HashMap;
 use wgpu::util::DeviceExt;
 
-const PREMUL: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+/// Premultiplied part accumulation. Half float where the GPU can render to
+/// it; otherwise 8-bit, the precision E-mote's own D3D9 targets use.
+pub fn premultiplied_format(adapter: &wgpu::Adapter) -> wgpu::TextureFormat {
+    let wide = wgpu::TextureFormat::Rgba16Float;
+    let features = adapter.get_texture_format_features(wide);
+    if features.allowed_usages.contains(wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING)
+        && features.flags.contains(wgpu::TextureFormatFeatureFlags::BLENDABLE)
+    {
+        wide
+    } else {
+        wgpu::TextureFormat::Rgba8Unorm
+    }
+}
 const STENCIL: wgpu::TextureFormat = wgpu::TextureFormat::Depth24PlusStencil8;
 pub const MAX_TARGET: u32 = 4096;
 
@@ -38,6 +50,7 @@ pub struct PuppetRenderer {
     mask: wgpu::RenderPipeline,
     resolve: wgpu::RenderPipeline,
     targets: HashMap<String, Target>,
+    premul: wgpu::TextureFormat,
 }
 
 fn blend_state(b: PartBlend) -> wgpu::BlendState {
@@ -58,7 +71,7 @@ fn blend_state(b: PartBlend) -> wgpu::BlendState {
 }
 
 impl PuppetRenderer {
-    pub fn new(d: &wgpu::Device, texture_layout: &wgpu::BindGroupLayout, output: wgpu::TextureFormat) -> Self {
+    pub fn new(d: &wgpu::Device, texture_layout: &wgpu::BindGroupLayout, output: wgpu::TextureFormat, premul: wgpu::TextureFormat) -> Self {
         let shader = d.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("puppet"),
             source: wgpu::ShaderSource::Wgsl(crysirror_shaders::wgsl::PUPPET.into()),
@@ -100,14 +113,14 @@ impl PuppetRenderer {
                 (Stencil::Inside, wgpu::CompareFunction::Equal),
                 (Stencil::Outside, wgpu::CompareFunction::NotEqual),
             ] {
-                let target = wgpu::ColorTargetState { format: PREMUL, blend: Some(blend_state(b)), write_mask: wgpu::ColorWrites::ALL };
+                let target = wgpu::ColorTargetState { format: premul, blend: Some(blend_state(b)), write_mask: wgpu::ColorWrites::ALL };
                 parts.insert((b, s), pipeline("puppet part", "fs_part", target, depth(compare, wgpu::StencilOperation::Keep)));
             }
         }
         let mask = pipeline(
             "puppet mask",
             "fs_mask",
-            wgpu::ColorTargetState { format: PREMUL, blend: None, write_mask: wgpu::ColorWrites::empty() },
+            wgpu::ColorTargetState { format: premul, blend: None, write_mask: wgpu::ColorWrites::empty() },
             depth(wgpu::CompareFunction::Always, wgpu::StencilOperation::Replace),
         );
         let resolve = d.create_render_pipeline(&wgpu::RenderPipelineDescriptor { cache: None,
@@ -120,7 +133,7 @@ impl PuppetRenderer {
             multisample: Default::default(),
             multiview_mask: None,
         });
-        Self { parts, mask, resolve, targets: HashMap::new() }
+        Self { parts, mask, resolve, targets: HashMap::new(), premul }
     }
 
     /// Drops targets of puppet layers that no longer exist.
@@ -143,6 +156,7 @@ impl PuppetRenderer {
         bind: &dyn Fn(u32) -> Option<&'a wgpu::BindGroup>,
         output: &wgpu::TextureView,
     ) -> anyhow::Result<()> {
+        let premul_format = self.premul;
         let target = match self.targets.get(key) {
             Some(t) if t.size == size => t,
             _ => {
@@ -158,7 +172,7 @@ impl PuppetRenderer {
                         view_formats: &[],
                     })
                 };
-                let premul = tex("puppet premultiplied", PREMUL, wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING)
+                let premul = tex("puppet premultiplied", premul_format, wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING)
                     .create_view(&Default::default());
                 let stencil = tex("puppet stencil", STENCIL, wgpu::TextureUsages::RENDER_ATTACHMENT).create_view(&Default::default());
                 let premul_bind = d.create_bind_group(&wgpu::BindGroupDescriptor {

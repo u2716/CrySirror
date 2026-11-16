@@ -1,0 +1,11 @@
+[package]
+name = "crysirror-lua"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Pure-Rust Lua 5.3 bytecode loader and run-to-completion interpreter for engine-hosted scripts"
+
+[dependencies]
+anyhow.workspace = true

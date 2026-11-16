@@ -1,0 +1,25 @@
+[package]
+name = "crysirror-nsystem"
+description = "N-System MSD native script VM over CrySirror services"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+encoding_rs = "0.8"
+md-5 = "=0.11.0"
+crysirror-core.workspace = true
+crysirror-formats-arc.workspace = true
+crysirror-image.workspace = true
+crysirror-resource.workspace = true
+crysirror-tasks.workspace = true
+crysirror-runtime = {workspace = true, optional = true}
+
+[features]
+default = ["runtime"]
+runtime = ["dep:crysirror-runtime"]

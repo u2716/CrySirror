@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 pub mod embedded;
+pub(crate) use crysirror_launch::core::{Core, load_fonts, materialize_canvases, settle_vm_preparations};
 use crate::audio::Audio;
 use anyhow::{Context, Result, bail, ensure};
 use crysirror_core::service::{InputFrame, buttons};
@@ -20,21 +21,15 @@ use winit::{
     window::{Window, WindowId},
 };
 
-/// What the window loop drives: a plain runtime, or the engine App with
-/// behaviours/scripts (which owns the runtime).
-pub enum Core {
-    Plain(Runtime),
-    Scripted(Box<crysirror_engine::App>),
+pub(crate) trait CoreHost {
+    fn frame_pending(&self, audio: &Audio) -> bool;
+    fn begin_tick(&mut self, audio: &mut Audio, ms: u64, input: InputFrame) -> Result<()>;
+    fn poll_tick(&mut self, audio: &mut Audio) -> Result<bool>;
+    fn shutdown(&mut self, audio: &mut Audio) -> Result<()>;
+    fn quit_requested(&self) -> bool;
+    fn should_exit(&mut self) -> bool;
 }
-impl Core {
-    pub fn rt(&mut self) -> &mut Runtime {
-        match self {
-            Core::Plain(rt) => rt,
-            Core::Scripted(app) => app
-                .runtime_mut()
-                .expect("engine context present between frames"),
-        }
-    }
+impl CoreHost for Core {
     fn frame_pending(&self, audio: &Audio) -> bool {
         match self {
             Core::Plain(_) => audio.frame_pending(),
@@ -153,24 +148,6 @@ pub struct App {
     cursor: crate::cursor::CursorPresenter,
 }
 
-pub fn load_fonts(rt: &mut Runtime, override_font: Option<&Path>) -> Result<()> {
-    for (alias, path) in &rt.project.fonts {
-        let bytes = rt.assets.read(path)?;
-        rt.assets.text.add_font(alias, bytes.to_vec())?;
-        rt.host.text.add_font(alias, bytes.to_vec())?;
-    }
-    if let Some(path) = override_font {
-        let mut bytes = Vec::new();
-        std::fs::File::open(path)
-            .with_context(|| format!("font {}", path.display()))?
-            .take(32 * 1024 * 1024 + 1)
-            .read_to_end(&mut bytes)?;
-        ensure!(bytes.len() <= 32 * 1024 * 1024, "font exceeds 32 MiB");
-        rt.host.text.add_font("default", bytes.clone())?;
-        rt.assets.text.add_font("default", bytes)?;
-    }
-    Ok(())
-}
 /// What a movie advances between frames: the bare runtime, or an engine
 /// App whose scripts keep running.
 pub trait MovieSource {
@@ -262,54 +239,6 @@ pub fn movie_on(
         "hardware_rt_report":renderer.gpu.hardware_rt_report(),
         "hardware_rt_stats":renderer.hardware_rt_stats(),"vfx":renderer.pbr().map(|p|p.vfx_stats()),"frame_samples":frame_samples,"frame_samples_dropped":frames.saturating_sub(256),"profile":renderer.profile_report_offline()?}),
     )
-}
-/// Compacted canvases (scene compaction requests) are rasterized once by the
-/// renderer and republished as immutable engine PNGs, so their frozen
-/// snapshot trees stop nesting. A request whose images are still loading is
-/// retried next frame.
-pub fn materialize_canvases(renderer: &mut Renderer, rt: &mut Runtime) -> Result<()> {
-    rt.prepare_frame_captures(|rt| {
-        let canvas = rt.project.canvas;
-        renderer.set_engine_frame(rt.host.engine.frame(canvas)?)?;
-        let image = renderer.capture(&rt.host.scene, &mut rt.assets, canvas, rt.project.background)?;
-        Ok(image.into_raw())
-    })?;
-    rt.prepare_canvas_images(|request,assets| renderer.snapshot_readback(assets,request.client,request.size,&request.layers))?;
-    for request in rt.host.engine.canvases.materialize_requests() {
-        let Some(image) = renderer.materialize_snapshot(&mut rt.assets, request.client, request.size, &request.layers)?
-        else {
-            continue;
-        };
-        let mut png = Vec::new();
-        image.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)?;
-        // FNV-1a over the pixels names the immutable image.
-        let hash = image.as_raw().iter().fold(0xcbf2_9ce4_8422_2325u64, |h, b| {
-            (h ^ u64::from(*b)).wrapping_mul(0x0000_0100_0000_01b3)
-        });
-        let path = format!(
-            "__crysirror/canvas-{}-{}x{}-{hash:016x}.png",
-            request.surface, request.size[0], request.size[1]
-        );
-        let client = crysirror_core::state::ClientId(request.client);
-        rt.assets.register_generated(client, &path, png)?;
-        let engine = &mut rt.host.engine;
-        engine.canvases.resolve_materialized(&request, &path, &mut engine.layers)?;
-        log::debug!("canvas {} materialized as {path}", request.surface);
-    }
-    renderer.advance_frame_histories(&mut rt.assets,rt.host.engine.layers.frame(rt.project.canvas)?,rt.project.canvas)?;
-    Ok(())
-}
-
-/// Offline startup has an explicit dependency fence. Counting simulated frames
-/// while a cold resource worker is still preparing a VM can otherwise produce
-/// a successful empty capture before any original instruction has run.
-pub fn settle_vm_preparations(rt:&mut Runtime)->Result<()> {
-    let started=Instant::now();
-    while rt.poll_vm_preparations()? {
-        ensure!(started.elapsed()<Duration::from_secs(120),"native startup preparation timeout");
-        std::thread::sleep(Duration::from_millis(1));
-    }
-    Ok(())
 }
 /// Explicit capture fence on the live renderer, retaining GPU simulation state.
 pub(crate) fn capture_existing(
@@ -465,7 +394,10 @@ impl App {
         // inserting them first would reject the UI batch and close the game.
         // Apply the same boundary to IME commits without weakening the shared
         // single-line UI contract or dropping printable text in a mixed commit.
-        let text: String = text.chars().filter(|c| !c.is_control()).collect();
+        let multiline=rt.host.engine.ui.focused_multiline_field();
+        // Enter's KeyEvent is handled by the input clock. Multicharacter IME
+        // commits/paste may contain actual paragraphs; keep those in editors.
+        let text: String = text.chars().filter(|c| !c.is_control()||multiline&&text.chars().count()>1&&matches!(c,'\n'|'\r'|'\t')).collect();
         if text.is_empty() {
             return Ok(());
         }
@@ -513,6 +445,7 @@ impl App {
             )?,
         );
         window.set_ime_allowed(true);
+        crysirror_scene::ui::theme::set_dark(window.theme() == Some(winit::window::Theme::Dark));
         self.core.rt().host.text_input.set_presenter_available(true);
         self.core.rt().host.text_input.focus(self.focused);
         crate::desktop_provider::install(self.core.rt(),true)?;
@@ -816,6 +749,18 @@ impl App {
         }
         if let Some((_,visible))=self.core.rt().host.engine.ui.window_requests.visible.take(){w.window.set_visible(visible);}
         if let Some((_,minimized))=self.core.rt().host.engine.ui.window_requests.minimized.take(){w.window.set_minimized(minimized);}
+        if self.core.rt().host.engine.ui.window_requests.drag.take().is_some(){
+            w.window.drag_window().context("native window drag request")?;
+        }
+        if self.core.rt().host.engine.ui.window_requests.reset_shape.take().is_some(){w.window.set_transparent(false);}
+        if let Some((_,[x,y,width,height]))=self.core.rt().host.engine.ui.window_requests.ime_cursor_area.take(){
+            let canvas=self.core.rt().project.canvas;
+            let mode=self.core.rt().host.engine.ui.presentation_scale.map(|(_,mode)|mode).unwrap_or_default();
+            let vp=Viewport::with_mode(canvas,[w.config.width,w.config.height],mode);
+            let sx=f64::from(vp.width)/f64::from(canvas[0]);let sy=f64::from(vp.height)/f64::from(canvas[1]);
+            w.window.set_ime_cursor_area(winit::dpi::PhysicalPosition::new(f64::from(vp.x)+f64::from(x)*sx,f64::from(vp.y)+f64::from(y)*sy),
+                winit::dpi::PhysicalSize::new((f64::from(width)*sx).ceil().max(1.) as u32,(f64::from(height)*sy).ceil().max(1.) as u32));
+        }
         if let Some((_, title)) = &self.core.rt().host.engine.ui.title {
             w.window.set_title(title);
         }
@@ -957,6 +902,10 @@ impl App {
                 self.last_tick = Instant::now();
                 self.remainder = Duration::ZERO;
             }
+            WindowEvent::ThemeChanged(theme) => {
+                crysirror_scene::ui::theme::set_dark(theme == winit::window::Theme::Dark);
+                if let Some(w) = self.window.as_ref() { w.window.request_redraw(); }
+            }
             WindowEvent::Focused(focused) => {
                 self.focused = focused;
                 self.core.rt().host.text_input.focus(focused);
@@ -1054,6 +1003,12 @@ impl App {
                         KeyCode::KeyC => Some(buttons::KEY_C),
                         KeyCode::KeyL => Some(buttons::KEY_L),
                         KeyCode::KeyZ => Some(buttons::KEY_Z),
+                        KeyCode::KeyH => Some(buttons::KEY_H),
+                        KeyCode::KeyI => Some(buttons::KEY_I),
+                        KeyCode::KeyJ => Some(buttons::KEY_J),
+                        KeyCode::KeyM => Some(buttons::KEY_M),
+                        KeyCode::KeyV => Some(buttons::KEY_V),
+                        KeyCode::Delete => Some(buttons::DELETE),
                         KeyCode::Escape => Some(buttons::ESCAPE),
                         KeyCode::Backspace => Some(buttons::BACKSPACE),
                         KeyCode::Home => Some(buttons::HOME),

@@ -119,6 +119,12 @@ impl Bridge<'_> {
                 protected,
             } => self.begin_flat_framebuffer(*out, *ticks, *color, *protected),
             EffectRequest::TileMask { pattern, color } => self.begin_tile_mask(*pattern, *color),
+            EffectRequest::SlotFade { slot, ticks } => {
+                if let Some(image) = self.services.images.get(slot).cloned() {
+                    self.begin_restore_snapshot_fade(image, *ticks)?;
+                }
+                Ok(true)
+            }
             EffectRequest::MaskFade {
                 reverse,
                 ticks,
@@ -418,6 +424,7 @@ impl Bridge<'_> {
                 }
                 Ok(true)
             }
+            EffectRequest::OriginalScreen(request) => self.original_screen(request),
             EffectRequest::StageBatch {
                 operations,
                 ticks,

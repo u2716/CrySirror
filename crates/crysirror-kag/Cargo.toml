@@ -2,7 +2,7 @@
 name = "crysirror-kag"
 version = "0.1.0"
 edition = "2024"
-license = "AGPL-3.0-or-later"
+license = "MPL-2.0"
 publish = false
 description = "KAG scenario parser and execution state for CrySirror"
 autoexamples = false

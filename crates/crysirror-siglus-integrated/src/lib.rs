@@ -5,7 +5,9 @@ mod native_xfile;
 mod native_vm;
 mod host_scope;
 mod adapter;
-pub use adapter::register;
+pub use adapter::{Config, register};
+#[cfg(any(target_os = "horizon", target_os = "vita"))]
+pub mod console;
 use native_assets::{keys,key_recovery};
 pub mod decode_material;
 pub mod gameexe { pub use crate::native_assets::gameexe::*; }

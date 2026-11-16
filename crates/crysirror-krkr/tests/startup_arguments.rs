@@ -66,3 +66,57 @@ fn malformed_and_oversized_native_arguments_are_rejected() {
     .unwrap();
     assert!(cfg.validate().is_err());
 }
+
+/// krkrz option stock: command line > `<datapath>/<exe>.cfu` > `<exe>.cf` >
+/// embedded area. The `.cfu` is written by the game itself (KAGEX
+/// changeUserConf) in one session and read before the next one's startup.
+#[test]
+fn configuration_files_layer_between_embedded_and_player_arguments() {
+    let temp = tempfile::tempdir().unwrap();
+    let assets = temp.path().join("game");
+    std::fs::create_dir(&assets).unwrap();
+    let mut exe = b"MZ fixture XOPT_EMBED_AREA_".to_vec();
+    exe.extend(128u32.to_le_bytes());
+    exe.extend(b"a=\"embedded\"\nb=\"embedded\"\nc=\"embedded\"\nd=\"embedded\"\0\0");
+    std::fs::write(assets.join("game.exe"), exe).unwrap();
+    std::fs::write(assets.join("game.cf"), b"; comment\r\nb=\"cf\"\r\nc=cf\r\nd=cf\r\n").unwrap();
+    std::fs::write(
+        assets.join("startup.tjs"),
+        r#"
+        if (System.getArgument("-a") !== "embedded") throw "embedded lost";
+        if (System.getArgument("-b") !== "cf") throw "cf ignored";
+        if (System.getArgument("-d") !== "player") throw "player not first";
+        if (Storages.isExistentStorage(System.dataPath + "game.cfu")) {
+            if (System.getArgument("-c") !== "user") throw "cfu ignored";
+            Debug.message("second session");
+        } else {
+            if (System.getArgument("-c") !== "cf") throw "cf value";
+            Plugins.link("savestruct.dll");
+            ["c=\"user\"", "d=\"user\""].save2(System.dataPath + "game.cfu");
+            Debug.message("first session");
+        }
+    "#,
+    )
+    .unwrap();
+    for marker in ["first session", "second session"] {
+        let project = serde_json::from_value(json!({"schema":2,"name":"config files",
+            "content_revision":"1","assets":"game","canvas":[640,480],
+            "clients":[{"name":"game","game":"authored","adapter":"krkr","config":{
+                "canvas":[640,480],"executable":"game.exe","arguments":{"-d":"player"}}}]}))
+        .unwrap();
+        let mut registry = AdapterRegistry::default();
+        crysirror_krkr::register(&mut registry).unwrap();
+        let mut rt =
+            Runtime::with_asset_root(project, &assets, &temp.path().join("state"), registry).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            rt.tick(1, InputFrame::default()).unwrap();
+            let log = rt.inspect()["sessions"][0]["native"]["log_tail"].to_string();
+            if log.contains(marker) {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "{}", rt.inspect());
+            std::thread::yield_now();
+        }
+    }
+}

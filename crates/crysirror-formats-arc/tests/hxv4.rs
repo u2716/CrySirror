@@ -70,7 +70,7 @@ fn actual_hxv4_authenticates_index_and_decodes_startup_and_samples() {
     let ids: Vec<_> = archive
         .entries()
         .iter()
-        .filter(|e| e.size < 2 * 1024 * 1024 && e.metadata.get("hxv4").is_some())
+        .filter(|e| e.size < 2 * 1024 * 1024 && archive.entry_metadata(e.id).get("hxv4").is_some())
         .step_by(127)
         .take(32)
         .map(|e| e.id)

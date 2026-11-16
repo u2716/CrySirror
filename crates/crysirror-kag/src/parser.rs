@@ -1883,6 +1883,7 @@ impl KagParser {
                 Ok(true)
             }
             "emb" => {
+                host.sync_parser_state(self)?;
                 let expression = self.required_attr_string(&tag, "exp", host)?;
                 let text = host.eval_string(&expression)?;
                 let escape = match self.optional_attr_string(&tag, "escape", host)? {
@@ -2272,6 +2273,10 @@ impl KagParser {
         let Some(value) = tag.take_attr("cond") else {
             return Ok(true);
         };
+        // Nested macro entry/pop can happen inside one getNextTag call.
+        // Publish its current mp before script evaluation, rather than leaving
+        // the host getter at the last tag returned to the conductor.
+        host.sync_parser_state(self)?;
         let expression = self.attr_value_to_string(&value, host)?;
         host.eval_bool(&expression)
     }
@@ -2335,14 +2340,19 @@ impl KagParser {
             } = param
                 && param_name == name
             {
-                return value.clone();
+                // KAGParser::_GetNextTag applies the fallback to a native
+                // void value as well as a missing member. Empty strings are
+                // real supplied values and must remain distinct.
+                if !matches!(value, AttributeValue::Void) { return value.clone(); }
+                break;
             }
         }
 
         match default {
             Some(value) => AttributeValue::Literal(value),
-            None if self.is_ext_kag() => AttributeValue::Void,
-            None => AttributeValue::Literal(String::new()),
+            // The native dictionary PropGet keeps an absent argument void.
+            // Coercing it to "" turns optional numeric fields into zero.
+            None => AttributeValue::Void,
         }
     }
 
@@ -2350,6 +2360,7 @@ impl KagParser {
     where
         H: KagHost,
     {
+        host.sync_parser_state(self)?;
         let expression = self.required_attr_string(tag, attr, host)?;
         host.eval_bool(&expression)
     }
@@ -2380,7 +2391,10 @@ impl KagParser {
     {
         match value {
             AttributeValue::Literal(value) => Ok(value.clone()),
-            AttributeValue::Expression(expression) => host.eval_string(expression),
+            AttributeValue::Expression(expression) => {
+                host.sync_parser_state(self)?;
+                host.eval_string(expression)
+            }
             AttributeValue::MacroArgument(value) => {
                 let resolved =
                     self.resolve_macro_argument_value(AttributeValue::MacroArgument(value.clone()));
@@ -2399,6 +2413,7 @@ impl KagParser {
                 continue;
             };
             if let AttributeValue::Expression(expression) = value {
+                host.sync_parser_state(self)?;
                 *value = host
                     .eval_attribute(expression)?
                     .map(AttributeValue::Literal)

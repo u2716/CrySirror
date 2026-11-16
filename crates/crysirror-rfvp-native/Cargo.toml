@@ -1,4 +1,5 @@
 [package]
+license-file.workspace = true
 name = "crysirror-rfvp-native"
 version.workspace = true
 edition = "2021"
@@ -18,6 +19,8 @@ doctest = false
 
 [features]
 host-session = ["no_std"]
+vita-gxm = ["no_std"]
+switch-framebuffer = ["no_std"]
 nfs = ["dep:game-network", "game-network/nfs"]
 smb = ["dep:game-network", "game-network/smb"]
 default = ["no_std", "host-session"]

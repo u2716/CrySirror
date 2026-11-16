@@ -18,6 +18,7 @@ pub(crate) use detached::NativePictureViews;
 #[derive(Clone)]
 pub struct PreparedPicture {
     pub has_mask: bool,
+    pub(crate) mask_storage:Option<crate::native_mask_storage::MaskStorage>,
     /// Native half-open left/top/right/bottom source edges, independent of
     /// the caller's mutable destination/source rectangles.
     pub source_clip: [i32; 4],
@@ -32,6 +33,7 @@ pub struct PreparedPicture {
     pub keyed: Arc<dyn ImageResource>,
 }
 pub(crate) struct PicturePreparation {
+    png_header:Option<crysirror_image::png_header::PngHeader>,
     client: ClientId,
     slot: i32,
     preload: bool,
@@ -44,13 +46,17 @@ pub(crate) struct PicturePreparation {
     has_mask: Option<bool>,
     clip: crate::native_picture_preparation_clip::PictureClipPreparation,
     ready: Option<PreparedPicture>,
+    mask_history:Option<crate::native_mask_storage::MaskStorage>,
+    mask_preparation:Option<crate::native_mask_storage::Preparation>,
     pub api_calls: u64,
 }
 struct Pending {
+    cached: bool,
     call: NativeCall,
     preparation: PicturePreparation,
 }
 pub struct ImageBridge {
+    pub(crate) ui_pictures:BTreeMap<crate::native_config_layout::pictures::Key,crate::native_config_layout::pictures::Picture>,
     client: ClientId,
     names: ResourceNames,
     levels: u32,
@@ -60,6 +66,8 @@ pub struct ImageBridge {
     /// Original CPicture slots retain raw alpha even when their current
     /// background display ignores it. Engine resources own every pixel.
     pub pictures: BTreeMap<i32, PreparedPicture>,
+    native_caches: crate::native_staff_bank::Bank,
+    pub(crate) png_palette:crate::native_png_palette::PngPalette,
     pub api_calls: u64,
 }
 impl ImageBridge {
@@ -78,9 +86,14 @@ impl ImageBridge {
             names,
             levels,
             resources,
-            pool: TaskPool::new("nnn-native-picture", 1, 1)?,
+            // One worker keeps reads ordered; a retired background reader may
+            // still be finishing a cancelled read when the next reader starts.
+            pool: TaskPool::new("nnn-native-picture", 1, 8)?,
             pending: None,
             pictures: BTreeMap::new(),
+            native_caches: BTreeMap::new(),
+            ui_pictures:BTreeMap::new(),
+            png_palette:Default::default(),
             api_calls: 0,
         })
     }
@@ -97,11 +110,34 @@ impl ImageBridge {
             pool: self.pool.clone(),
             pending: None,
             pictures: self.pictures.clone(),
+            native_caches: self.native_caches.clone(),
+            ui_pictures:self.ui_pictures.clone(),
+            png_palette:self.png_palette.clone(),
             api_calls: 0,
         })
     }
     pub(crate) fn resources(&self) -> NativeResources {
         self.resources.clone()
+    }
+    pub(crate) fn full_anime_context(&self) -> crate::native_full_anime::PreparationContext {
+        crate::native_full_anime::PreparationContext { resources: self.resources.clone(), pool: self.pool.clone() }
+    }
+    pub(crate) fn staff_context(&self) -> crate::native_picture_reload::ContextData {
+        crate::native_picture_reload::ContextData { resources:self.resources.clone(),names:self.names.clone(),levels:self.levels,pool:self.pool.clone() }
+    }
+    pub(crate) fn retained_native_caches(&self) -> &crate::native_staff_bank::Bank { &self.native_caches }
+    pub(crate) fn native_load_ok(&self, slot:i32) -> bool {
+        self.native_caches.get(&slot).map_or(self.pictures.contains_key(&slot),|p|p.load_ok)
+    }
+    pub(crate) fn adopt_native_caches(&mut self, bank:&crate::native_staff_bank::Bank, touched:&std::collections::BTreeSet<i32>, opaque:&BTreeMap<i32,bool>) {
+        for slot in touched {
+            if let Some(cache)=bank.get(slot) {
+                if let Some(picture)=crate::native_staff_bank::prepared(*slot,cache,self.pictures.get(slot),opaque.get(slot).copied().unwrap_or(*slot<4||*slot==14)) {
+                    self.pictures.insert(*slot,picture);
+                }
+                self.native_caches.insert(*slot,cache.clone());
+            }
+        }
     }
     pub fn dependency_pending(&self) -> bool {
         self.pending
@@ -130,20 +166,21 @@ impl ImageBridge {
             bail!("NNN image slot payload")
         };
         ensure!((0..16).contains(slot), "NNN legacy picture slot bounds");
+        // Cached native filenames may contain a directory. Script LOADDWQ
+        // still admits basenames only, even when no new I/O is necessary.
+        self.names.script_image(name,self.levels)?;
         if self.pending.is_none() {
-            self.pending = Some(Pending {
-                call: call.clone(),
-                preparation: PicturePreparation::begin(
-                    self.client,
-                    *slot,
-                    name.clone(),
-                    *preload,
-                    &self.names,
-                    self.levels,
-                    self.resources.clone(),
-                    &self.pool,
-                )?,
-            });
+            let previous=self.pictures.get(slot);
+            let cached=if let Some(picture)=previous {crate::native_staff_bank::same_name(&picture.name,name)?}else{false};
+            let preparation=if let Some(picture)=previous.filter(|_|cached){
+                // CPicture::LoadDWQ compares the original byte filename before
+                // opening, resetting flags or changing retained mask storage.
+                PicturePreparation::cached(self.client,picture.clone(),*preload,&self.pool)?
+            }else{
+                PicturePreparation::begin(self.client,*slot,name.clone(),*preload,&self.names,self.levels,self.resources.clone(),&self.pool)?
+                    .with_mask_history(previous.and_then(|picture|picture.mask_storage.clone()))
+            };
+            self.pending=Some(Pending{cached,call:call.clone(),preparation});
         }
         let pending = self.pending.as_mut().unwrap();
         ensure!(pending.call == *call, "NNN image slot receipt changed");
@@ -167,6 +204,10 @@ impl ImageBridge {
             .ready
             .clone()
             .ok_or_else(|| anyhow::anyhow!("NNN picture is not ready"))?;
+        if !pending.cached {
+            if let Some(header)=pending.preparation.png_header.as_ref(){self.png_palette.observe_header(header)?;}
+            self.native_caches.remove(&prepared.slot);
+        }
         self.pictures.insert(prepared.slot, prepared);
         self.pending = None;
         Ok(())
@@ -174,6 +215,12 @@ impl ImageBridge {
 }
 
 impl PicturePreparation {
+    fn cached(client:ClientId,mut picture:PreparedPicture,preload:bool,pool:&TaskPool)->Result<Self>{
+        ensure!(picture.raw.client()==client,"NNN cached picture client scope");
+        picture.preload=preload;
+        picture.display=if preload{picture.raw.clone()}else if picture.slot<4||picture.slot==14{picture.opaque.clone()}else{picture.keyed.clone()};
+        Ok(Self{png_header:None,client,slot:picture.slot,preload,name:picture.name.clone(),task:None,job:None,raw:None,stage:0,opaque:None,has_mask:None,clip:crate::native_picture_preparation_clip::PictureClipPreparation::new(pool.clone()),ready:Some(picture),mask_history:None,mask_preparation:None,api_calls:0})
+    }
     /// Native slot/alpha policy over shared resource workers and ImageJobs.
     /// Original save restoration can prepare pictures without inventing a VM
     /// instruction/receipt; all pixels and format decoding remain engine-owned.
@@ -206,6 +253,7 @@ impl PicturePreparation {
             slot,
             preload,
             name,
+            png_header:None,
             task: Some(task),
             job: None,
             raw: None,
@@ -214,9 +262,13 @@ impl PicturePreparation {
             has_mask: None,
             clip: crate::native_picture_preparation_clip::PictureClipPreparation::new(pool.clone()),
             ready: None,
+            mask_history:None,
+            mask_preparation:None,
             api_calls: 0,
         })
     }
+    pub(crate) fn png_header(&self)->Option<&crysirror_image::png_header::PngHeader>{self.png_header.as_ref()}
+    pub(crate) fn with_mask_history(mut self,history:Option<crate::native_mask_storage::MaskStorage>)->Self{self.mask_history=history;self}
     pub(crate) fn poll(&mut self, host: &mut dyn HostServices) -> Result<Option<PreparedPicture>> {
         if let Some(ready) = &self.ready {
             return Ok(Some(ready.clone()));
@@ -225,6 +277,7 @@ impl PicturePreparation {
             let Some(source) = task.try_take()? else {
                 return Ok(None);
             };
+            self.png_header=source.png_header.clone();
             self.has_mask = Some(source.has_mask);
             self.clip.configure(source.has_mask, source.clip_insets)?;
             self.job = Some(
@@ -301,8 +354,13 @@ impl PicturePreparation {
                 let Some(source_clip) = self.clip.poll(self.raw.clone().unwrap())? else {
                     return Ok(None);
                 };
+                if self.mask_preparation.is_none(){self.mask_preparation=Some(crate::native_mask_storage::Preparation::new(self.client,self.raw.clone().unwrap(),self.has_mask.unwrap(),self.mask_history.clone())?);}
+                let preparation=self.mask_preparation.as_mut().unwrap();let before=preparation.api_calls;
+                let retained=preparation.poll(host);self.api_calls+=preparation.api_calls-before;
+                let Some(mask_storage)=retained?else{return Ok(None);};
                 let prepared = PreparedPicture {
                     has_mask: self.has_mask.unwrap(),
+                    mask_storage,
                     source_clip: source_clip.bounds(),
                     slot: self.slot,
                     preload: self.preload,

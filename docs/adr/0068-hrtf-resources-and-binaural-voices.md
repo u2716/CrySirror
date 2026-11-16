@@ -13,7 +13,7 @@ The dependency is pinned at `303532bd609db2d74c1b9e7f7483666dad1210fa`
 in vendor/sofar, with full original licenses and an audited one-line HDF5 v3
 version-range fix. SOURCE.json records original hashes and manifest changes.
 No legacy engine or composed output is hosted. Source audit and semantic
-adaptations are described in crysirror-acoustics/HRTF_UPSTREAM.md.
+adaptations are described in crysirror-acoustics/HRTF_SOURCES.md.
 
 HrtfDataset is an immutable engine resource. Inputs are SOFA SimpleFreeFieldHRIR
 FIR assets, or portable HrirAsset JSON with explicit left/right FIRs and local

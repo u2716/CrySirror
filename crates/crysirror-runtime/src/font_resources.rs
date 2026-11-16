@@ -237,6 +237,7 @@ struct ClientFonts {
     text: TextSystem,
 }
 impl FontLibrary for ClientFonts {
+    fn catalog(&self)->crysirror_core::Result<Vec<crysirror_core::service::FontCatalogFace>> {self.text.font_catalog().map_err(err)}
     fn aliases(&self) -> crysirror_core::Result<Vec<String>> {
         self.text.font_aliases().map_err(err)
     }

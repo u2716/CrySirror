@@ -14,7 +14,7 @@ use crysirror_core::{
 use crysirror_tasks::{Cancellation, Task, TaskPool};
 use std::sync::Arc;
 mod music_envelope;
-mod system_audio;
+pub(crate) mod system_audio;
 use system_audio::SystemPending as SystemSoundPending;
 
 /// Resolves reviewed native precedence using scoped engine archive/VFS APIs.
@@ -46,13 +46,13 @@ enum Pending {
 enum OuterMusicRequest {
     Script { words: [i32; 4], restart: bool },
     Listen(Option<crate::native_audio::ListenMusic>),
-    ReplayVoice(Vec<u8>),
+    ReplayVoice { name: Vec<u8>, percent: i32 },
 }
 enum OuterMusicPending {
     Resolve {
         request: OuterMusicRequest,
         plan: NativeAudioPlan,
-        task: Task<crate::resource_bridge::ResolvedAudio>,
+        task: Task<Option<crate::resource_bridge::ResolvedAudio>>,
     },
     Prepare {
         request: OuterMusicRequest,
@@ -67,6 +67,9 @@ struct SystemSoundPolicy {
     multi: bool,
     base: u32,
     current: u32,
+    /// Original CWaveData array, loaded at callback construction rather than
+    /// re-reading the first systemSoundLoadNumber files on every button click.
+    preloaded: Vec<Option<crate::resource_bridge::ResolvedAudio>>,
 }
 pub struct AudioBridge {
     pub policy: NativeAudioPolicy,
@@ -80,6 +83,10 @@ pub struct AudioBridge {
     outer_music: Option<OuterMusicPending>,
     system_sounds: Option<SystemSoundPolicy>,
     system_pending: Option<SystemSoundPending>,
+    system_wave_resolver: Option<crate::native_button_voice::Resolver>,
+    replay_voice_resolver: Option<crate::native_button_voice::Resolver>,
+    button_catalogues: Option<crate::native_button_voice::Catalogues>,
+    button_voices: Option<crate::native_button_voice::ButtonVoiceOwner>,
     restored_work: Option<crate::native_save_audio::SavedAudioWork>,
     voice_lengths_ms: [Option<u32>; 8],
     music_runtime: music_envelope::MusicRuntime,
@@ -98,6 +105,10 @@ pub(crate) struct AudioRestoreSeed {
     resolver: AudioResolver,
     pool: TaskPool,
     system_sounds: Option<SystemSoundPolicy>,
+    system_wave_resolver: Option<crate::native_button_voice::Resolver>,
+    replay_voice_resolver: Option<crate::native_button_voice::Resolver>,
+    button_catalogues: Option<crate::native_button_voice::Catalogues>,
+    button_voices: Option<crate::native_button_voice::RestoreSeed>,
 }
 impl AudioRestoreSeed {
     pub(crate) fn prepare(
@@ -155,6 +166,10 @@ impl AudioRestoreSeed {
                 outer_music: None,
                 system_sounds: self.system_sounds,
                 system_pending: None,
+                system_wave_resolver: self.system_wave_resolver,
+                replay_voice_resolver: self.replay_voice_resolver,
+                button_catalogues: self.button_catalogues,
+                button_voices: self.button_voices.map(|seed| seed.finish()),
                 restored_work: Some(prepared.original),
                 voice_lengths_ms: [None; 8],
                 music_runtime,
@@ -231,12 +246,23 @@ impl AudioBridge {
             resolver: self.resolver.clone(),
             pool: self.pool.clone(),
             system_sounds: self.system_sounds.clone(),
+            system_wave_resolver: self.system_wave_resolver.clone(),
+            replay_voice_resolver: self.replay_voice_resolver.clone(),
+            button_catalogues: self.button_catalogues.clone(),
+            button_voices: self
+                .button_voices
+                .as_ref()
+                .map(|owner| owner.restore_seed())
+                .transpose()?,
         })
     }
     /// Chart SetGameStatusByLoad restores native loop-work records without
     /// replaying each voice/SFX channel. Keep all raw filename tail bytes for
     /// the next native save, alongside the interpreted current-volume policy.
-    pub(crate) fn restore_native_work_records(&mut self, work: crate::native_save_audio::SavedAudioWork) -> Result<()> {
+    pub(crate) fn restore_native_work_records(
+        &mut self,
+        work: crate::native_save_audio::SavedAudioWork,
+    ) -> Result<()> {
         let policy = work.prepare_policy(&self.policy)?;
         self.policy = policy;
         self.restored_work = Some(work);
@@ -300,6 +326,10 @@ impl AudioBridge {
             outer_music: None,
             system_sounds: None,
             system_pending: None,
+            system_wave_resolver: None,
+            replay_voice_resolver: None,
+            button_catalogues: None,
+            button_voices: None,
             restored_work: None,
             voice_lengths_ms: [None; 8],
             music_runtime: Default::default(),
@@ -310,7 +340,100 @@ impl AudioBridge {
         })
     }
     pub fn pending(&self) -> bool {
-        self.pending.is_some() || self.outer_music.is_some() || self.system_pending.is_some()
+        self.pending.is_some()
+            || self.outer_music.is_some()
+            || self.system_pending.is_some()
+            || self.button_voice_pending()
+    }
+    pub(crate) fn callback_pending(&self) -> bool {
+        self.pending.is_some()
+    }
+    pub(crate) fn outer_music_pending(&self) -> bool {
+        self.outer_music.is_some()
+    }
+    pub(crate) fn system_sound_pending(&self) -> bool {
+        self.system_pending.is_some()
+    }
+    pub(crate) fn button_voice_busy(&self) -> bool {
+        self.button_voice_pending()
+    }
+    fn button_voice_pending(&self) -> bool {
+        self.button_voices
+            .as_ref()
+            .is_some_and(|owner| !owner.idle())
+    }
+    pub(crate) fn configure_button_voices(
+        &mut self,
+        catalogues: Vec<Arc<Names>>,
+        number: i32,
+        base: u32,
+        resources: crate::resource_bridge::NativeResources,
+        names: crate::native_resources::ResourceNames,
+    ) -> Result<()> {
+        ensure!(
+            self.button_voices.is_none() && resources.client() == self.client,
+            "NNN button voice configuration owner"
+        );
+        ensure!(
+            base > 0 && base.checked_add(1).is_some(),
+            "NNN button voice channel range"
+        );
+        let b = self.policy.bindings;
+        ensure!(
+            !(base..=base + 1).contains(&b.music)
+                && (base + 1 < b.sound_base || base >= b.sound_base + 8)
+                && (base + 1 < b.voice_base || base >= b.voice_base + 8)
+                && !self
+                    .system_sounds
+                    .as_ref()
+                    .is_some_and(|s| base <= s.base + 1 && s.base <= base + 1),
+            "NNN button voice channel collision"
+        );
+        let replay_resources = resources.clone();
+        let replay_names = names.clone();
+        self.replay_voice_resolver = Some(Arc::new(move |name, cancel| {
+            replay_resources.optional_replay_voice(&replay_names, name, cancel)
+        }));
+        let resolver: crate::native_button_voice::Resolver =
+            Arc::new(move |name, cancel| resources.optional_system_wave(&names, name, cancel));
+        self.button_voices = Some(crate::native_button_voice::ButtonVoiceOwner::new(
+            self.client,
+            base,
+            number,
+            self.pool.clone(),
+            resolver.clone(),
+        )?);
+        self.button_catalogues = Some(crate::native_button_voice::Catalogues { names: catalogues });
+        self.system_wave_resolver = Some(resolver);
+        Ok(())
+    }
+    pub(crate) fn button_voice_filename(
+        &self,
+        use_system_voice: i32,
+        number: i32,
+    ) -> Result<Option<Vec<u8>>> {
+        self.button_catalogues
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("NNN button voice catalogues absent"))?
+            .filename(use_system_voice, number)
+    }
+    pub(crate) fn poll_button_voice(
+        &mut self,
+        host: &mut dyn HostServices,
+        name: &[u8],
+        inputs: crate::native_button_voice::Inputs,
+    ) -> Result<bool> {
+        if self.pending.is_some() || self.outer_music.is_some() || self.system_pending.is_some() {
+            return Ok(false);
+        }
+        let owner = self
+            .button_voices
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("NNN button voice channels absent"))?;
+        let before = owner.api_calls;
+        let result = owner.poll(host, name, inputs);
+        self.api_calls += owner.api_calls - before;
+        result
     }
     /// Last fully decoded native voice duration, even when playback is muted.
     /// It is a measured source fact, independent of current channel playback.
@@ -379,19 +502,44 @@ impl AudioBridge {
                 && (base + 1 < bindings.voice_base || base >= bindings.voice_base + 8),
             "NNN system sound channel collision"
         );
+        ensure!(
+            !self
+                .button_voices
+                .as_ref()
+                .is_some_and(|v| base <= v.base + 1 && v.base <= base + 1),
+            "NNN system/button voice channel collision"
+        );
         self.system_sounds = Some(SystemSoundPolicy {
             names: names.map(Arc::new),
             disabled,
             multi,
             base,
             current: 0,
+            preloaded: Vec::new(),
         });
         Ok(())
     }
     /// Original one-based UI sound numbers select sys waves and two alternating
     /// channels; this never reuses the script sound bank or its playback cursor.
-    pub(crate) fn poll_system_sound(&mut self,host:&mut dyn HostServices,number:i32)->Result<bool> {
-        self.poll_system_audio(host,system_audio::Request::Sound(number))
+    pub(crate) fn poll_system_sound(
+        &mut self,
+        host: &mut dyn HostServices,
+        number: i32,
+    ) -> Result<bool> {
+        let s = self.policy.settings;
+        self.poll_system_sound_typed(
+            host,
+            number,
+            system_audio::SoundInputs {
+                total_off: false,
+                voice_enabled: s.voice_enabled,
+                sound_enabled: s.sound_enabled,
+                voice_volume: s.voice_volume,
+                sound_volume: s.sound_volume,
+                volume_type: 0,
+                name_delta: 0,
+            },
+        )
     }
     /// Original GeneralInit PlayCommonBGM. One native audio policy is shared
     /// with background SPT; resource lookup and decoder receipts remain async.
@@ -410,16 +558,41 @@ impl AudioBridge {
     ) -> Result<bool> {
         self.poll_outer_request(host, OuterMusicRequest::Listen(music))
     }
-    pub(crate) fn poll_replay_voice(&mut self, host: &mut dyn HostServices, name: Vec<u8>) -> Result<bool> {
-        if self.pending.is_some() || self.system_pending.is_some() { return Ok(false); }
+    pub(crate) fn poll_replay_voice(
+        &mut self,
+        host: &mut dyn HostServices,
+        name: Vec<u8>,
+    ) -> Result<bool> {
+        self.poll_replay_voice_with_percent(host, name, self.policy.settings.voice_volume)
+    }
+    pub(crate) fn poll_replay_voice_with_percent(
+        &mut self,
+        host: &mut dyn HostServices,
+        name: Vec<u8>,
+        percent: i32,
+    ) -> Result<bool> {
+        if self.pending.is_some() || self.system_pending.is_some() || self.button_voice_pending() {
+            return Ok(false);
+        }
         if self.outer_music.is_none() && self.policy.settings.voice_enabled {
-            host.submit_audio(self.client,crysirror_core::service::AudioRequest::Stop { channel:self.policy.bindings.voice_base,fade_ms:0.0 })?;
+            host.submit_audio(
+                self.client,
+                crysirror_core::service::AudioRequest::Stop {
+                    channel: self.policy.bindings.voice_base,
+                    fade_ms: 0.0,
+                },
+            )?;
             self.api_calls += 1;
         }
-        self.poll_outer_request(host, OuterMusicRequest::ReplayVoice(name))
+        self.poll_outer_request(host, OuterMusicRequest::ReplayVoice { name, percent })
     }
-    pub(crate) fn stop_gallery_script_slots(&mut self, host: &mut dyn HostServices) -> Result<bool> {
-        if self.pending() { return Ok(false); }
+    pub(crate) fn stop_gallery_script_slots(
+        &mut self,
+        host: &mut dyn HostServices,
+    ) -> Result<bool> {
+        if self.pending() {
+            return Ok(false);
+        }
         self.stop_script_slots(host)?;
         Ok(true)
     }
@@ -428,7 +601,7 @@ impl AudioBridge {
         host: &mut dyn HostServices,
         request: OuterMusicRequest,
     ) -> Result<bool> {
-        if self.pending.is_some() || self.system_pending.is_some() {
+        if self.pending.is_some() || self.system_pending.is_some() || self.button_voice_pending() {
             return Ok(false);
         }
         if self.outer_music.is_none() {
@@ -449,8 +622,17 @@ impl AudioBridge {
                     }
                     self.policy.music(words, &self.music, playing)?
                 }
-                OuterMusicRequest::Listen(music) => self.policy.listen_music(music.as_ref(), playing)?,
-                OuterMusicRequest::ReplayVoice(name) => self.policy.replay_voice(name)?,
+                OuterMusicRequest::Listen(music) => {
+                    self.policy.listen_music(music.as_ref(), playing)?
+                }
+                OuterMusicRequest::ReplayVoice { name, percent } => {
+                    let mut plan = self.policy.replay_voice(name)?;
+                    if let AudioOperation::Play { parameters, .. } = &mut plan.operation {
+                        parameters.gain =
+                            crate::native_audio::legacy_gain((*percent).clamp(0, 100))?;
+                    }
+                    plan
+                }
             };
             let Some(source) = plan.source.clone() else {
                 self.control_plan(host, &plan)?;
@@ -458,41 +640,91 @@ impl AudioBridge {
                 return Ok(true);
             };
             let resolver = self.resolver.clone();
-            let task = self.pool.spawn(move |cancel| resolver(&source, &cancel))?;
-            self.outer_music = Some(OuterMusicPending::Resolve { request, plan, task });
+            let replay = matches!(&request, OuterMusicRequest::ReplayVoice { .. })
+                .then(|| self.replay_voice_resolver.clone())
+                .flatten();
+            let task = self.pool.spawn(move |cancel| {
+                cancel.check()?;
+                let value = if let Some(replay) = replay {
+                    replay(&source.name, &cancel)?
+                } else {
+                    Some(resolver(&source, &cancel)?)
+                };
+                cancel.check()?;
+                Ok(value)
+            })?;
+            self.outer_music = Some(OuterMusicPending::Resolve {
+                request,
+                plan,
+                task,
+            });
             return Ok(false);
         }
         let expected = match self.outer_music.as_ref().unwrap() {
             OuterMusicPending::Resolve { request, .. }
             | OuterMusicPending::Prepare { request, .. } => request,
         };
-        ensure!(request == *expected, "NNN outer music request changed while pending");
+        ensure!(
+            request == *expected,
+            "NNN outer music request changed while pending"
+        );
         let pending = self.outer_music.take().unwrap();
         match pending {
-            OuterMusicPending::Resolve { request: expected, plan, mut task } => {
-                ensure!(request == expected, "NNN outer music request changed while pending");
+            OuterMusicPending::Resolve {
+                request: expected,
+                plan,
+                mut task,
+            } => {
+                ensure!(
+                    request == expected,
+                    "NNN outer music request changed while pending"
+                );
                 let Some(source) = task.try_take()? else {
-                    self.outer_music = Some(OuterMusicPending::Resolve { request, plan, task });
+                    self.outer_music = Some(OuterMusicPending::Resolve {
+                        request,
+                        plan,
+                        task,
+                    });
                     return Ok(false);
+                };
+                let Some(source) = source else {
+                    return Ok(true);
                 };
                 let audio_request = self.source_request(host, &plan, source)?;
                 let ticket = host.begin_audio(self.client, audio_request)?;
                 self.api_calls += 1;
-                self.outer_music = Some(OuterMusicPending::Prepare { request, plan, ticket });
+                self.outer_music = Some(OuterMusicPending::Prepare {
+                    request,
+                    plan,
+                    ticket,
+                });
                 Ok(false)
             }
-            OuterMusicPending::Prepare { request: expected, plan, ticket } => {
-                ensure!(request == expected, "NNN outer music request changed while preparing");
+            OuterMusicPending::Prepare {
+                request: expected,
+                plan,
+                ticket,
+            } => {
+                ensure!(
+                    request == expected,
+                    "NNN outer music request changed while preparing"
+                );
                 let state = host.audio_preparation(self.client, ticket)?;
                 match state.phase {
                     AudioPreparePhase::Pending => {
-                        self.outer_music = Some(OuterMusicPending::Prepare { request, plan, ticket });
+                        self.outer_music = Some(OuterMusicPending::Prepare {
+                            request,
+                            plan,
+                            ticket,
+                        });
                         Ok(false)
                     }
                     AudioPreparePhase::Failed => {
                         host.release_audio(self.client, ticket)?;
-                        bail!("NNN shared outer music preparation failed: {}",
-                            state.error.unwrap_or_else(|| "no diagnostic".into()))
+                        bail!(
+                            "NNN shared outer music preparation failed: {}",
+                            state.error.unwrap_or_else(|| "no diagnostic".into())
+                        )
                     }
                     AudioPreparePhase::Ready => {
                         host.release_audio(self.client, ticket)?;
@@ -514,6 +746,13 @@ impl AudioBridge {
         // when the VM has not observed it. Retire both owners on cancellation.
         // Keep cleaning the other channels if an individual cleanup fails.
         let mut cleanup_error = None;
+        if let Some(owner) = &mut self.button_voices {
+            let before = owner.api_calls;
+            if let Err(error) = owner.shutdown(host) {
+                cleanup_error = Some(error);
+            }
+            self.api_calls += owner.api_calls - before;
+        }
         let mut record = |result: crysirror_core::Result<()>| {
             if let Err(error) = result {
                 cleanup_error.get_or_insert_with(|| anyhow::Error::from(error));
@@ -642,7 +881,10 @@ impl AudioBridge {
         context: crate::native_audio::AudioCallbackContext,
     ) -> Result<bool> {
         machine.validate_receipt(call)?;
-        if self.outer_music.is_some() || self.system_pending.is_some() {
+        if self.outer_music.is_some()
+            || self.system_pending.is_some()
+            || self.button_voice_pending()
+        {
             return Ok(false);
         }
         if self.pending.is_none() {
@@ -912,14 +1154,25 @@ mod outer_system_sound_tests {
             "canvas": [4,4], "clients": [{"name":"native","adapter":"crysirror-script-v1","game":"authored"}]
         })).unwrap();
         let mut runtime = crysirror_runtime::Runtime::with_asset_root(
-            project, root.path(), &root.path().join("state"), Default::default(),
-        ).unwrap();
+            project,
+            root.path(),
+            &root.path().join("state"),
+            Default::default(),
+        )
+        .unwrap();
         runtime.tick(0, Default::default()).unwrap();
-        let mut settings = crate::native_services_bootstrap::NativePreferences::original_defaults().audio;
+        let mut settings =
+            crate::native_services_bootstrap::NativePreferences::original_defaults().audio;
         settings.music_enabled = false;
-        let mut policy = NativeAudioPolicy::new(settings, AudioBindings {
-            music: 0, sound_base: 16, voice_base: 32,
-        }).unwrap();
+        let mut policy = NativeAudioPolicy::new(
+            settings,
+            AudioBindings {
+                music: 0,
+                sound_base: 16,
+                voice_base: 32,
+            },
+        )
+        .unwrap();
         policy.music_number = Some(17);
         policy.last_music_number = Some(17);
         let bytes = wave();
@@ -931,20 +1184,36 @@ mod outer_system_sound_tests {
                 _ => panic!("unexpected catalogue audio source"),
             }
             Ok(crate::resource_bridge::ResolvedAudio::Encoded(
-                crysirror_core::service::EncodedAudio { bytes: bytes.clone(), frame_limit: None }
+                crysirror_core::service::EncodedAudio {
+                    bytes: bytes.clone(),
+                    frame_limit: None,
+                },
             ))
         });
         // The table is deliberately empty: ListenBGM never requires a
         // synthetic song ID or mutates the native original-save music fields.
-        let mut bridge = AudioBridge::new(ClientId(1), policy,
-            Names { tokens: vec![] }, Names { tokens: vec![] }, resolver).unwrap();
+        let mut bridge = AudioBridge::new(
+            ClientId(1),
+            policy,
+            Names { tokens: vec![] },
+            Names { tokens: vec![] },
+            resolver,
+        )
+        .unwrap();
         for looping in [false, true] {
             let music = crate::native_audio::ListenMusic {
-                name: b"catalogue_only".to_vec(), looping, volume: 90, fade_in: 0, fade_out: 0,
+                name: b"catalogue_only".to_vec(),
+                looping,
+                volume: 90,
+                fade_in: 0,
+                fade_out: 0,
             };
             let end = Instant::now() + Duration::from_secs(5);
             loop {
-                if bridge.poll_listen_music(&mut runtime.host, Some(music.clone())).unwrap() {
+                if bridge
+                    .poll_listen_music(&mut runtime.host, Some(music.clone()))
+                    .unwrap()
+                {
                     break;
                 }
                 runtime.tick(0, Default::default()).unwrap();
@@ -958,22 +1227,40 @@ mod outer_system_sound_tests {
             assert_eq!(bridge.policy.last_music_number, None);
         }
         assert!(bridge.poll_listen_music(&mut runtime.host, None).unwrap());
-        assert!(runtime.host.audio_gain_envelope_info(ClientId(1), 0).unwrap().unwrap().spec.stop_at_end);
+        assert!(
+            runtime
+                .host
+                .audio_gain_envelope_info(ClientId(1), 0)
+                .unwrap()
+                .unwrap()
+                .spec
+                .stop_at_end
+        );
         bridge.policy.voice_work[0][0] = 1;
         bridge.policy.voice_work[0][1] = 77;
         bridge.policy.voice_names[0] = b"original_script".to_vec();
-        let end = Instant::now()+Duration::from_secs(5);
+        let end = Instant::now() + Duration::from_secs(5);
         loop {
-            if bridge.poll_replay_voice(&mut runtime.host,b"ga001".to_vec()).unwrap() { break; }
-            runtime.tick(0,Default::default()).unwrap();
-            assert!(Instant::now()<end); std::thread::yield_now();
+            if bridge
+                .poll_replay_voice(&mut runtime.host, b"ga001".to_vec())
+                .unwrap()
+            {
+                break;
+            }
+            runtime.tick(0, Default::default()).unwrap();
+            assert!(Instant::now() < end);
+            std::thread::yield_now();
         }
-        assert!(runtime.host.audio_playing(ClientId(1),32).unwrap());
-        assert_eq!(bridge.policy.voice_names[0],b"original_script");
-        assert_eq!(bridge.policy.voice_work[0][..2],[1,77]);
+        assert!(runtime.host.audio_playing(ClientId(1), 32).unwrap());
+        assert_eq!(bridge.policy.voice_names[0], b"original_script");
+        assert_eq!(bridge.policy.voice_work[0][..2], [1, 77]);
         bridge.policy.settings.voice_enabled = false;
-        assert!(bridge.poll_replay_voice(&mut runtime.host,b"missing_when_disabled".to_vec()).unwrap());
-        assert!(runtime.host.audio_playing(ClientId(1),32).unwrap());
+        assert!(
+            bridge
+                .poll_replay_voice(&mut runtime.host, b"missing_when_disabled".to_vec())
+                .unwrap()
+        );
+        assert!(runtime.host.audio_playing(ClientId(1), 32).unwrap());
         bridge.shutdown(&mut runtime.host).unwrap();
         assert!(!bridge.pending());
         assert!(!runtime.host.audio_playing(ClientId(1), 0).unwrap());

@@ -37,6 +37,11 @@ pub mod pcm;
 pub mod reverb;
 pub mod resources;
 pub mod pcm_filters;
+pub mod iir_design;
+pub mod wave_filters;
+pub mod carriers;
+pub mod phase_vocoder;
+pub mod multitrack;
 pub mod voice_compression;
 pub mod render_job;
 pub mod scene;
@@ -348,3 +353,5 @@ pub mod seek_receipt;
 mod channel_seek;
 
 pub mod channel_replacement;
+
+pub mod spectrum_graph;

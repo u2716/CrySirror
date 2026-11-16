@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
-// Migrated from pinned siglus_rs; see UPSTREAM.md and upstream-files.json.
+// Migrated from pinned siglus_rs; see SOURCE.json and upstream-files.json.
 //! Native saves from the early engine generation (3116-byte file header,
 //! 332-byte local POD). Field order here follows that generation's stream;
 //! keep newer fields in the current readers in vm.rs.

@@ -6,6 +6,8 @@ use crate::settings::{SETTINGS_BYTES, SystemData};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SystemRequest {
     LocalHour,
+    ///Host civil time for an original save clock (DC3WY 40B5D0/40B630).
+    LocalTime,
     WindowState,
     NativeWindowMode,
     ///Renderer+24, initialized to1 by43A2F0; gates43A460 transitions.
@@ -86,6 +88,8 @@ pub enum SystemReply {
         idle: bool,
     },
     Hour(u8),
+    ///year, month, day, hour, minute, second.
+    LocalTime([i32; 6]),
     Fullscreen(bool),
     Account {
         authenticated: bool,
@@ -1473,6 +1477,7 @@ mod tests {
             labels: vec![],
             label_metadata: vec![],
             raw_strings: Default::default(),
+            original: None,
             instructions: vec![Instruction {
                 offset: 3,
                 next: 12,

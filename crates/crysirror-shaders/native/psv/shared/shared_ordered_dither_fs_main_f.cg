@@ -1,0 +1,125 @@
+// SPDX-License-Identifier: MPL-2.0
+// Generated from canonical WGSL by crysirror-shader-tools.
+int min(int a,int b){return a<b?a:b;}
+int max(int a,int b){return a>b?a:b;}
+int clamp(int a,int lo,int hi){return min(max(a,lo),hi);}
+int2 min(int2 a,int2 b){return a<b?a:b;}
+int2 max(int2 a,int2 b){return a>b?a:b;}
+int2 clamp(int2 a,int2 lo,int2 hi){return min(max(a,lo),hi);}
+int3 min(int3 a,int3 b){return a<b?a:b;}
+int3 max(int3 a,int3 b){return a>b?a:b;}
+int3 clamp(int3 a,int3 lo,int3 hi){return min(max(a,lo),hi);}
+int4 min(int4 a,int4 b){return a<b?a:b;}
+int4 max(int4 a,int4 b){return a>b?a:b;}
+int4 clamp(int4 a,int4 lo,int4 hi){return min(max(a,lo),hi);}
+
+
+// SGX has no general integer divide. Bias a full-width float estimate
+// below the quotient, refine its small remainder, then correct in integers.
+// The 2^-20 bias dominates f32 conversion/division error (all inputs normal).
+// The refinement quotient is below 2048, so three corrections are sufficient.
+int cg_div_positive(int a,int b){
+ if(b==1)return a;
+ bool negative=a<0;
+ int n=negative?-(a+1):a;
+ float estimate=float(n)/float(b);
+ int q=int(max(floor(estimate-max(estimate*0.00000095367431640625,2.0)),0.0));
+ int r=n-q*b;
+ int correction=max(int(floor(float(r)/float(b)))-2,0);
+ q+=correction;r-=correction*b;
+ if(r>=b){r-=b;q+=1;}
+ if(r>=b){r-=b;q+=1;}
+ if(r>=b){r-=b;q+=1;}
+ if(negative)return -q-int(r==b-1);
+ return q;
+}
+int cg_div(int a,int b){
+ if(b==0)return a;
+ if(b==(-2147483647-1))return a==b?1:0;
+ if(a==(-2147483647-1)&&b==-1)return a;
+ return b<0?-cg_div_positive(a,-b):cg_div_positive(a,b);
+}
+int2 cg_div(int2 a,int2 b){return int2(cg_div(a.x,b.x),cg_div(a.y,b.y));}
+int3 cg_div(int3 a,int3 b){return int3(cg_div(a.x,b.x),cg_div(a.y,b.y),cg_div(a.z,b.z));}
+int4 cg_div(int4 a,int4 b){return int4(cg_div(a.x,b.x),cg_div(a.y,b.y),cg_div(a.z,b.z),cg_div(a.w,b.w));}
+float4 cg_load(sampler2D tex,int3 p,float4 size){
+ if(any(p.xy<0)||any(p.xy>=int2(size.xy))||p.z!=0)return float4(0,0,0,0);
+ return tex2Dlod(tex,float4((float2(p.xy)+0.5)*size.zw,0,0));
+}
+// Naga uses these for signed/unsigned integer wrapping, never float bitcasts.
+int asint(int v){return int(v);} int2 asint(int2 v){return int2(v);}
+int3 asint(int3 v){return int3(v);} int4 asint(int4 v){return int4(v);}
+int asuint(int v){return int(v);} int2 asuint(int2 v){return int2(v);}
+int3 asuint(int3 v){return int3(v);} int4 asuint(int4 v){return int4(v);}
+
+struct WipeUniform {
+    float4 kind_progress;
+    float4 option0_;
+    float4 option1_;
+    float4 option2_;
+    float4 option3_;
+};
+
+uniform sampler2D current_tex : TEXUNIT0;
+uniform float4 cg_size_current_tex;
+uniform sampler2D old_tex : TEXUNIT1;
+uniform float4 cg_size_old_tex;
+uniform WipeUniform wipe;
+
+struct FragmentInput_fs_main {
+    float4 position_1 : WPOS;
+};
+
+int2 naga_div(int2 lhs,int2 rhs){return cg_div(lhs,rhs);}
+
+int naga_mod(int lhs,int rhs) {
+ int overflow=int(lhs==int(-2147483647-1)) & int(rhs==int(-1));
+ int invalid=overflow | int(rhs==int(0));
+ int divisor=invalid?int(1):rhs;
+ return lhs-cg_div(lhs,divisor)*divisor;
+}
+
+
+int2 naga_f2i32(float2 value) {
+    return int2(clamp(value, -2147483600.0, 2147483500.0));
+}
+
+int2 naga_f2u32(float2 value) {
+    return int2(clamp(value, 0.0, 2147483500.0));
+}
+
+
+float4 main(FragmentInput_fs_main fragmentinput_fs_main) : COLOR
+{
+    float4 position = fragmentinput_fs_main.position_1;
+    int i = (int)0;
+    int j = (int)0;
+    int bayer[16] = { 0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5 };
+
+    int2 _e2 = naga_f2i32(position.xy);
+    float4 _e5 = cg_load(current_tex,int3(_e2, int(0)),cg_size_current_tex);
+    float _e9 = wipe.kind_progress.y;
+    float _e12 = clamp(_e9, 0.0, 1.0);
+    if ((_e12 >= 1.0)) {
+        return _e5;
+    }
+    float4 _e26 = cg_load(old_tex,int3(clamp(_e2, (int(0)).xx, asint(asuint(int2(int2(cg_size_old_tex.xy))) - asuint((int(1)).xx))), int(0)),cg_size_old_tex);
+    float2 _e29 = float2(int2(cg_size_current_tex.xy));
+    float4 _e32 = wipe.kind_progress;
+    float2 _e36 = max(_e32.zw, (1.0).xx);
+    float _e43 = min((_e29.x / _e36.x), (_e29.y / _e36.y));
+    float4 _e59 = wipe.option0_;
+    int2 _e65 = naga_div(naga_f2u32(max(floor(((position.xy - ((_e29 - (_e36 * _e43)) * 0.5)) / (_e43).xx)), (0.0).xx)), max(naga_f2u32(_e59.xy), (1).xx));
+    i = _e65.x;
+    j = _e65.y;
+    float _e73 = wipe.option0_.z;
+    if ((_e73 > 0.5)) {
+        i = (_e65.x + _e65.y);
+        j = (_e65.x + (3 * _e65.y));
+    }
+    int _e102 = j;
+    int _e107 = i;
+    int _e112 = bayer[((naga_mod(_e102, 4) * 4) + naga_mod(_e107, 4))];
+    float _e123 = wipe.option0_.w;
+    return (floor(((lerp(_e26, _e5, clamp((((_e12 - (((float(_e112) / 16.0) * 0.9375) + 0.03125)) / (max(_e123, 1.0) / 16.0)) + 0.5), 0.0, 1.0)) * 255.0) + (0.5).xxxx)) / (255.0).xxxx);
+}

@@ -1,0 +1,100 @@
+// SPDX-License-Identifier: MPL-2.0
+// vfx_render.wgsl vertex stages for the PSV tier. GXM has no storage buffers
+// or vertex index: the CPU particle simulation streams one vertex per sprite
+// corner (or per-instance mesh attributes through GXM instance streams).
+#include "lite_common.cgh"
+
+uniform float4 lite_view_proj[4];
+uniform float4 lite_view[4];
+uniform float4 lite_model[4];
+uniform float4 lite_camera;      // eye xyz
+uniform float4 lite_mode;        // renderer, facing (0 camera, 1 velocity, 2 axis), columns, rows
+uniform float4 lite_animation;   // frames, fps (0 over life), soft distance (unused), radial
+uniform float4 lite_axis;
+
+float3 lite_safe_normal(float3 v, float3 fallback)
+{
+    float d = dot(v, v);
+    return d > 1e-10 ? v * rsqrt(max(d, 1e-12)) : fallback;
+}
+
+void lite_out(float3 world, float2 uv, float4 color, float4 tile,
+              out float4 clip, out float2 o_uv, out float4 o_color, out float3 o_world, out float4 o_tile)
+{
+    clip = lite_xform(lite_view_proj[0], lite_view_proj[1], lite_view_proj[2], lite_view_proj[3], float4(world, 1.0));
+    o_uv = uv;
+    o_color = color;
+    o_world = world;
+    o_tile = tile;
+}
+
+#if defined(LITE_VFX_SPRITE)
+void main(float3 position : POSITION,
+          float2 corner : TEXCOORD0,
+          float4 velocity_life : TEXCOORD1,
+          float4 size_rotation_age : TEXCOORD2,
+          float4 color : COLOR,
+          out float4 clip : POSITION, out float2 o_uv : TEXCOORD0, out float4 o_color : TEXCOORD1,
+          out float3 o_world : TEXCOORD2, out float4 o_tile : TEXCOORD3)
+{
+    float3 center = lite_xform(lite_model[0], lite_model[1], lite_model[2], lite_model[3], float4(position, 1.0)).xyz;
+    float3 right = float3(lite_view[0].x, lite_view[1].x, lite_view[2].x);
+    float3 up = float3(lite_view[0].y, lite_view[1].y, lite_view[2].y);
+    if (lite_mode.y > 0.5) {
+        float3 axis = lite_xform(lite_model[0], lite_model[1], lite_model[2], lite_model[3], float4(velocity_life.xyz, 0.0)).xyz;
+        if (lite_mode.y > 1.5) {
+            axis = lite_xform(lite_model[0], lite_model[1], lite_model[2], lite_model[3], float4(lite_axis.xyz, 0.0)).xyz;
+        }
+        up = lite_safe_normal(axis, up);
+        right = lite_safe_normal(cross(up, lite_camera.xyz - center), right);
+    }
+    float angle = size_rotation_age.z;
+    float cs = cos(angle);
+    float sn = sin(angle);
+    float2 q = float2(cs * corner.x - sn * corner.y, sn * corner.x + cs * corner.y) * size_rotation_age.xy * 0.5;
+    float2 scale = float2(length(lite_model[0].xyz), length(lite_model[1].xyz));
+    float3 world = center + right * q.x * scale.x + up * q.y * scale.y;
+    float age = size_rotation_age.w;
+    float life = max(velocity_life.w, 1e-6);
+    float frames = max(floor(lite_animation.x), 1.0);
+    float tile = min(floor(clamp(age / life, 0.0, 0.999999) * frames), frames - 1.0);
+    if (lite_animation.y > 0.0) {
+        float t = floor(max(age, 0.0) * lite_animation.y);
+        tile = t - floor(t / frames) * frames;
+    }
+    float columns = max(lite_mode.z, 1.0);
+    float rows = max(lite_mode.w, 1.0);
+    float atlas_row = floor(tile / columns);
+    float2 cell = float2(tile - atlas_row * columns, atlas_row);
+    float2 dims = float2(columns, rows);
+    float2 uv = (float2(corner.x * 0.5 + 0.5, 0.5 - corner.y * 0.5) + cell) / dims;
+    float2 begin = cell / dims;
+    lite_out(world, uv, color, float4(begin, begin + 1.0 / dims), clip, o_uv, o_color, o_world, o_tile);
+}
+#elif defined(LITE_VFX_MESH)
+void main(float3 position : POSITION,
+          float2 uv : TEXCOORD0,
+          float3 particle : TEXCOORD1,
+          float4 size_rotation_age : TEXCOORD2,
+          float4 color : COLOR,
+          out float4 clip : POSITION, out float2 o_uv : TEXCOORD0, out float4 o_color : TEXCOORD1,
+          out float3 o_world : TEXCOORD2, out float4 o_tile : TEXCOORD3)
+{
+    float a = size_rotation_age.z;
+    float cs = cos(a);
+    float sn = sin(a);
+    float3 q = position * float3(size_rotation_age.xy, size_rotation_age.x);
+    float3 rotated = float3(cs * q.x - sn * q.y, sn * q.x + cs * q.y, q.z);
+    float3 world = lite_xform(lite_model[0], lite_model[1], lite_model[2], lite_model[3], float4(particle + rotated, 1.0)).xyz;
+    lite_out(world, uv, color, float4(0.0, 0.0, 1.0, 1.0), clip, o_uv, o_color, o_world, o_tile);
+}
+#else
+void main(float3 position : POSITION,
+          float2 uv : TEXCOORD0,
+          float4 color : COLOR,
+          out float4 clip : POSITION, out float2 o_uv : TEXCOORD0, out float4 o_color : TEXCOORD1,
+          out float3 o_world : TEXCOORD2, out float4 o_tile : TEXCOORD3)
+{
+    lite_out(position, uv, color, float4(0.0, 0.0, 1.0, 1.0), clip, o_uv, o_color, o_world, o_tile);
+}
+#endif

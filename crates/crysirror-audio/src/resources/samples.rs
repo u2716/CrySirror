@@ -219,6 +219,7 @@ mod lifetime_tests {
                     encoded_bytes: count as u64,
                     has_replay_gain: false,
                 },
+                stems: None,
             }),
         );
         let pool = TaskPool::new("source-pcm-test", 1, 4).unwrap();

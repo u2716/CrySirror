@@ -189,6 +189,9 @@ pub enum Event {
     MixerControls { enabled: [bool; 3], gain: [f32; 3], playback_gain:[Option<f32>;3] },
     ///Original40D240 setter effects occur even when a preference is unchanged.
     NativeMixerControls {enabled:[bool;3],gain:[f32;3],playback_gain:[Option<f32>;3],force_gain:[bool;3],force_enable:[bool;3]},
+    ///DC3WY4325C0/431E60 changes only idle native volume envelopes, over30
+    ///render ticks; the engine scalar sequencer and mixer own the arithmetic.
+    Dc3MusicVolume {enabled:[bool;3],gain:[f32;3],playback_gain:[Option<f32>;3]},
     /// Original scene-wide falling effect selector and encoded density/wind.
     FallingEffect {
         kind: i16,
@@ -207,6 +210,17 @@ pub enum Event {
     LoadImage {
         slot: u8,
         name: String,
+    },
+    ///DC2 41BCE0/41BFE0 portrait: `name`, with `expression` stamped by
+    ///40BB40 at (0,0), at `percent` of the logical extent. `nearest` is
+    ///40D7C0's draw-time stretch (Ctrl skip or >=200%), otherwise 4045B0's
+    ///area filter scales both images before the stamp.
+    LoadScaledImage {
+        slot: u8,
+        name: String,
+        percent: i16,
+        nearest: bool,
+        expression: Option<String>,
     },
     DefineGroup {
         slot: u8,
@@ -267,6 +281,15 @@ pub enum Event {
 /// Resource preparation may complete on a worker; `false` retains the current
 /// instruction and yields without inventing success or advancing native PC.
 pub trait NativeHost {
+    fn direct_audio(&mut self,_request:&crate::dc2_audio::Request)->Result<bool>{bail!("Circus per-channel native audio service unavailable")}
+    ///DC2 weather petals over the presented screen; None removes them.
+    fn dc2_weather(&mut self,_frame:Option<&crate::dc2::WeatherFrame>)->Result<bool>{bail!("DC2 weather presentation unavailable")}
+    fn dc2_text(&mut self,_frame:Option<&crate::dc2::TextFrame>)->Result<bool>{bail!("DC2 message glyph presentation unavailable")}
+    ///DirectSound SetVolume on an already playing native channel (db100).
+    fn direct_audio_gain(&mut self,_channel:u32,_gain_db100:i32)->Result<()>{bail!("Circus per-channel native gain service unavailable")}
+    fn dc2_music(&mut self,_id:u16)->Result<Option<crate::dc2_audio::MusicLookup>>{bail!("DC2 original music directory service unavailable")}
+    fn dc2_sound(&mut self,_id:u16)->Result<Option<crate::dc2_audio::MusicLookup>>{bail!("DC2 original SE directory service unavailable")}
+    fn bitmap_stage(&mut self,_request:&crate::dc2_bitmap::Request)->Result<bool>{bail!("Circus stored bitmap presentation unavailable")}
     fn effect_states(&mut self)->Result<Vec<effect_ops::StageSample>>{bail!("Circus effect queue observation unavailable")}
     fn effect_control(&mut self,_request:&effect_ops::EffectRequest)->Result<bool>{bail!("Circus shared effect controls unavailable")}
     fn visual(&mut self, _request: &visual_ops::VisualRequest) -> Result<bool> {
@@ -306,6 +329,8 @@ pub trait NativeHost {
     }
     ///436DB0's -2 receipt, retained until the post-UI common callback pass.
     fn take_panel_scroll_changed(&mut self)->bool {false}
+    ///A click/Enter that an inline control menu received outside its controls.
+    fn menu_free_release(&mut self)->bool {false}
     fn menu_bindings(&self)->Vec<(i16,i16)> {Vec::new()}
     fn sync_menu_values(&mut self,_values:&[MenuValue])->Result<()> {Ok(())}
     fn take_menu_values(&mut self)->Vec<MenuValue> {Vec::new()}
@@ -316,6 +341,11 @@ pub trait NativeHost {
     }
     fn save_readable(&mut self, _slot: u16) -> Result<Option<bool>> {
         bail!("Circus native save availability probe unavailable")
+    }
+    ///Lend the process MSVC rand() stream for one synchronous native routine
+    ///(e.g. DC2 418040's per-tile setup). False: the stream is not available.
+    fn random_batch(&mut self, _f: &mut dyn FnMut(&mut dyn FnMut() -> Result<i32>) -> Result<()>) -> Result<bool> {
+        bail!("Circus native random batch unavailable")
     }
     fn random(&mut self, _modulus: u16) -> Result<Option<i32>> {
         bail!("Circus native shared random sequence unavailable")
@@ -354,6 +384,12 @@ pub trait NativeHost {
     }
     fn write_system(&mut self, _bytes: &[u8]) -> Result<bool> {
         bail!("Circus native system.dat persistence unavailable")
+    }
+    /// Version-specific original preference payload. Older ABIs must never
+    /// pass their shorter source buffer through the DC4PH save projection.
+    fn write_profile_system(&mut self, profile:Profile, bytes:&[u8]) -> Result<bool> {
+        if profile==Profile::Dc4PlusHarmony { self.write_system(bytes) }
+        else {bail!("Circus preference persistence for {profile:?} unavailable")}
     }
     fn scene_index(&mut self, _name: &str) -> Result<Option<i32>> {
         bail!("Circus native scene index unavailable")
@@ -2362,6 +2398,9 @@ mod tests {
             match request {
                 system_ops::SystemRequest::FramebufferStatus=>Ok(Some(system_ops::SystemReply::FramebufferComplete(self.flat.as_ref().is_none_or(|ramp|!ramp.active())))),
                 system_ops::SystemRequest::CallbackInput=>Ok(Some(system_ops::SystemReply::CallbackInput{pressed:0,fullscreen:None,idle:false})),
+                //No platform input in these fixtures: the prefix sampler sees
+                //a disabled, empty input revision.
+                system_ops::SystemRequest::Gesture(gesture_ops::GestureRequest::PrefixInput)=>Ok(Some(system_ops::SystemReply::Gesture(gesture_ops::GestureReply::PrefixInput(gesture_ops::PrefixInput{revision:0,enabled:false,pressed:0,released:0,down:0,control_trigger:false,control_stock:false})))),
                 _=>bail!("unexpected test system request {request:?}"),
             }
         }
@@ -2504,6 +2543,7 @@ mod tests {
             labels: vec![0; 8],
             label_metadata: vec![0; 8],
             raw_strings: Default::default(),
+            original: None,
             instructions,
         });
         (

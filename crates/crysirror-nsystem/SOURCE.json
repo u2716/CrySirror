@@ -1,0 +1,18 @@
+{
+  "research": [
+    {
+      "repository": "https://github.com/morkt/GARbro",
+      "commit": "b09ee45 (abbreviated id as fetched; full id not recorded)",
+      "license": "MIT",
+      "files": ["ArcFormats/NSystem/ArcFJSYS.cs"],
+      "use": "Cross-check of the MSD title-MD5 block XOR only; the implementation follows HANANYU.EXE CSnrBuffer::Read 0x442B60."
+    }
+  ],
+  "scope": "Adopt-mode original MSD VM, message window, select, action, title-screen semantics over shared image, text, layer/transition, audio, media and storage services. FJSYS/MGD stay in the shared crysirror-formats-arc decoders (arc_unpacker provenance there). No original executable execution or hosted engine.",
+  "native_module": {
+    "path": "owner game-nsystem-HANANYU/HANANYU.EXE (not distributed)",
+    "sha256": "81b9063fbd81238bfcfc59e3aa3099f5fcc31972fb07540df80bf83e9ad3e1ee",
+    "size": 2158592,
+    "inspection": "Static IDA 9.0 only; function names come from the binary's own trace calls (sub_440850 arguments); no original program execution"
+  }
+}

@@ -6,7 +6,9 @@ use crate::machine::text_ops::{TextReply, TextRequest};
 use crysirror_core::service::{MediaPhase, MediaRequest, buttons};
 const ROOT: u32 = 0x3f00_0000;
 const IMAGE: u32 = ROOT + 1;
-const MEDIA: u32 = ROOT + 2;
+//Media identities are client-scoped0..1023, independently of retained Layer
+//IDs. The native runtime owns one blocking movie, so channel0 is sufficient.
+const MEDIA: u32 = 0;
 #[derive(Default)]
 pub(super) struct NativeMovie {
     name: Option<String>,
@@ -44,6 +46,8 @@ impl Bridge<'_> {
                     return Ok(None);
                 }
                 if !protected {
+                    let dc3=self.services.native_profile==Some(crate::Profile::Dc3WithYou);
+                    let system_slots=if dc3{28..=34}else{37..=44};
                     let rate = self.services.text.extra_sprite_rate;
                     self.native_text(&TextRequest::Clear)?;
                     self.services.text.extra_sprite_rate = rate;
@@ -53,7 +57,7 @@ impl Bridge<'_> {
                         .displayed
                         .iter()
                         .copied()
-                        .filter(|slot| !(37..=44).contains(slot))
+                        .filter(|slot| !system_slots.contains(slot))
                         .collect::<Vec<_>>();
                     self.submit(
                         remove
@@ -70,9 +74,13 @@ impl Bridge<'_> {
                         .images
                         .keys()
                         .copied()
-                        .filter(|slot| *slot < 51 && !(37..=44).contains(slot))
+                        .filter(|slot| *slot < 51 && !system_slots.contains(slot))
                         .collect::<Vec<_>>();
                     for slot in slots {
+                        if dc3 {
+                            if self.native_resource(&crate::machine::resource_ops::ResourceRequest::Unload{slot})?.is_none(){return Ok(None)}
+                            continue
+                        }
                         if let Some(image) = self.services.images.remove(&slot) {
                             self.host
                                 .release_image_resource(self.client, image.path.relative())?;
@@ -88,7 +96,11 @@ impl Bridge<'_> {
                     ensure!(active == name, "Circus movie owner changed during playback");
                     return Ok(Some(TextReply::Done));
                 }
-                let asset = movie_asset(name)?;
+                let asset = if self.services.native_profile == Some(crate::Profile::Dc2PlusCommunication) {
+                    dc2_movie_asset(name)?
+                } else {
+                    movie_asset(name)?
+                };
                 self.root()?;
                 let path=match self.host.media_request(self.client,MediaRequest::Play{
                     id:MEDIA,asset,looping:false,audio:true,gain:*gain,
@@ -102,7 +114,8 @@ impl Bridge<'_> {
                     }
                     Err(error)=>return Err(error.into()),
                 };
-                self.submit(vec![json!({"op":"put","layer":{"id":ROOT,"rect":[0,0,1280,720],"order":[2_000_000_000,0],"paint":{"kind":"solid","color":[0,0,0,255]}}})],vec![json!({"op":"put","widget":{"id":ROOT,"rect":[0,0,1280,720],"z":2_000_000_000,"modal":true,"interaction_only":true,"key_events":[{"buttons":buttons::MOUSE_RIGHT|buttons::ESCAPE,"edge":"release","event":"movie_skip"}]}})])?;
+                let [width,height]=self.native_canvas();
+                self.submit(vec![json!({"op":"put","layer":{"id":ROOT,"rect":[0,0,width,height],"order":[2_000_000_000,0],"paint":{"kind":"solid","color":[0,0,0,255]}}})],vec![json!({"op":"put","widget":{"id":ROOT,"rect":[0,0,width,height],"z":2_000_000_000,"modal":true,"interaction_only":true,"key_events":[{"buttons":buttons::MOUSE_RIGHT|buttons::ESCAPE,"edge":"release","event":"movie_skip"}]}})])?;
                 self.services.movie = NativeMovie {
                     name: Some(name.clone()),
                     path: Some(path),
@@ -155,13 +168,22 @@ impl Bridge<'_> {
                         .path
                         .as_ref()
                         .context("Circus MPG frame surface")?;
-                    self.submit(vec![json!({"op":"put","layer":{"id":IMAGE,"parent":ROOT,"rect":[0,0,1280,720],"paint":{"kind":"image","asset":path.relative()}}})],vec![])?;
+                    let [width,height]=self.native_canvas();
+                    self.submit(vec![json!({"op":"put","layer":{"id":IMAGE,"parent":ROOT,"rect":[0,0,width,height],"order":[2_000_000_000,1],"paint":{"kind":"image","asset":path.relative()}}})],vec![])?;
                     self.services.movie.image = true;
                 }
                 Ok(Some(TextReply::Input { advance: false }))
             }
         }
     }
+}
+///DC2 422E60 case56: 415930 joins the install directory and the literal
+///name (`movie\\dc2fst.mpg`) without a suffix or MOVIE prefix.
+fn dc2_movie_asset(name: &str) -> Result<String> {
+    ensure!(!name.is_empty() && !name.contains('\0'), "DC2 MPG resource name");
+    Ok(VfsPath::new(Mount::Asset, &format!("Advdata/{}", name.replace('\\', "/")))?
+        .relative()
+        .into())
 }
 fn movie_asset(name: &str) -> Result<String> {
     ensure!(
@@ -189,5 +211,7 @@ mod tests {
             "Advdata/MOVIE/sub/end.MPG"
         );
         assert!(movie_asset("../../escape").is_err());
+        assert_eq!(dc2_movie_asset("movie\\dc2fst.mpg").unwrap(), "Advdata/movie/dc2fst.mpg");
+        assert!(dc2_movie_asset("..\\..\\escape").is_err());
     }
 }

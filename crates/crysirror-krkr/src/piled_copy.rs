@@ -1,5 +1,6 @@
 // Copyright (c) 2026 CrySirror contributors.
-// Distributed under the GNU Affero General Public License, version 3 or later.
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. A copy is available at https://mozilla.org/MPL/2.0/.
 //! Layer.piledCopy semantic mapping onto the engine Canvas CopySubtree command.
 //! Reference: krkrz fd5c4baa6a2ef5978db1bd043634351f48667daf,
 //! visual/LayerIntf.cpp PiledCopy (4102), Complete (6104), wrapper (7095).

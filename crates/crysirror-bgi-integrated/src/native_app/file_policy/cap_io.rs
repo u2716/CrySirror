@@ -1,7 +1,7 @@
 //! Handle-relative desktop storage. cap-std keeps traversal inside each root,
 //! including when a directory is renamed while an operation is in flight.
 use super::{PolicyMetadata, relative, user_data_alias};
-use cap_std::fs::{Dir, OpenOptions};
+use crysirror_capfs::fs::{Dir, OpenOptions};
 use std::{
     fs::File,
     io::{self, Read, Seek, SeekFrom, Write},
@@ -45,7 +45,7 @@ fn walk(
     recurse: bool,
     depth: usize,
     count: &mut usize,
-    visit: &mut impl FnMut(&Path, &cap_std::fs::DirEntry) -> io::Result<()>,
+    visit: &mut impl FnMut(&Path, &crysirror_capfs::fs::DirEntry) -> io::Result<()>,
 ) -> io::Result<()> {
     if depth > 64 {
         return Err(io::Error::new(
@@ -91,8 +91,8 @@ impl Roots {
             return Err(denied());
         }
         Ok(Self {
-            resource: Dir::open_ambient_dir(&resource_path, cap_std::ambient_authority())?,
-            user: Dir::open_ambient_dir(&user_path, cap_std::ambient_authority())?,
+            resource: Dir::open_ambient_dir(&resource_path, crysirror_capfs::ambient_authority())?,
+            user: Dir::open_ambient_dir(&user_path, crysirror_capfs::ambient_authority())?,
             resource_path,
         })
     }

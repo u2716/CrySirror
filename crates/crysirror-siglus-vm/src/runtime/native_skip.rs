@@ -1,7 +1,7 @@
 // Copyright (c) 2026 CrySirror contributors. MPL-2.0.
 // Native policy adopted from xmoezzz/siglus_rs commit
 // 5f358ef1360b0439e92aed2b749e8f25d8721954,
-// crates/siglus_scene_vm/src/runtime/mod.rs. See UPSTREAM.md and SOURCE.json.
+// crates/siglus_scene_vm/src/runtime/mod.rs. See SOURCE.json and SOURCE.json.
 //! Complete native read/automatic/trigger-skip policy group. Key stocks and
 //! reveal/timeline mechanisms belong to Scene; only Siglus precedence lives here.
 //! A consumed reveal request is published through engine CompleteReveal by message.

@@ -275,7 +275,7 @@ fn xp3_versions_zlib_indices_and_multisegment_entries_use_shared_transforms() {
             let mut p = [0; 4];
             assert_eq!(reader.read_at(4, &mut p).unwrap(), 4);
             assert_eq!(&p, b"t-se");
-            assert_eq!(archive.entries()[0].metadata["adler32"], 0x33445566u32);
+            assert_eq!(archive.entry_metadata(0)["adler32"], 0x33445566u32);
         }
     }
 }
@@ -417,9 +417,12 @@ fn malformed_sizes_versions_paths_and_budget_fail_before_exposing_data() {
     assert!(Xp3.open(memory(xp3(1, true, false)), &tiny).is_err());
     tiny = ctx;
     tiny.limits.max_entry_size = 1;
-    assert!(BgiArc
+    // Raw entries are zero-copy ranges: the decoded-entry limit does not
+    // reject them (issue #5), and they still read in full.
+    let archive = BgiArc
         .open(memory(bgi(true, &[("a", vec![1, 2])])), &tiny)
-        .is_err());
+        .unwrap();
+    assert_eq!(read_all(archive.open(0, &tiny).unwrap().as_ref(), 100).unwrap(), vec![1, 2]);
 }
 struct Sparse {
     header: Vec<u8>,

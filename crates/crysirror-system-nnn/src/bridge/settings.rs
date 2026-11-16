@@ -36,6 +36,7 @@ impl Bridge {
         Ok(())
     }
     pub(crate) fn resume_after_menu(&mut self, host: &mut dyn HostServices) -> Result<()> {
+        self.pause_foreground_general_audio(false);
         self.hide_film_button(host)?;
         self.actor_clock_at = None;
         if let Some(text) = self.text.as_mut() {
@@ -52,10 +53,8 @@ impl Bridge {
             .system_file
             .as_ref()
             .context("NNN settings SystemFile absent")?;
-        crate::native_settings::SETTINGS
-            .iter()
-            .map(|s| Ok((s.id, file.system_word(s.offset)?)))
-            .collect()
+        let mut settings=crate::native_settings::SETTINGS.iter().map(|s|Ok((s.id,file.system_word(s.offset)?))).collect::<Result<Vec<_>>>()?;
+        self.append_character_settings(file,&mut settings)?;Ok(settings)
     }
     pub(crate) fn apply_menu_setting(
         &mut self,
@@ -73,6 +72,51 @@ impl Bridge {
             .context("NNN settings SystemFile absent")?
             .clone();
         file.set_menu_parameter(id, value)?;
+        self.commit_setting_file(file, id, value, host)
+    }
+    /// CCommonConfig SetSystemParam through the published-source policy.
+    /// Every returned service action is either performed here or refused.
+    pub(crate) fn apply_config_parameter(
+        &mut self,
+        policy: &crate::native_source_parameters::Policy,
+        id: i32,
+        value: i32,
+        host: &mut dyn HostServices,
+    ) -> Result<Option<[i32; 4]>> {
+        use crate::native_source_parameters::Action;
+        ensure!(
+            !self.dependency_pending(),
+            "NNN Config setting change requires a drained actor"
+        );
+        let file = self
+            .system_file
+            .as_ref()
+            .context("NNN settings SystemFile absent")?;
+        let write = policy.prepare(file, id, value)?;
+        for action in &write.actions {
+            match action {
+                // Performed by the audio/text side effects below.
+                Action::ChangeMusicVolume(_) | Action::SwitchMusic(_) | Action::MessageWindowPercent => (),
+                other => anyhow::bail!("NNN Config {other:?} requires its native host owner"),
+            }
+        }
+        self.commit_setting_file(write.file, id, value, host)
+    }
+    /// SetVoiceFlag(character, flag) from a Config character button.
+    pub(crate) fn set_config_voice_flag(&mut self, slot: usize, flag: bool) -> Result<()> {
+        let file = self
+            .system_file
+            .as_mut()
+            .context("NNN Config voice flag SystemFile absent")?;
+        crate::native_character_setting::set_voice_enabled(file, slot, flag)
+    }
+    fn commit_setting_file(
+        &mut self,
+        file: crate::native_system_file::NativeSystemFile,
+        id: i32,
+        value: i32,
+        host: &mut dyn HostServices,
+    ) -> Result<Option<[i32; 4]>> {
         let word = |offset| file.system_word(offset);
         let audio = crate::native_audio::AudioSettings {
             music_volume: word(176)?,

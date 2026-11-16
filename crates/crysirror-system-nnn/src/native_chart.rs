@@ -9,6 +9,8 @@ use crate::config::Names;
 use anyhow::{Context, Result, ensure};
 mod model;
 mod checkpoint;
+mod new_mark;
+pub(crate) use new_mark::ChartNewMark;
 pub(crate) use checkpoint::ChartCheckpoint;
 pub(crate) use model::{ChartFunctionEffect, ChartRuntime, ChartWrite, ChartSnapshotRequest};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -31,6 +31,7 @@ pub fn codec_supported(codec: &str) -> bool {
     let codec = match codec {
         "opus" => symphonia::core::codecs::CODEC_TYPE_OPUS,
         "vorbis" => symphonia::core::codecs::CODEC_TYPE_VORBIS,
+        "ms-adpcm" => symphonia::core::codecs::CODEC_TYPE_ADPCM_MS,
         _ => return false,
     };
     crate::opus::codecs().get_codec(codec).is_some()
@@ -107,6 +108,15 @@ pub trait AudioSource: Send {
     /// True only when poll_read/poll_seek/service execute no decoder I/O.
     fn is_nonblocking(&self) -> bool {
         false
+    }
+    /// Number of independently gained tracks this source carries (0: none).
+    fn track_count(&self) -> usize {
+        0
+    }
+    /// Hand over the tracks (source and initial gain) for lockstep mixing;
+    /// the remaining shell is no longer read.
+    fn take_tracks(&mut self) -> Option<Vec<(Box<dyn AudioSource>, f32)>> {
+        None
     }
     fn buffer_status(&self) -> Option<SourceBufferStatus> {
         None
@@ -310,9 +320,20 @@ pub struct Stream {
     startup_delay: u64,
     trim_start: u64,
     has_replay_gain: bool,
+    /// Decoded channels feeding left/right (None: silence) instead of the
+    /// mono/stereo projection; allows up to 32 channels.
+    pick: Option<[Option<usize>; 2]>,
 }
 impl Stream {
     pub fn open(source: Box<dyn MediaSource>, extension: Option<&str>) -> Result<Self> {
+        Self::open_picked(source, extension, None)
+    }
+    /// A stereo view of chosen channels of a (possibly multichannel) stream.
+    pub fn open_picked(
+        source: Box<dyn MediaSource>,
+        extension: Option<&str>,
+        pick: Option<[Option<usize>; 2]>,
+    ) -> Result<Self> {
         let mut hint = Hint::new();
         if let Some(ext) = extension {
             hint.with_extension(ext);
@@ -348,10 +369,17 @@ impl Stream {
             .channels
             .context("audio stream has no channels")?
             .count();
+        let max_channels = if pick.is_some() { 32 } else { 2 };
         ensure!(
-            (8000..=192000).contains(&rate) && (1..=2).contains(&channels),
-            "only mono/stereo audio at 8000..192000 Hz is supported"
+            (8000..=192000).contains(&rate) && (1..=max_channels).contains(&channels),
+            "only mono/stereo audio (or picked channels of up to 32) at 8000..192000 Hz is supported"
         );
+        if let Some(pick) = pick {
+            ensure!(
+                pick.iter().flatten().all(|c| *c < channels),
+                "picked audio channel outside the source layout"
+            );
+        }
         let decoder = crate::opus::codecs()
             .make(&track.codec_params, &DecoderOptions::default())
             .context("audio codec")?;
@@ -380,6 +408,7 @@ impl Stream {
             startup_delay,
             trim_start: startup_delay,
             has_replay_gain,
+            pick,
         })
     }
     pub fn from_bytes(bytes: Arc<[u8]>, extension: Option<&str>) -> Result<Self> {
@@ -468,7 +497,10 @@ impl Stream {
                     .min((samples.samples().len() / self.channels) as u64) as usize;
             self.trim_start -= skip as u64;
             for row in samples.samples().chunks_exact(self.channels).skip(skip) {
-                let frame = [row[0], if self.channels == 1 { row[0] } else { row[1] }];
+                let frame = match self.pick {
+                    Some([l, r]) => [l.map_or(0., |c| row[c]), r.map_or(0., |c| row[c])],
+                    None => [row[0], if self.channels == 1 { row[0] } else { row[1] }],
+                };
                 ensure!(
                     frame.iter().all(|x| x.is_finite() && x.abs() <= 16.),
                     "invalid decoded PCM"
@@ -661,6 +693,19 @@ pub fn open_asset(
         Box::new(AssetMedia(crysirror_io::AssetIo::new(reader)?)),
         extension,
     )
+}
+
+/// Picked channels of an asset decoded by the standard stream decoder.
+pub fn open_asset_picked(
+    reader: Arc<dyn AssetReader>,
+    extension: Option<&str>,
+    pick: [Option<usize>; 2],
+) -> Result<Box<dyn AudioSource>> {
+    Ok(Box::new(Stream::open_picked(
+        Box::new(AssetMedia(crysirror_io::AssetIo::new(reader)?)),
+        extension,
+        Some(pick),
+    )?))
 }
 
 pub(crate) struct AssetMedia(pub(crate) crysirror_io::AssetIo);

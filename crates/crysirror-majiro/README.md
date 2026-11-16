@@ -1,5 +1,7 @@
 # Majiro native adapter
 
+[Opcode and syscall implementation list](../../docs/native-api/majiro.md).
+
 Onboarding mode: **adopt** (ADR 0102). This first-class crate owns original
 MJO parsing/execution and the native syscall semantics; pixel, glyph, audio,
 storage and presentation work goes through shared CrySirror services. No

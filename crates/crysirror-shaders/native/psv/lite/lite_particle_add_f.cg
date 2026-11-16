@@ -1,0 +1,8 @@
+// SPDX-License-Identifier: MPL-2.0
+// particle.wgsl fs_add
+float4 main(float2 uv : TEXCOORD0, float4 color : TEXCOORD1) : COLOR
+{
+    float r2 = dot(uv, uv);
+    float a = (r2 < 1.0 ? (1.0 - r2) * (1.0 - r2) : 0.0) * color.a;
+    return float4(color.rgb * a, 0.0);
+}

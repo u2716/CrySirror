@@ -1,0 +1,4 @@
+interface:
+  display_name: "CrySirror Network Storage"
+  short_description: "Maintain NFS/SMB readers, credentials and scoped storage"
+  default_prompt: "Use $crysirror-network-storage to trace this NFS or SMB game source through detection and runtime reads, preserving bounded caches and local saves."

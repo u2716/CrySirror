@@ -4,6 +4,27 @@
 use crate::{ImageSurface, effects::MAX_EFFECT_PIXELS};
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
+pub(crate) fn pixel(destination: &mut [u8], source: &[u8], scale: u16, subtract: bool) {
+    let alpha = u32::from(source[3]);
+    if alpha == 0 {
+        return;
+    }
+    for c in 0..3 {
+        // Signed packed-word multiplication, reconstructed after >>8, then
+        // signed-word to unsigned-byte saturation. Accepted legacy positive
+        // scales retain the original result; negative word profiles are also
+        // available to the generic row-batch math without scalar substitution.
+        let value = ((i32::from(source[c]) * i32::from(scale as i16)) >> 8).clamp(0, 255) as u8;
+        let old = destination[c];
+        let mixed = if subtract {
+            old.saturating_sub(value)
+        } else {
+            old.saturating_add(value)
+        };
+        destination[c] =
+            ((u32::from(mixed) * alpha >> 8) + (u32::from(old) * (256 - alpha) >> 8)) as u8;
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MaskedAddSubtract256 {
@@ -58,23 +79,12 @@ impl MaskedAddSubtract256 {
             for x in x0..x1 {
                 let si = (((sy + y) * i64::from(source.width) + sx + x) * 4) as usize;
                 let di = (((dy + y) * i64::from(output.width) + dx + x) * 4) as usize;
-                let alpha = u32::from(source.rgba[si + 3]);
-                if alpha == 0 {
-                    continue;
-                }
-                for c in 0..3 {
-                    let src = ((u32::from(source.rgba[si + c]) * u32::from(self.scale)) >> 8)
-                        .min(255) as u8;
-                    let dst = output.rgba[di + c];
-                    let mixed = if self.subtract {
-                        dst.saturating_sub(src)
-                    } else {
-                        dst.saturating_add(src)
-                    };
-                    output.rgba[di + c] = ((u32::from(mixed) * alpha >> 8)
-                        + (u32::from(dst) * (256 - alpha) >> 8))
-                        as u8;
-                }
+                pixel(
+                    &mut output.rgba[di..di + 4],
+                    &source.rgba[si..si + 4],
+                    self.scale,
+                    self.subtract,
+                );
             }
         }
         check()?;

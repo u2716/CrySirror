@@ -44,8 +44,8 @@
   "source": {
     "url": "https://github.com/xmoezzz/siglus_rs.git",
     "pin": "5f358ef1360b0439e92aed2b749e8f25d8721954",
-    "attribution": "crates/crysirror-image/UPSTREAM.md",
-    "transforms": "docs/native-audit-siglus-transform.md"
+    "attribution": "crates/crysirror-image/SOURCE_NOTES.md",
+    "transforms": "crates/crysirror-siglus-vm/src/export.rs"
   },
   "compilation_and_tests": [
     {

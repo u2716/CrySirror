@@ -5,6 +5,8 @@ edition.workspace=true
 license="MPL-2.0"
 [features]
 default=[]
+vita-gxm=["crysirror-rfvp-native/vita-gxm"]
+switch-framebuffer=["crysirror-rfvp-native/switch-framebuffer"]
 nfs=["crysirror-rfvp-native/nfs"]
 smb=["crysirror-rfvp-native/smb"]
 [dependencies]

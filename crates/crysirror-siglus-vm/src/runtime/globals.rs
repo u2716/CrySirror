@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
-// Migrated from pinned siglus_rs; see UPSTREAM.md and upstream-files.json.
+// Migrated from pinned siglus_rs; see SOURCE.json and upstream-files.json.
 /// The runtime's tables (objects, stage lists, properties) are keyed by
 /// small integers and looked up many times per object operation; SipHash
 /// was about a tenth of the VM's frame time on consoles.

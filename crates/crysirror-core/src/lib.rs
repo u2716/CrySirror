@@ -67,3 +67,5 @@ pub mod image_encoding;
 pub mod frame_image;
 
 pub mod vector_scene;
+
+pub mod time_mapping;

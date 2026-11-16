@@ -3,8 +3,12 @@
 //! ArcFormats/Circus/AudioPCM.cs (morkt, MIT; notice in circus.LICENSE).
 //! PCM and Ogg payloads remain streamed; no native mixer or device is involved.
 use crate::decoder::{AudioSource, MediaSource, Stream};
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use std::io::{Read, Seek, SeekFrom};
+#[path = "circus_spectral.rs"]
+mod spectral;
+#[path = "circus_delta.rs"]
+mod delta;
 
 fn u16(b: &[u8], at: usize) -> u16 {
     u16::from_le_bytes(b[at..at + 2].try_into().unwrap())
@@ -77,8 +81,8 @@ impl MediaSource for View {
         Some(self.prefix.len() as u64 + self.body_len)
     }
 }
-/// Open XPCM mode 0 PCM or mode 5 Ogg on the engine's existing decoder.
-/// Recognizable unsupported transform modes fail rather than becoming noise.
+/// Open XPCM0 PCM, 2 adaptive delta, 5 Ogg, or 1/3 fixed-point spectral streams. Compressed
+/// music retains bounded blocks and seekable VFS authority, never whole PCM.
 pub fn open_reader(mut source: Box<dyn MediaSource>) -> Result<Box<dyn AudioSource>> {
     ensure!(source.is_seekable(), "XPCM requires a seekable capability");
     source.seek(SeekFrom::Start(0))?;
@@ -88,22 +92,125 @@ pub fn open_reader(mut source: Box<dyn MediaSource>) -> Result<Box<dyn AudioSour
     let decoded = u64::from(u32(&header, 4));
     ensure!(decoded > 0, "XPCM decoded length");
     let mode = u32(&header, 8) & 255;
-    let (start,len,prefix,extension):(u64,u64,Vec<u8>,&str)=match mode{
-        5=>{
-            let len=u64::from(u32(&header,12));ensure!(len>0,"XPCM Ogg length");
-            let mut magic=[0u8;4];source.read_exact(&mut magic)?;ensure!(&magic==b"OggS","XPCM mode 5 payload is not Ogg");
-            (16,len,Vec::new(),"ogg")
+    let (start, len, prefix, extension): (u64, u64, Vec<u8>, &str) = match mode {
+        5 => {
+            let len = u64::from(u32(&header, 12));
+            ensure!(len > 0, "XPCM Ogg length");
+            let mut magic = [0u8; 4];
+            source.read_exact(&mut magic)?;
+            ensure!(&magic == b"OggS", "XPCM mode 5 payload is not Ogg");
+            (16, len, Vec::new(), "ogg")
         }
-        0=>{
-            let mut format=[0u8;16];format[..4].copy_from_slice(&header[12..16]);source.read_exact(&mut format[4..])?;
-            let tag=u16(&format,0);let channels=u16(&format,2);let rate=u32(&format,4);let byte_rate=u32(&format,8);let align=u16(&format,12);let bits=u16(&format,14);
-            ensure!(tag==1&&matches!(channels,1|2)&&matches!(bits,8|16|24|32),"unsupported XPCM PCM layout");
-            ensure!((8000..=192000).contains(&rate)&&align==channels*(bits/8)&&byte_rate==rate*u32::from(align),"XPCM PCM rates/alignment");
-            ensure!(decoded%u64::from(align)==0&&decoded<=u64::from(u32::MAX)-36,"XPCM PCM length/alignment");
-            let mut prefix=b"RIFF".to_vec();prefix.extend(((decoded+36) as u32).to_le_bytes());prefix.extend(b"WAVEfmt ");prefix.extend(16u32.to_le_bytes());prefix.extend(format);prefix.extend(b"data");prefix.extend((decoded as u32).to_le_bytes());
-            (28,decoded,prefix,"wav")
+        0 => {
+            let mut format = [0u8; 16];
+            format[..4].copy_from_slice(&header[12..16]);
+            source.read_exact(&mut format[4..])?;
+            let tag = u16(&format, 0);
+            let channels = u16(&format, 2);
+            let rate = u32(&format, 4);
+            let byte_rate = u32(&format, 8);
+            let align = u16(&format, 12);
+            let bits = u16(&format, 14);
+            ensure!(
+                tag == 1 && matches!(channels, 1 | 2) && matches!(bits, 8 | 16 | 24 | 32),
+                "unsupported XPCM PCM layout"
+            );
+            ensure!(
+                (8000..=192000).contains(&rate)
+                    && align == channels * (bits / 8)
+                    && byte_rate == rate * u32::from(align),
+                "XPCM PCM rates/alignment"
+            );
+            ensure!(
+                decoded % u64::from(align) == 0 && decoded <= u64::from(u32::MAX) - 36,
+                "XPCM PCM length/alignment"
+            );
+            let mut prefix = b"RIFF".to_vec();
+            prefix.extend(((decoded + 36) as u32).to_le_bytes());
+            prefix.extend(b"WAVEfmt ");
+            prefix.extend(16u32.to_le_bytes());
+            prefix.extend(format);
+            prefix.extend(b"data");
+            prefix.extend((decoded as u32).to_le_bytes());
+            (28, decoded, prefix, "wav")
         }
-        other=>anyhow::bail!("unsupported XPCM transform mode {other}; LZSS/zlib spectral decoding is not implemented"),
+        1 | 3 => {
+            let mut format = [0u8; 16];
+            format[..4].copy_from_slice(&header[12..16]);
+            source.read_exact(&mut format[4..])?;
+            let tag = u16(&format, 0);
+            let channels = u16(&format, 2);
+            let rate = u32(&format, 4);
+            let byte_rate = u32(&format, 8);
+            let align = u16(&format, 12);
+            let bits = u16(&format, 14);
+            ensure!(
+                tag == 1 && matches!(channels, 1 | 2) && bits == 16,
+                "unsupported XPCM spectral PCM layout"
+            );
+            ensure!(
+                (8000..=192000).contains(&rate)
+                    && align == channels * 2
+                    && byte_rate == rate * u32::from(align),
+                "XPCM spectral rates/alignment"
+            );
+            let mut packed = [0; 4];
+            source.read_exact(&mut packed)?;
+            let length = u64::from(u32::from_le_bytes(packed));
+            ensure!(length > 0, "XPCM spectral compressed length");
+            if let Some(total) = source.byte_len() {
+                ensure!(
+                    length.checked_add(32).is_some_and(|end| end <= total),
+                    "truncated XPCM spectral payload"
+                );
+            }
+            let view = View {
+                source,
+                prefix: Vec::new(),
+                body_start: 32,
+                body_len: length,
+                at: 0,
+            };
+            return Ok(Box::new(spectral::Spectral::new(
+                view,
+                decoded,
+                rate,
+                channels,
+                header[9],
+                mode == 3,
+            )?));
+        }
+        2 => {
+            let mut format = [0u8; 16];
+            format[..4].copy_from_slice(&header[12..16]);
+            source.read_exact(&mut format[4..])?;
+            let tag = u16(&format, 0);
+            let channels = u16(&format, 2);
+            let rate = u32(&format, 4);
+            let align = u16(&format, 12);
+            let bits = u16(&format, 14);
+            ensure!(
+                tag == 1 && matches!(channels, 1 | 2) && bits == 16 && align == channels * 2,
+                "unsupported XPCM delta PCM layout"
+            );
+            ensure!((8000..=192000).contains(&rate), "XPCM delta rate");
+            let length = decoded / 2;
+            if let Some(total) = source.byte_len() {
+                ensure!(
+                    length.checked_add(28).is_some_and(|end| end <= total),
+                    "truncated XPCM delta payload"
+                );
+            }
+            let view = View {
+                source,
+                prefix: Vec::new(),
+                body_start: 28,
+                body_len: length,
+                at: 0,
+            };
+            return Ok(Box::new(delta::Delta::new(view, decoded, rate, channels)?));
+        }
+        other => anyhow::bail!("unsupported XPCM transform mode {other}"),
     };
     let end = start.checked_add(len).context("XPCM payload overflow")?;
     if let Some(length) = source.byte_len() {
@@ -157,7 +264,7 @@ mod tests {
     #[test]
     fn invalid_layouts_transform_modes_and_truncation_are_visible_errors() {
         let mut b = pcm();
-        b[8] = 3;
+        b[8] = 4;
         assert!(open_reader(Box::new(Cursor::new(b))).is_err());
         let mut b = pcm();
         b[12] = 2;
@@ -184,7 +291,7 @@ mod tests {
                     continue;
                 }
                 let mode = u32(&header, 8) & 255;
-                assert!(matches!(mode, 0 | 5), "{}: mode {mode}", p.display());
+                assert!(matches!(mode, 0 | 1 | 3 | 5), "{}: mode {mode}", p.display());
                 file.seek(SeekFrom::Start(0)).unwrap();
                 let mut source = crate::decoder::open_reader(Box::new(file), Some("pcm"))
                     .unwrap_or_else(|e| panic!("{}: {e:#}", p.display()));

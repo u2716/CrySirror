@@ -122,6 +122,48 @@ impl VmFactory for Factory {
         Ok(Box::new(IntegratedVm::new(client, config)?))
     }
 }
+/// Resolve key material from the game's own Gameexe/Scene (no key.toml is
+/// required) and install the host-owned resource/save/font scope on this
+/// thread. Shared by the desktop session and the console hosts.
+pub(crate) fn install_scope(config: &Config, root: &std::path::Path) -> Result<()> {
+    install_scope_with(config, root, None)
+}
+pub(crate) fn install_scope_with(config: &Config, root: &std::path::Path, system_font: Option<&'static [u8]>) -> Result<()> {
+    ensure!(crate::native_vm::resource::fs::metadata(root)?.is_dir(), "Siglus resource root");
+    // Compare canonical forms on both sides: the platform's canonical spelling
+    // can differ from the host-supplied root (Vita `ux0:data` vs `ux0:/data`).
+    let canonical = |p: &std::path::Path| crate::native_vm::resource::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let root = canonical(root);
+    let user_root = canonical(&config.user_root);
+    let read = |name: &str, limit: u64| -> Result<Vec<u8>> {
+        let path = crate::native_vm::resource::fs::canonicalize(root.join(name))?;
+        ensure!(path.starts_with(&root), "Siglus bootstrap path escapes root");
+        ensure!(
+            crate::native_vm::resource::fs::metadata(&path)?.len() <= limit,
+            "Siglus bootstrap size budget"
+        );
+        Ok(crate::native_vm::resource::fs::read(path)?)
+    };
+    let material = if let Some(key) = &config.key_file {
+        crate::key_toml::parse_key_toml(std::str::from_utf8(&read(key, 65536)?)?)?
+    } else {
+        Default::default()
+    };
+    let material = crate::decode_material::resolve(
+        &read(&config.gameexe, 16 * 1024 * 1024)?,
+        &read(&config.scene, 64 * 1024 * 1024)?,
+        material,
+    )?;
+    crate::host_scope::install(crate::host_scope::Scope {
+        resource_root: root.clone(),
+        user_root,
+        font: config.font_file.as_deref().map(canonical),
+        font_face_index: config.font_face_index,
+        material,
+        system_font,
+    });
+    Ok(())
+}
 pub fn register(registry: &mut AdapterRegistry) -> Result<()> {
     registry.register("siglus", Arc::new(Factory))
 }
@@ -184,40 +226,15 @@ impl Worker {
                         let root=if let Some(mount)=&_mount {mount.path().to_path_buf()}else{config.resource_root.canonicalize()?};
                         #[cfg(not(any(feature="nfs",feature="smb")))]
                         let root=config.resource_root.canonicalize()?;
-                        ensure!(crate::native_vm::resource::fs::metadata(&root)?.is_dir(), "Siglus resource root");
-                        let read = |name: &str, limit: u64| -> Result<Vec<u8>> {
-                            let path = crate::native_vm::resource::fs::canonicalize(root.join(name))?;
-                            ensure!(
-                                path.starts_with(&root),
-                                "Siglus bootstrap path escapes root"
-                            );
-                            ensure!(
-                                crate::native_vm::resource::fs::metadata(&path)?.len() <= limit,
-                                "Siglus bootstrap size budget"
-                            );
-                            Ok(crate::native_vm::resource::fs::read(path)?)
-                        };
-                        let material = if let Some(key) = &config.key_file {
-                            crate::key_toml::parse_key_toml(std::str::from_utf8(&read(
-                                key, 65536,
-                            )?)?)?
-                        } else {
-                            Default::default()
-                        };
-                        let material = crate::decode_material::resolve(
-                            &read(&config.gameexe, 16 * 1024 * 1024)?,
-                            &read(&config.scene, 64 * 1024 * 1024)?,
-                            material,
-                        )?;
-                        crate::host_scope::install(crate::host_scope::Scope {
-                            resource_root: root.clone(),
-                            user_root: config.user_root.clone(),
-                            font: config.font_file.clone(),
-                            font_face_index: config.font_face_index,
-                            material,
-                        });
+                        install_scope(&config, &root)?;
                         let native = SiglusHostConfig::new(root);
                         let (w, h) = SiglusHost::resolve_initial_size(&native);
+                        // Console hosts drive this runtime through its native
+                        // GXM/deko3d presenter (switch_host / Vita player),
+                        // not through a CPU readback of an offscreen frame.
+                        #[cfg(any(target_os = "horizon", target_os = "vita"))]
+                        let renderer: Renderer = bail!("console hosts present integrated Siglus natively; the offscreen session is desktop-only");
+                        #[cfg(not(any(target_os = "horizon", target_os = "vita")))]
                         let renderer = pollster::block_on(Renderer::new_offscreen(w, h))?;
                         let mut session = SiglusHost::new_with_renderer_sync(native, renderer)?;
                         let ui = Arc::new(Mutex::new(VecDeque::new()));
@@ -288,7 +305,10 @@ impl Worker {
                                     last_time = Some(now);
                                     let halted = session.step(dt as u32)?;
                                     global = Some(session.persist_global_if_changed(global));
+                                    #[cfg(not(any(target_os = "horizon", target_os = "vita")))]
                                     let frame = session.renderer_mut().take_host_frame();
+                                    #[cfg(any(target_os = "horizon", target_os = "vita"))]
+                                    let frame = None;
                                     let pcm = session.render_host_pcm(dt as usize * 48)?;
                                     let requests = ui
                                         .lock()

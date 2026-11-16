@@ -1,0 +1,3 @@
+// SPDX-License-Identifier: MPL-2.0
+// Static PBR mesh vertex program (PSV tier).
+#include "lite_mesh_vertex.cgh"

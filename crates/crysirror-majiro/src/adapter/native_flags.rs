@@ -43,7 +43,6 @@ impl MajiroVm {
             //4022E0's absent argument is1.426070 deliberately preserves the
             //last input timestamp, so the350ms interval is not rearmed here.
             0xb7e3e81c => {
-                ensure!(arguments.len() <= 1, "Majiro input suppression ABI");
                 let mask = arguments
                     .first()
                     .map(Value::integer)
@@ -52,19 +51,17 @@ impl MajiroVm {
                 self.native_flags.click_mask = mask;
                 self.native_flags.click_remaining = 3;
             }
+            //These three setters do not read argc or stack operands at all.
+            //The dispatcher discards every supplied operand afterward; games
+            //legitimately call4203F0 with1, which still means an unconditional
+            //one-shot skip. Do not invent an empty-argument ABI restriction.
             0xdf9f7749 => {
-                ensure!(arguments.is_empty(), "Majiro next-console-voice gender ABI");
                 self.console.voice_male = true;
             }
             0xaccf4004 => {
-                ensure!(arguments.is_empty(), "Majiro skip-next-console-voice ABI");
                 self.console.skip_voice = Some(1);
             }
             0x0542e1b7 => {
-                ensure!(
-                    arguments.is_empty(),
-                    "Majiro suppress-next-console-newline ABI"
-                );
                 self.console.suppress_next_newline = true;
             }
             _ => return Ok(None),
@@ -110,6 +107,9 @@ impl MajiroVm {
             .iter()
             .position(|byte| *byte == 0)
             .unwrap_or(name.len())];
+        //447D90/447E00 first copy to the original260-byte voice-name buffer.
+        //The original overflow has no defined native contract to reproduce.
+        ensure!(name.len() <= 259, "Majiro native voice-name buffer");
         if name.eq_ignore_ascii_case(b"NW") {
             return Ok(());
         }
@@ -144,10 +144,6 @@ impl MajiroVm {
         };
         let instance_gain = self.audio.instance_gain[native_audio::VOICE as usize];
         let gain = volume.wrapping_mul(instance_gain) / 1000;
-        ensure!(
-            (0..=4000).contains(&gain),
-            "Majiro voice gain outside shared transport range"
-        );
         host.submit_audio(
             self.client,
             AudioRequest::Stop {
@@ -160,6 +156,10 @@ impl MajiroVm {
         self.audio_names.remove(&native_audio::VOICE);
         if self.read_audio_exists(name) {
             if permitted && (repeat != 0 || !self.fast_skip_active(host)?) {
+                ensure!(
+                    (0..=4000).contains(&gain),
+                    "Majiro voice gain outside shared transport range"
+                );
                 let bytes = self
                     .read_audio(host, name)?
                     .context("Majiro indexed voice resource disappeared")?;

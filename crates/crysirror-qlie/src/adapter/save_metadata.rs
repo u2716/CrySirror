@@ -252,8 +252,7 @@ fn mutate(
 }
 impl QlieVm {
     fn native_save_key(&self) -> u32 {
-        self.text
-            .get("system/etc/game.txt")
+        self.game_settings()
             .into_iter()
             .flat_map(|s| s.lines())
             .filter_map(|line| line.split_once('='))
@@ -307,9 +306,7 @@ impl QlieVm {
         if self.save_query.is_none() {
             let storage = h.storage(self.client)?;
             // Native5054F4 defaults CodeKey to81789, masks it to24 bits.
-            let key = self
-                .text
-                .get("system/etc/game.txt")
+            let key = self.game_settings()
                 .into_iter()
                 .flat_map(|s| s.lines())
                 .filter_map(|line| line.split_once('='))

@@ -1,6 +1,7 @@
 use super::*;
 mod bar;
 mod strings;
+mod native_log;
 /// 5D3DE0 (log\\ct): message text without tags. A token is one character
 /// or a `[`..`]` run (5D3C98). Inside a tag, Copy(Trim(token), 2, len-2) is
 /// split on ','; `lim,n,text` keeps the first n code points of text,
@@ -899,6 +900,7 @@ impl QlieVm {
                     let source = self
                         .text
                         .get("system/voice/voicedata.txt")
+                        .or_else(|| self.text.get("system/voice/voicedata.dat"))
                         .context("QLIE character voice catalog missing")?;
                     let mut aliases = BTreeMap::<usize, Vec<String>>::new();
                     for line in source
@@ -1072,7 +1074,8 @@ impl QlieVm {
                     let fonts = h.font_library(self.client)?;
                     let installed = fonts.aliases()?;
                     let mut names = vec![fonts.resolve_alias("default")?.unwrap_or_default()];
-                    if let Some(text) = self.text.get("system/font/fontdata.txt") {
+                    if let Some(text) = self.text.get("system/font/fontdata.txt")
+                        .or_else(|| self.text.get("system/font/fontdata.dat")) {
                         let entries: BTreeMap<String, String> = text
                             .lines()
                             .filter_map(|l| l.split_once('='))
@@ -1115,6 +1118,9 @@ impl QlieVm {
         }
         if matches!(kind.as_str(), "log" | "llog" | "flog") {
             let o = self.objects.get_mut(&id).unwrap();
+            if kind == "log" && native_log::method(o, m, op, &a)? {
+                return Ok(true);
+            }
             match op {
                 "lk" => o.locked = n(0)? != 0,
                 "?lk" => m.result(0, Value::Int(i32::from(o.locked))),
@@ -2174,7 +2180,11 @@ impl QlieVm {
                     if s(0).to_ascii_lowercase().starts_with("$$$gamethreadimage") {
                         return self.load_game_thread_image(h, &id, &s(0));
                     }
-                    let path = self.resolve(m, &s(0))?;
+                    let path = if kind == "theora" {
+                        self.resolve_movie(m, &s(0))?
+                    } else {
+                        self.resolve(m, &s(0))?
+                    };
                     if kind == "theora" || kind == "snd" {
                         let o = self.objects.get_mut(&id).unwrap();
                         if kind == "snd" && o.asset.as_deref() != Some(&path) {
@@ -2491,23 +2501,7 @@ impl QlieVm {
                         vec![Value::Int(n(0)? * factor), Value::Int(n(1)? * factor)],
                     );
                     self.put_parent(h, &id)?;
-                    let o = &self.objects[&id];
-                    let size = o
-                        .bundle
-                        .as_ref()
-                        .map(|b| b.animation.size)
-                        .or_else(|| o.images.first().and_then(|v| v.as_ref()).map(|v| v.size))
-                        .unwrap_or(self.config.canvas);
-                    let layer: serde_json::Value = serde_json::from_slice(
-                        &h.query_engine(self.client, EngineQuery::Layer(o.layer))?,
-                    )?;
-                    let mut transform = layer["transform"].clone();
-                    transform["object_anchor"] = json!(true);
-                    transform["texture_center_x"] =
-                        json!(size[0] as f32 * n(0)? as f32 * factor as f32 / 100.);
-                    transform["texture_center_y"] =
-                        json!(size[1] as f32 * n(1)? as f32 * factor as f32 / 100.);
-                    self.submit(h,json!({"layers":[{"op":"set_transform","id":o.layer,"transform":transform}]}))?;
+                    self.apply_alignment(h, &id)?;
                 }
                 "g2" => {
                     self.put_parent(h, &id)?;
@@ -2599,8 +2593,12 @@ impl QlieVm {
                 // 6F1370 mi/?mi: +3044 input-blocking byte checked by 6B04B4
                 // (vmt+40): a hit on this object stops lower objects' hit
                 // tests. The shared UI dispatches to the topmost widget.
+                // A bare `\mi` (BIMAN1 uppermenu/layout.s) is valid: the
+                // native argument list returns "" for a missing field and
+                // `mi` has no omitted-field branch, so the calculator's empty
+                // result 0 is stored as `0 == 1` (not blocking).
                 "mi" => {
-                    ensure!(a.len() == 1, "QLIE input block ABI");
+                    ensure!(a.len() <= 1, "QLIE input block ABI");
                     let block = i32::from(n(0)? == 1);
                     self.objects
                         .get_mut(&id)

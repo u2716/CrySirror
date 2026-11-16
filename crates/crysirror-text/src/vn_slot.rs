@@ -5,7 +5,7 @@
 #![allow(unexpected_cfgs)]
 use crate::bitmap_font::Font;
 use crate::slot_color::SlotColor as ColorItem;
-use anyhow::{anyhow, bail, Result};
+use anyhow::{Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone)]
 enum FontItem {

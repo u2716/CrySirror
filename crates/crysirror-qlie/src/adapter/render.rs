@@ -645,6 +645,11 @@ impl Traversal<'_> {
         };
         let motion_index = frame.motion;
         if depth == 0 {
+            if !self.direct_sample {
+                self.object.animation_clocks.get_mut(&bundle.id)
+                    .context("QLIE published animation clock missing")?
+                    .accept_published_motion();
+            }
             self.object.motion = motion_index;
         }
         let motion = bundle
@@ -1057,7 +1062,7 @@ impl Traversal<'_> {
                             child.animation.size[1] as f32,
                         ],
                     )
-                } else if member.metadata["kind"] == 7 {
+                } else if member.is_video() {
                     if !self.object.embedded_media.contains_key(&member.slot) {
                         let id = (0..1024)
                             .find(|n| !self.ids.contains(n))
@@ -1067,7 +1072,11 @@ impl Traversal<'_> {
                             id,
                             Arc::new(resources::Memory(member.bytes.clone())),
                             MediaSourceOptions {
-                                looping: true,
+                                // Embedded movies follow the ABMP seek value;
+                                // looping belongs to native key jumps, not the
+                                // decoder. IMOAVI4DD350 and BIMAN3 Theora
+                                // 4E5B44 -> DLL10001E90 clamp to the last frame.
+                                looping: false,
                                 audio: false,
                                 gain: 1.,
                             },
@@ -1644,24 +1653,28 @@ pub(super) fn update(vm: &mut QlieVm, h: &mut dyn HostServices) -> Result<()> {
             if let Some(input) = interaction {
                 let state = (input.hovered, input.pressed, input.activation_serial);
                 if state != o.button_state {
+                    // A re-registered widget restarts its activation serial
+                    // at 0 (config close re-puts the in-game buttons). That
+                    // reset is not a click; only a new nonzero serial is.
+                    let activated = state.2 != o.button_state.2 && state.2 != 0;
                     // 6A1xxx counts clicks at button +3844 for ?bc.
-                    if state.2 != o.button_state.2 {
+                    if activated {
                         let count = property_int(o, "native/bc", 0).saturating_add(1);
                         o.properties.insert("native/bc".into(), vec![Value::Int(count)]);
                     }
                     // 6D474C mode 9: a btn wait takes the click (no callback).
                     let button_wait = matches!(vm.wait, Some(Wait::Button { .. }))
                         && o.thread == vm.host_thread;
-                    if button_wait && state.2 != o.button_state.2 && vm.button_clicked.is_none() {
+                    if button_wait && activated && vm.button_clicked.is_none() {
                         vm.button_clicked = Some(object_id.clone());
-                    } else if o.kind == "sbtn" && state.2 != o.button_state.2 {
+                    } else if o.kind == "sbtn" && activated {
                         ensure!(
                             vm.button_callbacks.len() < 256,
                             "QLIE pending button callback budget"
                         );
                         vm.button_callbacks.push_back(object_id.clone());
                     }
-                    let name = if state.2 != o.button_state.2 {
+                    let name = if activated {
                         "*OnClick"
                     } else if state.1 {
                         "*OnMouseDown"

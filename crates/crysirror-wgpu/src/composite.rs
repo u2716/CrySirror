@@ -204,6 +204,7 @@ impl Renderer {
                     32 + if !dynamic { 2 * bytes_per_pixel } else { 0 }
                 }
                 Some((SubtreeTransitionEffect::Dim { .. }, _)) => 24,
+                Some((SubtreeTransitionEffect::Glitch { .. }, _)) => 0,
                 None => 0,
             })
             .sum();
@@ -217,15 +218,17 @@ impl Renderer {
             .compositor
             .take()
             .unwrap_or_else(|| Compositor::new(self.gpu.clone(), self.format));
-        if composites
-            .iter()
-            .any(|(_, _, frame)| frame.effect.is_some())
-            && c.filter.is_none()
+        if composites.iter().any(|(_, _, frame)| {
+            matches!(
+                frame.effect.as_ref(),
+                Some((
+                    SubtreeTransitionEffect::Blur { .. } | SubtreeTransitionEffect::Dim { .. },
+                    _
+                ))
+            )
+        }) && c.filter.is_none()
         {
-            for format in [
-                wgpu::TextureFormat::Rgba32Float,
-                wgpu::TextureFormat::Rgba16Float,
-            ] {
+            for format in [wgpu::TextureFormat::Rgba32Float, filter::product_format(&self.gpu)] {
                 let usages = self
                     .gpu
                     .adapter
@@ -405,6 +408,8 @@ impl Renderer {
                 };
                 let mut progress = frame.progress;
                 let mut phase = 0.;
+                let mut glitch_tint = None;
+                let mut _glitch_table = None;
                 if let Some((effect, rect)) = &frame.effect {
                     effect.validate()?;
                     progress = effect.progress(frame.timing[0], frame.timing[1]) as f32;
@@ -444,6 +449,20 @@ impl Renderer {
                             .floor() as f32;
                         }
                         SubtreeTransitionEffect::Dim { .. } => {}
+                        SubtreeTransitionEffect::Glitch { .. } => {
+                            let size = [rect[2].max(1.) as u32, rect[3].max(1.) as u32];
+                            let glitch = effect
+                                .glitch_frame(frame.timing[0], frame.timing[1], size)
+                                .context("glitch frame")?;
+                            let table = self.glitch_table(&glitch, size)?;
+                            rule_view = table.create_view(&Default::default());
+                            _glitch_table = Some(table);
+                            mode = 4.;
+                            phase = glitch.field.block() as f32;
+                            glitch_tint = Some(glitch.tint.map_or(-1., |[r, g, b]| {
+                                (u32::from(r) << 16 | u32::from(g) << 8 | u32::from(b)) as f32
+                            }));
+                        }
                     }
                 }
                 let uniform =
@@ -452,10 +471,13 @@ impl Renderer {
                         .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                             label: Some("crossfade progress"),
                             contents: bytemuck::cast_slice(&{
-                                let (vague, _, mut rect) = match &frame.rule {
+                                let (mut vague, _, mut rect) = match &frame.rule {
                                     Some((r, rect)) if rule_ready => (r.vague as f32, 1., *rect),
                                     _ => (0., 0., [0., 0., 1., 1.]),
                                 };
+                                if let Some(tint) = glitch_tint {
+                                    vague = tint;
+                                }
                                 if let Some((_, effect_rect)) = &frame.effect {
                                     rect = *effect_rect;
                                 }
@@ -574,6 +596,60 @@ impl Renderer {
 const MAX_FRAME_SNAPSHOTS: usize = 512;
 
 impl Renderer {
+    /// Per-row, per-block glitch offsets as 24-bit biased integers: rows
+    /// `3v..3v+2` hold the x shift (alpha: row uses the new input), the y
+    /// shift and the channel split of every block column.
+    fn glitch_table(
+        &self,
+        glitch: &crysirror_scene::layer::GlitchFrame,
+        size: [u32; 2],
+    ) -> Result<wgpu::Texture> {
+        let cols = glitch.field.columns() as u32;
+        let rows = 3 * size[1];
+        let limit = self.gpu.device.limits().max_texture_dimension_2d;
+        ensure!(
+            cols <= limit && rows <= limit,
+            "glitch table {cols}x{rows} exceeds the device texture limit"
+        );
+        let mut texels = vec![0u8; (cols * rows * 4) as usize];
+        for (v, (use_new, coef)) in glitch.rows.iter().enumerate() {
+            for bx in 0..cols as usize {
+                let offsets = glitch.field.offsets(v, bx, *coef);
+                for (k, value) in offsets.iter().enumerate() {
+                    let biased = ((*value).clamp(-(1 << 23), (1 << 23) - 1) + (1 << 23)) as u32;
+                    let at = (((3 * v + k) * cols as usize + bx) * 4) as usize;
+                    texels[at..at + 3].copy_from_slice(&biased.to_le_bytes()[..3]);
+                    texels[at + 3] = if k == 0 && *use_new { 255 } else { 0 };
+                }
+            }
+        }
+        let extent = wgpu::Extent3d {
+            width: cols,
+            height: rows,
+            depth_or_array_layers: 1,
+        };
+        let texture = self.gpu.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("glitch table"),
+            size: extent,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        self.gpu.queue.write_texture(
+            texture.as_image_copy(),
+            &texels,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(cols * 4),
+                rows_per_image: Some(rows),
+            },
+            extent,
+        );
+        Ok(texture)
+    }
     pub(super) fn snapshot_key(
         assets: &Assets,
         owner: u32,

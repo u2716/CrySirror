@@ -6,6 +6,7 @@ pub mod dsc;
 pub mod capability_lookup;
 pub mod capability_tree;
 pub mod circus_pck;
+pub mod circus_voice;
 pub mod circus_crm;
 pub mod circus_frames;
 pub mod cg_catalog;
@@ -34,6 +35,7 @@ mod file;
 pub mod io;
 pub mod keys;
 pub mod lzss;
+pub mod lz4_frame;
 pub mod legacy_stream;
 pub mod lane_feedback;
 pub mod installer;
@@ -62,6 +64,9 @@ use std::sync::Arc;
 
 /// Public entry metadata. Native offsets, segment plans and filename codecs
 /// remain inside a format plugin; no native executable pointers are exposed.
+/// `metadata` holds facts the format stores as JSON; formats with large
+/// indexes keep per-entry facts typed and publish them through
+/// [`Archive::entry_metadata`], which is the complete view.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ArchiveEntry {
@@ -80,6 +85,17 @@ pub trait Archive: Send + Sync {
         None
     }
     fn open(&self, entry_id: u32, context: &DecodeContext) -> Result<Arc<dyn AssetReader>>;
+    /// Complete JSON facts of one entry. A JSON object per entry costs about
+    /// 1-2 KiB of heap, so large indexes (tens of thousands of voice entries)
+    /// keep their facts typed and build this view on request. The default
+    /// returns the stored `ArchiveEntry::metadata`.
+    fn entry_metadata(&self, entry_id: u32) -> serde_json::Value {
+        self.entries()
+            .iter()
+            .find(|e| e.id == entry_id)
+            .map(|e| e.metadata.clone())
+            .unwrap_or_default()
+    }
 }
 pub trait ArchiveFormat: Send + Sync {
     fn id(&self) -> &'static str;

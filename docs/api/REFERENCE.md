@@ -6,7 +6,7 @@ Generated from the class registry, the command table, serde defaults and Rust do
 `CRYSIRROR_BLESS=1 cargo test --release -p crysirror-engine --test api_docs`.
 Policy and change log: [README](README.md), [CHANGES](CHANGES.md).
 
-API fingerprint: `b963b04efb70ebdb`
+API fingerprint: `730548bc6fc7fb95`
 
 The same classes are exposed to Rust (`EngineContext` calls), to JavaScript/TypeScript (bindings generated from the registry, [crysirror.d.ts](crysirror.d.ts)) and to inspection tools.
 
@@ -15,7 +15,7 @@ The same classes are exposed to Rust (`EngineContext` calls), to JavaScript/Type
 - [Globals](#globals)
 - Classes: [Assets](#class-assets), [Audio](#class-audio), [Bitmap](#class-bitmap), [Canvases](#class-canvases), [Client](#class-client), [Engine](#class-engine), [Entity](#class-entity), [Fs](#class-fs), [Input](#class-input), [InputRoutes](#class-inputroutes), [Layers](#class-layers), [Localization](#class-localization), [Media](#class-media), [Physics](#class-physics), [PhysicsJoint](#class-physicsjoint), [Platform](#class-platform), [Profiler](#class-profiler), [Puppets](#class-puppets), [Resources](#class-resources), [Save](#class-save), [Text](#class-text), [Ui](#class-ui), [Vfx](#class-vfx), [World](#class-world)
 - [Commands](#commands)
-- Data: [ImageCompositeMath](#imagecompositemath), [RgbaBlendFactor](#rgbablendfactor), [RgbaBlendEquation](#rgbablendequation), [RgbaBlendComponent](#rgbablendcomponent), [RgbaByteRounding](#rgbabyterounding), [RgbaBlendArithmetic](#rgbablendarithmetic), [RgbaBlendState](#rgbablendstate), [SessionSeedSource](#sessionseedsource), [SessionSeedMaterial](#sessionseedmaterial), [SessionSeedState](#sessionseedstate), [CropRect](#croprect), [ImageEffect](#imageeffect), [IntegerWipe](#integerwipe), [IntegerWipeGeometry](#integerwipegeometry), [ScanlineWipe](#scanlinewipe), [ShapeWipe](#shapewipe), [ScaleWipe](#scalewipe), [ImageFragment](#imagefragment), [PolygonFragments](#polygonfragments), [RandomWipeGeometry](#randomwipegeometry), [RandomWipe](#randomwipe), [ShiftRows](#shiftrows), [PackedColorMask](#packedcolormask), [PackedDualMask](#packeddualmask), [ScanlineMath](#scanlinemath), [FixedSampleSpan](#fixedsamplespan), [FixedScanlines](#fixedscanlines), [ScanlineClip](#scanlineclip), [ClippedScanlineSample](#clippedscanlinesample), [FloatingLine](#floatingline), [CoverageBounds](#coveragebounds), [NeighborRelief](#neighborrelief), [NativeBoxBlurMath](#nativeboxblurmath), [NativeBoxBlur](#nativeboxblur), [RowTintBlend](#rowtintblend), [MaskedBackdropShift](#maskedbackdropshift), [RowBlit](#rowblit), [RowWordAdd](#rowwordadd), [MaskedAddSubtract256](#maskedaddsubtract256), [TonalBand](#tonalband), [TonalBalance](#tonalbalance), [LumaOffsetLookup](#lumaoffsetlookup), [RectMapSample](#rectmapsample), [RectMap](#rectmap), [RectMapRegion](#rectmapregion), [QuadraticBezierPath](#quadraticbezierpath), [CubicBezierPath](#cubicbezierpath), [BoxReduce](#boxreduce), [BoxArithmetic](#boxarithmetic), [BoxAnchors](#boxanchors), [BoxAlpha](#boxalpha), [ByteRaster](#byteraster), [ByteRasterMath](#byterastermath), [IntegerLine](#integerline), [LogRecord](#logrecord), [LogReceipt](#logreceipt), [LogSnapshot](#logsnapshot), [ReadingWait](#readingwait), [AldVolume](#aldvolume), [AldCatalog](#aldcatalog), [AlkCatalog](#alkcatalog), [System4IniValue](#system4inivalue), [System4IniEntry](#system4inientry), [System4IniDocument](#system4inidocument), [System4Mixer](#system4mixer), [System4Bootstrap](#system4bootstrap), [System4AssetClass](#system4assetclass), [System4AssetVolume](#system4assetvolume), [System4Assets](#system4assets), [System4SpriteSurface](#system4spritesurface), [System4Sprite](#system4sprite), [System4Sprites](#system4sprites), [System4Input](#system4input), [System4Sact](#system4sact), [System4NativeAdapter](#system4nativeadapter), [PointerObservation](#pointerobservation), [InputObservation](#inputobservation), [ControllerButton](#controllerbutton), [ControllerAxis](#controlleraxis), [ControllerInputSample](#controllerinputsample), [InputFrame](#inputframe), [InputSourcesFrame](#inputsourcesframe), [InputSourcesObservation](#inputsourcesobservation), [MediaPolicy](#mediapolicy), [PlatformIntegration](#platformintegration), [PlatformIntegrationInfo](#platformintegrationinfo), [KeyboardLockState](#keyboardlockstate), [KeyboardLockSnapshot](#keyboardlocksnapshot), [NativeLiveState](#nativelivestate), [CivilTime](#civiltime), [CivilTransitionDay](#civiltransitionday), [CivilTransition](#civiltransition), [CivilDaylightRules](#civildaylightrules), [CivilTimeZoneProfile](#civiltimezoneprofile), [CivilTimeZoneState](#civiltimezonestate), [CivilTimeZoneQuery](#civiltimezonequery), [HttpMethod](#httpmethod), [HttpRequest](#httprequest), [HttpResponse](#httpresponse), [HttpRequestState](#httprequeststate), [HttpRequestJob](#httprequestjob), [SteppedPointerMotionSpec](#steppedpointermotionspec), [SteppedPointerMotion](#steppedpointermotion), [TexelQuad](#texelquad), [LayerSequenceSpec](#layersequencespec), [LayerSequenceBinding](#layersequencebinding), [LayerSequenceBindingTarget](#layersequencebindingtarget), [LayerSequenceValueMap](#layersequencevaluemap), [LayerSequenceDeltaSource](#layersequencedeltasource), [LayerSequenceTrack](#layersequencetrack), [LayerSequenceOperation](#layersequenceoperation), [LayerSequenceStatus](#layersequencestatus), [LayerSequenceLane](#layersequencelane), [LayerSequenceRecord](#layersequencerecord), [LayerSequenceActive](#layersequenceactive), [ImageEncodingInfo](#imageencodinginfo), [ImageEncodingInfoReceipt](#imageencodinginforeceipt), [ImageEncodingInfoState](#imageencodinginfostate), [Mt19937_1998](#mt199371998), [Mt19937Split](#mt19937split), [ByteLeadProfile](#byteleadprofile), [ByteStringProfile](#bytestringprofile), [ByteStringLimits](#bytestringlimits), [ByteStringContext](#bytestringcontext), [ByteNumberSymbols](#bytenumbersymbols), [NumericCompaction](#numericcompaction), [CivilTimeState](#civiltimestate), [MediaProbeInfo](#mediaprobeinfo), [MediaProbeState](#mediaprobestate), [InputReceiverSpec](#inputreceiverspec), [InputRouteSource](#inputroutesource), [InputRoutePhase](#inputroutephase), [InputRouteEvent](#inputrouteevent), [InputDeliveryReceipt](#inputdeliveryreceipt), [InputDelivery](#inputdelivery), [InputRouteStats](#inputroutestats), [InputRouteCommand](#inputroutecommand), [RgbLookup](#rgblookup), [RgbLookupProfile](#rgblookupprofile), [PatternRng](#patternrng), [TemporalPatternSpec](#temporalpatternspec), [TemporalPatternSnapshot](#temporalpatternsnapshot), [PatternResourceInfo](#patternresourceinfo), [PatternRequest](#patternrequest), [PatternOutput](#patternoutput), [PatternProcessState](#patternprocessstate), [FixedMixSpec](#fixedmixspec), [FixedMixRounding](#fixedmixrounding), [FixedMixAlpha](#fixedmixalpha), [FixedLumaSpec](#fixedlumaspec), [ProgressKnot](#progressknot), [ProgressShape](#progressshape), [ProgressCurve](#progresscurve), [FixedSampleRegion](#fixedsampleregion), [ResampleAlpha](#resamplealpha), [PiecewiseResampleSpec](#piecewiseresamplespec), [AlphaClipRect](#alphacliprect), [ByteGroupSplitLimits](#bytegroupsplitlimits), [ByteGroupSplitOutput](#bytegroupsplitoutput), [MaskedPairBlend](#maskedpairblend), [CgCatalogEntry](#cgcatalogentry), [CgCatalog](#cgcatalog), [PagedImageLayout](#pagedimagelayout), [PagedImageRegion](#pagedimageregion), [PagedImage](#pagedimage), [PagedClearPlan](#pagedclearplan), [DepthOrderKey](#depthorderkey), [DepthOrderStep](#depthorderstep), [ServiceBatch](#servicebatch), [ImageInput](#imageinput), [GlyphImageSpec](#glyphimagespec), [GlyphSizeBasis](#glyphsizebasis), [GlyphImageOrigin](#glyphimageorigin), [GlyphRasterOptions](#glyphrasteroptions), [StyledGlyphImageSpec](#styledglyphimagespec), [GlyphImageCell](#glyphimagecell), [GlyphImageBatchSpec](#glyphimagebatchspec), [GlyphImageBatchState](#glyphimagebatchstate), [ImageProcessState](#imageprocessstate), [MaterializeRequest](#materializerequest), [KeyboardLockPolicy](#keyboardlockpolicy), [SpriteAlpha](#spritealpha), [StripeReveal](#stripereveal), [SheetSequence](#sheetsequence), [SheetLoop](#sheetloop), [WidgetInteraction](#widgetinteraction), [VectorPath](#vectorpath), [PathCommand](#pathcommand), [PathStroke](#pathstroke), [ImageTransition](#imagetransition), [SineRowCopy](#sinerowcopy), [RegisterScore](#registerscore), [RegisterWrite](#registerwrite), [SimpleTextPlacement](#simpletextplacement), [WindowPolicy](#windowpolicy), [InputSample](#inputsample), [InputReceipt](#inputreceipt), [FrameAdmissionClock](#frameadmissionclock), [InputBufferSnapshot](#inputbuffersnapshot), [InputFrame](#inputframe), [CueSequenceCursor](#cuesequencecursor), [AudioSequenceCursor](#audiosequencecursor), [CueSequenceSpec](#cuesequencespec), [CueSequenceLine](#cuesequenceline), [CueSequenceMode](#cuesequencemode), [CueSequenceClock](#cuesequenceclock), [CueSequenceTiming](#cuesequencetiming), [CueSequenceRandom](#cuesequencerandom), [AudioSequenceHandle](#audiosequencehandle), [AudioSequenceEmission](#audiosequenceemission), [AudioSequenceInfo](#audiosequenceinfo), [DopplerSettings](#dopplersettings), [DopplerCalculation](#dopplercalculation), [DopplerInfo](#dopplerinfo), [MotionSettings](#motionsettings), [MotionEstimate](#motionestimate), [MotionStatus](#motionstatus), [Spatial](#spatial), [VoiceSpec](#voicespec), [AudioResourceHandle](#audioresourcehandle), [AudioSourcePrepareSpec](#audiosourcepreparespec), [AudioTransformSpec](#audiotransformspec), [AudioResourceTransform](#audioresourcetransform), [AudioResourceInfo](#audioresourceinfo), [AudioResourcePreparation](#audioresourcepreparation), [AudioMixGroupSettings](#audiomixgroupsettings), [AudioMixGroupInfo](#audiomixgroupinfo), [AudioParameters](#audioparameters), [PcmBus](#pcmbus), [AudioResumeSettings](#audioresumesettings), [AudioResumePolicy](#audioresumepolicy), [AudioPlaybackInfo](#audioplaybackinfo), [ReflectionTrackingSpec](#reflectiontrackingspec), [ReflectionOptions](#reflectionoptions), [ReflectionQuery](#reflectionquery), [ReflectionPath](#reflectionpath), [ReflectionPaths](#reflectionpaths), [ReverbSpec](#reverbspec), [ReverbSettings](#reverbsettings), [ReverbSend](#reverbsend), [SceneVoicePhase](#scenevoicephase), [SceneVoiceStatus](#scenevoicestatus), [AudioAsset](#audioasset), [AudioRequest](#audiorequest), [AudioPlaylist](#audioplaylist), [AudioPlaylistNode](#audioplaylistnode), [OriginalRestoreTicket](#originalrestoreticket), [OriginalRestoreStatus](#originalrestorestatus), [OriginalRestoreProgress](#originalrestoreprogress), [OriginalRestoreBatch](#originalrestorebatch), [OriginalRestoreCommit](#originalrestorecommit), [AudioReplacementInfo](#audioreplacementinfo), [AudioReplacementState](#audioreplacementstate), [ChannelReplacementJob](#channelreplacementjob), [PreparedChannelReplacement](#preparedchannelreplacement), [ChannelReplacementCommit](#channelreplacementcommit), [UnitFlowOptions](#unitflowoptions), [UnitFlowItem](#unitflowitem), [UnitFlowGlyph](#unitflowglyph), [UnitFlowLayout](#unitflowlayout), [GlyphBoundsRequest](#glyphboundsrequest), [GlyphBoundsSpec](#glyphboundsspec), [GlyphBounds](#glyphbounds), [GlyphBoundsProgress](#glyphboundsprogress), [AdaptiveStepClock](#adaptivestepclock), [ActivityTimer](#activitytimer), [MusicMetadataVersion](#musicmetadataversion), [MusicLoopEntry](#musicloopentry), [MusicLoopCatalog](#musicloopcatalog), [WaveRoutingEntry](#waveroutingentry), [WaveRoutingCatalog](#waveroutingcatalog), [ByteFormatValue](#byteformatvalue), [ByteFormatOutput](#byteformatoutput), [Printf32Argument](#printf32argument), [Printf32Output](#printf32output), [BitmapGlyph](#bitmapglyph), [PrecomputedFont](#precomputedfont), [ByteSplitBoundary](#bytesplitboundary), [ByteSplitLimits](#bytesplitlimits), [ByteSplitOutput](#bytesplitoutput), [LoopFrameRounding](#loopframerounding), [RegionMap](#regionmap), [AudioLoopTimebase](#audiolooptimebase), [AudioLoopRange](#audiolooprange), [AudioLoopMetadata](#audioloopmetadata), [AudioLoopCatalogReceipt](#audioloopcatalogreceipt), [AudioPreparePhase](#audiopreparephase), [AudioPreparation](#audiopreparation), [PcmAudioInfo](#pcmaudioinfo), [StreamBufferSpec](#streambufferspec), [SourceBufferStatus](#sourcebufferstatus), [AudioReleaseSpec](#audioreleasespec), [AudioReleaseHandle](#audioreleasehandle), [AudioReleasePhase](#audioreleasephase), [AudioReleaseInfo](#audioreleaseinfo), [VoiceReleaseSpec](#voicereleasespec), [TooltipSpec](#tooltipspec), [SpriteCursorLayout](#spritecursorlayout), [SpriteHotspot](#spritehotspot), [InstallerFile](#installerfile), [InstallerCatalog](#installercatalog), [XmlDocument](#xmldocument), [XmlNode](#xmlnode), [MajiroSettingsProfile](#majirosettingsprofile), [OpticalDiscPolicy](#opticaldiscpolicy), [SeekProgress](#seekprogress), [SourceSeekReceipt](#sourceseekreceipt), [SourceSeekState](#sourceseekstate), [FontMetrics](#fontmetrics), [FontFaceStyle](#fontfacestyle), [HrtfEarOrder](#hrtfearorder), [HrtfOptions](#hrtfoptions), [HrirAsset](#hrirasset), [HrirMeasurement](#hrirmeasurement), [AcousticBackend](#acousticbackend), [AcousticMeshUpdate](#acousticmeshupdate), [AcousticGeometryStats](#acousticgeometrystats), [AcousticMeshBindingSpec](#acousticmeshbindingspec), [AcousticSceneSpec](#acousticscenespec), [AcousticMesh](#acousticmesh), [AcousticMaterial](#acousticmaterial), [AcousticSource](#acousticsource), [AcousticQuery](#acousticquery), [DirectPath](#directpath), [DecodeLimits](#decodelimits), [TransformSpec](#transformspec), [LzssMode](#lzssmode), [LzssParams](#lzssparams), [FileKind](#filekind), [WaveLoop](#waveloop), [WaveSpec](#wavespec), [BitmapRect](#bitmaprect), [PixelMath](#pixelmath), [Sampling](#sampling), [BlitOptions](#blitoptions), [StretchOptions](#stretchoptions), [MessageWindow](#messagewindow), [AssociatedBlend](#associatedblend), [CoverageWrite](#coveragewrite), [AssociatedBlitOptions](#associatedblitoptions), [RgbFilter](#rgbfilter), [AssetKind](#assetkind), [AssetState](#assetstate), [AssetTicket](#assetticket), [AssetStatus](#assetstatus), [TaskStats](#taskstats), [Environment](#environment), [Sun](#sun), [Fog](#fog), [AutoExposure](#autoexposure), [ScreenSpaceReflections](#screenspacereflections), [RayTracedGi](#raytracedgi), [GeometryLod](#geometrylod), [VirtualShadows](#virtualshadows), [Tonemap](#tonemap), [EntitySpec](#entityspec), [Transform](#transform), [Material](#material), [AlphaMode](#alphamode), [NormalEncoding](#normalencoding), [LightSpec](#lightspec), [LightShape](#lightshape), [LightUnits](#lightunits), [Falloff](#falloff), [ReflectionProbeSpec](#reflectionprobespec), [IrradianceVolumeSpec](#irradiancevolumespec), [ColliderSpec](#colliderspec), [ColliderShape](#collidershape), [BodyKind](#bodykind), [CollisionGroups](#collisiongroups), [SystemsSpec](#systemsspec), [PhysicsScene](#physicsscene), [ClientPhysicsScene](#clientphysicsscene), [BodyForces](#bodyforces), [KinematicTarget](#kinematictarget), [JointFrame](#jointframe), [JointMotor](#jointmotor), [JointSpec](#jointspec), [JointHandle](#jointhandle), [JointState](#jointstate), [EmitterSpec](#emitterspec), [VfxSystemSpec](#vfxsystemspec), [VfxEmitterSpec](#vfxemitterspec), [VfxScreenSpriteTarget](#vfxscreenspritetarget), [VfxScreenSpriteOptions](#vfxscreenspriteoptions), [VfxSimulationClock](#vfxsimulationclock), [VfxSequenceRng](#vfxsequencerng), [VfxSequenceExchange](#vfxsequenceexchange), [VfxFallingAtlasSpec](#vfxfallingatlasspec), [VfxDriftMotion](#vfxdriftmotion), [VfxDriftSpawnWindow](#vfxdriftspawnwindow), [VfxDriftingAtlasSpec](#vfxdriftingatlasspec), [VfxDriftingAtlasState](#vfxdriftingatlasstate), [VfxSystemSequenceState](#vfxsystemsequencestate), [VfxParameterValue](#vfxparametervalue), [VfxScalarValue](#vfxscalarvalue), [VfxScalarBinding](#vfxscalarbinding), [VfxVectorValue](#vfxvectorvalue), [VfxVectorBinding](#vfxvectorbinding), [VfxSimulationTarget](#vfxsimulationtarget), [VfxSimulationSpace](#vfxsimulationspace), [VfxOverflowPolicy](#vfxoverflowpolicy), [VfxSpawnSpec](#vfxspawnspec), [VfxBurst](#vfxburst), [VfxInitSpec](#vfxinitspec), [VfxSpawnShape](#vfxspawnshape), [VfxModule](#vfxmodule), [VfxInterpolation](#vfxinterpolation), [VfxScalarKey](#vfxscalarkey), [VfxVec2Key](#vfxvec2key), [VfxColorKey](#vfxcolorkey), [VfxScalarCurve](#vfxscalarcurve), [VfxVec2Curve](#vfxvec2curve), [VfxColorCurve](#vfxcolorcurve), [VfxRenderSpec](#vfxrenderspec), [VfxBlendMode](#vfxblendmode), [VfxFacingMode](#vfxfacingmode), [VfxMeshShape](#vfxmeshshape), [VfxEventKind](#vfxeventkind), [VfxEventHandler](#vfxeventhandler), [VfxParticle](#vfxparticle), [VfxParticleEvent](#vfxparticleevent), [VfxStats](#vfxstats), [VfxWorldBudget](#vfxworldbudget), [LayerSpec](#layerspec), [Paint](#paint), [SubtreeTransitionEffect](#subtreetransitioneffect), [RuleWipe](#rulewipe), [ImageSampling](#imagesampling), [TextureAddressMode](#textureaddressmode), [PositionedGlyph](#positionedglyph), [GlyphRevealUnit](#glyphrevealunit), [GlyphReveal](#glyphreveal), [GlyphRevealStatus](#glyphrevealstatus), [GlyphBlur](#glyphblur), [GlyphCoverageKernel](#glyphcoveragekernel), [CanvasSurface](#canvassurface), [CanvasNode](#canvasnode), [CanvasCommand](#canvascommand), [ServiceBatch](#servicebatch), [MediaRequest](#mediarequest), [MediaPhase](#mediaphase), [MediaInfo](#mediainfo), [MediaOptions](#mediaoptions), [MediaState](#mediastate), [MediaClock](#mediaclock), [MediaStatus](#mediastatus), [LayerFilter](#layerfilter), [Blend](#blend), [ToneCurve](#tonecurve), [LayerMask](#layermask), [Distortion](#distortion), [TransitionSpec](#transitionspec), [TransitionEffect](#transitioneffect), [Easing](#easing), [WidgetSpec](#widgetspec), [WidgetKind](#widgetkind), [WidgetKeyEvent](#widgetkeyevent), [WidgetKeyEdge](#widgetkeyedge), [Flow](#flow), [PuppetCommand](#puppetcommand), [PuppetRig](#puppetrig), [Parameter](#parameter), [Deformer](#deformer), [DeformerKey](#deformerkey), [Part](#part), [PartKey](#partkey), [PartBlend](#partblend), [Motion](#motion), [Curve](#curve), [Pendulum](#pendulum), [SequenceSpec](#sequencespec), [Track](#track), [TrackProperty](#trackproperty), [KeyInterpolation](#keyinterpolation), [TrackNoise](#tracknoise), [CameraTrack](#cameratrack), [CameraKey](#camerakey), [SequenceEvent](#sequenceevent), [WorldCommand](#worldcommand), [LayerCommand](#layercommand), [UiCommand](#uicommand), [MenuSpec](#menuspec), [MenuItemSpec](#menuitemspec), [OperationStatus](#operationstatus), [OperationState](#operationstate), [FontJob](#fontjob), [FontHandle](#fonthandle), [FontLoadSource](#fontloadsource), [FontLoadSpec](#fontloadspec), [FontInfo](#fontinfo), [FontLoadState](#fontloadstate), [MotionProperty](#motionproperty), [MotionTrackSpec](#motiontrackspec), [MotionTrackStatus](#motiontrackstatus), [MotionStatus](#motionstatus), [ExternalMotionPose](#externalmotionpose), [ExternalMotionStamp](#externalmotionstamp), [ExternalMotionStatus](#externalmotionstatus), [WidgetHitMask](#widgethitmask), [MenuTemplate](#menutemplate), [MenuTemplateItem](#menutemplateitem), [PeMenuResource](#pemenuresource), [PeResourceName](#peresourcename), [UiEvent](#uievent), [WidgetId](#widgetid)
+- Data: [ImageCompositeMath](#imagecompositemath), [RgbaBlendFactor](#rgbablendfactor), [RgbaBlendEquation](#rgbablendequation), [RgbaBlendComponent](#rgbablendcomponent), [RgbaByteRounding](#rgbabyterounding), [RgbaBlendArithmetic](#rgbablendarithmetic), [RgbaBlendState](#rgbablendstate), [SessionSeedSource](#sessionseedsource), [SessionSeedMaterial](#sessionseedmaterial), [SessionSeedState](#sessionseedstate), [CropRect](#croprect), [ImageEffect](#imageeffect), [NinePatchLayout](#ninepatchlayout), [CoverageBitmap](#coveragebitmap), [IntegerWipe](#integerwipe), [IntegerWipeGeometry](#integerwipegeometry), [ScanlineWipe](#scanlinewipe), [ShapeWipe](#shapewipe), [ScaleWipe](#scalewipe), [ImageFragment](#imagefragment), [PolygonFragments](#polygonfragments), [RandomWipeGeometry](#randomwipegeometry), [RandomWipe](#randomwipe), [ShiftRows](#shiftrows), [PackedColorMask](#packedcolormask), [PackedDualMask](#packeddualmask), [AffineSampleFilter](#affinesamplefilter), [AffineSampleBlend](#affinesampleblend), [AffineSampleBlendByte](#affinesampleblendbyte), [StoredGradientSpans](#storedgradientspans), [StoredWordSpans](#storedwordspans), [LinearMaskOffset](#linearmaskoffset), [SpatialColorBand](#spatialcolorband), [RowBlitBatch](#rowblitbatch), [PngHeader](#pngheader), [LinearByteStorage](#linearbytestorage), [RadialNoiseAtlas](#radialnoiseatlas), [AlphaBrushes](#alphabrushes), [PackedRepeatRows](#packedrepeatrows), [RadialRgbBrushes](#radialrgbbrushes), [PackedPairBatch](#packedpairbatch), [FloatingPolygonFragments](#floatingpolygonfragments), [FragmentGrid](#fragmentgrid), [PackedRadialField](#packedradialfield), [RadialWavePair](#radialwavepair), [RepeatScaleSample](#repeatscalesample), [AxisBoxSample](#axisboxsample), [MaskFieldPair](#maskfieldpair), [RadialTwistSample](#radialtwistsample), [LinearChannelTransfer](#linearchanneltransfer), [ScanlineMath](#scanlinemath), [FixedSampleSpan](#fixedsamplespan), [FixedScanlines](#fixedscanlines), [ScanlineClip](#scanlineclip), [ClippedScanlineSample](#clippedscanlinesample), [FloatingLine](#floatingline), [CoverageBounds](#coveragebounds), [NeighborRelief](#neighborrelief), [NativeBoxBlurMath](#nativeboxblurmath), [NativeBoxBlur](#nativeboxblur), [RowTintBlend](#rowtintblend), [MaskedBackdropShift](#maskedbackdropshift), [MaskedClipBlit](#maskedclipblit), [BlockSamplePaint](#blocksamplepaint), [MaskedBlockSample](#maskedblocksample), [CircularOffset](#circularoffset), [RowEdgeLift](#rowedgelift), [EllipticPaintMath](#ellipticpaintmath), [EllipticCutout](#ellipticcutout), [EllipticPaint](#ellipticpaint), [PackedPairBlend](#packedpairblend), [RowBlit](#rowblit), [RowWordAdd](#rowwordadd), [MaskedAddSubtract256](#maskedaddsubtract256), [TonalBand](#tonalband), [TonalBalance](#tonalbalance), [LumaOffsetLookup](#lumaoffsetlookup), [RectMapSample](#rectmapsample), [RectMap](#rectmap), [RectMapRegion](#rectmapregion), [QuadraticBezierPath](#quadraticbezierpath), [CubicBezierPath](#cubicbezierpath), [BoxReduce](#boxreduce), [BoxArithmetic](#boxarithmetic), [BoxAnchors](#boxanchors), [BoxAlpha](#boxalpha), [ByteRaster](#byteraster), [ByteRasterMath](#byterastermath), [IntegerLine](#integerline), [LogRecord](#logrecord), [LogReceipt](#logreceipt), [LogSnapshot](#logsnapshot), [ReadingWait](#readingwait), [AldVolume](#aldvolume), [AldCatalog](#aldcatalog), [AlkCatalog](#alkcatalog), [System4IniValue](#system4inivalue), [System4IniEntry](#system4inientry), [System4IniDocument](#system4inidocument), [System4Mixer](#system4mixer), [System4Bootstrap](#system4bootstrap), [System4AssetClass](#system4assetclass), [System4AssetVolume](#system4assetvolume), [System4Assets](#system4assets), [System4SpriteSurface](#system4spritesurface), [System4Sprite](#system4sprite), [System4Sprites](#system4sprites), [System4Input](#system4input), [System4Sact](#system4sact), [System4NativeAdapter](#system4nativeadapter), [PointerObservation](#pointerobservation), [InputObservation](#inputobservation), [ControllerButton](#controllerbutton), [ControllerAxis](#controlleraxis), [ControllerInputSample](#controllerinputsample), [InputFrame](#inputframe), [InputSourcesFrame](#inputsourcesframe), [InputSourcesObservation](#inputsourcesobservation), [MediaPolicy](#mediapolicy), [PlatformIntegration](#platformintegration), [PlatformIntegrationInfo](#platformintegrationinfo), [KeyboardLockState](#keyboardlockstate), [KeyboardLockSnapshot](#keyboardlocksnapshot), [NativeLiveState](#nativelivestate), [CivilTime](#civiltime), [CivilTransitionDay](#civiltransitionday), [CivilTransition](#civiltransition), [CivilDaylightRules](#civildaylightrules), [CivilTimeZoneProfile](#civiltimezoneprofile), [CivilTimeZoneState](#civiltimezonestate), [CivilTimeZoneQuery](#civiltimezonequery), [HttpMethod](#httpmethod), [HttpRequest](#httprequest), [HttpResponse](#httpresponse), [HttpRequestState](#httprequeststate), [HttpRequestJob](#httprequestjob), [SteppedPointerMotionSpec](#steppedpointermotionspec), [SteppedPointerMotion](#steppedpointermotion), [TexelQuad](#texelquad), [LayerSequenceSpec](#layersequencespec), [LayerSequenceBinding](#layersequencebinding), [LayerSequenceBindingTarget](#layersequencebindingtarget), [LayerSequenceValueMap](#layersequencevaluemap), [LayerSequenceDeltaSource](#layersequencedeltasource), [LayerSequenceTrack](#layersequencetrack), [LayerSequenceOperation](#layersequenceoperation), [LayerSequenceStatus](#layersequencestatus), [LayerSequenceLane](#layersequencelane), [LayerSequenceRecord](#layersequencerecord), [LayerSequenceActive](#layersequenceactive), [ImageEncodingInfo](#imageencodinginfo), [ImageEncodingInfoReceipt](#imageencodinginforeceipt), [ImageEncodingInfoState](#imageencodinginfostate), [Mt19937_1998](#mt199371998), [Mt19937Split](#mt19937split), [ByteLeadProfile](#byteleadprofile), [ByteStringProfile](#bytestringprofile), [ByteStringLimits](#bytestringlimits), [ByteStringContext](#bytestringcontext), [ByteNumberSymbols](#bytenumbersymbols), [NumericCompaction](#numericcompaction), [CivilTimeState](#civiltimestate), [MediaProbeInfo](#mediaprobeinfo), [MediaProbeState](#mediaprobestate), [InputReceiverSpec](#inputreceiverspec), [InputRouteSource](#inputroutesource), [InputRoutePhase](#inputroutephase), [InputRouteEvent](#inputrouteevent), [InputDeliveryReceipt](#inputdeliveryreceipt), [InputDelivery](#inputdelivery), [InputRouteStats](#inputroutestats), [InputRouteCommand](#inputroutecommand), [RgbLookup](#rgblookup), [RgbLookupProfile](#rgblookupprofile), [PatternRng](#patternrng), [TemporalPatternSpec](#temporalpatternspec), [TemporalPatternSnapshot](#temporalpatternsnapshot), [PatternResourceInfo](#patternresourceinfo), [PatternRequest](#patternrequest), [PatternOutput](#patternoutput), [PatternProcessState](#patternprocessstate), [FixedMixSpec](#fixedmixspec), [FixedMixRounding](#fixedmixrounding), [FixedMixAlpha](#fixedmixalpha), [FixedLumaSpec](#fixedlumaspec), [ProgressKnot](#progressknot), [ProgressShape](#progressshape), [ProgressCurve](#progresscurve), [FixedSampleRegion](#fixedsampleregion), [ResampleAlpha](#resamplealpha), [PiecewiseResampleSpec](#piecewiseresamplespec), [AlphaClipRect](#alphacliprect), [ByteGroupSplitLimits](#bytegroupsplitlimits), [ByteGroupSplitOutput](#bytegroupsplitoutput), [MaskedPairBlend](#maskedpairblend), [CgCatalogEntry](#cgcatalogentry), [CgCatalog](#cgcatalog), [PagedImageLayout](#pagedimagelayout), [PagedImageRegion](#pagedimageregion), [PagedImage](#pagedimage), [PagedClearPlan](#pagedclearplan), [DepthOrderKey](#depthorderkey), [DepthOrderStep](#depthorderstep), [ServiceBatch](#servicebatch), [ImageInput](#imageinput), [GlyphImageSpec](#glyphimagespec), [GlyphSizeBasis](#glyphsizebasis), [GlyphImageOrigin](#glyphimageorigin), [GlyphRasterOptions](#glyphrasteroptions), [StyledGlyphImageSpec](#styledglyphimagespec), [GlyphImageCell](#glyphimagecell), [GlyphImageBatchSpec](#glyphimagebatchspec), [GlyphImageBatchState](#glyphimagebatchstate), [ImageProcessState](#imageprocessstate), [MaterializeRequest](#materializerequest), [KeyboardLockPolicy](#keyboardlockpolicy), [SpriteAlpha](#spritealpha), [StripeReveal](#stripereveal), [SheetSequence](#sheetsequence), [SheetLoop](#sheetloop), [IndexedPlane](#indexedplane), [SpriteSamples](#spritesamples), [SpriteSample](#spritesample), [WidgetInteraction](#widgetinteraction), [VectorPath](#vectorpath), [PathCommand](#pathcommand), [PathStroke](#pathstroke), [ImageTransition](#imagetransition), [SineRowCopy](#sinerowcopy), [RegisterScore](#registerscore), [RegisterWrite](#registerwrite), [SimpleTextPlacement](#simpletextplacement), [WindowPolicy](#windowpolicy), [InputSample](#inputsample), [InputReceipt](#inputreceipt), [FrameAdmissionClock](#frameadmissionclock), [InputBufferSnapshot](#inputbuffersnapshot), [InputFrame](#inputframe), [CueSequenceCursor](#cuesequencecursor), [AudioSequenceCursor](#audiosequencecursor), [CueSequenceSpec](#cuesequencespec), [CueSequenceLine](#cuesequenceline), [CueSequenceMode](#cuesequencemode), [CueSequenceClock](#cuesequenceclock), [CueSequenceTiming](#cuesequencetiming), [CueSequenceRandom](#cuesequencerandom), [AudioSequenceHandle](#audiosequencehandle), [AudioSequenceEmission](#audiosequenceemission), [AudioSequenceInfo](#audiosequenceinfo), [DopplerSettings](#dopplersettings), [DopplerCalculation](#dopplercalculation), [DopplerInfo](#dopplerinfo), [MotionSettings](#motionsettings), [MotionEstimate](#motionestimate), [MotionStatus](#motionstatus), [Spatial](#spatial), [VoiceSpec](#voicespec), [AudioResourceHandle](#audioresourcehandle), [AudioSourcePrepareSpec](#audiosourcepreparespec), [AudioTransformSpec](#audiotransformspec), [AudioResourceTransform](#audioresourcetransform), [AudioResourceInfo](#audioresourceinfo), [AudioResourcePreparation](#audioresourcepreparation), [AudioMixGroupSettings](#audiomixgroupsettings), [AudioMixGroupInfo](#audiomixgroupinfo), [AudioParameters](#audioparameters), [PcmBus](#pcmbus), [AudioResumeSettings](#audioresumesettings), [AudioResumePolicy](#audioresumepolicy), [AudioPlaybackInfo](#audioplaybackinfo), [ReflectionTrackingSpec](#reflectiontrackingspec), [ReflectionOptions](#reflectionoptions), [ReflectionQuery](#reflectionquery), [ReflectionPath](#reflectionpath), [ReflectionPaths](#reflectionpaths), [ReverbSpec](#reverbspec), [ReverbSettings](#reverbsettings), [ReverbSend](#reverbsend), [SceneVoicePhase](#scenevoicephase), [SceneVoiceStatus](#scenevoicestatus), [AudioAsset](#audioasset), [AudioRequest](#audiorequest), [AudioPlaylist](#audioplaylist), [AudioPlaylistNode](#audioplaylistnode), [OriginalRestoreTicket](#originalrestoreticket), [OriginalRestoreStatus](#originalrestorestatus), [OriginalRestoreProgress](#originalrestoreprogress), [OriginalRestoreBatch](#originalrestorebatch), [OriginalRestoreCommit](#originalrestorecommit), [AudioReplacementInfo](#audioreplacementinfo), [AudioReplacementState](#audioreplacementstate), [ChannelReplacementJob](#channelreplacementjob), [PreparedChannelReplacement](#preparedchannelreplacement), [ChannelReplacementCommit](#channelreplacementcommit), [UnitFlowOptions](#unitflowoptions), [UnitFlowItem](#unitflowitem), [UnitFlowGlyph](#unitflowglyph), [UnitFlowLayout](#unitflowlayout), [GlyphBoundsRequest](#glyphboundsrequest), [GlyphBoundsSpec](#glyphboundsspec), [GlyphBounds](#glyphbounds), [GlyphBoundsProgress](#glyphboundsprogress), [AdaptiveStepClock](#adaptivestepclock), [ActivityTimer](#activitytimer), [MusicMetadataVersion](#musicmetadataversion), [MusicLoopEntry](#musicloopentry), [MusicLoopCatalog](#musicloopcatalog), [WaveRoutingEntry](#waveroutingentry), [WaveRoutingCatalog](#waveroutingcatalog), [ByteFormatValue](#byteformatvalue), [ByteFormatOutput](#byteformatoutput), [Printf32Argument](#printf32argument), [Printf32Output](#printf32output), [BitmapGlyph](#bitmapglyph), [PrecomputedFont](#precomputedfont), [ByteSplitBoundary](#bytesplitboundary), [ByteSplitLimits](#bytesplitlimits), [ByteSplitOutput](#bytesplitoutput), [LoopFrameRounding](#loopframerounding), [SpectrumGraphSpec](#spectrumgraphspec), [SpectrumGraphStyle](#spectrumgraphstyle), [SpectrumGraphState](#spectrumgraphstate), [SpectrumGraphReceipt](#spectrumgraphreceipt), [MountedMedia](#mountedmedia), [MountedMediaCatalog](#mountedmediacatalog), [RegionMap](#regionmap), [RegionMapState](#regionmapstate), [LabelImage](#labelimage), [PngRows](#pngrows), [AudioLoopTimebase](#audiolooptimebase), [AudioLoopRange](#audiolooprange), [AudioLoopMetadata](#audioloopmetadata), [AudioLoopCatalogReceipt](#audioloopcatalogreceipt), [AudioPreparePhase](#audiopreparephase), [AudioPreparation](#audiopreparation), [PcmAudioInfo](#pcmaudioinfo), [StreamBufferSpec](#streambufferspec), [SourceBufferStatus](#sourcebufferstatus), [AudioReleaseSpec](#audioreleasespec), [AudioReleaseHandle](#audioreleasehandle), [AudioReleasePhase](#audioreleasephase), [AudioReleaseInfo](#audioreleaseinfo), [VoiceReleaseSpec](#voicereleasespec), [TooltipSpec](#tooltipspec), [SpriteCursorLayout](#spritecursorlayout), [SpriteHotspot](#spritehotspot), [InstallerFile](#installerfile), [InstallerCatalog](#installercatalog), [XmlDocument](#xmldocument), [XmlNode](#xmlnode), [MajiroSettingsProfile](#majirosettingsprofile), [OpticalDiscPolicy](#opticaldiscpolicy), [SeekProgress](#seekprogress), [SourceSeekReceipt](#sourceseekreceipt), [SourceSeekState](#sourceseekstate), [FontMetrics](#fontmetrics), [FontFaceStyle](#fontfacestyle), [HrtfEarOrder](#hrtfearorder), [HrtfOptions](#hrtfoptions), [HrirAsset](#hrirasset), [HrirMeasurement](#hrirmeasurement), [AcousticBackend](#acousticbackend), [AcousticMeshUpdate](#acousticmeshupdate), [AcousticGeometryStats](#acousticgeometrystats), [AcousticMeshBindingSpec](#acousticmeshbindingspec), [AcousticSceneSpec](#acousticscenespec), [AcousticMesh](#acousticmesh), [AcousticMaterial](#acousticmaterial), [AcousticSource](#acousticsource), [AcousticQuery](#acousticquery), [DirectPath](#directpath), [DecodeLimits](#decodelimits), [TransformSpec](#transformspec), [LzssMode](#lzssmode), [LzssParams](#lzssparams), [FileKind](#filekind), [WaveLoop](#waveloop), [WaveSpec](#wavespec), [BitmapRect](#bitmaprect), [PixelMath](#pixelmath), [Sampling](#sampling), [BlitOptions](#blitoptions), [StretchOptions](#stretchoptions), [MessageWindow](#messagewindow), [AssociatedBlend](#associatedblend), [CoverageWrite](#coveragewrite), [AssociatedBlitOptions](#associatedblitoptions), [RgbFilter](#rgbfilter), [AssetKind](#assetkind), [AssetState](#assetstate), [AssetTicket](#assetticket), [AssetStatus](#assetstatus), [TaskStats](#taskstats), [Environment](#environment), [Sun](#sun), [Fog](#fog), [AutoExposure](#autoexposure), [ScreenSpaceReflections](#screenspacereflections), [RayTracedGi](#raytracedgi), [GeometryLod](#geometrylod), [VirtualShadows](#virtualshadows), [Tonemap](#tonemap), [EntitySpec](#entityspec), [Transform](#transform), [Material](#material), [AlphaMode](#alphamode), [NormalEncoding](#normalencoding), [LightSpec](#lightspec), [LightShape](#lightshape), [LightUnits](#lightunits), [Falloff](#falloff), [ReflectionProbeSpec](#reflectionprobespec), [IrradianceVolumeSpec](#irradiancevolumespec), [ColliderSpec](#colliderspec), [ColliderShape](#collidershape), [BodyKind](#bodykind), [CollisionGroups](#collisiongroups), [SystemsSpec](#systemsspec), [PhysicsScene](#physicsscene), [ClientPhysicsScene](#clientphysicsscene), [BodyForces](#bodyforces), [KinematicTarget](#kinematictarget), [JointFrame](#jointframe), [JointMotor](#jointmotor), [JointSpec](#jointspec), [JointHandle](#jointhandle), [JointState](#jointstate), [EmitterSpec](#emitterspec), [VfxSystemSpec](#vfxsystemspec), [VfxEmitterSpec](#vfxemitterspec), [VfxScreenSpriteTarget](#vfxscreenspritetarget), [VfxScreenSpriteOptions](#vfxscreenspriteoptions), [VfxSimulationClock](#vfxsimulationclock), [VfxSequenceRng](#vfxsequencerng), [VfxSequenceExchange](#vfxsequenceexchange), [VfxFallingAtlasSpec](#vfxfallingatlasspec), [VfxDriftMotion](#vfxdriftmotion), [VfxDriftSpawnWindow](#vfxdriftspawnwindow), [VfxDriftingAtlasSpec](#vfxdriftingatlasspec), [VfxDriftingAtlasState](#vfxdriftingatlasstate), [VfxSystemSequenceState](#vfxsystemsequencestate), [VfxParameterValue](#vfxparametervalue), [VfxScalarValue](#vfxscalarvalue), [VfxScalarBinding](#vfxscalarbinding), [VfxVectorValue](#vfxvectorvalue), [VfxVectorBinding](#vfxvectorbinding), [VfxSimulationTarget](#vfxsimulationtarget), [VfxSimulationSpace](#vfxsimulationspace), [VfxOverflowPolicy](#vfxoverflowpolicy), [VfxSpawnSpec](#vfxspawnspec), [VfxBurst](#vfxburst), [VfxInitSpec](#vfxinitspec), [VfxSpawnShape](#vfxspawnshape), [VfxModule](#vfxmodule), [VfxInterpolation](#vfxinterpolation), [VfxScalarKey](#vfxscalarkey), [VfxVec2Key](#vfxvec2key), [VfxColorKey](#vfxcolorkey), [VfxScalarCurve](#vfxscalarcurve), [VfxVec2Curve](#vfxvec2curve), [VfxColorCurve](#vfxcolorcurve), [VfxRenderSpec](#vfxrenderspec), [VfxBlendMode](#vfxblendmode), [VfxFacingMode](#vfxfacingmode), [VfxMeshShape](#vfxmeshshape), [VfxEventKind](#vfxeventkind), [VfxEventHandler](#vfxeventhandler), [VfxParticle](#vfxparticle), [VfxParticleEvent](#vfxparticleevent), [VfxStats](#vfxstats), [VfxWorldBudget](#vfxworldbudget), [LayerSpec](#layerspec), [Paint](#paint), [SubtreeTransitionEffect](#subtreetransitioneffect), [RuleWipe](#rulewipe), [ImageSampling](#imagesampling), [TextureAddressMode](#textureaddressmode), [PositionedGlyph](#positionedglyph), [GlyphRevealUnit](#glyphrevealunit), [GlyphReveal](#glyphreveal), [GlyphRevealStatus](#glyphrevealstatus), [GlyphBlur](#glyphblur), [GlyphCoverageKernel](#glyphcoveragekernel), [CanvasSurface](#canvassurface), [CanvasNode](#canvasnode), [CanvasCommand](#canvascommand), [ServiceBatch](#servicebatch), [MediaRequest](#mediarequest), [MediaPhase](#mediaphase), [MediaInfo](#mediainfo), [MediaOptions](#mediaoptions), [MediaState](#mediastate), [MediaClock](#mediaclock), [MediaStatus](#mediastatus), [LayerFilter](#layerfilter), [Blend](#blend), [ToneCurve](#tonecurve), [LayerMask](#layermask), [Distortion](#distortion), [TransitionSpec](#transitionspec), [TransitionEffect](#transitioneffect), [Easing](#easing), [WidgetSpec](#widgetspec), [WidgetKind](#widgetkind), [WidgetKeyEvent](#widgetkeyevent), [WidgetKeyEdge](#widgetkeyedge), [Flow](#flow), [PuppetCommand](#puppetcommand), [PuppetRig](#puppetrig), [Parameter](#parameter), [Deformer](#deformer), [DeformerKey](#deformerkey), [Part](#part), [PartKey](#partkey), [PartBlend](#partblend), [Motion](#motion), [Curve](#curve), [Pendulum](#pendulum), [SequenceSpec](#sequencespec), [Track](#track), [TrackProperty](#trackproperty), [KeyInterpolation](#keyinterpolation), [TrackNoise](#tracknoise), [CameraTrack](#cameratrack), [CameraKey](#camerakey), [SequenceEvent](#sequenceevent), [WorldCommand](#worldcommand), [LayerCommand](#layercommand), [UiCommand](#uicommand), [MenuSpec](#menuspec), [MenuItemSpec](#menuitemspec), [OperationStatus](#operationstatus), [OperationState](#operationstate), [FontJob](#fontjob), [FontHandle](#fonthandle), [FontLoadSource](#fontloadsource), [FontLoadSpec](#fontloadspec), [FontInfo](#fontinfo), [FontCatalogFace](#fontcatalogface), [FontLoadState](#fontloadstate), [MotionProperty](#motionproperty), [MotionTrackSpec](#motiontrackspec), [MotionTrackStatus](#motiontrackstatus), [MotionStatus](#motionstatus), [ExternalMotionPose](#externalmotionpose), [ExternalMotionStamp](#externalmotionstamp), [ExternalMotionStatus](#externalmotionstatus), [WidgetHitMask](#widgethitmask), [MenuTemplate](#menutemplate), [MenuTemplateItem](#menutemplateitem), [PeMenuResource](#pemenuresource), [PeResourceName](#peresourcename), [UiEvent](#uievent), [WidgetId](#widgetid)
 - [Adapter configs](#adapter-configs)
 
 ## Globals
@@ -732,9 +732,12 @@ Script global: `ui`.
 | `setCursor(cursor: Record<string, any>)` | `void` | Select the pointer shape: {kind:'standard', shape:'default'\|'pointer'\|'text'\|'wait'\|...} or {kind:'custom', id} for a cursor this client defined. |
 | `setFullscreen(enabled: boolean)` | `void` | Request borderless desktop fullscreen. Headless hosts retain client-owned state; the desktop applies it at frame publication. |
 | `setWindowPolicy(decorated: boolean, resizable: boolean)` | `void` | Request desktop decorations and resizing through engine-owned client state. Headless hosts retain the request; the desktop applies it at frame publication. |
+| `beginWindowDrag(—)` | `void` | Request a native pointer-driven move of the presenting window; requires an active pointer gesture. |
+| `resetWindowShape(—)` | `void` | Restore the native window to its ordinary opaque rectangle. |
+| `setImeCursorArea(rect: number[])` | `void` | Set IME candidate geometry in logical canvas pixels. |
 | `setTitle(text: string)` | `void` | Set engine presentation title. |
 | `focusTextField(id: number)` | `void` | Focus an enabled, visible text field owned by this client. |
-| `insertText(text: string)` | `void` | Append committed single-line Unicode to the focused text field, up to max_length Unicode scalars. |
+| `insertText(text: string)` | `void` | Append committed Unicode up to max_length scalars. Multiline fields also accept newline and tab; single-line fields reject controls. |
 | `backspace(id: number)` | `void` | Remove the final Unicode scalar from a client-owned text field. |
 | `setText(id: number, text: string, font: string \| null)` | `void` | Label/button text and optional font alias; null preserves the existing font. |
 | `beginMotion(id: number, track: Record<string, any>)` | `void` | Animate widget x/y using a shared MotionTrackSpec; engine duration uses milliseconds, external duration uses caller units. |
@@ -742,7 +745,7 @@ Script global: `ui`.
 | `endMotion(id: number, property: string \| null, finish: boolean)` | `void` | Cancel one or all widget motion tracks, optionally applying their targets. |
 | `motionStatus(id: number)` | `Record<string, any>` | Current owned widget motion tracks and completion; a missing target fails. |
 
-Commands issued: `setMenu` → `ui.set_menu`, `removeMenu` → `ui.remove_menu`, `openMenu` → `ui.open_menu`, `openDialog` → `ui.open_dialog`, `closeDialog` → `ui.close_dialog`, `warpPointer` → `ui.warp_pointer`, `movePointerStepped` → `ui.move_pointer_stepped`, `advancePointerMotion` → `ui.advance_pointer_motion`, `closeMenu` → `ui.close_menu`, `setMenuChecked` → `ui.set_menu_checked`, `setMenuEnabled` → `ui.set_menu_enabled`, `putTooltip` → `ui.put_tooltip`, `removeTooltip` → `ui.remove_tooltip`, `showTooltip` → `ui.show_tooltip`, `hideTooltip` → `ui.hide_tooltip`, `put` → `ui.put`, `remove` → `ui.remove`, `setRect` → `ui.set_rect`, `setVisible` → `ui.set_visible`, `setEnabled` → `ui.set_enabled`, `setValue` → `ui.set_value`, `setHitMask` → `ui.set_hit_mask`, `setHitMaskGeometry` → `ui.set_hit_mask_geometry`, `setText` → `ui.set_text`, `setTitle` → `ui.set_title`, `setWindowPolicy` → `ui.set_window_policy`, `setFullscreen` → `ui.set_fullscreen`, `setCursorVisible` → `ui.set_cursor_visible`, `defineCursor` → `ui.define_cursor`, `setCursor` → `ui.set_cursor`, `insertText` → `ui.insert_text`, `backspace` → `ui.backspace`, `focusTextField` → `ui.focus`, `beginMotion` → `ui.begin_motion`, `setMotionElapsed` → `ui.set_motion_elapsed`, `endMotion` → `ui.end_motion`.
+Commands issued: `setMenu` → `ui.set_menu`, `removeMenu` → `ui.remove_menu`, `openMenu` → `ui.open_menu`, `openDialog` → `ui.open_dialog`, `closeDialog` → `ui.close_dialog`, `warpPointer` → `ui.warp_pointer`, `movePointerStepped` → `ui.move_pointer_stepped`, `advancePointerMotion` → `ui.advance_pointer_motion`, `closeMenu` → `ui.close_menu`, `setMenuChecked` → `ui.set_menu_checked`, `setMenuEnabled` → `ui.set_menu_enabled`, `putTooltip` → `ui.put_tooltip`, `removeTooltip` → `ui.remove_tooltip`, `showTooltip` → `ui.show_tooltip`, `hideTooltip` → `ui.hide_tooltip`, `put` → `ui.put`, `remove` → `ui.remove`, `setRect` → `ui.set_rect`, `setVisible` → `ui.set_visible`, `setEnabled` → `ui.set_enabled`, `setValue` → `ui.set_value`, `setHitMask` → `ui.set_hit_mask`, `setHitMaskGeometry` → `ui.set_hit_mask_geometry`, `setText` → `ui.set_text`, `setTitle` → `ui.set_title`, `setWindowPolicy` → `ui.set_window_policy`, `beginWindowDrag` → `ui.begin_window_drag`, `resetWindowShape` → `ui.reset_window_shape`, `setImeCursorArea` → `ui.set_ime_cursor_area`, `setFullscreen` → `ui.set_fullscreen`, `setCursorVisible` → `ui.set_cursor_visible`, `defineCursor` → `ui.define_cursor`, `setCursor` → `ui.set_cursor`, `insertText` → `ui.insert_text`, `backspace` → `ui.backspace`, `focusTextField` → `ui.focus`, `beginMotion` → `ui.begin_motion`, `setMotionElapsed` → `ui.set_motion_elapsed`, `endMotion` → `ui.end_motion`.
 
 ## Class Vfx
 
@@ -930,6 +933,9 @@ Every typed engine command and the API member that issues it. `tests/api_coverag
 | ui | `set_text` | `Ui.setText` |
 | ui | `set_title` | `Ui.setTitle` |
 | ui | `set_window_policy` | `Ui.setWindowPolicy` |
+| ui | `begin_window_drag` | `Ui.beginWindowDrag` |
+| ui | `reset_window_shape` | `Ui.resetWindowShape` |
+| ui | `set_ime_cursor_area` | `Ui.setImeCursorArea` |
 | ui | `set_fullscreen` | `Ui.setFullscreen` |
 | ui | `set_cursor_visible` | `Ui.setCursorVisible` |
 | ui | `define_cursor` | `Ui.defineCursor` |
@@ -1049,6 +1055,8 @@ Explicit arithmetic profiles. Byte255 is integer table arithmetic, including tra
 |---|---|---|
 | `FloatNearest` | — | — |
 | `Byte255` | `source: RgbaByteRounding, destination: RgbaByteRounding` | — |
+| `Byte255Sum` | `rounding: RgbaByteRounding` | Byte255 transforms and factors, but the signed sum of both unscaled products is divided by255 once: `round((s*fs +/- d*fd)/255)`. Native integer alpha blitters (e.g. Circus DC2 40B5F0) divide the whole sum. |
+| `ByteShiftSum` | `shift: u8` | Integer power-of-two weights: `(s*fs +/- d*fd) >> shift`, where only One/Zero/Constant*/OneMinusConstant* factors are admitted and constants are rounded to multiples of `1/(1<<shift)` (e.g. 16-level native blits). |
 
 ### RgbaBlendState
 
@@ -1068,6 +1076,7 @@ CPU encoded-UNORM8 profile. Raw source keys and inclusive alpha range discard a 
 | `source_alpha_range` | `[f32; 2]` | — | Inclusive raw source alpha range in0..1; default[0,1] discards nothing. |
 | `source_color_key` | `Option<[u8; 3]>` | — | Exact original encoded RGB/alpha keys, before source transformation. |
 | `source_alpha_key` | `Option<u8>` | — | — |
+| `source_color_key_invert` | `bool` | — | Invert `source_color_key`: only fragments equal to the key are kept (native "copy key colour only" hole punches). |
 
 ### SessionSeedSource
 
@@ -1121,8 +1130,21 @@ Reusable image operations. All channels are straight RGBA bytes; RGB-only transf
 
 | Variant | Fields | Description |
 |---|---|---|
+| `nine_patch` | `width: u32, height: u32` | Remove alpha-marked border and resize nine retained image cells. |
+| `coverage_bitmap` | `spec: crate::coverage_bitmap::CoverageBitmap` | Import bounded monochrome coverage or packed BGRA glyph bytes. |
+| `glyph_coverage_blur` | `radius: u32, level: i32` | Native-compatible circular coverage blur, preserving stored RGB. |
+| `radial_rgb_brushes` | `spec: crate::radial_rgb_brushes::RadialRgbBrushes` | — |
+| `packed_pair_batch` | `spec: crate::packed_pair_batch::PackedPairBatch` | — |
+| `radial_wave_pair` | `spec: crate::radial_wave_pair::RadialWavePair` | — |
+| `linear_mask_offset` | `spec: crate::linear_mask_offset::LinearMaskOffset` | — |
+| `stored_word_spans` | `spec: crate::stored_word_spans::StoredWordSpans` | — |
+| `stored_gradient_spans` | `spec: crate::stored_gradient_spans::StoredGradientSpans` | — |
+| `circular_offset` | `spec: crate::circular_offset::CircularOffset` | Saturated RGB offsets over squared-distance circular/cutout spans. |
+| `row_edge_lift` | `spec: crate::row_edge_lift::RowEdgeLift` | Quantized outward channel lifts from independently positioned row edges. |
+| `elliptic_paint` | `spec: crate::elliptic_paint::EllipticPaint` | Inclusive ellipse/cutout spans with explicit stored-byte RGB arithmetic. |
 | `neighbor_relief` | `spec: crate::neighbor_relief::NeighborRelief` | Stored RGB neighbour differences with independently truncated weights. |
-| `packed_color_mask` | `spec: crate::packed_color_mask::PackedColorMask` | Three-input RGB-mask coverage with explicit packed-word arithmetic. |
+| `mask_field_pair` | `spec: crate::mask_field_pair::MaskFieldPair` | Three-input RGB-mask coverage with explicit packed-word arithmetic. |
+| `packed_color_mask` | `spec: crate::packed_color_mask::PackedColorMask` | — |
 | `packed_dual_mask` | `spec: crate::packed_dual_mask::PackedDualMask` | Two independent alpha masks, optional RGB transform and packed products. |
 | `floating_lines` | `lines: Vec<crate::floating_lines::FloatingLine>` | Single-precision half-biased DDA with signed stored-colour interpolation. |
 | `alpha_lookup` | `table: Vec<u8>` | One checked lookup for the stored coverage byte; RGB remains unchanged. |
@@ -1136,6 +1158,7 @@ Reusable image operations. All channels are straight RGBA bytes; RGB-only transf
 | `radial_angle_lookup` | `spec: crate::radial_angle::RadialAngleLookup` | — |
 | `gradient_overlay` | `spec: crate::gradient_overlay::GradientOverlayByte` | — |
 | `linear_gradient` | `spec: crate::linear_gradient::LinearGradientByte` | — |
+| `linear_alpha_lookup` | `spec: crate::linear_alpha_lookup::LinearAlphaLookup` | Alpha from a byte table indexed by offset + x*step0 + y*step1. |
 | `sequential_box_blur` | `spec: crate::sequential_box_blur::SequentialBoxBlur` | — |
 | `masked_blur` | `spec: crate::masked_blur::MaskedBlur` | — |
 | `box_blur_clamped` | `spec: crate::box_blur_clamped::BoxBlurClamped` | — |
@@ -1180,7 +1203,15 @@ Reusable image operations. All channels are straight RGBA bytes; RGB-only transf
 | `disc_copies` | `spec: crate::disc_copy::DiscCopies` | Two-input whole-pixel row copy; preserves uncovered destination pixels. Midpoint-circle discs copied from the raster source (second input). |
 | `sine_row_copy` | `spec: crate::row_copy::SineRowCopy` | — |
 | `alpha_clip_rect` | `spec: crate::alpha_clip::AlphaClipRect` | Two-input clipped coverage multiplication with optional exterior clear. |
-| `masked_pair_blend` | `spec: crate::masked_pair::MaskedPairBlend` | Three immutable inputs, two independent masks and exact14bit products. |
+| `blue_to_alpha` | `spec: crate::layer_ex::BlueToAlpha` | Second-half blue into first-half alpha (layerExBTOA). |
+| `fill_alpha` | `spec: crate::layer_ex::FillAlpha` | Opaque alpha inside a rectangle (layerExBTOA fillAlpha). |
+| `shrink_fast` | `spec: crate::layer_ex::ShrinkFast` | Integer box shrink to an opaque image (shrinkCopyFast). |
+| `shrink_copy` | `spec: crate::layer_ex::ShrinkCopy` | Two-input area-average shrink onto a fractional rectangle (shrinkCopy). |
+| `overwrap_rect` | `spec: crate::layer_ex::OverwrapRect` | Two-input threshold overwrite (layerExBTOA overwrapRect). |
+| `stitch_wrapped_copy` | `spec: crate::layer_ex::StitchWrappedCopy` | Two-input horizontally wrapped row copy (layerStwCopy). |
+| `glitch_copy` | `spec: crate::layer_ex::GlitchCopy` | Two-input block/line displacement with channel splitting (GlitchEffect). |
+| `packed_pair_blend` | `spec: crate::packed_pair_blend::PackedPairBlend` | Three immutable inputs, two independent masks and exact14bit products. |
+| `masked_pair_blend` | `spec: crate::masked_pair::MaskedPairBlend` | — |
 | `transition` | `spec: crate::transition::ImageTransition` | — |
 | `vector` | `path: crate::vector::VectorPath` | Engine vector path on the existing image with source-over composition. |
 | `integer_lines` | `lines: Vec<crate::integer_lines::IntegerLine>` | Stored RGBA integer DDA strokes with explicit signed half-bias rounding. |
@@ -1201,6 +1232,26 @@ Reusable image operations. All channels are straight RGBA bytes; RGB-only transf
 | `resize` | `width: u32, height: u32` | Bilinear resize of straight RGBA to a new size. |
 | `rotate` | `degrees: u16` | Clockwise quarter turns; 90 and 270 swap width and height. |
 | `raster` | `amplitude: f32, frequency: f32, phase: f32` | Whole-pixel row displacement: round(sin(phase+y*frequency)*amplitude). Source edges clamp. Phase/frequency are radians, amplitude is pixels. |
+
+### NinePatchLayout
+
+Used by: Alpha-border nine-patch stretch cells and content margins.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+| `stretch` | `[u32; 4]` | — | — |
+| `margins` | `[i32; 4]` | — | — |
+
+### CoverageBitmap
+
+Used by: ImageEffect.coverage_bitmap; bounded glyph coverage or BGRA bytes.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+| `size` | `[u32; 2]` | — | — |
+| `bytes` | `Vec<u8>` | — | — |
+| `levels` | `u32` | — | — |
+| `color` | `[u8; 4]` | — | — |
 
 ### IntegerWipe
 
@@ -1354,9 +1405,279 @@ Used by: Independent source/mask coverage and packed-word RGB fade over an immut
 | `weight` | `u16` | — | Independent low-word scale after alpha1*(alpha2+1)/256. |
 | `source_color` | `Option<([u8; 3], [u16; 3])>` | — | Optional source RGB multiply/256 followed by packed-word addition. RGB lanes remain words until their final coverage product. |
 
+### AffineSampleFilter
+
+Used by: Explicit nearest or scale-distance neighbour sampling for double affine image operations.
+
+| Variant | Fields | Description |
+|---|---|---|
+| `nearest` | — | — |
+| `scale_neighbor` | — | — |
+
+### AffineSampleBlend
+
+Used by: Stored-byte coverage composition for affine image samples.
+
+| Variant | Fields | Description |
+|---|---|---|
+| `normal` | — | — |
+| `add` | — | — |
+| `subtract` | — | — |
+| `copy` | — | — |
+
+### AffineSampleBlendByte
+
+Used by: Staged double affine mapping, scale-distance neighbour interpolation and RGB coverage composition.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+| `rectangle` | `[i32; 4]` | — | — |
+| `destination_origin` | `[i32; 2]` | — | — |
+| `linear` | `[[f64; 2]; 2]` | — | Matrix products/sum precede post_scale, translation, then sample_bias; these stages intentionally are not flattened into one coefficient. |
+| `post_scale` | `[f64; 2]` | — | — |
+| `translation` | `[i32; 2]` | — | — |
+| `sample_bias` | `[f64; 2]` | — | — |
+| `filter` | `AffineSampleFilter` | — | — |
+| `neighbor_step` | `[f64; 2]` | — | Distances to the alternative horizontal/vertical texel for ScaleNeighbor. |
+| `color_offset` | `[i32; 3]` | — | — |
+| `percent` | `i32` | — | — |
+| `blend` | `AffineSampleBlend` | — | — |
+
+### StoredGradientSpans
+
+Used by: Ordered RGB spans with independent saturating byte weight steps and low-word summed products.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+| `spans` | `Vec<StoredGradientSpan>` | — | — |
+
+### StoredWordSpans
+
+Used by: Ordered RGB spans using low-word wrapping affine transforms or signed additive ramps, retaining alpha.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+| `spans` | `Vec<StoredWordSpan>` | — | — |
+
+### LinearMaskOffset
+
+Used by: Stored RGB offsets through two bounded linear coverage planes with independent strides and exact full-coverage identity.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+| `destination` | `[i32; 4]` | — | — |
+| `origins` | `[[i32; 2]; 2]` | — | — |
+| `strides` | `[i32; 2]` | — | — |
+| `add` | `[u8; 3]` | — | — |
+| `subtract` | `[u8; 3]` | — | — |
+
+### SpatialColorBand
+
+Used by: Quantized spatial RGB highlight bands with explicit table bounds, packed colour and stored-mask composition.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+| `source` | `[i32; 4]` | — | — |
+| `destination` | `[i32; 2]` | — | — |
+| `table_origin` | `i32` | — | — |
+| `table_extent` | `i32` | — | — |
+| `coordinate` | `i32` | — | — |
+| `increments` | `[i32; 2]` | — | — |
+| `band_length` | `i32` | — | — |
+| `gradient_length` | `i32` | — | — |
+| `brightness` | `[i32; 3]` | — | — |
+
+### RowBlitBatch
+
+Used by: Ordered clipped sprite/scanline writes over one immutable source with a single destination clone and per-row stored-byte math.
+
+Ordered sprite/scanline operations sharing one immutable source and one output allocation. Overlapping entries observe preceding destination writes.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+| `operations` | `Vec<RowBlit>` | — | — |
+
+### PngHeader
+
+Used by: Bounded PNG header and palette observation independent of IDAT row decoding.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+| `size` | `[u32; 2]` | — | — |
+| `bit_depth` | `u8` | — | — |
+| `color_type` | `u8` | — | — |
+| `palette` | `Option<Vec<[u8; 3]>>` | — | — |
+
+### LinearByteStorage
+
+Used by: Immutable grow-or-retain byte allocations preserving unwritten tails with explicit zero initialization.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+
+### RadialNoiseAtlas
+
+Used by: Ordered radial byte-brush generation with explicit integer profiles and transactional random state.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+| `size` | `[u32; 2]` | — | — |
+| `tiles` | `Vec<RadialNoiseTile>` | — | Tiles execute in vector order, then row-major inside each rectangle. Even a clamped zero sample consumes one draw. |
+
+### AlphaBrushes
+
+Used by: Ordered rationally scaled coverage add/subtract brushes over bounded linear retained storage.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+| `destination_pitch` | `u32` | — | — |
+| `brushes` | `Vec<AlphaBrush>` | — | — |
+
+### PackedRepeatRows
+
+Used by: Packed Q16 repeating rows with explicit signed-word wrapping, stored coverage and colour offsets.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+| `rows` | `Vec<PackedRepeatRow>` | — | — |
+| `masked` | `bool` | — | — |
+| `offset_colors` | `bool` | — | — |
+| `unmasked_offset_pairs` | `bool` | — | A stored-byte implementation can process unmasked offsets in pairs, retaining the destination's odd last pixel rather than inventing a tail. |
+| `opaque_subtract_prior_blend` | `bool` | — | Some packed implementations reuse the prior partial blend's bytes as the subtraction operand for a later opaque sample in the SAME row. |
+
+### RadialRgbBrushes
+
+Used by: Ordered signed RGB radial brush placements with one lookup table and destination allocation.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+| `brush_size` | `[u32; 2]` | — | — |
+| `coordinate_origin` | `[i32; 2]` | — | — |
+| `coordinate_step` | `[i32; 2]` | — | — |
+| `radial_strength` | `u32` | — | — |
+| `signed_rgb` | `[i32; 3]` | — | — |
+| `percent` | `u32` | — | — |
+| `positions` | `Vec<[i32; 2]>` | — | — |
+
+### PackedPairBatch
+
+Used by: Ordered two-source packed sprite composition sharing immutable sources and one destination allocation.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+| `operations` | `Vec<PackedPairBlend>` | — | — |
+
+### FloatingPolygonFragments
+
+Used by: Ordered f32 edge-walked translated polygons with inclusive spans, bounded linear source reads and low-word RGB mixing.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+| `fragments` | `Vec<ImageFragment>` | — | — |
+| `weight256` | `i32` | — | — |
+
+### FragmentGrid
+
+Used by: Worker-prepared ordered jittered triangle, quad and strip partitions with transactional random state.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+| `size` | `[u32; 2]` | — | — |
+| `subdivisions` | `[u32; 2]` | — | — |
+| `style` | `FragmentGridStyle` | — | — |
+| `jitter_tenths` | `u32` | — | Native tenths of one base cell; zero suppresses all jitter draws. |
+
+### PackedRadialField
+
+Used by: Worker-prepared signed radial direction and radius-offset data carried by a scoped immutable image resource.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+| `canvas` | `[u32; 2]` | — | — |
+| `center` | `[i32; 2]` | — | — |
+| `x_lanes` | `[u8; 4]` | — | Each sample's direction-X numerator may use another lane's coordinate. Radius and direction-Y always use the sample's own radius. Ordinary fields select [0,1,2,3]; compatibility fields can select explicit lanes. |
+| `squared_math` | `RadialSquaredMath` | — | — |
+
+### RadialWavePair
+
+Used by: Two-source radial wave sampling over a retained packed field using signed-word multiply-high and low-word RGB weights.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+| `canvas` | `[u32; 2]` | — | — |
+| `count` | `i32` | — | — |
+| `wave_length` | `i32` | — | — |
+| `speed` | `i32` | — | — |
+| `angular_speed` | `i32` | — | — |
+| `hold` | `i32` | — | — |
+| `power` | `f64` | — | — |
+| `source_origins` | `[[i32; 2]; 2]` | — | — |
+| `weights` | `[u16; 2]` | — | — |
+
+### RepeatScaleSample
+
+Used by: Repeated scaled samples with independent clipped-tile origins and quantized16.16 steps.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+| `period` | `[u32; 2]` | — | — |
+| `origin` | `[i32; 2]` | — | — |
+| `source` | `[u32; 4]` | — | — |
+| `math` | `ScanlineMath` | — | — |
+| `corner_rgb_key` | `bool` | — | — |
+
+### AxisBoxSample
+
+Used by: Sliding one-axis source windows with delayed phase changes and packed-word RGB normalization.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+| `source` | `[i32; 2]` | — | — |
+| `vertical` | `bool` | — | — |
+| `window` | `u16` | — | — |
+| `phase` | `[i32; 2]` | — | — |
+| `paired_columns` | `bool` | — | Vertical packed-pair loops leave an odd final destination column intact. |
+
+### MaskFieldPair
+
+Used by: Stored per-channel RGB mask coverage and signed packed-word displacement over immutable paired images.
+
+Variants are tagged by `"kind"`.
+
+| Variant | Fields | Description |
+|---|---|---|
+| `color_coverage` | `multiplier: u16, offset: u16, nonnegative_bias: u16` | Per-channel weights: low-word multiply/add, biased unsigned lower clamp, upper clamp255, summed low-word RGB products, one final /256. |
+| `displacement` | `amplitude: u16, second_weight128: u16` | Blue controls horizontal displacement; green controls vertical. Signed low-word products shift arithmetically before bounded coordinate adds. RGB contributions are independently floored at /128, then saturated. |
+
+### RadialTwistSample
+
+Used by: Quantized radial twist samples with independent field/source centres and stored coverage-percent composition.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+| `field_origin` | `[i32; 2]` | — | — |
+| `source_center` | `[i32; 2]` | — | — |
+| `radius_scale` | `f64` | — | — |
+| `twist_degrees` | `i32` | — | — |
+| `reference_radius` | `u32` | — | — |
+| `angle_pi` | `f64` | — | — |
+| `coverage_percent` | `u8` | — | — |
+
+### LinearChannelTransfer
+
+Used by: Bounded channel copying between linear pixel streams independent of image shape.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+| `source_channel` | `u8` | — | — |
+| `destination_channel` | `u8` | — | — |
+| `source_offset` | `u64` | — | — |
+| `destination_offset` | `u64` | — | — |
+| `length` | `u64` | — | — |
+
 ### ScanlineMath
 
-Used by: Explicit stored-byte, coverage or independently weighted scanline RGB arithmetic.
+Used by: Explicit stored-byte scanline RGB arithmetic including raw mask complements without endpoint shortcuts.
 
 Variants are tagged by `"kind"`.
 
@@ -1365,6 +1686,11 @@ Variants are tagged by `"kind"`.
 | `stored` | `math: ByteRasterMath` | — |
 | `coverage_separate` | `weight: u32, opaque_copy: bool` | Multiply stored source coverage by a32-bit wrapping weight, then take bits8..23. Source/destination products wrap to16bits and floor separately; the destination weight XORs the source weight's low byte with255. |
 | `constant_separate` | `weights: [u16; 2]` | Independent packed-word RGB weights; products floor separately and their sum saturates to255. Coverage is ignored, destination alpha is retained. |
+| `constant_summed` | `weights: [u16; 2]` | Multiply stored RGB by independent low-word weights, add with16-bit wrapping, then shift once by8. Coverage is ignored; alpha is retained. |
+| `coverage_summed` | `weight: u32` | Skip zero coverage; otherwise multiply it by a wrapping32-bit weight, take bits8..15, and copy at255. Partial RGB uses that byte and its255 complement, with one final shift after the16-bit wrapping sum. |
+| `coverage_raw_summed` | `weight: u16, complement: u16` | Scale coverage with a low-word product /256, use its wrapping complement, sum low-word RGB products before one /256 truncation. Every coverage value participates, including0 and255; alpha is retained. |
+| `coverage_word_separate` | `weight: u16, complement: u16, opaque_copy: bool` | Low-word scaled coverage and explicit complement with separate product floors. |
+| `coverage_byte_separate` | `weight: u32` | Skip original coverage0. Scale coverage by a wrapping32-bit weight and shift by8; the complete result255 copies RGB. Otherwise use the low bytes of that result and256-result as weights, floor each product by256 independently and saturate their sum. A scaled result0 paints black. |
 
 ### FixedSampleSpan
 
@@ -1379,7 +1705,7 @@ Used by: Immutable16.16 source phase and per-pixel step for one destination scan
 
 ### FixedScanlines
 
-Used by: Clipped immutable fixed-point sampling with optional corner key and source colour adjustment.
+Used by: Clipped immutable fixed-point sampling with checked or wrapping32-bit phase, optional corner key and colour adjustment.
 
 | Field | Rust type | Default | Description |
 |---|---|---|---|
@@ -1484,6 +1810,112 @@ Used by: Thresholded displacement of an immutable backdrop through an independen
 | `offset` | `[i32; 2]` | — | — |
 | `channel` | `u8` | — | — |
 | `threshold` | `u8` | — | — |
+
+### MaskedClipBlit
+
+Used by: Directed source-mask clipping with explicit wrapping packed-word scale/add and blend products.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+| `destination` | `[i32; 2]` | — | — |
+| `clip` | `ScanlineClip` | — | — |
+| `weight` | `u16` | — | Each nonzero stored coverage byte is incremented before a wrapping low-word multiplication by this weight and a logical eight-bit shift. |
+| `source_scale_add` | `Option<([u8; 3], [u16; 3])>` | — | Independent byte multipliers followed by a logical shift of eight, then wrapping packed-word additions. RGB words are not prematurely clamped to bytes before the final covered blend. |
+
+### BlockSamplePaint
+
+Used by: Per-source or sampled coverage policy for bounded stochastic block painting.
+
+Variants are tagged by `"kind"`.
+
+| Variant | Fields | Description |
+|---|---|---|
+| `pixel_coverage` | — | Paint the sampled RGB through each output pixel's own source coverage. Zero skips,255 copies, partial products sum before a single /256 shift with the255 complement. Optional source bounds affect painting only. |
+| `sample_coverage` | `percent: Option<i32>` | Paint a flat rectangle. None maps sampled alpha to floor(alpha*100/255) (255 is100); Some supplies a percent. Nonpositive skips,100 copies, other positive values clamp to100 and use complementary /256 weights. |
+
+### MaskedBlockSample
+
+Used by: Immutable mask-dependent block search and painting with caller-owned RNG completion.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+| `source` | `[u32; 4]` | — | — |
+| `destination` | `[i32; 2]` | — | — |
+| `cell` | `[u32; 2]` | — | — |
+| `search_nonzero` | `bool` | — | On a zero initial sample, try area random coordinates; then ALWAYS advance through at most area coordinates in row-major cyclic order, even when a preceding random retry found coverage. Search consumes no random values during its linear pass. |
+| `paint` | `BlockSamplePaint` | — | — |
+| `paint_source_bounds` | `Option<[i32; 4]>` | — | — |
+
+### CircularOffset
+
+Used by: Squared-distance circular RGB offsets with explicit inner-hole boundary policy.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+| `center` | `[i32; 2]` | — | — |
+| `radius` | `u32` | — | — |
+| `cutout_radius` | `Option<u32>` | — | — |
+| `cutout_excludes_outer_right` | `bool` | — | When a hole intersects a row, the rightmost outer boundary is excluded. |
+| `add` | `[u8; 3]` | — | — |
+| `subtract` | `[u8; 3]` | — | — |
+
+### RowEdgeLift
+
+Used by: Per-row quantized outward channel lifts with independent boundaries and explicit clipping.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+| `row_start` | `i32` | — | — |
+| `edge_groups` | `Vec<[Option<i32>; 2]>` | — | Absolute column GROUP indices. Left contributes (left-group)*step for groups<=left; right contributes (group-right)*step for groups>=right. Each edge may be independently absent; overlapping lifts saturate. |
+| `group_width` | `u16` | — | — |
+| `step` | `u8` | — | — |
+| `right_full_groups_only` | `bool` | — | Exclude the final incomplete group from the right-side lift only. |
+| `write_mask` | `[bool; 4]` | — | — |
+
+### EllipticPaintMath
+
+Used by: Stored-byte ellipse RGB mixing or saturated colour offsets.
+
+Variants are tagged by `"kind"`.
+
+| Variant | Fields | Description |
+|---|---|---|
+| `mix` | `color: [u8; 3], weights: [u16; 2]` | Independent low-word RGB weights,16-bit wrapping sum, one /256 shift. |
+| `offset` | `add: [u8; 3], subtract: [u8; 3]` | Saturating addition then subtraction, independently per stored RGB byte. |
+
+### EllipticCutout
+
+Used by: Explicit inner ellipse spans and their intersection policy.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+| `center` | `[i32; 2]` | — | — |
+| `radius` | `[i32; 2]` | — | — |
+| `padding` | `i32` | — | — |
+| `intersect_outer` | `bool` | — | True intersects cut boundaries with the outer span. False produces independent left/right spans bounded only by the image rectangle. |
+
+### EllipticPaint
+
+Used by: Bounded inclusive elliptic scanlines with optional inner cutouts and row override.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+| `center` | `[i32; 2]` | — | — |
+| `radius` | `[i32; 2]` | — | — |
+| `cutout` | `Option<EllipticCutout>` | — | — |
+| `rows` | `Option<[i32; 2]>` | — | Inclusive outer row range. None uses centerY-radiusY..centerY+radiusY. Rows outside the ellipse retain the clamped one-pixel endpoint. |
+| `math` | `EllipticPaintMath` | — | — |
+
+### PackedPairBlend
+
+Used by: Independent stored-byte two-source composition with optional coverage and signed destination residual.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+| `sources` | `[[i32; 4]; 2]` | — | — |
+| `destination` | `[i32; 2]` | — | — |
+| `weights256` | `[u16; 2]` | — | Each source is independently0..256. Their sum may exceed256. |
+| `use_masks` | `bool` | — | With masks, alpha0 skips,255 uses the full14-bit weight and partial alpha uses floor(mask*weight/4). Without masks, ignore both alpha planes. |
 
 ### RowBlit
 
@@ -1661,11 +2093,23 @@ Variants are tagged by `"operation"`.
 
 | Variant | Fields | Description |
 |---|---|---|
+| `floating_polygon_fragments` | `spec: crate::floating_polygon_fragments::FloatingPolygonFragments` | — |
+| `alpha_brushes` | `spec: crate::alpha_brushes::AlphaBrushes` | — |
+| `packed_repeat_rows` | `spec: crate::packed_repeat_rows::PackedRepeatRows` | — |
+| `repeat_scale_sample` | `spec: crate::repeat_scale_sample::RepeatScaleSample` | Radius-scaled angular samples with independently quantized twist. |
+| `axis_box_sample` | `spec: crate::axis_box_sample::AxisBoxSample` | — |
+| `radial_twist_sample` | `spec: crate::radial_twist_sample::RadialTwistSample` | — |
+| `affine_sample_blend` | `spec: crate::affine_sample_blend::AffineSampleBlendByte` | Explicit double affine samples and optional scale-distance neighbours. |
+| `linear_channel_transfer` | `spec: crate::linear_channel_transfer::LinearChannelTransfer` | Copy one selected channel between linear pixel streams of any shape. |
+| `masked_clip_blit` | `spec: crate::masked_clip_blit::MaskedClipBlit` | — |
 | `row_tint_blend` | `spec: crate::row_tint_blend::RowTintBlend` | — |
 | `masked_backdrop_shift` | `spec: crate::masked_backdrop_shift::MaskedBackdropShift` | — |
 | `native_box_blur` | `spec: crate::native_box_blur::NativeBoxBlur` | Clipped box sums with an explicit packed-byte normalisation profile. |
 | `fixed_scanlines` | `spec: crate::fixed_scanlines::FixedScanlines` | — |
+| `fixed_scanlines_wrapping32` | `spec: crate::fixed_scanlines::FixedScanlines` | Signed16.16 origins/steps accumulated with explicit32-bit wrapping. |
 | `clipped_scanline_sample` | `spec: crate::clipped_scanline_sample::ClippedScanlineSample` | — |
+| `row_blit_batch` | `spec: crate::row_blit::RowBlitBatch` | — |
+| `spatial_color_band` | `spec: crate::spatial_color_band::SpatialColorBand` | — |
 | `row_blit` | `spec: crate::row_blit::RowBlit` | — |
 | `masked_add_subtract256` | `spec: crate::masked_add::MaskedAddSubtract256` | — |
 | `random_wipe` | `spec: crate::integer_wipe::random::RandomWipe` | — |
@@ -1686,6 +2130,8 @@ Variants are tagged by `"kind"`.
 
 | Variant | Fields | Description |
 |---|---|---|
+| `signed_scaled_masked_rgb256` | `scale: i16, subtract: bool` | Signed packed-word RGB scaling, saturated add/subtract, then separate mask products /256, including full255 coverage without a shortcut. |
+| `alpha_percent_rgb256` | `percent: u8` | Scale stored coverage by an integer percent /100, then sum RGB products before /256. Coverage0 skips; scaled255 copies RGB. |
 | `saturated_rgb` | `subtract: bool` | Independent saturated stored-RGB addition or subtraction; no coverage modulation and no alpha writes. |
 | `alpha_weighted_rgb256` | `weight: u16` | Scale stored coverage by weight/256. Zero coverage skips, 255 copies RGB; partial contributions are summed before one /256 truncation. Destination alpha is retained independently of the coverage source. |
 | `alpha_weighted_separate_rgb256` | `weight: u16` | Scale source coverage by weight/256, then floor the two RGB products separately. Only source alpha255 plus weight256 copies RGB directly. Destination alpha is retained; weight is0..=256. |
@@ -2180,6 +2626,9 @@ Used by: Rust owner-authorized HttpRequest.method.
 |---|---|---|
 | `Get` | — | — |
 | `Post` | — | — |
+| `Put` | — | — |
+| `Delete` | — | — |
+| `Head` | — | — |
 
 ### HttpRequest
 
@@ -2203,6 +2652,7 @@ Used by: Bounded retained HTTP response bytes.
 | Field | Rust type | Default | Description |
 |---|---|---|---|
 | `status` | `u16` | — | — |
+| `headers` | `Vec<(String, String)>` | — | Final response header fields in arrival order; names are lower-case. |
 | `body` | `Vec<u8>` | — | — |
 
 ### HttpRequestState
@@ -2732,6 +3182,7 @@ Used by: HostServices.begin_pattern; create/advance/render/restore on common ima
 
 | Variant | Fields | Description |
 |---|---|---|
+| `SampleBlocks` | `destination: ImageInput, source: ImageInput, spec: Arc<[u8]>, rng: Arc<[u8]>` | Source-dependent stochastic block sampling and painting. The immutable source/destination graphs and RNG state are admitted in one owner scope. The worker returns the real post-sampling RNG only with the ready image. |
 | `Create` | `spec: Arc<[u8]>, rng: Arc<[u8]>` | — |
 | `Advance` | `source: Arc<dyn PatternResource>, rng: Arc<[u8]>` | — |
 | `AdvancePrefix` | `source: Arc<dyn PatternResource>, rng: Arc<[u8]>, words: usize` | Same immutable resource/RNG transaction, limited to a prefix bank. |
@@ -2744,6 +3195,7 @@ Used by: PatternProcessState.Ready owner receipt.
 
 | Variant | Fields | Description |
 |---|---|---|
+| `ImageWithRng` | `image: Arc<dyn ImageResource>, rng_after: Arc<[u8]>` | — |
 | `Resource` | `resource: Arc<dyn PatternResource>, rng_after: Arc<[u8]>` | — |
 | `Image` | — | — |
 
@@ -3212,6 +3664,38 @@ Used by: SheetSequence.mode.
 | `once` | — | — |
 | `ping_pong` | — | — |
 | `still` | — | — |
+
+### IndexedPlane
+
+Used by: Palette-indexed linear pixels prepared with the existing packed-pixel and RGB-lookup image operations.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+| `size` | `[u32; 2]` | — | — |
+| `palette` | `[[u8; 3]; 256]` | — | — |
+| `indices` | `Arc<[u8]>` | — | — |
+
+### SpriteSamples
+
+Used by: Counter-free integer current/next sprite sampling with forward/ping-pong and repeat/hold policies.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+| `cells` | `u32` | — | — |
+| `ticks_per_cell` | `u32` | — | — |
+| `ping_pong` | `bool` | — | — |
+| `hold` | `bool` | — | — |
+
+### SpriteSample
+
+Used by: Integer sprite sample receipt with exact cell fraction for caller-selected quantisation.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+| `current` | `u32` | — | — |
+| `next` | `u32` | — | — |
+| `fraction_ticks` | `u32` | — | Exact interpolation numerator; clients choose their own byte/float quantisation. Both endpoints can coincide without losing this fraction. |
+| `ticks_per_cell` | `u32` | — | — |
 
 ### WidgetInteraction
 
@@ -3697,6 +4181,8 @@ Worker-prepared numeric transform, separate from source transport/pitch.
 |---|---|---|
 | `SiglusJitan` | `percent: u16` | Pinned mono PCM16 splice profile; 100..400 percent, 100 exact identity. |
 | `PcmFilters` | — | Ordered integer stereo filter chain applied to the decoded PCM16 (at most 16 stages); see [`PcmFilter`]. |
+| `WaveFilters` | — | Ordered floating-point WaveFilter chain (at most 16 stages) applied to the decoded PCM at its own rate; see [`WaveFilter`]. |
+| `MultiTrack` | — | Independently gained stereo stems (1..=64) of one voice, mixed in lockstep; see [`MultiTrackStem`] and `AudioRequest::SetTrackGains`. |
 
 ### AudioResourceInfo
 
@@ -4028,6 +4514,7 @@ Client-scoped channel commands for the shared decoder/mixer. Encoded bytes and d
 | `SetPan` | `channel: u32, pan: f32, fade_ms: f32` | — |
 | `SetStereoGain` | `channel: u32, gains: [f32; 2], fade_ms: f32` | Independent post-processing left/right amplitude controls, each0..4. Unity preserves the current pan/spatial law. This is not equal-power pan. |
 | `SetLoopSchedule` | `channel: u32, start: u64, end: Option<u64>, passes: Option<u32>` | Replace the decoded-frame loop range and remaining-pass schedule while retaining the current fractional cursor. None passes repeats unbounded; Some must be positive, including the current pass. None end uses EOF. |
+| `SetTrackGains` | `channel: u32, positions: Option<alloc::vec::Vec<u64>>, changes: alloc::vec::Vec<AudioTrackGain>` | Retarget track gains of a multi-track voice from its current source frame, or (with `positions`) at the first listed source frame reached; a new deferred request replaces an unapplied one. |
 | `SetChannelSwap` | `channel: u32, swapped: bool` | Exchange decoded left/right channels without restarting transport. |
 | `SetLooped` | `channel: u32, looping: bool, loop_start: Option<u64>` | Change loop mode at the current source position; never restart/seek. Enabling restores unbounded repeats, clearing a prior counted schedule. |
 
@@ -4422,12 +4909,105 @@ Explicit endpoint conversion; no decoder, native profile or PlayAsset default in
 | `Floor` | — | — |
 | `Ceil` | — | — |
 
-### RegionMap
+### SpectrumGraphSpec
 
-Used by: Rust scoped region-label map; atomic clipped snapshot copies and zero-filled resize.
+Used by: Shared source-audio sine spectrum and fire/LCD bitmap visualization rectangle.
 
 | Field | Rust type | Default | Description |
 |---|---|---|---|
+| `rect` | `[u32; 4]` | — | — |
+| `style` | `SpectrumGraphStyle` | — | — |
+
+### SpectrumGraphStyle
+
+Used by: Shared fire spectrum or explicit LCD bar geometry and colors.
+
+| Variant | Fields | Description |
+|---|---|---|
+| `Fire` | — | — |
+| `Bars` | `divisions: u32, thickness: u32, on: [u8; 4], off: [u8; 4], background: [u8; 4], peak: [u8; 4]` | — |
+
+### SpectrumGraphState
+
+Used by: Explicit retained level/peak/hold history committed with a completed image.
+
+Explicit analysis history, committed only with a completed image. The catalogue/voice/decoder remains host-owned; this contains no device handles.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+| `cut` | `f32` | — | — |
+| `levels` | `Vec<i32>` | — | — |
+| `peaks` | `Vec<i32>` | — | — |
+| `peak_age` | `Vec<i32>` | — | — |
+
+### SpectrumGraphReceipt
+
+Used by: Client-scoped image and next visualization state; worker-owned decoder never seeks a live voice.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+| `client` | `ClientId` | — | — |
+| `image` | `Arc<dyn ImageResource>` | — | — |
+| `state` | `SpectrumGraphState` | — | — |
+
+### MountedMedia
+
+Used by: Host-published volume label, legacy drive and canonical client asset root; installed media aliases never assert physical optical media or entitlement.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+| `label` | `String` | — | — |
+| `drive` | `char` | — | Legacy drive identity supplied by the host, A through Z. |
+| `root` | `String` | — | Canonical directory relative to this client's asset capability. |
+
+### MountedMediaCatalog
+
+Used by: Client-scoped resident media catalogue; label lookup is case insensitive and grants no ambient filesystem authority.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+
+### RegionMap
+
+Used by: Rust scoped interaction labels from immutable resident planes and bounded overlays; copy/resize/flip retain source indices without copying pixels.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+
+### RegionMapState
+
+Used by: ImageMetadata.begin_region_map asynchronous scoped integer-label decoding; errors remain typed and results retain memory charges.
+
+Worker result for encoded label images. Ready retains decoded memory charges.
+
+| Variant | Fields | Description |
+|---|---|---|
+| `Pending` | — | — |
+| `Ready` | — | — |
+| `Failed` | — | — |
+
+### LabelImage
+
+Used by: Shared indexed PNG/BMP or grayscale PNG label decoder; palette indices stay independent of display colours.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+| `size` | `[u32; 2]` | — | — |
+| `labels` | `Arc<[u8]>` | — | — |
+
+### PngRows
+
+Used by: Shared bounded PNG source rows without palette expansion, gamma conversion or transparency insertion.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+| `size` | `[u32; 2]` | — | — |
+| `bit_depth` | `u8` | — | — |
+| `color_type` | `u8` | — | PNG IHDR color type:0 grey,2 RGB,3 indexed,4 grey+alpha,6 RGBA. |
+| `channels` | `u8` | — | — |
+| `stride` | `usize` | — | — |
+| `palette` | `Option<Vec<[u8; 3]>>` | — | — |
+| `bytes` | `Arc<[u8]>` | — | — |
 
 ### AudioLoopTimebase
 
@@ -4662,7 +5242,7 @@ Immutable logical installed file, usable by any adapter or asset tool.
 
 Used by: Rust shared read-only MSI/CAB catalog.
 
-A catalog owns only its scoped source and immutable data. The third-party MSI/CAB readers are created and destroyed inside each worker invocation; neither !Send MSI objects nor decoder pointers cross task boundaries.
+A catalog owns only its scoped source and immutable data. The third-party MSI reader stays on the worker thread that opened it (thread-local, keyed by catalog id); neither !Send MSI objects nor decoder pointers cross threads.
 
 | Field | Rust type | Default | Description |
 |---|---|---|---|
@@ -5822,7 +6402,7 @@ Used by: `VfxEmitterSpec.falling_atlas`; bounded CPU pixel-motion and atlas node
 |---|---|---|---|
 | `canvas` | `[u32; 2]` | — | Spawn width and bottom reset plane in logical pixels. |
 | `tick_hz` | `u32` | — | Fixed ticks per second, defining published velocity/age units. |
-| `x_bands` | `Vec<i32>` | — | Chosen x-band offsets in multiples of canvas width, in sequence order. |
+| `x_bands` | `Vec<i32>` | — | Chosen x-band offsets in multiples of canvas width, in sequence order. Empty: no band draw is consumed and the offset is zero. |
 | `fall_range` | `[u32; 2]` | — | Inclusive integer speed numerator sampled once per birth/reset. |
 | `initial_fall_range` | `Option<[u32; 2]>` | — | Optional first-birth speed range; subsequent recycling uses fall_range. |
 | `spawn_window` | `Option<FallingSpawnWindow>` | — | Live birth/reset sampling control. Updating it preserves existing particles and consumes no random values until their next birth. |
@@ -5839,7 +6419,7 @@ Used by: `VfxEmitterSpec.falling_atlas`; bounded CPU pixel-motion and atlas node
 | `scale` | `f32` | — | Uniform destination scale; bottom cropping is applied before scaling. |
 | `alpha_base` | `f32` | — | Alpha is base + step*(random % count) + offset. |
 | `alpha_step` | `f32` | — | Discrete alpha step. |
-| `alpha_count` | `u32` | — | Number of discrete alpha choices. |
+| `alpha_count` | `u32` | — | Number of discrete alpha choices. Zero consumes no draw: the alpha is base + offset. |
 | `alpha_offset` | `f32` | — | Final alpha offset, useful for authored depth attenuation. |
 | `atlas_interval_ms` | `u64` | — | Atlas advances by at most one frame only when elapsed exceeds this. |
 | `atlas_clock_bits` | `u8` | — | Timer arithmetic:32 for wrapping millisecond clocks,64 for monotonic. |
@@ -5877,6 +6457,7 @@ Used by: `VfxEmitterSpec.drifting_atlas`; externally clocked drift, alpha and at
 | `depth` | `u32` | — | Pool depth in 0..5, selecting the buoyant atlas row pair. |
 | `motion` | `VfxDriftMotion` | — | Motion and atlas-layout preset consumed by this node. |
 | `spawn_window` | `Option<VfxDriftSpawnWindow>` | — | Optional biased respawn area; updates preserve live particle attributes. |
+| `streak_cell` | `Option<[u32; 3]>` | — | Streak cell `[width, height step, row base]`: rows are `step * (row + base)` texels tall at x = 8*row. Absent is `[2, 24, 1]`. |
 
 ### VfxDriftingAtlasState
 
@@ -6363,6 +6944,7 @@ A scoped, renderer-owned transition between two isolated subtree inputs. Filters
 |---|---|---|
 | `blur` | `before: [u32; 2], after: [u32; 2], dynamic: bool` | Increasing blur of the old input and decreasing blur of the new one, followed by gamma-space byte-weight blending. Static inputs are GPU snapshots; dynamic inputs are recaptured each frame. |
 | `dim` | `rule: RuleWipe, blur: [u32; 2], negative: bool, acceleration: f64` | Grayscale, clamped-edge box-blurred rule image, optionally inverted, controlling a rule wipe. Acceleration matches the legacy pow curve. |
+| `glitch` | `params: GlitchParams, mode: GlitchTransition, seed: u64` | Block/line displacement with channel splitting (KiriKiri GlitchEffect `glitch`/`fadeglitch`). Each frame regenerates its field from `seed + elapsed_ms`; inputs are recaptured every frame. A `fade` transition may use its destination as its own source. |
 
 ### RuleWipe
 
@@ -6754,9 +7336,12 @@ Variants are tagged by `"kind"`.
 | Variant | Fields | Description |
 |---|---|---|
 | `crossfade` | — | Plain cross-dissolve. |
-| `mask` | `asset: String, fade: u8` | Grayscale mask image: bright pixels reveal first; `fade` 0..=8 is the Siglus soft-edge step (0 = hard edge). |
+| `mask` | `asset: String, fade: u8, vague: Option<u16>` | Grayscale mask image: bright pixels reveal first; `fade` 0..=8 is the Siglus soft-edge step (0 = hard edge). |
 | `slide` | `direction: u8` | direction 0 down, 1 up, 2 right, 3 left (Siglus type 200, both scenes move). |
 | `mosaic` | `size: u32` | Mosaic out of the old scene and into the new one (type 230). |
+| `spin_zoom` | `reverse: bool` | The new scene grows from the canvas centre (scale 0→1) while turning one revolution, counter-clockwise or `reverse`d, over the old scene (N-System CDIBOverlap Rotate, DrawRotate 0x42BC50). |
+| `bounce` | `count: u16, vector: [i16; 2], damped: bool, stretch: bool` | The new scene offset along `vector` (px) by a triangle wave of `count` round trips, uncovered pixels keeping the old scene; `damped` scales the offset by 1 − t/2; `stretch` grows the scene by the offset about its centre instead of moving it (N-System Bound, DrawBound 0x42CA60, modes 0/1 and +10). |
+| `door_flip` | `axis: u8, focal: u16` | A perspective page flip over black: the old scene turns away about `axis` (0 vertical, 1 horizontal, 2 the view axis) through a quarter turn, then the new scene turns in; `focal` is the pinhole distance in px (N-System RotDoor, MoveRotDoor 0x42E000). |
 | `ordered_dither` | `cell: [u32; 2], diagonal: bool, steps: u32` | Ordered Bayer-4 fade in logical canvas pixels. This is a shared engine effect with an independent code, not an alias for a Siglus wipe type. |
 | `siglus` | `code: i32, options: Vec<i32>, mask: Option<String>` | A raw Siglus wipe type with its option list. Pattern types (5..=199) without `mask` use the original generated masks. |
 
@@ -6810,6 +7395,10 @@ Used by: `Ui.put`, `ClientSpec.systems.widgets`.
 | `color` | `[u8; 4]` | `[52,66,88,255]` | RGBA8 fill color. |
 | `text` | `String` | `""` | Label or button text. |
 | `max_length` | `u32` | `1024` | Maximum Unicode scalar count for TextField committed text. |
+| `multiline` | `bool` | `false` | Permit newline/tab in a text field; Enter inserts a newline. |
+| `read_only` | `bool` | `false` | Display committed text without accepting edits. |
+| `no_wrap` | `bool` | `false` | Disable automatic line wrapping while retaining explicit newlines. |
+| `scroll_lines` | `u32` | `0` | First explicit text line displayed in a multiline editor. |
 | `activate_on_press` | `bool` | `false` | A Button activates on pointer press instead of matching release. Keyboard activation keeps its normal semantics; other kinds reject it. |
 | `font` | `Option<String>` | `null` | Explicit licensed project font alias. |
 | `text_color` | `[u8; 4]` | `[245,245,245,255]` | RGBA8 text paint, independent of the control fill. |
@@ -7230,6 +7819,9 @@ Variants are tagged by `"op"`.
 | `advance_pointer_motion` | `ticks: u32` | Issued by `Ui.advancePointerMotion`. |
 | `set_title` | `text: String` | Issued by `Ui.setTitle`. |
 | `set_window_size` | `size: [u32; 2]` | Physical client size, applied by the host after presentation-mode changes. |
+| `begin_window_drag` | — | Enter the presenting host's native pointer-driven window move loop. |
+| `reset_window_shape` | — | Restore the ordinary opaque rectangular native window shape. |
+| `set_ime_cursor_area` | `rect: [i32;4]` | IME candidate origin/extent in logical canvas pixels. |
 | `set_presentation_scale` | `mode: crysirror_core::service::PresentationScale` | — |
 | `set_window_position` | `position: [i32; 2]` | Outer frame coordinates in the host display space. |
 | `set_window_visible` | `visible: bool` | — |
@@ -7373,6 +7965,20 @@ Published font metadata. The canonical alias pins immutable content.
 | `collection_faces` | `u32` | — | Number of faces in the source collection (one for standalone fonts). |
 | `face_index` | `u32` | — | Selected zero-based face index in a TTC/OTC source. |
 | `byte_len` | `usize` | — | Encoded source bytes; decoded backend storage has a separate host budget. |
+
+### FontCatalogFace
+
+Used by: FontLibrary.catalog authorized face names, fixed pitch, outline and declared code pages.
+
+Portable face metadata, without GDI handles or invented installed fonts.
+
+| Field | Rust type | Default | Description |
+|---|---|---|---|
+| `alias` | `String` | — | — |
+| `names` | `Vec<String>` | — | — |
+| `fixed_pitch` | `bool` | — | — |
+| `outline` | `bool` | — | — |
+| `code_pages` | `Option<[u32;2]>` | — | — |
 
 ### FontLoadState
 
@@ -7620,6 +8226,7 @@ Used by: UiEvent.widget client/local identity.
 |---|---|---|
 | `script` | `String` | Native scene basename, relative to Advdata/MES (no generated bootstrap). |
 | `font` | `String` | Licensed project font alias; no fonts or user game files are embedded. |
+| `installation_policy` | `InstallationPolicy` | Portable installed-game hosts validate mounted resources instead of recreating the reviewed original Windows installation/licence dialog. |
 
 ### `catsystem2`
 
@@ -7644,6 +8251,7 @@ Used by: UiEvent.widget client/local identity.
 | `executable` | `Option<String>` | Companion executable basename reported by `System.exeName`. |
 | `bootstrap_profile` | `Option<String>` | Engine-published protected-bootstrap profile (`hxv4_bootstrap_profile` for `Plugins.linkZ`, or `cxdec_bootstrap_profile` for the startup `Storages.setupArchiveData` facade) the natives must match. |
 | `arguments` | `BTreeMap<String, String>` | Native command-line values exposed by System.getArgument. Explicit player values override executable-embedded defaults before startup. |
+| `locale` | `Option<String>` | User locale reported by getLangName.dll (`ja-JP`, `en-US`). Absent, the process locale environment is used, then `en-US`. |
 
 ### `majiro`
 

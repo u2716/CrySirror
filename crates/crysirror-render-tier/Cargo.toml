@@ -1,0 +1,15 @@
+[package]
+name = "crysirror-render-tier"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Platform render tiers: equivalent reduced 3D feature sets for Switch and PS Vita"
+
+[dependencies]
+crysirror-scene.workspace = true
+crysirror-console.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

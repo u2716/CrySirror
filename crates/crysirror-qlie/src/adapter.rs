@@ -403,6 +403,21 @@ impl QlieVm {
             m.frame.path
         )
     }
+    fn resolve_movie(&self, m: &Machine, name: &str) -> Result<String> {
+        // Native standalone movie loaders (BIMAN 513464/517F14) search the
+        // installed movie directory in addition to FilePack resources. The
+        // script's path manager remains ordered; no arbitrary basename match.
+        let candidates = self.resource_candidates(m, name)?;
+        let movie_candidates = ["GameData/Movie", "Movie"].into_iter().filter_map(|directory| {
+            crate::program::canonical(&format!("{directory}/{name}")).ok()
+        });
+        for logical in candidates.into_iter().chain(movie_candidates) {
+            if let Some(actual) = self.config.assets.get(&logical) {
+                return Ok(actual.clone());
+            }
+        }
+        bail!("QLIE movie resource absent: {name} relative to {}", m.frame.path)
+    }
     fn run(&mut self, h: &mut dyn HostServices, budget: u32) -> Result<VmYield> {
         if self.random.is_none() {
             use crysirror_core::service::{SessionSeedSource, SessionSeedState};
@@ -1089,14 +1104,30 @@ impl QlieVm {
                 m.result_text(0, output);
             }
             "bsub" => {
-                ensure!(a.len() == 3, "QLIE regex replacement ABI");
-                let text = m.eval(&a[0])?.text();
-                let pattern = m.eval(&a[1])?.text();
-                let replacement = m.eval(&a[2])?.text();
-                let regex = regex::RegexBuilder::new(&pattern)
-                    .size_limit(1024 * 1024)
-                    .build()?;
-                let result = regex.replace_all(&text, replacement).into_owned();
+                // BIMAN titles call the bundled BREGEXP.DLL BSubst form
+                // `\bsub,"s/pattern/replacement/flags",target`; the older
+                // three-field (text, pattern, replacement) form is retained.
+                let (text, regex, replacement, global) = if a.len() == 2 {
+                    let command = m.eval(&a[0])?.text();
+                    let text = m.eval(&a[1])?.text();
+                    let (regex, replacement, global) =
+                        crate::bregexp::substitution(&command)?;
+                    (text, regex, replacement, global)
+                } else {
+                    ensure!(a.len() == 3, "QLIE regex replacement ABI");
+                    let text = m.eval(&a[0])?.text();
+                    let pattern = m.eval(&a[1])?.text();
+                    let replacement = m.eval(&a[2])?.text();
+                    let regex = regex::RegexBuilder::new(&pattern)
+                        .size_limit(1024 * 1024)
+                        .build()?;
+                    (text, regex, replacement, true)
+                };
+                let result = if global {
+                    regex.replace_all(&text, replacement.as_str()).into_owned()
+                } else {
+                    regex.replace(&text, replacement.as_str()).into_owned()
+                };
                 ensure!(result.len() <= 1024 * 1024, "QLIE regex output limit");
                 m.result_text(0, result);
             }

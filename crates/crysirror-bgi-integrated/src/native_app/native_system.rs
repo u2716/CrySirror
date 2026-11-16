@@ -3,6 +3,8 @@ use crate::native_vm::SysApi;
 
 #[derive(Default)]
 pub(super) struct NativeSystemState {
+    /// 1.653 544A98 / 1.687 1401ECF30: 600 main-loop wall-clock deltas.
+    pub(super) frame_history: VecDeque<i32>,
     #[cfg(any(target_os = "vita", target_os = "horizon"))]
     pub(super) mutex_names: BTreeMap<String, u64>,
     pub(super) main_loop_wait_override: i32,
@@ -187,8 +189,13 @@ impl RuntimeTraceApi {
         directories: bool,
     ) -> Vec<String> {
         if let Some(policy) = file_policy::active() {
+            let pattern = if directories {
+                pattern.to_string()
+            } else {
+                user_files::native_enumeration_pattern(pattern)
+            };
             return policy
-                .enumerate_user(pattern, recursive, max_count, directories)
+                .enumerate_user(&pattern, recursive, max_count, directories)
                 .unwrap_or_default();
         }
         let normalized = pattern.replace('\\', std::path::MAIN_SEPARATOR_STR);

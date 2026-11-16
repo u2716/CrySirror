@@ -133,7 +133,12 @@ pub fn canonical(path: &str) -> Result<String> {
             _ => components.push(c),
         }
     }
-    Ok(components.join("/").to_ascii_lowercase())
+    // The native CP932 namespace uses composed kana. macOS loose filenames
+    // commonly arrive decomposed; normalize only the logical lookup key and
+    // retain the original storage spelling separately in Config.assets.
+    Ok(icu_normalizer::ComposingNormalizerBorrowed::new_nfc()
+        .normalize(&components.join("/"))
+        .to_ascii_lowercase())
 }
 impl Program {
     pub fn parse(path: &str, bytes: &[u8]) -> Result<Self> {
@@ -223,7 +228,10 @@ impl Program {
                 starts.push(source.len());
                 for span in starts.windows(2) {
                     let raw = source[span[0] + 1..span[1]].trim();
-                    let mut a = arguments(raw)?;
+                    let command = raw.split(',').next().unwrap_or("").chars().take(64).collect::<String>();
+                    let mut a = arguments(raw).with_context(|| {
+                        format!("QLIE command {command} at {path}:{}", line + 1)
+                    })?;
                     // A final comma terminates a native command, including
                     // `\scp,sl,\?v,...`. Interior placeholders and quoted
                     // empty strings remain actual argument fields.
@@ -273,12 +281,12 @@ impl Program {
                     p.code.push(instruction);
                 }
             } else {
-                let (op, args) = if let Some(s) = source.strip_prefix('^') {
-                    let mut a = arguments(s)?;
-                    (format!("^{}", a.remove(0)), a)
-                } else {
-                    ("text".into(), vec![source.into()])
-                };
+                // Reader replacements run before expression/command parsing.
+                // Caret macros are raw reader text too: their field values may
+                // contain punctuation such as an unmatched `]` (addpri:]).
+                // Preserve the complete line for rep rules, then parse the
+                // resulting native commands when Machine::inject admits them.
+                let (op, args) = ("text".into(), vec![source.into()]);
                 p.code.push(Instruction {
                     op,
                     args,

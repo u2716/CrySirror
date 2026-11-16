@@ -1,0 +1,19 @@
+[package]
+name = "crysirror-wgpu-deko3d"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "wgpu custom backend over deko3d (Nintendo Switch); the shared CrySirror renderer runs unchanged on it"
+
+[dependencies]
+wgpu = { workspace = true, features = ["custom"] }
+serde.workspace = true
+serde_json.workspace = true
+blake3.workspace = true
+
+[dev-dependencies]
+crysirror-wgpu.workspace = true
+crysirror-runtime.workspace = true
+crysirror-core.workspace = true
+pollster.workspace = true

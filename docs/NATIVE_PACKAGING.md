@@ -1,5 +1,36 @@
 # Native application packages
 
+## Console CI images
+
+The build workflow uses CrySirror-owned GHCR images:
+
+| Target | Image | Build definition |
+| --- | --- | --- |
+| PS Vita | `ghcr.io/xmoezzz/crysirror/psv-build` | [Dockerfile](../platform/psv/docker/Dockerfile): VitaSDK, libvita2d, cargo-vita and nightly with rust-src. |
+| Switch | `ghcr.io/xmoezzz/crysirror/switch-build` | [Dockerfile](../platform/switch/docker/Dockerfile): devkitA64, libnx, deko3d, uam, host image tools and stable/nightly Rust. |
+
+The [image workflow](../.github/workflows/console-image.yml) hashes each
+Dockerfile, reuses the corresponding image when present, and otherwise builds
+and publishes it using the repository's `GITHUB_TOKEN`. VPK/NRO jobs consume
+that exact hash tag, not `latest`. Changing a toolchain or SDK recipe requires
+updating its Dockerfile; keep the build workflow's Rust pin in sync. A manual
+image workflow run can prepare either environment ahead of the next build.
+
+The recipes follow Siglus's console build-environment approach; their source
+blob identities are recorded in the Dockerfiles. CrySirror does not consume
+Siglus's published images. Build contexts contain only tooling definitions,
+not game data, fonts or proprietary SDK modules. CI builds and packages; it
+does not run tests, games or emulators. Image publication alone does not
+establish a successful player build or device compatibility.
+
+## Apple and Android frontends
+
+Use the [platform-host skill](../.agents/skills/crysirror-platform-host/SKILL.md)
+for session/view lifecycle, bridges, NLS/input, packaging, signing and build-only
+CI. Compilation, package creation, signing and device behavior are separate
+results. Native save reconstruction follows the
+[native-save skill](../.agents/skills/crysirror-native-save/SKILL.md).
+
 CrySirror's native application frontends use the shared player library and
 `crysirror-mobile` C/JNI boundary. `crysirror-desktop` still supplies the
 `crysirror` CLI; its reusable library is named `crysirror_player`.
@@ -134,7 +165,10 @@ Platform references:
 
 ## Console seams
 
-PS Vita and Switch have SDK-free host scaffolds, not playable ports. See
+PS Vita and Switch share an SDK-free host contract, with separate native device
+drivers and player/package source. See
 [`platform/psv`](../platform/psv/README.md) and
-[`platform/switch`](../platform/switch/README.md). Their device backends, full
-Runtime portability and packages remain separate work.
+[`platform/switch`](../platform/switch/README.md), the
+[memory contract](MEMORY_MANAGEMENT.md) and their platform characteristics.
+Source implementation, package compilation, emulator behavior and physical
+hardware validation remain separate evidence for each session/backend.

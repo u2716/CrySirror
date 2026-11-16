@@ -95,6 +95,11 @@ impl NativeOverlap {
     pub fn dependency_pending(&self) -> bool {
         self.frame.is_none() || self.blend.is_some()
     }
+    pub(crate) fn presentation_pending(&self) -> bool {
+        // Subsequent blends only prepare an immutable candidate. The latest
+        // owner-published blend remains a complete displayable screen.
+        self.presented_frame.is_none() && self.dependency_pending()
+    }
     pub(crate) fn owned_path(&self)->Option<&str>{self.display_path.as_deref()}
     pub(crate) fn reanchor_after_pause(&mut self,now:u64,paused:u64)->Result<()> {
         let elapsed=now.checked_sub(paused).ok_or_else(||anyhow::anyhow!("NNN overlap pause clock reversed"))?;

@@ -8,10 +8,22 @@ use crysirror_core::{
     service::AssetReader,
 };
 use std::{
+    cell::RefCell,
     collections::{BTreeMap, BTreeSet},
     io::Read,
-    sync::Arc,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
 };
+static NEXT_CATALOG: AtomicU64 = AtomicU64::new(1);
+/// Opened MSI databases retained per worker thread (the MSI reader is !Send).
+/// Opening parses the whole CFB/string pool (~100ms+ for large packages), so
+/// each member read must not repeat it. Bounded; entries are keyed by catalog.
+const RETAINED_PACKAGES: usize = 2;
+thread_local! {
+    static PACKAGES: RefCell<Vec<(u64, msi::Package<AssetIo>)>> = const { RefCell::new(Vec::new()) };
+}
 const MAX_ROWS: usize = 32768;
 /// Immutable logical installed file, usable by any adapter or asset tool.
 #[derive(Clone, Debug)]
@@ -23,11 +35,12 @@ pub struct InstallerFile {
     pub cabinet_key: String,
 }
 /// A catalog owns only its scoped source and immutable data. The third-party
-/// MSI/CAB readers are created and destroyed inside each worker invocation;
-/// neither !Send MSI objects nor decoder pointers cross task boundaries.
+/// MSI reader stays on the worker thread that opened it (thread-local, keyed by
+/// catalog id); neither !Send MSI objects nor decoder pointers cross threads.
 pub struct InstallerCatalog {
     source: Arc<dyn AssetReader>,
     files: Vec<InstallerFile>,
+    id: u64,
 }
 fn text<'a>(row: &'a msi::Row, column: &str) -> Result<&'a str> {
     ensure!(row.has_column(column), "MSI missing column {column}");
@@ -175,7 +188,11 @@ impl InstallerCatalog {
             });
         }
         ensure!(!files.is_empty(), "MSI has no installed files");
-        Ok(Self { source, files })
+        Ok(Self {
+            source,
+            files,
+            id: NEXT_CATALOG.fetch_add(1, Ordering::Relaxed),
+        })
     }
     pub fn files(&self) -> &[InstallerFile] {
         &self.files
@@ -186,7 +203,35 @@ impl InstallerCatalog {
         let file = self.files.get(index).context("MSI file index")?;
         cx.check_cancelled()?;
         cx.decode_with(file.size, || {
-            let mut package = msi::Package::open(AssetIo::new(self.source.clone())?)?;
+            PACKAGES.with(|cell| -> Result<Vec<u8>> {
+                let mut packages = cell.borrow_mut();
+                let at = match packages.iter().position(|(id, _)| *id == self.id) {
+                    Some(at) => at,
+                    None => {
+                        let package = msi::Package::open(AssetIo::new(self.source.clone())?)?;
+                        if packages.len() >= RETAINED_PACKAGES {
+                            packages.remove(0);
+                        }
+                        packages.push((self.id, package));
+                        packages.len() - 1
+                    }
+                };
+                let result = self.read_member(&mut packages[at].1, file, cx);
+                if result.is_err() {
+                    // Never retain a reader whose cursor/state failed mid-read.
+                    packages.remove(at);
+                }
+                result
+            })
+        })
+    }
+    fn read_member(
+        &self,
+        package: &mut msi::Package<AssetIo>,
+        file: &InstallerFile,
+        cx: &DecodeContext,
+    ) -> Result<Vec<u8>> {
+        {
             let stream = package.read_stream(&file.cabinet_stream)?;
             let mut cabinet = cab::Cabinet::new(stream)?;
             let mut reader = cabinet.read_file(&file.cabinet_key)?;
@@ -209,7 +254,7 @@ impl InstallerCatalog {
                 "MSI cabinet file size mismatch"
             );
             Ok(bytes)
-        })
+        }
     }
 }
 /// Shared `windows/msi` archive adapter. A CFB header is only a candidate;

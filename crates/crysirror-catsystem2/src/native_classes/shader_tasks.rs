@@ -3,7 +3,7 @@
 //! manager (67FE70). Scene transitions are the classes this title uses: rdraw (38, 5F8F50),
 //! rwipe (39, 5F9920), rwmos (50, 5FB110) and rfmos (51). Each fades the previous frame out
 //! under a z band; here they are shared screen transitions, which also cover what the
-//! original keeps above the band (see HANDOFF). A transition starts when the script hands over its
+//! original keeps above the band (see docs/native-api/catsystem2.md). A transition starts when the script hands over its
 //! parameters, the last point before the new picture is presented.
 //! wbreak (52) and the wave wipes (57, 58) use the same timing, but fade instead of their own
 //! mesh motion. blur (35) and mosaic (36) run until disabled, as `Paint::Backdrop` layers at their

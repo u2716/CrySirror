@@ -5533,12 +5533,15 @@ pub mod opcodes {
     /// | 2 | `archive` | string | Archive file path (relative to the game root or absolute). | any |
     ///
     /// Returns: i32: 1 when the archive cannot be opened; on success the target pushes the native address of size_out (nonzero, not 1).
+    /// The ModernFused x64 profile (1400EBDF0 -> 1400BA1C0) instead returns
+    /// status 0 on success, for both the size query and the directory copy.
     ///
     /// Scheduling: continue
     ///
     /// # Port
     ///
-    /// Audit status: deferred (ADR 0003). Deferred: the port enumerates user files by pattern and returns the entry count.
+    /// Port: the host enumerates an authorized indexed archive, preserving its
+    /// member order; VM memory receives the native byte-size/count protocol.
     pub const SYS81_ENUMERATE_RESOURCES: NativeOpcode = NativeOpcode {
         group: 0x81,
         id: 0x39,
@@ -9917,6 +9920,11 @@ pub mod opcodes {
     ///
     /// Set where the message caret is drawn.
     ///
+    /// Native profile variation: NSM 1.686.4 / Triple 1.687 additionally push
+    /// success 1, and reset mode to zero without changing coordinates when
+    /// its unsigned value exceeds four. Compatibility 1.72 does not identify
+    /// this variation: ESchool 1.653.3 retains the no-result ABI.
+    ///
     /// Globals dword_565B94 (mode), 565B98 (x), 565B9C (y). Mode 1 is an absolute position; other modes place the caret relative to the window/text.
     ///
     /// # ABI
@@ -11453,7 +11461,9 @@ pub mod opcodes {
     };
     /// `90:DD` — `Graph90_DD_SwapKnobInputMode`, BGI 1.622 handler `sub_4809D0`.
     ///
-    /// Set the global knob input mode and return the previous one.
+    /// Set the global Knob mouse-wheel gate and return the previous integer.
+    /// Zero routes the wheel to ordinary input; nonzero routes it to the first
+    /// watched Knob. This does not disable pointer capture or hit testing.
     ///
     /// Swaps dword_507204.
     ///
@@ -22521,12 +22531,6 @@ const THREAD_ID_PARAMETERS: &[NativeParameterSpec] = &[NativeParameterSpec {
     description: "Nonzero thread identifier searched recursively from the current root.",
 }];
 
-const FREE_PROGRAM_ABI_SLOT_PARAMETERS: &[NativeParameterSpec] = &[NativeParameterSpec {
-    name: "legacy_descriptor_slot",
-    kind: "ignored ABI slot",
-    description: "The recovered ABI descriptor reports one input, but target handler sub_488CD0 performs no pop and removes the current CThread tail module directly.",
-}];
-
 const WRITE_FILE_PARAMETERS: &[NativeParameterSpec] = &[
     NativeParameterSpec {
         name: "path",
@@ -30723,14 +30727,14 @@ const SYS81_39_PARAMETERS: &[NativeParameterSpec] = &[
         description: "Optional output buffer.",
     },
     NativeParameterSpec {
-        name: "required_bytes",
+        name: "size_out",
         kind: "pointer to u32",
-        description: "Receives packed byte count.",
+        description: "Receives packed byte count with null destination, member count otherwise.",
     },
     NativeParameterSpec {
-        name: "pattern",
-        kind: "Shift-JIS pattern",
-        description: "Archive/resource wildcard.",
+        name: "archive",
+        kind: "Shift-JIS path",
+        description: "Archive file whose directory is enumerated.",
     },
 ];
 
@@ -33527,9 +33531,9 @@ const DOCUMENTED_OPCODES: &[NativeOpcodeSpec] = &[
         opcode: opcodes::SYS81_ENUMERATE_RESOURCES,
         symbol: "Sys81_39_EnumerateResources",
         parameters: SYS81_39_PARAMETERS,
-        returns: "entry count/status",
+        returns: "size_out pointer on success, 1 when archive is unavailable",
         scheduling: NativeSchedulingEffect::Continue,
-        notes: "Target sub_467A60 enumerates matching archive/resource names into packed NUL strings.",
+        notes: "BGI 1.610.1 480E60 -> 45EAB0 and 1.622 48C8C0 -> 467FC0: pop archive, size_out, destination; enumerate its directory in archive order. Null destination measures packed CP932 NUL strings; otherwise write names and member count. Success returns size_out; unknown archive returns 1 without changing outputs.",
     },
     NativeOpcodeSpec {
         opcode: opcodes::SYS81_BROWSE_FOLDER,
@@ -34198,7 +34202,7 @@ const DOCUMENTED_OPCODES: &[NativeOpcodeSpec] = &[
     NativeOpcodeSpec {
         opcode: opcodes::SYS_FREE_LAST_PROGRAM_MODULE,
         symbol: "Sys80_41_FreeLastProgramModule",
-        parameters: FREE_PROGRAM_ABI_SLOT_PARAMETERS,
+        parameters: &[],
         returns: "remaining module count",
         scheduling: NativeSchedulingEffect::Continue,
         notes: "sub_488CD0 pops nothing. sub_444D80 unlinks the newest module record, rolls back the code-used end and pushes the remaining module count (the main program counts); with no record it pushes 0x80000001, and a remaining count of 0 is a fatal error.",
@@ -40185,6 +40189,7 @@ const PORTABLE_EQUIVALENT_OPCODES: &[NativeOpcode] = &[
     opcodes::SYS_FREE_LAST_PROGRAM_MODULE,
     opcodes::SYS_LOAD_PROGRAM_THREAD,
     opcodes::SYS81_CREATE_CHILD_THREAD,
+    opcodes::SYS81_ENUMERATE_RESOURCES,
 ];
 
 const PARTIAL_IMPLEMENTATION_OPCODES: &[NativeOpcode] = &[
@@ -40206,7 +40211,6 @@ const PARTIAL_IMPLEMENTATION_OPCODES: &[NativeOpcode] = &[
     opcodes::SYS_WRITE_WINDOWS_DIRECTORY,
     opcodes::GRAPH90_IMPORT_EXTERNAL_IMAGE,
     opcodes::GRAPH90_SAVE_BITMAP_TO_IMAGE_FILE,
-    opcodes::SYS81_ENUMERATE_RESOURCES,
     opcodes::SYS81_QUEUE_RESOURCE_SEEK,
     opcodes::SYS81_QUEUE_RESOURCE_READ,
     opcodes::SYS81_QUEUE_RESOURCE_CLOSE,
@@ -40332,6 +40336,9 @@ pub struct NativeProcedureCompletion {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeProcedureClass {
+    RegisterBitmap,
+    PlayMovieMf,
+    ExamineHealthOfFile,
     LoadSound,
     RegisterSound,
     EncodeData,
@@ -40351,6 +40358,9 @@ pub enum NativeProcedureClass {
 impl NativeProcedureClass {
     pub const fn target_class_name(self) -> &'static str {
         match self {
+            Self::RegisterBitmap => "DCProcRegisterBmp",
+            Self::PlayMovieMf => "DCProcPlayMovieByMF",
+            Self::ExamineHealthOfFile => "DCProcExamineHealthOfFile",
             Self::LoadSound => "CProcLoadSound",
             Self::RegisterSound => "DCProcRgstrSound",
             Self::EncodeData => "CProcEncodeData",

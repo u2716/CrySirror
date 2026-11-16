@@ -5,7 +5,7 @@
 //! and COLORADDSUB99 is 4B3CD0/4B3E70. CHARASEPIA127 follows CSepiaBlt.
 //! Native parameters, curves and save counters only. Immutable Image graphs
 //! perform clipping, saturated byte arithmetic and mask-weighted composition.
-use anyhow::{Result, ensure};
+use anyhow::{Context,Result, ensure};
 use crysirror_core::image_processing::{
     ImageCompositeLayer, ImageCompositeMath, ImageInput, ImageResource,
 };
@@ -16,6 +16,56 @@ use std::sync::Arc;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PictureEffectKind {
+    Animation{parameters:[i32;17]},
+    Hahen{parameters:[i32;18]},
+    BathWindow{parameters:[i32;9]},
+    Beach{parameters:[i32;15]},
+    Hanabira{parameters:[i32;24]},
+    Hotaru{parameters:[i32;20]},
+    HotaruNew{parameters:[i32;32]},
+    Flower{parameters:[i32;4]},
+    Snow{parameters:[i32;3],second:bool},
+    Cloud{parameters:[i32;16]},
+    Rain{parameters:[i32;8]},
+    Rain2{parameters:[i32;8],work:[i32;25]},
+    Rain4{parameters:[i32;9],distance:i32},
+    Hamon{parameters:[i32;32]},
+    CharaMetal{parameters:[i32;16]},
+    Komorebi{parameters:[i32;16]},
+    SunRays{parameters:[i32;3]},
+    SpeedLine{parameters:[i32;12]},
+    StaffRoll{parameters:[i32;16]},
+    Kagerou{parameters:[i32;17]},
+    Waterfall{parameters:[i32;8]},
+    Fish{parameters:[i32;176]},
+    Hae{parameters:[i32;144]},
+    Ke{parameters:[i32;144]},
+    Remember{parameters:[i32;224]},
+    GrassPlane{parameters:[i32;12]},
+    Taiyo{parameters:[i32;11]},
+    Perspective{parameters:[i32;16]},
+    Turn{parameters:[i32;36]},
+    TurnNew{parameters:[i32;36]},
+    FaceAnimation{parameters:[i32;15]},
+    MovieWarp{parameters:[i32;16]},
+    Soyosoyo{parameters:[i32;13]},
+    Slash{parameters:[i32;6]},
+    Kira{parameters:[i32;6]},
+    MaskWipe{command:i32,parameters:[i32;10]},
+    Circle{parameters:[i32;8],command:i32,active:bool},
+    Water{parameters:[i32;4]},
+    WaterDrop{parameters:[i32;3]},
+    Konoha{parameters:[i32;16]},
+    FullAnime{parameters:[i32;16]},
+    Geometry{parameters:crate::native_picture_geo::GeoParameters},
+    CharaMosaic{parameters:[i32;16]},
+    BossDeath{parameters:[i32;11]},
+    StoppedBoss{parameters:[i32;11]},
+    Zantetsu{parameters:[i32;13]},
+    SpecialMove{parameters:[i32;64]},
+    BankAnimation{parameters:[i32;17]},
+    TaClip{parameters:[i32;35]},
+    Change{parameters:[i32;8]},
     Rainbow{parameters:[i32;16]},
     Meisai{parameters:[i32;16]},
     Relief {parameters:[i32;16]},
@@ -118,6 +168,60 @@ pub struct PictureEffectState {
 }
 impl PictureEffectState {
     pub(crate) fn parse_for_canvas(command: i32, p: &[i32], canvas: [u32; 2]) -> Result<Self> {
+        if command==137 {return Self::parse(command,p);}
+        if command==81 {let parameters=crate::native_hahen::parameters(p,canvas);let state=Self{frames:parameters[0],count:0,parameter_frames:parameters[0],kind:PictureEffectKind::Hahen{parameters}};state.validate()?;return Ok(state);}
+        if command==97 {let parameters=crate::native_bath_window::parameters(p,canvas);let state=Self{frames:9999,count:0,parameter_frames:parameters[0],kind:PictureEffectKind::BathWindow{parameters}};state.validate()?;return Ok(state);}
+        if command==83 {let parameters=crate::native_beach::parameters(p,canvas);let state=Self{frames:parameters[0],count:0,parameter_frames:parameters[0],kind:PictureEffectKind::Beach{parameters}};state.validate()?;return Ok(state);}
+        if command==70 {let parameters=crate::native_hanabira::parameters(p);let state=Self{frames:parameters[0],count:0,parameter_frames:parameters[0],kind:PictureEffectKind::Hanabira{parameters}};state.validate()?;return Ok(state);}
+        if command==71 {let parameters=crate::native_hotaru::parameters(p,canvas);let state=Self{frames:parameters[0],count:0,parameter_frames:parameters[0],kind:PictureEffectKind::Hotaru{parameters}};state.validate()?;return Ok(state);}
+        if command==138 {let parameters=crate::native_hotaru_new::parameters(p,canvas);let state=Self{frames:parameters[0],count:0,parameter_frames:parameters[0],kind:PictureEffectKind::HotaruNew{parameters}};state.validate()?;return Ok(state);}
+        if command==12 {let parameters=crate::native_flower::parameters(p);return Ok(Self{frames:99999,count:0,parameter_frames:parameters[0],kind:PictureEffectKind::Flower{parameters}});}
+        if matches!(command,14|57) {let parameters=crate::native_snow::parameters(p);return Ok(Self{frames:parameters[0],count:0,parameter_frames:parameters[0],kind:PictureEffectKind::Snow{parameters,second:command==57}});}
+        if command==82 {let parameters=crate::native_cloud::parameters(p,canvas,0);let state=Self{frames:parameters[0],count:0,parameter_frames:parameters[0],kind:PictureEffectKind::Cloud{parameters}};state.validate()?;return Ok(state);}
+        if command==69 {let parameters=crate::native_hamon::parameters(p,canvas);let state=Self{frames:parameters[0],count:0,parameter_frames:parameters[0],kind:PictureEffectKind::Hamon{parameters}};state.validate()?;return Ok(state);}
+        if command==80 {let parameters=crate::native_staff_roll::parameters(p,canvas);let state=Self{frames:parameters[0],count:0,parameter_frames:parameters[0],kind:PictureEffectKind::StaffRoll{parameters}};state.validate()?;return Ok(state);}
+        if command==85 {let parameters=crate::native_speed_line::parameters(p,canvas);let state=Self{frames:parameters[0],count:0,parameter_frames:parameters[0],kind:PictureEffectKind::SpeedLine{parameters}};state.validate()?;return Ok(state);}
+        if command==102 {let parameters=crate::native_rain4::parameters(p,canvas);return Ok(Self{frames:parameters[0],count:0,parameter_frames:parameters[0],kind:PictureEffectKind::Rain4{parameters,distance:0}});}
+        if command==42 {let parameters=crate::native_kira::parameters(p,canvas);return Ok(Self{frames:99999,count:0,parameter_frames:parameters[0],kind:PictureEffectKind::Kira{parameters}});}
+        if command==28 {let parameters=crate::native_picture_circle::parameters(p,canvas);return Ok(Self{frames:parameters[0],count:0,parameter_frames:parameters[0],kind:PictureEffectKind::Circle{parameters,command:28,active:true}});}
+        if command==105 {let parameters=crate::native_picture_movie_warp::parameters(p,canvas);let state=Self{frames:parameters[0],count:0,parameter_frames:parameters[0],kind:PictureEffectKind::MovieWarp{parameters}};state.validate()?;return Ok(state);}
+        if command==67 {let parameters=crate::native_picture_pers::parameters(p,canvas);let state=Self{frames:parameters[0],count:0,parameter_frames:parameters[0],kind:PictureEffectKind::Perspective{parameters}};state.validate()?;return Ok(state);}
+        if command==51 {let parameters=crate::native_taiyo::parameters(p,canvas);let state=Self{frames:parameters[0],count:0,parameter_frames:parameters[0],kind:PictureEffectKind::Taiyo{parameters}};state.validate()?;return Ok(state);}
+        if command==93 {let parameters=crate::native_grass_plane::parameters(p,canvas);let state=Self{frames:parameters[0],count:0,parameter_frames:parameters[0],kind:PictureEffectKind::GrassPlane{parameters}};state.validate()?;return Ok(state);}
+        if command==111 {
+            let parameters=crate::native_picture_fish::parameters(p,canvas);
+            let state=Self{frames:parameters[0],count:0,parameter_frames:parameters[0],kind:PictureEffectKind::Fish{parameters}};state.validate()?;return Ok(state);
+        }
+        if command==22 {
+            let parameters=crate::native_kagerou::parameters(p,canvas);
+            let state=Self{frames:parameters[0],count:0,parameter_frames:parameters[0],kind:PictureEffectKind::Kagerou{parameters}};
+            state.validate()?;return Ok(state);
+        }
+        if command==24 {
+            let parameters=crate::native_water::parameters(p,canvas[1]);
+            let state=Self{frames:99999,count:0,parameter_frames:parameters[0],kind:PictureEffectKind::Water{parameters}};
+            state.validate()?;return Ok(state);
+        }
+        if command==104 {
+            let parameters=crate::native_picture_konoha::parameters(p,canvas);
+            let state=Self{frames:parameters[0],count:0,parameter_frames:parameters[0],kind:PictureEffectKind::Konoha{parameters}};
+            state.validate()?;return Ok(state);
+        }
+        if matches!(command,87|88|89|114|115|116|117|118) {
+            let parameters=crate::native_picture_geo::GeoParameters::parse(command,p,canvas)?;
+            let state=Self{frames:parameters.frames(),count:0,parameter_frames:parameters.parameter0(),kind:PictureEffectKind::Geometry{parameters}};
+            state.validate()?;return Ok(state);
+        }
+        if command==139 {
+            let parameters=crate::native_picture_chara_mosaic::parameters(p,canvas);
+            let state=Self{frames:parameters[0],count:0,parameter_frames:parameters[0],kind:PictureEffectKind::CharaMosaic{parameters}};
+            state.validate()?;return Ok(state);
+        }
+        if command==86 {
+            let parameters=crate::native_picture_zantetsu::parameters(p,canvas);
+            let state=Self{frames:parameters[0],count:0,parameter_frames:parameters[0],kind:PictureEffectKind::Zantetsu{parameters}};
+            state.validate()?;return Ok(state);
+        }
         if command==55 {
             let parameters=crate::native_picture_old_film::parameters(p,canvas)?;
             let state=Self{frames:9999,count:0,parameter_frames:parameters[0],kind:PictureEffectKind::OldFilm{parameters}};
@@ -200,8 +304,47 @@ impl PictureEffectState {
         Ok(state)
     }
     pub fn parse(command: i32, p: &[i32]) -> Result<Self> {
+        if command==137 {let parameters=crate::native_animation::parameters(p,0,0);let state=Self{frames:parameters[0],count:0,parameter_frames:parameters[0],kind:PictureEffectKind::Animation{parameters}};state.validate()?;return Ok(state);}
         let get = |i: usize, default| p.get(i).copied().unwrap_or(default);
+        if matches!(command,81|97|70|71|83|138|12|14|57|24|104|87|88|89|114|115|116|117|118){return Self::parse_for_canvas(command,p,[800,600]);}
         let (kind, frames) = match command {
+            82=>{let parameters=crate::native_cloud::parameters(p,[800,600],0);(PictureEffectKind::Cloud{parameters},parameters[0])},
+            69=>{let parameters=crate::native_hamon::parameters(p,[800,600]);(PictureEffectKind::Hamon{parameters},parameters[0])},
+            112=>{let parameters=crate::native_chara_metal::parameters(p);(PictureEffectKind::CharaMetal{parameters},parameters[0])},
+            78=>{let parameters=crate::native_komorebi::parameters(p);(PictureEffectKind::Komorebi{parameters},parameters[0])},
+            15=>{let parameters=crate::native_sun_rays::parameters(p);(PictureEffectKind::SunRays{parameters},parameters[0])},
+            80=>{let parameters=crate::native_staff_roll::parameters(p,[800,600]);(PictureEffectKind::StaffRoll{parameters},parameters[0])},
+            85=>{let parameters=crate::native_speed_line::parameters(p,[800,600]);(PictureEffectKind::SpeedLine{parameters},parameters[0])},
+            102=>{let parameters=crate::native_rain4::parameters(p,[800,600]);(PictureEffectKind::Rain4{parameters,distance:0},parameters[0])},
+            42=>{let parameters=crate::native_kira::parameters(p,[800,600]);(PictureEffectKind::Kira{parameters},99999)},
+            76=>{let parameters=crate::native_picture_slash::parameters(p);(PictureEffectKind::Slash{parameters},parameters[0])},
+            28=>{let parameters=crate::native_picture_circle::parameters(p,[800,600]);(PictureEffectKind::Circle{parameters,command:28,active:true},parameters[0])},
+            60|101=>{let parameters=crate::native_picture_mask_wipe::parameters(command,p)?;(PictureEffectKind::MaskWipe{command,parameters},parameters[0])},
+            92=>{let parameters=crate::native_picture_soyosoyo::parameters(p);(PictureEffectKind::Soyosoyo{parameters},parameters[0])},
+            105=>{let parameters=crate::native_picture_movie_warp::parameters(p,[800,600]);(PictureEffectKind::MovieWarp{parameters},parameters[0])},
+            98=>{let parameters=crate::native_picture_face_animation::parameters(p);(PictureEffectKind::FaceAnimation{parameters},9999)},
+            64=>{let parameters=crate::native_picture_turn::parameters(p);(PictureEffectKind::Turn{parameters},parameters[0])},
+            140=>{let parameters=crate::native_picture_turn_new::parameters(p);(PictureEffectKind::TurnNew{parameters},parameters[0])},
+            67=>{let parameters=crate::native_picture_pers::parameters(p,[800,600]);(PictureEffectKind::Perspective{parameters},parameters[0])},
+            51=>{let parameters=crate::native_taiyo::parameters(p,[800,600]);(PictureEffectKind::Taiyo{parameters},parameters[0])},
+            93=>{let parameters=crate::native_grass_plane::parameters(p,[800,600]);(PictureEffectKind::GrassPlane{parameters},parameters[0])},
+            26=>(PictureEffectKind::Remember{parameters:[0;224]},99999),
+            27=>{let parameters=crate::native_picture_ke::parameters(p);(PictureEffectKind::Ke{parameters},parameters[0])},
+            108=>{let parameters=crate::native_picture_hae::parameters(p);(PictureEffectKind::Hae{parameters},parameters[0])},
+            111=>{let parameters=crate::native_picture_fish::parameters(p,[800,600]);(PictureEffectKind::Fish{parameters},parameters[0])},
+            91=>{let parameters=crate::native_waterfall::parameters(p);(PictureEffectKind::Waterfall{parameters},parameters[0])},
+            22=>{let parameters=crate::native_kagerou::parameters(p,[800,600]);(PictureEffectKind::Kagerou{parameters},parameters[0])},
+            56=>{let parameters=crate::native_rain2::parameters(p);let work=crate::native_rain2::work(&parameters);(PictureEffectKind::Rain2{parameters,work},parameters[0])},
+            13=>{let parameters=crate::native_rain::parameters(p);(PictureEffectKind::Rain{parameters},parameters[0])},
+            95=>{let parameters=crate::native_picture_water_drop::parameters(p);(PictureEffectKind::WaterDrop{parameters},9999)},
+            79=>{let parameters=crate::native_full_anime::parameters(p);(PictureEffectKind::FullAnime{parameters},parameters[0])},
+            139=>{let parameters=crate::native_picture_chara_mosaic::parameters(p,[800,600]);(PictureEffectKind::CharaMosaic{parameters},parameters[0])},
+            48=>{let parameters=crate::native_picture_boss_death::parameters(p);(PictureEffectKind::BossDeath{parameters},parameters[0])},
+            86=>{let parameters=crate::native_picture_zantetsu::parameters(p,[800,600]);(PictureEffectKind::Zantetsu{parameters},parameters[0])},
+            61=>{let parameters=crate::native_picture_special_move::parameters(p);(PictureEffectKind::SpecialMove{parameters},parameters[0])},
+            19=>{let parameters=crate::native_picture_bank_animation::parameters(p);(PictureEffectKind::BankAnimation{parameters},parameters[0])},
+            136=>{let parameters=crate::native_picture_ta_clip::parameters(p);(PictureEffectKind::TaClip{parameters},parameters[0])},
+            40=>{let parameters=crate::native_picture_change::parameters(p).ok_or_else(||anyhow::anyhow!("NNN CHANGE requires two parameters"))?;(PictureEffectKind::Change{parameters},parameters[0])},
             72=>{let parameters=crate::native_picture_meisai::parameters(p);(PictureEffectKind::Meisai{parameters},parameters[0])}
             96=>{let parameters=crate::native_picture_rainbow::parameters(p);(PictureEffectKind::Rainbow{parameters},parameters[0])}
             33=>{let parameters=crate::native_picture_releaf::parameters(p);(PictureEffectKind::Relief{parameters},parameters[0])}
@@ -368,6 +511,55 @@ impl PictureEffectState {
     }
     pub fn command(&self) -> i32 {
         match self.kind {
+            PictureEffectKind::Rain{..}=>13,
+            PictureEffectKind::Rain2{..}=>56,
+            PictureEffectKind::Kagerou{..}=>22,
+            PictureEffectKind::Waterfall{..}=>91,
+            PictureEffectKind::Fish{..}=>111,
+            PictureEffectKind::Hae{..}=>108,
+            PictureEffectKind::Ke{..}=>27,
+            PictureEffectKind::Remember{..}=>26,
+            PictureEffectKind::GrassPlane{..}=>93,
+            PictureEffectKind::Taiyo{..}=>51,
+            PictureEffectKind::Perspective{..}=>67,
+            PictureEffectKind::Turn{..}=>64,
+            PictureEffectKind::TurnNew{..}=>140,
+            PictureEffectKind::FaceAnimation{..}=>98,
+            PictureEffectKind::MovieWarp{..}=>105,
+            PictureEffectKind::Soyosoyo{..}=>92,
+            PictureEffectKind::Slash{..}=>76,
+            PictureEffectKind::Kira{..}=>42,
+            PictureEffectKind::Rain4{..}=>102,
+            PictureEffectKind::Animation{..}=>137,
+            PictureEffectKind::Hahen{..}=>81,
+            PictureEffectKind::BathWindow{..}=>97,
+            PictureEffectKind::Beach{..}=>83,
+            PictureEffectKind::Hanabira{..}=>70,
+            PictureEffectKind::Hotaru{..}=>71,
+            PictureEffectKind::HotaruNew{..}=>138,
+            PictureEffectKind::Flower{..}=>12,
+            PictureEffectKind::Snow{second,..}=>if second {57}else{14},
+            PictureEffectKind::Cloud{..}=>82,
+            PictureEffectKind::Hamon{..}=>69,
+            PictureEffectKind::CharaMetal{..}=>112,
+            PictureEffectKind::Komorebi{..}=>78,
+            PictureEffectKind::SunRays{..}=>15,
+            PictureEffectKind::StaffRoll{..}=>80,
+            PictureEffectKind::SpeedLine{..}=>85,
+            PictureEffectKind::MaskWipe{command,..}|PictureEffectKind::Circle{command,..}=>command,
+            PictureEffectKind::Water{..}=>24,
+            PictureEffectKind::WaterDrop{..}=>95,
+            PictureEffectKind::Konoha{..}=>104,
+            PictureEffectKind::FullAnime{..}=>79,
+            PictureEffectKind::Geometry{ref parameters}=>parameters.command(),
+            PictureEffectKind::CharaMosaic{..}=>139,
+            PictureEffectKind::BossDeath{..}=>48,
+            PictureEffectKind::StoppedBoss{..}=>0,
+            PictureEffectKind::Zantetsu{..}=>86,
+            PictureEffectKind::SpecialMove{..}=>61,
+            PictureEffectKind::BankAnimation{..}=>19,
+            PictureEffectKind::TaClip{..}=>136,
+            PictureEffectKind::Change{..}=>40,
             PictureEffectKind::Rainbow{..}=>96,
             PictureEffectKind::Meisai{..}=>72,
             PictureEffectKind::Relief{..}=>33,
@@ -420,6 +612,43 @@ impl PictureEffectState {
     }
     pub fn validate(&self) -> Result<()> {
         match self.kind {
+            PictureEffectKind::Animation{parameters}=>crate::native_animation::validate(&parameters)?,
+            PictureEffectKind::Hahen{parameters}=>crate::native_hahen::validate(&parameters,self.frames)?,
+            PictureEffectKind::BathWindow{parameters}=>crate::native_bath_window::validate(&parameters)?,
+            PictureEffectKind::Beach{parameters}=>crate::native_beach::validate(&parameters)?,
+            PictureEffectKind::Hanabira{parameters}=>crate::native_hanabira::validate(&parameters)?,
+            PictureEffectKind::Hotaru{parameters}=>crate::native_hotaru::validate(&parameters)?,
+            PictureEffectKind::HotaruNew{parameters}=>crate::native_hotaru_new::validate(&parameters)?,
+            PictureEffectKind::Flower{..}|PictureEffectKind::Snow{..}=>(),
+            PictureEffectKind::Cloud{parameters}=>crate::native_cloud::validate(&parameters)?,
+            PictureEffectKind::Hamon{parameters}=>crate::native_hamon::validate(&parameters)?,
+            PictureEffectKind::CharaMetal{parameters}=>crate::native_chara_metal::validate(&parameters)?,
+            PictureEffectKind::Komorebi{parameters}=>crate::native_komorebi::validate(&parameters)?,
+            PictureEffectKind::SunRays{..}=>(),
+            PictureEffectKind::StaffRoll{parameters}=>crate::native_staff_roll::validate(&parameters)?,
+            PictureEffectKind::SpeedLine{parameters}=>crate::native_speed_line::validate(&parameters)?,
+            PictureEffectKind::Hae{parameters}|PictureEffectKind::Ke{parameters}=>crate::native_picture_hae::validate(&parameters)?,
+            PictureEffectKind::MovieWarp{parameters}=>crate::native_picture_movie_warp::validate(&parameters,self.frames)?,
+            PictureEffectKind::Slash{parameters}=>crate::native_picture_slash::validate(&parameters,self.frames)?,
+            PictureEffectKind::MaskWipe{command,parameters}=>crate::native_picture_mask_wipe::validate(command,&parameters,self.frames)?,
+            PictureEffectKind::FaceAnimation{parameters}=>crate::native_picture_face_animation::validate(&parameters)?,
+            PictureEffectKind::Turn{parameters}=>crate::native_picture_turn::validate(&parameters,self.frames)?,
+            PictureEffectKind::TurnNew{parameters}=>crate::native_picture_turn_new::validate(&parameters,self.frames)?,
+            PictureEffectKind::Perspective{parameters}=>crate::native_picture_pers::validate(&parameters)?,
+            PictureEffectKind::Taiyo{parameters}=>crate::native_taiyo::validate(&parameters)?,
+            PictureEffectKind::GrassPlane{parameters}=>crate::native_grass_plane::validate(&parameters)?,
+            PictureEffectKind::Fish{parameters}=>crate::native_picture_fish::validate(&parameters)?,
+            PictureEffectKind::Rain2{parameters,..}=>crate::native_rain2::validate(&parameters)?,
+            PictureEffectKind::Kagerou{parameters}=>ensure!(parameters[1]>=0&&parameters[2]>=0&&parameters[1]<=16384&&parameters[2]<=16384,"NNN KAGEROU native rows"),
+            PictureEffectKind::Konoha{parameters}=>crate::native_picture_konoha::validate(&parameters)?,
+            PictureEffectKind::Geometry{ref parameters}=>parameters.validate(self.frames)?,
+            PictureEffectKind::CharaMosaic{parameters}=>crate::native_picture_chara_mosaic::validate(&parameters)?,
+            PictureEffectKind::BossDeath{parameters}=>crate::native_picture_boss_death::validate(&parameters,self.frames)?,
+            PictureEffectKind::Zantetsu{parameters}=>crate::native_picture_zantetsu::validate(&parameters,self.frames)?,
+            PictureEffectKind::SpecialMove{parameters}=>crate::native_picture_special_move::validate(&parameters)?,
+            PictureEffectKind::BankAnimation{parameters}=>crate::native_picture_bank_animation::validate(&parameters,self.frames)?,
+            PictureEffectKind::TaClip{parameters}=>crate::native_picture_ta_clip::validate(&parameters,self.frames)?,
+            PictureEffectKind::Change{parameters}=>crate::native_picture_change::validate(&parameters,self.frames)?,
             PictureEffectKind::Rainbow{parameters}=>crate::native_picture_rainbow::validate(&parameters,self.frames)?,
             PictureEffectKind::Meisai{parameters}=>crate::native_picture_meisai::validate(&parameters,self.frames)?,
             PictureEffectKind::Relief{parameters}=>crate::native_picture_releaf::validate(&parameters,self.frames)?,
@@ -519,6 +748,52 @@ impl PictureEffectState {
     }
     pub fn parameters(&self) -> Vec<i32> {
         match self.kind {
+            PictureEffectKind::Kagerou{parameters}=>parameters.to_vec(),
+            PictureEffectKind::Waterfall{parameters}=>parameters.to_vec(),
+            PictureEffectKind::Fish{parameters}=>parameters.to_vec(),
+            PictureEffectKind::Hae{parameters}|PictureEffectKind::Ke{parameters}=>parameters.to_vec(),
+            PictureEffectKind::Remember{parameters}=>parameters.to_vec(),
+            PictureEffectKind::GrassPlane{parameters}=>parameters.to_vec(),
+            PictureEffectKind::Taiyo{parameters}=>parameters.to_vec(),
+            PictureEffectKind::Perspective{parameters}=>parameters.to_vec(),
+            PictureEffectKind::Turn{parameters}|PictureEffectKind::TurnNew{parameters}=>parameters.to_vec(),
+            PictureEffectKind::FaceAnimation{parameters}=>parameters.to_vec(),
+            PictureEffectKind::MovieWarp{parameters}=>parameters.to_vec(),
+            PictureEffectKind::Soyosoyo{parameters}=>parameters.to_vec(),
+            PictureEffectKind::Slash{parameters}|PictureEffectKind::Kira{parameters}=>parameters.to_vec(),
+            PictureEffectKind::MaskWipe{parameters,..}=>parameters.to_vec(),
+            PictureEffectKind::Circle{parameters,..}=>parameters.to_vec(),
+            PictureEffectKind::Rain{parameters}=>parameters.to_vec(),
+            PictureEffectKind::Rain2{parameters,..}=>parameters.to_vec(),
+            PictureEffectKind::Rain4{parameters,..}=>parameters.to_vec(),
+            PictureEffectKind::Animation{parameters}=>parameters.to_vec(),
+            PictureEffectKind::Hahen{parameters}=>parameters.to_vec(),
+            PictureEffectKind::BathWindow{parameters}=>parameters.to_vec(),
+            PictureEffectKind::Beach{parameters}=>parameters.to_vec(),
+            PictureEffectKind::Hanabira{parameters}=>parameters.to_vec(),
+            PictureEffectKind::Hotaru{parameters}=>parameters.to_vec(),
+            PictureEffectKind::HotaruNew{parameters}=>parameters.to_vec(),
+            PictureEffectKind::Flower{parameters}=>parameters.to_vec(),
+            PictureEffectKind::Snow{parameters,..}=>parameters.to_vec(),
+            PictureEffectKind::Cloud{parameters}=>parameters.to_vec(),
+            PictureEffectKind::Hamon{parameters}=>parameters.to_vec(),
+            PictureEffectKind::CharaMetal{parameters}=>parameters.to_vec(),
+            PictureEffectKind::Komorebi{parameters}=>parameters.to_vec(),
+            PictureEffectKind::SunRays{parameters}=>parameters.to_vec(),
+            PictureEffectKind::StaffRoll{parameters}=>parameters.to_vec(),
+            PictureEffectKind::SpeedLine{parameters}=>parameters.to_vec(),
+            PictureEffectKind::Water{parameters}=>parameters.to_vec(),
+            PictureEffectKind::WaterDrop{parameters}=>parameters.to_vec(),
+            PictureEffectKind::Konoha{parameters}=>parameters.to_vec(),
+            PictureEffectKind::FullAnime{parameters}=>parameters.to_vec(),
+            PictureEffectKind::Geometry{ref parameters}=>parameters.parameters(),
+            PictureEffectKind::CharaMosaic{parameters}=>parameters.to_vec(),
+            PictureEffectKind::BossDeath{parameters}|PictureEffectKind::StoppedBoss{parameters}=>parameters.to_vec(),
+            PictureEffectKind::Zantetsu{parameters}=>parameters.to_vec(),
+            PictureEffectKind::SpecialMove{parameters}=>parameters.to_vec(),
+            PictureEffectKind::BankAnimation{parameters}=>parameters.to_vec(),
+            PictureEffectKind::TaClip{parameters}=>parameters.to_vec(),
+            PictureEffectKind::Change{parameters}=>parameters.to_vec(),
             PictureEffectKind::Rainbow{parameters}|PictureEffectKind::Meisai{parameters}=>parameters.to_vec(),
             PictureEffectKind::Relief{parameters}|PictureEffectKind::CharaBlur{parameters}|PictureEffectKind::BackgroundBlur{parameters}=>parameters.to_vec(),
             PictureEffectKind::OldFilm{parameters}=>parameters.to_vec(),
@@ -609,11 +884,14 @@ impl PictureEffectState {
             }
         }
     }
+    pub(crate) fn inactive(&self)->bool {matches!(self.kind,PictureEffectKind::StoppedBoss{..}|PictureEffectKind::Circle{active:false,..})}
     pub fn count_up(&mut self, steps: u32) {
+        if self.inactive(){return;}
         // These CountIsMax methods never change command/flag (90 returns FALSE).
         if self.count < self.frames {
             self.count = self.count.wrapping_add(steps as i32).min(self.frames);
         }
+        if self.count>=self.frames {if let PictureEffectKind::Animation{parameters}=self.kind{crate::native_animation::count_is_max(&parameters,&mut self.count,self.frames);}}
     }
     /// Native GetPicture clamps its bank index. The legacy profile uses the
     /// configured picture-bank bound; invalid GetDstPoint indices formerly
@@ -628,6 +906,12 @@ impl PictureEffectState {
     }
     pub fn uses_mask(&self, background: bool) -> bool {
         match self.kind {
+            PictureEffectKind::Rain{..}|PictureEffectKind::Kagerou{..}|PictureEffectKind::Remember{..}|PictureEffectKind::Taiyo{..}=>!background,
+            PictureEffectKind::Rain2{..}|PictureEffectKind::Waterfall{..}|PictureEffectKind::Fish{..}|PictureEffectKind::Hae{..}|PictureEffectKind::Ke{..}=>true,
+            PictureEffectKind::Animation{..}|PictureEffectKind::Hahen{..}|PictureEffectKind::BathWindow{..}|PictureEffectKind::Beach{..}|PictureEffectKind::Hanabira{..}|PictureEffectKind::Hotaru{..}|PictureEffectKind::HotaruNew{..}|PictureEffectKind::Flower{..}|PictureEffectKind::Snow{..}|PictureEffectKind::Cloud{..}|PictureEffectKind::Hamon{..}|PictureEffectKind::CharaMetal{..}|PictureEffectKind::Komorebi{..}|PictureEffectKind::SunRays{..}|PictureEffectKind::StaffRoll{..}|PictureEffectKind::SpeedLine{..}|PictureEffectKind::Rain4{..}|PictureEffectKind::Kira{..}|PictureEffectKind::Slash{..}|PictureEffectKind::Circle{..}|PictureEffectKind::MaskWipe{..}|PictureEffectKind::Soyosoyo{..}|PictureEffectKind::MovieWarp{..}|PictureEffectKind::FaceAnimation{..}|PictureEffectKind::Turn{..}|PictureEffectKind::TurnNew{..}|PictureEffectKind::Perspective{..}|PictureEffectKind::GrassPlane{..}|PictureEffectKind::Water{..}|PictureEffectKind::WaterDrop{..}|PictureEffectKind::FullAnime{..}|PictureEffectKind::BankAnimation{..}|PictureEffectKind::Change{..}=>false,
+            PictureEffectKind::Geometry{..}=>!background,
+            PictureEffectKind::Konoha{..}|PictureEffectKind::CharaMosaic{..}|PictureEffectKind::BossDeath{..}|PictureEffectKind::Zantetsu{..}|PictureEffectKind::StoppedBoss{..}=>true,
+            PictureEffectKind::TaClip{..}|PictureEffectKind::SpecialMove{..}=>true,
             PictureEffectKind::Rainbow{..}|PictureEffectKind::Meisai{..}=>true,
             PictureEffectKind::Relief{..}|PictureEffectKind::OldFilm{..}|PictureEffectKind::BackgroundBlur{..}=>false,
             PictureEffectKind::CharaBlur{..}=>true,
@@ -668,13 +952,24 @@ impl PictureEffectState {
 
 #[derive(Clone)]
 pub struct PictureEffectFrame {
+    pub(crate) bath_class:Option<Arc<crate::native_bath_window::BathWindowClass>>,
+    pub(crate) bath_update:Option<crate::native_bath_window::Update>,
+    pub(crate) bath_mouse:[i32;2],
+    pub(crate) bank:crate::native_picture_bank::FramePictureBank,
+    pub(crate) bank_limit:i32,
     pub slot: i32,
     pub state: PictureEffectState,
     pub source: Option<Arc<dyn ImageResource>>,
     pub rectangles: crate::native_geometry::NativeRects,
     pub canvas: [u32; 2],
     pub has_mask: bool,
+    pub(crate) source_uses_mask: bool,
     pub(crate) source_clip: Option<[i32;4]>,
+    pub(crate) voice_speaking:bool,
+    pub(crate) speed_line_class:Option<Arc<crate::native_speed_line::SpeedLineClass>>,
+    pub(crate) rain_class:Option<Arc<crate::native_rain::RainClass>>,
+    pub(crate) grass_class:Option<Arc<crate::native_grass_plane::GrassClass>>,
+    pub(crate) taiyo_class:Option<Arc<crate::native_taiyo::TaiyoClass>>,
     pub(crate) rainbow_palette:Option<Arc<crate::native_picture_rainbow::RainbowPalette>>,
     pub(crate) second_clip: Option<[i32;4]>,
     pub(crate) motion_background: bool,
@@ -744,6 +1039,31 @@ impl PictureEffectFrame {
         }
     }
     pub fn calcu(&mut self, random: &mut PatternRng) -> Result<()> {
+        if self.state.inactive(){return Ok(());}
+        // Source CalcuOnly snapshots c before invoking the class hook. KONOHA
+        // can reset EFFECT.count while ordinary XY still uses the old snapshot.
+        let common_count=self.state.count;
+        if let PictureEffectKind::Rain4{parameters,distance}=&mut self.state.kind {crate::native_rain4::calcu(parameters,distance);}
+        if let PictureEffectKind::Soyosoyo{parameters}=&mut self.state.kind{crate::native_picture_soyosoyo::calcu(parameters,&mut self.state.count);}
+        if let PictureEffectKind::FaceAnimation{parameters}=&mut self.state.kind{crate::native_picture_face_animation::calcu(parameters,&mut self.state.count,random)?;}
+        if matches!(self.state.kind,PictureEffectKind::Taiyo{..})&&self.state.count>self.state.frames{self.state.count=self.state.frames;}
+        if let PictureEffectKind::Kagerou{parameters}=&self.state.kind{crate::native_kagerou::calcu(parameters,&mut self.state.count);}
+        if let PictureEffectKind::Hae{parameters}=&mut self.state.kind{crate::native_picture_hae::calcu(parameters,&mut self.state.count,self.canvas,random)?;}
+        if let PictureEffectKind::Ke{parameters}=&mut self.state.kind{crate::native_picture_ke::calcu(parameters,&mut self.state.count,self.canvas,random)?;}
+        if let PictureEffectKind::Fish{parameters}=&mut self.state.kind{crate::native_picture_fish::calcu(parameters,&mut self.state.count,random)?;}
+        if let PictureEffectKind::Waterfall{parameters}=&self.state.kind{
+            let slot=crate::native_waterfall::slot(parameters,self.slot,self.bank_limit);
+            let height=self.bank.picture(slot).map(|p|p.picture.raw.size()[1]).unwrap_or(1);
+            crate::native_waterfall::calcu(parameters,&mut self.state.count,height);
+        }
+        if let PictureEffectKind::Rain2{parameters,work}=&mut self.state.kind {
+            let size=self.bank.picture(self.slot).map(|p|p.picture.raw.size()).unwrap_or([1,1]);
+            crate::native_rain2::calcu(parameters,work,size,self.canvas,random)?;
+        }
+        if let PictureEffectKind::Konoha{parameters}=&self.state.kind {crate::native_picture_konoha::calcu(parameters,&mut self.state.count);}
+        if let PictureEffectKind::BankAnimation{parameters}=&self.state.kind {
+            crate::native_picture_bank_animation::calcu(parameters,&mut self.state.count);
+        }
         if let PictureEffectKind::Koma {parameters}= &self.state.kind {
             crate::native_picture_koma::calcu(parameters,&mut self.state.count);
         }
@@ -775,6 +1095,7 @@ impl PictureEffectFrame {
             }
         }
         let mut geometry = self.geometry();
+        if matches!(self.state.kind,PictureEffectKind::Konoha{..}|PictureEffectKind::Kagerou{..}|PictureEffectKind::Waterfall{..}|PictureEffectKind::Fish{..}|PictureEffectKind::Hae{..}|PictureEffectKind::Ke{..}|PictureEffectKind::Taiyo{..}|PictureEffectKind::FaceAnimation{..}|PictureEffectKind::Soyosoyo{..}) {geometry.count=common_count;}
         geometry.calcu(self.geometry_assigned);
         self.rectangles = geometry.rectangles;
         if let Some(normal) = self.normal.as_mut() {
@@ -786,6 +1107,7 @@ impl PictureEffectFrame {
         &mut self,
         rectangles: &std::collections::BTreeMap<i32, crate::native_move::NativeMoveState>,
     ) {
+        if matches!(self.state.kind,PictureEffectKind::Hahen{..}|PictureEffectKind::BathWindow{..}|PictureEffectKind::Hanabira{..}|PictureEffectKind::HotaruNew{..}|PictureEffectKind::Cloud{..}|PictureEffectKind::BankAnimation{..}|PictureEffectKind::Change{..}|PictureEffectKind::FaceAnimation{..}|PictureEffectKind::Komorebi{..}|PictureEffectKind::Hamon{..}){self.bank.resolve(rectangles);}
         if let Some(state) = rectangles.get(&self.first_slot) {
             self.first_destination = [
                 state.rectangles.destination[0],
@@ -805,6 +1127,61 @@ impl PictureEffectFrame {
         random: &mut PatternRng,
     ) -> Result<Option<ImageInput>> {
         match self.state.kind {
+            PictureEffectKind::Circle{parameters,command,..}=>return match command {
+                0=>Ok(None),
+                54=>Ok(Some(ImageInput::Solid{size:self.canvas,color:[parameters[1] as u8,parameters[2] as u8,parameters[3] as u8,255]})),
+                _=>Ok(Some(crate::native_picture_circle::image_input(&parameters,self.state.count,self.state.frames,self.canvas,base)?)),
+            },
+            PictureEffectKind::Hahen{..}|PictureEffectKind::BathWindow{..}|PictureEffectKind::Beach{..}|PictureEffectKind::Hanabira{..}|PictureEffectKind::Hotaru{..}|PictureEffectKind::HotaruNew{..}|PictureEffectKind::Flower{..}|PictureEffectKind::Snow{..}=>anyhow::bail!("NNN particle effects require their constructor-owned class state"),
+            PictureEffectKind::Animation{..}=>anyhow::bail!("NNN ANIMATION requires its class-wide retained file/cache transaction"),
+            PictureEffectKind::Cloud{..}=>anyhow::bail!("NNN CLOUD requires the class-wide ordered Print clock"),
+            PictureEffectKind::Hamon{..}=>anyhow::bail!("NNN HAMON requires its retained field/capture owner"),
+            PictureEffectKind::CharaMetal{parameters}=>return crate::native_chara_metal::image_input(self,&parameters,base,random),
+            PictureEffectKind::Komorebi{parameters}=>return crate::native_komorebi::image_input(self,&parameters,base,random),
+            PictureEffectKind::SunRays{..}=>anyhow::bail!("NNN SAN requires its global ordered Print/RNG owner"),
+            PictureEffectKind::StaffRoll{..}=>unreachable!("STAFFROLL owns retained page I/O in NativeFrameWork"),
+            PictureEffectKind::SpeedLine{parameters}=>{
+                let class=self.speed_line_class.as_ref().context("NNN SPEEDLINE painter class absent")?;
+                let spec=class.plan(&parameters)?;
+                if spec.spans.is_empty(){return Ok(None);}
+                return Ok(Some(ImageInput::Process{input:Box::new(base),effects:serde_json::to_vec(&[ImageEffect::StoredGradientSpans{spec}])?.into()}));
+            }
+            PictureEffectKind::Rain4{parameters,distance}=>return crate::native_rain4::image_input(self,&parameters,distance,base),
+            PictureEffectKind::Slash{parameters}=>return crate::native_picture_slash::image_input(self,&parameters,base,random),
+            PictureEffectKind::Soyosoyo{parameters}=>return crate::native_picture_soyosoyo::image_input(self,&parameters,base),
+            PictureEffectKind::MovieWarp{parameters}=>return crate::native_picture_movie_warp::image_input(self,&parameters,base,random),
+            PictureEffectKind::FaceAnimation{parameters}=>return crate::native_picture_face_animation::image_input(self,&parameters,self.voice_speaking,base),
+            PictureEffectKind::Turn{parameters}=>return crate::native_picture_turn::image_input(self,&parameters,base,random),
+            PictureEffectKind::TurnNew{parameters}=>return crate::native_picture_turn_new::image_input(self,&parameters,base,random),
+            PictureEffectKind::Perspective{parameters}=>return crate::native_picture_pers::image_input(self,&parameters,base),
+            PictureEffectKind::Taiyo{..}=>anyhow::bail!("NNN TAIYO requires its class-global Print/RNG transaction"),
+            PictureEffectKind::GrassPlane{..}=>anyhow::bail!("NNN GRASSPLANE requires its class-global Calcu/Print transaction"),
+            PictureEffectKind::Remember{..}=>anyhow::bail!("NNN REMEMBER requires its class-global Print transaction"),
+            PictureEffectKind::Hae{parameters}|PictureEffectKind::Ke{parameters}=>return crate::native_picture_hae::image_input(self,&parameters,base),
+            PictureEffectKind::Fish{parameters}=>return crate::native_picture_fish::image_input(self,&parameters,base),
+            PictureEffectKind::Waterfall{parameters}=>return crate::native_waterfall::image_input(self,&parameters,base),
+            PictureEffectKind::Kagerou{parameters}=>return Ok(Some(crate::native_kagerou::image_input(&parameters,self.state.count,self.canvas,base)?)),
+            PictureEffectKind::WaterDrop{parameters}=>return Ok(Some(crate::native_picture_water_drop::image_input(parameters,self.canvas))),
+            PictureEffectKind::Rain{..}|PictureEffectKind::Rain2{..}|PictureEffectKind::Water{..}|PictureEffectKind::Konoha{..}=>anyhow::bail!("NNN screen/sprite effect requires its ordered frame transaction"),
+            PictureEffectKind::FullAnime{..}=>anyhow::bail!("NNN FULLANIME requires its asynchronous file/image transaction"),
+            PictureEffectKind::Geometry{ref parameters}=>return parameters.image_input(self,base,random),
+            PictureEffectKind::CharaMosaic{..}=>anyhow::bail!("NNN CHARAMOZAIC requires a sampled image/RNG transaction"),
+            PictureEffectKind::StoppedBoss{..}=>return Ok(None),
+            PictureEffectKind::BossDeath{parameters}=>{
+                let picture=self.bank.picture(self.slot).map(|p|crate::native_picture_boss_death::Picture {
+                    raw:p.picture.raw.clone(),keyed:p.picture.keyed.clone(),has_mask:p.picture.has_mask,source_clip:p.picture.source_clip,
+                });
+                return crate::native_picture_boss_death::image_input(&parameters,self.state.count,self.state.frames,self.canvas,self.geometry_assigned,picture.as_ref(),[self.rectangles.destination[0],self.rectangles.destination[1]],base,random);
+            },
+            PictureEffectKind::Zantetsu{parameters}=>return crate::native_picture_zantetsu::image_input(self,&parameters,base,random),
+            PictureEffectKind::SpecialMove{..}=>anyhow::bail!("NNN SPECIALMOVE requires a Print-state candidate"),
+            PictureEffectKind::BankAnimation{parameters}=>{
+                let slot=crate::native_picture_bank_animation::picture_slot(&parameters,self.state.count);
+                let picture=self.bank.animation_picture(slot);
+                return crate::native_picture_bank_animation::image_input(&parameters,self.state.count,self.state.frames,base,picture.as_ref(),random);
+            },
+            PictureEffectKind::TaClip{parameters}=>return crate::native_picture_ta_clip::image_input(self,&parameters,base,random),
+            PictureEffectKind::Change{parameters}=>return crate::native_picture_change::image_input(self,&parameters,base,random),
             PictureEffectKind::Rainbow{..}|PictureEffectKind::Meisai{..}=>return self.masked_special_input(base,random),
             PictureEffectKind::Relief{parameters}=>{
                 let spec=crate::native_picture_releaf::spec(&parameters,self.state.count,self.state.frames,self.canvas,random)?;
@@ -1023,6 +1400,8 @@ impl PictureEffectFrame {
         // Native helpers return before curve evaluation if no picture exists.
         let (effects, weight) = match self.state.kind {
             PictureEffectKind::Rainbow{..}|PictureEffectKind::Meisai{..}|PictureEffectKind::Relief{..}|PictureEffectKind::OldFilm{..}|PictureEffectKind::CharaBlur{..}|PictureEffectKind::BackgroundBlur{..}=>unreachable!(),
+            PictureEffectKind::Soyosoyo{..}|PictureEffectKind::MovieWarp{..}|PictureEffectKind::FaceAnimation{..}|PictureEffectKind::Turn{..}|PictureEffectKind::TurnNew{..}|PictureEffectKind::Perspective{..}|PictureEffectKind::Taiyo{..}|PictureEffectKind::GrassPlane{..}|PictureEffectKind::Remember{..}|PictureEffectKind::Hae{..}|PictureEffectKind::Ke{..}|PictureEffectKind::Fish{..}|PictureEffectKind::Waterfall{..}|PictureEffectKind::Kagerou{..}|PictureEffectKind::Rain{..}|PictureEffectKind::Rain2{..}|PictureEffectKind::Water{..}|PictureEffectKind::WaterDrop{..}|PictureEffectKind::Konoha{..}|PictureEffectKind::FullAnime{..}|PictureEffectKind::Geometry{..}|PictureEffectKind::CharaMosaic{..}|PictureEffectKind::BossDeath{..}|PictureEffectKind::StoppedBoss{..}|PictureEffectKind::Zantetsu{..}=>unreachable!(),
+            PictureEffectKind::SpecialMove{..}|PictureEffectKind::BankAnimation{..}|PictureEffectKind::TaClip{..}|PictureEffectKind::Change{..}=>unreachable!(),
             PictureEffectKind::DualMask{..}|PictureEffectKind::MaskAppear{..}|PictureEffectKind::Sentence{..}|PictureEffectKind::StretchBlit{..}|PictureEffectKind::ClipZoom{..}=>unreachable!(),
             PictureEffectKind::Koma { .. } | PictureEffectKind::Ghost { .. } => unreachable!(),
             PictureEffectKind::Noise { .. } => unreachable!(),
@@ -1044,6 +1423,9 @@ impl PictureEffectFrame {
             PictureEffectKind::ScreenLight { .. } => unreachable!(),
             PictureEffectKind::AddSubtract { .. } => unreachable!(),
             PictureEffectKind::Stretch { .. } => unreachable!(),
+            PictureEffectKind::Animation{..}|PictureEffectKind::Hahen{..}|PictureEffectKind::BathWindow{..}|PictureEffectKind::Beach{..}|PictureEffectKind::Hanabira{..}|PictureEffectKind::Hotaru{..}|PictureEffectKind::HotaruNew{..}|PictureEffectKind::Flower{..}|PictureEffectKind::Snow{..}|PictureEffectKind::Cloud{..}|PictureEffectKind::Hamon{..}|PictureEffectKind::CharaMetal{..}|PictureEffectKind::Komorebi{..}|PictureEffectKind::SunRays{..}|PictureEffectKind::StaffRoll{..}|PictureEffectKind::SpeedLine{..}|PictureEffectKind::Rain4{..}|PictureEffectKind::Circle{..}|PictureEffectKind::Slash{..}=>unreachable!(),
+            PictureEffectKind::Kira{..}=>anyhow::bail!("NNN KIRA requires ordered class Print transaction"),
+            PictureEffectKind::MaskWipe{..}=>anyhow::bail!("NNN mask wipe requires ordered capture transaction"),
             PictureEffectKind::Buffered { .. } => {
                 anyhow::bail!("NNN buffered effect requires its ordered frame transaction")
             }

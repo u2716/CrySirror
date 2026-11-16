@@ -1,0 +1,4 @@
+interface:
+  display_name: "CrySirror Engine Semantics"
+  short_description: "Map native ABI and opcodes before changing shared APIs"
+  default_prompt: "Use $crysirror-engine-semantics to maintain this engine's ABI, opcode and syscall contracts, document them and assess capability and API compatibility."

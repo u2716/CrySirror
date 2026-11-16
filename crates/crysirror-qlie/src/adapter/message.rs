@@ -16,6 +16,8 @@ pub(super) fn native_glyph_style(flags: i32, aa: i32, color: i32) -> Result<Posi
     );
     let color = color as u32;
     Ok(PositionedGlyphStyle {
+        underline:false,
+        strikeout:false,
         bold: flags & 1 != 0,
         raster: match aa {
             0 => GlyphCoverageQuality::Binary { threshold: 128 },
@@ -384,11 +386,8 @@ fn markup(
                 // shifted right to start at zero, keeping its width.
                 message.cursor.position[0] = message.cursor.position[0].max(0);
                 message.cursor.position[1] += style.ruby_position[1] - style.ruby_size[1];
-                // The shared layout cursor is nonnegative; ruby may extend
-                // above the baseline by a semantic offset applied to its glyphs.
-                let offset = message.cursor.position[1].min(0);
-                message.cursor.position[1] -= offset;
-                let first = message.glyphs.len();
+                // Shared cell layout retains signed origins, including ruby
+                // and inline pictures above the message's top edge.
                 message.style.size = style.ruby_size;
                 message.style.font = style
                     .ruby_font
@@ -401,9 +400,6 @@ fn markup(
                 message.style.pitch = style.ruby_pitch;
                 message.style.color = style.ruby_color;
                 glyphs(h, message, &args[2])?;
-                for g in &mut message.glyphs[first..] {
-                    g.baseline[1] += offset as f32;
-                }
                 message.style = style;
                 message.cursor = after;
             }

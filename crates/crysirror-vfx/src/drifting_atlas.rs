@@ -40,6 +40,10 @@ pub struct DriftingAtlasSpec {
     #[serde(default)]
     /// Optional biased respawn area; updates preserve live particle attributes.
     pub spawn_window: Option<DriftSpawnWindow>,
+    /// Streak cell `[width, height step, row base]`: rows are
+    /// `step * (row + base)` texels tall at x = 8*row. Absent is `[2, 24, 1]`.
+    #[serde(default)]
+    pub streak_cell: Option<[u32; 3]>,
 }
 impl DriftingAtlasSpec {
     pub fn validate(&self) -> Result<()> {
@@ -54,10 +58,18 @@ impl DriftingAtlasSpec {
             "drifting atlas geometry/clock"
         );
         match self.motion {
-            DriftMotion::Streak => ensure!(
-                self.texture_extent[0] >= 18 && self.texture_extent[1] >= 72,
-                "streak atlas extent"
-            ),
+            DriftMotion::Streak => {
+                let [width, step, base] = self.streak_cell.unwrap_or([2, 24, 1]);
+                ensure!(
+                    width > 0
+                        && width <= 64
+                        && step <= 4096
+                        && base <= 1
+                        && self.texture_extent[0] >= 16 + width
+                        && self.texture_extent[1] >= step * (2 + base),
+                    "streak atlas extent"
+                )
+            }
             DriftMotion::Buoyant | DriftMotion::FallingGlow | DriftMotion::RisingGlow => ensure!(
                 self.texture_extent[0] >= 252 && self.texture_extent[1] >= (self.depth + 2) * 28,
                 "buoyant atlas extent"
@@ -235,7 +247,10 @@ impl CompiledDriftingAtlas {
     }
     fn cell(&self, state: &DriftingAtlasState) -> [u32; 2] {
         match self.spec.motion {
-            DriftMotion::Streak => [2, 24 * (state.row + 1)],
+            DriftMotion::Streak => {
+                let [width, step, base] = self.spec.streak_cell.unwrap_or([2, 24, 1]);
+                [width, step * (state.row + base)]
+            }
             _ => [28, 28],
         }
     }

@@ -17,6 +17,13 @@ use crysirror_text::grid::{CellCursor, CellLayoutOptions, layout_cells};
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, sync::Arc};
 mod background;
+/// Shared window composition used by Config's PrintMessageWindowDirect.
+pub(crate) fn window_composite_input(
+    background: Arc<dyn crysirror_core::image_processing::ImageResource>,
+    windows: &[MessageWindow],
+) -> Result<crysirror_core::image_processing::ImageInput> {
+    background::composite_input(background, windows)
+}
 mod cutin;
 pub use cutin::CutinPolicy;
 mod draw;

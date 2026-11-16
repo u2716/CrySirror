@@ -50,6 +50,18 @@ mod movie;
 mod system;
 mod text;
 mod visual;
+mod dc2;
+mod dc2_bitmap;
+mod dc2_weather;
+mod dc2_text;
+mod dc2_audio;
+mod dc2_voice;
+mod dc2_audio_files;
+mod dc2_background;
+mod dc3;
+mod dc3_music;
+mod dc3_original_screen;
+mod dc1;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -58,8 +70,36 @@ pub struct Config {
     pub script: String,
     /// Licensed project font alias; no fonts or user game files are embedded.
     pub font: String,
+    ///Portable installed-game hosts validate mounted resources instead of
+    ///recreating the reviewed original Windows installation/licence dialog.
+    #[serde(default)]
+    pub installation_policy: InstallationPolicy,
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum InstallationPolicy {
+    #[default]
+    OriginalWindows,
+    MountedResources,
 }
 impl Config {
+    ///Validate the native execution selector and ordinary resource config
+    ///together, identically for installed-game launch and factory creation.
+    ///No older MES is silently redirected through the DC4PH interpreter.
+    pub fn from_execution_value(mut value:Value)->Result<(crate::Profile,Self)> {
+        let abi=value.as_object_mut().context("Circus configuration object")?.remove("abi");
+        let profile=match abi.as_ref().and_then(Value::as_str) {
+            None if abi.is_none()=>crate::Profile::Dc4PlusHarmony,
+            Some("dc4ph-abb6")=>crate::Profile::Dc4PlusHarmony,
+            Some("dc3wy-a09f")=>crate::Profile::Dc3WithYou,
+            Some("dc3-8a71")=>crate::Profile::Dc3,
+            Some("dc2pc-5769")=>crate::Profile::Dc2PlusCommunication,
+            _=>bail!("unsupported explicit Circus execution ABI"),
+        };
+        let config:Self=serde_json::from_value(value)?;config.validate()?;
+        ensure!(config.installation_policy==InstallationPolicy::OriginalWindows || matches!(profile,crate::Profile::Dc2PlusCommunication|crate::Profile::Dc3WithYou|crate::Profile::Dc3),"Circus mounted-resource installation policy is reviewed only for DC2PC and DC3WY");
+        Ok((profile,config))
+    }
     pub fn validate(&self) -> Result<()> {
         scene_path(&self.script)?;
         ensure!(
@@ -80,10 +120,23 @@ impl VmFactory for Factory {
             spec.program.is_empty(),
             "Circus executes native MES, not data-VM actions"
         );
-        Ok(Box::new(CircusVm::new(
-            client,
-            serde_json::from_value(spec.config.clone())?,
-        )?))
+        // First-generation DC.EXE (#SYS_SET System.MES + #ADV_TXT scenarios)
+        // is not a MES ABI; its owner is selected explicitly, never inferred.
+        if spec.config.get("abi").and_then(Value::as_str)==Some("dc1-advtxt") {
+            let mut value=spec.config.clone();
+            value.as_object_mut().context("Circus configuration object")?.remove("abi");
+            let config:Config=serde_json::from_value(value)?;
+            config.validate()?;
+            return Ok(Box::new(dc1::Dc1Vm::new(client,config)?));
+        }
+        let (profile,config)=Config::from_execution_value(spec.config.clone())?;
+        match profile {
+            crate::Profile::Dc4PlusHarmony=>Ok(Box::new(CircusVm::new(client,config)?)),
+            crate::Profile::Dc3WithYou=>Ok(Box::new(dc3::Dc3Vm::new(client,config)?)),
+            crate::Profile::Dc3=>Ok(Box::new(dc3::Dc3Vm::new_original(client,config)?)),
+            crate::Profile::Dc2PlusCommunication=>Ok(Box::new(dc2::Dc2Vm::new(client,config)?)),
+            _=>bail!("unsupported Circus native execution profile"),
+        }
     }
 }
 #[cfg(feature = "runtime")]
@@ -95,32 +148,46 @@ pub fn register(registry: &mut AdapterRegistry) -> Result<()> {
 enum Work {
     Scene(String),
     Image(String),
+    Dc2Background(String),
+    Dc2ScaledImage(String, i16, bool, Option<String>),
     Cursor(String),
     Names,
     Audio(String, bool),
     ProfileLoad,
     ProfileSave(profile::ProfileData),
     SystemLoad,
+    Dc3SystemLoad,
+    ProfilePreferences(crate::Profile),
     SystemReload,
     SystemSave(Vec<u8>),
+    ProfileSystemSave(crate::Profile,Vec<u8>),
     MusicLoops,
     CommentMetadata,
     ResourceMetadata,
     PackedOpen(String),
     PackedFrame(String,u32),
     SaveProbe(u16),
+    ProfileSlotReadable(crate::Profile,u16),
+    ProfileSlotFull(crate::Profile,u16,u32),
+    ProfileSlotWrite(crate::Profile,u16,Vec<u8>),
+    ProfileSlotRead(crate::Profile,u16),
 }
 enum Prepared {
     Scene(Arc<Program>),
-    Image(ImageSurface, [u32; 2]),
+    ///Padded surface, logical extent, CRXG canvas origin.
+    Image(ImageSurface, [u32; 2], [i32; 2]),
     Cursor(CursorImage),
     Names(crate::names::Names),
+    Dc2Names(crate::dc2_names::Names,crate::names::Names),
     Audio(Arc<[u8]>, Option<Arc<dyn Archive>>),
     Profile(profile::ProfileData),
     ProfileSaved,
     System(crate::settings::SystemData),
+    Dc3System(crate::dc3_settings::SystemData),
+    ProfilePreferences(Option<Vec<u8>>),
     SystemReload(crate::machine::SystemReload),
     SystemSaved,
+    SlotBytes(Option<Vec<u8>>),
     MusicLoops(audio::AudioMetadata),
     CommentMetadata(Vec<String>),
     ResourceMetadata(Vec<(String,String)>),
@@ -134,6 +201,16 @@ struct Loading {
 }
 #[derive(Default)]
 struct Services {
+    installation_policy: InstallationPolicy,
+    canvas: Option<[u32;2]>,
+    native_profile: Option<crate::Profile>,
+    dc2_bitmap:dc2_bitmap::Bitmap,
+    dc2_weather:dc2_weather::Weather,
+    dc2_text:dc2_text::Text,
+    dc2_audio:dc2_audio::DirectAudio,
+    dc3_music:dc3_music::Music,
+    dc3_original:dc3_original_screen::Screen,
+    sound_finish_select: bool,
     window_image_alpha:u8,
     window_image_native_alpha:f32,
     window_alpha_layers:BTreeSet<u32>,
@@ -179,13 +256,18 @@ struct Services {
     scenes: BTreeMap<String, Arc<Program>>,
     images: BTreeMap<u8, UploadedImage>,
     image_extents: BTreeMap<u8, [u32; 2]>,
+    ///CRXG origins of the uploaded slot images (see images::load_profile_image_origin).
+    image_origins: BTreeMap<u8, [i32; 2]>,
     image_names: BTreeMap<u8, String>,
+    ///Slots holding a DC2 41BCE0 rescale of `image_names` (percent, nearest).
+    image_scales: BTreeMap<u8, (i16, bool, Option<String>)>,
     ui_ids: BTreeMap<u8, Vec<u32>>,
     layer_ids: BTreeMap<u8, Vec<u32>>,
     palette: BTreeMap<u8, [u8; 3]>,
     positions: BTreeMap<u8, [i16; 2]>,
     sprite_scales: BTreeMap<u8, (i16, [i16; 2])>,
     names: Option<crate::names::Names>,
+    dc2_names: Option<Arc<crate::dc2_names::Names>>,
     voice_archive: Option<Arc<dyn Archive>>,
     audio: Option<(u32, String, u64)>,
     music_loops: Option<BTreeMap<String, [u64; 2]>>,
@@ -226,6 +308,8 @@ struct Services {
     scoped_menus:BTreeMap<u8,menu::NativeMenu>,
     menu_images: BTreeMap<String, Arc<dyn crysirror_core::image_processing::ImageResource>>,
     menu_image_job: Option<(String, crysirror_core::image_processing::ImageJob)>,
+    ///DC3WY 43C5B0/41E360(1)/43DE10 scene capture into a texture slot.
+    screen_capture: Option<(u8, crysirror_core::image_processing::ImageJob)>,
 }
 const SCENE_ROOT: u32 = 0x3400_0000;
 const COLOUR_ROOT: u32 = 0x3400_0001;
@@ -270,6 +354,9 @@ fn image_path(name: &str) -> Result<VfsPath> {
 }
 impl Services {
     fn prepare(&mut self, work: Work, client: ClientId) -> Result<Option<Prepared>> {
+        if std::env::var_os("CIRCUS_TRACE").is_some() {
+            eprintln!("circus prepare {:?} pending={:?}", work, self.loading.as_ref().map(|l| &l.work));
+        }
         if let Some(job) = self.loading.as_ref() {
             ensure!(
                 job.work == work,
@@ -280,7 +367,11 @@ impl Services {
                 Err(TryRecvError::Disconnected) => bail!("Circus resource worker disconnected"),
                 Ok(value) => {
                     self.loading = None;
-                    return value.map(Some).map_err(anyhow::Error::msg);
+                    let prepared=value.map_err(anyhow::Error::msg)?;
+                    return Ok(Some(match prepared {
+                        Prepared::Dc2Names(native,names)=>{self.dc2_names=Some(Arc::new(native));Prepared::Names(names)},
+                        prepared=>prepared,
+                    }));
                 }
             }
         }
@@ -290,6 +381,7 @@ impl Services {
             .context("Circus storage not initialized")?
             .clone();
         let archive = self.voice_archive.clone();
+        let native_profile=self.native_profile;
         let packed_context=matches!(&work,Work::PackedOpen(_)).then(||self.packed.decode_context(client));
         let packed_frame=if let Work::PackedFrame(name,_)=&work{Some(self.packed.archives.get(name).cloned().context("Circus packed resource capability missing")?)}else{None};
         let (sender, receiver) = mpsc::sync_channel(1);
@@ -298,6 +390,7 @@ impl Services {
             .name("circus-native-resource".into())
             .spawn(move || {
                 let result = (|| -> Result<Prepared> {
+                    let dc2_background = matches!(&task, Work::Dc2Background(_));
                     match task {
                         Work::PackedOpen(name)=>Ok(Prepared::Packed(packed::open_pack_with_context(storage.as_ref(),packed_context.as_ref().context("Circus packed resource budget owner")?,&name)?)),
                         Work::PackedFrame(_,index)=>{
@@ -324,12 +417,90 @@ impl Services {
                             crysirror_resource::read_exact_at(reader.as_ref(), 0, &mut block)?;
                             Ok(Prepared::SaveReadable(true))
                         }
+                        Work::ProfileSlotReadable(profile,slot)=>{
+                            ensure!(profile==crate::Profile::Dc3WithYou,"Circus original slot open profile");
+                            let path=VfsPath::new(Mount::Save,&format!("DC3WY{slot:02}.dat"))?;
+                            let readable=match storage.metadata(Mount::Save,path.relative())? {
+                                Some(metadata) if !metadata.is_directory=>{drop(storage.open_read(&path)?);true},
+                                _=>false,
+                            };
+                            Ok(Prepared::SaveReadable(readable))
+                        }
+                        Work::ProfileSlotFull(profile,slot,bytes)=>{
+                            ensure!(profile==crate::Profile::Dc3WithYou,"Circus original slot read profile");
+                            let path=VfsPath::new(Mount::Save,&format!("DC3WY{slot:02}.dat"))?;
+                            let full=match storage.metadata(Mount::Save,path.relative())? {
+                                Some(metadata) if !metadata.is_directory=>storage.open_read(&path)?.len()?>=u64::from(bytes),
+                                _=>false,
+                            };
+                            Ok(Prepared::SaveReadable(full))
+                        }
+                        Work::ProfileSlotRead(profile,slot)=>{
+                            ensure!(profile==crate::Profile::Dc3WithYou,"Circus original slot read profile");
+                            let path=VfsPath::new(Mount::Save,&format!("DC3WY{slot:02}.dat"))?;
+                            let bytes=match storage.metadata(Mount::Save,path.relative())? {
+                                Some(metadata) if !metadata.is_directory=>Some(storage.read(&path)?),
+                                _=>None,
+                            };
+                            Ok(Prepared::SlotBytes(bytes))
+                        }
+                        Work::ProfileSlotWrite(profile,slot,bytes)=>{
+                            ensure!(profile==crate::Profile::Dc3WithYou,"Circus original slot write profile");
+                            crate::dc3::slot::Slot::try_from(bytes.clone())?;
+                            storage.write_atomic(&VfsPath::new(Mount::Save,&format!("DC3WY{slot:02}.dat"))?,&bytes)?;
+                            Ok(Prepared::SystemSaved)
+                        }
                         Work::Scene(name) => {
                             let data = storage.read(&scene_path(&name)?)?;
-                            Ok(Prepared::Scene(Arc::new(Program::parse(&data)?)))
+                            let program = Program::parse(&data)?;
+                            //D.C.III runs on the DC3WY interpreter through the
+                            //reviewed opcode translation (dc3_original).
+                            let program = if program.profile == crate::Profile::Dc3 { program.into_dc3wy()? } else { program };
+                            Ok(Prepared::Scene(Arc::new(program)))
                         }
-                        Work::Image(name) => {
-                            let decoded = images::load_image(storage.as_ref(), client, &name)?;
+                        Work::Dc2ScaledImage(name, percent, nearest, expression) => {
+                            //41BCE0 -> 4045B0 (RGB24 FF00FF keyed / ARGB32) or
+                            //41A950 -> 40D7C0; both produce percent*extent/100.
+                            //41BFE0 scales the expression by the portrait's
+                            //A241B8 before 40BB40; a draw-time stretch applies
+                            //to the stamped bitmap.
+                            const KEY: [u8; 3] = [255, 0, 255];
+                            let load = |name: &str| -> Result<(ImageSurface, Option<[u8; 3]>)> {
+                                let alpha = dc2_background::validate(storage.as_ref(), name)?;
+                                let image = images::load_profile_image(storage.as_ref(), client, name, native_profile)?;
+                                Ok((image, (!alpha).then_some(KEY)))
+                            };
+                            let (mut base, base_key) = load(&name)?;
+                            let expression = expression.as_deref().map(load).transpose()?;
+                            let size_of = |image: &ImageSurface| -> Result<[u32; 2]> {
+                                let size = [image.width, image.height].map(|v| i64::from(percent) * i64::from(v) / 100);
+                                ensure!(size.iter().all(|v| (1..=16384).contains(v)), "DC2 scaled portrait extent");
+                                Ok(size.map(|v| v as u32))
+                            };
+                            let area = percent != 100 && !nearest;
+                            if area {
+                                base = crysirror_image::overlap_resample::overlap_resample(&base, size_of(&base)?, base_key)?;
+                            }
+                            if let Some((mut stamp, stamp_key)) = expression {
+                                if area {
+                                    stamp = crysirror_image::overlap_resample::overlap_resample(&stamp, size_of(&stamp)?, stamp_key)?;
+                                }
+                                crysirror_image::keyed_over::keyed_over(&mut base, base_key, &stamp, stamp_key, [0, 0])?;
+                            }
+                            if percent != 100 && nearest {
+                                base = crysirror_image::overlap_resample::stepped_nearest(&base, size_of(&base)?)?;
+                            }
+                            let size = [base.width, base.height];
+                            let extent = size.map(|v| v.max(2).next_power_of_two());
+                            let surface = crysirror_image::padding::pad_to_extent(&base, extent, [0; 4])?;
+                            Ok(Prepared::Image(surface, size, [0, 0]))
+                        }
+                        Work::Image(name) | Work::Dc2Background(name) => {
+                            if dc2_background {
+                                ensure!(!dc2_background::validate(storage.as_ref(), &name)?,
+                                    "DC2 native background slot with ARGB32 CRXG is not reviewed");
+                            }
+                            let (decoded, origin) = images::load_profile_image_origin(storage.as_ref(), client, &name, native_profile)?;
                             let logical = [decoded.width, decoded.height];
                             // Native 44C130/44BFB0 + 44A590 allocate backing
                             // textures with independently rounded POT sides.
@@ -339,7 +510,7 @@ impl Services {
                             ];
                             let surface =
                                 crysirror_image::padding::pad_to_extent(&decoded, extent, [0; 4])?;
-                            Ok(Prepared::Image(surface, logical))
+                            Ok(Prepared::Image(surface, logical, origin))
                         }
                         Work::Cursor(name) => {
                             let path =
@@ -348,6 +519,13 @@ impl Services {
                             Ok(Prepared::Cursor(crysirror_image::cursor::decode_cursor(
                                 &data,
                             )?))
+                        }
+                        Work::Names if native_profile==Some(crate::Profile::Dc2PlusCommunication)=>{
+                            let path=VfsPath::new(Mount::Asset,"DAT/names.dat")?;
+                            let data=crysirror_resource::read_all(storage.open_read(&path)?.as_ref(),1024*1024)?;
+                            let native=crate::dc2_names::Names::parse(&data)?;
+                            let names=native.semantic_names()?;
+                            Ok(Prepared::Dc2Names(native,names))
                         }
                         Work::Names => {
                             let data = storage
@@ -386,6 +564,17 @@ impl Services {
                             settings.names()?;
                             Ok(Prepared::System(settings))
                         }
+                        Work::Dc3SystemLoad => {
+                            Ok(Prepared::Dc3System(dc3::read_system(storage.as_ref())?.unwrap_or_default()))
+                        }
+                        Work::ProfilePreferences(profile) => {
+                            let bytes=match profile {
+                                crate::Profile::Dc3WithYou=>dc3::read_system(storage.as_ref())?.map(Vec::from),
+                                crate::Profile::Dc2PlusCommunication=>dc2::read_system(storage.as_ref())?.map(Vec::from),
+                                _=>bail!("Circus preference read profile is not implemented"),
+                            };
+                            Ok(Prepared::ProfilePreferences(bytes))
+                        }
                         Work::SystemReload => {
                             let path = VfsPath::new(Mount::Save, "system.dat")?;
                             let loaded =
@@ -409,11 +598,24 @@ impl Services {
                                 .write_atomic(&VfsPath::new(Mount::Save, "system.dat")?, &bytes)?;
                             Ok(Prepared::SystemSaved)
                         }
+                        Work::ProfileSystemSave(profile,bytes) => {
+                            match profile {
+                                crate::Profile::Dc3WithYou => {crate::dc3_settings::SystemData::try_from(bytes.clone())?;}
+                                crate::Profile::Dc2PlusCommunication => {crate::dc2_settings::SystemData::try_from(bytes.clone())?;}
+                                crate::Profile::Dc4PlusHarmony => {crate::settings::SystemData::try_from(bytes.clone())?;}
+                                _=>bail!("Circus original preference profile {profile:?} is not implemented"),
+                            }
+                            storage.write_atomic(&VfsPath::new(Mount::Save,"system.dat")?,&bytes)?;
+                            Ok(Prepared::SystemSaved)
+                        }
                         Work::ResourceMetadata=>Ok(Prepared::ResourceMetadata(resource::load_resource_metadata(storage.as_ref())?)),
                         Work::CommentMetadata=>Ok(Prepared::CommentMetadata(comments::load_comment_metadata(storage.as_ref())?)),
                         Work::MusicLoops => Ok(Prepared::MusicLoops(audio::load_music_loops(
                             storage.as_ref(),
                         )?)),
+                        Work::Audio(name, _) if native_profile == Some(crate::Profile::Dc2PlusCommunication) => {
+                            dc2_audio_files::prepare(storage.clone(), client, archive, &name)
+                        }
                         Work::Audio(name, true) => {
                             let native = name.replace('\\', "/");
                             ensure!(
@@ -464,6 +666,9 @@ impl Services {
                         }
                     }
                 })();
+                if std::env::var_os("CIRCUS_TRACE").is_some() {
+                    eprintln!("circus worker done: {}", match &result { Ok(_) => "ok".to_string(), Err(e) => format!("{e:#}") });
+                }
                 let _ = sender.send(result.map_err(|e| format!("{e:#}")));
             })?;
         self.loading = Some(Loading { work, receiver });
@@ -478,6 +683,7 @@ struct Bridge<'a> {
     input: InputFrame,
 }
 impl Bridge<'_> {
+    fn native_canvas(&self)->[u32;2] {self.services.canvas.unwrap_or([1280,720])}
     fn native_frame(&mut self) -> Result<()> {
         let now = self.host.now_ms();
         if self.services.frame_at == Some(now) && !self.services.native_force_admission {
@@ -555,7 +761,8 @@ impl Bridge<'_> {
     }
     fn root(&mut self) -> Result<()> {
         if !self.services.scene_root {
-            self.submit(vec![json!({"op":"put","layer":{"id":SCENE_ROOT,"rect":[0,0,1280,720],"paint":{"kind":"solid","color":[0,0,0,255]},"order":[0,0]}})],vec![])?;
+            let [width,height]=self.native_canvas();
+            self.submit(vec![json!({"op":"put","layer":{"id":SCENE_ROOT,"rect":[0,0,width,height],"paint":{"kind":"solid","color":[0,0,0,255]},"order":[0,0]}})],vec![])?;
             self.services.scene_root = true;
         }
         Ok(())
@@ -719,6 +926,17 @@ impl Bridge<'_> {
     }
 }
 impl NativeHost for Bridge<'_> {
+    fn direct_audio(&mut self,request:&crate::dc2_audio::Request)->Result<bool>{self.dc2_direct_audio(request)}
+    fn dc2_weather(&mut self,frame:Option<&crate::dc2::WeatherFrame>)->Result<bool>{self.dc2_weather_frame(frame)}
+    fn dc2_text(&mut self,frame:Option<&crate::dc2::TextFrame>)->Result<bool>{self.dc2_text_frame(frame)}
+    fn direct_audio_gain(&mut self,channel:u32,gain_db100:i32)->Result<()>{
+        ensure!((-10000..=0).contains(&gain_db100),"DC2 native channel gain");
+        self.host.submit_audio(self.client,AudioRequest::SetGain{channel,gain:10f32.powf(gain_db100 as f32/2000.),fade_ms:0.})?;
+        Ok(())
+    }
+    fn dc2_music(&mut self,id:u16)->Result<Option<crate::dc2_audio::MusicLookup>>{self.dc2_music_lookup(id)}
+    fn dc2_sound(&mut self,id:u16)->Result<Option<crate::dc2_audio::MusicLookup>>{self.dc2_sound_lookup(id)}
+    fn bitmap_stage(&mut self,request:&crate::dc2_bitmap::Request)->Result<bool>{self.dc2_bitmap(request)}
     fn effect_states(&mut self)->Result<Vec<crate::machine::effect_ops::StageSample>>{self.effect_frame_samples()}
     fn effect_control(&mut self,request:&crate::machine::effect_ops::EffectRequest)->Result<bool>{self.native_effect_control(request)}
     fn visual(&mut self, request: &crate::machine::visual_ops::VisualRequest) -> Result<bool> {
@@ -823,6 +1041,7 @@ impl NativeHost for Bridge<'_> {
         Ok(self.process_menu_fallback()?.or(panel))
     }
     fn take_panel_scroll_changed(&mut self)->bool {Bridge::take_panel_scroll_changed(self)}
+    fn menu_free_release(&mut self)->bool {self.take_menu_free_release()}
     fn menu_bindings(&self)->Vec<(i16,i16)> {self.menu_value_bindings()}
     fn sync_menu_values(&mut self,values:&[crate::machine::MenuValue])->Result<()> {self.sync_native_menu_values(values)}
     fn take_menu_values(&mut self)->Vec<crate::machine::MenuValue> {self.take_native_menu_values()}
@@ -847,6 +1066,18 @@ impl NativeHost for Bridge<'_> {
     fn random(&mut self, modulus: u16) -> Result<Option<i32>> {
         self.native_random(modulus)
     }
+    fn random_batch(&mut self, f: &mut dyn FnMut(&mut dyn FnMut() -> Result<i32>) -> Result<()>) -> Result<bool> {
+        if !self.effects_ready()? {
+            return Ok(false);
+        }
+        ensure!(
+            self.services.effects.is_none() && self.services.random_exchange.is_none(),
+            "Circus random batch during a falling-effect sequence exchange"
+        );
+        let rng = self.services.sequence_rng.as_mut().context("Circus process random sequence missing")?;
+        f(&mut || Ok(rng.next_u32()? as i32))?;
+        Ok(true)
+    }
     fn packed(&mut self,request:&crate::machine::packed_ops::PackedRequest)->Result<bool>{self.native_packed(request)}
     fn sprite_resource_bound(&mut self,object:u16,slot:u8)->Result<bool>{self.sprite_resource_bound(object,slot)}
     fn resource(&mut self,request:&crate::machine::resource_ops::ResourceRequest)->Result<Option<crate::machine::resource_ops::ResourceReply>>{self.native_resource(request)}
@@ -854,7 +1085,7 @@ impl NativeHost for Bridge<'_> {
     fn packed_dimensions(&mut self,object:u16)->Result<Option<([u32;2],[u32;2])>>{Ok(self.native_packed_dimensions(object))}
     fn packed_frame_count(&mut self,slot:u8)->Result<Option<u32>>{self.native_packed_frame_count(slot)}
     fn packed_lineage(&mut self,object:u16)->Result<Option<u32>>{self.native_packed_lineage(object)}
-    fn callbacks_ready(&self)->bool{self.services.loading.is_none()&&self.services.audio.is_none()&&self.services.menu_image_job.is_none()&&!self.panel_process_pending()&&!self.services.packed.preparing&&!self.services.packed.decoder_pending()&&!self.framebuffer_capture_pending()&&!self.services.system.window_request_pending()&&!self.services.system.account_pending()}
+    fn callbacks_ready(&self)->bool{!self.services.dc2_audio.pending()&&self.services.loading.is_none()&&self.services.audio.is_none()&&self.services.menu_image_job.is_none()&&!self.panel_process_pending()&&!self.services.packed.preparing&&!self.services.packed.decoder_pending()&&!self.framebuffer_capture_pending()&&!self.services.system.window_request_pending()&&!self.services.system.account_pending()}
     fn sprite(&mut self,request:&crate::machine::sprite_ops::SpriteRequest)->Result<bool>{self.native_sprite(request)}
     fn sprite_states(&mut self)->Result<Vec<(u16,crysirror_scene::layer::queued::SequenceStatus)>>{self.primary_sprite_states()}
     fn publish_audio(&mut self,declaration:&crate::machine::media_ops::AudioDeclaration)->Result<Option<crate::machine::media_ops::AudioPublication>> {
@@ -903,7 +1134,12 @@ impl NativeHost for Bridge<'_> {
         );
         Ok(true)
     }
+    fn write_profile_system(&mut self,profile:crate::Profile,bytes:&[u8]) -> Result<bool> {
+        let Some(prepared)=self.services.prepare(Work::ProfileSystemSave(profile,bytes.to_vec()),self.client)? else{return Ok(false)};
+        ensure!(matches!(prepared,Prepared::SystemSaved),"Circus profile preference completion type");Ok(true)
+    }
     fn audio_playing(&mut self, channel: u32) -> Result<bool> {
+        if self.services.native_profile==Some(crate::Profile::Dc2PlusCommunication) {return Ok(self.host.audio_info(self.client,channel)?.is_some_and(|info|info.source_playing))}
         self.native_channel_playing(channel)
     }
     fn fade_complete(&mut self, out: bool) -> Result<bool> {
@@ -1018,22 +1254,39 @@ impl NativeHost for Bridge<'_> {
             Event::ActivatePanel=>return self.activate_panel(),
             Event::MixerControls { enabled, gain, playback_gain } => self.sync_audio_controls(crate::machine::MixerControls { enabled: *enabled, gain: *gain,playback_gain:*playback_gain })?,
             Event::NativeMixerControls{enabled,gain,playback_gain,force_gain,force_enable}=>self.sync_audio_controls_forced(crate::machine::MixerControls{enabled:*enabled,gain:*gain,playback_gain:*playback_gain},*force_gain,*force_enable)?,
+            Event::Dc3MusicVolume {enabled,gain,playback_gain} => self.dc3_music_volume(crate::machine::MixerControls {enabled:*enabled,gain:*gain,playback_gain:*playback_gain})?,
             Event::AudioBalance{kind,from,to,steps}=>self.native_balance(*kind,*from,*to,*steps)?,
             Event::PlayerInput => return self.player_input(),
             Event::BeginMenu(group) => return self.begin_menu(group),
-            Event::LoadImage { slot, name } => {
+            Event::LoadImage { slot, name } | Event::LoadScaledImage { slot, name, .. } => {
+                let scale = match event {
+                    Event::LoadScaledImage { percent, nearest, expression, .. } => Some((*percent, *nearest, expression.clone())),
+                    _ => None,
+                };
                 if self.services.image_names.get(slot) == Some(name)
                     && self.services.images.contains_key(slot)
+                    && self.services.image_scales.get(slot) == scale.as_ref()
                 {
                     return Ok(true);
                 }
+                let work = if let Some((percent, nearest, expression)) = scale.clone() {
+                    ensure!(
+                        self.services.native_profile == Some(crate::Profile::Dc2PlusCommunication),
+                        "Circus scaled image outside DC2 41BCE0"
+                    );
+                    Work::Dc2ScaledImage(name.clone(), percent, nearest, expression)
+                } else if self.services.native_profile == Some(crate::Profile::Dc2PlusCommunication) && *slot == 1 {
+                    Work::Dc2Background(name.clone())
+                } else {
+                    Work::Image(name.clone())
+                };
                 let Some(prepared) = self
                     .services
-                    .prepare(Work::Image(name.clone()), self.client)?
+                    .prepare(work, self.client)?
                 else {
                     return Ok(false);
                 };
-                let Prepared::Image(image, logical) = prepared else {
+                let Prepared::Image(image, logical, origin) = prepared else {
                     bail!("Circus image worker type");
                 };
                 let generation=self.services.image_generation.checked_add(1).context("Circus image generation exhausted")?;
@@ -1061,7 +1314,12 @@ impl NativeHost for Bridge<'_> {
                     self.host.release_image_resource(self.client,previous.path.relative())?;
                 }
                 self.services.image_extents.insert(*slot, logical);
+                self.services.image_origins.insert(*slot, origin);
                 self.services.image_names.insert(*slot, name.clone());
+                match scale {
+                    Some(scale) => self.services.image_scales.insert(*slot, scale),
+                    None => self.services.image_scales.remove(slot),
+                };
                 // upload_rgba is owner-published by Runtime at the end of this
                 // tick. Yield once before an instruction can reference it.
                 return Ok(false);
@@ -1169,6 +1427,8 @@ impl NativeHost for Bridge<'_> {
             Event::ReleaseAudioGroup{kind,forced,steps}=>return self.release_native_group(*kind,*forced,*steps),
             Event::ReleaseAudio{channel,steps}=>return self.release_native_sound(*channel,*steps),
             Event::StopAudio { channel } => {
+                if crate::trace_enabled() {eprintln!("circus stop audio channel={channel}");}
+                if *channel == 0 && self.services.native_profile == Some(crate::Profile::Dc3WithYou) {self.close_dc3_music()?;}
                 if *channel==0{self.cancel_native_duck()?;}
                 self.host.submit_audio(self.client,AudioRequest::Stop{channel:*channel,fade_ms:0.})?;
                 self.services.stopped_audio.push(*channel);
@@ -1243,6 +1503,8 @@ impl NativeHost for Bridge<'_> {
                     .get(slot)
                     .context("Circus logical image extent")?;
                 let extent=*logical;
+                let origin=self.dc3_image_origin(*slot);
+                let position=[i32::from(position[0])+origin[0],i32::from(position[1])+origin[1]];
                 self.submit(vec![json!({"op":"put","layer":{"id":0x3700_0000+u32::from(*slot),"parent":parent,"rect":[position[0],position[1],extent[0],extent[1]],"paint":{"kind":"image","asset":image.path.relative()},"sampling":{"address_u":"repeat","address_v":"repeat"},"uv":[0.,0.,logical[0] as f32/image.size[0] as f32,logical[1] as f32/image.size[1] as f32],"order":[0,slot],"filter":self.filter_for_slot(*slot)}})],vec![])?;
                 self.services.displayed.insert(*slot);
             }
@@ -1319,7 +1581,7 @@ impl VmAdapter for CircusVm {
             }
             bridge.native_audio_update(self.machine.state.native_audio_frame_policy()?)?;
             for channel in std::mem::take(&mut bridge.services.stopped_audio){self.machine.state.native_live.sound_stopped(channel);}
-            if !bridge.sprite_mask_resources_ready()?{return Ok(VmYield::BudgetExhausted)}
+            if !bridge.sprite_mask_resources_ready()?||!bridge.committed_sprite_masks_ready()?{return Ok(VmYield::BudgetExhausted)}
             if self.machine.resource_publication_pending()&&!self.machine.publish_resources(&mut bridge,now)?{return Ok(VmYield::BudgetExhausted)}
             if bridge.services.packed.preparing&&!bridge.prepare_packed_tick(bridge.native_effect_fast())? {return Ok(VmYield::BudgetExhausted)}
             if !bridge.effects_ready()? {
@@ -1341,6 +1603,7 @@ impl VmAdapter for CircusVm {
                     if done {bridge.services.presentation_pending=false;return Ok(VmYield::Halted)}
                     return Ok(VmYield::BudgetExhausted);
                 }
+                if !bridge.committed_sprite_masks_ready()? {return Ok(VmYield::BudgetExhausted)}
                 bridge.services.voice_rate_percent=self.machine.state.value(99,185)?.wrapping_add(100);
                 if !self.machine.audio_setter_pending(){bridge.sync_audio_controls(self.machine.state.audio_controls()?)?;}
                 bridge.sync_window_image_alpha(self.machine.state.system_data.dword(6))?;

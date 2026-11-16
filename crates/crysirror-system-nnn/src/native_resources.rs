@@ -127,10 +127,8 @@ impl ResourceNames {
     }
     pub fn system_wave(&self, directory: Option<&[u8]>, basename: &[u8]) -> Result<String> {
         let name = Self::decoded_name(basename)?;
-        ensure!(
-            !name.contains('/'),
-            "System-NNN system wave expects basename"
-        );
+        // LoadSystemWave concatenates dirName and filenameOnly: nested names
+        // are valid. decoded_name has already rejected absolute/traversal paths.
         let relative = if let Some(dir) = directory.filter(|d| !d.is_empty()) {
             format!("vaw/{}/{name}.vaw", Self::decoded_name(dir)?)
         } else {

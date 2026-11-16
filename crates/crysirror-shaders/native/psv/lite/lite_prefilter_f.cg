@@ -1,0 +1,60 @@
+// SPDX-License-Identifier: MPL-2.0
+// prefilter.wgsl fs_prefilter with 64 instead of 256 GGX samples. The same
+// pdf-driven source mip selection (filtered importance sampling) keeps the
+// lobe integral; GXM programs have no integer bit operations, so the CPU
+// supplies the Hammersley points (crysirror_render_tier::derived::hammersley).
+#include "lite_common.cgh"
+
+uniform float4 lite_prefilter;      // x roughness, y source width, z source mip count
+uniform float4 lite_hammersley[32]; // 64 points, two per float4 (xy, zw)
+
+float3 lite_importance_ggx(float2 xi, float3 n, float a)
+{
+    float phi = 2.0 * LITE_PI * xi.x;
+    float cos_t = sqrt((1.0 - xi.y) / (1.0 + (a * a - 1.0) * xi.y));
+    float sin_t = sqrt(1.0 - cos_t * cos_t);
+    float3 h = float3(cos(phi) * sin_t, sin(phi) * sin_t, cos_t);
+    float3 up = abs(n.z) < 0.999 ? float3(0.0, 0.0, 1.0) : float3(1.0, 0.0, 0.0);
+    float3 tx = normalize(cross(up, n));
+    float3 ty = cross(n, tx);
+    return normalize(tx * h.x + ty * h.y + n * h.z);
+}
+
+float4 lite_sample(sampler2D src, float3 n, float a, float2 xi, float sa_texel, float max_mip)
+{
+    float3 h = lite_importance_ggx(xi, n, a);
+    float3 l = normalize(2.0 * dot(n, h) * h - n);
+    float nl = dot(n, l);
+    if (nl <= 0.0) {
+        return float4(0.0, 0.0, 0.0, 0.0);
+    }
+    float nh = max(dot(n, h), 0.0);
+    float a2 = a * a;
+    float d = nh * nh * (a2 - 1.0) + 1.0;
+    float pdf = a2 / (LITE_PI * d * d) / 4.0 + 1e-4;
+    float sa_sample = 1.0 / (64.0 * pdf);
+    float mip = clamp(0.5 * log2(sa_sample / sa_texel) + 1.0, 0.0, max_mip);
+    return float4(tex2Dlod(src, float4(lite_dir_uv(l), 0.0, mip)).rgb * nl, nl);
+}
+
+float4 main(float2 uv : TEXCOORD0, uniform sampler2D src_env : TEXUNIT0) : COLOR
+{
+    float phi = (uv.x - 0.5) * 2.0 * LITE_PI;
+    float theta = uv.y * LITE_PI;
+    float3 n = float3(sin(theta) * cos(phi), cos(theta), sin(theta) * sin(phi));
+    float roughness = lite_prefilter.x;
+    if (roughness < 0.01) {
+        return float4(tex2Dlod(src_env, float4(uv, 0.0, 0.0)).rgb, 1.0);
+    }
+    float a = roughness * roughness;
+    float width = lite_prefilter.y;
+    float sa_texel = 4.0 * LITE_PI / (width * width * 0.5);
+    float max_mip = lite_prefilter.z - 1.0;
+    float4 acc = float4(0.0, 0.0, 0.0, 0.0);
+    for (int k = 0; k < 32; k++) {
+        float4 xi = lite_hammersley[k];
+        acc += lite_sample(src_env, n, a, xi.xy, sa_texel, max_mip);
+        acc += lite_sample(src_env, n, a, xi.zw, sa_texel, max_mip);
+    }
+    return float4(acc.rgb / max(acc.w, 1e-4), 1.0);
+}

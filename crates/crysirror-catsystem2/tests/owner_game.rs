@@ -691,7 +691,7 @@ fn owner_fes_dump_for_review() -> Result<()> {
     let mut cx = DecodeContext::new(ClientId(1));
     cx.limits.max_entry_size = 1024 * 1024 * 1024;
     cx.resolver = Some(resolver.clone());
-    cx.parameters.insert("cat-system/int".into(), json!({"executable":"cs2.exe"}));
+    cx.parameters.insert("cat-system/int".into(), json!({"executable":std::env::var("CRYSIRROR_CATSYSTEM2_EXE").unwrap_or_else(|_| "cs2.exe".into())}));
     cx.source_name = Some("fes.int".into());
     let format = crysirror_formats_arc::legacy_archive("cat-system/int").unwrap();
     let mut systems = cx.clone();
@@ -727,7 +727,7 @@ fn owner_kcs_native_census() -> Result<()> {
     let mut cx = DecodeContext::new(ClientId(1));
     cx.limits.max_entry_size = 1024 * 1024 * 1024;
     cx.resolver = Some(resolver.clone());
-    cx.parameters.insert("cat-system/int".into(), json!({"executable":"cs2.exe"}));
+    cx.parameters.insert("cat-system/int".into(), json!({"executable":std::env::var("CRYSIRROR_CATSYSTEM2_EXE").unwrap_or_else(|_| "cs2.exe".into())}));
     cx.source_name = Some("kcs.int".into());
     let format = crysirror_formats_arc::legacy_archive("cat-system/int").unwrap();
     let mounted = crysirror_resource::ArchiveMount::new(format.open(resolver.open("kcs.int")?, &cx)?, cx.clone())?;

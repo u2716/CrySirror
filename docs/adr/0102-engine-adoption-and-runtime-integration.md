@@ -16,7 +16,7 @@ engine's mode requires a deliberate migration, not relabelling its package.
 | `adopt` | First-class VM and native semantic/resource/wait/save policy over shared CrySirror capabilities. Implement from scratch through authorized source/binary analysis, or adopt maintainable interpreter source with provenance. | Native semantics plus independently usable engine capabilities; a factory or matching screenshot alone is insufficient. |
 | `integrated` | An existing runtime, including its native composition where needed, maintained inside workspace crates and connected to CrySirror's host services. | Managed lifecycle, bounded frame/PCM output, input/storage integration, documented platform capabilities and actual scoped behavior evidence. This does not establish capability extraction. |
 
-Siglus, BGI and SoftPAL use `integrated`. Other engines retain
+Siglus, BGI, SoftPAL and RFVP use `integrated`. Other engines retain
 their current `adopt` boundary unless explicitly migrated. Both modes preserve
 source provenance, original instruction/value/wait/save behavior and visible
 failure for unknown operations or layouts. Original no-op operations stay
@@ -45,7 +45,8 @@ identified as such; unfinished functionality cannot be counted as a no-op.
 - Declare desktop, iOS, Android, browser, Vita and Switch capabilities
   separately. Unimplemented targets/backends fail visibly. Native shaders,
   CPU threads, browser workers and hardware RT are target capabilities, not
-  consequences of either mode. Console device backends remain deferred.
+  consequences of either mode. Vita and Switch are active native-backend targets,
+  with implementation and validation tracked separately for each backend.
 
 ## Integration-specific requirements
 
@@ -55,6 +56,11 @@ but exchanges owned, bounded outputs with CrySirror. A CPU frame needs a declare
 pixel/alpha/color-space/stride contract and native canvas dimensions. Any GPU
 interoperability needs an explicit compatible backend and completion/ownership
 contract; portable GPU pointer sharing is not assumed.
+
+Default integrated players require GPU composition. CPU asset decoding and
+glyph rasterization remain valid preparation stages, but uploading an already
+composed CPU screen does not satisfy GPU rendering. Existing full-screen CPU
+composition and per-frame GPU readback must be listed as integration work.
 
 Audio publishes timestamped PCM with declared format, rate and channels to
 CrySirror's managed audio path. Define queue limits, backpressure, EOF, pause,

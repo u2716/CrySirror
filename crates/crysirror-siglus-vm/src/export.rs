@@ -1,5 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Native object policy -> checked engine layers. No renderer/device ownership.
+//!
+//! Native collector policy (source revision recorded by this crate): CENTER_REP
+//! shifts the XY anchor as well as the pivot. The 3D setup resets pivot Z to
+//! center_z before the final anchor adds center_rep_z. Color-add channels are
+//! unsigned and clamp to 0..255. Destination clipping uses viewport_clip in
+//! canvas coordinates; source_crop and transformed local clip are distinct.
 use crate::runtime::CommandContext;
 use anyhow::{Context, Result, ensure};
 use crysirror_core::{service::HostServices, state::ClientId};

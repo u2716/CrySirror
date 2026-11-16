@@ -925,8 +925,7 @@ impl QlieVm {
     /// 5054F4 ThumWidth/ThumHeight (defaults 128x96).
     pub(super) fn thumbnail_size(&self) -> [u32; 2] {
         let setting = |name: &str, default: u32| {
-            self.text
-                .get("system/etc/game.txt")
+            self.game_settings()
                 .into_iter()
                 .flat_map(|s| s.lines())
                 .filter_map(|line| line.split_once('='))

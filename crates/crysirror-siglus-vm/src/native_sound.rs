@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Adopted as a whole policy group from xmoezzz/siglus_rs
 // 5f358ef1360b0439e92aed2b749e8f25d8721954 runtime/forms/syscom.rs.
-// See UPSTREAM.md, SOURCE.json and upstream-files.json for provenance.
+// See SOURCE.json, SOURCE.json and upstream-files.json for provenance.
 //! Original integer category/character/PCMCH/two-level BGM routing policy.
 //! Scene owns integer curve evaluation; shared Audio owns actual group gains.
 use crate::runtime::CommandContext;

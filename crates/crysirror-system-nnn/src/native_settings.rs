@@ -157,3 +157,13 @@ mod tests {
         assert_eq!(file.encode().unwrap(), bytes);
     }
 }
+
+pub(crate) fn setting_label(id:i32)->Result<String>{if let Some(control)=crate::native_character_setting::Setting::decode(id){Ok(control.label())}else{Ok(setting(id)?.name.into())}}
+
+/// Shared modal widgets have their own private identities. They must never
+/// become native Get/SetSystemParam IDs or expose a synthetic record offset.
+pub(crate) fn menu_setting(id:i32)->Result<Setting>{
+    if let Some(control)=crate::native_character_setting::Setting::decode(id){
+        Ok(Setting{id,name:"Character voice",offset:0,maximum:control.steps()})
+    }else{setting(id)}
+}

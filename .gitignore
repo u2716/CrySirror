@@ -8,6 +8,10 @@ __pycache__/
 .crysirror-mcp/
 .crysirror-state/
 *.tmp
+*.log
+.env
+.env.local
+.env.*.local
 *.ttf
 *.otf
 *.ttc
@@ -31,3 +35,20 @@ __pycache__/
 /platform/android/build/
 /platform/android/app/build/
 /platform/android/local.properties
+/platform/android/keystore.properties
+/platform/android/*.jks
+/platform/android/*.keystore
+/platform/psv/siglus-shaderc/target/
+/platform/psv/siglus-shaderc/Cargo.lock
+platform/switch/runtime/build/
+platform/switch/runtime/romfs/
+platform/switch/runtime/crysirror.*
+platform/switch/siglus-shaderc/target/
+
+/platform/psv/shaderc/target/
+/platform/psv/shaderc/Cargo.lock
+/platform/psv/player/target/
+
+# .NET scene bridge build intermediates
+/tools/ue_scene_bridge/bin/
+/tools/ue_scene_bridge/obj/

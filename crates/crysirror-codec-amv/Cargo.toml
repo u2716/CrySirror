@@ -1,4 +1,5 @@
 [package]
+license-file.workspace = true
 name = "crysirror-codec-amv"
 version = "0.2.0"
 edition = "2024"

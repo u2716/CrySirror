@@ -77,9 +77,16 @@ impl Bridge<'_> {
         if !self.effects_ready()? {
             return Ok(false);
         }
+        let dc3 = self.services.native_profile == Some(crate::Profile::Dc3WithYou);
+        //DC3WY 419BC0: 4185D0 (sakura) and 4187E0 (kind 3, type 5; 419300
+        //is the shared falling-glow step on the 1024x576 canvas) are
+        //connected; 2/13/14/15 use 418A00/418DA0/418BA0/419040.
+        //Kind 2 (418A00, type 2) is the streak step with 1 x 56*row cells
+        //from slot 23 (this+1680).
+        ensure!(!dc3 || matches!(kind, 0..=12) || kind >= 16, "DC3WY 419BC0 weather kind {kind} is not connected");
         //40EEC0 selects the pool wrapper even for the empty kind0 profile;
         //density and texture presence do not select the primary sprite back.
-        self.mark_particle_wrappers(if kind==15 {&[59]}else{&[6,19,29,39,59]})?;
+        self.mark_particle_wrappers(if dc3 {&[6,19,29,39,48]} else if kind==15 {&[59]}else{&[6,19,29,39,59]})?;
         if kind == 0 {
             if self.services.effect_stopping {
                 self.services.effect_stopping = false;
@@ -169,7 +176,11 @@ impl Bridge<'_> {
                 return Ok(false);
             }
         }
-        let image = self.services.images.get(&if kind == 15 {
+        let image = self.services.images.get(&if dc3 {
+            //4233A0 0x27 passes this+1680 (slot 23) for kind 2, otherwise
+            //this+1676 (slot 22).
+            if kind == 2 { 23 } else { 22 }
+        } else if kind == 15 {
             30
         } else if kind == 2 {
             29
@@ -181,7 +192,8 @@ impl Bridge<'_> {
             .sequence_rng
             .clone()
             .context("Circus process random sequence missing")?;
-        let mut spec = if (parameter % 10).clamp(0, 6) == 0 {
+        let empty_density = if dc3 { parameter.clamp(0, 6) == 0 } else { (parameter % 10).clamp(0, 6) == 0 };
+        let mut spec = if empty_density {
             //41DAC0 stores the passed handle, clears its twenty descriptors,
             //then exits before any texture bind/dimension read at density0.
             //Keep native pool objects (and retained scale), consume no RNG,
@@ -229,6 +241,7 @@ impl Bridge<'_> {
                 image.size,
                 rng.clone(),
                 self.host.now_ms(),
+                dc3,
             )?
         } else {
             let image = image.context("Circus particle texture missing")?;
@@ -238,6 +251,7 @@ impl Bridge<'_> {
                 image.size,
                 rng.clone(),
                 self.host.now_ms(),
+                dc3,
             )?
         };
         for emitter in &mut spec.emitters {
@@ -353,16 +367,24 @@ fn native_spec(
     extent: [u32; 2],
     rng: SequenceRng,
     now: u64,
+    dc3: bool,
 ) -> Result<SystemSpec> {
     // Native42A982 splits the two decimal density/wind components.41DAC0
     // clamps density to0..6 and constructs the original five pools.
-    let tens = i32::from(parameter) / 10;
-    let wind = if parameter < 100 {
+    // DC3WY 419BC0 clamps the operand itself (no wind) and 4185D0 samples
+    // x%1024, -(y%576), window, (r%8+1)/1.5 (r%2+1 at density 6, first birth
+    // only), sway r%32+28, row depth+r%2, phase r%360, frame; scale 100%,
+    // alpha 0.8; 419300 advances the atlas after 500 ms.
+    let tens = if dc3 { 0 } else { i32::from(parameter) / 10 };
+    let wind = if dc3 {
+        0
+    } else if parameter < 100 {
         tens
     } else {
         -(i32::from(parameter) % 100 / 10)
     };
     let density = (i32::from(parameter) - 10 * tens).clamp(0, 6) as usize;
+    let canvas = if dc3 { [1024, 576] } else { [1280, 720] };
     let count = [0, 1, 3, 6, 9, 12, 20][density];
     let emitters = (0..=4)
         .rev()
@@ -379,18 +401,22 @@ fn native_spec(
             };
             emitter.spawn.burst_looping = false;
             emitter.screen = Some(ScreenSpriteTarget {
-                canvas: [1280, 720],
+                canvas,
                 layer: EFFECT_LAYER + depth,
                 parent: Some(SCENE_ROOT),
-                order: pool_order(depth),
+                order: pool_order(depth, dc3),
                 anchor: [0., 0.],
             });
             emitter.falling_atlas = Some(FallingAtlasSpec {
-                canvas: [1280, 720],
+                canvas,
                 tick_hz: 60,
-                x_bands: vec![0, -1, 1],
-                fall_range: [2, 11],
-                initial_fall_range: if density == 6 { Some([2, 5]) } else { None },
+                x_bands: if dc3 { vec![] } else { vec![0, -1, 1] },
+                fall_range: if dc3 { [1, 8] } else { [2, 11] },
+                initial_fall_range: match (density == 6, dc3) {
+                    (true, true) => Some([1, 2]),
+                    (true, false) => Some([2, 5]),
+                    _ => None,
+                },
                 spawn_window: None,
                 fall_divisor: 1.5,
                 sway_range: [28, 59],
@@ -402,12 +428,12 @@ fn native_spec(
                 cell: [28, 28],
                 stride: [32, 28],
                 texture_extent: extent,
-                scale: 1. - 0.1 * depth as f32,
-                alpha_base: 0.5,
+                scale: if dc3 { 1. } else { 1. - 0.1 * depth as f32 },
+                alpha_base: if dc3 { 0.8 } else { 0.5 },
                 alpha_step: 0.1,
-                alpha_count: 3,
-                alpha_offset: -0.02 * depth as f32,
-                atlas_interval_ms: 300,
+                alpha_count: if dc3 { 0 } else { 3 },
+                alpha_offset: if dc3 { 0. } else { -0.02 * depth as f32 },
+                atlas_interval_ms: if dc3 { 500 } else { 300 },
                 atlas_clock_bits: 32,
             });
             emitter.render = RenderSpec::Sprite {
@@ -435,10 +461,11 @@ fn native_spec(
     spec.compile()?;
     Ok(spec)
 }
-fn pool_order(depth: u32) -> [i32; 2] {
-    //41F300 binds depth4/3/2/1/0 to wrappers6/19/29/39/59. Use the same
-    //painter partitions as the ordinary native object renderer.
-    let object = [59, 39, 29, 19, 6][depth as usize];
+fn pool_order(depth: u32, dc3: bool) -> [i32; 2] {
+    //41F300 binds depth4/3/2/1/0 to wrappers6/19/29/39/59 (DC3WY 41A5D0:
+    //objects 6/19/29/39/48). Use the same painter partitions as the
+    //ordinary native object renderer.
+    let object = if dc3 { [48, 39, 29, 19, 6] } else { [59, 39, 29, 19, 6] }[depth as usize];
     if object < 10 {
         [0, object]
     } else {
@@ -452,9 +479,13 @@ fn drifting_spec(
     extent: [u32; 2],
     rng: SequenceRng,
     now: u64,
+    dc3: bool,
 ) -> Result<SystemSpec> {
     let mut spec = empty_pools(texture, rng, now);
-    let count = [0, 1, 3, 6, 9, 12, 20][(parameter % 10).clamp(0, 6) as usize];
+    let canvas = if dc3 { [1024, 576] } else { [1280, 720] };
+    //DC3WY 419BC0 clamps the operand itself; DC4 splits density/wind.
+    let density = if dc3 { parameter.clamp(0, 6) } else { (parameter % 10).clamp(0, 6) };
+    let count = [0, 1, 3, 6, 9, 12, 20][density as usize];
     for (index, emitter) in spec.emitters.iter_mut().enumerate() {
         let depth = 4 - index as u32;
         emitter.enabled = true;
@@ -465,17 +496,18 @@ fn drifting_spec(
             vec![Burst { time: 0., count }]
         };
         emitter.screen = Some(ScreenSpriteTarget {
-            canvas: [1280, 720],
+            canvas,
             layer: EFFECT_LAYER + depth,
             parent: Some(SCENE_ROOT),
-            order: pool_order(depth),
+            order: pool_order(depth, dc3),
             anchor: [0., 0.],
         });
         emitter.drifting_atlas = Some(crysirror_vfx::drifting_atlas::DriftingAtlasSpec {
-            canvas: [1280, 720],
+            canvas,
             texture_extent: extent,
             tick_hz: 60,
             depth,
+            streak_cell: (dc3 && kind == 2).then_some([1, 56, 0]),
             motion: match kind {
                 2 => crysirror_vfx::drifting_atlas::DriftMotion::Streak,
                 3 => crysirror_vfx::drifting_atlas::DriftMotion::FallingGlow,
@@ -511,7 +543,7 @@ fn empty_pools(texture: &str, rng: SequenceRng, now: u64) -> SystemSpec {
             canvas: [1280, 720],
             layer: EFFECT_LAYER + depth,
             parent: Some(SCENE_ROOT),
-            order: pool_order(depth),
+            order: pool_order(depth, false),
             anchor: [0., 0.],
         });
         emitter.render = RenderSpec::Sprite {
@@ -559,7 +591,7 @@ fn native_orbit_emitter(
         canvas: [1280, 720],
         layer: EFFECT_LAYER + 4,
         parent: Some(SCENE_ROOT),
-        order: pool_order(4),
+        order: pool_order(4, false),
         anchor: [0.5, 0.5],
     });
     emitter.orbit_atlas = Some(crysirror_vfx::orbit_atlas::OrbitAtlasSpec {
@@ -594,7 +626,7 @@ mod tests {
     use super::*;
     #[test]
     fn native_five_depth_declaration_is_one_shared_system_in_original_order() {
-        let s = native_spec(5, "authored.png", [256, 256], SequenceRng::msvc(7), 42).unwrap();
+        let s = native_spec(5, "authored.png", [256, 256], SequenceRng::msvc(7), 42, false).unwrap();
         assert_eq!(s.emitters.len(), 5);
         assert_eq!(
             s.emitters
@@ -607,6 +639,6 @@ mod tests {
         assert_eq!(s.emitters[4].id, "depth-0");
         assert_eq!(s.emitters[0].falling_atlas.as_ref().unwrap().rows, [4, 5]);
         assert_eq!(s.sequence_rng, Some(SequenceRng::msvc(7)));
-        assert!(native_spec(5, "authored.png", [128, 128], SequenceRng::msvc(7), 42).is_err());
+        assert!(native_spec(5, "authored.png", [128, 128], SequenceRng::msvc(7), 42, false).is_err());
     }
 }

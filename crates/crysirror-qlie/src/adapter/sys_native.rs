@@ -264,8 +264,7 @@ impl QlieVm {
         Ok(true)
     }
     pub(super) fn game_setting_text(&self, key: &str) -> Option<String> {
-        self.text
-            .get("system/etc/game.txt")
+        self.game_settings()
             .into_iter()
             .flat_map(|s| s.lines())
             .filter_map(|line| line.split_once('='))

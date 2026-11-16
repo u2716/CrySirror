@@ -1,8 +1,8 @@
 //! Static native execution diagnostic. Does not render and is not a game host.
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use crysirror_circus::{
-    machine::{Event, Machine, NativeHost, Outcome},
     Program,
+    machine::{Event, Machine, NativeHost, Outcome},
 };
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 struct Host {
@@ -71,6 +71,27 @@ impl NativeHost for Host {
     }
 }
 fn main() -> Result<()> {
+    if std::env::args().nth(1).as_deref() == Some("--inspect") {
+        let path = std::env::args()
+            .nth(2)
+            .context("native_trace --inspect ORIGINAL_MES")?;
+        let bytes = std::fs::read(&path)?;
+        if bytes.starts_with(b"#ADV_TXT") {
+            let program =
+                crysirror_circus::advtxt::Program::parse(&bytes).with_context(|| path.clone())?;
+            println!(
+                "{}",
+                serde_json::json!({"profile":"Dc1AdvTxt","bytes":bytes.len(),"code_file_offset":program.code_file_offset,"labels":program.labels.len(),"read_marks":program.read_marks.len(),"records":program.records.len()})
+            );
+            return Ok(());
+        }
+        let program = Program::parse(&bytes).with_context(|| path.clone())?;
+        println!(
+            "{}",
+            serde_json::json!({"profile":program.profile,"bytes":bytes.len(),"code_file_offset":program.code_file_offset,"labels":program.labels.len(),"label_metadata":program.label_metadata.len(),"instructions":program.instructions.len()})
+        );
+        return Ok(());
+    }
     let root = std::env::args()
         .nth(1)
         .context("native_trace GAME_ROOT [ENTRY]")?;

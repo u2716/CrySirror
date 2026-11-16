@@ -654,6 +654,7 @@ pub(crate) struct CProcHostCompleted {
 /// the virtual completion method.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NativeGraphProcedureMode {
+    HostResult,
     Control,
     Select,
     Shake,
@@ -663,6 +664,7 @@ impl NativeGraphProcedureMode {
     pub(crate) const fn name(self) -> &'static str {
         match self {
             Self::Control => "control",
+            Self::HostResult => "host-result",
             Self::Select => "select",
             Self::Shake => "shake",
         }

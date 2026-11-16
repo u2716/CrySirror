@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
-// Migrated from pinned siglus_rs; see UPSTREAM.md and upstream-files.json.
+// Migrated from pinned siglus_rs; see SOURCE.json and upstream-files.json.
 //! The 3120-byte split-file generation saves scene indices and individual
 //! local fields, before the later local POD/envelope formats.
 use super::*;

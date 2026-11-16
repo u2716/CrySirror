@@ -1,5 +1,6 @@
 // Copyright (c) 2026 CrySirror contributors.
-// Distributed under the GNU Affero General Public License, version 3 or later.
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. A copy is available at https://mozilla.org/MPL/2.0/.
 //! KaichoTrans option/resource semantics only; filtering/composition lives in
 //! CrySirror's shared subtree GPU APIs. Complete v0.2.5.1 Main.cpp, blur.cpp,
 //! dim.cpp and license reviewed from the author's source release, SHA256

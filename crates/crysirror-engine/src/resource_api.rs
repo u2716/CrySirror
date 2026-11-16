@@ -276,6 +276,9 @@ impl Archive for SharedArchive {
     fn open(&self, id: u32, cx: &DecodeContext) -> Result<Arc<dyn AssetReader>> {
         self.0.open(id, cx)
     }
+    fn entry_metadata(&self, id: u32) -> serde_json::Value {
+        self.0.entry_metadata(id)
+    }
 }
 fn mount_decoded(
     state: &mut EngineState,
@@ -573,7 +576,13 @@ impl Class for ResourcesClass {
                                 let end = offset
                                     .saturating_add(limit as usize)
                                     .min(archive.entries().len());
-                                let entries = archive.entries().get(offset..end).unwrap_or(&[]);
+                                let entries: Vec<ArchiveEntry> = archive
+                                    .entries()
+                                    .get(offset..end)
+                                    .unwrap_or(&[])
+                                    .iter()
+                                    .map(|e| ArchiveEntry { metadata: archive.entry_metadata(e.id), ..e.clone() })
+                                    .collect();
                                 json!({"kind":"archive","format":format,"total":archive.entries().len(),"offset":offset,"entries":entries})
                             }
                         }
@@ -711,7 +720,13 @@ impl Class for ResourcesClass {
                     .offset
                     .saturating_add(limit)
                     .min(archive.entries().len());
-                let entries = archive.entries().get(options.offset..end).unwrap_or(&[]);
+                let entries: Vec<ArchiveEntry> = archive
+                    .entries()
+                    .get(options.offset..end)
+                    .unwrap_or(&[])
+                    .iter()
+                    .map(|e| ArchiveEntry { metadata: archive.entry_metadata(e.id), ..e.clone() })
+                    .collect();
                 json!({"format":format,"total":archive.entries().len(),"offset":options.offset,"entries":entries})
             }
             "mount" => {

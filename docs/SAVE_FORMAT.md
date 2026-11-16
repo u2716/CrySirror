@@ -3,6 +3,11 @@
 A new wrapper format, **not** the RFVP or Siglus original save format. Native
 save import/export belongs to the corresponding compatibility adapter.
 
+Use the [native-save skill](../.agents/skills/crysirror-native-save/SKILL.md)
+for original slot/system-data versions, compatibility analysis, user-data
+protection and resource-dependent restore. This envelope does not replace the
+native format or certify import/export support for an adapter.
+
 All integer fields are unsigned little-endian. No native pointer or usize is
 serialized.
 

@@ -1,0 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
+// Skinned PBR mesh vertex program (PSV tier).
+#define LITE_SKINNED
+#include "lite_mesh_vertex.cgh"

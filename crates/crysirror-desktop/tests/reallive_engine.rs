@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Opt-in owner-provided content, never committed fixtures. The assertions test
 //! engine-owned resources and edits at a paused native PC, beyond a screenshot.
-#[path = "../src/input_track.rs"]
-mod input_track;
+use crysirror_launch::input_track;
 use crysirror_core::{service::HostServices, state::ClientId};
 use crysirror_runtime::{AdapterRegistry, Runtime};
 use crysirror_wgpu::{Gpu, Renderer};

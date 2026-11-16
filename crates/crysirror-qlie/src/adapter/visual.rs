@@ -247,7 +247,7 @@ impl QlieVm {
                 bundle.slot(index).map(|member| {
                     (
                         member.name.clone(),
-                        if member.nested.is_some() || member.model.is_some() || member.metadata["kind"] == 7 {
+                        if member.nested.is_some() || member.model.is_some() || member.is_video() {
                             Arc::from([])
                         } else {
                             member.bytes.clone()
@@ -260,6 +260,9 @@ impl QlieVm {
             let Some((name, bytes)) = next else {
                 o.preparing = false;
                 o.started = h.now_ms();
+                // `\l,""` retires the layer but keeps the stored alignment;
+                // the native percentage applies to the newly loaded extent.
+                self.apply_alignment(h, id)?;
                 return Ok(true);
             };
             if bytes.is_empty() {
@@ -542,10 +545,16 @@ impl QlieVm {
             self.camera_parent(o.thread, o.position[2])
         };
         let layers = if o.created {
-            json!([{"op":"set_parent","id":o.layer,"parent":parent},{"op":"set_visible","id":o.layer,"visible":o.visible},
-                {"op":"set_order","id":o.layer,"order":[o.position[2],0]},
-                {"op":"set_paint","id":o.layer,"paint":{"kind":"group"}},
-                {"op":"set_depth","id":o.layer,"depth":null}])
+            let mut layers = vec![json!({"op":"set_parent","id":o.layer,"parent":parent}),json!({"op":"set_visible","id":o.layer,"visible":o.visible}),
+                json!({"op":"set_order","id":o.layer,"order":[o.position[2],0]}),
+                json!({"op":"set_paint","id":o.layer,"paint":{"kind":"group"}}),
+                json!({"op":"set_depth","id":o.layer,"depth":null})];
+            // Layer order is global: the message glyph run carries the
+            // object priority it was created with, so follow later changes.
+            if let Some(message) = o.message.as_ref().filter(|m| m.created) {
+                layers.push(json!({"op":"set_order","id":message.layer,"order":[o.position[2],0]}));
+            }
+            json!(layers)
         } else {
             // Native leaf priorities add object/key values before global
             // queue sorting. This root owns geometry, never a painter fence.
@@ -559,10 +568,45 @@ impl QlieVm {
         } else {
             json!([])
         };
+        let fresh = !o.created;
         let batch = json!({"layers":layers,"ui":ui});
         self.submit(h, batch)?;
         self.objects.get_mut(id).unwrap().created = true;
+        if fresh {
+            self.apply_alignment(h, id)?;
+        }
         Ok(())
+    }
+    /// Stored `alg`/`alg2` percentages (+50 per alg unit) place the image's
+    /// extent at the object position. Re-applied after every image load so a
+    /// recreated layer keeps the alignment (BIMAN1 templates set
+    /// `\alg,1,1` before the first background exists).
+    pub(super) fn apply_alignment(&mut self, h: &mut dyn HostServices, id: &str) -> Result<()> {
+        let o = &self.objects[id];
+        let Some(alg) = o.properties.get("alg") else {
+            return Ok(());
+        };
+        if !o.created {
+            return Ok(());
+        }
+        let get = |i: usize| alg.get(i).and_then(|v| v.integer().ok()).unwrap_or(0) as f32;
+        let (px, py) = (get(0), get(1));
+        let size = o
+            .bundle
+            .as_ref()
+            .map(|b| b.animation.size)
+            .or_else(|| o.images.first().and_then(|v| v.as_ref()).map(|v| v.size))
+            .unwrap_or(self.config.canvas);
+        let layer: serde_json::Value =
+            serde_json::from_slice(&h.query_engine(self.client, EngineQuery::Layer(o.layer))?)?;
+        let mut transform = layer["transform"].clone();
+        if !transform.is_object() {
+            transform = json!({});
+        }
+        transform["object_anchor"] = json!(true);
+        transform["texture_center_x"] = json!(size[0] as f32 * px / 100.);
+        transform["texture_center_y"] = json!(size[1] as f32 * py / 100.);
+        self.submit(h, json!({"layers":[{"op":"set_transform","id":o.layer,"transform":transform}]}))
     }
     /// 5D1644 multiplies an anchored object's matrix by its anchor's. A
     /// group proxy beside the anchor mirrors only that geometry, so the
@@ -817,7 +861,7 @@ impl QlieVm {
                 let colour = a[2].integer()? as u32;
                 let mode = a.get(3).map(Value::integer).transpose()?.unwrap_or(0);
                 ensure!((0..=6).contains(&mode), "QLIE colour transition blend {mode}");
-                let priority = a.get(4).map(Value::integer).transpose()?.unwrap_or(i32::MAX);
+                let priority = a.get(4).map(Value::integer).transpose()?.unwrap_or(60000);
                 let easing = self.property_easing(&eff, "fdm")?;
                 let flash = capture + 4;
                 let rgb = [(colour >> 16) & 255, (colour >> 8) & 255, colour & 255, 255];
@@ -845,7 +889,7 @@ impl QlieVm {
                 ensure!(self.capture, "QLIE fade requires captured scene");
                 ensure!(a.len() >= 2, "QLIE mosaic transition ABI");
                 let duration = a[1].integer()?.max(0) as u64;
-                let priority = a.get(3).map(Value::integer).transpose()?.unwrap_or(i32::MAX);
+                let priority = a.get(3).map(Value::integer).transpose()?.unwrap_or(60000);
                 let easing = self.property_easing(&eff, "fdm")?;
                 self.cancel_animated_transition(h)?;
                 self.rule_fade = None;
@@ -884,11 +928,15 @@ impl QlieVm {
                 );
                 let filename = a.get(2).map(Value::text).unwrap_or_default();
                 let duration = a[1].integer()?.max(0) as u64;
+                //6DCF18/6DD0E5 (and BIMAN5321BC) supply60000 when the
+                //script omits priority. i32::MAX is not an infinity sentinel:
+                //TABMP adds it in single precision before queue quantization,
+                //where that invented default rounds beyond signed32-bit.
                 let priority = a
                     .get(3)
                     .map(Value::integer)
                     .transpose()?
-                    .unwrap_or(i32::MAX);
+                    .unwrap_or(60000);
                 let easing = self.property_easing(&eff, "fdm")?;
                 if !filename.is_empty() {
                     let path = self.resolve(m, &filename)?;

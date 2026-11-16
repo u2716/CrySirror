@@ -34,6 +34,10 @@ pub trait VmAdapter {
         false
     }
     fn engine_id(&self) -> &'static str;
+    /// Opcode allowance per owner tick, independent of presentation cadence.
+    /// Adapters with an explicit bounded worker quantum may request more than
+    /// the default data-VM allowance; the host still caps admission.
+    fn instruction_budget(&self) -> u32 { 1024 }
     fn snapshot_schema(&self) -> u32;
     fn step(
         &mut self,

@@ -4,6 +4,7 @@
 #![forbid(unsafe_code)]
 mod archive;
 mod dwq;
+pub mod full_anime;
 mod vaw;
 mod gpk_index;
 pub use gpk_index::{GpkIndex,GpkIndexEntry};

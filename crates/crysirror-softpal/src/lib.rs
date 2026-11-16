@@ -7,3 +7,5 @@ pub mod native_vm;
 pub use adapter::{register, Config, SoftpalVm};
 mod detection;
 pub use detection::detect_game;
+#[cfg(all(target_os = "vita", feature = "vita-gxm"))]
+pub mod vita;

@@ -3,6 +3,10 @@
 CrySirror opens original game directories and reads their scripts and resources
 in place. Game detection, archive mounting and startup are automatic.
 
+Implementation details: [opcode and syscall lists](native-api/README.md).
+For Siglus, BGI, SoftPAL and RFVP, use the
+[upstream versions and integration changes](INTEGRATED_ENGINES.md).
+
 ## Installed-game launch
 
 ```sh
@@ -29,13 +33,15 @@ The [desktop guide](DESKTOP_API.md) lists the available launch options.
 | [SoftPAL](#bgi-and-softpal) | PAL resources and scripts, sprites, text, choices, animation, audio, movies and game saves. |
 | [RFVP / FAVORITE View Point](#rfvp) | HCB scenarios, BIN archives and loose resources, graphics, text, effects, audio, movies, custom cursors and game saves. |
 | [NScripter](#nscripter) | Text scenarios, SAR/NSA archives, sprites, animation, ruby, choices, menus, backlog, skip/auto, audio and movies. |
-| [Circus](#circus) | DC4 Plus Harmony MES scenarios, PCK/DAT resources, CRXG graphics, XPCM audio, dialogue, menus, screen effects and native save slots. |
+| [Circus](#circus) | Native ADV_TXT/MES profiles, PCK/DAT resources, CRXG graphics, XPCM audio, dialogue, menus, screen effects and native save slots. |
 | [CatSystem2](#catsystem2) | INT/FWP resources, HG3 graphics, KCS/FES/CST scenarios, dialogue, image effects, E-mote and menus. |
 | [QLIE](#qlie) | FilePack archives, .s scenarios, ABMP animation, DPNG graphics, text/ruby, buttons, transitions, audio, movies and saves. |
 | [Majiro](#majiro) | MJO scenarios, ARC resources, RCT/RC8 graphics, text, choices, sprite animation, music, voice, backlog and saves. |
 | [AliceSoft System 4](#alicesoft-system-4) | System40.ini, AIN v5 scenarios, ALD/ALK resources and QNT graphics. |
 | [System-NNN](#system-nnn) | SPT scenarios, Black Cyc archives, DWQ graphics, VAW audio, text, choices and picture effects. |
 | [SugarPot](#sugarpot) | The Tsukumo no Tsuki format: AOS2/SCR resources, ABM/BMP graphics, sprites, text, choices, audio, movies and the H-scene gallery. |
+| [N-System](#n-system) | MSD scenarios, FJSYS banks, MGD graphics, text, choices, transitions, title/option/extras screens, original saves. |
+| [WillPlus / AdvHD](native-api/willplus.md) | WS2 V3 scenarios, ARC/PNA resources, Lua system scripts, layers, text, audio and movies. |
 
 ## KiriKiri
 
@@ -106,9 +112,10 @@ Saves created by CrySirror are not interchangeable with original NScripter
 
 ## Circus
 
-The executable scenario format is the DC4 Plus Harmony MES variant. Features
-include dialogue, menus, CRXG images, XPCM PCM/Ogg audio, transitions, falling
-sprite effects, native save slots and thumbnails.
+DC1 ADV_TXT, DC2PC, DC3, DC3 With You and DC4 Plus Harmony use separate native
+execution paths. See the [profile and opcode tables](native-api/circus.md) for
+their command mappings. Features include dialogue, menus, CRXG images, XPCM
+PCM/Ogg audio, transitions, falling sprite effects, native save slots and thumbnails.
 
 The older DC4 MES format can be recognized but cannot be played. XPCM spectral
 audio formats are unavailable.
@@ -178,6 +185,20 @@ background music, sound, voice, movies, screen fades and the H-scene gallery.
 Settings, global flags and read-history files use their original formats.
 Save-slot restoration is unavailable. Other games using similar LiLiM/AOS2
 containers may use a different scenario language.
+
+## N-System
+
+Supports the 2015 *その花びらにくちづけを にゅーじぇね！* build (HANANYU.EXE).
+Features include MSD decryption with the build's title key, layers, the
+original transitions (fade, rule wipe, rotate, bound, door flip), message
+window with name plates and glyph images, choices, scroll actions, BGM, voice,
+sound effects, the logo/opening-movie/title sequence and route endings.
+
+Save/load (including quick save), options, the extras screen (CG viewer,
+scene replay, music), backlog, skip and auto use the original screens.
+GAMEnn.SAV, CONFIG.SAV and Novel.ini keep their original formats in
+CrySirror's save directory; copy existing files there to use them. Other
+N-System builds need their own profile. See [native-api/nsystem.md](native-api/nsystem.md).
 
 ## Network storage
 

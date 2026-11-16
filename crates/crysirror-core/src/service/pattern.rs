@@ -2,9 +2,9 @@
 //! Host-owned persistent raster patterns. Specification/RNG/snapshot bytes are
 //! bounded portable data; resources are scoped, immutable and never serialized.
 use crate::{
-    Result,
     image_processing::{ImageInput, ImageResource},
     state::ClientId,
+    Result,
 };
 use alloc::{string::String, sync::Arc};
 use core::any::Any;
@@ -25,6 +25,15 @@ pub trait PatternResource: Any + Send + Sync + core::fmt::Debug {
 }
 #[derive(Clone, Debug)]
 pub enum PatternRequest {
+    /// Source-dependent stochastic block sampling and painting. The immutable
+    /// source/destination graphs and RNG state are admitted in one owner scope.
+    /// The worker returns the real post-sampling RNG only with the ready image.
+    SampleBlocks {
+        destination: ImageInput,
+        source: ImageInput,
+        spec: Arc<[u8]>,
+        rng: Arc<[u8]>,
+    },
     Create {
         spec: Arc<[u8]>,
         rng: Arc<[u8]>,
@@ -52,6 +61,10 @@ pub enum PatternRequest {
 }
 #[derive(Clone, Debug)]
 pub enum PatternOutput {
+    ImageWithRng {
+        image: Arc<dyn ImageResource>,
+        rng_after: Arc<[u8]>,
+    },
     Resource {
         resource: Arc<dyn PatternResource>,
         rng_after: Arc<[u8]>,

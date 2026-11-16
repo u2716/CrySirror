@@ -16,6 +16,7 @@ crysirror-text.workspace = true
 crysirror-scene.workspace = true
 crysirror-resource.workspace = true
 crysirror-vfx.workspace = true
+crysirror-tasks.workspace = true
 serde_json.workspace = true
 
 [features]

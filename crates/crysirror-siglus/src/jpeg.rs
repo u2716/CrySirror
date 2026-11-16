@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 // Derived from xmoezzz/siglus_rs at 5f358ef1360b0439e92aed2b749e8f25d8721954.
-// Original path: crates/siglus_assets/src/g00.rs. See UPSTREAM.md.
+// Original path: crates/siglus_assets/src/g00.rs. See SOURCE_NOTES.md.
 /// Fixed 256-byte XOR table used by Siglus G00 type 3 payloads.
 ///
 /// Type 3 stores a JPEG stream after the 5-byte G00 header, with every

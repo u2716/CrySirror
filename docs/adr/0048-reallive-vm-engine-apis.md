@@ -54,7 +54,7 @@ original Engine/System/Graphics/Sound/Movie and painters.
 
 ## Evidence and limits
 
-[REALLIVE.md](../REALLIVE.md) describes actual ownership and setup;
+[native-api/reallive.md](../native-api/reallive.md) describes actual ownership and setup;
 [reallive-source-audit.json](../reallive-source-audit.json) records provenance,
 forbidden-path checks, shared API routes and independent media evidence.
 Native integration fixtures must demonstrate inspectable shared nodes and

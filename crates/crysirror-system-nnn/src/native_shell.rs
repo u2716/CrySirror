@@ -56,6 +56,7 @@ pub struct NativeStartupProfile {
     pub codec_limit: i32,
     pub startup_jump_script: bool,
     pub logos: Vec<NativeLogoSpec>,
+    pub(crate) logo_audio: Vec<crate::native_logo_audio::SoundSpec>,
     pub logo_corner_colors: Vec<[bool; 2]>,
     pub logo_next: NativeMode,
     pub(crate) logo_return: crate::native_general::ModeReturn,
@@ -150,16 +151,13 @@ impl NativeStartupProfile {
             Ok(c)
         };
         let count = int(logo, "logoNumber", 2)?;
-        crate::native_general::ModeReturn::validate_entry(logo)?;
+        crate::native_general::ModeReturn::validate_entry(logo,2)?;
         let logo_return = crate::native_general::ModeReturn::read(
             logo,
             Some(mode(logo, "nextMode", NativeMode::Title)?),
         )?;
         ensure!((1..=64).contains(&count), "NNN original logo count bounds");
-        ensure!(
-            int(logo, "soundNumber", 0)? == 0,
-            "NNN timed logo system sounds require native trigger policy"
-        );
+        let logo_audio = crate::native_logo_audio::read(logo)?;
         let use_files = int(logo, "useCustomFileFlag", 0)? != 0;
         let use_times = int(logo, "useCustomTimeFlag", 0)? != 0;
         let use_colors = int(logo, "useCustomColorFlag", 0)? != 0;
@@ -269,6 +267,7 @@ impl NativeStartupProfile {
             codec_limit: int(nothing, "codecLimit", 3)?,
             startup_jump_script: int(nothing, "startupJumpScriptFlag", 0)? != 0,
             logos,
+            logo_audio,
             logo_corner_colors,
             logo_next: mode(logo, "nextMode", NativeMode::Title)?,
             logo_return,
@@ -311,6 +310,11 @@ pub struct NativeLogoPlayer {
     canvas: [u32; 2],
     frame_ms: u64,
     launch_count: u32,
+    audio: crate::native_logo_audio::Clock,
+    general_enabled:bool,
+    frame_admission:bool,
+    general_counter:u64,
+    general_updates:std::collections::VecDeque<u64>,
     specs: Vec<NativeLogoSpec>,
     corner_colors: Vec<[bool; 2]>,
     resources: crate::resource_bridge::NativeResources,
@@ -334,6 +338,14 @@ pub struct NativeLogoPlayer {
     pub api_calls: u64,
 }
 impl NativeLogoPlayer {
+    fn record_general_update(&mut self)->Result<()> {
+        if self.general_enabled {
+            let ticket=self.general_counter;
+            self.general_counter=self.general_counter.checked_add(1).context("NNN Logo General update exhausted")?;
+            self.general_updates.push_back(ticket);
+        }
+        Ok(())
+    }
     pub fn new(
         client: ClientId,
         layer: u32,
@@ -358,6 +370,11 @@ impl NativeLogoPlayer {
             canvas,
             frame_ms,
             launch_count,
+            audio: Default::default(),
+            general_enabled:false,
+            frame_admission:true,
+            general_counter:0,
+            general_updates:Default::default(),
             corner_colors: vec![[false; 2]; specs.len()],
             specs,
             resources,
@@ -399,6 +416,8 @@ impl NativeLogoPlayer {
             || self.source_job.is_some()
             || self.frame_job.is_some()
             || self.finish_job.is_some()
+            || self.audio.pending().is_some()
+            || !self.general_updates.is_empty()
     }
     pub fn native_location(&self) -> (usize, usize, u32) {
         (self.index, self.phase, self.count)
@@ -407,12 +426,14 @@ impl NativeLogoPlayer {
         self.index += 1;
         self.phase = 0;
         self.count = 0;
+        self.audio.next_logo();
         self.source = None;
         self.presented = None;
         self.clock = None;
         self.remainder = 0;
     }
     fn elapse(&mut self, now: u64, input: InputFrame) -> Result<()> {
+        if !self.frame_admission {return Ok(());}
         if self.source.is_none() {
             return Ok(());
         }
@@ -424,6 +445,7 @@ impl NativeLogoPlayer {
                     | crysirror_core::service::buttons::MOUSE_RIGHT)
                 != 0
         {
+            self.record_general_update()?;
             self.next();
             return Ok(());
         }
@@ -436,9 +458,11 @@ impl NativeLogoPlayer {
         // Keep remaining debt, rather than unboundedly iterating a long gap on
         // the owner. There is no I/O wait or sleep in this native clock step.
         let steps = (self.remainder / self.frame_ms).min(4096);
-        self.remainder -= steps * self.frame_ms;
         for _ in 0..steps {
+            self.remainder -= self.frame_ms;
+            self.record_general_update()?;
             self.count += 1;
+            self.audio.calcu(self.index);
             if self.count >= self.specs[self.index].frames[self.phase] {
                 self.count = 0;
                 self.phase += 1;
@@ -447,6 +471,9 @@ impl NativeLogoPlayer {
                     break;
                 }
             }
+            // Complete this native Calcu, then drain its ordered audio before
+            // another Calcu. Retain unconsumed catch-up debt across retries.
+            if self.audio.pending().is_some()||!self.general_updates.is_empty() { break; }
         }
         Ok(())
     }
@@ -476,6 +503,7 @@ impl NativeLogoPlayer {
         self.pending_buttons |= input.buttons_pressed
             & (crysirror_core::service::buttons::MOUSE_LEFT
                 | crysirror_core::service::buttons::MOUSE_RIGHT);
+        if self.audio.pending().is_some()||!self.general_updates.is_empty() { return Ok(false); }
         if let Some((key, job)) = &mut self.frame_job {
             match job.poll()? {
                 ImageProcessState::Pending => return Ok(false),
@@ -560,6 +588,7 @@ impl NativeLogoPlayer {
             )?;
             self.pending_buttons = 0;
         }
+        if self.audio.pending().is_some()||!self.general_updates.is_empty() { return Ok(false); }
         if self.index == self.specs.len() {
             // Logo.Print clamps its completed page index to the last page,
             // phase2/count=fadeOutTime: the final frame is exactly its fill
@@ -654,7 +683,13 @@ impl NativeLogoPlayer {
 /// Reviewed portable host policy: only the actual shared decoder/header
 /// capability is known here. This never manufactures the original DirectShow
 /// numeric codec status and does not claim that every audio packet can decode.
+enum GeneralStep {Begin(NativeMode),Update(i32,u64)}
 pub struct NativeStartupShell {
+    general_enabled:bool,
+    general_queue:std::collections::VecDeque<GeneralStep>,
+    general_exit_ticket:Option<u64>,
+    opening_general_counter:u64,
+    opening_general_next:Option<u64>,
     client: ClientId,
     root: u32,
     pub profile: NativeStartupProfile,
@@ -675,6 +710,41 @@ pub struct NativeStartupShell {
     pub api_calls: u64,
 }
 impl NativeStartupShell {
+    pub(crate) fn poll_logo_audio(&mut self, host: &mut dyn HostServices, vm: &mut crate::adapter::NativeAdapter,admit:bool) -> Result<bool> {
+        if !vm.poll_general_audio(host)? {return Ok(false);}
+        if !self.general_enabled&&admit {
+            self.general_enabled=true;self.logo.general_enabled=true;
+            self.general_queue.push_back(GeneralStep::Begin(self.mode));
+        }
+        while let Some(step)=self.general_queue.front() {
+            match step {
+                GeneralStep::Begin(mode)=>vm.begin_general_audio(*mode as i32,crate::native_general_audio::GeneralAudioPolicy::for_mode(*mode as i32,&Names{tokens:vec![]})?)?,
+                GeneralStep::Update(mode,ticket)=>if !vm.poll_general_update(host,*mode,*ticket)? {return Ok(false);},
+            }
+            self.general_queue.pop_front();
+        }
+        while let Some(ticket)=self.logo.general_updates.front().copied() {
+            if !vm.poll_general_update(host,2,ticket)? {return Ok(false);}
+            self.logo.general_updates.pop_front();
+        }
+        while let Some(event) = self.logo.audio.pending().cloned() {
+            let complete = match &event {
+                crate::native_logo_audio::Event::SystemWave(name) => vm.poll_system_wave_filename(host, name, 0)?,
+                crate::native_logo_audio::Event::ReplayVoice(name) => vm.poll_replay_voice(host, name)?,
+            };
+            if !complete { return Ok(false); }
+            self.logo.audio.complete(&event)?;
+        }
+        if admit&&self.mode==NativeMode::Opening&&!vm.dependency_pending() {
+            let now=host.now_ms();
+            if self.opening_general_next.is_none_or(|next|now>=next) {
+                if !vm.poll_general_update(host,3,self.opening_general_counter)? {return Ok(false);}
+                self.opening_general_counter=self.opening_general_counter.checked_add(1).context("NNN Opening General update exhausted")?;
+                self.opening_general_next=Some(now.checked_add(self.logo.frame_ms).context("NNN Opening General deadline overflow")?);
+            }
+        }
+        Ok(true)
+    }
     pub(crate) fn bind_wipe_context(&mut self,vm:&crate::adapter::NativeAdapter)->Result<()> {
         self.retained_enter=vm.retained_general_enter_frame();
         if let Some(fade)=self.logo_fade.as_mut() {vm.bind_wipe_context(fade)?;}
@@ -717,7 +787,13 @@ impl NativeStartupShell {
             resources,
         )?;
         logo.configure_corner_colors(profile.logo_corner_colors.clone())?;
+        logo.audio = crate::native_logo_audio::Clock::new(profile.logo_audio.clone());
         Ok(Self {
+            general_enabled:false,
+            general_queue:Default::default(),
+            general_exit_ticket:None,
+            opening_general_counter:0,
+            opening_general_next:None,
             client,
             root,
             profile,
@@ -744,6 +820,7 @@ impl NativeStartupShell {
     }
     pub fn dependency_pending(&self) -> bool {
         self.probe.is_some()
+            || !self.general_queue.is_empty()
             || self.nothing_job.is_some()
             || self.logo.dependency_pending()
             || self
@@ -783,6 +860,8 @@ impl NativeStartupShell {
             self.logo.resources.clone(),
         )?;
         logo.configure_corner_colors(self.profile.logo_corner_colors.clone())?;
+        logo.audio = crate::native_logo_audio::Clock::new(self.profile.logo_audio.clone());
+        logo.general_enabled=self.general_enabled;
         let cover = if mode == NativeMode::Nothing {
             self.nothing_frame
                 .clone()
@@ -792,6 +871,8 @@ impl NativeStartupShell {
         };
         self.publish_cover(host, cover)?;
         self.logo = logo;
+        self.general_queue.clear();self.general_exit_ticket=None;self.opening_general_counter=0;self.opening_general_next=None;
+        if self.general_enabled {self.general_queue.push_back(GeneralStep::Begin(mode));}
         self.logo_return_started = false;
         self.logo_fade = None;
         self.logo_exit = None;
@@ -889,6 +970,11 @@ impl NativeStartupShell {
     }
     /// True hands control to the original configured background SPT, not sys.
     pub fn poll(&mut self, host: &mut dyn HostServices, input: InputFrame) -> Result<bool> {
+        self.poll_with_admission(host,input,true)
+    }
+    pub(crate) fn poll_with_admission(&mut self,host:&mut dyn HostServices,input:InputFrame,admit:bool)->Result<bool> {
+        self.logo.frame_admission=admit;
+        if !self.general_queue.is_empty() {return Ok(false);}
         if self.mode == NativeMode::Nothing {
             if !self.nothing_published {
                 let c = self.profile.nothing_color;
@@ -941,7 +1027,13 @@ impl NativeStartupShell {
                     }
                 }
             }
+            if !admit {return Ok(false);}
             self.mode = NativeMode::Logo;
+            if self.general_enabled {
+                self.general_queue.push_back(GeneralStep::Update(1,0));
+                self.general_queue.push_back(GeneralStep::Begin(NativeMode::Logo));
+                return Ok(false);
+            }
         }
         if self.mode == NativeMode::Logo {
             if !self.logo.poll(host, input)? {
@@ -991,7 +1083,16 @@ impl NativeStartupShell {
             if let Some(fade) = self.logo_fade.as_mut() {
                 use crysirror_core::service::buttons as B;
                 fade.note_skip(input.buttons_pressed & (B::MOUSE_LEFT | B::MOUSE_RIGHT) != 0);
-                let image = fade.poll(host)?;
+                if self.general_enabled&&admit {
+                    if let Some(ticket)=fade.audio_ticket(host.now_ms()) {
+                        if self.general_exit_ticket!=Some(ticket) {
+                            self.general_exit_ticket=Some(ticket);
+                            self.general_queue.push_back(GeneralStep::Update(2,ticket));
+                            return Ok(false);
+                        }
+                    }
+                }
+                let image = if admit {fade.poll(host)?}else{fade.poll_dependency()?};
                 let finished = fade.finished();
                 if let Some(image) = image {
                     if finished {
@@ -1015,6 +1116,10 @@ impl NativeStartupShell {
             );
             self.mode = self.profile.logo_next;
             self.opening_entry_pending = self.mode == NativeMode::Opening;
+            if self.general_enabled {
+                self.general_queue.push_back(GeneralStep::Begin(self.mode));
+                return Ok(false);
+            }
         }
         Ok(self.mode == NativeMode::Opening)
     }

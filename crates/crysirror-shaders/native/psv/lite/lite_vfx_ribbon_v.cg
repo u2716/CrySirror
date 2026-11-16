@@ -1,0 +1,3 @@
+// SPDX-License-Identifier: MPL-2.0
+// vfx_render.wgsl vs_ribbon
+#include "lite_vfx_vertex.cgh"

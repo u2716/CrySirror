@@ -128,9 +128,11 @@ impl Bridge<'_> {
         let previous:Value=serde_json::from_slice(&self.host.query_engine(self.client,EngineQuery::Layer(alias))?)?;
         if !previous.is_null(){self.submit(vec![json!({"op":"remove","id":alias})],vec![])?;}
         let [l,t,r,b]=self.services.primary.resources.get(&object).map(|(_,crop)|*crop).or_else(||self.services.packed.active.get(&object).and_then(|playback|playback.crop)).unwrap_or([0,0,logical[0] as i32,logical[1] as i32]);
+        if crate::trace_enabled(){eprintln!("circus packed show object={object} size={:?} logical={logical:?} crop={:?}",image.size,[l,t,r,b]);}
         let quad=crysirror_scene::layer::crop::texel_center_quad(image.size,logical.map(|value|value as f32),[l as f32,t as f32,r as f32,b as f32],[0.,0.])?;
         let size=quad.map(|quad|quad.size).unwrap_or([1.,1.]);let uv=quad.map(|quad|quad.uv);
-        self.submit(vec![json!({"op":"set_visible","id":visual::object_layer(object),"visible":self.native_primary_visible(object,true)}),json!({"op":"put","layer":{"id":layer(object),"parent":root,"rect":[0,0,size[0],size[1]],"uv":uv,"visible":quad.is_some(),"sampling":{"address_u":"repeat","address_v":"repeat"},"filter":filter,"paint":{"kind":"image","asset":image.path.relative()}}})],vec![])?;
+        let order=self.dc3_leaf_order(object)?;
+        self.submit(vec![json!({"op":"set_visible","id":visual::object_layer(object),"visible":self.native_primary_visible(object,true)}),json!({"op":"put","layer":{"id":layer(object),"parent":root,"order":order,"rect":[0,0,size[0],size[1]],"uv":uv,"visible":quad.is_some(),"sampling":{"address_u":"repeat","address_v":"repeat"},"filter":filter,"paint":{"kind":"image","asset":image.path.relative()}}})],vec![])?;
         if let Some(old)=self.services.packed.images.insert(object,image.clone()) {
             if old.path!=image.path {self.host.release_image_resource(self.client,old.path.relative())?;}
         }
@@ -203,6 +205,16 @@ impl Bridge<'_> {
                     self.services.packed.archives.insert(name.clone(),archive);
                 }
                 self.services.packed.slots.insert(*slot,name.clone());Ok(true)
+            },
+            PackedRequest::Frame{slot,object,frame}=>{
+                let name=self.services.packed.slots.get(slot).cloned().context("Circus packed frame slot is unbound")?;
+                let frames=u32::try_from(self.services.packed.archives[&name].entries().len())?;
+                if *frame>=frames {
+                    self.submit(vec![json!({"op":"set_visible","id":visual::object_layer(*object),"visible":false})],vec![])?;
+                    return Ok(true);
+                }
+                let Some((image,logical))=self.prepare_packed_image(*object,&name,i32::try_from(*frame)?)?else{return Ok(false)};
+                self.show_packed_image(*object,&image,logical)?;Ok(true)
             },
             PackedRequest::Play{slot,seed,position,hold_ticks,looping}=>{
                 let Some(name)=self.services.packed.slots.get(slot).cloned()else{return Ok(true)};

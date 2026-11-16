@@ -7,12 +7,13 @@
 use super::*;
 use std::collections::{BTreeMap, BTreeSet};
 
-pub(super) fn publish(inner: Box<dyn Archive>) -> Result<Box<dyn Archive>> {
-    if !inner
-        .entries()
-        .iter()
-        .any(|e| e.metadata["xp3_inline_name"].is_string())
-    {
+/// `info_names` maps each entry published under an inline filename to its
+/// original `info` name (typed XP3 facts, see `Xp3Facts`).
+pub(super) fn publish(
+    inner: Box<dyn Archive>,
+    info_names: &BTreeMap<u32, Box<str>>,
+) -> Result<Box<dyn Archive>> {
+    if info_names.is_empty() {
         return Ok(inner);
     }
     let mut names: BTreeMap<String, Vec<&ArchiveEntry>> = BTreeMap::new();
@@ -27,11 +28,8 @@ pub(super) fn publish(inner: Box<dyn Archive>) -> Result<Box<dyn Archive>> {
             .entry(path.relative().to_owned())
             .or_default()
             .push(entry);
-        if entry.metadata["xp3_inline_name"].is_string() {
-            let native = entry.metadata["xp3_info_name"]
-                .as_str()
-                .context("XP3 inline name without native info name")?
-                .replace('\\', "/");
+        if let Some(native) = info_names.get(&entry.id) {
+            let native = native.replace('\\', "/");
             let native =
                 crysirror_core::path::VfsPath::new(crysirror_core::path::Mount::Asset, &native)
                     .map_err(|e| anyhow::anyhow!("XP3 native info alias: {e}"))?;
@@ -51,7 +49,7 @@ pub(super) fn publish(inner: Box<dyn Archive>) -> Result<Box<dyn Archive>> {
         }
         let preferred: Vec<_> = entries
             .iter()
-            .filter(|e| e.metadata["xp3_inline_name"].is_string())
+            .filter(|e| info_names.contains_key(&e.id))
             .collect();
         ensure!(
             preferred.len() == 1,
@@ -86,13 +84,7 @@ pub(super) fn publish(inner: Box<dyn Archive>) -> Result<Box<dyn Archive>> {
                 .entries()
                 .iter()
                 .filter(|e| !hidden.contains(&e.id))
-                .map(|e| {
-                    let mut e = e.clone();
-                    if let Some(ids) = shadows.get(&e.id) {
-                        e.metadata["xp3_shadowed_native_ids"] = serde_json::json!(ids);
-                    }
-                    e
-                })
+                .cloned()
                 .collect(),
         )
     };
@@ -100,12 +92,15 @@ pub(super) fn publish(inner: Box<dyn Archive>) -> Result<Box<dyn Archive>> {
         inner,
         visible,
         aliases,
+        shadows,
     }))
 }
 struct InlineArchive {
     inner: Box<dyn Archive>,
     visible: Option<Vec<ArchiveEntry>>,
     aliases: BTreeMap<String, u32>,
+    /// Preferred inline entry id -> shadowed plain-index ids.
+    shadows: BTreeMap<u32, Vec<u32>>,
 }
 impl Archive for InlineArchive {
     fn entries(&self) -> &[ArchiveEntry] {
@@ -122,6 +117,16 @@ impl Archive for InlineArchive {
     fn open(&self, id: u32, ctx: &DecodeContext) -> Result<Arc<dyn AssetReader>> {
         self.inner.open(id, ctx)
     }
+    fn entry_metadata(&self, id: u32) -> serde_json::Value {
+        let mut out = self.inner.entry_metadata(id);
+        if let Some(ids) = self.shadows.get(&id) {
+            if !out.is_object() {
+                out = serde_json::json!({});
+            }
+            out["xp3_shadowed_native_ids"] = serde_json::json!(ids);
+        }
+        out
+    }
 }
 #[cfg(test)]
 mod tests {
@@ -136,31 +141,41 @@ mod tests {
             Ok(Arc::new(MemoryAssetReader(Arc::from([id as u8]))))
         }
     }
-    fn entry(id: u32, path: &str, inline: bool) -> ArchiveEntry {
+    fn entry(id: u32, path: &str, _inline: bool) -> ArchiveEntry {
         ArchiveEntry {
             id,
             path: path.into(),
             size: 1,
             stored_size: 1,
-            metadata: if inline {
-                serde_json::json!({"xp3_inline_name":path,"xp3_info_name":format!("native_token_{id}")})
-            } else {
-                serde_json::json!({})
-            },
+            metadata: serde_json::json!({}),
         }
+    }
+    fn info(entries: &[ArchiveEntry], inline: &[u32]) -> BTreeMap<u32, Box<str>> {
+        entries
+            .iter()
+            .filter(|e| inline.contains(&e.id))
+            .map(|e| (e.id, format!("native_token_{}", e.id).into_boxed_str()))
+            .collect()
+    }
+    fn publish_with(entries: Vec<ArchiveEntry>, inline: &[u32]) -> Result<Box<dyn Archive>> {
+        let names = info(&entries, inline);
+        publish(Box::new(Source(entries)), &names)
     }
     #[test]
     fn explicit_inline_namespace_wins_over_fallback_without_losing_original_record_or_info_alias() {
-        let a = publish(Box::new(Source(vec![
-            entry(0, "startup.tjs", false),
-            entry(1, "startup.tjs", true),
-            entry(2, "scene.ks", true),
-        ])))
+        let a = publish_with(
+            vec![
+                entry(0, "startup.tjs", false),
+                entry(1, "startup.tjs", true),
+                entry(2, "scene.ks", true),
+            ],
+            &[1, 2],
+        )
         .unwrap();
         assert_eq!(a.entries().len(), 2);
         assert_eq!(a.entries()[0].id, 1);
         assert_eq!(
-            a.entries()[0].metadata["xp3_shadowed_native_ids"],
+            a.entry_metadata(1)["xp3_shadowed_native_ids"],
             serde_json::json!([0])
         );
         assert_eq!(a.resolve("native_token_1"), Some(1));
@@ -179,15 +194,7 @@ mod tests {
     }
     #[test]
     fn multiple_inline_records_or_token_conflicts_are_not_guessed() {
-        assert!(publish(Box::new(Source(vec![
-            entry(0, "same", true),
-            entry(1, "same", true)
-        ])))
-        .is_err());
-        assert!(publish(Box::new(Source(vec![
-            entry(0, "native_token_1", false),
-            entry(1, "other", true)
-        ])))
-        .is_err());
+        assert!(publish_with(vec![entry(0, "same", true), entry(1, "same", true)], &[0, 1]).is_err());
+        assert!(publish_with(vec![entry(0, "native_token_1", false), entry(1, "other", true)], &[1]).is_err());
     }
 }

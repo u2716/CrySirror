@@ -128,6 +128,13 @@ impl EntryFadePlayer {
     pub(crate) fn active(&self) -> bool {
         self.active
     }
+    /// A ticket exists only for the Calcu which will decrement the entry
+    /// counter. Image completions and the terminal handoff are not updates.
+    pub(crate) fn audio_ticket(&self, now:u64)->Option<u64> {
+        (self.job.is_none() && self.active && self.remaining>0
+            && self.next_ms.is_none_or(|next|now>=next))
+            .then(|| (1u64<<63) | (self.spec.frames-self.remaining) as u64)
+    }
     pub(crate) fn resumes_mode_at(&self, now_ms: u64) -> bool {
         self.job.is_none() && self.remaining <= 0 && self.next_ms.is_none_or(|next| now_ms >= next)
     }

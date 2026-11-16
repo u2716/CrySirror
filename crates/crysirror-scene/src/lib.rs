@@ -305,5 +305,6 @@ pub mod effect;
 
 /// Engine-clock sprite sheet sequences shared by retained UI/native adapters.
 pub mod sprite;
+pub mod sprite_samples;
 
 pub mod canvas_lens;

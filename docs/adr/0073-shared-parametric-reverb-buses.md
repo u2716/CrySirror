@@ -16,7 +16,7 @@ their dated scope. They must not be read as an engine-wide current missing list.
 Use standalone FunDSP 0.23.0's 32-channel FDN for authored late reverberation,
 behind CrySirror `LateReverb`, `PreparedReverb` and bus routing. Exact original
 revision, complete source inventory, registry comparison, reviewed hooks and
-unchanged upstream licenses are in crysirror-acoustics/REVERB_UPSTREAM.md.
+unchanged upstream licenses are in crysirror-acoustics/REVERB_SOURCES.md.
 Only std is selected: its optional file loader/convolution features are disabled.
 No VM, legacy mixer, engine renderer or audio-device backend is imported.
 

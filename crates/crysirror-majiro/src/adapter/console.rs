@@ -361,7 +361,10 @@ impl MajiroVm {
                 0x32d0236c => {
                     //447E00 is the console/history voice form.447D90's
                     //90d5298a direct playback deliberately bypasses this state.
-                    ensure!(matches!(args.len(), 1 | 2), "Majiro console voice ABI");
+                    //447E00 reads the first filename and, when argc>=2,
+                    //the second repeat word. Later arguments are ignored by
+                    //the native dispatcher, not an ABI mismatch.
+                    ensure!(!args.is_empty(), "Majiro console voice requires a filename");
                     let name = args[0].bytes()?;
                     let end = name
                         .iter()

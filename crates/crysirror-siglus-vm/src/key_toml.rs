@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
-// Migrated from pinned siglus_rs; see UPSTREAM.md and upstream-files.json.
+// Migrated from pinned siglus_rs; see SOURCE.json and upstream-files.json.
 use crate::io_fs::{self as fs, OpenOptions};
 #[cfg(target_os = "horizon")]
 use std::io::Read;

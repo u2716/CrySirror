@@ -38,21 +38,21 @@ fn color(table: &Names, prefix: &str) -> Result<[u8; 4]> {
 }
 
 impl ModeReturn {
-    pub(crate) fn validate_skinned_entry(table:&Names)->Result<()> {
+    pub(crate) fn validate_plain_menu_entry(table:&Names,mode:i32)->Result<()> {
         crate::native_general_entry::ModeEntry::read(table)?;
-        ensure!(table.integer(b"enterExitVoiceFlag")?.unwrap_or(0)==0,
-            "NNN General delayed entry/exit voice requires its original trigger policy");
+        crate::native_general_audio::GeneralAudioPolicy::for_mode(mode,table)?;
         Ok(())
     }
-    pub(crate) fn validate_entry(table: &Names) -> Result<()> {
+    pub(crate) fn validate_skinned_entry(table:&Names)->Result<()> {
+        crate::native_general_entry::ModeEntry::read(table)?;
+        Ok(())
+    }
+    pub(crate) fn validate_entry(table: &Names,mode:i32) -> Result<()> {
         ensure!(
             table.integer(b"enterFadeInType")?.unwrap_or(0) == 0,
             "NNN General entry fade requires its original countdown/shared exact effect"
         );
-        ensure!(
-            table.integer(b"enterExitVoiceFlag")?.unwrap_or(0) == 0,
-            "NNN General delayed entry/exit voice requires its original trigger policy"
-        );
+        crate::native_general_audio::GeneralAudioPolicy::for_mode(mode,table)?;
         Ok(())
     }
     ///4f0cd0 captures before admitting the countdown.4f2640 reads special
@@ -144,6 +144,10 @@ pub(crate) struct ExitFadePlayer {
     tables: crate::native_simple_wipe::Tables,
 }
 impl ExitFadePlayer {
+    pub(crate) fn audio_ticket(&self,now:u64)->Option<u64> {
+        (self.job.is_none()&&!self.finished&&self.next_ms.is_none_or(|next|now>=next))
+            .then(|| (1u64<<62)|u64::from(self.count))
+    }
     pub fn new(
         host: &mut dyn HostServices,
         client: ClientId,
