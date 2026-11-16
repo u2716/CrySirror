@@ -22,5 +22,6 @@ RUN apt-get update \
 # Host shader tools use stable; the Horizon library rebuilds std with nightly.
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
         | sh -s -- -y --no-modify-path --profile minimal --default-toolchain stable \
+            --component rustfmt --component clippy \
     && rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component rust-src \
     && chmod -R a+rwX "$RUSTUP_HOME" "$CARGO_HOME"

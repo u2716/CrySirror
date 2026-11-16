@@ -272,8 +272,11 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Report build tools
+      - name: Prepare host toolchain before parallel build
         run: |
+          # Match rust-toolchain.toml before make starts concurrent host tools.
+          # Otherwise each cargo invocation tries to install the same components.
+          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
           rustc +stable --version
           rustc +"$TOOLCHAIN" --version
           "$DEVKITA64/bin/aarch64-none-elf-gcc" --version
