@@ -126,6 +126,10 @@ pub trait AudioSource: Send {
 /// Unified resident-resource decoder used by channels, data-VM playback and
 /// engine Audio APIs. Native codecs share the same AudioSource/mixer contract.
 pub fn open_memory(bytes: Arc<[u8]>, extension: Option<&str>) -> Result<Box<dyn AudioSource>> {
+    if let Some((start, len)) = crate::wave_ogg::ogg_range(&bytes[..bytes.len().min(4096)], bytes.len() as u64) {
+        let payload: Arc<[u8]> = Arc::from(&bytes[start as usize..(start + len) as usize]);
+        return Ok(Box::new(Stream::from_bytes(payload, Some("ogg"))?));
+    }
     if crate::wave_box::WaveBoxInfo::parse(&bytes).is_some() {
         return open_asset(Arc::new(crysirror_core::service::MemoryAssetReader(bytes)),extension);
     }
@@ -688,6 +692,18 @@ pub fn open_asset(
     }
     if let Some(info)=crate::wave_box::WaveBoxInfo::parse(&header[..count]) {
         return crate::wave_box::open(reader,info);
+    }
+    if header[..count].starts_with(b"RIFF") {
+        let mut prefix=[0u8;512];
+        let mut n=0;
+        while n<prefix.len() {
+            let read=reader.read_at(n as u64,&mut prefix[n..])?;
+            if read==0{break;}ensure!(read<=prefix.len()-n,"invalid audio header read");n+=read;
+        }
+        if let Some((start,len))=crate::wave_ogg::ogg_range(&prefix[..n],reader.len()?) {
+            let payload=crysirror_resource::subrange(reader,start,len)?;
+            return open_reader(Box::new(AssetMedia(crysirror_io::AssetIo::new(payload)?)),Some("ogg"));
+        }
     }
     open_reader(
         Box::new(AssetMedia(crysirror_io::AssetIo::new(reader)?)),

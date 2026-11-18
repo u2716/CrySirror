@@ -50,6 +50,16 @@ resources.mount("data.xp3", "story", { format: "kirikiri/xp3" });
 bitmap.load(1, "story/image/background.png");
 ```
 
+## Malie resources
+
+Malie LIB/LIBP/LIBU archives use the same Resources mount path. LIBU preserves
+nested Unicode directories and 64-bit offsets; LIBP supports configurable data
+alignment. Host-keyed Camellia/CFI profiles provide bounded random reads, with
+TXTz/PSBz decompression and MGF/PNG/WebP companions for DZI composition. Classic
+LIB is an additional format beyond the pinned arc_unpacker inventory above.
+See the [format and key contract](../crates/crysirror-formats-arc/src/legacy/e/malie.md).
+This is resource support; a Malie script VM is not registered.
+
 ## Native pictures and textures
 
 `Runtime.assets.decoders` owns a content-aware CPU registry. Registered formats
@@ -137,7 +147,7 @@ Hosts can register a format through `ArchiveFormat`, a byte transform through
 `ByteTransform`, and a key service through `KeyProvider`. `PipelineSelector`
 chooses transforms by format and native entry metadata. The built-ins are
 `identity`, `zlib`, `deflate`, `lzss`, `xor`, `aes-ctr128be`, `aes-ctr128le`,
-`aes-cbc`, `aes256-cbc` and `rc4`. Shared Rust primitives additionally implement
+`aes-cbc`, `aes256-cbc`, `rc4`, `malie-camellia` and `malie-cfi`. Shared Rust primitives additionally implement
 Blowfish little-endian blocks, PKCS#1 type-1 RSA public decoding and caller-IV
 MD5 for native layouts. CBC validates complete blocks and selected padding;
 LZSS distinguishes bytewise and configurable bitwise layouts.

@@ -117,6 +117,7 @@ tracks remaining engine capabilities.
 | [0101](0101-native-host-packages-and-console-seams.md) | Native packages and console host seams | mobile/macOS packaging and retained sessions; console device backends deferred |
 | [0102](0102-engine-adoption-and-runtime-integration.md) | Engine adoption and runtime integration | accepted two-mode policy; documentation, safe analysis, managed outputs and platform boundaries |
 | [0103](0103-game-space-ui.md) | Game-space UI, controls and presentation boundaries | accepted design; shared layout, skins, interaction and lifecycle separate from OS windows |
+| [0104](0104-n2system-slot-checkpoint.md) | N2System non-zero slots use a CrySirror checkpoint version | accepted; stage 1 capture/write, restore pending |
 
 ## Requirement backlog
 

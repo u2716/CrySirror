@@ -58,6 +58,7 @@ impl LayerSystem {
         external: bool,
         self_source: bool,
     ) -> Result<()> {
+        ensure!(!self.targets.allocations.keys().any(|(owner,_)|*owner==client.0), "isolated crossfade of persistent targets requires an explicit target scope");
         ensure!(
             (id != source || self_source) && (1..=600_000).contains(&duration_ms),
             "crossfade endpoints/duration"

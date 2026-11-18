@@ -19,12 +19,14 @@ struct Rule {
 pub struct RedirectStorage {
     source: Arc<dyn ClientStorage>,
     rules: RwLock<BTreeMap<String, Rule>>,
+    retained: crate::retained_assets::RetainedAssets,
 }
 impl RedirectStorage {
     pub fn new(source: Arc<dyn ClientStorage>) -> Self {
         Self {
             source,
             rules: RwLock::new(BTreeMap::new()),
+            retained: Default::default(),
         }
     }
     fn validate(name: &str, empty: bool) -> Result<()> {
@@ -134,14 +136,31 @@ impl ClientStorage for RedirectStorage {
             .clear();
         Ok(())
     }
+    fn retain_asset_bytes(&self, path: &VfsPath, bytes: Arc<[u8]>, budget: u64) -> Result<()> {
+        self.retained.insert(&self.resolve(path)?, bytes, budget)
+    }
+    fn release_asset_bytes(&self, path: Option<&VfsPath>) -> Result<()> {
+        let resolved = path.map(|path| self.resolve(path)).transpose()?;
+        self.retained.remove(resolved.as_ref())
+    }
     fn read(&self, path: &VfsPath) -> Result<Vec<u8>> {
-        self.source.read(&self.resolve(path)?)
+        let path = self.resolve(path)?;
+        if let Some(bytes) = self.retained.get(&path)? { return Ok(bytes.to_vec()); }
+        self.source.read(&path)
     }
     fn open_asset(&self, path: &VfsPath) -> Result<Arc<dyn AssetReader>> {
-        self.source.open_asset(&self.resolve(path)?)
+        let path = self.resolve(path)?;
+        if let Some(bytes) = self.retained.get(&path)? {
+            return Ok(Arc::new(crysirror_core::service::MemoryAssetReader(bytes)));
+        }
+        self.source.open_asset(&path)
     }
     fn open_read(&self, path: &VfsPath) -> Result<Arc<dyn AssetReader>> {
-        self.source.open_read(&self.resolve(path)?)
+        let path = self.resolve(path)?;
+        if let Some(bytes) = self.retained.get(&path)? {
+            return Ok(Arc::new(crysirror_core::service::MemoryAssetReader(bytes)));
+        }
+        self.source.open_read(&path)
     }
     fn metadata(&self, mount: Mount, name: &str) -> Result<Option<StorageMetadata>> {
         self.source.metadata(mount, &self.relative(mount, name)?)
@@ -151,7 +170,7 @@ impl ClientStorage for RedirectStorage {
     }
     fn exists(&self, path: &VfsPath) -> bool {
         self.resolve(path)
-            .is_ok_and(|path| self.source.exists(&path))
+            .is_ok_and(|path| self.retained.get(&path).is_ok_and(|v| v.is_some()) || self.source.exists(&path))
     }
     fn served_by_container(&self, path: &VfsPath) -> bool {
         self.resolve(path)

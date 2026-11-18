@@ -7,6 +7,7 @@ pub mod dialog;
 pub mod hit_mask;
 pub mod menu;
 pub mod navigation;
+pub mod linear_slider;
 pub mod pointer_motion;
 pub mod snapshot;
 pub mod theme;

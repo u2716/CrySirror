@@ -17,6 +17,7 @@ Each reference contains the native ABI, dispatch/return and wait contracts, shar
 | WillPlus / AdvHD | [willplus](willplus.md) | 519 | 74 |
 | KiriKiri / TJS2 / KAG | [krkr](krkr.md) | 1003 | 449 |
 | N-System | [nsystem](nsystem.md) | 134 | 128 |
+| codeX RScript | [rscript](rscript.md) | 138 | 0 |
 
 ## Status
 
@@ -37,6 +38,8 @@ Each reference contains the native ABI, dispatch/return and wait contracts, shar
 Counts are table entries, not an upstream completeness percentage. Modules, class receivers, profiles and subcommands have separate namespaces. Unknown native totals remain unknown.
 
 Siglus, BGI, SoftPAL and RFVP use the [upstream-version and local-change table](../INTEGRATED_ENGINES.md).
+
+Malie / MalieSystem has a [native coverage and host contract reference](../../crates/crysirror-malie/README.md#coverage-against-the-exe), with separate [game validation records](../validation/malie-ragnarok.md).
 
 Regenerate after dispatch changes:
 

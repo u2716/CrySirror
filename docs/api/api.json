@@ -4475,6 +4475,36 @@
           "returns": "void"
         },
         {
+          "doc": "Allocate persistent client-owned bitmap backing with size, clear, optional immutable initial image and opaque sampling. Replacement starts a fresh generation; mutable pixels require readback before checkpoints.",
+          "name": "createRenderTarget",
+          "params": [
+            {
+              "name": "id",
+              "type": "number"
+            },
+            {
+              "name": "spec",
+              "type": "Record<string, any>"
+            }
+          ],
+          "returns": "void"
+        },
+        {
+          "doc": "Redirect an owned bitmap/text draw into another owned persistent target in ordinary painter order. Null restores frame output. Removing a destination detaches its sources; hidden targets retain backing.",
+          "name": "setOutput",
+          "params": [
+            {
+              "name": "id",
+              "type": "number"
+            },
+            {
+              "name": "target",
+              "type": "number | null"
+            }
+          ],
+          "returns": "void"
+        },
+        {
           "doc": "Change finite positive rectangle geometry while preserving scalar/external animation and unrelated Layer state.",
           "name": "setRect",
           "params": [
@@ -7463,6 +7493,16 @@
       "system": "layer"
     },
     {
+      "api": "Layers.createRenderTarget",
+      "op": "create_render_target",
+      "system": "layer"
+    },
+    {
+      "api": "Layers.setOutput",
+      "op": "set_output",
+      "system": "layer"
+    },
+    {
       "api": "Layers.setMotionElapsed",
       "op": "set_motion_elapsed",
       "system": "layer"
@@ -7520,6 +7560,11 @@
     {
       "api": "Canvases.apply",
       "op": "copy_subtree",
+      "system": "canvas"
+    },
+    {
+      "api": "Canvases.apply",
+      "op": "draw_subtree",
       "system": "canvas"
     },
     {
@@ -8379,6 +8424,18 @@
         },
         {
           "default": null,
+          "doc": "Look up one stored channel and copy the result into selected channels. RGBA write bits are1/2/4/8; every lookup reads the original pixel.",
+          "name": "channel_lookup",
+          "rust_type": "channel: u8, write_mask: u8, table: Vec<u8>"
+        },
+        {
+          "default": null,
+          "doc": "Normalize RGB only where stored alpha is exactly zero.",
+          "name": "clear_transparent_rgb",
+          "rust_type": ""
+        },
+        {
+          "default": null,
           "doc": "Binary alpha from a reference channel byte. Spec: reference[x,y], channel0..3, equal0..255, different0..255. RGB remains unchanged.",
           "name": "coverage_reference_key",
           "rust_type": "spec: crate::coverage_key::CoverageReferenceKey"
@@ -8454,6 +8511,12 @@
           "doc": "",
           "name": "masked_blur",
           "rust_type": "spec: crate::masked_blur::MaskedBlur"
+        },
+        {
+          "default": null,
+          "doc": "Sequential 3x3 stored RGBA averages with row feedback and one final top/bottom/left border repair; the right visible column stays intact.",
+          "name": "feedback_box_blur",
+          "rust_type": "spec: crate::feedback_box_blur::FeedbackBoxBlur"
         },
         {
           "default": null,
@@ -8568,6 +8631,30 @@
           "doc": "Truncated straight RGBA means, one uniform colour per rectangular cell.",
           "name": "block_average",
           "rust_type": "cell: [u16; 2]"
+        },
+        {
+          "default": null,
+          "doc": "Scaled sprite/tile composition onto a new transparent canvas.",
+          "name": "tile_compose",
+          "rust_type": "spec: crate::tile_compose::TileCompose"
+        },
+        {
+          "default": null,
+          "doc": "Vertical alpha-ramp streaks stored into the image (Rain 438E90).",
+          "name": "streak_field",
+          "rust_type": "spec: crate::streak_field::StreakField"
+        },
+        {
+          "default": null,
+          "doc": "One signed horizontal shift per row, transparent fill (Wave 433E80).",
+          "name": "row_shift",
+          "rust_type": "offsets: Vec<i32>"
+        },
+        {
+          "default": null,
+          "doc": "Truncated straight RGBA means over complete square cells only; the right/bottom remainder keeps its source pixels (N-System Mosaic 433630).",
+          "name": "full_block_average",
+          "rust_type": "cell: u16"
         },
         {
           "default": null,
@@ -8859,6 +8946,12 @@
         },
         {
           "default": null,
+          "doc": "codeX RScript image-layer load conversions (mirror, rotate/zoom, tone).",
+          "name": "cel_convert",
+          "rust_type": "spec: crate::cel_convert::CelConvert"
+        },
+        {
+          "default": null,
           "doc": "Top-left proportional nearest sampling using exact integer quotients.",
           "name": "resize_nearest",
           "rust_type": "width: u32, height: u32"
@@ -8884,6 +8977,279 @@
       ],
       "name": "ImageEffect",
       "used_by": "Bitmap.applyEffectAsync; shared worker effects"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "passes",
+          "rust_type": "u8"
+        },
+        {
+          "default": null,
+          "doc": "Include edge pixels with the actual in-bounds neighbour count. False retains the existing interior scan and native border-repair profile.",
+          "name": "clipped_edges",
+          "rust_type": "bool"
+        }
+      ],
+      "name": "FeedbackBoxBlur",
+      "used_by": "Stored-byte sequential3x3 RGBA blur, truncated feedback, explicit final border policy and optional clipped-edge neighborhoods"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "Additive [X,Y,Z] Euler angles in radians before each sprite's model rotation. This differs from rotating the completed scene/view matrix. Zero preserves existing geometry; native camera-angle subtraction can supply the negated camera channels without changing sprite motion.",
+          "name": "model_rotation_offset",
+          "rust_type": "[f32; 3]"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "plane",
+          "rust_type": "f32"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "near",
+          "rust_type": "f32"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "far",
+          "rust_type": "f32"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "near_clamp",
+          "rust_type": "bool"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "affine_uv",
+          "rust_type": "bool"
+        },
+        {
+          "default": null,
+          "doc": "Legacy canvas rasterizers truncate projected coordinates into signed 16-bit vertices. Zero/negative reference distances are meaningful for this profile (collapsed/reflected geometry), without changing the ordinary positive-distance perspective contract.",
+          "name": "signed_16_xy",
+          "rust_type": "bool"
+        }
+      ],
+      "name": "CanvasLens",
+      "used_by": "Shared inherited canvas projection; signed_16_xy explicitly selects wrapping native screen coordinates"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "position",
+          "rust_type": "[f32; 2]"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "transform",
+          "rust_type": "SpriteTransform"
+        }
+      ],
+      "name": "PoseCopy",
+      "used_by": "One retained geometric pose sharing its source layer's paint and resource leases"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "Input poses are painter ordered; the original draws after them when true and before them when false.",
+          "name": "before",
+          "rust_type": "bool"
+        },
+        {
+          "default": null,
+          "doc": "Thousandths of the original layer's own opacity, truncated before ancestor opacity. All copies share this scale, without age attenuation.",
+          "name": "opacity",
+          "rust_type": "u16"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "poses",
+          "rust_type": "Vec<PoseCopy>"
+        }
+      ],
+      "name": "PoseCopies",
+      "used_by": "Bounded ordered pose instances with fixed opacity before or after the primary layer"
+    },
+    {
+      "doc": "Immutable polar sampling geometry. Distance stays binary32 and direction is a wrapping256-entry angular index; no game/runtime or device is retained.",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "client",
+          "rust_type": "ClientId"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "size",
+          "rust_type": "[u32; 2]"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "distances",
+          "rust_type": "Arc<[f32]>"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "angles",
+          "rust_type": "Arc<[u8]>"
+        }
+      ],
+      "name": "RadialPhaseField",
+      "used_by": "Rust immutable scoped polar geometry retained by asynchronous field-warp jobs"
+    },
+    {
+      "doc": "Immutable spherical-lens sampling tables for an `n`x`n` extent: one signed integer source offset, four /255 bilinear weights and an outside-disc flag per output pixel. No game/runtime or device state is retained.",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "client",
+          "rust_type": "ClientId"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "size",
+          "rust_type": "u32"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "offsets",
+          "rust_type": "Arc<[[i32; 2]]>"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "weights",
+          "rust_type": "Arc<[[u8; 4]]>"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "outside",
+          "rust_type": "Arc<[bool]>"
+        }
+      ],
+      "name": "LensTable",
+      "used_by": "Rust immutable scoped spherical-lens offset/weight tables retained by asynchronous field-warp jobs"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "Bounded inverse polar rotation, tapering linearly to zero at radius. Strength 0..1000 denotes zero to one full turn at the centre. Explicit compatibility geometry, independent of any native callback layout.",
+          "name": "PolarTwist",
+          "rust_type": "field: Arc<RadialPhaseField>, center: [i32; 2], radius: u16, strength: u16, clear: [u8; 4]"
+        },
+        {
+          "default": null,
+          "doc": "Nearest RGBA sampling through a quantized polar wave. Outside samples write the declared clear pixel; phase and angles wrap at256 entries.",
+          "name": "RadialPhase",
+          "rust_type": "field: Arc<RadialPhaseField>, phase: u32, frequency: u16, amplitude: u16, clear: [u8; 4]"
+        },
+        {
+          "default": null,
+          "doc": "Sample the source (a frame whose extent may differ from the output) through a `LensTable` placed at `origin`. `full_cover` selects the native variant used when the lens covers the whole source: it has no outside-disc copy path.",
+          "name": "Lens",
+          "rust_type": "table: Arc<LensTable>, origin: [i32; 2], full_cover: bool"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "Displacement",
+          "rust_type": "first: Arc<VectorFieldResource>, second: Option<Arc<VectorFieldResource>>, amount: u16, bilinear: bool"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "Wave",
+          "rust_type": "field: Arc<VectorFieldResource>, samples: Arc<[i16]>, origin: [i32; 2], wrap: bool, bilinear: bool"
+        }
+      ],
+      "name": "FieldWarpSpec",
+      "used_by": "Rust ImageInput::FieldWarp sampling profile, including vector, radial phase, lens and explicit polar twist fields"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "canvas",
+          "rust_type": "[u32; 2]"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "tiles",
+          "rust_type": "Vec<TileDraw>"
+        }
+      ],
+      "name": "TileCompose",
+      "used_by": "ImageEffect.tile_compose canvas and ordered sprite draws"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "Source rectangle x, y, width, height (clipped to the input).",
+          "name": "src",
+          "rust_type": "[i32; 4]"
+        },
+        {
+          "default": null,
+          "doc": "Canvas position of the unscaled rectangle's top-left corner.",
+          "name": "dst",
+          "rust_type": "[i32; 2]"
+        },
+        {
+          "default": null,
+          "doc": "Horizontal/vertical scale in 1/256 units; the sign mirrors the axis.",
+          "name": "scale",
+          "rust_type": "[i32; 2]"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "opacity",
+          "rust_type": "u8"
+        },
+        {
+          "default": null,
+          "doc": "Rotation around the scaled tile centre, clockwise in canvas pixels. Zero keeps the existing axis-scaled sampling path exactly unchanged.",
+          "name": "rotation_degrees",
+          "rust_type": "i32"
+        }
+      ],
+      "name": "TileDraw",
+      "used_by": "TileCompose.tiles source region, destination, scale, opacity and optional rotation"
     },
     {
       "doc": "",
@@ -11255,6 +11621,18 @@
       "fields": [
         {
           "default": null,
+          "doc": "Copy the first image's RGBA only where its alpha is nonzero and its RGB differs from the second image. All other output pixels are zero.",
+          "name": "rgb_difference_cutout",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "matte_span256",
+          "rust_type": "spec: crate::matte_span::MatteSpan"
+        },
+        {
+          "default": null,
           "doc": "",
           "name": "floating_polygon_fragments",
           "rust_type": "spec: crate::floating_polygon_fragments::FloatingPolygonFragments"
@@ -12722,7 +13100,7 @@
       "used_by": "CivilTimeZoneQuery.poll completion"
     },
     {
-      "doc": "",
+      "doc": "Client-owned asynchronous timezone-policy dependency.",
       "fields": [],
       "name": "CivilTimeZoneQuery",
       "used_by": "Opaque client-owned asynchronous timezone query"
@@ -12858,7 +13236,7 @@
       "used_by": "HttpRequestJob.poll completion"
     },
     {
-      "doc": "",
+      "doc": "Dropping a job cancels delivery; the transport checks cancellation at each bounded I/O boundary. Deadline bounds a currently blocked system operation.",
       "fields": [],
       "name": "HttpRequestJob",
       "used_by": "Opaque cancellable client-scoped HTTP job"
@@ -14514,6 +14892,18 @@
           "doc": "",
           "name": "half_cosine",
           "rust_type": "pi: f64"
+        },
+        {
+          "default": null,
+          "doc": "Unit quarter-sine acceleration/deceleration families.",
+          "name": "sine",
+          "rust_type": "direction: ProgressDirection"
+        },
+        {
+          "default": null,
+          "doc": "Inverse of (1-cos(pi*t))/2, with exact unit endpoints.",
+          "name": "inverse_half_cosine",
+          "rust_type": ""
         },
         {
           "default": null,
@@ -17262,6 +17652,12 @@
         },
         {
           "default": null,
+          "doc": "Signed source samples at interleaved block indices 0, N/4, 3N/4 and N-2, before gain, panning, channel exchange and per-voice effects. They support inexpensive presentation/lip-sync meters without exposing a decoder buffer or its lifetime. Inactive sources return zeroes.",
+          "name": "source_taps",
+          "rust_type": "[f32; 4]"
+        },
+        {
+          "default": null,
           "doc": "Mixer-owner observation of the independent external dB balance track.",
           "name": "balance",
           "rust_type": "AudioBalanceInfo"
@@ -17900,6 +18296,56 @@
       "used_by": "HostServices::begin_audio / AudioRequest::PlayAsset"
     },
     {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "Wet output fraction0..1; dry output uses1-wet.",
+          "name": "wet",
+          "rust_type": "f32"
+        },
+        {
+          "default": null,
+          "doc": "Delayed signal fed back into the delay input,0..1.",
+          "name": "feedback",
+          "rust_type": "f32"
+        },
+        {
+          "default": null,
+          "doc": "Independent left/right delay in milliseconds,1..2000.",
+          "name": "delay_ms",
+          "rust_type": "[f32; 2]"
+        },
+        {
+          "default": null,
+          "doc": "Feed the opposite channel's delayed signal into each delay line.",
+          "name": "cross_feedback",
+          "rust_type": "bool"
+        }
+      ],
+      "name": "StereoEchoSpec",
+      "used_by": "AudioRequest.SetEcho bounded stereo delay"
+    },
+    {
+      "doc": "Portable streaming stereo effects. These define portable DSP parameters, not a sample-identical implementation of a platform's proprietary effect. Variants are tagged by `\"kind\"`.",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "chorus",
+          "rust_type": "wet: f32, depth: f32, feedback: f32, delay_ms: f32, frequency_hz: f32, phase_degrees: f32"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "reverb",
+          "rust_type": "input_gain: f32, wet: f32, decay_seconds: f32, damping: f32"
+        }
+      ],
+      "name": "StereoEffectSpec",
+      "used_by": "AudioRequest.SetStereoEffect portable streaming chorus and reverb"
+    },
+    {
       "doc": "Client-scoped channel commands for the shared decoder/mixer. Encoded bytes and decoder resources are not part of logical VM snapshots.",
       "fields": [
         {
@@ -17997,6 +18443,18 @@
           "doc": "Change the source playback multiplier without seeking, restarting or resetting resampler/DSP history. Pitch, looping and transport survive.",
           "name": "SetRate",
           "rust_type": "channel: u32, rate: f32"
+        },
+        {
+          "default": null,
+          "doc": "Replace a live voice's bounded stereo delay. None removes the effect. A missing voice is unchanged; no source is opened by this control.",
+          "name": "SetEcho",
+          "rust_type": "channel: u32, effect: Option<StereoEchoSpec>"
+        },
+        {
+          "default": null,
+          "doc": "Replace a live voice's portable chorus/reverb; None clears it.",
+          "name": "SetStereoEffect",
+          "rust_type": "channel: u32, effect: Option<StereoEffectSpec>"
         },
         {
           "default": null,
@@ -24971,6 +25429,12 @@
       "fields": [
         {
           "default": null,
+          "doc": "Ordered geometry instances sharing this layer's current bitmap.",
+          "name": "pose_copies",
+          "rust_type": "Option<Arc<pose_copies::PoseCopies>>"
+        },
+        {
+          "default": null,
           "doc": "Pause automatic motion, glyph reveal and subtree crossfade clocks. Descendants inherit the pause; explicit external samples still apply.",
           "name": "clock_paused",
           "rust_type": "bool"
@@ -25734,6 +26198,12 @@
         },
         {
           "default": null,
+          "doc": "Decode colour in the top half and a green-channel alpha plane in the bottom half of each picture. Geometry is half the encoded height. The ordinary Play contract and its default opaque frames are unchanged.",
+          "name": "PlayAlpha",
+          "rust_type": "id: u32, asset: String, looping: bool, audio: bool, gain: f32"
+        },
+        {
+          "default": null,
           "doc": "",
           "name": "Stop",
           "rust_type": "id: u32"
@@ -25867,6 +26337,12 @@
     {
       "doc": "",
       "fields": [
+        {
+          "default": false,
+          "doc": "Top colour/bottom green-channel alpha packed pictures. Disabled by default; applies before publication and survives seek/loop/restart.",
+          "name": "packed_alpha",
+          "rust_type": "bool"
+        },
         {
           "default": false,
           "doc": "",
@@ -26138,6 +26614,12 @@
           "rust_type": "Option<LayerMask>"
         },
         {
+          "default": null,
+          "doc": "An independent canvas-space red-channel matte, multiplied into source alpha after colour effects and continuous rule-image coverage.",
+          "name": "stencil",
+          "rust_type": "Option<LayerStencil>"
+        },
+        {
           "default": false,
           "doc": "Discard pixels whose alpha is below 1/255.",
           "name": "alpha_test",
@@ -26319,6 +26801,12 @@
           "doc": "Address mask pixels in source-image coordinates; outside pixels keep their original alpha instead of stretching or clamping the mask.",
           "name": "source_space",
           "rust_type": "bool"
+        },
+        {
+          "default": null,
+          "doc": "Continuous coverage computed after interpolating mask bytes. None keeps the existing per-texel integer mask profile unchanged.",
+          "name": "coverage",
+          "rust_type": "Option<MaskCoverage>"
         }
       ],
       "name": "LayerMask",
@@ -27807,6 +28295,24 @@
       "fields": [
         {
           "default": null,
+          "doc": "Allocate or replace mutable backing for an existing owned drawable.",
+          "name": "create_render_target",
+          "rust_type": "id: u32, spec: render_target::RenderTargetSpec, reset_view: bool"
+        },
+        {
+          "default": null,
+          "doc": "Redirect this drawable into a retained target; None restores the frame.",
+          "name": "set_output",
+          "rust_type": "id: u32, target: Option<u32>"
+        },
+        {
+          "default": null,
+          "doc": "Replace bitmap geometry instances without replacing image, pose tracks, source crop, camera or target ownership. None removes all instances.",
+          "name": "set_pose_copies",
+          "rust_type": "id: u32, copies: Option<Arc<pose_copies::PoseCopies>>"
+        },
+        {
+          "default": null,
           "doc": "Advance this client's automatic motion, reveal and transition clocks. Other clients, physical input, external producers and global time stay on their own clocks. Bounded to one day per admitted operation.",
           "name": "advance_time",
           "rust_type": "delta_ms: u64"
@@ -28695,7 +29201,7 @@
           "default": null,
           "doc": "",
           "name": "code_pages",
-          "rust_type": "Option<[u32;2]>"
+          "rust_type": "Option<[u32; 2]>"
         }
       ],
       "name": "FontCatalogFace",
@@ -29244,7 +29750,7 @@
       "used_by": "UiEvent.widget client/local identity"
     }
   ],
-  "fingerprint": "730548bc6fc7fb95",
+  "fingerprint": "8693c021aef05c1f",
   "generated_by": "crysirror-engine api_doc (tests/api_docs.rs)",
   "globals": [
     {

@@ -1,5 +1,35 @@
 # Native application packages
 
+## Pre-release downloads and CI retention
+
+A successful default-branch [Build workflow](../.github/workflows/build.yml)
+updates the [rolling pre-release download page](https://github.com/xmoezzz/CrySirror/releases/tag/pre-release).
+Manual builds on the default branch can publish too; pull requests and other
+branches do not publish. All required build jobs must succeed first.
+
+The page contains Linux x86_64, Windows x86_64 and macOS arm64 CLI packages,
+a Web ZIP, a PS Vita VPK and a Switch NRO, plus SHA-256 checksums, source commit
+metadata and notices. The macOS CLI is not notarized. Android and iOS remain
+separate packaging routes below. Only the `pre-release` release/tag is replaced;
+versioned releases are preserved. Builds contain no user game data or fonts.
+
+Intermediate package artifacts expire after one day and are deleted immediately
+after a successful transfer to the release. Build timings expire after three
+days. Downloading a release does not use the Actions cache.
+
+Dependency caches retain compressed Cargo downloads and Git object databases,
+not unpacked registry sources, Git checkouts or entire target trees. Linux/macOS
+keep compiler-object caching with sccache. Windows uses direct rustc and a short
+build path because its sccache wrapper exceeds the process command limit. Older
+dependency-cache generations are pruned after publication. Console Docker cache
+metadata lives in the published GHCR images using inline caching, rather than
+consuming Actions cache space.
+
+GitHub includes 10 GiB of Actions cache per repository, separate from artifacts
+and packages; older entries are evicted at the configured limit and unused
+entries expire after seven days. The workflows do not increase the repository's
+paid cache limit. See [GitHub cache limits](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching#usage-limits-and-eviction-policy).
+
 ## Console CI images
 
 The build workflow uses CrySirror-owned GHCR images:

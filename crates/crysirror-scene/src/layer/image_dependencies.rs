@@ -16,7 +16,12 @@ impl LayerSpec {
     }
     /// Visit immutable image paths without copying glyph/mesh/vertex payloads.
     pub fn visit_image_dependencies(&self, visitor: &mut dyn FnMut(&str)) {
+        self.visit_filter_image_dependencies(visitor);
+        self.visit_paint_image_dependencies(visitor);
+    }
+    fn visit_filter_image_dependencies(&self, visitor:&mut dyn FnMut(&str)) {
         if let Some(filter) = &self.filter {
+            if let Some(stencil)=&filter.stencil {visitor(&stencil.asset);}
             if let Some(tone) = &filter.tone_curve {
                 visitor(&tone.asset);
             }
@@ -24,8 +29,10 @@ impl LayerSpec {
                 visitor(&mask.asset);
             }
         }
+    }
+    fn visit_paint_image_dependencies(&self,visitor:&mut dyn FnMut(&str)) {
         match &self.paint {
-            Paint::CoverageWrite{paint}=>{let mut layer=self.clone();layer.paint=(**paint).clone();layer.visit_image_dependencies(visitor);},
+            Paint::CoverageWrite{paint}=>{let mut layer=self.clone();layer.paint=(**paint).clone();layer.visit_paint_image_dependencies(visitor);},
             Paint::Image { asset, .. } | Paint::Puppet { asset, .. } => visitor(asset),
             Paint::Snapshot { layers, .. } => {
                 for layer in layers.iter() {
@@ -60,9 +67,16 @@ impl LayerSystem {
     /// Enumerate retained dependencies. False is a retirement barrier: an open
     /// transaction may still restore older paths that its journal retains.
     pub fn visit_image_dependencies(&self, visitor: &mut dyn FnMut(ClientId, &str)) -> bool {
+        for target in self.targets.allocations.values() {
+            if let Some(asset) = &target.spec.initial { visitor(ClientId(target.owner), asset); }
+        }
         for (client, layers) in &self.clients {
             for layer in layers.values() {
-                layer.visit_image_dependencies(&mut |asset| visitor(ClientId(*client), asset));
+                if self.targets.allocations.contains_key(&(*client,layer.id)) {
+                    layer.visit_filter_image_dependencies(&mut |asset|visitor(ClientId(*client),asset));
+                } else {
+                    layer.visit_image_dependencies(&mut |asset| visitor(ClientId(*client), asset));
+                }
             }
         }
         for (client, transitions) in &self.crossfades {

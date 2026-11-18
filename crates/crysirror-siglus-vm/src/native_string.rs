@@ -509,7 +509,7 @@ impl PreparedString {
                 *next = next
                     .checked_add(1)
                     .context("native STRING layer identity overflow")?;
-                out.push(LayerSpec { tie_order:None, clock_paused: false, source_crop: None,
+                out.push(LayerSpec { pose_copies:None, tie_order:None, clock_paused: false, source_crop: None,
                     viewport_clip: None,
                     id,
                     parent,

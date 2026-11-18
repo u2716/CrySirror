@@ -2425,6 +2425,8 @@ dependencies = [
  "crysirror-formats-arc",
  "crysirror-krkr",
  "crysirror-majiro",
+ "crysirror-malie",
+ "crysirror-n2system",
  "crysirror-network",
  "crysirror-nscripter",
  "crysirror-nsystem",
@@ -2436,6 +2438,7 @@ dependencies = [
  "crysirror-rfvp",
  "crysirror-rfvp-integrated",
  "crysirror-rfvp-vm",
+ "crysirror-rscript",
  "crysirror-runtime",
  "crysirror-scene",
  "crysirror-script-js",
@@ -2450,11 +2453,14 @@ dependencies = [
  "crysirror-vita-io",
  "crysirror-wgpu",
  "crysirror-willplus",
+ "encoding_rs",
  "image 0.24.9",
  "log",
+ "pollster 0.3.0",
  "serde",
  "serde_json",
  "tempfile",
+ "wgpu",
  "windows-sys 0.61.2",
 ]
 
@@ -2496,6 +2502,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "crysirror-malie"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "crysirror-core",
+ "crysirror-image",
+ "crysirror-resource",
+ "crysirror-runtime",
+ "crysirror-scene",
+ "crysirror-squirrel",
+ "crysirror-tasks",
+ "encoding_rs",
+ "flate2",
+ "log",
+ "quick-xml 0.37.5",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "crysirror-mobile"
 version = "0.2.0"
 dependencies = [
@@ -2507,6 +2533,25 @@ dependencies = [
  "raw-window-handle",
  "serde_json",
  "wgpu",
+]
+
+[[package]]
+name = "crysirror-n2system"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "crysirror-core",
+ "crysirror-formats-arc",
+ "crysirror-image",
+ "crysirror-resource",
+ "crysirror-runtime",
+ "crysirror-scene",
+ "crysirror-tasks",
+ "crysirror-text",
+ "encoding_rs",
+ "glam 0.27.0",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -2790,6 +2835,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "crysirror-rscript"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "crysirror-core",
+ "crysirror-image",
+ "crysirror-resource",
+ "crysirror-runtime",
+ "crysirror-tasks",
+ "encoding_rs",
+ "log",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "crysirror-runtime"
 version = "0.2.0"
 dependencies = [
@@ -3005,6 +3066,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "crysirror-squirrel"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "cc",
+ "serde_json",
+]
+
+[[package]]
 name = "crysirror-sugarpot"
 version = "0.2.0"
 dependencies = [
@@ -3154,6 +3224,7 @@ dependencies = [
  "oxideav-h265",
  "oxideav-mp4",
  "oxideav-pixfmt",
+ "vp8-decoder",
 ]
 
 [[package]]
@@ -11452,6 +11523,12 @@ checksum = "446e7ffcb6c27a71d05af7e51ef2ee5b71c48424b122a832f2439651e1914899"
 dependencies = [
  "rayon",
 ]
+
+[[package]]
+name = "vp8-decoder"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e75d02b41ef642b8fb67d0ea86ce2b5555f1b94bf5d664df9b03adee9cae1ed9"
 
 [[package]]
 name = "vsimd"

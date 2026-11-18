@@ -110,6 +110,14 @@ impl Compositor {
     }
 }
 impl Renderer {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn texture_readback_reader(
+        &self, texture: wgpu::Texture, size: [u32;2],
+    ) -> std::sync::Arc<dyn crysirror_core::service::AssetReader> {
+        std::sync::Arc::new(SnapshotReadback {
+            gpu:self.gpu.clone(), texture, size, pixels:std::sync::OnceLock::new(),
+        })
+    }
     fn transition_inputs_ready(
         &mut self,
         assets: &mut Assets,
@@ -1086,6 +1094,7 @@ impl Renderer {
         }
         if !self.textures.contains_key(&key) {
             let probe = crysirror_scene::layer::Primitive {
+                target: None, output: None,
                 coverage:crysirror_scene::layer::coverage::Operation::None,
                 tie_order:None,
                 depth_order:None,

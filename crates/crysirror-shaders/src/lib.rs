@@ -15,6 +15,7 @@ pub fn material_modules(hook:&str)->[String;3] {
 }
 pub fn modules()->Vec<Module> {
  let mut result=Vec::new();
+ result.push(assembled("quad_v2",&["quad_v2.wgsl"]));
  for name in ["quad","mesh","present","puppet","wipe","ordered_dither","composite","vfx_render","raytrace","ray_lite","gi_project","vsm_mark","lod_select","vfx_compute","vfx_cull","vfx_sort","rt_geometry","rt_denoise"] {result.push(assembled(name,&[&format!("{name}.wgsl")]));}
  for name in ["ssao","taa","ssr","brdf","prefilter","tonemap","bloom","copy_hdr","exposure","probe"] {result.push(assembled(name,&["fullscreen.wgsl",&format!("{name}.wgsl")]));}
  result.push(assembled("particle",&["pbr_common.wgsl","particle.wgsl"]));

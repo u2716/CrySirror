@@ -504,6 +504,16 @@ impl HostServices for SharedHost {
         self.canvas_images
             .begin_frame(client, size, &self.image_tasks, self.image_memory.clone())
     }
+    fn begin_layer_target_image(
+        &mut self,
+        client: ClientId,
+        layer: u32,
+    ) -> crysirror_core::Result<crysirror_core::image_processing::ImageJob> {
+        if !self.clients.contains(&client) { return Err(Error::NotFound); }
+        let target = self.engine.layers.render_target(client,layer).ok_or(Error::NotFound)?.clone();
+        self.canvas_images.begin_target(client,target,self.published_images.snapshot(),&self.text,
+            &self.image_tasks,self.image_memory.clone())
+    }
     fn begin_pattern(
         &mut self,
         client: ClientId,
@@ -1171,19 +1181,15 @@ impl HostServices for SharedHost {
         if !self.clients.contains(&client) {
             return Err(Error::NotFound);
         }
+        let packed_alpha = matches!(&request, MediaRequest::PlayAlpha { .. });
         let id = request.id();
         if id >= 1024 {
             return Err(Error::Limit("media identity"));
         }
         let slot = 0x7100_0000 + id;
         match request {
-            MediaRequest::Play {
-                asset,
-                looping,
-                audio,
-                gain,
-                ..
-            } => {
+            MediaRequest::Play { asset, looping, audio, gain, .. }
+            | MediaRequest::PlayAlpha { asset, looping, audio, gain, .. } => {
                 let path = VfsPath::new(Mount::Asset, &asset)?;
                 let storage = self.fs.storage(client)?;
                 self.media
@@ -1193,6 +1199,7 @@ impl HostServices for SharedHost {
                         storage,
                         &path,
                         crate::media::MediaOptions {
+                            packed_alpha,
                             looping,
                             audio,
                             gain,
@@ -1256,7 +1263,7 @@ impl HostServices for SharedHost {
         use crysirror_core::path::Mount;
         if !self.clients.contains(&client){return Err(Error::NotFound)}
         if id>=1024{return Err(Error::Limit("media identity"))}
-        self.media.play_reader(client,id,source,crate::media::MediaOptions{looping:options.looping,audio:options.audio,gain:options.gain,audio_channel:0x7000_0000+id,clock:crate::media::MediaClock::Engine}).map_err(|e|Error::Io(e.to_string()))?;
+        self.media.play_reader(client,id,source,crate::media::MediaOptions{packed_alpha:false,looping:options.looping,audio:options.audio,gain:options.gain,audio_channel:0x7000_0000+id,clock:crate::media::MediaClock::Engine}).map_err(|e|Error::Io(e.to_string()))?;
         for audio in self.media.take_audio(){self.channel_audio.submit(audio.client.0,audio.request).map_err(|e|Error::Io(e.to_string()))?;}
         let slot=0x7100_0000+id;
         self.surfaces.push((client,slot,Some((1,1,vec![0,0,0,255]))));

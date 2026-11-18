@@ -175,7 +175,8 @@ impl<'a> ImageDecodeContext<'a> {
 impl DecoderRegistry {
     /// Encoded source metadata, selected by exactly the same native-provider
     /// priorities and ambiguity rules as pixel decoding. Unknown fields remain
-    /// None and no standard-codec fallback fabricates original plane presence.
+    /// None. Built-in PNG/JPEG codecs inspect their actual encoded headers;
+    /// normalized RGBA never stands in for original plane presence.
     pub fn encoding_info_with(
         &self,
         path: &str,
@@ -195,7 +196,7 @@ impl DecoderRegistry {
         };
         context.check_cancelled()?;
         let Some(decoder) = self.select_format(path, bytes, format)? else {
-            return Ok(None);
+            return crate::standard_encoding::inspect(path,bytes);
         };
         let result = decoder.encoding_info(bytes, &context)?;
         if let Some(info) = &result {

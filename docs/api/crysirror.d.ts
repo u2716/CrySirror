@@ -622,6 +622,10 @@ declare class Layers {
   setParent(id: number, parent: number | null): void;
   /** Replace owned layer paint while retaining geometry and animation; non-image paints clear image-only sampling and UV crop. */
   setPaint(id: number, paint: Record<string, any>): void;
+  /** Allocate persistent client-owned bitmap backing with size, clear, optional immutable initial image and opaque sampling. Replacement starts a fresh generation; mutable pixels require readback before checkpoints. */
+  createRenderTarget(id: number, spec: Record<string, any>): void;
+  /** Redirect an owned bitmap/text draw into another owned persistent target in ordinary painter order. Null restores frame output. Removing a destination detaches its sources; hidden targets retain backing. */
+  setOutput(id: number, target: number | null): void;
   /** Change finite positive rectangle geometry while preserving scalar/external animation and unrelated Layer state. */
   setRect(id: number, rect: number[]): void;
   /** Sample an externally clocked motion track at caller elapsed units. */

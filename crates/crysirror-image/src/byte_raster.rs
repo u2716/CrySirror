@@ -122,6 +122,11 @@ impl ByteRasterMath {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ByteRaster {
+    /// Copy the first image's RGBA only where its alpha is nonzero and its
+    /// RGB differs from the second image. All other output pixels are zero.
+    RgbDifferenceCutout,
+    #[serde(rename="matte_span_256")]
+    MatteSpan256 {spec:crate::matte_span::MatteSpan},
     FloatingPolygonFragments{spec:crate::floating_polygon_fragments::FloatingPolygonFragments},
     AlphaBrushes{spec:crate::alpha_brushes::AlphaBrushes},
     PackedRepeatRows{spec:crate::packed_repeat_rows::PackedRepeatRows},
@@ -199,6 +204,7 @@ pub enum ByteRaster {
 impl ByteRaster {
     pub fn validate(&self) -> Result<()> {
         match self {
+            Self::RgbDifferenceCutout=>{},
             Self::FloatingPolygonFragments{spec}=>spec.validate()?,
             Self::AlphaBrushes{spec}=>spec.validate()?,
             Self::PackedRepeatRows{spec}=>spec.validate()?,
@@ -210,6 +216,7 @@ impl ByteRaster {
             Self::FixedScanlinesWrapping32{spec}=>spec.validate_wrapping32()?,
             Self::FixedScanlines {spec}=>spec.validate()?,
             Self::ClippedScanlineSample {spec}=>spec.validate()?,
+            Self::MatteSpan256{spec}=>spec.validate()?,
             Self::RowBlitBatch{spec}=>spec.validate()?,
             Self::SpatialColorBand{spec}=>spec.validate()?,
             Self::RowBlit { spec } => spec.validate()?,
@@ -308,6 +315,22 @@ impl ByteRaster {
         check: &dyn Fn() -> Result<()>,
     ) -> Result<ImageSurface> {
         self.validate()?;
+        if matches!(self,Self::RgbDifferenceCutout) {
+            destination.validate()?;source.validate()?;
+            ensure!(destination.width==source.width && destination.height==source.height,"difference cutout dimensions");
+            ensure!(u64::from(source.width)*u64::from(source.height)<=MAX_EFFECT_PIXELS,"difference cutout pixel budget");
+            let mut output=ImageSurface{width:destination.width,height:destination.height,rgba:vec![0;destination.rgba.len()]};
+            let stride=destination.width as usize*4;
+            for y in 0..destination.height as usize {
+                check()?;
+                for x in 0..destination.width as usize {
+                    let at=y*stride+x*4;
+                    let a=&destination.rgba[at..at+4];let b=&source.rgba[at..at+4];
+                    if a[3]!=0 && a[..3]!=b[..3] {output.rgba[at..at+4].copy_from_slice(a);}
+                }
+            }
+            check()?;return Ok(output);
+        }
         if let Self::RepeatScaleSample{spec}=self{return spec.apply(destination,source,check);}
         if let Self::AxisBoxSample{spec}=self{return spec.apply(destination,source,check);}
         if let Self::RadialTwistSample{spec}=self{return spec.apply(destination,source,check);}
@@ -319,6 +342,7 @@ impl ByteRaster {
         if let Self::FloatingPolygonFragments{spec}=self{return spec.apply(destination,source,check);}
         if let Self::AlphaBrushes{spec}=self{return spec.apply(destination,source,check);}
         if let Self::PackedRepeatRows{spec}=self{return spec.apply(destination,source,check);}
+        if let Self::MatteSpan256{spec}=self{return spec.apply(destination,source,check);}
         if let Self::RowBlitBatch{spec}=self{return spec.apply(destination,source,check);}
         if let Self::SpatialColorBand{spec}=self{return spec.apply(destination,source,check);}
         if let Self::RowBlit { spec } = self { return spec.apply(destination,source,check); }
@@ -353,8 +377,9 @@ impl ByteRaster {
         check()?;
         let mut output = destination.clone();
         match *self {
+            Self::RgbDifferenceCutout=>unreachable!("difference cutout handled before output allocation"),
             Self::RepeatScaleSample{..}|Self::AxisBoxSample{..}|Self::RadialTwistSample{..}|Self::AffineSampleBlend{..}|Self::LinearChannelTransfer{..}|Self::FixedScanlinesWrapping32{..}|Self::FixedScanlines{..}|Self::ClippedScanlineSample{..}=>unreachable!(),
-            Self::FloatingPolygonFragments{..}|Self::AlphaBrushes{..}|Self::PackedRepeatRows{..}|Self::RowBlitBatch{..}|Self::SpatialColorBand{..}|Self::MaskedClipBlit{..} | Self::RowBlit { .. } | Self::NativeBoxBlur {..} | Self::RowTintBlend{..} | Self::MaskedBackdropShift{..} => unreachable!(),
+            Self::MatteSpan256{..}|Self::FloatingPolygonFragments{..}|Self::AlphaBrushes{..}|Self::PackedRepeatRows{..}|Self::RowBlitBatch{..}|Self::SpatialColorBand{..}|Self::MaskedClipBlit{..} | Self::RowBlit { .. } | Self::NativeBoxBlur {..} | Self::RowTintBlend{..} | Self::MaskedBackdropShift{..} => unreachable!(),
             Self::MaskedAddSubtract256{..}=>unreachable!(),
             Self::RandomWipe { .. }
             | Self::PolygonFragments { .. }

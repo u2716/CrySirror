@@ -209,7 +209,16 @@ pub fn sprite_quad_geometry_in_hierarchy(
     let camera = if s.camera_enabled||s.canvas_projection.is_some() { &s } else { inherited_camera.unwrap_or(&s) };
     let corners = [[local[0],local[1]], [local[2],local[1]], [local[2],local[3]], [local[0],local[3]]];
     let parent = sprite_parent_matrix(sprite, dst[0], dst[1], parent);
-    let model = parent * sprite_model_matrix(sprite, dst[0], dst[1]);
+    let rotation_offset = camera.canvas_projection.map_or([0.; 3], |lens| lens.model_rotation_offset);
+    let model = parent * if rotation_offset == [0.; 3] {
+        sprite_model_matrix(sprite, dst[0], dst[1])
+    } else {
+        let mut model_sprite = sprite.clone();
+        model_sprite.rotate_x += rotation_offset[0];
+        model_sprite.rotate_y += rotation_offset[1];
+        model_sprite.rotate += rotation_offset[2];
+        sprite_model_matrix(&model_sprite, dst[0], dst[1])
+    };
     let world = corners.map(|p| {
         let q = if s.billboard {
             let mut facing=s.clone();

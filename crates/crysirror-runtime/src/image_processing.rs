@@ -53,6 +53,7 @@ struct Resource {
     owner: ClientId,
     size: [u32; 2],
     opaque: bool,
+    scalar_coverage: bool,
     pixels: Arc<[u8]>,
     _charge: Charge,
 }
@@ -80,6 +81,7 @@ impl ImageResource for Resource {
     fn opaque(&self) -> bool {
         self.opaque
     }
+    fn scalar_coverage(&self) -> Option<bool> {Some(self.scalar_coverage)}
 }
 struct Job {
     task: Option<Task<Arc<dyn ImageResource>>>,
@@ -193,7 +195,11 @@ pub(crate) fn begin(
                 0
             },
     )?;
-    let permit = pool.reserve().map_err(|e| Error::Io(e.to_string()))?;
+    // Admission pressure is retryable; malformed input and memory-budget
+    // failures remain distinct. Callers keep their native PC until accepted.
+    let permit = pool.reserve().map_err(|e| if e.is::<crysirror_tasks::CapacityExceeded>() {
+        Error::Limit("image preparation task capacity")
+    } else {Error::Io(e.to_string())})?;
     let task = permit
         .spawn(move |cancel| {
             let _scratch = scratch;
@@ -254,6 +260,7 @@ fn effect_output_size(mut size: [u32; 2], effects: &[ImageEffect]) -> Result<[u3
     for effect in effects {
         match effect {
             ImageEffect::NinePatch{width,height}=>{size=[*width,*height];}
+            ImageEffect::TileCompose{spec}=>{size=spec.canvas;}
             ImageEffect::CoverageBitmap{spec}=>{size=spec.size;}
             ImageEffect::GlyphCoverageBlur{radius,..}=>{
                 size=[size[0].checked_add(radius*2).ok_or(Error::Limit("coverage width"))?,size[1].checked_add(radius*2).ok_or(Error::Limit("coverage height"))?];
@@ -300,6 +307,7 @@ fn effect_output_size(mut size: [u32; 2], effects: &[ImageEffect]) -> Result<[u3
                     .map_err(|e| Error::Io(e.to_string()))?
             }
             ImageEffect::Rotate { degrees } if matches!(*degrees, 90 | 270) => size.swap(0, 1),
+            ImageEffect::CelConvert { spec } => size = spec.output_size(size),
             _ => (),
         }
         crysirror_image::rgba_len(size[0], size[1]).map_err(|e| Error::Io(e.to_string()))?;
@@ -1272,9 +1280,11 @@ pub(crate) fn resource_from_surface(
 ) -> anyhow::Result<Arc<dyn ImageResource>> {
     image.validate()?;
     let mut opaque = true;
+    let mut scalar_coverage = true;
     for block in image.rgba.chunks(256 * 1024) {
         check()?;
         opaque &= block.chunks_exact(4).all(|p| p[3] == 255);
+        scalar_coverage &= block.chunks_exact(4).all(|p|p[0]==p[1]&&p[0]==p[2]&&p[0]==p[3]);
     }
     check()?;
     let pixels = Arc::from(std::mem::take(&mut image.rgba));
@@ -1282,6 +1292,7 @@ pub(crate) fn resource_from_surface(
         owner,
         size: [image.width, image.height],
         opaque,
+        scalar_coverage,
         pixels,
         _charge: charge,
     }))

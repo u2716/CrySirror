@@ -41,6 +41,9 @@ pub fn adapter_registry() -> Result<AdapterRegistry> {
     crysirror_qlie::adapter::register(&mut registry)?;
     crysirror_sugarpot::register(&mut registry)?;
     crysirror_nsystem::register(&mut registry)?;
+    crysirror_rscript::register(&mut registry)?;
+    crysirror_n2system::register(&mut registry)?;
+    crysirror_malie::register(&mut registry)?;
     crysirror_system_nnn::installed::register(&mut registry)?;
     crysirror_system4::factory::register(&mut registry)?;
     crysirror_avg32::register(&mut registry)?;
@@ -113,6 +116,27 @@ pub fn bootstrap_interruptible(mut rt: Runtime, plan: &Plan, cancelled: impl Fn(
         let mut engine = crysirror_engine::App::new(rt, "game")?;
         engine.init()?;
         let cx = engine.context();
+        if plan.engine=="N2System" {
+            use crysirror_core::service::HostServices;
+            let state=cx.state()?;
+            let client=crysirror_core::state::ClientId(1);
+            let config:crysirror_n2system::Config=serde_json::from_value(state.runtime.project.clients[0].config.clone())?;
+            if let Some(material)=config.archive_material {
+                state.resources.keys=material.provider(client,state.runtime.host.storage(client)?)?;
+            }
+        }
+        if plan.engine=="Malie" {
+            use crysirror_core::{service::HostServices,path::{Mount,VfsPath}};
+            let state=cx.state()?;
+            let client=crysirror_core::state::ClientId(1);
+            let config:crysirror_malie::adapter::Config=serde_json::from_value(state.runtime.project.clients[0].config.clone())?;
+            let storage=state.runtime.host.storage(client)?;
+            let source=storage.open_read(&VfsPath::new(Mount::Asset,&config.executable)?)?;
+            let material=crysirror_malie::material::archive_key(&crysirror_resource::read_all(source.as_ref(),16*1024*1024)?)?;
+            let keys=std::sync::Arc::new(crysirror_resource::MemoryKeyProvider::default());
+            keys.insert(client,"malie-game",material)?;
+            state.resources.keys=keys;
+        }
         let resources = cx.singleton("Resources")?;
         for (name, profile) in &plan.profiles {
             cx.call(
@@ -198,6 +222,12 @@ pub fn load_fonts(rt: &mut Runtime, override_font: Option<&Path>) -> Result<()> 
 /// snapshot trees stop nesting. A request whose images are still loading is
 /// retried next frame.
 pub fn materialize_canvases(renderer: &mut Renderer, rt: &mut Runtime) -> Result<()> {
+    if rt.has_pending_target_images() {
+        let canvas = rt.project.canvas;
+        renderer.set_engine_frame(rt.host.engine.frame(canvas)?)?;
+        renderer.flush_target_writes(&rt.host.scene,&mut rt.assets,canvas,rt.project.background)?;
+        rt.prepare_target_images(|target,assets|renderer.render_target_readback(assets,target))?;
+    }
     rt.prepare_frame_captures(|rt| {
         let canvas = rt.project.canvas;
         renderer.set_engine_frame(rt.host.engine.frame(canvas)?)?;

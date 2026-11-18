@@ -106,7 +106,7 @@ impl UiSystem {
             } else {
                 Some(primitive.uv)
             };
-            layers.push(LayerSpec { tie_order:None, clock_paused: false,
+            layers.push(LayerSpec { pose_copies:None, tie_order:None, clock_paused: false,
                 source_crop: None,
                 viewport_clip: None,
                 id: layers.len() as u32 + 1,

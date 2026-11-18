@@ -1,5 +1,44 @@
 # API change log
 
+## `8693c021aef05c1f` (2026-11-17): canvas camera channels, packed-alpha media and stereo DSP
+
+- `CanvasLens.model_rotation_offset` adds default-zero Euler channels in radians before sprite model rotation. Existing JSON preserves its geometry; Rust struct literals must supply the new field. This permits native camera-angle subtraction without replacing the sprite's animation or rotating a completed view matrix.
+- Rust-only `MediaRequest::PlayAlpha` and `MediaOptions.packed_alpha` select top-half colour/bottom-half green-channel alpha. Shared decoder workers unpack before publication, and displayed height is halved. Ordinary `Play` and omitted JSON options retain opaque playback. Exhaustive Rust matches add the variant; `MediaOptions` literals supply the field or use `Default`.
+- Rust-only `AudioRequest::SetStereoEffect` and `StereoEffectSpec` add bounded streaming chorus and late reverb to an owned live channel. Existing Echo, gain, rate and transport controls retain their contracts. The portable DSP does not promise sample-identical DirectSound output. Exhaustive Rust matches add the control; `None` removes it. `StereoEchoSpec` is also included in the generated parameter reference.
+- N2System slot sound records add an optional, default-empty stereo-effect description. Old records remain readable; decoder handles and DSP history are recreated, not serialized.
+
+## `97f00ec0e0c50f30` (2026-11-17): polar twist and tile rotation
+
+- Rust-only `FieldWarpSpec::PolarTwist` adds a scoped radial geometry field, centre, radius, strength and clear pixel. `crysirror_image::radial_phase::twist` samples the inverse polar rotation. Exhaustive Rust matches must handle the new variant; existing sampling profiles are unchanged. N2System uses this as an explicit Spiral compatibility extension because the native constructor installs an incompatible callback.
+- `TileDraw.rotation_degrees` adds centred sprite rotation to `ImageEffect.tile_compose`. Omitted JSON values default to zero and retain the existing axis-scaled path; Rust struct literals must supply the new field. `TileCompose` and `TileDraw` now have generated parameter tables. N2System LookupRain uses this to draw its recovered internal white stripe.
+
+## `78307311e0154f29` (2026-11-17): N-System tile and streak image operations
+
+- `ImageEffect` adds `tile_compose` (`spec`: `canvas`, `tiles` of `src`/`dst`/`scale` in 1/256 with sign mirroring/`opacity`, at most 65536), specified by `crysirror_image::tile_compose`: scaled sprite/tile composition onto a new transparent canvas whose size replaces the image size (N-System Split, TurnOver, Drop, FloatBubble).
+- `ImageEffect` adds `streak_field` (`spec`: `streaks`, `ramp`, `color`), specified by `crysirror_image::streak_field`: vertical alpha-ramp streaks stored into the image (N-System Rain 438E90).
+- Rust-only, not in the script reference: `crysirror_image::tile_compose`, `crysirror_image::streak_field`.
+
+## `2bbf87c0234528eb` (2026-11-17): N-System Mosaic and Wave image operations
+
+- `ImageEffect` adds `full_block_average` (`cell` 1..4096), specified by `ImageSurface::full_block_average`: truncated straight RGBA means over complete square cells only; the right/bottom remainder keeps its source pixels, and a cell as large as the image is a no-op (N-System Mosaic 433630). It does not replace `block_average`, which still averages partial edge cells.
+- `ImageEffect` adds `row_shift` (`offsets`, one signed pixel shift per row, at most 16384), specified by `crysirror_image::row_shift`: each row moves horizontally independently with transparent fill (N-System Wave 433E80).
+- Rust-only, not in the script reference: `crysirror_image::row_shift::apply`.
+
+## `e11262cc5a343e2b` (2026-11-17): N2System spherical lens warp
+
+- `FieldWarpSpec` adds `Lens { table, origin, full_cover }`, sampled by `crysirror_image::lens::warp`: a spherical-lens displacement of an arbitrary-extent source into a square output through an immutable `LensTable` (per-pixel offsets, four /255 bilinear weights, outside-disc flag). `LensTable` is a new Rust-only data type; tables are built by `crysirror_image::lens::prepare`. No existing variant changed; consumers matching `FieldWarpSpec` exhaustively add one arm.
+- Rust-only, not in the script reference: `crysirror_image::lens` (`prepare`, `warp`).
+
+## `b27e595a1c729491` (2026-11-17): RScript image-load conversions, WCG writer, canvas draw_subtree
+
+- `ImageEffect` adds `cel_convert` (`spec`: `mirror` bits, `degrees`, `percent`, `tone` 0..15), specified by `crysirror_image::cel_convert`: the codeX RScript load-time mirror, rotation/zoom and tone conversions.
+- The script command list adds `canvas.draw_subtree` (`CanvasCommand::DrawSubtree { source, destination }`, through `Canvases.apply`).
+- Opaque trait handles (`CivilTimeZoneQuery`, `HttpRequestJob`) now resolve their source declaration in the reference.
+- The regenerated artifacts also carry the uncommitted declarations present in the working tree at generation time (`feedback_box_blur`, audio `SetEcho`, layer `stencil`/`coverage` and the progress-curve shapes).
+- Rust-only, not in the script reference:
+  - `crysirror_image::wcg_encode` (`encode_wcg`, `percent_shrink`, `WCG_VERSION`).
+  - `crysirror_image::cel_convert::emboss` (the CMath emboss table).
+
 ## `730548bc6fc7fb95` (2026-11-16): N-System transitions and MGD regions
 
 - `TransitionEffect::Mask` adds `vague` (1..=4096): a continuous soft edge in rule levels, weight (r + t·(vague+255) − 255)/vague, replacing the discrete `fade` step when set.

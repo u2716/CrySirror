@@ -11,6 +11,8 @@ systems for building games. Scenes and behaviours can be described as data or
 controlled through Rust and JavaScript/TypeScript APIs. The desktop host uses
 **wgpu + winit**, targeting Windows, Linux and macOS.
 
+[Pre-release downloads](https://github.com/xmoezzz/CrySirror/releases/tag/pre-release) · [Packaging](docs/NATIVE_PACKAGING.md)
+
 ## Capabilities
 
 | System | Features |
@@ -47,6 +49,7 @@ and engine-owned resources.
 Open original game data with `crysirror play /path/to/game`.
 See the [compatibility guide](docs/NATIVE_ADAPTERS.md) for features and save-file compatibility.
 See the [opcode and syscall lists](docs/native-api/README.md) for per-engine implementation entries and gaps.
+See [Software heritage](docs/SOFTWARE_HERITAGE.md) for the 289 archive, image and audio decoders and KiriKiri automatic decryption.
 For Siglus, BGI, SoftPAL and RFVP updates, see the
 [upstream versions, integration changes and rendering paths](docs/INTEGRATED_ENGINES.md).
 
@@ -67,6 +70,10 @@ For Siglus, BGI, SoftPAL and RFVP updates, see the
 | [AliceSoft System 4](docs/NATIVE_ADAPTERS.md#alicesoft-system-4) | AIN v5, ALD/ALK, QNT |
 | [System-NNN](docs/NATIVE_ADAPTERS.md#system-nnn) | SPT, Black Cyc archives, DWQ/VAW |
 | [SugarPot](docs/NATIVE_ADAPTERS.md#sugarpot) | Tsukumo no Tsuki AOS2/SCR, ABM/BMP |
+| [codeX RScript](docs/native-api/rscript.md) | GSC scenarios, APINI, WCG/LWG graphics |
+| [N-System](docs/NATIVE_ADAPTERS.md#n-system) | MSD, FJSYS, MGD |
+| [N2System / NsScript](crates/crysirror-n2system/README.md) | NSS scenarios, Nitroplus NPA resources |
+| [Malie / MalieSystem](crates/crysirror-malie/README.md) | EXEC scenarios, LIBP resources, MGF/DZI graphics, SVG/Squirrel UI |
 
 ## Try CrySirror
 

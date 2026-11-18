@@ -16,6 +16,7 @@ pub mod precomputed_font;
 pub mod format;
 pub mod byte_replace;
 pub mod printf32;
+pub mod printf_values;
 pub mod glyph;
 pub mod glyph_blur;
 pub mod glyph_coverage;
@@ -675,3 +676,4 @@ pub mod byte_split;
 pub mod byte_groups;
 
 pub mod bitmap_raster;
+pub mod line_viewport;

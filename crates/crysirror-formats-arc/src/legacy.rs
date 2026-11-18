@@ -93,13 +93,26 @@ impl ArchiveFormat for Legacy {
         source: Arc<dyn AssetReader>,
         context: &DecodeContext,
     ) -> Result<Box<dyn Archive>> {
+        let encrypted_malie = matches!(self.id, "malie/libp" | "malie/libu")
+            && context
+                .parameters
+                .get(self.id)
+                .and_then(|p| p.get("encryption"))
+                .is_some();
         let source = if self.id == "cat-system/int" {
             e::int_fwp::prepare(source, context)?
+        } else if matches!(self.id, "malie/libp" | "malie/libu") {
+            e::malie::prepare(self.id, source, context)?
         } else {
             source
         };
         let rows = (self.open)(source.as_ref(), context)?;
-        finish(self.id, source, context, rows)
+        let archive = finish(self.id, source, context, rows)?;
+        Ok(if encrypted_malie {
+            e::malie::wrap(archive, context)
+        } else {
+            archive
+        })
     }
 }
 fn finish(
@@ -176,6 +189,7 @@ pub(crate) fn formats() -> impl Iterator<Item = &'static Legacy> {
         .chain(g::FORMATS)
         .chain(h::FORMATS)
         .chain(i::FORMATS)
+        .chain(e::malie::ADDITIONAL_FORMATS)
 }
 pub(crate) fn magic(source: &dyn AssetReader, at: u64, expected: &[u8]) -> Result<bool> {
     let end = at + expected.len() as u64;

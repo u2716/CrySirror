@@ -81,8 +81,8 @@ jobs:
           tags: |
             ${{ steps.ref.outputs.image }}
             ${{ steps.ref.outputs.name }}:latest
-          cache-from: type=gha,scope=crysirror-${{ inputs.platform }}-image
-          cache-to: type=gha,mode=max,scope=crysirror-${{ inputs.platform }}-image
+          cache-from: type=registry,ref=${{ steps.ref.outputs.name }}:latest
+          cache-to: type=inline
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.description=CrySirror ${{ inputs.platform }} build environment

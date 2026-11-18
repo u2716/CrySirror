@@ -212,7 +212,7 @@ impl Renderer {
                     count = count.checked_add(1).context("glyph frame count overflow")?;
                     ensure!(count <= 196_608, "positioned glyph face/outline frame budget");
                     let mut draw = p.clone();
-                    draw.quad = local_quad(&p, crop.rect)?;
+                    draw.quad = oriented_glyph_quad(&p,crop.rect,image.rect,g.character,g.size.unwrap_or(*size),g.style)?;
                     draw.uv = crop.uv;
                     draw.size = [
                         (crop.rect[2].ceil() as u32).clamp(1, 16384),
@@ -461,7 +461,9 @@ impl Renderer {
                     else {
                         continue;
                     };
-                    draw.quad = local_quad(&p, crop.rect)?;
+                    draw.quad = oriented_glyph_quad(&p,crop.rect,
+                        [origin[0]-pass_offset[0],origin[1]-pass_offset[1],cell.width as f32,cell.height as f32],
+                        g.character,size,g.style)?;
                     draw.uv = crop.uv;
                     draw.size = [cell.width, cell.height];
                     draw.extent = [crop.rect[2], crop.rect[3]];
@@ -479,6 +481,14 @@ impl Renderer {
 /// screen-space overlay. Primitive stores divided xyz plus homogeneous w.
 fn local_quad(p: &Primitive, rect: [f32; 4]) -> Result<[[f32; 4]; 4]> {
     crysirror_scene::layer::crop::subrect_quad(p.quad, p.extent, rect)
+}
+fn oriented_glyph_quad(p:&Primitive,rect:[f32;4],bitmap:[f32;4],character:char,size:f32,
+    style:Option<crysirror_scene::layer::PositionedGlyphStyle>)->Result<[[f32;4];4]> {
+    if !style.is_some_and(|s|s.upright_in_clockwise_line) {return local_quad(p,rect);}
+    let [x,y,w,h]=rect;
+    let points=crysirror_text::glyph::vertical::clockwise_line_corners(character,bitmap,size,
+        [[x,y],[x+w,y],[x+w,y+h],[x,y+h]]);
+    crysirror_scene::layer::crop::local_points_quad(p.quad,p.extent,points)
 }
 
 #[cfg(test)]

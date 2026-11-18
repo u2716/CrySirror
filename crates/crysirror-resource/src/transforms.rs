@@ -6,6 +6,8 @@ use ctr::cipher::{KeyIvInit, StreamCipher, StreamCipherSeek};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, io::Read, sync::Arc};
 
+mod malie;
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TransformSpec {
@@ -58,6 +60,8 @@ impl Default for TransformRegistry {
             "aes-cbc",
             "aes256-cbc",
             "rc4",
+            "malie-camellia",
+            "malie-cfi",
         ] {
             out.transforms.insert(id.into(), Arc::new(Builtin));
         }
@@ -119,6 +123,7 @@ impl ByteTransform for Builtin {
         context: &DecodeContext,
     ) -> Result<Arc<dyn AssetReader>> {
         match spec.algorithm.as_str() {
+            "malie-camellia" | "malie-cfi" => malie::apply(spec, input, context),
             "aes-cbc" | "aes256-cbc" => {
                 #[derive(Deserialize)]
                 #[serde(deny_unknown_fields)]

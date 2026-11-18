@@ -3,6 +3,7 @@
 use crate::TextSystem;
 use ab_glyph::{Font, GlyphId, PxScale, ScaleFont, point};
 use anyhow::{Context, Result, ensure};
+pub mod vertical;
 
 #[derive(Clone, Copy, Debug)]
 pub struct GlyphRaster {
@@ -27,6 +28,21 @@ pub struct GlyphMetrics {
     pub advance: f32,
 }
 impl TextSystem {
+    pub fn line_height_for_em(&self, font: &str, em: f32) -> Result<f32> {
+        ensure!(em.is_finite() && em > 0. && em <= 512., "font em size");
+        ensure!(
+            self.precomputed_face(font)?.is_none(),
+            "bitmap font has no em design scale"
+        );
+        let face = self.font(font)?;
+        let scale =
+            em * face.height_unscaled() / face.units_per_em().context("font units per em")?;
+        ensure!(
+            scale.is_finite() && scale > 0. && scale <= 2048.,
+            "font line-height scale"
+        );
+        Ok(scale)
+    }
     /// Stable identity for a positioned glyph resource. Consumers may subtract
     /// integer baseline translation to share raster cells across placements.
     pub fn glyph_cell_key(&self, font: &str, request: GlyphRaster) -> Result<String> {

@@ -28,6 +28,13 @@ pub fn crop_rect(bounds:[f32;4],clip:Option<[f32;4]>,uv:[f32;4])->Result<Option<
 /// homogeneous positions before dividing, preserving perspective and shear.
 pub fn subrect_quad(quad:[[f32;4];4],extent:[f32;2],rect:[f32;4])->Result<[[f32;4];4]> {
     ensure!(extent.iter().all(|v|v.is_finite() && *v>0.) && valid_rect(rect),"invalid crop quad extent/rect");
+    let [x,y,w,h]=rect;
+    local_points_quad(quad,extent,[[x,y],[x+w,y],[x+w,y+h],[x,y+h]])
+}
+/// Map arbitrary local corners through the same homogeneous quad projection.
+/// This supports local glyph orientation without discarding parent perspective.
+pub fn local_points_quad(quad:[[f32;4];4],extent:[f32;2],corners:[[f32;2];4])->Result<[[f32;4];4]> {
+    ensure!(extent.iter().all(|v|v.is_finite()&&*v>0.)&&corners.iter().flatten().all(|v|v.is_finite()),"invalid local projection points");
     let positions=quad.map(|[x,y,z,w]|[x*w,y*w,z*w,w]);
     let point=|x:f32,y:f32|->Result<[f32;4]> {
         let (u,v)=(x/extent[0],y/extent[1]);
@@ -35,7 +42,7 @@ pub fn subrect_quad(quad:[[f32;4];4],extent:[f32;2],rect:[f32;4])->Result<[[f32;
         ensure!(h.iter().all(|v|v.is_finite()) && h[3].abs()>1e-6,"crop projection has invalid homogeneous coordinates");
         Ok([h[0]/h[3],h[1]/h[3],h[2]/h[3],h[3]])
     };
-    let [x,y,w,h]=rect;Ok([point(x,y)?,point(x+w,y)?,point(x+w,y+h)?,point(x,y+h)?])
+    Ok([point(corners[0][0],corners[0][1])?,point(corners[1][0],corners[1][1])?,point(corners[2][0],corners[2][1])?,point(corners[3][0],corners[3][1])?])
 }
 
 // Texel-center sampling is separate from geometric clipping above.

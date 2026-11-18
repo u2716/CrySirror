@@ -14,7 +14,7 @@ ENV PATH=$CARGO_HOME/bin:$DEVKITA64/bin:$DEVKITPRO/tools/bin:$PATH
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates curl git python3 patch build-essential pkg-config \
-        librsvg2-bin imagemagick \
+        librsvg2-bin imagemagick default-jre-headless \
     && rm -rf /var/lib/apt/lists/* \
     && dkp-pacman -Syu --noconfirm --needed switch-dev deko3d uam \
     && (command -v magick || ln -s "$(command -v convert)" /usr/local/bin/magick)

@@ -26,6 +26,21 @@ const MAX_CAPTURES: usize = 16;
 // The shared image byte budget still admits every output/staging allocation;
 // this geometry cap allows 4K regions without promising unbounded readbacks.
 const MAX_PIXELS: u64 = 16 * 1024 * 1024;
+struct TargetTransfer {
+    counter: Arc<AtomicUsize>,
+    bytes: usize,
+}
+impl TargetTransfer {
+    fn reserve(counter:Arc<AtomicUsize>,bytes:usize)->Result<Self> {
+        let limit = if cfg!(target_os="vita") {32} else {128} *1024*1024;
+        counter.fetch_update(Ordering::AcqRel,Ordering::Acquire,|n|n.checked_add(bytes).filter(|n|*n<=limit))
+            .map_err(|_|Error::Limit("target capture working set"))?;
+        Ok(Self{counter,bytes})
+    }
+}
+impl Drop for TargetTransfer {
+    fn drop(&mut self) {self.counter.fetch_sub(self.bytes,Ordering::AcqRel);}
+}
 fn error(e: impl std::fmt::Display) -> Error {
     Error::Io(e.to_string())
 }
@@ -62,6 +77,27 @@ impl Drop for CanvasImageCapture {
     }
 }
 
+struct TargetImageCapture {
+    target: crysirror_scene::layer::render_target::RenderTargetBinding,
+    store: u64,
+    published: BTreeMap<(ClientId, String), Surface>,
+    text: crysirror_text::TextSystem,
+    response: Weak<Completion>,
+}
+impl TargetImageCapture {
+    fn complete(&self, reply: Reply) {
+        if let Some(response) = self.response.upgrade() {
+            if let Ok(mut value) = response.lock() {
+                if value.is_none() { *value = Some(reply); }
+            }
+        }
+    }
+    fn alive(&self) -> bool { self.response.strong_count() != 0 }
+}
+impl Drop for TargetImageCapture {
+    fn drop(&mut self) { self.complete(Err("target image presenter abandoned request".into())); }
+}
+
 struct FrameCapture {
     response: Weak<Completion>,
 }
@@ -95,6 +131,8 @@ pub(crate) struct Broker {
     store: u64,
     pending: VecDeque<CanvasImageCapture>,
     frames: Vec<FrameCapture>,
+    targets: VecDeque<TargetImageCapture>,
+    target_transfers: Arc<AtomicUsize>,
     count: Arc<AtomicUsize>,
 }
 impl Broker {
@@ -104,6 +142,8 @@ impl Broker {
             store,
             pending: VecDeque::new(),
             frames: Vec::new(),
+            targets: VecDeque::new(),
+            target_transfers: Arc::new(AtomicUsize::new(0)),
             count: Arc::new(AtomicUsize::new(0)),
         }
     }
@@ -156,11 +196,41 @@ impl Broker {
             task: None,
             state: ImageProcessState::Pending,
             _lease: lease,
+            target_transfer: None,
         }))
     }
 }
 
 impl Broker {
+    pub(crate) fn begin_target(
+        &mut self,
+        owner: ClientId,
+        target: crysirror_scene::layer::render_target::RenderTargetBinding,
+        published: BTreeMap<(ClientId, String), Surface>,
+        text: &crysirror_text::TextSystem,
+        tasks: &TaskPool,
+        memory: Arc<AtomicUsize>,
+    ) -> Result<ImageJob> {
+        if !self.enabled { return Err(Error::Unsupported("target image presenter")); }
+        if target.owner != owner.0 || target.generation == 0 { return Err(Error::Invalid("target image owner/generation")); }
+        target.spec.validate().map_err(error)?;
+        self.targets.retain(TargetImageCapture::alive);
+        let size = target.spec.size;
+        let bytes = usize::try_from(u64::from(size[0])*u64::from(size[1])*4).map_err(error)?;
+        let transfer = TargetTransfer::reserve(self.target_transfers.clone(),bytes*6+size[1] as usize*256)?;
+        let output = Charge::new(memory.clone(),bytes)?;
+        // Frozen GPU copy, padded mapping and CPU readback/worker buffers can
+        // coexist. This is additional to the live target's own reservation.
+        let scratch = Charge::new(memory,bytes*5+size[1] as usize*256)?;
+        let permit = tasks.reserve().map_err(error)?;
+        let text = text.frozen().map_err(error)?;
+        self.count.fetch_update(Ordering::AcqRel,Ordering::Acquire,|n|(n<MAX_CAPTURES).then_some(n+1))
+            .map_err(|_|Error::Limit("Canvas capture jobs"))?;
+        let lease = Admission(self.count.clone());
+        let response = Arc::new(Mutex::new(None));
+        self.targets.push_back(TargetImageCapture {target,store:self.store,published,text,response:Arc::downgrade(&response)});
+        Ok(Box::new(Job {owner,size,response,admission:Some((permit,output,scratch)),task:None,state:ImageProcessState::Pending,_lease:lease,target_transfer:Some(transfer)}))
+    }
     pub(crate) fn begin_frame(
         &mut self,
         owner: ClientId,
@@ -197,6 +267,7 @@ impl Broker {
             task: None,
             state: ImageProcessState::Pending,
             _lease: lease,
+            target_transfer: None,
         }))
     }
 }
@@ -273,6 +344,7 @@ struct Job {
     task: Option<Task<Arc<dyn ImageResource>>>,
     state: ImageProcessState,
     _lease: Admission,
+    target_transfer: Option<TargetTransfer>,
 }
 impl ImageProcess for Job {
     fn poll(&mut self) -> Result<ImageProcessState> {
@@ -345,6 +417,9 @@ impl ImageProcess for Job {
                 }
             }
         }
+        // The completed immutable output keeps its ordinary resource charge;
+        // transfer staging and GPU-copy admission end at this worker fence.
+        if !matches!(self.state,ImageProcessState::Pending) {self.target_transfer=None;}
         Ok(self.state.clone())
     }
 }
@@ -357,7 +432,41 @@ impl Runtime {
             for work in self.host.canvas_images.pending.drain(..) {
                 work.complete(Err("Canvas image presenter removed".into()));
             }
+            for work in self.host.canvas_images.targets.drain(..) {
+                work.complete(Err("target image presenter removed".into()));
+            }
         }
+    }
+    /// Presenter work only; pruning cancelled jobs also releases their frozen
+    /// resource leases even if no subsequent target capture is requested.
+    pub fn has_pending_target_images(&mut self) -> bool {
+        self.host.canvas_images.targets.retain(TargetImageCapture::alive);
+        !self.host.canvas_images.targets.is_empty()
+    }
+    /// Freeze GPU copies before a later frame can overwrite the source. The
+    /// returned reader maps on the ImageJob worker, never on the VM owner.
+    pub fn prepare_target_images(
+        &mut self,
+        mut prepare: impl FnMut(&crysirror_scene::layer::render_target::RenderTargetBinding,&mut Assets)
+            -> anyhow::Result<Option<Arc<dyn AssetReader>>>,
+    ) -> anyhow::Result<()> {
+        let requests = std::mem::take(&mut self.host.canvas_images.targets);
+        for work in requests {
+            if !work.alive() { continue; }
+            let current = self.host.engine.layers.render_target(ClientId(work.target.owner),work.target.id);
+            if current.is_none_or(|t|t.generation!=work.target.generation) {
+                work.complete(Err("target image source deleted or replaced".into()));
+                continue;
+            }
+            let result = self.assets.with_capture_resources(work.store,work.published.clone(),work.text.clone(),
+                |assets|prepare(&work.target,assets));
+            match result {
+                Ok(Some(reader)) => work.complete(Ok(reader)),
+                Ok(None) => self.host.canvas_images.targets.push_back(work),
+                Err(error) => work.complete(Err(format!("target image: {error:#}"))),
+            }
+        }
+        Ok(())
     }
     /// Complete pending whole-frame captures. `capture` renders the current frame
     /// and returns tightly packed canvas-sized RGBA; it runs only when requested.

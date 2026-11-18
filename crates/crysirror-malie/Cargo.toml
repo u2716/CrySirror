@@ -1,0 +1,28 @@
+[package]
+name = "crysirror-malie"
+description = "Malie EXEC VM and native policy over CrySirror services"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[features]
+default = ["runtime"]
+runtime = ["dep:crysirror-runtime"]
+
+[dependencies]
+quick-xml = "0.37.5"
+crysirror-squirrel.workspace = true
+anyhow.workspace = true
+log = "0.4"
+serde.workspace = true
+serde_json.workspace = true
+encoding_rs = "0.8"
+flate2 = "1.0"
+crysirror-core.workspace = true
+crysirror-resource.workspace = true
+crysirror-scene.workspace = true
+crysirror-image.workspace = true
+crysirror-tasks.workspace = true
+crysirror-runtime = { workspace = true, optional = true }

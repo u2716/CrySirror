@@ -300,6 +300,9 @@ pub(crate) fn generate() -> api_doc::ApiDocs {
         "crates/crysirror-scene/src/components.rs",
         "crates/crysirror-scene/src/world.rs",
         "crates/crysirror-scene/src/layer.rs",
+        "crates/crysirror-scene/src/layer/render_target.rs",
+        "crates/crysirror-scene/src/layer/pose_copies.rs",
+        "crates/crysirror-scene/src/canvas_lens.rs",
         "crates/crysirror-scene/src/layer/crop.rs",
         "crates/crysirror-scene/src/layer/motion.rs",
         "crates/crysirror-scene/src/layer/external_motion.rs",
@@ -315,6 +318,7 @@ pub(crate) fn generate() -> api_doc::ApiDocs {
         "crates/crysirror-scene/src/canvas.rs",
         "crates/crysirror-core/src/service.rs",
         "crates/crysirror-core/src/service/audio_playlist.rs",
+        "crates/crysirror-core/src/service/echo.rs",
         "crates/crysirror-core/src/service/diagnostics.rs",
         "crates/crysirror-core/src/service/keyboard_locks.rs",
         "crates/crysirror-core/src/service/input_observation.rs",
@@ -373,6 +377,10 @@ pub(crate) fn generate() -> api_doc::ApiDocs {
         "crates/crysirror-majiro/src/adapter/media.rs",
         "crates/crysirror-image/src/associated.rs",
         "crates/crysirror-image/src/effects.rs",
+        "crates/crysirror-image/src/feedback_box_blur.rs",
+        "crates/crysirror-image/src/matte_span.rs",
+        "crates/crysirror-image/src/radial_phase.rs",
+        "crates/crysirror-image/src/tile_compose.rs",
         "crates/crysirror-image/src/nine_patch.rs",
         "crates/crysirror-image/src/coverage_bitmap.rs",
         "crates/crysirror-image/src/integer_lines.rs",
@@ -567,6 +575,15 @@ pub(crate) fn generate() -> api_doc::ApiDocs {
         d("SessionSeedState","Rust SessionSeedQuery retained Pending/Ready/Failed/Cancelled completion",None),
         d("CropRect","Rust layer::crop shared local geometry/UV intersection result",None),
         d("ImageEffect","Bitmap.applyEffectAsync; shared worker effects",None),
+        d("FeedbackBoxBlur","Stored-byte sequential3x3 RGBA blur, truncated feedback, explicit final border policy and optional clipped-edge neighborhoods",None),
+        d("CanvasLens","Shared inherited canvas projection; signed_16_xy explicitly selects wrapping native screen coordinates",None),
+        d("PoseCopy","One retained geometric pose sharing its source layer's paint and resource leases",None),
+        d("PoseCopies","Bounded ordered pose instances with fixed opacity before or after the primary layer",None),
+        d("RadialPhaseField","Rust immutable scoped polar geometry retained by asynchronous field-warp jobs",None),
+        d("LensTable","Rust immutable scoped spherical-lens offset/weight tables retained by asynchronous field-warp jobs",None),
+        d("FieldWarpSpec","Rust ImageInput::FieldWarp sampling profile, including vector, radial phase, lens and explicit polar twist fields",None),
+        d("TileCompose","ImageEffect.tile_compose canvas and ordered sprite draws",None),
+        d("TileDraw","TileCompose.tiles source region, destination, scale, opacity and optional rotation",None),
         d("NinePatchLayout","Alpha-border nine-patch stretch cells and content margins",None),
         d("CoverageBitmap","ImageEffect.coverage_bitmap; bounded glyph coverage or BGRA bytes",None),
         d("IntegerWipe", "ImageEffect::ByteRaster integer two-image reveal geometry with caller-owned native clocks", None),
@@ -838,6 +855,8 @@ pub(crate) fn generate() -> api_doc::ApiDocs {
         d("SceneVoicePhase","SceneVoiceStatus.phase",None),
         d("SceneVoiceStatus","Audio.channelStatus",None),
         d("AudioAsset","HostServices::begin_audio / AudioRequest::PlayAsset",None),
+        d("StereoEchoSpec","AudioRequest.SetEcho bounded stereo delay",None),
+        d("StereoEffectSpec","AudioRequest.SetStereoEffect portable streaming chorus and reverb",None),
         d("AudioRequest","Rust client-scoped HostServices audio commands; resource-bearing enum, not a JSON command or reflected class",None),
         d("AudioPlaylist","Rust AudioRequest::PlayPlaylist; immutable encoded clips and a bounded repeat program",None),
         d("AudioPlaylistNode","Rust shared segmented-audio source; finite or infinite nested sequences",None),
@@ -1710,11 +1729,11 @@ fn native_capabilities_and_config_are_in_public_reference() {
     let seed_state=metadata["data"].as_array().unwrap().iter().find(|spec|spec["name"]=="SessionSeedState").unwrap();
     assert_eq!(seed_state["fields"].as_array().unwrap().iter().find(|field|field["name"]=="Ready").unwrap()["rust_type"],"SessionSeedMaterial");
     let blend=metadata["data"].as_array().unwrap().iter().find(|spec|spec["name"]=="RgbaBlendState").unwrap();
-    assert_eq!(blend["fields"].as_array().unwrap().len(),10);
+    assert_eq!(blend["fields"].as_array().unwrap().len(),11);
     let math=metadata["data"].as_array().unwrap().iter().find(|spec|spec["name"]=="ImageCompositeMath").unwrap();
     assert_eq!(math["fields"].as_array().unwrap().iter().find(|field|field["name"]=="Normalized").unwrap()["rust_type"],"crate::image_blend::RgbaBlendState");
     let specs=metadata["data"].as_array().unwrap();
-    for (name,fields) in [("AdaptiveStepClock",8),("GlyphRasterOptions",9),("StyledGlyphImageSpec",2),
+    for (name,fields) in [("AdaptiveStepClock",8),("GlyphRasterOptions",10),("StyledGlyphImageSpec",2),
         ("GlyphImageCell",2),("GlyphImageBatchSpec",4),("FontFaceStyle",2)] {
         let spec=specs.iter().find(|spec|spec["name"]==name).unwrap();
         assert_eq!(spec["fields"].as_array().unwrap().len(),fields,"{name} actual declared fields");

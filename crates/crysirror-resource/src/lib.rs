@@ -15,6 +15,7 @@ mod crypto;
 mod jobs;
 pub mod krkr_pbd;
 pub mod signature;
+pub mod npf;
 pub mod sniff;
 pub mod pe;
 pub mod checksum;
@@ -41,6 +42,7 @@ pub mod lane_feedback;
 pub mod installer;
 pub mod registry;
 pub mod redirect;
+pub mod retained_assets;
 pub mod transforms;
 pub mod xor_recovery;
 

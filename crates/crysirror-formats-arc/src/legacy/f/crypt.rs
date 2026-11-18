@@ -222,10 +222,14 @@ fn key_word(cx: &DecodeContext, p: &serde_json::Value, field: &str) -> Result<u3
 }
 pub(super) fn npa(s: &dyn AssetReader, cx: &DecodeContext) -> Result<Vec<Row>> {
     let p = profile(cx, "nitroplus/npa")?;
-    let name_key = key_word(cx, &p, "file_name_key_id")?;
     let h = bytes(s, 7, 34, 34)?;
     let k1 = le32(&h, 0)?;
     let k2 = le32(&h, 4)?;
+    // Standard NPA names use the archive-header product (GARbro ArcNPA.cs
+    // GetArchiveKey/DecryptName). Retain explicitly supplied variant keys.
+    let name_key = if p["file_name_key_source"].as_str()==Some("header_product") {
+        k1.wrapping_mul(k2)
+    } else { key_word(cx, &p, "file_name_key_id")? };
     let comp = h[8] != 0;
     let encrypted = h[9] != 0;
     let n = le32(&h, 10)? as usize;

@@ -519,8 +519,11 @@ impl Cursor {
 }
 
 struct Voice {
+    echo:Option<crate::echo::Echo>,
+    stereo_effect: Option<crate::stereo_effect::Effect>,
     stepped_gain: Option<crate::gain_envelope::Envelope>,
     source_peak: f32,
+    source_taps: [f32; 4],
     balance:crate::balance::Balance,
     doppler: Ramp,
     doppler_settings: Option<DopplerSettings>,
@@ -1541,6 +1544,16 @@ impl Mixer {
         ensure!(rate.is_finite()&&(1./4096. ..=32.).contains(&rate),"live audio rate out of range");
         self.voice(client,h)?.spec.rate=rate;Ok(())
     }
+    /// Prepare before replacing, so failed allocation keeps the old DSP live.
+    pub fn set_stereo_effect(&mut self, client: u32, h: VoiceHandle, spec: Option<crysirror_core::service::StereoEffectSpec>) -> Result<()> {
+        let effect = spec.map(|s| crate::stereo_effect::Effect::prepare(self.sample_rate(), s)).transpose()?;
+        self.voice(client, h)?.stereo_effect = effect;
+        Ok(())
+    }
+    pub fn set_echo(&mut self,client:u32,h:VoiceHandle,spec:Option<crysirror_core::service::StereoEchoSpec>)->Result<()> {
+        let effect=spec.map(|spec|crate::echo::Echo::new(self.sample_rate(),spec)).transpose()?;
+        self.voice(client,h)?.echo=effect;Ok(())
+    }
     pub fn set_rate(&mut self, client: u32, h: VoiceHandle, rate: f32, pitch: f32) -> Result<()> {
         ensure!(
             rate.is_finite()
@@ -1962,6 +1975,7 @@ impl Mixer {
         let voice = self.voices[h.slot as usize].as_ref().unwrap();
         Ok(crysirror_core::service::AudioPlaybackInfo {
             source_peak: if voice.spec.paused || !voice.spec.transport_active || voice.source_ended {0.}else{voice.source_peak},
+            source_taps: if voice.spec.paused || !voice.spec.transport_active || voice.source_ended {[0.;4]}else{voice.source_taps},
             balance:voice.balance.info(),
             age_frames: voice.age_frames,
             transport_frames: voice.transport_frames,
@@ -2288,7 +2302,7 @@ impl Mixer {
         let rate = self.config.sample_rate;
         for v in self.voices.iter_mut().flatten() {
             let settings = v.spec.spatial.as_ref().and_then(|s| s.doppler);
-            if !out.is_empty() {v.source_peak=0.;}
+            if !out.is_empty() {v.source_peak=0.;v.source_taps=[0.;4];}
             let target = if let (Some(s), Some(settings)) = (&v.spec.spatial, settings) {
                 let l = self
                     .listeners
@@ -2349,7 +2363,9 @@ impl Mixer {
             .enumerate()
             .filter_map(|(i, v)| v.is_some().then_some(i))
             .collect();
-        for sample in out.iter_mut() {
+        let sample_count = out.len()*2;
+        let taps = [0,sample_count/4,sample_count/4+sample_count/2,sample_count.saturating_sub(2)];
+        for (frame_index,sample) in out.iter_mut().enumerate() {
             self.groups.step();
             for c in self.clients.values_mut() {
                 c.dialogue_voices = 0;
@@ -2576,9 +2592,16 @@ impl Mixer {
                 };
                 let mut s = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
                 if !v.source_ended {v.source_peak=v.source_peak.max(s[0].abs()).max(s[1].abs());}
+                if !v.source_ended {
+                    for (tap,&at) in v.source_taps.iter_mut().zip(&taps) {
+                        if at/2==frame_index { *tap=s[at%2]; }
+                    }
+                }
                 if v.spec.swap_channels {
                     s.swap(0, 1);
                 }
+                if let Some(echo)=&mut v.echo {s=echo.process(s);}
+                if let Some(effect) = &mut v.stereo_effect { s = effect.process(s)?; }
                 let echo = if let Some(effect) = &mut v.reflections {
                     effect.process_frame((s[0] + s[1]) * 0.5)?
                 } else {
@@ -2832,8 +2855,11 @@ fn new_voice(
     let stepped_gain = spec.gain_envelope.map(|envelope| crate::gain_envelope::Envelope::new(envelope, rate, db100, spec.gain));
     if let Some(envelope) = stepped_gain { spec.gain = envelope.gain; }
     Voice {
+        echo:None,
+        stereo_effect: None,
         stepped_gain,
         source_peak: 0.,
+        source_taps: [0.;4],
         balance:Default::default(),
         doppler: Ramp::new(1.),
         doppler_settings: None,

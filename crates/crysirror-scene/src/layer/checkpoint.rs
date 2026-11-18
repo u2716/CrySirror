@@ -30,6 +30,7 @@ impl LayerSystem {
             self.txn.0.is_empty(),
             "checkpoint during open layer transaction"
         );
+        ensure!(!self.targets.allocations.keys().any(|(owner,_)| *owner == client), "persistent targets require pixel readback before checkpoint");
         let ids = self.checkpoint_ids(client, roots)?;
         let mut state = self.clone();
         state.clients.retain(|owner, layers| {
@@ -96,6 +97,7 @@ impl LayerSystem {
             self.txn.0.is_empty(),
             "checkpoint restore during open layer transaction"
         );
+        ensure!(!self.targets.allocations.keys().any(|(owner,_)| *owner == client) && !saved.targets.allocations.keys().any(|(owner,_)| *owner == client), "persistent targets require pixel restore");
         let mut removed = self.checkpoint_ids(client, roots)?;
         if let Some(owner) = saved.clients.get(&client) {
             removed.extend(owner.keys());

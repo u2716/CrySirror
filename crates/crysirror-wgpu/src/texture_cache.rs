@@ -25,7 +25,13 @@ impl Renderer {
     pub(super) fn frame_cache_keys(assets: &Assets, frame: &[Primitive]) -> Result<BTreeSet<String>> {
         fn collect(assets: &Assets, frame: &[Primitive], keys: &mut BTreeSet<String>) -> Result<()> {
             for p in frame {
-                match &p.paint {
+                for target in p.target.iter().chain(p.output.iter()) {
+                    keys.insert(Renderer::target_key(assets,target));
+                }
+                if let Some(source) = p.target.as_ref().filter(|t|p.output.as_ref()==Some(*t)) { keys.insert(format!("{}:read",Renderer::target_key(assets,source))); }
+                // Backing is the sampled image once promoted. Its original
+                // Paint and one-shot seed are no longer GPU dependencies.
+                if p.target.is_none() { match &p.paint {
                     Paint::Solid { .. } => { keys.insert("solid:white".into()); }
                     Paint::Backdrop { .. } => { keys.insert(BACKDROP_KEY.into()); }
                     Paint::Image { asset, .. } => {
@@ -63,6 +69,7 @@ impl Renderer {
                     Paint::LegacyMesh { .. } => anyhow::bail!("legacy mesh must be evaluated by shared layer extraction"),
                     Paint::CoverageWrite{..}|Paint::CoverageReset{..}|Paint::GlyphView{..}|Paint::Group { .. } | Paint::OrderedState { .. } => anyhow::bail!("composition command must be consumed by shared layer extraction"),
                 }
+                }
                 if let Some(mesh) = &p.puppet {
                     for asset in &mesh.textures {
                         keys.insert(match crysirror_core::service::frame_history_layer(asset) {
@@ -73,6 +80,7 @@ impl Renderer {
                     }
                 }
                 if let Some(filter) = &p.filter {
+                    if let Some(stencil)=&filter.stencil {keys.insert(Renderer::image_key(assets,p.owner,&stencil.asset)?);}
                     keys.insert(match &filter.mask { Some(mask) => Renderer::image_key(assets, p.owner, &mask.asset)?, None => "solid:white".into() });
                     keys.insert(match &filter.tone_curve { Some(curve) => Renderer::image_key(assets, p.owner, &curve.asset)?, None => "curve:identity".into() });
                 }
@@ -106,6 +114,7 @@ impl Renderer {
         used.extend(self.scene_texture_keys.iter().cloned());
         self.preserve_capture_textures(&mut used);
         self.textures.retain(|key,_| used.contains(key));
+        self.target_write_revisions.retain(|key,_|used.contains(key));
         Ok(())
     }
 }
