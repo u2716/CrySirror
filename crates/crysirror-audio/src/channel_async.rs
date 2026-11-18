@@ -465,6 +465,8 @@ impl ChannelAudio {
                 (*channel, false)
             }
             AudioRequest::SetRate{channel,rate}=>{ensure!(rate.is_finite()&&(1./4096. ..=32.).contains(rate),"live audio rate out of range");(*channel,false)},
+            AudioRequest::SetStereoEffect { channel, effect } => { if let Some(spec) = effect { spec.validate().map_err(|e| anyhow::anyhow!("{e}"))?; } (*channel, false) },
+            AudioRequest::SetEcho{channel,effect}=>{if let Some(spec)=effect {spec.validate().map_err(|e|anyhow::anyhow!("{e}"))?;}(*channel,false)},
             AudioRequest::Balance{channel,command}=>{crate::balance::validate(*command)?;(*channel,false)},
             AudioRequest::SetLoopSchedule {
                 channel,

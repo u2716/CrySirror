@@ -17,6 +17,7 @@ pub const FORMATS: &[&str] = &[
     "crowd/zbm",
     "almond-collective/teyl",
     "malie/mgf",
+    "malie/dzi",
     "minato-soft/fil",
     "nekopack/masked-bmp",
     "riddle-soft/cmp",
@@ -75,6 +76,7 @@ pub fn probe(id: &str, path: &str, b: &[u8]) -> bool {
         "crowd/cwp" => b.starts_with(b"CWDP"),
         "almond-collective/teyl" => b.starts_with(b"TEYL"),
         "malie/mgf" => b.starts_with(b"MalieGF\0"),
+        "malie/dzi" => b.starts_with(b"DZI\r\n") || b.starts_with(b"DZI\n"),
         "minato-soft/fil" => {
             b.len() >= 8
                 && u32le(b, 0)
@@ -146,6 +148,7 @@ pub fn decode(id: &str, b: &[u8], ctx: &ImageDecodeContext<'_>) -> Result<ImageS
             3,
         )?,
         "minato-soft/fil" => raw(u32le(b, 0)?, u32le(b, 4)?, slice(b, 8, b.len() - 8)?, 1)?,
+        "malie/dzi" => crate::malie_dzi::decode(b,ctx)?,
         "malie/mgf" => {
             let mut png = b.to_vec();
             png[..8].copy_from_slice(b"\x89PNG\r\n\x1a\n");

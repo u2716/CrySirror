@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Engine video service (ADR 0020): one frame API over the decoders vendored
 //! with siglus_rs: Siglus OMV and plain Ogg/Theora, MPEG-1/2 program and
-//! elementary streams, and ASF/WMV (WMV2, WMV3, VC-1). Frames are RGBA8 with
+//! elementary streams, ASF/WMV (WMV2, WMV3, VC-1) and WebM/VP8. Frames are RGBA8 with
 //! presentation times. The crate never opens a window, GPU or audio device;
 //! renderers upload frames as textures and audio is handed to the mixer.
 #![forbid(unsafe_code)]
@@ -14,6 +14,7 @@ pub mod mpeg_probe;
 pub mod omv;
 pub mod asf;
 pub mod theora;
+pub mod webm;
 use anyhow::{Context, Result, bail, ensure};
 use std::io::Cursor;
 
@@ -34,6 +35,8 @@ pub enum Container {
     Avi,
     /// IMOAVI100: indexed Motion-JPEG/raw pictures with native redirects.
     ImoAvi,
+    /// WebM (Matroska) with a VP8 video track.
+    WebM,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -80,6 +83,9 @@ pub fn sniff(bytes: &[u8]) -> Result<Container> {
     if bytes.starts_with(b"IMOAVI\0\0") {
         return Ok(Container::ImoAvi);
     }
+    if bytes.starts_with(&[0x1A, 0x45, 0xDF, 0xA3]) && bytes[..bytes.len().min(64)].windows(4).any(|w| w == b"webm") {
+        return Ok(Container::WebM);
+    }
     if isobmff::is_mp4(bytes) {
         return Ok(Container::Mp4);
     }
@@ -119,6 +125,7 @@ pub fn open(bytes: Vec<u8>) -> Result<Box<dyn VideoStream>> {
         Container::Amv => Box::new(AmvStream::new(bytes)?),
         Container::Avi => Box::new(avi::AviStream::new(bytes)?),
         Container::ImoAvi => Box::new(imoavi::Movie::new(Cursor::new(bytes))?),
+        Container::WebM => Box::new(webm::WebmStream::new(bytes)?),
     })
 }
 

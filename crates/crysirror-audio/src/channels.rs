@@ -426,7 +426,7 @@ impl ChannelAudio {
         self.cancel_pending_control(client, &request)?;
         let controlled_channel = match &request {
             AudioRequest::ExchangeChannels { .. } => unreachable!("atomic exchange handled before single-channel controls"),
-            AudioRequest::SetMixGroup { .. } | AudioRequest::SetMixGroupGain { .. } | AudioRequest::Balance { .. } | AudioRequest::SetRate{..} => None,
+            AudioRequest::SetMixGroup { .. } | AudioRequest::SetMixGroupGain { .. } | AudioRequest::Balance { .. } | AudioRequest::SetRate{..} | AudioRequest::SetEcho{..} | AudioRequest::SetStereoEffect { .. } => None,
             AudioRequest::Play { channel, .. }
             | AudioRequest::PlayPlaylist {channel,..}
             | AudioRequest::PlayResident {channel,..}
@@ -555,6 +555,16 @@ impl ChannelAudio {
             AudioRequest::SetRate{channel,rate}=>{
                 ensure!(rate.is_finite()&&(1./4096. ..=32.).contains(&rate),"live audio rate out of range");
                 if let Some(&handle)=self.voices.get(&(client,channel)).filter(|handle|self.mixer.is_playing(client,**handle)){self.mixer.set_playback_rate(client,handle,rate)?;}
+            },
+            AudioRequest::SetStereoEffect { channel, effect } => {
+                if let Some(spec) = effect { spec.validate().map_err(|e| anyhow::anyhow!("{e}"))?; }
+                if let Some(&handle) = self.voices.get(&(client, channel)).filter(|h| self.mixer.is_playing(client, **h)) {
+                    self.mixer.set_stereo_effect(client, handle, effect)?;
+                }
+            }
+            AudioRequest::SetEcho {channel,effect}=>{
+                if let Some(spec)=effect {spec.validate().map_err(|e|anyhow::anyhow!("{e}"))?;}
+                if let Some(&handle)=self.voices.get(&(client,channel)).filter(|h|self.mixer.is_playing(client,**h)) {self.mixer.set_echo(client,handle,effect)?;}
             },
             AudioRequest::SetGain {
                 channel,

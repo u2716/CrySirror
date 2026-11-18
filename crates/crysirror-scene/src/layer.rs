@@ -7,10 +7,12 @@ mod depth_order;
 use depth_order::DepthOrders;
 pub use depth_order::{DepthOrderKey, DepthOrderStep, compare_primitives};
 pub mod crop;
+pub mod render_target;
 mod crossfade_effect;
 mod external_motion;
 mod image_dependencies;
 pub mod motion;
+pub mod pose_copies;
 pub mod queued;
 pub mod ordered_state;
 mod snapshot_opacity;
@@ -357,6 +359,10 @@ pub struct LayerFilter {
     /// Grayscale mask image multiplied into alpha, or `null`.
     #[serde(default)]
     pub mask: Option<LayerMask>,
+    /// An independent canvas-space red-channel matte, multiplied into source
+    /// alpha after colour effects and continuous rule-image coverage.
+    #[serde(default, skip_serializing_if="Option::is_none")]
+    pub stencil: Option<LayerStencil>,
     /// Discard pixels whose alpha is below 1/255.
     #[serde(default)]
     pub alpha_test: bool,
@@ -369,8 +375,25 @@ impl Default for LayerFilter {
         Self { multiply: [1.; 3], luma_weights: None, rgb_alpha_power: 0.,
             ignore_tint_alpha: false, encoded_sampling: false, mono: 0.,
             invert: 0., bright: 0., dark: 0., color_rate: 0., color: [0.; 3],
-            add: [0.; 3], tone_curve: None, mask: None, alpha_test: false, distortion: None }
+            add: [0.; 3], tone_curve: None, mask: None, stencil:None, alpha_test: false, distortion: None }
     }
+}
+#[derive(Clone,Debug,PartialEq,Serialize,Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LayerStencil {
+    pub asset:String,
+    pub canvas:[u32;2],
+    pub origin:[f32;2],
+    /// Point-sample byte mattes instead of interpolating them.
+    #[serde(default)]
+    pub nearest:bool,
+    /// Outside the positioned bitmap is uncovered rather than edge-clamped.
+    #[serde(default)]
+    pub outside_zero:bool,
+    /// Independent component coverage, including alpha. The presenter uses
+    /// destination attenuation plus contribution passes for supported blends.
+    #[serde(default)]
+    pub rgba:bool,
 }
 /// Tone-curve lookup: each channel indexes column `value` of `row` in a
 /// LUT image (e.g. 256×N), after mixing `saturation` toward mono.
@@ -412,6 +435,20 @@ pub struct LayerMask {
     /// their original alpha instead of stretching or clamping the mask.
     #[serde(default)]
     pub source_space:bool,
+    /// Continuous coverage computed after interpolating mask bytes. None keeps
+    /// the existing per-texel integer mask profile unchanged.
+    #[serde(default, skip_serializing_if="Option::is_none")]
+    pub coverage: Option<MaskCoverage>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MaskCoverage {
+    pub progress: f32,
+    pub feather: f32,
+    /// Some selects design-canvas pixels independently of the sprite's UVs.
+    /// None stretches the mask over the sprite's own source UV rectangle.
+    #[serde(default)]
+    pub canvas: Option<[u32; 2]>,
 }
 #[derive(Clone,Copy,Debug,Default,PartialEq,Eq,Serialize,Deserialize)]
 #[serde(rename_all="snake_case")]
@@ -502,6 +539,20 @@ impl LayerFilter {
             ensure!(m.channel!=MaskChannel::Rgba||m.scale==1.,"RGBA multiplication has no scalar alpha scale");
             ensure!(m.channel!=MaskChannel::Rgba||m.offset==0.,"RGBA multiplication has no scalar alpha offset");
             ensure!(!m.gray_alpha||m.channel==MaskChannel::Rgba,"mask alpha channel conflicts with gray alpha");
+            if let Some(c) = m.coverage {
+                ensure!(unit(c.progress) && unit(c.feather),"invalid continuous mask coverage");
+                ensure!(m.channel != MaskChannel::Rgba && !m.gray_alpha && !m.source_space,
+                    "continuous coverage requires one mask channel and its own coordinate policy");
+                ensure!(c.canvas.is_none_or(|s| s.iter().all(|v| (1..=16384).contains(v))),
+                    "continuous mask canvas bounds");
+            }
+        }
+        if let Some(s)=&self.stencil {
+            VfsPath::new(Mount::Asset,&s.asset).map_err(|e|anyhow::anyhow!("{e}"))?;
+            ensure!(s.canvas.iter().all(|v|(1..=16384).contains(v))&&s.origin.iter().all(|v|v.is_finite()&&v.abs()<=1_000_000.),"invalid canvas stencil geometry");
+            ensure!(self.tone_curve.is_none(),"canvas stencil and tone curve require independent sampler slots");
+            ensure!(self.mask.as_ref().is_none_or(|m|m.coverage.is_some()),"canvas stencil cannot alias the legacy byte-mask coordinate registers");
+            ensure!(self.mask.as_ref().and_then(|m|m.coverage).and_then(|c|c.canvas).is_none_or(|c|c==s.canvas),"mask/stencil canvas mismatch");
         }
         if let Some(d) = self.distortion {
             let f = |v: f32, lo: f32, hi: f32| v.is_finite() && (lo..=hi).contains(&v);
@@ -630,6 +681,10 @@ pub struct GlyphShadow {pub offset:[f32;2],pub color:[u8;4]}
 #[derive(Clone,Copy,Debug,Default,PartialEq,Serialize,Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PositionedGlyphStyle {
+    /// Keep CJK glyphs upright when the containing line rotates clockwise by
+    /// 90 degrees. Brackets/dashes retain that outer rotation; flow is unchanged.
+    #[serde(default)]
+    pub upright_in_clockwise_line:bool,
     #[serde(default)]
     pub underline:bool,
     #[serde(default)]
@@ -1204,6 +1259,9 @@ pub enum GlyphCoverageKernel {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LayerSpec {
+    /// Ordered geometry instances sharing this layer's current bitmap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pose_copies: Option<Arc<pose_copies::PoseCopies>>,
     /// Pause automatic motion, glyph reveal and subtree crossfade clocks.
     /// Descendants inherit the pause; explicit external samples still apply.
     #[serde(default)]
@@ -1266,6 +1324,9 @@ fn alpha() -> u8 {
 }
 #[derive(Clone, Debug)]
 pub struct Primitive {
+    /// Persistent sampled backing and explicit painter destination.
+    pub target: Option<render_target::RenderTargetBinding>,
+    pub output: Option<render_target::RenderTargetBinding>,
     pub coverage: coverage::Operation,
     pub tie_order:Option<u64>,
     /// Derived client-scoped floating-depth scopes, inherited by child payloads.
@@ -1358,6 +1419,8 @@ pub struct LayerSystem {
     #[serde(default)]
     crossfades: BTreeMap<u32, BTreeMap<u32, SubtreeCrossfade>>,
     clients: BTreeMap<u32, BTreeMap<u32, LayerSpec>>,
+    #[serde(default)]
+    targets: render_target::Targets,
     /// Derived adjacency retained across small Canvas rebuild batches. It is
     /// invalidated on rollback/install and reconstructed after deserialization.
     #[serde(skip)]
@@ -1404,6 +1467,7 @@ type SideState = (
     MotionTracks,
     queued::Sequences,
     DepthOrders,
+    render_target::Targets,
 );
 
 /// Originals of every layer the transaction's batches touched (first touch
@@ -1520,6 +1584,29 @@ impl Easing {
     pub fn validate(self) -> Result<()> {
         if let Self::Progress { shape } = self { shape.validate()?; }
         Ok(())
+    }
+    /// Binary64 evaluation for integer envelope tables. The existing binary32
+    /// sampling profile remains unchanged for retained scalar motion callers.
+    pub fn apply_f64(self, raw: f64) -> f64 {
+        use crysirror_image::progress_curve::{ProgressDirection, ProgressShape};
+        let p = raw.clamp(0., 1.);
+        match self {
+            Self::Progress { shape: ProgressShape::Power { exponent, direction } }
+                if exponent == 3. && matches!(direction, ProgressDirection::In | ProgressDirection::Out) => {
+                let p = if direction == ProgressDirection::Out {1. - p} else {p};
+                let cube = p * p * p;
+                if direction == ProgressDirection::Out {1. - cube} else {cube}
+            }
+            Self::Progress { shape } => shape.apply(p),
+            Self::Linear => p,
+            Self::EaseIn => p * p,
+            Self::EaseOut => 1. - (1. - p) * (1. - p),
+            Self::Smooth => p * p * (3. - 2. * p),
+            Self::EaseInQuart => p * p * p * p,
+            Self::EaseOutQuart => {let p=1. - p; 1. - p * p * p * p},
+            Self::EaseInOutQuart => if p < 0.5 { 8. * p.powi(4) } else { 1. - (-2. * p + 2.).powi(4) / 2. },
+            Self::EaseOutInQuart => if p < 0.5 { (1. - (1. - 2. * p).powi(4)) / 2. } else { 0.5 + (2. * p - 1.).powi(4) / 2. },
+        }
     }
     /// siglus_rs `runtime/wipe.rs::eased_progress`.
     pub fn apply(self, raw: f32) -> f32 {
@@ -1703,6 +1790,19 @@ fn viewport_clip_valid(rect: [f32; 4]) -> bool {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum LayerCommand {
+    /// Allocate or replace mutable backing for an existing owned drawable.
+    CreateRenderTarget {
+        id: u32,
+        spec: render_target::RenderTargetSpec,
+        /// Reset source UV/crop/sampling while preserving pose and motion.
+        #[serde(default)]
+        reset_view: bool,
+    },
+    /// Redirect this drawable into a retained target; None restores the frame.
+    SetOutput { id: u32, target: Option<u32> },
+    /// Replace bitmap geometry instances without replacing image, pose tracks,
+    /// source crop, camera or target ownership. None removes all instances.
+    SetPoseCopies {id:u32,copies:Option<Arc<pose_copies::PoseCopies>>},
     /// Advance this client's automatic motion, reveal and transition clocks.
     /// Other clients, physical input, external producers and global time stay
     /// on their own clocks. Bounded to one day per admitted operation.
@@ -1920,6 +2020,7 @@ impl LayerSystem {
         client: ClientId,
         order_exclusive: [i32; 2],
     ) -> Result<Vec<LayerSpec>> {
+        ensure!(!self.targets.allocations.keys().any(|(owner,_)| *owner == client.0), "prefix capture of persistent targets requires pixel readback");
         ensure!(
             self.transition.as_ref().is_none_or(|t| t.owner != client.0),
             "prefix capture during screen transition requires its explicit composition scope"
@@ -2010,6 +2111,7 @@ impl LayerSystem {
         client: ClientId,
         root: u32,
     ) -> Result<Vec<LayerSpec>> {
+        ensure!(!self.targets.allocations.keys().any(|(owner,_)| *owner == client.0), "subtree capture of persistent targets requires pixel readback");
         let owner = self
             .clients
             .get(&client.0)
@@ -2140,6 +2242,7 @@ impl LayerSystem {
             self.motions.clone(),
             self.sequences.clone(),
             self.depth_orders.clone(),
+            self.targets.clone(),
         )
     }
     /// Run `f` as one atomic unit over several `apply_batch` calls without
@@ -2183,6 +2286,7 @@ impl LayerSystem {
                 self.motions,
                 self.sequences,
                 self.depth_orders,
+                self.targets,
             ) = txn.side;
         }
         result
@@ -2195,6 +2299,7 @@ impl LayerSystem {
         let result = self
             .apply_in_place(client, commands, &mut journal)
             .and_then(|()| {
+                if !commands.is_empty() { self.targets.advance(); }
                 self.sync_puppets();
                 self.validate_touched(client, journal.keys().copied())
             });
@@ -2220,6 +2325,7 @@ impl LayerSystem {
                 self.motions,
                 self.sequences,
                 self.depth_orders,
+                self.targets,
             ) = side;
             return Err(e);
         }
@@ -2241,6 +2347,31 @@ impl LayerSystem {
         // batches; one Canvas edit must not rescan thousands of unrelated nodes.
         for command in commands {
             match command {
+                LayerCommand::CreateRenderTarget { id, spec, reset_view } => {
+                    ensure!(staged.crossfades.get(&client.0).is_none_or(|fades|fades.is_empty()), "render target allocation during isolated crossfade requires its explicit target scope");
+                    let layer = staged.get(client, *id).context("render target layer missing")?;
+                    ensure!(matches!(layer.paint, Paint::Solid {..} | Paint::Image {..} | Paint::Group {..}), "render target requires bitmap paint");
+                    staged.targets.create(client.0, *id, spec.clone())?;
+                    if *reset_view {
+                        let layer=staged.clients.get_mut(&client.0).and_then(|owner|owner.get_mut(id)).context("render target view owner missing")?;
+                        journal.entry(*id).or_insert_with(||Some(layer.clone()));
+                        layer.uv=None;
+                        layer.sampling=ImageSampling::default();
+                        layer.source_crop=None;
+                    }
+                    continue;
+                }
+                LayerCommand::SetOutput { id, target } => {
+                    let layer = staged.get(client, *id).context("render output layer missing")?;
+                    ensure!(matches!(layer.paint, Paint::Solid {..} | Paint::Image {..} | Paint::GlyphRun {..} | Paint::Text {..} | Paint::Group {..}), "render output requires a bitmap or text drawable");
+                    if let Some(target) = target {
+                        ensure!(staged.targets.allocations.contains_key(&(client.0, *target)), "owned render output target missing");
+                        staged.targets.outputs.insert((client.0, *id), *target);
+                    } else {
+                        staged.targets.outputs.remove(&(client.0, *id));
+                    }
+                    continue;
+                }
                 LayerCommand::AdvanceTime { delta_ms } => {
                     ensure!(*delta_ms <= 86_400_000, "layer clock advance limit");
                     if let Some(owner) = staged.clients.get(&client.0) {
@@ -2267,6 +2398,7 @@ impl LayerSystem {
                     if let Some(owner)=staged.clients.get_mut(&client.0){
                         for (id,layer) in owner.iter_mut(){
                             if matches!(&layer.paint,Paint::Image{asset,..} if asset==from){
+                                ensure!(!staged.targets.allocations.contains_key(&(client.0,*id)), "rebind persistent target seed through explicit replacement");
                                 journal.entry(*id).or_insert_with(||Some(layer.clone()));
                                 if let Paint::Image{asset,..}=&mut layer.paint{*asset=to.clone();}
                             }
@@ -2347,6 +2479,7 @@ impl LayerSystem {
                         .get_mut(&client.0)
                         .and_then(|o| o.get_mut(id))
                         .context("solid color layer missing")?;
+                    ensure!(!staged.targets.allocations.contains_key(&(client.0, *id)), "mutate a render target through routed drawing or explicit replacement");
                     ensure!(
                         matches!(layer.paint, Paint::Solid { .. }),
                         "solid color requires Solid paint"
@@ -2366,6 +2499,14 @@ impl LayerSystem {
                         "layer depth target missing"
                     );
                     staged.depth_orders.set(client.0, *id, *depth)?;
+                    continue;
+                }
+                LayerCommand::SetPoseCopies {id,copies} => {
+                    let layer=staged.clients.get_mut(&client.0).and_then(|o|o.get_mut(id)).context("pose copy owner layer missing")?;
+                    if let Some(copies)=copies {copies.validate(&layer.paint)?;}
+                    journal.entry(*id).or_insert_with(||Some(layer.clone()));
+                    layer.pose_copies=copies.clone();
+                    ensure!(staged.clients[&client.0].values().map(|s|s.pose_copies.as_ref().map_or(0,|c|c.poses.len())).sum::<usize>()<=4096,"client pose copy budget");
                     continue;
                 }
                 LayerCommand::BeginSequence {id,..}|LayerCommand::Sequence{id,..}=>{
@@ -2563,6 +2704,14 @@ impl LayerSystem {
             let owner = staged.clients.entry(client.0).or_default();
             match command {
                 LayerCommand::Put { layer } => {
+                    if staged.targets.allocations.contains_key(&(client.0, layer.id)) {
+                        ensure!(owner.get(&layer.id).is_some_and(|old| match (&old.paint,&layer.paint) {
+                            (Paint::Solid{color:a},Paint::Solid{color:b})=>a==b,
+                            (Paint::Image{asset:a,tint:at},Paint::Image{asset:b,tint:bt})=>a==b&&at==bt,
+                            (Paint::Group{tint:a,add:aa},Paint::Group{tint:b,add:ba})=>a==b&&aa==ba,
+                            _=>false,
+                        }), "replace persistent target pixels explicitly");
+                    }
                     // Snapshot payloads are immutable: checked once on entry,
                     // not on every revalidation.
                     if matches!(layer.paint, Paint::Snapshot { .. }) {
@@ -2605,6 +2754,7 @@ impl LayerSystem {
                     }
                     staged.sequences.cancel(client.0,&remove);
                     for r in &remove {
+                        staged.targets.remove(client.0, *r);
                         staged.depth_orders.remove(client.0, *r);
                         staged.motions.cancel(client.0, *r);
                         if let Some(spec) = owner.remove(r) {
@@ -2647,6 +2797,7 @@ impl LayerSystem {
                     journal.entry(*id).or_insert_with(|| Some(layer.clone()));
                     match other {
                         LayerCommand::SetPaint {paint,..} => {
+                            ensure!(!staged.targets.allocations.contains_key(&(client.0, *id)), "replace persistent target pixels explicitly");
                             paint.validate()?;
                             layer.paint=paint.clone();
                             if !matches!(paint,Paint::Image{..}) {
@@ -2833,6 +2984,7 @@ impl LayerSystem {
     }
     /// Advance engine-owned text and transition clocks.
     pub fn tick(&mut self, delta_ms: u64) {
+        self.targets.advance();
         let paused=self.paused_clock_nodes();
         for (owner, id, property, value) in self.motions.tick_filtered(delta_ms,|owner,id|paused.contains(&(owner,id))) {
             if let Some(layer) = self.clients.get_mut(&owner).and_then(|o| o.get_mut(&id)) {
@@ -2899,6 +3051,7 @@ impl LayerSystem {
                 "duplicate layer id"
             );
         }
+        if !specs.is_empty() { staged.targets.advance(); }
         staged.sync_puppets();
         staged.validate()?;
         *self = staged;
@@ -2929,6 +3082,7 @@ impl LayerSystem {
             }
         }
         if let Some(owner) = self.clients.get(&client.0) {
+            ensure!(owner.values().map(|s|s.pose_copies.as_ref().map_or(0,|c|c.poses.len())).sum::<usize>()<=4096,"client pose copy budget");
             for id in ids {
                 if let Some(s) = owner.get(&id) {
                     // Snapshot payloads were checked when they entered.
@@ -2937,6 +3091,7 @@ impl LayerSystem {
             }
         }
         self.depth_orders.validate(&self.clients)?;
+        self.targets.validate(&self.clients)?;
         self.validate_crossfades()
     }
     /// Full validation, including frozen snapshot payloads (restore paths).
@@ -2972,14 +3127,17 @@ impl LayerSystem {
             }
         }
         for owner in self.clients.values() {
+            ensure!(owner.values().map(|s|s.pose_copies.as_ref().map_or(0,|c|c.poses.len())).sum::<usize>()<=4096,"client pose copy budget");
             for (id, s) in owner {
                 validate_layer(owner, *id, s, snapshots)?;
             }
         }
         self.depth_orders.validate(&self.clients)?;
+        self.targets.validate(&self.clients)?;
         self.validate_crossfades()
     }
     pub fn set_visible(&mut self, client: ClientId, id: u32, visible: bool) -> Result<()> {
+        self.targets.advance();
         self.clients
             .get_mut(&client.0)
             .and_then(|c| c.get_mut(&id))
@@ -2988,7 +3146,9 @@ impl LayerSystem {
         Ok(())
     }
     pub fn frame(&self, canvas: [u32; 2]) -> Result<Vec<Primitive>> {
-        self.composite_frame(canvas)
+        let mut frame = self.composite_frame(canvas)?;
+        self.route_frame(&mut frame)?;
+        Ok(frame)
     }
     fn frame_plain(&self, canvas: [u32; 2]) -> Result<Vec<Primitive>> {
         // State is valid by construction: every mutation path validates what
@@ -3006,7 +3166,9 @@ impl LayerSystem {
             let ordered_blend_writes=owner.values().any(|s| matches!(&s.paint,
                 Paint::OrderedState { command: ordered_state::Command::Push { state } }
                     if state.blend.is_some_and(blend_writes_at_zero_opacity)));
-            for spec in owner.values() {
+            for stored in owner.values() {
+              for (sub, variant) in pose_copies::variants(stored) {
+                let spec=variant.as_ref();
                 if matches!(&spec.paint,Paint::Group{..}){continue;}
                 let is_command=matches!(&spec.paint,Paint::OrderedState{..}|Paint::CoverageReset{..}|Paint::CoverageWrite{..});
                 let mut chain = vec![spec];
@@ -3176,13 +3338,14 @@ impl LayerSystem {
                     ordinary_2d:!inherited_3d&&spec.transform.matrix_is_2d()&&!spec.transform.camera_enabled,
                     geometry_order:spec.transform.geometry_order,
                     primitive:Primitive {
+                    target: None, output: None,
                     coverage,
                     tie_order:spec.tie_order,
                     depth_order: depth_keys.get(&(*client, spec.id)).cloned(),
                     composite: None,
                     owner: *client,
                     id: spec.id,
-                    sub: 0,
+                    sub,
                     order: [spec.order[0],spec.order[1].checked_add(if spec.transform.geometry_order.is_none(){inherited_order.unwrap_or(0)}else{0}).context("inherited geometry order overflow")?],
                     size: [spec.rect[2].ceil() as u32, spec.rect[3].ceil() as u32],
                     extent: [local[2], local[3]],
@@ -3199,6 +3362,7 @@ impl LayerSystem {
                         _ => self.puppet_frames.get(&(*client, spec.id)).cloned(),
                     },
                 }});
+              }
             }
         }
         ordered_state::resolve(out,canvas)
@@ -3215,6 +3379,7 @@ pub fn rectangle(
 ) -> Primitive {
     let [x, y, w, h] = rect;
     Primitive {
+        target: None, output: None,
         coverage:coverage::Operation::None,
         tie_order:None,
         depth_order: None,
@@ -3358,6 +3523,7 @@ fn validate_layer(
         s.paint.validate()?;
     }
     s.transform.validate()?;
+    if let Some(copies)=&s.pose_copies {copies.validate(&s.paint)?;}
     if let Some(clip) = s.clip {
         ensure!(rect_valid(clip), "invalid layer clip");
     }

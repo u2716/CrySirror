@@ -24,6 +24,12 @@ pub enum ProgressShape {
     HalfCosine {
         pi: f64,
     },
+    /// Unit quarter-sine acceleration/deceleration families.
+    Sine {
+        direction: ProgressDirection,
+    },
+    /// Inverse of (1-cos(pi*t))/2, with exact unit endpoints.
+    InverseHalfCosine,
     /// Four-control B-spline with duplicate0/1 endpoints, blended with linear
     ///progress by an explicit tension. General controls use sample_four_point.
     BSpline {
@@ -263,6 +269,20 @@ impl ProgressShape {
             Self::QuadraticIn => p * p,
             Self::SquareRoot => p.sqrt(),
             Self::HalfCosine { pi } => (1. - (p * pi).cos()) * 0.5,
+            Self::Sine {direction} => {
+                let half_pi = std::f64::consts::FRAC_PI_2;
+                match direction {
+                    ProgressDirection::In => 1. - (p * half_pi).cos(),
+                    ProgressDirection::Out => (p * half_pi).sin(),
+                    ProgressDirection::InOut => (1. - (p * std::f64::consts::PI).cos()) * 0.5,
+                    ProgressDirection::OutIn => if p < 0.5 {
+                        (p * std::f64::consts::PI).sin() * 0.5
+                    } else {
+                        1. - ((1. - p) * std::f64::consts::PI).sin() * 0.5
+                    },
+                }
+            },
+            Self::InverseHalfCosine => (1. - 2. * p).clamp(-1.,1.).acos() / std::f64::consts::PI,
             Self::BSpline { strength } => {
                 let spline = (-2. * p * p * p + 3. * p * p + 3. * p + 1.) / 6.;
                 if strength <= 1. {

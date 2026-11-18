@@ -88,7 +88,13 @@ pub(crate) fn begin(
         .frozen_font(&spec.font)
         .map_err(|e| Error::Io(e.to_string()))?;
     let _scratch = Charge::new(memory, max_scratch + glyphs * 64 + spec.cells.len() * 128)?;
-    let permit = pool.reserve().map_err(|e| Error::Io(e.to_string()))?;
+    let permit = pool.reserve().map_err(|e| {
+        if e.is::<crysirror_tasks::CapacityExceeded>() {
+            Error::Limit("glyph batch task capacity")
+        } else {
+            Error::Io(e.to_string())
+        }
+    })?;
     let task = permit
         .spawn(move |cancel| {
             let _scratch = _scratch;

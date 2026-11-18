@@ -38,3 +38,26 @@ establish exhaustive codec/profile conformance or realtime 4K performance.
 `tests/fixtures/generate_mp4.py` reproduces test data and reference samples;
 FFmpeg is only the offline fixture encoder/reference decoder. Tests themselves
 need no FFmpeg, external assets or device.
+
+## WebM / VP8
+
+`webm` demuxes WebM (Matroska `DocType` `webm`/`matroska`) over a seekable
+reader: EBML header, `Info` (timecode scale, duration), the first video
+`TrackEntry`, and `SimpleBlock`/`BlockGroup` packets in sized or unknown-size
+`Cluster`s. Laced video blocks, non-VP8 video and WebM audio decoding fail
+explicitly; alpha `BlockAdditions` are not decoded (pictures are opaque).
+Element headers are read through a 256 KiB buffer with a locally tracked
+position, so archive-backed readers are not hit per byte. Header elements are
+bounded to 1 MiB and blocks to 32 MiB.
+
+VP8 decoding uses the crates.io `vp8-decoder` =0.1.2 (RFC 6386 reference port,
+MIT OR Apache-2.0 with the RFC's BSD-3-Clause tables; notice in NOTICE.md).
+Output I420 is converted to RGBA8 with BT.601 studio-range integer arithmetic.
+
+Validation (2026-11-18, Apple M5, release): `tests/webm.rs` decodes a
+self-generated 64x48 libvpx clip (10 frames, small clusters) against an FFmpeg
+RGBA oracle (max channel difference 1), checks rewind identity and truncated
+input. Locally, three shipped Silverio Ragnarok movies (1920x1080 382 frames,
+960x540 540 frames, 960x544 170 frames) matched FFmpeg's frame counts and its
+libvpx frame 30/60 pixels within 1 level; 1080p decoding measured about
+4.8 ms/frame from a file. Game movies are not part of the repository.

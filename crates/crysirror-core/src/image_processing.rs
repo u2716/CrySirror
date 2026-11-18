@@ -6,17 +6,23 @@ use crate::{Result, state::ClientId};
 use alloc::{boxed::Box, string::String, sync::Arc, vec::Vec};
 /// Device-free coverage quality for retained outline glyphs.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(tag="kind",rename_all="snake_case",deny_unknown_fields)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum GlyphCoverageQuality {
     #[default]
     Grayscale,
-    Binary { threshold:u8 },
-    Supersample { factor:u8 },
+    Binary {
+        threshold: u8,
+    },
+    Supersample {
+        factor: u8,
+    },
 }
 impl GlyphCoverageQuality {
-    pub fn validate(self)->Result<()> {
-        if let Self::Supersample{factor}=self {
-            if !matches!(factor,2|4|8) {return Err(crate::Error::Invalid("glyph supersampling factor"));}
+    pub fn validate(self) -> Result<()> {
+        if let Self::Supersample { factor } = self {
+            if !matches!(factor, 2 | 4 | 8) {
+                return Err(crate::Error::Invalid("glyph supersampling factor"));
+            }
         }
         Ok(())
     }
@@ -172,6 +178,59 @@ pub struct VectorFieldResource {
     pub size: [u32; 2],
     pub samples: VectorFieldSamples,
 }
+/// Immutable polar sampling geometry. Distance stays binary32 and direction
+/// is a wrapping256-entry angular index; no game/runtime or device is retained.
+#[derive(Clone, Debug)]
+pub struct RadialPhaseField {
+    pub client: ClientId,
+    pub size: [u32; 2],
+    pub distances: Arc<[f32]>,
+    pub angles: Arc<[u8]>,
+}
+/// Immutable spherical-lens sampling tables for an `n`x`n` extent: one signed
+/// integer source offset, four /255 bilinear weights and an outside-disc flag
+/// per output pixel. No game/runtime or device state is retained.
+#[derive(Clone, Debug)]
+pub struct LensTable {
+    pub client: ClientId,
+    pub size: u32,
+    pub offsets: Arc<[[i32; 2]]>,
+    pub weights: Arc<[[u8; 4]]>,
+    pub outside: Arc<[bool]>,
+}
+impl LensTable {
+    pub fn validate(&self, owner: ClientId, size: [u32; 2]) -> Result<usize> {
+        let count = u64::from(self.size) * u64::from(self.size);
+        if self.client != owner
+            || size != [self.size, self.size]
+            || count == 0
+            || count > 4_194_304
+            || self.size > 16_384
+            || self.offsets.len() as u64 != count
+            || self.weights.len() as u64 != count
+            || self.outside.len() as u64 != count
+        {
+            return Err(crate::Error::Invalid("lens table owner/layout"));
+        }
+        Ok(self.offsets.len() * 8 + self.weights.len() * 4 + self.outside.len())
+    }
+}
+impl RadialPhaseField {
+    pub fn validate(&self, owner: ClientId, size: [u32; 2]) -> Result<usize> {
+        let count = u64::from(self.size[0]) * u64::from(self.size[1]);
+        if self.client != owner
+            || self.size != size
+            || count == 0
+            || count > 4_194_304
+            || self.size.iter().any(|n| *n > 16_384)
+            || self.distances.len() as u64 != count
+            || self.angles.len() as u64 != count
+        {
+            return Err(crate::Error::Invalid("radial phase field owner/layout"));
+        }
+        Ok(self.distances.len() * core::mem::size_of::<f32>() + self.angles.len())
+    }
+}
 impl VectorFieldResource {
     pub fn validate(&self, owner: ClientId) -> Result<()> {
         if self.client != owner {
@@ -196,6 +255,34 @@ impl VectorFieldResource {
 }
 #[derive(Clone, Debug)]
 pub enum FieldWarpSpec {
+    /// Bounded inverse polar rotation, tapering linearly to zero at radius.
+    /// Strength 0..1000 denotes zero to one full turn at the centre. Explicit
+    /// compatibility geometry, independent of any native callback layout.
+    PolarTwist {
+        field: Arc<RadialPhaseField>,
+        center: [i32; 2],
+        radius: u16,
+        strength: u16,
+        clear: [u8; 4],
+    },
+    /// Nearest RGBA sampling through a quantized polar wave. Outside samples
+    /// write the declared clear pixel; phase and angles wrap at256 entries.
+    RadialPhase {
+        field: Arc<RadialPhaseField>,
+        phase: u32,
+        frequency: u16,
+        amplitude: u16,
+        clear: [u8; 4],
+    },
+    /// Sample the source (a frame whose extent may differ from the output)
+    /// through a `LensTable` placed at `origin`. `full_cover` selects the
+    /// native variant used when the lens covers the whole source: it has no
+    /// outside-disc copy path.
+    Lens {
+        table: Arc<LensTable>,
+        origin: [i32; 2],
+        full_cover: bool,
+    },
     Displacement {
         first: Arc<VectorFieldResource>,
         second: Option<Arc<VectorFieldResource>>,
@@ -220,6 +307,39 @@ impl FieldWarpSpec {
             Ok(())
         };
         match self {
+            Self::PolarTwist {
+                field,
+                center,
+                radius,
+                strength,
+                ..
+            } => {
+                if *radius == 0
+                    || *radius > 16384
+                    || *strength > 1000
+                    || center.iter().any(|v| v.unsigned_abs() > 16384)
+                {
+                    return Err(crate::Error::Limit("polar twist parameters"));
+                }
+                field.validate(owner, size)
+            }
+            Self::Lens { table, origin, .. } => {
+                if origin.iter().any(|v| v.unsigned_abs() > 1_000_000) {
+                    return Err(crate::Error::Limit("lens origin"));
+                }
+                table.validate(owner, size)
+            }
+            Self::RadialPhase {
+                field,
+                amplitude,
+                frequency,
+                ..
+            } => {
+                if *amplitude > 1000 || *frequency > 6553 {
+                    return Err(crate::Error::Limit("radial phase wave parameters"));
+                }
+                field.validate(owner, size)
+            }
             Self::Displacement {
                 first,
                 second,
@@ -365,6 +485,11 @@ pub trait ImageResource: Send + Sync + core::fmt::Debug {
     fn size(&self) -> [u32; 2];
     fn rgba(&self) -> Arc<[u8]>;
     fn opaque(&self) -> bool;
+    /// Cached worker metadata: all four channels match within every pixel.
+    /// None requires general component coverage, never an owner-thread scan.
+    fn scalar_coverage(&self) -> Option<bool> {
+        None
+    }
     /// Opt-in checked lookup on resident storage. The default deliberately
     /// does not call rgba(): third-party providers may materialize full images
     /// there. None means out of bounds; malformed/unsupported storage is an error.
@@ -589,7 +714,12 @@ impl RgbaImage {
             return Err(crate::Error::Invalid("RGBA image layout"));
         }
         let opaque = pixels.chunks_exact(4).all(|p| p[3] == 255);
-        Ok(Self { client, size, pixels, opaque })
+        Ok(Self {
+            client,
+            size,
+            pixels,
+            opaque,
+        })
     }
 }
 impl ImageResource for RgbaImage {

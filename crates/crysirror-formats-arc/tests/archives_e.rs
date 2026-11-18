@@ -67,7 +67,7 @@ impl DependencyResolver for Dependencies {
         Ok(mem(self
             .0
             .get(path)
-            .ok_or_else(|| anyhow::anyhow!("missing {path}"))?
+            .ok_or(crysirror_core::Error::NotFound)?
             .clone()))
     }
 }

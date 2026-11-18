@@ -6,6 +6,7 @@
 | --- | --- |
 | Start a game, choose fonts and save locations, or use network storage | [Desktop player](DESKTOP_API.md) |
 | Supported engines, resource formats and save-file compatibility | [Engine compatibility](NATIVE_ADAPTERS.md) |
+| Archive formats and KiriKiri automatic decryption | [Software heritage](SOFTWARE_HERITAGE.md) |
 | KAG scenarios, graphics extensions, movies and supported DLL interfaces | [KiriKiri plug-ins](KIRIKIRI.md#plug-in-compatibility) |
 | BGI installed-game and installation-media directories | [BGI / Ethornell](BGI.md) |
 | macOS, iOS and Android application packages | [Native applications](NATIVE_PACKAGING.md) |

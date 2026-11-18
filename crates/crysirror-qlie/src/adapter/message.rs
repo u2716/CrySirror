@@ -16,6 +16,7 @@ pub(super) fn native_glyph_style(flags: i32, aa: i32, color: i32) -> Result<Posi
     );
     let color = color as u32;
     Ok(PositionedGlyphStyle {
+        upright_in_clockwise_line:false,
         underline:false,
         strikeout:false,
         bold: flags & 1 != 0,

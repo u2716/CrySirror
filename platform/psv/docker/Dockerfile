@@ -15,7 +15,7 @@ ENV PATH=$VITASDK/bin:$CARGO_HOME/bin:$PATH
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        build-essential ca-certificates curl git python3 xz-utils zstd unzip \
+        build-essential ca-certificates curl git python3 xz-utils zstd unzip default-jre-headless \
     && rm -rf /var/lib/apt/lists/*
 
 # bootstrap-vitasdk.sh creates VITASDK itself and rejects an existing directory.

@@ -266,8 +266,13 @@ fn xfl(s: &dyn AssetReader, cx: &DecodeContext) -> Result<Vec<Row>> {
 }
 
 fn lwg(s: &dyn AssetReader, cx: &DecodeContext) -> Result<Vec<Row>> {
+    // codeX RScript reader (0x4392F0 in the verified 1.11.0.3 build): the
+    // header holds the canvas height (+4), width (+8) and a 16-bit count
+    // (+12); entries carry a signed position, a format byte, the data
+    // offset/size and a length-prefixed Shift-JIS name.
     let h = bytes(s, 0, 24, 24)?;
-    let (width, height, count) = (le32(&h, 4)?, le32(&h, 8)?, le32(&h, 12)? as usize);
+    let (height, width) = (le32(&h, 4)?, le32(&h, 8)?);
+    let count = usize::from(u16::from_le_bytes([h[12], h[13]]));
     let table_size = u64::from(le32(&h, 20)?);
     limits(cx, count)?;
     let start = 24 + table_size + 4;
@@ -275,13 +280,15 @@ fn lwg(s: &dyn AssetReader, cx: &DecodeContext) -> Result<Vec<Row>> {
     let mut c = Cursor::new(&table);
     let mut rows = Vec::with_capacity(count);
     for _ in 0..count {
-        c.take(9)?;
+        let x = c.le32()? as i32;
+        let y = c.le32()? as i32;
+        let format = c.u8()?;
         let offset = start + u64::from(c.le32()?);
         let size = u64::from(c.le32()?);
         let n = c.u8()? as usize;
         rows.push(
             Row::raw(sjis(c.take(n)?)?, offset, size)
-                .meta(serde_json::json!({"canvas": [width, height]})),
+                .meta(serde_json::json!({"canvas": [width, height], "x": x, "y": y, "format": format})),
         );
     }
     Ok(rows)

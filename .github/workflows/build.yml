@@ -30,10 +30,13 @@ jobs:
       matrix:
         include:
           - os: ubuntu-24.04
+            platform: linux
             cargo_jobs: 4
           - os: windows-2022
+            platform: windows
             cargo_jobs: 4
           - os: macos-latest
+            platform: macos
             cargo_jobs: 2
     env:
       CARGO_BUILD_JOBS: ${{ matrix.cargo_jobs }}
@@ -47,6 +50,10 @@ jobs:
         uses: actions/checkout@v6
         with:
           persist-credentials: false
+
+      - name: Use a short Windows build path
+        if: runner.os == 'Windows'
+        run: echo "CARGO_TARGET_DIR=C:/t" >> "$GITHUB_ENV"
 
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
@@ -70,15 +77,16 @@ jobs:
           path: |
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
-            ~/.cargo/registry/src
             ~/.cargo/git/db
-            ~/.cargo/git/checkouts
-          key: cargo-sources-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock') }}
+          key: cargo-downloads-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
-            cargo-sources-${{ runner.os }}-${{ runner.arch }}-
+            cargo-downloads-v2-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Cache Rust compilation results
         id: sccache
+        # The Windows wrapper fails with CreateProcess error 206 on this
+        # dependency graph. Use direct rustc and the short target path there.
+        if: runner.os != 'Windows'
         continue-on-error: true
         uses: mozilla-actions/sccache-action@v0.0.11
         with:
@@ -99,6 +107,21 @@ jobs:
       - name: Build release player
         run: cargo +stable build --release --locked --timings -p crysirror-desktop --bin crysirror
 
+      - name: Package release player
+        run: |
+          binary="${CARGO_TARGET_DIR:-target}/release/crysirror"
+          if [ "$RUNNER_OS" = Windows ]; then binary="$binary.exe"; fi
+          python3 tools/ci_package.py desktop --binary "$binary" --platform "${{ matrix.platform }}"
+
+      - name: Upload release player
+        uses: actions/upload-artifact@v7
+        with:
+          name: crysirror-${{ matrix.platform }}-${{ runner.arch }}
+          path: dist/crysirror-*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
       - name: Report compiler cache statistics
         if: ${{ always() && env.RUSTC_WRAPPER == 'sccache' }}
         continue-on-error: true
@@ -109,9 +132,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: build-timings-${{ matrix.os }}-${{ runner.arch }}
-          path: target/cargo-timings/*.html
+          path: ${{ env.CARGO_TARGET_DIR || 'target' }}/cargo-timings/*.html
           if-no-files-found: ignore
-          retention-days: 7
+          retention-days: 3
 
   # Browser host (crates/crysirror-web): threaded wasm32 build with
   # shared-memory Workers, bindings from the wasm-bindgen release pinned in
@@ -143,12 +166,10 @@ jobs:
           path: |
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
-            ~/.cargo/registry/src
             ~/.cargo/git/db
-            ~/.cargo/git/checkouts
             target/wasm-tools
-          key: cargo-web-${{ hashFiles('Cargo.lock') }}
-          restore-keys: cargo-web-
+          key: cargo-downloads-v2-web-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-downloads-v2-web-
 
       - name: Install wasm-bindgen matching Cargo.lock
         run: |
@@ -163,12 +184,17 @@ jobs:
       - name: Build browser host
         run: python3 tools/web_host.py build
 
+      - name: Package browser host
+        run: python3 tools/ci_package.py web
+
       - name: Upload site
         uses: actions/upload-artifact@v7
         with:
           name: crysirror-web
-          path: target/web
-          retention-days: 14
+          path: dist/crysirror-web.zip
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
 
   psv_image:
     name: PS Vita build image
@@ -219,22 +245,24 @@ jobs:
           path: |
             /usr/local/cargo/registry/index
             /usr/local/cargo/registry/cache
-            /usr/local/cargo/registry/src
             /usr/local/cargo/git/db
-          key: cargo-psv-${{ hashFiles('platform/psv/player/Cargo.lock') }}
-          restore-keys: cargo-psv-
+          key: cargo-downloads-v2-psv-${{ hashFiles('platform/psv/player/Cargo.lock') }}
+          restore-keys: cargo-downloads-v2-psv-
 
       - name: Build VPK
         working-directory: platform/psv/player
         run: cargo +"$CRYSIRROR_NIGHTLY" vita build vpk -- --release
 
+      - name: Stage VPK
+        run: python3 tools/ci_package.py console --platform psv --input platform/psv/player/target/armv7-sony-vita-newlibeabihf/release
+
       - name: Upload VPK
         uses: actions/upload-artifact@v7
         with:
           name: crysirror-psv
-          path: platform/psv/player/target/armv7-sony-vita-newlibeabihf/release/*.vpk
+          path: dist/crysirror-psv.vpk
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 1
 
   switch_image:
     name: Nintendo Switch build image
@@ -281,14 +309,118 @@ jobs:
           rustc +"$TOOLCHAIN" --version
           "$DEVKITA64/bin/aarch64-none-elf-gcc" --version
 
+      - name: Cache dependency downloads
+        continue-on-error: true
+        uses: actions/cache@v5
+        with:
+          path: |
+            /usr/local/cargo/registry/index
+            /usr/local/cargo/registry/cache
+            /usr/local/cargo/git/db
+          key: cargo-downloads-v2-switch-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-downloads-v2-switch-
+
       - name: Build NRO
         working-directory: platform/switch/runtime
         run: make TOOLCHAIN="$TOOLCHAIN" -j"$(nproc)"
+
+      - name: Stage NRO
+        run: python3 tools/ci_package.py console --platform switch --input platform/switch/runtime/crysirror.nro
 
       - name: Upload NRO
         uses: actions/upload-artifact@v7
         with:
           name: crysirror-switch
-          path: platform/switch/runtime/crysirror.nro
+          path: dist/crysirror-switch.nro
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 1
+
+  prerelease:
+    name: Publish rolling pre-release
+    needs: [desktop, web, psv, switch]
+    if: >-
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Check out release source
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Download build packages
+        uses: actions/download-artifact@v8
+        with:
+          pattern: crysirror-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Prepare release metadata and checksums
+        run: |
+          python3 - <<'PY'
+          import json, os, tomllib
+          from pathlib import Path
+          root = Path('release-assets')
+          expected = ['crysirror-linux-x86_64.tar.gz', 'crysirror-windows-x86_64.zip',
+                      'crysirror-macos-arm64.tar.gz', 'crysirror-web.zip',
+                      'crysirror-psv.vpk', 'crysirror-switch.nro']
+          for name in expected:
+              if not (root / name).is_file():
+                  raise SystemExit(f'Missing build package: {name}')
+          info = {'commit': os.environ['GITHUB_SHA'], 'run_id': os.environ['GITHUB_RUN_ID'],
+                  'version': tomllib.loads(Path('Cargo.toml').read_text())['workspace']['package']['version']}
+          (root / 'build.json').write_text(json.dumps(info, indent=2) + '\n')
+          for name in ['LICENSE', 'NOTICE.md']:
+              (root / name).write_bytes(Path(name).read_bytes())
+          notes = [f"Rolling pre-release from `{info['commit']}`.", '',
+                   'Only the latest successful build is retained on this page.', '',
+                   '| Platform | Download |', '| --- | --- |']
+          labels = ['Linux x86_64', 'Windows x86_64', 'macOS arm64 CLI', 'Web', 'PS Vita', 'Nintendo Switch']
+          for label, name in zip(labels, expected):
+              notes.append(f'| {label} | [{name}](https://github.com/{os.environ["GITHUB_REPOSITORY"]}/releases/download/pre-release/{name}) |')
+          notes += ['', 'Verify downloads with `SHA256SUMS`. No game data or fonts are bundled.',
+                    'These are pre-release builds. Compilation does not establish game or hardware compatibility.',
+                    'The macOS CLI is not notarized. Android and iOS packages are not included in this build matrix.']
+          Path('release-notes.md').write_text('\n'.join(notes) + '\n')
+          with open(os.environ['GITHUB_ENV'], 'a') as env:
+              env.write(f"RELEASE_VERSION={info['version']}\n")
+          PY
+          python3 tools/ci_package.py checksums release-assets
+
+      - name: Replace the rolling pre-release
+        run: |
+          set -euo pipefail
+          # Build/validate every package before replacing this one rolling tag.
+          # Other release tags and assets are never removed.
+          if gh release view pre-release >/dev/null 2>&1; then
+            gh release delete pre-release --cleanup-tag --yes
+          elif gh api "repos/$GH_REPO/git/ref/tags/pre-release" >/dev/null 2>&1; then
+            gh api --method DELETE "repos/$GH_REPO/git/refs/tags/pre-release"
+          fi
+          gh release create pre-release release-assets/* \
+            --target "$GITHUB_SHA" --draft --prerelease --latest=false \
+            --title "CrySirror v$RELEASE_VERSION pre-release (${GITHUB_SHA::7})" \
+            --notes-file release-notes.md
+          gh release edit pre-release --draft=false --prerelease --latest=false
+
+      - name: Remove transferred build artifacts
+        continue-on-error: true
+        run: |
+          gh api "repos/$GH_REPO/actions/runs/$GITHUB_RUN_ID/artifacts" --paginate \
+            --jq '.artifacts[] | select(.name | startswith("crysirror-")) | .id' |
+          while read -r id; do
+            gh api --method DELETE "repos/$GH_REPO/actions/artifacts/$id"
+          done
+
+      - name: Prune obsolete dependency and Docker caches
+        continue-on-error: true
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: python3 tools/ci_cache.py --repo "$GH_REPO" --default-branch "$DEFAULT_BRANCH" --prune

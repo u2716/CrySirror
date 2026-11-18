@@ -232,55 +232,43 @@ pub(super) fn mca(s: &dyn AssetReader, cx: &DecodeContext) -> Result<Vec<Row>> {
 }
 pub(super) fn dzi(s: &dyn AssetReader, cx: &DecodeContext) -> Result<Vec<Row>> {
     let b = index(s, cx, 0, length(s)?)?;
-    let text = std::str::from_utf8(&b)?;
-    let mut lines = text.lines();
-    ensure!(lines.next() == Some("DZI"), "missing DZI");
-    let pair = |line: &str| -> Result<(u32, u32)> {
-        let (a, b) = line.split_once(',').context("DZI dimension pair")?;
-        Ok((a.parse()?, b.parse()?))
-    };
-    let (width, height) = pair(lines.next().context("DZI dimensions")?)?;
-    let size = output_size(width, height, cx)?;
-    let n = lines.next().context("DZI frame count")?.parse::<usize>()?;
-    limits(cx, n)?;
+    let levels=crate::malie_dzi::parse(&b,cx.limits.max_entries)?;
+    let mut decoders = crysirror_image::DecoderRegistry::default();
+    crate::register_images(&mut decoders)?;
+    let decoders = Arc::new(decoders);
     let mut rows = Vec::new();
-    for i in 0..n {
-        let (cols, rows_n) = pair(lines.next().context("DZI grid")?)?;
-        ensure!(
-            cols as u64 * rows_n as u64 <= cx.limits.max_entries as u64,
-            "DZI texture count limit"
-        );
-        let mut textures = Vec::new();
-        for y in 0..rows_n {
-            let line = lines.next().context("DZI texture row")?;
-            let names: Vec<_> = line.split(',').collect();
-            ensure!(names.len() >= cols as usize, "short DZI row");
-            for x in 0..cols {
-                let name = names[x as usize];
-                if name.is_empty() {
-                    continue;
+    for (i,level) in levels.into_iter().enumerate() {
+        cx.check_cancelled()?;
+        let [width,height]=level.size;
+        let size=output_size(width,height,cx)?;
+        let mut textures=Vec::new();
+        for (x,y,name) in level.tiles {
+            let mut reader=None;
+            for extension in ["webp","png","mgf"] {
+                match cx.open_sibling(&format!("tex/{name}.{extension}")) {
+                    Ok(tile)=>{reader=Some(tile);break;}
+                    Err(error)=>{
+                        let missing=matches!(error.downcast_ref::<crysirror_core::Error>(),Some(crysirror_core::Error::NotFound))
+                            ||error.downcast_ref::<std::io::Error>().is_some_and(|e|e.kind()==std::io::ErrorKind::NotFound);
+                        if !missing||extension=="mgf" {return Err(error);}
+                    }
                 }
-                ensure!(
-                    !name.contains('/') && !name.contains('\\'),
-                    "DZI texture name must be a basename"
-                );
-                let reader = cx
-                    .open_sibling(&format!("tex/{name}.webp"))
-                    .or_else(|_| cx.open_sibling(&format!("tex/{name}.png")))?;
-                textures.push((x * 256, y * 256, reader));
             }
+            textures.push((x,y,reader.context("DZI tile resource missing")?));
         }
         let limit = cx.limits.max_entry_size;
+        let decoders = decoders.clone();
         rows.push(Row::packed(
             format!("{i:03}.png"),
             0,
             0,
             size,
-            decode(move |_, _| {
+            decode_context(move |_, _, context| {
                 let mut dst = ImageSurface::filled(width, height, [0; 4])?;
                 for (x, y, reader) in &textures {
+                    context.check_cancelled()?;
                     let data = crysirror_resource::read_all(reader.as_ref(), limit)?;
-                    let src = crysirror_image::decode_standard(&data)?;
+                    let src = decoders.decode_with("dzi-tile", &data, None, Some(context), None)?;
                     blit(&mut dst, &src, *x as i32, *y as i32)?;
                 }
                 encode_png_uncompressed(&dst)
@@ -289,6 +277,7 @@ pub(super) fn dzi(s: &dyn AssetReader, cx: &DecodeContext) -> Result<Vec<Row>> {
     }
     Ok(rows)
 }
+
 /// Cyberworks images use a caller-provided header permutation/delimiters. The
 /// original title lookup table stays outside the engine and repository.
 pub(super) fn cyber_image(b: &[u8], profile: &serde_json::Value) -> Result<ImageSurface> {

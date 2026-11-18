@@ -398,7 +398,20 @@ impl Assets {
                         source
                             .read(uri, &cancel)
                             .map(|b| b.to_vec())
-                            .map_err(|e| crysirror_core::Error::Io(format!("{e:#}")))
+                            .map_err(|e| {
+                                // Format decoders probe optional companions
+                                // (e.g. per-tile extensions); keep absence typed.
+                                if e.chain().any(|c| {
+                                    matches!(
+                                        c.downcast_ref::<crysirror_core::Error>(),
+                                        Some(crysirror_core::Error::NotFound)
+                                    )
+                                }) {
+                                    crysirror_core::Error::NotFound
+                                } else {
+                                    crysirror_core::Error::Io(format!("{e:#}"))
+                                }
+                            })
                     };
                     let image =
                         decoders.decode_with(&name, &bytes, Some(&dependencies), None, None)?;

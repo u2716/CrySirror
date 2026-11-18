@@ -541,7 +541,7 @@ pub fn project(ctx: &mut CommandContext, client:ClientId, host: &mut dyn HostSer
                 bold: None,
             })
             .collect();
-        let body = LayerSpec { tie_order:None, clock_paused: false, source_crop: None, viewport_clip: None,
+        let body = LayerSpec { pose_copies:None, tie_order:None, clock_paused: false, source_crop: None, viewport_clip: None,
             id,
             parent: None,
             rect: [

@@ -234,7 +234,7 @@ pub fn publish(
                     ..Default::default()
                 };
                 needed.push(image);
-                layers.push(LayerSpec { tie_order:None, clock_paused: false, source_crop: object_source_crop(b,[cx as f32,cy as f32]),
+                layers.push(LayerSpec { pose_copies:None, tie_order:None, clock_paused: false, source_crop: object_source_crop(b,[cx as f32,cy as f32]),
                     viewport_clip: object_viewport_clip(b),
                     id,
                     parent: None,
@@ -301,7 +301,7 @@ pub fn publish(
         const MOV_LAYER: u32 = 0xA000_0000;
         let mov = &ctx.globals.mov;
         ids.insert(MOV_LAYER);
-        layers.push(LayerSpec { tie_order:None, clock_paused: false, source_crop: None,
+        layers.push(LayerSpec { pose_copies:None, tie_order:None, clock_paused: false, source_crop: None,
             viewport_clip: None,
             id: MOV_LAYER,
             parent: None,
@@ -471,7 +471,7 @@ pub(crate) fn object_filter(
         color: [u(b.color_r), u(b.color_g), u(b.color_b)],
         add: [u(b.color_add_r), u(b.color_add_g), u(b.color_add_b)],
         tone_curve: None,
-        mask: None,
+        mask: None, stencil: None,
         alpha_test: b.alpha_test != 0,
         distortion: None,
     };

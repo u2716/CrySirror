@@ -63,7 +63,9 @@ pub(crate) fn begin_scoped(
 ) -> Result<Box<dyn ImageEncodingInfoQuery>> {
     let permit = pool
         .reserve()
-        .map_err(|error| Error::Io(error.to_string()))?;
+        .map_err(|error| if error.is::<crysirror_tasks::CapacityExceeded>() {
+            Error::Limit("encoded image metadata task capacity")
+        } else {Error::Io(error.to_string())})?;
     let task = permit
         .spawn(move |cancel| {
             cancel.check()?;

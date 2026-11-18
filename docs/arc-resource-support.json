@@ -3142,7 +3142,7 @@
         "src/legacy/e/images.rs"
       ],
       "variants": [
-        "DZI tile-grid composition through shared bitmap APIs"
+        "DZI tile-grid composition through shared bitmap APIs, with scoped WebP/PNG/MGF companions"
       ],
       "limits": [
         "Tiles are scoped companion resources; missing tiles/layouts fail",
@@ -3150,7 +3150,8 @@
       ],
       "evidence": {
         "ordinary_tests": [
-          "tests/archives_e.rs"
+          "tests/archives_e.rs",
+          "tests/malie.rs"
         ],
         "external_corpus_tests": [],
         "behavior_scope": "Test files cover the reviewed group; not every native/title variant has an external fixture. No commercial game or hardware result is implied.",
@@ -3162,23 +3163,27 @@
       "kind": "archive",
       "status": "partial",
       "registration_group": "e",
-      "entrypoint": "libp",
+      "entrypoint": "malie::libp",
       "implementation": [
-        "src/legacy/e.rs"
+        "src/legacy/e.rs",
+        "src/legacy/e/malie.rs"
       ],
       "variants": [
-        "Plain LIBP recursive directory/index with configurable data alignment"
+        "LIBP recursive directories, both file flags and configurable data alignment",
+        "Host-keyed Camellia/CFI whole-source random-access readers",
+        "Encrypted TXTz zlib and PSBz wrapped members"
       ],
       "limits": [
-        "Encrypted header/index/members require explicit caller pipelines",
+        "Encrypted archives require explicit format/cipher and a client-scoped host key; no automatic executable key extraction or title-key catalogue",
         "Shared entry/index/count/resident budgets and canonical capability paths apply; unknown native layouts fail."
       ],
       "evidence": {
         "ordinary_tests": [
-          "tests/archives_e.rs"
+          "tests/archives_e.rs",
+          "tests/malie.rs"
         ],
         "external_corpus_tests": [],
-        "behavior_scope": "Test files cover the reviewed group; not every native/title variant has an external fixture. No commercial game or hardware result is implied.",
+        "behavior_scope": "Authored indexes, encrypted mounts and decoded members; shared cipher vectors are tested separately. Original-program parity and complete-title execution are not established.",
         "external_fixture_coverage": "No external fixture comparison for this ID is claimed; ordinary tests and implementation review are the evidence."
       }
     },
@@ -3187,23 +3192,27 @@
       "kind": "archive",
       "status": "partial",
       "registration_group": "e",
-      "entrypoint": "libu",
+      "entrypoint": "malie::libu",
       "implementation": [
-        "src/legacy/e.rs"
+        "src/legacy/e.rs",
+        "src/legacy/e/malie.rs"
       ],
       "variants": [
-        "Plain LIBU UTF16 index and caller-transformed encrypted header/index/members"
+        "Nested LIBU UTF16 directories and full signed 64-bit relative offsets",
+        "Host-keyed Camellia/CFI whole-source random-access readers",
+        "Encrypted TXTz zlib and PSBz wrapped members"
       ],
       "limits": [
-        "Native encrypted cipher is supplied by explicit caller pipeline rather than embedded title implementation",
+        "Encrypted archives require explicit format/cipher and a client-scoped host key; no automatic executable key extraction or title-key catalogue",
         "Shared entry/index/count/resident budgets and canonical capability paths apply; unknown native layouts fail."
       ],
       "evidence": {
         "ordinary_tests": [
-          "tests/archives_e.rs"
+          "tests/archives_e.rs",
+          "tests/malie.rs"
         ],
         "external_corpus_tests": [],
-        "behavior_scope": "Test files cover the reviewed group; not every native/title variant has an external fixture. No commercial game or hardware result is implied.",
+        "behavior_scope": "Authored indexes, encrypted mounts and decoded members; shared cipher vectors are tested separately. Original-program parity and complete-title execution are not established.",
         "external_fixture_coverage": "No external fixture comparison for this ID is claimed; ordinary tests and implementation review are the evidence."
       }
     },

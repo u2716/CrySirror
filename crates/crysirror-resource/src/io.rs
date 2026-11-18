@@ -88,6 +88,27 @@ pub fn read_all(source: &dyn AssetReader, limit: u64) -> Result<Vec<u8>> {
     read_exact_at(source, 0, &mut out)?;
     Ok(out)
 }
+/// Bounded whole-resource preparation with cooperative checks between 64 KiB
+/// reads. No data is published until the complete immutable resource exists.
+pub fn read_all_checked(
+    source: &dyn AssetReader,
+    limit: u64,
+    check: &dyn Fn() -> Result<()>,
+) -> Result<Vec<u8>> {
+    check()?;
+    let len = source.len().map_err(|e| anyhow::anyhow!("resource size: {e}"))?;
+    ensure!(len <= limit, "resource exceeds byte limit");
+    let len = usize::try_from(len).context("resource exceeds address space")?;
+    let mut output = Vec::new();
+    output.try_reserve_exact(len)?;
+    output.resize(len, 0);
+    for (index, chunk) in output.chunks_mut(64 * 1024).enumerate() {
+        check()?;
+        read_exact_at(source, index as u64 * 64 * 1024, chunk)?;
+    }
+    check()?;
+    Ok(output)
+}
 struct SubReader {
     source: Arc<dyn AssetReader>,
     offset: u64,

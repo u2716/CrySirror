@@ -55,6 +55,14 @@ pub fn parse_rust_items(src: &str) -> Vec<RustItem> {
             continue;
         }
         if current.is_none() {
+            // Opaque trait handles: documented by name and doc, no payload.
+            if let (Some(rest), true) = (t.strip_prefix("pub trait "), line.starts_with("pub ")) {
+                let name: String = rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+                items.push(RustItem { name, doc: doc.join(" "), is_enum: false, members: Vec::new() });
+                doc.clear();
+                attrs.clear();
+                continue;
+            }
             let decl = t
                 .strip_prefix("pub struct ")
                 .map(|r| (r, false))

@@ -23,3 +23,6 @@ oxideav-av1 = { git = "https://github.com/OxideAV/oxideav-av1", rev = "b3c95abe0
 oxideav-pixfmt = "=0.1.11"
 # Cinepak (AVI/CVID, MIT) for AVG32 movies; no oxideav-core registry glue.
 oxideav-cinepak = { version = "=0.0.3", default-features = false }
+# VP8 (RFC 6386) for WebM movies; bit-exact against the WebM test vectors.
+# Licence (MIT OR Apache-2.0) AND BSD-3-Clause (RFC 6386 tables); see NOTICE.md.
+vp8-decoder = "=0.1.2"

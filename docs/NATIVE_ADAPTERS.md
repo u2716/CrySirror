@@ -41,6 +41,7 @@ The [desktop guide](DESKTOP_API.md) lists the available launch options.
 | [System-NNN](#system-nnn) | SPT scenarios, Black Cyc archives, DWQ graphics, VAW audio, text, choices and picture effects. |
 | [SugarPot](#sugarpot) | The Tsukumo no Tsuki format: AOS2/SCR resources, ABM/BMP graphics, sprites, text, choices, audio, movies and the H-scene gallery. |
 | [N-System](#n-system) | MSD scenarios, FJSYS banks, MGD graphics, text, choices, transitions, title/option/extras screens, original saves. |
+| [Malie / MalieSystem](../crates/crysirror-malie/README.md) | EXEC scenarios, LIBP resources, MGF/DZI graphics, SVG/Squirrel UI, dialogue, choices, audio, movies and portable saves. Original-save and platform limits are recorded in the adapter reference. |
 | [WillPlus / AdvHD](native-api/willplus.md) | WS2 V3 scenarios, ARC/PNA resources, Lua system scripts, layers, text, audio and movies. |
 
 ## KiriKiri

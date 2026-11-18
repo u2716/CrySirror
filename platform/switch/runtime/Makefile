@@ -53,7 +53,7 @@ SHADERS := $(foreach n,$(SIGLUS_SHADERS),$(ROMFS)/shaders/$(n)_vsh.dksh $(ROMFS)
 all: $(TARGET).nro
 
 rust: $(LIBC_DIR)/.patched $(STD_LIBC_DIR)/.patched $(RUST_SRC)/.patched
-	cd $(WORKSPACE) && \
+	+cd $(WORKSPACE) && \
 	CC_aarch64_switch=$(DEVKITA64)/bin/aarch64-none-elf-gcc AR_aarch64_switch=$(DEVKITA64)/bin/aarch64-none-elf-ar \
 	CXX_aarch64_switch=$(DEVKITA64)/bin/aarch64-none-elf-g++ \
 	CFLAGS_aarch64_switch="$(CFLAGS) -D__SWITCH__" CXXFLAGS_aarch64_switch="$(CFLAGS) -D__SWITCH__" \
@@ -110,14 +110,13 @@ ICON_BACKGROUND := \#2d2d2d
 # the deko3d backend's null driver over the repository's example projects,
 # then compiled per entry by UAM (crysirror-shader-tools cook-switch).
 CAPTURE_PROJECTS := examples/desktop/project.json examples/desktop/arena.json examples/desktop/systems.json \
-	examples/desktop/glyph-effects.json examples/aaa-systems/project.json examples/aaa-helmet/project.json \
-	examples/aaa-vfx/project.json examples/materials/project.json examples/shader-effects/project.json \
+	examples/desktop/glyph-effects.json examples/materials/project.json examples/shader-effects/project.json \
 	examples/engine/project.json
 $(ROMFS)/wgsl/index.json: | $(ROMFS)/shaders
 	rm -rf $(BUILD)/capture $(ROMFS)/wgsl
-	cd $(WORKSPACE) && for p in $(CAPTURE_PROJECTS); do \
+	+cd $(WORKSPACE) && for p in $(CAPTURE_PROJECTS); do \
 	  cargo run --release -q -p crysirror-wgpu-deko3d --example capture -- platform/switch/runtime/$(BUILD)/capture $$p || exit 1; done
-	cd $(WORKSPACE) && UAM=$(UAM) cargo run --release -q -p crysirror-shader-tools -- cook-switch \
+	+cd $(WORKSPACE) && UAM=$(UAM) cargo run --release -q -p crysirror-shader-tools -- cook-switch \
 	  platform/switch/runtime/$(BUILD)/capture platform/switch/runtime/$(ROMFS)/wgsl
 
 $(BUILD)/icon.jpg: ../../../icon/crysirror.svg Makefile | $(BUILD)

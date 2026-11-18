@@ -29,7 +29,7 @@ impl Renderer {
         if p.coverage==crysirror_scene::layer::coverage::Operation::Write {
             //The ordered writer is admitted before whole-face near/cull
             //rejection, even when projection produces no surviving triangles.
-            draws.push(Draw{owner:p.owner,coverage:p.coverage,key:"solid:white".into(),range:0..0,clip:None,blend:Blend::Normal,capture_after:false,filter:None});
+            draws.push(Draw{rgba_contribution:false,output:None,feedback_source:None,owner:p.owner,coverage:p.coverage,key:"solid:white".into(),range:0..0,clip:None,blend:Blend::Normal,capture_after:false,filter:None});
         }
         let mut tint = geometry::tint(*tint);
         tint[3] *= f32::from(p.opacity) / 255.;
@@ -61,7 +61,7 @@ impl Renderer {
                 filter.add[axis] = (filter.add[axis] + part.add[axis]).clamp(-1., 1.);
             }
             let filter_index = records.len() as f32;
-            let mut record = filter_gpu(&filter);
+            let mut record = filter_gpu(&filter,self.mask_viewport);
             let mut sampling=p.sampling;
             sampling.linear=part.linear;
             filter_sampling(&mut record,sampling);
@@ -88,6 +88,8 @@ impl Renderer {
             let step=if matches!(blend,Blend::StoredByte{..}) {3}else{(end-start).max(1)};
             for first in (start..end).step_by(step as usize) {
                 draws.push(Draw {
+                    rgba_contribution:false,
+                    output:None,feedback_source:None,
                     owner:p.owner,coverage:p.coverage,
                     key:key.clone(),range:first..(first+step).min(end),clip:p.clip,blend,
                     capture_after:false,filter:filter_keys.clone(),

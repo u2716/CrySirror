@@ -120,7 +120,9 @@ pub trait GlyphBoundsQuery: Send {
 /// Bounded font registration capability. Handles cannot cross clients.
 pub trait FontLibrary: Send + Sync {
     /// Actual metadata of the authorized, currently published font catalogue.
-    fn catalog(&self)->Result<Vec<FontCatalogFace>> {Err(crate::Error::Unsupported("font catalogue metadata"))}
+    fn catalog(&self) -> Result<Vec<FontCatalogFace>> {
+        Err(crate::Error::Unsupported("font catalogue metadata"))
+    }
     /// Cached aliases currently authorized for this client. This enumerates
     /// published faces only and performs no filesystem or system-font scan.
     fn aliases(&self) -> Result<Vec<String>> {
@@ -147,6 +149,11 @@ pub trait FontLibrary: Send + Sync {
     fn metrics(&self, _alias: &str, _size: f32, _character: char) -> Result<super::FontMetrics> {
         Err(crate::Error::Unsupported("scoped font metrics"))
     }
+    /// Convert an outline em size to the exact line-height scale used by glyph
+    /// bounds/metrics. Uses an authorized immutable face, with no host I/O.
+    fn line_height_for_em(&self, _alias: &str, _em: f32) -> Result<f32> {
+        Err(crate::Error::Unsupported("scoped font em scale"))
+    }
     fn begin_glyph_bounds(
         &self,
         _spec: GlyphBoundsSpec,
@@ -158,11 +165,11 @@ pub trait FontLibrary: Send + Sync {
     fn release_font(&self, handle: FontHandle) -> Result<()>;
 }
 /// Portable face metadata, without GDI handles or invented installed fonts.
-#[derive(Clone,Debug)]
+#[derive(Clone, Debug)]
 pub struct FontCatalogFace {
-    pub alias:String,
-    pub names:Vec<String>,
-    pub fixed_pitch:bool,
-    pub outline:bool,
-    pub code_pages:Option<[u32;2]>,
+    pub alias: String,
+    pub names: Vec<String>,
+    pub fixed_pitch: bool,
+    pub outline: bool,
+    pub code_pages: Option<[u32; 2]>,
 }

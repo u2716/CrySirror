@@ -9,6 +9,7 @@ mod images;
 mod int_aliases;
 mod int_executable;
 pub(super) mod int_fwp;
+pub(super) mod malie;
 mod pac3;
 mod profiles;
 mod structured;
@@ -168,12 +169,12 @@ pub(crate) static FORMATS: &[Legacy] = &[
     Legacy {
         id: "malie/libu",
         probe: Some(|s| magic(s, 0, b"LIBU")),
-        open: libu,
+        open: malie::libu,
     },
     Legacy {
         id: "malie/libp",
         probe: Some(|s| magic(s, 0, b"LIBP")),
-        open: libp,
+        open: malie::libp,
     },
     Legacy {
         id: "microsoft/exe",
@@ -889,119 +890,6 @@ fn bid(s: &dyn AssetReader, cx: &DecodeContext) -> Result<Vec<Row>> {
             start + le32(p, 16)? as u64,
             le32(p, 20)? as u64,
         ));
-    }
-    checked_rows(s, cx, rows)
-}
-fn libu(s: &dyn AssetReader, cx: &DecodeContext) -> Result<Vec<Row>> {
-    let encrypted = !magic(s, 0, b"LIBU")?;
-    let h = index_profile(
-        cx,
-        "malie/libu",
-        "__header__",
-        0,
-        bytes(s, 0, 16, 16)?,
-        encrypted,
-    )?;
-    ensure!(&h[..4] == b"LIBU", "LIBU decoded header mismatch");
-    let n = le32(&h, 8)? as usize;
-    limits(cx, n)?;
-    let t = index_profile(
-        cx,
-        "malie/libu",
-        "__index__",
-        16,
-        index(s, cx, 16, n as u64 * 80)?,
-        encrypted,
-    )?;
-    let mut rows = Vec::new();
-    for p in t.chunks_exact(80) {
-        let end = p[..68]
-            .chunks_exact(2)
-            .position(|p| p == [0, 0])
-            .unwrap_or(34)
-            * 2;
-        let size = le32(p, 68)? as u64;
-        rows.push(Row::packed(
-            utf16(&p[..end])?,
-            le32(p, 72)? as u64,
-            size,
-            size,
-            if encrypted { Plan::Profile } else { Plan::Raw },
-        ));
-    }
-    checked_rows(s, cx, rows)
-}
-fn libp(s: &dyn AssetReader, cx: &DecodeContext) -> Result<Vec<Row>> {
-    let encrypted = !magic(s, 0, b"LIBP")?;
-    let h = index_profile(
-        cx,
-        "malie/libp",
-        "__header__",
-        0,
-        bytes(s, 0, 16, 16)?,
-        encrypted,
-    )?;
-    ensure!(&h[..4] == b"LIBP", "LIBP decoded header mismatch");
-    let n = le32(&h, 4)? as usize;
-    let m = le32(&h, 8)? as usize;
-    limits(cx, n)?;
-    limits(cx, m)?;
-    let t = index_profile(
-        cx,
-        "malie/libp",
-        "__index__",
-        16,
-        index(s, cx, 16, n as u64 * 32 + m as u64 * 4)?,
-        encrypted,
-    )?;
-    let align = cx
-        .parameters
-        .get("malie/libp")
-        .and_then(|p| p.get("data_alignment"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(4096);
-    ensure!(
-        align > 0 && align.is_power_of_two() && align <= 1 << 20,
-        "invalid LIBP data alignment"
-    );
-    let base = (16 + t.len() as u64 + align - 1) & !(align - 1);
-    let mut rows = Vec::new();
-    let mut stack = vec![(0usize, String::new(), 0usize)];
-    let mut seen = std::collections::BTreeSet::new();
-    while let Some((i, root, depth)) = stack.pop() {
-        ensure!(depth <= 256 && seen.insert(i), "LIBP cyclic/deep directory");
-        ensure!(i < n, "LIBP directory index");
-        let p = &t[i * 32..i * 32 + 32];
-        let name = sjis(zstr(&p[..20]))?;
-        let path = if root.is_empty() {
-            name
-        } else if name.is_empty() {
-            root.clone()
-        } else {
-            format!("{root}/{name}")
-        };
-        let flags = le32(p, 20)?;
-        let off = le32(p, 24)? as usize;
-        let size = le32(p, 28)? as u64;
-        if flags & 0x10000 != 0 {
-            ensure!(off < m, "LIBP offset index");
-            let offset = base + u64::from(le32(&t, n * 32 + off * 4)?) * 1024;
-            rows.push(Row::packed(
-                path,
-                offset,
-                size,
-                size,
-                if encrypted { Plan::Profile } else { Plan::Raw },
-            ));
-        } else if off > i {
-            ensure!(
-                off.checked_add(size as usize).is_some_and(|v| v <= n),
-                "LIBP directory range"
-            );
-            for child in (off..off + size as usize).rev() {
-                stack.push((child, path.clone(), depth + 1));
-            }
-        }
     }
     checked_rows(s, cx, rows)
 }

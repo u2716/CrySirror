@@ -302,7 +302,7 @@ fn contains(outer: [f32; 4], inner: [f32; 4]) -> bool {
         && inner[1] + inner[3] <= outer[1] + outer[3]
 }
 fn spec(id: u32, rect: [f32; 4], paint: Paint) -> LayerSpec {
-    LayerSpec { tie_order:None, clock_paused: false,
+    LayerSpec { pose_copies:None, tie_order:None, clock_paused: false,
         source_crop: None,
         viewport_clip: None,
         id,
@@ -1642,7 +1642,7 @@ fn recolor(nodes: &mut [CanvasNode], rgb: [u8; 3]) -> Result<()> {
                         color: [0.; 3],
                         add: [0.; 3],
                         tone_curve: None,
-                        mask: None,
+                        mask: None, stencil: None,
                         alpha_test: false,
                         distortion: None,
                     });

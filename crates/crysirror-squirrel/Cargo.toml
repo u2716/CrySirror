@@ -1,0 +1,15 @@
+[package]
+name = "crysirror-squirrel"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT"
+publish = false
+description = "Bounded Squirrel source interpreter with an isolated, device-free host boundary"
+
+[dependencies]
+anyhow.workspace = true
+serde_json.workspace = true
+
+[build-dependencies]
+cc = "1"

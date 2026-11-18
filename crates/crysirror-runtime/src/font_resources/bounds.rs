@@ -147,5 +147,11 @@ pub(super) fn begin(
             state: GlyphBoundsProgress::Pending,
         })
     };
-    Ok(Box::new(prepare().map_err(err)?))
+    Ok(Box::new(prepare().map_err(|error| {
+        if error.is::<crysirror_tasks::CapacityExceeded>() {
+            crysirror_core::Error::Limit("font CPU task capacity")
+        } else {
+            err(error)
+        }
+    })?))
 }

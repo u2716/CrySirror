@@ -11,7 +11,7 @@ use crysirror_core::{
     state::ClientId,
 };
 use crysirror_video::{
-    amv, asf, imoavi, isobmff, theora,
+    amv, asf, imoavi, isobmff, theora, webm,
     mpeg::{self, VideoFrame},
 };
 use serde::{Deserialize, Serialize};
@@ -47,6 +47,9 @@ pub enum MediaClock {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct MediaOptions {
+    /// Top colour/bottom green-channel alpha packed pictures. Disabled by
+    /// default; applies before publication and survives seek/loop/restart.
+    pub packed_alpha: bool,
     pub looping: bool,
     pub audio: bool,
     pub gain: f32,
@@ -60,6 +63,7 @@ pub struct MediaOptions {
 impl Default for MediaOptions {
     fn default() -> Self {
         Self {
+            packed_alpha: false,
             looping: false,
             audio: true,
             gain: 1.,
@@ -69,6 +73,10 @@ impl Default for MediaOptions {
     }
 }
 impl MediaOptions {
+    fn display_size(&self, mut size: [u32; 2]) -> [u32; 2] {
+        if self.packed_alpha { size[1] /= 2; }
+        size
+    }
     fn validate(&self) -> Result<()> {
         ensure!(
             self.gain.is_finite() && (0. ..=4.).contains(&self.gain),
@@ -120,6 +128,23 @@ pub struct MediaAudioUpdate {
 pub struct MediaUpdates {
     pub frames: Vec<MediaFrameUpdate>,
     pub audio: Vec<MediaAudioUpdate>,
+}
+
+/// N2 trial 472B80/473AB0: colour is the top half of a top-down decoded
+/// picture; the lower half's green component supplies straight alpha. The
+/// original DirectShow DIB is bottom-up; shared decoder frames are top-down.
+fn unpack_alpha_picture(frame: &mut VideoFrame) -> Result<()> {
+    ensure!(frame.height >= 2 && frame.height % 2 == 0, "packed-alpha video height must be positive and even");
+    let pixels = (frame.width as usize).checked_mul(frame.height as usize)
+        .context("packed-alpha video dimensions")?;
+    ensure!(pixels.checked_mul(4) == Some(frame.rgba.len()), "packed-alpha video pixel extent");
+    let half = pixels / 2;
+    for at in 0..half {
+        frame.rgba[at * 4 + 3] = frame.rgba[(half + at) * 4 + 1];
+    }
+    frame.rgba.truncate(half * 4);
+    frame.height /= 2;
+    Ok(())
 }
 
 /// Opening and length queries are worker work. Audio/video share one opened
@@ -302,6 +327,7 @@ impl Workers {
     fn new(
         source: Arc<MediaInput>,
         audio: bool,
+        packed_alpha: bool,
         video_budget: Arc<ByteBudget>,
         audio_budget: Arc<ByteBudget>,
         worker_budget: Arc<ByteBudget>,
@@ -345,6 +371,7 @@ impl Workers {
                     let mp4 = mp4_input(&mut video_reader)?;
                     let publish_metadata = |info: crysirror_video::VideoMetadata| -> Result<()> {
                         crysirror_image::rgba_len(info.size[0], info.size[1])?;
+                        ensure!(!packed_alpha || (info.size[1] >= 2 && info.size[1] % 2 == 0), "packed-alpha video height must be positive and even");
                         if let Some(ms) = info.frame_ms {
                             ensure!(ms.is_finite() && ms > 0. && ms <= 10000., "media header frame duration");
                             frame_duration.store(ms.round().max(1.) as u64, Ordering::Release);
@@ -352,11 +379,16 @@ impl Workers {
                         *stream_metadata.lock().unwrap_or_else(|e| e.into_inner()) = Some(info);
                         Ok(())
                     };
-                    let publish = |frame: VideoFrame| -> Result<bool> {
+                    let publish = |mut frame: VideoFrame| -> Result<bool> {
                         if stop.load(Ordering::Acquire) {
                             return Ok(false);
                         }
-                        let reservation = video_budget.reserve(frame.rgba.len())?;
+                        // Include source/output overlap if shrinking reallocates.
+                        let reservation = video_budget.reserve(frame.rgba.capacity() + if packed_alpha { frame.rgba.len()/2 } else {0})?;
+                        if packed_alpha {
+                            unpack_alpha_picture(&mut frame)?;
+                            frame.rgba.shrink_to_fit();
+                        }
                         counter.fetch_add(1, Ordering::Relaxed);
                         Ok(video_tx
                             .send(QueuedFrame {
@@ -379,6 +411,9 @@ impl Workers {
                                 break;
                             }
                         }
+                    } else if webm::is_input(&mut video_reader)? {
+                        webm::decode_video_with_metadata(video_reader,
+                            ||stop.load(Ordering::Acquire), publish_metadata, publish)?;
                     } else if imoavi::is_input(&mut video_reader)? {
                         imoavi::decode_video_with_metadata(video_reader,
                             ||stop.load(Ordering::Acquire), publish_metadata, publish)?;
@@ -443,6 +478,12 @@ impl Workers {
                         if imoavi::is_input(&mut reader)? {
                             ensure!(!imoavi::info(&mut reader)?.has_audio,
                                 "IMOAVI audio decoding is not implemented; explicitly disable audio for video-only playback");
+                            let _ = tx.send(None);
+                            return Ok(());
+                        }
+                        if webm::is_input(&mut reader)? {
+                            ensure!(!webm::info(&mut reader)?.has_audio,
+                                "WebM audio decoding is not implemented; explicitly disable audio for video-only playback");
                             let _ = tx.send(None);
                             return Ok(());
                         }
@@ -550,7 +591,7 @@ impl Slot {
     }
     fn refresh_metadata(&mut self) {
         if let Some(info) = self.workers.as_ref().and_then(|w| *w.metadata.lock().unwrap_or_else(|e| e.into_inner())) {
-            self.status.size = Some(info.size);
+            self.status.size = Some(self.options.display_size(info.size));
             self.status.duration_ms = info.duration_ms;
         }
     }
@@ -683,6 +724,7 @@ impl MediaManager {
         let workers = Workers::new(
             reader.clone(),
             options.audio,
+            options.packed_alpha,
             self.video_budget.clone(),
             self.audio_budget.clone(),
             self.worker_budget.clone(),
@@ -814,6 +856,7 @@ impl MediaManager {
         slot.workers = Some(Workers::new(
             slot.source.clone(),
             slot.options.audio,
+            slot.options.packed_alpha,
             self.video_budget.clone(),
             self.audio_budget.clone(),
             self.worker_budget.clone(),
@@ -862,7 +905,7 @@ impl MediaManager {
         self.slots.get(&(client, id)).map(|s| {
             let mut status = s.status.clone();
             if let Some(info) = s.workers.as_ref().and_then(|w| *w.metadata.lock().unwrap_or_else(|e| e.into_inner())) {
-                status.size = Some(info.size);
+                status.size = Some(s.options.display_size(info.size));
                 status.duration_ms = info.duration_ms;
             }
             if let (MediaClock::External { now_ms }, Some(start), MediaState::Playing) =
@@ -903,7 +946,7 @@ impl MediaManager {
                 continue;
             };
             if let Some(info) = *workers.metadata.lock().unwrap_or_else(|e| e.into_inner()) {
-                slot.status.size = Some(info.size);
+                slot.status.size = Some(slot.options.display_size(info.size));
                 slot.status.duration_ms = info.duration_ms;
             }
             slot.status.decoded_frames = workers.decoded.load(Ordering::Relaxed) as u64;
@@ -1079,6 +1122,7 @@ impl MediaManager {
                         match Workers::new(
                             slot.source.clone(),
                             slot.options.audio,
+                            slot.options.packed_alpha,
                             self.video_budget.clone(),
                             self.audio_budget.clone(),
                             self.worker_budget.clone(),

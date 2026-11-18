@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "engine": "codeX RScript",
+  "mode": "adopt",
+  "binaries": [
+    {
+      "role": "verified build (static analysis only, never executed)",
+      "file_version": "1.11.0.3",
+      "sha256": "f9e3299467ff1bae3942e9ddf7c8092b70ec2f758581bfe4471deceeaaff191d",
+      "functions": {
+        "WinMain / APINI reader": "0x433730",
+        "dispatcher": "0x4358A0",
+        "blend dispatcher": "0x4464E0",
+        "save screen (CSave)": "0x41D230",
+        "slot writer": "0x433240",
+        "slot reader": "0x432FB0",
+        "system save writer / reader": "0x433180 / 0x432D60",
+        "game state init / exit / start": "0x42F0C0 / 0x4306B0 / 0x42FCA0",
+        "panel window (CTexBoxEx)": "0x427400",
+        "configuration (CConfig)": "0x417D30",
+        "title / top menu": "0x440A20",
+        "animated layer loader / flow": "0x402280 / 0x4034B0 / 0x402510",
+        "image load conversions": "0x415810",
+        "zoom / shrink transitions": "0x453A60 / 0x4537E0",
+        "thumbnail WCG writer": "0x471F20"
+      },
+      "analysis": "IDA 9.0 database kept locally under target/verification/rscript (not distributed)"
+    }
+  ]
+}

@@ -11,10 +11,13 @@ nfs = ["crysirror-network/nfs", "crysirror-siglus-integrated/nfs", "crysirror-bg
 smb = ["crysirror-network/smb", "crysirror-siglus-integrated/smb", "crysirror-bgi-integrated/smb", "crysirror-softpal/smb", "crysirror-rfvp-integrated/smb"]
 
 [dependencies]
+crysirror-malie.workspace = true
 crysirror-vita-io.workspace = true
 crysirror-qlie = {workspace=true,features=["runtime"]}
 crysirror-sugarpot = {workspace=true,features=["runtime"]}
 crysirror-nsystem = {workspace=true,features=["runtime"]}
+crysirror-rscript = {workspace=true,features=["runtime"]}
+crysirror-n2system = {workspace=true,features=["runtime"]}
 crysirror-reallive.workspace = true
 crysirror-avg32.workspace = true
 crysirror-krkr.workspace = true
@@ -46,6 +49,7 @@ crysirror-puppet.workspace = true
 crysirror-puppet-eluna = { path = "../crysirror-puppet-eluna" }
 crysirror-script-js.workspace = true
 crysirror-scene.workspace = true
+encoding_rs = "0.8"
 anyhow.workspace = true
 serde_json.workspace = true
 serde.workspace = true
@@ -59,3 +63,5 @@ windows-sys = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging", "W
 
 [dev-dependencies]
 tempfile = "3.12"
+wgpu.workspace = true
+pollster.workspace = true

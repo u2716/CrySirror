@@ -1,0 +1,29 @@
+[package]
+name = "crysirror-n2system"
+description = "N2System NsScript VM over shared CrySirror capabilities"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[features]
+default = ["runtime"]
+runtime = ["dep:crysirror-runtime"]
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+encoding_rs = "0.8"
+glam.workspace = true
+crysirror-core.workspace = true
+crysirror-resource.workspace = true
+crysirror-tasks.workspace = true
+crysirror-text.workspace = true
+crysirror-scene.workspace = true
+crysirror-image.workspace = true
+crysirror-runtime = { workspace = true, optional = true }
+
+[dev-dependencies]
+crysirror-formats-arc.workspace = true

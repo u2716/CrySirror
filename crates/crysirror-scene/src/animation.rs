@@ -10,7 +10,11 @@
 mod cubic_path;
 mod bezier_path;
 mod oscillator;
+mod stepped_alternation;
+pub use stepped_alternation::SteppedAlternation;
 mod scalar_steps;
+mod frame_sequence;
+pub use frame_sequence::FrameSequenceClock;
 pub use cubic_path::NaturalCubicPath;
 pub use bezier_path::{CubicBezierPath,QuadraticBezierPath};
 pub use oscillator::{ScalarOscillator, SignalFade, Waveform};
@@ -394,3 +398,5 @@ impl IntEvent {
 
 mod adaptive_steps;
 pub use adaptive_steps::AdaptiveStepClock;
+mod staggered_fade;
+pub use staggered_fade::StaggeredFade;

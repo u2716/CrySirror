@@ -44,6 +44,11 @@ pub enum ImageEffect {
     AlphaLookup {
         table: Vec<u8>,
     },
+    /// Look up one stored channel and copy the result into selected channels.
+    /// RGBA write bits are1/2/4/8; every lookup reads the original pixel.
+    ChannelLookup { channel: u8, write_mask: u8, table: Vec<u8> },
+    /// Normalize RGB only where stored alpha is exactly zero.
+    ClearTransparentRgb,
     /// Binary alpha from a reference channel byte. Spec: reference[x,y],
     /// channel0..3, equal0..255, different0..255. RGB remains unchanged.
     CoverageReferenceKey {
@@ -87,6 +92,11 @@ pub enum ImageEffect {
     },
     MaskedBlur {
         spec: crate::masked_blur::MaskedBlur,
+    },
+    /// Sequential 3x3 stored RGBA averages with row feedback and one final
+    /// top/bottom/left border repair; the right visible column stays intact.
+    FeedbackBoxBlur {
+        spec: crate::feedback_box_blur::FeedbackBoxBlur,
     },
     BoxBlurClamped {
         spec: crate::box_blur_clamped::BoxBlurClamped,
@@ -148,6 +158,23 @@ pub enum ImageEffect {
     /// Truncated straight RGBA means, one uniform colour per rectangular cell.
     BlockAverage {
         cell: [u16; 2],
+    },
+    /// Scaled sprite/tile composition onto a new transparent canvas.
+    TileCompose {
+        spec: crate::tile_compose::TileCompose,
+    },
+    /// Vertical alpha-ramp streaks stored into the image (Rain 438E90).
+    StreakField {
+        spec: crate::streak_field::StreakField,
+    },
+    /// One signed horizontal shift per row, transparent fill (Wave 433E80).
+    RowShift {
+        offsets: Vec<i32>,
+    },
+    /// Truncated straight RGBA means over complete square cells only; the
+    /// right/bottom remainder keeps its source pixels (N-System Mosaic 433630).
+    FullBlockAverage {
+        cell: u16,
     },
     /// Horizontal mean over a row-truncated window (optionally one past).
     TruncatedRowBlur {
@@ -339,6 +366,8 @@ pub enum ImageEffect {
         horizontal: bool,
         vertical: bool,
     },
+    /// codeX RScript image-layer load conversions (mirror, rotate/zoom, tone).
+    CelConvert { spec: crate::cel_convert::CelConvert },
     /// Top-left proportional nearest sampling using exact integer quotients.
     ResizeNearest { width: u32, height: u32 },
     /// Bilinear resize of straight RGBA to a new size.
@@ -369,6 +398,10 @@ impl ImageEffect {
                 "stored channel copy selection"
             ),
             Self::AlphaLookup { table } => ensure!(table.len() == 256, "alpha lookup table length"),
+            Self::ChannelLookup { channel, write_mask, table } => ensure!(
+                *channel < 4 && (1..=15).contains(write_mask) && table.len() == 256,
+                "channel lookup selection/table"
+            ),
             Self::CoverageReferenceKey { spec } => spec.validate()?,
             Self::RectMap { spec } => spec.validate()?,
             Self::DualTexture { spec } => spec.validate()?,
@@ -382,6 +415,7 @@ impl ImageEffect {
             Self::LinearAlphaLookup { spec } => spec.validate()?,
             Self::SequentialBoxBlur { spec } => spec.validate()?,
             Self::MaskedBlur { spec } => spec.validate()?,
+            Self::FeedbackBoxBlur { spec } => spec.validate()?,
             Self::BoxBlurClamped { spec } => spec.validate()?,
             Self::BoxBlurSpan { spec } => spec.validate()?,
             Self::CyclicCellSample { spec } => spec.validate()?,
@@ -403,6 +437,16 @@ impl ImageEffect {
             Self::TruncatedRowBlur { spec } => spec.validate()?,
             Self::TiledTransform { spec } => spec.validate()?,
             Self::ChannelRangeStretch { spec } => spec.validate()?,
+            Self::TileCompose { spec } => spec.validate()?,
+            Self::StreakField { spec } => spec.validate()?,
+            Self::RowShift { offsets } => ensure!(
+                offsets.len() <= 16_384 && offsets.iter().all(|v| v.unsigned_abs() <= 1 << 20),
+                "row shift offsets"
+            ),
+            Self::FullBlockAverage { cell } => ensure!(
+                (1..=4096).contains(cell),
+                "full block average cell must be 1..4096"
+            ),
             Self::BlockAverage { cell } => ensure!(
                 cell.iter().all(|v| (1..=1024).contains(v)),
                 "block average cell must be1..1024"
@@ -555,6 +599,9 @@ impl ImageSurface {
         if let ImageEffect::MaskedBlur { spec } = effect {
             return spec.apply(self, check);
         }
+        if let ImageEffect::FeedbackBoxBlur { spec } = effect {
+            return spec.apply(self, check);
+        }
         if let ImageEffect::BoxBlurClamped { spec } = effect {
             return spec.apply(self, check);
         }
@@ -565,6 +612,9 @@ impl ImageSurface {
             return spec.apply(self, check);
         }
         if let ImageEffect::NearestCellSample { spec } = effect {
+            return spec.apply(self, check);
+        }
+        if let ImageEffect::CelConvert { spec } = effect {
             return spec.apply(self, check);
         }
         if let ImageEffect::RadialAngleLookup { spec } = effect {
@@ -630,6 +680,29 @@ impl ImageSurface {
             check()?;
             return Ok(out);
         }
+        if let ImageEffect::ChannelLookup { channel, write_mask, table } = effect {
+            let mut out = self.clone();
+            for row in out.rgba.chunks_mut(self.width as usize * 4) {
+                check()?;
+                for pixel in row.chunks_exact_mut(4) {
+                    let value = table[usize::from(pixel[usize::from(*channel)])];
+                    for (index, byte) in pixel.iter_mut().enumerate() {
+                        if *write_mask & (1 << index) != 0 { *byte = value; }
+                    }
+                }
+            }
+            check()?;
+            return Ok(out);
+        }
+        if let ImageEffect::ClearTransparentRgb = effect {
+            let mut out=self.clone();
+            for row in out.rgba.chunks_mut(self.width as usize*4) {
+                check()?;
+                for pixel in row.chunks_exact_mut(4) {if pixel[3]==0 {pixel[..3].fill(0);}}
+            }
+            check()?;
+            return Ok(out);
+        }
         if let ImageEffect::RectMap { spec } = effect {
             return spec.apply(self, check);
         }
@@ -673,6 +746,18 @@ impl ImageSurface {
         }
         if let ImageEffect::ChannelRangeStretch { spec } = effect {
             return spec.apply(self, check);
+        }
+        if let ImageEffect::TileCompose { spec } = effect {
+            return spec.apply(self, check);
+        }
+        if let ImageEffect::StreakField { spec } = effect {
+            return spec.apply(self, check);
+        }
+        if let ImageEffect::RowShift { offsets } = effect {
+            return crate::row_shift::apply(self, offsets, check);
+        }
+        if let ImageEffect::FullBlockAverage { cell } = effect {
+            return self.full_block_average(*cell, check);
         }
         if let ImageEffect::BlockAverage { cell } = effect {
             return self.block_average(*cell, check);

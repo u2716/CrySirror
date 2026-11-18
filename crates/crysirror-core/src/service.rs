@@ -19,6 +19,8 @@ mod audio_gain_envelope;
 pub use audio_gain_envelope::*;
 mod audio_balance;
 pub use audio_balance::*;
+mod echo;
+pub use echo::*;
 mod audio_sequence;
 pub use audio_sequence::*;
 mod audio_replacement;
@@ -312,6 +314,11 @@ pub struct AudioPlaybackInfo {
     /// Peak absolute source PCM in the last completed mixer block, before
     /// gain, bus, pan and spatial processing. Paused/inactive sources report 0.
     pub source_peak: f32,
+    /// Signed source samples at interleaved block indices 0, N/4, 3N/4
+    /// and N-2, before gain, panning, channel exchange and per-voice effects.
+    /// They support inexpensive presentation/lip-sync meters without exposing
+    /// a decoder buffer or its lifetime. Inactive sources return zeroes.
+    pub source_taps: [f32; 4],
     /// Mixer-owner observation of the independent external dB balance track.
     pub balance: AudioBalanceInfo,
     /// Source has remaining input, even when paused; excludes processing tails.
@@ -907,6 +914,11 @@ pub enum AudioRequest {
     /// Change the source playback multiplier without seeking, restarting or
     ///resetting resampler/DSP history. Pitch, looping and transport survive.
     SetRate {channel:u32,rate:f32},
+    /// Replace a live voice's bounded stereo delay. None removes the effect.
+    /// A missing voice is unchanged; no source is opened by this control.
+    SetEcho {channel:u32,effect:Option<StereoEchoSpec>},
+    /// Replace a live voice's portable chorus/reverb; None clears it.
+    SetStereoEffect { channel: u32, effect: Option<StereoEffectSpec> },
     SetGain {
         channel: u32,
         gain: f32,
@@ -997,6 +1009,16 @@ pub enum MediaRequest {
         audio: bool,
         gain: f32,
     },
+    /// Decode colour in the top half and a green-channel alpha plane in
+    /// the bottom half of each picture. Geometry is half the encoded height.
+    /// The ordinary Play contract and its default opaque frames are unchanged.
+    PlayAlpha {
+        id: u32,
+        asset: String,
+        looping: bool,
+        audio: bool,
+        gain: f32,
+    },
     Stop {
         id: u32,
     },
@@ -1036,6 +1058,7 @@ impl MediaRequest {
     pub fn id(&self) -> u32 {
         match self {
             Self::Play { id, .. }
+            | Self::PlayAlpha { id, .. }
             | Self::SetGain { id, .. }
             | Self::Stop { id }
             | Self::Remove { id }
@@ -1260,6 +1283,17 @@ pub trait ClientStorage: Send + Sync {
     }
     fn clear_asset_redirects(&self) -> Result<()> {
         Err(crate::Error::Unsupported("asset redirects"))
+    }
+    /// Retain frozen asset bytes for subsequent scoped reads. No I/O occurs
+    /// here; callers prepare on workers and publish after cancellation checks.
+    /// Admission is atomic and may not evict other explicitly retained files.
+    fn retain_asset_bytes(&self, _path: &VfsPath, _bytes: Arc<[u8]>, _max_resident: u64) -> Result<()> {
+        Err(crate::Error::Unsupported("retained asset bytes"))
+    }
+    /// Remove one retained asset, or all when None. Existing readers keep their
+    /// immutable leases; releasing a cache entry does not invalidate a consumer.
+    fn release_asset_bytes(&self, _path: Option<&VfsPath>) -> Result<()> {
+        Err(crate::Error::Unsupported("retained asset bytes"))
     }
     /// Read metadata for a canonical mount-relative name; empty names denote
     /// the mount root. Queries must not open ambient paths or decode resources.
@@ -1643,6 +1677,17 @@ pub trait HostServices: FileSystem {
         _client: ClientId,
     ) -> Result<crate::image_processing::ImageJob> {
         Err(crate::Error::Unsupported("frame capture presenter"))
+    }
+    /// Freeze an owned persistent Layer target at the next presenter fence.
+    /// The job owns bounded staging/output admission; deletion or replacement
+    /// cancels its generation. Returned RGBA contains bitmap pixels before the
+    /// presentation layer's transform, opacity or surrounding scene.
+    fn begin_layer_target_image(
+        &mut self,
+        _client: ClientId,
+        _layer: u32,
+    ) -> Result<crate::image_processing::ImageJob> {
+        Err(crate::Error::Unsupported("persistent Layer target readback"))
     }
     fn begin_pattern(&mut self, _client: ClientId, _request: PatternRequest) -> Result<PatternJob> {
         Err(crate::Error::Unsupported("persistent pattern worker"))
@@ -2336,6 +2381,10 @@ pub mod buttons {
     pub const KEY_J: u64 = 1 << 58;
     pub const KEY_M: u64 = 1 << 59;
     pub const KEY_V: u64 = 1 << 60;
+    /// Additional letters retain all existing InputFrame bit assignments.
+    pub const KEY_T: u64 = 1 << 61;
+    pub const KEY_B: u64 = 1 << 62;
+    pub const KEY_N: u64 = 1 << 63;
     /// Logical names used by action maps, in bit order.
     pub const NAMES: &[(&str, u64)] = &[
         ("enter", ENTER),
@@ -2399,6 +2448,9 @@ pub mod buttons {
         ("j", KEY_J),
         ("m", KEY_M),
         ("v", KEY_V),
+        ("t", KEY_T),
+        ("b", KEY_B),
+        ("n", KEY_N),
     ];
     /// Checked legacy VK translation for this framed-button profile. None
     /// means unrepresented, not released. Distinct keypad/side-specific keys
@@ -2437,6 +2489,9 @@ pub mod buttons {
             0x4a => KEY_J,
             0x4c => KEY_L,
             0x4d => KEY_M,
+            0x4e => KEY_N,
+            0x42 => KEY_B,
+            0x54 => KEY_T,
             0x51 => KEY_Q,
             0x52 => KEY_R,
             0x53 => KEY_S,

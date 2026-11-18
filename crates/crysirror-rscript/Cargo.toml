@@ -1,0 +1,24 @@
+[package]
+name = "crysirror-rscript"
+description = "codeX RScript (Liar-soft) GSC native script VM over CrySirror services"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+log = "0.4"
+encoding_rs = "0.8"
+crysirror-core.workspace = true
+crysirror-image.workspace = true
+crysirror-resource.workspace = true
+crysirror-tasks.workspace = true
+crysirror-runtime = {workspace = true, optional = true}
+
+[features]
+default = ["runtime"]
+runtime = ["dep:crysirror-runtime"]

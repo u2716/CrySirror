@@ -2,6 +2,12 @@
 //! CPU-only image surfaces and decoder dispatch. No GPU, window or VM policy.
 #![forbid(unsafe_code)]
 pub mod label_image;
+pub mod matte_span;
+pub mod lens;
+pub mod radial_phase;
+pub mod row_shift;
+pub mod streak_field;
+pub mod tile_compose;
 pub mod png_rows;
 pub mod pna;
 pub mod psd;
@@ -9,6 +15,7 @@ use anyhow::{Result, ensure};
 use std::{collections::BTreeMap, io::Cursor, sync::Arc};
 mod fixed_blend;
 mod formats;
+mod standard_encoding;
 pub use formats::{ImageDecodeContext, ImageFormat, ImageSource};
 
 pub const MAX_DECODED_BYTES: usize = 64 * 1024 * 1024;
@@ -71,6 +78,7 @@ pub mod affine_blend;
 pub mod associated;
 pub mod bitmap;
 pub mod box_blur_clamped;
+pub mod feedback_box_blur;
 pub mod box_blur_span;
 pub mod nearest_cell_sample;
 pub mod box_downscale;
@@ -397,6 +405,8 @@ pub mod progress_curve;
 pub mod masked_pair;
 
 pub mod bmp_encode;
+pub mod wcg_encode;
+pub mod cel_convert;
 pub mod paged;
 
 pub mod packed_pixels;

@@ -27,6 +27,8 @@ mod rt_pbr;
 mod sampling;
 pub mod text;
 mod transition;
+mod render_targets;
+mod rgba_stencil;
 pub mod vfx_gpu;
 pub mod vfx_render;
 pub mod vsm;
@@ -193,6 +195,9 @@ pub struct RenderTarget<'a> {
     pub size: [u32; 2],
 }
 struct Draw {
+    rgba_contribution: bool,
+    output: Option<(String, [u32; 2], u64)>,
+    feedback_source: Option<String>,
     owner:u32,
     coverage:crysirror_scene::layer::coverage::Operation,
     key: String,
@@ -218,14 +223,21 @@ struct FilterGpu {
     h: [f32; 4],
     i: [f32; 4],
 }
-fn filter_gpu(f: &crysirror_scene::layer::LayerFilter) -> FilterGpu {
+fn filter_gpu(f: &crysirror_scene::layer::LayerFilter,_viewport:[f32;4]) -> FilterGpu {
     use crysirror_scene::layer::Distortion;
+    let coverage = f.mask.as_ref().and_then(|m|m.coverage);
     let flags = u32::from(f.tone_curve.is_some())
         | u32::from(f.mask.is_some()) << 1
         | u32::from(f.mask.as_ref().is_some_and(|m| m.gray_alpha)) << 2
         | u32::from(f.alpha_test) << 3
         | u32::from(f.ignore_tint_alpha) << 4
-        | u32::from(f.encoded_sampling) << 5;
+        | u32::from(f.encoded_sampling) << 5
+        | u32::from(coverage.is_some()) << 14
+        | u32::from(coverage.is_some_and(|c|c.canvas.is_some())) << 15
+        | u32::from(f.stencil.is_some()) << 16
+        | u32::from(f.stencil.as_ref().is_some_and(|s|s.nearest)) << 17
+        | u32::from(f.stencil.as_ref().is_some_and(|s|s.outside_zero)) << 18
+        | u32::from(f.stencil.as_ref().is_some_and(|s|s.rgba)) << 19;
     let (kind, p) = match f.distortion {
         None => (0., [0.; 5]),
         Some(Distortion::NineTap { offset, center_weight, neighbor_weight }) =>
@@ -259,7 +271,7 @@ fn filter_gpu(f: &crysirror_scene::layer::LayerFilter) -> FilterGpu {
         }) => (if invert { 6. } else { 5. }, [fade, threshold, 0., 0., 0.]),
     };
     let curve = f.tone_curve.as_ref();
-    FilterGpu {
+    let mut record = FilterGpu {
         a: [f.mono, f.invert, f.bright, f.dark],
         b: [f.color_rate, f.color[0], f.color[1], f.color[2]],
         c: [f.add[0], f.add[1], f.add[2], flags as f32],
@@ -277,7 +289,18 @@ fn filter_gpu(f: &crysirror_scene::layer::LayerFilter) -> FilterGpu {
         }),
         h: [f.mask.as_ref().map_or(1.,|mask|mask.scale),f.multiply[0],f.multiply[1],f.multiply[2]],
         i: [0.;4],
+    };
+    if let Some(c) = coverage {
+        record.g[1] = c.progress;
+        record.g[2] = c.feather;
+        record.g[3] = c.canvas.map_or(0.,|s|s[0] as f32);
+        record.h[0] = c.canvas.map_or(0.,|s|s[1] as f32);
     }
+    if let Some(canvas)=f.stencil.as_ref().map(|s|s.canvas).or_else(||coverage.and_then(|c|c.canvas)) {
+        record.g[3]=canvas[0] as f32;record.h[0]=canvas[1] as f32;
+    }
+    if let Some(s)=&f.stencil {record.d[0]=s.origin[0];record.d[1]=s.origin[1];}
+    record
 }
 fn filter_sampling(record:&mut FilterGpu,sampling:crysirror_scene::layer::ImageSampling) {
     use crysirror_scene::layer::{ImageSampleProfile,TextureAddressMode};
@@ -313,9 +336,12 @@ pub struct Renderer {
     snapshot_rasterizations: u64,
     quad_pipelines: Vec<wgpu::RenderPipeline>,
     filtered_pipelines: Vec<wgpu::RenderPipeline>,
+    rgba_add_pipeline: wgpu::RenderPipeline,
+    rgba_subtract_pipeline: wgpu::RenderPipeline,
     stored_pipeline: wgpu::RenderPipeline,
     filter_layout: wgpu::BindGroupLayout,
     filter_buffer: Option<wgpu::Buffer>,
+    mask_viewport:[f32;4],
     /// (mask key, curve key) → bind group over this frame's filter buffer.
     filter_binds: std::collections::HashMap<(String, String), wgpu::BindGroup>,
     engine_frame: Vec<Primitive>,
@@ -332,6 +358,10 @@ pub struct Renderer {
     scene_texture_keys: BTreeSet<String>,
     capture_texture_keys: BTreeSet<String>,
     snapshot_readers: BTreeMap<String, Vec<std::sync::Weak<dyn crysirror_core::service::AssetReader>>>,
+    target_write_revisions: BTreeMap<String, u64>,
+    pending_target_outputs: BTreeSet<String>,
+    target_readback_serial: u64,
+    flushing_target_writes: bool,
     glyph_cells: BTreeMap<String, glyph_run::GlyphBitmap>,
     camera_buffer: wgpu::Buffer,
     camera_bind: wgpu::BindGroup,
@@ -405,7 +435,12 @@ impl Renderer {
         });
         let quad_shader = d.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("quad shader"),
-            source: wgpu::ShaderSource::Wgsl(crysirror_shaders::wgsl::QUAD.into()),
+            // Existing native packages are keyed by the exact v1 module hash.
+            // Keep that ABI until their v2 programs are cooked; reject the new
+            // coverage profile explicitly below instead of altering old draws.
+            source: wgpu::ShaderSource::Wgsl(if cfg!(any(target_os="vita",target_os="horizon")) {
+                crysirror_shaders::wgsl::QUAD
+            } else { crysirror_shaders::wgsl::QUAD_V2 }.into()),
         });
         let mesh_shader = d.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("mesh shader"),
@@ -492,7 +527,7 @@ impl Renderer {
         ];
         // Fixed-function factor pairs apply to colour and alpha alike.
         let fixed = |src_factor, dst_factor| wgpu::BlendComponent { src_factor, dst_factor, operation: wgpu::BlendOperation::Add };
-        let quad_pipeline = |blend: Blend, filtered: bool| {
+        let quad_pipeline = |blend: Blend, filtered: bool, rgba_contribution: bool| {
             let color = match blend {
                 Blend::Normal => wgpu::BlendState::ALPHA_BLENDING.color,
                 Blend::Add => wgpu::BlendComponent {
@@ -559,6 +594,11 @@ impl Renderer {
                 Blend::SourceOver | Blend::Modulate | Blend::InverseDestination | Blend::ModulateAdd | Blend::DestinationIn | Blend::StoredByte { .. } => color,
                 _ => wgpu::BlendComponent::OVER,
             };
+            let (color,alpha)=if rgba_contribution {
+                (wgpu::BlendComponent {src_factor:wgpu::BlendFactor::One,dst_factor:wgpu::BlendFactor::One,
+                    operation:if blend==Blend::Subtract {wgpu::BlendOperation::ReverseSubtract}else{wgpu::BlendOperation::Add}},
+                    fixed(wgpu::BlendFactor::One,wgpu::BlendFactor::One))
+            } else {(color,alpha)};
             d.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 cache: None,
                 label: Some("layer compositing"),
@@ -612,12 +652,14 @@ impl Renderer {
                 multiview_mask: None,
             })
         };
-        let quad_pipelines: Vec<_> = blends.iter().map(|b| quad_pipeline(*b, false)).collect();
-        let filtered_pipelines: Vec<_> = blends.iter().map(|b| quad_pipeline(*b, true)).collect();
+        let quad_pipelines: Vec<_> = blends.iter().map(|b| quad_pipeline(*b, false, false)).collect();
+        let filtered_pipelines: Vec<_> = blends.iter().map(|b| quad_pipeline(*b, true, false)).collect();
+        let rgba_add_pipeline=quad_pipeline(Blend::Add,true,true);
+        let rgba_subtract_pipeline=quad_pipeline(Blend::Subtract,true,true);
         let stored_pipeline = quad_pipeline(Blend::StoredByte {
             mode: crysirror_image::rgb_lut::ConstantByteBlend::Normal,
             force_source_opaque:false,force_output_opaque:false,
-        },true);
+        },true,false);
         let mesh_pipeline = d.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             cache: None,
             label: Some("3D opaque"),
@@ -720,6 +762,9 @@ impl Renderer {
             snapshot_rasterizations: 0,
             quad_pipelines,
             filtered_pipelines,
+            rgba_add_pipeline,
+            rgba_subtract_pipeline,
+            mask_viewport:[1.,1.,0.,0.],
             stored_pipeline,
             coverage_layout,coverage_planes:BTreeMap::new(),coverage_white,_coverage_white_texture:coverage_white_texture,
             filter_layout,
@@ -735,6 +780,10 @@ impl Renderer {
             scene_texture_keys: Default::default(),
             capture_texture_keys: Default::default(),
             snapshot_readers: Default::default(),
+            target_write_revisions: Default::default(),
+            pending_target_outputs: Default::default(),
+            target_readback_serial: 0,
+            flushing_target_writes: false,
             glyph_cells: BTreeMap::new(),
             camera_buffer,
             camera_bind,
@@ -950,6 +999,20 @@ impl Renderer {
         ensure!(frame.len() <= 32768, "extracted frame limit");
         for p in &frame {
             p.paint.validate()?;
+            for allocation in p.target.iter().chain(p.output.iter()) {
+                allocation.spec.validate()?;
+                ensure!(allocation.owner == p.owner && allocation.generation != 0, "render target owner/generation");
+            }
+            ensure!(p.output.is_none() || !stored_blend::uses_stored(p), "stored-byte routed blending requires target-scoped destination capture");
+            ensure!(p.output.is_none() || (p.coverage == crysirror_scene::layer::coverage::Operation::None && p.composite.is_none() && matches!(p.paint, Paint::Solid {..} | Paint::Image {..} | Paint::Text {..} | Paint::GlyphRun {..})), "unsupported routed composition payload");
+            ensure!(!cfg!(any(target_os="vita",target_os="horizon"))
+                || p.filter.as_ref().and_then(|f|f.mask.as_ref()).and_then(|m|m.coverage).is_none(),
+                "continuous mask coverage needs the console quad v2 shader package");
+            ensure!(!cfg!(any(target_os="vita",target_os="horizon")) || p.filter.as_ref().is_none_or(|f|f.stencil.is_none()),
+                "canvas stencil needs the console quad v2 shader package");
+            if p.filter.as_ref().and_then(|f|f.stencil.as_ref()).is_some_and(|s|s.rgba) {
+                ensure!(!matches!(p.paint,Paint::ProjectedMesh{..}) && matches!(p.blend,Blend::Normal|Blend::Add|Blend::Subtract|Blend::Multiply|Blend::Screen), "component matte needs a supported 2D blend");
+            }
             if p.sampling != crysirror_scene::layer::ImageSampling::default() {
                 ensure!(
                     // Shared extraction evaluates retained LegacyMesh into
@@ -1315,7 +1378,12 @@ impl Renderer {
         };
         let keys = frame
             .iter()
-            .map(|p| match &p.paint {
+            .map(|p| {
+                if let Some(target) = &p.target {
+                    let key = Self::target_key(assets, target);
+                    return Ok(if p.output.as_ref() == Some(target) { format!("{key}:read") } else { key });
+                }
+                match &p.paint {
                 Paint::Solid { .. } => Ok("solid:white".to_string()),
                 Paint::ProjectedMesh { .. } => Ok("solid:white".to_string()),
                 Paint::LegacyMesh { .. } => anyhow::bail!("legacy mesh must be evaluated by shared layer extraction"),
@@ -1333,7 +1401,7 @@ impl Renderer {
                     let [w, h] = Self::puppet_size(p);
                     Ok(format!("puppet:{}:{}:{w}x{h}", p.owner, p.id))
                 }
-            })
+            }})
             .collect::<Result<Vec<_>>>()?;
         // Layer filters: mask / tone-curve textures (white and identity by default).
         let coverage_owners: BTreeSet<_>=frame.iter().filter(|p|p.coverage!=crysirror_scene::layer::coverage::Operation::None).map(|p|p.owner).collect();
@@ -1341,7 +1409,7 @@ impl Renderer {
             .iter()
             .map(|p| {
                 let Some(f) = &p.filter else {
-                    return Ok((coverage_owners.contains(&p.owner)||matches!(p.paint,Paint::ProjectedMesh{..}) || stored_blend::uses_stored(p)
+                    return Ok((p.target.as_ref().is_some_and(|t|t.spec.opaque)||coverage_owners.contains(&p.owner)||matches!(p.paint,Paint::ProjectedMesh{..}) || stored_blend::uses_stored(p)
                         ||p.sampling.profile==crysirror_scene::layer::ImageSampleProfile::StoredByte128)
                         .then(||("solid:white".to_string(),"curve:identity".to_string())));
                 };
@@ -1351,7 +1419,7 @@ impl Renderer {
                 };
                 let curve = match &f.tone_curve {
                     Some(t) => Self::image_key(assets, p.owner, &t.asset)?,
-                    None => "curve:identity".to_string(),
+                    None => match &f.stencil {Some(s)=>Self::image_key(assets,p.owner,&s.asset)?,None=>"curve:identity".to_string()},
                 };
                 Ok(Some((mask, curve)))
             })
@@ -1361,8 +1429,11 @@ impl Renderer {
         // Sampling aliases share the admitted image allocation. Keep its base
         // key resident so alias creation never requires a second image upload.
         for p in &frame {
+            for target in p.target.iter().chain(p.output.iter()) {
+                used.insert(Self::target_key(assets, target));
+            }
             if let Paint::Image { asset, .. } = &p.paint {
-                used.insert(Self::image_key(assets, p.owner, asset)?);
+                if p.target.is_none() {used.insert(Self::image_key(assets, p.owner, asset)?);}
             }
             if let Paint::ProjectedMesh { frame, .. } = &p.paint {
                 for part in &frame.parts {
@@ -1429,6 +1500,7 @@ impl Renderer {
                 if let Some(t) = &f.tone_curve {
                     self.ensure_image(assets, p.owner, &t.asset, ck)?;
                 }
+                if let Some(s)=&f.stencil {self.ensure_image(assets,p.owner,&s.asset,ck)?;}
             }
         }
         let mut records = vec![FilterGpu {
@@ -1444,15 +1516,28 @@ impl Renderer {
         }];
         let mut vertices = Vec::with_capacity(frame.len() * 6);
         let mut draws = Vec::new();
+        let mut pending_targets = BTreeSet::new();
+        for p in &frame {
+            for allocation in p.target.iter().chain(p.output.iter()) {
+                let key = Self::target_key(assets,allocation);
+                if !self.textures.contains_key(&key) { pending_targets.insert(key); }
+            }
+        }
         let mut coverage_active=BTreeMap::new();
         for (((p, key), fkeys), tex_keys) in
             frame.iter().zip(keys).zip(filter_keys).zip(puppet_textures)
         {
             use crysirror_scene::layer::coverage::Operation as C;
+            let draw_canvas = p.output.as_ref().map_or(canvas, |t| t.spec.size);
+            let output = p.output.as_ref().map(|t| (Self::target_key(assets, t), t.spec.size, t.revision));
+            if output.as_ref().is_some_and(|(key,_,revision)| self.target_write_revisions.get(key)==Some(revision)) { continue; }
+            if output.as_ref().is_some_and(|(key,_,_)| !self.textures.contains_key(key)) { continue; }
+            if p.target.as_ref().is_some_and(|t| !self.textures.contains_key(&Self::target_key(assets,t))) { continue; }
+            if p.target.is_some() && p.opacity == 0 { continue; }
             let active=coverage_active.entry(p.owner).or_insert(false);
-            let consume=match p.coverage {C::None=>*active,C::Write=>{*active=true;false},C::Reset{value}=>{*active=value!=255;false}};
+            let consume=match p.coverage {C::None=>*active && p.output.is_none(),C::Write=>{*active=true;false},C::Reset{value}=>{*active=value!=255;false}};
             if let C::Reset{..}=p.coverage {
-                draws.push(Draw{owner:p.owner,coverage:p.coverage,key:"solid:white".into(),range:0..0,clip:None,blend:Blend::Normal,capture_after:false,filter:None});
+                draws.push(Draw{rgba_contribution:false,output:None,feedback_source:None,owner:p.owner,coverage:p.coverage,key:"solid:white".into(),range:0..0,clip:None,blend:Blend::Normal,capture_after:false,filter:None});
                 continue;
             }
             if matches!(p.paint,Paint::ProjectedMesh{..}) {
@@ -1466,9 +1551,10 @@ impl Renderer {
             if fkeys.as_ref().is_some_and(|(a, b)| {
                 !self.textures.contains_key(a) || !self.textures.contains_key(b)
             }) {
+                if let Some((key,_,_)) = &output { pending_targets.insert(key.clone()); }
                 continue;
             }
-            let color = match &p.paint {
+            let color = if p.target.is_some() {match &p.paint {Paint::Image {tint,..}=>*tint,_=>[255;4]}} else { match &p.paint {
                 Paint::ProjectedMesh { .. } => unreachable!("projected mesh handled before quads"),
                 Paint::LegacyMesh { .. } => unreachable!("legacy mesh evaluated during shared layer extraction"),
                 Paint::CoverageWrite{..}|Paint::CoverageReset{..}|Paint::GlyphView{..}|Paint::Group { .. } | Paint::OrderedState { .. } => unreachable!("composition commands consumed during shared layer extraction"),
@@ -1494,6 +1580,7 @@ impl Renderer {
                 }
                 Paint::Image { asset, tint } => {
                     if !self.ensure_sampled_image(assets, p.owner, asset, &key, p.sampling)? {
+                        if let Some((key,_,_)) = &output { pending_targets.insert(key.clone()); }
                         continue;
                     }
                     *tint
@@ -1598,14 +1685,18 @@ impl Renderer {
                     }
                     *color
                 }
-            };
+            }};
+            if p.filter.as_ref().and_then(|f|f.stencil.as_ref()).is_some_and(|s|s.rgba) {
+                self.prepare_rgba_stencil(p,draw_canvas,color,key,fkeys,output,consume,&mut records,&mut vertices,&mut draws,assets)?;
+                continue;
+            }
             let start = vertices.len() as u32;
-            let mut quad = clip_sampling::quad(p, canvas, color);
+            let mut quad = clip_sampling::quad(p, draw_canvas, color);
             // Transparent solid containers (common VM group roots) cannot
             // change any pixel under these blends: the unfiltered shader
             // emits white·colour, and each blend is the identity for it.
             // Rasterising them anyway costs a full-target fill per layer.
-            if matches!(p.paint,Paint::Solid{..}) && !consume && p.filter.is_none()
+            if p.target.is_none() && matches!(p.paint,Paint::Solid{..}) && !consume && p.filter.is_none()
                 && p.coverage==C::None
                 && p.sampling.profile!=crysirror_scene::layer::ImageSampleProfile::StoredByte128 {
                 let alpha_zero=quad.iter().all(|v|v.color[3]==0.);
@@ -1618,12 +1709,13 @@ impl Renderer {
                     continue;
                 }
             }
-            if consume || p.filter.is_some() || matches!(p.blend,Blend::StoredByte{..})
+            if p.target.as_ref().is_some_and(|t|t.spec.opaque) || consume || p.filter.is_some() || matches!(p.blend,Blend::StoredByte{..})
                 ||p.sampling.profile==crysirror_scene::layer::ImageSampleProfile::StoredByte128 {
                 let index = records.len() as f32;
-                let mut record=filter_gpu(&p.filter.clone().unwrap_or_default());
+                let mut record=filter_gpu(&p.filter.clone().unwrap_or_default(),if p.output.is_some(){[1.,1.,0.,0.]}else{self.mask_viewport});
                 filter_sampling(&mut record,p.sampling);
-                stored_blend::configure(&mut record,p.blend,self.blend_origin,p.opacity);
+                stored_blend::configure(&mut record,p.blend,if p.output.is_some(){[0.;2]}else{self.blend_origin},p.opacity);
+                if p.target.as_ref().is_some_and(|t|t.spec.opaque) { record.i[3]=(record.i[3] as u32 | 1) as f32; }
                 coverage::configure(&mut record,consume);
                 records.push(record);
                 for v in &mut quad {
@@ -1632,6 +1724,9 @@ impl Renderer {
             }
             vertices.extend_from_slice(&quad);
             draws.push(Draw {
+                rgba_contribution:false,
+                output,
+                feedback_source: p.target.as_ref().filter(|t|p.output.as_ref()==Some(*t)).map(|t|Self::target_key(assets,t)),
                 owner:p.owner,coverage:p.coverage,
                 key,
                 range: start..start + 6,
@@ -1641,6 +1736,21 @@ impl Renderer {
                 filter: fkeys,
             });
         }
+        // Each destination is admitted as one dependency set. No partial
+        // alpha writes are replayed when a later image/curve finishes loading.
+        loop {
+            let before = pending_targets.len();
+            for p in &frame {
+                if let (Some(source),Some(destination)) = (&p.target,&p.output) {
+                    if pending_targets.contains(&Self::target_key(assets,source)) {
+                        pending_targets.insert(Self::target_key(assets,destination));
+                    }
+                }
+            }
+            if pending_targets.len()==before { break; }
+        }
+        draws.retain(|draw|draw.output.as_ref().is_none_or(|(key,_,_)|!pending_targets.contains(key)));
+        self.pending_target_outputs = pending_targets;
         // Upload this frame's filter records and (re)build mask/curve bind groups.
         self.filter_binds.clear();
         if records.len() > 1 {
@@ -1747,13 +1857,16 @@ impl Renderer {
             "render target too large"
         );
         self.scene_texture_keys = Self::scene_cache_keys(assets, scene)?;
+        self.prepare_render_targets(assets)?;
         self.prepare_snapshots(assets)?;
         self.prepare_composites(assets, canvas)?;
         //Destination bindings are built during prepare. Admit the actual
         //composition texture first, including on the renderer's first frame,
         //so StoredByte never retains the neutral fallback in its bind group.
-        self.transitions.begin(&self.gpu.device,target.size);
+        if !self.flushing_target_writes { self.transitions.begin(&self.gpu.device,target.size); }
         let blend_viewport=Viewport::with_mode(canvas,target.size,self.presentation_scale);
+        self.mask_viewport=[target.size[0] as f32/blend_viewport.width,target.size[1] as f32/blend_viewport.height,
+            blend_viewport.x/blend_viewport.width,blend_viewport.y/blend_viewport.height];
         self.blend_origin=[blend_viewport.x.max(0.).floor(),blend_viewport.y.max(0.).floor()];
         if self.engine_frame.iter().any(stored_blend::uses_stored) {
             let vp=Viewport::with_mode(canvas,target.size,self.presentation_scale);
@@ -1763,8 +1876,8 @@ impl Renderer {
         self.ensure_coverage(&owners,target.size)?;
         let (vertices, draws) = self.prepare(scene, assets, canvas)?;
         self.sync_transition_mask(assets)?;
-        self.depth(target.size);
-        if let Some(s) = &self.scene3d {
+        if !self.flushing_target_writes { self.depth(target.size); }
+        if let Some(s) = self.scene3d.as_ref().filter(|_|!self.flushing_target_writes) {
             self.gpu.queue.write_buffer(
                 &self.camera_buffer,
                 0,
@@ -1798,27 +1911,27 @@ impl Renderer {
             });
         // Each render owns a fresh encoder and submits internally on success.
         // Any tokens left by a prior error belong to an abandoned encoder.
-        if let Some(p) = &mut self.pbr {
-            p.cancel_unsubmitted_vfx()?;
+        if !self.flushing_target_writes {
+            if let Some(p) = &mut self.pbr { p.cancel_unsubmitted_vfx()?; }
         }
         let gpu_sample =
             self.gpu_timings
                 .begin(&mut encoder, self.profiler.clone(), self.profile_frame);
-        let pbr_active = self.pbr_active();
+        let pbr_active = !self.flushing_target_writes && self.pbr_active();
         // Compose into a retained frame; `transitions.finish` presents it.
-        self.transitions.begin(&self.gpu.device, target.size);
+        if !self.flushing_target_writes { self.transitions.begin(&self.gpu.device, target.size); }
         let backdrop_source = if draws.iter().any(|draw| draw.key == BACKDROP_KEY || matches!(draw.blend,Blend::StoredByte{..})) {
             self.ensure_backdrop([vp.width.ceil() as u32, vp.height.ceil() as u32])?;
             self.transitions.composing()
         } else {
             None
         };
-        let frame_view = self.transitions.begin(&self.gpu.device, target.size);
+        let frame_view = if self.flushing_target_writes {target.view} else {self.transitions.begin(&self.gpu.device, target.size)};
         ensure!(
             !(pbr_active && self.path == RenderingPath::ComputeRaytrace),
             "the PBR scene renders on the raster path only; compute ray tracing of PBR materials is not implemented"
         );
-        let ray_texture = if self.path == RenderingPath::HardwareRaytrace && !pbr_active {
+        let ray_texture = if !self.flushing_target_writes && self.path == RenderingPath::HardwareRaytrace && !pbr_active {
             let scene = self
                 .scene3d
                 .as_ref()
@@ -1842,7 +1955,7 @@ impl Renderer {
                         &mut encoder,
                     )?,
             )
-        } else if let (RenderingPath::ComputeRaytrace, Some(lite)) = (self.path, &self.ray_lite) {
+        } else if let (false, RenderingPath::ComputeRaytrace, Some(lite)) = (self.flushing_target_writes, self.path, &self.ray_lite) {
             Some(lite.encode(
                 &self.gpu,
                 self.scene3d.as_ref().context("compute raytrace requires a 3D scene")?,
@@ -1850,7 +1963,7 @@ impl Renderer {
                 background,
                 &mut encoder,
             )?)
-        } else if self.path == RenderingPath::ComputeRaytrace {
+        } else if !self.flushing_target_writes && self.path == RenderingPath::ComputeRaytrace {
             Some(
                 self.raytracer
                     .as_ref()
@@ -1886,21 +1999,21 @@ impl Renderer {
                         store: wgpu::StoreOp::Store,
                     },
                 })],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                depth_stencil_attachment: if self.flushing_target_writes { None } else { Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &self.depth.as_ref().context("depth target")?.view,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(1.),
                         store: wgpu::StoreOp::Discard,
                     }),
                     stencil_ops: None,
-                }),
+                }) },
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
             if let Some(buffer) = self
                 .mesh_buffer
                 .as_ref()
-                .filter(|_| self.path == RenderingPath::Raster && !pbr_active)
+                .filter(|_| !self.flushing_target_writes && self.path == RenderingPath::Raster && !pbr_active)
             {
                 pass.set_viewport(vp.x, vp.y, vp.width, vp.height, 0., 1.);
                 pass.set_pipeline(&self.mesh_pipeline);
@@ -1986,7 +2099,7 @@ impl Renderer {
             // Passes end only at ordering fences: coverage clears, backdrop
             // copies and attachment changes. Target key: None = frame view,
             // Some(owner) = that owner's coverage plane.
-            let mut open:Option<(Option<u32>,wgpu::RenderPass<'static>)>=None;
+            let mut open:Option<(Option<String>,wgpu::RenderPass<'static>)>=None;
             for draw in &draws {
                 let writing=draw.coverage==C::Write;
                 if let C::Reset{value}=draw.coverage {
@@ -2008,43 +2121,53 @@ impl Renderer {
                         color_attachments:&[Some(wgpu::RenderPassColorAttachment{view:&self.coverage_planes[&draw.owner].view,depth_slice:None,resolve_target:None,ops:wgpu::Operations{load:wgpu::LoadOp::Clear(wgpu::Color::BLACK),store:wgpu::StoreOp::Store}})],depth_stencil_attachment:None,timestamp_writes:None,occlusion_query_set:None});
                 }
                 if draw.range.is_empty(){continue;}
+                if let Some(source) = &draw.feedback_source {
+                    open = None;
+                    let source = &self.textures[source].texture;
+                    let destination = &self.textures[&draw.key].texture;
+                    encoder.copy_texture_to_texture(source.as_image_copy(), destination.as_image_copy(), source.size());
+                }
+                let draw_canvas = draw.output.as_ref().map_or(canvas, |(_,size,_)| *size);
+                let draw_size = draw.output.as_ref().map_or(target.size, |(_,size,_)| *size);
+                let draw_vp = if draw.output.is_some() { Viewport::with_mode(draw_canvas, draw_size, crysirror_core::service::PresentationScale::default()) } else { vp };
                 let capture=|encoder:&mut wgpu::CommandEncoder|->Result<()> {
                     let source=if writing {Some(self.coverage_planes[&draw.owner].texture.clone())}
+                        else if let Some((key,_,_)) = &draw.output {Some(self.textures[key].texture.clone())}
                         else {backdrop_source.as_ref().map(|(source,_,_)|source.clone())};
                     if let Some(source)=source {
                         let destination=&self.textures.get(BACKDROP_KEY).context("backdrop texture")?.texture;
-                        let extent=destination.size();let origin=[vp.x.max(0.)as u32,vp.y.max(0.)as u32];
+                        let extent=destination.size();let origin=[draw_vp.x.max(0.)as u32,draw_vp.y.max(0.)as u32];
                         let copy=wgpu::Extent3d{width:extent.width.min(source.width().saturating_sub(origin[0])),height:extent.height.min(source.height().saturating_sub(origin[1])),depth_or_array_layers:1};
                         encoder.copy_texture_to_texture(wgpu::TexelCopyTextureInfo{texture:&source,mip_level:0,origin:wgpu::Origin3d{x:origin[0],y:origin[1],z:0},aspect:wgpu::TextureAspect::All},wgpu::TexelCopyTextureInfo{texture:destination,mip_level:0,origin:wgpu::Origin3d::ZERO,aspect:wgpu::TextureAspect::All},copy);
                     }Ok(())
                 };
                 if draw.key==BACKDROP_KEY&&!draw.capture_after||matches!(draw.blend,Blend::StoredByte{..}){open=None;capture(&mut encoder)?;}
-                let target_key=writing.then_some(draw.owner);
+                let target_key=if writing {Some(format!("coverage:{}",draw.owner))}else{draw.output.as_ref().map(|(key,_,_)|key.clone())};
                 if open.as_ref().is_none_or(|(key,_)|*key!=target_key) {
                     open=None;
-                    let view=if writing{&self.coverage_planes[&draw.owner].view}else{frame_view};
+                    let view=if writing{&self.coverage_planes[&draw.owner].view}else if let Some((key,_,_))=&draw.output{&self.textures[key].view}else{frame_view};
                     let mut pass=encoder.begin_render_pass(&wgpu::RenderPassDescriptor{label:Some("ordered 2D draws"),multiview_mask:None,
                         color_attachments:&[Some(wgpu::RenderPassColorAttachment{view,depth_slice:None,resolve_target:None,ops:wgpu::Operations{load:wgpu::LoadOp::Load,store:wgpu::StoreOp::Store}})],depth_stencil_attachment:None,timestamp_writes:None,occlusion_query_set:None}).forget_lifetime();
-                    pass.set_viewport(vp.x,vp.y,vp.width,vp.height,0.,1.);
+                    pass.set_viewport(draw_vp.x,draw_vp.y,draw_vp.width,draw_vp.height,0.,1.);
                     pass.set_vertex_buffer(0,buffer.slice(..));
                     open=Some((target_key,pass));
                 }
                 let pass=&mut open.as_mut().context("ordered 2D pass")?.1;
                 let c = draw
                     .clip
-                    .unwrap_or([0., 0., canvas[0] as f32, canvas[1] as f32]);
-                let x = (vp.x + c[0] * vp.width / canvas[0] as f32)
+                    .unwrap_or([0., 0., draw_canvas[0] as f32, draw_canvas[1] as f32]);
+                let x = (draw_vp.x + c[0] * draw_vp.width / draw_canvas[0] as f32)
                     .floor()
-                    .clamp(0., target.size[0] as f32) as u32;
-                let y = (vp.y + c[1] * vp.height / canvas[1] as f32)
+                    .clamp(0., draw_size[0] as f32) as u32;
+                let y = (draw_vp.y + c[1] * draw_vp.height / draw_canvas[1] as f32)
                     .floor()
-                    .clamp(0., target.size[1] as f32) as u32;
-                let right = (vp.x + (c[0] + c[2]) * vp.width / canvas[0] as f32)
+                    .clamp(0., draw_size[1] as f32) as u32;
+                let right = (draw_vp.x + (c[0] + c[2]) * draw_vp.width / draw_canvas[0] as f32)
                     .ceil()
-                    .clamp(0., target.size[0] as f32) as u32;
-                let bottom = (vp.y + (c[1] + c[3]) * vp.height / canvas[1] as f32)
+                    .clamp(0., draw_size[0] as f32) as u32;
+                let bottom = (draw_vp.y + (c[1] + c[3]) * draw_vp.height / draw_canvas[1] as f32)
                     .ceil()
-                    .clamp(0., target.size[1] as f32) as u32;
+                    .clamp(0., draw_size[1] as f32) as u32;
                 if right <= x || bottom <= y {
                     continue;
                 }
@@ -2066,7 +2189,10 @@ impl Renderer {
                     Blend::DestinationIn => 13,
                     Blend::StoredByte { .. } => 0,
                 };
-                if matches!(draw.blend,Blend::StoredByte{..}) {
+                if draw.rgba_contribution {
+                    pass.set_pipeline(if draw.blend==Blend::Subtract {&self.rgba_subtract_pipeline}else{&self.rgba_add_pipeline});
+                    pass.set_bind_group(1,self.filter_binds.get(draw.filter.as_ref().context("component matte filter record")?).context("component matte filter binding")?,&[]);
+                } else if matches!(draw.blend,Blend::StoredByte{..}) {
                     pass.set_pipeline(&self.stored_pipeline);
                     pass.set_bind_group(1,self.filter_binds.get(draw.filter.as_ref()
                         .context("stored blend filter record missing")?)
@@ -2101,17 +2227,20 @@ impl Renderer {
             }
             drop(open);
         }
-        self.transitions.finish(
+        if !self.flushing_target_writes { self.transitions.finish(
             &self.gpu.device,
             &mut encoder,
             target.view,
             self.transition.as_ref(),
             canvas,
-        );
+        ); }
         self.gpu_timings.end(&mut encoder, gpu_sample);
         self.gpu.queue.submit(Some(encoder.finish()));
+        for draw in &draws {
+            if let Some((key,_,revision)) = &draw.output { self.target_write_revisions.insert(key.clone(),*revision); }
+        }
         self.gpu_timings.submitted(&self.gpu, gpu_sample);
-        if self.path == RenderingPath::HardwareRaytrace && !pbr_active {
+        if !self.flushing_target_writes && self.path == RenderingPath::HardwareRaytrace && !pbr_active {
             if let Some(rt) = &mut self.hardware_rt {
                 rt.mark_submitted();
             }

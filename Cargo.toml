@@ -77,6 +77,10 @@ members = [
     "crates/crysirror-qlie",
     "crates/crysirror-sugarpot",
     "crates/crysirror-nsystem",
+    "crates/crysirror-n2system",
+    "crates/crysirror-malie",
+    "crates/crysirror-squirrel",
+    "crates/crysirror-rscript",
     "crates/crysirror-willplus",
     "crates/crysirror-lua",
     "crates/crysirror-reallive-dll",
@@ -99,6 +103,10 @@ crysirror-willplus = { path = "crates/crysirror-willplus" }
 crysirror-lua = { path = "crates/crysirror-lua" }
 crysirror-sugarpot = { path = "crates/crysirror-sugarpot" }
 crysirror-nsystem = { path = "crates/crysirror-nsystem" }
+crysirror-n2system = { path = "crates/crysirror-n2system" }
+crysirror-squirrel = { path = "crates/crysirror-squirrel" }
+crysirror-malie = { path = "crates/crysirror-malie" }
+crysirror-rscript = { path = "crates/crysirror-rscript" }
 crysirror-qlie = { path = "crates/crysirror-qlie" }
 crysirror-network = { path = "crates/crysirror-network", default-features = false }
 crysirror-io = { path = "crates/crysirror-io" }

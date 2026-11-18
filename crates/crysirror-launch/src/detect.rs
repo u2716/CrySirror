@@ -13,6 +13,9 @@ mod softpal;
 mod qlie;
 mod sugarpot;
 mod nsystem;
+mod n2system;
+mod malie;
+mod rscript;
 mod willplus;
 use anyhow::{bail, ensure, Context, Result};
 use serde_json::{json, Value};
@@ -198,6 +201,9 @@ fn detect_layout(dir: &SourcePath) -> Result<Plan> {
     if let Some(plan) = qlie::detect(dir,&names,&name)? {return Ok(plan);}
     if let Some(plan) = sugarpot::detect(dir,&names,&name)? {return Ok(plan);}
     if let Some(plan) = nsystem::detect(dir,&names,&name)? {return Ok(plan);}
+    if let Some(plan) = malie::detect(dir,&names,&name)? {return Ok(plan);}
+    if let Some(plan) = n2system::detect(dir,&names,&name)? {return Ok(plan);}
+    if let Some(plan) = rscript::detect(dir,&names,&name)? {return Ok(plan);}
     if let Some(plan) = willplus::detect(dir,&names,&name)? {return Ok(plan);}
     if find(&names, "data.xp3").is_some() {
         return krkr(dir, &names, &name);

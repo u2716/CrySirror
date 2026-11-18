@@ -758,12 +758,56 @@ pub fn warp(
         u64::from(size[0]) * u64::from(size[1]) <= crate::effects::MAX_EFFECT_PIXELS,
         "field warp pixel budget"
     );
+    if let FieldWarpSpec::RadialPhase {
+        field,
+        phase,
+        frequency,
+        amplitude,
+        clear,
+    } = spec
+    {
+        ensure!(
+            size == [source.width, source.height],
+            "radial phase output extent"
+        );
+        return crate::radial_phase::warp(
+            source, field, *phase, *frequency, *amplitude, *clear, check,
+        );
+    }
+    if let FieldWarpSpec::PolarTwist {
+        field,
+        center,
+        radius,
+        strength,
+        clear,
+    } = spec
+    {
+        ensure!(
+            size == [source.width, source.height],
+            "polar twist output extent"
+        );
+        return crate::radial_phase::twist(
+            source, field, *center, *radius, *strength, *clear, check,
+        );
+    }
+    if let FieldWarpSpec::Lens {
+        table,
+        origin,
+        full_cover,
+    } = spec
+    {
+        return crate::lens::warp(source, size, table, *origin, *full_cover, check);
+    }
     let mut output = DecodedImage {
         width: size[0],
         height: size[1],
         rgba: vec![0; crate::rgba_len(size[0], size[1])?],
     };
     match spec {
+        FieldWarpSpec::RadialPhase { .. } | FieldWarpSpec::PolarTwist { .. } => {
+            unreachable!("polar field handled before allocation")
+        }
+        FieldWarpSpec::Lens { .. } => unreachable!("lens handled before allocation"),
         FieldWarpSpec::Displacement {
             first,
             second,

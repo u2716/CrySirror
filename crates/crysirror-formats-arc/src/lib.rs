@@ -12,6 +12,7 @@ mod files;
 pub use audio::{audio_format_ids, register_audio};
 pub use files::{file_format_ids, register_files};
 mod images;
+mod malie_dzi;
 pub mod images_a;
 pub mod images_b;
 pub mod images_c;

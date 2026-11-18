@@ -44,6 +44,115 @@ fn linear() -> bool {
     true
 }
 impl MeshFrame {
+    /// Project model-space triangles with an explicit homogeneous camera.
+    /// Clips all six D3D/WebGPU planes before dividing, retaining clip W for
+    /// perspective-correct GPU sampling. Native adapters supply data/matrices.
+    pub fn project_homogeneous(&self, matrix: glam::Mat4, cull_clockwise: bool) -> Result<Self> {
+        self.validate()?;
+        ensure!(matrix.is_finite(), "mesh projection matrix");
+        #[derive(Clone)]
+        struct Corner {
+            p: glam::Vec4,
+            uv: [f32; 2],
+            color: [f32; 4],
+        }
+        fn distance(p: glam::Vec4, plane: usize) -> f32 {
+            match plane {
+                0 => p.w + p.x,
+                1 => p.w - p.x,
+                2 => p.w + p.y,
+                3 => p.w - p.y,
+                4 => p.z,
+                _ => p.w - p.z,
+            }
+        }
+        fn mix(a: &Corner, b: &Corner, t: f32) -> Corner {
+            Corner {
+                p: a.p.lerp(b.p, t),
+                uv: core::array::from_fn(|i| a.uv[i] + (b.uv[i] - a.uv[i]) * t),
+                color: core::array::from_fn(|i| a.color[i] + (b.color[i] - a.color[i]) * t),
+            }
+        }
+        let mut result = Self {
+            size: self.size,
+            parts: Vec::with_capacity(self.parts.len()),
+        };
+        for source in &self.parts {
+            let mut part = source.clone();
+            part.vertices.clear();
+            part.indices.clear();
+            for triangle in source.indices.chunks_exact(3) {
+                let mut polygon = triangle
+                    .iter()
+                    .map(|&index| {
+                        let v = &source.vertices[index as usize];
+                        Corner {
+                            p: matrix * glam::Vec4::from_array(v.position),
+                            uv: v.uv,
+                            color: v.color,
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                ensure!(
+                    polygon.iter().all(|v| v.p.is_finite()),
+                    "mesh projection overflow"
+                );
+                for plane in 0..6 {
+                    if polygon.is_empty() {
+                        break;
+                    }
+                    let mut clipped = Vec::with_capacity(polygon.len() + 1);
+                    let mut a = polygon.last().unwrap();
+                    let mut da = distance(a.p, plane);
+                    for b in &polygon {
+                        let db = distance(b.p, plane);
+                        if (da >= 0.) != (db >= 0.) {
+                            clipped.push(mix(a, b, da / (da - db)));
+                        }
+                        if db >= 0. {
+                            clipped.push(b.clone());
+                        }
+                        a = b;
+                        da = db;
+                    }
+                    polygon = clipped;
+                }
+                if polygon.len() < 3 || polygon.iter().any(|v| v.p.w <= 1e-20) {
+                    continue;
+                }
+                let vertices = polygon
+                    .into_iter()
+                    .map(|v| Vertex {
+                        position: [
+                            (v.p.x / v.p.w + 1.) * self.size[0] * 0.5,
+                            (1. - v.p.y / v.p.w) * self.size[1] * 0.5,
+                            v.p.z / v.p.w,
+                            v.p.w,
+                        ],
+                        uv: v.uv,
+                        color: v.color,
+                    })
+                    .collect::<Vec<_>>();
+                let a = &vertices[0].position;
+                let b = &vertices[1].position;
+                let c = &vertices[2].position;
+                let area = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+                if area == 0. || (cull_clockwise && area > 0.) {
+                    continue;
+                }
+                let base = part.vertices.len() as u32;
+                part.indices.extend(
+                    (1..vertices.len() as u32 - 1).flat_map(|i| [base, base + i, base + i + 1]),
+                );
+                part.vertices.extend(vertices);
+            }
+            if !part.indices.is_empty() {
+                result.parts.push(part);
+            }
+        }
+        result.validate()?;
+        Ok(result)
+    }
     pub fn validate(&self) -> Result<()> {
         ensure!(
             self.size
