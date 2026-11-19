@@ -17444,6 +17444,12 @@
         },
         {
           "default": null,
+          "doc": "Optional legacy quantized fader. Ordinary playback uses a float gain.",
+          "name": "pcm16_gain",
+          "rust_type": "Option<AudioPcm16Gain>"
+        },
+        {
+          "default": null,
           "doc": "Mixer voice gain, default 1.",
           "name": "gain",
           "rust_type": "f32"
@@ -17565,6 +17571,69 @@
       ],
       "name": "AudioParameters",
       "used_by": "Rust HostServices/ChannelAudio playback parameters"
+    },
+    {
+      "doc": "Optional legacy PCM16 fader with a wrapping Q8 secondary multiplier and two raw Q8 attenuation coefficients. Unity is 256. The unity clamp applies to the computed channel gain after all wrapping products.",
+      "fields": [
+        {
+          "default": null,
+          "doc": "Secondary Q8 gain word, initially 256.",
+          "name": "multiplier",
+          "rust_type": "u32"
+        },
+        {
+          "default": null,
+          "doc": "Left and right Q8 gain words, initially both 256.",
+          "name": "stereo",
+          "rust_type": "[u32; 2]"
+        }
+      ],
+      "name": "AudioPcm16Gain",
+      "used_by": "Rust AudioParameters.pcm16_gain fixed-point voice fader"
+    },
+    {
+      "doc": "Update either coefficient without replacing the source or resetting a fade.",
+      "fields": [
+        {
+          "default": null,
+          "doc": "Replace only the secondary gain.",
+          "name": "Multiplier",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "Replace both stereo words together.",
+          "name": "Stereo",
+          "rust_type": ""
+        }
+      ],
+      "name": "AudioPcm16GainUpdate",
+      "used_by": "Rust HostServices.update_audio_pcm16_gain scoped live control"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "Pending",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "Ready",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "Failed",
+          "rust_type": ""
+        }
+      ],
+      "name": "ResidentAudioState",
+      "used_by": "Rust HostServices.begin_resident_audio; worker-prepared reusable PCM"
     },
     {
       "doc": "",
@@ -17718,13 +17787,13 @@
         },
         {
           "default": null,
-          "doc": "Output frames while input transport is running, including decoder/seek/ preparation holds. Excludes fully paused/delayed input and effect tails. Pause fades count until frozen; seek, loop and playback rate do not reset it.",
+          "doc": "Output frames while input transport is running, including decoder/seek/ preparation holds. Excludes fully paused/delayed input and effect tails. Pause fades count until frozen; seek, loop and playback rate do not reset it. Explicit retained-source activation starts a new playback interval.",
           "name": "transport_frames",
           "rust_type": "u64"
         },
         {
           "default": null,
-          "doc": "A stop fade retains completion even after source EOF.",
+          "doc": "A stop fade or scheduled retirement is pending on the allocated voice.",
           "name": "stopping",
           "rust_type": "bool"
         },
@@ -21074,7 +21143,7 @@
       "used_by": "Resources.defineProfile rules and native format pipelines"
     },
     {
-      "doc": "`bytewise`: 8-flag control byte (LSB first, 1 = literal), 12-bit position and 4-bit length+3 in two bytes over a 4 KiB ring. `bitwise`: MSB-first bit stream, flag bit 1 = literal, configurable position/length widths. Truncated input stops decoding and the remainder stays zero, which is the behavior legacy decoders rely on for archives with padded size fields.",
+      "doc": "`bytewise`: 8-flag control byte (LSB first, 1 = literal) and two-byte references. The 12/4 layout zero-fills short output for legacy padded archives. The 11/5 and 10/6 layouts require exact input and output lengths. `bitwise`: MSB-first bitstream with configurable position and length widths.",
       "fields": [
         {
           "default": null,
@@ -21109,25 +21178,25 @@
         },
         {
           "default": 12,
-          "doc": "Dictionary position width; bytewise requires 12.",
+          "doc": "Dictionary position width. Bytewise supports 12, 11 and 10.",
           "name": "position_bits",
           "rust_type": "u32"
         },
         {
           "default": 4,
-          "doc": "Match length width; bytewise requires 4.",
+          "doc": "Match length width. Bytewise uses the remaining 4, 5 or 6 bits.",
           "name": "size_bits",
           "rust_type": "u32"
         },
         {
           "default": 3,
-          "doc": "Minimum match length; bytewise requires 3.",
+          "doc": "Minimum match length. Bytewise uses 3 for 12/4 and 2 for 11/5 or 10/6.",
           "name": "min_match",
           "rust_type": "usize"
         },
         {
           "default": false,
-          "doc": "Bytewise only: the 4-bit length field is stored inverted (GLib).",
+          "doc": "Bytewise 12/4 only: the 4-bit length field is stored inverted (GLib).",
           "name": "invert_length",
           "rust_type": "bool"
         }
@@ -25819,6 +25888,86 @@
       "used_by": "`Paint.glyph_run.glyphs`"
     },
     {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "Keep CJK glyphs upright when the containing line rotates clockwise by 90 degrees. Brackets/dashes retain that outer rotation; flow is unchanged.",
+          "name": "upright_in_clockwise_line",
+          "rust_type": "bool"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "underline",
+          "rust_type": "bool"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "strikeout",
+          "rust_type": "bool"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "bold",
+          "rust_type": "bool"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "raster",
+          "rust_type": "crysirror_core::image_processing::GlyphCoverageQuality"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "outline",
+          "rust_type": "Option<GlyphOutline>"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "shadow",
+          "rust_type": "Option<GlyphShadow>"
+        }
+      ],
+      "name": "PositionedGlyphStyle",
+      "used_by": "`PositionedGlyph.style`"
+    },
+    {
+      "doc": "Device-free coverage quality for retained outline glyphs. Variants are tagged by `\"kind\"`.",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "grayscale",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "binary",
+          "rust_type": "threshold: u8"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "supersample",
+          "rust_type": "factor: u8"
+        },
+        {
+          "default": null,
+          "doc": "Sample the outline at four times the target resolution and map the rounded coverage count (0 through 16) through the supplied alpha table.",
+          "name": "supersample_alpha4",
+          "rust_type": "table: [u8; 17]"
+        }
+      ],
+      "name": "GlyphCoverageQuality",
+      "used_by": "`PositionedGlyphStyle.raster`"
+    },
+    {
       "doc": "Unit of an explicitly positioned run. Each item contains one Unicode scalar. A caller may separately map native cells or shaped clusters onto positioned-glyph boundaries through GlyphReveal::prefix_steps.",
       "fields": [
         {
@@ -29750,7 +29899,7 @@
       "used_by": "UiEvent.widget client/local identity"
     }
   ],
-  "fingerprint": "8693c021aef05c1f",
+  "fingerprint": "224f952a71accc52",
   "generated_by": "crysirror-engine api_doc (tests/api_docs.rs)",
   "globals": [
     {

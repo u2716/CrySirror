@@ -39,6 +39,13 @@ establish exhaustive codec/profile conformance or realtime 4K performance.
 FFmpeg is only the offline fixture encoder/reference decoder. Tests themselves
 need no FFmpeg, external assets or device.
 
+## CMV5, CMV6, CMV7, CMV8 and CMV9
+
+The shared decoder reads an indexed CMV stream through a seekable reader
+and decodes JBPD or JBPE into top-down RGBA. CMV9 retains an immutable
+static base while dynamic blocks are decoded per picture. The runtime
+passes the indexed Ogg subrange to its existing Vorbis decoder.
+
 ## WebM / VP8
 
 `webm` demuxes WebM (Matroska `DocType` `webm`/`matroska`) over a seekable

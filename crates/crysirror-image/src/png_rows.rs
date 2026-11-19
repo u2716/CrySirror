@@ -124,6 +124,16 @@ impl PngRows {
         Ok(plane)
     }
     pub fn decode(data: &[u8], check: &dyn Fn() -> Result<()>) -> Result<Self> {
+        Self::decode_rows(data, false, check)
+    }
+
+    /// Expand indexed PNG rows to RGB or RGBA, retaining source bytes for
+    /// every other PNG color type, including big-endian 16-bit samples.
+    pub fn decode_with_palette_expansion(data: &[u8], check: &dyn Fn() -> Result<()>) -> Result<Self> {
+        Self::decode_rows(data, true, check)
+    }
+
+    fn decode_rows(data: &[u8], expand_palette: bool, check: &dyn Fn() -> Result<()>) -> Result<Self> {
         check()?;
         ensure!(
             data.len() <= crate::MAX_DECODED_BYTES,
@@ -138,7 +148,11 @@ impl PngRows {
                 bytes: crate::MAX_DECODED_BYTES,
             },
         );
-        decoder.set_transformations(png::Transformations::IDENTITY);
+        if expand_palette && decoder.read_header_info()?.color_type == png::ColorType::Indexed {
+            decoder.set_transformations(png::Transformations::EXPAND);
+        } else {
+            decoder.set_transformations(png::Transformations::IDENTITY);
+        }
         let mut reader = decoder.read_info()?;
         let info = reader.info();
         let size = [info.width, info.height];
@@ -190,5 +204,45 @@ impl PngRows {
         check()?;
         rows.validate()?;
         Ok(rows)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn optional_palette_expansion_preserves_transparency_and_other_source_rows() {
+        let mut indexed = Vec::new();
+        let mut encoder = png::Encoder::new(&mut indexed, 2, 1);
+        encoder.set_color(png::ColorType::Indexed);
+        encoder.set_depth(png::BitDepth::One);
+        encoder.set_palette(vec![5, 6, 7, 8, 9, 10]);
+        encoder.set_trns(vec![11, 13]);
+        encoder
+            .write_header()
+            .unwrap()
+            .write_image_data(&[0x40])
+            .unwrap();
+        let expanded = PngRows::decode_with_palette_expansion(&indexed, &|| Ok(())).unwrap();
+        assert_eq!(expanded.color_type, 6);
+        assert_eq!(&*expanded.bytes, [5, 6, 7, 11, 8, 9, 10, 13]);
+        let raw = PngRows::decode(&indexed, &|| Ok(())).unwrap();
+        assert_eq!(raw.color_type, 3);
+        assert_eq!(&*raw.bytes, [0x40]);
+
+        let mut rgb = Vec::new();
+        let mut encoder = png::Encoder::new(&mut rgb, 1, 1);
+        encoder.set_color(png::ColorType::Rgb);
+        encoder.set_depth(png::BitDepth::Sixteen);
+        encoder.set_trns(vec![0x10, 0x20, 0x30, 0x40, 0x50, 0x60]);
+        encoder
+            .write_header()
+            .unwrap()
+            .write_image_data(&[0x10, 0x20, 0x30, 0x40, 0x50, 0x60])
+            .unwrap();
+        let rows = PngRows::decode_with_palette_expansion(&rgb, &|| Ok(())).unwrap();
+        assert_eq!(rows.color_type, 2);
+        assert_eq!(&*rows.bytes, [0x10, 0x20, 0x30, 0x40, 0x50, 0x60]);
     }
 }

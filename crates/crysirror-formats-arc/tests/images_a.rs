@@ -22,6 +22,196 @@ fn raw_pixels_flip_and_offset() {
         [12, 12, 12, 255, 34, 34, 34, 255]
     );
 }
+
+#[test]
+fn cmvs_msk0_registry_uses_native_data_offset_and_plane_order() {
+    let mut registry = DecoderRegistry::default();
+    crysirror_formats_arc::register_images(&mut registry).unwrap();
+    let mut bytes = b"MSK0".to_vec();
+    bytes.extend(19u32.to_le_bytes());
+    bytes.extend(2u32.to_le_bytes());
+    bytes.extend(2u32.to_le_bytes());
+    bytes.extend([91, 92, 93, 0, 64, 127, 255]);
+
+    let surface = registry.decode("fixture.bin", &bytes).unwrap();
+    assert_eq!((surface.width, surface.height), (2, 2));
+    assert_eq!(
+        surface.rgba,
+        [0, 0, 0, 255, 64, 64, 64, 255, 127, 127, 127, 255, 255, 255, 255, 255]
+    );
+    assert!(registry.decode("fixture.bin", &bytes[..22]).is_err());
+    bytes[4..8].copy_from_slice(&u32::MAX.to_le_bytes());
+    assert!(registry.decode("fixture.bin", &bytes).is_err());
+    bytes[4..8].copy_from_slice(&19u32.to_le_bytes());
+    bytes[8..12].copy_from_slice(&u32::MAX.to_le_bytes());
+    assert!(registry.decode("fixture.bin", &bytes).is_err());
+}
+
+fn pb2_fixture(mode: u16, width: u16, height: u16, depth: u16, frames: u32) -> Vec<u8> {
+    let mut bytes = vec![0; 32];
+    bytes[..4].copy_from_slice(b"PB2A");
+    bytes[8..12].copy_from_slice(&frames.to_le_bytes());
+    for (field, value) in bytes[16..24]
+        .chunks_exact_mut(2)
+        .zip([mode, width, height, depth])
+    {
+        field.copy_from_slice(&value.to_le_bytes());
+    }
+    bytes
+}
+
+fn seal_pb2(mut bytes: Vec<u8>) -> Vec<u8> {
+    let mask = [0xa2, 0xfb];
+    for (index, byte) in bytes[8..32].iter_mut().enumerate() {
+        let subtractor = (index as u8).wrapping_mul(39);
+        *byte = byte.wrapping_add(subtractor) ^ mask[index % 2];
+    }
+    bytes.extend((0u8..24).map(|index| index.wrapping_mul(39)));
+    bytes.extend([mask[0], mask[1], 0]);
+    bytes
+}
+
+#[test]
+fn cmvs_pb2_tiled_planes_and_lzss() {
+    let mut registry = DecoderRegistry::default();
+    crysirror_formats_arc::register_images(&mut registry).unwrap();
+
+    let mut mode1 = pb2_fixture(1, 9, 2, 24, 0);
+    mode1[24..28].copy_from_slice(&32u32.to_le_bytes());
+    mode1[28..32].copy_from_slice(&39u32.to_le_bytes());
+    mode1.extend([0; 7]);
+    for base in [0u8, 20, 40] {
+        mode1.extend((0..18).map(|i| base + i));
+    }
+    let surface = registry.decode("tile.bin", &seal_pb2(mode1)).unwrap();
+    let pixel = |x: usize, y: usize| &surface.rgba[(y * 9 + x) * 4..][..4];
+    assert_eq!(pixel(0, 0), [40, 20, 0, 255]);
+    assert_eq!(pixel(0, 1), [48, 28, 8, 255]);
+    assert_eq!(pixel(8, 0), [56, 36, 16, 255]);
+    assert_eq!(pixel(8, 1), [57, 37, 17, 255]);
+
+    let mut backref = pb2_fixture(1, 1, 1, 32, 0);
+    backref[24..28].copy_from_slice(&32u32.to_le_bytes());
+    backref[28..32].copy_from_slice(&33u32.to_le_bytes());
+    backref.extend([0x40, 91]);
+    backref.extend((2014u16 << 5).to_le_bytes());
+    assert_eq!(
+        registry
+            .decode("tile.bin", &seal_pb2(backref.clone()))
+            .unwrap()
+            .rgba,
+        [91; 4]
+    );
+    backref[34] |= 1; // Match spans four bytes with only three left.
+    assert!(registry.decode("tile.bin", &seal_pb2(backref)).is_err());
+
+    let mut mode2 = pb2_fixture(2, 9, 1, 24, 0);
+    mode2[24..28].copy_from_slice(&32u32.to_le_bytes());
+    mode2[28..32].copy_from_slice(&89u32.to_le_bytes());
+    for size in [15u32; 3] {
+        mode2.extend(size.to_le_bytes());
+    }
+    for color in [2, 4, 6] {
+        for size in [1u32, 1, 1] {
+            mode2.extend(size.to_le_bytes());
+        }
+        mode2.extend([0x80, color, 0]);
+    }
+    for size in [1u32; 3] {
+        mode2.extend(size.to_le_bytes());
+    }
+    mode2.extend([11, 22, 33]);
+    let tiled = registry
+        .decode("tile.bin", &seal_pb2(mode2.clone()))
+        .unwrap();
+    assert_eq!(tiled.rgba[..32], [6, 4, 2, 255].repeat(8));
+    assert_eq!(tiled.rgba[32..], [33, 22, 11, 255]);
+    mode2.pop();
+    assert!(registry.decode("tile.bin", &seal_pb2(mode2)).is_err());
+}
+
+fn neutral_jbp() -> Vec<u8> {
+    let mut jbp = b"JBP1".to_vec();
+    jbp.extend(36u32.to_le_bytes());
+    jbp.extend(0x1800_0000u32.to_le_bytes()); // 16-pixel alignment and explicit quantization tables.
+    jbp.extend([0; 4]);
+    for word in [16u16, 16, 24, 0, 0, 0] {
+        jbp.extend(word.to_le_bytes());
+    }
+    jbp.extend(1u32.to_le_bytes());
+    jbp.extend(1u32.to_le_bytes());
+    // Both trees take the zero branch. The first chooses DC bit count zero.
+    // The second chooses AC end of block.
+    for (first, second) in [(0, 1), (15, 1)] {
+        for index in 0..16 {
+            let frequency = if index == first {
+                1
+            } else if index == second {
+                2
+            } else {
+                2_100_000_000u32
+            };
+            jbp.extend(frequency.to_le_bytes());
+        }
+    }
+    jbp.extend([0; 16]);
+    jbp.extend([1; 128]);
+    jbp.extend([0, 0]);
+    jbp
+}
+
+#[test]
+fn cmvs_pb2_jbp_and_alpha() {
+    let jbp = neutral_jbp();
+    let mut registry = DecoderRegistry::default();
+    crysirror_formats_arc::register_images(&mut registry).unwrap();
+    let mut mode3 = pb2_fixture(3, 3, 1, 24, 0);
+    mode3.extend(&jbp);
+    assert_eq!(
+        registry.decode("photo.bin", &seal_pb2(mode3)).unwrap().rgba,
+        [128, 128, 128, 255].repeat(3)
+    );
+    let mut mode4 = pb2_fixture(4, 3, 1, 32, 0);
+    mode4[24..28].copy_from_slice(&(32 + jbp.len() as u32).to_le_bytes());
+    mode4.extend(&jbp);
+    mode4.extend([0, 1, 91, 255, 1]);
+    assert_eq!(
+        registry
+            .decode("photo.bin", &seal_pb2(mode4.clone()))
+            .unwrap()
+            .rgba,
+        [128, 128, 128, 0, 128, 128, 128, 91, 128, 128, 128, 255]
+    );
+    *mode4.last_mut().unwrap() = 2;
+    assert!(registry.decode("photo.bin", &seal_pb2(mode4)).is_err());
+}
+
+#[test]
+fn cmvs_pb2_first_frame_and_missing_named_variant() {
+    let mut registry = DecoderRegistry::default();
+    crysirror_formats_arc::register_images(&mut registry).unwrap();
+    let mut mode5 = pb2_fixture(5, 1, 1, 32, 2);
+    for index in 0..4u32 {
+        mode5.extend(0u32.to_le_bytes());
+        mode5.extend((index + 1).to_le_bytes());
+    }
+    mode5.extend([0, 1, 2, 4, 8]);
+    assert_eq!(
+        registry
+            .decode("frame.bin", &seal_pb2(mode5.clone()))
+            .unwrap()
+            .rgba,
+        [12, 14, 15, 8]
+    );
+    mode5[8..12].fill(0);
+    assert!(registry.decode("frame.bin", &seal_pb2(mode5)).is_err());
+
+    let error = registry
+        .decode("frame.bin", &seal_pb2(pb2_fixture(6, 1, 1, 32, 1)))
+        .unwrap_err();
+    assert!(format!("{error:#}").contains("requires a native variant name"));
+}
+
 #[test]
 fn spb_single_pixel_and_truncation() {
     assert_eq!(
@@ -416,9 +606,189 @@ fn pb3_constant_blocks_and_unknown_variant() {
         decode("purple-software/pb3", &b).unwrap().rgba,
         [1, 2, 3, 77]
     );
+    b[0x18..0x1c].copy_from_slice(&1u32.to_le_bytes());
+    assert_eq!(
+        decode("purple-software/pb3", &b).unwrap().rgba,
+        [1, 2, 3, 77]
+    );
+    b[0x18..0x1c].fill(0);
+    assert!(decode("purple-software/pb3", &b).is_err());
     b[0x1c..0x1e].copy_from_slice(&4u16.to_le_bytes());
     assert!(decode("purple-software/pb3", &b).is_err());
 }
+
+fn pb3_test_header(mode: u16, width: u16, depth: u16, size: usize) -> Vec<u8> {
+    let mut bytes = vec![0; size];
+    bytes[..4].copy_from_slice(b"PB3B");
+    bytes[28..30].copy_from_slice(&mode.to_le_bytes());
+    bytes[30..32].copy_from_slice(&width.to_le_bytes());
+    bytes[32..34].copy_from_slice(&1u16.to_le_bytes());
+    bytes[34..36].copy_from_slice(&depth.to_le_bytes());
+    bytes
+}
+
+#[test]
+fn pb3_type7_decodes_interleaved_bgra() {
+    let mut image = pb3_test_header(7, 1, 32, 60);
+    image[56..60].copy_from_slice(&1u32.to_le_bytes());
+    image.extend([0, 4, 3, 2, 91]);
+    let footer = image.len();
+    image.resize(footer + 47, 0);
+    assert_eq!(
+        decode("purple-software/pb3", &image).unwrap().rgba,
+        [2, 3, 4, 91]
+    );
+
+    image[34..36].copy_from_slice(&24u16.to_le_bytes());
+    assert_eq!(
+        decode("purple-software/pb3", &image).unwrap().rgba,
+        [2, 3, 4, 255]
+    );
+    image[60] = 0x80;
+    image[61..63].copy_from_slice(&2u16.to_le_bytes()); // Five bytes into a four-byte output.
+    assert!(decode("purple-software/pb3", &image).is_err());
+}
+
+#[test]
+fn pb3_type8_requires_its_named_base_and_replaces_only_selected_tiles() {
+    let mut image = pb3_test_header(8, 9, 32, 84);
+    image[12..16].copy_from_slice(&52u32.to_le_bytes());
+    image[24..28].copy_from_slice(&13u32.to_le_bytes());
+    image[44..48].copy_from_slice(&2u32.to_le_bytes());
+    for (i, key) in [0xa6, 0x75, 0xf3, 0x9c, 0xc5].into_iter().enumerate() {
+        image[52 + i] = b"base\0"[i] ^ key;
+    }
+    image.extend([0, 0]); // LZSS flags for thirteen literals.
+    image.extend([1, 0, 0, 0, 0, 0, 0, 0, 0x80, 4, 3, 2, 91]);
+    image.resize(image.len() + 47, 0);
+
+    let mut base = pb3_test_header(7, 9, 32, 60);
+    base[56..60].copy_from_slice(&5u32.to_le_bytes());
+    base.extend([0; 5]);
+    base.extend([12, 11, 10, 111].repeat(9));
+    base.resize(base.len() + 47, 0);
+
+    let mut registry = DecoderRegistry::default();
+    crysirror_formats_arc::register_images(&mut registry).unwrap();
+    let source = |path: &str| {
+        assert_eq!(path, "sub/base.pb3");
+        Ok(base.clone())
+    };
+    let result = registry
+        .decode_with("sub/image.pb3", &image, Some(&source), None, None)
+        .unwrap();
+    assert_eq!(result.rgba[..32], [10, 11, 12, 111].repeat(8));
+    assert_eq!(result.rgba[32..], [2, 3, 4, 91]);
+    assert!(registry.decode("sub/image.pb3", &image).is_err());
+
+    image[28..30].copy_from_slice(&6u16.to_le_bytes());
+    let mut resources = crysirror_resource::DecodeContext::new(crysirror_core::state::ClientId(1));
+    resources
+        .parameters
+        .insert("purple-software/pb3-native-base".into(), true.into());
+    let native = registry
+        .decode_with(
+            "sub/image.pb3",
+            &image,
+            Some(&source),
+            Some(&resources),
+            None,
+        )
+        .unwrap();
+    assert_eq!(native.rgba, result.rgba);
+    let missing = |path: &str| {
+        assert_eq!(path, "sub/base.pb3");
+        Err(crysirror_core::Error::NotFound)
+    };
+    assert!(registry
+        .decode_with(
+            "sub/image.pb3",
+            &image,
+            Some(&missing),
+            Some(&resources),
+            None
+        )
+        .is_err());
+}
+
+#[test]
+fn cmvs_memory_preview_uses_the_native_bmp_and_png_upload_bytes() {
+    let context = crysirror_resource::DecodeContext::new(crysirror_core::state::ClientId(1));
+    let decode = |bytes: &[u8]| {
+        crysirror_formats_arc::cmvs_image::decode(
+            bytes,
+            &|_| panic!("unrelated image dependency"),
+            &context,
+        )
+    };
+    let mut bmp = vec![0; 54];
+    bmp[..2].copy_from_slice(b"BM");
+    bmp[10..14].copy_from_slice(&99u32.to_le_bytes()); // Memory loader uses the fixed pixel offset.
+    bmp[18..22].copy_from_slice(&1u32.to_le_bytes());
+    bmp[22..26].copy_from_slice(&2u32.to_le_bytes());
+    bmp[28..30].copy_from_slice(&24u16.to_le_bytes());
+    bmp.extend([30, 20, 10, 0, 60, 50, 40, 0]);
+    let (pixels, alpha) = decode(&bmp).unwrap();
+    assert!(!alpha);
+    assert_eq!(pixels.rgba, [40, 50, 60, 255, 10, 20, 30, 255]);
+    bmp[28..30].copy_from_slice(&32u16.to_le_bytes());
+    bmp[57] = 13;
+    bmp[61] = 37;
+    let (pixels, alpha) = decode(&bmp).unwrap();
+    assert!(alpha);
+    assert_eq!(pixels.rgba, [40, 50, 60, 37, 10, 20, 30, 13]);
+    assert!(decode(&bmp[..61]).is_err());
+
+    let rgba = crysirror_image::ImageSurface::filled(1, 2, [3, 82, 111, 117]).unwrap();
+    let png = crysirror_image::encode_png_uncompressed(&rgba).unwrap();
+    let (pixels, alpha) = decode(&png).unwrap();
+    assert!(alpha);
+    assert_eq!(pixels.rgba, [111, 82, 3, 117].repeat(2));
+
+    let mut mask = b"MSK0".to_vec();
+    for word in [16u32, 1, 1] {
+        mask.extend(word.to_le_bytes());
+    }
+    mask.push(2);
+    assert!(decode(&mask)
+        .unwrap_err()
+        .to_string()
+        .contains("scene upload stride"));
+}
+
+#[test]
+fn cmvs_memory_preview_uses_pb3_depth_and_decodes_all_four_differential_planes() {
+    let context = crysirror_resource::DecodeContext::new(crysirror_core::state::ClientId(1));
+    let decode = |bytes: &[u8]| {
+        crysirror_formats_arc::cmvs_image::decode(
+            bytes,
+            &|_| panic!("unrelated image dependency"),
+            &context,
+        )
+    };
+    for mode in [2, 3] {
+        let mut image = pb3_test_header(mode, 1, 32, 52);
+        image.extend(neutral_jbp());
+        let alpha_offset = image.len() as u32;
+        image[44..48].copy_from_slice(&alpha_offset.to_le_bytes());
+        image.extend([65, 0xff]); // Only one alpha byte belongs to this image.
+        image.resize(image.len() + 47, 0);
+        let (pixels, alpha) = decode(&image).unwrap();
+        assert!(alpha);
+        assert_eq!(pixels.rgba, [128, 128, 128, 65]);
+    }
+    let mut image = pb3_test_header(5, 2, 24, 52);
+    for index in 0..4u32 {
+        image.extend(0u32.to_le_bytes());
+        image.extend((1 + index * 2).to_le_bytes());
+    }
+    image.extend([0, 4, 5, 3, 6, 2, 7, 55, 3]);
+    image.resize(image.len() + 47, 0);
+    let (pixels, alpha) = decode(&image).unwrap();
+    assert!(!alpha);
+    assert_eq!(pixels.rgba, [2, 3, 4, 55, 9, 9, 9, 58]);
+}
+
 #[test]
 fn malformed_dimensions_do_not_overflow_before_validation() {
     for magic in [b"AP".as_slice(), b"AO", b"AP-0", b"AP-2", b"AP-3"] {

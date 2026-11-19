@@ -1034,6 +1034,7 @@ impl UiSystem {
             .chain(self.window_requests.position.as_ref().map(|v| v.0))
             .chain(self.window_requests.visible.as_ref().map(|v| v.0))
             .chain(self.window_requests.minimized.as_ref().map(|v| v.0))
+            .chain(self.window_requests.icon.as_ref().map(|v| v.0))
             .chain(self.window_requests.drag)
             .chain(self.window_requests.reset_shape)
             .chain(self.window_requests.ime_cursor_area.as_ref().map(|v|v.0))

@@ -4,6 +4,9 @@ use crysirror_image::{DecoderRegistry, ImageDecodeContext, ImageFormat, ImageSur
 use std::sync::Arc;
 type Probe = fn(&str, &str, &[u8]) -> bool;
 type Decode = fn(&str, &[u8], &ImageDecodeContext<'_>) -> Result<ImageSurface>;
+// Native CMVS codecs outside the pinned arc_unpacker inventory.
+const CMVS_MSK0: &str = "purple-software/msk0";
+const CMVS_PB2: &str = "purple-software/pb2";
 struct Plugin {
     id: &'static str,
     probe: Probe,
@@ -45,7 +48,7 @@ impl ImageFormat for Plugin {
     }
 }
 pub fn image_format_ids() -> Vec<&'static str> {
-    let mut ids = vec!["bgi/cbg"];
+    let mut ids = vec!["bgi/cbg", CMVS_MSK0, CMVS_PB2];
     ids.extend_from_slice(crate::images_a::FORMATS);
     ids.extend_from_slice(crate::images_b::FORMATS);
     ids.extend_from_slice(crate::images_c::FORMATS);
@@ -55,6 +58,16 @@ pub fn image_format_ids() -> Vec<&'static str> {
         .collect()
 }
 pub fn register_images(registry: &mut DecoderRegistry) -> Result<()> {
+    registry.register_format(Arc::new(Plugin {
+        id: CMVS_PB2,
+        probe: |_, _, bytes| bytes.starts_with(b"PB2A"),
+        decode: |_, bytes, _| crate::images_a::pb2::decode(bytes),
+    }))?;
+    registry.register_format(Arc::new(Plugin {
+        id: CMVS_MSK0,
+        probe: |_, _, bytes| bytes.starts_with(b"MSK0"),
+        decode: |_, bytes, _| crate::images_a::msk0::decode(bytes),
+    }))?;
     for &id in crate::images_d::FORMATS {
         registry.register_format(Arc::new(Plugin {
             id,

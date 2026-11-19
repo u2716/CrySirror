@@ -49,8 +49,10 @@ python3 tools/compile_psv_shaders.py EXPORTED_DIR COMPILER.vpk OUTPUT_DIR \
 
 The driver creates temporary compiler-only filesystems, copies the local compiler
 module, reads firmware through local symlinks, and removes its temporary files
-when finished. Game data is not copied. It uses a fresh compiler process per
-program, disables emulator logging, limits each run to 90 seconds, stops at log
+when finished. It installs the compiler VPK in the temporary filesystem
+and forces the SDL offscreen video driver and dummy audio driver. It uses a
+fresh compiler process per program, disables emulator logging, limits each
+run to 90 seconds, stops at log
 limits or less than 2 GiB free space, and reuses matching completed artifacts.
 It never truncates the supplied global log or terminates an unrelated process.
 `--program STEM` selects a particular program. `--jobs` defaults to one.

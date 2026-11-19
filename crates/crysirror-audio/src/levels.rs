@@ -2,6 +2,38 @@
 //! Shared amplitude/decibel conversion. Compatibility silence sentinels are
 //! explicit and separate from ordinary finite decibels.
 use anyhow::{ensure, Result};
+use crysirror_core::service::AudioPcm16Gain;
+
+pub(crate) fn to_pcm16(sample: f32) -> i16 {
+    (sample * 32_768.).round().clamp(-32_768., 32_767.) as i16
+}
+
+/// Quantize the own gain and transport fade before applying the legacy
+/// secondary word and each channel's attenuation.
+pub(crate) fn apply_pcm16_gain(
+    frame: [f32; 2],
+    control: AudioPcm16Gain,
+    gain: f32,
+    transport: f32,
+    fading_out: bool,
+    device_gain: u16,
+) -> [f32; 2] {
+    let base = (gain.clamp(0., 1.) * 256.).round() as u32;
+    let fade = transport.clamp(0., 1.) * 256.;
+    let fade = if fading_out {
+        fade.ceil()
+    } else {
+        fade.floor()
+    } as u32;
+    let level = (base * fade) >> 8;
+    let shared = level.wrapping_mul(control.multiplier).wrapping_mul(256) >> 16;
+    let shared = (shared * u32::from(device_gain)) >> 8;
+    [0, 1].map(|side| {
+        let coefficient = (shared.wrapping_mul(control.stereo[side]) >> 8).min(256);
+        let sample = i32::from(to_pcm16(frame[side]));
+        ((sample * coefficient as i32) >> 8) as f32 / 32_768.
+    })
+}
 
 /// Convert hundredths of one dB to linear amplitude. -16000..1204 fits the
 /// shared mixer0..4 gain range. -10000 is finite -100dB, not implicit silence.
@@ -64,6 +96,46 @@ pub fn validate_stereo_gains(gains: [f32; 2]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pcm16_fader_preserves_shift_order_and_signed_samples() {
+        let unit = 1. / 32_768.;
+        let frame = [-unit, unit];
+        let halfway = AudioPcm16Gain {
+            multiplier: 128,
+            ..Default::default()
+        };
+        assert_eq!(
+            apply_pcm16_gain(frame, halfway, 1., 1., false, 256),
+            [-unit, 0.]
+        );
+        let wraps = AudioPcm16Gain {
+            multiplier: 65536,
+            ..Default::default()
+        };
+        assert_eq!(apply_pcm16_gain(frame, wraps, 1., 1., false, 256), [0.; 2]);
+        assert_eq!(
+            apply_pcm16_gain([0.5; 2], wraps, 1., 0.5, false, 256),
+            [0.5; 2],
+        );
+        let doubled = AudioPcm16Gain {
+            multiplier: 512,
+            stereo: [64, 256],
+        };
+        assert_eq!(
+            apply_pcm16_gain([0.5; 2], doubled, 1., 1., false, 256),
+            [0.25, 0.5]
+        );
+        let wrapped_pan = AudioPcm16Gain {
+            multiplier: 256,
+            stereo: [0x8000_0100, 256],
+        };
+        assert_eq!(
+            apply_pcm16_gain([0.5; 2], wrapped_pan, 1. / 256., 1., false, 256),
+            [0.5, 0.5 / 256.],
+        );
+    }
+
     #[test]
     fn finite_decibels_and_legacy_silence_are_distinct() {
         assert!((gain_from_db100(-600).unwrap() - 0.5011872).abs() < 1e-7);

@@ -193,10 +193,9 @@ fn capture_pins_published_inputs_while_release_mutation_and_failed_presenter_rem
         rt.assets.surface(owner, &path).is_some(),
         "Canvas still owns the retired image path"
     );
-    assert!(
-        rt.host.release_image_resource(owner, &path).is_err(),
-        "caller ownership ended exactly once"
-    );
+    rt.host
+        .release_image_resource(owner, &path)
+        .expect("releasing an owned retired path again is idempotent");
     submit(
         &mut rt,
         serde_json::json!({"canvases":[{"op":"clear","id":1,"color":[0,0,255,255]}]}),
@@ -206,6 +205,7 @@ fn capture_pins_published_inputs_while_release_mutation_and_failed_presenter_rem
         rt.assets.surface(owner, &path).is_none(),
         "unreferenced retired path collected"
     );
+    assert!(rt.host.release_image_resource(owner, &path).is_err());
     rt.prepare_canvas_images(|_, assets| {
         assert_eq!(assets.surface(owner, &path).unwrap().rgba, pixels);
         Ok(Some(Arc::new(MemoryAssetReader(pixels.clone()))))
@@ -234,5 +234,17 @@ fn capture_pins_published_inputs_while_release_mutation_and_failed_presenter_rem
     assert!(matches!(
         pending.poll().unwrap(),
         ImageProcessState::Failed(_)
+    ));
+}
+
+#[test]
+fn frame_capture_reports_failure_when_its_presenter_is_removed() {
+    let (_root, mut rt) = runtime();
+    rt.set_canvas_image_presenter(true);
+    let mut frame = rt.host.begin_frame_capture(ClientId(1)).unwrap();
+    rt.set_canvas_image_presenter(false);
+    assert!(matches!(
+        frame.poll().unwrap(),
+        ImageProcessState::Failed(reason) if reason.contains("presenter abandoned")
     ));
 }

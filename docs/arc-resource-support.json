@@ -3700,10 +3700,11 @@
         "src/legacy/f/crypt.rs"
       ],
       "variants": [
-        "CPZ6 header/index/member ciphers, extra key and custom-IV MD5"
+        "CPZ6 header/index/member ciphers, extra key and custom-IV MD5",
+        "CMVS mode 1 with encrypted member checksum and client-provided table"
       ],
       "limits": [
-        "Caller secret key_id and explicit plugin constants required",
+        "Caller key_id required. Mode 1 selects the reviewed constants; other layouts require explicit plugin constants.",
         "Shared entry/index/count/resident budgets and canonical capability paths apply; unknown native layouts fail."
       ],
       "evidence": {
@@ -3712,6 +3713,32 @@
         ],
         "external_corpus_tests": [],
         "behavior_scope": "Test files cover the reviewed group; not every native/title variant has an external fixture. No commercial game or hardware result is implied.",
+        "external_fixture_coverage": "No external fixture comparison for this ID is claimed; ordinary tests and implementation review are the evidence."
+      }
+    },
+    {
+      "id": "purple-software/cpz7",
+      "kind": "archive",
+      "status": "ported",
+      "registration_group": "f",
+      "entrypoint": "|s,c|crypt::cpz(s,c,7)",
+      "implementation": [
+        "src/legacy/f.rs",
+        "src/legacy/f/crypt.rs"
+      ],
+      "variants": [
+        "CMVS V7B header, checked index mask, script-registered words and encrypted member checksum"
+      ],
+      "limits": [
+        "Caller key_id and four script words required. Other CPZ7 layouts fail.",
+        "Shared entry/index/count/resident budgets and canonical capability paths apply; unknown native layouts fail."
+      ],
+      "evidence": {
+        "ordinary_tests": [
+          "src/legacy/f/crypt.rs"
+        ],
+        "external_corpus_tests": [],
+        "behavior_scope": "Unit tests cover the index mask. No commercial game or hardware result is implied.",
         "external_fixture_coverage": "No external fixture comparison for this ID is claimed; ordinary tests and implementation review are the evidence."
       }
     },

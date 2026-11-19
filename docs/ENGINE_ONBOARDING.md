@@ -60,12 +60,14 @@ Do not turn a difficult syscall into an undeclared runtime fallback.
 
 ## Adopt and reverse implementation
 
-Native engine work follows this order for each reviewed slice: establish
-ABI/profile identity and differences; maintain opcode/syscall/subselector
-semantics and developer tables; then map the contract to existing capabilities.
-Assess API compatibility before extending shared services. Reuse proven
-compatible profiles, separate genuinely different encodings/semantics and keep
-unknown profiles explicit. The
+Start native engine work by establishing the supported ABI profiles, version
+and architecture differences, and evidence used to select them. Use stable
+profile IDs and record binary/source identities as provenance. Share a
+profile across releases where their contracts are compatible. Keep distinct
+encodings or semantics behind explicit versioned profiles. Then recover and
+document opcode, operand, syscall and subselector semantics and map the
+reviewed contracts to existing capabilities. Assess API compatibility
+before extending shared services. The
 [semantics skill](../.agents/skills/crysirror-engine-semantics/SKILL.md)
 provides the workflow. Integrated engines retain their complete dispatch
 catalogues and host seam while following the same contract-first analysis.
@@ -83,10 +85,18 @@ restoration policy; native memory layouts are not portable framework saves.
 
 Maintain an inventory near the implementation: opcode IDs, syscall IDs,
 subselectors, original no-ops, implemented/unsupported paths and unknown
-denominators. Count an operation complete only after its reviewed branches and
-dependencies are implemented. Report counts with their denominator and native
-profile; opcode presence is not syscall/subselector coverage. Keep exercised
-game paths separate from source coverage.
+denominators. Complete integration requires reverse evidence and implementation
+for every operation in each supported profile, including ones absent from
+sample games. Cover valid operand forms, returns, waits, failure branches
+and dependencies. Evidence-backed aliases, no-ops and reserved entries retain
+their original behavior. Report unresolved and partial entries as open until
+their contracts are covered. Measure game exercise coverage separately.
+
+Each syscall must implement its full native contract before entering normal
+dispatch. Track incomplete experiments and existing gaps under
+[ADR 0105](adr/0105-self-admitted-technical-debt.md), including the history of
+partial progress and code moves. Remove a record after implementing and
+verifying its entire scope.
 
 Present the inventory as a readable API table: native API/opcode, purpose,
 profile, corresponding CrySirror API, connected behavior and remaining gap.
@@ -207,10 +217,30 @@ regressions or create debug artifacts. For a new
 risky semantic/output boundary, choose the smallest check capable of exposing
 an incorrect state transition or lifetime; existing fixtures may suffice.
 
-Record implementation, compilation and behavior separately. Exercise real
-input/resource/save/output paths when authorized. Offscreen runs can validate
-composed frames and native progression, but not physical menu interaction,
-audible output, mobile lifecycle or console hardware. A muted run proves
-neither audio fidelity nor native audio completion. Repeat checks only for new
-changes or unresolved failures. Report remaining paths without upgrading a
-title screen or one save round-trip into complete-game support.
+Finish the supported profiles' reverse analysis and implementation before the
+full game acceptance pass. Use synthetic checks while implementing individual
+families. For desktop acceptance, use the normal GUI player and renderer with
+no window or audio device:
+
+```sh
+./target/release/crysirror play "$game_dir" --headless --no-audio \
+  --data-dir "$isolated_state" --input-track "$replay" --frames "$frame_limit" \
+  --capture "$capture"
+```
+
+1. If the game has a title screen, exercise settings and other reachable
+   menus first. Open, change, apply and cancel options where available,
+   confirm persistence across restart, and check return/navigation paths.
+   Cover accessible load/save, extras/gallery and exit/reset interactions.
+2. Replay the complete game flow, including relevant choices, routes and
+   endings. Exercise native saves with separate writable state. Include
+   unlock-dependent menus after reaching their required game state.
+3. Check the expected UI or VM state, representative captured frames and
+   the actual route ending or native halt. Use the frame budget as a
+   watchdog. Record any limit exhaustion before the expected state and any
+   runtime error with its native opcode and PC.
+
+Record implementation, compilation and behavior separately. Headless
+evidence covers the GUI canvas, input routing and progression actually
+exercised. Record physical OS menu interactions, audio output fidelity,
+mobile lifecycle and console hardware as separate evidence when relevant.

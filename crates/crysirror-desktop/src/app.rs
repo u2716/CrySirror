@@ -744,6 +744,10 @@ impl App {
         if let Some((_,size))=self.core.rt().host.engine.ui.window_requests.size.take(){
             let _=w.window.request_inner_size(winit::dpi::PhysicalSize::new(size[0],size[1]));
         }
+        if let Some((_, icon)) = self.core.rt().host.engine.ui.window_requests.icon.take() {
+            let icon = winit::window::Icon::from_rgba(icon.rgba, icon.size[0], icon.size[1])?;
+            w.window.set_window_icon(Some(icon));
+        }
         if let Some((_,position))=self.core.rt().host.engine.ui.window_requests.position.take(){
             w.window.set_outer_position(winit::dpi::PhysicalPosition::new(position[0],position[1]));
         }

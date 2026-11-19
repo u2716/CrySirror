@@ -183,3 +183,50 @@ fn typed_gain_ramp_and_finish_requests_reach_shared_channel_samples() {
         )
         .is_err());
 }
+
+#[test]
+fn live_gain_batch_is_atomic_scoped_and_preserves_transport_fade() {
+    let mut audio = ChannelAudio::default();
+    for (client, channel) in [(1, 7), (1, 8), (2, 7)] {
+        audio
+            .submit(
+                client,
+                AudioRequest::PlayPcm {
+                    channel,
+                    source: PcmAudio::new(48_000, vec![[0.4; 2]; 512]).unwrap(),
+                    parameters: AudioParameters::default(),
+                },
+            )
+            .unwrap();
+    }
+    audio
+        .submit(
+            1,
+            AudioRequest::Stop {
+                channel: 7,
+                fade_ms: 4.0,
+            },
+        )
+        .unwrap();
+    audio.render(1).unwrap();
+    let before = audio.playback_info(1, 7).unwrap().unwrap();
+    assert!(before.stopping && before.fade_out_frames > 0);
+
+    assert!(audio.set_gains(1, &[(7, 0.25), (8, f32::NAN)]).is_err());
+    assert_eq!(
+        audio.playback_info(1, 7).unwrap().unwrap().gain,
+        before.gain
+    );
+    assert_eq!(audio.playback_info(1, 8).unwrap().unwrap().gain, 1.0);
+
+    audio
+        .set_gains(1, &[(7, 0.25), (8, 0.5), (9, 0.75)])
+        .unwrap();
+    let after = audio.playback_info(1, 7).unwrap().unwrap();
+    assert_eq!(after.gain, 0.25);
+    assert_eq!(after.position_frames, before.position_frames);
+    assert_eq!(after.fade_out_frames, before.fade_out_frames);
+    assert_eq!(audio.playback_info(1, 8).unwrap().unwrap().gain, 0.5);
+    assert_eq!(audio.playback_info(2, 7).unwrap().unwrap().gain, 1.0);
+    assert!(audio.playback_info(1, 9).unwrap().is_none());
+}

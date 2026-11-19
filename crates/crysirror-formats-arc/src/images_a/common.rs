@@ -141,3 +141,37 @@ pub fn back(out: &mut Vec<u8>, distance: usize, count: usize, limit: usize) -> R
 pub fn size(w: u32, h: u32, channels: usize) -> Result<usize> {
     Ok(crysirror_image::rgba_len(w, h)? / 4 * channels)
 }
+
+// Split MSB-first flags and 11/5 LZSS used by Purple Software images.
+// The PB3 path retains its existing handling of a final clipped match.
+// Derived from arc_unpacker PB3 image decoder, Copyright (C) 2016 rr-.
+pub(super) fn purple_lz(control: &[u8], data: &[u8], n: usize, exact: bool) -> Result<Vec<u8>> {
+    ensure!(n <= MAX_DECODED_BYTES, "Purple LZSS output limit");
+    let mut flags = Bits::new(control, true);
+    let mut data = C::new(data);
+    let mut dictionary = [0u8; 2048];
+    let mut write = 0x7de;
+    let mut out = Vec::new();
+    out.try_reserve_exact(n)?;
+    while out.len() < n {
+        if flags.get(1)? != 0 {
+            let token = data.u16()? as usize;
+            let mut read = token >> 5;
+            let count = (token & 31) + 3;
+            ensure!(!exact || count <= n - out.len(), "Purple LZSS match exceeds output");
+            for _ in 0..count.min(n - out.len()) {
+                let value = dictionary[read];
+                read = (read + 1) & 2047;
+                out.push(value);
+                dictionary[write] = value;
+                write = (write + 1) & 2047;
+            }
+        } else {
+            let value = data.u8()?;
+            out.push(value);
+            dictionary[write] = value;
+            write = (write + 1) & 2047;
+        }
+    }
+    Ok(out)
+}

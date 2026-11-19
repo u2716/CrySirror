@@ -1,0 +1,584 @@
+// SPDX-License-Identifier: MPL-2.0
+//! Bounded CMV5, CMV6 JBPD, CMV7 and CMV8 JBPE decoder. Evidence: documented cmvs64.exe
+//! hash, 0x1400ab650 / 0x1400af100 (tiles/entropy), 0x1400b51c0 (integer IDCT), 0x1400a2300
+//! (color), 0x1400a3850 (alpha). The 2021 build (stamp 0x615e1fde) decodes CMV5 in
+//! 0x1400079d0 and CMV7 in 0x140009a10.
+//! Always decodes all blocks, like the original non-consecutive-frame path.
+use super::{FormatError, MAX_PACKET};
+use crysirror_image::ImageSurface;
+
+/// Zigzag scan; JBP1's 0x1400e4730 holds entries 1..64 of the same order.
+pub(crate) const ORDER: [usize; 64] = [
+    0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48, 41, 34, 27, 20,
+    13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51, 58, 59,
+    52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63,
+];
+const ROW: [[i32; 32]; 4] = [
+    [
+        16384, 21407, 16384, 8867, 16384, -8867, 16384, -21407, 16384, 8867, -16384, -21407,
+        -16384, 21407, 16384, -8867, 22725, 19266, 19266, -4520, 12873, -22725, 4520, -12873,
+        12873, 4520, -22725, -12873, 4520, 19266, 19266, -22725,
+    ],
+    [
+        22725, 29692, 22725, 12288, 22725, -12299, 22725, -29692, 22725, 12299, -22725, -29692,
+        -22725, 29692, 22725, -12299, 31521, 26722, 26722, -6270, 17855, -31521, 6270, -17855,
+        17855, 6270, -31521, -17855, 6270, 26722, 26722, -31521,
+    ],
+    [
+        21407, 27969, 21407, 11585, 21407, -11585, 21407, -27969, 21407, 11585, -21407, -27969,
+        -21407, 27969, 21407, -11585, 29692, 25172, 25172, -5906, 16819, -29692, 5906, -16819,
+        16819, 5906, -29692, -16819, 5906, 25172, 25172, -29692,
+    ],
+    [
+        19266, 25172, 19266, 10426, 19266, -10426, 19266, -25172, 19266, 10426, -19266, -25172,
+        -19266, 25172, 19266, -10426, 26722, 22654, 22654, -5315, 15137, -26722, 5315, -15137,
+        15137, 5315, -26722, -15137, 5315, 22654, 22654, -26722,
+    ],
+];
+fn sat(x: i32) -> i16 {
+    x.clamp(i16::MIN as i32, i16::MAX as i32) as i16
+}
+fn add(a: i16, b: i16) -> i16 {
+    a.saturating_add(b)
+}
+fn sub(a: i16, b: i16) -> i16 {
+    a.saturating_sub(b)
+}
+fn mul(a: i16, b: i16) -> i16 {
+    ((i32::from(a) * i32::from(b)) >> 16) as i16
+}
+fn idct(block: &mut [i16; 64]) {
+    for (r, &table) in [0, 1, 2, 3, 0, 3, 2, 1].iter().enumerate() {
+        let x = &block[r * 8..r * 8 + 8];
+        let c = &ROW[table];
+        let mut row = [0i16; 8];
+        for j in 0..4 {
+            let e = 1024i32
+                .wrapping_add(i32::from(x[0]) * c[2 * j])
+                .wrapping_add(i32::from(x[2]) * c[2 * j + 1])
+                .wrapping_add(i32::from(x[4]) * c[8 + 2 * j])
+                .wrapping_add(i32::from(x[6]) * c[9 + 2 * j]);
+            let o = (i32::from(x[1]) * c[16 + 2 * j])
+                .wrapping_add(i32::from(x[3]) * c[17 + 2 * j])
+                .wrapping_add(i32::from(x[5]) * c[24 + 2 * j])
+                .wrapping_add(i32::from(x[7]) * c[25 + 2 * j]);
+            row[j] = sat(e.wrapping_add(o) >> 11);
+            row[7 - j] = sat(e.wrapping_sub(o) >> 11);
+        }
+        block[r * 8..r * 8 + 8].copy_from_slice(&row);
+    }
+    for c in 0..8 {
+        let x: [i16; 8] = std::array::from_fn(|r| block[r * 8 + c]);
+        let a = sub(mul(13036, x[1]), x[7]);
+        let b = add(mul(x[7], 13036), x[1]);
+        let d = add(add(mul(x[5], -21746), x[5]), x[3]);
+        let e = sub(x[5], add(mul(-21746, x[3]), x[3]));
+        let f = add(add(d, b), 1);
+        let g = add(sub(a, e), 1);
+        let h = add(a, e);
+        let i = sub(b, d);
+        let j = add(mul(x[6], 27146), x[2]);
+        let k = sub(mul(27146, x[2]), x[6]);
+        let l = add(x[4], x[0]);
+        let m = sub(l, j);
+        let n = add(add(i, g), mul(-19195, add(i, g))) | 1;
+        let p = add(mul(-19195, sub(i, g)), sub(i, g)) | 1;
+        let q = add(add(l, j), 32);
+        let s = sub(x[0], x[4]);
+        let t = add(sub(s, k), 31);
+        let u = add(add(s, k), 32);
+        let v = add(m, 31);
+        let out = [
+            add(f, q),
+            add(u, n),
+            add(t, p),
+            add(h, v),
+            sub(v, h),
+            sub(t, p),
+            sub(u, n),
+            sub(q, f),
+        ];
+        for r in 0..8 {
+            block[r * 8 + c] = out[r] >> 6;
+        }
+    }
+}
+
+/// Bits taken low bit first from each byte (the originals load 32-bit words).
+pub(crate) struct Bits<'a> {
+    data: &'a [u8],
+    at: usize,
+}
+impl<'a> Bits<'a> {
+    pub(crate) fn new(data: &'a [u8]) -> Self {
+        Self { data, at: 0 }
+    }
+    pub(crate) fn bit(&mut self) -> Result<usize, FormatError> {
+        let b = *self
+            .data
+            .get(self.at / 8)
+            .ok_or(FormatError("JBP bitstream truncated"))?;
+        let v = usize::from((b >> (self.at % 8)) & 1);
+        self.at += 1;
+        Ok(v)
+    }
+    pub(crate) fn signed(&mut self, n: usize) -> Result<i16, FormatError> {
+        if n == 0 {
+            return Ok(0);
+        }
+        let mut v = 0i32;
+        for _ in 0..n {
+            v = (v << 1) | self.bit()? as i32;
+        }
+        if v < (1 << (n - 1)) {
+            v -= (1 << n) - 1;
+        }
+        Ok(v as i16)
+    }
+}
+/// Frequency tree shared by JBPD (0x1400a0960) and JBP1 (0x1400b3b40): repeatedly join the
+/// two lowest weights, lower node index first, the first one on bit 0.
+pub(crate) struct Tree {
+    children: Vec<[usize; 2]>,
+}
+impl Tree {
+    pub(crate) fn new(data: &[u8]) -> Result<Self, FormatError> {
+        let mut weights: Vec<u32> = data
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|b| u32::from_le_bytes(*b))
+            .collect();
+        let mut children = vec![[0, 0]; 16];
+        let mut active = vec![true; 16];
+        for _ in 0..15 {
+            let mut ids: Vec<_> = (0..weights.len()).filter(|&i| active[i]).collect();
+            ids.sort_by_key(|&i| (weights[i], i));
+            let (a, b) = (ids[0], ids[1]);
+            let sum = weights[a]
+                .checked_add(weights[b])
+                .filter(|&v| v < 2099999999)
+                .ok_or(FormatError("JBP Huffman frequencies overflow"))?;
+            active[a] = false;
+            active[b] = false;
+            weights.push(sum);
+            active.push(true);
+            children.push([a, b]);
+        }
+        Ok(Self { children })
+    }
+    pub(crate) fn symbol(&self, bits: &mut Bits<'_>) -> Result<usize, FormatError> {
+        let mut node = 30;
+        while node >= 16 {
+            node = self.children[node][bits.bit()?];
+        }
+        Ok(node)
+    }
+}
+pub(crate) fn word(data: &[u8], at: usize) -> Result<u32, FormatError> {
+    Ok(u32::from_le_bytes(
+        data.get(at..at + 4)
+            .ok_or(FormatError("JBP header truncated"))?
+            .try_into()
+            .unwrap(),
+    ))
+}
+
+/// Frame layout selected by the container version (0x14004c090).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Layout {
+    Cmv5,
+    Cmv6,
+    Cmv7,
+    Cmv8,
+}
+
+impl Layout {
+    fn alpha(self) -> bool {
+        matches!(self, Self::Cmv7 | Self::Cmv8)
+    }
+    fn early(self) -> bool {
+        matches!(self, Self::Cmv5 | Self::Cmv7)
+    }
+}
+
+/// Decode a self-contained CMV6 JBPD frame to top-down opaque RGBA.
+/// Other JBP versions, subsampling modes, and missing quantization tables are rejected.
+pub fn decode(data: &[u8]) -> Result<ImageSurface, FormatError> {
+    decode_inner(data, None, Layout::Cmv6)
+}
+
+/// Decode a CMV5 frame to top-down opaque RGBA (0x1400079d0). The table offset has no tile
+/// mask adjustment, entropy data starts on a 32-byte boundary after the tile list, and no
+/// reuse mask exists. The original does not check the frame signature.
+pub fn decode_cmv5(data: &[u8]) -> Result<ImageSurface, FormatError> {
+    decode_inner(data, None, Layout::Cmv5)
+}
+
+/// Decode a CMV7 frame to top-down RGBA (0x140009a10). It is laid out like JBPE with a two-bit
+/// mask per MCU. A set high bit marks a transparent MCU with no entropy data. The low bit only
+/// lets consecutive frames skip the IDCT, so independent decoding ignores it.
+pub fn decode_cmv7(data: &[u8]) -> Result<ImageSurface, FormatError> {
+    decode_inner(data, None, Layout::Cmv7)
+}
+
+/// Decode a self-contained CMV8 `JBPE` frame (0x1400af100) to top-down RGBA with alpha.
+/// After the six colour blocks each MCU carries four alpha blocks laid out like luma and
+/// dequantized with a third table. The DC count is stored after the three tables; the
+/// optional reuse mask covers the MCU grid rounded up to 16 pixels. The original does not
+/// check the signature; only the observed `JBPE` is accepted here.
+pub fn decode_alpha(data: &[u8]) -> Result<ImageSurface, FormatError> {
+    decode_inner(data, None, Layout::Cmv8)
+}
+
+/// 0x1400a3850 writes byte 0 of `0x1400e3b30[4 * v + 512]` for each alpha IDCT sample:
+/// clamp(v, 0, 255) for v in -128..=383. Other entries hold unrelated values and samples
+/// below -128 read before the table, so they are rejected.
+fn alpha_sample(v: i16) -> Result<u8, FormatError> {
+    match v {
+        -128..=383 => Ok(v.clamp(0, 255) as u8),
+        _ => Err(FormatError(
+            "JBPE alpha sample outside the verified clamp table",
+        )),
+    }
+}
+
+/// CMV9: the outer bitmap marks static blocks. Base data contains the set bits;
+/// ordinary frames contain the clear bits. Frames decode independently over the base.
+/// The base stream's table offset lacks the regular frame's four-byte tile mask.
+pub(crate) fn decode_masked(
+    data: &[u8],
+    mask: &[u8],
+    static_blocks: bool,
+    base: Option<&ImageSurface>,
+) -> Result<ImageSurface, FormatError> {
+    decode_inner(data, Some((mask, static_blocks, base)), Layout::Cmv6)
+}
+
+fn decode_inner(
+    data: &[u8],
+    masked: Option<(&[u8], bool, Option<&ImageSurface>)>,
+    layout: Layout,
+) -> Result<ImageSurface, FormatError> {
+    let alpha = layout.alpha();
+    let signature: &[u8] = if alpha { b"JBPE" } else { b"JBPD" };
+    if data.len() > MAX_PACKET || (!layout.early() && data.get(..4) != Some(signature)) {
+        return Err(FormatError("expected bounded JBPD frame"));
+    }
+    let flags = word(data, 8)?;
+    // Verified 4:2:0, explicit quantizers, CMV6 tile layout. Bit 12 is an optional reuse mask.
+    // Early layouts read only the sampling and quantizer bits; CMV7 always indexes its mask.
+    let supported = match layout {
+        Layout::Cmv5 => flags & 0x3800_0000 == 0x1800_0000,
+        Layout::Cmv7 => flags & 0x3800_1000 == 0x1800_1000,
+        _ => flags & !0x1000 == 0x58c00002,
+    };
+    if !supported {
+        return Err(FormatError("unsupported JBPD flags"));
+    }
+    let dimensions = word(data, 16)?;
+    let w = (dimensions & 65535) as usize;
+    let h = (dimensions >> 16) as usize;
+    if w == 0
+        || h == 0
+        || w * h > MAX_PACKET / 4
+        || (!layout.early() && word(data, 20)? != if alpha { 32 } else { 24 })
+    {
+        return Err(FormatError("unsupported JBPD dimensions or bit depth"));
+    }
+    // JBPE has a third (alpha) quantization table.
+    let head_size = if alpha { 336 } else { 272 };
+    let table = usize::try_from(word(data, 4)?)
+        .ok()
+        .and_then(|n| {
+            n.checked_add(
+                if layout == Layout::Cmv5
+                    || masked.is_some_and(|(_, static_blocks, _)| static_blocks)
+                {
+                    0
+                } else {
+                    4
+                },
+            )
+        })
+        .filter(|&n| n >= 44 && n <= data.len().saturating_sub(head_size))
+        .ok_or(FormatError("JBPD table offset outside frame"))?;
+    let head = data
+        .get(table..table + head_size)
+        .ok_or(FormatError("JBPD tables truncated"))?;
+    let dc_tree = Tree::new(&head[..64])?;
+    let ac_tree = Tree::new(&head[64..128])?;
+    let runs = &head[128..144];
+    let quant = &head[144..head_size];
+    let mcus = w.div_ceil(16) * h.div_ceil(16);
+    let per_mcu = if alpha { 10 } else { 6 };
+    let mut tile_list = table + head_size;
+    let mut dc_count = None;
+    if alpha {
+        dc_count = Some(word(data, tile_list)? as usize);
+        tile_list += 4;
+    }
+    let layout_word = word(data, tile_list)?;
+    let rows = (layout_word & 255) as usize;
+    let cols = ((layout_word >> 8) & 255) as usize;
+    let count = (layout_word >> 16) as usize;
+    if rows != h.div_ceil(256) || cols != w.div_ceil(256) || count != rows * cols {
+        return Err(FormatError("JBPD tile grid differs from dimensions"));
+    }
+    let tiles = data
+        .get(tile_list + 4..tile_list + 4 + count * 2)
+        .ok_or(FormatError("JBPD tiles truncated"))?;
+    let alignment = if layout == Layout::Cmv5 { 32 } else { 4 };
+    let mut start = tile_list + (4 + count * 2).next_multiple_of(alignment);
+    let mut block_modes = None;
+    if layout == Layout::Cmv7 {
+        let size = ((mcus + 7) >> 2).next_multiple_of(4);
+        block_modes = Some(
+            data.get(start..start + size)
+                .ok_or(FormatError("CMV7 block mask truncated"))?,
+        );
+        start += size;
+    } else if layout != Layout::Cmv5 && flags & 0x1000 != 0 {
+        if masked.is_some() {
+            let length = data
+                .get(start..start + 2)
+                .ok_or(FormatError("CMV9 reuse mask truncated"))?;
+            start += 2 + usize::from(u16::from_le_bytes(length.try_into().unwrap()));
+        } else {
+            // 0x1400a0ad0 rounds both dimensions up to 16 for 4:2:0; 0x1400ab650 (JBPD) and
+            // 0x1400af100 (JBPE) size the mask from that MCU grid (hot_n_mov.cmv: 640x360).
+            start += mcus.div_ceil(8).next_multiple_of(4);
+        }
+    }
+    let split = start
+        .checked_add(word(data, 28)? as usize)
+        .ok_or(FormatError("JBPD stream offset overflow"))?;
+    let end = split
+        .checked_add(word(data, 32)? as usize)
+        .ok_or(FormatError("JBPD stream size overflow"))?;
+    let dc_data = data
+        .get(start..split)
+        .ok_or(FormatError("JBPD DC stream outside frame"))?;
+    let ac_data = data
+        .get(split..end)
+        .ok_or(FormatError("JBPD AC stream outside frame"))?;
+    let mut dc = Bits::new(dc_data);
+    let mut ac = Bits::new(ac_data);
+    if masked.is_some_and(|(mask, _, base)| {
+        mask.len() != mcus.div_ceil(8)
+            || base.is_some_and(|b| b.width as usize != w || b.height as usize != h)
+    }) {
+        return Err(FormatError("CMV9 base mask or dimensions differ"));
+    }
+    let present = |index: usize| match block_modes {
+        Some(modes) => modes[index / 4] & (128 >> (index % 4 * 2)) == 0,
+        None => masked
+            .is_none_or(|(mask, set, _)| ((mask[index / 8] & (128 >> (index % 8))) != 0) == set),
+    };
+    let blocks = (0..mcus).filter(|&i| present(i)).count() * per_mcu;
+    if dc_count.is_some_and(|stored| stored != blocks) {
+        return Err(FormatError("JBPE DC count differs from the MCU grid"));
+    }
+    if masked.is_some() && word(data, 36)? as usize != blocks {
+        return Err(FormatError("CMV9 DC count differs from block mask"));
+    }
+    let mut values = Vec::with_capacity(blocks);
+    let mut previous = 0i16;
+    for _ in 0..blocks {
+        let n = dc_tree.symbol(&mut dc)?;
+        previous = previous.wrapping_add(dc.signed(n)?);
+        values.push(previous);
+    }
+    let mut pixels = masked.and_then(|(_, _, base)| base).map_or_else(
+        || vec![0u8; w * h * 4],
+        |base| base.rgba.as_slice().to_vec(),
+    );
+    let mut dc_index = 0;
+    let mut mcu_index = 0;
+    for tile in 0..count {
+        let ty = tile / cols * 256;
+        let tx = tile % cols * 256;
+        let nr = usize::from(tiles[tile * 2]);
+        let nc = usize::from(tiles[tile * 2 + 1]);
+        if nr != (h - ty).min(256).div_ceil(16) || nc != (w - tx).min(256).div_ceil(16) {
+            return Err(FormatError("JBPD tile extent differs from grid"));
+        }
+        for by in 0..nr {
+            for bx in 0..nc {
+                let draw = present(mcu_index);
+                mcu_index += 1;
+                if !draw {
+                    continue;
+                }
+                // Luma 0..3, Cb 4, Cr 5, then JBPE alpha 6..9 with the third table.
+                let mut samples = [[0i16; 64]; 10];
+                for (n, block) in samples[..per_mcu].iter_mut().enumerate() {
+                    let q = &quant[match n {
+                        0..4 => 0..64,
+                        4 | 5 => 64..128,
+                        _ => 128..192,
+                    }];
+                    block[0] = values[dc_index].wrapping_mul(i16::from(q[0]));
+                    dc_index += 1;
+                    let mut pos = 1;
+                    while pos < 64 {
+                        let symbol = ac_tree.symbol(&mut ac)?;
+                        if symbol == 15 {
+                            break;
+                        }
+                        if symbol == 0 {
+                            let mut run = 0;
+                            while ac.bit()? != 0 {
+                                run += 1;
+                                if run == 16 {
+                                    return Err(FormatError(
+                                        "JBPD zero run selector outside table",
+                                    ));
+                                }
+                            }
+                            pos += usize::from(runs[run]) + 1;
+                            if pos > 64 {
+                                return Err(FormatError("JBPD zero run outside block"));
+                            }
+                        } else {
+                            block[ORDER[pos]] =
+                                ac.signed(symbol)?.wrapping_mul(i16::from(q[ORDER[pos]]));
+                            pos += 1;
+                        }
+                    }
+                    idct(block);
+                }
+                for y in 0..16 {
+                    for x in 0..16 {
+                        if ty + by * 16 + y >= h || tx + bx * 16 + x >= w {
+                            continue;
+                        }
+                        let l = i32::from(samples[y / 8 * 2 + x / 8][y % 8 * 8 + x % 8]);
+                        let cb = i32::from(samples[4][y / 2 * 8 + x / 2]);
+                        let cr = i32::from(samples[5][y / 2 * 8 + x / 2]);
+                        let rgb = [
+                            l + 128 + ((91888 * cr) >> 16),
+                            l + 128 - ((22544 * cb) >> 16) - ((46784 * cr) >> 16),
+                            l + 128 + ((116112 * cb) >> 16),
+                        ];
+                        let at = ((ty + by * 16 + y) * w + tx + bx * 16 + x) * 4;
+                        for c in 0..3 {
+                            pixels[at + c] = rgb[c].clamp(0, 255) as u8;
+                        }
+                        pixels[at + 3] = if alpha {
+                            alpha_sample(samples[6 + y / 8 * 2 + x / 8][y % 8 * 8 + x % 8])?
+                        } else {
+                            255
+                        };
+                    }
+                }
+            }
+        }
+    }
+    Ok(ImageSurface {
+        width: w as u32,
+        height: h as u32,
+        rgba: pixels,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Default)]
+    struct Writer {
+        bytes: Vec<u8>,
+        bits: usize,
+    }
+    impl Writer {
+        fn bit(&mut self, bit: usize) {
+            if self.bits % 8 == 0 {
+                self.bytes.push(0);
+            }
+            *self.bytes.last_mut().unwrap() |= (bit as u8) << (self.bits % 8);
+            self.bits += 1;
+        }
+        fn symbol(&mut self, tree: &Tree, symbol: usize) {
+            fn path(tree: &Tree, node: usize, symbol: usize, out: &mut Vec<usize>) -> bool {
+                if node < 16 {
+                    return node == symbol;
+                }
+                (0..2).any(|bit| {
+                    out.push(bit);
+                    path(tree, tree.children[node][bit], symbol, out) || {
+                        out.pop();
+                        false
+                    }
+                })
+            }
+            let mut bits = Vec::new();
+            assert!(path(tree, 30, symbol, &mut bits));
+            bits.into_iter().for_each(|bit| self.bit(bit));
+        }
+    }
+
+    /// Two 16x16 MCUs. `alpha_at` receives an opaque first alpha block when alpha is present.
+    fn frame(layout: Layout, modes: &[u8], coded: usize) -> Vec<u8> {
+        let weights = [1u32; 16].map(u32::to_le_bytes).concat();
+        let tree = Tree::new(&weights).unwrap();
+        let per_mcu = if layout.alpha() { 10 } else { 6 };
+        let (mut dc, mut ac) = (Writer::default(), Writer::default());
+        for block in 0..coded * per_mcu {
+            if layout.alpha() && block == 6 {
+                dc.symbol(&tree, 8);
+                (0..8).for_each(|_| dc.bit(1));
+            } else {
+                dc.symbol(&tree, 0);
+            }
+            ac.symbol(&tree, 15);
+        }
+        let table = 44;
+        let mut out = vec![0; table];
+        out[..4].copy_from_slice(if layout.alpha() { b"JBPE" } else { b"JBPD" });
+        let offset = if layout == Layout::Cmv5 { table } else { table - 4 };
+        out[4..8].copy_from_slice(&(offset as u32).to_le_bytes());
+        out[8..12].copy_from_slice(&0x58c0_1002u32.to_le_bytes());
+        out[16..20].copy_from_slice(&(32u32 | 16 << 16).to_le_bytes());
+        out[20..24].copy_from_slice(&(if layout.alpha() { 32u32 } else { 24 }).to_le_bytes());
+        out[28..32].copy_from_slice(&(dc.bytes.len() as u32).to_le_bytes());
+        out[32..36].copy_from_slice(&(ac.bytes.len() as u32).to_le_bytes());
+        out.extend_from_slice(&weights);
+        out.extend_from_slice(&weights);
+        out.extend_from_slice(&[0; 16]);
+        out.resize(out.len() + if layout.alpha() { 192 } else { 128 }, 8);
+        if layout.alpha() {
+            out.extend_from_slice(&((coded * per_mcu) as u32).to_le_bytes());
+        }
+        let tile_list = out.len();
+        out.extend_from_slice(&(1u32 | 1 << 8 | 1 << 16).to_le_bytes());
+        out.extend_from_slice(&[1, 2]);
+        let alignment = if layout == Layout::Cmv5 { 32 } else { 4 };
+        out.resize(tile_list + 6usize.next_multiple_of(alignment), 0xff);
+        out.extend_from_slice(modes);
+        out.extend_from_slice(&dc.bytes);
+        out.extend_from_slice(&ac.bytes);
+        out
+    }
+
+    #[test]
+    fn cmv5_entropy_starts_on_a_32_byte_boundary() {
+        let image = decode_cmv5(&frame(Layout::Cmv5, &[], 2)).unwrap();
+        assert_eq!([image.width, image.height], [32, 16]);
+        assert!(image.rgba.chunks_exact(4).all(|p| p == [128, 128, 128, 255]));
+    }
+
+    #[test]
+    fn cmv7_high_mode_bit_clears_the_mcu_without_entropy_data() {
+        let image = decode_cmv7(&frame(Layout::Cmv7, &[0x80, 0, 0, 0], 1)).unwrap();
+        assert_eq!(image.rgba[..4], [0, 0, 0, 0]);
+        let coded = &image.rgba[16 * 4..16 * 4 + 4];
+        assert_eq!(coded[..3], [128, 128, 128]);
+        assert!(coded[3] > 200, "alpha block decoded: {}", coded[3]);
+    }
+
+    #[test]
+    fn cmv7_rejects_a_dc_count_that_disagrees_with_the_mask() {
+        assert!(decode_cmv7(&frame(Layout::Cmv7, &[0, 0, 0, 0], 1)).is_err());
+    }
+}

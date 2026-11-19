@@ -52,6 +52,8 @@ See the [opcode and syscall lists](docs/native-api/README.md) for per-engine imp
 See [Software heritage](docs/SOFTWARE_HERITAGE.md) for the 289 archive, image and audio decoders and KiriKiri automatic decryption.
 For Siglus, BGI, SoftPAL and RFVP updates, see the
 [upstream versions, integration changes and rendering paths](docs/INTEGRATED_ENGINES.md).
+Malie, N2System and codeX RScript were requested in
+[Early Feedback (#7)](https://github.com/xmoezzz/CrySirror/issues/7).
 
 | Engine | Game data |
 | --- | --- |
@@ -74,6 +76,9 @@ For Siglus, BGI, SoftPAL and RFVP updates, see the
 | [N-System](docs/NATIVE_ADAPTERS.md#n-system) | MSD, FJSYS, MGD |
 | [N2System / NsScript](crates/crysirror-n2system/README.md) | NSS scenarios, Nitroplus NPA resources |
 | [Malie / MalieSystem](crates/crysirror-malie/README.md) | EXEC scenarios, LIBP resources, MGF/DZI graphics, SVG/Squirrel UI |
+| [WillPlus / AdvHD](crates/crysirror-willplus/README.md) | WS2 V3 scenarios, Will/Pulltop ARC archives, PNA graphics |
+| [CMVS](crates/crysirror-cmvs/README.md) | PS2A scenarios, CPZ6/CPZ7 archives and PB3 graphics for the 2016 and 2021 Windows x64 profiles |
+| [CVNS](crates/crysirror-cmvs/README.md#cvns) | PSS0 scenarios and CPZ1 archives, with startup support for the 2004 Windows i386 profile |
 
 ## Try CrySirror
 

@@ -69,6 +69,11 @@ pub fn run(args: Vec<String>) -> Result<()> {
         }
         let module = naga::front::wgsl::parse_str(&super::lower_depth_reads(&source))
             .map_err(|e| anyhow::anyhow!("{hash}: {}", e.emit_to_string(&source)))?;
+        // Without the new mask flags, the two quad revisions execute the
+        // same code. Link the legacy GXP for those draws and retain each
+        // program's actual source hash in the native catalogue.
+        let legacy_quad = (source == crysirror_shaders::wgsl::QUAD_V2)
+            .then(|| blake3::hash(crysirror_shaders::wgsl::QUAD.as_bytes()).to_hex());
         let mut entries = Vec::new();
         for (stage, entry) in &wanted {
             let st = match stage.as_str() {
@@ -93,10 +98,19 @@ pub fn run(args: Vec<String>) -> Result<()> {
                             // in: every output format shares one program.
                             c["module"] == "composite_filter_rgba16float" && c["compute_lowering"].is_string()
                         } else {
-                            c["wgsl_blake3"].as_str().is_some_and(|w| w.starts_with(&hash)) && c["stage"] == stage.as_str()
+                            c["wgsl_blake3"].as_str().is_some_and(|w| {
+                                w.starts_with(&hash) || legacy_quad.as_ref().is_some_and(|legacy| w == legacy.as_str())
+                            }) && c["stage"] == stage.as_str()
                         }
                 })
                 .collect();
+            if legacy_quad.is_some() && matches!(ep.name.as_str(), "fs_filtered" | "fs_filtered_premultiply") {
+                for sampling in 0..5 {
+                    let variants = programs.iter().filter(|p| p["module"] == "quad_v2"
+                        && p["distortion_variant"] == 0 && p["sampling_variant"] == sampling);
+                    ensure!(variants.count() == 1, "{hash} {}: missing or duplicate mask variant {sampling}", ep.name);
+                }
+            }
             if programs.is_empty() {
                 unavailable.push(format!("{hash} {stage} {}", ep.name));
                 entries.push(json!({"entry": ep.name, "stage": stage, "unavailable": true}));
@@ -260,14 +274,18 @@ fn entry_json(module: &naga::Module, ep: &naga::EntryPoint, stage: &str, program
             let key = (u["group"].as_u64().unwrap() as u32, u["binding"].as_u64().unwrap() as u32);
             used_blocks.push(block_keys.iter().position(|k| *k == key).unwrap());
         }
-        variants.push(json!({
+        let mut variant = json!({
             "program": program_name(p)?,
             "wipe": p["wipe_variant"],
             "distortion": p["distortion_variant"],
             "sampling": p["sampling_variant"],
             "textures": units,
             "blocks": used_blocks,
-        }));
+        });
+        if p["module"] == "quad_v2" {
+            variant["quad_mask"] = json!(true);
+        }
+        variants.push(variant);
     }
     let first = programs[0];
     if variants.len() > 1 && first["wipe_variant"].is_null() && first["distortion_variant"].is_null() {

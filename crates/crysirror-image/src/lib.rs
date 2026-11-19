@@ -367,6 +367,10 @@ pub mod surface;
 
 pub mod avg32;
 pub mod g00;
+pub mod gdi_region;
+pub mod alpha_cells;
+pub mod layer_stack;
+pub mod channel_matte;
 /// Shared MPL PDT10/PDT11 image codec; native cut/pattern metadata stays in adapters.
 pub mod pdt;
 pub mod reallive_wipe;

@@ -6,6 +6,7 @@ mod audio;
 pub mod lilim_animation;
 pub mod ald_catalog;
 pub mod alice_message_log;
+pub mod cmvs_image;
 pub mod qnt;
 mod common;
 mod files;

@@ -6,6 +6,7 @@
 //! profile, and produces a typed engine resource plan. Only data is read;
 //! no native executable or external launcher script runs.
 mod majiro;
+mod cmvs;
 mod system_nnn;
 mod system4;
 mod bgi;
@@ -195,6 +196,7 @@ fn detect_layout(dir: &SourcePath) -> Result<Plan> {
     }
     if let Some(plan) = system4::detect(dir, &names, &name)? { return Ok(plan); }
     if let Some(plan) = majiro::detect(dir, &names, &name)? { return Ok(plan); }
+    if let Some(plan) = cmvs::detect(dir, &names, &name)? { return Ok(plan); }
     if let Some(plan) = system_nnn::detect(dir, &names, &name)? { return Ok(plan); }
     if let Some(plan) = bgi::detect(dir,&names,&name)? {return Ok(plan);}
     if let Some(plan) = softpal::detect(dir,&names,&name)? {return Ok(plan);}

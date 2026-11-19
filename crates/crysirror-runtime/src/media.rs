@@ -7,11 +7,12 @@ use anyhow::{Context, Result, anyhow, ensure};
 pub mod probe;
 use crysirror_core::{
     path::{Mount, VfsPath},
-    service::{AssetReader, AudioParameters, AudioRequest, ClientStorage, PcmAudio, PcmBus},
+    service::{AssetReader, AudioParameters, AudioPcm16Gain, AudioRequest, ClientStorage, PcmAudio, PcmBus},
     state::ClientId,
 };
+use crysirror_video::mgv;
 use crysirror_video::{
-    amv, asf, imoavi, isobmff, theora, webm,
+    amv, asf, cmv, imoavi, isobmff, theora, webm,
     mpeg::{self, VideoFrame},
 };
 use serde::{Deserialize, Serialize};
@@ -356,6 +357,7 @@ impl Workers {
         let frame_duration = frame_ms.clone();
         let metadata = Arc::new(Mutex::new(None));
         let stream_metadata = metadata.clone();
+        let mgv_source = source.clone();
         std::thread::Builder::new()
             .name("crysirror-media-video".into())
             .spawn(move || {
@@ -410,6 +412,21 @@ impl Workers {
                             if !publish(frame)? {
                                 break;
                             }
+                        }
+                    } else if mgv::is_input(&mut video_reader)? {
+                        let (offset, length) = mgv::Layout::read(&mut video_reader)?.video;
+                        let range = crysirror_resource::subrange(mgv_source.reader()?, offset, length)?;
+                        theora::decode_video_with_metadata(AssetCursor::new(range)?,
+                            || stop.load(Ordering::Acquire), publish_metadata, publish)?;
+                    } else if cmv::is_input(&mut video_reader)? {
+                        let mut decoder = cmv::Movie::new(video_reader)?;
+                        publish_metadata(decoder.metadata())?;
+                        while !stop.load(Ordering::Acquire) {
+                            let Some(frame) = decoder.decode_next()? else { break; };
+                            if !publish(VideoFrame {
+                                pts_ms: i64::try_from(frame.pts_ms)?,
+                                width: frame.width, height: frame.height, rgba: frame.rgba,
+                            })? { break; }
                         }
                     } else if webm::is_input(&mut video_reader)? {
                         webm::decode_video_with_metadata(video_reader,
@@ -521,7 +538,17 @@ impl Workers {
                             samples.append(builder.as_mut().unwrap())?;
                             Ok(true)
                         };
-                        if asf::is_asf(&mut reader)? {
+                        if mgv::is_input(&mut reader)? {
+                            if let Some((offset, length)) = mgv::Layout::read(&mut reader)?.audio {
+                                let range = crysirror_resource::subrange(source.reader()?, offset, length)?;
+                                theora::decode_audio(AssetCursor::new(range)?, || stop.load(Ordering::Acquire), |c| accept(c.pts_ms, c.sample_rate, c.channels, DecodedSamples::F32(c.samples)))?;
+                            }
+                        } else if cmv::is_input(&mut reader)? {
+                            if let Some((offset, length)) = cmv::Index::read(&mut reader)?.audio {
+                                let range = crysirror_resource::subrange(source.reader()?, offset, length)?;
+                                theora::decode_audio(AssetCursor::new(range)?, || stop.load(Ordering::Acquire), |c| accept(c.pts_ms, c.sample_rate, c.channels, DecodedSamples::F32(c.samples)))?;
+                            }
+                        } else if asf::is_asf(&mut reader)? {
                             asf::decode_audio(reader, || stop.load(Ordering::Acquire), |c| accept(c.pts_ms,c.sample_rate,c.channels,DecodedSamples::F32(c.samples)))?;
                         } else if theora::is_input(&mut reader)? {
                             theora::decode_audio(reader, || stop.load(Ordering::Acquire), |c| accept(c.pts_ms,c.sample_rate,c.channels,DecodedSamples::F32(c.samples)))?;
@@ -564,6 +591,7 @@ struct Slot {
     source: Arc<MediaInput>,
     workers: Option<Workers>,
     options: MediaOptions,
+    pcm16_gain: Option<AudioPcm16Gain>,
     status: MediaStatus,
     pending: Option<QueuedFrame>,
     track: Option<AudioTrack>,
@@ -595,12 +623,18 @@ impl Slot {
             self.status.duration_ms = info.duration_ms;
         }
     }
-    fn new(source: Arc<MediaInput>, options: MediaOptions, workers: Workers) -> Self {
+    fn new(
+        source: Arc<MediaInput>,
+        options: MediaOptions,
+        workers: Workers,
+        pcm16_gain: Option<AudioPcm16Gain>,
+    ) -> Self {
         let audio_ready = !options.audio;
         Self {
             source,
             workers: Some(workers),
             options,
+            pcm16_gain,
             status: MediaStatus {
                 state: MediaState::Loading,
                 position_ms: 0,
@@ -685,14 +719,31 @@ impl MediaManager {
             path.mount() == Mount::Asset,
             "media source must use asset capability"
         );
-        self.play_source(client,id,MediaSource::Asset{storage,path:path.clone()},options)
+        self.play_source(client,id,MediaSource::Asset{storage,path:path.clone()},options,None)
     }
     /// Reader-backed resources share file media's admission, workers, seek,
     /// loop, cancellation and retirement.
     pub fn play_reader(&mut self,client:ClientId,id:u32,source:Arc<dyn AssetReader>,options:MediaOptions)->Result<()> {
-        self.play_source(client,id,MediaSource::Reader(source),options)
+        self.play_reader_with_fader(client, id, source, options, None)
     }
-    fn play_source(&mut self,client:ClientId,id:u32,source:MediaSource,options:MediaOptions)->Result<()> {
+    pub(crate) fn play_reader_with_fader(
+        &mut self,
+        client: ClientId,
+        id: u32,
+        source: Arc<dyn AssetReader>,
+        options: MediaOptions,
+        pcm16_gain: Option<AudioPcm16Gain>,
+    ) -> Result<()> {
+        self.play_source(client, id, MediaSource::Reader(source), options, pcm16_gain)
+    }
+    fn play_source(
+        &mut self,
+        client: ClientId,
+        id: u32,
+        source: MediaSource,
+        options: MediaOptions,
+        pcm16_gain: Option<AudioPcm16Gain>,
+    ) -> Result<()> {
         options.validate()?;
         if options.audio {
             ensure!(
@@ -729,7 +780,7 @@ impl MediaManager {
             self.audio_budget.clone(),
             self.worker_budget.clone(),
         )?;
-        let next = Slot::new(reader, options, workers);
+        let next = Slot::new(reader, options, workers, pcm16_gain);
         if let Some(previous) = self.slots.insert((client, id), next) {
             if previous.audio_sent {
                 self.pending_audio.push(MediaAudioUpdate {
@@ -1021,6 +1072,7 @@ impl MediaManager {
                                 source: track.pcm.clone(),
                                 parameters: AudioParameters {
                                     gain: slot.options.gain,
+                                    pcm16_gain: slot.pcm16_gain,
                                     start_ms: skip,
                                     bus: PcmBus::Music,
                                     ..Default::default()
@@ -1572,8 +1624,17 @@ mod tests {
     fn live_gain_changes_real_pcm_without_restarting_clock_or_other_clients() {
         let c=ClientId(3);
         let mut manager=MediaManager::default();
-        manager.play(c,8,Arc::new(Storage(include_bytes!("../../crysirror-video/tests/fixtures/media_av.mpg").to_vec())),
-            &path(),MediaOptions{audio_channel:0x7000_0008,..Default::default()},0).unwrap();
+        let source = crysirror_core::service::MemoryAssetReader(Arc::from(
+            &include_bytes!("../../crysirror-video/tests/fixtures/media_av.mpg")[..],
+        ));
+        let fader = Some(AudioPcm16Gain { multiplier: 128, ..Default::default() });
+        manager.play_reader_with_fader(
+            c,
+            8,
+            Arc::new(source),
+            MediaOptions { audio_channel: 0x7000_0008, ..Default::default() },
+            fader,
+        ).unwrap();
         // A loading mutation is retained; it must not emit a premature voice.
         manager.set_gain(c,8,0.5).unwrap();
         assert_eq!(manager.gain(c,8),Some(0.5));
@@ -1586,7 +1647,9 @@ mod tests {
             let mut ready=false;
             for update in updates.audio {
                 if let AudioRequest::PlayPcm{parameters,..}=&update.request {
-                    assert_eq!(parameters.gain,0.5); ready=true;
+                    assert_eq!(parameters.gain,0.5);
+                    assert_eq!(parameters.pcm16_gain, fader);
+                    ready=true;
                 }
                 mixer.submit(update.client.0,update.request).unwrap();
             }
@@ -1619,7 +1682,8 @@ mod tests {
         assert!(manager.status(c,8).unwrap().paused);
         manager.resume(c,8,now+100).unwrap();
         let resumed=manager.tick(now+100).unwrap();
-        assert!(resumed.audio.iter().any(|update| matches!(&update.request,AudioRequest::PlayPcm{parameters,..} if parameters.gain==0.25)));
+        assert!(resumed.audio.iter().any(|update| matches!(&update.request,
+            AudioRequest::PlayPcm{parameters,..} if parameters.gain == 0.25 && parameters.pcm16_gain == fader)));
     }
     #[test]
     fn invalid_capabilities_and_background_decode_errors_do_not_report_successful_eos() {
@@ -1782,7 +1846,7 @@ mod tests {
                 source:MediaSource::Asset{storage:fixture(),path:path()},
                 reader: OnceLock::new(),
             });
-            let mut slot = Slot::new(input, MediaOptions::default(), workers);
+            let mut slot = Slot::new(input, MediaOptions::default(), workers, None);
             slot.track = Some(AudioTrack {
                 pcm: PcmAudio::new(48000, (0..4096).map(|n| [n as f32 / 10000.; 2]).collect())
                     .unwrap(),

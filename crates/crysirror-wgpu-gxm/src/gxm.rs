@@ -293,6 +293,7 @@ struct Variant {
     wipe: Option<i64>,
     distortion: Option<u32>,
     sampling: Option<u32>,
+    quad_mask: bool,
     /// (backend texture slot, GXM unit, dimensions uniform)
     textures: Vec<(u32, u32, String)>,
     blocks: Vec<usize>,
@@ -343,6 +344,7 @@ fn parse_shader(code: &[u8]) -> Result<Shader, String> {
             wipe: x["wipe"].as_i64(),
             distortion: x["distortion"].as_u64().map(|v| v as u32),
             sampling: x["sampling"].as_u64().map(|v| v as u32),
+            quad_mask: x["quad_mask"] == true,
             textures: x["textures"]
                 .as_array()
                 .cloned()
@@ -1157,7 +1159,10 @@ impl Inner {
             }
             let sampling = Self::sampling(flags);
             let fs = &self.shaders[&p.fs];
-            let Some(variant) = fs.variants.iter().position(|v| v.distortion == Some(distortion as u32) && v.sampling == Some(sampling)) else {
+            let quad_mask = (flags & ((1 << 14) | (1 << 16))) != 0;
+            let Some(variant) = fs.variants.iter().position(|v| {
+                v.distortion == Some(distortion as u32) && v.sampling == Some(sampling) && v.quad_mask == quad_mask
+            }) else {
                 log_once(&format!("filter variant d{distortion} s{sampling} missing"));
                 continue;
             };

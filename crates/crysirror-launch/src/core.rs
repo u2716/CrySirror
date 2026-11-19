@@ -36,6 +36,7 @@ pub fn adapter_registry() -> Result<AdapterRegistry> {
     crysirror_bgi_integrated::register(&mut registry)?;
     crysirror_softpal::register(&mut registry)?;
     crysirror_circus::register(&mut registry)?;
+    crysirror_cmvs::adapter::register(&mut registry)?;
     crysirror_catsystem2::register(&mut registry)?;
     crysirror_majiro::adapter::register(&mut registry)?;
     crysirror_qlie::adapter::register(&mut registry)?;

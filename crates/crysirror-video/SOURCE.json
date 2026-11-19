@@ -1,6 +1,6 @@
 {
-  "purpose": "Common engine software MP4 video codecs",
-  "integration": "Dependencies only; no FFmpeg C code or process in production",
+  "purpose": "Common engine software MP4 and CMV video codecs",
+  "integration": "Workspace codecs and pinned dependencies",
   "packages": [
     {
       "crate": "oxideav-core",

@@ -42,6 +42,7 @@ TITLES = {
     "nscripter": "NScripter", "qlie": "QLIE", "system-nnn": "System-NNN",
     "sugarpot": "SugarPot", "willplus": "WillPlus / AdvHD", "krkr": "KiriKiri / TJS2 / KAG",
     "nsystem": "N-System",
+    "cmvs": "CMVS",
 }
 PURPOSE = {
     "PUSH": "Push an immediate value", "POP": "Pop a stack value",
@@ -584,6 +585,16 @@ def choose(engine, r):
     elif engine == "nscripter":
         if fn in ("extended_command", "native_command", "execute") and value in ("command", "command.as_str()"):
             return "Script commands", False, None
+    elif engine == "cmvs":
+        primary = {
+            ("adapter.rs", "advance", "step.1"),
+            ("vm/startup.rs", "startup_command", "opcode"),
+            ("vm/control.rs", "command", "opcode"),
+            ("vm/input.rs", "command", "opcode"),
+            ("vm/screen.rs", "command", "opcode"),
+        }
+        if (rel, fn, value) in primary and not r["contexts"]:
+            return "PC 20160201 x64 syscalls", True, None
     elif engine == "qlie":
         if file == "adapter.rs" and fn == "native" and value == "ins.op.as_str()":
             return "Script commands", False, None
@@ -627,7 +638,202 @@ def choose(engine, r):
     return None
 
 
+def cmvs_catalogue(inv):
+    section = "PC 20160201 x64 syscalls"
+    root = ROOT / "crates/crysirror-cmvs/src"
+    metadata_path = ROOT / "tools/native-api/cmvs-20160201.json"
+    metadata = json.loads(metadata_path.read_text())
+    first = int(metadata["first_opcode"], 16)
+    corpus = {int(opcode, 16) for opcode in metadata["sample_syscalls"]}
+    cases = [int(rva, 16) for rva in metadata["cases_rva"]]
+    noops = {
+        opcode
+        for begin, end in re.findall(
+            r"(0x[\da-f]+)(?:\.\.=(0x[\da-f]+))?",
+            "\n".join(line for line in (root / "vm/noop.rs").read_text().splitlines()
+                      if not line.lstrip().startswith("//")),
+        )
+        for opcode in range(int(begin, 16), int(end or begin, 16) + 1)
+    }
+    if noops != {first + i for i, rva in enumerate(cases) if rva == 0x823E7}:
+        raise ValueError("CMVS no-effect routes disagree with the recorded x64 dispatcher")
+
+    def location(path, pattern):
+        return next(i for i, line in enumerate(path.read_text().splitlines(), 1) if pattern in line)
+
+    input_path = root / "vm/input.rs"
+    for base in re.findall(r"\((0x[\da-f]+), \d+\)", input_path.read_text().split("#[derive(Default)]")[0]):
+        for opcode in (int(base, 16), int(base, 16) + 1):
+            key = short_id(opcode)
+            inv.add(section, key, key, "Read or consume an input edge", "Handled", "—",
+                    input_path, location(input_path, f"({base},"))
+    for opcode, src, meaning, matcher in [
+        (0x2000, root / "vm/machine.rs", "Advance and yield", "System { command: 0 }"),
+        (0x208A, root / "vm/startup.rs", "Invoke a registered callback", "if opcode == 0x208a"),
+        (0x22FF, root / "adapter/display.rs", "Read the device's other-display setting", "0x22ff if self.profile"),
+    ]:
+        key = short_id(opcode)
+        inv.add(section, key, key, meaning, "Handled", "—", src, location(src, matcher))
+
+    open_syscalls = {
+        0x2002: "Frame-window counter latch recovered. Its native host update boundaries are pending",
+        0x202B: "2016 target-texture source selection requires native offscreen routing; 2021 uses its object error branch",
+        0x20A5: "Device attenuation affects software PCM and subsequent hardware sample starts; driver parity is pending",
+        0x20A6: "MOG length result unit is unverified",
+        0x20AA: "Elapsed mixer frames are available; original device cursor and buffer lead are pending",
+        0x20AF: "MOG length and rate-conversion parity are unverified",
+        0x20AE: "Buffered source levels are connected; output resampling can differ from DirectSound",
+        0x20B7: "Elapsed mixer frames are available; original device cursor and buffer lead are pending",
+        0x20FC: "Overlapping format buffers and native pointer reinterpretation are rejected",
+        0x20FD: "Overlapping format buffers and native pointer reinterpretation are rejected",
+        0x2106: "Scoped font aliases are connected; native GDI font metrics remain open",
+        0x2150: "Message move modes with an unsupported branch remain open",
+        0x2152: "Gradient and exact native font fidelity remain open",
+        0x2157: "Gradient and exact native font fidelity remain open",
+        0x222A: "Shared shader-equivalent coverage; native CPU-device path is pending",
+        0x2225: "Additional native quake waveform and random direction semantics remain open",
+        0x2234: "Shared coverage; CPU-device path and old-target shader retention are pending",
+        0x2240: "Scoped playback is connected; native invalid-slot reporting occurs at the frame boundary",
+        0x2242: "Shared elapsed transport time replaces the DirectSound device cursor",
+        0x2243: "Buffered source levels are connected; output resampling can differ from DirectSound",
+        0x2244: "Quantized multiplier is connected; the renderer uses its own fade clock",
+        0x2248: "Resident sample loading is connected; native codec compatibility needs validation",
+        0x224A: "Retains the cursor on stop/resume; DirectSound EOF cursor parity is open",
+        0x224F: "Uses 32 duplicate positions; driver gain and voice-cap parity are open",
+        0x22B2: "In-memory logical capture; persistent gameplay save/restore is pending",
+        0x22B5: "The connected reader accepts CrySirror checkpoints. Original CSV2 native state reconstruction is pending",
+        0x22B6: "The connected writer stores a CrySirror checkpoint in CSV2 framing. Native checkpoint records are pending",
+        0x22DE: "Font alias selection is connected; GDI font discovery and INI writeback remain open",
+        0x22D7: "Effect reopen restores per-slot multiplier and pan; native settings persistence is pending",
+        0x22DF: "Both nonzero outline modes currently share the same glyph outline",
+        0x22E0: "Glyph weight follows the setting; exact native font metrics remain open",
+        0x2300: "2016 requires native group-8/9 offscreen targets; 2021 uses its object error branch",
+        0x2301: "2016 requires native group-8/9 offscreen targets; 2021 uses its object error branch",
+        0x230A: "Releases owned slot; scene movie creation is pending",
+    }
+    open_syscalls.update((opcode, "Retains native registers; only the implemented 2D paths consume them")
+                         for opcode in (*range(0x2058, 0x2069), 0x209C))
+    open_syscalls.update((opcode, "Quantized per-voice gain is connected; native fade and device PCM timing need parity evidence")
+                         for opcode in (0x20AC, 0x20AD, 0x20B8, 0x20B9))
+    open_syscalls.update((opcode, "Native trigonometric results at truncation boundaries need verification")
+                         for opcode in (*range(0x20D8, 0x20DD), 0x20E0))
+    syscall_purposes = {
+        0x202B: "Select the render target used as an object's texture",
+        0x2031: "Release the image owned by a scene object",
+        0x20A7: "Activate the allocated voice at its current decoder cursor",
+        0x20B2: "Pause the effect slot and retain its decoder",
+        0x20B4: "Rewind and activate the allocated effect",
+        0x20BC: "Mark the allocated voice for mixer retirement",
+        0x20BD: "Wait for the mixer to release the voice slot",
+        0x2290: "Create a textured ground and water scene",
+        0x2291: "Create the walking camera and resident sound scene",
+        0x2292: "Create the rotating quad scene with staggered fades and resident cues",
+        0x2293: "Create projected panels with width-selected textures and rule-image reveals",
+        0x2294: "Create the rising planes, drifting billboards and resident cue",
+        0x2295: "Create the three projected atlas actors and resident sound choreography",
+        0x2296: "Create the fixed ground and seven rotating quads",
+        0x2297: "Create the orbiting atlas scene and its triggerable overlays",
+        0x22AF: "Trigger a scene or change its native mode",
+        0x22B7: "Find the newest native save header in a slot range",
+        0x22B1: "Set the maximum number of history entries captured in a save",
+        0x22B5: "Restore a native CSV slot",
+        0x22B6: "Write a native CSV slot",
+        0x22B8: "Capture the thumbnail used by the next native save",
+        0x22BB: "Test whether a native CSV save slot exists",
+        0x22BC: "Update the native save slot comment",
+        0x22BD: "Read native save metadata and replace a scene object's preview",
+        0x22FF: "Read the device's other-display setting",
+        0x22BE: "Update two native save metadata words",
+        0x2300: "Create a native offscreen render target",
+        0x2301: "Release a native offscreen render target",
+        0x2321: "Set a draw record's second-texture blend mode",
+        0x2364: "Select the pointer gesture mode and reset tracking",
+        0x236A: "Read unrestricted-drag release status, angle and speed",
+        0x236B: "Set the unrestricted-drag movement threshold",
+    }
+    for i, rva in enumerate(cases):
+        opcode = first + i
+        key = short_id(opcode)
+        condition = f"x64 case RVA `0x{rva:x}`"
+        if opcode in corpus:
+            condition += ", present in the supplied script corpus"
+        existing = inv.rows.get((section, key))
+        if opcode in noops:
+            path = root / "vm/noop.rs"
+            inv.rows.pop((section, key), None)
+            inv.add(section, key, key, "Advance with no operands or effects", "Original no-op",
+                    "Original handler returns 0x4000", path,
+                    location(path, "fn returns_without_effect"), condition)
+        elif existing:
+            existing["condition"] = condition
+            if opcode in syscall_purposes:
+                existing["purpose"] = syscall_purposes[opcode]
+            if opcode in open_syscalls:
+                existing["status"], existing["gap"] = "Open", open_syscalls[opcode]
+            elif existing["status"] == "Partial":
+                existing["status"] = "Open"
+        else:
+            inv.add(section, key, key, syscall_purposes.get(opcode, "Original system dispatcher entry"),
+                    "Open" if opcode in open_syscalls else "Unreviewed",
+                    open_syscalls.get(opcode, "No connected CrySirror dispatch route"), metadata_path,
+                    location(metadata_path, '"cases_rva"') + 1 + i // 16, condition)
+
+    cvns_path = ROOT / "tools/native-api/cvns-20040515.json"
+    cvns = json.loads(cvns_path.read_text())
+    cvns_section = "CVNS 20040515 x86 syscalls"
+    cvns_routes = {
+        0x2000: (root / "vm/machine.rs", "System { command: 0 }", "Advance and yield"),
+        0x2002: (root / "adapter/display.rs", "fn cvns_set_frame_period", "Set the native frame period in milliseconds"),
+        0x2003: (root / "adapter.rs", "0x2003 => session.vm.complete_owner_call", "Read the native frame period"),
+    }
+    cvns_noop_path = root / "vm/cvns.rs"
+    cvns_noops = {
+        opcode
+        for begin, end in re.findall(r"(0x[\da-f]+)(?:\.\.=(0x[\da-f]+))?",
+                                    "\n".join(line for line in cvns_noop_path.read_text().splitlines()
+                                              if not line.lstrip().startswith("//")))
+        for opcode in range(int(begin, 16), int(end or begin, 16) + 1)
+    }
+    cvns_first = int(cvns["first_opcode"], 16)
+    if cvns_noops != {cvns_first + i for i, rva in enumerate(cvns["cases_rva"]) if int(rva, 16) == 0x32fd5}:
+        raise ValueError("CVNS no-effect routes disagree with the recorded x86 dispatcher")
+    for i, rva in enumerate(cvns["cases_rva"]):
+        opcode = cvns_first + i
+        key = short_id(opcode)
+        guard = f"x86 case RVA `0x{rva}`"
+        if opcode in cvns_routes:
+            path, marker, purpose = cvns_routes[opcode]
+            inv.add(cvns_section, key, key, purpose, "Handled", "—", path, location(path, marker), guard)
+        elif opcode in cvns_noops:
+            inv.add(cvns_section, key, key, "Advance with no operands or effects", "Original no-op",
+                    "Original handler returns 0x4000", cvns_noop_path,
+                    location(cvns_noop_path, "fn returns_without_effect"), guard)
+        else:
+            inv.add(cvns_section, key, key, "Original system dispatcher entry", "Unreviewed",
+                    "No CVNS execution route", cvns_path,
+                    location(cvns_path, '"cases_rva"') + 1 + i // 16, guard)
+
+    opcodes = {
+        0x0200: "Integer expression", 0x0201: "String expression", 0x0202: "Float expression",
+        0x0400: "Direct jump", 0x0401: "Jump on clear condition", 0x0402: "Jump on set condition",
+        0x0403: "Jump on raw result equality", 0x0405: "Jump to label", 0x0407: "Long jump",
+        0x0410: "Call label", 0x0411: "Return and discard literal byte count",
+        0x0412: "Discard literal byte count", 0x0413: "Return and discard result-scaled byte count",
+        0x0414: "Cross-script return", 0x0416: "Call result offset in current script",
+        0x0430: "Push result", 0x0440: "Write immediate and advance stack",
+        0x0442: "Write immediate and advance stack",
+    }
+    path = root / "vm/machine.rs"
+    for opcode, name in opcodes.items():
+        gap = "Expression tag and operator restrictions in the ABI" if opcode <= 0x0202 else "—"
+        state = "Partial" if opcode <= 0x0202 else "Handled"
+        key = short_id(opcode)
+        inv.add("PC 20160201 x64 VM instructions", key, key, name, state, gap,
+                path, location(path, "pub fn step("))
+
+
 def catalogues(inventories):
+    cmvs_catalogue(inventories["cmvs"])
     inv = inventories["krkr"]
     path = ROOT / "crates/crysirror-krkr/src/surfaces.rs"
     root = syntax(path)
@@ -867,6 +1073,14 @@ def render(inv):
         lines += ["", "Module routing uses `(modtype, module)` IDs. Command tables keep opcode/overload pairs and parent module conditions separate; a bare opcode is scoped by its linked dispatcher."]
     if inv.engine == "majiro":
         lines += ["", "Reference mnemonics: [MajiroTools Opcode.cs](" + MAJIRO["source"] + ") at the revision recorded in [SOURCE.json](../../crates/crysirror-majiro/SOURCE.json). Execution status comes from CrySirror's handlers, not that reference catalogue."]
+    if inv.engine == "cmvs":
+        corpus_rows = [row for row in groups["PC 20160201 x64 syscalls"]
+                       if "present in the supplied script corpus" in row["condition"]]
+        corpus_counts = Counter(row["status"] for row in corpus_rows)
+        lines += ["", "Open reports an unresolved native syscall contract and is excluded from the implemented entries.", "",
+                  "System selectors in the supplied corpus, by CrySirror route status.", "",
+                  "| Status | Selectors |", "| --- | ---: |"]
+        lines += [f"| {state} | {count} |" for state, count in sorted(corpus_counts.items())]
     for section, rows in sorted(groups.items()):
         def key(row):
             try:
@@ -901,6 +1115,8 @@ def render(inv):
                 arm = rule["arm"]
                 pattern = text(arm["pattern"])
                 state, gap = status(arm)
+                if inv.engine == "cmvs" and state == "Partial":
+                    state = "Open"
                 if r.get("declaration"):
                     state, gap = "Guard / allowlist", "Predicate only; execution is defined by its caller"
                 if re.fullmatch(r"\s*(?:return\s+)?(?:Ok\()?(?:None|false)\)?[;\s]*", text(arm["body"])):
@@ -965,6 +1181,7 @@ def generate():
               "| Empty handler | Empty source body without original no-op evidence. |",
               "| Decode only | An operand/name catalogue entry with no extracted execution route. |",
               "| Unreviewed | Known native catalogue entry whose execution route needs review. |",
+              "| Open | Unfinished native syscall contract. |",
               "| Continuation | Bytecode continuation record, not a separate VM operation. |",
               "| Parameterized | Native registration accepts a caller-supplied name; this is an open name pattern, not one fixed builtin. |",
               "| Guard / allowlist | A native dispatch predicate; execution belongs to the caller. |",

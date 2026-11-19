@@ -1,6 +1,679 @@
 {
   "modules": {
-    "10628618e5e69aa1a831400c4bc5d699": [
+    "20e96d794ea45690538ca489d402e4ef": [
+      {
+        "entry": "fs_main",
+        "gxm": {
+          "blocks": [
+            {
+              "members": [
+                {
+                  "components": 4,
+                  "kind": "f32",
+                  "name": "a",
+                  "offset": 0
+                },
+                {
+                  "components": 4,
+                  "kind": "f32",
+                  "name": "rect",
+                  "offset": 16
+                }
+              ],
+              "name": "params",
+              "slot": 0,
+              "storage": false
+            }
+          ],
+          "variants": [
+            {
+              "blocks": [
+                0
+              ],
+              "distortion": null,
+              "program": "shared_composite_fs_main_f",
+              "sampling": null,
+              "textures": [
+                {
+                  "dimensions": "cg_size_before",
+                  "slot": 0,
+                  "unit": 0
+                },
+                {
+                  "dimensions": "cg_size_after",
+                  "slot": 1,
+                  "unit": 1
+                },
+                {
+                  "dimensions": "cg_size_rule",
+                  "slot": 2,
+                  "unit": 2
+                }
+              ],
+              "wipe": null
+            }
+          ]
+        },
+        "images": [],
+        "stage": "fragment",
+        "storage": [],
+        "textures": [
+          [
+            0,
+            0,
+            0,
+            4294967295,
+            0
+          ],
+          [
+            1,
+            0,
+            1,
+            4294967295,
+            0
+          ],
+          [
+            2,
+            0,
+            3,
+            4294967295,
+            0
+          ]
+        ],
+        "uniforms": [
+          [
+            0,
+            2,
+            0
+          ]
+        ]
+      },
+      {
+        "entry": "vs_main",
+        "gxm": {
+          "blocks": [],
+          "variants": [
+            {
+              "blocks": [],
+              "distortion": null,
+              "program": "shared_composite_vs_main_v",
+              "sampling": null,
+              "textures": [],
+              "wipe": null
+            }
+          ]
+        },
+        "images": [],
+        "stage": "vertex",
+        "storage": [],
+        "textures": [],
+        "uniforms": []
+      }
+    ],
+    "525d3279ff4fdda0be9b33773a629b36": [
+      {
+        "entry": "fs_main",
+        "stage": "fragment",
+        "unavailable": true
+      },
+      {
+        "entry": "vs_main",
+        "stage": "vertex",
+        "unavailable": true
+      }
+    ],
+    "59d2fd535d09441314095e6efcfa3e81": [
+      {
+        "entry": "fs_main",
+        "gxm": {
+          "blocks": [
+            {
+              "members": [
+                {
+                  "components": 4,
+                  "kind": "f32",
+                  "name": "kind_progress",
+                  "offset": 0
+                },
+                {
+                  "components": 4,
+                  "kind": "f32",
+                  "name": "option0",
+                  "offset": 16
+                },
+                {
+                  "components": 4,
+                  "kind": "f32",
+                  "name": "option1",
+                  "offset": 32
+                },
+                {
+                  "components": 4,
+                  "kind": "f32",
+                  "name": "option2",
+                  "offset": 48
+                },
+                {
+                  "components": 4,
+                  "kind": "f32",
+                  "name": "option3",
+                  "offset": 64
+                }
+              ],
+              "name": "wipe",
+              "slot": 0,
+              "storage": false
+            }
+          ],
+          "variants": [
+            {
+              "blocks": [
+                0
+              ],
+              "distortion": null,
+              "program": "shared_ordered_dither_fs_main_f",
+              "sampling": null,
+              "textures": [
+                {
+                  "dimensions": "cg_size_current_tex",
+                  "slot": 0,
+                  "unit": 0
+                },
+                {
+                  "dimensions": "cg_size_old_tex",
+                  "slot": 1,
+                  "unit": 1
+                }
+              ],
+              "wipe": null
+            }
+          ]
+        },
+        "images": [],
+        "stage": "fragment",
+        "storage": [],
+        "textures": [
+          [
+            0,
+            0,
+            2,
+            4294967295,
+            0
+          ],
+          [
+            1,
+            0,
+            4,
+            4294967295,
+            0
+          ]
+        ],
+        "uniforms": [
+          [
+            0,
+            8,
+            0
+          ]
+        ]
+      },
+      {
+        "entry": "vs_main",
+        "gxm": {
+          "blocks": [],
+          "variants": [
+            {
+              "blocks": [],
+              "distortion": null,
+              "program": "shared_ordered_dither_vs_main_v",
+              "sampling": null,
+              "textures": [],
+              "wipe": null
+            }
+          ]
+        },
+        "images": [],
+        "stage": "vertex",
+        "storage": [],
+        "textures": [],
+        "uniforms": []
+      }
+    ],
+    "608de8af4a67e411e65e1c49a34e895a": [
+      {
+        "entry": "cs_main",
+        "gxm": {
+          "blocks": [
+            {
+              "members": [
+                {
+                  "components": 4,
+                  "kind": "u32",
+                  "name": "config",
+                  "offset": 0
+                },
+                {
+                  "components": 4,
+                  "kind": "f32",
+                  "name": "rect",
+                  "offset": 16
+                },
+                {
+                  "components": 4,
+                  "kind": "u32",
+                  "name": "extra",
+                  "offset": 32
+                }
+              ],
+              "name": "params",
+              "slot": 0,
+              "storage": false
+            }
+          ],
+          "lowering": "box_filter",
+          "variants": [
+            {
+              "blocks": [
+                0
+              ],
+              "distortion": null,
+              "program": "shared_composite_filter_rgba16float_cs_main_f",
+              "sampling": null,
+              "textures": [
+                {
+                  "dimensions": "cg_size_source",
+                  "slot": 0,
+                  "unit": 0
+                },
+                {
+                  "dimensions": "cg_size_horizontal_ba",
+                  "slot": 1,
+                  "unit": 1
+                }
+              ],
+              "wipe": null
+            }
+          ]
+        },
+        "images": [
+          [
+            0,
+            2,
+            0
+          ]
+        ],
+        "stage": "compute",
+        "storage": [],
+        "textures": [
+          [
+            0,
+            0,
+            0,
+            4294967295,
+            0
+          ],
+          [
+            1,
+            0,
+            3,
+            4294967295,
+            0
+          ]
+        ],
+        "uniforms": [
+          [
+            0,
+            1,
+            0
+          ]
+        ]
+      }
+    ],
+    "6e167518d07f4524aa1eb31a26114dc5": [
+      {
+        "entry": "fs_copy",
+        "gxm": {
+          "blocks": [],
+          "variants": [
+            {
+              "blocks": [],
+              "distortion": null,
+              "program": "shared_present_fs_copy_f",
+              "sampling": null,
+              "textures": [
+                {
+                  "dimensions": "cg_size_src",
+                  "slot": 0,
+                  "unit": 0
+                }
+              ],
+              "wipe": null
+            }
+          ]
+        },
+        "images": [],
+        "stage": "fragment",
+        "storage": [],
+        "textures": [
+          [
+            0,
+            0,
+            0,
+            4294967295,
+            0
+          ]
+        ],
+        "uniforms": []
+      },
+      {
+        "entry": "fs_decode",
+        "gxm": {
+          "blocks": [],
+          "variants": [
+            {
+              "blocks": [],
+              "distortion": null,
+              "program": "shared_present_fs_decode_f",
+              "sampling": null,
+              "textures": [
+                {
+                  "dimensions": "cg_size_src",
+                  "slot": 0,
+                  "unit": 0
+                }
+              ],
+              "wipe": null
+            }
+          ]
+        },
+        "images": [],
+        "stage": "fragment",
+        "storage": [],
+        "textures": [
+          [
+            0,
+            0,
+            0,
+            4294967295,
+            0
+          ]
+        ],
+        "uniforms": []
+      },
+      {
+        "entry": "vs_main",
+        "gxm": {
+          "blocks": [],
+          "variants": [
+            {
+              "blocks": [],
+              "distortion": null,
+              "program": "shared_present_vs_main_v",
+              "sampling": null,
+              "textures": [],
+              "wipe": null
+            }
+          ]
+        },
+        "images": [],
+        "stage": "vertex",
+        "storage": [],
+        "textures": [],
+        "uniforms": []
+      }
+    ],
+    "6f05988d6d4101def331d79bab09ab6f": [
+      {
+        "entry": "vs_main",
+        "gxm": {
+          "attributes": [
+            [
+              0,
+              "position"
+            ],
+            [
+              1,
+              "uv"
+            ]
+          ],
+          "blocks": [],
+          "variants": [
+            {
+              "blocks": [],
+              "distortion": null,
+              "program": "ray_lite_v",
+              "sampling": null,
+              "textures": [],
+              "wipe": null
+            }
+          ]
+        },
+        "images": [],
+        "stage": "vertex",
+        "storage": [],
+        "textures": [],
+        "uniforms": []
+      },
+      {
+        "entry": "fs_main",
+        "gxm": {
+          "blocks": [
+            {
+              "members": [
+                {
+                  "components": 4,
+                  "kind": "f32",
+                  "name": "ray_nodes",
+                  "offset": 0
+                },
+                {
+                  "components": 4,
+                  "kind": "f32",
+                  "name": "ray_triangles",
+                  "offset": 16
+                },
+                {
+                  "components": 4,
+                  "kind": "f32",
+                  "name": "ray_eye",
+                  "offset": 32
+                },
+                {
+                  "components": 4,
+                  "kind": "f32",
+                  "name": "ray_corner",
+                  "offset": 48
+                },
+                {
+                  "components": 4,
+                  "kind": "f32",
+                  "name": "ray_dx",
+                  "offset": 64
+                },
+                {
+                  "components": 4,
+                  "kind": "f32",
+                  "name": "ray_dy",
+                  "offset": 80
+                },
+                {
+                  "components": 4,
+                  "kind": "f32",
+                  "name": "ray_light",
+                  "offset": 96
+                },
+                {
+                  "components": 4,
+                  "kind": "f32",
+                  "name": "ray_sun",
+                  "offset": 112
+                },
+                {
+                  "components": 4,
+                  "kind": "f32",
+                  "name": "ray_ambient",
+                  "offset": 128
+                },
+                {
+                  "components": 4,
+                  "kind": "f32",
+                  "name": "ray_sky_low",
+                  "offset": 144
+                },
+                {
+                  "components": 4,
+                  "kind": "f32",
+                  "name": "ray_sky_high",
+                  "offset": 160
+                }
+              ],
+              "name": "",
+              "slot": 0,
+              "storage": false
+            }
+          ],
+          "variants": [
+            {
+              "blocks": [
+                0
+              ],
+              "distortion": null,
+              "program": "ray_lite_f",
+              "sampling": null,
+              "textures": [
+                {
+                  "dimensions": "",
+                  "slot": 0,
+                  "unit": 0
+                },
+                {
+                  "dimensions": "",
+                  "slot": 1,
+                  "unit": 1
+                }
+              ],
+              "wipe": null
+            }
+          ]
+        },
+        "images": [],
+        "stage": "fragment",
+        "storage": [],
+        "textures": [
+          [
+            0,
+            0,
+            1,
+            4294967295,
+            0
+          ],
+          [
+            1,
+            0,
+            2,
+            4294967295,
+            0
+          ]
+        ],
+        "uniforms": [
+          [
+            0,
+            0,
+            0
+          ]
+        ]
+      }
+    ],
+    "76431b1270755d4734ea9cd239152df0": [
+      {
+        "entry": "cs_main",
+        "gxm": {
+          "blocks": [
+            {
+              "members": [
+                {
+                  "components": 4,
+                  "kind": "u32",
+                  "name": "config",
+                  "offset": 0
+                },
+                {
+                  "components": 4,
+                  "kind": "f32",
+                  "name": "rect",
+                  "offset": 16
+                },
+                {
+                  "components": 4,
+                  "kind": "u32",
+                  "name": "extra",
+                  "offset": 32
+                }
+              ],
+              "name": "params",
+              "slot": 0,
+              "storage": false
+            }
+          ],
+          "lowering": "box_filter",
+          "variants": [
+            {
+              "blocks": [
+                0
+              ],
+              "distortion": null,
+              "program": "shared_composite_filter_rgba16float_cs_main_f",
+              "sampling": null,
+              "textures": [
+                {
+                  "dimensions": "cg_size_source",
+                  "slot": 0,
+                  "unit": 0
+                },
+                {
+                  "dimensions": "cg_size_horizontal_ba",
+                  "slot": 1,
+                  "unit": 1
+                }
+              ],
+              "wipe": null
+            }
+          ]
+        },
+        "images": [
+          [
+            0,
+            2,
+            0
+          ]
+        ],
+        "stage": "compute",
+        "storage": [],
+        "textures": [
+          [
+            0,
+            0,
+            0,
+            4294967295,
+            0
+          ],
+          [
+            1,
+            0,
+            3,
+            4294967295,
+            0
+          ]
+        ],
+        "uniforms": [
+          [
+            0,
+            1,
+            0
+          ]
+        ]
+      }
+    ],
+    "7b744e1dcf7e5aca82e87a51b08349fa": [
       {
         "entry": "fs_filtered",
         "gxm": {
@@ -74,6 +747,166 @@
             }
           ],
           "variants": [
+            {
+              "blocks": [
+                0
+              ],
+              "distortion": 0,
+              "program": "shared_quad_v2_fs_filtered_s0_d0_f",
+              "quad_mask": true,
+              "sampling": 0,
+              "textures": [
+                {
+                  "dimensions": "cg_size_image",
+                  "slot": 0,
+                  "unit": 0
+                },
+                {
+                  "dimensions": "cg_size_mask_image",
+                  "slot": 1,
+                  "unit": 1
+                },
+                {
+                  "dimensions": "cg_size_curve_image",
+                  "slot": 2,
+                  "unit": 2
+                },
+                {
+                  "dimensions": "cg_size_ordered_coverage",
+                  "slot": 3,
+                  "unit": 3
+                }
+              ],
+              "wipe": null
+            },
+            {
+              "blocks": [
+                0
+              ],
+              "distortion": 0,
+              "program": "shared_quad_v2_fs_filtered_s1_d0_f",
+              "quad_mask": true,
+              "sampling": 1,
+              "textures": [
+                {
+                  "dimensions": "cg_size_image",
+                  "slot": 0,
+                  "unit": 0
+                },
+                {
+                  "dimensions": "cg_size_mask_image",
+                  "slot": 1,
+                  "unit": 1
+                },
+                {
+                  "dimensions": "cg_size_curve_image",
+                  "slot": 2,
+                  "unit": 2
+                },
+                {
+                  "dimensions": "cg_size_ordered_coverage",
+                  "slot": 3,
+                  "unit": 3
+                }
+              ],
+              "wipe": null
+            },
+            {
+              "blocks": [
+                0
+              ],
+              "distortion": 0,
+              "program": "shared_quad_v2_fs_filtered_s2_d0_f",
+              "quad_mask": true,
+              "sampling": 2,
+              "textures": [
+                {
+                  "dimensions": "cg_size_image",
+                  "slot": 0,
+                  "unit": 0
+                },
+                {
+                  "dimensions": "cg_size_mask_image",
+                  "slot": 1,
+                  "unit": 1
+                },
+                {
+                  "dimensions": "cg_size_curve_image",
+                  "slot": 2,
+                  "unit": 2
+                },
+                {
+                  "dimensions": "cg_size_ordered_coverage",
+                  "slot": 3,
+                  "unit": 3
+                }
+              ],
+              "wipe": null
+            },
+            {
+              "blocks": [
+                0
+              ],
+              "distortion": 0,
+              "program": "shared_quad_v2_fs_filtered_s3_d0_f",
+              "quad_mask": true,
+              "sampling": 3,
+              "textures": [
+                {
+                  "dimensions": "cg_size_image",
+                  "slot": 0,
+                  "unit": 0
+                },
+                {
+                  "dimensions": "cg_size_mask_image",
+                  "slot": 1,
+                  "unit": 1
+                },
+                {
+                  "dimensions": "cg_size_curve_image",
+                  "slot": 2,
+                  "unit": 2
+                },
+                {
+                  "dimensions": "cg_size_ordered_coverage",
+                  "slot": 3,
+                  "unit": 3
+                }
+              ],
+              "wipe": null
+            },
+            {
+              "blocks": [
+                0
+              ],
+              "distortion": 0,
+              "program": "shared_quad_v2_fs_filtered_s4_d0_f",
+              "quad_mask": true,
+              "sampling": 4,
+              "textures": [
+                {
+                  "dimensions": "cg_size_image",
+                  "slot": 0,
+                  "unit": 0
+                },
+                {
+                  "dimensions": "cg_size_mask_image",
+                  "slot": 1,
+                  "unit": 1
+                },
+                {
+                  "dimensions": "cg_size_curve_image",
+                  "slot": 2,
+                  "unit": 2
+                },
+                {
+                  "dimensions": "cg_size_ordered_coverage",
+                  "slot": 3,
+                  "unit": 3
+                }
+              ],
+              "wipe": null
+            },
             {
               "blocks": [
                 0
@@ -1911,6 +2744,166 @@
             }
           ],
           "variants": [
+            {
+              "blocks": [
+                0
+              ],
+              "distortion": 0,
+              "program": "shared_quad_v2_fs_filtered_premultiply_s0_d0_f",
+              "quad_mask": true,
+              "sampling": 0,
+              "textures": [
+                {
+                  "dimensions": "cg_size_image",
+                  "slot": 0,
+                  "unit": 0
+                },
+                {
+                  "dimensions": "cg_size_mask_image",
+                  "slot": 1,
+                  "unit": 1
+                },
+                {
+                  "dimensions": "cg_size_curve_image",
+                  "slot": 2,
+                  "unit": 2
+                },
+                {
+                  "dimensions": "cg_size_ordered_coverage",
+                  "slot": 3,
+                  "unit": 3
+                }
+              ],
+              "wipe": null
+            },
+            {
+              "blocks": [
+                0
+              ],
+              "distortion": 0,
+              "program": "shared_quad_v2_fs_filtered_premultiply_s1_d0_f",
+              "quad_mask": true,
+              "sampling": 1,
+              "textures": [
+                {
+                  "dimensions": "cg_size_image",
+                  "slot": 0,
+                  "unit": 0
+                },
+                {
+                  "dimensions": "cg_size_mask_image",
+                  "slot": 1,
+                  "unit": 1
+                },
+                {
+                  "dimensions": "cg_size_curve_image",
+                  "slot": 2,
+                  "unit": 2
+                },
+                {
+                  "dimensions": "cg_size_ordered_coverage",
+                  "slot": 3,
+                  "unit": 3
+                }
+              ],
+              "wipe": null
+            },
+            {
+              "blocks": [
+                0
+              ],
+              "distortion": 0,
+              "program": "shared_quad_v2_fs_filtered_premultiply_s2_d0_f",
+              "quad_mask": true,
+              "sampling": 2,
+              "textures": [
+                {
+                  "dimensions": "cg_size_image",
+                  "slot": 0,
+                  "unit": 0
+                },
+                {
+                  "dimensions": "cg_size_mask_image",
+                  "slot": 1,
+                  "unit": 1
+                },
+                {
+                  "dimensions": "cg_size_curve_image",
+                  "slot": 2,
+                  "unit": 2
+                },
+                {
+                  "dimensions": "cg_size_ordered_coverage",
+                  "slot": 3,
+                  "unit": 3
+                }
+              ],
+              "wipe": null
+            },
+            {
+              "blocks": [
+                0
+              ],
+              "distortion": 0,
+              "program": "shared_quad_v2_fs_filtered_premultiply_s3_d0_f",
+              "quad_mask": true,
+              "sampling": 3,
+              "textures": [
+                {
+                  "dimensions": "cg_size_image",
+                  "slot": 0,
+                  "unit": 0
+                },
+                {
+                  "dimensions": "cg_size_mask_image",
+                  "slot": 1,
+                  "unit": 1
+                },
+                {
+                  "dimensions": "cg_size_curve_image",
+                  "slot": 2,
+                  "unit": 2
+                },
+                {
+                  "dimensions": "cg_size_ordered_coverage",
+                  "slot": 3,
+                  "unit": 3
+                }
+              ],
+              "wipe": null
+            },
+            {
+              "blocks": [
+                0
+              ],
+              "distortion": 0,
+              "program": "shared_quad_v2_fs_filtered_premultiply_s4_d0_f",
+              "quad_mask": true,
+              "sampling": 4,
+              "textures": [
+                {
+                  "dimensions": "cg_size_image",
+                  "slot": 0,
+                  "unit": 0
+                },
+                {
+                  "dimensions": "cg_size_mask_image",
+                  "slot": 1,
+                  "unit": 1
+                },
+                {
+                  "dimensions": "cg_size_curve_image",
+                  "slot": 2,
+                  "unit": 2
+                },
+                {
+                  "dimensions": "cg_size_ordered_coverage",
+                  "slot": 3,
+                  "unit": 3
+                }
+              ],
+              "wipe": null
+            },
             {
               "blocks": [
                 0
@@ -5905,679 +6898,6 @@
         "storage": [],
         "textures": [],
         "uniforms": []
-      }
-    ],
-    "20e96d794ea45690538ca489d402e4ef": [
-      {
-        "entry": "fs_main",
-        "gxm": {
-          "blocks": [
-            {
-              "members": [
-                {
-                  "components": 4,
-                  "kind": "f32",
-                  "name": "a",
-                  "offset": 0
-                },
-                {
-                  "components": 4,
-                  "kind": "f32",
-                  "name": "rect",
-                  "offset": 16
-                }
-              ],
-              "name": "params",
-              "slot": 0,
-              "storage": false
-            }
-          ],
-          "variants": [
-            {
-              "blocks": [
-                0
-              ],
-              "distortion": null,
-              "program": "shared_composite_fs_main_f",
-              "sampling": null,
-              "textures": [
-                {
-                  "dimensions": "cg_size_before",
-                  "slot": 0,
-                  "unit": 0
-                },
-                {
-                  "dimensions": "cg_size_after",
-                  "slot": 1,
-                  "unit": 1
-                },
-                {
-                  "dimensions": "cg_size_rule",
-                  "slot": 2,
-                  "unit": 2
-                }
-              ],
-              "wipe": null
-            }
-          ]
-        },
-        "images": [],
-        "stage": "fragment",
-        "storage": [],
-        "textures": [
-          [
-            0,
-            0,
-            0,
-            4294967295,
-            0
-          ],
-          [
-            1,
-            0,
-            1,
-            4294967295,
-            0
-          ],
-          [
-            2,
-            0,
-            3,
-            4294967295,
-            0
-          ]
-        ],
-        "uniforms": [
-          [
-            0,
-            2,
-            0
-          ]
-        ]
-      },
-      {
-        "entry": "vs_main",
-        "gxm": {
-          "blocks": [],
-          "variants": [
-            {
-              "blocks": [],
-              "distortion": null,
-              "program": "shared_composite_vs_main_v",
-              "sampling": null,
-              "textures": [],
-              "wipe": null
-            }
-          ]
-        },
-        "images": [],
-        "stage": "vertex",
-        "storage": [],
-        "textures": [],
-        "uniforms": []
-      }
-    ],
-    "525d3279ff4fdda0be9b33773a629b36": [
-      {
-        "entry": "fs_main",
-        "stage": "fragment",
-        "unavailable": true
-      },
-      {
-        "entry": "vs_main",
-        "stage": "vertex",
-        "unavailable": true
-      }
-    ],
-    "59d2fd535d09441314095e6efcfa3e81": [
-      {
-        "entry": "fs_main",
-        "gxm": {
-          "blocks": [
-            {
-              "members": [
-                {
-                  "components": 4,
-                  "kind": "f32",
-                  "name": "kind_progress",
-                  "offset": 0
-                },
-                {
-                  "components": 4,
-                  "kind": "f32",
-                  "name": "option0",
-                  "offset": 16
-                },
-                {
-                  "components": 4,
-                  "kind": "f32",
-                  "name": "option1",
-                  "offset": 32
-                },
-                {
-                  "components": 4,
-                  "kind": "f32",
-                  "name": "option2",
-                  "offset": 48
-                },
-                {
-                  "components": 4,
-                  "kind": "f32",
-                  "name": "option3",
-                  "offset": 64
-                }
-              ],
-              "name": "wipe",
-              "slot": 0,
-              "storage": false
-            }
-          ],
-          "variants": [
-            {
-              "blocks": [
-                0
-              ],
-              "distortion": null,
-              "program": "shared_ordered_dither_fs_main_f",
-              "sampling": null,
-              "textures": [
-                {
-                  "dimensions": "cg_size_current_tex",
-                  "slot": 0,
-                  "unit": 0
-                },
-                {
-                  "dimensions": "cg_size_old_tex",
-                  "slot": 1,
-                  "unit": 1
-                }
-              ],
-              "wipe": null
-            }
-          ]
-        },
-        "images": [],
-        "stage": "fragment",
-        "storage": [],
-        "textures": [
-          [
-            0,
-            0,
-            2,
-            4294967295,
-            0
-          ],
-          [
-            1,
-            0,
-            4,
-            4294967295,
-            0
-          ]
-        ],
-        "uniforms": [
-          [
-            0,
-            8,
-            0
-          ]
-        ]
-      },
-      {
-        "entry": "vs_main",
-        "gxm": {
-          "blocks": [],
-          "variants": [
-            {
-              "blocks": [],
-              "distortion": null,
-              "program": "shared_ordered_dither_vs_main_v",
-              "sampling": null,
-              "textures": [],
-              "wipe": null
-            }
-          ]
-        },
-        "images": [],
-        "stage": "vertex",
-        "storage": [],
-        "textures": [],
-        "uniforms": []
-      }
-    ],
-    "608de8af4a67e411e65e1c49a34e895a": [
-      {
-        "entry": "cs_main",
-        "gxm": {
-          "blocks": [
-            {
-              "members": [
-                {
-                  "components": 4,
-                  "kind": "u32",
-                  "name": "config",
-                  "offset": 0
-                },
-                {
-                  "components": 4,
-                  "kind": "f32",
-                  "name": "rect",
-                  "offset": 16
-                },
-                {
-                  "components": 4,
-                  "kind": "u32",
-                  "name": "extra",
-                  "offset": 32
-                }
-              ],
-              "name": "params",
-              "slot": 0,
-              "storage": false
-            }
-          ],
-          "lowering": "box_filter",
-          "variants": [
-            {
-              "blocks": [
-                0
-              ],
-              "distortion": null,
-              "program": "shared_composite_filter_rgba16float_cs_main_f",
-              "sampling": null,
-              "textures": [
-                {
-                  "dimensions": "cg_size_source",
-                  "slot": 0,
-                  "unit": 0
-                },
-                {
-                  "dimensions": "cg_size_horizontal_ba",
-                  "slot": 1,
-                  "unit": 1
-                }
-              ],
-              "wipe": null
-            }
-          ]
-        },
-        "images": [
-          [
-            0,
-            2,
-            0
-          ]
-        ],
-        "stage": "compute",
-        "storage": [],
-        "textures": [
-          [
-            0,
-            0,
-            0,
-            4294967295,
-            0
-          ],
-          [
-            1,
-            0,
-            3,
-            4294967295,
-            0
-          ]
-        ],
-        "uniforms": [
-          [
-            0,
-            1,
-            0
-          ]
-        ]
-      }
-    ],
-    "6e167518d07f4524aa1eb31a26114dc5": [
-      {
-        "entry": "fs_copy",
-        "gxm": {
-          "blocks": [],
-          "variants": [
-            {
-              "blocks": [],
-              "distortion": null,
-              "program": "shared_present_fs_copy_f",
-              "sampling": null,
-              "textures": [
-                {
-                  "dimensions": "cg_size_src",
-                  "slot": 0,
-                  "unit": 0
-                }
-              ],
-              "wipe": null
-            }
-          ]
-        },
-        "images": [],
-        "stage": "fragment",
-        "storage": [],
-        "textures": [
-          [
-            0,
-            0,
-            0,
-            4294967295,
-            0
-          ]
-        ],
-        "uniforms": []
-      },
-      {
-        "entry": "fs_decode",
-        "gxm": {
-          "blocks": [],
-          "variants": [
-            {
-              "blocks": [],
-              "distortion": null,
-              "program": "shared_present_fs_decode_f",
-              "sampling": null,
-              "textures": [
-                {
-                  "dimensions": "cg_size_src",
-                  "slot": 0,
-                  "unit": 0
-                }
-              ],
-              "wipe": null
-            }
-          ]
-        },
-        "images": [],
-        "stage": "fragment",
-        "storage": [],
-        "textures": [
-          [
-            0,
-            0,
-            0,
-            4294967295,
-            0
-          ]
-        ],
-        "uniforms": []
-      },
-      {
-        "entry": "vs_main",
-        "gxm": {
-          "blocks": [],
-          "variants": [
-            {
-              "blocks": [],
-              "distortion": null,
-              "program": "shared_present_vs_main_v",
-              "sampling": null,
-              "textures": [],
-              "wipe": null
-            }
-          ]
-        },
-        "images": [],
-        "stage": "vertex",
-        "storage": [],
-        "textures": [],
-        "uniforms": []
-      }
-    ],
-    "6f05988d6d4101def331d79bab09ab6f": [
-      {
-        "entry": "vs_main",
-        "gxm": {
-          "attributes": [
-            [
-              0,
-              "position"
-            ],
-            [
-              1,
-              "uv"
-            ]
-          ],
-          "blocks": [],
-          "variants": [
-            {
-              "blocks": [],
-              "distortion": null,
-              "program": "ray_lite_v",
-              "sampling": null,
-              "textures": [],
-              "wipe": null
-            }
-          ]
-        },
-        "images": [],
-        "stage": "vertex",
-        "storage": [],
-        "textures": [],
-        "uniforms": []
-      },
-      {
-        "entry": "fs_main",
-        "gxm": {
-          "blocks": [
-            {
-              "members": [
-                {
-                  "components": 4,
-                  "kind": "f32",
-                  "name": "ray_nodes",
-                  "offset": 0
-                },
-                {
-                  "components": 4,
-                  "kind": "f32",
-                  "name": "ray_triangles",
-                  "offset": 16
-                },
-                {
-                  "components": 4,
-                  "kind": "f32",
-                  "name": "ray_eye",
-                  "offset": 32
-                },
-                {
-                  "components": 4,
-                  "kind": "f32",
-                  "name": "ray_corner",
-                  "offset": 48
-                },
-                {
-                  "components": 4,
-                  "kind": "f32",
-                  "name": "ray_dx",
-                  "offset": 64
-                },
-                {
-                  "components": 4,
-                  "kind": "f32",
-                  "name": "ray_dy",
-                  "offset": 80
-                },
-                {
-                  "components": 4,
-                  "kind": "f32",
-                  "name": "ray_light",
-                  "offset": 96
-                },
-                {
-                  "components": 4,
-                  "kind": "f32",
-                  "name": "ray_sun",
-                  "offset": 112
-                },
-                {
-                  "components": 4,
-                  "kind": "f32",
-                  "name": "ray_ambient",
-                  "offset": 128
-                },
-                {
-                  "components": 4,
-                  "kind": "f32",
-                  "name": "ray_sky_low",
-                  "offset": 144
-                },
-                {
-                  "components": 4,
-                  "kind": "f32",
-                  "name": "ray_sky_high",
-                  "offset": 160
-                }
-              ],
-              "name": "",
-              "slot": 0,
-              "storage": false
-            }
-          ],
-          "variants": [
-            {
-              "blocks": [
-                0
-              ],
-              "distortion": null,
-              "program": "ray_lite_f",
-              "sampling": null,
-              "textures": [
-                {
-                  "dimensions": "",
-                  "slot": 0,
-                  "unit": 0
-                },
-                {
-                  "dimensions": "",
-                  "slot": 1,
-                  "unit": 1
-                }
-              ],
-              "wipe": null
-            }
-          ]
-        },
-        "images": [],
-        "stage": "fragment",
-        "storage": [],
-        "textures": [
-          [
-            0,
-            0,
-            1,
-            4294967295,
-            0
-          ],
-          [
-            1,
-            0,
-            2,
-            4294967295,
-            0
-          ]
-        ],
-        "uniforms": [
-          [
-            0,
-            0,
-            0
-          ]
-        ]
-      }
-    ],
-    "76431b1270755d4734ea9cd239152df0": [
-      {
-        "entry": "cs_main",
-        "gxm": {
-          "blocks": [
-            {
-              "members": [
-                {
-                  "components": 4,
-                  "kind": "u32",
-                  "name": "config",
-                  "offset": 0
-                },
-                {
-                  "components": 4,
-                  "kind": "f32",
-                  "name": "rect",
-                  "offset": 16
-                },
-                {
-                  "components": 4,
-                  "kind": "u32",
-                  "name": "extra",
-                  "offset": 32
-                }
-              ],
-              "name": "params",
-              "slot": 0,
-              "storage": false
-            }
-          ],
-          "lowering": "box_filter",
-          "variants": [
-            {
-              "blocks": [
-                0
-              ],
-              "distortion": null,
-              "program": "shared_composite_filter_rgba16float_cs_main_f",
-              "sampling": null,
-              "textures": [
-                {
-                  "dimensions": "cg_size_source",
-                  "slot": 0,
-                  "unit": 0
-                },
-                {
-                  "dimensions": "cg_size_horizontal_ba",
-                  "slot": 1,
-                  "unit": 1
-                }
-              ],
-              "wipe": null
-            }
-          ]
-        },
-        "images": [
-          [
-            0,
-            2,
-            0
-          ]
-        ],
-        "stage": "compute",
-        "storage": [],
-        "textures": [
-          [
-            0,
-            0,
-            0,
-            4294967295,
-            0
-          ],
-          [
-            1,
-            0,
-            3,
-            4294967295,
-            0
-          ]
-        ],
-        "uniforms": [
-          [
-            0,
-            1,
-            0
-          ]
-        ]
       }
     ],
     "7e83b20ed6d3d831777af0ea63aff384": [

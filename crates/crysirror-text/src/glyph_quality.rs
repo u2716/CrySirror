@@ -18,9 +18,12 @@ impl TextSystem {
     ) -> Result<GlyphCell> {
         quality.validate()?;
         self.glyph_metrics(font, request.glyph_id, request.size)?;
-        let GlyphCoverageQuality::Supersample { factor } = quality else {
-            let mut cell = self.rasterize_glyph_cell_scaled(font, request, horizontal_scale)?;
-            if let GlyphCoverageQuality::Binary { threshold } = quality {
+        let (factor, alpha) = match quality {
+            GlyphCoverageQuality::Grayscale => {
+                return self.rasterize_glyph_cell_scaled(font, request, horizontal_scale);
+            }
+            GlyphCoverageQuality::Binary { threshold } => {
+                let mut cell = self.rasterize_glyph_cell_scaled(font, request, horizontal_scale)?;
                 for sample in &mut cell.coverage {
                     *sample = if *sample * 255. >= f32::from(threshold) {
                         1.
@@ -28,8 +31,10 @@ impl TextSystem {
                         0.
                     };
                 }
+                return Ok(cell);
             }
-            return Ok(cell);
+            GlyphCoverageQuality::Supersample { factor } => (factor, None),
+            GlyphCoverageQuality::SupersampleAlpha4 { table } => (4, Some(table)),
         };
         ensure!(
             self.precomputed_face(font)?.is_none(),
@@ -77,11 +82,60 @@ impl TextSystem {
                     high.coverage[(y * high.width + x) as usize] * weight;
             }
         }
+        if let Some(table) = alpha {
+            for sample in &mut coverage {
+                let bin = ((*sample * 16.).round() as usize).min(16);
+                *sample = f32::from(table[bin]) / 255.;
+            }
+        }
         Ok(GlyphCell {
             origin: std::array::from_fn(|i| origin[i] + translation[i]),
             width,
             height,
             coverage,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "requires CRYSIRROR_TEST_FONT pointing to a local outline font"]
+    fn alpha_table_remaps_coverage_without_changing_cell_geometry() -> Result<()> {
+        let path = std::env::var_os("CRYSIRROR_TEST_FONT").expect("local outline font");
+        let mut fonts = TextSystem::default();
+        fonts.add_font("test", std::fs::read(path)?)?;
+        let glyph = GlyphRaster {
+            glyph_id: fonts.glyph_id("test", 'A')?,
+            size: 23.,
+            baseline: [-2.75, 31.5],
+        };
+        let raw = fonts.rasterize_glyph_cell_quality(
+            "test",
+            glyph,
+            1.,
+            GlyphCoverageQuality::Supersample { factor: 4 },
+        )?;
+        let table = std::array::from_fn(|bin| (bin * 15) as u8);
+        let mapped = fonts.rasterize_glyph_cell_quality(
+            "test",
+            glyph,
+            1.,
+            GlyphCoverageQuality::SupersampleAlpha4 { table },
+        )?;
+        assert_eq!(
+            (mapped.origin, mapped.width, mapped.height),
+            (raw.origin, raw.width, raw.height)
+        );
+        assert!(raw.coverage.iter().any(|alpha| 0. < *alpha && *alpha < 1.));
+        for (before, after) in raw.coverage.iter().zip(&mapped.coverage) {
+            assert_eq!(
+                *after,
+                f32::from(table[(*before * 16.).round() as usize]) / 255.
+            );
+        }
+        Ok(())
     }
 }

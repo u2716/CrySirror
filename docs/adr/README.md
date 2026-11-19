@@ -118,6 +118,7 @@ tracks remaining engine capabilities.
 | [0102](0102-engine-adoption-and-runtime-integration.md) | Engine adoption and runtime integration | accepted two-mode policy; documentation, safe analysis, managed outputs and platform boundaries |
 | [0103](0103-game-space-ui.md) | Game-space UI, controls and presentation boundaries | accepted design; shared layout, skins, interaction and lifecycle separate from OS windows |
 | [0104](0104-n2system-slot-checkpoint.md) | N2System non-zero slots use a CrySirror checkpoint version | accepted; stage 1 capture/write, restore pending |
+| [0105](0105-self-admitted-technical-debt.md) | Self-admitted technical debt tracks unfinished work through code moves and verified completion | accepted |
 
 ## Requirement backlog
 

@@ -435,6 +435,7 @@ impl Runtime {
             for work in self.host.canvas_images.targets.drain(..) {
                 work.complete(Err("target image presenter removed".into()));
             }
+            self.host.canvas_images.frames.clear();
         }
     }
     /// Presenter work only; pruning cancelled jobs also releases their frozen

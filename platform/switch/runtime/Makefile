@@ -112,7 +112,12 @@ ICON_BACKGROUND := \#2d2d2d
 CAPTURE_PROJECTS := examples/desktop/project.json examples/desktop/arena.json examples/desktop/systems.json \
 	examples/desktop/glyph-effects.json examples/materials/project.json examples/shader-effects/project.json \
 	examples/engine/project.json
-$(ROMFS)/wgsl/index.json: | $(ROMFS)/shaders
+CAPTURE_SOURCES := $(wildcard $(WORKSPACE)/crates/crysirror-shaders/wgsl/*.wgsl) \
+	$(wildcard $(WORKSPACE)/crates/crysirror-wgpu/src/*.rs) \
+	$(wildcard $(WORKSPACE)/crates/crysirror-shader-tools/src/*.rs) \
+	$(WORKSPACE)/crates/crysirror-wgpu-deko3d/examples/capture.rs \
+	$(addprefix $(WORKSPACE)/,$(CAPTURE_PROJECTS))
+$(ROMFS)/wgsl/index.json: Makefile $(CAPTURE_SOURCES) | $(ROMFS)/shaders
 	rm -rf $(BUILD)/capture $(ROMFS)/wgsl
 	+cd $(WORKSPACE) && for p in $(CAPTURE_PROJECTS); do \
 	  cargo run --release -q -p crysirror-wgpu-deko3d --example capture -- platform/switch/runtime/$(BUILD)/capture $$p || exit 1; done

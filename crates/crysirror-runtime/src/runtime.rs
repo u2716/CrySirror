@@ -174,6 +174,46 @@ pub struct SharedHost {
     pub(crate) vfx_sequences: BTreeMap<(u32, u32), serde_json::Value>,
 }
 impl SharedHost {
+    fn start_reader_media(
+        &mut self,
+        client: ClientId,
+        id: u32,
+        source: Arc<dyn crysirror_core::service::AssetReader>,
+        options: crysirror_core::service::MediaSourceOptions,
+        pcm16_gain: Option<crysirror_core::service::AudioPcm16Gain>,
+    ) -> crysirror_core::Result<VfsPath> {
+        use crysirror_core::path::Mount;
+        if !self.clients.contains(&client) {
+            return Err(Error::NotFound);
+        }
+        if id >= 1024 {
+            return Err(Error::Limit("media identity"));
+        }
+        self.media
+            .play_reader_with_fader(
+                client,
+                id,
+                source,
+                crate::media::MediaOptions {
+                    audio: options.audio,
+                    gain: options.gain,
+                    looping: options.looping,
+                    audio_channel: 0x7000_0000 + id,
+                    ..Default::default()
+                },
+                pcm16_gain,
+            )
+            .map_err(|error| Error::Io(error.to_string()))?;
+        for audio in self.media.take_audio() {
+            self.channel_audio
+                .submit(audio.client.0, audio.request)
+                .map_err(|error| Error::Io(error.to_string()))?;
+        }
+        let slot = 0x7100_0000 + id;
+        self.surfaces.push((client, slot, Some((1, 1, vec![0, 0, 0, 255]))));
+        VfsPath::new(Mount::Asset, &format!("__surface/{slot}"))
+    }
+
     /// Owner-only media publication. Aliases grant no authority beyond the
     /// client's existing asset capability and are never restored from VM saves.
     pub fn publish_mounted_media(&mut self, client: ClientId, volumes: Vec<crysirror_core::service::MountedMedia>) -> crysirror_core::Result<()> {
@@ -843,6 +883,21 @@ impl HostServices for SharedHost {
             .begin_encoded_resource_preparation(client.0, name, encoded, measure_frames)
             .map_err(|error| Error::Io(format!("encoded audio resource preparation: {error:#}")))
     }
+    fn begin_resident_audio(
+        &mut self,
+        client: ClientId,
+        reader: Arc<dyn crysirror_core::service::AssetReader>,
+        name: &str,
+        unknown_pcm16_bytes: Option<u64>,
+    ) -> crysirror_core::Result<crysirror_core::service::ResidentAudioJob> {
+        if !self.clients.contains(&client) {
+            return Err(Error::NotFound);
+        }
+        let extension = name.rsplit_once('.').map(|(_, extension)| extension.to_owned());
+        self.channel_audio
+            .prepare_resident_audio(client, reader, extension, unknown_pcm16_bytes, &self.host_tasks)
+            .map_err(|error| Error::Io(format!("resident audio preparation: {error:#}")))
+    }
     fn begin_transformed_audio_resource(
         &mut self,
         client: ClientId,
@@ -980,6 +1035,44 @@ impl HostServices for SharedHost {
             .playback_info(client.0, channel)
             .map_err(|e| Error::Io(format!("shared audio transport: {e:#}")))
     }
+    fn set_audio_channel_retirement(
+        &mut self,
+        client: ClientId,
+        channel: u32,
+        retire: bool,
+    ) -> crysirror_core::Result<bool> {
+        if !self.clients.contains(&client) {
+            return Err(Error::NotFound);
+        }
+        self.channel_audio
+            .set_channel_retirement(client.0, channel, retire)
+            .map_err(|error| Error::Io(format!("shared channel retirement: {error:#}")))
+    }
+    fn resume_retained_audio_channel(
+        &mut self,
+        client: ClientId,
+        channel: u32,
+        looping: bool,
+    ) -> crysirror_core::Result<bool> {
+        if !self.clients.contains(&client) {
+            return Err(Error::NotFound);
+        }
+        self.channel_audio
+            .resume_retained_channel(client.0, channel, looping)
+            .map_err(|error| Error::Io(format!("resume retained audio channel: {error:#}")))
+    }
+    fn audio_source_level(
+        &self,
+        client: ClientId,
+        channel: u32,
+    ) -> crysirror_core::Result<Option<[u32; 2]>> {
+        if !self.clients.contains(&client) {
+            return Err(Error::NotFound);
+        }
+        self.channel_audio
+            .source_level(client.0, channel)
+            .map_err(|e| Error::Io(format!("shared audio source meter: {e:#}")))
+    }
     fn begin_audio_replacement(
         &mut self,
         client: ClientId,
@@ -1021,6 +1114,19 @@ impl HostServices for SharedHost {
         self.channel_audio
             .begin_channel_seek(client.0, channel, frame)
             .map_err(|e| Error::Io(format!("shared audio seek: {e:#}")))
+    }
+    fn begin_retained_audio_rewind(
+        &mut self,
+        client: ClientId,
+        channel: u32,
+        looping: bool,
+    ) -> crysirror_core::Result<u64> {
+        if !self.clients.contains(&client) {
+            return Err(Error::NotFound);
+        }
+        self.channel_audio
+            .begin_retained_channel_rewind(client.0, channel, looping)
+            .map_err(|error| Error::Io(format!("retained audio rewind: {error:#}")))
     }
     fn audio_seek_preparation(
         &mut self,
@@ -1260,17 +1366,29 @@ impl HostServices for SharedHost {
         VfsPath::new(Mount::Asset, &format!("__surface/{slot}"))
     }
     fn media_reader(&mut self,client:ClientId,id:u32,source:Arc<dyn crysirror_core::service::AssetReader>,options:crysirror_core::service::MediaSourceOptions)->crysirror_core::Result<VfsPath>{
-        use crysirror_core::path::Mount;
-        if !self.clients.contains(&client){return Err(Error::NotFound)}
-        if id>=1024{return Err(Error::Limit("media identity"))}
-        self.media.play_reader(client,id,source,crate::media::MediaOptions{packed_alpha:false,looping:options.looping,audio:options.audio,gain:options.gain,audio_channel:0x7000_0000+id,clock:crate::media::MediaClock::Engine}).map_err(|e|Error::Io(e.to_string()))?;
-        for audio in self.media.take_audio(){self.channel_audio.submit(audio.client.0,audio.request).map_err(|e|Error::Io(e.to_string()))?;}
-        let slot=0x7100_0000+id;
-        self.surfaces.push((client,slot,Some((1,1,vec![0,0,0,255]))));
-        VfsPath::new(Mount::Asset,&format!("__surface/{slot}"))
+        self.start_reader_media(client, id, source, options, None)
+    }
+    fn media_reader_with_pcm16_gain(
+        &mut self,
+        client: ClientId,
+        id: u32,
+        source: Arc<dyn crysirror_core::service::AssetReader>,
+        options: crysirror_core::service::MediaSourceOptions,
+        gain: crysirror_core::service::AudioPcm16Gain,
+    ) -> crysirror_core::Result<VfsPath> {
+        self.start_reader_media(client, id, source, options, Some(gain))
     }
     fn display_info(&self) -> Option<crysirror_core::service::DisplayInfo> {
         self.display
+    }
+    fn request_window_icon(
+        &mut self, client: ClientId, size: [u32; 2], rgba: Vec<u8>,
+    ) -> crysirror_core::Result<()> {
+        if !self.clients.contains(&client) {
+            return Err(Error::NotFound);
+        }
+        self.engine.ui.window_requests.set_icon(client.0, size, rgba)
+            .map_err(|error| Error::Io(error.to_string()))
     }
     fn window_focused(&self, client: ClientId) -> crysirror_core::Result<Option<bool>> {
         if !self.clients.contains(&client) {
@@ -1438,6 +1556,20 @@ impl HostServices for SharedHost {
             .begin_preparation(client.0, request, storage)
             .map_err(|e| Error::Io(format!("shared audio preparation: {e:#}")))
     }
+    fn begin_metered_audio(
+        &mut self,
+        client: ClientId,
+        request: crysirror_core::service::AudioRequest,
+        meter: crysirror_core::service::AudioSourceMeterSpec,
+    ) -> crysirror_core::Result<u64> {
+        if !self.clients.contains(&client) {
+            return Err(Error::NotFound);
+        }
+        let storage = self.fs.storage(client)?;
+        self.channel_audio
+            .begin_preparation_with_meter(client.0, request, storage, Some(meter))
+            .map_err(|e| Error::Io(format!("shared audio preparation: {e:#}")))
+    }
     fn audio_preparation(
         &mut self,
         client: ClientId,
@@ -1469,6 +1601,86 @@ impl HostServices for SharedHost {
         self.channel_audio
             .submit(client.0, request)
             .map_err(|e| Error::Io(format!("shared audio: {e:#}")))
+    }
+    fn set_playback_gains(
+        &mut self,
+        client: ClientId,
+        audio: &[(u32, f32)],
+        media: &[(u32, f32)],
+    ) -> crysirror_core::Result<()> {
+        if !self.clients.contains(&client) {
+            return Err(Error::NotFound);
+        }
+        if audio.len().saturating_add(media.len()) > 256 {
+            return Err(Error::Limit("playback gain batch"));
+        }
+        if media
+            .iter()
+            .enumerate()
+            .any(|(i, (id, _))| media[..i].iter().any(|(prior, _)| prior == id))
+        {
+            return Err(Error::Invalid("duplicate media gain target"));
+        }
+        let mut gains = audio.to_vec();
+        for &(id, gain) in media {
+            let update = self
+                .media
+                .gain_update(client, id, gain)
+                .map_err(|e| Error::Io(e.to_string()))?;
+            if let Some(update) = update {
+                let crysirror_core::service::AudioRequest::SetGain { channel, gain, .. } = update.request else {
+                    unreachable!("media gain update only produces a gain control");
+                };
+                gains.push((channel, gain));
+            }
+        }
+        self.channel_audio
+            .set_gains(client.0, &gains)
+            .map_err(|e| Error::Io(format!("shared audio gain batch: {e:#}")))?;
+        for &(id, gain) in media {
+            self.media.commit_gain(client, id, gain);
+        }
+        Ok(())
+    }
+    fn update_audio_pcm16_gain(
+        &mut self,
+        client: ClientId,
+        channel: u32,
+        update: crysirror_core::service::AudioPcm16GainUpdate,
+    ) -> crysirror_core::Result<()> {
+        if !self.clients.contains(&client) {
+            return Err(Error::NotFound);
+        }
+        self.channel_audio
+            .update_pcm16_gain(client.0, channel, update)
+            .map_err(|e| Error::Io(format!("shared PCM16 gain: {e:#}")))
+    }
+    fn set_audio_pcm16_device_gain(&mut self, client: ClientId, gain: u16) -> crysirror_core::Result<()> {
+        if !self.clients.contains(&client) {
+            return Err(Error::NotFound);
+        }
+        self.channel_audio
+            .mixer
+            .set_pcm16_device_gain(client.0, gain)
+            .map_err(|error| Error::Io(format!("shared PCM16 device gain: {error:#}")))
+    }
+    fn replace_audio_channels(
+        &mut self,
+        client: ClientId,
+        channels: &[u32],
+        prepared: Option<&Arc<dyn crysirror_core::service::AudioReplacementResource>>,
+    ) -> crysirror_core::Result<()> {
+        if !self.clients.contains(&client) {
+            return Err(Error::NotFound);
+        }
+        let prepared = prepared
+            .map(|resource| crate::audio_replacement::take(&self.audio_replacement_owner, client, resource))
+            .transpose()?;
+        self.channel_audio
+            .stage_channel_replacement(client.0, channels, prepared)
+            .map_err(|e| Error::Io(format!("scoped audio replacement: {e:#}")))?
+            .install();
+        Ok(())
     }
     fn submit_pcm(
         &mut self,

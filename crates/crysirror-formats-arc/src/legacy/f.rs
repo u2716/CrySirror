@@ -167,6 +167,11 @@ pub(crate) static FORMATS: &[Legacy] = &[
         open: tables::mgr,
     },
     Legacy {
+        id: "purple-software/cpz1",
+        probe: Some(|s| magic(s, 0, b"CPZ1")),
+        open: crypt::cpz1,
+    },
+    Legacy {
         id: "purple-software/cpz5",
         probe: Some(|s| magic(s, 0, b"CPZ5")),
         open: |s, c| crypt::cpz(s, c, 5),
@@ -175,6 +180,11 @@ pub(crate) static FORMATS: &[Legacy] = &[
         id: "purple-software/cpz6",
         probe: Some(|s| magic(s, 0, b"CPZ6")),
         open: |s, c| crypt::cpz(s, c, 6),
+    },
+    Legacy {
+        id: "purple-software/cpz7",
+        probe: Some(|s| magic(s, 0, b"CPZ7")),
+        open: |s, c| crypt::cpz(s, c, 7),
     },
     Legacy {
         id: "qlie/abmp7",

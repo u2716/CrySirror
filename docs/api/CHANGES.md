@@ -1,5 +1,51 @@
 # API change log
 
+## `224f952a71accc52` (2026-11-19) — outline glyph coverage tables
+
+- `PositionedGlyphStyle.raster` accepts `supersample_alpha4` with a 17-entry byte table. The renderer maps rounded 4×4 coverage through the table before colouring the glyph. Existing glyph records retain their defaults. Rust callers that exhaustively match `GlyphCoverageQuality` must account for the new variant.
+- The generated reference now describes `PositionedGlyphStyle` and `GlyphCoverageQuality`. The fingerprint changes from `737bf04f8bfeec00` to `224f952a71accc52`.
+
+## `737bf04f8bfeec00` (2026-11-19) — retained audio transport
+
+- Rust `HostServices` can schedule scoped channel retirement and resume a retained voice at its existing decoder cursor. A retiring voice remains allocated until the next nonempty mix publishes its removal.
+- A retained rewind holds the voice and its fade until the scoped seek receipt publishes playback at frame zero with the requested loop mode. The script bindings and reflected fingerprint remain the same.
+
+## `737bf04f8bfeec00` (2026-11-19) — reusable resident audio from a reader
+
+- Rust-only `HostServices::begin_resident_audio` opens and decodes a scoped reader on a worker. The `ResidentAudioState` receipt publishes immutable PCM. The slot and playback instances share the reservation through the last PCM clone.
+- The generated reference adds `ResidentAudioState`. The fingerprint changes from `a5986f521965c214` to `737bf04f8bfeec00`. Script bindings and TypeScript declarations retain their signatures.
+
+## `a5986f521965c214` (2026-11-19) — PCM16 device attenuation and embedded audio
+
+- Rust-only `HostServices::set_audio_pcm16_device_gain` sets a retained client Q8 attenuation between the secondary and stereo stages. It applies to live and future opted-in channels.
+- Rust-only `HostServices::media_reader_with_pcm16_gain` attaches the fader to a reader-backed media track and retains it across PCM channel recreation. Existing reader methods, media options and serialization keep their existing signatures. The reference fingerprint is unchanged.
+
+## `a5986f521965c214` (2026-11-19) — quantized PCM16 voice gain
+
+- Rust-only `AudioParameters::pcm16_gain` opts a channel into fixed-point attenuation at publication. The default is `None`. Complete Rust struct literals now supply the field or use `..Default::default()`. Play request variants and existing project data are unchanged.
+- `HostServices::update_audio_pcm16_gain` updates the raw secondary word or stereo coefficients on a client channel. It preserves the gain and transport clocks and is a no-op on an empty channel.
+- The generated reference now includes the new Rust field and the two PCM16 gain types. The fingerprint changes from `8693c021aef05c1f` to `a5986f521965c214`. Script bindings and TypeScript declarations are unchanged.
+
+## `8693c021aef05c1f` (2026-11-18) — buffered stereo source levels
+
+- Rust-only `HostServices::begin_metered_audio` and `audio_source_level` make a fixed-window PCM16 meter available on a client channel. An opt-in `AudioSourceMeterSpec` defines its time base, window and bounded history. Admission, preparation and lease publication follow the existing channel playback boundary. Existing playback requests and reflective API signatures are unchanged.
+
+## `8693c021aef05c1f` (2026-11-18) — scoped audio replacement
+
+- Rust-only `HostServices::replace_audio_channels` installs detached playback recipes into a bounded set of client-owned channels. It clears selected channels without a recipe and preserves all channels outside that set. The original-save full-client replacement has the same contract as before. The reflected API fingerprint is unchanged.
+
+## `8693c021aef05c1f` (2026-11-18) — scoped playback gain updates
+
+- Rust-only `HostServices::set_playback_gains` validates and commits live audio and retained media gains in one client scope. It preserves transport fades, clocks and source positions. The reflected API fingerprint is unchanged.
+- CMVS configuration accepts `movie_volume` as the raw 0–256 category setting. `movie_gain` remains accepted for existing projects. The raw setting takes precedence when both are present.
+
+## `8693c021aef05c1f` (2026-11-18) — native window icons and CMVS LZSS layouts
+
+- Rust-only `HostServices::request_window_icon` takes ownership of straight RGBA pixels for an icon up to 256×256 through the presenting host.
+- `LzssParams` accepts exact-length 11/5 and 10/6 bytewise layouts for CMVS scripts and system saves. The existing 12/4 bytewise layout retains its padded-output behavior.
+- Rust-only `crysirror_video::Container::Cmv` identifies indexed CMV6, CMV8 and CMV9 streams. Exhaustive Rust matches add the variant. The existing Media API opens these streams, and metadata probes identify the CMV container and embedded audio.
+- Rust-only `crysirror_formats_arc::images_a::pb3_bit_depth` reads the validated source depth from the shared PB3 header parser.
+
 ## `8693c021aef05c1f` (2026-11-17): canvas camera channels, packed-alpha media and stereo DSP
 
 - `CanvasLens.model_rotation_offset` adds default-zero Euler channels in radians before sprite model rotation. Existing JSON preserves its geometry; Rust struct literals must supply the new field. This permits native camera-angle subtraction without replacing the sprite's animation or rotating a completed view matrix.

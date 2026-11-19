@@ -20,6 +20,7 @@ pub mod sniff;
 pub mod pe;
 pub mod checksum;
 pub mod pe_menu;
+pub mod private_profile;
 pub mod xml;
 pub mod sli;
 pub mod text_stream;

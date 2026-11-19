@@ -1,0 +1,25 @@
+[package]
+name = "crysirror-cmvs"
+description = "Purple Software CMVS native script format and bytecode"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[features]
+runtime = ["dep:crysirror-formats-arc", "dep:crysirror-image", "dep:crysirror-runtime", "dep:crysirror-scene", "dep:crysirror-tasks", "dep:glam", "dep:serde"]
+
+[dependencies]
+anyhow.workspace = true
+crysirror-core.workspace = true
+crysirror-resource.workspace = true
+crysirror-formats-arc = { workspace = true, optional = true }
+crysirror-image = { workspace = true, optional = true }
+crysirror-runtime = { workspace = true, optional = true }
+crysirror-scene = { workspace = true, optional = true }
+crysirror-tasks = { workspace = true, optional = true }
+encoding_rs = "0.8"
+glam = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+serde_json.workspace = true

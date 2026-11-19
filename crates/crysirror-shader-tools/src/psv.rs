@@ -11,6 +11,7 @@ pub fn is_shared_2d(module: &str) -> bool {
     matches!(
         module,
         "quad"
+            | "quad_v2"
             | "present"
             | "puppet"
             | "wipe"
@@ -73,7 +74,7 @@ fn box_fix(q:ptr<function,vec4<f32>>,r:ptr<function,vec4<f32>>,a:f32) {
 "#;
 fn lower_wgsl(module: &str, source: &str) -> Result<String> {
     let mut text = source.to_owned();
-    if module == "quad" {
+    if matches!(module, "quad" | "quad_v2") {
         let declaration = "var<storage, read> filters: array<LayerFilter>;";
         ensure!(
             text.contains(declaration) && text.contains("filters[in.filter_index]"),
@@ -825,6 +826,17 @@ pub fn export(
     entry: &str,
     stage: naga::ShaderStage,
 ) -> Result<Vec<Value>> {
+    if module_name == "quad_v2" {
+        // GXM mask draws use the undistorted, fixed-function blend pipelines.
+        // The original catalogue covers all draws without the new mask flags.
+        return if matches!(entry, "fs_filtered" | "fs_filtered_premultiply") {
+            (0..5).map(|sampling| {
+                export_one(out, module_name, source, entry, stage, Some(0), Some(sampling), None)
+            }).collect()
+        } else {
+            Ok(Vec::new())
+        };
+    }
     let filtered = module_name == "quad"
         && matches!(
             entry,
@@ -1152,7 +1164,8 @@ pub fn import(args: Vec<String>) -> Result<()> {
         entry["gxp_blake3"] = json!(blake3::hash(&bytes).to_hex().to_string());
         entry["cg_blake3"] = json!(blake3::hash(&source).to_hex().to_string());
         entry["compiler_options"] = json!(options);
-        if let (Some(d), Some(s)) = (
+        if let (true, Some(d), Some(s)) = (
+            entry["module"] == "quad",
             entry["distortion_variant"].as_u64(),
             entry["sampling_variant"].as_u64(),
         ) {

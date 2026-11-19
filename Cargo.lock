@@ -2112,6 +2112,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "crysirror-cmvs"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "crysirror-core",
+ "crysirror-formats-arc",
+ "crysirror-image",
+ "crysirror-resource",
+ "crysirror-runtime",
+ "crysirror-scene",
+ "crysirror-tasks",
+ "encoding_rs",
+ "glam 0.27.0",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "crysirror-codec-amv"
 version = "0.2.0"
 dependencies = [
@@ -2420,6 +2438,7 @@ dependencies = [
  "crysirror-bgi-integrated",
  "crysirror-catsystem2",
  "crysirror-circus",
+ "crysirror-cmvs",
  "crysirror-core",
  "crysirror-engine",
  "crysirror-formats-arc",

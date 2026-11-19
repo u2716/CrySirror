@@ -71,6 +71,7 @@ members = [
     "crates/crysirror-softpal-kira",
     "crates/crysirror-circus",
     "crates/crysirror-catsystem2",
+    "crates/crysirror-cmvs",
     "crates/crysirror-system4",
     "crates/crysirror-system-nnn",
     "crates/crysirror-majiro",
@@ -132,6 +133,7 @@ crysirror-scene = { path = "crates/crysirror-scene" }
 crysirror-console = { path = "crates/crysirror-console" }
 crysirror-capfs = { path = "crates/crysirror-capfs" }
 crysirror-launch = { path = "crates/crysirror-launch" }
+crysirror-cmvs = { path = "crates/crysirror-cmvs" }
 crysirror-wgpu-deko3d = { path = "crates/crysirror-wgpu-deko3d" }
 crysirror-wgpu-gxm = { path = "crates/crysirror-wgpu-gxm" }
 crysirror-vita-io = { path = "crates/crysirror-vita-io" }

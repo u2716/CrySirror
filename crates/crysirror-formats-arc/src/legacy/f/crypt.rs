@@ -386,6 +386,9 @@ pub(super) fn npk2(s: &dyn AssetReader, cx: &DecodeContext) -> Result<Vec<Row>> 
 #[derive(Clone)]
 struct CpzPlugin {
     secret: crysirror_resource::KeyMaterial,
+    cmvs_mode1: bool,
+    /// Script-registered words of the native `CPackCode1024V7B` reader.
+    cpz7_words: Option<[u32; 4]>,
     hash_permutation: [u32; 4],
     hash_iv: [u32; 4],
     hash_xor: [u32; 4],
@@ -402,8 +405,56 @@ struct CpzPlugin {
 impl CpzPlugin {
     fn read(cx: &DecodeContext, id: &str) -> Result<Self> {
         let p = profile(cx, id)?;
+        let secret = key_bytes(cx, id)?;
+        secret.with_bytes(|s| {
+            ensure!(s.len() >= 96, "CPZ secret requires 96 bytes");
+            Ok(())
+        })?;
+        if p.get("layout").and_then(|layout| layout.as_str()) == Some("cmvs_v7b") {
+            ensure!(id == "purple-software/cpz7", "CMVS V7B requires CPZ7");
+            return Ok(Self {
+                secret,
+                cmvs_mode1: true,
+                cpz7_words: Some(array(&p, "words")?),
+                hash_permutation: [2, 1, 0, 3],
+                hash_iv: [0xc74a2b02, 0xe7c8ab8f, 0x38bebc4e, 0x7531a4c3],
+                hash_xor: [0x53a76d2e, 0, 0, 0xf5c6a9a3],
+                hash_add: [0, 0x5bb17fda, 0x6853e14d, 0],
+                mul: 0x1a74f195,
+                add1: 0x784c5062,
+                add2: 0x01010101,
+                tail_sub: 0x7d,
+                addends: [0, 0x11003322, 0, 0x34216785],
+                init_key: 0x2a65cb4f,
+                start_pos: 10,
+                tail_xor: 0xae,
+            });
+        }
+        if p.get("layout").and_then(|layout| layout.as_str()) == Some("cmvs_mode1") {
+            ensure!(id == "purple-software/cpz6", "CMVS mode 1 requires CPZ6");
+            return Ok(Self {
+                secret,
+                cmvs_mode1: true,
+                cpz7_words: None,
+                hash_permutation: [2, 1, 0, 3],
+                hash_iv: [0xc74a2b01, 0xe7c8ab8f, 0xd8bedc4e, 0x7302a4c5],
+                hash_xor: [0x45a76c2f, 0, 0x79abe8ad, 0],
+                hash_add: [0, 0u32.wrapping_sub(0x5ba17fcb), 0, 0u32.wrapping_sub(0x1c08561b)],
+                mul: 0x1a74f195,
+                add1: 0x784c5062,
+                add2: 0x01010101,
+                tail_sub: 0x7d,
+                addends: [0, 0x11003322, 0, 0x34216785],
+                init_key: 0x2a65cb4f,
+                start_pos: 10,
+                tail_xor: 0xae,
+            });
+        }
+        ensure!(p.get("layout").is_none(), "unsupported CPZ layout");
         let out = Self {
-            secret: key_bytes(cx, id)?,
+            secret,
+            cmvs_mode1: false,
+            cpz7_words: None,
             hash_permutation: array(&p, "hash_permutation")?,
             hash_iv: array(&p, "hash_iv")?,
             hash_xor: array(&p, "hash_xor")?,
@@ -421,10 +472,6 @@ impl CpzPlugin {
             out.hash_permutation.iter().all(|x| *x < 4),
             "CPZ hash permutation"
         );
-        out.secret.with_bytes(|s| {
-            ensure!(s.len() >= 96, "CPZ secret requires 96 bytes");
-            Ok(())
-        })?;
         Ok(out)
     }
 }
@@ -458,12 +505,16 @@ fn cpz_1a(b: &mut [u8], p: &CpzPlugin, key: u32) {
         w.copy_from_slice(&n.to_le_bytes());
         pos = (pos + 1) % 24;
     }
-    for (i, w) in c.into_remainder().iter_mut().enumerate() {
-        *w = (*w ^ (table[pos] >> (4 * (3 - i))) as u8).wrapping_sub(p.tail_sub);
+    let tail = c.into_remainder();
+    let count = tail.len();
+    for (i, w) in tail.iter_mut().enumerate() {
+        let shift = if p.cmvs_mode1 { count - i } else { 3 - i };
+        *w = (*w ^ (table[pos] >> (4 * shift)) as u8).wrapping_sub(p.tail_sub);
         pos = (pos + 1) % 24;
     }
 }
-fn cpz_1b(b: &mut [u8], key: u32, hash: [u32; 4]) {
+fn cpz_1b(b: &mut [u8], p: &CpzPlugin, key: u32, hash: [u32; 4]) {
+    let step = p.cpz7_words.map_or(0x10fb562a, |words| words[0] ^ 0x10fb562a);
     let add = [0x76a3bf29u32, 0, 0x10000000, 0];
     let table: [u32; 4] = std::array::from_fn(|i| hash[i] ^ key.wrapping_add(add[i]));
     let mut pos = 0;
@@ -476,7 +527,7 @@ fn cpz_1b(b: &mut [u8], key: u32, hash: [u32; 4]) {
             .wrapping_sub(seed);
         w.copy_from_slice(&n.to_le_bytes());
         pos = (pos + 1) % 4;
-        seed = seed.wrapping_add(0x10fb562a);
+        seed = seed.wrapping_add(step);
     }
     for w in c.into_remainder() {
         *w = (*w ^ (table[pos] >> 6) as u8).wrapping_add(0x37);
@@ -484,6 +535,7 @@ fn cpz_1b(b: &mut [u8], key: u32, hash: [u32; 4]) {
     }
 }
 fn cpz_1c(b: &mut [u8], p: &CpzPlugin, key: u32, hash: [u32; 4]) {
+    let step = p.cpz7_words.map_or(0x139fa9b, |words| words[1] ^ 0x139fa9b);
     let table: [u32; 4] = std::array::from_fn(|i| hash[i] ^ key.wrapping_add(p.addends[i]));
     let mut pos = 0;
     let mut seed = p.init_key;
@@ -495,10 +547,11 @@ fn cpz_1c(b: &mut [u8], p: &CpzPlugin, key: u32, hash: [u32; 4]) {
             .wrapping_add(0x37a19e8b);
         w.copy_from_slice(&n.to_le_bytes());
         pos = (pos + 1) % 4;
-        seed = seed.wrapping_sub(0x139fa9b);
+        seed = seed.wrapping_sub(step);
     }
     for w in c.into_remainder() {
-        *w = (*w ^ (table[pos] >> 4) as u8).wrapping_add(5);
+        let add = if p.cmvs_mode1 { 3 } else { 5 };
+        *w = (*w ^ (table[pos] >> 4) as u8).wrapping_add(add);
         pos = (pos + 1) % 4;
     }
 }
@@ -516,7 +569,8 @@ fn cpz_3(b: &[u8], p: &CpzPlugin, main: u32, hash: [u32; 4], key: u32) -> Vec<u8
     let words: [u32; 24] = std::array::from_fn(|i| {
         u32::from_le_bytes(raw[i * 4..i * 4 + 4].try_into().unwrap()) ^ key
     });
-    let (mut pos, mut state) = (p.start_pos, 0x2547a39eu32);
+    let mut pos = p.start_pos;
+    let mut state = if p.cmvs_mode1 { 0x2748c39eu32 } else { 0x2547a39e };
     let mut out = b.to_vec();
     let mut c = out.chunks_exact_mut(4);
     for w in &mut c {
@@ -533,15 +587,171 @@ fn cpz_3(b: &[u8], p: &CpzPlugin, main: u32, hash: [u32; 4], key: u32) -> Vec<u8
     }
     out
 }
+
+fn cpz_member_checksum(bytes: &[u8]) -> u32 {
+    let (words, tail) = bytes.as_chunks::<4>();
+    let sum = words.iter().fold(0x5a902b7c_u32, |sum, word| {
+        sum.wrapping_add(u32::from_le_bytes(*word))
+    });
+    tail.iter().fold(sum, |sum, &byte| sum.wrapping_add(u32::from(byte)))
+}
+
+/// Bit reader over the little-endian words of the CPZ7 index mask stream.
+struct Cpz7Bits<'a> {
+    words: std::slice::ChunksExact<'a, u8>,
+    word: u32,
+    left: u32,
+}
+impl Cpz7Bits<'_> {
+    fn bit(&mut self) -> Result<u32> {
+        if self.left == 0 {
+            let word = self.words.next().context("CPZ7 index mask stream truncated")?;
+            self.word = u32::from_le_bytes(word.try_into()?);
+            self.left = 32;
+        }
+        let bit = self.word & 1;
+        self.word >>= 1;
+        self.left -= 1;
+        Ok(bit)
+    }
+}
+
+const CPZ7_MASK_NODES: usize = 511 - 256;
+const CPZ7_MASK_BYTES: usize = 0x3ff;
+
+fn cpz7_mask_node(
+    bits: &mut Cpz7Bits<'_>,
+    tree: &mut Vec<[u16; 2]>,
+) -> Result<u16> {
+    if bits.bit()? == 0 {
+        let mut leaf = 0;
+        for _ in 0..8 {
+            leaf = bits.bit()? | leaf << 1;
+        }
+        return Ok(leaf as u16);
+    }
+    let node = tree.len();
+    ensure!(node < CPZ7_MASK_NODES, "CPZ7 index mask tree limit");
+    tree.push([0; 2]);
+    let zero = cpz7_mask_node(bits, tree)?;
+    let one = cpz7_mask_node(bits, tree)?;
+    tree[node] = [zero, one];
+    Ok(256 + node as u16)
+}
+
+/// Expand the checked mask block stored between the index and member data.
+fn cpz7_index_mask(block: &[u8]) -> Result<Vec<u8>> {
+    ensure!(block.len() >= 24, "CPZ7 index mask header");
+    let digest = crysirror_resource::md5_with_iv(
+        &block[16..],
+        [0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476],
+    );
+    for (index, word) in digest.iter().enumerate() {
+        ensure!(le32(block, index * 4)? == *word, "CPZ7 index mask digest mismatch");
+    }
+    let expanded = le32(block, 16)? as usize;
+    ensure!(expanded >= CPZ7_MASK_BYTES, "CPZ7 index mask is too short");
+    let key: [u8; 4] = block[20..24].try_into()?;
+    let stream: Vec<u8> = block[24..]
+        .iter()
+        .enumerate()
+        .map(|(index, byte)| byte ^ key[index & 3])
+        .collect();
+    let mut bits = Cpz7Bits {
+        words: stream.chunks_exact(4),
+        word: 0,
+        left: 0,
+    };
+    let mut tree = Vec::with_capacity(CPZ7_MASK_NODES);
+    let root = cpz7_mask_node(&mut bits, &mut tree)?;
+    let mut mask = Vec::with_capacity(CPZ7_MASK_BYTES);
+    for _ in 0..CPZ7_MASK_BYTES {
+        let mut node = root;
+        while node >= 256 {
+            node = tree[usize::from(node - 256)][bits.bit()? as usize];
+        }
+        mask.push(node as u8);
+    }
+    Ok(mask)
+}
+
+/// CVNS `CPZ1` (cvns.exe 2004-05-15, 0x41ee80): a 16-byte header (magic, count, index
+/// bytes, reserved), the index and the members, all transformed as
+/// `(byte ^ key[i % 64]) - 108` with the position restarting at every block. Index
+/// records are size, length, offset after the index, 12 reserved bytes and a CP932 name.
+/// The 64-byte key is the program's embedded key after its load-time transform.
+pub(super) fn cpz1(s: &dyn AssetReader, cx: &DecodeContext) -> Result<Vec<Row>> {
+    const ID: &str = "purple-software/cpz1";
+    let key: Arc<[u8; 64]> = key_bytes(cx, ID)?.with_bytes(|bytes| {
+        let key: [u8; 64] = bytes.get(..64).context("CPZ1 key requires 64 bytes")?.try_into()?;
+        Ok::<_, anyhow::Error>(Arc::new(key))
+    })?;
+    ensure!(magic(s, 0, b"CPZ1")?, "expected CPZ1 signature");
+    let head = bytes(s, 0, 16, 16)?;
+    let count = le32(&head, 4)? as usize;
+    limits(cx, count)?;
+    let stored = u64::from(le32(&head, 8)?);
+    let mut table = index(s, cx, 16, stored)?;
+    cpz1_crypt(&mut table, &key);
+    let data = 16 + stored;
+    let mut c = Cursor::new(&table);
+    let mut rows = Vec::with_capacity(count);
+    for _ in 0..count {
+        cx.check_cancelled()?;
+        let start = c.at;
+        let size = c.le32()? as usize;
+        ensure!(size >= 25, "CPZ1 record size");
+        let len = u64::from(c.le32()?);
+        let at = data.checked_add(u64::from(c.le32()?)).context("CPZ1 entry offset overflow")?;
+        c.take(12)?;
+        let name = sjis(c.zero()?)?;
+        ensure!(size >= c.at - start, "CPZ1 record truncation");
+        c.at = start;
+        c.take(size)?;
+        let key = key.clone();
+        rows.push(Row::packed(
+            name,
+            at,
+            len,
+            len,
+            decode(move |b, _| {
+                let mut out = b.to_vec();
+                cpz1_crypt(&mut out, &key);
+                Ok(out)
+            }),
+        ));
+    }
+    Ok(rows)
+}
+
+fn cpz1_crypt(bytes: &mut [u8], key: &[u8; 64]) {
+    for (index, byte) in bytes.iter_mut().enumerate() {
+        *byte = (*byte ^ key[index & 63]).wrapping_sub(108);
+    }
+}
+
 pub(super) fn cpz(s: &dyn AssetReader, cx: &DecodeContext, v: u8) -> Result<Vec<Row>> {
-    let id = if v == 5 {
-        "purple-software/cpz5"
-    } else {
-        "purple-software/cpz6"
+    let id = match v {
+        5 => "purple-software/cpz5",
+        6 => "purple-software/cpz6",
+        _ => "purple-software/cpz7",
     };
     let plugin = CpzPlugin::read(cx, id)?;
-    let h = bytes(s, 4, 60, 60)?;
-    let delta = u32::from(v - 5);
+    ensure!(v != 7 || plugin.cpz7_words.is_some(), "CPZ7 requires the CMVS V7B layout");
+    let h = bytes(s, 4, if v == 7 { 68 } else { 60 }, 68)?;
+    if v == 7 {
+        ensure!(magic(s, 0, b"CPZ7")?, "expected CPZ7 signature");
+        ensure!(le32(&h, 48)? ^ 0xfb73a956 != 0, "unsupported CPZ7 encryption mode");
+        let head = bytes(s, 0, 64, 64)?;
+        let sum = (0..16).try_fold(le32(&h, 60)?.wrapping_sub(1841670580), |sum, index| {
+            Ok::<_, anyhow::Error>(sum.wrapping_add(le32(&head, index * 4)?))
+        })?;
+        ensure!(sum == le32(&h, 64)?, "CPZ7 header checksum mismatch");
+    } else if plugin.cmvs_mode1 {
+        ensure!(magic(s, 0, b"CPZ6")?, "expected CPZ6 signature");
+        ensure!((le32(&h, 48)? ^ 0xfb73a956) == 1, "unsupported CPZ6 encryption mode");
+    }
+    let delta = u32::from(v.min(6) - 5);
     let n = le32(&h, 0)? ^ (0xfe3a53d9 + delta);
     limits(cx, n as usize)?;
     let dirs = (le32(&h, 4)? ^ (0x37f298e7 + delta)) as u64;
@@ -567,16 +777,31 @@ pub(super) fn cpz(s: &dyn AssetReader, cx: &DecodeContext, v: u8) -> Result<Vec<
             .rotate_right(5)
             .wrapping_mul(0x7da8f173)
             .wrapping_add(0x13712765)
+            .wrapping_add(plugin.cpz7_words.map_or(0, |words| words[2]))
     };
     let table_size = dirs.checked_add(files).context("CPZ index size overflow")?;
-    let data = 64 + table_size;
-    let mut table = index(s, cx, 64, table_size)?;
+    let (header, mask_size) = if v == 7 {
+        (72, u64::from(le32(&h, 60)? ^ 0x65ef99f3))
+    } else {
+        (64, 0)
+    };
+    let stored = table_size.checked_add(mask_size).context("CPZ index size overflow")?;
+    let data = header + stored;
+    let mut table = index(s, cx, header, stored)?;
+    if v == 7 {
+        let mask = cpz7_index_mask(&table[table_size as usize..])?;
+        table.truncate(table_size as usize);
+        for (position, byte) in table.iter_mut().enumerate() {
+            *byte ^= mask[(position + 3) % CPZ7_MASK_BYTES];
+        }
+    }
     cpz_1a(&mut table, &plugin, main ^ 0x3795b39a);
     cpz_2(&mut table[..dirs as usize], &plugin, main, hash[1], 0x3a);
-    cpz_1b(&mut table[..dirs as usize], main, hash);
+    cpz_1b(&mut table[..dirs as usize], &plugin, main, hash);
     let mut c = Cursor::new(&table[..dirs as usize]);
     let mut ds = Vec::new();
     for _ in 0..n {
+        cx.check_cancelled()?;
         let start = c.at;
         let size = c.le32()? as usize;
         ensure!(size >= 17, "CPZ directory record size");
@@ -590,6 +815,10 @@ pub(super) fn cpz(s: &dyn AssetReader, cx: &DecodeContext, v: u8) -> Result<Vec<
         c.take(size)?;
         ds.push((count, at, key, path));
     }
+    if plugin.cmvs_mode1 {
+        ensure!(c.at == dirs as usize, "CPZ6 directory count/length mismatch");
+        ensure!(ds.first().is_some_and(|dir| dir.1 == 0), "CPZ6 unassigned file index prefix");
+    }
     let mut rows = Vec::new();
     for i in 0..ds.len() {
         let (count, at, key, ref path) = ds[i];
@@ -600,19 +829,32 @@ pub(super) fn cpz(s: &dyn AssetReader, cx: &DecodeContext, v: u8) -> Result<Vec<
         cpz_1c(t, &plugin, key, hash);
         let mut c = Cursor::new(t);
         for _ in 0..count {
+            cx.check_cancelled()?;
             let start = c.at;
             let size = c.le32()? as usize;
-            ensure!(size >= 25, "CPZ file record size");
+            ensure!(size >= if v == 7 { 29 } else { 25 }, "CPZ file record size");
             let at = data
                 .checked_add(c.le64()?)
                 .context("CPZ entry offset overflow")?;
             let len = u64::from(c.le32()?);
-            c.take(4)?;
+            if v == 7 {
+                c.le32()?;
+            }
+            let checksum = c.le32()?;
             let tmp = c.le32()?;
-            let entry_key = (main ^ key.wrapping_add(tmp))
-                .wrapping_add(n)
-                .wrapping_sub(0x5c29e87b)
-                ^ extra;
+            let entry_key = match plugin.cpz7_words {
+                Some(words) => {
+                    (words[3] ^ (main ^ key.wrapping_add(tmp)).wrapping_add(n))
+                        .wrapping_sub(0x5c39e87b)
+                        ^ extra
+                }
+                None => {
+                    (main ^ key.wrapping_add(tmp))
+                        .wrapping_add(n)
+                        .wrapping_sub(0x5c29e87b)
+                        ^ extra
+                }
+            };
             let name = sjis(c.zero()?)?;
             let name = if path.rsplit(['/', '\\']).next() == Some("root") {
                 name
@@ -628,9 +870,17 @@ pub(super) fn cpz(s: &dyn AssetReader, cx: &DecodeContext, v: u8) -> Result<Vec<
                 at,
                 len,
                 len,
-                decode(move |b, _| Ok(cpz_3(b, &plugin, main, hash, entry_key))),
+                decode(move |b, _| {
+                    if plugin.cmvs_mode1 {
+                        ensure!(cpz_member_checksum(b) == checksum, "CPZ6 member checksum mismatch");
+                    }
+                    Ok(cpz_3(b, &plugin, main, hash, entry_key))
+                }),
             ));
             limits(cx, rows.len())?;
+        }
+        if plugin.cmvs_mode1 {
+            ensure!(c.at == end - at, "CPZ6 file count/length mismatch");
         }
     }
     Ok(rows)
@@ -957,4 +1207,66 @@ pub(super) fn pack(s: &dyn AssetReader, cx: &DecodeContext) -> Result<Vec<Row>> 
         rows.push(Row::packed(path, at, stored, size, plan));
     }
     Ok(rows)
+}
+
+#[cfg(test)]
+mod cpz7_tests {
+    use super::*;
+
+    fn block(bits: &[u32], expanded: u32) -> Vec<u8> {
+        let mut words = vec![0u32; bits.len().div_ceil(32)];
+        for (index, bit) in bits.iter().enumerate() {
+            words[index / 32] |= bit << (index % 32);
+        }
+        let key = [0x11, 0x22, 0x33, 0x44];
+        let mut out = vec![0; 16];
+        out.extend(expanded.to_le_bytes());
+        out.extend(key);
+        for (index, byte) in words.iter().flat_map(|word| word.to_le_bytes()).enumerate() {
+            out.push(byte ^ key[index & 3]);
+        }
+        let digest = crysirror_resource::md5_with_iv(
+            &out[16..],
+            [0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476],
+        );
+        for (index, word) in digest.iter().enumerate() {
+            out[index * 4..index * 4 + 4].copy_from_slice(&word.to_le_bytes());
+        }
+        out
+    }
+
+    fn leaf(bits: &mut Vec<u32>, value: u32) {
+        bits.push(0);
+        bits.extend((0..8).rev().map(|shift| value >> shift & 1));
+    }
+
+    #[test]
+    fn index_mask_expands_the_native_tree_order() {
+        let mut bits = vec![1];
+        leaf(&mut bits, 0xa5);
+        leaf(&mut bits, 0x3c);
+        let pattern: Vec<u32> = (0..CPZ7_MASK_BYTES as u32).map(|index| index & 1).collect();
+        bits.extend(&pattern);
+        let mask = cpz7_index_mask(&block(&bits, CPZ7_MASK_BYTES as u32)).unwrap();
+        assert_eq!(mask.len(), CPZ7_MASK_BYTES);
+        assert_eq!(&mask[..4], &[0xa5, 0x3c, 0xa5, 0x3c]);
+    }
+
+    #[test]
+    fn index_mask_rejects_damage_and_short_streams() {
+        let mut bits = vec![1];
+        leaf(&mut bits, 1);
+        leaf(&mut bits, 2);
+        let mut damaged = block(&bits, CPZ7_MASK_BYTES as u32);
+        *damaged.last_mut().unwrap() ^= 1;
+        assert!(cpz7_index_mask(&damaged).is_err());
+        assert!(cpz7_index_mask(&block(&bits, CPZ7_MASK_BYTES as u32)).is_err());
+        assert!(cpz7_index_mask(&block(&bits, CPZ7_MASK_BYTES as u32 - 1)).is_err());
+    }
+
+    #[test]
+    fn index_mask_tree_is_bounded() {
+        let bits = vec![1; 4096];
+        assert!(cpz7_index_mask(&block(&bits, CPZ7_MASK_BYTES as u32)).is_err());
+    }
 }

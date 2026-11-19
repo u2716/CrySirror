@@ -181,6 +181,8 @@ pub(crate) struct PreparedChannel {
     pub start: u64,
     pub pan: f32,
     pub replace_fade_ms: f32,
+    pub source_meter: Option<crate::mixer::source_meter::SourceMeter>,
+    pub pcm16_gain: Option<crysirror_core::service::AudioPcm16Gain>,
 }
 pub(super) fn prepare(
     encoded: Box<dyn AudioSource>,
@@ -305,6 +307,8 @@ pub(super) fn prepare(
         start,
         pan: p.pan,
         replace_fade_ms: p.replace_fade_ms,
+        source_meter: None,
+        pcm16_gain: p.pcm16_gain,
     })
 }
 pub struct ChannelAudio {
@@ -344,6 +348,38 @@ impl Default for ChannelAudio {
     }
 }
 impl ChannelAudio {
+    pub fn set_channel_retirement(&mut self, client: u32, channel: u32, retire: bool) -> Result<bool> {
+        self.mixer.idle()?;
+        if let Some(&handle) = self.voices.get(&(client, channel)) {
+            if self.mixer.is_playing(client, handle) {
+                return self.mixer.set_voice_retirement(client, handle, retire);
+            }
+        }
+        Ok(false)
+    }
+    pub fn resume_retained_channel(&mut self, client: u32, channel: u32, looping: bool) -> Result<bool> {
+        self.mixer.idle()?;
+        if let Some(&handle) = self.voices.get(&(client, channel)) {
+            if self.mixer.is_playing(client, handle) {
+                return self.mixer.resume_retained_voice(client, handle, looping);
+            }
+        }
+        Ok(false)
+    }
+    pub fn update_pcm16_gain(
+        &mut self,
+        client: u32,
+        channel: u32,
+        update: crysirror_core::service::AudioPcm16GainUpdate,
+    ) -> Result<()> {
+        self.mixer.idle()?;
+        if let Some(&handle) = self.voices.get(&(client, channel)) {
+            if self.mixer.is_playing(client, handle) {
+                self.mixer.update_pcm16_gain(client, handle, update)?;
+            }
+        }
+        Ok(())
+    }
     pub fn playback_info(
         &self,
         client: u32,
@@ -354,6 +390,14 @@ impl ChannelAudio {
             .filter(|h| self.mixer.is_playing(client, **h))
             .map(|h| self.mixer.playback_info(client, *h))
             .transpose()
+    }
+    pub fn source_level(&self, client: u32, channel: u32) -> Result<Option<[u32; 2]>> {
+        self.voices
+            .get(&(client, channel))
+            .filter(|h| self.mixer.is_playing(client, **h))
+            .map(|h| self.mixer.source_level(client, *h))
+            .transpose()
+            .map(Option::flatten)
     }
     /// Authoritative, client-scoped channel state from the shared mixer.
     pub fn is_playing(&self, client: u32, channel: u32) -> bool {
@@ -404,6 +448,32 @@ impl ChannelAudio {
         self.clients.insert(client);
         Ok(())
     }
+    /// Validate all requested live gains before changing any channel. An empty
+    /// channel receives no source or deferred control.
+    pub fn set_gains(&mut self, client: u32, gains: &[(u32, f32)]) -> Result<()> {
+        if gains.is_empty() {
+            return Ok(());
+        }
+        self.mixer.idle()?;
+        ensure!(gains.len() <= 256, "audio gain batch limit");
+        ensure!(
+            gains
+                .iter()
+                .all(|(_, gain)| gain.is_finite() && (0.0..=4.0).contains(gain)),
+            "voice gain must be 0..4"
+        );
+        for &(channel, gain) in gains {
+            if let Some(&handle) = self.voices.get(&(client, channel)) {
+                if self.mixer.is_playing(client, handle) {
+                    self.mixer
+                        .set_gain(client, handle, gain)
+                        .expect("validated live voice and gain");
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub fn submit(&mut self, client: u32, request: AudioRequest) -> Result<()> {
         if let AudioRequest::ExchangeChannels { left, right } = request {
             return self.exchange_channels(client,left,right);
@@ -708,6 +778,8 @@ impl ChannelAudio {
             start,
             pan,
             replace_fade_ms,
+            source_meter,
+            pcm16_gain,
         } = prepared;
         let previous = self
             .voices
@@ -733,6 +805,12 @@ impl ChannelAudio {
         };
         self.mixer.prepared_position(client, h, start)?;
         self.mixer.set_pan(client, h, pan, 0.)?;
+        if let Some(control) = pcm16_gain {
+            self.mixer.install_pcm16_gain(client, h, control)?;
+        }
+        if let Some(meter) = source_meter {
+            self.mixer.install_source_meter(client, h, meter)?;
+        }
         self.cancel_release_channel(client, channel);
         self.voices.insert((client, channel), h);
         Ok(())

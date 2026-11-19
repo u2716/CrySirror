@@ -18,6 +18,7 @@ Each reference contains the native ABI, dispatch/return and wait contracts, shar
 | KiriKiri / TJS2 / KAG | [krkr](krkr.md) | 1003 | 449 |
 | N-System | [nsystem](nsystem.md) | 134 | 128 |
 | codeX RScript | [rscript](rscript.md) | 138 | 0 |
+| CMVS | [cmvs](cmvs.md) | 1538 | 948 |
 
 ## Status
 
@@ -30,6 +31,7 @@ Each reference contains the native ABI, dispatch/return and wait contracts, shar
 | Empty handler | Empty source body without original no-op evidence. |
 | Decode only | An operand/name catalogue entry with no extracted execution route. |
 | Unreviewed | Known native catalogue entry whose execution route needs review. |
+| Open | Unfinished native syscall contract. |
 | Continuation | Bytecode continuation record, not a separate VM operation. |
 | Parameterized | Native registration accepts a caller-supplied name; this is an open name pattern, not one fixed builtin. |
 | Guard / allowlist | A native dispatch predicate; execution belongs to the caller. |

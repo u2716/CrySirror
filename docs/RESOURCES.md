@@ -66,6 +66,19 @@ This is resource support; a Malie script VM is not registered.
 include QNT/PMS/AJP/DCF, TLG5/6, G00/PDT, CBG, RCT/RC8, PGD, NVSG, PB3,
 ERI, GIM/GTF/XTX and the remaining native IDs recorded in the ledger. Standard
 PNG/JPEG/BMP/DDS/TGA/WebP codecs reuse shared implementations where appropriate.
+CMVS MSK0 (`purple-software/msk0`) and PB2A (`purple-software/pb2`) use
+native layout evidence outside the pinned arc_unpacker inventory. MSK0 reads
+its grayscale plane from the offset in the header. The PB2A registry entry
+decodes the native unnamed memory-image profile, including frame zero of type
+5. The named and animated entry points are tracked in
+[the format SATD record](../crates/crysirror-formats-arc/SATD.md#satd-formats-arc-pb2-selection).
+The PB3 registry entry also reads interleaved LZSS pixels in type 7 and a
+scoped `.pb3` base plus tile replacements in type 8. Set the decode parameter
+`purple-software/pb3-native-base` to `true` to apply the native base requirement
+to type 6. See [PB3 selection SATD](../crates/crysirror-formats-arc/SATD.md#satd-formats-arc-pb3-selection).
+CMVS save previews use the separate `cmvs_image` memory profile. It applies
+the original BMP row origin, indexed PNG expansion and BGR upload rules,
+alongside the unnamed PB2A and PB3B image profiles.
 Normal Bitmap, text-icon, retained-layer and renderer uploads use this registry;
 the PBR loader accepts `load_pbr_with_decoder` so glTF textures use it too.
 
@@ -150,7 +163,9 @@ chooses transforms by format and native entry metadata. The built-ins are
 `aes-cbc`, `aes256-cbc`, `rc4`, `malie-camellia` and `malie-cfi`. Shared Rust primitives additionally implement
 Blowfish little-endian blocks, PKCS#1 type-1 RSA public decoding and caller-IV
 MD5 for native layouts. CBC validates complete blocks and selected padding;
-LZSS distinguishes bytewise and configurable bitwise layouts.
+LZSS distinguishes bytewise and configurable bitwise layouts. The bytewise
+12/4 layout supports legacy zero padding. The bytewise 11/5 and 10/6 layouts
+used by CMVS PS2A and CSS1 files require exact compressed and expanded lengths.
 XOR and CTR streams support unaligned random reads. CTR and XOR are not
 authenticated encryption; their output alone does not establish a correct key.
 Format-specific integrity checks or authenticated transforms must enforce any

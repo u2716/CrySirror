@@ -92,6 +92,85 @@ fn render(a: &mut ChannelAudio, n: usize) -> Vec<StereoFrame> {
     pcm
 }
 #[test]
+fn slot_retirement_waits_for_a_published_nonempty_render_and_can_be_cancelled() {
+    let mut audio = ChannelAudio::default();
+    play(&mut audio, 0, 1., None, None, false);
+    play(&mut audio, 1, 1., None, None, false);
+    render(&mut audio, 5);
+
+    assert!(!audio.set_channel_retirement(8, 0, true).unwrap());
+    assert!(audio.set_channel_retirement(7, 0, true).unwrap());
+    render(&mut audio, 0);
+    let info = audio.playback_info(7, 0).unwrap().unwrap();
+    assert!(info.stopping);
+    assert!(!info.source_playing);
+    assert_eq!(info.position_frames, 5);
+
+    assert!(audio.set_channel_retirement(7, 0, false).unwrap());
+    let info = audio.playback_info(7, 0).unwrap().unwrap();
+    assert!(!info.stopping);
+    assert!(info.source_playing);
+    assert_eq!(info.position_frames, 5);
+
+    assert!(audio.set_channel_retirement(7, 0, true).unwrap());
+    let mut worker = audio.mixer.lease_render(994).unwrap();
+    let mut pcm = [[0.; 2]; 1];
+    worker.render(&mut pcm).unwrap();
+    assert!(audio.playback_info(7, 0).unwrap().unwrap().stopping);
+    assert!(audio.mixer.finish_render(994, worker));
+    assert!(audio.playback_info(7, 0).unwrap().is_none());
+    assert_eq!(audio.playback_info(7, 1).unwrap().unwrap().position_frames, 6);
+    assert!((pcm[0][0] - 0.006).abs() < 1e-6);
+}
+#[test]
+fn retained_transport_parks_resumes_and_rewinds_without_replacing_the_source() {
+    use crysirror_core::service::{AudioPreparePhase, AudioRequest};
+
+    let mut audio = ChannelAudio::default();
+    let seeks = Arc::new(AtomicUsize::new(0));
+    let source = wrap_source(
+        Box::new(Samples { at: 0, len: 8, seeks: seeks.clone() }),
+        None,
+        1.,
+    )
+    .unwrap();
+    let ready = prepare(
+        source,
+        None,
+        AudioParameters { gain: 0.5, retain_on_finish: true, ..Default::default() },
+    )
+    .unwrap();
+    audio.publish(7, 0, ready).unwrap();
+    render(&mut audio, 3);
+    audio.submit(7, AudioRequest::SetTransportActive { channel: 0, active: false }).unwrap();
+    assert_eq!(render(&mut audio, 2), vec![[0.; 2]; 2]);
+    assert_eq!(audio.playback_info(7, 0).unwrap().unwrap().position_frames, 3);
+
+    assert!(audio.resume_retained_channel(7, 0, false).unwrap());
+    let resumed = audio.playback_info(7, 0).unwrap().unwrap();
+    assert_eq!((resumed.position_frames, resumed.transport_frames), (3, 0));
+    assert!(!audio.resume_retained_channel(7, 0, true).unwrap());
+    assert!(!audio.playback_info(7, 0).unwrap().unwrap().looping);
+    assert!((render(&mut audio, 5)[0][0] - 0.002).abs() < 1e-6);
+    assert!(!audio.is_playing(7, 0));
+
+    assert!(audio.resume_retained_channel(7, 0, true).unwrap());
+    assert!(audio.is_playing(7, 0));
+    assert_eq!(audio.playback_info(7, 0).unwrap().unwrap().transport_frames, 0);
+    assert_eq!(render(&mut audio, 1), [[0.; 2]]);
+    assert!(!audio.is_playing(7, 0));
+    assert_eq!(seeks.load(Ordering::SeqCst), 0);
+
+    let ticket = audio.begin_retained_channel_rewind(7, 0, true).unwrap();
+    assert_eq!(
+        audio.channel_seek_preparation(7, ticket).unwrap().phase,
+        AudioPreparePhase::Ready,
+    );
+    audio.release_channel_seek(7, ticket).unwrap();
+    assert!((render(&mut audio, 1)[0][0] - 0.0005).abs() < 1e-6);
+    assert_eq!(seeks.load(Ordering::SeqCst), 1);
+}
+#[test]
 fn in_place_release_keeps_loop_cursor_and_channel_ownership() {
     let mut a=ChannelAudio::default();
     play(&mut a,3,1.,None,Some(20),true);
@@ -433,6 +512,57 @@ fn encoded_play(channel: u32) -> AudioRequest {
         parameters: AudioParameters::default(),
     }
 }
+
+#[test]
+fn source_meter_observations_follow_channel_publication_and_client_scope() {
+    use crysirror_core::service::AudioSourceMeterSpec;
+
+    let mut audio = ChannelAudio::default();
+    let client = 7;
+    let channel = 15;
+    let mut request = encoded_play(channel);
+    if let AudioRequest::Play { parameters, .. } = &mut request {
+        parameters.gain = 0.;
+    }
+    let storage = Arc::new(EmptyStorage);
+    let meter = AudioSourceMeterSpec {
+        reference_rate: 48_000,
+        window_frames: 2,
+        history_windows: 3,
+    };
+    let ticket = audio
+        .begin_preparation_with_meter(client, request, storage.clone(), Some(meter))
+        .unwrap();
+    audio.release_preparation(client, ticket).unwrap();
+    let peer_ticket = audio
+        .begin_preparation(8, encoded_play(channel), storage.clone())
+        .unwrap();
+    audio.release_preparation(8, peer_ticket).unwrap();
+    assert_eq!(audio.source_level(client, channel).unwrap(), Some([0; 2]));
+
+    let mut worker = audio.mixer.lease_render(993).unwrap();
+    worker.render(&mut [[0.; 2]; 6]).unwrap();
+    assert_eq!(audio.source_level(client, channel).unwrap(), Some([0; 2]));
+    assert!(audio.mixer.finish_render(993, worker));
+    assert_eq!(audio.source_level(client, channel).unwrap(), Some([100; 2]));
+    assert_eq!(audio.source_level(8, channel).unwrap(), None);
+
+    audio
+        .submit(client, AudioRequest::Pause { channel, paused: true, fade_ms: 0. })
+        .unwrap();
+    assert_eq!(audio.source_level(client, channel).unwrap(), Some([0; 2]));
+    audio
+        .submit(client, AudioRequest::Pause { channel, paused: false, fade_ms: 0. })
+        .unwrap();
+    assert_eq!(audio.source_level(client, channel).unwrap(), Some([100; 2]));
+
+    let replacement = audio
+        .begin_preparation(client, encoded_play(channel), storage)
+        .unwrap();
+    audio.release_preparation(client, replacement).unwrap();
+    assert_eq!(audio.source_level(client, channel).unwrap(), None);
+}
+
 #[test]
 fn release_cancels_older_pending_preparation_before_it_can_resurrect_source() {
     use std::time::{Duration, Instant};

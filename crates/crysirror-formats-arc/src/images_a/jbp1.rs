@@ -2,6 +2,27 @@
 // Safe translation of arc_unpacker JBP1, Copyright (C) 2016 rr-.
 use super::common::*;
 use anyhow::{ensure, Result};
+
+pub(super) fn apply_native_alpha(
+    image: &mut crysirror_image::ImageSurface,
+    input: &[u8],
+) -> Result<()> {
+    let mut input = C::new(input);
+    let mut output = image.rgba.chunks_exact_mut(4);
+    while output.len() != 0 {
+        let value = input.u8()?;
+        let count = if value == 0 || value == 255 {
+            usize::from(input.u8()?)
+        } else {
+            1
+        };
+        ensure!(count <= output.len(), "JBP1 alpha run exceeds image");
+        for pixel in output.by_ref().take(count) {
+            pixel[3] = value;
+        }
+    }
+    Ok(())
+}
 struct Bit<'a>(Bits<'a>);
 impl<'a> Bit<'a> {
     fn new(b: &'a [u8]) -> Self {
@@ -112,14 +133,19 @@ fn signed(bits: usize, b: &mut Bit<'_>) -> Result<i32> {
         n
     })
 }
-pub fn decode(bytes: &[u8]) -> Result<Vec<u8>> {
+pub(super) fn decode(bytes: &[u8], crop: Option<[u32; 2]>) -> Result<Vec<u8>> {
     let mut c = C::new(bytes);
     ensure!(c.take(4)? == b"JBP1", "JBP1 signature");
     let at = c.u32()? as usize;
     let flags = c.u32()?;
     c.skip(4)?;
     let (w, h, depth) = (u32::from(c.u16()?), u32::from(c.u16()?), c.u16()?);
-    let _ = image(w, h)?;
+    crysirror_image::rgba_len(w, h)?;
+    let [crop_width, crop_height] = crop.unwrap_or([w, h]);
+    ensure!(
+        (1..=w).contains(&crop_width) && (1..=h).contains(&crop_height),
+        "JBP1 crop outside the image"
+    );
     ensure!(depth == 24, "unsupported JBP1 depth");
     c.skip(6)?;
     let (n1, n2) = (c.u32()? as usize, c.u32()? as usize);
@@ -223,9 +249,10 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<u8>> {
             }
         }
     }
-    let mut raw = Vec::with_capacity(w * h * 3);
-    for y in 0..h {
-        for x in 0..w {
+    let (crop_width, crop_height) = (crop_width as usize, crop_height as usize);
+    let mut raw = Vec::with_capacity(crop_width * crop_height * 3);
+    for y in 0..crop_height {
+        for x in 0..crop_width {
             raw.extend_from_slice(&blocks[(y * bw + x) * 4..][..3]);
         }
     }

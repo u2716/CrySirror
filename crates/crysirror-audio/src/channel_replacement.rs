@@ -1,5 +1,5 @@
 // Copyright (c) 2026 CrySirror contributors. MPL-2.0.
-//! Detached channel preparation and a single owner commit for native restoration.
+//! Detached channel preparation and a single owner commit for audio replacement.
 //! A commit token exclusively borrows the destination until install or rollback.
 use crate::{
     buffered::{BufferedSource, StreamBufferSpec},
@@ -75,6 +75,7 @@ pub struct ChannelReplacementCommit<'a> {
     revision: u64,
     voices: ClientVoiceReplacement,
     channels: BTreeMap<(u32, u32), crate::mixer::VoiceHandle>,
+    scope: Option<Vec<u32>>,
 }
 impl ChannelReplacementCommit<'_> {
     pub fn install(self) {
@@ -84,13 +85,18 @@ impl ChannelReplacementCommit<'_> {
             revision,
             voices,
             channels,
+            scope,
         } = self;
-        audio.jobs.clear_owner(owner);
-        audio.seeks.clear_owner(owner);
-        audio.releases.clear_owner(owner);
-        audio.sequences.clear_client(owner);
+        if scope.is_none() {
+            audio.jobs.clear_owner(owner);
+            audio.seeks.clear_owner(owner);
+            audio.releases.clear_owner(owner);
+            audio.sequences.clear_client(owner);
+        }
         voices.install(&mut audio.mixer);
-        audio.voices.retain(|(client, _), _| *client != owner);
+        audio.voices.retain(|(client, channel), _| {
+            *client != owner || scope.as_ref().is_some_and(|ids| !ids.contains(channel))
+        });
         audio.voices.extend(channels);
         audio.clients.insert(owner);
         audio.replacement_versions.insert(owner, revision);
@@ -373,19 +379,64 @@ impl ChannelAudio {
         owner: u32,
         prepared: PreparedChannelReplacement,
     ) -> Result<ChannelReplacementCommit<'_>> {
+        self.stage_replacement(owner, Some(prepared), None)
+    }
+
+    /// Publish a prepared batch into a bounded subset of logical channels.
+    /// Pending controls on those channels must resolve before replacement.
+    pub fn stage_channel_replacement(
+        &mut self,
+        owner: u32,
+        channels: &[u32],
+        prepared: Option<PreparedChannelReplacement>,
+    ) -> Result<ChannelReplacementCommit<'_>> {
         ensure!(
-            prepared.owner == owner
-                && prepared.mixer == self.mixer.identity()
-                && prepared.epoch == self.replacement_epoch
-                && prepared.revision == self.replacement_versions.get(&owner).copied().unwrap_or(0),
-            "foreign or obsolete prepared audio replacement"
+            !channels.is_empty() && channels.len() <= 64,
+            "scoped audio replacement channel count"
         );
-        let revision = prepared
-            .revision
+        for (index, &channel) in channels.iter().enumerate() {
+            ensure!(!channels[..index].contains(&channel), "duplicate audio replacement scope");
+            ensure!(
+                !self.jobs.exchange_reserved(owner, channel, channel)
+                    && !self.seeks.exchange_reserved(owner, channel, channel)
+                    && !self.releases.exchange_reserved(owner, channel, channel),
+                "audio replacement scope has a pending channel dependency"
+            );
+        }
+        self.stage_replacement(owner, prepared, Some(channels.to_vec()))
+    }
+
+    fn stage_replacement(
+        &mut self,
+        owner: u32,
+        prepared: Option<PreparedChannelReplacement>,
+        scope: Option<Vec<u32>>,
+    ) -> Result<ChannelReplacementCommit<'_>> {
+        let current_revision = self.replacement_versions.get(&owner).copied().unwrap_or(0);
+        let channels = if let Some(prepared) = prepared {
+            ensure!(
+                prepared.owner == owner
+                    && prepared.mixer == self.mixer.identity()
+                    && prepared.epoch == self.replacement_epoch
+                    && prepared.revision == current_revision,
+                "foreign or obsolete prepared audio replacement"
+            );
+            ensure!(
+                scope.as_ref().is_none_or(|ids| prepared.channels.iter().all(|(id, _)| ids.contains(id))),
+                "prepared channel outside replacement scope"
+            );
+            prepared.channels
+        } else {
+            Vec::new()
+        };
+        let revision = current_revision
             .checked_add(1)
             .context("audio replacement client revision exhausted")?;
-        let (ids, channels): (Vec<_>, Vec<_>) = prepared.channels.into_iter().unzip();
-        let voices = self.mixer.prepare_client_replacement(owner, channels)?;
+        let (ids, channels): (Vec<_>, Vec<_>) = channels.into_iter().unzip();
+        let live = scope.as_ref().map(|ids| {
+            ids.iter().filter_map(|id| self.voices.get(&(owner, *id)).copied()).collect::<Vec<_>>()
+        });
+        let voices = self.mixer.prepare_client_replacement(owner, channels, live.as_deref())?;
         let channels = ids
             .into_iter()
             .zip(voices.handles())
@@ -397,6 +448,7 @@ impl ChannelAudio {
             revision,
             voices,
             channels,
+            scope,
         })
     }
 }
@@ -520,6 +572,84 @@ mod tests {
         a.submit(2, play(7, 0.25)).unwrap();
         a
     }
+    #[test]
+    fn scoped_replacement_preserves_other_channels_and_rejects_extra_recipes() {
+        let mut audio = setup();
+        audio.submit(1, play(9, 0.5)).unwrap();
+        audio.render(1).unwrap();
+        let music = audio.playback_info(1, 7).unwrap().unwrap();
+        let peer = audio.playback_info(2, 7).unwrap().unwrap();
+        let previous = audio.playback_info(1, 9).unwrap().unwrap();
+        let out_of_scope = prepare(&audio, 1, vec![play(7, 0.875)]);
+        assert!(audio.stage_channel_replacement(1, &[9, 10], Some(out_of_scope)).is_err());
+        assert_eq!(audio.playback_info(1, 9).unwrap(), Some(previous));
+
+        let replacement = prepare(&audio, 1, vec![play(10, 0.75)]);
+        audio.stage_channel_replacement(1, &[9, 10], Some(replacement)).unwrap().install();
+        assert!(audio.playback_info(1, 9).unwrap().is_none());
+        assert_eq!(audio.playback_info(1, 10).unwrap().unwrap().position_frames, 0);
+        assert_eq!(audio.playback_info(1, 7).unwrap(), Some(music));
+        assert_eq!(audio.playback_info(2, 7).unwrap(), Some(peer));
+        audio.stage_channel_replacement(1, &[9, 10], None).unwrap().install();
+        assert!(audio.playback_info(1, 10).unwrap().is_none());
+        assert_eq!(audio.playback_info(1, 7).unwrap(), Some(music));
+    }
+    #[test]
+    fn pcm16_device_gain_is_retained_before_publication_and_scoped_to_opted_in_voices() {
+        use crysirror_core::service::AudioPcm16Gain;
+
+        let mut audio = ChannelAudio::default();
+        audio.mixer.set_pcm16_device_gain(1, 128).unwrap();
+        let mut native = play(10, 0.5);
+        let AudioRequest::PlayPcm { parameters, .. } = &mut native else {
+            unreachable!();
+        };
+        parameters.pcm16_gain = Some(AudioPcm16Gain { multiplier: 512, stereo: [64, 256] });
+        let replacement = prepare(&audio, 1, vec![native]);
+        audio.stage_channel_replacement(1, &[10], Some(replacement)).unwrap().install();
+        audio.submit(1, play(11, 0.125)).unwrap();
+        let mut peer = play(10, 0.25);
+        let AudioRequest::PlayPcm { parameters, .. } = &mut peer else {
+            unreachable!();
+        };
+        parameters.pcm16_gain = Some(AudioPcm16Gain::default());
+        audio.submit(2, peer).unwrap();
+        audio.render(1).unwrap();
+        assert!(audio.take_output().iter().all(|frame| *frame == [0.5, 0.875]));
+
+        let before = audio.playback_info(1, 10).unwrap();
+        assert!(audio.mixer.set_pcm16_device_gain(1, 257).is_err());
+        audio.mixer.set_pcm16_device_gain(1, 0).unwrap();
+        assert_eq!(audio.playback_info(1, 10).unwrap(), before);
+        audio.render(1).unwrap();
+        assert!(audio.take_output().iter().all(|frame| *frame == [0.375; 2]));
+    }
+
+    #[test]
+    fn replacement_publishes_pcm16_fader_before_first_sample_and_keeps_live_controls_separate() {
+        use crysirror_core::service::{AudioPcm16Gain, AudioPcm16GainUpdate};
+
+        let mut audio = ChannelAudio::default();
+        let mut request = play(10, 0.5);
+        let AudioRequest::PlayPcm { parameters, .. } = &mut request else {
+            unreachable!();
+        };
+        parameters.pcm16_gain = Some(AudioPcm16Gain { multiplier: 512, stereo: [64, 256] });
+        let replacement = prepare(&audio, 1, vec![request]);
+        audio.stage_channel_replacement(1, &[10], Some(replacement)).unwrap().install();
+        audio.render(1).unwrap();
+        assert!(audio.take_output().iter().all(|frame| *frame == [0.25, 0.5]));
+        let before = audio.playback_info(1, 10).unwrap().unwrap();
+
+        audio.update_pcm16_gain(1, 10, AudioPcm16GainUpdate::Multiplier(128)).unwrap();
+        audio.set_gains(1, &[(10, 0.5)]).unwrap();
+        let after = audio.playback_info(1, 10).unwrap().unwrap();
+        assert_eq!(after.position_frames, before.position_frames);
+        assert_eq!(after.fade_out_frames, before.fade_out_frames);
+        audio.render(1).unwrap();
+        assert!(audio.take_output().iter().all(|frame| *frame == [0.03125, 0.125]));
+    }
+
     #[test]
     fn detached_prepare_and_dropped_preflight_preserve_live_state_then_one_install_replaces_only_owner()
      {

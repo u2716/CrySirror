@@ -12,6 +12,7 @@ smb = ["crysirror-network/smb", "crysirror-siglus-integrated/smb", "crysirror-bg
 
 [dependencies]
 crysirror-malie.workspace = true
+crysirror-cmvs = { workspace = true, features = ["runtime"] }
 crysirror-vita-io.workspace = true
 crysirror-qlie = {workspace=true,features=["runtime"]}
 crysirror-sugarpot = {workspace=true,features=["runtime"]}

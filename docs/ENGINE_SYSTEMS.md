@@ -38,6 +38,54 @@ compilation, CPU/GPU results and remaining limits: [ADR 0015](adr/0015-engine-ma
 
 ## Data and execution
 
+Native adapters can set live channel gains and retained media gains together
+through `HostServices::set_playback_gains`. The runtime validates each
+client-owned media slot and all gains before applying the mixer update. Missing
+audio channels stay empty, and transport fades and media clocks keep running.
+Native adapters can also prepare a detached batch of playable audio sources
+and commit it with `HostServices::replace_audio_channels`. The runtime checks
+that each recipe fits the requested client channel set, settles the selected
+slots as a batch and leaves other channel handles and transport intact.
+
+Native adapters can opt a channel into a bounded stereo source meter when
+admitting playback. The mixer observes pre-gain PCM, quantizes it to signed
+16-bit samples, and keeps per-window mean absolute levels. It advances the
+window on its own sample clock using a caller-specified reference frame
+duration. A meter measures available source PCM, so pauses and starvation
+hold its window. Reads use the oldest slot in the fixed history, with zeroes
+before that slot fills. Meter history belongs to the live voice and publishes
+with the completed mixer frame.
+
+The opt-in PCM16 fader quantizes own gain and transport attenuation before
+applying a wrapping secondary gain and independent stereo coefficients.
+It clamps each computed channel gain to unity and uses signed arithmetic
+shifts on the PCM16 samples. A prepared replacement installs these controls
+with its source. The scoped live update changes the secondary multiplier or
+the stereo coefficients without replacing playback. Ordinary float faders
+use the existing path.
+
+The PCM16 device stage is a retained client mixer control. It scales the
+secondary product before stereo attenuation on live and future opted-in
+voices. A reader-backed media slot can carry the opt-in fader to its
+embedded track. It keeps the fader when its playback channel is regenerated,
+including pause/resume and seek.
+
+Reader-backed resident PCM preparation uses the shared channel-audio
+reservation and a host worker pool. An optional unknown-length cap acts on
+the source PCM16 layout. The original reader can be retired after decode.
+The slot owner and each playback instance share one immutable PCM
+allocation. Its budget stays charged through the last playback clone.
+
+The scoped audio channel retirement control keeps a slot allocated until
+the next nonempty mixer render. Source activity immediately reflects the
+pending retirement. Callers can cancel it before that render. The owner
+observes slot removal after the render result is published.
+Retained sources can resume at their existing decoder cursor. At EOF they
+can report active until the next nonempty mix without producing PCM. A
+rewind holds the decoder, gain and retirement clocks for the allocated
+voice. The owner publishes the rewind and new loop mode together on
+the scoped seek receipt.
+
 `ClientSpec.systems` holds `entities`, `layers` and `widgets`. Each object's ID
 is local to that client. Parents and UI action targets cannot access another
 client's objects. All installs/mutation batches stage and validate before commit.

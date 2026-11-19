@@ -16,6 +16,11 @@ pub enum GlyphCoverageQuality {
     Supersample {
         factor: u8,
     },
+    /// Sample the outline at four times the target resolution and map the
+    /// rounded coverage count (0 through 16) through the supplied alpha table.
+    SupersampleAlpha4 {
+        table: [u8; 17],
+    },
 }
 impl GlyphCoverageQuality {
     pub fn validate(self) -> Result<()> {
