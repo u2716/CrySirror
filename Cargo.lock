@@ -3288,7 +3288,10 @@ dependencies = [
  "anyhow",
  "crysirror-asset",
  "crysirror-core",
+ "crysirror-dotnet",
  "crysirror-image",
+ "lz4_flex",
+ "lzma-rs",
  "serde",
  "serde_json",
 ]

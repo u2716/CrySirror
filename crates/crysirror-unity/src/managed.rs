@@ -35,6 +35,8 @@ pub enum Value {
     PPtr(PPtr),
     /// Vector/quaternion/color/rect/bounds/matrix components in field order.
     Floats(Vec<f32>),
+    /// Byte arrays and `TypelessData` of type-tree objects.
+    Bytes(Vec<u8>),
     Array(Vec<Value>),
     Struct(Fields),
 }

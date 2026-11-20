@@ -261,6 +261,19 @@ pub fn resource_container(bytes: &[u8]) -> Result<Vec<(String, PPtr)>> {
     Ok(out)
 }
 
+/// `ResourceManager.m_Container` of serialized format ≥ 14 files (64-bit
+/// path ids).
+pub fn resource_container_64(bytes: &[u8]) -> Result<Vec<(String, PPtr)>> {
+    let mut r = Reader::new(bytes);
+    let n = r.count(16)?;
+    let mut out = Vec::with_capacity(n);
+    for _ in 0..n {
+        let name = r.string()?;
+        out.push((name, PPtr { file_id: r.i32()?, path_id: r.i64()? }));
+    }
+    Ok(out)
+}
+
 /// `BuildSettings.levels`: scene paths in build order (`level<n>`).
 pub fn build_levels(bytes: &[u8]) -> Result<Vec<String>> {
     Reader::new(bytes).strings()
