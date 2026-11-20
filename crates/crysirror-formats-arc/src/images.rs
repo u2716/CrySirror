@@ -61,7 +61,7 @@ pub fn register_images(registry: &mut DecoderRegistry) -> Result<()> {
     registry.register_format(Arc::new(Plugin {
         id: CMVS_PB2,
         probe: |_, _, bytes| bytes.starts_with(b"PB2A"),
-        decode: |_, bytes, _| crate::images_a::pb2::decode(bytes),
+        decode: |_, bytes, context| crate::images_a::pb2::decode(bytes, context),
     }))?;
     registry.register_format(Arc::new(Plugin {
         id: CMVS_MSK0,

@@ -55,9 +55,61 @@ pub fn resample(cell: &[u8], source: u32, target: u32) -> Vec<u8> {
     out
 }
 
+/// Paint an eight-bit square coverage cell onto a transparent DIB, with an
+/// optional shadow offset by one pixel. The gradient uses signed 10-bit
+/// increments and the colour and coverage accumulators use 256 as unity.
+pub fn paint_cell(
+    mask: &[u8], size: u32, colors: [[u8; 3]; 2], gradient: u32, shadow: Option<[u8; 3]>,
+) -> anyhow::Result<crate::ImageSurface> {
+    let side = size.checked_add(1).ok_or_else(|| anyhow::anyhow!("glyph size overflow"))?;
+    let len = crate::rgba_len(side, side)?;
+    anyhow::ensure!(size > 0 && mask.len() == size as usize * size as usize, "invalid glyph mask");
+    let mut rgba = vec![0; len];
+    let mut paint = |x: usize, y: usize, color: [u8; 3], coverage: u8| {
+        let start = (y * side as usize + x) * 4;
+        let pixel = &mut rgba[start..start + 4];
+        let a = u32::from(coverage);
+        for (channel, source) in pixel[..3].iter_mut().zip(color) {
+            *channel = ((u32::from(source) * a + u32::from(*channel) * (256 - a)) >> 8) as u8;
+        }
+        pixel[3] = if pixel[3] == 0 { coverage }
+            else { ((255 * a + u32::from(pixel[3]) * (256 - a)) >> 8) as u8 };
+    };
+    if let Some(color) = shadow {
+        for (i, &a) in mask.iter().enumerate().filter(|(_, a)| **a != 0) {
+            paint(i % size as usize + 1, i / size as usize + 1, color, a);
+        }
+    }
+    let step: [i32; 3] = std::array::from_fn(|c|
+        ((i32::from(colors[1][c]) - i32::from(colors[0][c])) << 10) / size as i32);
+    for (i, &a) in mask.iter().enumerate().filter(|(_, a)| **a != 0) {
+        let (x, y) = (i % size as usize, i / size as usize);
+        let color = std::array::from_fn(|c| {
+            let advance = match gradient {
+                1 => step[c] * y as i32,
+                2 => step[c] * x as i32,
+                3 => (step[c] / 2) * (x + y) as i32,
+                _ => 0,
+            };
+            (((i32::from(colors[0][c]) << 10) + advance) >> 10) as u8
+        });
+        paint(x, y, color, a);
+    }
+    Ok(crate::ImageSurface { width: side, height: side, rgba })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn painted_cell_blends_shadow_and_face_and_advances_signed_gradient() -> anyhow::Result<()> {
+        let cell = paint_cell(&[255, 0, 0, 128], 2, [[255, 0, 0], [0, 0, 255]], 2, Some([0, 255, 0]))?;
+        assert_eq!(cell.rgba[..4], [254, 0, 0, 255]);
+        assert_eq!(cell.rgba[16..20], [63, 127, 63, 255]);
+        assert_eq!(cell.rgba[32..36], [0, 127, 0, 128]);
+        Ok(())
+    }
 
     #[test]
     fn cuts_cells_in_row_order() {

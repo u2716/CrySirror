@@ -26,6 +26,12 @@ pub struct ParserOptions {
     pub process_cond: bool,
     pub resolve_entities: bool,
     pub max_macro_depth: usize,
+    /// Attribute naming the scenario of `jump`/`call`/`return` (KAG3:
+    /// `storage`; the Custom Maid 3D 2 KAGParser uses `file`).
+    pub storage_attribute: String,
+    /// Attribute naming the label of `jump`/`call`/`return` (KAG3: `target`;
+    /// the Custom Maid 3D 2 KAGParser uses `label`).
+    pub target_attribute: String,
 }
 
 impl Default for ParserOptions {
@@ -36,6 +42,8 @@ impl Default for ParserOptions {
             process_cond: true,
             resolve_entities: true,
             max_macro_depth: 64,
+            storage_attribute: "storage".into(),
+            target_attribute: "target".into(),
         }
     }
 }
@@ -382,7 +390,7 @@ impl ParserSnapshot {
                 (
                     name.into(),
                     MacroDefinition {
-                        source: source.into(),
+                        source: host_macro_source(&source.into()),
                     },
                 )
             })
@@ -1112,7 +1120,7 @@ impl KagParser {
                 (
                     name.into(),
                     MacroDefinition {
-                        source: source.into(),
+                        source: host_macro_source(&source.into()),
                     },
                 )
             })
@@ -2082,8 +2090,9 @@ impl KagParser {
     where
         H: KagHost,
     {
-        let storage = self.optional_attr_string(&tag, "storage", host)?;
-        let target = self.optional_attr_string(&tag, "target", host)?;
+        let names = (self.options.storage_attribute.clone(), self.options.target_attribute.clone());
+        let storage = self.optional_attr_string(&tag, &names.0, host)?;
+        let target = self.optional_attr_string(&tag, &names.1, host)?;
         host.sync_parser_state(self)?;
         if host.on_jump(&tag, storage.as_deref(), target.as_deref())? {
             self.move_to(storage.as_deref(), target.as_deref(), Some(host))?;
@@ -2095,8 +2104,9 @@ impl KagParser {
     where
         H: KagHost,
     {
-        let storage = self.optional_attr_string(&tag, "storage", host)?;
-        let target = self.optional_attr_string(&tag, "target", host)?;
+        let names = (self.options.storage_attribute.clone(), self.options.target_attribute.clone());
+        let storage = self.optional_attr_string(&tag, &names.0, host)?;
+        let target = self.optional_attr_string(&tag, &names.1, host)?;
         host.sync_parser_state(self)?;
         if host.on_call(&tag, storage.as_deref(), target.as_deref())? {
             self.push_ext_locals(&tag, host)?;
@@ -2112,8 +2122,9 @@ impl KagParser {
     where
         H: KagHost,
     {
-        let storage = self.optional_attr_string(&tag, "storage", host)?;
-        let target = self.optional_attr_string(&tag, "target", host)?;
+        let names = (self.options.storage_attribute.clone(), self.options.target_attribute.clone());
+        let storage = self.optional_attr_string(&tag, &names.0, host)?;
+        let target = self.optional_attr_string(&tag, &names.1, host)?;
         host.on_call_stack_depth(self.call_stack.len())?;
         host.sync_parser_state(self)?;
         if !host.on_return(&tag, storage.as_deref(), target.as_deref())? {
@@ -3063,6 +3074,27 @@ fn is_kag_ws(ch: char) -> bool {
     ch == ' ' || ch == '\t'
 }
 
+/// A host-supplied macro body in recorded form: scenario lines lose their
+/// leading tabs and `@` command lines become `[...]` tags, as
+/// `recorded_macro_fragment` stores `[macro]` bodies of scenarios. Recorded
+/// bodies pass through unchanged.
+fn host_macro_source(source: &str) -> String {
+    let stripped = strip_leading_tabs_per_line(source);
+    let mut out = String::with_capacity(stripped.len() + 8);
+    for line in stripped.split_inclusive('\n') {
+        let body = line.trim_end_matches(['\r', '\n']);
+        match body.strip_prefix('@') {
+            Some(command) => {
+                out.push('[');
+                out.push_str(command);
+                out.push(']');
+            }
+            None => out.push_str(line),
+        }
+    }
+    out
+}
+
 fn strip_leading_tabs_per_line(source: &str) -> String {
     let mut stripped = String::with_capacity(source.len());
     let mut at_line_start = true;
@@ -3194,6 +3226,20 @@ mod tests {
         assert!(!Arc::ptr_eq(&parser.scenarios, &cloned.scenarios));
         assert!(parser.scenarios.contains_key("second.ks"));
         assert!(!cloned.scenarios.contains_key("second.ks"));
+    }
+
+    #[test]
+    fn host_macro_bodies_strip_leading_tabs_like_scenarios() {
+        let mut parser = KagParser::new();
+        parser.set_ignore_cr(true);
+        parser.set_macro_definitions([("show", "\t@_show\n\t@s\n")]);
+        parser.load_scenario_text("first.ks", "@show\n").unwrap();
+        let mut host = TestHost::default();
+        let names: Vec<String> = std::iter::from_fn(|| parser.next_tag_with(&mut host).unwrap())
+            .map(|t| t.tagname)
+            .filter(|n| n != "r")
+            .collect();
+        assert_eq!(names, ["_show", "s"]);
     }
 
     #[test]

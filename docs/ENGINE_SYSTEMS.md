@@ -70,6 +70,13 @@ voices. A reader-backed media slot can carry the opt-in fader to its
 embedded track. It keeps the fader when its playback channel is regenerated,
 including pause/resume and seek.
 
+Indexed movie playback can select a picture directly using the embedded PCM
+cursor or, for a silent resource, the session clock. The media worker retains
+one outstanding index request. Reader-backed CMV callers can select native
+rate, 30 Hz even-frame delivery or adaptive 30 Hz delivery. A scoped media
+audio clock distinguishes an absent track, inactive PCM and a running
+source position in milliseconds.
+
 Reader-backed resident PCM preparation uses the shared channel-audio
 reservation and a host worker pool. An optional unknown-length cap acts on
 the source PCM16 layout. The original reader can be retired after decode.

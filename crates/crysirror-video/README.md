@@ -39,10 +39,11 @@ establish exhaustive codec/profile conformance or realtime 4K performance.
 FFmpeg is only the offline fixture encoder/reference decoder. Tests themselves
 need no FFmpeg, external assets or device.
 
-## CMV5, CMV6, CMV7, CMV8 and CMV9
+## CMV3, CMV5, CMV6, CMV7, CMV8 and CMV9
 
 The shared decoder reads an indexed CMV stream through a seekable reader
-and decodes JBPD or JBPE into top-down RGBA. CMV9 retains an immutable
+and decodes JBP1, JBPD or JBPE into top-down RGBA. CMV3 stores independent
+JBP1 pictures in raster MCU order. CMV9 retains an immutable
 static base while dynamic blocks are decoded per picture. The runtime
 passes the indexed Ogg subrange to its existing Vorbis decoder.
 

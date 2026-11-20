@@ -7,6 +7,9 @@ use super::{DecodeError, Expression, InstructionKind, Term, VmProfile};
 use crate::Script;
 use std::{collections::BTreeMap, sync::Arc};
 
+#[cfg(feature = "runtime")]
+mod csp;
+
 /// Frame table +82548 has 64 entries indexed by depth +82804; entry 0 is the base.
 const MAX_CALL_DEPTH: usize = 63;
 /// The +82864 accumulator and each string slot are 1024 bytes including the NUL.
@@ -29,7 +32,7 @@ fn append(buffer: &mut Vec<u8>, bytes: &[u8], pc: usize, tag: u16) -> Result<(),
     buffer.extend_from_slice(bytes);
     Ok(())
 }
-/// 0x140085ea0 copies only slots 0..127; other indexes leave the accumulator unchanged.
+/// Out-of-range direct string operands leave the accumulator unchanged.
 fn append_slot(
     state: &State,
     buffer: &mut Vec<u8>,
@@ -37,7 +40,7 @@ fn append_slot(
     pc: usize,
     tag: u16,
 ) -> Result<(), DecodeError> {
-    if index > 127 {
+    if index >= state.string_cells() {
         return Ok(());
     }
     let bytes = state
@@ -128,9 +131,9 @@ impl Image {
             .map_or_else(|| self.script.text_bytes(), Vec::as_slice)
     }
 
-    fn write_text_string(&mut self, start: usize, bytes: &[u8]) -> Result<(), &'static str> {
+    fn write_text(&mut self, start: usize, bytes: &[u8], terminate: bool) -> Result<(), &'static str> {
         let end = start
-            .checked_add(bytes.len() + 1)
+            .checked_add(bytes.len() + usize::from(terminate))
             .filter(|&end| end <= self.text_bytes().len())
             .ok_or("CMVS string write outside script text")?;
         if self.modified_text.as_mut().and_then(Arc::get_mut).is_none() {
@@ -146,8 +149,8 @@ impl Image {
             .as_mut()
             .and_then(Arc::get_mut)
             .expect("unique text backing");
-        text[start..end - 1].copy_from_slice(bytes);
-        text[end - 1] = 0;
+        text[start..start + bytes.len()].copy_from_slice(bytes);
+        if terminate { text[end - 1] = 0; }
         Ok(())
     }
 }
@@ -174,6 +177,8 @@ impl Machine {
             "pc": self.pc,
             "frames": self.frames,
             "cross": self.cross_calls,
+            "native_return_stack": self.native_return_stack,
+            "cvns_arguments": self.cvns_arguments,
             "repeat": self.repeat_count,
             "state": self.state.snapshot(),
             "stack": self.stack.snapshot(),
@@ -201,13 +206,16 @@ impl Machine {
         }
         let slot = word(value, "slot")? as u8;
         images.contains_key(&slot).then_some(())?;
+        let cvns = images.get(&0)?.profile == VmProfile::Cvns20040515X86;
         Some(Self {
             images,
             slot,
             pc: word(value, "pc")? as usize,
             state: State::from_snapshot(&value["state"])?,
-            stack: ParameterStack::from_snapshot(&value["stack"])?,
+            stack: ParameterStack::from_snapshot(&value["stack"], cvns)?,
             frames: words(value, "frames")?.into_iter().map(|at| at as usize).collect(),
+            cvns_arguments: match value.get("cvns_arguments") { Some(_) => words(value,"cvns_arguments")?.try_into().ok()?, None=>[0;16] },
+            native_return_stack: cvns && value["native_return_stack"].as_bool().unwrap_or(false),
             cross_calls: words(value, "cross")?.into_iter().map(|at| at as u8).collect(),
             pending: None,
             repeat_count: word(value, "repeat")?,
@@ -237,6 +245,9 @@ pub struct Machine {
     stack: ParameterStack,
     frames: Vec<usize>,
     cross_calls: Vec<u8>,
+    // Original CSP1 keeps return contexts in the parameter stack alone.
+    native_return_stack: bool,
+    cvns_arguments: [u32;16],
     pending: Option<(usize, u16)>,
     repeat_count: u32,
 }
@@ -244,14 +255,21 @@ pub struct Machine {
 impl Machine {
     pub fn new(PreparedScript(image): PreparedScript) -> Self {
         let pc = image.script.entry_pc() as usize;
+        let state = match image.profile {
+            VmProfile::Cvns20040515X86 => State::new().with_string_cells(256),
+            _ => State::new(),
+        };
+        let stack = if image.profile == VmProfile::Cvns20040515X86 { ParameterStack::cvns() } else { ParameterStack::new(65536) };
         Self {
             images: BTreeMap::from([(0, image)]),
             slot: 0,
             pc,
-            state: State::new(),
-            stack: ParameterStack::new(65536),
+            state,
+            stack,
             frames: Vec::new(),
             cross_calls: Vec::new(),
+            native_return_stack: false,
+            cvns_arguments:[0;16],
             pending: None,
             repeat_count: 0,
         }
@@ -305,7 +323,7 @@ impl Machine {
             StringRef::Text(offset) => (self.image().text_bytes(), offset),
             StringRef::ScriptData(offset) => (self.script_data(), offset),
             StringRef::StringBank(index) => {
-                let index = if index > 127 { 0 } else { index };
+                let index = self.state.string_slot(index);
                 return self
                     .state
                     .string(index)
@@ -329,7 +347,7 @@ impl Machine {
             StringRef::StringBank(slot) => {
                 let cell = self
                     .state
-                    .raw_string_cell(if slot < 128 { slot } else { 0 })
+                    .raw_string_cell(self.state.string_slot(slot))
                     .expect("normalized slot");
                 (cell.as_slice(), 0)
             }
@@ -358,6 +376,28 @@ impl Machine {
             })
     }
 
+    /// RegQueryValueExA copies the stored byte count, without adding a string terminator.
+    #[cfg(feature = "runtime")]
+    pub(super) fn write_registry_bytes(&mut self, reference: u32, bytes: &[u8]) -> Result<(), DecodeError> {
+        let pc = self.pc;
+        let fail = |reason| error(pc, 0x2049, reason);
+        match StringRef::decode(reference) {
+            StringRef::Text(offset) => self.images.get_mut(&self.slot).expect("active image")
+                .write_text(offset as usize, bytes, false).map_err(fail),
+            StringRef::ScriptData(offset) => {
+                let data = &mut self.images.get_mut(&self.slot).expect("active image").data;
+                data.get_mut(offset as usize..).and_then(|tail| tail.get_mut(..bytes.len()))
+                    .ok_or_else(|| fail("registry value outside script data"))?.copy_from_slice(bytes);
+                Ok(())
+            }
+            StringRef::StringBank(slot) => self.state.write_cell_prefix(self.state.string_slot(slot), bytes).map_err(fail),
+            StringRef::Frame(raw) => {
+                let start = frame_offset(self.frame_base(), raw, false).ok_or_else(|| fail("registry destination outside stack"))?;
+                self.stack.write_prefix(start, bytes).map_err(|e| fail(e.0))
+            }
+        }
+    }
+
     pub(super) fn write_string_reference(
         &mut self,
         opcode: u16,
@@ -365,7 +405,7 @@ impl Machine {
         bytes: &[u8],
     ) -> Result<(), DecodeError> {
         let (tag, offset) = match StringRef::decode(reference) {
-            StringRef::StringBank(slot) => (0x121, if slot < 128 { slot } else { 0 }),
+            StringRef::StringBank(slot) => (0x121, self.state.string_slot(slot)),
             StringRef::ScriptData(offset) => (0x125, offset),
             StringRef::Frame(offset) => (0x127, offset),
             StringRef::Text(offset) => {
@@ -373,7 +413,7 @@ impl Machine {
                     .images
                     .get_mut(&self.slot)
                     .expect("active image")
-                    .write_text_string(offset as usize, bytes)
+                    .write_text(offset as usize, bytes, true)
                     .map_err(|why| error(self.pc, opcode, why));
             }
         };
@@ -419,7 +459,7 @@ impl Machine {
         match tag {
             0x121 => {
                 let slot = raw & 0x3fff_ffff;
-                if slot < 128 {
+                if slot < self.state.string_cells() {
                     self.state
                         .set_string_journaled(slot, bytes, journal)
                         .map_err(fail)?;
@@ -746,7 +786,8 @@ impl Machine {
                 let repeat = self.stack.peek_u32(12).map_err(|e| error(pc, op, e.0))?;
                 if slot > 3
                     || !self.is_boundary(slot as u8, next)
-                    || self.cross_calls.last().copied() != Some(slot as u8)
+                    || (!self.cross_calls.is_empty() || !self.native_return_stack)
+                        && self.cross_calls.last().copied() != Some(slot as u8)
                 {
                     return Err(error(pc, op, "invalid cross-script return context"));
                 }
@@ -754,6 +795,7 @@ impl Machine {
                 self.slot = slot as u8;
                 self.repeat_count = repeat;
                 self.cross_calls.pop();
+                if self.stack.len_bytes() == 0 { self.native_return_stack = false; }
             }
             InstructionKind::System { command: 0 } => {
                 self.pc = next;
@@ -761,6 +803,23 @@ impl Machine {
                 return Ok(Step::Yield);
             }
             &InstructionKind::System { command } => {
+                let command = match self.profile() {
+                    VmProfile::Cvns20040515X86 => {
+                        if let Some(&count)=super::cvns_scratch::ARGUMENT_WORDS.get(command as usize) {
+                            for index in 0..usize::from(count) {
+                                if let Ok(word)=self.stack.peek_u32(4*(index+1)) {
+                                    self.cvns_arguments[index]=word;
+                                }
+                            }
+                            // sub_42b310 decrements its signed exponent in the argument block.
+                            if command==0xe6 && self.cvns_arguments[1] as i32>1 {
+                                self.cvns_arguments[1]=1;
+                            }
+                        }
+                        super::cvns::route(command)
+                    },
+                    _ => command,
+                };
                 self.pending = Some((pc, command));
                 return Ok(Step::System { pc, command });
             }
@@ -813,9 +872,12 @@ impl Machine {
         slot: u32,
         PreparedScript(image): PreparedScript,
     ) -> Result<(), DecodeError> {
-        if !matches!(self.pending, Some((_, 0x81))) {
-            return Err(error(self.pc, 0x2081, "no pending common-script load"));
-        }
+        // CVNS 0x42c3c0 consumes only the name word and always loads image slot 1.
+        let arguments = match self.pending {
+            Some((_, 0x81)) => 8,
+            Some((_, 0x812)) if slot == 0 => 4,
+            _ => return Err(error(self.pc, 0x2081, "no pending common-script load")),
+        };
         if slot >= 3 {
             return Err(error(self.pc, 0x2081, "common slot must be 0..2"));
         }
@@ -828,7 +890,7 @@ impl Machine {
             ));
         }
         let entry = image.script.entry_pc() as usize;
-        let stack = self.transfer_stack(8, 0x2081)?;
+        let stack = self.transfer_stack(arguments, 0x2081)?;
         self.images.insert(slot, image);
         self.stack = stack;
         self.cross_calls.push(self.slot);
@@ -840,16 +902,17 @@ impl Machine {
     }
 
     pub fn enter_main(&mut self, PreparedScript(image): PreparedScript) -> Result<(), DecodeError> {
-        if !matches!(self.pending, Some((_, 0x03 | 0x80))) {
+        if !matches!(self.pending, Some((_, 0x03 | 0x80 | 0x805 | 0x810))) {
             return Err(error(self.pc, 0x2080, "no pending main-script load"));
         }
         self.pc = image.script.entry_pc() as usize;
         self.images.insert(0, image);
         self.slot = 0;
         self.repeat_count = 0;
-        self.stack = ParameterStack::new(65536);
+        self.stack.discard(self.stack.len_bytes()).map_err(|e| error(self.pc, 0x2080, e.0))?;
         self.frames.clear();
         self.cross_calls.clear();
+        self.native_return_stack = false;
         self.pending = None;
         Ok(())
     }
@@ -930,8 +993,8 @@ impl Machine {
         let (pc, command) = self
             .pending
             .ok_or_else(|| error(self.pc, 0, "no pending system command"))?;
-        let script_transfer = self.profile() != VmProfile::Cvns20040515X86
-            && matches!(command, 0x03 | 0x80 | 0x81);
+        // CVNS 0x2010 and 0x2012 also install their image and PC directly.
+        let script_transfer = matches!(command, 0x03 | 0x80 | 0x81 | 0x810 | 0x812);
         if !flags.advances_pc() || script_transfer {
             return Err(error(
                 pc,

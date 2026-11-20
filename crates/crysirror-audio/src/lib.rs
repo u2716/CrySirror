@@ -22,6 +22,7 @@ pub mod decoder;
 pub mod onset;
 pub mod wave_box;
 mod wave_ogg;
+mod mv2;
 pub mod legacy_envelopes;
 mod encoded_resource;
 pub mod opus;

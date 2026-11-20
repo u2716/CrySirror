@@ -2,6 +2,11 @@ xp3-brute — https://github.com/xmoezzz/xp3-brute
 Commit c82cb14302138125640478556723705aa720007b, src/decoder/pbd.rs
 (TJS/ns0 and TJS/4s0 data pack decoding: checkers, PackinOne ChaCha
 variants, LZ4 frames with a 64 KiB dictionary).
+Commit c2a2dec56e81ae9ba8c080a0d7dcfc0d5b830de2, src/nana.rs and
+src/cxdec_names.rs (Nana profile format, name stream and validation).
+Commit 67b5cc8d439be69859505583b33db6ba3cb2f1fb, src/madocrypt.rs
+(known-header MadoCrypt seed selection and archive checksum validation).
+Copyright (c) xp3-brute contributors.
 Licensed under the MIT License (Cargo.toml `license = "MIT"`):
 
 Permission is hereby granted, free of charge, to any person obtaining a copy

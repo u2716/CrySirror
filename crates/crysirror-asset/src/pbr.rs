@@ -478,7 +478,7 @@ fn load_pbr_with(
     for m in doc.materials() {
         let p = m.pbr_metallic_roughness();
         if let Some(extra) = engine_material(&m)? {
-            for index in extra.textures().into_iter().flatten() {
+            for index in extra.all_textures() {
                 ensure!(
                     *index < srgb.len(),
                     "engine material image index outside model"

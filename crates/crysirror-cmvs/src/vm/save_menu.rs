@@ -28,6 +28,11 @@ fn csv_version(bytes: &[u8]) -> Option<u8> {
         .then(|| signature[3] - b'0')
 }
 
+#[cfg(feature = "runtime")]
+fn cvns_signature(header: &[u8]) -> bool {
+    header.starts_with(b"CSP") && header.get(3).is_some_and(|v| (b'1'..=b'9').contains(v))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SaveHeader {
     pub version: u8,
@@ -87,29 +92,49 @@ pub(crate) fn scan_latest_slot(
     storage: &dyn ClientStorage,
     base: Option<(&VfsPath, bool)>,
     range: std::ops::Range<u32>,
-    mut scratch: SlotHeaderScratch,
+    scratch: SlotHeaderScratch,
     check_cancel: impl FnMut() -> Result<()>,
 ) -> Result<(u32, SlotHeaderScratch)> {
-    if range.is_empty() {
+    scan_slot_range(storage, base, range.start, range.end.saturating_sub(range.start),
+        scratch, |h| csv_version(h).is_some(), check_cancel)
+}
+
+#[cfg(feature = "runtime")]
+pub(crate) fn latest_cvns_slot(
+    storage: &dyn ClientStorage, base: Option<(&VfsPath, bool)>, first: u32, count: u32,
+    scratch: SlotHeaderScratch, check: impl FnMut() -> Result<()>,
+) -> Result<(u32, SlotHeaderScratch)> {
+    // 0x42fda0 checks twice the starting index, and 0x4362e0 opens first + 1.
+    if first as i32 <= 0 || first.wrapping_mul(2) as i32 > 257 || first >= first.wrapping_add(count) {
         return Ok((u32::MAX, scratch));
     }
-    let headers = read_slot_headers(storage, base, range.clone(), check_cancel)?;
+    scan_slot_range(storage, base, first + 1, count, scratch, cvns_signature, check)
+}
+
+#[cfg(feature = "runtime")]
+fn scan_slot_range(
+    storage: &dyn ClientStorage, base: Option<(&VfsPath, bool)>, first: u32, count: u32,
+    mut scratch: SlotHeaderScratch, valid: impl Fn(&[u8]) -> bool, check: impl FnMut() -> Result<()>,
+) -> Result<(u32, SlotHeaderScratch)> {
+    if count == 0 { return Ok((u32::MAX, scratch)); }
+    let suffix = first % SLOT_NAME_CYCLE;
+    let headers = read_slot_headers(storage, base, suffix..suffix + count.min(SLOT_NAME_CYCLE), check)?;
 
     // The original %z3 repeats names every 1,000 slots. A full pass
     // overwrites the same scratch prefix on each iteration. A second pass
     // scores every file after that prefix is initialized. Later full passes
     // produce the same scores, and strict comparison keeps earlier winners.
-    let count = range.end - range.start;
-    let prefix_end = range.start + count.min(2 * SLOT_NAME_CYCLE);
-    let tail_start = prefix_end.max(range.end - count % SLOT_NAME_CYCLE);
+    let prefix_end = count.min(2 * SLOT_NAME_CYCLE);
+    let tail_start = prefix_end.max(count - count % SLOT_NAME_CYCLE);
     let mut newest = 0;
     let mut slot = u32::MAX;
-    for candidate in (range.start..prefix_end).chain(tail_start..range.end) {
+    for offset in (0..prefix_end).chain(tail_start..count) {
+        let candidate = first.wrapping_add(offset);
         let Some((bytes, len)) = headers.get(&(candidate % SLOT_NAME_CYCLE)) else {
             continue;
         };
         scratch[..*len].copy_from_slice(&bytes[..*len]);
-        if csv_version(&scratch).is_some() {
+        if valid(&scratch) {
             let key = packed_timestamp(&scratch[16..]);
             if key > newest {
                 newest = key;
@@ -125,18 +150,33 @@ pub(crate) fn probe_save_slot(
     storage: &dyn ClientStorage,
     base: Option<(&VfsPath, bool)>,
     slot: u32,
-    mut scratch: SlotHeaderScratch,
+    scratch: SlotHeaderScratch,
     check_cancel: impl FnMut() -> Result<()>,
 ) -> Result<(u32, SlotHeaderScratch)> {
     if slot >= SLOT_NAME_CYCLE {
         return Ok((0, scratch));
     }
-    let headers = read_slot_headers(storage, base, slot..slot + 1, check_cancel)?;
+    probe_header(storage, base, slot, scratch, |h| csv_version(h).is_some(), check_cancel)
+}
+
+#[cfg(feature = "runtime")]
+pub(crate) fn probe_cvns_slot(storage: &dyn ClientStorage, base: Option<(&VfsPath, bool)>,
+    slot: u32, scratch: SlotHeaderScratch, check: impl FnMut() -> Result<()>,
+) -> Result<(u32, SlotHeaderScratch)> {
+    if slot == 0 { return Ok((0, scratch)); }
+    probe_header(storage, base, slot % SLOT_NAME_CYCLE, scratch, cvns_signature, check)
+}
+
+#[cfg(feature = "runtime")]
+fn probe_header(storage: &dyn ClientStorage, base: Option<(&VfsPath, bool)>,
+    slot: u32, mut scratch: SlotHeaderScratch, valid: impl Fn(&[u8]) -> bool, check: impl FnMut() -> Result<()>,
+) -> Result<(u32, SlotHeaderScratch)> {
+    let headers = read_slot_headers(storage, base, slot..slot + 1, check)?;
     let Some((bytes, len)) = headers.get(&slot) else {
         return Ok((0, scratch));
     };
     scratch[..*len].copy_from_slice(&bytes[..*len]);
-    Ok((u32::from(csv_version(&scratch).is_some()), scratch))
+    Ok((u32::from(valid(&scratch)), scratch))
 }
 
 #[cfg(feature = "runtime")]
@@ -248,17 +288,25 @@ pub(crate) enum SlotHeaderEdit {
     Values([u32; 2]),
 }
 
-#[cfg(feature = "runtime")]
-pub(crate) fn edit_save_slot(
+#[cfg(all(test, feature = "runtime"))]
+fn edit_save_slot(
     storage: &dyn ClientStorage,
     base: Option<(&VfsPath, bool)>,
     slot: u32,
     edit: SlotHeaderEdit,
     check_cancel: impl Fn() -> Result<()>,
 ) -> Result<bool> {
+    edit_slot_header(storage, base, slot, edit, false, check_cancel)
+}
+
+#[cfg(feature = "runtime")]
+pub(crate) fn edit_slot_header(
+    storage: &dyn ClientStorage, base: Option<(&VfsPath, bool)>, slot: u32, edit: SlotHeaderEdit,
+    cvns: bool, check_cancel: impl Fn() -> Result<()>,
+) -> Result<bool> {
     const VALUE_OFFSET: usize = 532;
 
-    if slot >= SLOT_NAME_CYCLE {
+    if (cvns && slot as i32 <= 0) || (!cvns && slot >= SLOT_NAME_CYCLE) {
         return Ok(false);
     }
     let Some((path, reader)) = open_save_slot(storage, base, slot)? else {
@@ -269,7 +317,8 @@ pub(crate) fn edit_save_slot(
     }
     let mut signature = [0; 4];
     read_exact_at(reader.as_ref(), 0, &mut signature)?;
-    if csv_version(&signature).is_none() {
+    let valid = |header: &[u8]| if cvns { cvns_signature(header) } else { csv_version(header).is_some() };
+    if !valid(&signature) {
         return Ok(false);
     }
     let mut bytes = crysirror_resource::io::read_all_checked(
@@ -280,7 +329,7 @@ pub(crate) fn edit_save_slot(
     let Some(header) = bytes.get_mut(..SLOT_PREFIX_BYTES) else {
         return Ok(false);
     };
-    if csv_version(header).is_none() {
+    if !valid(header) {
         return Ok(false);
     }
     match edit {
@@ -344,8 +393,8 @@ pub(crate) enum SlotPreview {
     Encoded(Vec<u8>),
 }
 
-#[cfg(feature = "runtime")]
-pub(crate) fn read_slot_metadata(
+#[cfg(all(test, feature = "runtime"))]
+fn read_slot_metadata(
     storage: &dyn ClientStorage,
     base: Option<(&VfsPath, bool)>,
     slot: i32,
@@ -356,6 +405,15 @@ pub(crate) fn read_slot_metadata(
     let Ok(slot) = u32::try_from(slot) else {
         return Ok(None);
     };
+    read_gameplay_metadata(storage, base, slot, wants_image, false, check_cancel)
+}
+
+#[cfg(feature = "runtime")]
+pub(crate) fn read_gameplay_metadata(
+    storage: &dyn ClientStorage, base: Option<(&VfsPath, bool)>, slot: u32,
+    wants_image: bool, cvns: bool, check_cancel: impl Fn() -> Result<()>,
+) -> Result<Option<SlotMetadata>> {
+    check_cancel()?;
     let Some((_, reader)) = open_save_slot(storage, base, slot)? else {
         return Ok(None);
     };
@@ -364,7 +422,7 @@ pub(crate) fn read_slot_metadata(
     }
     let mut header = [0; SLOT_PREFIX_BYTES];
     read_exact_at(reader.as_ref(), 0, &mut header)?;
-    if csv_version(&header).is_none() {
+    if !(if cvns { cvns_signature(&header) } else { csv_version(&header).is_some() }) {
         return Ok(None);
     }
     let string = |offset: usize| -> Result<Vec<u8>> {
@@ -484,6 +542,55 @@ impl SaveMenuRequest {
     }
 }
 
+/// 0x436040 scans CSP1..CSP9, starting at file 001. The checked index
+/// is zero-based. Labels and ordering both come from the header at +16.
+#[cfg(feature = "runtime")]
+pub(crate) fn scan_cvns_menu(
+    storage: &dyn ClientStorage,
+    base: Option<(&VfsPath, bool)>,
+    count: u32,
+    check: impl Fn() -> Result<()>,
+) -> Result<SaveMenu> {
+    let count = count.min(256);
+    let mut result = SaveMenu { slots: Vec::with_capacity(count as usize), latest: None };
+    if count == 0 {
+        return Ok(result);
+    }
+    let paths = slot_paths(storage, base, 1..count + 1)?;
+    let mut newest = 0;
+    for number in 1..=count {
+        check()?;
+        let Some(path) = paths.get(&number) else {
+            result.slots.push(SaveSlot::Missing);
+            continue;
+        };
+        let input = match storage.open_read(path) {
+            Err(Error::NotFound) => {
+                result.slots.push(SaveSlot::Missing);
+                continue;
+            }
+            other => other?,
+        };
+        let mut prefix = [0; 600];
+        let size = input.len()?.min(prefix.len() as u64) as usize;
+        read_exact_at(input.as_ref(), 0, &mut prefix[..size])?;
+        let header = &prefix[..size];
+        let status = if header.len() >= 35 && cvns_signature(header) {
+            let end = header[16..].iter().position(|&b| b == 0).context("unterminated CVNS slot label")?;
+            let key = packed_timestamp(&header[16..35]);
+            if key > newest {
+                newest = key;
+                result.latest = Some((number - 1) as u16);
+            }
+            SaveSlot::Recognized(SaveHeader { version: header[3] - b'0', label: header[16..16 + end].to_vec(), ordering_key: key })
+        } else {
+            SaveSlot::Invalid
+        };
+        result.slots.push(status);
+    }
+    Ok(result)
+}
+
 #[cfg(all(test, feature = "runtime"))]
 mod latest_tests {
     use super::*;
@@ -565,6 +672,24 @@ mod latest_tests {
         header[..4].copy_from_slice(signature);
         header[16..35].copy_from_slice(timestamp);
         header
+    }
+
+    #[test]
+    fn cvns_probes_and_scans_csp_headers_using_one_based_range() -> Result<()> {
+        let storage = Storage::read_only(BTreeMap::from([
+            ("Save/SAVE001.DAT", header(b"CSP1", b"2026-11-19 08:00:00")),
+            ("Save/save002.dat", header(b"CSV9", b"2099-11-19 08:00:00")),
+            ("Save/save003.dat", header(b"CSP9", b"2026-11-19 08:00:00")),
+        ]));
+        let root = VfsPath::new(Mount::Save, "save")?;
+        let base = Some((&root, true));
+        let scratch = [0; 64];
+        assert_eq!(latest_cvns_slot(&storage, base, 1, 2, scratch, || Ok(()))?.0, 3);
+        assert_eq!(latest_cvns_slot(&storage, base, 129, 10, scratch, || Ok(()))?.0, u32::MAX);
+        assert_eq!(probe_cvns_slot(&storage, base, 1001, scratch, || Ok(()))?.0, 1);
+        assert_eq!(probe_cvns_slot(&storage, base, 2, scratch, || Ok(()))?.0, 0);
+        assert_eq!(probe_cvns_slot(&storage, base, 0, scratch, || Ok(()))?.0, 0);
+        Ok(())
     }
 
     #[test]

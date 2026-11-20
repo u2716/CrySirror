@@ -996,3 +996,59 @@ fn group_c_explicit_formats() {
         pairs(&[("a.pgx", b"PGX\0hi")])
     );
 }
+
+#[test]
+fn kiss_warc_walks_the_hash_tree_and_inflates_chunks() {
+    let chunk = |zlib_method: bool, body: &[u8]| {
+        let stored = if zlib_method { zlib(body) } else { body.to_vec() };
+        let mut out = le(u32::from(zlib_method)).to_vec();
+        out.extend(le(0));
+        out.extend(le(body.len() as u32));
+        out.extend(le(stored.len() as u32));
+        out.extend(stored);
+        out
+    };
+    let (dir, a, b) = (0x11u64, 0x22u64, 0x33u64);
+    // Block 2: the two file chunks.
+    let first = chunk(true, b"[playvoice]");
+    let second = chunk(false, b"raw");
+    let mut data = first.clone();
+    data.extend(&second);
+    // Block 0: root with one directory, which holds both files.
+    let node = |hash: u64, entries: &[(u64, u64)], directories: u32| {
+        let mut out = le(32).to_vec();
+        out.extend(le(16));
+        out.extend(hash.to_le_bytes());
+        out.extend(le(directories));
+        out.extend(le(entries.len() as u32 - directories));
+        out.extend(0u64.to_le_bytes());
+        for (hash, offset) in entries {
+            out.extend(hash.to_le_bytes());
+            out.extend(offset.to_le_bytes());
+        }
+        out
+    };
+    let root = node(0, &[(dir, 48)], 1);
+    let mut tree = root.clone();
+    tree.extend(node(dir, &[(a, 0), (b, first.len() as u64)], 0));
+    // Block 3: names, compressed.
+    let mut names = Vec::new();
+    for (hash, name) in [(dir, "script"), (a, "a.ks"), (b, "b.txt")] {
+        names.extend(hash.to_le_bytes());
+        names.extend(le(name.len() as u32));
+        names.extend(name.encode_utf16().flat_map(u16::to_le_bytes));
+    }
+    let names = chunk(true, &names);
+    let mut arc = b"warc\xff\xaa\x45\xf1".to_vec();
+    arc.extend(le(1000));
+    arc.extend(le(4));
+    for (id, body) in [(2u32, &data), (0, &tree), (1, &tree), (3, &names)] {
+        arc.extend(le(id));
+        arc.extend((body.len() as u64).to_le_bytes());
+        arc.extend(body);
+    }
+    assert_eq!(
+        extract("kiss/warc", arc, true),
+        pairs(&[("script/a.ks", b"[playvoice]"), ("script/b.txt", b"raw")])
+    );
+}

@@ -24,6 +24,10 @@ use crysirror_core::{
 };
 use std::sync::atomic::{AtomicU64, Ordering};
 
+#[cfg(feature="runtime")]
+pub(crate) mod csp;
+mod cvns;
+
 static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -77,6 +81,7 @@ pub struct CmvsVm {
     save_information: [Option<u32>; 3],
     /// Object command and slot standing in for a pending message window child command.
     owner_alias: Option<(u16, u32)>,
+    cvns: super::cvns::CvnsState,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -128,6 +133,8 @@ impl PreparedTransfer {
 
 /// Logical VM image at a native checkpoint. It does not contain device state.
 pub(crate) struct MainVmCheckpoint {
+    #[cfg(feature = "runtime")]
+    pub(crate) cvns_records: Vec<u8>,
     machine: Machine,
     _control: Control,
     _second_save_group: bool,
@@ -261,6 +268,8 @@ impl CmvsVm {
         let session = NEXT_SESSION
             .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
             .map_err(|_| anyhow::anyhow!("CMVS session IDs exhausted"))?;
+        // CVNS starts with the popup gate +20440 cleared until 0x2068 sets it.
+        let popup_enabled = profile != VmProfile::Cvns20040515X86;
         Ok(Self {
             machine: Machine::new(startup),
             control: Control::default(),
@@ -269,25 +278,33 @@ impl CmvsVm {
             cursors: Vec::new(),
             session,
             io_generation: 0,
-            save_menu: None,
+            save_menu: (profile == VmProfile::Cvns20040515X86).then(|| SaveMenu {
+                slots: Vec::new(),
+                latest: None,
+            }),
             second_save_group: false,
             persistent_lists: [Vec::new(), Vec::new()],
             native: NativeState::default(),
             title: None,
             save_title: Vec::new(),
             scene_title: Vec::new(),
-            popup_enabled: true,
+            popup_enabled,
             skipping: false,
             auto_advance: false,
             message_bypass: false,
             gesture_options: PointerGesture::default(),
-            history: History::default(),
+            history: if profile == VmProfile::Cvns20040515X86 { History::cvns() } else { History::default() },
             message_windows: [None; 8],
             actions: Actions::default(),
             screen: Screen::default(),
             owner_alias: None,
             sequence: Sequence::default(),
             save_information: [None; 3],
+            cvns: super::cvns::CvnsState {
+                persistent_start: [4096, 1024, 32],
+                version: 0x1_0000,
+                ..Default::default()
+            },
         })
     }
 
@@ -335,6 +352,10 @@ impl CmvsVm {
     #[cfg(feature = "runtime")]
     pub(crate) fn cursor_name(&self, index: u32) -> Option<&[u8]> {
         self.cursors.get(usize::try_from(index).ok()?.checked_sub(1)?).map(Vec::as_slice)
+    }
+
+    pub(crate) fn bit(&self, index: u32) -> Option<bool> {
+        self.machine.state().bit(index)
     }
 
     pub fn integer(&self, index: usize) -> Option<u32> {
@@ -465,14 +486,17 @@ impl CmvsVm {
     }
 
     pub fn pending_script(&self) -> Result<Option<ScriptRequest>, DecodeError> {
-        if self.machine.profile() == VmProfile::Cvns20040515X86 {
-            return Ok(None);
-        }
-        let Some((pc, command @ (0x03 | 0x80 | 0x81))) = self.machine.pending_system() else {
+        let Some((pc, command @ (0x03 | 0x80 | 0x81 | 0x805 | 0x810 | 0x812))) =
+            self.machine.pending_system()
+        else {
             return Ok(None);
         };
         let opcode = 0x2000 + command;
-        let (common_slot, distance) = if command == 0x81 {
+        // CVNS 0x2010 (0x4317c0) replaces the main image and 0x2012 (0x42c3c0)
+        // calls into image slot 1; both read the name at SP-4.
+        let (common_slot, distance) = if command == 0x812 {
+            (Some(0), 4)
+        } else if command == 0x81 {
             let slot = self.required_parameter(opcode, 4)?;
             if slot >= 3 {
                 return Err(error(pc, opcode, "common script slot outside 0..3"));
@@ -483,11 +507,13 @@ impl CmvsVm {
         };
         let name = if command == 0x03 {
             &b"main.ps3"[..]
+        } else if command == 0x805 {
+            b"main.pss"
         } else {
             let reference = self.required_parameter(opcode, distance)?;
             self.machine.resolve_string(reference)?
         };
-        if name.is_empty() || name.len() >= 64 {
+        if name.is_empty() || name.len() >= if command >= 0x800 { 32 } else { 64 } {
             return Err(error(pc, opcode, "script basename exceeds native bounds"));
         }
         Ok(Some(ScriptRequest {
@@ -497,7 +523,7 @@ impl CmvsVm {
             caller: self.machine.current_slot(),
             pc,
             common_slot,
-            reset: command == 0x03,
+            reset: matches!(command, 0x03 | 0x805),
             name: name.to_vec(),
         }))
     }
@@ -528,6 +554,7 @@ impl CmvsVm {
     pub(crate) fn complete_main_script(
         &mut self,
         prepared: PreparedTransfer,
+        cvns_scene: Vec<u8>,
     ) -> Result<MainVmCheckpoint, DecodeError> {
         if !prepared.is_main()
             || prepared.request.reset
@@ -545,7 +572,7 @@ impl CmvsVm {
         candidate.enter_main(prepared.image)?;
         let mut control = self.control.clone();
         control.replace_main();
-        let checkpoint = self.vm_checkpoint(candidate.clone(), control.clone(), 0x2080)?;
+        let checkpoint = self.vm_checkpoint(candidate.clone(), control.clone(), 0x2080, cvns_scene)?;
         candidate
             .state_mut()
             .fill_bits(0, 1, false)
@@ -575,6 +602,17 @@ impl CmvsVm {
         self.machine.enter_main(prepared.image)?;
         self.native
             .record(&mut self.persistent_lists, super::native_state::SEEN_SCRIPT, &name);
+        if self.profile() == VmProfile::Cvns20040515X86 {
+            // 0x431070 keeps the banks, configuration, callback ownership and
+            // history capacity; it clears the linked history entries.
+            self.control.replace_main();
+            self.history.clear_entries();
+            self.message_windows = [None; 8];
+            self.skipping = false;
+            self.auto_advance = false;
+            self.io_generation += 1;
+            return Ok(());
+        }
         // 0x140084960 sets the slot-save flag again on reset.
         self.native.set_saved_flag(true);
         self.control.replace_main();
@@ -591,14 +629,14 @@ impl CmvsVm {
     }
 
     #[cfg(feature = "runtime")]
-    pub(crate) fn complete_scene_checkpoint(&mut self) -> Result<MainVmCheckpoint, DecodeError> {
+    pub(crate) fn complete_scene_checkpoint(&mut self, cvns_scene: Vec<u8>) -> Result<MainVmCheckpoint, DecodeError> {
         let pc = self.pc();
         if self.machine.pending_system() != Some((pc, 0x2b2)) {
             return Err(error(pc, 0x22b2, "CMVS scene checkpoint request missing"));
         }
         let mut candidate = self.machine.clone();
         candidate.complete_system(SystemResult(0x4000))?;
-        let checkpoint = self.vm_checkpoint(candidate.clone(), self.control.clone(), 0x22b2)?;
+        let checkpoint = self.vm_checkpoint(candidate.clone(), self.control.clone(), 0x22b2, cvns_scene)?;
         candidate
             .state_mut()
             .fill_bits(0, 1, false)
@@ -612,12 +650,36 @@ impl CmvsVm {
         mut machine: Machine,
         control: Control,
         opcode: u16,
+        _cvns_scene: Vec<u8>,
     ) -> Result<MainVmCheckpoint, DecodeError> {
-        machine
-            .state_mut()
-            .fill_bits(0, 1, true)
-            .map_err(|why| error(self.pc(), opcode, why))?;
+        if machine.profile() != VmProfile::Cvns20040515X86 {
+            machine
+                .state_mut()
+                .fill_bits(0, 1, true)
+                .map_err(|why| error(self.pc(), opcode, why))?;
+        }
+        #[cfg(feature = "runtime")]
+        let cvns_records = if machine.profile() == VmProfile::Cvns20040515X86 {
+            let capture = || -> anyhow::Result<Vec<u8>> {
+                let mut records = _cvns_scene;
+                for (tag,title) in [(0x100,&self.save_title),(0xff,&self.scene_title)] {
+                    let mut name=title.clone();
+                    name.push(0);
+                    super::save_slot::csp1::append(&mut records,tag,&[],&name)?;
+                }
+                super::save_slot::csp1::append(&mut records,0x204,&[],&u32::from(self.popup_enabled).to_le_bytes())?;
+                super::save_slot::csp1::append(&mut records,0x10a,&[],&u32::from(self.second_save_group).to_le_bytes())?;
+                control.csp_records(&mut records)?;
+                machine.csp_execution(&mut records)?;
+                super::csp_banks::capture(machine.state(), self.cvns.persistent_start, &mut records)?;
+                self.history.csp_record(&mut records)?;
+                super::save_slot::csp1::ordered(&records)
+            };
+            capture().map_err(|_| error(self.pc(), opcode, "CVNS native execution checkpoint exceeds its layout"))?
+        } else { Vec::new() };
         Ok(MainVmCheckpoint {
+            #[cfg(feature = "runtime")]
+            cvns_records,
             machine,
             _control: control,
             _second_save_group: self.second_save_group,
@@ -821,7 +883,7 @@ impl CmvsVm {
 
     #[cfg(feature = "runtime")]
     pub(crate) fn pending_effect_sound(&self) -> Result<EffectSound, DecodeError> {
-        let Some((pc, command @ (0xb0 | 0xb1 | 0xb3 | 0xba))) = self.machine.pending_system()
+        let Some((pc, command @ (0xb0 | 0xb1 | 0xb3 | 0xba | 0x8c5))) = self.machine.pending_system()
         else {
             return Err(error(
                 self.pc(),
@@ -831,30 +893,34 @@ impl CmvsVm {
         };
         let opcode = 0x2000 + command;
         let channel = self.required_parameter(opcode, 4)? as usize;
-        if channel >= 6 {
-            return Err(error(pc, opcode, "CMVS effect sound channel outside 0..5"));
+        let cvns = self.machine.profile() == VmProfile::Cvns20040515X86;
+        let sample = command == 0x8c5;
+        let limit = if sample { 4 } else if cvns { 48 } else { 6 };
+        if channel >= limit {
+            return Err(error(pc, opcode, "effect channel outside the native table"));
         }
         Ok(match command {
-            0xb0 | 0xba => {
+            0xb0 | 0xba | 0x8c5 => {
                 let name = self
                     .machine
                     .resolve_string(self.required_parameter(opcode, 8)?)?;
-                if name.len() >= 32 {
+                // CVNS keeps 64-byte names at +2768 + 64 * channel.
+                if !sample && name.len() >= if cvns { 64 } else { 32 } {
                     return Err(error(pc, opcode, "CMVS effect sound name byte limit"));
                 }
                 let name = path_string(name)
                     .map_err(|_| error(pc, opcode, "CMVS effect sound name encoding"))?;
                 EffectSound::Load {
-                    channel,
+                    channel: if sample { channel + 48 } else { channel },
                     name,
                     volume: self.required_parameter(opcode, 12)? as i32,
                     looping: self
-                        .required_parameter(opcode, if command == 0xba { 20 } else { 16 })?
+                        .required_parameter(opcode, if command == 0xb0 { 16 } else { 20 })?
                         != 0,
                     immediate: self
-                        .required_parameter(opcode, if command == 0xba { 24 } else { 20 })?
+                        .required_parameter(opcode, if command == 0xb0 { 20 } else { 24 })?
                         != 0,
-                    fade_ms: if command == 0xba {
+                    fade_ms: if command != 0xb0 {
                         self.required_parameter(opcode, 16)?
                     } else {
                         0
@@ -876,7 +942,7 @@ impl CmvsVm {
     ) -> Result<(), DecodeError> {
         let cleanup = match self.pending_effect_sound()? {
             EffectSound::Load { .. } => {
-                if matches!(self.machine.pending_system(), Some((_, 0xba))) {
+                if matches!(self.machine.pending_system(), Some((_, 0xba | 0x8c5))) {
                     24
                 } else {
                     20
@@ -1113,10 +1179,13 @@ impl CmvsVm {
             .machine
             .pending_system()
             .map_or(0, |(_, op)| op + 0x2000);
-        if name.is_empty() || (matches!(opcode, 0x2240 | 0x2248) && name.len() >= 32) {
+        if self.profile() == VmProfile::Cvns20040515X86 && opcode == 0x28b8 {
+            if name.is_empty() || name.len() >= 64 {
+                return Ok(None);
+            }
+        } else if name.is_empty() || (matches!(opcode, 0x2240 | 0x2248) && name.len() >= 32) {
             return Ok(None);
-        }
-        if name.len() >= 32 {
+        } else if name.len() >= 32 {
             return Err(error(self.pc(), opcode, "CMVS sound name byte limit"));
         }
         path_string(name)
@@ -1128,6 +1197,11 @@ impl CmvsVm {
     pub(crate) fn movie_path(&self) -> Result<VfsPath, DecodeError> {
         let opcode = self.machine.pending_system().map_or(0x20c0, |(_, op)| op + 0x2000);
         let [reference] = self.owner_arguments(opcode)?;
+        self.movie_path_for(reference)
+    }
+
+    #[cfg(feature = "runtime")]
+    pub(crate) fn movie_path_for(&self, reference: u32) -> Result<VfsPath, DecodeError> {
         let name = self.machine.resolve_string(reference)?;
         let pc = self.pc();
         let name =
@@ -1160,15 +1234,17 @@ impl CmvsVm {
         metadata: Option<&super::SlotMetadata>,
         publish: impl FnOnce() -> Result<()>,
     ) -> Result<()> {
+        let cvns = self.profile() == VmProfile::Cvns20040515X86;
+        let (opcode, words) = if cvns { (0x29ac, 4) } else { (0x22bd, 5) };
         let Some(metadata) = metadata else {
-            return Ok(self.complete_owner_call(5, Some(0))?);
+            return Ok(self.complete_owner_call(words, Some(0))?);
         };
-        let opcode = 0x22bd;
-        let [_, _, _, timestamp, comment] = self.owner_arguments(opcode)?;
+        let timestamp = self.owner_argument(opcode, usize::from(words - 1) * 4)?;
+        let comment = self.owner_argument(opcode, usize::from(words) * 4)?;
         let mut candidate = self.machine.clone();
         candidate.write_string_reference(opcode, timestamp, &metadata.timestamp)?;
         candidate.write_string_reference(opcode, comment, &metadata.comment)?;
-        candidate.complete_system(SystemResult(0x4014))?;
+        candidate.complete_system(SystemResult(0x4000 | words * 4))?;
         let [first, second, third] = metadata.values;
         for (index, value) in [
             (0, 1),
@@ -1199,7 +1275,9 @@ impl CmvsVm {
     pub(crate) fn complete_voice(&mut self, words: u16, loaded: bool) -> Result<(), DecodeError> {
         self.complete_owner_call(words, Some(u32::from(loaded)))?;
         // The unit of the original MOG_GetPcmLength result is still unverified.
-        self.machine.state_mut().forget_system_integer(4);
+        if self.profile() != VmProfile::Cvns20040515X86 {
+            self.machine.state_mut().forget_system_integer(4);
+        }
         Ok(())
     }
 
@@ -1479,15 +1557,19 @@ impl CmvsVm {
                 Step::Yield => return Ok(VmYield::Frame),
                 Step::System { pc, command } => {
                     let opcode = command + 0x2000;
-                    if self.machine.profile() == VmProfile::Cvns20040515X86 {
-                        if super::cvns::returns_without_effect(opcode) {
-                            self.machine.complete_system(SystemResult(0x4000))?;
-                            continue;
-                        }
-                        return match opcode {
-                            0x2002 | 0x2003 => Ok(VmYield::SystemCall { pc, opcode }),
-                            _ => Err(error(pc, opcode, "unreviewed CVNS native syscall")),
+                    if let Some(selector) = super::cvns::selector(opcode) {
+                        let result = if super::cvns::returns_without_effect(selector) {
+                            SystemResult(0x4000)
+                        } else {
+                            match self.cvns_command(selector)? {
+                                Some(result) => result,
+                                None => return Ok(VmYield::SystemCall { pc, opcode }),
+                            }
                         };
+                        if self.machine.complete_system(result)? == Step::Yield {
+                            return Ok(VmYield::Frame);
+                        }
+                        continue;
                     }
                     if opcode == 0x208a {
                         self.control.invoke(&mut self.machine)?;

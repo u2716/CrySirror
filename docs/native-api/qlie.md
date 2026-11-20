@@ -297,38 +297,38 @@ These tables cover the checked-in catalogues and explicit dispatch branches. An 
 
 | ID / API | Purpose | Status | Gap / condition | Source |
 | --- | --- | --- | --- | --- |
-| `cc` | cc | Handled | — | [message.rs:575](../../crates/crysirror-qlie/src/adapter/message.rs#L575) |
-| `?ap` | ?ap | Handled | — | [message.rs:721](../../crates/crysirror-qlie/src/adapter/message.rs#L721) |
-| `?as` | ?as | Handled | — | [message.rs:717](../../crates/crysirror-qlie/src/adapter/message.rs#L717) |
-| `?kwb` | ?kwb | Handled | — | [message.rs:734](../../crates/crysirror-qlie/src/adapter/message.rs#L734) |
-| `?kwd` | ?kwd | Handled | — | [message.rs:761](../../crates/crysirror-qlie/src/adapter/message.rs#L761) |
-| `?kwe` | ?kwe | Handled | — | [message.rs:735](../../crates/crysirror-qlie/src/adapter/message.rs#L735) |
-| `?kwl` | ?kwl | Handled | — | [message.rs:740](../../crates/crysirror-qlie/src/adapter/message.rs#L740) |
-| `?mc` | ?mc | Handled | — | [message.rs:783](../../crates/crysirror-qlie/src/adapter/message.rs#L783) |
-| `?ns` | ?ns | Handled | — | [message.rs:744](../../crates/crysirror-qlie/src/adapter/message.rs#L744) |
-| `?nsw` | ?nsw | Handled | — | [message.rs:731](../../crates/crysirror-qlie/src/adapter/message.rs#L731) |
-| `?tda` | ?tda | Handled | — | [message.rs:638](../../crates/crysirror-qlie/src/adapter/message.rs#L638) |
-| `?tlt` | ?tlt | Handled | — | [message.rs:761](../../crates/crysirror-qlie/src/adapter/message.rs#L761) |
-| `?tmg` | ?tmg | Handled | — | [message.rs:626](../../crates/crysirror-qlie/src/adapter/message.rs#L626) |
-| `?tp` | ?tp | Handled | — | [message.rs:613](../../crates/crysirror-qlie/src/adapter/message.rs#L613) |
-| `?ts` | ?ts | Handled | — | [message.rs:770](../../crates/crysirror-qlie/src/adapter/message.rs#L770) |
-| `ap` | ap | Handled | — | [message.rs:707](../../crates/crysirror-qlie/src/adapter/message.rs#L707) |
-| `as` | as | Handled | — | [message.rs:659](../../crates/crysirror-qlie/src/adapter/message.rs#L659) |
-| `kwb` | kwb | Handled | — | [message.rs:677](../../crates/crysirror-qlie/src/adapter/message.rs#L677) |
-| `kwd` | kwd,v (+3752) and tlt,v (, +3749) are kept settings | Handled | — | [message.rs:749](../../crates/crysirror-qlie/src/adapter/message.rs#L749) |
-| `kwe` | kwe | Handled | — | [message.rs:677](../../crates/crysirror-qlie/src/adapter/message.rs#L677) |
-| `kwl` | kwl | Handled | — | [message.rs:689](../../crates/crysirror-qlie/src/adapter/message.rs#L689) |
-| `mc` | mc | Handled | — | [message.rs:775](../../crates/crysirror-qlie/src/adapter/message.rs#L775) |
-| `n` | n | Handled | — | [message.rs:471](../../crates/crysirror-qlie/src/adapter/message.rs#L471) |
-| `ns` | ns | Handled | — | [message.rs:698](../../crates/crysirror-qlie/src/adapter/message.rs#L698) |
-| `nsw` | nsw | Handled | — | [message.rs:668](../../crates/crysirror-qlie/src/adapter/message.rs#L668) |
-| `o` | o | Handled | — | [message.rs:471](../../crates/crysirror-qlie/src/adapter/message.rs#L471) |
-| `sk` | sk | Handled | — | [message.rs:775](../../crates/crysirror-qlie/src/adapter/message.rs#L775) |
-| `t` | t | Handled | — | [message.rs:471](../../crates/crysirror-qlie/src/adapter/message.rs#L471) |
-| `tlt` | kwd,v (+3752) and tlt,v (, +3749) are kept settings | Handled | — | [message.rs:749](../../crates/crysirror-qlie/src/adapter/message.rs#L749) |
-| `tmg` | tmg | Handled | — | [message.rs:650](../../crates/crysirror-qlie/src/adapter/message.rs#L650) |
-| `tp` | tp | Handled | — | [message.rs:603](../../crates/crysirror-qlie/src/adapter/message.rs#L603) |
-| `ts` | ts | Handled | — | [message.rs:585](../../crates/crysirror-qlie/src/adapter/message.rs#L585) |
+| `cc` | cc | Handled | — | [message.rs:576](../../crates/crysirror-qlie/src/adapter/message.rs#L576) |
+| `?ap` | ?ap | Handled | — | [message.rs:722](../../crates/crysirror-qlie/src/adapter/message.rs#L722) |
+| `?as` | ?as | Handled | — | [message.rs:718](../../crates/crysirror-qlie/src/adapter/message.rs#L718) |
+| `?kwb` | ?kwb | Handled | — | [message.rs:735](../../crates/crysirror-qlie/src/adapter/message.rs#L735) |
+| `?kwd` | ?kwd | Handled | — | [message.rs:762](../../crates/crysirror-qlie/src/adapter/message.rs#L762) |
+| `?kwe` | ?kwe | Handled | — | [message.rs:736](../../crates/crysirror-qlie/src/adapter/message.rs#L736) |
+| `?kwl` | ?kwl | Handled | — | [message.rs:741](../../crates/crysirror-qlie/src/adapter/message.rs#L741) |
+| `?mc` | ?mc | Handled | — | [message.rs:784](../../crates/crysirror-qlie/src/adapter/message.rs#L784) |
+| `?ns` | ?ns | Handled | — | [message.rs:745](../../crates/crysirror-qlie/src/adapter/message.rs#L745) |
+| `?nsw` | ?nsw | Handled | — | [message.rs:732](../../crates/crysirror-qlie/src/adapter/message.rs#L732) |
+| `?tda` | ?tda | Handled | — | [message.rs:639](../../crates/crysirror-qlie/src/adapter/message.rs#L639) |
+| `?tlt` | ?tlt | Handled | — | [message.rs:762](../../crates/crysirror-qlie/src/adapter/message.rs#L762) |
+| `?tmg` | ?tmg | Handled | — | [message.rs:627](../../crates/crysirror-qlie/src/adapter/message.rs#L627) |
+| `?tp` | ?tp | Handled | — | [message.rs:614](../../crates/crysirror-qlie/src/adapter/message.rs#L614) |
+| `?ts` | ?ts | Handled | — | [message.rs:771](../../crates/crysirror-qlie/src/adapter/message.rs#L771) |
+| `ap` | ap | Handled | — | [message.rs:708](../../crates/crysirror-qlie/src/adapter/message.rs#L708) |
+| `as` | as | Handled | — | [message.rs:660](../../crates/crysirror-qlie/src/adapter/message.rs#L660) |
+| `kwb` | kwb | Handled | — | [message.rs:678](../../crates/crysirror-qlie/src/adapter/message.rs#L678) |
+| `kwd` | kwd,v (+3752) and tlt,v (, +3749) are kept settings | Handled | — | [message.rs:750](../../crates/crysirror-qlie/src/adapter/message.rs#L750) |
+| `kwe` | kwe | Handled | — | [message.rs:678](../../crates/crysirror-qlie/src/adapter/message.rs#L678) |
+| `kwl` | kwl | Handled | — | [message.rs:690](../../crates/crysirror-qlie/src/adapter/message.rs#L690) |
+| `mc` | mc | Handled | — | [message.rs:776](../../crates/crysirror-qlie/src/adapter/message.rs#L776) |
+| `n` | n | Handled | — | [message.rs:472](../../crates/crysirror-qlie/src/adapter/message.rs#L472) |
+| `ns` | ns | Handled | — | [message.rs:699](../../crates/crysirror-qlie/src/adapter/message.rs#L699) |
+| `nsw` | nsw | Handled | — | [message.rs:669](../../crates/crysirror-qlie/src/adapter/message.rs#L669) |
+| `o` | o | Handled | — | [message.rs:472](../../crates/crysirror-qlie/src/adapter/message.rs#L472) |
+| `sk` | sk | Handled | — | [message.rs:776](../../crates/crysirror-qlie/src/adapter/message.rs#L776) |
+| `t` | t | Handled | — | [message.rs:472](../../crates/crysirror-qlie/src/adapter/message.rs#L472) |
+| `tlt` | kwd,v (+3752) and tlt,v (, +3749) are kept settings | Handled | — | [message.rs:750](../../crates/crysirror-qlie/src/adapter/message.rs#L750) |
+| `tmg` | tmg | Handled | — | [message.rs:651](../../crates/crysirror-qlie/src/adapter/message.rs#L651) |
+| `tp` | tp | Handled | — | [message.rs:604](../../crates/crysirror-qlie/src/adapter/message.rs#L604) |
+| `ts` | ts | Handled | — | [message.rs:586](../../crates/crysirror-qlie/src/adapter/message.rs#L586) |
 
 ## Object and system methods / adapter/misc_native / misc_native_method
 
@@ -1657,12 +1657,12 @@ fn message_method(
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `condition; under op="o" \| "t" \| "n"` | `op == "n"` | Local state/value operations | Handled | [472](../../crates/crysirror-qlie/src/adapter/message.rs#L472) |
-| `condition; under op="o" \| "t" \| "n"` | `op == "t"` | Local state/value operations | Handled | [474](../../crates/crysirror-qlie/src/adapter/message.rs#L474) |
-| `condition; under op="kwb" \| "kwe"` | `op == "kwb"` | Local state/value operations | Handled | [683](../../crates/crysirror-qlie/src/adapter/message.rs#L683) |
-| `op; under op="?kwb" \| "?kwe" \| "?nsw"` | `_` | Local state/value operations | Handled | [736](../../crates/crysirror-qlie/src/adapter/message.rs#L736) |
-| `condition; under op="kwd" \| "tlt"` | `op == "kwd"` | i32::from | Handled | [750](../../crates/crysirror-qlie/src/adapter/message.rs#L750) |
-| `op` | `_` | Local state/value operations | Return only: Boolean/optional result interpreted by the caller | [799](../../crates/crysirror-qlie/src/adapter/message.rs#L799) |
+| `condition; under op="o" \| "t" \| "n"` | `op == "n"` | Local state/value operations | Handled | [473](../../crates/crysirror-qlie/src/adapter/message.rs#L473) |
+| `condition; under op="o" \| "t" \| "n"` | `op == "t"` | Local state/value operations | Handled | [475](../../crates/crysirror-qlie/src/adapter/message.rs#L475) |
+| `condition; under op="kwb" \| "kwe"` | `op == "kwb"` | Local state/value operations | Handled | [684](../../crates/crysirror-qlie/src/adapter/message.rs#L684) |
+| `op; under op="?kwb" \| "?kwe" \| "?nsw"` | `_` | Local state/value operations | Handled | [737](../../crates/crysirror-qlie/src/adapter/message.rs#L737) |
+| `condition; under op="kwd" \| "tlt"` | `op == "kwd"` | i32::from | Handled | [751](../../crates/crysirror-qlie/src/adapter/message.rs#L751) |
+| `op` | `_` | Local state/value operations | Return only: Boolean/optional result interpreted by the caller | [800](../../crates/crysirror-qlie/src/adapter/message.rs#L800) |
 
 ### adapter/minor_kinds.rs / QlieVm::minor_kind_method
 

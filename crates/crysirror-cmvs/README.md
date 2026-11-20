@@ -40,6 +40,14 @@ stop with a visible error, as tracked in
 
 `Cvns20040515X86` identifies the predecessor CVNS engine in the supplied i386
 build. It has its own PSS0/CPZ1 admission, frame timing and syscall table.
+The muted headless player runs voiced dialogue and a story choice back to the
+title, opens the Settings pages and exits through the title menu. Voices use
+the shared MV2X decoder.
+The profile reads and writes CSS0 system data (`save000.dat`), scans numbered
+CSP slot headers for the original save/load menus and plays CMV3 movies with
+their indexed Vorbis soundtrack. Numbered CSP1 slots store the checkpoint,
+optional thumbnail and embedded main script. A fresh player can rebuild the
+saved scene and resume execution at the recorded instruction.
 [CVNS validation](../../docs/validation/cvns-20040515.md) records the scope
 of the current profile. [CVNS SATD](SATD.md#satd-cvns-20040515-profile)
 tracks the remaining ABI and resource variants.

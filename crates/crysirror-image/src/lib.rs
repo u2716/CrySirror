@@ -88,6 +88,7 @@ pub mod color;
 pub mod composition;
 pub mod crx;
 pub mod crxd;
+pub mod kiss_tex;
 pub mod cursor;
 pub mod cximage;
 mod dds;
@@ -267,6 +268,7 @@ impl Default for DecoderRegistry {
         }
         this.decoders.insert("pdt".into(), Arc::new(Pdt));
         this.formats.insert("circus/crx", Arc::new(crx::Format));
+        this.formats.insert(kiss_tex::ID, Arc::new(kiss_tex::Format));
         this.formats
             .insert("engine/packed-bitmap", Arc::new(packed_bitmap::Format));
         this

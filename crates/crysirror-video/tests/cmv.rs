@@ -16,7 +16,7 @@ fn cmv_index_rejects_unbounded_frame_table() {
 }
 
 #[test]
-#[ignore = "requires an original CMV6 with indexed Vorbis audio"]
+#[ignore = "requires an original CMV with indexed Vorbis audio"]
 fn original_cmv_stream_renders_and_rewinds() -> anyhow::Result<()> {
     use anyhow::Context;
     let asset = std::env::var_os("CRYSIRROR_CMV_FILE").context("CMV fixture path")?;

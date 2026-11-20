@@ -19,6 +19,8 @@ pub struct Primitive {
     /// mesh carries the same targets; their names are the mesh's
     /// `targetNames`.
     pub targets: Vec<Vec<[f32; 3]>>,
+    /// Dense normal deltas per morph target; empty, or one per target.
+    pub target_normals: Vec<Vec<[f32; 3]>>,
     pub target_names: Vec<String>,
 }
 
@@ -33,6 +35,10 @@ pub struct Material {
     /// "OPAQUE", "MASK" or "BLEND".
     pub alpha_mode: &'static str,
     pub alpha_cutoff: f32,
+    /// Complete engine material (`crysirror_material` extras, schema 1) whose
+    /// texture fields are image indices; it supersedes the glTF fields above,
+    /// which remain as the portable fallback.
+    pub engine: Option<crate::pbr::PbrMaterial>,
 }
 
 impl Default for Material {
@@ -47,6 +53,7 @@ impl Default for Material {
             double_sided: false,
             alpha_mode: "OPAQUE",
             alpha_cutoff: 0.5,
+            engine: None,
         }
     }
 }
@@ -89,6 +96,9 @@ pub struct Track {
     pub node: usize,
     pub times: Vec<f32>,
     pub values: Channel,
+    /// glTF CUBICSPLINE in/out tangents per key (xyz used for vectors);
+    /// `None` samples linearly.
+    pub tangents: Option<(Vec<[f32; 4]>, Vec<[f32; 4]>)>,
 }
 
 pub struct Animation {
@@ -269,9 +279,18 @@ impl Document {
                 );
                 if !p.targets.is_empty() {
                     let mut targets = Vec::new();
-                    for t in &p.targets {
+                    ensure!(
+                        p.target_normals.is_empty() || p.target_normals.len() == p.targets.len(),
+                        "mesh `{name}`: morph normal count"
+                    );
+                    for (k, t) in p.targets.iter().enumerate() {
                         ensure!(t.len() == n, "mesh `{name}`: morph target vertex count");
-                        targets.push(json!({"POSITION": w.floats(t, "VEC3", true, Some(34962))}));
+                        let mut target = json!({"POSITION": w.floats(t, "VEC3", true, Some(34962))});
+                        if let Some(normals) = p.target_normals.get(k) {
+                            ensure!(normals.len() == n, "mesh `{name}`: morph normal vertex count");
+                            target["NORMAL"] = json!(w.floats(normals, "VEC3", false, Some(34962)));
+                        }
+                        targets.push(target);
                     }
                     prim["targets"] = Value::Array(targets);
                 }
@@ -311,6 +330,9 @@ impl Document {
                 if m.alpha_mode == "MASK" {
                     v["alphaCutoff"] = json!(m.alpha_cutoff);
                 }
+                if let Some(engine) = &m.engine {
+                    v["extras"] = json!({"crysirror_material": {"schema": 1, "material": engine}});
+                }
                 v
             })
             .collect();
@@ -319,6 +341,13 @@ impl Document {
                 m.base_color_texture.is_none_or(|t| t < self.images.len()),
                 "texture index"
             );
+            if let Some(engine) = &m.engine {
+                engine.validate()?;
+                ensure!(
+                    engine.all_textures().into_iter().all(|t| *t < self.images.len()),
+                    "engine material texture index"
+                );
+            }
         }
         let nodes: Vec<Value> = self
             .nodes
@@ -359,12 +388,27 @@ impl Document {
                     continue;
                 }
                 let input = w.scalars(&t.times);
-                let (path, output) = match &t.values {
-                    Channel::Translation(v) => ("translation", w.floats(v, "VEC3", false, None)),
-                    Channel::Rotation(v) => ("rotation", w.floats(v, "VEC4", false, None)),
-                    Channel::Scale(v) => ("scale", w.floats(v, "VEC3", false, None)),
+                let (path, values): (&str, Vec<[f32; 4]>) = match &t.values {
+                    Channel::Translation(v) => ("translation", v.iter().map(|x| [x[0], x[1], x[2], 0.]).collect()),
+                    Channel::Rotation(v) => ("rotation", v.clone()),
+                    Channel::Scale(v) => ("scale", v.iter().map(|x| [x[0], x[1], x[2], 0.]).collect()),
                 };
-                samplers.push(json!({"input":input,"output":output,"interpolation":"LINEAR"}));
+                ensure!(values.len() == t.times.len(), "animation key count");
+                let keys: Vec<[f32; 4]> = match &t.tangents {
+                    None => values,
+                    Some((a, b)) => {
+                        ensure!(a.len() == values.len() && b.len() == values.len(), "animation tangent count");
+                        (0..values.len()).flat_map(|k| [a[k], values[k], b[k]]).collect()
+                    }
+                };
+                let output = if path == "rotation" {
+                    w.floats(&keys, "VEC4", false, None)
+                } else {
+                    let v: Vec<[f32; 3]> = keys.iter().map(|x| [x[0], x[1], x[2]]).collect();
+                    w.floats(&v, "VEC3", false, None)
+                };
+                let interpolation = if t.tangents.is_some() { "CUBICSPLINE" } else { "LINEAR" };
+                samplers.push(json!({"input":input,"output":output,"interpolation":interpolation}));
                 channels
                     .push(json!({"sampler":samplers.len()-1,"target":{"node":t.node,"path":path}}));
             }

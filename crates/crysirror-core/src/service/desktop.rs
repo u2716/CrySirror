@@ -54,6 +54,9 @@ pub enum DesktopRequest {
     ClipboardWrite {
         text: String,
     },
+    /// Replace the clipboard with a top-down, tightly packed RGBA image.
+    ClipboardImage { size: [u32; 2], rgba: alloc::sync::Arc<[u8]> },
+    ClipboardClear,
     /// Current plain-text clipboard contents (empty when it holds no text).
     ClipboardRead,
     UserName,
@@ -91,6 +94,13 @@ impl DesktopRequest {
                 }
             }
             Self::ClipboardWrite { text: s } => text(s, 1024 * 1024)?,
+            Self::ClipboardImage { size: [w, h], rgba } => {
+                if *w == 0 || *h == 0 || *w > 8192 || *h > 8192
+                    || rgba.len() > 64 * 1024 * 1024
+                    || u64::from(*w) * u64::from(*h) * 4 != rgba.len() as u64 {
+                    return Err(Error::Invalid("desktop clipboard image dimensions"));
+                }
+            }
             Self::FileDialog {
                 title,
                 initial,

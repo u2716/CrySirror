@@ -60,14 +60,18 @@ enum Channel {
     Started,
 }
 
+mod csp;
+
 pub(super) struct Effects {
     pub settings: EffectsSettings,
-    channels: [Channel; 6],
+    channels: Vec<Channel>,
+    cvns_levels: Option<[u32; 2]>,
+    cvns_table: Option<csp::SoundTable>,
     pending: Option<(u64, usize, bool, EffectSource)>,
     restart: Option<EffectRestart>,
-    sources: [Option<EffectSource>; 6],
-    volume_words: [i32; 6],
-    mix_words: [EffectMix; 6],
+    sources: Vec<Option<EffectSource>>,
+    volume_words: Vec<i32>,
+    mix_words: Vec<EffectMix>,
 }
 
 struct EffectRestart {
@@ -100,7 +104,14 @@ impl Default for EffectMix {
 }
 
 impl EffectMix {
-    fn reopened(self) -> AudioPcm16Gain {
+    fn reopened(self, percent: bool) -> AudioPcm16Gain {
+        if percent {
+            return AudioPcm16Gain {
+                multiplier: self.multiplier.min(100),
+                stereo: pan_words(self.pan, 100),
+                ..AudioPcm16Gain::percent()
+            };
+        }
         AudioPcm16Gain {
             multiplier: if (self.multiplier as i32) < 256 {
                 self.multiplier
@@ -108,16 +119,21 @@ impl EffectMix {
                 256
             },
             stereo: pcm16_pan(self.pan),
+            ..Default::default()
         }
     }
 }
 
 fn pcm16_pan(pan: i32) -> [u32; 2] {
-    let level = 256_u32.wrapping_sub(pan.unsigned_abs());
+    pan_words(pan, 256)
+}
+
+fn pan_words(pan: i32, unity: u32) -> [u32; 2] {
+    let level = unity.wrapping_sub(pan.unsigned_abs());
     if pan > 0 {
-        [level, 256]
+        [level, unity]
     } else {
-        [256, level]
+        [unity, level]
     }
 }
 
@@ -129,10 +145,17 @@ pub(super) fn fader_update(opcode: u16, word: u32) -> AudioPcm16GainUpdate {
     }
 }
 
+pub(super) fn cvns_fader_update(selector: u16, word: u32) -> AudioPcm16GainUpdate {
+    if matches!(selector, 0x20af | 0x20be) {
+        AudioPcm16GainUpdate::Stereo(pan_words(word as i32, 100))
+    } else {
+        AudioPcm16GainUpdate::Multiplier(word)
+    }
+}
+
 pub(super) const MUSIC_CHANNELS: [u32; 2] = [0, 1];
 /// Client mix group of every CMVS channel, muted while the inactive window must be silent.
 pub(super) const MIX_GROUP: &str = "cmvs";
-pub(super) const EFFECT_CHANNELS: [u32; 6] = [9, 10, 11, 12, 13, 14];
 pub(super) const DEVICE_SOUND_CHANNEL: u32 = 15;
 
 pub(super) fn meter_spec(quality: i32, buffer: u32) -> AudioSourceMeterSpec {
@@ -272,15 +295,20 @@ pub(super) struct EffectReplay {
 }
 
 impl Effects {
-    pub fn new(settings: EffectsSettings) -> Self {
+    pub fn new(settings: EffectsSettings, cvns_levels: Option<[u32; 2]>) -> Self {
+        // Native channels 12..59 are SE, followed by four independent
+        // sample streams. Only the first group responds to SE stop-all.
+        let count = if cvns_levels.is_some() { 52 } else { 6 };
         Self {
+            cvns_table: cvns_levels.map(|_| Default::default()),
+            cvns_levels,
             settings,
-            channels: [Channel::Empty; 6],
+            channels: vec![Channel::Empty; count],
             pending: None,
             restart: None,
-            sources: Default::default(),
-            volume_words: [0; 6],
-            mix_words: [EffectMix::default(); 6],
+            sources: vec![None; count],
+            volume_words: vec![0; count],
+            mix_words: vec![EffectMix::default(); count],
         }
     }
 
@@ -321,8 +349,12 @@ impl Effects {
             frame_limit: None,
         };
         let parameters = AudioParameters {
-            gain: self.settings.gain(volume),
-            pcm16_gain: Some(AudioPcm16Gain::default()),
+            gain: self.gain(channel, volume),
+            pcm16_gain: Some(if self.cvns_levels.is_some() {
+                AudioPcm16Gain::percent()
+            } else {
+                AudioPcm16Gain::default()
+            }),
             looping,
             retain_on_finish: true,
             transport_active: immediate,
@@ -399,8 +431,12 @@ impl Effects {
     }
 
     fn remember(&mut self, slot: usize, record: EffectSource) {
+        if let Some(table)=&mut self.cvns_table { table.load(slot,&record); }
         self.volume_words[slot] = record.volume;
-        self.mix_words[slot] = EffectMix::default();
+        self.mix_words[slot] = EffectMix {
+            multiplier: if self.cvns_levels.is_some() { 100 } else { 256 },
+            pan: 0,
+        };
         self.sources[slot] = Some(record);
     }
 
@@ -412,21 +448,44 @@ impl Effects {
         opcode: u16,
         word: u32,
     ) -> Result<()> {
-        host.update_audio_pcm16_gain(client, device_channel(slot), fader_update(opcode, word))?;
-        if opcode == 0x20b8 {
+        let update = if self.cvns_levels.is_some() {
+            cvns_fader_update(opcode, word)
+        } else {
+            fader_update(opcode, word)
+        };
+        host.update_audio_pcm16_gain(client, device_channel(slot), update)?;
+        if matches!(update, AudioPcm16GainUpdate::Multiplier(_)) {
             self.mix_words[slot].multiplier = word;
+            if let Some(table)=&mut self.cvns_table { table.word(2,slot,word); }
         } else {
             self.mix_words[slot].pan = word as i32;
+            if let Some(table)=&mut self.cvns_table { table.word(3,slot,word); }
         }
         Ok(())
     }
 
     pub fn reset_records(&mut self) {
+        if let Some(table)=&mut self.cvns_table { *table=Default::default(); }
         self.volume_words.fill(0);
         self.mix_words.fill(EffectMix {
             multiplier: 0,
             pan: 0,
         });
+    }
+
+    pub fn count(&self) -> usize {
+        self.channels.len()
+    }
+
+    fn gain(&self, channel: usize, volume: i32) -> f32 {
+        match self.cvns_levels {
+            Some([master, _]) if channel >= 48 => {
+                let percent = master.wrapping_mul(volume as u32) / 100;
+                if percent <= 100 { percent as f32 / 100.0 } else { 0.0 }
+            }
+            Some([master, category]) => cvns_gain(master, category, volume),
+            None => self.settings.gain(volume),
+        }
     }
 
     pub fn remember_disabled(&mut self, vm: &mut CmvsVm) -> Result<()> {
@@ -454,8 +513,23 @@ impl Effects {
         Ok(())
     }
 
+    pub fn switched_channels(&self) -> usize {
+        if self.cvns_levels.is_some() { 48 } else { 6 }
+    }
+
+    pub fn cvns_live_gains(&mut self, levels: [u32; 2], category_changed: bool) -> Vec<(u32, f32)> {
+        self.cvns_levels = Some(levels);
+        let base = levels[0].wrapping_mul(levels[1]) / 100;
+        self.volume_words[..48].iter().enumerate().filter_map(|(slot, &volume)| {
+            let percent = if category_changed && volume != 0 {
+                base.wrapping_mul(volume as u32) / 100
+            } else { base };
+            (percent <= 100).then(|| (device_channel(slot), percent as f32 / 100.0))
+        }).collect()
+    }
+
     pub fn reopen_plan(&self) -> Vec<EffectReplay> {
-        self.sources
+        self.sources[..self.switched_channels()]
             .iter()
             .enumerate()
             .filter_map(|(slot, record)| {
@@ -464,8 +538,8 @@ impl Effects {
                     slot,
                     name: record.name.clone(),
                     parameters: AudioParameters {
-                        gain: self.settings.gain(record.volume),
-                        pcm16_gain: Some(self.mix_words[slot].reopened()),
+                        gain: self.gain(slot, record.volume),
+                        pcm16_gain: Some(self.mix_words[slot].reopened(self.cvns_levels.is_some())),
                         looping: record.looping,
                         retain_on_finish: true,
                         transport_active: record.looping && record.started,
@@ -477,7 +551,7 @@ impl Effects {
             .collect()
     }
 
-    pub fn set_availability(&mut self, enabled: bool, decoded: [bool; 6]) {
+    pub fn set_availability(&mut self, enabled: bool, decoded: impl IntoIterator<Item = bool>) {
         self.settings.enabled = enabled;
         for (slot, ready) in decoded.into_iter().enumerate() {
             let record = self.sources[slot].as_mut();
@@ -506,7 +580,7 @@ impl Effects {
         channel: usize,
         looping: bool,
     ) -> Result<()> {
-        if self.settings.enabled
+        if (self.settings.enabled || channel >= 48)
             && host.resume_retained_audio_channel(client, device_channel(channel), looping)?
         {
             self.channels[channel] = Channel::Started;
@@ -516,6 +590,7 @@ impl Effects {
     }
 
     fn remember_start(&mut self, channel: usize, looping: bool) {
+        if let Some(table)=&mut self.cvns_table { table.word(4,channel,1); }
         let source = self.sources[channel].get_or_insert_with(EffectSource::default);
         source.looping = looping;
         source.started = true;
@@ -539,6 +614,7 @@ impl Effects {
                 None => self.channels[slot] = Channel::Empty,
             }
         }
+        if let Some(table)=&mut self.cvns_table { table.word(4,slot,0); }
         if let Some(source) = &mut self.sources[slot] {
             source.started = false;
         }
@@ -583,6 +659,8 @@ impl Effects {
             )?;
             self.channels[channel] = Channel::Empty;
         }
+        if let Some(table)=&mut self.cvns_table { table.clear_name(channel); }
+        if let Some(table)=&mut self.cvns_table { table.word(4,channel,0); }
         self.sources[channel] = None;
         Ok(())
     }
@@ -605,6 +683,7 @@ impl Effects {
                 },
             )?;
         }
+        if let Some(table)=&mut self.cvns_table { table.clear_name(channel); }
         self.sources[channel] = None;
         Ok(())
     }
@@ -630,7 +709,16 @@ fn set_effect_active(
 }
 
 pub(super) fn device_channel(channel: usize) -> u32 {
-    channel as u32 + 9
+    if channel < 6 { channel as u32 + 9 } else { channel as u32 + 0x100 }
+}
+
+/// 0x40c650 leaves a freshly allocated channel at zero for levels above 100.
+pub(super) fn cvns_gain(master: u32, category: u32, volume: i32) -> f32 {
+    let mut percent = master.wrapping_mul(category) / 100;
+    if volume > 0 {
+        percent = percent.wrapping_mul(volume as u32) / 100;
+    }
+    if percent <= 100 { percent as f32 / 100.0 } else { 0.0 }
 }
 
 #[derive(Clone, Copy, Deserialize)]
@@ -678,6 +766,8 @@ pub(super) struct VoiceRequest {
     volume: i32,
     start: bool,
     rate: f32,
+    looping: bool,
+    cvns_gain: Option<f32>,
     words: u16,
 }
 
@@ -706,7 +796,26 @@ impl VoiceRequest {
             volume: volume as i32,
             start: start != 0,
             rate,
+            looping: false,
+            cvns_gain: None,
             words,
+        })
+    }
+
+    /// CVNS `0x42a5a0` (0x20b8): channel, name, volume in percent, loop and start.
+    pub fn read_cvns(vm: &CmvsVm, opcode: u16, master: u32, voices: u32) -> Result<Self> {
+        let [channel, name, volume, looping, start] = vm.owner_arguments(opcode)?;
+        ensure!(channel < 4, "CVNS voice channel outside 0..3");
+        let gain = cvns_gain(master, voices, volume as i32);
+        Ok(Self {
+            name: vm.sound_name(name)?,
+            channel: channel + 5,
+            volume: volume as i32,
+            looping: looping != 0,
+            cvns_gain: Some(gain),
+            start: start != 0,
+            rate: 1.0,
+            words: 5,
         })
     }
 
@@ -770,6 +879,7 @@ impl Voices {
         if host.resume_retained_audio_channel(client, 5 + slot, looping)? {
             if let Some(source) = &mut self.sources[slot as usize] {
                 source.start = true;
+                source.looping = looping;
             }
         }
         Ok(())
@@ -800,8 +910,13 @@ impl Voices {
                 },
                 intro: None,
                 parameters: AudioParameters {
-                    gain: self.settings.gain(request.volume),
-                    pcm16_gain: Some(AudioPcm16Gain::default()),
+                    gain: request.cvns_gain.unwrap_or_else(|| self.settings.gain(request.volume)),
+                    looping: request.looping,
+                    pcm16_gain: Some(if request.cvns_gain.is_some() {
+                        AudioPcm16Gain::percent()
+                    } else {
+                        AudioPcm16Gain::default()
+                    }),
                     rate: request.rate,
                     paused: !request.start,
                     retain_on_finish: true,
@@ -862,6 +977,14 @@ impl Voices {
             self.sources[(channel - 5) as usize] = None;
         }
         self.fading_out[(channel - 5) as usize] = fade != 0;
+        Ok(())
+    }
+
+    /// 0x40b060 leaves an existing fade-out running with its original deadline.
+    pub fn fade_cvns(&mut self, host: &mut dyn HostServices, client: ClientId, slot: u32, duration: u32) -> Result<()> {
+        if !self.fading_out[slot as usize] && host.audio_info(client, slot + 5)?.is_some() {
+            self.stop(host, client, slot + 5, duration)?;
+        }
         Ok(())
     }
 
@@ -994,7 +1117,7 @@ mod level_tests {
 
     #[test]
     fn reopening_effects_only_autoplays_loops_marked_started() {
-        let mut effects = Effects::new(EffectsSettings::default());
+        let mut effects = Effects::new(EffectsSettings::default(), None);
         for (slot, looping, started) in [(0, true, true), (1, false, true), (2, true, false)] {
             effects.remember(
                 slot,
@@ -1023,6 +1146,7 @@ mod level_tests {
             Some(AudioPcm16Gain {
                 multiplier: u32::MAX,
                 stereo: [256, 192],
+                ..Default::default()
             })
         );
         assert_eq!(
@@ -1030,6 +1154,7 @@ mod level_tests {
             Some(AudioPcm16Gain {
                 multiplier: 256,
                 stereo: [128, 256],
+                ..Default::default()
             })
         );
         assert!(recipe[0].parameters.transport_active);
@@ -1066,7 +1191,7 @@ mod level_tests {
 
     #[test]
     fn master_and_effect_level_updates_follow_distinct_native_paths() {
-        let mut effects = Effects::new(EffectsSettings::default());
+        let mut effects = Effects::new(EffectsSettings::default(), None);
         effects.volume_words[..4].copy_from_slice(&[128, 1024, -1, 1]);
         let levels = Levels {
             music: MusicSettings {
@@ -1263,6 +1388,7 @@ impl MusicRequest {
 
 pub(super) struct Music {
     pub settings: MusicSettings,
+    pub cvns_gain: Option<f32>,
     /// Host time of the last request made while music output is off (BGM object +160).
     disabled_since: u64,
     current: u32,
@@ -1275,12 +1401,17 @@ impl Music {
     pub fn new(settings: MusicSettings) -> Self {
         Self {
             settings,
+            cvns_gain: None,
             disabled_since: 0,
             current: 0,
             pending: None,
             sources: Default::default(),
             retained: None,
         }
+    }
+
+    pub fn gain(&self) -> f32 {
+        self.cvns_gain.unwrap_or_else(|| self.settings.gain())
     }
 
     pub fn stop(&mut self, host: &mut dyn HostServices, client: ClientId) -> Result<()> {
@@ -1334,7 +1465,7 @@ impl Music {
         let channel = self.current ^ 1;
         let ticket = host.begin_audio(
             client,
-            request.recipe(channel, primary, secondary, self.settings.gain()),
+            request.recipe(channel, primary, secondary, self.gain()),
         )?;
         self.pending = Some((ticket, request, channel));
         Ok(())
@@ -1426,8 +1557,8 @@ impl Music {
 pub(super) struct AudioCheckpoint {
     _music_index: u32,
     _music: [Option<MusicRequest>; 2],
-    _effects: [Option<EffectSource>; 6],
-    _effect_mix: [EffectMix; 6],
+    _effects: Vec<Option<EffectSource>>,
+    _effect_mix: Vec<EffectMix>,
     _voices: [Option<VoiceRequest>; 4],
     _transport: [Option<AudioPlaybackInfo>; 12],
 }
@@ -1459,7 +1590,7 @@ impl AudioCheckpoint {
             _music_index: music.current,
             _music: music.sources.clone(),
             _effects: effects.sources.clone(),
-            _effect_mix: effects.mix_words,
+            _effect_mix: effects.mix_words.clone(),
             _voices: voices.sources.clone(),
             _transport: transport,
         })

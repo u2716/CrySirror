@@ -101,7 +101,7 @@ impl EngineSystems {
             let client = ClientId(client);
             for (_, _, entity) in self.world.entities(client) {
                 if let Some(material) = &entity.material {
-                    for asset in material.textures().into_iter().flatten() {
+                    for asset in material.all_textures() {
                         visitor(client, asset);
                     }
                 }

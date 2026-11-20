@@ -6,6 +6,7 @@
 //! Integer arithmetic follows the CMVS CTexture compositor (0x14003cbf0..0x14003f270).
 
 use crate::ImageSurface;
+use std::sync::Arc;
 
 pub const LAYERS: usize = 16;
 
@@ -20,7 +21,7 @@ struct Layer {
 
 #[derive(Clone, Debug, Default)]
 pub struct LayerStack {
-    layers: [Option<Layer>; LAYERS],
+    layers: [Option<Arc<Layer>>; LAYERS],
 }
 
 /// Channel of a `0x00RRGGBB` colour for RGBA channel `channel`.
@@ -53,7 +54,40 @@ impl LayerStack {
     /// Places `pixels` as layer `index`; layer 0 is the base the others are placed on.
     pub fn place(&mut self, index: usize, pixels: ImageSurface, alpha: bool, position: [i32; 2]) {
         if let Some(slot) = self.layers.get_mut(index) {
-            *slot = Some(Layer { pixels, filtered: None, alpha, position });
+            *slot = Some(Arc::new(Layer { pixels, filtered: None, alpha, position }));
+        }
+    }
+
+    /// Source pixels after the most recent layer filter, before baking.
+    pub fn surface(&self, index: usize) -> Option<&ImageSurface> {
+        let layer = self.layers.get(index)?.as_ref()?;
+        Some(layer.filtered.as_ref().unwrap_or(&layer.pixels))
+    }
+
+    pub fn has_overlays(&self) -> bool {
+        self.layers[1..].iter().any(Option::is_some)
+    }
+
+    pub fn reposition(&mut self, index: usize, position: [i32; 2]) {
+        if let Some(Some(layer)) = self.layers.get_mut(index) {
+            Arc::make_mut(layer).position = position;
+        }
+    }
+
+    /// Copies both original and filtered pixels and installs the new offset.
+    pub fn copy_layer(&mut self, index: usize, source: &Self, from: usize, position: [i32; 2]) {
+        if let Some(slot) = self.layers.get_mut(index) {
+            *slot = source.layers.get(from).cloned().flatten();
+            self.reposition(index, position);
+        }
+    }
+
+    /// Fill the underlying layer, preserving its independent filtered copy.
+    pub fn fill_rgba(&mut self, index: usize, color: [u8; 4]) {
+        if let Some(Some(layer)) = self.layers.get_mut(index) {
+            for pixel in Arc::make_mut(layer).pixels.rgba.chunks_exact_mut(4) {
+                pixel.copy_from_slice(&color);
+            }
         }
     }
 
@@ -72,7 +106,7 @@ impl LayerStack {
     /// Layers `index`, or every layer for 16 and above, until the first empty one.
     fn targets(&mut self, index: usize) -> impl Iterator<Item = Option<&mut Layer>> {
         let range = if index >= LAYERS { 0..LAYERS } else { index..index + 1 };
-        self.layers[range].iter_mut().map(Option::as_mut)
+        self.layers[range].iter_mut().map(|slot| slot.as_mut().map(Arc::make_mut))
     }
 
     /// Grey by the channel mean, then scaled by `color` (0x14003f0e0). False when it
@@ -106,7 +140,7 @@ impl LayerStack {
     /// Filter `mode` with `parameter` into the layer's filtered copy (0x14003e320).
     /// Mode 0 drops the copy; unknown modes leave the layer as it is. False for an empty layer.
     pub fn filter(&mut self, index: usize, mode: u32, parameter: u32) -> bool {
-        let Some(layer) = self.layers.get_mut(index).and_then(Option::as_mut) else {
+        let Some(layer) = self.layers.get_mut(index).and_then(Option::as_mut).map(Arc::make_mut) else {
             return false;
         };
         let source = &layer.pixels;
@@ -145,7 +179,7 @@ impl LayerStack {
             let source = layer.filtered.as_ref().unwrap_or(&layer.pixels);
             let [x, y] = layer.position;
             let (w, h) = (source.width as i32, source.height as i32);
-            if x + w <= 0 || x >= width || y + h <= 0 || y >= height {
+            if x.saturating_add(w) <= 0 || x >= width || y.saturating_add(h) <= 0 || y >= height {
                 continue;
             }
             let (skip_x, skip_y) = ((-x).max(0), (-y).max(0));
@@ -223,7 +257,7 @@ fn mosaic(source: &ImageSurface, block: u32) -> ImageSurface {
 /// half with the pixel itself; alpha too.
 fn neighbours(source: &ImageSurface, offset: u32) -> ImageSurface {
     let mut out = blank(source);
-    let (width, offset) = (source.width as i32, offset as i32);
+    let (width, offset) = (source.width as i32, offset.min(source.width) as i32);
     for y in 0..source.height as i32 {
         for x in 0..width {
             let mut sum = [0u32; 4];
@@ -263,7 +297,7 @@ fn grey_tint(source: &ImageSurface, color: u32) -> ImageSurface {
 /// Mode 10 (0x14003d9e0): the mean of every second pixel within `reach` along the row.
 fn box_blur(source: &ImageSurface, reach: u32) -> ImageSurface {
     let mut out = blank(source);
-    let (width, reach) = (source.width as i32, reach as i32);
+    let (width, reach) = (source.width as i32, reach.min(source.width.next_multiple_of(2)) as i32);
     for y in 0..source.height as i32 {
         for x in 0..width {
             let mut sum = [0u32; 3];
@@ -293,7 +327,7 @@ fn radial(source: &ImageSurface, length: u32, scaled: bool, inward: bool) -> Ima
     let mut out = blank(source);
     let (width, height) = (source.width as i32, source.height as i32);
     let centre = [width >> 1, height >> 1];
-    let length = length as i32;
+    let length = i64::from(length);
     for y in 0..height {
         for x in 0..width {
             let index = ((y * width + x) * 4) as usize;
@@ -303,19 +337,20 @@ fn radial(source: &ImageSurface, length: u32, scaled: bool, inward: bool) -> Ima
                 out.rgba[index + 3] = 255;
                 continue;
             }
-            let samples = if scaled { length * distance / centre[0].max(1) + 2 } else { length + 1 };
+            let samples = if scaled { length * i64::from(distance) / i64::from(centre[0].max(1)) + 2 } else { length + 1 };
             let step = [((centre[0] - x) << 10) / distance, ((centre[1] - y) << 10) / distance];
             let mut point = [x << 10, y << 10];
             let mut sum = [0u32; 3];
             let mut count = 0u32;
             for _ in 0..samples.max(0) {
                 let [px, py] = [point[0] >> 10, point[1] >> 10];
-                if (0..width).contains(&px) && (0..height).contains(&py) {
-                    for (total, &value) in sum.iter_mut().zip(at(source, px, py)) {
-                        *total += u32::from(value);
-                    }
-                    count += 1;
+                // Both axes advance monotonically. Once outside, no later tap contributes.
+                if !(0..width).contains(&px) || !(0..height).contains(&py) { break; }
+                for (total, &value) in sum.iter_mut().zip(at(source, px, py)) {
+                    *total += u32::from(value);
                 }
+                count += 1;
+                if step == [0, 0] { break; }
                 for axis in 0..2 {
                     point[axis] = if inward { point[axis] + step[axis] } else { point[axis] - step[axis] };
                 }
@@ -335,7 +370,7 @@ fn spin(source: &ImageSurface, length: u32, scaled: bool) -> ImageSurface {
     let mut out = blank(source);
     let (width, height) = (source.width as i32, source.height as i32);
     let centre = [width >> 1, height >> 1];
-    let length = length as i32;
+    let length = i64::from(length);
     for y in 0..height {
         for x in 0..width {
             let index = ((y * width + x) * 4) as usize;
@@ -345,20 +380,22 @@ fn spin(source: &ImageSurface, length: u32, scaled: bool) -> ImageSurface {
                 out.rgba[index + 3] = 255;
                 continue;
             }
-            let samples = if scaled { length * distance / centre[0].max(1) + 1 } else { length };
-            let first = 180 - samples / 2 + angle;
-            let mut sum = [0u32; 3];
-            let mut count = 0u32;
-            for step in 0..=samples.max(-1) {
-                let degrees = (first + step) % 360;
+            let samples = if scaled { length * i64::from(distance) / i64::from(centre[0].max(1)) + 1 } else { length };
+            let first = 180 - samples / 2 + i64::from(angle);
+            let mut sum = [0u64; 3];
+            let mut count = 0u64;
+            // Identical angles repeat after a revolution. Weight each distinct sample.
+            for step in 0..=samples.min(359) {
+                let repeats = ((samples - step) / 360 + 1) as u64;
+                let degrees = ((first + step) % 360) as i32;
                 let radians = if degrees == 0 { 0.0 } else { f64::from(degrees) / 180.0 * std::f64::consts::PI };
                 let px = 320 - (radians.cos() * f64::from(distance)) as i32;
                 let py = 240 - (radians.sin() * f64::from(distance)) as i32;
                 if (0..width).contains(&px) && (0..height).contains(&py) {
                     for (total, &value) in sum.iter_mut().zip(at(source, px, py)) {
-                        *total += u32::from(value);
+                        *total += u64::from(value) * repeats;
                     }
-                    count += 1;
+                    count += repeats;
                 }
             }
             if count == 0 {

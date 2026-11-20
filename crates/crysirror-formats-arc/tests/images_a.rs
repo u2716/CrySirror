@@ -60,6 +60,46 @@ fn pb2_fixture(mode: u16, width: u16, height: u16, depth: u16, frames: u32) -> V
     bytes
 }
 
+#[test]
+fn pb2_numbered_frames_patch_the_base_independently() {
+    let mut image = pb2_fixture(5, 16, 8, 32, 3);
+    // All four base planes share 128 literal zeroes.
+    for _ in 0..4 {
+        image.extend(0u32.to_le_bytes());
+        image.extend(16u32.to_le_bytes());
+    }
+    image.extend([0; 16 + 128]);
+    let table = image.len() as u32;
+    image[12..16].copy_from_slice(&table.to_le_bytes());
+    for (mask, bgr) in [(0x40, [1, 2, 3]), (0x80, [4, 5, 6])] {
+        let mut delta = vec![1, 0, 0, 0, 0, 0, 0, 0, mask];
+        delta.extend(bgr.repeat(64));
+        let flags = delta.len().div_ceil(8);
+        for field in [16 + flags + delta.len(), flags, delta.len(), delta.len()] {
+            image.extend((field as u32).to_le_bytes());
+        }
+        image.resize(image.len() + flags, 0);
+        image.extend(delta);
+    }
+    let bytes = seal_pb2(image);
+    let mut registry = DecoderRegistry::default();
+    crysirror_formats_arc::register_images(&mut registry).unwrap();
+    let decode = |frame: u32| {
+        let mut context = crysirror_resource::DecodeContext::new(crysirror_core::state::ClientId(1));
+        context.parameters.insert("purple-software/pb2-frame".into(), frame.into());
+        registry.decode_with("indexed.pb2", &bytes, None, Some(&context), None)
+    };
+    let first = decode(1).unwrap();
+    let second = decode(2).unwrap();
+    for row in 0..8 {
+        assert_eq!(first.rgba[row * 64..row * 64 + 32], [3, 2, 1, 255].repeat(8));
+        assert_eq!(first.rgba[row * 64 + 32..(row + 1) * 64], [0; 32]);
+        assert_eq!(second.rgba[row * 64..row * 64 + 32], [0; 32]);
+        assert_eq!(second.rgba[row * 64 + 32..(row + 1) * 64], [6, 5, 4, 255].repeat(8));
+    }
+    assert!(decode(3).is_err());
+}
+
 fn seal_pb2(mut bytes: Vec<u8>) -> Vec<u8> {
     let mask = [0xa2, 0xfb];
     for (index, byte) in bytes[8..32].iter_mut().enumerate() {
@@ -127,6 +167,10 @@ fn cmvs_pb2_tiled_planes_and_lzss() {
     assert_eq!(tiled.rgba[..32], [6, 4, 2, 255].repeat(8));
     assert_eq!(tiled.rgba[32..], [33, 22, 11, 255]);
     mode2.pop();
+    // The final red literal now comes from the first key byte at EOF.
+    let tail = registry.decode("tile.bin", &seal_pb2(mode2.clone())).unwrap();
+    assert_eq!(tail.rgba[32..], [0, 22, 11, 255]);
+    mode2[28..32].copy_from_slice(&u32::MAX.to_le_bytes());
     assert!(registry.decode("tile.bin", &seal_pb2(mode2)).is_err());
 }
 

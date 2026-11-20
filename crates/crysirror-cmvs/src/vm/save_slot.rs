@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
-//! CSV2 slot framing for Pc20160201X64. SATD-cmvs-x64-dispatch keeps the
-//! whole-slot codec isolated until its checkpoint records and restore can
-//! be bound to the native syscalls.
+//! CSV2 and CSP1 gameplay slot envelopes. Each ABI selects its own checkpoint
+//! transform, expansion limit and saved main-script format.
 
-use crate::script::{MAX_PS2A_IMAGE, PS2A_LZSS, Script};
+use crate::script::{MAX_PS2A_IMAGE, PS2A_LZSS, Script, ScriptFormat};
 use anyhow::{Context, Result, ensure};
 use crysirror_core::service::AssetReader;
 use crysirror_resource::{
@@ -11,6 +10,8 @@ use crysirror_resource::{
     read_exact_at,
 };
 use std::ops::Range;
+
+pub(crate) mod csp1;
 
 pub(crate) const HEADER_BYTES: usize = 600;
 const CHECKPOINT_LIMIT: usize = 32 * 1024 * 1024;
@@ -46,30 +47,50 @@ fn put_word(header: &mut [u8; HEADER_BYTES], at: usize, value: u32) {
     header[at..at + 4].copy_from_slice(&value.to_le_bytes());
 }
 
-fn check_header(header: &[u8; HEADER_BYTES]) -> Result<()> {
-    ensure!(
-        &header[..4] == b"CSV2" && word(header, 4) == HEADER_BYTES as u32,
-        "unsupported CMVS whole-slot header"
-    );
-    Ok(())
+#[derive(Clone, Copy)]
+pub(crate) enum SlotFormat { Csv2, Csp1 }
+
+impl SlotFormat {
+    fn signature(self) -> &'static [u8; 4] {
+        match self { Self::Csv2 => b"CSV2", Self::Csp1 => b"CSP1" }
+    }
+    fn key(self) -> &'static [u8] {
+        match self { Self::Csv2 => CHECKPOINT_KEY, Self::Csp1 => b"SAVE_IMAGE_ARC" }
+    }
+    fn script(self) -> ScriptFormat {
+        match self { Self::Csv2 => ScriptFormat::Ps2a, Self::Csp1 => ScriptFormat::Pss0 }
+    }
+    fn limit(self) -> usize {
+        match self { Self::Csv2 => CHECKPOINT_LIMIT, Self::Csp1 => 0x300000 }
+    }
+    fn check(self, header: &[u8; HEADER_BYTES]) -> Result<()> {
+        ensure!(&header[..4] == self.signature() && word(header, 4) == HEADER_BYTES as u32,
+            "unsupported CMVS whole-slot header");
+        Ok(())
+    }
 }
 
 pub(crate) fn pack(
-    mut header: [u8; HEADER_BYTES],
-    checkpoint: &[u8],
-    thumbnail: Option<&[u8]>,
-    main_image: &[u8],
-    check_cancel: impl Fn() -> Result<()>,
+    header: [u8; HEADER_BYTES], checkpoint: &[u8], thumbnail: Option<&[u8]>,
+    main_image: &[u8], check_cancel: impl Fn() -> Result<()>,
 ) -> Result<Vec<u8>> {
-    check_header(&header)?;
+    pack_native(SlotFormat::Csv2, header, checkpoint, thumbnail, main_image, check_cancel)
+}
+
+pub(crate) fn pack_native(
+    format: SlotFormat, mut header: [u8; HEADER_BYTES], checkpoint: &[u8],
+    thumbnail: Option<&[u8]>, main_image: &[u8], check_cancel: impl Fn() -> Result<()>,
+) -> Result<Vec<u8>> {
+    format.check(&header)?;
     ensure!(
-        (1..=CHECKPOINT_LIMIT).contains(&checkpoint.len()),
+        (1..=format.limit()).contains(&checkpoint.len()),
         "CMVS checkpoint size"
     );
     ensure!(
         (48..=MAX_PS2A_IMAGE).contains(&main_image.len()),
         "CMVS main script image size"
     );
+    if matches!(format, SlotFormat::Csp1) { csp1::validate(checkpoint)?; }
     let thumbnail = thumbnail.unwrap_or_default();
     ensure!(thumbnail.len() <= THUMBNAIL_LIMIT, "CMVS thumbnail size");
     let has_thumbnail = header[548..550] != [0, 0];
@@ -91,7 +112,7 @@ pub(crate) fn pack(
     let mut sum = 0u16;
     for (byte, &key) in file[HEADER_BYTES..checkpoint_end]
         .iter_mut()
-        .zip(CHECKPOINT_KEY.iter().cycle())
+        .zip(format.key().iter().cycle())
     {
         *byte = byte.wrapping_add(0x80) ^ key;
         sum = sum.wrapping_add(u16::from(*byte));
@@ -140,6 +161,7 @@ impl Section {
     fn expand(
         self,
         source: &dyn AssetReader,
+        format: SlotFormat,
         checksum: Option<u16>,
         check_cancel: &dyn Fn() -> Result<()>,
     ) -> Result<Vec<u8>> {
@@ -154,7 +176,7 @@ impl Section {
         }
         if let Some(expected) = checksum {
             let mut actual = 0u16;
-            for (byte, &key) in data.iter_mut().zip(CHECKPOINT_KEY.iter().cycle()) {
+            for (byte, &key) in data.iter_mut().zip(format.key().iter().cycle()) {
                 actual = actual.wrapping_add(u16::from(*byte));
                 *byte = (*byte ^ key).wrapping_add(0x80);
             }
@@ -168,12 +190,16 @@ impl Section {
 }
 
 pub(crate) fn unpack(source: &dyn AssetReader, check_cancel: impl Fn() -> Result<()>) -> Result<Slot> {
+    unpack_native(SlotFormat::Csv2, source, check_cancel)
+}
+
+pub(crate) fn unpack_native(format: SlotFormat, source: &dyn AssetReader, check_cancel: impl Fn() -> Result<()>) -> Result<Slot> {
     check_cancel()?;
     let len = source.len()?;
     let mut header = [0; HEADER_BYTES];
     read_exact_at(source, 0, &mut header)?;
-    check_header(&header)?;
-    let checkpoint = section(&header, 0, HEADER_BYTES as u64, CHECKPOINT_LIMIT, false)?;
+    format.check(&header)?;
+    let checkpoint = section(&header, 0, HEADER_BYTES as u64, format.limit(), false)?;
     let thumbnail = section(&header, 1, checkpoint.packed.end, THUMBNAIL_LIMIT, true)?;
     let main = section(&header, 2, thumbnail.packed.end, MAX_PS2A_IMAGE, false)?;
     let trailer = u64::from(word(&header, 540));
@@ -189,18 +215,19 @@ pub(crate) fn unpack(source: &dyn AssetReader, check_cancel: impl Fn() -> Result
         None
     };
     let checkpoint = checkpoint
-        .expand(source, checksum, &check_cancel)
+        .expand(source, format, checksum, &check_cancel)
         .context("expand CMVS slot checkpoint")?;
+    if matches!(format, SlotFormat::Csp1) { csp1::validate(&checkpoint)?; }
     let thumbnail = if thumbnail.packed.is_empty() {
         None
     } else {
         Some(
             thumbnail
-                .expand(source, None, &check_cancel)
+                .expand(source, format, None, &check_cancel)
                 .context("expand CMVS slot thumbnail")?,
         )
     };
-    let main = Script::decode_expanded(main.expand(source, None, &check_cancel)?)
+    let main = Script::decode_saved(main.expand(source, format, None, &check_cancel)?, format.script())
         .context("expand CMVS saved main script")?;
     Ok(Slot {
         header,

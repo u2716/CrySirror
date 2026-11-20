@@ -187,6 +187,7 @@ pub(crate) fn word(data: &[u8], at: usize) -> Result<u32, FormatError> {
 /// Frame layout selected by the container version (0x14004c090).
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Layout {
+    Cmv3,
     Cmv5,
     Cmv6,
     Cmv7,
@@ -200,6 +201,12 @@ impl Layout {
     fn early(self) -> bool {
         matches!(self, Self::Cmv5 | Self::Cmv7)
     }
+}
+
+/// CVNS 0x43fca0 reads the two entropy streams in raster MCU order
+/// immediately after the two Huffman tables, run lengths and quantizers.
+pub fn decode_cmv3(data: &[u8]) -> Result<ImageSurface, FormatError> {
+    decode_inner(data, None, Layout::Cmv3)
 }
 
 /// Decode a self-contained CMV6 JBPD frame to top-down opaque RGBA.
@@ -261,7 +268,7 @@ fn decode_inner(
     layout: Layout,
 ) -> Result<ImageSurface, FormatError> {
     let alpha = layout.alpha();
-    let signature: &[u8] = if alpha { b"JBPE" } else { b"JBPD" };
+    let signature: &[u8] = if layout == Layout::Cmv3 { b"JBP1" } else if alpha { b"JBPE" } else { b"JBPD" };
     if data.len() > MAX_PACKET || (!layout.early() && data.get(..4) != Some(signature)) {
         return Err(FormatError("expected bounded JBPD frame"));
     }
@@ -269,7 +276,7 @@ fn decode_inner(
     // Verified 4:2:0, explicit quantizers, CMV6 tile layout. Bit 12 is an optional reuse mask.
     // Early layouts read only the sampling and quantizer bits; CMV7 always indexes its mask.
     let supported = match layout {
-        Layout::Cmv5 => flags & 0x3800_0000 == 0x1800_0000,
+        Layout::Cmv3 | Layout::Cmv5 => flags & 0x3800_0000 == 0x1800_0000,
         Layout::Cmv7 => flags & 0x3800_1000 == 0x1800_1000,
         _ => flags & !0x1000 == 0x58c00002,
     };
@@ -292,7 +299,7 @@ fn decode_inner(
         .ok()
         .and_then(|n| {
             n.checked_add(
-                if layout == Layout::Cmv5
+                if matches!(layout, Layout::Cmv3 | Layout::Cmv5)
                     || masked.is_some_and(|(_, static_blocks, _)| static_blocks)
                 {
                     0
@@ -318,18 +325,21 @@ fn decode_inner(
         dc_count = Some(word(data, tile_list)? as usize);
         tile_list += 4;
     }
-    let layout_word = word(data, tile_list)?;
-    let rows = (layout_word & 255) as usize;
-    let cols = ((layout_word >> 8) & 255) as usize;
-    let count = (layout_word >> 16) as usize;
-    if rows != h.div_ceil(256) || cols != w.div_ceil(256) || count != rows * cols {
-        return Err(FormatError("JBPD tile grid differs from dimensions"));
-    }
-    let tiles = data
-        .get(tile_list + 4..tile_list + 4 + count * 2)
-        .ok_or(FormatError("JBPD tiles truncated"))?;
-    let alignment = if layout == Layout::Cmv5 { 32 } else { 4 };
-    let mut start = tile_list + (4 + count * 2).next_multiple_of(alignment);
+    let (cols, count, tiles, mut start) = if layout == Layout::Cmv3 {
+        (1, 1, None, tile_list)
+    } else {
+        let grid = word(data, tile_list)?;
+        let rows = (grid & 255) as usize;
+        let cols = ((grid >> 8) & 255) as usize;
+        let count = (grid >> 16) as usize;
+        if rows != h.div_ceil(256) || cols != w.div_ceil(256) || count != rows * cols {
+            return Err(FormatError("JBPD tile grid differs from dimensions"));
+        }
+        let tiles = data.get(tile_list + 4..tile_list + 4 + count * 2)
+            .ok_or(FormatError("JBPD tiles truncated"))?;
+        let alignment = if layout == Layout::Cmv5 { 32 } else { 4 };
+        (cols, count, Some(tiles), tile_list + (4 + count * 2).next_multiple_of(alignment))
+    };
     let mut block_modes = None;
     if layout == Layout::Cmv7 {
         let size = ((mcus + 7) >> 2).next_multiple_of(4);
@@ -338,7 +348,7 @@ fn decode_inner(
                 .ok_or(FormatError("CMV7 block mask truncated"))?,
         );
         start += size;
-    } else if layout != Layout::Cmv5 && flags & 0x1000 != 0 {
+    } else if !matches!(layout, Layout::Cmv3 | Layout::Cmv5) && flags & 0x1000 != 0 {
         if masked.is_some() {
             let length = data
                 .get(start..start + 2)
@@ -398,11 +408,14 @@ fn decode_inner(
     for tile in 0..count {
         let ty = tile / cols * 256;
         let tx = tile % cols * 256;
-        let nr = usize::from(tiles[tile * 2]);
-        let nc = usize::from(tiles[tile * 2 + 1]);
-        if nr != (h - ty).min(256).div_ceil(16) || nc != (w - tx).min(256).div_ceil(16) {
-            return Err(FormatError("JBPD tile extent differs from grid"));
-        }
+        let (nr, nc) = if let Some(tiles) = tiles {
+            let nr = usize::from(tiles[tile * 2]);
+            let nc = usize::from(tiles[tile * 2 + 1]);
+            if nr != (h - ty).min(256).div_ceil(16) || nc != (w - tx).min(256).div_ceil(16) {
+                return Err(FormatError("JBPD tile extent differs from grid"));
+            }
+            (nr, nc)
+        } else { (h.div_ceil(16), w.div_ceil(16)) };
         for by in 0..nr {
             for bx in 0..nc {
                 let draw = present(mcu_index);

@@ -37,7 +37,7 @@ pub enum Container {
     Avi,
     /// IMOAVI100: indexed Motion-JPEG/raw pictures with native redirects.
     ImoAvi,
-    /// Purple Software CMV5/6/7/8/9 movie container.
+    /// Purple Software CMV3/5/6/7/8/9 movie container.
     Cmv,
     /// WebM (Matroska) with a VP8 video track.
     WebM,
@@ -93,7 +93,7 @@ pub fn sniff(bytes: &[u8]) -> Result<Container> {
     if isobmff::is_mp4(bytes) {
         return Ok(Container::Mp4);
     }
-    if matches!(bytes.get(..4), Some(b"CMV5" | b"CMV6" | b"CMV7" | b"CMV8" | b"CMV9")) {
+    if matches!(bytes.get(..4), Some(b"CMV3" | b"CMV5" | b"CMV6" | b"CMV7" | b"CMV8" | b"CMV9")) {
         return Ok(Container::Cmv);
     }
     if bytes.starts_with(b"OggS") {

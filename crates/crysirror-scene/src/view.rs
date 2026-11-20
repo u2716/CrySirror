@@ -42,6 +42,10 @@ pub struct Sun {
     /// Cast shadows (cascades or virtual shadow maps).
     #[serde(default = "yes")]
     pub shadows: bool,
+    /// Fraction of the light a cast shadow removes (Unity `Light.shadowStrength`):
+    /// visibility becomes `mix(1, shadow, strength)`.
+    #[serde(default = "one")]
+    pub shadow_strength: f32,
     /// Angular diameter of the sun disc in degrees (the real sun is about
     /// 0.53). Hardware ray-traced shadows sample the disc and denoise over
     /// time; 0 keeps one exact hard-shadow ray. Raster shadows ignore it.
@@ -58,6 +62,7 @@ impl Default for Sun {
             color: white3(),
             intensity: sun_lux(),
             shadows: true,
+            shadow_strength: 1.,
             angular_diameter_degrees: 0.,
         }
     }
@@ -377,6 +382,11 @@ pub struct Environment {
     /// Directional sun light; `null` for none.
     #[serde(default)]
     pub sun: Option<Sun>,
+    /// Uniform ambient radiance (linear RGB) replacing the environment's
+    /// diffuse spherical harmonics, e.g. a flat `RenderSettings.ambientLight`.
+    /// Scaled by `intensity` like the environment it replaces.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ambient: Option<[f32; 3]>,
     /// Bloom mix strength (0 disables).
     #[serde(default = "bloom")]
     pub bloom: f32,
@@ -427,6 +437,7 @@ impl Default for Environment {
             tonemap: Tonemap::default(),
             show_sky: true,
             sun: Some(Sun::default()),
+            ambient: None,
             bloom: bloom(),
             ambient_occlusion: ao(),
             temporal_aa: true,
@@ -442,6 +453,10 @@ impl Default for Environment {
 }
 impl Environment {
     pub fn validate(&self) -> Result<()> {
+        ensure!(
+            self.ambient.is_none_or(|a| a.iter().all(|x| x.is_finite() && (0.0..=65504.).contains(x))),
+            "environment ambient range"
+        );
         if let Some(h) = &self.hdr {
             ensure!(
                 !h.is_empty() && !h.starts_with('/') && !h.contains("..") && !h.contains('\\'),
@@ -486,7 +501,8 @@ impl Environment {
                     && s.color.iter().all(|c| *c >= 0.)
                     && s.intensity.is_finite()
                     && (0.0..=100_000.).contains(&s.intensity)
-                    && (0.0..=10.).contains(&s.angular_diameter_degrees),
+                    && (0.0..=10.).contains(&s.angular_diameter_degrees)
+                    && (0.0..=1.).contains(&s.shadow_strength),
                 "invalid sun"
             );
         }
@@ -540,6 +556,12 @@ pub enum PbrDrawable {
         animation: Vec<crate::components::AnimationLayer>,
         /// Non-zero morph target weights by target name.
         morphs: Vec<(String, f32)>,
+        /// Instance key whose local pose is copied onto same-named nodes.
+        follow: Option<u64>,
+        /// Leader node the root nodes ride on (`AnimationState::attach`).
+        attach: Option<String>,
+        /// Procedural local poses by node name, applied last.
+        nodes: Vec<(String, crate::components::NodePose)>,
     },
     /// Untextured triangles (cubes, legacy meshes) with a base color.
     Triangles {
@@ -790,6 +812,19 @@ impl World {
                             .flat_map(|a| &a.morphs)
                             .filter(|(_, w)| **w != 0.)
                             .map(|(n, w)| (n.clone(), *w))
+                            .collect(),
+                        follow: spec
+                            .animation
+                            .as_ref()
+                            .and_then(|a| a.follow)
+                            .filter(|leader| *leader != id)
+                            .map(|leader| (u64::from(client) << 32) | u64::from(leader)),
+                        attach: spec.animation.as_ref().and_then(|a| a.attach.clone()),
+                        nodes: spec
+                            .animation
+                            .iter()
+                            .flat_map(|a| &a.nodes)
+                            .map(|(n, p)| (n.clone(), *p))
                             .collect(),
                     },
                     g => {

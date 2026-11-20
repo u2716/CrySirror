@@ -1,0 +1,20 @@
+[package]
+name = "crysirror-unity"
+version = "0.1.0"
+edition = "2024"
+license = "MPL-2.0"
+publish = false
+description = "Bounded readers for Unity 4.x serialized files (format 9) as engine data"
+autoexamples = false
+autobenches = false
+
+[lib]
+doctest = false
+
+[dependencies]
+anyhow.workspace = true
+crysirror-core.workspace = true
+crysirror-image.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+crysirror-asset.workspace = true

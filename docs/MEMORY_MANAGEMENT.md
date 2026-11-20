@@ -50,6 +50,12 @@ space, an available descriptor or a kernel memblock slot.
    shutdown. Stop/join producers and resolve device ownership before destroying
    their resources; retained caches/arenas need an explicit lifetime and bound.
 
+Adapter-built models (`HostServices::upload_model`) stay in the client asset
+cache until the adapter calls `release_model`. The runtime drops the bytes at
+the end of the first tick in which no world entity of that client references the
+asset, so an adapter releases a model when it despawns or rebuilds the entity
+that drew it. Unreleased models count against the 256 MiB asset cache.
+
 Reuse shared caches and size classes before creating new per-VM copies. Keep
 keys, saves, original input data and native policy separate from disposable
 derived caches. Do not change the game's logical resolution or omit native

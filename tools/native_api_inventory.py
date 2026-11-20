@@ -782,18 +782,95 @@ def cmvs_catalogue(inv):
     cvns = json.loads(cvns_path.read_text())
     cvns_section = "CVNS 20040515 x86 syscalls"
     cvns_routes = {
-        0x2000: (root / "vm/machine.rs", "System { command: 0 }", "Advance and yield"),
-        0x2002: (root / "adapter/display.rs", "fn cvns_set_frame_period", "Set the native frame period in milliseconds"),
-        0x2003: (root / "adapter.rs", "0x2003 => session.vm.complete_owner_call", "Read the native frame period"),
+        0x2000: (root / "vm/machine.rs", "System { command: 0 }", "Advance and yield", "—"),
+        0x2005: (root / "adapter.rs", "Some(0x2005) =>", "Soft reset the native scene and enter main.pss while preserving the game banks", "—"),
+        0x2007: (root / "adapter.rs", "Some(0x2007) =>", "Read the completed one-second frame counter", "—"),
+        0x21ed: (root / "adapter.rs", "Some(0x21ed) =>", "Write the indexed CVNS setting and update its live owners and menu", "—"),
+        0x217c: (root / "adapter.rs", "Some(0x217c) =>", "Switch between windowed and fullscreen presentation", "—"),
+        0x2180: (root / "adapter.rs", "Some(0x2180) =>", "Read the window position in desktop coordinates", "—"),
+        0x2182: (root / "adapter.rs", "Some(0x2182) =>", "Read the minimized or maximized window state", "—"),
+        0x20a4: (root / "adapter.rs", "Some(0x20a4) =>", "Read music playback time after the native buffer lead", "—"),
+        0x2181: (root / "adapter.rs", "Some(0x2181) =>", "Move the window in desktop coordinates and yield a native frame", "—"),
+        0x21a7: (root / "vm/save_menu.rs", "pub(crate) fn latest_cvns_slot", "Find the newest CSP slot after the starting index", "—"),
+        0x21ae: (root / "vm/save_menu.rs", "pub(crate) fn probe_cvns_slot", "Probe a numbered CSP gameplay slot signature", "—"),
+        0x21ab: (root / "vm/save_menu.rs", "pub(crate) fn edit_slot_header", "Replace the CSP comment while preserving the payload", "—"),
+        0x21ac: (root / "adapter.rs", "0x29ac | 0x22bd =>", "Read CSP metadata and optionally install its compressed thumbnail bitmap", "—"),
+        0x2002: (root / "adapter/display.rs", "fn cvns_set_frame_period", "Set the native frame period in milliseconds", "—"),
+        0x2003: (root / "adapter.rs", "Some(0x2003) =>", "Read the native frame period", "—"),
+        0x2010: (root / "adapter.rs", "Some(0x2010) =>", "Replace the main script and capture its entry state in CSP1", "—"),
+        0x2012: (root / "adapter.rs", "Some(0x2012) =>", "Call a script in image slot 1", "—"),
+        0x20b6: (root / "adapter.rs", "Some(selector @ (0x20b6", "Read active SE playback milliseconds after the two-buffer lead", "—"),
+        0x20b8: (root / "adapter/sound.rs", "pub fn read_cvns(", "Load or play a voice with a percentage gain and loop flag", "—"),
+        0x20b9: (root / "adapter.rs", "Some(selector @ 0x20b9", "Start a prepared voice", "—"),
+        0x20ba: (root / "adapter.rs", "Some(selector @ 0x20b9", "Stop and release a voice", "—"),
+        0x20bb: (root / "adapter.rs", "Some(selector @ 0x20b9", "Fade a voice to retirement", "—"),
+        0x20af: (root / "adapter.rs", "Some(selector @ (0x20af", "Set signed percentage balance of one SE stream", "—"),
+        0x20b7: (root / "adapter.rs", "Some(selector @ (0x20af", "Set secondary percentage gain of one SE stream", "—"),
+        0x20bd: (root / "adapter.rs", "Some(selector @ (0x20af", "Set secondary percentage gain of one voice", "—"),
+        0x20be: (root / "adapter.rs", "Some(selector @ (0x20af", "Set signed percentage balance of one voice", "—"),
+        0x20bc: (root / "adapter.rs", "Some(selector @ (0x20b6", "Read active voice playback milliseconds after the two-buffer lead", "—"),
+        0x20eb: (root / "adapter.rs", "Some(0x20eb) =>", "Clear the vector result and set native fault bit 0", "—"),
+        0x2041: (root / "adapter.rs", "Some(0x2041) =>", "Set native fault bit 0 after consuming the selector argument", "—"),
+        0x217b: (root / "adapter/display.rs", "let fullscreen = if self.profile", "Return zero in a window and the active native pixel-depth mode in fullscreen", "—"),
+        0x217f: (root / "adapter.rs", "Some(0x217f) =>", "Read the primary display dimensions into registers 1 and 2", "—"),
+        0x217d: (root / "adapter.rs", "Some(0x217d) =>", "Read the backing canvas dimensions into registers 1 and 2", "—"),
+        0x21af: (root / "adapter/thumbnail.rs", "BoxSampleRows::HorizontalRatio", "Capture the displayed frame as a bottom-up BGR24 save thumbnail using the x86 row interval", "—"),
+        0x21a1: (root / "vm/save_menu.rs", "fn scan_cvns_menu(", "Scan CSP gameplay slot headers and update load/save menu entries", "—"),
+        0x20c0: (root / "adapter.rs", "Some(0x20c0) =>", "Play a fullscreen movie and suspend the script until EOF or input", "—"),
+        0x20c5: (root / "adapter.rs", "Some(0x20c5) =>", "Prepare or play one of four independent sound streams", "—"),
+        0x20c6: (root / "adapter.rs", "Some(selector @ (0x20b6", "Read the active sample stream cursor", "—"),
+        0x20c7: (root / "adapter.rs", "Some(0x20c7) =>", "Release a sample stream", "—"),
+        0x21b6: (root / "adapter/dialog.rs", "0x29b6 =>", "Choose the default face and rebind message windows that inherit it", "—"),
+        0x21b7: (root / "adapter/dialog.rs", "0x29b7 =>", "Choose an RGB colour using two initial custom swatches", "—"),
+        0x21b2: (root / "adapter/dialog.rs", "0x213c | 0x29b2 =>", "Edit a CP932 name and copy the accepted or original text to the script destination", "—"),
+        0x200b: (root / "adapter/cvns/mod.rs", "0x200b =>", "Fill the retained primary and schedule full damage", "—"),
+        0x200d: (root / "adapter/cvns/mod.rs", "0x200d =>", "Cancel queued redraw rectangles", "—"),
+        0x21a0: (root / "adapter.rs", "fn poll_cvns_checkpoint(", "Capture VM and resource records at the next instruction in CSP1", "—"),
+        0x21a3: (root / "adapter.rs", "Some(0x21a3) =>", "Restore a numbered CSP1 slot and resume its embedded PSS0", "—"),
+        0x21a4: (root / "adapter/cvns/slot.rs", "pub(in crate::adapter) fn write(", "Write the retained checkpoint, thumbnail and live main image to a numbered slot", "—"),
+        0x200c: (root / "adapter/cvns/mod.rs", "0x200c =>", "Submit a clipped redraw rectangle", "—"),
+        0x21b1: (root / "adapter/dialog.rs", "0x213b | 0x29b1 =>", "Show the retry/cancel prompt and return the selected result", "—"),
+        0x21c0: (root / "vm/css0.rs", "pub(crate) fn decode(", "Load the CSS0 persistent bank suffixes and name lists", "—"),
+        0x21c1: (root / "vm/css0.rs", "pub(crate) fn encode(", "Write save000.dat in CSS0 format", "—"),
     }
     cvns_noop_path = root / "vm/cvns.rs"
+    cvns_source = cvns_noop_path.read_text()
+
+    def function_body(text, name):
+        start = text.index(f"fn {name}")
+        return text[start:text.index("\n}\n", start)]
+
+    def match_arms(text):
+        arms = {}
+        for number, line in enumerate(text.splitlines(), 1):
+            match = re.match(r" {12}((?:0x2[\da-f]{3}(?:\.\.=0x2[\da-f]{3})?(?:\s*\|\s*)?)+)\s*(?:if .*)?=>", line)
+            if not match:
+                continue
+            for begin, end in re.findall(r"(0x[\da-f]+)(?:\.\.=(0x[\da-f]+))?", match.group(1)):
+                for opcode in range(int(begin, 16), int(end or begin, 16) + 1):
+                    arms.setdefault(opcode, number)
+        return arms
+
     cvns_noops = {
         opcode
         for begin, end in re.findall(r"(0x[\da-f]+)(?:\.\.=(0x[\da-f]+))?",
-                                    "\n".join(line for line in cvns_noop_path.read_text().splitlines()
+                                    "\n".join(line for line in function_body(cvns_source, "returns_without_effect").splitlines()
                                               if not line.lstrip().startswith("//")))
         for opcode in range(int(begin, 16), int(end or begin, 16) + 1)
     }
+    route_offset = cvns_source[:cvns_source.index("fn route")].count("\n")
+    for number, line in enumerate(function_body(cvns_source, "route").splitlines(), route_offset + 1):
+        match = re.match(r"\s*((?:0x2[\da-f]{3}(?:\.\.=0x2[\da-f]{3})?(?:\s*\|\s*)?)+)\s*=>\s*(0x2[\da-f]{3}|opcode)", line)
+        if match:
+            for first, last in re.findall(r"(0x[\da-f]+)(?:\.\.=(0x[\da-f]+))?", match.group(1)):
+                for selector in range(int(first, 16), int(last or first, 16) + 1):
+                    target = selector if match.group(2) == "opcode" else int(match.group(2), 16)
+                    cvns_routes.setdefault(selector, (cvns_noop_path, number,
+                                                       f"Shares the reviewed 2016 route {short_id(target)}", "—"))
+    for path, purpose in [(root / "vm/startup/cvns.rs", "VM-owned CVNS selector"),
+                          (root / "adapter/cvns/mod.rs", "CVNS scene, text, input or settings selector")]:
+        for opcode, number in match_arms(path.read_text()).items():
+            cvns_routes.setdefault(opcode, (path, number, purpose, "—"))
     cvns_first = int(cvns["first_opcode"], 16)
     if cvns_noops != {cvns_first + i for i, rva in enumerate(cvns["cases_rva"]) if int(rva, 16) == 0x32fd5}:
         raise ValueError("CVNS no-effect routes disagree with the recorded x86 dispatcher")
@@ -802,8 +879,9 @@ def cmvs_catalogue(inv):
         key = short_id(opcode)
         guard = f"x86 case RVA `0x{rva}`"
         if opcode in cvns_routes:
-            path, marker, purpose = cvns_routes[opcode]
-            inv.add(cvns_section, key, key, purpose, "Handled", "—", path, location(path, marker), guard)
+            path, marker, purpose, gap = cvns_routes[opcode]
+            line = marker if isinstance(marker, int) else location(path, marker)
+            inv.add(cvns_section, key, key, purpose, "Handled" if gap == "—" else "Open", gap, path, line, guard)
         elif opcode in cvns_noops:
             inv.add(cvns_section, key, key, "Advance with no operands or effects", "Original no-op",
                     "Original handler returns 0x4000", cvns_noop_path,

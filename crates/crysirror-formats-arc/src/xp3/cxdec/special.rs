@@ -149,9 +149,14 @@ pub fn decode_blob(params: &SpecialParams, stored: &[u8], original: usize) -> Re
 /// every record must have exactly that body size and the stream must end on
 /// a record boundary.
 pub fn parse_records(decoded: &[u8]) -> Result<Vec<(u32, String)>> {
+    parse_records_limited(decoded, usize::MAX)
+}
+
+pub(super) fn parse_records_limited(decoded: &[u8], limit: usize) -> Result<Vec<(u32, String)>> {
     let mut out = Vec::new();
     let mut at = 0usize;
     while at < decoded.len() {
+        ensure!(out.len() < limit, "too many Special filename records");
         ensure!(at + 12 <= decoded.len(), "truncated Special record header");
         let size = i64::from_le_bytes(decoded[at + 4..at + 12].try_into().unwrap());
         let body = at + 12;

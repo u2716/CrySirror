@@ -159,6 +159,8 @@ pub struct State {
     system_float_bits: [Option<u32>; 4],
     integer_limit: u32,
     bit_limit: u32,
+    /// CMVS keeps 128 string cells and CVNS 256; both alias higher reads to cell 0.
+    string_cells: u32,
     string_buffer: Vec<u8>,
     pub result: Option<u32>,
     pub condition: Option<bool>,
@@ -175,10 +177,23 @@ impl State {
             system_float_bits: [None; 4],
             integer_limit: 4097,
             bit_limit: 262144,
+            string_cells: 128,
             string_buffer: Vec::new(),
             result: None,
             condition: None,
         }
+    }
+    /// The CVNS bank at 0x477308 holds 256 cells of 1,024 bytes (0x427360 / 0x433a50).
+    pub(crate) fn with_string_cells(mut self, cells: u32) -> Self {
+        self.string_cells = cells;
+        self
+    }
+    pub fn string_cells(&self) -> u32 {
+        self.string_cells
+    }
+    /// Reads and writes through an out-of-range cell resolve to cell 0.
+    pub(crate) fn string_slot(&self, index: u32) -> u32 {
+        if index < self.string_cells { index } else { 0 }
     }
     pub fn integer(&self, index: u32) -> Option<i32> {
         self.integers
@@ -239,8 +254,16 @@ impl State {
     }
     pub(super) fn raw_string_cell(&self, index: u32) -> Option<&[u8; STRING_SLOT_BYTES]> {
         static EMPTY: [u8; STRING_SLOT_BYTES] = [0; STRING_SLOT_BYTES];
-        (index < 128).then(|| self.strings.get(&index).map_or(&EMPTY, Box::as_ref))
+        (index < self.string_cells).then(|| self.strings.get(&index).map_or(&EMPTY, Box::as_ref))
     }
+    #[cfg(feature = "runtime")]
+    pub(super) fn write_cell_prefix(&mut self, slot: u32, bytes: &[u8]) -> Result<(), &'static str> {
+        Self::range(slot, 1, self.string_cells)?;
+        if bytes.len() > STRING_SLOT_BYTES { return Err("registry value outside string cell"); }
+        self.strings.entry(slot).or_insert_with(|| Box::new([0; STRING_SLOT_BYTES]))[..bytes.len()].copy_from_slice(bytes);
+        Ok(())
+    }
+
     pub(crate) fn set_string_buffer_journaled(&mut self, bytes: Vec<u8>, journal: &mut Journal) {
         let old = std::mem::replace(&mut self.string_buffer, bytes);
         journal.0.push(Undo::Buffer(old));
@@ -255,7 +278,7 @@ impl State {
         bytes: &[u8],
         journal: &mut Journal,
     ) -> Result<(), &'static str> {
-        Self::range(index, 1, 128)?;
+        Self::range(index, 1, self.string_cells)?;
         if bytes.len() >= STRING_SLOT_BYTES {
             return Err("invalid bounded string slot value");
         }
@@ -402,6 +425,7 @@ impl State {
             "system_floats": self.system_float_bits,
             "integer_limit": self.integer_limit,
             "bit_limit": self.bit_limit,
+            "string_cells": self.string_cells,
             "buffer": hex(&self.string_buffer),
             "result": self.result,
             "condition": self.condition,
@@ -412,6 +436,10 @@ impl State {
     pub(super) fn from_snapshot(value: &serde_json::Value) -> Option<Self> {
         use super::snapshot::{bytes, unhex, word, words};
         let mut state = Self::new();
+        // Snapshots older than the CVNS profile carry the CMVS cell count.
+        if let Some(cells) = value["string_cells"].as_u64() {
+            state.string_cells = u32::try_from(cells).ok()?;
+        }
         for pair in value["integers"].as_array()? {
             state.integers.insert(pair[0].as_u64()? as u32, pair[1].as_i64()? as i32);
         }
@@ -437,6 +465,17 @@ impl State {
         state.result = value["result"].as_u64().map(|word| word as u32);
         state.condition = value["condition"].as_bool();
         Some(state)
+    }
+
+    #[cfg(any(test,feature = "runtime"))]
+    pub(super) fn packed_bit_suffix(&self, first_byte: usize) -> Vec<u8> {
+        let mut bytes = vec![0; 32768 - first_byte];
+        for (&index, &set) in self.bits.range((first_byte as u32 * 8)..262144) {
+            if set {
+                bytes[index as usize / 8 - first_byte] |= 1 << (index % 8);
+            }
+        }
+        bytes
     }
 
     /// The persistent banks in CSS1 order: bits, integers, floats, then 64 C strings.
@@ -497,7 +536,7 @@ impl State {
         if bytes.len() >= STRING_SLOT_BYTES || bytes.contains(&0) {
             return Err("invalid bounded string slot value");
         }
-        for index in Self::range(start, count, 128)? {
+        for index in Self::range(start, count, self.string_cells)? {
             let cell = self
                 .strings
                 .entry(index)

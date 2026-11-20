@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Native PB2A memory images. The CMVS dispatcher selects frame zero and
-//! supplies no variant name for memory inputs. See the format SATD record for
-//! the named variant and additional frame entry points.
+//! PB2A images. Mode 5 stores each numbered overlay relative to the same base.
 
 use super::common::{bgr, image, purple_lz, Bits, C};
 use anyhow::{bail, ensure, Context, Result};
@@ -13,6 +11,7 @@ const RGB_CHANNELS: [usize; 4] = [2, 1, 0, 3];
 
 struct Header {
     frames: u32,
+    frame_table: usize,
     mode: u16,
     width: u32,
     height: u32,
@@ -22,7 +21,7 @@ struct Header {
 }
 
 impl Header {
-    fn read(input: &[u8]) -> Result<(Self, &[u8])> {
+    fn read(input: &[u8]) -> Result<Self> {
         ensure!(
             input.len() >= HEADER_LEN + FOOTER_LEN && input.starts_with(b"PB2A"),
             "invalid PB2A header"
@@ -34,38 +33,52 @@ impl Header {
         }
         let mut header = C::new(&decoded);
         let frames = header.u32()?;
-        header.skip(4)?; // Offset of the additional frame table.
+        let frame_table = header.u32()? as usize;
         let mode = header.u16()?;
         let width = u32::from(header.u16()?);
         let height = u32::from(header.u16()?);
         let depth = header.u16()?;
         let control = header.u32()? as usize;
         let data = header.u32()? as usize;
-        Ok((
-            Self {
+        Ok(Self {
                 frames,
+                frame_table,
                 mode,
                 width,
                 height,
                 depth,
                 control,
                 data,
-            },
-            body,
-        ))
+        })
     }
 }
 
-pub(crate) fn decode(input: &[u8]) -> Result<ImageSurface> {
-    decode_with_alpha(input).map(|(image, _)| image)
+pub(crate) fn decode(input: &[u8], context: &crysirror_image::ImageDecodeContext<'_>) -> Result<ImageSurface> {
+    let frame = context.parameter("purple-software/pb2-frame")
+        .map(|value| value.as_u64().and_then(|v| u32::try_from(v).ok()).context("invalid PB2A frame index"))
+        .transpose()?.unwrap_or(0);
+    decode_frame(input, frame).map(|(image, _)| image)
 }
 
 pub(crate) fn decode_with_alpha(input: &[u8]) -> Result<(ImageSurface, bool)> {
-    let (header, body) = Header::read(input)?;
+    decode_frame(input, 0)
+}
+
+fn decode_frame(input: &[u8], frame: u32) -> Result<(ImageSurface, bool)> {
+    let header = Header::read(input)?;
     let image = match header.mode {
-        1 | 2 => decode_tiles(&header, body),
-        3 | 4 => decode_jbp(&header, body),
-        5 => decode_first_frame(&header, body),
+        // CVNS 0x43d360, 0x43cd80 and 0x43d180 read their streams up to the end
+        // of the file; the key bytes near the end can also be payload.
+        1 | 2 => decode_tiles(&header, input),
+        3 | 4 => decode_jbp(&header, input),
+        5 => {
+            ensure!(frame < header.frames, "PB2A frame {frame} outside {}", header.frames);
+            let mut surface = decode_first_frame(&header, input)?;
+            if frame != 0 {
+                apply_frame(&header, input, frame, &mut surface)?;
+            }
+            Ok(surface)
+        }
         6 => bail!("PB2A mode 6 requires a native variant name"),
         mode => bail!("unsupported PB2A mode {mode}"),
     }?;
@@ -198,4 +211,39 @@ fn decode_first_frame(header: &Header, body: &[u8]) -> Result<ImageSurface> {
         rgba[2] ^= rgba[1];
     }
     Ok(surface)
+}
+
+/// 0x43c980. Frames after zero each replace a subset of complete 8x8 tiles.
+/// A set mask bit preserves the base tile. Changed tiles contain opaque BGR.
+fn apply_frame(header: &Header, bytes: &[u8], frame: u32, surface: &mut ImageSurface) -> Result<()> {
+    let mut records = C::new(payload_at(bytes, header.frame_table)?);
+    for _ in 1..frame {
+        let length = records.u32()? as usize;
+        records.skip(length.checked_sub(4).context("short PB2A frame record")?)?;
+    }
+    let length = records.u32()? as usize;
+    let mut record = C::new(records.take(length.checked_sub(4).context("short PB2A frame record")?)?);
+    let flags_len = record.u32()? as usize;
+    record.skip(4)?;
+    let unpacked = record.u32()? as usize;
+    let control = record.take(flags_len)?;
+    let data = purple_lz(control, record.take(record.left())?, unpacked, true)?;
+    let mut delta = C::new(&data);
+    let mask_len = delta.u32()? as usize;
+    delta.skip(4)?;
+    let mut mask = Bits::new(delta.take(mask_len)?, true);
+    let width = surface.width as usize;
+    for ty in 0..surface.height as usize / 8 {
+        for tx in 0..width / 8 {
+            if mask.get(1)? != 0 { continue; }
+            for row in 0..8 {
+                let start = 4 * ((ty * 8 + row) * width + tx * 8);
+                for pixel in surface.rgba[start..start + 32].chunks_exact_mut(4) {
+                    let bgr = delta.take(3)?;
+                    pixel.copy_from_slice(&[bgr[2], bgr[1], bgr[0], 255]);
+                }
+            }
+        }
+    }
+    Ok(())
 }

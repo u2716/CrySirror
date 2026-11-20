@@ -45,12 +45,15 @@ impl ArchiveFormat for Xp3 {
             })
             .collect();
         let renumbered = !index.specials.is_empty();
+        let nana = cxdec::nana::profile(&index.specials, context)?;
         let archive: Box<dyn Archive> = if let Some(d) = index.hxv4 {
             ensure!(
                 index.specials.is_empty(),
                 "HXV4 archive with indirect Special descriptor"
             );
             hxv4::open(index.archive, d, context)?
+        } else if let Some(profile) = nana {
+            cxdec::nana::open(index.archive, &index.specials[0], profile, context)?
         } else if hash_fold_xor::requested(context) {
             ensure!(
                 index.specials.is_empty(),
@@ -64,10 +67,10 @@ impl ArchiveFormat for Xp3 {
             );
             adler_xor::open(index.archive, context)?
         } else if !index.specials.is_empty() || cxdec::requested(context) {
-            ensure!(cxdec::requested(context), "XP3 indirect Special (filename) index needs an explicit CXDEC profile (kirikiri/xp3.cxdec_modules)");
+            ensure!(cxdec::requested(context), "XP3 indirect Special (filename) index requires CXDEC modules or a Nana profile for dls:");
             cxdec::open(index.archive, index.specials, context)?
         } else {
-            Box::new(index.archive)
+            adler_xor::open_auto(index.archive, context)?
         };
         // CXDEC filename recovery renumbers entries; rebuild the table from
         // the published view in that (rare) case.

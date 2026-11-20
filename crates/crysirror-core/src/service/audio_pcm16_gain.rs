@@ -1,22 +1,41 @@
 // SPDX-License-Identifier: MPL-2.0
 
-/// Optional legacy PCM16 fader with a wrapping Q8 secondary multiplier and
-/// two raw Q8 attenuation coefficients. Unity is 256. The unity clamp
-/// applies to the computed channel gain after all wrapping products.
+/// Integer arithmetic used by the PCM16 fader.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Pcm16GainScale {
+    /// Unity is 256; attenuate signed samples by arithmetic right shift.
+    #[default]
+    Q8,
+    /// Unity is 100; divide signed samples toward zero.
+    Percent,
+}
+
+/// Optional PCM16 fader. Products wrap before division and the final
+/// channel gain is capped at unity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AudioPcm16Gain {
-    /// Secondary Q8 gain word, initially 256.
+    /// Coefficient scale and sample rounding rule.
+    pub scale: Pcm16GainScale,
+    /// Secondary gain word.
     pub multiplier: u32,
-    /// Left and right Q8 gain words, initially both 256.
+    /// Left and right attenuation words.
     pub stereo: [u32; 2],
 }
 
 impl Default for AudioPcm16Gain {
     fn default() -> Self {
         Self {
+            scale: Pcm16GainScale::Q8,
             multiplier: 256,
             stereo: [256; 2],
         }
+    }
+}
+
+impl AudioPcm16Gain {
+    /// Unity coefficients for a percentage-based fader.
+    pub fn percent() -> Self {
+        Self { scale: Pcm16GainScale::Percent, multiplier: 100, stereo: [100; 2] }
     }
 }
 

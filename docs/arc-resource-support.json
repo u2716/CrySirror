@@ -8,16 +8,16 @@
   },
   "review_date": "2026-10-26",
   "summary": {
-    "registered_resource_decoders": 193,
+    "registered_resource_decoders": 194,
     "registered_upstream_decoders_all_kinds": 289,
     "registered_image_decoders_documented_separately": 96,
     "kind_counts": {
-      "archive": 152,
+      "archive": 153,
       "audio": 16,
       "file": 25
     },
     "status_counts": {
-      "ported": 178,
+      "ported": 179,
       "partial": 15
     },
     "registered_archive_groups": {
@@ -30,7 +30,8 @@
       "f": 37,
       "g": 8,
       "h": 11,
-      "i": 2
+      "i": 2,
+      "j": 1
     },
     "counts_are_metadata_not_automatic_behavior_proofs": true
   },
@@ -2325,6 +2326,32 @@
         ],
         "external_corpus_tests": [],
         "behavior_scope": "Test files cover the reviewed group; not every native/title variant has an external fixture. No commercial game or hardware result is implied."
+      }
+    },
+    {
+      "id": "kiss/warc",
+      "kind": "archive",
+      "status": "ported",
+      "registration_group": "j",
+      "entrypoint": "warc",
+      "implementation": [
+        "src/legacy/j.rs"
+      ],
+      "variants": [
+        "Custom Maid 3D 2 warc version 1000: block table, directory hash tree, zlib or stored chunks and UTF-16 name table"
+      ],
+      "limits": [
+        "The block-1 lookup tree is not needed for listing and is not validated",
+        "Shared entry/index/count/resident budgets and canonical capability paths apply; unknown chunk methods and layouts fail."
+      ],
+      "evidence": {
+        "ordinary_tests": [
+          "tests/legacy_archives.rs"
+        ],
+        "external_corpus_tests": [
+          "tests/kiss_warc_game.rs"
+        ],
+        "behavior_scope": "Recovered from the original cm3d2_x64.dll reader; the ignored corpus test opens every entry of the installed script, csv and tjs archives. No complete-title behavior is implied."
       }
     },
     {

@@ -843,6 +843,7 @@ pub(crate) fn generate() -> api_doc::ApiDocs {
         d("AudioMixGroupInfo","Audio.mixGroup / nativeMixGroup / HostServices.audio_mix_group",None),
         d("AudioParameters","Rust HostServices/ChannelAudio playback parameters",None),
         d("AudioPcm16Gain","Rust AudioParameters.pcm16_gain fixed-point voice fader",None),
+        d("Pcm16GainScale","Rust AudioPcm16Gain.scale coefficient units and signed-sample rounding",None),
         d("AudioPcm16GainUpdate","Rust HostServices.update_audio_pcm16_gain scoped live control",None),
         d("ResidentAudioState","Rust HostServices.begin_resident_audio; worker-prepared reusable PCM",None),
         d("PcmBus","AudioParameters.bus",None),
@@ -1362,6 +1363,8 @@ pub(crate) fn generate() -> api_doc::ApiDocs {
             sample::<layer::PositionedGlyph>(json!({"character":"あ","baseline":[0,20]})),
         ),
         d("PositionedGlyphStyle", "`PositionedGlyph.style`", None),
+        d("GlyphGradient", "`PositionedGlyphStyle.gradient`", None),
+        d("GlyphGradientAxis", "`GlyphGradient.axis`", None),
         d("GlyphCoverageQuality", "`PositionedGlyphStyle.raster`", None),
         d("GlyphRevealUnit", "`GlyphReveal.unit`", None),
         d(

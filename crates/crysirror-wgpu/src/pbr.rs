@@ -671,6 +671,8 @@ struct GpuMaterial {
     alpha: AlphaMode,
     bind: wgpu::BindGroup,
     double_sided: bool,
+    /// Toon inverted-hull outline pass (`ToonShading::outline_width` > 0).
+    outline: bool,
     /// Coverage inputs for ray-traced alpha testing (ADR 0055).
     rt: RtCoverage,
 }
@@ -788,6 +790,8 @@ pub struct PbrRenderer {
     palette_buf: wgpu::Buffer,
     palette_capacity: u64,
     prev_palettes: HashMap<u64, Vec<[[f32; 4]; 4]>>,
+    /// Animation clips bound to a model's nodes: (model key, source key, clip).
+    bound_clips: HashMap<(String, String, String), Arc<cpu::Clip>>,
     /// Per-draw morphed vertex buffers keyed by draw key: (weights hash, buffer, vertex count).
     morph_buffers: HashMap<u64, (u64, wgpu::Buffer, usize)>,
     ssao_bgl: wgpu::BindGroupLayout,
@@ -1035,6 +1039,9 @@ struct SurfacePipelines {
     prepass_skin_double: wgpu::RenderPipeline,
     shadow: wgpu::RenderPipeline,
     shadow_skin: wgpu::RenderPipeline,
+    /// Toon outline (front faces culled, extruded hull): static, skinned.
+    outline: wgpu::RenderPipeline,
+    outline_skin: wgpu::RenderPipeline,
     transparent: Vec<wgpu::RenderPipeline>,
 }
 impl SurfacePipelines {
@@ -1106,6 +1113,39 @@ impl SurfacePipelines {
                 multiview_mask: None,
             })
         };
+        let outline_pipeline = |skinned: bool| {
+            let buffers = [Some(vertex_layout()), Some(skin_layout())];
+            d.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                cache: None,
+                label: Some("toon outline"),
+                layout: Some(&main_layout),
+                vertex: wgpu::VertexState {
+                    module: &pbr_sh,
+                    entry_point: Some(if skinned { "vs_outline_skinned" } else { "vs_outline" }),
+                    buffers: &buffers[..if skinned { 2 } else { 1 }],
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &pbr_sh,
+                    entry_point: Some("fs_outline"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: HDR,
+                        blend: blend_state(AlphaMode::Opaque),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    cull_mode: Some(wgpu::Face::Front),
+                    ..Default::default()
+                },
+                depth_stencil: Some(depth_state(true, wgpu::CompareFunction::LessEqual)),
+                multisample: msaa,
+                multiview_mask: None,
+            })
+        };
+        let outline = outline_pipeline(false);
+        let outline_skin = outline_pipeline(true);
         let opaque = opaque_pipeline(Some(wgpu::Face::Back), false, AlphaMode::Opaque);
         let opaque_double = opaque_pipeline(None, false, AlphaMode::Opaque);
         let opaque_skin = opaque_pipeline(Some(wgpu::Face::Back), true, AlphaMode::Opaque);
@@ -1214,6 +1254,8 @@ impl SurfacePipelines {
             prepass_skin_double,
             shadow,
             shadow_skin,
+            outline,
+            outline_skin,
             transparent,
         })
     }
@@ -1378,7 +1420,8 @@ impl PbrRenderer {
                 },
             ],
         });
-        let mut mat_entries = vec![uniform_entry(0, frag, false)];
+        // The toon outline vertex stage reads the material uniform.
+        let mut mat_entries = vec![uniform_entry(0, wgpu::ShaderStages::VERTEX_FRAGMENT, false)];
         for b in 1..=5 {
             mat_entries.push(float_tex(b));
         }
@@ -1897,6 +1940,7 @@ impl PbrRenderer {
             palette_buf,
             palette_capacity,
             prev_palettes: HashMap::new(),
+            bound_clips: HashMap::new(),
             morph_buffers: HashMap::new(),
             ssao_bgl,
             blur_bgl,
@@ -2288,12 +2332,16 @@ impl PbrRenderer {
     fn material_uniform<T>(m: &crysirror_scene::material::Material<T>) -> MaterialUniform {
         MaterialUniform {
             base_color: m.base_color_factor,
-            emissive: [
-                m.emissive_factor[0],
-                m.emissive_factor[1],
-                m.emissive_factor[2],
-                m.emissive_strength,
-            ],
+            // Toon materials emit nothing; the slot carries the outline colour.
+            emissive: match &m.toon {
+                Some(t) => t.outline_color,
+                None => [
+                    m.emissive_factor[0],
+                    m.emissive_factor[1],
+                    m.emissive_factor[2],
+                    m.emissive_strength,
+                ],
+            },
             params: [
                 m.metallic_factor,
                 m.roughness_factor,
@@ -2303,7 +2351,8 @@ impl PbrRenderer {
             alpha: [
                 m.alpha_mode.code(),
                 m.alpha_cutoff,
-                if m.unlit { 1. } else { 0. },
+                // 0 lit, 1 unlit, 2 toon.
+                if m.toon.is_some() { 2. } else if m.unlit { 1. } else { 0. },
                 if m.opacity_from_alpha { 1. } else { 0. },
             ],
             uv_transform: [m.uv_scale[0], m.uv_scale[1], m.uv_offset[0], m.uv_offset[1]],
@@ -2318,7 +2367,26 @@ impl PbrRenderer {
                 },
                 m.specular_factor,
             ],
-            effect_params: m.effect.as_ref().map_or([[0.; 4]; 4], |e| e.uniforms().1),
+            effect_params: match &m.toon {
+                // Toon materials take no effect; their parameters use the slots.
+                Some(t) => [
+                    [t.rim_color[0], t.rim_color[1], t.rim_color[2], t.rim_power],
+                    [t.shadow_color[0], t.shadow_color[1], t.shadow_color[2], t.rim_shift],
+                    [
+                        t.shininess,
+                        t.highlight_rate,
+                        t.highlight_power,
+                        if t.color_table { 1. } else { 0. },
+                    ],
+                    [
+                        if t.highlight_texture.is_some() { 1. } else { 0. },
+                        t.outline_width,
+                        0.,
+                        0.,
+                    ],
+                ],
+                None => m.effect.as_ref().map_or([[0.; 4]; 4], |e| e.uniforms().1),
+            },
         }
     }
     fn prim(&self, p: &cpu::PbrPrimitive) -> GpuPrim {
@@ -2487,9 +2555,8 @@ impl PbrRenderer {
         m.validate_paths()?;
         let key = Self::override_key(client, m)?;
         let live_revisions = |assets: &Assets| -> Result<Vec<(String, u64)>> {
-            m.textures()
+            m.all_textures()
                 .into_iter()
-                .flatten()
                 .filter(|p| Self::is_live_texture(p))
                 .map(|p| {
                     let surface = assets
@@ -2507,9 +2574,15 @@ impl PbrRenderer {
         let mut textures = Vec::new();
         let mut views = Vec::new();
         let mut texture_keys = Vec::new();
-        for (i, path) in m.textures().into_iter().enumerate() {
+        // Toon materials bind lookup/shadow/highlight in slots 1, 3 and 6, raw.
+        let mut slots = m.textures();
+        if let Some(t) = &m.toon {
+            [slots[1], slots[3], slots[6]] = t.textures();
+        }
+        let srgb_slot = |i: usize| matches!(i, 0 | 4) || (i == 6 && m.toon.is_none());
+        for (i, path) in slots.into_iter().enumerate() {
             if let Some(path) = path {
-                let srgb = matches!(i, 0 | 4 | 6);
+                let srgb = srgb_slot(i);
                 if !Self::is_live_texture(path) {
                     let shared = format!("{client}@{}:{srgb}:{path}", assets.revision(ClientId(client)));
                     if let Some((t, v)) = self.override_textures.get(&shared) {
@@ -2541,7 +2614,7 @@ impl PbrRenderer {
                 } else {
                     crysirror_image::decode_standard(&assets.read_for(ClientId(client), path)?)?
                 };
-                let srgb = matches!(i, 0 | 4 | 6);
+                let srgb = srgb_slot(i);
                 let levels = cpu::mip_chain(surface.width, surface.height, surface.rgba, srgb);
                 let (t, v) =
                     Self::upload_rgba(&self.gpu, surface.width, surface.height, &levels, srgb);
@@ -2568,6 +2641,7 @@ impl PbrRenderer {
                 material: GpuMaterial {
                     shader,
                     bind,
+                    outline: m.toon.as_ref().is_some_and(|t| t.outline_width > 0.),
                     double_sided: m.double_sided,
                     alpha: m.alpha_mode,
                     rt: Self::rt_coverage(m),
@@ -2629,15 +2703,17 @@ impl PbrRenderer {
                         &Self::material_uniform(m),
                         [
                             pick(m.base_color_texture, 0),
-                            pick(m.metallic_roughness_texture, 1),
+                            // Toon: lookup, shadow and highlight textures.
+                            pick(m.toon.as_ref().map_or(m.metallic_roughness_texture, |t| t.lookup_texture), 1),
                             pick(m.normal_texture, 2),
-                            pick(m.occlusion_texture, 1),
+                            pick(m.toon.as_ref().map_or(m.occlusion_texture, |t| t.shadow_texture), 1),
                             pick(m.emissive_texture, 0),
                             pick(m.opacity_texture, 1),
-                            pick(m.specular_texture, 0),
+                            pick(m.toon.as_ref().map_or(m.specular_texture, |t| t.highlight_texture), 0),
                         ],
                     ),
                     double_sided: m.double_sided,
+                    outline: m.toon.as_ref().is_some_and(|t| t.outline_width > 0.),
                     alpha: m.alpha_mode,
                 }
             })
@@ -2690,6 +2766,7 @@ impl PbrRenderer {
             Self::upload_rgba(&self.gpu, image.width, image.height, &image.levels, true);
         let mat = GpuMaterial {
             rt: Self::rt_coverage(&material),
+            outline: false,
             shader: None,
             bind: self.material_bind(
                 &Self::material_uniform(&material),
@@ -3027,34 +3104,105 @@ impl PbrRenderer {
             _ => true,
         });
         let mut pose_keys = Vec::new();
-        let mut pose_requests = Vec::new();
+        let mut pose_requests: Vec<crysirror_asset::anim::LocalPoseRequest> = Vec::new();
+        let mut pose_links: Vec<(Option<u64>, Option<&str>, &[(String, crysirror_scene::components::NodePose)])> =
+            Vec::new();
+        let mut live_clips = std::collections::HashSet::new();
         for instance in &scene.instances {
             if let PbrDrawable::Scene {
                 client,
                 asset,
                 animation,
+                follow,
+                attach,
+                nodes,
                 ..
             } = &instance.drawable
             {
                 let key = format!("{client}@{}:{asset}", assets.revision(ClientId(*client)));
                 let model = self.models[&key].cpu.clone();
-                let layers = animation
-                    .iter()
-                    .map(|l| {
-                        crysirror_asset::anim::clip_index(&model, &l.clip)
-                            .map(|clip| crysirror_asset::anim::Layer {
-                                clip,
-                                time: l.time,
-                                weight: l.weight,
-                            })
-                            .with_context(|| format!("{asset}: no animation clip '{}'", l.clip))
-                    })
-                    .collect::<Result<Vec<_>>>()?;
+                let mut layers = Vec::with_capacity(animation.len());
+                for l in animation {
+                    let (source_key, source) = match &l.source {
+                        None => (key.clone(), model.clone()),
+                        Some(path) => {
+                            // A library still importing contributes no layer yet.
+                            let Some(source) = assets.model_for(ClientId(*client), path)? else {
+                                continue;
+                            };
+                            (format!("{client}@{}:{path}", assets.revision(ClientId(*client))), source)
+                        }
+                    };
+                    let id = (key.clone(), source_key, l.clip.clone());
+                    let clip = match self.bound_clips.get(&id) {
+                        Some(c) => c.clone(),
+                        None => {
+                            let index = crysirror_asset::anim::clip_index(&source, &l.clip).with_context(|| {
+                                format!("{}: no animation clip '{}'", l.source.as_deref().unwrap_or(asset), l.clip)
+                            })?;
+                            let clip = Arc::new(if l.source.is_some() {
+                                crysirror_asset::anim::retarget(&source, &source.animations[index], &model)
+                            } else {
+                                source.animations[index].clone()
+                            });
+                            self.bound_clips.insert(id.clone(), clip.clone());
+                            clip
+                        }
+                    };
+                    live_clips.insert(id);
+                    layers.push(crysirror_asset::anim::PoseLayer {
+                        clip,
+                        time: l.time,
+                        weight: l.weight,
+                        looping: l.looping,
+                        layer: l.blend_layer,
+                    });
+                }
                 pose_keys.push(instance.key);
                 pose_requests.push((model, layers));
+                pose_links.push((*follow, attach.as_deref(), nodes.as_slice()));
             }
         }
-        let poses = crysirror_asset::anim::poses_parallel(&assets.cpu_tasks(), &pose_requests)?;
+        self.bound_clips.retain(|id, _| live_clips.contains(id));
+        let mut locals =
+            crysirror_asset::anim::local_poses_parallel(&assets.cpu_tasks(), &pose_requests)?;
+        // Followers take their leader's final local pose, then their own
+        // procedural nodes; chains resolve leader-first, cycles are cut.
+        let slot: HashMap<u64, usize> = pose_keys.iter().enumerate().map(|(i, k)| (*k, i)).collect();
+        let mut done = vec![false; locals.len()];
+        for start in 0..locals.len() {
+            let mut chain = vec![start];
+            while let Some(next) = pose_links[*chain.last().unwrap()]
+                .0
+                .and_then(|k| slot.get(&k).copied())
+                .filter(|n| !done[*n] && !chain.contains(n) && chain.len() < 16)
+            {
+                chain.push(next);
+            }
+            for &i in chain.iter().rev() {
+                if done[i] {
+                    continue;
+                }
+                if let Some(j) = pose_links[i].0.and_then(|k| slot.get(&k).copied()).filter(|j| done[*j]) {
+                    let leader = locals[j].clone();
+                    crysirror_asset::anim::follow(&pose_requests[i].0, &mut locals[i], &pose_requests[j].0, &leader);
+                    if let Some(node) = pose_links[i].1 {
+                        crysirror_asset::anim::attach(&pose_requests[i].0, &mut locals[i], &pose_requests[j].0, &leader, node);
+                    }
+                }
+                crysirror_asset::anim::override_nodes(
+                    &pose_requests[i].0,
+                    &mut locals[i],
+                    pose_links[i].2.iter().map(|(n, p)| (n.as_str(), p)),
+                );
+                done[i] = true;
+            }
+        }
+        let poses: Vec<Vec<Mat4>> = pose_requests
+            .iter()
+            .zip(&locals)
+            .map(|((model, _), local)| crysirror_asset::anim::global_pose(model, local))
+            .collect();
         let mut poses: HashMap<_, _> = pose_keys.into_iter().zip(poses).collect();
         let used: std::collections::HashSet<String> = scene
             .instances
@@ -3193,8 +3341,8 @@ impl PbrRenderer {
                 PbrDrawable::Scene {
                     client,
                     asset,
-                    animation: _,
                     morphs,
+                    ..
                 } => {
                     let key = format!("{client}@{}:{asset}", assets.revision(ClientId(*client)));
                     let model = self.models[&key].cpu.clone();
@@ -3330,6 +3478,7 @@ impl PbrRenderer {
                             shader: None,
                             bind,
                             double_sided: false,
+                            outline: false,
                             alpha: AlphaMode::Opaque,
                             rt: RtCoverage::default(),
                         },
@@ -3740,7 +3889,8 @@ impl PbrRenderer {
                 sun.color[0],
                 sun.color[1],
                 sun.color[2],
-                if sun.shadows { 1. } else { 0. },
+                // Cast-shadow strength; 0 disables sampling.
+                if sun.shadows { sun.shadow_strength.clamp(0., 1.) } else { 0. },
             ],
             env: [
                 env.intensity,
@@ -3760,7 +3910,16 @@ impl PbrRenderer {
                 scene.time,
                 0.,
             ],
-            sh: e.sh,
+            sh: match env.ambient {
+                // Irradiance of uniform radiance L is πL.
+                Some(a) => {
+                    let mut sh = [[0.; 4]; 9];
+                    let pi = std::f32::consts::PI;
+                    sh[0] = [a[0] * pi, a[1] * pi, a[2] * pi, 0.];
+                    sh
+                }
+                None => e.sh,
+            },
             clusters: [cam.near, cam.far, 0., 1. / (cam.far / cam.near).ln()],
             fog_color: env
                 .fog
@@ -4389,15 +4548,43 @@ impl PbrRenderer {
                     .map_or(&self.pipelines, |k| &self.custom_pipelines[k]),
             )
         };
+        let outlined = |r: &DrawRef| -> bool {
+            let mat = match &r.override_key {
+                Some(k) => &self.overrides[k].material,
+                None if r.kind == 0 => {
+                    let model = &self.models[r.model.as_ref().unwrap()];
+                    &model.materials[model.meshes[r.mesh as usize][r.prim].material]
+                }
+                None => &flat[r.flat].1,
+            };
+            mat.outline
+        };
         let mut transparent_draws: Vec<_> =
             draws.iter().filter(|r| get(r).3.transparent()).collect();
+        // Back to front per mesh instance (the centre of all its primitives'
+        // bounds), then primitive order inside one mesh: overlapping
+        // transparent submeshes (decals, eye highlights) keep their authored
+        // order instead of flipping with the camera.
         let depth = |r: &DrawRef| {
-            let (p, _, _, _, _) = get(r);
+            let (lo, hi) = if r.kind == 0 {
+                let model = &self.models[r.model.as_ref().unwrap()];
+                model.meshes[r.mesh as usize].iter().fold(
+                    (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY)),
+                    |(lo, hi), p| (lo.min(p.bounds.0), hi.max(p.bounds.1)),
+                )
+            } else {
+                get(r).0.bounds
+            };
             let world = Mat4::from_cols_array_2d(&objects[r.object as usize].model)
-                .transform_point3((p.bounds.0 + p.bounds.1) * 0.5);
+                .transform_point3((lo + hi) * 0.5);
             -view.transform_point3(world).z
         };
-        transparent_draws.sort_by(|a, b| depth(b).total_cmp(&depth(a)));
+        transparent_draws.sort_by(|a, b| {
+            depth(b)
+                .total_cmp(&depth(a))
+                .then(a.object.cmp(&b.object))
+                .then(a.prim.cmp(&b.prim))
+        });
         let simple_pass = |enc: &mut wgpu::CommandEncoder,
                            label: &str,
                            dst: &wgpu::TextureView,
@@ -5417,6 +5604,25 @@ impl PbrRenderer {
                     (true, false) => &pipelines.opaque_skin,
                     (true, true) => &pipelines.opaque_skin_double,
                 });
+                if r.skinned {
+                    pass.set_vertex_buffer(1, p.skin.as_ref().unwrap().slice(..));
+                }
+                pass.set_bind_group(1, mat, &[]);
+                pass.set_bind_group(
+                    2,
+                    &self.object_bind,
+                    &[(r.object as u64 * OBJECT_STRIDE) as u32],
+                );
+                pass.set_vertex_buffer(0, vertex_buffer(r, p).slice(..));
+                draw_prim!(pass, r, p, 0);
+            }
+            // Toon outlines: the opaque hull again, extruded, front faces culled.
+            for r in &draws {
+                let (p, mat, _, alpha, pipelines) = get(r);
+                if alpha.transparent() || !outlined(r) {
+                    continue;
+                }
+                pass.set_pipeline(if r.skinned { &pipelines.outline_skin } else { &pipelines.outline });
                 if r.skinned {
                     pass.set_vertex_buffer(1, p.skin.as_ref().unwrap().slice(..));
                 }

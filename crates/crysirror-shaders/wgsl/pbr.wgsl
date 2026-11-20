@@ -36,6 +36,32 @@ fn vs_skinned(v: VertexIn, s: SkinIn) -> VertexOut {
     return transform_vertex(w);
 }
 
+// Toon outline hull (CM3D2/Outline `OUTLINE` pass): the clip position moves
+// along the view-space normal projected by the projection's 2x2 part, scaled
+// by min(depth, 0.7) and the material's outline width.
+fn outline_vertex(v: VertexIn) -> VertexOut {
+    var o = transform_vertex(v);
+    // P · (n_view, 0) = VP · (n_world, 0).
+    let offset = (frame.view_proj * vec4<f32>(normalize(o.normal), 0.0)).xy;
+    let depth = -(frame.view * vec4<f32>(o.world, 1.0)).z;
+    let k = clamp(depth, 0.0, 0.7) * material.effect_params[3].y;
+    o.clip = vec4<f32>(o.clip.xy + offset * k, o.clip.zw);
+    return o;
+}
+@vertex
+fn vs_outline(v: VertexIn) -> VertexOut {
+    return outline_vertex(v);
+}
+@vertex
+fn vs_outline_skinned(v: VertexIn, s: SkinIn) -> VertexOut {
+    let k = skin_matrix(s, object.skin.x);
+    var w = v;
+    w.position = (k * vec4<f32>(v.position, 1.0)).xyz;
+    w.normal = (k * vec4<f32>(v.normal, 0.0)).xyz;
+    w.tangent = vec4<f32>((k * vec4<f32>(v.tangent.xyz, 0.0)).xyz, v.tangent.w);
+    return outline_vertex(w);
+}
+
 fn d_ggx(nh: f32, a: f32) -> f32 {
     let a2 = a * a;
     let d = nh * nh * (a2 - 1.0) + 1.0;
@@ -460,6 +486,42 @@ fn gi_capture(color: vec3<f32>, world: vec3<f32>, front: bool) -> vec4<f32> {
     return vec4<f32>(select(vec3<f32>(0.0), color, front), select(-d, d, front));
 }
 
+// Exact sRGB transfer, for toon materials that shade display-referred values.
+fn toon_encode(c: vec3<f32>) -> vec3<f32> {
+    let x = max(c, vec3<f32>(0.0));
+    return select(1.055 * pow(x, vec3<f32>(1.0 / 2.4)) - 0.055, x * 12.92, x <= vec3<f32>(0.0031308));
+}
+fn toon_decode(c: vec3<f32>) -> vec3<f32> {
+    let x = max(c, vec3<f32>(0.0));
+    return select(pow((x + 0.055) / 1.055, vec3<f32>(2.4)), x / 12.92, x <= vec3<f32>(0.04045));
+}
+// Rows of the 256x3 toon lookup texture (material slot 1).
+fn toon_lookup(row: f32, u: f32) -> vec4<f32> {
+    return textureSampleLevel(t_mr, s_material, vec2<f32>(clamp(u, 0.0, 1.0), (row + 0.5) / 3.0), 0.0);
+}
+fn toon_outline_color() -> vec4<f32> {
+    return material.emissive;
+}
+fn toon_table(c: vec3<f32>) -> vec3<f32> {
+    if material.effect_params[2].w > 0.5 {
+        return toon_lookup(2.0, c.r * 0.9951).rgb;
+    }
+    return c;
+}
+
+// Outline colour: ramp(n·l) · outline colour · light · 2 + ambient · 2
+// (display-referred, like the toon surface).
+@fragment
+fn fs_outline(i: VertexOut) -> @location(0) vec4<f32> {
+    let n = normalize(i.normal);
+    let l = normalize(-frame.sun_dir.xyz);
+    let ramp = toon_lookup(0.0, dot(n, l) * 0.495 + 0.5).rgb;
+    let light = toon_encode(frame.sun_color.rgb) * frame.sun_dir.w;
+    let ambient = toon_encode(sh_irradiance(n) * frame.env.x / PI);
+    let c = ramp * toon_outline_color().rgb * light * 2.0 + ambient * 2.0;
+    return vec4<f32>(toon_decode(c), 1.0);
+}
+
 @fragment
 fn fs_main(i: VertexOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
     // Sample everything first: derivatives stay in uniform control flow.
@@ -468,7 +530,11 @@ fn fs_main(i: VertexOut, @builtin(front_facing) front: bool) -> @location(0) vec
     let base=surface.color;
     let tn = decode_normal(textureSample(t_normal, s_material, uv));
     let specular_color = textureSample(t_specular, s_material, uv).rgb * material.surface.w;
-    let occ_tex = textureSample(t_occlusion, s_material, uv).r;
+    let occ_sample = textureSample(t_occlusion, s_material, uv);
+    let occ_tex = occ_sample.r;
+    // Toon: raw base, shadow (slot 3) and highlight (slot 6) samples.
+    let toon_base = textureSample(t_base, s_material, uv);
+    let toon_hi = textureSample(t_specular, s_material, uv);
     if material.alpha.x == 1.0 && base.a < material.alpha.y {
         discard;
     }
@@ -484,12 +550,49 @@ fn fs_main(i: VertexOut, @builtin(front_facing) front: bool) -> @location(0) vec
         alpha=alpha*clamp((opaque_view-fragment_view)/material.surface.x,0.0,1.0);
     }
     let emissive=surface.emission;
-    if material.alpha.z>0.5 {
+    // alpha.z: 0 lit, 1 unlit, 2 toon.
+    if material.alpha.z>0.5 && material.alpha.z<1.5 {
         let color=base.rgb+emissive;
         if frame.misc.w > 0.5 {
             return gi_capture(color, i.world, front);
         }
         return vec4<f32>(select(color,color*alpha,material.alpha.x==4.0),alpha);
+    }
+    if material.alpha.z > 1.5 {
+        let p = material.effect_params;
+        var tn_toon = normalize(i.normal);
+        if !front {
+            tn_toon = -tn_toon;
+        }
+        let tv = normalize(frame.camera_pos.xyz - i.world);
+        let tl = normalize(-frame.sun_dir.xyz);
+        let tex = toon_table(toon_encode(toon_base.rgb));
+        let rim = clamp(pow(max(1.0 - clamp(dot(tv, tn_toon), 0.0, 1.0) + p[1].w, 0.0), p[0].w), 0.0, 1.0);
+        let c = tex * material.base_color.rgb + rim * p[0].rgb;
+        let u = dot(tn_toon, tl) * 0.4951 + 0.5;
+        let ramp = toon_table(toon_lookup(0.0, u).rgb);
+        let rate = toon_lookup(1.0, u).r;
+        let shadow_layer = toon_table(occ_sample.rgb);
+        let a = occ_sample.a * (1.0 - rate);
+        var m = mix(c, shadow_layer, a);
+        let nh = max(dot(tn_toon, normalize(tl + tv)), 0.0);
+        if p[3].x > 0.5 {
+            m = m + toon_table(toon_hi.rgb) * toon_hi.a * pow(nh, p[2].z) * p[2].y;
+        }
+        var cast_light = 1.0;
+        if frame.sun_color.w > 0.0 {
+            cast_light = mix(1.0, sun_shadow(i.world, max(dot(tn_toon, tl), 0.0), i.clip.xy), frame.sun_color.w);
+        }
+        m = mix(p[1].rgb, m, cast_light);
+        let light = toon_encode(frame.sun_color.rgb) * frame.sun_dir.w;
+        let ambient = toon_encode(sh_irradiance(tn_toon) * frame.env.x / PI);
+        let shaded = m * ramp * light + vec3<f32>(pow(nh, 48.0) * p[2].x) + c * ambient;
+        let fog_t = height_fog(i.world);
+        let color = mix(toon_decode(shaded), fog_t.rgb, fog_t.a);
+        if frame.misc.w > 0.5 {
+            return gi_capture(color, i.world, front);
+        }
+        return vec4<f32>(select(color, color * alpha, material.alpha.x == 4.0), alpha);
     }
     let roughness = surface.roughness;
     let metallic = surface.metallic;
@@ -516,8 +619,8 @@ fn fs_main(i: VertexOut, @builtin(front_facing) front: bool) -> @location(0) vec
     let spec = d_ggx(nh, a) * v_smith_ggx_correlated(nv, nl, a) * f;
     let kd = (vec3<f32>(1.0) - f) * (1.0 - metallic);
     var visibility = 1.0;
-    if frame.sun_color.w > 0.5 && nl > 0.0 {
-        visibility = sun_shadow(i.world, max(dot(ng, l), 0.0),i.clip.xy);
+    if frame.sun_color.w > 0.0 && nl > 0.0 {
+        visibility = mix(1.0, sun_shadow(i.world, max(dot(ng, l), 0.0),i.clip.xy), frame.sun_color.w);
     }
     let direct = (kd * base.rgb / PI + spec) * frame.sun_color.rgb * frame.sun_dir.w * nl * visibility;
 

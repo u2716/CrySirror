@@ -12,6 +12,7 @@ smb = ["crysirror-network/smb", "crysirror-siglus-integrated/smb", "crysirror-bg
 
 [dependencies]
 crysirror-malie.workspace = true
+crysirror-cm3d2 = { workspace = true, features = ["runtime"] }
 crysirror-cmvs = { workspace = true, features = ["runtime"] }
 crysirror-vita-io.workspace = true
 crysirror-qlie = {workspace=true,features=["runtime"]}
@@ -56,6 +57,9 @@ serde_json.workspace = true
 serde.workspace = true
 image.workspace = true
 log = "0.4"
+
+[target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
+arboard = "3.6.1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "=0.10.1"

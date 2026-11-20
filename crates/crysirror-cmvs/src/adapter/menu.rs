@@ -18,6 +18,7 @@ const VISIBLE_SLOTS: u32 = 10;
 
 pub(super) struct NativeMenu {
     published: bool,
+    cvns: bool,
     template: Value,
 }
 
@@ -66,6 +67,7 @@ impl NativeMenu {
         }
         Ok(Self {
             published: false,
+            cvns: profile == VmProfile::Cvns20040515X86,
             template: json!({"id":MENU,"rect":[0,0,canvas[0],24],"font":"default",
             "context":true,"items":items}),
         })
@@ -80,15 +82,19 @@ impl NativeMenu {
         checks: &[(u32, bool)],
     ) -> Result<()> {
         let mut menu = self.template.clone();
-        if let Some(items) = menu["items"].as_array_mut() {
-            apply_checks(items, checks);
+        if !self.cvns {
+            if let Some(items) = menu["items"].as_array_mut() {
+                apply_checks(items, checks);
+            }
         }
         let main = menu["items"][0]["children"]
             .as_array_mut()
             .context("CMVS menu root")?;
         main[0]["enabled"] = Value::Bool(true);
         main[1]["enabled"] = Value::Bool(enabled);
-        apply_slots(main, slots);
+        if !self.cvns {
+            apply_slots(main, slots);
+        }
         host.submit_engine(
             client,
             1,
@@ -96,6 +102,56 @@ impl NativeMenu {
         )?;
         self.published = true;
         Ok(())
+    }
+
+    pub fn update_cvns_setting(&mut self, changes: &[(u32, bool, bool)]) {
+        fn update(items: &mut [Value], changes: &[(u32, bool, bool)]) {
+            for item in items {
+                if let Some((_, enabled, checked)) = changes.iter().find(|(id, _, _)| item["id"].as_u64() == Some(u64::from(*id))) {
+                    item["enabled"] = json!(enabled);
+                    item["checked"] = json!(checked);
+                }
+                if let Some(children) = item["children"].as_array_mut() {
+                    update(children, changes);
+                }
+            }
+        }
+        if let Some(items) = self.template["items"].as_array_mut() {
+            update(items, changes);
+        }
+    }
+
+    /// Update the native template even while the context menu is hidden.
+    /// A later scan with fewer slots leaves the other item labels intact.
+    pub fn update_cvns_slots(&mut self, slots: &SaveMenu) -> Result<()> {
+        let root = self.template["items"][0]["children"].as_array_mut().context("CVNS menu root")?;
+        cvns_slots(root, slots);
+        Ok(())
+    }
+}
+
+fn cvns_slots(items: &mut [Value], slots: &SaveMenu) {
+    for item in items {
+        if let Some(id) = item["id"].as_u64() {
+            // The native loop writes load then save at each index. Where
+            // the ID ranges overlap, the later load index wins.
+            let slot = [(33100, true), (33300, false)].into_iter().find_map(|(first, load)| {
+                let index = id.checked_sub(first)? as usize;
+                slots.slots.get(index).map(|slot| (index, load, slot))
+            });
+            if let Some((index, load, slot)) = slot {
+                let label = match slot {
+                    SaveSlot::Recognized(header) => encoding_rs::SHIFT_JIS.decode(&header.label).0,
+                    _ => "---- 未定義 ----".into(),
+                };
+                item["label"] = json!(format!("{:02} : {label}", (index + 1) % 100));
+                item["enabled"] = json!(!load || matches!(slot, SaveSlot::Recognized(_)));
+                item["checked"] = json!(slots.latest == Some(index as u16));
+            }
+        }
+        if let Some(children) = item["children"].as_array_mut() {
+            cvns_slots(children, slots);
+        }
     }
 }
 

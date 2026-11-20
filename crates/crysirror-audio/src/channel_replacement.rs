@@ -604,7 +604,7 @@ mod tests {
         let AudioRequest::PlayPcm { parameters, .. } = &mut native else {
             unreachable!();
         };
-        parameters.pcm16_gain = Some(AudioPcm16Gain { multiplier: 512, stereo: [64, 256] });
+        parameters.pcm16_gain = Some(AudioPcm16Gain { multiplier: 512, stereo: [64, 256], ..Default::default() });
         let replacement = prepare(&audio, 1, vec![native]);
         audio.stage_channel_replacement(1, &[10], Some(replacement)).unwrap().install();
         audio.submit(1, play(11, 0.125)).unwrap();
@@ -634,7 +634,7 @@ mod tests {
         let AudioRequest::PlayPcm { parameters, .. } = &mut request else {
             unreachable!();
         };
-        parameters.pcm16_gain = Some(AudioPcm16Gain { multiplier: 512, stereo: [64, 256] });
+        parameters.pcm16_gain = Some(AudioPcm16Gain { multiplier: 512, stereo: [64, 256], ..Default::default() });
         let replacement = prepare(&audio, 1, vec![request]);
         audio.stage_channel_replacement(1, &[10], Some(replacement)).unwrap().install();
         audio.render(1).unwrap();

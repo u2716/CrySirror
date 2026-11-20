@@ -1945,7 +1945,7 @@ fn publish_object(
     Ok(())
 }
 
-fn resolve_face(
+pub(super) fn resolve_face(
     host: &mut dyn HostServices,
     client: ClientId,
     bytes: &[u8],

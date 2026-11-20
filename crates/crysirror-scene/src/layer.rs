@@ -678,9 +678,49 @@ pub struct GlyphOutline {pub radius:u8,pub color:[u8;4],pub kernel:GlyphOutlineK
 #[derive(Clone,Copy,Debug,PartialEq,Serialize,Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GlyphShadow {pub offset:[f32;2],pub color:[u8;4]}
+/// A two-colour fill sampled in the original square glyph cell, before reveal scaling.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GlyphGradient {
+    /// Direction in cell coordinates.
+    pub axis: GlyphGradientAxis,
+    /// RGB endpoints in stored byte space.
+    pub colors: [[u8; 3]; 2],
+    /// Authored cell side length in pixels.
+    pub cell_size: u16,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GlyphGradientAxis {
+    Vertical,
+    Horizontal,
+    Diagonal,
+}
+
+impl GlyphGradient {
+    pub fn sample(self, x: i32, y: i32) -> [u8; 3] {
+        let size = i32::from(self.cell_size.max(1));
+        let (x,y) = (x.clamp(0, size-1), y.clamp(0, size-1));
+        std::array::from_fn(|c| {
+            let from = i32::from(self.colors[0][c]);
+            let step = ((i32::from(self.colors[1][c]) - from) << 10) / size;
+            let offset = match self.axis {
+                GlyphGradientAxis::Vertical => y * step,
+                GlyphGradientAxis::Horizontal => x * step,
+                GlyphGradientAxis::Diagonal => (x + y) * (step / 2),
+            };
+            (((from << 10) + offset) >> 10) as u8
+        })
+    }
+}
+
 #[derive(Clone,Copy,Debug,Default,PartialEq,Serialize,Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PositionedGlyphStyle {
+    /// Colour only the glyph face. Its outline and shadow retain their own colours.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gradient: Option<GlyphGradient>,
     /// Keep CJK glyphs upright when the containing line rotates clockwise by
     /// 90 degrees. Brackets/dashes retain that outer rotation; flow is unchanged.
     #[serde(default)]
@@ -701,6 +741,7 @@ pub struct PositionedGlyphStyle {
 impl PositionedGlyphStyle {
     fn validate(self)->Result<()> {
         self.raster.validate()?;
+        ensure!(self.gradient.is_none_or(|g| g.cell_size > 0), "empty glyph gradient cell");
         ensure!(self.outline.is_none_or(|o|o.radius<=16),"glyph style outline radius");
         ensure!(self.shadow.is_none_or(|s|s.offset.iter().all(|v|v.is_finite()&&v.abs()<=1024.)),"glyph style shadow offset");
         Ok(())

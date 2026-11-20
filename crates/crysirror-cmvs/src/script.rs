@@ -139,15 +139,18 @@ impl Script {
     // SATD-cmvs-x64-dispatch. The slot codec is isolated until the native
     // checkpoint restore can bind this image and all its resources atomically.
     #[cfg(any(test, feature = "runtime"))]
-    pub(crate) fn decode_expanded(mut bytes: Vec<u8>) -> Result<Self> {
+    pub(crate) fn decode_saved(mut bytes: Vec<u8>, format: ScriptFormat) -> Result<Self> {
         let header = Header::parse(&bytes)?;
         ensure!(
-            header.format == ScriptFormat::Ps2a,
-            "expected PS2A save image"
+            header.format == format,
+            "saved script format disagrees with the gameplay slot ABI"
         );
         bytes.drain(..HEADER_SIZE);
         Self::from_payload(header, bytes)
     }
+
+    #[cfg(feature = "runtime")]
+    pub(crate) fn expanded_len(&self) -> usize { HEADER_SIZE + self.header.payload_len }
 
     #[cfg(any(test, feature = "runtime"))]
     pub(crate) fn expanded_image(&self, data: &[u8], text: &[u8]) -> Result<Vec<u8>> {

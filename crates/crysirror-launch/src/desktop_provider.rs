@@ -72,6 +72,7 @@ impl DesktopProvider for Provider {
                 DesktopRequest::PulseDisplayActivity
                     | DesktopRequest::FileDialog { .. }
                     | DesktopRequest::ClipboardWrite { .. }
+                    | DesktopRequest::ClipboardClear | DesktopRequest::ClipboardImage { .. }
                     | DesktopRequest::ClipboardRead
                     | DesktopRequest::OpenUrl { .. }
             )
@@ -269,6 +270,11 @@ pub fn perform(
             clipboard(&text, check)?;
             Ok(DesktopResponse::ClipboardWritten)
         }
+        DesktopRequest::ClipboardClear | DesktopRequest::ClipboardImage { .. } => {
+            check()?;
+            clipboard_contents(&request)?;
+            Ok(DesktopResponse::ClipboardWritten)
+        }
         DesktopRequest::ClipboardRead => Ok(DesktopResponse::Text(clipboard_read(check)?)),
         DesktopRequest::UserName => Ok(DesktopResponse::Text(
             std::env::var("USERNAME")
@@ -393,6 +399,29 @@ pub fn open_url(url: &str, check: &dyn Fn() -> Result<()>) -> Result<()> {
         Err(failure(&output))
     }
 }
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+fn clipboard_contents(request: &DesktopRequest) -> Result<()> {
+    // On X11 the writing process retains clipboard ownership until another
+    // owner replaces it. Keep the connection after the worker completes.
+    static OWNER: Mutex<Option<arboard::Clipboard>> = Mutex::new(None);
+    let mut owner = OWNER.lock().map_err(|_| Error::Io("clipboard owner poisoned".into()))?;
+    let fail = |error: arboard::Error| Error::Io(error.to_string());
+    if owner.is_none() { *owner = Some(arboard::Clipboard::new().map_err(fail)?); }
+    let clipboard = owner.as_mut().ok_or(Error::NotFound)?;
+    match request {
+        DesktopRequest::ClipboardImage { size, rgba } => clipboard.set_image(arboard::ImageData {
+            width: size[0] as usize, height: size[1] as usize, bytes: std::borrow::Cow::Borrowed(rgba),
+        }),
+        DesktopRequest::ClipboardClear => clipboard.clear(),
+        _ => return Err(Error::Invalid("clipboard content operation")),
+    }.map_err(fail)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+fn clipboard_contents(_: &DesktopRequest) -> Result<()> {
+    Err(Error::Unsupported("system image clipboard"))
+}
+
 #[cfg(target_os = "macos")]
 pub fn clipboard(text: &str, check: &dyn Fn() -> Result<()>) -> Result<()> {
     let output = run(Command::new("/usr/bin/pbcopy"), Some(text), check)?;

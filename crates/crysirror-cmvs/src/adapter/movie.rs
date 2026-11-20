@@ -39,27 +39,26 @@ impl Movies {
         vm: &mut CmvsVm,
         source: Option<Arc<dyn AssetReader>>,
         gain: f32,
+        frame_control: Option<u32>,
     ) -> Result<()> {
         self.stop(host, client)?;
         if let Some(source) = source {
-            let path = host.media_reader_with_pcm16_gain(
-                client,
-                FULLSCREEN,
-                source,
-                MediaSourceOptions {
-                    looping: false,
-                    audio: true,
-                    gain,
-                },
-                AudioPcm16Gain::default(),
-            )?;
+            let options = MediaSourceOptions { looping: false, audio: true, gain };
+            let fader = AudioPcm16Gain::default();
+            let path = if let Some(mode) = frame_control {
+                use crysirror_core::service::IndexedMoviePacing::*;
+                let pacing = match mode % 3 { 1 => HalfRate30, 2 => Adaptive30, _ => NativeRate };
+                host.indexed_movie_reader(client, FULLSCREEN, source, options, fader, pacing)?
+            } else {
+                host.media_reader_with_pcm16_gain(client, FULLSCREEN, source, options, fader)?
+            };
             self.fullscreen = Some(Fullscreen {
                 loading: true,
                 layer: false,
                 asset: path.relative().into(),
             });
         } else {
-            vm.complete_owner_call(1, Some(0))?;
+            vm.finish_owner_call(1, Some(0), vm.profile() == crate::vm::VmProfile::Cvns20040515X86)?;
         }
         Ok(())
     }
@@ -90,7 +89,7 @@ impl Movies {
         }});
         host.submit_engine(client, 1, &serde_json::to_vec(&json!({"layers":[layer]}))?)?;
         movie.layer = true;
-        vm.complete_owner_call(1, Some(1))?;
+        vm.finish_owner_call(1, Some(1), vm.profile() == crate::vm::VmProfile::Cvns20040515X86)?;
         movie.loading = false;
         Ok(false)
     }

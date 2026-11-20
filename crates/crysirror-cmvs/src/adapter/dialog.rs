@@ -22,7 +22,6 @@ const EXIT_MESSAGE: &str = "ゲームを終了させますか？";
 /// Title of the 0x140085450 font selection dialog.
 const FONT_TITLE: &str = "フォントの選択";
 
-#[derive(PartialEq)]
 enum Kind {
     /// `0x213a` and `0x213b`: the chosen button is the result.
     Choice,
@@ -30,6 +29,8 @@ enum Kind {
     Edit { output: u32, fallback: Vec<u8>, limit: usize },
     /// `0x213d`: the chosen face becomes the default message face.
     Font { faces: Vec<String> },
+    CvnsFont { faces: Vec<String>, page: usize, font: String },
+    Color(crysirror_scene::ui::color_picker::ColorPicker),
 }
 
 struct Pending {
@@ -54,6 +55,19 @@ pub(super) enum Outcome {
 
 fn decode(bytes: &[u8]) -> String {
     encoding_rs::SHIFT_JIS.decode_without_bom_handling(bytes).0.into_owned()
+}
+
+/// 0x439bc0 copies only double-byte CP932 characters from the ANSI edit buffer.
+fn cvns_name(bytes: &[u8], limit: usize) -> Vec<u8> {
+    let mut pairs = Vec::new();
+    let mut input = bytes[..bytes.len().min(limit)].iter().copied();
+    while let Some(byte) = input.next() {
+        if matches!(byte, 0x81..=0x9f | 0xe0..=0xfc) {
+            let Some(trail) = input.next() else { break; };
+            pairs.extend([byte, trail]);
+        }
+    }
+    pairs
 }
 
 fn submit(host: &mut dyn HostServices, client: ClientId, ops: Vec<Value>) -> Result<()> {
@@ -90,26 +104,44 @@ impl Dialogs {
                 self.open_choice(host, client, font, EXIT_TITLE, EXIT_MESSAGE, &[(1, "はい"), (0, "いいえ")], 1, Some(0))?;
                 Kind::Choice
             }
-            0x213b => {
+            0x213b | 0x29b1 => {
                 let [mode, title, message] = vm.owner_arguments(opcode)?;
                 let title = decode(vm.text_reference(title).context("CMVS message box title")?);
                 let message = decode(vm.text_reference(message).context("CMVS message box text")?);
                 // 0x14007ce20: mode 0 is MB_OK, other values MB_RETRYCANCEL. IDOK and IDRETRY give 1.
-                if (mode as i32).unsigned_abs() == 0 {
+                if opcode == 0x213b && mode == 0 {
                     self.open_choice(host, client, font, &title, &message, &[(1, "OK")], 1, Some(1))?;
                 } else {
                     self.open_choice(host, client, font, &title, &message, &[(1, "再試行"), (0, "キャンセル")], 1, Some(0))?;
                 }
                 Kind::Choice
             }
-            0x213c => {
+            0x213c | 0x29b2 => {
                 let [title, prompt, initial, limit, output, _] = vm.owner_arguments(opcode)?;
                 let title = decode(vm.text_reference(title).context("CMVS edit dialog title")?);
                 let prompt = decode(vm.text_reference(prompt).context("CMVS edit dialog prompt")?);
                 let fallback = vm.text_reference(initial).context("CMVS edit dialog text")?.to_vec();
-                let limit = (limit as i32).clamp(1, 255) as usize;
+                let limit = if opcode == 0x29b2 {
+                    if limit == 0 { 255 } else { limit.min(255) as usize }
+                } else { (limit as i32).clamp(1, 255) as usize };
                 self.open_edit(host, client, canvas, font, &title, &prompt, &decode(&fallback), limit)?;
                 Kind::Edit { output, fallback, limit }
+            }
+            0x29b7 => {
+                let colors: [u32; 2] = vm.owner_arguments(opcode)?;
+                let mut palette = [[0; 3]; 16];
+                for (dst, value) in palette.iter_mut().zip(colors) {
+                    *dst = super::cvns::rgb(value);
+                }
+                Kind::Color(crysirror_scene::ui::color_picker::ColorPicker::open(
+                    host, client, EDIT_ROOT, canvas, [0; 3], &palette, font)?)
+            }
+            0x29b6 => {
+                let faces = host.font_library(client)?.aliases()?;
+                let current = faces.iter().position(|f| f == font).unwrap_or(0);
+                let page = current / 4;
+                self.open_font_page(host, client, font, &faces, page, current)?;
+                Kind::CvnsFont { faces, page, font: font.to_owned() }
             }
             0x213d => {
                 let mut faces = host.font_library(client)?.aliases()?;
@@ -126,6 +158,17 @@ impl Dialogs {
         self.pending = Some(Pending { opcode, pc: vm.pc(), kind });
         vm.wait_owner_call(opcode, None)?;
         Ok(Outcome::Waiting)
+    }
+
+    fn open_font_page(&self, host: &mut dyn HostServices, client: ClientId, font: &str,
+        faces: &[String], page: usize, selected: usize) -> Result<()> {
+        let mut buttons: Vec<_> = faces.iter().skip(page * 4).take(4).enumerate()
+            .map(|(i, f)| (i as u32 + 1, f.as_str())).collect();
+        if page > 0 { buttons.push((5, "前へ")); }
+        if (page + 1) * 4 < faces.len() { buttons.push((6, "次へ")); }
+        buttons.push((0, "キャンセル"));
+        let default = if faces.is_empty() { 0 } else { (selected % 4 + 1) as u32 };
+        self.open_choice(host, client, font, FONT_TITLE, FONT_TITLE, &buttons, default, Some(0))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -160,7 +203,7 @@ impl Dialogs {
     ) -> Result<()> {
         let [width, height] = canvas.map(|value| value as f32);
         let panel = [width / 2. - 260., height / 2. - 110., 520., 220.];
-        let at = |x: f32, y: f32, w: f32, h: f32| [panel[0] + x, panel[1] + y, w, h];
+        let at = |x: f32, y: f32, w: f32, h: f32| [x, y, w, h];
         let label = |id: u32, rect: [f32; 4], text: &str| {
             json!({"op":"put","widget":{"id":id,"parent":EDIT_ROOT,"rect":rect,"kind":"label",
                 "text":text,"font":font,"text_size":20,"text_color":[0,0,0,255],"z":1}})
@@ -185,8 +228,23 @@ impl Dialogs {
     }
 
     fn poll(&mut self, vm: &mut CmvsVm, host: &mut dyn HostServices, client: ClientId) -> Result<Outcome> {
-        let pending = self.pending.as_ref().context("CMVS dialog state")?;
+        let pending = self.pending.as_mut().context("CMVS dialog state")?;
         let opcode = pending.opcode;
+        if let Kind::Color(picker) = &mut pending.kind {
+            use crysirror_scene::ui::color_picker::ColorSelection;
+            match picker.poll(host, client)? {
+                ColorSelection::Pending => {
+                    vm.wait_owner_call(opcode, None)?;
+                    return Ok(Outcome::Waiting);
+                }
+                ColorSelection::Cancelled => vm.complete_owner_call(2, Some(0))?,
+                ColorSelection::Selected([r,g,b]) => vm.complete_owner_results(2,
+                    &[(0,1),(4,u32::from_be_bytes([0,r,g,b]))])?,
+            }
+            self.pending = None;
+            return Ok(Outcome::Done);
+        }
+        let pending = self.pending.as_ref().context("CMVS dialog state")?;
         if let Kind::Edit { output, fallback, limit } = &pending.kind {
             let mut choice = None;
             for event in events(host, client, EDIT_ROOT)? {
@@ -201,19 +259,25 @@ impl Dialogs {
                 vm.wait_owner_call(opcode, None)?;
                 return Ok(Outcome::Waiting);
             };
-            let mut text = Vec::new();
+            let cvns = opcode == 0x29b2;
+            let mut text = if cvns { fallback.clone() } else { Vec::new() };
             if accepted {
                 let widget: Value = serde_json::from_slice(&host.query_engine(client, EngineQuery::UiWidget(EDIT_FIELD))?)?;
-                let edited = widget["text"].as_str().unwrap_or_default().trim();
+                let edited = widget["text"].as_str().unwrap_or_default();
+                let edited = if cvns { edited } else { edited.trim() };
                 let (bytes, _, _) = encoding_rs::SHIFT_JIS.encode(edited);
                 text = bytes.into_owned();
+                if cvns {
+                    text = cvns_name(&text, *limit);
+                }
                 // 0x1400a6d50 keeps the initial text when the edit is empty.
                 if text.is_empty() {
                     text.clone_from(fallback);
                 }
-                text.truncate(*limit);
+                if !cvns { text.truncate(*limit); }
             }
-            vm.store_owner_string(*output, &text)?;
+            if cvns { vm.write_cvns_text(opcode, *output, &text)?; }
+            else { vm.store_owner_string(*output, &text)?; }
             submit(host, client, vec![json!({"op":"remove","id":EDIT_ROOT})])?;
             vm.complete_owner_call(6, Some(u32::from(accepted)))?;
             self.pending = None;
@@ -231,6 +295,18 @@ impl Dialogs {
         };
         let pending = self.pending.take().context("CMVS dialog state")?;
         match pending.kind {
+            Kind::CvnsFont { faces, mut page, font } => {
+                if choice == 5 || choice == 6 {
+                    page = if choice == 5 { page - 1 } else { page + 1 };
+                    self.open_font_page(host, client, &font, &faces, page, page * 4)?;
+                    self.pending = Some(Pending { opcode, pc: vm.pc(), kind: Kind::CvnsFont { faces, page, font } });
+                    vm.wait_owner_call(opcode, None)?;
+                    return Ok(Outcome::Waiting);
+                }
+                vm.complete_owner_call(0, None)?;
+                let face = choice.checked_sub(1).and_then(|i| faces.get(page * 4 + i as usize));
+                Ok(face.map_or(Outcome::Done, |f| Outcome::Face(encoding_rs::SHIFT_JIS.encode(f).0.into_owned())))
+            }
             Kind::Font { faces } => {
                 vm.complete_owner_call(0, None)?;
                 let face = (choice as usize).checked_sub(1).and_then(|index| faces.get(index));
@@ -239,7 +315,7 @@ impl Dialogs {
                 }))
             }
             _ => {
-                let words = if opcode == 0x213b { 3 } else { 0 };
+                let words = if matches!(opcode, 0x213b | 0x29b1) { 3 } else { 0 };
                 vm.complete_owner_call(words, Some(choice))?;
                 Ok(Outcome::Done)
             }

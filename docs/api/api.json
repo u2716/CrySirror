@@ -17573,23 +17573,48 @@
       "used_by": "Rust HostServices/ChannelAudio playback parameters"
     },
     {
-      "doc": "Optional legacy PCM16 fader with a wrapping Q8 secondary multiplier and two raw Q8 attenuation coefficients. Unity is 256. The unity clamp applies to the computed channel gain after all wrapping products.",
+      "doc": "Optional PCM16 fader. Products wrap before division and the final channel gain is capped at unity.",
       "fields": [
         {
           "default": null,
-          "doc": "Secondary Q8 gain word, initially 256.",
+          "doc": "Coefficient scale and sample rounding rule.",
+          "name": "scale",
+          "rust_type": "Pcm16GainScale"
+        },
+        {
+          "default": null,
+          "doc": "Secondary gain word.",
           "name": "multiplier",
           "rust_type": "u32"
         },
         {
           "default": null,
-          "doc": "Left and right Q8 gain words, initially both 256.",
+          "doc": "Left and right attenuation words.",
           "name": "stereo",
           "rust_type": "[u32; 2]"
         }
       ],
       "name": "AudioPcm16Gain",
       "used_by": "Rust AudioParameters.pcm16_gain fixed-point voice fader"
+    },
+    {
+      "doc": "Integer arithmetic used by the PCM16 fader.",
+      "fields": [
+        {
+          "default": null,
+          "doc": "Unity is 256; attenuate signed samples by arithmetic right shift.",
+          "name": "Q8",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "Unity is 100; divide signed samples toward zero.",
+          "name": "Percent",
+          "rust_type": ""
+        }
+      ],
+      "name": "Pcm16GainScale",
+      "used_by": "Rust AudioPcm16Gain.scale coefficient units and signed-sample rounding"
     },
     {
       "doc": "Update either coefficient without replacing the source or resetting a fade.",
@@ -21977,6 +22002,12 @@
           "rust_type": "Option<Sun>"
         },
         {
+          "default": null,
+          "doc": "Uniform ambient radiance (linear RGB) replacing the environment's diffuse spherical harmonics, e.g. a flat `RenderSettings.ambientLight`. Scaled by `intensity` like the environment it replaces.",
+          "name": "ambient",
+          "rust_type": "Option<[f32; 3]>"
+        },
+        {
           "default": 0.04,
           "doc": "Bloom mix strength (0 disables).",
           "name": "bloom",
@@ -22074,6 +22105,12 @@
           "doc": "Cast shadows (cascades or virtual shadow maps).",
           "name": "shadows",
           "rust_type": "bool"
+        },
+        {
+          "default": 1.0,
+          "doc": "Fraction of the light a cast shadow removes (Unity `Light.shadowStrength`): visibility becomes `mix(1, shadow, strength)`.",
+          "name": "shadow_strength",
+          "rust_type": "f32"
         },
         {
           "default": 0.0,
@@ -22678,6 +22715,12 @@
           "doc": "Built-in shader effect or custom WGSL surface hook (ADR 0016).",
           "name": "effect",
           "rust_type": "Option<crate::effect::ShaderEffect>"
+        },
+        {
+          "default": null,
+          "doc": "Cel shading model instead of PBR lighting.",
+          "name": "toon",
+          "rust_type": "Option<ToonShading<T>>"
         }
       ],
       "name": "Material",
@@ -25892,6 +25935,12 @@
       "fields": [
         {
           "default": null,
+          "doc": "Colour only the glyph face. Its outline and shadow retain their own colours.",
+          "name": "gradient",
+          "rust_type": "Option<GlyphGradient>"
+        },
+        {
+          "default": null,
           "doc": "Keep CJK glyphs upright when the containing line rotates clockwise by 90 degrees. Brackets/dashes retain that outer rotation; flow is unchanged.",
           "name": "upright_in_clockwise_line",
           "rust_type": "bool"
@@ -25935,6 +25984,56 @@
       ],
       "name": "PositionedGlyphStyle",
       "used_by": "`PositionedGlyph.style`"
+    },
+    {
+      "doc": "A two-colour fill sampled in the original square glyph cell, before reveal scaling.",
+      "fields": [
+        {
+          "default": null,
+          "doc": "Direction in cell coordinates.",
+          "name": "axis",
+          "rust_type": "GlyphGradientAxis"
+        },
+        {
+          "default": null,
+          "doc": "RGB endpoints in stored byte space.",
+          "name": "colors",
+          "rust_type": "[[u8; 3]; 2]"
+        },
+        {
+          "default": null,
+          "doc": "Authored cell side length in pixels.",
+          "name": "cell_size",
+          "rust_type": "u16"
+        }
+      ],
+      "name": "GlyphGradient",
+      "used_by": "`PositionedGlyphStyle.gradient`"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "vertical",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "horizontal",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "diagonal",
+          "rust_type": ""
+        }
+      ],
+      "name": "GlyphGradientAxis",
+      "used_by": "`GlyphGradient.axis`"
     },
     {
       "doc": "Device-free coverage quality for retained outline glyphs. Variants are tagged by `\"kind\"`.",
@@ -29899,7 +29998,7 @@
       "used_by": "UiEvent.widget client/local identity"
     }
   ],
-  "fingerprint": "224f952a71accc52",
+  "fingerprint": "60772aceebd8f060",
   "generated_by": "crysirror-engine api_doc (tests/api_docs.rs)",
   "globals": [
     {

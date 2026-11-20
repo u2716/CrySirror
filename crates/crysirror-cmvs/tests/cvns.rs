@@ -106,3 +106,30 @@ fn cvns_original_archive_members_are_read_through_the_profile() -> anyhow::Resul
     }
     Ok(())
 }
+
+#[test]
+fn cvns_fills_mirrored_banks_and_keeps_native_selectors_pending() -> anyhow::Result<()> {
+    // Fill integers 5..7 with 7 (0x2109 reads first, count and value from SP-4),
+    // then reach 0x2002, which only the host can complete.
+    let mut code = Vec::new();
+    for word in [7u32, 2, 5] {
+        code.extend_from_slice(&0x0440u16.to_le_bytes());
+        code.extend_from_slice(&4u16.to_le_bytes());
+        code.extend_from_slice(&word.to_le_bytes());
+    }
+    code.extend_from_slice(&0x2109u16.to_le_bytes());
+    code.extend_from_slice(&0x2002u16.to_le_bytes());
+    let mut bytes = b"PSS0".to_vec();
+    for word in [48u32, 0, 0, 0, code.len() as u32, 0, 0, 0, 0, 0, 0] {
+        bytes.extend_from_slice(&word.to_le_bytes());
+    }
+    bytes.extend_from_slice(&code);
+    let reader = MemoryAssetReader(bytes.into());
+    let mut vm = CmvsVm::prepare(VmProfile::Cvns20040515X86, &reader)?;
+    assert!(matches!(
+        vm.run(16)?,
+        VmYield::SystemCall { pc: 26, opcode: 0x2802 }
+    ));
+    assert_eq!([4, 5, 6, 7].map(|index| vm.integer(index)), [Some(0), Some(7), Some(7), Some(0)]);
+    Ok(())
+}

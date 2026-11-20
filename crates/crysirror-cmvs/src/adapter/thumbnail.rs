@@ -9,13 +9,13 @@ use crysirror_core::{
     service::{AssetReader, HostServices},
     state::ClientId,
 };
-use crysirror_image::bmp_encode::{box_average_bmp_len, encode_box_average_bmp};
+use crysirror_image::bmp_encode::{box_average_bmp_len, encode_box_average_bmp_with_rows, BoxSampleRows};
 use crysirror_resource::DecodeContext;
 use crysirror_tasks::{Task, TaskPermit, TaskPool};
 use serde_json::{json, Value};
 use std::sync::Arc;
 
-struct Bitmap {
+pub(super) struct Bitmap {
     size: [u32; 2],
     bytes: Arc<dyn AssetReader>,
     fingerprint: u64,
@@ -35,6 +35,7 @@ pub(super) struct Thumbnail {
     context: DecodeContext,
     pending: Option<Capture>,
     bitmap: Option<Bitmap>,
+    for_backup: bool,
     error: Option<String>,
 }
 
@@ -44,6 +45,7 @@ impl Thumbnail {
             context: DecodeContext::new(client),
             pending: None,
             bitmap: None,
+            for_backup: false,
             error: None,
         }
     }
@@ -53,10 +55,33 @@ impl Thumbnail {
         self.bitmap.as_ref().map(|bitmap| bitmap.bytes.clone())
     }
 
+    pub(super) fn prepare_cvns(bytes: Vec<u8>, context: &DecodeContext) -> Result<Bitmap> {
+        ensure!(bytes.starts_with(b"BM") && bytes.len() >= 54, "invalid CSP1 thumbnail BMP");
+        let dimension = |at| i32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+        let size = [u32::try_from(dimension(18))?, dimension(22).unsigned_abs()];
+        ensure!(size.iter().all(|&n| n != 0), "empty CSP1 thumbnail");
+        let fingerprint = bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |hash,&byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
+        });
+        let bytes = context.decode_with(bytes.len() as u64, || Ok(bytes))?;
+        Ok(Bitmap { size, bytes, fingerprint })
+    }
+
+    pub(super) fn restore_cvns(&mut self, bitmap: Bitmap) {
+        self.bitmap = Some(bitmap);
+        self.pending = None;
+        self.error = None;
+    }
+
     pub fn clear(&mut self) {
         self.pending = None;
         self.bitmap = None;
         self.error = None;
+    }
+
+    pub(super) fn begin_backup(&mut self,host:&mut dyn HostServices,pool:&TaskPool,vm:&mut CmvsVm)->Result<bool>{
+        self.for_backup=true;
+        self.begin(host,pool,vm)
     }
 
     pub fn begin(
@@ -106,9 +131,14 @@ impl Thumbnail {
                 }
                 Ok(ImageProcessState::Ready(frame)) => {
                     let context = self.context.clone();
+                    let rows = if vm.profile() == crate::vm::VmProfile::Cvns20040515X86 {
+                        BoxSampleRows::HorizontalRatio
+                    } else {
+                        BoxSampleRows::VerticalRatio
+                    };
                     match permit.spawn(move |cancel| {
                         let context = context.with_cancellation(cancel);
-                        encode(&context, frame.as_ref(), size, length)
+                        encode(&context, frame.as_ref(), size, length, rows)
                     }) {
                         Ok(task) => self.pending = Some(Capture::Encode(task)),
                         Err(error) => self.finish(vm, Err(error))?,
@@ -129,8 +159,15 @@ impl Thumbnail {
     }
 
     fn finish(&mut self, vm: &mut CmvsVm, result: Result<Bitmap>) -> Result<()> {
-        vm.owner_arguments::<0>(0x22b8)?;
-        vm.complete_owner_call(0, None)?;
+        if vm.profile() == crate::vm::VmProfile::Cvns20040515X86 {
+            if let Err(error) = &result {
+                anyhow::bail!("CVNS save thumbnail capture: {error:#}");
+            }
+        }
+        if !std::mem::take(&mut self.for_backup) {
+            vm.owner_arguments::<0>(0x22b8)?;
+            vm.complete_owner_call(0, None)?;
+        }
         match result {
             Ok(bitmap) => {
                 self.bitmap = Some(bitmap);
@@ -158,6 +195,7 @@ fn encode(
     frame: &dyn ImageResource,
     size: [u32; 2],
     length: u64,
+    rows: BoxSampleRows,
 ) -> Result<Bitmap> {
     ensure!(
         frame.client() == context.client,
@@ -168,7 +206,7 @@ fn encode(
     // reader and the old resident BMP until the owner commits.
     let bytes = context.with_temporary_bytes(length, || {
         context.decode_with(length, || {
-            let data = encode_box_average_bmp(frame.size(), &frame.rgba(), size, &|| {
+            let data = encode_box_average_bmp_with_rows(frame.size(), &frame.rgba(), size, rows, &|| {
                 Ok(context.check_cancelled()?)
             })?;
             fingerprint = data.iter().fold(0xcbf2_9ce4_8422_2325u64, |hash, &byte| {

@@ -5,6 +5,9 @@
 use anyhow::{Context, Result, anyhow, ensure};
 #[path="media_probe.rs"]
 pub mod probe;
+#[path="media_cadence.rs"]
+mod cadence;
+use crysirror_core::service::IndexedMoviePacing;
 use crysirror_core::{
     path::{Mount, VfsPath},
     service::{AssetReader, AudioParameters, AudioPcm16Gain, AudioRequest, ClientStorage, PcmAudio, PcmBus},
@@ -156,7 +159,7 @@ struct MediaInput {
 }
 enum MediaSource {
     Asset{storage:Arc<dyn ClientStorage>,path:VfsPath},
-    Reader(Arc<dyn AssetReader>),
+    Reader(Arc<dyn AssetReader>, Option<IndexedMoviePacing>),
 }
 impl MediaInput {
     fn reader(&self) -> Result<Arc<dyn AssetReader>> {
@@ -164,7 +167,7 @@ impl MediaInput {
             .get_or_init(|| {
                 match &self.source {
                     MediaSource::Asset{storage,path}=>storage.open_asset(path).map_err(|e| format!("open scoped media asset: {e}")),
-                    MediaSource::Reader(reader)=>Ok(reader.clone()),
+                    MediaSource::Reader(reader, _)=>Ok(reader.clone()),
                 }
             })
             .as_ref()
@@ -257,6 +260,7 @@ impl Drop for Reservation {
 struct QueuedFrame {
     frame: VideoFrame,
     _reservation: Reservation,
+    decode_ms: u64,
 }
 struct AudioTrack {
     pcm: PcmAudio,
@@ -311,6 +315,7 @@ fn mp4_input(reader: &mut (impl Read + Seek)) -> Result<bool> {
 }
 
 struct Workers {
+    indexed: Option<cadence::Delivery>,
     video: Receiver<QueuedFrame>,
     audio: Option<Receiver<Option<AudioTrack>>>,
     cancel: Arc<AtomicBool>,
@@ -333,6 +338,13 @@ impl Workers {
         audio_budget: Arc<ByteBudget>,
         worker_budget: Arc<ByteBudget>,
     ) -> Result<Self> {
+        let (indexed, control) = match &source.source {
+            MediaSource::Reader(_, Some(mode)) => {
+                let (delivery, decoder) = cadence::Delivery::new(*mode);
+                (Some(delivery), Some(decoder))
+            }
+            _ => (None, None),
+        };
         let video_input = source.clone();
         let video_lease = worker_budget
             .reserve(1)
@@ -371,6 +383,8 @@ impl Workers {
                     }
                     let mut video_reader = AssetCursor::new(video_input.reader()?)?;
                     let mp4 = mp4_input(&mut video_reader)?;
+                    if control.is_some() { ensure!(cmv::is_input(&mut video_reader)?, "indexed playback needs CMV"); }
+                    let decode_ms = std::cell::Cell::new(0);
                     let publish_metadata = |info: crysirror_video::VideoMetadata| -> Result<()> {
                         crysirror_image::rgba_len(info.size[0], info.size[1])?;
                         ensure!(!packed_alpha || (info.size[1] >= 2 && info.size[1] % 2 == 0), "packed-alpha video height must be positive and even");
@@ -396,6 +410,7 @@ impl Workers {
                             .send(QueuedFrame {
                                 frame,
                                 _reservation: reservation,
+                                decode_ms: decode_ms.get(),
                             })
                             .is_ok())
                     };
@@ -421,8 +436,24 @@ impl Workers {
                     } else if cmv::is_input(&mut video_reader)? {
                         let mut decoder = cmv::Movie::new(video_reader)?;
                         publish_metadata(decoder.metadata())?;
+                        if let Some(control) = &control {
+                            let _ = control.index.set(decoder.frame_index());
+                        }
+                        let mut first = true;
                         while !stop.load(Ordering::Acquire) {
-                            let Some(frame) = decoder.decode_next()? else { break; };
+                            let target = if let Some(control) = &control {
+                                if first { Some(0) } else {
+                                    match control.targets.recv() { Ok(index) => Some(index), Err(_) => break }
+                                }
+                            } else { None };
+                            first = false;
+                            let start = std::time::Instant::now();
+                            let frame = match target {
+                                Some(index) => decoder.decode_at(index)?,
+                                None => decoder.decode_next()?,
+                            };
+                            let Some(frame) = frame else { break; };
+                            decode_ms.set(start.elapsed().as_millis() as u64);
                             if !publish(VideoFrame {
                                 pts_ms: i64::try_from(frame.pts_ms)?,
                                 width: frame.width, height: frame.height, rgba: frame.rgba,
@@ -463,6 +494,7 @@ impl Workers {
             })
             .context("spawn engine video decoder")?;
         let mut workers = Self {
+            indexed,
             video: video_rx,
             audio: None,
             cancel,
@@ -734,7 +766,10 @@ impl MediaManager {
         options: MediaOptions,
         pcm16_gain: Option<AudioPcm16Gain>,
     ) -> Result<()> {
-        self.play_source(client, id, MediaSource::Reader(source), options, pcm16_gain)
+        self.play_reader_paced(client, id, source, options, pcm16_gain, None)
+    }
+    pub(crate) fn play_reader_paced(&mut self, client: ClientId, id: u32, source: Arc<dyn AssetReader>, options: MediaOptions, pcm16_gain: Option<AudioPcm16Gain>, pacing: Option<IndexedMoviePacing>) -> Result<()> {
+        self.play_source(client, id, MediaSource::Reader(source, pacing), options, pcm16_gain)
     }
     fn play_source(
         &mut self,
@@ -970,6 +1005,11 @@ impl MediaManager {
             status
         })
     }
+    pub(crate) fn track_channel(&self, client: ClientId, id: u32) -> Option<u32> {
+        let slot = self.slots.get(&(client, id))?;
+        slot.track.as_ref().map(|_| slot.options.audio_channel)
+    }
+
     pub fn frame(&self, client: ClientId, id: u32) -> Option<crysirror_core::service::MediaFrame> {
         self.slots.get(&(client,id)).and_then(|s|s.current.clone())
     }
@@ -981,6 +1021,11 @@ impl MediaManager {
             "queued_video_bytes":self.video_budget.used.load(Ordering::Acquire),"retained_audio_bytes":self.audio_budget.used.load(Ordering::Acquire),"decoder_worker_reservations":self.worker_budget.used.load(Ordering::Acquire)})
     }
     pub fn tick(&mut self, now_ms: u64) -> Result<MediaUpdates> {
+        self.tick_with_audio(now_ms, |_, _| Ok(None))
+    }
+
+    pub(crate) fn tick_with_audio(&mut self, now_ms: u64,
+        audio_position: impl Fn(ClientId, u32) -> Result<Option<u64>>) -> Result<MediaUpdates> {
         // Surface worker errors before consuming any other resource's outputs.
         for ((client, id), slot) in &mut self.slots {
             if let Some(error) = slot.workers.as_ref().and_then(Workers::error) {
@@ -1084,6 +1129,21 @@ impl MediaManager {
                     }
                 }
             }
+            let mut indexed_end = false;
+            let mut due_ms = elapsed;
+            if let Some(pacing) = &mut workers.indexed {
+                if let Some(track) = slot.track.as_ref().filter(|_| slot.status.published_frames != 0 && slot.paused_at.is_none()) {
+                    let pcm = track.pcm.info();
+                    let track_ms = (pcm.frames as u64 * 1000).div_ceil(u64::from(pcm.sample_rate));
+                    match audio_position(*client, slot.options.audio_channel)? {
+                        Some(ms) => { pacing.audio_seen = true; due_ms = ms; }
+                        None if pacing.audio_seen || slot.audio_sent && elapsed >= track_ms => { indexed_end = true; }
+                        None => { due_ms = 0; }
+                    }
+                }
+                if !indexed_end && slot.paused_at.is_none() { indexed_end = pacing.advance(due_ms as u32)?; }
+                slot.status.position_ms = due_ms;
+            }
             let mut presented = None;
             loop {
                 if slot.pending.is_none() && !slot.eof {
@@ -1106,17 +1166,18 @@ impl MediaManager {
                     .pts_ms
                     .saturating_sub(slot.first_pts_ms.unwrap_or(frame.frame.pts_ms))
                     .max(0) as u64;
-                if relative > elapsed {
+                if relative > due_ms && workers.indexed.is_none() {
                     break;
                 }
                 let frame = slot.pending.take().expect("pending checked");
                 if let Some(previous) = slot.status.frame_pts_ms {
                     let delta = frame.frame.pts_ms.saturating_sub(previous);
-                    if delta > 0 {
+                    if delta > 0 && workers.indexed.is_none() {
                         slot.last_duration_ms = delta as u64;
                     }
                 }
                 slot.status.frame_pts_ms = Some(frame.frame.pts_ms);
+                if let Some(pacing) = &mut workers.indexed { pacing.presented(frame.decode_ms); }
                 presented = Some(frame);
             }
             let presented = presented.filter(|frame| {
@@ -1153,7 +1214,7 @@ impl MediaManager {
                 .frame_pts_ms
                 .zip(slot.first_pts_ms)
                 .map(|(last, first)| last.saturating_sub(first).max(0) as u64);
-            if slot.eof
+            if indexed_end || slot.eof
                 && slot.pending.is_none()
                 && last.is_some_and(|pts| elapsed >= pts.saturating_add(slot.last_duration_ms))
             {
@@ -1831,9 +1892,11 @@ mod tests {
                     rgba: vec![0, 0, 0, 255],
                 },
                 _reservation: manager.video_budget.reserve(4).unwrap(),
+                decode_ms: 0,
             })
             .unwrap();
             let workers = Workers {
+                indexed: None,
                 video: rx,
                 audio: None,
                 cancel: Arc::new(AtomicBool::new(false)),

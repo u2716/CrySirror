@@ -43,6 +43,12 @@ pub(super) struct Display {
     /// Next frame start of the native limiter, in host milliseconds.
     next_frame: Option<u64>,
     cvns_frame_period: u32,
+    cvns_second_due: Option<u64>,
+    cvns_frames: u32,
+    cvns_last_frames: u32,
+    cvns_position: [i32; 2],
+    cvns_windowed_position: [i32; 2],
+    cvns_auto_move: bool,
     cursor_hidden: bool,
     cursor_shown_by_script: bool,
 }
@@ -114,10 +120,16 @@ impl Display {
             fill: false,
             window_size: canvas,
             settings,
+            cvns_position: [int("WINDOW_STATUS", "MAP_X", 0), int("WINDOW_STATUS", "MAP_Y", 0)],
+            cvns_windowed_position: [0; 2],
+            cvns_auto_move: int("MOUSE_INFO", "AUTO_MOVE", 0) != 0,
             config,
             config_dirty: false,
             next_frame: None,
             cvns_frame_period: 17,
+            cvns_second_due: None,
+            cvns_frames: 0,
+            cvns_last_frames: 0,
             cursor_hidden: false,
             cursor_shown_by_script: true,
         }
@@ -133,7 +145,8 @@ impl Display {
     }
 
     pub fn cvns_set_frame_period(&mut self, vm: &mut CmvsVm) -> Result<()> {
-        let [period] = vm.owner_arguments(0x2002)?;
+        // Pending CVNS selectors without a CMVS counterpart live at 0x2800 + selector.
+        let [period] = vm.owner_arguments(0x2802)?;
         ensure!(period != 0, "CVNS frame timer cannot advance with a zero period");
         vm.complete_owner_call(1, None)?;
         self.cvns_frame_period = period;
@@ -144,11 +157,24 @@ impl Display {
     /// Returns the time to wait for when the next frame is not due yet.
     pub fn frame_due(&mut self, now: u64) -> Option<u64> {
         let period = u64::from(self.frame_period());
+        if self.profile == VmProfile::Cvns20040515X86 {
+            let due = *self.cvns_second_due.get_or_insert(now + 1000);
+            if now >= due {
+                let missed = (now - due) / 1000;
+                self.cvns_last_frames = if missed == 0 { self.cvns_frames } else { 0 };
+                self.cvns_frames = 0;
+                self.cvns_second_due = Some(due + 1000 * (missed + 1));
+            }
+        }
         match self.next_frame {
             Some(due) if now < due => Some(due),
             Some(due) if self.profile == VmProfile::Cvns20040515X86 => {
                 // sub_43a730 catches up missed periods without executing a
                 // batch for each skipped deadline.
+                // 0x43a771 increments for each next deadline >= now. An exact
+                // hit after missed ticks counts both sides of the boundary.
+                let extra = now > due && (now - due) % period == 0;
+                self.cvns_frames = self.cvns_frames.wrapping_add(1 + u32::from(extra));
                 self.next_frame = Some(now.saturating_add(period - (now - due) % period));
                 None
             }
@@ -164,11 +190,65 @@ impl Display {
         }
     }
 
+    // CVNS mode 1 leaves the pointer visible; modes 2–5 hide after 5–20 s.
+    pub fn set_cvns_cursor_delay(&mut self, mode: u32) {
+        self.settings.auto_clear = mode.saturating_sub(1);
+    }
+
+    pub fn cvns_auto_move(&mut self, move_pointer: bool) {
+        self.cvns_auto_move = move_pointer;
+    }
+
+    pub fn cvns_last_frames(&self) -> u32 { self.cvns_last_frames }
+
+    pub fn start_cvns(&mut self, host: &mut dyn HostServices, client: ClientId) -> Result<()> {
+        let now = host.now_ms();
+        self.cvns_second_due = Some(now + 1000);
+        self.next_frame = Some(now + u64::from(self.frame_period()));
+        self.cvns_windowed_position = self.cvns_position;
+        self.apply_mode(host, client)?;
+        if self.windowed { self.cvns_move(host, client, self.cvns_position)?; }
+        Ok(())
+    }
+
+    pub fn cvns_mode(&self) -> u32 { if self.windowed { 0 } else { 3 } }
+
+    pub fn cvns_position(&mut self, host: &dyn HostServices, client: ClientId) -> Result<[i32; 2]> {
+        if let Some(position) = host.window_geometry(client)?.and_then(|g| g.outer_position) {
+            self.cvns_position = position;
+        }
+        Ok(self.cvns_position)
+    }
+
+    pub fn cvns_move(&mut self, host: &mut dyn HostServices, client: ClientId, position: [i32; 2]) -> Result<()> {
+        Self::submit_ui(host, client, vec![json!({"op":"set_window_position","position":position})])?;
+        self.cvns_position = position;
+        Ok(())
+    }
+
+    pub fn cvns_set_mode(&mut self, host: &mut dyn HostServices, client: ClientId, fullscreen: bool) -> Result<()> {
+        if self.windowed == !fullscreen { return Ok(()); }
+        if self.windowed { self.cvns_windowed_position = self.cvns_position(host, client)?; }
+        self.windowed = !fullscreen;
+        self.apply_mode(host, client)?;
+        if self.windowed { self.cvns_move(host, client, self.cvns_windowed_position)?; }
+        else { self.cvns_position = [0; 2]; }
+        Ok(())
+    }
+
     pub fn inactive_sound(&self) -> bool {
         self.settings.inactive_sound
     }
 
     /// Changed `cmvs.cfg` contents to store under the save root, once.
+    pub fn cvns_config_bytes(&mut self, scene: &super::cvns::Scene) -> Vec<u8> {
+        scene.store_settings(&mut self.config);
+        self.config.set("WINDOW_STATUS", "WINDOW_MODE", &self.cvns_mode().to_string());
+        self.config.set("WINDOW_STATUS", "MAP_X", &self.cvns_position[0].to_string());
+        self.config.set("WINDOW_STATUS", "MAP_Y", &self.cvns_position[1].to_string());
+        encoding_rs::SHIFT_JIS.encode(&self.config.to_text()).0.into_owned()
+    }
+
     pub fn take_config(&mut self) -> Option<Vec<u8>> {
         if !std::mem::take(&mut self.config_dirty) {
             return None;
@@ -273,6 +353,12 @@ impl Display {
             && idle_ms.is_some_and(|idle| idle >= 5000 * u64::from(self.settings.auto_clear));
         if hidden != self.cursor_hidden && self.cursor_shown_by_script {
             self.cursor_hidden = hidden;
+            if hidden && self.profile == VmProfile::Cvns20040515X86 && self.cvns_auto_move {
+                match host.warp_pointer(client, 0, 0) {
+                    Ok(()) | Err(crysirror_core::Error::Unsupported(_)) => {}
+                    Err(error) => return Err(error.into()),
+                }
+            }
             Self::submit_ui(host, client, vec![json!({"op":"set_cursor_visible","visible":!hidden})])?;
         }
         Ok(())
@@ -303,7 +389,8 @@ impl Display {
             }
             0x2163 => {
                 self.observe(host, client)?;
-                vm.complete_owner_call(0, Some(u32::from(!self.windowed)))?;
+                let fullscreen = if self.profile == VmProfile::Cvns20040515X86 { 3 } else { 1 };
+                vm.complete_owner_call(0, Some(if self.windowed { 0 } else { fullscreen }))?;
             }
             0x2164 => {
                 let [fullscreen] = vm.owner_arguments(opcode)?;
@@ -503,6 +590,17 @@ mod tests {
     }
 
     #[test]
+    fn cvns_fps_counts_exact_catchup_boundaries_and_expires_after_an_idle_second() {
+        let mut display = Display::new(VmProfile::Cvns20040515X86, [640, 480], b"");
+        for now in [0, 17, 51, 1000] {
+            assert_eq!(display.frame_due(now), None);
+        }
+        assert_eq!(display.cvns_last_frames(), 3);
+        assert_eq!(display.frame_due(3000), None);
+        assert_eq!(display.cvns_last_frames(), 0);
+    }
+
+    #[test]
     fn cvns_applies_the_new_period_after_the_already_scheduled_deadline() -> Result<()> {
         let profile = VmProfile::Cvns20040515X86;
         let mut display = Display::new(profile, [640, 480], b"");
@@ -515,13 +613,13 @@ mod tests {
         let mut vm = CmvsVm::prepare(profile, &MemoryAssetReader(script.into()))?;
         assert_eq!(display.frame_period(), 17);
         assert_eq!(display.frame_due(100), None);
-        assert!(matches!(vm.run(3)?, VmYield::SystemCall { pc: 10, opcode: 0x2002 }));
+        assert!(matches!(vm.run(3)?, VmYield::SystemCall { pc: 10, opcode: 0x2802 }));
         display.cvns_set_frame_period(&mut vm)?;
         assert_eq!(display.frame_period(), 33);
         assert_eq!(display.frame_due(116), Some(117));
         assert_eq!(display.frame_due(200), None);
         assert_eq!(display.frame_due(215), Some(216));
-        assert!(matches!(vm.run(1)?, VmYield::SystemCall { pc: 12, opcode: 0x2003 }));
+        assert!(matches!(vm.run(1)?, VmYield::SystemCall { pc: 12, opcode: 0x2803 }));
         vm.complete_owner_call(0, Some(display.frame_period()))?;
         assert!(matches!(vm.run(1)?, VmYield::Frame));
         Ok(())

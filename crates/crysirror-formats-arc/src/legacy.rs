@@ -19,6 +19,7 @@ mod f;
 mod g;
 mod h;
 mod i;
+mod j;
 
 /// How a parsed entry's stored bytes become its logical bytes.
 pub(crate) enum Plan {
@@ -189,6 +190,7 @@ pub(crate) fn formats() -> impl Iterator<Item = &'static Legacy> {
         .chain(g::FORMATS)
         .chain(h::FORMATS)
         .chain(i::FORMATS)
+        .chain(j::FORMATS)
         .chain(e::malie::ADDITIONAL_FORMATS)
 }
 pub(crate) fn magic(source: &dyn AssetReader, at: u64, expected: &[u8]) -> Result<bool> {

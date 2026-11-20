@@ -2158,6 +2158,7 @@ fn child_id(slot: usize, child: usize) -> u32 {
     }
 }
 
+#[derive(Clone)]
 pub(super) struct DecodedImage {
     image: Arc<dyn ImageResource>,
     native_alpha: Option<bool>,

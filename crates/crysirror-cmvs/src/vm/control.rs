@@ -31,10 +31,99 @@ pub(super) struct Control {
     timers: [u32; 10],
     marked_at: u32,
     random: u32,
+    /// CVNS `0x202a` arms entries 1..63 for the next frame (+22952 + 28 * index).
+    armed: u64,
 }
 
 #[cfg(feature = "runtime")]
 impl Control {
+    pub(super) fn csp_records(&self, out: &mut Vec<u8>) -> anyhow::Result<()> {
+        use super::save_slot::csp1::append;
+        let mut timers = Vec::with_capacity(40);
+        for timer in self.timers {
+            timers.extend_from_slice(&timer.to_le_bytes());
+        }
+        append(out, 0x109, &[], &timers)?;
+        let mut table = Vec::with_capacity(1796);
+        table.extend_from_slice(&u32::from(self.automatic).to_le_bytes());
+        for (index, entry) in self.callbacks.iter().enumerate() {
+            let [script, target, first, second, third, at] = match entry {
+                Some(c) => [
+                    u32::from(c.script),
+                    c.target,
+                    c._parameters[2],
+                    c._parameters[1],
+                    c._parameters[0],
+                    c._registered_at,
+                ],
+                None => [0, u32::MAX, 0, 0, 0, 0],
+            };
+            for word in [
+                ((self.armed >> index) & 1) as u32,
+                script,
+                target,
+                first,
+                second,
+                third,
+                at,
+            ] {
+                table.extend_from_slice(&word.to_le_bytes());
+            }
+        }
+        append(out, 0x10b, &[], &table)
+    }
+
+    pub(super) fn restore_csp_record(
+        &mut self,
+        tag: u16,
+        bytes: &[u8],
+        machine: &Machine,
+    ) -> anyhow::Result<()> {
+        use anyhow::ensure;
+        if tag == 0x109 {
+            ensure!(bytes.len() == 40, "invalid CSP1 timer record");
+            for (timer, raw) in self.timers.iter_mut().zip(bytes.as_chunks::<4>().0) {
+                *timer = u32::from_le_bytes(*raw);
+            }
+            return Ok(());
+        }
+        ensure!(
+            tag == 0x10b && bytes.len() == 1796,
+            "invalid CSP1 callback table"
+        );
+        self.automatic = u32::from_le_bytes(bytes[..4].try_into()?) != 0;
+        let live_armed = self.armed;
+        self.armed = 0;
+        for (index, raw) in bytes[4..].chunks_exact(28).enumerate() {
+            let field = |i: usize| u32::from_le_bytes(raw[4 * i..4 * i + 4].try_into().unwrap());
+            let bit = 1u64 << index;
+            if self.callbacks[index].is_some_and(|c| c.script == 1) {
+                self.armed |= live_armed & bit;
+                continue;
+            }
+            let script = u8::try_from(field(1))?;
+            let target = if script == 1 { 0 } else { field(2) };
+            if field(0) != 0 && script != 1 {
+                self.armed |= bit;
+            }
+            // The x86 loader clears saved common targets before overlaying live common rows.
+            ensure!(
+                script <= 1
+                    && (script == 1
+                        || target == u32::MAX
+                        || machine.is_boundary(script, target as usize)),
+                "invalid CSP1 callback target"
+            );
+            self.callbacks[index] = Some(Callback {
+                script,
+                target,
+                _parameters: [field(5), field(4), field(3)],
+                _registered_at: field(6),
+            });
+        }
+        Ok(())
+    }
+
     pub(super) fn snapshot(&self) -> serde_json::Value {
         let callbacks: Vec<_> = self
             .callbacks
@@ -56,6 +145,7 @@ impl Control {
             "timers": self.timers,
             "marked_at": self.marked_at,
             "random": self.random,
+            "armed": self.armed,
         })
     }
 
@@ -83,6 +173,7 @@ impl Control {
         control.timers = words(value, "timers")?.try_into().ok()?;
         control.marked_at = word(value, "marked_at")?;
         control.random = word(value, "random")?;
+        control.armed = value["armed"].as_u64().unwrap_or(0);
         Some(control)
     }
 }
@@ -99,6 +190,7 @@ impl Default for Control {
             timers: [0; 10],
             marked_at: 0,
             random: 0,
+            armed: 0,
         }
     }
 }
@@ -128,6 +220,9 @@ impl Control {
             *timer = timer.wrapping_add(delta);
         }
         self.advance_random();
+        if machine.profile() == super::VmProfile::Cvns20040515X86 {
+            return self.dispatch_cvns(machine, visible_messages);
+        }
         if self.inhibited {
             return Ok(());
         }
@@ -136,7 +231,7 @@ impl Control {
             .iter()
             .enumerate()
             .filter_map(|(index, callback)| {
-                let callback = callback.as_ref()?;
+                let callback = callback.as_ref().filter(|c| c.target != u32::MAX)?;
                 let due = index == 28
                     || self.automatic
                         && match index {
@@ -150,9 +245,93 @@ impl Control {
         machine.dispatch_callbacks(&due)
     }
 
+    /// 0x423430: with `0x2029` enabled, entries 3..5 run every frame, 10 and 11
+    /// while their message windows are shown and 32..63 once armed. The arming
+    /// of all 64 entries is cleared afterwards whether or not dispatch ran.
+    fn dispatch_cvns(
+        &mut self,
+        machine: &mut Machine,
+        visible_messages: [bool; 8],
+    ) -> Result<(), DecodeError> {
+        let armed = std::mem::take(&mut self.armed);
+        if !self.automatic {
+            return Ok(());
+        }
+        let due: Vec<_> = self
+            .callbacks
+            .iter()
+            .enumerate()
+            .filter_map(|(index, callback)| {
+                let callback = callback.as_ref().filter(|c| c.target != u32::MAX)?;
+                let due = match index {
+                    3..=5 => true,
+                    10 | 11 => visible_messages[index - 10],
+                    32..=63 => armed & (1 << index) != 0,
+                    _ => false,
+                };
+                due.then_some((callback.script, callback.target as usize))
+            })
+            .collect();
+        machine.dispatch_callbacks(&due)
+    }
+
+    /// CVNS callback selectors 0x42a890, 0x42a970, 0x42a9a0 and 0x42aab0.
+    pub(super) fn cvns_command(
+        &mut self,
+        machine: &Machine,
+        opcode: u16,
+    ) -> Result<u16, DecodeError> {
+        let index = Self::argument(machine, opcode, 4)?;
+        Ok(match opcode {
+            0x2028 => {
+                if index < 64 {
+                    let target = Self::argument(machine, opcode, 8)?;
+                    let script = machine.current_slot();
+                    if target != u32::MAX && !machine.is_boundary(script, target as usize) {
+                        return Err(error(
+                            machine.pc(),
+                            opcode,
+                            "CVNS callback target is not an instruction boundary",
+                        ));
+                    }
+                    self.callbacks[index as usize] = Some(Callback {
+                        script,
+                        target,
+                        _parameters: [
+                            Self::argument(machine, opcode, 20)?,
+                            Self::argument(machine, opcode, 16)?,
+                            Self::argument(machine, opcode, 12)?,
+                        ],
+                        _registered_at: self.clock,
+                    });
+                }
+                20
+            }
+            0x2029 => {
+                self.automatic = index != 0;
+                4
+            }
+            0x202a => {
+                if (1..64).contains(&index)
+                    && self.automatic
+                    && self.callbacks[index as usize].is_some_and(|c|c.target != u32::MAX)
+                {
+                    self.armed |= 1 << index;
+                }
+                4
+            }
+            _ => {
+                if let Some(entry) = self.callbacks.get_mut(index as usize).and_then(Option::as_mut) {
+                    entry.target = u32::MAX;
+                }
+                4
+            }
+        })
+    }
+
     pub(super) fn invoke(&self, machine: &mut Machine) -> Result<(), DecodeError> {
         let argument = Self::argument(machine, 0x208a, 4)?;
-        let callback = self.callbacks[(argument & 63) as usize]
+        let callback = self.callbacks[(argument & 63) as usize].filter(|c|c.target!=u32::MAX)
             .ok_or_else(|| error(machine.pc(), 0x208a, "CMVS callback is absent or disabled"))?;
         machine.call_callback(callback.script, callback.target as usize)
     }

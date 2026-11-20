@@ -15,7 +15,7 @@ const FLOATS_END: usize = 44800;
 const MAX_FILE: u64 = 16 * 1024 * 1024;
 const MAX_EXPANDED: usize = 1024 * 1024;
 const CHECK_SEQUENCE: &[u8] = b"YUKO_KAWAI_PURPLE_SYSTEM_SAVE_CHECK";
-const CSS1_LZSS: LzssParams = LzssParams {
+pub(super) const SYSTEM_LZSS: LzssParams = LzssParams {
     mode: LzssMode::Bytewise,
     initial: 976,
     position_bits: 10,
@@ -105,7 +105,7 @@ impl CssState {
             let key = xor_bias.wrapping_add(CHECK_SEQUENCE[index % CHECK_SEQUENCE.len()]);
             *byte = (byte.rotate_right(shift).wrapping_sub(subtract) ^ key).wrapping_sub(64);
         }
-        let expanded = lzss_decompress(packed, declared, &CSS1_LZSS)?;
+        let expanded = lzss_decompress(packed, declared, &SYSTEM_LZSS)?;
         let mut strings = Vec::with_capacity(64);
         let mut lists = [Vec::new(), Vec::new()];
         let mut tail = &expanded[FLOATS_END..];
@@ -169,7 +169,7 @@ pub(super) fn encode(
     }
     ensure!(expanded.len() <= MAX_EXPANDED, "CSS1 expanded size limit");
     let mut packed = Vec::new();
-    lzss_compress_bytewise(&expanded, &CSS1_LZSS, &mut packed, || Ok(()))?;
+    lzss_compress_bytewise(&expanded, &SYSTEM_LZSS, &mut packed, || Ok(()))?;
     let (subtract, xor_bias, selector, rotation) = (0x5a_u8, 0xa5_u8, 0x5a_u16, 0x1234_u16);
     let shift = u32::from((rotation >> ((selector >> 1) & 7)) & 3) + 2;
     let mut checksum = 0u16;
@@ -203,13 +203,13 @@ pub(super) fn encode(
     Ok(out)
 }
 
-fn read_name(tail: &mut &[u8], limit: usize) -> Result<Vec<u8>> {
+pub(super) fn read_name(tail: &mut &[u8], limit: usize) -> Result<Vec<u8>> {
     let remaining = *tail;
     let end = remaining
         .iter()
         .position(|&byte| byte == 0)
-        .context("unterminated CSS1 string")?;
-    ensure!(end <= limit, "CSS1 string exceeds its destination");
+        .context("unterminated system-save string")?;
+    ensure!(end <= limit, "system-save string exceeds its destination");
     let name = remaining[..end].to_vec();
     *tail = &remaining[end + 1..];
     Ok(name)

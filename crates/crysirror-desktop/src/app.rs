@@ -452,6 +452,7 @@ impl App {
         self.focused = window.has_focus();
         self.core.rt().host.window_focused = Some(self.focused);
         self.core.rt().host.window_minimized=window.is_minimized();
+        self.core.rt().host.window_maximized = Some(window.is_maximized());
         self.core.rt().host.window_fullscreen=Some(window.fullscreen().is_some());
         self.core.rt().host.window_geometry=Some(crysirror_core::service::WindowGeometry{
             inner_size:[window.inner_size().width,window.inner_size().height],
@@ -682,6 +683,7 @@ impl App {
         self.text_input.sync(&w.window,&mut self.core.rt().host,canvas,[w.config.width,w.config.height])?;
         self.core.rt().host.engine.ui.pointer_surface=[w.config.width,w.config.height];
         self.core.rt().host.window_minimized=w.window.is_minimized();
+        self.core.rt().host.window_maximized = Some(w.window.is_maximized());
         self.core.rt().host.window_fullscreen=Some(w.window.fullscreen().is_some());
         self.core.rt().host.window_geometry=Some(crysirror_core::service::WindowGeometry{
             inner_size:[w.window.inner_size().width,w.window.inner_size().height],
@@ -915,7 +917,10 @@ impl App {
                 self.core.rt().host.text_input.focus(focused);
                 if !focused { self.ime_composing=false; }
                 self.core.rt().host.window_focused = Some(focused);
-                if let Some(w)=self.window.as_ref(){self.core.rt().host.window_minimized=w.window.is_minimized();}
+                if let Some(w) = self.window.as_ref() {
+                    self.core.rt().host.window_minimized = w.window.is_minimized();
+                    self.core.rt().host.window_maximized = Some(w.window.is_maximized());
+                }
                 self.input = InputFrame::default();
                 #[cfg(feature = "gamepad")]
                 if let Some(backend) = &mut self.gamepad {
@@ -1129,6 +1134,7 @@ impl ApplicationHandler for App {
         self.core.rt().host.window_focused = None;
         if let Err(error)=crate::desktop_provider::install(self.core.rt(),false){self.fail(el,error);return;}
         self.core.rt().host.window_minimized=None;
+        self.core.rt().host.window_maximized = None;
         self.core.rt().host.window_fullscreen=None;
         self.core.rt().host.window_geometry=None;
         self.core.rt().host.pointer_observation = Default::default();

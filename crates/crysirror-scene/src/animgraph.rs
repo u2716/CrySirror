@@ -239,6 +239,8 @@ fn motion_layers(
                 target_weight: w * weight,
                 fade: 0.,
                 looping,
+                source: None,
+                blend_layer: 0,
             });
         }
     };
@@ -447,6 +449,8 @@ pub fn compose(
             target_weight: w.max(1e-3),
             fade: 0.,
             looping: false,
+            source: None,
+            blend_layer: 0,
         });
     }
     layers.retain(|l| l.weight > 1e-4);

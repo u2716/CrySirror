@@ -33,24 +33,258 @@ A zero period cannot advance that scheduler and the adapter reports it as
 invalid. Other CVNS selectors require their own recovered contract before
 they can reach a handler.
 
-`0x210e` sets the audit-enable word at `+0x4fa4` and returns `0x4000`.
-`0x433bb0` visits one of eight stripes of the original bit and integer
-banks per admitted frame, compares each cell with its mirror and rotates
-the stripe. A mismatch sets bit 1 of the engine error word at `+22500`.
-The original bank accessors also check or synchronize mirrored values.
-The CVNS adapter currently stops at `0x210e` until this bank contract is
-represented in the VM.
+Selectors whose CVNS case has the operands, cleanup, result and effect of a
+reviewed 2016 case are routed to that case by `vm::cvns::route`. The
+remaining CVNS selectors pend as `0x2800 + selector`, so they never alias a
+2016 command of the same number. The 2016-shared routes are the window and
+scene titles (`0x2178`/`0x2179`/`0x217a` → `0x2160`/`0x2161`/`0x2162`), the
+icon `0x2168` → `0x208f`, cursors `0x21d4`/`0x21d5` → `0x2098`/`0x2099`,
+thumbnail size `0x21a6` → `0x22b0`, the name-list gates `0x21c2`/`0x21c3` →
+`0x212a`/`0x212b`, callback invoke `0x202b` → `0x208a`, the popup gate `0x2068`
+→ `0x22cd`, the frame-time counters `0x201a`/`0x201b` → `0x200b`/`0x200c`,
+and effect channels `0x20b0`/`0x20b1`/
+`0x20b3` with stop-all `0x20b4` → `0x20b5`. CVNS has 48 effect channels. The mixer accepts integer percentages. The
+six-word `0x20ad` also accepts a fade-in duration, `0x20ae` rewinds before
+starting, and `0x20b5` fades the selected channel to retirement.
+`0x20e4` and `0x20e5` share the MSVC random sequence with sprite effects and
+CSS0 salts. Both use signed remainder. The two-operand form first subtracts
+the lower bound with 32-bit wrap. `0x20e6` retains the base for exponents
+below two. `0x20e7` takes whole degrees, whereas `0x20e9` takes hundredths
+and uses a fixed radius of 4096. The interpolation call `0x20ea` preserves
+result 0 for unknown modes. `0x20eb` clears results 1 and 2 and sets fault bit 0.
 
-In the supplied `start.pss`, the audit starts at code offset `0x1e`.
-The next native calls fill global banks in this order. Each fill consumes
-three words in the order first index, count and value from the top of stack.
+`0x2013` returns the name of the main script from any executing slot.
+`0x201c` returns local YYYYMMDD, HHMMSS and weekday in registers 4–6.
+`0x21c8`–`0x21cc` query, register and clear the two CSS0 name lists.
+Comparison folds ASCII case outside CP932 double-byte pairs. Explicit image
+registration obeys the recording gate and requires a name shorter than 64 bytes.
 
-| Offset | Selector | Native contract |
-| --- | --- | --- |
-| `0x44` | `0x2108` | `0x42c460` fills packed bits through the mirrored setter at `0x433910`. |
-| `0x6a` | `0x2109` | `0x42c4d0` fills integer words through `0x4339e0`. |
-| `0x90` | `0x210a` | `0x42c540` copies the resolved string into consecutive cells through `0x433a50`. CVNS has 256 string cells of 1,024 bytes. |
-| `0xaa` | `0x2023` | `0x429610` binds a numbered resource source under the install root through `0x40a190`. This call consumes two words. |
+`0x210e` sets the audit-enable word at `+0x4fa4`. `0x433bb0` visits one of
+eight stripes of the bit and integer banks per admitted frame and compares
+each cell with its mirror. Every CrySirror bank write updates the single
+modelled copy, so the audit cannot observe a mismatch.
+`0x2108`–`0x210a` read first index, count and value from SP-4 and loop while
+`index < first + count` in u32 arithmetic. CVNS has 256 string cells of
+1,024 bytes; reads and writes beyond cell 255 resolve to cell 0, like the
+128-cell CMVS bank. `0x2020`–`0x2024` bind slots 0–4 for scripts, images,
+effects, music and voices and ignore higher slots. `0x2025` and `0x2026`
+keep the movie and save directories and also consume the unused slot word.
+`0x2010` replaces the main image and captures the game-bank prefix with bit zero set, and
+`0x2012` calls `intproc.pss` in image slot 1 with a four-byte name operand.
+`0x21c0` reads `save000.dat` from the save directory and changes nothing when
+the file is absent. `0x21c1` writes it. CSS0 records the persistent bit suffix
+rounded down to a byte, signed integer cells, zero-terminated string cells
+and the two name registries. The 600-byte header carries the compressed and
+expanded extents and two salt bytes. The optional trailing checksum covers
+the encrypted compressed bytes. Decoding completes before the banks change.
+
+The gameplay menu scan at `0x436040` starts at `save001.dat`. It reads
+the slot signature CSP1 through CSP9 and a CP932 label at offset 16.
+The first 19 label bytes provide the packed date used to check the most
+recent slot. A timestamp tie keeps the earlier slot. The menu command
+bases are 33100 for load and 33300 for save. Missing slots disable load.
+`0x21a1` clamps the unsigned count to 256, and `0x21a2` always enables
+the load group and controls whether the save group is enabled.
+
+The save thumbnail capture (`0x21af`, x86 `0x427110`) averages the displayed
+frame into a bottom-up, row-aligned 24-bit BMP with a 54-byte header. It
+takes its width and height from `0x21a6`. The integer sample box uses the
+per-axis ratios, but the fixed-point row origin advances by the *horizontal*
+ratio. That distinction matters for thumbnails with a different aspect ratio.
+
+The settings writer (`0x21ed`, x86 `0x430680`) takes four words,
+resolves the second as a string, then dispatches on the first. Keys
+10–14 clamp percentages to 10–100 and call `0x411150` for mixer
+categories 0, 1, 3, 2 and 4 in that order. Key 15 passes the resolved
+string to the font selector. Key 22 also clears the skip flag. Key 999
+sets that flag directly. Other branches update menu checks, window state
+and scheduling. The CVNS session applies these settings to the live mixer,
+cursor, menu and message owners. It writes the profile-backed keys in CP932
+under the client save root at shutdown. Key 6 selects the cooperative VM
+instruction budget. The original applies a Win32 process priority class.
+
+The x86 scheduler at `0x43a7a0` starts separate frame-period and one-second
+deadlines. `0x43a730` publishes the completed second's count before admitting
+the next frame. `0x2007` returns that count from window field +44. A gap of
+two complete seconds publishes zero. The frame-step clock selected by
+`0x2004` and setting 2 is separate from this counter.
+
+`0x2048` selects a registry company, initially KAWAIKO. `0x2049`–`0x204c`
+address case-insensitive subkeys and value names. Each client stores its raw
+values under its private save root. String writes omit the terminator and
+reads preserve destination bytes beyond the payload. The native reader
+distinguishes a missing key from a missing value under an existing key.
+
+`0x21a5` limits history in the checkpoint. `0x21a9` and `0x21aa` set
+the three words at CSP header offsets 528, 532 and 536. `0x21a7` and
+`0x21ae` query the newest and selected slots. `0x21ab` rewrites the
+comment. `0x21ac` reads metadata and optionally restores the embedded BMP
+to a global bitmap.
+
+The CSP1 writer at `0x4312e0` stores three bytewise LZSS sections after a
+600-byte header. Only the compressed checkpoint uses the `SAVE_IMAGE_ARC`
+transform. The 16-bit sum covers the transformed bytes. The reader at
+`0x431ce0` allocates at most 3 MiB for the checkpoint and restores both the
+second and third information words from header offset 532. The main section
+contains an expanded PSS0 image. Checkpoint records at `0x4258e0` use
+tag-dependent 16- or 32-bit lengths and no alignment. Resource records carry
+their table indices before the length. The slot envelope and record boundaries
+are implemented in `vm/save_slot`. Validation also bounds bitmap components,
+sprite effects, glyph counts, movie names and history strings before
+resource loading.
+
+- `0x2010` captures the entry state of the replacement main script.
+  `0x21a0` captures the instruction after the explicit checkpoint. Both
+  sample local civil time and retain native VM, bank, callback, history,
+  drawable, movie and sound records.
+- `0x21a4` writes that checkpoint, the retained thumbnail when enabled,
+  and the current expanded main script. An overwrite below slot 950 backs
+  up the previous file in slot 999. CSS0 uses its own system-data writer.
+- `0x21a3` restores the embedded script at its saved instruction and stack
+  depth. The live common script and its callback registrations survive the
+  transfer. Named bitmaps reopen from the current resource bindings and
+  unnamed components regain their native blank pixels. The owner stages
+  images, clips and replacement audio before switching the live scene.
+  A load below slot 950 with the save menu enabled writes the previous
+  checkpoint to slot 998.
+
+Three display selectors share a retained primary surface. `0x200b` fills
+the primary immediately, then schedules full damage. `0x200c` adds a clipped
+rectangle, merging intersecting or touching entries in list order at
+`0x41eab0`. `0x200d` clears pending rectangles without erasing the primary.
+At the frame boundary, `0x410e10` redraws only the damaged regions and
+preserves previous pixels when background fill is disabled.
+
+The soft reset at `0x2005` enters `main.pss` with the game banks intact and
+releases the previous scene. CD selectors `0x20a5/0x20a6` clear and populate
+a 64-entry track-name table. Clipboard selectors `0x2158`–`0x215a` transfer
+a compatible bitmap, clear the clipboard or copy CP932 text. For name entry
+(`0x21b2`), accepting an edit retains complete double-byte characters. An
+empty result or cancellation copies the original name. The font and colour
+selectors (`0x21b6/0x21b7`) use the client font catalogue and shared RGB picker.
+
+Fullscreen playback uses the embedded PCM cursor, or elapsed time for a
+silent CMV. For a 30 Hz index, frame-control mode 1 selects even frames.
+Mode 2 switches to even frames after 30 late steps. Each requested index
+is decoded directly against the immutable base. Scene clips use six
+independent slots at `0x20c8`–`0x20cc`. A loaded clip publishes its first
+picture before returning. Starting it resets its clock. A type-9 sprite
+created by `0x2071` reads the corresponding movie surface.
+
+`0x42a5a0` loads or starts one of four voice streams. Its operands are slot,
+filename, percentage, loop and start. The shared audio decoder reads MV2X in
+320-frame blocks and reconstructs its 32-band filter history separately for
+each channel. `0x420ee0` uses a 250 ms silence interval for voice-synchronised
+advance. The ADV renderer retains the two glyph colours and the gradient axis
+at issuance, independently of later window style changes.
+
+The x86 mask-font loader at `0x407e00` accepts only eight-bit sheets.
+At `0x407f00`, registering a CP932 character copies its numbered square
+cell from each sheet registered at that instant. The source has full-sheet
+stride. Lookup at `0x408000` takes the first registration with that character
+code, then seeks the exact requested cell size within it. A later registration
+of the same code cannot supply a missing size. ADV rendering calls this
+lookup from `0x421a00`. In the supplied startup script the sheets are
+`font20ex.msk` and `font22ex.msk`, and cell zero is registered for `0x8197`.
+The renderer retains the resolved cell at issuance, applies the window
+colour gradient and shadow to its eight-bit coverage, and submits the glyph
+through the shared message image path.
+
+The x86 bitmap table contains 128 objects. Each owns eight 112-byte component
+records and an independent baked image at +896. Moving a bitmap transfers
+ownership. Copying clones the components and excludes the bake. Indexed
+loads use the third operand of `0x2052` for PB2A mode 5. The tile mask is
+MSB-first and each numbered frame overlays the base independently.
+`0x2193`–`0x2196` use the per-frame shake clock at `0x422f40` and apply
+displacement to the categories selected by `0x423150`. Shake, sprite effects
+and VM random values consume one CRT sequence seeded at startup by `0x410f50`.
+
+The dialogue history uses `0x4216e0` to prepend a record containing two
+31-byte labels, a variable-length line and two words. Its initial capacity
+is 128. `0x212d` changes capacity and eviction occurs on insertion.
+`0x2128` counts entries, `0x2129`–`0x212b` copy the requested byte string,
+`0x2136` chooses a word by the low bit, and `0x212f` clears the list.
+Negative indices select the newest entry. Missing entries return an empty
+string or the integer sentinel `0xffffffff`.
+
+The CVNS compiler places a lone `0xfffc` word after some `0x0413` returns. The
+original loop has no case for it, so CrySirror decodes it as a one-word
+instruction that fails if it is ever executed.
+
+The callback table has the 2016 shape, but `0x423430` dispatches differently.
+With `0x2029` enabled, entries 3–5 run every frame, entries 10 and 11 run
+while their message windows are shown, and entries 32–63 run once after
+`0x202a` arms them. The arming is cleared every frame.
+
+CVNS `0x41e8a0` selects PNG, BMP, PB2A or MSK0 by signature. Its PB2A
+reader `0x41e280` restores the 24-byte header with the same key bytes as the
+2016 path and decodes modes 1, 2, 3/4 and 5. The mode 1 and 2 streams continue
+up to the end of the file, and the shared decoder reads them over the
+complete input.
+
+### CVNS sprite scene
+
+The original composes 128 bitmaps (`+11232`) and 1,024 sprite records
+(`+7136`) in software. `0x40fa20` buckets enabled sprites by layer `+124`
+(0–127), and the band compositor `0x410e10` draws bucket 127 first and
+bucket 0 last, each bucket from the highest sprite index to the lowest.
+`0x41a830` places a sprite at position `+88/+92` minus origin `+104/+108`, with
+scale `+112/+116` in thousandths and rotation `+120` in degrees about the
+position. `+28` is the 0–256 opacity, `+20` hides the blit and `+80` excludes
+the sprite from bucketing. The `adapter/cvns/` scene implements creation
+`0x2070`/`0x2072`, removal `0x2074`/`0x2075`, sources `0x2076`–`0x2078`,
+position, layer, opacity, hide, tint, origin, rotation, scale and enable
+(`0x207a`–`0x2082`), and the queries `0x2083`/`0x2084`/`0x2086`.
+Bitmaps are loaded by `0x2051` and released by `0x2055`/`0x2056`. Colours are
+`0xRRGGBB` DIB words.
+
+The software sprite blitters `0x415c40` and `0x415df0` take the high
+byte of each Q8 colour product before adding. Rectangle fills use the
+packed sum in `0x4144c0`. The shared RGB lookup supplies the image curve.
+`0x205a` captures the displayed frame into an opaque base component.
+
+`0x2188` starts a rule wipe on a sprite. `0x2189` creates bitmap and
+sprite zero from the presented screen and starts a hiding wipe. The 256
+start times are `index * (duration - edge) / 255`. The mask comes from the
+green byte of colour images or the byte of a grayscale mask. The revealing
+blitter uses a 256-step numerator and the hiding blitter a 255-step numerator.
+`0x218a` returns remaining milliseconds or −1. `0x218b` finishes the
+active rule, `0x218c` waits or consumes skip input. Completing a hiding
+rule releases the target sprite and its source bitmap.
+
+The 2004 sound interface maps voice slots to native channels 8–11, effects
+to 12–59 and independent sample streams to 60–63. The three cursor calls
+`0x20bc`, `0x20b6` and `0x20c6` use sound vtable slot 6.
+Sample load `0x20c5` takes slot, effect filename, percentage, fade duration,
+loop and start. It uses master volume independently of the SE switch and
+category volume. SE stop-all leaves the sample streams running. `0x20c7`
+releases one sample stream.
+SE selectors `0x20b7`/`0x20af` and voice selectors `0x20bd`/`0x20be`
+set a secondary percentage and a signed balance. The native mixer at
+`0x40a3f0` multiplies the faded level by the secondary word, divides by
+100, then multiplies by the per-side word and divides by 100 again. Both
+products wrap as unsigned words. Coefficients of 100 or greater pass the
+sample unchanged. Attenuation divides a signed PCM16 sample toward zero.
+The two devices invoke `0x40b700` or `0x40d0b0`. Inactive voices return
+−1. The active cursor subtracts two output buffers from elapsed playback
+time, floored at zero. SOUND_BUFFER selects a 92 ms or 185 ms lead for
+both output rates. The fullscreen movie call `0x20c0` suspends script
+execution until completion, left click or Enter. CMV3 frame data begins
+with JBP1. The 2004 decoder `0x43fca0` consumes 16×16 blocks in raster
+order and takes DC and AC streams immediately after the quantizers.
+The original file's trailing indexed Ogg stream supplies the soundtrack.
+
+The screen fade keeps colour `+18536` and level `+18540` (0–256). `0x410200`
+mixes each default sprite with `image · L/256 + colour · (256 − L)/256`, which
+CrySirror composes as one colour layer above the sprites. `0x2009` sets
+both, and `0x200a` changes the colour alone. `0x200c` requests a rectangular
+redraw at the next frame boundary, covered by the host's full-canvas redraw.
+`0x2190` returns the remaining fade duration, or −1 when idle.
+`0x218f` starts a 0→256 (reveal) or 256→0 ramp that `0x422a60` advances
+by frame time. `0x2192` retries each frame while the ramp exists and
+`0x2191` finishes it. `0x2008` makes `0x410e10` fill each band with the fade
+colour first. Any error bit in `+22500` shows a message box and destroys the
+window, so CrySirror reports these conditions as errors.
 
 The `0x423290` loader uses a 48-byte PSS0 header and the label, code,
 mutable-data and text segments in the same order as PS2A. PSS0 payloads go

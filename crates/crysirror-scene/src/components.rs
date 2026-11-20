@@ -156,7 +156,50 @@ pub struct AnimationLayer {
     pub fade: f32,
     #[serde(default = "yes")]
     pub looping: bool,
+    /// Client-scoped asset whose clip `clip` drives this entity, bound to its
+    /// nodes by node name (an animation library such as a converted `.anm`).
+    /// `None` uses the entity's own scene.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// Priority layer: per node, higher layers take their weight first and
+    /// lower layers share the remainder (Unity legacy animation layers).
+    /// Clips contribute only to nodes they animate.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub blend_layer: u32,
 }
+fn is_zero(v: &u32) -> bool {
+    *v == 0
+}
+
+/// Local transform components that replace the animated value of one node.
+/// Absent components keep the animated (or followed) value.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NodePose {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub translation: Option<[f32; 3]>,
+    /// Unit quaternion `[x, y, z, w]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotation: Option<[f32; 4]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale: Option<[f32; 3]>,
+}
+impl NodePose {
+    pub fn validate(&self) -> Result<()> {
+        let finite = |v: &[f32]| v.iter().all(|x| x.is_finite() && x.abs() <= 1_000_000.);
+        ensure!(
+            self.translation.is_none_or(|t| finite(&t))
+                && self.scale.is_none_or(|s| finite(&s))
+                && self.rotation.is_none_or(|q| {
+                    finite(&q) && (q.iter().map(|x| x * x).sum::<f32>().sqrt() - 1.).abs() <= 1e-3
+                }),
+            "invalid node pose"
+        );
+        Ok(())
+    }
+}
+/// Bound on procedural node poses per entity.
+pub const MAX_NODE_POSES: usize = 1024;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -174,11 +217,29 @@ pub struct AnimationState {
     /// mesh of the model that has a target of that name.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub morphs: std::collections::BTreeMap<String, f32>,
+    /// Entity of the same client whose evaluated local translation and
+    /// rotation are copied onto this entity's same-named nodes after its own
+    /// clips (parts sharing a character skeleton). Scale stays the follower's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub follow: Option<u32>,
+    /// Leader node this entity's root nodes ride on, keeping their rest
+    /// offset: roots take `leader(node) · leader_rest(node)⁻¹` (a part
+    /// parented to a bone of the followed skeleton). Needs `follow`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attach: Option<String>,
+    /// Procedural local poses by node name, applied last (look-at, bone
+    /// sliders, physics results supplied by the owner).
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub nodes: std::collections::BTreeMap<String, NodePose>,
 }
 /// Bound on named morph weights per entity.
 pub const MAX_MORPH_WEIGHTS: usize = 1024;
 impl AnimationState {
     pub fn validate(&self) -> Result<()> {
+        ensure!(
+            self.attach.as_ref().is_none_or(|n| !n.is_empty() && n.len() <= 256 && self.follow.is_some()),
+            "animation attach needs a follow leader and a node name of at most 256 bytes"
+        );
         ensure!(
             self.layers.len() <= MAX_ANIMATION_LAYERS,
             "too many animation layers"
@@ -197,6 +258,26 @@ impl AnimationState {
                     && l.time.abs() <= 1_000_000.,
                 "invalid animation layer"
             );
+        }
+        for l in &self.layers {
+            if let Some(source) = &l.source {
+                ensure!(
+                    !source.is_empty()
+                        && source.len() <= 1024
+                        && !source.starts_with('/')
+                        && !source.contains('\\')
+                        && !source.split('/').any(|part| part == ".."),
+                    "invalid animation source asset"
+                );
+            }
+        }
+        ensure!(
+            self.nodes.len() <= MAX_NODE_POSES,
+            "too many node poses"
+        );
+        for (name, pose) in &self.nodes {
+            ensure!(!name.is_empty() && name.len() <= 256, "invalid node pose name");
+            pose.validate()?;
         }
         ensure!(
             self.morphs.len() <= MAX_MORPH_WEIGHTS,
@@ -248,6 +329,7 @@ impl AnimationState {
                 clip: clip.into(),
                 time: 0.,
                 speed,
+                source: None,
                 weight: if fade_seconds > 0. && !self.layers.is_empty() {
                     0.
                 } else {
@@ -256,6 +338,7 @@ impl AnimationState {
                 target_weight: 1.,
                 fade: rate,
                 looping,
+                blend_layer: 0,
             });
         }
     }

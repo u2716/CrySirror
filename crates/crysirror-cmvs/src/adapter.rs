@@ -3,6 +3,7 @@
 
 mod buttons;
 mod composite;
+mod cvns;
 mod dialog;
 mod display;
 mod effect;
@@ -27,7 +28,7 @@ mod visual_opacity;
 mod visual_track;
 
 use crate::vm::{
-    cpz6_from_pe, edit_save_slot, latest_slot_range, probe_save_slot, read_slot_metadata,
+    cpz6_from_pe, latest_slot_range, probe_save_slot,
     scan_latest_slot, CmvsVm, Cpz6Resources, EffectSound, MainVmCheckpoint, PreparedSaveMenu,
     PreparedSystemSave, PreparedTransfer, SceneObject, ScriptSources, SlotHeaderEdit,
     SlotHeaderScratch, SlotMetadata, SlotPreview, VmProfile, VmYield,
@@ -82,9 +83,16 @@ struct Session {
     thumbnail: thumbnail::Thumbnail,
     boot_clock: u64,
     civil_clock: Option<Box<dyn CivilTimeQuery>>,
+    cvns_checkpoint_clock: Option<(Box<dyn CivilTimeQuery>, Option<PreparedTransfer>)>,
+    cvns_slot: Option<(Box<[u8;600]>, Vec<u8>)>,
+    cvns_load: Option<Box<cvns::restore::Load>>,
+    cvns_loaded_before: bool,
+    cvns_backup_capture: bool,
     active_draw: bool,
     previous_frame: Option<u64>,
     frame_delta: u32,
+    /// CVNS sprite and bitmap scene; unused by the CMVS profiles.
+    cvns: cvns::Scene,
     frame_pending: bool,
     syscall_fault: Option<SyscallFault>,
     main_checkpoint: Option<MainCheckpoint>,
@@ -456,7 +464,8 @@ impl Session {
 
     /// The original stops mixing on deactivation unless ACTIVE_DRAW or `0x22ed` is set.
     fn apply_inactive_mute(&mut self, host: &mut dyn HostServices, client: ClientId, focused: bool) -> Result<()> {
-        let muted = !focused && !self.active_draw && !self.display.inactive_sound();
+        let background_audio = self.vm.profile() != VmProfile::Cvns20040515X86 && self.display.inactive_sound();
+        let muted = !focused && !self.active_draw && !background_audio;
         if self.muted == Some(muted) {
             return Ok(());
         }
@@ -468,8 +477,9 @@ impl Session {
                 fade_ms: 0.,
             },
         )?;
-        let gain = if muted { 0. } else { self.movie_volume.gain };
-        let media: Vec<_> = self.movies.gain_targets().map(|id| (id, gain)).collect();
+        let configured = if self.vm.profile() == VmProfile::Cvns20040515X86 { self.cvns.movie_gain() } else { self.movie_volume.gain };
+        let gain = if muted { 0. } else { configured };
+        let media: Vec<_> = self.movies.gain_targets().chain(self.cvns.movies.gain_targets()).map(|id| (id, gain)).collect();
         if !media.is_empty() {
             host.set_playback_gains(client, &[], &media)?;
         }
@@ -484,7 +494,7 @@ impl Session {
         self.ducking.advance(now, voices);
         let factor = self.ducking.factor();
         if factor != before && self.music.settings.enabled {
-            let gain = self.music.settings.gain() * factor;
+            let gain = self.music.gain() * factor;
             let audio = sound::MUSIC_CHANNELS.map(|channel| (channel, gain));
             host.set_playback_gains(client, &audio, &[])?;
         }
@@ -513,6 +523,9 @@ impl Session {
         waiting: HostYield,
     ) -> Result<HostYield> {
         self.frame_pending = true;
+        if self.vm.profile() == VmProfile::Cvns20040515X86 {
+            self.cvns.frame(host, client, canvas)?;
+        }
         if let Some(fault) = &self.syscall_fault {
             bail!(
                 "CMVS native error flags {:#x} after syscall {:#06x} at {}+{:#x}",
@@ -573,8 +586,9 @@ impl Session {
                     resource.client() == client,
                     "CMVS foreign audio replacement receipt"
                 );
-                host.replace_audio_channels(client, operation.scope(), Some(&resource))?;
-                self.vm.complete_owner_call(2, None)?;
+                host.replace_audio_channels(client, &operation.scope(), Some(&resource))?;
+                let words = if self.vm.profile() == VmProfile::Cvns20040515X86 { 4 } else { 2 };
+                self.vm.complete_owner_call(words, None)?;
                 match operation {
                     AudioReopen::Music(request) => self.music.commit_reopen(request),
                     AudioReopen::Effects(decoded) => self.effects.set_availability(true, decoded),
@@ -582,6 +596,31 @@ impl Session {
             }
         }
         Ok(true)
+    }
+
+    fn cvns_volume(&mut self, host: &mut dyn HostServices, client: ClientId, key: u32) -> Result<()> {
+        let mut channels = Vec::new();
+        let mut media = Vec::new();
+        if matches!(key, 10 | 11) {
+            let gain = self.cvns.music_gain();
+            self.music.cvns_gain = Some(gain);
+            channels.extend(sound::MUSIC_CHANNELS.map(|channel| (channel, gain)));
+        }
+        if matches!(key, 10 | 12) {
+            channels.extend(self.effects.cvns_live_gains(self.cvns.effect_levels(), key == 12));
+        }
+        if matches!(key, 10 | 13) {
+            let (_, master, voice) = self.cvns.voice_settings();
+            let gain = sound::cvns_gain(master, voice, 0);
+            channels.extend((5..9).map(|channel| (channel, gain)));
+        }
+        if matches!(key, 10 | 14) {
+            self.movie_volume.gain = self.cvns.movie_gain();
+            let gain = if self.muted == Some(true) { 0. } else { self.movie_volume.gain };
+            media.extend(self.movies.gain_targets().chain(self.cvns.movies.gain_targets()).map(|id| (id, gain)));
+        }
+        host.set_playback_gains(client, &channels, &media)?;
+        Ok(())
     }
 
     fn volume_command(
@@ -625,6 +664,35 @@ impl Session {
         self.voices.settings = next.voices;
         self.movie_volume = next.movie;
         Ok(())
+    }
+
+    fn poll_cvns_checkpoint(
+        &mut self,
+        host: &mut dyn HostServices,
+        client: ClientId,
+    ) -> Result<bool> {
+        let Some((query, _)) = self.cvns_checkpoint_clock.as_mut() else {
+            return Ok(false);
+        };
+        let sample = match query.poll()? {
+            CivilTimeState::Pending => return Ok(true),
+            CivilTimeState::Failed(why) => anyhow::bail!("CVNS checkpoint clock: {why}"),
+            CivilTimeState::Ready(sample) => sample,
+        };
+        ensure!(sample.client == client, "CVNS foreign checkpoint clock");
+        let (_, main) = self.cvns_checkpoint_clock.take().unwrap();
+        let (scene, audio, records) = self.capture_scene(host, client)?;
+        let mut native = if let Some(main) = main {
+            self.vm.complete_main_script(main, records)?
+        } else {
+            self.vm.complete_scene_checkpoint(records)?
+        };
+        self.cvns_slot = Some((
+            self.vm.cvns_header(sample),
+            std::mem::take(&mut native.cvns_records),
+        ));
+        self.retain_checkpoint(native, scene, audio);
+        Ok(false)
     }
 
     fn poll_civil_clock(&mut self, client: ClientId) -> Result<bool> {
@@ -672,6 +740,7 @@ impl Session {
         let LoadedSlot { snapshot, scripts, images, movies, music, effects, seconds, mattes } = loaded;
         self.stop_outputs(host, client)?;
         self.effects.reset_records();
+
         for mask in &mut self.masks {
             mask::Active::remove(mask, &mut self.objects, host, client, false)?;
         }
@@ -729,6 +798,7 @@ impl Session {
         self.quake = None;
         self.screen_timer = None;
         self.main_checkpoint = None;
+        self.cvns_slot = None;
         self.thumbnail.clear();
         self.previous_frame = None;
         self.frame_pending = true;
@@ -748,7 +818,7 @@ impl Session {
         for channel in 5..9 {
             self.voices.stop(host, client, channel, 0)?;
         }
-        for channel in 0..6 {
+        for channel in 0..self.effects.count() {
             self.effects.stop(host, client, channel)?;
         }
         self.device_sound.stop(host, client)?;
@@ -765,6 +835,16 @@ impl Session {
         self.vm.validate_reset(&prepared)?;
         self.stop_outputs(host, client)?;
         self.effects.reset_records();
+        if self.vm.profile() == VmProfile::Cvns20040515X86 {
+            self.cvns.reset_scene(host, client)?;
+            self.thumbnail.clear();
+            self.main_checkpoint = None;
+        self.cvns_slot = None;
+            self.previous_frame = None;
+            self.frame_pending = true;
+            self.vm.complete_reset(prepared)?;
+            return Ok(());
+        }
         for mask in &mut self.masks {
             mask::Active::remove(mask, &mut self.objects, host, client, false)?;
         }
@@ -798,6 +878,7 @@ impl Session {
         self.light = Default::default();
         self.quake = None;
         self.main_checkpoint = None;
+        self.cvns_slot = None;
         self.save_preview_error = None;
         self.thumbnail.clear();
         self.previous_frame = None;
@@ -810,7 +891,7 @@ impl Session {
         &self,
         host: &mut dyn HostServices,
         client: ClientId,
-    ) -> Result<(Arc<dyn SceneCheckpoint>, sound::AudioCheckpoint)> {
+    ) -> Result<(Arc<dyn SceneCheckpoint>, sound::AudioCheckpoint, Vec<u8>)> {
         ensure!(
             !self.movies.live(),
             "CMVS scene checkpoint has a live movie"
@@ -832,7 +913,13 @@ impl Session {
             scope.layer_roots.push(fade::LAYER);
         }
         let scene = host.capture_scene_checkpoint(client, &scope)?;
-        Ok((scene, audio))
+        let mut records = Vec::new();
+        if self.vm.profile() == VmProfile::Cvns20040515X86 {
+            self.cvns.checkpoint_records(&mut records)?;
+            self.effects.csp_record(&mut records)?;
+            self.music.csp_record(&mut records)?;
+        }
+        Ok((scene, audio, records))
     }
 
     fn retain_checkpoint(
@@ -938,6 +1025,17 @@ struct SceneImages {
 
 enum Completion {
     Boot(Box<Session>),
+    /// CVNS `0x21c0` found no `save000.dat` and leaves the banks unchanged.
+    CvnsSystemData(Option<crate::vm::css0::SystemData>),
+    CvnsSaveMenu(crate::vm::SaveMenu),
+    CvnsLoaded(Box<cvns::restore::Load>),
+    CvnsSlotMissing,
+    CvnsWritten(Option<crate::vm::SaveMenu>, bool),
+    /// CVNS `0x2051`/`0x2130` bitmap slot, operand words and decoded image.
+    CvnsBitmap(cvns::bitmap::Prepared),
+    CvnsMaskSheet(Option<cvns::mask_fonts::Sheet>),
+    CvnsRegistry(cvns::registry::Reply),
+    CvnsRule(Option<cvns::rule::Active>, Option<cvns::bitmap::Prepared>),
     ChildImage(usize, usize, String, visual::DecodedImage),
     SystemSaved,
     /// `cmvs.cfg` written under the save root after a settings change.
@@ -970,6 +1068,7 @@ enum Completion {
     LatestSaveSlot(u32, SlotHeaderScratch),
     ProbeSaveSlot(u32, SlotHeaderScratch),
     EditSaveSlot { words: u16, edited: bool },
+    CvnsSlotMetadata(Option<SlotMetadata>, Option<cvns::bitmap::Prepared>),
     SaveSlotMetadata(Option<SlotMetadata>, Option<SavePreviewReplacement>),
     SystemSave(PreparedSystemSave),
     Script(PreparedTransfer),
@@ -989,6 +1088,7 @@ enum Completion {
     Voice(sound::VoiceRequest, Option<Vec<u8>>),
     DeviceSound(sound::DeviceSoundRequest, Option<Vec<u8>>),
     MovieSource(Option<Arc<dyn AssetReader>>),
+    CvnsSceneMovie(usize, Option<cvns::movie::Clip>),
     ObjectImage(visual::DecodedImage),
     /// A mask rule image; None when it is missing, which the original reports as 0.
     MaskImage(mask::Request, Option<visual::DecodedImage>),
@@ -1003,14 +1103,14 @@ struct SavePreviewReplacement {
 
 enum AudioReopen {
     Music(sound::MusicRequest),
-    Effects([bool; 6]),
+    Effects(Vec<bool>),
 }
 
 impl AudioReopen {
-    fn scope(&self) -> &[u32] {
+    fn scope(&self) -> Vec<u32> {
         match self {
-            Self::Music(_) => &sound::MUSIC_CHANNELS,
-            Self::Effects(_) => &sound::EFFECT_CHANNELS,
+            Self::Music(_) => sound::MUSIC_CHANNELS.to_vec(),
+            Self::Effects(decoded) => (0..decoded.len()).map(sound::device_channel).collect(),
         }
     }
 }
@@ -1041,7 +1141,7 @@ impl Adapter {
         let canvas = self.canvas;
         let effects_settings = self.effects_settings;
         let music_settings = self.music_settings;
-        let voice_settings = self.voice_settings;
+        let mut voice_settings = self.voice_settings;
         let movie_volume = self.movie_volume;
         let pool = TaskPool::new("cmvs-storage", 1, 2)?;
         self.job = Some(pool.spawn(move |cancel| {
@@ -1064,14 +1164,11 @@ impl Adapter {
             let config_name = if profile == VmProfile::Cvns20040515X86 { "cvns.cfg" } else { "cmvs.cfg" };
             let config = VfsPath::new(Mount::Asset, config_name)?;
             // Settings written back by this player take precedence over the installed file.
-            let saved_config = if profile == VmProfile::Cvns20040515X86 {
-                None
-            } else {
-                match storage.read(&display::Display::config_path()?) {
-                    Ok(bytes) => Some(bytes),
-                    Err(Error::NotFound) => None,
-                    Err(error) => return Err(error.into()),
-                }
+            let overlay = VfsPath::new(Mount::Save, config_name)?;
+            let saved_config = match storage.read(&overlay) {
+                Ok(bytes) => Some(bytes),
+                Err(Error::NotFound) => None,
+                Err(error) => return Err(error.into()),
             };
             let installed_config = if let Some(path) =
                 crysirror_resource::capability_lookup::resolve_ascii_case_insensitive(
@@ -1094,15 +1191,36 @@ impl Adapter {
                 );
                 messages.configure(&display_config);
             }
-            let display = display::Display::new(profile, canvas, &display_config);
+            let mut display = display::Display::new(profile, canvas, &display_config);
             messages.set_alpha_revision(display.alpha_revision());
             cancel.check()?;
             let executable = storage.open_asset(&executable)?;
             let bytes = read_all(executable.as_ref(), 16 * 1024 * 1024)?;
             let pe = PeData::parse(&bytes)?;
-            let menu = menu::NativeMenu::prepare(profile, &pe, canvas)?;
+            let mut menu = menu::NativeMenu::prepare(profile, &pe, canvas)?;
             let cpz6 = Arc::new(cpz6_from_pe(profile, DecodeContext::new(client), &pe)?);
             cancel.check()?;
+            let mut cvns = cvns::Scene::default();
+            let mut music = sound::Music::new(music_settings);
+            let mut effects_settings = effects_settings;
+            let cvns_levels = (profile == VmProfile::Cvns20040515X86).then(|| {
+                cvns.configure(&display_config);
+                for key in 1..=31 {
+                    let changes = if (7..=9).contains(&key) {
+                        vec![(33010 + key - 7, true, cvns.setting(key) != Some(0))]
+                    } else { cvns.menu_setting(key) };
+                    menu.update_cvns_setting(&changes);
+                }
+                let fullscreen = display.cvns_mode() != 0;
+                menu.update_cvns_setting(&[(32743, fullscreen, !fullscreen), (32744, !fullscreen, fullscreen)]);
+
+                display.set_cvns_cursor_delay(cvns.setting(29).unwrap_or(1));
+                effects_settings.enabled = cvns.setting(8) != Some(0);
+                music.settings.enabled = cvns.setting(7) != Some(0);
+                voice_settings.enabled = cvns.setting(9) != Some(0);
+                music.cvns_gain = Some(cvns.music_gain());
+                cvns.effect_levels()
+            });
             Ok(Completion::Boot(Box::new(Session {
                 storage,
                 vm,
@@ -1114,15 +1232,21 @@ impl Adapter {
                 thumbnail: thumbnail::Thumbnail::new(client),
                 boot_clock: 0,
                 civil_clock: None,
+                cvns_checkpoint_clock: None,
+                cvns_slot: None,
+                cvns_load: None,
+                cvns_loaded_before: false,
+                cvns_backup_capture: false,
                 active_draw,
                 previous_frame: None,
                 frame_delta: 0,
+                cvns,
                 frame_pending: true,
                 syscall_fault: None,
                 main_checkpoint: None,
                 clear_layer: false,
-                effects: sound::Effects::new(effects_settings),
-                music: sound::Music::new(music_settings),
+                effects: sound::Effects::new(effects_settings, cvns_levels),
+                music,
                 voices: sound::Voices::new(voice_settings),
                 device_sound: sound::DeviceSound::default(),
                 samples: sample::Samples::default(),
@@ -1166,6 +1290,10 @@ impl Adapter {
         match completion {
             Completion::Boot(mut session) => {
                 session.boot_clock = host.now_ms();
+                session.cvns.seed(session.boot_clock as u32);
+                if self.profile == VmProfile::Cvns20040515X86 {
+                    session.display.start_cvns(host, self.client)?;
+                }
                 // The engine seeds rand() from the clock at startup (srand in 0x14002c7e0).
                 session.rand = effect::Rand::seeded(session.boot_clock as u32);
                 session.messages.check_initial_face(host, self.client)?;
@@ -1174,6 +1302,47 @@ impl Adapter {
             completion => {
                 let session = self.session.as_mut().context("CMVS session missing")?;
                 match completion {
+                    Completion::CvnsSlotMissing => {
+                        let wake = HostYield::WaitUntil(host.now_ms());
+                        session.finish_native_frame(host, self.client, self.canvas, wake)?;
+                    }
+                    Completion::CvnsWritten(menu, backup) => {
+                        if backup {
+                            session.menu.update_cvns_setting(&[(161, true, false)]);
+                        }
+                        if let Some(menu) = menu {
+                            session.menu.update_cvns_slots(&menu)?;
+                            let (visible, enabled) = session.vm.menu_options();
+                            if visible {
+                                session
+                                    .menu
+                                    .publish(host, self.client, &menu, enabled, &[])?;
+                            }
+                            session.vm.complete_cvns_menu(menu)?;
+                        } else {
+                            session.vm.complete_owner_call(1, None)?;
+                        }
+                    }
+                    Completion::CvnsLoaded(mut load) => {
+                        let gain = if session.muted == Some(true) {
+                            0.
+                        } else {
+                            session.cvns.movie_gain()
+                        };
+                        if let Err(error) = load.stage(&session.cvns, host, self.client, gain) {
+                            load.discard(host, self.client)?;
+                            return Err(error);
+                        }
+                        session.cvns_load = Some(load);
+                    }
+                    Completion::CvnsSaveMenu(slots) => {
+                        session.menu.update_cvns_slots(&slots)?;
+                        let (visible, enabled) = session.vm.menu_options();
+                        if visible {
+                            session.menu.publish(host, self.client, &slots, enabled, &[])?;
+                        }
+                        session.vm.complete_cvns_menu(slots)?;
+                    }
                     Completion::SaveMenu(prepared) => {
                         let (visible, enabled) = session.vm.menu_options();
                         if visible {
@@ -1201,6 +1370,12 @@ impl Adapter {
                         session
                             .vm
                             .complete_owner_call(words, Some(u32::from(edited)))?;
+                    }
+                    Completion::CvnsSlotMetadata(metadata, bitmap) => {
+                        session.vm.complete_slot_metadata(metadata.as_ref(), || {
+                            if let Some(bitmap) = bitmap { session.cvns.install_bitmap(host, self.client, bitmap)?; }
+                            Ok(())
+                        })?;
                     }
                     Completion::SaveSlotMetadata(metadata, replacement) => {
                         let mut failure = None;
@@ -1230,15 +1405,29 @@ impl Adapter {
                         })?;
                         session.save_preview_error = failure;
                     }
+                    Completion::CvnsSystemData(data) => session.vm.complete_cvns_system_load(data)?,
+                    Completion::CvnsRule(mask, captured) => {
+                        session.cvns.commit_rule(host, self.client, &mut session.vm, mask, captured)?
+                    }
+                    Completion::CvnsRegistry(reply) => reply.complete(&mut session.vm)?,
+                    Completion::CvnsMaskSheet(sheet) => {
+                        if let Some(sheet) = sheet { session.cvns.masks.sheet(sheet)?; }
+                        session.vm.complete_owner_call(2, None)?;
+                    }
+                    Completion::CvnsBitmap(bitmap) => {
+                        session.cvns.commit_bitmap(host, self.client, &mut session.vm, bitmap)?
+                    }
                     Completion::SystemSave(prepared) => {
                         session.vm.complete_system_save(prepared)?
                     }
                     Completion::Script(prepared) => {
                         if prepared.is_reset() {
                             session.reset(host, self.client, prepared)?;
+                        } else if prepared.is_main() && session.vm.profile()==VmProfile::Cvns20040515X86 {
+                            session.cvns_checkpoint_clock=Some((host.begin_civil_time(self.client)?,Some(prepared)));
                         } else if prepared.is_main() {
-                            let (scene, audio) = session.capture_scene(host, self.client)?;
-                            let native = session.vm.complete_main_script(prepared)?;
+                            let (scene, audio, records) = session.capture_scene(host, self.client)?;
+                            let native = session.vm.complete_main_script(prepared, records)?;
                             session.retain_checkpoint(native, scene, audio);
                         } else {
                             session.vm.complete_common_script(prepared)?;
@@ -1317,13 +1506,22 @@ impl Adapter {
                             session.audio_meter,
                         )?;
                     }
+                    Completion::CvnsSceneMovie(index, clip) => {
+                        if let Some(clip) = clip {
+                            let gain = if session.muted == Some(true) { 0. } else { session.cvns.movie_gain() };
+                            session.cvns.movies.load(host, self.client, index, clip, gain)?;
+                        } else {
+                            session.vm.complete_owner_call(2, Some(0))?;
+                        }
+                    }
                     Completion::MovieSource(source) => {
                         session.movies.begin(
                             host,
                             self.client,
                             &mut session.vm,
                             source,
-                            session.movie_volume.gain,
+                            if session.muted == Some(true) { 0. } else if self.profile == VmProfile::Cvns20040515X86 { session.cvns.movie_gain() } else { session.movie_volume.gain },
+                            (self.profile == VmProfile::Cvns20040515X86).then(|| session.cvns.setting(31).unwrap_or(0)),
                         )?;
                     }
                     Completion::SceneMovie(index, object, name, source, size, alpha, player, words) => {
@@ -1463,6 +1661,7 @@ impl Adapter {
             let running = session.active_draw || focused;
             if running {
                 session.vm.admit_input(input);
+                session.cvns.admit_input(input);
             } else {
                 session.previous_frame = None;
                 session.frame_delta = 0;
@@ -1483,7 +1682,26 @@ impl Adapter {
             self.begin_boot(host)?;
             return Ok(waiting);
         };
-        if session.poll_civil_clock(self.client)? {
+        if session.poll_cvns_checkpoint(host,self.client)? || session.poll_civil_clock(self.client)? {
+            return Ok(waiting);
+        }
+        if let Some(mut load) = session.cvns_load.take() {
+            let gain = if session.muted == Some(true) {
+                0.
+            } else {
+                session.cvns.movie_gain()
+            };
+            match load.ready(host, self.client, gain) {
+                Ok(true) => {
+                    load.commit(session, self.canvas, host, self.client)?;
+                    return session.finish_native_frame(host, self.client, self.canvas, waiting);
+                }
+                Ok(false) => session.cvns_load = Some(load),
+                Err(error) => {
+                    load.discard(host, self.client)?;
+                    return Err(error);
+                }
+            }
             return Ok(waiting);
         }
         if session.poll_audio_switch(host, self.client)? {
@@ -1508,6 +1726,9 @@ impl Adapter {
                 }
                 Ok(Completion::DoorRules(index, images))
             })?);
+            return Ok(waiting);
+        }
+        if session.cvns.movies.poll(host, self.client, &mut session.vm)? {
             return Ok(waiting);
         }
         if session.thumbnail.poll(&mut session.vm)? {
@@ -1540,10 +1761,20 @@ impl Adapter {
         {
             return Ok(waiting);
         }
+        if self.profile == VmProfile::Cvns20040515X86 && session.movies.live() {
+            // 0x402770 pumps the movie and input, and runs no script until exit.
+            if session.cvns.consume_movie_skip() {
+                session.movies.stop(host, self.client)?;
+            } else if session.movies.frame(host, self.client)? != u32::MAX {
+                return Ok(waiting);
+            }
+            session.previous_frame = None;
+        }
         if !running {
             return Ok(waiting);
         }
         if session.frame_pending {
+            if !session.cvns.finish_screen_copy(host, self.client)? { return Ok(waiting); }
             let now = host.now_ms();
             if let Some(due) = session.display.frame_due(now) {
                 return Ok(HostYield::WaitUntil(due));
@@ -1606,6 +1837,9 @@ impl Adapter {
                 self.canvas,
             )?;
             session.vm.begin_frame(delta as u32)?;
+            if self.profile == VmProfile::Cvns20040515X86 {
+                session.cvns.begin_frame(now as u32, session.display.frame_period());
+            }
             session.previous_frame = Some(now);
             session.frame_pending = false;
         }
@@ -1620,14 +1854,476 @@ impl Adapter {
                 VmYield::SystemCall { pc, opcode } => (pc, opcode),
             };
             session.vm.set_owner_alias(None);
-            if self.profile == VmProfile::Cvns20040515X86 {
-                match step.1 {
-                    0x2002 => session.display.cvns_set_frame_period(&mut session.vm)?,
-                    0x2003 => session.vm.complete_owner_call(0, Some(session.display.frame_period()))?,
-                    _ => unreachable!("CVNS VM only yields reviewed owner commands"),
+            // CVNS selectors without a CMVS counterpart pend as 0x2800 + selector.
+            let step = match crate::vm::cvns_selector(step.1) {
+                Some(0x21ed) => {
+                    let [key, name, raw, _] = session.vm.owner_arguments(step.1)?;
+                    let face = session.vm.text_reference(name).context("CVNS setting string")?;
+                    let before = session.cvns.setting(key);
+                    session.cvns.write_setting(key, raw, face);
+                    let changed = before != session.cvns.setting(key);
+                    if (1..=31).contains(&key) && key != 6 && (changed || key == 15) {
+                        session.cvns.settings_dirty = true;
+                    }
+                    if key == 2 {
+                        session.cvns.reset_clock(session.cvns.setting(2) != Some(0), host.now_ms() as u32);
+                    }
+                    if key == 30 { session.display.cvns_auto_move(raw != 0); }
+                    if key == 29 {
+                        session.display.set_cvns_cursor_delay(session.cvns.setting(29).unwrap_or(1));
+                    }
+                    if key == 5 {
+                        session.active_draw = raw != 0;
+                        let focused = host.window_focused(self.client)? != Some(false);
+                        session.apply_inactive_mute(host, self.client, focused)?;
+                    }
+                    if (10..=14).contains(&key) {
+                        session.cvns_volume(host, self.client, key)?;
+                    }
+                    if !matches!(key, 6..=9) || changed {
+                        let changes = session.cvns.menu_setting(key);
+                        if !changes.is_empty() {
+                            session.menu.update_cvns_setting(&changes);
+                            if session.menu.published() {
+                                let slots = session.vm.save_menu().context("CVNS slot menu missing")?;
+                                session.menu.publish(host, self.client, slots, session.vm.menu_options().1, &[])?;
+                            }
+                        }
+                    }
+                    if matches!(key, 7..=9) && changed {
+                        step
+                    } else {
+                        session.vm.complete_owner_call(4, None)?;
+                        continue;
+                    }
                 }
-                continue;
-            }
+                Some(0x2007) => {
+                    session.vm.complete_owner_call(0, Some(session.display.cvns_last_frames()))?;
+                    continue;
+                }
+                Some(0x2002) => {
+                    session.display.cvns_set_frame_period(&mut session.vm)?;
+                    continue;
+                }
+                Some(0x217c) => {
+                    let [mode] = session.vm.owner_arguments(step.1)?;
+                    if mode as i32 > 3 {
+                        session.latch_syscall_fault(step.0, 0x217c, 8);
+                    } else {
+                        let fullscreen = mode != 0;
+                        session.display.cvns_set_mode(host, self.client, fullscreen)?;
+                        session.menu.update_cvns_setting(&[(32743, fullscreen, !fullscreen), (32744, !fullscreen, fullscreen)]);
+                        if session.menu.published() {
+                            let slots = session.vm.save_menu().context("CVNS slot menu missing")?;
+                            session.menu.publish(host, self.client, slots, session.vm.menu_options().1, &[])?;
+                        }
+                        session.cvns.settings_dirty = true;
+                    }
+                    session.vm.finish_owner_call(1, None, true)?;
+                    return session.finish_native_frame(host, self.client, self.canvas, waiting);
+                }
+                Some(0x2182) => {
+                    let state = if host.window_maximized(self.client)? == Some(true) { 1 }
+                        else if host.window_minimized(self.client)? == Some(true) { 2 } else { 0 };
+                    session.vm.complete_owner_call(0, Some(state))?;
+                    continue;
+                }
+                Some(0x2180) => {
+                    let [x, y] = session.display.cvns_position(host, self.client)?;
+                    session.vm.complete_owner_results(0, &[(1, x as u32), (2, y as u32)])?;
+                    continue;
+                }
+                Some(0x2181) => {
+                    let [x, y] = session.vm.owner_arguments(step.1)?;
+                    session.display.cvns_move(host, self.client, [x as i32, y as i32])?;
+                    session.cvns.settings_dirty = true;
+                    session.vm.finish_owner_call(2, None, true)?;
+                    return session.finish_native_frame(host, self.client, self.canvas, waiting);
+                }
+                Some(0x2003) => {
+                    session.vm.complete_owner_call(0, Some(session.display.frame_period()))?;
+                    continue;
+                }
+                Some(0x21a3) => {
+                    let [slot] = session.vm.owner_arguments(step.1)?;
+                    if slot as i32 <= 0 {
+                        session.vm.complete_owner_call(1, None)?;
+                        continue;
+                    }
+                    let backup_enabled = slot < 950 && session.vm.menu_options().1;
+                    if backup_enabled
+                        && session.cvns_loaded_before
+                        && !session.cvns_backup_capture
+                        && session.vm.settings().thumbnail_size.iter().all(|&n| n != 0)
+                    {
+                        session.cvns_backup_capture = true;
+                        session
+                            .thumbnail
+                            .begin_backup(host, pool, &mut session.vm)?;
+                        return Ok(waiting);
+                    }
+                    session.cvns_backup_capture = false;
+                    let backup = if backup_enabled {
+                        cvns::slot::Write::capture(session, 998)?
+                    } else {
+                        None
+                    };
+                    if slot < 950 {
+                        session
+                            .menu
+                            .update_cvns_setting(&[(160, backup_enabled, false)]);
+                    }
+                    let seed = session.vm.cvns_restore_seed();
+                    let resources = session.vm.resources();
+                    let paths = |op| resources.sources(op).cloned().collect::<Vec<_>>();
+                    let (images, sounds, bgm) = (paths(0x2011), paths(0x2012), paths(0x2013));
+                    let root = resources.movie_root().cloned();
+                    let base = resources.save_file_base().map(|(p, dir)| (p.clone(), dir));
+                    let storage = session.storage.clone();
+                    let cpz = session.cpz6.clone();
+                    let client = self.client;
+                    let random = session.cvns.restore_random();
+                    let generation = session.cvns.masks.generation();
+                    let effects = sound::Effects::new(
+                        session.effects.settings,
+                        Some(session.cvns.effect_levels()),
+                    );
+                    let mut music = sound::Music::new(session.music.settings);
+                    music.cvns_gain = Some(session.cvns.music_gain());
+                    self.job = Some(pool.spawn(move |cancel| {
+                        use crate::vm::save_slot::{SlotFormat, unpack_native};
+                        let base = base.as_ref().map(|(p, dir)| (p, *dir));
+                        if let Some(backup) = backup {
+                            backup.write(storage.as_ref(), || Ok(cancel.check()?))?;
+                        }
+                        let Some((_, reader)) =
+                            crate::vm::open_save_slot(storage.as_ref(), base, slot)?
+                        else {
+                            return Ok(Completion::CvnsSlotMissing);
+                        };
+                        let mut saved = unpack_native(SlotFormat::Csp1, reader.as_ref(), || {
+                            Ok(cancel.check()?)
+                        })?;
+                        let thumbnail = saved.thumbnail.take();
+                        let vm = seed.prepare(saved)?;
+                        let registry = cpz6_registry()?;
+                        let sources =
+                            |list| ScriptSources::prepare(storage.clone(), &registry, &cpz, list);
+                        let load = cvns::restore::Load::prepare(
+                            vm,
+                            thumbnail,
+                            &sources(images)?,
+                            &sources(sounds)?,
+                            &sources(bgm)?,
+                            storage.as_ref(),
+                            root.as_ref(),
+                            client,
+                            &cancel,
+                            random,
+                            generation,
+                            effects,
+                            music,
+                        )?;
+                        Ok(Completion::CvnsLoaded(Box::new(load)))
+                    })?);
+                    return Ok(waiting);
+                }
+                Some(0x21a4) => {
+                    let [slot] = session.vm.owner_arguments(step.1)?;
+                    if slot as i32 <= 0 {
+                        session.vm.complete_owner_call(1, None)?;
+                        continue;
+                    }
+                    let Some(write) = cvns::slot::Write::capture(session, slot)? else {
+                        session.vm.complete_owner_call(1, None)?;
+                        continue;
+                    };
+                    let base = session
+                        .vm
+                        .resources()
+                        .save_file_base()
+                        .map(|(path, dir)| (path.clone(), dir));
+                    let count = session.vm.save_menu().map(|m| m.slots.len() as u32);
+                    let storage = session.storage.clone();
+                    self.job = Some(pool.spawn(move |cancel| {
+                        let check = || Ok(cancel.check()?);
+                        let backup = write.write(storage.as_ref(), check)?;
+                        let base = base.as_ref().map(|(path, dir)| (path, *dir));
+                        let menu = count
+                            .filter(|_| slot <= 256)
+                            .map(|n| crate::vm::scan_cvns_menu(storage.as_ref(), base, n, check))
+                            .transpose()?;
+                        Ok(Completion::CvnsWritten(menu, backup))
+                    })?);
+                    return Ok(waiting);
+                }
+                Some(selector @ (0x21c0 | 0x21c1)) => {
+                    let root = session.vm.resources().save_suffix().context("CVNS save directory is not registered")?;
+                    let path = VfsPath::new(Mount::Save, &format!("{}/save000.dat", root.relative().trim_end_matches('/')))?;
+                    let storage = session.storage.clone();
+                    if selector == 0x21c0 {
+                        let suffix = session.vm.cvns_save_suffix()?;
+                        self.job = Some(pool.spawn(move |cancel| {
+                            cancel.check()?;
+                            let data = match storage.open_read(&path) {
+                                Err(Error::NotFound) => None,
+                                result => {
+                                    let bytes = read_all(result?.as_ref(), 2 * 1024 * 1024)?;
+                                    Some(crate::vm::css0::SystemData::decode(bytes, suffix)?)
+                                }
+                            };
+                            Ok(Completion::CvnsSystemData(data))
+                        })?);
+                    } else {
+                        let data = session.vm.cvns_system_data()?;
+                        let salts = session.cvns.save_salts();
+                        self.job = Some(pool.spawn(move |cancel| {
+                            let bytes = data.encode(salts, || Ok(cancel.check()?))?;
+                            cancel.check()?;
+                            storage.write_atomic(&path, &bytes)?;
+                            Ok(Completion::SystemSaved)
+                        })?);
+                    }
+                    return Ok(waiting);
+                }
+                Some(0x20b8 | 0x21b1 | 0x21b2 | 0x21b6 | 0x21b7 | 0x21ab | 0x21ac) => step,
+                Some(selector @ (0x21a7 | 0x21ae)) => {
+                    let base = session.vm.resources().save_file_base().map(|(path, dir)| (path.clone(), dir));
+                    let storage = session.storage.clone();
+                    let first = session.vm.owner_argument(step.1, 4)?;
+                    let latest = selector == 0x21a7;
+                    let count = if latest { session.vm.owner_argument(step.1, 8)? } else { 1 };
+                    let scratch = if latest { session.latest_save_header } else { session.probed_save_header };
+                    self.job = Some(pool.spawn(move |cancel| {
+                        let base = base.as_ref().map(|(path, dir)| (path, *dir));
+                        let check = || Ok(cancel.check()?);
+                        if latest {
+                            let (slot, scratch) = crate::vm::latest_cvns_slot(storage.as_ref(), base, first, count, scratch, check)?;
+                            Ok(Completion::LatestSaveSlot(slot, scratch))
+                        } else {
+                            let (found, scratch) = crate::vm::probe_cvns_slot(storage.as_ref(), base, first, scratch, check)?;
+                            Ok(Completion::ProbeSaveSlot(found, scratch))
+                        }
+                    })?);
+                    return Ok(waiting);
+                }
+                Some(0x21a1) => {
+                    let [count] = session.vm.owner_arguments(step.1)?;
+                    let base = session.vm.resources().save_file_base().map(|(path, dir)| (path.clone(), dir));
+                    let storage = session.storage.clone();
+                    self.job = Some(pool.spawn(move |cancel| {
+                        let base = base.as_ref().map(|(path, dir)| (path, *dir));
+                        Ok(Completion::CvnsSaveMenu(crate::vm::scan_cvns_menu(
+                            storage.as_ref(), base, count, || Ok(cancel.check()?),
+                        )?))
+                    })?);
+                    return Ok(waiting);
+                }
+                Some(selector @ (0x20af | 0x20b7 | 0x20bd | 0x20be)) => {
+                    let [slot, word] = session.vm.owner_arguments(step.1)?;
+                    let voice = matches!(selector, 0x20bd | 0x20be);
+                    let slots = if voice { 4 } else { 48 };
+                    if slot >= slots {
+                        session.latch_syscall_fault(step.0, selector, 0x8000);
+                    } else if voice {
+                        host.update_audio_pcm16_gain(self.client, slot + 5, sound::cvns_fader_update(selector, word))?;
+                    } else {
+                        session.effects.set_fader(host, self.client, slot as usize, selector, word)?;
+                    }
+                    session.vm.complete_owner_call(2, None)?;
+                    continue;
+                }
+                Some(selector @ 0x20b9..=0x20bb) => {
+                    let [slot] = session.vm.owner_arguments(step.1)?;
+                    let words = if selector == 0x20ba { 1 } else { 2 };
+                    if slot >= 4 {
+                        session.latch_syscall_fault(step.0, selector, 0x8000);
+                    } else {
+                        match selector {
+                            0x20b9 => {
+                                let [_, looping] = session.vm.owner_arguments(step.1)?;
+                                session.voices.start(host, self.client, slot, looping != 0)?;
+                            }
+                            0x20ba => session.voices.stop(host, self.client, slot + 5, 0)?,
+                            _ => {
+                                let [_, duration] = session.vm.owner_arguments(step.1)?;
+                                session.voices.fade_cvns(host, self.client, slot, duration)?;
+                            }
+                        }
+                    }
+                    session.vm.complete_owner_call(words, None)?;
+                    continue;
+                }
+                Some(selector @ (0x20b6 | 0x20bc | 0x20c6)) => {
+                    let [slot] = session.vm.owner_arguments(step.1)?;
+                    let voice = selector == 0x20bc;
+                    let slots = if selector == 0x20b6 { 48 } else { 4 };
+                    if slot >= slots {
+                        session.latch_syscall_fault(step.0, selector, 0x8000);
+                        session.vm.complete_owner_call(1, None)?;
+                    } else {
+                        let position = if voice {
+                            sound::position(host, self.client, slot + 5)?
+                        } else {
+                            let offset = if selector == 0x20c6 { 48 } else { 0 };
+                            session.effects.position(host, self.client, offset + slot as usize)?
+                        };
+                        let elapsed = if position == u32::MAX {
+                            position
+                        } else {
+                            position.saturating_sub(session.cvns.audio_lead_ms)
+                        };
+                        session.vm.complete_owner_call(1, Some(elapsed))?;
+                    }
+                    continue;
+                }
+                Some(0x20a4) => {
+                    let position = session.music.elapsed(host, self.client, host.now_ms())?;
+                    let result = if session.music.settings.enabled && position != u32::MAX {
+                        position.saturating_sub(session.cvns.audio_lead_ms)
+                    } else { position };
+                    session.vm.complete_owner_call(0, Some(result))?;
+                    continue;
+                }
+                Some(0x20c0) => (step.0, 0x20c0),
+                Some(0x20c5) => {
+                    let [slot] = session.vm.owner_arguments(step.1)?;
+                    if slot >= 4 {
+                        session.latch_syscall_fault(step.0, 0x20c5, 0x8000);
+                        session.vm.complete_owner_call(6, None)?;
+                        continue;
+                    }
+                    step
+                }
+                Some(0x20c7) => {
+                    let [slot] = session.vm.owner_arguments(step.1)?;
+                    if slot >= 4 {
+                        session.latch_syscall_fault(step.0, 0x20c7, 0x8000);
+                    } else {
+                        session.effects.stop(host, self.client, slot as usize + 48)?;
+                    }
+                    session.vm.complete_owner_call(1, None)?;
+                    continue;
+                }
+                Some(0x20eb) => {
+                    // 0x42b530 always zeroes the two vector results and sets bit 0.
+                    let _: [u32; 4] = session.vm.owner_arguments(step.1)?;
+                    session.latch_syscall_fault(step.0, 0x20eb, 1);
+                    session.vm.complete_owner_results(4, &[(1, 0), (2, 0)])?;
+                    continue;
+                }
+                Some(0x2041) => {
+                    let _: [u32; 1] = session.vm.owner_arguments(step.1)?;
+                    session.latch_syscall_fault(step.0, 0x2041, 1);
+                    session.vm.complete_owner_call(1, None)?;
+                    continue;
+                }
+                Some(0x217f) => {
+                    let [width, height] = host.display_info().context("CVNS display dimensions unavailable")?.screen;
+                    session.vm.complete_owner_results(0, &[(1, width), (2, height)])?;
+                    continue;
+                }
+                Some(0x217d) => {
+                    session.vm.complete_owner_results(0, &[(1, self.canvas[0]), (2, self.canvas[1])])?;
+                    continue;
+                }
+                Some(0x2005) => (step.0, 0x2003),
+                Some(0x2010) => (step.0, 0x2080),
+                Some(0x2012) => (step.0, 0x2081),
+                Some(selector) => {
+                    match session.cvns.command(selector, self.canvas, session.muted == Some(true), &mut session.vm, host, self.client)? {
+                        Some(cvns::Step::Done) => continue,
+                        Some(cvns::Step::Fault { words, flags }) => {
+                            session.latch_syscall_fault(step.0, selector, flags);
+                            session.vm.complete_owner_call(words, None)?;
+                            continue;
+                        }
+                        Some(cvns::Step::Frame) => {
+                            return session.finish_native_frame(host, self.client, self.canvas, waiting);
+                        }
+                        Some(cvns::Step::Pending) => return Ok(waiting),
+                        Some(cvns::Step::Rule(mut request)) => {
+                            let cpz6 = session.cpz6.clone();
+                            let sources = session.vm.resources().sources(0x2011).cloned().collect();
+                            let client = self.client;
+                            let storage = session.storage.clone();
+                            self.job = Some(pool.spawn(move |cancel| {
+                                let context = DecodeContext::new(client).with_cancellation(cancel.clone());
+                                let sources = ScriptSources::prepare(storage, &cpz6_registry()?, &cpz6, sources)?;
+                                let mask = if sources.open_entry(&request.name)?.is_some() {
+                                    let image = visual::prepare_image(&sources, &request.name, &context)?;
+                                    Some(cvns::rule::Active::new(&request, image))
+                                } else { None };
+                                let captured = request.screen.take().map(|image| cvns::bitmap::Job {
+                                    slot: cvns::BitmapSlot::Global(0), words: 3, picture: Default::default(),
+                                    edit: cvns::bitmap::Edit::Capture(image),
+                                }.run(client, |_, _| unreachable!())).transpose()?;
+                                cancel.check()?;
+                                Ok(Completion::CvnsRule(mask, captured))
+                            })?);
+                            return Ok(waiting);
+                        }
+                        Some(cvns::Step::Movie(index, path, name)) => {
+                            let storage = session.storage.clone();
+                            self.job = Some(pool.spawn(move |cancel| {
+                                cancel.check()?;
+                                let path = crysirror_resource::capability_lookup::resolve_ascii_case_insensitive(storage.as_ref(), &path)?;
+                                let clip = path.map(|p| cvns::movie::Clip::read(storage.open_asset(&p)?, name)).transpose()?;
+                                cancel.check()?;
+                                Ok(Completion::CvnsSceneMovie(index, clip))
+                            })?);
+                            return Ok(waiting);
+                        }
+                        Some(cvns::Step::Registry(request)) => {
+                            let storage = session.storage.clone();
+                            self.job = Some(pool.spawn(move |cancel| {
+                                cancel.check()?;
+                                Ok(Completion::CvnsRegistry(request.run(storage.as_ref())?))
+                            })?);
+                            return Ok(waiting);
+                        }
+                        Some(cvns::Step::MaskSheet(name, size)) => {
+                            let cpz6 = session.cpz6.clone();
+                            let sources = session.vm.resources().sources(0x2011).cloned().collect();
+                            let client = self.client;
+                            let storage = session.storage.clone();
+                            self.job = Some(pool.spawn(move |cancel| {
+                                let sources = ScriptSources::prepare(storage, &cpz6_registry()?, &cpz6, sources)?;
+                                let sheet = cvns::mask_fonts::load(&sources, &name, size,
+                                    &DecodeContext::new(client).with_cancellation(cancel.clone()))?;
+                                cancel.check()?;
+                                Ok(Completion::CvnsMaskSheet(sheet))
+                            })?);
+                            return Ok(waiting);
+                        }
+                        Some(cvns::Step::Bitmap(job)) => {
+                            let cpz6 = session.cpz6.clone();
+                            let sources = session.vm.resources().sources(0x2011).cloned().collect();
+                            let context = DecodeContext::new(self.client);
+                            let storage = session.storage.clone();
+                            self.job = Some(pool.spawn(move |cancel| {
+                                cancel.check()?;
+                                let bitmap = job.run(context.client, |name, frame| {
+                                    let mut context = context.with_cancellation(cancel.clone());
+                                    context.parameters.insert("purple-software/pb2-frame".into(), frame.into());
+                                    let sources = ScriptSources::prepare(storage, &cpz6_registry()?, &cpz6, sources)?;
+                                    visual::prepare_image(&sources, name, &context)
+                                })?;
+                                cancel.check()?;
+                                Ok(Completion::CvnsBitmap(bitmap))
+                            })?);
+                            return Ok(waiting);
+                        }
+                        None => {}
+                    }
+                    bail!(
+                    "unsupported CVNS syscall 0x{selector:04x} at {}+0x{:x}",
+                    String::from_utf8_lossy(session.vm.script_name()),
+                    step.0,
+                    )
+                }
+                None => step,
+            };
             session.messages.set_alias_words(match step.1 {
                 0x2380 => Some(4),
                 0x2381 => Some(6),
@@ -1653,6 +2349,26 @@ impl Adapter {
                 }
                 None => step,
             };
+            if self.profile == VmProfile::Cvns20040515X86 {
+                let effect_call = match step.1 {
+                    0x20b0 => Some((0x20b0, 5)),
+                    0x20ba => Some((0x20ad, 6)),
+                    0x20b1 => Some((0x20b1, 2)),
+                    0x20b2 => Some((0x20b2, 1)),
+                    0x20b3 => Some((0x20b3, 1)),
+                    0x20b4 => Some((0x20ae, 2)),
+                    0x20b6 => Some((0x20b5, 2)),
+                    _ => None,
+                };
+                if let Some((selector, words)) = effect_call {
+                    let [slot] = session.vm.owner_arguments(step.1)?;
+                    if slot >= 48 {
+                        session.latch_syscall_fault(step.0, selector, 0x8000);
+                        session.vm.complete_owner_call(words, None)?;
+                        continue;
+                    }
+                }
+            }
             let storage = session.storage.clone();
             match step.1 {
                 0x2007 => {
@@ -1671,6 +2387,17 @@ impl Adapter {
                     return Ok(waiting);
                 }
                 0x2001 => {
+                    if session.cvns.settings_dirty {
+                        let bytes = session.display.cvns_config_bytes(&session.cvns);
+                        let path = VfsPath::new(Mount::Save, "cvns.cfg")?;
+                        self.job = Some(pool.spawn(move |cancel| {
+                            cancel.check()?;
+                            storage.write_atomic(&path, &bytes)?;
+                            Ok(Completion::ConfigSaved)
+                        })?);
+                        session.cvns.settings_dirty = false;
+                        return Ok(waiting);
+                    }
                     for mask in &mut session.masks {
                         mask::Active::remove(mask, &mut session.objects, host, self.client, false)?;
                     }
@@ -1691,8 +2418,12 @@ impl Adapter {
                     })?);
                 }
                 0x22b2 => {
-                    let (scene, audio) = session.capture_scene(host, self.client)?;
-                    let native = session.vm.complete_scene_checkpoint()?;
+                    if session.vm.profile()==VmProfile::Cvns20040515X86 {
+                        session.cvns_checkpoint_clock=Some((host.begin_civil_time(self.client)?,None));
+                        return Ok(waiting);
+                    }
+                    let (scene, audio, records) = session.capture_scene(host, self.client)?;
+                    let native = session.vm.complete_scene_checkpoint(records)?;
                     session.retain_checkpoint(native, scene, audio);
                 }
                 0x22b4 => {
@@ -1762,12 +2493,13 @@ impl Adapter {
                         Ok(Completion::ProbeSaveSlot(found, header))
                     })?);
                 }
-                0x22bd => {
-                    let [slot, object, child, _, _] = session.vm.owner_arguments(step.1)?;
-                    let slot = slot as i32;
-                    let child = child as i32;
-                    if slot < 0 || object >= 256 {
-                        session.vm.complete_owner_call(5, Some(0))?;
+                0x29ac | 0x22bd => {
+                    let cvns = step.1 == 0x29ac;
+                    let slot = session.vm.owner_argument(step.1, 4)?;
+                    let object = session.vm.owner_argument(step.1, 8)?;
+                    let child = if cvns { -1 } else { session.vm.owner_argument(step.1, 12)? as i32 };
+                    if (cvns && (slot == 0 || object >= 128)) || (!cvns && ((slot as i32) < 0 || object >= 256)) {
+                        session.vm.complete_owner_call(if cvns { 4 } else { 5 }, Some(0))?;
                         session.save_preview_error = None;
                         continue;
                     }
@@ -1784,13 +2516,14 @@ impl Adapter {
                     let cpz6 = session.cpz6.clone();
                     let context = DecodeContext::new(self.client);
                     self.job = Some(pool.spawn(move |cancel| {
-                        let mut metadata = read_slot_metadata(
+                        let mut metadata = crate::vm::read_gameplay_metadata(
                             storage.as_ref(),
                             base.as_ref().map(|(path, directory)| (path, *directory)),
                             slot,
-                            wants_image,
+                            wants_image, cvns,
                             || Ok(cancel.check()?),
                         )?;
+                        let client = context.client;
                         let replacement = metadata
                             .as_mut()
                             .and_then(|metadata| metadata.preview.take())
@@ -1849,11 +2582,22 @@ impl Adapter {
                                 }
                             });
                         cancel.check()?;
-                        Ok(Completion::SaveSlotMetadata(metadata, replacement))
+                        if cvns {
+                            let bitmap = replacement.map(|r| -> anyhow::Result<_> {
+                                let image = r.image?;
+                                cvns::bitmap::Job {
+                                    slot: cvns::BitmapSlot::Global(object), words: 4, picture: Default::default(),
+                                    edit: cvns::bitmap::Edit::Load { layer: 0, position: [0; 2], flag: u32::from(image.has_alpha()),
+                                        name: Vec::new(), frame: 0 },
+                                }.run(client, |_, _| Ok(image))
+                            }).transpose()?;
+                            Ok(Completion::CvnsSlotMetadata(metadata, bitmap))
+                        } else { Ok(Completion::SaveSlotMetadata(metadata, replacement)) }
                     })?);
                 }
-                0x22bc | 0x22be => {
-                    let (slot, words, edit) = if step.1 == 0x22bc {
+                0x29ab | 0x22bc | 0x22be => {
+                    let cvns = step.1 == 0x29ab;
+                    let (slot, words, edit) = if step.1 != 0x22be {
                         let [slot, reference] = session.vm.owner_arguments(step.1)?;
                         let comment = session
                             .vm
@@ -1871,11 +2615,11 @@ impl Adapter {
                         .map(|(path, directory)| (path.clone(), directory));
                     self.job = Some(pool.spawn(move |cancel| {
                         cancel.check()?;
-                        let edited = edit_save_slot(
+                        let edited = crate::vm::edit_slot_header(
                             storage.as_ref(),
                             base.as_ref().map(|(path, directory)| (path, *directory)),
                             slot,
-                            edit,
+                            edit, cvns,
                             || Ok(cancel.check()?),
                         )?;
                         Ok(Completion::EditSaveSlot { words, edited })
@@ -1981,8 +2725,8 @@ impl Adapter {
                         Ok(Completion::Icon(icon.image))
                     })?);
                 }
-                0x20b0 | 0x20b1 | 0x20b3 | 0x20ba => match session.vm.pending_effect_sound()? {
-                    EffectSound::Load { name, .. } if session.effects.settings.enabled => {
+                0x20b0 | 0x20b1 | 0x20b3 | 0x20ba | 0x28c5 => match session.vm.pending_effect_sound()? {
+                    EffectSound::Load { name, .. } if step.1 == 0x28c5 || session.effects.settings.enabled => {
                         let cpz6 = session.cpz6.clone();
                         let sources = session.vm.resources().sources(0x2012).cloned().collect();
                         self.job = Some(pool.spawn(move |cancel| {
@@ -2010,15 +2754,13 @@ impl Adapter {
                     }
                 },
                 0x20b5 => {
-                    for channel in 0..6 {
-                        session.effects.stop(host, self.client, channel)?;
-                    }
+                    session.effects.stop_all(host,self.client)?;
                     session.vm.complete_owner_call(0, None)?;
                 }
                 0x20b2 | 0x20b4 => {
                     let [slot] = session.vm.owner_arguments(step.1)?;
                     let words = if step.1 == 0x20b2 { 1 } else { 2 };
-                    if slot >= 6 {
+                    if slot as usize >= session.effects.count() {
                         session.latch_syscall_fault(step.0, step.1, 0x200);
                     } else if step.1 == 0x20b2 {
                         session.effects.pause(host, self.client, slot as usize)?;
@@ -2040,7 +2782,7 @@ impl Adapter {
                 }
                 0x20b6 | 0x20b7 => {
                     let [channel] = session.vm.owner_arguments(step.1)?;
-                    ensure!(channel < 6, "CMVS effect channel outside 0..5");
+                    ensure!((channel as usize) < session.effects.count(), "effect channel outside profile");
                     let channel = channel as usize;
                     if step.1 == 0x20b6 {
                         let [_, duration] = session.vm.owner_arguments(step.1)?;
@@ -2085,9 +2827,22 @@ impl Adapter {
                     session.vm.complete_owner_call(1, None)?;
                     session.samples.set_device_gain(gain);
                 }
-                0x20a6 | 0x20af => {
-                    let request = sound::VoiceRequest::read(&session.vm, step.1)?;
-                    if !session.voices.settings.enabled {
+                0x20a6 | 0x20af | 0x28b8 => {
+                    let mut enabled = session.voices.settings.enabled;
+                    let request = if step.1 == 0x28b8 {
+                        let [slot] = session.vm.owner_arguments(step.1)?;
+                        if slot >= 4 {
+                            session.latch_syscall_fault(step.0, 0x20b8, 0x8000);
+                            session.vm.complete_owner_call(5, None)?;
+                            continue;
+                        }
+                        let (use_voice, master, voices) = session.cvns.voice_settings();
+                        enabled = use_voice;
+                        sound::VoiceRequest::read_cvns(&session.vm, step.1, master, voices)?
+                    } else {
+                        sound::VoiceRequest::read(&session.vm, step.1)?
+                    };
+                    if !enabled {
                         request.disabled(&mut session.vm)?;
                     } else {
                         let cpz6 = session.cpz6.clone();
@@ -2420,9 +3175,15 @@ impl Adapter {
                         session.active_draw = value != 0;
                     }
                 }
-                0x22d6..=0x22d8 => {
-                    let [mode] = session.vm.owner_arguments(step.1)?;
-                    let current = match step.1 {
+                opcode @ (0x22d6..=0x22d8 | 0x29ed) => {
+                    let (switch, mode, value, words) = if opcode == 0x29ed {
+                        let [key, _, value, _] = session.vm.owner_arguments(opcode)?;
+                        (0x22d6 + (key - 7) as u16, 1, value, 4)
+                    } else {
+                        let [mode, value] = session.vm.owner_arguments(opcode)?;
+                        (opcode, mode, value, 2)
+                    };
+                    let current = match switch {
                         0x22d6 => session.music.settings.enabled,
                         0x22d7 => session.effects.settings.enabled,
                         _ => session.voices.settings.enabled,
@@ -2430,23 +3191,22 @@ impl Adapter {
                     if mode == 0 {
                         session
                             .vm
-                            .complete_owner_call(2, Some(u32::from(current)))?;
+                            .complete_owner_call(words, Some(u32::from(current)))?;
                         continue;
                     }
-                    let [_, value] = session.vm.owner_arguments(step.1)?;
                     let enable = value != 0;
                     if current == enable {
-                        session.vm.complete_owner_call(2, None)?;
+                        session.vm.complete_owner_call(words, None)?;
                         continue;
                     }
-                    match step.1 {
+                    match switch {
                         0x22d6 => {
                             if let Some(request) = session.music.reopen_request() {
                                 if enable {
                                     let cpz6 = session.cpz6.clone();
                                     let paths =
                                         session.vm.resources().sources(0x2013).cloned().collect();
-                                    let gain = session.music.settings.gain();
+                                    let gain = session.music.gain();
                                     self.job = Some(pool.spawn(move |cancel| {
                                         let sources = ScriptSources::prepare(
                                             storage,
@@ -2472,11 +3232,12 @@ impl Adapter {
                                 )?;
                                 session.music.clear_playback();
                             }
-                            session.vm.complete_owner_call(2, None)?;
+                            session.vm.complete_owner_call(words, None)?;
                             session.music.settings.enabled = enable;
                         }
                         0x22d7 => {
                             if enable {
+                                let count = session.effects.switched_channels();
                                 let plan = session.effects.reopen_plan();
                                 if !plan.is_empty() {
                                     let cpz6 = session.cpz6.clone();
@@ -2489,7 +3250,7 @@ impl Adapter {
                                             &cpz6,
                                             paths,
                                         )?;
-                                        let mut decoded = [false; 6];
+                                        let mut decoded = vec![false; count];
                                         let mut recipes = Vec::new();
                                         for effect in plan {
                                             cancel.check()?;
@@ -2520,15 +3281,15 @@ impl Adapter {
                             } else {
                                 host.replace_audio_channels(
                                     self.client,
-                                    &sound::EFFECT_CHANNELS,
+                                    &(0..session.effects.switched_channels()).map(sound::device_channel).collect::<Vec<_>>(),
                                     None,
                                 )?;
                             }
-                            session.vm.complete_owner_call(2, None)?;
-                            session.effects.set_availability(enable, [false; 6]);
+                            session.vm.complete_owner_call(words, None)?;
+                            session.effects.set_availability(enable, vec![false; session.effects.switched_channels()]);
                         }
                         _ => {
-                            session.vm.complete_owner_call(2, None)?;
+                            session.vm.complete_owner_call(words, None)?;
                             session.voices.settings.enabled = enable;
                         }
                     }
@@ -3702,8 +4463,9 @@ impl Adapter {
                         }
                     }
                 }
-                0x213a..=0x213d => {
-                    let font = session.messages.ui_font(host, self.client)?;
+                0x213a..=0x213d | 0x29b1 | 0x29b2 | 0x29b6 | 0x29b7 => {
+                    let font = if step.1 == 0x29b6 { session.cvns.default_font(host, self.client)?.to_string() }
+                        else { session.messages.ui_font(host, self.client)?.to_string() };
                     match session.dialogs.command(
                         step.1,
                         &mut session.vm,
@@ -3714,6 +4476,9 @@ impl Adapter {
                     )? {
                         dialog::Outcome::Waiting => session.frame_pending = true,
                         dialog::Outcome::Done => {}
+                        dialog::Outcome::Face(face) if step.1 == 0x29b6 => {
+                            session.cvns.select_font(host, self.client, face)?;
+                        }
                         dialog::Outcome::Face(face) => {
                             session.messages.select_default_face(host, self.client, face)?
                         }
@@ -4081,6 +4846,14 @@ impl Adapter {
 }
 
 impl VmAdapter for Adapter {
+    fn instruction_budget(&self) -> u32 {
+        match self.session.as_ref().filter(|_| self.profile == VmProfile::Cvns20040515X86).map(|s| s.cvns.priority) {
+            Some(0) => 2048,
+            Some(2) => 512,
+            _ => 1024,
+        }
+    }
+
     fn engine_id(&self) -> &'static str {
         "cmvs"
     }

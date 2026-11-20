@@ -15,6 +15,7 @@ crysirror-audio.workspace = true
 image.workspace = true
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 anyhow.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.10.9"
 encoding_rs = "0.8"

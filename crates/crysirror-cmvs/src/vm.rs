@@ -6,6 +6,7 @@ use std::fmt;
 mod abi;
 mod control;
 mod cvns;
+mod cvns_scratch;
 mod evaluate;
 mod gesture;
 mod history;
@@ -25,15 +26,22 @@ mod startup;
 mod strings;
 mod system_save;
 #[cfg(feature = "runtime")]
+pub(crate) mod css0;
+#[cfg(any(test, feature = "runtime"))]
+mod csp_banks;
+#[cfg(feature = "runtime")]
 pub(crate) use resources::cpz6_from_pe;
 #[cfg(feature = "runtime")]
 pub use snapshot::SavedScripts;
+#[cfg(feature="runtime")]
+pub(crate) use startup::csp::RestoredVm;
+pub(crate) use cvns::selector as cvns_selector;
 #[cfg(feature = "runtime")]
 pub(crate) use sequence::Kind as SequenceKind;
 pub use resources::{Cpz6Resources, ResourceBindings, ResourceSource, ScriptSources};
 #[cfg(feature = "runtime")]
 pub(crate) use save_menu::{
-    edit_save_slot, latest_slot_range, open_save_slot, probe_save_slot, read_slot_metadata, scan_latest_slot,
+    latest_slot_range, open_save_slot, probe_save_slot, scan_latest_slot, scan_cvns_menu, latest_cvns_slot, probe_cvns_slot, edit_slot_header, read_gameplay_metadata,
     SlotHeaderEdit, SlotHeaderScratch, SlotMetadata, SlotPreview,
 };
 pub use save_menu::{PreparedSaveMenu, SaveHeader, SaveMenu, SaveMenuRequest, SaveSlot};
@@ -55,6 +63,17 @@ pub enum VmProfile {
 impl VmProfile {
     fn decode_at(self, code: &[u8], pc: usize) -> Result<Instruction, DecodeError> {
         match self {
+            // The CVNS compiler leaves a 0xfffc word after some 0x0413 returns. The
+            // 0x424850 loop has no case for it and would not advance, so the word
+            // occupies a boundary that fails visibly if it is ever executed.
+            Self::Cvns20040515X86 if code.get(pc..pc + 2) == Some(&[0xfc, 0xff]) => {
+                Ok(Instruction {
+                    pc,
+                    end: pc + 2,
+                    opcode: 0xfffc,
+                    kind: InstructionKind::Simple,
+                })
+            }
             Self::Cvns20040515X86 | Self::Pc20160201X64 | Self::Pc20211007X64 => decode_at(code, pc),
         }
     }

@@ -156,7 +156,7 @@ def load_resource_ports(path: Path = RESOURCE_MANIFEST, *, expected_count=193):
             values = evidence.get(key, [])
             if not isinstance(values, list) or not all(isinstance(v, str) and v for v in values):
                 raise ValueError("invalid resource test evidence references")
-        if resource.get("registration_group") not in set("abcdefghi") | {"reused", "audio", "file"}:
+        if resource.get("registration_group") not in set("abcdefghij") | {"reused", "audio", "file"}:
             raise ValueError("unknown resource registration group")
         if not isinstance(resource.get("entrypoint"), str) or not resource["entrypoint"]:
             raise ValueError("resource entrypoint missing")
@@ -239,7 +239,7 @@ def validate_resource_registration(ports, root: Path = ROOT):
         aggregate = strip_comments((base / "src/legacy.rs").read_text())
         body = re.sub(r"\s+", "", rust_function_body(aggregate, "formats"))
         groups = set(value["registration_group"] for value in legacy.values())
-        linked = re.findall(r"\b([a-i])::FORMATS", body)
+        linked = re.findall(r"\b([a-j])::FORMATS", body)
         if set(linked) != groups or len(linked) != len(set(linked)):
             raise ValueError("native archive aggregate groups differ from resource manifest")
         for group in groups:

@@ -1,5 +1,37 @@
 # API change log
 
+## `60772aceebd8f060` (2026-11-20) — PCM16 percentage faders
+
+The Rust audio service accepts `Pcm16GainScale::Percent` on `AudioPcm16Gain`.
+`AudioPcm16Gain::percent()` sets both sides and the secondary multiplier
+to 100. Q8 remains the default. Existing Rust struct literals that list
+every field can add `..Default::default()` to keep Q8 arithmetic.
+The previous signature fingerprint was `0c844a1be2219ddd`.
+
+## `0c844a1be2219ddd` (2026-11-20) — gradients on glyph faces
+
+`PositionedGlyphStyle.gradient` accepts two RGB endpoints, a cell size and a vertical, horizontal or diagonal axis. Shadow and outline passes use their own colours. Existing serialized glyphs default to a uniform face. Rust callers that construct every style field must supply `gradient`. Regeneration changed the fingerprint from `274d1ddae2c9986c`.
+
+## `274d1ddae2c9986c` (2026-11-20) — generated model release and the shared KAGParser store
+
+- Rust-only `HostServices::release_model(client, path)` ends an adapter's use of an `upload_model` path (default: unsupported). The runtime keeps the bytes while any world entity of the client has `Geometry::Scene`/`Model` with that asset and drops them at the end of the first tick without one; an identical later upload registers again. Existing callers are unaffected; adapters that rebuild models should release the old paths (see [memory management](../MEMORY_MANAGEMENT.md)).
+- `crysirror_kag::krkr_store` (new; `crysirror-kag` now depends on `crysirror-tjs2`) holds the native `KAGParser.store()` dictionary capture/decode moved from `crysirror-krkr`, with `Profile::Kag3` (condition stacks, active frames refused, the previous behaviour) and `Profile::Cm3d2` (levels only, call frames restored at their label, offset and position). `crysirror-krkr` keeps its messages and behaviour.
+- No reflected signature changes; the fingerprint stays `274d1ddae2c9986c`.
+
+## `274d1ddae2c9986c` (2026-11-20) — toon materials, attached parts and Unity-style lighting
+
+- `Material.toon` (`ToonShading`) selects a cel shading model evaluated on display-referred values: base × colour plus rim, a shadow layer gated by a 256×3 lookup texture (diffuse ramp, shadow rate, optional colour table), Blinn highlight/specular, cast-shadow colour and an optional inverted-hull outline. Toon materials bind their lookup/shadow/highlight textures in the metallic-roughness/occlusion/specular slots, which must be empty, and take no effect or unlit flag. `Material::all_textures` lists every texture. Absent by default; existing materials keep their meaning. Complete Rust struct literals of `Material` supply the field or use `..Default::default()`.
+- `AnimationState.attach` rides a follower's root nodes on a named leader node at their rest offset (parts parented to a bone); it requires `follow`. Exhaustive matches on `PbrDrawable::Scene` gain `attach`.
+- `Environment.ambient` replaces the environment's diffuse spherical harmonics with uniform linear radiance; `Sun.shadow_strength` (default 1) blends cast-shadow visibility as `mix(1, shadow, strength)`. Both keep existing environments unchanged.
+- The material uniform is visible to the vertex stage (outline extrusion); the unlit flag uses code 1 and toon code 2 in `Material.alpha.z`.
+- Regeneration changed `224f952a71accc52` to `274d1ddae2c9986c`. Captures of the installed CM3D2 opening are recorded in docs/validation/cm3d2.md; no other game or device result is implied.
+
+## `224f952a71accc52` (2026-11-20) — external clips, followed skeletons and client models
+
+- `AnimationLayer.source` names a client asset whose clip drives the entity, bound to its nodes by node name (for example a converted `.anm`). `AnimationState.follow` copies the evaluated local translation/rotation of another entity's same-named nodes; `AnimationState.nodes` replaces named nodes' local components (`NodePose`). All three default to absent, so existing project, command and snapshot data keep their meaning. Rust struct literals of `AnimationLayer`/`AnimationState` must supply the fields or use `..Default::default()`; exhaustive matches on `PbrDrawable::Scene` gain `follow` and `nodes`.
+- Rust-only `HostServices::upload_model` registers an adapter-built GLB under an immutable client-scoped `__crysirror/` path (default: unsupported). `crysirror_kag::ParserOptions` gains `storage_attribute`/`target_attribute` (defaults `storage`/`target`). `crysirror_asset::interchange` recognises CM3D2 `.model`/`.anm`; the image registry adds `kiss/cm3d2-tex`.
+- The regenerated reference keeps the fingerprint `224f952a71accc52`.
+
 ## `224f952a71accc52` (2026-11-19) — outline glyph coverage tables
 
 - `PositionedGlyphStyle.raster` accepts `supersample_alpha4` with a 17-entry byte table. The renderer maps rounded 4×4 coverage through the table before colouring the glyph. Existing glyph records retain their defaults. Rust callers that exhaustively match `GlyphCoverageQuality` must account for the new variant.

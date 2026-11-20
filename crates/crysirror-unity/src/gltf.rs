@@ -1,0 +1,138 @@
+// SPDX-License-Identifier: MPL-2.0
+//! Assemble Unity GameObject hierarchies (Transform + MeshFilter/
+//! MeshRenderer) into one GLB for the engine's world renderer.
+//!
+//! Unity is left-handed with bottom-up UVs; glTF is right-handed with
+//! top-down UVs. Conversion mirrors X (positions, normals, translations,
+//! quaternions `(x, -y, -z, w)`), reverses triangle winding and flips V.
+use crate::classes::Mesh;
+use anyhow::{ensure, Result};
+use crysirror_asset::{interchange::glb, pbr::PbrMaterial};
+use std::collections::HashMap;
+
+pub fn mirror_point(v: [f32; 3]) -> [f32; 3] {
+    [-v[0], v[1], v[2]]
+}
+pub fn mirror_quat(q: [f32; 4]) -> [f32; 4] {
+    [q[0], -q[1], -q[2], q[3]]
+}
+
+#[derive(Default)]
+pub struct GlbBuilder {
+    doc: glb::Document,
+    images: HashMap<String, usize>,
+}
+
+impl GlbBuilder {
+    pub fn new(generator: &str) -> Self {
+        Self { doc: glb::Document { generator: generator.into(), ..Default::default() }, images: HashMap::new() }
+    }
+
+    /// Add a node with its Unity local transform; returns its index.
+    pub fn node(&mut self, name: &str, parent: Option<usize>, position: [f32; 3], rotation: [f32; 4], scale: [f32; 3]) -> Result<usize> {
+        let index = self.doc.nodes.len();
+        self.doc.nodes.push(glb::Node {
+            translation: mirror_point(position),
+            rotation: mirror_quat(rotation),
+            scale,
+            ..glb::Node::named(name)
+        });
+        match parent {
+            Some(p) => {
+                ensure!(p < index, "glTF parent must precede its child");
+                self.doc.nodes[p].children.push(index);
+            }
+            None => self.doc.roots.push(index),
+        }
+        Ok(index)
+    }
+
+    /// Embed an encoded PNG/JPEG once per `key`.
+    pub fn image(&mut self, key: &str, encoded: impl FnOnce() -> Result<(Vec<u8>, &'static str)>) -> Result<usize> {
+        if let Some(i) = self.images.get(key) {
+            return Ok(*i);
+        }
+        let (bytes, mime) = encoded()?;
+        self.doc.images.push((bytes, mime));
+        let i = self.doc.images.len() - 1;
+        self.images.insert(key.to_owned(), i);
+        Ok(i)
+    }
+
+    pub fn material(&mut self, name: &str, engine: PbrMaterial) -> usize {
+        self.doc.materials.push(glb::Material {
+            name: name.into(),
+            base_color: engine.base_color_factor,
+            base_color_texture: engine.base_color_texture,
+            alpha_mode: match engine.alpha_mode {
+                crysirror_asset::pbr::AlphaMode::Opaque => "OPAQUE",
+                crysirror_asset::pbr::AlphaMode::Mask => "MASK",
+                _ => "BLEND",
+            },
+            double_sided: engine.double_sided,
+            roughness: engine.roughness_factor,
+            engine: Some(engine),
+            ..Default::default()
+        });
+        self.doc.materials.len() - 1
+    }
+
+    /// Attach `mesh` to `node`, one primitive per sub-mesh with the
+    /// renderer's material of the same index (Unity reuses the last one).
+    pub fn mesh(&mut self, node: usize, mesh: &Mesh, materials: &[usize]) -> Result<()> {
+        let mut prims = Vec::new();
+        for (s, sub) in mesh.submeshes.iter().enumerate() {
+            ensure!(sub.topology == 0, "Unity mesh {} topology {}", mesh.name, sub.topology);
+            let start = sub.first_byte as usize / 2;
+            let end = start + sub.index_count as usize;
+            let Some(indices) = mesh.indices.get(start..end) else { continue };
+            if indices.len() < 3 {
+                continue;
+            }
+            let mut remap: HashMap<u16, u32> = HashMap::new();
+            let mut p = glb::Primitive { material: materials.get(s).or(materials.last()).copied(), ..Default::default() };
+            for &i in indices {
+                if remap.contains_key(&i) {
+                    continue;
+                }
+                let v = i as usize;
+                remap.insert(i, p.positions.len() as u32);
+                p.positions.push(mirror_point(mesh.positions[v]));
+                if let Some(n) = mesh.normals.get(v) {
+                    p.normals.push(mirror_point(*n));
+                }
+                if let Some(uv) = mesh.uv0.get(v) {
+                    p.uvs.push([uv[0], 1. - uv[1]]);
+                }
+            }
+            if p.normals.len() != p.positions.len() {
+                p.normals.clear();
+            }
+            if p.uvs.len() != p.positions.len() {
+                p.uvs.clear();
+            }
+            for tri in indices.chunks_exact(3) {
+                p.indices.extend([remap[&tri[0]], remap[&tri[2]], remap[&tri[1]]]);
+            }
+            prims.push(p);
+        }
+        if prims.is_empty() {
+            return Ok(());
+        }
+        self.doc.meshes.push((mesh.name.clone(), prims));
+        self.doc.nodes[node].mesh = Some(self.doc.meshes.len() - 1);
+        Ok(())
+    }
+
+    pub fn dropped(&mut self, note: String) {
+        self.doc.dropped.push(note);
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.doc.meshes.is_empty()
+    }
+
+    pub fn finish(self) -> Result<Vec<u8>> {
+        self.doc.to_glb()
+    }
+}

@@ -2,7 +2,7 @@
 //! Shared amplitude/decibel conversion. Compatibility silence sentinels are
 //! explicit and separate from ordinary finite decibels.
 use anyhow::{ensure, Result};
-use crysirror_core::service::AudioPcm16Gain;
+use crysirror_core::service::{AudioPcm16Gain, Pcm16GainScale};
 
 pub(crate) fn to_pcm16(sample: f32) -> i16 {
     (sample * 32_768.).round().clamp(-32_768., 32_767.) as i16
@@ -18,6 +18,17 @@ pub(crate) fn apply_pcm16_gain(
     fading_out: bool,
     device_gain: u16,
 ) -> [f32; 2] {
+    if control.scale == Pcm16GainScale::Percent {
+        let base = (gain.clamp(0., 1.) * 100.).round() as u32;
+        let ramp = transport.clamp(0., 1.) * 100.;
+        let fade = if fading_out { ramp.ceil() } else { ramp.floor() } as u32;
+        let level = (base * fade / 100).wrapping_mul(control.multiplier) / 100;
+        return [0, 1].map(|side| {
+            let coefficient = (level.wrapping_mul(control.stereo[side]) / 100).min(100);
+            let sample = i32::from(to_pcm16(frame[side]));
+            (sample * coefficient as i32 / 100) as f32 / 32_768.
+        });
+    }
     let base = (gain.clamp(0., 1.) * 256.).round() as u32;
     let fade = transport.clamp(0., 1.) * 256.;
     let fade = if fading_out {
@@ -98,6 +109,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn percentage_fader_truncates_each_product_and_signed_samples() {
+        let unit = 1.0 / 32768.0;
+        let control = AudioPcm16Gain {
+            multiplier: 75,
+            stereo: [100, 50],
+            ..AudioPcm16Gain::percent()
+        };
+        // floor(75 * 73 / 100) = 54, then 54 and 27 per side.
+        assert_eq!(
+            apply_pcm16_gain([-101. * unit, 101. * unit], control, 0.73, 1., false, 256),
+            [-54. * unit, 27. * unit]
+        );
+        let wrapped = AudioPcm16Gain { multiplier: 0x4000_0000, ..control };
+        assert_eq!(apply_pcm16_gain([1.; 2], wrapped, 1., 1., false, 256), [0.; 2]);
+        let boosted = AudioPcm16Gain { multiplier: 200, ..control };
+        assert_eq!(
+            apply_pcm16_gain([-unit, -unit], boosted, 1., 1., false, 256),
+            [-unit; 2]
+        );
+    }
+
+    #[test]
     fn pcm16_fader_preserves_shift_order_and_signed_samples() {
         let unit = 1. / 32_768.;
         let frame = [-unit, unit];
@@ -121,6 +154,7 @@ mod tests {
         let doubled = AudioPcm16Gain {
             multiplier: 512,
             stereo: [64, 256],
+            ..Default::default()
         };
         assert_eq!(
             apply_pcm16_gain([0.5; 2], doubled, 1., 1., false, 256),
@@ -129,6 +163,7 @@ mod tests {
         let wrapped_pan = AudioPcm16Gain {
             multiplier: 256,
             stereo: [0x8000_0100, 256],
+            ..Default::default()
         };
         assert_eq!(
             apply_pcm16_gain([0.5; 2], wrapped_pan, 1. / 256., 1., false, 256),

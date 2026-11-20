@@ -1001,6 +1001,17 @@ pub trait FileSystem {
     }
 }
 
+/// Frame selection for indexed movies using a native millisecond clock.
+/// Half-rate modes select even indices only for 30 Hz source material.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IndexedMoviePacing {
+    NativeRate,
+    HalfRate30,
+    /// Drop an extra frame after a decode over 30 ms, then select even
+    /// indices after 30 observations of lateness.
+    Adaptive30,
+}
+
 /// Engine media resources, independent of a script VM or a window.
 #[derive(Clone,Copy,Debug)]
 pub struct MediaSourceOptions {
@@ -1114,6 +1125,14 @@ pub enum MediaPhase {
     Stopped,
     Failed,
 }
+/// Position of a movie's decoded PCM source, independent of the output device.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MediaAudioClock {
+    NoTrack,
+    Inactive,
+    Playing(u64),
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct MediaInfo {
     pub phase: MediaPhase,
@@ -2131,6 +2150,12 @@ pub trait HostServices: FileSystem {
     ) -> Result<VfsPath> {
         Err(crate::Error::Unsupported("reader media with PCM16 gain"))
     }
+    /// Start an indexed CMV with an audio-master clock (elapsed time for a silent
+    /// stream) and decode only pictures requested by the presentation owner.
+    fn indexed_movie_reader(&mut self, _client: ClientId, _id: u32, _source: Arc<dyn AssetReader>,
+        _options: MediaSourceOptions, _gain: AudioPcm16Gain, _pacing: IndexedMoviePacing) -> Result<VfsPath> {
+        Err(crate::Error::Unsupported("indexed movie playback"))
+    }
     fn media_info(&self, _client: ClientId, _id: u32) -> Result<MediaInfo> {
         Err(crate::Error::Unsupported("engine media status"))
     }
@@ -2164,6 +2189,8 @@ pub trait HostServices: FileSystem {
     fn window_minimized(&self, _client: ClientId) -> Result<Option<bool>> {
         Ok(None)
     }
+    /// Maximized state of the client's presenting window, if the host models it.
+    fn window_maximized(&self, _client: ClientId) -> Result<Option<bool>> { Ok(None) }
     /// Actual fullscreen state published by the physical or explicitly virtual window owner.
     /// An accepted UI request alone does not establish this observation.
     /// None means neither a physical nor virtual window observation is available.
@@ -2262,6 +2289,9 @@ pub trait HostServices: FileSystem {
         _id: u32,
     ) -> Result<Option<Arc<dyn crate::image_processing::ImageResource>>> {
         Err(crate::Error::Unsupported("media frame image lease"))
+    }
+    fn media_audio_clock(&self, _client: ClientId, _id: u32) -> Result<MediaAudioClock> {
+        Err(crate::Error::Unsupported("media PCM clock"))
     }
     fn media_frame(&self, _client: ClientId, _id: u32) -> Result<Option<MediaFrame>> {
         Err(crate::Error::Unsupported("engine media picture"))
@@ -2382,6 +2412,21 @@ pub trait HostServices: FileSystem {
         _rgba: &[u8],
     ) -> Result<VfsPath> {
         Err(crate::Error::Unsupported("decoded image upload"))
+    }
+    /// Register an adapter-built glTF binary (GLB) model under a host-minted,
+    /// immutable client-scoped asset path, for world `scene`/`model` geometry.
+    /// Used when a native format's scene graph is assembled by the VM (for
+    /// example Unity prefabs) rather than stored as one file.
+    fn upload_model(&mut self, _client: ClientId, _id: u32, _glb: &[u8]) -> Result<VfsPath> {
+        Err(crate::Error::Unsupported("model upload"))
+    }
+    /// End the caller's use of an `upload_model` path. The host drops the
+    /// model bytes once no world entity of the client references the asset
+    /// (checked at the end of each tick, so a despawn in the same tick is
+    /// enough); an identical later upload registers it again. Releasing a
+    /// path still in use only defers the drop.
+    fn release_model(&mut self, _client: ClientId, _path: &VfsPath) -> Result<()> {
+        Err(crate::Error::Unsupported("model release"))
     }
     /// Decode provider-owned encoded image bytes (for example an image embedded
     /// in a native container the VFS does not mount) with the engine's shared

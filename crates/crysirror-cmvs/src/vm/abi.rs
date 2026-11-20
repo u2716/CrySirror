@@ -68,6 +68,8 @@ pub type StackWord = [Option<u8>; 4];
 pub struct ParameterStack {
     bytes: Vec<u8>,
     written: Vec<bool>,
+    // CVNS preserves bytes above SP in its 64 KiB native stack allocation.
+    cvns_backing: Option<Vec<u8>>,
     limit: usize,
 }
 
@@ -75,21 +77,34 @@ pub struct ParameterStack {
 impl ParameterStack {
     pub(super) fn snapshot(&self) -> serde_json::Value {
         let written: Vec<u8> = self.written.iter().map(|&set| u8::from(set)).collect();
-        serde_json::json!({
+        let mut snapshot = serde_json::json!({
             "bytes": super::snapshot::hex(&self.bytes),
             "written": super::snapshot::hex(&written),
             "limit": self.limit,
-        })
+        });
+        if let Some(bytes) = &self.cvns_backing { snapshot["cvns_backing"] = super::snapshot::hex(bytes).into(); }
+        snapshot
     }
 
-    pub(super) fn from_snapshot(value: &serde_json::Value) -> Option<Self> {
+    pub(super) fn from_snapshot(value: &serde_json::Value, cvns: bool) -> Option<Self> {
         use super::snapshot::{bytes, word};
         let data = bytes(value, "bytes")?;
         let written: Vec<bool> = bytes(value, "written")?.into_iter().map(|set| set != 0).collect();
-        (data.len() == written.len()).then_some(Self {
+        let limit = word(value, "limit")? as usize;
+        let cvns_backing = if cvns {
+            if limit != 65536 { return None; }
+            let backing = match value.get("cvns_backing") {
+                None => Vec::new(),
+                Some(_) => bytes(value, "cvns_backing")?,
+            };
+            if backing.len() > limit { return None; }
+            Some(backing)
+        } else { None };
+        (data.len() == written.len() && data.len() <= limit).then_some(Self {
+            cvns_backing,
             bytes: data,
             written,
-            limit: word(value, "limit")? as usize,
+            limit,
         })
     }
 }
@@ -99,10 +114,30 @@ impl ParameterStack {
     pub fn new(limit: usize) -> Self {
         Self {
             bytes: Vec::new(),
+            cvns_backing: None,
             written: Vec::new(),
             limit,
         }
     }
+    pub(super) fn cvns() -> Self {
+        Self { cvns_backing: Some(Vec::new()), ..Self::new(65536) }
+    }
+
+    #[cfg(any(test, feature = "runtime"))]
+    pub(super) fn cvns_image(&self) -> Vec<u8> {
+        let mut image = self.cvns_backing.clone().expect("CVNS parameter stack");
+        image.resize(65536, 0);
+        image[..self.bytes.len()].copy_from_slice(&self.bytes);
+        image
+    }
+
+    #[cfg(feature = "runtime")]
+    pub(super) fn from_csp_image(image: &[u8], sp: usize) -> anyhow::Result<Self> {
+        anyhow::ensure!(image.len()==65536 && sp<=image.len(),"invalid CSP1 parameter stack");
+        Ok(Self { bytes:image[..sp].to_vec(), written:vec![true;sp],
+            cvns_backing:Some(image.to_vec()), limit:image.len() })
+    }
+
     pub fn len_bytes(&self) -> usize {
         self.bytes.len()
     }
@@ -122,6 +157,16 @@ impl ParameterStack {
             .try_reserve(count)
             .map_err(|_| StackError("parameter stack allocation failed"))?;
         let value = value.to_le_bytes();
+        if let Some(backing) = &mut self.cvns_backing {
+            let sp = self.bytes.len();
+            let end = sp + count;
+            let word_end = (sp + 4).min(self.limit);
+            backing.resize(backing.len().max(end).max(word_end), 0);
+            backing[sp..word_end].copy_from_slice(&value[..word_end-sp]);
+            self.bytes.extend_from_slice(&backing[sp..end]);
+            self.written.resize(end,true);
+            return Ok(());
+        }
         let known = count.min(4);
         self.bytes.extend_from_slice(&value[..known]);
         self.written.resize(self.bytes.len(), true);
@@ -197,6 +242,14 @@ impl ParameterStack {
             None => Err(StackError("fixed-width frame read outside stack")),
         }
     }
+    #[cfg(feature = "runtime")]
+    pub(super) fn write_prefix(&mut self, start: usize, bytes: &[u8]) -> Result<(), StackError> {
+        let end = start.checked_add(bytes.len()).filter(|end| *end <= self.bytes.len())
+            .ok_or(StackError("registry value outside live stack bytes"))?;
+        self.bytes[start..end].copy_from_slice(bytes);
+        self.written[start..end].fill(true);
+        Ok(())
+    }
     pub(super) fn write_c_string(
         &mut self,
         offset: usize,
@@ -226,6 +279,10 @@ impl ParameterStack {
             .len()
             .checked_sub(count)
             .ok_or(StackError("parameter stack underflow"))?;
+        if let Some(backing) = &mut self.cvns_backing {
+            backing.resize(backing.len().max(self.bytes.len()),0);
+            backing[length..self.bytes.len()].copy_from_slice(&self.bytes[length..]);
+        }
         self.bytes.truncate(length);
         self.written.truncate(length);
         Ok(())

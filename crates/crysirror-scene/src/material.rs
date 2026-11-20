@@ -53,6 +53,82 @@ impl AlphaMode {
         }
     }
 }
+/// Cel ("toon") shading, evaluated on display-referred (gamma) values like
+/// the forward toon shaders of Unity-era games:
+///
+/// - `c = base · base_color` (+ rim `pow(1 − n·v + rim_shift, rim_power) · rim_color`);
+/// - `u = n·l · 0.4951 + 0.5`; `a = shadow.a · (1 − rate(u))`;
+/// - `m = mix(c, shadow.rgb, a)` (+ highlight `hi.rgb · hi.a · max(n·h, 0)^highlight_power · highlight_rate`),
+///   blended toward `shadow_color` by the cast-shadow term;
+/// - colour = `m · ramp(u) · sun + max(n·h, 0)^48 · shininess + c · ambient`.
+///
+/// `lookup_texture` (linear, 256×3) holds the diffuse ramp in row 0, the
+/// shadow-layer rate in row 1 (red) and, with `color_table`, a colour table
+/// in row 2: base, shadow, ramp and highlight colours are replaced by
+/// `table(red · 0.9951)`. `shadow_texture` and `highlight_texture` are
+/// sampled raw (no sRGB decode). Toon materials bind these three textures in
+/// place of the metallic-roughness, occlusion and specular slots, which must
+/// be empty, and take no shader effect.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ToonShading<T = String> {
+    pub lookup_texture: Option<T>,
+    pub shadow_texture: Option<T>,
+    pub highlight_texture: Option<T>,
+    pub color_table: bool,
+    pub rim_color: [f32; 3],
+    pub rim_power: f32,
+    pub rim_shift: f32,
+    /// Display-referred colour under cast shadows.
+    pub shadow_color: [f32; 3],
+    pub shininess: f32,
+    pub highlight_rate: f32,
+    pub highlight_power: f32,
+    /// Inverted-hull outline: clip-space width (0 disables) and colour,
+    /// lit by the ramp at `n·l`.
+    pub outline_width: f32,
+    pub outline_color: [f32; 4],
+}
+impl<T> Default for ToonShading<T> {
+    fn default() -> Self {
+        Self {
+            lookup_texture: None,
+            shadow_texture: None,
+            highlight_texture: None,
+            color_table: false,
+            rim_color: [0.; 3],
+            rim_power: 3.,
+            rim_shift: 0.,
+            shadow_color: [0.5; 3],
+            shininess: 0.,
+            highlight_rate: 0.,
+            highlight_power: 1.,
+            outline_width: 0.,
+            outline_color: [0., 0., 0., 1.],
+        }
+    }
+}
+impl<T> ToonShading<T> {
+    pub fn textures(&self) -> [Option<&T>; 3] {
+        [self.lookup_texture.as_ref(), self.shadow_texture.as_ref(), self.highlight_texture.as_ref()]
+    }
+    pub fn validate(&self) -> Result<()> {
+        let range = |x: f32, a: f32, b: f32| x.is_finite() && (a..=b).contains(&x);
+        ensure!(
+            self.rim_color.iter().chain(&self.shadow_color).chain(&self.outline_color).all(|x| range(*x, 0., 16.))
+                && range(self.rim_power, 0., 64.)
+                && range(self.rim_shift, -1., 1.)
+                && range(self.shininess, 0., 16.)
+                && range(self.highlight_rate, 0., 16.)
+                && range(self.highlight_power, 0., 256.)
+                && range(self.outline_width, 0., 0.1),
+            "toon shading parameter range"
+        );
+        ensure!(!self.color_table || self.lookup_texture.is_some(), "toon colour table needs the lookup texture");
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Material<T = String> {
@@ -108,6 +184,9 @@ pub struct Material<T = String> {
     /// Built-in shader effect or custom WGSL surface hook (ADR 0016).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effect: Option<crate::effect::ShaderEffect>,
+    /// Cel shading model instead of PBR lighting.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub toon: Option<ToonShading<T>>,
 }
 impl<T> Default for Material<T> {
     fn default() -> Self {
@@ -137,6 +216,7 @@ impl<T> Default for Material<T> {
             uv_offset: [0.; 2],
             depth_fade: 0.,
             effect: None,
+            toon: None,
         }
     }
 }
@@ -152,7 +232,23 @@ impl<T> Material<T> {
             self.specular_texture.as_ref(),
         ]
     }
+    /// Every texture, the toon textures after the seven material slots.
+    pub fn all_textures(&self) -> Vec<&T> {
+        let toon = self.toon.iter().flat_map(|t| t.textures());
+        self.textures().into_iter().chain(toon).flatten().collect()
+    }
     pub fn validate(&self) -> Result<()> {
+        if let Some(t) = &self.toon {
+            t.validate()?;
+            ensure!(
+                self.effect.is_none()
+                    && !self.unlit
+                    && self.metallic_roughness_texture.is_none()
+                    && self.occlusion_texture.is_none()
+                    && self.specular_texture.is_none(),
+                "toon materials take no effect, unlit flag or metallic-roughness/occlusion/specular texture"
+            );
+        }
         if let Some(e) = &self.effect {
             e.validate()?;
             match e {
@@ -215,7 +311,7 @@ pub type MaterialSpec = Material<String>;
 impl MaterialSpec {
     pub fn validate_paths(&self) -> Result<()> {
         self.validate()?;
-        for p in self.textures().into_iter().flatten() {
+        for p in self.all_textures() {
             let v = crysirror_core::path::VfsPath::new(crysirror_core::path::Mount::Asset, p)
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
             ensure!(v.relative() == p, "non-canonical material asset path");

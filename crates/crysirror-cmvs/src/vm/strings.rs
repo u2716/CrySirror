@@ -9,12 +9,26 @@ pub(super) fn command(vm: &mut Machine, opcode: u16) -> Result<u16, DecodeError>
     let fail = |why| error(pc, opcode, why);
     let arg = |index| vm.stack().peek_u32(index).map_err(|e| fail(e.0));
     let string = |index| vm.resolve_string(arg(index)?).map_err(|e| fail(e.reason));
-    let (cleanup, result) = match opcode {
+    let cvns = vm.profile() == super::VmProfile::Cvns20040515X86;
+    let operation = if cvns {
+        match opcode {
+            0x20f0 => 0x20f1,
+            0x20f1 => 0x20f0,
+            0x20f8..=0x20fc => opcode + 1,
+            0x20fd => 0x20f8,
+            _ => opcode,
+        }
+    } else {
+        opcode
+    };
+    let cells = vm.state().string_cells();
+    let overlaps = |a, sa, la, b, sb, lb| overlaps(cells, a, sa, la, b, sb, lb);
+    let (cleanup, result) = match operation {
         0x20f0 | 0x20f2 => {
             let target = arg(4)?;
             let source_ref = arg(8)?;
             let source = string(8)?;
-            let output = if opcode == 0x20f2 {
+            let output = if operation == 0x20f2 {
                 let mut buffer = string(4)?.to_vec();
                 buffer.extend_from_slice(source);
                 buffer
@@ -29,7 +43,7 @@ pub(super) fn command(vm: &mut Machine, opcode: u16) -> Result<u16, DecodeError>
         }
         0x20f1 => {
             let equal = compare_folded(string(4)?, string(8)?, true).map_err(fail)?;
-            (8, u32::from(equal))
+            (8, u32::from(if cvns { !equal } else { equal }))
         }
         0x20f3 => {
             let target = arg(4)?;
@@ -38,7 +52,7 @@ pub(super) fn command(vm: &mut Machine, opcode: u16) -> Result<u16, DecodeError>
             let bytes = string(8)?;
             let mut i = start;
             let mut count = 0;
-            while i < end {
+            while if cvns { (i as u32) < end as u32 } else { i < end } {
                 let offset =
                     usize::try_from(i).map_err(|_| fail("negative CMVS substring offset"))?;
                 if offset > bytes.len() {
@@ -72,8 +86,11 @@ pub(super) fn command(vm: &mut Machine, opcode: u16) -> Result<u16, DecodeError>
         }
         0x20f4 => {
             let target = arg(4)?;
-            let delimiter = string(8)?;
-            let source = string(12)?;
+            let (delimiter, source) = if cvns {
+                (string(12)?, string(8)?)
+            } else {
+                (string(8)?, string(12)?)
+            };
             let width = 1 + usize::from(delimiter.first().is_some_and(|&b| lead(b)));
             let offset = delimiter
                 .get(..width)
@@ -86,12 +103,12 @@ pub(super) fn command(vm: &mut Machine, opcode: u16) -> Result<u16, DecodeError>
             let starts_with = compare_folded(string(8)?, string(4)?, false).map_err(fail)?;
             (8, u32::from(starts_with))
         }
-        0x20f6 => (4, native_integer(string(4)?) as u32),
+        0x20f6 => (4, native_integer(string(4)?, !cvns) as u32),
         0x20f7 | 0x20f9 => {
             let source = string(4)?;
             let needle = byte_at(string(8)?, 0);
             let matches = |&byte: &u8| byte == needle;
-            let offset = if opcode == 0x20f7 {
+            let offset = if operation == 0x20f7 {
                 source.iter().position(matches)
             } else {
                 source.iter().rposition(matches)
@@ -101,18 +118,18 @@ pub(super) fn command(vm: &mut Machine, opcode: u16) -> Result<u16, DecodeError>
         0x20f8 => (4, string(4)?.len() as u32),
         0x20fa | 0x20fc | 0x20fd => {
             let target = arg(4)?;
-            let value = match opcode {
+            let value = match operation {
                 0x20fa => FormatArg::Integer(arg(8)?),
                 0x20fc => FormatArg::Integer(arg(12)?),
                 _ => FormatArg::String(string(12)?),
             };
-            let pattern = if opcode == 0x20fa { b"%d-" } else { string(8)? };
-            let output = sprintf(pattern, value, |offset| {
+            let pattern = if operation == 0x20fa { b"%d-" } else { string(8)? };
+            let output = sprintf(pattern, value, cvns, |offset| {
                 vm.string_storage_byte(opcode, target, offset)
                     .map_err(|e| e.reason)
             })
             .map_err(fail)?;
-            if (opcode != 0x20fa
+            if (operation != 0x20fa
                 && overlaps(target, 0, output.len() + 1, arg(8)?, 0, pattern.len() + 1))
                 || matches!(value, FormatArg::String(source)
                     if overlaps(target, 0, output.len() + 1, arg(12)?, 0, source.len() + 1))
@@ -120,7 +137,7 @@ pub(super) fn command(vm: &mut Machine, opcode: u16) -> Result<u16, DecodeError>
                 return Err(fail("overlapping CMVS format operands"));
             }
             vm.write_string_reference(opcode, target, &output)?;
-            return Ok(if opcode == 0x20fa { 8 } else { 12 });
+            return Ok(if operation == 0x20fa { 8 } else { 12 });
         }
         0x20fb => {
             let source = arg(4)?;
@@ -170,10 +187,10 @@ fn byte_at(bytes: &[u8], index: usize) -> u8 {
     bytes.get(index).copied().unwrap_or(0)
 }
 
-fn overlaps(a: u32, start_a: usize, len_a: usize, b: u32, start_b: usize, len_b: usize) -> bool {
+fn overlaps(cells: u32, a: u32, start_a: usize, len_a: usize, b: u32, start_b: usize, len_b: usize) -> bool {
     let (base_a, base_b) = match (StringRef::decode(a), StringRef::decode(b)) {
         (StringRef::StringBank(a), StringRef::StringBank(b)) => {
-            let slot = |index| if index < 128 { index } else { 0 };
+            let slot = |index| if index < cells { index } else { 0 };
             return slot(a) == slot(b) && start_a < start_b + len_b && start_b < start_a + len_a;
         }
         (StringRef::ScriptData(a), StringRef::ScriptData(b))
@@ -188,7 +205,7 @@ fn overlaps(a: u32, start_a: usize, len_a: usize, b: u32, start_b: usize, len_b:
 
 /// 0x140008220 accepts lowercase 0x, treats nondigits as decimal zeroes,
 /// and negates the result if a minus occurs anywhere in a decimal string.
-fn native_integer(bytes: &[u8]) -> i32 {
+fn native_integer(bytes: &[u8], signed_decimal: bool) -> i32 {
     if let Some(hex) = bytes.strip_prefix(b"0x") {
         return hex.iter().fold(0i32, |value, &byte| {
             let digit = if byte.is_ascii_digit() {
@@ -207,7 +224,7 @@ fn native_integer(bytes: &[u8]) -> i32 {
         };
         value.wrapping_mul(10).wrapping_add(i32::from(digit))
     });
-    if bytes.contains(&b'-') {
+    if signed_decimal && bytes.contains(&b'-') {
         value.wrapping_neg()
     } else {
         value
@@ -239,6 +256,7 @@ enum FormatArg<'a> {
 fn sprintf(
     pattern: &[u8],
     argument: FormatArg<'_>,
+    single_x86_word: bool,
     read_destination: impl Fn(usize) -> Result<u8, &'static str>,
 ) -> Result<Vec<u8>, &'static str> {
     let mut output = Vec::new();
@@ -280,6 +298,9 @@ fn sprintf(
             && !matches!(kind, b'd' | b'u' | b'z' | b'x' | b'o' | b's' | b'f' | b't')
         {
             continue;
+        }
+        if single_x86_word && matches!(kind, b'f' | b't') {
+            return Err("64-bit conversion reads past the single CVNS vararg");
         }
         let wide = conversion.is_ascii_uppercase();
         let value = arg

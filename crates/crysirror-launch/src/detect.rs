@@ -6,6 +6,7 @@
 //! profile, and produces a typed engine resource plan. Only data is read;
 //! no native executable or external launcher script runs.
 mod majiro;
+mod cm3d2;
 mod cmvs;
 mod system_nnn;
 mod system4;
@@ -194,6 +195,7 @@ fn detect_layout(dir: &SourcePath) -> Result<Plan> {
         if crate::source_path::SourceFile::open(path)?.read_exact(&mut signature).is_err() || signature != *b"KIF\0" { continue; }
         return catsystem2(dir,&local,&name,prefix,&format!("{config}/{startup}"));
     }
+    if let Some(plan) = cm3d2::detect(dir, &names, &name)? { return Ok(plan); }
     if let Some(plan) = system4::detect(dir, &names, &name)? { return Ok(plan); }
     if let Some(plan) = majiro::detect(dir, &names, &name)? { return Ok(plan); }
     if let Some(plan) = cmvs::detect(dir, &names, &name)? { return Ok(plan); }
@@ -207,8 +209,11 @@ fn detect_layout(dir: &SourcePath) -> Result<Plan> {
     if let Some(plan) = n2system::detect(dir,&names,&name)? {return Ok(plan);}
     if let Some(plan) = rscript::detect(dir,&names,&name)? {return Ok(plan);}
     if let Some(plan) = willplus::detect(dir,&names,&name)? {return Ok(plan);}
-    if find(&names, "data.xp3").is_some() {
-        return krkr(dir, &names, &name);
+    if find(&names, "data.xp3").is_some() || find(&names, "arc").is_some() {
+        let archives = krkr_probe::with_archive_directory(dir, &names)?;
+        if krkr_probe::startup_archive(&archives).is_some() {
+            return krkr(dir, &archives, &name);
+        }
     }
     if find(&names, "gameexe.ini").is_some() && find(&names, "seen.txt").is_some() {
         return reallive(dir, &names, &name);
@@ -447,16 +452,11 @@ fn voice_packs_in(dir: &SourcePath, root: &SourcePath, folders: &[SourcePath]) -
 fn krkr(dir: &SourcePath, names: &[String], name: &str) -> Result<Plan> {
     use krkr_probe::*;
     let exe = main_exe(dir, names).context("KiriKiri game without an executable")?;
-    let tpm: Vec<String> = listing(&dir.join("plugin"))
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|n| n.to_ascii_lowercase().ends_with(".tpm"))
-        .map(|n| format!("plugin/{n}"))
-        .collect();
+    let tpm = filter_modules(dir, names);
     // Profiles in order of evidence; the first that opens data.xp3 and
     // finds its startup wins.
     let mut tried = Vec::new();
-    let mut candidates: Vec<Protection> = Vec::new();
+    let mut candidates = vec![Protection::ArchiveFilter];
     if !tpm.is_empty() {
         candidates.push(Protection::AdlerXor {
             modules: tpm.clone(),
@@ -485,7 +485,13 @@ fn krkr(dir: &SourcePath, names: &[String], name: &str) -> Result<Plan> {
     for protection in candidates {
         match open(dir, &exe, &protection) {
             Ok(archive) => {
-                let protection = protection.authenticated(&archive)?;
+                let protection = match protection.authenticated(&archive) {
+                    Ok(profile) => profile,
+                    Err(err) => {
+                        tried.push(format!("{}: {err:#}", protection.label()));
+                        continue;
+                    }
+                };
                 match canvas(dir, &exe, &archive, &protection) {
                     Ok(canvas) => return Ok(plan(dir, names, name, &exe, protection, canvas)),
                     Err(e) => tried.push(format!("{} canvas: {e:#}", protection.label())),
@@ -509,11 +515,10 @@ pub fn kirikiri_script_search(dir: &Path, needle: &str, limit: usize) -> Result<
     use crysirror_resource::read_all;
     use krkr_probe::*;
     let dir = SourcePath::local(dir);
-    let names = listing(&dir)?;
+    let names = with_archive_directory(&dir, &listing(&dir)?)?;
     let exe = main_exe(&dir, &names).context("KiriKiri game without an executable")?;
-    let tpm: Vec<String> = listing(&dir.join("plugin")).unwrap_or_default().into_iter()
-        .filter(|n| n.to_ascii_lowercase().ends_with(".tpm")).map(|n| format!("plugin/{n}")).collect();
-    let mut candidates = Vec::new();
+    let tpm = filter_modules(&dir, &names);
+    let mut candidates = vec![Protection::ArchiveFilter];
     if !tpm.is_empty() {
         candidates.push(Protection::AdlerXor { modules: tpm.clone() });
         candidates.push(Protection::Cxdec { modules: tpm.clone(), setup: false });
@@ -610,6 +615,7 @@ mod krkr_probe {
 
     #[derive(Clone)]
     pub enum Protection {
+        ArchiveFilter,
         Hxv4,
         Cxdec { modules: Vec<String>, setup: bool },
         AdlerXor { modules: Vec<String> },
@@ -619,6 +625,7 @@ mod krkr_probe {
     impl Protection {
         pub fn label(&self) -> &'static str {
             match self {
+                Self::ArchiveFilter => "archive-authenticated XP3 filter",
                 Self::Hxv4 => "HXV4",
                 Self::HashFoldXor { .. } => "checksum-authenticated folded Adler XOR",
                 Self::AdlerXor { .. } => "rotating Adler XOR",
@@ -629,6 +636,30 @@ mod krkr_probe {
             }
         }
         pub(super) fn authenticated(&self, opened: &Opened) -> Result<Self> {
+            if matches!(self, Self::ArchiveFilter) {
+                let recognized = |archive: &dyn Archive| archive.entries().iter().any(|entry| {
+                    let metadata = archive.entry_metadata(entry.id);
+                    metadata["adler_xor"]["family"] == "MadoCrypt" || metadata["cxdec"]["special"] == "dls:"
+                });
+                if !recognized(opened.archive.as_ref()) {
+                    // A plain startup archive can use a separately protected foreground pack.
+                    let mut found = false;
+                    for name in ["fgimage.xp3", "arc/fgimage.xp3"] {
+                        let Ok(reader) = opened.context.open_sibling(name) else { continue };
+                        let mut ctx = opened.context.clone();
+                        let parent = ctx.source_name.as_deref().and_then(|p| p.rsplit_once('/'));
+                        ctx.source_name = Some(parent.map_or_else(|| name.into(), |(p, _)| format!("{p}/{name}")));
+                        if crysirror_formats_arc::Xp3.open(reader, &ctx).is_ok_and(|a| recognized(a.as_ref())) {
+                            found = true;
+                            break;
+                        }
+                    }
+                    ensure!(found, "no MadoCrypt or Nana evidence");
+                }
+                let startup = opened.find("startup.tjs").context("missing KiriKiri startup script")?;
+                opened.archive.open(startup, &opened.context)?;
+                return Ok(self.clone());
+            }
             if let Self::Cxdec{modules,setup:true}=self {
                 // The format publishes a bootstrap only for setupArchiveData
                 // startup redirects. Classic CXDEC uses ordinary startup.tjs
@@ -665,7 +696,7 @@ mod krkr_probe {
                 } => json!({"cxdec_modules": modules,
                     "cxdec_bootstrap_profile": "__cxdec/protection.json"}),
                 Self::Cxdec { modules, .. } => json!({"cxdec_modules": modules}),
-                Self::Plain => json!({}),
+                Self::ArchiveFilter | Self::Plain => json!({}),
             }
         }
     }
@@ -692,17 +723,37 @@ mod krkr_probe {
                 .map_err(|e| crysirror_core::Error::Io(e.to_string()))
         }
     }
+    pub(super) fn filter_modules(dir: &SourcePath, names: &[String]) -> Vec<String> {
+        let mut modules = with_ext(names, "tpm").cloned().collect::<Vec<_>>();
+        if let Some(plugin) = find(names, "plugin") {
+            let files = listing(&dir.join(plugin)).unwrap_or_default();
+            modules.extend(with_ext(&files, "tpm").map(|name| format!("{plugin}/{name}")));
+        }
+        modules
+    }
+
+    pub(super) fn with_archive_directory(dir: &SourcePath, names: &[String]) -> Result<Vec<String>> {
+        let mut all = names.to_vec();
+        if let Some(arc) = find(names, "arc") {
+            let folder = dir.join(arc);
+            if folder.is_dir() && folder.canonicalize()?.starts_with(dir.canonicalize()?) {
+                all.extend(with_ext(&listing(&folder)?, "xp3").map(|file| format!("{arc}/{file}")));
+            }
+        }
+        Ok(all)
+    }
+
+    pub(super) fn startup_archive(names: &[String]) -> Option<&String> {
+        find(names, "data.xp3").or_else(|| find(names, "arc/data.xp3"))
+    }
+
     /// Companion modules, confined to the game folder.
     struct Companions(SourcePath);
     impl DependencyResolver for Companions {
         fn open(&self, path: &str) -> anyhow::Result<Arc<dyn AssetReader>> {
-            anyhow::ensure!(
-                !path.split(['/', '\\']).any(|s| s == ".."),
-                "companion escapes the game folder"
-            );
-            Ok(Arc::new(File(Mutex::new(crate::source_path::SourceFile::open(
-                self.0.join(path),
-            )?))))
+            let file = self.0.join(path).canonicalize()?;
+            ensure!(file.starts_with(self.0.canonicalize()?), "XP3 companion escapes game folder");
+            Ok(Arc::new(File(Mutex::new(crate::source_path::SourceFile::open(file)?))))
         }
     }
 
@@ -712,7 +763,9 @@ mod krkr_probe {
     }
 
     pub fn open(dir: &SourcePath, exe: &str, protection: &Protection) -> Result<Opened> {
-        let opened = open_archive(dir, "data.xp3", exe, protection)?;
+        let paths = with_archive_directory(dir, &listing(dir)?)?;
+        let data = startup_archive(&paths).context("missing XP3 startup archive")?;
+        let opened = open_archive(dir, data, exe, protection)?;
         // The profile must reach the game's startup script.
         let startup = match protection {
             Protection::Hxv4 => "__bootstrap/protection.json",
@@ -747,8 +800,10 @@ mod krkr_probe {
     }
 
     fn names_ci(dir: &SourcePath, name: &str) -> Result<SourcePath> {
-        let names = listing(dir)?;
-        Ok(dir.join(find(&names, name).with_context(|| format!("{name} missing"))?))
+        let names = with_archive_directory(dir, &listing(dir)?)?;
+        let path = dir.join(find(&names, name).with_context(|| format!("{name} missing"))?).canonicalize()?;
+        ensure!(path.starts_with(dir.canonicalize()?), "XP3 archive escapes game folder");
+        Ok(path)
     }
 
     impl Opened {
@@ -784,7 +839,7 @@ mod krkr_probe {
         if let Ok(c) = canvas_in(archive, protection) {
             return Ok(c);
         }
-        for name in listing(dir)?
+        for name in with_archive_directory(dir, &listing(dir)?)?
             .iter()
             .filter(|n| n.to_ascii_lowercase().ends_with(".xp3"))
         {
@@ -912,7 +967,7 @@ mod krkr_probe {
         }
         let profile = json!({"limits": {"max_entry_size": 268435456u64, "max_index_size": 67108864, "max_entries": 1000000},
             "parameters": {"kirikiri/xp3": protection.parameters(exe)}});
-        let data = find(names, "data.xp3")
+        let data = startup_archive(names)
             .cloned()
             .unwrap_or_else(|| "data.xp3".into());
         let mut mounts = vec![(data.clone(), String::new())];
@@ -1441,6 +1496,19 @@ mod tests {
         std::fs::write(dir.path().join("0.txt"), png.into_inner()).unwrap();
         let error = detect(dir.path()).unwrap_err().to_string();
         assert!(error.contains("image/png"), "{error}");
+    }
+
+    #[test]
+    fn arc_startup_and_sibling_keep_their_native_container_paths() {
+        let names = vec!["arc/data.xp3".to_owned(), "arc/fgimage.xp3".to_owned()];
+        let plan = krkr_probe::plan(
+            &SourcePath::local("."), &names, "authored", "game.exe",
+            krkr_probe::Protection::ArchiveFilter, [640, 480],
+        );
+        assert_eq!(plan.mounts[0].source, "arc/data.xp3");
+        assert_eq!(plan.mounts[0].target, "");
+        assert_eq!(plan.mounts[1].source, "arc/fgimage.xp3");
+        assert_eq!(plan.mounts[1].target, "__xp3/arc/fgimage");
     }
 
     #[test]

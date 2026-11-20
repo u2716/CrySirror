@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
-//! Indexed CMV5, CMV6, CMV7, CMV8 and CMV9 movies. Only the index, static base and current
+//! Indexed CMV3, CMV5, CMV6, CMV7, CMV8 and CMV9 movies. Only the index, static base and current
 //! frame payload are read into the decoder. Audio is exposed as an Ogg range.
 mod jbpd;
 
@@ -30,6 +30,7 @@ struct Entry {
 
 #[derive(Clone, Copy)]
 enum Codec {
+    Cmv3,
     Cmv5,
     Jbpd,
     Cmv7,
@@ -52,7 +53,7 @@ pub fn is_input(reader: &mut (impl Read + Seek)) -> Result<bool> {
     let read = reader.read_exact(&mut magic);
     reader.seek(SeekFrom::Start(0))?;
     match read {
-        Ok(()) => Ok(matches!(&magic, b"CMV5" | b"CMV6" | b"CMV7" | b"CMV8" | b"CMV9")),
+        Ok(()) => Ok(matches!(&magic, b"CMV3" | b"CMV5" | b"CMV6" | b"CMV7" | b"CMV8" | b"CMV9")),
         Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => Ok(false),
         Err(error) => Err(error.into()),
     }
@@ -81,7 +82,7 @@ impl Index {
         // 0x14004c360 reads CMV5 and CMV7 through the index alone, without the checks below.
         let early = matches!(&head[..4], b"CMV5" | b"CMV7");
         ensure!(
-            early || matches!(&head[..4], b"CMV6" | b"CMV8" | b"CMV9"),
+            early || matches!(&head[..4], b"CMV3" | b"CMV6" | b"CMV8" | b"CMV9"),
             "CMV signature"
         );
         let count = word(&head, 16) as usize;
@@ -168,6 +169,7 @@ impl Index {
                 "CMV resource table spacing"
             );
             match &head[..4] {
+                b"CMV3" => Codec::Cmv3,
                 b"CMV5" => Codec::Cmv5,
                 b"CMV7" => Codec::Cmv7,
                 b"CMV8" => Codec::Jbpe,
@@ -250,6 +252,16 @@ impl<R: Read + Seek> Movie<R> {
         self.index.metadata
     }
 
+    /// Indexed header frame rate and number of independent pictures.
+    pub fn frame_index(&self) -> (u32, usize) { (self.index.rate, self.index.frames.len()) }
+
+    /// Decode an indexed picture without decoding the intervening packets.
+    /// Delta-layout CMVs reuse their immutable base surface for every frame.
+    pub fn decode_at(&mut self, index: usize) -> Result<Option<Frame>> {
+        self.next = index;
+        self.decode_next()
+    }
+
     pub fn decode_next(&mut self) -> Result<Option<Frame>> {
         let Some(&entry) = self.index.frames.get(self.next) else {
             return Ok(None);
@@ -258,6 +270,7 @@ impl<R: Read + Seek> Movie<R> {
         let decoded = match &self.base {
             Some((mask, base)) => jbpd::decode_masked(&self.packet, mask, false, Some(base)),
             None => match self.index.codec {
+                Codec::Cmv3 => jbpd::decode_cmv3(&self.packet),
                 Codec::Cmv5 => jbpd::decode_cmv5(&self.packet),
                 Codec::Cmv7 => jbpd::decode_cmv7(&self.packet),
                 Codec::Jbpe => jbpd::decode_alpha(&self.packet),

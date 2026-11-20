@@ -71,7 +71,7 @@ fn reads_synthetic_ranges_emitted_by_the_original_csv2_writer() {
 #[test]
 fn checked_slot_keeps_native_header_and_expanded_main_image() {
     let raw = script();
-    let main = Script::decode_expanded(raw.clone()).unwrap();
+    let main = Script::decode_saved(raw.clone(), ScriptFormat::Ps2a).unwrap();
     let live = main.expanded_image(b"data", b"saved\0").unwrap();
     assert_eq!(&live[..48], &raw[..48]);
     assert!(main.expanded_image(b"longer", b"saved\0").is_err());
@@ -167,4 +167,39 @@ fn invalid_sections_trailer_script_and_cancellation_do_not_return_state() {
     .err()
     .unwrap();
     assert!(format!("{error:#}").contains("cancelled"), "{error:#}");
+}
+
+#[test]
+fn csp1_uses_its_own_checkpoint_key_and_pss0_main_image() -> Result<()> {
+    // Independently encoded literal-only LZSS packets for each section.
+    let record = b"\x00\x01\x04\x00abc\0";
+    let mut image = script();
+    image[..4].copy_from_slice(b"PSS0");
+    let literal = |data: &[u8]| -> Vec<u8> {
+        data.chunks(8).flat_map(|chunk| std::iter::once(0xff).chain(chunk.iter().copied())).collect()
+    };
+    let mut packed = literal(record);
+    for (i, b) in packed.iter_mut().enumerate() {
+        *b = b.wrapping_add(128) ^ b"SAVE_IMAGE_ARC"[i % 14];
+    }
+    let sum: u16 = packed.iter().map(|&b| u16::from(b)).sum();
+    let mut h = header(false);
+    h[..4].copy_from_slice(b"CSP1");
+    h[544..546].copy_from_slice(&3u16.to_le_bytes());
+    put_word(&mut h, 560, packed.len() as u32);
+    put_word(&mut h, 580, record.len() as u32);
+    let main = literal(&image);
+    put_word(&mut h, 568, main.len() as u32);
+    put_word(&mut h, 588, image.len() as u32);
+    put_word(&mut h, 540, (HEADER_BYTES + packed.len() + main.len()) as u32);
+    let file = [h.as_slice(), &packed, &main, &sum.to_le_bytes()].concat();
+    let reader = MemoryAssetReader(file.into());
+    assert!(unpack(&reader, || Ok(())).is_err());
+    let slot = unpack_native(SlotFormat::Csp1, &reader, || Ok(()))?;
+    assert_eq!(slot.checkpoint, record);
+    assert_eq!(slot.main.format(), ScriptFormat::Pss0);
+    let written = pack_native(SlotFormat::Csp1, slot.header, record, None, &image, || Ok(()))?;
+    let reopened = unpack_native(SlotFormat::Csp1, &MemoryAssetReader(written.into()), || Ok(()))?;
+    assert_eq!(reopened.main.expanded_image(&[5,6,7,8], b"hello\0")?, image);
+    Ok(())
 }

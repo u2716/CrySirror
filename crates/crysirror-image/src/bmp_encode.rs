@@ -182,6 +182,25 @@ pub fn encode_box_average_bmp(
     size: [u32; 2],
     check: &dyn Fn() -> Result<()>,
 ) -> Result<Vec<u8>> {
+    encode_box_average_bmp_with_rows(source, rgba, size, BoxSampleRows::VerticalRatio, check)
+}
+
+/// Fixed-point interval used to advance from one output row to the next.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum BoxSampleRows {
+    VerticalRatio,
+    /// Use the horizontal interval on both axes. The sample box itself
+    /// still has the height derived from the vertical ratio.
+    HorizontalRatio,
+}
+
+pub fn encode_box_average_bmp_with_rows(
+    source: [u32; 2],
+    rgba: &[u8],
+    size: [u32; 2],
+    rows: BoxSampleRows,
+    check: &dyn Fn() -> Result<()>,
+) -> Result<Vec<u8>> {
     check()?;
     ensure!(
         crate::rgba_len(source[0], source[1])? == rgba.len(),
@@ -205,13 +224,22 @@ pub fn encode_box_average_bmp(
         (u64::from(source[axis]) << 10) / u64::from(size[axis])
     });
     let extent = step.map(|value| (value >> 10) as usize);
+    let row_step = match rows {
+        BoxSampleRows::VerticalRatio => step[1],
+        BoxSampleRows::HorizontalRatio => {
+            ensure!(!extent.contains(&0), "empty thumbnail averaging box");
+            let last = (u64::from(height - 1) * step[0]) >> 10;
+            ensure!(last + extent[1] as u64 <= u64::from(source[1]), "thumbnail sampling exceeds frame height");
+            step[0]
+        }
+    };
     if extent.contains(&0) {
         check()?;
         return Ok(out);
     }
     for y in 0..height as usize {
         check()?;
-        let top = ((y as u64 * step[1]) >> 10) as usize;
+        let top = ((y as u64 * row_step) >> 10) as usize;
         let bottom = (top + extent[1]).min(source[1] as usize);
         let row = BMP_HEADER_BYTES as usize + (height as usize - 1 - y) * pitch;
         for (x, pixel) in out[row..row + width as usize * 3]
@@ -233,6 +261,9 @@ pub fn encode_box_average_bmp(
                         rgb[channel] += u64::from(input[channel]);
                     }
                 }
+            }
+            if rows == BoxSampleRows::HorizontalRatio {
+                rgb = rgb.map(|value| value & u64::from(u32::MAX));
             }
             let [r, g, b] = rgb.map(|value| (value / count as u64) as u8);
             pixel.copy_from_slice(&[b, g, r]);
@@ -275,6 +306,24 @@ mod tests {
             Ok(())
         })
         .is_err());
+    }
+
+    #[test]
+    fn horizontal_row_interval_keeps_the_vertical_box_height() {
+        let mut pixels = Vec::new();
+        for y in 0..8 {
+            for _ in 0..4 {
+                pixels.extend_from_slice(&[y, 0, 0, 255]);
+            }
+        }
+        let bmp = encode_box_average_bmp_with_rows(
+            [4, 8], &pixels, [2, 2], BoxSampleRows::HorizontalRatio, &|| Ok(()),
+        ).unwrap();
+        // Rows average source y = 2..6 and 0..4 in bottom-up BMP order.
+        assert_eq!([bmp[56], bmp[64]], [3, 1]);
+        assert!(encode_box_average_bmp_with_rows(
+            [8, 4], &pixels, [2, 2], BoxSampleRows::HorizontalRatio, &|| Ok(()),
+        ).is_err());
     }
 
     #[test]
