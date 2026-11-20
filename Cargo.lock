@@ -1936,6 +1936,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "crysirror-core",
+ "crysirror-image",
  "crysirror-unity",
  "image 0.24.9",
  "serde",

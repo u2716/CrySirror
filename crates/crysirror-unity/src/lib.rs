@@ -20,8 +20,10 @@ pub mod gltf;
 pub mod managed;
 pub mod managed_gen;
 pub mod reader;
+pub mod scene6;
 pub mod texture;
 pub mod typetree;
+pub mod ugui;
 pub mod unity6;
 
 use anyhow::{bail, ensure, Context, Result};

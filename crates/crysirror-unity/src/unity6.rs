@@ -304,3 +304,46 @@ pub fn mesh(f: &Fields, resolve: StreamResolver) -> Result<Mesh6> {
     }
     Ok(m)
 }
+
+/// A sprite's texture and texture rectangle (x, y, w, h in texture pixels,
+/// bottom-up): `m_RD`, or for sprites packed in a `SpriteAtlas` the
+/// atlas's `m_RenderDataMap` entry for the sprite's `m_RenderDataKey`.
+/// `atlas` decodes the sprite's `m_SpriteAtlas` (same file reference).
+/// The texture pointer is relative to the file that holds the render data
+/// (`true` when it is the atlas's file).
+pub fn sprite_render(sprite: &Fields, atlas: &dyn Fn(crate::PPtr) -> Option<Fields>) -> Option<(crate::PPtr, [f32; 4], bool)> {
+    let rect = |s: &Fields| -> Option<[f32; 4]> {
+        match s.get("textureRect") {
+            Some(Value::Struct(r)) => Some(["x", "y", "width", "height"].map(|k| r.float(k).unwrap_or(0.) as f32)),
+            _ => None,
+        }
+    };
+    if let Some(Value::Struct(rd)) = sprite.get("m_RD") {
+        if let Some(Value::PPtr(t)) = rd.get("texture") {
+            if !t.is_null() {
+                return Some((*t, rect(rd)?, false));
+            }
+        }
+    }
+    let Some(Value::PPtr(a)) = sprite.get("m_SpriteAtlas") else { return None };
+    if a.is_null() {
+        return None;
+    }
+    let atlas = atlas(*a)?;
+    let key = match sprite.get("m_RenderDataKey") {
+        Some(Value::Struct(k)) => k.clone(),
+        _ => return None,
+    };
+    let Some(Value::Array(map)) = atlas.get("m_RenderDataMap") else { return None };
+    for e in map {
+        let Value::Struct(pair) = e else { continue };
+        if pair.get("first") == Some(&Value::Struct(key.clone())) {
+            if let Some(Value::Struct(d)) = pair.get("second") {
+                if let Some(Value::PPtr(t)) = d.get("texture") {
+                    return Some((*t, rect(d)?, true));
+                }
+            }
+        }
+    }
+    None
+}

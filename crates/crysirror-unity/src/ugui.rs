@@ -1,0 +1,500 @@
+// SPDX-License-Identifier: MPL-2.0
+//! uGUI layout of a [`Scene6`] into renderer-independent draw items:
+//! `Canvas`/`CanvasScaler` (screen-space overlay, constant pixel size or
+//! scale with screen size), `RectTransform` rectangles (anchors, pivot,
+//! anchored position, size delta, local scale), `CanvasGroup` alpha,
+//! `Image` (simple and sliced sprites, plain colour) and `TextMeshProUGUI`
+//! text runs, plus raycast targets for hit testing. Layout groups are not
+//! recomputed: the serialized rectangles carry the editor's last layout.
+//!
+//! Output coordinates are screen pixels, origin top-left, y down.
+use crate::managed::{Fields, Value};
+use crate::scene6::{Scene6, CANVAS, CANVAS_GROUP, RECT_TRANSFORM};
+use crate::{class_id, PPtr};
+use std::collections::HashMap;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Rect {
+    pub x0: f32,
+    pub y0: f32,
+    pub x1: f32,
+    pub y1: f32,
+}
+
+impl Rect {
+    pub fn width(&self) -> f32 {
+        self.x1 - self.x0
+    }
+    pub fn height(&self) -> f32 {
+        self.y1 - self.y0
+    }
+    pub fn contains(&self, x: f32, y: f32) -> bool {
+        x >= self.x0 && x < self.x1 && y >= self.y0 && y < self.y1
+    }
+}
+
+/// Run-time overrides of a node (set by game logic).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct NodeState {
+    pub active: Option<bool>,
+    /// `CanvasGroup.alpha`.
+    pub group_alpha: Option<f32>,
+    /// `Graphic.color`.
+    pub color: Option<[f32; 4]>,
+    /// `TMP_Text.text`.
+    pub text: Option<String>,
+    /// `Image.sprite` (a sprite of the scene's file).
+    pub sprite: Option<PPtr>,
+    pub anchored_position: Option<[f32; 2]>,
+    pub size_delta: Option<[f32; 2]>,
+    pub scale: Option<[f32; 3]>,
+    /// `Image.fillAmount`.
+    pub fill: Option<f32>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Paint {
+    /// A sprite (or the white texture when `sprite` is null) with
+    /// nine-slice borders in canvas units (left, bottom, right, top).
+    Image { sprite: PPtr, color: [f32; 4], sliced: Option<[f32; 4]>, fill: Option<(i64, f32)> },
+    Text { text: String, font: PPtr, size: f32, color: [f32; 4], alignment: i64, wrap: bool, margin: [f32; 4] },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct DrawItem {
+    pub node: usize,
+    pub rect: Rect,
+    /// Canvas units → screen pixels.
+    pub scale: f32,
+    pub paint: Paint,
+    /// Canvas sorting order, then hierarchy order.
+    pub order: (i64, u32),
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Layout {
+    pub items: Vec<DrawItem>,
+    /// Raycast targets in draw order: (node, rect).
+    pub hits: Vec<(usize, Rect)>,
+    pub rects: HashMap<usize, Rect>,
+}
+
+fn color(f: &Fields, name: &str) -> [f32; 4] {
+    match f.get(name) {
+        Some(Value::Struct(s)) => ["r", "g", "b", "a"].map(|k| s.float(k).unwrap_or(1.) as f32),
+        _ => [1.; 4],
+    }
+}
+
+fn vec2(f: &Fields, name: &str, d: [f32; 2]) -> [f32; 2] {
+    match f.get(name) {
+        Some(Value::Struct(s)) => [s.float("x").map_or(d[0], |v| v as f32), s.float("y").map_or(d[1], |v| v as f32)],
+        _ => d,
+    }
+}
+
+fn pptr(f: &Fields, name: &str) -> PPtr {
+    match f.get(name) {
+        Some(Value::PPtr(p)) => *p,
+        _ => PPtr::default(),
+    }
+}
+
+/// Sprite border lookup for sliced images: (left, bottom, right, top) in
+/// sprite pixels and the sprite's pixels per unit.
+pub type SpriteInfo<'a> = &'a dyn Fn(PPtr) -> Option<([f32; 4], f32)>;
+
+/// Sprite size in pixels (`Sprite.rect`) for `Image` preferred sizes.
+pub type SpriteSize<'a> = &'a dyn Fn(PPtr) -> Option<([f32; 2], f32)>;
+
+/// Text measurement: (text, font asset, font size) → (width, height) in
+/// canvas units of the unwrapped text.
+pub type MeasureText<'a> = &'a dyn Fn(&str, PPtr, f32) -> [f32; 2];
+
+/// Layout inputs supplied by the consumer.
+pub struct Services<'a> {
+    pub sprite_info: SpriteInfo<'a>,
+    pub sprite_size: SpriteSize<'a>,
+    pub measure: MeasureText<'a>,
+}
+
+struct Walk {
+    /// Parent rectangle in canvas units, y up (x0, y0 bottom-left).
+    parent: Rect,
+    /// Canvas units → screen pixels and the canvas origin on screen.
+    scale: f32,
+    origin: [f32; 2],
+    alpha: f32,
+    sorting: i64,
+    in_canvas: bool,
+}
+
+/// Lay out every active canvas of the scene for a `width`×`height` screen.
+pub fn layout(scene: &Scene6, states: &HashMap<usize, NodeState>, width: f32, height: f32, svc: &Services) -> Layout {
+    let mut out = Layout::default();
+    let mut order = 0u32;
+    let mut driven: HashMap<usize, crate::scene6::RectParams> = HashMap::new();
+    for &r in &scene.roots {
+        let w = Walk { parent: Rect { x0: 0., y0: 0., x1: width, y1: height }, scale: 1., origin: [0., 0.], alpha: 1., sorting: 0, in_canvas: false };
+        walk(scene, states, r, w, width, height, svc, &mut driven, &mut out, &mut order);
+    }
+    out.items.sort_by(|a, b| a.order.cmp(&b.order));
+    out
+}
+
+#[allow(clippy::too_many_arguments)]
+fn walk(scene: &Scene6, states: &HashMap<usize, NodeState>, n: usize, mut w: Walk, sw: f32, sh: f32, svc: &Services, driven: &mut HashMap<usize, crate::scene6::RectParams>, out: &mut Layout, order: &mut u32) {
+    let sprite_info = svc.sprite_info;
+    let node = &scene.nodes[n];
+    let st = states.get(&n);
+    if !st.and_then(|s| s.active).unwrap_or(node.active) {
+        return;
+    }
+    // A root Canvas (screen space overlay/camera) defines the canvas space.
+    if let Some(c) = scene.component(n, CANVAS, "") {
+        if c.fields.int("m_Enabled").unwrap_or(1) != 0 && !w.in_canvas {
+            let mut scale = c.fields.float("m_ScaleFactor").unwrap_or(1.) as f32;
+            if let Some(cs) = node.components.iter().find(|c| c.script.ends_with("CanvasScaler")) {
+                let f = &cs.fields;
+                match f.int("m_UiScaleMode").unwrap_or(0) {
+                    1 => {
+                        let reference = vec2(f, "m_ReferenceResolution", [800., 600.]);
+                        let m = f.float("m_MatchWidthOrHeight").unwrap_or(0.) as f32;
+                        scale = match f.int("m_ScreenMatchMode").unwrap_or(0) {
+                            1 => (sw / reference[0]).min(sh / reference[1]),
+                            2 => (sw / reference[0]).max(sh / reference[1]),
+                            _ => {
+                                let lw = (sw / reference[0]).log2();
+                                let lh = (sh / reference[1]).log2();
+                                2f32.powf(lw + (lh - lw) * m)
+                            }
+                        };
+                    }
+                    0 => scale = f.float("m_ScaleFactor").unwrap_or(1.) as f32,
+                    _ => {}
+                }
+            }
+            w = Walk { parent: Rect { x0: 0., y0: 0., x1: sw / scale, y1: sh / scale }, scale, origin: [0., 0.], alpha: w.alpha, sorting: c.fields.int("m_SortingOrder").unwrap_or(0), in_canvas: true };
+            out.rects.insert(n, Rect { x0: 0., y0: 0., x1: sw, y1: sh });
+            for &k in &node.children {
+                walk(scene, states, k, Walk { ..w }, sw, sh, svc, driven, out, order);
+            }
+            return;
+        }
+    }
+    if !w.in_canvas {
+        for &k in &node.children {
+            walk(scene, states, k, Walk { ..w }, sw, sh, svc, driven, out, order);
+        }
+        return;
+    }
+    // RectTransform rectangle in the parent's space (canvas units, y up).
+    let Some(mut rp) = driven.get(&n).copied().or(node.xform.rect) else { return };
+    if let Some(p) = st.and_then(|s| s.anchored_position) {
+        rp.anchored_position = p;
+    }
+    if let Some(d) = st.and_then(|s| s.size_delta) {
+        rp.size_delta = d;
+    }
+    let scale3 = st.and_then(|s| s.scale).unwrap_or(node.xform.scale);
+    let pr = w.parent;
+    let amin = [pr.x0 + rp.anchor_min[0] * pr.width(), pr.y0 + rp.anchor_min[1] * pr.height()];
+    let amax = [pr.x0 + rp.anchor_max[0] * pr.width(), pr.y0 + rp.anchor_max[1] * pr.height()];
+    let mut size = [amax[0] - amin[0] + rp.size_delta[0], amax[1] - amin[1] + rp.size_delta[1]];
+    // ContentSizeFitter (min 1 / preferred 2 per axis) resizes the node
+    // around its pivot.
+    if let Some(csf) = script(scene, n, "ContentSizeFitter") {
+        for (axis, key) in [(0, "m_HorizontalFit"), (1, "m_VerticalFit")] {
+            let fit = csf.int(key).unwrap_or(0);
+            if fit != 0 {
+                let (min, pref, _) = sizes(scene, states, n, axis, svc);
+                let want = if fit == 1 { min } else { pref };
+                rp.size_delta[axis] += want - size[axis];
+                size[axis] = want;
+            }
+        }
+    }
+    let pivot_pos = [
+        amin[0] + (amax[0] - amin[0]) * rp.pivot[0] + rp.anchored_position[0],
+        amin[1] + (amax[1] - amin[1]) * rp.pivot[1] + rp.anchored_position[1],
+    ];
+    // Local scale applies around the pivot (rotation is not laid out).
+    let sx = scale3[0];
+    let sy = scale3[1];
+    let local = Rect {
+        x0: pivot_pos[0] - rp.pivot[0] * size[0] * sx,
+        y0: pivot_pos[1] - rp.pivot[1] * size[1] * sy,
+        x1: pivot_pos[0] + (1. - rp.pivot[0]) * size[0] * sx,
+        y1: pivot_pos[1] + (1. - rp.pivot[1]) * size[1] * sy,
+    };
+    let screen = Rect {
+        x0: w.origin[0] + local.x0 * w.scale,
+        x1: w.origin[0] + local.x1 * w.scale,
+        y0: sh - (w.origin[1] + local.y1 * w.scale),
+        y1: sh - (w.origin[1] + local.y0 * w.scale),
+    };
+    out.rects.insert(n, screen);
+    let mut alpha = w.alpha;
+    if let Some(g) = scene.component(n, CANVAS_GROUP, "") {
+        alpha *= st.and_then(|s| s.group_alpha).unwrap_or(g.fields.float("m_Alpha").unwrap_or(1.) as f32);
+    }
+    // Children see this rect in unscaled local units (size, not scaled
+    // size); scale carries into their screen mapping.
+    let child_parent = Rect { x0: 0., y0: 0., x1: size[0], y1: size[1] };
+    let child_origin = [w.origin[0] + local.x0 * w.scale, w.origin[1] + local.y0 * w.scale];
+    let child_scale = w.scale * sx;
+    for c in &node.components {
+        if c.class_id != class_id::MONO_BEHAVIOUR || c.fields.int("m_Enabled").unwrap_or(1) == 0 {
+            continue;
+        }
+        let f = &c.fields;
+        let tint = st.and_then(|s| s.color).unwrap_or_else(|| color(f, "m_Color"));
+        let tint = [tint[0], tint[1], tint[2], tint[3] * alpha];
+        let paint = match c.script.rsplit('.').next().unwrap_or("") {
+            "Image" | "RawImage" => {
+                let sprite = st.and_then(|s| s.sprite).unwrap_or_else(|| pptr(f, if c.script.ends_with("RawImage") { "m_Texture" } else { "m_Sprite" }));
+                let ty = f.int("m_Type").unwrap_or(0);
+                let sliced = if ty == 1 || ty == 2 {
+                    sprite_info(sprite).filter(|(b, _)| b.iter().any(|v| *v > 0.)).map(|(b, ppu)| {
+                        let mult = f.float("m_PixelsPerUnitMultiplier").unwrap_or(1.) as f32;
+                        // Canvas reference pixels per unit 100.
+                        let k = 100. / (ppu * mult.max(1e-3));
+                        b.map(|v| v * k)
+                    })
+                } else {
+                    None
+                };
+                let fill = (ty == 3).then(|| (f.int("m_FillMethod").unwrap_or(0), st.and_then(|s| s.fill).unwrap_or(f.float("m_FillAmount").unwrap_or(1.) as f32)));
+                Some(Paint::Image { sprite, color: tint, sliced, fill })
+            }
+            "TextMeshProUGUI" => {
+                let text = st.and_then(|s| s.text.clone()).unwrap_or_else(|| f.string("m_text").unwrap_or("").to_owned());
+                let fc = color(f, "m_fontColor");
+                let fc = st.and_then(|s| s.color).unwrap_or(fc);
+                let margin = match f.get("m_margin") {
+                    Some(Value::Struct(s)) => ["x", "y", "z", "w"].map(|k| s.float(k).unwrap_or(0.) as f32),
+                    _ => [0.; 4],
+                };
+                Some(Paint::Text {
+                    text,
+                    font: pptr(f, "m_fontAsset"),
+                    size: f.float("m_fontSize").unwrap_or(36.) as f32,
+                    color: [fc[0], fc[1], fc[2], fc[3] * alpha],
+                    alignment: f.int("m_HorizontalAlignment").map(|h| h | (f.int("m_VerticalAlignment").unwrap_or(256))).unwrap_or(f.int("m_textAlignment").unwrap_or(257)),
+                    wrap: f.int("m_TextWrappingMode").map(|m| m != 0).unwrap_or(f.int("m_enableWordWrapping").unwrap_or(1) != 0),
+                    margin,
+                })
+            }
+            _ => None,
+        };
+        if let Some(paint) = paint {
+            *order += 1;
+            if f.int("m_RaycastTarget").unwrap_or(0) != 0 && alpha > 0. {
+                out.hits.push((n, screen));
+            }
+            out.items.push(DrawItem { node: n, rect: screen, scale: w.scale * sx, paint, order: (w.sorting, *order) });
+        }
+    }
+    let _ = RECT_TRANSFORM;
+    // Horizontal/VerticalLayoutGroup drive their children's rectangles.
+    for (axis, name) in [(0usize, "HorizontalLayoutGroup"), (1, "VerticalLayoutGroup")] {
+        if let Some(g) = script(scene, n, name) {
+            arrange(scene, states, n, g, axis, size, svc, driven);
+        }
+    }
+    for &k in &node.children {
+        walk(scene, states, k, Walk { parent: child_parent, scale: child_scale, origin: child_origin, alpha, sorting: w.sorting, in_canvas: true }, sw, sh, svc, driven, out, order);
+    }
+}
+
+/// The node's enabled MonoBehaviour with this script class (last name part).
+fn script<'a>(scene: &'a Scene6, n: usize, name: &str) -> Option<&'a Fields> {
+    scene.nodes[n]
+        .components
+        .iter()
+        .find(|c| c.class_id == class_id::MONO_BEHAVIOUR && c.fields.int("m_Enabled").unwrap_or(1) != 0 && c.script.rsplit('.').next() == Some(name))
+        .map(|c| &c.fields)
+}
+
+fn active(scene: &Scene6, states: &HashMap<usize, NodeState>, n: usize) -> bool {
+    states.get(&n).and_then(|s| s.active).unwrap_or(scene.nodes[n].active)
+}
+
+fn padding(g: &Fields) -> [f32; 4] {
+    match g.get("m_Padding") {
+        Some(Value::Struct(s)) => ["m_Left", "m_Right", "m_Top", "m_Bottom"].map(|k| s.int(k).unwrap_or(0) as f32),
+        _ => [0.; 4],
+    }
+}
+
+/// Layout children of a group (active, not `ignoreLayout`).
+fn layout_children(scene: &Scene6, states: &HashMap<usize, NodeState>, n: usize) -> Vec<usize> {
+    scene.nodes[n]
+        .children
+        .iter()
+        .copied()
+        .filter(|&c| active(scene, states, c) && script(scene, c, "LayoutElement").is_none_or(|e| e.int("m_IgnoreLayout").unwrap_or(0) == 0))
+        .collect()
+}
+
+/// `LayoutUtility` min/preferred/flexible size of a node along `axis`.
+fn sizes(scene: &Scene6, states: &HashMap<usize, NodeState>, n: usize, axis: usize, svc: &Services) -> (f32, f32, f32) {
+    let (mut min, mut pref, mut flex) = (0f32, 0f32, 0f32);
+    let group = [(0usize, "HorizontalLayoutGroup"), (1, "VerticalLayoutGroup")].into_iter().find_map(|(a, name)| script(scene, n, name).map(|g| (a, g)));
+    if let Some((along, g)) = group {
+        let pad = padding(g);
+        let edge = if axis == 0 { pad[0] + pad[1] } else { pad[2] + pad[3] };
+        let spacing = g.float("m_Spacing").unwrap_or(0.) as f32;
+        let control = g.int(if axis == 0 { "m_ChildControlWidth" } else { "m_ChildControlHeight" }).unwrap_or(1) != 0;
+        let kids = layout_children(scene, states, n);
+        for (i, &c) in kids.iter().enumerate() {
+            let (cmin, cpref, cflex) = if control {
+                sizes(scene, states, c, axis, svc)
+            } else {
+                let d = scene.nodes[c].xform.rect.map_or(0., |r| r.size_delta[axis]);
+                (d, d, 0.)
+            };
+            if along == axis {
+                min += cmin;
+                pref += cpref;
+                flex += cflex;
+                if i > 0 {
+                    min += spacing;
+                    pref += spacing;
+                }
+            } else {
+                min = min.max(cmin);
+                pref = pref.max(cpref);
+                flex = flex.max(cflex);
+            }
+        }
+        min += edge;
+        pref = pref.max(min - edge) + edge;
+    } else {
+        // ILayoutElement graphics.
+        for c in &scene.nodes[n].components {
+            if c.class_id != class_id::MONO_BEHAVIOUR || c.fields.int("m_Enabled").unwrap_or(1) == 0 {
+                continue;
+            }
+            match c.script.rsplit('.').next().unwrap_or("") {
+                "Image" => {
+                    let sp = states.get(&n).and_then(|s| s.sprite).unwrap_or_else(|| pptr(&c.fields, "m_Sprite"));
+                    if let Some((px, ppu)) = (svc.sprite_size)(sp) {
+                        let k = 100. / ppu.max(1e-3);
+                        if c.fields.int("m_Type").unwrap_or(0) == 0 {
+                            pref = pref.max(px[axis] * k);
+                        }
+                    }
+                }
+                "TextMeshProUGUI" => {
+                    let text = states.get(&n).and_then(|s| s.text.clone()).unwrap_or_else(|| c.fields.string("m_text").unwrap_or("").to_owned());
+                    let m = (svc.measure)(&text, pptr(&c.fields, "m_fontAsset"), c.fields.float("m_fontSize").unwrap_or(36.) as f32);
+                    pref = pref.max(m[axis]);
+                }
+                _ => {}
+            }
+        }
+    }
+    if let Some(e) = script(scene, n, "LayoutElement") {
+        let get = |k: &str| e.float(k).map(|v| v as f32).filter(|v| *v >= 0.);
+        let (kmin, kpref, kflex) = if axis == 0 { ("m_MinWidth", "m_PreferredWidth", "m_FlexibleWidth") } else { ("m_MinHeight", "m_PreferredHeight", "m_FlexibleHeight") };
+        if let Some(v) = get(kmin) {
+            min = v;
+        }
+        if let Some(v) = get(kpref) {
+            pref = v;
+        }
+        if let Some(v) = get(kflex) {
+            flex = v;
+        }
+    }
+    (min, pref.max(min), flex)
+}
+
+/// `HorizontalOrVerticalLayoutGroup.SetChildrenAlongAxis` for both axes of
+/// a group of size `size` (canvas units): children get top-left anchors.
+#[allow(clippy::too_many_arguments)]
+fn arrange(scene: &Scene6, states: &HashMap<usize, NodeState>, n: usize, g: &Fields, along: usize, size: [f32; 2], svc: &Services, driven: &mut HashMap<usize, crate::scene6::RectParams>) {
+    let kids = layout_children(scene, states, n);
+    if kids.is_empty() {
+        return;
+    }
+    let pad = padding(g);
+    let spacing = g.float("m_Spacing").unwrap_or(0.) as f32;
+    // TextAnchor: 0..8 = upper/middle/lower × left/center/right.
+    let anchor = g.int("m_ChildAlignment").unwrap_or(0);
+    let align = [(anchor % 3) as f32 * 0.5, (anchor / 3) as f32 * 0.5];
+    let reverse = g.int("m_ReverseArrangement").unwrap_or(0) != 0;
+    let mut pos = [[0f32; 2]; 0].to_vec();
+    let mut sz = Vec::new();
+    for axis in 0..2 {
+        let control = g.int(if axis == 0 { "m_ChildControlWidth" } else { "m_ChildControlHeight" }).unwrap_or(1) != 0;
+        let expand = g.int(if axis == 0 { "m_ChildForceExpandWidth" } else { "m_ChildForceExpandHeight" }).unwrap_or(1) != 0;
+        let inner = size[axis] - if axis == 0 { pad[0] + pad[1] } else { pad[2] + pad[3] };
+        let lead = if axis == 0 { pad[0] } else { pad[2] };
+        let child_sizes: Vec<(f32, f32, f32)> = kids
+            .iter()
+            .map(|&c| {
+                if control {
+                    let (a, b, f) = sizes(scene, states, c, axis, svc);
+                    (a, b, if expand { f.max(1.) } else { f })
+                } else {
+                    let d = scene.nodes[c].xform.rect.map_or(0., |r| r.size_delta[axis]);
+                    (d, d, if expand { 1. } else { 0. })
+                }
+            })
+            .collect();
+        if axis == along {
+            let total_pref: f32 = child_sizes.iter().map(|c| c.1).sum::<f32>() + spacing * (kids.len() - 1) as f32;
+            let total_flex: f32 = child_sizes.iter().map(|c| c.2).sum();
+            let extra = (inner - total_pref).max(0.);
+            let mut cursor = lead;
+            if total_flex == 0. {
+                cursor += (inner - total_pref).max(0.) * align[axis];
+            }
+            let order: Vec<usize> = if reverse { (0..kids.len()).rev().collect() } else { (0..kids.len()).collect() };
+            let mut p = vec![0f32; kids.len()];
+            let mut s = vec![0f32; kids.len()];
+            for i in order {
+                let (_, pref, flex) = child_sizes[i];
+                let mut w = pref;
+                if control && total_flex > 0. {
+                    w += extra * flex / total_flex;
+                }
+                p[i] = cursor;
+                s[i] = w;
+                cursor += w + spacing;
+            }
+            pos.push([0.; 2]);
+            sz.push(s.clone());
+            for (i, v) in p.into_iter().enumerate() {
+                if pos.len() <= i + 1 {
+                    pos.resize(i + 2, [0.; 2]);
+                }
+                pos[i + 1][axis] = v;
+            }
+        } else {
+            let mut s = vec![0f32; kids.len()];
+            for (i, &(min, pref, flex)) in child_sizes.iter().enumerate() {
+                let w = if control { if flex > 0. { inner.max(min) } else { pref.min(inner).max(min) } } else { pref };
+                s[i] = w;
+                if pos.len() <= i + 1 {
+                    pos.resize(i + 2, [0.; 2]);
+                }
+                pos[i + 1][axis] = lead + (inner - w) * align[axis];
+            }
+            sz.push(s);
+        }
+    }
+    // sz holds the axis order pushed (0 then 1).
+    for (i, &c) in kids.iter().enumerate() {
+        let Some(mut rp) = scene.nodes[c].xform.rect else { continue };
+        let (x, y) = (pos[i + 1][0], pos[i + 1][1]);
+        let (w, h) = (sz[0][i], sz[1][i]);
+        rp.anchor_min = [0., 1.];
+        rp.anchor_max = [0., 1.];
+        rp.size_delta = [w, h];
+        rp.anchored_position = [x + rp.pivot[0] * w, -(y + (1. - rp.pivot[1]) * h)];
+        driven.insert(c, rp);
+    }
+}
