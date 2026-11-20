@@ -13,6 +13,7 @@ smb = ["crysirror-network/smb", "crysirror-siglus-integrated/smb", "crysirror-bg
 [dependencies]
 crysirror-malie.workspace = true
 crysirror-cm3d2 = { workspace = true, features = ["runtime"] }
+crysirror-amanatsu = { workspace = true, features = ["runtime"] }
 crysirror-cmvs = { workspace = true, features = ["runtime"] }
 crysirror-vita-io.workspace = true
 crysirror-qlie = {workspace=true,features=["runtime"]}

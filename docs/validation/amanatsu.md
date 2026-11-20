@@ -1,0 +1,8 @@
+# 甘夏ろけーしょん validation
+
+## 2026-11-21 — data readers and the title screen (local, Apple M4 Max / Metal, offscreen, muted)
+
+- Build: `cargo build --release -p crysirror-desktop --bin crysirror`; `cargo test --release -p crysirror-image --lib` (240 passed), `-p crysirror-unity --lib`, `-p crysirror-cm3d2 --lib` (23 passed); Unity 4 owner corpus (CM3D2) still passes.
+- Owner corpus (`crysirror-unity` `unity6_bundles`, `crysirror-amanatsu` `owner_corpus`): all 392 `lib/` bundles (358,891 objects) and the Addressables bundles decode byte-exactly through their type trees; player files decode through bundle trees plus 87 MonoBehaviour trees generated from metadata-only assemblies (editor-only `SubGraphAsset`, script-less MonoBehaviours, `UniversalRenderPipelineGlobalSettings` and the `globalgamemanagers` settings singletons excepted); 2,678 ADV scenarios (35,224 commands), 4,404 textures (TMP Alpha8 SDF atlases above the decode limit and empty dynamic font textures excepted) and 2,341 meshes decode.
+- Run: `crysirror play ~/Downloads/game-甘夏ろけーしょん --headless --no-audio --frames 120 --capture title.png`: detected as AmanatsuLocation; the Title build scene (`level2`) laid out by the shared uGUI layout (CanvasScaler, layout groups, sliced sprites, SpriteAtlas render data) shows the background, logo, the six menu signs with icons and their labels in the game's Rounded M+ 1c (TrueType of the TMP dynamic fallback), version and manual/terms buttons.
+- Not established: Init/Logo/Title logic (the title is shown directly; animations, the language dialog, menu actions), input, audio, any later scene, comparison with the original game's captures.

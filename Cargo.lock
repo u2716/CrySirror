@@ -1936,7 +1936,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "crysirror-core",
+ "crysirror-dotnet",
  "crysirror-image",
+ "crysirror-runtime",
  "crysirror-unity",
  "image 0.24.9",
  "serde",
@@ -2512,6 +2514,7 @@ dependencies = [
  "anyhow",
  "arboard",
  "core-foundation 0.10.1",
+ "crysirror-amanatsu",
  "crysirror-audio",
  "crysirror-avg32",
  "crysirror-bgi-integrated",

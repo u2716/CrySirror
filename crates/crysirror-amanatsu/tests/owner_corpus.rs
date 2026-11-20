@@ -236,6 +236,36 @@ fn layout_level_png() {
         }
     }
     let layout = ugui::layout(&scene, &states, 1920., 1080., &svc);
+    if std::env::var_os("AMANATSU_FONTS").is_some() {
+        let mut seen = std::collections::BTreeSet::new();
+        for item in &layout.items {
+            if let ugui::Paint::Text { font, .. } = &item.paint {
+                if !seen.insert(*font) {
+                    continue;
+                }
+                // Also the first fallback of the asset.
+                if let Some(fb) = file.external(font.file_id).ok().and_then(|n| open(n)) {
+                    for pid in [480i64, 481] {
+                        if let Some(Ok(f)) = fb.object(pid).map(|i| fb.decode_using(i, &registry)) {
+                            eprintln!("fallback #{pid}: {} pop {:?} source {:?} atlas {:?}", f.string("m_Name").unwrap_or(""), f.int("m_AtlasPopulationMode"), f.get("m_SourceFontFile"), f.get("m_AtlasTextures"));
+                            if let Some(crysirror_unity::managed::Value::PPtr(p)) = f.get("m_SourceFontFile") {
+                                if let Some(Ok(ff)) = fb.object(p.path_id).map(|i| fb.decode_using(i, &registry)) {
+                                    eprintln!("  font {} keys {:?} data {}", ff.string("m_Name").unwrap_or(""), ff.0.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>(), match ff.get("m_FontData") { Some(crysirror_unity::managed::Value::Bytes(b)) => b.len(), Some(crysirror_unity::managed::Value::Array(a)) => a.len(), _ => 0 });
+                                }
+                            }
+                        }
+                    }
+                }
+                let src = if font.file_id == 0 { Some(file.clone()) } else { file.external(font.file_id).ok().and_then(|n| open(n)) };
+                let Some(src) = src else { eprintln!("font {font:?} file missing"); continue };
+                let f = src.object(font.path_id).map(|i| src.decode_using(i, &registry));
+                match f {
+                    Some(Ok(f)) => eprintln!("font {font:?} in {}: {} keys {:?} pop {:?} source {:?} atlas {:?} fallback {:?}", file.external(font.file_id).unwrap_or("self"), f.string("m_Name").unwrap_or(""), f.0.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>(), f.int("m_AtlasPopulationMode"), f.get("m_SourceFontFile"), f.get("m_AtlasTextures"), f.get("m_FallbackFontAssetTable")),
+                    other => eprintln!("font {font:?}: {:?}", other.map(|r| r.err().map(|e| e.to_string()))),
+                }
+            }
+        }
+    }
     let (w, h) = (1920usize, 1080usize);
     let mut canvas = vec![0u8; w * h * 4];
     let mut cache: std::collections::HashMap<(String, i64), Arc<crysirror_image::ImageSurface>> = Default::default();
@@ -310,4 +340,71 @@ fn layout_level_png() {
     let out = std::env::var("AMANATSU_OUT").unwrap_or_else(|_| "/tmp/amanatsu_layout.png".into());
     image::save_buffer(&out, &canvas, w as u32, h as u32, image::ColorType::Rgba8).unwrap();
     eprintln!("saved {out}");
+}
+
+/// Regenerates `data/managed_trees.json`: type trees of the player-file
+/// MonoBehaviours whose scripts no bundle carries, derived from metadata-only
+/// assemblies (`AMANATSU_ASSEMBLIES`, Cpp2IL `--use-processor
+/// attributeanalyzer,attributeinjector` output). Structure only (field
+/// names and types), keyed by the 16-byte script id.
+#[test]
+#[ignore = "needs AMANATSU_ROOT and AMANATSU_ASSEMBLIES"]
+fn generate_managed_trees() {
+    use crysirror_unity::{scene6, TreeRegistry};
+    let root = PathBuf::from(std::env::var_os("AMANATSU_ROOT").unwrap());
+    let data = root.join("AmanatsuLocation_Data");
+    let mut registry = TreeRegistry::default();
+    let mut files = Vec::new();
+    walk(&root.join("lib"), &mut files);
+    walk(&data.join("StreamingAssets"), &mut files);
+    for path in files {
+        let source: Arc<dyn AssetReader> = Arc::new(File(Mutex::new(std::fs::File::open(&path).unwrap())));
+        let Ok(bundle) = Bundle::open(source) else { continue };
+        for node in bundle.nodes.iter().filter(|n| n.flags & 4 != 0) {
+            registry.add(&SerializedFile::open(bundle.reader(node)).unwrap());
+        }
+    }
+    let open = |n: &str| -> Option<Arc<SerializedFile>> {
+        let f = std::fs::File::open(data.join(n)).ok()?;
+        Some(Arc::new(SerializedFile::open(Arc::new(File(Mutex::new(f))) as Arc<dyn AssetReader>).ok()?))
+    };
+    let mut names: Vec<String> = std::fs::read_dir(&data).unwrap().filter_map(|e| e.ok()?.file_name().into_string().ok()).filter(|n| n.starts_with("level") || n.ends_with(".assets")).collect();
+    names.sort();
+    let mut wanted: BTreeMap<String, ([u8; 16], String)> = BTreeMap::new();
+    for name in &names {
+        let file = open(name).unwrap();
+        for info in file.objects.iter().filter(|o| o.class_id == 114) {
+            let ty = &file.types[info.type_index.unwrap()];
+            let Some(id) = ty.script_id else { continue };
+            if registry.lookup(114, Some(id)).is_some() {
+                continue;
+            }
+            let b = file.bytes(info).unwrap();
+            let p = crysirror_unity::PPtr { file_id: i32::from_le_bytes(b[16..20].try_into().unwrap()), path_id: i64::from_le_bytes(b[20..28].try_into().unwrap()) };
+            let Ok(class) = scene6::resolve_script(&file, p, &registry, &open) else { continue };
+            if !class.is_empty() {
+                wanted.insert(id.iter().map(|b| format!("{b:02x}")).collect(), (id, class));
+            }
+        }
+    }
+    let dir = PathBuf::from(std::env::var_os("AMANATSU_ASSEMBLIES").unwrap());
+    let mut asms = Vec::new();
+    for e in std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()) {
+        if e.path().extension().is_some_and(|x| x == "dll") {
+            asms.push(crysirror_dotnet::Assembly::parse(std::fs::read(e.path()).unwrap()).unwrap());
+        }
+    }
+    let g = crysirror_unity::managed_gen::Generator::new(asms, &registry).unwrap();
+    let mut out = serde_json::Map::new();
+    for (key, (_, class)) in &wanted {
+        match g.mono_behaviour(class) {
+            Ok(tree) => {
+                out.insert(key.clone(), serde_json::json!({"class": class, "tree": tree}));
+            }
+            Err(e) => eprintln!("skip {class}: {e:#}"),
+        }
+    }
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("data/managed_trees.json");
+    std::fs::write(&path, serde_json::to_string(&serde_json::json!({"schema": 1, "unity": "6000.0.65f1", "scripts": out})).unwrap()).unwrap();
+    eprintln!("{} trees → {}", out.len(), path.display());
 }

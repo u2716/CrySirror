@@ -56,7 +56,9 @@ pub struct NodeState {
 pub enum Paint {
     /// A sprite (or the white texture when `sprite` is null) with
     /// nine-slice borders in canvas units (left, bottom, right, top).
-    Image { sprite: PPtr, color: [f32; 4], sliced: Option<[f32; 4]>, fill: Option<(i64, f32)> },
+    /// `sliced`: borders (left, bottom, right, top) in canvas units and in
+    /// sprite pixels.
+    Image { sprite: PPtr, color: [f32; 4], sliced: Option<([f32; 4], [f32; 4])>, fill: Option<(i64, f32)> },
     Text { text: String, font: PPtr, size: f32, color: [f32; 4], alignment: i64, wrap: bool, margin: [f32; 4] },
 }
 
@@ -259,7 +261,7 @@ fn walk(scene: &Scene6, states: &HashMap<usize, NodeState>, n: usize, mut w: Wal
                         let mult = f.float("m_PixelsPerUnitMultiplier").unwrap_or(1.) as f32;
                         // Canvas reference pixels per unit 100.
                         let k = 100. / (ppu * mult.max(1e-3));
-                        b.map(|v| v * k)
+                        (b.map(|v| v * k), b)
                     })
                 } else {
                     None

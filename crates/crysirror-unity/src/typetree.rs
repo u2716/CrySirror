@@ -20,7 +20,7 @@ const MAX_NODES: usize = 1 << 20;
 /// Bound of decoded array elements (per array).
 const MAX_ELEMENTS: usize = 1 << 28;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct TypeNode {
     pub type_name: String,
     pub name: String,
@@ -30,7 +30,7 @@ pub struct TypeNode {
     pub meta_flag: u32,
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct TypeTree {
     pub nodes: Vec<TypeNode>,
 }

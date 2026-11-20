@@ -11,14 +11,21 @@ autobenches = false
 [lib]
 doctest = false
 
+[features]
+runtime = ["dep:crysirror-runtime"]
+
 [dependencies]
 anyhow.workspace = true
 crysirror-core.workspace = true
 crysirror-unity.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+crysirror-image.workspace = true
+crysirror-runtime = { workspace = true, optional = true }
 
 [dev-dependencies]
+crysirror-dotnet.workspace = true
+serde_json.workspace = true
 crysirror-image.workspace = true
 image.workspace = true
 crysirror-core.workspace = true

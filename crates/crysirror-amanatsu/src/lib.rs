@@ -4,4 +4,11 @@
 //! game logic is ported from the original program; assets are read from
 //! the user's installation.
 #![forbid(unsafe_code)]
+pub mod adapter;
 pub mod adv;
+pub mod ui;
+pub mod unity;
+
+pub use adapter::{AmanatsuVm, Config, ENGINE_ID};
+#[cfg(feature = "runtime")]
+pub use adapter::register;

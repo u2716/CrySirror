@@ -6,6 +6,7 @@
 //! profile, and produces a typed engine resource plan. Only data is read;
 //! no native executable or external launcher script runs.
 mod majiro;
+mod amanatsu;
 mod cm3d2;
 mod cmvs;
 mod system_nnn;
@@ -196,6 +197,7 @@ fn detect_layout(dir: &SourcePath) -> Result<Plan> {
         return catsystem2(dir,&local,&name,prefix,&format!("{config}/{startup}"));
     }
     if let Some(plan) = cm3d2::detect(dir, &names, &name)? { return Ok(plan); }
+    if let Some(plan) = amanatsu::detect(dir, &names, &name)? { return Ok(plan); }
     if let Some(plan) = system4::detect(dir, &names, &name)? { return Ok(plan); }
     if let Some(plan) = majiro::detect(dir, &names, &name)? { return Ok(plan); }
     if let Some(plan) = cmvs::detect(dir, &names, &name)? { return Ok(plan); }
