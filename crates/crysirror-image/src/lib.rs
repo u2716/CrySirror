@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 //! CPU-only image surfaces and decoder dispatch. No GPU, window or VM policy.
 #![forbid(unsafe_code)]
+pub mod block_compressed;
 pub mod label_image;
 pub mod matte_span;
 pub mod lens;

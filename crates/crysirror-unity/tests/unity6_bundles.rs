@@ -272,3 +272,89 @@ fn build_settings_and_resources_read() {
     eprintln!("{} resources, e.g. {:?}", res.len(), &res[..res.len().min(8)]);
     assert!(!levels.is_empty() && !res.is_empty());
 }
+
+/// `UNITY6_DATA` + `UNITY6_LEVEL=level1`: the scene hierarchy with each
+/// GameObject's components (scripts by class name).
+#[test]
+#[ignore = "needs UNITY6_DATA and UNITY6_LEVEL"]
+fn print_level() {
+    let dir = PathBuf::from(std::env::var_os("UNITY6_DATA").unwrap());
+    let level = std::env::var("UNITY6_LEVEL").unwrap();
+    let mut registry = crysirror_unity::TreeRegistry::default();
+    if let Some(root) = std::env::var_os("UNITY6_BUNDLES") {
+        let mut files = Vec::new();
+        walk(std::path::Path::new(&root), &mut files);
+        for path in files {
+            let source: Arc<dyn AssetReader> = Arc::new(File(Mutex::new(std::fs::File::open(&path).unwrap())));
+            let bundle = Bundle::open(source).unwrap();
+            for node in bundle.nodes.iter().filter(|n| n.flags & 4 != 0) {
+                registry.add(&SerializedFile::open(bundle.reader(node)).unwrap());
+            }
+        }
+    }
+    let open = |n: &str| -> SerializedFile {
+        let s: Arc<dyn AssetReader> = Arc::new(File(Mutex::new(std::fs::File::open(dir.join(n)).unwrap())));
+        SerializedFile::open(s).unwrap()
+    };
+    let file = open(&level);
+    let ggm = open("globalgamemanagers.assets");
+    let script_name = |p: crysirror_unity::PPtr| -> String {
+        let src = if p.file_id == 0 { &file } else { &ggm };
+        src.object(p.path_id).and_then(|i| src.decode_using(i, &registry).ok()).map(|f| f.string("m_ClassName").unwrap_or("?").to_owned()).unwrap_or_else(|| format!("script {p:?}"))
+    };
+    // GameObject → (name, components); Transform → (gameobject, children).
+    let mut go: BTreeMap<i64, (String, Vec<String>, bool)> = BTreeMap::new();
+    let mut tf: BTreeMap<i64, (i64, Vec<i64>, i64)> = BTreeMap::new();
+    for info in &file.objects {
+        let Ok(f) = file.decode_using(info, &registry) else { continue };
+        let pp = |n: &str| match f.get(n) {
+            Some(crysirror_unity::managed::Value::PPtr(p)) => *p,
+            _ => crysirror_unity::PPtr::default(),
+        };
+        match info.class_id {
+            1 => {
+                go.insert(info.path_id, (f.string("m_Name").unwrap_or("").to_owned(), Vec::new(), f.int("m_IsActive").unwrap_or(1) != 0));
+            }
+            4 | 224 => {
+                let kids = match f.get("m_Children") {
+                    Some(crysirror_unity::managed::Value::Array(a)) => a.iter().filter_map(|v| if let crysirror_unity::managed::Value::PPtr(p) = v { Some(p.path_id) } else { None }).collect(),
+                    _ => Vec::new(),
+                };
+                tf.insert(info.path_id, (pp("m_GameObject").path_id, kids, pp("m_Father").path_id));
+            }
+            _ => {}
+        }
+    }
+    for info in &file.objects {
+        if matches!(info.class_id, 1 | 4 | 224) {
+            continue;
+        }
+        let Ok(f) = file.decode_using(info, &registry) else { continue };
+        let Some(crysirror_unity::managed::Value::PPtr(g)) = f.get("m_GameObject") else { continue };
+        let label = if info.class_id == 114 {
+            match f.get("m_Script") {
+                Some(crysirror_unity::managed::Value::PPtr(p)) => script_name(*p),
+                _ => "MonoBehaviour".into(),
+            }
+        } else {
+            format!("#{}", info.class_id)
+        };
+        if let Some(e) = go.get_mut(&g.path_id) {
+            e.1.push(label);
+        }
+    }
+    fn show(t: i64, depth: usize, tf: &BTreeMap<i64, (i64, Vec<i64>, i64)>, go: &BTreeMap<i64, (String, Vec<String>, bool)>) {
+        let Some((g, kids, _)) = tf.get(&t) else { return };
+        if let Some((name, comps, active)) = go.get(g) {
+            eprintln!("{}{name}{} {comps:?}", "  ".repeat(depth), if *active { "" } else { " (inactive)" });
+        }
+        for k in kids {
+            show(*k, depth + 1, tf, go);
+        }
+    }
+    for (t, (_, _, father)) in &tf {
+        if *father == 0 {
+            show(*t, 0, &tf, &go);
+        }
+    }
+}

@@ -22,6 +22,7 @@ pub mod managed_gen;
 pub mod reader;
 pub mod texture;
 pub mod typetree;
+pub mod unity6;
 
 use anyhow::{bail, ensure, Context, Result};
 use crysirror_core::service::AssetReader;

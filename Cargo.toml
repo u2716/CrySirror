@@ -59,6 +59,7 @@ members = [
     "crates/crysirror-tjs2",
     "crates/crysirror-kag",
     "crates/crysirror-cm3d2",
+    "crates/crysirror-amanatsu",
     "crates/crysirror-unity",
     "crates/crysirror-dotnet",
     "crates/crysirror-rfvp-vm",
@@ -164,6 +165,7 @@ crysirror-krkr = { path = "crates/crysirror-krkr" }
 crysirror-tjs2 = { path = "crates/crysirror-tjs2" }
 crysirror-kag = { path = "crates/crysirror-kag" }
 crysirror-cm3d2 = { path = "crates/crysirror-cm3d2" }
+crysirror-amanatsu = { path = "crates/crysirror-amanatsu" }
 crysirror-unity = { path = "crates/crysirror-unity" }
 crysirror-dotnet = { path = "crates/crysirror-dotnet" }
 crysirror-rfvp-vm = { path = "crates/crysirror-rfvp-vm", default-features = false, features = ["no_std"] }
