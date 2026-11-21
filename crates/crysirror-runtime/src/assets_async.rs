@@ -536,6 +536,27 @@ impl Assets {
         e.status.state = AssetState::Cancelled;
         Ok(())
     }
+    /// Drop every unpinned prepared entry of `path` (any kind) for the
+    /// client: a released generated model must also leave the prepared
+    /// budget, or repeated scene changes accumulate until loads fail.
+    pub fn release_prepared_path(&mut self, client: ClientId, path: &str) {
+        let ids: Vec<u64> = self
+            .asynchronous
+            .entries
+            .iter()
+            .filter(|(_, e)| e.status.ticket.client == client.0 && e.status.path == path && e.pins.load(Ordering::Acquire) == 0)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in ids {
+            if let Some(mut e) = self.asynchronous.entries.remove(&id) {
+                if let Some(job) = e.job.take() {
+                    job.cancel();
+                }
+                self.asynchronous.resident -= e.status.bytes;
+                self.asynchronous.keys.remove(&(client, e.status.kind, e.status.path));
+            }
+        }
+    }
     pub fn release_task(&mut self, client: ClientId, ticket: AssetTicket) -> Result<()> {
         self.asynchronous.entry(client, ticket)?;
         ensure!(

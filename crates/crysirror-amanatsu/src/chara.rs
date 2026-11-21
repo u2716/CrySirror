@@ -203,6 +203,11 @@ impl Lists {
         Ok(out)
     }
 
+    /// The loaded list names.
+    pub fn names(&self) -> Vec<String> {
+        self.tables.keys().cloned().collect()
+    }
+
     /// A row of `list` by id, as a key → value lookup.
     pub fn row(&self, list: &str, id: i64) -> Option<Row<'_>> {
         let t = self.tables.get(list)?;
@@ -315,12 +320,15 @@ impl Human {
         let skeleton = scene.nodes.iter().position(|n| n.name == "cf_j_root").context("body cf_j_root")?;
         // Body physics: the bone prefab's MagicaCloth springs and colliders
         // on the body skeleton, tuned by the card's softness values.
-        let bone = Level::prefab(unity, BODY_BONE.0, BODY_BONE.1)?;
-        let bone_root = scene.graft(&bone.scene, &bone.key, 0);
-        scene.alias_bones(bone_root, skeleton);
-        match shake_correct(unity) {
-            Ok(shake) => log.push(format!("body springs: {} components tuned", apply_shake(&mut scene, bone_root, &shake, body_data))),
-            Err(e) => log.push(format!("body springs untuned: {e:#}")),
+        // Only the female body has a bone prefab.
+        if female {
+            let bone = Level::prefab(unity, BODY_BONE.0, BODY_BONE.1)?;
+            let bone_root = scene.graft(&bone.scene, &bone.key, 0);
+            scene.alias_bones(bone_root, skeleton);
+            match shake_correct(unity) {
+                Ok(shake) => log.push(format!("body springs: {} components tuned", apply_shake(&mut scene, bone_root, &shake, body_data))),
+                Err(e) => log.push(format!("body springs untuned: {e:#}")),
+            }
         }
         // Head.
         let head_id = face.get("headId").and_then(Value::as_i64).unwrap_or(0);
@@ -463,6 +471,30 @@ impl Human {
     pub fn state_tracks(&self, unity: &mut Unity, state: &str) -> Result<crysirror_unity::world6::ClipTracks> {
         let (bundle, name) = motion_controller(self.female);
         self.controller_tracks(unity, &bundle, name, state)
+    }
+
+    /// A state's own (first) clip of a controller, named `name` in the GLB
+    /// (H postures keep their `_L`/`_M`/`_S` variants as separate states).
+    pub fn exact_state_tracks(&self, unity: &mut Unity, bundle: &str, controller: &str, state: &str, name: &str) -> Result<crysirror_unity::world6::ClipTracks> {
+        use crysirror_unity::animator::{Clip, Controller};
+        let (k, id) = unity.bundle_asset(bundle, controller, 91)?.with_context(|| format!("controller {controller}"))?;
+        let ctl = Controller::decode(&unity.decode(&k, id)?)?;
+        let si = ctl.find_state(0, state).with_context(|| format!("state {state}"))?;
+        let cp = *ctl.clips.get(ctl.layers[0].states[si].clip.context("state motion")?).context("state clip")?;
+        let (f, cid) = unity.target(&k, cp)?;
+        let clip = Clip::decode(&unity.decode(&f, cid)?)?;
+        Ok(crysirror_unity::world6::clip_tracks(&self.scene, 0, &clip, name, 30.))
+    }
+
+    /// The H height suffix of the card (`_S`, `_M`, `_L`).
+    pub fn height_suffix(&self) -> &'static str {
+        if self.height < 1. / 3. {
+            "S"
+        } else if self.height < 2. / 3. {
+            "M"
+        } else {
+            "L"
+        }
     }
 
     /// A state's motion of any controller (`bundle`, controller asset) with

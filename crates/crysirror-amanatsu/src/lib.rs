@@ -11,6 +11,7 @@ pub mod card;
 pub mod chara;
 pub mod charaselect;
 pub mod commands;
+pub mod h;
 pub mod hud;
 pub mod level;
 pub mod map;

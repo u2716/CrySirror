@@ -1128,7 +1128,8 @@ fn chara_glb() {
     let card_path = std::env::var("AMANATSU_CARD").unwrap_or_else(|_| "DefaultData/0/chara/female/AL_F_00.png".into());
     let card = crysirror_amanatsu::card::Card::parse(&u.read_all(&card_path).unwrap()).unwrap();
     let lists = crysirror_amanatsu::chara::Lists::load(&mut u).unwrap();
-    let mut human = crysirror_amanatsu::chara::Human::from_card(&mut u, &lists, &card, true).unwrap();
+    let female = std::env::var("AMANATSU_MALE").is_err();
+    let mut human = crysirror_amanatsu::chara::Human::from_card(&mut u, &lists, &card, female).unwrap();
     for l in &human.log {
         println!("{l}");
     }
@@ -1394,7 +1395,8 @@ fn patch_save_favorability() {
     let path = std::env::var("AMANATSU_SAVE").unwrap();
     let mut f = crysirror_amanatsu::save::SaveFile::decode(&std::fs::read(&path).unwrap()).unwrap();
     for n in &mut f.npcs {
-        n.parameter.favorability.point = 100;
+        n.parameter.favorability.point = std::env::var("AMANATSU_FAV_POINT").ok().and_then(|v| v.parse().ok()).unwrap_or(100);
+        n.parameter.favorability.lv = std::env::var("AMANATSU_FAV_LV").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
         n.parameter.late_point = 20;
         n.parameter.cost = 5;
         n.count.massage = 1;
@@ -1402,4 +1404,25 @@ fn patch_save_favorability() {
     }
     f.save.time_zone = 0;
     std::fs::write(&path, f.encode().unwrap()).unwrap();
+}
+
+/// Lists the `characustom` table names.
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn list_tables() {
+    let mut u = unity();
+    let lists = crysirror_amanatsu::chara::Lists::load(&mut u).unwrap();
+    let mut names = lists.names();
+    names.sort();
+    println!("{}", names.join(" "));
+}
+
+/// Prints the H postures.
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn h_postures() {
+    let mut u = unity();
+    for p in crysirror_amanatsu::h::load_postures(&mut u).unwrap() {
+        println!("{} {} {} cam {} {:?}", p.file, p.id, p.name, p.camera, p.charas.iter().map(|c| format!("{}:{}", c.info.bundle, c.info.asset)).collect::<Vec<_>>());
+    }
 }

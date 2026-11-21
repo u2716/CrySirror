@@ -267,6 +267,7 @@ impl Assets {
         if let Some(bytes) = self.bytes.remove(&key) {
             self.total -= bytes.len();
         }
+        self.release_prepared_path(client, path);
         Ok(())
     }
     /// Whether `path` is served by a mounted container for this client (its

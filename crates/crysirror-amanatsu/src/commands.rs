@@ -135,6 +135,10 @@ impl AdvAssets {
         if exhausted {
             return self.get("_agree", "Exhaustion").into_iter().collect();
         }
+        if kind == "H" {
+            let level = if favorability_lv > 3 { "H_High" } else { "H_General" };
+            return (1..=2).filter_map(|i| self.get("_agree", &format!("{level}_{i}"))).collect();
+        }
         if kind == "Massage" {
             let level = if favorability_lv > 3 { "High" } else { "Normal" };
             return (1..=2).filter_map(|i| self.get("_agree", &format!("Massage_{level}_{i}"))).collect();
@@ -159,6 +163,20 @@ impl AdvAssets {
     /// short movie of level `lv`.
     pub fn short_movie_after(&self, lv: i32) -> Vec<Asset> {
         self.get("_shortMoiveAfterAssets", &format!("#{lv}")).into_iter().collect()
+    }
+
+    /// `GetHStartAsset`: the general H openers, or `Map_No_Here` when the
+    /// map has no H place (the heroine proposes moving).
+    pub fn h_start(&self, here: bool) -> Vec<Asset> {
+        if !here {
+            return self.get("_h", "Map_No_Here").into_iter().collect();
+        }
+        (1..=4).filter_map(|i| self.get("_h", &format!("General_{i}"))).collect()
+    }
+
+    /// The H result's `Evaluation[index]` asset.
+    pub fn h_evaluation(&self, index: usize) -> Vec<Asset> {
+        self.get("_h", &format!("Evaluation#{index}")).into_iter().collect()
     }
 
     /// The massage result's `Evaluation[stage]` asset.

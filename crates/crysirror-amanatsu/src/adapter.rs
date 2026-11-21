@@ -76,6 +76,27 @@ enum MassagePhase {
     Evaluation,
 }
 
+/// An H scene in progress (`EventManager.H` + `AL.H.HScene`).
+struct HRun {
+    card: String,
+    phase: MassagePhase,
+    return_map: i32,
+    posture: Option<crate::h::Posture>,
+    /// Entities of the heroine and the male.
+    entities: Vec<u32>,
+    /// The playing motion (`Idle`, `WLoop1`, `SLoop1`, `OrgasmF`).
+    motion: &'static str,
+    /// When a one-shot motion ends.
+    motion_until: u64,
+    /// `Gauge Female` (0..100).
+    gauge: f32,
+    orgasms: u32,
+    last_ms: u64,
+}
+
+/// The H motions baked into the characters.
+const H_MOTIONS: [&str; 4] = ["Idle", "WLoop1", "SLoop1", "OrgasmF"];
+
 /// A massage in progress (`EventManager.Massage` + `AL.Oil.OilScene`).
 struct MassageRun {
     card: String,
@@ -119,8 +140,18 @@ pub struct Game {
     visit_played: bool,
     /// `AL.Oil` tables (loaded on the first massage) and the massage.
     oil: Option<crate::oil::OilData>,
+    /// The H scene.
+    h: Option<HRun>,
+    /// The H postures (loaded on the first H).
+    h_postures: Option<Vec<crate::h::Posture>>,
     /// A "一緒に遊ぶ" waiting for its scenarios to end (card).
     pending_with: Option<String>,
+    /// The loaded map's H place (`H/H00`: position, rotation).
+    h_point: Option<([f32; 3], [f32; 4])>,
+    /// The H pair waiting to spawn (key light intensity).
+    h_spawn_sun: Option<f32>,
+    /// The covered map change released the old map (loads next step).
+    map_released: bool,
     massage: Option<MassageRun>,
     /// A loaded save waiting for the ActionMap scene.
     loaded_save: Option<crate::save::SaveFile>,
@@ -272,7 +303,9 @@ impl Game {
         self.spots.clear();
         let info = self.maps.iter().find(|m| m.id == id).cloned().with_context(|| format!("map {id} not in map_info"))?;
         let t = std::time::Instant::now();
-        let world = map::load(&mut self.unity, &info, time_zone)?;
+        // An H scene spawns two characters next to the map.
+        let budget = if self.h.is_some() { 64 << 20 } else { map::MAP_TEXTURE_BUDGET };
+        let world = map::load_with_budget(&mut self.unity, &info, time_zone, budget)?;
         self.spawn_models(host, client, &info.scene.1, &world.chunks)?;
         let mut env = world.environment();
         if let Some(sky) = &world.sky {
@@ -296,6 +329,16 @@ impl Game {
         // (SATD-amanatsu-port: `ActionPoint` choice, their `_animIDList`
         // motions and NavMesh wandering are not ported).
         self.place_heroines(false);
+        self.h_point = world.points.iter().find(|p| p.0 == "H00").map(|p| (p.1, p.2));
+        let h_entry = self.h.as_ref().filter(|h| h.phase == MassagePhase::Enter).map(|h| h.card.clone());
+        if h_entry.is_some() {
+            // Spawned on the next step, after the previous map's models
+            // leave the prepared-asset budget.
+            match self.h_point {
+                Some(_) => self.h_spawn_sun = Some(world.sun.as_ref().map_or(1., |l| l.intensity)),
+                None => self.log.push("SATD-amanatsu-port: H map without H00".into()),
+            }
+        }
         let massage_entry = self.massage.as_ref().filter(|m| m.phase == MassagePhase::Enter).map(|m| m.card.clone());
         if let Some(card) = massage_entry {
             if let Some((_, pos, rot)) = world.points.iter().find(|p| p.0 == "Est00").cloned() {
@@ -304,7 +347,7 @@ impl Game {
                 self.log.push("SATD-amanatsu-port: esthetics map without Est00".into());
             }
         }
-        let heroines: Vec<String> = if self.massage.is_some() { Vec::new() } else { self.heroines.iter().filter(|h| self.placement.get(*h) == Some(&id)).cloned().collect() };
+        let heroines: Vec<String> = if self.massage.is_some() || self.h.is_some() { Vec::new() } else { self.heroines.iter().filter(|h| self.placement.get(*h) == Some(&id)).cloned().collect() };
         for (card, point) in heroines.iter().zip(world.points.iter().filter(|p| p.0.contains("tati"))) {
             let (_, pos, rot) = point;
             let q = glam::Quat::from_array(crysirror_unity::gltf::mirror_quat(*rot));
@@ -377,7 +420,7 @@ impl Game {
             self.lists = Some(crate::chara::Lists::load(&mut self.unity)?);
         }
         let lists = self.lists.take().context("lists")?;
-        let human = crate::chara::Human::from_card(&mut self.unity, &lists, &card, true);
+        let human = crate::chara::Human::from_card(&mut self.unity, &lists, &card, !card_path.contains("/male/"));
         self.lists = Some(lists);
         let human = human?;
         self.log.extend(human.log.iter().cloned());
@@ -408,6 +451,43 @@ impl Game {
         self.log.push(format!("character {card_path}: {} renderers, {} materials, {} tracks", report.renderers, report.materials, clips.first().map_or(0, |c| c.tracks.len())));
         self.log.extend(report.errors.iter().take(8).cloned());
         Ok(chunks)
+    }
+
+    /// A character with several exact states of one controller baked as
+    /// named clips (H postures), playing `play`; returns its entities.
+    fn spawn_character_states(&mut self, host: &mut dyn HostServices, client: ClientId, card_path: &str, transform: serde_json::Value, sun: f32, bundle: &str, controller: &str, states: &[&str], play: &str) -> Result<Vec<u32>> {
+        let card = crate::card::Card::parse(&self.unity.read_all(card_path)?)?;
+        if self.lists.is_none() {
+            self.lists = Some(crate::chara::Lists::load(&mut self.unity)?);
+        }
+        let lists = self.lists.take().context("lists")?;
+        let human = crate::chara::Human::from_card(&mut self.unity, &lists, &card, !card_path.contains("/male/"));
+        self.lists = Some(lists);
+        let human = human?;
+        let suffix = human.height_suffix();
+        let mut clips = Vec::new();
+        for state in states {
+            // `_L`/`_M`/`_S` by height, falling back to the other sizes.
+            let found = [suffix, "M", "L", "S"].iter().find_map(|sz| human.exact_state_tracks(&mut self.unity, bundle, controller, &format!("{state}_{sz}"), state).ok());
+            match found {
+                Some(t) => clips.push(t),
+                None => self.log.push(format!("H state {state} not in {controller}")),
+            }
+        }
+        // Two characters share the H map's budget: 512 px, 16 MiB each.
+        let options = crysirror_unity::world6::GlbOptions { max_texture: 512, texture_budget: 16 << 20, spring_unit: CHARACTER_UNIT };
+        let mut assets = crate::chara::CharaAssets { unity: &mut self.unity, human: &human, light: 0.7 / sun.max(0.7) };
+        let (chunks, _) = crysirror_unity::world6::scene_glb_animated(&human.scene, &human.key, &[0], &mut assets, &options, "CrySirror AmanatsuLocation character importer", &clips)?;
+        self.log.push(format!("H character GLB {} bytes", chunks.iter().map(Vec::len).sum::<usize>()));
+        let first = self.map_entities.len();
+        self.spawn_models(host, client, "hchara", &chunks)?;
+        let ids: Vec<u32> = self.map_entities[first..].iter().map(|e| e.0).collect();
+        for &entity in &ids {
+            self.world.push(json!({"op": "set_transform", "id": entity, "transform": transform}));
+            self.world.push(json!({"op": "set_animation", "id": entity, "animation": {"layers": [{"clip": play, "looping": true}]}}));
+        }
+        self.log.push(format!("H character {card_path}: {controller} {} clips", clips.len()));
+        Ok(ids)
     }
 
     /// `CustomScene` start: the default heroine (`HumanData` preset) in
@@ -597,6 +677,17 @@ impl Game {
         let points = self.param_table.points.clone();
         let Some((level, _)) = self.overlays.get_mut(ci) else { return };
         let Some(ui) = level.scene.nodes.iter().flat_map(|n| &n.components).find(|c| c.script == "AL.CommandUI").map(|c| c.fields.clone()) else { return };
+        // `SetCost`: commands need cost; H also favourability LV > 0, its
+        // lock cover shows below that.
+        let can = gp.cost > 0;
+        for (field, on) in [("_btnTalk", can), ("_btnListen", can), ("_btnMassage", can), ("_btnInvite", can), ("_btnHTopic", can), ("_btnH", can && gp.favorability.lv > 0)] {
+            if let Some(n) = ui.pptr(field).and_then(|p| level.owner(p.path_id)) {
+                level.interactable.insert(n, on);
+            }
+        }
+        if let Some(n) = ui.pptr("_imgHCover").and_then(|p| level.owner(p.path_id)) {
+            level.set_active(n, gp.favorability.lv <= 0);
+        }
         // `SetCost`: `GetMax(favourability LV)` hourglasses shown, the
         // remaining cost lit.
         let max = self.cost.0.get_max(&self.cost.1, gp.favorability.lv);
@@ -761,6 +852,200 @@ impl Game {
         let lv = gp.favorability.lv;
         self.log.push(format!("favourability LV{lv}"));
         self.show_parameters(card);
+    }
+
+    /// `HScene.Initialize`: the heroine and the male (the default male
+    /// card) at the H place in the starting posture, framed by its camera.
+    /// SATD-amanatsu-port: the posture comes from the posture list's first
+    /// standing kiss (`aib` 立ちキス) instead of `PostureMainSelecter`.
+    fn spawn_h_pair(&mut self, host: &mut dyn HostServices, client: ClientId, card: &str, pos: [f32; 3], rot: [f32; 4], sun: f32) -> Result<()> {
+        if self.h_postures.is_none() {
+            self.h_postures = Some(crate::h::load_postures(&mut self.unity)?);
+        }
+        let posture = self.h_postures.as_ref().and_then(|p| p.iter().find(|p| p.file == "aib" && p.id == 9).or(p.first()).cloned()).context("H postures")?;
+        let q = glam::Quat::from_array(crysirror_unity::gltf::mirror_quat(rot));
+        let tr = glam::Vec3::from_array(crysirror_unity::gltf::mirror_point(pos));
+        let (x, y, z) = q.to_euler(glam::EulerRot::XYZ);
+        let t = json!({"translation": tr.to_array(), "rotation_degrees": [x.to_degrees(), y.to_degrees(), z.to_degrees()], "scale": [1.0, 1.0, 1.0]});
+        let mut entities = Vec::new();
+        for c in &posture.charas {
+            if c.info.bundle.is_empty() {
+                continue;
+            }
+            let who = if c.is_male() { "DefaultData/0/chara/male/AL_M_00.png".to_owned() } else { card.to_owned() };
+            let bundle = format!("lib/{}", c.info.bundle);
+            entities.extend(self.spawn_character_states(host, client, &who, t.clone(), sun, &bundle, &c.info.asset, &H_MOTIONS, "Idle")?);
+        }
+        let (personality, name) = self.unity.read_all(card).ok().and_then(|b| crate::card::Card::parse(&b).ok()).and_then(|c| c.parameter()).map_or((0, String::new()), |p| (p.0, p.1));
+        self.spots.push((card.to_owned(), tr.to_array(), personality, name));
+        // The posture camera around the H place.
+        if let Ok(cam) = crate::oil::CameraData::load_from(&mut self.unity, "lib/h/list/camera/000_01.unity3d", &posture.camera) {
+            let mirror = glam::Mat4::from_scale(glam::Vec3::new(-1., 1., 1.));
+            let (eye, target, up) = cam.eye(mirror * glam::Mat4::from_rotation_translation(q, tr) * mirror);
+            let v = map::View { eye: crysirror_unity::gltf::mirror_point(eye.to_array()), target: crysirror_unity::gltf::mirror_point(target.to_array()), up: crysirror_unity::gltf::mirror_point(up.to_array()), fov: cam.fov, near: 0.1, far: 1000. };
+            self.world.push(v.command());
+            self.view = Some(v);
+        }
+        self.log.push(format!("HScene: {} ({}{})", posture.name, posture.file, posture.id));
+        if let Some(h) = self.h.as_mut() {
+            h.posture = Some(posture);
+            h.entities = entities;
+        }
+        Ok(())
+    }
+
+    /// `HScene.Create`: the H UI; play starts in `Idle`.
+    fn enter_h_scene(&mut self, now: u64) -> Result<()> {
+        let mut level = Level::prefab(&mut self.unity, crate::h::SCENE_BUNDLE, crate::h::SCENE_PREFAB)?;
+        for path in ["HScene/Canvas/ccr_dropShadow/PostureSelect", "HScene/Canvas Point", "HScene/Canvas/ccr_dropShadow/Option/RightBottomArea/MoveSetting/root"] {
+            if let Some(n) = level.find(path) {
+                level.set_active(n, false);
+            }
+        }
+        self.overlays.push((level, Ui::new(7)));
+        if let Some(h) = self.h.as_mut() {
+            h.phase = MassagePhase::Play;
+            h.last_ms = now;
+        }
+        self.h_gauges();
+        Ok(())
+    }
+
+    fn h_play(&mut self, motion: &'static str, looping: bool) {
+        let Some(h) = self.h.as_mut() else { return };
+        h.motion = motion;
+        for &e in &h.entities {
+            self.world.push(json!({"op": "set_animation", "id": e, "animation": {"layers": [{"clip": motion, "looping": looping}]}}));
+        }
+    }
+
+    /// `Gauge Female` fill and the finish buttons' availability.
+    fn h_gauges(&mut self) {
+        let Some(gauge) = self.h.as_ref().map(|h| h.gauge) else { return };
+        let Some(oi) = self.overlays.iter().position(|(l, _)| l.name == crate::h::SCENE_PREFAB) else { return };
+        let level = &mut self.overlays[oi].0;
+        for (i, path) in ["Fill Area 0", "Fill Area 1", "Fill Area 2"].iter().enumerate() {
+            // Three stages of a third each.
+            if let Some(n) = level.find(&format!("HScene/Canvas/ccr_dropShadow/GaugeController/Gauge Female/{path}/Fill")) {
+                let t = ((gauge / 100. * 3.) - i as f32).clamp(0., 1.);
+                level.states.entry(n).or_default().fill = Some(t);
+            }
+        }
+        if let Some(n) = level.find("HScene/Canvas/ccr_dropShadow/GaugeController/Finish Female") {
+            level.interactable.insert(n, gauge >= 70.);
+        }
+    }
+
+    /// `MotionPlayer`: a click on the scene steps Idle → weak loop →
+    /// strong loop → weak loop; the loops fill the female gauge
+    /// (SATD-amanatsu-port: rates 4/s weak and 8/s strong, no wheel speed,
+    /// voices, IK or male gauge); a finished one-shot returns to Idle.
+    fn h_update(&mut self, clicked: bool, now: u64) {
+        let Some(h) = self.h.as_mut() else { return };
+        if h.phase != MassagePhase::Play {
+            return;
+        }
+        let dt = (now.saturating_sub(h.last_ms) as f32 / 1000.).min(0.1);
+        h.last_ms = now;
+        let rate = match h.motion {
+            "WLoop1" => 4.,
+            "SLoop1" => 8.,
+            _ => 0.,
+        };
+        h.gauge = (h.gauge + rate * dt).min(100.);
+        if h.motion == "OrgasmF" && now >= h.motion_until {
+            self.h_play("Idle", true);
+        } else if clicked {
+            let next = match h.motion {
+                "Idle" => Some("WLoop1"),
+                "WLoop1" => Some("SLoop1"),
+                "SLoop1" => Some("WLoop1"),
+                _ => None,
+            };
+            if let Some(n) = next {
+                self.h_play(n, true);
+            }
+        }
+        self.h_gauges();
+    }
+
+    /// H UI buttons: `Finish Female` (orgasm), `Exit` (end).
+    fn h_button(&mut self, name: &str, now: u64) -> Result<()> {
+        match name {
+            "Finish Female" => {
+                if let Some(h) = self.h.as_mut().filter(|h| h.gauge >= 70.) {
+                    h.gauge = 0.;
+                    h.orgasms += 1;
+                    h.motion_until = now + 3000;
+                    self.h_play("OrgasmF", false);
+                }
+            }
+            "Exit" => {
+                // `HScene.End` → `AddHCount`, the evaluation scenario.
+                // SATD-amanatsu-port: the evaluation index is the orgasm count.
+                let Some(h) = self.h.as_mut().filter(|h| h.phase == MassagePhase::Play) else { return Ok(()) };
+                h.phase = MassagePhase::Evaluation;
+                let index = (h.orgasms as usize).min(19);
+                let mut rng = self.rng;
+                let mut random = |n: usize| game_random(&mut rng, n);
+                let list: Vec<String> = crate::commands::choose(&self.adv_assets.h_evaluation(index), &mut random).into_iter().collect();
+                self.rng = rng;
+                if let Some(oi) = self.overlays.iter().position(|(l, _)| l.name == crate::h::SCENE_PREFAB) {
+                    let (_, mut ui) = self.overlays.remove(oi);
+                    self.removed.extend(ui.clear());
+                }
+                self.log.push(format!("HScene end: {} orgasms, {list:?}", self.h.as_ref().map_or(0, |h| h.orgasms)));
+                if list.is_empty() {
+                    self.h_talk_ended(now)?;
+                } else {
+                    self.start_talk(0, list)?;
+                }
+            }
+            other => self.log.push(format!("SATD-amanatsu-port: HScene button {other} not ported")),
+        }
+        Ok(())
+    }
+
+    /// A conversation ended during H: advance its phase.
+    fn h_talk_ended(&mut self, now: u64) -> Result<()> {
+        let Some(phase) = self.h.as_ref().map(|h| h.phase) else { return Ok(()) };
+        match phase {
+            MassagePhase::Agree => {
+                if let Some((_, ci)) = self.command.take() {
+                    if ci < self.overlays.len() {
+                        let (_, mut ui) = self.overlays.remove(ci);
+                        self.removed.extend(ui.clear());
+                    }
+                }
+                let zone = if let Controller::ActionMap(m) = &self.controller { m.time_zone } else { 0 };
+                let here = if let Controller::ActionMap(m) = &self.controller { if let actionmap::Phase::Map(id) = m.phase { Some(id) } else { None } } else { None };
+                // An H map: the current one with an H place, else the hotel.
+                let target = if self.h_point.is_some() { here.unwrap_or(12) } else { 12 };
+                if let Some(h) = self.h.as_mut() {
+                    h.phase = MassagePhase::Enter;
+                }
+                self.fade.start(now, true, self.fade_seconds);
+                self.pending_map = Some((target, zone));
+                self.log.push(format!("EventManager.H → map {target}"));
+            }
+            MassagePhase::Evaluation => {
+                let Some(h) = self.h.take() else { return Ok(()) };
+                let index = (h.orgasms as usize).min(7);
+                self.apply_points(h.card.clone(), "H", Some(index));
+                {
+                    let (gp, count, _) = self.npc(&h.card);
+                    count.h += 1;
+                    gp.cost = (gp.cost - 1).max(0);
+                }
+                let zone = if let Controller::ActionMap(c) = &self.controller { c.time_zone } else { 0 };
+                self.fade.start(now, true, self.fade_seconds);
+                self.pending_map = Some((h.return_map, zone));
+                let n = self.npc(&h.card).1.h;
+                self.log.push(format!("H done: {} orgasms, H count {n}", h.orgasms));
+            }
+            _ => {}
+        }
+        Ok(())
     }
 
     /// The massage heroine on the esthetics bed (`Est00`) in the first
@@ -1226,6 +1511,11 @@ impl AmanatsuVm {
             loaded_save: None,
             oil: None,
             pending_with: None,
+            h: None,
+            h_postures: None,
+            h_point: None,
+            h_spawn_sun: None,
+            map_released: false,
             massage: None,
             adv_assets,
             adv_maps,
@@ -1307,8 +1597,14 @@ impl AmanatsuVm {
         let client = self.client;
         // A map change waits for the covering fade, then loads behind it.
         if let Some((id, zone)) = game.pending_map {
-            if !game.fade.fading(now) {
+            if !game.fade.fading(now) && !game.map_released {
+                // `ReleaseMapObject` first: the old map's models leave the
+                // prepared-asset budget before the next map loads.
+                game.release_map(host, client)?;
+                game.map_released = true;
+            } else if !game.fade.fading(now) {
                 game.pending_map = None;
+                game.map_released = false;
                 if let Some((_, mut ui)) = (!game.overlays.is_empty()).then(|| game.overlays.remove(0)) {
                     game.removed.extend(ui.clear());
                 }
@@ -1316,6 +1612,8 @@ impl AmanatsuVm {
                 game.change_map(host, client, id, zone)?;
                 if game.massage.as_ref().is_some_and(|m| m.phase == MassagePhase::Enter) {
                     game.enter_oil_scene(host, client, now)?;
+                } else if game.h.as_ref().is_some_and(|h| h.phase == MassagePhase::Enter) {
+                    game.enter_h_scene(now)?;
                 } else {
                     game.open_hud(id, zone)?;
                 }
@@ -1323,6 +1621,13 @@ impl AmanatsuVm {
                 let bgm = game.sound_ids.zone_bgm[zone.clamp(0, 3) as usize];
                 game.level.sounds.push(sound::Call::Bgm(bgm));
                 game.fade.start(host.now_ms(), false, game.fade_seconds);
+            }
+        }
+        if let Some(sun) = game.h_spawn_sun.take() {
+            if let (Some((pos, rot)), Some(card)) = (game.h_point, game.h.as_ref().map(|h| h.card.clone())) {
+                if let Err(e) = game.spawn_h_pair(host, client, &card, pos, rot, sun) {
+                    game.log.push(format!("HScene: {e:#}"));
+                }
             }
         }
         if !game.released.is_empty() {
@@ -1390,6 +1695,10 @@ impl AmanatsuVm {
                 }
             }
         }
+        if game.h.is_some() && game.talk.is_none() {
+            let clicked_scene = input.buttons_pressed & b::MOUSE_LEFT != 0 && handler.is_none() && !fading;
+            game.h_update(clicked_scene, now);
+        }
         if game.massage.is_some() && game.talk.is_none() {
             let down = input.buttons_down & b::MOUSE_LEFT != 0 && handler.is_none() && !fading;
             game.massage_touch(x, y, down, now);
@@ -1426,7 +1735,7 @@ impl AmanatsuVm {
             game.pending_steps.extend(steps);
             click = None;
             game.pressed = None;
-        } else if input.buttons_pressed & b::MOUSE_LEFT != 0 && handler.is_none() && !fading && game.massage.is_none() && matches!(&game.controller, Controller::ActionMap(m) if matches!(m.phase, actionmap::Phase::Map(_))) {
+        } else if input.buttons_pressed & b::MOUSE_LEFT != 0 && handler.is_none() && !fading && game.massage.is_none() && game.h.is_none() && matches!(&game.controller, Controller::ActionMap(m) if matches!(m.phase, actionmap::Phase::Map(_))) {
             let hit_ui = layouts.iter().any(|l| l.hits.iter().any(|(_, r)| r.contains(x, y)));
             if !hit_ui {
                 if let Some(spot) = game.pick_heroine(x, y).filter(|_| game.command.is_none()) {
@@ -1481,6 +1790,7 @@ impl AmanatsuVm {
         let mut hud_click: Option<crate::hud::HudAction> = None;
         let mut replace_heroines = false;
         let mut massage_exit = false;
+        let mut h_button: Option<String> = None;
         if let Some((h, button)) = click {
             if h > 0 {
                 let level = &mut game.overlays[h - 1].0;
@@ -1489,6 +1799,9 @@ impl AmanatsuVm {
                 let script = level.invoke(&calls);
                 if game.massage.is_some() && level.name == crate::oil::SCENE_PREFAB && level.scene.nodes[button].name == "Button Exit" {
                     massage_exit = true;
+                }
+                if game.h.is_some() && level.name == crate::h::SCENE_PREFAB {
+                    h_button = Some(level.scene.nodes[button].name.clone());
                 }
                 if h == 1 && game.command.is_none() && game.talk.is_none() {
                     if let Some(a) = game.hud.as_ref().and_then(|hud| hud.action(button)) {
@@ -1570,9 +1883,13 @@ impl AmanatsuVm {
         }
         if massage_talk_ended {
             game.massage_talk_ended(now)?;
+            game.h_talk_ended(now)?;
         }
         if massage_exit {
             game.massage_exit()?;
+        }
+        if let Some(name) = h_button {
+            game.h_button(&name, now)?;
         }
         if let Some(zone) = game.pending_auto_save.take() {
             if let Err(e) = game.auto_save(host, zone) {
@@ -1628,6 +1945,18 @@ impl AmanatsuVm {
                 game.rng = rng;
                 game.visit_played = true;
                 game.show_parameters(&card);
+            } else if name == "btnH" {
+                // `EventManager.H`: agree, the opener, then the H scene (on
+                // an H map when this one has no H place).
+                let mut rng = game.rng;
+                let mut random = |n: usize| game_random(&mut rng, n);
+                let return_map = if let Controller::ActionMap(m) = &game.controller { if let actionmap::Phase::Map(id) = m.phase { id } else { 0 } } else { 0 };
+                let here = game.h_point.is_some();
+                list.extend(crate::commands::choose(&game.adv_assets.agree("H", fav_lv, false), &mut random));
+                list.extend(crate::commands::choose(&game.adv_assets.h_start(here), &mut random));
+                game.rng = rng;
+                game.visit_played = true;
+                game.h = Some(HRun { card: card.clone(), phase: MassagePhase::Agree, return_map, posture: None, entities: Vec::new(), motion: "Idle", motion_until: 0, gauge: 0., orgasms: 0, last_ms: now });
             } else if name == "btnWith" {
                 // `EventManager.With`: the agree line, the short movie and
                 // `_shortMoiveAfterAssets[LV]`, then the favourability level.

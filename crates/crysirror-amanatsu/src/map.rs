@@ -280,6 +280,12 @@ pub fn azure_sky(azure: &crysirror_unity::managed::Fields, sun: Option<&SceneLig
 /// `MapManager.ChangeMap(id, timeZone)`: the map scene with the zone's
 /// light setting applied, as GLB chunks.
 pub fn load(unity: &mut Unity, info: &MapInfo, time_zone: i32) -> Result<MapWorld> {
+    load_with_budget(unity, info, time_zone, MAP_TEXTURE_BUDGET)
+}
+
+/// `load` with a texture budget (scenes with two characters, such as H,
+/// leave them room in the prepared-asset budget).
+pub fn load_with_budget(unity: &mut Unity, info: &MapInfo, time_zone: i32, texture_budget: usize) -> Result<MapWorld> {
     let mut log = Vec::new();
     let key = format!("bundle:lib/{}#BuildPlayer-{}", info.scene.0, info.scene.1);
     let mut scene = unity.scene(&key).with_context(|| format!("map scene {}", info.scene.1))?;
@@ -333,7 +339,7 @@ pub fn load(unity: &mut Unity, info: &MapInfo, time_zone: i32) -> Result<MapWorl
     let roots = scene.roots.clone();
     // SATD-amanatsu-port: one texture budget for the map; characters and
     // the rest of the session share the player's prepared-asset budget.
-    let options = GlbOptions { max_texture: 1024, texture_budget: MAP_TEXTURE_BUDGET, spring_unit: 10. };
+    let options = GlbOptions { max_texture: 1024, texture_budget, spring_unit: 10. };
     let (chunks, report) = world6::scene_glb(&scene, &key, &roots, unity, &options, "CrySirror AmanatsuLocation map importer")?;
     // Move-point prefab cameras.
     let mut cameras = Vec::new();

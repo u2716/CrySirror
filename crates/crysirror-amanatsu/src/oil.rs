@@ -139,7 +139,12 @@ impl CameraData {
     }
 
     pub fn load(unity: &mut Unity, name: &str) -> Result<Self> {
-        let (k, id) = unity.bundle_asset("lib/oil/camera/000_01.unity3d", name, 49)?.with_context(|| format!("oil camera {name}"))?;
+        Self::load_from(unity, "lib/oil/camera/000_01.unity3d", name)
+    }
+
+    /// From a camera list bundle (`lib/h/list/camera/000_01.unity3d`, …).
+    pub fn load_from(unity: &mut Unity, bundle: &str, name: &str) -> Result<Self> {
+        let (k, id) = unity.bundle_asset(bundle, name, 49)?.with_context(|| format!("camera {name}"))?;
         Self::parse(&unity.text_asset(&k, id)?)
     }
 
