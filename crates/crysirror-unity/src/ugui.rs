@@ -50,6 +50,10 @@ pub struct NodeState {
     pub scale: Option<[f32; 3]>,
     /// `Image.fillAmount`.
     pub fill: Option<f32>,
+    /// `CanvasGroup.blocksRaycasts`.
+    pub blocks_raycasts: Option<bool>,
+    /// `CanvasGroup.interactable`.
+    pub interactable: Option<bool>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -76,8 +80,12 @@ pub struct DrawItem {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Layout {
     pub items: Vec<DrawItem>,
-    /// Raycast targets in draw order: (node, rect).
+    /// Raycast targets in draw order: (node, rect). Graphics under a
+    /// `CanvasGroup` that does not block raycasts are left out.
     pub hits: Vec<(usize, Rect)>,
+    /// Laid-out nodes whose `CanvasGroup` chain is not interactable
+    /// (`Selectable.IsInteractable` also requires its own flag).
+    pub non_interactable: std::collections::HashSet<usize>,
     pub rects: HashMap<usize, Rect>,
 }
 
@@ -129,6 +137,8 @@ struct Walk {
     alpha: f32,
     sorting: i64,
     in_canvas: bool,
+    blocks: bool,
+    interactable: bool,
 }
 
 /// Lay out every active canvas of the scene for a `width`×`height` screen.
@@ -137,7 +147,7 @@ pub fn layout(scene: &Scene6, states: &HashMap<usize, NodeState>, width: f32, he
     let mut order = 0u32;
     let mut driven: HashMap<usize, crate::scene6::RectParams> = HashMap::new();
     for &r in &scene.roots {
-        let w = Walk { parent: Rect { x0: 0., y0: 0., x1: width, y1: height }, scale: 1., origin: [0., 0.], alpha: 1., sorting: 0, in_canvas: false };
+        let w = Walk { parent: Rect { x0: 0., y0: 0., x1: width, y1: height }, scale: 1., origin: [0., 0.], alpha: 1., sorting: 0, in_canvas: false, blocks: true, interactable: true };
         walk(scene, states, r, w, width, height, svc, &mut driven, &mut out, &mut order);
     }
     out.items.sort_by(|a, b| a.order.cmp(&b.order));
@@ -176,7 +186,7 @@ fn walk(scene: &Scene6, states: &HashMap<usize, NodeState>, n: usize, mut w: Wal
                     _ => {}
                 }
             }
-            w = Walk { parent: Rect { x0: 0., y0: 0., x1: sw / scale, y1: sh / scale }, scale, origin: [0., 0.], alpha: w.alpha, sorting: c.fields.int("m_SortingOrder").unwrap_or(0), in_canvas: true };
+            w = Walk { parent: Rect { x0: 0., y0: 0., x1: sw / scale, y1: sh / scale }, scale, origin: [0., 0.], alpha: w.alpha, sorting: c.fields.int("m_SortingOrder").unwrap_or(0), in_canvas: true, blocks: w.blocks, interactable: w.interactable };
             out.rects.insert(n, Rect { x0: 0., y0: 0., x1: sw, y1: sh });
             for &k in &node.children {
                 walk(scene, states, k, Walk { ..w }, sw, sh, svc, driven, out, order);
@@ -237,8 +247,19 @@ fn walk(scene: &Scene6, states: &HashMap<usize, NodeState>, n: usize, mut w: Wal
     };
     out.rects.insert(n, screen);
     let mut alpha = w.alpha;
+    let (mut blocks, mut interactable) = (w.blocks, w.interactable);
     if let Some(g) = scene.component(n, CANVAS_GROUP, "") {
         alpha *= st.and_then(|s| s.group_alpha).unwrap_or(g.fields.float("m_Alpha").unwrap_or(1.) as f32);
+        let own_blocks = st.and_then(|s| s.blocks_raycasts).unwrap_or(g.fields.int("m_BlocksRaycasts").unwrap_or(1) != 0);
+        let own_inter = st.and_then(|s| s.interactable).unwrap_or(g.fields.int("m_Interactable").unwrap_or(1) != 0);
+        if g.fields.int("m_IgnoreParentGroups").unwrap_or(0) != 0 {
+            (blocks, interactable) = (own_blocks, own_inter);
+        } else {
+            (blocks, interactable) = (blocks && own_blocks, interactable && own_inter);
+        }
+    }
+    if !interactable {
+        out.non_interactable.insert(n);
     }
     // Children see this rect in unscaled local units (size, not scaled
     // size); scale carries into their screen mapping.
@@ -291,7 +312,7 @@ fn walk(scene: &Scene6, states: &HashMap<usize, NodeState>, n: usize, mut w: Wal
         };
         if let Some(paint) = paint {
             *order += 1;
-            if f.int("m_RaycastTarget").unwrap_or(0) != 0 && alpha > 0. {
+            if f.int("m_RaycastTarget").unwrap_or(0) != 0 && blocks {
                 out.hits.push((n, screen));
             }
             out.items.push(DrawItem { node: n, rect: screen, scale: w.scale * sx, paint, order: (w.sorting, *order) });
@@ -305,7 +326,7 @@ fn walk(scene: &Scene6, states: &HashMap<usize, NodeState>, n: usize, mut w: Wal
         }
     }
     for &k in &node.children {
-        walk(scene, states, k, Walk { parent: child_parent, scale: child_scale, origin: child_origin, alpha, sorting: w.sorting, in_canvas: true }, sw, sh, svc, driven, out, order);
+        walk(scene, states, k, Walk { parent: child_parent, scale: child_scale, origin: child_origin, alpha, sorting: w.sorting, in_canvas: true, blocks, interactable }, sw, sh, svc, driven, out, order);
     }
 }
 

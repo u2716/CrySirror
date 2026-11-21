@@ -14,6 +14,26 @@ distributed.
   the scenario MonoBehaviours in `lib/adv/scene` (`ScenarioCommand`: hash,
   version, multi, `Command`, string arguments; the `Command` names).
 
+- `unity.rs`: the installation through client storage — bundle/player file
+  keys, the type-tree registry (bundles plus generated MonoBehaviour trees),
+  sprites, TMP font fallbacks, build scene names.
+- `level.rs`: a build scene — hierarchy, script-driven uGUI state, Animator
+  playback (shared `crysirror_unity::animator`), `Button.m_OnClick`
+  persistent calls (built-in targets run here, `TitleScene` methods go to the
+  scene controller), `Selectable.interactable`, and the
+  `Manager.Scene.SceneFadeCanvas` fade (`_time` 1 s from the Addressables
+  manager prefab).
+- `scenes.rs`: `InitScene` (fade colour, `_loadLevel`), `LogoScene` (fade
+  out, `_waitTime`, click skip unless `_clickWait`, `SceneSettings.Load`),
+  `TitleScene` (+ `SelectMenuAnimation`, `PressAnyAnimation`): press-any →
+  menu, `OnGamePlay`/`OnCustom`/`OnNetWork` sub menus, `OnBack` (Back button
+  calls, right click), `OnStart`/`OnCustomMale|Female`/`OnMemory` scene
+  loads, `OnQuit`/Escape quit, F1 config. `SceneSettings_00_Master` ids map to
+  build scene names.
+- `adapter.rs`: the session — boot, scene loads after the fade-in, frame
+  layout and layer submission, Button click dispatch (press and release on
+  the same interactable handler).
+
 ## Validation
 
 `AMANATSU_ROOT=<game> cargo test --release -p crysirror-amanatsu --test owner_corpus -- --ignored --nocapture`:

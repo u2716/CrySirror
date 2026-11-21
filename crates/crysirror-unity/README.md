@@ -41,3 +41,27 @@ except editor-only assets (`UnityEditor.ShaderGraph.SubGraphAsset`),
 MonoBehaviours without a script, `UniversalRenderPipelineGlobalSettings`
 and the `globalgamemanagers` settings singletons (no trees; `BuildSettings`
 and `ResourceManager` have fixed readers).
+
+## Unity 2020+ assets, scenes and UI
+
+- `unity6.rs`: `Texture2D` (inline or streamed `.resS` data; BCn through
+  `crysirror-image`), `Mesh` vertex streams (skin weights, blend shapes,
+  sub-meshes), `Sprite` render data including `SpriteAtlas` packing.
+- `scene6.rs`: GameObject/Transform/RectTransform hierarchies with every
+  decoded component (MonoBehaviours named by their script class).
+- `ugui.rs`: uGUI layout of a `Scene6` into draw items and raycast targets —
+  `Canvas`/`CanvasScaler`, RectTransform anchors/pivot/scale, layout groups,
+  `LayoutElement`, `ContentSizeFitter`, `Image` (simple, sliced, filled),
+  `TextMeshProUGUI` runs, `CanvasGroup` alpha and its `blocksRaycasts` /
+  `interactable` inheritance (`ignoreParentGroups`). Per-node `NodeState`
+  overrides carry runtime changes.
+- `animator.rs`: Mecanim without Unity — `AnimationClip` muscle clips
+  (streamed cubic segments, dense samples, constants) with their generic
+  bindings, `AnimatorController` layers, states, exit-time transitions and
+  cross-fades, `Animator.Play(state)`; path/attribute CRC-32 resolution onto
+  uGUI properties (GameObject active, CanvasGroup alpha, Graphic/TMP colour,
+  anchored position, size delta, local scale, fill amount). Parameter
+  conditions, blend trees beyond a single motion, root motion and humanoid
+  muscles are not evaluated.
+- `events.rs`: `UnityEvent` persistent calls (target, method, argument mode)
+  for the consumer to invoke.

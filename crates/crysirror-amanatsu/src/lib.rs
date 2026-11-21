@@ -6,6 +6,8 @@
 #![forbid(unsafe_code)]
 pub mod adapter;
 pub mod adv;
+pub mod level;
+pub mod scenes;
 pub mod ui;
 pub mod unity;
 

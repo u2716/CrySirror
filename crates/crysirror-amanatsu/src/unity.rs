@@ -267,6 +267,22 @@ impl Unity {
         Ok(None)
     }
 
+    /// Build scene names by build index (`BuildSettings.scenes`, without
+    /// path or extension).
+    pub fn build_scenes(&mut self) -> Result<Vec<String>> {
+        let ggm = self.file("globalgamemanagers")?;
+        let info = ggm.objects.iter().find(|o| o.class_id == crysirror_unity::class_id::BUILD_SETTINGS).context("BuildSettings")?;
+        let levels = crysirror_unity::classes::build_levels(&ggm.bytes(info)?)?;
+        Ok(levels.iter().map(|l| l.rsplit('/').next().unwrap_or(l).trim_end_matches(".unity").to_owned()).collect())
+    }
+
+    /// Keys of every serialized file of the loaded bundles.
+    pub fn bundle_files(&self) -> Vec<String> {
+        let mut v: Vec<String> = self.cabs.values().map(|(b, n)| format!("bundle:{b}#{n}")).collect();
+        v.sort();
+        v
+    }
+
     /// `m_ClassName` of a MonoBehaviour's script.
     pub fn script_name(&mut self, file: &str, p: PPtr) -> String {
         if p.is_null() {

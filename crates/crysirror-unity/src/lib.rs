@@ -14,7 +14,9 @@
 //! externals `{NUL-terminated asset path, 16-byte GUID, i32 type,
 //! NUL-terminated path name}`.
 #![forbid(unsafe_code)]
+pub mod animator;
 pub mod bundle;
+pub mod events;
 pub mod classes;
 pub mod gltf;
 pub mod managed;

@@ -18,6 +18,34 @@ impl AssetReader for File {
     }
 }
 
+/// The game directory as client asset storage (`Mount::Asset`).
+struct Dir(PathBuf);
+impl crysirror_core::service::ClientStorage for Dir {
+    fn read(&self, p: &crysirror_core::path::VfsPath) -> crysirror_core::Result<Vec<u8>> {
+        std::fs::read(self.0.join(p.relative())).map_err(|_| crysirror_core::Error::NotFound)
+    }
+    fn write_atomic(&self, _: &crysirror_core::path::VfsPath, _: &[u8]) -> crysirror_core::Result<()> {
+        Err(crysirror_core::Error::ReadOnly)
+    }
+    fn remove(&self, _: &crysirror_core::path::VfsPath) -> crysirror_core::Result<()> {
+        Err(crysirror_core::Error::ReadOnly)
+    }
+    fn list(&self, _: crysirror_core::path::Mount, dir: &str) -> crysirror_core::Result<Vec<String>> {
+        let rd = std::fs::read_dir(self.0.join(dir)).map_err(|_| crysirror_core::Error::NotFound)?;
+        Ok(rd.filter_map(|e| e.ok()?.file_name().into_string().ok()).collect())
+    }
+    fn open_asset(&self, p: &crysirror_core::path::VfsPath) -> crysirror_core::Result<Arc<dyn AssetReader>> {
+        let f = std::fs::File::open(self.0.join(p.relative())).map_err(|_| crysirror_core::Error::NotFound)?;
+        Ok(Arc::new(File(Mutex::new(f))))
+    }
+}
+
+/// The adapter's Unity view of `AMANATSU_ROOT`.
+fn unity() -> crysirror_amanatsu::unity::Unity {
+    let root = PathBuf::from(std::env::var_os("AMANATSU_ROOT").unwrap());
+    crysirror_amanatsu::unity::Unity::new(Arc::new(Dir(root)), "AmanatsuLocation_Data").unwrap()
+}
+
 fn walk(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
     let mut entries: Vec<_> = std::fs::read_dir(dir).unwrap().filter_map(|e| e.ok()).map(|e| e.path()).collect();
     entries.sort();
@@ -407,4 +435,245 @@ fn generate_managed_trees() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("data/managed_trees.json");
     std::fs::write(&path, serde_json::to_string(&serde_json::json!({"schema": 1, "unity": "6000.0.65f1", "scripts": out})).unwrap()).unwrap();
     eprintln!("{} trees → {}", out.len(), path.display());
+}
+
+/// MonoBehaviours of a level with their fields (`AMANATSU_LEVEL`,
+/// `AMANATSU_SCRIPT` substring filter); object pointers in the level are
+/// printed as node paths.
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn print_scripts() {
+    use crysirror_unity::{managed::Value, scene6::Scene6, PPtr, TreeRegistry};
+    let root = PathBuf::from(std::env::var_os("AMANATSU_ROOT").unwrap());
+    let data = root.join("AmanatsuLocation_Data");
+    let level = std::env::var("AMANATSU_LEVEL").unwrap_or_else(|_| "level2".into());
+    let filter = std::env::var("AMANATSU_SCRIPT").unwrap_or_default();
+    let mut registry = TreeRegistry::default();
+    let mut files = Vec::new();
+    walk(&root.join("lib"), &mut files);
+    walk(&data.join("StreamingAssets"), &mut files);
+    for path in files {
+        let source: Arc<dyn AssetReader> = Arc::new(File(Mutex::new(std::fs::File::open(&path).unwrap())));
+        let Ok(bundle) = Bundle::open(source) else { continue };
+        for node in bundle.nodes.iter().filter(|n| n.flags & 4 != 0) {
+            registry.add(&SerializedFile::open(bundle.reader(node)).unwrap());
+        }
+    }
+    let doc: serde_json::Value = serde_json::from_str(include_str!("../data/managed_trees.json")).unwrap();
+    for (k, v) in doc["scripts"].as_object().unwrap() {
+        let id: [u8; 16] = std::array::from_fn(|i| u8::from_str_radix(&k[i * 2..i * 2 + 2], 16).unwrap());
+        if registry.lookup(crysirror_unity::class_id::MONO_BEHAVIOUR, Some(id)).is_none() {
+            registry.insert_script(id, serde_json::from_value(v["tree"].clone()).unwrap());
+        }
+    }
+    let open = |n: &str| -> Option<Arc<SerializedFile>> {
+        let f = std::fs::File::open(data.join(n)).ok()?;
+        Some(Arc::new(SerializedFile::open(Arc::new(File(Mutex::new(f))) as Arc<dyn AssetReader>).ok()?))
+    };
+    let file = open(&level).unwrap();
+    let script = |p: PPtr| crysirror_unity::scene6::resolve_script(&file, p, &registry, &open).unwrap_or_default();
+    let scene = Scene6::load(&file, &registry, &script).unwrap();
+    if let Ok(spec) = std::env::var("AMANATSU_OBJ") {
+        // file_id:path_id of the level's pointer space.
+        let (fid, pid) = spec.split_once(':').unwrap();
+        let (fid, pid): (i32, i64) = (fid.parse().unwrap(), pid.parse().unwrap());
+        let src = if fid == 0 { file.clone() } else { open(file.external(fid).unwrap()).unwrap() };
+        let info = src.object(pid).unwrap();
+        println!("class {} in {}", info.class_id, if fid == 0 { level.clone() } else { file.external(fid).unwrap().to_owned() });
+        let f = src.decode_using(info, &registry).unwrap();
+        for (k, v) in f.0.iter() {
+            let s = format!("{v:?}");
+            println!("  {k} = {}", s.chars().take(std::env::var("AMANATSU_WIDTH").ok().and_then(|w| w.parse().ok()).unwrap_or(600)).collect::<String>());
+        }
+        return;
+    }
+    if std::env::var_os("AMANATSU_TREE").is_some() {
+        for (i, n) in scene.nodes.iter().enumerate() {
+            let group = n.components.iter().find(|c| c.class_id == 225).and_then(|c| c.fields.float("m_Alpha"));
+            println!("{}{} {}", if n.active { "" } else { "(inactive) " }, scene.path(i), group.map(|a| format!("group alpha {a}")).unwrap_or_default());
+        }
+    }
+    for info in file.objects.iter().filter(|o| o.class_id == 114) {
+        if let Err(e) = file.decode_using(info, &registry) {
+            println!("UNDECODED {} {e:#}", info.path_id);
+        }
+    }
+    let mut owner = std::collections::HashMap::new();
+    for (i, n) in scene.nodes.iter().enumerate() {
+        owner.insert(n.game_object, i);
+        owner.insert(n.transform, i);
+        for c in &n.components {
+            owner.insert(c.path_id, i);
+        }
+    }
+    fn show(v: &Value, scene: &Scene6, owner: &std::collections::HashMap<i64, usize>, depth: usize) -> String {
+        match v {
+            Value::PPtr(p) if p.file_id == 0 && p.path_id != 0 => match owner.get(&p.path_id) {
+                Some(&n) => format!("@{}", scene.path(n)),
+                None => format!("@{}", p.path_id),
+            },
+            Value::Array(a) if depth < 4 => format!("[{}]", a.iter().take(24).map(|x| show(x, scene, owner, depth + 1)).collect::<Vec<_>>().join(", ")),
+            Value::Struct(s) if depth < 4 => format!("{{{}}}", s.0.iter().map(|(k, x)| format!("{k}: {}", show(x, scene, owner, depth + 1))).collect::<Vec<_>>().join(", ")),
+            other => {
+                let s = format!("{other:?}");
+                s.chars().take(160).collect()
+            }
+        }
+    }
+    for (i, n) in scene.nodes.iter().enumerate() {
+        for c in &n.components {
+            let class: Option<i32> = std::env::var("AMANATSU_CLASS").ok().and_then(|v| v.parse().ok());
+            let wanted = match class {
+                Some(id) => c.class_id == id,
+                None => !c.script.is_empty() && c.script.contains(filter.as_str()),
+            };
+            if !wanted {
+                continue;
+            }
+            println!("{} [{}]", scene.path(i), c.script);
+            for (k, v) in c.fields.0.iter() {
+                if matches!(k.as_str(), "m_GameObject" | "m_Enabled" | "m_Script" | "m_Name" | "m_EditorHideFlags" | "m_EditorClassIdentifier") {
+                    continue;
+                }
+                println!("    {k} = {}", show(v, &scene, &owner, 0));
+            }
+        }
+    }
+}
+
+/// Every Animator of the build scenes: controller and clips decode, and the
+/// bindings census (uGUI-mapped vs unsupported) per level.
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn animators_decode() {
+    use crysirror_unity::{animator, scene6::Scene6, PPtr, TreeRegistry};
+    let root = PathBuf::from(std::env::var_os("AMANATSU_ROOT").unwrap());
+    let data = root.join("AmanatsuLocation_Data");
+    let mut registry = TreeRegistry::default();
+    let mut files = Vec::new();
+    walk(&root.join("lib"), &mut files);
+    walk(&data.join("StreamingAssets"), &mut files);
+    for path in files {
+        let source: Arc<dyn AssetReader> = Arc::new(File(Mutex::new(std::fs::File::open(&path).unwrap())));
+        let Ok(bundle) = Bundle::open(source) else { continue };
+        for node in bundle.nodes.iter().filter(|n| n.flags & 4 != 0) {
+            registry.add(&SerializedFile::open(bundle.reader(node)).unwrap());
+        }
+    }
+    let doc: serde_json::Value = serde_json::from_str(include_str!("../data/managed_trees.json")).unwrap();
+    for (k, v) in doc["scripts"].as_object().unwrap() {
+        let id: [u8; 16] = std::array::from_fn(|i| u8::from_str_radix(&k[i * 2..i * 2 + 2], 16).unwrap());
+        if registry.lookup(crysirror_unity::class_id::MONO_BEHAVIOUR, Some(id)).is_none() {
+            registry.insert_script(id, serde_json::from_value(v["tree"].clone()).unwrap());
+        }
+    }
+    let open = |n: &str| -> Option<Arc<SerializedFile>> {
+        let f = std::fs::File::open(data.join(n)).ok()?;
+        Some(Arc::new(SerializedFile::open(Arc::new(File(Mutex::new(f))) as Arc<dyn AssetReader>).ok()?))
+    };
+    let mut failures = 0;
+    for level in 0..6 {
+        let name = format!("level{level}");
+        let file = open(&name).unwrap();
+        let script = |p: PPtr| crysirror_unity::scene6::resolve_script(&file, p, &registry, &open).unwrap_or_default();
+        let scene = Scene6::load(&file, &registry, &script).unwrap();
+        let (mut animators, mut mapped, mut unsupported) = (0, 0, std::collections::BTreeMap::<(i32, u32), usize>::new());
+        for (i, n) in scene.nodes.iter().enumerate() {
+            for c in n.components.iter().filter(|c| c.class_id == 95) {
+                animators += 1;
+                let p = c.fields.pptr("m_Controller").unwrap_or_default();
+                if p.is_null() {
+                    continue;
+                }
+                let src = if p.file_id == 0 { file.clone() } else { open(file.external(p.file_id).unwrap()).unwrap() };
+                let ctl = match src.decode_using(src.object(p.path_id).unwrap(), &registry).map_err(anyhow::Error::from).and_then(|f| animator::Controller::decode(&f)) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        failures += 1;
+                        println!("{name} {}: controller {e:#}", scene.path(i));
+                        continue;
+                    }
+                };
+                for cp in &ctl.clips {
+                    let csrc = if cp.file_id == 0 { src.clone() } else { open(src.external(cp.file_id).unwrap()).unwrap() };
+                    let clip = match csrc.decode_using(csrc.object(cp.path_id).unwrap(), &registry).map_err(anyhow::Error::from).and_then(|f| animator::Clip::decode(&f)) {
+                        Ok(c) => c,
+                        Err(e) => {
+                            failures += 1;
+                            println!("{name} {} {}: clip {e:#}", scene.path(i), ctl.name);
+                            continue;
+                        }
+                    };
+                    for b in &clip.bindings {
+                        let resolved = animator::resolve_path(&scene, i, b.path).is_some();
+                        if resolved && (0..b.curves).all(|k| b.ugui(k).is_some()) {
+                            mapped += 1;
+                        } else {
+                            *unsupported.entry((b.class_id, if resolved { b.attribute } else { b.path })).or_default() += 1;
+                            if std::env::var_os("AMANATSU_VERBOSE").is_some() {
+                                println!("  {} {} {}: class {} attr {} path {} resolved {resolved}", scene.path(i), ctl.name, clip.name, b.class_id, b.attribute, b.path);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        println!("{name}: {animators} animators, {mapped} mapped bindings, unsupported {unsupported:?}");
+    }
+    assert_eq!(failures, 0);
+}
+
+/// MonoBehaviours of script class `AMANATSU_FIND` (substring) in the player
+/// files and every bundle, with their fields.
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn find_scripts() {
+    let want = std::env::var("AMANATSU_FIND").unwrap();
+    let mut u = unity();
+    let mut keys: Vec<String> = ["resources.assets", "globalgamemanagers.assets"].iter().map(|s| s.to_string()).collect();
+    keys.extend((0..6).map(|i| format!("level{i}")));
+    keys.extend((0..6).map(|i| format!("sharedassets{i}.assets")));
+    keys.extend(u.bundle_files());
+    for key in keys {
+        let Ok(file) = u.file(&key) else { continue };
+        for info in file.objects.iter().filter(|o| o.class_id == 114) {
+            let Ok(f) = u.decode(&key, info.path_id) else { continue };
+            let class = u.script_name(&key, f.pptr("m_Script").unwrap_or_default());
+            if !class.contains(want.as_str()) {
+                continue;
+            }
+            println!("{key} #{} [{class}] {}", info.path_id, f.string("m_Name").unwrap_or(""));
+            for (k, v) in f.0.iter().filter(|(k, _)| !matches!(k.as_str(), "m_GameObject" | "m_Enabled" | "m_Script" | "m_Name" | "m_EditorHideFlags" | "m_EditorClassIdentifier")) {
+                println!("    {k} = {}", format!("{v:?}").chars().take(std::env::var("AMANATSU_WIDTH").ok().and_then(|w| w.parse().ok()).unwrap_or(300)).collect::<String>());
+            }
+        }
+    }
+}
+
+/// Persistent click/value-changed calls of every Selectable in a level
+/// (`AMANATSU_LEVEL`).
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn print_events() {
+    let level = std::env::var("AMANATSU_LEVEL").unwrap_or_else(|_| "level2".into());
+    let mut u = unity();
+    let scene = u.scene(&level).unwrap();
+    let mut owner = std::collections::HashMap::new();
+    for (i, n) in scene.nodes.iter().enumerate() {
+        owner.insert(n.game_object, i);
+        for c in &n.components {
+            owner.insert(c.path_id, i);
+        }
+    }
+    for (i, n) in scene.nodes.iter().enumerate() {
+        for c in &n.components {
+            for field in ["m_OnClick", "m_OnValueChanged", "onValueChanged"] {
+                let Some(ev) = c.fields.fields(field) else { continue };
+                for call in crysirror_unity::events::persistent_calls(ev) {
+                    let target = owner.get(&call.target.path_id).map(|&t| scene.path(t)).unwrap_or_else(|| format!("{:?}", call.target));
+                    println!("{} {field}: {}.{}({:?}) on {target}", scene.path(i), call.type_name, call.method, call.argument);
+                }
+            }
+        }
+    }
 }
