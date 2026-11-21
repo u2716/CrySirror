@@ -119,6 +119,8 @@ pub struct Game {
     visit_played: bool,
     /// `AL.Oil` tables (loaded on the first massage) and the massage.
     oil: Option<crate::oil::OilData>,
+    /// A "一緒に遊ぶ" waiting for its scenarios to end (card).
+    pending_with: Option<String>,
     massage: Option<MassageRun>,
     /// A loaded save waiting for the ActionMap scene.
     loaded_save: Option<crate::save::SaveFile>,
@@ -747,6 +749,20 @@ impl Game {
         }
     }
 
+    /// `EventManager._With_d__41` after the short movie: favourability
+    /// takes the late points as its new gauge and one level.
+    fn favorability_up(&mut self, card: &str) {
+        let max = self.param_table.points.first().map_or(6, |p| p.max_lv);
+        let (gp, _, _) = self.npc(card);
+        gp.favorability.point = gp.late_point;
+        gp.late_point = 0;
+        gp.favorability.lv = (gp.favorability.lv + 1).min(max);
+        gp.favorability.is_max_lv = gp.favorability.lv == max;
+        let lv = gp.favorability.lv;
+        self.log.push(format!("favourability LV{lv}"));
+        self.show_parameters(card);
+    }
+
     /// The massage heroine on the esthetics bed (`Est00`) in the first
     /// oil pose (`AnimationInfo` 0, its controller's default state), kept
     /// as a CPU model for the touch raycast.
@@ -1041,9 +1057,23 @@ impl Game {
             return self.start_talk(spot, list);
         }
         let mut level = Level::prefab(&mut self.unity, "lib/am/pre/s/000_00.unity3d", "command")?;
-        for path in ["Command/Canvas/Hide", "Command/Canvas/Panel/WaterGun", "Command/Canvas/Panel/Command/WithPlay"] {
+        // `CommandUI.IsNextShortMovie`: "一緒に遊ぶ" only with a full
+        // favourability gauge and the level's massage/H progress.
+        let with_ready = {
+            let card = self.spots[spot].0.clone();
+            let lv_point = self.param_table.points.first().map_or(100, |p| p.lv_point);
+            let (gp, count, _) = self.npc(&card).clone();
+            !gp.favorability.is_max_lv && gp.favorability.point >= lv_point && crate::params::favorability_gate(&gp.favorability, &count)
+        };
+        let hidden: &[&str] = if with_ready { &["Command/Canvas/Hide", "Command/Canvas/Panel/WaterGun"] } else { &["Command/Canvas/Hide", "Command/Canvas/Panel/WaterGun", "Command/Canvas/Panel/Command/WithPlay"] };
+        for path in hidden.iter().copied() {
             if let Some(n) = level.find(path) {
                 level.set_active(n, false);
+            }
+        }
+        if with_ready {
+            if let Some(n) = level.find("Command/Canvas/Panel/Command/WithPlay") {
+                level.set_active(n, true);
             }
         }
         if let Some(p) = level.find("Command/Canvas/Panel") {
@@ -1195,6 +1225,7 @@ impl AmanatsuVm {
             pending_points: None,
             loaded_save: None,
             oil: None,
+            pending_with: None,
             massage: None,
             adv_assets,
             adv_maps,
@@ -1421,6 +1452,9 @@ impl AmanatsuVm {
                             game.apply_points(card, kind, talk.selected);
                         }
                         massage_talk_ended = true;
+                        if let Some(card) = game.pending_with.take() {
+                            game.favorability_up(&card);
+                        }
                         if oi < game.overlays.len() {
                             let (_, mut ui) = game.overlays.remove(oi);
                             game.removed.extend(ui.clear());
@@ -1594,6 +1628,17 @@ impl AmanatsuVm {
                 game.rng = rng;
                 game.visit_played = true;
                 game.show_parameters(&card);
+            } else if name == "btnWith" {
+                // `EventManager.With`: the agree line, the short movie and
+                // `_shortMoiveAfterAssets[LV]`, then the favourability level.
+                // SATD-amanatsu-port: the ShortMovie timeline is not played.
+                let mut rng = game.rng;
+                let mut random = |n: usize| game_random(&mut rng, n);
+                list.extend(crate::commands::choose(&game.adv_assets.agree("With", fav_lv, false), &mut random));
+                list.extend(crate::commands::choose(&game.adv_assets.short_movie_after(fav_lv), &mut random));
+                game.rng = rng;
+                game.visit_played = true;
+                game.pending_with = Some(card.clone());
             } else if name == "btnMassage" {
                 // `EventManager.Massage`: the agree line, then the oil scene
                 // on the esthetics map.

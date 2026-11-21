@@ -1385,3 +1385,21 @@ fn map_points() {
         }
     }
 }
+
+/// Writes `AMANATSU_SAVE` with every heroine's favourability gauge full,
+/// one massage and map 0 (for testing the favourability short movie).
+#[test]
+#[ignore = "needs AMANATSU_SAVE"]
+fn patch_save_favorability() {
+    let path = std::env::var("AMANATSU_SAVE").unwrap();
+    let mut f = crysirror_amanatsu::save::SaveFile::decode(&std::fs::read(&path).unwrap()).unwrap();
+    for n in &mut f.npcs {
+        n.parameter.favorability.point = 100;
+        n.parameter.late_point = 20;
+        n.parameter.cost = 5;
+        n.count.massage = 1;
+        n.action.map_id = 0;
+    }
+    f.save.time_zone = 0;
+    std::fs::write(&path, f.encode().unwrap()).unwrap();
+}

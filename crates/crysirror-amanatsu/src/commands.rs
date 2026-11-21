@@ -25,6 +25,16 @@ impl AdvAssets {
     pub fn from_property_data(adv: &Fields, map_ids: Option<&Fields>) -> (Self, HashMap<i32, &'static str>) {
         let mut groups = HashMap::new();
         for (name, v) in &adv.0 {
+            // Top-level asset lists (`_shortMoiveAfterAssets`): `#index`.
+            if let Value::Array(list) = v {
+                let g: HashMap<String, Asset> = list
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, a)| if let Value::Struct(a) = a { Some((format!("#{i}"), (a.string("Asset")?.to_owned(), a.int("Priority").unwrap_or(0)))) } else { None })
+                    .collect();
+                groups.insert(name.clone(), g);
+                continue;
+            }
             let Value::Struct(f) = v else { continue };
             let mut g = HashMap::new();
             for (k, a) in &f.0 {
@@ -143,6 +153,12 @@ impl AdvAssets {
     pub fn massage_before(&self, favorability_lv: i32) -> Vec<Asset> {
         let level = if favorability_lv > 3 { "High" } else { "Normal" };
         (1..=2).filter_map(|i| self.get("_massage", &format!("Before_{level}_{i}"))).collect()
+    }
+
+    /// `_shortMoiveAfterAssets[lv]`: the scenario after the favourability
+    /// short movie of level `lv`.
+    pub fn short_movie_after(&self, lv: i32) -> Vec<Asset> {
+        self.get("_shortMoiveAfterAssets", &format!("#{lv}")).into_iter().collect()
     }
 
     /// The massage result's `Evaluation[stage]` asset.
