@@ -30,6 +30,8 @@ pub struct Level {
     pub animators: Vec<Animated>,
     /// `Selectable.interactable` changed at runtime.
     pub interactable: HashMap<usize, bool>,
+    /// Sound requests of this frame.
+    pub sounds: Vec<crate::sound::Call>,
     pub log: Vec<String>,
 }
 
@@ -53,7 +55,7 @@ impl Level {
                 }
             }
         }
-        Ok(Self { key: key.to_owned(), name: name.to_owned(), scene, states: HashMap::new(), animators, interactable: HashMap::new(), log })
+        Ok(Self { key: key.to_owned(), name: name.to_owned(), scene, states: HashMap::new(), animators, interactable: HashMap::new(), sounds: Vec::new(), log })
     }
 
     pub fn find(&self, path: &str) -> Option<usize> {

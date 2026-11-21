@@ -14,3 +14,11 @@
 - Owner corpus: `animators_decode` — the 14 Animators of the build scenes (all in `Title`) decode with their clips; all 72 bindings map to uGUI properties.
 - Behaviour (`crysirror play <game> --headless --no-audio --frames N --capture … --input-track …`): white fade-in to the ILLGAMES logo (Logo, `_waitTime` 2 s), fade to Title; the menu without Memories (no save data read); clicking ゲームスタート plays the Animator states (background/logo slide, menu dimmed and moved left, sub menu はじめから/つづきから/戻る shown); 戻る and right click return to the menu; キャラクリエイト opens 女キャラ/男キャラ/戻る; はじめから fades to the ActionMap scene (`level3`, black: no controller yet); ゲーム終了 halts the session.
 - Not established: sound, save-dependent entries, dialogs (config, exit confirmation, TOS, language, save/load), hover transitions, the ActionMap/CustomScene/Memory scenes, comparison with captures of the original game.
+
+## 2026-11-21 — sound (local, Apple M4 Max, offscreen with the null audio device)
+
+- Implementation: `crysirror-audio` `fsb5.rs` (FSB5 v0/v1 banks; Vorbis → Ogg with rebuilt identification/comment headers, granules from lewton's packet sample counts and the bank's frame count; PCM16 and IMA ADPCM → WAVE); `crysirror-amanatsu` `tables.rs`, `sound.rs`. Native evidence: `AL.Utils.Sound.Play(int)`/`PlayBGM(int)` decompiles (`ContentProvider.DicSystemSE`/`DicBGM` → `Manager.Sound.Loader`), `PropertyData` field offsets (`_bgmID` 0x88, `_sseID` 0xB8) against `TitleScene` handler reads (+188/+192/+196).
+- Compilation: `cargo test --release -p crysirror-audio --lib fsb5` (2 passed); `cargo build --release -p crysirror-desktop`.
+- Owner corpus: `audio_census` — 15,912 AudioClips: Vorbis 15,825 (three setup headers, CRC 6d39bf3e/d6e0bbd4/8d00698d, all found in the installed `UnityPlayer.dll`), PCM 76, ADPCM 11; `audio_decodes` with `AMANATSU_DIR=lib` decodes all 15,912 to the end through the shared decoder (4,216,330,279 frames), 0 failures.
+- Behaviour: `crysirror play <game> --headless --frames 300`: at the title `channel_audio` reports 1 active voice, 182,016 rendered frames, peak 0.999, no underruns; no audio errors in the adapter log.
+- Not established: audible comparison with the original game, volumes/cross-fades, sound beyond the title.

@@ -15,6 +15,7 @@ doctest = false
 runtime = ["dep:crysirror-runtime"]
 
 [dependencies]
+crysirror-audio.workspace = true
 anyhow.workspace = true
 crysirror-core.workspace = true
 crysirror-unity.workspace = true

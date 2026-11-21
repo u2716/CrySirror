@@ -11,8 +11,9 @@ Memories entry, `SaveLoadUI` for つづきから), `ConfigWindow`, `ExitDialog`
 confirmation (quit is immediate), the TOS check/viewer, the language dialog,
 Selectable hover/press transitions (`ColorTint`, Animator triggers), the
 ILLGAMES `PlayAnimationUI` tweens (LitMotion easing) and the uploader/
-downloader; Animator parameter conditions; sound (BGM, SE, brand/title call
-voices: FSB5 `AudioClip` data); the ADV command interpreter (45 command
+downloader; Animator parameter conditions; sound: BGM cross-fades, config
+volumes, the title call voice, ENV/3D SE and voices outside the title, the
+`UnityPlayer.dll` setup-header scan on a worker; the ADV command interpreter (45 command
 kinds in use), characters (body/face/hair/clothes, colour masks, blend
 shapes, bones, physics), maps and H scenes,
 saves (`UserData/save`), character cards; TextMeshPro Alpha8 SDF atlases
@@ -25,3 +26,4 @@ H scenes and save/load, recorded in a validation note.
 | --- | --- | --- |
 | 2026-11-21 | Shared Unity 6 readers (bundles, type trees, generated MonoBehaviour trees, textures incl. BC4/BC6H/BC7, meshes with skinning and blend shapes); ADV scenario decoding. | Everything listed above. |
 | 2026-11-21 | Boot flow Init → Logo → Title with the scene fade; shared Mecanim playback (`crysirror_unity::animator`), UnityEvent persistent calls and uGUI raycast/interactable inheritance; title menus, Back/right click, scene loads and quit ported from `TitleScene`. | Listed above. |
+| 2026-11-21 | Sound: shared FSB5 (Vorbis/PCM16/IMA ADPCM) conversion in `crysirror-audio`; `TableData` lists; title BGM, menu SE and the logo brand call. | Listed above. |

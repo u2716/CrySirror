@@ -276,6 +276,89 @@ impl Unity {
         Ok(levels.iter().map(|l| l.rsplit('/').next().unwrap_or(l).trim_end_matches(".unity").to_owned()).collect())
     }
 
+    /// The `m_Resource` bytes (an FSB5 bank) of a decoded AudioClip of
+    /// `file`: a sibling node of its bundle or a player `.resource` file.
+    pub fn audio_clip_bytes(&mut self, file: &str, clip: &Fields) -> Result<Vec<u8>> {
+        let res = clip.fields("m_Resource").context("AudioClip m_Resource")?;
+        let source = res.string("m_Source").unwrap_or("");
+        let offset = res.int("m_Offset").unwrap_or(0) as u64;
+        let size = res.int("m_Size").unwrap_or(0) as usize;
+        anyhow::ensure!(size <= 256 << 20, "AudioClip resource of {size} bytes");
+        let node = source.rsplit('/').next().unwrap_or(source);
+        let reader = match file.strip_prefix("bundle:").and_then(|r| r.split_once('#')) {
+            Some((bundle, _)) => {
+                let b = self.bundle(bundle)?;
+                let n = b.node(node).with_context(|| format!("{node} not in {bundle}"))?;
+                b.reader(n)
+            }
+            None => self.reader(&format!("{}/{node}", self.data_dir))?,
+        };
+        let mut out = vec![0u8; size];
+        let mut at = 0;
+        while at < size {
+            let n = reader.read_at(offset + at as u64, &mut out[at..])?;
+            anyhow::ensure!(n > 0, "AudioClip resource truncated");
+            at += n;
+        }
+        Ok(out)
+    }
+
+    /// `m_Script` bytes of a TextAsset (read raw: the type-tree string is
+    /// not UTF-8).
+    pub fn text_asset(&mut self, file: &str, path_id: i64) -> Result<Vec<u8>> {
+        let f = self.file(file)?;
+        let info = *f.object(path_id).with_context(|| format!("TextAsset {path_id} of {file}"))?;
+        let b = f.bytes(&info)?;
+        let name_len = u32::from_le_bytes(b.get(..4).context("TextAsset")?.try_into()?) as usize;
+        let at = (4 + name_len + 3) & !3;
+        let len = u32::from_le_bytes(b.get(at..at + 4).context("TextAsset m_Script")?.try_into()?) as usize;
+        Ok(b.get(at + 4..at + 4 + len).context("TextAsset m_Script bytes")?.to_vec())
+    }
+
+    /// Objects of a bundle (`lib/…` path) by asset name (`AssetBundle`
+    /// container path stem, case-insensitive): (file key, path id).
+    pub fn bundle_asset(&mut self, bundle: &str, name: &str, class_id: i32) -> Result<Option<(String, i64)>> {
+        let b = self.bundle(bundle)?;
+        let nodes: Vec<String> = b.nodes.iter().filter(|n| n.flags & 4 != 0).map(|n| n.path.clone()).collect();
+        for node in nodes {
+            let key = format!("bundle:{bundle}#{node}");
+            let f = self.file(&key)?;
+            let Some(ab) = f.objects.iter().find(|o| o.class_id == crysirror_unity::class_id::ASSET_BUNDLE).copied() else { continue };
+            let fields = f.decode_using(&ab, &self.registry)?;
+            for e in fields.array("m_Container").unwrap_or(&[]) {
+                let crysirror_unity::managed::Value::Struct(e) = e else { continue };
+                let path = e.string("first").unwrap_or("");
+                let stem = path.rsplit('/').next().unwrap_or(path);
+                let stem = stem.rsplit_once('.').map_or(stem, |(s, _)| s);
+                if !stem.eq_ignore_ascii_case(name) {
+                    continue;
+                }
+                let Some(p) = e.fields("second").and_then(|s| s.pptr("asset")) else { continue };
+                if f.object(p.path_id).is_some_and(|o| o.class_id == class_id) {
+                    return Ok(Some((key, p.path_id)));
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    /// The first MonoBehaviour of script class `class` in the bundles whose
+    /// key contains `within` (e.g. the Addressables `PropertyData`).
+    pub fn find_script_object(&mut self, within: &str, class: &str) -> Result<Option<Fields>> {
+        let keys: Vec<String> = self.bundle_files().into_iter().filter(|k| k.contains(within)).collect();
+        for key in keys {
+            let file = self.file(&key)?;
+            let ids: Vec<i64> = file.objects.iter().filter(|o| o.class_id == crysirror_unity::class_id::MONO_BEHAVIOUR).map(|o| o.path_id).collect();
+            for id in ids {
+                let Ok(f) = self.decode(&key, id) else { continue };
+                if self.script_name(&key, f.pptr("m_Script").unwrap_or_default()) == class {
+                    return Ok(Some(f));
+                }
+            }
+        }
+        Ok(None)
+    }
+
     /// Keys of every serialized file of the loaded bundles.
     pub fn bundle_files(&self) -> Vec<String> {
         let mut v: Vec<String> = self.cabs.values().map(|(b, n)| format!("bundle:{b}#{n}")).collect();

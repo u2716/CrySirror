@@ -30,6 +30,13 @@ distributed.
   calls, right click), `OnStart`/`OnCustomMale|Female`/`OnMemory` scene
   loads, `OnQuit`/Escape quit, F1 config. `SceneSettings_00_Master` ids map to
   build scene names.
+- `tables.rs`: `AL.Serialization.TableData` (MemoryPack TextAssets: column
+  keys, rows of strings), e.g. the `sd/lis` `bgm[…]`/`sse[…]` lists.
+- `sound.rs`: `Manager.Sound`/`AL.Utils.Sound` — `DicBGM`/`DicSystemSE`,
+  `Loader` (bundle, asset) → AudioClip → FSB5 → shared decoder stream on the
+  host's channels (BGM looping); Vorbis setup headers from the installed
+  `UnityPlayer.dll`. Title BGM, menu SE (`PropertyData._sseID`) and the logo's
+  random `sd/dt/bc` brand call play.
 - `adapter.rs`: the session — boot, scene loads after the fade-in, frame
   layout and layer submission, Button click dispatch (press and release on
   the same interactable handler).

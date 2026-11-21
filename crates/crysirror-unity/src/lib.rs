@@ -387,6 +387,7 @@ pub mod class_id {
     pub const MONO_SCRIPT: i32 = 115;
     pub const FONT: i32 = 128;
     pub const SKINNED_MESH_RENDERER: i32 = 137;
+    pub const ASSET_BUNDLE: i32 = 142;
     pub const BUILD_SETTINGS: i32 = 141;
     pub const RESOURCE_MANAGER: i32 = 147;
     pub const TEXT_ASSET: i32 = 49;

@@ -215,6 +215,10 @@ remain ordinary image resources; sound conversions use the shared `WaveSpec`
 serializer and feed the existing CrySirror audio decoder/mixer through VFS.
 No external unpacker or legacy engine process is invoked. HCA uses the safe
 Rust `cridecoder` library; MIO, NWA and the other native codecs are Rust ports.
+`crysirror_audio::fsb5` turns FMOD FSB5 banks (Unity `AudioClip` resources)
+into Ogg Vorbis or WAVE streams for the same decoder; Vorbis banks name their
+setup header by CRC-32, which the caller supplies from a binary the user
+installed (`find_vorbis_setup`), never from bundled data.
 
 Realtime callers schedule work on the existing bounded CPU task pool. Source
 opening happens there too, including materializing a compressed mounted entry:

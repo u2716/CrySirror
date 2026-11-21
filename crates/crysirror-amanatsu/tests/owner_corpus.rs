@@ -634,7 +634,8 @@ fn find_scripts() {
     keys.extend((0..6).map(|i| format!("level{i}")));
     keys.extend((0..6).map(|i| format!("sharedassets{i}.assets")));
     keys.extend(u.bundle_files());
-    for key in keys {
+    let key_filter = std::env::var("AMANATSU_KEY").unwrap_or_default();
+    for key in keys.into_iter().filter(|k| k.contains(key_filter.as_str())) {
         let Ok(file) = u.file(&key) else { continue };
         for info in file.objects.iter().filter(|o| o.class_id == 114) {
             let Ok(f) = u.decode(&key, info.path_id) else { continue };
@@ -673,6 +674,155 @@ fn print_events() {
                     let target = owner.get(&call.target.path_id).map(|&t| scene.path(t)).unwrap_or_else(|| format!("{:?}", call.target));
                     println!("{} {field}: {}.{}({:?}) on {target}", scene.path(i), call.type_name, call.method, call.argument);
                 }
+            }
+        }
+    }
+}
+
+/// AudioClip census of `lib/<AMANATSU_DIR>` (default `sd`): load type,
+/// compression format, channels/frequency, resource sizes; FSB5 header mode.
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn audio_census() {
+    let mut u = unity();
+    let sub = std::env::var("AMANATSU_DIR").unwrap_or_else(|_| "lib/sd".into());
+    let mut census: BTreeMap<String, usize> = BTreeMap::new();
+    let mut shown = 0;
+    for key in u.bundle_files().into_iter().filter(|k| k.contains(&format!("{sub}/"))) {
+        let Ok(file) = u.file(&key) else { continue };
+        for info in file.objects.iter().filter(|o| o.class_id == 83) {
+            let f = match u.decode(&key, info.path_id) {
+                Ok(f) => f,
+                Err(e) => {
+                    *census.entry(format!("decode error {e}")).or_default() += 1;
+                    continue;
+                }
+            };
+            let res = f.fields("m_Resource").cloned().unwrap_or_default();
+            let k = format!("load {} fmt {} ch {} hz {}", f.int("m_LoadType").unwrap_or(-1), f.int("m_CompressionFormat").unwrap_or(-1), f.int("m_Channels").unwrap_or(-1), f.int("m_Frequency").unwrap_or(-1));
+            *census.entry(k).or_default() += 1;
+            {
+                let src = res.string("m_Source").unwrap_or("");
+                let off = res.int("m_Offset").unwrap_or(0) as u64;
+                let (bundle, _) = key.trim_start_matches("bundle:").split_once('#').unwrap();
+                let b = u.bundle(bundle).unwrap();
+                if let Some(n) = b.node(src.rsplit('/').next().unwrap()) {
+                    let mut h = vec![0u8; 0x100];
+                    let got = b.reader(n).read_at(off, &mut h).unwrap_or(0);
+                    h.truncate(got);
+                    // FSB5 v1: 0x3C header, then the sample's u64 mode bits and chunks.
+                    let le = |o: usize| u32::from_le_bytes(h[o..o + 4].try_into().unwrap());
+                    if h.len() >= 0x48 && &h[..4] == b"FSB5" && le(24) == 15 {
+                        let bits = u64::from_le_bytes(h[0x3C..0x44].try_into().unwrap());
+                        let mut o = 0x44;
+                        let mut more = bits & 1 != 0;
+                        while more && o + 4 <= h.len() {
+                            let c = le(o);
+                            more = c & 1 != 0;
+                            let size = ((c >> 1) & 0xFF_FFFF) as usize;
+                            let ty = c >> 25;
+                            if ty == 11 {
+                                *census.entry(format!("vorbis setup crc {:08x}", le(o + 4))).or_default() += 1;
+                            }
+                            o += 4 + size;
+                        }
+                    }
+                }
+            }
+            if shown < 3 {
+                shown += 1;
+                println!("{key} {} {:?}", f.string("m_Name").unwrap_or(""), res);
+                let src = res.string("m_Source").unwrap_or("");
+                let off = res.int("m_Offset").unwrap_or(0) as u64;
+                let size = res.int("m_Size").unwrap_or(0) as usize;
+                let (bundle, _) = key.trim_start_matches("bundle:").split_once('#').unwrap();
+                let b = u.bundle(bundle).unwrap();
+                let node = src.rsplit('/').next().unwrap();
+                if let Some(n) = b.node(node) {
+                    let r = b.reader(n);
+                    let mut head = vec![0u8; size.min(96)];
+                    r.read_at(off, &mut head).unwrap();
+                    println!("  head {:02x?}", &head[..head.len().min(96)]);
+                }
+            }
+        }
+    }
+    for (k, n) in census {
+        println!("{n:6} {k}");
+    }
+}
+
+/// Every AudioClip of `lib/<AMANATSU_DIR>` (default `sd`) converts from
+/// FSB5 and decodes through the shared decoder; the Vorbis setup headers
+/// come from the installed `UnityPlayer.dll`. `AMANATSU_LIMIT` caps clips.
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn audio_decodes() {
+    use crysirror_audio::fsb5;
+    let root = PathBuf::from(std::env::var_os("AMANATSU_ROOT").unwrap());
+    let player = std::fs::read(root.join("UnityPlayer.dll")).unwrap();
+    let setups: std::cell::RefCell<std::collections::HashMap<u32, Option<Vec<u8>>>> = Default::default();
+    let mut u = unity();
+    let sub = std::env::var("AMANATSU_DIR").unwrap_or_else(|_| "lib/sd".into());
+    let limit: usize = std::env::var("AMANATSU_LIMIT").ok().and_then(|v| v.parse().ok()).unwrap_or(usize::MAX);
+    let (mut ok, mut failed, mut frames_total) = (0usize, 0usize, 0u64);
+    'outer: for key in u.bundle_files().into_iter().filter(|k| k.contains(&format!("{sub}/"))) {
+        let Ok(file) = u.file(&key) else { continue };
+        for info in file.objects.iter().filter(|o| o.class_id == 83) {
+            if ok + failed >= limit {
+                break 'outer;
+            }
+            let f = u.decode(&key, info.path_id).unwrap();
+            let name = f.string("m_Name").unwrap_or("").to_owned();
+            let bank = u.audio_clip_bytes(&key, &f).unwrap();
+            let stream = fsb5::to_stream(&bank, &|crc| setups.borrow_mut().entry(crc).or_insert_with(|| fsb5::find_vorbis_setup(&player, crc)).clone());
+            // Decode to the end (streamed, as long music plays).
+            let result = stream.and_then(|s| {
+                let ext = if s.starts_with(b"OggS") { "ogg" } else { "wav" };
+                let mut src = crysirror_audio::decoder::open_memory(s.into(), Some(ext))?;
+                let mut block = [[0f32; 2]; 4096];
+                let mut n = 0u64;
+                loop {
+                    let got = src.read(&mut block)?;
+                    if got == 0 {
+                        break;
+                    }
+                    n += got as u64;
+                }
+                Ok(n)
+            });
+            match result {
+                Ok(n) => {
+                    ok += 1;
+                    frames_total += n;
+                }
+                Err(e) => {
+                    failed += 1;
+                    if failed < 10 {
+                        println!("{key} {name}: {e:#}");
+                    }
+                }
+            }
+        }
+    }
+    println!("{ok} clips decoded ({frames_total} frames), {failed} failed; setups {:?}", setups.borrow().iter().map(|(k, v)| (format!("{k:08x}"), v.as_ref().map(|v| v.len()))).collect::<Vec<_>>());
+    assert_eq!(failed, 0);
+}
+
+/// Raw object bytes (hex) of TextAssets in bundles matching `AMANATSU_KEY`.
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn hex_text_assets() {
+    let mut u = unity();
+    let want = std::env::var("AMANATSU_KEY").unwrap();
+    let n: usize = std::env::var("AMANATSU_WIDTH").ok().and_then(|w| w.parse().ok()).unwrap_or(256);
+    for key in u.bundle_files().into_iter().filter(|k| k.contains(want.as_str())) {
+        let file = u.file(&key).unwrap();
+        for info in file.objects.iter().filter(|o| o.class_id == 49) {
+            let b = file.bytes(info).unwrap();
+            println!("{key} #{} {} bytes", info.path_id, b.len());
+            for (i, c) in b[..b.len().min(n)].chunks(32).enumerate() {
+                println!("  {:04x}: {}  {}", i * 32, c.iter().map(|x| format!("{x:02x}")).collect::<Vec<_>>().join(" "), c.iter().map(|&x| if (32..127).contains(&x) { x as char } else { '.' }).collect::<String>());
             }
         }
     }

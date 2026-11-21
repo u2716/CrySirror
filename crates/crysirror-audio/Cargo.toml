@@ -27,4 +27,6 @@ rodio = { version = "0.17.3", optional = true, default-features = false, feature
 
 # Device-free native resource codecs, not the original engine runtime.
 opus-decoder = "=0.1.1"
+# Vorbis header/packet parsing for FSB5 → Ogg rebuilding (decoding stays in symphonia).
+lewton = "0.10.2"
 flate2 = { version = "1.0", default-features = false, features = ["rust_backend"] }

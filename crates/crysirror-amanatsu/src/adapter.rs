@@ -4,6 +4,7 @@
 use crate::{
     level::{Fade, Level},
     scenes,
+    sound::{self, Sound},
     ui::{Host, Ui},
     unity::Unity,
 };
@@ -55,6 +56,9 @@ pub struct Game {
     pub build_scenes: Vec<String>,
     pub level: Level,
     pub controller: Controller,
+    pub sound: Sound,
+    pub sound_ids: scenes::SoundIds,
+    rng: u64,
     /// `Manager.Scene.SceneFadeCanvas` and its `_time`.
     pub fade: Fade,
     pub fade_seconds: f32,
@@ -90,7 +94,7 @@ impl Game {
         self.controller = match name {
             "Init" => Controller::Init,
             "Logo" => Controller::Logo(scenes::Logo::new(&level)),
-            "Title" => Controller::Title(scenes::Title::new(&mut level)),
+            "Title" => Controller::Title(scenes::Title::new(&mut level, self.sound_ids)),
             _ => {
                 self.log.push(format!("SATD-amanatsu-port: {name} scene controller not ported"));
                 Controller::Static
@@ -103,6 +107,35 @@ impl Game {
         }
         self.level = level;
         self.ui = Ui::default();
+        Ok(())
+    }
+
+    /// Run this frame's sound requests of the scene logic.
+    fn sounds(&mut self, host: &mut dyn HostServices, client: ClientId) -> Result<()> {
+        for call in std::mem::take(&mut self.level.sounds) {
+            let r = match &call {
+                sound::Call::Bgm(id) => self.sound.play_bgm(host, client, &mut self.unity, *id),
+                sound::Call::SystemSe(id) => self.sound.play_system_se(host, client, &mut self.unity, *id),
+                sound::Call::StopAll => self.sound.stop_all(host, client),
+                sound::Call::RandomClip(prefix) => (|| {
+                    let clips = Sound::clips_under(&mut self.unity, prefix)?;
+                    if clips.is_empty() {
+                        return Ok(());
+                    }
+                    // xorshift: `ShuffleSelf` then the first element.
+                    self.rng ^= self.rng << 13;
+                    self.rng ^= self.rng >> 7;
+                    self.rng ^= self.rng << 17;
+                    let (bundle, name) = &clips[(self.rng % clips.len() as u64) as usize];
+                    self.sound.play(host, client, &mut self.unity, sound::Kind::SystemSe, bundle, name, 1.)
+                })(),
+            };
+            if let Err(e) = r {
+                self.log.push(format!("sound {call:?}: {e:#}"));
+            }
+        }
+        self.sound.poll(host, client)?;
+        self.log.append(&mut self.sound.log);
         Ok(())
     }
 }
@@ -148,7 +181,19 @@ impl AmanatsuVm {
         let rgba = f.fields("_fadeColor").and_then(|c| c.int("rgba")).unwrap_or(0xFFFF_FFFF) as u32;
         let color = [rgba & 0xFF, (rgba >> 8) & 0xFF, (rgba >> 16) & 0xFF].map(|c| c as f32 / 255.);
         let load = f.int("_loadLevel").unwrap_or(1) as usize;
+        let sound = Sound::load(&mut unity)?;
+        let pd = unity.find_script_object("StreamingAssets/aa", "AL.PropertyData")?.context("AL.PropertyData")?;
+        let sse = pd.fields("_sseID").cloned().unwrap_or_default();
+        let sound_ids = scenes::SoundIds {
+            ok_s: sse.int("OK_s").unwrap_or(1) as i32,
+            ok_l: sse.int("OK_l").unwrap_or(2) as i32,
+            cancel: sse.int("Cancel").unwrap_or(3) as i32,
+            title_bgm: pd.fields("_bgmID").and_then(|b| b.int("Title")).unwrap_or(0) as i32,
+        };
         let mut game = Game {
+            sound,
+            sound_ids,
+            rng: host.now_ms() | 1,
             unity,
             ui: Ui::default(),
             build_scenes,
@@ -266,6 +311,7 @@ impl AmanatsuVm {
                 }
             }
         }
+        game.sounds(host, client)?;
         game.log.append(&mut game.level.log);
         match request {
             scenes::Request::None => {}

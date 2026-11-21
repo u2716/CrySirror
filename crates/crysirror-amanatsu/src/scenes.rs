@@ -3,7 +3,7 @@
 //! `AL.Scene.LogoScene` and `AL.Title.TitleScene` (+ `SelectMenuAnimation`,
 //! `PressAnyAnimation`). Each runs once per frame over its [`Level`]; the
 //! native `async UniTask` steps are explicit stages.
-use crate::level::Level;
+use crate::{level::Level, sound::Call};
 use crysirror_unity::{events::PersistentCall, managed::Value};
 
 /// `ILLGAMES.Settings.SceneSettings` ids (`SceneSettings_00_Master`).
@@ -42,6 +42,16 @@ pub struct Logo {
     shown_at: Option<u64>,
 }
 
+/// `PropertyData._sseID` / `_bgmID.Title` values of `PropertyData`
+/// (`OK_s`, `OK_l`, `Cancel`).
+#[derive(Clone, Copy, Debug)]
+pub struct SoundIds {
+    pub ok_s: i32,
+    pub ok_l: i32,
+    pub cancel: i32,
+    pub title_bgm: i32,
+}
+
 impl Logo {
     pub fn new(level: &Level) -> Self {
         let f = level.scene.nodes.iter().flat_map(|n| &n.components).find(|c| c.script == "AL.Scene.LogoScene").map(|c| c.fields.clone()).unwrap_or_default();
@@ -56,7 +66,10 @@ impl Logo {
         if input.fading {
             return Request::None;
         }
-        // SATD-amanatsu-port: the `sd/dt/bc` brand call voice (FSB5 audio).
+        if self.shown_at.is_none() {
+            // A random brand call of `sd/dt/bc`.
+            level.sounds.push(Call::RandomClip("sd/dt/bc/".into()));
+        }
         let shown = *self.shown_at.get_or_insert(input.now);
         let skip = self.skippable && input.click.is_some();
         if skip || input.now >= shown + self.wait_ms {
@@ -99,6 +112,7 @@ pub struct Title {
     /// `SelectMenuAnimation` lock: raycasts blocked until this time.
     locked_until: Option<u64>,
     started: bool,
+    ids: SoundIds,
 }
 
 fn refs(level: &Level, fields: &crysirror_unity::managed::Fields, name: &str) -> Vec<Option<usize>> {
@@ -106,7 +120,7 @@ fn refs(level: &Level, fields: &crysirror_unity::managed::Fields, name: &str) ->
 }
 
 impl Title {
-    pub fn new(level: &mut Level) -> Self {
+    pub fn new(level: &mut Level, ids: SoundIds) -> Self {
         let f = level.scene.nodes.iter().flat_map(|n| &n.components).find(|c| c.script == "AL.Title.TitleScene").map(|c| c.fields.clone()).unwrap_or_default();
         let ptr = |name: &str| f.pptr(name).filter(|p| !p.is_null()).and_then(|p| level.owner(p.path_id));
         let menu_layout = ptr("_selectMenuAnimation");
@@ -132,7 +146,11 @@ impl Title {
             press_any: PressAny::None,
             locked_until: None,
             started: false,
+            ids,
         };
+        // Start: Voice.StopAll, Sound.Stop, then PlayBGMAsync(_bgmID.Title).
+        level.sounds.push(Call::StopAll);
+        level.sounds.push(Call::Bgm(ids.title_bgm));
         // SATD-amanatsu-port: Memories shows only with unlocked memories in
         // the save data (`Game` save list); saves are not read yet.
         if let Some(Some(m)) = t.menu_objects.get(6) {
@@ -202,9 +220,11 @@ impl Title {
         }
         if input.escape {
             // SATD-amanatsu-port: `ExitDialog` confirmation UI.
+            level.sounds.push(Call::SystemSe(self.ids.ok_l));
             return Request::Quit;
         }
         if input.f1 {
+            level.sounds.push(Call::SystemSe(self.ids.ok_l));
             level.log.push("ConfigWindow.Load (not ported)".into());
             return Request::None;
         }
@@ -226,14 +246,32 @@ impl Title {
             return Request::None;
         }
         match call.method.as_str() {
-            "OnGamePlay" => self.on_next(level, Menu::GamePlay, 0, 6, now),
-            "OnCustom" => self.on_next(level, Menu::CharaCreation, 1, 7, now),
-            "OnNetWork" => self.on_next(level, Menu::Network, 2, 8, now),
+            "OnGamePlay" | "OnCustom" | "OnNetWork" => {
+                level.sounds.push(Call::SystemSe(self.ids.ok_s));
+                match call.method.as_str() {
+                    "OnGamePlay" => self.on_next(level, Menu::GamePlay, 0, 6, now),
+                    "OnCustom" => self.on_next(level, Menu::CharaCreation, 1, 7, now),
+                    _ => self.on_next(level, Menu::Network, 2, 8, now),
+                }
+            }
             "OnBack" => return self.on_back(level, now),
-            "OnStart" => return Request::Load(scene_id::ACTION_MAP),
-            "OnCustomMale" | "OnCustomFemale" => return Request::Load(scene_id::CUSTOM),
-            "OnMemory" => return Request::Load(scene_id::MEMORY),
-            "OnQuit" => return Request::Quit,
+            "OnStart" | "OnCustomMale" | "OnCustomFemale" | "OnMemory" | "OnQuit" | "OnOption" => {
+                level.sounds.push(Call::SystemSe(self.ids.ok_l));
+                return match call.method.as_str() {
+                    "OnStart" => Request::Load(scene_id::ACTION_MAP),
+                    "OnCustomMale" | "OnCustomFemale" => Request::Load(scene_id::CUSTOM),
+                    "OnMemory" => Request::Load(scene_id::MEMORY),
+                    "OnQuit" => Request::Quit,
+                    _ => {
+                        level.log.push("ConfigWindow.Load (not ported)".into());
+                        Request::None
+                    }
+                };
+            }
+            "OnTOS" | "OnManual" | "OnLanguage" | "OnLoad" | "OnUploader" | "OnDownloader" => {
+                level.sounds.push(Call::SystemSe(self.ids.ok_s));
+                level.log.push(format!("TitleScene.{} (not ported)", call.method));
+            }
             // SATD-amanatsu-port: SaveLoadUI, ConfigWindow, TOS viewer,
             // uploader/downloader; OnManual opens an external URL.
             m => level.log.push(format!("TitleScene.{m} (not ported)")),
@@ -278,6 +316,7 @@ impl Title {
         if let Some(Some(g)) = self.sub_groups.get(group) {
             level.set_group_interactable(*g, false);
         }
+        level.sounds.push(Call::SystemSe(self.ids.cancel));
         Request::None
     }
 

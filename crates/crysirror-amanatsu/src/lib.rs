@@ -8,6 +8,8 @@ pub mod adapter;
 pub mod adv;
 pub mod level;
 pub mod scenes;
+pub mod sound;
+pub mod tables;
 pub mod ui;
 pub mod unity;
 

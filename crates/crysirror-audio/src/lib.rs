@@ -19,6 +19,7 @@ mod stereo_effect;
 mod resident;
 mod channel_exchange;
 pub mod decoder;
+pub mod fsb5;
 pub mod onset;
 pub mod wave_box;
 mod wave_ogg;
