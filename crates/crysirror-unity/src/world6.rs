@@ -10,7 +10,7 @@
 use crate::{
     gltf::GlbBuilder,
     managed::{Fields, Value},
-    scene6::Scene6,
+    scene6::{Component, Scene6},
     unity6::Mesh6,
     PPtr,
 };
@@ -756,19 +756,22 @@ pub fn scene_glb_animated(scene: &Scene6, file: &str, roots: &[usize], assets: &
     Ok((chunks, report))
 }
 
-/// `MagicaCloth2.MagicaCloth` BoneCloth (`clothType` 1) components of the
-/// active nodes as spring chains on scene nodes: one chain per root bone,
-/// gravity (`gravity` × `gravityDirection`, Unity → mirrored model space,
-/// times `unit`), `damping`, `angleRestorationConstraint.stiffness`,
-/// `angleLimitConstraint.limitAngle`, `radius` (base values; their depth
-/// curves are not evaluated). Collider lists are not converted.
+/// MagicaCloth 2 BoneCloth (`clothType` 1) and BoneSpring (10) components as
+/// spring chains on their root bones (resolved through bone aliases), with
+/// `unit` engine units per metre. Gravity, damping, angle restoration
+/// (stiffness, velocity attenuation), angle limit, particle radius, the
+/// spring's distance limit and capsule/sphere colliders of `colliderList`
+/// are converted; depth curves, inertia and self collision are not.
 pub fn magica_bone_cloths(scene: &Scene6, unit: f32) -> Vec<(usize, crysirror_asset::spring::SpringChain)> {
     let transforms: HashMap<(u32, i64), usize> = scene.nodes.iter().enumerate().map(|(i, n)| ((n.origin, n.transform), i)).collect();
+    let components: HashMap<(u32, i64), (usize, &Component)> = scene.nodes.iter().enumerate().flat_map(|(i, n)| n.components.iter().map(move |c| ((n.origin, c.path_id), (i, c)))).collect();
+    let alias = |n: usize| scene.bone_alias.get(&n).copied().unwrap_or(n);
     let mut out = Vec::new();
     for n in scene.nodes.iter().filter(|n| n.active) {
         for c in n.components.iter().filter(|c| c.script.ends_with("MagicaCloth")) {
             let Some(d) = c.fields.fields("serializeData") else { continue };
-            if d.int("clothType").unwrap_or(0) != 1 {
+            let kind = d.int("clothType").unwrap_or(0);
+            if kind != 1 && kind != 10 {
                 continue;
             }
             let value = |f: Option<&Fields>, default: f32| f.and_then(|f| f.float("value")).map_or(default, |v| v as f32);
@@ -776,22 +779,43 @@ pub fn magica_bone_cloths(scene: &Scene6, unit: f32) -> Vec<(usize, crysirror_as
             let g = d.float("gravity").unwrap_or(5.) as f32 * unit;
             let gravity = crate::gltf::mirror_point([dir[0] * g, dir[1] * g, dir[2] * g]);
             let restoration = d.fields("angleRestorationConstraint");
-            let stiffness = if restoration.and_then(|r| r.int("useAngleRestoration")).unwrap_or(1) != 0 { value(restoration.and_then(|r| r.fields("stiffness")), 0.2) } else { 0. };
+            let restore = restoration.and_then(|r| r.int("useAngleRestoration")).unwrap_or(1) != 0;
+            let mut stiffness = if restore { value(restoration.and_then(|r| r.fields("stiffness")), 0.2) } else { 0. };
+            let attenuation = if restore { restoration.and_then(|r| r.float("velocityAttenuation")).unwrap_or(0.) as f32 } else { 0. };
             let limit = d.fields("angleLimitConstraint");
             let angle_limit = if limit.and_then(|l| l.int("useAngleLimit")).unwrap_or(0) != 0 { value(limit.and_then(|l| l.fields("limitAngle")), 60.) } else { 0. };
+            let mut max_distance = 0.;
+            if kind == 10 {
+                if let Some(sp) = d.fields("springConstraint").filter(|s| s.int("useSpring").unwrap_or(0) != 0) {
+                    stiffness += sp.float("springPower").unwrap_or(0.) as f32;
+                    max_distance = sp.float("limitDistance").unwrap_or(0.) as f32 * unit;
+                }
+            }
+            let mut colliders = Vec::new();
+            for p in d.fields("colliderCollisionConstraint").and_then(|c| c.array("colliderList")).unwrap_or(&[]) {
+                let Value::PPtr(p) = p else { continue };
+                if p.path_id == 0 || p.file_id != 0 {
+                    continue;
+                }
+                let Some(&(node, col)) = components.get(&(n.origin, p.path_id)) else { continue };
+                if let Some(c) = magica_collider(col) {
+                    colliders.push(crysirror_asset::spring::SpringCollider { node: alias(node), ..c });
+                }
+            }
             let chain = crysirror_asset::spring::SpringChain {
                 root: 0,
                 gravity,
-                damping: value(d.fields("damping"), 0.05).clamp(0., 1.) * 0.5,
+                damping: (value(d.fields("damping"), 0.05).max(attenuation) * 0.5).clamp(0., 1.),
                 stiffness: stiffness.clamp(0., 1.),
                 angle_limit: angle_limit.clamp(0., 180.),
                 radius: (value(d.fields("radius"), 0.02) * unit).max(0.),
-                colliders: Vec::new(),
+                max_distance: max_distance.clamp(0., 1e4),
+                colliders,
             };
             for b in d.array("rootBones").unwrap_or(&[]) {
                 let Value::PPtr(b) = b else { continue };
                 if let Some(&node) = transforms.get(&(n.origin, b.path_id)) {
-                    out.push((node, chain.clone()));
+                    out.push((alias(node), chain.clone()));
                 }
             }
         }
@@ -799,11 +823,34 @@ pub fn magica_bone_cloths(scene: &Scene6, unit: f32) -> Vec<(usize, crysirror_as
     out
 }
 
+/// A `MagicaCapsuleCollider` (`size`: start radius, end radius, length along
+/// `direction` X/Y/Z, centred or from `center`) or `MagicaSphereCollider` in
+/// its node's space (node index left 0).
+fn magica_collider(c: &Component) -> Option<crysirror_asset::spring::SpringCollider> {
+    let v = |name: &str| c.fields.fields(name).map(|f| ["x", "y", "z"].map(|k| f.float(k).unwrap_or(0.) as f32));
+    let center = v("center").unwrap_or([0.; 3]);
+    let size = v("size")?;
+    if c.script.ends_with("MagicaSphereCollider") {
+        return Some(crysirror_asset::spring::SpringCollider { node: 0, offset: crate::gltf::mirror_point(center), tail: None, radius: size[0].max(0.) });
+    }
+    if !c.script.ends_with("MagicaCapsuleCollider") {
+        return None;
+    }
+    let mut axis = [0.; 3];
+    axis[c.fields.int("direction").unwrap_or(0).clamp(0, 2) as usize] = if c.fields.int("reverseDirection").unwrap_or(0) != 0 { -1. } else { 1. };
+    let (start, end) = if c.fields.int("alignedOnCenter").unwrap_or(1) != 0 { (-0.5 * size[2], 0.5 * size[2]) } else { (0., size[2]) };
+    let at = |t: f32| [center[0] + axis[0] * t, center[1] + axis[1] * t, center[2] + axis[2] * t];
+    let radius = if c.fields.int("radiusSeparation").unwrap_or(0) != 0 { size[0].max(size[1]) } else { size[0] };
+    Some(crysirror_asset::spring::SpringCollider { node: 0, offset: crate::gltf::mirror_point(at(start)), tail: Some(crate::gltf::mirror_point(at(end))), radius: radius.max(0.) })
+}
+
 /// Add the clips' tracks of nodes present in the chunk, then encode.
 fn finish_chunk(mut chunk: Chunk, clips: &[ClipTracks]) -> Result<Vec<u8>> {
     for (node, mut chain) in std::mem::take(&mut chunk.springs) {
         if let Some(&root) = chunk.nodes.get(&node) {
             chain.root = root;
+            // Colliders on nodes outside this chunk are dropped.
+            chain.colliders.retain_mut(|c| chunk.nodes.get(&c.node).map(|&n| c.node = n).is_some());
             chunk.glb.spring(chain);
         }
     }

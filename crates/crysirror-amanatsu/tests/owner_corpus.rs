@@ -1144,7 +1144,7 @@ fn chara_glb() {
         let len = u32::from_le_bytes(g[12..16].try_into().unwrap()) as usize;
         let json: serde_json::Value = serde_json::from_slice(&g[20..20 + len]).unwrap();
         let springs = json["extras"]["crysirror_springs"].as_array().cloned().unwrap_or_default();
-        println!("  {} spring chains: {}", springs.len(), springs.iter().take(6).map(|c| format!("{}(g {} d {} s {} lim {})", json["nodes"][c["root"].as_u64().unwrap() as usize]["name"], c["gravity"][1], c["damping"], c["stiffness"], c["angle_limit"])).collect::<Vec<_>>().join(" "));
+        println!("  {} spring chains: {}", springs.len(), springs.iter().take(16).map(|c| format!("{}(g {} d {} s {} lim {} max {} col {})", json["nodes"][c["root"].as_u64().unwrap() as usize]["name"], c["gravity"][1], c["damping"], c["stiffness"], c["angle_limit"], c["max_distance"], c["colliders"].as_array().map_or(0, Vec::len))).collect::<Vec<_>>().join(" "));
         for m in json["materials"].as_array().unwrap() {
             let e = &m["extras"]["crysirror_material"]["material"];
             println!("  {} alpha {} tex {} color {}", m["name"], e["alpha_mode"], e["base_color_texture"], e["base_color_factor"]);
@@ -1215,5 +1215,70 @@ fn print_scenarios() {
                 println!("  {i:3} {}{} {:?}", c.name(), if c.multi { "*" } else { "" }, c.args);
             }
         }
+    }
+}
+
+/// MagicaCloth components and colliders under `lib/chara`: cloth types,
+/// collider lists and collider component classes.
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn magica_census() {
+    let mut u = unity();
+    let mut types = std::collections::BTreeMap::<String, usize>::new();
+    for key in u.bundle_files().into_iter().filter(|k| k.contains("lib/chara/")) {
+        let Ok(file) = u.file(&key) else { continue };
+        let ids: Vec<i64> = file.objects.iter().filter(|o| o.class_id == 114).map(|o| o.path_id).collect();
+        for id in ids {
+            let Ok(f) = u.decode(&key, id) else { continue };
+            let class = u.script_name(&key, f.pptr("m_Script").unwrap_or_default());
+            if !class.starts_with("MagicaCloth2") {
+                continue;
+            }
+            let mut k = class.clone();
+            if let Some(d) = f.fields("serializeData") {
+                let colliders = d.fields("colliderCollisionConstraint").and_then(|c| c.array("colliderList")).map_or(0, |l| l.len());
+                k = format!("{class} type {} colliders {}", d.int("clothType").unwrap_or(-1), colliders.min(1));
+                if d.int("clothType").unwrap_or(-1) != 1 || colliders > 0 {
+                    println!("{} {k} {}", key.rsplit('#').next().unwrap_or(""), key.split('#').next().unwrap_or(""));
+                }
+            } else {
+                println!("{} {class} {}", key.split('#').next().unwrap_or(""), f.fields("center").map(|_| "").unwrap_or(""));
+            }
+            *types.entry(k).or_default() += 1;
+        }
+    }
+    for (k, n) in types {
+        println!("{n:6} {k}");
+    }
+}
+
+/// Writes the skin material textures of the card's body (`mt_*` list rows:
+/// sunburn, nipple, underhair, detail) to `AMANATSU_OUT` for inspection.
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn skin_textures() {
+    let mut u = unity();
+    let lists = crysirror_amanatsu::chara::Lists::load(&mut u).unwrap();
+    let out = PathBuf::from(std::env::var("AMANATSU_OUT").unwrap());
+    for id in 0..2 {
+        let r = lists.row("bo_body", id).unwrap();
+        println!("bo_body {id}: {:?}", (0..130).filter_map(|k| r.get(k).map(|v| (k, v.to_owned()))).collect::<Vec<_>>());
+    }
+    for (list, id, tex) in [("mt_sunburnUp", 1, 60), ("mt_sunburnDown", 2, 60), ("mt_nip", 0, 40), ("mt_underhair", 4, 61), ("mt_body_detail", 0, 42), ("mt_body_detail", 0, 28), ("mt_body_shine", 3, 124), ("bo_body", 1, 34)] {
+        let Some(row) = lists.row(list, id) else {
+            println!("{list} {id}: no row");
+            continue;
+        };
+        let Some((b, n)) = row.asset(if list == "bo_body" { crysirror_amanatsu::chara::key::MAIN_TEX_AB } else { crysirror_amanatsu::chara::key::MAIN_AB }, tex) else {
+            println!("{list} {id}: no key {tex}");
+            continue;
+        };
+        let Some((k, pid)) = u.bundle_asset(&b, &n, crysirror_unity::class_id::TEXTURE_2D).unwrap() else {
+            println!("{list} {id}: {b} {n} missing");
+            continue;
+        };
+        let img = crysirror_unity::world6::SceneAssets::texture(&mut u, &k, pid).unwrap();
+        println!("{list} {id} key {tex}: {n} {}x{}", img.width, img.height);
+        image::RgbaImage::from_raw(img.width, img.height, img.rgba).unwrap().save(out.join(format!("{list}_{tex}.png"))).unwrap();
     }
 }

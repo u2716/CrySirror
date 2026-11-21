@@ -99,6 +99,21 @@ impl Fields {
             _ => None,
         }
     }
+
+    /// Replace an existing field by dotted path through structs
+    /// (`springConstraint.springPower`); false when the path is absent.
+    pub fn set(&mut self, path: &str, value: Value) -> bool {
+        let (head, rest) = path.split_once('.').map_or((path, None), |(h, r)| (h, Some(r)));
+        let Some((_, v)) = self.0.iter_mut().find(|(n, _)| n == head) else { return false };
+        match (rest, v) {
+            (None, v) => {
+                *v = value;
+                true
+            }
+            (Some(rest), Value::Struct(f)) => f.set(rest, value),
+            _ => false,
+        }
+    }
 }
 
 /// Depth limit of nested serializable structs (Unity stops at 7).

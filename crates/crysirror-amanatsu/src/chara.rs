@@ -6,11 +6,13 @@
 //! (`co_*`) on the body, their bones resolved by name onto the skeletons
 //! (`AssignedAnotherWeights`). Materials get the list's main textures,
 //! tinted by the card's skin/hair colours and the clothes' colour masks.
+//! The body bone prefab adds the bust/hip/arm/leg/belly/waist MagicaCloth
+//! springs and `cf_hit_*` colliders, tuned by the card's softness values.
 //!
 //! SATD-amanatsu-port: accessories, face/body shape values
 //! (`customshape`), makeup/paint/eye layers of the `LIF/*` texture creation,
-//! clothing body cut-outs (`body_upper/lower/onepi` types), blend shapes,
-//! physics and poses are not applied.
+//! clothing body cut-outs (`body_upper/lower/onepi` types), blend shapes
+//! and poses are not applied.
 use crate::{card::Card, level::Level, tables::Table, unity::Unity};
 use anyhow::{Context, Result};
 use crysirror_asset::pbr::AlphaMode;
@@ -46,6 +48,83 @@ const HIDDEN_BODY: [&str; 16] = [
     "n_dankon", "n_mnpb", "body_onepi", "n_silhouetteTop", "o_body_shadow", "o_upper_type02", "o_upper_type03", "o_upper_type04", "o_upper_type05", "o_lower_type02", "o_lower_type03", "o_lower_type04", "o_lower_type05",
     "o_lower_type06", "o_upper_type06", "n_body_silhouette",
 ];
+
+/// The body bone prefab carrying the body MagicaCloth springs and the
+/// `cf_hit_*` colliders (`HumanBody` loads it beside `bo_body`).
+const BODY_BONE: (&str, &str) = ("lib/chara/body/bone/000.unity3d", "p_cf_al_body_bone_00");
+
+/// `HumanMagicaSpringSetting` groups: (field, `ShakeCorrectData` part,
+/// card body softness field).
+const SPRING_GROUPS: [(&str, &str, &str); 10] = [
+    ("_magicaBustLBones", "_bustData", "bustSoftness"),
+    ("_magicaBustRBones", "_bustData", "bustSoftness"),
+    ("_magicaHipLBones", "_hipData", "hipSoftness"),
+    ("_magicaHipRBones", "_hipData", "hipSoftness"),
+    ("_magicaArmLBones", "_upperArmData", "upperArmSoftness"),
+    ("_magicaArmRBones", "_upperArmData", "upperArmSoftness"),
+    ("_magicaLegLBones", "_thighData", "thighSoftness"),
+    ("_magicaLegRBones", "_thighData", "thighSoftness"),
+    ("_magicaBellyBones", "_bellyData", "bellySoftness"),
+    ("_magicaWaistBones", "_waistData", "waistSoftness"),
+];
+
+/// The `ShakeCorrectData` asset (`chara/list/shakecorrect`).
+fn shake_correct(unity: &mut Unity) -> Result<crysirror_unity::managed::Fields> {
+    for key in unity.bundle_files().into_iter().filter(|k| k.starts_with("bundle:lib/chara/list/shakecorrect/")) {
+        let ids: Vec<i64> = unity.file(&key)?.objects.iter().filter(|o| o.class_id == 114).map(|o| o.path_id).collect();
+        for id in ids {
+            let f = unity.decode(&key, id)?;
+            if f.get("_bustData").is_some() {
+                return Ok(f);
+            }
+        }
+    }
+    anyhow::bail!("no ShakeCorrectData")
+}
+
+/// `HumanBody.SetSpringSetting`/`ChangeBustGravity`: each group's
+/// MagicaCloths get `PartsData.GetData(softness)` (min + (max − min) ×
+/// clamp01(v)) as spring power, spring limit distance, angle-restoration
+/// stiffness and velocity attenuation; the bust gravity is
+/// lerp(`_bustGravity`, `bustWeight`). Returns the components changed.
+fn apply_shake(scene: &mut Scene6, bone_root: usize, shake: &crysirror_unity::managed::Fields, body: &Value) -> usize {
+    use crysirror_unity::managed::{Fields, Value as F};
+    let origin = scene.nodes[bone_root].origin;
+    let range = |f: Option<&Fields>, v: f32| {
+        let (a, b) = f.map_or((0., 0.), |f| (f.float("_min").unwrap_or(0.) as f32, f.float("_max").unwrap_or(0.) as f32));
+        a + (b - a) * v.clamp(0., 1.)
+    };
+    let soft = |k: &str| body.get(k).and_then(Value::as_f32).unwrap_or(0.5);
+    let Some(setting) = scene.nodes.iter().filter(|n| n.origin == origin).flat_map(|n| &n.components).find(|c| c.script.ends_with("HumanMagicaSpringSetting")).map(|c| c.fields.clone()) else { return 0 };
+    let mut changed = 0;
+    for (group, part, softness) in SPRING_GROUPS {
+        let v = soft(softness);
+        let part = shake.fields(part);
+        let data = part.and_then(|p| p.fields("_data"));
+        let values = [
+            ("serializeData.springConstraint.springPower", range(part.and_then(|p| p.fields("_power")), v)),
+            ("serializeData.springConstraint.limitDistance", range(data.and_then(|d| d.fields("_limitDistance")), v)),
+            ("serializeData.angleRestorationConstraint.stiffness.value", range(data.and_then(|d| d.fields("_stiffness")), v)),
+            ("serializeData.angleRestorationConstraint.velocityAttenuation", range(data.and_then(|d| d.fields("_velocityAttenuation")), v)),
+        ];
+        let gravity = part.is_some_and(|_| group.starts_with("_magicaBust")).then(|| range(shake.fields("_bustGravity"), soft("bustWeight")));
+        let springs: Vec<i64> = match setting.get(group) {
+            Some(F::Array(a)) => a.iter().filter_map(|e| if let F::Struct(f) = e { f.pptr("Spring") } else { None }).map(|p| p.path_id).collect(),
+            Some(F::Struct(f)) => f.pptr("Spring").map(|p| p.path_id).into_iter().collect(),
+            _ => Vec::new(),
+        };
+        for c in scene.nodes.iter_mut().filter(|n| n.origin == origin).flat_map(|n| &mut n.components).filter(|c| springs.contains(&c.path_id)) {
+            for (path, x) in values {
+                c.fields.set(path, F::Float(f64::from(x)));
+            }
+            if let Some(g) = gravity {
+                c.fields.set("serializeData.gravity", F::Float(f64::from(g)));
+            }
+            changed += 1;
+        }
+    }
+    changed
+}
 
 /// Face texture lists: (shader, list, texture key, card id field, card
 /// colour fields for the texture's R, G, B mask channels).
@@ -127,6 +206,8 @@ struct PartLook {
     colors: Vec<[f32; 4]>,
     /// Card outline colour (hair).
     outline: Option<[f32; 4]>,
+    /// Card `skinShadowColor` (`_Shadow_color` of the skin shaders).
+    shadow: Option<[f32; 4]>,
 }
 
 pub struct Human {
@@ -166,13 +247,23 @@ impl Human {
         let mut scene = body.scene;
         let mut looks = HashMap::new();
         let skin = color(body_data.get("skinMainColor")).unwrap_or([1.; 4]);
-        looks.insert(body.key.clone(), PartLook { shaders: &["AL/skin_body"], main: body_row.asset(key::MAIN_TEX_AB, key::MAIN_TEX), colors: vec![skin], ..Default::default() });
+        let shadow = color(body_data.get("skinShadowColor"));
+        looks.insert(body.key.clone(), PartLook { shaders: &["AL/skin_body"], main: body_row.asset(key::MAIN_TEX_AB, key::MAIN_TEX), colors: vec![skin], shadow, ..Default::default() });
         for name in HIDDEN_BODY {
             for n in scene.nodes.iter_mut().filter(|n| n.name == name) {
                 n.active = false;
             }
         }
         let skeleton = scene.nodes.iter().position(|n| n.name == "cf_j_root").context("body cf_j_root")?;
+        // Body physics: the bone prefab's MagicaCloth springs and colliders
+        // on the body skeleton, tuned by the card's softness values.
+        let bone = Level::prefab(unity, BODY_BONE.0, BODY_BONE.1)?;
+        let bone_root = scene.graft(&bone.scene, &bone.key, 0);
+        scene.alias_bones(bone_root, skeleton);
+        match shake_correct(unity) {
+            Ok(shake) => log.push(format!("body springs: {} components tuned", apply_shake(&mut scene, bone_root, &shake, body_data))),
+            Err(e) => log.push(format!("body springs untuned: {e:#}")),
+        }
         // Head.
         let head_id = face.get("headId").and_then(Value::as_i64).unwrap_or(0);
         let head_row = lists.row("bo_head", head_id).with_context(|| format!("bo_head {head_id}"))?;
@@ -188,7 +279,7 @@ impl Human {
             let texture = lists.row(list, id).and_then(|r| r.asset(key::MAIN_AB, tex));
             layers.push((shader, texture, colors));
         }
-        looks.insert(head.key.clone(), PartLook { shaders: &["AL/skin_head"], main: head_row.asset(key::MAIN_TEX_AB, key::MAIN_TEX), colors: vec![skin], layers, ..Default::default() });
+        looks.insert(head.key.clone(), PartLook { shaders: &["AL/skin_head"], main: head_row.asset(key::MAIN_TEX_AB, key::MAIN_TEX), colors: vec![skin], layers, shadow, ..Default::default() });
         let link = scene.nodes.iter().position(|n| n.name == "cf_s_headlink").context("body cf_s_headlink")?;
         let head_root = scene.graft(&head.scene, &head.key, link);
         let hair_parent = {
@@ -385,7 +476,15 @@ impl SceneAssets for CharaAssets<'_> {
         }
         // AL character shaders are cel shaded with outlines.
         let outline = look.outline.unwrap_or([0.25, 0.18, 0.18, 1.]);
-        o.toon = Some((toon_lookup(shader), if shader.starts_with("AL/hair") || shader.starts_with("AL/cloth") || shader.starts_with("AL/skin") { 0.0015 } else { 0. }, outline));
+        // Skin: the card's shadow colour at its alpha, scaled by the
+        // material's `_Shadow_power` (SATD-amanatsu-port: the shader graph
+        // combination is not decoded; this is the tint-strength reading).
+        let mut ramp = toon_lookup(shader);
+        if let Some(c) = look.shadow.filter(|_| shader.starts_with("AL/skin")) {
+            let power = m.floats.get("_Shadow_power").copied().unwrap_or(0.5).clamp(0., 1.);
+            set_ramp_shadow(&mut ramp, [0, 1, 2].map(|i| 1. - (1. - c[i].clamp(0., 1.)) * c[3].clamp(0., 1.) * power));
+        }
+        o.toon = Some((ramp, if shader.starts_with("AL/hair") || shader.starts_with("AL/cloth") || shader.starts_with("AL/skin") { 0.0015 } else { 0. }, outline));
         let k = self.light;
         if let Some(main) = &look.main {
             if let Some(mut img) = self.texture_named(main)? {
@@ -412,8 +511,14 @@ impl SceneAssets for CharaAssets<'_> {
 /// Two-tone ramp of the ILLGAMES toon shaders: a soft terminator around
 /// n·l = 0 (u = 0.5) between a warm shadow tone and full colour.
 pub fn toon_lookup(shader: &str) -> ImageSurface {
-    let shadow: [f32; 3] = if shader.starts_with("AL/skin") { [0.86, 0.74, 0.74] } else { [0.74, 0.72, 0.78] };
-    let mut rgba = vec![0u8; 256 * 3 * 4];
+    let mut ramp = ImageSurface { width: 256, height: 3, rgba: vec![0u8; 256 * 3 * 4] };
+    set_ramp_shadow(&mut ramp, if shader.starts_with("AL/skin") { [0.86, 0.74, 0.74] } else { [0.74, 0.72, 0.78] });
+    ramp
+}
+
+/// Write the ramp's colour row with `shadow` as the shadow tone.
+fn set_ramp_shadow(ramp: &mut ImageSurface, shadow: [f32; 3]) {
+    let rgba = &mut ramp.rgba;
     for x in 0..256 {
         let u = x as f32 / 255.;
         let t = ((u - 0.46) / 0.08).clamp(0., 1.);
@@ -425,7 +530,6 @@ pub fn toon_lookup(shader: &str) -> ImageSurface {
         rgba[(256 + x) * 4..(256 + x) * 4 + 4].copy_from_slice(&[255, 255, 255, 255]);
         rgba[(512 + x) * 4 + 3] = 255;
     }
-    ImageSurface { width: 256, height: 3, rgba }
 }
 
 #[cfg(test)]

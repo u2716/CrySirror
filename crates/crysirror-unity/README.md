@@ -81,9 +81,14 @@ and `ResourceManager` have fixed readers).
   (`clip_tracks` + `scene_glb_animated`); a hook toon ramp/outline selects the
   engine toon model; `gltf::image_plane_glb` places a camera-space image
   (canvas backgrounds) in the 3D view.
-  MagicaCloth 2 BoneCloth components become spring-bone chains in the GLB
-  (`magica_bone_cloths`: gravity, damping, angle restoration, angle limit,
-  radius; depth curves and colliders not converted).
+  MagicaCloth 2 BoneCloth and BoneSpring components become spring-bone
+  chains in the GLB (`magica_bone_cloths`: gravity, damping, angle
+  restoration, angle limit, radius, spring power and distance limit, and
+  `MagicaCapsuleCollider`/`MagicaSphereCollider` entries of `colliderList`
+  resolved through bone aliases; depth curves, inertia, self collision and
+  MeshCloth are not converted). `managed::Fields::set` rewrites a decoded
+  field by dotted path, so adapters can apply runtime parameter changes
+  before export.
 - `msgpack.rs`: bounded MessagePack decoding (MessagePack-CSharp payloads).
 - `animator.rs`: Mecanim without Unity — `AnimationClip` muscle clips
   (streamed cubic segments, dense samples, constants) with their generic

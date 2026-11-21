@@ -26,9 +26,16 @@ worker under ADR 0050; characters beyond the card-driven assembly in
 `CustomScene` (the scene's preset instead of `AL_F_00`, accessories,
 `customshape` face/body shape values, makeup/paint/eyelid/mouth layers and
 the eye UV layout of the `LIF/*` texture creation, the original toon
-ramps (`mt_ramp`), gloss and rim terms, clothing body cut-outs, blend
-shapes/expressions, MagicaCloth depth curves, colliders and MeshCloth
-(BoneCloth hair is simulated as spring bones), height blending between the
+ramps (`mt_ramp`), gloss and rim terms, the skin shader graph (the card
+`skinShadowColor` → `_Shadow_color` tint is read as colour × alpha ×
+`_Shadow_power`; `_Highlight_color`, `_SkinIntensity` detail rate, the
+`mt_body_detail` normal map/line mask, `mt_body_shine` and the sunburn,
+nipple and underhair layers are not drawn: their textures use separate UV
+layouts/positioned decals not in the body's UV0), clothing body cut-outs, blend
+shapes/expressions, MagicaCloth depth curves, inertia and MeshCloth
+(BoneCloth hair and the body BoneSprings are simulated as spring bones;
+hair `colliderList`s hold only null slots in the shipped prefabs and no
+runtime assignment was found in `GameAssembly.dll`, so hair does not collide), height blending between the
 `_S/_M/_L` clips, controller transitions, characters on maps); the
 `CustomScene` character maker UI (instantiated from `lib/custom` prefabs at
 runtime; only the background is drawn) and `Memory` scene controller; on the title: save data (the
@@ -75,3 +82,4 @@ H scenes and save/load, recorded in a validation note.
 | 2026-11-21 | ADV program and the `ADVCore` window: picking a heroine on the map starts a conversation (text, voices, choices with `ReplaceLanguage`, variables, branches) that returns to the map. | Listed above. |
 | 2026-11-21 | `CommandUI` menu on later clicks: greeting, talk/listen/H-topic/with/massage scenarios by family, 戻る; panel hidden during events. Scenario choice by parameters, invite/massage/H scenes and point changes remain. | Listed above. |
 | 2026-11-21 | Physics and lighting: shared spring bones (`crysirror_asset::spring`, GLB `crysirror_springs`, renderer pose pass) fed by MagicaCloth BoneCloth; shared `Environment.grading`; map global Volume (Beautify tonemap/exposure/saturation/contrast/temperature, URP Bloom). | Listed above. |
+| 2026-11-22 | Body physics: the bone prefab `p_cf_al_body_bone_00` grafted onto the skeleton; its 14 MagicaCloth BoneSprings (bust, hip, upper arm, thigh, belly, waist) tuned from `ShakeCorrectData` by the card softness values and bust weight (`HumanBody.SetSpringSetting`/`ChangeBustGravity`); shared capsule colliders and distance limits in `crysirror_asset::spring`; skin shadow colour from the card. | Listed above. |
