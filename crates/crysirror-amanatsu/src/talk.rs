@@ -48,6 +48,10 @@ pub fn load_scenario(unity: &mut Unity, index: &HashMap<String, (String, i64)>, 
 
 /// Show a node with its fade canvases at full alpha (the `FadeCanvas` /
 /// `ADVMsgWindow` open state; their tweens are not ported).
+pub fn show(level: &mut Level, node: usize) {
+    fade_in(level, node);
+}
+
 fn fade_in(level: &mut Level, node: usize) {
     level.set_active(node, true);
     let group = |level: &mut Level, n: usize| {
@@ -68,6 +72,39 @@ fn fade_in(level: &mut Level, node: usize) {
         group(level, n);
         up = level.scene.nodes[n].parent;
     }
+}
+
+/// A random scenario of a family (`ct8`, `agree-3`, …) in `index`.
+pub fn pick(index: &HashMap<String, (String, i64)>, family: &str, seed: u64) -> Option<String> {
+    let mut names: Vec<&String> = index
+        .keys()
+        .filter(|k| k.strip_prefix(family).is_some_and(|r| { let r = r.strip_prefix('-').unwrap_or(r); !r.is_empty() && r.chars().all(|c| c.is_ascii_digit()) }))
+        .collect();
+    names.sort();
+    (!names.is_empty()).then(|| names[(seed as usize) % names.len()].clone())
+}
+
+/// The scenarios of a first meeting: `e1-approach` and one `e1-N`.
+pub fn first_meeting(index: &HashMap<String, (String, i64)>, seed: u64) -> Vec<String> {
+    let mut v = vec!["e1-approach".to_owned()];
+    v.extend(pick(index, "e1", seed));
+    v
+}
+
+/// `CommandUI` buttons → the scenario family they play after an `agree`
+/// voice (SATD-amanatsu-port: `EventManager.Get*Asset` choose by
+/// parameters, map and time; massage, invite and H continue into scenes
+/// that are not ported).
+pub fn command_family(button: &str) -> Option<&'static str> {
+    Some(match button {
+        "btnTalk" => "ct",
+        "btnListen" => "cl",
+        "btnHTopic" => "cht",
+        "btnMassage" => "msg",
+        "btnWith" => "with",
+        "btnInvite" | "btnH" => "agree",
+        _ => return None,
+    })
 }
 
 /// What the session needs from the host this frame.
@@ -96,15 +133,11 @@ pub struct Talk {
 }
 
 impl Talk {
-    pub fn start(unity: &mut Unity, level: &mut Level, personality: i64, heroine_name: &str, seed: u64) -> Result<Self> {
+    /// A conversation playing `scenarios` in order (names of the
+    /// heroine's personality bundles).
+    pub fn start(unity: &mut Unity, level: &mut Level, personality: i64, heroine_name: &str, seed: u64, scenarios: Vec<String>) -> Result<Self> {
         let index = scenario_index(unity, personality)?;
-        let events: Vec<&String> = index.keys().filter(|k| k.starts_with("e1-") && k[3..].chars().all(|c| c.is_ascii_digit())).collect();
-        let mut queue = vec!["e1-approach".to_owned()];
-        if !events.is_empty() {
-            let mut names: Vec<&String> = events;
-            names.sort();
-            queue.push(names[(seed as usize) % names.len()].clone());
-        }
+        let mut queue = scenarios;
         queue.reverse();
         let first = queue.pop().context("talk scenario")?;
         let mut program = Program::new(&first, load_scenario(unity, &index, &first)?, seed);

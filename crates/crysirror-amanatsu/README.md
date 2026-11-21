@@ -19,7 +19,11 @@ distributed.
 - `talk.rs`: conversations on the map — the `ADVCore` window (name,
   message, cloned `Choice` buttons) over the heroine's personality
   scenarios (`adv/scene/cNN`); voices on their own channel. A heroine is
-  picked by a camera ray against her standing volume.
+  picked by a camera ray against her standing volume: the first click plays
+  the first meeting (`e1-approach` + `e1-N`), later clicks open the
+  `CommandUI` menu with a `prelude` greeting; 話す/聞く/Hな話題/一緒に遊ぶ/
+  マッサージ play an `agree` voice and the family's scenario (`ct`, `cl`,
+  `cht`, `with`+`wend`, `msg`+`msge`), 戻る plays `end` and closes the menu.
 
 - `unity.rs`: the installation through client storage — bundle/player file
   keys, the type-tree registry (bundles plus generated MonoBehaviour trees),

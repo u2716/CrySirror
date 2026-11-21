@@ -69,3 +69,4 @@ H scenes and save/load, recorded in a validation note.
 | 2026-11-21 | Characters posed (`Pose_D_00_Loop` as glTF animation), cel shaded with card outline/hair colours, CustomScene background image plane. | Listed above. |
 | 2026-11-21 | `CharaSelectUI` (preset cards grid, thumbnails, entry slots), shared `GridLayoutGroup`, runtime images, `clone_subtree`; entered heroines placed at the map's standing action points with the key-light toon scale. | Listed above. |
 | 2026-11-21 | ADV program and the `ADVCore` window: picking a heroine on the map starts a conversation (text, voices, choices with `ReplaceLanguage`, variables, branches) that returns to the map. | Listed above. |
+| 2026-11-21 | `CommandUI` menu on later clicks: greeting, talk/listen/H-topic/with/massage scenarios by family, 戻る; panel hidden during events. Scenario choice by parameters, invite/massage/H scenes and point changes remain. | Listed above. |

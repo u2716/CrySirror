@@ -95,6 +95,10 @@ pub struct Game {
     /// Heroines standing on the map: (card, engine-space feet position,
     /// personality, first name).
     spots: Vec<(String, [f32; 3], i64, String)>,
+    /// Heroines met (first-meeting events played), by card.
+    met: std::collections::HashSet<String>,
+    /// The command menu: (spot, overlay index).
+    command: Option<(usize, usize)>,
     /// A conversation in progress and its overlay index.
     talk: Option<(crate::talk::Talk, usize)>,
     /// `chara/list/characustom` tables (loaded once).
@@ -403,12 +407,39 @@ impl Game {
         best.map(|b| b.1)
     }
 
+    /// A click on a standing heroine: the first meeting, else the command
+    /// menu (`CommandScene.OpenExe`) with her greeting.
+    fn heroine_clicked(&mut self, spot: usize) -> Result<()> {
+        let (card, _, personality, _) = self.spots[spot].clone();
+        let index = crate::talk::scenario_index(&mut self.unity, personality)?;
+        if self.met.insert(card) {
+            let list = crate::talk::first_meeting(&index, self.now);
+            return self.start_talk(spot, list);
+        }
+        let mut level = Level::prefab(&mut self.unity, "lib/am/pre/s/000_00.unity3d", "command")?;
+        for path in ["Command/Canvas/Hide", "Command/Canvas/Panel/WaterGun", "Command/Canvas/Panel/Command/WithPlay"] {
+            if let Some(n) = level.find(path) {
+                level.set_active(n, false);
+            }
+        }
+        if let Some(p) = level.find("Command/Canvas/Panel") {
+            crate::talk::show(&mut level, p);
+        }
+        self.overlays.push((level, Ui::new(4)));
+        self.command = Some((spot, self.overlays.len() - 1));
+        // `GetPreludeAsset`: a greeting voice.
+        if let Some(prelude) = crate::talk::pick(&index, "prelude", self.now) {
+            self.start_talk(spot, vec![prelude])?;
+        }
+        Ok(())
+    }
+
     /// Start a conversation with a standing heroine.
-    fn start_talk(&mut self, spot: usize) -> Result<()> {
+    fn start_talk(&mut self, spot: usize, scenarios: Vec<String>) -> Result<()> {
         let (_, _, personality, name) = self.spots[spot].clone();
         let key = self.unity.bundle_files().into_iter().find(|k| k.starts_with(&format!("bundle:{}#", crate::talk::ADV_BUNDLE)) && !k.ends_with(".resS")).context("ADV bundle")?;
         let mut level = Level::root_of(&mut self.unity, &key, "ADVCore")?;
-        let mut talk = crate::talk::Talk::start(&mut self.unity, &mut level, personality, &name, self.now)?;
+        let mut talk = crate::talk::Talk::start(&mut self.unity, &mut level, personality, &name, self.now, scenarios)?;
         let steps = talk.advance(&mut self.unity, &mut level, self.now);
         self.overlays.push((level, Ui::new(3)));
         let index = self.overlays.len() - 1;
@@ -535,6 +566,8 @@ impl AmanatsuVm {
             heroines: Vec::new(),
             chara_select: None,
             spots: Vec::new(),
+            met: std::collections::HashSet::new(),
+            command: None,
             talk: None,
             lists: None,
             thumbnails: std::collections::HashMap::new(),
@@ -688,8 +721,8 @@ impl AmanatsuVm {
         } else if input.buttons_pressed & b::MOUSE_LEFT != 0 && handler.is_none() && !fading && matches!(&game.controller, Controller::ActionMap(m) if matches!(m.phase, actionmap::Phase::Map(_))) {
             let hit_ui = layouts.iter().any(|l| l.hits.iter().any(|(_, r)| r.contains(x, y)));
             if !hit_ui {
-                if let Some(spot) = game.pick_heroine(x, y) {
-                    if let Err(e) = game.start_talk(spot) {
+                if let Some(spot) = game.pick_heroine(x, y).filter(|_| game.command.is_none()) {
+                    if let Err(e) = game.heroine_clicked(spot) {
                         game.log.push(format!("talk: {e:#}"));
                     }
                 }
@@ -711,6 +744,13 @@ impl AmanatsuVm {
                             game.removed.extend(ui.clear());
                         }
                         game.log.push("talk ended".into());
+                        if let Some((_, ci)) = game.command {
+                            if let Some((l, _)) = game.overlays.get_mut(ci) {
+                                if let Some(p) = l.find("Command/Canvas/Panel") {
+                                    crate::talk::show(l, p);
+                                }
+                            }
+                        }
                     }
                 }
                 crate::talk::Step::None => {}
@@ -721,13 +761,20 @@ impl AmanatsuVm {
         }
         let mut open_chara_select = false;
         let mut close_chara_select = false;
+        let mut command_click: Option<(usize, usize, String)> = None;
         if let Some((h, button)) = click {
             if h > 0 {
                 let level = &mut game.overlays[h - 1].0;
                 game.log.push(format!("click {}", level.scene.path(button)));
                 let calls = level.on_click(button);
                 let script = level.invoke(&calls);
-                if h == 2 {
+                if let Some((spot, ci)) = game.command {
+                    if h == ci + 1 {
+                        let name = level.scene.nodes[button].name.clone();
+                        command_click = Some((spot, ci, name));
+                    }
+                }
+                if h == 2 && game.command.is_none() {
                     if let Some(cs) = game.chara_select.as_mut() {
                         let mut entered = None;
                         let out = cs.click(level, button, &mut |card| {
@@ -783,6 +830,48 @@ impl AmanatsuVm {
         }
         for (o, _) in &mut game.overlays {
             game.log.append(&mut o.log);
+        }
+        if let Some((spot, ci, name)) = command_click.take() {
+            let personality = game.spots.get(spot).map_or(0, |s| s.2);
+            let index = crate::talk::scenario_index(&mut game.unity, personality)?;
+            let end = name == "btnEnd";
+            let mut list = Vec::new();
+            if end {
+                list.extend(crate::talk::pick(&index, "end", now));
+            } else if let Some(family) = crate::talk::command_family(&name) {
+                list.extend(crate::talk::pick(&index, "agree", now));
+                if family != "agree" {
+                    list.extend(crate::talk::pick(&index, family, now));
+                }
+                if family == "msg" {
+                    list.extend(crate::talk::pick(&index, "msge", now));
+                }
+                if family == "with" {
+                    list.extend(crate::talk::pick(&index, "wend", now));
+                }
+                if matches!(name.as_str(), "btnInvite" | "btnH" | "btnMassage") {
+                    game.log.push(format!("SATD-amanatsu-port: {name} scene (invite/massage/H) not ported"));
+                }
+            } else {
+                game.log.push(format!("SATD-amanatsu-port: command {name} not ported"));
+            }
+            if end {
+                // `CommandSceneToMap`: the menu closes.
+                if ci < game.overlays.len() {
+                    let (_, mut ui) = game.overlays.remove(ci);
+                    game.removed.extend(ui.clear());
+                }
+                game.command = None;
+            } else if let Some(p) = game.overlays.get_mut(ci).and_then(|(l, _)| l.find("Command/Canvas/Panel").map(|p| (l, p))) {
+                // Hidden while the event plays.
+                p.0.set_active(p.1, false);
+            }
+            if !list.is_empty() && game.talk.is_none() {
+                game.log.push(format!("command {name}: {list:?}"));
+                if let Err(e) = game.start_talk(spot, list) {
+                    game.log.push(format!("talk: {e:#}"));
+                }
+            }
         }
         if close_chara_select && game.overlays.len() == 2 {
             if let Some((_, mut ui)) = game.overlays.pop() {
