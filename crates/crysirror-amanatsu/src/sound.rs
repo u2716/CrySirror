@@ -34,6 +34,8 @@ pub enum Kind {
     SystemSe,
     GameSe2d,
     GameSe3d,
+    /// ADV/character voices (`Manager.Voice`).
+    Voice,
 }
 
 impl Kind {
@@ -44,6 +46,7 @@ impl Kind {
             Kind::SystemSe => 2,
             Kind::GameSe2d => 3,
             Kind::GameSe3d => 4,
+            Kind::Voice => 5,
         }
     }
 }
@@ -124,6 +127,7 @@ impl Sound {
                 Kind::Bgm => PcmBus::Music,
                 Kind::Env => PcmBus::Ambient,
                 Kind::SystemSe => PcmBus::Ui,
+                Kind::Voice => PcmBus::Voice,
                 _ => PcmBus::Sfx,
             },
             ..Default::default()

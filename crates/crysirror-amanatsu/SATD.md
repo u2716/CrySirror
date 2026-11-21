@@ -10,7 +10,10 @@
 `ConfirmDialog`, `ActionMapUI` HUD and its camera position switching, time
 zones and `Skip`, `ActionPoint` choice and `_animIDList` motions, NavMesh
 movement, `CharaSelectUI` sources/sorting/pairs/release, scroll views and
-`RectMask2D` clipping, `CommandScene`,
+`RectMask2D` clipping, `CommandScene` (the command menu that chooses
+scenarios, parameters, favourability; talks now play `e1-approach` and one
+`e1-N`), ADV expressions/motions/event CGs/cloth states and the
+auto/skip/log/config buttons and text reveal,
 the map-select title/option/save buttons, map open flags from save progress);
 map rendering parity (lightmaps of `ma/lit`, reflection probes, the Azure sky
 time of day, URP global volumes / colour grading, `AL/MapColorMask`, water
@@ -31,8 +34,8 @@ Selectable hover/press transitions (`ColorTint`, Animator triggers), the
 ILLGAMES `PlayAnimationUI` tweens (LitMotion easing) and the uploader/
 downloader; Animator parameter conditions; sound: BGM cross-fades, config
 volumes, the title call voice, ENV/3D SE and voices outside the title, the
-`UnityPlayer.dll` setup-header scan on a worker; the ADV command interpreter (45 command
-kinds in use), characters (body/face/hair/clothes, colour masks, blend
+`UnityPlayer.dll` setup-header scan on a worker; the ADV commands still reported as unported (character, event CG
+and H commands), characters (body/face/hair/clothes, colour masks, blend
 shapes, bones, physics), maps and H scenes,
 saves (`UserData/save`), character cards; TextMeshPro Alpha8 SDF atlases
 beyond the RGBA decode limit; meshes with `m_MeshCompression`.
@@ -65,3 +68,4 @@ H scenes and save/load, recorded in a validation note.
 | 2026-11-21 | Characters: shared skinned GLB export, `Scene6::graft`/`alias_bones`, material hook, MessagePack; `HumanData` cards and list tables; the default heroine assembled (body, head, hair, clothes, skin/clothes/eye colours) in `CustomScene`. | Listed above. |
 | 2026-11-21 | Characters posed (`Pose_D_00_Loop` as glTF animation), cel shaded with card outline/hair colours, CustomScene background image plane. | Listed above. |
 | 2026-11-21 | `CharaSelectUI` (preset cards grid, thumbnails, entry slots), shared `GridLayoutGroup`, runtime images, `clone_subtree`; entered heroines placed at the map's standing action points with the key-light toon scale. | Listed above. |
+| 2026-11-21 | ADV program and the `ADVCore` window: picking a heroine on the map starts a conversation (text, voices, choices with `ReplaceLanguage`, variables, branches) that returns to the map. | Listed above. |

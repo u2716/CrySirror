@@ -87,9 +87,16 @@ pub struct Game {
     map_entities: Vec<(u32, VfsPath)>,
     next_model: u32,
     pub view: Option<map::View>,
+    /// Talk steps waiting for host services.
+    pending_steps: Vec<crate::talk::Step>,
     /// Registered heroines (card paths), `SaveData.NPCDataList` order.
     pub heroines: Vec<String>,
     chara_select: Option<crate::charaselect::CharaSelect>,
+    /// Heroines standing on the map: (card, engine-space feet position,
+    /// personality, first name).
+    spots: Vec<(String, [f32; 3], i64, String)>,
+    /// A conversation in progress and its overlay index.
+    talk: Option<(crate::talk::Talk, usize)>,
     /// `chara/list/characustom` tables (loaded once).
     lists: Option<crate::chara::Lists>,
     /// Uploaded card thumbnails by card path.
@@ -131,7 +138,9 @@ impl Game {
                 // `Initialize`: the sub fade canvas starts transparent, the
                 // map list is read and `MapSelectUI` opens.
                 if let Some(n) = level.find("SubFadeCanvas") {
-                    level.states.entry(n).or_default().group_alpha = Some(0.);
+                    let st = level.states.entry(n).or_default();
+                    st.group_alpha = Some(0.);
+                    st.blocks_raycasts = Some(false);
                 }
                 self.maps = map::map_infos(&mut self.unity)?;
                 let mut select = Level::prefab(&mut self.unity, actionmap::UI_BUNDLE, "MapSelectUI")?;
@@ -168,11 +177,13 @@ impl Game {
             self.released.push(path);
         }
         self.view = None;
+        self.spots.clear();
     }
 
     /// Replace the map's world entities (`ReleaseMapObject` + load).
     fn change_map(&mut self, host: &mut dyn HostServices, client: ClientId, id: i32, time_zone: i32) -> Result<()> {
         self.release_map(host, client)?;
+        self.spots.clear();
         let info = self.maps.iter().find(|m| m.id == id).cloned().with_context(|| format!("map {id} not in map_info"))?;
         let t = std::time::Instant::now();
         let world = map::load(&mut self.unity, &info, time_zone)?;
@@ -188,8 +199,12 @@ impl Game {
             let (x, y, z) = q.to_euler(glam::EulerRot::XYZ);
             let t = json!({"translation": crysirror_unity::gltf::mirror_point(*pos), "rotation_degrees": [x.to_degrees(), y.to_degrees(), z.to_degrees()], "scale": [1.0, 1.0, 1.0]});
             let sun = world.sun.as_ref().map_or(1., |l| l.intensity);
-            if let Err(e) = self.spawn_character(host, client, card, Some(t), sun) {
-                self.log.push(format!("heroine {card}: {e:#}"));
+            match self.spawn_character(host, client, card, Some(t), sun) {
+                Ok(()) => {
+                    let (personality, name) = self.unity.read_all(card).ok().and_then(|b| crate::card::Card::parse(&b).ok()).and_then(|c| c.parameter()).map_or((0, String::new()), |p| (p.0, p.1));
+                    self.spots.push((card.clone(), crysirror_unity::gltf::mirror_point(*pos), personality, name));
+                }
+                Err(e) => self.log.push(format!("heroine {card}: {e:#}")),
             }
         }
         self.view = world.camera().cloned();
@@ -356,6 +371,53 @@ impl Game {
         Ok(())
     }
 
+    /// The heroine under a screen point (camera ray against her standing
+    /// volume: radius 3, height 16 world units).
+    fn pick_heroine(&self, x: f32, y: f32) -> Option<usize> {
+        use glam::Vec3;
+        let v = self.view.as_ref()?;
+        let eye = Vec3::from_array(v.eye);
+        let fwd = (Vec3::from_array(v.target) - eye).normalize();
+        let right = fwd.cross(Vec3::from_array(v.up)).normalize();
+        let up = right.cross(fwd);
+        let th = (v.fov.to_radians() / 2.).tan();
+        let ndc = [x / WIDTH * 2. - 1., 1. - y / HEIGHT * 2.];
+        let d = (fwd + right * ndc[0] * th * WIDTH / HEIGHT + up * ndc[1] * th).normalize();
+        let mut best: Option<(f32, usize)> = None;
+        for (i, (_, p, _, _)) in self.spots.iter().enumerate() {
+            let c = Vec3::from_array(*p);
+            let (ox, oz, dx, dz) = (eye.x - c.x, eye.z - c.z, d.x, d.z);
+            let a = dx * dx + dz * dz;
+            let b = 2. * (ox * dx + oz * dz);
+            let cc = ox * ox + oz * oz - 9.;
+            let disc = b * b - 4. * a * cc;
+            if a < 1e-6 || disc < 0. {
+                continue;
+            }
+            let t = (-b - disc.sqrt()) / (2. * a);
+            let h = eye.y + d.y * t - c.y;
+            if t > 0. && (0. ..=16.).contains(&h) && best.is_none_or(|b| t < b.0) {
+                best = Some((t, i));
+            }
+        }
+        best.map(|b| b.1)
+    }
+
+    /// Start a conversation with a standing heroine.
+    fn start_talk(&mut self, spot: usize) -> Result<()> {
+        let (_, _, personality, name) = self.spots[spot].clone();
+        let key = self.unity.bundle_files().into_iter().find(|k| k.starts_with(&format!("bundle:{}#", crate::talk::ADV_BUNDLE)) && !k.ends_with(".resS")).context("ADV bundle")?;
+        let mut level = Level::root_of(&mut self.unity, &key, "ADVCore")?;
+        let mut talk = crate::talk::Talk::start(&mut self.unity, &mut level, personality, &name, self.now)?;
+        let steps = talk.advance(&mut self.unity, &mut level, self.now);
+        self.overlays.push((level, Ui::new(3)));
+        let index = self.overlays.len() - 1;
+        self.log.push(format!("talk with {name} (c{personality:02}): {}", talk.program.name));
+        self.talk = Some((talk, index));
+        self.pending_steps = steps;
+        Ok(())
+    }
+
     fn release_map(&mut self, host: &mut dyn HostServices, client: ClientId) -> Result<()> {
         for (entity, path) in std::mem::take(&mut self.map_entities) {
             self.world.push(json!({"op": "despawn", "id": entity}));
@@ -469,8 +531,11 @@ impl AmanatsuVm {
             map_entities: Vec::new(),
             next_model: 0,
             view: None,
+            pending_steps: Vec::new(),
             heroines: Vec::new(),
             chara_select: None,
+            spots: Vec::new(),
+            talk: None,
             lists: None,
             thumbnails: std::collections::HashMap::new(),
             world: Vec::new(),
@@ -609,6 +674,51 @@ impl AmanatsuVm {
                 scenes::Request::None
             }
         };
+        // A conversation takes the clicks; timed waits run every frame.
+        if let Some((talk, oi)) = game.talk.as_mut() {
+            let level = &mut game.overlays[*oi].0;
+            let mut steps = talk.tick(&mut game.unity, level, now);
+            if input.buttons_pressed & b::MOUSE_LEFT != 0 && !fading {
+                let node = handler.filter(|(h, _)| *h == *oi + 1).map(|(_, n)| n);
+                steps.extend(talk.click(&mut game.unity, level, node, now));
+            }
+            game.pending_steps.extend(steps);
+            click = None;
+            game.pressed = None;
+        } else if input.buttons_pressed & b::MOUSE_LEFT != 0 && handler.is_none() && !fading && matches!(&game.controller, Controller::ActionMap(m) if matches!(m.phase, actionmap::Phase::Map(_))) {
+            let hit_ui = layouts.iter().any(|l| l.hits.iter().any(|(_, r)| r.contains(x, y)));
+            if !hit_ui {
+                if let Some(spot) = game.pick_heroine(x, y) {
+                    if let Err(e) = game.start_talk(spot) {
+                        game.log.push(format!("talk: {e:#}"));
+                    }
+                }
+            }
+        }
+        for step in std::mem::take(&mut game.pending_steps) {
+            match step {
+                crate::talk::Step::Voice(bundle, asset) => {
+                    if let Err(e) = game.sound.play(host, client, &mut game.unity, sound::Kind::Voice, &bundle, &asset, 1.) {
+                        game.log.push(format!("voice {asset}: {e:#}"));
+                    }
+                }
+                crate::talk::Step::StopVoice => {}
+                crate::talk::Step::End => {
+                    if let Some((talk, oi)) = game.talk.take() {
+                        game.log.extend(talk.log);
+                        if oi < game.overlays.len() {
+                            let (_, mut ui) = game.overlays.remove(oi);
+                            game.removed.extend(ui.clear());
+                        }
+                        game.log.push("talk ended".into());
+                    }
+                }
+                crate::talk::Step::None => {}
+            }
+        }
+        if let Some((talk, _)) = game.talk.as_mut() {
+            game.log.append(&mut talk.log);
+        }
         let mut open_chara_select = false;
         let mut close_chara_select = false;
         if let Some((h, button)) = click {

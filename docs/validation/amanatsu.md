@@ -46,3 +46,10 @@
 - Compilation: `cargo test --release -p crysirror-unity -p crysirror-amanatsu -p crysirror-cm3d2` (pass); `cargo build --release -p crysirror-desktop`.
 - Behaviour (input track: はじめから, Add Heroine, first card, 登録, 閉じる, pool, はい): `CharaSelectUI` lists the 15 preset heroine cards with thumbnails in a 4-column grid (3 rows visible); the selected card enters the left list's first slot; after closing and choosing the pool, `AL_F_00` stands at the first standing `ActionPoint` beside the deck tables in her idle pose, lit for the map. Title and CustomScene runs unchanged.
 - Not established: scrolling, the other card sources, motions per action point, interaction with heroines (ADV), comparison with the original.
+
+## 2026-11-21 — conversations (local, Apple M4 Max / Metal, offscreen)
+
+- Implementation: `crysirror-amanatsu` `adv.rs` (`Program`), `talk.rs`, voice channel in `sound.rs`, heroine picking and the talk overlay in the adapter; `Card::parameter` (personality, names).
+- Compilation: `cargo test --release -p crysirror-unity -p crysirror-amanatsu` (`adv::tests::choice_flow` and the rest pass); `cargo build --release -p crysirror-desktop`.
+- Behaviour (track: new game, enter `AL_F_00`, pool, click her at (530, 280), clicks, first choice): the `ADVCore` window shows 恵莉佳: 「あ、こんな所にいたんだね」, then 「私、結構天然な方だって…どう思う？」 with the choices いい事だと思う / 気にしなくていい; choosing the first shows 「だよね、天然ってそんなに悪い事じゃないよね」 and the next click closes the window back to the map. With audio on, `channel_audio` reports 2 active voices (BGM, voice), no underruns.
+- Not established: the original scenario selection (`CommandScene`), expressions/camera framing during talk, comparison with the original.

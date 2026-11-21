@@ -1186,3 +1186,32 @@ fn chara_controller() {
         println!("clip {} {:.2}s loop {} bindings {} resolved {} classes {:?}", clip.name, clip.duration(), clip.looping, clip.bindings.len(), resolved, classes);
     }
 }
+
+/// Commands of the scenarios in `AMANATSU_BUNDLES` (one `lib/adv/scene/…`
+/// bundle) whose name contains `AMANATSU_ASSET` (default all, first 3).
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn print_scenarios() {
+    let mut u = unity();
+    let bundle = std::env::var("AMANATSU_BUNDLES").unwrap();
+    let want = std::env::var("AMANATSU_ASSET").unwrap_or_default();
+    let max: usize = std::env::var("AMANATSU_COUNT").ok().and_then(|c| c.parse().ok()).unwrap_or(3);
+    let mut shown = 0;
+    for key in u.bundle_files().into_iter().filter(|k| k.contains(&format!("bundle:{bundle}#"))) {
+        let file = u.file(&key).unwrap();
+        let ids: Vec<i64> = file.objects.iter().filter(|o| o.class_id == 114).map(|o| o.path_id).collect();
+        for id in ids {
+            let f = u.decode(&key, id).unwrap();
+            let name = f.string("m_Name").unwrap_or("").to_owned();
+            if !name.contains(&want) || shown >= max {
+                continue;
+            }
+            let Some(crysirror_unity::managed::Value::Bytes(b)) = f.get("_bytes") else { continue };
+            shown += 1;
+            println!("== {name}");
+            for (i, c) in crysirror_amanatsu::adv::parse_scenario(b).unwrap().iter().enumerate() {
+                println!("  {i:3} {}{} {:?}", c.name(), if c.multi { "*" } else { "" }, c.args);
+            }
+        }
+    }
+}

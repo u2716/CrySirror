@@ -51,6 +51,15 @@ impl Level {
         Self::from_scene(unity, &key, asset, scene)
     }
 
+    /// The hierarchy rooted at a root object named `root` in a serialized
+    /// file (`key`), e.g. an Addressables prefab without a container name.
+    pub fn root_of(unity: &mut Unity, key: &str, root: &str) -> Result<Self> {
+        let all = unity.scene(key)?;
+        let r = *all.roots.iter().find(|&&r| all.nodes[r].name == root).with_context(|| format!("{root} in {key}"))?;
+        let scene = all.subtree(r);
+        Self::from_scene(unity, key, root, scene)
+    }
+
     fn from_scene(unity: &mut Unity, key: &str, name: &str, scene: Scene6) -> Result<Self> {
         let mut animators = Vec::new();
         let mut log = Vec::new();

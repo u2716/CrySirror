@@ -157,3 +157,218 @@ pub fn parse_scenario(bytes: &[u8]) -> Result<Vec<ScenarioCommand>> {
     ensure!(p.at == bytes.len(), "ScenarioData left {} of {} bytes", bytes.len() - p.at, bytes.len());
     Ok(out)
 }
+
+/// A value of the scenario variables (`VAR`).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Var {
+    Int(i64),
+    Float(f64),
+    Bool(bool),
+    Str(String),
+}
+
+impl Var {
+    fn parse(ty: &str, v: &str) -> Self {
+        match ty {
+            "System.Int32" | "System.Int64" => Var::Int(v.trim().parse().unwrap_or(0)),
+            "System.Single" | "System.Double" => Var::Float(v.trim().parse().unwrap_or(0.)),
+            "System.Boolean" => Var::Bool(v.trim().eq_ignore_ascii_case("true")),
+            _ => Var::Str(v.to_owned()),
+        }
+    }
+    pub fn as_text(&self) -> String {
+        match self {
+            Var::Int(i) => i.to_string(),
+            Var::Float(f) => f.to_string(),
+            Var::Bool(b) => if *b { "TRUE".into() } else { "FALSE".into() },
+            Var::Str(s) => s.clone(),
+        }
+    }
+}
+
+/// What the program asks of its host before it continues.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Wait {
+    /// Show a message and wait for the reader (speaker, text).
+    Text { speaker: String, text: String },
+    /// Offer choices (label text, target tag); `choose` resumes.
+    Choice(Vec<(String, String)>),
+    /// Wait `seconds`.
+    Time(f32),
+    /// Wait for the actor's voice to end.
+    Voice,
+    /// `Open`: continue with another scenario (bundle key, name).
+    Open(String, String),
+    /// The scenario ended (`Close` or the end of the list).
+    End,
+}
+
+/// Effects of a step for the host (sound, fades, characters).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Effect {
+    Voice { actor: String, bundle: String, asset: String },
+    VoiceStop(String),
+    Expression { actor: String, id: i64 },
+    /// `SceneFade`/`Fade`: covering (`in`) or revealing over seconds.
+    Fade { cover: bool, seconds: f32, color: Option<String> },
+    /// A command whose semantics are not ported (name, arguments).
+    Unported(String, Vec<String>),
+}
+
+/// `ILLGAMES.ADV.MainScenario` over one command list: program counter,
+/// tags, `VAR` values, `ReplaceLanguage` replacements and the random source
+/// of `RandomJump`.
+pub struct Program {
+    pub name: String,
+    commands: Vec<ScenarioCommand>,
+    pub pc: usize,
+    pub vars: std::collections::HashMap<String, Var>,
+    pub replace: std::collections::HashMap<String, String>,
+    /// `[H]`-style speaker/text tokens → names.
+    pub names: std::collections::HashMap<String, String>,
+    rng: u64,
+}
+
+impl Program {
+    pub fn new(name: &str, commands: Vec<ScenarioCommand>, seed: u64) -> Self {
+        Self { name: name.to_owned(), commands, pc: 0, vars: Default::default(), replace: Default::default(), names: Default::default(), rng: seed | 1 }
+    }
+
+    /// Continue with another command list (`Open`), keeping variables.
+    pub fn open(&mut self, name: &str, commands: Vec<ScenarioCommand>) {
+        self.name = name.to_owned();
+        self.commands = commands;
+        self.pc = 0;
+    }
+
+    fn random(&mut self, n: usize) -> usize {
+        self.rng ^= self.rng << 13;
+        self.rng ^= self.rng >> 7;
+        self.rng ^= self.rng << 17;
+        (self.rng % n.max(1) as u64) as usize
+    }
+
+    fn jump(&mut self, tag: &str) -> bool {
+        match self.commands.iter().position(|c| c.name() == "Tag" && c.args.first().map(String::as_str) == Some(tag)) {
+            Some(i) => {
+                self.pc = i + 1;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Replace `[key]` tokens: speaker names, then `ReplaceLanguage`.
+    pub fn substitute(&self, s: &str) -> String {
+        let mut out = s.to_owned();
+        for (k, v) in self.names.iter().chain(self.replace.iter().map(|(k, v)| (k, v))) {
+            out = out.replace(&format!("[{k}]"), v);
+        }
+        out
+    }
+
+    /// Resume after a choice.
+    pub fn choose(&mut self, tag: &str) {
+        if !self.jump(tag) {
+            self.pc = self.commands.len();
+        }
+    }
+
+    /// Run until the next wait; effects are appended to `effects`.
+    pub fn run(&mut self, effects: &mut Vec<Effect>) -> Wait {
+        let mut guard = 0;
+        while let Some(c) = self.commands.get(self.pc).cloned() {
+            guard += 1;
+            if guard > 100_000 {
+                effects.push(Effect::Unported("runaway scenario".into(), vec![self.name.clone()]));
+                return Wait::End;
+            }
+            self.pc += 1;
+            let a = |i: usize| c.args.get(i).cloned().unwrap_or_default();
+            match c.name().as_str() {
+                "Text" => return Wait::Text { speaker: self.substitute(&a(0)), text: self.substitute(&a(1)) },
+                "Voice" | "CharaVoicePlay" => effects.push(Effect::Voice { actor: a(0), bundle: a(1), asset: a(2) }),
+                "CharaVoiceStop" => effects.push(Effect::VoiceStop(a(0))),
+                "CharaVoiceWait" => return Wait::Voice,
+                "Expression" => effects.push(Effect::Expression { actor: a(0), id: a(1).parse().unwrap_or(0) }),
+                "CharaExpression" => effects.push(Effect::Expression { actor: a(0), id: a(if c.args.len() > 2 { 2 } else { 1 }).parse().unwrap_or(0) }),
+                "Tag" => {}
+                "Jump" => {
+                    if !self.jump(&a(0)) {
+                        return Wait::End;
+                    }
+                }
+                "RandomJump" => {
+                    let i = self.random(c.args.len());
+                    if !self.jump(&a(i)) {
+                        return Wait::End;
+                    }
+                }
+                "Switch" => {
+                    // [variable, "value,tag", …]
+                    let v = self.vars.get(&a(0)).map(Var::as_text).unwrap_or_default();
+                    let target = c.args.iter().skip(1).filter_map(|e| e.split_once(',')).find(|(k, _)| *k == v).map(|(_, t)| t.to_owned());
+                    if let Some(t) = target {
+                        self.jump(&t);
+                    }
+                }
+                "Choice" => {
+                    let items = c.args.iter().skip(1).filter_map(|e| e.split_once(',')).map(|(label, tag)| (self.substitute(label), tag.to_owned())).collect();
+                    return Wait::Choice(items);
+                }
+                "VAR" => {
+                    self.vars.insert(a(1), Var::parse(&a(0), &a(2)));
+                }
+                "ReplaceLanguage" => {
+                    self.replace.insert(a(0), a(1));
+                }
+                "SceneFade" | "Fade" => effects.push(Effect::Fade { cover: a(0) == "in", seconds: a(1).parse().unwrap_or(0.), color: None }),
+                "SceneFadeColor" | "FadeColor" => effects.push(Effect::Fade { cover: false, seconds: 0., color: Some(a(0)) }),
+                "WaitAbs" => return Wait::Time(a(0).parse().unwrap_or(0.)),
+                "Open" => return Wait::Open(a(0), a(1)),
+                "Close" => {
+                    self.pc = self.commands.len();
+                    return Wait::End;
+                }
+                "TextClear" => {}
+                other => effects.push(Effect::Unported(other.to_owned(), c.args.clone())),
+            }
+        }
+        Wait::End
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cmd(name: &str, args: &[&str]) -> ScenarioCommand {
+        ScenarioCommand { hash: 0, version: 0, multi: false, command: COMMANDS.iter().position(|c| *c == name).unwrap() as i32, args: args.iter().map(|s| (*s).to_owned()).collect() }
+    }
+
+    #[test]
+    fn choice_flow() {
+        let list = vec![
+            cmd("Text", &["[H]", "question"]),
+            cmd("ReplaceLanguage", &["a-0", "yes"]),
+            cmd("Choice", &["FALSE", "[a-0],A", "no,B"]),
+            cmd("Tag", &["A"]),
+            cmd("VAR", &["System.Int32", "Sel", "0"]),
+            cmd("Jump", &["End"]),
+            cmd("Tag", &["B"]),
+            cmd("VAR", &["System.Int32", "Sel", "1"]),
+            cmd("Tag", &["End"]),
+            cmd("Text", &["", "done"]),
+            cmd("Close", &[]),
+        ];
+        let mut p = Program::new("t", list, 1);
+        p.names.insert("H".into(), "Erika".into());
+        let mut fx = Vec::new();
+        assert_eq!(p.run(&mut fx), Wait::Text { speaker: "Erika".into(), text: "question".into() });
+        assert_eq!(p.run(&mut fx), Wait::Choice(vec![("yes".into(), "A".into()), ("no".into(), "B".into())]));
+        p.choose("B");
+        assert_eq!(p.run(&mut fx), Wait::Text { speaker: "".into(), text: "done".into() });
+        assert_eq!(p.vars["Sel"], Var::Int(1));
+        assert_eq!(p.run(&mut fx), Wait::End);
+    }
+}

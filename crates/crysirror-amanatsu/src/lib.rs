@@ -15,6 +15,7 @@ pub mod map;
 pub mod scenes;
 pub mod sound;
 pub mod tables;
+pub mod talk;
 pub mod ui;
 pub mod unity;
 

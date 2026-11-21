@@ -12,7 +12,14 @@ distributed.
 
 - `adv.rs`: ADV scenarios — `ILLGAMES.ADV.ScenarioData` MemoryPack bytes of
   the scenario MonoBehaviours in `lib/adv/scene` (`ScenarioCommand`: hash,
-  version, multi, `Command`, string arguments; the `Command` names).
+  version, multi, `Command`, string arguments; the `Command` names) — and the
+  `MainScenario` program: Text, Voice/CharaVoicePlay/Wait/Stop,
+  Expression, Tag/Jump/RandomJump/Switch, Choice with `ReplaceLanguage`
+  labels, `VAR`, Open, fades, WaitAbs, Close; other commands are reported.
+- `talk.rs`: conversations on the map — the `ADVCore` window (name,
+  message, cloned `Choice` buttons) over the heroine's personality
+  scenarios (`adv/scene/cNN`); voices on their own channel. A heroine is
+  picked by a camera ray against her standing volume.
 
 - `unity.rs`: the installation through client storage — bundle/player file
   keys, the type-tree registry (bundles plus generated MonoBehaviour trees),

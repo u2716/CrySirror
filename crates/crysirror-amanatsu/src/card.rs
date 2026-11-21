@@ -138,6 +138,13 @@ impl Card {
         Ok(out)
     }
 
+    /// `Parameter`: (personality, first name, last name).
+    pub fn parameter(&self) -> Option<(i64, String, String)> {
+        let v = msgpack::decode(self.block("Parameter")?).ok()?;
+        let s = |k: &str| v.get(k).and_then(Value::as_str).unwrap_or("").to_owned();
+        Some((v.get("personality").and_then(Value::as_i64).unwrap_or(0), s("firstname"), s("lastname")))
+    }
+
     pub fn block(&self, name: &str) -> Option<&[u8]> {
         self.blocks.iter().find(|b| b.0 == name).map(|b| b.2.as_slice())
     }
