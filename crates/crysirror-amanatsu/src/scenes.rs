@@ -50,6 +50,10 @@ pub struct SoundIds {
     pub ok_l: i32,
     pub cancel: i32,
     pub title_bgm: i32,
+    /// `_bgmID` Morning, Afternoon, EarlyEvening, Evening (`PlayBGMBYActionMap`).
+    pub zone_bgm: [i32; 4],
+    /// `_sseID.TimeZoneChange`.
+    pub time_zone_se: i32,
 }
 
 impl Logo {

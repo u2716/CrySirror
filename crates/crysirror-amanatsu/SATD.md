@@ -10,7 +10,8 @@
 (cameras, 2D map, `Skip`) and time-zone advance (tutorial
 `ConfirmDialog`, HUD config/help and button fade animations, night events
 (`GetNightEventHeroine`/`NightEvent`), the auto save after a zone change,
-BGM per zone, `MapManager.GetForPlacementTable` heroine placement per zone,
+link-partner placement (`SetCharaForMap` `isLink`), the `MapSelectUI`
+hover faces (`_charaInfos`) and player icon (`_pIcon`),
 `MapSelectUI` next-zone reloading a map behind it, the light settings'
 baked lightmaps (`_colorLightmaps`/`_lightmapIndices`: the renderer has no
 second UV set) and reflection cubemaps, Azure's scattering integral,
@@ -93,3 +94,4 @@ H scenes and save/load, recorded in a validation note.
 | 2026-11-22 | Clothes dressed state (`Table.sKeyNameTable` DEF/NUGE objects, `CmpClothes.objOpt01/02` by `hideOpt`); eyes: card pupil (`mt_eyepipil`) and highlights (`mt_eye_hi_up`) per eye with `CmpEyeLookMaterial` ranges. | Listed above. |
 | 2026-11-22 | `ActionMapUI` HUD (map name, move-point cameras prev/next/reset, 2D map back to `MapSelectUI`, `Skip` → `EventManager.TimeZone`: `Cycle.IncrementTimeZone` mod 4 and the map reloaded in the zone's light setting/Volume); `MapSelectUI._btnNextTimeZone`; `ImageSprite.Set` for the zone icons and map illustrations. | Listed above. |
 | 2026-11-22 | Zone lighting: the active light groups' point/spot lights as engine lights (map layers 0/4/7/8, URP intensity/range); the Azure hour/latitude/gradients as a shared gradient sky (`crysirror_asset::sky`) uploaded through the new `upload_hdr` host service. | Listed above. |
+| 2026-11-22 | Heroine placement per zone (`GetForPlacementTable`/`SetCharaForMap`: shuffled heroines to shuffled maps under `_mapLimitFull`, esthetics/H maps excluded; only the current map's heroines stand there); `PlayBGMBYActionMap` (`_bgmID` per zone) and the `TimeZoneChange` SE. | Listed above. |

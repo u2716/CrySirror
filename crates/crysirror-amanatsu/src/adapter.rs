@@ -70,6 +70,10 @@ pub struct Game {
     pub sound: Sound,
     pub sound_ids: scenes::SoundIds,
     rng: u64,
+    /// `NPCData` map of each registered heroine (by card) in this zone.
+    placement: std::collections::HashMap<String, i32>,
+    excluded_maps: Vec<i32>,
+    map_limit: usize,
     /// `Manager.Scene.SceneFadeCanvas` and its `_time`.
     pub fade: Fade,
     pub fade_seconds: f32,
@@ -231,7 +235,8 @@ impl Game {
         // Registered heroines at the map's standing action points
         // (SATD-amanatsu-port: `ActionPoint` choice, their `_animIDList`
         // motions and NavMesh wandering are not ported).
-        let heroines = self.heroines.clone();
+        self.place_heroines(false);
+        let heroines: Vec<String> = self.heroines.iter().filter(|h| self.placement.get(*h) == Some(&id)).cloned().collect();
         for (card, point) in heroines.iter().zip(world.points.iter().filter(|p| p.0.contains("tati"))) {
             let (_, pos, rot) = point;
             let q = glam::Quat::from_array(crysirror_unity::gltf::mirror_quat(*rot));
@@ -446,6 +451,41 @@ impl Game {
         best.map(|b| b.1)
     }
 
+    fn random(&mut self, n: usize) -> usize {
+        self.rng ^= self.rng << 13;
+        self.rng ^= self.rng >> 7;
+        self.rng ^= self.rng << 17;
+        (self.rng % n.max(1) as u64) as usize
+    }
+
+    /// `ActionMapScene.SetCharaForMap` over `GetForPlacementTable`: the
+    /// unplaced heroines in shuffled order each take the first map of a
+    /// shuffled map list with fewer than `_mapLimitFull` heroines (map 0
+    /// when all are full). `clear` resets every heroine first (a new zone).
+    /// SATD-amanatsu-port: link partners (`isLink`) are not kept together.
+    fn place_heroines(&mut self, clear: bool) {
+        if clear {
+            self.placement.clear();
+        }
+        let maps: Vec<i32> = self.maps.iter().map(|m| m.id).filter(|id| !self.excluded_maps.contains(id)).collect();
+        let mut heroines: Vec<String> = self.heroines.iter().filter(|h| !self.placement.contains_key(*h)).cloned().collect();
+        for i in (1..heroines.len()).rev() {
+            let j = self.random(i + 1);
+            heroines.swap(i, j);
+        }
+        for h in heroines {
+            let mut order = maps.clone();
+            for i in (1..order.len()).rev() {
+                let j = self.random(i + 1);
+                order.swap(i, j);
+            }
+            let count = |m: i32, p: &std::collections::HashMap<String, i32>| p.values().filter(|v| **v == m).count();
+            let map = order.iter().copied().find(|m| count(*m, &self.placement) < self.map_limit).unwrap_or(0);
+            self.log.push(format!("SetCharaForMap: {h} → map {map}"));
+            self.placement.insert(h, map);
+        }
+    }
+
     /// `ActionMapUI.Create/OpenExe` over the loaded map (overlay 0).
     fn open_hud(&mut self, map_id: i32, zone: i32) -> Result<()> {
         let (mut level, hud) = crate::hud::Hud::open(&mut self.unity)?;
@@ -497,11 +537,13 @@ impl Game {
                 // `TimeZoneInternal` (the map again in the new zone).
                 // SATD-amanatsu-port: night events, heroine placement tables,
                 // BGM per zone and the auto save are not ported.
-                self.level.sounds.push(sound::Call::SystemSe(self.sound_ids.ok_l));
+                self.level.sounds.push(sound::Call::SystemSe(self.sound_ids.time_zone_se));
                 m.time_zone = (m.time_zone + 1) % 4;
                 self.fade.start(now, true, self.fade_seconds);
-                self.pending_map = Some((map_id, m.time_zone));
-                self.log.push(format!("EventManager.TimeZone → zone {}", m.time_zone));
+                let zone = m.time_zone;
+                self.place_heroines(true);
+                self.pending_map = Some((map_id, zone));
+                self.log.push(format!("EventManager.TimeZone → zone {zone}"));
             }
             H::Config | H::Help | H::CameraPrev | H::CameraNext | H::CameraReset => self.log.push(format!("SATD-amanatsu-port: ActionMapUI {action:?} not ported")),
         }
@@ -643,11 +685,24 @@ impl AmanatsuVm {
             ok_l: sse.int("OK_l").unwrap_or(2) as i32,
             cancel: sse.int("Cancel").unwrap_or(3) as i32,
             title_bgm: pd.fields("_bgmID").and_then(|b| b.int("Title")).unwrap_or(0) as i32,
+            zone_bgm: ["Morning", "Afternoon", "EarlyEvening", "Evening"].map(|k| pd.fields("_bgmID").and_then(|b| b.int(k)).unwrap_or(2) as i32),
+            time_zone_se: sse.int("TimeZoneChange").unwrap_or(6) as i32,
         };
+        // `MapManager.GetForPlacementTable`: maps other than the esthetics
+        // and H maps take up to `_mapLimitFull` heroines each.
+        let map_ids = pd.fields("_mapID");
+        let excluded_maps: Vec<i32> = ["EstheticsMap", "HMaps"]
+            .iter()
+            .flat_map(|k| map_ids.and_then(|m| m.array(k)).unwrap_or(&[]).iter().filter_map(|v| if let crysirror_unity::managed::Value::Int(i) = v { Some(*i as i32) } else { None }))
+            .collect();
+        let map_limit = pd.int("_mapLimitFull").unwrap_or(6).max(1) as usize;
         let mut game = Game {
             sound,
             sound_ids,
             rng: host.now_ms() | 1,
+            placement: std::collections::HashMap::new(),
+            excluded_maps,
+            map_limit,
             unity,
             ui: Ui::default(),
             build_scenes,
@@ -730,6 +785,9 @@ impl AmanatsuVm {
                 game.hud = None;
                 game.change_map(host, client, id, zone)?;
                 game.open_hud(id, zone)?;
+                // `PlayBGMBYActionMap`.
+                let bgm = game.sound_ids.zone_bgm[zone.clamp(0, 3) as usize];
+                game.level.sounds.push(sound::Call::Bgm(bgm));
                 game.fade.start(host.now_ms(), false, game.fade_seconds);
             }
         }
@@ -875,6 +933,7 @@ impl AmanatsuVm {
         let mut close_chara_select = false;
         let mut command_click: Option<(usize, usize, String)> = None;
         let mut hud_click: Option<crate::hud::HudAction> = None;
+        let mut replace_heroines = false;
         if let Some((h, button)) = click {
             if h > 0 {
                 let level = &mut game.overlays[h - 1].0;
@@ -922,8 +981,9 @@ impl AmanatsuVm {
                         actionmap::Action::OpenCharaSelect => open_chara_select = true,
                         actionmap::Action::NextTimeZone(zone) => {
                             // `MapSelectUI.ChangeTimeZone` after `EventManager.TimeZone`.
-                            game.level.sounds.push(sound::Call::SystemSe(game.sound_ids.ok_l));
+                            game.level.sounds.push(sound::Call::SystemSe(game.sound_ids.time_zone_se));
                             let n = crate::hud::set_image_sprites(level, zone.clamp(0, 3) as usize);
+                            replace_heroines = true;
                             game.log.push(format!("EventManager.TimeZone → zone {zone} ({n} sprites)"));
                         }
                         actionmap::Action::None => {}
@@ -954,6 +1014,9 @@ impl AmanatsuVm {
         }
         for (o, _) in &mut game.overlays {
             game.log.append(&mut o.log);
+        }
+        if replace_heroines {
+            game.place_heroines(true);
         }
         if let Some(a) = hud_click {
             game.log.push(format!("ActionMapUI {a:?}"));
