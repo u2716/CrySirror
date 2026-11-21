@@ -211,7 +211,7 @@ pub fn engine_material(m: &UnityMaterial, image: &mut dyn FnMut(&TexEnv, TexUse)
     let smoothness = float("_Smoothness").or_else(|| float("_Glossiness")).unwrap_or(0.5).clamp(0., 1.);
     out.metallic_factor = float("_Metallic").unwrap_or(0.).clamp(0., 1.);
     out.roughness_factor = 1. - smoothness;
-    if let Some(t) = m.texture("_BumpMap").or_else(|| m.texture("_NormalMap")).cloned() {
+    if let Some(t) = m.texture("_BumpMap").or_else(|| m.texture("_NormalMap")).or_else(|| m.texture("_Normal_map")).cloned() {
         if let Some(i) = image(&t, TexUse::Normal)? {
             out.normal_texture = Some(i);
             out.normal_encoding = NormalEncoding::Rgb;
@@ -292,6 +292,24 @@ pub trait SceneAssets {
     fn texture(&mut self, file: &str, path_id: i64) -> Result<ImageSurface>;
     /// Level 0 size without decoding the pixels.
     fn texture_size(&mut self, file: &str, path_id: i64) -> Result<(u32, u32)>;
+    /// Consumer semantics for a material drawn by a renderer of `file`
+    /// (e.g. textures a game composes at runtime); `None` keeps the shader
+    /// mapping.
+    fn material_hook(&mut self, _file: &str, _m: &UnityMaterial) -> Result<Option<MaterialOverride>> {
+        Ok(None)
+    }
+}
+
+/// A consumer's replacement of parts of a mapped material.
+#[derive(Clone, Debug, Default)]
+pub struct MaterialOverride {
+    /// Base colour texture (top-down RGBA8, sRGB) with a cache key.
+    pub base_texture: Option<(String, ImageSurface)>,
+    /// Linear base colour factor.
+    pub base_color: Option<[f32; 4]>,
+    /// Do not draw the material.
+    pub hidden: bool,
+    pub alpha_mode: Option<AlphaMode>,
 }
 
 #[derive(Clone, Debug)]
@@ -506,7 +524,7 @@ pub fn scene_glb(scene: &Scene6, file: &str, roots: &[usize], assets: &mut dyn S
         for &child in n.children.iter().rev() {
             stack.push(child);
         }
-        let (Some(r), Some(_)) = (n.components.iter().find(|c| c.class_id == MESH_RENDERER), n.components.iter().find(|c| c.class_id == MESH_FILTER)) else { continue };
+        let Some(r) = n.components.iter().find(|c| (c.class_id == MESH_RENDERER && n.components.iter().any(|f| f.class_id == MESH_FILTER)) || c.class_id == SKINNED_MESH_RENDERER) else { continue };
         if !renderer_enabled(&r.fields) {
             report.skipped_renderers += 1;
         } else if lod_hidden.contains(&r.path_id) {
@@ -516,13 +534,15 @@ pub fn scene_glb(scene: &Scene6, file: &str, roots: &[usize], assets: &mut dyn S
             drawable.push((mats, node));
         }
     }
-    drawable.sort_by_key(|(m, _)| m.iter().map(|p| (p.file_id, p.path_id)).collect::<Vec<_>>());
+    drawable.sort_by_key(|(m, n)| (scene.nodes[*n].origin, m.iter().map(|p| (p.file_id, p.path_id)).collect::<Vec<_>>()));
+    // Transforms by (origin, path id): grafted parts keep their own ids.
+    let transforms: HashMap<(u32, i64), usize> = scene.nodes.iter().enumerate().map(|(i, n)| ((n.origin, n.transform), i)).collect();
     // Texture budget: every (texture, use) the materials sample, sized.
     let mut seen_materials: HashSet<(String, i64)> = HashSet::new();
     let mut wanted: Vec<((String, i64, TexUse), u32, u32)> = Vec::new();
     let mut seen_textures: HashSet<(String, i64, TexUse)> = HashSet::new();
-    for p in drawable.iter().flat_map(|(m, _)| m.iter()) {
-        let Some((mf, mid, class, fields)) = assets.object(file, *p)? else { continue };
+    for (p, n) in drawable.iter().flat_map(|(m, n)| m.iter().map(move |p| (p, *n))) {
+        let Some((mf, mid, class, fields)) = assets.object(scene.file_of(n, file), *p)? else { continue };
         if class != crate::class_id::MATERIAL || !seen_materials.insert((mf.clone(), mid)) {
             continue;
         }
@@ -555,7 +575,9 @@ pub fn scene_glb(scene: &Scene6, file: &str, roots: &[usize], assets: &mut dyn S
     let mut chunk = Chunk::new(generator);
     for (_, node) in drawable {
         let n = &scene.nodes[node];
-        let (Some(r), Some(fc)) = (n.components.iter().find(|c| c.class_id == MESH_RENDERER), n.components.iter().find(|c| c.class_id == MESH_FILTER)) else { continue };
+        let Some(r) = n.components.iter().find(|c| c.class_id == MESH_RENDERER || c.class_id == SKINNED_MESH_RENDERER) else { continue };
+        let skinned = r.class_id == SKINNED_MESH_RENDERER;
+        let mesh_ptr = if skinned { r.fields.pptr("m_Mesh") } else { n.components.iter().find(|c| c.class_id == MESH_FILTER).and_then(|f| f.fields.pptr("m_Mesh")) }.unwrap_or_default();
         if chunk.glb.estimated_bytes() > CHUNK_BUDGET {
             let full = std::mem::replace(&mut chunk, Chunk::new(generator));
             report.materials += full.materials.values().filter(|m| m.is_some()).count();
@@ -563,12 +585,13 @@ pub fn scene_glb(scene: &Scene6, file: &str, roots: &[usize], assets: &mut dyn S
             chunks.push(full.glb.finish()?);
         }
         let drawn = (|| -> Result<bool> {
-            let Some((mf, mid, _, _)) = assets.object(file, fc.fields.pptr("m_Mesh").unwrap_or_default())? else { return Ok(false) };
+            let nf = scene.file_of(node, file);
+            let Some((mf, mid, _, _)) = assets.object(nf, mesh_ptr)? else { return Ok(false) };
             let mesh = assets.mesh(&mf, mid)?;
             let mut ids = Vec::new();
             for p in r.fields.array("m_Materials").unwrap_or(&[]) {
                 if let Value::PPtr(p) = p {
-                    ids.push(material(assets, &mut chunk, &mut report, file, *p, &sides)?);
+                    ids.push(material(assets, &mut chunk, &mut report, nf, *p, &sides)?);
                 }
             }
             let (first, count) = r.fields.fields("m_StaticBatchInfo").map(|s| (s.int("firstSubMesh").unwrap_or(0) as usize, s.int("subMeshCount").unwrap_or(0) as usize)).unwrap_or((0, 0));
@@ -587,6 +610,25 @@ pub fn scene_glb(scene: &Scene6, file: &str, roots: &[usize], assets: &mut dyn S
             } else {
                 (chunk.node(scene, node)?, 0..mesh.submeshes.len())
             };
+            if skinned {
+                // Joints: the renderer's `m_Bones` transforms (with their
+                // ancestors) in this chunk; the mesh node's own transform is
+                // ignored by glTF skinning, as Unity ignores the renderer's.
+                let mut joints = Vec::new();
+                for b in r.fields.array("m_Bones").unwrap_or(&[]) {
+                    let Value::PPtr(b) = b else { continue };
+                    let bone = transforms.get(&(n.origin, b.path_id)).copied().filter(|_| b.file_id == 0).map(|bn| scene.bone_alias.get(&bn).copied().unwrap_or(bn));
+                    joints.push(match bone {
+                        Some(bn) => chunk.node(scene, bn)?,
+                        None => holder,
+                    });
+                }
+                anyhow::ensure!(mesh.bind_poses.len() == joints.len(), "skin of {} has {} bones for {} bind poses", mesh.name, joints.len(), mesh.bind_poses.len());
+                let skin = chunk.glb.skin(joints, &mesh.bind_poses);
+                chunk.glb.set_skin(holder, skin);
+                let index = chunk.glb.mesh6_skinned(holder, &mesh, range, &ids, true)?;
+                return Ok(index.is_some());
+            }
             let key = (mf, mid, range.start, range.end, ids.clone());
             let index = match chunk.meshes.get(&key) {
                 Some(i) => {
@@ -625,7 +667,10 @@ fn material(assets: &mut dyn SceneAssets, chunk: &mut Chunk, report: &mut GlbRep
     if class != crate::class_id::MATERIAL {
         return Ok(None);
     }
-    if let Some(id) = chunk.materials.get(&(mf.clone(), mid)) {
+    // Per renderer file: a consumer hook may draw a shared material
+    // differently for each part.
+    let cache_key = (format!("{file}|{mf}"), mid);
+    if let Some(id) = chunk.materials.get(&cache_key) {
         return Ok(*id);
     }
     let shader = match assets.object(&mf, fields.pptr("m_Shader").unwrap_or_default())? {
@@ -658,7 +703,26 @@ fn material(assets: &mut dyn SceneAssets, chunk: &mut Chunk, report: &mut GlbRep
         images.insert((tf, tid, usage), img);
         Ok(img)
     };
-    let (engine, support) = engine_material(&m, &mut image)?;
+    let (mut engine, mut support) = engine_material(&m, &mut image)?;
+    if let Some(o) = assets.material_hook(file, &m)? {
+        if o.hidden {
+            support = ShaderSupport::Skipped;
+        }
+        if let Some((key, img)) = o.base_texture {
+            let img = downsample(img, 1024);
+            let png = crysirror_image::encode_png(&img)?;
+            engine.base_color_texture = Some(chunk.glb.image(&key, || Ok((png, "image/png")))?);
+            engine.uv_scale = [1.; 2];
+            engine.uv_offset = [0.; 2];
+        }
+        if let Some(c) = o.base_color {
+            engine.base_color_factor = c;
+        }
+        if let Some(a) = o.alpha_mode {
+            engine.alpha_mode = a;
+            engine.double_sided |= a.transparent();
+        }
+    }
     let e = report.shaders.entry(m.shader.clone()).or_insert_with(|| (format!("{support:?}"), 0));
     e.1 += 1;
     let id = match support {
@@ -669,7 +733,7 @@ fn material(assets: &mut dyn SceneAssets, chunk: &mut Chunk, report: &mut GlbRep
         }
         ShaderSupport::Mapped => Some(chunk.glb.material(&m.name, engine)),
     };
-    chunk.materials.insert((mf, mid), id);
+    chunk.materials.insert(cache_key, id);
     Ok(id)
 }
 

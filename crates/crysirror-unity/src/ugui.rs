@@ -540,7 +540,7 @@ mod tests {
 
     fn node(name: &str, parent: Option<usize>, children: Vec<usize>, components: Vec<Component>) -> Node {
         let rect = RectParams { anchor_min: [0.; 2], anchor_max: [1.; 2], anchored_position: [0.; 2], size_delta: [0.; 2], pivot: [0.5; 2] };
-        Node { name: name.into(), active: true, game_object: 0, transform: 0, xform: Xform { rect: Some(rect), scale: [1.; 3], rotation: [0., 0., 0., 1.], ..Default::default() }, parent, children, components }
+        Node { name: name.into(), active: true, game_object: 0, transform: 0, xform: Xform { rect: Some(rect), scale: [1.; 3], rotation: [0., 0., 0., 1.], ..Default::default() }, parent, children, components, origin: 0 }
     }
 
     fn component(class_id: i32, script: &str, fields: Vec<(&str, Value)>) -> Component {

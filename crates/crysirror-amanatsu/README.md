@@ -49,6 +49,15 @@ distributed.
   buttons by `MapUIInfo._id`, `CharaIconClear`), `MapConfirmDialog`
   (はい/いいえ, right click), `MapSelectCallBack` → `ChangeMap` under the
   scene fade.
+- `card.rs`: `HumanData` cards and nested ILLGAMES containers
+  (`【ALChara】`, `【ALClothes】`): block index, `Custom` face/body parts.
+- `chara.rs`: `Character.Human` assembly from a card through the
+  `chara/list/characustom` tables (body, head at `cf_s_headlink`, four hair
+  parts at `HairParent`, the first coordinate's clothes rebound onto the body
+  skeleton), base-body variants hidden, materials: skin main textures tinted
+  by the card skin colour, clothes main textures through their colour masks,
+  hair colours, iris/lash/brow layers from the `mt_*` lists. Shown in
+  `CustomScene` from the scene's main camera.
 - `adapter.rs`: the session — boot, scene loads after the fade-in, frame
   layout and layer submission for the build scene and instantiated UI
   prefabs (each its own `Ui` slot), world entities/environment/camera of the

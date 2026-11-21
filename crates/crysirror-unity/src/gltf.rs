@@ -16,6 +16,18 @@ pub fn mirror_point(v: [f32; 3]) -> [f32; 3] {
 pub fn mirror_quat(q: [f32; 4]) -> [f32; 4] {
     [q[0], -q[1], -q[2], q[3]]
 }
+/// `S·M·S` with S = diag(−1, 1, 1, 1) (column-major), e.g. bind poses.
+pub fn mirror_matrix(m: [f32; 16]) -> [f32; 16] {
+    let mut out = m;
+    for col in 0..4 {
+        for row in 0..4 {
+            if (row == 0) != (col == 0) {
+                out[col * 4 + row] = -m[col * 4 + row];
+            }
+        }
+    }
+    out
+}
 
 #[derive(Default)]
 pub struct GlbBuilder {
@@ -132,6 +144,22 @@ impl GlbBuilder {
     /// Returns the GLB mesh index (`None` when nothing was drawn), which
     /// other nodes may share through [`Self::set_mesh`].
     pub fn mesh6(&mut self, node: usize, mesh: &crate::unity6::Mesh6, range: std::ops::Range<usize>, materials: &[Option<usize>]) -> Result<Option<usize>> {
+        self.mesh6_skinned(node, mesh, range, materials, false)
+    }
+
+    /// A skin of joint nodes with Unity bind poses; returns its index.
+    pub fn skin(&mut self, joints: Vec<usize>, bind_poses: &[[f32; 16]]) -> usize {
+        self.doc.skins.push(glb::Skin { joints, inverse_bind: bind_poses.iter().map(|m| mirror_matrix(*m)).collect(), skeleton: None });
+        self.doc.skins.len() - 1
+    }
+
+    pub fn set_skin(&mut self, node: usize, skin: usize) {
+        self.doc.nodes[node].skin = Some(skin);
+    }
+
+    /// [`Self::mesh6`] with the mesh's joints/weights when `skinned`.
+    pub fn mesh6_skinned(&mut self, node: usize, mesh: &crate::unity6::Mesh6, range: std::ops::Range<usize>, materials: &[Option<usize>], skinned: bool) -> Result<Option<usize>> {
+        let skinned = skinned && mesh.joints.len() == mesh.positions.len() && mesh.weights.len() == mesh.positions.len();
         let mut prims = Vec::new();
         for (slot, s) in range.enumerate() {
             let Some(sub) = mesh.submeshes.get(s) else { continue };
@@ -159,6 +187,10 @@ impl GlbBuilder {
                     if let Some(uv) = mesh.uv[0].get(v) {
                         p.uvs.push([uv[0], 1. - uv[1]]);
                     }
+                    if skinned {
+                        p.joints.push(mesh.joints[v]);
+                        p.weights.push(mesh.weights[v]);
+                    }
                     (p.positions.len() - 1) as u32
                 });
                 tri.push(at);
@@ -173,7 +205,7 @@ impl GlbBuilder {
                 p.indices.extend([t[0], t[2], t[1]]);
             }
             if !p.indices.is_empty() {
-                self.bytes += p.positions.len() * 32 + p.indices.len() * 4;
+                self.bytes += p.positions.len() * if skinned { 56 } else { 32 } + p.indices.len() * 4;
                 prims.push(p);
             }
         }

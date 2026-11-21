@@ -7,6 +7,8 @@
 pub mod actionmap;
 pub mod adapter;
 pub mod adv;
+pub mod card;
+pub mod chara;
 pub mod level;
 pub mod map;
 pub mod scenes;

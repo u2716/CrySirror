@@ -44,11 +44,23 @@ impl Table {
     /// Parse the TextAsset bytes (`m_Script`).
     pub fn parse(b: &[u8]) -> Result<Self> {
         let mut p = Pack { b, at: 0 };
-        // Union-style header: member count, the type name, reserved words.
-        ensure!(p.take(1)?[0] == 6, "TableData header");
-        let ty = p.string()?;
-        ensure!(ty.starts_with("AL.Serialization.TableData"), "TableData type {ty}");
-        p.take(12)?;
+        let tag = p.take(1)?[0];
+        let list = match tag {
+            // Union-style header: member count, the type name, reserved words.
+            6 => {
+                let ty = p.string()?;
+                ensure!(ty.starts_with("AL.Serialization.TableData"), "TableData type {ty}");
+                p.take(12)?;
+                false
+            }
+            // `chara/list` tables: category number and a reserved word.
+            4 => {
+                let _category = p.i32()?;
+                p.take(4)?;
+                true
+            }
+            other => anyhow::bail!("TableData header {other}"),
+        };
         let nkeys = p.i32()?;
         ensure!((0..=256).contains(&nkeys), "TableData key count");
         let keys = (0..nkeys).map(|_| p.i32()).collect::<Result<Vec<_>>>()?;
@@ -57,8 +69,10 @@ impl Table {
         let mut rows = Vec::with_capacity(nrows as usize);
         for _ in 0..nrows {
             let _index = p.i32()?;
-            // Info object header and its reserved fields.
-            p.take(9)?;
+            if !list {
+                // Info object header and its reserved fields.
+                p.take(9)?;
+            }
             let n = p.i32()?;
             ensure!((0..=4096).contains(&n), "TableData column count");
             rows.push((0..n).map(|_| p.string()).collect::<Result<Vec<_>>>()?);

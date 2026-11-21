@@ -97,6 +97,21 @@ impl Unity {
         Ok(self.storage.open_asset(&VfsPath::new(Mount::Asset, path)?)?)
     }
 
+    /// A whole installation file (cards, settings).
+    pub fn read_all(&self, path: &str) -> Result<Vec<u8>> {
+        let r = self.reader(path)?;
+        let len = r.len().map_err(|e| anyhow::anyhow!("{path}: {e}"))? as usize;
+        anyhow::ensure!(len <= 64 << 20, "{path} is larger than 64 MiB");
+        let mut out = vec![0u8; len];
+        let mut at = 0;
+        while at < len {
+            let n = r.read_at(at as u64, &mut out[at..]).map_err(|e| anyhow::anyhow!("{path}: {e}"))?;
+            anyhow::ensure!(n > 0, "{path} truncated");
+            at += n;
+        }
+        Ok(out)
+    }
+
     pub fn bundle(&mut self, path: &str) -> Result<Arc<Bundle>> {
         if let Some(b) = self.bundles.get(path) {
             return Ok(b.clone());

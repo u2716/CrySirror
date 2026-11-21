@@ -264,6 +264,13 @@ fn layout_level_png() {
         }
     }
     let layout = ugui::layout(&scene, &states, 1920., 1080., &svc);
+    if std::env::var_os("AMANATSU_ITEMS").is_some() {
+        for item in &layout.items {
+            let r = item.rect;
+            let what = match &item.paint { ugui::Paint::Image { sprite, color, .. } => format!("image {sprite:?} {color:?}"), ugui::Paint::Text { text, .. } => format!("text {text:?}") };
+            println!("{} [{:.0},{:.0},{:.0},{:.0}] {what}", scene.path(item.node), r.x0, r.y0, r.x1, r.y1);
+        }
+    }
     if std::env::var_os("AMANATSU_FONTS").is_some() {
         let mut seen = std::collections::BTreeSet::new();
         for item in &layout.items {
@@ -993,5 +1000,157 @@ fn prefab_tree() {
         }
         let scripts: Vec<&str> = n.components.iter().filter(|c| !c.script.is_empty()).map(|c| c.script.as_str()).collect();
         println!("{}{} {}", if n.active { "" } else { "(inactive) " }, scene.path(i), scripts.join(","));
+    }
+}
+
+/// A character card's blocks as MessagePack trees (`AMANATSU_CARD`, a path
+/// under the game root; `AMANATSU_BLOCK` limits to one block).
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn print_card() {
+    let root = PathBuf::from(std::env::var_os("AMANATSU_ROOT").unwrap());
+    let card = crysirror_amanatsu::card::Card::parse(&std::fs::read(root.join(std::env::var("AMANATSU_CARD").unwrap())).unwrap()).unwrap();
+    println!("product {} version {}", card.product, card.version);
+    let want = std::env::var("AMANATSU_BLOCK").ok();
+    fn show(v: &crysirror_unity::msgpack::Value, depth: usize, out: &mut String) {
+        use crysirror_unity::msgpack::Value as V;
+        let pad = "  ".repeat(depth);
+        match v {
+            V::Map(m) => {
+                for (k, x) in m {
+                    let key = match k { V::Str(s) => s.clone(), other => format!("{other:?}") };
+                    match x {
+                        V::Map(_) => { out.push_str(&format!("{pad}{key}:\n")); show(x, depth + 1, out); }
+                        V::Array(a) if a.iter().any(|e| matches!(e, V::Map(_))) => { out.push_str(&format!("{pad}{key}: [{}]\n", a.len())); for e in a.iter().take(3) { show(e, depth + 1, out); out.push_str(&format!("{pad}  --\n")); } }
+                        V::Bin(b) => { out.push_str(&format!("{pad}{key}: bin {} -> \n", b.len())); if let Ok(inner) = crysirror_unity::msgpack::decode(b) { show(&inner, depth + 1, out); } }
+                        V::Array(a) if a.iter().any(|e| matches!(e, V::Bin(_))) => { out.push_str(&format!("{pad}{key}: [{} bins]\n", a.len())); }
+                        other => out.push_str(&format!("{pad}{key} = {}\n", format!("{other:?}").chars().take(200).collect::<String>())),
+                    }
+                }
+            }
+            V::Array(a) if a.iter().all(|e| matches!(e, V::Bin(_))) => {
+                for (i, e) in a.iter().enumerate() {
+                    let V::Bin(b) = e else { continue };
+                    match crysirror_amanatsu::card::Card::container(b) {
+                        Ok((marker, c)) => {
+                            out.push_str(&format!("{pad}[{i}] {marker}\n"));
+                            for (n, _, bytes) in &c.blocks {
+                                out.push_str(&format!("{pad}  -- {n} {} bytes\n", bytes.len()));
+                                if let Ok(v) = crysirror_unity::msgpack::decode(bytes) { show(&v, depth + 2, out); }
+                            }
+                        }
+                        Err(e) => out.push_str(&format!("{pad}[{i}] bin {} ({e:#})\n", b.len())),
+                    }
+                    if i >= 0 { break; }
+                }
+            }
+            other => out.push_str(&format!("{pad}{}\n", format!("{other:?}").chars().take(400).collect::<String>())),
+        }
+    }
+    for (name, ver, bytes) in &card.blocks {
+        if want.as_deref().is_some_and(|w| w != name) {
+            continue;
+        }
+        println!("== {name} {ver} {} bytes", bytes.len());
+        let mut out = String::new();
+        if name == "Custom" {
+            for (i, v) in card.parts(name).unwrap().iter().enumerate() {
+                out.push_str(&format!(" part {i}\n"));
+                show(v, 1, &mut out);
+            }
+            println!("{out}");
+            continue;
+        }
+        match crysirror_unity::msgpack::decode(bytes) {
+            Ok(v) => show(&v, 1, &mut out),
+            Err(e) => out = format!("  undecoded: {e:#}"),
+        }
+        println!("{out}");
+    }
+}
+
+/// GLB of a bundle prefab (`AMANATSU_BUNDLES` = one `lib/…` path,
+/// `AMANATSU_ASSET` = prefab name) through the shared importer; writes
+/// `AMANATSU_OUT<i>.glb` when set.
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn prefab_glb() {
+    let mut u = unity();
+    let bundle = std::env::var("AMANATSU_BUNDLES").unwrap();
+    let asset = std::env::var("AMANATSU_ASSET").unwrap();
+    let level = crysirror_amanatsu::level::Level::prefab(&mut u, &bundle, &asset).unwrap();
+    let (glb, report) = crysirror_unity::world6::scene_glb(&level.scene, &level.key, &[0], &mut u, &Default::default(), "test").unwrap();
+    println!("glb chunks {:?} renderers {} skipped {} materials {} textures {} ({} bytes)", glb.iter().map(|g| g.len()).collect::<Vec<_>>(), report.renderers, report.skipped_renderers, report.materials, report.textures, report.texture_bytes);
+    for (s, (support, n)) in &report.shaders {
+        println!("  {n:4} {support:12} {s}");
+    }
+    for e in &report.errors {
+        println!("  error {e}");
+    }
+    if let Ok(out) = std::env::var("AMANATSU_OUT") {
+        for (i, g) in glb.iter().enumerate() {
+            std::fs::write(format!("{out}{i}.glb"), g).unwrap();
+        }
+    }
+}
+
+/// Renderers of a bundle prefab with their materials' shaders and texture
+/// slots (`AMANATSU_BUNDLES`, `AMANATSU_ASSET`).
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn prefab_renderers() {
+    use crysirror_unity::world6::{shader_name, SceneAssets, UnityMaterial};
+    let mut u = unity();
+    let level = crysirror_amanatsu::level::Level::prefab(&mut u, &std::env::var("AMANATSU_BUNDLES").unwrap(), &std::env::var("AMANATSU_ASSET").unwrap()).unwrap();
+    for (i, n) in level.scene.nodes.iter().enumerate() {
+        for c in n.components.iter().filter(|c| c.class_id == 23 || c.class_id == 137) {
+            let mut mats = Vec::new();
+            for p in c.fields.array("m_Materials").unwrap_or(&[]) {
+                let crysirror_unity::managed::Value::PPtr(p) = p else { continue };
+                let Some((mf, _, _, f)) = SceneAssets::object(&mut u, &level.key, *p).unwrap() else { continue };
+                let shader = SceneAssets::object(&mut u, &mf, f.pptr("m_Shader").unwrap_or_default()).unwrap().map(|s| shader_name(&s.3)).unwrap_or_default();
+                let m = UnityMaterial::decode(&f, shader);
+                let tex: Vec<&String> = m.textures.iter().filter(|(_, t)| !t.texture.is_null()).map(|(k, _)| k).collect();
+                mats.push(format!("{} <{}> {:?} queue {}", m.name, m.shader, tex, m.render_queue));
+            }
+            println!("{}{} enabled {:?}: {}", if n.active { "" } else { "(inactive) " }, level.scene.path(i), c.fields.get("m_Enabled"), mats.join(" | "));
+        }
+    }
+}
+
+/// The default heroine assembled from `AMANATSU_CARD` (default
+/// `AL_F_00`): parts log, and the GLB's materials (name, alpha mode, base
+/// texture) with nodes in `AMANATSU_HIDE` (comma-separated names) hidden.
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn chara_glb() {
+    let mut u = unity();
+    let card_path = std::env::var("AMANATSU_CARD").unwrap_or_else(|_| "DefaultData/0/chara/female/AL_F_00.png".into());
+    let card = crysirror_amanatsu::card::Card::parse(&u.read_all(&card_path).unwrap()).unwrap();
+    let lists = crysirror_amanatsu::chara::Lists::load(&mut u).unwrap();
+    let mut human = crysirror_amanatsu::chara::Human::from_card(&mut u, &lists, &card, true).unwrap();
+    for l in &human.log {
+        println!("{l}");
+    }
+    for name in std::env::var("AMANATSU_HIDE").unwrap_or_default().split(',').filter(|s| !s.is_empty()) {
+        for n in human.scene.nodes.iter_mut().filter(|n| n.name == name) {
+            n.active = false;
+        }
+    }
+    let mut assets = crysirror_amanatsu::chara::CharaAssets { unity: &mut u, human: &human };
+    let (glb, report) = crysirror_unity::world6::scene_glb(&human.scene, &human.key, &[0], &mut assets, &Default::default(), "test").unwrap();
+    println!("chunks {:?} renderers {} errors {:?}", glb.iter().map(|g| g.len()).collect::<Vec<_>>(), report.renderers, report.errors);
+    for g in &glb {
+        let len = u32::from_le_bytes(g[12..16].try_into().unwrap()) as usize;
+        let json: serde_json::Value = serde_json::from_slice(&g[20..20 + len]).unwrap();
+        for m in json["materials"].as_array().unwrap() {
+            let e = &m["extras"]["crysirror_material"]["material"];
+            println!("  {} alpha {} tex {} color {}", m["name"], e["alpha_mode"], e["base_color_texture"], e["base_color_factor"]);
+        }
+    }
+    if let Ok(out) = std::env::var("AMANATSU_OUT") {
+        for (i, g) in glb.iter().enumerate() {
+            std::fs::write(format!("{out}{i}.glb"), g).unwrap();
+        }
     }
 }

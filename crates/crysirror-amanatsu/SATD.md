@@ -13,8 +13,14 @@ map rendering parity (lightmaps of `ma/lit`, reflection probes, the Azure sky
 time of day, URP global volumes / colour grading, `AL/MapColorMask`, water
 and particle shaders, `CameraLight` prefabs); the synchronous
 `ChangeMap` import (≈1–2 s inside one VM step behind the fade) moving to a
-worker under ADR 0050; scene controllers for `CustomScene` and `Memory`
-(shown laid out, without logic); on the title: save data (the
+worker under ADR 0050; characters beyond the card-driven assembly in
+`CustomScene` (the scene's preset instead of `AL_F_00`, accessories,
+`customshape` face/body shape values, makeup/paint/eyelid/mouth layers and
+the eye UV layout of the `LIF/*` texture creation, toon shading and
+outlines, clothing body cut-outs, blend shapes/expressions, hair/cloth
+physics, poses and Mecanim humanoid animation, characters on maps); the
+`CustomScene` UI (its canvases are laid out but behind-3D background
+canvases are hidden) and `Memory` scene controller; on the title: save data (the
 Memories entry, `SaveLoadUI` for つづきから), `ConfigWindow`, `ExitDialog`
 confirmation (quit is immediate), the TOS check/viewer, the language dialog,
 Selectable hover/press transitions (`ColorTint`, Animator triggers), the
@@ -52,3 +58,4 @@ H scenes and save/load, recorded in a validation note.
 | 2026-11-21 | Boot flow Init → Logo → Title with the scene fade; shared Mecanim playback (`crysirror_unity::animator`), UnityEvent persistent calls and uGUI raycast/interactable inheritance; title menus, Back/right click, scene loads and quit ported from `TitleScene`. | Listed above. |
 | 2026-11-21 | Sound: shared FSB5 (Vorbis/PCM16/IMA ADPCM) conversion in `crysirror-audio`; `TableData` lists; title BGM, menu SE and the logo brand call. | Listed above. |
 | 2026-11-21 | 3D maps: shared `crysirror_unity::world6` (Unity 6 materials → engine PBR, GLB chunks, LOD 0, static batches, texture budget), `Scene6::subtree`, root-Canvas `CanvasGroup` fix; `MapSelectUI` + `MapConfirmDialog` + `ChangeMap` (map scene, time-zone light setting, key light, ambient, fog, Cinemachine camera) for all seven maps. | Listed above. |
+| 2026-11-21 | Characters: shared skinned GLB export, `Scene6::graft`/`alias_bones`, material hook, MessagePack; `HumanData` cards and list tables; the default heroine assembled (body, head, hair, clothes, skin/clothes/eye colours) in `CustomScene`. | Listed above. |

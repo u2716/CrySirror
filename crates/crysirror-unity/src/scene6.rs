@@ -53,6 +53,9 @@ pub struct Node {
     pub parent: Option<usize>,
     pub children: Vec<usize>,
     pub components: Vec<Component>,
+    /// Serialized file of the node's object pointers: 0 the scene's own,
+    /// `n` [`Scene6::files`]`[n − 1]` for grafted parts.
+    pub origin: u32,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -63,6 +66,11 @@ pub struct Scene6 {
     pub by_transform: HashMap<i64, usize>,
     /// GameObject path id → node.
     pub by_game_object: HashMap<i64, usize>,
+    /// File keys of grafted parts ([`Node::origin`] − 1).
+    pub files: Vec<String>,
+    /// Skinned-renderer bones resolved onto another node (a part's bone
+    /// copy → the skeleton's bone of the same name).
+    pub bone_alias: HashMap<usize, usize>,
 }
 
 fn v<'a>(f: &'a Fields, name: &str) -> Option<&'a Value> {
@@ -129,6 +137,7 @@ impl Scene6 {
                         parent: None,
                         children: Vec::new(),
                         components: Vec::new(),
+                        origin: 0,
                     });
                     s.by_game_object.insert(info.path_id, idx);
                 }
@@ -190,7 +199,64 @@ impl Scene6 {
             stack.extend(self.nodes[n].children.iter().rev());
         }
         out.roots = vec![0];
+        out.files = self.files.clone();
+        out.bone_alias = self.bone_alias.iter().filter_map(|(k, v)| Some((*map.get(k)?, *map.get(v)?))).collect();
         out
+    }
+
+    /// The file key of a node's pointers (`primary` for the scene's own).
+    pub fn file_of<'a>(&'a self, node: usize, primary: &'a str) -> &'a str {
+        match self.nodes[node].origin {
+            0 => primary,
+            o => self.files.get(o as usize - 1).map_or(primary, String::as_str),
+        }
+    }
+
+    /// Attach `part` (a scene of `part_file`, e.g. a prefab instance) under
+    /// `parent`; returns the index of the part's first root. Lookup maps
+    /// keep the scene's own objects; grafted nodes are reached by index.
+    pub fn graft(&mut self, part: &Scene6, part_file: &str, parent: usize) -> usize {
+        let base = self.nodes.len();
+        self.files.push(part_file.to_owned());
+        let origin = self.files.len() as u32;
+        for n in &part.nodes {
+            let mut n = n.clone();
+            n.parent = Some(n.parent.map_or(parent, |p| p + base));
+            n.children = n.children.iter().map(|c| c + base).collect();
+            n.origin = origin;
+            self.nodes.push(n);
+        }
+        for &r in &part.roots {
+            self.nodes[parent].children.push(r + base);
+        }
+        for (k, v) in &part.bone_alias {
+            self.bone_alias.insert(k + base, v + base);
+        }
+        base + part.roots.first().copied().unwrap_or(0)
+    }
+
+    /// Resolve the bones under `part` onto same-named nodes under
+    /// `skeleton` (ILLGAMES `AssignedAnotherWeights`); returns the count.
+    pub fn alias_bones(&mut self, part: usize, skeleton: usize) -> usize {
+        let mut names: HashMap<&str, usize> = HashMap::new();
+        let mut stack = vec![skeleton];
+        while let Some(n) = stack.pop() {
+            names.entry(self.nodes[n].name.as_str()).or_insert(n);
+            stack.extend(&self.nodes[n].children);
+        }
+        let mut alias = Vec::new();
+        let mut stack = vec![part];
+        while let Some(n) = stack.pop() {
+            if let Some(&t) = names.get(self.nodes[n].name.as_str()) {
+                if t != n {
+                    alias.push((n, t));
+                }
+            }
+            stack.extend(&self.nodes[n].children);
+        }
+        let count = alias.len();
+        self.bone_alias.extend(alias);
+        count
     }
 
     /// Node by slash-separated path from a root (`Canvas/Panel`).
@@ -254,7 +320,7 @@ mod tests {
         let mut s = Scene6::default();
         for (name, parent) in [("A", None), ("B", Some(0)), ("C", Some(0)), ("D", Some(1))] {
             let i = s.nodes.len();
-            s.nodes.push(Node { name: name.into(), active: true, game_object: 10 + i as i64, transform: 20 + i as i64, xform: Xform::default(), parent, children: Vec::new(), components: Vec::new() });
+            s.nodes.push(Node { name: name.into(), active: true, game_object: 10 + i as i64, transform: 20 + i as i64, xform: Xform::default(), parent, children: Vec::new(), components: Vec::new(), origin: 0 });
             if let Some(p) = parent {
                 s.nodes[p].children.push(i);
             }
@@ -265,5 +331,12 @@ mod tests {
         assert_eq!((t.roots.clone(), t.nodes[0].parent, t.nodes[1].parent, t.nodes[0].children.clone()), (vec![0], None, Some(0), vec![1]));
         assert_eq!(t.path(1), "B/D");
         assert_eq!(t.by_game_object.get(&13), Some(&1));
+        // Graft B/D under C of the original and alias D onto itself's name
+        // twin in the skeleton.
+        let mut g = s.clone();
+        let root = g.graft(&t, "part", 2);
+        assert_eq!((root, g.nodes[root].parent, g.path(root + 1), g.file_of(root + 1, "main")), (4, Some(2), "A/C/B/D".to_owned(), "part"));
+        assert_eq!(g.alias_bones(root, 1), 2);
+        assert_eq!((g.bone_alias[&root], g.bone_alias[&(root + 1)]), (1, 3));
     }
 }

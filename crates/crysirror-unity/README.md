@@ -68,9 +68,14 @@ and `ResourceManager` have fixed readers).
   from their combined mesh, shared meshes per chunk, renderers grouped by
   material), a prepared-texture budget (`fit_textures` halves the largest
   textures first), `Light` components with culling masks and
-  `RenderSettings` ambient/fog. Lightmaps, reflection probes, terrain,
-  particle systems, skinned renderers and shader-graph effects are not
-  converted.
+  `RenderSettings` ambient/fog; `SkinnedMeshRenderer` as glTF skins
+  (`m_Bones` joints, bind poses mirrored `S·M·S`, joints/weights), with
+  `Scene6::graft` parts (per-node file keys) and `Scene6::alias_bones`
+  name-based rebinding onto another skeleton; a consumer `material_hook`
+  (per renderer file) for runtime-composed textures, colours, alpha and
+  hiding. Lightmaps, reflection probes, terrain, particle systems, blend
+  shapes and shader-graph effects are not converted.
+- `msgpack.rs`: bounded MessagePack decoding (MessagePack-CSharp payloads).
 - `animator.rs`: Mecanim without Unity — `AnimationClip` muscle clips
   (streamed cubic segments, dense samples, constants) with their generic
   bindings, `AnimatorController` layers, states, exit-time transitions and

@@ -26,6 +26,8 @@ use std::{cell::RefCell, sync::Arc};
 pub const ENGINE_ID: &str = "amanatsu";
 pub const WIDTH: f32 = 1920.;
 pub const HEIGHT: f32 = 1080.;
+/// The first default heroine card of the installation.
+const DEFAULT_FEMALE_CARD: &str = "DefaultData/0/chara/female/AL_F_00.png";
 /// Layer id of the scene fade canvas, above every uGUI layer.
 const FADE_LAYER: u32 = 0x0F00;
 
@@ -165,13 +167,7 @@ impl Game {
         let info = self.maps.iter().find(|m| m.id == id).cloned().with_context(|| format!("map {id} not in map_info"))?;
         let t = std::time::Instant::now();
         let world = map::load(&mut self.unity, &info, time_zone)?;
-        for (i, glb) in world.chunks.iter().enumerate() {
-            self.next_model += 1;
-            let path = host.upload_model(client, 0x6000_0000 + self.next_model, glb)?;
-            let entity = 0x100 + self.next_model;
-            self.world.push(json!({"op": "spawn", "entity": {"id": entity, "name": format!("{}#{i}", info.scene.1), "geometry": {"kind": "scene", "asset": path.relative()}}}));
-            self.map_entities.push((entity, path));
-        }
+        self.spawn_models(host, client, &info.scene.1, &world.chunks)?;
         self.world.push(world.environment());
         self.view = world.camera().cloned();
         if let Some(v) = &self.view {
@@ -196,6 +192,57 @@ impl Game {
         }
         self.log.extend(r.errors.iter().take(8).cloned());
         self.log.extend(world.log);
+        Ok(())
+    }
+
+    /// Upload GLB chunks and spawn them as world entities at the origin.
+    fn spawn_models(&mut self, host: &mut dyn HostServices, client: ClientId, name: &str, chunks: &[Vec<u8>]) -> Result<()> {
+        for (i, glb) in chunks.iter().enumerate() {
+            self.next_model += 1;
+            let path = host.upload_model(client, 0x6000_0000 + self.next_model, glb)?;
+            let entity = 0x100 + self.next_model;
+            self.world.push(json!({"op": "spawn", "entity": {"id": entity, "name": format!("{name}#{i}"), "geometry": {"kind": "scene", "asset": path.relative()}}}));
+            self.map_entities.push((entity, path));
+        }
+        Ok(())
+    }
+
+    /// `CustomScene` start: the default heroine (`HumanData` preset) in
+    /// front of the main camera.
+    fn custom_scene(&mut self, host: &mut dyn HostServices, client: ClientId) -> Result<()> {
+        // SATD-amanatsu-port: the scene's own default (`HumanData`
+        // preset for the chosen sex) is approximated by the first default
+        // female card.
+        let card = crate::card::Card::parse(&self.unity.read_all(DEFAULT_FEMALE_CARD)?)?;
+        let lists = crate::chara::Lists::load(&mut self.unity)?;
+        let human = crate::chara::Human::from_card(&mut self.unity, &lists, &card, true)?;
+        self.log.extend(human.log.iter().cloned());
+        let options = crysirror_unity::world6::GlbOptions { max_texture: 1024, texture_budget: 64 << 20 };
+        let mut assets = crate::chara::CharaAssets { unity: &mut self.unity, human: &human };
+        let (chunks, report) = crysirror_unity::world6::scene_glb(&human.scene, &human.key, &[0], &mut assets, &options, "CrySirror AmanatsuLocation character importer")?;
+        self.spawn_models(host, client, "chara", &chunks)?;
+        self.log.push(format!("character: {} chunks, {} renderers ({} skipped), {} materials", chunks.len(), report.renderers, report.skipped_renderers, report.materials));
+        self.log.extend(report.errors.iter().take(8).cloned());
+        // The main camera's authored transform frames the character
+        // (characters are about 16 units tall). SATD-amanatsu-port:
+        // `CameraController` orbit/zoom input is not ported.
+        if let Some(cam) = self.level.find("CustomScene/Camera/MainCamera") {
+            let fov = self.level.scene.nodes[cam].components.iter().find(|c| c.class_id == 20).and_then(|c| c.fields.float("field of view")).unwrap_or(23.);
+            let mut lens = crysirror_unity::managed::Fields::default();
+            lens.0.push(("FieldOfView".into(), crysirror_unity::managed::Value::Float(fov)));
+            let v = map::view(&self.level.scene, cam, Some(&lens));
+            self.world.push(v.command());
+            self.view = Some(v);
+        }
+        // Screen-space camera canvases behind the 3D view (background image)
+        // cannot be drawn beneath the world yet.
+        // `SaveFrame` canvases belong to the card-capture cameras.
+        for path in ["CustomScene/UI/Cvs_BackGround", "CustomScene/UI/Root/Cvs_BackGround_Cover", "CustomScene/UI/Root/SaveFrame"] {
+            if let Some(n) = self.level.find(path) {
+                self.level.set_active(n, false);
+            }
+        }
+        self.world.push(json!({"op": "set_environment", "environment": {"show_sky": false, "intensity": 1.0, "bloom": 0.0, "tonemap": "none", "ambient_occlusion": 0.0, "ambient": [0.45, 0.45, 0.47], "sun": {"direction": [0.3, -0.5, 0.8], "color": [1.0, 1.0, 1.0], "intensity": 1.2, "shadow_strength": 0.3}}}));
         Ok(())
     }
 
@@ -341,6 +388,9 @@ impl AmanatsuVm {
                 game.pending = None;
                 let name = scene_name(id).context("SceneSettings id")?;
                 game.open(name)?;
+                if name == "CustomScene" {
+                    game.custom_scene(host, self.client)?;
+                }
             }
         }
         game.level.advance(dt);
