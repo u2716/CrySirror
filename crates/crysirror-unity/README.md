@@ -81,6 +81,9 @@ and `ResourceManager` have fixed readers).
   (`clip_tracks` + `scene_glb_animated`); a hook toon ramp/outline selects the
   engine toon model; `gltf::image_plane_glb` places a camera-space image
   (canvas backgrounds) in the 3D view.
+  `scene_lights` reports Unity lights (kind, colour, intensity, range,
+  culling mask, spot angles, shadow type, bake type); `gradient` evaluates a
+  serialized `UnityEngine.Gradient`.
   MagicaCloth 2 BoneCloth and BoneSpring components become spring-bone
   chains in the GLB (`magica_bone_cloths`: gravity, damping, angle
   restoration, angle limit, radius, spring power and distance limit, and

@@ -2420,7 +2420,14 @@ pub trait HostServices: FileSystem {
     fn upload_model(&mut self, _client: ClientId, _id: u32, _glb: &[u8]) -> Result<VfsPath> {
         Err(crate::Error::Unsupported("model upload"))
     }
-    /// End the caller's use of an `upload_model` path. The host drops the
+    /// Register an adapter-built linear-RGB equirectangular environment
+    /// (`width = 2 × height`, rows from +Y down) as a Radiance `.hdr` asset
+    /// under a host-minted client-scoped path, for `Environment.hdr` (for
+    /// example a time-of-day sky). Released with `release_model`.
+    fn upload_hdr(&mut self, _client: ClientId, _id: u32, _width: u32, _height: u32, _rgb: &[[f32; 3]]) -> Result<VfsPath> {
+        Err(crate::Error::Unsupported("environment upload"))
+    }
+    /// End the caller's use of an `upload_model` (or `upload_hdr`) path. The host drops the
     /// model bytes once no world entity of the client references the asset
     /// (checked at the end of each tick, so a despawn in the same tick is
     /// enough); an identical later upload registers it again. Releasing a

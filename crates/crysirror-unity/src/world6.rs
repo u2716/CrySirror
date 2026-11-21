@@ -963,6 +963,43 @@ pub struct SceneLight {
     pub position: [f32; 3],
     /// Unity forward (+Z) of the light.
     pub direction: [f32; 3],
+    /// Spot cone: `m_SpotAngle` (outer, full angle) and `m_InnerSpotAngle`
+    /// in degrees.
+    pub spot_angle: f32,
+    pub inner_spot_angle: f32,
+    /// `m_Shadows.m_Type` (0 none, 1 hard, 2 soft).
+    pub shadows: i64,
+    /// `m_Lightmapping` (bake type): 4 realtime, 1 mixed, 2 baked only.
+    pub bake: i64,
+}
+
+/// Evaluate a serialized `UnityEngine.Gradient` (`key0..7` colours at
+/// `ctime0..7`/65535, `m_NumColorKeys`; `m_Mode` 0 blends, 1 steps) at
+/// `t` in 0..1; RGB only.
+pub fn gradient(g: &Fields, t: f32) -> Option<[f32; 3]> {
+    let n = g.int("m_NumColorKeys").unwrap_or(0).clamp(0, 8) as usize;
+    let keys: Vec<(f32, [f32; 3])> = (0..n)
+        .filter_map(|i| {
+            let c = rgba(g.get(&format!("key{i}")))?;
+            Some((g.int(&format!("ctime{i}")).unwrap_or(0) as f32 / 65535., [c[0], c[1], c[2]]))
+        })
+        .collect();
+    let first = keys.first()?;
+    let t = t.clamp(0., 1.);
+    if t <= first.0 {
+        return Some(first.1);
+    }
+    for w in keys.windows(2) {
+        let ((t0, a), (t1, b)) = (w[0], w[1]);
+        if t <= t1 {
+            if g.int("m_Mode").unwrap_or(0) == 1 {
+                return Some(b);
+            }
+            let f = if t1 > t0 { (t - t0) / (t1 - t0) } else { 1. };
+            return Some([0, 1, 2].map(|i| a[i] + (b[i] - a[i]) * f));
+        }
+    }
+    keys.last().map(|k| k.1)
 }
 
 /// The enabled lights of active nodes.
@@ -993,6 +1030,10 @@ pub fn scene_lights(scene: &Scene6) -> Vec<SceneLight> {
                 culling_mask: c.fields.fields("m_CullingMask").and_then(|m| m.int("m_Bits")).unwrap_or(-1) as u32,
                 position: m.w_axis.truncate().to_array(),
                 direction: m.transform_vector3(Vec3::Z).normalize_or_zero().to_array(),
+                spot_angle: c.fields.float("m_SpotAngle").unwrap_or(30.) as f32,
+                inner_spot_angle: c.fields.float("m_InnerSpotAngle").unwrap_or(0.) as f32,
+                shadows: c.fields.fields("m_Shadows").and_then(|f| f.int("m_Type")).unwrap_or(0),
+                bake: c.fields.int("m_Lightmapping").unwrap_or(4),
             });
         }
     }

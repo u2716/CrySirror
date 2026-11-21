@@ -19,6 +19,10 @@ use serde_json::{json, Value as Json};
 /// prepared-asset budget.
 pub const MAP_TEXTURE_BUDGET: usize = 128 << 20;
 
+/// Culling-mask bits of the layers map renderers use (Default, 4, 7, 8;
+/// the map lights' masks are 0x180, 0x190, 0x900, 0x980).
+const MAP_LAYERS: u32 = 0x1 | 0x10 | 0x80 | 0x100;
+
 /// A `MapListContent` row.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MapInfo {
@@ -175,6 +179,11 @@ pub struct MapWorld {
     pub chunks: Vec<Vec<u8>>,
     pub report: GlbReport,
     pub sun: Option<SceneLight>,
+    /// Point and spot lights of the active light groups (lamps of the
+    /// evening/night settings).
+    pub lights: Vec<SceneLight>,
+    /// The time-of-day sky of the light setting's Azure parameters.
+    pub sky: Option<crysirror_asset::sky::GradientSky>,
     pub settings: RenderSettings6,
     /// The active global Volume's post settings (Beautify + URP Bloom).
     pub post: Post,
@@ -227,6 +236,47 @@ pub fn view(scene: &Scene6, node: usize, lens: Option<&crysirror_unity::managed:
     }
 }
 
+/// The light setting's Azure sky (`_azure`: `_csTimeSystem._timeLine` hour
+/// and `_latitube`; `_DefaultPreset.Scat` `_rayleighColor`/`_mieColor`
+/// gradients over the day) as a gradient sky. The sun elevation follows the
+/// hour angle at the latitude (declination 0); the glow sits toward the
+/// map's key light.
+///
+/// SATD-amanatsu-port: Azure's Rayleigh/Mie scattering integral, clouds,
+/// moon and stars are not evaluated; zenith/horizon radiances are a fit
+/// scaled by the gradient tints.
+pub fn azure_sky(azure: &crysirror_unity::managed::Fields, sun: Option<&SceneLight>) -> crysirror_asset::sky::GradientSky {
+    let time = azure.fields("_csTimeSystem");
+    let hour = time.and_then(|t| t.float("_timeLine")).unwrap_or(12.) as f32;
+    let lat = time.and_then(|t| t.float("_latitube")).unwrap_or(0.) as f32;
+    let elevation = (lat.to_radians().cos() * ((hour - 12.) * 15.).to_radians().cos()).clamp(-1., 1.);
+    let day = ((elevation + 0.1) / 0.25).clamp(0., 1.);
+    let day = day * day * (3. - 2. * day);
+    let scat = azure.fields("_DefaultPreset").and_then(|p| p.fields("Scat"));
+    let tint = |name: &str| scat.and_then(|s| s.fields(name)).and_then(|g| world6::gradient(g, hour / 24.)).unwrap_or([1.; 3]);
+    let (rayleigh, mie) = (tint("_rayleighColor"), tint("_mieColor"));
+    let mix = |night: [f32; 3], dayc: [f32; 3], t: [f32; 3], k: f32| [0, 1, 2].map(|i| night[i] + (dayc[i] * t[i] * k - night[i]) * day);
+    let zenith = mix([0.008, 0.012, 0.03], [0.2, 0.42, 1.0], rayleigh, 1.3);
+    let mut horizon = mix([0.02, 0.025, 0.045], [0.75, 0.82, 0.95], rayleigh, 1.2);
+    // Low sun: the horizon takes the Mie colour (sunset band).
+    let low = (1. - elevation.abs() * 3.).clamp(0., 1.) * day;
+    for i in 0..3 {
+        horizon[i] += mie[i] * low * 0.9;
+    }
+    let sun_dir = sun.map_or([0., elevation, (1. - elevation * elevation).max(0.).sqrt()], |l| {
+        let d = mirror_point(l.direction);
+        [-d[0], -d[1], -d[2]]
+    });
+    crysirror_asset::sky::GradientSky {
+        sun: sun_dir,
+        zenith,
+        horizon,
+        ground: horizon.map(|c| c * 0.3),
+        glow: mie.map(|c| c * 3. * day),
+        glow_power: 12.,
+    }
+}
+
 /// `MapManager.ChangeMap(id, timeZone)`: the map scene with the zone's
 /// light setting applied, as GLB chunks.
 pub fn load(unity: &mut Unity, info: &MapInfo, time_zone: i32) -> Result<MapWorld> {
@@ -235,6 +285,7 @@ pub fn load(unity: &mut Unity, info: &MapInfo, time_zone: i32) -> Result<MapWorl
     let mut scene = unity.scene(&key).with_context(|| format!("map scene {}", info.scene.1))?;
     // Light setting of the time zone.
     let mut fog = None;
+    let mut azure = None;
     let light_name = format!("{}{time_zone:02}", info.light.1);
     match unity.bundle_asset(&format!("lib/{}", info.light.0), &light_name, crysirror_unity::class_id::MONO_BEHAVIOUR)? {
         Some((k, id)) => {
@@ -242,6 +293,7 @@ pub fn load(unity: &mut Unity, info: &MapInfo, time_zone: i32) -> Result<MapWorl
             let off = toggle(&mut scene, f.array("_offObjectNames").unwrap_or(&[]), false);
             let on = toggle(&mut scene, f.array("_onObjectNames").unwrap_or(&[]), true);
             log.push(format!("{light_name}: {on} objects on, {off} off"));
+            azure = f.fields("_azure").cloned();
             if f.int("_fog").unwrap_or(0) != 0 {
                 fog = color3(f.get("_fogColor")).map(|c| (c, f.float("_fogStartDistance").unwrap_or(0.) as f32, f.float("_fogEndDistance").unwrap_or(1000.) as f32));
             }
@@ -272,6 +324,12 @@ pub fn load(unity: &mut Unity, info: &MapInfo, time_zone: i32) -> Result<MapWorl
     // The key light: the brightest enabled directional light that lights
     // the Default layer.
     let sun = world6::scene_lights(&scene).into_iter().filter(|l| l.kind == 1 && l.culling_mask & 1 != 0 && l.intensity > 0.01).max_by(|a, b| a.intensity.total_cmp(&b.intensity));
+    // SATD-amanatsu-port: the settings' baked lightmaps (`_colorLightmaps`,
+    // `_lightmapIndices`) need a second UV set in the renderer; the point
+    // and spot lights of the active groups light the map in real time.
+    // Map renderers sit on the Default, water (4) and map (7, 8) layers.
+    let lights: Vec<SceneLight> = world6::scene_lights(&scene).into_iter().filter(|l| matches!(l.kind, 0 | 2) && l.culling_mask & MAP_LAYERS != 0 && l.intensity > 0.01 && l.range > 0.).collect();
+    log.push(format!("{} local lights", lights.len()));
     let roots = scene.roots.clone();
     // SATD-amanatsu-port: one texture budget for the map; characters and
     // the rest of the session share the player's prepared-asset budget.
@@ -298,10 +356,41 @@ pub fn load(unity: &mut Unity, info: &MapInfo, time_zone: i32) -> Result<MapWorl
         }
         Err(e) => log.push(format!("move points {}: {e:#}", info.point.1)),
     }
-    Ok(MapWorld { info: info.clone(), chunks, report, sun, settings, post, fog, cameras, points: action_points, log })
+    let sky = azure.as_ref().map(|a| azure_sky(a, sun.as_ref()));
+    if let Some(s) = &sky {
+        log.push(format!("Azure sky: zenith {:?} horizon {:?}", s.zenith, s.horizon));
+    }
+    Ok(MapWorld { info: info.clone(), chunks, report, sun, lights, sky, settings, post, fog, cameras, points: action_points, log })
 }
 
 impl MapWorld {
+    /// Engine entity specs of the local lights (URP: candela-like intensity
+    /// with inverse-square falloff inside `range`; spot cones along the
+    /// light's forward, the engine's local −Z).
+    pub fn light_entities(&self, first_id: u32) -> Vec<Json> {
+        self.lights
+            .iter()
+            .enumerate()
+            .map(|(i, l)| {
+                let pos = mirror_point(l.position);
+                let dir = Vec3::from_array(mirror_point(l.direction)).normalize_or_zero();
+                let q = glam::Quat::from_rotation_arc(Vec3::NEG_Z, if dir == Vec3::ZERO { Vec3::NEG_Z } else { dir });
+                let (x, y, z) = q.to_euler(glam::EulerRot::XYZ);
+                let shape = if l.kind == 0 {
+                    json!({"kind": "spot", "inner_degrees": (l.inner_spot_angle * 0.5).clamp(0., 89.), "outer_degrees": (l.spot_angle * 0.5).clamp(0.5, 89.)})
+                } else {
+                    json!({"kind": "point"})
+                };
+                json!({"op": "spawn", "entity": {
+                    "id": first_id + i as u32,
+                    "name": format!("light{i}"),
+                    "transform": {"translation": pos, "rotation_degrees": [x.to_degrees(), y.to_degrees(), z.to_degrees()], "scale": [1.0, 1.0, 1.0]},
+                    "light": {"shape": shape, "color": l.color.map(|c| c.clamp(0., 4.)), "intensity": l.intensity.clamp(0., 1e7), "units": "candela", "range": l.range.clamp(0.01, 2000.), "shadows": false},
+                }})
+            })
+            .collect()
+    }
+
     /// The live Cinemachine camera: the highest priority (the first of
     /// equal priorities).
     pub fn camera(&self) -> Option<&View> {

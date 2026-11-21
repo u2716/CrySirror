@@ -1312,3 +1312,21 @@ fn prefab_component() {
         }
     }
 }
+
+/// Prints a named MonoBehaviour asset of a bundle (`AMANATSU_BUNDLE`,
+/// `AMANATSU_ASSET`).
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn print_asset() {
+    let mut u = unity();
+    let bundle = std::env::var("AMANATSU_BUNDLE").unwrap_or_else(|_| {
+        // Default: map 0's light setting bundle.
+        let infos = crysirror_amanatsu::map::map_infos(&mut u).unwrap();
+        println!("map 0 light {:?}", infos[0].light);
+        format!("lib/{}", infos[0].light.0)
+    });
+    let (k, id) = u.bundle_asset(&bundle, &std::env::var("AMANATSU_ASSET").unwrap(), 114).unwrap().expect("asset");
+    for (name, v) in u.decode(&k, id).unwrap().0 {
+        println!("  {name} = {}", format!("{v:?}").chars().take(std::env::var("AMANATSU_WIDTH").ok().and_then(|w| w.parse().ok()).unwrap_or(400)).collect::<String>());
+    }
+}

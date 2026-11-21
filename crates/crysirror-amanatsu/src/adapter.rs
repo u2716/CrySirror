@@ -88,6 +88,10 @@ pub struct Game {
     pub pending_map: Option<(i32, i32)>,
     /// World entities of the loaded map and their model assets.
     map_entities: Vec<(u32, VfsPath)>,
+    /// Light entities of the loaded map.
+    map_lights: Vec<u32>,
+    /// The uploaded sky of the map's time zone.
+    sky: Option<VfsPath>,
     next_model: u32,
     pub view: Option<map::View>,
     /// The map's move-point cameras and the current/default one
@@ -190,6 +194,10 @@ impl Game {
             self.world.push(json!({"op": "despawn", "id": entity}));
             self.released.push(path);
         }
+        for id in std::mem::take(&mut self.map_lights) {
+            self.world.push(json!({"op": "despawn", "id": id}));
+        }
+        self.hud = None;
         self.view = None;
         self.spots.clear();
     }
@@ -202,7 +210,24 @@ impl Game {
         let t = std::time::Instant::now();
         let world = map::load(&mut self.unity, &info, time_zone)?;
         self.spawn_models(host, client, &info.scene.1, &world.chunks)?;
-        self.world.push(world.environment());
+        let mut env = world.environment();
+        if let Some(sky) = &world.sky {
+            let img = sky.render(512, 256)?;
+            self.next_model += 1;
+            let path = host.upload_hdr(client, 0x6000_0000 + self.next_model, img.width, img.height, &img.rgb)?;
+            env["environment"]["hdr"] = json!(path.relative());
+            // The previous sky is no longer the environment: release it.
+            if let Some(old) = self.sky.replace(path) {
+                host.release_model(client, &old)?;
+            }
+        }
+        self.world.push(env);
+        for spawn in world.light_entities(0x4000) {
+            if let Some(id) = spawn["entity"]["id"].as_u64() {
+                self.map_lights.push(id as u32);
+            }
+            self.world.push(spawn);
+        }
         // Registered heroines at the map's standing action points
         // (SATD-amanatsu-port: `ActionPoint` choice, their `_animIDList`
         // motions and NavMesh wandering are not ported).
@@ -526,6 +551,9 @@ impl Game {
     }
 
     fn release_map(&mut self, host: &mut dyn HostServices, client: ClientId) -> Result<()> {
+        for id in std::mem::take(&mut self.map_lights) {
+            self.world.push(json!({"op": "despawn", "id": id}));
+        }
         for (entity, path) in std::mem::take(&mut self.map_entities) {
             self.world.push(json!({"op": "despawn", "id": entity}));
             self.released.push(path);
@@ -636,6 +664,8 @@ impl AmanatsuVm {
             maps: Vec::new(),
             pending_map: None,
             map_entities: Vec::new(),
+            map_lights: Vec::new(),
+            sky: None,
             next_model: 0,
             view: None,
             cameras: Vec::new(),

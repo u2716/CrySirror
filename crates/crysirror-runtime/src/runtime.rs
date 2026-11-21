@@ -1876,12 +1876,28 @@ impl HostServices for SharedHost {
         self.generated.push((client, path.clone(), glb.to_vec()));
         VfsPath::new(crysirror_core::path::Mount::Asset, &path)
     }
+    fn upload_hdr(&mut self, client: ClientId, id: u32, width: u32, height: u32, rgb: &[[f32; 3]]) -> crysirror_core::Result<VfsPath> {
+        if !self.clients.contains(&client) {
+            return Err(Error::NotFound);
+        }
+        if width != height.saturating_mul(2) || !(2..=4096).contains(&width) || rgb.len() != (width as usize) * (height as usize) || rgb.iter().flatten().any(|v| !v.is_finite() || *v < 0.) {
+            return Err(Error::Invalid("environment upload is not a finite 2:1 equirectangular image up to 4096 wide"));
+        }
+        let img = crysirror_asset::pbr::HdrImage { width, height, rgb: rgb.to_vec() };
+        let bytes = crysirror_asset::sky::encode_hdr(&img).map_err(|e| Error::Io(e.to_string()))?;
+        let path = format!("__crysirror/{id}-{}.hdr", blake3::hash(&bytes).to_hex());
+        if self.generated.iter().map(|(_, _, b)| b.len()).sum::<usize>() + bytes.len() > 128 * 1024 * 1024 {
+            return Err(Error::Limit("environment upload batch"));
+        }
+        self.generated.push((client, path.clone(), bytes));
+        VfsPath::new(crysirror_core::path::Mount::Asset, &path)
+    }
     fn release_model(&mut self, client: ClientId, path: &VfsPath) -> crysirror_core::Result<()> {
         if !self.clients.contains(&client) {
             return Err(Error::NotFound);
         }
         let path = path.relative();
-        if !path.starts_with("__crysirror/") || !path.ends_with(".glb") {
+        if !path.starts_with("__crysirror/") || !(path.ends_with(".glb") || path.ends_with(".hdr")) {
             return Err(Error::Invalid("model release outside generated models"));
         }
         // Not yet published this tick: drop the pending upload as well.
@@ -2125,6 +2141,9 @@ impl HostServices for RestoreResources<'_> {
     }
     fn release_model(&mut self, c: ClientId, p: &VfsPath) -> crysirror_core::Result<()> {
         self.source.release_model(c, p)
+    }
+    fn upload_hdr(&mut self, c: ClientId, id: u32, w: u32, h: u32, rgb: &[[f32; 3]]) -> crysirror_core::Result<VfsPath> {
+        self.source.upload_hdr(c, id, w, h, rgb)
     }
     fn upload_encoded_image(
         &mut self,
