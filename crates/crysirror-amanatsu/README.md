@@ -56,8 +56,11 @@ distributed.
   parts at `HairParent`, the first coordinate's clothes rebound onto the body
   skeleton), base-body variants hidden, materials: skin main textures tinted
   by the card skin colour, clothes main textures through their colour masks,
-  hair colours, iris/lash/brow layers from the `mt_*` lists. Shown in
-  `CustomScene` from the scene's main camera.
+  hair colours/outlines, iris/lash/brow layers from the `mt_*` lists, cel
+  shading with outlines. Posed by the motion controller's default state
+  (`Pose_D_00_Loop`, the height blend tree's nearest clip) as a looping glTF
+  animation. Shown in `CustomScene` from the scene's main camera over the
+  default background image.
 - `adapter.rs`: the session — boot, scene loads after the fade-in, frame
   layout and layer submission for the build scene and instantiated UI
   prefabs (each its own `Ui` slot), world entities/environment/camera of the

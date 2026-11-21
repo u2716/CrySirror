@@ -75,6 +75,10 @@ and `ResourceManager` have fixed readers).
   (per renderer file) for runtime-composed textures, colours, alpha and
   hiding. Lightmaps, reflection probes, terrain, particle systems, blend
   shapes and shader-graph effects are not converted.
+  Generic `AnimationClip` transform curves become glTF animations
+  (`clip_tracks` + `scene_glb_animated`); a hook toon ramp/outline selects the
+  engine toon model; `gltf::image_plane_glb` places a camera-space image
+  (canvas backgrounds) in the 3D view.
 - `msgpack.rs`: bounded MessagePack decoding (MessagePack-CSharp payloads).
 - `animator.rs`: Mecanim without Unity — `AnimationClip` muscle clips
   (streamed cubic segments, dense samples, constants) with their generic

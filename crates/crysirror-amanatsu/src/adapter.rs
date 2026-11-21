@@ -28,6 +28,8 @@ pub const WIDTH: f32 = 1920.;
 pub const HEIGHT: f32 = 1080.;
 /// The first default heroine card of the installation.
 const DEFAULT_FEMALE_CARD: &str = "DefaultData/0/chara/female/AL_F_00.png";
+/// The first custom-scene background sample of the installation.
+const DEFAULT_CUSTOM_BG: &str = "DefaultData/common/bg/al_mapsample00.png";
 /// Layer id of the scene fade canvas, above every uGUI layer.
 const FADE_LAYER: u32 = 0x0F00;
 
@@ -218,9 +220,27 @@ impl Game {
         let human = crate::chara::Human::from_card(&mut self.unity, &lists, &card, true)?;
         self.log.extend(human.log.iter().cloned());
         let options = crysirror_unity::world6::GlbOptions { max_texture: 1024, texture_budget: 64 << 20 };
+        // `HumanData` default action: the controller's default state.
+        const IDLE: &str = "Pose_D_00_Loop";
+        let clips = match human.state_tracks(&mut self.unity, IDLE) {
+            Ok(t) => {
+                self.log.push(format!("{IDLE}: {} tracks ({} bindings unbound)", t.tracks.len(), t.unbound));
+                vec![t]
+            }
+            Err(e) => {
+                self.log.push(format!("{IDLE}: {e:#}"));
+                Vec::new()
+            }
+        };
         let mut assets = crate::chara::CharaAssets { unity: &mut self.unity, human: &human };
-        let (chunks, report) = crysirror_unity::world6::scene_glb(&human.scene, &human.key, &[0], &mut assets, &options, "CrySirror AmanatsuLocation character importer")?;
+        let (chunks, report) = crysirror_unity::world6::scene_glb_animated(&human.scene, &human.key, &[0], &mut assets, &options, "CrySirror AmanatsuLocation character importer", &clips)?;
+        let first = self.map_entities.len();
         self.spawn_models(host, client, "chara", &chunks)?;
+        if !clips.is_empty() {
+            for (entity, _) in self.map_entities[first..].to_vec() {
+                self.world.push(json!({"op": "set_animation", "id": entity, "animation": {"layers": [{"clip": IDLE, "looping": true}]}}));
+            }
+        }
         self.log.push(format!("character: {} chunks, {} renderers ({} skipped), {} materials", chunks.len(), report.renderers, report.skipped_renderers, report.materials));
         self.log.extend(report.errors.iter().take(8).cloned());
         // The main camera's authored transform frames the character
@@ -234,16 +254,44 @@ impl Game {
             self.world.push(v.command());
             self.view = Some(v);
         }
-        // Screen-space camera canvases behind the 3D view (background image)
-        // cannot be drawn beneath the world yet.
+        // `Cvs_BackGround` (screen space – camera, behind the character)
+        // shows the background image: drawn as an image plane filling the
+        // view far behind the character. SATD-amanatsu-port: the default
+        // background is the first `DefaultData/common/bg` sample, not the
+        // custom scene's saved choice.
+        if let (Some(v), Ok(bytes)) = (self.view.clone(), self.unity.read_all(DEFAULT_CUSTOM_BG)) {
+            match self.background_plane(&v, bytes, 80.) {
+                Ok(glb) => self.spawn_models(host, client, "background", &[glb])?,
+                Err(e) => self.log.push(format!("custom background: {e:#}")),
+            }
+        }
+        // The canvases themselves are not drawn over the world.
         // `SaveFrame` canvases belong to the card-capture cameras.
         for path in ["CustomScene/UI/Cvs_BackGround", "CustomScene/UI/Root/Cvs_BackGround_Cover", "CustomScene/UI/Root/SaveFrame"] {
             if let Some(n) = self.level.find(path) {
                 self.level.set_active(n, false);
             }
         }
-        self.world.push(json!({"op": "set_environment", "environment": {"show_sky": false, "intensity": 1.0, "bloom": 0.0, "tonemap": "none", "ambient_occlusion": 0.0, "ambient": [0.45, 0.45, 0.47], "sun": {"direction": [0.3, -0.5, 0.8], "color": [1.0, 1.0, 1.0], "intensity": 1.2, "shadow_strength": 0.3}}}));
+        self.world.push(json!({"op": "set_environment", "environment": {"show_sky": false, "intensity": 1.0, "bloom": 0.0, "tonemap": "none", "ambient_occlusion": 0.0, "ambient": [0.15, 0.15, 0.16], "sun": {"direction": [0.3, -0.5, -0.8], "color": [1.0, 1.0, 1.0], "intensity": 0.7, "shadow_strength": 0.3}}}));
         Ok(())
+    }
+
+    /// An image filling the view `v` at `distance` (aspect preserved by
+    /// covering, as `RawImage` with an aspect fitter would).
+    fn background_plane(&self, v: &map::View, png: Vec<u8>, distance: f32) -> Result<Vec<u8>> {
+        use glam::Vec3;
+        let img = crysirror_image::decode_standard(&png)?;
+        let eye = Vec3::from_array(v.eye);
+        let fwd = (Vec3::from_array(v.target) - eye).normalize();
+        let right = fwd.cross(Vec3::from_array(v.up)).normalize();
+        let up = right.cross(fwd);
+        let h = 2. * distance * (v.fov.to_radians() / 2.).tan() * 1.02;
+        let w = h * WIDTH / HEIGHT;
+        let aspect = img.width as f32 / img.height.max(1) as f32;
+        let (w, h) = if aspect > w / h { (h * aspect, h) } else { (w, w / aspect) };
+        let c = eye + fwd * distance;
+        let corner = |x: f32, y: f32| (c + right * (x * w / 2.) + up * (y * h / 2.)).to_array();
+        crysirror_unity::gltf::image_plane_glb("CrySirror AmanatsuLocation background", png, [corner(-1., 1.), corner(1., 1.), corner(1., -1.), corner(-1., -1.)])
     }
 
     fn release_map(&mut self, host: &mut dyn HostServices, client: ClientId) -> Result<()> {

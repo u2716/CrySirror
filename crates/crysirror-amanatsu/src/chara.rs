@@ -125,11 +125,16 @@ struct PartLook {
     /// Card colours (sRGB) for the mask channels R, G, B (and the tint
     /// without a mask).
     colors: Vec<[f32; 4]>,
+    /// Card outline colour (hair).
+    outline: Option<[f32; 4]>,
 }
 
 pub struct Human {
     /// Body file key (the scene's primary file).
     pub key: String,
+    pub female: bool,
+    /// `shapeValueBody[0]` (height, 0..1).
+    pub height: f32,
     pub scene: Scene6,
     /// Part looks by the file key of their prefab.
     looks: HashMap<String, PartLook>,
@@ -212,8 +217,9 @@ impl Human {
             let Some((ab, data)) = row.asset(key::MAIN_AB, key::MAIN_DATA) else { continue };
             match Level::prefab(unity, &ab, &data) {
                 Ok(p) => {
-                    let c = part.get("colorInfo").map(Value::as_array).and_then(|a| a.first()).and_then(|c| color(c.get("baseColor")));
-                    looks.insert(p.key.clone(), PartLook { shaders: &["AL/hair"], colors: c.into_iter().collect(), ..Default::default() });
+                    let c = color(part.get("baseColor"));
+                    let outline = color(part.get("outlineColor"));
+                    looks.insert(p.key.clone(), PartLook { shaders: &["AL/hair"], colors: c.into_iter().collect(), outline, ..Default::default() });
                     let r = scene.graft(&p.scene, &p.key, hair_parent);
                     scene.alias_bones(r, head_root);
                     log.push(format!("{list} {id}: {data}"));
@@ -250,7 +256,33 @@ impl Human {
         for n in scene.nodes.iter_mut().filter(|n| n.name.ends_with("_shadow")) {
             n.active = false;
         }
-        Ok(Self { key: body.key, scene, looks, log })
+        let height = body_data.get("shapeValueBody").map(Value::as_array).and_then(|a| a.first()).and_then(Value::as_f32).unwrap_or(0.5);
+        Ok(Self { key: body.key, female, height, scene, looks, log })
+    }
+}
+
+/// Animator controllers of the action motions (`ani/mot/<sex>`).
+pub fn motion_controller(female: bool) -> (String, &'static str) {
+    (format!("lib/ani/mot/{}/000_00.unity3d", u8::from(female)), if female { "f_00" } else { "m_00" })
+}
+
+impl Human {
+    /// A controller state's motion as glTF tracks: the state's height
+    /// blend tree (`_S`/`_M`/`_L` clips) at the card's height, nearest
+    /// child (SATD-amanatsu-port: no blending between the three).
+    pub fn state_tracks(&self, unity: &mut Unity, state: &str) -> Result<crysirror_unity::world6::ClipTracks> {
+        use crysirror_unity::animator::{Clip, Controller};
+        let (bundle, name) = motion_controller(self.female);
+        let (k, id) = unity.bundle_asset(&bundle, name, 91)?.with_context(|| format!("controller {name}"))?;
+        let ctl = Controller::decode(&unity.decode(&k, id)?)?;
+        let si = ctl.find_state(0, state).with_context(|| format!("state {state}"))?;
+        let first = ctl.layers[0].states[si].clip.context("state motion")?;
+        let pick = if self.height < 1. / 3. { 0 } else if self.height < 2. / 3. { 1 } else { 2 };
+        let cp = *ctl.clips.get(first + pick).or(ctl.clips.get(first)).context("state clip")?;
+        let (f, cid) = unity.target(&k, cp)?;
+        let clip = Clip::decode(&unity.decode(&f, cid)?)?;
+        let root = 0;
+        Ok(crysirror_unity::world6::clip_tracks(&self.scene, root, &clip, state, 30.))
     }
 }
 
@@ -260,11 +292,6 @@ impl Human {
 pub struct CharaAssets<'a> {
     pub unity: &'a mut Unity,
     pub human: &'a Human,
-}
-
-fn srgb(c: f32) -> f32 {
-    let c = c.clamp(0., 1.);
-    if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
 }
 
 impl CharaAssets<'_> {
@@ -352,6 +379,9 @@ impl SceneAssets for CharaAssets<'_> {
         if !look.shaders.iter().any(|s| shader.starts_with(s)) {
             return Ok(None);
         }
+        // AL character shaders are cel shaded with outlines.
+        let outline = look.outline.unwrap_or([0.25, 0.18, 0.18, 1.]);
+        o.toon = Some((toon_lookup(shader), if shader.starts_with("AL/hair") || shader.starts_with("AL/cloth") || shader.starts_with("AL/skin") { 0.0015 } else { 0. }, outline));
         if let Some(main) = &look.main {
             if let Some(mut img) = self.texture_named(main)? {
                 let mask = match &look.mask {
@@ -367,10 +397,30 @@ impl SceneAssets for CharaAssets<'_> {
                 o.base_color = Some([1.; 4]);
             }
         } else if let Some(c) = look.colors.first() {
-            o.base_color = Some([srgb(c[0]), srgb(c[1]), srgb(c[2]), 1.]);
+            // Toon shading works on display-referred colours.
+            o.base_color = Some([c[0], c[1], c[2], 1.]);
         }
         Ok(Some(o))
     }
+}
+
+/// Two-tone ramp of the ILLGAMES toon shaders: a soft terminator around
+/// n·l = 0 (u = 0.5) between a warm shadow tone and full colour.
+pub fn toon_lookup(shader: &str) -> ImageSurface {
+    let shadow: [f32; 3] = if shader.starts_with("AL/skin") { [0.86, 0.74, 0.74] } else { [0.74, 0.72, 0.78] };
+    let mut rgba = vec![0u8; 256 * 3 * 4];
+    for x in 0..256 {
+        let u = x as f32 / 255.;
+        let t = ((u - 0.46) / 0.08).clamp(0., 1.);
+        for c in 0..3 {
+            rgba[x * 4 + c] = ((shadow[c] + (1. - shadow[c]) * t) * 255.).round() as u8;
+        }
+        rgba[x * 4 + 3] = 255;
+        // Row 1: shadow-layer rate (no shadow texture), row 2: unused.
+        rgba[(256 + x) * 4..(256 + x) * 4 + 4].copy_from_slice(&[255, 255, 255, 255]);
+        rgba[(512 + x) * 4 + 3] = 255;
+    }
+    ImageSurface { width: 256, height: 3, rgba }
 }
 
 #[cfg(test)]

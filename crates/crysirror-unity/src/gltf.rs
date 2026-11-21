@@ -218,6 +218,24 @@ impl GlbBuilder {
         Ok(Some(index))
     }
 
+    /// A named animation of Unity-space transform tracks on GLB nodes.
+    pub fn animation(&mut self, name: &str, tracks: Vec<(usize, Vec<f32>, crate::world6::TrackValues)>) {
+        let tracks = tracks
+            .into_iter()
+            .map(|(node, times, values)| glb::Track {
+                node,
+                times,
+                values: match values {
+                    crate::world6::TrackValues::Translation(v) => glb::Channel::Translation(v.into_iter().map(mirror_point).collect()),
+                    crate::world6::TrackValues::Rotation(v) => glb::Channel::Rotation(v.into_iter().map(mirror_quat).collect()),
+                    crate::world6::TrackValues::Scale(v) => glb::Channel::Scale(v),
+                },
+                tangents: None,
+            })
+            .collect();
+        self.doc.animations.push(glb::Animation { name: name.into(), tracks });
+    }
+
     pub fn set_mesh(&mut self, node: usize, mesh: usize) {
         self.doc.nodes[node].mesh = Some(mesh);
     }
@@ -238,4 +256,26 @@ impl GlbBuilder {
     pub fn finish(self) -> Result<Vec<u8>> {
         self.doc.to_glb()
     }
+}
+
+/// One unlit, two-sided textured quad with corners (top-left, top-right,
+/// bottom-right, bottom-left) in engine space: a screen-space camera canvas
+/// (e.g. a background image) placed in the 3D view.
+pub fn image_plane_glb(generator: &str, png: Vec<u8>, corners: [[f32; 3]; 4]) -> Result<Vec<u8>> {
+    let mut doc = glb::Document { generator: generator.into(), ..Default::default() };
+    doc.images.push((png, "image/png"));
+    let engine = PbrMaterial { base_color_texture: Some(0), unlit: true, double_sided: true, ..Default::default() };
+    doc.materials.push(glb::Material { name: "image".into(), base_color_texture: Some(0), double_sided: true, engine: Some(engine), ..Default::default() });
+    let [a, b, c, d] = corners;
+    let n = {
+        let (u, v) = ([b[0] - a[0], b[1] - a[1], b[2] - a[2]], [d[0] - a[0], d[1] - a[1], d[2] - a[2]]);
+        let n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+        let l = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt().max(1e-6);
+        n.map(|x| x / l)
+    };
+    let p = glb::Primitive { positions: vec![a, b, c, d], normals: vec![n; 4], uvs: vec![[0., 0.], [1., 0.], [1., 1.], [0., 1.]], indices: vec![0, 3, 2, 0, 2, 1], material: Some(0), ..Default::default() };
+    doc.meshes.push(("image".into(), vec![p]));
+    doc.nodes.push(glb::Node { mesh: Some(0), ..glb::Node::named("image") });
+    doc.roots.push(0);
+    doc.to_glb()
 }

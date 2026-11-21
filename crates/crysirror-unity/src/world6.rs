@@ -310,6 +310,10 @@ pub struct MaterialOverride {
     /// Do not draw the material.
     pub hidden: bool,
     pub alpha_mode: Option<AlphaMode>,
+    /// Cel shading instead of PBR: the engine toon model with this
+    /// lookup texture (256×3, see `crysirror_scene::material::ToonShading`)
+    /// and inverted-hull outline (clip-space width, colour).
+    pub toon: Option<(ImageSurface, f32, [f32; 4])>,
 }
 
 #[derive(Clone, Debug)]
@@ -495,6 +499,87 @@ fn renderer_enabled(f: &Fields) -> bool {
 /// chunk carries the ancestor transforms of what it draws and is placed at
 /// the world origin. Empty when nothing is drawn.
 pub fn scene_glb(scene: &Scene6, file: &str, roots: &[usize], assets: &mut dyn SceneAssets, options: &GlbOptions, generator: &str) -> Result<(Vec<Vec<u8>>, GlbReport)> {
+    scene_glb_animated(scene, file, roots, assets, options, generator, &[])
+}
+
+/// Unity-space values of a transform track.
+#[derive(Clone, Debug, PartialEq)]
+pub enum TrackValues {
+    Translation(Vec<[f32; 3]>),
+    Rotation(Vec<[f32; 4]>),
+    Scale(Vec<[f32; 3]>),
+}
+
+/// A clip's transform curves sampled per scene node.
+#[derive(Clone, Debug, Default)]
+pub struct ClipTracks {
+    pub name: String,
+    pub tracks: Vec<(usize, Vec<f32>, TrackValues)>,
+    /// Bindings without a node under the root, or not transform curves.
+    pub unbound: usize,
+}
+
+/// Sample the generic transform bindings of `clip` (attributes 1 position,
+/// 2 rotation, 3 scale) at `fps` over its duration, bound by path hash to
+/// nodes under `root`.
+pub fn clip_tracks(scene: &Scene6, root: usize, clip: &crate::animator::Clip, name: &str, fps: f32) -> ClipTracks {
+    let mut paths: HashMap<u32, usize> = HashMap::new();
+    paths.insert(0, root);
+    let mut stack: Vec<(usize, String)> = scene.nodes[root].children.iter().map(|&c| (c, scene.nodes[c].name.clone())).collect();
+    while let Some((n, path)) = stack.pop() {
+        paths.entry(crate::animator::crc32(&path)).or_insert(n);
+        for &c in &scene.nodes[n].children {
+            stack.push((c, format!("{path}/{}", scene.nodes[c].name)));
+        }
+    }
+    let d = clip.duration();
+    let frames = ((d * fps).ceil() as usize).max(1);
+    let times: Vec<f32> = (0..=frames).map(|i| (i as f32 / frames as f32) * d).collect();
+    let samples: Vec<Vec<f32>> = times.iter().map(|t| clip.sample(*t)).collect();
+    let mut out = ClipTracks { name: name.to_owned(), ..Default::default() };
+    let mut at = 0;
+    for b in &clip.bindings {
+        let base = at;
+        at += b.curves;
+        let node = paths.get(&b.path).copied();
+        let (Some(node), true) = (node, b.class_id == crate::class_id::TRANSFORM) else {
+            out.unbound += 1;
+            continue;
+        };
+        let v = |s: &Vec<f32>, k: usize| s.get(base + k).copied().unwrap_or(0.);
+        let values = match b.attribute {
+            1 => TrackValues::Translation(samples.iter().map(|s| [v(s, 0), v(s, 1), v(s, 2)]).collect()),
+            2 => {
+                let mut prev = [0., 0., 0., 1.];
+                TrackValues::Rotation(
+                    samples
+                        .iter()
+                        .map(|s| {
+                            let q = Quat::from_xyzw(v(s, 0), v(s, 1), v(s, 2), v(s, 3)).normalize();
+                            let mut q = q.to_array();
+                            // Keep consecutive keys in one hemisphere.
+                            if q.iter().zip(&prev).map(|(a, b)| a * b).sum::<f32>() < 0. {
+                                q = q.map(|x| -x);
+                            }
+                            prev = q;
+                            q
+                        })
+                        .collect(),
+                )
+            }
+            3 => TrackValues::Scale(samples.iter().map(|s| [v(s, 0), v(s, 1), v(s, 2)]).collect()),
+            _ => {
+                out.unbound += 1;
+                continue;
+            }
+        };
+        out.tracks.push((node, times.clone(), values));
+    }
+    out
+}
+
+/// [`scene_glb`] with clips as glTF animations on the chunks' nodes.
+pub fn scene_glb_animated(scene: &Scene6, file: &str, roots: &[usize], assets: &mut dyn SceneAssets, options: &GlbOptions, generator: &str, clips: &[ClipTracks]) -> Result<(Vec<Vec<u8>>, GlbReport)> {
     let mut report = GlbReport::default();
     // LOD groups: only LOD 0 renderers are drawn (no distance switching).
     let mut lod_hidden: HashSet<i64> = HashSet::new();
@@ -582,7 +667,7 @@ pub fn scene_glb(scene: &Scene6, file: &str, roots: &[usize], assets: &mut dyn S
             let full = std::mem::replace(&mut chunk, Chunk::new(generator));
             report.materials += full.materials.values().filter(|m| m.is_some()).count();
             report.textures += full.images.values().filter(|i| i.is_some()).count();
-            chunks.push(full.glb.finish()?);
+            chunks.push(finish_chunk(full, clips)?);
         }
         let drawn = (|| -> Result<bool> {
             let nf = scene.file_of(node, file);
@@ -657,9 +742,20 @@ pub fn scene_glb(scene: &Scene6, file: &str, roots: &[usize], assets: &mut dyn S
     report.materials += chunk.materials.values().filter(|m| m.is_some()).count();
     report.textures += chunk.images.values().filter(|i| i.is_some()).count();
     if !chunk.glb.is_empty() {
-        chunks.push(chunk.glb.finish()?);
+        chunks.push(finish_chunk(chunk, clips)?);
     }
     Ok((chunks, report))
+}
+
+/// Add the clips' tracks of nodes present in the chunk, then encode.
+fn finish_chunk(mut chunk: Chunk, clips: &[ClipTracks]) -> Result<Vec<u8>> {
+    for c in clips {
+        let tracks: Vec<_> = c.tracks.iter().filter_map(|(n, t, v)| Some((*chunk.nodes.get(n)?, t.clone(), v.clone()))).collect();
+        if !tracks.is_empty() {
+            chunk.glb.animation(&c.name, tracks);
+        }
+    }
+    chunk.glb.finish()
 }
 
 fn material(assets: &mut dyn SceneAssets, chunk: &mut Chunk, report: &mut GlbReport, file: &str, p: PPtr, sides: &HashMap<(String, i64, TexUse), u32>) -> Result<Option<usize>> {
@@ -721,6 +817,17 @@ fn material(assets: &mut dyn SceneAssets, chunk: &mut Chunk, report: &mut GlbRep
         if let Some(a) = o.alpha_mode {
             engine.alpha_mode = a;
             engine.double_sided |= a.transparent();
+        }
+        if let Some((lut, width, color)) = o.toon {
+            let png = crysirror_image::encode_png(&lut)?;
+            let key = format!("toon-lut:{:x}", png.iter().fold(0u64, |h, b| h.wrapping_mul(31).wrapping_add(u64::from(*b))));
+            let lookup = chunk.glb.image(&key, || Ok((png, "image/png")))?;
+            // Toon materials use the lookup/shadow/highlight slots instead.
+            engine.metallic_roughness_texture = None;
+            engine.occlusion_texture = None;
+            engine.specular_texture = None;
+            engine.effect = None;
+            engine.toon = Some(crysirror_scene::material::ToonShading { lookup_texture: Some(lookup), outline_width: width.clamp(0., 0.1), outline_color: color, ..Default::default() });
         }
     }
     let e = report.shaders.entry(m.shader.clone()).or_insert_with(|| (format!("{support:?}"), 0));

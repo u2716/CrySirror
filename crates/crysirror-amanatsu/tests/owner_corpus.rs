@@ -1154,3 +1154,35 @@ fn chara_glb() {
         }
     }
 }
+
+/// The female animator controller (`ani/mot/1`): layers/states and the
+/// binding classes of the first clips, paths resolved on the body prefab.
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn chara_controller() {
+    use crysirror_unity::animator::{self, Clip, Controller};
+    let mut u = unity();
+    let (k, id) = u.bundle_asset("lib/ani/mot/1/000_00.unity3d", "f_00", 91).unwrap().unwrap();
+    let ctl = Controller::decode(&u.decode(&k, id).unwrap()).unwrap();
+    println!("layers {} clips {}", ctl.layers.len(), ctl.clips.len());
+    for (li, l) in ctl.layers.iter().enumerate() {
+        println!("layer {li}: {} states, default {:?}", l.states.len(), l.default_state);
+        for s in l.states.iter().take(std::env::var("AMANATSU_COUNT").ok().and_then(|c| c.parse().ok()).unwrap_or(10)) {
+            println!("  {} clip {:?}", ctl.names.get(&s.name_id).cloned().unwrap_or_default(), s.clip);
+        }
+    }
+    let body = crysirror_amanatsu::level::Level::prefab(&mut u, "lib/chara/body/body_00.unity3d", "p_cf_al_body_00").unwrap();
+    for cp in ctl.clips.iter().take(2) {
+        let Ok((f, cid)) = u.target(&k, *cp) else { continue };
+        let clip = Clip::decode(&u.decode(&f, cid).unwrap()).unwrap();
+        let mut classes = std::collections::BTreeMap::<(i32, u32), usize>::new();
+        let mut resolved = 0;
+        for b in &clip.bindings {
+            *classes.entry((b.class_id, b.attribute)).or_default() += 1;
+            if animator::resolve_path(&body.scene, 0, b.path).is_some() {
+                resolved += 1;
+            }
+        }
+        println!("clip {} {:.2}s loop {} bindings {} resolved {} classes {:?}", clip.name, clip.duration(), clip.looping, clip.bindings.len(), resolved, classes);
+    }
+}
