@@ -10,6 +10,7 @@ pub mod adv;
 pub mod card;
 pub mod chara;
 pub mod charaselect;
+pub mod hud;
 pub mod level;
 pub mod map;
 pub mod scenes;

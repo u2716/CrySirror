@@ -6,9 +6,13 @@
 `crysirror-unity` (shared) and game semantics in this crate.
 
 **Remaining work.** `ActionMap` beyond the new-game map select,
-`ChangeMap` and heroine entry/standing placement (tutorial
-`ConfirmDialog`, `ActionMapUI` HUD and its camera position switching, time
-zones and `Skip`, `ActionPoint` choice and `_animIDList` motions, NavMesh
+`ChangeMap`, heroine entry/standing placement, the `ActionMapUI` HUD
+(cameras, 2D map, `Skip`) and time-zone advance (tutorial
+`ConfirmDialog`, HUD config/help and button fade animations, night events
+(`GetNightEventHeroine`/`NightEvent`), the auto save after a zone change,
+BGM per zone, `MapManager.GetForPlacementTable` heroine placement per zone,
+`MapSelectUI` next-zone reloading a map behind it, the Azure sky time of
+day and point lights of the evening/night settings, `ActionPoint` choice and `_animIDList` motions, NavMesh
 movement, `CharaSelectUI` sources/sorting/pairs/release, scroll views and
 `RectMask2D` clipping, `CommandScene` (the command menu that chooses
 scenarios, parameters, favourability; talks now play `e1-approach` and one
@@ -84,3 +88,4 @@ H scenes and save/load, recorded in a validation note.
 | 2026-11-21 | Physics and lighting: shared spring bones (`crysirror_asset::spring`, GLB `crysirror_springs`, renderer pose pass) fed by MagicaCloth BoneCloth; shared `Environment.grading`; map global Volume (Beautify tonemap/exposure/saturation/contrast/temperature, URP Bloom). | Listed above. |
 | 2026-11-22 | Body physics: the bone prefab `p_cf_al_body_bone_00` grafted onto the skeleton; its 14 MagicaCloth BoneSprings (bust, hip, upper arm, thigh, belly, waist) tuned from `ShakeCorrectData` by the card softness values and bust weight (`HumanBody.SetSpringSetting`/`ChangeBustGravity`); shared capsule colliders and distance limits in `crysirror_asset::spring`; skin shadow colour from the card. | Listed above. |
 | 2026-11-22 | Clothes dressed state (`Table.sKeyNameTable` DEF/NUGE objects, `CmpClothes.objOpt01/02` by `hideOpt`); eyes: card pupil (`mt_eyepipil`) and highlights (`mt_eye_hi_up`) per eye with `CmpEyeLookMaterial` ranges. | Listed above. |
+| 2026-11-22 | `ActionMapUI` HUD (map name, move-point cameras prev/next/reset, 2D map back to `MapSelectUI`, `Skip` → `EventManager.TimeZone`: `Cycle.IncrementTimeZone` mod 4 and the map reloaded in the zone's light setting/Volume); `MapSelectUI._btnNextTimeZone`; `ImageSprite.Set` for the zone icons and map illustrations. | Listed above. |

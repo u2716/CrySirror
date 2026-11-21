@@ -31,18 +31,23 @@ pub enum Action {
     ChangeMap { id: i32, time_zone: i32 },
     /// `_btnCharaEdit` (Add Heroine): open `CharaSelectUI`.
     OpenCharaSelect,
+    /// `_btnNextTimeZone`: the zone advanced to this value.
+    NextTimeZone(i32),
 }
 
 pub struct ActionMap {
     pub phase: Phase,
     /// `SaveData.Cycle` time zone (0 morning).
     pub time_zone: i32,
+    /// `SaveData.MapID` (a map is loaded behind the UI).
+    pub map: Option<i32>,
     /// Map button node → map id (`MapUIInfo._id`).
     buttons: HashMap<usize, i32>,
     dialog: Option<usize>,
     enter: Option<usize>,
     cancels: Vec<usize>,
     title: Option<usize>,
+    next_zone: Option<usize>,
 }
 
 fn node_of(scene: &Scene6, path_id: i64) -> Option<usize> {
@@ -55,7 +60,7 @@ impl ActionMap {
         let scene = &select.scene;
         let mut buttons = HashMap::new();
         let mut dialog = None;
-        let (mut enter, mut cancels, mut title) = (None, Vec::new(), None);
+        let (mut enter, mut cancels, mut title, mut next_zone) = (None, Vec::new(), None, None);
         let mut hidden = Vec::new();
         for (i, n) in scene.nodes.iter().enumerate() {
             for c in &n.components {
@@ -72,6 +77,7 @@ impl ActionMap {
                     }
                     "AL.MapSelectUI" => {
                         title = c.fields.pptr("_btnTitle").and_then(|p| node_of(scene, p.path_id));
+                        next_zone = c.fields.pptr("_btnNextTimeZone").and_then(|p| node_of(scene, p.path_id));
                         // `CharaIconClear`: no heroine icons on a new game.
                         for info in c.fields.array("_charaInfos").unwrap_or(&[]) {
                             if let crysirror_unity::managed::Value::Struct(f) = info {
@@ -99,7 +105,7 @@ impl ActionMap {
         for n in hidden {
             select.set_active(n, false);
         }
-        Self { phase: Phase::MapSelect, time_zone: 0, buttons, dialog, enter, cancels, title }
+        Self { phase: Phase::MapSelect, time_zone: 0, map: None, buttons, dialog, enter, cancels, title, next_zone }
     }
 
     /// A Button click inside `MapSelectUI`.
@@ -116,6 +122,12 @@ impl ActionMap {
                     select.log.push(format!("map select {id}: confirm"));
                 } else if select.scene.nodes[node].name == "btnHeroin" {
                     return Action::OpenCharaSelect;
+                } else if Some(node) == self.next_zone {
+                    // SATD-amanatsu-port: with a map loaded behind the UI the
+                    // original reloads it in the new zone at once; here the
+                    // next map choice loads it.
+                    self.time_zone = (self.time_zone + 1) % 4;
+                    return Action::NextTimeZone(self.time_zone);
                 } else if Some(node) == self.title {
                     select.log.push("SATD-amanatsu-port: MapSelectUI title button (ExitDialog to title) not ported".into());
                 } else {

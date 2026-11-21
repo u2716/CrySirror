@@ -90,6 +90,13 @@ pub struct Game {
     map_entities: Vec<(u32, VfsPath)>,
     next_model: u32,
     pub view: Option<map::View>,
+    /// The map's move-point cameras and the current/default one
+    /// (`ActionMapUI._rpMapCameraID`).
+    cameras: Vec<map::View>,
+    camera: usize,
+    default_camera: usize,
+    /// `ActionMapUI` (overlay 0 while a map is shown).
+    hud: Option<crate::hud::Hud>,
     /// Talk steps waiting for host services.
     pending_steps: Vec<crate::talk::Step>,
     /// Registered heroines (card paths), `SaveData.NPCDataList` order.
@@ -214,6 +221,10 @@ impl Game {
                 Err(e) => self.log.push(format!("heroine {card}: {e:#}")),
             }
         }
+        self.cameras = world.cameras.iter().map(|c| c.0.clone()).collect();
+        let best = world.cameras.iter().map(|c| c.1).max().unwrap_or(0);
+        self.default_camera = world.cameras.iter().position(|c| c.1 == best).unwrap_or(0);
+        self.camera = self.default_camera;
         self.view = world.camera().cloned();
         if let Some(v) = &self.view {
             self.world.push(v.command());
@@ -410,6 +421,68 @@ impl Game {
         best.map(|b| b.1)
     }
 
+    /// `ActionMapUI.Create/OpenExe` over the loaded map (overlay 0).
+    fn open_hud(&mut self, map_id: i32, zone: i32) -> Result<()> {
+        let (mut level, hud) = crate::hud::Hud::open(&mut self.unity)?;
+        let name = self.maps.iter().find(|m| m.id == map_id).map(|m| m.name.clone()).unwrap_or_default();
+        hud.set_map_name(&mut level, &name);
+        crate::hud::set_image_sprites(&mut level, zone.clamp(0, 3) as usize);
+        self.overlays.insert(0, (level, Ui::new(5)));
+        self.hud = Some(hud);
+        Ok(())
+    }
+
+    /// A HUD button (`ActionMapUI.Initialize` handlers).
+    fn hud_action(&mut self, action: crate::hud::HudAction, now: u64) -> Result<()> {
+        use crate::hud::HudAction as H;
+        let Controller::ActionMap(m) = &mut self.controller else { return Ok(()) };
+        let actionmap::Phase::Map(map_id) = m.phase else { return Ok(()) };
+        match action {
+            H::CameraPrev | H::CameraNext | H::CameraReset if !self.cameras.is_empty() => {
+                let n = self.cameras.len();
+                self.camera = match action {
+                    H::CameraPrev => (self.camera + n - 1) % n,
+                    H::CameraNext => (self.camera + 1) % n,
+                    _ => self.default_camera,
+                };
+                self.level.sounds.push(sound::Call::SystemSe(self.sound_ids.ok_s));
+                let v = self.cameras[self.camera].clone();
+                self.world.push(v.command());
+                self.view = Some(v);
+            }
+            H::Map2D => {
+                // `CloseExeAsync`, then `MapSelectUI.Create/OpenExe` over the map.
+                self.level.sounds.push(sound::Call::SystemSe(self.sound_ids.ok_s));
+                if self.overlays.len() == 1 {
+                    let (_, mut ui) = self.overlays.remove(0);
+                    self.removed.extend(ui.clear());
+                    self.hud = None;
+                    let zone = m.time_zone;
+                    let mut select = Level::prefab(&mut self.unity, actionmap::UI_BUNDLE, "MapSelectUI")?;
+                    let mut c = ActionMap::new(&mut select, &self.maps);
+                    c.time_zone = zone;
+                    c.map = Some(map_id);
+                    crate::hud::set_image_sprites(&mut select, zone.clamp(0, 3) as usize);
+                    self.overlays.push((select, Ui::new(1)));
+                    self.controller = Controller::ActionMap(c);
+                }
+            }
+            H::NextTime => {
+                // `EventManager.TimeZone`: SE, fade, `Cycle.IncrementTimeZone`,
+                // `TimeZoneInternal` (the map again in the new zone).
+                // SATD-amanatsu-port: night events, heroine placement tables,
+                // BGM per zone and the auto save are not ported.
+                self.level.sounds.push(sound::Call::SystemSe(self.sound_ids.ok_l));
+                m.time_zone = (m.time_zone + 1) % 4;
+                self.fade.start(now, true, self.fade_seconds);
+                self.pending_map = Some((map_id, m.time_zone));
+                self.log.push(format!("EventManager.TimeZone → zone {}", m.time_zone));
+            }
+            H::Config | H::Help | H::CameraPrev | H::CameraNext | H::CameraReset => self.log.push(format!("SATD-amanatsu-port: ActionMapUI {action:?} not ported")),
+        }
+        Ok(())
+    }
+
     /// A click on a standing heroine: the first meeting, else the command
     /// menu (`CommandScene.OpenExe`) with her greeting.
     fn heroine_clicked(&mut self, spot: usize) -> Result<()> {
@@ -565,6 +638,10 @@ impl AmanatsuVm {
             map_entities: Vec::new(),
             next_model: 0,
             view: None,
+            cameras: Vec::new(),
+            camera: 0,
+            default_camera: 0,
+            hud: None,
             pending_steps: Vec::new(),
             heroines: Vec::new(),
             chara_select: None,
@@ -620,7 +697,9 @@ impl AmanatsuVm {
                 if let Some((_, mut ui)) = (!game.overlays.is_empty()).then(|| game.overlays.remove(0)) {
                     game.removed.extend(ui.clear());
                 }
+                game.hud = None;
                 game.change_map(host, client, id, zone)?;
+                game.open_hud(id, zone)?;
                 game.fade.start(host.now_ms(), false, game.fade_seconds);
             }
         }
@@ -765,12 +844,18 @@ impl AmanatsuVm {
         let mut open_chara_select = false;
         let mut close_chara_select = false;
         let mut command_click: Option<(usize, usize, String)> = None;
+        let mut hud_click: Option<crate::hud::HudAction> = None;
         if let Some((h, button)) = click {
             if h > 0 {
                 let level = &mut game.overlays[h - 1].0;
                 game.log.push(format!("click {}", level.scene.path(button)));
                 let calls = level.on_click(button);
                 let script = level.invoke(&calls);
+                if h == 1 && game.command.is_none() && game.talk.is_none() {
+                    if let Some(a) = game.hud.as_ref().and_then(|hud| hud.action(button)) {
+                        hud_click = Some(a);
+                    }
+                }
                 if let Some((spot, ci)) = game.command {
                     if h == ci + 1 {
                         let name = level.scene.nodes[button].name.clone();
@@ -796,7 +881,7 @@ impl AmanatsuVm {
                     }
                 }
                 match &mut game.controller {
-                    Controller::ActionMap(m) if h == 1 => match m.click(level, button) {
+                    Controller::ActionMap(m) if h == 1 && game.hud.is_none() => match m.click(level, button) {
                         actionmap::Action::ChangeMap { id, time_zone } => {
                             game.level.sounds.push(sound::Call::SystemSe(game.sound_ids.ok_l));
                             game.fade.start(now, true, game.fade_seconds);
@@ -805,6 +890,12 @@ impl AmanatsuVm {
                         }
                         actionmap::Action::Scene(r) => request = r,
                         actionmap::Action::OpenCharaSelect => open_chara_select = true,
+                        actionmap::Action::NextTimeZone(zone) => {
+                            // `MapSelectUI.ChangeTimeZone` after `EventManager.TimeZone`.
+                            game.level.sounds.push(sound::Call::SystemSe(game.sound_ids.ok_l));
+                            let n = crate::hud::set_image_sprites(level, zone.clamp(0, 3) as usize);
+                            game.log.push(format!("EventManager.TimeZone → zone {zone} ({n} sprites)"));
+                        }
                         actionmap::Action::None => {}
                     },
                     _ => {}
@@ -833,6 +924,10 @@ impl AmanatsuVm {
         }
         for (o, _) in &mut game.overlays {
             game.log.append(&mut o.log);
+        }
+        if let Some(a) = hud_click {
+            game.log.push(format!("ActionMapUI {a:?}"));
+            game.hud_action(a, now)?;
         }
         if let Some((spot, ci, name)) = command_click.take() {
             let personality = game.spots.get(spot).map_or(0, |s| s.2);
