@@ -129,6 +129,8 @@ pub struct Talk {
     choice_template: Option<usize>,
     /// Cloned choice buttons and their target tags.
     choice_nodes: Vec<(usize, String)>,
+    /// `ADVCore.PackData.SelectNum`: the last choice index (none: -1).
+    pub selected: Option<usize>,
     pub log: Vec<String>,
 }
 
@@ -155,6 +157,7 @@ impl Talk {
             choices_root: find("ADVCore/Canvas_Main/background_Choices"),
             choice_template: find("ADVCore/Canvas_Main/background_Choices/Choices/Choice"),
             choice_nodes: Vec::new(),
+            selected: None,
             log: Vec::new(),
         };
         // Hidden until used: fades, filters, back log, letterbox, choices.
@@ -283,8 +286,9 @@ impl Talk {
                 let mut cur = Some(n);
                 let mut tag = None;
                 while let Some(c) = cur {
-                    if let Some((_, t)) = self.choice_nodes.iter().find(|(x, _)| *x == c) {
-                        tag = Some(t.clone());
+                    if let Some(i) = self.choice_nodes.iter().position(|(x, _)| *x == c) {
+                        tag = Some(self.choice_nodes[i].1.clone());
+                        self.selected = Some(i);
                         break;
                     }
                     cur = level.scene.nodes[c].parent;

@@ -23,6 +23,9 @@ pub enum Request {
     Load(i32),
     /// `Application.Quit` (through `ExitDialog`).
     Quit,
+    /// `TitleScene.OnLoad` → `SaveLoadUI` → `LoadSaveFileInternal`: load a
+    /// save and enter the action map.
+    LoadSave,
 }
 
 pub struct Input {
@@ -272,7 +275,11 @@ impl Title {
                     }
                 };
             }
-            "OnTOS" | "OnManual" | "OnLanguage" | "OnLoad" | "OnUploader" | "OnDownloader" => {
+            "OnLoad" => {
+                level.sounds.push(Call::SystemSe(self.ids.ok_s));
+                return Request::LoadSave;
+            }
+            "OnTOS" | "OnManual" | "OnLanguage" | "OnUploader" | "OnDownloader" => {
                 level.sounds.push(Call::SystemSe(self.ids.ok_s));
                 level.log.push(format!("TitleScene.{} (not ported)", call.method));
             }

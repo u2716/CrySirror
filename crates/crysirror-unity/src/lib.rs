@@ -20,6 +20,7 @@ pub mod events;
 pub mod classes;
 pub mod gltf;
 pub mod managed;
+pub mod memorypack;
 pub mod msgpack;
 pub mod managed_gen;
 pub mod reader;

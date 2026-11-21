@@ -93,6 +93,8 @@ and `ResourceManager` have fixed readers).
   field by dotted path, so adapters can apply runtime parameter changes
   before export.
 - `msgpack.rs`: bounded MessagePack decoding (MessagePack-CSharp payloads).
+- `memorypack.rs`: Cysharp MemoryPack reading/writing (varints, object
+  headers, version-tolerant member tables, UTF-8/UTF-16 strings, arrays).
 - `animator.rs`: Mecanim without Unity — `AnimationClip` muscle clips
   (streamed cubic segments, dense samples, constants) with their generic
   bindings, `AnimatorController` layers, states, exit-time transitions and

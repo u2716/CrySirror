@@ -33,6 +33,8 @@ pub struct Level {
     /// Sound requests of this frame.
     pub sounds: Vec<crate::sound::Call>,
     pub log: Vec<String>,
+    /// Diagnostics already reported (the log is drained every frame).
+    reported: std::collections::HashSet<String>,
 }
 
 impl Level {
@@ -78,7 +80,7 @@ impl Level {
                 }
             }
         }
-        Ok(Self { key: key.to_owned(), name: name.to_owned(), scene, states: HashMap::new(), animators, interactable: HashMap::new(), sounds: Vec::new(), log })
+        Ok(Self { key: key.to_owned(), name: name.to_owned(), scene, states: HashMap::new(), animators, interactable: HashMap::new(), sounds: Vec::new(), log, reported: Default::default() })
     }
 
     pub fn find(&self, path: &str) -> Option<usize> {
@@ -191,7 +193,7 @@ impl Level {
             let values = a.playback.sample(&a.controller, &|i| a.clips.get(i)?.as_deref());
             for b in animator::apply_ugui(&self.scene, a.node, &values, &mut out) {
                 let msg = format!("{}: unmapped animation binding class {} attribute {}", self.scene.path(a.node), b.class_id, b.attribute);
-                if !self.log.contains(&msg) {
+                if self.reported.insert(msg.clone()) {
                     self.log.push(msg);
                 }
             }

@@ -13,6 +13,8 @@ pub mod charaselect;
 pub mod hud;
 pub mod level;
 pub mod map;
+pub mod params;
+pub mod save;
 pub mod scenes;
 pub mod sound;
 pub mod tables;

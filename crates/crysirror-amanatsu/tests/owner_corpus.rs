@@ -1305,7 +1305,7 @@ fn prefab_component() {
                     crysirror_unity::managed::Value::Array(a) if a.iter().all(|e| matches!(e, crysirror_unity::managed::Value::PPtr(_))) => {
                         format!("[{}]", a.iter().map(|e| if let crysirror_unity::managed::Value::PPtr(q) = e { name(q.path_id) } else { String::new() }).collect::<Vec<_>>().join(", "))
                     }
-                    v => format!("{v:?}").chars().take(200).collect(),
+                    v => format!("{v:?}").chars().take(std::env::var("AMANATSU_WIDTH").ok().and_then(|w| w.parse().ok()).unwrap_or(200)).collect(),
                 };
                 println!("  {k} = {s}");
             }
@@ -1329,4 +1329,18 @@ fn print_asset() {
     for (name, v) in u.decode(&k, id).unwrap().0 {
         println!("  {name} = {}", format!("{v:?}").chars().take(std::env::var("AMANATSU_WIDTH").ok().and_then(|w| w.parse().ok()).unwrap_or(400)).collect::<String>());
     }
+}
+
+/// Decodes a `.sav` file (`AMANATSU_SAVE`) and prints its contents.
+#[test]
+#[ignore = "needs AMANATSU_SAVE"]
+fn print_save() {
+    let b = std::fs::read(std::env::var("AMANATSU_SAVE").unwrap()).unwrap();
+    let f = crysirror_amanatsu::save::SaveFile::decode(&b).unwrap();
+    println!("{:?}", f.save);
+    println!("player {:?} card {} bytes", f.player.actor.chara_file_name, f.player.actor.human.as_ref().map_or(0, Vec::len));
+    for n in &f.npcs {
+        println!("npc {:?} id {} map {} {:?} {:?} card {} bytes", n.actor.chara_file_name, n.actor.unique_id, n.action.map_id, n.parameter, n.count, n.actor.human.as_ref().map_or(0, Vec::len));
+    }
+    assert_eq!(f.encode().unwrap(), b);
 }

@@ -74,6 +74,17 @@ pub struct Game {
     placement: std::collections::HashMap<String, i32>,
     excluded_maps: Vec<i32>,
     map_limit: usize,
+    /// `PropertyData._param`.
+    param_table: crate::params::ParamTable,
+    /// `NPCData.GameParameter`/`Count` and card characteristic by card.
+    npc: std::collections::HashMap<String, (crate::params::GameParameter, crate::params::Count, usize)>,
+    /// A loaded save waiting for the ActionMap scene.
+    loaded_save: Option<crate::save::SaveFile>,
+    /// `SaveData.Save` after `EventManager.TimeZone` (zone).
+    pending_auto_save: Option<i32>,
+    client_id: ClientId,
+    /// Command points waiting for the conversation to end: (card, kind).
+    pending_points: Option<(String, &'static str)>,
     /// `Manager.Scene.SceneFadeCanvas` and its `_time`.
     pub fade: Fade,
     pub fade_seconds: f32,
@@ -166,7 +177,12 @@ impl Game {
                 }
                 self.maps = map::map_infos(&mut self.unity)?;
                 let mut select = Level::prefab(&mut self.unity, actionmap::UI_BUNDLE, "MapSelectUI")?;
-                let c = ActionMap::new(&mut select, &self.maps);
+                let mut c = ActionMap::new(&mut select, &self.maps);
+                if let Some(file) = self.loaded_save.take() {
+                    c.time_zone = file.save.time_zone.clamp(0, 3);
+                    crate::hud::set_image_sprites(&mut select, c.time_zone as usize);
+                    self.apply_save(file);
+                }
                 self.overlays.push((select, Ui::new(1)));
                 self.log.push("SATD-amanatsu-port: ActionMap tutorial ConfirmDialog, player card and ActionMapUI not ported".into());
                 Controller::ActionMap(c)
@@ -486,6 +502,172 @@ impl Game {
         }
     }
 
+    /// The heroine's `NPCData` parameters (created from the card on first
+    /// use: all parameters at 0, `GameParameter_AL.characteristic`).
+    fn npc(&mut self, card: &str) -> &mut (crate::params::GameParameter, crate::params::Count, usize) {
+        if !self.npc.contains_key(card) {
+            let characteristic = self
+                .unity
+                .read_all(card)
+                .ok()
+                .and_then(|b| crate::card::Card::parse(&b).ok())
+                .and_then(|c| c.block("GameParameter_AL").and_then(|b| crysirror_unity::msgpack::decode(b).ok()))
+                .and_then(|v| v.get("characteristic").and_then(crysirror_unity::msgpack::Value::as_i64))
+                .unwrap_or(0)
+                .max(0) as usize;
+            self.npc.insert(card.to_owned(), (Default::default(), Default::default(), characteristic));
+        }
+        self.npc.get_mut(card).expect("inserted")
+    }
+
+    /// `CommandUI.SetParameter`: gauges (`ImgGauge.fillAmount` = Point /
+    /// LVPoint) and level toggles (`TglLVs[i].isOn` for i < LV).
+    fn show_parameters(&mut self, card: &str) {
+        let gp = self.npc(card).0.clone();
+        let Some((_, ci)) = self.command else { return };
+        let points = self.param_table.points.clone();
+        let Some((level, _)) = self.overlays.get_mut(ci) else { return };
+        let Some(ui) = level.scene.nodes.iter().flat_map(|n| &n.components).find(|c| c.script == "AL.CommandUI").map(|c| c.fields.clone()) else { return };
+        for (i, (field, info)) in [("_favorability", gp.favorability), ("_inclusiveness", gp.inclusiveness), ("_proactivity", gp.proactivity), ("_curiosity", gp.curiosity)].iter().enumerate() {
+            let Some(f) = ui.fields(field) else { continue };
+            let lv_point = points.get(i).map_or(100, |p| p.lv_point).max(1);
+            if let Some(n) = f.pptr("ImgGauge").and_then(|p| level.owner(p.path_id)) {
+                level.states.entry(n).or_default().fill = Some((info.point as f32 / lv_point as f32).clamp(0., 1.));
+            }
+            for (k, t) in f.array("TglLVs").unwrap_or(&[]).iter().enumerate() {
+                let crysirror_unity::managed::Value::PPtr(t) = t else { continue };
+                let Some(tn) = level.owner(t.path_id) else { continue };
+                let graphic = level.scene.nodes[tn].components.iter().find(|c| c.script == "UnityEngine.UI.Toggle").and_then(|c| c.fields.pptr("graphic")).and_then(|p| level.owner(p.path_id));
+                if let Some(g) = graphic {
+                    level.set_active(g, (k as i32) < info.lv);
+                }
+            }
+        }
+    }
+
+    /// `EventManager.Talk` after the conversation: the command's points
+    /// (`CommandUI.AddPoint`).
+    fn apply_points(&mut self, card: String, kind: &str, select: Option<usize>) {
+        let characteristic = self.npc(&card).2;
+        let table = std::mem::take(&mut self.param_table);
+        let mut rng = self.rng;
+        let mut random = |n: usize| {
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
+            (rng % n.max(1) as u64) as usize
+        };
+        let add = table.command_points(kind, select, characteristic, &mut random);
+        self.rng = rng;
+        let gp = &mut self.npc(&card).0;
+        let ups = table.add_points(gp, add);
+        let msg = format!(
+            "AddPoint {kind} (select {select:?}): +{add:?}, {ups} level-ups → favorability LV{} {} (late {}), inclusiveness LV{} {}, proactivity LV{} {}, curiosity LV{} {}",
+            gp.favorability.lv, gp.favorability.point, gp.late_point, gp.inclusiveness.lv, gp.inclusiveness.point, gp.proactivity.lv, gp.proactivity.point, gp.curiosity.lv, gp.curiosity.point
+        );
+        self.param_table = table;
+        self.log.push(msg);
+        self.show_parameters(&card);
+    }
+
+    /// The state as `SaveData`/`PlayerData`/`NPCData` (`SaveData.Save`).
+    /// SATD-amanatsu-port: the player is the default male card
+    /// (`_defaultMaleCardFileName`), tutorial progress and versions are 0,
+    /// motion/link state is not kept.
+    fn save_file(&mut self, zone: i32, comment: &str) -> crate::save::SaveFile {
+        use crate::save::*;
+        let (text, entry) = now_text();
+        let card = |unity: &mut Unity, path: &str| unity.read_all(path).ok();
+        let player_path = "DefaultData/0/chara/male/AL_M_00.png";
+        let player = PlayerData { actor: Actor { chara_file_name: Some("AL_M_00".into()), unique_id: 0, human: card(&mut self.unity, player_path), version: Some(Version::default()), ..Default::default() }, is_futanari: false };
+        let mut npcs = Vec::new();
+        for (i, h) in self.heroines.clone().iter().enumerate() {
+            let (gp, count, _) = self.npc(h).clone();
+            let name = std::path::Path::new(h).file_stem().and_then(|s| s.to_str()).unwrap_or("").to_owned();
+            npcs.push(NpcData {
+                actor: Actor { chara_file_name: Some(name), unique_id: i as i32 + 1, human: card(&mut self.unity, h), version: Some(Version::default()), data_id: Some(h.clone()), ..Default::default() },
+                action: ActionState { version: Some(Version::default()), link_partner: -1, map_id: self.placement.get(h).copied().unwrap_or(-1) },
+                parameter: gp,
+                count,
+                count_extra: CountExtra { version: Some(Version::default()), ..Default::default() },
+                save_time_text: Some(text.clone()),
+                entry_time: entry,
+                ..Default::default()
+            });
+        }
+        SaveFile { save: SaveData { load_product_id: 100, version: Some(Version::default()), save_time_text: Some(text), time_zone: zone, entry_count: npcs.len() as i32, comment: Some(comment.into()), ..Default::default() }, player, npcs }
+    }
+
+    /// Restore heroines, their parameters and placement from a save (cards
+    /// by `DataID` path, else `CharaFileName` among the preset cards).
+    fn apply_save(&mut self, file: crate::save::SaveFile) {
+        self.heroines.clear();
+        self.npc.clear();
+        self.placement.clear();
+        for n in file.npcs {
+            let name = n.actor.chara_file_name.clone().unwrap_or_default();
+            let path = n.actor.data_id.clone().filter(|p| self.unity.read_all(p).is_ok()).or_else(|| (0..4).map(|d| format!("DefaultData/{d}/chara/female/{name}.png")).find(|p| self.unity.read_all(p).is_ok()));
+            let Some(path) = path else {
+                self.log.push(format!("save heroine {name}: card not found"));
+                continue;
+            };
+            self.heroines.push(path.clone());
+            let characteristic = self.npc(&path).2;
+            self.npc.insert(path.clone(), (n.parameter, n.count, characteristic));
+            if n.action.map_id >= 0 {
+                self.placement.insert(path, n.action.map_id);
+            }
+        }
+    }
+
+    /// `SaveData.Save(isAuto: true)` after a time-zone change: the next
+    /// `a_NNN.sav` in the engine's save mount (`user/`).
+    /// SATD-amanatsu-port: the original's auto-save count limit/rotation
+    /// beyond the next free number is not reproduced.
+    fn auto_save(&mut self, host: &mut dyn HostServices, zone: i32) -> Result<()> {
+        let storage = host.storage(self.client_id)?;
+        let existing = storage.list(crysirror_core::path::Mount::Save, "user").unwrap_or_default();
+        let next = existing.iter().filter_map(|f| f.rsplit('/').next()?.strip_prefix("a_")?.strip_suffix(".sav")?.parse::<u32>().ok()).max().map_or(0, |n| (n + 1) % 1000);
+        let name = crate::save::file_name(&format!("{next:03}"), true);
+        let bytes = self.save_file(zone, "オートセーブデータ").encode()?;
+        let _ = storage.create_directory(&VfsPath::new(crysirror_core::path::Mount::Save, "user")?);
+        storage.write_atomic(&VfsPath::new(crysirror_core::path::Mount::Save, &format!("user/{name}"))?, &bytes)?;
+        self.log.push(format!("SaveData.Save(auto): user/{name} ({} bytes)", bytes.len()));
+        Ok(())
+    }
+
+    /// The newest `.sav` of the engine's save mount.
+    fn newest_save(&mut self, host: &mut dyn HostServices) -> Result<Option<(String, crate::save::SaveFile)>> {
+        let storage = host.storage(self.client_id)?;
+        let mut files: Vec<String> = storage.list(crysirror_core::path::Mount::Save, "user").unwrap_or_default().into_iter().filter(|f| f.ends_with(".sav")).collect();
+        let mut best: Option<(String, crate::save::SaveFile, i64)> = None;
+        files.sort();
+        for f in files {
+            let rel = if f.starts_with("user/") { f.clone() } else { format!("user/{f}") };
+            let Ok(bytes) = storage.read(&VfsPath::new(crysirror_core::path::Mount::Save, &rel)?) else { continue };
+            match crate::save::SaveFile::decode(&bytes) {
+                Ok(file) => {
+                    let t = file.npcs.first().map_or(0, |n| n.entry_time);
+                    if best.as_ref().is_none_or(|b| t >= b.2) {
+                        best = Some((rel, file, t));
+                    }
+                }
+                Err(e) => self.log.push(format!("save {rel}: {e:#}")),
+            }
+        }
+        Ok(best.map(|b| (b.0, b.1)))
+    }
+
+    fn set_hud_visible(&mut self, on: bool) {
+        if self.hud.is_some() {
+            if let Some((level, _)) = self.overlays.first_mut() {
+                for r in level.scene.roots.clone() {
+                    level.set_active(r, on);
+                }
+            }
+        }
+    }
+
     /// `ActionMapUI.Create/OpenExe` over the loaded map (overlay 0).
     fn open_hud(&mut self, map_id: i32, zone: i32) -> Result<()> {
         let (mut level, hud) = crate::hud::Hud::open(&mut self.unity)?;
@@ -544,6 +726,7 @@ impl Game {
                 self.place_heroines(true);
                 self.pending_map = Some((map_id, zone));
                 self.log.push(format!("EventManager.TimeZone → zone {zone}"));
+                self.pending_auto_save = Some(zone);
             }
             H::Config | H::Help | H::CameraPrev | H::CameraNext | H::CameraReset => self.log.push(format!("SATD-amanatsu-port: ActionMapUI {action:?} not ported")),
         }
@@ -570,6 +753,10 @@ impl Game {
         }
         self.overlays.push((level, Ui::new(4)));
         self.command = Some((spot, self.overlays.len() - 1));
+        let card = self.spots[spot].0.clone();
+        self.show_parameters(&card);
+        // `Map3DToCommandScene`: the map HUD closes while the menu is open.
+        self.set_hud_visible(false);
         // `GetPreludeAsset`: a greeting voice.
         if let Some(prelude) = crate::talk::pick(&index, "prelude", self.now) {
             self.start_talk(spot, vec![prelude])?;
@@ -703,6 +890,12 @@ impl AmanatsuVm {
             placement: std::collections::HashMap::new(),
             excluded_maps,
             map_limit,
+            param_table: crate::params::ParamTable::from_property_data(&pd.fields("_param").cloned().unwrap_or_default()),
+            npc: std::collections::HashMap::new(),
+            pending_points: None,
+            loaded_save: None,
+            pending_auto_save: None,
+            client_id: self.client,
             unity,
             ui: Ui::default(),
             build_scenes,
@@ -909,6 +1102,9 @@ impl AmanatsuVm {
                 crate::talk::Step::End => {
                     if let Some((talk, oi)) = game.talk.take() {
                         game.log.extend(talk.log);
+                        if let Some((card, kind)) = game.pending_points.take() {
+                            game.apply_points(card, kind, talk.selected);
+                        }
                         if oi < game.overlays.len() {
                             let (_, mut ui) = game.overlays.remove(oi);
                             game.removed.extend(ui.clear());
@@ -1018,6 +1214,11 @@ impl AmanatsuVm {
         if replace_heroines {
             game.place_heroines(true);
         }
+        if let Some(zone) = game.pending_auto_save.take() {
+            if let Err(e) = game.auto_save(host, zone) {
+                game.log.push(format!("SaveData.Save: {e:#}"));
+            }
+        }
         if let Some(a) = hud_click {
             game.log.push(format!("ActionMapUI {a:?}"));
             game.hud_action(a, now)?;
@@ -1030,6 +1231,16 @@ impl AmanatsuVm {
             if end {
                 list.extend(crate::talk::pick(&index, "end", now));
             } else if let Some(family) = crate::talk::command_family(&name) {
+                // `TKind` → `PropertyData._param` command points.
+                let kind = match name.as_str() {
+                    "btnTalk" => Some("Talk"),
+                    "btnListen" => Some("Listen"),
+                    "btnHTopic" => Some("HTopic"),
+                    _ => None,
+                };
+                if let (Some(kind), Some(s)) = (kind, game.spots.get(spot)) {
+                    game.pending_points = Some((s.0.clone(), kind));
+                }
                 list.extend(crate::talk::pick(&index, "agree", now));
                 if family != "agree" {
                     list.extend(crate::talk::pick(&index, family, now));
@@ -1053,6 +1264,7 @@ impl AmanatsuVm {
                     game.removed.extend(ui.clear());
                 }
                 game.command = None;
+                game.set_hud_visible(true);
             } else if let Some(p) = game.overlays.get_mut(ci).and_then(|(l, _)| l.find("Command/Canvas/Panel").map(|p| (l, p))) {
                 // Hidden while the event plays.
                 p.0.set_active(p.1, false);
@@ -1086,12 +1298,43 @@ impl AmanatsuVm {
                 game.log.push(format!("SceneSettings.Load({id})"));
             }
             scenes::Request::Load(_) => {}
+            scenes::Request::LoadSave if game.pending.is_none() => match game.newest_save(host) {
+                Ok(Some((name, file))) => {
+                    game.log.push(format!("SaveData.Load({name}): zone {}, {} heroines", file.save.time_zone, file.npcs.len()));
+                    game.loaded_save = Some(file);
+                    game.fade.start(now, true, game.fade_seconds);
+                    game.pending = Some((scenes::scene_id::ACTION_MAP, now));
+                }
+                Ok(None) => game.log.push("SaveLoadUI: no save data".into()),
+                Err(e) => game.log.push(format!("SaveData.Load: {e:#}")),
+            },
+            scenes::Request::LoadSave => {}
         }
         if game.quit {
             return Ok(VmYield::Halted);
         }
         Ok(VmYield::WaitUntil(game.now + 16))
     }
+}
+
+/// `SaveData.UpdateSaveTime`: the local time as `yyyy/MM/dd HH:mm` and as
+/// a .NET `DateTime` binary (ticks since 0001-01-01, kind Local).
+fn now_text() -> (String, i64) {
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
+    let days = secs.div_euclid(86_400);
+    let rem = secs.rem_euclid(86_400);
+    // Civil date from days since 1970-01-01 (Howard Hinnant's algorithm).
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    let ticks = (secs + 62_135_596_800) * 10_000_000;
+    (format!("{y:04}/{m:02}/{d:02} {:02}:{:02}", rem / 3600, rem % 3600 / 60), ticks | (2i64 << 62))
 }
 
 impl VmAdapter for AmanatsuVm {
