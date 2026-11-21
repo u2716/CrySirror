@@ -19,6 +19,22 @@ shapes, bones, physics), maps and H scenes,
 saves (`UserData/save`), character cards; TextMeshPro Alpha8 SDF atlases
 beyond the RGBA decode limit; meshes with `m_MeshCompression`.
 
+**Next work list (survey 2026-11-21, `material_census`, ActionMapScene
+decompile).** New game: `ActionMapScene.Initialize` creates `SaveData`, loads
+the player from the default card (`PropertyData._defaultMaleCardFileName`
+`AL_M_00`, `HumanData.LoadCharaFile`/`LoadFromPreset`), instantiates the
+map prefab (`ActiomMapPrefabScenePath`) and `AngleData`, opens
+`ActionMapUI`/`MapSelectUI`/`PlayerSelectUI`/`CharaSelectUI` prefabs and
+the tutorial `ConfirmDialog`. Rendering needs: Unity 6 Material/Shader
+mapping into the shared world renderer — maps: `Universal Render
+Pipeline/Lit` (104), `Nature/SpeedTree8_PBRLit` (459), `AL/Map` (282),
+`AL/MapColorMask`, NatureManufacture water, Azure sky, Lux/VFX particles;
+characters: ILLGAMES toon shaders `AL/skin_body`, `AL/skin_head`, `AL/hair`,
+`AL/hair_outline`, `AL/cloth`, `AL/cloth_alpha`, `AL/acs*`, `AL/eye*`,
+`AL/nail` (150–490 properties each: colour masks, paint/cheek layers,
+outlines); character cards (PNG + ILLGAMES data), body/face assembly,
+Cinemachine cameras, NavMesh wandering, Mecanim humanoid animation.
+
 **Closure evidence.** Installed-game runs through the title, ADV, map and
 H scenes and save/load, recorded in a validation note.
 

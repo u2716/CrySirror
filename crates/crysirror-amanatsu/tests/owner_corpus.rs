@@ -827,3 +827,41 @@ fn hex_text_assets() {
         }
     }
 }
+
+/// Material census of `lib/<AMANATSU_DIR>` bundles: shader name → material
+/// count, with the texture/float/colour property names of each shader.
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn material_census() {
+    let mut u = unity();
+    let sub = std::env::var("AMANATSU_DIR").unwrap_or_else(|_| "lib/ma".into());
+    let mut shaders: BTreeMap<String, (usize, std::collections::BTreeSet<String>)> = BTreeMap::new();
+    let mut shader_names: std::collections::HashMap<(String, i64), String> = Default::default();
+    for key in u.bundle_files().into_iter().filter(|k| k.contains(&format!("{sub}/"))) {
+        let Ok(file) = u.file(&key) else { continue };
+        for info in file.objects.iter().filter(|o| o.class_id == 21) {
+            let Ok(f) = u.decode(&key, info.path_id) else { continue };
+            let sp = f.pptr("m_Shader").unwrap_or_default();
+            let name = match u.target(&key, sp) {
+                Ok(t) => shader_names.entry(t.clone()).or_insert_with(|| u.decode(&t.0, t.1).ok().and_then(|s| s.fields("m_ParsedForm").and_then(|p| p.string("m_Name")).map(str::to_owned).or_else(|| s.string("m_Name").map(str::to_owned))).unwrap_or_else(|| format!("?{}", t.0.rsplit('/').next().unwrap_or("")))).clone(),
+                Err(_) => "<unresolved>".into(),
+            };
+            let e = shaders.entry(name).or_default();
+            e.0 += 1;
+            if let Some(props) = f.fields("m_SavedProperties") {
+                for list in ["m_TexEnvs", "m_Floats", "m_Colors"] {
+                    for p in props.array(list).unwrap_or(&[]) {
+                        if let crysirror_unity::managed::Value::Struct(p) = p {
+                            if let Some(n) = p.string("first") {
+                                e.1.insert(format!("{}:{n}", &list[2..5]));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    for (name, (n, props)) in &shaders {
+        println!("{n:6} {name}  [{} props] {}", props.len(), props.iter().take(40).cloned().collect::<Vec<_>>().join(" "));
+    }
+}
