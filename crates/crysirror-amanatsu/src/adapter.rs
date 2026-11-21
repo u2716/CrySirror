@@ -87,6 +87,13 @@ pub struct Game {
     map_entities: Vec<(u32, VfsPath)>,
     next_model: u32,
     pub view: Option<map::View>,
+    /// Registered heroines (card paths), `SaveData.NPCDataList` order.
+    pub heroines: Vec<String>,
+    chara_select: Option<crate::charaselect::CharaSelect>,
+    /// `chara/list/characustom` tables (loaded once).
+    lists: Option<crate::chara::Lists>,
+    /// Uploaded card thumbnails by card path.
+    thumbnails: std::collections::HashMap<String, String>,
     /// World commands and layer removals of this frame.
     world: Vec<serde_json::Value>,
     removed: Vec<serde_json::Value>,
@@ -171,6 +178,20 @@ impl Game {
         let world = map::load(&mut self.unity, &info, time_zone)?;
         self.spawn_models(host, client, &info.scene.1, &world.chunks)?;
         self.world.push(world.environment());
+        // Registered heroines at the map's standing action points
+        // (SATD-amanatsu-port: `ActionPoint` choice, their `_animIDList`
+        // motions and NavMesh wandering are not ported).
+        let heroines = self.heroines.clone();
+        for (card, point) in heroines.iter().zip(world.points.iter().filter(|p| p.0.contains("tati"))) {
+            let (_, pos, rot) = point;
+            let q = glam::Quat::from_array(crysirror_unity::gltf::mirror_quat(*rot));
+            let (x, y, z) = q.to_euler(glam::EulerRot::XYZ);
+            let t = json!({"translation": crysirror_unity::gltf::mirror_point(*pos), "rotation_degrees": [x.to_degrees(), y.to_degrees(), z.to_degrees()], "scale": [1.0, 1.0, 1.0]});
+            let sun = world.sun.as_ref().map_or(1., |l| l.intensity);
+            if let Err(e) = self.spawn_character(host, client, card, Some(t), sun) {
+                self.log.push(format!("heroine {card}: {e:#}"));
+            }
+        }
         self.view = world.camera().cloned();
         if let Some(v) = &self.view {
             self.world.push(v.command());
@@ -209,40 +230,52 @@ impl Game {
         Ok(())
     }
 
+    /// Assemble a card's character, posed by the motion controller's
+    /// default state (`Pose_D_00_Loop`), and spawn it with an engine-space
+    /// transform (`None`: at the origin).
+    fn spawn_character(&mut self, host: &mut dyn HostServices, client: ClientId, card_path: &str, transform: Option<serde_json::Value>, sun: f32) -> Result<()> {
+        const IDLE: &str = "Pose_D_00_Loop";
+        let card = crate::card::Card::parse(&self.unity.read_all(card_path)?)?;
+        if self.lists.is_none() {
+            self.lists = Some(crate::chara::Lists::load(&mut self.unity)?);
+        }
+        let lists = self.lists.take().context("lists")?;
+        let human = crate::chara::Human::from_card(&mut self.unity, &lists, &card, true);
+        self.lists = Some(lists);
+        let human = human?;
+        self.log.extend(human.log.iter().cloned());
+        let options = crysirror_unity::world6::GlbOptions { max_texture: 1024, texture_budget: 48 << 20 };
+        let clips = match human.state_tracks(&mut self.unity, IDLE) {
+            Ok(t) => vec![t],
+            Err(e) => {
+                self.log.push(format!("{IDLE}: {e:#}"));
+                Vec::new()
+            }
+        };
+        let mut assets = crate::chara::CharaAssets { unity: &mut self.unity, human: &human, light: 0.7 / sun.max(0.7) };
+        let (chunks, report) = crysirror_unity::world6::scene_glb_animated(&human.scene, &human.key, &[0], &mut assets, &options, "CrySirror AmanatsuLocation character importer", &clips)?;
+        let first = self.map_entities.len();
+        self.spawn_models(host, client, "chara", &chunks)?;
+        for (entity, _) in self.map_entities[first..].to_vec() {
+            if let Some(t) = &transform {
+                self.world.push(json!({"op": "set_transform", "id": entity, "transform": t}));
+            }
+            if !clips.is_empty() {
+                self.world.push(json!({"op": "set_animation", "id": entity, "animation": {"layers": [{"clip": IDLE, "looping": true}]}}));
+            }
+        }
+        self.log.push(format!("character {card_path}: {} renderers, {} materials, {} tracks", report.renderers, report.materials, clips.first().map_or(0, |c| c.tracks.len())));
+        self.log.extend(report.errors.iter().take(8).cloned());
+        Ok(())
+    }
+
     /// `CustomScene` start: the default heroine (`HumanData` preset) in
     /// front of the main camera.
     fn custom_scene(&mut self, host: &mut dyn HostServices, client: ClientId) -> Result<()> {
         // SATD-amanatsu-port: the scene's own default (`HumanData`
         // preset for the chosen sex) is approximated by the first default
         // female card.
-        let card = crate::card::Card::parse(&self.unity.read_all(DEFAULT_FEMALE_CARD)?)?;
-        let lists = crate::chara::Lists::load(&mut self.unity)?;
-        let human = crate::chara::Human::from_card(&mut self.unity, &lists, &card, true)?;
-        self.log.extend(human.log.iter().cloned());
-        let options = crysirror_unity::world6::GlbOptions { max_texture: 1024, texture_budget: 64 << 20 };
-        // `HumanData` default action: the controller's default state.
-        const IDLE: &str = "Pose_D_00_Loop";
-        let clips = match human.state_tracks(&mut self.unity, IDLE) {
-            Ok(t) => {
-                self.log.push(format!("{IDLE}: {} tracks ({} bindings unbound)", t.tracks.len(), t.unbound));
-                vec![t]
-            }
-            Err(e) => {
-                self.log.push(format!("{IDLE}: {e:#}"));
-                Vec::new()
-            }
-        };
-        let mut assets = crate::chara::CharaAssets { unity: &mut self.unity, human: &human };
-        let (chunks, report) = crysirror_unity::world6::scene_glb_animated(&human.scene, &human.key, &[0], &mut assets, &options, "CrySirror AmanatsuLocation character importer", &clips)?;
-        let first = self.map_entities.len();
-        self.spawn_models(host, client, "chara", &chunks)?;
-        if !clips.is_empty() {
-            for (entity, _) in self.map_entities[first..].to_vec() {
-                self.world.push(json!({"op": "set_animation", "id": entity, "animation": {"layers": [{"clip": IDLE, "looping": true}]}}));
-            }
-        }
-        self.log.push(format!("character: {} chunks, {} renderers ({} skipped), {} materials", chunks.len(), report.renderers, report.skipped_renderers, report.materials));
-        self.log.extend(report.errors.iter().take(8).cloned());
+        self.spawn_character(host, client, DEFAULT_FEMALE_CARD, None, 0.7)?;
         // The main camera's authored transform frames the character
         // (characters are about 16 units tall). SATD-amanatsu-port:
         // `CameraController` orbit/zoom input is not ported.
@@ -292,6 +325,35 @@ impl Game {
         let c = eye + fwd * distance;
         let corner = |x: f32, y: f32| (c + right * (x * w / 2.) + up * (y * h / 2.)).to_array();
         crysirror_unity::gltf::image_plane_glb("CrySirror AmanatsuLocation background", png, [corner(-1., 1.), corner(1., 1.), corner(1., -1.), corner(-1., -1.)])
+    }
+
+    /// A card's PNG thumbnail uploaded once.
+    fn thumbnail(&mut self, host: &mut dyn HostServices, client: ClientId, card: &str) -> Option<String> {
+        if let Some(a) = self.thumbnails.get(card) {
+            return Some(a.clone());
+        }
+        let img = self.unity.read_all(card).ok().and_then(|b| crysirror_image::decode_standard(&b).ok())?;
+        let id = 0x5000_0000 + self.thumbnails.len() as u32;
+        let asset = host.upload_rgba(client, id, img.width, img.height, &img.rgba).ok()?.relative().to_owned();
+        self.thumbnails.insert(card.to_owned(), asset.clone());
+        Some(asset)
+    }
+
+    /// `CharaSelectUI.Open`: the preset heroine cards.
+    fn open_chara_select(&mut self, host: &mut dyn HostServices, client: ClientId) -> Result<()> {
+        let mut level = Level::prefab(&mut self.unity, actionmap::UI_BUNDLE, "CharaSelectUI")?;
+        let dir = "DefaultData/0/chara/female";
+        let cards: Vec<String> = self.unity.list_dir(dir).into_iter().filter(|n| n.ends_with(".png")).map(|n| format!("{dir}/{n}")).collect();
+        let cards: Vec<(String, Option<String>)> = cards.into_iter().map(|c| (c.clone(), self.thumbnail(host, client, &c))).collect();
+        let registered: Vec<(String, Option<String>)> = self.heroines.clone().into_iter().map(|c| (c.clone(), self.thumbnail(host, client, &c))).collect();
+        self.chara_select = crate::charaselect::CharaSelect::new(&mut level, &cards, &registered);
+        match &self.chara_select {
+            Some(cs) => self.log.push(cs.describe(&level)),
+            None => self.log.push("CharaSelectUI: list controls not found".into()),
+        }
+        self.log.push(format!("CharaSelectUI.Open: {} cards, {} registered", cards.len(), registered.len()));
+        self.overlays.push((level, Ui::new(2)));
+        Ok(())
     }
 
     fn release_map(&mut self, host: &mut dyn HostServices, client: ClientId) -> Result<()> {
@@ -407,6 +469,10 @@ impl AmanatsuVm {
             map_entities: Vec::new(),
             next_model: 0,
             view: None,
+            heroines: Vec::new(),
+            chara_select: None,
+            lists: None,
+            thumbnails: std::collections::HashMap::new(),
             world: Vec::new(),
             removed: Vec::new(),
             released: Vec::new(),
@@ -543,12 +609,32 @@ impl AmanatsuVm {
                 scenes::Request::None
             }
         };
+        let mut open_chara_select = false;
+        let mut close_chara_select = false;
         if let Some((h, button)) = click {
             if h > 0 {
                 let level = &mut game.overlays[h - 1].0;
                 game.log.push(format!("click {}", level.scene.path(button)));
                 let calls = level.on_click(button);
                 let script = level.invoke(&calls);
+                if h == 2 {
+                    if let Some(cs) = game.chara_select.as_mut() {
+                        let mut entered = None;
+                        let out = cs.click(level, button, &mut |card| {
+                            entered = Some(card.to_owned());
+                            game.thumbnails.get(card).cloned()
+                        });
+                        if let Some(card) = entered {
+                            if !game.heroines.contains(&card) {
+                                game.heroines.push(card.clone());
+                                game.log.push(format!("heroine entered: {card}"));
+                            }
+                        }
+                        if let crate::charaselect::Outcome::Close = out {
+                            close_chara_select = true;
+                        }
+                    }
+                }
                 match &mut game.controller {
                     Controller::ActionMap(m) if h == 1 => match m.click(level, button) {
                         actionmap::Action::ChangeMap { id, time_zone } => {
@@ -558,6 +644,7 @@ impl AmanatsuVm {
                             game.log.push(format!("MapSelectCallBack → ChangeMap({id}, {time_zone})"));
                         }
                         actionmap::Action::Scene(r) => request = r,
+                        actionmap::Action::OpenCharaSelect => open_chara_select = true,
                         actionmap::Action::None => {}
                     },
                     _ => {}
@@ -586,6 +673,16 @@ impl AmanatsuVm {
         }
         for (o, _) in &mut game.overlays {
             game.log.append(&mut o.log);
+        }
+        if close_chara_select && game.overlays.len() == 2 {
+            if let Some((_, mut ui)) = game.overlays.pop() {
+                game.removed.extend(ui.clear());
+            }
+            game.chara_select = None;
+            game.log.push("CharaSelectUI.Close".into());
+        }
+        if open_chara_select && game.overlays.len() == 1 {
+            game.open_chara_select(host, client)?;
         }
         game.sounds(host, client)?;
         game.log.append(&mut game.level.log);

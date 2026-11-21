@@ -292,6 +292,10 @@ impl Human {
 pub struct CharaAssets<'a> {
     pub unity: &'a mut Unity,
     pub human: &'a Human,
+    /// Toon colour scale for the scene's key light: Unity lights characters
+    /// with their own light (`Directional Light Sun Chara`), the engine with
+    /// the one sun.
+    pub light: f32,
 }
 
 impl CharaAssets<'_> {
@@ -382,6 +386,7 @@ impl SceneAssets for CharaAssets<'_> {
         // AL character shaders are cel shaded with outlines.
         let outline = look.outline.unwrap_or([0.25, 0.18, 0.18, 1.]);
         o.toon = Some((toon_lookup(shader), if shader.starts_with("AL/hair") || shader.starts_with("AL/cloth") || shader.starts_with("AL/skin") { 0.0015 } else { 0. }, outline));
+        let k = self.light;
         if let Some(main) = &look.main {
             if let Some(mut img) = self.texture_named(main)? {
                 let mask = match &look.mask {
@@ -394,11 +399,11 @@ impl SceneAssets for CharaAssets<'_> {
                     o.alpha_mode = Some(AlphaMode::Mask);
                 }
                 o.base_texture = Some((format!("{}:{}:{}", main.0, main.1, m.name), img));
-                o.base_color = Some([1.; 4]);
+                o.base_color = Some([k, k, k, 1.]);
             }
         } else if let Some(c) = look.colors.first() {
             // Toon shading works on display-referred colours.
-            o.base_color = Some([c[0], c[1], c[2], 1.]);
+            o.base_color = Some([c[0] * k, c[1] * k, c[2] * k, 1.]);
         }
         Ok(Some(o))
     }

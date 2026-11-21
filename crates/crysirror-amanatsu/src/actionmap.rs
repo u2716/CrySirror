@@ -29,6 +29,8 @@ pub enum Action {
     Scene(Request),
     /// Close `MapSelectUI` and `ChangeMap(id, time_zone)` behind the fade.
     ChangeMap { id: i32, time_zone: i32 },
+    /// `_btnCharaEdit` (Add Heroine): open `CharaSelectUI`.
+    OpenCharaSelect,
 }
 
 pub struct ActionMap {
@@ -112,6 +114,8 @@ impl ActionMap {
                     }
                     self.phase = Phase::Confirm(id);
                     select.log.push(format!("map select {id}: confirm"));
+                } else if select.scene.nodes[node].name == "btnHeroin" {
+                    return Action::OpenCharaSelect;
                 } else if Some(node) == self.title {
                     select.log.push("SATD-amanatsu-port: MapSelectUI title button (ExitDialog to title) not ported".into());
                 } else {

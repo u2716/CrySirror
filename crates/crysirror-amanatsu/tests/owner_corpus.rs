@@ -1137,7 +1137,7 @@ fn chara_glb() {
             n.active = false;
         }
     }
-    let mut assets = crysirror_amanatsu::chara::CharaAssets { unity: &mut u, human: &human };
+    let mut assets = crysirror_amanatsu::chara::CharaAssets { unity: &mut u, human: &human, light: 1. };
     let (glb, report) = crysirror_unity::world6::scene_glb(&human.scene, &human.key, &[0], &mut assets, &Default::default(), "test").unwrap();
     println!("chunks {:?} renderers {} errors {:?}", glb.iter().map(|g| g.len()).collect::<Vec<_>>(), report.renderers, report.errors);
     for g in &glb {

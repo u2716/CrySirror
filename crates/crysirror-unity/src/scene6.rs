@@ -235,6 +235,31 @@ impl Scene6 {
         base + part.roots.first().copied().unwrap_or(0)
     }
 
+    /// `Object.Instantiate(template, parent)` within the scene: a copy of
+    /// the subtree under `parent` (same file, same object ids); returns the
+    /// copy's root. Lookup maps keep the originals.
+    pub fn clone_subtree(&mut self, template: usize, parent: usize) -> usize {
+        let mut map: HashMap<usize, usize> = HashMap::new();
+        let mut stack = vec![template];
+        let mut order = Vec::new();
+        while let Some(n) = stack.pop() {
+            order.push(n);
+            stack.extend(self.nodes[n].children.iter().rev());
+        }
+        for &n in &order {
+            let i = self.nodes.len();
+            map.insert(n, i);
+            let mut c = self.nodes[n].clone();
+            c.children.clear();
+            c.parent = if n == template { Some(parent) } else { c.parent.and_then(|p| map.get(&p).copied()) };
+            self.nodes.push(c);
+            if let Some(p) = self.nodes[i].parent {
+                self.nodes[p].children.push(i);
+            }
+        }
+        map[&template]
+    }
+
     /// Resolve the bones under `part` onto same-named nodes under
     /// `skeleton` (ILLGAMES `AssignedAnotherWeights`); returns the count.
     pub fn alias_bones(&mut self, part: usize, skeleton: usize) -> usize {
@@ -338,5 +363,7 @@ mod tests {
         assert_eq!((root, g.nodes[root].parent, g.path(root + 1), g.file_of(root + 1, "main")), (4, Some(2), "A/C/B/D".to_owned(), "part"));
         assert_eq!(g.alias_bones(root, 1), 2);
         assert_eq!((g.bone_alias[&root], g.bone_alias[&(root + 1)]), (1, 3));
+        let c = g.clone_subtree(1, 0);
+        assert_eq!((g.path(c), g.path(c + 1), g.nodes[0].children.last().copied()), ("A/B".to_owned(), "A/B/D".to_owned(), Some(c)));
     }
 }

@@ -151,9 +151,13 @@ impl Ui {
             }
             let order = [base_order + item.order.0 as i32, item.order.1 as i32];
             match &item.paint {
-                ugui::Paint::Image { sprite, color, sliced, .. } => {
+                ugui::Paint::Image { sprite, color, sliced, image, .. } => {
                     let tint = [byte(color[0]), byte(color[1]), byte(color[2]), byte(color[3])];
                     if tint[3] == 0 {
+                        continue;
+                    }
+                    if let Some(asset) = image {
+                        layers.insert(id, json!({"id": id, "rect": [r.x0, r.y0, r.width(), r.height()], "paint": {"kind": "image", "asset": asset, "tint": tint}, "uv": [0., 0., 1., 1.], "order": order}));
                         continue;
                     }
                     let Some(up) = self.sprite(unity, host, file, *sprite)? else {

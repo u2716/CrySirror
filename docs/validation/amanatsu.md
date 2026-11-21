@@ -39,3 +39,10 @@
 - Behaviour: キャラクリエイト → 女キャラ loads `CustomScene`; the heroine stands in her rest T-pose from the scene's main camera with the card's blue bob, red bikini, skin tone, irises, lashes and brows; skinning shows no misplaced parts. The ActionMap map run (pool) is unchanged.
 - Not established: the scene's own preset and UI, posing/animation, face details (mouth, nose, makeup), toon shading, comparison with the original.
 - Update (same day): the heroine plays `Pose_D_00_Loop` (f_00 controller, 1,016 transform tracks bound, 76 non-transform bindings unbound) as a looping glTF animation; cel shading with outlines; hair `baseColor`/`outlineColor` from the card (brown bob for `AL_F_00`); the `al_mapsample00` background fills the view behind her. Capture: pose and clothes deform together, no detached parts.
+
+## 2026-11-21 — Add Heroine and heroines on maps (local, Apple M4 Max / Metal, offscreen, muted)
+
+- Implementation: `crysirror-unity` `ugui.rs` (`GridLayoutGroup`, `NodeState::image`), `scene6.rs` `clone_subtree`; `crysirror-amanatsu` `charaselect.rs`, `Level` Toggle click handling, `spawn_character`, `map.rs` action points.
+- Compilation: `cargo test --release -p crysirror-unity -p crysirror-amanatsu -p crysirror-cm3d2` (pass); `cargo build --release -p crysirror-desktop`.
+- Behaviour (input track: はじめから, Add Heroine, first card, 登録, 閉じる, pool, はい): `CharaSelectUI` lists the 15 preset heroine cards with thumbnails in a 4-column grid (3 rows visible); the selected card enters the left list's first slot; after closing and choosing the pool, `AL_F_00` stands at the first standing `ActionPoint` beside the deck tables in her idle pose, lit for the map. Title and CustomScene runs unchanged.
+- Not established: scrolling, the other card sources, motions per action point, interaction with heroines (ADV), comparison with the original.

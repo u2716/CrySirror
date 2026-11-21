@@ -97,6 +97,13 @@ impl Unity {
         Ok(self.storage.open_asset(&VfsPath::new(Mount::Asset, path)?)?)
     }
 
+    /// File names in an installation directory (sorted).
+    pub fn list_dir(&self, dir: &str) -> Vec<String> {
+        let mut v = self.storage.list(Mount::Asset, dir).unwrap_or_default();
+        v.sort();
+        v
+    }
+
     /// A whole installation file (cards, settings).
     pub fn read_all(&self, path: &str) -> Result<Vec<u8>> {
         let r = self.reader(path)?;

@@ -61,6 +61,11 @@ distributed.
   (`Pose_D_00_Loop`, the height blend tree's nearest clip) as a looping glTF
   animation. Shown in `CustomScene` from the scene's main camera over the
   default background image.
+- `charaselect.rs`: `CharaSelectUI` (Add Heroine) — the preset heroine
+  cards in the `LoopGridView` grid with their PNG thumbnails, toggle
+  selection, 登録 into the entered slots (`MainListCardInfoComponent`), 閉じる.
+  Entered heroines stand at the map's standing `ActionPoint`s after
+  `ChangeMap`, posed and cel shaded.
 - `adapter.rs`: the session — boot, scene loads after the fade-in, frame
   layout and layer submission for the build scene and instantiated UI
   prefabs (each its own `Ui` slot), world entities/environment/camera of the

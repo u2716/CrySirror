@@ -86,6 +86,9 @@ pub struct MapWorld {
     /// Cinemachine positions `Camera/Pos1..` of the move-point prefab with
     /// their `Priority`.
     pub cameras: Vec<(View, i64)>,
+    /// `AL.ActionPoint`s of the move-point prefab: (name, Unity world
+    /// position, world rotation).
+    pub points: Vec<(String, [f32; 3], [f32; 4])>,
     pub log: Vec<String>,
 }
 
@@ -109,8 +112,9 @@ fn color3(v: Option<&Value>) -> Option<[f32; 3]> {
     }
 }
 
-/// Unity world camera of a transform node as an engine view.
-fn view(scene: &Scene6, node: usize, lens: Option<&crysirror_unity::managed::Fields>) -> View {
+/// Unity world camera of a transform node as an engine view (`lens`:
+/// Cinemachine `Lens` fields).
+pub fn view(scene: &Scene6, node: usize, lens: Option<&crysirror_unity::managed::Fields>) -> View {
     let m = world6::world_matrix(scene, node);
     let eye = m.w_axis.truncate();
     let fwd = m.transform_vector3(Vec3::Z).normalize_or_zero();
@@ -168,8 +172,15 @@ pub fn load(unity: &mut Unity, info: &MapInfo, time_zone: i32) -> Result<MapWorl
     let (chunks, report) = world6::scene_glb(&scene, &key, &roots, unity, &options, "CrySirror AmanatsuLocation map importer")?;
     // Move-point prefab cameras.
     let mut cameras = Vec::new();
+    let mut action_points = Vec::new();
     match crate::level::Level::prefab(unity, &format!("lib/{}", info.point.0), &info.point.1) {
         Ok(points) => {
+            for (i, n) in points.scene.nodes.iter().enumerate() {
+                if n.components.iter().any(|c| c.script == "AL.ActionPoint") {
+                    let (_, rot, pos) = world6::world_matrix(&points.scene, i).to_scale_rotation_translation();
+                    action_points.push((n.name.clone(), pos.to_array(), rot.to_array()));
+                }
+            }
             for i in 1..=9 {
                 let Some(n) = points.scene.find(&format!("{}/Camera/Pos{i}/CinemachineCamera", points.scene.nodes[0].name)) else { break };
                 let cam = points.scene.nodes[n].components.iter().find(|c| c.script.ends_with("CinemachineCamera"));
@@ -180,7 +191,7 @@ pub fn load(unity: &mut Unity, info: &MapInfo, time_zone: i32) -> Result<MapWorl
         }
         Err(e) => log.push(format!("move points {}: {e:#}", info.point.1)),
     }
-    Ok(MapWorld { info: info.clone(), chunks, report, sun, settings, fog, cameras, log })
+    Ok(MapWorld { info: info.clone(), chunks, report, sun, settings, fog, cameras, points: action_points, log })
 }
 
 impl MapWorld {

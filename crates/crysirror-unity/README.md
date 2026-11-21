@@ -56,7 +56,9 @@ and `ResourceManager` have fixed readers).
   `TextMeshProUGUI` runs, `CanvasGroup` alpha and its `blocksRaycasts` /
   `interactable` inheritance (`ignoreParentGroups`; a group on a root Canvas
   object applies to the whole canvas). Per-node `NodeState` overrides carry
-  runtime changes.
+  runtime changes (including runtime images for `Image`/`RawImage`).
+  `GridLayoutGroup` (cell size, spacing, start corner/axis, constraint,
+  alignment); `Scene6::clone_subtree` instantiates templates at runtime.
 - `world6.rs`: 3D content for the world renderer — `Material` +
   shader name → engine material (URP Lit/Simple Lit, Standard, ILLGAMES
   `AL/Map`: base colour/map, cutout/transparent, cull, metallic/smoothness

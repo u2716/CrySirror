@@ -5,9 +5,12 @@
 **Scope and current location.** The whole adopt-mode port: asset readers in
 `crysirror-unity` (shared) and game semantics in this crate.
 
-**Remaining work.** `ActionMap` beyond the new-game map select and
-`ChangeMap` (tutorial `ConfirmDialog`, `ActionMapUI` HUD and its camera
-position switching, time zones and `Skip`, heroine placement, `CommandScene`,
+**Remaining work.** `ActionMap` beyond the new-game map select,
+`ChangeMap` and heroine entry/standing placement (tutorial
+`ConfirmDialog`, `ActionMapUI` HUD and its camera position switching, time
+zones and `Skip`, `ActionPoint` choice and `_animIDList` motions, NavMesh
+movement, `CharaSelectUI` sources/sorting/pairs/release, scroll views and
+`RectMask2D` clipping, `CommandScene`,
 the map-select title/option/save buttons, map open flags from save progress);
 map rendering parity (lightmaps of `ma/lit`, reflection probes, the Azure sky
 time of day, URP global volumes / colour grading, `AL/MapColorMask`, water
@@ -61,3 +64,4 @@ H scenes and save/load, recorded in a validation note.
 | 2026-11-21 | 3D maps: shared `crysirror_unity::world6` (Unity 6 materials → engine PBR, GLB chunks, LOD 0, static batches, texture budget), `Scene6::subtree`, root-Canvas `CanvasGroup` fix; `MapSelectUI` + `MapConfirmDialog` + `ChangeMap` (map scene, time-zone light setting, key light, ambient, fog, Cinemachine camera) for all seven maps. | Listed above. |
 | 2026-11-21 | Characters: shared skinned GLB export, `Scene6::graft`/`alias_bones`, material hook, MessagePack; `HumanData` cards and list tables; the default heroine assembled (body, head, hair, clothes, skin/clothes/eye colours) in `CustomScene`. | Listed above. |
 | 2026-11-21 | Characters posed (`Pose_D_00_Loop` as glTF animation), cel shaded with card outline/hair colours, CustomScene background image plane. | Listed above. |
+| 2026-11-21 | `CharaSelectUI` (preset cards grid, thumbnails, entry slots), shared `GridLayoutGroup`, runtime images, `clone_subtree`; entered heroines placed at the map's standing action points with the key-light toon scale. | Listed above. |

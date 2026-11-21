@@ -110,10 +110,11 @@ impl Level {
         self.scene.nodes[node].components.iter().find(|c| matches!(c.script.as_str(), "UnityEngine.UI.Button" | "UnityEngine.UI.Toggle"))
     }
 
-    /// The Button handling a click on `node` (itself or an ancestor).
+    /// The Button or Toggle handling a click on `node` (itself or an
+    /// ancestor).
     pub fn click_handler(&self, mut node: usize) -> Option<usize> {
         loop {
-            if self.scene.nodes[node].components.iter().any(|c| c.script == "UnityEngine.UI.Button") {
+            if self.scene.nodes[node].components.iter().any(|c| c.script == "UnityEngine.UI.Button" || c.script == "UnityEngine.UI.Toggle") {
                 return Some(node);
             }
             node = self.scene.nodes[node].parent?;

@@ -45,6 +45,9 @@ pub struct NodeState {
     pub text: Option<String>,
     /// `Image.sprite` (a sprite of the scene's file).
     pub sprite: Option<PPtr>,
+    /// A runtime image (consumer asset path) shown by an `Image`/`RawImage`
+    /// instead of its sprite/texture (e.g. `RawImage.texture` set by code).
+    pub image: Option<String>,
     pub anchored_position: Option<[f32; 2]>,
     pub size_delta: Option<[f32; 2]>,
     pub scale: Option<[f32; 3]>,
@@ -62,7 +65,8 @@ pub enum Paint {
     /// nine-slice borders in canvas units (left, bottom, right, top).
     /// `sliced`: borders (left, bottom, right, top) in canvas units and in
     /// sprite pixels.
-    Image { sprite: PPtr, color: [f32; 4], sliced: Option<([f32; 4], [f32; 4])>, fill: Option<(i64, f32)> },
+    /// `image`: a runtime image replacing the sprite ([`NodeState::image`]).
+    Image { sprite: PPtr, color: [f32; 4], sliced: Option<([f32; 4], [f32; 4])>, fill: Option<(i64, f32)>, image: Option<String> },
     Text { text: String, font: PPtr, size: f32, color: [f32; 4], alignment: i64, wrap: bool, margin: [f32; 4] },
 }
 
@@ -299,7 +303,9 @@ fn walk(scene: &Scene6, states: &HashMap<usize, NodeState>, n: usize, mut w: Wal
                     None
                 };
                 let fill = (ty == 3).then(|| (f.int("m_FillMethod").unwrap_or(0), st.and_then(|s| s.fill).unwrap_or(f.float("m_FillAmount").unwrap_or(1.) as f32)));
-                Some(Paint::Image { sprite, color: tint, sliced, fill })
+                let image = st.and_then(|s| s.image.clone());
+                let sliced = if image.is_some() { None } else { sliced };
+                Some(Paint::Image { sprite, color: tint, sliced, fill, image })
             }
             "TextMeshProUGUI" => {
                 let text = st.and_then(|s| s.text.clone()).unwrap_or_else(|| f.string("m_text").unwrap_or("").to_owned());
@@ -335,6 +341,9 @@ fn walk(scene: &Scene6, states: &HashMap<usize, NodeState>, n: usize, mut w: Wal
         if let Some(g) = script(scene, n, name) {
             arrange(scene, states, n, g, axis, size, svc, driven);
         }
+    }
+    if let Some(g) = script(scene, n, "GridLayoutGroup") {
+        arrange_grid(scene, states, n, g, size, driven);
     }
     for &k in &node.children {
         walk(scene, states, k, Walk { parent: child_parent, scale: child_scale, origin: child_origin, alpha, sorting: w.sorting, in_canvas: true, blocks, interactable }, sw, sh, svc, driven, out, order);
@@ -529,6 +538,53 @@ fn arrange(scene: &Scene6, states: &HashMap<usize, NodeState>, n: usize, g: &Fie
         rp.anchor_max = [0., 1.];
         rp.size_delta = [w, h];
         rp.anchored_position = [x + rp.pivot[0] * w, -(y + (1. - rp.pivot[1]) * h)];
+        driven.insert(c, rp);
+    }
+}
+
+/// `GridLayoutGroup`: fixed `m_CellSize` cells with `m_Spacing`, filled from
+/// `m_StartCorner` along `m_StartAxis`, columns/rows from `m_Constraint`
+/// (0 flexible, 1 fixed columns, 2 fixed rows); the block is aligned by
+/// `m_ChildAlignment` inside the padding.
+fn arrange_grid(scene: &Scene6, states: &HashMap<usize, NodeState>, n: usize, g: &Fields, size: [f32; 2], driven: &mut HashMap<usize, crate::scene6::RectParams>) {
+    let kids = layout_children(scene, states, n);
+    if kids.is_empty() {
+        return;
+    }
+    let pad = padding(g);
+    let cell = vec2(g, "m_CellSize", [100., 100.]);
+    let spacing = vec2(g, "m_Spacing", [0., 0.]);
+    let inner = [size[0] - pad[0] - pad[1], size[1] - pad[2] - pad[3]];
+    let count = g.int("m_ConstraintCount").unwrap_or(2).max(1) as usize;
+    let fit = |axis: usize| (((inner[axis] + spacing[axis] + 0.001) / (cell[axis] + spacing[axis])).floor() as usize).max(1);
+    let (cols, rows) = match g.int("m_Constraint").unwrap_or(0) {
+        1 => (count, kids.len().div_ceil(count)),
+        2 => (kids.len().div_ceil(count), count),
+        _ => {
+            let c = fit(0).min(kids.len());
+            (c, kids.len().div_ceil(c))
+        }
+    };
+    let corner = g.int("m_StartCorner").unwrap_or(0);
+    let vertical_first = g.int("m_StartAxis").unwrap_or(0) == 1;
+    let anchor = g.int("m_ChildAlignment").unwrap_or(0);
+    let align = [(anchor % 3) as f32 * 0.5, (anchor / 3) as f32 * 0.5];
+    let block = [cols as f32 * cell[0] + (cols - 1) as f32 * spacing[0], rows as f32 * cell[1] + (rows - 1) as f32 * spacing[1]];
+    let start = [pad[0] + (inner[0] - block[0]).max(0.) * align[0], pad[2] + (inner[1] - block[1]).max(0.) * align[1]];
+    for (i, &c) in kids.iter().enumerate() {
+        let Some(mut rp) = scene.nodes[c].xform.rect else { continue };
+        let (mut col, mut row) = if vertical_first { (i / rows, i % rows) } else { (i % cols, i / cols) };
+        if corner % 2 == 1 {
+            col = cols - 1 - col;
+        }
+        if corner >= 2 {
+            row = rows - 1 - row;
+        }
+        let (x, y) = (start[0] + col as f32 * (cell[0] + spacing[0]), start[1] + row as f32 * (cell[1] + spacing[1]));
+        rp.anchor_min = [0., 1.];
+        rp.anchor_max = [0., 1.];
+        rp.size_delta = cell;
+        rp.anchored_position = [x + rp.pivot[0] * cell[0], -(y + (1. - rp.pivot[1]) * cell[1])];
         driven.insert(c, rp);
     }
 }
