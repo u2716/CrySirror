@@ -169,6 +169,30 @@ impl Scene6 {
         Ok(s)
     }
 
+    /// The hierarchy under `root` as its own scene (a prefab instance):
+    /// `root` becomes the only root, path ids are kept.
+    pub fn subtree(&self, root: usize) -> Scene6 {
+        let mut out = Scene6::default();
+        let mut map: HashMap<usize, usize> = HashMap::new();
+        let mut stack = vec![root];
+        while let Some(n) = stack.pop() {
+            let i = out.nodes.len();
+            map.insert(n, i);
+            let mut node = self.nodes[n].clone();
+            node.parent = if n == root { None } else { node.parent.and_then(|p| map.get(&p).copied()) };
+            node.children.clear();
+            out.by_game_object.insert(node.game_object, i);
+            out.by_transform.insert(node.transform, i);
+            out.nodes.push(node);
+            if let Some(p) = out.nodes[i].parent {
+                out.nodes[p].children.push(i);
+            }
+            stack.extend(self.nodes[n].children.iter().rev());
+        }
+        out.roots = vec![0];
+        out
+    }
+
     /// Node by slash-separated path from a root (`Canvas/Panel`).
     pub fn find(&self, path: &str) -> Option<usize> {
         let mut parts = path.split('/');
@@ -219,4 +243,27 @@ pub fn resolve_script(file: &SerializedFile, p: PPtr, registry: &TreeRegistry, o
         ext.decode_using(&info, registry)?
     };
     Ok(script_class(&f))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn subtree_keeps_the_hierarchy() {
+        let mut s = Scene6::default();
+        for (name, parent) in [("A", None), ("B", Some(0)), ("C", Some(0)), ("D", Some(1))] {
+            let i = s.nodes.len();
+            s.nodes.push(Node { name: name.into(), active: true, game_object: 10 + i as i64, transform: 20 + i as i64, xform: Xform::default(), parent, children: Vec::new(), components: Vec::new() });
+            if let Some(p) = parent {
+                s.nodes[p].children.push(i);
+            }
+        }
+        s.roots = vec![0];
+        let t = s.subtree(1);
+        assert_eq!(t.nodes.iter().map(|n| n.name.as_str()).collect::<Vec<_>>(), ["B", "D"]);
+        assert_eq!((t.roots.clone(), t.nodes[0].parent, t.nodes[1].parent, t.nodes[0].children.clone()), (vec![0], None, Some(0), vec![1]));
+        assert_eq!(t.path(1), "B/D");
+        assert_eq!(t.by_game_object.get(&13), Some(&1));
+    }
 }

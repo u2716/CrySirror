@@ -34,22 +34,48 @@ struct Uploaded {
     height: f32,
 }
 
-#[derive(Default)]
+/// The uGUI presentation of one hierarchy (build scene or prefab
+/// instance). Each `slot` owns its own layer and upload id range.
 pub struct Ui {
     sprites: HashMap<(String, i64), Option<Uploaded>>,
     fonts: HashMap<(String, i64), FontSlot>,
     next_upload: u32,
     submitted: BTreeMap<u32, String>,
     pub hits: Vec<(usize, ugui::Rect)>,
+    layer_base: u32,
+    upload_base: u32,
+}
+
+impl Default for Ui {
+    fn default() -> Self {
+        Self::new(0)
+    }
 }
 
 fn byte(v: f32) -> u8 {
     (v.clamp(0., 1.) * 255. + 0.5) as u8
 }
 
-const LAYER_BASE: u32 = 0x1000;
-
 impl Ui {
+    /// Slot 0 is the build scene; prefab overlays use 1.. (at most 15).
+    pub fn new(slot: u32) -> Self {
+        Self {
+            sprites: HashMap::new(),
+            fonts: HashMap::new(),
+            next_upload: 0,
+            submitted: BTreeMap::new(),
+            hits: Vec::new(),
+            layer_base: 0x1000 + slot * 0x10_0000,
+            upload_base: 0x4000_0000 + slot * 0x0100_0000,
+        }
+    }
+
+    /// Remove every submitted layer (the hierarchy is gone).
+    pub fn clear(&mut self) -> Vec<Json> {
+        self.hits.clear();
+        std::mem::take(&mut self.submitted).into_keys().map(|id| json!({"op": "remove", "id": id})).collect()
+    }
+
     /// The uploaded crop of a sprite of `file`.
     fn sprite(&mut self, unity: &mut Unity, host: &mut dyn Host, file: &str, p: PPtr) -> Result<Option<Uploaded>> {
         if p.is_null() {
@@ -62,7 +88,7 @@ impl Ui {
         let up = match unity.sprite_image(&fname, path_id)? {
             Some(img) => {
                 self.next_upload += 1;
-                let asset = host.upload(0x4000_0000 + self.next_upload, img.width, img.height, &img.rgba)?;
+                let asset = host.upload(self.upload_base + self.next_upload, img.width, img.height, &img.rgba)?;
                 Some(Uploaded { asset, width: img.width as f32, height: img.height as f32 })
             }
             None => None,
@@ -118,7 +144,7 @@ impl Ui {
     pub fn compose(&mut self, unity: &mut Unity, host: &mut dyn Host, file: &str, layout: &ugui::Layout, base_order: i32) -> Result<Vec<Json>> {
         let mut layers: BTreeMap<u32, Json> = BTreeMap::new();
         for (i, item) in layout.items.iter().enumerate() {
-            let id = LAYER_BASE + (i as u32) * 16;
+            let id = self.layer_base + (i as u32) * 16;
             let r = item.rect;
             if r.width() <= 0. || r.height() <= 0. {
                 continue;

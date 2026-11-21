@@ -18,6 +18,8 @@ crysirror-image.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 crysirror-asset.workspace = true
+crysirror-scene.workspace = true
+glam.workspace = true
 lz4_flex = { version = "=0.11.6", default-features = false, features = ["safe-decode"] }
 lzma-rs = "0.3"
 crysirror-dotnet.workspace = true

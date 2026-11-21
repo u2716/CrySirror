@@ -48,13 +48,29 @@ and `ResourceManager` have fixed readers).
   `crysirror-image`), `Mesh` vertex streams (skin weights, blend shapes,
   sub-meshes), `Sprite` render data including `SpriteAtlas` packing.
 - `scene6.rs`: GameObject/Transform/RectTransform hierarchies with every
-  decoded component (MonoBehaviours named by their script class).
+  decoded component (MonoBehaviours named by their script class);
+  `subtree` instantiates one prefab root as its own scene.
 - `ugui.rs`: uGUI layout of a `Scene6` into draw items and raycast targets —
   `Canvas`/`CanvasScaler`, RectTransform anchors/pivot/scale, layout groups,
   `LayoutElement`, `ContentSizeFitter`, `Image` (simple, sliced, filled),
   `TextMeshProUGUI` runs, `CanvasGroup` alpha and its `blocksRaycasts` /
-  `interactable` inheritance (`ignoreParentGroups`). Per-node `NodeState`
-  overrides carry runtime changes.
+  `interactable` inheritance (`ignoreParentGroups`; a group on a root Canvas
+  object applies to the whole canvas). Per-node `NodeState` overrides carry
+  runtime changes.
+- `world6.rs`: 3D content for the world renderer — `Material` +
+  shader name → engine material (URP Lit/Simple Lit, Standard, ILLGAMES
+  `AL/Map`: base colour/map, cutout/transparent, cull, metallic/smoothness
+  and `_MetallicGlossMap` → glTF roughness/metal, `UnpackNormalmapRGorAG`
+  normals, occlusion, emission; SpeedTree 8 foliage; unlit; particles and
+  NatureManufacture water approximated; Lux FX volumes, skyboxes and
+  `Hidden/` shaders skipped), MeshFilter/MeshRenderer hierarchies as GLB
+  chunks under the engine's 64 MiB model limit (LOD 0 only, static batches
+  from their combined mesh, shared meshes per chunk, renderers grouped by
+  material), a prepared-texture budget (`fit_textures` halves the largest
+  textures first), `Light` components with culling masks and
+  `RenderSettings` ambient/fog. Lightmaps, reflection probes, terrain,
+  particle systems, skinned renderers and shader-graph effects are not
+  converted.
 - `animator.rs`: Mecanim without Unity — `AnimationClip` muscle clips
   (streamed cubic segments, dense samples, constants) with their generic
   bindings, `AnimatorController` layers, states, exit-time transitions and

@@ -27,6 +27,7 @@ pub mod texture;
 pub mod typetree;
 pub mod ugui;
 pub mod unity6;
+pub mod world6;
 
 use anyhow::{bail, ensure, Context, Result};
 use crysirror_core::service::AssetReader;

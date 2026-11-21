@@ -23,6 +23,7 @@ serde.workspace = true
 serde_json.workspace = true
 crysirror-image.workspace = true
 crysirror-runtime = { workspace = true, optional = true }
+glam.workspace = true
 
 [dev-dependencies]
 crysirror-dotnet.workspace = true

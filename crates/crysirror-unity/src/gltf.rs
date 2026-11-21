@@ -21,11 +21,12 @@ pub fn mirror_quat(q: [f32; 4]) -> [f32; 4] {
 pub struct GlbBuilder {
     doc: glb::Document,
     images: HashMap<String, usize>,
+    bytes: usize,
 }
 
 impl GlbBuilder {
     pub fn new(generator: &str) -> Self {
-        Self { doc: glb::Document { generator: generator.into(), ..Default::default() }, images: HashMap::new() }
+        Self { doc: glb::Document { generator: generator.into(), ..Default::default() }, images: HashMap::new(), bytes: 0 }
     }
 
     /// Add a node with its Unity local transform; returns its index.
@@ -53,6 +54,7 @@ impl GlbBuilder {
             return Ok(*i);
         }
         let (bytes, mime) = encoded()?;
+        self.bytes += bytes.len();
         self.doc.images.push((bytes, mime));
         let i = self.doc.images.len() - 1;
         self.images.insert(key.to_owned(), i);
@@ -122,6 +124,75 @@ impl GlbBuilder {
         self.doc.meshes.push((mesh.name.clone(), prims));
         self.doc.nodes[node].mesh = Some(self.doc.meshes.len() - 1);
         Ok(())
+    }
+
+    /// Attach sub-meshes `range` of a Unity 2020+ mesh to `node`, one
+    /// primitive per triangle sub-mesh with the renderer material of the
+    /// same position (Unity reuses the last; `None` skips the sub-mesh).
+    /// Returns the GLB mesh index (`None` when nothing was drawn), which
+    /// other nodes may share through [`Self::set_mesh`].
+    pub fn mesh6(&mut self, node: usize, mesh: &crate::unity6::Mesh6, range: std::ops::Range<usize>, materials: &[Option<usize>]) -> Result<Option<usize>> {
+        let mut prims = Vec::new();
+        for (slot, s) in range.enumerate() {
+            let Some(sub) = mesh.submeshes.get(s) else { continue };
+            if sub.topology != 0 {
+                self.dropped(format!("mesh {} sub-mesh {s} topology {}", mesh.name, sub.topology));
+                continue;
+            }
+            let Some(material) = materials.get(slot).or(materials.last()).copied() else { continue };
+            let Some(material) = material else { continue };
+            let start = sub.first_index as usize;
+            let Some(indices) = mesh.indices.get(start..start + sub.index_count as usize) else { continue };
+            let mut remap: HashMap<u32, u32> = HashMap::new();
+            let mut p = glb::Primitive { material: Some(material), ..Default::default() };
+            let mut tri = Vec::with_capacity(indices.len());
+            for &i in indices {
+                let v = (i + sub.base_vertex) as usize;
+                if v >= mesh.positions.len() {
+                    continue;
+                }
+                let at = *remap.entry(v as u32).or_insert_with(|| {
+                    p.positions.push(mirror_point(mesh.positions[v]));
+                    if let Some(n) = mesh.normals.get(v) {
+                        p.normals.push(mirror_point(*n));
+                    }
+                    if let Some(uv) = mesh.uv[0].get(v) {
+                        p.uvs.push([uv[0], 1. - uv[1]]);
+                    }
+                    (p.positions.len() - 1) as u32
+                });
+                tri.push(at);
+            }
+            if p.normals.len() != p.positions.len() {
+                p.normals.clear();
+            }
+            if p.uvs.len() != p.positions.len() {
+                p.uvs.clear();
+            }
+            for t in tri.chunks_exact(3) {
+                p.indices.extend([t[0], t[2], t[1]]);
+            }
+            if !p.indices.is_empty() {
+                self.bytes += p.positions.len() * 32 + p.indices.len() * 4;
+                prims.push(p);
+            }
+        }
+        if prims.is_empty() {
+            return Ok(None);
+        }
+        self.doc.meshes.push((mesh.name.clone(), prims));
+        let index = self.doc.meshes.len() - 1;
+        self.doc.nodes[node].mesh = Some(index);
+        Ok(Some(index))
+    }
+
+    pub fn set_mesh(&mut self, node: usize, mesh: usize) {
+        self.doc.nodes[node].mesh = Some(mesh);
+    }
+
+    /// Approximate GLB payload so far (vertex attributes, indices, images).
+    pub fn estimated_bytes(&self) -> usize {
+        self.bytes
     }
 
     pub fn dropped(&mut self, note: String) {

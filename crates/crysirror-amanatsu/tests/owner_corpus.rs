@@ -862,6 +862,136 @@ fn material_census() {
         }
     }
     for (name, (n, props)) in &shaders {
-        println!("{n:6} {name}  [{} props] {}", props.len(), props.iter().take(40).cloned().collect::<Vec<_>>().join(" "));
+        println!("{n:6} {name}  [{} props] {}", props.len(), props.iter().take(std::env::var("AMANATSU_PROPS").ok().and_then(|w| w.parse().ok()).unwrap_or(40)).cloned().collect::<Vec<_>>().join(" "));
+    }
+}
+
+/// Nodes, `m_Container` entries and object classes of the bundles named in
+/// `AMANATSU_BUNDLES` (comma-separated `lib/…` paths).
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn bundle_census() {
+    let mut u = unity();
+    for path in std::env::var("AMANATSU_BUNDLES").unwrap().split(',') {
+        let b = u.bundle(path).unwrap();
+        println!("== {path}");
+        let nodes: Vec<(String, u32)> = b.nodes.iter().map(|n| (n.path.clone(), n.flags)).collect();
+        for (node, flags) in nodes {
+            println!("  node {node} flags {flags}");
+            if flags & 4 == 0 {
+                continue;
+            }
+            let key = format!("bundle:{path}#{node}");
+            let f = u.file(&key).unwrap();
+            let mut classes = std::collections::BTreeMap::<i32, usize>::new();
+            for o in &f.objects {
+                *classes.entry(o.class_id).or_default() += 1;
+            }
+            println!("    classes {classes:?}");
+            if let Some(ab) = f.objects.iter().find(|o| o.class_id == crysirror_unity::class_id::ASSET_BUNDLE) {
+                let fields = f.decode_using(ab, &u.registry).unwrap();
+                for e in fields.array("m_Container").unwrap_or(&[]).iter().take(60) {
+                    let crysirror_unity::managed::Value::Struct(e) = e else { continue };
+                    let p = e.fields("second").and_then(|s| s.pptr("asset")).unwrap_or_default();
+                    let class = f.object(p.path_id).map(|o| o.class_id).unwrap_or(-1);
+                    println!("    {} -> {}:{} class {class}", e.string("first").unwrap_or(""), p.file_id, p.path_id);
+                }
+            }
+        }
+    }
+}
+
+/// The first `AMANATSU_COUNT` (default 3) objects of class `AMANATSU_CLASS`
+/// in file `AMANATSU_KEY` (a `bundle:<path>#<node>` key).
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn dump_class() {
+    let mut u = unity();
+    let key = std::env::var("AMANATSU_KEY").unwrap();
+    let class: i32 = std::env::var("AMANATSU_CLASS").unwrap().parse().unwrap();
+    let count: usize = std::env::var("AMANATSU_COUNT").ok().and_then(|c| c.parse().ok()).unwrap_or(3);
+    let width: usize = std::env::var("AMANATSU_WIDTH").ok().and_then(|c| c.parse().ok()).unwrap_or(300);
+    let file = u.file(&key).unwrap();
+    for info in file.objects.iter().filter(|o| o.class_id == class).take(count) {
+        println!("-- {} ", info.path_id);
+        match u.decode(&key, info.path_id) {
+            Ok(f) => {
+                for (k, v) in f.0.iter() {
+                    println!("  {k} = {}", format!("{v:?}").chars().take(width).collect::<String>());
+                }
+            }
+            Err(e) => println!("  undecoded: {e:#}"),
+        }
+    }
+}
+
+/// Builds the GLB of a scene file (`AMANATSU_KEY`, default map000) through
+/// the shared importer; reports shaders, counts and the build time, and
+/// writes `AMANATSU_OUT` when set.
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn scene_glb() {
+    let mut u = unity();
+    let key = std::env::var("AMANATSU_KEY").unwrap_or_else(|_| "bundle:lib/ma/pre/sc/000_08/00.unity3d#BuildPlayer-map000".into());
+    let t = std::time::Instant::now();
+    let scene = u.scene(&key).unwrap();
+    println!("scene: {} nodes, {} roots in {:?}", scene.nodes.len(), scene.roots.len(), t.elapsed());
+    let t = std::time::Instant::now();
+    let roots = scene.roots.clone();
+    let (glb, report) = crysirror_unity::world6::scene_glb(&scene, &key, &roots, &mut u, &crysirror_unity::world6::GlbOptions { max_texture: std::env::var("AMANATSU_MAXTEX").ok().and_then(|v| v.parse().ok()).unwrap_or(1024), texture_budget: crysirror_amanatsu::map::MAP_TEXTURE_BUDGET }, "test").unwrap();
+    println!("glb chunks {:?} bytes in {:?}", glb.iter().map(|g| g.len()).collect::<Vec<_>>(), t.elapsed());
+    println!("texture bytes {} renderers {} skipped {} lod-culled {} materials {} textures {}", report.texture_bytes, report.renderers, report.skipped_renderers, report.lod_culled, report.materials, report.textures);
+    for (s, (support, n)) in &report.shaders {
+        println!("  {n:4} {support:12} {s}");
+    }
+    for e in report.errors.iter().take(20) {
+        println!("  error {e}");
+    }
+    println!("{} errors", report.errors.len());
+    for l in crysirror_unity::world6::scene_lights(&scene).iter().filter(|l| l.kind == 1) {
+        println!("  directional {} {:?} x{} dir {:?}", scene.path(l.node), l.color, l.intensity, l.direction);
+    }
+    if let Ok(out) = std::env::var("AMANATSU_OUT") {
+        for (i, g) in glb.iter().enumerate() {
+            std::fs::write(format!("{out}{i}.glb"), g).unwrap();
+        }
+    }
+}
+
+/// Rows of a `TableData` TextAsset by bundle and asset name
+/// (`AMANATSU_BUNDLES` = `lib/…`, `AMANATSU_ASSET` = name stem).
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn print_table() {
+    let mut u = unity();
+    let bundle = std::env::var("AMANATSU_BUNDLES").unwrap();
+    let asset = std::env::var("AMANATSU_ASSET").unwrap();
+    let (k, id) = u.bundle_asset(&bundle, &asset, 49).unwrap().expect("asset");
+    let t = crysirror_amanatsu::tables::Table::parse(&u.text_asset(&k, id).unwrap()).unwrap();
+    println!("keys {:?}", t.keys);
+    for r in &t.rows {
+        println!("  {r:?}");
+    }
+}
+
+/// Node paths (and MonoBehaviour classes) of a bundle file's hierarchy
+/// (`AMANATSU_KEY`), limited to roots named `AMANATSU_ROOTNAME` if set.
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn prefab_tree() {
+    let mut u = unity();
+    let key = std::env::var("AMANATSU_KEY").unwrap();
+    let want = std::env::var("AMANATSU_ROOTNAME").ok();
+    let scene = u.scene(&key).unwrap();
+    for (i, n) in scene.nodes.iter().enumerate() {
+        let mut r = i;
+        while let Some(p) = scene.nodes[r].parent {
+            r = p;
+        }
+        if want.as_deref().is_some_and(|w| !scene.nodes[r].name.eq_ignore_ascii_case(w)) {
+            continue;
+        }
+        let scripts: Vec<&str> = n.components.iter().filter(|c| !c.script.is_empty()).map(|c| c.script.as_str()).collect();
+        println!("{}{} {}", if n.active { "" } else { "(inactive) " }, scene.path(i), scripts.join(","));
     }
 }

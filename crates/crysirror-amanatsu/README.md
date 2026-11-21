@@ -17,7 +17,8 @@ distributed.
 - `unity.rs`: the installation through client storage — bundle/player file
   keys, the type-tree registry (bundles plus generated MonoBehaviour trees),
   sprites, TMP font fallbacks, build scene names.
-- `level.rs`: a build scene — hierarchy, script-driven uGUI state, Animator
+- `level.rs`: a build scene or an instantiated bundle prefab
+  (`Level::prefab`) — hierarchy, script-driven uGUI state, Animator
   playback (shared `crysirror_unity::animator`), `Button.m_OnClick`
   persistent calls (built-in targets run here, `TitleScene` methods go to the
   scene controller), `Selectable.interactable`, and the
@@ -37,8 +38,21 @@ distributed.
   host's channels (BGM looping); Vorbis setup headers from the installed
   `UnityPlayer.dll`. Title BGM, menu SE (`PropertyData._sseID`) and the logo's
   random `sd/dt/bc` brand call play.
+- `map.rs`: `Manager.MapManager` — the `ma/lis` `map_info` rows, and
+  `ChangeMap(id, timeZone)` as world content: the additive map scene
+  (`BuildPlayer-mapNNN`), its `LightmapSettings_<map>_<zone>` object on/off
+  lists and fog, the key directional light, `RenderSettings` ambient, and the
+  move-point prefab's Cinemachine cameras (highest `Priority`). Geometry and
+  materials go through the shared `crysirror_unity::world6` importer within
+  `MAP_TEXTURE_BUDGET`.
+- `actionmap.rs`: `ActionMapScene` for a new game — `MapSelectUI` (map
+  buttons by `MapUIInfo._id`, `CharaIconClear`), `MapConfirmDialog`
+  (はい/いいえ, right click), `MapSelectCallBack` → `ChangeMap` under the
+  scene fade.
 - `adapter.rs`: the session — boot, scene loads after the fade-in, frame
-  layout and layer submission, Button click dispatch (press and release on
+  layout and layer submission for the build scene and instantiated UI
+  prefabs (each its own `Ui` slot), world entities/environment/camera of the
+  map, Button click dispatch to the topmost hierarchy (press and release on
   the same interactable handler).
 
 ## Validation

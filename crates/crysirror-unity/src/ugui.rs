@@ -154,6 +154,23 @@ pub fn layout(scene: &Scene6, states: &HashMap<usize, NodeState>, width: f32, he
     out
 }
 
+/// `CanvasGroup` of a node over the inherited walk state: (alpha,
+/// blocksRaycasts, interactable), `ignoreParentGroups` resetting the flags.
+fn canvas_group(scene: &Scene6, n: usize, st: Option<&NodeState>, w: &Walk) -> (f32, bool, bool) {
+    let (mut alpha, mut blocks, mut interactable) = (w.alpha, w.blocks, w.interactable);
+    if let Some(g) = scene.component(n, CANVAS_GROUP, "") {
+        alpha *= st.and_then(|s| s.group_alpha).unwrap_or(g.fields.float("m_Alpha").unwrap_or(1.) as f32);
+        let own_blocks = st.and_then(|s| s.blocks_raycasts).unwrap_or(g.fields.int("m_BlocksRaycasts").unwrap_or(1) != 0);
+        let own_inter = st.and_then(|s| s.interactable).unwrap_or(g.fields.int("m_Interactable").unwrap_or(1) != 0);
+        if g.fields.int("m_IgnoreParentGroups").unwrap_or(0) != 0 {
+            (blocks, interactable) = (own_blocks, own_inter);
+        } else {
+            (blocks, interactable) = (blocks && own_blocks, interactable && own_inter);
+        }
+    }
+    (alpha, blocks, interactable)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn walk(scene: &Scene6, states: &HashMap<usize, NodeState>, n: usize, mut w: Walk, sw: f32, sh: f32, svc: &Services, driven: &mut HashMap<usize, crate::scene6::RectParams>, out: &mut Layout, order: &mut u32) {
     let sprite_info = svc.sprite_info;
@@ -186,8 +203,13 @@ fn walk(scene: &Scene6, states: &HashMap<usize, NodeState>, n: usize, mut w: Wal
                     _ => {}
                 }
             }
-            w = Walk { parent: Rect { x0: 0., y0: 0., x1: sw / scale, y1: sh / scale }, scale, origin: [0., 0.], alpha: w.alpha, sorting: c.fields.int("m_SortingOrder").unwrap_or(0), in_canvas: true, blocks: w.blocks, interactable: w.interactable };
+            // A CanvasGroup on the Canvas object applies to everything in it.
+            let (alpha, blocks, interactable) = canvas_group(scene, n, st, &w);
+            w = Walk { parent: Rect { x0: 0., y0: 0., x1: sw / scale, y1: sh / scale }, scale, origin: [0., 0.], alpha, sorting: c.fields.int("m_SortingOrder").unwrap_or(0), in_canvas: true, blocks, interactable };
             out.rects.insert(n, Rect { x0: 0., y0: 0., x1: sw, y1: sh });
+            if !interactable {
+                out.non_interactable.insert(n);
+            }
             for &k in &node.children {
                 walk(scene, states, k, Walk { ..w }, sw, sh, svc, driven, out, order);
             }
@@ -246,18 +268,7 @@ fn walk(scene: &Scene6, states: &HashMap<usize, NodeState>, n: usize, mut w: Wal
         y1: sh - (w.origin[1] + local.y0 * w.scale),
     };
     out.rects.insert(n, screen);
-    let mut alpha = w.alpha;
-    let (mut blocks, mut interactable) = (w.blocks, w.interactable);
-    if let Some(g) = scene.component(n, CANVAS_GROUP, "") {
-        alpha *= st.and_then(|s| s.group_alpha).unwrap_or(g.fields.float("m_Alpha").unwrap_or(1.) as f32);
-        let own_blocks = st.and_then(|s| s.blocks_raycasts).unwrap_or(g.fields.int("m_BlocksRaycasts").unwrap_or(1) != 0);
-        let own_inter = st.and_then(|s| s.interactable).unwrap_or(g.fields.int("m_Interactable").unwrap_or(1) != 0);
-        if g.fields.int("m_IgnoreParentGroups").unwrap_or(0) != 0 {
-            (blocks, interactable) = (own_blocks, own_inter);
-        } else {
-            (blocks, interactable) = (blocks && own_blocks, interactable && own_inter);
-        }
-    }
+    let (alpha, blocks, interactable) = canvas_group(scene, n, st, &w);
     if !interactable {
         out.non_interactable.insert(n);
     }
@@ -519,5 +530,42 @@ fn arrange(scene: &Scene6, states: &HashMap<usize, NodeState>, n: usize, g: &Fie
         rp.size_delta = [w, h];
         rp.anchored_position = [x + rp.pivot[0] * w, -(y + (1. - rp.pivot[1]) * h)];
         driven.insert(c, rp);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scene6::{Component, Node, RectParams, Xform};
+
+    fn node(name: &str, parent: Option<usize>, children: Vec<usize>, components: Vec<Component>) -> Node {
+        let rect = RectParams { anchor_min: [0.; 2], anchor_max: [1.; 2], anchored_position: [0.; 2], size_delta: [0.; 2], pivot: [0.5; 2] };
+        Node { name: name.into(), active: true, game_object: 0, transform: 0, xform: Xform { rect: Some(rect), scale: [1.; 3], rotation: [0., 0., 0., 1.], ..Default::default() }, parent, children, components }
+    }
+
+    fn component(class_id: i32, script: &str, fields: Vec<(&str, Value)>) -> Component {
+        Component { path_id: 0, class_id, script: script.into(), fields: Fields(fields.into_iter().map(|(k, v)| (k.to_owned(), v)).collect()) }
+    }
+
+    /// A CanvasGroup on the root Canvas object fades and blocks everything
+    /// under it (ActionMap `SubFadeCanvas`).
+    #[test]
+    fn root_canvas_group_applies() {
+        let canvas = component(CANVAS, "", vec![("m_Enabled", Value::Int(1))]);
+        let group = component(CANVAS_GROUP, "", vec![("m_Alpha", Value::Float(1.)), ("m_BlocksRaycasts", Value::Int(1)), ("m_Interactable", Value::Int(1))]);
+        let image = component(class_id::MONO_BEHAVIOUR, "UnityEngine.UI.Image", vec![("m_RaycastTarget", Value::Int(1))]);
+        let scene = Scene6 { nodes: vec![node("Fade", None, vec![1], vec![canvas, group]), node("Panel", Some(0), vec![], vec![image])], roots: vec![0], ..Default::default() };
+        let svc = Services { sprite_info: &|_| None, sprite_size: &|_| None, measure: &|_, _, _| [0.; 2] };
+        let alpha = |states: &HashMap<usize, NodeState>| {
+            let l = layout(&scene, states, 1920., 1080., &svc);
+            match &l.items[0].paint {
+                Paint::Image { color, .. } => (color[3], l.hits.len()),
+                _ => unreachable!(),
+            }
+        };
+        assert_eq!(alpha(&HashMap::new()), (1., 1));
+        let mut states = HashMap::new();
+        states.insert(0, NodeState { group_alpha: Some(0.), blocks_raycasts: Some(false), ..Default::default() });
+        assert_eq!(alpha(&states), (0., 0));
     }
 }

@@ -38,6 +38,20 @@ pub struct Level {
 impl Level {
     pub fn load(unity: &mut Unity, key: &str, name: &str) -> Result<Self> {
         let scene = unity.scene(key)?;
+        Self::from_scene(unity, key, name, scene)
+    }
+
+    /// An instance of the prefab `asset` (GameObject container name) of a
+    /// `lib/` bundle (`Object.Instantiate` of `Bundler.Load<GameObject>`).
+    pub fn prefab(unity: &mut Unity, bundle: &str, asset: &str) -> Result<Self> {
+        let (key, go) = unity.bundle_asset(bundle, asset, crysirror_unity::class_id::GAME_OBJECT)?.with_context(|| format!("prefab {asset} in {bundle}"))?;
+        let all = unity.scene(&key)?;
+        let root = *all.by_game_object.get(&go).with_context(|| format!("prefab {asset} root"))?;
+        let scene = all.subtree(root);
+        Self::from_scene(unity, &key, asset, scene)
+    }
+
+    fn from_scene(unity: &mut Unity, key: &str, name: &str, scene: Scene6) -> Result<Self> {
         let mut animators = Vec::new();
         let mut log = Vec::new();
         for (i, n) in scene.nodes.iter().enumerate() {

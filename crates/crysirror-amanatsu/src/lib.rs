@@ -4,9 +4,11 @@
 //! game logic is ported from the original program; assets are read from
 //! the user's installation.
 #![forbid(unsafe_code)]
+pub mod actionmap;
 pub mod adapter;
 pub mod adv;
 pub mod level;
+pub mod map;
 pub mod scenes;
 pub mod sound;
 pub mod tables;

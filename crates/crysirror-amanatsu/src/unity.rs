@@ -33,6 +33,7 @@ pub struct Unity {
     /// Generated script classes by script id.
     pub script_classes: HashMap<[u8; 16], String>,
     sprite_meta: HashMap<(String, i64), Option<([f32; 4], [f32; 2], f32)>>,
+    meshes: HashMap<(String, i64), Arc<unity6::Mesh6>>,
 }
 
 fn hex16(s: &str) -> Option<[u8; 16]> {
@@ -54,6 +55,7 @@ impl Unity {
             registry: TreeRegistry::default(),
             script_classes: HashMap::new(),
             sprite_meta: HashMap::new(),
+            meshes: HashMap::new(),
         };
         let mut paths = Vec::new();
         u.walk("lib", &mut paths);
@@ -375,6 +377,18 @@ impl Unity {
         self.decode(&k, id).map(|f| crysirror_unity::scene6::script_class(&f)).unwrap_or_default()
     }
 
+    /// A `Mesh` with its streamed vertex data.
+    pub fn mesh(&mut self, file: &str, path_id: i64) -> Result<Arc<unity6::Mesh6>> {
+        if let Some(m) = self.meshes.get(&(file.to_owned(), path_id)) {
+            return Ok(m.clone());
+        }
+        let f = self.decode(file, path_id)?;
+        let resolve = |p: &str| -> Option<Arc<dyn AssetReader>> { self.stream_reader_ro(file, p) };
+        let m = Arc::new(unity6::mesh(&f, &resolve)?);
+        self.meshes.insert((file.to_owned(), path_id), m.clone());
+        Ok(m)
+    }
+
     /// A level (`levelN`) or bundle file as a scene hierarchy.
     pub fn scene(&mut self, key: &str) -> Result<crysirror_unity::scene6::Scene6> {
         let file = self.file(key)?;
@@ -399,4 +413,38 @@ impl Unity {
 #[allow(dead_code)]
 fn unused() -> Result<()> {
     bail!("unused")
+}
+
+impl crysirror_unity::world6::SceneAssets for Unity {
+    fn object(&mut self, file: &str, p: PPtr) -> Result<Option<(String, i64, i32, Fields)>> {
+        if p.is_null() {
+            return Ok(None);
+        }
+        let (k, id) = match self.target(file, p) {
+            Ok(t) => t,
+            // `Library/unity default resources` and other player built-ins.
+            Err(_) => return Ok(None),
+        };
+        let Ok(f) = self.file(&k) else { return Ok(None) };
+        let Some(info) = f.object(id).copied() else { return Ok(None) };
+        let fields = match info.class_id {
+            crysirror_unity::class_id::MATERIAL | crysirror_unity::world6::SHADER => f.decode_using(&info, &self.registry)?,
+            _ => Fields::default(),
+        };
+        Ok(Some((k, id, info.class_id, fields)))
+    }
+    fn mesh(&mut self, file: &str, path_id: i64) -> Result<Arc<unity6::Mesh6>> {
+        Unity::mesh(self, file, path_id)
+    }
+    fn texture_size(&mut self, file: &str, path_id: i64) -> Result<(u32, u32)> {
+        let f = self.decode(file, path_id)?;
+        Ok((f.int("m_Width").unwrap_or(0).max(1) as u32, f.int("m_Height").unwrap_or(0).max(1) as u32))
+    }
+    fn texture(&mut self, file: &str, path_id: i64) -> Result<ImageSurface> {
+        // Make the texture's bundle resident for streamed data.
+        if let Some((bp, _)) = file.strip_prefix("bundle:").and_then(|r| r.split_once('#')) {
+            self.bundle(bp)?;
+        }
+        Unity::texture(self, file, path_id)
+    }
 }
