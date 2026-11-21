@@ -57,6 +57,101 @@ pub fn map_infos(unity: &mut Unity) -> Result<Vec<MapInfo>> {
     Ok(out)
 }
 
+/// Post-processing of the map's active global `Volume` profile.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Post {
+    pub aces: bool,
+    /// Exposure in stops (`tonemapExposurePre`).
+    pub exposure: f32,
+    pub saturation: f32,
+    pub contrast: f32,
+    pub color_filter: [f32; 3],
+    pub bloom: f32,
+}
+
+impl Default for Post {
+    fn default() -> Self {
+        Self { aces: false, exposure: 0., saturation: 1., contrast: 1., color_filter: [1.; 3], bloom: 0.02 }
+    }
+}
+
+/// Linear RGB of a black body at `kelvin` relative to 6600 K (white), the
+/// colour temperature filter of Beautify (Tanner Helland's fit).
+fn kelvin_filter(kelvin: f32) -> [f32; 3] {
+    let rgb = |k: f32| -> [f32; 3] {
+        let t = k / 100.;
+        let r = if t <= 66. { 255. } else { 329.698_73 * (t - 60.).powf(-0.133_204_76) };
+        let g = if t <= 66. { 99.470_8 * t.ln() - 161.119_57 } else { 288.122_16 * (t - 60.).powf(-0.075_514_85) };
+        let b = if t >= 66. { 255. } else if t <= 19. { 0. } else { 138.517_73 * (t - 10.).ln() - 305.044_8 };
+        [r, g, b].map(|c| (c / 255.).clamp(0.01, 1.))
+    };
+    let (a, w) = (rgb(kelvin.clamp(1000., 40000.)), rgb(6600.));
+    [a[0] / w[0], a[1] / w[1], a[2] / w[2]]
+}
+
+/// The first enabled global `Volume` of the active nodes.
+fn volume_post(unity: &mut Unity, key: &str, scene: &Scene6) -> Option<Post> {
+    let active: Vec<bool> = (0..scene.nodes.len())
+        .map(|i| {
+            let mut n = Some(i);
+            while let Some(k) = n {
+                if !scene.nodes[k].active {
+                    return false;
+                }
+                n = scene.nodes[k].parent;
+            }
+            true
+        })
+        .collect();
+    let profile = scene.nodes.iter().enumerate().filter(|(i, _)| active[*i]).flat_map(|(_, n)| &n.components).find(|c| c.script.ends_with("Rendering.Volume") && c.fields.int("m_IsGlobal").unwrap_or(0) != 0 && c.fields.int("m_Enabled").unwrap_or(1) != 0)?.fields.pptr("sharedProfile")?;
+    let (pk, pid) = unity.target(key, profile).ok()?;
+    let prof = unity.decode(&pk, pid).ok()?;
+    let mut post = Post::default();
+    let over = |f: &crysirror_unity::managed::Fields, name: &str| -> Option<f32> {
+        let v = f.fields(name)?;
+        (v.int("m_OverrideState").unwrap_or(0) != 0).then(|| v.float("m_Value").map(|x| x as f32).or_else(|| v.int("m_Value").map(|x| x as f32)))?
+    };
+    for c in prof.array("components").unwrap_or(&[]) {
+        let Value::PPtr(c) = c else { continue };
+        let Ok((ck, cid)) = unity.target(&pk, *c) else { continue };
+        let Ok(f) = unity.decode(&ck, cid) else { continue };
+        if f.int("active").unwrap_or(1) == 0 {
+            continue;
+        }
+        match f.string("m_Name").unwrap_or("") {
+            "Beautify" => {
+                if over(&f, "disabled").unwrap_or(0.) != 0. {
+                    continue;
+                }
+                if let Some(t) = over(&f, "tonemap") {
+                    post.aces = t > 0.;
+                }
+                if let Some(e) = over(&f, "tonemapExposurePre") {
+                    post.exposure = e.max(0.01).log2();
+                }
+                // Beautify `saturate` is a vibrance boost (0 neutral).
+                if let Some(v) = over(&f, "saturate") {
+                    post.saturation = (1. + v * 0.12).clamp(0., 4.);
+                }
+                if let Some(v) = over(&f, "contrast") {
+                    post.contrast = v.clamp(0., 4.);
+                }
+                if let (Some(k), Some(b)) = (over(&f, "colorTemp"), over(&f, "colorTempBlend")) {
+                    let t = kelvin_filter(k);
+                    post.color_filter = [0, 1, 2].map(|i| 1. + (t[i] - 1.) * b.clamp(0., 1.));
+                }
+            }
+            "Bloom" => {
+                if let Some(i) = over(&f, "intensity") {
+                    post.bloom = (i * 0.06).clamp(0., 1.);
+                }
+            }
+            _ => {}
+        }
+    }
+    Some(post)
+}
+
 /// A camera in engine space.
 #[derive(Clone, Debug, PartialEq)]
 pub struct View {
@@ -81,6 +176,8 @@ pub struct MapWorld {
     pub report: GlbReport,
     pub sun: Option<SceneLight>,
     pub settings: RenderSettings6,
+    /// The active global Volume's post settings (Beautify + URP Bloom).
+    pub post: Post,
     /// Fog of the light setting (colour, start, end).
     pub fog: Option<([f32; 3], f32, f32)>,
     /// Cinemachine positions `Camera/Pos1..` of the move-point prefab with
@@ -153,6 +250,16 @@ pub fn load(unity: &mut Unity, info: &MapInfo, time_zone: i32) -> Result<MapWorl
         }
         None => log.push(format!("light setting {light_name} not found")),
     }
+    let post = match volume_post(unity, &key, &scene) {
+        Some(p) => {
+            log.push(format!("volume post: {p:?}"));
+            p
+        }
+        None => {
+            log.push("no active global Volume".into());
+            Post::default()
+        }
+    };
     let file = unity.file(&key)?;
     let settings = file
         .objects
@@ -168,7 +275,7 @@ pub fn load(unity: &mut Unity, info: &MapInfo, time_zone: i32) -> Result<MapWorl
     let roots = scene.roots.clone();
     // SATD-amanatsu-port: one texture budget for the map; characters and
     // the rest of the session share the player's prepared-asset budget.
-    let options = GlbOptions { max_texture: 1024, texture_budget: MAP_TEXTURE_BUDGET };
+    let options = GlbOptions { max_texture: 1024, texture_budget: MAP_TEXTURE_BUDGET, spring_unit: 10. };
     let (chunks, report) = world6::scene_glb(&scene, &key, &roots, unity, &options, "CrySirror AmanatsuLocation map importer")?;
     // Move-point prefab cameras.
     let mut cameras = Vec::new();
@@ -191,7 +298,7 @@ pub fn load(unity: &mut Unity, info: &MapInfo, time_zone: i32) -> Result<MapWorl
         }
         Err(e) => log.push(format!("move points {}: {e:#}", info.point.1)),
     }
-    Ok(MapWorld { info: info.clone(), chunks, report, sun, settings, fog, cameras, points: action_points, log })
+    Ok(MapWorld { info: info.clone(), chunks, report, sun, settings, post, fog, cameras, points: action_points, log })
 }
 
 impl MapWorld {
@@ -209,11 +316,16 @@ impl MapWorld {
             let d = mirror_point(l.direction);
             json!({"direction": d, "color": l.color.map(|c| c.clamp(0., 4.)), "intensity": l.intensity.clamp(0., 8.), "shadow_strength": 0.6})
         });
+        // SATD-amanatsu-port: Beautify sharpen, depth of field, film grain,
+        // chromatic aberration, vignette and ShadowsMidtonesHighlights are
+        // not converted.
+        let p = &self.post;
         let mut env = json!({
-            "show_sky": true, "intensity": 1.0, "bloom": 0.02, "tonemap": "none", "ambient_occlusion": 0.0,
+            "show_sky": true, "intensity": 1.0, "bloom": p.bloom, "tonemap": if p.aces { "aces" } else { "none" }, "exposure": p.exposure, "ambient_occlusion": 0.0,
             "ambient": self.settings.ambient_linear(),
             "sun": sun,
             "shadow_distance": 80.0,
+            "grading": {"color_filter": p.color_filter, "contrast": p.contrast, "saturation": p.saturation},
         });
         if let Some((c, start, end)) = self.fog {
             let decode = |v: f32| if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) };

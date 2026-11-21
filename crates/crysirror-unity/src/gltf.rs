@@ -236,6 +236,10 @@ impl GlbBuilder {
         self.doc.animations.push(glb::Animation { name: name.into(), tracks });
     }
 
+    pub fn spring(&mut self, chain: crysirror_asset::spring::SpringChain) {
+        self.doc.springs.push(chain);
+    }
+
     pub fn set_mesh(&mut self, node: usize, mesh: usize) {
         self.doc.nodes[node].mesh = Some(mesh);
     }

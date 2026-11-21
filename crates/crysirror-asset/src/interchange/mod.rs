@@ -15,6 +15,8 @@ use anyhow::Result;
 use std::{borrow::Cow, collections::BTreeMap};
 
 pub const DROPPED_EXTRA: &str = "crysirror_import_dropped";
+/// Document extras key of spring-bone chains ([`crate::spring::SpringChain`]).
+pub const SPRINGS_EXTRA: &str = "crysirror_springs";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Format {

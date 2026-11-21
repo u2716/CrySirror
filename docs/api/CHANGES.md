@@ -1,5 +1,11 @@
 # API change log
 
+## `53a766c230fb9b32` (2026-11-21) — environment colour grading
+
+`Environment.grading` (`ColorGrading`: `color_filter`, `contrast` around middle grey, `saturation`) adjusts colour before tonemapping; absent or neutral values leave output unchanged. Rust callers that construct every `Environment` field must supply `grading` (`None`). Models may also carry spring-bone chains (`crysirror_springs` glTF document extras), which the renderer simulates after animation; no reflected signature covers them.
+
+The previous signature fingerprint was `60772aceebd8f060`.
+
 ## `60772aceebd8f060` (2026-11-20) — PCM16 percentage faders
 
 The Rust audio service accepts `Pcm16GainScale::Percent` on `AudioPcm16Gain`.

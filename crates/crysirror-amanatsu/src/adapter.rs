@@ -26,6 +26,9 @@ use std::{cell::RefCell, sync::Arc};
 pub const ENGINE_ID: &str = "amanatsu";
 pub const WIDTH: f32 = 1920.;
 pub const HEIGHT: f32 = 1080.;
+/// ILLGAMES characters are modelled at ten Unity units per metre: physics
+/// accelerations scale by this.
+const CHARACTER_UNIT: f32 = 10.;
 /// The first default heroine card of the installation.
 const DEFAULT_FEMALE_CARD: &str = "DefaultData/0/chara/female/AL_F_00.png";
 /// The first custom-scene background sample of the installation.
@@ -263,7 +266,7 @@ impl Game {
         self.lists = Some(lists);
         let human = human?;
         self.log.extend(human.log.iter().cloned());
-        let options = crysirror_unity::world6::GlbOptions { max_texture: 1024, texture_budget: 48 << 20 };
+        let options = crysirror_unity::world6::GlbOptions { max_texture: 1024, texture_budget: 48 << 20, spring_unit: CHARACTER_UNIT };
         let clips = match human.state_tracks(&mut self.unity, IDLE) {
             Ok(t) => vec![t],
             Err(e) => {

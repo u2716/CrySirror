@@ -945,7 +945,7 @@ fn scene_glb() {
     println!("scene: {} nodes, {} roots in {:?}", scene.nodes.len(), scene.roots.len(), t.elapsed());
     let t = std::time::Instant::now();
     let roots = scene.roots.clone();
-    let (glb, report) = crysirror_unity::world6::scene_glb(&scene, &key, &roots, &mut u, &crysirror_unity::world6::GlbOptions { max_texture: std::env::var("AMANATSU_MAXTEX").ok().and_then(|v| v.parse().ok()).unwrap_or(1024), texture_budget: crysirror_amanatsu::map::MAP_TEXTURE_BUDGET }, "test").unwrap();
+    let (glb, report) = crysirror_unity::world6::scene_glb(&scene, &key, &roots, &mut u, &crysirror_unity::world6::GlbOptions { max_texture: std::env::var("AMANATSU_MAXTEX").ok().and_then(|v| v.parse().ok()).unwrap_or(1024), texture_budget: crysirror_amanatsu::map::MAP_TEXTURE_BUDGET, spring_unit: 10. }, "test").unwrap();
     println!("glb chunks {:?} bytes in {:?}", glb.iter().map(|g| g.len()).collect::<Vec<_>>(), t.elapsed());
     println!("texture bytes {} renderers {} skipped {} lod-culled {} materials {} textures {}", report.texture_bytes, report.renderers, report.skipped_renderers, report.lod_culled, report.materials, report.textures);
     for (s, (support, n)) in &report.shaders {
@@ -1143,6 +1143,8 @@ fn chara_glb() {
     for g in &glb {
         let len = u32::from_le_bytes(g[12..16].try_into().unwrap()) as usize;
         let json: serde_json::Value = serde_json::from_slice(&g[20..20 + len]).unwrap();
+        let springs = json["extras"]["crysirror_springs"].as_array().cloned().unwrap_or_default();
+        println!("  {} spring chains: {}", springs.len(), springs.iter().take(6).map(|c| format!("{}(g {} d {} s {} lim {})", json["nodes"][c["root"].as_u64().unwrap() as usize]["name"], c["gravity"][1], c["damping"], c["stiffness"], c["angle_limit"])).collect::<Vec<_>>().join(" "));
         for m in json["materials"].as_array().unwrap() {
             let e = &m["extras"]["crysirror_material"]["material"];
             println!("  {} alpha {} tex {} color {}", m["name"], e["alpha_mode"], e["base_color_texture"], e["base_color_factor"]);

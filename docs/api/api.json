@@ -22066,6 +22066,12 @@
           "doc": "Virtual shadow maps for the sun, replacing cascades (ADR 0027).",
           "name": "virtual_shadows",
           "rust_type": "Option<VirtualShadows>"
+        },
+        {
+          "default": null,
+          "doc": "Colour adjustments before tonemapping; `null` is neutral.",
+          "name": "grading",
+          "rust_type": "Option<ColorGrading>"
         }
       ],
       "name": "Environment",
@@ -29998,7 +30004,7 @@
       "used_by": "UiEvent.widget client/local identity"
     }
   ],
-  "fingerprint": "60772aceebd8f060",
+  "fingerprint": "53a766c230fb9b32",
   "generated_by": "crysirror-engine api_doc (tests/api_docs.rs)",
   "globals": [
     {

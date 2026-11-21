@@ -357,6 +357,26 @@ pub enum Tonemap {
     None,
 }
 
+/// Colour adjustments before tonemapping (URP `ColorAdjustments`-style):
+/// a linear colour filter, contrast around middle grey (0.18) and
+/// saturation around Rec. 709 luminance. Neutral values are 1.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ColorGrading {
+    #[serde(default = "white3")]
+    pub color_filter: [f32; 3],
+    #[serde(default = "one")]
+    pub contrast: f32,
+    #[serde(default = "one")]
+    pub saturation: f32,
+}
+
+impl Default for ColorGrading {
+    fn default() -> Self {
+        Self { color_filter: [1.; 3], contrast: 1., saturation: 1. }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Environment {
@@ -417,6 +437,9 @@ pub struct Environment {
     /// Virtual shadow maps for the sun, replacing cascades (ADR 0027).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub virtual_shadows: Option<VirtualShadows>,
+    /// Colour adjustments before tonemapping; `null` is neutral.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grading: Option<ColorGrading>,
 }
 fn ao() -> f32 {
     1.
@@ -448,11 +471,16 @@ impl Default for Environment {
             ray_traced_gi: None,
             geometry_lod: None,
             virtual_shadows: None,
+            grading: None,
         }
     }
 }
 impl Environment {
     pub fn validate(&self) -> Result<()> {
+        if let Some(g) = &self.grading {
+            let r = |x: f32, a: f32, b: f32| x.is_finite() && (a..=b).contains(&x);
+            ensure!(g.color_filter.iter().all(|c| r(*c, 0., 16.)) && r(g.contrast, 0., 4.) && r(g.saturation, 0., 4.), "colour grading range");
+        }
         ensure!(
             self.ambient.is_none_or(|a| a.iter().all(|x| x.is_finite() && (0.0..=65504.).contains(x))),
             "environment ambient range"

@@ -324,11 +324,14 @@ pub struct GlbOptions {
     /// Prepared RGBA8 bytes (with mips) all textures may take: the largest
     /// textures are halved until the set fits.
     pub texture_budget: usize,
+    /// Scale from Unity physics units (m/s²) to model units for spring
+    /// gravity (e.g. 10 when characters are modelled at ten units per metre).
+    pub spring_unit: f32,
 }
 
 impl Default for GlbOptions {
     fn default() -> Self {
-        Self { max_texture: 1024, texture_budget: 128 << 20 }
+        Self { max_texture: 1024, texture_budget: 128 << 20, spring_unit: 1. }
     }
 }
 
@@ -463,11 +466,13 @@ struct Chunk {
     /// (mesh file, path id, sub-mesh range, materials) → GLB mesh.
     meshes: HashMap<(String, i64, usize, usize, Vec<Option<usize>>), Option<usize>>,
     batch_root: Option<usize>,
+    /// Spring chains on scene nodes (resolved to GLB nodes at the end).
+    springs: Vec<(usize, crysirror_asset::spring::SpringChain)>,
 }
 
 impl Chunk {
     fn new(generator: &str) -> Self {
-        Self { glb: GlbBuilder::new(generator), nodes: HashMap::new(), materials: HashMap::new(), images: HashMap::new(), meshes: HashMap::new(), batch_root: None }
+        Self { glb: GlbBuilder::new(generator), nodes: HashMap::new(), materials: HashMap::new(), images: HashMap::new(), meshes: HashMap::new(), batch_root: None, springs: Vec::new() }
     }
 
     /// The GLB node of a scene node, creating its ancestor chain.
@@ -657,14 +662,18 @@ pub fn scene_glb_animated(scene: &Scene6, file: &str, roots: &[usize], assets: &
         prepared_bytes(w, h)
     }).sum();
     let mut chunks = Vec::new();
+    let springs = magica_bone_cloths(scene, options.spring_unit);
     let mut chunk = Chunk::new(generator);
+    chunk.springs = springs.clone();
     for (_, node) in drawable {
         let n = &scene.nodes[node];
         let Some(r) = n.components.iter().find(|c| c.class_id == MESH_RENDERER || c.class_id == SKINNED_MESH_RENDERER) else { continue };
         let skinned = r.class_id == SKINNED_MESH_RENDERER;
         let mesh_ptr = if skinned { r.fields.pptr("m_Mesh") } else { n.components.iter().find(|c| c.class_id == MESH_FILTER).and_then(|f| f.fields.pptr("m_Mesh")) }.unwrap_or_default();
         if chunk.glb.estimated_bytes() > CHUNK_BUDGET {
-            let full = std::mem::replace(&mut chunk, Chunk::new(generator));
+            let mut fresh = Chunk::new(generator);
+            fresh.springs = springs.clone();
+            let full = std::mem::replace(&mut chunk, fresh);
             report.materials += full.materials.values().filter(|m| m.is_some()).count();
             report.textures += full.images.values().filter(|i| i.is_some()).count();
             chunks.push(finish_chunk(full, clips)?);
@@ -747,8 +756,57 @@ pub fn scene_glb_animated(scene: &Scene6, file: &str, roots: &[usize], assets: &
     Ok((chunks, report))
 }
 
+/// `MagicaCloth2.MagicaCloth` BoneCloth (`clothType` 1) components of the
+/// active nodes as spring chains on scene nodes: one chain per root bone,
+/// gravity (`gravity` × `gravityDirection`, Unity → mirrored model space,
+/// times `unit`), `damping`, `angleRestorationConstraint.stiffness`,
+/// `angleLimitConstraint.limitAngle`, `radius` (base values; their depth
+/// curves are not evaluated). Collider lists are not converted.
+pub fn magica_bone_cloths(scene: &Scene6, unit: f32) -> Vec<(usize, crysirror_asset::spring::SpringChain)> {
+    let transforms: HashMap<(u32, i64), usize> = scene.nodes.iter().enumerate().map(|(i, n)| ((n.origin, n.transform), i)).collect();
+    let mut out = Vec::new();
+    for n in scene.nodes.iter().filter(|n| n.active) {
+        for c in n.components.iter().filter(|c| c.script.ends_with("MagicaCloth")) {
+            let Some(d) = c.fields.fields("serializeData") else { continue };
+            if d.int("clothType").unwrap_or(0) != 1 {
+                continue;
+            }
+            let value = |f: Option<&Fields>, default: f32| f.and_then(|f| f.float("value")).map_or(default, |v| v as f32);
+            let dir = d.fields("gravityDirection").map_or([0., -1., 0.], |g| ["x", "y", "z"].map(|k| g.float(k).unwrap_or(0.) as f32));
+            let g = d.float("gravity").unwrap_or(5.) as f32 * unit;
+            let gravity = crate::gltf::mirror_point([dir[0] * g, dir[1] * g, dir[2] * g]);
+            let restoration = d.fields("angleRestorationConstraint");
+            let stiffness = if restoration.and_then(|r| r.int("useAngleRestoration")).unwrap_or(1) != 0 { value(restoration.and_then(|r| r.fields("stiffness")), 0.2) } else { 0. };
+            let limit = d.fields("angleLimitConstraint");
+            let angle_limit = if limit.and_then(|l| l.int("useAngleLimit")).unwrap_or(0) != 0 { value(limit.and_then(|l| l.fields("limitAngle")), 60.) } else { 0. };
+            let chain = crysirror_asset::spring::SpringChain {
+                root: 0,
+                gravity,
+                damping: value(d.fields("damping"), 0.05).clamp(0., 1.) * 0.5,
+                stiffness: stiffness.clamp(0., 1.),
+                angle_limit: angle_limit.clamp(0., 180.),
+                radius: (value(d.fields("radius"), 0.02) * unit).max(0.),
+                colliders: Vec::new(),
+            };
+            for b in d.array("rootBones").unwrap_or(&[]) {
+                let Value::PPtr(b) = b else { continue };
+                if let Some(&node) = transforms.get(&(n.origin, b.path_id)) {
+                    out.push((node, chain.clone()));
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Add the clips' tracks of nodes present in the chunk, then encode.
 fn finish_chunk(mut chunk: Chunk, clips: &[ClipTracks]) -> Result<Vec<u8>> {
+    for (node, mut chain) in std::mem::take(&mut chunk.springs) {
+        if let Some(&root) = chunk.nodes.get(&node) {
+            chain.root = root;
+            chunk.glb.spring(chain);
+        }
+    }
     for c in clips {
         let tracks: Vec<_> = c.tracks.iter().filter_map(|(n, t, v)| Some((*chunk.nodes.get(n)?, t.clone(), v.clone()))).collect();
         if !tracks.is_empty() {

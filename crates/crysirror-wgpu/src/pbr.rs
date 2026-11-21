@@ -792,6 +792,8 @@ pub struct PbrRenderer {
     prev_palettes: HashMap<u64, Vec<[[f32; 4]; 4]>>,
     /// Animation clips bound to a model's nodes: (model key, source key, clip).
     bound_clips: HashMap<(String, String, String), Arc<cpu::Clip>>,
+    /// Spring-bone particles per animated instance.
+    spring_states: HashMap<u64, crysirror_asset::spring::SpringState>,
     /// Per-draw morphed vertex buffers keyed by draw key: (weights hash, buffer, vertex count).
     morph_buffers: HashMap<u64, (u64, wgpu::Buffer, usize)>,
     ssao_bgl: wgpu::BindGroupLayout,
@@ -1772,7 +1774,7 @@ impl PbrRenderer {
         let cascade_bufs: Vec<wgpu::Buffer> = (0..CASCADES)
             .map(|_| uniform("cascade light", std::mem::size_of::<ShadowUniform>() as u64))
             .collect();
-        let post_buf = uniform("post", 32);
+        let post_buf = uniform("post", 64);
         let object_capacity = 256;
         let object_buf = uniform("pbr objects", OBJECT_STRIDE * object_capacity);
         let particles = crate::particles::Particles::new(d, HDR, MSAA)?;
@@ -1941,6 +1943,7 @@ impl PbrRenderer {
             palette_capacity,
             prev_palettes: HashMap::new(),
             bound_clips: HashMap::new(),
+            spring_states: HashMap::new(),
             morph_buffers: HashMap::new(),
             ssao_bgl,
             blur_bgl,
@@ -3108,6 +3111,7 @@ impl PbrRenderer {
         let mut pose_links: Vec<(Option<u64>, Option<&str>, &[(String, crysirror_scene::components::NodePose)])> =
             Vec::new();
         let mut live_clips = std::collections::HashSet::new();
+        let mut pose_matrices: Vec<Mat4> = Vec::new();
         for instance in &scene.instances {
             if let PbrDrawable::Scene {
                 client,
@@ -3159,6 +3163,7 @@ impl PbrRenderer {
                     });
                 }
                 pose_keys.push(instance.key);
+                pose_matrices.push(Mat4::from_cols_array_2d(&instance.matrix));
                 pose_requests.push((model, layers));
                 pose_links.push((*follow, attach.as_deref(), nodes.as_slice()));
             }
@@ -3198,6 +3203,16 @@ impl PbrRenderer {
                 done[i] = true;
             }
         }
+        // Spring bones after the animated and procedural pose.
+        for (i, (model, _)) in pose_requests.iter().enumerate() {
+            if model.springs.is_empty() {
+                continue;
+            }
+            let state = self.spring_states.entry(pose_keys[i]).or_default();
+            crysirror_asset::spring::simulate(model, &model.springs, &mut locals[i], pose_matrices[i], state, scene.time);
+        }
+        let live: std::collections::HashSet<u64> = pose_keys.iter().copied().collect();
+        self.spring_states.retain(|k, _| live.contains(k));
         let poses: Vec<Vec<Mat4>> = pose_requests
             .iter()
             .zip(&locals)
@@ -4358,6 +4373,7 @@ impl PbrRenderer {
             ],
             screen: fu.screen,
         };
+        let grading = env.grading.clone().unwrap_or_default();
         let tonemap = match env.tonemap {
             Tonemap::PbrNeutral => 0.,
             Tonemap::Aces => 1.,
@@ -4373,6 +4389,14 @@ impl PbrRenderer {
                 0.,
                 if env.auto_exposure.is_some() { 1. } else { 0. },
                 env.auto_exposure.as_ref().map_or(0., |a| a.compensation),
+                0.,
+                0.,
+                grading.color_filter[0],
+                grading.color_filter[1],
+                grading.color_filter[2],
+                0.,
+                grading.contrast,
+                grading.saturation,
                 0.,
                 0.,
             ]),

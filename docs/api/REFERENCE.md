@@ -6,7 +6,7 @@ Generated from the class registry, the command table, serde defaults and Rust do
 `CRYSIRROR_BLESS=1 cargo test --release -p crysirror-engine --test api_docs`.
 Policy and change log: [README](README.md), [CHANGES](CHANGES.md).
 
-API fingerprint: `60772aceebd8f060`
+API fingerprint: `53a766c230fb9b32`
 
 The same classes are exposed to Rust (`EngineContext` calls), to JavaScript/TypeScript (bindings generated from the registry, [crysirror.d.ts](crysirror.d.ts)) and to inspection tools.
 
@@ -6008,6 +6008,7 @@ Used by: `World.setEnvironment`, `world.set_environment`.
 | `ray_traced_gi` | `Option<RayTracedGi>` | — | Per-pixel ray-traced diffuse GI; requires the hardware rendering path. |
 | `geometry_lod` | `Option<GeometryLod>` | — | Cluster-LOD virtualized geometry (ADR 0026). |
 | `virtual_shadows` | `Option<VirtualShadows>` | — | Virtual shadow maps for the sun, replacing cascades (ADR 0027). |
+| `grading` | `Option<ColorGrading>` | — | Colour adjustments before tonemapping; `null` is neutral. |
 
 ### Sun
 

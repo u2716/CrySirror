@@ -16,7 +16,10 @@ scenarios, parameters, favourability; talks now play `e1-approach` and one
 auto/skip/log/config buttons and text reveal,
 the map-select title/option/save buttons, map open flags from save progress);
 map rendering parity (lightmaps of `ma/lit`, reflection probes, the Azure sky
-time of day, URP global volumes / colour grading, `AL/MapColorMask`, water
+time of day, Beautify sharpen/depth of field/film grain/vignette and URP
+ShadowsMidtonesHighlights (tonemap, exposure, saturation, contrast, colour
+temperature and bloom are applied), the PS Vita lite tonemap without colour
+grading, `AL/MapColorMask`, water
 and particle shaders, `CameraLight` prefabs); the synchronous
 `ChangeMap` import (≈1–2 s inside one VM step behind the fade) moving to a
 worker under ADR 0050; characters beyond the card-driven assembly in
@@ -24,7 +27,8 @@ worker under ADR 0050; characters beyond the card-driven assembly in
 `customshape` face/body shape values, makeup/paint/eyelid/mouth layers and
 the eye UV layout of the `LIF/*` texture creation, the original toon
 ramps (`mt_ramp`), gloss and rim terms, clothing body cut-outs, blend
-shapes/expressions, hair/cloth physics, height blending between the
+shapes/expressions, MagicaCloth depth curves, colliders and MeshCloth
+(BoneCloth hair is simulated as spring bones), height blending between the
 `_S/_M/_L` clips, controller transitions, characters on maps); the
 `CustomScene` character maker UI (instantiated from `lib/custom` prefabs at
 runtime; only the background is drawn) and `Memory` scene controller; on the title: save data (the
@@ -70,3 +74,4 @@ H scenes and save/load, recorded in a validation note.
 | 2026-11-21 | `CharaSelectUI` (preset cards grid, thumbnails, entry slots), shared `GridLayoutGroup`, runtime images, `clone_subtree`; entered heroines placed at the map's standing action points with the key-light toon scale. | Listed above. |
 | 2026-11-21 | ADV program and the `ADVCore` window: picking a heroine on the map starts a conversation (text, voices, choices with `ReplaceLanguage`, variables, branches) that returns to the map. | Listed above. |
 | 2026-11-21 | `CommandUI` menu on later clicks: greeting, talk/listen/H-topic/with/massage scenarios by family, 戻る; panel hidden during events. Scenario choice by parameters, invite/massage/H scenes and point changes remain. | Listed above. |
+| 2026-11-21 | Physics and lighting: shared spring bones (`crysirror_asset::spring`, GLB `crysirror_springs`, renderer pose pass) fed by MagicaCloth BoneCloth; shared `Environment.grading`; map global Volume (Beautify tonemap/exposure/saturation/contrast/temperature, URP Bloom). | Listed above. |

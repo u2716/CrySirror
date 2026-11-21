@@ -54,3 +54,11 @@
 - Behaviour (track: new game, enter `AL_F_00`, pool, click her at (530, 280), clicks, first choice): the `ADVCore` window shows 恵莉佳: 「あ、こんな所にいたんだね」, then 「私、結構天然な方だって…どう思う？」 with the choices いい事だと思う / 気にしなくていい; choosing the first shows 「だよね、天然ってそんなに悪い事じゃないよね」 and the next click closes the window back to the map. With audio on, `channel_audio` reports 2 active voices (BGM, voice), no underruns.
 - Not established: the original scenario selection (`CommandScene`), expressions/camera framing during talk, comparison with the original.
 - Update (same day): a second click on the heroine opens the command menu (parameter panel, command ring, H locked by 必要親密度) with a greeting voice; 話す plays `agree` + a `ct` topic (「そういえばこの間、色の綺麗なトカゲっぽいの見かけたよ」) with the menu hidden, the menu returns afterwards, and 戻る plays `end` and closes it back to the map.
+
+## 2026-11-21 — hair physics and map post-processing (local, Apple M4 Max / Metal, offscreen, muted)
+
+- Implementation: `crysirror-asset` `spring.rs` (Verlet spring bones with stiffness, damping, gravity, angle limit, sphere colliders; GLB document extras `crysirror_springs`), `crysirror-wgpu` spring state per animated instance after the clip/override pass, `crysirror-scene` `Environment.grading` with the WGSL tonemap pass; `crysirror-unity` `magica_bone_cloths`; `crysirror-amanatsu` map `Volume` → environment.
+- Compilation: `cargo test --release -p crysirror-asset -p crysirror-unity -p crysirror-amanatsu` (the spring chain test lags, keeps bone length and settles); `crysirror-scene` lib tests: 104 pass, `input_routes::tests::menu_collision_leaves_ui_journal_and_clock_uncommitted` fails identically on a clean checkout of HEAD (pre-existing, unrelated); API reference regenerated (fingerprint `53a766c230fb9b32`).
+- Owner corpus: `chara_glb` — `AL_F_00` carries 42 hair spring chains (MagicaCloth gravity 2 × 10 units, stiffness 0.22–0.40, limit 30°).
+- Behaviour: CustomScene hair stays attached and stable across frames 800/860 while ends move with the idle loop; map000 morning resolves `volume_map00_00_morning` (ACES, −0.07 EV, saturation 1.3, contrast 1.1, 6800 K filter, bloom 0.03) and renders warmer and more saturated than the untoned frame.
+- Not established: comparison with original captures, collision of hair with the head/body, evening/night volumes.

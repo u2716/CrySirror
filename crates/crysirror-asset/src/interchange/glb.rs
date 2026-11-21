@@ -118,6 +118,8 @@ pub struct Document {
     pub animations: Vec<Animation>,
     /// Source features the conversion could not represent.
     pub dropped: Vec<String>,
+    /// Spring-bone chains on document node indices.
+    pub springs: Vec<crate::spring::SpringChain>,
     pub generator: String,
 }
 
@@ -437,8 +439,18 @@ impl Document {
                 doc[key] = Value::Array(value);
             }
         }
-        if !self.dropped.is_empty() {
-            doc["extras"] = json!({ crate::interchange::DROPPED_EXTRA: self.dropped });
+        if !self.dropped.is_empty() || !self.springs.is_empty() {
+            let mut extras = serde_json::Map::new();
+            if !self.dropped.is_empty() {
+                extras.insert(crate::interchange::DROPPED_EXTRA.into(), json!(self.dropped));
+            }
+            if !self.springs.is_empty() {
+                for c in &self.springs {
+                    c.validate(self.nodes.len())?;
+                }
+                extras.insert(crate::interchange::SPRINGS_EXTRA.into(), json!(self.springs));
+            }
+            doc["extras"] = Value::Object(extras);
         }
         let mut json = serde_json::to_vec(&doc)?;
         while json.len() % 4 != 0 {

@@ -155,6 +155,8 @@ pub struct PbrModel {
     pub materials: Vec<PbrMaterial>,
     pub images: Vec<MipImage>,
     pub dropped: Vec<String>,
+    /// Spring-bone chains (`crysirror_springs` document extras).
+    pub springs: Vec<crate::spring::SpringChain>,
 }
 
 impl PbrModel {
@@ -473,6 +475,15 @@ fn load_pbr_with(
         });
     }
     let mut model = PbrModel::default();
+    if let Some(raw) = doc.document.as_json().extras.as_ref() {
+        let value: serde_json::Value = serde_json::from_str(raw.get()).context("document extras")?;
+        if let Some(springs) = value.get(crate::interchange::SPRINGS_EXTRA) {
+            model.springs = serde_json::from_value(springs.clone()).context("spring chains")?;
+            for c in &model.springs {
+                c.validate(doc.nodes().len())?;
+            }
+        }
+    }
     // Which images are color (sRGB) is decided by material usage.
     let mut srgb = vec![false; doc.images().len()];
     for m in doc.materials() {
