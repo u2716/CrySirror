@@ -50,6 +50,9 @@ pub struct NodeState {
     pub image: Option<String>,
     pub anchored_position: Option<[f32; 2]>,
     pub size_delta: Option<[f32; 2]>,
+    /// `RectTransform.anchorMin`/`anchorMax` (e.g. a `Slider` fill rect).
+    pub anchor_min: Option<[f32; 2]>,
+    pub anchor_max: Option<[f32; 2]>,
     pub scale: Option<[f32; 3]>,
     /// `Image.fillAmount`.
     pub fill: Option<f32>,
@@ -233,6 +236,12 @@ fn walk(scene: &Scene6, states: &HashMap<usize, NodeState>, n: usize, mut w: Wal
     }
     if let Some(d) = st.and_then(|s| s.size_delta) {
         rp.size_delta = d;
+    }
+    if let Some(a) = st.and_then(|s| s.anchor_min) {
+        rp.anchor_min = a;
+    }
+    if let Some(a) = st.and_then(|s| s.anchor_max) {
+        rp.anchor_max = a;
     }
     let scale3 = st.and_then(|s| s.scale).unwrap_or(node.xform.scale);
     let pr = w.parent;
@@ -624,4 +633,26 @@ mod tests {
         states.insert(0, NodeState { group_alpha: Some(0.), blocks_raycasts: Some(false), ..Default::default() });
         assert_eq!(alpha(&states), (0., 0));
     }
+}
+
+/// `Slider.value` setter (`UpdateVisuals`): the fill rect's anchors span
+/// the normalized value along the slider's direction (0 left-to-right,
+/// 1 right-to-left, 2 bottom-to-top, 3 top-to-bottom).
+pub fn slider_value(scene: &Scene6, slider: &Fields, value: f32, states: &mut HashMap<usize, NodeState>) {
+    let (lo, hi) = (slider.float("m_MinValue").unwrap_or(0.) as f32, slider.float("m_MaxValue").unwrap_or(1.) as f32);
+    let t = if hi > lo { ((value - lo) / (hi - lo)).clamp(0., 1.) } else { 0. };
+    let Some(fill) = slider.pptr("m_FillRect").and_then(|p| scene.nodes.iter().position(|n| n.transform == p.path_id || n.components.iter().any(|c| c.path_id == p.path_id))) else { return };
+    let dir = slider.int("m_Direction").unwrap_or(0);
+    let axis = usize::from(dir >= 2);
+    let reverse = dir == 1 || dir == 3;
+    let mut amin = [0., 0.];
+    let mut amax = [1., 1.];
+    if reverse {
+        amin[axis] = 1. - t;
+    } else {
+        amax[axis] = t;
+    }
+    let st = states.entry(fill).or_default();
+    st.anchor_min = Some(amin);
+    st.anchor_max = Some(amax);
 }

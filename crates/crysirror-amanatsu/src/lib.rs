@@ -14,6 +14,7 @@ pub mod commands;
 pub mod hud;
 pub mod level;
 pub mod map;
+pub mod oil;
 pub mod params;
 pub mod save;
 pub mod scenes;

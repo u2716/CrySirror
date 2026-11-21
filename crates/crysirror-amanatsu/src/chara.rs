@@ -461,9 +461,15 @@ impl Human {
     /// blend tree (`_S`/`_M`/`_L` clips) at the card's height, nearest
     /// child (SATD-amanatsu-port: no blending between the three).
     pub fn state_tracks(&self, unity: &mut Unity, state: &str) -> Result<crysirror_unity::world6::ClipTracks> {
-        use crysirror_unity::animator::{Clip, Controller};
         let (bundle, name) = motion_controller(self.female);
-        let (k, id) = unity.bundle_asset(&bundle, name, 91)?.with_context(|| format!("controller {name}"))?;
+        self.controller_tracks(unity, &bundle, name, state)
+    }
+
+    /// A state's motion of any controller (`bundle`, controller asset) with
+    /// the `_S`/`_M`/`_L` height pick (oil poses, H postures).
+    pub fn controller_tracks(&self, unity: &mut Unity, bundle: &str, name: &str, state: &str) -> Result<crysirror_unity::world6::ClipTracks> {
+        use crysirror_unity::animator::{Clip, Controller};
+        let (k, id) = unity.bundle_asset(bundle, name, 91)?.with_context(|| format!("controller {name}"))?;
         let ctl = Controller::decode(&unity.decode(&k, id)?)?;
         let si = ctl.find_state(0, state).with_context(|| format!("state {state}"))?;
         let first = ctl.layers[0].states[si].clip.context("state motion")?;

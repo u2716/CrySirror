@@ -1164,7 +1164,9 @@ fn chara_glb() {
 fn chara_controller() {
     use crysirror_unity::animator::{self, Clip, Controller};
     let mut u = unity();
-    let (k, id) = u.bundle_asset("lib/ani/mot/1/000_00.unity3d", "f_00", 91).unwrap().unwrap();
+    let bundle = std::env::var("AMANATSU_BUNDLE").unwrap_or_else(|_| "lib/ani/mot/1/000_00.unity3d".into());
+    let asset = std::env::var("AMANATSU_ASSET").unwrap_or_else(|_| "f_00".into());
+    let (k, id) = u.bundle_asset(&bundle, &asset, 91).unwrap().unwrap();
     let ctl = Controller::decode(&u.decode(&k, id).unwrap()).unwrap();
     println!("layers {} clips {}", ctl.layers.len(), ctl.clips.len());
     for (li, l) in ctl.layers.iter().enumerate() {
@@ -1343,4 +1345,43 @@ fn print_save() {
         println!("npc {:?} id {} map {} {:?} {:?} card {} bytes", n.actor.chara_file_name, n.actor.unique_id, n.action.map_id, n.parameter, n.count, n.actor.human.as_ref().map_or(0, Vec::len));
     }
     assert_eq!(f.encode().unwrap(), b);
+}
+
+/// Prints the massage tables and hit volumes.
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn oil_data() {
+    let mut u = unity();
+    let d = crysirror_amanatsu::oil::OilData::load(&mut u).unwrap();
+    for s in &d.satisfaction {
+        println!("sat {:?}", s);
+    }
+    println!("sum max {}", d.satisfaction.iter().map(|s| s.max).sum::<f32>());
+    for p in &d.poses {
+        println!("pose {:?}", p);
+    }
+    for v in &d.volumes {
+        println!("hit {} bone {} {:?}..{:?}", v.tag, v.bone, v.min, v.max);
+    }
+}
+
+/// Lists `map_info` and the action points of a map (`AMANATSU_MAP`).
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn map_points() {
+    let mut u = unity();
+    let infos = crysirror_amanatsu::map::map_infos(&mut u).unwrap();
+    for i in &infos {
+        println!("map {} {} scene {:?} point {:?}", i.id, i.name, i.scene, i.point);
+    }
+    let id: i32 = std::env::var("AMANATSU_MAP").ok().and_then(|v| v.parse().ok()).unwrap_or(10);
+    if let Some(info) = infos.iter().find(|i| i.id == id) {
+        let p = crysirror_amanatsu::level::Level::prefab(&mut u, &format!("lib/{}", info.point.0), &info.point.1).unwrap();
+        for (i, n) in p.scene.nodes.iter().enumerate() {
+            let scripts: Vec<&str> = n.components.iter().filter(|c| !c.script.is_empty()).map(|c| c.script.as_str()).collect();
+            if !scripts.is_empty() {
+                println!("  {} {:?} {}", p.scene.path(i), crysirror_unity::world6::world_matrix(&p.scene, i).w_axis.truncate(), scripts.join(","));
+            }
+        }
+    }
 }

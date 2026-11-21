@@ -28,10 +28,23 @@ impl AdvAssets {
             let Value::Struct(f) = v else { continue };
             let mut g = HashMap::new();
             for (k, a) in &f.0 {
-                if let Value::Struct(a) = a {
-                    if let Some(asset) = a.string("Asset") {
-                        g.insert(k.clone(), (asset.to_owned(), a.int("Priority").unwrap_or(0)));
+                match a {
+                    Value::Struct(a) => {
+                        if let Some(asset) = a.string("Asset") {
+                            g.insert(k.clone(), (asset.to_owned(), a.int("Priority").unwrap_or(0)));
+                        }
                     }
+                    // Asset lists (`Evaluation`): `name#index`.
+                    Value::Array(list) => {
+                        for (i, a) in list.iter().enumerate() {
+                            if let Value::Struct(a) = a {
+                                if let Some(asset) = a.string("Asset") {
+                                    g.insert(format!("{k}#{i}"), (asset.to_owned(), a.int("Priority").unwrap_or(0)));
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
                 }
             }
             groups.insert(name.clone(), g);
@@ -112,6 +125,10 @@ impl AdvAssets {
         if exhausted {
             return self.get("_agree", "Exhaustion").into_iter().collect();
         }
+        if kind == "Massage" {
+            let level = if favorability_lv > 3 { "High" } else { "Normal" };
+            return (1..=2).filter_map(|i| self.get("_agree", &format!("Massage_{level}_{i}"))).collect();
+        }
         let prefix = match kind {
             "Talk" if favorability_lv > 3 => "Takl",
             "Listen" if favorability_lv > 3 => "Listen",
@@ -120,6 +137,17 @@ impl AdvAssets {
             _ => "General",
         };
         (1..=2).filter_map(|i| self.get("_agree", &format!("{prefix}_{i}"))).collect()
+    }
+
+    /// `GetMassageStartAsset`: `Before_Normal_*` / `Before_High_*`.
+    pub fn massage_before(&self, favorability_lv: i32) -> Vec<Asset> {
+        let level = if favorability_lv > 3 { "High" } else { "Normal" };
+        (1..=2).filter_map(|i| self.get("_massage", &format!("Before_{level}_{i}"))).collect()
+    }
+
+    /// The massage result's `Evaluation[stage]` asset.
+    pub fn massage_evaluation(&self, stage: usize) -> Vec<Asset> {
+        self.get("_massage", &format!("Evaluation#{stage}")).into_iter().collect()
     }
 
     /// The `_end` assets: `DoNothing` (priority 0) when no command was
