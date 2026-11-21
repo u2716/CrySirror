@@ -78,6 +78,13 @@ pub struct Game {
     param_table: crate::params::ParamTable,
     /// `NPCData.GameParameter`/`Count` and card characteristic by card.
     npc: std::collections::HashMap<String, (crate::params::GameParameter, crate::params::Count, usize)>,
+    /// `PropertyData._adv` assets and the `_mapID` → map asset keys.
+    adv_assets: crate::commands::AdvAssets,
+    adv_maps: std::collections::HashMap<i32, &'static str>,
+    /// `ExploreProperties.Cost` and its `_costUpLVs`.
+    cost: (crate::commands::CostProperty, Vec<i32>),
+    /// A command was played during the current menu visit.
+    visit_played: bool,
     /// A loaded save waiting for the ActionMap scene.
     loaded_save: Option<crate::save::SaveFile>,
     /// `SaveData.Save` after `EventManager.TimeZone` (zone).
@@ -482,6 +489,11 @@ impl Game {
     fn place_heroines(&mut self, clear: bool) {
         if clear {
             self.placement.clear();
+            // `TimeZoneInternal`: every heroine's `RecoveryCost`.
+            let (c, ups) = self.cost.clone();
+            for (gp, _, _) in self.npc.values_mut() {
+                gp.cost = c.get_max(&ups, gp.favorability.lv);
+            }
         }
         let maps: Vec<i32> = self.maps.iter().map(|m| m.id).filter(|id| !self.excluded_maps.contains(id)).collect();
         let mut heroines: Vec<String> = self.heroines.iter().filter(|h| !self.placement.contains_key(*h)).cloned().collect();
@@ -515,7 +527,9 @@ impl Game {
                 .and_then(|v| v.get("characteristic").and_then(crysirror_unity::msgpack::Value::as_i64))
                 .unwrap_or(0)
                 .max(0) as usize;
-            self.npc.insert(card.to_owned(), (Default::default(), Default::default(), characteristic));
+            // `RecoveryCost` on entry: the full cost for favourability LV 0.
+            let gp = crate::params::GameParameter { cost: self.cost.0.get_max(&self.cost.1, 0), ..Default::default() };
+            self.npc.insert(card.to_owned(), (gp, Default::default(), characteristic));
         }
         self.npc.get_mut(card).expect("inserted")
     }
@@ -528,6 +542,18 @@ impl Game {
         let points = self.param_table.points.clone();
         let Some((level, _)) = self.overlays.get_mut(ci) else { return };
         let Some(ui) = level.scene.nodes.iter().flat_map(|n| &n.components).find(|c| c.script == "AL.CommandUI").map(|c| c.fields.clone()) else { return };
+        // `SetCost`: `GetMax(favourability LV)` hourglasses shown, the
+        // remaining cost lit.
+        let max = self.cost.0.get_max(&self.cost.1, gp.favorability.lv);
+        for (k, t) in ui.array("_tglCosts").unwrap_or(&[]).iter().enumerate() {
+            let crysirror_unity::managed::Value::PPtr(t) = t else { continue };
+            let Some(tn) = level.owner(t.path_id) else { continue };
+            level.set_active(tn, (k as i32) < max);
+            let graphic = level.scene.nodes[tn].components.iter().find(|c| c.script == "UnityEngine.UI.Toggle").and_then(|c| c.fields.pptr("graphic")).and_then(|p| level.owner(p.path_id));
+            if let Some(g) = graphic {
+                level.set_active(g, (k as i32) < gp.cost);
+            }
+        }
         for (i, (field, info)) in [("_favorability", gp.favorability), ("_inclusiveness", gp.inclusiveness), ("_proactivity", gp.proactivity), ("_curiosity", gp.curiosity)].iter().enumerate() {
             let Some(f) = ui.fields(field) else { continue };
             let lv_point = points.get(i).map_or(100, |p| p.lv_point).max(1);
@@ -755,6 +781,7 @@ impl Game {
         self.command = Some((spot, self.overlays.len() - 1));
         let card = self.spots[spot].0.clone();
         self.show_parameters(&card);
+        self.visit_played = false;
         // `Map3DToCommandScene`: the map HUD closes while the menu is open.
         self.set_hud_visible(false);
         // `GetPreludeAsset`: a greeting voice.
@@ -883,6 +910,7 @@ impl AmanatsuVm {
             .flat_map(|k| map_ids.and_then(|m| m.array(k)).unwrap_or(&[]).iter().filter_map(|v| if let crysirror_unity::managed::Value::Int(i) = v { Some(*i as i32) } else { None }))
             .collect();
         let map_limit = pd.int("_mapLimitFull").unwrap_or(6).max(1) as usize;
+        let (adv_assets, adv_maps) = crate::commands::AdvAssets::from_property_data(&pd.fields("_adv").cloned().unwrap_or_default(), pd.fields("_mapID"));
         let mut game = Game {
             sound,
             sound_ids,
@@ -894,6 +922,10 @@ impl AmanatsuVm {
             npc: std::collections::HashMap::new(),
             pending_points: None,
             loaded_save: None,
+            adv_assets,
+            adv_maps,
+            cost: crate::commands::CostProperty::from_property_data(pd.fields("_explore")),
+            visit_played: false,
             pending_auto_save: None,
             client_id: self.client,
             unity,
@@ -1228,19 +1260,47 @@ impl AmanatsuVm {
             let index = crate::talk::scenario_index(&mut game.unity, personality)?;
             let end = name == "btnEnd";
             let mut list = Vec::new();
+            let card = game.spots.get(spot).map(|s| s.0.clone()).unwrap_or_default();
+            let (fav_lv, cur_lv, cost) = {
+                let gp = &game.npc(&card).0;
+                (gp.favorability.lv, gp.curiosity.lv, gp.cost)
+            };
+            let kind = match name.as_str() {
+                "btnTalk" => Some("Talk"),
+                "btnListen" => Some("Listen"),
+                "btnHTopic" => Some("HTopic"),
+                _ => None,
+            };
             if end {
-                list.extend(crate::talk::pick(&index, "end", now));
-            } else if let Some(family) = crate::talk::command_family(&name) {
-                // `TKind` → `PropertyData._param` command points.
-                let kind = match name.as_str() {
-                    "btnTalk" => Some("Talk"),
-                    "btnListen" => Some("Listen"),
-                    "btnHTopic" => Some("HTopic"),
-                    _ => None,
-                };
-                if let (Some(kind), Some(s)) = (kind, game.spots.get(spot)) {
-                    game.pending_points = Some((s.0.clone(), kind));
+                // `EndProc`: the end asset of the visit.
+                let c = game.adv_assets.end(game.visit_played, cost <= 0 && game.visit_played, fav_lv);
+                let mut random = |n: usize| game_random(&mut game.rng, n);
+                list.extend(crate::commands::choose(&c, &mut random));
+            } else if let Some(kind) = kind {
+                // `EventManager.Talk`: the agree line, then (with cost) the
+                // command's asset, points and `ConsumptionCost`.
+                let exhausted = cost <= 0;
+                let zone = if let Controller::ActionMap(m) = &game.controller { m.time_zone } else { 0 };
+                let map_key = if let Controller::ActionMap(m) = &game.controller { if let actionmap::Phase::Map(id) = m.phase { game.adv_maps.get(&id).copied() } else { None } } else { None };
+                let ctx = crate::commands::Context { favorability_lv: fav_lv, map_key, zone };
+                let mut rng = game.rng;
+                let mut random = |n: usize| game_random(&mut rng, n);
+                list.extend(crate::commands::choose(&game.adv_assets.agree(kind, fav_lv, exhausted), &mut random));
+                if !exhausted {
+                    let c = match kind {
+                        "Talk" => game.adv_assets.talk("_talk", &ctx),
+                        "Listen" => game.adv_assets.talk("_listen", &ctx),
+                        _ => game.adv_assets.h_topic(random(100) < 50, fav_lv, cur_lv),
+                    };
+                    list.extend(crate::commands::choose(&c, &mut random));
+                    game.pending_points = Some((card.clone(), kind));
+                    let gp = &mut game.npc(&card).0;
+                    gp.cost = (gp.cost - 1).max(0);
                 }
+                game.rng = rng;
+                game.visit_played = true;
+                game.show_parameters(&card);
+            } else if let Some(family) = crate::talk::command_family(&name) {
                 list.extend(crate::talk::pick(&index, "agree", now));
                 if family != "agree" {
                     list.extend(crate::talk::pick(&index, family, now));
@@ -1251,6 +1311,7 @@ impl AmanatsuVm {
                 if family == "with" {
                     list.extend(crate::talk::pick(&index, "wend", now));
                 }
+                game.visit_played = true;
                 if matches!(name.as_str(), "btnInvite" | "btnH" | "btnMassage") {
                     game.log.push(format!("SATD-amanatsu-port: {name} scene (invite/massage/H) not ported"));
                 }
@@ -1315,6 +1376,13 @@ impl AmanatsuVm {
         }
         Ok(VmYield::WaitUntil(game.now + 16))
     }
+}
+
+fn game_random(rng: &mut u64, n: usize) -> usize {
+    *rng ^= *rng << 13;
+    *rng ^= *rng >> 7;
+    *rng ^= *rng << 17;
+    (*rng % n.max(1) as u64) as usize
 }
 
 /// `SaveData.UpdateSaveTime`: the local time as `yyyy/MM/dd HH:mm` and as

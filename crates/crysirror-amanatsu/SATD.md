@@ -18,8 +18,10 @@ second UV set) and reflection cubemaps, Azure's scattering integral,
 clouds, moon and stars (the sky is a gradient fit from the Azure hour,
 latitude and Rayleigh/Mie gradients), `ActionPoint` choice and `_animIDList` motions, NavMesh
 movement, `CharaSelectUI` sources/sorting/pairs/release, scroll views and
-`RectMask2D` clipping, `CommandScene` (scenario choice by parameters, command
-costs (`Heroine.ConsumptionCost`/`_tglCosts`), the favourability level-up
+`RectMask2D` clipping, `CommandScene` (prelude choice, the heroine-motion/water-gun/
+`*_Fin` assets of `Get*Asset`, the H-after/move-map ends, the exact
+`GetGeneralCommandAgreeAsset` branches beyond favourability > 3, cost
+for massage/with/invite, the favourability level-up
 short movies (`IsNextShortMovie` gates are ported, the `with` movies and
 LV increase are not), parameter gauge/max animations, `IsForgetPoint`; talks now play `e1-approach` and one
 `e1-N`), ADV expressions/motions/event CGs/cloth states and the
@@ -102,3 +104,4 @@ H scenes and save/load, recorded in a validation note.
 | 2026-11-22 | Zone lighting: the active light groups' point/spot lights as engine lights (map layers 0/4/7/8, URP intensity/range); the Azure hour/latitude/gradients as a shared gradient sky (`crysirror_asset::sky`) uploaded through the new `upload_hdr` host service. | Listed above. |
 | 2026-11-22 | Heroine placement per zone (`GetForPlacementTable`/`SetCharaForMap`: shuffled heroines to shuffled maps under `_mapLimitFull`, esthetics/H maps excluded; only the current map's heroines stand there); `PlayBGMBYActionMap` (`_bgmID` per zone) and the `TimeZoneChange` SE. | Listed above. |
 | 2026-11-22 | Heroine parameters (`params.rs`: `GameParameter`/`ParameterInfo` level-ups, favourability gauge and `LatePoint`, `PropertyData._param` command points with `IndividualityRate`, `IsNextShortMovie` gates; talk/listen/H-topic points with the chosen choice, command-menu stars/gauges); native saves (shared `crysirror_unity::memorypack`; `save.rs` `SaveData`/`PlayerData`/`NPCData` `.sav` layout), the auto save after a zone change into the engine's save mount and つづきから loading it. | Listed above. |
+| 2026-11-22 | Command scenario choice (`commands.rs`: `PropertyData._adv` talk/listen/H-topic/agree/end assets by favourability, map and zone, lowest priority then random) and command cost (`CostProperty.GetMax`, `ConsumptionCost`, `RecoveryCost` per zone, hourglasses; exhaustion lines without cost). | Listed above. |
