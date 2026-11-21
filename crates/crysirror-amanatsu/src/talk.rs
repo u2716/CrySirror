@@ -20,11 +20,12 @@ use std::collections::HashMap;
 /// The Addressables bundle holding `ADVCore` (and the scene fade canvas).
 pub const ADV_BUNDLE: &str = "AmanatsuLocation_Data/StreamingAssets/aa/StandaloneWindows64/6d3223da354de646ab79d5660dcac9d2.bundle";
 
-/// Scenario name → (file key, object id) of a personality's bundles.
+/// Scenario name → (file key, object id) of a personality's bundles and
+/// the shared `g` scenarios (`morning`, `rest`).
 pub fn scenario_index(unity: &mut Unity, personality: i64) -> Result<HashMap<String, (String, i64)>> {
     let dir = format!("lib/adv/scene/c{personality:02}/");
     let mut out = HashMap::new();
-    for key in unity.bundle_files().into_iter().filter(|k| k.contains(&format!("bundle:{dir}"))) {
+    for key in unity.bundle_files().into_iter().filter(|k| k.contains(&format!("bundle:{dir}")) || k.contains("bundle:lib/adv/scene/g/")) {
         let file = unity.file(&key)?;
         let ids: Vec<i64> = file.objects.iter().filter(|o| o.class_id == 114).map(|o| o.path_id).collect();
         for id in ids {
@@ -245,7 +246,7 @@ impl Talk {
                 Wait::Open(_, name) => {
                     match load_scenario(unity, &self.index, name) {
                         Ok(list) => {
-                            self.program.open(name, list);
+                            self.program.call(name, list);
                             continue;
                         }
                         Err(e) => self.log.push(format!("ADV Open {name}: {e:#}")),

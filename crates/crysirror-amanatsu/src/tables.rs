@@ -89,3 +89,14 @@ impl Table {
             .collect()
     }
 }
+
+/// `ContentProvider.ShortMovieInfoContents` (`am/lis` `al_short_movie`):
+/// short movie id → `Map` (`ALShortMovieContent.MapID`).
+pub fn short_movie_maps(unity: &mut crate::unity::Unity) -> Result<std::collections::HashMap<i32, i32>> {
+    let (key, id) = unity.bundle_asset("lib/am/lis/000_00.unity3d", "al_short_movie[000_00]", 49)?.context("al_short_movie")?;
+    let t = Table::parse(&unity.text_asset(&key, id)?)?;
+    let col = |k: i32| t.keys.iter().position(|&c| c == k);
+    // `TableData.Key`: ID 5, Map 103.
+    let (Some(i), Some(m)) = (col(5), col(103)) else { anyhow::bail!("al_short_movie columns {:?}", t.keys) };
+    Ok(t.rows.iter().filter_map(|r| Some((r.get(i)?.parse().ok()?, r.get(m)?.parse().ok()?))).collect())
+}

@@ -92,6 +92,34 @@ struct HRun {
     gauge: f32,
     orgasms: u32,
     last_ms: u64,
+    /// A night event H (`HDetail` from `NightEvent`): the points kind
+    /// after it (`H_NightShowerAfter`, `H_NightMorningAfter`).
+    night: Option<&'static str>,
+}
+
+/// `EventManager.NightEvent` phases.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum NightPhase {
+    /// `Before_Night_(NO_)Cottage`: the invitation (choice 1 declines).
+    Invite,
+    /// `Before_Night_(NO_)Cottage_ShortMovie`: after the shower movie.
+    Shower,
+    /// `Night_H_After`.
+    HAfter,
+    /// `Night`: the next morning loads.
+    NewDay,
+    /// `Night_Morning` (`morning`, `Judge` by the event id).
+    Morning,
+    /// `_h.Event_After` after a morning H.
+    MorningHAfter,
+    /// `Greetings_ShortMovie` after the morning movie.
+    Greetings,
+}
+
+struct NightRun {
+    card: String,
+    phase: NightPhase,
+    cottage: bool,
 }
 
 /// The H motions baked into the characters.
@@ -148,6 +176,24 @@ pub struct Game {
     pending_with: Option<String>,
     /// The loaded map's H place (`H/H00`: position, rotation).
     h_point: Option<([f32; 3], [f32; 4])>,
+    /// TMP font registrations of every hierarchy.
+    font_cache: crate::ui::FontCache,
+    /// The night event.
+    night: Option<NightRun>,
+    /// A night event heroine waiting to stand at the night event point.
+    pending_night: Option<String>,
+    /// `NPCData.Count` members beyond the gates (`IsH`, `IsNightH`, …).
+    npc_extra: std::collections::HashMap<String, crate::save::CountExtra>,
+    /// The loaded map's action points and key light intensity.
+    map_points: Vec<(String, [f32; 3], [f32; 4])>,
+    map_sun: f32,
+    /// The last conversation's choice (`SelectNum`) and `IsHScene`.
+    last_talk: (Option<usize>, bool),
+    /// `ExploreProperties.Event._nightEventRate` (percent).
+    night_rate: i64,
+    /// `_nightEventShowerSMID`/`_nightEventSMID` movies' maps
+    /// (`al_short_movie` `Map`).
+    night_movie_maps: (i32, i32),
     /// The H pair waiting to spawn (key light intensity).
     h_spawn_sun: Option<f32>,
     /// The covered map change released the old map (loads next step).
@@ -329,7 +375,12 @@ impl Game {
         // (SATD-amanatsu-port: `ActionPoint` choice, their `_animIDList`
         // motions and NavMesh wandering are not ported).
         self.place_heroines(false);
-        self.h_point = world.points.iter().find(|p| p.0 == "H00").map(|p| (p.1, p.2));
+        // The H place: `H/H00`, or `NightEventH00` for a night event H
+        // (`MovePointInfo.GetNightEventHPoint`).
+        let place = if self.h.as_ref().is_some_and(|h| h.night.is_some()) { "NightEventH00" } else { "H00" };
+        self.h_point = world.points.iter().find(|p| p.0 == place).map(|p| (p.1, p.2));
+        self.map_points = world.points.clone();
+        self.map_sun = world.sun.as_ref().map_or(1., |l| l.intensity);
         let h_entry = self.h.as_ref().filter(|h| h.phase == MassagePhase::Enter).map(|h| h.card.clone());
         if h_entry.is_some() {
             // Spawned on the next step, after the previous map's models
@@ -347,7 +398,7 @@ impl Game {
                 self.log.push("SATD-amanatsu-port: esthetics map without Est00".into());
             }
         }
-        let heroines: Vec<String> = if self.massage.is_some() || self.h.is_some() { Vec::new() } else { self.heroines.iter().filter(|h| self.placement.get(*h) == Some(&id)).cloned().collect() };
+        let heroines: Vec<String> = if self.massage.is_some() || self.h.is_some() || self.night.is_some() { Vec::new() } else { self.heroines.iter().filter(|h| self.placement.get(*h) == Some(&id)).cloned().collect() };
         for (card, point) in heroines.iter().zip(world.points.iter().filter(|p| p.0.contains("tati"))) {
             let (_, pos, rot) = point;
             let q = glam::Quat::from_array(crysirror_unity::gltf::mirror_quat(*rot));
@@ -761,7 +812,7 @@ impl Game {
                 action: ActionState { version: Some(Version::default()), link_partner: -1, map_id: self.placement.get(h).copied().unwrap_or(-1) },
                 parameter: gp,
                 count,
-                count_extra: CountExtra { version: Some(Version::default()), ..Default::default() },
+                count_extra: self.npc_extra.get(h).cloned().unwrap_or(CountExtra { version: Some(Version::default()), action_motion_id: -1, next_motion_id: -1, ..Default::default() }),
                 save_time_text: Some(text.clone()),
                 entry_time: entry,
                 ..Default::default()
@@ -775,6 +826,7 @@ impl Game {
     fn apply_save(&mut self, file: crate::save::SaveFile) {
         self.heroines.clear();
         self.npc.clear();
+        self.npc_extra.clear();
         self.placement.clear();
         for n in file.npcs {
             let name = n.actor.chara_file_name.clone().unwrap_or_default();
@@ -786,21 +838,22 @@ impl Game {
             self.heroines.push(path.clone());
             let characteristic = self.npc(&path).2;
             self.npc.insert(path.clone(), (n.parameter, n.count, characteristic));
+            self.npc_extra.insert(path.clone(), n.count_extra);
             if n.action.map_id >= 0 {
                 self.placement.insert(path, n.action.map_id);
             }
         }
     }
 
-    /// `SaveData.Save(isAuto: true)` after a time-zone change: the next
-    /// `a_NNN.sav` in the engine's save mount (`user/`).
-    /// SATD-amanatsu-port: the original's auto-save count limit/rotation
-    /// beyond the next free number is not reproduced.
+    /// `SaveData.Save(isAuto: true)` after a time-zone change, in the
+    /// engine's save mount (`user/`).
+    /// SATD-amanatsu-port: `Config.InGameData.AutoSaveMode` (mode 2 saves
+    /// only in the morning) is not read; every zone change saves.
     fn auto_save(&mut self, host: &mut dyn HostServices, zone: i32) -> Result<()> {
         let storage = host.storage(self.client_id)?;
-        let existing = storage.list(crysirror_core::path::Mount::Save, "user").unwrap_or_default();
-        let next = existing.iter().filter_map(|f| f.rsplit('/').next()?.strip_prefix("a_")?.strip_suffix(".sav")?.parse::<u32>().ok()).max().map_or(0, |n| (n + 1) % 1000);
-        let name = crate::save::file_name(&format!("{next:03}"), true);
+        // `Save(…, isAuto)` → `EnsureFileNameIfEmpty`: an auto save is
+        // always `000` (`a_000.sav`, overwritten).
+        let name = crate::save::file_name("000", true);
         let bytes = self.save_file(zone, "オートセーブデータ").encode()?;
         let _ = storage.create_directory(&VfsPath::new(crysirror_core::path::Mount::Save, "user")?);
         storage.write_atomic(&VfsPath::new(crysirror_core::path::Mount::Save, &format!("user/{name}"))?, &bytes)?;
@@ -986,9 +1039,11 @@ impl Game {
                 let Some(h) = self.h.as_mut().filter(|h| h.phase == MassagePhase::Play) else { return Ok(()) };
                 h.phase = MassagePhase::Evaluation;
                 let index = (h.orgasms as usize).min(19);
+                let night = h.night.is_some();
                 let mut rng = self.rng;
                 let mut random = |n: usize| game_random(&mut rng, n);
-                let list: Vec<String> = crate::commands::choose(&self.adv_assets.h_evaluation(index), &mut random).into_iter().collect();
+                // A night event H continues in `NightEvent` instead.
+                let list: Vec<String> = if night { Vec::new() } else { crate::commands::choose(&self.adv_assets.h_evaluation(index), &mut random).into_iter().collect() };
                 self.rng = rng;
                 if let Some(oi) = self.overlays.iter().position(|(l, _)| l.name == crate::h::SCENE_PREFAB) {
                     let (_, mut ui) = self.overlays.remove(oi);
@@ -1030,11 +1085,32 @@ impl Game {
             }
             MassagePhase::Evaluation => {
                 let Some(h) = self.h.take() else { return Ok(()) };
+                // `HDetail`: `IsTimeZoneH`, `IsH`, and `IsNightH` at night.
+                let zone = if let Controller::ActionMap(c) = &self.controller { c.time_zone } else { 0 };
+                {
+                    let e = self.extra(&h.card);
+                    e.is_time_zone_h = true;
+                    e.is_h = true;
+                    e.is_night_h |= zone == 3;
+                }
+                if let Some(kind) = h.night {
+                    // `NightEvent`: the event's points (`GetSelect(0)`),
+                    // `AddHCount(force)`, then its after scenario.
+                    self.apply_points(h.card.clone(), kind, Some(0));
+                    let count = &mut self.npc(&h.card).1;
+                    count.h = (count.h + 1).min(100);
+                    let (phase, list) = if kind == "H_NightShowerAfter" { (NightPhase::HAfter, self.adv_assets.event("Night_H_After")) } else { (NightPhase::MorningHAfter, self.adv_assets.h_event_after()) };
+                    if let Some(n) = self.night.as_mut() {
+                        n.phase = phase;
+                    }
+                    self.log.push(format!("night H done: {} orgasms", h.orgasms));
+                    return self.night_talk(&h.card, list.into_iter().collect(), &[]);
+                }
                 let index = (h.orgasms as usize).min(7);
                 self.apply_points(h.card.clone(), "H", Some(index));
                 {
                     let (gp, count, _) = self.npc(&h.card);
-                    count.h += 1;
+                    count.h = (count.h + 1).min(100);
                     gp.cost = (gp.cost - 1).max(0);
                 }
                 let zone = if let Controller::ActionMap(c) = &self.controller { c.time_zone } else { 0 };
@@ -1314,22 +1390,194 @@ impl Game {
                 }
             }
             H::NextTime => {
-                // `EventManager.TimeZone`: SE, fade, `Cycle.IncrementTimeZone`,
-                // `TimeZoneInternal` (the map again in the new zone).
-                // SATD-amanatsu-port: night events, heroine placement tables,
-                // BGM per zone and the auto save are not ported.
-                self.level.sounds.push(sound::Call::SystemSe(self.sound_ids.time_zone_se));
-                m.time_zone = (m.time_zone + 1) % 4;
-                self.fade.start(now, true, self.fade_seconds);
-                let zone = m.time_zone;
-                self.place_heroines(true);
-                self.pending_map = Some((map_id, zone));
-                self.log.push(format!("EventManager.TimeZone → zone {zone}"));
-                self.pending_auto_save = Some(zone);
+                // `EventManager.TimeZone`: at night, `NightEvent` with
+                // `GetNightEventHeroine` when `IsNightEvent` rolls.
+                if m.time_zone == 3 {
+                    if let Some(card) = self.night_event_heroine() {
+                        let roll = self.random(100) as i64 + 1;
+                        self.log.push(format!("IsNightEvent {card}: {roll} <= {}", self.night_rate));
+                        if roll <= self.night_rate {
+                            self.night = Some(NightRun { card: card.clone(), phase: NightPhase::Invite, cottage: self.adv_maps.get(&map_id) == Some(&"Cottage") });
+                            self.pending_night = Some(card);
+                            self.set_hud_visible(false);
+                            return Ok(());
+                        }
+                    }
+                }
+                self.next_time_zone(map_id, now);
             }
             H::Config | H::Help | H::CameraPrev | H::CameraNext | H::CameraReset => self.log.push(format!("SATD-amanatsu-port: ActionMapUI {action:?} not ported")),
         }
         Ok(())
+    }
+
+    /// `EventManager.TimeZone`: SE, fade, `Cycle.IncrementTimeZone`, every
+    /// heroine's per-zone counts, `TimeZoneInternal` (the map again in the
+    /// new zone with new placements) and the auto save.
+    fn next_time_zone(&mut self, map_id: i32, now: u64) {
+        let Controller::ActionMap(m) = &mut self.controller else { return };
+        m.time_zone = (m.time_zone + 1) % 4;
+        let zone = m.time_zone;
+        self.level.sounds.push(sound::Call::SystemSe(self.sound_ids.time_zone_se));
+        self.fade.start(now, true, self.fade_seconds);
+        self.place_heroines(true);
+        for c in self.npc_extra.values_mut() {
+            c.time_zone_play_command = 0;
+            c.is_time_zone_h = false;
+            c.action_motion_id = -1;
+            c.next_motion_id = -1;
+        }
+        self.pending_map = Some((map_id, zone));
+        self.log.push(format!("EventManager.TimeZone → zone {zone}"));
+        self.pending_auto_save = Some(zone);
+    }
+
+    fn extra(&mut self, card: &str) -> &mut crate::save::CountExtra {
+        self.npc_extra.entry(card.to_owned()).or_insert_with(|| crate::save::CountExtra { version: Some(crate::save::Version::default()), action_motion_id: -1, next_motion_id: -1, ..Default::default() })
+    }
+
+    /// `GetNightEventHeroine`: a random heroine with favourability LV 4 or
+    /// more who had H (`IsH`) but no night H yet (`IsNightH`).
+    fn night_event_heroine(&mut self) -> Option<String> {
+        let mut list = Vec::new();
+        for h in self.heroines.clone() {
+            let lv = self.npc(&h).0.favorability.lv;
+            let e = self.extra(&h).clone();
+            if lv >= 4 && e.is_h && !e.is_night_h {
+                list.push(h);
+            }
+        }
+        (!list.is_empty()).then(|| {
+            let i = self.random(list.len());
+            list.swap_remove(i)
+        })
+    }
+
+    /// `ActionPoint.Reflect`: the night event heroine at the map's
+    /// `NightEvent00` (unless she already stands on this map).
+    fn night_spawn_heroine(&mut self, host: &mut dyn HostServices, client: ClientId, card: &str) -> Result<()> {
+        if self.spots.iter().any(|s| s.0 == card) {
+            return Ok(());
+        }
+        let (pos, rot) = self.map_points.iter().find(|p| p.0 == "NightEvent00").map(|p| (p.1, p.2)).unwrap_or(([0.; 3], [0., 0., 0., 1.]));
+        let q = glam::Quat::from_array(crysirror_unity::gltf::mirror_quat(rot));
+        let (x, y, z) = q.to_euler(glam::EulerRot::XYZ);
+        let t = json!({"translation": crysirror_unity::gltf::mirror_point(pos), "rotation_degrees": [x.to_degrees(), y.to_degrees(), z.to_degrees()], "scale": [1.0, 1.0, 1.0]});
+        let sun = self.map_sun;
+        self.spawn_character(host, client, card, Some(t), sun)?;
+        let (personality, name) = self.unity.read_all(card).ok().and_then(|b| crate::card::Card::parse(&b).ok()).and_then(|c| c.parameter()).map_or((0, String::new()), |p| (p.0, p.1));
+        self.spots.push((card.to_owned(), crysirror_unity::gltf::mirror_point(pos), personality, name));
+        Ok(())
+    }
+
+    /// A night event conversation with its heroine.
+    fn night_talk(&mut self, card: &str, scenarios: Vec<String>, vars: &[(&str, crate::adv::Var)]) -> Result<()> {
+        let spot = match self.spots.iter().position(|s| s.0 == card) {
+            Some(i) => i,
+            None => {
+                let (personality, name) = self.unity.read_all(card).ok().and_then(|b| crate::card::Card::parse(&b).ok()).and_then(|c| c.parameter()).map_or((0, String::new()), |p| (p.0, p.1));
+                self.spots.push((card.to_owned(), [0.; 3], personality, name));
+                self.spots.len() - 1
+            }
+        };
+        self.start_talk_vars(spot, scenarios, vars)
+    }
+
+    /// `NightEvent` after one of its conversations.
+    fn night_talk_ended(&mut self, now: u64) -> Result<()> {
+        let Some((card, phase, cottage)) = self.night.as_ref().map(|n| (n.card.clone(), n.phase, n.cottage)) else { return Ok(()) };
+        let (selected, is_h_scene) = self.last_talk;
+        let event = |key: &str| self.adv_assets.event(key).into_iter().collect::<Vec<String>>();
+        let (shower_map, morning_map) = self.night_movie_maps;
+        match phase {
+            NightPhase::Invite if selected == Some(1) => {
+                // Declined: `Night` (the next morning without the event).
+                self.log.push(format!("NightEvent {card}: declined"));
+                self.night = None;
+                let map = self.current_map();
+                self.next_time_zone(map, now);
+            }
+            NightPhase::Invite => {
+                // SATD-amanatsu-port: the shower short movie (its
+                // timeline, the after-bath coordinate) is not played.
+                let list = event(if cottage { "Before_Night_Cottage_ShortMovie" } else { "Before_Night_NO_Cottage_ShortMovie" });
+                self.night.as_mut().unwrap().phase = NightPhase::Shower;
+                self.night_talk(&card, list, &[])?;
+            }
+            NightPhase::Shower => {
+                // `HDetail(Event1)` at the movie map's night H place.
+                self.h = Some(HRun { card: card.clone(), phase: MassagePhase::Enter, return_map: shower_map, posture: None, entities: Vec::new(), motion: "Idle", motion_until: 0, gauge: 0., orgasms: 0, last_ms: now, night: Some("H_NightShowerAfter") });
+                self.fade.start(now, true, self.fade_seconds);
+                self.pending_map = Some((shower_map, 3));
+                self.log.push(format!("NightEvent {card}: H on map {shower_map}"));
+            }
+            NightPhase::HAfter => {
+                // `Night`: the next morning on that map, with her.
+                self.night.as_mut().unwrap().phase = NightPhase::NewDay;
+                if let Controller::ActionMap(m) = &mut self.controller {
+                    m.phase = actionmap::Phase::Map(shower_map);
+                }
+                self.next_time_zone(shower_map, now);
+            }
+            NightPhase::Morning if is_h_scene => {
+                // The morning H (`HDetail(Event2/3)`).
+                self.h = Some(HRun { card: card.clone(), phase: MassagePhase::Enter, return_map: morning_map, posture: None, entities: Vec::new(), motion: "Idle", motion_until: 0, gauge: 0., orgasms: 0, last_ms: now, night: Some("H_NightMorningAfter") });
+                self.fade.start(now, true, self.fade_seconds);
+                let zone = if let Controller::ActionMap(m) = &self.controller { m.time_zone } else { 0 };
+                self.pending_map = Some((morning_map, zone));
+            }
+            NightPhase::Morning | NightPhase::MorningHAfter | NightPhase::Greetings => {
+                // `SceneEnd` → `EndProc`: the action map again.
+                self.night = None;
+                self.log.push(format!("NightEvent {card}: end"));
+                self.fade.start(now, true, self.fade_seconds);
+                let zone = if let Controller::ActionMap(m) = &self.controller { m.time_zone } else { 0 };
+                self.pending_map = Some((self.current_map(), zone));
+            }
+            NightPhase::NewDay => {}
+        }
+        Ok(())
+    }
+
+    /// `NightEvent` after `Night`: by `NightEventCount` (the first three
+    /// in order, then at random) `Night_Morning` with `Judge`, or the
+    /// greeting movie.
+    /// SATD-amanatsu-port: the flag that turns events 1 and 2 into 3 and
+    /// the morning movie (`_nightEventSMID`) are not ported.
+    fn night_morning(&mut self, host: &mut dyn HostServices, client: ClientId) -> Result<()> {
+        let Some(card) = self.night.as_ref().map(|n| n.card.clone()) else { return Ok(()) };
+        self.night_spawn_heroine(host, client, &card)?;
+        let count = self.npc(&card).1.night_events;
+        let id = if count < 3 {
+            self.npc(&card).1.night_events = (count + 1).min(3);
+            count
+        } else {
+            self.random(4) as i32
+        };
+        self.log.push(format!("NightEvent {card}: morning event {id}"));
+        if id != 0 {
+            let judge = match id {
+                1 => 1,
+                2 => 0,
+                _ => 2,
+            };
+            self.night.as_mut().unwrap().phase = NightPhase::Morning;
+            let list = self.adv_assets.event("Night_Morning").into_iter().collect();
+            self.night_talk(&card, list, &[("Judge", crate::adv::Var::Int(judge))])
+        } else {
+            self.night.as_mut().unwrap().phase = NightPhase::Greetings;
+            let list = self.adv_assets.event("Greetings_ShortMovie").into_iter().collect();
+            self.night_talk(&card, list, &[])
+        }
+    }
+
+    fn current_map(&self) -> i32 {
+        if let Controller::ActionMap(m) = &self.controller {
+            if let actionmap::Phase::Map(id) = m.phase {
+                return id;
+            }
+        }
+        0
     }
 
     /// A click on a standing heroine: the first meeting, else the command
@@ -1380,10 +1628,18 @@ impl Game {
 
     /// Start a conversation with a standing heroine.
     fn start_talk(&mut self, spot: usize, scenarios: Vec<String>) -> Result<()> {
+        self.start_talk_vars(spot, scenarios, &[])
+    }
+
+    /// A conversation with `ADVCore.PackData` variables set first.
+    fn start_talk_vars(&mut self, spot: usize, scenarios: Vec<String>, vars: &[(&str, crate::adv::Var)]) -> Result<()> {
         let (_, _, personality, name) = self.spots[spot].clone();
         let key = self.unity.bundle_files().into_iter().find(|k| k.starts_with(&format!("bundle:{}#", crate::talk::ADV_BUNDLE)) && !k.ends_with(".resS")).context("ADV bundle")?;
         let mut level = Level::root_of(&mut self.unity, &key, "ADVCore")?;
         let mut talk = crate::talk::Talk::start(&mut self.unity, &mut level, personality, &name, self.now, scenarios)?;
+        for (k, v) in vars {
+            talk.program.vars.insert((*k).to_owned(), v.clone());
+        }
         let steps = talk.advance(&mut self.unity, &mut level, self.now);
         self.overlays.push((level, Ui::new(3)));
         let index = self.overlays.len() - 1;
@@ -1440,6 +1696,7 @@ impl Game {
 struct HostAdapter<'a> {
     host: &'a mut dyn HostServices,
     client: ClientId,
+    fonts: &'a mut crate::ui::FontCache,
 }
 
 impl Host for HostAdapter<'_> {
@@ -1451,6 +1708,9 @@ impl Host for HostAdapter<'_> {
     }
     fn measurement(&mut self) -> Result<Arc<dyn TextMeasurement>> {
         Ok(self.host.text_measurement(self.client)?)
+    }
+    fn font_cache(&mut self) -> &mut crate::ui::FontCache {
+        self.fonts
     }
 }
 
@@ -1497,6 +1757,11 @@ impl AmanatsuVm {
             .flat_map(|k| map_ids.and_then(|m| m.array(k)).unwrap_or(&[]).iter().filter_map(|v| if let crysirror_unity::managed::Value::Int(i) = v { Some(*i as i32) } else { None }))
             .collect();
         let map_limit = pd.int("_mapLimitFull").unwrap_or(6).max(1) as usize;
+        let event = pd.fields("_explore").and_then(|e| e.fields("_event"));
+        let night_rate = event.and_then(|e| e.int("_nightEventRate")).unwrap_or(50);
+        let movie_maps = crate::tables::short_movie_maps(&mut unity).unwrap_or_default();
+        let movie = |key: &str, default: i64| movie_maps.get(&(event.and_then(|e| e.int(key)).unwrap_or(default) as i32)).copied().unwrap_or(2);
+        let night_movie_maps = (movie("_nightEventShowerSMID", 20), movie("_nightEventSMID", 22));
         let (adv_assets, adv_maps) = crate::commands::AdvAssets::from_property_data(&pd.fields("_adv").cloned().unwrap_or_default(), pd.fields("_mapID"));
         let mut game = Game {
             sound,
@@ -1515,6 +1780,15 @@ impl AmanatsuVm {
             h_postures: None,
             h_point: None,
             h_spawn_sun: None,
+            font_cache: Default::default(),
+            night: None,
+            pending_night: None,
+            npc_extra: std::collections::HashMap::new(),
+            map_points: Vec::new(),
+            map_sun: 1.,
+            last_talk: (None, false),
+            night_rate,
+            night_movie_maps,
             map_released: false,
             massage: None,
             adv_assets,
@@ -1614,7 +1888,12 @@ impl AmanatsuVm {
                     game.enter_oil_scene(host, client, now)?;
                 } else if game.h.as_ref().is_some_and(|h| h.phase == MassagePhase::Enter) {
                     game.enter_h_scene(now)?;
+                } else if game.night.as_ref().is_some_and(|n| n.phase == NightPhase::NewDay) {
+                    game.night_morning(host, client)?;
                 } else {
+                    if let Controller::ActionMap(m) = &mut game.controller {
+                        m.phase = actionmap::Phase::Map(id);
+                    }
                     game.open_hud(id, zone)?;
                 }
                 // `PlayBGMBYActionMap`.
@@ -1622,6 +1901,13 @@ impl AmanatsuVm {
                 game.level.sounds.push(sound::Call::Bgm(bgm));
                 game.fade.start(host.now_ms(), false, game.fade_seconds);
             }
+        }
+        if let Some(card) = game.pending_night.take() {
+            game.night_spawn_heroine(host, client, &card)?;
+            let cottage = game.night.as_ref().is_some_and(|n| n.cottage);
+            let list = game.adv_assets.event(if cottage { "Before_Night_Cottage" } else { "Before_Night_NO_Cottage" }).into_iter().collect();
+            game.log.push(format!("NightEvent {card}"));
+            game.night_talk(&card, list, &[])?;
         }
         if let Some(sun) = game.h_spawn_sun.take() {
             if let (Some((pos, rot)), Some(card)) = (game.h_point, game.h.as_ref().map(|h| h.card.clone())) {
@@ -1638,13 +1924,13 @@ impl AmanatsuVm {
         let mut ops = std::mem::take(&mut game.removed);
         let mut layouts = Vec::new();
         {
-            let Game { unity, ui, level, overlays, .. } = &mut *game;
+            let Game { unity, ui, level, overlays, font_cache, .. } = &mut *game;
             let mut hierarchies: Vec<(&mut Level, &mut Ui)> = vec![(level, ui)];
             hierarchies.extend(overlays.iter_mut().map(|(l, u)| (l, u)));
             for (slot, (level, ui)) in hierarchies.into_iter().enumerate() {
                 let key = level.key.clone();
                 let states = level.frame_states();
-                let cell = RefCell::new((&mut *unity, &mut *ui, HostAdapter { host: &mut *host, client }));
+                let cell = RefCell::new((&mut *unity, &mut *ui, HostAdapter { host: &mut *host, client, fonts: &mut *font_cache }));
                 let info = |p: PPtr| {
                     let mut c = cell.borrow_mut();
                     c.0.sprite_meta(&key, p).map(|(b, _, ppu)| (b, ppu))
@@ -1735,7 +2021,7 @@ impl AmanatsuVm {
             game.pending_steps.extend(steps);
             click = None;
             game.pressed = None;
-        } else if input.buttons_pressed & b::MOUSE_LEFT != 0 && handler.is_none() && !fading && game.massage.is_none() && game.h.is_none() && matches!(&game.controller, Controller::ActionMap(m) if matches!(m.phase, actionmap::Phase::Map(_))) {
+        } else if input.buttons_pressed & b::MOUSE_LEFT != 0 && handler.is_none() && !fading && game.massage.is_none() && game.h.is_none() && game.night.is_none() && matches!(&game.controller, Controller::ActionMap(m) if matches!(m.phase, actionmap::Phase::Map(_))) {
             let hit_ui = layouts.iter().any(|l| l.hits.iter().any(|(_, r)| r.contains(x, y)));
             if !hit_ui {
                 if let Some(spot) = game.pick_heroine(x, y).filter(|_| game.command.is_none()) {
@@ -1746,6 +2032,7 @@ impl AmanatsuVm {
             }
         }
         let mut massage_talk_ended = false;
+        let mut night_talk_ended = false;
         for step in std::mem::take(&mut game.pending_steps) {
             match step {
                 crate::talk::Step::Voice(bundle, asset) => {
@@ -1757,6 +2044,9 @@ impl AmanatsuVm {
                 crate::talk::Step::End => {
                     if let Some((talk, oi)) = game.talk.take() {
                         game.log.extend(talk.log);
+                        let is_h_scene = matches!(talk.program.vars.get("IsHScene"), Some(crate::adv::Var::Bool(true)));
+                        game.last_talk = (talk.selected, is_h_scene);
+                        night_talk_ended = game.night.is_some();
                         if let Some((card, kind)) = game.pending_points.take() {
                             game.apply_points(card, kind, talk.selected);
                         }
@@ -1885,6 +2175,9 @@ impl AmanatsuVm {
             game.massage_talk_ended(now)?;
             game.h_talk_ended(now)?;
         }
+        if night_talk_ended {
+            game.night_talk_ended(now)?;
+        }
         if massage_exit {
             game.massage_exit()?;
         }
@@ -1956,7 +2249,7 @@ impl AmanatsuVm {
                 list.extend(crate::commands::choose(&game.adv_assets.h_start(here), &mut random));
                 game.rng = rng;
                 game.visit_played = true;
-                game.h = Some(HRun { card: card.clone(), phase: MassagePhase::Agree, return_map, posture: None, entities: Vec::new(), motion: "Idle", motion_until: 0, gauge: 0., orgasms: 0, last_ms: now });
+                game.h = Some(HRun { card: card.clone(), phase: MassagePhase::Agree, return_map, posture: None, entities: Vec::new(), motion: "Idle", motion_until: 0, gauge: 0., orgasms: 0, last_ms: now, night: None });
             } else if name == "btnWith" {
                 // `EventManager.With`: the agree line, the short movie and
                 // `_shortMoiveAfterAssets[LV]`, then the favourability level.

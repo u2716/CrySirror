@@ -174,6 +174,16 @@ impl AdvAssets {
         (1..=4).filter_map(|i| self.get("_h", &format!("General_{i}"))).collect()
     }
 
+    /// `_event` assets of `NightEvent` (`Before_Night_Cottage`, `Night_H_After`, …).
+    pub fn event(&self, key: &str) -> Option<String> {
+        self.get("_event", key).map(|a| a.0)
+    }
+
+    /// `_h.Event_After` (after a morning H).
+    pub fn h_event_after(&self) -> Option<String> {
+        self.get("_h", "Event_After").map(|a| a.0)
+    }
+
     /// The H result's `Evaluation[index]` asset.
     pub fn h_evaluation(&self, index: usize) -> Vec<Asset> {
         self.get("_h", &format!("Evaluation#{index}")).into_iter().collect()

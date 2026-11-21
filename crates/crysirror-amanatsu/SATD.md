@@ -8,8 +8,10 @@
 **Remaining work.** `ActionMap` beyond the new-game map select,
 `ChangeMap`, heroine entry/standing placement, the `ActionMapUI` HUD
 (cameras, 2D map, `Skip`) and time-zone advance (tutorial
-`ConfirmDialog`, HUD config/help and button fade animations, night events
-(`GetNightEventHeroine`/`NightEvent`), the auto save after a zone change,
+`ConfirmDialog`, HUD config/help and button fade animations, the night
+event's short movies (shower `_nightEventShowerSMID`, morning
+`_nightEventSMID`: timelines, coordinates, the flag turning morning events
+1/2 into 3), `GetEvent` (item/rest events), `AutoSaveMode`,
 link-partner placement (`SetCharaForMap` `isLink`), the `MapSelectUI`
 hover faces (`_charaInfos`) and player icon (`_pIcon`),
 `MapSelectUI` next-zone reloading a map behind it, the light settings'
@@ -108,3 +110,4 @@ H scenes and save/load, recorded in a validation note.
 | 2026-11-22 | Massage (`EventManager.Massage` + `AL.Oil`): agree, esthetics map with the heroine on `Est00` in the first oil pose, pose camera data, `OilMassageScene` UI, CPU-posed hit-object raycast feeding the `SatisfactionData` gauge (front/back groups), Exit → evaluation stage scenario, Massage points, `Count.Massage`, cost, return; shared uGUI anchor overrides and `Slider` value. Remaining: excitement/H flag, oil gauge, pose changes/reactions, IK, fluids, clothes/light UI, camera orbit. | Listed above. |
 | 2026-11-22 | 一緒に遊ぶ (`EventManager.With`): shown with a full favourability gauge and the `IsNextShortMovie` gate, agree + `_shortMoiveAfterAssets[LV]`, favourability LV +1 with `LatePoint` as the new gauge. Remaining: the ShortMovie timeline itself. | Listed above. |
 | 2026-11-22 | H (`EventManager.H` + `AL.H.HScene`): H button by cost and favourability LV > 0 (`SetCost`), agree + opener (`Map_No_Here` without an H place), the hotel's `H00` with the heroine and the default male in the first posture (立ちキス, `aib`) from the posture lists (`h.rs`), posture camera, `HScene` UI, click-stepped Idle/weak/strong loops filling the female gauge, Finish Female (orgasm), Exit → evaluation, H points, `Count.H`, cost; map changes release the old map a step before loading; generated model releases also drop prepared assets (runtime). Remaining: posture selection and categories, wheel speed, male gauge/finishes, voices/SE, IK/neck, items, fluids, clothes states, invite and the H map choice, evaluation from the H result, 3P/rez. | Listed above. |
+| 2026-11-22 | Night events (`EventManager.TimeZone` at night → `NightEvent`): `GetNightEventHeroine` (favourability LV ≥ 4, `IsH`, not `IsNightH`), `IsNightEvent` (`_nightEventRate`), the heroine at `NightEvent00`, `Before_Night_(NO_)Cottage` with decline (choice 1) → `Night`, the shower ADV, night H at the shower movie map's `NightEventH00` (`al_short_movie` `Map`), `H_NightShowerAfter` points, `AddHCount(force)`, `Night_H_After`, `Night` into the morning, `NightEventCount` → `morning` with `Judge` or the greeting ADV, morning H from `IsHScene` (`H_NightMorningAfter`, `_h.Event_After`), `SceneEnd`. `NPCData.Count` members beyond the gates are kept and saved (`IsH`/`IsTimeZoneH`/`IsNightH` from `HDetail`, per-zone resets); ADV `Open` returns to its caller; shared `g` scenarios; the auto save is `a_000.sav` (`EnsureFileNameIfEmpty`); TMP fonts register once per session and release their load jobs. | Listed above. |

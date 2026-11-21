@@ -227,17 +227,29 @@ pub struct Program {
     /// `[H]`-style speaker/text tokens → names.
     pub names: std::collections::HashMap<String, String>,
     rng: u64,
+    /// Callers of `Open` (name, commands, resume pc): an opened scenario
+    /// returns to the command after its `Open`.
+    stack: Vec<(String, Vec<ScenarioCommand>, usize)>,
 }
 
 impl Program {
     pub fn new(name: &str, commands: Vec<ScenarioCommand>, seed: u64) -> Self {
-        Self { name: name.to_owned(), commands, pc: 0, vars: Default::default(), replace: Default::default(), names: Default::default(), rng: seed | 1 }
+        Self { name: name.to_owned(), commands, pc: 0, vars: Default::default(), replace: Default::default(), names: Default::default(), rng: seed | 1, stack: Vec::new() }
     }
 
-    /// Continue with another command list (`Open`), keeping variables.
+    /// Continue with another command list (a queued scenario), keeping
+    /// variables.
     pub fn open(&mut self, name: &str, commands: Vec<ScenarioCommand>) {
         self.name = name.to_owned();
         self.commands = commands;
+        self.pc = 0;
+        self.stack.clear();
+    }
+
+    /// `Open`: run another command list, then return after the `Open`.
+    pub fn call(&mut self, name: &str, commands: Vec<ScenarioCommand>) {
+        let caller = (std::mem::replace(&mut self.name, name.to_owned()), std::mem::replace(&mut self.commands, commands), self.pc);
+        self.stack.push(caller);
         self.pc = 0;
     }
 
@@ -277,7 +289,19 @@ impl Program {
     /// Run until the next wait; effects are appended to `effects`.
     pub fn run(&mut self, effects: &mut Vec<Effect>) -> Wait {
         let mut guard = 0;
-        while let Some(c) = self.commands.get(self.pc).cloned() {
+        loop {
+            let Some(c) = self.commands.get(self.pc).cloned() else {
+                // The end of an opened scenario returns to its caller.
+                match self.stack.pop() {
+                    Some((name, commands, pc)) => {
+                        self.name = name;
+                        self.commands = commands;
+                        self.pc = pc;
+                        continue;
+                    }
+                    None => return Wait::End,
+                }
+            };
             guard += 1;
             if guard > 100_000 {
                 effects.push(Effect::Unported("runaway scenario".into(), vec![self.name.clone()]));
@@ -328,13 +352,13 @@ impl Program {
                 "Open" => return Wait::Open(a(0), a(1)),
                 "Close" => {
                     self.pc = self.commands.len();
+                    self.stack.clear();
                     return Wait::End;
                 }
                 "TextClear" => {}
                 other => effects.push(Effect::Unported(other.to_owned(), c.args.clone())),
             }
         }
-        Wait::End
     }
 }
 
@@ -370,5 +394,29 @@ mod tests {
         assert_eq!(p.run(&mut fx), Wait::Text { speaker: "".into(), text: "done".into() });
         assert_eq!(p.vars["Sel"], Var::Int(1));
         assert_eq!(p.run(&mut fx), Wait::End);
+    }
+
+    /// `morning`: `Switch` on a preset `Judge`, `Open` of a personality
+    /// scenario, then the caller continues (`IsHScene`).
+    #[test]
+    fn open_returns_to_caller() {
+        let list = vec![
+            cmd("Switch", &["Judge", "0,A", "1,B"]),
+            cmd("Tag", &["A"]),
+            cmd("Jump", &["End"]),
+            cmd("Tag", &["B"]),
+            cmd("Open", &["MainBundle", "e-fel", "TRUE", "TRUE", "TRUE", "0"]),
+            cmd("VAR", &["System.Boolean", "IsHScene", "TRUE"]),
+            cmd("Tag", &["End"]),
+        ];
+        let mut p = Program::new("morning", list, 1);
+        p.vars.insert("Judge".into(), Var::Int(1));
+        let mut fx = Vec::new();
+        assert_eq!(p.run(&mut fx), Wait::Open("MainBundle".into(), "e-fel".into()));
+        p.call("e-fel", vec![cmd("Text", &["", "fel"])]);
+        assert_eq!(p.run(&mut fx), Wait::Text { speaker: "".into(), text: "fel".into() });
+        assert_eq!(p.run(&mut fx), Wait::End);
+        assert_eq!(p.name, "morning");
+        assert_eq!(p.vars["IsHScene"], Var::Bool(true));
     }
 }

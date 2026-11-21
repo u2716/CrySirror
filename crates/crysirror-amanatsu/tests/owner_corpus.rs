@@ -1343,7 +1343,7 @@ fn print_save() {
     println!("{:?}", f.save);
     println!("player {:?} card {} bytes", f.player.actor.chara_file_name, f.player.actor.human.as_ref().map_or(0, Vec::len));
     for n in &f.npcs {
-        println!("npc {:?} id {} map {} {:?} {:?} card {} bytes", n.actor.chara_file_name, n.actor.unique_id, n.action.map_id, n.parameter, n.count, n.actor.human.as_ref().map_or(0, Vec::len));
+        println!("npc {:?} id {} map {} {:?} {:?} {:?} card {} bytes", n.actor.chara_file_name, n.actor.unique_id, n.action.map_id, n.parameter, n.count, n.count_extra, n.actor.human.as_ref().map_or(0, Vec::len));
     }
     assert_eq!(f.encode().unwrap(), b);
 }
@@ -1401,8 +1401,16 @@ fn patch_save_favorability() {
         n.parameter.cost = 5;
         n.count.massage = 1;
         n.action.map_id = 0;
+        if std::env::var("AMANATSU_IS_H").is_ok() {
+            n.count.h = 1;
+            n.count_extra.is_h = true;
+            n.count_extra.is_night_h = false;
+        }
+        if let Some(c) = std::env::var("AMANATSU_NIGHT_EVENTS").ok().and_then(|v| v.parse().ok()) {
+            n.count.night_events = c;
+        }
     }
-    f.save.time_zone = 0;
+    f.save.time_zone = std::env::var("AMANATSU_ZONE").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
     std::fs::write(&path, f.encode().unwrap()).unwrap();
 }
 
@@ -1424,5 +1432,63 @@ fn h_postures() {
     let mut u = unity();
     for p in crysirror_amanatsu::h::load_postures(&mut u).unwrap() {
         println!("{} {} {} cam {} {:?}", p.file, p.id, p.name, p.camera, p.charas.iter().map(|c| format!("{}:{}", c.info.bundle, c.info.asset)).collect::<Vec<_>>());
+    }
+}
+
+/// Prints `PropertyData` members (`AMANATSU_FIELD`: one top-level member).
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn property_data() {
+    let mut u = unity();
+    let pd = u.find_script_object("StreamingAssets/aa", "AL.PropertyData").unwrap().expect("AL.PropertyData");
+    let field = std::env::var("AMANATSU_FIELD").unwrap_or_else(|_| "_explore".into());
+    println!("{field} = {:?}", pd.get(&field));
+}
+
+/// Lists a bundle's objects (`AMANATSU_BUNDLE`): class, path id, name;
+/// TextAssets print their first bytes.
+#[test]
+#[ignore = "needs AMANATSU_ROOT and AMANATSU_BUNDLE"]
+fn bundle_objects() {
+    let mut u = unity();
+    let bundle = std::env::var("AMANATSU_BUNDLE").unwrap();
+    for key in u.bundle_files().into_iter().filter(|k| k.starts_with(&format!("bundle:{bundle}#")) && !k.ends_with(".resS")) {
+        let objects: Vec<(i32, i64)> = u.file(&key).unwrap().objects.iter().map(|o| (o.class_id, o.path_id)).collect();
+        for (class, id) in objects {
+            let name = u.decode(&key, id).ok().and_then(|f| f.string("m_Name").map(str::to_owned)).unwrap_or_default();
+            print!("{key} {class} {id} {name}");
+            if class == 49 {
+                let b = u.text_asset(&key, id).unwrap_or_default();
+                match crysirror_amanatsu::tables::Table::parse(&b) {
+                    Ok(t) if std::env::var("AMANATSU_FILTER").is_ok_and(|f| name.contains(&f)) => print!(" keys {:?} rows {:?}", t.keys, t.rows),
+                    Ok(t) => print!(" table {} rows", t.rows.len()),
+                    Err(_) => print!(" {} bytes {:02x?}", b.len(), &b[..b.len().min(48)]),
+                }
+            }
+            println!();
+        }
+    }
+}
+
+/// Finds `TableData` lists with a column key (`AMANATSU_KEY_ID`) among the
+/// list bundles and prints them.
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn tables_with_key() {
+    let mut u = unity();
+    let want: i32 = std::env::var("AMANATSU_KEY_ID").unwrap().parse().unwrap();
+    let keys: Vec<String> = u.bundle_files().into_iter().filter(|k| (k.contains("/lis/") || k.contains("/list/") || k.contains("al_lib")) && !k.ends_with(".resS")).collect();
+    for key in keys {
+        let Ok(file) = u.file(&key) else { continue };
+        let ids: Vec<i64> = file.objects.iter().filter(|o| o.class_id == 49).map(|o| o.path_id).collect();
+        for id in ids {
+            let Ok(b) = u.text_asset(&key, id) else { continue };
+            if let Ok(t) = crysirror_amanatsu::tables::Table::parse(&b) {
+                if t.keys.contains(&want) {
+                    let name = u.decode(&key, id).ok().and_then(|f| f.string("m_Name").map(str::to_owned)).unwrap_or_default();
+                    println!("{key} {name} keys {:?} rows {:?}", t.keys, t.rows);
+                }
+            }
+        }
     }
 }

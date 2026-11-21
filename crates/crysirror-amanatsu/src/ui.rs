@@ -17,10 +17,17 @@ pub trait Host {
     fn upload(&mut self, id: u32, width: u32, height: u32, rgba: &[u8]) -> Result<String>;
     fn fonts(&mut self) -> Result<Arc<dyn FontLibrary>>;
     fn measurement(&mut self) -> Result<Arc<dyn TextMeasurement>>;
+    /// The session's TMP font registrations, shared by every hierarchy.
+    fn font_cache(&mut self) -> &mut FontCache;
 }
 
+/// TMP font asset (file, path id) → its registration. A font is
+/// registered once per session; its load job is released when it resolves
+/// (the font library bounds outstanding jobs per client).
+pub type FontCache = HashMap<(String, i64), FontSlot>;
+
 #[derive(Clone, Debug)]
-enum FontSlot {
+pub enum FontSlot {
     Pending(FontJob),
     Ready(String),
     Missing,
@@ -38,7 +45,6 @@ struct Uploaded {
 /// instance). Each `slot` owns its own layer and upload id range.
 pub struct Ui {
     sprites: HashMap<(String, i64), Option<Uploaded>>,
-    fonts: HashMap<(String, i64), FontSlot>,
     next_upload: u32,
     submitted: BTreeMap<u32, String>,
     pub hits: Vec<(usize, ugui::Rect)>,
@@ -61,7 +67,6 @@ impl Ui {
     pub fn new(slot: u32) -> Self {
         Self {
             sprites: HashMap::new(),
-            fonts: HashMap::new(),
             next_upload: 0,
             submitted: BTreeMap::new(),
             hits: Vec::new(),
@@ -103,7 +108,7 @@ impl Ui {
             return Ok(None);
         }
         let key = unity.target(file, p)?;
-        let slot = match self.fonts.get(&key) {
+        let slot = match host.font_cache().get(&key) {
             Some(s) => s.clone(),
             None => {
                 let slot = match unity.tmp_font_data(&key.0, key.1)? {
@@ -114,7 +119,7 @@ impl Ui {
                     })?),
                     None => FontSlot::Missing,
                 };
-                self.fonts.insert(key.clone(), slot.clone());
+                host.font_cache().insert(key.clone(), slot.clone());
                 slot
             }
         };
@@ -124,10 +129,15 @@ impl Ui {
             FontSlot::Pending(job) => match host.fonts()?.status(job)? {
                 FontLoadState::Pending => None,
                 FontLoadState::Ready(info) => {
-                    self.fonts.insert(key, FontSlot::Ready(info.alias.clone()));
+                    host.fonts()?.release_job(job)?;
+                    host.font_cache().insert(key, FontSlot::Ready(info.alias.clone()));
                     Some(info.alias)
                 }
-                FontLoadState::Failed(e) => anyhow::bail!("TMP font registration: {e}"),
+                FontLoadState::Failed(e) => {
+                    host.fonts()?.release_job(job)?;
+                    host.font_cache().insert(key, FontSlot::Missing);
+                    anyhow::bail!("TMP font registration: {e}")
+                }
             },
         })
     }
