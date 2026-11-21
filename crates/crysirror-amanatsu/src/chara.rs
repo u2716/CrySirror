@@ -34,6 +34,8 @@ pub mod key {
     pub const MAIN_TEX_AB: i32 = 37;
     pub const COLOR_MASK_AB: i32 = 5;
     pub const COLOR_MASK: i32 = 6;
+    pub const EYE_HI_UP_TEX: i32 = 14;
+    pub const EYE_PIPIL_TEX: i32 = 18;
 }
 
 /// Hair part lists in `HairData.parts` order.
@@ -67,6 +69,41 @@ const SPRING_GROUPS: [(&str, &str, &str); 10] = [
     ("_magicaBellyBones", "_bellyData", "bellySoftness"),
     ("_magicaWaistBones", "_waistData", "waistSoftness"),
 ];
+
+/// `Table.sKeyNameTable` state objects of the clothes (`S_*_NUGE`,
+/// `S_UWB_B_NUGE2`, `S_PANST_NUGE`): shown only while a part is half
+/// undressed; the `*_DEF` objects (`n_top_a`, `n_bot_a`, `n_panst_a`) are
+/// the dressed state.
+const UNDRESSED: [&str; 4] = ["n_top_b", "n_bot_b", "n_bot_c", "n_panst_b"];
+
+/// `HumanCloth.UpdateVisible`/`DrawOption` for the dressed state: hide the
+/// half-undressed objects under the part and the `CmpClothes.objOpt01/02`
+/// options the coordinate's `hideOpt` flags hide.
+fn dress(scene: &mut Scene6, part: usize, hide_opt: &[bool]) {
+    let origin = scene.nodes[part].origin;
+    let mut stack = vec![part];
+    let mut sub = Vec::new();
+    while let Some(n) = stack.pop() {
+        sub.push(n);
+        stack.extend(&scene.nodes[n].children);
+    }
+    let mut hidden: Vec<i64> = Vec::new();
+    for &n in &sub {
+        for c in scene.nodes[n].components.iter().filter(|c| c.script.ends_with("CmpClothes")) {
+            for (i, field) in ["objOpt01", "objOpt02"].iter().enumerate() {
+                if hide_opt.get(i).copied().unwrap_or(false) {
+                    hidden.extend(c.fields.array(field).unwrap_or(&[]).iter().filter_map(|v| if let crysirror_unity::managed::Value::PPtr(p) = v { Some(p.path_id) } else { None }));
+                }
+            }
+        }
+    }
+    for n in sub {
+        let node = &mut scene.nodes[n];
+        if UNDRESSED.contains(&node.name.as_str()) || (node.origin == origin && hidden.contains(&node.game_object)) {
+            node.active = false;
+        }
+    }
+}
 
 /// The `ShakeCorrectData` asset (`chara/list/shakecorrect`).
 fn shake_correct(unity: &mut Unity) -> Result<crysirror_unity::managed::Fields> {
@@ -208,6 +245,27 @@ struct PartLook {
     outline: Option<[f32; 4]>,
     /// Card `skinShadowColor` (`_Shadow_color` of the skin shaders).
     shadow: Option<[f32; 4]>,
+    /// Pupil and highlight layers of the left and right eye (card
+    /// `pupil[0]`, `pupil[1]`).
+    eyes: Vec<EyeLayers>,
+}
+
+/// `HumanFace.ChangeSettingEyes`/`ChangeSettingEyeHL*` values of one eye.
+#[derive(Clone, Debug, Default)]
+struct EyeLayers {
+    /// `mt_eyepipil` texture (`overId`), its R/G/B colours
+    /// (`pupil01..03Color`) and `_Pipil_size` (`_eyePupilSizeRange`).
+    pupil: Option<(String, String)>,
+    pupil_colors: Vec<[f32; 4]>,
+    pupil_size: [f32; 2],
+    /// `_Eye_position`: iris size (`_eyeSizeRange` of `eyeWidth`/
+    /// `eyeHeight`) and offset (`_eyeLookRange` of `eyeX`/`eyeY`, mirrored
+    /// for the right eye).
+    iris: [f32; 4],
+    /// `mt_eye_hi_up` highlights: texture, `_Highlight_0N_position`
+    /// (size x/y from `_eyeHLSizeRange`, offset x − 0.5, y − 0.5),
+    /// rotation, `color` (R core) and `color2` (G glow).
+    highlights: Vec<(Option<(String, String)>, [f32; 4], f32, [f32; 4], [f32; 4])>,
 }
 
 pub struct Human {
@@ -279,7 +337,46 @@ impl Human {
             let texture = lists.row(list, id).and_then(|r| r.asset(key::MAIN_AB, tex));
             layers.push((shader, texture, colors));
         }
-        looks.insert(head.key.clone(), PartLook { shaders: &["AL/skin_head"], main: head_row.asset(key::MAIN_TEX_AB, key::MAIN_TEX), colors: vec![skin], layers, shadow, ..Default::default() });
+        let lerp = |a: f32, b: f32, v: f32| a + (b - a) * v.clamp(0., 1.);
+        let num = |v: Option<&Value>, d: f32| v.and_then(Value::as_f32).unwrap_or(d);
+        let mut eyes = Vec::new();
+        for (lr, p) in face.get("pupil").map(Value::as_array).unwrap_or(&[]).iter().take(2).enumerate() {
+            // `CmpEyeLookMaterial` ranges: size 4.0→0.9 (x) / 4.0→1.3 (y);
+            // look x −0.2→0.11 (left) / −0.11→0.2 (right, value mirrored),
+            // y −0.07→0.15.
+            let ex = num(face.get("eyeX"), 0.5);
+            let iris = [
+                lerp(4.0, 0.9, num(face.get("eyeWidth"), 0.5)),
+                lerp(4.0, 1.3, num(face.get("eyeHeight"), 0.5)),
+                if lr == 0 { lerp(-0.2, 0.11, ex) } else { lerp(-0.11, 0.2, 1. - ex) },
+                lerp(-0.07, 0.15, num(face.get("eyeY"), 0.5)),
+            ];
+            // `CmpEyeLookMaterial` ranges of `p_cf_al_head_00`: pupil
+            // 2.0→0.2 (width, height), highlight 3.0→0.5.
+            let pupil_size = [lerp(2.0, 0.2, num(face.get("pupilWidth"), 0.5)), lerp(2.0, 0.2, num(face.get("pupilHeight"), 0.5))];
+            let highlights = p
+                .get("highlightInfos")
+                .map(Value::as_array)
+                .unwrap_or(&[])
+                .iter()
+                .take(3)
+                .map(|h| {
+                    let id = h.get("id").and_then(Value::as_i64).unwrap_or(-1);
+                    let tex = lists.row("mt_eye_hi_up", id).and_then(|r| r.asset(key::MAIN_AB, key::EYE_HI_UP_TEX));
+                    let pos = [lerp(3.0, 0.5, num(h.get("width"), 0.5)), lerp(3.0, 0.5, num(h.get("height"), 0.5)), num(h.get("x"), 0.5).clamp(0., 1.) - 0.5, num(h.get("y"), 0.5).clamp(0., 1.) - 0.5];
+                    (tex, pos, num(h.get("rotation"), 0.5), color(h.get("color")).unwrap_or([1.; 4]), color(h.get("color2")).unwrap_or([1.; 4]))
+                })
+                .collect();
+            let over = p.get("overId").and_then(Value::as_i64).unwrap_or(-1);
+            eyes.push(EyeLayers {
+                pupil: lists.row("mt_eyepipil", over).and_then(|r| r.asset(key::MAIN_AB, key::EYE_PIPIL_TEX)),
+                pupil_colors: ["pupil01Color", "pupil02Color", "pupil03Color"].iter().map(|k| color(p.get(k)).unwrap_or([0., 0., 0., 1.])).collect(),
+                pupil_size,
+                iris,
+                highlights,
+            });
+        }
+        looks.insert(head.key.clone(), PartLook { shaders: &["AL/skin_head"], main: head_row.asset(key::MAIN_TEX_AB, key::MAIN_TEX), colors: vec![skin], layers, shadow, eyes, ..Default::default() });
         let link = scene.nodes.iter().position(|n| n.name == "cf_s_headlink").context("body cf_s_headlink")?;
         let head_root = scene.graft(&head.scene, &head.key, link);
         let hair_parent = {
@@ -337,7 +434,9 @@ impl Human {
                     looks.insert(p.key.clone(), PartLook { shaders: &["AL/cloth"], main: row.asset(key::MAIN_TEX_AB, key::MAIN_TEX), mask: row.asset(key::COLOR_MASK_AB, key::COLOR_MASK), colors, ..Default::default() });
                     let r = scene.graft(&p.scene, &p.key, 0);
                     let n = scene.alias_bones(r, skeleton);
-                    log.push(format!("{list} {id}: {data} ({n} bones)"));
+                    let hide: Vec<bool> = part.get("hideOpt").map(Value::as_array).unwrap_or(&[]).iter().map(|v| v.as_bool().unwrap_or(false)).collect();
+                    dress(&mut scene, r, &hide);
+                    log.push(format!("{list} {id}: {ab} {data} ({n} bones)"));
                 }
                 Err(e) => log.push(format!("{list} {id}: {e:#}")),
             }
@@ -456,6 +555,28 @@ impl SceneAssets for CharaAssets<'_> {
                         if shader == "AL/eye" {
                             // Iris: R/G/B select the three eye colours.
                             tint_by_mask(&mut img, Some(&mask), colors);
+                            // Materials `cf_m_hitomi_00_L`/`_R` take the card's
+                            // first/second pupil entry.
+                            let eye = look.eyes.get(usize::from(m.name.ends_with("_R"))).or(look.eyes.first()).cloned();
+                            if let Some(eye) = eye {
+                                // Relative to the material's authored `_Eye_position`
+                                // (the mesh UV shows the iris unscaled at that value).
+                                let d = m.colors.get("_Eye_position").copied().unwrap_or([eye.iris[0], eye.iris[1], eye.iris[2], eye.iris[3]]);
+                                let rel = [eye.iris[0] / d[0].max(1e-3), eye.iris[1] / d[1].max(1e-3), eye.iris[2] - d[2], eye.iris[3] - d[3]];
+                                let [sx, sy, ox, oy] = rel;
+                                img = resample_layer(&img, img.width, img.height, rel);
+                                if let Some(t) = &eye.pupil {
+                                    if let Some(p) = self.texture_named(t)? {
+                                        // The pupil sits in the iris's space.
+                                        overlay_layer(&mut img, &p, [sx * eye.pupil_size[0], sy * eye.pupil_size[1], ox, oy], 0.5, &eye.pupil_colors);
+                                    }
+                                }
+                                for (t, pos, rot, c1, c2) in &eye.highlights {
+                                    if let Some(h) = t.as_ref().map(|t| self.texture_named(t)).transpose()?.flatten() {
+                                        overlay_layer(&mut img, &h, *pos, *rot, &[*c1, *c2]);
+                                    }
+                                }
+                            }
                         } else {
                             // Lashes/brows: the shape in the main colour
                             // (gradient/highlight channels not converted).
@@ -505,6 +626,82 @@ impl SceneAssets for CharaAssets<'_> {
             o.base_color = Some([c[0] * k, c[1] * k, c[2] * k, 1.]);
         }
         Ok(Some(o))
+    }
+}
+
+/// `src` resampled into a `width`×`height` eye UV space at
+/// `(uv − 0.5 − offset) × size + 0.5` (transparent outside).
+pub fn resample_layer(src: &ImageSurface, width: u32, height: u32, pos: [f32; 4]) -> ImageSurface {
+    let mut out = ImageSurface { width, height, rgba: vec![0; (width * height * 4) as usize] };
+    if src.width == 0 || src.height == 0 {
+        return out;
+    }
+    for y in 0..height {
+        for x in 0..width {
+            let lu = ((x as f32 + 0.5) / width as f32 - 0.5 - pos[2]) * pos[0] + 0.5;
+            let lv = (1. - (y as f32 + 0.5) / height as f32 - 0.5 - pos[3]) * pos[1] + 0.5;
+            if !(0. ..1.).contains(&lu) || !(0. ..1.).contains(&lv) {
+                continue;
+            }
+            let sx = ((lu * src.width as f32) as u32).min(src.width - 1);
+            let sy = (((1. - lv) * src.height as f32) as u32).min(src.height - 1);
+            let j = ((sy * src.width + sx) * 4) as usize;
+            let i = ((y * width + x) * 4) as usize;
+            out.rgba[i..i + 4].copy_from_slice(&src.rgba[j..j + 4]);
+        }
+    }
+    out
+}
+
+/// Draw an eye layer texture over the iris (both in the eye's UV
+/// space): the layer is sampled at `(uv − 0.5 − offset) × size`, rotated by
+/// `(rotation − 0.5)` turns around the centre (0.5 is neutral in the
+/// materials), then `+ 0.5`; its R/G/B masks select `colors`, its alpha
+/// (× the colour's alpha) covers the iris. SATD-amanatsu-port: the
+/// `AL/eye` shader graph is not decoded; this is the reading of the packed
+/// `_Highlight_0N_position`/`_Pipil_size` vectors.
+pub fn overlay_layer(dst: &mut ImageSurface, layer: &ImageSurface, pos: [f32; 4], rotation: f32, colors: &[[f32; 4]]) {
+    if layer.width == 0 || layer.height == 0 || dst.width == 0 {
+        return;
+    }
+    let (s, c) = ((rotation - 0.5) * std::f32::consts::TAU).sin_cos();
+    for y in 0..dst.height {
+        for x in 0..dst.width {
+            // Image rows run top-down; UV v runs bottom-up.
+            let u = (x as f32 + 0.5) / dst.width as f32 - 0.5 - pos[2];
+            let v = 1. - (y as f32 + 0.5) / dst.height as f32 - 0.5 - pos[3];
+            let (ru, rv) = (u * c - v * s, u * s + v * c);
+            let (lu, lv) = (ru * pos[0] + 0.5, rv * pos[1] + 0.5);
+            if !(0. ..1.).contains(&lu) || !(0. ..1.).contains(&lv) {
+                continue;
+            }
+            let lx = ((lu * layer.width as f32) as u32).min(layer.width - 1);
+            let ly = (((1. - lv) * layer.height as f32) as u32).min(layer.height - 1);
+            let j = ((ly * layer.width + lx) * 4) as usize;
+            let a = f32::from(layer.rgba[j + 3]) / 255.;
+            if a <= 0. {
+                continue;
+            }
+            // Mask channels mix the colours (R first, then G, then B).
+            let mut col = [0f32; 4];
+            let mut w_sum = 0.;
+            for (k, cc) in colors.iter().enumerate().take(3) {
+                let w = f32::from(layer.rgba[j + k]) / 255.;
+                for ch in 0..4 {
+                    col[ch] += cc[ch] * w;
+                }
+                w_sum += w;
+            }
+            if w_sum <= 0. {
+                continue;
+            }
+            let cover = (a * (col[3] / w_sum) * w_sum.min(1.)).clamp(0., 1.);
+            let i = ((y * dst.width + x) * 4) as usize;
+            for ch in 0..3 {
+                let target = col[ch] / w_sum * 255.;
+                dst.rgba[i + ch] = (f32::from(dst.rgba[i + ch]) + (target - f32::from(dst.rgba[i + ch])) * cover).round().clamp(0., 255.) as u8;
+            }
+        }
     }
 }
 

@@ -1264,7 +1264,7 @@ fn skin_textures() {
         let r = lists.row("bo_body", id).unwrap();
         println!("bo_body {id}: {:?}", (0..130).filter_map(|k| r.get(k).map(|v| (k, v.to_owned()))).collect::<Vec<_>>());
     }
-    for (list, id, tex) in [("mt_sunburnUp", 1, 60), ("mt_sunburnDown", 2, 60), ("mt_nip", 0, 40), ("mt_underhair", 4, 61), ("mt_body_detail", 0, 42), ("mt_body_detail", 0, 28), ("mt_body_shine", 3, 124), ("bo_body", 1, 34)] {
+    for (list, id, tex) in [("mt_eye", 1, 23), ("mt_eyepipil", 4, 18), ("mt_eyepipil", 1, 18), ("mt_eye_gradation", 1, 23), ("mt_eye_gradation", 1, 10), ("mt_eye_hi_up", 4, 14), ("mt_eye_hi_up", 3, 14), ("mt_eye_hi_up", 2, 14), ("mt_eye_white", 0, 24), ("mt_sunburnUp", 1, 60), ("mt_sunburnDown", 2, 60), ("mt_nip", 0, 40), ("mt_underhair", 4, 61), ("mt_body_detail", 0, 42), ("mt_body_detail", 0, 28), ("mt_body_shine", 3, 124), ("bo_body", 1, 34)] {
         let Some(row) = lists.row(list, id) else {
             println!("{list} {id}: no row");
             continue;
@@ -1278,7 +1278,37 @@ fn skin_textures() {
             continue;
         };
         let img = crysirror_unity::world6::SceneAssets::texture(&mut u, &k, pid).unwrap();
-        println!("{list} {id} key {tex}: {n} {}x{}", img.width, img.height);
-        image::RgbaImage::from_raw(img.width, img.height, img.rgba).unwrap().save(out.join(format!("{list}_{tex}.png"))).unwrap();
+        let ext = |c: usize| img.rgba.chunks_exact(4).map(|p| p[c]).fold((255u8, 0u8), |(a, b), v| (a.min(v), b.max(v)));
+        println!("{list} {id} key {tex}: {n} {}x{} rgba {:?}", img.width, img.height, [ext(0), ext(1), ext(2), ext(3)]);
+        image::RgbaImage::from_raw(img.width, img.height, img.rgba).unwrap().save(out.join(format!("{list}_{id}_{tex}.png"))).unwrap();
+    }
+}
+
+/// Prints the fields of the components whose script ends with
+/// `AMANATSU_SCRIPT` in a prefab (`AMANATSU_BUNDLE`, `AMANATSU_ASSET`),
+/// with node paths for object pointers resolved within the prefab.
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn prefab_component() {
+    let mut u = unity();
+    let p = crysirror_amanatsu::level::Level::prefab(&mut u, &std::env::var("AMANATSU_BUNDLE").unwrap(), &std::env::var("AMANATSU_ASSET").unwrap()).unwrap();
+    let script = std::env::var("AMANATSU_SCRIPT").unwrap();
+    let by_go: std::collections::HashMap<i64, usize> = p.scene.nodes.iter().enumerate().map(|(i, n)| (n.game_object, i)).collect();
+    let by_tr: std::collections::HashMap<i64, usize> = p.scene.nodes.iter().enumerate().map(|(i, n)| (n.transform, i)).collect();
+    let name = |id: i64| by_go.get(&id).or(by_tr.get(&id)).map(|&i| p.scene.path(i)).unwrap_or_else(|| id.to_string());
+    for (i, n) in p.scene.nodes.iter().enumerate() {
+        for c in n.components.iter().filter(|c| c.script.ends_with(&script)) {
+            println!("== {} {}", p.scene.path(i), c.script);
+            for (k, v) in &c.fields.0 {
+                let s = match v {
+                    crysirror_unity::managed::Value::PPtr(q) => name(q.path_id),
+                    crysirror_unity::managed::Value::Array(a) if a.iter().all(|e| matches!(e, crysirror_unity::managed::Value::PPtr(_))) => {
+                        format!("[{}]", a.iter().map(|e| if let crysirror_unity::managed::Value::PPtr(q) = e { name(q.path_id) } else { String::new() }).collect::<Vec<_>>().join(", "))
+                    }
+                    v => format!("{v:?}").chars().take(200).collect(),
+                };
+                println!("  {k} = {s}");
+            }
+        }
     }
 }
