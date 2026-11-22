@@ -202,3 +202,9 @@
 - Engine: `AnimationState.hidden` (node names whose subtrees the renderer does not draw).
 - Behaviour (`hc`/`hc2` tracks from the `h_lv1` save): the shirt button at frame 2700 opens the part column; the bra button shows the half state (pulled up) at 2810 and removes it at 2870; the shorts button changes the bottoms at 2930 (log `HumanCloth … [2, 1, 0]`).
 
+
+## 2026-11-22 — Map particle systems
+
+- Native evidence: map 00 `effect00_map00/effect00_morning|evening|night` groups (toggled by the light setting's `_onObjectNames`) with `Waterfall_Top/Middle/Bottom/Clouds/Noise` and `River_Noise` ParticleSystems (`Legacy Shaders/Particles/Additive [(Soft)]`, `_MainTex`, `_TintColor`); `particle_dump` lists their Initial/Shape/Emission/Color/Size/Rotation/UV modules and renderer modes.
+- Engine: the shared `crysirror_unity::particles` importer converts the modules to `crysirror_vfx::SystemSpec` (textured sprite renderer, baked colour/size curves, shape frame with Unity +Z as engine +Y); the adapter uploads `_MainTex` once and spawns `vfx` entities with the map lights. Unconvertible shaders (Vefects fire/heat haze) and approximations are logged per system.
+- Behaviour (`w1` track from the `with` save, frame 1750, morning): six systems spawn on the pool map. A temporary worktree-only camera override aimed at the pool waterfall shows its mist over the water sheet and the white foam at its base, both absent in the same capture with the particle entities withheld.

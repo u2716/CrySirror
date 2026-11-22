@@ -206,6 +206,8 @@ pub struct MapWorld {
     /// `AL.ItemOutlinable` objects of the move-point prefab (the rest
     /// items of `EventManager.Item`): name, Unity world position.
     pub items: Vec<(String, [f32; 3])>,
+    /// Particle systems of the active nodes as engine VFX systems.
+    pub particles: Vec<MapParticles>,
     pub log: Vec<String>,
 }
 
@@ -292,6 +294,51 @@ pub fn azure_sky(azure: &crysirror_unity::managed::Fields, sun: Option<&SceneLig
 /// light setting applied, as GLB chunks.
 pub fn load(unity: &mut Unity, info: &MapInfo, time_zone: i32) -> Result<MapWorld> {
     load_with_budget(unity, info, time_zone, MAP_TEXTURE_BUDGET)
+}
+
+/// A map particle system with its `_MainTex` (cache key, pixels).
+#[derive(Clone, Debug)]
+pub struct MapParticles {
+    pub name: String,
+    pub import: crysirror_unity::particles::ParticleImport,
+    pub texture: Option<(String, crysirror_image::ImageSurface)>,
+}
+
+/// The particle systems of the map's active nodes. Azure's weather
+/// effects (`AzureCoreSystem/VisualFX`) emit only under its weather
+/// profiles and are left out with the weather.
+fn map_particles(unity: &mut Unity, key: &str, scene: &Scene6, log: &mut Vec<String>) -> Vec<MapParticles> {
+    use crysirror_unity::particles;
+    let mut out = Vec::new();
+    for (n, p) in particles::scene_particles(scene).iter().enumerate() {
+        let name = scene.path(p.node);
+        if name.contains("/AzureCoreSystem/") {
+            // SATD-amanatsu-port: Azure weather (rain, storm, ripples).
+            continue;
+        }
+        let material = p.renderer.and_then(particles::renderer_material).and_then(|m| {
+            let (f, o) = unity.target(key, m).ok()?;
+            let mf = unity.decode(&f, o).ok()?;
+            let shader = mf.pptr("m_Shader").and_then(|s| unity.target(&f, s).ok()).and_then(|(sf, so)| unity.decode(&sf, so).ok()).map(|s| world6::shader_name(&s)).unwrap_or_default();
+            Some((f, world6::UnityMaterial::decode(&mf, shader)))
+        });
+        let seed = name.bytes().fold(0x811c_9dc5u32, |h, b| (h ^ u32::from(b)).wrapping_mul(0x0100_0193));
+        match particles::particle_system(scene, p, material.as_ref().map(|m| &m.1), seed) {
+            Ok(import) => {
+                let texture = import.texture.zip(material.as_ref()).and_then(|(t, (f, _))| {
+                    let (tf, to) = unity.target(f, t).ok()?;
+                    let img = unity.texture(&tf, to).map_err(|e| log.push(format!("particle {name} texture: {e:#}"))).ok()?;
+                    (img.width <= 2048 && img.height <= 2048).then(|| (format!("{tf}#{to}"), img))
+                });
+                if !import.notes.is_empty() {
+                    log.push(format!("particle {name}: {}", import.notes.join("; ")));
+                }
+                out.push(MapParticles { name: format!("{name}#{n}"), import, texture });
+            }
+            Err(e) => log.push(format!("particle {name}: {e:#}")),
+        }
+    }
+    out
 }
 
 /// `load` with a texture budget (scenes with two characters, such as H,
@@ -387,11 +434,13 @@ pub fn load_with_budget(unity: &mut Unity, info: &MapInfo, time_zone: i32, textu
         }
         Err(e) => log.push(format!("move points {}: {e:#}", info.point.1)),
     }
+    let particles = map_particles(unity, &key, &scene, &mut log);
+    log.push(format!("{} particle systems", particles.len()));
     let sky = azure.as_ref().map(|a| azure_sky(a, sun.as_ref()));
     if let Some(s) = &sky {
         log.push(format!("Azure sky: zenith {:?} horizon {:?}", s.zenith, s.horizon));
     }
-    Ok(MapWorld { info: info.clone(), chunks, report, sun, chara_light, lights, sky, settings, post, fog, cameras, points: action_points, short_movies, items, log })
+    Ok(MapWorld { info: info.clone(), chunks, report, sun, chara_light, lights, sky, settings, post, fog, cameras, points: action_points, short_movies, items, particles, log })
 }
 
 impl MapWorld {

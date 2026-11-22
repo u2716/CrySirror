@@ -23,6 +23,7 @@ pub mod managed;
 pub mod memorypack;
 pub mod msgpack;
 pub mod managed_gen;
+pub mod particles;
 pub mod reader;
 pub mod scene6;
 pub mod texture;

@@ -426,6 +426,8 @@ pub struct Game {
     map_entities: Vec<(u32, VfsPath)>,
     /// Light entities of the loaded map.
     map_lights: Vec<u32>,
+    /// Uploaded particle textures by (file, path id) key.
+    particle_textures: std::collections::HashMap<String, String>,
     /// The uploaded sky of the map's time zone.
     sky: Option<VfsPath>,
     next_model: u32,
@@ -588,6 +590,7 @@ impl Game {
             }
             self.world.push(spawn);
         }
+        self.spawn_particles(host, client, &world.particles);
         // Registered heroines at the map's standing action points
         // (SATD-amanatsu-port: `ActionPoint` choice, their `_animIDList`
         // motions and NavMesh wandering are not ported).
@@ -686,6 +689,49 @@ impl Game {
         self.log.extend(r.errors.iter().take(8).cloned());
         self.log.extend(world.log);
         Ok(())
+    }
+
+    /// The map's particle systems as engine VFX entities (despawned with
+    /// the map lights); textures are uploaded once per session.
+    fn spawn_particles(&mut self, host: &mut dyn HostServices, client: ClientId, particles: &[crate::map::MapParticles]) {
+        use crysirror_unity::gltf::{mirror_point, mirror_quat};
+        for (i, p) in particles.iter().enumerate() {
+            let mut system = p.import.system.clone();
+            if let Some((key, img)) = &p.texture {
+                let path = match self.particle_textures.get(key) {
+                    Some(path) => path.clone(),
+                    None => {
+                        let id = 0x5800_0000 + self.particle_textures.len() as u32;
+                        match host.upload_rgba(client, id, img.width, img.height, &img.rgba) {
+                            Ok(path) => {
+                                let path = path.relative().to_owned();
+                                self.particle_textures.insert(key.clone(), path.clone());
+                                path
+                            }
+                            Err(e) => {
+                                self.log.push(format!("particle {}: texture upload: {e:#}", p.name));
+                                continue;
+                            }
+                        }
+                    }
+                };
+                for e in &mut system.emitters {
+                    if let crysirror_vfx::RenderSpec::Sprite { texture, .. } = &mut e.render {
+                        *texture = Some(path.clone());
+                    }
+                }
+            }
+            let q = glam::Quat::from_array(mirror_quat(p.import.rotation)).normalize();
+            let (x, y, z) = q.to_euler(glam::EulerRot::XYZ);
+            let id = 0x4800 + i as u32;
+            self.map_lights.push(id);
+            self.world.push(json!({"op": "spawn", "entity": {
+                "id": id,
+                "name": format!("particles:{}", p.name),
+                "transform": {"translation": mirror_point(p.import.position), "rotation_degrees": [x.to_degrees(), y.to_degrees(), z.to_degrees()], "scale": [1.0, 1.0, 1.0]},
+                "vfx": system,
+            }}));
+        }
     }
 
     /// Upload GLB chunks and spawn them as world entities at the origin.
@@ -3155,6 +3201,7 @@ impl AmanatsuVm {
             pending_map: None,
             map_entities: Vec::new(),
             map_lights: Vec::new(),
+            particle_textures: std::collections::HashMap::new(),
             sky: None,
             next_model: 0,
             view: None,

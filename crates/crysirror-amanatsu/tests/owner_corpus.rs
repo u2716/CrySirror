@@ -2056,3 +2056,54 @@ fn map_particles() {
     }
     println!("{n} particle systems");
 }
+
+/// One ParticleSystem's enabled modules and its renderer material
+/// (`AMANATSU_NODE` path suffix).
+#[test]
+#[ignore]
+fn particle_dump() {
+    use crysirror_unity::managed::{Fields, Value};
+    fn dump(f: &Fields, depth: usize, out: &mut String) {
+        for (k, v) in &f.0 {
+            match v {
+                Value::Struct(s) => {
+                    if s.int("enabled") == Some(0) && depth == 0 {
+                        out.push_str(&format!("{k}: off\n"));
+                        continue;
+                    }
+                    out.push_str(&format!("{}{k}:\n", "  ".repeat(depth)));
+                    dump(s, depth + 1, out);
+                }
+                Value::Array(a) if a.len() > 8 => out.push_str(&format!("{}{k}: [{} items]\n", "  ".repeat(depth), a.len())),
+                Value::Bytes(b) => out.push_str(&format!("{}{k}: {} bytes\n", "  ".repeat(depth), b.len())),
+                v => out.push_str(&format!("{}{k}: {v:?}\n", "  ".repeat(depth))),
+            }
+        }
+    }
+    let mut u = unity();
+    let infos = crysirror_amanatsu::map::map_infos(&mut u).unwrap();
+    let info = infos.iter().find(|i| i.id == 0).unwrap();
+    let key = u.bundle_files().into_iter().find(|k| k.starts_with(&format!("bundle:lib/{}#", info.scene.0)) && !k.ends_with(".resS")).unwrap();
+    let scene = u.scene(&key).unwrap();
+    let want = std::env::var("AMANATSU_NODE").unwrap_or("effect00_morning/Waterfall_Clouds".into());
+    let i = (0..scene.nodes.len()).find(|&i| scene.path(i).ends_with(&want)).unwrap();
+    let node = &scene.nodes[i];
+    let mut out = String::new();
+    for c in node.components.iter().filter(|c| matches!(c.class_id, 198 | 199)) {
+        out.push_str(&format!("== class {}\n", c.class_id));
+        dump(&c.fields, 0, &mut out);
+        if c.class_id == 199 {
+            for m in c.fields.array("m_Materials").unwrap_or(&[]) {
+                if let Value::PPtr(p) = m {
+                    let (f, o) = u.target(&key, *p).unwrap();
+                    let mf = u.decode(&f, o).unwrap();
+                    out.push_str("== material\n");
+                    dump(&mf, 0, &mut out);
+                }
+            }
+        }
+    }
+    let (_, _, pos) = crysirror_unity::world6::world_matrix(&scene, i).to_scale_rotation_translation();
+    out.push_str(&format!("world position {pos:?}\n"));
+    std::fs::write(std::env::var("AMANATSU_DUMP").unwrap_or("/dev/stdout".into()), out).unwrap();
+}
