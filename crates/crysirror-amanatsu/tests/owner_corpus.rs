@@ -1967,3 +1967,92 @@ fn controller_states() {
         println!("layer {li}: {names:?}");
     }
 }
+
+/// ADV command counts over every scenario of personality 0 (with up to
+/// three argument examples of `AMANATSU_CMD`).
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn adv_census() {
+    let mut u = unity();
+    let index = crysirror_amanatsu::talk::scenario_index(&mut u, 0).unwrap();
+    let want = std::env::var("AMANATSU_CMD").ok();
+    let mut counts: std::collections::BTreeMap<String, usize> = Default::default();
+    let mut shown = 0;
+    let mut names: Vec<&String> = index.keys().collect();
+    names.sort();
+    for name in names {
+        let Ok(cmds) = crysirror_amanatsu::talk::load_scenario(&mut u, &index, name) else { continue };
+        for c in cmds {
+            let cname = c.name();
+            if want.as_deref() == Some(cname.as_str()) && shown < 12 {
+                shown += 1;
+                println!("{name}: {cname} {:?}", c.args);
+            }
+            *counts.entry(cname).or_default() += 1;
+            if false {
+            }
+        }
+    }
+    let mut v: Vec<_> = counts.into_iter().collect();
+    v.sort_by(|a, b| b.1.cmp(&a.1));
+    for (k, n) in v {
+        println!("{n:6} {k}");
+    }
+}
+
+/// List tables (any bundle) with a row holding the value `AMANATSU_VALUE`.
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn tables_with_value() {
+    let mut u = unity();
+    let want = std::env::var("AMANATSU_VALUE").unwrap();
+    let keys: Vec<String> = u.bundle_files().into_iter().filter(|k| !k.ends_with(".resS") && !k.contains("/chara/") && !k.contains("/ma/")).collect();
+    for key in keys {
+        let Ok(file) = u.file(&key) else { continue };
+        let ids: Vec<i64> = file.objects.iter().filter(|o| o.class_id == 49).map(|o| o.path_id).collect();
+        for id in ids {
+            let Ok(b) = u.text_asset(&key, id) else { continue };
+            if let Ok(t) = crysirror_amanatsu::tables::Table::parse(&b) {
+                if let Some(r) = t.rows.iter().find(|r| r.iter().any(|c| *c == want)) {
+                    let name = u.decode(&key, id).ok().and_then(|f| f.string("m_Name").map(str::to_owned)).unwrap_or_default();
+                    println!("{key} {name} keys {:?} row {:?}", t.keys, r);
+                }
+            }
+        }
+    }
+}
+
+/// Particle systems of a map scene (`AMANATSU_MAP`): node, active, emission
+/// rate, start lifetime/size/speed and renderer material shader.
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn map_particles() {
+    let mut u = unity();
+    let infos = crysirror_amanatsu::map::map_infos(&mut u).unwrap();
+    let id: i32 = std::env::var("AMANATSU_MAP").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+    let info = infos.iter().find(|i| i.id == id).unwrap();
+    let key = u.bundle_files().into_iter().find(|k| k.starts_with(&format!("bundle:lib/{}#", info.scene.0)) && !k.ends_with(".resS")).unwrap();
+    let scene = u.scene(&key).unwrap();
+    let mut n = 0;
+    for (i, node) in scene.nodes.iter().enumerate() {
+        for c in node.components.iter().filter(|c| c.class_id == 198) {
+            n += 1;
+            if n > 25 {
+                continue;
+            }
+            let mat = node.components.iter().find(|c| c.class_id == 199).and_then(|r| r.fields.array("m_Materials").and_then(|a| a.first().cloned()));
+            let shader = mat.and_then(|m| if let crysirror_unity::managed::Value::PPtr(p) = m { u.target(&key, p).ok() } else { None }).and_then(|(f, o)| {
+                let mf = u.decode(&f, o).ok()?;
+                let sp = mf.pptr("m_Shader")?;
+                let (sf, so) = u.target(&f, sp).ok()?;
+                Some(format!("{} / {}", mf.string("m_Name").unwrap_or(""), u.decode(&sf, so).ok()?.fields("m_ParsedForm").and_then(|p| p.string("m_Name")).unwrap_or("")))
+            });
+            let module = |k: &str| c.fields.fields(k).cloned();
+            let rate = module("EmissionModule").and_then(|e| e.fields("rateOverTime").and_then(|r| r.float("scalar")));
+            let init = module("InitialModule");
+            let f = |k: &str| init.as_ref().and_then(|m| m.fields(k)).and_then(|v| v.float("scalar"));
+            println!("{} active {} rate {:?} life {:?} size {:?} speed {:?} {:?}", scene.path(i), node.active, rate, f("startLifetime"), f("startSize"), f("startSpeed"), shader);
+        }
+    }
+    println!("{n} particle systems");
+}
