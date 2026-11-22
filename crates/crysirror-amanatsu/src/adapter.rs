@@ -99,6 +99,9 @@ struct HRun {
     /// A night event H (`HDetail` from `NightEvent`): the points kind
     /// after it (`H_NightShowerAfter`, `H_NightMorningAfter`).
     night: Option<&'static str>,
+    /// The action point of an event H (`ItemEventH00`); none: the map's
+    /// first H point (or `NightEventH00` for a night H).
+    event_point: Option<&'static str>,
 }
 
 /// A short movie (`EventManager.EventShortMovie` / `ShortMovie.PlayAsync`).
@@ -116,6 +119,12 @@ struct MoviePlay {
     fades: Vec<(f64, bool, f64, [f32; 3])>,
     /// The ADV after the movie (`endADVAsset`).
     after: Vec<String>,
+}
+
+/// `EventManager.Item`: a rest item was chosen (heroine, `GetEvent`).
+struct ItemRun {
+    card: Option<String>,
+    judge: i32,
 }
 
 /// `EventManager.NightEvent` phases.
@@ -225,6 +234,15 @@ pub struct Game {
     /// A short movie to start when the current conversation ends (card,
     /// id, after ADV).
     pending_movie: Option<(String, i32, Vec<String>)>,
+    /// The loaded map's rest items (name, Unity position).
+    map_items: Vec<(String, [f32; 3])>,
+    item: Option<ItemRun>,
+    /// `ExploreProperties.Event._itemEventRate`, `_itemEventHRate`.
+    item_rates: (i64, i64),
+    /// The last conversation's `ItemSelectNum`.
+    item_select: Option<i64>,
+    /// `SaveData.IsItemEvent`.
+    is_item_event: bool,
     /// The map a "一緒に遊ぶ" movie returns to.
     with_return: Option<i32>,
     /// The height pick (`_S`/`_M`/`_L` index) of the last character.
@@ -429,10 +447,14 @@ impl Game {
         self.place_heroines(false);
         // The H place: `H/H00`, or `NightEventH00` for a night event H
         // (`MovePointInfo.GetNightEventHPoint`).
-        let place = if self.h.as_ref().is_some_and(|h| h.night.is_some()) { "NightEventH00" } else { "H00" };
+        let place = match self.h.as_ref() {
+            Some(HRun { event_point: Some(p), .. }) => *p,
+            Some(h) if h.night.is_some() => "NightEventH00",
+            _ => "H00",
+        };
         self.h_point = world.points.iter().find(|p| p.0 == place).map(|p| (p.1, p.2));
         self.h_place = 0;
-        if self.h.as_ref().is_some_and(|h| h.night.is_none() && h.phase == MassagePhase::Enter) {
+        if self.h.as_ref().is_some_and(|h| h.night.is_none() && h.event_point.is_none() && h.phase == MassagePhase::Enter) {
             // `HPointCtrl.FindFirst`: a first `HPoint` of the map.
             match crate::h::load_hpoints(&mut self.unity, id) {
                 Ok(points) => {
@@ -451,6 +473,7 @@ impl Game {
             }
         }
         self.map_points = world.points.clone();
+        self.map_items = world.items.clone();
         self.map_sun = world.sun.as_ref().map_or(1., |l| l.intensity);
         let h_entry = self.h.as_ref().filter(|h| h.phase == MassagePhase::Enter).map(|h| h.card.clone());
         if h_entry.is_some() {
@@ -486,6 +509,10 @@ impl Game {
                 }
                 Err(e) => self.log.push(format!("heroine {card}: {e:#}")),
             }
+        }
+        if let Some(v) = world.camera() {
+            let shown: Vec<String> = world.items.iter().map(|(n, p)| format!("{n} {:?}", project(v, crysirror_unity::gltf::mirror_point(*p)).map(|s| [s[0].round(), s[1].round()]))).collect();
+            self.log.push(format!("rest items: {shown:?}"));
         }
         self.cameras = world.cameras.iter().map(|c| c.0.clone()).collect();
         let best = world.cameras.iter().map(|c| c.1).max().unwrap_or(0);
@@ -903,7 +930,7 @@ impl Game {
                 ..Default::default()
             });
         }
-        SaveFile { save: SaveData { load_product_id: 100, version: Some(Version::default()), save_time_text: Some(text), time_zone: zone, entry_count: npcs.len() as i32, comment: Some(comment.into()), ..Default::default() }, player, npcs }
+        SaveFile { save: SaveData { load_product_id: 100, version: Some(Version::default()), save_time_text: Some(text), time_zone: zone, entry_count: npcs.len() as i32, comment: Some(comment.into()), is_item_event: self.is_item_event, ..Default::default() }, player, npcs }
     }
 
     /// Restore heroines, their parameters and placement from a save (cards
@@ -912,6 +939,7 @@ impl Game {
         self.heroines.clear();
         self.npc.clear();
         self.npc_extra.clear();
+        self.is_item_event = file.save.is_item_event;
         self.placement.clear();
         for n in file.npcs {
             let name = n.actor.chara_file_name.clone().unwrap_or_default();
@@ -1304,9 +1332,13 @@ impl Game {
                 let index = (h.orgasms as usize).min(7);
                 self.apply_points(h.card.clone(), "H", Some(index));
                 {
+                    // An item event H is not a command: no cost.
+                    let command = h.event_point.is_none();
                     let (gp, count, _) = self.npc(&h.card);
                     count.h = (count.h + 1).min(100);
-                    gp.cost = (gp.cost - 1).max(0);
+                    if command {
+                        gp.cost = (gp.cost - 1).max(0);
+                    }
                 }
                 let zone = if let Controller::ActionMap(c) = &self.controller { c.time_zone } else { 0 };
                 self.fade.start(now, true, self.fade_seconds);
@@ -1799,7 +1831,7 @@ impl Game {
             }
             NightPhase::Shower => {
                 // `HDetail(Event1)` at the movie map's night H place.
-                self.h = Some(HRun { card: card.clone(), phase: MassagePhase::Enter, return_map: shower_map, posture: None, entities: Vec::new(), motion: "Idle", motion_until: 0, gauge: 0., male_gauge: 0., finishes: Vec::new(), orgasms: 0, last_ms: now, night: Some("H_NightShowerAfter") });
+                self.h = Some(HRun { card: card.clone(), phase: MassagePhase::Enter, return_map: shower_map, posture: None, entities: Vec::new(), motion: "Idle", motion_until: 0, gauge: 0., male_gauge: 0., finishes: Vec::new(), orgasms: 0, last_ms: now, night: Some("H_NightShowerAfter"), event_point: None });
                 self.fade.start(now, true, self.fade_seconds);
                 self.pending_map = Some((shower_map, 3));
                 self.log.push(format!("NightEvent {card}: H on map {shower_map}"));
@@ -1814,7 +1846,7 @@ impl Game {
             }
             NightPhase::Morning if is_h_scene => {
                 // The morning H (`HDetail(Event2/3)`).
-                self.h = Some(HRun { card: card.clone(), phase: MassagePhase::Enter, return_map: morning_map, posture: None, entities: Vec::new(), motion: "Idle", motion_until: 0, gauge: 0., male_gauge: 0., finishes: Vec::new(), orgasms: 0, last_ms: now, night: Some("H_NightMorningAfter") });
+                self.h = Some(HRun { card: card.clone(), phase: MassagePhase::Enter, return_map: morning_map, posture: None, entities: Vec::new(), motion: "Idle", motion_until: 0, gauge: 0., male_gauge: 0., finishes: Vec::new(), orgasms: 0, last_ms: now, night: Some("H_NightMorningAfter"), event_point: None });
                 self.fade.start(now, true, self.fade_seconds);
                 let zone = if let Controller::ActionMap(m) = &self.controller { m.time_zone } else { 0 };
                 self.pending_map = Some((morning_map, zone));
@@ -1873,6 +1905,102 @@ impl Game {
             }
         }
         0
+    }
+
+    /// A rest item under the pointer (the item's screen position within
+    /// 96 px; SATD-amanatsu-port: the `OutlineCollider` shapes and the
+    /// hover outline are not ported).
+    fn pick_item(&self, x: f32, y: f32) -> Option<usize> {
+        let v = self.view.as_ref()?;
+        self.map_items
+            .iter()
+            .enumerate()
+            .filter_map(|(i, (_, p))| project(v, crysirror_unity::gltf::mirror_point(*p)).map(|s| (i, (s[0] - x).hypot(s[1] - y))))
+            .filter(|(_, d)| *d < 96.)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(i, _)| i)
+    }
+
+    /// `EventManager.Item`: `GetHeroine` (a heroine with favourability LV 2
+    /// or more), `GetEvent` (`_itemEventRate`; the H variant at LV 4 with
+    /// `IsH`, no H this zone, `IsItemEvent` and `_itemEventHRate`), then
+    /// `Before_Item` (`rest`) with `Judge`.
+    fn item_clicked(&mut self, item: usize) -> Result<()> {
+        let name = self.map_items.get(item).map(|i| i.0.clone()).unwrap_or_default();
+        let mut cands = Vec::new();
+        for h in self.heroines.clone() {
+            if self.npc(&h).0.favorability.lv >= 2 {
+                cands.push(h);
+            }
+        }
+        let card = (!cands.is_empty()).then(|| {
+            let i = self.random(cands.len());
+            cands.swap_remove(i)
+        });
+        let judge = match &card {
+            None => 2,
+            Some(c) => {
+                let roll = self.random(100) as i64 + 1;
+                if roll > self.item_rates.0 {
+                    2
+                } else {
+                    let lv = self.npc(c).0.favorability.lv;
+                    let e = self.extra(c).clone();
+                    if lv < 4 || !e.is_h || e.is_time_zone_h || !self.is_item_event {
+                        1
+                    } else {
+                        i32::from(self.random(100) as i64 + 1 > self.item_rates.1)
+                    }
+                }
+            }
+        };
+        self.log.push(format!("EventManager.Item {name}: heroine {card:?}, GetEvent {judge}"));
+        self.level.sounds.push(sound::Call::SystemSe(self.sound_ids.ok_s));
+        let list: Vec<String> = self.adv_assets.event("Before_Item").into_iter().collect();
+        self.item = Some(ItemRun { card: card.clone(), judge });
+        self.set_hud_visible(false);
+        // SATD-amanatsu-port: the event CGs (`EventCG_Chair*`) and the
+        // heroine's placement at the item are not ported; she is addressed
+        // where she stands.
+        let who = card.clone().unwrap_or_else(|| self.heroines.first().cloned().unwrap_or_default());
+        let vars = [("Judge", crate::adv::Var::Int(judge as i64)), ("G_MapID", crate::adv::Var::Int(self.current_map() as i64))];
+        self.night_talk(&who, list, &vars)
+    }
+
+    /// `EventManager.Item` after `rest`: 休まない (`SelectNum` 1) or no event
+    /// ends it; the H variant (`IsHScene`) is an H at the map's item event
+    /// H point; the talk variant adds `QuestionsFromNPC` points by
+    /// `ItemSelectNum`. `ItemEventEnd` returns to the action map.
+    fn item_talk_ended(&mut self, now: u64) {
+        let Some(item) = self.item.take() else { return };
+        let (selected, is_h_scene) = self.last_talk;
+        let end = |game: &mut Self| {
+            game.set_hud_visible(true);
+            game.log.push("ItemEventEnd".into());
+        };
+        if selected == Some(1) || item.judge == 2 {
+            return end(self);
+        }
+        let Some(card) = item.card else { return end(self) };
+        if item.judge == 0 && is_h_scene {
+            let point = if self.map_points.iter().any(|p| p.0 == "ItemEventH00") { "ItemEventH00" } else { "ItemEvent00" };
+            let map = self.current_map();
+            self.h = Some(HRun { card, phase: MassagePhase::Enter, return_map: map, posture: None, entities: Vec::new(), motion: "Idle", motion_until: 0, gauge: 0., male_gauge: 0., finishes: Vec::new(), orgasms: 0, last_ms: now, night: None, event_point: Some(point) });
+            let zone = if let Controller::ActionMap(m) = &self.controller { m.time_zone } else { 0 };
+            self.fade.start(now, true, self.fade_seconds);
+            self.pending_map = Some((map, zone));
+            self.log.push(format!("EventManager.Item: H at {point}"));
+            return;
+        }
+        if item.judge == 1 {
+            if let Some(n) = self.item_select.take() {
+                if n >= 0 {
+                    self.apply_points(card, "QuestionsFromNPC", Some(n as usize));
+                }
+            }
+            self.is_item_event = true;
+        }
+        end(self);
     }
 
     /// `EventShortMovie`: the movie's map (`ALShortMovieContent.MapID`)
@@ -2178,6 +2306,7 @@ impl AmanatsuVm {
         let map_limit = pd.int("_mapLimitFull").unwrap_or(6).max(1) as usize;
         let event = pd.fields("_explore").and_then(|e| e.fields("_event"));
         let night_rate = event.and_then(|e| e.int("_nightEventRate")).unwrap_or(50);
+        let item_rates = (event.and_then(|e| e.int("_itemEventRate")).unwrap_or(50), event.and_then(|e| e.int("_itemEventHRate")).unwrap_or(50));
         let movie_maps = crate::tables::short_movie_maps(&mut unity).unwrap_or_default();
         let movie = |key: &str, default: i64| movie_maps.get(&(event.and_then(|e| e.int(key)).unwrap_or(default) as i32)).copied().unwrap_or(2);
         let night_movie_maps = (movie("_nightEventShowerSMID", 20), movie("_nightEventSMID", 22));
@@ -2223,6 +2352,11 @@ impl AmanatsuVm {
             pending_movie: None,
             last_height_pick: 1,
             with_return: None,
+            map_items: Vec::new(),
+            item: None,
+            item_rates,
+            is_item_event: false,
+            item_select: None,
             map_released: false,
             massage: None,
             adv_assets,
@@ -2488,18 +2622,23 @@ impl AmanatsuVm {
             game.pending_steps.extend(steps);
             click = None;
             game.pressed = None;
-        } else if input.buttons_pressed & b::MOUSE_LEFT != 0 && handler.is_none() && !fading && game.massage.is_none() && game.h.is_none() && game.night.is_none() && game.movie.is_none() && matches!(&game.controller, Controller::ActionMap(m) if matches!(m.phase, actionmap::Phase::Map(_))) {
+        } else if input.buttons_pressed & b::MOUSE_LEFT != 0 && handler.is_none() && !fading && game.massage.is_none() && game.h.is_none() && game.night.is_none() && game.movie.is_none() && game.item.is_none() && matches!(&game.controller, Controller::ActionMap(m) if matches!(m.phase, actionmap::Phase::Map(_))) {
             let hit_ui = layouts.iter().any(|l| l.hits.iter().any(|(_, r)| r.contains(x, y)));
             if !hit_ui {
                 if let Some(spot) = game.pick_heroine(x, y).filter(|_| game.command.is_none()) {
                     if let Err(e) = game.heroine_clicked(spot) {
                         game.log.push(format!("talk: {e:#}"));
                     }
+                } else if let Some(item) = game.pick_item(x, y).filter(|_| game.command.is_none() && game.talk.is_none() && game.item.is_none()) {
+                    if let Err(e) = game.item_clicked(item) {
+                        game.log.push(format!("EventManager.Item: {e:#}"));
+                    }
                 }
             }
         }
         let mut massage_talk_ended = false;
         let mut night_talk_ended = false;
+        let mut item_talk_ended = false;
         let mut movie_start: Option<(String, i32, Vec<String>)> = None;
         for step in std::mem::take(&mut game.pending_steps) {
             match step {
@@ -2513,7 +2652,18 @@ impl AmanatsuVm {
                     if let Some((talk, oi)) = game.talk.take() {
                         game.log.extend(talk.log);
                         let is_h_scene = matches!(talk.program.vars.get("IsHScene"), Some(crate::adv::Var::Bool(true)));
-                        game.last_talk = (talk.selected, is_h_scene);
+                        // `ScenePack.GetInt("SelectNum")`: the scenario's
+                        // variable, else the chosen item's index.
+                        let select = match talk.program.vars.get("SelectNum") {
+                            Some(crate::adv::Var::Int(n)) => Some(*n as usize),
+                            _ => talk.selected,
+                        };
+                        game.last_talk = (select, is_h_scene);
+                        game.item_select = match talk.program.vars.get("ItemSelectNum") {
+                            Some(crate::adv::Var::Int(n)) => Some(*n),
+                            _ => None,
+                        };
+                        item_talk_ended = game.item.is_some();
                         night_talk_ended = game.night.is_some();
                         if let Some((card, kind)) = game.pending_points.take() {
                             game.apply_points(card, kind, talk.selected);
@@ -2674,6 +2824,9 @@ impl AmanatsuVm {
         if night_talk_ended {
             game.night_talk_ended(now)?;
         }
+        if item_talk_ended {
+            game.item_talk_ended(now);
+        }
         if let Some((card, id, after)) = movie_start {
             game.start_movie(&card, id, after, now);
         }
@@ -2759,7 +2912,7 @@ impl AmanatsuVm {
                 list.extend(crate::commands::choose(&game.adv_assets.h_start(here), &mut random));
                 game.rng = rng;
                 game.visit_played = true;
-                game.h = Some(HRun { card: card.clone(), phase: MassagePhase::Agree, return_map, posture: None, entities: Vec::new(), motion: "Idle", motion_until: 0, gauge: 0., male_gauge: 0., finishes: Vec::new(), orgasms: 0, last_ms: now, night: None });
+                game.h = Some(HRun { card: card.clone(), phase: MassagePhase::Agree, return_map, posture: None, entities: Vec::new(), motion: "Idle", motion_until: 0, gauge: 0., male_gauge: 0., finishes: Vec::new(), orgasms: 0, last_ms: now, night: None, event_point: None });
             } else if name == "btnWith" {
                 // `EventManager.With`: the agree line, the short movie and
                 // `_shortMoiveAfterAssets[LV]`, then the favourability level.

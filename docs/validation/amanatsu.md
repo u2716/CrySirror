@@ -137,3 +137,9 @@
 - Owner corpus: `short_movie` (stm_20: 12.83 s, `stm_f_20_00/01`, `stm_cam_20_00/01`, four fades; personality 0 LV1 → movie 4), `state_clip_bindings` (`stm_cam_20_00_S/M/L` root position/rotation and scale curves 0.1/10000/42.1), map 2 `Short20`/`Short22`, map 4 `Short16`.
 - Behaviour (auto slot patched to a full favourability gauge and one massage): 一緒に遊ぶ → `agree-1` → ShortMovie 16 on 滝 with the heroine at `Short16` and the timeline camera framing her (after flipping the rig's camera to −Z; before, the camera faced away into rocks) → `with0` → favourability LV1 → back to プール. Earlier runs showed clicks during the movie opening a conversation; heroine picks are now blocked while a movie plays.
 - Not established: the remaining tracks, comparison with the original movie framing.
+
+## 2026-11-22 — Item (rest) events (local, Apple M4 Max / Metal, offscreen, muted)
+
+- Native evidence: `EventManager._Item_d__50` (`GetHeroine`, `GetEvent` → `PackData` `Judge`, `Before_Item`, `SelectNum` 1 → `ItemEventEnd(0)`, `Judge` 0 → `HDetail(Event0)` → `_h.Evaluation`, `Judge` 1 → `ItemSelectNum` → `_param` +120 `QuestionsFromNPC.GetSelect`), `GetEvent`, `GetHeroine` (favourability LV ≥ 2), `ItemEventEnd` (camera/HUD restore), `PropertyData.Parameter` layout, `g` `rest` scenario.
+- Behaviour (auto slot patched to favourability LV4 with `IsH`): the pool's beach chair (`p_al_m00_bchair00_00 (1)`) starts `rest`; with `GetEvent` 2 休む ends in `ItemEventEnd` with the HUD back; a later try with `GetEvent` 1 plays the heroine's part and adds `QuestionsFromNPC` points (select 0).
+- Not established: the item H variant on screen (code path shared with H), event CGs.

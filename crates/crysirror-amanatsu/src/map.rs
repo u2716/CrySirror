@@ -198,6 +198,9 @@ pub struct MapWorld {
     /// `ActionPoint`s of kind 1 (`GetShortMoviePoint`): short movie id,
     /// position, rotation.
     pub short_movies: Vec<(i32, [f32; 3], [f32; 4])>,
+    /// `AL.ItemOutlinable` objects of the move-point prefab (the rest
+    /// items of `EventManager.Item`): name, Unity world position.
+    pub items: Vec<(String, [f32; 3])>,
     pub log: Vec<String>,
 }
 
@@ -348,9 +351,14 @@ pub fn load_with_budget(unity: &mut Unity, info: &MapInfo, time_zone: i32, textu
     let mut cameras = Vec::new();
     let mut action_points = Vec::new();
     let mut short_movies = Vec::new();
+    let mut items = Vec::new();
     match crate::level::Level::prefab(unity, &format!("lib/{}", info.point.0), &info.point.1) {
         Ok(points) => {
             for (i, n) in points.scene.nodes.iter().enumerate() {
+                if n.components.iter().any(|c| c.script == "AL.ItemOutlinable") {
+                    let pos = world6::world_matrix(&points.scene, i).w_axis.truncate();
+                    items.push((n.name.clone(), pos.to_array()));
+                }
                 if n.components.iter().any(|c| c.script == "AL.ActionPoint") {
                     let (_, rot, pos) = world6::world_matrix(&points.scene, i).to_scale_rotation_translation();
                     action_points.push((n.name.clone(), pos.to_array(), rot.to_array()));
@@ -373,7 +381,7 @@ pub fn load_with_budget(unity: &mut Unity, info: &MapInfo, time_zone: i32, textu
     if let Some(s) = &sky {
         log.push(format!("Azure sky: zenith {:?} horizon {:?}", s.zenith, s.horizon));
     }
-    Ok(MapWorld { info: info.clone(), chunks, report, sun, lights, sky, settings, post, fog, cameras, points: action_points, short_movies, log })
+    Ok(MapWorld { info: info.clone(), chunks, report, sun, lights, sky, settings, post, fog, cameras, points: action_points, short_movies, items, log })
 }
 
 impl MapWorld {
