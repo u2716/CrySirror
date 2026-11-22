@@ -323,6 +323,8 @@ pub struct MaterialOverride {
     pub toon_light_limit: Option<f32>,
     /// `ToonShading::shade_from_base`.
     pub toon_shade_from_base: bool,
+    /// `ToonShading::shadow_rim`.
+    pub toon_shadow_rim: Option<[f32; 4]>,
     /// Toon shadow layer (`ToonShading::shadow_texture`: top-down RGBA8,
     /// display-referred colour and amount, sampled raw) with a cache key.
     pub toon_shadow: Option<(String, ImageSurface)>,
@@ -964,6 +966,7 @@ fn material(assets: &mut dyn SceneAssets, chunk: &mut Chunk, report: &mut GlbRep
                 ambient_scale: o.toon_ambient.unwrap_or(1.).clamp(0., 16.),
                 light_limit: o.toon_light_limit.unwrap_or(0.).clamp(0., 16.),
                 shade_from_base: o.toon_shade_from_base,
+                shadow_rim: o.toon_shadow_rim.unwrap_or([0.; 4]).map(|x| x.clamp(0., 1.)),
                 outline_width: width.clamp(0., 0.1),
                 outline_color: color,
                 ..Default::default()

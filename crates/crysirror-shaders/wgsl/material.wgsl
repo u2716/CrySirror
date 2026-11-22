@@ -11,6 +11,8 @@ struct Material {
     // x: depth fade, y: effect kind, z: normal encoding (0 rgb, 1 rg, 2 ag), w: specular factor
     surface:vec4<f32>,
     effect_params:array<vec4<f32>,4>,
+    // Toon: rgb linear grazing shadow tint, a its strength (shadow_rim).
+    toon:vec4<f32>,
 };
 @group(1) @binding(0) var<uniform> material: Material;
 @group(1) @binding(1) var t_base: texture_2d<f32>;

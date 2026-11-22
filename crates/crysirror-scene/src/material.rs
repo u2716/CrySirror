@@ -99,6 +99,11 @@ pub struct ToonShading<T = String> {
     /// `√S · min(10√V, 1)` and value `0.5√V + 0.5` (HSV), i.e. the shaded
     /// colour is `base · mix(shade(base), 1, lit)` (linear).
     pub shade_from_base: bool,
+    /// With `shade_from_base`: the shadow tone moves toward this linear
+    /// colour (rgb) at grazing angles, `min((1 − n'·v)^1.8, 1) ·
+    /// (0.7 − 0.2 · (clamp(lum(sun), 1, 3) − 1)) · a` with `n'` the normal
+    /// bent 0.25 down.
+    pub shadow_rim: [f32; 4],
     pub shininess: f32,
     pub highlight_rate: f32,
     pub highlight_power: f32,
@@ -122,6 +127,7 @@ impl<T> Default for ToonShading<T> {
             ambient_scale: 1.,
             light_limit: 0.,
             shade_from_base: false,
+            shadow_rim: [0.; 4],
             shininess: 0.,
             highlight_rate: 0.,
             highlight_power: 1.,
@@ -145,7 +151,8 @@ impl<T> ToonShading<T> {
                 && range(self.highlight_power, 0., 256.)
                 && range(self.outline_width, 0., 0.1)
                 && range(self.ambient_scale, 0., 16.)
-                && range(self.light_limit, 0., 16.),
+                && range(self.light_limit, 0., 16.)
+                && self.shadow_rim.iter().all(|x| range(*x, 0., 1.)),
             "toon shading parameter range"
         );
         ensure!(!self.color_table || self.lookup_texture.is_some(), "toon colour table needs the lookup texture");

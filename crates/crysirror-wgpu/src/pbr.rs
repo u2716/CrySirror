@@ -506,6 +506,7 @@ struct MaterialUniform {
     uv_transform: [f32; 4],
     surface: [f32; 4],
     effect_params: [[f32; 4]; 4],
+    toon: [f32; 4],
 }
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -2399,6 +2400,7 @@ impl PbrRenderer {
                 ],
                 None => m.effect.as_ref().map_or([[0.; 4]; 4], |e| e.uniforms().1),
             },
+            toon: m.toon.as_ref().map_or([0.; 4], |t| t.shadow_rim),
         }
     }
     fn prim(&self, p: &cpu::PbrPrimitive) -> GpuPrim {

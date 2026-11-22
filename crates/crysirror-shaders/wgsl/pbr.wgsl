@@ -612,7 +612,14 @@ fn fs_main(i: VertexOut, @builtin(front_facing) front: bool) -> @location(0) vec
             // The tone multiplies the base in linear space; as a
             // display-referred ramp factor of the base.
             let lin = toon_decode(tex);
-            let shade = toon_base_shade(lin);
+            var shade = toon_base_shade(lin);
+            if material.toon.a > 0.0 {
+                let bent = normalize(tn_toon - vec3<f32>(0.0, 0.25, 0.0));
+                let sun = toon_encode(frame.toon_color.rgb) * frame.toon_dir.w;
+                let k = 0.7 - 0.2 * (clamp(dot(sun, vec3<f32>(0.299, 0.587, 0.114)), 1.0, 3.0) - 1.0);
+                let f = min(pow(max(1.0 - dot(bent, tv), 1e-4), 1.8), 1.0) * k * material.toon.a;
+                shade = mix(shade, material.toon.rgb, f);
+            }
             let inv = 1.0 / max(tex, vec3<f32>(1e-4));
             ramp = toon_encode(lin * mix(shade, vec3<f32>(1.0), toon_lookup(0.0, u).r)) * inv;
             shadow_end = toon_encode(lin * mix(shade, vec3<f32>(1.0), toon_lookup(0.0, 0.0).r)) * inv;

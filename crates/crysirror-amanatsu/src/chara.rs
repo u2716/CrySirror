@@ -1160,6 +1160,8 @@ impl SceneAssets for CharaAssets<'_> {
                                 for (h, pos, rot, c1, c2) in &highlights {
                                     highlight_over(&mut img, h, *pos, *rot, *c1, *c2);
                                 }
+                                // A 512² eye is ample on screen (budget).
+                                let img = halve_to(img, 512);
                                 o.base_texture = Some((format!("{}:{}:{}", t.0, t.1, m.name), img));
                                 // Shaded like the other AL materials (no
                                 // `_Lamp`: a soft terminator).
@@ -1218,6 +1220,10 @@ impl SceneAssets for CharaAssets<'_> {
             // (A linear factor; the ramp multiplies display-referred colour.)
             let ambient = (!shader.starts_with("AL/skin")).then(|| [srgb_encode(self.ambient * 0.7 + 0.3); 3]);
             o.toon_shade_from_base = shade.is_none() && ambient.is_none();
+            // The card `skinShadowColor` (`_Shadow_color`) at grazing angles.
+            if o.toon_shade_from_base {
+                o.toon_shadow_rim = look.shadow.map(|c| { let l = linear_color(c); [l[0], l[1], l[2], c[3]] });
+            }
             o.toon_light_limit = Some(1.);
             let tone = shade.map(|c| [c[0], c[1], c[2]]).or(ambient);
             o.toon_ambient = m.floats.get("_AmbientIntensity").or(m.floats.get("_AmbientIntensity1")).copied();
@@ -1270,6 +1276,27 @@ impl SceneAssets for CharaAssets<'_> {
         self.base_look(file, m, &look, shader, k, o).map(Some)
     }
 
+}
+
+/// Box-halve an image until both sides are at most `max`.
+fn halve_to(mut img: ImageSurface, max: u32) -> ImageSurface {
+    while img.width > max.max(1) || img.height > max.max(1) {
+        let (w, h) = ((img.width / 2).max(1), (img.height / 2).max(1));
+        let mut out = vec![0u8; (w * h * 4) as usize];
+        for y in 0..h {
+            for x in 0..w {
+                for c in 0..4 {
+                    let s: u32 = [(0, 0), (1, 0), (0, 1), (1, 1)].iter().map(|(dx, dy)| {
+                        let (sx, sy) = ((x * 2 + dx).min(img.width - 1), (y * 2 + dy).min(img.height - 1));
+                        u32::from(img.rgba[((sy * img.width + sx) * 4 + c) as usize])
+                    }).sum();
+                    out[((y * w + x) * 4 + c) as usize] = ((s + 2) / 4) as u8;
+                }
+            }
+        }
+        img = ImageSurface { width: w, height: h, rgba: out };
+    }
+    img
 }
 
 /// The `AL/eye` iris colour from its `_Eye_mask` (`cf_eye_*`):
@@ -1496,7 +1523,7 @@ fn md_shadow_layer(base: &ImageSurface, md: &ImageSurface, srgb: bool, k: f32, t
     let lin = |b: u8| if srgb { srgb_decode(f32::from(b) / 255.) } else { f32::from(b) / 255. };
     let get = |n: &str, d: f32| m.floats.get(n).copied().unwrap_or(d);
     let (intensity, power, bust) = (get("_mdGIntensity", 0.8), get("_mdGPower", 0.5), get("_Bust_shadowonoff", 0.));
-    shadow_layer(base, k, tone, floor, &|u, v| {
+    shadow_layer(base, k, tone, floor, 1024, &|u, v| {
         let j = texel(md, u, v);
         let (g, b, a) = (lin(md.rgba[j + 1]), lin(md.rgba[j + 2]), lin(md.rgba[j + 3]));
         let chest = ((a - 0.66) * -4.16667 + 1.).clamp(0., 1.);
@@ -1518,7 +1545,7 @@ fn face_md_layer(base: &ImageSurface, md: &ImageSurface, md2: Option<&ImageSurfa
     let get = |n: &str, d: f32| m.floats.get(n).copied().unwrap_or(d);
     let (intensity, power) = (get("_mdGIntensity", 1.), get("_mdGPower", 0.));
     let ch = |img: &ImageSurface, u: f32, v: f32, c: usize| f32::from(img.rgba[texel(img, u, v) + c]) / 255.;
-    shadow_layer(base, k, None, floor, &|u, v| {
+    shadow_layer(base, k, None, floor, 512, &|u, v| {
         let (r, g, b) = (ch(md, u, v, 0), ch(md, u, v, 1), ch(md, u, v, 2));
         let oval = md2.map_or(0., |t| ch(t, u, v, 2));
         let lit = (((1. - g) * 1.23 - 0.31).clamp(0., 1.) - (r - oval)).clamp(0., 1.);
@@ -1536,10 +1563,10 @@ fn texel(img: &ImageSurface, u: f32, v: f32) -> usize {
 
 /// A toon shadow layer over a display-referred base texture: colour
 /// `base · k · mix(tone, 1, floor)` in linear space (tone: the given one or
-/// the HSV shade of the texel), alpha `amount(u, v) · 1.5`; at most 1024
+/// the HSV shade of the texel), alpha `amount(u, v) · 1.5`; at most `max`
 /// texels a side (prepared-asset budget).
-fn shadow_layer(base: &ImageSurface, k: f32, tone: Option<[f32; 3]>, floor: f32, amount: &dyn Fn(f32, f32) -> f32) -> ImageSurface {
-    let (ow, oh) = (base.width.min(1024).max(1), base.height.min(1024).max(1));
+fn shadow_layer(base: &ImageSurface, k: f32, tone: Option<[f32; 3]>, floor: f32, max: u32, amount: &dyn Fn(f32, f32) -> f32) -> ImageSurface {
+    let (ow, oh) = (base.width.min(max).max(1), base.height.min(max).max(1));
     let mut out = ImageSurface { width: ow, height: oh, rgba: vec![0; (ow * oh * 4) as usize] };
     for y in 0..oh {
         for x in 0..ow {
