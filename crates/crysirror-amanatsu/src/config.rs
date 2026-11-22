@@ -13,7 +13,11 @@
 //! save mount (`user/config.xml`); a missing file is first read from the
 //! installation's `UserData/config.xml`.
 //!
-//! SATD-amanatsu-port: keys absent from the shipped file (`Urine`,
+//! Applied: volumes (mix groups), `Text/FontSpeed` (message reveal),
+//! `Text/WindowAlpha`, `GameSystem/AutoSaveMode` and `HScene/Visible`.
+//!
+//! SATD-amanatsu-port: the other values (camera, graphics, H draw
+//! options, read skip) are stored but not applied; keys absent from the shipped file (`Urine`,
 //! `UrineDraw`, `Ambient`, `SelfShadow`, `SSR`, `ReflectionProbe`,
 //! `SunShaft`, `Rain`) use their field names; the screen dropdowns, colour
 //! pickers, per-personality voice rows, section shortcuts, slider number

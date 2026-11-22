@@ -1054,8 +1054,8 @@ impl Game {
 
     /// `SaveData.Save(isAuto: true)` after a time-zone change, in the
     /// engine's save mount (`user/`).
-    /// SATD-amanatsu-port: `Config.InGameData.AutoSaveMode` (mode 2 saves
-    /// only in the morning) is not read; every zone change saves.
+    /// `Config.InGameData.AutoSaveMode`: 0 never, 1 every zone change,
+    /// 2 only when the morning starts.
     fn auto_save(&mut self, host: &mut dyn HostServices, zone: i32) -> Result<()> {
         let storage = host.storage(self.client_id)?;
         // `Save(…, isAuto)` → `EnsureFileNameIfEmpty`: an auto save is
@@ -1132,7 +1132,14 @@ impl Game {
             }
             let who = if c.is_male() { "DefaultData/0/chara/male/AL_M_00.png".to_owned() } else { card.to_owned() };
             let bundle = format!("lib/{}", c.info.bundle);
-            entities.extend(self.spawn_character_states(host, client, &who, t.clone(), sun, &bundle, &c.info.asset, &H_MOTIONS, "Idle")?);
+            let ids = self.spawn_character_states(host, client, &who, t.clone(), sun, &bundle, &c.info.asset, &H_MOTIONS, "Idle")?;
+            // Config `HScene/Visible`: the player can be hidden.
+            if c.is_male() && !self.config.flag("HScene", "Visible", true) {
+                for &id in &ids {
+                    self.world.push(json!({"op": "set_visible", "id": id, "visible": false}));
+                }
+            }
+            entities.extend(ids);
             if !c.is_male() {
                 finishes = self.baked_states.iter().filter(|s| s.starts_with("Orgasm")).cloned().collect();
             }
@@ -2317,6 +2324,11 @@ impl Game {
 
     /// The face's morph weights with the character's animation layers.
     fn apply_face(&mut self, card: &str) {
+        // A face whose entities were despawned (map change, H end) is gone.
+        if self.faces.get(card).is_some_and(|f| !f.1.iter().all(|id| self.map_entities.iter().any(|e| e.0 == *id))) {
+            self.faces.remove(card);
+            return;
+        }
         let Some((face, ids, layers, expr)) = self.faces.get(card) else { return };
         let mut e = *expr;
         if self.blinking.contains(card) {
@@ -2599,6 +2611,8 @@ impl Game {
         let key = self.unity.bundle_files().into_iter().find(|k| k.starts_with(&format!("bundle:{}#", crate::talk::ADV_BUNDLE)) && !k.ends_with(".resS")).context("ADV bundle")?;
         let mut level = Level::root_of(&mut self.unity, &key, "ADVCore")?;
         let mut talk = crate::talk::Talk::start(&mut self.unity, &mut level, personality, &name, self.now, scenarios)?;
+        talk.chars_per_sec = self.config.number("Text", "FontSpeed", 40.);
+        talk.set_window_alpha(&mut level, self.config.number("Text", "WindowAlpha", 1.));
         for (k, v) in vars {
             talk.program.vars.insert((*k).to_owned(), v.clone());
         }
@@ -3368,7 +3382,11 @@ impl AmanatsuVm {
         if let Some(is_title) = open_save_load {
             game.open_save_load(host, is_title)?;
         }
-        if let Some(zone) = game.pending_auto_save.take() {
+        if let Some(zone) = game.pending_auto_save.take().filter(|&z| match game.config.number("GameSystem", "AutoSaveMode", 2.) as i32 {
+            0 => false,
+            1 => true,
+            _ => z == 0,
+        }) {
             if let Err(e) = game.auto_save(host, zone) {
                 game.log.push(format!("SaveData.Save: {e:#}"));
             }

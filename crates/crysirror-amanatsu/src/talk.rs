@@ -137,6 +137,14 @@ pub struct Talk {
     /// `ADVCore.PackData.SelectNum`: the last choice index (none: -1).
     pub selected: Option<usize>,
     pub log: Vec<String>,
+    /// `TextController`: characters per second of the message reveal
+    /// (config `Text/FontSpeed`; 100 shows at once). SATD-amanatsu-port:
+    /// the native speed curve is not decoded; the value is read as
+    /// characters per second.
+    pub chars_per_sec: f32,
+    /// The message being revealed and when it started (set on the next
+    /// frame).
+    reveal: Option<(String, Option<u64>)>,
 }
 
 impl Talk {
@@ -164,6 +172,8 @@ impl Talk {
             choice_nodes: Vec::new(),
             selected: None,
             log: Vec::new(),
+            chars_per_sec: 100.,
+            reveal: None,
         };
         // Hidden until used: fades, filters, back log, letterbox, choices.
         for path in [
@@ -189,7 +199,7 @@ impl Talk {
         Ok(t)
     }
 
-    fn show_text(&self, level: &mut Level, speaker: &str, text: &str) {
+    fn show_text(&mut self, level: &mut Level, speaker: &str, text: &str) {
         if let Some(w) = self.window {
             // `ADVMsgWindow` open.
             fade_in(level, w);
@@ -198,8 +208,38 @@ impl Talk {
             level.states.entry(n).or_default().text = Some(speaker.to_owned());
         }
         if let Some(n) = self.message_node {
-            level.states.entry(n).or_default().text = Some(text.to_owned());
+            let shown = if self.chars_per_sec >= 100. { text.to_owned() } else { String::new() };
+            level.states.entry(n).or_default().text = Some(shown);
         }
+        self.reveal = (self.chars_per_sec < 100.).then(|| (text.to_owned(), None));
+    }
+
+    /// `ADVMsgWindow` background alpha (config `Text/WindowAlpha`).
+    pub fn set_window_alpha(&self, level: &mut Level, alpha: f32) {
+        let Some(w) = self.message_node.and_then(|m| level.scene.nodes[m].parent) else { return };
+        let base = level.scene.nodes[w].components.iter().find(|c| c.script.ends_with("UI.Image")).and_then(|c| match c.fields.get("m_Color") {
+            Some(crysirror_unity::managed::Value::Struct(s)) => Some(["r", "g", "b", "a"].map(|k| s.float(k).unwrap_or(1.) as f32)),
+            _ => None,
+        });
+        if let Some(c) = base {
+            level.states.entry(w).or_default().color = Some([c[0], c[1], c[2], c[3] * alpha.clamp(0., 1.)]);
+        }
+    }
+
+    /// The revealed part of the message at `now`; true once complete.
+    fn update_reveal(&mut self, level: &mut Level, now: u64) -> bool {
+        let Some((text, start)) = self.reveal.as_mut() else { return true };
+        let start = *start.get_or_insert(now);
+        let total = text.chars().count();
+        let n = ((now - start) as f32 / 1000. * self.chars_per_sec.max(1.)) as usize;
+        let done = n >= total;
+        if let Some(m) = self.message_node {
+            level.states.entry(m).or_default().text = Some(text.chars().take(n.min(total)).collect());
+        }
+        if done {
+            self.reveal = None;
+        }
+        done
     }
 
     fn show_choices(&mut self, level: &mut Level, items: &[(String, String)]) {
@@ -278,6 +318,7 @@ impl Talk {
 
     /// A frame: timed waits resume by themselves.
     pub fn tick(&mut self, unity: &mut Unity, level: &mut Level, now: u64) -> Vec<Step> {
+        self.update_reveal(level, now);
         match self.wait {
             Wait::Time(_) | Wait::Voice if now >= self.wait_until => self.advance(unity, level, now),
             _ => Vec::new(),
@@ -287,6 +328,15 @@ impl Talk {
     /// A click: the message advances; a choice button picks its tag.
     pub fn click(&mut self, unity: &mut Unity, level: &mut Level, node: Option<usize>, now: u64) -> Vec<Step> {
         match &self.wait {
+            // A click during the reveal shows the whole message.
+            Wait::Text { text, .. } if self.reveal.is_some() => {
+                let text = text.clone();
+                self.reveal = None;
+                if let Some(m) = self.message_node {
+                    level.states.entry(m).or_default().text = Some(text);
+                }
+                Vec::new()
+            }
             Wait::Text { .. } => self.advance(unity, level, now),
             Wait::Choice(_) => {
                 let Some(n) = node else { return Vec::new() };
