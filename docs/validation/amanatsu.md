@@ -160,3 +160,11 @@
 
 - Native evidence: `EventManager._Invite_d__39` ("別マップに誘う", `GetInviteAgreeAsset`, `SelectNum` != 1 → `ChangeMapAsync` → `Invite_g__HPlay_0`), `PropertyData._adv._invite`, `_mapID.HMaps` (11, 12).
 - Behaviour (auto slot patched to favourability LV1): 誘う on the pool plays `cm1`, moves to 岩陰 and starts the H (床キス at the first H point).
+
+## 2026-11-22 — Character lighting and face makeup (local, Apple M4 Max / Metal, offscreen, muted)
+
+- Native evidence: map light groups carry `Directional Light Sun Chara` (culling mask 0x80, intensity 1.8, the only directional light on the character layer 7 apart from the weak `Directional Light C`); the map key light (`Directional Light Far`, 2.5, straight down) does not light characters. `AL/skin_body`/`AL/skin_head`/`AL/cloth` materials: `_Lamp` ramps `t_ramp_03` (skin, soft) and `t_ramp_02` (cloth/head, terminator near 0.42), G = shadow amount over the half Lambert term; `_AmbientIntensity` 0.5. `AL/skin_head`: `_Cheek_texture`/`_Lip_texture`/`_Lip_line_texture` and the `cf_O_face` UV sets (uv1 mirrored cheek space, uv2 nose, uv3 mouth; outside [0, 1] elsewhere); card `FaceMakeup` (`cheekId`/`cheekColor`/`cheekPos`/`cheekRotation`/`cheekSize`, `lipId`/`lipColor`) and face `noseId`/`noseColor` with the `mt_cheek` (key 2), `mt_nose` (43), `mt_lip` (30), `mt_lipline` (29) lists.
+- Engine: `Environment.toon_light` (toon key light apart from the sun; cast shadows stay with the sun) and `ToonShading.cast_shadow_ramp`/`ambient_scale`.
+- Owner corpus: `map_directional_lights`, `bundle_materials`, `bundle_textures`, `chara_uv_channels`, `list_rows`.
+- Behaviour (command close-up, `w1` track at frame 1890 from the `with` save): before, the neck and stomach under cast shadows (the head, the pergola) rendered as pale grey-white patches (the absolute toon `shadow_color` 0.5 above the scaled skin) and hair outlines glowed orange; after, shadows keep the skin tone, outlines follow the hair colour, and the face shows the card's cheeks, nose and lips. Lit skin measures (231, 214, 206) against the card thumbnail's (254, 229, 210); the remaining paleness comes from the map's ACES/contrast grading over the pale card skin colour and the undecoded skin shader graph (SSS, skin colour layers).
+

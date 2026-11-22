@@ -217,6 +217,9 @@ struct FrameUniform {
     gi_extent: [f32; 4],
     gi_counts: [f32; 4],
     rt_shadow: [f32; 4],
+    /// Toon key light: xyz direction, w intensity; rgb colour.
+    toon_dir: [f32; 4],
+    toon_color: [f32; 4],
 }
 /// Byte offset of the irradiance probes in the shadow-data buffer
 /// (after 64 tile matrices and the virtual shadow page table).
@@ -2384,8 +2387,8 @@ impl PbrRenderer {
                     [
                         if t.highlight_texture.is_some() { 1. } else { 0. },
                         t.outline_width,
-                        0.,
-                        0.,
+                        if t.cast_shadow_ramp { 1. } else { 0. },
+                        t.ambient_scale,
                     ],
                 ],
                 None => m.effect.as_ref().map_or([[0.; 4]; 4], |e| e.uniforms().1),
@@ -3968,6 +3971,17 @@ impl PbrRenderer {
             gi_extent: [0.; 4],
             gi_counts: [0.; 4],
             rt_shadow: [if use_rt { 1. } else { 0. }, 0., 0., 0.],
+            toon_dir: match &env.toon_light {
+                Some(t) => {
+                    let d = Vec3::from_array(t.direction).normalize();
+                    [d.x, d.y, d.z, t.intensity]
+                }
+                None => [l.x, l.y, l.z, sun.intensity],
+            },
+            toon_color: {
+                let c = env.toon_light.as_ref().map_or(sun.color, |t| t.color);
+                [c[0], c[1], c[2], 0.]
+            },
         };
         // Irradiance volume (ADR 0028): the first volume; a few probes refresh
         // per frame, nearest to the camera first. After three complete sweeps

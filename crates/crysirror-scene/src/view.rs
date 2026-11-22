@@ -402,6 +402,12 @@ pub struct Environment {
     /// Directional sun light; `null` for none.
     #[serde(default)]
     pub sun: Option<Sun>,
+    /// Key light of toon materials (direction, colour, intensity; shadow
+    /// fields unused), for scenes that light characters apart from the world
+    /// (Unity per-layer character lights). `null` lights them with the sun;
+    /// cast shadows always come from the sun.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub toon_light: Option<Sun>,
     /// Uniform ambient radiance (linear RGB) replacing the environment's
     /// diffuse spherical harmonics, e.g. a flat `RenderSettings.ambientLight`.
     /// Scaled by `intensity` like the environment it replaces.
@@ -460,6 +466,7 @@ impl Default for Environment {
             tonemap: Tonemap::default(),
             show_sky: true,
             sun: Some(Sun::default()),
+            toon_light: None,
             ambient: None,
             bloom: bloom(),
             ambient_occlusion: ao(),
@@ -481,6 +488,13 @@ impl Environment {
             let r = |x: f32, a: f32, b: f32| x.is_finite() && (a..=b).contains(&x);
             ensure!(g.color_filter.iter().all(|c| r(*c, 0., 16.)) && r(g.contrast, 0., 4.) && r(g.saturation, 0., 4.), "colour grading range");
         }
+        ensure!(
+            self.toon_light.as_ref().is_none_or(|l| l.direction.iter().chain(&l.color).all(|x| x.is_finite())
+                && l.direction.iter().any(|x| *x != 0.)
+                && l.intensity.is_finite()
+                && (0.0..=1000.).contains(&l.intensity)),
+            "toon light range"
+        );
         ensure!(
             self.ambient.is_none_or(|a| a.iter().all(|x| x.is_finite() && (0.0..=65504.).contains(x))),
             "environment ambient range"

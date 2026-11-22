@@ -514,11 +514,16 @@ fn toon_table(c: vec3<f32>) -> vec3<f32> {
 @fragment
 fn fs_outline(i: VertexOut) -> @location(0) vec4<f32> {
     let n = normalize(i.normal);
-    let l = normalize(-frame.sun_dir.xyz);
+    let l = normalize(-frame.toon_dir.xyz);
     let ramp = toon_lookup(0.0, dot(n, l) * 0.495 + 0.5).rgb;
-    let light = toon_encode(frame.sun_color.rgb) * frame.sun_dir.w;
+    let light = toon_encode(frame.toon_color.rgb) * frame.toon_dir.w;
     let ambient = toon_encode(sh_irradiance(n) * frame.env.x / PI);
-    let c = ramp * toon_outline_color().rgb * light * 2.0 + ambient * 2.0;
+    let p = material.effect_params;
+    var c = ramp * toon_outline_color().rgb * light * 2.0 + ambient * 2.0;
+    if p[3].z > 0.5 {
+        // Ramp-shaded (Unity) toon: the outline is shaded like the surface.
+        c = toon_outline_color().rgb * (ramp * light + ambient * p[3].w);
+    }
     return vec4<f32>(toon_decode(c), 1.0);
 }
 
@@ -565,12 +570,12 @@ fn fs_main(i: VertexOut, @builtin(front_facing) front: bool) -> @location(0) vec
             tn_toon = -tn_toon;
         }
         let tv = normalize(frame.camera_pos.xyz - i.world);
-        let tl = normalize(-frame.sun_dir.xyz);
+        let tl = normalize(-frame.toon_dir.xyz);
         let tex = toon_table(toon_encode(toon_base.rgb));
         let rim = clamp(pow(max(1.0 - clamp(dot(tv, tn_toon), 0.0, 1.0) + p[1].w, 0.0), p[0].w), 0.0, 1.0);
         let c = tex * material.base_color.rgb + rim * p[0].rgb;
         let u = dot(tn_toon, tl) * 0.4951 + 0.5;
-        let ramp = toon_table(toon_lookup(0.0, u).rgb);
+        var ramp = toon_table(toon_lookup(0.0, u).rgb);
         let rate = toon_lookup(1.0, u).r;
         let shadow_layer = toon_table(occ_sample.rgb);
         let a = occ_sample.a * (1.0 - rate);
@@ -581,12 +586,16 @@ fn fs_main(i: VertexOut, @builtin(front_facing) front: bool) -> @location(0) vec
         }
         var cast_light = 1.0;
         if frame.sun_color.w > 0.0 {
-            cast_light = mix(1.0, sun_shadow(i.world, max(dot(tn_toon, tl), 0.0), i.clip.xy), frame.sun_color.w);
+            cast_light = mix(1.0, sun_shadow(i.world, max(dot(tn_toon, normalize(-frame.sun_dir.xyz)), 0.0), i.clip.xy), frame.sun_color.w);
         }
-        m = mix(p[1].rgb, m, cast_light);
-        let light = toon_encode(frame.sun_color.rgb) * frame.sun_dir.w;
+        if p[3].z > 0.5 {
+            ramp = mix(toon_table(toon_lookup(0.0, 0.0).rgb), ramp, cast_light);
+        } else {
+            m = mix(p[1].rgb, m, cast_light);
+        }
+        let light = toon_encode(frame.toon_color.rgb) * frame.toon_dir.w;
         let ambient = toon_encode(sh_irradiance(tn_toon) * frame.env.x / PI);
-        let shaded = m * ramp * light + vec3<f32>(pow(nh, 48.0) * p[2].x) + c * ambient;
+        let shaded = m * ramp * light + vec3<f32>(pow(nh, 48.0) * p[2].x) + c * ambient * p[3].w;
         let fog_t = height_fog(i.world);
         let color = mix(toon_decode(shaded), fog_t.rgb, fog_t.a);
         if frame.misc.w > 0.5 {

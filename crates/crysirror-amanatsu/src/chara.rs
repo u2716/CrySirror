@@ -253,6 +253,140 @@ struct PartLook {
     /// Pupil and highlight layers of the left and right eye (card
     /// `pupil[0]`, `pupil[1]`).
     eyes: Vec<EyeLayers>,
+    /// Face makeup layers drawn over the main texture (head).
+    makeup: Option<std::sync::Arc<Makeup>>,
+}
+
+/// The `AL/skin_head` makeup layers of a face mesh: each layer's mask
+/// lives in one of the mesh's UV sets (uv1 cheek space, mirrored with
+/// u = 1 on the centre line; uv2 nose; uv3 mouth), outside [0, 1] where
+/// the layer does not reach.
+#[derive(Debug)]
+pub struct Makeup {
+    pub mesh: std::sync::Arc<crysirror_unity::unity6::Mesh6>,
+    pub layers: Vec<MakeupLayer>,
+}
+
+#[derive(Clone, Debug)]
+pub struct MakeupLayer {
+    pub texture: (String, String),
+    /// UV set of the layer.
+    pub uv: usize,
+    /// Mask channel colour (sRGB, alpha the strength).
+    pub color: [f32; 4],
+    /// Highlight colour of the blue channel.
+    pub highlight: Option<[f32; 4]>,
+    /// Card placement: position, rotation (0.5 neutral) and size; the
+    /// texture centre sits at the position.
+    pub place: Option<([f32; 2], f32, f32)>,
+    /// The mask is the texture's alpha (else its red channel).
+    pub alpha_mask: bool,
+}
+
+/// `HumanFace` makeup of the card: cheek (`mt_cheek`, uv1), nose
+/// (`mt_nose`, uv2), lip and lip line (`mt_lip`, `mt_lipline`, uv3).
+/// SATD-amanatsu-port: the shader's size/position ranges are not decoded
+/// (the card position is read as an offset from the cheek-space centre at
+/// half range, the size as a unit scale); eye shadow
+/// (eyelid layer), face detail and paint, moles and the expression blush
+/// map are not drawn.
+fn face_makeup(lists: &Lists, face: &Value, makeup: Option<&Value>) -> Vec<MakeupLayer> {
+    let mut out = Vec::new();
+    let tex = |list: &str, id: i64, key: i32| lists.row(list, id).and_then(|r| r.asset(key::MAIN_AB, key));
+    let id = |v: Option<&Value>, k: &str| v.and_then(|v| v.get(k)).and_then(Value::as_i64).unwrap_or(0);
+    let num = |v: Option<&Value>, k: &str, d: f32| v.and_then(|v| v.get(k)).and_then(Value::as_f32).unwrap_or(d);
+    if let Some(t) = tex("mt_cheek", id(makeup, "cheekId"), 2) {
+        let pos = makeup.and_then(|m| m.get("cheekPos")).map(Value::as_array).filter(|a| a.len() >= 2).map_or([0.5; 2], |a| [a[0].as_f32().unwrap_or(0.5), a[1].as_f32().unwrap_or(0.5)]).map(|p| 0.5 + (p - 0.5) * 0.5);
+        out.push(MakeupLayer {
+            texture: t,
+            uv: 1,
+            color: makeup.and_then(|m| color(m.get("cheekColor"))).unwrap_or([1., 0.5, 0.5, 0.5]),
+            highlight: makeup.and_then(|m| color(m.get("cheekHighlightColor"))),
+            place: Some((pos, num(makeup, "cheekRotation", 0.5), num(makeup, "cheekSize", 1.))),
+            alpha_mask: false,
+        });
+    }
+    if let Some(t) = tex("mt_nose", id(Some(face), "noseId"), 43) {
+        out.push(MakeupLayer { texture: t, uv: 2, color: color(face.get("noseColor")).unwrap_or([1.; 4]), highlight: None, place: None, alpha_mask: true });
+    }
+    if let Some(t) = tex("mt_lip", id(makeup, "lipId"), 30) {
+        out.push(MakeupLayer { texture: t, uv: 3, color: makeup.and_then(|m| color(m.get("lipColor"))).unwrap_or([1., 0.6, 0.6, 0.5]), highlight: makeup.and_then(|m| color(m.get("lipHighlightColor"))), place: None, alpha_mask: false });
+    }
+    if let Some(t) = tex("mt_lipline", id(Some(face), "lipLineId"), 29) {
+        out.push(MakeupLayer { texture: t, uv: 3, color: color(face.get("lipLineColor")).unwrap_or([1., 0.6, 0.6, 1.]), highlight: None, place: None, alpha_mask: false });
+    }
+    out
+}
+
+/// Draw makeup layers into a face texture: every triangle is rasterised in
+/// UV0 space and each layer sampled through its own UV set.
+pub fn bake_makeup(img: &mut ImageSurface, mesh: &crysirror_unity::unity6::Mesh6, layers: &[(MakeupLayer, ImageSurface)]) {
+    let (w, h) = (img.width as usize, img.height as usize);
+    let uv0 = &mesh.uv[0];
+    if w == 0 || h == 0 || uv0.len() != mesh.positions.len() {
+        return;
+    }
+    for (layer, tex) in layers {
+        let Some(uvk) = mesh.uv.get(layer.uv).filter(|u| u.len() == uv0.len()) else { continue };
+        if tex.width == 0 || tex.height == 0 {
+            continue;
+        }
+        let inside = |p: [f32; 2]| (0. ..=1.).contains(&p[0]) && (0. ..=1.).contains(&p[1]);
+        let (sn, cs) = layer.place.map_or((0., 1.), |(_, r, _)| ((r - 0.5) * std::f32::consts::TAU).sin_cos());
+        for t in mesh.indices.chunks_exact(3) {
+            let q = [0, 1, 2].map(|i| uvk[t[i] as usize]);
+            if !q.iter().any(|p| inside(*p)) {
+                continue;
+            }
+            let p = [0, 1, 2].map(|i| uv0[t[i] as usize]);
+            let d = (p[1][0] - p[0][0]) * (p[2][1] - p[0][1]) - (p[2][0] - p[0][0]) * (p[1][1] - p[0][1]);
+            if d.abs() < 1e-12 {
+                continue;
+            }
+            let lo = |k: usize| p.iter().map(|v| v[k]).fold(f32::MAX, f32::min);
+            let hi = |k: usize| p.iter().map(|v| v[k]).fold(f32::MIN, f32::max);
+            let (x0, x1) = (((lo(0) * w as f32) as i64).max(0), ((hi(0) * w as f32) as i64).min(w as i64 - 1));
+            let (y0, y1) = (((lo(1) * h as f32) as i64).max(0), ((hi(1) * h as f32) as i64).min(h as i64 - 1));
+            for py in y0..=y1 {
+                for px in x0..=x1 {
+                    let (x, y) = ((px as f32 + 0.5) / w as f32, (py as f32 + 0.5) / h as f32);
+                    let b1 = ((x - p[0][0]) * (p[2][1] - p[0][1]) - (p[2][0] - p[0][0]) * (y - p[0][1])) / d;
+                    let b2 = ((p[1][0] - p[0][0]) * (y - p[0][1]) - (x - p[0][0]) * (p[1][1] - p[0][1])) / d;
+                    let b0 = 1. - b1 - b2;
+                    if b0 < -1e-4 || b1 < -1e-4 || b2 < -1e-4 {
+                        continue;
+                    }
+                    let mut v = [0, 1].map(|i| q[0][i] * b0 + q[1][i] * b1 + q[2][i] * b2);
+                    if !inside(v) {
+                        continue;
+                    }
+                    if let Some((pos, _, size)) = layer.place {
+                        let (du, dv) = ((v[0] - pos[0]) / size.max(0.05), (v[1] - pos[1]) / size.max(0.05));
+                        v = [du * cs - dv * sn + 0.5, du * sn + dv * cs + 0.5];
+                        if !inside(v) {
+                            continue;
+                        }
+                    }
+                    let sx = ((v[0] * tex.width as f32) as u32).min(tex.width - 1);
+                    let sy = (((1. - v[1]) * tex.height as f32) as u32).min(tex.height - 1);
+                    let j = ((sy * tex.width + sx) * 4) as usize;
+                    let s = |c: usize| f32::from(tex.rgba[j + c]) / 255.;
+                    let mask = if layer.alpha_mask { s(3) } else { s(0) } * layer.color[3].clamp(0., 1.);
+                    let hl = layer.highlight.map_or(0., |c| s(2) * c[3].clamp(0., 1.));
+                    // Image rows run top-down; UV v runs bottom-up.
+                    let o = ((h - 1 - py as usize) * w + px as usize) * 4;
+                    for c in 0..3 {
+                        let mut out = f32::from(img.rgba[o + c]) / 255.;
+                        out += (layer.color[c] - out) * mask;
+                        if let Some(hc) = layer.highlight {
+                            out += (hc[c] - out) * hl;
+                        }
+                        img.rgba[o + c] = (out.clamp(0., 1.) * 255.).round() as u8;
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// `HumanFace.ChangeSettingEyes`/`ChangeSettingEyeHL*` values of one eye.
@@ -384,7 +518,18 @@ impl Human {
                 highlights,
             });
         }
-        looks.insert(head.key.clone(), PartLook { shaders: &["AL/skin_head"], main: head_row.asset(key::MAIN_TEX_AB, key::MAIN_TEX), colors: vec![skin], layers, shadow, eyes, ..Default::default() });
+        let makeup_block = coordinate(card).ok().and_then(|c| c.block("FaceMakeup").and_then(|b| crysirror_unity::msgpack::decode(b).ok()));
+        let makeup_layers = face_makeup(lists, face, makeup_block.as_ref());
+        let face_mesh = head.scene.nodes.iter().find(|n| n.name == "cf_O_face").and_then(|n| n.components.iter().find(|c| c.class_id == 137)).and_then(|c| c.fields.pptr("m_Mesh"));
+        let makeup = match face_mesh {
+            Some(p) if !makeup_layers.is_empty() => {
+                let (f, id) = unity.target(&head.key, p)?;
+                Some(std::sync::Arc::new(Makeup { mesh: SceneAssets::mesh(&mut *unity, &f, id)?, layers: makeup_layers }))
+            }
+            _ => None,
+        };
+        log.push(format!("face makeup: {:?}", makeup.as_ref().map(|m| m.layers.iter().map(|l| l.texture.1.clone()).collect::<Vec<_>>())));
+        looks.insert(head.key.clone(), PartLook { shaders: &["AL/skin_head"], main: head_row.asset(key::MAIN_TEX_AB, key::MAIN_TEX), colors: vec![skin], layers, shadow, eyes, makeup, ..Default::default() });
         let link = scene.nodes.iter().position(|n| n.name == "cf_s_headlink").context("body cf_s_headlink")?;
         let head_root = scene.graft(&head.scene, &head.key, link);
         let hair_parent = {
@@ -635,16 +780,33 @@ impl SceneAssets for CharaAssets<'_> {
         }
         // AL character shaders are cel shaded with outlines.
         let outline = look.outline.unwrap_or([0.25, 0.18, 0.18, 1.]);
-        // Skin: the card's shadow colour at its alpha, scaled by the
-        // material's `_Shadow_power` (SATD-amanatsu-port: the shader graph
-        // combination is not decoded; this is the tint-strength reading).
-        let mut ramp = toon_lookup(shader);
-        if let Some(c) = look.shadow.filter(|_| shader.starts_with("AL/skin")) {
-            let power = m.floats.get("_Shadow_power").copied().unwrap_or(0.5).clamp(0., 1.);
-            set_ramp_shadow(&mut ramp, [0, 1, 2].map(|i| 1. - (1. - c[i].clamp(0., 1.)) * c[3].clamp(0., 1.) * power));
-        }
-        o.toon = Some((ramp, if shader.starts_with("AL/hair") || shader.starts_with("AL/cloth") || shader.starts_with("AL/skin") { 0.0015 } else { 0. }, outline));
+        // The material's `_Lamp` ramp (G: shadow amount over the half
+        // Lambert term) between the full colour and a shadow tone. Skin:
+        // the card's shadow colour at its alpha, scaled by the material's
+        // `_Shadow_power` (SATD-amanatsu-port: the shader graph combination
+        // is not decoded; this is the tint-strength reading).
+        let lamp = match m.textures.get("_Lamp").filter(|t| t.texture.path_id != 0) {
+            Some(t) => {
+                let (f, id) = self.unity.target(file, t.texture)?;
+                Some(SceneAssets::texture(&mut *self.unity, &f, id)?)
+            }
+            None => None,
+        };
+        let curve = ramp_curve(lamp.as_ref());
+        let shadow = match look.shadow.filter(|_| shader.starts_with("AL/skin")) {
+            Some(c) => {
+                let power = m.floats.get("_Shadow_power").copied().unwrap_or(0.5).clamp(0., 1.);
+                [0, 1, 2].map(|i| 1. - (1. - c[i].clamp(0., 1.)) * c[3].clamp(0., 1.) * power)
+            }
+            None if shader.starts_with("AL/skin") => [0.86, 0.74, 0.74],
+            None => [0.74, 0.72, 0.78],
+        };
+        let ramp = toon_ramp(&curve, shadow);
+        o.toon_ambient = m.floats.get("_AmbientIntensity").or(m.floats.get("_AmbientIntensity1")).copied();
         let k = self.light;
+        // The outline colour is shaded like the surface colour.
+        let outline = [outline[0] * k, outline[1] * k, outline[2] * k, outline[3]];
+        o.toon = Some((ramp, if shader.starts_with("AL/hair") || shader.starts_with("AL/cloth") || shader.starts_with("AL/skin") { 0.0015 } else { 0. }, outline));
         if let Some(main) = &look.main {
             if let Some(mut img) = self.texture_named(main)? {
                 let mask = match &look.mask {
@@ -652,6 +814,15 @@ impl SceneAssets for CharaAssets<'_> {
                     None => None,
                 };
                 tint_by_mask(&mut img, mask.as_ref(), &look.colors);
+                if let Some(makeup) = look.makeup.as_ref().filter(|_| shader.starts_with("AL/skin_head")) {
+                    let mut layers = Vec::new();
+                    for l in &makeup.layers {
+                        if let Some(t) = self.texture_named(&l.texture)? {
+                            layers.push((l.clone(), t));
+                        }
+                    }
+                    bake_makeup(&mut img, &makeup.mesh, &layers);
+                }
                 // Texture alpha cuts openings (the face's eye holes).
                 if img.rgba.chunks_exact(4).any(|p| p[3] < 128) {
                     o.alpha_mode = Some(AlphaMode::Mask);
@@ -743,33 +914,53 @@ pub fn overlay_layer(dst: &mut ImageSurface, layer: &ImageSurface, pos: [f32; 4]
     }
 }
 
-/// Two-tone ramp of the ILLGAMES toon shaders: a soft terminator around
-/// n·l = 0 (u = 0.5) between a warm shadow tone and full colour.
-pub fn toon_lookup(shader: &str) -> ImageSurface {
-    let mut ramp = ImageSurface { width: 256, height: 3, rgba: vec![0u8; 256 * 3 * 4] };
-    set_ramp_shadow(&mut ramp, if shader.starts_with("AL/skin") { [0.86, 0.74, 0.74] } else { [0.74, 0.72, 0.78] });
-    ramp
+/// Shadow amount of the ILLGAMES `_Lamp` ramp textures at 256 steps of
+/// the half Lambert term (their G channel, 1 facing away from the light);
+/// without one, a soft terminator around n·l = 0.
+pub fn ramp_curve(lamp: Option<&ImageSurface>) -> [f32; 256] {
+    std::array::from_fn(|x| {
+        let u = x as f32 / 255.;
+        match lamp {
+            Some(l) if l.width > 0 && l.height > 0 => {
+                let lx = ((u * l.width as f32) as u32).min(l.width - 1);
+                f32::from(l.rgba[(lx * 4 + 1) as usize]) / 255.
+            }
+            _ => 1. - ((u - 0.46) / 0.08).clamp(0., 1.),
+        }
+    })
 }
 
-/// Write the ramp's colour row with `shadow` as the shadow tone.
-fn set_ramp_shadow(ramp: &mut ImageSurface, shadow: [f32; 3]) {
+/// The engine toon lookup (256×3): row 0 the colour between `shadow` and
+/// full by the ramp's shadow amount, row 1 the shadow-layer rate (no shadow
+/// texture), row 2 unused.
+pub fn toon_ramp(curve: &[f32; 256], shadow: [f32; 3]) -> ImageSurface {
+    let mut ramp = ImageSurface { width: 256, height: 3, rgba: vec![0u8; 256 * 3 * 4] };
     let rgba = &mut ramp.rgba;
-    for x in 0..256 {
-        let u = x as f32 / 255.;
-        let t = ((u - 0.46) / 0.08).clamp(0., 1.);
+    for (x, a) in curve.iter().enumerate() {
         for c in 0..3 {
-            rgba[x * 4 + c] = ((shadow[c] + (1. - shadow[c]) * t) * 255.).round() as u8;
+            rgba[x * 4 + c] = ((1. - (1. - shadow[c]) * a.clamp(0., 1.)) * 255.).round() as u8;
         }
         rgba[x * 4 + 3] = 255;
-        // Row 1: shadow-layer rate (no shadow texture), row 2: unused.
         rgba[(256 + x) * 4..(256 + x) * 4 + 4].copy_from_slice(&[255, 255, 255, 255]);
         rgba[(512 + x) * 4 + 3] = 255;
     }
+    ramp
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ramp_from_lamp() {
+        // G 255 → 0 across the texture: full shadow facing away.
+        let lamp = ImageSurface { width: 2, height: 1, rgba: vec![0, 255, 0, 255, 0, 0, 0, 255] };
+        let curve = ramp_curve(Some(&lamp));
+        assert_eq!((curve[0], curve[255]), (1., 0.));
+        let r = toon_ramp(&curve, [0.5, 0.5, 0.5]);
+        assert_eq!(&r.rgba[..3], &[128, 128, 128]);
+        assert_eq!(&r.rgba[255 * 4..255 * 4 + 3], &[255, 255, 255]);
+    }
 
     #[test]
     fn mask_tint() {

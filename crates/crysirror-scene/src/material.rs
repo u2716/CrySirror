@@ -59,8 +59,9 @@ impl AlphaMode {
 /// - `c = base · base_color` (+ rim `pow(1 − n·v + rim_shift, rim_power) · rim_color`);
 /// - `u = n·l · 0.4951 + 0.5`; `a = shadow.a · (1 − rate(u))`;
 /// - `m = mix(c, shadow.rgb, a)` (+ highlight `hi.rgb · hi.a · max(n·h, 0)^highlight_power · highlight_rate`),
-///   blended toward `shadow_color` by the cast-shadow term;
-/// - colour = `m · ramp(u) · sun + max(n·h, 0)^48 · shininess + c · ambient`.
+///   blended toward `shadow_color` by the cast-shadow term (with
+///   `cast_shadow_ramp`, the ramp moves to its shadow end `ramp(0)` instead);
+/// - colour = `m · ramp(u) · sun + max(n·h, 0)^48 · shininess + c · ambient · ambient_scale`.
 ///
 /// `lookup_texture` (linear, 256×3) holds the diffuse ramp in row 0, the
 /// shadow-layer rate in row 1 (red) and, with `color_table`, a colour table
@@ -81,6 +82,14 @@ pub struct ToonShading<T = String> {
     pub rim_shift: f32,
     /// Display-referred colour under cast shadows.
     pub shadow_color: [f32; 3],
+    /// Cast shadows shade with the ramp's shadow tone (`ramp(0)`, relative
+    /// to the surface colour) instead of the absolute `shadow_color`, and
+    /// the outline is shaded like the surface
+    /// (`outline · (ramp · sun + ambient · ambient_scale)`) instead of
+    /// `ramp · outline · sun · 2 + ambient · 2`.
+    pub cast_shadow_ramp: bool,
+    /// Scale of the environment ambient term.
+    pub ambient_scale: f32,
     pub shininess: f32,
     pub highlight_rate: f32,
     pub highlight_power: f32,
@@ -100,6 +109,8 @@ impl<T> Default for ToonShading<T> {
             rim_power: 3.,
             rim_shift: 0.,
             shadow_color: [0.5; 3],
+            cast_shadow_ramp: false,
+            ambient_scale: 1.,
             shininess: 0.,
             highlight_rate: 0.,
             highlight_power: 1.,
@@ -121,7 +132,8 @@ impl<T> ToonShading<T> {
                 && range(self.shininess, 0., 16.)
                 && range(self.highlight_rate, 0., 16.)
                 && range(self.highlight_power, 0., 256.)
-                && range(self.outline_width, 0., 0.1),
+                && range(self.outline_width, 0., 0.1)
+                && range(self.ambient_scale, 0., 16.),
             "toon shading parameter range"
         );
         ensure!(!self.color_table || self.lookup_texture.is_some(), "toon colour table needs the lookup texture");

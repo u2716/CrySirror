@@ -262,6 +262,9 @@ pub struct Game {
     next_blink: std::collections::HashMap<String, u64>,
     /// Expression presets by personality.
     expressions: std::collections::HashMap<i64, std::collections::HashMap<i64, [Option<f32>; 6]>>,
+    /// The toon ambient characters receive on this map (sky radiance or
+    /// the light setting's ambient, luminance).
+    sky_ambient: f32,
     /// The command camera table (`AngleData` prefab).
     angle_data: Option<Level>,
     /// The map view before the command camera.
@@ -463,10 +466,19 @@ impl Game {
         // An H scene spawns two characters next to the map.
         let budget = if self.h.is_some() { 64 << 20 } else { map::MAP_TEXTURE_BUDGET };
         let world = map::load_with_budget(&mut self.unity, &info, time_zone, budget)?;
+        {
+            let a = world.settings.ambient_linear();
+            self.sky_ambient = 0.2126 * a[0] + 0.7152 * a[1] + 0.0722 * a[2];
+        }
         self.spawn_models(host, client, &info.scene.1, &world.chunks)?;
         let mut env = world.environment();
         if let Some(sky) = &world.sky {
             let img = sky.render(512, 256)?;
+            // The sky's mean upper-hemisphere radiance: the toon ambient
+            // (`sh_irradiance / π`) characters take from it.
+            let half = (img.width * img.height / 2) as usize;
+            let lum = img.rgb[..half.min(img.rgb.len())].iter().map(|c| 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]).sum::<f32>() / half.max(1) as f32;
+            self.sky_ambient = lum.clamp(0., 8.);
             self.next_model += 1;
             let path = host.upload_hdr(client, 0x6000_0000 + self.next_model, img.width, img.height, &img.rgb)?;
             env["environment"]["hdr"] = json!(path.relative());
@@ -515,20 +527,20 @@ impl Game {
         }
         self.map_points = world.points.clone();
         self.map_items = world.items.clone();
-        self.map_sun = world.sun.as_ref().map_or(1., |l| l.intensity);
+        self.map_sun = world.chara_key();
         let h_entry = self.h.as_ref().filter(|h| h.phase == MassagePhase::Enter).map(|h| h.card.clone());
         if h_entry.is_some() {
             // Spawned on the next step, after the previous map's models
             // leave the prepared-asset budget.
             match self.h_point {
-                Some(_) => self.h_spawn_sun = Some(world.sun.as_ref().map_or(1., |l| l.intensity)),
+                Some(_) => self.h_spawn_sun = Some(world.chara_key()),
                 None => self.log.push("SATD-amanatsu-port: H map without H00".into()),
             }
         }
         let massage_entry = self.massage.as_ref().filter(|m| m.phase == MassagePhase::Enter).map(|m| m.card.clone());
         if let Some(card) = massage_entry {
             if let Some((_, pos, rot)) = world.points.iter().find(|p| p.0 == "Est00").cloned() {
-                self.spawn_oil_heroine(host, client, &card, pos, rot, world.sun.as_ref().map_or(1., |l| l.intensity))?;
+                self.spawn_oil_heroine(host, client, &card, pos, rot, world.chara_key())?;
             } else {
                 self.log.push("SATD-amanatsu-port: esthetics map without Est00".into());
             }
@@ -542,7 +554,7 @@ impl Game {
             let q = glam::Quat::from_array(crysirror_unity::gltf::mirror_quat(*rot));
             let (x, y, z) = q.to_euler(glam::EulerRot::XYZ);
             let t = json!({"translation": crysirror_unity::gltf::mirror_point(*pos), "rotation_degrees": [x.to_degrees(), y.to_degrees(), z.to_degrees()], "scale": [1.0, 1.0, 1.0]});
-            let sun = world.sun.as_ref().map_or(1., |l| l.intensity);
+            let sun = world.chara_key();
             // One heroine per step after the map: a step's generated
             // uploads are bounded.
             self.pending_heroines.push((card.clone(), t, crysirror_unity::gltf::mirror_point(*pos), sun));
@@ -626,9 +638,9 @@ impl Game {
                 Vec::new()
             }
         };
-        let mut assets = crate::chara::CharaAssets { unity: &mut self.unity, human: &human, light: 0.7 / sun.max(0.7) };
+        let mut assets = crate::chara::CharaAssets { unity: &mut self.unity, human: &human, light: chara_light(sun, self.sky_ambient) };
         let (chunks, report) = crysirror_unity::world6::scene_glb_animated(&human.scene, &human.key, &[0], &mut assets, &options, "CrySirror AmanatsuLocation character importer", &clips)?;
-        self.log.push(format!("character GLB {} bytes", chunks.iter().map(Vec::len).sum::<usize>()));
+        self.log.push(format!("character GLB {} bytes (sun {sun}, ambient {}, light {})", chunks.iter().map(Vec::len).sum::<usize>(), self.sky_ambient, chara_light(sun, self.sky_ambient)));
         if let Some(s) = self.standing.get_mut(card_path) {
             s.2 = human.height;
         }
@@ -693,7 +705,7 @@ impl Game {
         }
         // Two characters share the H map's budget: 512 px, 16 MiB each.
         let options = crysirror_unity::world6::GlbOptions { max_texture: 512, texture_budget: 16 << 20, spring_unit: CHARACTER_UNIT, morph_targets: true };
-        let mut assets = crate::chara::CharaAssets { unity: &mut self.unity, human: &human, light: 0.7 / sun.max(0.7) };
+        let mut assets = crate::chara::CharaAssets { unity: &mut self.unity, human: &human, light: chara_light(sun, self.sky_ambient) };
         let (chunks, _) = crysirror_unity::world6::scene_glb_animated(&human.scene, &human.key, &[0], &mut assets, &options, "CrySirror AmanatsuLocation character importer", &clips)?;
         self.log.push(format!("H character GLB {} bytes", chunks.iter().map(Vec::len).sum::<usize>()));
         let first = self.map_entities.len();
@@ -2529,6 +2541,7 @@ impl AmanatsuVm {
             standing: std::collections::HashMap::new(),
             command_view_return: None,
             angle_data: None,
+            sky_ambient: 0.,
             expressions: std::collections::HashMap::new(),
             blinking: std::collections::HashSet::new(),
             next_blink: std::collections::HashMap::new(),
@@ -3279,6 +3292,15 @@ fn game_random(rng: &mut u64, n: usize) -> usize {
 
 /// `SaveData.UpdateSaveTime`: the local time as `yyyy/MM/dd HH:mm` and as
 /// a .NET `DateTime` binary (ticks since 0001-01-01, kind Local).
+/// Toon colour scale of characters: Unity lights them with their own key
+/// light (`Directional Light Sun Chara`) and no sky ambient; the engine's
+/// toon model adds the sun and the environment's ambient, so the colour is
+/// scaled to keep their sum near the authored colour.
+/// The materials scale the ambient by `_AmbientIntensity` (0.5).
+fn chara_light(sun: f32, ambient: f32) -> f32 {
+    1. / (sun + 0.5 * ambient).max(1.)
+}
+
 /// A world point on the screen of a view (pixels), if in front of it.
 fn project(v: &map::View, p: [f32; 3]) -> Option<[f32; 2]> {
     use glam::Vec3;

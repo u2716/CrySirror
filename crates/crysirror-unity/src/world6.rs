@@ -314,6 +314,8 @@ pub struct MaterialOverride {
     /// lookup texture (256×3, see `crysirror_scene::material::ToonShading`)
     /// and inverted-hull outline (clip-space width, colour).
     pub toon: Option<(ImageSurface, f32, [f32; 4])>,
+    /// Scale of the toon ambient term (`ToonShading::ambient_scale`).
+    pub toon_ambient: Option<f32>,
 }
 
 #[derive(Clone, Debug)]
@@ -935,7 +937,16 @@ fn material(assets: &mut dyn SceneAssets, chunk: &mut Chunk, report: &mut GlbRep
             engine.occlusion_texture = None;
             engine.specular_texture = None;
             engine.effect = None;
-            engine.toon = Some(crysirror_scene::material::ToonShading { lookup_texture: Some(lookup), outline_width: width.clamp(0., 0.1), outline_color: color, ..Default::default() });
+            // Cast shadows take the ramp's shadow tone (URP toon shaders
+            // fold shadow attenuation into the ramp coordinate).
+            engine.toon = Some(crysirror_scene::material::ToonShading {
+                lookup_texture: Some(lookup),
+                cast_shadow_ramp: true,
+                ambient_scale: o.toon_ambient.unwrap_or(1.).clamp(0., 16.),
+                outline_width: width.clamp(0., 0.1),
+                outline_color: color,
+                ..Default::default()
+            });
         }
     }
     let e = report.shaders.entry(m.shader.clone()).or_insert_with(|| (format!("{support:?}"), 0));

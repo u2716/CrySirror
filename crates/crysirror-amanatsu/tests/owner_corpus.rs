@@ -1469,6 +1469,9 @@ fn bundle_objects() {
         for (class, id) in objects {
             let name = u.decode(&key, id).ok().and_then(|f| f.string("m_Name").map(str::to_owned)).unwrap_or_default();
             print!("{key} {class} {id} {name}");
+            if class == 1 {
+                print!(" layer {}", u.decode(&key, id).ok().and_then(|f| f.int("m_Layer")).unwrap_or(-1));
+            }
             if class == 49 {
                 let b = u.text_asset(&key, id).unwrap_or_default();
                 match crysirror_amanatsu::tables::Table::parse(&b) {
@@ -1664,5 +1667,177 @@ fn command_angles() {
     println!();
     for h in [0.2f32, 0.5, 0.8] {
         println!("id 0 height {h}: {:?}", crysirror_amanatsu::face::command_camera(s, 0, h));
+    }
+}
+
+/// Directional lights of a map scene (`AMANATSU_MAP`, default 0) in all
+/// light groups: path, active, mask, colour, intensity, direction.
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn map_directional_lights() {
+    let mut u = unity();
+    let infos = crysirror_amanatsu::map::map_infos(&mut u).unwrap();
+    let id: i32 = std::env::var("AMANATSU_MAP").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+    let info = infos.iter().find(|i| i.id == id).unwrap();
+    let key = u.bundle_files().into_iter().find(|k| k.starts_with(&format!("bundle:lib/{}#", info.scene.0)) && !k.ends_with(".resS")).unwrap();
+    let scene = u.scene(&key).unwrap();
+    for l in crysirror_unity::world6::scene_lights(&scene).into_iter().filter(|l| l.kind == 1) {
+        println!("{} active {} mask {:#x} color {:?} intensity {} dir {:?}", scene.path(l.node), scene.nodes[l.node].active, l.culling_mask, l.color, l.intensity, l.direction);
+    }
+}
+
+/// Writes the Texture2D assets of a bundle (`AMANATSU_BUNDLE`) whose names
+/// contain `AMANATSU_FILTER` as PNG files into `AMANATSU_DUMP`.
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn bundle_textures() {
+    let mut u = unity();
+    let bundle = std::env::var("AMANATSU_BUNDLE").unwrap();
+    let filter = std::env::var("AMANATSU_FILTER").unwrap_or_default();
+    let dir = std::env::var("AMANATSU_DUMP").unwrap();
+    for key in u.bundle_files().into_iter().filter(|k| k.starts_with(&format!("bundle:{bundle}#")) && !k.ends_with(".resS")) {
+        let ids: Vec<i64> = u.file(&key).unwrap().objects.iter().filter(|o| o.class_id == crysirror_unity::class_id::TEXTURE_2D).map(|o| o.path_id).collect();
+        for id in ids {
+            let name = u.decode(&key, id).ok().and_then(|f| f.string("m_Name").map(str::to_owned)).unwrap_or_default();
+            if !name.contains(&filter) {
+                continue;
+            }
+            match crysirror_unity::world6::SceneAssets::texture(&mut u, &key, id) {
+                Ok(img) => {
+                    println!("{name} {}x{}", img.width, img.height);
+                    std::fs::write(format!("{dir}/{name}.png"), crysirror_image::encode_png(&img).unwrap()).unwrap();
+                }
+                Err(e) => println!("{name}: {e}"),
+            }
+        }
+    }
+}
+
+/// Materials of a bundle (`AMANATSU_BUNDLE`) whose names contain
+/// `AMANATSU_FILTER`: shader, render queue, keywords, floats and colours.
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn bundle_materials() {
+    let mut u = unity();
+    let bundle = std::env::var("AMANATSU_BUNDLE").unwrap();
+    let filter = std::env::var("AMANATSU_FILTER").unwrap_or_default();
+    for key in u.bundle_files().into_iter().filter(|k| k.starts_with(&format!("bundle:{bundle}#")) && !k.ends_with(".resS")) {
+        let ids: Vec<i64> = u.file(&key).unwrap().objects.iter().filter(|o| o.class_id == 21).map(|o| o.path_id).collect();
+        for id in ids {
+            let f = u.decode(&key, id).unwrap();
+            if !f.string("m_Name").unwrap_or("").contains(&filter) {
+                continue;
+            }
+            let shader = u.target(&key, f.pptr("m_Shader").unwrap_or_default()).ok().and_then(|t| u.decode(&t.0, t.1).ok()).and_then(|s| s.fields("m_ParsedForm").and_then(|p| p.string("m_Name")).map(str::to_owned)).unwrap_or_default();
+            let m = crysirror_unity::world6::UnityMaterial::decode(&f, shader);
+            println!("{} {} queue {} keywords {:?}", m.name, m.shader, m.render_queue, m.keywords);
+            let mut floats: Vec<_> = m.floats.iter().collect();
+            floats.sort_by(|a, b| a.0.cmp(b.0));
+            println!("  floats {floats:?}");
+            let mut colors: Vec<_> = m.colors.iter().collect();
+            colors.sort_by(|a, b| a.0.cmp(b.0));
+            println!("  colors {colors:?}");
+            let mut tex: Vec<_> = m.textures.iter().filter(|(_, t)| t.texture.path_id != 0).map(|(k, t)| (k.clone(), u.target(&key, t.texture).ok().and_then(|(f, o)| u.decode(&f, o).ok()).and_then(|f| f.string("m_Name").map(str::to_owned)))).collect();
+            tex.sort();
+            println!("  textures {tex:?}");
+            if let Ok(dir) = std::env::var("AMANATSU_DUMP") {
+                for t in m.textures.values().filter(|t| t.texture.path_id != 0) {
+                    let Ok((f, o)) = u.target(&key, t.texture) else { continue };
+                    let name = u.decode(&f, o).ok().and_then(|f| f.string("m_Name").map(str::to_owned)).unwrap_or_default();
+                    if let Ok(img) = crysirror_unity::world6::SceneAssets::texture(&mut u, &f, o) {
+                        std::fs::write(format!("{dir}/{name}.png"), crysirror_image::encode_png(&img).unwrap()).unwrap();
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// UV channels of the card character's renderers using a material whose
+/// name contains `AMANATSU_FILTER` (default `head`): per channel the
+/// bounds and, with `AMANATSU_DUMP`, a plot of channel k over UV0.
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn chara_uv_channels() {
+    let mut u = unity();
+    let card = crysirror_amanatsu::card::Card::parse(&u.read_all("DefaultData/0/chara/female/AL_F_00.png").unwrap()).unwrap();
+    let lists = crysirror_amanatsu::chara::Lists::load(&mut u).unwrap();
+    let human = crysirror_amanatsu::chara::Human::from_card(&mut u, &lists, &card, true).unwrap();
+    let filter = std::env::var("AMANATSU_FILTER").unwrap_or_else(|_| "head".into());
+    for n in &human.scene.nodes {
+        for c in n.components.iter().filter(|c| c.class_id == 137 || c.class_id == 23) {
+            let file = if n.origin == 0 { human.key.clone() } else { human.scene.files[n.origin as usize - 1].clone() };
+            let mats: Vec<String> = c.fields.array("m_Materials").unwrap_or(&[]).iter().filter_map(|v| if let crysirror_unity::managed::Value::PPtr(p) = v { Some(*p) } else { None }).filter_map(|p| {
+                let (f, o) = u.target(&file, p).ok()?;
+                u.decode(&f, o).ok()?.string("m_Name").map(str::to_owned)
+            }).collect();
+            if !mats.iter().any(|m| m.contains(&filter)) {
+                continue;
+            }
+            let Some(mp) = c.fields.pptr("m_Mesh") else { continue };
+            let (mf, mo) = u.target(&file, mp).unwrap();
+            let mesh = crysirror_unity::world6::SceneAssets::mesh(&mut u, &mf, mo).unwrap();
+            println!("{} mats {mats:?} vertices {} submeshes {}", n.name, mesh.positions.len(), mesh.submeshes.len());
+            for (k, uv) in mesh.uv.iter().enumerate() {
+                if uv.is_empty() {
+                    continue;
+                }
+                let (mut lo, mut hi) = ([f32::MAX; 2], [f32::MIN; 2]);
+                for p in uv {
+                    for i in 0..2 {
+                        lo[i] = lo[i].min(p[i]);
+                        hi[i] = hi[i].max(p[i]);
+                    }
+                }
+                println!("  uv{k} {} {lo:?}..{hi:?}", uv.len());
+                if let (Ok(dir), true) = (std::env::var("AMANATSU_DUMP"), k > 0) {
+                    // Channel k as red/green at each UV0 texel of the triangles.
+                    let s = 512usize;
+                    let mut img = crysirror_image::ImageSurface { width: s as u32, height: s as u32, rgba: vec![0; s * s * 4] };
+                    let uv0 = &mesh.uv[0];
+                    for t in mesh.indices.chunks_exact(3) {
+                        let p: Vec<[f32; 2]> = t.iter().map(|&i| uv0[i as usize]).collect();
+                        let q: Vec<[f32; 2]> = t.iter().map(|&i| uv[i as usize]).collect();
+                        let (x0, x1) = (p.iter().map(|v| v[0]).fold(f32::MAX, f32::min), p.iter().map(|v| v[0]).fold(f32::MIN, f32::max));
+                        let (y0, y1) = (p.iter().map(|v| v[1]).fold(f32::MAX, f32::min), p.iter().map(|v| v[1]).fold(f32::MIN, f32::max));
+                        let d = (p[1][0] - p[0][0]) * (p[2][1] - p[0][1]) - (p[2][0] - p[0][0]) * (p[1][1] - p[0][1]);
+                        if d.abs() < 1e-12 {
+                            continue;
+                        }
+                        for py in ((y0 * s as f32) as i64).max(0)..=((y1 * s as f32) as i64).min(s as i64 - 1) {
+                            for px in ((x0 * s as f32) as i64).max(0)..=((x1 * s as f32) as i64).min(s as i64 - 1) {
+                                let (x, y) = ((px as f32 + 0.5) / s as f32, (py as f32 + 0.5) / s as f32);
+                                let b1 = ((x - p[0][0]) * (p[2][1] - p[0][1]) - (p[2][0] - p[0][0]) * (y - p[0][1])) / d;
+                                let b2 = ((p[1][0] - p[0][0]) * (y - p[0][1]) - (x - p[0][0]) * (p[1][1] - p[0][1])) / d;
+                                let b0 = 1. - b1 - b2;
+                                if b0 < 0. || b1 < 0. || b2 < 0. {
+                                    continue;
+                                }
+                                let v = [0, 1].map(|i| q[0][i] * b0 + q[1][i] * b1 + q[2][i] * b2);
+                                let o = ((s - 1 - py as usize) * s + px as usize) * 4;
+                                img.rgba[o..o + 4].copy_from_slice(&[(v[0].fract().abs() * 255.) as u8, (v[1].fract().abs() * 255.) as u8, if (0. ..=1.).contains(&v[0]) && (0. ..=1.).contains(&v[1]) { 0 } else { 255 }, 255]);
+                            }
+                        }
+                    }
+                    std::fs::write(format!("{dir}/{}_uv{k}.png", n.name), crysirror_image::encode_png(&img).unwrap()).unwrap();
+                }
+            }
+        }
+    }
+}
+
+/// Rows of characustom lists (`AMANATSU_LISTS`, comma-separated) for an id
+/// (`AMANATSU_ID`): every key 0..64 with a value.
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn list_rows() {
+    let mut u = unity();
+    let lists = crysirror_amanatsu::chara::Lists::load(&mut u).unwrap();
+    let id: i64 = std::env::var("AMANATSU_ID").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+    for list in std::env::var("AMANATSU_LISTS").unwrap().split(',') {
+        match lists.row(list, id) {
+            Some(r) => println!("{list} {id}: {:?}", (0..64).filter_map(|k| r.get(k).map(|v| (k, v.to_owned()))).collect::<Vec<_>>()),
+            None => println!("{list} {id}: none"),
+        }
     }
 }

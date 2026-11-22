@@ -79,7 +79,9 @@ and `ResourceManager` have fixed readers).
   shapes and shader-graph effects are not converted.
   Generic `AnimationClip` transform curves become glTF animations
   (`clip_tracks` + `scene_glb_animated`); a hook toon ramp/outline selects the
-  engine toon model; `gltf::image_plane_glb` places a camera-space image
+  engine toon model in its ramp-shaded mode (`cast_shadow_ramp`: cast shadows
+  and outlines follow the ramp, `toon_ambient` scales the ambient);
+  `gltf::image_plane_glb` places a camera-space image
   (canvas backgrounds) in the 3D view.
   `scene_lights` reports Unity lights (kind, colour, intensity, range,
   culling mask, spot angles, shadow type, bake type); `gradient` evaluates a

@@ -22,6 +22,8 @@ pub const MAP_TEXTURE_BUDGET: usize = 128 << 20;
 /// Culling-mask bits of the layers map renderers use (Default, 4, 7, 8;
 /// the map lights' masks are 0x180, 0x190, 0x900, 0x980).
 const MAP_LAYERS: u32 = 0x1 | 0x10 | 0x80 | 0x100;
+/// Layer mask of the character lights (`Directional Light Sun Chara`).
+const CHARA_LAYER: u32 = 0x80;
 
 /// A `MapListContent` row.
 #[derive(Clone, Debug, PartialEq)]
@@ -179,6 +181,9 @@ pub struct MapWorld {
     pub chunks: Vec<Vec<u8>>,
     pub report: GlbReport,
     pub sun: Option<SceneLight>,
+    /// The character key light (`Directional Light Sun Chara`): the
+    /// brightest enabled directional light of the character layer (7).
+    pub chara_light: Option<SceneLight>,
     /// Point and spot lights of the active light groups (lamps of the
     /// evening/night settings).
     pub lights: Vec<SceneLight>,
@@ -336,6 +341,10 @@ pub fn load_with_budget(unity: &mut Unity, info: &MapInfo, time_zone: i32, textu
     // The key light: the brightest enabled directional light that lights
     // the Default layer.
     let sun = world6::scene_lights(&scene).into_iter().filter(|l| l.kind == 1 && l.culling_mask & 1 != 0 && l.intensity > 0.01).max_by(|a, b| a.intensity.total_cmp(&b.intensity));
+    // SATD-amanatsu-port: further character-layer directional lights
+    // (`Directional Light C`, a weaker top fill) are not applied.
+    let chara_light = world6::scene_lights(&scene).into_iter().filter(|l| l.kind == 1 && l.culling_mask & CHARA_LAYER != 0 && l.intensity > 0.01).max_by(|a, b| a.intensity.total_cmp(&b.intensity));
+    log.push(format!("character light: {:?}", chara_light.as_ref().map(|l| (scene.path(l.node), l.intensity))));
     // SATD-amanatsu-port: the settings' baked lightmaps (`_colorLightmaps`,
     // `_lightmapIndices`) need a second UV set in the renderer; the point
     // and spot lights of the active groups light the map in real time.
@@ -381,10 +390,15 @@ pub fn load_with_budget(unity: &mut Unity, info: &MapInfo, time_zone: i32, textu
     if let Some(s) = &sky {
         log.push(format!("Azure sky: zenith {:?} horizon {:?}", s.zenith, s.horizon));
     }
-    Ok(MapWorld { info: info.clone(), chunks, report, sun, lights, sky, settings, post, fog, cameras, points: action_points, short_movies, items, log })
+    Ok(MapWorld { info: info.clone(), chunks, report, sun, chara_light, lights, sky, settings, post, fog, cameras, points: action_points, short_movies, items, log })
 }
 
 impl MapWorld {
+    /// Intensity of the light characters are shaded with.
+    pub fn chara_key(&self) -> f32 {
+        self.chara_light.as_ref().or(self.sun.as_ref()).map_or(1., |l| l.intensity)
+    }
+
     /// Engine entity specs of the local lights (URP: candela-like intensity
     /// with inverse-square falloff inside `range`; spot cones along the
     /// light's forward, the engine's local −Z).
@@ -434,6 +448,7 @@ impl MapWorld {
             "show_sky": true, "intensity": 1.0, "bloom": p.bloom, "tonemap": if p.aces { "aces" } else { "none" }, "exposure": p.exposure, "ambient_occlusion": 0.0,
             "ambient": self.settings.ambient_linear(),
             "sun": sun,
+            "toon_light": self.chara_light.as_ref().map(|l| json!({"direction": mirror_point(l.direction), "color": l.color.map(|c| c.clamp(0., 4.)), "intensity": l.intensity.clamp(0., 8.)})),
             "shadow_distance": 80.0,
             "grading": {"color_filter": p.color_filter, "contrast": p.contrast, "saturation": p.saturation},
         });
