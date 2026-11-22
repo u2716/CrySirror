@@ -103,6 +103,9 @@ and `ResourceManager` have fixed readers).
   anchored position, size delta, local scale, fill amount). Parameter
   conditions, blend trees beyond a single motion, root motion and humanoid
   muscles are not evaluated.
+- Blend shapes: `GlbOptions.morph_targets` exports skinned meshes' blend
+  shapes as named glTF morph targets (position deltas of each shape's
+  full-weight frame; normal deltas and in-between frames are not exported).
 - `timeline.rs`: Unity Timeline assets — the `TimelineAsset` track tree
   (`m_Tracks`, `m_Children`, `m_Muted`), each track's `TimelineClip`s
   (start, duration, clip-in, time scale, playable asset) and the timeline

@@ -112,6 +112,10 @@ pub fn command_family(button: &str) -> Option<&'static str> {
 pub enum Step {
     None,
     Voice(String, String),
+    /// `CharaExpression` values (see `adv::Effect::Face`).
+    Face([Option<f32>; 6]),
+    /// An expression preset id.
+    Expression(i64),
     StopVoice,
     End,
 }
@@ -232,7 +236,9 @@ impl Talk {
                     adv::Effect::Voice { bundle, asset, .. } => steps.push(Step::Voice(bundle, asset)),
                     adv::Effect::VoiceStop(_) => steps.push(Step::StopVoice),
                     adv::Effect::Unported(name, args) => self.log.push(format!("SATD-amanatsu-port: ADV {name} {args:?}")),
-                    adv::Effect::Expression { .. } | adv::Effect::Fade { .. } => {}
+                    adv::Effect::Face { values, .. } => steps.push(Step::Face(values)),
+                    adv::Effect::Expression { id, .. } => steps.push(Step::Expression(id)),
+                    adv::Effect::Fade { .. } => {}
                 }
             }
             match &w {

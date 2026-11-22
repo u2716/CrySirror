@@ -945,7 +945,7 @@ fn scene_glb() {
     println!("scene: {} nodes, {} roots in {:?}", scene.nodes.len(), scene.roots.len(), t.elapsed());
     let t = std::time::Instant::now();
     let roots = scene.roots.clone();
-    let (glb, report) = crysirror_unity::world6::scene_glb(&scene, &key, &roots, &mut u, &crysirror_unity::world6::GlbOptions { max_texture: std::env::var("AMANATSU_MAXTEX").ok().and_then(|v| v.parse().ok()).unwrap_or(1024), texture_budget: crysirror_amanatsu::map::MAP_TEXTURE_BUDGET, spring_unit: 10. }, "test").unwrap();
+    let (glb, report) = crysirror_unity::world6::scene_glb(&scene, &key, &roots, &mut u, &crysirror_unity::world6::GlbOptions { max_texture: std::env::var("AMANATSU_MAXTEX").ok().and_then(|v| v.parse().ok()).unwrap_or(1024), texture_budget: crysirror_amanatsu::map::MAP_TEXTURE_BUDGET, spring_unit: 10., morph_targets: false }, "test").unwrap();
     println!("glb chunks {:?} bytes in {:?}", glb.iter().map(|g| g.len()).collect::<Vec<_>>(), t.elapsed());
     println!("texture bytes {} renderers {} skipped {} lod-culled {} materials {} textures {}", report.texture_bytes, report.renderers, report.skipped_renderers, report.lod_culled, report.materials, report.textures);
     for (s, (support, n)) in &report.shaders {
@@ -1139,8 +1139,20 @@ fn chara_glb() {
         }
     }
     let mut assets = crysirror_amanatsu::chara::CharaAssets { unity: &mut u, human: &human, light: 1. };
-    let (glb, report) = crysirror_unity::world6::scene_glb(&human.scene, &human.key, &[0], &mut assets, &Default::default(), "test").unwrap();
+    let options = crysirror_unity::world6::GlbOptions { morph_targets: true, ..Default::default() };
+    let (glb, report) = crysirror_unity::world6::scene_glb(&human.scene, &human.key, &[0], &mut assets, &options, "test").unwrap();
     println!("chunks {:?} renderers {} errors {:?}", glb.iter().map(|g| g.len()).collect::<Vec<_>>(), report.renderers, report.errors);
+    for g in &glb {
+        let len = u32::from_le_bytes(g[12..16].try_into().unwrap()) as usize;
+        let json: serde_json::Value = serde_json::from_slice(&g[20..20 + len]).unwrap();
+        for m in json["meshes"].as_array().into_iter().flatten() {
+            let names = m["extras"]["targetNames"].as_array().map_or(0, Vec::len);
+            let targets = m["primitives"][0]["targets"].as_array().map_or(0, Vec::len);
+            if names + targets > 0 {
+                println!("  mesh {} targets {targets} names {names}", m["name"]);
+            }
+        }
+    }
     for g in &glb {
         let len = u32::from_le_bytes(g[12..16].try_into().unwrap()) as usize;
         let json: serde_json::Value = serde_json::from_slice(&g[20..20 + len]).unwrap();
@@ -1591,4 +1603,66 @@ fn h_breaths() {
     assert_eq!(list.len(), 375);
     let groups: std::collections::BTreeSet<i32> = list.iter().map(|b| b.group).collect();
     println!("{} breaths, groups {groups:?}, first {:?}", list.len(), list[0]);
+}
+
+/// Blend shapes of the meshes of a prefab (`AMANATSU_BUNDLE`,
+/// `AMANATSU_ASSET`).
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn prefab_blend_shapes() {
+    let mut u = unity();
+    let bundle = std::env::var("AMANATSU_BUNDLE").unwrap_or_else(|_| "lib/chara/fo_head_000_00.unity3d".into());
+    let keys: Vec<String> = u.bundle_files().into_iter().filter(|k| k.starts_with(&format!("bundle:{bundle}#")) && !k.ends_with(".resS")).collect();
+    for key in keys {
+        let ids: Vec<i64> = u.file(&key).unwrap().objects.iter().filter(|o| o.class_id == 43).map(|o| o.path_id).collect();
+        for id in ids {
+            let Ok(m) = u.mesh(&key, id) else { continue };
+            if m.blend_shapes.is_empty() {
+                continue;
+            }
+            println!("{} ({} vertices): {} shapes", m.name, m.positions.len(), m.blend_shapes.len());
+            for b in m.blend_shapes.iter().take(std::env::var("AMANATSU_COUNT").ok().and_then(|c| c.parse().ok()).unwrap_or(200)) {
+                println!("  {} frames {:?}", b.name, b.frames.iter().map(|f| (f.0, f.1.len())).collect::<Vec<_>>());
+            }
+        }
+    }
+}
+
+/// Members of the components of a serialized file's nodes (`AMANATSU_KEY`)
+/// whose script contains `AMANATSU_SCRIPT`.
+#[test]
+#[ignore = "needs AMANATSU_ROOT and AMANATSU_KEY"]
+fn scene_component() {
+    let mut u = unity();
+    let scene = u.scene(&std::env::var("AMANATSU_KEY").unwrap()).unwrap();
+    let want = std::env::var("AMANATSU_SCRIPT").unwrap();
+    let width: usize = std::env::var("AMANATSU_WIDTH").ok().and_then(|w| w.parse().ok()).unwrap_or(400);
+    for (i, n) in scene.nodes.iter().enumerate() {
+        for c in n.components.iter().filter(|c| c.script.contains(&want)) {
+            println!("== {} {} {:?}", scene.path(i), c.script, n.xform);
+            for (k, v) in &c.fields.0 {
+                println!("  {k} = {}", format!("{v:?}").chars().take(width).collect::<String>());
+            }
+        }
+    }
+}
+
+/// The command camera table (`AngleData` prefab): key → entry node.
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn command_angles() {
+    let mut u = unity();
+    let level = crysirror_amanatsu::level::Level::prefab(&mut u, "lib/am/pre/s/000_00.unity3d", "AngleData").unwrap();
+    let s = &level.scene;
+    let c = s.nodes.iter().flat_map(|n| &n.components).find(|c| c.script == "AL.CinemachineCameraAngleData").unwrap();
+    let t = c.fields.fields("_table").unwrap();
+    for (k, v) in t.array("_keyData").unwrap().iter().zip(t.array("_valueData").unwrap()) {
+        let crysirror_unity::managed::Value::PPtr(p) = v else { continue };
+        let n = s.nodes.iter().position(|n| n.components.iter().any(|c| c.path_id == p.path_id)).map(|i| s.path(i)).unwrap_or_default();
+        print!("{k:?}={n}  ");
+    }
+    println!();
+    for h in [0.2f32, 0.5, 0.8] {
+        println!("id 0 height {h}: {:?}", crysirror_amanatsu::face::command_camera(s, 0, h));
+    }
 }

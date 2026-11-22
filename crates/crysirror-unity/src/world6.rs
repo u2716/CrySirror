@@ -327,11 +327,14 @@ pub struct GlbOptions {
     /// Scale from Unity physics units (m/s²) to model units for spring
     /// gravity (e.g. 10 when characters are modelled at ten units per metre).
     pub spring_unit: f32,
+    /// Export skinned meshes' blend shapes as named glTF morph targets
+    /// (each shape's full-weight frame; weights 0..1).
+    pub morph_targets: bool,
 }
 
 impl Default for GlbOptions {
     fn default() -> Self {
-        Self { max_texture: 1024, texture_budget: 128 << 20, spring_unit: 1. }
+        Self { max_texture: 1024, texture_budget: 128 << 20, spring_unit: 1., morph_targets: false }
     }
 }
 
@@ -720,7 +723,7 @@ pub fn scene_glb_animated(scene: &Scene6, file: &str, roots: &[usize], assets: &
                 anyhow::ensure!(mesh.bind_poses.len() == joints.len(), "skin of {} has {} bones for {} bind poses", mesh.name, joints.len(), mesh.bind_poses.len());
                 let skin = chunk.glb.skin(joints, &mesh.bind_poses);
                 chunk.glb.set_skin(holder, skin);
-                let index = chunk.glb.mesh6_skinned(holder, &mesh, range, &ids, true)?;
+                let index = chunk.glb.mesh6_full(holder, &mesh, range, &ids, true, options.morph_targets)?;
                 return Ok(index.is_some());
             }
             let key = (mf, mid, range.start, range.end, ids.clone());

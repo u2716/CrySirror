@@ -254,6 +254,21 @@ pub struct Game {
     with_return: Option<i32>,
     /// The height pick (`_S`/`_M`/`_L` index) of the last character.
     last_height_pick: usize,
+    /// Expression presets by personality.
+    expressions: std::collections::HashMap<i64, std::collections::HashMap<i64, [Option<f32>; 6]>>,
+    /// The command camera table (`AngleData` prefab).
+    angle_data: Option<Level>,
+    /// The map view before the command camera.
+    command_view_return: Option<map::View>,
+    /// Standing heroines' Unity transforms and heights (card → position,
+    /// rotation, height).
+    standing: std::collections::HashMap<String, ([f32; 3], [f32; 4], f32)>,
+    /// Steps to wait after a map load before spawning heroines.
+    heroine_wait: u8,
+    /// Heroines to spawn on the map (card, transform, position, sun).
+    pending_heroines: Vec<(String, serde_json::Value, [f32; 3], f32)>,
+    /// The card of the heroine in the current conversation.
+    talk_card: Option<String>,
     /// The H place kind (`HPoint._placeType`) of the H scene.
     h_place: i32,
     /// `PostureSelect` of the H scene.
@@ -262,6 +277,9 @@ pub struct Game {
     baked_states: Vec<String>,
     /// Short movie sound effects to play (bundle, asset).
     movie_sounds: Vec<(String, String)>,
+    /// Faces of the heroines standing on the map (card → face, entities,
+    /// their animation layers, the shown expression).
+    faces: std::collections::HashMap<String, (crate::face::Face, Vec<u32>, serde_json::Value, crate::face::Expression)>,
     /// An H breath voice to play (bundle, asset).
     h_voice: Option<(String, String)>,
     /// The place the posture lists were built for.
@@ -428,6 +446,10 @@ impl Game {
     fn change_map(&mut self, host: &mut dyn HostServices, client: ClientId, id: i32, time_zone: i32) -> Result<()> {
         self.release_map(host, client)?;
         self.spots.clear();
+        self.faces.clear();
+        self.command_view_return = None;
+        self.pending_heroines.clear();
+        self.heroine_wait = 1;
         let info = self.maps.iter().find(|m| m.id == id).cloned().with_context(|| format!("map {id} not in map_info"))?;
         let t = std::time::Instant::now();
         // An H scene spawns two characters next to the map.
@@ -513,13 +535,10 @@ impl Game {
             let (x, y, z) = q.to_euler(glam::EulerRot::XYZ);
             let t = json!({"translation": crysirror_unity::gltf::mirror_point(*pos), "rotation_degrees": [x.to_degrees(), y.to_degrees(), z.to_degrees()], "scale": [1.0, 1.0, 1.0]});
             let sun = world.sun.as_ref().map_or(1., |l| l.intensity);
-            match self.spawn_character(host, client, card, Some(t), sun) {
-                Ok(()) => {
-                    let (personality, name) = self.unity.read_all(card).ok().and_then(|b| crate::card::Card::parse(&b).ok()).and_then(|c| c.parameter()).map_or((0, String::new()), |p| (p.0, p.1));
-                    self.spots.push((card.clone(), crysirror_unity::gltf::mirror_point(*pos), personality, name));
-                }
-                Err(e) => self.log.push(format!("heroine {card}: {e:#}")),
-            }
+            // One heroine per step after the map: a step's generated
+            // uploads are bounded.
+            self.pending_heroines.push((card.clone(), t, crysirror_unity::gltf::mirror_point(*pos), sun));
+            self.standing.insert(card.clone(), (*pos, *rot, 0.5));
         }
         if let Some(v) = world.camera() {
             let shown: Vec<String> = world.items.iter().map(|(n, p)| format!("{n} {:?}", project(v, crysirror_unity::gltf::mirror_point(*p)).map(|s| [s[0].round(), s[1].round()]))).collect();
@@ -587,7 +606,7 @@ impl Game {
         self.lists = Some(lists);
         let human = human?;
         self.log.extend(human.log.iter().cloned());
-        let options = crysirror_unity::world6::GlbOptions { max_texture: 1024, texture_budget: 48 << 20, spring_unit: CHARACTER_UNIT };
+        let options = crysirror_unity::world6::GlbOptions { max_texture: 1024, texture_budget: 48 << 20, spring_unit: CHARACTER_UNIT, morph_targets: true };
         let tracks = match motion {
             Some((bundle, ctl, state)) => human.controller_tracks(&mut self.unity, bundle, ctl, state),
             None => human.state_tracks(&mut self.unity, idle),
@@ -601,15 +620,31 @@ impl Game {
         };
         let mut assets = crate::chara::CharaAssets { unity: &mut self.unity, human: &human, light: 0.7 / sun.max(0.7) };
         let (chunks, report) = crysirror_unity::world6::scene_glb_animated(&human.scene, &human.key, &[0], &mut assets, &options, "CrySirror AmanatsuLocation character importer", &clips)?;
+        self.log.push(format!("character GLB {} bytes", chunks.iter().map(Vec::len).sum::<usize>()));
+        if let Some(s) = self.standing.get_mut(card_path) {
+            s.2 = human.height;
+        }
         let first = self.map_entities.len();
         self.spawn_models(host, client, "chara", &chunks)?;
-        for (entity, _) in self.map_entities[first..].to_vec() {
+        let ids: Vec<u32> = self.map_entities[first..].iter().map(|e| e.0).collect();
+        for &entity in &ids {
             if let Some(t) = &transform {
                 self.world.push(json!({"op": "set_transform", "id": entity, "transform": t}));
             }
-            if !clips.is_empty() {
-                self.world.push(json!({"op": "set_animation", "id": entity, "animation": {"layers": [{"clip": idle, "looping": true}]}}));
+        }
+        let layers = if clips.is_empty() { json!([]) } else { json!([{"clip": idle, "looping": true}]) };
+        // `HumanFace`: the default expression (eyes open).
+        match crate::face::Face::from_scene(&mut self.unity, &human.scene, &human.key) {
+            Ok(Some(face)) => {
+                self.faces.insert(card_path.to_owned(), (face, ids.clone(), layers.clone(), crate::face::Expression::default()));
+                self.apply_face(card_path);
             }
+            Ok(None) => {
+                for &entity in &ids {
+                    self.world.push(json!({"op": "set_animation", "id": entity, "animation": {"layers": layers}}));
+                }
+            }
+            Err(e) => self.log.push(format!("face {card_path}: {e:#}")),
         }
         self.log.push(format!("character {card_path}: {} renderers, {} materials, {} tracks", report.renderers, report.materials, clips.first().map_or(0, |c| c.tracks.len())));
         self.log.extend(report.errors.iter().take(8).cloned());
@@ -649,7 +684,7 @@ impl Game {
             }
         }
         // Two characters share the H map's budget: 512 px, 16 MiB each.
-        let options = crysirror_unity::world6::GlbOptions { max_texture: 512, texture_budget: 16 << 20, spring_unit: CHARACTER_UNIT };
+        let options = crysirror_unity::world6::GlbOptions { max_texture: 512, texture_budget: 16 << 20, spring_unit: CHARACTER_UNIT, morph_targets: true };
         let mut assets = crate::chara::CharaAssets { unity: &mut self.unity, human: &human, light: 0.7 / sun.max(0.7) };
         let (chunks, _) = crysirror_unity::world6::scene_glb_animated(&human.scene, &human.key, &[0], &mut assets, &options, "CrySirror AmanatsuLocation character importer", &clips)?;
         self.log.push(format!("H character GLB {} bytes", chunks.iter().map(Vec::len).sum::<usize>()));
@@ -2061,6 +2096,41 @@ impl Game {
         end(self);
     }
 
+    /// The face's morph weights with the character's animation layers.
+    fn apply_face(&mut self, card: &str) {
+        let Some((face, ids, layers, expr)) = self.faces.get(card) else { return };
+        let morphs = face.weights(expr);
+        for &id in ids {
+            self.world.push(json!({"op": "set_animation", "id": id, "animation": {"layers": layers, "morphs": morphs}}));
+        }
+    }
+
+    /// `CharaExpression` for the talking heroine.
+    fn talk_face(&mut self, values: [Option<f32>; 6]) {
+        let Some(card) = self.talk.as_ref().and_then(|_| self.talk_card.clone()) else { return };
+        let Some(state) = self.faces.get_mut(&card) else { return };
+        let e = &mut state.3;
+        if let Some(v) = values[0] {
+            e.eyebrow = v.max(0.) as usize;
+        }
+        if let Some(v) = values[1] {
+            e.eyes = v.max(0.) as usize;
+        }
+        if let Some(v) = values[2] {
+            e.mouth = v.max(0.) as usize;
+        }
+        if let Some(v) = values[3] {
+            e.eyebrow_open = v;
+        }
+        if let Some(v) = values[4] {
+            e.eyes_open = v;
+        }
+        if let Some(v) = values[5] {
+            e.mouth_open = v;
+        }
+        self.apply_face(&card);
+    }
+
     /// `EventShortMovie`: the movie's map (`ALShortMovieContent.MapID`)
     /// behind the fade, then `ShortMovie.PlayAsync` and the ADV after it.
     fn start_movie(&mut self, card: &str, id: i32, after: Vec<String>, now: u64) {
@@ -2200,6 +2270,24 @@ impl Game {
             return self.start_talk(spot, list);
         }
         let mut level = Level::prefab(&mut self.unity, "lib/am/pre/s/000_00.unity3d", "command")?;
+        // `SetCommnadCamera(heroine, …, 0)`: the command camera on her.
+        if self.angle_data.is_none() {
+            self.angle_data = Level::prefab(&mut self.unity, "lib/am/pre/s/000_00.unity3d", "AngleData").ok();
+        }
+        if let (Some(&(pos, rot, height)), Some(angles)) = (self.standing.get(&self.spots[spot].0), self.angle_data.as_ref()) {
+            // Camera 0 (`Stand`): the heroines stand at their points.
+            if let Some((cp, cr)) = crate::face::command_camera(&angles.scene, 0, height) {
+                let base = glam::Mat4::from_rotation_translation(glam::Quat::from_array(rot), glam::Vec3::from_array(pos));
+                let eye = base.transform_point3(cp);
+                let r = glam::Quat::from_array(rot) * cr;
+                let fwd = r * glam::Vec3::Z;
+                let up = r * glam::Vec3::Y;
+                let fov = self.view.as_ref().map_or(45., |v| v.fov);
+                let v = map::View { eye: crysirror_unity::gltf::mirror_point(eye.to_array()), target: crysirror_unity::gltf::mirror_point((eye + fwd).to_array()), up: crysirror_unity::gltf::mirror_point(up.to_array()), fov, near: 0.1, far: 1000. };
+                self.world.push(v.command());
+                self.command_view_return = self.view.replace(v);
+            }
+        }
         // `CommandUI.IsNextShortMovie`: "一緒に遊ぶ" only with a full
         // favourability gauge and the level's massage/H progress.
         let with_ready = {
@@ -2243,7 +2331,8 @@ impl Game {
 
     /// A conversation with `ADVCore.PackData` variables set first.
     fn start_talk_vars(&mut self, spot: usize, scenarios: Vec<String>, vars: &[(&str, crate::adv::Var)]) -> Result<()> {
-        let (_, _, personality, name) = self.spots[spot].clone();
+        let (card, _, personality, name) = self.spots[spot].clone();
+        self.talk_card = Some(card);
         let key = self.unity.bundle_files().into_iter().find(|k| k.starts_with(&format!("bundle:{}#", crate::talk::ADV_BUNDLE)) && !k.ends_with(".resS")).context("ADV bundle")?;
         let mut level = Level::root_of(&mut self.unity, &key, "ADVCore")?;
         let mut talk = crate::talk::Talk::start(&mut self.unity, &mut level, personality, &name, self.now, scenarios)?;
@@ -2393,11 +2482,19 @@ impl AmanatsuVm {
             h_point: None,
             h_spawn_sun: None,
             h_place: 0,
+            talk_card: None,
+            pending_heroines: Vec::new(),
+            heroine_wait: 0,
+            standing: std::collections::HashMap::new(),
+            command_view_return: None,
+            angle_data: None,
+            expressions: std::collections::HashMap::new(),
             h_ui: None,
             h_change: None,
             h_points: Vec::new(),
             h_ui_place: None,
             h_voice: None,
+            faces: std::collections::HashMap::new(),
             movie_sounds: Vec::new(),
             baked_states: Vec::new(),
             h_point_index: None,
@@ -2536,6 +2633,18 @@ impl AmanatsuVm {
                 let bgm = game.sound_ids.zone_bgm[zone.clamp(0, 3) as usize];
                 game.level.sounds.push(sound::Call::Bgm(bgm));
                 game.fade.start(host.now_ms(), false, game.fade_seconds);
+            }
+        }
+        if game.heroine_wait > 0 {
+            game.heroine_wait -= 1;
+        } else if game.pending_map.is_none() && !game.pending_heroines.is_empty() {
+            let (card, t, pos, sun) = game.pending_heroines.remove(0);
+            match game.spawn_character(host, client, &card, Some(t), sun) {
+                Ok(()) => {
+                    let (personality, name) = game.unity.read_all(&card).ok().and_then(|b| crate::card::Card::parse(&b).ok()).and_then(|c| c.parameter()).map_or((0, String::new()), |p| (p.0, p.1));
+                    game.spots.push((card, pos, personality, name));
+                }
+                Err(e) => game.log.push(format!("heroine {card}: {e:#}")),
             }
         }
         if let Some(card) = game.pending_night.take() {
@@ -2713,6 +2822,18 @@ impl AmanatsuVm {
                     }
                 }
                 crate::talk::Step::StopVoice => {}
+                crate::talk::Step::Face(values) => game.talk_face(values),
+                crate::talk::Step::Expression(id) => {
+                    // The talking heroine's personality preset.
+                    let personality = game.talk_card.as_ref().and_then(|c| game.spots.iter().find(|s| &s.0 == c)).map_or(0, |s| s.2);
+                    if !game.expressions.contains_key(&personality) {
+                        let list = crate::face::expression_list(&mut game.unity, personality).unwrap_or_default();
+                        game.expressions.insert(personality, list);
+                    }
+                    if let Some(values) = game.expressions.get(&personality).and_then(|l| l.get(&id)).copied() {
+                        game.talk_face(values);
+                    }
+                }
                 crate::talk::Step::End => {
                     if let Some((talk, oi)) = game.talk.take() {
                         game.log.extend(talk.log);
@@ -3033,8 +3154,8 @@ impl AmanatsuVm {
                     list.extend(crate::talk::pick(&index, "wend", now));
                 }
                 game.visit_played = true;
-                if matches!(name.as_str(), "btnInvite" | "btnH" | "btnMassage") {
-                    game.log.push(format!("SATD-amanatsu-port: {name} scene (invite/massage/H) not ported"));
+                if name == "btnInvite" {
+                    game.log.push("SATD-amanatsu-port: btnInvite (map invitation) not ported".into());
                 }
             } else {
                 game.log.push(format!("SATD-amanatsu-port: command {name} not ported"));
@@ -3047,6 +3168,11 @@ impl AmanatsuVm {
                 }
                 game.command = None;
                 game.set_hud_visible(true);
+                // `SetMapCamera`: back to the map view.
+                if let Some(v) = game.command_view_return.take() {
+                    game.world.push(v.command());
+                    game.view = Some(v);
+                }
             } else if let Some(p) = game.overlays.get_mut(ci).and_then(|(l, _)| l.find("Command/Canvas/Panel").map(|p| (l, p))) {
                 // Hidden while the event plays.
                 p.0.set_active(p.1, false);

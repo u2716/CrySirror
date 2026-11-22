@@ -159,6 +159,13 @@ impl GlbBuilder {
 
     /// [`Self::mesh6`] with the mesh's joints/weights when `skinned`.
     pub fn mesh6_skinned(&mut self, node: usize, mesh: &crate::unity6::Mesh6, range: std::ops::Range<usize>, materials: &[Option<usize>], skinned: bool) -> Result<Option<usize>> {
+        self.mesh6_full(node, mesh, range, materials, skinned, false)
+    }
+
+    /// [`Self::mesh6_skinned`], with the blend shapes as morph targets when
+    /// `morphs` (position deltas of the last, full-weight frame of each
+    /// shape; glTF target names are the shape names).
+    pub fn mesh6_full(&mut self, node: usize, mesh: &crate::unity6::Mesh6, range: std::ops::Range<usize>, materials: &[Option<usize>], skinned: bool, morphs: bool) -> Result<Option<usize>> {
         let skinned = skinned && mesh.joints.len() == mesh.positions.len() && mesh.weights.len() == mesh.positions.len();
         let mut prims = Vec::new();
         for (slot, s) in range.enumerate() {
@@ -203,6 +210,24 @@ impl GlbBuilder {
             }
             for t in tri.chunks_exact(3) {
                 p.indices.extend([t[0], t[2], t[1]]);
+            }
+            if morphs && !mesh.blend_shapes.is_empty() {
+                let n = p.positions.len();
+                // Position deltas only: dense per-target data is large, and
+                // normal deltas change little of a face.
+                for shape in &mesh.blend_shapes {
+                    let mut dp = vec![[0f32; 3]; n];
+                    if let Some((_, deltas)) = shape.frames.last() {
+                        for (v, pos, _) in deltas {
+                            if let Some(&at) = remap.get(v) {
+                                dp[at as usize] = mirror_point(*pos);
+                            }
+                        }
+                    }
+                    p.targets.push(dp);
+                    p.target_names.push(shape.name.clone());
+                }
+                self.bytes += n * mesh.blend_shapes.len() * 12;
             }
             if !p.indices.is_empty() {
                 self.bytes += p.positions.len() * if skinned { 56 } else { 32 } + p.indices.len() * 4;

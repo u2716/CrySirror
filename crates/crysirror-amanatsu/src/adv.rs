@@ -209,6 +209,10 @@ pub enum Effect {
     Voice { actor: String, bundle: String, asset: String },
     VoiceStop(String),
     Expression { actor: String, id: i64 },
+    /// `Expression`/`CharaExpression` in full (`Manager.Game.Expression`):
+    /// eyebrow, eyes, mouth, eyebrow open, eyes open, mouth open min
+    /// (empty: unchanged).
+    Face { actor: String, values: [Option<f32>; 6] },
     /// `SceneFade`/`Fade`: covering (`in`) or revealing over seconds.
     Fade { cover: bool, seconds: f32, color: Option<String> },
     /// A command whose semantics are not ported (name, arguments).
@@ -314,8 +318,14 @@ impl Program {
                 "Voice" | "CharaVoicePlay" => effects.push(Effect::Voice { actor: a(0), bundle: a(1), asset: a(2) }),
                 "CharaVoiceStop" => effects.push(Effect::VoiceStop(a(0))),
                 "CharaVoiceWait" => return Wait::Voice,
-                "Expression" => effects.push(Effect::Expression { actor: a(0), id: a(1).parse().unwrap_or(0) }),
-                "CharaExpression" => effects.push(Effect::Expression { actor: a(0), id: a(if c.args.len() > 2 { 2 } else { 1 }).parse().unwrap_or(0) }),
+                // [chara, id] (a preset of the personality's expression
+                // list), or in full: [chara, -, eyebrow, eyes, mouth,
+                // eyebrowOpen, eyesOpen, mouthOpenMax, mouthOpenMin, …].
+                "Expression" | "CharaExpression" if c.args.len() > 2 => {
+                    let v = |i: usize| a(i).trim().parse::<f32>().ok();
+                    effects.push(Effect::Face { actor: a(0), values: [v(2), v(3), v(4), v(5), v(6), v(8)] });
+                }
+                "Expression" | "CharaExpression" => effects.push(Effect::Expression { actor: a(0), id: a(1).trim().parse().unwrap_or(0) }),
                 "Tag" => {}
                 "Jump" => {
                     if !self.jump(&a(0)) {

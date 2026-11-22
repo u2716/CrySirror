@@ -345,7 +345,7 @@ pub fn load_with_budget(unity: &mut Unity, info: &MapInfo, time_zone: i32, textu
     let roots = scene.roots.clone();
     // SATD-amanatsu-port: one texture budget for the map; characters and
     // the rest of the session share the player's prepared-asset budget.
-    let options = GlbOptions { max_texture: 1024, texture_budget, spring_unit: 10. };
+    let options = GlbOptions { max_texture: 1024, texture_budget, spring_unit: 10., morph_targets: false };
     let (chunks, report) = world6::scene_glb(&scene, &key, &roots, unity, &options, "CrySirror AmanatsuLocation map importer")?;
     // Move-point prefab cameras.
     let mut cameras = Vec::new();

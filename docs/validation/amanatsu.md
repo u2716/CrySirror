@@ -149,3 +149,9 @@
 - Native evidence: `AL.H.List.Voice.BreathData`/`Data` (il2cpp layout: `BaseData` ID/bundle/file/override/`FaceParams`, `StageEnum`, `GroupEnum` LoopWait … ClimaxMouth_A), `FaceParam` (17 members, `Range` = two `Vector3`), `HVoiceCtrl.OnChangeState`/`UpdateBreath` (per-category updaters).
 - Owner corpus: `h_breaths` — `breath[000]` parses to exactly its 375 entries (groups 0–21, `sd/dt/pcm/c00/h/000_01.unity3d`).
 - Behaviour: the H runs load the breaths and submit them without errors; offscreen captures do not emit audio, so audibility is not established.
+
+## 2026-11-22 — Faces and the command camera
+
+- Native evidence: `ILLGAMES.Unity.FaceBlendShape` (`EyebrowCtrl`/`EyesCtrl`/`MouthCtrl` `FBSTarget` `PtnSet` close/open indices) on the head prefab, `Manager.Game.Expression.Initialize/Change` (argument order), `ILLGAMES.ADV.Commands.Base.Expression.Convert` + `Manager.Game.LoadExpressionData` (`ExpressionList` `cNN` `ExcelData`), `ActionMapCameraManager.SetCommnadCamera`, `CameraAngleTransformData.CalcUpper/CalcLower`, the `AngleData` prefab (`CinemachineCameraAngleData`, 39 poses).
+- Owner corpus: `prefab_blend_shapes` (`cf_O_face` 53 shapes `face.eye_f00_*`/`face.kuti_f00_*`, eyelash/eyelid 53, `mayuge` 11), `chara_glb` (morph targets in the character GLB), `command_angles` (camera 0 `Stand` at (0, 14, 8.6) facing the heroine).
+- Behaviour: the command menu frames the heroine at head height; a temporary forced closed-eye/open-mouth expression rendered with closed eyes and an open mouth (reverted). Before staggering the spawns, the map plus a morph-carrying heroine in one step hit `image upload batch`.
