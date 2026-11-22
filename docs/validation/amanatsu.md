@@ -120,3 +120,11 @@
 - Compilation: `cargo test --release -p crysirror-amanatsu --lib` (10 passed, `slot_file_names`), `cargo test --release -p crysirror-unity --lib`; desktop from the HEAD worktree plus these files.
 - Behaviour: title → ロード shows the list with the auto slot (time, sun icon, オートセーブデータ) and empty slots; selecting the auto slot shows 読込み, its dialog shows the slot, はい loads `a_000.sav` into the action map; map select → セーブ/ロード shows empty slots with 新規保存, はい writes `user/000.sav` (NEW mark, 読込み/上書き/削除), 削除 → はい removes it. The dialog buttons sit centred in their halves after the layout fix.
 - Not established: comment entry, animations, comparison with the original.
+
+## 2026-11-22 — H posture selection (local, Apple M4 Max / Metal, offscreen, muted)
+
+- Implementation: `h.rs` posture members, `load_hpoints`, `Posture::usable`, `first_posture`; `hui.rs`; adapter H start at the first `HPoint` and `ChangePosture`. Native evidence: `AnimationListInfo` field layout (il2cpp), `CheckReleasePhase`, `HScene.Resource._FindPosture_g__Check_71_0` and `FindPosture`, `PostureMainSelecter.CheckPosture`/`CheckPostureSum`/`SelectionPosture`, the `PostureMainSelecter`/`PostureSubSelecter`/`LoopListView2` prefab fields (`_viewDatas` labels 愛撫…複数; the sub content's `VerticalLayoutGroup` disabled).
+- Compilation: `cargo test --release -p crysirror-amanatsu --lib` (`posture_checks`).
+- Owner corpus: `h_postures` with modes/positions/release phases; `hpoint_12` HPoints (floor first, chairs, …).
+- Behaviour (auto slot patched to favourability LV1, ロード → H): the hotel's first floor HPoint, a random first posture (正常位), the category buttons and the 男主導挿入 list (正常位, 胸揉み正常位, 後背位, 対面立位, 背面立位, 駅弁); 対面立位 respawns the pair in `som_07` with its camera.
+- Not established: point moves, comparison with the original.

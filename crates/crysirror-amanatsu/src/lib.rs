@@ -12,6 +12,7 @@ pub mod chara;
 pub mod charaselect;
 pub mod commands;
 pub mod h;
+pub mod hui;
 pub mod hud;
 pub mod level;
 pub mod map;

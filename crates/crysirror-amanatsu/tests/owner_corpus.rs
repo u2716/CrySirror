@@ -1431,7 +1431,7 @@ fn list_tables() {
 fn h_postures() {
     let mut u = unity();
     for p in crysirror_amanatsu::h::load_postures(&mut u).unwrap() {
-        println!("{} {} {} cam {} {:?}", p.file, p.id, p.name, p.camera, p.charas.iter().map(|c| format!("{}:{}", c.info.bundle, c.info.asset)).collect::<Vec<_>>());
+        println!("{} {} {} cam {} mode {} kind {} pos {:?} cat {} release {} state {} weak {} {:?}", p.file, p.id, p.name, p.camera, p.mode, p.kind, p.positions, p.category, p.release_phase, p.state, p.weakness, p.charas.iter().map(|c| format!("{}:{}", c.info.bundle, c.info.asset)).collect::<Vec<_>>());
     }
 }
 
@@ -1462,7 +1462,12 @@ fn bundle_objects() {
                 match crysirror_amanatsu::tables::Table::parse(&b) {
                     Ok(t) if std::env::var("AMANATSU_FILTER").is_ok_and(|f| name.contains(&f)) => print!(" keys {:?} rows {:?}", t.keys, t.rows),
                     Ok(t) => print!(" table {} rows", t.rows.len()),
-                    Err(_) => print!(" {} bytes {:02x?}", b.len(), &b[..b.len().min(48)]),
+                    Err(_) => {
+                        print!(" {} bytes {:02x?}", b.len(), &b[..b.len().min(48)]);
+                        if let Ok(dir) = std::env::var("AMANATSU_DUMP") {
+                            std::fs::write(format!("{dir}/{name}.bin"), &b).unwrap();
+                        }
+                    }
                 }
             }
             println!();

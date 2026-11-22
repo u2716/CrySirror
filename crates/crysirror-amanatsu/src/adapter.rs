@@ -194,6 +194,12 @@ pub struct Game {
     /// `_nightEventShowerSMID`/`_nightEventSMID` movies' maps
     /// (`al_short_movie` `Map`).
     night_movie_maps: (i32, i32),
+    /// The H place kind (`HPoint._placeType`) of the H scene.
+    h_place: i32,
+    /// `PostureSelect` of the H scene.
+    h_ui: Option<crate::hui::PostureUi>,
+    /// A posture change waiting for the next step (file, id).
+    h_change: Option<(String, i32)>,
     /// The H pair waiting to spawn (key light intensity).
     h_spawn_sun: Option<f32>,
     /// The covered map change released the old map (loads next step).
@@ -381,6 +387,22 @@ impl Game {
         // (`MovePointInfo.GetNightEventHPoint`).
         let place = if self.h.as_ref().is_some_and(|h| h.night.is_some()) { "NightEventH00" } else { "H00" };
         self.h_point = world.points.iter().find(|p| p.0 == place).map(|p| (p.1, p.2));
+        self.h_place = 0;
+        if self.h.as_ref().is_some_and(|h| h.night.is_none() && h.phase == MassagePhase::Enter) {
+            // `HPointCtrl.FindFirst`: a first `HPoint` of the map.
+            match crate::h::load_hpoints(&mut self.unity, id) {
+                Ok(points) => {
+                    let first: Vec<&crate::h::HPoint> = points.iter().filter(|p| p.first).collect();
+                    let pick = if first.is_empty() { points.first() } else { Some(first[(self.rng % first.len() as u64) as usize]) };
+                    if let Some(p) = pick {
+                        self.h_point = Some((p.pos, p.rot));
+                        self.h_place = p.place;
+                        self.log.push(format!("HPointCtrl.FindFirst: place {} id {}", p.place, p.id));
+                    }
+                }
+                Err(e) => self.log.push(format!("H points of map {id}: {e:#}")),
+            }
+        }
         self.map_points = world.points.clone();
         self.map_sun = world.sun.as_ref().map_or(1., |l| l.intensity);
         let h_entry = self.h.as_ref().filter(|h| h.phase == MassagePhase::Enter).map(|h| h.card.clone());
@@ -895,7 +917,26 @@ impl Game {
         if self.h_postures.is_none() {
             self.h_postures = Some(crate::h::load_postures(&mut self.unity)?);
         }
-        let posture = self.h_postures.as_ref().and_then(|p| p.iter().find(|p| p.file == "aib" && p.id == 9).or(p.first()).cloned()).context("H postures")?;
+        let lv = {
+            let gp = &self.npc(card).0;
+            [gp.favorability.lv, gp.inclusiveness.lv, gp.proactivity.lv, gp.curiosity.lv]
+        };
+        let place = self.h_place;
+        let change = self.h_change.take();
+        let mut rng = self.rng;
+        let mut random = |n: usize| game_random(&mut rng, n);
+        let postures = self.h_postures.as_deref().unwrap_or(&[]);
+        // `FindPosture(isFirst)`, or the posture chosen in `PostureSelect`.
+        // SATD-amanatsu-port: exhaustion (`isWeakness`) is not tracked.
+        let posture = match &change {
+            Some((file, id)) => postures.iter().find(|p| &p.file == file && p.id == *id),
+            None => crate::h::first_posture(postures, place, lv, &mut random),
+        }
+        .or(postures.first())
+        .cloned()
+        .context("H postures")?;
+        let usable: Vec<crate::h::Posture> = postures.iter().filter(|p| crate::h::category_allowed(p.mode) && p.usable(false, place, lv, false)).cloned().collect();
+        self.rng = rng;
         let q = glam::Quat::from_array(crysirror_unity::gltf::mirror_quat(rot));
         let tr = glam::Vec3::from_array(crysirror_unity::gltf::mirror_point(pos));
         let (x, y, z) = q.to_euler(glam::EulerRot::XYZ);
@@ -910,7 +951,20 @@ impl Game {
             entities.extend(self.spawn_character_states(host, client, &who, t.clone(), sun, &bundle, &c.info.asset, &H_MOTIONS, "Idle")?);
         }
         let (personality, name) = self.unity.read_all(card).ok().and_then(|b| crate::card::Card::parse(&b).ok()).and_then(|c| c.parameter()).map_or((0, String::new()), |p| (p.0, p.1));
-        self.spots.push((card.to_owned(), tr.to_array(), personality, name));
+        if !self.spots.iter().any(|s| s.0 == card) {
+            self.spots.push((card.to_owned(), tr.to_array(), personality, name));
+        }
+        // `PostureSelect` over the usable postures.
+        if let Some(i) = self.overlays.iter().position(|(l, _)| l.name == crate::h::SCENE_PREFAB) {
+            let level = &mut self.overlays[i].0;
+            match self.h_ui.as_mut() {
+                Some(ui) => ui.set_current(level, &posture.file, posture.id),
+                None => {
+                    let refs: Vec<&crate::h::Posture> = usable.iter().collect();
+                    self.h_ui = crate::hui::PostureUi::new(level, &refs, &posture);
+                }
+            }
+        }
         // The posture camera around the H place.
         if let Ok(cam) = crate::oil::CameraData::load_from(&mut self.unity, "lib/h/list/camera/000_01.unity3d", &posture.camera) {
             let mirror = glam::Mat4::from_scale(glam::Vec3::new(-1., 1., 1.));
@@ -930,7 +984,8 @@ impl Game {
     /// `HScene.Create`: the H UI; play starts in `Idle`.
     fn enter_h_scene(&mut self, now: u64) -> Result<()> {
         let mut level = Level::prefab(&mut self.unity, crate::h::SCENE_BUNDLE, crate::h::SCENE_PREFAB)?;
-        for path in ["HScene/Canvas/ccr_dropShadow/PostureSelect", "HScene/Canvas Point", "HScene/Canvas/ccr_dropShadow/Option/RightBottomArea/MoveSetting/root"] {
+        self.h_ui = None;
+        for path in ["HScene/Canvas Point", "HScene/Canvas/ccr_dropShadow/Option/RightBottomArea/MoveSetting/root"] {
             if let Some(n) = level.find(path) {
                 level.set_active(n, false);
             }
@@ -1857,6 +1912,9 @@ impl AmanatsuVm {
             h_postures: None,
             h_point: None,
             h_spawn_sun: None,
+            h_place: 0,
+            h_ui: None,
+            h_change: None,
             font_cache: Default::default(),
             night: None,
             pending_night: None,
@@ -1986,6 +2044,33 @@ impl AmanatsuVm {
             let list = game.adv_assets.event(if cottage { "Before_Night_Cottage" } else { "Before_Night_NO_Cottage" }).into_iter().collect();
             game.log.push(format!("NightEvent {card}"));
             game.night_talk(&card, list, &[])?;
+        }
+        if game.h_change.is_some() && game.h.as_ref().is_some_and(|h| h.phase == MassagePhase::Play) {
+            // `HScene.ChangePosture`: the pair again in the new posture.
+            let ids = game.h.as_mut().map(|h| std::mem::take(&mut h.entities)).unwrap_or_default();
+            let mut released = Vec::new();
+            game.map_entities.retain(|(e, path)| {
+                let gone = ids.contains(e);
+                if gone {
+                    released.push(path.clone());
+                }
+                !gone
+            });
+            for id in &ids {
+                game.world.push(json!({"op": "despawn", "id": id}));
+            }
+            for path in released {
+                host.release_model(client, &path)?;
+            }
+            if let (Some((pos, rot)), Some(card)) = (game.h_point, game.h.as_ref().map(|h| h.card.clone())) {
+                let sun = game.map_sun;
+                if let Err(e) = game.spawn_h_pair(host, client, &card, pos, rot, sun) {
+                    game.log.push(format!("HScene.ChangePosture: {e:#}"));
+                }
+                if let Some(h) = game.h.as_mut() {
+                    h.motion = "Idle";
+                }
+            }
         }
         if let Some(sun) = game.h_spawn_sun.take() {
             if let (Some((pos, rot)), Some(card)) = (game.h_point, game.h.as_ref().map(|h| h.card.clone())) {
@@ -2171,7 +2256,12 @@ impl AmanatsuVm {
                     massage_exit = true;
                 }
                 if game.h.is_some() && level.name == crate::h::SCENE_PREFAB {
-                    h_button = Some(level.scene.nodes[button].name.clone());
+                    let posture = game.h_ui.as_mut().map(|ui| ui.click(level, button));
+                    match posture {
+                        Some(crate::hui::Action::Change(file, id)) => game.h_change = Some((file, id)),
+                        _ if level.scene.path(button).starts_with(crate::hui::ROOT) => {}
+                        _ => h_button = Some(level.scene.nodes[button].name.clone()),
+                    }
                 }
                 if level.name == crate::saveload::PREFAB {
                     if let Some(sl) = game.save_load.as_mut() {
