@@ -179,4 +179,5 @@
 - Native evidence: `AL.H.List.Voice.FaceParam` (`OpenEye`, `OpenMouthMin`/`Max`, `EyeBrow`, `Eye`, `Mouth`, `Tear`, `Cheek`, `Highlight`, `Blink`, neck/eye behaviour and ranges; 122 unmanaged bytes after the 17-member header).
 - Owner corpus: `h_breaths` (375 breaths of personality 0; e.g. `al_hl_00_00_012` LoopWait: eye 0.8, mouth 0.1–0.5, eyebrow 5, eye 2, mouth 0, blinking; openness within [0, 1] for all).
 - Behaviour (`hp0` track at frame 3000 from the `h_lv1` save, 床手コキ): the heroine shows the breath's face (closed smiling eyes, open mouth) with her motion; the motion changes keep the face.
+- Short movies (same day): `AL.TimeLine.FaceTrack` `FaceClip._info` (`_keyData` personalities 0–11, `_valueData` `ExpID`/`Brow`/`Eyes`/`Mouoth`/`EyesOpen`/`MouthOpen`/…); `short_movie_tracks` lists `stm_16` with five face clips (3.93 s, 5.00 s, 8.67 s, …). The `with` save + `w2` track (一緒に遊ぶ at frame 1900) plays `stm_16` on map 4; at frame 2400 the heroine shows the clip's closed-eye face while her motion plays.
 

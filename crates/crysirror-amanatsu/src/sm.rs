@@ -9,9 +9,12 @@
 //! (`SceneFadeInfo`: In covers, Out reveals, InOut both).
 //!
 //! `SETrack` (`SEClip._info` bundle/asset) sound effects are played at
-//! their clip starts.
+//! their clip starts; `FaceTrack` (`FaceClip._info`, a table by
+//! personality) sets the heroine's face at its clip starts.
 //!
-//! SATD-amanatsu-port: SE `Is3D`/`SettingNo` positioning, Face, ClothState, BasePos, FluidFlow, Wet,
+//! SATD-amanatsu-port: SE `Is3D`/`SettingNo` positioning, the face
+//! track's blend times, look targets, tears, cheek, blink and lip-sync
+//! flags, ClothState, BasePos, FluidFlow, Wet,
 //! TimeScale, Shake, Activation (lights, props), Control (clouds,
 //! particles), Alembic and item animator tracks are not played; the skip
 //! button is not ported.
@@ -47,6 +50,17 @@ pub struct FadeClip {
     pub color: [f32; 3],
 }
 
+/// A `FaceClip` entry (`ExpID` ≥ 0 selects an expression preset).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MovieFace {
+    pub expression: i64,
+    pub brow: i64,
+    pub eyes: i64,
+    pub mouth: i64,
+    pub eyes_open: f32,
+    pub mouth_open: f32,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Movie {
     pub id: i32,
@@ -55,6 +69,8 @@ pub struct Movie {
     pub fades: Vec<FadeClip>,
     /// `SEClip` (start, bundle, asset).
     pub ses: Vec<(f64, String, String)>,
+    /// `FaceClip` starts with their faces by personality.
+    pub faces: Vec<(f64, Vec<(i64, MovieFace)>)>,
     pub duration: f64,
 }
 
@@ -91,6 +107,22 @@ impl Movie {
                             }
                         }
                     }
+                    "AL.TimeLine.FaceTrack" => {
+                        let info = fields.fields("_info");
+                        let keys = info.and_then(|i| i.array("_keyData")).unwrap_or(&[]);
+                        let values = info.and_then(|i| i.array("_valueData")).unwrap_or(&[]);
+                        let table = keys
+                            .iter()
+                            .zip(values)
+                            .filter_map(|(k, v)| {
+                                let (crysirror_unity::managed::Value::Int(k), crysirror_unity::managed::Value::Struct(v)) = (k, v) else { return None };
+                                let int = |n: &str| v.int(n).unwrap_or(0);
+                                let float = |n: &str, d: f64| v.float(n).unwrap_or(d) as f32;
+                                Some((*k, MovieFace { expression: int("ExpID"), brow: int("Brow"), eyes: int("Eyes"), mouth: int("Mouoth"), eyes_open: float("EyesOpen", 1.), mouth_open: float("MouthOpen", 0.) }))
+                            })
+                            .collect();
+                        movie.faces.push((c.start, table));
+                    }
                     "AL.TimeLine.SceneFadeTrack" => {
                         let info = fields.fields("_info");
                         let color = info.and_then(|i| i.fields("Color")).map_or([0.; 3], |c| ["r", "g", "b"].map(|k| c.float(k).unwrap_or(0.) as f32));
@@ -105,6 +137,7 @@ impl Movie {
         }
         movie.fades.sort_by(|a, b| a.start.total_cmp(&b.start));
         movie.ses.sort_by(|a, b| a.0.total_cmp(&b.0));
+        movie.faces.sort_by(|a, b| a.0.total_cmp(&b.0));
         Ok(movie)
     }
 

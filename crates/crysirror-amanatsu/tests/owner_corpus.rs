@@ -1867,3 +1867,33 @@ fn card_accessories() {
         println!("{i}: type {ty} id {:?} parent {:?} move {:?} hideCategory {:?}", p.get("id"), p.get("parentKeyType"), p.get("addMove"), p.get("hideCategory"));
     }
 }
+
+/// The tracks of a short movie timeline (`AMANATSU_SM`) with the first
+/// clip's asset fields of the tracks whose script contains
+/// `AMANATSU_TRACK` (default `Face`).
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn short_movie_tracks() {
+    let mut u = unity();
+    let id: i32 = std::env::var("AMANATSU_SM").ok().and_then(|v| v.parse().ok()).unwrap_or(20);
+    let want = std::env::var("AMANATSU_TRACK").unwrap_or_else(|_| "Face".into());
+    let (key, oid) = u.bundle_asset(crysirror_amanatsu::sm::TIMELINES, &format!("stm_{id:02}"), 114).unwrap().unwrap();
+    let asset = u.decode(&key, oid).unwrap();
+    let mut object = |p: crysirror_unity::PPtr| -> Option<(String, crysirror_unity::managed::Fields)> {
+        let (f, o) = u.target(&key, p).ok()?;
+        let fields = u.decode(&f, o).ok()?;
+        let script = fields.pptr("m_Script").map(|s| u.script_name(&f, s)).unwrap_or_default();
+        Some((script, fields))
+    };
+    let t = crysirror_unity::timeline::Timeline::decode(&asset, &mut object).unwrap();
+    for track in t.all_tracks() {
+        println!("{} [{}] muted {} clips {}", track.name, track.script, track.muted, track.clips.len());
+        if track.script.contains(&want) {
+            for c in track.clips.iter().take(3) {
+                if let Some((s, f)) = object(c.asset) {
+                    println!("  {:.2}+{:.2} {s}: {:?}", c.start, c.duration, f);
+                }
+            }
+        }
+    }
+}

@@ -126,6 +126,9 @@ struct MoviePlay {
     fades: Vec<(f64, bool, f64, [f32; 3])>,
     /// Sound effects still to start (start, bundle, asset).
     ses: Vec<(f64, String, String)>,
+    /// Face clips still to start.
+    faces: Vec<(f64, Vec<(i64, crate::sm::MovieFace)>)>,
+    personality: i64,
     /// The ADV after the movie (`endADVAsset`).
     after: Vec<String>,
 }
@@ -1200,8 +1203,12 @@ impl Game {
         let Some(h) = self.h.as_mut() else { return };
         h.motion = motion;
         let entities = h.entities.clone();
-        let layers = json!([{"clip": motion, "looping": looping}]);
-        // Characters with a face keep their morphs with the new motion.
+        self.play_layers(&entities, json!([{"clip": motion, "looping": looping}]));
+    }
+
+    /// Animation layers on entities; characters with a face keep their
+    /// morphs with the new layers.
+    fn play_layers(&mut self, entities: &[u32], layers: serde_json::Value) {
         let mut faced = Vec::new();
         let cards: Vec<String> = self.faces.iter().filter(|(_, f)| f.1.iter().any(|e| entities.contains(e))).map(|(c, _)| c.clone()).collect();
         for card in cards {
@@ -1211,9 +1218,41 @@ impl Game {
             }
             self.apply_face(&card);
         }
-        for e in entities.into_iter().filter(|e| !faced.contains(e)) {
+        for e in entities.iter().filter(|e| !faced.contains(*e)) {
             self.world.push(json!({"op": "set_animation", "id": e, "animation": {"layers": layers}}));
         }
+    }
+
+    /// A short movie `FaceClip` on the heroine: an expression preset
+    /// (`ExpID`), else its patterns and openness.
+    fn movie_face(&mut self, card: &str, f: crate::sm::MovieFace) {
+        let personality = self.movie.as_ref().map_or(0, |m| m.personality);
+        let preset = (f.expression >= 0).then(|| self.expressions.get(&personality).and_then(|l| l.get(&f.expression)).copied()).flatten();
+        let Some(state) = self.faces.get_mut(card) else { return };
+        let e = &mut state.3;
+        match preset {
+            Some(v) => {
+                let set = |slot: &mut usize, x: Option<f32>| {
+                    if let Some(x) = x {
+                        *slot = x.max(0.) as usize;
+                    }
+                };
+                set(&mut e.eyebrow, v[0]);
+                set(&mut e.eyes, v[1]);
+                set(&mut e.mouth, v[2]);
+                e.eyebrow_open = v[3].unwrap_or(e.eyebrow_open);
+                e.eyes_open = v[4].unwrap_or(e.eyes_open);
+                e.mouth_open = v[5].unwrap_or(e.mouth_open);
+            }
+            None => {
+                e.eyebrow = f.brow.max(0) as usize;
+                e.eyes = f.eyes.max(0) as usize;
+                e.mouth = f.mouth.max(0) as usize;
+                e.eyes_open = f.eyes_open.clamp(0., 1.);
+                e.mouth_open = f.mouth_open.clamp(0., 1.);
+            }
+        }
+        self.apply_face(card);
     }
 
     /// A breath's `FaceParam` on the heroine (`HVoiceCtrl` face change):
@@ -2293,7 +2332,7 @@ impl Game {
         let zone = if let Controller::ActionMap(m) = &self.controller { m.time_zone } else { 0 };
         let map = self.movie_maps.get(&id).copied().unwrap_or_else(|| self.current_map());
         self.log.push(format!("ShortMovie {id} on map {map}: {:.1} s", movie.duration));
-        self.movie = Some(MoviePlay { movie, card: card.to_owned(), entering: true, start_ms: now, base: None, cameras: Default::default(), entities: Vec::new(), heroine_clip: None, fades: Vec::new(), ses: Vec::new(), after });
+        self.movie = Some(MoviePlay { movie, card: card.to_owned(), entering: true, start_ms: now, base: None, cameras: Default::default(), entities: Vec::new(), heroine_clip: None, fades: Vec::new(), ses: Vec::new(), faces: Vec::new(), personality: 0, after });
         self.fade.start(now, true, self.fade_seconds);
         self.pending_map = Some((map, zone));
     }
@@ -2337,6 +2376,14 @@ impl Game {
                 }
             }
             m.ses = m.movie.ses.clone();
+            m.faces = m.movie.faces.clone();
+            m.personality = personality;
+        }
+        if !self.expressions.contains_key(&personality) {
+            let list = crate::face::expression_list(&mut self.unity, personality).unwrap_or_default();
+            self.expressions.insert(personality, list);
+        }
+        if let Some(m) = self.movie.as_mut() {
             m.entering = false;
             m.start_ms = now;
             m.entities = entities;
@@ -2356,11 +2403,22 @@ impl Game {
             if m.heroine_clip != Some(i) {
                 m.heroine_clip = Some(i);
                 let c = &m.movie.heroine[i];
-                for &e in &m.entities {
-                    self.world.push(json!({"op": "set_animation", "id": e, "animation": {"layers": [{"clip": c.state, "looping": c.looping}]}}));
-                }
+                let layers = json!([{"clip": c.state, "looping": c.looping}]);
+                let entities = m.entities.clone();
+                self.play_layers(&entities, layers);
             }
         }
+        let m = self.movie.as_mut().unwrap();
+        let mut face = None;
+        while m.faces.first().is_some_and(|f| f.0 <= t) {
+            let (_, table) = m.faces.remove(0);
+            face = table.iter().find(|(k, _)| *k == m.personality).or(table.first()).map(|(_, f)| *f);
+        }
+        if let Some(f) = face {
+            let card = m.card.clone();
+            self.movie_face(&card, f);
+        }
+        let m = self.movie.as_mut().unwrap();
         // The camera of the active (or next) camera clip, relative to the
         // short movie point.
         let cam = m.movie.camera.iter().rev().find(|c| c.start <= t).or(m.movie.camera.first()).cloned();
