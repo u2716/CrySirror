@@ -6,7 +6,7 @@ Generated from the class registry, the command table, serde defaults and Rust do
 `CRYSIRROR_BLESS=1 cargo test --release -p crysirror-engine --test api_docs`.
 Policy and change log: [README](README.md), [CHANGES](CHANGES.md).
 
-API fingerprint: `8693c021aef05c1f`
+API fingerprint: `a6235515c431567d`
 
 The same classes are exposed to Rust (`EngineContext` calls), to JavaScript/TypeScript (bindings generated from the registry, [crysirror.d.ts](crysirror.d.ts)) and to inspection tools.
 
@@ -8405,6 +8405,7 @@ Used by: UiEvent.widget client/local identity.
 | `canvas` | `[u32; 2]` | Logical canvas size; must equal the project canvas. |
 | `plugin_shells` | `Vec<String>` | Explicit registration-only native modules, with no callable exports. Loading a shell does not establish implementation of that plugin. |
 | `executable` | `Option<String>` | Companion executable basename reported by `System.exeName`. |
+| `launcher_overlay` | `Option<LauncherOverlay>` | Ordered, session-local overrides from a selected KiriKiri launcher. |
 | `bootstrap_profile` | `Option<String>` | Engine-published protected-bootstrap profile (`hxv4_bootstrap_profile` for `Plugins.linkZ`, or `cxdec_bootstrap_profile` for the startup `Storages.setupArchiveData` facade) the natives must match. |
 | `arguments` | `BTreeMap<String, String>` | Native command-line values exposed by System.getArgument. Explicit player values override executable-embedded defaults before startup. |
 | `locale` | `Option<String>` | User locale reported by getLangName.dll (`ja-JP`, `en-US`). Absent, the process locale environment is used, then `en-US`. |
