@@ -168,3 +168,9 @@
 - Owner corpus: `map_directional_lights`, `bundle_materials`, `bundle_textures`, `chara_uv_channels`, `list_rows`.
 - Behaviour (command close-up, `w1` track at frame 1890 from the `with` save): before, the neck and stomach under cast shadows (the head, the pergola) rendered as pale grey-white patches (the absolute toon `shadow_color` 0.5 above the scaled skin) and hair outlines glowed orange; after, shadows keep the skin tone, outlines follow the hair colour, and the face shows the card's cheeks, nose and lips. Lit skin measures (231, 214, 206) against the card thumbnail's (254, 229, 210); the remaining paleness comes from the map's ACES/contrast grading over the pale card skin colour and the undecoded skin shader graph (SSS, skin colour layers).
 
+## 2026-11-22 — Accessories
+
+- Native evidence: `HumanAccessory.UpdateAccessoryMoveFromInfo` → `sub_180AE3DD0`/`sub_180AE4180` (`objAcsMove[0..1]` local position = `addMove` × 0.01 × 10, `localEulerAngles`, `localScale`), `Define.CategoryNo` `ao_hair` 121 … `ao_kokan` 130, `HumanAccessory.Define.AccessoryParentKey` (0 none … 55 `a_n_ana`), list key 54 (default parent), prefabs `N_move`/`N_move2`, `CmpAccessory` (`rendNormal`, `defColor01..04`), `AL/acs` materials with `_Main_color_mask` and no main texture.
+- Owner corpus: `card_accessories` (the default heroine: slot 0 `ao_neck` 0 `p_acs_neck_shellnecklace` on `a_n_bust`, slot 1 `ao_hair` 2 `p_acs_hair_kamidome` on `a_n_hair_pin` with a (−0.6, 0, −0.7) offset and (350°, 353°, 0°) rotation), `chara_glb` (23 renderers).
+- Behaviour: the command close-up shows the gold hair clip and the shell necklace where the card thumbnail has them.
+

@@ -9,7 +9,7 @@
 //! The body bone prefab adds the bust/hip/arm/leg/belly/waist MagicaCloth
 //! springs and `cf_hit_*` colliders, tuned by the card's softness values.
 //!
-//! SATD-amanatsu-port: accessories, face/body shape values
+//! SATD-amanatsu-port: accessory swing/hide states, face/body shape values
 //! (`customshape`), makeup/paint/eye layers of the `LIF/*` texture creation,
 //! clothing body cut-outs (`body_upper/lower/onepi` types), blend shapes
 //! and poses are not applied.
@@ -36,11 +36,23 @@ pub mod key {
     pub const COLOR_MASK: i32 = 6;
     pub const EYE_HI_UP_TEX: i32 = 14;
     pub const EYE_PIPIL_TEX: i32 = 18;
+    /// Accessory default parent node.
+    pub const ACCESSORY_PARENT: i32 = 54;
 }
 
 /// Hair part lists in `HairData.parts` order.
 pub const HAIR_LISTS: [&str; 4] = ["bo_hair_b", "bo_hair_f", "bo_hair_s", "bo_hair_o"];
 /// Clothes part lists in `ClothesData.parts` order.
+/// Accessory lists by `Define.CategoryNo` 121 (`ao_hair`) to 130.
+pub const ACCESSORY_LISTS: [&str; 10] = ["ao_hair", "ao_head", "ao_face", "ao_neck", "ao_body", "ao_waist", "ao_leg", "ao_arm", "ao_hand", "ao_kokan"];
+
+/// `HumanAccessory.Define.AccessoryParentKey` node names (0 none, 1 the
+/// root bone).
+const ACCESSORY_PARENTS: [&str; 56] = [
+    "", "cf_j_root", "a_n_hair_pony", "a_n_hair_twin_L", "a_n_hair_twin_R", "a_n_hair_pin", "a_n_hair_pin_R", "a_n_headtop", "a_n_head", "a_n_headflont", "a_n_headside", "a_n_earrings_L", "a_n_earrings_R", "a_n_megane", "a_n_nose", "a_n_mouth", "a_n_neck", "a_n_bust_f", "a_n_bust", "a_n_nip_L", "a_n_nip_R", "a_n_back", "a_n_back_L", "a_n_back_R", "a_n_waist", "a_n_waist_f", "a_n_waist_b", "a_n_waist_L", "a_n_waist_R", "a_n_leg_L", "a_n_knee_L", "a_n_ankle_L", "a_n_heel_L", "a_n_leg_R",
+    "a_n_knee_R", "a_n_ankle_R", "a_n_heel_R", "a_n_shoulder_L", "a_n_arm_L", "a_n_elbo_L", "a_n_wrist_L", "a_n_shoulder_R", "a_n_arm_R", "a_n_elbo_R", "a_n_wrist_R", "a_n_hand_L", "a_n_ind_L", "a_n_mid_L", "a_n_ring_L", "a_n_hand_R", "a_n_ind_R", "a_n_mid_R", "a_n_ring_R", "a_n_dan", "a_n_kokan", "a_n_ana",
+];
+
 pub const CLOTHES_LISTS: [&str; 11] = ["co_top", "co_bot", "co_bra", "co_shorts", "co_gloves", "co_panst", "co_socks", "co_shoes", "co_add_arm", "co_add_leg", "co_add_other"];
 
 /// Body objects the base body does not show: the clothing cut-out
@@ -255,6 +267,9 @@ struct PartLook {
     eyes: Vec<EyeLayers>,
     /// Face makeup layers drawn over the main texture (head).
     makeup: Option<std::sync::Arc<Makeup>>,
+    /// The colour mask is the material's own `_Main_color_mask`
+    /// (accessories, which have no main texture).
+    material_mask: bool,
 }
 
 /// The `AL/skin_head` makeup layers of a face mesh: each layer's mask
@@ -594,6 +609,53 @@ impl Human {
                 Err(e) => log.push(format!("{list} {id}: {e:#}")),
             }
         }
+        // Accessories (`HumanAccessory.ChangeAccessory`): the slot's list
+        // prefab under its parent node (the card's `parentKeyType`, else the
+        // list's), the card's two corrections on `N_move`/`N_move2`
+        // (`UpdateAccessoryMoveFromInfo`: position × 0.1, Euler degrees,
+        // scale) and the card colours through the material's colour mask.
+        // SATD-amanatsu-port: `DynamicBone` swing, hide categories, visible
+        // timings, patterns, gloss/metallic and hair-coloured accessories
+        // are not applied.
+        let acs = crysirror_unity::msgpack::decode(coord.block("Accessory").context("coordinate Accessory")?)?;
+        let head_origin = scene.nodes[head_root].origin;
+        for (slot, part) in acs.get("parts").map(Value::as_array).unwrap_or(&[]).iter().enumerate() {
+            let ty = part.get("type").and_then(Value::as_i64).unwrap_or(120);
+            let Some(list) = usize::try_from(ty - 121).ok().and_then(|i| ACCESSORY_LISTS.get(i)) else { continue };
+            let id = part.get("id").and_then(Value::as_i64).unwrap_or(0);
+            let Some(row) = lists.row(list, id) else {
+                log.push(format!("accessory {slot} {list} {id}: no list row"));
+                continue;
+            };
+            let Some((ab, data)) = row.asset(key::MAIN_AB, key::MAIN_DATA) else { continue };
+            let key_index = part.get("parentKeyType").and_then(Value::as_i64).unwrap_or(0);
+            let parent_name = usize::try_from(key_index).ok().and_then(|i| ACCESSORY_PARENTS.get(i)).filter(|n| !n.is_empty()).map(|n| (*n).to_owned()).or_else(|| row.get(key::ACCESSORY_PARENT).map(str::to_owned));
+            let Some(parent) = parent_name.as_deref().and_then(|name| scene.nodes.iter().position(|n| n.name == name && (n.origin == 0 || n.origin == head_origin))) else {
+                log.push(format!("accessory {slot} {list} {id}: parent {parent_name:?} not found"));
+                continue;
+            };
+            match Level::prefab(unity, &ab, &data) {
+                Ok(p) => {
+                    let colors = part.get("color").map(Value::as_array).unwrap_or(&[]).iter().filter_map(|c| color(Some(c))).collect();
+                    looks.insert(p.key.clone(), PartLook { shaders: &["AL/acs"], colors, material_mask: true, ..Default::default() });
+                    let r = scene.graft(&p.scene, &p.key, parent);
+                    let origin = scene.nodes[r].origin;
+                    let moves = part.get("addMove").map(Value::as_array).and_then(|a| a.get(2)).map(Value::as_array).unwrap_or(&[]);
+                    let v3 = |i: usize, d: f32| moves.get(i).map(Value::as_array).filter(|a| a.len() >= 3).map_or([d; 3], |a| [0, 1, 2].map(|k| a[k].as_f32().unwrap_or(d)));
+                    for (k, name) in ["N_move", "N_move2"].iter().enumerate() {
+                        let Some(n) = scene.nodes.iter().position(|n| n.origin == origin && n.name == *name) else { continue };
+                        let (pos, rot, scale) = (v3(k * 3, 0.), v3(k * 3 + 1, 0.), v3(k * 3 + 2, 1.));
+                        let q = glam::Quat::from_euler(glam::EulerRot::YXZ, rot[1].to_radians(), rot[0].to_radians(), rot[2].to_radians());
+                        let x = &mut scene.nodes[n].xform;
+                        x.position = pos.map(|v| v * 0.1);
+                        x.rotation = q.to_array();
+                        x.scale = scale;
+                    }
+                    log.push(format!("accessory {slot} {list} {id}: {data} on {}", parent_name.unwrap_or_default()));
+                }
+                Err(e) => log.push(format!("accessory {slot} {list} {id}: {e:#}")),
+            }
+        }
         // Shadow-caster proxies (`o_body_shadow`, `cf_O_face_shadow`) only
         // feed Unity's shadow pass.
         for n in scene.nodes.iter_mut().filter(|n| n.name.ends_with("_shadow")) {
@@ -830,6 +892,14 @@ impl SceneAssets for CharaAssets<'_> {
                 o.base_texture = Some((format!("{}:{}:{}", main.0, main.1, m.name), img));
                 o.base_color = Some([k, k, k, 1.]);
             }
+        } else if let Some(mask) = m.textures.get("_Main_color_mask").filter(|t| look.material_mask && t.texture.path_id != 0) {
+            // White tinted through the material's colour mask.
+            let (f, id) = self.unity.target(file, mask.texture)?;
+            let mask = SceneAssets::texture(&mut *self.unity, &f, id)?;
+            let mut img = ImageSurface { width: mask.width, height: mask.height, rgba: vec![255; mask.rgba.len()] };
+            tint_by_mask(&mut img, Some(&mask), &look.colors);
+            o.base_texture = Some((format!("{file}:{}:acs", m.name), img));
+            o.base_color = Some([k, k, k, 1.]);
         } else if let Some(c) = look.colors.first() {
             // Toon shading works on display-referred colours.
             o.base_color = Some([c[0] * k, c[1] * k, c[2] * k, 1.]);

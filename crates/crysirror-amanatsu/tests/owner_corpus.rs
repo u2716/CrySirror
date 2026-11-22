@@ -1841,3 +1841,24 @@ fn list_rows() {
         }
     }
 }
+
+/// The used accessory slots of a card's first coordinate (`AMANATSU_CARD`):
+/// type, id, parent key and the move/colour values.
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn card_accessories() {
+    let mut u = unity();
+    let path = std::env::var("AMANATSU_CARD").unwrap_or_else(|_| "DefaultData/0/chara/female/AL_F_00.png".into());
+    let card = crysirror_amanatsu::card::Card::parse(&u.read_all(&path).unwrap()).unwrap();
+    let coords = crysirror_unity::msgpack::decode(card.block("Coordinate").unwrap()).unwrap();
+    let first = coords.as_array().first().and_then(crysirror_unity::msgpack::Value::as_bytes).unwrap().to_vec();
+    let coord = crysirror_amanatsu::card::Card::container(&first).unwrap().1;
+    let acc = crysirror_unity::msgpack::decode(coord.block("Accessory").unwrap()).unwrap();
+    for (i, p) in acc.get("parts").map(crysirror_unity::msgpack::Value::as_array).unwrap_or(&[]).iter().enumerate() {
+        let ty = p.get("type").and_then(crysirror_unity::msgpack::Value::as_i64).unwrap_or(0);
+        if ty == 120 {
+            continue;
+        }
+        println!("{i}: type {ty} id {:?} parent {:?} move {:?} hideCategory {:?}", p.get("id"), p.get("parentKeyType"), p.get("addMove"), p.get("hideCategory"));
+    }
+}
