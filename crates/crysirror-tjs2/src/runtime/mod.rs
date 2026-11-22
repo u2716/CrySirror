@@ -339,6 +339,7 @@ pub struct Runtime<H: TjsHost = NoHost> {
     /// `this` of the script frame that issued the current call (krkr passes
     /// it as objthis to static native members such as scriptsEx functions).
     pub(crate) native_caller_this: Option<ObjectHandle>,
+    native_result_needed: bool,
     pub(crate) suspended_call: Option<SuspendedCallStack>,
     pub(crate) parked_calls: Vec<SuspendedCallStack>,
     /// CrySirror addition: the result a suspended native call returns when
@@ -407,6 +408,7 @@ impl<H: TjsHost + 'static> Runtime<H> {
             max_call_depth: 1024,
             suspend_requested: false,
             native_caller_this: None,
+            native_result_needed: true,
             suspended_call: None,
             parked_calls: Vec::new(),
             resume_value: None,
@@ -1280,6 +1282,15 @@ impl<H: TjsHost + 'static> Runtime<H> {
     /// `this` of the script frame whose call reached the running native.
     pub fn native_caller_this(&self) -> Option<ObjectHandle> {
         self.native_caller_this
+    }
+
+    /// Whether the active native call received a result slot from its caller.
+    pub fn native_result_needed(&self) -> bool {
+        self.native_result_needed
+    }
+
+    pub(crate) fn set_native_result_needed(&mut self, needed: bool) -> bool {
+        std::mem::replace(&mut self.native_result_needed, needed)
     }
 
     pub fn request_suspend(&mut self) {

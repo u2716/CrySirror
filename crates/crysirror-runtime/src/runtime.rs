@@ -892,6 +892,10 @@ impl HostServices for SharedHost {
         if !self.clients.contains(&client){return Err(Error::NotFound);}
         self.channel_audio.resources.begin_samples(client.0,resource,request,&self.image_tasks).map_err(|e|Error::Io(format!("audio source samples: {e:#}")))
     }
+    fn begin_audio_visual_samples(&mut self,client:ClientId,resource:crysirror_core::service::AudioResourceHandle,request:crysirror_core::service::AudioSampleRequest)->crysirror_core::Result<Box<dyn crysirror_core::service::AudioSampleQuery>>{
+        if !self.clients.contains(&client){return Err(Error::NotFound);}
+        self.channel_audio.resources.begin_visual_samples(client.0,resource,request,&self.image_tasks).map_err(|e|Error::Io(format!("audio visualization samples: {e:#}")))
+    }
     fn audio_resource_info(
         &self,
         client: ClientId,
@@ -1814,6 +1818,9 @@ impl crysirror_core::service::FileSystem for RestoreResources<'_> {
 impl HostServices for RestoreResources<'_> {
     fn begin_spectrum_graph(&mut self,client:ClientId,source:Option<crysirror_core::service::AudioResourceHandle>,position:u64,destination:crysirror_core::image_processing::ImageInput,spec:crysirror_core::service::SpectrumGraphSpec,state:crysirror_core::service::SpectrumGraphState)->crysirror_core::Result<crysirror_core::service::SpectrumGraphJob>{
         self.source.begin_spectrum_graph(client,source,position,destination,spec,state)
+    }
+    fn begin_audio_visual_samples(&mut self,client:ClientId,resource:crysirror_core::service::AudioResourceHandle,request:crysirror_core::service::AudioSampleRequest)->crysirror_core::Result<Box<dyn crysirror_core::service::AudioSampleQuery>>{
+        self.source.begin_audio_visual_samples(client,resource,request)
     }
 
     fn mounted_media(&mut self, client: ClientId) -> crysirror_core::Result<crysirror_core::service::MountedMediaCatalog> {
