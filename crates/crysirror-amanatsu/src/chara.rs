@@ -637,15 +637,27 @@ fn color(v: Option<&Value>) -> Option<[f32; 4]> {
 }
 
 /// The first coordinate's blocks (`Clothes`, `Hair`, …).
-fn coordinate(card: &Card) -> Result<Card> {
+/// `HumanCoordinate.Define.CoordinateType`: `Swimsuit` 0, `AfterBath` 1
+/// (the card's `Coordinate` entries in that order).
+pub const COORDINATE_TYPES: [&str; 2] = ["Swimsuit", "AfterBath"];
+
+/// The card's coordinate `index` (the first when the card has fewer).
+fn coordinate_at(card: &Card, index: usize) -> Result<Card> {
     let v = crysirror_unity::msgpack::decode(card.block("Coordinate").context("card Coordinate")?)?;
-    let first = v.as_array().first().and_then(Value::as_bytes).context("card coordinate 0")?;
-    Ok(Card::container(first)?.1)
+    let list = v.as_array();
+    let entry = list.get(index).or(list.first()).and_then(Value::as_bytes).context("card coordinate")?;
+    Ok(Card::container(entry)?.1)
 }
 
 impl Human {
-    /// Assemble the card's character.
+    /// Assemble the card's character in its first coordinate (`Swimsuit`).
     pub fn from_card(unity: &mut Unity, lists: &Lists, card: &Card, female: bool) -> Result<Self> {
+        Self::from_card_coordinate(unity, lists, card, female, 0)
+    }
+
+    /// Assemble the card's character in coordinate `coordinate`
+    /// (`COORDINATE_TYPES`).
+    pub fn from_card_coordinate(unity: &mut Unity, lists: &Lists, card: &Card, female: bool, coordinate: usize) -> Result<Self> {
         let mut log = Vec::new();
         let custom = card.parts("Custom")?;
         let face = custom.first().context("card face")?;
@@ -730,7 +742,7 @@ impl Human {
                 highlights,
             });
         }
-        let makeup_block = coordinate(card).ok().and_then(|c| c.block("FaceMakeup").and_then(|b| crysirror_unity::msgpack::decode(b).ok()));
+        let makeup_block = coordinate_at(card, coordinate).ok().and_then(|c| c.block("FaceMakeup").and_then(|b| crysirror_unity::msgpack::decode(b).ok()));
         let makeup_layers = face_makeup(lists, face, makeup_block.as_ref());
         let face_mesh = head.scene.nodes.iter().find(|n| n.name == "cf_O_face").and_then(|n| n.components.iter().find(|c| c.class_id == 137)).and_then(|c| c.fields.pptr("m_Mesh"));
         let makeup = match face_mesh {
@@ -757,7 +769,7 @@ impl Human {
             found.context("head HairParent")?
         };
         log.push(format!("body {bp}, head {hp}"));
-        let coord = coordinate(card)?;
+        let coord = coordinate_at(card, coordinate)?;
         // Hair.
         let hair = crysirror_unity::msgpack::decode(coord.block("Hair").context("coordinate Hair")?)?;
         let gloss = hair.get("glossId").and_then(Value::as_i64).and_then(|id| lists.row("mt_hairgloss", id)).and_then(|r| r.asset(key::MAIN_TEX_AB, key::MAIN_TEX));

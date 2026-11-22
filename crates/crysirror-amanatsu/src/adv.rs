@@ -228,6 +228,8 @@ pub enum Effect {
     /// `CharaVisible` [actor, `All`/`Head`/`Son`, flag]; `CharaDitherIn`
     /// shows and `CharaDitherOut` hides the whole actor.
     Visible { actor: String, part: String, on: bool },
+    /// `CharaCoordinate` [actor, type name] (`Swimsuit`, `AfterBath`).
+    Coordinate { actor: String, kind: String },
     /// `CharaClothState` [actor, part, state] (0 dressed, 1 half, 2 off).
     ClothState { actor: String, part: String, state: usize },
     /// A command whose semantics are not ported (name, arguments).
@@ -385,6 +387,7 @@ impl Program {
                 "EventCGRelease" => effects.push(Effect::EventCgRelease),
                 "CharaStandFind" if a(1) == "EventCG" => effects.push(Effect::StandFind { actor: a(0), child: a(3) }),
                 "CharaMotion" => effects.push(Effect::Motion { actor: a(0), id: a(1).trim().parse().unwrap_or(-1) }),
+                "CharaCoordinate" => effects.push(Effect::Coordinate { actor: a(0), kind: a(1) }),
                 "CharaVisible" => effects.push(Effect::Visible { actor: a(0), part: a(1), on: a(2).eq_ignore_ascii_case("TRUE") }),
                 "CharaDitherIn" | "CharaDitherOut" => effects.push(Effect::Visible { actor: a(0), part: "All".into(), on: c.name() == "CharaDitherIn" }),
                 "CharaClothState" => effects.push(Effect::ClothState { actor: a(0), part: a(1), state: a(2).trim().parse().unwrap_or(0) }),
@@ -442,6 +445,7 @@ mod tests {
             cmd("CharaMotion", &["NowID", "2004"]),
             cmd("CharaVisible", &["-1", "Head", "FALSE"]),
             cmd("EventCGRelease", &["FALSE"]),
+            cmd("CharaCoordinate", &["NowID", "Swimsuit"]),
             cmd("Close", &[]),
         ];
         let mut p = Program::new("morning", list, 1);
@@ -457,6 +461,7 @@ mod tests {
                 Effect::Motion { actor: "NowID".into(), id: 2004 },
                 Effect::Visible { actor: "-1".into(), part: "Head".into(), on: false },
                 Effect::EventCgRelease,
+                Effect::Coordinate { actor: "NowID".into(), kind: "Swimsuit".into() },
             ]
         );
     }

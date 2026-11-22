@@ -476,6 +476,9 @@ pub struct Game {
     /// `CharaClothState` of ADV actors not spawned with their variants yet:
     /// card → (list, state).
     adv_cloth: std::collections::HashMap<String, Vec<(&'static str, usize)>>,
+    /// `HumanCoordinate` type of characters not in their first coordinate:
+    /// card → index into `chara::COORDINATE_TYPES`.
+    coordinates: std::collections::HashMap<String, usize>,
     /// Unity root (position, rotation) of characters placed on the map or
     /// in an event, for their eye look.
     chara_roots: std::collections::HashMap<String, ([f32; 3], [f32; 4])>,
@@ -828,7 +831,8 @@ impl Game {
             self.lists = Some(crate::chara::Lists::load(&mut self.unity)?);
         }
         let lists = self.lists.take().context("lists")?;
-        let human = crate::chara::Human::from_card(&mut self.unity, &lists, &card, !card_path.contains("/male/"));
+        let coordinate = self.coordinates.get(card_path).copied().unwrap_or(0);
+        let human = crate::chara::Human::from_card_coordinate(&mut self.unity, &lists, &card, !card_path.contains("/male/"), coordinate);
         self.lists = Some(lists);
         let human = human?;
         self.log.extend(human.log.iter().cloned());
@@ -888,7 +892,8 @@ impl Game {
             self.lists = Some(crate::chara::Lists::load(&mut self.unity)?);
         }
         let lists = self.lists.take().context("lists")?;
-        let human = crate::chara::Human::from_card(&mut self.unity, &lists, &card, !card_path.contains("/male/"));
+        let coordinate = self.coordinates.get(card_path).copied().unwrap_or(0);
+        let human = crate::chara::Human::from_card_coordinate(&mut self.unity, &lists, &card, !card_path.contains("/male/"), coordinate);
         self.lists = Some(lists);
         let mut human = human?;
         human.undress_all();
@@ -2138,6 +2143,29 @@ impl Game {
                 pending.push((list, state));
                 self.apply_adv_cloth(&card);
             }
+            E::Coordinate { actor, kind } => {
+                let Some(card) = self.adv_actor(&actor) else { return Ok(()) };
+                let Some(index) = crate::chara::COORDINATE_TYPES.iter().position(|t| *t == kind) else {
+                    self.log.push(format!("CharaCoordinate {kind}: unknown type"));
+                    return Ok(());
+                };
+                if self.coordinates.get(&card).copied().unwrap_or(0) == index {
+                    return Ok(());
+                }
+                if index == 0 {
+                    self.coordinates.remove(&card);
+                } else {
+                    self.coordinates.insert(card.clone(), index);
+                }
+                // `ChangeCoordinateType(..., reload)`: an actor in the event
+                // respawns in its current motion.
+                let state = self.cloth.get(&card).and_then(|c| c.layers.get(0)).and_then(|l| l.get("clip")).and_then(|c| c.as_str()).map(str::to_owned);
+                if let (Some(state), Some(e)) = (state, self.event_cg.as_ref()) {
+                    let t = unity_transform(e.cha.0, e.cha.1);
+                    self.adv_spawn(host, client, &card, t, &state)?;
+                }
+                self.log.push(format!("CharaCoordinate {actor}: {kind}"));
+            }
             other => self.log.push(format!("SATD-amanatsu-port: ADV {other:?}")),
         }
         Ok(())
@@ -2811,8 +2839,9 @@ impl Game {
                 self.next_time_zone(map, now);
             }
             NightPhase::Invite => {
-                // `EventShortMovie(_nightEventShowerSMID)` and its ADV.
-                // SATD-amanatsu-port: the after-bath coordinate is not applied.
+                // `EventShortMovie(_nightEventShowerSMID, AfterBath)` and its
+                // ADV: she stays in the after-bath coordinate for the night.
+                self.coordinates.insert(card.clone(), 1);
                 let list = event(if cottage { "Before_Night_Cottage_ShortMovie" } else { "Before_Night_NO_Cottage_ShortMovie" });
                 self.night.as_mut().unwrap().phase = NightPhase::Shower;
                 let id = self.night_movie_ids.0;
@@ -2841,7 +2870,9 @@ impl Game {
                 self.pending_map = Some((morning_map, zone));
             }
             NightPhase::Morning | NightPhase::MorningHAfter | NightPhase::Greetings => {
-                // `SceneEnd` → `EndProc`: the action map again.
+                // `SceneEnd` (back to `Swimsuit`) → `EndProc`: the action
+                // map again.
+                self.coordinates.remove(&card);
                 self.night = None;
                 self.log.push(format!("NightEvent {card}: end"));
                 self.fade.start(now, true, self.fade_seconds);
@@ -2881,6 +2912,8 @@ impl Game {
         } else {
             self.night.as_mut().unwrap().phase = NightPhase::Greetings;
             let list = self.adv_assets.event("Greetings_ShortMovie").into_iter().collect();
+            // `EventShortMovie(_nightEventSMID, Swimsuit)`.
+            self.coordinates.remove(&card);
             let (id, now) = (self.night_movie_ids.1, self.now);
             self.start_movie(&card, id, list, now);
             Ok(())
@@ -3594,6 +3627,7 @@ impl AmanatsuVm {
             global_dirty: false,
             memory_play: None,
             adv_cloth: std::collections::HashMap::new(),
+            coordinates: std::collections::HashMap::new(),
             heads: std::collections::HashMap::new(),
             chara_roots: std::collections::HashMap::new(),
             eye_rest: std::collections::HashMap::new(),

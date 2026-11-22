@@ -9,7 +9,7 @@
 `ChangeMap`, heroine entry/standing placement, the `ActionMapUI` HUD
 (cameras, 2D map, `Skip`) and time-zone advance (tutorial
 `ConfirmDialog`, HUD config/help and button fade animations, the night
-event's after-bath/swimsuit coordinates and the flag turning morning
+event's coordinate menu in HScene and the flag turning morning
 events 1/2 into 3, the item events' CGs and heroine placement and the item
 HScene settings flag, `AutoSaveMode`,
 link-partner placement (`SetCharaForMap` `isLink`), the `MapSelectUI`
@@ -144,3 +144,4 @@ HScene mode and save/load, recorded in a validation note.
 | 2026-11-23 | Face md layers as the head's shadow layer. Remaining: the face's `_spmap` nose/lip maxima and the `_Lamp` shift (fixed strength), hair and clothes md layers. | Listed above. |
 | 2026-11-23 | Grazing `_Shadow_color` tint of the skin shadow tone (shared `ToonShading.shadow_rim`). Remaining: SSS, shine, rim and specular terms. | Listed above. |
 | 2026-11-23 | Clothes and hair md layers; override images follow the importer's texture cap. Remaining: the md layers' `_Lamp` coordinate shift (fixed-strength layers), cloth patterns/matcap (`_TexTAMatcap`, `_Matcap_mask`), skin shine and SSS. | Listed above. |
+| 2026-11-23 | Coordinate types (`Swimsuit`/`AfterBath`): night shower movie, greeting movie, `SceneEnd`, ADV `CharaCoordinate`. Remaining: the HScene `Coodenate` menu and `HActor.Dispose` restore. | Listed above. |
