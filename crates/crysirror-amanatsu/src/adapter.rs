@@ -279,6 +279,8 @@ pub struct Game {
     config_ui: Option<crate::config::ConfigUi>,
     config_loaded: bool,
     config_dirty: bool,
+    /// `AL.Dialog.ExitDialog` is open.
+    exit_dialog: bool,
     /// The command camera table (`AngleData` prefab).
     angle_data: Option<Level>,
     /// The map view before the command camera.
@@ -1918,6 +1920,34 @@ impl Game {
         }
     }
 
+    /// `ExitDialog.Show` (the `ExitDialog` prefab; btnEnter quits).
+    fn open_exit_dialog(&mut self) {
+        if self.exit_dialog {
+            return;
+        }
+        match Level::prefab(&mut self.unity, crate::talk::ADV_BUNDLE, "ExitDialog") {
+            Ok(mut level) => {
+                if let Some(n) = level.find("ExitDialog/Dialog_Panel") {
+                    crate::talk::show(&mut level, n);
+                }
+                self.overlays.push((level, Ui::new(11)));
+                self.exit_dialog = true;
+            }
+            Err(e) => {
+                self.log.push(format!("ExitDialog: {e:#}"));
+                self.quit = true;
+            }
+        }
+    }
+
+    fn close_exit_dialog(&mut self) {
+        while let Some(i) = self.overlays.iter().position(|(l, _)| l.name == "ExitDialog") {
+            let (_, mut ui) = self.overlays.remove(i);
+            self.removed.extend(ui.clear());
+        }
+        self.exit_dialog = false;
+    }
+
     /// `ConfigWindow.Load`: the `Config` prefab over everything.
     fn open_config(&mut self) {
         if self.config_ui.is_some() {
@@ -2770,6 +2800,7 @@ impl AmanatsuVm {
             config_ui: None,
             config_loaded: false,
             config_dirty: false,
+            exit_dialog: false,
             expressions: std::collections::HashMap::new(),
             blinking: std::collections::HashSet::new(),
             next_blink: std::collections::HashMap::new(),
@@ -3094,7 +3125,7 @@ impl AmanatsuVm {
         let scene_input = scenes::Input {
             now,
             fading,
-            click: (input.buttons_pressed & b::MOUSE_LEFT != 0).then_some((x, y)),
+            click: (input.buttons_pressed & b::MOUSE_LEFT != 0 && !game.exit_dialog).then_some((x, y)),
             right_click: input.buttons_pressed & b::MOUSE_RIGHT != 0,
             escape: input.buttons_pressed & b::ESCAPE != 0,
             f1: input.buttons_pressed & b::F1 != 0,
@@ -3236,7 +3267,14 @@ impl AmanatsuVm {
         let mut h_point_action: Option<crate::hui::PointAction> = None;
         let mut open_save_load: Option<bool> = None;
         if let Some((h, button)) = click {
-            if h > 0 {
+            if h > 0 && game.overlays[h - 1].0.name == "ExitDialog" {
+                let name = game.overlays[h - 1].0.scene.nodes[button].name.clone();
+                match name.as_str() {
+                    "btnEnter" => game.quit = true,
+                    "btnCancel" | "btnClose" => game.close_exit_dialog(),
+                    _ => {}
+                }
+            } else if h > 0 {
                 let level = &mut game.overlays[h - 1].0;
                 game.log.push(format!("click {}", level.scene.path(button)));
                 let calls = level.on_click(button);
@@ -3555,7 +3593,8 @@ impl AmanatsuVm {
         }
         match request {
             scenes::Request::None => {}
-            scenes::Request::Quit => game.quit = true,
+            // `ExitDialog`: quit after confirmation.
+            scenes::Request::Quit => game.open_exit_dialog(),
             scenes::Request::Load(id) if game.pending.is_none() => {
                 // SceneSettings FadeType In: cover, then load.
                 game.fade.start(now, true, game.fade_seconds);

@@ -188,4 +188,5 @@
 - Owner corpus: `find_game_object` (the `Config` prefab in the ADV Addressables bundle), `component_refs`.
 - Behaviour (`cf1`–`cf4` tracks from the `with` save: the HUD gear at frame 1810): the window opens over the map with the installation's values (auto-save 1日ごと, BGM 40…); six wheel steps scroll the content under the viewport clip; clicking 注視点 OFF and dragging the BGM slider to 83 update the toggles, fill, handle and number; the close button writes `user/config.xml` in the save mount (`Look` False, `BGM` `Volume[83] : Switch[True]`). Volumes apply as client mix groups (`submit_audio` `SetMixGroup`) without errors with audio enabled.
 - Config values (same day): the `hp0` track from the `h_lv1` save runs through the talk into H again at frames 2350 and 3000 (before the face-lifetime fix it stopped with `world entity missing` once the H map replaced the talking heroine). The message reveal is not yet observed in a capture (the tracks' talks before H show no text lines).
+- `ExitDialog` (same day): Escape on the title at frame 700 shows 「ゲームを終了しますか？」 with はい/いいえ at frame 760 instead of quitting (`ex` track).
 
