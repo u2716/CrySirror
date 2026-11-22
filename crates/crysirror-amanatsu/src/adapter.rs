@@ -99,6 +99,11 @@ struct HRun {
     /// A night event H (`HDetail` from `NightEvent`): the points kind
     /// after it (`H_NightShowerAfter`, `H_NightMorningAfter`).
     night: Option<&'static str>,
+    /// The heroine's breath voices, the playing group and when the next
+    /// breath starts.
+    breaths: Vec<crate::hvoice::Breath>,
+    breath_group: i32,
+    next_breath: u64,
     /// The action point of an event H (`ItemEventH00`); none: the map's
     /// first H point (or `NightEventH00` for a night H).
     event_point: Option<&'static str>,
@@ -253,6 +258,8 @@ pub struct Game {
     h_ui: Option<crate::hui::PostureUi>,
     /// The states the last character baked (`spawn_character_states`).
     baked_states: Vec<String>,
+    /// An H breath voice to play (bundle, asset).
+    h_voice: Option<(String, String)>,
     /// The place the posture lists were built for.
     h_ui_place: Option<i32>,
     /// The map's H points and the one in use.
@@ -1047,6 +1054,17 @@ impl Game {
         if !self.spots.iter().any(|s| s.0 == card) {
             self.spots.push((card.to_owned(), tr.to_array(), personality, name));
         }
+        // `HVoiceCtrl.Setup`: the personality's breath voices.
+        if self.h.as_ref().is_some_and(|h| h.breaths.is_empty()) {
+            match crate::hvoice::load(&mut self.unity, personality) {
+                Ok(list) => {
+                    if let Some(h) = self.h.as_mut() {
+                        h.breaths = list;
+                    }
+                }
+                Err(e) => self.log.push(format!("H breaths: {e:#}")),
+            }
+        }
         // `PostureSelect` over the usable postures.
         if let Some(i) = self.overlays.iter().position(|(l, _)| l.name == crate::h::SCENE_PREFAB) {
             let level = &mut self.overlays[i].0;
@@ -1154,6 +1172,27 @@ impl Game {
         };
         h.gauge = (h.gauge + rate * dt).min(100.);
         h.male_gauge = (h.male_gauge + rate * dt).min(100.);
+        // Breaths: the group of the motion and gauge, again after a pause.
+        let finish_ready = h.gauge >= 70. || h.male_gauge >= 70.;
+        let level = ((h.gauge / 100. * 3.) as i32).clamp(0, 2);
+        let group = match h.motion {
+            "WLoop1" => Some(crate::hvoice::group::looped(level, if finish_ready { 2 } else { 0 })),
+            "SLoop1" => Some(crate::hvoice::group::looped(level, if finish_ready { 2 } else { 1 })),
+            "Idle" => Some(crate::hvoice::group::LOOP_WAIT),
+            _ => None,
+        };
+        if let Some(g) = group {
+            if g != h.breath_group || now >= h.next_breath {
+                h.breath_group = g;
+                let mut rng = self.rng;
+                let mut random = |n: usize| game_random(&mut rng, n);
+                if let Some(b) = crate::hvoice::pick(&h.breaths, g, 0, &mut random) {
+                    self.h_voice = Some((b.bundle.clone(), b.asset.clone()));
+                }
+                h.next_breath = now + 3000 + random(2000) as u64;
+                self.rng = rng;
+            }
+        }
         if h.motion.starts_with("Orgasm") && now >= h.motion_until {
             self.h_play("Idle", true);
         } else if clicked {
@@ -1250,6 +1289,21 @@ impl Game {
                         h.male_gauge = 0.;
                     }
                     h.motion_until = now + 3000;
+                    // The climax breath of the finish.
+                    let g = match state {
+                        "OrgasmM_IN" => crate::hvoice::group::CLIMAX_IN,
+                        "OrgasmM_OUT" => crate::hvoice::group::CLIMAX_OUT,
+                        _ => crate::hvoice::group::CLIMAX_F,
+                    };
+                    h.breath_group = g;
+                    h.next_breath = now + 4000;
+                    let mut rng = self.rng;
+                    let mut random = |n: usize| game_random(&mut rng, n);
+                    let voice = crate::hvoice::pick(&h.breaths, g, 0, &mut random).map(|b| (b.bundle.clone(), b.asset.clone()));
+                    self.rng = rng;
+                    if voice.is_some() {
+                        self.h_voice = voice;
+                    }
                     self.h_play(state, false);
                     self.log.push(format!("HScene finish: {state}"));
                 } else {
@@ -1831,7 +1885,7 @@ impl Game {
             }
             NightPhase::Shower => {
                 // `HDetail(Event1)` at the movie map's night H place.
-                self.h = Some(HRun { card: card.clone(), phase: MassagePhase::Enter, return_map: shower_map, posture: None, entities: Vec::new(), motion: "Idle", motion_until: 0, gauge: 0., male_gauge: 0., finishes: Vec::new(), orgasms: 0, last_ms: now, night: Some("H_NightShowerAfter"), event_point: None });
+                self.h = Some(HRun { card: card.clone(), phase: MassagePhase::Enter, return_map: shower_map, posture: None, entities: Vec::new(), motion: "Idle", motion_until: 0, gauge: 0., male_gauge: 0., finishes: Vec::new(), breaths: Vec::new(), breath_group: -1, next_breath: 0, orgasms: 0, last_ms: now, night: Some("H_NightShowerAfter"), event_point: None });
                 self.fade.start(now, true, self.fade_seconds);
                 self.pending_map = Some((shower_map, 3));
                 self.log.push(format!("NightEvent {card}: H on map {shower_map}"));
@@ -1846,7 +1900,7 @@ impl Game {
             }
             NightPhase::Morning if is_h_scene => {
                 // The morning H (`HDetail(Event2/3)`).
-                self.h = Some(HRun { card: card.clone(), phase: MassagePhase::Enter, return_map: morning_map, posture: None, entities: Vec::new(), motion: "Idle", motion_until: 0, gauge: 0., male_gauge: 0., finishes: Vec::new(), orgasms: 0, last_ms: now, night: Some("H_NightMorningAfter"), event_point: None });
+                self.h = Some(HRun { card: card.clone(), phase: MassagePhase::Enter, return_map: morning_map, posture: None, entities: Vec::new(), motion: "Idle", motion_until: 0, gauge: 0., male_gauge: 0., finishes: Vec::new(), breaths: Vec::new(), breath_group: -1, next_breath: 0, orgasms: 0, last_ms: now, night: Some("H_NightMorningAfter"), event_point: None });
                 self.fade.start(now, true, self.fade_seconds);
                 let zone = if let Controller::ActionMap(m) = &self.controller { m.time_zone } else { 0 };
                 self.pending_map = Some((morning_map, zone));
@@ -1985,7 +2039,7 @@ impl Game {
         if item.judge == 0 && is_h_scene {
             let point = if self.map_points.iter().any(|p| p.0 == "ItemEventH00") { "ItemEventH00" } else { "ItemEvent00" };
             let map = self.current_map();
-            self.h = Some(HRun { card, phase: MassagePhase::Enter, return_map: map, posture: None, entities: Vec::new(), motion: "Idle", motion_until: 0, gauge: 0., male_gauge: 0., finishes: Vec::new(), orgasms: 0, last_ms: now, night: None, event_point: Some(point) });
+            self.h = Some(HRun { card, phase: MassagePhase::Enter, return_map: map, posture: None, entities: Vec::new(), motion: "Idle", motion_until: 0, gauge: 0., male_gauge: 0., finishes: Vec::new(), breaths: Vec::new(), breath_group: -1, next_breath: 0, orgasms: 0, last_ms: now, night: None, event_point: Some(point) });
             let zone = if let Controller::ActionMap(m) = &self.controller { m.time_zone } else { 0 };
             self.fade.start(now, true, self.fade_seconds);
             self.pending_map = Some((map, zone));
@@ -2334,6 +2388,7 @@ impl AmanatsuVm {
             h_change: None,
             h_points: Vec::new(),
             h_ui_place: None,
+            h_voice: None,
             baked_states: Vec::new(),
             h_point_index: None,
             h_point_ui: None,
@@ -2836,6 +2891,11 @@ impl AmanatsuVm {
         if let Some(name) = h_button {
             game.h_button(&name, now)?;
         }
+        if let Some((bundle, asset)) = game.h_voice.take() {
+            if let Err(e) = game.sound.play(host, client, &mut game.unity, sound::Kind::Voice, &bundle, &asset, 1.) {
+                game.log.push(format!("H voice {asset}: {e:#}"));
+            }
+        }
         if let Some(a) = h_point_action {
             game.h_point_action(a);
         }
@@ -2912,7 +2972,7 @@ impl AmanatsuVm {
                 list.extend(crate::commands::choose(&game.adv_assets.h_start(here), &mut random));
                 game.rng = rng;
                 game.visit_played = true;
-                game.h = Some(HRun { card: card.clone(), phase: MassagePhase::Agree, return_map, posture: None, entities: Vec::new(), motion: "Idle", motion_until: 0, gauge: 0., male_gauge: 0., finishes: Vec::new(), orgasms: 0, last_ms: now, night: None, event_point: None });
+                game.h = Some(HRun { card: card.clone(), phase: MassagePhase::Agree, return_map, posture: None, entities: Vec::new(), motion: "Idle", motion_until: 0, gauge: 0., male_gauge: 0., finishes: Vec::new(), breaths: Vec::new(), breath_group: -1, next_breath: 0, orgasms: 0, last_ms: now, night: None, event_point: None });
             } else if name == "btnWith" {
                 // `EventManager.With`: the agree line, the short movie and
                 // `_shortMoiveAfterAssets[LV]`, then the favourability level.

@@ -1580,3 +1580,14 @@ fn short_movie() {
     }
     println!("personal 0 LV1 → {:?}", crysirror_amanatsu::sm::personal_movie(&mut u, 0, 1).unwrap());
 }
+
+/// The H breath voices of personality 0.
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn h_breaths() {
+    let mut u = unity();
+    let list = crysirror_amanatsu::hvoice::load(&mut u, 0).unwrap();
+    assert_eq!(list.len(), 375);
+    let groups: std::collections::BTreeSet<i32> = list.iter().map(|b| b.group).collect();
+    println!("{} breaths, groups {groups:?}, first {:?}", list.len(), list[0]);
+}

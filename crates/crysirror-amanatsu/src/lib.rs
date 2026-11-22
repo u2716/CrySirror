@@ -13,6 +13,7 @@ pub mod charaselect;
 pub mod commands;
 pub mod h;
 pub mod hui;
+pub mod hvoice;
 pub mod hud;
 pub mod level;
 pub mod map;

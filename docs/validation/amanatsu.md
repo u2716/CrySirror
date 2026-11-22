@@ -143,3 +143,9 @@
 - Native evidence: `EventManager._Item_d__50` (`GetHeroine`, `GetEvent` → `PackData` `Judge`, `Before_Item`, `SelectNum` 1 → `ItemEventEnd(0)`, `Judge` 0 → `HDetail(Event0)` → `_h.Evaluation`, `Judge` 1 → `ItemSelectNum` → `_param` +120 `QuestionsFromNPC.GetSelect`), `GetEvent`, `GetHeroine` (favourability LV ≥ 2), `ItemEventEnd` (camera/HUD restore), `PropertyData.Parameter` layout, `g` `rest` scenario.
 - Behaviour (auto slot patched to favourability LV4 with `IsH`): the pool's beach chair (`p_al_m00_bchair00_00 (1)`) starts `rest`; with `GetEvent` 2 休む ends in `ItemEventEnd` with the HUD back; a later try with `GetEvent` 1 plays the heroine's part and adds `QuestionsFromNPC` points (select 0).
 - Not established: the item H variant on screen (code path shared with H), event CGs.
+
+## 2026-11-22 — H breath voices
+
+- Native evidence: `AL.H.List.Voice.BreathData`/`Data` (il2cpp layout: `BaseData` ID/bundle/file/override/`FaceParams`, `StageEnum`, `GroupEnum` LoopWait … ClimaxMouth_A), `FaceParam` (17 members, `Range` = two `Vector3`), `HVoiceCtrl.OnChangeState`/`UpdateBreath` (per-category updaters).
+- Owner corpus: `h_breaths` — `breath[000]` parses to exactly its 375 entries (groups 0–21, `sd/dt/pcm/c00/h/000_01.unity3d`).
+- Behaviour: the H runs load the breaths and submit them without errors; offscreen captures do not emit audio, so audibility is not established.
