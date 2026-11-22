@@ -19,6 +19,62 @@ use std::{collections::BTreeMap, sync::Arc};
 /// Upper bound on indexed files; a project larger than this fails visibly.
 const MAX_FILES: usize = 65_536;
 
+/// Read-only replacement archives selected by the installed-game launcher.
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct LauncherOverlay {
+    /// Mounted XP3 basenames, with the first existing member taking priority.
+    pub archives: Vec<String>,
+    /// Native media names eligible for exact member replacement.
+    pub protocols: Vec<String>,
+    /// Apply the same check to requests without a media prefix.
+    pub no_protocol: bool,
+}
+
+impl LauncherOverlay {
+    pub fn validate(&self) -> Result<()> {
+        ensure!((1..=64).contains(&self.archives.len()), "KiriKiri launcher archive count");
+        let mut names = std::collections::BTreeSet::new();
+        for archive in &self.archives {
+            let path = VfsPath::new(Mount::Asset, archive).map_err(err)?;
+            let folded = archive.to_lowercase();
+            ensure!(
+                path.relative() == archive && !archive.contains(['/', '>'])
+                    && folded.ends_with(".xp3") && folded != "data.xp3"
+                    && names.insert(folded),
+                "invalid or duplicate KiriKiri launcher XP3: {archive}"
+            );
+        }
+        let mut protocols = std::collections::BTreeSet::new();
+        for protocol in &self.protocols {
+            ensure!(
+                matches!(protocol.as_str(), "arc" | "archive" | "psb") && protocols.insert(protocol),
+                "unsupported or duplicate KiriKiri launcher protocol: {protocol}"
+            );
+        }
+        Ok(())
+    }
+}
+
+struct MountedOverlay {
+    archives: Vec<OverlayArchive>,
+    protocols: Vec<String>,
+    no_protocol: bool,
+    reported_hit: std::sync::atomic::AtomicBool,
+}
+
+struct OverlayArchive {
+    source: String,
+    point: String,
+    index_prefix: String,
+}
+
+struct AutoPath {
+    directory: String,
+    /// Missing physical directories need only the unenumerated archive lookup.
+    probe_loose: bool,
+}
+
 pub struct Storage {
     files: Arc<dyn ClientStorage>,
     root: String,
@@ -28,7 +84,14 @@ pub struct Storage {
     /// asset mount.
     index: BTreeMap<String, String>,
     /// Lowercased auto-path directories, searched after a direct match.
-    auto: Vec<String>,
+    auto: Vec<AutoPath>,
+    /// Ordered container/directory pairs searched for flat names. File probes
+    /// still use the current mounted provider and its exact case policy.
+    auto_routes: std::sync::OnceLock<Option<Vec<(String, String)>>>,
+    // Native TVPGetPlacedPath caches both hits and misses. This bounded index
+    // is private to the mounted game and excludes saves and mutable aliases.
+    archive_names: std::sync::Mutex<BTreeMap<String, Option<String>>>,
+    launcher_overlay: Option<MountedOverlay>,
     /// Registered compound media (`arc://`), owned by the shared resource service.
     pub compound: Option<(String, crysirror_resource::compound::CompoundStorage)>,
     /// Directory inside each routed container that answers hashed names.
@@ -134,6 +197,9 @@ impl Storage {
             media: None,
             index: BTreeMap::new(),
             auto: Vec::new(),
+            auto_routes: Default::default(),
+            archive_names: Default::default(),
+            launcher_overlay: None,
             compound: None,
             hashed_root: None,
             wrappers: WrapperMedia::default(),
@@ -285,26 +351,35 @@ impl Storage {
     fn resolve_compound(&self, relative: &str) -> Option<String> {
         let (_, media) = self.compound.as_ref()?;
         for candidate in media.candidates(".", relative) {
-            let Ok(Some(point)) = self.container_point(&candidate.container) else {
+            if let Some(path) = self.routed_member(&candidate.container, &candidate.inner) {
+                return Some(path);
+            }
+        }
+        None
+    }
+
+    fn routed_member(&self, container: &str, member: &str) -> Option<String> {
+        let point = self.container_point(container).ok()??;
+        let folded = member.to_lowercase();
+        for inner in std::iter::once(member)
+            .chain((folded != member).then_some(folded.as_str())) {
+            let inner = match &self.hashed_root {
+                Some(root) => format!("{root}/{inner}"),
+                None => inner.to_owned(),
+            };
+            let path = match (self.root.is_empty(), point.is_empty()) {
+                (true, true) => inner,
+                (true, false) => format!("{point}/{inner}"),
+                (false, true) => format!("{}/{inner}", self.root),
+                (false, false) => format!("{}/{point}/{inner}", self.root),
+            };
+            let Ok(checked) = VfsPath::new(Mount::Asset, &path) else {
                 continue;
             };
-            for inner in [candidate.inner.clone(), candidate.inner.to_lowercase()] {
-                let inner = match &self.hashed_root {
-                    Some(root) => format!("{root}/{inner}"),
-                    None => inner,
-                };
-                let path = match (self.root.is_empty(), point.is_empty()) {
-                    (true, true) => inner,
-                    (true, false) => format!("{point}/{inner}"),
-                    (false, true) => format!("{}/{inner}", self.root),
-                    (false, false) => format!("{}/{point}/{inner}", self.root),
-                };
-                let Ok(checked) = VfsPath::new(Mount::Asset, &path) else {
-                    continue;
-                };
-                if self.files.exists(&checked) {
-                    return Some(path);
-                }
+            // A routed archive entry can only come from its provider. A
+            // negative hashed lookup must not enumerate loose folders.
+            if self.files.serving_container(&checked).is_some() {
+                return Some(path);
             }
         }
         None
@@ -434,9 +509,19 @@ impl Storage {
             return Ok(());
         }
         let dir = self.full_name(path)?.trim_end_matches('/').to_lowercase();
-        if !self.auto.contains(&dir) {
-            self.auto.push(dir)
+        let relative = if self.root.is_empty() || dir.is_empty() {
+            format!("{}{}", self.root, dir)
+        } else { format!("{}/{dir}", self.root) };
+        let probe_loose = self.compound.is_none() || (!self.full_uri(path)?.contains('>')
+            && !dir.contains("://")
+            && self.files.metadata(Mount::Asset, &relative)
+                .map_or(true, |entry| entry.is_some_and(|e| e.is_directory)));
+        if let Some(entry) = self.auto.iter_mut().find(|e| e.directory == dir) {
+            entry.probe_loose = probe_loose;
+        } else {
+            self.auto.push(AutoPath { directory: dir, probe_loose });
         }
+        self.clear_archive_names();
         Ok(())
     }
     pub fn remove_auto_path(&mut self, path: &str) -> Result<()> {
@@ -444,12 +529,16 @@ impl Storage {
             return Ok(());
         }
         let dir = self.full_name(path)?.trim_end_matches('/').to_lowercase();
-        self.auto.retain(|d| *d != dir);
+        self.auto.retain(|entry| entry.directory != dir);
+        self.clear_archive_names();
         Ok(())
     }
 
     /// Resolve a storage name to an asset-relative path, or `None`.
     pub fn resolve(&self, name: &str) -> Option<String> {
+        if let Some(path) = self.launcher_override(name) {
+            return Some(path);
+        }
         if let Some(media) = &self.wrappers.psd {
             if let Some(rest) = crate::psd_plugin::psd_uri(name) {
                 return media.exists(self, &rest).then(|| format!("psd://{rest}"));
@@ -477,7 +566,91 @@ impl Storage {
                 .then(|| format!("savedata/{}", path.relative()));
         }
         let normalized = self.full_name(name).ok()?;
-        if let Some(rel) = self.compound_relative(&normalized) {
+        if self.compound.is_none() || self.wrappers.proxy.is_some() || normalized.len() > 1024 {
+            return self.resolve_asset_name(&normalized);
+        }
+        if let Some(hit) = self.archive_names.lock().unwrap_or_else(|e| e.into_inner()).get(&normalized) {
+            return hit.clone();
+        }
+        let found = self.resolve_asset_name(&normalized);
+        if found.as_ref().is_none_or(|path| path.len() <= 4096) {
+            let mut names = self.archive_names.lock().unwrap_or_else(|e| e.into_inner());
+            if names.len() >= 2048 {
+                names.clear();
+            }
+            names.insert(normalized, found.clone());
+        }
+        found
+    }
+
+    pub(crate) fn install_launcher_overlay(&mut self, config: &LauncherOverlay) -> Result<()> {
+        let mut archives = Vec::with_capacity(config.archives.len());
+        for name in &config.archives {
+            let source = if self.root.is_empty() {
+                name.clone()
+            } else {
+                format!("{}/{name}", self.root)
+            };
+            let point = self.files.container_mount(&source).map_err(err)?
+                .filter(|point| !point.is_empty() && point != &self.root)
+                .with_context(|| format!("KiriKiri launcher XP3 `{name}` is not mounted separately"))?;
+            let relative = if self.root.is_empty() {
+                point.as_str()
+            } else {
+                point.strip_prefix(&self.root).and_then(|p| p.strip_prefix('/'))
+                    .context("KiriKiri launcher XP3 mount outside the native asset root")?
+            };
+            let index_prefix = relative.to_lowercase();
+            archives.push(OverlayArchive { source, point, index_prefix });
+        }
+        self.launcher_overlay = Some(MountedOverlay {
+            archives,
+            protocols: config.protocols.clone(),
+            no_protocol: config.no_protocol,
+            reported_hit: Default::default(),
+        });
+        Ok(())
+    }
+
+    /// Check the original request before compound hashing or auto paths.
+    /// The replacement key is the full member path in the declared archive.
+    pub(crate) fn launcher_override(&self, name: &str) -> Option<String> {
+        let overlay = self.launcher_overlay.as_ref()?;
+        let member = match name.split_once("://") {
+            Some((protocol, member)) if overlay.protocols.iter().any(|p| p.eq_ignore_ascii_case(protocol)) => member,
+            None if overlay.no_protocol => name,
+            _ => return None,
+        };
+        let native = member.replace('\\', "/");
+        if native.ends_with('/') || native.contains('>') {
+            return None;
+        }
+        let member = VfsPath::new(Mount::Asset, &native).ok()?;
+        let folded = member.relative().to_lowercase();
+        if matches!(folded.split('/').next(), Some("savedata" | "__bootstrap" | "__cxdec")) {
+            return None;
+        }
+        for archive in &overlay.archives {
+            let key = format!("{}/{folded}", archive.index_prefix);
+            let Some(path) = self.index.get(&key) else { continue };
+            let path = VfsPath::new(Mount::Asset, path).ok()?;
+            if !self.files.serving_container(&path).is_some_and(|(source, point)| {
+                source == archive.source && point == archive.point
+            }) {
+                continue;
+            }
+            let trace = std::env::var_os("CRYSIRROR_KRKR_TRACE_STORAGE").is_some();
+            if !overlay.reported_hit.swap(true, std::sync::atomic::Ordering::Relaxed) || trace {
+                let entry = path.relative().strip_prefix(&archive.point)?.strip_prefix('/')?;
+                eprintln!("[KiriKiri launcher override] {name} -> {}>{entry}", archive.source);
+            }
+            return Some(path.relative().to_owned());
+        }
+        None
+    }
+
+    fn resolve_asset_name(&self, normalized: &str) -> Option<String> {
+        if let Some(rel) = self.compound_relative(normalized) {
             let rel = rel.ok()?;
             if let Some(found) = self.resolve_compound(&rel) {
                 return Some(found);
@@ -493,7 +666,8 @@ impl Storage {
             return Some(found.clone());
         }
         let base = key.rsplit('/').next().unwrap_or(&key);
-        for dir in self.auto.iter().rev() {
+        for entry in self.auto.iter().rev() {
+            let dir = &entry.directory;
             if self.wrappers.scheme(dir).is_some() {
                 if let Some(found) = self.resolve(&format!("{}/{base}", dir.trim_end_matches('/'))) {
                     return Some(found);
@@ -511,40 +685,71 @@ impl Storage {
         }
         // Hash-indexed engine archive providers may resolve a requested spelling
         // without being able to enumerate plaintext names. Keep the same root.
-        let candidate = |name: &str| {
+        let candidate = |name: &str, archive_only: bool| {
             let path = if self.root.is_empty() {
                 name.to_owned()
             } else {
                 format!("{}/{name}", self.root)
             };
             let checked = VfsPath::new(Mount::Asset, &path).ok()?;
-            self.files.exists(&checked).then_some(path)
+            let exists = if archive_only {
+                self.files.serving_container(&checked).is_some()
+            } else { self.files.exists(&checked) };
+            exists.then_some(path)
         };
-        if let Some(path) = candidate(&normalized) {
+        if let Some(path) = candidate(normalized, false) {
             return Some(path);
         }
-        if let Some(path) = candidate(&key) {
+        if key != normalized && let Some(path) = candidate(&key, false) {
             return Some(path);
         }
-        for dir in self.auto.iter().rev() {
-            if let Some(path) = candidate(&format!("{dir}/{base}")) {
+        for entry in self.auto.iter().rev() {
+            let dir = &entry.directory;
+            if dir.contains("://") { continue; }
+            if let Some(path) = candidate(&format!("{dir}/{base}"), self.compound.is_some() && !entry.probe_loose) {
                 return Some(path);
             }
         }
         self.resolve_auto(base)
     }
+    /// True when immutable archive contents serve this resolved asset.
+    pub(crate) fn is_mounted_asset(&self, path: &VfsPath) -> bool {
+        self.files.serving_container(path).is_some()
+    }
+
     /// Auto-path directories inside compound media.
     fn resolve_auto(&self, base: &str) -> Option<String> {
-        for dir in self.auto.iter().rev() {
-            if let Some(Ok(rel)) = self.compound_relative(dir) {
-                let rel = rel.trim_end_matches('/');
-                let path = if rel.is_empty() { base.to_owned() } else { format!("{rel}/{base}") };
-                if let Some(found) = self.resolve_compound(&path) {
-                    return Some(found);
+        let (_, media) = self.compound.as_ref()?;
+        // Compound routes match the directory. Their final filename is always
+        // the supplied basename, regardless of which source directory won.
+        let candidates = || self.auto.iter().rev().filter_map(|entry| {
+            let dir = self.compound_relative(&entry.directory)?.ok()?;
+            let dir = dir.trim_end_matches('/');
+            let lookup = if dir.is_empty() { base.to_owned() } else { format!("{dir}/{base}") };
+            Some(media.candidates(".", &lookup))
+        }).flatten();
+        let routes = self.auto_routes.get_or_init(|| {
+            let mut routes = Vec::new();
+            let mut seen = std::collections::BTreeSet::new();
+            for candidate in candidates() {
+                let end = candidate.inner.rfind('/').map_or(0, |slash| slash + 1);
+                let route = (candidate.container, candidate.inner[..end].to_owned());
+                if seen.insert(route.clone()) {
+                    if routes.len() >= crysirror_resource::compound::MAX_ROUTES { return None; }
+                    routes.push(route);
                 }
             }
+            Some(routes)
+        });
+        match routes {
+            Some(routes) => routes.iter().find_map(|(container, prefix)| self.routed_member(container, &format!("{prefix}{base}"))),
+            None => candidates().find_map(|candidate| self.routed_member(&candidate.container, &candidate.inner)),
         }
-        None
+    }
+
+    pub(crate) fn clear_archive_names(&mut self) {
+        self.auto_routes.take();
+        self.archive_names.get_mut().unwrap_or_else(|e| e.into_inner()).clear();
     }
 
     /// Resolve trying KiriKiri's implicit extensions in order.
@@ -725,6 +930,34 @@ fn err(e: crysirror_core::Error) -> anyhow::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn mounted_game_rechecks_cached_hits_and_misses_after_auto_path_changes() {
+        use crysirror_core::state::ClientId;
+        use crysirror_resource::compound::CompoundStorage;
+        use crysirror_runtime::vfs::DiskVfs;
+
+        let assets = tempfile::tempdir().unwrap();
+        let saves = tempfile::tempdir().unwrap();
+        std::fs::create_dir(assets.path().join("audio")).unwrap();
+        std::fs::write(assets.path().join("audio/select.ogg"), b"fixture").unwrap();
+        let mut vfs = DiskVfs::new(assets.path(), saves.path()).unwrap();
+        let client = ClientId(1);
+        vfs.register(client, "krkr", "test").unwrap();
+        let mut storage = Storage::new(vfs.storage(client).unwrap(), "").unwrap();
+        storage.compound = Some(("arc".into(), CompoundStorage::new("test", &[]).unwrap()));
+        assert_eq!(storage.resolve("select.ogg"), None);
+        storage.add_auto_path("audio/").unwrap();
+        assert_eq!(storage.resolve("select.ogg").as_deref(), Some("audio/select.ogg"));
+        storage.remove_auto_path("audio/").unwrap();
+        assert_eq!(storage.resolve("select.ogg"), None);
+        storage.add_auto_path("late/").unwrap();
+        assert_eq!(storage.resolve("line.txt"), None);
+        std::fs::create_dir(assets.path().join("late")).unwrap();
+        std::fs::write(assets.path().join("late/line.txt"), b"new").unwrap();
+        storage.add_auto_path("late/").unwrap();
+        assert_eq!(storage.resolve("line.txt").as_deref(), Some("late/line.txt"));
+    }
+
     #[test]
     fn normalizes_prefixes_and_decodes_boms() {
         assert_eq!(normalize("file://./data\\bg.png"), "data/bg.png");

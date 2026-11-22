@@ -171,6 +171,11 @@ fn resource(rt: &Rt, uri: &str) -> Result<Vec<u8>> {
 /// Layer.loadImages on a `psb://` name: suspend until the engine decodes the
 /// resource, then attach it as the layer's image.
 pub fn load_image(rt: &mut Rt, layer: ObjectHandle, uri: &str) -> Result<Variant> {
+    if let Some(path) = rt.host().storage()?.launcher_override(uri) {
+        let bytes = rt.host().storage()?.read_limited(&path, 64 * 1024 * 1024)
+            .map_err(|e| err(format!("KiriKiri launcher override `{path}`: {e}")))?;
+        return load_encoded_image(rt, layer, &path, bytes);
+    }
     let bytes = resource(rt, uri)?;
     load_encoded_image(rt, layer, uri, bytes)
 }

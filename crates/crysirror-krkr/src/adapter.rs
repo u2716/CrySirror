@@ -5,7 +5,7 @@
 use crate::{
     host::{Batch, KrkrHost},
     natives::{self, Rt, has_member},
-    storage::Storage,
+    storage::{LauncherOverlay, Storage},
 };
 use anyhow::{Context, Result, bail, ensure};
 use crysirror_core::{
@@ -41,6 +41,9 @@ pub struct Config {
     /// Companion executable basename reported by `System.exeName`.
     #[serde(default)]
     pub executable: Option<String>,
+    /// Ordered, session-local overrides from a selected KiriKiri launcher.
+    #[serde(default)]
+    pub launcher_overlay: Option<LauncherOverlay>,
     /// Engine-published protected-bootstrap profile (`hxv4_bootstrap_profile`
     /// for `Plugins.linkZ`, or `cxdec_bootstrap_profile` for the startup
     /// `Storages.setupArchiveData` facade) the natives must match.
@@ -97,6 +100,9 @@ impl Config {
                 !exe.is_empty() && exe.len() <= 255 && !exe.contains(['/', '\\', ':', '\0']) && exe != "." && exe != "..",
                 "KiriKiri executable must be a basename"
             );
+        }
+        if let Some(overlay) = &self.launcher_overlay {
+            overlay.validate()?;
         }
         if let Some(locale) = &self.locale {
             ensure!(
@@ -207,11 +213,6 @@ impl KrkrVm {
         let files = h.storage(self.client).map_err(err)?;
         let mut storage = Storage::new(files, &self.config.root)?;
         storage.media = Some(h.mounted_media(self.client).map_err(err)?);
-        ensure!(
-            storage.resolve(&self.config.startup).is_some(),
-            "KiriKiri startup script `{}` absent",
-            self.config.startup
-        );
         let mut host = KrkrHost::new(self.config.canvas, self.config.font_alias.clone());
         host.client = self.client.0;
         for codec in ["opus","vorbis","ms-adpcm"] {
@@ -288,6 +289,15 @@ impl KrkrVm {
             }
             rt.set_global_member("__crysirror_arguments", Variant::Object(table));
         }
+        let storage = rt.host_mut().storage.as_mut().context("KiriKiri storage unavailable")?;
+        if let Some(overlay) = &self.config.launcher_overlay {
+            storage.install_launcher_overlay(overlay)?;
+        }
+        ensure!(
+            storage.resolve(&self.config.startup).is_some(),
+            "KiriKiri startup script `{}` absent",
+            self.config.startup
+        );
         crate::plugins::autoload(&mut rt)?;
         // Developer diagnostic: on the first runtime exception, log the paused
         // frame's registers and evaluate `;;`-separated expressions in it.
