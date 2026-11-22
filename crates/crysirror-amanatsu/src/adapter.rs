@@ -228,7 +228,7 @@ struct NightRun {
 
 /// The H motions baked into the characters.
 /// The H motions baked into the characters (each posture has the
-/// finishes of its category: `OrgasmF`, `OrgasmM_IN`, `OrgasmM_OUT`).
+/// finishes of its category: female, male inside, male outside).
 /// The `AL.H.Motion.State` states of the posture animators (with their
 /// `S_` strong variants), baked when the controller has them.
 const H_MOTIONS: [&str; 53] = [
@@ -255,8 +255,8 @@ enum HFinish {
     Vomit,
 }
 
-/// The state sequence of a finish (`Orgasm*` → `_ST` → the `_A` idle;
-/// service drink/spit through `Drink`/`Vomit` `_IN` → `` → `_A`).
+/// The state sequence of a finish (finish → `_ST` → the `_A` idle;
+/// the two service finishes through `_IN` → `` → `_A`).
 /// SATD-amanatsu-port: reconstructed from the state classes and the
 /// animators (the transitions live in compiler-generated lambdas of
 /// `AL.H.Motion.Base.Controller`); states the animator lacks are skipped.
@@ -1331,7 +1331,7 @@ impl Game {
     /// `HScene.Initialize`: the heroine and the male (the default male
     /// card) at the H place in the starting posture, framed by its camera.
     /// SATD-amanatsu-port: the posture comes from the posture list's first
-    /// standing kiss (`aib` 立ちキス) instead of `PostureMainSelecter`.
+    /// first `aib` posture instead of `PostureMainSelecter`.
     fn spawn_h_pair(&mut self, host: &mut dyn HostServices, client: ClientId, card: &str, pos: [f32; 3], rot: [f32; 4], sun: f32) -> Result<()> {
         if self.h_postures.is_none() {
             self.h_postures = Some(crate::h::load_postures(&mut self.unity)?);
@@ -1657,11 +1657,11 @@ impl Game {
                 None => self.h_play("Idle", true),
             }
         } else if wheel != 0 && (h.motion.ends_with("Idle_IN_A") || h.motion.ends_with("Idle_OF_A")) {
-            // `Insert.Controller.Update` in `Idle_IN_A`/`Idle_OF_A`: the
-            // wheel forward resumes `WLoop`, back pulls out (`Pull`/`SPull`),
-            // which falls to the outside idle (after an inside finish
-            // through `Drop`). SATD-amanatsu-port: `GetNextHash`'s exact
-            // order after `Pull` is inferred from the state names.
+            // The transition controller's `Update` in `Idle_IN_A`/`Idle_OF_A`:
+            // the wheel forward resumes `WLoop`, back plays the exit
+            // transition, which falls to the `_OUT_A` idle (after the male
+            // finish through the second exit state). SATD-amanatsu-port:
+            // `GetNextHash`'s exact order is inferred from the state names.
             let s = if h.motion.starts_with("S_") { "S_" } else { "" };
             let has = |n: &str| h.finishes.iter().any(|f| f == n);
             if wheel > 0 {
@@ -1682,8 +1682,8 @@ impl Game {
             }
         } else if clicked && rest {
             h.strong = false;
-            // Insert postures (`Insert.Controller`): from outside, `Insert`
-            // then `InsertIdle` first.
+            // Transition postures (the transition controller): from the outer
+            // idles, the entry transition and its idle first.
             let outside = h.motion == "Idle" || h.motion.ends_with("_OUT_A");
             let has = |n: &str| h.finishes.iter().any(|f| f == n);
             if outside && has("Insert") {
@@ -1787,7 +1787,7 @@ impl Game {
         self.log.push(format!("HScene.ChangePoint: place {} id {}", p.place, p.id));
     }
 
-    /// H UI buttons: `Finish Female` (orgasm), `Exit` (end).
+    /// H UI buttons: `Finish Female`, `Exit` (end).
     fn h_button(&mut self, name: &str, now: u64) -> Result<()> {
         match name {
             "Config" => self.open_config(),
@@ -1816,7 +1816,7 @@ impl Game {
             }
             "Exit" => {
                 // `HScene.End` → `AddHCount`, the evaluation scenario.
-                // SATD-amanatsu-port: the evaluation index is the orgasm count.
+                // SATD-amanatsu-port: the evaluation index is the female finish count.
                 let Some(h) = self.h.as_mut().filter(|h| h.phase == MassagePhase::Play) else { return Ok(()) };
                 h.phase = MassagePhase::Evaluation;
                 let index = (h.orgasms as usize).min(19);
@@ -1843,7 +1843,7 @@ impl Game {
     }
 
     /// `Controller.Finish`: the finish's states (the `S_` variants from a
-    /// strong loop), the gauges spent and the climax breath.
+    /// strong loop), the gauges spent and the finish breath.
     fn h_finish(&mut self, kind: HFinish, now: u64) {
         let Some(h) = self.h.as_ref() else { return };
         let female = matches!(kind, HFinish::Female | HFinish::Double);

@@ -388,7 +388,7 @@ impl Program {
                 "CharaVisible" => effects.push(Effect::Visible { actor: a(0), part: a(1), on: a(2).eq_ignore_ascii_case("TRUE") }),
                 "CharaDitherIn" | "CharaDitherOut" => effects.push(Effect::Visible { actor: a(0), part: "All".into(), on: c.name() == "CharaDitherIn" }),
                 "CharaClothState" => effects.push(Effect::ClothState { actor: a(0), part: a(1), state: a(2).trim().parse().unwrap_or(0) }),
-                // Mosaic visibility: the engine draws no mosaic.
+                // Censor overlay visibility: the engine draws no overlay.
                 "MozVisible" => {}
                 other => effects.push(Effect::Unported(other.to_owned(), c.args.clone())),
             }
@@ -430,7 +430,7 @@ mod tests {
         assert_eq!(p.run(&mut fx), Wait::End);
     }
 
-    /// `morning` 挿入: the event CG, actors, motions, visibility and clothes.
+    /// `morning` event 3: the event CG, actors, motions, visibility and clothes.
     #[test]
     fn event_cg_effects() {
         let list = vec![

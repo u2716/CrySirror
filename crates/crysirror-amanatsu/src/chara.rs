@@ -6,7 +6,7 @@
 //! (`co_*`) on the body, their bones resolved by name onto the skeletons
 //! (`AssignedAnotherWeights`). Materials get the list's main textures,
 //! tinted by the card's skin/hair colours and the clothes' colour masks.
-//! The body bone prefab adds the bust/hip/arm/leg/belly/waist MagicaCloth
+//! The body bone prefab adds the chest/hip/arm/leg/belly/waist MagicaCloth
 //! springs and `cf_hit_*` colliders, tuned by the card's softness values.
 //!
 //! SATD-amanatsu-port: accessory swing/hide states, face/body shape values
@@ -83,8 +83,8 @@ const SPRING_GROUPS: [(&str, &str, &str); 10] = [
 ];
 
 /// `Table.sKeyNameTable` state objects of the clothes (`S_*_NUGE`,
-/// `S_UWB_B_NUGE2`, `S_PANST_NUGE`): shown only while a part is half
-/// undressed; the `*_DEF` objects (`n_top_a`, `n_bot_a`, `n_panst_a`) are
+/// `S_UWB_B_NUGE2`, `S_PANST_NUGE`): shown only while a part is in its
+/// half state; the `*_DEF` objects (`n_top_a`, `n_bot_a`, `n_panst_a`) are
 /// the dressed state.
 const UNDRESSED: [&str; 4] = ["n_top_b", "n_bot_b", "n_bot_c", "n_panst_b"];
 
@@ -134,7 +134,7 @@ fn shake_correct(unity: &mut Unity) -> Result<crysirror_unity::managed::Fields> 
 /// `HumanBody.SetSpringSetting`/`ChangeBustGravity`: each group's
 /// MagicaCloths get `PartsData.GetData(softness)` (min + (max − min) ×
 /// clamp01(v)) as spring power, spring limit distance, angle-restoration
-/// stiffness and velocity attenuation; the bust gravity is
+/// stiffness and velocity attenuation; the chest gravity is
 /// lerp(`_bustGravity`, `bustWeight`). Returns the components changed.
 fn apply_shake(scene: &mut Scene6, bone_root: usize, shake: &crysirror_unity::managed::Fields, body: &Value) -> usize {
     use crysirror_unity::managed::{Fields, Value as F};

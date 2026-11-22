@@ -1268,7 +1268,7 @@ fn magica_census() {
 }
 
 /// Writes the skin material textures of the card's body (`mt_*` list rows:
-/// sunburn, nipple, underhair, detail) to `AMANATSU_OUT` for inspection.
+/// sunburn, two overlays, detail) to `AMANATSU_OUT` for inspection.
 #[test]
 #[ignore = "needs AMANATSU_ROOT"]
 fn skin_textures() {

@@ -7,7 +7,7 @@
 //! SATD-amanatsu-port: `HVoiceCtrl` chooses groups through per-state voice
 //! updaters that are not reproduced; the H scene uses LoopWait for Idle,
 //! `Loop{gauge third}` with `_S` (weak loop), `_F` (strong loop) or `_C`
-//! (a finish available), and the climax groups for the finishes. The
+//! (a finish available), and the finish groups for the finishes. The
 //! breath's first `FaceParam` sets the face (patterns, openness, blink);
 //! its mouth moves between `OpenMouthMin` and `OpenMouthMax` while the
 //! breath plays instead of following the voice level. Short breaths, speech

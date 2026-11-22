@@ -65,12 +65,12 @@
 
 ## 2026-11-22 — body physics and skin shadow (local, Apple M4 Max / Metal, offscreen, muted)
 
-- Implementation: `crysirror-asset` `spring.rs` (capsule colliders as segments, `max_distance` from the animated position); `crysirror-unity` `magica_bone_cloths` BoneSpring (type 10) and `colliderList` capsules/spheres, collider node remap per GLB chunk, `Fields::set`; `crysirror-amanatsu` `chara.rs` body bone prefab graft, `ShakeCorrectData` tuning, card skin shadow colour. Native evidence (`GameAssembly.dll`): `HumanBody.SetSpringSetting`/`ChangeBustGravity`, `PartsData.GetData`, `HumanMagicaSpringSetting` groups, `HumanShader.Define.Body` cctor (`_Shadow_color`, `_Highlight_color`, `_SkinIntensity`, `_Normal_map`, `_Detail_mask_02`), `CreateBodyTexture` (list categories `mt_sunburnUp/Down`, `mt_nip`, `mt_underhair`, `mt_body_detail`).
+- Implementation: `crysirror-asset` `spring.rs` (capsule colliders as segments, `max_distance` from the animated position); `crysirror-unity` `magica_bone_cloths` BoneSpring (type 10) and `colliderList` capsules/spheres, collider node remap per GLB chunk, `Fields::set`; `crysirror-amanatsu` `chara.rs` body bone prefab graft, `ShakeCorrectData` tuning, card skin shadow colour. Native evidence (`GameAssembly.dll`): `HumanBody.SetSpringSetting`/`ChangeBustGravity`, `PartsData.GetData`, `HumanMagicaSpringSetting` groups, `HumanShader.Define.Body` cctor (`_Shadow_color`, `_Highlight_color`, `_SkinIntensity`, `_Normal_map`, `_Detail_mask_02`), `CreateBodyTexture` (list categories `mt_sunburnUp/Down`, two body overlay categories, `mt_body_detail`).
 - Compilation: `cargo test --release -p crysirror-asset -p crysirror-unity -p crysirror-amanatsu` (pass, incl. `spring::tests::capsule_collider_pushes_out`); `cargo build --release -p crysirror-desktop`. No reflected API change from this work.
-- Owner corpus: `chara_glb` — `AL_F_00`: 56 spring chains (14 body BoneSprings tuned: bust stiffness 0.45 + power 0.025, limit 0.2, gravity 5 from `bustWeight` 0.5; hip/arm/thigh/belly/waist from their softness values) plus 42 hair chains; `magica_census` — all chara bundles: 471 BoneCloth without colliders, 16 hair BoneCloths whose `colliderList` holds only null slots, 14 BoneSprings, 1 MeshCloth (`co_shoes_000`), 34 capsule colliders on the body bone prefab.
-- Behaviour (CustomScene, frames 800/830): body and clothes stay attached with the body springs active; the skin shadow takes the card's warm tone under the bust.
-- Not established: comparison with original captures (spring amplitude, shadow strength), tan lines/nipple/underhair layers, hair–body collision (not configured in the shipped data).
-- Update (same day): the bikini top drew both the dressed `n_top_a` and the half-undressed `n_top_b` objects (overlapping cups and band); `Table.sKeyNameTable` (`S_*_DEF`/`S_*_NUGE` → `n_top_a`/`n_top_b`, `n_bot_a/b/c`, `n_panst_a/b`) and `HumanCloth.UpdateVisible` now select the dressed state, and `CmpClothes.objOpt01/02` follow the card's `hideOpt` (both false for `AL_F_00`, so the halter option stays). Eyes: the card's pupil (`overId` → `mt_eyepipil`, `pupil01..03Color`) and three highlights per eye (`mt_eye_hi_up`, R core `color`, G glow `color2`, size from `_eyeHLSizeRange` 3.0→0.5, offset x/y − 0.5, rotation with 0.5 neutral) are composited into the iris; the iris follows `eyeX/eyeY/eyeWidth/eyeHeight` relative to the authored `_Eye_position`. Capture: single bikini top; pupils and the dark upper highlight dome visible. Not established: highlight placement against the original (the `AL/eye` shader graph is not decoded).
+- Owner corpus: `chara_glb` — `AL_F_00`: 56 spring chains (14 body BoneSprings tuned: chest stiffness 0.45 + power 0.025, limit 0.2, gravity 5 from the card's chest weight 0.5; hip/arm/thigh/belly/waist from their softness values) plus 42 hair chains; `magica_census` — all chara bundles: 471 BoneCloth without colliders, 16 hair BoneCloths whose `colliderList` holds only null slots, 14 BoneSprings, 1 MeshCloth (`co_shoes_000`), 34 capsule colliders on the body bone prefab.
+- Behaviour (CustomScene, frames 800/830): body and clothes stay attached with the body springs active; the skin shadow takes the card's warm tone under the chest.
+- Not established: comparison with original captures (spring amplitude, shadow strength), tan line and body detail overlay layers, hair–body collision (not configured in the shipped data).
+- Update (same day): the bikini top drew both the dressed `n_top_a` and the half-state `n_top_b` objects (overlapping cups and band); `Table.sKeyNameTable` (`S_*_DEF`/`S_*_NUGE` → `n_top_a`/`n_top_b`, `n_bot_a/b/c` and the other parts' variants) and `HumanCloth.UpdateVisible` now select the dressed state, and `CmpClothes.objOpt01/02` follow the card's `hideOpt` (both false for `AL_F_00`, so the halter option stays). Eyes: the card's pupil (`overId` → `mt_eyepipil`, `pupil01..03Color`) and three highlights per eye (`mt_eye_hi_up`, R core `color`, G glow `color2`, size from `_eyeHLSizeRange` 3.0→0.5, offset x/y − 0.5, rotation with 0.5 neutral) are composited into the iris; the iris follows `eyeX/eyeY/eyeWidth/eyeHeight` relative to the authored `_Eye_position`. Capture: single bikini top; pupils and the dark upper highlight dome visible. Not established: highlight placement against the original (the `AL/eye` shader graph is not decoded).
 
 ## 2026-11-22 — ActionMap HUD and time zones (local, Apple M4 Max / Metal, offscreen, muted)
 
@@ -98,20 +98,20 @@
 - Not established: excitement, oil gauge and reactions, comparison with the original.
 - Update (same day): favourability level-up. Native evidence: `EventManager._With_d__41` (「一緒に遊ぶ」, `GetWithAgreeAsset`, `ShortMovie.Load/PlayAsync`, `_shortMoiveAfterAssets`, `Point = LatePoint`, `LV + 1` up to `MaxLV`), `Count.ContactClear` (PlayCommand/HResult only). Run (a save patched to a full gauge and one massage, つづきから, pool, heroine, menu): `btnWith` appears in `WithPlay`; it plays `agree-1` + `with0` and the heroine reaches favourability LV1. Not established: the ShortMovie timeline (`lib/sm`).
 
-## 2026-11-22 — H scenes (local, Apple M4 Max / Metal, offscreen, muted)
+## 2026-11-22 — HScene mode (local, Apple M4 Max / Metal, offscreen, muted)
 
 - Implementation: `crysirror-runtime` `Assets::release_generated` → `release_prepared_path` (released generated models leave the prepared-asset budget); `crysirror-amanatsu` `h.rs` (posture lists: `IntKeyDictionary<AnimationListInfo>`, `CharaInfo` animators, camera names), `chara.rs` exact states/height suffix and female-only body bones, `map.rs` `load_with_budget`, adapter H phases, two-step map changes. Native evidence: `CommandUI.SetCost` (`_btnH` interactable with cost and favourability LV > 0, `_imgHCover` below), `EventManager._H_d__37`/`_HProc_d__44` (agree, `GetHStartAsset`, `HScene.InitializeAsync`, `AddHCount`, `_h.Evaluation`, `CommandPoint.GetSelect`), `HScene.Create` (`h/scene/hscene.unity3d` `HScene`), `HScene.CameraLoad` (`AL.H.CameraData` 40-byte records).
 - Compilation: `cargo test --release -p crysirror-amanatsu --lib`, `cargo test --release -p crysirror-runtime --lib assets`; desktop from a HEAD worktree plus these files.
-- Owner corpus: `h_postures` — `sof` (騎乗位…), `rez`, `aib` (立ちキス…), `hou`, `som`, `3p` with male/female controllers and cameras; `chara_glb` with `AMANATSU_MALE` assembles `AL_M_00` (male body, no body bone springs).
-- Behaviour (a save patched to favourability LV1, つづきから, pool, heroine, H): `agree-3` and the `Map_No_Here` opener, a move to ホテル, the heroine and the male kissing (`aib_f_09`/`aib_m_09`) framed by `cam_aib_09` under the HScene UI; clicks step to the strong loop, the female gauge fills, Finish Female plays the orgasm, Exit plays `che1`, adds the H points, counts H (1) and returns to the pool. Before the runtime fix the prepared assets of earlier maps stayed resident and the hotel load failed at the 256 MiB budget.
-- Not established: the remaining H features (posture choice, speed, voices, male side), comparison with the original.
+- Owner corpus: `h_postures` — `sof`, `rez`, `aib`, `hou`, `som`, `3p` with male/female controllers and cameras; `chara_glb` with `AMANATSU_MALE` assembles `AL_M_00` (male body, no body bone springs).
+- Behaviour (a save patched to favourability LV1, つづきから, pool, heroine, H): `agree-3` and the `Map_No_Here` opener, a move to ホテル, the heroine and the male in `aib_f_09`/`aib_m_09` framed by `cam_aib_09` under the HScene UI; clicks step to the strong loop, the female gauge fills, Finish Female plays the female finish state, Exit plays `che1`, adds the H points, counts the HScene (1) and returns to the pool. Before the runtime fix the prepared assets of earlier maps stayed resident and the hotel load failed at the 256 MiB budget.
+- Not established: the remaining HScene features (posture choice, speed, voices, male side), comparison with the original.
 
 ## 2026-11-22 — Night events (local, Apple M4 Max / Metal, offscreen, muted)
 
 - Implementation: `crysirror-amanatsu` adapter night phases, `adv.rs` `Program::call` (`Open` returns to the command after it), `talk.rs` shared `lib/adv/scene/g` scenarios, `tables::short_movie_maps`, `commands` `_event`/`_h.Event_After` assets, `ui.rs` session font cache. Native evidence: `EventManager._TimeZone_d__55` (`Cycle.TimeZone == 3` → `GetNightEventHeroine`, `RandomRangeInt(1, 101) <= _explore._event._nightEventRate` → `NightEvent`), `GetNightEventHeroine` (`Favorability.LV >= 4`, `Count.IsH`, `!Count.IsNightH`, shuffled), `_NightEvent_d__60` (asset choice by `_mapID.Cottage`, `SelectNum == 1` → `Night`, `EventShortMovie(_nightEventShowerSMID)`, `HDetail(Event1)` at `MovePointInfo.GetNightEventHPoint`, `H_NightShowerAfter.GetSelect(0)`, `AddHCount(force)`, `Night_H_After`, `NightEventCount` < 3 increments else random 0..3, `PackData` `Judge` = {1:1, 2:0, 3:2}, `Night_Morning`, `IsHScene` → `HDetail` and `H_NightMorningAfter`, `_h.Event_After`, `Greetings_ShortMovie` for event 0), `EventShortMovie` (`ALShortMovieContent.MapID` → `ChangeMapAsync`), `_HDetail_d__46` (`IsTimeZoneH`, `IsH`, `IsNightH` when `TimeZone == 3`), `SaveData._Save_g__EnsureFileNameIfEmpty_55_0` (auto saves use `000`).
 - Compilation: `cargo test --release -p crysirror-amanatsu --lib` (9 passed, including `open_returns_to_caller`); desktop from the HEAD worktree plus these files.
-- Owner corpus: `property_data` (`_nightEventRate` 50, shower movie 20, morning movie 22), `tables_with_key` (`al_short_movie`: movies 20 and 22 on map 2, 水上コテージ), `bundle_objects` (`sm/lis` tables), `print_scenarios` (`g` `morning`: `Switch Judge`, `Open e-ins/e-fel/e9/e10`, `VAR IsHScene`).
-- Behaviour (a save patched to favourability LV4, `IsH`, zone 3, `NightEventCount` 0 or 1; nine `Skip`s until the roll succeeds; the roll depends on the session's random state): the heroine at the pool's `NightEvent00` with `e2` and the いいよ/今は無理 choice; いいよ → `e4`, the night H in the cottage at `NightEventH00`, Finish, Exit, `Night_H_After`, the next morning on the cottage (auto save: H count +1, `IsNightH`), then with `NightEventCount` 0 the greeting `e8` and with 1 `morning` (`Judge` 1: `e-fel`, `e9`, `IsHScene`) → morning H → `H_NightMorningAfter` points → `e11` → the cottage action map. Before the font cache, long sessions stopped with `font job capacity`.
+- Owner corpus: `property_data` (`_nightEventRate` 50, shower movie 20, morning movie 22), `tables_with_key` (`al_short_movie`: movies 20 and 22 on map 2, 水上コテージ), `bundle_objects` (`sm/lis` tables), `print_scenarios` (`g` `morning`: `Switch Judge`, `Open` of four event scenarios, `VAR IsHScene`).
+- Behaviour (a save patched to favourability LV4, `IsH`, zone 3, `NightEventCount` 0 or 1; nine `Skip`s until the roll succeeds; the roll depends on the session's random state): the heroine at the pool's `NightEvent00` with `e2` and the いいよ/今は無理 choice; いいよ → `e4`, the night HScene in the cottage at `NightEventH00`, Finish, Exit, `Night_H_After`, the next morning on the cottage (auto save: H count +1, `IsNightH`), then with `NightEventCount` 0 the greeting `e8` and with 1 `morning` (`Judge` 1: two event scenarios, `IsHScene`) → morning HScene → `H_NightMorningAfter` points → `e11` → the cottage action map. Before the font cache, long sessions stopped with `font job capacity`.
 - Not established: the short movies, decline path on screen (code path only), comparison with the original.
 
 ## 2026-11-22 — Save/load screen (local, Apple M4 Max / Metal, offscreen, muted)
@@ -121,14 +121,14 @@
 - Behaviour: title → ロード shows the list with the auto slot (time, sun icon, オートセーブデータ) and empty slots; selecting the auto slot shows 読込み, its dialog shows the slot, はい loads `a_000.sav` into the action map; map select → セーブ/ロード shows empty slots with 新規保存, はい writes `user/000.sav` (NEW mark, 読込み/上書き/削除), 削除 → はい removes it. The dialog buttons sit centred in their halves after the layout fix.
 - Not established: comment entry, animations, comparison with the original.
 
-## 2026-11-22 — H posture selection (local, Apple M4 Max / Metal, offscreen, muted)
+## 2026-11-22 — HScene posture selection (local, Apple M4 Max / Metal, offscreen, muted)
 
-- Implementation: `h.rs` posture members, `load_hpoints`, `Posture::usable`, `first_posture`; `hui.rs`; adapter H start at the first `HPoint` and `ChangePosture`. Native evidence: `AnimationListInfo` field layout (il2cpp), `CheckReleasePhase`, `HScene.Resource._FindPosture_g__Check_71_0` and `FindPosture`, `PostureMainSelecter.CheckPosture`/`CheckPostureSum`/`SelectionPosture`, the `PostureMainSelecter`/`PostureSubSelecter`/`LoopListView2` prefab fields (`_viewDatas` labels 愛撫…複数; the sub content's `VerticalLayoutGroup` disabled).
+- Implementation: `h.rs` posture members, `load_hpoints`, `Posture::usable`, `first_posture`; `hui.rs`; adapter H start at the first `HPoint` and `ChangePosture`. Native evidence: `AnimationListInfo` field layout (il2cpp), `CheckReleasePhase`, `HScene.Resource._FindPosture_g__Check_71_0` and `FindPosture`, `PostureMainSelecter.CheckPosture`/`CheckPostureSum`/`SelectionPosture`, the `PostureMainSelecter`/`PostureSubSelecter`/`LoopListView2` prefab fields (`_viewDatas` category labels; the sub content's `VerticalLayoutGroup` disabled).
 - Compilation: `cargo test --release -p crysirror-amanatsu --lib` (`posture_checks`).
 - Owner corpus: `h_postures` with modes/positions/release phases; `hpoint_12` HPoints (floor first, chairs, …).
-- Behaviour (auto slot patched to favourability LV1, ロード → H): the hotel's first floor HPoint, a random first posture (正常位), the category buttons and the 男主導挿入 list (正常位, 胸揉み正常位, 後背位, 対面立位, 背面立位, 駅弁); 対面立位 respawns the pair in `som_07` with its camera.
+- Behaviour (auto slot patched to favourability LV1, ロード → H): the hotel's first floor HPoint, a random first posture (`som` family), the category buttons and one category's list of six postures; its fourth entry respawns the pair in `som_07` with its camera.
 - Not established: point moves, comparison with the original.
-- 2026-11-22 (same build): Point → six hotel H points marked (floor, chairs, desks); a chair marker moves the pair to the chair point in 椅子咥え (`hou_16`) with the 愛撫/奉仕/挿入 lists for chairs; two clicks into the strong loop, the male gauge fills and 射精 plays `OrgasmM_IN` (log `HScene finish: OrgasmM_IN`). Native evidence: `HPointCtrl` (`GetPlaceTypeAll`, `Find`), the `Canvas Point` filter buttons per place type, the posture animators' state lists (`hou_f_16`: `OrgasmM_IN/OUT`, no `OrgasmF`).
+- 2026-11-22 (same build): Point → six hotel H points marked (floor, chairs, desks); a chair marker moves the pair to the chair point in `hou_16` with the category lists for chairs; two clicks into the strong loop, the male gauge fills and the male finish button plays its finish state (logged as `HScene finish`). Native evidence: `HPointCtrl` (`GetPlaceTypeAll`, `Find`), the `Canvas Point` filter buttons per place type, the posture animators' state lists (`hou_f_16`: male finish states only).
 
 ## 2026-11-22 — Short movies (local, Apple M4 Max / Metal, offscreen, muted)
 
@@ -142,13 +142,13 @@
 
 - Native evidence: `EventManager._Item_d__50` (`GetHeroine`, `GetEvent` → `PackData` `Judge`, `Before_Item`, `SelectNum` 1 → `ItemEventEnd(0)`, `Judge` 0 → `HDetail(Event0)` → `_h.Evaluation`, `Judge` 1 → `ItemSelectNum` → `_param` +120 `QuestionsFromNPC.GetSelect`), `GetEvent`, `GetHeroine` (favourability LV ≥ 2), `ItemEventEnd` (camera/HUD restore), `PropertyData.Parameter` layout, `g` `rest` scenario.
 - Behaviour (auto slot patched to favourability LV4 with `IsH`): the pool's beach chair (`p_al_m00_bchair00_00 (1)`) starts `rest`; with `GetEvent` 2 休む ends in `ItemEventEnd` with the HUD back; a later try with `GetEvent` 1 plays the heroine's part and adds `QuestionsFromNPC` points (select 0).
-- Not established: the item H variant on screen (code path shared with H), event CGs.
+- Not established: the item HScene variant on screen (code path shared with HScene), event CGs.
 
-## 2026-11-22 — H breath voices
+## 2026-11-22 — HScene breath voices
 
-- Native evidence: `AL.H.List.Voice.BreathData`/`Data` (il2cpp layout: `BaseData` ID/bundle/file/override/`FaceParams`, `StageEnum`, `GroupEnum` LoopWait … ClimaxMouth_A), `FaceParam` (17 members, `Range` = two `Vector3`), `HVoiceCtrl.OnChangeState`/`UpdateBreath` (per-category updaters).
+- Native evidence: `AL.H.List.Voice.BreathData`/`Data` (il2cpp layout: `BaseData` ID/bundle/file/override/`FaceParams`, `StageEnum`, `GroupEnum`, 22 groups), `FaceParam` (17 members, `Range` = two `Vector3`), `HVoiceCtrl.OnChangeState`/`UpdateBreath` (per-category updaters).
 - Owner corpus: `h_breaths` — `breath[000]` parses to exactly its 375 entries (groups 0–21, `sd/dt/pcm/c00/h/000_01.unity3d`).
-- Behaviour: the H runs load the breaths and submit them without errors; offscreen captures do not emit audio, so audibility is not established.
+- Behaviour: the HScene runs load the breaths and submit them without errors; offscreen captures do not emit audio, so audibility is not established.
 
 ## 2026-11-22 — Faces and the command camera
 
@@ -159,7 +159,7 @@
 ## 2026-11-22 — Invitation (誘う)
 
 - Native evidence: `EventManager._Invite_d__39` ("別マップに誘う", `GetInviteAgreeAsset`, `SelectNum` != 1 → `ChangeMapAsync` → `Invite_g__HPlay_0`), `PropertyData._adv._invite`, `_mapID.HMaps` (11, 12).
-- Behaviour (auto slot patched to favourability LV1): 誘う on the pool plays `cm1`, moves to 岩陰 and starts the H (床キス at the first H point).
+- Behaviour (auto slot patched to favourability LV1): 誘う on the pool plays `cm1`, moves to 岩陰 and starts the HScene at the first H point.
 
 ## 2026-11-22 — Character lighting and face makeup (local, Apple M4 Max / Metal, offscreen, muted)
 
@@ -170,15 +170,15 @@
 
 ## 2026-11-22 — Accessories
 
-- Native evidence: `HumanAccessory.UpdateAccessoryMoveFromInfo` → `sub_180AE3DD0`/`sub_180AE4180` (`objAcsMove[0..1]` local position = `addMove` × 0.01 × 10, `localEulerAngles`, `localScale`), `Define.CategoryNo` `ao_hair` 121 … `ao_kokan` 130, `HumanAccessory.Define.AccessoryParentKey` (0 none … 55 `a_n_ana`), list key 54 (default parent), prefabs `N_move`/`N_move2`, `CmpAccessory` (`rendNormal`, `defColor01..04`), `AL/acs` materials with `_Main_color_mask` and no main texture.
-- Owner corpus: `card_accessories` (the default heroine: slot 0 `ao_neck` 0 `p_acs_neck_shellnecklace` on `a_n_bust`, slot 1 `ao_hair` 2 `p_acs_hair_kamidome` on `a_n_hair_pin` with a (−0.6, 0, −0.7) offset and (350°, 353°, 0°) rotation), `chara_glb` (23 renderers).
+- Native evidence: `HumanAccessory.UpdateAccessoryMoveFromInfo` → `sub_180AE3DD0`/`sub_180AE4180` (`objAcsMove[0..1]` local position = `addMove` × 0.01 × 10, `localEulerAngles`, `localScale`), `Define.CategoryNo` `ao_hair` 121 … 130, `HumanAccessory.Define.AccessoryParentKey` (0 none … 55), list key 54 (default parent), prefabs `N_move`/`N_move2`, `CmpAccessory` (`rendNormal`, `defColor01..04`), `AL/acs` materials with `_Main_color_mask` and no main texture.
+- Owner corpus: `card_accessories` (the default heroine: slot 0 `ao_neck` 0 `p_acs_neck_shellnecklace` on its chest parent node, slot 1 `ao_hair` 2 `p_acs_hair_kamidome` on `a_n_hair_pin` with a (−0.6, 0, −0.7) offset and (350°, 353°, 0°) rotation), `chara_glb` (23 renderers).
 - Behaviour: the command close-up shows the gold hair clip and the shell necklace where the card thumbnail has them.
 
-## 2026-11-22 — H faces and breath expressions
+## 2026-11-22 — HScene faces and breath expressions
 
 - Native evidence: `AL.H.List.Voice.FaceParam` (`OpenEye`, `OpenMouthMin`/`Max`, `EyeBrow`, `Eye`, `Mouth`, `Tear`, `Cheek`, `Highlight`, `Blink`, neck/eye behaviour and ranges; 122 unmanaged bytes after the 17-member header).
 - Owner corpus: `h_breaths` (375 breaths of personality 0; e.g. `al_hl_00_00_012` LoopWait: eye 0.8, mouth 0.1–0.5, eyebrow 5, eye 2, mouth 0, blinking; openness within [0, 1] for all).
-- Behaviour (`hp0` track at frame 3000 from the `h_lv1` save, 床手コキ): the heroine shows the breath's face (closed smiling eyes, open mouth) with her motion; the motion changes keep the face.
+- Behaviour (`hp0` track at frame 3000 from the `h_lv1` save, a `hou` floor posture): the heroine shows the breath's face (closed smiling eyes, open mouth) with her motion; the motion changes keep the face.
 - Short movies (same day): `AL.TimeLine.FaceTrack` `FaceClip._info` (`_keyData` personalities 0–11, `_valueData` `ExpID`/`Brow`/`Eyes`/`Mouoth`/`EyesOpen`/`MouthOpen`/…); `short_movie_tracks` lists `stm_16` with five face clips (3.93 s, 5.00 s, 8.67 s, …). The `with` save + `w2` track (一緒に遊ぶ at frame 1900) plays `stm_16` on map 4; at frame 2400 the heroine shows the clip's closed-eye face while her motion plays.
 - Talk lip sync (same day): a heroine voice line opens and closes her mouth for the clip's `m_Length` (from the expression's openness up to 0.8); `w1` track from the `with` save: the greeting at frame 1850 shows the mouth open, at 1856 nearly closed.
 
@@ -187,20 +187,20 @@
 - Native evidence: `AL.Config.ConfigWindow` (`Load` → `Manager.Scene.Add`, `Setup`, `_btnTitle` hidden on the title, `_rectMask2D`/`_mainWindow`), the setting components' serialized toggle arrays (`component_refs`: `[ON, OFF]` pairs, `_tglInvertMove*` `[標準, 反転]`, `_tglAutoSaveTiming` `[None, TimeZone, Day]`, `_tglFullScreen` `[Windowed, FullScreen]`), `GraphicSetting._objVisible` (rows not offered), `SliderObservableToTMPro` (`_slider`/`_text`, `_format` "0"), `UserData/config.xml` (`Preferences` sections, `Volume[n] : Switch[b]`).
 - Owner corpus: `find_game_object` (the `Config` prefab in the ADV Addressables bundle), `component_refs`.
 - Behaviour (`cf1`–`cf4` tracks from the `with` save: the HUD gear at frame 1810): the window opens over the map with the installation's values (auto-save 1日ごと, BGM 40…); six wheel steps scroll the content under the viewport clip; clicking 注視点 OFF and dragging the BGM slider to 83 update the toggles, fill, handle and number; the close button writes `user/config.xml` in the save mount (`Look` False, `BGM` `Volume[83] : Switch[True]`). Volumes apply as client mix groups (`submit_audio` `SetMixGroup`) without errors with audio enabled.
-- Config values (same day): the `hp0` track from the `h_lv1` save runs through the talk into H again at frames 2350 and 3000 (before the face-lifetime fix it stopped with `world entity missing` once the H map replaced the talking heroine). The message reveal is not yet observed in a capture (the tracks' talks before H show no text lines).
+- Config values (same day): the `hp0` track from the `h_lv1` save runs through the talk into the HScene again at frames 2350 and 3000 (before the face-lifetime fix it stopped with `world entity missing` once the HScene map replaced the talking heroine). The message reveal is not yet observed in a capture (the tracks' talks before the HScene show no text lines).
 - `ExitDialog` (same day): Escape on the title at frame 700 shows 「ゲームを終了しますか？」 with はい/いいえ at frame 760 instead of quitting (`ex` track).
 
-## 2026-11-22 — H motion states and finishes
+## 2026-11-22 — HScene motion states and finishes
 
-- Native evidence: `AL.H.Motion.State.*` classes (`WLoop`, `WSPLoop`, `SSPLoop`, `OrgasmF[_ST]`, `OrgasmM_IN[_ST]`, `OrgasmM_OUT[_ST]`, `OrgasmS_IN`/`_ST`, `Idle_IN_A`/`_OUT_A`/`_OF_A`, `Drink[_IN|_A]`, `Vomit[_IN|_A]`, `Insert`, `Pull`, `Put`, `Drop` and `S*` variants), `Base.Controller.IsNext` (current state hash and normalized time ≥ 1), `Controller.Finish(index)`; `controller_states` (`hou_f_05`: `Idle`, `W/SLoop1/2`, `W/SSPLoop1/2`, `OrgasmM_OUT[_ST]`, `Idle_OUT_A`, `S_` variants, by `_S/_M/_L`); H prefab `GaugeController/Solo/Item 0–2` (外出しする/飲ませる/吐かせる).
-- Behaviour (`hf` track from the `h_lv1` save, 床手コキ): a scene click starts the weak loop, a wheel step makes it strong; at frame 3300 the gauge allows ぶっかける, which plays `S_OrgasmM_OUT`, then the hold and `S_Idle_OUT_A` (frames 3340, 3700).
-- Insert postures (same day): `controller_states` `som_f_00` has `Insert`, `InsertIdle`, `Pull`, `Drop` beside the loops/finishes (37 baked clips). The `hi` track switches to 正常位 through the posture list and clicks the scene at 3000; frames 3030 and 3200 show the insert and the following motion.
+- Native evidence: `AL.H.Motion.State.*` classes (`WLoop`, `WSPLoop`, `SSPLoop`, four finish states with `_ST` holds, the `Idle_IN_A`/`_OUT_A`/`_OF_A` idles, two service finishes, four transition states, each with `S*` variants), `Base.Controller.IsNext` (current state hash and normalized time ≥ 1), `Controller.Finish(index)`; `controller_states` (`hou_f_05`: `Idle`, `W/SLoop1/2`, `W/SSPLoop1/2`, one finish with its hold, `Idle_OUT_A`, `S_` variants, by `_S/_M/_L`); H prefab `GaugeController/Solo/Item 0–2` (three finish options).
+- Behaviour (`hf` track from the `h_lv1` save, a `hou` floor posture): a scene click starts the weak loop, a wheel step makes it strong; at frame 3300 the gauge allows the outside finish, which plays its strong finish state, then the hold and `S_Idle_OUT_A` (frames 3340, 3700).
+- Transition postures (same day): `controller_states` `som_f_00` has four transition states beside the loops/finishes (37 baked clips). The `hi` track switches to a `som` posture through the posture list and clicks the scene at 3000; frames 3030 and 3200 show the transition and the following motion.
 
-## 2026-11-22 — H clothing states
+## 2026-11-22 — HScene clothing states
 
-- Native evidence: H prefab `Option/RightTopArea` (`Clothes`, `Acs`, `Coodenate`) and `ClothesSetting/root/SelectClothesState` (`Button ALL`, `Tops`, `Bottoms`, `Bra`, `Shorts`, `Gloves`, `Panst`, `Socks`, `Shoes`, `Option 1–3`), `Chara List` toggles, `SelectAccessoryState/Toggle ALL`; clothing prefabs' `n_top_a`/`n_top_b` (bra), `n_bot_*` variants.
+- Native evidence: H prefab `Option/RightTopArea` (`Clothes`, `Acs`, `Coodenate`) and `ClothesSetting/root/SelectClothesState` (`Button ALL` and one button per clothing part), `Chara List` toggles, `SelectAccessoryState/Toggle ALL`; clothing prefabs' `n_top_*`/`n_bot_*` variants.
 - Engine: `AnimationState.hidden` (node names whose subtrees the renderer does not draw).
-- Behaviour (`hc`/`hc2` tracks from the `h_lv1` save): the shirt button at frame 2700 opens the part column; the bra button shows the half state (pulled up) at 2810 and removes it at 2870; the shorts button changes the bottoms at 2930 (log `HumanCloth … [2, 1, 0]`).
+- Behaviour (`hc`/`hc2` tracks from the `h_lv1` save): the shirt button at frame 2700 opens the part column; an inner part's button shows its half state at 2810 and hides it at 2870; another part's button changes the bottoms at 2930 (log `HumanCloth … [2, 1, 0]`).
 
 
 ## 2026-11-22 — Map particle systems
@@ -211,10 +211,10 @@
 
 ## 2026-11-22 — ADV morning event (EventCG)
 
-- Native evidence: `ILLGAMES.ADV.Commands.EventCG.Setting.Do` (`Common.Release`, `CreateEventCG`, `Data.set_CamRoot` → the ADV camera root takes `camPos`'s world pose and `CameraData.FieldOfView`, `Data.SetChaRoot` → characters at the `chaPos*` children, `Data.Next(0)`), `CameraData.Calculate` (height lerps between `_minPos/_maxPos`, all zero in `000_00`), `Commands.Chara.Motion`, `StandFindPosition`, `Game.CharaVisible`, `Chara.ClothState`; `adv/evcg/000_00` prefabs (`EventCG_BedIns/BedFel/BedTalk_000_00`, `chaPos`, `camPos`), `ani/lis/m` `anim_f_{personality}`/`anim_m` lists (`TableData.Key` 5 ID, 68 state; 2004 `al_f/m_Hevent_adv_01`, 2005 `_02`, 2006 `al_f_advevent_00_00`), probes `prefab_dump`, `tables_with_value` (`AMANATSU_ALLROWS`).
+- Native evidence: `ILLGAMES.ADV.Commands.EventCG.Setting.Do` (`Common.Release`, `CreateEventCG`, `Data.set_CamRoot` → the ADV camera root takes `camPos`'s world pose and `CameraData.FieldOfView`, `Data.SetChaRoot` → characters at the `chaPos*` children, `Data.Next(0)`), `CameraData.Calculate` (height lerps between `_minPos/_maxPos`, all zero in `000_00`), `Commands.Chara.Motion`, `StandFindPosition`, `Game.CharaVisible`, `Chara.ClothState`; `adv/evcg/000_00` prefabs (three `EventCG_Bed*_000_00` events, `chaPos`, `camPos`), `ani/lis/m` `anim_f_{personality}`/`anim_m` lists (`TableData.Key` 5 ID, 68 state; 2004 `al_f/m_Hevent_adv_01`, 2005 `_02`, 2006 `al_f_advevent_00_00`), probes `prefab_dump`, `tables_with_value` (`AMANATSU_ALLROWS`).
 - Implementation: `adv.rs` effects `EventCg`, `EventCgRelease`, `StandFind`, `Motion`, `Visible` (with `CharaDitherIn/Out`), `ClothState`; `tables::motion_state`; adapter `adv_chara` (actors `NowID`/`-1`, respawn with every clothing variant playing the list's state of `f_00`/`m_00`, pending clothing states, the head's renderer nodes hidden for `Head`, camera restored on release); `crysirror-runtime` `upload_rgba`'s batch check now limits encoded images to 64 MiB within the 128 MiB generated-asset batch (it counted model bytes against the image cap, so a 37-clip H pair plus the posture UI failed with `image upload batch`).
-- Behaviour (`night_lv4_ev1` save, track `n11c` = `w1` load + `n11` shifted 300 frames; `n11m` stops clicking at 7195): `morning` event 1 (`Judge` 1, `EventCG_BedFel_000_00`) places both characters on the cottage bed at `chaPos` (an overhead debug view at frame 7600 shows the player lying with his head hidden, trousers off, and the heroine kneeling between his legs in `al_f_Hevent_adv_02`); the event camera at `camPos` (45°) looks from the player's head at her face. The full `n11c` run continues through the morning H (騎乗位), `H_NightMorningAfter`, `e11` and the cottage action map at frame 10800.
-- Not established: comparison with the original's framing; events 2 (`BedIns`) and 3 (`BedTalk`) in captures.
+- Behaviour (`night_lv4_ev1` save, track `n11c` = `w1` load + `n11` shifted 300 frames; `n11m` stops clicking at 7195): `morning` event 1 (`Judge` 1, the second bed event) places both characters on the cottage bed at `chaPos` (an overhead debug view at frame 7600 shows both characters in the event pose `al_f_Hevent_adv_02`, the player's head hidden and the clothing states applied); the event camera at `camPos` (45°) looks from the player's head at her face. The full `n11c` run continues through the morning HScene, `H_NightMorningAfter`, `e11` and the cottage action map at frame 10800.
+- Not established: comparison with the original's framing; the other two bed events in captures.
 - Tests: `adv::tests::event_cg_effects`. `crysirror-runtime` lib tests: 88 pass, 8 Siglus pack/provider tests fail in `Runtime::load` of the Siglus fixture project, independent of the upload check.
 
 ## 2026-11-22 — Eye look
@@ -234,12 +234,12 @@
 
 ## 2026-11-22 — Config graphics switches and personality voice volumes
 
-- Implementation: `Graphic/Bloom` and `Graphic/Fog` applied to the map environment (kept before the switches and re-sent when the config window closes after a change); `Voice/c00`–`c11` as `voice_cNN` mix groups under `voice`, used for talk and H voices by the speaking heroine's personality.
+- Implementation: `Graphic/Bloom` and `Graphic/Fog` applied to the map environment (kept before the switches and re-sent when the config window closes after a change); `Voice/c00`–`c11` as `voice_cNN` mix groups under `voice`, used for talk and HScene voices by the speaking heroine's personality.
 - Behaviour (`w1` track, `with` save, a saved `config.xml` with Bloom/Fog off; removed afterwards): the world environment at frame 1900 has `bloom` 0 and no fog.
 - Not established: audible voice levels (runs are muted); the voice rows' controls in the window.
 
-## 2026-11-22 — H pull-out
+## 2026-11-22 — HScene exit transitions
 
-- Native evidence: `AL.H.Motion.Insert.Controller.Update`: in `Idle_IN_A`/`Idle_OF_A` (and `S` variants) the H wheel value forward sets `WLoop`, backward `Pull`/`SPull`; `Pull`/`SPull` and `Drop`/`SDrop` advance by `GetNextHash` at their clip end; `Idle_OUT_A` and `Put` re-insert (`Insert`, `isInside` cleared).
-- Behaviour (`hpull` track = `hi` + a scene click at 3300, 射精 at 4450, a wheel step back at 4900; `h_lv1` save, 正常位): the female clip is `Idle_IN_A` at 4850, `Pull` at 4960 and `Idle_OUT_A` at 5300.
-- Not established: `GetNextHash`'s exact order (Drop after an inside finish is inferred), `Put` (pour) setups.
+- Native evidence: the transition controller's `Update` (`AL.H.Motion`): in the `Idle_IN_A`/`Idle_OF_A` idles (and `S` variants) the wheel forward sets `WLoop`, backward the exit transition; exit transitions advance by `GetNextHash` at their clip end; `Idle_OUT_A` and the pour state return to the entry transition.
+- Behaviour (`hpull` track = `hi` + a scene click at 3300, the male finish at 4450, a wheel step back at 4900; `h_lv1` save, a `som` posture): the female clip is `Idle_IN_A` at 4850, the exit transition at 4960 and `Idle_OUT_A` at 5300.
+- Not established: `GetNextHash`'s exact order (the second exit state after the male finish is inferred), pour setups.

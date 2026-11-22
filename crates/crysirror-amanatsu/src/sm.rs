@@ -16,7 +16,7 @@
 //!
 //! SATD-amanatsu-port: SE `Is3D`/`SettingNo` positioning, the face
 //! track's blend times, look targets, tears, cheek, blink and lip-sync
-//! flags, BasePos, FluidFlow, Wet,
+//! flags, BasePos, two surface-effect tracks,
 //! TimeScale, Shake, Activation (lights, props), Control (clouds,
 //! particles), Alembic and item animator tracks are not played; the skip
 //! button is not ported.

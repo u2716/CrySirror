@@ -13,8 +13,8 @@
 //! and 5 at 100 (`Evaluation` scenarios by stage).
 //!
 //! SATD-amanatsu-port: hit objects are approximated by a box per hit mesh
-//! in its dominant bone's bind space; excitement (mune/hip/kokan gauges,
-//! the H flag), the oil gauge, pose reactions/transitions, IK, Obi fluids,
+//! in its dominant bone's bind space; excitement (three body gauges,
+//! the HScene flag), the oil gauge, pose reactions/transitions, IK, Obi effects,
 //! clothes/light/colour UI and the camera's orbit limits are not ported.
 use crate::{level::Level, unity::Unity};
 use anyhow::{Context, Result};

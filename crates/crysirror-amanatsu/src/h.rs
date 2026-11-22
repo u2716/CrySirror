@@ -216,7 +216,7 @@ impl Posture {
 }
 
 /// `PostureMainSelecter.CheckPosture` for a heroine with the male player:
-/// caress, service and the insert/special categories (no Les or M1F2).
+/// the posture categories (no Les or M1F2).
 pub fn category_allowed(category: i32) -> bool {
     (0..=4).contains(&category)
 }
