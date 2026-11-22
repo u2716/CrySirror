@@ -306,6 +306,13 @@ pub struct MakeupLayer {
 pub struct HairLook {
     pub start: [f32; 4],
     pub end: [f32; 4],
+    /// `mt_hairgloss` texture of the card's `glossId`
+    /// (`HumanHair.LoadHairGlossMask`) and `glossColor`/`glossColor2`
+    /// (`_Highlight_color01/02`).
+    pub gloss: Option<(String, String)>,
+    pub gloss_colors: [[f32; 4]; 2],
+    /// The part's meshes (the gloss band lies in their uv1).
+    pub meshes: Vec<std::sync::Arc<crysirror_unity::unity6::Mesh6>>,
 }
 
 /// `AL/skin_head` placements of a makeup texture (decompiled forward
@@ -404,6 +411,68 @@ pub fn hair_colors(mask: &ImageSurface, main: [f32; 4], start: [f32; 4], end: [f
         })
         .collect();
     ImageSurface { width: mask.width, height: mask.height, rgba }
+}
+
+/// The `AL/hair` gloss band baked into the uv0 colour texture: the gloss
+/// texture is read at `(uv1.x, uv1.y · k − 0.56 · (1.5 − 1.2 · LL) + k ·
+/// _hilightmove3)` with `k = 2.5 − 1.2 · _LightLength`; its R strokes mix
+/// `glossColor` by `R · min(a, 0.9) · sat(r + g + b)`; its B band lifts
+/// the saturation (`(c − lum) · 2 + lum`) by `B · _HairHigh2Multiply`
+/// (linear space). SATD-amanatsu-port: the
+/// view-dependent shift (normal × `_hilightmove`/`_hilightmove2`, view
+/// parallax), the fresnel weight and card `glossSize` are not applied: the
+/// band is fixed on the hair.
+pub fn bake_hair_gloss(img: &mut ImageSurface, mesh: &crysirror_unity::unity6::Mesh6, gloss: &ImageSurface, colors: [[f32; 4]; 2], ll: f32, shift: f32, high2: f32) {
+    let (Some(uv0), Some(uv1)) = (mesh.uv.first(), mesh.uv.get(1)) else { return };
+    if uv0.len() != mesh.positions.len() || uv1.len() != uv0.len() || gloss.width == 0 || gloss.height == 0 {
+        return;
+    }
+    let k = 2.5 - 1.2 * ll;
+    let off = -0.56 * (1.5 - 1.2 * ll) + k * shift;
+    let h1 = linear_color(colors[0]);
+    let a1 = h1[3].clamp(0., 0.9) * (h1[0] + h1[1] + h1[2]).clamp(0., 1.);
+    let (w, h) = (img.width as usize, img.height as usize);
+    for t in mesh.indices.chunks_exact(3) {
+        let p = [0, 1, 2].map(|i| uv0[t[i] as usize]);
+        let q = [0, 1, 2].map(|i| uv1[t[i] as usize]);
+        let d = (p[1][0] - p[0][0]) * (p[2][1] - p[0][1]) - (p[2][0] - p[0][0]) * (p[1][1] - p[0][1]);
+        if d.abs() < 1e-12 {
+            continue;
+        }
+        let lo = |k: usize| p.iter().map(|v| v[k]).fold(f32::MAX, f32::min);
+        let hi = |k: usize| p.iter().map(|v| v[k]).fold(f32::MIN, f32::max);
+        let (x0, x1) = (((lo(0) * w as f32) as i64).max(0), ((hi(0) * w as f32) as i64 + 1).min(w as i64 - 1));
+        let (y0, y1) = (((lo(1) * h as f32) as i64).max(0), ((hi(1) * h as f32) as i64 + 1).min(h as i64 - 1));
+        for py in y0..=y1 {
+            for px in x0..=x1 {
+                let (x, y) = ((px as f32 + 0.5) / w as f32, (py as f32 + 0.5) / h as f32);
+                let b1 = ((x - p[0][0]) * (p[2][1] - p[0][1]) - (p[2][0] - p[0][0]) * (y - p[0][1])) / d;
+                let b2 = ((p[1][0] - p[0][0]) * (y - p[0][1]) - (x - p[0][0]) * (p[1][1] - p[0][1])) / d;
+                let b0 = 1. - b1 - b2;
+                if b0 < -1e-3 || b1 < -1e-3 || b2 < -1e-3 {
+                    continue;
+                }
+                let v = [0, 1].map(|i| q[0][i] * b0 + q[1][i] * b1 + q[2][i] * b2);
+                let (gu, gv) = (v[0], v[1] * k + off);
+                if !(0. ..1.).contains(&gu) || !(0. ..1.).contains(&gv) {
+                    continue;
+                }
+                let sx = ((gu * gloss.width as f32) as u32).min(gloss.width - 1);
+                let sy = (((1. - gv) * gloss.height as f32) as u32).min(gloss.height - 1);
+                let j = ((sy * gloss.width + sx) * 4) as usize;
+                let (r, b) = (f32::from(gloss.rgba[j]) / 255., f32::from(gloss.rgba[j + 2]) / 255.);
+                let o = ((h - 1 - py as usize) * w + px as usize) * 4;
+                let lin: [f32; 3] = std::array::from_fn(|c| srgb_decode(f32::from(img.rgba[o + c]) / 255.));
+                let lum = 0.212673 * lin[0] + 0.715152 * lin[1] + 0.072175 * lin[2];
+                for c in 0..3 {
+                    let mut v = lin[c];
+                    v += ((v - lum) * 2. + lum - v).max(-v) * b * high2;
+                    v += (h1[c] - v) * r * a1;
+                    img.rgba[o + c] = (srgb_encode(v) * 255.).round() as u8;
+                }
+            }
+        }
+    }
 }
 
 /// Draw makeup layers into a face texture: every triangle is rasterised in
@@ -691,6 +760,7 @@ impl Human {
         let coord = coordinate(card)?;
         // Hair.
         let hair = crysirror_unity::msgpack::decode(coord.block("Hair").context("coordinate Hair")?)?;
+        let gloss = hair.get("glossId").and_then(Value::as_i64).and_then(|id| lists.row("mt_hairgloss", id)).and_then(|r| r.asset(key::MAIN_TEX_AB, key::MAIN_TEX));
         for (i, part) in hair.get("parts").map(Value::as_array).unwrap_or(&[]).iter().enumerate() {
             let Some(list) = HAIR_LISTS.get(i) else { break };
             let id = part.get("id").and_then(Value::as_i64).unwrap_or(-1);
@@ -703,7 +773,19 @@ impl Human {
                 Ok(p) => {
                     let c = color(part.get("baseColor"));
                     let outline = color(part.get("outlineColor"));
-                    let hair_look = HairLook { start: color(part.get("startColor")).unwrap_or([1.; 4]), end: color(part.get("endColor")).unwrap_or([1.; 4]) };
+                    // The part's own renderers (outline shells excepted).
+                    let mut meshes = Vec::new();
+                    for n in p.scene.nodes.iter().filter(|n| !n.name.ends_with("_line")) {
+                        for mp in n.components.iter().filter(|c| c.class_id == 137 || c.class_id == 33).filter_map(|c| c.fields.pptr("m_Mesh")) {
+                            if let Ok((f, id)) = unity.target(&p.key, mp) {
+                                if let Ok(m) = SceneAssets::mesh(&mut *unity, &f, id) {
+                                    meshes.push(m);
+                                }
+                            }
+                        }
+                    }
+                    let gloss_colors = [color(part.get("glossColor")).unwrap_or([1.; 4]), color(part.get("glossColor2")).unwrap_or([1., 1., 1., 0.])];
+                    let hair_look = HairLook { gloss: gloss.clone(), gloss_colors, meshes, start: color(part.get("startColor")).unwrap_or([1.; 4]), end: color(part.get("endColor")).unwrap_or([1.; 4]) };
                     looks.insert(p.key.clone(), PartLook { shaders: &["AL/hair"], colors: c.into_iter().collect(), outline, hair: Some(std::sync::Arc::new(hair_look)), ..Default::default() });
                     let r = scene.graft(&p.scene, &p.key, hair_parent);
                     scene.alias_bones(r, head_root);
@@ -935,7 +1017,14 @@ impl CharaAssets<'_> {
             let (f, id) = self.unity.target(if m.file.is_empty() { file } else { &m.file }, mask.texture)?;
             let mask = self.mask(&f, id)?;
             let main = look.colors.first().copied().unwrap_or([1.; 4]);
-            let img = hair_colors(&mask, main, hair.start, hair.end);
+            let mut img = hair_colors(&mask, main, hair.start, hair.end);
+            if let Some(g) = hair.gloss.as_ref().map(|g| self.mask_named(g)).transpose()?.flatten() {
+                let ll = m.floats.get("_LightLength").copied().unwrap_or(0.03);
+                let shift = m.floats.get("_hilightmove3").copied().unwrap_or(0.);
+                for mesh in &hair.meshes {
+                    bake_hair_gloss(&mut img, mesh, &g, hair.gloss_colors, ll, shift, m.floats.get("_HairHigh2Multiply").copied().unwrap_or(0.25));
+                }
+            }
             o.base_texture = Some((format!("{file}:{}:hair", m.name), img));
             o.base_color = Some([k, k, k, 1.]);
         } else if let Some(c) = look.colors.first() {
