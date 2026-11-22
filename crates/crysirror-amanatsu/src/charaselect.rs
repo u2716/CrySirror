@@ -11,7 +11,7 @@
 use crate::level::Level;
 use crysirror_unity::{managed::Value, scene6::Scene6};
 
-fn node_of(scene: &Scene6, path_id: i64) -> Option<usize> {
+pub(crate) fn node_of(scene: &Scene6, path_id: i64) -> Option<usize> {
     scene.by_game_object.get(&path_id).copied().or_else(|| scene.nodes.iter().position(|n| n.transform == path_id || n.components.iter().any(|c| c.path_id == path_id)))
 }
 
@@ -34,7 +34,7 @@ fn descend(scene: &Scene6, mut node: usize, path: &[String]) -> Option<usize> {
 }
 
 /// One grid: the item template and where clones go.
-struct Grid {
+pub(crate) struct Grid {
     template: usize,
     content: usize,
     columns: usize,
@@ -48,14 +48,20 @@ struct Grid {
     check: Option<Vec<String>>,
     /// Rows the viewport shows (SATD-amanatsu-port: no scrolling).
     rows: usize,
-    items: Vec<(usize, String)>,
+    pub(crate) items: Vec<(usize, String)>,
 }
 
 impl Grid {
-    fn find(level: &Level, ctrl_class: &str, list_ctrl: Option<i64>) -> Option<Self> {
+    pub(crate) fn find(level: &Level, ctrl_class: &str, list_ctrl: Option<i64>) -> Option<Self> {
         let scene = &level.scene;
         let ctrl = scene.nodes.iter().flat_map(|n| &n.components).find(|c| c.script == ctrl_class && list_ctrl.is_none_or(|id| c.path_id == id))?;
         let template = ctrl.fields.pptr("_clone").and_then(|p| node_of(scene, p.path_id))?;
+        Self::from_template(level, template)
+    }
+
+    /// The grid of the `LoopGridView` whose item prefab is `template`.
+    pub(crate) fn from_template(level: &Level, template: usize) -> Option<Self> {
+        let scene = &level.scene;
         let content = scene.nodes[template].parent?;
         let grid = scene.nodes.iter().flat_map(|n| &n.components).find(|c| c.script.ends_with("LoopGridView") && c.fields.array("mItemPrefabDataList").is_some_and(|l| l.iter().any(|e| matches!(e, Value::Struct(s) if s.pptr("mItemPrefab").and_then(|p| node_of(scene, p.path_id)) == Some(template)))));
         let v2 = |name: &str, d: [f32; 2]| grid.and_then(|g| g.fields.fields(name)).map_or(d, |s| [s.float("x").unwrap_or(d[0] as f64) as f32, s.float("y").unwrap_or(d[1] as f64) as f32]);
@@ -94,6 +100,12 @@ impl Grid {
             rows: 0,
             items: Vec::new(),
         };
+        // A zero `mItemSize` takes the item prefab's own size.
+        if g.size[0] <= 0. || g.size[1] <= 0. {
+            if let Some(r) = scene.nodes[template].xform.rect {
+                g.size = r.size_delta;
+            }
+        }
         g.rows = usize::MAX;
         if viewport > 0. {
             g.rows = (((viewport + g.padding[1]) / (g.size[1] + g.padding[1])).floor() as usize).max(1);
@@ -102,13 +114,20 @@ impl Grid {
     }
 
     /// Clone an item for `card` showing `image` (an uploaded asset).
-    fn add(&mut self, level: &mut Level, card: &str, image: Option<String>) -> usize {
+    pub(crate) fn describe(&self) -> String {
+        format!("{} cols × {} rows, item {:?} padding {:?}", self.columns, self.rows, self.size, self.padding)
+    }
+
+    pub(crate) fn add(&mut self, level: &mut Level, card: &str, image: Option<String>) -> usize {
         let i = self.items.len();
         let node = level.scene.clone_subtree(self.template, self.content);
         level.set_active(node, true);
         let (col, row) = (i % self.columns, i / self.columns);
         let st = level.states.entry(node).or_default();
-        // LoopGridView lays items from the content's top-left corner.
+        // LoopGridView lays items from the content's top-left corner
+        // (`AdjustAnchor`: item anchors at the top left).
+        st.anchor_min = Some([0., 1.]);
+        st.anchor_max = Some([0., 1.]);
         st.anchored_position = Some([col as f32 * (self.size[0] + self.padding[0]) + self.size[0] / 2., -(row as f32 * (self.size[1] + self.padding[1])) - self.size[1] / 2.]);
         if let (Some(raw), Some(img)) = (&self.raw, image) {
             if let Some(r) = descend(&level.scene, node, raw) {
@@ -127,7 +146,7 @@ impl Grid {
         node
     }
 
-    fn item_of(&self, level: &Level, mut node: usize) -> Option<usize> {
+    pub(crate) fn item_of(&self, level: &Level, mut node: usize) -> Option<usize> {
         loop {
             if let Some(i) = self.items.iter().position(|(n, _)| *n == node) {
                 return Some(i);
@@ -136,7 +155,7 @@ impl Grid {
         }
     }
 
-    fn highlight(&self, level: &mut Level, selected: Option<usize>) {
+    pub(crate) fn highlight(&self, level: &mut Level, selected: Option<usize>) {
         for (i, (n, _)) in self.items.iter().enumerate() {
             for p in [&self.highlight, &self.check].into_iter().flatten() {
                 if let Some(h) = descend(&level.scene, *n, p) {

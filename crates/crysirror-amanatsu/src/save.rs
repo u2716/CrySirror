@@ -389,6 +389,48 @@ pub fn file_name(name: &str, auto: bool) -> String {
     format!("{}{name}.sav", if auto { "a_" } else { "" })
 }
 
+/// `AL.User.GlobalData` (`UserData/save/global.dat`, version tolerant):
+/// seen help pages, flags (the short movie ids played, which unlock the
+/// `Memory` scene) and the tutorial flag.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct GlobalData {
+    pub help_states: std::collections::BTreeSet<i32>,
+    pub flags: std::collections::BTreeSet<i32>,
+    pub tutorial_seen: bool,
+}
+
+/// A `HashSet<int>`: count (−1 null) then the values.
+fn int_set(b: &[u8]) -> Result<std::collections::BTreeSet<i32>> {
+    let Some(raw) = Reader::new(b).array(4)? else { return Ok(Default::default()) };
+    Ok(raw.chunks_exact(4).map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect())
+}
+
+impl GlobalData {
+    pub const FILE: &'static str = "global.dat";
+
+    pub fn parse(b: &[u8]) -> Result<Self> {
+        let m = Reader::new(b).tolerant()?.context("null GlobalData")?;
+        Ok(Self { help_states: int_set(slot(&m, 0))?, flags: int_set(slot(&m, 1))?, tutorial_seen: !slot(&m, 2).is_empty() && boolean(slot(&m, 2))? })
+    }
+
+    pub fn write(&self) -> Result<Vec<u8>> {
+        let set = |s: &std::collections::BTreeSet<i32>| {
+            member(|w| {
+                let raw: Vec<u8> = s.iter().flat_map(|v| v.to_le_bytes()).collect();
+                w.array(Some(&raw), 4);
+            })
+        };
+        let mut w = Writer::default();
+        w.tolerant(&[set(&self.help_states), set(&self.flags), member(|w| w.bool(self.tutorial_seen))])?;
+        Ok(w.out)
+    }
+
+    /// `AddShortMovie`: whether the id was new.
+    pub fn add_short_movie(&mut self, id: i32) -> bool {
+        self.flags.insert(id)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -412,5 +454,17 @@ mod tests {
         assert_eq!(SaveFile::decode(&bytes).unwrap(), file);
         assert_eq!(file_name("x", true), "a_x.sav");
         assert!(SaveFile::decode(&bytes[..bytes.len() - 1]).is_err());
+    }
+
+    #[test]
+    fn global_data_round_trip() {
+        let mut g = GlobalData::default();
+        assert!(g.add_short_movie(5));
+        assert!(!g.add_short_movie(5));
+        g.help_states.insert(2);
+        g.tutorial_seen = true;
+        let b = g.write().unwrap();
+        assert_eq!(b[0], 3);
+        assert_eq!(GlobalData::parse(&b).unwrap(), g);
     }
 }

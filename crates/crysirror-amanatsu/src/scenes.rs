@@ -130,7 +130,7 @@ fn refs(level: &Level, fields: &crysirror_unity::managed::Fields, name: &str) ->
 }
 
 impl Title {
-    pub fn new(level: &mut Level, ids: SoundIds) -> Self {
+    pub fn new(level: &mut Level, ids: SoundIds, memories: bool) -> Self {
         let f = level.scene.nodes.iter().flat_map(|n| &n.components).find(|c| c.script == "AL.Title.TitleScene").map(|c| c.fields.clone()).unwrap_or_default();
         let ptr = |name: &str| f.pptr(name).filter(|p| !p.is_null()).and_then(|p| level.owner(p.path_id));
         let menu_layout = ptr("_selectMenuAnimation");
@@ -161,10 +161,9 @@ impl Title {
         // Start: Voice.StopAll, Sound.Stop, then PlayBGMAsync(_bgmID.Title).
         level.sounds.push(Call::StopAll);
         level.sounds.push(Call::Bgm(ids.title_bgm));
-        // SATD-amanatsu-port: Memories shows only with unlocked memories in
-        // the save data (`Game` save list); saves are not read yet.
+        // Memories shows once a short movie was played (`GlobalData.Flags`).
         if let Some(Some(m)) = t.menu_objects.get(6) {
-            level.set_active(*m, false);
+            level.set_active(*m, memories);
         }
         // SATD-amanatsu-port: the first-run language dialog
         // (`LanguageDLG`, `Localize.Translate`) stays hidden.

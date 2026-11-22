@@ -2171,3 +2171,53 @@ fn behaviours_with_field() {
         }
     }
 }
+
+/// A block of a card's first coordinate (`AMANATSU_CARD`,
+/// `AMANATSU_BLOCK`, default `Hair`) as a MessagePack tree.
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn coordinate_block() {
+    let mut u = unity();
+    let path = std::env::var("AMANATSU_CARD").unwrap_or_else(|_| "DefaultData/0/chara/female/AL_F_00.png".into());
+    let card = crysirror_amanatsu::card::Card::parse(&u.read_all(&path).unwrap()).unwrap();
+    let coords = crysirror_unity::msgpack::decode(card.block("Coordinate").unwrap()).unwrap();
+    let first = coords.as_array().first().and_then(crysirror_unity::msgpack::Value::as_bytes).unwrap().to_vec();
+    let coord = crysirror_amanatsu::card::Card::container(&first).unwrap().1;
+    let block = std::env::var("AMANATSU_BLOCK").unwrap_or_else(|_| "Hair".into());
+    println!("{:?}", crysirror_unity::msgpack::decode(coord.block(&block).unwrap()).unwrap());
+}
+
+/// The hierarchy of a build scene (`AMANATSU_SCENE`) with scripts.
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn build_scene_tree() {
+    let mut u = unity();
+    let name = std::env::var("AMANATSU_SCENE").unwrap_or_else(|_| "Memory".into());
+    let index = u.build_scenes().unwrap().iter().position(|s| *s == name).unwrap();
+    let level = crysirror_amanatsu::level::Level::load(&mut u, &format!("level{index}"), &name).unwrap();
+    let want = std::env::var("AMANATSU_SCRIPT").ok();
+    for (i, n) in level.scene.nodes.iter().enumerate() {
+        let scripts: Vec<&str> = n.components.iter().filter(|c| !c.script.is_empty()).map(|c| c.script.as_str()).collect();
+        println!("{}{} {}", if n.active { "" } else { "(inactive) " }, level.scene.path(i), scripts.join(","));
+        for c in n.components.iter().filter(|c| want.as_deref().is_some_and(|w| c.script.ends_with(w))) {
+            for (k, v) in &c.fields.0 {
+                println!("    {k}: {}", format!("{v:?}").chars().take(300).collect::<String>());
+            }
+        }
+    }
+}
+
+/// A TextAsset's bytes (`AMANATSU_BUNDLE`, `AMANATSU_ASSET`) as hex.
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn text_asset_hex() {
+    let mut u = unity();
+    let (k, id) = u.bundle_asset(&std::env::var("AMANATSU_BUNDLE").unwrap(), &std::env::var("AMANATSU_ASSET").unwrap(), 49).unwrap().unwrap();
+    let b = u.text_asset(&k, id).unwrap();
+    println!("{} bytes", b.len());
+    for (i, chunk) in b.chunks(32).take(24).enumerate() {
+        let hex: Vec<String> = chunk.iter().map(|x| format!("{x:02x}")).collect();
+        let text: String = chunk.iter().map(|&x| if (32..127).contains(&x) { x as char } else { '.' }).collect();
+        println!("{:04x} {} {}", i * 32, hex.join(" "), text);
+    }
+}

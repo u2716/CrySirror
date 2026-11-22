@@ -19,6 +19,7 @@ pub mod hvoice;
 pub mod hud;
 pub mod level;
 pub mod map;
+pub mod memory;
 pub mod oil;
 pub mod params;
 pub mod save;

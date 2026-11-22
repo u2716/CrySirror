@@ -57,6 +57,8 @@ pub enum Controller {
     Logo(scenes::Logo),
     Title(scenes::Title),
     ActionMap(ActionMap),
+    /// `AL.Memory` (回想).
+    Memory(Box<crate::memory::Memory>),
     /// A scene whose controller is not ported: shown as laid out.
     Static,
 }
@@ -460,6 +462,13 @@ pub struct Game {
     map_entities: Vec<(u32, VfsPath)>,
     /// Light entities of the loaded map.
     map_lights: Vec<u32>,
+    /// `AL.User.GlobalData` (`global.dat`): unlocked memories.
+    global: crate::save::GlobalData,
+    global_loaded: bool,
+    global_dirty: bool,
+    /// A short movie started from the `Memory` scene (its time zone):
+    /// the scene returns after it.
+    memory_play: Option<i32>,
     /// The ADV event CG in place (`EventCGSetting`).
     event_cg: Option<EventCgRun>,
     /// `CharaClothState` of ADV actors not spawned with their variants yet:
@@ -541,7 +550,7 @@ impl Game {
         self.controller = match name {
             "Init" => Controller::Init,
             "Logo" => Controller::Logo(scenes::Logo::new(&level)),
-            "Title" => Controller::Title(scenes::Title::new(&mut level, self.sound_ids)),
+            "Title" => Controller::Title(scenes::Title::new(&mut level, self.sound_ids, !self.global.flags.is_empty())),
             "ActionMap" => {
                 // `Initialize`: the sub fade canvas starts transparent, the
                 // map list is read and `MapSelectUI` opens.
@@ -936,6 +945,36 @@ impl Game {
         }
         self.log.push(format!("H character {card_path}: {controller} {} clips", clips.len()));
         Ok(ids)
+    }
+
+    /// `Memory` scene start: the memory list with thumbnails and the
+    /// heroine cards.
+    fn memory_scene(&mut self, host: &mut dyn HostServices, client: ClientId) -> Result<()> {
+        if self.maps.is_empty() {
+            self.maps = map::map_infos(&mut self.unity)?;
+        }
+        let titles = crate::memory::titles(&mut self.unity).unwrap_or_default();
+        let mut entries = Vec::new();
+        for (i, t) in crate::memory::thumbnails(&mut self.unity)?.into_iter().enumerate() {
+            let image = self
+                .unity
+                .bundle_asset(&format!("lib/{}", t.bundle), &t.asset, crysirror_unity::class_id::SPRITE)
+                .ok()
+                .flatten()
+                .and_then(|(k, id)| self.unity.sprite_image(&k, id).ok().flatten())
+                .and_then(|img| host.upload_rgba(client, 0x5A00_0000 + i as u32, img.width, img.height, &img.rgba).ok())
+                .map(|p| p.relative().to_owned());
+            let unlocked = self.global.flags.contains(&t.movie);
+            entries.push(crate::memory::Entry { title: titles.get(&t.movie).cloned().unwrap_or_default(), unlocked, image, thumbnail: t });
+        }
+        let dir = "DefaultData/0/chara/female";
+        let cards: Vec<String> = self.unity.list_dir(dir).into_iter().filter(|n| n.ends_with(".png")).map(|n| format!("{dir}/{n}")).collect();
+        let cards: Vec<(String, Option<String>)> = cards.into_iter().map(|c| (c.clone(), self.thumbnail(host, client, &c))).collect();
+        crate::memory::reset_object_ctrls(&mut self.level);
+        let memory = crate::memory::Memory::new(&mut self.level, entries, &cards);
+        self.log.push(format!("Memory: {}", memory.describe()));
+        self.controller = Controller::Memory(Box::new(memory));
+        Ok(())
     }
 
     /// `CustomScene` start: the default heroine (`HumanData` preset) in
@@ -3034,7 +3073,15 @@ impl Game {
                 return;
             }
         };
-        let zone = if let Controller::ActionMap(m) = &self.controller { m.time_zone } else { 0 };
+        // `GlobalData.AddShortMovie`: the memory unlocks.
+        if self.global.add_short_movie(id) {
+            self.global_dirty = true;
+        }
+        let zone = match (&self.controller, self.memory_play) {
+            (_, Some(zone)) => zone,
+            (Controller::ActionMap(m), None) => m.time_zone,
+            _ => 0,
+        };
         let map = self.movie_maps.get(&id).copied().unwrap_or_else(|| self.current_map());
         self.log.push(format!("ShortMovie {id} on map {map}: {:.1} s", movie.duration));
         self.movie = Some(MoviePlay { movie, card: card.to_owned(), entering: true, start_ms: now, base: None, cameras: Default::default(), entities: Vec::new(), heroine_clip: None, fades: Vec::new(), ses: Vec::new(), faces: Vec::new(), clothes: Vec::new(), personality: 0, after });
@@ -3181,7 +3228,11 @@ impl Game {
             if !self.fade.fading(now) {
                 self.fade.start(now, false, 0.3);
             }
-            if let Err(e) = self.night_talk(&m.card, m.after, &[]) {
+            if self.memory_play.take().is_some() {
+                // `MovieManager`: back to the memory list.
+                self.fade.start(now, true, self.fade_seconds);
+                self.pending = Some((scenes::scene_id::MEMORY, now));
+            } else if let Err(e) = self.night_talk(&m.card, m.after, &[]) {
                 self.log.push(format!("ShortMovie ADV: {e:#}"));
             }
         }
@@ -3488,6 +3539,10 @@ impl AmanatsuVm {
             map_lights: Vec::new(),
             particle_textures: std::collections::HashMap::new(),
             event_cg: None,
+            global: Default::default(),
+            global_loaded: false,
+            global_dirty: false,
+            memory_play: None,
             adv_cloth: std::collections::HashMap::new(),
             heads: std::collections::HashMap::new(),
             chara_roots: std::collections::HashMap::new(),
@@ -3534,6 +3589,29 @@ impl AmanatsuVm {
             game.config_loaded = true;
             game.load_config(host);
         }
+        if !game.global_loaded {
+            game.global_loaded = true;
+            let path = VfsPath::new(crysirror_core::path::Mount::Save, &format!("user/{}", crate::save::GlobalData::FILE))?;
+            if let Some(b) = host.storage(game.client_id).ok().and_then(|s| s.read(&path).ok()) {
+                match crate::save::GlobalData::parse(&b) {
+                    Ok(g) => game.global = g,
+                    Err(e) => game.log.push(format!("GlobalData: {e:#}")),
+                }
+            }
+        }
+        if game.global_dirty {
+            // `GlobalData.Save`.
+            game.global_dirty = false;
+            let path = VfsPath::new(crysirror_core::path::Mount::Save, &format!("user/{}", crate::save::GlobalData::FILE))?;
+            let written = game.global.write().and_then(|b| {
+                let storage = host.storage(game.client_id)?;
+                let _ = storage.create_directory(&VfsPath::new(crysirror_core::path::Mount::Save, "user")?);
+                Ok(storage.write_atomic(&path, &b)?)
+            });
+            if let Err(e) = written {
+                game.log.push(format!("GlobalData.Save: {e:#}"));
+            }
+        }
         let dt = (game.now.saturating_sub(game.last)).min(100) as f32 / 1000.;
         game.last = game.now;
         let now = game.now;
@@ -3546,6 +3624,9 @@ impl AmanatsuVm {
                 game.open(name)?;
                 if name == "CustomScene" {
                     game.custom_scene(host, self.client)?;
+                }
+                if name == "Memory" {
+                    game.memory_scene(host, self.client)?;
                 }
             }
         }
@@ -3766,7 +3847,7 @@ impl AmanatsuVm {
             f1: input.buttons_pressed & b::F1 != 0,
         };
         let mut request = match &mut game.controller {
-            Controller::Init | Controller::Static => scenes::Request::None,
+            Controller::Init | Controller::Static | Controller::Memory(_) => scenes::Request::None,
             Controller::Logo(l) => l.step(&mut game.level, &scene_input),
             Controller::Title(t) => t.step(&mut game.level, &scene_input),
             Controller::ActionMap(m) => {
@@ -3997,6 +4078,21 @@ impl AmanatsuVm {
                 }
                 let mut l = std::mem::take(&mut level.log);
                 game.log.append(&mut l);
+            } else if let Controller::Memory(m) = &mut game.controller {
+                game.log.push(format!("click {}", game.level.scene.path(button)));
+                match m.click(&mut game.level, button) {
+                    crate::memory::Outcome::Back => request = scenes::Request::Load(scenes::scene_id::TITLE),
+                    crate::memory::Outcome::Play { movie, zone, card } => {
+                        // `PlayShortMove`: the list hides behind the movie.
+                        if let Some(c) = game.level.find("Canvas") {
+                            game.level.set_active(c, false);
+                        }
+                        game.memory_play = Some(zone);
+                        game.log.push(format!("Memory: play {movie} (zone {zone}) with {card}"));
+                        game.start_movie(&card, movie, Vec::new(), now);
+                    }
+                    crate::memory::Outcome::None => {}
+                }
             } else {
                 let calls = game.level.on_click(button);
                 game.log.push(format!("click {}", game.level.scene.path(button)));
