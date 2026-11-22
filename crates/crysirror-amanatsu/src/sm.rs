@@ -10,11 +10,13 @@
 //!
 //! `SETrack` (`SEClip._info` bundle/asset) sound effects are played at
 //! their clip starts; `FaceTrack` (`FaceClip._info`, a table by
-//! personality) sets the heroine's face at its clip starts.
+//! personality) sets the heroine's face and `ClothStateTrack`
+//! (`ClothStateClip._info` `TopType`…`ShoesType`: 0 dressed, 1 half, 2
+//! off) her clothes at their clip starts.
 //!
 //! SATD-amanatsu-port: SE `Is3D`/`SettingNo` positioning, the face
 //! track's blend times, look targets, tears, cheek, blink and lip-sync
-//! flags, ClothState, BasePos, FluidFlow, Wet,
+//! flags, BasePos, FluidFlow, Wet,
 //! TimeScale, Shake, Activation (lights, props), Control (clouds,
 //! particles), Alembic and item animator tracks are not played; the skip
 //! button is not ported.
@@ -71,6 +73,8 @@ pub struct Movie {
     pub ses: Vec<(f64, String, String)>,
     /// `FaceClip` starts with their faces by personality.
     pub faces: Vec<(f64, Vec<(i64, MovieFace)>)>,
+    /// `ClothStateClip` starts: state by part list (`co_top` … `co_shoes`).
+    pub clothes: Vec<(f64, Vec<(&'static str, i64)>)>,
     pub duration: f64,
 }
 
@@ -123,6 +127,12 @@ impl Movie {
                             .collect();
                         movie.faces.push((c.start, table));
                     }
+                    "AL.TimeLine.ClothStateTrack" => {
+                        if let Some(info) = fields.fields("_info") {
+                            let parts = [("TopType", "co_top"), ("BotType", "co_bot"), ("BraType", "co_bra"), ("ShortsType", "co_shorts"), ("GlovesType", "co_gloves"), ("PanstType", "co_panst"), ("SocksType", "co_socks"), ("ShoesType", "co_shoes")];
+                            movie.clothes.push((c.start, parts.iter().filter_map(|(k, list)| info.int(k).map(|v| (*list, v))).collect()));
+                        }
+                    }
                     "AL.TimeLine.SceneFadeTrack" => {
                         let info = fields.fields("_info");
                         let color = info.and_then(|i| i.fields("Color")).map_or([0.; 3], |c| ["r", "g", "b"].map(|k| c.float(k).unwrap_or(0.) as f32));
@@ -138,6 +148,7 @@ impl Movie {
         movie.fades.sort_by(|a, b| a.start.total_cmp(&b.start));
         movie.ses.sort_by(|a, b| a.0.total_cmp(&b.0));
         movie.faces.sort_by(|a, b| a.0.total_cmp(&b.0));
+        movie.clothes.sort_by(|a, b| a.0.total_cmp(&b.0));
         Ok(movie)
     }
 

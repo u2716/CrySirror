@@ -152,6 +152,8 @@ struct MoviePlay {
     ses: Vec<(f64, String, String)>,
     /// Face clips still to start.
     faces: Vec<(f64, Vec<(i64, crate::sm::MovieFace)>)>,
+    /// Cloth state clips still to start.
+    clothes: Vec<(f64, Vec<(&'static str, i64)>)>,
     personality: i64,
     /// The ADV after the movie (`endADVAsset`).
     after: Vec<String>,
@@ -2704,7 +2706,7 @@ impl Game {
         let zone = if let Controller::ActionMap(m) = &self.controller { m.time_zone } else { 0 };
         let map = self.movie_maps.get(&id).copied().unwrap_or_else(|| self.current_map());
         self.log.push(format!("ShortMovie {id} on map {map}: {:.1} s", movie.duration));
-        self.movie = Some(MoviePlay { movie, card: card.to_owned(), entering: true, start_ms: now, base: None, cameras: Default::default(), entities: Vec::new(), heroine_clip: None, fades: Vec::new(), ses: Vec::new(), faces: Vec::new(), personality: 0, after });
+        self.movie = Some(MoviePlay { movie, card: card.to_owned(), entering: true, start_ms: now, base: None, cameras: Default::default(), entities: Vec::new(), heroine_clip: None, fades: Vec::new(), ses: Vec::new(), faces: Vec::new(), clothes: Vec::new(), personality: 0, after });
         self.fade.start(now, true, self.fade_seconds);
         self.pending_map = Some((map, zone));
     }
@@ -2749,6 +2751,7 @@ impl Game {
             }
             m.ses = m.movie.ses.clone();
             m.faces = m.movie.faces.clone();
+            m.clothes = m.movie.clothes.clone();
             m.personality = personality;
         }
         if !self.expressions.contains_key(&personality) {
@@ -2789,6 +2792,27 @@ impl Game {
         if let Some(f) = face {
             let card = m.card.clone();
             self.movie_face(&card, f);
+        }
+        let m = self.movie.as_mut().unwrap();
+        let mut cloth = None;
+        while m.clothes.first().is_some_and(|c| c.0 <= t) {
+            cloth = Some(m.clothes.remove(0).1);
+        }
+        if let Some(parts) = cloth {
+            let card = m.card.clone();
+            // 0 dressed, 1 half (the second variant), 2 off.
+            if let Some(c) = self.cloth.get_mut(&card) {
+                for (p, st) in c.parts.iter().zip(c.states.iter_mut()) {
+                    if let Some((_, v)) = parts.iter().find(|(l, _)| *l == p.list) {
+                        *st = match v {
+                            0 => 0,
+                            1 if p.states() > 2 => 1,
+                            _ => p.states() - 1,
+                        };
+                    }
+                }
+            }
+            self.refresh_cloth(&card);
         }
         let m = self.movie.as_mut().unwrap();
         // The camera of the active (or next) camera clip, relative to the
