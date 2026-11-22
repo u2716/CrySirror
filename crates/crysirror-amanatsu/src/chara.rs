@@ -435,6 +435,10 @@ pub struct Human {
     pub clothes: Vec<ClothPart>,
     /// Accessory part root names (exported unique, `acs{slot}#root`).
     pub accessories: Vec<String>,
+    /// The renderer nodes of the grafted head with its hair
+    /// (`CharaVisible` `Head`; the head root is merged into the body's
+    /// bones on export).
+    pub head: Vec<String>,
     pub log: Vec<String>,
 }
 
@@ -726,7 +730,15 @@ impl Human {
             n.active = false;
         }
         let height = body_data.get("shapeValueBody").map(Value::as_array).and_then(|a| a.first()).and_then(Value::as_f32).unwrap_or(0.5);
-        Ok(Self { key: body.key, female, height, scene, looks, clothes: clothes_parts, accessories, log })
+        let mut head = Vec::new();
+        let mut stack = vec![head_root];
+        while let Some(n) = stack.pop() {
+            if scene.nodes[n].components.iter().any(|c| matches!(c.class_id, 23 | 137)) {
+                head.push(scene.nodes[n].name.clone());
+            }
+            stack.extend(&scene.nodes[n].children);
+        }
+        Ok(Self { key: body.key, female, height, scene, looks, clothes: clothes_parts, accessories, head, log })
     }
 }
 

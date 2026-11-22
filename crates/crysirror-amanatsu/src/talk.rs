@@ -117,6 +117,8 @@ pub enum Step {
     /// An expression preset id.
     Expression(i64),
     StopVoice,
+    /// ADV character/event commands (`adv::Effect::EventCg` … `ClothState`).
+    Chara(adv::Effect),
     End,
 }
 
@@ -279,6 +281,7 @@ impl Talk {
                     adv::Effect::Face { values, .. } => steps.push(Step::Face(values)),
                     adv::Effect::Expression { id, .. } => steps.push(Step::Expression(id)),
                     adv::Effect::Fade { .. } => {}
+                    e => steps.push(Step::Chara(e)),
                 }
             }
             match &w {

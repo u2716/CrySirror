@@ -1906,7 +1906,8 @@ fn find_game_object() {
     let want = std::env::var("AMANATSU_FIND").unwrap();
     for key in u.bundle_files().into_iter().filter(|k| !k.ends_with(".resS")) {
         let Ok(file) = u.file(&key) else { continue };
-        let ids: Vec<i64> = file.objects.iter().filter(|o| o.class_id == 1).map(|o| o.path_id).collect();
+        let class: i32 = std::env::var("AMANATSU_CLASS").ok().and_then(|c| c.parse().ok()).unwrap_or(1);
+        let ids: Vec<i64> = file.objects.iter().filter(|o| o.class_id == class).map(|o| o.path_id).collect();
         for id in ids {
             let Ok(f) = u.decode(&key, id) else { continue };
             let name = f.string("m_Name").unwrap_or("");
@@ -1984,6 +1985,9 @@ fn adv_census() {
         let Ok(cmds) = crysirror_amanatsu::talk::load_scenario(&mut u, &index, name) else { continue };
         for c in cmds {
             let cname = c.name();
+            if std::env::var("AMANATSU_SCENARIO").ok().as_deref() == Some(name.as_str()) {
+                println!("{name}: {cname} {:?}", c.args);
+            }
             if want.as_deref() == Some(cname.as_str()) && shown < 12 {
                 shown += 1;
                 println!("{name}: {cname} {:?}", c.args);
@@ -2016,6 +2020,11 @@ fn tables_with_value() {
                 if let Some(r) = t.rows.iter().find(|r| r.iter().any(|c| *c == want)) {
                     let name = u.decode(&key, id).ok().and_then(|f| f.string("m_Name").map(str::to_owned)).unwrap_or_default();
                     println!("{key} {name} keys {:?} row {:?}", t.keys, r);
+                    if std::env::var("AMANATSU_ALLROWS").is_ok() {
+                        for r in &t.rows {
+                            println!("  {r:?}");
+                        }
+                    }
                 }
             }
         }
@@ -2106,4 +2115,31 @@ fn particle_dump() {
     let (_, _, pos) = crysirror_unity::world6::world_matrix(&scene, i).to_scale_rotation_translation();
     out.push_str(&format!("world position {pos:?}\n"));
     std::fs::write(std::env::var("AMANATSU_DUMP").unwrap_or("/dev/stdout".into()), out).unwrap();
+}
+
+/// The nodes of a root (`AMANATSU_KEY`, `AMANATSU_ROOTNAME`) with local
+/// transforms and their script components' fields.
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn prefab_dump() {
+    let mut u = unity();
+    let key = std::env::var("AMANATSU_KEY").unwrap();
+    let want = std::env::var("AMANATSU_ROOTNAME").unwrap();
+    let scene = u.scene(&key).unwrap();
+    for (i, n) in scene.nodes.iter().enumerate() {
+        let mut r = i;
+        while let Some(p) = scene.nodes[r].parent {
+            r = p;
+        }
+        if scene.nodes[r].name != want {
+            continue;
+        }
+        println!("{} {:?}", scene.path(i), n.xform);
+        for c in n.components.iter().filter(|c| !c.script.is_empty()) {
+            println!("  {}", c.script);
+            for (k, v) in &c.fields.0 {
+                println!("    {k}: {}", format!("{v:?}").chars().take(300).collect::<String>());
+            }
+        }
+    }
 }

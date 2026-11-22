@@ -100,3 +100,28 @@ pub fn short_movie_maps(unity: &mut crate::unity::Unity) -> Result<std::collecti
     let (Some(i), Some(m)) = (col(5), col(103)) else { anyhow::bail!("al_short_movie columns {:?}", t.keys) };
     Ok(t.rows.iter().filter_map(|r| Some((r.get(i)?.parse().ok()?, r.get(m)?.parse().ok()?))).collect())
 }
+
+/// `ADV.Commands.Chara.Motion`: a motion id of the `ani/lis/m` lists
+/// (`anim_f_{personality:03}` for heroines, `anim_m` for the player;
+/// every bundle's `{list}[…]` table) → the state name of the character's
+/// motion controller (`TableData.Key` 5 ID, 68 state).
+pub fn motion_state(unity: &mut crate::unity::Unity, list: &str, id: i32) -> Result<Option<String>> {
+    let keys: Vec<String> = unity.bundle_files().into_iter().filter(|k| k.starts_with("bundle:lib/ani/lis/m/") && !k.ends_with(".resS")).collect();
+    for key in keys {
+        let file = unity.file(&key)?;
+        let texts: Vec<i64> = file.objects.iter().filter(|o| o.class_id == crysirror_unity::class_id::TEXT_ASSET).map(|o| o.path_id).collect();
+        for tid in texts {
+            let name = unity.decode(&key, tid)?.string("m_Name").unwrap_or("").to_owned();
+            if !name.strip_prefix(list).is_some_and(|r| r.starts_with('[')) {
+                continue;
+            }
+            let t = Table::parse(&unity.text_asset(&key, tid)?).with_context(|| format!("motion list {name}"))?;
+            let col = |k: i32| t.keys.iter().position(|&c| c == k);
+            let (Some(i), Some(s)) = (col(5), col(68)) else { continue };
+            if let Some(r) = t.rows.iter().find(|r| r.get(i).and_then(|v| v.parse::<i32>().ok()) == Some(id)) {
+                return Ok(r.get(s).filter(|v| !v.is_empty()).cloned());
+            }
+        }
+    }
+    Ok(None)
+}

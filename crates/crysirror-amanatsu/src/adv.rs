@@ -215,6 +215,21 @@ pub enum Effect {
     Face { actor: String, values: [Option<f32>; 6] },
     /// `SceneFade`/`Fade`: covering (`in`) or revealing over seconds.
     Fade { cover: bool, seconds: f32, color: Option<String> },
+    /// `EventCGSetting` (bundle, prefab): the event's character root
+    /// (`chaPos`) and camera (`camPos`).
+    EventCg { bundle: String, asset: String },
+    /// `EventCGRelease`: the camera returns.
+    EventCgRelease,
+    /// `CharaStandFind` [actor, "EventCG", prefab, child]: the actor stands
+    /// at the event child.
+    StandFind { actor: String, child: String },
+    /// `CharaMotion` [actor, motion id].
+    Motion { actor: String, id: i32 },
+    /// `CharaVisible` [actor, `All`/`Head`/`Son`, flag]; `CharaDitherIn`
+    /// shows and `CharaDitherOut` hides the whole actor.
+    Visible { actor: String, part: String, on: bool },
+    /// `CharaClothState` [actor, part, state] (0 dressed, 1 half, 2 off).
+    ClothState { actor: String, part: String, state: usize },
     /// A command whose semantics are not ported (name, arguments).
     Unported(String, Vec<String>),
 }
@@ -366,6 +381,15 @@ impl Program {
                     return Wait::End;
                 }
                 "TextClear" => {}
+                "EventCGSetting" => effects.push(Effect::EventCg { bundle: a(0), asset: a(1) }),
+                "EventCGRelease" => effects.push(Effect::EventCgRelease),
+                "CharaStandFind" if a(1) == "EventCG" => effects.push(Effect::StandFind { actor: a(0), child: a(3) }),
+                "CharaMotion" => effects.push(Effect::Motion { actor: a(0), id: a(1).trim().parse().unwrap_or(-1) }),
+                "CharaVisible" => effects.push(Effect::Visible { actor: a(0), part: a(1), on: a(2).eq_ignore_ascii_case("TRUE") }),
+                "CharaDitherIn" | "CharaDitherOut" => effects.push(Effect::Visible { actor: a(0), part: "All".into(), on: c.name() == "CharaDitherIn" }),
+                "CharaClothState" => effects.push(Effect::ClothState { actor: a(0), part: a(1), state: a(2).trim().parse().unwrap_or(0) }),
+                // Mosaic visibility: the engine draws no mosaic.
+                "MozVisible" => {}
                 other => effects.push(Effect::Unported(other.to_owned(), c.args.clone())),
             }
         }
@@ -404,6 +428,37 @@ mod tests {
         assert_eq!(p.run(&mut fx), Wait::Text { speaker: "".into(), text: "done".into() });
         assert_eq!(p.vars["Sel"], Var::Int(1));
         assert_eq!(p.run(&mut fx), Wait::End);
+    }
+
+    /// `morning` 挿入: the event CG, actors, motions, visibility and clothes.
+    #[test]
+    fn event_cg_effects() {
+        let list = vec![
+            cmd("MozVisible", &["NowID", "TRUE"]),
+            cmd("CharaClothState", &["-1", "Bot", "2"]),
+            cmd("EventCGSetting", &["adv/evcg/000_00.unity3d", "EventCG_BedIns_000_00"]),
+            cmd("CharaStandFind", &["-1", "EventCG", "EventCG_BedIns_000_00", "chaPos"]),
+            cmd("CharaDitherIn", &["-1", "0.2"]),
+            cmd("CharaMotion", &["NowID", "2004"]),
+            cmd("CharaVisible", &["-1", "Head", "FALSE"]),
+            cmd("EventCGRelease", &["FALSE"]),
+            cmd("Close", &[]),
+        ];
+        let mut p = Program::new("morning", list, 1);
+        let mut fx = Vec::new();
+        assert_eq!(p.run(&mut fx), Wait::End);
+        assert_eq!(
+            fx,
+            vec![
+                Effect::ClothState { actor: "-1".into(), part: "Bot".into(), state: 2 },
+                Effect::EventCg { bundle: "adv/evcg/000_00.unity3d".into(), asset: "EventCG_BedIns_000_00".into() },
+                Effect::StandFind { actor: "-1".into(), child: "chaPos".into() },
+                Effect::Visible { actor: "-1".into(), part: "All".into(), on: true },
+                Effect::Motion { actor: "NowID".into(), id: 2004 },
+                Effect::Visible { actor: "-1".into(), part: "Head".into(), on: false },
+                Effect::EventCgRelease,
+            ]
+        );
     }
 
     /// `morning`: `Switch` on a preset `Judge`, `Open` of a personality

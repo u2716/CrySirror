@@ -1932,14 +1932,16 @@ impl HostServices for SharedHost {
             blake3::hash(rgba).to_hex()
         );
         let bytes = crysirror_image::encode_png(&surface).map_err(|e| Error::Io(e.to_string()))?;
-        if self
+        // A batch holds at most 128 MiB of generated assets (the model
+        // limit), of which at most 64 MiB encoded images.
+        let images = self
             .generated
             .iter()
+            .filter(|(_, p, _)| p.ends_with(".png"))
             .map(|(_, _, b)| b.len())
-            .sum::<usize>()
-            + bytes.len()
-            > 64 * 1024 * 1024
-        {
+            .sum::<usize>();
+        let total = self.generated.iter().map(|(_, _, b)| b.len()).sum::<usize>();
+        if images + bytes.len() > 64 * 1024 * 1024 || total + bytes.len() > 128 * 1024 * 1024 {
             return Err(Error::Limit("image upload batch"));
         }
         self.collect_retired_images()?;

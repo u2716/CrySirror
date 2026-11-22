@@ -122,17 +122,51 @@ struct ClothRun {
     accessories: Vec<String>,
     accessories_hidden: bool,
     entities: Vec<u32>,
+    /// Further hidden node subtrees (`CharaVisible` `Head`).
+    hidden_nodes: Vec<String>,
+    /// The animation layers outside H.
+    layers: serde_json::Value,
 }
 
 impl ClothRun {
     /// `AnimationState.hidden`.
     fn hidden(&self) -> Vec<String> {
         let mut out: Vec<String> = self.parts.iter().zip(&self.states).flat_map(|(p, s)| p.hidden(*s)).collect();
+        out.extend(self.hidden_nodes.iter().cloned());
         if self.accessories_hidden {
             out.extend(self.accessories.iter().cloned());
         }
         out
     }
+}
+
+/// `ILLGAMES.ADV.EventCG.Data` in place: the character root (`chaPos`,
+/// Unity world position and rotation) and the view before the event.
+struct EventCgRun {
+    cha: ([f32; 3], [f32; 4]),
+    view_return: Option<crate::map::View>,
+}
+
+/// An engine transform of a Unity world position and rotation.
+fn unity_transform(pos: [f32; 3], rot: [f32; 4]) -> serde_json::Value {
+    let q = glam::Quat::from_array(crysirror_unity::gltf::mirror_quat(rot)).normalize();
+    let (x, y, z) = q.to_euler(glam::EulerRot::XYZ);
+    json!({"translation": crysirror_unity::gltf::mirror_point(pos), "rotation_degrees": [x.to_degrees(), y.to_degrees(), z.to_degrees()], "scale": [1.0, 1.0, 1.0]})
+}
+
+/// `CharaClothState` part names → `ChaFileClothes` lists.
+fn adv_cloth_list(part: &str) -> Option<&'static str> {
+    Some(match part {
+        "Top" => "co_top",
+        "Bot" => "co_bot",
+        "Bra" => "co_bra",
+        "Shorts" => "co_shorts",
+        "Gloves" => "co_gloves",
+        "Panst" => "co_panst",
+        "Socks" => "co_socks",
+        "Shoes" => "co_shoes",
+        _ => return None,
+    })
 }
 
 /// A short movie (`EventManager.EventShortMovie` / `ShortMovie.PlayAsync`).
@@ -426,6 +460,13 @@ pub struct Game {
     map_entities: Vec<(u32, VfsPath)>,
     /// Light entities of the loaded map.
     map_lights: Vec<u32>,
+    /// The ADV event CG in place (`EventCGSetting`).
+    event_cg: Option<EventCgRun>,
+    /// `CharaClothState` of ADV actors not spawned with their variants yet:
+    /// card → (list, state).
+    adv_cloth: std::collections::HashMap<String, Vec<(&'static str, usize)>>,
+    /// The head renderer node names of characters spawned with variants.
+    heads: std::collections::HashMap<String, Vec<String>>,
     /// Uploaded particle textures by (file, path id) key.
     particle_textures: std::collections::HashMap<String, String>,
     /// The uploaded sky of the map's time zone.
@@ -859,8 +900,9 @@ impl Game {
             self.world.push(json!({"op": "set_transform", "id": entity, "transform": transform}));
         }
         // Dressed (state 0) with every variant exported.
-        self.cloth.insert(card_path.to_owned(), ClothRun { states: vec![0; human.clothes.len()], parts: human.clothes.clone(), accessories: human.accessories.clone(), accessories_hidden: false, entities: ids.clone() });
         let layers = json!([{"clip": play, "looping": true}]);
+        self.cloth.insert(card_path.to_owned(), ClothRun { states: vec![0; human.clothes.len()], parts: human.clothes.clone(), accessories: human.accessories.clone(), accessories_hidden: false, entities: ids.clone(), hidden_nodes: Vec::new(), layers: layers.clone() });
+        self.heads.insert(card_path.to_owned(), human.head.clone());
         match crate::face::Face::from_scene(&mut self.unity, &human.scene, &human.key) {
             Ok(Some(face)) => {
                 self.faces.insert(card_path.to_owned(), (face, ids.clone(), layers, crate::face::Expression::default()));
@@ -1849,11 +1891,204 @@ impl Game {
             self.apply_face(card);
         } else if let Some(c) = self.cloth.get(card) {
             let hidden = c.hidden();
-            let layers = self.h.as_ref().map(|h| json!([{"clip": h.motion, "looping": true}])).unwrap_or(json!([]));
-            for &e in &c.entities {
+            let layers = self.h.as_ref().map(|h| json!([{"clip": h.motion, "looping": true}])).unwrap_or_else(|| c.layers.clone());
+            for &e in c.entities.iter().filter(|id| self.map_entities.iter().any(|m| m.0 == **id)) {
                 self.world.push(json!({"op": "set_animation", "id": e, "animation": {"layers": layers, "hidden": hidden}}));
             }
         }
+    }
+
+    /// An ADV actor: `NowID` the talking heroine, `-1` the player.
+    fn adv_actor(&self, actor: &str) -> Option<String> {
+        match actor {
+            "NowID" => self.talk_card.clone(),
+            "-1" => Some(MALE_CARD.to_owned()),
+            _ => None,
+        }
+    }
+
+    /// Remove a character's entities and release its models (a new motion
+    /// respawns it).
+    fn despawn_character(&mut self, host: &mut dyn HostServices, client: ClientId, card: &str) -> Result<()> {
+        let mut ids: Vec<u32> = self.faces.remove(card).map(|f| f.1).unwrap_or_default();
+        ids.extend(self.cloth.remove(card).map(|c| c.entities).unwrap_or_default());
+        ids.sort_unstable();
+        ids.dedup();
+        let mut keep = Vec::new();
+        let mut gone = Vec::new();
+        for (e, path) in std::mem::take(&mut self.map_entities) {
+            if ids.contains(&e) {
+                self.world.push(json!({"op": "despawn", "id": e}));
+                gone.push(path);
+            } else {
+                keep.push((e, path));
+            }
+        }
+        self.map_entities = keep;
+        // Not through `released`, which releases the whole map.
+        for path in gone {
+            host.release_model(client, &path)?;
+        }
+        Ok(())
+    }
+
+    /// The live entities of a spawned character (records of earlier maps
+    /// name despawned ones).
+    fn character_entities(&self, card: &str) -> Vec<u32> {
+        let ids = self.cloth.get(card).map(|c| c.entities.clone()).filter(|ids| !ids.is_empty()).or_else(|| self.faces.get(card).map(|f| f.1.clone())).unwrap_or_default();
+        ids.into_iter().filter(|id| self.map_entities.iter().any(|e| e.0 == *id)).collect()
+    }
+
+    /// ADV character and event CG commands (`ILLGAMES.ADV.Commands`
+    /// `EventCG.Setting`/`Release`, `Chara.StandFindPosition`, `Motion`,
+    /// `Game.CharaVisible`, `Chara.ClothState`).
+    fn adv_chara(&mut self, host: &mut dyn HostServices, client: ClientId, effect: crate::adv::Effect) -> Result<()> {
+        use crate::adv::Effect as E;
+        match effect {
+            E::EventCg { bundle, asset } => {
+                // `CreateEventCG`: the prefab; `set_CamRoot` moves the camera
+                // to `camPos` (`CameraData.FieldOfView`); `SetChaRoot` stands
+                // the characters at `chaPos`.
+                let (key, go) = self.unity.bundle_asset(&format!("lib/{bundle}"), &asset, crysirror_unity::class_id::GAME_OBJECT)?.with_context(|| format!("EventCG {asset}"))?;
+                let all = self.unity.scene(&key)?;
+                let root = *all.by_game_object.get(&go).with_context(|| format!("EventCG {asset} root"))?;
+                let scene = all.subtree(root);
+                let find = |n: &str| scene.nodes.iter().position(|x| x.name == n);
+                let cha = find("chaPos").with_context(|| format!("EventCG {asset} chaPos"))?;
+                let (_, rot, pos) = crysirror_unity::world6::world_matrix(&scene, cha).to_scale_rotation_translation();
+                let cam = find("camPos").with_context(|| format!("EventCG {asset} camPos"))?;
+                let data = scene.nodes[cam].components.iter().find(|c| c.script.ends_with("EventCG.CameraData")).map(|c| &c.fields);
+                let mut view = crate::map::view(&scene, cam, data);
+                if let Some(v) = &self.view {
+                    (view.near, view.far) = (v.near, v.far);
+                }
+                self.world.push(view.command());
+                let previous = std::mem::replace(&mut self.view, Some(view));
+                let view_return = match self.event_cg.take() {
+                    Some(e) => e.view_return,
+                    None => previous,
+                };
+                self.event_cg = Some(EventCgRun { cha: (pos.to_array(), rot.to_array()), view_return });
+                self.log.push(format!("EventCG {asset}: chaPos {pos:?}"));
+                if let Some(card) = self.talk_card.clone() {
+                    let t = unity_transform(pos.to_array(), rot.to_array());
+                    for e in self.character_entities(&card) {
+                        self.world.push(json!({"op": "set_transform", "id": e, "transform": t}));
+                    }
+                }
+            }
+            E::EventCgRelease => {
+                if let Some(e) = self.event_cg.take() {
+                    self.view = e.view_return;
+                    if let Some(v) = &self.view {
+                        self.world.push(v.command());
+                    }
+                }
+            }
+            E::StandFind { actor, child } => {
+                let (Some(card), Some((pos, rot))) = (self.adv_actor(&actor), self.event_cg.as_ref().map(|e| e.cha)) else { return Ok(()) };
+                if child != "chaPos" {
+                    self.log.push(format!("SATD-amanatsu-port: CharaStandFind {child}"));
+                }
+                // An actor not on the map yet spawns there with its
+                // `CharaMotion` (the event motions place both at the root).
+                let t = unity_transform(pos, rot);
+                for e in self.character_entities(&card) {
+                    self.world.push(json!({"op": "set_transform", "id": e, "transform": t}));
+                }
+            }
+            E::Motion { actor, id } => {
+                let Some(card) = self.adv_actor(&actor) else { return Ok(()) };
+                let female = card != MALE_CARD;
+                let list = if female {
+                    let personality = self.spots.iter().find(|s| s.0 == card).map_or(0, |s| s.2);
+                    format!("anim_f_{personality:03}")
+                } else {
+                    "anim_m".to_owned()
+                };
+                let Some(state) = crate::tables::motion_state(&mut self.unity, &list, id)? else {
+                    self.log.push(format!("CharaMotion {actor} {id}: not in {list}"));
+                    return Ok(());
+                };
+                let t = match (self.event_cg.as_ref(), self.spots.iter().find(|s| s.0 == card)) {
+                    (Some(e), _) => unity_transform(e.cha.0, e.cha.1),
+                    (None, Some(s)) => json!({"translation": s.1, "rotation_degrees": [0.0, 0.0, 0.0], "scale": [1.0, 1.0, 1.0]}),
+                    _ => return Ok(()),
+                };
+                self.log.push(format!("CharaMotion {actor} {id}: {list} {state}"));
+                self.adv_spawn(host, client, &card, t, &state)?;
+            }
+            E::Visible { actor, part, on } => {
+                let Some(card) = self.adv_actor(&actor) else { return Ok(()) };
+                match part.as_str() {
+                    "All" => {
+                        for e in self.character_entities(&card) {
+                            self.world.push(json!({"op": "set_visible", "id": e, "visible": on}));
+                        }
+                    }
+                    "Head" => {
+                        let head = self.heads.get(&card).cloned().unwrap_or_default();
+                        if let Some(c) = self.cloth.get_mut(&card) {
+                            c.hidden_nodes.retain(|n| !head.contains(n));
+                            if !on {
+                                c.hidden_nodes.extend(head);
+                            }
+                            self.refresh_cloth(&card);
+                        }
+                    }
+                    // SATD-amanatsu-port: the male `Son` object is drawn
+                    // with the body.
+                    other => self.log.push(format!("SATD-amanatsu-port: CharaVisible {other}")),
+                }
+            }
+            E::ClothState { actor, part, state } => {
+                let Some(card) = self.adv_actor(&actor) else { return Ok(()) };
+                let Some(list) = adv_cloth_list(&part) else {
+                    self.log.push(format!("SATD-amanatsu-port: CharaClothState {part}"));
+                    return Ok(());
+                };
+                let pending = self.adv_cloth.entry(card.clone()).or_default();
+                pending.retain(|p| p.0 != list);
+                pending.push((list, state));
+                self.apply_adv_cloth(&card);
+            }
+            other => self.log.push(format!("SATD-amanatsu-port: ADV {other:?}")),
+        }
+        Ok(())
+    }
+
+    /// Spawn an ADV actor with every clothing variant playing `state` of its
+    /// motion controller, replacing its current entities.
+    fn adv_spawn(&mut self, host: &mut dyn HostServices, client: ClientId, card: &str, transform: serde_json::Value, state: &str) -> Result<()> {
+        let hidden_nodes = self.cloth.get(card).map(|c| c.hidden_nodes.clone()).unwrap_or_default();
+        self.despawn_character(host, client, card)?;
+        let (bundle, controller) = crate::chara::motion_controller(card != MALE_CARD);
+        let sun = self.map_sun;
+        self.spawn_character_states(host, client, card, transform, sun, &bundle, controller, &[state], state)?;
+        if let Some(c) = self.cloth.get_mut(card) {
+            c.hidden_nodes = hidden_nodes;
+        }
+        self.apply_adv_cloth(card);
+        Ok(())
+    }
+
+    /// The pending `CharaClothState`s of a character spawned with variants.
+    fn apply_adv_cloth(&mut self, card: &str) {
+        if self.character_entities(card).is_empty() {
+            // Applied when the actor spawns.
+            return;
+        }
+        let Some(c) = self.cloth.get_mut(card) else { return };
+        for (list, v) in self.adv_cloth.get(card).cloned().unwrap_or_default() {
+            for (p, st) in c.parts.iter().zip(c.states.iter_mut()).filter(|(p, _)| p.list == list) {
+                *st = match v {
+                    0 => 0,
+                    1 if p.states() > 2 => 1,
+                    _ => p.states() - 1,
+                };
+            }
+        }
+        self.refresh_cloth(card);
     }
 
     /// A conversation ended during H: advance its phase.
@@ -3202,6 +3437,9 @@ impl AmanatsuVm {
             map_entities: Vec::new(),
             map_lights: Vec::new(),
             particle_textures: std::collections::HashMap::new(),
+            event_cg: None,
+            adv_cloth: std::collections::HashMap::new(),
+            heads: std::collections::HashMap::new(),
             sky: None,
             next_model: 0,
             view: None,
@@ -3535,6 +3773,11 @@ impl AmanatsuVm {
                     }
                 }
                 crate::talk::Step::Face(values) => game.talk_face(values),
+                crate::talk::Step::Chara(effect) => {
+                    if let Err(e) = game.adv_chara(host, client, effect) {
+                        game.log.push(format!("ADV: {e:#}"));
+                    }
+                }
                 crate::talk::Step::Expression(id) => {
                     // The talking heroine's personality preset.
                     let personality = game.talk_card.as_ref().and_then(|c| game.spots.iter().find(|s| &s.0 == c)).map_or(0, |s| s.2);
