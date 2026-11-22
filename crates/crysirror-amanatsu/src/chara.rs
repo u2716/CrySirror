@@ -1225,14 +1225,28 @@ impl SceneAssets for CharaAssets<'_> {
             let mut o = self.base_look(file, m, &look, shader, k, o)?;
             // The body's md layers (`_Detail_mask_01` slice 0) shade painted
             // creases and contours as a shadow layer.
+            let mf = if m.file.is_empty() { file.to_owned() } else { m.file.clone() };
             if let (Some(md), Some((key, img))) = (m.textures.get("_Detail_mask_01").filter(|t| t.texture.path_id != 0 && shader.starts_with("AL/skin_body")), o.base_texture.as_ref()) {
-                let (f, id) = self.unity.target(if m.file.is_empty() { file } else { &m.file }, md.texture)?;
+                let (f, id) = self.unity.target(&mf, md.texture)?;
                 let (slices, srgb) = self.unity.texture_array(&f, id)?;
                 if let Some(md) = slices.first() {
                     let alpha = look.shadow.map_or(0., |c| c[3]);
                     let layer = md_shadow_layer(img, md, srgb, k, tone, floor, alpha, m);
                     o.toon_shadow = Some((format!("{key}:md"), layer));
                 }
+            }
+            // The face's md layers (two Texture2D masks).
+            if let (Some(md), Some((key, img))) = (m.textures.get("_Detail_mask_01").filter(|t| t.texture.path_id != 0 && shader.starts_with("AL/skin_head")), o.base_texture.clone()) {
+                let (f, id) = self.unity.target(&mf, md.texture)?;
+                let md = self.mask(&f, id)?;
+                let md2 = match m.textures.get("_Detail_mask_02").filter(|t| t.texture.path_id != 0) {
+                    Some(t) => {
+                        let (f, id) = self.unity.target(&mf, t.texture)?;
+                        Some(self.mask(&f, id)?)
+                    }
+                    None => None,
+                };
+                o.toon_shadow = Some((format!("{key}:md"), face_md_layer(&img, &md, md2.as_ref(), k, floor, m)));
             }
             let ramp = toon_ramp_floor(&curve, tone.unwrap_or([0.; 3]), floor, o.toon_shadow.is_some());
             let outline = [outline[0] * k, outline[1] * k, outline[2] * k, outline[3]];
@@ -1482,31 +1496,63 @@ fn md_shadow_layer(base: &ImageSurface, md: &ImageSurface, srgb: bool, k: f32, t
     let lin = |b: u8| if srgb { srgb_decode(f32::from(b) / 255.) } else { f32::from(b) / 255. };
     let get = |n: &str, d: f32| m.floats.get(n).copied().unwrap_or(d);
     let (intensity, power, bust) = (get("_mdGIntensity", 0.8), get("_mdGPower", 0.5), get("_Bust_shadowonoff", 0.));
-    // A soft layer: at most 1024 texels a side (prepared-asset budget).
+    shadow_layer(base, k, tone, floor, &|u, v| {
+        let j = texel(md, u, v);
+        let (g, b, a) = (lin(md.rgba[j + 1]), lin(md.rgba[j + 2]), lin(md.rgba[j + 3]));
+        let chest = ((a - 0.66) * -4.16667 + 1.).clamp(0., 1.);
+        let shade = ((chest * 0.75).max(shadow_alpha) * 0.7 + 0.3).min(1.) * g;
+        let s = (shade * (1. - chest) + shade * chest * bust).max(0.);
+        let div = (1. - 0.5 * power * (1. - b)).clamp(0.5, 1.);
+        ((s / div).clamp(0., 1.) * (intensity + (0.5 - intensity) * b)).max(0.)
+    })
+}
+
+/// The face's md shading (`AL/skin_head` forward program,
+/// `_Detail_mask_01`/`_02`, both linearised): `r = sat(sat((1 − G) · 1.23 −
+/// 0.31) − (R − md2.B))`, amount `(1 − r) / clamp(1 − 0.5 · _mdGPower ·
+/// (1 − B), 0.5, 1) · lerp(_mdGIntensity, 0.5, B)` (G marks the outer face
+/// and neck, R and the md2 oval cancel in the face centre).
+/// SATD-amanatsu-port: the nose/lip `_spmap` maxima and the `_Lamp`
+/// coordinate shift are not applied (fixed strength as for the body).
+fn face_md_layer(base: &ImageSurface, md: &ImageSurface, md2: Option<&ImageSurface>, k: f32, floor: f32, m: &UnityMaterial) -> ImageSurface {
+    let get = |n: &str, d: f32| m.floats.get(n).copied().unwrap_or(d);
+    let (intensity, power) = (get("_mdGIntensity", 1.), get("_mdGPower", 0.));
+    let ch = |img: &ImageSurface, u: f32, v: f32, c: usize| f32::from(img.rgba[texel(img, u, v) + c]) / 255.;
+    shadow_layer(base, k, None, floor, &|u, v| {
+        let (r, g, b) = (ch(md, u, v, 0), ch(md, u, v, 1), ch(md, u, v, 2));
+        let oval = md2.map_or(0., |t| ch(t, u, v, 2));
+        let lit = (((1. - g) * 1.23 - 0.31).clamp(0., 1.) - (r - oval)).clamp(0., 1.);
+        let div = (1. - 0.5 * power * (1. - b)).clamp(0.5, 1.);
+        ((1. - lit) / div).min(1.) * (intensity + (0.5 - intensity) * b)
+    })
+}
+
+/// Byte offset of the texel at top-down image coordinates `u`, `v` in [0, 1).
+fn texel(img: &ImageSurface, u: f32, v: f32) -> usize {
+    let x = ((u * img.width as f32) as u32).min(img.width.saturating_sub(1));
+    let y = ((v * img.height as f32) as u32).min(img.height.saturating_sub(1));
+    ((y * img.width + x) * 4) as usize
+}
+
+/// A toon shadow layer over a display-referred base texture: colour
+/// `base · k · mix(tone, 1, floor)` in linear space (tone: the given one or
+/// the HSV shade of the texel), alpha `amount(u, v) · 1.5`; at most 1024
+/// texels a side (prepared-asset budget).
+fn shadow_layer(base: &ImageSurface, k: f32, tone: Option<[f32; 3]>, floor: f32, amount: &dyn Fn(f32, f32) -> f32) -> ImageSurface {
     let (ow, oh) = (base.width.min(1024).max(1), base.height.min(1024).max(1));
     let mut out = ImageSurface { width: ow, height: oh, rgba: vec![0; (ow * oh * 4) as usize] };
     for y in 0..oh {
-        let my = ((y as u64 * md.height as u64) / oh as u64) as u32;
-        let by = ((y as u64 * base.height as u64) / oh as u64) as u32;
         for x in 0..ow {
-            let mx = ((x as u64 * md.width as u64) / ow as u64) as u32;
-            let bx = ((x as u64 * base.width as u64) / ow as u64) as u32;
-            let j = ((my * md.width + mx) * 4) as usize;
-            let (g, b, a) = (lin(md.rgba[j + 1]), lin(md.rgba[j + 2]), lin(md.rgba[j + 3]));
-            let chest = ((a - 0.66) * -4.16667 + 1.).clamp(0., 1.);
-            let shade = ((chest * 0.75).max(shadow_alpha) * 0.7 + 0.3).min(1.) * g;
-            let s = (shade * (1. - chest) + shade * chest * bust).max(0.);
-            let div = (1. - 0.5 * power * (1. - b)).clamp(0.5, 1.);
-            let amount = ((s / div).clamp(0., 1.) * (intensity + (0.5 - intensity) * b)).max(0.);
-            let i = ((y * ow + x) * 4) as usize;
-            let bi = ((by * base.width + bx) * 4) as usize;
+            let (u, v) = ((x as f32 + 0.5) / ow as f32, (y as f32 + 0.5) / oh as f32);
+            let bi = texel(base, u, v);
             let c = [0, 1, 2].map(|n| srgb_decode(f32::from(base.rgba[bi + n]) / 255.));
             let t = tone.unwrap_or_else(|| hsv_shade(c));
+            let i = ((y * ow + x) * 4) as usize;
             for n in 0..3 {
                 let v = srgb_encode(c[n] * (t[n] + (1. - t[n]) * floor)) * k;
                 out.rgba[i + n] = (v.clamp(0., 1.) * 255.).round() as u8;
             }
-            out.rgba[i + 3] = ((amount * 1.5).clamp(0., 1.) * 255.).round() as u8;
+            out.rgba[i + 3] = ((amount(u, v) * 1.5).clamp(0., 1.) * 255.).round() as u8;
         }
     }
     out
