@@ -128,3 +128,4 @@
 - Owner corpus: `h_postures` with modes/positions/release phases; `hpoint_12` HPoints (floor first, chairs, …).
 - Behaviour (auto slot patched to favourability LV1, ロード → H): the hotel's first floor HPoint, a random first posture (正常位), the category buttons and the 男主導挿入 list (正常位, 胸揉み正常位, 後背位, 対面立位, 背面立位, 駅弁); 対面立位 respawns the pair in `som_07` with its camera.
 - Not established: point moves, comparison with the original.
+- 2026-11-22 (same build): Point → six hotel H points marked (floor, chairs, desks); a chair marker moves the pair to the chair point in 椅子咥え (`hou_16`) with the 愛撫/奉仕/挿入 lists for chairs; two clicks into the strong loop, the male gauge fills and 射精 plays `OrgasmM_IN` (log `HScene finish: OrgasmM_IN`). Native evidence: `HPointCtrl` (`GetPlaceTypeAll`, `Find`), the `Canvas Point` filter buttons per place type, the posture animators' state lists (`hou_f_16`: `OrgasmM_IN/OUT`, no `OrgasmF`).

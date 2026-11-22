@@ -238,3 +238,85 @@ impl PostureUi {
         Action::None
     }
 }
+
+impl PostureUi {
+    /// Hide the cloned buttons and items (the lists are rebuilt for a new
+    /// place).
+    pub fn dispose(self, level: &mut Level) {
+        for (_, button, _) in self.main {
+            if let Some(root) = level.scene.nodes[button].parent {
+                level.set_active(root, false);
+            }
+        }
+        for (root, ..) in self.sub_items {
+            level.set_active(root, false);
+        }
+    }
+}
+
+/// What a click in the point mode asks.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PointAction {
+    None,
+    Back,
+    /// Move to the H point (index).
+    Move(usize),
+}
+
+/// `AL.H.UI.PointSetting` (`Canvas Point`): the main canvas gives way to
+/// the point canvas and each other H point gets a marker.
+/// SATD-amanatsu-port: the HPoint particle markers and colliders are not
+/// rendered; each point is marked by a clone of its place type's filter
+/// button at the point's screen position, and the filters do not filter.
+pub struct PointUi {
+    markers: Vec<(usize, usize)>,
+    back: Option<usize>,
+}
+
+/// `Filter` buttons by `HPoint._placeType`.
+const FILTERS: [&str; 7] = ["Button Floor", "Button Chair", "Button Desk", "Button BeachChair", "Button Poolside", "Button Pool", "Button Sea"];
+
+impl PointUi {
+    /// `points`: (index, place type, screen position) of the points to mark.
+    pub fn open(level: &mut Level, points: &[(usize, i32, [f32; 2])], height: f32) -> Option<Self> {
+        let canvas = level.find("HScene/Canvas Point")?;
+        let filter = level.find("HScene/Canvas Point/ccr_dropShadow/Filter")?;
+        // `FadeCanvas` open.
+        crate::talk::show(level, canvas);
+        if let Some(main) = level.find("HScene/Canvas") {
+            level.set_active(main, false);
+        }
+        let mut markers = Vec::new();
+        for &(index, place, [x, y]) in points {
+            let Some(name) = FILTERS.get(place.max(0) as usize) else { continue };
+            let Some(template) = level.scene.nodes[filter].children.iter().copied().find(|&c| level.scene.nodes[c].name == *name) else { continue };
+            let node = level.scene.clone_subtree(template, canvas);
+            level.set_active(node, true);
+            let st = level.states.entry(node).or_default();
+            st.anchor_min = Some([0., 0.]);
+            st.anchor_max = Some([0., 0.]);
+            st.anchored_position = Some([x, height - y]);
+            markers.push((node, index));
+        }
+        Some(Self { markers, back: level.find("HScene/Canvas Point/ccr_dropShadow/Back") })
+    }
+
+    pub fn click(&self, node: usize) -> PointAction {
+        if Some(node) == self.back {
+            return PointAction::Back;
+        }
+        self.markers.iter().find(|m| m.0 == node).map_or(PointAction::None, |m| PointAction::Move(m.1))
+    }
+
+    pub fn close(self, level: &mut Level) {
+        for (node, _) in self.markers {
+            level.set_active(node, false);
+        }
+        if let Some(c) = level.find("HScene/Canvas Point") {
+            level.set_active(c, false);
+        }
+        if let Some(main) = level.find("HScene/Canvas") {
+            level.set_active(main, true);
+        }
+    }
+}

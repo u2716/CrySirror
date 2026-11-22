@@ -90,6 +90,10 @@ struct HRun {
     motion_until: u64,
     /// `Gauge Female` (0..100).
     gauge: f32,
+    /// `Gauge Male` (0..100).
+    male_gauge: f32,
+    /// The finish states the posture's heroine animator has.
+    finishes: Vec<String>,
     orgasms: u32,
     last_ms: u64,
     /// A night event H (`HDetail` from `NightEvent`): the points kind
@@ -123,7 +127,9 @@ struct NightRun {
 }
 
 /// The H motions baked into the characters.
-const H_MOTIONS: [&str; 4] = ["Idle", "WLoop1", "SLoop1", "OrgasmF"];
+/// The H motions baked into the characters (each posture has the
+/// finishes of its category: `OrgasmF`, `OrgasmM_IN`, `OrgasmM_OUT`).
+const H_MOTIONS: [&str; 6] = ["Idle", "WLoop1", "SLoop1", "OrgasmF", "OrgasmM_IN", "OrgasmM_OUT"];
 
 /// A massage in progress (`EventManager.Massage` + `AL.Oil.OilScene`).
 struct MassageRun {
@@ -198,6 +204,15 @@ pub struct Game {
     h_place: i32,
     /// `PostureSelect` of the H scene.
     h_ui: Option<crate::hui::PostureUi>,
+    /// The states the last character baked (`spawn_character_states`).
+    baked_states: Vec<String>,
+    /// The place the posture lists were built for.
+    h_ui_place: Option<i32>,
+    /// The map's H points and the one in use.
+    h_points: Vec<crate::h::HPoint>,
+    h_point_index: Option<usize>,
+    /// The point mode (`PointSetting`) and the view it replaced.
+    h_point_ui: Option<(crate::hui::PointUi, Option<map::View>)>,
     /// A posture change waiting for the next step (file, id).
     h_change: Option<(String, i32)>,
     /// The H pair waiting to spawn (key light intensity).
@@ -392,13 +407,16 @@ impl Game {
             // `HPointCtrl.FindFirst`: a first `HPoint` of the map.
             match crate::h::load_hpoints(&mut self.unity, id) {
                 Ok(points) => {
-                    let first: Vec<&crate::h::HPoint> = points.iter().filter(|p| p.first).collect();
-                    let pick = if first.is_empty() { points.first() } else { Some(first[(self.rng % first.len() as u64) as usize]) };
-                    if let Some(p) = pick {
+                    let first: Vec<usize> = (0..points.len()).filter(|&i| points[i].first).collect();
+                    let pick = if first.is_empty() { (!points.is_empty()).then_some(0) } else { Some(first[(self.rng % first.len() as u64) as usize]) };
+                    if let Some(i) = pick {
+                        let p = &points[i];
                         self.h_point = Some((p.pos, p.rot));
                         self.h_place = p.place;
                         self.log.push(format!("HPointCtrl.FindFirst: place {} id {}", p.place, p.id));
                     }
+                    self.h_point_index = pick;
+                    self.h_points = points;
                 }
                 Err(e) => self.log.push(format!("H points of map {id}: {e:#}")),
             }
@@ -541,11 +559,15 @@ impl Game {
         let human = human?;
         let suffix = human.height_suffix();
         let mut clips = Vec::new();
+        self.baked_states.clear();
         for state in states {
             // `_L`/`_M`/`_S` by height, falling back to the other sizes.
             let found = [suffix, "M", "L", "S"].iter().find_map(|sz| human.exact_state_tracks(&mut self.unity, bundle, controller, &format!("{state}_{sz}"), state).ok());
             match found {
-                Some(t) => clips.push(t),
+                Some(t) => {
+                    clips.push(t);
+                    self.baked_states.push((*state).to_owned());
+                }
                 None => self.log.push(format!("H state {state} not in {controller}")),
             }
         }
@@ -942,6 +964,7 @@ impl Game {
         let (x, y, z) = q.to_euler(glam::EulerRot::XYZ);
         let t = json!({"translation": tr.to_array(), "rotation_degrees": [x.to_degrees(), y.to_degrees(), z.to_degrees()], "scale": [1.0, 1.0, 1.0]});
         let mut entities = Vec::new();
+        let mut finishes = Vec::new();
         for c in &posture.charas {
             if c.info.bundle.is_empty() {
                 continue;
@@ -949,6 +972,9 @@ impl Game {
             let who = if c.is_male() { "DefaultData/0/chara/male/AL_M_00.png".to_owned() } else { card.to_owned() };
             let bundle = format!("lib/{}", c.info.bundle);
             entities.extend(self.spawn_character_states(host, client, &who, t.clone(), sun, &bundle, &c.info.asset, &H_MOTIONS, "Idle")?);
+            if !c.is_male() {
+                finishes = self.baked_states.iter().filter(|s| s.starts_with("Orgasm")).cloned().collect();
+            }
         }
         let (personality, name) = self.unity.read_all(card).ok().and_then(|b| crate::card::Card::parse(&b).ok()).and_then(|c| c.parameter()).map_or((0, String::new()), |p| (p.0, p.1));
         if !self.spots.iter().any(|s| s.0 == card) {
@@ -957,6 +983,12 @@ impl Game {
         // `PostureSelect` over the usable postures.
         if let Some(i) = self.overlays.iter().position(|(l, _)| l.name == crate::h::SCENE_PREFAB) {
             let level = &mut self.overlays[i].0;
+            if self.h_ui_place != Some(place) {
+                if let Some(old) = self.h_ui.take() {
+                    old.dispose(level);
+                }
+                self.h_ui_place = Some(place);
+            }
             match self.h_ui.as_mut() {
                 Some(ui) => ui.set_current(level, &posture.file, posture.id),
                 None => {
@@ -977,6 +1009,7 @@ impl Game {
         if let Some(h) = self.h.as_mut() {
             h.posture = Some(posture);
             h.entities = entities;
+            h.finishes = finishes;
         }
         Ok(())
     }
@@ -985,6 +1018,8 @@ impl Game {
     fn enter_h_scene(&mut self, now: u64) -> Result<()> {
         let mut level = Level::prefab(&mut self.unity, crate::h::SCENE_BUNDLE, crate::h::SCENE_PREFAB)?;
         self.h_ui = None;
+        self.h_ui_place = None;
+        self.h_point_ui = None;
         for path in ["HScene/Canvas Point", "HScene/Canvas/ccr_dropShadow/Option/RightBottomArea/MoveSetting/root"] {
             if let Some(n) = level.find(path) {
                 level.set_active(n, false);
@@ -1009,18 +1044,28 @@ impl Game {
 
     /// `Gauge Female` fill and the finish buttons' availability.
     fn h_gauges(&mut self) {
-        let Some(gauge) = self.h.as_ref().map(|h| h.gauge) else { return };
+        let Some((gauge, male, finishes)) = self.h.as_ref().map(|h| (h.gauge, h.male_gauge, h.finishes.clone())) else { return };
         let Some(oi) = self.overlays.iter().position(|(l, _)| l.name == crate::h::SCENE_PREFAB) else { return };
         let level = &mut self.overlays[oi].0;
-        for (i, path) in ["Fill Area 0", "Fill Area 1", "Fill Area 2"].iter().enumerate() {
-            // Three stages of a third each.
-            if let Some(n) = level.find(&format!("HScene/Canvas/ccr_dropShadow/GaugeController/Gauge Female/{path}/Fill")) {
-                let t = ((gauge / 100. * 3.) - i as f32).clamp(0., 1.);
-                level.states.entry(n).or_default().fill = Some(t);
+        for (who, value) in [("Female", gauge), ("Male", male)] {
+            for (i, path) in ["Fill Area 0", "Fill Area 1", "Fill Area 2"].iter().enumerate() {
+                // Three stages of a third each.
+                if let Some(n) = level.find(&format!("HScene/Canvas/ccr_dropShadow/GaugeController/Gauge {who}/{path}/Fill")) {
+                    let t = ((value / 100. * 3.) - i as f32).clamp(0., 1.);
+                    level.states.entry(n).or_default().fill = Some(t);
+                }
             }
         }
-        if let Some(n) = level.find("HScene/Canvas/ccr_dropShadow/GaugeController/Finish Female") {
-            level.interactable.insert(n, gauge >= 70.);
+        let has = |s: &str| finishes.iter().any(|f| f == s);
+        for (button, ok) in [
+            ("Finish Female", gauge >= 70. && has("OrgasmF")),
+            ("Finish Male", male >= 70. && has("OrgasmM_IN")),
+            ("Finish Shot", male >= 70. && has("OrgasmM_OUT")),
+            ("Finish Double", gauge >= 70. && male >= 70. && has("OrgasmF") && has("OrgasmM_IN")),
+        ] {
+            if let Some(n) = level.find(&format!("HScene/Canvas/ccr_dropShadow/GaugeController/{button}")) {
+                level.interactable.insert(n, ok);
+            }
         }
     }
 
@@ -1041,7 +1086,8 @@ impl Game {
             _ => 0.,
         };
         h.gauge = (h.gauge + rate * dt).min(100.);
-        if h.motion == "OrgasmF" && now >= h.motion_until {
+        h.male_gauge = (h.male_gauge + rate * dt).min(100.);
+        if h.motion.starts_with("Orgasm") && now >= h.motion_until {
             self.h_play("Idle", true);
         } else if clicked {
             let next = match h.motion {
@@ -1057,15 +1103,90 @@ impl Game {
         self.h_gauges();
     }
 
+    /// `PointSetting`: the point canvas over the map's overview camera with
+    /// a marker on every other H point.
+    fn open_h_points(&mut self) {
+        // SATD-amanatsu-port: the point mode's free camera is not ported;
+        // the H camera stays and points outside it are marked at the screen
+        // edge toward them.
+        let Some(view) = self.view.clone() else { return };
+        let marks: Vec<(usize, i32, [f32; 2])> = self
+            .h_points
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| Some(*i) != self.h_point_index)
+            .map(|(i, p)| (i, p.place, project_edge(&view, crysirror_unity::gltf::mirror_point(p.pos))))
+            .collect();
+        let Some(oi) = self.overlays.iter().position(|(l, _)| l.name == crate::h::SCENE_PREFAB) else { return };
+        if let Some(ui) = crate::hui::PointUi::open(&mut self.overlays[oi].0, &marks, HEIGHT) {
+            self.log.push(format!("PointSetting: {} points", marks.len()));
+            self.world.push(view.command());
+            self.h_point_ui = Some((ui, self.view.replace(view)));
+        }
+    }
+
+    /// A point-mode click: back, or `HScene.ChangePoint` → a posture usable
+    /// at the new place (`FindPosture`).
+    fn h_point_action(&mut self, action: crate::hui::PointAction) {
+        use crate::hui::PointAction as P;
+        if action == P::None {
+            return;
+        }
+        let Some((ui, view)) = self.h_point_ui.take() else { return };
+        if let Some(oi) = self.overlays.iter().position(|(l, _)| l.name == crate::h::SCENE_PREFAB) {
+            ui.close(&mut self.overlays[oi].0);
+        }
+        if let Some(v) = view {
+            self.world.push(v.command());
+            self.view = Some(v);
+        }
+        let P::Move(i) = action else { return };
+        let Some(p) = self.h_points.get(i).cloned() else { return };
+        let Some(card) = self.h.as_ref().map(|h| h.card.clone()) else { return };
+        let lv = {
+            let gp = &self.npc(&card).0;
+            [gp.favorability.lv, gp.inclusiveness.lv, gp.proactivity.lv, gp.curiosity.lv]
+        };
+        let list: Vec<(String, i32)> = self.h_postures.as_deref().unwrap_or(&[]).iter().filter(|q| crate::h::category_allowed(q.mode) && q.usable(false, p.place, lv, false)).map(|q| (q.file.clone(), q.id)).collect();
+        if list.is_empty() {
+            self.log.push(format!("HScene.ChangePoint: no posture for place {}", p.place));
+            return;
+        }
+        let pick = list[self.random(list.len())].clone();
+        self.h_point = Some((p.pos, p.rot));
+        self.h_place = p.place;
+        self.h_point_index = Some(i);
+        self.h_change = Some(pick);
+        self.log.push(format!("HScene.ChangePoint: place {} id {}", p.place, p.id));
+    }
+
     /// H UI buttons: `Finish Female` (orgasm), `Exit` (end).
     fn h_button(&mut self, name: &str, now: u64) -> Result<()> {
         match name {
-            "Finish Female" => {
-                if let Some(h) = self.h.as_mut().filter(|h| h.gauge >= 70.) {
-                    h.gauge = 0.;
-                    h.orgasms += 1;
+            "Point" => self.open_h_points(),
+            "Finish Female" | "Finish Male" | "Finish Shot" | "Finish Double" => {
+                // SATD-amanatsu-port: the finish menus (外出し/飲ませる/吐かせる),
+                // fluids and the male finish count are not ported.
+                let (state, female, male): (&'static str, bool, bool) = match name {
+                    "Finish Female" => ("OrgasmF", true, false),
+                    "Finish Male" => ("OrgasmM_IN", false, true),
+                    "Finish Shot" => ("OrgasmM_OUT", false, true),
+                    _ => ("OrgasmF", true, true),
+                };
+                let ok = self.h.as_ref().is_some_and(|h| h.finishes.iter().any(|f| f == state) && (!female || h.gauge >= 70.) && (!male || h.male_gauge >= 70.));
+                if let Some(h) = self.h.as_mut().filter(|_| ok) {
+                    if female {
+                        h.gauge = 0.;
+                        h.orgasms += 1;
+                    }
+                    if male {
+                        h.male_gauge = 0.;
+                    }
                     h.motion_until = now + 3000;
-                    self.h_play("OrgasmF", false);
+                    self.h_play(state, false);
+                    self.log.push(format!("HScene finish: {state}"));
+                } else {
+                    self.log.push(format!("HScene {name}: not available"));
                 }
             }
             "Exit" => {
@@ -1638,7 +1759,7 @@ impl Game {
             }
             NightPhase::Shower => {
                 // `HDetail(Event1)` at the movie map's night H place.
-                self.h = Some(HRun { card: card.clone(), phase: MassagePhase::Enter, return_map: shower_map, posture: None, entities: Vec::new(), motion: "Idle", motion_until: 0, gauge: 0., orgasms: 0, last_ms: now, night: Some("H_NightShowerAfter") });
+                self.h = Some(HRun { card: card.clone(), phase: MassagePhase::Enter, return_map: shower_map, posture: None, entities: Vec::new(), motion: "Idle", motion_until: 0, gauge: 0., male_gauge: 0., finishes: Vec::new(), orgasms: 0, last_ms: now, night: Some("H_NightShowerAfter") });
                 self.fade.start(now, true, self.fade_seconds);
                 self.pending_map = Some((shower_map, 3));
                 self.log.push(format!("NightEvent {card}: H on map {shower_map}"));
@@ -1653,7 +1774,7 @@ impl Game {
             }
             NightPhase::Morning if is_h_scene => {
                 // The morning H (`HDetail(Event2/3)`).
-                self.h = Some(HRun { card: card.clone(), phase: MassagePhase::Enter, return_map: morning_map, posture: None, entities: Vec::new(), motion: "Idle", motion_until: 0, gauge: 0., orgasms: 0, last_ms: now, night: Some("H_NightMorningAfter") });
+                self.h = Some(HRun { card: card.clone(), phase: MassagePhase::Enter, return_map: morning_map, posture: None, entities: Vec::new(), motion: "Idle", motion_until: 0, gauge: 0., male_gauge: 0., finishes: Vec::new(), orgasms: 0, last_ms: now, night: Some("H_NightMorningAfter") });
                 self.fade.start(now, true, self.fade_seconds);
                 let zone = if let Controller::ActionMap(m) = &self.controller { m.time_zone } else { 0 };
                 self.pending_map = Some((morning_map, zone));
@@ -1915,6 +2036,11 @@ impl AmanatsuVm {
             h_place: 0,
             h_ui: None,
             h_change: None,
+            h_points: Vec::new(),
+            h_ui_place: None,
+            baked_states: Vec::new(),
+            h_point_index: None,
+            h_point_ui: None,
             font_cache: Default::default(),
             night: None,
             pending_night: None,
@@ -2245,6 +2371,7 @@ impl AmanatsuVm {
         let mut massage_exit = false;
         let mut h_button: Option<String> = None;
         let mut save_load_action: Option<crate::saveload::Action> = None;
+        let mut h_point_action: Option<crate::hui::PointAction> = None;
         let mut open_save_load: Option<bool> = None;
         if let Some((h, button)) = click {
             if h > 0 {
@@ -2255,7 +2382,10 @@ impl AmanatsuVm {
                 if game.massage.is_some() && level.name == crate::oil::SCENE_PREFAB && level.scene.nodes[button].name == "Button Exit" {
                     massage_exit = true;
                 }
-                if game.h.is_some() && level.name == crate::h::SCENE_PREFAB {
+                let point_action = if game.h.is_some() && level.name == crate::h::SCENE_PREFAB { game.h_point_ui.as_ref().map(|(ui, _)| ui.click(button)) } else { None };
+                if let Some(a) = point_action {
+                    h_point_action = Some(a);
+                } else if game.h.is_some() && level.name == crate::h::SCENE_PREFAB {
                     let posture = game.h_ui.as_mut().map(|ui| ui.click(level, button));
                     match posture {
                         Some(crate::hui::Action::Change(file, id)) => game.h_change = Some((file, id)),
@@ -2363,6 +2493,9 @@ impl AmanatsuVm {
         if let Some(name) = h_button {
             game.h_button(&name, now)?;
         }
+        if let Some(a) = h_point_action {
+            game.h_point_action(a);
+        }
         if let Some(a) = save_load_action {
             if let Err(e) = game.save_load_action(host, a, now) {
                 game.log.push(format!("SaveLoadUI: {e:#}"));
@@ -2436,7 +2569,7 @@ impl AmanatsuVm {
                 list.extend(crate::commands::choose(&game.adv_assets.h_start(here), &mut random));
                 game.rng = rng;
                 game.visit_played = true;
-                game.h = Some(HRun { card: card.clone(), phase: MassagePhase::Agree, return_map, posture: None, entities: Vec::new(), motion: "Idle", motion_until: 0, gauge: 0., orgasms: 0, last_ms: now, night: None });
+                game.h = Some(HRun { card: card.clone(), phase: MassagePhase::Agree, return_map, posture: None, entities: Vec::new(), motion: "Idle", motion_until: 0, gauge: 0., male_gauge: 0., finishes: Vec::new(), orgasms: 0, last_ms: now, night: None });
             } else if name == "btnWith" {
                 // `EventManager.With`: the agree line, the short movie and
                 // `_shortMoiveAfterAssets[LV]`, then the favourability level.
@@ -2539,6 +2672,43 @@ fn game_random(rng: &mut u64, n: usize) -> usize {
 
 /// `SaveData.UpdateSaveTime`: the local time as `yyyy/MM/dd HH:mm` and as
 /// a .NET `DateTime` binary (ticks since 0001-01-01, kind Local).
+/// A world point on the screen of a view (pixels), if in front of it.
+fn project(v: &map::View, p: [f32; 3]) -> Option<[f32; 2]> {
+    use glam::Vec3;
+    let eye = Vec3::from_array(v.eye);
+    let fwd = (Vec3::from_array(v.target) - eye).normalize();
+    let right = fwd.cross(Vec3::from_array(v.up)).normalize();
+    let up = right.cross(fwd);
+    let th = (v.fov.to_radians() / 2.).tan();
+    let d = Vec3::from_array(p) - eye;
+    let z = d.dot(fwd);
+    if z <= 0.01 {
+        return None;
+    }
+    let x = d.dot(right) / (z * th * WIDTH / HEIGHT);
+    let y = d.dot(up) / (z * th);
+    let s = [(x + 1.) / 2. * WIDTH, (1. - y) / 2. * HEIGHT];
+    ((0. ..=WIDTH).contains(&s[0]) && (0. ..=HEIGHT).contains(&s[1])).then_some(s)
+}
+
+/// `project`, or for a point outside the view the screen edge position
+/// toward it (48 px margin).
+fn project_edge(v: &map::View, p: [f32; 3]) -> [f32; 2] {
+    use glam::Vec3;
+    if let Some(s) = project(v, p) {
+        return s;
+    }
+    let eye = Vec3::from_array(v.eye);
+    let fwd = (Vec3::from_array(v.target) - eye).normalize();
+    let right = fwd.cross(Vec3::from_array(v.up)).normalize();
+    let up = right.cross(fwd);
+    let d = Vec3::from_array(p) - eye;
+    let dir = glam::Vec2::new(d.dot(right), -d.dot(up)).normalize_or(glam::Vec2::X);
+    let (cx, cy, m) = (WIDTH / 2., HEIGHT / 2., 48.);
+    let t = ((cx - m) / dir.x.abs().max(1e-6)).min((cy - m) / dir.y.abs().max(1e-6));
+    [cx + dir.x * t, cy + dir.y * t]
+}
+
 fn now_text() -> (String, i64) {
     let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
     let days = secs.div_euclid(86_400);
