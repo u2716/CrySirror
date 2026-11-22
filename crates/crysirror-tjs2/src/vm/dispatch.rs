@@ -2210,117 +2210,83 @@ impl<'bc, 'rt, H: TjsHost + 'static> Vm<'bc, 'rt, H> {
         }
     }
 
-    pub(super) fn invalidate_object(&mut self, handle: ObjectHandle) -> Result<bool> {
-        if !self.runtime.heap[handle.0].valid {
-            return Ok(false);
-        }
-        if self.runtime.heap[handle.0].invalidating {
-            return Ok(false);
-        }
+    /// Execute INV in native order, preserving progress if a script or native
+    /// finalizer parks on a resource. Only retire storage after finalization
+    /// and all registered window items have actually completed.
+    pub(super) fn invalidate_instruction(
+        &mut self, frame: &mut Frame, reg: i16, pc: usize, next: usize,
+    ) -> Result<super::Step> {
+        use super::frame::{InvalidationPhase as Phase, PendingInvalidation};
+        use super::Step;
 
-        self.runtime.heap[handle.0].invalidating = true;
-        let receiver_type = self.object_debug_type(handle, "object");
-        let result = (|| {
-            // `tTJSCustomObject::Finalize` (`tjsObject.cpp:451`) dispatches
-            // `finalize` through `FuncCall` and *ignores its return value*, so
-            // an object that does not carry the member -- an Array, a
-            // Dictionary, a plain data object -- finalizes silently.  Only a
-            // member that exists and throws propagates.
-            let finalize = match self.prop_get_handle(
-                handle,
-                "finalize",
-                DispatchFlags::default(),
-                Some(handle),
-            ) {
-                Ok(value) => value,
-                Err(error) if error.is_member_not_found() => Variant::Void,
-                Err(error) => return Err(error),
+        if frame.invalidations.is_empty() {
+            let object = self.resolve_object(frame.get(reg)?).ok().filter(|h| {
+                let o = &self.runtime.heap[h.0];
+                o.valid && !o.invalidating
+            });
+            let Some(object) = object else {
+                frame.set(reg, Variant::Integer(0))?;
+                return Ok(Step::Next(next));
             };
-            if !matches!(finalize, Variant::Void) {
-                let base_depth = self.runtime.call_depth;
-                let outcome = self
-                    .call_value(
-                        finalize,
-                        Some(handle),
-                        Vec::new(),
-                        false,
-                        Continuation::Root,
-                    )
-                    .map_err(|error| {
-                        label_in_flight_call(
-                            error,
-                            TjsMemberAccess {
-                                operation: TjsMemberOperation::Calling,
-                                receiver_type: receiver_type.clone(),
-                                member_name: Some("finalize".to_string()),
-                                callee_type: None,
-                            },
-                        )
-                    })?;
-                match outcome {
-                    CallOutcome::Immediate(_, Continuation::Root) => {}
-                    CallOutcome::Immediate(_, continuation) => {
-                        return Err(TjsError::runtime(format!(
-                            "unexpected finalize continuation {continuation:?}"
-                        )));
+            self.runtime.heap[object.0].invalidating = true;
+            frame.invalidations.push(PendingInvalidation { object, phase: Phase::CallFinalizer });
+        }
+        while let Some(current) = frame.invalidations.last_mut() {
+            let object = current.object;
+            match &mut current.phase {
+                Phase::CallFinalizer => {
+                    let finalize = match self.prop_get_handle(object, "finalize", DispatchFlags::default(), Some(object)) {
+                        Ok(value) => value,
+                        Err(error) if error.is_member_not_found() => Variant::Void,
+                        Err(error) => return Err(error),
+                    };
+                    if self.runtime.suspended_call.is_some() {
+                        return Ok(Step::Next(pc));
                     }
-                    CallOutcome::Frame(frame) => {
-                        self.run_call_stack(vec![*frame], base_depth)
-                            .map_err(|error| {
-                                label_in_flight_call(
-                                    error,
-                                    TjsMemberAccess {
-                                        operation: TjsMemberOperation::Calling,
-                                        receiver_type: receiver_type.clone(),
-                                        member_name: Some("finalize".to_string()),
-                                        callee_type: None,
-                                    },
-                                )
-                            })?;
+                    if !matches!(finalize, Variant::Void) {
+                        let outcome = self.call_value(finalize, Some(object), Vec::new(), false,
+                            Continuation::CallerRegister { dest: None })
+                            .map_err(|error| label_in_flight_call(error, TjsMemberAccess {
+                                operation: TjsMemberOperation::Calling,
+                                receiver_type: self.object_debug_type(object, "object"),
+                                member_name: Some("finalize".into()), callee_type: None,
+                            }))?;
+                        current.phase = Phase::TakeRegistered;
+                        if let CallOutcome::Frame(callee) = outcome {
+                            return Ok(Step::Call { frame: callee, resume_pc: pc });
+                        }
+                        if std::mem::take(&mut self.runtime.suspend_requested) {
+                            return Ok(Step::Suspend { resume_pc: pc, dest: None });
+                        }
+                        if self.runtime.suspended_call.is_some() {
+                            return Ok(Step::Next(pc));
+                        }
+                    } else {
+                        current.phase = Phase::TakeRegistered;
+                    }
+                }
+                Phase::TakeRegistered => {
+                    current.phase = Phase::Children(self.runtime.host_mut().take_registered_objects(object).into_iter());
+                }
+                Phase::Children(children) => {
+                    if let Some(child) = children.next() {
+                        let item = &mut self.runtime.heap[child.0];
+                        if item.valid && !item.invalidating {
+                            item.invalidating = true;
+                            frame.invalidations.push(PendingInvalidation { object: child, phase: Phase::CallFinalizer });
+                        }
+                    } else {
+                        self.runtime.heap[object.0].valid = false;
+                        self.runtime.heap[object.0].invalidating = false;
+                        self.runtime.host_mut().invalidate_object(object);
+                        self.runtime.heap[object.0].members.clear();
+                        frame.invalidations.pop();
                     }
                 }
             }
-            Ok(())
-        })();
-
-        if let Err(error) = result {
-            self.runtime.heap[handle.0].invalidating = false;
-            return Err(error);
         }
-
-        // `Window::Invalidate` finalizes every object the window registered
-        // through `Window.add` inside its native invalidation
-        // (`WindowIntf.cpp:222-243`) -- after the window's own `finalize`
-        // member and before `DeleteAllMembers` (`tjsObject.cpp:451-469`).
-        // Only the VM can dispatch an item's `finalize` member, so the host
-        // hands the drained registration list over and the VM runs each
-        // item's `_Finalize`; an item that throws is logged and the loop goes
-        // on with the next one, exactly like the reference's catch arm
-        // (`:236-240`).  The window is still valid while the loop runs --
-        // `IsInvalidated` is set only after `Finalize` returns
-        // (`tjsObject.cpp:430-440`).
-        let registered = self.runtime.host_mut().take_registered_objects(handle);
-        for item in registered {
-            if let Err(error) = self.invalidate_object(item) {
-                let message = error.message.clone();
-                self.runtime.host_mut().log(&message);
-            }
-        }
-
-        self.runtime.heap[handle.0].valid = false;
-        self.runtime.heap[handle.0].invalidating = false;
-        self.runtime.host_mut().invalidate_object(handle);
-        // `Finalize` ends with `DeleteAllMembers` (`tjsObject.cpp:467`), which
-        // empties the symbol table the way `Clear()` (`tjsObject.h:566`) does:
-        // `Count` drops to zero and every member a script kept -- the class
-        // functions `regmember` copied onto the instance, the native class's
-        // accessor members, this engine's layer bookkeeping members -- is gone.
-        // The object itself stays allocated, so `NativeInstanceSupport` in the
-        // reference keeps answering for it and a native wrapper that receives
-        // it as an argument still resolves a Layer; what died is every script
-        // member protocol (`GetValidity()`, `tjsObject.cpp:493`).
-        self.runtime.heap[handle.0].members.clear();
-        Ok(true)
+        frame.set(reg, Variant::Integer(1))?;
+        Ok(Step::Next(next))
     }
 
     pub(super) fn call_value(
