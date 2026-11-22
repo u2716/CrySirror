@@ -485,11 +485,13 @@ struct Chunk {
     batch_root: Option<usize>,
     /// Spring chains on scene nodes (resolved to GLB nodes at the end).
     springs: Vec<(usize, crysirror_asset::spring::SpringChain)>,
+    /// `GlbOptions::max_texture`, also applied to consumer override images.
+    max_texture: u32,
 }
 
 impl Chunk {
-    fn new(generator: &str) -> Self {
-        Self { glb: GlbBuilder::new(generator), nodes: HashMap::new(), materials: HashMap::new(), images: HashMap::new(), meshes: HashMap::new(), batch_root: None, springs: Vec::new() }
+    fn new(generator: &str, max_texture: u32) -> Self {
+        Self { glb: GlbBuilder::new(generator), nodes: HashMap::new(), materials: HashMap::new(), images: HashMap::new(), meshes: HashMap::new(), batch_root: None, springs: Vec::new(), max_texture }
     }
 
     /// The GLB node of a scene node, creating its ancestor chain.
@@ -680,7 +682,7 @@ pub fn scene_glb_animated(scene: &Scene6, file: &str, roots: &[usize], assets: &
     }).sum();
     let mut chunks = Vec::new();
     let springs = magica_bone_cloths(scene, options.spring_unit);
-    let mut chunk = Chunk::new(generator);
+    let mut chunk = Chunk::new(generator, options.max_texture);
     chunk.springs = springs.clone();
     for (_, node) in drawable {
         let n = &scene.nodes[node];
@@ -688,7 +690,7 @@ pub fn scene_glb_animated(scene: &Scene6, file: &str, roots: &[usize], assets: &
         let skinned = r.class_id == SKINNED_MESH_RENDERER;
         let mesh_ptr = if skinned { r.fields.pptr("m_Mesh") } else { n.components.iter().find(|c| c.class_id == MESH_FILTER).and_then(|f| f.fields.pptr("m_Mesh")) }.unwrap_or_default();
         if chunk.glb.estimated_bytes() > CHUNK_BUDGET {
-            let mut fresh = Chunk::new(generator);
+            let mut fresh = Chunk::new(generator, options.max_texture);
             fresh.springs = springs.clone();
             let full = std::mem::replace(&mut chunk, fresh);
             report.materials += full.materials.values().filter(|m| m.is_some()).count();
@@ -928,7 +930,7 @@ fn material(assets: &mut dyn SceneAssets, chunk: &mut Chunk, report: &mut GlbRep
             support = ShaderSupport::Skipped;
         }
         if let Some((key, img)) = o.base_texture {
-            let img = downsample(img, 1024);
+            let img = downsample(img, chunk.max_texture.min(1024));
             let png = crysirror_image::encode_png(&img)?;
             engine.base_color_texture = Some(chunk.glb.image(&key, || Ok((png, "image/png")))?);
             engine.uv_scale = [1.; 2];
@@ -954,7 +956,7 @@ fn material(assets: &mut dyn SceneAssets, chunk: &mut Chunk, report: &mut GlbRep
             // fold shadow attenuation into the ramp coordinate).
             let shadow = match &o.toon_shadow {
                 Some((key, img)) => {
-                    let png = crysirror_image::encode_png(img)?;
+                    let png = crysirror_image::encode_png(&downsample(img.clone(), chunk.max_texture.min(1024)))?;
                     Some(chunk.glb.image(key, || Ok((png, "image/png")))?)
                 }
                 None => None,

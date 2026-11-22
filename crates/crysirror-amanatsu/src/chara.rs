@@ -1025,7 +1025,8 @@ impl CharaAssets<'_> {
                     bake_hair_gloss(&mut img, mesh, &g, hair.gloss_colors, ll, shift, m.floats.get("_HairHigh2Multiply").copied().unwrap_or(0.25));
                 }
             }
-            o.base_texture = Some((format!("{file}:{}:hair", m.name), img));
+            // Soft gradients: 512² is ample (prepared-asset budget).
+            o.base_texture = Some((format!("{file}:{}:hair", m.name), halve_to(img, 512)));
             o.base_color = Some([k, k, k, 1.]);
         } else if let Some(c) = look.colors.first() {
             // Toon shading works on display-referred colours.
@@ -1253,6 +1254,13 @@ impl SceneAssets for CharaAssets<'_> {
                     None => None,
                 };
                 o.toon_shadow = Some((format!("{key}:md"), face_md_layer(&img, &md, md2.as_ref(), k, floor, m)));
+            }
+            // Clothes (`_Detail_mask_01`) and hair (`_md_01`) md layers.
+            let md_name = if shader.starts_with("AL/cloth") { Some("_Detail_mask_01") } else if shader.starts_with("AL/hair") { Some("_md_01") } else { None };
+            if let (Some(md), Some((key, img))) = (md_name.and_then(|n| m.textures.get(n)).filter(|t| t.texture.path_id != 0), o.base_texture.clone()) {
+                let (f, id) = self.unity.target(&mf, md.texture)?;
+                let md = self.mask(&f, id)?;
+                o.toon_shadow = Some((format!("{key}:md"), green_md_layer(&img, &md, k, tone, floor, m)));
             }
             let ramp = toon_ramp_floor(&curve, tone.unwrap_or([0.; 3]), floor, o.toon_shadow.is_some());
             let outline = [outline[0] * k, outline[1] * k, outline[2] * k, outline[3]];
@@ -1523,7 +1531,7 @@ fn md_shadow_layer(base: &ImageSurface, md: &ImageSurface, srgb: bool, k: f32, t
     let lin = |b: u8| if srgb { srgb_decode(f32::from(b) / 255.) } else { f32::from(b) / 255. };
     let get = |n: &str, d: f32| m.floats.get(n).copied().unwrap_or(d);
     let (intensity, power, bust) = (get("_mdGIntensity", 0.8), get("_mdGPower", 0.5), get("_Bust_shadowonoff", 0.));
-    shadow_layer(base, k, tone, floor, 1024, &|u, v| {
+    shadow_layer(base, k, tone, floor, 512, &|u, v| {
         let j = texel(md, u, v);
         let (g, b, a) = (lin(md.rgba[j + 1]), lin(md.rgba[j + 2]), lin(md.rgba[j + 3]));
         let chest = ((a - 0.66) * -4.16667 + 1.).clamp(0., 1.);
@@ -1552,6 +1560,19 @@ fn face_md_layer(base: &ImageSurface, md: &ImageSurface, md2: Option<&ImageSurfa
         let div = (1. - 0.5 * power * (1. - b)).clamp(0.5, 1.);
         ((1. - lit) / div).min(1.) * (intensity + (0.5 - intensity) * b)
     })
+}
+
+/// The clothes' and hair's md shading (`AL/cloth`, `AL/hair` forward
+/// programs): `sat(G / clamp(1 − 0.5 · _mdGPower, 0.5, 1)) · _mdGIntensity`
+/// of the (linearised) md texture in uv0, as a 256² shadow layer (every
+/// clothing variant carries one).
+/// SATD-amanatsu-port: the `_Lamp` coordinate shift is not applied (fixed
+/// strength as for the body).
+fn green_md_layer(base: &ImageSurface, md: &ImageSurface, k: f32, tone: Option<[f32; 3]>, floor: f32, m: &UnityMaterial) -> ImageSurface {
+    let get = |n: &str, d: f32| m.floats.get(n).copied().unwrap_or(d);
+    let (intensity, power) = (get("_mdGIntensity", 0.5), get("_mdGPower", 0.5));
+    let div = (1. - 0.5 * power).clamp(0.5, 1.);
+    shadow_layer(base, k, tone, floor, 256, &|u, v| (f32::from(md.rgba[texel(md, u, v) + 1]) / 255. / div).clamp(0., 1.) * intensity)
 }
 
 /// Byte offset of the texel at top-down image coordinates `u`, `v` in [0, 1).
