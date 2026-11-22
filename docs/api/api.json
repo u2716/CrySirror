@@ -214,6 +214,11 @@
           "rust_type": "Option<String>"
         },
         {
+          "doc": "Ordered, session-local overrides from a selected KiriKiri launcher.",
+          "name": "launcher_overlay",
+          "rust_type": "Option<LauncherOverlay>"
+        },
+        {
           "doc": "Engine-published protected-bootstrap profile (`hxv4_bootstrap_profile` for `Plugins.linkZ`, or `cxdec_bootstrap_profile` for the startup `Storages.setupArchiveData` facade) the natives must match.",
           "name": "bootstrap_profile",
           "rust_type": "Option<String>"
@@ -29750,7 +29755,7 @@
       "used_by": "UiEvent.widget client/local identity"
     }
   ],
-  "fingerprint": "8693c021aef05c1f",
+  "fingerprint": "a6235515c431567d",
   "generated_by": "crysirror-engine api_doc (tests/api_docs.rs)",
   "globals": [
     {
