@@ -115,6 +115,26 @@ struct HRun {
     event_point: Option<&'static str>,
 }
 
+/// `HumanCloth` states of a character spawned with every clothing variant.
+struct ClothRun {
+    parts: Vec<crate::chara::ClothPart>,
+    states: Vec<usize>,
+    accessories: Vec<String>,
+    accessories_hidden: bool,
+    entities: Vec<u32>,
+}
+
+impl ClothRun {
+    /// `AnimationState.hidden`.
+    fn hidden(&self) -> Vec<String> {
+        let mut out: Vec<String> = self.parts.iter().zip(&self.states).flat_map(|(p, s)| p.hidden(*s)).collect();
+        if self.accessories_hidden {
+            out.extend(self.accessories.iter().cloned());
+        }
+        out
+    }
+}
+
 /// A short movie (`EventManager.EventShortMovie` / `ShortMovie.PlayAsync`).
 struct MoviePlay {
     movie: crate::sm::Movie,
@@ -182,6 +202,9 @@ const H_MOTIONS: [&str; 53] = [
     "S_Idle_IN_A", "S_Idle_OUT_A", "S_Idle_OF_A", "S_Drink_IN", "S_Drink", "S_Drink_A", "S_Vomit_IN", "S_Vomit", "S_Vomit_A",
     "S_Insert", "S_InsertIdle", "S_Pull", "S_Put", "S_Drop",
 ];
+
+/// The player's card.
+const MALE_CARD: &str = "DefaultData/0/chara/male/AL_M_00.png";
 
 /// How an H finish ends (`GaugeController` buttons, `Solo` items).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -327,6 +350,11 @@ pub struct Game {
     config_dirty: bool,
     /// `AL.Dialog.ExitDialog` is open.
     exit_dialog: bool,
+    /// H clothing states by card: parts, their states, accessories and
+    /// whether the accessories are hidden.
+    cloth: std::collections::HashMap<String, ClothRun>,
+    /// The character the H clothes menu edits.
+    cloth_card: Option<String>,
     /// The command camera table (`AngleData` prefab).
     angle_data: Option<Level>,
     /// The map view before the command camera.
@@ -745,7 +773,8 @@ impl Game {
         let lists = self.lists.take().context("lists")?;
         let human = crate::chara::Human::from_card(&mut self.unity, &lists, &card, !card_path.contains("/male/"));
         self.lists = Some(lists);
-        let human = human?;
+        let mut human = human?;
+        human.undress_all();
         let suffix = human.height_suffix();
         self.last_height_pick = match suffix {
             "S" => 0,
@@ -781,6 +810,8 @@ impl Game {
         for &entity in &ids {
             self.world.push(json!({"op": "set_transform", "id": entity, "transform": transform}));
         }
+        // Dressed (state 0) with every variant exported.
+        self.cloth.insert(card_path.to_owned(), ClothRun { states: vec![0; human.clothes.len()], parts: human.clothes.clone(), accessories: human.accessories.clone(), accessories_hidden: false, entities: ids.clone() });
         let layers = json!([{"clip": play, "looping": true}]);
         match crate::face::Face::from_scene(&mut self.unity, &human.scene, &human.key) {
             Ok(Some(face)) => {
@@ -791,8 +822,9 @@ impl Game {
                 if let Err(e) = other {
                     self.log.push(format!("H face {card_path}: {e:#}"));
                 }
+                let hidden = self.cloth.get(card_path).map(ClothRun::hidden).unwrap_or_default();
                 for &entity in &ids {
-                    self.world.push(json!({"op": "set_animation", "id": entity, "animation": {"layers": layers}}));
+                    self.world.push(json!({"op": "set_animation", "id": entity, "animation": {"layers": layers, "hidden": hidden}}));
                 }
             }
         }
@@ -1183,7 +1215,7 @@ impl Game {
             if c.info.bundle.is_empty() {
                 continue;
             }
-            let who = if c.is_male() { "DefaultData/0/chara/male/AL_M_00.png".to_owned() } else { card.to_owned() };
+            let who = if c.is_male() { MALE_CARD.to_owned() } else { card.to_owned() };
             let bundle = format!("lib/{}", c.info.bundle);
             let ids = self.spawn_character_states(host, client, &who, t.clone(), sun, &bundle, &c.info.asset, &H_MOTIONS, "Idle")?;
             // Config `HScene/Visible`: the player can be hidden.
@@ -1286,7 +1318,8 @@ impl Game {
             self.apply_face(&card);
         }
         for e in entities.iter().filter(|e| !faced.contains(*e)) {
-            self.world.push(json!({"op": "set_animation", "id": e, "animation": {"layers": layers}}));
+            let hidden = self.cloth.values().find(|c| c.entities.contains(e)).map(ClothRun::hidden).unwrap_or_default();
+            self.world.push(json!({"op": "set_animation", "id": e, "animation": {"layers": layers, "hidden": hidden}}));
         }
     }
 
@@ -1584,6 +1617,17 @@ impl Game {
         match name {
             "Config" => self.open_config(),
             "Point" => self.open_h_points(),
+            "Clothes" | "Acs" | "Coodenate" => self.h_clothes_menu(name),
+            "Toggle Female" | "Toggle Female 0" => self.cloth_card = self.h.as_ref().map(|h| h.card.clone()),
+            "Toggle Male" => self.cloth_card = Some(MALE_CARD.to_owned()),
+            n if n.starts_with("Button ") => self.h_cloth_state(&n["Button ".len()..]),
+            "Toggle ALL" => {
+                let card = self.cloth_card.clone().or_else(|| self.h.as_ref().map(|h| h.card.clone())).unwrap_or_default();
+                if let Some(c) = self.cloth.get_mut(&card) {
+                    c.accessories_hidden = !c.accessories_hidden;
+                }
+                self.refresh_cloth(&card);
+            }
             "Finish Female" | "Finish Male" | "Finish Shot" | "Finish Double" | "Item 0" | "Item 1" | "Item 2" => {
                 let kind = match name {
                     "Finish Female" => HFinish::Female,
@@ -1681,6 +1725,87 @@ impl Game {
         }
         self.h_play(first, false);
         self.log.push(format!("HScene finish {kind:?}: {first}"));
+    }
+
+    /// `ClothesSettingMenu`: the `Clothes`/`Acs`/`Coodenate` buttons open
+    /// their panel (again: close). SATD-amanatsu-port: coordinate cards,
+    /// accessory slots one by one and the menu animation are not ported.
+    fn h_clothes_menu(&mut self, which: &str) {
+        let Some(oi) = self.overlays.iter().position(|(l, _)| l.name == crate::h::SCENE_PREFAB) else { return };
+        let level = &mut self.overlays[oi].0;
+        let base = "HScene/Canvas/ccr_dropShadow/Option/RightTopArea/ClothesSetting/root";
+        let panel = match which {
+            "Clothes" => "SelectClothesState",
+            "Acs" => "SelectAccessoryState",
+            _ => "SelectCoodinateCard",
+        };
+        let Some(root) = level.find(base) else { return };
+        let open_panel = level.find(&format!("{base}/{panel}")).filter(|&p| level.is_active(root) && level.is_active(p) && level.states.get(&root).and_then(|s| s.group_alpha).unwrap_or(0.) > 0.);
+        if open_panel.is_some() {
+            level.set_active(root, false);
+            return;
+        }
+        crate::talk::show(level, root);
+        for p in ["SelectClothesState", "SelectAccessoryState", "SelectCoodinateCard"] {
+            if let Some(n) = level.find(&format!("{base}/{p}")) {
+                if p == panel {
+                    crate::talk::show(level, n);
+                } else {
+                    level.set_active(n, false);
+                }
+            }
+        }
+        if self.cloth_card.is_none() {
+            self.cloth_card = self.h.as_ref().map(|h| h.card.clone());
+        }
+    }
+
+    /// `HumanCloth.SetClothesStateNext` of a part (`Tops`, `Bottoms`, …,
+    /// `ALL`) of the selected character.
+    fn h_cloth_state(&mut self, part: &str) {
+        let card = self.cloth_card.clone().or_else(|| self.h.as_ref().map(|h| h.card.clone())).unwrap_or_default();
+        let list = match part {
+            "Tops" => "co_top",
+            "Bottoms" => "co_bot",
+            "Bra" => "co_bra",
+            "Shorts" => "co_shorts",
+            "Gloves" => "co_gloves",
+            "Panst" => "co_panst",
+            "Socks" => "co_socks",
+            "Shoes" => "co_shoes",
+            "Option 1" => "co_add_arm",
+            "Option 2" => "co_add_leg",
+            "Option 3" => "co_add_other",
+            "ALL" => "",
+            _ => return,
+        };
+        let Some(c) = self.cloth.get_mut(&card) else { return };
+        if list.is_empty() {
+            // All parts together: the next state of the most dressed.
+            let next = c.states.iter().copied().min().unwrap_or(0) + 1;
+            for (p, st) in c.parts.iter().zip(c.states.iter_mut()) {
+                *st = if next >= p.states() { 0 } else { next.min(p.states() - 1) };
+            }
+        } else {
+            for (p, st) in c.parts.iter().zip(c.states.iter_mut()).filter(|(p, _)| p.list == list) {
+                *st = (*st + 1) % p.states();
+            }
+        }
+        self.log.push(format!("HumanCloth {card} {part}: {:?}", c.states));
+        self.refresh_cloth(&card);
+    }
+
+    /// Re-send a character's animation with its clothing state.
+    fn refresh_cloth(&mut self, card: &str) {
+        if self.faces.contains_key(card) {
+            self.apply_face(card);
+        } else if let Some(c) = self.cloth.get(card) {
+            let hidden = c.hidden();
+            let layers = self.h.as_ref().map(|h| json!([{"clip": h.motion, "looping": true}])).unwrap_or(json!([]));
+            for &e in &c.entities {
+                self.world.push(json!({"op": "set_animation", "id": e, "animation": {"layers": layers, "hidden": hidden}}));
+            }
+        }
     }
 
     /// A conversation ended during H: advance its phase.
@@ -2506,8 +2631,9 @@ impl Game {
             e.eyes_open = 0.;
         }
         let morphs = face.weights(&e);
+        let hidden = self.cloth.get(card).map(ClothRun::hidden).unwrap_or_default();
         for &id in ids {
-            self.world.push(json!({"op": "set_animation", "id": id, "animation": {"layers": layers, "morphs": morphs}}));
+            self.world.push(json!({"op": "set_animation", "id": id, "animation": {"layers": layers, "morphs": morphs, "hidden": hidden}}));
         }
     }
 
@@ -2942,6 +3068,8 @@ impl AmanatsuVm {
             config_loaded: false,
             config_dirty: false,
             exit_dialog: false,
+            cloth: std::collections::HashMap::new(),
+            cloth_card: None,
             expressions: std::collections::HashMap::new(),
             blinking: std::collections::HashSet::new(),
             next_blink: std::collections::HashMap::new(),

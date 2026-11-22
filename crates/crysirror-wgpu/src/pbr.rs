@@ -3360,6 +3360,7 @@ impl PbrRenderer {
                     client,
                     asset,
                     morphs,
+                    hidden,
                     ..
                 } => {
                     let key = format!("{client}@{}:{asset}", assets.revision(ClientId(*client)));
@@ -3367,8 +3368,28 @@ impl PbrRenderer {
                     let global = poses
                         .remove(&inst.key)
                         .context("prepared animation pose missing")?;
+                    // Subtrees of hidden nodes are not drawn.
+                    let mut skip = vec![false; model.nodes.len()];
+                    if !hidden.is_empty() {
+                        let mut stack: Vec<usize> = model
+                            .nodes
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, n)| hidden.iter().any(|h| *h == n.name))
+                            .map(|(i, _)| i)
+                            .collect();
+                        while let Some(i) = stack.pop() {
+                            if !skip[i] {
+                                skip[i] = true;
+                                stack.extend(&model.nodes[i].children);
+                            }
+                        }
+                    }
                     for (ni, node) in model.nodes.iter().enumerate() {
                         let Some(mesh) = node.mesh else { continue };
+                        if skip[ni] {
+                            continue;
+                        }
                         let world = m * global[ni];
                         let sub = inst.key.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (ni as u64 + 1);
                         let wm = world.to_cols_array_2d();

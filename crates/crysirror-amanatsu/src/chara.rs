@@ -431,7 +431,47 @@ pub struct Human {
     pub scene: Scene6,
     /// Part looks by the file key of their prefab.
     looks: HashMap<String, PartLook>,
+    /// Clothing parts with their state variants (`HumanCloth`).
+    pub clothes: Vec<ClothPart>,
+    /// Accessory part root names (exported unique, `acs{slot}#root`).
+    pub accessories: Vec<String>,
     pub log: Vec<String>,
+}
+
+/// A clothing part (`ChaFileClothes` slot) for `HumanCloth.SetClothesState`:
+/// the node names of its state variants `n_*_a`/`_b`/`_c` in order and of
+/// the part root (made unique per part: `{list}#{name}`).
+#[derive(Clone, Debug)]
+pub struct ClothPart {
+    pub list: &'static str,
+    pub root: String,
+    pub variants: Vec<String>,
+}
+
+impl ClothPart {
+    /// The number of states: each variant, then off.
+    pub fn states(&self) -> usize {
+        self.variants.len().max(1) + 1
+    }
+
+    /// The node names hidden in `state` (0 dressed, the last off).
+    pub fn hidden(&self, state: usize) -> Vec<String> {
+        if state + 1 >= self.states() {
+            return vec![self.root.clone()];
+        }
+        self.variants.iter().enumerate().filter(|(i, _)| *i != state).map(|(_, v)| v.clone()).collect()
+    }
+}
+
+impl Human {
+    /// Export every clothing state variant (for runtime states through
+    /// `AnimationState.hidden` instead of the import-time dress).
+    pub fn undress_all(&mut self) {
+        let names: std::collections::HashSet<String> = self.clothes.iter().flat_map(|c| c.variants.iter().cloned()).collect();
+        for n in self.scene.nodes.iter_mut().filter(|n| names.contains(&n.name)) {
+            n.active = true;
+        }
+    }
 }
 
 fn color(v: Option<&Value>) -> Option<[f32; 4]> {
@@ -584,8 +624,10 @@ impl Human {
             }
         }
         // Clothes.
-        let clothes = crysirror_unity::msgpack::decode(coord.block("Clothes").context("coordinate Clothes")?)?;
-        for (i, part) in clothes.get("parts").map(Value::as_array).unwrap_or(&[]).iter().enumerate() {
+        let mut clothes_parts: Vec<ClothPart> = Vec::new();
+        let clothes = &mut clothes_parts;
+        let clothes_block = crysirror_unity::msgpack::decode(coord.block("Clothes").context("coordinate Clothes")?)?;
+        for (i, part) in clothes_block.get("parts").map(Value::as_array).unwrap_or(&[]).iter().enumerate() {
             let Some(list) = CLOTHES_LISTS.get(i) else { break };
             let id = part.get("id").and_then(Value::as_i64).unwrap_or(0);
             let Some(row) = lists.row(list, id) else {
@@ -604,6 +646,24 @@ impl Human {
                     let n = scene.alias_bones(r, skeleton);
                     let hide: Vec<bool> = part.get("hideOpt").map(Value::as_array).unwrap_or(&[]).iter().map(|v| v.as_bool().unwrap_or(false)).collect();
                     dress(&mut scene, r, &hide);
+                    // Unique names for the part's state nodes.
+                    let mut stack = vec![r];
+                    let mut variants: Vec<(String, usize)> = Vec::new();
+                    while let Some(n) = stack.pop() {
+                        stack.extend(&scene.nodes[n].children);
+                        let name = scene.nodes[n].name.clone();
+                        let b = name.as_bytes();
+                        if name.starts_with("n_") && b.len() >= 4 && b[b.len() - 2] == b'_' && matches!(b[b.len() - 1], b'a' | b'b' | b'c') {
+                            let unique = format!("{list}#{name}");
+                            scene.nodes[n].name = unique.clone();
+                            variants.push((unique, n));
+                        }
+                    }
+                    variants.sort();
+                    // One variant set per part: the first letter group.
+                    let root = format!("{list}#root");
+                    scene.nodes[r].name = root.clone();
+                    clothes.push(ClothPart { list, root, variants: variants.into_iter().map(|v| v.0).collect() });
                     log.push(format!("{list} {id}: {ab} {data} ({n} bones)"));
                 }
                 Err(e) => log.push(format!("{list} {id}: {e:#}")),
@@ -618,6 +678,7 @@ impl Human {
         // timings, patterns, gloss/metallic and hair-coloured accessories
         // are not applied.
         let acs = crysirror_unity::msgpack::decode(coord.block("Accessory").context("coordinate Accessory")?)?;
+        let mut accessories = Vec::new();
         let head_origin = scene.nodes[head_root].origin;
         for (slot, part) in acs.get("parts").map(Value::as_array).unwrap_or(&[]).iter().enumerate() {
             let ty = part.get("type").and_then(Value::as_i64).unwrap_or(120);
@@ -640,6 +701,9 @@ impl Human {
                     looks.insert(p.key.clone(), PartLook { shaders: &["AL/acs"], colors, material_mask: true, ..Default::default() });
                     let r = scene.graft(&p.scene, &p.key, parent);
                     let origin = scene.nodes[r].origin;
+                    let root_name = format!("acs{slot}#root");
+                    scene.nodes[r].name = root_name.clone();
+                    accessories.push(root_name);
                     let moves = part.get("addMove").map(Value::as_array).and_then(|a| a.get(2)).map(Value::as_array).unwrap_or(&[]);
                     let v3 = |i: usize, d: f32| moves.get(i).map(Value::as_array).filter(|a| a.len() >= 3).map_or([d; 3], |a| [0, 1, 2].map(|k| a[k].as_f32().unwrap_or(d)));
                     for (k, name) in ["N_move", "N_move2"].iter().enumerate() {
@@ -662,7 +726,7 @@ impl Human {
             n.active = false;
         }
         let height = body_data.get("shapeValueBody").map(Value::as_array).and_then(|a| a.first()).and_then(Value::as_f32).unwrap_or(0.5);
-        Ok(Self { key: body.key, female, height, scene, looks, log })
+        Ok(Self { key: body.key, female, height, scene, looks, clothes: clothes_parts, accessories, log })
     }
 }
 

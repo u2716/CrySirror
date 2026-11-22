@@ -217,6 +217,10 @@ pub struct AnimationState {
     /// mesh of the model that has a target of that name.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub morphs: std::collections::BTreeMap<String, f32>,
+    /// Nodes of the model whose subtrees are not drawn (clothing states,
+    /// removable parts); their poses still evaluate.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hidden: Vec<String>,
     /// Entity of the same client whose evaluated local translation and
     /// rotation are copied onto this entity's same-named nodes after its own
     /// clips (parts sharing a character skeleton). Scale stays the follower's.
@@ -282,6 +286,10 @@ impl AnimationState {
         ensure!(
             self.morphs.len() <= MAX_MORPH_WEIGHTS,
             "too many morph weights"
+        );
+        ensure!(
+            self.hidden.len() <= MAX_NODE_POSES && self.hidden.iter().all(|n| !n.is_empty() && n.len() <= 256),
+            "invalid hidden nodes"
         );
         for (name, w) in &self.morphs {
             ensure!(

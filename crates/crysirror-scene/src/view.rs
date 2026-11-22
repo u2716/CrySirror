@@ -598,6 +598,8 @@ pub enum PbrDrawable {
         animation: Vec<crate::components::AnimationLayer>,
         /// Non-zero morph target weights by target name.
         morphs: Vec<(String, f32)>,
+        /// Node names whose subtrees are not drawn.
+        hidden: Vec<String>,
         /// Instance key whose local pose is copied onto same-named nodes.
         follow: Option<u64>,
         /// Leader node the root nodes ride on (`AnimationState::attach`).
@@ -855,6 +857,7 @@ impl World {
                             .filter(|(_, w)| **w != 0.)
                             .map(|(n, w)| (n.clone(), *w))
                             .collect(),
+                        hidden: spec.animation.iter().flat_map(|a| a.hidden.iter().cloned()).collect(),
                         follow: spec
                             .animation
                             .as_ref()

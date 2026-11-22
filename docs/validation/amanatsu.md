@@ -196,3 +196,9 @@
 - Behaviour (`hf` track from the `h_lv1` save, 床手コキ): a scene click starts the weak loop, a wheel step makes it strong; at frame 3300 the gauge allows ぶっかける, which plays `S_OrgasmM_OUT`, then the hold and `S_Idle_OUT_A` (frames 3340, 3700).
 - Insert postures (same day): `controller_states` `som_f_00` has `Insert`, `InsertIdle`, `Pull`, `Drop` beside the loops/finishes (37 baked clips). The `hi` track switches to 正常位 through the posture list and clicks the scene at 3000; frames 3030 and 3200 show the insert and the following motion.
 
+## 2026-11-22 — H clothing states
+
+- Native evidence: H prefab `Option/RightTopArea` (`Clothes`, `Acs`, `Coodenate`) and `ClothesSetting/root/SelectClothesState` (`Button ALL`, `Tops`, `Bottoms`, `Bra`, `Shorts`, `Gloves`, `Panst`, `Socks`, `Shoes`, `Option 1–3`), `Chara List` toggles, `SelectAccessoryState/Toggle ALL`; clothing prefabs' `n_top_a`/`n_top_b` (bra), `n_bot_*` variants.
+- Engine: `AnimationState.hidden` (node names whose subtrees the renderer does not draw).
+- Behaviour (`hc`/`hc2` tracks from the `h_lv1` save): the shirt button at frame 2700 opens the part column; the bra button shows the half state (pulled up) at 2810 and removes it at 2870; the shorts button changes the bottoms at 2930 (log `HumanCloth … [2, 1, 0]`).
+
