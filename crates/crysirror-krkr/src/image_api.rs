@@ -385,39 +385,37 @@ pub(crate) fn begin_pair(rt:&mut Rt,target:ObjectHandle,source:ObjectHandle,effe
 /// Prepare native mask coverage before consuming an input receipt. The same
 /// shared ImageJob evaluates immutable copy/fill/resize graphs; no Canvas paint
 /// is retargeted, and no pointer callback or TJS continuation is replayed.
-pub(crate) fn prepare_hit_images(rt: &mut Rt, host: &mut dyn HostServices, client: ClientId, frame: crysirror_core::service::InputFrame) -> anyhow::Result<bool> {
+pub(crate) fn prepare_hit_image(
+    rt: &mut Rt, host: &mut dyn HostServices, client: ClientId, id: usize, x: i64, y: i64,
+) -> anyhow::Result<bool> {
     anyhow::ensure!(rt.host().image_job.is_none(), "hit preparation overlaps native image job");
-    let candidates = rt.host().hits(frame.pointer_x.into(), frame.pointer_y.into());
-    for (id, x, y) in candidates {
-        let h = ObjectHandle(id);
-        let kind = rt.object_member(h, "__lp_hitType").to_integer().map_err(|e|anyhow::anyhow!("{e}"))?;
-        let threshold = rt.object_member(h, "__lp_hitThreshold").to_integer().map_err(|e|anyhow::anyhow!("{e}"))?;
-        let layer = rt.host().layer(h).map_err(|e|anyhow::anyhow!("{e}"))?;
-        let px=x-layer.image_left; let py=y-layer.image_top;
-        if kind!=0 || !(1..256).contains(&threshold) || !layer.has_image
-            || layer.kind==1 || layer.full_alpha.is_some()
-            || px<0 || py<0 || px>=layer.image_width || py>=layer.image_height {
-            continue;
-        }
-        // A layer composed by retained canvas drawing has no CPU source: its
-        // coverage comes from the same shared capture Layer.saveLayerImage uses.
-        let Some(source)=layer.image_source.as_ref() else {
-            let slot=layer.slot;
-            let job=host.begin_canvas_image(client,slot)?;
-            rt.host_mut().image_job=Some((id,job,[false;2],false));
-            return Ok(false);
-        };
-        if matches!(source,ImageInput::Resource(_)) { continue; }
-        let source=source.clone();
-        let job=rt.host().images.as_ref().ok_or_else(||anyhow::anyhow!("image service absent"))?
-            .begin_process(source,std::sync::Arc::from(&b"[]"[..]))
-            .map_err(|e|anyhow::anyhow!("{e}"))?;
-        // Only coverage becomes ready. Existing retained Canvas nodes and copied
-        // immutable resources continue to own the visible image.
+    let h = ObjectHandle(id);
+    let kind = rt.object_member(h, "__lp_hitType").to_integer().map_err(|e|anyhow::anyhow!("{e}"))?;
+    let threshold = rt.object_member(h, "__lp_hitThreshold").to_integer().map_err(|e|anyhow::anyhow!("{e}"))?;
+    let layer = rt.host().layer(h).map_err(|e|anyhow::anyhow!("{e}"))?;
+    let px=x-layer.image_left; let py=y-layer.image_top;
+    if kind!=0 || !(1..256).contains(&threshold) || !layer.has_image
+        || layer.kind==1 || layer.full_alpha.is_some()
+        || px<0 || py<0 || px>=layer.image_width || py>=layer.image_height {
+        return Ok(true);
+    }
+    // A layer composed by retained canvas drawing has no CPU source: its
+    // coverage comes from the same shared capture Layer.saveLayerImage uses.
+    let Some(source)=layer.image_source.as_ref() else {
+        let slot=layer.slot;
+        let job=host.begin_canvas_image(client,slot)?;
         rt.host_mut().image_job=Some((id,job,[false;2],false));
         return Ok(false);
-    }
-    Ok(true)
+    };
+    if matches!(source,ImageInput::Resource(_)) { return Ok(true); }
+    let source=source.clone();
+    let job=rt.host().images.as_ref().ok_or_else(||anyhow::anyhow!("image service absent"))?
+        .begin_process(source,std::sync::Arc::from(&b"[]"[..]))
+        .map_err(|e|anyhow::anyhow!("{e}"))?;
+    // Only coverage becomes ready. Existing retained Canvas nodes and copied
+    // immutable resources continue to own the visible image.
+    rt.host_mut().image_job=Some((id,job,[false;2],false));
+    Ok(false)
 }
 
 /// A real layerExRaster facade. Only full clip boxes and shared source resources

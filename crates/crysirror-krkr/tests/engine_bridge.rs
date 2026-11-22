@@ -501,7 +501,10 @@ fn native_sound_parks_the_original_caller_until_shared_resources_and_voice_are_r
         r#"
  var w=new Window();
  class Sound extends WaveSoundBuffer {function Sound(w){super.WaveSoundBuffer(w);}function onStatusChanged(){Debug.message('status',status);}}
+ if(!System.getKeyState(17))throw new Exception('initial Ctrl press missing');
  var sound=new Sound(w);sound.open('tone.wav');
+ if(System.getKeyState(17))throw new Exception('Ctrl release lost while sound was opening');
+ if(!System.getKeyState(17,false) || System.getKeyState(17,false))throw new Exception('Ctrl press history');
  if(sound.totalSamples!=64||sound.frequency!=8000||sound.status!='stop')throw new Exception('open metadata');
  Debug.message('opened');sound.looping=true;sound.volume=50000;sound.play();
  if(sound.status!='play')throw new Exception('voice published early');
@@ -515,7 +518,7 @@ fn native_sound_parks_the_original_caller_until_shared_resources_and_voice_are_r
     let permits = (0..pool.stats().capacity)
         .map(|_| pool.reserve().unwrap())
         .collect::<Vec<_>>();
-    r.tick(0, InputFrame::default()).unwrap();
+    r.tick(0, InputFrame { buttons_down: buttons::CTRL, ..Default::default() }).unwrap();
     let before = r.inspect();
     assert_eq!(before["sessions"][0]["native"]["suspended"], true);
     assert!(
