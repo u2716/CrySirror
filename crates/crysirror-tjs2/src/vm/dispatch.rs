@@ -2497,7 +2497,11 @@ impl<'bc, 'rt, H: TjsHost + 'static> Vm<'bc, 'rt, H> {
                 if let Some(name) = self.runtime.native_call_name(id, false).map(str::to_string) {
                     self.runtime.trace_native_call(&name, native_this, &args);
                 }
-                let value = function.call(self.runtime, native_this, args)?;
+                let needed = !matches!(continuation, Continuation::CallerRegister { dest: None });
+                let prior = self.runtime.set_native_result_needed(needed);
+                let result = function.call(self.runtime, native_this, args);
+                self.runtime.set_native_result_needed(prior);
+                let value = result?;
                 if let Some(instance) = native_class_body {
                     for (name, value) in self.runtime.object_members(handle) {
                         let value = match value {
@@ -2546,10 +2550,11 @@ impl<'bc, 'rt, H: TjsHost + 'static> Vm<'bc, 'rt, H> {
                 if let Some(name) = self.runtime.native_call_name(id, true).map(str::to_string) {
                     self.runtime.trace_native_call(&name, this_obj, &args);
                 }
-                Ok(CallOutcome::Immediate(
-                    function.call(self, this_obj, args)?,
-                    continuation,
-                ))
+                let needed = !matches!(continuation, Continuation::CallerRegister { dest: None });
+                let prior = self.runtime.set_native_result_needed(needed);
+                let result = function.call(self, this_obj, args);
+                self.runtime.set_native_result_needed(prior);
+                Ok(CallOutcome::Immediate(result?, continuation))
             }
             ObjectKind::Proxy {
                 primary,

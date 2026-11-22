@@ -533,6 +533,11 @@ impl Storage {
         }
         self.resolve_auto(base)
     }
+    /// True when immutable archive contents serve this resolved asset.
+    pub(crate) fn is_mounted_asset(&self, path: &VfsPath) -> bool {
+        self.files.serving_container(path).is_some()
+    }
+
     /// Auto-path directories inside compound media.
     fn resolve_auto(&self, base: &str) -> Option<String> {
         for dir in self.auto.iter().rev() {
