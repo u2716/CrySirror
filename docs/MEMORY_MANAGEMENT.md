@@ -78,6 +78,20 @@ diagnostics, not complete engine-wide accounting. Switch's shared backend
 tracks submission retirement; inspect its actual allocator/driver diagnostics
 before claiming process-wide memory measurements.
 
+### Prepared CPU asset cache
+
+On publication, the runtime compares the decoded payload size and current
+residency against the prepared-cache budget. Under pressure it can reclaim
+recent automatic entries before the idle timer expires. It first checks that
+enough bytes are reclaimable, then removes the least recently used entries
+until the incoming payload fits. Explicit tickets, active streaming leases
+and payloads shared with consumers retain their ownership.
+
+If current owners prevent admission, the error reports the resident and
+incoming byte counts. An automatic request denied for this reason can decode
+again on a subsequent lookup once sufficient space is available. Oversized
+payloads and decoder errors retain their failure status.
+
 ## Platform review and validation
 
 - [PS Vita characteristics](../platform/psv/PLATFORM.md): user heap/CDRAM,
