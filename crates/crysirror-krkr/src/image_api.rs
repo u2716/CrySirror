@@ -237,15 +237,18 @@ pub(crate) fn commit_result(rt:&mut Rt,host:&mut dyn HostServices,client:ClientI
 /// and the atomic write then use shared image and storage services.
 pub(crate) struct LayerImageSave{
     pub layer:usize,
-    name:String,
+    // A bookmark encoder returns its octet to the suspended script. A
+    // saveLayerImage call writes it atomically through the Save capability.
+    destination:LayerImageDestination,
     format:SaveFormat,
     input:Option<ImageInput>,
     job:Option<crysirror_core::image_processing::ImageJob>,
 }
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
-enum SaveFormat{Bmp(crysirror_image::bmp_encode::BmpDepth),Png}
-/// The save handlers' mode acceptance (GraphicsLoaderIntf.cpp TVPSaveAsBMP):
-/// "bmp" and "bmp32" are 32-bit. TLG and JPEG need encoders the engine lacks.
+enum SaveFormat{Bmp(crysirror_image::bmp_encode::BmpDepth),Png,Jpeg(u8)}
+enum LayerImageDestination { File(String), Bookmark }
+/// Layer.saveLayerImage handler modes. The PackinOne bookmark encoder selects
+/// its JPEG quality separately from this mode string.
 fn save_format(mode:&str)->Option<SaveFormat>{
     use crysirror_image::bmp_encode::BmpDepth as D;
     match mode.to_ascii_lowercase().trim_start_matches('.'){
@@ -266,7 +269,7 @@ pub(crate) fn save_layer_image(rt:&mut Rt,t:Option<ObjectHandle>,args:Vec<Varian
     let mode=if matches!(args.get(1),None|Some(Variant::Void)){"bmp".to_owned()}else{crate::natives::string(&args,1,M)?};
     let Some(format)=save_format(&mode) else{
         return Err(if matches!(mode.to_ascii_lowercase().trim_start_matches('.'),"jpg"|"jpeg"|"tlg"|"tlg5"|"tlg6"){
-            unsupported(&format!("{M} type {mode:?}"),"a shared encoder for this format")
+            unsupported(&format!("{M} type {mode:?}"),"a registered layer-save handler for this mode")
         }else{
             TjsError::runtime(format!("unknown graphic format {mode:?}"))
         });
@@ -276,8 +279,29 @@ pub(crate) fn save_layer_image(rt:&mut Rt,t:Option<ObjectHandle>,args:Vec<Varian
     if crate::storage::save_path(&name).map_err(|e|TjsError::runtime(e.to_string()))?.is_none(){
         return Err(TjsError::runtime(format!("{M}: {name:?} is outside the save capability root")));
     }
-    rt.host_mut().image_save=Some(LayerImageSave{layer:h.0,name,format,input:layer.image_source,job:None});
+    rt.host_mut().image_save=Some(LayerImageSave{layer:h.0,destination:LayerImageDestination::File(name),format,input:layer.image_source,job:None});
     rt.request_suspend();Ok(Variant::Void)
+}
+
+pub(crate) fn capture_bookmark_thumbnail(rt: &mut Rt, layer: ObjectHandle, jpeg: bool, quality: u8) -> Result<Variant> {
+    before_bitmap_call(rt)?;
+    if !rt.host().can_suspend {
+        return Err(unsupported("makeDataPackThumb", "a resumable image capture"));
+    }
+    if rt.host().image_save.is_some() {
+        return Err(TjsError::runtime("native layer image save already pending"));
+    }
+    let source = rt.host().layer(layer)?;
+    if !source.has_image { return Ok(Variant::Void); }
+    let input = source.image_source.clone();
+    rt.host_mut().image_save = Some(LayerImageSave {
+        layer: layer.0,
+        destination: LayerImageDestination::Bookmark,
+        format: if jpeg { SaveFormat::Jpeg(quality) } else { SaveFormat::Png },
+        input, job: None,
+    });
+    rt.request_suspend();
+    Ok(Variant::Void)
 }
 fn poll_save(rt:&mut Rt,host:&mut dyn HostServices,client:ClientId)->anyhow::Result<bool>{
     let Some(mut save)=rt.host_mut().image_save.take() else{return Ok(true)};
@@ -298,9 +322,15 @@ fn poll_save(rt:&mut Rt,host:&mut dyn HostServices,client:ClientId)->anyhow::Res
             let bytes=match save.format{
                 SaveFormat::Bmp(depth)=>crysirror_image::bmp_encode::encode_bmp(width,height,&image.rgba(),depth)?,
                 SaveFormat::Png=>crysirror_image::encode_png(&crysirror_image::ImageSurface{width,height,rgba:image.rgba().to_vec()})?,
+                SaveFormat::Jpeg(quality)=>crysirror_image::encode_jpeg(&crysirror_image::ImageSurface{width,height,rgba:image.rgba().to_vec()},quality)?,
             };
-            let job=rt.host().storage().map_err(|e|anyhow::anyhow!("{e}"))?.begin_write(&save.name,bytes.into()).map_err(|e|anyhow::anyhow!("{e}"))?;
-            rt.host_mut().writes.push_back(job);
+            match save.destination {
+                LayerImageDestination::File(name) => {
+                    let job=rt.host().storage().map_err(|e|anyhow::anyhow!("{e}"))?.begin_write(&name,bytes.into()).map_err(|e|anyhow::anyhow!("{e}"))?;
+                    rt.host_mut().writes.push_back(job);
+                }
+                LayerImageDestination::Bookmark => rt.set_resume_value(Variant::Octet(bytes)),
+            }
             Ok(true)
         }
     }

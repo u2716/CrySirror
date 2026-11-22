@@ -188,3 +188,9 @@ types require their own compatibility work.
 Fonts, save locations, window behaviour and SMB/NFS game paths are described in
 the [desktop guide](DESKTOP_API.md). See [all supported engines](NATIVE_ADAPTERS.md)
 for other game formats.
+
+PackinOne bookmarks can include a captured layer as a JPEG or PNG preview.
+The desktop player reads previews from the game's Save mount, including JPEG
+bookmarks with APP11 records and PNG bookmarks with a tjSs record. A slot
+written without an image retains its saved state; a subsequent in-game save
+with thumbnails enabled records the current scene.

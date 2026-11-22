@@ -2388,6 +2388,7 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
+ "crc32fast",
  "crysirror-codec-emote",
  "crysirror-core",
  "crysirror-formats-arc",

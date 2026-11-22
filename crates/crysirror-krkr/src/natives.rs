@@ -2941,7 +2941,12 @@ fn layer_load_images(rt: &mut Rt, t: Option<ObjectHandle>, a: Vec<Variant>) -> R
         .map_err(|e| TjsError::runtime(e.to_string()))?
         .is_some()
     {
-        return Err(unsupported("Layer.loadImages", "storage image loading from the Save mount"));
+        let mut bytes = rt.host().storage()?.read_limited(&name, 64 * 1024 * 1024)
+            .map_err(|e| TjsError::runtime(format!("read save image `{name}`: {e}")))?;
+        let end = crate::plugin_ports::packinone::image_end(&bytes)
+            .ok_or_else(|| TjsError::runtime(format!("no JPEG or PNG thumbnail in `{name}`")))?;
+        bytes.truncate(end);
+        return crate::psbfile_plugin::load_encoded_image(rt, h, &name, bytes);
     }
     if crate::psbfile_plugin::is_uri(&name) {
         return crate::psbfile_plugin::load_image(rt, h, &name);

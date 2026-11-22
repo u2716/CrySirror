@@ -1497,6 +1497,47 @@ fn find_file(root: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
 }
 
 #[test]
+fn bookmark_thumbnail_round_trip_preserves_picture_and_slot_data() {
+    let (dir, mut runtime) = fixture(r#"
+        var w = new Window(), root = new Layer(w, null);
+        var layer = new Layer(w, root);
+        layer.setImageSize(16, 8);
+        layer.fillRect(0, 0, 16, 8, 0xffff0000);
+        layer.fillRect(8, 0, 8, 8, 0xff00ff00);
+        if (Scripts.makeDataPackThumb(layer, "kdt", 90, 3) !== void) throw "kdt";
+        var body = %["slot" => 17];
+        for (var i = 0; i < 2; i++) {
+            var ext = i == 0 ? "jpg" : "png";
+            var name = "savedata/bookmark." + ext;
+            var thumb = Scripts.makeDataPackThumb(layer, ext, 92, 3);
+            Scripts.saveDataPack(name, body, void, thumb);
+            if (Scripts.loadDataPack(name).slot != 17) throw "slot data";
+            var preview = new Layer(w, root);
+            preview.loadImages(name);
+            if (preview.imageWidth != 16 || preview.imageHeight != 8) throw "preview size";
+        }
+        Debug.message("bookmark-preview-complete");
+    "#);
+    runtime.set_canvas_image_presenter(true);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        runtime.tick(1, InputFrame::default()).unwrap();
+        let native = &runtime.inspect()["sessions"][0]["native"];
+        if native["log_tail"].to_string().contains("bookmark-preview-complete") { break; }
+        assert!(std::time::Instant::now() < deadline, "{native}");
+        std::thread::yield_now();
+    }
+    for ext in ["png", "jpg"] {
+        let path = find_file(&dir.path().join("state"), &format!("bookmark.{ext}")).unwrap();
+        let image = image::load_from_memory(&std::fs::read(path).unwrap()).unwrap().to_rgb8();
+        assert_eq!(image.dimensions(), (16, 8));
+        let red = image.get_pixel(2, 4);
+        let green = image.get_pixel(13, 4);
+        assert!(red[0] > 220 && red[1] < 30 && green[0] < 30 && green[1] > 220);
+    }
+}
+
+#[test]
 fn save_layer_image_writes_the_requested_bitmap_depths() {
     let (dir, mut runtime) = fixture(r#"
         var w=new Window();w.visible=true;var root=new Layer(w,null);
