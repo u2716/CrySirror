@@ -160,6 +160,12 @@ impl Sound {
         self.play(host, client, unity, Kind::SystemSe, &bundle, &asset, 1.)
     }
 
+    /// An AudioClip's `m_Length` in seconds.
+    pub fn clip_length(unity: &mut Unity, bundle: &str, asset: &str) -> Option<f32> {
+        let (key, id) = unity.bundle_asset(&format!("lib/{bundle}"), asset, crysirror_unity::class_id::AUDIO_CLIP).ok()??;
+        unity.decode(&key, id).ok()?.float("m_Length").map(|v| v as f32)
+    }
+
     /// Every AudioClip name of the bundles under `lib/<prefix>`, sorted.
     pub fn clips_under(unity: &mut Unity, prefix: &str) -> Result<Vec<(String, String)>> {
         let mut out = Vec::new();

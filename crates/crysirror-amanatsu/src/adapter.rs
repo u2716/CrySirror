@@ -265,7 +265,8 @@ pub struct Game {
     next_blink: std::collections::HashMap<String, u64>,
     /// Faces whose `FaceParam` disables blinking.
     no_blink: std::collections::HashSet<String>,
-    /// The H breath's mouth: card, `OpenMouthMin`/`Max`, start and end.
+    /// A speaking mouth (H breath or talk voice): card, openness range,
+    /// start and end.
     h_mouth: Option<(String, (f32, f32), u64, u64)>,
     /// Expression presets by personality.
     expressions: std::collections::HashMap<i64, std::collections::HashMap<i64, [Option<f32>; 6]>>,
@@ -1277,10 +1278,11 @@ impl Game {
         self.apply_face(card);
     }
 
-    /// The breath's mouth between `OpenMouthMin` and `OpenMouthMax`
-    /// (SATD-amanatsu-port: `LipSync` follows the voice level; this is a
-    /// 3 Hz approximation), updated every 60 ms.
-    fn h_lip_sync(&mut self, now: u64) {
+    /// The speaking mouth between its openness range (an H breath's
+    /// `OpenMouthMin`/`Max`, a talk voice's expression openness up to 0.8)
+    /// for the voice's length (SATD-amanatsu-port: `LipSync` follows the
+    /// voice level; this is a 3 Hz approximation), updated every 60 ms.
+    fn lip_sync(&mut self, now: u64) {
         let Some((card, (lo, hi), start, until)) = self.h_mouth.clone() else { return };
         if now >= until {
             if let Some(state) = self.faces.get_mut(&card) {
@@ -1338,7 +1340,6 @@ impl Game {
         if let Some((card, face, until)) = breath_face {
             self.h_breath_face(&card, face, now, until);
         }
-        self.h_lip_sync(now);
     }
 
     fn h_update_state(&mut self, clicked: bool, now: u64, breath_face: &mut Option<(String, Option<crate::hvoice::FaceParam>, u64)>) {
@@ -2962,6 +2963,7 @@ impl AmanatsuVm {
             game.movie_update(now);
         }
         game.blink(now);
+        game.lip_sync(now);
         if game.h.is_some() && game.talk.is_none() {
             let clicked_scene = input.buttons_pressed & b::MOUSE_LEFT != 0 && handler.is_none() && !fading;
             game.h_update(clicked_scene, now);
@@ -3023,11 +3025,23 @@ impl AmanatsuVm {
         for step in std::mem::take(&mut game.pending_steps) {
             match step {
                 crate::talk::Step::Voice(bundle, asset) => {
-                    if let Err(e) = game.sound.play(host, client, &mut game.unity, sound::Kind::Voice, &bundle, &asset, 1.) {
-                        game.log.push(format!("voice {asset}: {e:#}"));
+                    match game.sound.play(host, client, &mut game.unity, sound::Kind::Voice, &bundle, &asset, 1.) {
+                        Ok(()) => {
+                            // The talking heroine's mouth follows the line.
+                            let len = sound::Sound::clip_length(&mut game.unity, &bundle, &asset).unwrap_or(0.);
+                            if let Some(card) = game.talk_card.clone().filter(|c| game.faces.contains_key(c) && len > 0.) {
+                                let base = game.faces[&card].3.mouth_open;
+                                game.h_mouth = Some((card, (base, base.max(0.8)), now, now + (len * 1000.) as u64));
+                            }
+                        }
+                        Err(e) => game.log.push(format!("voice {asset}: {e:#}")),
                     }
                 }
-                crate::talk::Step::StopVoice => {}
+                crate::talk::Step::StopVoice => {
+                    if let Some(m) = game.h_mouth.as_mut().filter(|m| game.talk_card.as_ref() == Some(&m.0)) {
+                        m.3 = now;
+                    }
+                }
                 crate::talk::Step::Face(values) => game.talk_face(values),
                 crate::talk::Step::Expression(id) => {
                     // The talking heroine's personality preset.
