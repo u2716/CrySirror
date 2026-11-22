@@ -844,7 +844,7 @@ impl Game {
                 Vec::new()
             }
         };
-        let mut assets = crate::chara::CharaAssets { unity: &mut self.unity, human: &human, light: chara_light(sun, self.sky_ambient) };
+        let mut assets = crate::chara::CharaAssets { unity: &mut self.unity, human: &human, light: chara_light(sun, self.sky_ambient), ambient: self.sky_ambient };
         let (chunks, report) = crysirror_unity::world6::scene_glb_animated(&human.scene, &human.key, &[0], &mut assets, &options, "CrySirror AmanatsuLocation character importer", &clips)?;
         self.log.push(format!("character GLB {} bytes (sun {sun}, ambient {}, light {})", chunks.iter().map(Vec::len).sum::<usize>(), self.sky_ambient, chara_light(sun, self.sky_ambient)));
         if let Some(s) = self.standing.get_mut(card_path) {
@@ -918,7 +918,7 @@ impl Game {
         }
         // Two characters share the H map's budget: 512 px, 16 MiB each.
         let options = crysirror_unity::world6::GlbOptions { max_texture: 512, texture_budget: 16 << 20, spring_unit: CHARACTER_UNIT, morph_targets: true };
-        let mut assets = crate::chara::CharaAssets { unity: &mut self.unity, human: &human, light: chara_light(sun, self.sky_ambient) };
+        let mut assets = crate::chara::CharaAssets { unity: &mut self.unity, human: &human, light: chara_light(sun, self.sky_ambient), ambient: self.sky_ambient };
         let (chunks, _) = crysirror_unity::world6::scene_glb_animated(&human.scene, &human.key, &[0], &mut assets, &options, "CrySirror AmanatsuLocation character importer", &clips)?;
         self.log.push(format!("H character GLB {} bytes", chunks.iter().map(Vec::len).sum::<usize>()));
         let first = self.map_entities.len();

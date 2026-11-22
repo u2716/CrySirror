@@ -270,6 +270,8 @@ struct PartLook {
     /// The colour mask is the material's own `_Main_color_mask`
     /// (accessories, which have no main texture).
     material_mask: bool,
+    /// Hair: the card's start/end colours for the `_Hair_color_mask`.
+    hair: Option<std::sync::Arc<HairLook>>,
 }
 
 /// The `AL/skin_head` makeup layers of a face mesh: each layer's mask
@@ -295,6 +297,15 @@ pub struct MakeupLayer {
     pub additive: bool,
     /// Placement of the texture in its UV set.
     pub place: Option<Place>,
+}
+
+/// Hair colour inputs of one part (`HumanHair.ChangeSettingHairColor`:
+/// `baseColor` → `_Main_color`, `startColor` → `_Sub_color_01`, `endColor`
+/// → `_Sub_color_02`).
+#[derive(Debug)]
+pub struct HairLook {
+    pub start: [f32; 4],
+    pub end: [f32; 4],
 }
 
 /// `AL/skin_head` placements of a makeup texture (decompiled forward
@@ -369,6 +380,30 @@ fn face_makeup(lists: &Lists, face: &Value, makeup: Option<&Value>) -> Vec<Makeu
         out.push(MakeupLayer { texture: t, uv: 3, color: color(face.get("lipLineColor")).unwrap_or([1., 0.6, 0.6, 1.]), channel: 0, additive: false, place: None });
     }
     out
+}
+
+/// The `AL/hair` colour (decompiled forward program; the mask in uv0,
+/// TEXCOORD0 → `v6.zw`): `_Main_color`, then `_Sub_color_02` by the mask's
+/// G and `_Sub_color_01` by its B (each × its alpha), mixed in linear
+/// space. SATD-amanatsu-port: `_Add_skin_color` (md_02 A), the `Ex` hair
+/// colours and the shadow tint are not applied.
+pub fn hair_colors(mask: &ImageSurface, main: [f32; 4], start: [f32; 4], end: [f32; 4]) -> ImageSurface {
+    let lin = |c: [f32; 4]| [srgb_decode(c[0]), srgb_decode(c[1]), srgb_decode(c[2])];
+    let (m, s1, s2) = (lin(main), lin(start), lin(end));
+    let rgba = mask
+        .rgba
+        .chunks_exact(4)
+        .flat_map(|p| {
+            let (g, b) = (f32::from(p[1]) / 255., f32::from(p[2]) / 255.);
+            let c: [f32; 3] = std::array::from_fn(|k| {
+                let c = m[k] + (s2[k] - m[k]) * g * end[3];
+                c + (s1[k] - c) * b * start[3]
+            });
+            let c = c.map(|v| (srgb_encode(v) * 255.).round() as u8);
+            [c[0], c[1], c[2], 255]
+        })
+        .collect();
+    ImageSurface { width: mask.width, height: mask.height, rgba }
 }
 
 /// Draw makeup layers into a face texture: every triangle is rasterised in
@@ -668,7 +703,8 @@ impl Human {
                 Ok(p) => {
                     let c = color(part.get("baseColor"));
                     let outline = color(part.get("outlineColor"));
-                    looks.insert(p.key.clone(), PartLook { shaders: &["AL/hair"], colors: c.into_iter().collect(), outline, ..Default::default() });
+                    let hair_look = HairLook { start: color(part.get("startColor")).unwrap_or([1.; 4]), end: color(part.get("endColor")).unwrap_or([1.; 4]) };
+                    looks.insert(p.key.clone(), PartLook { shaders: &["AL/hair"], colors: c.into_iter().collect(), outline, hair: Some(std::sync::Arc::new(hair_look)), ..Default::default() });
                     let r = scene.graft(&p.scene, &p.key, hair_parent);
                     scene.alias_bones(r, head_root);
                     log.push(format!("{list} {id}: {data}"));
@@ -856,6 +892,9 @@ pub struct CharaAssets<'a> {
     /// with their own light (`Directional Light Sun Chara`), the engine with
     /// the one sun.
     pub light: f32,
+    /// The scene's ambient (sky) intensity: hair and clothes take their
+    /// shadow tone from the ambient light.
+    pub ambient: f32,
 }
 
 impl CharaAssets<'_> {
@@ -864,14 +903,14 @@ impl CharaAssets<'_> {
         if let Some(main) = &look.main {
             if let Some(mut img) = self.texture_named(main)? {
                 let mask = match &look.mask {
-                    Some(mk) => self.texture_named(mk)?,
+                    Some(mk) => self.mask_named(mk)?,
                     None => None,
                 };
                 tint_by_mask(&mut img, mask.as_ref(), &look.colors);
                 if let Some(makeup) = look.makeup.as_ref().filter(|_| shader.starts_with("AL/skin_head")) {
                     let mut layers = Vec::new();
                     for l in &makeup.layers {
-                        if let Some(t) = self.texture_named(&l.texture)? {
+                        if let Some(t) = self.mask_named(&l.texture)? {
                             layers.push((l.clone(), t));
                         }
                     }
@@ -887,16 +926,43 @@ impl CharaAssets<'_> {
         } else if let Some(mask) = m.textures.get("_Main_color_mask").filter(|t| look.material_mask && t.texture.path_id != 0) {
             // White tinted through the material's colour mask.
             let (f, id) = self.unity.target(if m.file.is_empty() { file } else { &m.file }, mask.texture)?;
-            let mask = SceneAssets::texture(&mut *self.unity, &f, id)?;
+            let mask = self.mask(&f, id)?;
             let mut img = ImageSurface { width: mask.width, height: mask.height, rgba: vec![255; mask.rgba.len()] };
             tint_by_mask(&mut img, Some(&mask), &look.colors);
             o.base_texture = Some((format!("{file}:{}:acs", m.name), img));
+            o.base_color = Some([k, k, k, 1.]);
+        } else if let (Some(hair), Some(mask)) = (look.hair.as_ref(), m.textures.get("_Hair_color_mask").filter(|t| t.texture.path_id != 0)) {
+            let (f, id) = self.unity.target(if m.file.is_empty() { file } else { &m.file }, mask.texture)?;
+            let mask = self.mask(&f, id)?;
+            let main = look.colors.first().copied().unwrap_or([1.; 4]);
+            let img = hair_colors(&mask, main, hair.start, hair.end);
+            o.base_texture = Some((format!("{file}:{}:hair", m.name), img));
             o.base_color = Some([k, k, k, 1.]);
         } else if let Some(c) = look.colors.first() {
             // Toon shading works on display-referred colours.
             o.base_color = Some([c[0] * k, c[1] * k, c[2] * k, 1.]);
         }
         Ok(o)
+    }
+
+    /// A mask texture as the shaders sample it: RGB linearised when the
+    /// texture is sRGB (`m_ColorSpace` 1; alpha is always linear).
+    fn mask(&mut self, file: &str, id: i64) -> Result<ImageSurface> {
+        let mut img = SceneAssets::texture(&mut *self.unity, file, id)?;
+        if self.unity.decode(file, id)?.int("m_ColorSpace") == Some(1) {
+            let lut: [u8; 256] = std::array::from_fn(|v| (srgb_decode(v as f32 / 255.) * 255.).round() as u8);
+            for p in img.rgba.chunks_exact_mut(4) {
+                for c in &mut p[..3] {
+                    *c = lut[*c as usize];
+                }
+            }
+        }
+        Ok(img)
+    }
+
+    fn mask_named(&mut self, (bundle, name): &(String, String)) -> Result<Option<ImageSurface>> {
+        let Some((k, id)) = self.unity.bundle_asset(bundle, name, crysirror_unity::class_id::TEXTURE_2D)? else { return Ok(None) };
+        Ok(Some(self.mask(&k, id)?))
     }
 
     fn texture_named(&mut self, (bundle, name): &(String, String)) -> Result<Option<ImageSurface>> {
@@ -959,7 +1025,7 @@ impl SceneAssets for CharaAssets<'_> {
             // A face layer: the list texture's RGB select the card colours,
             // its alpha is the shape.
             match texture {
-                Some(t) => match self.texture_named(t)? {
+                Some(t) => match self.mask_named(t)? {
                     Some(mask) => {
                         let mut img = ImageSurface { width: mask.width, height: mask.height, rgba: mask.rgba.iter().enumerate().map(|(i, a)| if i % 4 == 3 { *a } else { 255 }).collect() };
                         if shader == "AL/eye" {
@@ -986,12 +1052,12 @@ impl SceneAssets for CharaAssets<'_> {
                                 let iris = [(eye.iris[0] + 0.2) * add[0], (eye.iris[1] + 0.2) * add[1], -off[0], -off[1]];
                                 img = resample_layer(&img, img.width, img.height, iris);
                                 if let Some(t) = &eye.pupil {
-                                    if let Some(p) = self.texture_named(t)? {
+                                    if let Some(p) = self.mask_named(t)? {
                                         pupil_over(&mut img, &p, [eye.pupil_size[0], eye.pupil_size[1], -off[0], -off[1]], &eye.pupil_colors);
                                     }
                                 }
                                 for (t, pos, rot, c1, c2) in &eye.highlights {
-                                    if let Some(h) = t.as_ref().map(|t| self.texture_named(t)).transpose()?.flatten() {
+                                    if let Some(h) = t.as_ref().map(|t| self.mask_named(t)).transpose()?.flatten() {
                                         highlights.push((h, [pos[0] * add[0], pos[1] * add[1], -off[0] - 0.5 * pos[2], -off[1] - 0.5 * pos[3]], *rot, *c1, *c2));
                                     }
                                 }
@@ -1000,7 +1066,7 @@ impl SceneAssets for CharaAssets<'_> {
                             // (`AL/eye` forward program): opaque.
                             if let Some(mask) = m.textures.get("_Shadow_mask").filter(|t| t.texture.path_id != 0) {
                                 let (f, id) = self.unity.target(if m.file.is_empty() { file } else { &m.file }, mask.texture)?;
-                                let mask = SceneAssets::texture(&mut *self.unity, &f, id)?;
+                                let mask = self.mask(&f, id)?;
                                 sclera_under(&mut img, &mask, m);
                                 for (h, pos, rot, c1, c2) in &highlights {
                                     highlight_over(&mut img, h, *pos, *rot, *c1, *c2);
@@ -1048,7 +1114,7 @@ impl SceneAssets for CharaAssets<'_> {
         let lamp = match m.textures.get("_Lamp").filter(|t| t.texture.path_id != 0) {
             Some(t) => {
                 let (f, id) = self.unity.target(if m.file.is_empty() { file } else { &m.file }, t.texture)?;
-                Some(SceneAssets::texture(&mut *self.unity, &f, id)?)
+                Some(self.mask(&f, id)?)
             }
             None => None,
         };
@@ -1056,9 +1122,15 @@ impl SceneAssets for CharaAssets<'_> {
         if let Some(power) = m.floats.get("_Shadow_power") {
             let floor = 1. - (power * 0.4 + 0.5).clamp(0., 1.);
             let shade = m.colors.get("_Shade_color").filter(|_| m.floats.get("_UseShadowColor").is_some_and(|u| *u > 0.5));
-            o.toon_shade_from_base = shade.is_none();
+            // Skin derives the tone from its base colour; hair and clothes
+            // from the ambient light (`HSV(SH · 0.7 + 0.3)` with the
+            // saturation × 1.5: grey for the engine's scalar ambient).
+            // SATD-amanatsu-port: the ambient's hue is not available here.
+            // (A linear factor; the ramp multiplies display-referred colour.)
+            let ambient = (!shader.starts_with("AL/skin")).then(|| [srgb_encode(self.ambient * 0.7 + 0.3); 3]);
+            o.toon_shade_from_base = shade.is_none() && ambient.is_none();
             o.toon_light_limit = Some(1.);
-            let tone = shade.map(|c| [c[0], c[1], c[2]]);
+            let tone = shade.map(|c| [c[0], c[1], c[2]]).or(ambient);
             o.toon_ambient = m.floats.get("_AmbientIntensity").or(m.floats.get("_AmbientIntensity1")).copied();
             let k = self.light;
             let mut o = self.base_look(file, m, &look, shader, k, o)?;
@@ -1101,15 +1173,15 @@ impl SceneAssets for CharaAssets<'_> {
 /// `lerp(eye01, eye02, R · eye02.a)`, then linear light `c + 2 · eye03 − 1`
 /// by `G · eye03.a`, then `_Line_color` by B; alpha the mask's A.
 pub fn iris_colors(img: &mut ImageSurface, mask: &ImageSurface, colors: &[[f32; 4]], line: [f32; 4]) {
-    let get = |i: usize| colors.get(i).copied().unwrap_or([1.; 4]);
-    let (e1, e2, e3) = (get(0), get(1), get(2));
+    let get = |i: usize| linear_color(colors.get(i).copied().unwrap_or([1.; 4]));
+    let (e1, e2, e3, line) = (get(0), get(1), get(2), linear_color(line));
     for (o, p) in img.rgba.chunks_exact_mut(4).zip(mask.rgba.chunks_exact(4)) {
         let [r, g, b, a] = [p[0], p[1], p[2], p[3]].map(|v| f32::from(v) / 255.);
         for c in 0..3 {
             let mut v = e1[c] + (e2[c] - e1[c]) * r * e2[3];
             v = (v + (v + 2. * e3[c] - 1. - v) * g * e3[3]).clamp(0., 1.);
             v += (line[c] - v) * b;
-            o[c] = (v.clamp(0., 1.) * 255.).round() as u8;
+            o[c] = (srgb_encode(v) * 255.).round() as u8;
         }
         o[3] = (a * 255.).round() as u8;
     }
@@ -1123,7 +1195,7 @@ pub fn pupil_over(img: &mut ImageSurface, p: &ImageSurface, pos: [f32; 4], color
     if p.width == 0 || p.height == 0 {
         return;
     }
-    let get = |i: usize| colors.get(i).copied().unwrap_or([0., 0., 0., 0.]);
+    let get = |i: usize| linear_color(colors.get(i).copied().unwrap_or([0., 0., 0., 0.]));
     let (p1, p2, p3) = (get(0), get(1), get(2));
     for y in 0..img.height {
         for x in 0..img.width {
@@ -1138,11 +1210,11 @@ pub fn pupil_over(img: &mut ImageSurface, p: &ImageSurface, pos: [f32; 4], color
             let [r, g, _, a] = [0, 1, 2, 3].map(|k| f32::from(p.rgba[j + k]) / 255.);
             let i = ((y * img.width + x) * 4) as usize;
             for c in 0..3 {
-                let mut v = f32::from(img.rgba[i + c]) / 255.;
+                let mut v = srgb_decode(f32::from(img.rgba[i + c]) / 255.);
                 v += (p1[c] - v) * a * p1[3];
                 v += (p2[c] - v) * r * a * p2[3];
                 v += (p3[c] - v) * g * a * p3[3];
-                img.rgba[i + c] = (v.clamp(0., 1.) * 255.).round() as u8;
+                img.rgba[i + c] = (srgb_encode(v) * 255.).round() as u8;
             }
         }
     }
@@ -1169,11 +1241,12 @@ pub fn highlight_over(img: &mut ImageSurface, h: &ImageSurface, pos: [f32; 4], r
             let j = ((sy * h.width + sx) * 4) as usize;
             let [r, g, _, a] = [0, 1, 2, 3].map(|k| f32::from(h.rgba[j + k]) / 255.);
             let i = ((y * img.width + x) * 4) as usize;
+            let (c1, c2) = (linear_color(c1), linear_color(c2));
             for k in 0..3 {
-                let mut o = f32::from(img.rgba[i + k]) / 255.;
+                let mut o = srgb_decode(f32::from(img.rgba[i + k]) / 255.);
                 o += (c2[k] - o) * g * a * c2[3];
                 o += (c1[k] - o) * r * a * c1[3];
-                img.rgba[i + k] = (o.clamp(0., 1.) * 255.).round() as u8;
+                img.rgba[i + k] = (srgb_encode(o) * 255.).round() as u8;
             }
         }
     }
@@ -1202,10 +1275,10 @@ pub fn sclera_under(img: &mut ImageSurface, mask: &ImageSurface, m: &UnityMateri
             let i = ((y * img.width + x) * 4) as usize;
             let a = f32::from(img.rgba[i + 3]) / 255.;
             for c in 0..3 {
-                let white = w1[c] + (w2[c] - w1[c]) * r;
-                let white = white + (w3[c] - white) * g * w3[3];
-                let iris = f32::from(img.rgba[i + c]) / 255.;
-                img.rgba[i + c] = ((white + (iris - white) * a).clamp(0., 1.) * 255.).round() as u8;
+                let white = srgb_decode(w1[c]) + (srgb_decode(w2[c]) - srgb_decode(w1[c])) * r;
+                let white = white + (srgb_decode(w3[c]) - white) * g * w3[3];
+                let iris = srgb_decode(f32::from(img.rgba[i + c]) / 255.);
+                img.rgba[i + c] = (srgb_encode(white + (iris - white) * a) * 255.).round() as u8;
             }
             img.rgba[i + 3] = 255;
         }
@@ -1301,6 +1374,11 @@ pub fn hsv_shade(c: [f32; 3]) -> [f32; 3] {
 /// amount the md value. SATD-amanatsu-port: the original shifts the `_Lamp`
 /// coordinate by this amount and light terms (not decoded); the layer
 /// applies it at a fixed 1.5× strength.
+/// A material/card colour (sRGB, alpha linear) in linear space.
+fn linear_color(c: [f32; 4]) -> [f32; 4] {
+    [srgb_decode(c[0]), srgb_decode(c[1]), srgb_decode(c[2]), c[3]]
+}
+
 fn srgb_decode(c: f32) -> f32 {
     if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
 }
@@ -1315,11 +1393,15 @@ fn md_shadow_layer(base: &ImageSurface, md: &ImageSurface, srgb: bool, k: f32, t
     let lin = |b: u8| if srgb { srgb_decode(f32::from(b) / 255.) } else { f32::from(b) / 255. };
     let get = |n: &str, d: f32| m.floats.get(n).copied().unwrap_or(d);
     let (intensity, power, bust) = (get("_mdGIntensity", 0.8), get("_mdGPower", 0.5), get("_Bust_shadowonoff", 0.));
-    let mut out = ImageSurface { width: base.width, height: base.height, rgba: vec![0; base.rgba.len()] };
-    for y in 0..base.height {
-        let my = ((y as u64 * md.height as u64) / base.height.max(1) as u64) as u32;
-        for x in 0..base.width {
-            let mx = ((x as u64 * md.width as u64) / base.width.max(1) as u64) as u32;
+    // A soft layer: at most 1024 texels a side (prepared-asset budget).
+    let (ow, oh) = (base.width.min(1024).max(1), base.height.min(1024).max(1));
+    let mut out = ImageSurface { width: ow, height: oh, rgba: vec![0; (ow * oh * 4) as usize] };
+    for y in 0..oh {
+        let my = ((y as u64 * md.height as u64) / oh as u64) as u32;
+        let by = ((y as u64 * base.height as u64) / oh as u64) as u32;
+        for x in 0..ow {
+            let mx = ((x as u64 * md.width as u64) / ow as u64) as u32;
+            let bx = ((x as u64 * base.width as u64) / ow as u64) as u32;
             let j = ((my * md.width + mx) * 4) as usize;
             let (g, b, a) = (lin(md.rgba[j + 1]), lin(md.rgba[j + 2]), lin(md.rgba[j + 3]));
             let chest = ((a - 0.66) * -4.16667 + 1.).clamp(0., 1.);
@@ -1327,8 +1409,9 @@ fn md_shadow_layer(base: &ImageSurface, md: &ImageSurface, srgb: bool, k: f32, t
             let s = (shade * (1. - chest) + shade * chest * bust).max(0.);
             let div = (1. - 0.5 * power * (1. - b)).clamp(0.5, 1.);
             let amount = ((s / div).clamp(0., 1.) * (intensity + (0.5 - intensity) * b)).max(0.);
-            let i = ((y * base.width + x) * 4) as usize;
-            let c = [0, 1, 2].map(|n| srgb_decode(f32::from(base.rgba[i + n]) / 255.));
+            let i = ((y * ow + x) * 4) as usize;
+            let bi = ((by * base.width + bx) * 4) as usize;
+            let c = [0, 1, 2].map(|n| srgb_decode(f32::from(base.rgba[bi + n]) / 255.));
             let t = tone.unwrap_or_else(|| hsv_shade(c));
             for n in 0..3 {
                 let v = srgb_encode(c[n] * (t[n] + (1. - t[n]) * floor)) * k;
