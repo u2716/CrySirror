@@ -4412,9 +4412,10 @@ fn game_random(rng: &mut u64, n: usize) -> usize {
 /// light (`Directional Light Sun Chara`) and no sky ambient; the engine's
 /// toon model adds the sun and the environment's ambient, so the colour is
 /// scaled to keep their sum near the authored colour.
-/// The materials scale the ambient by `_AmbientIntensity` (0.5).
+/// The materials scale the ambient by `_AmbientIntensity` (0.5) and clamp
+/// the key light to 1.
 fn chara_light(sun: f32, ambient: f32) -> f32 {
-    1. / (sun + 0.5 * ambient).max(1.)
+    1. / (sun.min(1.) + 0.5 * ambient).max(1.)
 }
 
 /// A world point on the screen of a view (pixels), if in front of it.

@@ -41,6 +41,9 @@ pub struct TexEnv {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct UnityMaterial {
     pub name: String,
+    /// Serialized file holding the material (its texture references
+    /// resolve against it); empty when decoded without one.
+    pub file: String,
     pub shader: String,
     pub textures: HashMap<String, TexEnv>,
     pub floats: HashMap<String, f32>,
@@ -316,6 +319,13 @@ pub struct MaterialOverride {
     pub toon: Option<(ImageSurface, f32, [f32; 4])>,
     /// Scale of the toon ambient term (`ToonShading::ambient_scale`).
     pub toon_ambient: Option<f32>,
+    /// Bound of the toon key light (`ToonShading::light_limit`).
+    pub toon_light_limit: Option<f32>,
+    /// `ToonShading::shade_from_base`.
+    pub toon_shade_from_base: bool,
+    /// Toon shadow layer (`ToonShading::shadow_texture`: top-down RGBA8,
+    /// display-referred colour and amount, sampled raw) with a cache key.
+    pub toon_shadow: Option<(String, ImageSurface)>,
 }
 
 #[derive(Clone, Debug)]
@@ -883,7 +893,8 @@ fn material(assets: &mut dyn SceneAssets, chunk: &mut Chunk, report: &mut GlbRep
         Some((_, _, _, s)) => shader_name(&s),
         None => String::new(),
     };
-    let m = UnityMaterial::decode(&fields, shader);
+    let mut m = UnityMaterial::decode(&fields, shader);
+    m.file = mf.clone();
     let (glb, images) = (&mut chunk.glb, &mut chunk.images);
     let mut image = |t: &TexEnv, usage: TexUse| -> Result<Option<usize>> {
         let Some((tf, tid, class, _)) = assets.object(&mf, t.texture)? else { return Ok(None) };
@@ -939,10 +950,20 @@ fn material(assets: &mut dyn SceneAssets, chunk: &mut Chunk, report: &mut GlbRep
             engine.effect = None;
             // Cast shadows take the ramp's shadow tone (URP toon shaders
             // fold shadow attenuation into the ramp coordinate).
+            let shadow = match &o.toon_shadow {
+                Some((key, img)) => {
+                    let png = crysirror_image::encode_png(img)?;
+                    Some(chunk.glb.image(key, || Ok((png, "image/png")))?)
+                }
+                None => None,
+            };
             engine.toon = Some(crysirror_scene::material::ToonShading {
                 lookup_texture: Some(lookup),
+                shadow_texture: shadow,
                 cast_shadow_ramp: true,
                 ambient_scale: o.toon_ambient.unwrap_or(1.).clamp(0., 16.),
+                light_limit: o.toon_light_limit.unwrap_or(0.).clamp(0., 16.),
+                shade_from_base: o.toon_shade_from_base,
                 outline_width: width.clamp(0., 0.1),
                 outline_color: color,
                 ..Default::default()

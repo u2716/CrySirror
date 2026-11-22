@@ -86,6 +86,58 @@ pub fn texture_2d(f: &Fields, resolve: StreamResolver) -> Result<ImageSurface> {
     Ok(surface)
 }
 
+/// The slices of a Unity `Texture2DArray` at mip level 0 (top-down RGBA8,
+/// bytes as stored) and whether the format is sRGB. `m_Format` is a
+/// `GraphicsFormat`; each slice holds its full mip chain in turn.
+pub fn texture_2d_array(f: &Fields, resolve: StreamResolver) -> Result<(Vec<ImageSurface>, bool)> {
+    let (w, h, depth) = (f.int("m_Width").unwrap_or(0), f.int("m_Height").unwrap_or(0), f.int("m_Depth").unwrap_or(0));
+    ensure!(w > 0 && h > 0 && w <= 16384 && h <= 16384 && (1..=256).contains(&depth), "Texture2DArray size {w}x{h}x{depth}");
+    let (w, h) = (w as u32, h as u32);
+    let format = f.int("m_Format").unwrap_or(-1);
+    let mips = f.int("m_MipCount").unwrap_or(1).clamp(1, 16) as u32;
+    // GraphicsFormat: block kind (None: RGBA8) and sRGB.
+    let (block, srgb) = match format {
+        3 => (None, true),
+        7 => (None, false),
+        4 => (None, true),
+        8 => (None, false),
+        96 | 97 => (Some(Block::Bc1), format == 96),
+        100 | 101 => (Some(Block::Bc3), format == 100),
+        102 => (Some(Block::Bc4), false),
+        104 => (Some(Block::Bc5), false),
+        108 | 109 => (Some(Block::Bc7), format == 108),
+        other => bail!("unsupported Texture2DArray format {other}"),
+    };
+    let channels = if matches!(format, 3 | 7) { 3 } else { 4 };
+    let level = |l: u32| -> usize {
+        let (lw, lh) = ((w >> l).max(1) as usize, (h >> l).max(1) as usize);
+        match block {
+            Some(b) => lw.div_ceil(4) * lh.div_ceil(4) * b.block_bytes(),
+            None => lw * lh * channels,
+        }
+    };
+    let slice: usize = (0..mips).map(level).sum();
+    let data = stream_or_inline(f, "image data", resolve)?;
+    ensure!(data.len() >= slice * depth as usize, "Texture2DArray data {} < {}", data.len(), slice * depth as usize);
+    let mut out = Vec::new();
+    for s in 0..depth as usize {
+        let bytes = &data[s * slice..s * slice + level(0)];
+        let mut surface = match block {
+            Some(b) => crysirror_image::block_compressed::decode(b, w, h, bytes)?,
+            None => ImageSurface { width: w, height: h, rgba: bytes.chunks_exact(channels).flat_map(|p| [p[0], p[1], p[2], if channels == 4 { p[3] } else { 255 }]).collect() },
+        };
+        // Unity rows are bottom-up.
+        let row = w as usize * 4;
+        let mut flipped = Vec::with_capacity(surface.rgba.len());
+        for y in (0..h as usize).rev() {
+            flipped.extend_from_slice(&surface.rgba[y * row..(y + 1) * row]);
+        }
+        surface.rgba = flipped;
+        out.push(surface);
+    }
+    Ok((out, srgb))
+}
+
 /// `SubMesh` of a Unity 2020+ mesh (index range in indices, not bytes).
 #[derive(Clone, Debug, PartialEq)]
 pub struct SubMesh6 {
@@ -346,4 +398,27 @@ pub fn sprite_render(sprite: &Fields, atlas: &dyn Fn(crate::PPtr) -> Option<Fiel
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn texture_array_slices() {
+        // 2×1 RGB8 (GraphicsFormat 7), two slices with a 1×1 mip each.
+        let data = vec![1u8, 2, 3, 4, 5, 6, 9, 9, 9, 10, 11, 12, 13, 14, 15, 9, 9, 9];
+        let f = Fields(vec![
+            ("m_Width".into(), Value::Int(2)),
+            ("m_Height".into(), Value::Int(1)),
+            ("m_Depth".into(), Value::Int(2)),
+            ("m_Format".into(), Value::Int(7)),
+            ("m_MipCount".into(), Value::Int(2)),
+            ("image data".into(), Value::Bytes(data)),
+        ]);
+        let (slices, srgb) = texture_2d_array(&f, &|_| None).unwrap();
+        assert!(!srgb);
+        assert_eq!(slices.len(), 2);
+        assert_eq!(slices[1].rgba, vec![10, 11, 12, 255, 13, 14, 15, 255]);
+    }
 }

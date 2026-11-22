@@ -2351,8 +2351,12 @@ impl PbrRenderer {
                 ],
             },
             params: [
-                m.metallic_factor,
-                m.roughness_factor,
+                // Toon materials take no metallic term; the slot carries the
+                // shade-from-base switch.
+                m.toon.as_ref().map_or(m.metallic_factor, |t| if t.shade_from_base { 1. } else { 0. }),
+                // Toon materials take no roughness; the slot carries the
+                // key light limit.
+                m.toon.as_ref().map_or(m.roughness_factor, |t| t.light_limit),
                 m.normal_scale,
                 m.occlusion_strength,
             ],

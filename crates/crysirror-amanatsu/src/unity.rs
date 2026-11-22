@@ -179,6 +179,16 @@ impl Unity {
         unity6::texture_2d(&f, &resolve)
     }
 
+    /// A `Texture2DArray`'s slices at level 0 and whether they are sRGB.
+    pub fn texture_array(&mut self, file: &str, path_id: i64) -> Result<(Vec<ImageSurface>, bool)> {
+        if let Some((bp, _)) = file.strip_prefix("bundle:").and_then(|r| r.split_once('#')) {
+            self.bundle(bp)?;
+        }
+        let f = self.decode(file, path_id)?;
+        let resolve = |p: &str| -> Option<Arc<dyn AssetReader>> { self.stream_reader_ro(file, p) };
+        unity6::texture_2d_array(&f, &resolve)
+    }
+
     fn stream_reader_ro(&self, file: &str, path: &str) -> Option<Arc<dyn AssetReader>> {
         if let Some(rest) = file.strip_prefix("bundle:") {
             let (bp, _) = rest.split_once('#')?;

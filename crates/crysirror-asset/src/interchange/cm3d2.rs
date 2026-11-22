@@ -577,6 +577,8 @@ pub fn toon_parameters(
         shadow_color: rgb("_ShadowColor", [0.5; 3]),
         cast_shadow_ramp: false,
         ambient_scale: 1.,
+        light_limit: 0.,
+        shade_from_base: false,
         shininess: f("_Shininess", 0.).clamp(0., 16.),
         highlight_rate: if hair { f("_HiRate", 0.).clamp(0., 16.) } else { 0. },
         highlight_power: if hair { f("_HiPow", 0.).clamp(0., 256.) } else { 1. },

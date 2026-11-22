@@ -2221,3 +2221,178 @@ fn text_asset_hex() {
         println!("{:04x} {} {}", i * 32, hex.join(" "), text);
     }
 }
+
+/// A Shader's tree (`AMANATSU_SHADER` by parsed name, bundles under
+/// `AMANATSU_DIR`, default `lib/chara`); with `AMANATSU_DUMP` the
+/// decompressed program blobs per platform.
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn shader_dump() {
+    use crysirror_unity::managed::Value;
+    fn show(v: &Value, depth: usize, name: &str) {
+        let pad = "  ".repeat(depth);
+        match v {
+            Value::Struct(f) => {
+                println!("{pad}{name}:");
+                for (k, v) in &f.0 {
+                    show(v, depth + 1, k);
+                }
+            }
+            Value::Array(a) if a.iter().any(|x| matches!(x, Value::Struct(_) | Value::Array(_))) => {
+                println!("{pad}{name}: [{}]", a.len());
+                for (i, x) in a.iter().enumerate().take(2000) {
+                    show(x, depth + 1, &format!("[{i}]"));
+                }
+            }
+            Value::Bytes(b) => println!("{pad}{name}: <{} bytes>", b.len()),
+            v => println!("{pad}{name}: {}", format!("{v:?}").chars().take(200).collect::<String>()),
+        }
+    }
+    let mut u = unity();
+    let want = std::env::var("AMANATSU_SHADER").unwrap();
+    let sub = std::env::var("AMANATSU_DIR").unwrap_or_else(|_| "lib/chara".into());
+    for key in u.bundle_files().into_iter().filter(|k| k.contains(&format!("{sub}/")) && !k.ends_with(".resS")) {
+        let Ok(file) = u.file(&key) else { continue };
+        let ids: Vec<i64> = file.objects.iter().filter(|o| o.class_id == 48).map(|o| o.path_id).collect();
+        for id in ids {
+            let Ok(f) = u.decode(&key, id) else { continue };
+            if f.fields("m_ParsedForm").and_then(|p| p.string("m_Name")) != Some(want.as_str()) {
+                continue;
+            }
+            println!("== {key} {id}");
+            for (k, v) in &f.0 {
+                show(v, 0, k);
+            }
+            if let Ok(dir) = std::env::var("AMANATSU_DUMP") {
+                let blob = match f.get("compressedBlob") {
+                    Some(Value::Bytes(b)) => b.clone(),
+                    Some(Value::Array(a)) => a.iter().map(|x| match x { Value::Int(i) => *i as u8, _ => 0 }).collect(),
+                    _ => Vec::new(),
+                };
+                let nums = |n: &str| -> Vec<Vec<i64>> {
+                    f.array(n).unwrap_or(&[]).iter().map(|p| match p {
+                        Value::Array(a) => a.iter().map(|x| match x { Value::Int(i) => *i, Value::Struct(s) => s.int("data").unwrap_or(0), _ => 0 }).collect(),
+                        Value::Int(i) => vec![*i],
+                        Value::Struct(s) => s.array("data").map(|a| a.iter().filter_map(|x| if let Value::Int(i) = x { Some(*i) } else { None }).collect()).unwrap_or_default(),
+                        _ => Vec::new(),
+                    }).collect()
+                };
+                let (off, cl, dl) = (nums("offsets"), nums("compressedLengths"), nums("decompressedLengths"));
+                println!("blob {} offsets {off:?} c {cl:?} d {dl:?}", blob.len());
+                for (p, ((o, c), d)) in off.iter().zip(&cl).zip(&dl).enumerate() {
+                    for (j, ((o, c), d)) in o.iter().zip(c).zip(d).enumerate() {
+                        let src = &blob[*o as usize..(*o + *c) as usize];
+                        let out = lz4_block(src, *d as usize);
+                        std::fs::write(format!("{dir}/{p}_{j}.bin"), out).unwrap();
+                    }
+                }
+            }
+            return;
+        }
+    }
+    panic!("shader not found");
+}
+
+/// LZ4 block decompression (probe use).
+fn lz4_block(src: &[u8], size: usize) -> Vec<u8> {
+    let mut out = Vec::with_capacity(size);
+    let mut i = 0;
+    let len = |i: &mut usize, mut n: usize| {
+        if n == 15 {
+            loop {
+                let b = src[*i];
+                *i += 1;
+                n += b as usize;
+                if b != 255 {
+                    break;
+                }
+            }
+        }
+        n
+    };
+    while i < src.len() {
+        let token = src[i];
+        i += 1;
+        let lit = len(&mut i, (token >> 4) as usize);
+        out.extend_from_slice(&src[i..i + lit]);
+        i += lit;
+        if i >= src.len() {
+            break;
+        }
+        let off = u16::from_le_bytes([src[i], src[i + 1]]) as usize;
+        i += 2;
+        let m = len(&mut i, (token & 15) as usize) + 4;
+        let start = out.len() - off;
+        for k in 0..m {
+            out.push(out[start + k]);
+        }
+    }
+    out
+}
+
+/// Objects named `AMANATSU_ASSET` in `AMANATSU_BUNDLE`: class and fields
+/// (byte arrays by length).
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn object_fields() {
+    let mut u = unity();
+    let bundle = std::env::var("AMANATSU_BUNDLE").unwrap();
+    let name = std::env::var("AMANATSU_ASSET").unwrap();
+    for key in u.bundle_files().into_iter().filter(|k| k.starts_with(&format!("bundle:{bundle}#")) && !k.ends_with(".resS")) {
+        let objs: Vec<(i64, i32)> = u.file(&key).unwrap().objects.iter().map(|o| (o.path_id, o.class_id)).collect();
+        for (id, class) in objs {
+            let Ok(f) = u.decode(&key, id) else { continue };
+            if f.string("m_Name") != Some(name.as_str()) {
+                continue;
+            }
+            println!("== {key} {id} class {class}");
+            for (k, v) in &f.0 {
+                match v {
+                    crysirror_unity::managed::Value::Bytes(b) => println!("  {k}: <{} bytes>", b.len()),
+                    v => println!("  {k}: {}", format!("{v:?}").chars().take(300).collect::<String>()),
+                }
+            }
+        }
+    }
+}
+
+/// The slices of the `Texture2DArray` `AMANATSU_ASSET` in `AMANATSU_BUNDLE`
+/// as PNGs in `AMANATSU_DUMP` (RGB and alpha separately).
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn texture_array_dump() {
+    let mut u = unity();
+    let bundle = std::env::var("AMANATSU_BUNDLE").unwrap();
+    let name = std::env::var("AMANATSU_ASSET").unwrap();
+    let dir = std::env::var("AMANATSU_DUMP").unwrap();
+    let mut found = None;
+    for key in u.bundle_files().into_iter().filter(|k| k.starts_with(&format!("bundle:{bundle}#")) && !k.ends_with(".resS")) {
+        let ids: Vec<i64> = u.file(&key).unwrap().objects.iter().filter(|o| o.class_id == 187).map(|o| o.path_id).collect();
+        for id in ids {
+            if u.decode(&key, id).ok().and_then(|f| f.string("m_Name").map(|n| n == name)) == Some(true) {
+                found = Some((key.clone(), id));
+            }
+        }
+    }
+    let (k, id) = found.unwrap();
+    let (slices, srgb) = u.texture_array(&k, id).unwrap();
+    println!("{} slices, srgb {srgb}", slices.len());
+    for (i, s) in slices.iter().enumerate() {
+        for c in 0..4 {
+            let g: Vec<u8> = s.rgba.chunks_exact(4).flat_map(|p| [p[c], p[c], p[c], 255]).collect();
+            let img = crysirror_image::ImageSurface { width: s.width, height: s.height, rgba: g };
+            std::fs::write(format!("{dir}/{name}_{i}_{}.png", "rgba".as_bytes()[c] as char), crysirror_image::encode_png(&img).unwrap()).unwrap();
+        }
+    }
+}
+
+/// A card's `Custom` face values (`AMANATSU_CARD`, default `AL_F_00`).
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn card_face() {
+    let mut u = unity();
+    let path = std::env::var("AMANATSU_CARD").unwrap_or_else(|_| "DefaultData/0/chara/female/AL_F_00.png".into());
+    let card = crysirror_amanatsu::card::Card::parse(&u.read_all(&path).unwrap()).unwrap();
+    let custom = card.parts("Custom").unwrap();
+    println!("{:?}", custom.first());
+}

@@ -40,14 +40,14 @@ and particle shaders, `CameraLight` prefabs); the synchronous
 worker under ADR 0050; characters beyond the card-driven assembly in
 `CustomScene` (the scene's preset instead of `AL_F_00`, accessory swing
 and hide states, `customshape` face/body shape values, eye shadow,
-paint/eyelid layers and the makeup size/position ranges, hair colour
-gradients and gloss, gloss and rim terms, the skin shader graph (the card
-`skinShadowColor` → `_Shadow_color` tint is read as colour × alpha ×
-`_Shadow_power`; `_Highlight_color`, `_SkinIntensity` detail rate, the
+paint/eyelid layers, hair colour gradients and gloss, the AL forward
+program terms listed in the 2026-11-23 row (the grazing card
+`skinShadowColor` → `_Shadow_color` tint, SSS, shine, rim, specular, md
+layers beyond the body; `_SkinIntensity` detail rate, the
 `mt_body_detail` normal map/line mask, `mt_body_shine` and the sunburn
 and body detail overlay layers are not drawn: their textures use separate UV
-layouts/positioned decals not in the body's UV0), clothing body cut-outs, eye
-look, MagicaCloth depth curves, inertia and MeshCloth
+layouts/positioned decals not in the body's UV0), clothing body cut-outs,
+the eye bones, MagicaCloth depth curves, inertia and MeshCloth
 (BoneCloth hair and the body BoneSprings are simulated as spring bones;
 hair `colliderList`s hold only null slots in the shipped prefabs and no
 runtime assignment was found in `GameAssembly.dll`, so hair does not collide), height blending between the
@@ -139,3 +139,4 @@ HScene mode and save/load, recorded in a validation note.
 | 2026-11-22 | Eye look: the heroines' irises follow the camera through `EyeLookCalc` pattern 1 and `CmpEyeLookMaterial` ranges as per-node UV offsets (shared `AnimationState.uv_offsets`). Remaining: the animated eye bone pose (rest pose under the root stands in), `LeapSpeed` easing, micro saccades, `ChangeLookEyesPtn`/ADV look commands, the highlight staying fixed while the iris moves (baked together), eyes in HScene/events without a recorded root. | Listed above. |
 | 2026-11-22 | `Memory` scene: thumbnails/titles/unlock from `Memory_Thumbnail`, `sm_timeline` and `GlobalData.Flags` (`global.dat` read/written in the save mount, `AddShortMovie` on every movie), time zone toggles, preset card list, play and return, Back; the title's シーン回想 entry. Remaining: grid scrolling (first four rows), the card list's 自作/他作 sources and sorting, hover frames, `ShortCut` keys, `HelpStates`/`TutorialSeen` use. | Listed above. |
 | 2026-11-22 | HScene exit transitions: in `Idle_IN_A`/`Idle_OF_A` the wheel forward resumes the loop and back plays the exit transition (then the second exit state after the male finish, then `Idle_OUT_A`). Remaining: `GetNextHash`'s exact order, pour setups (`PourSetup`, `onPourRestore`), consecutive finishes (`SetupConsecutive`). | Listed above. |
+| 2026-11-23 | Character shading from the decoded AL forward programs: HSV shade tone and `_Shadow_power` floor under a key light clamped to 1 (shared `ToonShading.light_limit`/`shade_from_base`), the body md layers (`_Detail_mask_01`, shared `Texture2DArray` decode) as a shadow layer, the eye's sclera/iris/pupil/highlight composition, the cheek/highlight/nose/lip placements in linear space, material texture references resolved against the material's file. Remaining: the face/hair/cloth md layers and the `_Lamp` coordinate shift (the layer applies a fixed strength), the grazing `_Shadow_color` tint, SSS, shine, rim and specular terms, eye gradation/rotation/parallax/unfollow and the eye-look offset moving the baked sclera, the nose gloss/line, the expression blush map, hair gradients and gloss. | Listed above. |

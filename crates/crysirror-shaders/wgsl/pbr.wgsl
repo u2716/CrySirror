@@ -499,6 +499,37 @@ fn toon_decode(c: vec3<f32>) -> vec3<f32> {
 fn toon_lookup(row: f32, u: f32) -> vec4<f32> {
     return textureSampleLevel(t_mr, s_material, vec2<f32>(clamp(u, 0.0, 1.0), (row + 0.5) / 3.0), 0.0);
 }
+// The toon key light (display-referred colour × intensity), bounded per
+// channel by the material's light limit (params.y) when positive.
+fn toon_light() -> vec3<f32> {
+    let light = toon_encode(frame.toon_color.rgb) * frame.toon_dir.w;
+    if material.params.y > 0.0 {
+        return min(light, vec3<f32>(material.params.y));
+    }
+    return light;
+}
+// Shadow tone of a linear base colour (ToonShading shade_from_base): hue
+// kept, saturation sqrt(S)·min(10·sqrt(V), 1), value 0.5·sqrt(V) + 0.5.
+fn toon_base_shade(c: vec3<f32>) -> vec3<f32> {
+    let v = max(max(c.r, c.g), c.b);
+    let d = v - min(min(c.r, c.g), c.b);
+    var h = 0.0;
+    if d > 1e-6 {
+        if v == c.r {
+            h = (c.g - c.b) / d;
+        } else if v == c.g {
+            h = 2.0 + (c.b - c.r) / d;
+        } else {
+            h = 4.0 + (c.r - c.g) / d;
+        }
+        h = fract(h / 6.0 + 1.0);
+    }
+    let s = d / (v + 1e-10);
+    let s2 = min(sqrt(s), 1.0) * min(sqrt(v) * 10.0, 1.0);
+    let v2 = sqrt(v) * 0.5 + 0.5;
+    let hue = clamp(abs(fract(vec3<f32>(h) + vec3<f32>(1.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0) - 1.0, vec3<f32>(0.0), vec3<f32>(1.0));
+    return ((hue - 1.0) * s2 + 1.0) * v2;
+}
 fn toon_outline_color() -> vec4<f32> {
     return material.emissive;
 }
@@ -516,7 +547,7 @@ fn fs_outline(i: VertexOut) -> @location(0) vec4<f32> {
     let n = normalize(i.normal);
     let l = normalize(-frame.toon_dir.xyz);
     let ramp = toon_lookup(0.0, dot(n, l) * 0.495 + 0.5).rgb;
-    let light = toon_encode(frame.toon_color.rgb) * frame.toon_dir.w;
+    let light = toon_light();
     let ambient = toon_encode(sh_irradiance(n) * frame.env.x / PI);
     let p = material.effect_params;
     var c = ramp * toon_outline_color().rgb * light * 2.0 + ambient * 2.0;
@@ -576,6 +607,16 @@ fn fs_main(i: VertexOut, @builtin(front_facing) front: bool) -> @location(0) vec
         let c = tex * material.base_color.rgb + rim * p[0].rgb;
         let u = dot(tn_toon, tl) * 0.4951 + 0.5;
         var ramp = toon_table(toon_lookup(0.0, u).rgb);
+        var shadow_end = toon_table(toon_lookup(0.0, 0.0).rgb);
+        if material.params.x > 0.5 {
+            // The tone multiplies the base in linear space; as a
+            // display-referred ramp factor of the base.
+            let lin = toon_decode(tex);
+            let shade = toon_base_shade(lin);
+            let inv = 1.0 / max(tex, vec3<f32>(1e-4));
+            ramp = toon_encode(lin * mix(shade, vec3<f32>(1.0), toon_lookup(0.0, u).r)) * inv;
+            shadow_end = toon_encode(lin * mix(shade, vec3<f32>(1.0), toon_lookup(0.0, 0.0).r)) * inv;
+        }
         let rate = toon_lookup(1.0, u).r;
         let shadow_layer = toon_table(occ_sample.rgb);
         let a = occ_sample.a * (1.0 - rate);
@@ -589,11 +630,11 @@ fn fs_main(i: VertexOut, @builtin(front_facing) front: bool) -> @location(0) vec
             cast_light = mix(1.0, sun_shadow(i.world, max(dot(tn_toon, normalize(-frame.sun_dir.xyz)), 0.0), i.clip.xy), frame.sun_color.w);
         }
         if p[3].z > 0.5 {
-            ramp = mix(toon_table(toon_lookup(0.0, 0.0).rgb), ramp, cast_light);
+            ramp = mix(shadow_end, ramp, cast_light);
         } else {
             m = mix(p[1].rgb, m, cast_light);
         }
-        let light = toon_encode(frame.toon_color.rgb) * frame.toon_dir.w;
+        let light = toon_light();
         let ambient = toon_encode(sh_irradiance(tn_toon) * frame.env.x / PI);
         let shaded = m * ramp * light + vec3<f32>(pow(nh, 48.0) * p[2].x) + c * ambient * p[3].w;
         let fog_t = height_fog(i.world);
