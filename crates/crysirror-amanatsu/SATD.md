@@ -58,7 +58,7 @@ the `SaveLoadUI` list (つづきから loads the newest save; MapSelectUI
 Save/Load), manual saves, the original's auto-save rotation limit,
 `SaveTimeText` in local time (UTC is written), `PlayerData` from the
 player card editor (the default male card is saved), save versions (0.0.0)
-and import of saves in the installation's `UserData/save`, `ConfigWindow`, `ExitDialog`
+and import of saves in the installation's `UserData/save`, the `ConfigWindow` parts listed in `config.rs`, `ExitDialog`
 confirmation (quit is immediate), the TOS check/viewer, the language dialog,
 Selectable hover/press transitions (`ColorTint`, Animator triggers), the
 ILLGAMES `PlayAnimationUI` tweens (LitMotion easing) and the uploader/
@@ -126,3 +126,4 @@ H scenes and save/load, recorded in a validation note.
 | 2026-11-22 | H faces: H characters register their `FaceBlendShape`, motions keep the face morphs, the breath's first `FaceParam` sets patterns/openness/blinking and the mouth moves between its min/max while the breath plays. Remaining: voice-level lip sync, tears/cheek/highlight, neck/eye look behaviour, the other `FaceParam` entries, short-movie faces. | Listed above. |
 | 2026-11-22 | Short movie faces: `FaceTrack` clips by personality (expression preset or patterns/openness) at their starts; movie motions keep the face morphs. Remaining: blend times, look targets, tears, cheek, blink and lip-sync flags. | Listed above. |
 | 2026-11-22 | Talk lip sync: voice lines move the talking heroine's mouth for the clip length (`AudioClip.m_Length`), shared with the H breath mouth. Remaining: voice-level (`LipSync`) amplitude. | Listed above. |
+| 2026-11-22 | `ConfigWindow`: the `Config` prefab from the HUD gear, title option/F1 and H; toggles, sliders, volume switches, scrolling under `RectMask2D` clipping (shared `ugui` clip rects, `Mask` graphic, dropdown templates, grid preferred sizes, slider handles), `config.xml` in the save mount, volumes as mix groups. Remaining per `config.rs`: dropdowns, colour pickers, voice rows, shortcuts, reset, fade, and applying the non-volume values (text speed/alpha, camera, H toggles, auto-save mode). | Listed above. |

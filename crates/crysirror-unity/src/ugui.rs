@@ -28,6 +28,12 @@ impl Rect {
     pub fn height(&self) -> f32 {
         self.y1 - self.y0
     }
+    /// The overlap of two rectangles, if any.
+    pub fn intersect(&self, o: &Rect) -> Option<Rect> {
+        let r = Rect { x0: self.x0.max(o.x0), y0: self.y0.max(o.y0), x1: self.x1.min(o.x1), y1: self.y1.min(o.y1) };
+        (r.x1 > r.x0 && r.y1 > r.y0).then_some(r)
+    }
+
     pub fn contains(&self, x: f32, y: f32) -> bool {
         x >= self.x0 && x < self.x1 && y >= self.y0 && y < self.y1
     }
@@ -82,6 +88,8 @@ pub struct DrawItem {
     pub paint: Paint,
     /// Canvas sorting order, then hierarchy order.
     pub order: (i64, u32),
+    /// Screen rectangle of the enclosing `RectMask2D`/`Mask` ancestors.
+    pub clip: Option<Rect>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -146,6 +154,8 @@ struct Walk {
     in_canvas: bool,
     blocks: bool,
     interactable: bool,
+    /// Intersected screen rectangles of the masking ancestors.
+    clip: Option<Rect>,
 }
 
 /// Lay out every active canvas of the scene for a `width`×`height` screen.
@@ -154,7 +164,7 @@ pub fn layout(scene: &Scene6, states: &HashMap<usize, NodeState>, width: f32, he
     let mut order = 0u32;
     let mut driven: HashMap<usize, crate::scene6::RectParams> = HashMap::new();
     for &r in &scene.roots {
-        let w = Walk { parent: Rect { x0: 0., y0: 0., x1: width, y1: height }, scale: 1., origin: [0., 0.], alpha: 1., sorting: 0, in_canvas: false, blocks: true, interactable: true };
+        let w = Walk { parent: Rect { x0: 0., y0: 0., x1: width, y1: height }, scale: 1., origin: [0., 0.], alpha: 1., sorting: 0, in_canvas: false, blocks: true, interactable: true, clip: None };
         walk(scene, states, r, w, width, height, svc, &mut driven, &mut out, &mut order);
     }
     out.items.sort_by(|a, b| a.order.cmp(&b.order));
@@ -183,7 +193,7 @@ fn walk(scene: &Scene6, states: &HashMap<usize, NodeState>, n: usize, mut w: Wal
     let sprite_info = svc.sprite_info;
     let node = &scene.nodes[n];
     let st = states.get(&n);
-    if !st.and_then(|s| s.active).unwrap_or(node.active) {
+    if !st.and_then(|s| s.active).unwrap_or(node.active && !dropdown_template(scene, n)) {
         return;
     }
     // A root Canvas (screen space overlay/camera) defines the canvas space.
@@ -212,7 +222,7 @@ fn walk(scene: &Scene6, states: &HashMap<usize, NodeState>, n: usize, mut w: Wal
             }
             // A CanvasGroup on the Canvas object applies to everything in it.
             let (alpha, blocks, interactable) = canvas_group(scene, n, st, &w);
-            w = Walk { parent: Rect { x0: 0., y0: 0., x1: sw / scale, y1: sh / scale }, scale, origin: [0., 0.], alpha, sorting: c.fields.int("m_SortingOrder").unwrap_or(0), in_canvas: true, blocks, interactable };
+            w = Walk { parent: Rect { x0: 0., y0: 0., x1: sw / scale, y1: sh / scale }, scale, origin: [0., 0.], alpha, sorting: c.fields.int("m_SortingOrder").unwrap_or(0), in_canvas: true, blocks, interactable, clip: None };
             out.rects.insert(n, Rect { x0: 0., y0: 0., x1: sw, y1: sh });
             if !interactable {
                 out.non_interactable.insert(n);
@@ -297,7 +307,10 @@ fn walk(scene: &Scene6, states: &HashMap<usize, NodeState>, n: usize, mut w: Wal
         let f = &c.fields;
         let tint = st.and_then(|s| s.color).unwrap_or_else(|| color(f, "m_Color"));
         let tint = [tint[0], tint[1], tint[2], tint[3] * alpha];
+        // A `Mask` without `showMaskGraphic` only clips.
+        let hidden_graphic = script(scene, n, "Mask").is_some_and(|m| m.int("m_ShowMaskGraphic").unwrap_or(1) == 0);
         let paint = match c.script.rsplit('.').next().unwrap_or("") {
+            "Image" | "RawImage" if hidden_graphic => None,
             "Image" | "RawImage" => {
                 let sprite = st.and_then(|s| s.sprite).unwrap_or_else(|| pptr(f, if c.script.ends_with("RawImage") { "m_Texture" } else { "m_Sprite" }));
                 let ty = f.int("m_Type").unwrap_or(0);
@@ -338,10 +351,15 @@ fn walk(scene: &Scene6, states: &HashMap<usize, NodeState>, n: usize, mut w: Wal
         };
         if let Some(paint) = paint {
             *order += 1;
-            if f.int("m_RaycastTarget").unwrap_or(0) != 0 && blocks {
-                out.hits.push((n, screen));
+            // Masked graphics only take raycasts inside the mask.
+            let hit = match w.clip {
+                Some(c) => screen.intersect(&c),
+                None => Some(screen),
+            };
+            if let Some(hit) = hit.filter(|_| f.int("m_RaycastTarget").unwrap_or(0) != 0 && blocks) {
+                out.hits.push((n, hit));
             }
-            out.items.push(DrawItem { node: n, rect: screen, scale: w.scale * sx, paint, order: (w.sorting, *order) });
+            out.items.push(DrawItem { node: n, rect: screen, scale: w.scale * sx, paint, order: (w.sorting, *order), clip: w.clip });
         }
     }
     let _ = RECT_TRANSFORM;
@@ -354,9 +372,23 @@ fn walk(scene: &Scene6, states: &HashMap<usize, NodeState>, n: usize, mut w: Wal
     if let Some(g) = script(scene, n, "GridLayoutGroup") {
         arrange_grid(scene, states, n, g, size, driven);
     }
+    // `RectMask2D` and `Mask` clip the children to this rectangle (a
+    // `Mask` by its graphic's shape; the rectangle is used).
+    let clip = if script(scene, n, "RectMask2D").is_some() || script(scene, n, "Mask").is_some() {
+        Some(w.clip.map_or(screen, |c| c.intersect(&screen).unwrap_or(Rect { x0: screen.x0, y0: screen.y0, x1: screen.x0, y1: screen.y0 })))
+    } else {
+        w.clip
+    };
     for &k in &node.children {
-        walk(scene, states, k, Walk { parent: child_parent, scale: child_scale, origin: child_origin, alpha, sorting: w.sorting, in_canvas: true, blocks, interactable }, sw, sh, svc, driven, out, order);
+        walk(scene, states, k, Walk { parent: child_parent, scale: child_scale, origin: child_origin, alpha, sorting: w.sorting, in_canvas: true, blocks, interactable, clip }, sw, sh, svc, driven, out, order);
     }
+}
+
+/// A Dropdown's `m_Template` (deactivated in the dropdown's `Start`; shown
+/// only while the list is open).
+fn dropdown_template(scene: &Scene6, n: usize) -> bool {
+    let Some(p) = scene.nodes[n].parent else { return false };
+    scene.nodes[p].components.iter().any(|c| c.fields.pptr("m_Template").is_some_and(|t| t.path_id == scene.nodes[n].transform))
 }
 
 /// The node's enabled MonoBehaviour with this script class (last name part).
@@ -403,7 +435,7 @@ fn sizes(scene: &Scene6, states: &HashMap<usize, NodeState>, n: usize, axis: usi
             let (cmin, cpref, cflex) = if control {
                 sizes(scene, states, c, axis, svc)
             } else {
-                let d = scene.nodes[c].xform.rect.map_or(0., |r| r.size_delta[axis]);
+                let d = states.get(&c).and_then(|s| s.size_delta).map(|d| d[axis]).or_else(|| scene.nodes[c].xform.rect.map(|r| r.size_delta[axis])).unwrap_or(0.);
                 (d, d, 0.)
             };
             if along == axis {
@@ -422,6 +454,28 @@ fn sizes(scene: &Scene6, states: &HashMap<usize, NodeState>, n: usize, axis: usi
         }
         min += edge;
         pref = pref.max(min - edge) + edge;
+    } else if let Some(g) = script(scene, n, "GridLayoutGroup") {
+        // `GridLayoutGroup.CalculateLayoutInput*`: columns by the constraint
+        // (flexible: ⌈√n⌉ preferred), rows to hold the children.
+        let kids = layout_children(scene, states, n).len().max(1);
+        let pad = padding(g);
+        let cell = vec2(g, "m_CellSize", [100., 100.]);
+        let spacing = vec2(g, "m_Spacing", [0., 0.]);
+        let count = g.int("m_ConstraintCount").unwrap_or(2).max(1) as usize;
+        let cols = match g.int("m_Constraint").unwrap_or(0) {
+            1 => count,
+            2 => kids.div_ceil(count),
+            _ => (kids as f32).sqrt().ceil() as usize,
+        }
+        .max(1);
+        let rows = match g.int("m_Constraint").unwrap_or(0) {
+            2 => count,
+            _ => kids.div_ceil(cols),
+        };
+        let (k, edge) = if axis == 0 { (cols, pad[0] + pad[1]) } else { (rows, pad[2] + pad[3]) };
+        let v = edge + k as f32 * cell[axis] + k.saturating_sub(1) as f32 * spacing[axis];
+        min = v;
+        pref = v;
     } else {
         // ILayoutElement graphics.
         for c in &scene.nodes[n].components {
@@ -491,7 +545,7 @@ fn arrange(scene: &Scene6, states: &HashMap<usize, NodeState>, n: usize, g: &Fie
                     let (a, b, f) = sizes(scene, states, c, axis, svc);
                     (a, b, if expand { f.max(1.) } else { f })
                 } else {
-                    let d = scene.nodes[c].xform.rect.map_or(0., |r| r.size_delta[axis]);
+                    let d = states.get(&c).and_then(|s| s.size_delta).map(|d| d[axis]).or_else(|| scene.nodes[c].xform.rect.map(|r| r.size_delta[axis])).unwrap_or(0.);
                     (d, d, if expand { 1. } else { 0. })
                 }
             })
@@ -645,13 +699,23 @@ mod tests {
 
 /// `Slider.value` setter (`UpdateVisuals`): the fill rect's anchors span
 /// the normalized value along the slider's direction (0 left-to-right,
-/// 1 right-to-left, 2 bottom-to-top, 3 top-to-bottom).
+/// 1 right-to-left, 2 bottom-to-top, 3 top-to-bottom); the handle rect's
+/// anchors sit at the value.
 pub fn slider_value(scene: &Scene6, slider: &Fields, value: f32, states: &mut HashMap<usize, NodeState>) {
     let (lo, hi) = (slider.float("m_MinValue").unwrap_or(0.) as f32, slider.float("m_MaxValue").unwrap_or(1.) as f32);
     let t = if hi > lo { ((value - lo) / (hi - lo)).clamp(0., 1.) } else { 0. };
-    let Some(fill) = slider.pptr("m_FillRect").and_then(|p| scene.nodes.iter().position(|n| n.transform == p.path_id || n.components.iter().any(|c| c.path_id == p.path_id))) else { return };
     let dir = slider.int("m_Direction").unwrap_or(0);
     let axis = usize::from(dir >= 2);
+    let at = if dir == 1 || dir == 3 { 1. - t } else { t };
+    if let Some(handle) = slider.pptr("m_HandleRect").filter(|p| p.path_id != 0).and_then(|p| scene.nodes.iter().position(|n| n.transform == p.path_id || n.components.iter().any(|c| c.path_id == p.path_id))) {
+        let (mut amin, mut amax) = ([0., 0.], [1., 1.]);
+        amin[axis] = at;
+        amax[axis] = at;
+        let st = states.entry(handle).or_default();
+        st.anchor_min = Some(amin);
+        st.anchor_max = Some(amax);
+    }
+    let Some(fill) = slider.pptr("m_FillRect").and_then(|p| scene.nodes.iter().position(|n| n.transform == p.path_id || n.components.iter().any(|c| c.path_id == p.path_id))) else { return };
     let reverse = dir == 1 || dir == 3;
     let mut amin = [0., 0.];
     let mut amax = [1., 1.];

@@ -27,6 +27,8 @@ pub enum Request {
     /// `LoadSaveFileInternal`: load a
     /// save and enter the action map.
     LoadSave,
+    /// `ConfigWindow.Load`.
+    Config,
 }
 
 pub struct Input {
@@ -233,8 +235,7 @@ impl Title {
         }
         if input.f1 {
             level.sounds.push(Call::SystemSe(self.ids.ok_l));
-            level.log.push("ConfigWindow.Load (not ported)".into());
-            return Request::None;
+            return Request::Config;
         }
         if input.right_click {
             return self.on_back(level, input.now);
@@ -270,10 +271,7 @@ impl Title {
                     "OnCustomMale" | "OnCustomFemale" => Request::Load(scene_id::CUSTOM),
                     "OnMemory" => Request::Load(scene_id::MEMORY),
                     "OnQuit" => Request::Quit,
-                    _ => {
-                        level.log.push("ConfigWindow.Load (not ported)".into());
-                        Request::None
-                    }
+                    _ => Request::Config,
                 };
             }
             "OnLoad" => {
@@ -284,7 +282,7 @@ impl Title {
                 level.sounds.push(Call::SystemSe(self.ids.ok_s));
                 level.log.push(format!("TitleScene.{} (not ported)", call.method));
             }
-            // SATD-amanatsu-port: SaveLoadUI, ConfigWindow, TOS viewer,
+            // SATD-amanatsu-port: TOS viewer,
             // uploader/downloader; OnManual opens an external URL.
             m => level.log.push(format!("TitleScene.{m} (not ported)")),
         }

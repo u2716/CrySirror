@@ -182,3 +182,9 @@
 - Short movies (same day): `AL.TimeLine.FaceTrack` `FaceClip._info` (`_keyData` personalities 0–11, `_valueData` `ExpID`/`Brow`/`Eyes`/`Mouoth`/`EyesOpen`/`MouthOpen`/…); `short_movie_tracks` lists `stm_16` with five face clips (3.93 s, 5.00 s, 8.67 s, …). The `with` save + `w2` track (一緒に遊ぶ at frame 1900) plays `stm_16` on map 4; at frame 2400 the heroine shows the clip's closed-eye face while her motion plays.
 - Talk lip sync (same day): a heroine voice line opens and closes her mouth for the clip's `m_Length` (from the expression's openness up to 0.8); `w1` track from the `with` save: the greeting at frame 1850 shows the mouth open, at 1856 nearly closed.
 
+## 2026-11-22 — Config window
+
+- Native evidence: `AL.Config.ConfigWindow` (`Load` → `Manager.Scene.Add`, `Setup`, `_btnTitle` hidden on the title, `_rectMask2D`/`_mainWindow`), the setting components' serialized toggle arrays (`component_refs`: `[ON, OFF]` pairs, `_tglInvertMove*` `[標準, 反転]`, `_tglAutoSaveTiming` `[None, TimeZone, Day]`, `_tglFullScreen` `[Windowed, FullScreen]`), `GraphicSetting._objVisible` (rows not offered), `SliderObservableToTMPro` (`_slider`/`_text`, `_format` "0"), `UserData/config.xml` (`Preferences` sections, `Volume[n] : Switch[b]`).
+- Owner corpus: `find_game_object` (the `Config` prefab in the ADV Addressables bundle), `component_refs`.
+- Behaviour (`cf1`–`cf4` tracks from the `with` save: the HUD gear at frame 1810): the window opens over the map with the installation's values (auto-save 1日ごと, BGM 40…); six wheel steps scroll the content under the viewport clip; clicking 注視点 OFF and dragging the BGM slider to 83 update the toggles, fill, handle and number; the close button writes `user/config.xml` in the save mount (`Look` False, `BGM` `Volume[83] : Switch[True]`). Volumes apply as client mix groups (`submit_audio` `SetMixGroup`) without errors with audio enabled.
+

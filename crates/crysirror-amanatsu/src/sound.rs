@@ -49,6 +49,17 @@ impl Kind {
             Kind::Voice => 5,
         }
     }
+
+    /// The config mix group (`Manager.Sound` mixer groups).
+    fn group(self) -> &'static str {
+        match self {
+            Kind::Bgm => "bgm",
+            Kind::Env => "env",
+            Kind::SystemSe => "system_se",
+            Kind::GameSe2d | Kind::GameSe3d => "game_se",
+            Kind::Voice => "voice",
+        }
+    }
 }
 
 #[derive(Default)]
@@ -59,6 +70,8 @@ pub struct Sound {
     player: Option<Vec<u8>>,
     current_bgm: Option<(String, String)>,
     pending: Vec<u64>,
+    /// The config mix groups exist (`apply_volumes` succeeded).
+    groups: bool,
     pub log: Vec<String>,
 }
 
@@ -130,6 +143,7 @@ impl Sound {
                 Kind::Voice => PcmBus::Voice,
                 _ => PcmBus::Sfx,
             },
+            mix_group: self.groups.then(|| kind.group().to_owned()),
             ..Default::default()
         };
         let ticket = host.begin_audio(client, AudioRequest::Play { channel: kind.channel(), source: EncodedAudio { bytes: bytes.into(), frame_limit: None }, intro: None, parameters })?;
@@ -158,6 +172,28 @@ impl Sound {
             return Ok(());
         };
         self.play(host, client, unity, Kind::SystemSe, &bundle, &asset, 1.)
+    }
+
+    /// The config volumes (`Sound` Master/BGM/ENV/SystemSE/GameSE and the
+    /// `Voice` Master, each `Volume × Switch`) as mix groups under
+    /// `master`. SATD-amanatsu-port: the per-personality voice volumes are
+    /// not applied.
+    pub fn apply_volumes(&mut self, host: &mut dyn HostServices, client: ClientId, cfg: &crate::config::Config) -> Result<()> {
+        use crysirror_core::service::AudioMixGroupSettings as G;
+        let groups = [
+            ("master", None, cfg.gain("Sound", "Master")),
+            ("bgm", Some("master"), cfg.gain("Sound", "BGM")),
+            ("env", Some("master"), cfg.gain("Sound", "ENV")),
+            ("system_se", Some("master"), cfg.gain("Sound", "SystemSE")),
+            ("game_se", Some("master"), cfg.gain("Sound", "GameSE")),
+            ("voice", Some("master"), cfg.gain("Voice", "Master")),
+        ];
+        for (name, parent, gain) in groups {
+            let settings = G { parent: parent.map(str::to_owned), gain, muted: false };
+            host.submit_audio(client, AudioRequest::SetMixGroup { name: name.to_owned(), settings, fade_ms: 50. })?;
+        }
+        self.groups = true;
+        Ok(())
     }
 
     /// An AudioClip's `m_Length` in seconds.

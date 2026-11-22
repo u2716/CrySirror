@@ -273,6 +273,12 @@ pub struct Game {
     /// The toon ambient characters receive on this map (sky radiance or
     /// the light setting's ambient, luminance).
     sky_ambient: f32,
+    /// `Manager.Config` data, the open `ConfigWindow` and whether the data
+    /// changed since it was saved.
+    config: crate::config::Config,
+    config_ui: Option<crate::config::ConfigUi>,
+    config_loaded: bool,
+    config_dirty: bool,
     /// The command camera table (`AngleData` prefab).
     angle_data: Option<Level>,
     /// The map view before the command camera.
@@ -1455,6 +1461,7 @@ impl Game {
     /// H UI buttons: `Finish Female` (orgasm), `Exit` (end).
     fn h_button(&mut self, name: &str, now: u64) -> Result<()> {
         match name {
+            "Config" => self.open_config(),
             "Point" => self.open_h_points(),
             "Finish Female" | "Finish Male" | "Finish Shot" | "Finish Double" => {
                 // SATD-amanatsu-port: the finish menus (外出し/飲ませる/吐かせる),
@@ -1883,13 +1890,68 @@ impl Game {
                 }
                 self.next_time_zone(map_id, now);
             }
-            H::Config | H::Help | H::CameraPrev | H::CameraNext | H::CameraReset => self.log.push(format!("SATD-amanatsu-port: ActionMapUI {action:?} not ported")),
+            H::Config => self.open_config(),
+            H::Help | H::CameraPrev | H::CameraNext | H::CameraReset => self.log.push(format!("SATD-amanatsu-port: ActionMapUI {action:?} not ported")),
         }
         Ok(())
     }
 
     /// `SaveLoadUI.Create` + `OpenExe`: over the title (`IsTitle`) or the
     /// map select.
+    /// `Manager.Config` from the save mount (`user/config.xml`), else the
+    /// installation's `UserData/config.xml` (read only), and its volumes.
+    fn load_config(&mut self, host: &mut dyn HostServices) {
+        let saved = host.storage(self.client_id).ok().and_then(|s| s.read(&VfsPath::new(crysirror_core::path::Mount::Save, "user/config.xml").ok()?).ok());
+        let bytes = saved.or_else(|| self.unity.read_all("UserData/config.xml").ok());
+        if let Some(b) = bytes {
+            self.config = crate::config::Config::parse(&String::from_utf8_lossy(&b));
+        }
+        if let Err(e) = self.sound.apply_volumes(host, self.client_id, &self.config) {
+            self.log.push(format!("config volumes: {e:#}"));
+        }
+    }
+
+    /// `ConfigWindow.Load`: the `Config` prefab over everything.
+    fn open_config(&mut self) {
+        if self.config_ui.is_some() {
+            return;
+        }
+        match Level::prefab(&mut self.unity, crate::talk::ADV_BUNDLE, crate::config::PREFAB) {
+            Ok(mut level) => {
+                // `_btnTitle` is hidden on the title.
+                let on_title = matches!(self.controller, Controller::Title(_));
+                // `StartFade`: the `FadeCanvas` shows the window.
+                if let Some(root) = level.find("Config") {
+                    crate::talk::show(&mut level, root);
+                }
+                if let Some(n) = level.find("Config/Background/SubWindow/System/btnTitle") {
+                    level.set_active(n, !on_title);
+                }
+                self.config_ui = Some(crate::config::ConfigUi::new(&mut level, &self.config));
+                self.overlays.push((level, Ui::new(10)));
+                self.log.push("ConfigWindow.Load".into());
+            }
+            Err(e) => self.log.push(format!("ConfigWindow.Load: {e:#}")),
+        }
+    }
+
+    /// `ConfigWindow.Unload`: save and apply the data.
+    fn close_config(&mut self, host: &mut dyn HostServices) {
+        self.config_ui = None;
+        while let Some(i) = self.overlays.iter().position(|(l, _)| l.name == crate::config::PREFAB) {
+            let (_, mut ui) = self.overlays.remove(i);
+            self.removed.extend(ui.clear());
+        }
+        if std::mem::take(&mut self.config_dirty) {
+            let bytes = self.config.to_xml().into_bytes();
+            let written = host.storage(self.client_id).map_err(anyhow::Error::from).and_then(|s| Ok(s.write_atomic(&VfsPath::new(crysirror_core::path::Mount::Save, "user/config.xml")?, &bytes)?));
+            if let Err(e) = written {
+                self.log.push(format!("config save: {e:#}"));
+            }
+        }
+        self.log.push("ConfigWindow.Unload".into());
+    }
+
     fn open_save_load(&mut self, host: &mut dyn HostServices, is_title: bool) -> Result<()> {
         if self.save_load.is_some() {
             return Ok(());
@@ -2690,6 +2752,10 @@ impl AmanatsuVm {
             command_view_return: None,
             angle_data: None,
             sky_ambient: 0.,
+            config: Default::default(),
+            config_ui: None,
+            config_loaded: false,
+            config_dirty: false,
             expressions: std::collections::HashMap::new(),
             blinking: std::collections::HashSet::new(),
             next_blink: std::collections::HashMap::new(),
@@ -2786,6 +2852,10 @@ impl AmanatsuVm {
         }
         let game = self.game.as_mut().context("game")?;
         game.now = host.now_ms();
+        if !game.config_loaded {
+            game.config_loaded = true;
+            game.load_config(host);
+        }
         let dt = (game.now.saturating_sub(game.last)).min(100) as f32 / 1000.;
         game.last = game.now;
         let now = game.now;
@@ -2947,6 +3017,41 @@ impl AmanatsuVm {
                 handler = level.click_handler(n).filter(|&n| level.selectable_interactable(n) && !layout.non_interactable.contains(&n)).map(|n| (h, n));
                 break;
             }
+        }
+        // An open `ConfigWindow` takes the input.
+        let mut input = input;
+        let mut config_title = false;
+        if game.config_ui.is_some() {
+            let pressed = input.buttons_pressed & b::MOUSE_LEFT != 0;
+            let down = input.buttons_down & b::MOUSE_LEFT != 0;
+            let wheel = f32::from(u8::from(input.buttons_pressed & b::WHEEL_DOWN != 0)) - f32::from(u8::from(input.buttons_pressed & b::WHEEL_UP != 0));
+            let back = input.buttons_pressed & (b::ESCAPE | b::MOUSE_RIGHT) != 0;
+            let action = match game.overlays.iter().position(|(l, _)| l.name == crate::config::PREFAB) {
+                Some(oi) if !back => {
+                    let rects = layouts.get(oi + 1).map(|l| l.rects.clone()).unwrap_or_default();
+                    let level = &mut game.overlays[oi].0;
+                    let ui = game.config_ui.as_mut().unwrap();
+                    ui.input(level, &rects, (x, y), pressed && !fading, down, wheel, &mut game.config)
+                }
+                _ => crate::config::Action::Close,
+            };
+            match action {
+                crate::config::Action::None => {}
+                crate::config::Action::Changed => {
+                    game.config_dirty = true;
+                    if let Err(e) = game.sound.apply_volumes(host, client, &game.config) {
+                        game.log.push(format!("config volumes: {e:#}"));
+                    }
+                }
+                crate::config::Action::Close | crate::config::Action::Title => {
+                    game.close_config(host);
+                    config_title = action == crate::config::Action::Title;
+                }
+            }
+            input.buttons_pressed &= !(b::MOUSE_LEFT | b::MOUSE_RIGHT | b::ESCAPE | b::F1);
+            input.buttons_down &= !b::MOUSE_LEFT;
+            handler = None;
+            game.pressed = None;
         }
         let mut click = None;
         if input.buttons_pressed & b::MOUSE_LEFT != 0 {
@@ -3426,6 +3531,10 @@ impl AmanatsuVm {
         }
         game.sounds(host, client)?;
         game.log.append(&mut game.level.log);
+        if config_title {
+            // `ConfigWindow` `_btnTitle`: back to the title.
+            request = scenes::Request::Load(scenes::scene_id::TITLE);
+        }
         match request {
             scenes::Request::None => {}
             scenes::Request::Quit => game.quit = true,
@@ -3438,6 +3547,7 @@ impl AmanatsuVm {
             scenes::Request::Load(_) => {}
             scenes::Request::LoadSave if game.pending.is_none() => game.open_save_load(host, true)?,
             scenes::Request::LoadSave => {}
+            scenes::Request::Config => game.open_config(),
         }
         if game.quit {
             return Ok(VmYield::Halted);
@@ -3453,8 +3563,6 @@ fn game_random(rng: &mut u64, n: usize) -> usize {
     (*rng % n.max(1) as u64) as usize
 }
 
-/// `SaveData.UpdateSaveTime`: the local time as `yyyy/MM/dd HH:mm` and as
-/// a .NET `DateTime` binary (ticks since 0001-01-01, kind Local).
 /// Toon colour scale of characters: Unity lights them with their own key
 /// light (`Directional Light Sun Chara`) and no sky ambient; the engine's
 /// toon model adds the sun and the environment's ambient, so the colour is
@@ -3501,6 +3609,8 @@ fn project_edge(v: &map::View, p: [f32; 3]) -> [f32; 2] {
     [cx + dir.x * t, cy + dir.y * t]
 }
 
+/// `SaveData.UpdateSaveTime`: the local time as `yyyy/MM/dd HH:mm` and as
+/// a .NET `DateTime` binary (ticks since 0001-01-01, kind Local).
 fn now_text() -> (String, i64) {
     let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
     let days = secs.div_euclid(86_400);

@@ -1916,3 +1916,40 @@ fn find_game_object() {
         }
     }
 }
+
+/// Components of a scene (`AMANATSU_KEY`) whose script contains
+/// `AMANATSU_SCRIPT`, with their pointer fields resolved to node names.
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn component_refs() {
+    use crysirror_unity::managed::Value;
+    let mut u = unity();
+    let key = std::env::var("AMANATSU_KEY").unwrap();
+    let want = std::env::var("AMANATSU_SCRIPT").unwrap();
+    let scene = u.scene(&key).unwrap();
+    let mut owner = std::collections::HashMap::new();
+    for (i, n) in scene.nodes.iter().enumerate() {
+        for c in &n.components {
+            owner.insert(c.path_id, i);
+        }
+        owner.insert(n.game_object, i);
+        owner.insert(n.transform, i);
+    }
+    let name = |p: &crysirror_unity::PPtr| owner.get(&p.path_id).map_or_else(|| format!("#{}", p.path_id), |&i| {
+        let n = &scene.nodes[i];
+        let parent = n.parent.map_or("", |q| scene.nodes[q].name.as_str());
+        format!("{parent}/{}", n.name)
+    });
+    for n in &scene.nodes {
+        for c in n.components.iter().filter(|c| c.script.contains(&want)) {
+            println!("== {} {}", n.name, c.script);
+            for (k, v) in &c.fields.0 {
+                match v {
+                    Value::PPtr(p) if p.path_id != 0 => println!("  {k} = {}", name(p)),
+                    Value::Array(a) if a.iter().any(|x| matches!(x, Value::PPtr(_))) => println!("  {k} = [{}]", a.iter().filter_map(|x| if let Value::PPtr(p) = x { Some(name(p)) } else { None }).collect::<Vec<_>>().join(", ")),
+                    _ => {}
+                }
+            }
+        }
+    }
+}

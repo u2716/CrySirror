@@ -153,11 +153,19 @@ impl Ui {
     /// Layer operations for this frame's layout of a scene of `file`.
     pub fn compose(&mut self, unity: &mut Unity, host: &mut dyn Host, file: &str, layout: &ugui::Layout, base_order: i32) -> Result<Vec<Json>> {
         let mut layers: BTreeMap<u32, Json> = BTreeMap::new();
+        // Mask clips by item (the item's 16 layer ids).
+        let mut clips: BTreeMap<u32, ugui::Rect> = BTreeMap::new();
         for (i, item) in layout.items.iter().enumerate() {
             let id = self.layer_base + (i as u32) * 16;
             let r = item.rect;
             if r.width() <= 0. || r.height() <= 0. {
                 continue;
+            }
+            if let Some(c) = item.clip {
+                if r.intersect(&c).is_none() {
+                    continue;
+                }
+                clips.insert(id, c);
             }
             let order = [base_order + item.order.0 as i32, item.order.1 as i32];
             match &item.paint {
@@ -232,6 +240,12 @@ impl Ui {
                         }));
                     }
                 }
+            }
+        }
+        for (id, layer) in layers.iter_mut() {
+            let base = id - (id - self.layer_base) % 16;
+            if let Some(c) = clips.get(&base) {
+                layer["viewport_clip"] = json!([c.x0, c.y0, c.width(), c.height()]);
             }
         }
         self.hits = layout.hits.clone();
