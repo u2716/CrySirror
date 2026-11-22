@@ -508,14 +508,22 @@ fn arrange(scene: &Scene6, states: &HashMap<usize, NodeState>, n: usize, g: &Fie
             let mut p = vec![0f32; kids.len()];
             let mut s = vec![0f32; kids.len()];
             for i in order {
+                // `LayoutGroup.SetChildrenAlongAxis`: each cell takes its
+                // flexible share; an uncontrolled child keeps its size and
+                // sits at `(cell - size) * alignment` inside the cell.
                 let (_, pref, flex) = child_sizes[i];
-                let mut w = pref;
-                if control && total_flex > 0. {
-                    w += extra * flex / total_flex;
+                let mut cell = pref;
+                if total_flex > 0. {
+                    cell += extra * flex / total_flex;
                 }
-                p[i] = cursor;
-                s[i] = w;
-                cursor += w + spacing;
+                if control {
+                    p[i] = cursor;
+                    s[i] = cell;
+                } else {
+                    p[i] = cursor + (cell - pref) * align[axis];
+                    s[i] = pref;
+                }
+                cursor += cell + spacing;
             }
             pos.push([0.; 2]);
             sz.push(s.clone());

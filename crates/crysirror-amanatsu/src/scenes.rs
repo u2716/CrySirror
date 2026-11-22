@@ -23,7 +23,8 @@ pub enum Request {
     Load(i32),
     /// `Application.Quit` (through `ExitDialog`).
     Quit,
-    /// `TitleScene.OnLoad` → `SaveLoadUI` → `LoadSaveFileInternal`: load a
+    /// `TitleScene.OnLoad`: `SaveLoadUI` (`IsTitle`); its Load runs
+    /// `LoadSaveFileInternal`: load a
     /// save and enter the action map.
     LoadSave,
 }

@@ -33,6 +33,8 @@ pub enum Action {
     OpenCharaSelect,
     /// `_btnNextTimeZone`: the zone advanced to this value.
     NextTimeZone(i32),
+    /// `_btnSaveLoad`: open `SaveLoadUI`.
+    OpenSaveLoad,
 }
 
 pub struct ActionMap {
@@ -48,6 +50,7 @@ pub struct ActionMap {
     cancels: Vec<usize>,
     title: Option<usize>,
     next_zone: Option<usize>,
+    save_load: Option<usize>,
 }
 
 fn node_of(scene: &Scene6, path_id: i64) -> Option<usize> {
@@ -60,7 +63,7 @@ impl ActionMap {
         let scene = &select.scene;
         let mut buttons = HashMap::new();
         let mut dialog = None;
-        let (mut enter, mut cancels, mut title, mut next_zone) = (None, Vec::new(), None, None);
+        let (mut enter, mut cancels, mut title, mut next_zone, mut save_load) = (None, Vec::new(), None, None, None);
         let mut hidden = Vec::new();
         for (i, n) in scene.nodes.iter().enumerate() {
             for c in &n.components {
@@ -78,6 +81,7 @@ impl ActionMap {
                     "AL.MapSelectUI" => {
                         title = c.fields.pptr("_btnTitle").and_then(|p| node_of(scene, p.path_id));
                         next_zone = c.fields.pptr("_btnNextTimeZone").and_then(|p| node_of(scene, p.path_id));
+                        save_load = c.fields.pptr("_btnSaveLoad").and_then(|p| node_of(scene, p.path_id));
                         // `CharaIconClear`: no heroine icons on a new game.
                         for info in c.fields.array("_charaInfos").unwrap_or(&[]) {
                             if let crysirror_unity::managed::Value::Struct(f) = info {
@@ -105,7 +109,7 @@ impl ActionMap {
         for n in hidden {
             select.set_active(n, false);
         }
-        Self { phase: Phase::MapSelect, time_zone: 0, map: None, buttons, dialog, enter, cancels, title, next_zone }
+        Self { phase: Phase::MapSelect, time_zone: 0, map: None, buttons, dialog, enter, cancels, title, next_zone, save_load }
     }
 
     /// A Button click inside `MapSelectUI`.
@@ -128,6 +132,8 @@ impl ActionMap {
                     // next map choice loads it.
                     self.time_zone = (self.time_zone + 1) % 4;
                     return Action::NextTimeZone(self.time_zone);
+                } else if Some(node) == self.save_load {
+                    return Action::OpenSaveLoad;
                 } else if Some(node) == self.title {
                     select.log.push("SATD-amanatsu-port: MapSelectUI title button (ExitDialog to title) not ported".into());
                 } else {

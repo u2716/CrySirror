@@ -242,6 +242,8 @@ pub struct Game {
     /// Registered heroines (card paths), `SaveData.NPCDataList` order.
     pub heroines: Vec<String>,
     chara_select: Option<crate::charaselect::CharaSelect>,
+    /// `SaveLoadUI` (its overlay is named `SaveLoadUI`).
+    save_load: Option<crate::saveload::SaveLoad>,
     /// Heroines standing on the map: (card, engine-space feet position,
     /// personality, first name).
     spots: Vec<(String, [f32; 3], i64, String)>,
@@ -861,28 +863,6 @@ impl Game {
         Ok(())
     }
 
-    /// The newest `.sav` of the engine's save mount.
-    fn newest_save(&mut self, host: &mut dyn HostServices) -> Result<Option<(String, crate::save::SaveFile)>> {
-        let storage = host.storage(self.client_id)?;
-        let mut files: Vec<String> = storage.list(crysirror_core::path::Mount::Save, "user").unwrap_or_default().into_iter().filter(|f| f.ends_with(".sav")).collect();
-        let mut best: Option<(String, crate::save::SaveFile, i64)> = None;
-        files.sort();
-        for f in files {
-            let rel = if f.starts_with("user/") { f.clone() } else { format!("user/{f}") };
-            let Ok(bytes) = storage.read(&VfsPath::new(crysirror_core::path::Mount::Save, &rel)?) else { continue };
-            match crate::save::SaveFile::decode(&bytes) {
-                Ok(file) => {
-                    let t = file.npcs.first().map_or(0, |n| n.entry_time);
-                    if best.as_ref().is_none_or(|b| t >= b.2) {
-                        best = Some((rel, file, t));
-                    }
-                }
-                Err(e) => self.log.push(format!("save {rel}: {e:#}")),
-            }
-        }
-        Ok(best.map(|b| (b.0, b.1)))
-    }
-
     fn set_hud_visible(&mut self, on: bool) {
         if self.hud.is_some() {
             if let Some((level, _)) = self.overlays.first_mut() {
@@ -1411,6 +1391,103 @@ impl Game {
         Ok(())
     }
 
+    /// `SaveLoadUI.Create` + `OpenExe`: over the title (`IsTitle`) or the
+    /// map select.
+    fn open_save_load(&mut self, host: &mut dyn HostServices, is_title: bool) -> Result<()> {
+        if self.save_load.is_some() {
+            return Ok(());
+        }
+        let mut level = Level::prefab(&mut self.unity, actionmap::UI_BUNDLE, crate::saveload::PREFAB)?;
+        let Some(mut sl) = crate::saveload::SaveLoad::new(&mut level, is_title) else {
+            self.log.push("SATD-amanatsu-port: SaveLoadUI controls not found".into());
+            return Ok(());
+        };
+        sl.new_time = now_text().0;
+        sl.new_zone = if let Controller::ActionMap(m) = &self.controller { m.time_zone } else { 0 };
+        let infos = self.save_slots(host);
+        sl.set_infos(&mut level, infos);
+        self.log.push(format!("SaveLoadUI.Open (title {is_title}): {} slots with data", sl.infos.len()));
+        self.overlays.push((level, Ui::new(9)));
+        self.save_load = Some(sl);
+        Ok(())
+    }
+
+    /// The `SaveData` of every slot file (`SaveInfo` 0..99 and the auto
+    /// slot) in the engine's save mount.
+    fn save_slots(&mut self, host: &mut dyn HostServices) -> std::collections::HashMap<usize, crate::saveload::SlotData> {
+        let mut out = std::collections::HashMap::new();
+        let Ok(storage) = host.storage(self.client_id) else { return out };
+        let files: std::collections::HashSet<String> = storage.list(crysirror_core::path::Mount::Save, "user").unwrap_or_default().into_iter().map(|f| f.rsplit('/').next().unwrap_or("").to_owned()).collect();
+        for id in (0..100).chain([crate::saveload::AUTO]) {
+            let name = crate::saveload::file_name(id);
+            if !files.contains(&name) {
+                continue;
+            }
+            let Ok(path) = VfsPath::new(crysirror_core::path::Mount::Save, &format!("user/{name}")) else { continue };
+            match storage.read(&path).map_err(anyhow::Error::from).and_then(|b| crate::save::SaveFile::decode(&b)) {
+                Ok(f) => {
+                    out.insert(id, crate::saveload::SlotData { time_zone: f.save.time_zone, time: f.save.save_time_text.clone().unwrap_or_default(), comment: f.save.comment.clone().unwrap_or_default() });
+                }
+                Err(e) => self.log.push(format!("save {name}: {e:#}")),
+            }
+        }
+        out
+    }
+
+    fn close_save_load(&mut self) {
+        if let Some(i) = self.overlays.iter().position(|(l, _)| l.name == crate::saveload::PREFAB) {
+            let (_, mut ui) = self.overlays.remove(i);
+            self.removed.extend(ui.clear());
+        }
+        self.save_load = None;
+    }
+
+    /// A `SaveLoadUI` request: load (`LoadSaveFileInternal` → the action
+    /// map), save (`SaveData.Save(fileName)`) or delete a slot file.
+    fn save_load_action(&mut self, host: &mut dyn HostServices, action: crate::saveload::Action, now: u64) -> Result<()> {
+        use crate::saveload::Action as A;
+        let path = |id: usize| VfsPath::new(crysirror_core::path::Mount::Save, &format!("user/{}", crate::saveload::file_name(id)));
+        match action {
+            A::None => {}
+            A::Close => {
+                self.level.sounds.push(sound::Call::SystemSe(self.sound_ids.ok_s));
+                self.close_save_load();
+            }
+            A::Load(id) => {
+                let storage = host.storage(self.client_id)?;
+                let file = crate::save::SaveFile::decode(&storage.read(&path(id)?)?)?;
+                self.log.push(format!("SaveData.Load({}): zone {}, {} heroines", crate::saveload::file_name(id), file.save.time_zone, file.npcs.len()));
+                self.close_save_load();
+                self.loaded_save = Some(file);
+                self.fade.start(now, true, self.fade_seconds);
+                self.pending = Some((scenes::scene_id::ACTION_MAP, now));
+            }
+            A::Save(id, comment) => {
+                let zone = if let Controller::ActionMap(m) = &self.controller { m.time_zone } else { 0 };
+                let bytes = self.save_file(zone, &comment).encode()?;
+                let storage = host.storage(self.client_id)?;
+                let _ = storage.create_directory(&VfsPath::new(crysirror_core::path::Mount::Save, "user")?);
+                storage.write_atomic(&path(id)?, &bytes)?;
+                self.log.push(format!("SaveData.Save: user/{} ({} bytes)", crate::saveload::file_name(id), bytes.len()));
+                self.refresh_save_load(host);
+            }
+            A::Delete(id) => {
+                let storage = host.storage(self.client_id)?;
+                storage.remove(&path(id)?)?;
+                self.log.push(format!("SaveLoadUI delete: user/{}", crate::saveload::file_name(id)));
+                self.refresh_save_load(host);
+            }
+        }
+        Ok(())
+    }
+
+    fn refresh_save_load(&mut self, host: &mut dyn HostServices) {
+        let infos = self.save_slots(host);
+        if let (Some(sl), Some(i)) = (self.save_load.as_mut(), self.overlays.iter().position(|(l, _)| l.name == crate::saveload::PREFAB)) {
+            sl.set_infos(&mut self.overlays[i].0, infos);
+        }
+    }
+
     /// `EventManager.TimeZone`: SE, fade, `Cycle.IncrementTimeZone`, every
     /// heroine's per-zone counts, `TimeZoneInternal` (the map again in the
     /// new zone with new placements) and the auto save.
@@ -1824,6 +1901,7 @@ impl AmanatsuVm {
             pending_steps: Vec::new(),
             heroines: Vec::new(),
             chara_select: None,
+            save_load: None,
             spots: Vec::new(),
             met: std::collections::HashSet::new(),
             command: None,
@@ -2081,6 +2159,8 @@ impl AmanatsuVm {
         let mut replace_heroines = false;
         let mut massage_exit = false;
         let mut h_button: Option<String> = None;
+        let mut save_load_action: Option<crate::saveload::Action> = None;
+        let mut open_save_load: Option<bool> = None;
         if let Some((h, button)) = click {
             if h > 0 {
                 let level = &mut game.overlays[h - 1].0;
@@ -2092,6 +2172,11 @@ impl AmanatsuVm {
                 }
                 if game.h.is_some() && level.name == crate::h::SCENE_PREFAB {
                     h_button = Some(level.scene.nodes[button].name.clone());
+                }
+                if level.name == crate::saveload::PREFAB {
+                    if let Some(sl) = game.save_load.as_mut() {
+                        save_load_action = Some(sl.click(level, button));
+                    }
                 }
                 if h == 1 && game.command.is_none() && game.talk.is_none() {
                     if let Some(a) = game.hud.as_ref().and_then(|hud| hud.action(button)) {
@@ -2132,6 +2217,10 @@ impl AmanatsuVm {
                         }
                         actionmap::Action::Scene(r) => request = r,
                         actionmap::Action::OpenCharaSelect => open_chara_select = true,
+                        actionmap::Action::OpenSaveLoad => {
+                            game.level.sounds.push(sound::Call::SystemSe(game.sound_ids.ok_s));
+                            open_save_load = Some(false);
+                        }
                         actionmap::Action::NextTimeZone(zone) => {
                             // `MapSelectUI.ChangeTimeZone` after `EventManager.TimeZone`.
                             game.level.sounds.push(sound::Call::SystemSe(game.sound_ids.time_zone_se));
@@ -2183,6 +2272,14 @@ impl AmanatsuVm {
         }
         if let Some(name) = h_button {
             game.h_button(&name, now)?;
+        }
+        if let Some(a) = save_load_action {
+            if let Err(e) = game.save_load_action(host, a, now) {
+                game.log.push(format!("SaveLoadUI: {e:#}"));
+            }
+        }
+        if let Some(is_title) = open_save_load {
+            game.open_save_load(host, is_title)?;
         }
         if let Some(zone) = game.pending_auto_save.take() {
             if let Err(e) = game.auto_save(host, zone) {
@@ -2333,16 +2430,7 @@ impl AmanatsuVm {
                 game.log.push(format!("SceneSettings.Load({id})"));
             }
             scenes::Request::Load(_) => {}
-            scenes::Request::LoadSave if game.pending.is_none() => match game.newest_save(host) {
-                Ok(Some((name, file))) => {
-                    game.log.push(format!("SaveData.Load({name}): zone {}, {} heroines", file.save.time_zone, file.npcs.len()));
-                    game.loaded_save = Some(file);
-                    game.fade.start(now, true, game.fade_seconds);
-                    game.pending = Some((scenes::scene_id::ACTION_MAP, now));
-                }
-                Ok(None) => game.log.push("SaveLoadUI: no save data".into()),
-                Err(e) => game.log.push(format!("SaveData.Load: {e:#}")),
-            },
+            scenes::Request::LoadSave if game.pending.is_none() => game.open_save_load(host, true)?,
             scenes::Request::LoadSave => {}
         }
         if game.quit {
