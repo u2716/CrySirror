@@ -159,7 +159,7 @@ pub fn bootstrap_interruptible(mut rt: Runtime, plan: &Plan, cancelled: impl Fn(
                 )
                 .with_context(|| format!("index archive {}", mount.source))?;
             let started = std::time::Instant::now();
-            let result = (|| -> Result<()> {
+            let result = (|| -> Result<bool> {
                 loop {
                     ensure!(!cancelled(), "native launch cancelled");
                     let status = cx
@@ -167,6 +167,10 @@ pub fn bootstrap_interruptible(mut rt: Runtime, plan: &Plan, cancelled: impl Fn(
                         .to_json();
                     match status["state"].as_str() {
                         Some("ready") => break,
+                        Some("failed") if mount.is_hxv4_companion() => {
+                            log::warn!("cannot index optional archive {}: {}", mount.source, status["error"]);
+                            return Ok(false);
+                        }
                         Some("failed") => bail!("archive {}: {}", mount.source, status["error"]),
                         Some("pending") => {}
                         _ => bail!("invalid resource completion state: {status}"),
@@ -186,12 +190,14 @@ pub fn bootstrap_interruptible(mut rt: Runtime, plan: &Plan, cancelled: impl Fn(
                     "mountDecode",
                     &[ticket.clone(), Value::Str(mount.target.clone()),Value::Bool(mount.fallback)],
                 )?;
-                Ok(())
+                Ok(true)
             })();
             let release = cx.call(resources, "cancelDecode", &[ticket]);
-            result?;
+            let mounted = result?;
             release?;
-            log::info!("mounted {} at {}", mount.source, mount.target);
+            if mounted {
+                log::info!("mounted {} at {}", mount.source, mount.target);
+            }
         }
         ensure!(!cancelled(), "native launch cancelled");
         engine.start()?;
