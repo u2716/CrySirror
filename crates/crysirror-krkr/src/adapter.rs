@@ -708,6 +708,9 @@ impl KrkrVm {
             if !crate::plugin_ports::win32_dialog::poll(self.rt.as_mut().unwrap(), h, self.client)? {
                 return Ok(false);
             }
+            if !crate::edit_dialog::poll(self.rt.as_mut().unwrap(), h, self.client)? {
+                return Ok(false);
+            }
             if !crate::save_struct::poll(self.rt.as_mut().unwrap())? {
                 return Ok(false);
             }
@@ -759,13 +762,27 @@ impl KrkrVm {
         self.rt.as_mut().unwrap().host_mut().now = now;
         self.rt.as_mut().unwrap().host_mut().display = h.display_info();
         let input=self.modal_input(h,input)?;
-        let input=crate::native_pad::filter_input(self.rt.as_ref().unwrap(),input);
+        let mut input=crate::native_pad::filter_input(self.rt.as_ref().unwrap(),input);
         let host = self.rt.as_mut().unwrap().host_mut();
         host.bitmap_work = Some(crate::host::BitmapWorkSlice::default());
-        host.pressed_since_query |= input.buttons_down & !host.held_buttons;
-        if !booting { host.pressed_since_query |= input.buttons_pressed; }
-        host.held_buttons = input.buttons_down;
-        self.inbox.push(self.client.0,now,input)?;
+        // Startup scripts already observed the first input before boot returned.
+        host.prompt_release_mask &= input.buttons_down & !input.buttons_pressed;
+        if host.input_prompt.is_none() {
+            input.buttons_down &= !host.prompt_release_mask;
+            input.buttons_pressed &= !host.prompt_release_mask;
+            host.pressed_since_query |= input.buttons_down & !host.held_buttons;
+            if !booting { host.pressed_since_query |= input.buttons_pressed; }
+            host.held_buttons = input.buttons_down;
+            self.inbox.push(self.client.0,now,input)?;
+        } else {
+            host.prompt_release_mask |= input.buttons_down;
+            // The dialog can finish during this same tick. deliver_input
+            // also uses this sample directly when the game inbox is empty.
+            input.buttons_down = 0;
+            input.buttons_pressed = 0;
+            host.held_buttons = 0;
+            host.pressed_since_query = 0;
+        }
         if !self.drive_sound(h)? {
             return Ok(VmYield::BudgetExhausted);
         }
@@ -988,7 +1005,7 @@ impl VmAdapter for KrkrVm {
             // Only a batched bitmap redraw retains the previous picture.
             // Ordinary resource waits and the rest of a VM frame do not block
             // startup/animation presentation. Native modals must remain visible.
-            rt.host().dialog_pending.is_none() && rt.host().bitmap_redraw_pending
+            rt.host().dialog_pending.is_none() && rt.host().input_prompt.is_none() && rt.host().bitmap_redraw_pending
         })
     }
     fn engine_id(&self) -> &'static str {

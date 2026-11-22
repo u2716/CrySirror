@@ -1,5 +1,14 @@
 # API change log
 
+## `1c2e078251b5e7a6` (2026-11-22) · Text field selection
+
+`Ui.setTextSelection(id, start, end)` enables caret editing for an owned
+editable field. The two offsets are UTF-16 code units. End `-1` extends
+the selection to the end, and start `-1` collapses it at the caret.
+`Ui.insertText` replaces that range or inserts at the caret. Existing
+fields keep their original editing behavior until selection is requested.
+The corresponding `UiCommand::SetTextSelection` is appended to the enum.
+
 ## `a6235515c431567d` (2026-11-22) · KiriKiri launcher overrides
 
 KiriKiri project configuration gains an optional `launcher_overlay`. Explicit

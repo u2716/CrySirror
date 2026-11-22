@@ -151,7 +151,7 @@ before startup scripts, in filename order.
 | Plug-in | Available features | Restrictions |
 | --- | --- | --- |
 | `menu.dll` | Menu bars and menu items. | Synchronous modal popup calls are unavailable. |
-| `win32dialog.dll` | Message boxes receive the selected button ID. | Editable templates are unavailable. |
+| `win32dialog.dll` | Message boxes and modal text-edit templates, including initialization, command callbacks, edit text, OK and Cancel. The script receives the chosen button ID. | The supported template has one editable field, a caption or label, OK and Cancel, and optionally a third push button. |
 | `extrans.dll`, `extNagano.dll` | `crossfade` and `universal` rule-image transitions. | Other named transition methods are unavailable. |
 | `kaichoTrans.dll` | `blur` and `dim` transitions. | — |
 | `k2compat.dll` | `Window.TouchMouse` forwarding of touch handlers to mouse handlers and a hidden `System.ModelessOwnerWindow`. | The engine itself raises no touch events. |
@@ -194,3 +194,10 @@ The desktop player reads previews from the game's Save mount, including JPEG
 bookmarks with APP11 records and PNG bookmarks with a tjSs record. A slot
 written without an image retains its saved state; a subsequent in-game save
 with thumbnails enabled records the current scene.
+
+For bookmark comments, KiriKiri edit dialogs honor the script's
+`EM_SETSEL` selection in UTF-16 code units. A game can preselect the
+existing note so the next text commit replaces it. Clicking places the
+caret, dragging selects a range, and Shift with the arrow keys extends
+the selection. Confirm passes the edited string back to the game.
+Cancel discards the edit.

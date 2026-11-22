@@ -990,6 +990,24 @@ impl App {
                     return Ok(());
                 }
                 let pressed = event.state == ElementState::Pressed;
+                if pressed && !self.ime_composing {
+                    let edit_key = match event.physical_key {
+                        PhysicalKey::Code(KeyCode::ArrowLeft) => buttons::LEFT,
+                        PhysicalKey::Code(KeyCode::ArrowRight) => buttons::RIGHT,
+                        PhysicalKey::Code(KeyCode::ArrowUp) => buttons::UP,
+                        PhysicalKey::Code(KeyCode::ArrowDown) => buttons::DOWN,
+                        PhysicalKey::Code(KeyCode::Home) => buttons::HOME,
+                        PhysicalKey::Code(KeyCode::End) => buttons::END,
+                        PhysicalKey::Code(KeyCode::Delete) => buttons::DELETE,
+                        PhysicalKey::Code(KeyCode::Backspace) => buttons::BACKSPACE,
+                        PhysicalKey::Code(KeyCode::KeyA) => buttons::KEY_A,
+                        _ => 0,
+                    };
+                    let modifiers = self.input.buttons_down & (buttons::SHIFT | buttons::CTRL);
+                    if edit_key != 0 && self.core.rt().focused_editor_key(edit_key, modifiers)? {
+                        return Ok(());
+                    }
+                }
                 // KiriKiri owns the close decision. Consume this shortcut so
                 // the same Escape cannot also dismiss the game's new dialog.
                 if event.physical_key == PhysicalKey::Code(KeyCode::Escape)

@@ -2475,6 +2475,7 @@ impl Runtime {
             .checked_add(1)
             .context("input observation revision overflow")?;
         self.host.engine.ui.pointer_window_focused = self.host.window_focused;
+        self.prepare_text_editor()?;
         let consumed = {
             let _span = self.profiler.span(profile_frame, "world.physics_ui");
             let physics = &mut self.physics;
@@ -2545,6 +2546,7 @@ impl Runtime {
             self.project.canvas = size;
         }
         drop(vm_span);
+        self.prepare_text_editor()?;
         self.poll_original_save_restore_requests()?;
         let _outputs = self.profiler.span(profile_frame, "media.publish_audio");
         for (client, path, bytes) in std::mem::take(&mut self.host.generated) {
@@ -2732,6 +2734,18 @@ impl Runtime {
             }
         }
         handled
+    }
+    fn prepare_text_editor(&mut self) -> Result<()> {
+        let text = &self.host.text;
+        self.host.engine.ui.prepare_text_editor(|owner, alias| {
+            let view = text.for_client(ClientId(owner));
+            view.font_digest(alias).ok().map(|_| view)
+        })
+    }
+    /// Dispatch an editing key after measuring any text committed since the last frame.
+    pub fn focused_editor_key(&mut self, key: u64, modifiers: u64) -> Result<bool> {
+        self.prepare_text_editor()?;
+        Ok(self.host.engine.ui.focused_editor_key(key, modifiers))
     }
     pub fn now_ms(&self) -> u64 {
         self.host.clock_ms

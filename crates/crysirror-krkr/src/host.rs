@@ -242,6 +242,8 @@ pub struct KrkrHost {
     pub menus_revision: u64,
     /// WIN32Dialog.messageBox waiting on an engine dialog: (dialog id).
     pub dialog_pending: Option<u32>,
+    pub(crate) input_prompt: Option<crate::edit_dialog::Prompt>,
+    pub(crate) prompt_release_mask: u64,
     pub dialog_serial: u32,
     pub menus_synced: Option<(u64, Vec<(usize, bool)>, [u32; 2])>,
     pub loaded_plugins: BTreeSet<String>,
@@ -370,6 +372,8 @@ impl KrkrHost {
             menu_popups: vec![],
             menus_revision: 0,
             dialog_pending: None,
+            input_prompt: None,
+            prompt_release_mask: 0,
             dialog_serial: 0,
             menus_synced: None,
             loaded_plugins: BTreeSet::new(),
@@ -1039,6 +1043,7 @@ impl TjsHost for KrkrHost {
         if let Some(batch) = &self.bitmap_batch { out.push(ObjectHandle(batch.target)); }
         if let Some(pair)=&self.image_pair{out.extend([ObjectHandle(pair.target),ObjectHandle(pair.source)]);}
         if let Some(save)=&self.image_save{out.push(ObjectHandle(save.layer));}
+        if let Some(prompt) = &self.input_prompt { out.push(prompt.owner); }
         out.extend(self.mouse.hover.into_iter().chain(self.mouse.capture).map(ObjectHandle));
         out.extend(self.deferred.targets(self.client).map(|t| ObjectHandle((t >> 2) as usize)));
         self.layer_movies.gc_roots(out);
