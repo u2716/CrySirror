@@ -359,27 +359,67 @@ impl Storage {
     }
 
     fn routed_member(&self, container: &str, member: &str) -> Option<String> {
+        self.search_mounted_member(container, member, [self.hashed_root.as_deref()])
+    }
+
+    fn explicit_archive_member(&self, container: &str, member: &str) -> Option<String> {
+        // Ordinary entries retain their exact mount path. HXV4 exposes its
+        // authenticated logical names below a separate provider root.
+        let roots = std::iter::once(None).chain(self.hashed_root.as_deref().map(Some));
+        self.search_mounted_member(container, member, roots)
+    }
+
+    fn search_mounted_member<'a>(
+        &self,
+        container: &str,
+        member: &str,
+        roots: impl IntoIterator<Item = Option<&'a str>>,
+    ) -> Option<String> {
         let point = self.container_point(container).ok()??;
-        let folded = member.to_lowercase();
-        for inner in std::iter::once(member)
-            .chain((folded != member).then_some(folded.as_str())) {
-            let inner = match &self.hashed_root {
-                Some(root) => format!("{root}/{inner}"),
-                None => inner.to_owned(),
-            };
-            let path = match (self.root.is_empty(), point.is_empty()) {
-                (true, true) => inner,
-                (true, false) => format!("{point}/{inner}"),
-                (false, true) => format!("{}/{inner}", self.root),
-                (false, false) => format!("{}/{point}/{inner}", self.root),
-            };
-            let Ok(checked) = VfsPath::new(Mount::Asset, &path) else {
-                continue;
-            };
-            // A routed archive entry can only come from its provider. A
-            // negative hashed lookup must not enumerate loose folders.
-            if self.files.serving_container(&checked).is_some() {
+        let scoped = |name: &str| {
+            if self.root.is_empty() {
+                name.to_owned()
+            } else {
+                format!("{}/{name}", self.root)
+            }
+        };
+        let source = scoped(container);
+        let mount = if point.is_empty() {
+            self.root.clone()
+        } else {
+            scoped(&point)
+        };
+        let belongs_to_mount = |path: &str| {
+            VfsPath::new(Mount::Asset, path).ok().is_some_and(|path| {
+                self.files.serving_container(&path).is_some_and(|served| {
+                    served.0 == source && served.1 == mount
+                })
+            })
+        };
+        for root in roots {
+            let mut prefix = point.clone();
+            if !prefix.is_empty() {
+                prefix.push('/');
+            }
+            if let Some(root) = root {
+                prefix.push_str(root);
+                prefix.push('/');
+            }
+            let relative = format!("{prefix}{member}");
+            let path = scoped(&relative);
+            if belongs_to_mount(&path) {
                 return Some(path);
+            }
+            let folded = relative.to_lowercase();
+            if let Some(path) = self.index.get(&folded).filter(|path| belongs_to_mount(path)) {
+                return Some(path.clone());
+            }
+            let folded_member = member.to_lowercase();
+            if folded_member != member {
+                let path = scoped(&format!("{prefix}{folded_member}"));
+                if belongs_to_mount(&path) {
+                    return Some(path);
+                }
             }
         }
         None
@@ -389,8 +429,8 @@ impl Storage {
     /// container serves it. Hashed-name containers report the logical name.
     pub fn placed_path(&self, name: &str) -> Option<String> {
         let path = self.resolve(name)?;
-        let full = if self.root.is_empty() { path.clone() } else { format!("{}/{path}", self.root) };
-        let served = VfsPath::new(Mount::Asset, &full)
+        // resolve already returns a path in this client's asset namespace.
+        let served = VfsPath::new(Mount::Asset, &path)
             .ok()
             .and_then(|p| self.files.serving_container(&p));
         let Some((source, point)) = served else {
@@ -405,14 +445,15 @@ impl Storage {
         };
         let source = strip_root(&source);
         let inner = if point.is_empty() {
-            full.as_str()
+            path.as_str()
         } else {
-            full.strip_prefix(&format!("{point}/")).unwrap_or(&full)
+            path.strip_prefix(&format!("{point}/")).unwrap_or(&path)
         };
-        let inner = match &self.hashed_root {
-            Some(root) if inner.starts_with(&format!("{root}/")) => normalize(name),
-            _ => inner.to_owned(),
-        };
+        // Keep the directory selected by the compound/auto-path lookup.
+        // Only remove the engine's virtual HXV4 mount component.
+        let inner = self.hashed_root.as_deref()
+            .and_then(|root| inner.strip_prefix(root)?.strip_prefix('/'))
+            .unwrap_or(inner);
         Some(format!("file://./{source}>{inner}"))
     }
     /// Container source of a plain `file://` archive name that is mounted.
@@ -429,6 +470,9 @@ impl Storage {
         let Ok(uri) = self.full_uri(name) else {
             return false;
         };
+        if let Some((container, member)) = archive_uri_member(&uri) {
+            return self.explicit_archive_member(container, member).is_some();
+        }
         if let Some(Ok(rel)) = self.compound_relative(&uri) {
             return self.resolve_compound(&rel).is_some();
         }
@@ -447,6 +491,10 @@ impl Storage {
     /// Resolve native container syntax only to an already mounted shared provider.
     pub fn full_name(&self, name: &str) -> Result<String> {
         let uri = self.full_uri(name)?;
+        self.name_from_uri(uri)
+    }
+
+    fn name_from_uri(&self, uri: String) -> Result<String> {
         if self.compound_relative(&uri).is_some() || self.wrappers.scheme(&uri).is_some() {
             // Compound media are routed per lookup; keep the logical URI.
             return Ok(uri);
@@ -565,7 +613,11 @@ impl Storage {
                 .exists(&path)
                 .then(|| format!("savedata/{}", path.relative()));
         }
-        let normalized = self.full_name(name).ok()?;
+        let uri = self.full_uri(name).ok()?;
+        if let Some((container, member)) = archive_uri_member(&uri) {
+            return self.explicit_archive_member(container, member);
+        }
+        let normalized = self.name_from_uri(uri).ok()?;
         if self.compound.is_none() || self.wrappers.proxy.is_some() || normalized.len() > 1024 {
             return self.resolve_asset_name(&normalized);
         }
@@ -923,6 +975,11 @@ pub fn decode_text(bytes: &[u8]) -> Result<String> {
     crysirror_resource::text_stream::decode_auto(bytes,64*1024*1024)
 }
 
+fn archive_uri_member(uri: &str) -> Option<(&str, &str)> {
+    let (container, member) = uri.strip_prefix("file://./")?.split_once('>')?;
+    (!member.is_empty() && !member.ends_with('/')).then_some((container, member))
+}
+
 fn err(e: crysirror_core::Error) -> anyhow::Error {
     anyhow::anyhow!("{e}")
 }
@@ -930,6 +987,71 @@ fn err(e: crysirror_core::Error) -> anyhow::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_archive_uris_find_hashed_members_in_the_named_archive() {
+        use crysirror_core::{
+            state::ClientId,
+            vfs::{MemoryProvider, VfsProvider},
+        };
+        use crysirror_runtime::vfs::DiskVfs;
+        use std::sync::Arc;
+
+        struct Container(&'static str, MemoryProvider);
+        impl VfsProvider for Container {
+            fn kind(&self) -> &'static str { "synthetic-container" }
+            fn container_source(&self) -> Option<&str> { Some(self.0) }
+            fn read(&self, path: &str) -> crysirror_core::Result<Vec<u8>> {
+                self.1.read(path)
+            }
+            fn exists(&self, path: &str) -> bool { self.1.exists(path) }
+            fn list(&self) -> crysirror_core::Result<Vec<String>> {
+                // Authenticated name lookups can succeed without enumeration.
+                Ok(Vec::new())
+            }
+        }
+        let assets = tempfile::tempdir().unwrap();
+        let saves = tempfile::tempdir().unwrap();
+        std::fs::create_dir(assets.path().join("game")).unwrap();
+        let mut vfs = DiskVfs::new(assets.path(), saves.path()).unwrap();
+        let client = ClientId(1);
+        vfs.register(client, "krkr", "test").unwrap();
+        let mut base = MemoryProvider::new();
+        base.insert("__hxv4/map_object.asd", b"base".to_vec()).unwrap();
+        base.insert("__hxv4/base_only.asd", b"base only".to_vec()).unwrap();
+        let mut update = MemoryProvider::new();
+        update.insert("__hxv4/map_object.asd", b"update".to_vec()).unwrap();
+        update.insert("__hxv4/image/map/detail.asd", b"nested".to_vec()).unwrap();
+        update.insert("ordinary.asd", b"ordinary".to_vec()).unwrap();
+        vfs.mount_provider(client, "game", Arc::new(Container("game/data.xp3", base))).unwrap();
+        vfs.mount_provider(
+            client,
+            "game/__xp3/update",
+            Arc::new(Container("game/update.xp3", update)),
+        ).unwrap();
+        let mut storage = Storage::new(vfs.storage(client).unwrap(), "game").unwrap();
+        storage.hashed_root = Some("__hxv4".to_owned());
+
+        let exact = "file://./update.xp3>Map_Object.asd";
+        assert_eq!(storage.read_named(exact).unwrap(), b"update");
+        assert!(storage.exists_exact(exact));
+        assert_eq!(storage.read_named("file://./data.xp3>map_object.asd").unwrap(), b"base");
+        assert_eq!(storage.read_named("file://./update.xp3>ordinary.asd").unwrap(), b"ordinary");
+
+        storage.add_auto_path("update.xp3>__hxv4/image/map/").unwrap();
+        let placed = storage.placed_path("detail.asd").unwrap();
+        assert_eq!(placed, "file://./update.xp3>image/map/detail.asd");
+        assert_eq!(storage.read_named(&placed).unwrap(), b"nested");
+
+        storage.add_auto_path("data.xp3>").unwrap();
+        let absent = "file://./update.xp3>base_only.asd";
+        assert!(storage.resolve(absent).is_none());
+        assert!(!storage.exists_exact(absent));
+
+        storage.set_default_path("file://./update.xp3>").unwrap();
+        assert_eq!(storage.read_named("map_object.asd").unwrap(), b"update");
+    }
+
     #[test]
     fn mounted_game_rechecks_cached_hits_and_misses_after_auto_path_changes() {
         use crysirror_core::state::ClientId;
