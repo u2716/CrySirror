@@ -84,8 +84,12 @@ struct HRun {
     posture: Option<crate::h::Posture>,
     /// Entities of the heroine and the male.
     entities: Vec<u32>,
-    /// The playing motion (`Idle`, `WLoop1`, `SLoop1`, `OrgasmF`).
+    /// The playing motion (an `H_MOTIONS` state).
     motion: &'static str,
+    /// States still to play after the current one-shot.
+    queue: Vec<&'static str>,
+    /// The loop strength (wheel/click): strong (`SLoop`) or weak (`WLoop`).
+    strong: bool,
     /// When a one-shot motion ends.
     motion_until: u64,
     /// `Gauge Female` (0..100).
@@ -167,7 +171,49 @@ struct NightRun {
 /// The H motions baked into the characters.
 /// The H motions baked into the characters (each posture has the
 /// finishes of its category: `OrgasmF`, `OrgasmM_IN`, `OrgasmM_OUT`).
-const H_MOTIONS: [&str; 6] = ["Idle", "WLoop1", "SLoop1", "OrgasmF", "OrgasmM_IN", "OrgasmM_OUT"];
+/// The `AL.H.Motion.State` states of the posture animators (with their
+/// `S_` strong variants), baked when the controller has them.
+const H_MOTIONS: [&str; 53] = [
+    "Idle", "WLoop1", "WLoop2", "SLoop1", "SLoop2", "WSPLoop1", "WSPLoop2", "SSPLoop1", "SSPLoop2",
+    "OrgasmF", "OrgasmF_ST", "OrgasmM_IN", "OrgasmM_IN_ST", "OrgasmM_OUT", "OrgasmM_OUT_ST", "OrgasmS_IN", "OrgasmS_ST",
+    "Idle_IN_A", "Idle_OUT_A", "Idle_OF_A", "Drink_IN", "Drink", "Drink_A", "Vomit_IN", "Vomit", "Vomit_A",
+    "Insert", "InsertIdle", "Pull", "Put", "Drop",
+    "S_OrgasmF", "S_OrgasmF_ST", "S_OrgasmM_IN", "S_OrgasmM_IN_ST", "S_OrgasmM_OUT", "S_OrgasmM_OUT_ST", "S_OrgasmS_IN", "S_OrgasmS_ST",
+    "S_Idle_IN_A", "S_Idle_OUT_A", "S_Idle_OF_A", "S_Drink_IN", "S_Drink", "S_Drink_A", "S_Vomit_IN", "S_Vomit", "S_Vomit_A",
+    "S_Insert", "S_InsertIdle", "S_Pull", "S_Put", "S_Drop",
+];
+
+/// How an H finish ends (`GaugeController` buttons, `Solo` items).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum HFinish {
+    Female,
+    Inside,
+    Outside,
+    Double,
+    Drink,
+    Vomit,
+}
+
+/// The state sequence of a finish (`Orgasm*` → `_ST` → the `_A` idle;
+/// service drink/spit through `Drink`/`Vomit` `_IN` → `` → `_A`).
+/// SATD-amanatsu-port: reconstructed from the state classes and the
+/// animators (the transitions live in compiler-generated lambdas of
+/// `AL.H.Motion.Base.Controller`); states the animator lacks are skipped.
+fn finish_states(kind: HFinish) -> &'static [&'static str] {
+    match kind {
+        HFinish::Female => &["OrgasmF", "OrgasmF_ST", "Idle_OF_A"],
+        HFinish::Inside => &["OrgasmM_IN", "OrgasmM_IN_ST", "Idle_IN_A"],
+        HFinish::Outside => &["OrgasmM_OUT", "OrgasmM_OUT_ST", "Idle_OUT_A"],
+        HFinish::Double => &["OrgasmS_IN", "OrgasmS_ST", "Idle_IN_A"],
+        HFinish::Drink => &["OrgasmM_IN", "OrgasmM_IN_ST", "Drink_IN", "Drink", "Drink_A"],
+        HFinish::Vomit => &["OrgasmM_IN", "OrgasmM_IN_ST", "Vomit_IN", "Vomit", "Vomit_A"],
+    }
+}
+
+/// The `'static` name of a known H state.
+fn h_state(name: &str) -> Option<&'static str> {
+    H_MOTIONS.iter().copied().find(|s| *s == name)
+}
 
 /// A massage in progress (`EventManager.Massage` + `AL.Oil.OilScene`).
 struct MassageRun {
@@ -300,6 +346,8 @@ pub struct Game {
     h_ui: Option<crate::hui::PostureUi>,
     /// The states the last character baked (`spawn_character_states`).
     baked_states: Vec<String>,
+    /// Clip lengths (seconds) of the baked states.
+    state_seconds: std::collections::HashMap<String, f32>,
     /// Short movie sound effects to play (bundle, asset).
     movie_sounds: Vec<(String, String)>,
     /// Faces of the heroines standing on the map (card → face, entities,
@@ -706,6 +754,7 @@ impl Game {
         };
         let mut clips = Vec::new();
         self.baked_states.clear();
+        self.state_seconds.clear();
         for state in states {
             // `_L`/`_M`/`_S` by height, falling back to the other sizes.
             // States named without the size pick their motion by height
@@ -713,10 +762,12 @@ impl Game {
             let found = [suffix, "M", "L", "S"].iter().find_map(|sz| human.exact_state_tracks(&mut self.unity, bundle, controller, &format!("{state}_{sz}"), state).ok()).or_else(|| human.controller_tracks(&mut self.unity, bundle, controller, state).ok());
             match found {
                 Some(t) => {
+                    let secs = t.tracks.iter().filter_map(|tr| tr.1.last().copied()).fold(0f32, f32::max);
+                    self.state_seconds.insert((*state).to_owned(), secs);
                     clips.push(t);
                     self.baked_states.push((*state).to_owned());
                 }
-                None => self.log.push(format!("H state {state} not in {controller}")),
+                None => {}
             }
         }
         // Two characters share the H map's budget: 512 px, 16 MiB each.
@@ -1143,7 +1194,7 @@ impl Game {
             }
             entities.extend(ids);
             if !c.is_male() {
-                finishes = self.baked_states.iter().filter(|s| s.starts_with("Orgasm")).cloned().collect();
+                finishes = self.baked_states.clone();
             }
         }
         let (personality, name) = self.unity.read_all(card).ok().and_then(|b| crate::card::Card::parse(&b).ok()).and_then(|c| c.parameter()).map_or((0, String::new()), |p| (p.0, p.1));
@@ -1332,53 +1383,64 @@ impl Game {
                 }
             }
         }
-        let has = |s: &str| finishes.iter().any(|f| f == s);
+        let has = |s: &str| finishes.iter().any(|f| f == s || f == &format!("S_{s}"));
+        let looping = self.h.as_ref().is_some_and(|h| h.motion.contains("Loop"));
         for (button, ok) in [
             ("Finish Female", gauge >= 70. && has("OrgasmF")),
             ("Finish Male", male >= 70. && has("OrgasmM_IN")),
             ("Finish Shot", male >= 70. && has("OrgasmM_OUT")),
-            ("Finish Double", gauge >= 70. && male >= 70. && has("OrgasmF") && has("OrgasmM_IN")),
+            ("Finish Double", gauge >= 70. && male >= 70. && (has("OrgasmS_IN") || (has("OrgasmF") && has("OrgasmM_IN")))),
+            ("Solo/Item 0", male >= 70. && has("OrgasmM_OUT")),
+            ("Solo/Item 1", male >= 70. && has("Drink")),
+            ("Solo/Item 2", male >= 70. && has("Vomit")),
         ] {
+            let ok = ok && looping;
             if let Some(n) = level.find(&format!("HScene/Canvas/ccr_dropShadow/GaugeController/{button}")) {
                 level.interactable.insert(n, ok);
             }
         }
     }
 
-    /// `MotionPlayer`: a click on the scene steps Idle → weak loop →
-    /// strong loop → weak loop; the loops fill the female gauge
-    /// (SATD-amanatsu-port: rates 4/s weak and 8/s strong, no wheel speed,
-    /// voices, IK or male gauge); a finished one-shot returns to Idle.
-    fn h_update(&mut self, clicked: bool, now: u64) {
+    /// `AL.H.Motion.Base.Controller`: a click on the scene starts the loop
+    /// from Idle or an after-idle and toggles its strength, the wheel sets
+    /// it; the loops fill both gauges (SATD-amanatsu-port: rates 4/s weak,
+    /// 8/s strong, 10/s SP; IK not ported); finishes play their state
+    /// sequence (`h_finish`).
+    fn h_update(&mut self, clicked: bool, wheel: i32, now: u64) {
         let mut breath_face = None;
-        self.h_update_state(clicked, now, &mut breath_face);
+        self.h_update_state(clicked, wheel, now, &mut breath_face);
         if let Some((card, face, until)) = breath_face {
             self.h_breath_face(&card, face, now, until);
         }
     }
 
-    fn h_update_state(&mut self, clicked: bool, now: u64, breath_face: &mut Option<(String, Option<crate::hvoice::FaceParam>, u64)>) {
+    fn h_update_state(&mut self, clicked: bool, wheel: i32, now: u64, breath_face: &mut Option<(String, Option<crate::hvoice::FaceParam>, u64)>) {
         let Some(h) = self.h.as_mut() else { return };
         if h.phase != MassagePhase::Play {
             return;
         }
         let dt = (now.saturating_sub(h.last_ms) as f32 / 1000.).min(0.1);
         h.last_ms = now;
-        let rate = match h.motion {
-            "WLoop1" => 4.,
-            "SLoop1" => 8.,
-            _ => 0.,
+        let rate = if h.motion.contains("SPLoop") {
+            10.
+        } else if h.motion.starts_with("SLoop") {
+            8.
+        } else if h.motion.starts_with("WLoop") {
+            4.
+        } else {
+            0.
         };
         h.gauge = (h.gauge + rate * dt).min(100.);
         h.male_gauge = (h.male_gauge + rate * dt).min(100.);
         // Breaths: the group of the motion and gauge, again after a pause.
         let finish_ready = h.gauge >= 70. || h.male_gauge >= 70.;
         let level = ((h.gauge / 100. * 3.) as i32).clamp(0, 2);
-        let group = match h.motion {
-            "WLoop1" => Some(crate::hvoice::group::looped(level, if finish_ready { 2 } else { 0 })),
-            "SLoop1" => Some(crate::hvoice::group::looped(level, if finish_ready { 2 } else { 1 })),
-            "Idle" => Some(crate::hvoice::group::LOOP_WAIT),
-            _ => None,
+        let group = if h.motion.contains("Loop") {
+            Some(crate::hvoice::group::looped(level, if finish_ready { 2 } else { usize::from(h.strong) }))
+        } else if h.motion == "Idle" || h.motion.ends_with("_A") {
+            Some(crate::hvoice::group::LOOP_WAIT)
+        } else {
+            None
         };
         if let Some(g) = group {
             if g != h.breath_group || now >= h.next_breath {
@@ -1394,20 +1456,61 @@ impl Game {
                 }
             }
         }
-        if h.motion.starts_with("Orgasm") && now >= h.motion_until {
-            self.h_play("Idle", true);
-        } else if clicked {
-            let next = match h.motion {
-                "Idle" => Some("WLoop1"),
-                "WLoop1" => Some("SLoop1"),
-                "SLoop1" => Some("WLoop1"),
-                _ => None,
-            };
-            if let Some(n) = next {
-                self.h_play(n, true);
+        // One-shots advance when their clip ends (`IsNext`: normalized
+        // time ≥ 1); `_ST` holds until a click or 2.5 s; `_A` idles and
+        // Idle wait for a click, which starts the loop again.
+        let one_shot = !(h.motion.contains("Loop") || h.motion == "Idle" || h.motion.ends_with("_A"));
+        let hold = h.motion.ends_with("_ST");
+        if one_shot && (now >= h.motion_until || (hold && clicked)) {
+            match (!h.queue.is_empty()).then(|| h.queue.remove(0)) {
+                Some(next) => {
+                    let looping = next.ends_with("_A") || next.ends_with("_ST");
+                    let secs = if next.ends_with("_ST") { 2.5 } else { self.state_seconds.get(next).copied().unwrap_or(3.) };
+                    h.motion_until = now + (secs.max(0.5) * 1000.) as u64;
+                    self.h_play(next, looping);
+                }
+                None => self.h_play("Idle", true),
+            }
+        } else if clicked && (h.motion == "Idle" || h.motion.ends_with("_A")) {
+            h.strong = false;
+            if let Some(l) = self.h_loop() {
+                self.h_play(l, true);
+            }
+        } else if h.motion.contains("Loop") {
+            // Strength by click or wheel (`ホイール上下で速度変更`).
+            if clicked {
+                h.strong = !h.strong;
+            }
+            if wheel > 0 {
+                h.strong = true;
+            } else if wheel < 0 {
+                h.strong = false;
+            }
+            if let Some(l) = self.h_loop().filter(|l| Some(*l) != self.h.as_ref().map(|h| h.motion)) {
+                self.h_play(l, true);
             }
         }
         self.h_gauges();
+    }
+
+    /// The loop to play: weak/strong by the strength, `Loop2` past half
+    /// the female gauge, the `SP` loops once a finish is ready
+    /// (SATD-amanatsu-port: `YuragiCtrl` blending and the loop timing are
+    /// not ported).
+    fn h_loop(&self) -> Option<&'static str> {
+        let h = self.h.as_ref()?;
+        let has = |n: &str| h.finishes.iter().any(|f| f == n);
+        let ws = if h.strong { "S" } else { "W" };
+        let variant = if h.gauge >= 50. { 2 } else { 1 };
+        let sp = h.gauge >= 70. || h.male_gauge >= 70.;
+        let candidates = [
+            sp.then(|| format!("{ws}SPLoop{variant}")),
+            sp.then(|| format!("{ws}SPLoop1")),
+            Some(format!("{ws}Loop{variant}")),
+            Some(format!("{ws}Loop1")),
+            Some("WLoop1".to_owned()),
+        ];
+        candidates.into_iter().flatten().find(|c| has(c)).and_then(|c| h_state(&c))
     }
 
     /// `PointSetting`: the point canvas over the map's overview camera with
@@ -1472,47 +1575,16 @@ impl Game {
         match name {
             "Config" => self.open_config(),
             "Point" => self.open_h_points(),
-            "Finish Female" | "Finish Male" | "Finish Shot" | "Finish Double" => {
-                // SATD-amanatsu-port: the finish menus (外出し/飲ませる/吐かせる),
-                // fluids and the male finish count are not ported.
-                let (state, female, male): (&'static str, bool, bool) = match name {
-                    "Finish Female" => ("OrgasmF", true, false),
-                    "Finish Male" => ("OrgasmM_IN", false, true),
-                    "Finish Shot" => ("OrgasmM_OUT", false, true),
-                    _ => ("OrgasmF", true, true),
+            "Finish Female" | "Finish Male" | "Finish Shot" | "Finish Double" | "Item 0" | "Item 1" | "Item 2" => {
+                let kind = match name {
+                    "Finish Female" => HFinish::Female,
+                    "Finish Male" => HFinish::Inside,
+                    "Finish Shot" | "Item 0" => HFinish::Outside,
+                    "Finish Double" => HFinish::Double,
+                    "Item 1" => HFinish::Drink,
+                    _ => HFinish::Vomit,
                 };
-                let ok = self.h.as_ref().is_some_and(|h| h.finishes.iter().any(|f| f == state) && (!female || h.gauge >= 70.) && (!male || h.male_gauge >= 70.));
-                if let Some(h) = self.h.as_mut().filter(|_| ok) {
-                    if female {
-                        h.gauge = 0.;
-                        h.orgasms += 1;
-                    }
-                    if male {
-                        h.male_gauge = 0.;
-                    }
-                    h.motion_until = now + 3000;
-                    // The climax breath of the finish.
-                    let g = match state {
-                        "OrgasmM_IN" => crate::hvoice::group::CLIMAX_IN,
-                        "OrgasmM_OUT" => crate::hvoice::group::CLIMAX_OUT,
-                        _ => crate::hvoice::group::CLIMAX_F,
-                    };
-                    h.breath_group = g;
-                    h.next_breath = now + 4000;
-                    let mut rng = self.rng;
-                    let mut random = |n: usize| game_random(&mut rng, n);
-                    let picked = crate::hvoice::pick(&h.breaths, g, 0, &mut random).cloned();
-                    self.rng = rng;
-                    let card = h.card.clone();
-                    if let Some(b) = picked {
-                        self.h_voice = Some((b.bundle.clone(), b.asset.clone()));
-                        self.h_breath_face(&card, b.faces.first().copied(), now, now + 4000);
-                    }
-                    self.h_play(state, false);
-                    self.log.push(format!("HScene finish: {state}"));
-                } else {
-                    self.log.push(format!("HScene {name}: not available"));
-                }
+                self.h_finish(kind, now);
             }
             "Exit" => {
                 // `HScene.End` → `AddHCount`, the evaluation scenario.
@@ -1540,6 +1612,66 @@ impl Game {
             other => self.log.push(format!("SATD-amanatsu-port: HScene button {other} not ported")),
         }
         Ok(())
+    }
+
+    /// `Controller.Finish`: the finish's states (the `S_` variants from a
+    /// strong loop), the gauges spent and the climax breath.
+    fn h_finish(&mut self, kind: HFinish, now: u64) {
+        let Some(h) = self.h.as_ref() else { return };
+        let female = matches!(kind, HFinish::Female | HFinish::Double);
+        let male = kind != HFinish::Female;
+        let ready = h.motion.contains("Loop") && (!female || h.gauge >= 70.) && (!male || h.male_gauge >= 70.);
+        let strong = h.strong;
+        let pick = |s: &str| -> Option<&'static str> {
+            let has = |n: &str| h.finishes.iter().any(|f| f == n);
+            let sv = format!("S_{s}");
+            if strong && has(&sv) {
+                h_state(&sv)
+            } else if has(s) {
+                h_state(s)
+            } else {
+                None
+            }
+        };
+        let mut seq: Vec<&'static str> = finish_states(kind).iter().filter_map(|s| pick(s)).collect();
+        // A double finish without its own states plays the female one.
+        if kind == HFinish::Double && seq.is_empty() {
+            seq = finish_states(HFinish::Female).iter().filter_map(|s| pick(s)).collect();
+        }
+        if !ready || seq.is_empty() || !seq[0].contains("Orgasm") && !seq[0].contains("Drink") && !seq[0].contains("Vomit") {
+            self.log.push(format!("HScene finish {kind:?}: not available"));
+            return;
+        }
+        let first = seq.remove(0);
+        let secs = self.state_seconds.get(first).copied().unwrap_or(3.);
+        let h = self.h.as_mut().unwrap();
+        if female {
+            h.gauge = 0.;
+            h.orgasms += 1;
+        }
+        if male {
+            h.male_gauge = 0.;
+        }
+        h.queue = seq;
+        h.motion_until = now + (secs.max(0.5) * 1000.) as u64;
+        let g = match kind {
+            HFinish::Inside | HFinish::Drink | HFinish::Vomit | HFinish::Double => crate::hvoice::group::CLIMAX_IN,
+            HFinish::Outside => crate::hvoice::group::CLIMAX_OUT,
+            HFinish::Female => crate::hvoice::group::CLIMAX_F,
+        };
+        h.breath_group = g;
+        h.next_breath = now + 4000;
+        let mut rng = self.rng;
+        let mut random = |n: usize| game_random(&mut rng, n);
+        let picked = crate::hvoice::pick(&h.breaths, g, 0, &mut random).cloned();
+        self.rng = rng;
+        let card = h.card.clone();
+        if let Some(b) = picked {
+            self.h_voice = Some((b.bundle.clone(), b.asset.clone()));
+            self.h_breath_face(&card, b.faces.first().copied(), now, now + 4000);
+        }
+        self.h_play(first, false);
+        self.log.push(format!("HScene finish {kind:?}: {first}"));
     }
 
     /// A conversation ended during H: advance its phase.
@@ -2180,7 +2312,7 @@ impl Game {
             }
             NightPhase::Shower => {
                 // `HDetail(Event1)` at the movie map's night H place.
-                self.h = Some(HRun { card: card.clone(), phase: MassagePhase::Enter, return_map: shower_map, posture: None, entities: Vec::new(), motion: "Idle", motion_until: 0, gauge: 0., male_gauge: 0., finishes: Vec::new(), breaths: Vec::new(), breath_group: -1, next_breath: 0, orgasms: 0, last_ms: now, night: Some("H_NightShowerAfter"), event_point: None, invite_map: None });
+                self.h = Some(HRun { card: card.clone(), phase: MassagePhase::Enter, return_map: shower_map, posture: None, entities: Vec::new(), motion: "Idle", queue: Vec::new(), strong: false, motion_until: 0, gauge: 0., male_gauge: 0., finishes: Vec::new(), breaths: Vec::new(), breath_group: -1, next_breath: 0, orgasms: 0, last_ms: now, night: Some("H_NightShowerAfter"), event_point: None, invite_map: None });
                 self.fade.start(now, true, self.fade_seconds);
                 self.pending_map = Some((shower_map, 3));
                 self.log.push(format!("NightEvent {card}: H on map {shower_map}"));
@@ -2195,7 +2327,7 @@ impl Game {
             }
             NightPhase::Morning if is_h_scene => {
                 // The morning H (`HDetail(Event2/3)`).
-                self.h = Some(HRun { card: card.clone(), phase: MassagePhase::Enter, return_map: morning_map, posture: None, entities: Vec::new(), motion: "Idle", motion_until: 0, gauge: 0., male_gauge: 0., finishes: Vec::new(), breaths: Vec::new(), breath_group: -1, next_breath: 0, orgasms: 0, last_ms: now, night: Some("H_NightMorningAfter"), event_point: None, invite_map: None });
+                self.h = Some(HRun { card: card.clone(), phase: MassagePhase::Enter, return_map: morning_map, posture: None, entities: Vec::new(), motion: "Idle", queue: Vec::new(), strong: false, motion_until: 0, gauge: 0., male_gauge: 0., finishes: Vec::new(), breaths: Vec::new(), breath_group: -1, next_breath: 0, orgasms: 0, last_ms: now, night: Some("H_NightMorningAfter"), event_point: None, invite_map: None });
                 self.fade.start(now, true, self.fade_seconds);
                 let zone = if let Controller::ActionMap(m) = &self.controller { m.time_zone } else { 0 };
                 self.pending_map = Some((morning_map, zone));
@@ -2334,7 +2466,7 @@ impl Game {
         if item.judge == 0 && is_h_scene {
             let point = if self.map_points.iter().any(|p| p.0 == "ItemEventH00") { "ItemEventH00" } else { "ItemEvent00" };
             let map = self.current_map();
-            self.h = Some(HRun { card, phase: MassagePhase::Enter, return_map: map, posture: None, entities: Vec::new(), motion: "Idle", motion_until: 0, gauge: 0., male_gauge: 0., finishes: Vec::new(), breaths: Vec::new(), breath_group: -1, next_breath: 0, orgasms: 0, last_ms: now, night: None, event_point: Some(point), invite_map: None });
+            self.h = Some(HRun { card, phase: MassagePhase::Enter, return_map: map, posture: None, entities: Vec::new(), motion: "Idle", queue: Vec::new(), strong: false, motion_until: 0, gauge: 0., male_gauge: 0., finishes: Vec::new(), breaths: Vec::new(), breath_group: -1, next_breath: 0, orgasms: 0, last_ms: now, night: None, event_point: Some(point), invite_map: None });
             let zone = if let Controller::ActionMap(m) = &self.controller { m.time_zone } else { 0 };
             self.fade.start(now, true, self.fade_seconds);
             self.pending_map = Some((map, zone));
@@ -2814,6 +2946,7 @@ impl AmanatsuVm {
             faces: std::collections::HashMap::new(),
             movie_sounds: Vec::new(),
             baked_states: Vec::new(),
+            state_seconds: std::collections::HashMap::new(),
             h_point_index: None,
             h_point_ui: None,
             font_cache: Default::default(),
@@ -3116,7 +3249,8 @@ impl AmanatsuVm {
         game.lip_sync(now);
         if game.h.is_some() && game.talk.is_none() {
             let clicked_scene = input.buttons_pressed & b::MOUSE_LEFT != 0 && handler.is_none() && !fading;
-            game.h_update(clicked_scene, now);
+            let wheel = i32::from(input.buttons_pressed & b::WHEEL_UP != 0) - i32::from(input.buttons_pressed & b::WHEEL_DOWN != 0);
+            game.h_update(clicked_scene, wheel, now);
         }
         if game.massage.is_some() && game.talk.is_none() {
             let down = input.buttons_down & b::MOUSE_LEFT != 0 && handler.is_none() && !fading;
@@ -3489,7 +3623,7 @@ impl AmanatsuVm {
                 list.extend(crate::commands::choose(&game.adv_assets.h_start(here), &mut random));
                 game.rng = rng;
                 game.visit_played = true;
-                game.h = Some(HRun { card: card.clone(), phase: MassagePhase::Agree, return_map, posture: None, entities: Vec::new(), motion: "Idle", motion_until: 0, gauge: 0., male_gauge: 0., finishes: Vec::new(), breaths: Vec::new(), breath_group: -1, next_breath: 0, orgasms: 0, last_ms: now, night: None, event_point: None, invite_map: None });
+                game.h = Some(HRun { card: card.clone(), phase: MassagePhase::Agree, return_map, posture: None, entities: Vec::new(), motion: "Idle", queue: Vec::new(), strong: false, motion_until: 0, gauge: 0., male_gauge: 0., finishes: Vec::new(), breaths: Vec::new(), breath_group: -1, next_breath: 0, orgasms: 0, last_ms: now, night: None, event_point: None, invite_map: None });
             } else if name == "btnInvite" {
                 // `EventManager.Invite` ("別マップに誘う"): an H map other
                 // than this one (`_mapID.HMaps`) with its `_invite`
@@ -3501,7 +3635,7 @@ impl AmanatsuVm {
                 let pick = dests[game.random(dests.len())];
                 list.extend(game.adv_assets.invite(pick.1));
                 game.visit_played = true;
-                game.h = Some(HRun { card: card.clone(), phase: MassagePhase::Agree, return_map: here, posture: None, entities: Vec::new(), motion: "Idle", motion_until: 0, gauge: 0., male_gauge: 0., finishes: Vec::new(), breaths: Vec::new(), breath_group: -1, next_breath: 0, orgasms: 0, last_ms: now, night: None, event_point: None, invite_map: Some(pick.0) });
+                game.h = Some(HRun { card: card.clone(), phase: MassagePhase::Agree, return_map: here, posture: None, entities: Vec::new(), motion: "Idle", queue: Vec::new(), strong: false, motion_until: 0, gauge: 0., male_gauge: 0., finishes: Vec::new(), breaths: Vec::new(), breath_group: -1, next_breath: 0, orgasms: 0, last_ms: now, night: None, event_point: None, invite_map: Some(pick.0) });
             } else if name == "btnWith" {
                 // `EventManager.With`: the agree line, the short movie and
                 // `_shortMoiveAfterAssets[LV]`, then the favourability level.

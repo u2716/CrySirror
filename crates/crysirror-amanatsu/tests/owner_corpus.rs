@@ -1953,3 +1953,17 @@ fn component_refs() {
         }
     }
 }
+
+/// The state names of a controller (`AMANATSU_BUNDLE`, `AMANATSU_ASSET`).
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn controller_states() {
+    use crysirror_unity::animator::Controller;
+    let mut u = unity();
+    let (k, id) = u.bundle_asset(&std::env::var("AMANATSU_BUNDLE").unwrap(), &std::env::var("AMANATSU_ASSET").unwrap(), 91).unwrap().unwrap();
+    let ctl = Controller::decode(&u.decode(&k, id).unwrap()).unwrap();
+    for (li, l) in ctl.layers.iter().enumerate() {
+        let names: Vec<String> = l.states.iter().map(|s| ctl.names.get(&s.name_id).cloned().unwrap_or_else(|| format!("#{:x}", s.name_id))).collect();
+        println!("layer {li}: {names:?}");
+    }
+}

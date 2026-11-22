@@ -190,3 +190,8 @@
 - Config values (same day): the `hp0` track from the `h_lv1` save runs through the talk into H again at frames 2350 and 3000 (before the face-lifetime fix it stopped with `world entity missing` once the H map replaced the talking heroine). The message reveal is not yet observed in a capture (the tracks' talks before H show no text lines).
 - `ExitDialog` (same day): Escape on the title at frame 700 shows 「ゲームを終了しますか？」 with はい/いいえ at frame 760 instead of quitting (`ex` track).
 
+## 2026-11-22 — H motion states and finishes
+
+- Native evidence: `AL.H.Motion.State.*` classes (`WLoop`, `WSPLoop`, `SSPLoop`, `OrgasmF[_ST]`, `OrgasmM_IN[_ST]`, `OrgasmM_OUT[_ST]`, `OrgasmS_IN`/`_ST`, `Idle_IN_A`/`_OUT_A`/`_OF_A`, `Drink[_IN|_A]`, `Vomit[_IN|_A]`, `Insert`, `Pull`, `Put`, `Drop` and `S*` variants), `Base.Controller.IsNext` (current state hash and normalized time ≥ 1), `Controller.Finish(index)`; `controller_states` (`hou_f_05`: `Idle`, `W/SLoop1/2`, `W/SSPLoop1/2`, `OrgasmM_OUT[_ST]`, `Idle_OUT_A`, `S_` variants, by `_S/_M/_L`); H prefab `GaugeController/Solo/Item 0–2` (外出しする/飲ませる/吐かせる).
+- Behaviour (`hf` track from the `h_lv1` save, 床手コキ): a scene click starts the weak loop, a wheel step makes it strong; at frame 3300 the gauge allows ぶっかける, which plays `S_OrgasmM_OUT`, then the hold and `S_Idle_OUT_A` (frames 3340, 3700).
+
