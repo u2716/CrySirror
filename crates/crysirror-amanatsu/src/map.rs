@@ -346,7 +346,8 @@ pub fn load_with_budget(unity: &mut Unity, info: &MapInfo, time_zone: i32, textu
     let chara_light = world6::scene_lights(&scene).into_iter().filter(|l| l.kind == 1 && l.culling_mask & CHARA_LAYER != 0 && l.intensity > 0.01).max_by(|a, b| a.intensity.total_cmp(&b.intensity));
     log.push(format!("character light: {:?}", chara_light.as_ref().map(|l| (scene.path(l.node), l.intensity))));
     // SATD-amanatsu-port: the settings' baked lightmaps (`_colorLightmaps`,
-    // `_lightmapIndices`) need a second UV set in the renderer; the point
+    // `_lightmapIndices`; only map 00's `Lake Polygon`) need a second UV
+    // set in the renderer; the point
     // and spot lights of the active groups light the map in real time.
     // Map renderers sit on the Default, water (4) and map (7, 8) layers.
     let lights: Vec<SceneLight> = world6::scene_lights(&scene).into_iter().filter(|l| matches!(l.kind, 0 | 2) && l.culling_mask & MAP_LAYERS != 0 && l.intensity > 0.01 && l.range > 0.).collect();

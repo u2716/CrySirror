@@ -15,8 +15,9 @@ settings flag, `AutoSaveMode`,
 link-partner placement (`SetCharaForMap` `isLink`), the `MapSelectUI`
 hover faces (`_charaInfos`) and player icon (`_pIcon`),
 `MapSelectUI` next-zone reloading a map behind it, the light settings'
-baked lightmaps (`_colorLightmaps`/`_lightmapIndices`: the renderer has no
-second UV set) and reflection cubemaps, Azure's scattering integral,
+baked lightmaps (`_colorLightmaps`/`_lightmapIndices`: only map 00's `Lake
+Polygon` is lightmapped in the shipped settings; the renderer has no second
+UV set) and reflection cubemaps, Azure's scattering integral,
 clouds, moon and stars (the sky is a gradient fit from the Azure hour,
 latitude and Rayleigh/Mie gradients), `ActionPoint` choice and `_animIDList` motions, NavMesh
 movement, `CharaSelectUI` sources/sorting/pairs/release, scroll views and
@@ -29,7 +30,7 @@ ported; `sm.rs` lists the timeline tracks that are not played), parameter gauge/
 `e1-N`), ADV expressions/motions/event CGs/cloth states and the
 auto/skip/log/config buttons and text reveal,
 the map-select title/option buttons, the save list's comment entry, local-time stamps (UTC is used) and animations, map open flags from save progress);
-map rendering parity (lightmaps of `ma/lit`, reflection probes, the Azure sky
+map rendering parity (the lake lightmap of `ma/lit`, reflection probes, the Azure sky
 time of day, Beautify sharpen/depth of field/film grain/vignette and URP
 ShadowsMidtonesHighlights (tonemap, exposure, saturation, contrast, colour
 temperature and bloom are applied), the PS Vita lite tonemap without colour
@@ -37,16 +38,16 @@ grading, `AL/MapColorMask`, water
 and particle shaders, `CameraLight` prefabs); the synchronous
 `ChangeMap` import (≈1–2 s inside one VM step behind the fade) moving to a
 worker under ADR 0050; characters beyond the card-driven assembly in
-`CustomScene` (the scene's preset instead of `AL_F_00`, accessories,
-`customshape` face/body shape values, makeup/paint/eyelid/mouth layers and
-the eye UV layout of the `LIF/*` texture creation, the original toon
-ramps (`mt_ramp`), gloss and rim terms, the skin shader graph (the card
+`CustomScene` (the scene's preset instead of `AL_F_00`, accessory swing
+and hide states, `customshape` face/body shape values, eye shadow,
+paint/eyelid layers and the makeup size/position ranges, hair colour
+gradients and gloss, gloss and rim terms, the skin shader graph (the card
 `skinShadowColor` → `_Shadow_color` tint is read as colour × alpha ×
 `_Shadow_power`; `_Highlight_color`, `_SkinIntensity` detail rate, the
 `mt_body_detail` normal map/line mask, `mt_body_shine` and the sunburn,
 nipple and underhair layers are not drawn: their textures use separate UV
-layouts/positioned decals not in the body's UV0), clothing body cut-outs, blend
-shapes/expressions, MagicaCloth depth curves, inertia and MeshCloth
+layouts/positioned decals not in the body's UV0), clothing body cut-outs, eye
+look, MagicaCloth depth curves, inertia and MeshCloth
 (BoneCloth hair and the body BoneSprings are simulated as spring bones;
 hair `colliderList`s hold only null slots in the shipped prefabs and no
 runtime assignment was found in `GameAssembly.dll`, so hair does not collide), height blending between the

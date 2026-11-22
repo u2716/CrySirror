@@ -1897,3 +1897,22 @@ fn short_movie_tracks() {
         }
     }
 }
+
+/// Bundles holding GameObjects whose name contains `AMANATSU_FIND`.
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn find_game_object() {
+    let mut u = unity();
+    let want = std::env::var("AMANATSU_FIND").unwrap();
+    for key in u.bundle_files().into_iter().filter(|k| !k.ends_with(".resS")) {
+        let Ok(file) = u.file(&key) else { continue };
+        let ids: Vec<i64> = file.objects.iter().filter(|o| o.class_id == 1).map(|o| o.path_id).collect();
+        for id in ids {
+            let Ok(f) = u.decode(&key, id) else { continue };
+            let name = f.string("m_Name").unwrap_or("");
+            if name.contains(&want) {
+                println!("{key} {name}");
+            }
+        }
+    }
+}
