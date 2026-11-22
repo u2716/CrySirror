@@ -1699,6 +1699,7 @@ impl HostServices for SharedHost {
             storage: self.fs.storage(client)?,
             decoders: self.decoders.clone(),
             sizes: std::sync::Mutex::new(BTreeMap::new()),
+            pending_metadata: std::sync::Mutex::new(None),
             owner: client,
             tasks: self.image_tasks.clone(),
             memory: self.image_memory.clone(),
@@ -3812,7 +3813,37 @@ struct SharedImageMetadata {
     memory: Arc<std::sync::atomic::AtomicUsize>,
     storage: Arc<dyn crysirror_core::service::ClientStorage>,
     decoders: crysirror_image::DecoderRegistry,
-    sizes: std::sync::Mutex<BTreeMap<String, ([u32; 2], bool, [u8; 32])>>,
+    sizes: std::sync::Mutex<BTreeMap<String, ImageFacts>>,
+    pending_metadata: std::sync::Mutex<Option<(String, crysirror_tasks::Task<ImageFacts>)>>,
+}
+type ImageFacts = ([u32; 2], bool, [u8; 32]);
+
+fn read_image_facts(
+    asset: &str, storage: &dyn crysirror_core::service::ClientStorage,
+    decoders: &crysirror_image::DecoderRegistry, cx: Option<&crysirror_resource::DecodeContext>,
+    memory: &Arc<std::sync::atomic::AtomicUsize>,
+) -> crysirror_core::Result<ImageFacts> {
+    let path = VfsPath::new(crysirror_core::path::Mount::Asset, asset)?;
+    let bytes = storage.read(&path)?;
+    let decoded_bytes = match crysirror_image::encoded_dimensions_hint(&bytes) {
+        Some([w, h]) => crysirror_image::rgba_len(w, h).map_err(|e| Error::Io(e.to_string()))?,
+        None => crysirror_image::MAX_DECODED_BYTES,
+    };
+    let scratch = decoded_bytes.checked_mul(2).and_then(|n| n.checked_add(bytes.len()))
+        .ok_or(Error::Limit("image metadata working set"))?;
+    let _charge = crate::image_processing::Charge::new(memory.clone(), scratch)?;
+    let source = |name: &str| storage.read(&VfsPath::new(crysirror_core::path::Mount::Asset, name)?);
+    let image = decoders.decode_with(asset, &bytes, Some(&source), cx, None)
+        .map_err(|e| Error::Io(e.to_string()))?;
+    Ok(([image.width, image.height], image.rgba.chunks_exact(4).all(|p| p[3] == 255), *blake3::hash(&bytes).as_bytes()))
+}
+impl SharedImageMetadata {
+    fn cache_facts(&self, name: String, facts: ImageFacts) -> crysirror_core::Result<()> {
+        let mut sizes = self.sizes.lock().map_err(|_| Error::Io("image metadata lock".into()))?;
+        if sizes.len() >= 4096 { sizes.clear(); }
+        sizes.insert(name, facts);
+        Ok(())
+    }
 }
 impl crysirror_core::service::ImageMetadata for SharedImageMetadata {
     fn begin_region_map(
@@ -3975,36 +4006,46 @@ impl crysirror_core::service::ImageMetadata for SharedImageMetadata {
             .map(|v| v.1)
             .ok_or(Error::NotFound)
     }
-    fn size(&self, asset: &str) -> crysirror_core::Result<[u32; 2]> {
-        let mut sizes = self
-            .sizes
-            .lock()
-            .map_err(|_| Error::Io("image metadata lock".into()))?;
-        if let Some(size) = sizes.get(asset) {
-            return Ok(size.0);
+    fn prepare_metadata(&self, asset: &str) -> crysirror_core::Result<bool> {
+        if self.sizes.lock().map_err(|_| Error::Io("image metadata lock".into()))?.contains_key(asset) {
+            return Ok(true);
         }
-        let path = VfsPath::new(crysirror_core::path::Mount::Asset, asset)?;
-        let bytes = self.storage.read(&path)?;
-        let source = |name: &str| {
-            self.storage
-                .read(&VfsPath::new(crysirror_core::path::Mount::Asset, name)?)
+        let mut pending = self.pending_metadata.lock().map_err(|_| Error::Io("metadata task lock".into()))?;
+        if let Some((_, job)) = pending.as_mut() {
+            let result = job.try_take();
+            if matches!(result, Ok(None)) { return Ok(false); }
+            let (name, _) = pending.take().unwrap();
+            let requested = name == asset;
+            match result {
+                Ok(Some(facts)) => self.cache_facts(name, facts)?,
+                Err(error) if requested => return Err(Error::Io(error.to_string())),
+                _ => {}
+            }
+            if requested { return Ok(true); }
+        }
+        let (name, storage, decoders, memory, owner) =
+            (asset.to_owned(), self.storage.clone(), self.decoders.clone(), self.memory.clone(), self.owner);
+        let permit = match self.tasks.reserve() {
+            Ok(permit) => permit,
+            Err(error) if error.is::<crysirror_tasks::CapacityExceeded>() => return Ok(false),
+            Err(error) => return Err(Error::Io(error.to_string())),
         };
-        let image = self
-            .decoders
-            .decode_with(asset, &bytes, Some(&source), None, None)
-            .map_err(|e| Error::Io(e.to_string()))?;
-        if sizes.len() >= 4096 {
-            sizes.clear();
+        let job = permit.spawn(move |cancel| {
+            cancel.check()?;
+            let cx = crysirror_resource::DecodeContext::new(owner).with_cancellation(cancel.clone());
+            let facts = read_image_facts(&name, &*storage, &decoders, Some(&cx), &memory)?;
+            cancel.check()?;
+            Ok(facts)
+        }).map_err(|e| Error::Io(e.to_string()))?;
+        *pending = Some((asset.to_owned(), job));
+        Ok(false)
+    }
+    fn size(&self, asset: &str) -> crysirror_core::Result<[u32; 2]> {
+        if let Some(facts) = self.sizes.lock().map_err(|_| Error::Io("image metadata lock".into()))?.get(asset) {
+            return Ok(facts.0);
         }
-        let opaque = image.rgba.chunks_exact(4).all(|p| p[3] == 255);
-        sizes.insert(
-            asset.to_owned(),
-            (
-                [image.width, image.height],
-                opaque,
-                *blake3::hash(&bytes).as_bytes(),
-            ),
-        );
-        Ok([image.width, image.height])
+        let facts = read_image_facts(asset,&*self.storage,&self.decoders,None,&self.memory)?;
+        self.cache_facts(asset.to_owned(), facts)?;
+        Ok(facts.0)
     }
 }

@@ -93,7 +93,25 @@ fn var_media_references_live_octets_and_decodes_images_with_shared_engine_servic
         Scripts.execStorage('var://./files/script');
         if(global.mediaScript!=7)throw new Exception('media script');
         var window=new Window();var root=new Layer(window,null);var picture=new Layer(window,root);
-        picture.loadImages('var://./files/image');
+        Plugins.link('scriptsex.dll');
+        var count=0;
+        var stop=Scripts.foreach([0,1,2,3,4,5,6,7,8,9,10,11,12],function(i,v,extra) {
+            if(i!=count || v!=i || extra!=37) throw new Exception('foreach continuation');
+            picture.loadImages('var://./files/image');
+            ++count;
+            if(count==12) return 51;
+        },37);
+        if(count!=12 || stop!=51) throw new Exception('lost foreach callback or result');
+        Plugins.link('csvparser.dll');
+        var csvTarget=%[pic:picture,rows:0,doLine:function(fields,n) {
+            if(n!=this.rows+1) throw new Exception('CSV callback advanced before the previous row finished');
+            this.pic.loadImages('var://./files/image');
+            if(int(fields[0])!=n) throw new Exception('CSV row changed during wait');
+            ++this.rows;
+        }];
+        var csv=new CSVParser(csvTarget);
+        csv.parse("1\r\n2\r\n3");
+        if(csvTarget.rows!=3) throw new Exception('lost CSV row callback');
         if(picture.imageWidth!=2||picture.imageHeight!=1)throw new Exception('shared image decode');
         picture.visible=true;window.visible=true;
         Debug.message('var-media-complete');
@@ -116,6 +134,8 @@ fn var_media_references_live_octets_and_decodes_images_with_shared_engine_servic
         );
         std::thread::yield_now();
     }
+    let publications = &runtime.inspect()["published_images"];
+    assert_eq!(publications["resources"], 1, "replaced native images still held: {publications}");
     assert!(
         serde_json::to_string(&runtime.inspect())
             .unwrap()
@@ -961,8 +981,9 @@ fn native_addfont_registers_engine_resource_before_continuation_and_uses_shared_
         if log.contains("dynamic-native-font-complete:") {
             let lib=runtime.host.font_library(ClientId(1)).unwrap();
             let info=lib.resolve("runtime.ttf").unwrap().unwrap();
-            let metric=runtime.host.text_measurement(ClientId(1)).unwrap().measure_simple(&info.alias,20.,"ABC").unwrap();
-            assert!(log.contains(&format!("dynamic-native-font-complete:{}",metric.advance.ceil() as i64)),"{log}");
+            let scale=lib.line_height_for_em(&info.alias, 20.).unwrap();
+            let metric=runtime.host.text_measurement(ClientId(1)).unwrap().measure_simple(&info.alias,scale,"ABC").unwrap();
+            assert!(log.contains(&format!("dynamic-native-font-complete:{}",metric.advance.round() as i64)),"{log}");
             assert_eq!(runtime.assets.text.for_client(ClientId(1)).font_digest(&info.alias).unwrap(),info.digest);
             return;
         }

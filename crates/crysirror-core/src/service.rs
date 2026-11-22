@@ -1528,6 +1528,10 @@ pub trait ImageMetadata: Send + Sync {
         Err(crate::Error::Unsupported("worker image processing"))
     }
 
+    /// Poll bounded preparation for a resumable client. Once ready, size,
+    /// opacity and fingerprint can be read as one decoded metadata record.
+    /// Synchronous-only providers retain their normal size lookup.
+    fn prepare_metadata(&self, _asset: &str) -> Result<bool> { Ok(true) }
     fn size(&self, asset: &str) -> Result<[u32; 2]>;
     /// True only when every decoded texel has alpha 255.
     fn opaque(&self, _asset: &str) -> Result<bool> {

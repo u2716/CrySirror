@@ -1106,7 +1106,7 @@ impl Paint {
                     reveal.validate(glyphs.len())?;
                 }
             }
-            Self::Snapshot { size, layers } => validate_snapshot(*size, layers)?,
+            Self::Snapshot { size, layers } => validate_immutable_snapshot(*size, layers)?,
             Self::Solid { .. } => {}
         }
         Ok(())
@@ -1143,6 +1143,29 @@ pub fn snapshot_nesting(layers: &[LayerSpec]) -> usize {
         .max()
         .unwrap_or(0)
 }
+fn validate_immutable_snapshot(size: [u32; 2], layers: &Arc<Vec<LayerSpec>>) -> Result<()> {
+    // Installation and nested frame extraction can validate the same frozen
+    // page many times. A weak reference keeps allocation identity unique,
+    // without retaining the page or accepting a later copy-on-write mutation.
+    type ValidatedPages = BTreeMap<usize, ([u32; 2], std::sync::Weak<Vec<LayerSpec>>)>;
+    thread_local! {
+        static VALID: std::cell::RefCell<ValidatedPages> = std::cell::RefCell::new(BTreeMap::new());
+    }
+    let key = Arc::as_ptr(layers) as usize;
+    if VALID.with(|cache| cache.borrow().get(&key).is_some_and(|(checked, _)| *checked == size)) {
+        return Ok(());
+    }
+    validate_snapshot(size, layers)?;
+    VALID.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.len() >= 2048 {
+            cache.retain(|_, (_, weak)| weak.strong_count() != 0);
+        }
+        if cache.len() < 2048 { cache.insert(key, (size, Arc::downgrade(layers))); }
+    });
+    Ok(())
+}
+
 fn validate_snapshot(size: [u32; 2], layers: &[LayerSpec]) -> Result<()> {
     ensure!(
         size.iter().all(|v| (1..=8192).contains(v)),
@@ -1201,7 +1224,7 @@ fn validate_snapshot(size: [u32; 2], layers: &[LayerSpec]) -> Result<()> {
         let mut depth = 0;
         while let Some(id) = parent {
             depth += 1;
-            ensure!(depth < 30, "snapshot depth/cycle budget");
+            ensure!(depth < 30, "snapshot depth/cycle budget (layer {}, parent {}, {} layers)", layer.id, id, layers.len());
             parent = by_id
                 .get(&id)
                 .context("snapshot parent outside frozen tree")?
@@ -2173,11 +2196,13 @@ impl LayerSystem {
                     "snapshot puppet frame has not completed owner publication"
                 );
             }
-            if let Paint::Snapshot { layers, .. } = &layer.paint {
-                ensure!(
-                    1 + snapshot_nesting(layers) < MAX_SNAPSHOT_NESTING,
-                    "snapshot nesting budget"
-                );
+            if matches!(&layer.paint, Paint::Snapshot { layers, .. }
+                if 1 + snapshot_nesting(layers) >= MAX_SNAPSHOT_NESTING) {
+                // Capturing the subtree adds another isolated render target.
+                // Compact an already-full bitmap before wrapping it, retaining
+                // the original live layer and the normal snapshot budget.
+                layer.paint = crate::canvas::flatten_snapshot(&layer.paint)
+                    .context("snapshot nesting budget")?;
             }
             ensure!(
                 layer.paint.glyph_reveal_status().is_none_or(|r| r.complete),

@@ -11,7 +11,7 @@ pub(super) struct CallFrame {
     pub(super) file: Arc<BytecodeFile>,
     pub(super) code_handles: Arc<[ObjectHandle]>,
     pub(super) object_handle: ObjectHandle,
-    pub(super) object: CodeObject,
+    pub(super) object: Arc<CodeObject>,
     pub(super) instructions: Arc<[Instruction]>,
     pub(super) offset_to_index: Arc<BTreeMap<usize, usize>>,
     pub(super) jump: Arc<JumpTable>,
@@ -21,6 +21,7 @@ pub(super) struct CallFrame {
 }
 
 pub(crate) struct SuspendedCallStack {
+    pub(crate) forward_return: bool,
     pub(super) stack: Vec<CallFrame>,
     pub(super) base_depth: usize,
     /// CrySirror addition: the caller register a suspending native call
@@ -117,11 +118,12 @@ pub(crate) struct Frame {
 impl Frame {
     pub(super) fn new(
         object: &CodeObject,
+        max_register: u32,
         args: Vec<Variant>,
         this_obj: Option<ObjectHandle>,
         this_proxy: ObjectHandle,
-    ) -> Result<Self> {
-        let frame_len = object.effective_max_frame_count()?.saturating_add(1).max(1) as usize;
+    ) -> Self {
+        let frame_len = max_register.saturating_add(1) as usize;
         let mut regs = vec![Variant::Void; frame_len];
         regs[0] = Variant::Void;
 
@@ -136,7 +138,7 @@ impl Frame {
         {
             *slot = args.get(index).cloned().unwrap_or_default();
         }
-        Ok(Self {
+        Self {
             invalidations: Vec::new(),
             regs,
             negative,
@@ -146,7 +148,7 @@ impl Frame {
             entries: Vec::new(),
             this_obj,
             this_proxy,
-        })
+        }
     }
 
     pub(crate) fn get(&self, reg: i16) -> Result<Variant> {
@@ -251,7 +253,8 @@ mod tests {
             super_class_getter_pointers: Vec::new(),
             properties: Vec::new(),
         };
-        let mut frame = Frame::new(&object, Vec::new(), None, ObjectHandle(1)).expect("frame");
+        let max_register = object.effective_max_frame_count(&object.decode_instructions().unwrap());
+        let mut frame = Frame::new(&object, max_register, Vec::new(), None, ObjectHandle(1));
 
         assert_eq!(frame.get(-3).expect("default"), Variant::Void);
 
@@ -283,7 +286,8 @@ mod tests {
             super_class_getter_pointers: Vec::new(),
             properties: Vec::new(),
         };
-        let mut frame = Frame::new(&object, Vec::new(), None, ObjectHandle(1)).expect("frame");
+        let max_register = object.effective_max_frame_count(&object.decode_instructions().unwrap());
+        let mut frame = Frame::new(&object, max_register, Vec::new(), None, ObjectHandle(1));
 
         frame
             .set(2, Variant::Integer(9))

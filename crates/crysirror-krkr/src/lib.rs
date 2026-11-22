@@ -50,6 +50,7 @@ mod image_api;
 mod json_plugin;
 
 mod draw_plugin;
+mod d2d_view;
 
 mod protect_plugin;
 

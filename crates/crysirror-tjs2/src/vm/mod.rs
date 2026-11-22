@@ -227,7 +227,6 @@ impl<'bc, 'rt, H: TjsHost + 'static> Vm<'bc, 'rt, H> {
             error.with_stack_frame(self.stack_frame_for(&file, &decoded.object, 0))
         })?;
         let result = (|| {
-            let caller_args = args.clone();
             let global = self.runtime.global;
             // `tTJSInterCodeContext::FuncCall` runs a context entered with no
             // ObjThis on the global object only when it *is* the top-level
@@ -254,14 +253,10 @@ impl<'bc, 'rt, H: TjsHost + 'static> Vm<'bc, 'rt, H> {
                 Some(handle) => self.runtime.this_proxy(handle),
                 None => global,
             };
-            let mut frame = Frame::new(&decoded.object, args, this_obj, this_proxy)?;
+            let mut frame = Frame::new(&decoded.object, decoded.max_register, args, this_obj, this_proxy);
             if let Some(collapse_base) = decoded.object.func_decl_collapse_base {
                 let base = collapse_base as usize;
-                let rest = if caller_args.len() > base {
-                    caller_args[base..].to_vec()
-                } else {
-                    Vec::new()
-                };
+                let rest = frame.caller_args.get(base..).unwrap_or_default().to_vec();
                 let array = self.runtime.alloc_array_object(rest);
                 frame.set(-3 - collapse_base as i16, Variant::Object(array))?;
             }
@@ -294,17 +289,26 @@ impl<'bc, 'rt, H: TjsHost + 'static> Vm<'bc, 'rt, H> {
     }
 
     fn run_call_stack(&mut self, mut stack: Vec<CallFrame>, base_depth: usize) -> Result<Variant> {
+        let missing_frame = || TjsError::runtime("VM call stack completed without a value");
+        let Some(mut call_frame) = stack.pop() else {
+            self.runtime.call_depth = base_depth;
+            return Err(missing_frame());
+        };
+        // Keep the active frame in place across sequential instructions.
+        // Only calls, returns, suspension or exception unwinding need the
+        // caller stack; moving the full frame per opcode penalizes callbacks.
         let result = loop {
-            let Some(mut call_frame) = stack.pop() else {
-                break Err(TjsError::runtime("VM call stack completed without a value"));
-            };
             self.activate_call_frame(&call_frame);
             if call_frame.pc >= call_frame.instructions.len() {
                 let value = call_frame.frame.result.clone();
                 self.runtime.leave_call_frame();
                 match self.complete_call_value(value, call_frame.continuation, &mut stack) {
                     Ok(Some(value)) => break Ok(value),
-                    Ok(None) => continue,
+                    Ok(None) => {
+                        let Some(parent) = stack.pop() else { break Err(missing_frame()) };
+                        call_frame = parent;
+                        continue;
+                    }
                     Err(error) => break Err(error),
                 }
             }
@@ -370,10 +374,10 @@ impl<'bc, 'rt, H: TjsHost + 'static> Vm<'bc, 'rt, H> {
                         if matches!(inst_opcode, 103 | 107 | 115) {
                             call_frame.pc = pc;
                         }
-                        self.merge_nested_suspend(&mut stack, call_frame);
+                        self.merge_nested_suspend(&mut stack, call_frame, pc);
                         break Ok(Variant::Void);
                     }
-                    stack.push(call_frame);
+                    continue;
                 }
                 Ok(Step::Return(value)) => {
                     self.runtime.leave_call_frame();
@@ -386,7 +390,8 @@ impl<'bc, 'rt, H: TjsHost + 'static> Vm<'bc, 'rt, H> {
                 Ok(Step::Call { frame, resume_pc }) => {
                     call_frame.pc = resume_pc;
                     stack.push(call_frame);
-                    stack.push(*frame);
+                    call_frame = *frame;
+                    continue;
                 }
                 Ok(Step::Suspend { resume_pc, dest }) => {
                     let object_name = call_frame
@@ -400,7 +405,7 @@ impl<'bc, 'rt, H: TjsHost + 'static> Vm<'bc, 'rt, H> {
                     call_frame.pc = resume_pc;
                     stack.push(call_frame);
                     self.runtime.suspended_call =
-                        Some(SuspendedCallStack { stack, base_depth, resume_dest: dest });
+                        Some(SuspendedCallStack { stack, base_depth, resume_dest: dest, forward_return: false });
                     break Ok(Variant::Void);
                 }
                 Err(error) => {
@@ -416,7 +421,7 @@ impl<'bc, 'rt, H: TjsHost + 'static> Vm<'bc, 'rt, H> {
                     // the call opcodes.
                     if self.runtime.suspended_call.is_some() && matches!(inst_opcode, 99..=102) {
                         call_frame.pc = pc;
-                        self.merge_nested_suspend(&mut stack, call_frame);
+                        self.merge_nested_suspend(&mut stack, call_frame, pc);
                         break Ok(Variant::Void);
                     }
                     if error.kind == TjsErrorKind::ResourcePending {
@@ -435,7 +440,7 @@ impl<'bc, 'rt, H: TjsHost + 'static> Vm<'bc, 'rt, H> {
                         // exception.
                         stack.push(call_frame);
                         self.runtime.suspended_call =
-                            Some(SuspendedCallStack { stack, base_depth, resume_dest: None });
+                            Some(SuspendedCallStack { stack, base_depth, resume_dest: None, forward_return: false });
                         break Ok(Variant::Void);
                     }
                     // A debug-session quit must never become a catchable TJS
@@ -487,6 +492,8 @@ impl<'bc, 'rt, H: TjsHost + 'static> Vm<'bc, 'rt, H> {
                     }
                 }
             }
+            let Some(parent) = stack.pop() else { break Err(missing_frame()) };
+            call_frame = parent;
         };
         if result.is_err() {
             self.runtime.call_depth = base_depth;
@@ -657,6 +664,9 @@ impl<'bc, 'rt, H: TjsHost + 'static> Vm<'bc, 'rt, H> {
     }
 
     fn activate_call_frame(&mut self, frame: &CallFrame) {
+        if self.file_id == frame.file_id {
+            return;
+        }
         self.file_id = frame.file_id;
         self.file = Arc::clone(&frame.file);
         self.code_handles = Arc::clone(&frame.code_handles);
@@ -780,12 +790,17 @@ impl<'bc, 'rt, H: TjsHost + 'static> Vm<'bc, 'rt, H> {
         debugger.apply_action(action, key, depth)
     }
 
-    fn merge_nested_suspend(&mut self, stack: &mut Vec<CallFrame>, outer: CallFrame) {
+    fn merge_nested_suspend(&mut self, stack: &mut Vec<CallFrame>, outer: CallFrame, pc: usize) {
         let Some(mut suspended) = self.runtime.suspended_call.take() else {
             return;
         };
+        let forward = std::mem::take(&mut suspended.forward_return);
         if let Some(root) = suspended.stack.first_mut() {
-            root.continuation = Continuation::CallerRegister { dest: None };
+            let inst = &outer.instructions[pc];
+            let dest = if forward && matches!(inst.opcode, 99..=101) {
+                Some(inst.operands[0]).filter(|&r| r != 0)
+            } else { None };
+            root.continuation = Continuation::CallerRegister { dest };
         }
         // `stack` is ordered bottom-to-top and already contains callers of
         // `outer`; append the current frame and the nested suspended stack so

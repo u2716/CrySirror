@@ -169,6 +169,26 @@ fn empty_intersections_are_true_noops_even_for_replace() {
     }
 }
 #[test]
+fn mixed_service_batch_discards_staged_canvases_after_a_late_layer_error() {
+    use crysirror_scene::{EngineSystems, ServiceBatch};
+    let mut engine = EngineSystems::default();
+    let client = ClientId(1);
+    let initial = to_value(&engine).unwrap();
+    let invalid: ServiceBatch = serde_json::from_value(json!({
+        "canvases": [
+            {"op":"create","id":3,"width":10,"height":10},
+            {"op":"present","id":3,"layer":7,"order":0,"position":[0,0]}
+        ],
+        "layers": [{"op":"set_viewport_clip","id":7,"clip":[0,0,-1,1]}]
+    })).unwrap();
+    assert!(engine.submit(client, &invalid).is_err());
+    assert_eq!(to_value(&engine).unwrap(), initial);
+    let too_many = ServiceBatch { canvases: vec![create(3); 4097], ..Default::default() };
+    assert!(engine.submit(client, &too_many).unwrap_err().to_string().contains("canvas batch limit"));
+    assert_eq!(to_value(&engine).unwrap(), initial);
+}
+
+#[test]
 fn errors_roll_back_canvas_and_generated_layers_atomically() {
     let (mut c, mut l) = setup();
     let before = (to_value(&c).unwrap(), to_value(&l).unwrap());

@@ -140,12 +140,11 @@ impl<'bc, 'rt, H: TjsHost + 'static> Vm<'bc, 'rt, H> {
         flags: DispatchFlags,
         caller_this: Option<ObjectHandle>,
     ) -> Result<Variant> {
-        let kind = self.runtime.heap[handle.0].kind.clone();
         if let ObjectKind::Proxy {
             primary,
             fallback,
             bind_this,
-        } = kind
+        } = self.runtime.heap[handle.0].kind
         {
             if let Some(primary) = primary {
                 // `tTJSObjectProxy::PropGet` (`tjsInterCodeExec.cpp:284`) tries
@@ -247,7 +246,7 @@ impl<'bc, 'rt, H: TjsHost + 'static> Vm<'bc, 'rt, H> {
             {
                 let receiver = self.inherited_member_this(handle, caller_this);
                 match self.prop_get_handle(owner, name, flags.without_probe(), receiver) {
-                    Ok(value) => return Ok(self.bind_proxy_value(value, receiver)),
+                    Ok(value) => return Ok(self.bind_proxy_value(value, bind_this.or(Some(handle)))),
                     Err(error) if error.is_member_not_found() => {}
                     Err(error) => return Err(error),
                 }
@@ -258,7 +257,10 @@ impl<'bc, 'rt, H: TjsHost + 'static> Vm<'bc, 'rt, H> {
                 // walks on only for TJS_E_MEMBERNOTFOUND, so a super class
                 // member that exists with a void value is the answer.
                 match self.prop_get_handle(class_handle, name, flags.without_probe(), receiver) {
-                    Ok(value) => return Ok(self.bind_proxy_value(value, receiver)),
+                    // PropGet forwards ObjThis to accessors. The returned method
+                    // still has its stored binding when read through a class by
+                    // an unrelated caller (krkrz tjsInterCodeExec.cpp, PropGet).
+                    Ok(value) => return Ok(self.bind_proxy_value(value, bind_this.or(Some(handle)))),
                     Err(error) if error.is_member_not_found() => {}
                     Err(error) => return Err(error),
                 }
@@ -491,12 +493,11 @@ impl<'bc, 'rt, H: TjsHost + 'static> Vm<'bc, 'rt, H> {
         flags: DispatchFlags,
         caller_this: Option<ObjectHandle>,
     ) -> Result<()> {
-        let kind = self.runtime.heap[handle.0].kind.clone();
         if let ObjectKind::Proxy {
             primary,
             fallback,
             bind_this,
-        } = kind
+        } = self.runtime.heap[handle.0].kind
         {
             if let Some(primary) = primary {
                 let primary_value = self.member_in_super_chain(primary, name)?;
@@ -782,12 +783,11 @@ impl<'bc, 'rt, H: TjsHost + 'static> Vm<'bc, 'rt, H> {
         caller_this: Option<ObjectHandle>,
     ) -> Result<Variant> {
         let (handle, closure_this) = self.closure_parts(&target)?;
-        let kind = self.runtime.heap[handle.0].kind.clone();
         if let ObjectKind::InterCode {
             file_id,
             object_index,
             context: BytecodeContextType::Property,
-        } = kind
+        } = self.runtime.heap[handle.0].kind
         {
             let file = self.runtime.script_file(file_id)?;
             let getter = file.objects[object_index].prop_getter;
@@ -805,7 +805,7 @@ impl<'bc, 'rt, H: TjsHost + 'static> Vm<'bc, 'rt, H> {
             // when `PropGetter` is null (`tjsInterCodeExec.cpp:3138`).
             return Err(TjsError::access_denied());
         }
-        if let ObjectKind::NativeProperty { id, access } = kind {
+        if let ObjectKind::NativeProperty { id, access } = self.runtime.heap[handle.0].kind {
             if !access.allows_get() {
                 // An official read-only or write-only property answers
                 // `TJS_E_ACCESSDENYED` without running the accessor
@@ -832,12 +832,11 @@ impl<'bc, 'rt, H: TjsHost + 'static> Vm<'bc, 'rt, H> {
         caller_this: Option<ObjectHandle>,
     ) -> Result<()> {
         let (handle, closure_this) = self.closure_parts(&target)?;
-        let kind = self.runtime.heap[handle.0].kind.clone();
         if let ObjectKind::InterCode {
             file_id,
             object_index,
             context: BytecodeContextType::Property,
-        } = kind
+        } = self.runtime.heap[handle.0].kind
         {
             let file = self.runtime.script_file(file_id)?;
             let setter = file.objects[object_index].prop_setter;
@@ -850,7 +849,7 @@ impl<'bc, 'rt, H: TjsHost + 'static> Vm<'bc, 'rt, H> {
             // when `PropSetter` is null (`tjsInterCodeExec.cpp:3172`).
             return Err(TjsError::access_denied());
         }
-        if let ObjectKind::NativeProperty { id, access } = kind {
+        if let ObjectKind::NativeProperty { id, access } = self.runtime.heap[handle.0].kind {
             if !access.allows_set() {
                 return Err(TjsError::access_denied());
             }

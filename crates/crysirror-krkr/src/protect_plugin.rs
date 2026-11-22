@@ -318,8 +318,8 @@ fn parse_archive_index(rt: &mut Rt, _: Option<ObjectHandle>, a: Vec<Variant>) ->
 
 fn exists_exact(rt: &mut Rt, _: Option<ObjectHandle>, a: Vec<Variant>) -> Result<Variant> {
     let name = string(&a, 0, "Storages.isExistentStorageNoSearchNoNormalize")?;
-    if rt.host().storage()?.launcher_override(&name).is_some() {
-        return Ok(Variant::Integer(1));
+    if crate::psbfile_plugin::is_uri(&name) {
+        return Ok(Variant::Integer(crate::psbfile_plugin::exists(rt, &name)? as i64));
     }
     Ok(Variant::Integer(
         rt.host().storage()?.exists_exact(&name) as i64,

@@ -366,7 +366,8 @@ pub(crate) struct ScriptFile {
 
 #[derive(Clone, Debug)]
 pub(crate) struct DecodedScriptObject {
-    pub object: CodeObject,
+    pub object: Arc<CodeObject>,
+    pub max_register: u32,
     pub instructions: Arc<[Instruction]>,
     pub offset_to_index: Arc<BTreeMap<usize, usize>>,
     /// Precomputed sequential-next and branch-target indices for
@@ -1463,6 +1464,16 @@ impl<H: TjsHost + 'static> Runtime<H> {
         vm.call_function(callee, args)
     }
 
+    /// Delegate a native method's entire result to a script function, including
+    /// the return value produced after a host-resource wait.
+    pub fn tail_call_function(&mut self, callee: Variant, args: Vec<Variant>) -> Result<Variant> {
+        let value = self.call_function(callee, args)?;
+        if let Some(stack) = &mut self.suspended_call {
+            stack.forward_return = true;
+        }
+        Ok(value)
+    }
+
     /// Gives an exception that escaped a VM call to the TJS
     /// `System.exceptionHandler`, matching KRKR2/KRKRZ's event boundary.
     ///
@@ -1747,7 +1758,8 @@ impl<H: TjsHost + 'static> Runtime<H> {
             .collect::<BTreeMap<_, _>>();
         let jump = JumpTable::build(&instructions, &offset_to_index);
         let decoded = DecodedScriptObject {
-            object,
+            max_register: object.effective_max_frame_count(&instructions),
+            object: Arc::new(object),
             instructions,
             offset_to_index: Arc::new(offset_to_index),
             jump: Arc::new(jump),

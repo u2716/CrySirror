@@ -806,18 +806,18 @@ impl App {
             w.snapshot_store = rt.assets.store_id();
             w.snapshot_restored = rt.restored;
         }
-        // Always submit the first picture: startup time must not depend on a
-        // bitmap callback finishing before the window has ever presented.
-        if w.pending_snapshot.is_none()
-            && (w.render_snapshot.is_none() || !rt.presentation_pending())
-        {
-            w.pending_snapshot = Some(rt.schedule_render_snapshot()?);
-        }
         if let Some(pending) = &mut w.pending_snapshot {
             if let Some(snapshot) = pending.poll(rt)? {
                 w.render_snapshot = Some(snapshot);
                 w.pending_snapshot = None;
             }
+        }
+        // Start the successor as soon as the previous extraction is consumed.
+        // Workers can extract it while the completed picture is presented.
+        if w.pending_snapshot.is_none()
+            && (w.render_snapshot.is_none() || !rt.presentation_pending())
+        {
+            w.pending_snapshot = Some(rt.schedule_render_snapshot()?);
         }
         let Some(snapshot) = &w.render_snapshot else {
             return Ok(());
