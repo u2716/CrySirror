@@ -194,4 +194,5 @@
 
 - Native evidence: `AL.H.Motion.State.*` classes (`WLoop`, `WSPLoop`, `SSPLoop`, `OrgasmF[_ST]`, `OrgasmM_IN[_ST]`, `OrgasmM_OUT[_ST]`, `OrgasmS_IN`/`_ST`, `Idle_IN_A`/`_OUT_A`/`_OF_A`, `Drink[_IN|_A]`, `Vomit[_IN|_A]`, `Insert`, `Pull`, `Put`, `Drop` and `S*` variants), `Base.Controller.IsNext` (current state hash and normalized time ≥ 1), `Controller.Finish(index)`; `controller_states` (`hou_f_05`: `Idle`, `W/SLoop1/2`, `W/SSPLoop1/2`, `OrgasmM_OUT[_ST]`, `Idle_OUT_A`, `S_` variants, by `_S/_M/_L`); H prefab `GaugeController/Solo/Item 0–2` (外出しする/飲ませる/吐かせる).
 - Behaviour (`hf` track from the `h_lv1` save, 床手コキ): a scene click starts the weak loop, a wheel step makes it strong; at frame 3300 the gauge allows ぶっかける, which plays `S_OrgasmM_OUT`, then the hold and `S_Idle_OUT_A` (frames 3340, 3700).
+- Insert postures (same day): `controller_states` `som_f_00` has `Insert`, `InsertIdle`, `Pull`, `Drop` beside the loops/finishes (37 baked clips). The `hi` track switches to 正常位 through the posture list and clicks the scene at 3000; frames 3030 and 3200 show the insert and the following motion.
 

@@ -1459,21 +1459,30 @@ impl Game {
         // One-shots advance when their clip ends (`IsNext`: normalized
         // time ≥ 1); `_ST` holds until a click or 2.5 s; `_A` idles and
         // Idle wait for a click, which starts the loop again.
-        let one_shot = !(h.motion.contains("Loop") || h.motion == "Idle" || h.motion.ends_with("_A"));
+        let rest = h.motion == "Idle" || h.motion == "InsertIdle" || h.motion.ends_with("_A");
+        let one_shot = !(h.motion.contains("Loop") || rest);
         let hold = h.motion.ends_with("_ST");
         if one_shot && (now >= h.motion_until || (hold && clicked)) {
             match (!h.queue.is_empty()).then(|| h.queue.remove(0)) {
                 Some(next) => {
-                    let looping = next.ends_with("_A") || next.ends_with("_ST");
+                    let looping = next.ends_with("_A") || next.ends_with("_ST") || next == "InsertIdle";
                     let secs = if next.ends_with("_ST") { 2.5 } else { self.state_seconds.get(next).copied().unwrap_or(3.) };
                     h.motion_until = now + (secs.max(0.5) * 1000.) as u64;
                     self.h_play(next, looping);
                 }
                 None => self.h_play("Idle", true),
             }
-        } else if clicked && (h.motion == "Idle" || h.motion.ends_with("_A")) {
+        } else if clicked && rest {
             h.strong = false;
-            if let Some(l) = self.h_loop() {
+            // Insert postures (`Insert.Controller`): from outside, `Insert`
+            // then `InsertIdle` first.
+            let outside = h.motion == "Idle" || h.motion.ends_with("_OUT_A");
+            let has = |n: &str| h.finishes.iter().any(|f| f == n);
+            if outside && has("Insert") {
+                h.queue = if has("InsertIdle") { vec!["InsertIdle"] } else { Vec::new() };
+                h.motion_until = now + (self.state_seconds.get("Insert").copied().unwrap_or(2.).max(0.5) * 1000.) as u64;
+                self.h_play("Insert", false);
+            } else if let Some(l) = self.h_loop() {
                 self.h_play(l, true);
             }
         } else if h.motion.contains("Loop") {
