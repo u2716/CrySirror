@@ -8,7 +8,10 @@
 //! near/far/FOV curves, relative to the point) and `SceneFadeTrack`
 //! (`SceneFadeInfo`: In covers, Out reveals, InOut both).
 //!
-//! SATD-amanatsu-port: Face, SE, ClothState, BasePos, FluidFlow, Wet,
+//! `SETrack` (`SEClip._info` bundle/asset) sound effects are played at
+//! their clip starts.
+//!
+//! SATD-amanatsu-port: SE `Is3D`/`SettingNo` positioning, Face, ClothState, BasePos, FluidFlow, Wet,
 //! TimeScale, Shake, Activation (lights, props), Control (clouds,
 //! particles), Alembic and item animator tracks are not played; the skip
 //! button is not ported.
@@ -50,6 +53,8 @@ pub struct Movie {
     pub heroine: Vec<StateClip>,
     pub camera: Vec<StateClip>,
     pub fades: Vec<FadeClip>,
+    /// `SEClip` (start, bundle, asset).
+    pub ses: Vec<(f64, String, String)>,
     pub duration: f64,
 }
 
@@ -78,6 +83,14 @@ impl Movie {
                             movie.camera.push(clip);
                         }
                     }
+                    "AL.TimeLine.SETrack" => {
+                        if let Some(info) = fields.fields("_info") {
+                            let (bundle, asset) = (info.string("Bundle").unwrap_or(""), info.string("Asset").unwrap_or(""));
+                            if !asset.is_empty() {
+                                movie.ses.push((c.start, bundle.to_owned(), asset.to_owned()));
+                            }
+                        }
+                    }
                     "AL.TimeLine.SceneFadeTrack" => {
                         let info = fields.fields("_info");
                         let color = info.and_then(|i| i.fields("Color")).map_or([0.; 3], |c| ["r", "g", "b"].map(|k| c.float(k).unwrap_or(0.) as f32));
@@ -91,6 +104,7 @@ impl Movie {
             v.sort_by(|a, b| a.start.total_cmp(&b.start));
         }
         movie.fades.sort_by(|a, b| a.start.total_cmp(&b.start));
+        movie.ses.sort_by(|a, b| a.0.total_cmp(&b.0));
         Ok(movie)
     }
 

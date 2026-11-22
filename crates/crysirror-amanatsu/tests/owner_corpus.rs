@@ -1574,6 +1574,7 @@ fn short_movie() {
     println!("heroine {:?}", m.heroine);
     println!("camera {:?}", m.camera);
     println!("fades {:?}", m.fades);
+    println!("ses {:?}", m.ses);
     let clips = m.camera_clips(&mut u, 1).unwrap();
     for (k, c) in &clips {
         println!("{k}: {:?} .. {:?}", crysirror_amanatsu::sm::camera_pose(c, c.start), crysirror_amanatsu::sm::camera_pose(c, c.stop));

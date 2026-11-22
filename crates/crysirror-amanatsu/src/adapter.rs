@@ -122,6 +122,8 @@ struct MoviePlay {
     entities: Vec<u32>,
     heroine_clip: Option<usize>,
     fades: Vec<(f64, bool, f64, [f32; 3])>,
+    /// Sound effects still to start (start, bundle, asset).
+    ses: Vec<(f64, String, String)>,
     /// The ADV after the movie (`endADVAsset`).
     after: Vec<String>,
 }
@@ -258,6 +260,8 @@ pub struct Game {
     h_ui: Option<crate::hui::PostureUi>,
     /// The states the last character baked (`spawn_character_states`).
     baked_states: Vec<String>,
+    /// Short movie sound effects to play (bundle, asset).
+    movie_sounds: Vec<(String, String)>,
     /// An H breath voice to play (bundle, asset).
     h_voice: Option<(String, String)>,
     /// The place the posture lists were built for.
@@ -2077,7 +2081,7 @@ impl Game {
         let zone = if let Controller::ActionMap(m) = &self.controller { m.time_zone } else { 0 };
         let map = self.movie_maps.get(&id).copied().unwrap_or_else(|| self.current_map());
         self.log.push(format!("ShortMovie {id} on map {map}: {:.1} s", movie.duration));
-        self.movie = Some(MoviePlay { movie, card: card.to_owned(), entering: true, start_ms: now, base: None, cameras: Default::default(), entities: Vec::new(), heroine_clip: None, fades: Vec::new(), after });
+        self.movie = Some(MoviePlay { movie, card: card.to_owned(), entering: true, start_ms: now, base: None, cameras: Default::default(), entities: Vec::new(), heroine_clip: None, fades: Vec::new(), ses: Vec::new(), after });
         self.fade.start(now, true, self.fade_seconds);
         self.pending_map = Some((map, zone));
     }
@@ -2120,6 +2124,7 @@ impl Game {
                     _ => {}
                 }
             }
+            m.ses = m.movie.ses.clone();
             m.entering = false;
             m.start_ms = now;
             m.entities = entities;
@@ -2164,6 +2169,10 @@ impl Game {
             }
         }
         let m = self.movie.as_mut().unwrap();
+        while m.ses.first().is_some_and(|f| f.0 <= t) {
+            let (_, bundle, asset) = m.ses.remove(0);
+            self.movie_sounds.push((bundle, asset));
+        }
         while m.fades.first().is_some_and(|f| f.0 <= t) {
             let (_, cover, duration, color) = m.fades.remove(0);
             self.fade.color = color;
@@ -2389,6 +2398,7 @@ impl AmanatsuVm {
             h_points: Vec::new(),
             h_ui_place: None,
             h_voice: None,
+            movie_sounds: Vec::new(),
             baked_states: Vec::new(),
             h_point_index: None,
             h_point_ui: None,
@@ -2890,6 +2900,11 @@ impl AmanatsuVm {
         }
         if let Some(name) = h_button {
             game.h_button(&name, now)?;
+        }
+        for (bundle, asset) in std::mem::take(&mut game.movie_sounds) {
+            if let Err(e) = game.sound.play(host, client, &mut game.unity, sound::Kind::GameSe2d, &bundle, &asset, 1.) {
+                game.log.push(format!("ShortMovie SE {asset}: {e:#}"));
+            }
         }
         if let Some((bundle, asset)) = game.h_voice.take() {
             if let Err(e) = game.sound.play(host, client, &mut game.unity, sound::Kind::Voice, &bundle, &asset, 1.) {
