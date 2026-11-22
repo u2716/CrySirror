@@ -237,3 +237,9 @@
 - Implementation: `Graphic/Bloom` and `Graphic/Fog` applied to the map environment (kept before the switches and re-sent when the config window closes after a change); `Voice/c00`–`c11` as `voice_cNN` mix groups under `voice`, used for talk and H voices by the speaking heroine's personality.
 - Behaviour (`w1` track, `with` save, a saved `config.xml` with Bloom/Fog off; removed afterwards): the world environment at frame 1900 has `bloom` 0 and no fog.
 - Not established: audible voice levels (runs are muted); the voice rows' controls in the window.
+
+## 2026-11-22 — H pull-out
+
+- Native evidence: `AL.H.Motion.Insert.Controller.Update`: in `Idle_IN_A`/`Idle_OF_A` (and `S` variants) the H wheel value forward sets `WLoop`, backward `Pull`/`SPull`; `Pull`/`SPull` and `Drop`/`SDrop` advance by `GetNextHash` at their clip end; `Idle_OUT_A` and `Put` re-insert (`Insert`, `isInside` cleared).
+- Behaviour (`hpull` track = `hi` + a scene click at 3300, 射精 at 4450, a wheel step back at 4900; `h_lv1` save, 正常位): the female clip is `Idle_IN_A` at 4850, `Pull` at 4960 and `Idle_OUT_A` at 5300.
+- Not established: `GetNextHash`'s exact order (Drop after an inside finish is inferred), `Put` (pour) setups.

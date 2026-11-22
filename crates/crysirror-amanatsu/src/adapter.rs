@@ -1656,6 +1656,30 @@ impl Game {
                 }
                 None => self.h_play("Idle", true),
             }
+        } else if wheel != 0 && (h.motion.ends_with("Idle_IN_A") || h.motion.ends_with("Idle_OF_A")) {
+            // `Insert.Controller.Update` in `Idle_IN_A`/`Idle_OF_A`: the
+            // wheel forward resumes `WLoop`, back pulls out (`Pull`/`SPull`),
+            // which falls to the outside idle (after an inside finish
+            // through `Drop`). SATD-amanatsu-port: `GetNextHash`'s exact
+            // order after `Pull` is inferred from the state names.
+            let s = if h.motion.starts_with("S_") { "S_" } else { "" };
+            let has = |n: &str| h.finishes.iter().any(|f| f == n);
+            if wheel > 0 {
+                h.strong = false;
+                if let Some(l) = self.h_loop() {
+                    self.h_play(l, true);
+                }
+            } else if let Some(pull) = h_state(&format!("{s}Pull")).filter(|p| has(p)) {
+                let inside = h.motion.ends_with("Idle_IN_A");
+                let mut queue = Vec::new();
+                if inside {
+                    queue.extend(h_state(&format!("{s}Drop")).filter(|d| has(d)));
+                }
+                queue.extend(h_state(&format!("{s}Idle_OUT_A")).filter(|i| has(i)));
+                h.queue = queue;
+                h.motion_until = now + (self.state_seconds.get(pull).copied().unwrap_or(2.).max(0.5) * 1000.) as u64;
+                self.h_play(pull, false);
+            }
         } else if clicked && rest {
             h.strong = false;
             // Insert postures (`Insert.Controller`): from outside, `Insert`
