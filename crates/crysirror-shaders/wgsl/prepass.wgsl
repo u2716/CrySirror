@@ -20,7 +20,7 @@ fn transform_vertex(v: VertexIn) -> PreOut {
     var o: PreOut;
     o.clip = frame.view_proj * world;
     o.normal = (frame.view * vec4<f32>((object.normal * vec4<f32>(v.normal, 0.0)).xyz, 0.0)).xyz;
-    o.uv = v.uv;
+    o.uv = v.uv + object.uv.xy;
     o.world=world.xyz;
     o.world_normal=(object.normal*vec4<f32>(v.normal,0.0)).xyz;
     o.cur = frame.view_proj_nojitter * world;

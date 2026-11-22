@@ -520,6 +520,8 @@ struct ObjectUniform {
     normal: [[f32; 4]; 4],
     prev_model: [[f32; 4]; 4],
     skin: [u32; 4],
+    /// xy: UV0 offset (`AnimationState::uv_offsets`).
+    uv: [f32; 4],
 }
 
 struct GpuPrim {
@@ -3294,6 +3296,7 @@ impl PbrRenderer {
                 normal: m.inverse().transpose().to_cols_array_2d(),
                 prev_model,
                 skin: [0; 4],
+                uv: [0.; 4],
             });
             let grow = |b: (Vec3, Vec3), lo: &mut Vec3, hi: &mut Vec3| {
                 for i in 0..8 {
@@ -3361,6 +3364,7 @@ impl PbrRenderer {
                     asset,
                     morphs,
                     hidden,
+                    uv_offsets,
                     ..
                 } => {
                     let key = format!("{client}@{}:{asset}", assets.revision(ClientId(*client)));
@@ -3418,11 +3422,13 @@ impl PbrRenderer {
                             next_prev_palettes.insert(sub, pal);
                         }
                         let obj = objects.len() as u32;
+                        let uv = uv_offsets.iter().find(|(n, _)| *n == node.name).map_or([0.; 4], |(_, o)| [o[0], o[1], 0., 0.]);
                         objects.push(ObjectUniform {
                             model: wm,
                             normal: world.inverse().transpose().to_cols_array_2d(),
                             prev_model: prev,
                             skin,
+                            uv,
                         });
                         for (pi, p) in self.models[&key].meshes[mesh].iter().enumerate() {
                             let dk = draw_key(sub, pi as u64);

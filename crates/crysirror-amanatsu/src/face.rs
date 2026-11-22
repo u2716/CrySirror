@@ -7,7 +7,10 @@
 //!
 //! Blinking (`BlinkCtrl`) is timed by the session.
 //!
-//! SATD-amanatsu-port: eye look, cheeks
+//! Eye look (`EyeLookCalc` → `CmpEyeLookMaterial`) moves the iris
+//! texture of `cf_O_hitomi_L`/`_R` toward a target.
+//!
+//! SATD-amanatsu-port: cheeks
 //! (`HohoAka`), tears, highlights, lip sync and pattern blend transitions
 //! are not applied; the eyes/mouth openness is the `OpenMax` value.
 use crate::unity::Unity;
@@ -160,4 +163,103 @@ pub fn expression_list(unity: &mut Unity, personality: i64) -> Result<std::colle
         out.insert(pid, [v(2), v(3), v(4), v(5), v(6), v(8)]);
     }
     Ok(out)
+}
+
+/// `EyeLookCalc.EyeTypeState`: the bending limits of one look pattern.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EyeTypeState {
+    pub up: f32,
+    pub down: f32,
+    pub min: f32,
+    pub max: f32,
+    pub h_limit: f32,
+    pub v_limit: f32,
+}
+
+/// `EyeLookCalc.EyeTypeStates` of the head bone prefab
+/// (`chara/head/bone/000` `p_cf_al_head_bone_00`).
+pub fn eye_type_states(unity: &mut Unity) -> Result<Vec<EyeTypeState>> {
+    use anyhow::Context;
+    let (key, go) = unity.bundle_asset("lib/chara/head/bone/000.unity3d", "p_cf_al_head_bone_00", crysirror_unity::class_id::GAME_OBJECT)?.context("p_cf_al_head_bone_00")?;
+    let all = unity.scene(&key)?;
+    let root = *all.by_game_object.get(&go).context("head bone root")?;
+    let scene = all.subtree(root);
+    let states = scene.nodes.iter().flat_map(|n| &n.components).find_map(|c| c.fields.array("EyeTypeStates")).context("EyeLookCalc")?;
+    Ok(states
+        .iter()
+        .filter_map(|v| match v {
+            Value::Struct(f) => {
+                let g = |k: &str| f.float(k).unwrap_or(0.) as f32;
+                Some(EyeTypeState { up: g("UpBendingAngle"), down: g("DownBendingAngle"), min: g("MinBendingAngle"), max: g("MaxBendingAngle"), h_limit: g("HAngleLimit"), v_limit: g("VAngleLimit") })
+            }
+            _ => None,
+        })
+        .collect())
+}
+
+/// The rest eye positions and forwards (`EyeTargetL`/`EyeTargetR`, the
+/// `EyeLookCalc.EyeObjs`) in the character's space.
+pub fn eye_rest(scene: &Scene6) -> Option<[([f32; 3], [f32; 3]); 2]> {
+    let eye = |name: &str| {
+        let n = scene.nodes.iter().position(|n| n.name == name)?;
+        let m = crysirror_unity::world6::world_matrix(scene, n);
+        Some((m.w_axis.truncate().to_array(), m.transform_vector3(glam::Vec3::Z).normalize_or_zero().to_array()))
+    };
+    Some([eye("EyeTargetL")?, eye("EyeTargetR")?])
+}
+
+/// `CmpEyeLookMaterial._eyeLookRange` of `p_cf_al_head_00` (x for the
+/// left/right eye, y shared).
+const LOOK_RANGE_X: [[f32; 2]; 2] = [[-0.2, 0.11], [-0.11, 0.2]];
+const LOOK_RANGE_Y: [f32; 2] = [-0.07, 0.15];
+
+/// `EyeLookCalc.AngleHRateCalc`/`AngleVRateCalc` of an eye at `eye`
+/// looking along `forward` (Unity space, head up +Y) toward `target`, then
+/// `CmpEyeLookMaterial.Update`'s position relative to the straight look,
+/// as the iris offset in Unity UV (v up).
+pub fn eye_offset(state: &EyeTypeState, eye_index: usize, eye: glam::Vec3, forward: glam::Vec3, target: glam::Vec3) -> [f32; 2] {
+    let f = forward.normalize_or_zero();
+    let r = glam::Vec3::Y.cross(f).normalize_or_zero();
+    let u = f.cross(r);
+    let d = target - eye;
+    let (x, y, z) = (d.dot(r), d.dot(u), d.dot(f));
+    let h = x.atan2(z).to_degrees();
+    let v = -y.atan2((x * x + z * z).sqrt()).to_degrees();
+    if f == glam::Vec3::ZERO || h.abs() > state.h_limit || v.abs() > state.v_limit {
+        return [0.; 2];
+    }
+    let inv = |limit: f32, a: f32| if limit == 0. { 0. } else { (a / limit).clamp(0., 1.) };
+    let hr = if h < 0. { -inv(state.min, h) } else { inv(state.max, h) };
+    let vr = if v < 0. { -inv(state.up, v) } else { inv(state.down, v) };
+    let lerp = |r: [f32; 2], t: f32| r[0] + (r[1] - r[0]) * t;
+    let rx = LOOK_RANGE_X[eye_index.min(1)];
+    [lerp(rx, (hr + 1.) * 0.5) - lerp(rx, 0.5), lerp(LOOK_RANGE_Y, (-vr + 1.) * 0.5) - lerp(LOOK_RANGE_Y, 0.5)]
+}
+
+/// The iris offsets as engine UV0 offsets of the eye meshes. The lookup
+/// moves against the content in Unity UV; the exported UVs run top-down
+/// (v) and the X-mirrored export turns the eye texture's u (both checked
+/// against targets beside and above the head).
+pub fn eye_uv_offsets(offsets: &[[f32; 2]; 2]) -> BTreeMap<String, [f32; 2]> {
+    ["cf_O_hitomi_L", "cf_O_hitomi_R"].iter().zip(offsets).map(|(n, o)| ((*n).to_owned(), [o[0], o[1]])).collect()
+}
+
+#[cfg(test)]
+mod eye_tests {
+    use super::*;
+
+    const STATE: EyeTypeState = EyeTypeState { up: -66., down: 25., min: -21.5, max: 25.5, h_limit: 110., v_limit: 80. };
+
+    #[test]
+    fn straight_look_is_neutral_and_sides_saturate() {
+        let o = eye_offset(&STATE, 0, glam::Vec3::ZERO, glam::Vec3::Z, glam::Vec3::new(0., 0., 10.));
+        assert!(o[0].abs() < 1e-6 && o[1].abs() < 1e-6);
+        // 45° to the right: past `MaxBendingAngle`, the full range.
+        let o = eye_offset(&STATE, 0, glam::Vec3::ZERO, glam::Vec3::Z, glam::Vec3::new(10., 0., 10.));
+        assert!((o[0] - 0.155).abs() < 1e-4, "{o:?}");
+        // Behind the head (> `HAngleLimit`): straight again.
+        assert_eq!(eye_offset(&STATE, 0, glam::Vec3::ZERO, glam::Vec3::Z, glam::Vec3::new(0., 0., -10.)), [0.; 2]);
+        // Looking up moves the iris up.
+        assert!(eye_offset(&STATE, 1, glam::Vec3::ZERO, glam::Vec3::Z, glam::Vec3::new(0., 5., 10.))[1] > 0.);
+    }
 }

@@ -600,6 +600,8 @@ pub enum PbrDrawable {
         morphs: Vec<(String, f32)>,
         /// Node names whose subtrees are not drawn.
         hidden: Vec<String>,
+        /// UV0 offsets of named nodes' meshes.
+        uv_offsets: Vec<(String, [f32; 2])>,
         /// Instance key whose local pose is copied onto same-named nodes.
         follow: Option<u64>,
         /// Leader node the root nodes ride on (`AnimationState::attach`).
@@ -858,6 +860,7 @@ impl World {
                             .map(|(n, w)| (n.clone(), *w))
                             .collect(),
                         hidden: spec.animation.iter().flat_map(|a| a.hidden.iter().cloned()).collect(),
+                        uv_offsets: spec.animation.iter().flat_map(|a| a.uv_offsets.iter().map(|(n, o)| (n.clone(), *o))).collect(),
                         follow: spec
                             .animation
                             .as_ref()

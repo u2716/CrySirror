@@ -221,6 +221,10 @@ pub struct AnimationState {
     /// removable parts); their poses still evaluate.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hidden: Vec<String>,
+    /// UV0 offsets of the meshes of named nodes, added before the material's
+    /// UV transform (texture-driven eyes, scrolling decals).
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub uv_offsets: std::collections::BTreeMap<String, [f32; 2]>,
     /// Entity of the same client whose evaluated local translation and
     /// rotation are copied onto this entity's same-named nodes after its own
     /// clips (parts sharing a character skeleton). Scale stays the follower's.
@@ -290,6 +294,11 @@ impl AnimationState {
         ensure!(
             self.hidden.len() <= MAX_NODE_POSES && self.hidden.iter().all(|n| !n.is_empty() && n.len() <= 256),
             "invalid hidden nodes"
+        );
+        ensure!(
+            self.uv_offsets.len() <= MAX_NODE_POSES
+                && self.uv_offsets.iter().all(|(n, o)| !n.is_empty() && n.len() <= 256 && o.iter().all(|v| v.is_finite() && v.abs() <= 1000.)),
+            "invalid UV offsets"
         );
         for (name, w) in &self.morphs {
             ensure!(

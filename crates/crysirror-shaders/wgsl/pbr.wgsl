@@ -22,7 +22,7 @@ fn transform_vertex(v: VertexIn) -> VertexOut {
     o.world = world.xyz;
     o.normal = (object.normal * vec4<f32>(v.normal, 0.0)).xyz;
     o.tangent = vec4<f32>((object.model * vec4<f32>(v.tangent.xyz, 0.0)).xyz, v.tangent.w);
-    o.uv = v.uv;
+    o.uv = v.uv + object.uv.xy;
     return o;
 }
 

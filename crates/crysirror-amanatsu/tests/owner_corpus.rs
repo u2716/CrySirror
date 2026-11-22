@@ -2143,3 +2143,31 @@ fn prefab_dump() {
         }
     }
 }
+
+/// MonoBehaviours under `lib/{AMANATSU_PREFIX}` with a field named
+/// `AMANATSU_FIELD`, with their GameObject names.
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn behaviours_with_field() {
+    let mut u = unity();
+    let prefix = format!("bundle:lib/{}", std::env::var("AMANATSU_PREFIX").unwrap_or_default());
+    let field = std::env::var("AMANATSU_FIELD").unwrap();
+    let keys: Vec<String> = u.bundle_files().into_iter().filter(|k| k.starts_with(&prefix) && !k.ends_with(".resS")).collect();
+    let mut shown = 0;
+    for key in keys {
+        let Ok(file) = u.file(&key) else { continue };
+        let ids: Vec<i64> = file.objects.iter().filter(|o| o.class_id == 114).map(|o| o.path_id).collect();
+        for id in ids {
+            let Ok(f) = u.decode(&key, id) else { continue };
+            if f.get(&field).is_none() || shown > 3 {
+                continue;
+            }
+            shown += 1;
+            let go = f.pptr("m_GameObject").and_then(|p| u.decode(&key, p.path_id).ok()).and_then(|g| g.string("m_Name").map(str::to_owned));
+            println!("{key} {go:?}");
+            for (k, v) in &f.0 {
+                println!("  {k}: {}", format!("{v:?}").chars().take(1500).collect::<String>());
+            }
+        }
+    }
+}

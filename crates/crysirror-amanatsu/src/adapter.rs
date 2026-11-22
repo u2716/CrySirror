@@ -465,6 +465,15 @@ pub struct Game {
     /// `CharaClothState` of ADV actors not spawned with their variants yet:
     /// card → (list, state).
     adv_cloth: std::collections::HashMap<String, Vec<(&'static str, usize)>>,
+    /// Unity root (position, rotation) of characters placed on the map or
+    /// in an event, for their eye look.
+    chara_roots: std::collections::HashMap<String, ([f32; 3], [f32; 4])>,
+    /// Rest eye positions/forwards of spawned characters (character space)
+    /// and their last look offsets.
+    eye_rest: std::collections::HashMap<String, [([f32; 3], [f32; 3]); 2]>,
+    eye_offsets: std::collections::HashMap<String, [[f32; 2]; 2]>,
+    /// `EyeLookCalc.EyeTypeStates` of the head bone prefab.
+    eye_states: Option<Vec<crate::face::EyeTypeState>>,
     /// The head renderer node names of characters spawned with variants.
     heads: std::collections::HashMap<String, Vec<String>>,
     /// Uploaded particle textures by (file, path id) key.
@@ -697,6 +706,7 @@ impl Game {
             // uploads are bounded.
             self.pending_heroines.push((card.clone(), t, crysirror_unity::gltf::mirror_point(*pos), sun));
             self.standing.insert(card.clone(), (*pos, *rot, 0.5));
+            self.chara_roots.insert(card.clone(), (*pos, *rot));
         }
         if let Some(v) = world.camera() {
             let shown: Vec<String> = world.items.iter().map(|(n, p)| format!("{n} {:?}", project(v, crysirror_unity::gltf::mirror_point(*p)).map(|s| [s[0].round(), s[1].round()]))).collect();
@@ -834,6 +844,9 @@ impl Game {
             }
         }
         let layers = if clips.is_empty() { json!([]) } else { json!([{"clip": idle, "looping": true}]) };
+        if let Some(e) = crate::face::eye_rest(&human.scene) {
+            self.eye_rest.insert(card_path.to_owned(), e);
+        }
         // `HumanFace`: the default expression (eyes open).
         match crate::face::Face::from_scene(&mut self.unity, &human.scene, &human.key) {
             Ok(Some(face)) => {
@@ -901,6 +914,9 @@ impl Game {
         }
         // Dressed (state 0) with every variant exported.
         let layers = json!([{"clip": play, "looping": true}]);
+        if let Some(e) = crate::face::eye_rest(&human.scene) {
+            self.eye_rest.insert(card_path.to_owned(), e);
+        }
         self.cloth.insert(card_path.to_owned(), ClothRun { states: vec![0; human.clothes.len()], parts: human.clothes.clone(), accessories: human.accessories.clone(), accessories_hidden: false, entities: ids.clone(), hidden_nodes: Vec::new(), layers: layers.clone() });
         self.heads.insert(card_path.to_owned(), human.head.clone());
         match crate::face::Face::from_scene(&mut self.unity, &human.scene, &human.key) {
@@ -1971,6 +1987,7 @@ impl Game {
                 self.event_cg = Some(EventCgRun { cha: (pos.to_array(), rot.to_array()), view_return });
                 self.log.push(format!("EventCG {asset}: chaPos {pos:?}"));
                 if let Some(card) = self.talk_card.clone() {
+                    self.chara_roots.insert(card.clone(), (pos.to_array(), rot.to_array()));
                     let t = unity_transform(pos.to_array(), rot.to_array());
                     for e in self.character_entities(&card) {
                         self.world.push(json!({"op": "set_transform", "id": e, "transform": t}));
@@ -2687,6 +2704,7 @@ impl Game {
         let t = json!({"translation": crysirror_unity::gltf::mirror_point(pos), "rotation_degrees": [x.to_degrees(), y.to_degrees(), z.to_degrees()], "scale": [1.0, 1.0, 1.0]});
         let sun = self.map_sun;
         self.spawn_character(host, client, card, Some(t), sun)?;
+        self.chara_roots.insert(card.to_owned(), (pos, rot));
         let (personality, name) = self.unity.read_all(card).ok().and_then(|b| crate::card::Card::parse(&b).ok()).and_then(|c| c.parameter()).map_or((0, String::new()), |p| (p.0, p.1));
         self.spots.push((card.to_owned(), crysirror_unity::gltf::mirror_point(pos), personality, name));
         Ok(())
@@ -2915,8 +2933,40 @@ impl Game {
         }
         let morphs = face.weights(&e);
         let hidden = self.cloth.get(card).map(ClothRun::hidden).unwrap_or_default();
+        let uv = self.eye_offsets.get(card).map(|o| crate::face::eye_uv_offsets(o)).unwrap_or_default();
         for &id in ids {
-            self.world.push(json!({"op": "set_animation", "id": id, "animation": {"layers": layers, "morphs": morphs, "hidden": hidden}}));
+            self.world.push(json!({"op": "set_animation", "id": id, "animation": {"layers": layers, "morphs": morphs, "hidden": hidden, "uv_offsets": uv}}));
+        }
+    }
+
+    /// `EyeLookController`/`CmpEyeLookMaterial`: the eyes of placed
+    /// characters follow the camera (`EyeTypeStates` pattern 1, the
+    /// camera look). SATD-amanatsu-port: the eye bones' animated pose,
+    /// `LeapSpeed` easing, micro saccades and the other look patterns
+    /// (`ChangeLookEyesPtn`) are not ported; the rest pose under the
+    /// character root stands in for the animated head.
+    fn eye_look(&mut self) {
+        let Some(view) = self.view.clone() else { return };
+        if self.eye_states.is_none() {
+            self.eye_states = Some(crate::face::eye_type_states(&mut self.unity).unwrap_or_default());
+        }
+        let Some(state) = self.eye_states.as_ref().and_then(|s| s.get(1).or(s.first())).copied() else { return };
+        let camera = glam::Vec3::from_array(crysirror_unity::gltf::mirror_point(view.eye));
+        let cards: Vec<String> = self.faces.keys().cloned().collect();
+        for card in cards {
+            let (Some(&(pos, rot)), Some(rest)) = (self.chara_roots.get(&card), self.eye_rest.get(&card)) else { continue };
+            let root = glam::Mat4::from_rotation_translation(glam::Quat::from_array(rot), glam::Vec3::from_array(pos));
+            let offsets = [0, 1].map(|i| {
+                let eye = root.transform_point3(glam::Vec3::from_array(rest[i].0));
+                let fwd = root.transform_vector3(glam::Vec3::from_array(rest[i].1));
+                crate::face::eye_offset(&state, i, eye, fwd, camera)
+            });
+            let old = self.eye_offsets.get(&card).copied().unwrap_or_default();
+            let moved = old.iter().flatten().zip(offsets.iter().flatten()).any(|(a, b)| (a - b).abs() > 1e-3);
+            if moved || !self.eye_offsets.contains_key(&card) {
+                self.eye_offsets.insert(card.clone(), offsets);
+                self.apply_face(&card);
+            }
         }
     }
 
@@ -3440,6 +3490,10 @@ impl AmanatsuVm {
             event_cg: None,
             adv_cloth: std::collections::HashMap::new(),
             heads: std::collections::HashMap::new(),
+            chara_roots: std::collections::HashMap::new(),
+            eye_rest: std::collections::HashMap::new(),
+            eye_offsets: std::collections::HashMap::new(),
+            eye_states: None,
             sky: None,
             next_model: 0,
             view: None,
@@ -3692,6 +3746,7 @@ impl AmanatsuVm {
             game.movie_update(now);
         }
         game.blink(now);
+        game.eye_look();
         game.lip_sync(now);
         if game.h.is_some() && game.talk.is_none() {
             let clicked_scene = input.buttons_pressed & b::MOUSE_LEFT != 0 && handler.is_none() && !fading;
