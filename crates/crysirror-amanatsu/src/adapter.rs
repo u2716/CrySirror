@@ -260,6 +260,10 @@ pub struct Game {
     /// blinks or opens (`BlinkCtrl`).
     blinking: std::collections::HashSet<String>,
     next_blink: std::collections::HashMap<String, u64>,
+    /// Faces whose `FaceParam` disables blinking.
+    no_blink: std::collections::HashSet<String>,
+    /// The H breath's mouth: card, `OpenMouthMin`/`Max`, start and end.
+    h_mouth: Option<(String, (f32, f32), u64, u64)>,
     /// Expression presets by personality.
     expressions: std::collections::HashMap<i64, std::collections::HashMap<i64, [Option<f32>; 6]>>,
     /// The toon ambient characters receive on this map (sky radiance or
@@ -713,7 +717,21 @@ impl Game {
         let ids: Vec<u32> = self.map_entities[first..].iter().map(|e| e.0).collect();
         for &entity in &ids {
             self.world.push(json!({"op": "set_transform", "id": entity, "transform": transform}));
-            self.world.push(json!({"op": "set_animation", "id": entity, "animation": {"layers": [{"clip": play, "looping": true}]}}));
+        }
+        let layers = json!([{"clip": play, "looping": true}]);
+        match crate::face::Face::from_scene(&mut self.unity, &human.scene, &human.key) {
+            Ok(Some(face)) => {
+                self.faces.insert(card_path.to_owned(), (face, ids.clone(), layers, crate::face::Expression::default()));
+                self.apply_face(card_path);
+            }
+            other => {
+                if let Err(e) = other {
+                    self.log.push(format!("H face {card_path}: {e:#}"));
+                }
+                for &entity in &ids {
+                    self.world.push(json!({"op": "set_animation", "id": entity, "animation": {"layers": layers}}));
+                }
+            }
         }
         self.log.push(format!("H character {card_path}: {controller} {} clips", clips.len()));
         Ok(ids)
@@ -1181,9 +1199,67 @@ impl Game {
     fn h_play(&mut self, motion: &'static str, looping: bool) {
         let Some(h) = self.h.as_mut() else { return };
         h.motion = motion;
-        for &e in &h.entities {
-            self.world.push(json!({"op": "set_animation", "id": e, "animation": {"layers": [{"clip": motion, "looping": looping}]}}));
+        let entities = h.entities.clone();
+        let layers = json!([{"clip": motion, "looping": looping}]);
+        // Characters with a face keep their morphs with the new motion.
+        let mut faced = Vec::new();
+        let cards: Vec<String> = self.faces.iter().filter(|(_, f)| f.1.iter().any(|e| entities.contains(e))).map(|(c, _)| c.clone()).collect();
+        for card in cards {
+            if let Some(f) = self.faces.get_mut(&card) {
+                f.2 = layers.clone();
+                faced.extend(f.1.iter().copied());
+            }
+            self.apply_face(&card);
         }
+        for e in entities.into_iter().filter(|e| !faced.contains(e)) {
+            self.world.push(json!({"op": "set_animation", "id": e, "animation": {"layers": layers}}));
+        }
+    }
+
+    /// A breath's `FaceParam` on the heroine (`HVoiceCtrl` face change):
+    /// patterns, eye openness and blinking; the mouth follows the breath
+    /// until `until` (see `h_lip_sync`).
+    fn h_breath_face(&mut self, card: &str, face: Option<crate::hvoice::FaceParam>, now: u64, until: u64) {
+        let Some(f) = face else { return };
+        let Some(state) = self.faces.get_mut(card) else { return };
+        let e = &mut state.3;
+        e.eyebrow = f.eyebrow.max(0) as usize;
+        e.eyes = f.eye.max(0) as usize;
+        e.mouth = f.mouth.max(0) as usize;
+        e.eyes_open = f.open_eye.clamp(0., 1.);
+        e.mouth_open = f.open_mouth.0.clamp(0., 1.);
+        if f.blink {
+            self.no_blink.remove(card);
+        } else {
+            self.no_blink.insert(card.to_owned());
+            self.blinking.remove(card);
+        }
+        self.h_mouth = Some((card.to_owned(), f.open_mouth, now, until));
+        self.apply_face(card);
+    }
+
+    /// The breath's mouth between `OpenMouthMin` and `OpenMouthMax`
+    /// (SATD-amanatsu-port: `LipSync` follows the voice level; this is a
+    /// 3 Hz approximation), updated every 60 ms.
+    fn h_lip_sync(&mut self, now: u64) {
+        let Some((card, (lo, hi), start, until)) = self.h_mouth.clone() else { return };
+        if now >= until {
+            if let Some(state) = self.faces.get_mut(&card) {
+                state.3.mouth_open = lo.clamp(0., 1.);
+            }
+            self.h_mouth = None;
+            self.apply_face(&card);
+            return;
+        }
+        if (now - start) % 60 > 16 || (hi - lo).abs() < 1e-3 {
+            return;
+        }
+        let t = (now - start) as f32 / 1000.;
+        let open = lo + (hi - lo) * (t * std::f32::consts::TAU * 1.5).sin().abs();
+        if let Some(state) = self.faces.get_mut(&card) {
+            state.3.mouth_open = open.clamp(0., 1.);
+        }
+        self.apply_face(&card);
     }
 
     /// `Gauge Female` fill and the finish buttons' availability.
@@ -1218,6 +1294,15 @@ impl Game {
     /// (SATD-amanatsu-port: rates 4/s weak and 8/s strong, no wheel speed,
     /// voices, IK or male gauge); a finished one-shot returns to Idle.
     fn h_update(&mut self, clicked: bool, now: u64) {
+        let mut breath_face = None;
+        self.h_update_state(clicked, now, &mut breath_face);
+        if let Some((card, face, until)) = breath_face {
+            self.h_breath_face(&card, face, now, until);
+        }
+        self.h_lip_sync(now);
+    }
+
+    fn h_update_state(&mut self, clicked: bool, now: u64, breath_face: &mut Option<(String, Option<crate::hvoice::FaceParam>, u64)>) {
         let Some(h) = self.h.as_mut() else { return };
         if h.phase != MassagePhase::Play {
             return;
@@ -1245,11 +1330,13 @@ impl Game {
                 h.breath_group = g;
                 let mut rng = self.rng;
                 let mut random = |n: usize| game_random(&mut rng, n);
-                if let Some(b) = crate::hvoice::pick(&h.breaths, g, 0, &mut random) {
-                    self.h_voice = Some((b.bundle.clone(), b.asset.clone()));
-                }
+                let picked = crate::hvoice::pick(&h.breaths, g, 0, &mut random).cloned();
                 h.next_breath = now + 3000 + random(2000) as u64;
                 self.rng = rng;
+                if let Some(b) = picked {
+                    self.h_voice = Some((b.bundle.clone(), b.asset.clone()));
+                    *breath_face = Some((h.card.clone(), b.faces.first().copied(), h.next_breath));
+                }
             }
         }
         if h.motion.starts_with("Orgasm") && now >= h.motion_until {
@@ -1358,10 +1445,12 @@ impl Game {
                     h.next_breath = now + 4000;
                     let mut rng = self.rng;
                     let mut random = |n: usize| game_random(&mut rng, n);
-                    let voice = crate::hvoice::pick(&h.breaths, g, 0, &mut random).map(|b| (b.bundle.clone(), b.asset.clone()));
+                    let picked = crate::hvoice::pick(&h.breaths, g, 0, &mut random).cloned();
                     self.rng = rng;
-                    if voice.is_some() {
-                        self.h_voice = voice;
+                    let card = h.card.clone();
+                    if let Some(b) = picked {
+                        self.h_voice = Some((b.bundle.clone(), b.asset.clone()));
+                        self.h_breath_face(&card, b.faces.first().copied(), now, now + 4000);
                     }
                     self.h_play(state, false);
                     self.log.push(format!("HScene finish: {state}"));
@@ -2141,7 +2230,7 @@ impl Game {
     /// (SATD-amanatsu-port: `BlinkFrequency`'s random draw and the blink
     /// curve are approximated; `IsBlink` false is not honoured).
     fn blink(&mut self, now: u64) {
-        let cards: Vec<String> = self.faces.keys().cloned().collect();
+        let cards: Vec<String> = self.faces.keys().filter(|c| !self.no_blink.contains(*c)).cloned().collect();
         for card in cards {
             let due = *self.next_blink.entry(card.clone()).or_insert(now + 2000);
             if now < due {
@@ -2545,6 +2634,8 @@ impl AmanatsuVm {
             expressions: std::collections::HashMap::new(),
             blinking: std::collections::HashSet::new(),
             next_blink: std::collections::HashMap::new(),
+            no_blink: std::collections::HashSet::new(),
+            h_mouth: None,
             h_ui: None,
             h_change: None,
             h_points: Vec::new(),

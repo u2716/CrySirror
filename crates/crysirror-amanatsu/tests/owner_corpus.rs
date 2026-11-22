@@ -1606,6 +1606,11 @@ fn h_breaths() {
     assert_eq!(list.len(), 375);
     let groups: std::collections::BTreeSet<i32> = list.iter().map(|b| b.group).collect();
     println!("{} breaths, groups {groups:?}, first {:?}", list.len(), list[0]);
+    for b in list.iter().filter(|b| b.stage == 0).step_by(25) {
+        println!("group {} {}: {:?}", b.group, b.asset, b.faces);
+    }
+    // Face parameters are sane: openness in [0, 1].
+    assert!(list.iter().flat_map(|b| &b.faces).all(|f| (0. ..=1.).contains(&f.open_eye) && f.open_mouth.0 <= f.open_mouth.1 + 1e-4));
 }
 
 /// Blend shapes of the meshes of a prefab (`AMANATSU_BUNDLE`,

@@ -7,8 +7,11 @@
 //! SATD-amanatsu-port: `HVoiceCtrl` chooses groups through per-state voice
 //! updaters that are not reproduced; the H scene uses LoopWait for Idle,
 //! `Loop{gauge third}` with `_S` (weak loop), `_F` (strong loop) or `_C`
-//! (a finish available), and the climax groups for the finishes. Short
-//! breaths, speech voices (`voice[NN]`), face parameters, lip sync and SE
+//! (a finish available), and the climax groups for the finishes. The
+//! breath's first `FaceParam` sets the face (patterns, openness, blink);
+//! its mouth moves between `OpenMouthMin` and `OpenMouthMax` while the
+//! breath plays instead of following the voice level. Short breaths, speech
+//! voices (`voice[NN]`), tears, cheek, highlights, neck/eye behaviour and SE
 //! lists are not played.
 use crate::unity::Unity;
 use anyhow::{ensure, Context, Result};
@@ -34,11 +37,30 @@ pub struct Breath {
     pub group: i32,
     pub bundle: String,
     pub asset: String,
+    pub faces: Vec<FaceParam>,
+}
+
+/// `AL.H.List.Voice.FaceParam` (the face fields; tear, cheek, highlight
+/// and the neck/eye behaviour are read past).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FaceParam {
+    pub open_eye: f32,
+    pub open_mouth: (f32, f32),
+    pub eyebrow: i32,
+    pub eye: i32,
+    pub mouth: i32,
+    pub blink: bool,
 }
 
 /// `FaceParam`: 3 floats, 4 ints, a float, 2 bools, 4 ints and three
 /// `Range`s (two `Vector3` each), unmanaged after its member count.
 const FACE_PARAM_BYTES: usize = 12 + 16 + 4 + 2 + 16 + 3 * 24;
+
+fn face_param(b: &[u8]) -> FaceParam {
+    let f = |o: usize| f32::from_le_bytes(b[o..o + 4].try_into().unwrap_or_default());
+    let i = |o: usize| i32::from_le_bytes(b[o..o + 4].try_into().unwrap_or_default());
+    FaceParam { open_eye: f(0), open_mouth: (f(4), f(8)), eyebrow: i(12), eye: i(16), mouth: i(20), blink: b[33] != 0 }
+}
 
 pub fn parse(b: &[u8]) -> Result<Vec<Breath>> {
     let mut r = Reader::new(b);
@@ -54,12 +76,13 @@ pub fn parse(b: &[u8]) -> Result<Vec<Breath>> {
         let group = r.i32()?;
         let asset = r.string()?.unwrap_or_default();
         r.take(1)?;
-        let faces = r.i32()?;
-        for _ in 0..faces.max(0) {
+        let n = r.i32()?;
+        let mut faces = Vec::new();
+        for _ in 0..n.max(0) {
             ensure!(r.object_header()? == Some(17), "face param members");
-            r.take(FACE_PARAM_BYTES)?;
+            faces.push(face_param(r.take(FACE_PARAM_BYTES)?));
         }
-        out.push(Breath { stage, group, bundle, asset });
+        out.push(Breath { stage, group, bundle, asset, faces });
     }
     Ok(out)
 }
