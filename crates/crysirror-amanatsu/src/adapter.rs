@@ -104,6 +104,8 @@ struct HRun {
     breaths: Vec<crate::hvoice::Breath>,
     breath_group: i32,
     next_breath: u64,
+    /// `EventManager.Invite`: the H map the heroine was invited to.
+    invite_map: Option<i32>,
     /// The action point of an event H (`ItemEventH00`); none: the map's
     /// first H point (or `NightEventH00` for a night H).
     event_point: Option<&'static str>,
@@ -1396,8 +1398,16 @@ impl Game {
                 }
                 let zone = if let Controller::ActionMap(m) = &self.controller { m.time_zone } else { 0 };
                 let here = if let Controller::ActionMap(m) = &self.controller { if let actionmap::Phase::Map(id) = m.phase { Some(id) } else { None } } else { None };
-                // An H map: the current one with an H place, else the hotel.
-                let target = if self.h_point.is_some() { here.unwrap_or(12) } else { 12 };
+                let invite = self.h.as_ref().and_then(|h| h.invite_map);
+                if invite.is_some() && self.last_talk.0 == Some(1) {
+                    // The invitation was declined.
+                    self.h = None;
+                    self.log.push("EventManager.Invite: declined".into());
+                    return Ok(());
+                }
+                // An H map: the invited one, the current one with an H
+                // place, else the hotel.
+                let target = invite.unwrap_or(if self.h_point.is_some() { here.unwrap_or(12) } else { 12 });
                 if let Some(h) = self.h.as_mut() {
                     h.phase = MassagePhase::Enter;
                 }
@@ -1930,7 +1940,7 @@ impl Game {
             }
             NightPhase::Shower => {
                 // `HDetail(Event1)` at the movie map's night H place.
-                self.h = Some(HRun { card: card.clone(), phase: MassagePhase::Enter, return_map: shower_map, posture: None, entities: Vec::new(), motion: "Idle", motion_until: 0, gauge: 0., male_gauge: 0., finishes: Vec::new(), breaths: Vec::new(), breath_group: -1, next_breath: 0, orgasms: 0, last_ms: now, night: Some("H_NightShowerAfter"), event_point: None });
+                self.h = Some(HRun { card: card.clone(), phase: MassagePhase::Enter, return_map: shower_map, posture: None, entities: Vec::new(), motion: "Idle", motion_until: 0, gauge: 0., male_gauge: 0., finishes: Vec::new(), breaths: Vec::new(), breath_group: -1, next_breath: 0, orgasms: 0, last_ms: now, night: Some("H_NightShowerAfter"), event_point: None, invite_map: None });
                 self.fade.start(now, true, self.fade_seconds);
                 self.pending_map = Some((shower_map, 3));
                 self.log.push(format!("NightEvent {card}: H on map {shower_map}"));
@@ -1945,7 +1955,7 @@ impl Game {
             }
             NightPhase::Morning if is_h_scene => {
                 // The morning H (`HDetail(Event2/3)`).
-                self.h = Some(HRun { card: card.clone(), phase: MassagePhase::Enter, return_map: morning_map, posture: None, entities: Vec::new(), motion: "Idle", motion_until: 0, gauge: 0., male_gauge: 0., finishes: Vec::new(), breaths: Vec::new(), breath_group: -1, next_breath: 0, orgasms: 0, last_ms: now, night: Some("H_NightMorningAfter"), event_point: None });
+                self.h = Some(HRun { card: card.clone(), phase: MassagePhase::Enter, return_map: morning_map, posture: None, entities: Vec::new(), motion: "Idle", motion_until: 0, gauge: 0., male_gauge: 0., finishes: Vec::new(), breaths: Vec::new(), breath_group: -1, next_breath: 0, orgasms: 0, last_ms: now, night: Some("H_NightMorningAfter"), event_point: None, invite_map: None });
                 self.fade.start(now, true, self.fade_seconds);
                 let zone = if let Controller::ActionMap(m) = &self.controller { m.time_zone } else { 0 };
                 self.pending_map = Some((morning_map, zone));
@@ -2084,7 +2094,7 @@ impl Game {
         if item.judge == 0 && is_h_scene {
             let point = if self.map_points.iter().any(|p| p.0 == "ItemEventH00") { "ItemEventH00" } else { "ItemEvent00" };
             let map = self.current_map();
-            self.h = Some(HRun { card, phase: MassagePhase::Enter, return_map: map, posture: None, entities: Vec::new(), motion: "Idle", motion_until: 0, gauge: 0., male_gauge: 0., finishes: Vec::new(), breaths: Vec::new(), breath_group: -1, next_breath: 0, orgasms: 0, last_ms: now, night: None, event_point: Some(point) });
+            self.h = Some(HRun { card, phase: MassagePhase::Enter, return_map: map, posture: None, entities: Vec::new(), motion: "Idle", motion_until: 0, gauge: 0., male_gauge: 0., finishes: Vec::new(), breaths: Vec::new(), breath_group: -1, next_breath: 0, orgasms: 0, last_ms: now, night: None, event_point: Some(point), invite_map: None });
             let zone = if let Controller::ActionMap(m) = &self.controller { m.time_zone } else { 0 };
             self.fade.start(now, true, self.fade_seconds);
             self.pending_map = Some((map, zone));
@@ -3142,7 +3152,19 @@ impl AmanatsuVm {
                 list.extend(crate::commands::choose(&game.adv_assets.h_start(here), &mut random));
                 game.rng = rng;
                 game.visit_played = true;
-                game.h = Some(HRun { card: card.clone(), phase: MassagePhase::Agree, return_map, posture: None, entities: Vec::new(), motion: "Idle", motion_until: 0, gauge: 0., male_gauge: 0., finishes: Vec::new(), breaths: Vec::new(), breath_group: -1, next_breath: 0, orgasms: 0, last_ms: now, night: None, event_point: None });
+                game.h = Some(HRun { card: card.clone(), phase: MassagePhase::Agree, return_map, posture: None, entities: Vec::new(), motion: "Idle", motion_until: 0, gauge: 0., male_gauge: 0., finishes: Vec::new(), breaths: Vec::new(), breath_group: -1, next_breath: 0, orgasms: 0, last_ms: now, night: None, event_point: None, invite_map: None });
+            } else if name == "btnInvite" {
+                // `EventManager.Invite` ("別マップに誘う"): an H map other
+                // than this one (`_mapID.HMaps`) with its `_invite`
+                // scenario; unless declined, the H there.
+                // SATD-amanatsu-port: the water-gun variants and the invite
+                // point's camera are not ported.
+                let here = game.current_map();
+                let dests: Vec<(i32, &str)> = [(12, "Normal_Hotel"), (11, "Normal_Rock")].into_iter().filter(|d| d.0 != here).collect();
+                let pick = dests[game.random(dests.len())];
+                list.extend(game.adv_assets.invite(pick.1));
+                game.visit_played = true;
+                game.h = Some(HRun { card: card.clone(), phase: MassagePhase::Agree, return_map: here, posture: None, entities: Vec::new(), motion: "Idle", motion_until: 0, gauge: 0., male_gauge: 0., finishes: Vec::new(), breaths: Vec::new(), breath_group: -1, next_breath: 0, orgasms: 0, last_ms: now, night: None, event_point: None, invite_map: Some(pick.0) });
             } else if name == "btnWith" {
                 // `EventManager.With`: the agree line, the short movie and
                 // `_shortMoiveAfterAssets[LV]`, then the favourability level.
@@ -3188,9 +3210,7 @@ impl AmanatsuVm {
                     list.extend(crate::talk::pick(&index, "wend", now));
                 }
                 game.visit_played = true;
-                if name == "btnInvite" {
-                    game.log.push("SATD-amanatsu-port: btnInvite (map invitation) not ported".into());
-                }
+
             } else {
                 game.log.push(format!("SATD-amanatsu-port: command {name} not ported"));
             }

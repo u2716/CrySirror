@@ -174,6 +174,11 @@ impl AdvAssets {
         (1..=4).filter_map(|i| self.get("_h", &format!("General_{i}"))).collect()
     }
 
+    /// `_invite` assets (`Normal_Hotel`, `Normal_Rock`, …).
+    pub fn invite(&self, key: &str) -> Option<String> {
+        self.get("_invite", key).map(|a| a.0)
+    }
+
     /// `_event` assets of `NightEvent` (`Before_Night_Cottage`, `Night_H_After`, …).
     pub fn event(&self, key: &str) -> Option<String> {
         self.get("_event", key).map(|a| a.0)

@@ -155,3 +155,8 @@
 - Native evidence: `ILLGAMES.Unity.FaceBlendShape` (`EyebrowCtrl`/`EyesCtrl`/`MouthCtrl` `FBSTarget` `PtnSet` close/open indices) on the head prefab, `Manager.Game.Expression.Initialize/Change` (argument order), `ILLGAMES.ADV.Commands.Base.Expression.Convert` + `Manager.Game.LoadExpressionData` (`ExpressionList` `cNN` `ExcelData`), `ActionMapCameraManager.SetCommnadCamera`, `CameraAngleTransformData.CalcUpper/CalcLower`, the `AngleData` prefab (`CinemachineCameraAngleData`, 39 poses).
 - Owner corpus: `prefab_blend_shapes` (`cf_O_face` 53 shapes `face.eye_f00_*`/`face.kuti_f00_*`, eyelash/eyelid 53, `mayuge` 11), `chara_glb` (morph targets in the character GLB), `command_angles` (camera 0 `Stand` at (0, 14, 8.6) facing the heroine).
 - Behaviour: the command menu frames the heroine at head height; a temporary forced closed-eye/open-mouth expression rendered with closed eyes and an open mouth (reverted). Before staggering the spawns, the map plus a morph-carrying heroine in one step hit `image upload batch`.
+
+## 2026-11-22 — Invitation (誘う)
+
+- Native evidence: `EventManager._Invite_d__39` ("別マップに誘う", `GetInviteAgreeAsset`, `SelectNum` != 1 → `ChangeMapAsync` → `Invite_g__HPlay_0`), `PropertyData._adv._invite`, `_mapID.HMaps` (11, 12).
+- Behaviour (auto slot patched to favourability LV1): 誘う on the pool plays `cm1`, moves to 岩陰 and starts the H (床キス at the first H point).
