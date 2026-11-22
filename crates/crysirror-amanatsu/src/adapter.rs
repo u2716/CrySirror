@@ -462,6 +462,8 @@ pub struct Game {
     map_entities: Vec<(u32, VfsPath)>,
     /// Light entities of the loaded map.
     map_lights: Vec<u32>,
+    /// The current map's `set_environment` before the config switches.
+    map_env: Option<serde_json::Value>,
     /// `AL.User.GlobalData` (`global.dat`): unlocked memories.
     global: crate::save::GlobalData,
     global_loaded: bool,
@@ -642,6 +644,10 @@ impl Game {
                 host.release_model(client, &old)?;
             }
         }
+        // The map's environment before the config's graphics switches,
+        // kept to re-apply them when the config changes.
+        self.map_env = Some(env.clone());
+        self.config_environment(&mut env);
         self.world.push(env);
         for spawn in world.light_entities(0x4000) {
             if let Some(id) = spawn["entity"]["id"].as_u64() {
@@ -2585,6 +2591,10 @@ impl Game {
             self.removed.extend(ui.clear());
         }
         if std::mem::take(&mut self.config_dirty) {
+            if let Some(mut env) = self.map_env.clone() {
+                self.config_environment(&mut env);
+                self.world.push(env);
+            }
             let bytes = self.config.to_xml().into_bytes();
             let written = host.storage(self.client_id).map_err(anyhow::Error::from).and_then(|s| Ok(s.write_atomic(&VfsPath::new(crysirror_core::path::Mount::Save, "user/config.xml")?, &bytes)?));
             if let Err(e) = written {
@@ -2975,6 +2985,21 @@ impl Game {
         let uv = self.eye_offsets.get(card).map(|o| crate::face::eye_uv_offsets(o)).unwrap_or_default();
         for &id in ids {
             self.world.push(json!({"op": "set_animation", "id": id, "animation": {"layers": layers, "morphs": morphs, "hidden": hidden, "uv_offsets": uv}}));
+        }
+    }
+
+    /// `Graphic/Bloom` and `Graphic/Fog` of the config on a map's
+    /// environment (SATD-amanatsu-port: `SSAO`, `DepthOfField`,
+    /// `Vignette`, `Quality`, `Antialiasing` and `Map`/`Shield` are not
+    /// applied).
+    fn config_environment(&self, env: &mut serde_json::Value) {
+        if !self.config.flag("Graphic", "Bloom", true) {
+            env["environment"]["bloom"] = json!(0.0);
+        }
+        if !self.config.flag("Graphic", "Fog", true) {
+            if let Some(e) = env["environment"].as_object_mut() {
+                e.remove("fog");
+            }
         }
     }
 
@@ -3540,6 +3565,7 @@ impl AmanatsuVm {
             particle_textures: std::collections::HashMap::new(),
             event_cg: None,
             global: Default::default(),
+            map_env: None,
             global_loaded: false,
             global_dirty: false,
             memory_play: None,
@@ -3891,7 +3917,8 @@ impl AmanatsuVm {
         for step in std::mem::take(&mut game.pending_steps) {
             match step {
                 crate::talk::Step::Voice(bundle, asset) => {
-                    match game.sound.play(host, client, &mut game.unity, sound::Kind::Voice, &bundle, &asset, 1.) {
+                    let personality = game.talk_card.as_ref().and_then(|c| game.spots.iter().find(|s| &s.0 == c)).map(|s| s.2);
+                    match game.sound.play_voice(host, client, &mut game.unity, &bundle, &asset, personality) {
                         Ok(()) => {
                             // The talking heroine's mouth follows the line.
                             let len = sound::Sound::clip_length(&mut game.unity, &bundle, &asset).unwrap_or(0.);
@@ -4141,7 +4168,8 @@ impl AmanatsuVm {
             }
         }
         if let Some((bundle, asset)) = game.h_voice.take() {
-            if let Err(e) = game.sound.play(host, client, &mut game.unity, sound::Kind::Voice, &bundle, &asset, 1.) {
+            let personality = game.h.as_ref().map(|h| h.card.clone()).and_then(|c| game.spots.iter().find(|s| s.0 == c).map(|s| s.2));
+            if let Err(e) = game.sound.play_voice(host, client, &mut game.unity, &bundle, &asset, personality) {
                 game.log.push(format!("H voice {asset}: {e:#}"));
             }
         }

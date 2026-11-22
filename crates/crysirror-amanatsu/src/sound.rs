@@ -13,6 +13,9 @@ use crysirror_core::{
 };
 use std::collections::HashMap;
 
+/// Personalities with a `Voice/cNN` config volume.
+const PERSONALITIES: i64 = 12;
+
 /// A sound request of scene logic, executed by the adapter.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Call {
@@ -132,6 +135,17 @@ impl Sound {
 
     /// `Manager.Sound.Play(Loader)` of a bundle asset.
     pub fn play(&mut self, host: &mut dyn HostServices, client: ClientId, unity: &mut Unity, kind: Kind, bundle: &str, asset: &str, gain: f32) -> Result<()> {
+        self.play_in(host, client, unity, kind, bundle, asset, gain, kind.group().to_owned())
+    }
+
+    /// A character voice in its personality's config volume
+    /// (`Voice/cNN`, under the voice master).
+    pub fn play_voice(&mut self, host: &mut dyn HostServices, client: ClientId, unity: &mut Unity, bundle: &str, asset: &str, personality: Option<i64>) -> Result<()> {
+        let group = personality.filter(|p| (0..PERSONALITIES).contains(p)).map_or_else(|| Kind::Voice.group().to_owned(), |p| format!("voice_c{p:02}"));
+        self.play_in(host, client, unity, Kind::Voice, bundle, asset, 1., group)
+    }
+
+    fn play_in(&mut self, host: &mut dyn HostServices, client: ClientId, unity: &mut Unity, kind: Kind, bundle: &str, asset: &str, gain: f32, group: String) -> Result<()> {
         let bytes = self.stream(unity, bundle, asset)?;
         let parameters = AudioParameters {
             gain,
@@ -143,7 +157,7 @@ impl Sound {
                 Kind::Voice => PcmBus::Voice,
                 _ => PcmBus::Sfx,
             },
-            mix_group: self.groups.then(|| kind.group().to_owned()),
+            mix_group: self.groups.then_some(group),
             ..Default::default()
         };
         let ticket = host.begin_audio(client, AudioRequest::Play { channel: kind.channel(), source: EncodedAudio { bytes: bytes.into(), frame_limit: None }, intro: None, parameters })?;
@@ -174,23 +188,25 @@ impl Sound {
         self.play(host, client, unity, Kind::SystemSe, &bundle, &asset, 1.)
     }
 
-    /// The config volumes (`Sound` Master/BGM/ENV/SystemSE/GameSE and the
-    /// `Voice` Master, each `Volume × Switch`) as mix groups under
-    /// `master`. SATD-amanatsu-port: the per-personality voice volumes are
-    /// not applied.
+    /// The config volumes (`Sound` Master/BGM/ENV/SystemSE/GameSE, the
+    /// `Voice` Master and each personality's `cNN`, each
+    /// `Volume × Switch`) as mix groups under `master`.
     pub fn apply_volumes(&mut self, host: &mut dyn HostServices, client: ClientId, cfg: &crate::config::Config) -> Result<()> {
         use crysirror_core::service::AudioMixGroupSettings as G;
-        let groups = [
-            ("master", None, cfg.gain("Sound", "Master")),
-            ("bgm", Some("master"), cfg.gain("Sound", "BGM")),
-            ("env", Some("master"), cfg.gain("Sound", "ENV")),
-            ("system_se", Some("master"), cfg.gain("Sound", "SystemSE")),
-            ("game_se", Some("master"), cfg.gain("Sound", "GameSE")),
-            ("voice", Some("master"), cfg.gain("Voice", "Master")),
+        let mut groups: Vec<(String, Option<&str>, f32)> = vec![
+            ("master".into(), None, cfg.gain("Sound", "Master")),
+            ("bgm".into(), Some("master"), cfg.gain("Sound", "BGM")),
+            ("env".into(), Some("master"), cfg.gain("Sound", "ENV")),
+            ("system_se".into(), Some("master"), cfg.gain("Sound", "SystemSE")),
+            ("game_se".into(), Some("master"), cfg.gain("Sound", "GameSE")),
+            ("voice".into(), Some("master"), cfg.gain("Voice", "Master")),
         ];
+        for p in 0..PERSONALITIES {
+            groups.push((format!("voice_c{p:02}"), Some("voice"), cfg.gain("Voice", &format!("c{p:02}"))));
+        }
         for (name, parent, gain) in groups {
             let settings = G { parent: parent.map(str::to_owned), gain, muted: false };
-            host.submit_audio(client, AudioRequest::SetMixGroup { name: name.to_owned(), settings, fade_ms: 50. })?;
+            host.submit_audio(client, AudioRequest::SetMixGroup { name, settings, fade_ms: 50. })?;
         }
         self.groups = true;
         Ok(())

@@ -231,3 +231,9 @@
 - Implementation: `save::GlobalData` (parse/write, round-trip test), `memory.rs` (list parse test, grid of thumbnails, title, zone toggles, card list, play/back), the shared `charaselect::Grid` (LoopGridView items anchored top-left; a zero `mItemSize` takes the prefab size), adapter `memory_scene`, `GlobalData` load/save in the engine save mount, unlock on every short movie start, the title's シーン回想 entry shown once a memory is unlocked, the movie returning to the list.
 - Behaviour (a `global.dat` with flags {5, 16}): the title lists シーン回想; the scene shows 22 memories (16 in the first rows, 5 and 16 unlocked), 15 preset cards with the first selected and the morning zone; clicking 乾杯 sets the title, the play button plays movie 5 on the pool (zone 1) with AL_F_00 (frame 1300), the list returns after it (frame 2200) and Back loads the title. Without `global.dat`, the `w2` track's movie 16 writes `global.dat` with flag 16.
 - Not established: grid scrolling, the card list's sources/sorting, hover frames, the original's framing of the list.
+
+## 2026-11-22 — Config graphics switches and personality voice volumes
+
+- Implementation: `Graphic/Bloom` and `Graphic/Fog` applied to the map environment (kept before the switches and re-sent when the config window closes after a change); `Voice/c00`–`c11` as `voice_cNN` mix groups under `voice`, used for talk and H voices by the speaking heroine's personality.
+- Behaviour (`w1` track, `with` save, a saved `config.xml` with Bloom/Fog off; removed afterwards): the world environment at frame 1900 has `bloom` 0 and no fog.
+- Not established: audible voice levels (runs are muted); the voice rows' controls in the window.

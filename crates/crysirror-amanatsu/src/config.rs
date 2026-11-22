@@ -13,14 +13,16 @@
 //! save mount (`user/config.xml`); a missing file is first read from the
 //! installation's `UserData/config.xml`.
 //!
-//! Applied: volumes (mix groups), `Text/FontSpeed` (message reveal),
-//! `Text/WindowAlpha`, `GameSystem/AutoSaveMode` and `HScene/Visible`.
+//! Applied: volumes (mix groups, with a `voice_cNN` group per
+//! personality under the voice master), `Text/FontSpeed` (message reveal),
+//! `Text/WindowAlpha`, `GameSystem/AutoSaveMode`, `HScene/Visible` and
+//! `Graphic/Bloom`/`Fog` (re-applied to the map when the window closes).
 //!
-//! SATD-amanatsu-port: the other values (camera, graphics, H draw
-//! options, read skip) are stored but not applied; keys absent from the shipped file (`Urine`,
+//! SATD-amanatsu-port: the other values (camera, the other graphics
+//! switches, H draw options, read skip) are stored but not applied; keys absent from the shipped file (`Urine`,
 //! `UrineDraw`, `Ambient`, `SelfShadow`, `SSR`, `ReflectionProbe`,
 //! `SunShaft`, `Rain`) use their field names; the screen dropdowns, colour
-//! pickers, per-personality voice rows, section shortcuts, slider number
+//! pickers, the per-personality voice rows' controls, section shortcuts, slider number
 //! texts, reset (`btnInit`) defaults and the window fade are not ported.
 use crate::level::Level;
 use crysirror_unity::{managed::Value, scene6::Scene6, ugui};
