@@ -176,6 +176,9 @@ pub struct KrkrHost {
     pub(crate) hint_hover: Option<usize>,
     pub(crate) mouse: crate::native_mouse::MouseState,
     pub input: crysirror_core::service::InputFrame,
+    /// Latest host key levels, independent of an older queued event callback.
+    pub(crate) held_buttons: u64,
+    pub(crate) pressed_since_query: u64,
     pub now: u64,
     /// The presenting host's display (`System.screenWidth`, windowEx monitors);
     /// `None` falls back to the canvas.
@@ -282,6 +285,8 @@ impl KrkrHost {
             hint_hover: None,
             mouse: Default::default(),
             input: Default::default(),
+            held_buttons: 0,
+            pressed_since_query: 0,
             now: 0,
             display: None,
             canvas,

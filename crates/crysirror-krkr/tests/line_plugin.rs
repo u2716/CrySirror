@@ -889,7 +889,7 @@ fn native_application_focus_defaults_are_null_and_edges_use_shared_host_focus() 
             function onActivate(){global.windowEvents++;Debug.message('window-focus',global.windowEvents);}
             function onDeactivate(){global.windowEvents++;Debug.message('window-focus',global.windowEvents);}
         }
-        var window=new W();Debug.message('focus-ready');
+        var window=new W();window.visible=true;Debug.message('focus-ready');
     "#,
     );
     runtime.host.window_focused = Some(true);
@@ -924,6 +924,8 @@ fn monitor_info_preserves_original_hresult_truthiness_and_null_handle_policy() {
         var bad=false;try{System.getMonitorInfo(true,42);}catch(e){bad=true;}if(!bad)throw new Exception('primitive monitor argument');
         bad=false;try{System.getMonitorInfo(true,%[HWND:42]);}catch(e){bad=true;}if(!bad)throw new Exception('foreign window capability');
         var window=new Window();if(System.getMonitorInfo(false,window).primary!=1)throw new Exception('owned window display');
+        if(window.HWND !== 0)throw new Exception('unexpected native plug-in handle');
+        bad=false;try{window.HWND=42;}catch(e){bad=true;}if(!bad)throw new Exception('writable HWND');
         Debug.message('monitor-reference-quirk-complete');
     "#,
     );
@@ -1314,6 +1316,25 @@ fn layer_movie_real_eof_sends_one_stop_after_the_last_picture() {
 }
 
 #[test]
+fn accepted_menu_hit_does_not_read_back_the_portrait_behind_it() {
+    let (_dir, mut runtime) = fixture(r#"
+        var w = new Window(); w.visible = true;
+        var root = new Layer(w, null);
+        var part = new Layer(w,root); part.setSize(8,8);
+        part.fillRect(0,0,4,8,0xff808080);
+        var portrait = new Layer(w,root); portrait.setSize(8,8); portrait.visible=true;
+        portrait.piledCopy(0,0,part,0,0,8,8); portrait.hitThreshold=128;
+        var menu = new Layer(w,root); menu.setSize(8,8); menu.visible=true;
+        menu.hitThreshold=0;
+        menu.onMouseEnter=function(){Debug.message("menu-entered");};
+    "#);
+    // This fixture has no Canvas readback presenter. Only the menu is needed
+    // to decide the hit, even if the underlying bitmap needs preparation.
+    runtime.tick(16, InputFrame { pointer_x: 2, pointer_y: 2, ..Default::default() }).unwrap();
+    assert!(runtime.inspect()["sessions"][0]["native"]["log_tail"].to_string().contains("menu-entered"));
+}
+
+#[test]
 fn composite_alpha_hits_wait_for_shared_workers_and_refresh_after_copy() {
     use crysirror_core::{service::buttons, state::ClientId};
     let (dir, mut runtime)=fixture(r#"
@@ -1349,7 +1370,14 @@ fn composite_alpha_hits_wait_for_shared_workers_and_refresh_after_copy() {
         runtime.tick(1,InputFrame{buttons_down:down,buttons_pressed:0,pointer_x:x,pointer_y:0}).unwrap();
         // Input remains queued while coverage is pending; stable samples may
         // coalesce but their press/release edges must be consumed exactly once.
-        for _ in 0..200 {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let state = runtime.inspect();
+            let native = &state["sessions"][0]["native"];
+            if native["queued_input"] == 0 && native["input_delivery_pending"] == false {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "input delivery did not finish");
             runtime.tick(1,InputFrame{buttons_down:down,buttons_pressed:0,pointer_x:x,pointer_y:0}).unwrap();
             std::thread::yield_now();
         }
