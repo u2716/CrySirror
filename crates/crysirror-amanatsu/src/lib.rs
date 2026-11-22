@@ -19,6 +19,7 @@ pub mod map;
 pub mod oil;
 pub mod params;
 pub mod save;
+pub mod sm;
 pub mod saveload;
 pub mod scenes;
 pub mod sound;

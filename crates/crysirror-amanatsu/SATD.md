@@ -9,9 +9,8 @@
 `ChangeMap`, heroine entry/standing placement, the `ActionMapUI` HUD
 (cameras, 2D map, `Skip`) and time-zone advance (tutorial
 `ConfirmDialog`, HUD config/help and button fade animations, the night
-event's short movies (shower `_nightEventShowerSMID`, morning
-`_nightEventSMID`: timelines, coordinates, the flag turning morning events
-1/2 into 3), `GetEvent` (item/rest events), `AutoSaveMode`,
+event's after-bath/swimsuit coordinates and the flag turning morning
+events 1/2 into 3, `GetEvent` (item/rest events), `AutoSaveMode`,
 link-partner placement (`SetCharaForMap` `isLink`), the `MapSelectUI`
 hover faces (`_charaInfos`) and player icon (`_pIcon`),
 `MapSelectUI` next-zone reloading a map behind it, the light settings'
@@ -24,8 +23,8 @@ movement, `CharaSelectUI` sources/sorting/pairs/release, scroll views and
 `*_Fin` assets of `Get*Asset`, the H-after/move-map ends, the exact
 `GetGeneralCommandAgreeAsset` branches beyond favourability > 3, cost
 for massage/with/invite, the favourability level-up
-short movies (`IsNextShortMovie` gates are ported, the `with` movies and
-LV increase are not), parameter gauge/max animations, `IsForgetPoint`; talks now play `e1-approach` and one
+short movies (`IsNextShortMovie` gates, the movies and the LV increase are
+ported; `sm.rs` lists the timeline tracks that are not played), parameter gauge/max animations, `IsForgetPoint`; talks now play `e1-approach` and one
 `e1-N`), ADV expressions/motions/event CGs/cloth states and the
 auto/skip/log/config buttons and text reveal,
 the map-select title/option buttons, the save list's comment entry, local-time stamps (UTC is used) and animations, map open flags from save progress);
@@ -114,3 +113,4 @@ H scenes and save/load, recorded in a validation note.
 | 2026-11-22 | `SaveLoadUI` (`saveload.rs`): title (`IsTitle`) and map-select (`_btnSaveLoad`) entry, 10 tabs × 10 slots cloned from the templates and the auto slot, `SaveDataComponent.Refresh` states, selection, `StartBubble` kinds, Load/New/Override/Delete dialogs (`SaveLoadDialog`, zone sprites), slot files (`SaveInfo.GetFileName`), the newest-slot mark; the title no longer loads the newest save directly. Shared uGUI: uncontrolled layout-group children take their flexible cell and sit inside it by alignment. | Listed above. |
 | 2026-11-22 | H postures: `AnimationListInfo` members (`Mode` category, `Positions`, `Category` flags, `ReleasePhase`, `PostureState`, `WeaknessID`), map `HPoint`s (`h/list/hpoint/object` → `hpoint_NN`: `_placeType`, `_isFirst`), `HPointCtrl.FindFirst`, `FindPosture.Check` (`CheckReleasePhase`, weakness variants, place, first not standing) and the random first posture, `PostureSelect` (`hui.rs`: category buttons by `_viewDatas`, the category's posture list placed as `LoopListView2` does, fold/unfold) and `ChangePosture` respawning the pair. Remaining: moving between H points (`Canvas Point`), `HPointLimit`, exhaustion (`isWeakness`), Les/M1F2 actors, the list scroll and animations. | Listed above. |
 | 2026-11-22 | H point mode (`Option/RightBottomArea/Point` → `Canvas Point`): markers cloned from the place-type filter buttons at the HPoints' screen positions (edge-pinned outside the view), Back, `ChangePoint` with a posture usable at the new place and the posture lists rebuilt; the male gauge and the category finishes (`OrgasmF`, `OrgasmM_IN` 射精, `OrgasmM_OUT` ぶっかける, 同時絶頂) by the states the posture's animator has. Remaining: HPoint particle markers and colliders (no particle systems in the shared importer), the point mode's free camera and filters, the finish sub-menus (外出し/飲ませる/吐かせる), fluids, male finish counts. | Listed above. |
+| 2026-11-22 | Short movies: shared `crysirror-unity` `timeline.rs`; `sm.rs` (`stm_NN` Motion/Camera animator tracks, scene fades, `stm_cam_NN` root/near-far-FOV curves at the heroine's height, `al_sm_personal_NN`); the adapter moves to the movie map (`al_short_movie`), places the heroine at `ShortNN` (`_shortMoiveID`), plays states/camera (rig camera facing −Z)/fades on the timeline clock, then the after ADV; 一緒に遊ぶ (agree → movie → `_shortMoiveAfterAssets[LV]` → LV up → back to the map), the night shower and morning greeting movies. Remaining tracks: Face, SE, ClothState, BasePos, FluidFlow, Wet, TimeScale, Shake, Activation, Control, Alembic, items; skip. | Listed above. |

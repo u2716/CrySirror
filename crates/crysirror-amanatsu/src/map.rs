@@ -195,6 +195,9 @@ pub struct MapWorld {
     /// `AL.ActionPoint`s of the move-point prefab: (name, Unity world
     /// position, world rotation).
     pub points: Vec<(String, [f32; 3], [f32; 4])>,
+    /// `ActionPoint`s of kind 1 (`GetShortMoviePoint`): short movie id,
+    /// position, rotation.
+    pub short_movies: Vec<(i32, [f32; 3], [f32; 4])>,
     pub log: Vec<String>,
 }
 
@@ -344,12 +347,16 @@ pub fn load_with_budget(unity: &mut Unity, info: &MapInfo, time_zone: i32, textu
     // Move-point prefab cameras.
     let mut cameras = Vec::new();
     let mut action_points = Vec::new();
+    let mut short_movies = Vec::new();
     match crate::level::Level::prefab(unity, &format!("lib/{}", info.point.0), &info.point.1) {
         Ok(points) => {
             for (i, n) in points.scene.nodes.iter().enumerate() {
                 if n.components.iter().any(|c| c.script == "AL.ActionPoint") {
                     let (_, rot, pos) = world6::world_matrix(&points.scene, i).to_scale_rotation_translation();
                     action_points.push((n.name.clone(), pos.to_array(), rot.to_array()));
+                    if let Some(c) = n.components.iter().find(|c| c.script == "AL.ActionPoint").filter(|c| c.fields.int("_kind") == Some(1)) {
+                        short_movies.push((c.fields.int("_shortMoiveID").unwrap_or(0) as i32, pos.to_array(), rot.to_array()));
+                    }
                 }
             }
             for i in 1..=9 {
@@ -366,7 +373,7 @@ pub fn load_with_budget(unity: &mut Unity, info: &MapInfo, time_zone: i32, textu
     if let Some(s) = &sky {
         log.push(format!("Azure sky: zenith {:?} horizon {:?}", s.zenith, s.horizon));
     }
-    Ok(MapWorld { info: info.clone(), chunks, report, sun, lights, sky, settings, post, fog, cameras, points: action_points, log })
+    Ok(MapWorld { info: info.clone(), chunks, report, sun, lights, sky, settings, post, fog, cameras, points: action_points, short_movies, log })
 }
 
 impl MapWorld {

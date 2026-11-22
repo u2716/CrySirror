@@ -101,6 +101,23 @@ struct HRun {
     night: Option<&'static str>,
 }
 
+/// A short movie (`EventManager.EventShortMovie` / `ShortMovie.PlayAsync`).
+struct MoviePlay {
+    movie: crate::sm::Movie,
+    card: String,
+    /// The movie's map is loading (false: playing).
+    entering: bool,
+    start_ms: u64,
+    /// The short movie point (Unity space).
+    base: Option<([f32; 3], [f32; 4])>,
+    cameras: std::collections::HashMap<String, crysirror_unity::animator::Clip>,
+    entities: Vec<u32>,
+    heroine_clip: Option<usize>,
+    fades: Vec<(f64, bool, f64, [f32; 3])>,
+    /// The ADV after the movie (`endADVAsset`).
+    after: Vec<String>,
+}
+
 /// `EventManager.NightEvent` phases.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum NightPhase {
@@ -200,6 +217,18 @@ pub struct Game {
     /// `_nightEventShowerSMID`/`_nightEventSMID` movies' maps
     /// (`al_short_movie` `Map`).
     night_movie_maps: (i32, i32),
+    /// `_nightEventShowerSMID`, `_nightEventSMID`.
+    night_movie_ids: (i32, i32),
+    /// `al_short_movie`: movie id → map.
+    movie_maps: std::collections::HashMap<i32, i32>,
+    movie: Option<MoviePlay>,
+    /// A short movie to start when the current conversation ends (card,
+    /// id, after ADV).
+    pending_movie: Option<(String, i32, Vec<String>)>,
+    /// The map a "一緒に遊ぶ" movie returns to.
+    with_return: Option<i32>,
+    /// The height pick (`_S`/`_M`/`_L` index) of the last character.
+    last_height_pick: usize,
     /// The H place kind (`HPoint._placeType`) of the H scene.
     h_place: i32,
     /// `PostureSelect` of the H scene.
@@ -440,7 +469,10 @@ impl Game {
                 self.log.push("SATD-amanatsu-port: esthetics map without Est00".into());
             }
         }
-        let heroines: Vec<String> = if self.massage.is_some() || self.h.is_some() || self.night.is_some() { Vec::new() } else { self.heroines.iter().filter(|h| self.placement.get(*h) == Some(&id)).cloned().collect() };
+        if let Some(m) = self.movie.as_mut().filter(|m| m.entering) {
+            m.base = world.short_movies.iter().find(|p| p.0 == m.movie.id).map(|p| (p.1, p.2));
+        }
+        let heroines: Vec<String> = if self.massage.is_some() || self.h.is_some() || self.night.is_some() || self.movie.is_some() { Vec::new() } else { self.heroines.iter().filter(|h| self.placement.get(*h) == Some(&id)).cloned().collect() };
         for (card, point) in heroines.iter().zip(world.points.iter().filter(|p| p.0.contains("tati"))) {
             let (_, pos, rot) = point;
             let q = glam::Quat::from_array(crysirror_unity::gltf::mirror_quat(*rot));
@@ -558,11 +590,18 @@ impl Game {
         self.lists = Some(lists);
         let human = human?;
         let suffix = human.height_suffix();
+        self.last_height_pick = match suffix {
+            "S" => 0,
+            "M" => 1,
+            _ => 2,
+        };
         let mut clips = Vec::new();
         self.baked_states.clear();
         for state in states {
             // `_L`/`_M`/`_S` by height, falling back to the other sizes.
-            let found = [suffix, "M", "L", "S"].iter().find_map(|sz| human.exact_state_tracks(&mut self.unity, bundle, controller, &format!("{state}_{sz}"), state).ok());
+            // States named without the size pick their motion by height
+            // (the short movie animators).
+            let found = [suffix, "M", "L", "S"].iter().find_map(|sz| human.exact_state_tracks(&mut self.unity, bundle, controller, &format!("{state}_{sz}"), state).ok()).or_else(|| human.controller_tracks(&mut self.unity, bundle, controller, state).ok());
             match found {
                 Some(t) => {
                     clips.push(t);
@@ -1751,11 +1790,12 @@ impl Game {
                 self.next_time_zone(map, now);
             }
             NightPhase::Invite => {
-                // SATD-amanatsu-port: the shower short movie (its
-                // timeline, the after-bath coordinate) is not played.
+                // `EventShortMovie(_nightEventShowerSMID)` and its ADV.
+                // SATD-amanatsu-port: the after-bath coordinate is not applied.
                 let list = event(if cottage { "Before_Night_Cottage_ShortMovie" } else { "Before_Night_NO_Cottage_ShortMovie" });
                 self.night.as_mut().unwrap().phase = NightPhase::Shower;
-                self.night_talk(&card, list, &[])?;
+                let id = self.night_movie_ids.0;
+                self.start_movie(&card, id, list, now);
             }
             NightPhase::Shower => {
                 // `HDetail(Event1)` at the movie map's night H place.
@@ -1820,7 +1860,9 @@ impl Game {
         } else {
             self.night.as_mut().unwrap().phase = NightPhase::Greetings;
             let list = self.adv_assets.event("Greetings_ShortMovie").into_iter().collect();
-            self.night_talk(&card, list, &[])
+            let (id, now) = (self.night_movie_ids.1, self.now);
+            self.start_movie(&card, id, list, now);
+            Ok(())
         }
     }
 
@@ -1831,6 +1873,130 @@ impl Game {
             }
         }
         0
+    }
+
+    /// `EventShortMovie`: the movie's map (`ALShortMovieContent.MapID`)
+    /// behind the fade, then `ShortMovie.PlayAsync` and the ADV after it.
+    fn start_movie(&mut self, card: &str, id: i32, after: Vec<String>, now: u64) {
+        // `CommandScene` closes for the movie.
+        self.command = None;
+        while let Some(i) = self.overlays.iter().position(|(l, _)| l.name == "command") {
+            let (_, mut ui) = self.overlays.remove(i);
+            self.removed.extend(ui.clear());
+        }
+        let movie = match crate::sm::Movie::load(&mut self.unity, id) {
+            Ok(m) => m,
+            Err(e) => {
+                self.log.push(format!("ShortMovie {id}: {e:#}"));
+                let _ = self.night_talk(card, after, &[]);
+                return;
+            }
+        };
+        let zone = if let Controller::ActionMap(m) = &self.controller { m.time_zone } else { 0 };
+        let map = self.movie_maps.get(&id).copied().unwrap_or_else(|| self.current_map());
+        self.log.push(format!("ShortMovie {id} on map {map}: {:.1} s", movie.duration));
+        self.movie = Some(MoviePlay { movie, card: card.to_owned(), entering: true, start_ms: now, base: None, cameras: Default::default(), entities: Vec::new(), heroine_clip: None, fades: Vec::new(), after });
+        self.fade.start(now, true, self.fade_seconds);
+        self.pending_map = Some((map, zone));
+    }
+
+    /// `ShortMovie.Initialize`/`Load`: the heroine at the short movie point
+    /// in its animator, the camera clips at her height.
+    fn begin_movie(&mut self, host: &mut dyn HostServices, client: ClientId, now: u64) -> Result<()> {
+        let Some((card, id, states, base)) = self.movie.as_ref().map(|m| (m.card.clone(), m.movie.id, m.movie.heroine_states(), m.base)) else { return Ok(()) };
+        let (pos, rot) = base.unwrap_or(([0.; 3], [0., 0., 0., 1.]));
+        if base.is_none() {
+            self.log.push(format!("SATD-amanatsu-port: short movie point {id} not on the map"));
+        }
+        let q = glam::Quat::from_array(crysirror_unity::gltf::mirror_quat(rot));
+        let (x, y, z) = q.to_euler(glam::EulerRot::XYZ);
+        let t = json!({"translation": crysirror_unity::gltf::mirror_point(pos), "rotation_degrees": [x.to_degrees(), y.to_degrees(), z.to_degrees()], "scale": [1.0, 1.0, 1.0]});
+        let refs: Vec<&str> = states.iter().map(String::as_str).collect();
+        let first = refs.first().copied().unwrap_or("Idle");
+        let sun = self.map_sun;
+        let entities = self.spawn_character_states(host, client, &card, t, sun, crate::sm::ANIMATORS, &format!("stm_f_{id:02}"), &refs, first)?;
+        let pick = self.last_height_pick;
+        let cameras = match self.movie.as_ref().map(|m| m.movie.clone()) {
+            Some(m) => m.camera_clips(&mut self.unity, pick).unwrap_or_default(),
+            None => Default::default(),
+        };
+        let (personality, name) = self.unity.read_all(&card).ok().and_then(|b| crate::card::Card::parse(&b).ok()).and_then(|c| c.parameter()).map_or((0, String::new()), |p| (p.0, p.1));
+        if !self.spots.iter().any(|s| s.0 == card) {
+            self.spots.push((card.clone(), crysirror_unity::gltf::mirror_point(pos), personality, name));
+        }
+        if let Some(m) = self.movie.as_mut() {
+            // `SceneFadeInfo`: In covers, Out reveals, InOut covers then
+            // reveals.
+            for f in &m.movie.fades {
+                match f.kind {
+                    1 => m.fades.push((f.start, true, f.duration, f.color)),
+                    2 => m.fades.push((f.start, false, f.duration, f.color)),
+                    3 => {
+                        m.fades.push((f.start, true, f.duration / 2., f.color));
+                        m.fades.push((f.start + f.duration / 2., false, f.duration / 2., f.color));
+                    }
+                    _ => {}
+                }
+            }
+            m.entering = false;
+            m.start_ms = now;
+            m.entities = entities;
+            m.cameras = cameras;
+        }
+        self.movie_update(now);
+        Ok(())
+    }
+
+    /// One frame of the movie: heroine states, camera, fades; at the end
+    /// the ADV after it.
+    fn movie_update(&mut self, now: u64) {
+        let Some(m) = self.movie.as_mut().filter(|m| !m.entering) else { return };
+        let t = now.saturating_sub(m.start_ms) as f64 / 1000.;
+        // The heroine's state of the latest started clip.
+        if let Some(i) = m.movie.heroine.iter().rposition(|c| c.start <= t) {
+            if m.heroine_clip != Some(i) {
+                m.heroine_clip = Some(i);
+                let c = &m.movie.heroine[i];
+                for &e in &m.entities {
+                    self.world.push(json!({"op": "set_animation", "id": e, "animation": {"layers": [{"clip": c.state, "looping": c.looping}]}}));
+                }
+            }
+        }
+        // The camera of the active (or next) camera clip, relative to the
+        // short movie point.
+        let cam = m.movie.camera.iter().rev().find(|c| c.start <= t).or(m.movie.camera.first()).cloned();
+        if let Some(c) = cam {
+            let local = (c.clip_in + (t.clamp(c.start, c.end) - c.start) * c.time_scale) as f32;
+            if let Some((p, r, fov)) = m.cameras.get(&c.state).and_then(|clip| crate::sm::camera_pose(clip, clip.start + local)) {
+                let (bp, br) = m.base.unwrap_or(([0.; 3], [0., 0., 0., 1.]));
+                let base = glam::Mat4::from_rotation_translation(glam::Quat::from_array(br), glam::Vec3::from_array(bp));
+                let eye = base.transform_point3(glam::Vec3::from_array(p));
+                let rot = glam::Quat::from_array(br) * glam::Quat::from_array(r);
+                // The animated rig's camera looks along its −Z (the camera
+                // object is turned half way round under it).
+                let fwd = rot * -glam::Vec3::Z;
+                let up = rot * glam::Vec3::Y;
+                let v = map::View { eye: crysirror_unity::gltf::mirror_point(eye.to_array()), target: crysirror_unity::gltf::mirror_point((eye + fwd).to_array()), up: crysirror_unity::gltf::mirror_point(up.to_array()), fov: fov.unwrap_or(40.), near: 0.1, far: 1000. };
+                self.world.push(v.command());
+                self.view = Some(v);
+            }
+        }
+        let m = self.movie.as_mut().unwrap();
+        while m.fades.first().is_some_and(|f| f.0 <= t) {
+            let (_, cover, duration, color) = m.fades.remove(0);
+            self.fade.color = color;
+            self.fade.start(now, cover, duration as f32);
+        }
+        if t >= m.movie.duration {
+            let m = self.movie.take().unwrap();
+            self.log.push(format!("ShortMovie {} end", m.movie.id));
+            if !self.fade.fading(now) {
+                self.fade.start(now, false, 0.3);
+            }
+            if let Err(e) = self.night_talk(&m.card, m.after, &[]) {
+                self.log.push(format!("ShortMovie ADV: {e:#}"));
+            }
+        }
     }
 
     /// A click on a standing heroine: the first meeting, else the command
@@ -2015,6 +2181,7 @@ impl AmanatsuVm {
         let movie_maps = crate::tables::short_movie_maps(&mut unity).unwrap_or_default();
         let movie = |key: &str, default: i64| movie_maps.get(&(event.and_then(|e| e.int(key)).unwrap_or(default) as i32)).copied().unwrap_or(2);
         let night_movie_maps = (movie("_nightEventShowerSMID", 20), movie("_nightEventSMID", 22));
+        let night_movie_ids = (event.and_then(|e| e.int("_nightEventShowerSMID")).unwrap_or(20) as i32, event.and_then(|e| e.int("_nightEventSMID")).unwrap_or(22) as i32);
         let (adv_assets, adv_maps) = crate::commands::AdvAssets::from_property_data(&pd.fields("_adv").cloned().unwrap_or_default(), pd.fields("_mapID"));
         let mut game = Game {
             sound,
@@ -2050,6 +2217,12 @@ impl AmanatsuVm {
             last_talk: (None, false),
             night_rate,
             night_movie_maps,
+            night_movie_ids,
+            movie_maps,
+            movie: None,
+            pending_movie: None,
+            last_height_pick: 1,
+            with_return: None,
             map_released: false,
             massage: None,
             adv_assets,
@@ -2150,6 +2323,8 @@ impl AmanatsuVm {
                     game.enter_oil_scene(host, client, now)?;
                 } else if game.h.as_ref().is_some_and(|h| h.phase == MassagePhase::Enter) {
                     game.enter_h_scene(now)?;
+                } else if game.movie.as_ref().is_some_and(|m| m.entering) {
+                    game.begin_movie(host, client, now)?;
                 } else if game.night.as_ref().is_some_and(|n| n.phase == NightPhase::NewDay) {
                     game.night_morning(host, client)?;
                 } else {
@@ -2270,6 +2445,9 @@ impl AmanatsuVm {
                 }
             }
         }
+        if game.movie.is_some() {
+            game.movie_update(now);
+        }
         if game.h.is_some() && game.talk.is_none() {
             let clicked_scene = input.buttons_pressed & b::MOUSE_LEFT != 0 && handler.is_none() && !fading;
             game.h_update(clicked_scene, now);
@@ -2310,7 +2488,7 @@ impl AmanatsuVm {
             game.pending_steps.extend(steps);
             click = None;
             game.pressed = None;
-        } else if input.buttons_pressed & b::MOUSE_LEFT != 0 && handler.is_none() && !fading && game.massage.is_none() && game.h.is_none() && game.night.is_none() && matches!(&game.controller, Controller::ActionMap(m) if matches!(m.phase, actionmap::Phase::Map(_))) {
+        } else if input.buttons_pressed & b::MOUSE_LEFT != 0 && handler.is_none() && !fading && game.massage.is_none() && game.h.is_none() && game.night.is_none() && game.movie.is_none() && matches!(&game.controller, Controller::ActionMap(m) if matches!(m.phase, actionmap::Phase::Map(_))) {
             let hit_ui = layouts.iter().any(|l| l.hits.iter().any(|(_, r)| r.contains(x, y)));
             if !hit_ui {
                 if let Some(spot) = game.pick_heroine(x, y).filter(|_| game.command.is_none()) {
@@ -2322,6 +2500,7 @@ impl AmanatsuVm {
         }
         let mut massage_talk_ended = false;
         let mut night_talk_ended = false;
+        let mut movie_start: Option<(String, i32, Vec<String>)> = None;
         for step in std::mem::take(&mut game.pending_steps) {
             match step {
                 crate::talk::Step::Voice(bundle, asset) => {
@@ -2340,8 +2519,16 @@ impl AmanatsuVm {
                             game.apply_points(card, kind, talk.selected);
                         }
                         massage_talk_ended = true;
-                        if let Some(card) = game.pending_with.take() {
+                        if let Some(m) = game.pending_movie.take() {
+                            movie_start = Some(m);
+                        } else if let Some(card) = game.pending_with.take() {
                             game.favorability_up(&card);
+                            // `EndProc`: back to the action map after the movie.
+                            if let Some(map) = game.with_return.take() {
+                                let zone = if let Controller::ActionMap(m) = &game.controller { m.time_zone } else { 0 };
+                                game.fade.start(now, true, game.fade_seconds);
+                                game.pending_map = Some((map, zone));
+                            }
                         }
                         if oi < game.overlays.len() {
                             let (_, mut ui) = game.overlays.remove(oi);
@@ -2487,6 +2674,9 @@ impl AmanatsuVm {
         if night_talk_ended {
             game.night_talk_ended(now)?;
         }
+        if let Some((card, id, after)) = movie_start {
+            game.start_movie(&card, id, after, now);
+        }
         if massage_exit {
             game.massage_exit()?;
         }
@@ -2577,10 +2767,19 @@ impl AmanatsuVm {
                 let mut rng = game.rng;
                 let mut random = |n: usize| game_random(&mut rng, n);
                 list.extend(crate::commands::choose(&game.adv_assets.agree("With", fav_lv, false), &mut random));
-                list.extend(crate::commands::choose(&game.adv_assets.short_movie_after(fav_lv), &mut random));
+                let after: Vec<String> = crate::commands::choose(&game.adv_assets.short_movie_after(fav_lv), &mut random).into_iter().collect();
                 game.rng = rng;
                 game.visit_played = true;
                 game.pending_with = Some(card.clone());
+                // `tableSMPeronals[personality][LV]`.
+                let personality = game.spots.get(spot).map_or(0, |s| s.2);
+                match crate::sm::personal_movie(&mut game.unity, personality, fav_lv) {
+                    Ok(Some(id)) => {
+                        game.pending_movie = Some((card.clone(), id, after));
+                        game.with_return = Some(game.current_map());
+                    }
+                    _ => list.extend(after),
+                }
             } else if name == "btnMassage" {
                 // `EventManager.Massage`: the agree line, then the oil scene
                 // on the esthetics map.

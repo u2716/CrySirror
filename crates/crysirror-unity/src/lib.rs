@@ -26,6 +26,7 @@ pub mod managed_gen;
 pub mod reader;
 pub mod scene6;
 pub mod texture;
+pub mod timeline;
 pub mod typetree;
 pub mod ugui;
 pub mod unity6;

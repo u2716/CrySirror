@@ -1497,3 +1497,86 @@ fn tables_with_key() {
         }
     }
 }
+
+/// MonoBehaviours of a bundle (`AMANATSU_BUNDLE`) by script class, with
+/// the members of those whose name contains `AMANATSU_ASSET`.
+#[test]
+#[ignore = "needs AMANATSU_ROOT and AMANATSU_BUNDLE"]
+fn bundle_behaviours() {
+    let mut u = unity();
+    let bundle = std::env::var("AMANATSU_BUNDLE").unwrap();
+    let want = std::env::var("AMANATSU_ASSET").ok();
+    let width: usize = std::env::var("AMANATSU_WIDTH").ok().and_then(|w| w.parse().ok()).unwrap_or(300);
+    let mut counts: std::collections::BTreeMap<String, usize> = Default::default();
+    for key in u.bundle_files().into_iter().filter(|k| k.starts_with(&format!("bundle:{bundle}#")) && !k.ends_with(".resS")) {
+        let ids: Vec<i64> = u.file(&key).unwrap().objects.iter().filter(|o| o.class_id == 114).map(|o| o.path_id).collect();
+        for id in ids {
+            let Ok(f) = u.decode(&key, id) else { continue };
+            let script = f.pptr("m_Script").map(|p| u.script_name(&key, p)).unwrap_or_default();
+            *counts.entry(script.clone()).or_default() += 1;
+            if std::env::var("AMANATSU_SCRIPT").is_ok_and(|w| script.contains(&w)) {
+                println!("-- {id} {script} {}", f.string("m_Name").unwrap_or(""));
+            }
+            let name = f.string("m_Name").unwrap_or("").to_owned();
+            let by_id = std::env::var("AMANATSU_IDS").is_ok_and(|v| v.split(',').any(|x| x.trim() == id.to_string()));
+            if by_id || want.as_deref().is_some_and(|w| name.contains(w)) {
+                println!("== {id} {script} {name}");
+                for (k, v) in &f.0 {
+                    println!("  {k} = {}", format!("{v:?}").chars().take(width).collect::<String>());
+                }
+            }
+        }
+    }
+    for (k, n) in counts {
+        println!("{n:5} {k}");
+    }
+}
+
+/// A controller state's clip bindings (`AMANATSU_BUNDLE`, `AMANATSU_ASSET`
+/// controller, `AMANATSU_STATE`) with samples at 0 s and the end.
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn state_clip_bindings() {
+    use crysirror_unity::animator::{path_hash, Clip, Controller};
+    let mut u = unity();
+    let (k, id) = u.bundle_asset(&std::env::var("AMANATSU_BUNDLE").unwrap(), &std::env::var("AMANATSU_ASSET").unwrap(), 91).unwrap().unwrap();
+    let ctl = Controller::decode(&u.decode(&k, id).unwrap()).unwrap();
+    let si = ctl.find_state(0, &std::env::var("AMANATSU_STATE").unwrap()).expect("state");
+    let first = ctl.layers[0].states[si].clip.unwrap();
+    for i in 0..3 {
+        if let Some(&p) = ctl.clips.get(first + i) {
+            let (f, cid) = u.target(&k, p).unwrap();
+            println!("clip[{}] {:?}", first + i, u.decode(&f, cid).unwrap().string("m_Name"));
+        }
+    }
+    let pick: usize = std::env::var("AMANATSU_PICK").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+    let cp = ctl.clips[first + pick];
+    let (f, cid) = u.target(&k, cp).unwrap();
+    let clip = Clip::decode(&u.decode(&f, cid).unwrap()).unwrap();
+    println!("clip {} {}..{} loop {}", clip.name, clip.start, clip.stop, clip.looping);
+    let names = ["", "Camera", "Main Camera", "camera", "cam", "CameraBase", "Cam", "MainCamera"];
+    for b in &clip.bindings {
+        let n = names.iter().find(|n| path_hash(n) == b.path);
+        println!("  path {:#x} {:?} attr {:#x} class {} curves {}", b.path, n, b.attribute, b.class_id, b.curves);
+    }
+    println!("t0 {:?}", clip.sample(clip.start));
+    println!("t1 {:?}", clip.sample(clip.stop));
+}
+
+/// Prints a short movie's tracks (`AMANATSU_SM`, default 20).
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn short_movie() {
+    let mut u = unity();
+    let id: i32 = std::env::var("AMANATSU_SM").ok().and_then(|v| v.parse().ok()).unwrap_or(20);
+    let m = crysirror_amanatsu::sm::Movie::load(&mut u, id).unwrap();
+    println!("stm_{id:02}: {:.2} s", m.duration);
+    println!("heroine {:?}", m.heroine);
+    println!("camera {:?}", m.camera);
+    println!("fades {:?}", m.fades);
+    let clips = m.camera_clips(&mut u, 1).unwrap();
+    for (k, c) in &clips {
+        println!("{k}: {:?} .. {:?}", crysirror_amanatsu::sm::camera_pose(c, c.start), crysirror_amanatsu::sm::camera_pose(c, c.stop));
+    }
+    println!("personal 0 LV1 → {:?}", crysirror_amanatsu::sm::personal_movie(&mut u, 0, 1).unwrap());
+}

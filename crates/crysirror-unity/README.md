@@ -103,5 +103,11 @@ and `ResourceManager` have fixed readers).
   anchored position, size delta, local scale, fill amount). Parameter
   conditions, blend trees beyond a single motion, root motion and humanoid
   muscles are not evaluated.
+- `timeline.rs`: Unity Timeline assets — the `TimelineAsset` track tree
+  (`m_Tracks`, `m_Children`, `m_Muted`), each track's `TimelineClip`s
+  (start, duration, clip-in, time scale, playable asset) and the timeline
+  duration. Track/clip playable semantics (animation, activation, custom
+  tracks), bindings from a `PlayableDirector` and blending are left to the
+  consumer.
 - `events.rs`: `UnityEvent` persistent calls (target, method, argument mode)
   for the consumer to invoke.
