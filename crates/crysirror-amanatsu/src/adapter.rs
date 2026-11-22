@@ -254,6 +254,10 @@ pub struct Game {
     with_return: Option<i32>,
     /// The height pick (`_S`/`_M`/`_L` index) of the last character.
     last_height_pick: usize,
+    /// Heroines with their eyes shut for a blink, and when each next
+    /// blinks or opens (`BlinkCtrl`).
+    blinking: std::collections::HashSet<String>,
+    next_blink: std::collections::HashMap<String, u64>,
     /// Expression presets by personality.
     expressions: std::collections::HashMap<i64, std::collections::HashMap<i64, [Option<f32>; 6]>>,
     /// The command camera table (`AngleData` prefab).
@@ -447,6 +451,8 @@ impl Game {
         self.release_map(host, client)?;
         self.spots.clear();
         self.faces.clear();
+        self.blinking.clear();
+        self.next_blink.clear();
         self.command_view_return = None;
         self.pending_heroines.clear();
         self.heroine_wait = 1;
@@ -2099,9 +2105,34 @@ impl Game {
     /// The face's morph weights with the character's animation layers.
     fn apply_face(&mut self, card: &str) {
         let Some((face, ids, layers, expr)) = self.faces.get(card) else { return };
-        let morphs = face.weights(expr);
+        let mut e = *expr;
+        if self.blinking.contains(card) {
+            e.eyes_open = 0.;
+        }
+        let morphs = face.weights(&e);
         for &id in ids {
             self.world.push(json!({"op": "set_animation", "id": id, "animation": {"layers": layers, "morphs": morphs}}));
+        }
+    }
+
+    /// `FaceBlendShape.BlinkCtrl`: the eyes shut for 0.15 s every 2–6 s
+    /// (SATD-amanatsu-port: `BlinkFrequency`'s random draw and the blink
+    /// curve are approximated; `IsBlink` false is not honoured).
+    fn blink(&mut self, now: u64) {
+        let cards: Vec<String> = self.faces.keys().cloned().collect();
+        for card in cards {
+            let due = *self.next_blink.entry(card.clone()).or_insert(now + 2000);
+            if now < due {
+                continue;
+            }
+            if self.blinking.remove(&card) {
+                let wait = 2000 + self.random(4000) as u64;
+                self.next_blink.insert(card.clone(), now + wait);
+            } else {
+                self.blinking.insert(card.clone());
+                self.next_blink.insert(card.clone(), now + 150);
+            }
+            self.apply_face(&card);
         }
     }
 
@@ -2489,6 +2520,8 @@ impl AmanatsuVm {
             command_view_return: None,
             angle_data: None,
             expressions: std::collections::HashMap::new(),
+            blinking: std::collections::HashSet::new(),
+            next_blink: std::collections::HashMap::new(),
             h_ui: None,
             h_change: None,
             h_points: Vec::new(),
@@ -2756,6 +2789,7 @@ impl AmanatsuVm {
         if game.movie.is_some() {
             game.movie_update(now);
         }
+        game.blink(now);
         if game.h.is_some() && game.talk.is_none() {
             let clicked_scene = input.buttons_pressed & b::MOUSE_LEFT != 0 && handler.is_none() && !fading;
             game.h_update(clicked_scene, now);

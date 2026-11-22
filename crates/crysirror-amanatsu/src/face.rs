@@ -5,7 +5,9 @@
 //! pattern at an openness weights its close shape by `1 − open` and its
 //! open shape by `open` (`FBSBase.ChangePtn` / `SetOpenMax`).
 //!
-//! SATD-amanatsu-port: blinking (`BlinkCtrl`), eye look, cheeks
+//! Blinking (`BlinkCtrl`) is timed by the session.
+//!
+//! SATD-amanatsu-port: eye look, cheeks
 //! (`HohoAka`), tears, highlights, lip sync and pattern blend transitions
 //! are not applied; the eyes/mouth openness is the `OpenMax` value.
 use crate::unity::Unity;
