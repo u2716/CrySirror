@@ -1,5 +1,9 @@
 # KiriKiri first-run confirmation and Rect on Windows
 
+The following Windows observations were recorded by the author of
+[PR #19](https://github.com/xmoezzz/CrySirror/pull/19) on its original stacked
+branch.
+
 2026-11-23. The HF game with a fresh CrySirror profile previously stopped in
 `System.confirm` during append setup. The game now presents the complete prompt
 through the shared dialog service and resumes the calling script with the
@@ -19,3 +23,9 @@ The offline locked Release desktop build succeeded. Fifteen tests passed across
 confirmation, both dialog results, Rect copy and geometry operations, and the
 existing message and edit dialogs. The opt-in real-game font diagnostic was
 outside this run.
+
+## Standalone integration on macOS
+
+2026-11-25. The standalone changes from PR #19 passed all 12 Release tests
+in `win32_dialog` and `tjs_semantics`. The synthetic fixtures exercised
+nested startup suspension, both confirmation choices, and Rect geometry.
