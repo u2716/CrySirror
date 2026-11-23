@@ -16,11 +16,13 @@
 //!   blob at +0x48, per-attribute stream pointers at +0x50 (stride 8);
 //! - descriptor: 8-byte attributes from +8 (`id`, kind << 4 | components,
 //!   `u16` parameter offset, bit depth per component). Kind 4 stores
-//!   `max`, `min` and maps `q / (2ⁿ − 1)` across them; kind 6 adds three
-//!   `u32` grid offsets and maps `(q + offset) / (2ᵍ − 1)`. On the installed
-//!   levels `g` is the mesh's kind-4 position depth plus two (15 → 17,
-//!   18 → 20): no kind-6 value exceeds that grid. Meshes without a kind-4
-//!   fragment use 17 (SATD-nd-retail-runtime).
+//!   `max`, `min` and maps `q / (2ⁿ − 1)` across them. Kind 6 adds three
+//!   `u32` offsets and maps `((q << 2) + offset) / (4 · (2ᴺ − 1))`: the
+//!   mesh's N-bit grid with two placement bits. Neighbouring kind-6
+//!   fragments share seam vertices exactly only with the two-bit shift.
+//!   N is the largest position depth of the mesh, raised when a kind-6
+//!   value needs more (one installed mesh reaches `4 · (2²⁰ − 1)` exactly
+//!   with depths up to 19). Inferred from data (SATD-nd-retail-runtime).
 use crate::{geometry::decode_indices, package::Directory};
 use anyhow::{Context, Result, bail, ensure};
 use crysirror_core::service::AssetReader;
@@ -28,8 +30,6 @@ use crysirror_resource::read_exact_at;
 use std::collections::HashSet;
 
 pub const ATTR_POSITION: u8 = 1;
-/// Kind-6 grid bits for a mesh without kind-4 positions.
-const DEFAULT_GRID_BITS: u8 = 17;
 
 pub struct Loaded {
     pub data: Vec<u8>,
@@ -96,6 +96,16 @@ pub struct Fragment {
     pub triangles: Vec<[u16; 3]>,
 }
 
+/// Quantized positions before the mesh grid is known.
+struct Raw {
+    kind: u8,
+    depths: [u8; 3],
+    min: [f32; 3],
+    max: [f32; 3],
+    values: Vec<[u64; 3]>,
+    triangles: Vec<[u16; 3]>,
+}
+
 /// Unpack `count` records of MSB-first unsigned fields.
 fn unpack(data: &[u8], at: usize, count: usize, depths: &[u8]) -> Result<Vec<[u32; 4]>> {
     let bits: usize = depths.iter().map(|d| *d as usize).sum();
@@ -117,8 +127,8 @@ fn unpack(data: &[u8], at: usize, count: usize, depths: &[u8]) -> Result<Vec<[u3
     Ok(out)
 }
 
-/// The position attribute row of a fragment.
-fn position_row(p: &Loaded, f: usize) -> Result<(usize, usize, [u8; 8])> {
+/// The position attribute row of a fragment, if it stores positions.
+fn position_row(p: &Loaded, f: usize) -> Result<Option<(usize, usize, [u8; 8])>> {
     let desc = p.ptr(f + 0x28)?;
     let attributes = p.data[f + 0x2f] as usize;
     ensure!((1..=16).contains(&attributes), "ND fragment attribute count");
@@ -126,45 +136,51 @@ fn position_row(p: &Loaded, f: usize) -> Result<(usize, usize, [u8; 8])> {
         let at = desc + 8 + 8 * a;
         let row: [u8; 8] = p.data.get(at..at + 8).context("ND descriptor outside package")?.try_into()?;
         if row[0] == ATTR_POSITION {
-            return Ok((desc, a, row));
+            return Ok(Some((desc, a, row)));
         }
     }
-    bail!("ND fragment without positions")
+    Ok(None)
 }
 
-fn fragment(p: &Loaded, f: usize, grid_bits: u8) -> Result<Fragment> {
+/// `None` for fragments without stored positions: the installed `post-56`
+/// package has two-triangle quads that carry only texture coordinates.
+fn raw_fragment(p: &Loaded, f: usize) -> Result<Option<Raw>> {
     let vertices = p.u32(p.ptr(f + 0x24)?)? as usize;
     ensure!(vertices <= 0x10000, "ND fragment vertex count");
-    let (desc, a, row) = position_row(p, f)?;
+    let Some((desc, a, row)) = position_row(p, f)? else { return Ok(None) };
     let (kind, n) = (row[1] >> 4, (row[1] & 15) as usize);
-    ensure!(n == 3, "ND position components");
-    let depths = &row[4..7];
+    ensure!(n == 3 && matches!(kind, 4 | 6), "ND position format {:#x}", row[1]);
+    let depths = [row[4], row[5], row[6]];
     ensure!(depths.iter().all(|d| *d <= 24), "ND position bit depth");
     let param = desc + usize::from(u16::from_be_bytes([row[2], row[3]]));
     let max = [p.f32(param)?, p.f32(param + 4)?, p.f32(param + 8)?];
     let min = [p.f32(param + 12)?, p.f32(param + 16)?, p.f32(param + 20)?];
-    let q = unpack(&p.data, p.ptr(f + 0x50 + 8 * a)?, vertices, depths)?;
-    let map = |k: usize, v: f64| min[k] + (v as f32) * (max[k] - min[k]);
-    let positions: Vec<[f32; 3]> = match kind {
-        4 => q
-            .iter()
-            .map(|r| std::array::from_fn(|k| map(k, if depths[k] == 0 { 0. } else { f64::from(r[k]) / f64::from((1u32 << depths[k]) - 1) })))
-            .collect(),
-        6 => {
-            let o = [p.u32(param + 24)?, p.u32(param + 28)?, p.u32(param + 32)?];
-            let grid = f64::from((1u32 << grid_bits) - 1);
-            let mut out = Vec::with_capacity(q.len());
-            for r in &q {
-                let g: [u64; 3] = std::array::from_fn(|k| u64::from(r[k]) + u64::from(o[k]));
-                ensure!(g.iter().all(|v| *v as f64 <= grid), "ND kind-6 position outside the mesh grid");
-                out.push(std::array::from_fn(|k| map(k, g[k] as f64 / grid)));
-            }
-            out
-        }
-        k => bail!("ND position kind {k}"),
-    };
+    let offset = if kind == 6 { [p.u32(param + 24)?, p.u32(param + 28)?, p.u32(param + 32)?] } else { [0; 3] };
+    let values = unpack(&p.data, p.ptr(f + 0x50 + 8 * a)?, vertices, &depths)?
+        .iter()
+        .map(|r| std::array::from_fn(|k| if kind == 6 { (u64::from(r[k]) << 2) + u64::from(offset[k]) } else { u64::from(r[k]) }))
+        .collect();
     let triangles = decode_indices(&p.data[p.ptr(f + 0x48)?..], usize::from(p.u16(f + 0x40)?), vertices)?;
-    Ok(Fragment { positions, triangles })
+    Ok(Some(Raw { kind, depths, min, max, values, triangles }))
+}
+
+fn resolve(raw: Raw, grid_bits: u32) -> Fragment {
+    let grid = 4. * ((1u64 << grid_bits) - 1) as f64;
+    let positions = raw
+        .values
+        .iter()
+        .map(|v| {
+            std::array::from_fn(|k| {
+                let t = match (raw.kind, raw.depths[k]) {
+                    (6, _) => v[k] as f64 / grid,
+                    (_, 0) => 0.,
+                    (_, d) => v[k] as f64 / ((1u64 << d) - 1) as f64,
+                };
+                raw.min[k] + t as f32 * (raw.max[k] - raw.min[k])
+            })
+        })
+        .collect();
+    Fragment { positions, triangles: raw.triangles }
 }
 
 /// Every mesh of a `PM_COLLECTION_2` payload, as fragments.
@@ -176,17 +192,17 @@ pub fn prototype_meshes(p: &Loaded, payload: usize) -> Result<Vec<Vec<Fragment>>
         let header = p.ptr(p.ptr(payload + 4 + 4 * e)?)?;
         let fragments = usize::from(p.u16(header + 6)?);
         let array = p.ptr(header + 0x14)?;
-        let frags = (0..fragments).map(|i| p.ptr(array + 4 * i)).collect::<Result<Vec<_>>>()?;
-        let mut grid_bits = None;
-        for &f in &frags {
-            let (_, _, row) = position_row(p, f)?;
-            if row[1] >> 4 == 4 {
-                grid_bits = grid_bits.max(row[4..7].iter().max().map(|d| d + 2));
-            }
+        let raws = (0..fragments)
+            .map(|i| raw_fragment(p, p.ptr(array + 4 * i)?))
+            .filter_map(Result::transpose)
+            .collect::<Result<Vec<_>>>()?;
+        let mut grid_bits = raws.iter().flat_map(|r| r.depths).max().unwrap_or(0) as u32;
+        let top = raws.iter().filter(|r| r.kind == 6).flat_map(|r| r.values.iter().flatten()).copied().max().unwrap_or(0);
+        while 4 * ((1u64 << grid_bits) - 1) < top {
+            grid_bits += 1;
         }
-        let grid_bits = grid_bits.unwrap_or(DEFAULT_GRID_BITS);
         ensure!(grid_bits <= 26, "ND position grid");
-        meshes.push(frags.iter().map(|&f| fragment(p, f, grid_bits)).collect::<Result<Vec<_>>>()?);
+        meshes.push(raws.into_iter().map(|r| resolve(r, grid_bits)).collect());
     }
     Ok(meshes)
 }
