@@ -120,6 +120,14 @@ fn main() -> Result<()> {
                             directory.page_count,
                             directory.items.len()
                         );
+                        let (mut decoded, mut colours) = (0, std::collections::BTreeSet::new());
+                        for item in directory.items.iter().filter(|i| i.kind == "VRAM_DESC") {
+                            let desc = crysirror_naughty_dog::texture::VramDesc::read(handle.as_ref(), item.payload_offset)?;
+                            let image = desc.decode(handle.as_ref(), directory.texture_base)?;
+                            colours.extend(image.rgba.chunks_exact(4).take(4096).map(|c| u32::from_be_bytes(c.try_into().unwrap())));
+                            decoded += 1;
+                        }
+                        println!("  {p}: decoded {decoded} VRAM textures, {} distinct sampled RGBA values", colours.len());
                     }
                     let digest = crysirror_resource::checksum::sha256_reader(
                         handle.as_ref(),

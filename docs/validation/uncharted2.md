@@ -44,3 +44,7 @@ cargo run --release --offline --locked -p crysirror-naughty-dog --example level_
 Runtime entry, game-script execution, geometry, texture bindings, real-time audio, playable controls and native saves have no gameplay verification. Package selection for numbered names is unresolved. [Current implementation and scoped gaps](../../crates/crysirror-naughty-dog/README.md)
 
 The verified local release executable is available at `target/uncharted2-validation/level_resources`. The same directory holds `con-1-start.log`, `train-cliff.log` and `war-1-market-coop.log` from the three installed-data runs.
+
+## 2026-11-24 — textures and XVAG
+
+The release `level_resources` example decoded every `VRAM_DESC` level 0 in `menu-temple.pak` (48), `train-cliff.pak` (95, including DXT3), `con-1-start.pak` (35) and `war-1-market-coop.pak` (159), plus the menu level's actor packages. A separate PS-ADPCM reference decode of `146_JungleExplore_LOOP1.xvag` (2 channels, 48 kHz) produced no invalid filters, no clipping and an inter-channel correlation of 0.64. Census of 200 headers per archive: music and streams are 48 kHz with 1–6 channels; speech is 32 kHz mono or stereo, all codec 6. Unit tests cover descriptor bounds, Morton order, DXT3 alpha and XVAG interleave/history.
