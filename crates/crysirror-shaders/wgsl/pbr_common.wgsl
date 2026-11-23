@@ -103,6 +103,8 @@ struct Object {
     skin: vec4<u32>,
     // xy: UV0 offset of the node's meshes, z: toon blend-texture weight
     uv: vec4<f32>,
+    // Liquid levels of the four regions
+    liquid: vec4<f32>,
 };
 @group(2) @binding(0) var<uniform> object: Object;
 @group(2) @binding(1) var<storage, read> palettes: array<mat4x4<f32>>;

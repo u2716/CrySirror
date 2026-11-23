@@ -225,9 +225,29 @@ pub fn hit_volumes(unity: &mut Unity) -> Result<Vec<HitVolume>> {
     Ok(out)
 }
 
+/// `AL.H.SiruPasteInfo.Place` of the female hit objects: hit tag (the
+/// `o_hit_<tag>` name) → the `Human.Define.SiruParts` it pastes (0 face,
+/// 1 front up, 2 front down, 3 back up, 4 back down).
+pub fn siru_places(unity: &mut Unity) -> Result<std::collections::HashMap<String, Vec<u8>>> {
+    let level = Level::prefab(unity, HIT_BUNDLE, HIT_PREFAB)?;
+    let mut out = std::collections::HashMap::new();
+    for n in &level.scene.nodes {
+        let Some(tag) = n.name.strip_prefix("o_hit_") else { continue };
+        let Some(c) = n.components.iter().find(|c| c.script == "AL.H.SiruPasteInfo") else { continue };
+        let places: Vec<u8> = c.fields.array("Place").unwrap_or(&[]).iter().filter_map(|v| if let crysirror_unity::managed::Value::Int(i) = v { u8::try_from(*i).ok() } else { None }).collect();
+        out.insert(tag.to_owned(), places);
+    }
+    Ok(out)
+}
+
 /// Ray (engine space) against the volumes posed by `bone_world` (engine
 /// world matrix of a bone by name): the nearest hit's tag.
 pub fn raycast<'a>(volumes: &'a [HitVolume], origin: Vec3, dir: Vec3, bone_world: &dyn Fn(&str) -> Option<Mat4>) -> Option<&'a HitVolume> {
+    raycast_distance(volumes, origin, dir, bone_world).map(|h| h.1)
+}
+
+/// `raycast` with the hit's ray parameter (distance for a unit `dir`).
+pub fn raycast_distance<'a>(volumes: &'a [HitVolume], origin: Vec3, dir: Vec3, bone_world: &dyn Fn(&str) -> Option<Mat4>) -> Option<(f32, &'a HitVolume)> {
     // Unity bone space → engine bone space mirrors X.
     let mirror = Mat4::from_scale(Vec3::new(-1., 1., 1.));
     let mut best: Option<(f32, &HitVolume)> = None;
@@ -261,7 +281,7 @@ pub fn raycast<'a>(volumes: &'a [HitVolume], origin: Vec3, dir: Vec3, bone_world
             best = Some((t0, v));
         }
     }
-    best.map(|b| b.1)
+    best
 }
 
 /// `MouseTouch` satisfaction state of one massage.

@@ -509,6 +509,10 @@ struct MaterialUniform {
     toon: [f32; 4],
     toon_light: [f32; 4],
     toon_shade: [f32; 4],
+    /// Liquid layer: tiling (xy scale, zw offset) and colour (rgb linear,
+    /// a 1 when the layer's textures are bound).
+    liquid_tiling: [f32; 4],
+    liquid_color: [f32; 4],
 }
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -526,6 +530,8 @@ struct ObjectUniform {
     /// xy: UV0 offset (`AnimationState::uv_offsets`), z: toon blend-texture
     /// weight (`AnimationState::base_blend`).
     uv: [f32; 4],
+    /// Liquid levels of the four regions (`AnimationState::liquid_levels`).
+    liquid: [f32; 4],
 }
 
 struct GpuPrim {
@@ -2371,7 +2377,7 @@ impl PbrRenderer {
                 m.alpha_cutoff,
                 // 0 lit, 1 unlit, 2 toon.
                 if m.toon.is_some() { 2. } else if m.unlit { 1. } else { 0. },
-                if m.opacity_from_alpha { 1. } else { 0. },
+                if m.opacity_from_alpha || m.toon.as_ref().is_some_and(|t| t.liquid_blobs.is_some() && t.liquid_regions.is_some()) { 1. } else { 0. },
             ],
             uv_transform: [m.uv_scale[0], m.uv_scale[1], m.uv_offset[0], m.uv_offset[1]],
             surface: [
@@ -2407,6 +2413,8 @@ impl PbrRenderer {
             },
             toon: m.toon.as_ref().map_or([0.; 4], |t| t.shadow_rim),
             toon_light: m.toon.as_ref().map_or([0.; 4], |t| t.shadow_light),
+            liquid_tiling: m.toon.as_ref().map_or([1., 1., 0., 0.], |t| t.liquid_tiling),
+            liquid_color: m.toon.as_ref().map_or([0.; 4], |t| [t.liquid_color[0], t.liquid_color[1], t.liquid_color[2], if t.liquid_blobs.is_some() && t.liquid_regions.is_some() { 1. } else { 0. }]),
             toon_shade: m.toon.as_ref().map_or([0.; 4], |t| {
                 let kind = match t.shade_kind {
                     crysirror_scene::material::ToonShadeKind::BaseHsv => 0.,
@@ -2605,11 +2613,18 @@ impl PbrRenderer {
         // Toon materials bind lookup/shadow/highlight in slots 1, 3 and 6, raw.
         let mut slots = m.textures();
         if let Some(t) = &m.toon {
-            let [lookup, shadow, highlight, blend] = t.textures();
+            let [lookup, shadow, highlight, blend, _, _] = t.textures();
             [slots[1], slots[3], slots[6]] = [lookup, shadow, highlight];
             if blend.is_some() {
                 slots[4] = blend;
             }
+        }
+        // Toon liquid layer: blobs in the opacity slot (read through its
+        // alpha, which the blob texture keeps at 1) and regions in the
+        // highlight slot (raw).
+        if let Some(t) = m.toon.as_ref().filter(|t| t.liquid_blobs.is_some() && t.liquid_regions.is_some()) {
+            slots[5] = t.liquid_blobs.as_ref();
+            slots[6] = t.liquid_regions.as_ref();
         }
         let srgb_slot = |i: usize| matches!(i, 0 | 4) || (i == 6 && m.toon.is_none());
         for (i, path) in slots.into_iter().enumerate() {
@@ -2741,8 +2756,10 @@ impl PbrRenderer {
                             pick(m.toon.as_ref().map_or(m.occlusion_texture, |t| t.shadow_texture), 1),
                             // Toon: the blend texture when present.
                             pick(m.toon.as_ref().and_then(|t| t.blend_texture).or(m.emissive_texture), 0),
-                            pick(m.opacity_texture, 1),
-                            pick(m.toon.as_ref().map_or(m.specular_texture, |t| t.highlight_texture), 0),
+                            // Toon liquid layer: blobs in the opacity slot,
+                            // regions in the highlight slot.
+                            pick(m.toon.as_ref().and_then(|t| t.liquid_blobs.filter(|_| t.liquid_regions.is_some())).or(m.opacity_texture), 1),
+                            pick(m.toon.as_ref().map_or(m.specular_texture, |t| if t.liquid_blobs.is_some() && t.liquid_regions.is_some() { t.liquid_regions } else { t.highlight_texture }), 0),
                         ],
                     ),
                     double_sided: m.double_sided,
@@ -3322,6 +3339,7 @@ impl PbrRenderer {
                 prev_model,
                 skin: [0; 4],
                 uv: [0.; 4],
+                liquid: [0.; 4],
             });
             let grow = |b: (Vec3, Vec3), lo: &mut Vec3, hi: &mut Vec3| {
                 for i in 0..8 {
@@ -3391,6 +3409,7 @@ impl PbrRenderer {
                     hidden,
                     uv_offsets,
                     base_blend,
+                    liquid_levels,
                     ..
                 } => {
                     let key = format!("{client}@{}:{asset}", assets.revision(ClientId(*client)));
@@ -3456,6 +3475,7 @@ impl PbrRenderer {
                             prev_model: prev,
                             skin,
                             uv,
+                            liquid: liquid_levels.iter().find(|(n, _)| *n == node.name).map_or([0.; 4], |(_, l)| *l),
                         });
                         for (pi, p) in self.models[&key].meshes[mesh].iter().enumerate() {
                             let dk = draw_key(sub, pi as u64);

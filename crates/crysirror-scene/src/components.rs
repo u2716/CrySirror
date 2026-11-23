@@ -229,6 +229,10 @@ pub struct AnimationState {
     /// meshes of named nodes (expression textures such as a flushed face).
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub base_blend: std::collections::BTreeMap<String, f32>,
+    /// Liquid levels (0–2) of the four regions of the toon material's
+    /// liquid layer, for the meshes of named nodes.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub liquid_levels: std::collections::BTreeMap<String, [f32; 4]>,
     /// Entity of the same client whose evaluated local translation and
     /// rotation are copied onto this entity's same-named nodes after its own
     /// clips (parts sharing a character skeleton). Scale stays the follower's.
@@ -303,7 +307,9 @@ impl AnimationState {
             self.uv_offsets.len() <= MAX_NODE_POSES
                 && self.uv_offsets.iter().all(|(n, o)| !n.is_empty() && n.len() <= 256 && o.iter().all(|v| v.is_finite() && v.abs() <= 1000.))
                 && self.base_blend.len() <= MAX_NODE_POSES
-                && self.base_blend.iter().all(|(n, w)| !n.is_empty() && n.len() <= 256 && w.is_finite() && (0.0..=1.).contains(w)),
+                && self.base_blend.iter().all(|(n, w)| !n.is_empty() && n.len() <= 256 && w.is_finite() && (0.0..=1.).contains(w))
+                && self.liquid_levels.len() <= MAX_NODE_POSES
+                && self.liquid_levels.iter().all(|(n, l)| !n.is_empty() && n.len() <= 256 && l.iter().all(|v| v.is_finite() && (0.0..=2.).contains(v))),
             "invalid UV offsets"
         );
         for (name, w) in &self.morphs {

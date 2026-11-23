@@ -639,6 +639,8 @@ pub struct Human {
     /// character material takes as `_Lamp` (`ChangeRampTexture`), and
     /// `ShadowDepth`/`LineWidth` written to `_Shadow_power`/`_Line_width`.
     pub ramp: Option<(String, String)>,
+    /// Body mesh nodes (`AL/skin_body`), targets of the liquid levels.
+    pub body_nodes: Vec<String>,
     pub shadow_depth: f32,
     pub line_width: f32,
     pub log: Vec<String>,
@@ -1001,7 +1003,8 @@ impl Human {
         if ramp.is_none() {
             log.push(format!("mt_ramp {ramp_id}: no texture"));
         }
-        Ok(Self { key: body.key, female, height, scene, looks, clothes: clothes_parts, accessories, accessory_slots, head, ramp, shadow_depth, line_width, log })
+        let body_nodes = scene.nodes.iter().filter(|n| n.origin == 0 && n.name.starts_with("o_") && !HIDDEN_BODY.contains(&n.name.as_str()) && n.components.iter().any(|c| c.class_id == 137)).map(|n| n.name.clone()).collect();
+        Ok(Self { key: body.key, female, height, scene, looks, clothes: clothes_parts, accessories, accessory_slots, head, ramp, body_nodes, shadow_depth, line_width, log })
     }
 }
 
@@ -1146,6 +1149,77 @@ impl CharaAssets<'_> {
             }
         }
         Ok(img)
+    }
+
+    /// The AL skin programs' liquid layer: blob masks `A`/`B` (the
+    /// tiled mask's G and R after `smoothstep(sat(2·(x − 0.1)))`, at
+    /// `uv · _LiquidTiling.zw + _LiquidTiling.xy`) and region masks. Body
+    /// (`_TexEX` slice 1 blobs, slice 0 regions RGB; the program's t15):
+    /// front-up
+    /// `sat(R − G)`, front-down `sat(G − R)`, back-up `B`, back-down
+    /// `G · R`. Face (`_Texture2` blobs; one region
+    /// `sat(sat((1 − md1.g)·1.23 − 0.31) − (md1.r − md2.b))`).
+    fn liquid_layer(&mut self, mf: &str, m: &UnityMaterial, face: bool) -> Result<Option<((String, ImageSurface), (String, ImageSurface), [f32; 4], [f32; 3])>> {
+        let blob = |x: f32| {
+            let v = ((x - 0.1) * 2.).clamp(0., 1.);
+            v * v * (3. - 2. * v)
+        };
+        let to_rgba = |img: &ImageSurface, f: &dyn Fn([f32; 4]) -> [f32; 4]| {
+            let mut out = img.clone();
+            for p in out.rgba.chunks_exact_mut(4) {
+                let v = f([0, 1, 2, 3].map(|c| f32::from(p[c]) / 255.));
+                for c in 0..4 {
+                    p[c] = (v[c].clamp(0., 1.) * 255.).round() as u8;
+                }
+            }
+            out
+        };
+        let tex = |s: &mut Self, name: &str| -> Result<Option<ImageSurface>> {
+            match m.textures.get(name).filter(|t| t.texture.path_id != 0) {
+                Some(t) => {
+                    let (f, id) = s.unity.target(mf, t.texture)?;
+                    Ok(Some(s.mask(&f, id)?))
+                }
+                None => Ok(None),
+            }
+        };
+        let (blobs_src, regions) = if face {
+            let (Some(t2), Some(md1)) = (tex(self, "_Texture2")?, tex(self, "_Detail_mask_01")?) else { return Ok(None) };
+            let md2 = tex(self, "_Detail_mask_02")?;
+            let mut reg = md1.clone();
+            for (i, p) in reg.rgba.chunks_exact_mut(4).enumerate() {
+                let m1 = [0, 1, 2].map(|c| f32::from(md1.rgba[i * 4 + c]) / 255.);
+                let m2b = md2.as_ref().filter(|m2| m2.width == md1.width && m2.height == md1.height).map_or(0., |m2| f32::from(m2.rgba[i * 4 + 2]) / 255.);
+                let r = (((1. - m1[1]) * 1.23 - 0.31).clamp(0., 1.) - (m1[0] - m2b)).clamp(0., 1.);
+                p.copy_from_slice(&[(r * 255.).round() as u8, 0, 0, 0]);
+            }
+            (t2, reg)
+        } else {
+            let Some(t) = m.textures.get("_TexEX").filter(|t| t.texture.path_id != 0) else { return Ok(None) };
+            let (f, id) = self.unity.target(mf, t.texture)?;
+            let (mut slices, srgb) = self.unity.texture_array(&f, id)?;
+            if slices.len() < 2 {
+                return Ok(None);
+            }
+            if srgb {
+                for s in &mut slices {
+                    for p in s.rgba.chunks_exact_mut(4) {
+                        for c in 0..3 {
+                            p[c] = (srgb_decode(f32::from(p[c]) / 255.) * 255.).round() as u8;
+                        }
+                    }
+                }
+            }
+            let reg = to_rgba(&slices[0], &|v| [(v[0] - v[1]).clamp(0., 1.), (v[1] - v[0]).clamp(0., 1.), v[2], v[1] * v[0]]);
+            (slices[1].clone(), reg)
+        };
+        let blobs = to_rgba(&blobs_src, &|v| [blob(v[1]), blob(v[0]), 0., 1.]);
+        let lt = m.colors.get("_LiquidTiling").copied().unwrap_or([0., 0., 1., 1.]);
+        // The covered colour: the near-white the programs shade the layer
+        // with (sRGB (252, 251, 246) lit under a white key light).
+        let color = [252., 251., 246.].map(|c: f32| srgb_decode(c / 255.));
+        let key = format!("{}:{}", m.name, if face { "face" } else { "body" });
+        Ok(Some(((format!("{key}:liquid-blobs"), blobs), (format!("{key}:liquid-regions"), regions), [lt[2], lt[3], lt[0], lt[1]], color)))
     }
 
     fn mask_named(&mut self, (bundle, name): &(String, String)) -> Result<Option<ImageSurface>> {
@@ -1390,6 +1464,12 @@ impl SceneAssets for CharaAssets<'_> {
                 let (f, id) = self.unity.target(&mf, t.texture)?;
                 let map = self.mask(&f, id)?;
                 o.toon_blend = Some((format!("{key}:flush"), flush_layer(&img, &map, [t.scale[0], t.scale[1], t.offset[0], t.offset[1]], c)));
+            }
+            // The liquid layer (`_liquidftop`… / `_liquidface` levels).
+            if shader.starts_with("AL/skin_body") || shader.starts_with("AL/skin_head") {
+                // A mask that does not decode leaves the layer off (the
+                // decode error surfaces on the base textures).
+                o.toon_liquid = self.liquid_layer(&mf, m, shader.starts_with("AL/skin_head")).ok().flatten();
             }
             // The face's md layers (two Texture2D masks).
             if let (Some(md), Some((key, img))) = (m.textures.get("_Detail_mask_01").filter(|t| t.texture.path_id != 0 && shader.starts_with("AL/skin_head")), o.base_texture.clone()) {

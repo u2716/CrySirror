@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 struct Light {view_proj:mat4x4<f32>,camera_time:vec4<f32>};
 @group(0) @binding(0) var<uniform> light:Light;
-struct Object {model:mat4x4<f32>,normal:mat4x4<f32>,prev_model:mat4x4<f32>,skin:vec4<u32>,uv:vec4<f32>};
+struct Object {model:mat4x4<f32>,normal:mat4x4<f32>,prev_model:mat4x4<f32>,skin:vec4<u32>,uv:vec4<f32>,liquid:vec4<f32>};
 @group(1) @binding(0) var<uniform> object:Object;
 @group(1) @binding(1) var<storage,read> palettes:array<mat4x4<f32>>;
 struct Out {

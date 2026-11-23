@@ -134,6 +134,8 @@ struct ClothRun {
     hide_moz: bool,
     /// `Status.visibleGomu`.
     gomu: bool,
+    /// Body mesh nodes (liquid levels).
+    body_nodes: Vec<String>,
     entities: Vec<u32>,
     /// Further hidden node subtrees (`CharaVisible` `Head`).
     hidden_nodes: Vec<String>,
@@ -432,6 +434,15 @@ pub struct Game {
     pending_heroines: Vec<(String, serde_json::Value, [f32; 3], f32, Vec<i32>)>,
     /// `al_next_action` (loaded on first use).
     next_actions: Option<std::collections::HashMap<i32, Vec<(i32, f32)>>>,
+    /// `Human.SetSiruFlags` levels (face, front up, front down, back up,
+    /// back down; 0–2) by card.
+    siru: std::collections::HashMap<String, [u8; 5]>,
+    /// CPU models of the HScene characters (for the finish raycast) and the
+    /// pair's placement.
+    h_models: std::collections::HashMap<String, crysirror_asset::pbr::PbrModel>,
+    h_placement: Option<glam::Mat4>,
+    /// Female hit volumes with their paste places (loaded on first use).
+    h_hits: Option<(Vec<crate::oil::HitVolume>, std::collections::HashMap<String, Vec<u8>>)>,
     /// The card of the heroine in the current conversation.
     talk_card: Option<String>,
     /// The H place kind (`HPoint._placeType`) of the H scene.
@@ -961,12 +972,18 @@ impl Game {
         for &entity in &ids {
             self.world.push(json!({"op": "set_transform", "id": entity, "transform": transform}));
         }
+        // The HScene pair's CPU model (the finish raycast).
+        if self.h.is_some() {
+            if let Some(model) = chunks.first().and_then(|g| crysirror_asset::pbr::load_pbr(g, |_| anyhow::bail!("external resource")).ok()) {
+                self.h_models.insert(card_path.to_owned(), model);
+            }
+        }
         // Dressed (state 0) with every variant exported.
         let layers = json!([{"clip": play, "looping": true}]);
         if let Some(e) = crate::face::eye_rest(&human.scene) {
             self.eye_rest.insert(card_path.to_owned(), e);
         }
-        self.cloth.insert(card_path.to_owned(), ClothRun { states: vec![0; human.clothes.len()], parts: human.clothes.clone(), accessories: human.accessories.clone(), accessories_hidden: false, acs_slots: human.accessory_slots.iter().map(|n| (n.clone(), true)).collect(), male: card_path == MALE_CARD, son_config: self.config.flag("HScene", "Son", true) && self.adult_content(), son: self.h.is_some(), hide_moz: false, gomu: false, entities: ids.clone(), hidden_nodes: Vec::new(), layers: layers.clone() });
+        self.cloth.insert(card_path.to_owned(), ClothRun { states: vec![0; human.clothes.len()], parts: human.clothes.clone(), accessories: human.accessories.clone(), accessories_hidden: false, acs_slots: human.accessory_slots.iter().map(|n| (n.clone(), true)).collect(), male: card_path == MALE_CARD, son_config: self.config.flag("HScene", "Son", true) && self.adult_content(), son: self.h.is_some(), hide_moz: false, gomu: false, body_nodes: human.body_nodes.clone(), entities: ids.clone(), hidden_nodes: Vec::new(), layers: layers.clone() });
         self.heads.insert(card_path.to_owned(), human.head.clone());
         match crate::face::Face::from_scene(&mut self.unity, &human.scene, &human.key) {
             Ok(Some(face)) => {
@@ -1445,6 +1462,7 @@ impl Game {
         let tr = glam::Vec3::from_array(crysirror_unity::gltf::mirror_point(pos));
         let (x, y, z) = q.to_euler(glam::EulerRot::XYZ);
         let t = json!({"translation": tr.to_array(), "rotation_degrees": [x.to_degrees(), y.to_degrees(), z.to_degrees()], "scale": [1.0, 1.0, 1.0]});
+        self.h_placement = Some(glam::Mat4::from_rotation_translation(q, tr));
         let mut entities = Vec::new();
         let mut finishes = Vec::new();
         for c in &posture.charas {
@@ -1934,6 +1952,11 @@ impl Game {
                     self.removed.extend(ui.clear());
                 }
                 self.log.push(format!("HScene end: {} orgasms, {list:?}", self.h.as_ref().map_or(0, |h| h.orgasms)));
+                // `HActor.Dispose`: the surface levels and the pair's models.
+                if let Some(card) = self.h.as_ref().map(|h| h.card.clone()) {
+                    self.siru.remove(&card);
+                }
+                self.h_models.clear();
                 if list.is_empty() {
                     self.h_talk_ended(now)?;
                 } else {
@@ -2002,7 +2025,106 @@ impl Game {
             self.h_breath_face(&card, b.faces.first().copied(), now, now + 4000);
         }
         self.h_play(first, false);
+        if kind == HFinish::Outside {
+            self.h_paste(&card, first);
+        }
         self.log.push(format!("HScene finish {kind:?}: {first}"));
+    }
+
+    /// `SiruPasteCtrl.Paste` for an outside finish: the original's Obi
+    /// particles from the male part hit the female's `SiruPasteInfo`
+    /// colliders and each hit part's level rises by one (`SetSiruFlags`,
+    /// at most `Many`). Here a fan of rays from the male part's tip
+    /// (`cf_j_dan109_00`, along `cf_j_dan101_00` → tip) as ballistic arcs
+    /// against the posed hit volumes at the finish state's midpoint.
+    /// SATD-amanatsu-port: the particle simulation (flight, gravity,
+    /// spread), pour drips and the service finishes.
+    fn h_paste(&mut self, card: &str, state: &str) {
+        if self.h_hits.is_none() {
+            let hits = crate::oil::hit_volumes(&mut self.unity).and_then(|v| Ok((v, crate::oil::siru_places(&mut self.unity)?)));
+            match hits {
+                Ok(h) => self.h_hits = Some(h),
+                Err(e) => {
+                    self.log.push(format!("SiruPaste hit objects: {e:#}"));
+                    return;
+                }
+            }
+        }
+        let (Some(placement), Some(female), Some(male), Some((volumes, places))) = (self.h_placement, self.h_models.get(card), self.h_models.get(MALE_CARD), self.h_hits.as_ref()) else { return };
+        let pose = |model: &crysirror_asset::pbr::PbrModel| -> Option<Vec<glam::Mat4>> {
+            let clip = model.animations.iter().find(|c| c.name == state).or(model.animations.first())?;
+            let mut local: Vec<crysirror_asset::pbr::Trs> = model.nodes.iter().map(|n| n.rest).collect();
+            crysirror_asset::anim::sample_clip(model, clip, clip.duration * 0.5, &mut local);
+            Some(crysirror_asset::anim::global_pose(model, &local))
+        };
+        let (Some(fg), Some(mg)) = (pose(female), pose(male)) else { return };
+        let bone_of = |model: &crysirror_asset::pbr::PbrModel, g: &[glam::Mat4], name: &str| model.nodes.iter().position(|n| n.name == name).map(|i| placement * g[i]);
+        let (Some(tip), Some(base)) = (bone_of(male, &mg, "cf_j_dan109_00"), bone_of(male, &mg, "cf_j_dan101_00")) else {
+            self.log.push("SiruPaste: male part bones not found".into());
+            return;
+        };
+        let origin = tip.w_axis.truncate();
+        let dir = (origin - base.w_axis.truncate()).normalize_or_zero();
+        if dir == glam::Vec3::ZERO {
+            return;
+        }
+        // Ballistic arcs (engine units are 10 per metre): launch speeds
+        // 1.5–3.5 m/s over a ±20° cone, gravity 9.8 m/s², traced as 20 ms
+        // segments for 0.6 s.
+        let side = dir.cross(glam::Vec3::Y).normalize_or(glam::Vec3::X);
+        let up = side.cross(dir).normalize_or(glam::Vec3::Y);
+        let bone = |name: &str| bone_of(female, &fg, name);
+        let gravity = glam::Vec3::new(0., -98., 0.);
+        let mut parts: Vec<u8> = Vec::new();
+        for speed in [15f32, 25., 35.] {
+            for i in -2..=2 {
+                for j in -2..=2 {
+                    let d = (dir + side * (i as f32 * 0.18) + up * (j as f32 * 0.18)).normalize();
+                    let (mut p, mut v) = (origin, d * speed);
+                    for _ in 0..30 {
+                        let next = p + v * 0.02 + gravity * 0.0002;
+                        let seg = next - p;
+                        let len = seg.length();
+                        if len > 1e-6 {
+                            if let Some((t, hit)) = crate::oil::raycast_distance(volumes, p, seg / len, &bone).filter(|h| h.0 <= len) {
+                                let _ = t;
+                                for q in places.get(&hit.tag).into_iter().flatten() {
+                                    if !parts.contains(q) {
+                                        parts.push(*q);
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                        p = next;
+                        v += gravity * 0.02;
+                    }
+                }
+            }
+        }
+        let levels = self.siru.entry(card.to_owned()).or_default();
+        for &p in &parts {
+            if let Some(l) = levels.get_mut(p as usize) {
+                *l = (*l + 1).min(2);
+            }
+        }
+        self.log.push(format!("SiruPaste {card}: parts {parts:?} → {levels:?}"));
+        let card = card.to_owned();
+        self.refresh_cloth(&card);
+    }
+
+    /// `AnimationState.liquid_levels` of a character: body meshes take the
+    /// four body parts, the face mesh the face part.
+    fn liquid_levels(&self, card: &str) -> serde_json::Value {
+        let l = self.siru.get(card).copied().unwrap_or_default().map(f32::from);
+        let mut out = serde_json::Map::new();
+        if let Some(c) = self.cloth.get(card) {
+            for n in &c.body_nodes {
+                out.insert(n.clone(), json!([l[1], l[2], l[3], l[4]]));
+            }
+        }
+        out.insert(crate::chara::FACE_MESH.to_owned(), json!([l[0], 0.0, 0.0, 0.0]));
+        serde_json::Value::Object(out)
     }
 
     /// `ClothesSettingMenu`: the `Clothes`/`Acs`/`Coodenate` buttons open
@@ -2195,8 +2317,9 @@ impl Game {
         } else if let Some(c) = self.cloth.get(card) {
             let hidden = c.hidden();
             let layers = self.h.as_ref().map(|h| json!([{"clip": h.motion, "looping": true}])).unwrap_or_else(|| c.layers.clone());
+            let liquid = self.liquid_levels(card);
             for &e in c.entities.iter().filter(|id| self.map_entities.iter().any(|m| m.0 == **id)) {
-                self.world.push(json!({"op": "set_animation", "id": e, "animation": {"layers": layers, "hidden": hidden}}));
+                self.world.push(json!({"op": "set_animation", "id": e, "animation": {"layers": layers, "hidden": hidden, "liquid_levels": liquid}}));
             }
         }
     }
@@ -3292,8 +3415,9 @@ impl Game {
         let uv = self.eye_offsets.get(card).map(|o| crate::face::eye_uv_offsets(o)).unwrap_or_default();
         // The face mesh moves toward its flushed base (`_HohoakaIntensity`).
         let blend = json!({crate::chara::FACE_MESH: e.hohoaka});
+        let liquid = self.liquid_levels(card);
         for &id in ids {
-            self.world.push(json!({"op": "set_animation", "id": id, "animation": {"layers": layers, "morphs": morphs, "hidden": hidden, "uv_offsets": uv, "base_blend": blend}}));
+            self.world.push(json!({"op": "set_animation", "id": id, "animation": {"layers": layers, "morphs": morphs, "hidden": hidden, "uv_offsets": uv, "base_blend": blend, "liquid_levels": liquid}}));
         }
     }
 
@@ -3805,6 +3929,10 @@ impl AmanatsuVm {
             talk_card: None,
             pending_heroines: Vec::new(),
             next_actions: None,
+            siru: Default::default(),
+            h_models: Default::default(),
+            h_placement: None,
+            h_hits: None,
             heroine_wait: 0,
             standing: std::collections::HashMap::new(),
             command_view_return: None,

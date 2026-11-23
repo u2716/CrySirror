@@ -95,6 +95,17 @@ pub struct ToonShading<T = String> {
     /// Second base texture the colour moves toward by the node's
     /// `AnimationState::base_blend` weight (sampled like the base texture).
     pub blend_texture: Option<T>,
+    /// Liquid layer (with `liquid_regions`): blob masks sampled at
+    /// `uv · liquid_tiling.xy + liquid_tiling.zw` — red the level-2 blobs
+    /// `A`, green the level-1 blobs `B` (linear).
+    pub liquid_blobs: Option<T>,
+    /// Liquid layer region masks (RGBA, linear, uv0): region `c` at level
+    /// `l` (`AnimationState::liquid_levels`, 0–2) covers
+    /// `min(max(sat(l − 1)·A, l·B), region_c)`; the summed coverage
+    /// (saturated) moves the base toward `liquid_color` (linear).
+    pub liquid_regions: Option<T>,
+    pub liquid_tiling: [f32; 4],
+    pub liquid_color: [f32; 3],
     pub color_table: bool,
     pub rim_color: [f32; 3],
     pub rim_power: f32,
@@ -153,6 +164,10 @@ impl<T> Default for ToonShading<T> {
             shadow_texture: None,
             highlight_texture: None,
             blend_texture: None,
+            liquid_blobs: None,
+            liquid_regions: None,
+            liquid_tiling: [1., 1., 0., 0.],
+            liquid_color: [1.; 3],
             color_table: false,
             rim_color: [0.; 3],
             rim_power: 3.,
@@ -175,8 +190,8 @@ impl<T> Default for ToonShading<T> {
     }
 }
 impl<T> ToonShading<T> {
-    pub fn textures(&self) -> [Option<&T>; 4] {
-        [self.lookup_texture.as_ref(), self.shadow_texture.as_ref(), self.highlight_texture.as_ref(), self.blend_texture.as_ref()]
+    pub fn textures(&self) -> [Option<&T>; 6] {
+        [self.lookup_texture.as_ref(), self.shadow_texture.as_ref(), self.highlight_texture.as_ref(), self.blend_texture.as_ref(), self.liquid_blobs.as_ref(), self.liquid_regions.as_ref()]
     }
     pub fn validate(&self) -> Result<()> {
         let range = |x: f32, a: f32, b: f32| x.is_finite() && (a..=b).contains(&x);
@@ -192,7 +207,9 @@ impl<T> ToonShading<T> {
                 && range(self.light_limit, 0., 16.)
                 && self.shadow_rim.iter().all(|x| range(*x, 0., 1.))
                 && self.shadow_light.iter().all(|x| range(*x, 0., 1.))
-                && self.shade_color.iter().all(|x| range(*x, 0., 1.)),
+                && self.shade_color.iter().all(|x| range(*x, 0., 1.))
+                && self.liquid_tiling.iter().all(|x| range(*x, -1000., 1000.))
+                && self.liquid_color.iter().all(|x| range(*x, 0., 16.)),
             "toon shading parameter range"
         );
         ensure!(!self.color_table || self.lookup_texture.is_some(), "toon colour table needs the lookup texture");

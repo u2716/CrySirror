@@ -1147,6 +1147,7 @@ fn chara_glb() {
             n.active = false;
         }
     }
+    println!("body nodes {:?}", human.body_nodes);
     let mut assets = crysirror_amanatsu::chara::CharaAssets { unity: &mut u, human: &human, light: 1., ambient: 1. };
     let options = crysirror_unity::world6::GlbOptions { morph_targets: true, ..Default::default() };
     let (glb, report) = crysirror_unity::world6::scene_glb(&human.scene, &human.key, &[0], &mut assets, &options, "test").unwrap();
@@ -1176,6 +1177,12 @@ fn chara_glb() {
     for g in &glb {
         let len = u32::from_le_bytes(g[12..16].try_into().unwrap()) as usize;
         let json: serde_json::Value = serde_json::from_slice(&g[20..20 + len]).unwrap();
+        for m in json["materials"].as_array().into_iter().flatten() {
+            let s = m.to_string();
+            if s.contains("liquid_blobs") {
+                println!("  material {} liquid {}", m["name"], s.contains("\"liquid_regions\":"));
+            }
+        }
         for m in json["meshes"].as_array().into_iter().flatten() {
             let names = m["extras"]["targetNames"].as_array().map_or(0, Vec::len);
             let targets = m["primitives"][0]["targets"].as_array().map_or(0, Vec::len);

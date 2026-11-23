@@ -17,6 +17,10 @@ struct Material {
     toon_light:vec4<f32>,
     // Toon: rgb fixed shade colour, a shade kind (0 base HSV, 1 cloth, 2 fixed).
     toon_shade:vec4<f32>,
+    // Liquid layer: xy scale, zw offset of the blob texture.
+    liquid_tiling:vec4<f32>,
+    // Liquid layer: rgb linear colour, a 1 when bound.
+    liquid_color:vec4<f32>,
 };
 @group(1) @binding(0) var<uniform> material: Material;
 @group(1) @binding(1) var t_base: texture_2d<f32>;
@@ -27,6 +31,7 @@ struct Material {
 @group(1) @binding(6) var s_material: sampler;
 @group(1) @binding(7) var t_opacity: texture_2d<f32>;
 @group(1) @binding(8) var t_specular: texture_2d<f32>;
+
 
 // Tangent-space normal in [-1,1] from the material's encoding.
 fn decode_normal(t: vec4<f32>) -> vec3<f32> {

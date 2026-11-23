@@ -337,6 +337,10 @@ pub struct MaterialOverride {
     /// Toon blend texture (`ToonShading::blend_texture`: top-down RGBA8,
     /// sRGB like the base) with its image key.
     pub toon_blend: Option<(String, ImageSurface)>,
+    /// Toon liquid layer (`ToonShading::liquid_*`): blob and region masks
+    /// (top-down RGBA8, linear) with their image keys, the blob tiling and
+    /// the linear colour.
+    pub toon_liquid: Option<((String, ImageSurface), (String, ImageSurface), [f32; 4], [f32; 3])>,
     /// Unlit with this shader effect (no toon).
     pub unlit_effect: Option<ShaderEffect>,
 }
@@ -987,10 +991,20 @@ fn material(assets: &mut dyn SceneAssets, chunk: &mut Chunk, report: &mut GlbRep
                 }
                 None => None,
             };
+            let mut liquid = (None, None, [1., 1., 0., 0.], [1.; 3]);
+            if let Some(((bk, bi), (rk, ri), tiling, color)) = &o.toon_liquid {
+                let bpng = crysirror_image::encode_png(&downsample(bi.clone(), chunk.max_texture.min(512)))?;
+                let rpng = crysirror_image::encode_png(&downsample(ri.clone(), chunk.max_texture.min(512)))?;
+                liquid = (Some(chunk.glb.image(bk, || Ok((bpng, "image/png")))?), Some(chunk.glb.image(rk, || Ok((rpng, "image/png")))?), *tiling, *color);
+            }
             engine.toon = Some(crysirror_scene::material::ToonShading {
                 lookup_texture: Some(lookup),
                 shadow_texture: shadow,
                 blend_texture: blend,
+                liquid_blobs: liquid.0,
+                liquid_regions: liquid.1,
+                liquid_tiling: liquid.2,
+                liquid_color: liquid.3.map(|x| x.clamp(0., 16.)),
                 cast_shadow_ramp: true,
                 ambient_scale: o.toon_ambient.unwrap_or(1.).clamp(0., 16.),
                 light_limit: o.toon_light_limit.unwrap_or(0.).clamp(0., 16.),
