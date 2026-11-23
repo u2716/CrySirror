@@ -48,3 +48,7 @@ The verified local release executable is available at `target/uncharted2-validat
 ## 2026-11-24 — textures and XVAG
 
 The release `level_resources` example decoded every `VRAM_DESC` level 0 in `menu-temple.pak` (48), `train-cliff.pak` (95, including DXT3), `con-1-start.pak` (35) and `war-1-market-coop.pak` (159), plus the menu level's actor packages. A separate PS-ADPCM reference decode of `146_JungleExplore_LOOP1.xvag` (2 channels, 48 kHz) produced no invalid filters, no clipping and an inter-channel correlation of 0.64. Census of 200 headers per archive: music and streams are 48 kHz with 1–6 channels; speech is 32 kHz mono or stereo, all codec 6. Unit tests cover descriptor bounds, Morton order, DXT3 alpha and XVAG interleave/history.
+
+## 2026-11-24 — fragment indices
+
+All 37 fragments of the `menu-temple` prototype mesh decoded with the header counts exactly consumed: 41,040 half-edges, 31,830 with an opposite twin, no duplicate directed edges and no degenerate triangles. The two shared-edge code meanings were selected by maximizing opposite-twin edges over all 36 candidates; the chosen pair scored 31,830 against 11,086 for the next. Positions are not yet validated.
