@@ -7,8 +7,11 @@
 //! file offsets and refuses reads of words that are not listed pointers.
 //!
 //! Mesh layout (offsets into the relocated item payloads):
-//! - collection: `u32 count`, then `count` element pointers; element word 0
-//!   points to the mesh header;
+//! - collection: `u32 count`, then `count` record pointers. A record holds
+//!   the mesh header, a pointer to its instance-pointer list and the
+//!   instance count (twice). An instance carries a culling sphere at +0x30
+//!   and a row-major 4×4 world matrix in metres at +0x40 (translation in
+//!   the last row); the mesh's native units are centimetres;
 //! - mesh header: `u16` group and fragment counts at +4/+6, fragment
 //!   pointer array at +0x14;
 //! - fragment: vertex count block at +0x24, stream descriptor at +0x28,
@@ -134,6 +137,11 @@ pub struct Group {
 pub struct Mesh {
     pub fragments: Vec<Fragment>,
     pub groups: Vec<Group>,
+    /// Row-major world matrices in metres (`p' = p · M`, translation in
+    /// row 3), one per placed instance.
+    pub instances: Vec<[f32; 16]>,
+    /// Each instance's culling sphere (centre in metres, radius).
+    pub spheres: Vec<[f32; 4]>,
 }
 
 /// One quantized attribute before its mesh grid is known.
@@ -260,7 +268,22 @@ pub fn prototype_meshes(p: &Loaded, payload: usize) -> Result<Vec<Mesh>> {
     ensure!(count <= 4096, "ND prototype count");
     let mut meshes = Vec::with_capacity(count);
     for e in 0..count {
-        let header = p.ptr(p.ptr(payload + 4 + 4 * e)?)?;
+        let record = p.ptr(payload + 4 + 4 * e)?;
+        let header = p.ptr(record)?;
+        let placed = p.u32(record + 8)? as usize;
+        ensure!(placed <= 65536, "ND instance count");
+        let (mut instances, mut spheres) = (Vec::with_capacity(placed), Vec::with_capacity(placed));
+        if placed > 0 {
+            let list = p.ptr(record + 4)?;
+            for i in 0..placed {
+                let at = p.ptr(list + 4 * i)?;
+                let m: [f32; 16] = std::array::from_fn(|k| p.f32(at + 0x40 + 4 * k).unwrap_or(f32::NAN));
+                let s: [f32; 4] = std::array::from_fn(|k| p.f32(at + 0x30 + 4 * k).unwrap_or(f32::NAN));
+                ensure!(m.iter().chain(&s).all(|v| v.is_finite()) && (m[15] - 1.).abs() < 1e-3, "ND instance matrix");
+                instances.push(m);
+                spheres.push(s);
+            }
+        }
         let (group_count, fragments) = (usize::from(p.u16(header + 4)?), usize::from(p.u16(header + 6)?));
         let array = p.ptr(header + 0x14)?;
         let mut raws = Vec::with_capacity(fragments);
@@ -299,7 +322,7 @@ pub fn prototype_meshes(p: &Loaded, payload: usize) -> Result<Vec<Mesh>> {
             ensure!(first + n <= fragments.len(), "ND mesh group range");
             groups.push(Group { material: material(p, p.ptr(p.ptr(row)?)?)?, fragments: first..first + n });
         }
-        meshes.push(Mesh { fragments, groups });
+        meshes.push(Mesh { fragments, groups, instances, spheres });
     }
     Ok(meshes)
 }
