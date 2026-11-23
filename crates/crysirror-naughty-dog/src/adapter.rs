@@ -134,6 +134,22 @@ struct Session {
     pending: std::collections::VecDeque<String>,
     bounds: Option<([f32; 3], [f32; 3])>,
     start: Option<scene::StartCamera>,
+    /// Whether a level light table has set the environment.
+    lit: bool,
+}
+
+/// The world environment: the level's directional light and ambient term
+/// when known. Native intensities (0.9–19 on the installed levels) are
+/// clamped to the renderer's sun range; the mapping is not calibrated
+/// against the original renderer (SATD-nd-retail-runtime).
+fn environment(light: Option<&scene::LevelLight>) -> serde_json::Value {
+    match light {
+        None => json!({"op": "set_environment", "environment": {"show_sky": true, "intensity": 1.0, "ambient": [0.55, 0.55, 0.55], "sun": {"direction": [0.3, -0.8, -0.4], "color": [1.0, 0.97, 0.9], "intensity": 0.6, "shadow_strength": 0.0}}}),
+        Some(l) => {
+            let ambient = l.ambient.map_or([0.45; 3], |a| a.map(|v| (v * 1.6).clamp(0.05, 1.5)));
+            json!({"op": "set_environment", "environment": {"show_sky": true, "intensity": 1.0, "ambient": ambient, "sun": {"direction": l.direction, "color": l.color.map(|c| c.clamp(0., 4.)), "intensity": l.intensity.clamp(0.2, 4.0), "shadow_strength": 0.6}}})
+        }
+    }
 }
 
 pub struct NaughtyDogVm {
@@ -181,14 +197,14 @@ impl NaughtyDogVm {
         let (_, archive) = registry.open(open("pak22.psarc")?, Some("sony/psarc"), &context)?;
         let mount = ArchiveMount::new(archive, context)?;
         let camera = Camera { eye: [0.; 3], yaw: 0., pitch: 0., speed: 5. };
-        let mut session = Session { mount, levels, current, camera, last_ms: host.now_ms(), triangles: 0, packages: Vec::new(), entities: Vec::new(), next_model: 0, pending: Default::default(), bounds: None, start: None };
+        let mut session = Session { mount, levels, current, camera, last_ms: host.now_ms(), triangles: 0, packages: Vec::new(), entities: Vec::new(), next_model: 0, pending: Default::default(), bounds: None, start: None, lit: false };
         self.begin(host, &mut session)?;
         Ok(session)
     }
 
     /// Unload the presented level and queue `session.current`'s packages.
     fn begin(&self, host: &mut dyn HostServices, session: &mut Session) -> Result<()> {
-        let mut world = vec![json!({"op": "set_environment", "environment": {"show_sky": true, "intensity": 1.0, "ambient": [0.55, 0.55, 0.55], "sun": {"direction": [0.3, -0.8, -0.4], "color": [1.0, 0.97, 0.9], "intensity": 0.6, "shadow_strength": 0.0}}})];
+        let mut world = vec![environment(None)];
         for (id, asset) in session.entities.drain(..) {
             world.push(json!({"op": "despawn", "id": id}));
             host.release_model(self.client, &asset)?;
@@ -198,6 +214,7 @@ impl NaughtyDogVm {
         session.packages.clear();
         session.bounds = None;
         session.start = None;
+        session.lit = false;
         host.submit_engine(self.client, 1, &serde_json::to_vec(&json!({"layers": [], "world": world}))?)?;
         Ok(())
     }
@@ -211,6 +228,15 @@ impl NaughtyDogVm {
             let package = session.mount.open(&path)?;
             let directory = Directory::read(package.as_ref())?;
             let meshes = scene::package_meshes(package.as_ref(), &directory, PACKAGE_LIMIT)?;
+            if !session.lit {
+                if let Some(item) = directory.items.iter().find(|i| i.kind == "LIGHT_TABLE_1") {
+                    let loaded = crate::mesh::Loaded::read(package.as_ref(), PACKAGE_LIMIT)?;
+                    if let Some(light) = scene::level_light(&loaded, item.payload_offset as usize)? {
+                        world.push(environment(Some(&light)));
+                        session.lit = true;
+                    }
+                }
+            }
             if session.start.is_none() {
                 if let Some(item) = directory.items.iter().find(|i| i.kind == "CAMERA_TABLE_1") {
                     let loaded = crate::mesh::Loaded::read(package.as_ref(), PACKAGE_LIMIT)?;

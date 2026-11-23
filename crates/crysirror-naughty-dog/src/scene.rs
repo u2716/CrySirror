@@ -26,6 +26,44 @@ pub struct StartCamera {
     pub far: f32,
 }
 
+/// The level's directional light and ambient term from `LIGHT_TABLE_1`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LevelLight {
+    pub color: [f32; 3],
+    /// Unit direction the light travels.
+    pub direction: [f32; 3],
+    pub intensity: f32,
+    /// First RGB spherical-harmonic term of the table's probe record, when
+    /// non-zero.
+    pub ambient: Option<[f32; 3]>,
+}
+
+/// `LIGHT_TABLE_1`: the light record pointer at +0x28 holds colour,
+/// position, direction, position, zero, range (`f32::MAX` for directional)
+/// and intensity; the probe record at +0x30 holds a position followed by
+/// RGB spherical-harmonic coefficients.
+pub fn level_light(p: &mesh::Loaded, payload: usize) -> Result<Option<LevelLight>> {
+    // Some installed tables (for example `museum-sewer-end`) carry no light
+    // record.
+    let Ok(record) = p.ptr(payload + 0x28) else { return Ok(None) };
+    let f = |i: usize| p.f32(record + 4 * i);
+    let color = [f(0)?, f(1)?, f(2)?];
+    let direction = [f(6)?, f(7)?, f(8)?];
+    let (range, intensity) = (f(13)?, f(14)?);
+    let length = direction.iter().map(|v| v * v).sum::<f32>().sqrt();
+    if range < 1e30 || !(0.9..1.1).contains(&length) || !color.iter().chain([&intensity]).all(|v| v.is_finite() && *v >= 0.) {
+        return Ok(None);
+    }
+    let ambient = match p.ptr(payload + 0x30) {
+        Ok(probe) => {
+            let sh = [p.f32(probe + 12)?, p.f32(probe + 16)?, p.f32(probe + 20)?];
+            (sh.iter().all(|v| v.is_finite() && *v >= 0.) && sh.iter().any(|v| *v > 0.)).then_some(sh)
+        }
+        Err(_) => None,
+    };
+    Ok(Some(LevelLight { color, direction: direction.map(|v| v / length), intensity, ambient }))
+}
+
 /// The first camera of a `CAMERA_TABLE_1` payload: count, pointer to
 /// records of a name pointer followed by position, forward, up, two field
 /// of view angles, near and far.
