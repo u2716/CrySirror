@@ -170,7 +170,7 @@ fn unpack(data: &[u8], at: usize, count: usize, depths: &[u8]) -> Result<Vec<[u3
 fn raw_attribute<const N: usize>(p: &Loaded, f: usize, id: u8, vertices: usize) -> Result<Option<Raw<N>>> {
     let desc = p.ptr(f + 0x28)?;
     let attributes = p.data[f + 0x2f] as usize;
-    ensure!((1..=16).contains(&attributes), "ND fragment attribute count");
+    ensure!((1..=32).contains(&attributes), "ND fragment attribute count");
     for a in 0..attributes {
         let at = desc + 8 + 8 * a;
         let row: [u8; 8] = p.data.get(at..at + 8).context("ND descriptor outside package")?.try_into()?;
@@ -244,12 +244,19 @@ fn material(p: &Loaded, m: usize) -> Result<Material> {
     Ok(Material { name, samplers })
 }
 
+/// First word of the collision-mesh collections in actor packages (the
+/// foreground login code tests the same value); these hold no render meshes.
+pub const COLLISION_COLLECTION: usize = 0x1001;
+
 /// Every mesh of a `PM_COLLECTION_2` payload. Fragments without stored
 /// positions (two-triangle quads with only texture coordinates in the
 /// installed `post-56` package) decode as empty fragments so group ranges
 /// keep their native indices.
 pub fn prototype_meshes(p: &Loaded, payload: usize) -> Result<Vec<Mesh>> {
     let count = p.u32(payload)? as usize;
+    if count == COLLISION_COLLECTION {
+        return Ok(Vec::new());
+    }
     ensure!(count <= 4096, "ND prototype count");
     let mut meshes = Vec::with_capacity(count);
     for e in 0..count {
@@ -265,7 +272,9 @@ pub fn prototype_meshes(p: &Loaded, payload: usize) -> Result<Vec<Mesh>> {
                 raws.push(None);
                 continue;
             };
-            let uv = raw_attribute::<2>(p, f, ATTR_UV, vertices)?;
+            // One installed prop (`ice-t-prayer-wheel-gears`) stores
+            // coordinates in format 0xb8, not yet decoded: it keeps no UVs.
+            let uv = raw_attribute::<2>(p, f, ATTR_UV, vertices).ok().flatten();
             let triangles = decode_indices(&p.data[p.ptr(f + 0x48)?..], usize::from(p.u16(f + 0x40)?), vertices)?;
             raws.push(Some((pos, uv, triangles)));
         }

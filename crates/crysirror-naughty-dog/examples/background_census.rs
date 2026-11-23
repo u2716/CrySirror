@@ -26,7 +26,14 @@ impl AssetReader for File {
 fn main() -> Result<()> {
     let root = std::env::args_os().nth(1).context("usage: background_census GAME_ROOT")?;
     let dir = Dir::open_ambient_dir(root, ambient_authority())?.open_dir("PS3_GAME/USRDIR/build/main")?;
-    let f = dir.open("pak22.psarc")?;
+    for archive in ["pak22.psarc", "actor27.psarc"] {
+        census(&dir, archive)?;
+    }
+    Ok(())
+}
+
+fn census(dir: &Dir, archive_name: &str) -> Result<()> {
+    let f = dir.open(archive_name)?;
     let len = f.metadata()?.len();
     let mut registry = FormatRegistry::default();
     crysirror_formats_arc::register(&mut registry)?;
@@ -40,9 +47,18 @@ fn main() -> Result<()> {
     for name in &names {
         let handle = mount.open(name)?;
         let directory = Directory::read(handle.as_ref())?;
-        let Some(item) = directory.items.iter().find(|i| i.kind == "PM_COLLECTION_2") else { continue };
+        let items: Vec<_> = directory.items.iter().filter(|i| i.kind == "PM_COLLECTION_2").collect();
+        if items.is_empty() {
+            continue;
+        }
         packages += 1;
-        let result = mesh::Loaded::read(handle.as_ref(), 256 << 20).and_then(|l| mesh::prototype_meshes(&l, item.payload_offset as usize));
+        let result = mesh::Loaded::read(handle.as_ref(), 256 << 20).and_then(|l| {
+            let mut all = Vec::new();
+            for item in &items {
+                all.extend(mesh::prototype_meshes(&l, item.payload_offset as usize)?);
+            }
+            Ok(all)
+        });
         match result {
             Ok(m) => {
                 meshes += m.len();
@@ -52,7 +68,8 @@ fn main() -> Result<()> {
             Err(e) => failures.entry(format!("{e:#}")).or_default().push(name.clone()),
         }
     }
-    println!("{packages} packages with prototype meshes: {meshes} meshes, {fragments} fragments, {triangles} triangles decoded");
+    let _ = &failures;
+    println!("{archive_name}: {packages} packages with prototype meshes: {meshes} meshes, {fragments} fragments, {triangles} triangles decoded");
     for (message, names) in &failures {
         println!("{} failed: {message} (e.g. {})", names.len(), names.iter().take(3).cloned().collect::<Vec<_>>().join(", "));
     }

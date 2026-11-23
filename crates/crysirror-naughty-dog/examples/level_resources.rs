@@ -187,9 +187,14 @@ fn main() -> Result<()> {
                             decoded += 1;
                         }
                         println!("  {p}: decoded {decoded} VRAM textures, {} distinct sampled RGBA values", colours.len());
-                        if let Some(item) = directory.items.iter().find(|i| i.kind == "PM_COLLECTION_2") {
+                        let collections: Vec<_> = directory.items.iter().filter(|i| i.kind == "PM_COLLECTION_2").collect();
+                        if !collections.is_empty() {
                             let loaded = crysirror_naughty_dog::mesh::Loaded::read(handle.as_ref(), 256 << 20)?;
-                            let meshes = match crysirror_naughty_dog::mesh::prototype_meshes(&loaded, item.payload_offset as usize) {
+                            let decoded = collections.iter().try_fold(Vec::new(), |mut all, item| {
+                                all.extend(crysirror_naughty_dog::mesh::prototype_meshes(&loaded, item.payload_offset as usize)?);
+                                anyhow::Ok(all)
+                            });
+                            let meshes = match decoded {
                                 Ok(m) => m,
                                 Err(e) => {
                                     println!("  {p}: prototype meshes not decoded: {e:#}");
