@@ -507,6 +507,7 @@ struct MaterialUniform {
     surface: [f32; 4],
     effect_params: [[f32; 4]; 4],
     toon: [f32; 4],
+    toon_light: [f32; 4],
 }
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -2401,6 +2402,7 @@ impl PbrRenderer {
                 None => m.effect.as_ref().map_or([[0.; 4]; 4], |e| e.uniforms().1),
             },
             toon: m.toon.as_ref().map_or([0.; 4], |t| t.shadow_rim),
+            toon_light: m.toon.as_ref().map_or([0.; 4], |t| t.shadow_light),
         }
     }
     fn prim(&self, p: &cpu::PbrPrimitive) -> GpuPrim {
@@ -4006,7 +4008,10 @@ impl PbrRenderer {
             rt_shadow: [if use_rt { 1. } else { 0. }, 0., 0., 0.],
             toon_dir: match &env.toon_light {
                 Some(t) => {
-                    let d = Vec3::from_array(t.direction).normalize();
+                    let mut d = Vec3::from_array(t.direction).normalize();
+                    if env.toon_light_camera {
+                        d = view.inverse().transform_vector3(d).normalize();
+                    }
                     [d.x, d.y, d.z, t.intensity]
                 }
                 None => [l.x, l.y, l.z, sun.intensity],

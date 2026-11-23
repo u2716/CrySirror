@@ -2396,3 +2396,75 @@ fn card_face() {
     let custom = card.parts("Custom").unwrap();
     println!("{:?}", custom.first());
 }
+
+/// Every texture of a material (`AMANATSU_BUNDLE`, name `AMANATSU_FILTER`)
+/// to `AMANATSU_DUMP/<property>.png` (2D arrays: `<property>_<slice>.png`).
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn material_textures() {
+    let mut u = unity();
+    let bundle = std::env::var("AMANATSU_BUNDLE").unwrap();
+    let filter = std::env::var("AMANATSU_FILTER").unwrap();
+    let dir = std::env::var("AMANATSU_DUMP").unwrap();
+    for key in u.bundle_files().into_iter().filter(|k| k.starts_with(&format!("bundle:{bundle}#")) && !k.ends_with(".resS")) {
+        let ids: Vec<i64> = u.file(&key).unwrap().objects.iter().filter(|o| o.class_id == 21).map(|o| o.path_id).collect();
+        for id in ids {
+            let f = u.decode(&key, id).unwrap();
+            if f.string("m_Name").unwrap_or("") != filter {
+                continue;
+            }
+            let m = crysirror_unity::world6::UnityMaterial::decode(&f, String::new());
+            for (prop, env) in &m.textures {
+                if env.texture.path_id == 0 {
+                    continue;
+                }
+                let Ok((file, pid)) = u.target(&key, env.texture) else { continue };
+                let class = u.file(&file).unwrap().object(pid).map(|o| o.class_id).unwrap_or(0);
+                let srgb = u.decode(&file, pid).ok().and_then(|t| t.int("m_ColorSpace")).unwrap_or(-1);
+                if class == 187 {
+                    let (slices, _) = u.texture_array(&file, pid).unwrap();
+                    for (i, s) in slices.iter().enumerate() {
+                        std::fs::write(format!("{dir}/{prop}_{i}.png"), crysirror_image::encode_png(s).unwrap()).unwrap();
+                    }
+                    println!("{prop} array {} slices colorspace {srgb}", slices.len());
+                } else if let Ok(img) = u.texture(&file, pid) {
+                    std::fs::write(format!("{dir}/{prop}.png"), crysirror_image::encode_png(&img).unwrap()).unwrap();
+                    println!("{prop} {}x{} colorspace {srgb}", img.width, img.height);
+                } else {
+                    println!("{prop}: class {class} not decoded");
+                }
+            }
+        }
+    }
+}
+
+/// Lights of a bundle's prefabs (`AMANATSU_BUNDLE`): node path, local and
+/// world rotation, light fields and the scripts beside them.
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn bundle_lights() {
+    let mut u = unity();
+    let bundle = std::env::var("AMANATSU_BUNDLE").unwrap();
+    for key in u.bundle_files().into_iter().filter(|k| k.starts_with(&format!("bundle:{bundle}#")) && !k.ends_with(".resS")) {
+        let scene = match u.scene(&key) {
+            Ok(s) => s,
+            Err(e) => {
+                println!("{key}: {e:#}");
+                continue;
+            }
+        };
+        println!("{key}: {} nodes", scene.nodes.len());
+        for (i, n) in scene.nodes.iter().enumerate() {
+            let Some(l) = n.components.iter().find(|c| c.class_id == 108) else { continue };
+            let m = crysirror_unity::world6::world_matrix(&scene, i);
+            let scripts: Vec<&str> = n.components.iter().map(|c| c.script.as_str()).filter(|s| !s.is_empty()).collect();
+            println!("{} active {} local rot {:?} world fwd {:?}", scene.path(i), n.active, n.xform.rotation, m.transform_vector3(glam::Vec3::Z).to_array());
+            println!("    type {:?} color {:?} intensity {:?} mask {:?} scripts {scripts:?}", l.fields.int("m_Type"), l.fields.get("m_Color"), l.fields.float("m_Intensity"), l.fields.fields("m_CullingMask").and_then(|m| m.int("m_Bits")));
+        }
+        for (i, n) in scene.nodes.iter().enumerate() {
+            for c in n.components.iter().filter(|c| c.script.contains("Light")) {
+                println!("{} [{}] {:?}", scene.path(i), c.script, c.fields.0.iter().filter(|(k, _)| !k.starts_with("m_")).collect::<Vec<_>>());
+            }
+        }
+    }
+}

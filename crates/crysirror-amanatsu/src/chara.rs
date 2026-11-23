@@ -1211,10 +1211,14 @@ impl SceneAssets for CharaAssets<'_> {
         // shaders' forward programs (DXBC, see the validation note) shade
         // `base · mix(tone, 1, max(lit, 1 − sat(_Shadow_power · 0.4 + 0.5)))`
         // with `tone` the base colour's HSV shade, or `_Shade_color` with
-        // `_UseShadowColor`, under the key light clamped to 1.
-        // SATD-amanatsu-port: the grazing `_Shadow_color` (card
-        // `skinShadowColor`) tint, the md layers of the face, hair and
-        // clothes, SSS, shine and rim terms are not drawn.
+        // `_UseShadowColor`, under the key light clamped to 1. The skin
+        // programs (checked against their DXBC on a CPU interpreter) use the
+        // `_Lamp` blue channel at `sat((n·l + 0.6) / 1.6)` gated by
+        // `sat((n·l − 0.05) · 5)`, mix the base shade with the ambient tone
+        // and light it with a fixed bluish unlit-side colour
+        // (`ToonShading::shadow_light`).
+        // SATD-amanatsu-port: the skin base pre-grade (an overlay layer that
+        // warms and lifts mid tones), SSS, shine and rim terms are not drawn.
         let lamp = match m.textures.get("_Lamp").filter(|t| t.texture.path_id != 0) {
             Some(t) => {
                 let (f, id) = self.unity.target(if m.file.is_empty() { file } else { &m.file }, t.texture)?;
@@ -1222,7 +1226,8 @@ impl SceneAssets for CharaAssets<'_> {
             }
             None => None,
         };
-        let curve = ramp_curve(lamp.as_ref());
+        let skin = shader.starts_with("AL/skin");
+        let curve = if skin { skin_ramp_curve(lamp.as_ref()) } else { ramp_curve(lamp.as_ref()) };
         if let Some(power) = m.floats.get("_Shadow_power") {
             let floor = 1. - (power * 0.4 + 0.5).clamp(0., 1.);
             let shade = m.colors.get("_Shade_color").filter(|_| m.floats.get("_UseShadowColor").is_some_and(|u| *u > 0.5));
@@ -1240,7 +1245,15 @@ impl SceneAssets for CharaAssets<'_> {
             o.toon_light_limit = Some(1.);
             let tone = shade.map(|c| [c[0], c[1], c[2]]).or(ambient);
             o.toon_ambient = m.floats.get("_AmbientIntensity").or(m.floats.get("_AmbientIntensity1")).copied();
-            let k = self.light;
+            // The skin programs light the tone themselves: a fixed bluish
+            // light on the unlit side and no ambient term, so the base needs
+            // no compensation for the engine's ambient.
+            let skin_light = skin && o.toon_shade_from_base;
+            if skin_light {
+                o.toon_shadow_light = Some([0.539542, 0.546249, 0.737911, 1.]);
+                o.toon_ambient = Some(0.);
+            }
+            let k = if skin_light { 1. } else { self.light };
             let mut o = self.base_look(file, m, &look, shader, k, o)?;
             // The body's md layers (`_Detail_mask_01` slice 0) shade painted
             // creases and contours as a shadow layer.
@@ -1475,6 +1488,26 @@ pub fn ramp_curve(lamp: Option<&ImageSurface>) -> [f32; 256] {
     })
 }
 
+/// Shadow amount of the AL skin programs at 256 steps of the engine's half
+/// Lambert coordinate `u = n·l · 0.4951 + 0.5`: `_Lamp` blue at
+/// `sat((n·l + 0.6) / 1.6)`, the lit part gated by `sat((n·l − 0.05) · 5)`.
+/// SATD-amanatsu-port: the md layers' shift of the lamp coordinate.
+pub fn skin_ramp_curve(lamp: Option<&ImageSurface>) -> [f32; 256] {
+    std::array::from_fn(|x| {
+        let nl = (x as f32 / 255. - 0.5) / 0.4951;
+        let lx = ((nl + 0.6) / 1.6).clamp(0., 1.);
+        let b = match lamp {
+            Some(l) if l.width > 0 && l.height > 0 => {
+                let px = ((lx * l.width as f32) as u32).min(l.width - 1);
+                f32::from(l.rgba[(px * 4 + 2) as usize]) / 255.
+            }
+            None | Some(_) => 1. - ((lx - 0.46) / 0.08).clamp(0., 1.),
+        };
+        let gate = ((nl - 0.05) * 5.).clamp(0., 1.);
+        1. - (1. - b) * gate
+    })
+}
+
 /// The engine toon lookup of the AL shaders: row 0 `mix(tone, 1, lit)` with
 /// `lit = max(1 − shadow amount, floor)` (a black `tone` leaves the lit
 /// amount for `ToonShading::shade_from_base`), row 1 rate 0 with a shadow
@@ -1638,6 +1671,25 @@ pub fn toon_ramp(curve: &[f32; 256], shadow: [f32; 3]) -> ImageSurface {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn skin_lamp_curve() {
+        // A lamp whose blue falls linearly from 1 to 0.
+        let mut lamp = ImageSurface { width: 256, height: 1, rgba: vec![0; 256 * 4] };
+        for x in 0..256 {
+            lamp.rgba[x * 4 + 2] = 255 - x as u8;
+        }
+        let c = skin_ramp_curve(Some(&lamp));
+        let at = |nl: f32| c[((nl * 0.4951 + 0.5) * 255.).round() as usize];
+        // Below the gate (n·l ≤ 0.05) everything is shadow.
+        assert_eq!(at(-0.5), 1.);
+        assert_eq!(at(0.), 1.);
+        // Fully lit side: lamp x = (n·l + 0.6) / 1.6 ≈ 1 → blue ≈ 0.
+        assert!(at(1.) < 0.02, "{}", at(1.));
+        // Half the gate at n·l = 0.15, lamp x ≈ 0.47.
+        let mid = at(0.15);
+        assert!((mid - (1. - 0.5 * 0.47)).abs() < 0.03, "{mid}");
+    }
 
     #[test]
     fn al_shade_tone() {

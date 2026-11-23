@@ -408,6 +408,11 @@ pub struct Environment {
     /// cast shadows always come from the sun.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub toon_light: Option<Sun>,
+    /// `toon_light.direction` is in camera space (x right, y up, z toward
+    /// the viewer): a key light attached to the camera, e.g. a Unity light
+    /// parented to it. The renderer applies the camera rotation each frame.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub toon_light_camera: bool,
     /// Uniform ambient radiance (linear RGB) replacing the environment's
     /// diffuse spherical harmonics, e.g. a flat `RenderSettings.ambientLight`.
     /// Scaled by `intensity` like the environment it replaces.
@@ -467,6 +472,7 @@ impl Default for Environment {
             show_sky: true,
             sun: Some(Sun::default()),
             toon_light: None,
+            toon_light_camera: false,
             ambient: None,
             bloom: bloom(),
             ambient_occlusion: ao(),

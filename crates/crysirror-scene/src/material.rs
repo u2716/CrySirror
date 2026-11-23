@@ -104,6 +104,17 @@ pub struct ToonShading<T = String> {
     /// (0.7 − 0.2 · (clamp(lum(sun), 1, 3) − 1)) · a` with `n'` the normal
     /// bent 0.25 down.
     pub shadow_rim: [f32; 4],
+    /// With `shade_from_base` and `a > 0`: the ILLGAMES AL skin light model.
+    /// The shadow tone becomes `lum + k·(f·M − lum)` with `M` the mix of the
+    /// ambient tone (`HSV(SH · 0.7 + 0.3)`, saturation × 1.5) toward the
+    /// base shade by `w = (0.7 − 0.2·(clamp(lum(L), 1, 3) − 1)) · 0.375 ·
+    /// (1 + sat(n·l))`, `f`/`k` from the key light's per-channel
+    /// `clamp(log10 L, 0, 3) + sat(L)` sum `s` (`f = 1 − (min(s, 4) − 1)/6`,
+    /// `k = 1.1 + 0.9·sat((s − 1)/3)`); the result is lit by
+    /// `mix(rgb, L', max(shadow, 0.5)·sat((n·l + 0.8)·0.625))`, `rgb` (linear)
+    /// the light on the unlit side (toward the SH ambient as `avg(L)`
+    /// exceeds 1), `L' = max(min(L, 1), 0.8·min(L, 1) + 0.2)`.
+    pub shadow_light: [f32; 4],
     pub shininess: f32,
     pub highlight_rate: f32,
     pub highlight_power: f32,
@@ -128,6 +139,7 @@ impl<T> Default for ToonShading<T> {
             light_limit: 0.,
             shade_from_base: false,
             shadow_rim: [0.; 4],
+            shadow_light: [0.; 4],
             shininess: 0.,
             highlight_rate: 0.,
             highlight_power: 1.,
@@ -152,7 +164,8 @@ impl<T> ToonShading<T> {
                 && range(self.outline_width, 0., 0.1)
                 && range(self.ambient_scale, 0., 16.)
                 && range(self.light_limit, 0., 16.)
-                && self.shadow_rim.iter().all(|x| range(*x, 0., 1.)),
+                && self.shadow_rim.iter().all(|x| range(*x, 0., 1.))
+                && self.shadow_light.iter().all(|x| range(*x, 0., 1.)),
             "toon shading parameter range"
         );
         ensure!(!self.color_table || self.lookup_texture.is_some(), "toon colour table needs the lookup texture");

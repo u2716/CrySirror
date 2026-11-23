@@ -13,6 +13,7 @@ use crysirror_unity::{
     world6::{self, GlbOptions, GlbReport, RenderSettings6, SceneLight},
 };
 use glam::Vec3;
+use std::collections::HashMap;
 use serde_json::{json, Value as Json};
 
 /// Prepared texture bytes a map may take of the session's 256 MiB
@@ -35,6 +36,49 @@ pub struct MapInfo {
     pub point: (String, String),
     /// Light setting bundle and asset prefix (`LightmapSettings_000_`).
     pub light: (String, String),
+}
+
+/// `MapManager.LoadCameraLight(map, zone, camera)`: the `camera_light[…]`
+/// row of the map (`id, manifest, bundle, asset prefix`) names the prefab
+/// `<prefix><zone:00>` that is instantiated under the camera; its
+/// character-layer directional light with the `CameraLightCtrl` intensity
+/// (`CharaLightInfo.SetIntensity(true)`). The direction is in the
+/// prefab's parent space, i.e. Unity camera space.
+/// SATD-amanatsu-port: the 0.2 s intensity fades of a camera change and
+/// further lights of the prefab are not applied.
+pub fn camera_light(unity: &mut Unity, map: i32, zone: i32) -> Result<Option<SceneLight>> {
+    let bundles: Vec<String> = unity.bundle_files().into_iter().filter_map(|k| k.strip_prefix("bundle:").and_then(|r| r.split_once('#')).map(|(b, _)| b.to_owned())).filter(|b| b.starts_with("lib/ma/lis/")).collect();
+    let mut row = None;
+    for b in bundles {
+        let stem = b.rsplit('/').next().unwrap_or(&b).trim_end_matches(".unity3d").to_owned();
+        let Some((k, id)) = unity.bundle_asset(&b, &format!("camera_light[{stem}]"), 49)? else { continue };
+        let t = Table::parse(&unity.text_asset(&k, id)?)?;
+        if let Some(r) = t.rows.iter().find(|r| r.first().and_then(|v| v.parse::<i32>().ok()) == Some(map)) {
+            row = Some((r.get(2).cloned().unwrap_or_default(), r.get(3).cloned().unwrap_or_default()));
+        }
+    }
+    let Some((bundle, prefix)) = row else { return Ok(None) };
+    let prefab = crate::level::Level::prefab(unity, &format!("lib/{bundle}"), &format!("{prefix}{zone:02}"))?;
+    let scene = &prefab.scene;
+    let mut intensity: HashMap<usize, f32> = HashMap::new();
+    for n in &scene.nodes {
+        for c in n.components.iter().filter(|c| c.script == "AL.CameraLightCtrl") {
+            let infos = c.fields.fields("_cameraLightInfo").and_then(|f| f.array("Infos")).unwrap_or(&[]);
+            for info in infos {
+                let Value::Struct(f) = info else { continue };
+                let (Some(light), Some(k)) = (f.pptr("Light"), f.float("Intensity")) else { continue };
+                if let Some(node) = scene.nodes.iter().position(|n| n.components.iter().any(|c| c.path_id == light.path_id)) {
+                    intensity.insert(node, k as f32);
+                }
+            }
+        }
+    }
+    Ok(world6::scene_lights(scene).into_iter().filter(|l| l.kind == 1 && l.culling_mask & CHARA_LAYER != 0).map(|mut l| {
+        if let Some(k) = intensity.get(&l.node) {
+            l.intensity = *k;
+        }
+        l
+    }).filter(|l| l.intensity > 0.01).max_by(|a, b| a.intensity.total_cmp(&b.intensity)))
 }
 
 /// Every `map_info[…]` table of `lib/ma/lis`.
@@ -184,6 +228,10 @@ pub struct MapWorld {
     /// The character key light (`Directional Light Sun Chara`): the
     /// brightest enabled directional light of the character layer (7).
     pub chara_light: Option<SceneLight>,
+    /// `MapManager.LoadCameraLight`: the zone's camera light prefab
+    /// (instantiated under the camera); its direction is in Unity camera
+    /// space.
+    pub camera_light: Option<SceneLight>,
     /// Point and spot lights of the active light groups (lamps of the
     /// evening/night settings).
     pub lights: Vec<SceneLight>,
@@ -440,7 +488,15 @@ pub fn load_with_budget(unity: &mut Unity, info: &MapInfo, time_zone: i32, textu
     if let Some(s) = &sky {
         log.push(format!("Azure sky: zenith {:?} horizon {:?}", s.zenith, s.horizon));
     }
-    Ok(MapWorld { info: info.clone(), chunks, report, sun, chara_light, lights, sky, settings, post, fog, cameras, points: action_points, short_movies, items, particles, log })
+    let camera_light = match camera_light(unity, info.id, time_zone) {
+        Ok(l) => l,
+        Err(e) => {
+            log.push(format!("camera light: {e:#}"));
+            None
+        }
+    };
+    log.push(format!("camera light: {:?}", camera_light.as_ref().map(|l| (l.direction, l.color, l.intensity))));
+    Ok(MapWorld { info: info.clone(), chunks, report, sun, chara_light, camera_light, lights, sky, settings, post, fog, cameras, points: action_points, short_movies, items, particles, log })
 }
 
 impl MapWorld {
@@ -502,6 +558,13 @@ impl MapWorld {
             "shadow_distance": 80.0,
             "grading": {"color_filter": p.color_filter, "contrast": p.contrast, "saturation": p.saturation},
         });
+        // The camera light keys the characters while it exists (Unity
+        // camera space → engine view space: z flips).
+        if let Some(l) = &self.camera_light {
+            let d = l.direction;
+            env["toon_light"] = json!({"direction": [d[0], d[1], -d[2]], "color": l.color.map(|c| c.clamp(0., 4.)), "intensity": l.intensity.clamp(0., 8.)});
+            env["toon_light_camera"] = json!(true);
+        }
         if let Some((c, start, end)) = self.fog {
             let decode = |v: f32| if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) };
             // Unity linear fog (0 at `start`, 1 at `end`) as exponential

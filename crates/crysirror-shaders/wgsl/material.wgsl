@@ -13,6 +13,8 @@ struct Material {
     effect_params:array<vec4<f32>,4>,
     // Toon: rgb linear grazing shadow tint, a its strength (shadow_rim).
     toon:vec4<f32>,
+    // Toon: rgb linear unlit-side light, a enables the AL skin light model (shadow_light).
+    toon_light:vec4<f32>,
 };
 @group(1) @binding(0) var<uniform> material: Material;
 @group(1) @binding(1) var t_base: texture_2d<f32>;
