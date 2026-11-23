@@ -154,3 +154,8 @@ types require their own compatibility work.
 Fonts, save locations, window behaviour and SMB/NFS game paths are described in
 the [desktop guide](DESKTOP_API.md). See [all supported engines](NATIVE_ADAPTERS.md)
 for other game formats.
+
+`System.confirm` presents a shared modal dialog with Yes and No and resumes
+the running script with the chosen result. No is initially focused and
+Escape selects No. KiriKiri Z `Rect` supplies signed edges, sizing, offsets,
+clipping, union and containment for game scripts and font ink bounds.

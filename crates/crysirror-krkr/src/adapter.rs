@@ -688,7 +688,7 @@ impl KrkrVm {
             if !crate::psbfile_plugin::poll(self.rt.as_mut().unwrap(), h, self.client)? {
                 return Ok(false);
             }
-            if !crate::plugin_ports::win32_dialog::poll(self.rt.as_mut().unwrap(), h, self.client)? {
+            if !crate::message_dialog::poll(self.rt.as_mut().unwrap(), h, self.client)? {
                 return Ok(false);
             }
             if !crate::save_struct::poll(self.rt.as_mut().unwrap())? {

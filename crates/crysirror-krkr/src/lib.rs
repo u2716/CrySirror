@@ -37,6 +37,8 @@ mod native_mouse;
 mod plugins;
 mod sound;
 mod save_struct;
+mod message_dialog;
+mod native_rect;
 mod video;
 mod pointer;
 mod tooltip;
