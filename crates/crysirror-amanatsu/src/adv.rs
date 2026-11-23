@@ -209,6 +209,8 @@ pub enum Effect {
     Voice { actor: String, bundle: String, asset: String },
     VoiceStop(String),
     Expression { actor: String, id: i64 },
+    /// `MozVisible` [actor, flag]: the censor plane (`HideMoz = !flag`).
+    Moz { actor: String, on: bool },
     /// `Expression`/`CharaExpression` in full (`Manager.Game.Expression`):
     /// eyebrow, eyes, mouth, eyebrow open, eyes open, mouth open min
     /// (empty: unchanged).
@@ -392,7 +394,7 @@ impl Program {
                 "CharaDitherIn" | "CharaDitherOut" => effects.push(Effect::Visible { actor: a(0), part: "All".into(), on: c.name() == "CharaDitherIn" }),
                 "CharaClothState" => effects.push(Effect::ClothState { actor: a(0), part: a(1), state: a(2).trim().parse().unwrap_or(0) }),
                 // Censor overlay visibility: the engine draws no overlay.
-                "MozVisible" => {}
+                "MozVisible" => effects.push(Effect::Moz { actor: a(0), on: a(1).eq_ignore_ascii_case("TRUE") }),
                 other => effects.push(Effect::Unported(other.to_owned(), c.args.clone())),
             }
         }
@@ -454,6 +456,7 @@ mod tests {
         assert_eq!(
             fx,
             vec![
+                Effect::Moz { actor: "NowID".into(), on: true },
                 Effect::ClothState { actor: "-1".into(), part: "Bot".into(), state: 2 },
                 Effect::EventCg { bundle: "adv/evcg/000_00.unity3d".into(), asset: "EventCG_BedIns_000_00".into() },
                 Effect::StandFind { actor: "-1".into(), child: "chaPos".into() },

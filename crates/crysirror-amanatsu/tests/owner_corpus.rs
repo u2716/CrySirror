@@ -1151,6 +1151,28 @@ fn chara_glb() {
     let options = crysirror_unity::world6::GlbOptions { morph_targets: true, ..Default::default() };
     let (glb, report) = crysirror_unity::world6::scene_glb(&human.scene, &human.key, &[0], &mut assets, &options, "test").unwrap();
     println!("chunks {:?} renderers {} errors {:?}", glb.iter().map(|g| g.len()).collect::<Vec<_>>(), report.renderers, report.errors);
+    // `AMANATSU_DUMP`: the embedded images whose name contains
+    // `AMANATSU_FILTER`.
+    if let Ok(dir) = std::env::var("AMANATSU_DUMP") {
+        let filter = std::env::var("AMANATSU_FILTER").unwrap_or_default();
+        for (ci, g) in glb.iter().enumerate() {
+            let len = u32::from_le_bytes(g[12..16].try_into().unwrap()) as usize;
+            let json: serde_json::Value = serde_json::from_slice(&g[20..20 + len]).unwrap();
+            let bin = &g[20 + len + 8..];
+            for (ii, img) in json["images"].as_array().into_iter().flatten().enumerate() {
+                let name = img["name"].as_str().unwrap_or("");
+                if !name.contains(filter.as_str()) {
+                    continue;
+                }
+                let Some(v) = img["bufferView"].as_u64() else { continue };
+                let view = &json["bufferViews"][v as usize];
+                let (o, l) = (view["byteOffset"].as_u64().unwrap_or(0) as usize, view["byteLength"].as_u64().unwrap_or(0) as usize);
+                let safe: String = name.chars().map(|c| if c.is_alphanumeric() { c } else { '_' }).collect();
+                std::fs::write(format!("{dir}/{ci}_{ii}_{safe}.png"), &bin[o..o + l]).unwrap();
+                println!("image {ci}/{ii} {name}");
+            }
+        }
+    }
     for g in &glb {
         let len = u32::from_le_bytes(g[12..16].try_into().unwrap()) as usize;
         let json: serde_json::Value = serde_json::from_slice(&g[20..20 + len]).unwrap();
@@ -2412,6 +2434,9 @@ fn card_face() {
     let card = crysirror_amanatsu::card::Card::parse(&u.read_all(&path).unwrap()).unwrap();
     let custom = card.parts("Custom").unwrap();
     println!("{:?}", custom.first());
+    if let Some(body) = custom.get(1) {
+        println!("body {:?}", format!("{body:?}").chars().take(3000).collect::<String>());
+    }
     println!("Graphic {:?} raw {:?}", card.graphic(), card.block("Graphic").map(|b| b.len()));
 }
 

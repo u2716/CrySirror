@@ -331,6 +331,7 @@ impl<T> Material<T> {
                     self.alpha_mode != AlphaMode::Opaque,
                     "dissolve requires mask or transparency"
                 ),
+                crate::effect::ShaderEffect::BlockNoise { .. } => ensure!(self.unlit, "block noise requires an unlit material"),
                 _ => {}
             }
         }

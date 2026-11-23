@@ -126,6 +126,12 @@ struct ClothRun {
     /// `Status.showAccessory` per slot with the slot's part name (when one
     /// is equipped).
     acs_slots: Vec<(Option<String>, bool)>,
+    /// `HumanBody.UpdateVisible`: a male body (`isConfigSon`), the config
+    /// `HScene/Son` flag, the status `visibleSon` and `HideMoz`.
+    male: bool,
+    son_config: bool,
+    son: bool,
+    hide_moz: bool,
     entities: Vec<u32>,
     /// Further hidden node subtrees (`CharaVisible` `Head`).
     hidden_nodes: Vec<String>,
@@ -142,6 +148,17 @@ impl ClothRun {
             out.extend(self.accessories.iter().cloned());
         }
         out.extend(self.acs_slots.iter().enumerate().filter(|(_, (_, shown))| !shown).map(|(slot, _)| format!("acs{slot}#root")));
+        // The male part shows with the config flag when the status asks for
+        // it or neither bottoms nor shorts are worn; the censor plane unless
+        // `HideMoz`.
+        let wearing = |list: &str| self.parts.iter().zip(&self.states).any(|(p, s)| p.list == list && *s == 0);
+        let bottoms_off = !wearing("co_bot") && !wearing("co_shorts");
+        if !(self.male && self.son_config && (self.son || bottoms_off)) {
+            out.push(crate::chara::SON.to_owned());
+        }
+        if self.hide_moz {
+            out.push(crate::chara::MOZ.to_owned());
+        }
         out
     }
 }
@@ -944,7 +961,7 @@ impl Game {
         if let Some(e) = crate::face::eye_rest(&human.scene) {
             self.eye_rest.insert(card_path.to_owned(), e);
         }
-        self.cloth.insert(card_path.to_owned(), ClothRun { states: vec![0; human.clothes.len()], parts: human.clothes.clone(), accessories: human.accessories.clone(), accessories_hidden: false, acs_slots: human.accessory_slots.iter().map(|n| (n.clone(), true)).collect(), entities: ids.clone(), hidden_nodes: Vec::new(), layers: layers.clone() });
+        self.cloth.insert(card_path.to_owned(), ClothRun { states: vec![0; human.clothes.len()], parts: human.clothes.clone(), accessories: human.accessories.clone(), accessories_hidden: false, acs_slots: human.accessory_slots.iter().map(|n| (n.clone(), true)).collect(), male: card_path == MALE_CARD, son_config: self.config.flag("HScene", "Son", true), son: self.h.is_some(), hide_moz: false, entities: ids.clone(), hidden_nodes: Vec::new(), layers: layers.clone() });
         self.heads.insert(card_path.to_owned(), human.head.clone());
         match crate::face::Face::from_scene(&mut self.unity, &human.scene, &human.key) {
             Ok(Some(face)) => {
@@ -2311,10 +2328,22 @@ impl Game {
                             self.refresh_cloth(&card);
                         }
                     }
-                    // SATD-amanatsu-port: the male `Son` object is drawn
-                    // with the body.
+                    // `Status.visibleSon`.
+                    "Son" => {
+                        if let Some(c) = self.cloth.get_mut(&card) {
+                            c.son = on;
+                        }
+                        self.refresh_cloth(&card);
+                    }
                     other => self.log.push(format!("SATD-amanatsu-port: CharaVisible {other}")),
                 }
+            }
+            E::Moz { actor, on } => {
+                let Some(card) = self.adv_actor(&actor) else { return Ok(()) };
+                if let Some(c) = self.cloth.get_mut(&card) {
+                    c.hide_moz = !on;
+                }
+                self.refresh_cloth(&card);
             }
             E::ClothState { actor, part, state } => {
                 let Some(card) = self.adv_actor(&actor) else { return Ok(()) };

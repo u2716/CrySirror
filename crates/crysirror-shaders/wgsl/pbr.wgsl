@@ -550,6 +550,42 @@ fn toon_ambient_tone(c: vec3<f32>) -> vec3<f32> {
     let hue = clamp(abs(fract(vec3<f32>(h) + vec3<f32>(1.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0) - 1.0, vec3<f32>(0.0), vec3<f32>(1.0));
     return ((hue - 1.0) * s + 1.0) * v;
 }
+// ShaderEffect::BlockNoise: Ashima 2D simplex noise of screen blocks.
+fn sn_mod289(x: vec3<f32>) -> vec3<f32> {
+    return x - floor(x * (1.0 / 289.0)) * 289.0;
+}
+fn sn_permute(x: vec3<f32>) -> vec3<f32> {
+    return sn_mod289(((x * 34.0) + 1.0) * x);
+}
+fn simplex2(v: vec2<f32>) -> f32 {
+    let c = vec4<f32>(0.211324865405187, 0.366025403784439, -0.577350269189626, 0.024390243902439);
+    var i = floor(v + dot(v, c.yy));
+    let x0 = v - i + dot(i, c.xx);
+    let i1 = select(vec2<f32>(0.0, 1.0), vec2<f32>(1.0, 0.0), x0.x > x0.y);
+    var x12 = x0.xyxy + c.xxzz;
+    x12 = vec4<f32>(x12.xy - i1, x12.zw);
+    i = i - floor(i * (1.0 / 289.0)) * 289.0;
+    let p = sn_permute(sn_permute(i.y + vec3<f32>(0.0, i1.y, 1.0)) + i.x + vec3<f32>(0.0, i1.x, 1.0));
+    var m = max(vec3<f32>(0.5) - vec3<f32>(dot(x0, x0), dot(x12.xy, x12.xy), dot(x12.zw, x12.zw)), vec3<f32>(0.0));
+    m = m * m;
+    m = m * m;
+    let x = 2.0 * fract(p * c.www) - 1.0;
+    let h = abs(x) - 0.5;
+    let ox = floor(x + 0.5);
+    let a0 = x - ox;
+    m = m * (1.79284291400159 - 0.85373472095314 * (a0 * a0 + h * h));
+    let g = vec3<f32>(a0.x * x0.x + h.x * x0.y, a0.y * x12.x + h.y * x12.y, a0.z * x12.z + h.z * x12.w);
+    return 130.0 * dot(m, g);
+}
+fn block_noise_color(frag: vec2<f32>) -> vec3<f32> {
+    let p = material.effect_params;
+    let pixel = vec2<f32>(frag.x, frame.screen.y - frag.y);
+    var v = (pixel * 0.01 + vec2<f32>(10.0, 0.0)) * p[0].x;
+    v = floor(v + floor(frame.misc.z * p[0].y) * 3.0);
+    let t = fract(simplex2(v) * 0.5 + 0.5);
+    let c = mix(p[1].rgb, p[2].rgb, t);
+    return mix(c, vec3<f32>(0.789393), p[0].z);
+}
 fn toon_outline_color() -> vec4<f32> {
     return material.emissive;
 }
@@ -612,7 +648,10 @@ fn fs_main(i: VertexOut, @builtin(front_facing) front: bool) -> @location(0) vec
     let emissive=surface.emission;
     // alpha.z: 0 lit, 1 unlit, 2 toon.
     if material.alpha.z>0.5 && material.alpha.z<1.5 {
-        let color=base.rgb+emissive;
+        var color=base.rgb+emissive;
+        if material.surface.y == 4.0 {
+            color = block_noise_color(i.clip.xy);
+        }
         if frame.misc.w > 0.5 {
             return gi_capture(color, i.world, front);
         }

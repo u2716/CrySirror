@@ -50,11 +50,28 @@ pub enum ShaderEffect {
         #[serde(default = "color")]
         edge_color: [f32; 3],
     },
+    /// Unlit screen-space block noise (a censor plane): the fragment's
+    /// pixel position (y up) × 0.01 (+10 on x) × `scale`, shifted by
+    /// `floor(time · rate) · 3` and floored to blocks, picks
+    /// `mix(color_a, color_b, simplex(block) · 0.5 + 0.5)`, then
+    /// `mix(·, 0.789, white)` (linear colours).
+    BlockNoise {
+        scale: f32,
+        #[serde(default = "rate")]
+        rate: f32,
+        color_a: [f32; 3],
+        color_b: [f32; 3],
+        #[serde(default)]
+        white: f32,
+    },
     Custom {
         asset: String,
         #[serde(default)]
         parameters: [[f32; 4]; 4],
     },
+}
+fn rate() -> f32 {
+    3.
 }
 impl ShaderEffect {
     pub fn validate(&self) -> Result<()> {
@@ -85,6 +102,10 @@ impl ShaderEffect {
                     && range(*edge_width, 0.0001, 1.)
                     && edge_color.iter().all(|x| range(*x, 0., 100.)),
                 "dissolve effect parameter range"
+            ),
+            Self::BlockNoise { scale, rate, color_a, color_b, white } => ensure!(
+                range(*scale, 0.001, 1000.) && range(*rate, 0., 120.) && color_a.iter().chain(color_b).all(|x| range(*x, 0., 16.)) && range(*white, 0., 1.),
+                "block noise effect parameter range"
             ),
             Self::Custom { asset, parameters } => {
                 let p =
@@ -137,6 +158,12 @@ impl ShaderEffect {
                 p[0] = [*threshold, *edge_width, 0., 0.];
                 p[1] = [edge_color[0], edge_color[1], edge_color[2], 0.];
                 3.
+            }
+            Self::BlockNoise { scale, rate, color_a, color_b, white } => {
+                p[0] = [*scale, *rate, *white, 0.];
+                p[1] = [color_a[0], color_a[1], color_a[2], 0.];
+                p[2] = [color_b[0], color_b[1], color_b[2], 0.];
+                4.
             }
             Self::Custom { parameters, .. } => {
                 p = *parameters;

@@ -63,6 +63,11 @@ pub const CLOTHES_LISTS: [&str; 11] = ["co_top", "co_bot", "co_bra", "co_shorts"
 /// Body objects the base body does not show: the clothing cut-out
 /// variants (type 01 is the full torso), the one-piece variant, H options,
 /// silhouettes and the shadow proxy.
+/// `HumanBody.UpdateVisible` objects shown by the body state (`Table` refs
+/// 96 and 102): exported for runtime visibility on undressed characters.
+pub const SON: &str = "n_dankon";
+pub const MOZ: &str = "n_mnpb";
+
 const HIDDEN_BODY: [&str; 16] = [
     "n_dankon", "n_mnpb", "body_onepi", "n_silhouetteTop", "o_body_shadow", "o_upper_type02", "o_upper_type03", "o_upper_type04", "o_upper_type05", "o_lower_type02", "o_lower_type03", "o_lower_type04", "o_lower_type05",
     "o_lower_type06", "o_upper_type06", "n_body_silhouette",
@@ -285,7 +290,8 @@ struct PartLook {
 /// the layer does not reach.
 #[derive(Debug)]
 pub struct Makeup {
-    pub mesh: std::sync::Arc<crysirror_unity::unity6::Mesh6>,
+    /// The meshes sharing the base texture (uv0) the layers bake into.
+    pub meshes: Vec<std::sync::Arc<crysirror_unity::unity6::Mesh6>>,
     pub layers: Vec<MakeupLayer>,
 }
 
@@ -300,6 +306,13 @@ pub struct MakeupLayer {
     pub channel: usize,
     /// Added (highlights) instead of mixed.
     pub additive: bool,
+    /// Two colours: `color` → `color2` by the texture's red ×
+    /// `color2.a`, mixed in by the texture's alpha × `color.a` (the body's
+    /// `_Nip` layer).
+    pub color2: Option<[f32; 4]>,
+    /// The texture's own colour × `color`, mixed in by its alpha ×
+    /// `color.a` (the body's `_Under_hair_texture`).
+    pub tinted: bool,
     /// Placement of the texture in its UV set.
     pub place: Option<Place>,
 }
@@ -330,6 +343,10 @@ pub enum Place {
     Cheek { pos: [f32; 2], size: f32, rotation: f32, highlight: bool },
     /// Nose in uv2 at `_NoseScale`.
     Nose { scale: f32 },
+    /// Body detail layer in uv2 (`AL/skin_body`): away from the centre the
+    /// coordinate moves toward `uv · (2 − 2z) + z − 0.5` (`z = size · 0.27 +
+    /// 0.54`) by `sat((|uv − 0.5| + 0.05) · 8.69565 − 1)`.
+    Nip { size: f32 },
 }
 
 impl Place {
@@ -345,6 +362,13 @@ impl Place {
                 [d[0] * cs + d[1] * sn + 0.5, -d[0] * sn + d[1] * cs + 0.5]
             }
             Place::Nose { scale } => [uv[0] * (scale * 0.4 + 0.8) + scale * -0.2 + 0.1, uv[1] * (scale * 0.4 + 0.8) + scale * -0.2 + 0.1 + scale * 0.08 - 0.04],
+            Place::Nip { size } => {
+                let z = size * 0.27 + 0.54;
+                let w = size * 0.27 + 0.04;
+                let d = ((uv[0] - 0.5).powi(2) + (uv[1] - 0.5).powi(2)).sqrt();
+                let k = ((d + 0.05) * 8.69565 - 1.).clamp(0., 1.);
+                uv.map(|v| v + k * (v * (2. - 2. * z) + w - v))
+            }
         }
     }
 }
@@ -370,25 +394,25 @@ fn face_makeup(lists: &Lists, face: &Value, makeup: Option<&Value>) -> Vec<Makeu
             uv: 1,
             color: makeup.and_then(|m| color(m.get("cheekColor"))).unwrap_or([1., 0.5, 0.5, 0.5]),
             channel: 0,
-            additive: false,
+            additive: false, color2: None, tinted: false,
             place: Some(Place::Cheek { pos, size, rotation, highlight: false }),
         });
         if let Some(c) = makeup.and_then(|m| color(m.get("cheekHighlightColor"))) {
             // The highlight placement is the material's (no card values).
-            out.push(MakeupLayer { texture: t, uv: 1, color: c, channel: 2, additive: true, place: Some(Place::Cheek { pos: [f32::NAN; 2], size: f32::NAN, rotation: f32::NAN, highlight: true }) });
+            out.push(MakeupLayer { texture: t, uv: 1, color: c, channel: 2, additive: true, color2: None, tinted: false, place: Some(Place::Cheek { pos: [f32::NAN; 2], size: f32::NAN, rotation: f32::NAN, highlight: true }) });
         }
     }
     if let Some(t) = tex("mt_nose", id(Some(face), "noseId"), 43) {
-        out.push(MakeupLayer { texture: t, uv: 2, color: color(face.get("noseColor")).unwrap_or([1.; 4]), channel: 0, additive: false, place: Some(Place::Nose { scale: f32::NAN }) });
+        out.push(MakeupLayer { texture: t, uv: 2, color: color(face.get("noseColor")).unwrap_or([1.; 4]), channel: 0, additive: false, color2: None, tinted: false, place: Some(Place::Nose { scale: f32::NAN }) });
     }
     if let Some(t) = tex("mt_lip", id(makeup, "lipId"), 30) {
-        out.push(MakeupLayer { texture: t.clone(), uv: 3, color: makeup.and_then(|m| color(m.get("lipColor"))).unwrap_or([1., 0.6, 0.6, 0.5]), channel: 0, additive: false, place: None });
+        out.push(MakeupLayer { texture: t.clone(), uv: 3, color: makeup.and_then(|m| color(m.get("lipColor"))).unwrap_or([1., 0.6, 0.6, 0.5]), channel: 0, additive: false, color2: None, tinted: false, place: None });
         if let Some(c) = makeup.and_then(|m| color(m.get("lipHighlightColor"))) {
-            out.push(MakeupLayer { texture: t, uv: 3, color: c, channel: 2, additive: true, place: None });
+            out.push(MakeupLayer { texture: t, uv: 3, color: c, channel: 2, additive: true, color2: None, tinted: false, place: None });
         }
     }
     if let Some(t) = tex("mt_lipline", id(Some(face), "lipLineId"), 29) {
-        out.push(MakeupLayer { texture: t, uv: 3, color: color(face.get("lipLineColor")).unwrap_or([1., 0.6, 0.6, 1.]), channel: 0, additive: false, place: None });
+        out.push(MakeupLayer { texture: t, uv: 3, color: color(face.get("lipLineColor")).unwrap_or([1., 0.6, 0.6, 1.]), channel: 0, additive: false, color2: None, tinted: false, place: None });
     }
     out
 }
@@ -541,13 +565,21 @@ pub fn bake_makeup(img: &mut ImageSurface, mesh: &crysirror_unity::unity6::Mesh6
                     let sx = ((v[0] * tex.width as f32) as u32).min(tex.width - 1);
                     let sy = (((1. - v[1]) * tex.height as f32) as u32).min(tex.height - 1);
                     let j = ((sy * tex.width + sx) * 4) as usize;
-                    let mask = f32::from(tex.rgba[j + layer.channel.min(3)]) / 255. * layer.color[3].clamp(0., 1.);
+                    let texel = [0, 1, 2, 3].map(|c| f32::from(tex.rgba[j + c]) / 255.);
+                    let (mask, target) = match (layer.color2, layer.tinted) {
+                        (Some(c2), _) => {
+                            let t = texel[0] * c2[3].clamp(0., 1.);
+                            (texel[3] * layer.color[3].clamp(0., 1.), [0, 1, 2].map(|c| srgb_decode(layer.color[c]) + (srgb_decode(c2[c]) - srgb_decode(layer.color[c])) * t))
+                        }
+                        (None, true) => (texel[3] * layer.color[3].clamp(0., 1.), [0, 1, 2].map(|c| texel[c] * srgb_decode(layer.color[c]))),
+                        (None, false) => (texel[layer.channel.min(3)] * layer.color[3].clamp(0., 1.), [0, 1, 2].map(|c| srgb_decode(layer.color[c]))),
+                    };
                     // Image rows run top-down; UV v runs bottom-up.
                     let o = ((h - 1 - py as usize) * w + px as usize) * 4;
                     // Mixed in linear space (URP linear project).
                     for c in 0..3 {
                         let mut out = srgb_decode(f32::from(img.rgba[o + c]) / 255.);
-                        let col = srgb_decode(layer.color[c]);
+                        let col = target[c];
                         if layer.additive {
                             out += col * mask;
                         } else {
@@ -638,8 +670,10 @@ impl Human {
     /// `AnimationState.hidden` instead of the import-time dress).
     pub fn undress_all(&mut self) {
         let mut names: std::collections::HashSet<String> = self.clothes.iter().flat_map(|c| c.variants.iter().cloned()).collect();
-        // Tears, shown by the face state.
+        // Tears, shown by the face state; the body state objects.
         names.extend(crate::face::TEARS.iter().map(|n| (*n).to_owned()));
+        names.insert(SON.to_owned());
+        names.insert(MOZ.to_owned());
         for n in self.scene.nodes.iter_mut().filter(|n| names.contains(&n.name)) {
             n.active = true;
         }
@@ -684,7 +718,30 @@ impl Human {
         let mut looks = HashMap::new();
         let skin = color(body_data.get("skinMainColor")).unwrap_or([1.; 4]);
         let shadow = color(body_data.get("skinShadowColor"));
-        looks.insert(body.key.clone(), PartLook { shaders: &["AL/skin_body"], main: body_row.asset(key::MAIN_TEX_AB, key::MAIN_TEX), colors: vec![skin], shadow, ..Default::default() });
+        // `AL/skin_body` body detail layers of the card: `mt_nip` (uv2,
+        // `areolaSize`, `nipColor` → `nipColor2` by R, alpha A) and
+        // `mt_underhair` (uv3, its colour × `underhairColor`).
+        let mut detail = Vec::new();
+        let bid = |k: &str| body_data.get(k).and_then(Value::as_i64).unwrap_or(0);
+        if let Some(t) = lists.row("mt_nip", bid("nipId")).and_then(|r| r.asset(key::MAIN_AB, 40)) {
+            let size = body_data.get("areolaSize").and_then(Value::as_f32).unwrap_or(0.5);
+            detail.push(MakeupLayer { texture: t, uv: 2, color: color(body_data.get("nipColor")).unwrap_or([1., 0.7, 0.7, 1.]), channel: 3, additive: false, color2: Some(color(body_data.get("nipColor2")).unwrap_or([1., 0.6, 0.6, 1.])), tinted: false, place: Some(Place::Nip { size }) });
+        }
+        if let Some(t) = lists.row("mt_underhair", bid("underhairId")).and_then(|r| r.asset(key::MAIN_AB, 61)) {
+            detail.push(MakeupLayer { texture: t, uv: 3, color: color(body_data.get("underhairColor")).unwrap_or([0.2, 0.15, 0.1, 1.]), channel: 3, additive: false, color2: None, tinted: true, place: None });
+        }
+        let mut body_meshes = Vec::new();
+        if !detail.is_empty() {
+            let renderers: Vec<PPtr> = scene.nodes.iter().filter(|n| n.name.starts_with("o_") && !HIDDEN_BODY.contains(&n.name.as_str())).flat_map(|n| n.components.iter().filter(|c| c.class_id == 137).filter_map(|c| c.fields.pptr("m_Mesh"))).collect();
+            for p in renderers {
+                match unity.target(&body.key, p).and_then(|(f, id)| SceneAssets::mesh(&mut *unity, &f, id)) {
+                    Ok(m) => body_meshes.push(m),
+                    Err(e) => log.push(format!("body detail mesh: {e:#}")),
+                }
+            }
+        }
+        let body_makeup = (!detail.is_empty() && !body_meshes.is_empty()).then(|| std::sync::Arc::new(Makeup { meshes: body_meshes, layers: detail }));
+        looks.insert(body.key.clone(), PartLook { shaders: &["AL/skin_body"], main: body_row.asset(key::MAIN_TEX_AB, key::MAIN_TEX), colors: vec![skin], shadow, makeup: body_makeup, ..Default::default() });
         for name in HIDDEN_BODY {
             for n in scene.nodes.iter_mut().filter(|n| n.name == name) {
                 n.active = false;
@@ -763,7 +820,7 @@ impl Human {
         let makeup = match face_mesh {
             Some(p) if !makeup_layers.is_empty() => {
                 let (f, id) = unity.target(&head.key, p)?;
-                Some(std::sync::Arc::new(Makeup { mesh: SceneAssets::mesh(&mut *unity, &f, id)?, layers: makeup_layers }))
+                Some(std::sync::Arc::new(Makeup { meshes: vec![SceneAssets::mesh(&mut *unity, &f, id)?], layers: makeup_layers }))
             }
             _ => None,
         };
@@ -1023,14 +1080,16 @@ impl CharaAssets<'_> {
                     None => None,
                 };
                 tint_by_mask(&mut img, mask.as_ref(), &look.colors);
-                if let Some(makeup) = look.makeup.as_ref().filter(|_| shader.starts_with("AL/skin_head")) {
+                if let Some(makeup) = look.makeup.as_ref().filter(|_| shader.starts_with("AL/skin_head") || shader.starts_with("AL/skin_body")) {
                     let mut layers = Vec::new();
                     for l in &makeup.layers {
                         if let Some(t) = self.mask_named(&l.texture)? {
                             layers.push((l.clone(), t));
                         }
                     }
-                    bake_makeup(&mut img, &makeup.mesh, &layers, Some(m));
+                    for mesh in &makeup.meshes {
+                        bake_makeup(&mut img, mesh, &layers, Some(m));
+                    }
                 }
                 // Texture alpha cuts openings (the face's eye holes).
                 if img.rgba.chunks_exact(4).any(|p| p[3] < 128) {
@@ -1139,6 +1198,23 @@ impl SceneAssets for CharaAssets<'_> {
     fn material_hook(&mut self, file: &str, m: &UnityMaterial) -> Result<Option<MaterialOverride>> {
         let Some(look) = self.human.looks.get(file).cloned() else { return Ok(None) };
         let shader = m.shader.as_str();
+        // `AL/sub/mnpb`: the censor plane, unlit screen-space block noise
+        // (`_SP1` scale, `_TimeParameters.x · 3` steps, `_Color`/`_Color2`,
+        // `_WhiteOff`).
+        if shader == "AL/sub/mnpb" {
+            let lin = |k: &str, d: [f32; 4]| { let c = linear_color(m.colors.get(k).copied().unwrap_or(d)); [c[0], c[1], c[2]] };
+            let f = |k: &str, d: f32| m.floats.get(k).copied().unwrap_or(d);
+            return Ok(Some(MaterialOverride {
+                unlit_effect: Some(crysirror_unity::world6::ShaderEffect::BlockNoise {
+                    scale: f("_SP1", 6.).clamp(0.001, 1000.),
+                    rate: 3.,
+                    color_a: lin("_Color", [0.9, 0.66, 0.63, 1.]),
+                    color_b: lin("_Color2", [0.9, 0.45, 0.49, 1.]),
+                    white: f("_WhiteOff", 0.).clamp(0., 1.),
+                }),
+                ..Default::default()
+            }));
+        }
         // Outline shells and helper passes draw nothing here; the eyelid
         // layer shades the skin in the original shader (not converted).
         if shader.ends_with("_outline") || shader.starts_with("AL/sub/") || shader == "AL/eyelid" {

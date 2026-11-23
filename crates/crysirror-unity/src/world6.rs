@@ -303,7 +303,7 @@ pub trait SceneAssets {
     }
 }
 
-pub use crysirror_scene::material::ToonShadeKind;
+pub use crysirror_scene::{effect::ShaderEffect, material::ToonShadeKind};
 
 /// A consumer's replacement of parts of a mapped material.
 #[derive(Clone, Debug, Default)]
@@ -337,6 +337,8 @@ pub struct MaterialOverride {
     /// Toon blend texture (`ToonShading::blend_texture`: top-down RGBA8,
     /// sRGB like the base) with its image key.
     pub toon_blend: Option<(String, ImageSurface)>,
+    /// Unlit with this shader effect (no toon).
+    pub unlit_effect: Option<ShaderEffect>,
 }
 
 #[derive(Clone, Debug)]
@@ -947,6 +949,14 @@ fn material(assets: &mut dyn SceneAssets, chunk: &mut Chunk, report: &mut GlbRep
         }
         if let Some(c) = o.base_color {
             engine.base_color_factor = c;
+        }
+        if let Some(e) = o.unlit_effect.clone() {
+            engine.unlit = true;
+            engine.effect = Some(e);
+            engine.toon = None;
+            engine.metallic_roughness_texture = None;
+            engine.occlusion_texture = None;
+            engine.specular_texture = None;
         }
         if let Some(a) = o.alpha_mode {
             engine.alpha_mode = a;
