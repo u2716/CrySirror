@@ -295,3 +295,10 @@
 - Implementation: shared `ToonShading::blend_texture` (bound in the emissive slot, sRGB) and `AnimationState::base_blend` (per-node weight in the object uniform, now visible to the fragment stage); amanatsu `chara::flush_layer` bakes the full-rate flushed face (`chara::tests::flush_layer_mix`), `face::Expression::hohoaka` from the expression table, ADV expressions and breath faces, sent as `base_blend` on `cf_O_face`.
 - Behaviour: HScene (`h_lv1`, `hp0`, frame 3000) and night HScene (`n11c`, frame 6400): cheeks and nose flush with the breath face's rate; the earlier captures show the plain face.
 - Not established: tears (`TearsLV`), the expression highlight switch, blend transitions of the rate.
+
+## 2026-11-23 — Tears levels
+
+- Native evidence: `HumanFace.UpdateVisible` shows exactly one of the `Character.Table` ref objects 141–143 (`cf_O_namida_S/M/L`) for `Status.tearsLv` 1–3 (none at 0); `Expression.Change` writes the expression's `TearsLV` (table column 12) and the H breath `FaceParam.Tear` (offset 24) carries the HScene level.
+- Implementation: `face::{TEARS, hidden_tears}`, `Expression::tears`; spawned characters export the tear meshes and `apply_face` hides all but the level's one.
+- Behaviour: probes `h_breaths` (personality 0: 731 breath faces, all tears 0, cheek 0.2–0.5) and `expression_flush_tears` (65 presets, 19 with flush 0.3, none with tears); the pool close-up shows no tear mesh at level 0.
+- Not established: a tear mesh on screen (no corpus preset or breath of personality 0 sets a level).

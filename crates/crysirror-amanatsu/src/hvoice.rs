@@ -40,8 +40,8 @@ pub struct Breath {
     pub faces: Vec<FaceParam>,
 }
 
-/// `AL.H.List.Voice.FaceParam` (the face fields; tear, cheek, highlight
-/// and the neck/eye behaviour are read past).
+/// `AL.H.List.Voice.FaceParam` (the face fields with tear and cheek; the
+/// highlight and the neck/eye behaviour are read past).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FaceParam {
     pub open_eye: f32,
@@ -49,6 +49,8 @@ pub struct FaceParam {
     pub eyebrow: i32,
     pub eye: i32,
     pub mouth: i32,
+    /// `Tear`: the tears level.
+    pub tear: i32,
     /// `Cheek`: the flush rate.
     pub cheek: f32,
     pub blink: bool,
@@ -61,7 +63,7 @@ const FACE_PARAM_BYTES: usize = 12 + 16 + 4 + 2 + 16 + 3 * 24;
 fn face_param(b: &[u8]) -> FaceParam {
     let f = |o: usize| f32::from_le_bytes(b[o..o + 4].try_into().unwrap_or_default());
     let i = |o: usize| i32::from_le_bytes(b[o..o + 4].try_into().unwrap_or_default());
-    FaceParam { open_eye: f(0), open_mouth: (f(4), f(8)), eyebrow: i(12), eye: i(16), mouth: i(20), cheek: f(28), blink: b[33] != 0 }
+    FaceParam { open_eye: f(0), open_mouth: (f(4), f(8)), eyebrow: i(12), eye: i(16), mouth: i(20), tear: i(24), cheek: f(28), blink: b[33] != 0 }
 }
 
 pub fn parse(b: &[u8]) -> Result<Vec<Breath>> {

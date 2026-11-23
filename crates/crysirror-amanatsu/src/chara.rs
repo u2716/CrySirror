@@ -632,7 +632,9 @@ impl Human {
     /// Export every clothing state variant (for runtime states through
     /// `AnimationState.hidden` instead of the import-time dress).
     pub fn undress_all(&mut self) {
-        let names: std::collections::HashSet<String> = self.clothes.iter().flat_map(|c| c.variants.iter().cloned()).collect();
+        let mut names: std::collections::HashSet<String> = self.clothes.iter().flat_map(|c| c.variants.iter().cloned()).collect();
+        // Tears, shown by the face state.
+        names.extend(crate::face::TEARS.iter().map(|n| (*n).to_owned()));
         for n in self.scene.nodes.iter_mut().filter(|n| names.contains(&n.name)) {
             n.active = true;
         }

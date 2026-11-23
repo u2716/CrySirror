@@ -1609,8 +1609,16 @@ fn h_breaths() {
     for b in list.iter().filter(|b| b.stage == 0).step_by(25) {
         println!("group {} {}: {:?}", b.group, b.asset, b.faces);
     }
-    // Face parameters are sane: openness in [0, 1].
+    // Face parameters are sane: openness in [0, 1], tears 0..=3, cheek in
+    // [0, 1].
     assert!(list.iter().flat_map(|b| &b.faces).all(|f| (0. ..=1.).contains(&f.open_eye) && f.open_mouth.0 <= f.open_mouth.1 + 1e-4));
+    assert!(list.iter().flat_map(|b| &b.faces).all(|f| (0..=3).contains(&f.tear) && (0. ..=1.).contains(&f.cheek)));
+    let tears: std::collections::BTreeMap<i32, usize> = list.iter().flat_map(|b| &b.faces).fold(Default::default(), |mut m, f| {
+        *m.entry(f.tear).or_default() += 1;
+        m
+    });
+    let cheeks: Vec<i32> = list.iter().flat_map(|b| &b.faces).map(|f| (f.cheek * 10.).round() as i32).collect::<std::collections::BTreeSet<_>>().into_iter().collect();
+    println!("tears {tears:?}, cheek×10 {cheeks:?}, groups with tears {:?}", list.iter().filter(|b| b.faces.iter().any(|f| f.tear > 0)).map(|b| b.group).collect::<std::collections::BTreeSet<_>>());
 }
 
 /// Blend shapes of the meshes of a prefab (`AMANATSU_BUNDLE`,
@@ -2487,4 +2495,18 @@ fn bundle_scales() {
             }
         }
     }
+}
+
+/// Expression presets of a personality (`AMANATSU_ID`, default 0) with a
+/// flush or tears.
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn expression_flush_tears() {
+    let mut u = unity();
+    let p: i64 = std::env::var("AMANATSU_ID").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+    let list = crysirror_amanatsu::face::expression_list(&mut u, p).unwrap();
+    let mut ids: Vec<_> = list.iter().filter(|(_, v)| v[6].is_some_and(|x| x > 0.) || v[7].is_some_and(|x| x > 0.)).map(|(id, v)| (*id, v[6], v[7])).collect();
+    ids.sort_by_key(|x| x.0);
+    println!("{} presets, {} with flush/tears: {ids:?}", list.len(), ids.len());
+    assert!(list.values().all(|v| v[7].is_none_or(|t| (0. ..=3.).contains(&t))));
 }
