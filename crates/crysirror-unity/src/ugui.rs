@@ -739,13 +739,21 @@ pub fn is_selectable(fields: &Fields) -> bool {
 /// on the target graphic: a colour tint (1) multiplies its colour by
 /// `m_Colors` × `m_ColorMultiplier`, a sprite swap (2) overrides its sprite
 /// with `m_SpriteState.m_DisabledSprite`. Animation transitions (3) are not
-/// driven here.
-pub fn selectable_transition(scene: &Scene6, selectable: &Fields, disabled: bool, states: &mut HashMap<usize, NodeState>) {
+/// driven here. The target graphic is looked up in the subtree of `node`
+/// (the selectable's node) first, so cloned rows resolve to their own copy.
+pub fn selectable_transition(scene: &Scene6, node: usize, selectable: &Fields, disabled: bool, states: &mut HashMap<usize, NodeState>) {
     let target = pptr(selectable, "m_TargetGraphic");
     if target.path_id == 0 {
         return;
     }
-    let Some((node, graphic)) = scene.nodes.iter().enumerate().find_map(|(i, n)| n.components.iter().find(|c| c.path_id == target.path_id).map(|c| (i, c))) else { return };
+    let mut subtree = vec![node];
+    let mut i = 0;
+    while i < subtree.len() {
+        subtree.extend(scene.nodes[subtree[i]].children.iter().copied());
+        i += 1;
+    }
+    let find = |n: usize| scene.nodes[n].components.iter().find(|c| c.path_id == target.path_id).map(|c| (n, c));
+    let Some((node, graphic)) = subtree.iter().find_map(|&n| find(n)).or_else(|| (0..scene.nodes.len()).find_map(find)) else { return };
     match selectable.int("m_Transition").unwrap_or(1) {
         1 => {
             let Some(Value::Struct(colors)) = selectable.get("m_Colors") else { return };
@@ -787,18 +795,18 @@ mod selectable_tests {
         ]);
         assert!(is_selectable(&tint));
         let mut states = HashMap::new();
-        selectable_transition(&scene, &tint, true, &mut states);
+        selectable_transition(&scene, 0, &tint, true, &mut states);
         assert_eq!(states[&0].color, Some([0.5; 4]));
-        selectable_transition(&scene, &tint, false, &mut states);
+        selectable_transition(&scene, 0, &tint, false, &mut states);
         assert_eq!(states[&0].color, None);
         let swap = fields(vec![
             ("m_Transition", Value::Int(2)),
             ("m_TargetGraphic", Value::PPtr(PPtr { file_id: 0, path_id: 7 })),
             ("m_SpriteState", Value::Struct(fields(vec![("m_DisabledSprite", Value::PPtr(PPtr { file_id: 0, path_id: 9 }))]))),
         ]);
-        selectable_transition(&scene, &swap, true, &mut states);
+        selectable_transition(&scene, 0, &swap, true, &mut states);
         assert_eq!(states[&0].sprite, Some(PPtr { file_id: 0, path_id: 9 }));
-        selectable_transition(&scene, &swap, false, &mut states);
+        selectable_transition(&scene, 0, &swap, false, &mut states);
         assert_eq!(states[&0].sprite, None);
     }
 }

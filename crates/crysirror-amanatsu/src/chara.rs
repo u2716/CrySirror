@@ -38,6 +38,8 @@ pub mod key {
     pub const EYE_PIPIL_TEX: i32 = 18;
     /// Accessory default parent node.
     pub const ACCESSORY_PARENT: i32 = 54;
+    /// Display name.
+    pub const NAME: i32 = 39;
 }
 
 /// The face mesh node (`AL/skin_head`), target of the flush blend.
@@ -590,6 +592,9 @@ pub struct Human {
     pub clothes: Vec<ClothPart>,
     /// Accessory part root names (exported unique, `acs{slot}#root`).
     pub accessories: Vec<String>,
+    /// Every accessory slot of the coordinate: the list name of its part
+    /// (`ListInfoBase` `Name`) when one is equipped.
+    pub accessory_slots: Vec<Option<String>>,
     /// The renderer nodes of the grafted head with its hair
     /// (`CharaVisible` `Head`; the head root is merged into the body's
     /// bones on export).
@@ -872,6 +877,7 @@ impl Human {
         // are not applied.
         let acs = crysirror_unity::msgpack::decode(coord.block("Accessory").context("coordinate Accessory")?)?;
         let mut accessories = Vec::new();
+        let mut accessory_slots = vec![None; acs.get("parts").map(Value::as_array).map_or(0, |a| a.len())];
         let head_origin = scene.nodes[head_root].origin;
         for (slot, part) in acs.get("parts").map(Value::as_array).unwrap_or(&[]).iter().enumerate() {
             let ty = part.get("type").and_then(Value::as_i64).unwrap_or(120);
@@ -897,6 +903,7 @@ impl Human {
                     let root_name = format!("acs{slot}#root");
                     scene.nodes[r].name = root_name.clone();
                     accessories.push(root_name);
+                    accessory_slots[slot] = Some(row.get(key::NAME).unwrap_or("").to_owned());
                     let moves = part.get("addMove").map(Value::as_array).and_then(|a| a.get(2)).map(Value::as_array).unwrap_or(&[]);
                     let v3 = |i: usize, d: f32| moves.get(i).map(Value::as_array).filter(|a| a.len() >= 3).map_or([d; 3], |a| [0, 1, 2].map(|k| a[k].as_f32().unwrap_or(d)));
                     for (k, name) in ["N_move", "N_move2"].iter().enumerate() {
@@ -932,7 +939,7 @@ impl Human {
         if ramp.is_none() {
             log.push(format!("mt_ramp {ramp_id}: no texture"));
         }
-        Ok(Self { key: body.key, female, height, scene, looks, clothes: clothes_parts, accessories, head, ramp, shadow_depth, line_width, log })
+        Ok(Self { key: body.key, female, height, scene, looks, clothes: clothes_parts, accessories, accessory_slots, head, ramp, shadow_depth, line_width, log })
     }
 }
 

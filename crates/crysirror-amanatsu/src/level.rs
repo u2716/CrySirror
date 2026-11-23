@@ -130,7 +130,7 @@ impl Level {
         }
         self.interactable.insert(node, on);
         let Some(c) = self.selectable(node).cloned() else { return };
-        crysirror_unity::ugui::selectable_transition(&self.scene, &c.fields, !on, &mut self.states);
+        crysirror_unity::ugui::selectable_transition(&self.scene, node, &c.fields, !on, &mut self.states);
         if matches!(c.script.as_str(), "AL.H.UI.ClothesSettingMenu.ButtonEx" | "AL.H.UI.ClothesSettingMenu.DesideButton") {
             for (field, show) in [("_textNormal", on), ("_textDisabled", !on)] {
                 if let Some(n) = c.fields.pptr(field).and_then(|p| self.owner(p.path_id)) {

@@ -25,7 +25,7 @@ fn component<'a>(scene: &'a Scene6, script: &str) -> Option<(usize, &'a crysirro
 }
 
 /// Clone `template` under `parent`; template node → clone node.
-fn clone_map(scene: &mut Scene6, template: usize, parent: usize) -> HashMap<usize, usize> {
+pub(crate) fn clone_map(scene: &mut Scene6, template: usize, parent: usize) -> HashMap<usize, usize> {
     let mut order = Vec::new();
     let mut stack = vec![template];
     while let Some(n) = stack.pop() {

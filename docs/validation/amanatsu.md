@@ -302,3 +302,10 @@
 - Implementation: `face::{TEARS, hidden_tears}`, `Expression::tears`; spawned characters export the tear meshes and `apply_face` hides all but the level's one.
 - Behaviour: probes `h_breaths` (personality 0: 731 breath faces, all tears 0, cheek 0.2–0.5) and `expression_flush_tears` (65 presets, 19 with flush 0.3, none with tears); the pool close-up shows no tear mesh at level 0.
 - Not established: a tear mesh on screen (no corpus preset or breath of personality 0 sets a level).
+
+## 2026-11-23 — HScene accessory slots
+
+- Native evidence: `SelectAccessoryState.UpdateUI` lists one `AccessorySlot` per accessory slot (`LoopListView2`); the row text is the part's `ListInfoBase` `Name`, else `スロット{n:00}` with the row not interactable, and `isOn` is `Status.showAccessory[slot]`; `OnValueChanged` writes `showAccessory[slot]` and `Apply` updates the parts. `AccessorySlot.Setup` swaps the normal/disabled labels and `SetSprite(!isOn)`.
+- Implementation: `Human::accessory_slots` (list key 39 names), `ClothRun::acs_slots` hiding `acs{slot}#root` per slot, adapter `h_accessory_slots`/`h_accessory_toggle` (rows cloned from the template as `AcsSlot {slot}`); shared `ugui::selectable_transition` resolves the target graphic in the selectable's own subtree first (cloned rows share component ids).
+- Behaviour (`h_lv1`, clothes-menu track with `Acs` at (1825, 32)): rows `貝のネックレス`, `髪留め`, `スロット03`–`スロット20`; clicking the first row logs `HScene accessory slot 0: hidden`, switches its sprite and removes the necklace from the character.
+- Not established: the disabled look of empty rows (their toggles show the normal sprite), the `ALL` toggle's interplay with per-slot states, scrolling the list.

@@ -123,6 +123,9 @@ struct ClothRun {
     states: Vec<usize>,
     accessories: Vec<String>,
     accessories_hidden: bool,
+    /// `Status.showAccessory` per slot with the slot's part name (when one
+    /// is equipped).
+    acs_slots: Vec<(Option<String>, bool)>,
     entities: Vec<u32>,
     /// Further hidden node subtrees (`CharaVisible` `Head`).
     hidden_nodes: Vec<String>,
@@ -138,6 +141,7 @@ impl ClothRun {
         if self.accessories_hidden {
             out.extend(self.accessories.iter().cloned());
         }
+        out.extend(self.acs_slots.iter().enumerate().filter(|(_, (_, shown))| !shown).map(|(slot, _)| format!("acs{slot}#root")));
         out
     }
 }
@@ -937,7 +941,7 @@ impl Game {
         if let Some(e) = crate::face::eye_rest(&human.scene) {
             self.eye_rest.insert(card_path.to_owned(), e);
         }
-        self.cloth.insert(card_path.to_owned(), ClothRun { states: vec![0; human.clothes.len()], parts: human.clothes.clone(), accessories: human.accessories.clone(), accessories_hidden: false, entities: ids.clone(), hidden_nodes: Vec::new(), layers: layers.clone() });
+        self.cloth.insert(card_path.to_owned(), ClothRun { states: vec![0; human.clothes.len()], parts: human.clothes.clone(), accessories: human.accessories.clone(), accessories_hidden: false, acs_slots: human.accessory_slots.iter().map(|n| (n.clone(), true)).collect(), entities: ids.clone(), hidden_nodes: Vec::new(), layers: layers.clone() });
         self.heads.insert(card_path.to_owned(), human.head.clone());
         match crate::face::Face::from_scene(&mut self.unity, &human.scene, &human.key) {
             Ok(Some(face)) => {
@@ -1814,6 +1818,11 @@ impl Game {
             "Toggle Female" | "Toggle Female 0" => self.cloth_card = self.h.as_ref().map(|h| h.card.clone()),
             "Toggle Male" => self.cloth_card = Some(MALE_CARD.to_owned()),
             n if n.starts_with("Button ") => self.h_cloth_state(&n["Button ".len()..]),
+            n if n.starts_with("AcsSlot ") => {
+                if let Ok(slot) = n["AcsSlot ".len()..].parse() {
+                    self.h_accessory_toggle(slot);
+                }
+            }
             "Toggle ALL" => {
                 let card = self.cloth_card.clone().or_else(|| self.h.as_ref().map(|h| h.card.clone())).unwrap_or_default();
                 if let Some(c) = self.cloth.get_mut(&card) {
@@ -1921,8 +1930,8 @@ impl Game {
     }
 
     /// `ClothesSettingMenu`: the `Clothes`/`Acs`/`Coodenate` buttons open
-    /// their panel (again: close). SATD-amanatsu-port: coordinate card loading,
-    /// accessory slots one by one and the menu animation are not ported.
+    /// their panel (again: close). SATD-amanatsu-port: coordinate card loading
+    /// and the menu animation are not ported.
     fn h_clothes_menu(&mut self, which: &str) {
         let Some(oi) = self.overlays.iter().position(|(l, _)| l.name == crate::h::SCENE_PREFAB) else { return };
         let level = &mut self.overlays[oi].0;
@@ -1954,6 +1963,92 @@ impl Game {
         if panel == "SelectCoodinateCard" {
             self.h_coordinate_cards();
         }
+        if panel == "SelectAccessoryState" {
+            self.h_accessory_slots();
+        }
+    }
+
+    /// `SelectAccessoryState.UpdateUI`: one `AccessorySlot` row per slot of
+    /// the selected character (`LoopListView2` TopToBottom): the part's list
+    /// name, else `スロット{n:00}` and not interactable; on/off from
+    /// `Status.showAccessory` (`AccessorySlot.Setup`: the normal/disabled
+    /// label, `SetSprite(!isOn)` and the toggle). Rows are named
+    /// `AcsSlot {slot}` for the click dispatch.
+    fn h_accessory_slots(&mut self) {
+        let card = self.cloth_card.clone().or_else(|| self.h.as_ref().map(|h| h.card.clone())).unwrap_or_default();
+        let slots = self.cloth.get(&card).map(|c| c.acs_slots.clone()).unwrap_or_default();
+        let Some(oi) = self.overlays.iter().position(|(l, _)| l.name == crate::h::SCENE_PREFAB) else { return };
+        let level = &mut self.overlays[oi].0;
+        let base = "HScene/Canvas/ccr_dropShadow/Option/RightTopArea/ClothesSetting/root/SelectAccessoryState/Scroll View/Viewport/Content";
+        let (Some(content), Some(template)) = (level.find(base), level.find(&format!("{base}/Toggle"))) else { return };
+        let slot_comp = level.scene.nodes[template].components.iter().find(|c| c.script == "AL.H.UI.ClothesSettingMenu.AccessorySlot").cloned();
+        let padding = level
+            .scene
+            .nodes
+            .iter()
+            .flat_map(|n| &n.components)
+            .filter(|c| c.script.ends_with("LoopListView2"))
+            .find_map(|c| {
+                c.fields.array("mItemPrefabDataList")?.iter().find_map(|e| match e {
+                    crysirror_unity::managed::Value::Struct(d) if d.pptr("mItemPrefab").and_then(|p| level.owner(p.path_id)) == Some(template) => d.float("mPadding"),
+                    _ => None,
+                })
+            })
+            .unwrap_or(0.) as f32;
+        let rect = level.scene.nodes[template].xform.rect;
+        level.set_active(template, false);
+        for (slot, (name, shown)) in slots.iter().enumerate() {
+            let row_name = format!("AcsSlot {slot}");
+            let root = match level.find(&format!("{base}/{row_name}")) {
+                Some(r) => r,
+                None => {
+                    let map = crate::hui::clone_map(&mut level.scene, template, content);
+                    let root = map[&template];
+                    level.scene.nodes[root].name = row_name;
+                    root
+                }
+            };
+            level.set_active(root, true);
+            if let Some(r) = rect {
+                let y = r.anchored_position[1] - slot as f32 * (r.size_delta[1] + padding);
+                level.states.entry(root).or_default().anchored_position = Some([r.anchored_position[0], y]);
+            }
+            let text = name.clone().unwrap_or_else(|| format!("スロット{:02}", slot + 1));
+            let children: Vec<usize> = level.scene.nodes[root].children.clone();
+            for c in children {
+                match level.scene.nodes[c].name.as_str() {
+                    "ALT-00-18" => {
+                        level.set_active(c, name.is_some());
+                        level.states.entry(c).or_default().text = Some(text.clone());
+                    }
+                    "ALT-01-18" => {
+                        level.set_active(c, name.is_none());
+                        level.states.entry(c).or_default().text = Some(text.clone());
+                    }
+                    _ => {}
+                }
+            }
+            level.set_interactable(root, name.is_some());
+            // `SetSprite(!isOn)`: the row image takes `_sprites[0]` when on.
+            if let Some(sprite) = slot_comp.as_ref().and_then(|c| c.fields.array("_sprites")).and_then(|a| a.get(usize::from(!shown)).cloned()) {
+                if let crysirror_unity::managed::Value::PPtr(p) = sprite {
+                    level.states.entry(root).or_default().sprite = Some(p);
+                }
+            }
+        }
+    }
+
+    /// `AccessorySlot` toggle → `SelectAccessoryState.OnValueChanged`:
+    /// `Status.showAccessory[slot]` and the parts' visibility.
+    fn h_accessory_toggle(&mut self, slot: usize) {
+        let card = self.cloth_card.clone().or_else(|| self.h.as_ref().map(|h| h.card.clone())).unwrap_or_default();
+        let Some(c) = self.cloth.get_mut(&card) else { return };
+        let Some(s) = c.acs_slots.get_mut(slot).filter(|s| s.0.is_some()) else { return };
+        s.1 = !s.1;
+        let shown = s.1;
+        self.log.push(format!("HScene accessory slot {slot}: {}", if shown { "shown" } else { "hidden" }));
+        self.refresh_cloth(&card);
+        self.h_accessory_slots();
     }
 
     /// `SelectCoodinateCard.SetActor`/`UpdateUI`: the coordinate cards of
