@@ -15,6 +15,8 @@ struct Material {
     toon:vec4<f32>,
     // Toon: rgb linear unlit-side light, a enables the AL skin light model (shadow_light).
     toon_light:vec4<f32>,
+    // Toon: rgb fixed shade colour, a shade kind (0 base HSV, 1 cloth, 2 fixed).
+    toon_shade:vec4<f32>,
 };
 @group(1) @binding(0) var<uniform> material: Material;
 @group(1) @binding(1) var t_base: texture_2d<f32>;

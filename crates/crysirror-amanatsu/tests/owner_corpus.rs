@@ -2395,6 +2395,7 @@ fn card_face() {
     let card = crysirror_amanatsu::card::Card::parse(&u.read_all(&path).unwrap()).unwrap();
     let custom = card.parts("Custom").unwrap();
     println!("{:?}", custom.first());
+    println!("Graphic {:?} raw {:?}", card.graphic(), card.block("Graphic").map(|b| b.len()));
 }
 
 /// Every texture of a material (`AMANATSU_BUNDLE`, name `AMANATSU_FILTER`)

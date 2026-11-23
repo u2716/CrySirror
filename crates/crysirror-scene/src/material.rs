@@ -71,6 +71,21 @@ impl AlphaMode {
 /// sampled raw (no sRGB decode). Toon materials bind these three textures in
 /// place of the metallic-roughness, occlusion and specular slots, which must
 /// be empty, and take no shader effect.
+/// Base shade of the `ToonShading::shadow_light` model.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToonShadeKind {
+    /// HSV of the linear base: hue kept, saturation `√S · min(10√V, 1)`,
+    /// value `0.5√V + 0.5`.
+    #[default]
+    BaseHsv,
+    /// `mix((0.4508, 0.6061, 1), base, max(√S · min(10V, 1), 1 − V))`:
+    /// pale colours shade toward blue, saturated ones keep their colour.
+    Cloth,
+    /// `shade_color`.
+    Fixed,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ToonShading<T = String> {
@@ -115,6 +130,11 @@ pub struct ToonShading<T = String> {
     /// the light on the unlit side (toward the SH ambient as `avg(L)`
     /// exceeds 1), `L' = max(min(L, 1), 0.8·min(L, 1) + 0.2)`.
     pub shadow_light: [f32; 4],
+    /// The base shade `M` mixes toward under `shadow_light` (the shadow
+    /// rim tint still applies to `base_hsv`).
+    pub shade_kind: ToonShadeKind,
+    /// Linear shade colour of `ToonShadeKind::Fixed`.
+    pub shade_color: [f32; 3],
     pub shininess: f32,
     pub highlight_rate: f32,
     pub highlight_power: f32,
@@ -140,6 +160,8 @@ impl<T> Default for ToonShading<T> {
             shade_from_base: false,
             shadow_rim: [0.; 4],
             shadow_light: [0.; 4],
+            shade_kind: ToonShadeKind::BaseHsv,
+            shade_color: [0.5; 3],
             shininess: 0.,
             highlight_rate: 0.,
             highlight_power: 1.,
@@ -165,7 +187,8 @@ impl<T> ToonShading<T> {
                 && range(self.ambient_scale, 0., 16.)
                 && range(self.light_limit, 0., 16.)
                 && self.shadow_rim.iter().all(|x| range(*x, 0., 1.))
-                && self.shadow_light.iter().all(|x| range(*x, 0., 1.)),
+                && self.shadow_light.iter().all(|x| range(*x, 0., 1.))
+                && self.shade_color.iter().all(|x| range(*x, 0., 1.)),
             "toon shading parameter range"
         );
         ensure!(!self.color_table || self.lookup_texture.is_some(), "toon colour table needs the lookup texture");

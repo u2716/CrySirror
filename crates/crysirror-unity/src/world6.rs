@@ -303,6 +303,8 @@ pub trait SceneAssets {
     }
 }
 
+pub use crysirror_scene::material::ToonShadeKind;
+
 /// A consumer's replacement of parts of a mapped material.
 #[derive(Clone, Debug, Default)]
 pub struct MaterialOverride {
@@ -327,6 +329,8 @@ pub struct MaterialOverride {
     pub toon_shadow_rim: Option<[f32; 4]>,
     /// `ToonShading::shadow_light`.
     pub toon_shadow_light: Option<[f32; 4]>,
+    /// `ToonShading::shade_kind` and `shade_color`.
+    pub toon_shade: Option<(ToonShadeKind, [f32; 3])>,
     /// Toon shadow layer (`ToonShading::shadow_texture`: top-down RGBA8,
     /// display-referred colour and amount, sampled raw) with a cache key.
     pub toon_shadow: Option<(String, ImageSurface)>,
@@ -972,6 +976,8 @@ fn material(assets: &mut dyn SceneAssets, chunk: &mut Chunk, report: &mut GlbRep
                 shade_from_base: o.toon_shade_from_base,
                 shadow_rim: o.toon_shadow_rim.unwrap_or([0.; 4]).map(|x| x.clamp(0., 1.)),
                 shadow_light: o.toon_shadow_light.unwrap_or([0.; 4]).map(|x| x.clamp(0., 1.)),
+                shade_kind: o.toon_shade.map_or(Default::default(), |s| s.0),
+                shade_color: o.toon_shade.map_or([0.5; 3], |s| s.1.map(|x| x.clamp(0., 1.))),
                 outline_width: width.clamp(0., 0.1),
                 outline_color: color,
                 ..Default::default()

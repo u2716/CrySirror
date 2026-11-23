@@ -637,7 +637,14 @@ fn fs_main(i: VertexOut, @builtin(front_facing) front: bool) -> @location(0) vec
             // AL skin light model (ToonShading::shadow_light).
             let lin = toon_decode(tex);
             var shade = toon_base_shade(lin);
-            if material.toon.a > 0.0 {
+            if material.toon_shade.a > 1.5 {
+                shade = material.toon_shade.rgb;
+            } else if material.toon_shade.a > 0.5 {
+                let v = max(max(lin.r, lin.g), lin.b);
+                let sat = (v - min(min(lin.r, lin.g), lin.b)) / (v + 1e-10);
+                let k = max(min(sqrt(sat), 1.0) * min(v * 10.0, 1.0), 1.0 - v);
+                shade = mix(vec3<f32>(0.450842, 0.60609, 1.0), lin, k);
+            } else if material.toon.a > 0.0 {
                 let bent = normalize(tn_toon - vec3<f32>(0.0, 0.25, 0.0));
                 let sun = toon_encode(frame.toon_color.rgb) * frame.toon_dir.w;
                 let k = 0.7 - 0.2 * (clamp(dot(sun, vec3<f32>(0.299, 0.587, 0.114)), 1.0, 3.0) - 1.0);

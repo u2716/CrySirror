@@ -508,6 +508,7 @@ struct MaterialUniform {
     effect_params: [[f32; 4]; 4],
     toon: [f32; 4],
     toon_light: [f32; 4],
+    toon_shade: [f32; 4],
 }
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -2403,6 +2404,14 @@ impl PbrRenderer {
             },
             toon: m.toon.as_ref().map_or([0.; 4], |t| t.shadow_rim),
             toon_light: m.toon.as_ref().map_or([0.; 4], |t| t.shadow_light),
+            toon_shade: m.toon.as_ref().map_or([0.; 4], |t| {
+                let kind = match t.shade_kind {
+                    crysirror_scene::material::ToonShadeKind::BaseHsv => 0.,
+                    crysirror_scene::material::ToonShadeKind::Cloth => 1.,
+                    crysirror_scene::material::ToonShadeKind::Fixed => 2.,
+                };
+                [t.shade_color[0], t.shade_color[1], t.shade_color[2], kind]
+            }),
         }
     }
     fn prim(&self, p: &cpu::PbrPrimitive) -> GpuPrim {

@@ -592,6 +592,12 @@ pub struct Human {
     /// (`CharaVisible` `Head`; the head root is merged into the body's
     /// bones on export).
     pub head: Vec<String>,
+    /// `HumanGraphic` (card `Graphic`): the `mt_ramp` texture every
+    /// character material takes as `_Lamp` (`ChangeRampTexture`), and
+    /// `ShadowDepth`/`LineWidth` written to `_Shadow_power`/`_Line_width`.
+    pub ramp: Option<(String, String)>,
+    pub shadow_depth: f32,
+    pub line_width: f32,
     pub log: Vec<String>,
 }
 
@@ -917,7 +923,12 @@ impl Human {
             }
             stack.extend(&scene.nodes[n].children);
         }
-        Ok(Self { key: body.key, female, height, scene, looks, clothes: clothes_parts, accessories, head, log })
+        let (ramp_id, shadow_depth, line_width) = card.graphic();
+        let ramp = lists.row("mt_ramp", ramp_id).and_then(|r| r.asset(key::MAIN_AB, key::MAIN_TEX_AB));
+        if ramp.is_none() {
+            log.push(format!("mt_ramp {ramp_id}: no texture"));
+        }
+        Ok(Self { key: body.key, female, height, scene, looks, clothes: clothes_parts, accessories, head, ramp, shadow_depth, line_width, log })
     }
 }
 
@@ -1219,16 +1230,20 @@ impl SceneAssets for CharaAssets<'_> {
         // (`ToonShading::shadow_light`).
         // SATD-amanatsu-port: the skin base pre-grade (an overlay layer that
         // warms and lifts mid tones), SSS, shine and rim terms are not drawn.
-        let lamp = match m.textures.get("_Lamp").filter(|t| t.texture.path_id != 0) {
-            Some(t) => {
+        // `HumanGraphic.ChangeRampTexture`: the card's ramp replaces the
+        // material's `_Lamp`.
+        let lamp = match (&self.human.ramp, m.textures.get("_Lamp").filter(|t| t.texture.path_id != 0)) {
+            (Some(r), _) => self.mask_named(&r.clone())?,
+            (None, Some(t)) => {
                 let (f, id) = self.unity.target(if m.file.is_empty() { file } else { &m.file }, t.texture)?;
                 Some(self.mask(&f, id)?)
             }
-            None => None,
+            (None, None) => None,
         };
         let skin = shader.starts_with("AL/skin");
-        let curve = if skin { skin_ramp_curve(lamp.as_ref()) } else { ramp_curve(lamp.as_ref()) };
-        if let Some(power) = m.floats.get("_Shadow_power") {
+        let curve = if m.floats.contains_key("_Shadow_power") { skin_ramp_curve(lamp.as_ref()) } else { ramp_curve(lamp.as_ref()) };
+        // `ChangeShadowDepth`: the card's depth replaces `_Shadow_power`.
+        if let Some(power) = m.floats.get("_Shadow_power").map(|_| &self.human.shadow_depth) {
             let floor = 1. - (power * 0.4 + 0.5).clamp(0., 1.);
             let shade = m.colors.get("_Shade_color").filter(|_| m.floats.get("_UseShadowColor").is_some_and(|u| *u > 0.5));
             // Skin derives the tone from its base colour; hair and clothes
@@ -1236,24 +1251,34 @@ impl SceneAssets for CharaAssets<'_> {
             // saturation × 1.5: grey for the engine's scalar ambient).
             // SATD-amanatsu-port: the ambient's hue is not available here.
             // (A linear factor; the ramp multiplies display-referred colour.)
-            let ambient = (!shader.starts_with("AL/skin")).then(|| [srgb_encode(self.ambient * 0.7 + 0.3); 3]);
-            o.toon_shade_from_base = shade.is_none() && ambient.is_none();
+            let ambient = (!skin).then(|| [srgb_encode(self.ambient * 0.7 + 0.3); 3]);
+            // The programs (checked on their DXBC) mix a base shade with the
+            // SH ambient tone and light the result themselves: a bluish
+            // light on the unlit side and no ambient term, so the base needs
+            // no compensation for the engine's ambient. The base shade is the
+            // base colour's HSV shade on skin, a blue-leaning shade of it on
+            // clothes, the material's `_Shadow_color` on hair, and
+            // `_Shade_color` with `_UseShadowColor` (which replaces the whole
+            // tone in the original).
+            use crysirror_unity::world6::ToonShadeKind;
+            let lin3 = |c: &[f32; 4]| { let l = linear_color(*c); [l[0], l[1], l[2]] };
+            o.toon_shade = Some(match shade {
+                Some(c) => (ToonShadeKind::Fixed, lin3(c)),
+                None if skin => (ToonShadeKind::BaseHsv, [0.5; 3]),
+                None if shader.starts_with("AL/hair") => (ToonShadeKind::Fixed, m.colors.get("_Shadow_color").map_or([0.5; 3], lin3)),
+                None => (ToonShadeKind::Cloth, [0.5; 3]),
+            });
+            o.toon_shade_from_base = true;
             // The card `skinShadowColor` (`_Shadow_color`) at grazing angles.
-            if o.toon_shade_from_base {
+            if skin && shade.is_none() {
                 o.toon_shadow_rim = look.shadow.map(|c| { let l = linear_color(c); [l[0], l[1], l[2], c[3]] });
             }
             o.toon_light_limit = Some(1.);
+            o.toon_shadow_light = Some([0.539542, 0.546249, 0.737911, 1.]);
+            o.toon_ambient = Some(0.);
+            // The md layers keep their own shadow tone.
             let tone = shade.map(|c| [c[0], c[1], c[2]]).or(ambient);
-            o.toon_ambient = m.floats.get("_AmbientIntensity").or(m.floats.get("_AmbientIntensity1")).copied();
-            // The skin programs light the tone themselves: a fixed bluish
-            // light on the unlit side and no ambient term, so the base needs
-            // no compensation for the engine's ambient.
-            let skin_light = skin && o.toon_shade_from_base;
-            if skin_light {
-                o.toon_shadow_light = Some([0.539542, 0.546249, 0.737911, 1.]);
-                o.toon_ambient = Some(0.);
-            }
-            let k = if skin_light { 1. } else { self.light };
+            let k = 1.;
             let mut o = self.base_look(file, m, &look, shader, k, o)?;
             // The body's md layers (`_Detail_mask_01` slice 0) shade painted
             // creases and contours as a shadow layer.
@@ -1287,7 +1312,7 @@ impl SceneAssets for CharaAssets<'_> {
                 let md = self.mask(&f, id)?;
                 o.toon_shadow = Some((format!("{key}:md"), green_md_layer(&img, &md, k, tone, floor, m)));
             }
-            let ramp = toon_ramp_floor(&curve, tone.unwrap_or([0.; 3]), floor, o.toon_shadow.is_some());
+            let ramp = toon_ramp_floor(&curve, [0.; 3], floor, o.toon_shadow.is_some());
             let outline = [outline[0] * k, outline[1] * k, outline[2] * k, outline[3]];
             o.toon = Some((ramp, if shader.starts_with("AL/hair") || shader.starts_with("AL/cloth") || shader.starts_with("AL/skin") { 0.0015 } else { 0. }, outline));
             return Ok(Some(o));

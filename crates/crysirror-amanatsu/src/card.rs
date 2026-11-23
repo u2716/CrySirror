@@ -145,6 +145,19 @@ impl Card {
         Some((v.get("personality").and_then(Value::as_i64).unwrap_or(0), s("firstname"), s("lastname")))
     }
 
+    /// `Graphic` (`HumanDataGraphic`): ramp id (`mt_ramp`), shadow depth
+    /// (`_Shadow_power`) and line width (`_Line_width`); defaults 1, 0.7,
+    /// 0.33.
+    pub fn graphic(&self) -> (i64, f32, f32) {
+        let v = self.block("Graphic").and_then(|b| msgpack::decode(b).ok());
+        let get = |k: &str| v.as_ref().and_then(|v| v.get(k));
+        (
+            get("RampID").and_then(Value::as_i64).unwrap_or(1),
+            get("ShadowDepth").and_then(Value::as_f32).unwrap_or(0.7),
+            get("LineWidth").and_then(Value::as_f32).unwrap_or(0.33),
+        )
+    }
+
     pub fn block(&self, name: &str) -> Option<&[u8]> {
         self.blocks.iter().find(|b| b.0 == name).map(|b| b.2.as_slice())
     }
