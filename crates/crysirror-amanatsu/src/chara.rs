@@ -67,6 +67,10 @@ pub const CLOTHES_LISTS: [&str; 11] = ["co_top", "co_bot", "co_bra", "co_shorts"
 /// 96 and 102): exported for runtime visibility on undressed characters.
 pub const SON: &str = "n_dankon";
 pub const MOZ: &str = "n_mnpb";
+/// Ref 103, shown by `Status.visibleGomu` (ADV `CharaVisible … Gomu`).
+pub const GOMU: &str = "o_gomu";
+/// Ref 77, the body root (`CharaVisible … Body`).
+pub const BODY_ROOT: &str = "n_body";
 
 const HIDDEN_BODY: [&str; 16] = [
     "n_dankon", "n_mnpb", "body_onepi", "n_silhouetteTop", "o_body_shadow", "o_upper_type02", "o_upper_type03", "o_upper_type04", "o_upper_type05", "o_lower_type02", "o_lower_type03", "o_lower_type04", "o_lower_type05",
@@ -674,6 +678,7 @@ impl Human {
         names.extend(crate::face::TEARS.iter().map(|n| (*n).to_owned()));
         names.insert(SON.to_owned());
         names.insert(MOZ.to_owned());
+        names.insert(GOMU.to_owned());
         for n in self.scene.nodes.iter_mut().filter(|n| names.contains(&n.name)) {
             n.active = true;
         }

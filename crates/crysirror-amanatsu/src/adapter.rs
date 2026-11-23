@@ -132,6 +132,8 @@ struct ClothRun {
     son_config: bool,
     son: bool,
     hide_moz: bool,
+    /// `Status.visibleGomu`.
+    gomu: bool,
     entities: Vec<u32>,
     /// Further hidden node subtrees (`CharaVisible` `Head`).
     hidden_nodes: Vec<String>,
@@ -158,6 +160,9 @@ impl ClothRun {
         }
         if self.hide_moz {
             out.push(crate::chara::MOZ.to_owned());
+        }
+        if !self.gomu {
+            out.push(crate::chara::GOMU.to_owned());
         }
         out
     }
@@ -961,7 +966,7 @@ impl Game {
         if let Some(e) = crate::face::eye_rest(&human.scene) {
             self.eye_rest.insert(card_path.to_owned(), e);
         }
-        self.cloth.insert(card_path.to_owned(), ClothRun { states: vec![0; human.clothes.len()], parts: human.clothes.clone(), accessories: human.accessories.clone(), accessories_hidden: false, acs_slots: human.accessory_slots.iter().map(|n| (n.clone(), true)).collect(), male: card_path == MALE_CARD, son_config: self.config.flag("HScene", "Son", true), son: self.h.is_some(), hide_moz: false, entities: ids.clone(), hidden_nodes: Vec::new(), layers: layers.clone() });
+        self.cloth.insert(card_path.to_owned(), ClothRun { states: vec![0; human.clothes.len()], parts: human.clothes.clone(), accessories: human.accessories.clone(), accessories_hidden: false, acs_slots: human.accessory_slots.iter().map(|n| (n.clone(), true)).collect(), male: card_path == MALE_CARD, son_config: self.config.flag("HScene", "Son", true) && self.adult_content(), son: self.h.is_some(), hide_moz: false, gomu: false, entities: ids.clone(), hidden_nodes: Vec::new(), layers: layers.clone() });
         self.heads.insert(card_path.to_owned(), human.head.clone());
         match crate::face::Face::from_scene(&mut self.unity, &human.scene, &human.key) {
             Ok(Some(face)) => {
@@ -1173,6 +1178,13 @@ impl Game {
                 None
             }
         }
+    }
+
+    /// `GameSystem._pornStatus.Active` (`AppStatus.CheckUnlocked`): the
+    /// install has `lib/al_lib000_01` (the manifest name of `lib` +
+    /// `000_01`).
+    fn adult_content(&self) -> bool {
+        self.unity.list_dir("lib").iter().any(|n| n == "al_lib000_01")
     }
 
     fn random(&mut self, n: usize) -> usize {
@@ -2328,10 +2340,24 @@ impl Game {
                             self.refresh_cloth(&card);
                         }
                     }
-                    // `Status.visibleSon`.
-                    "Son" => {
+                    // `Status.visibleSon` / `visibleGomu`.
+                    "Son" | "Gomu" => {
                         if let Some(c) = self.cloth.get_mut(&card) {
-                            c.son = on;
+                            if part == "Son" {
+                                c.son = on;
+                            } else {
+                                c.gomu = on;
+                            }
+                        }
+                        self.refresh_cloth(&card);
+                    }
+                    // `Status.visibleBodyAlways`: the body root.
+                    "Body" => {
+                        if let Some(c) = self.cloth.get_mut(&card) {
+                            c.hidden_nodes.retain(|n| n != crate::chara::BODY_ROOT);
+                            if !on {
+                                c.hidden_nodes.push(crate::chara::BODY_ROOT.to_owned());
+                            }
                         }
                         self.refresh_cloth(&card);
                     }
@@ -2859,6 +2885,16 @@ impl Game {
             if let Some(mut env) = self.map_env.clone() {
                 self.config_environment(&mut env);
                 self.world.push(env);
+            }
+            // `HumanBody.ChangeConfigSonDraw`: the characters take the new
+            // `HScene/Son` flag.
+            let son = self.config.flag("HScene", "Son", true) && self.adult_content();
+            let cards: Vec<String> = self.cloth.iter_mut().filter(|(_, c)| c.son_config != son).map(|(k, c)| {
+                c.son_config = son;
+                k.clone()
+            }).collect();
+            for card in cards {
+                self.refresh_cloth(&card);
             }
             let bytes = self.config.to_xml().into_bytes();
             let written = host.storage(self.client_id).map_err(anyhow::Error::from).and_then(|s| Ok(s.write_atomic(&VfsPath::new(crysirror_core::path::Mount::Save, "user/config.xml")?, &bytes)?));

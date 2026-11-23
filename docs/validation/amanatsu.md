@@ -329,3 +329,10 @@
 - Implementation: shared `ShaderEffect::BlockNoise` (unlit materials; simplex noise of screen blocks); `MaterialOverride::unlit_effect`; amanatsu maps `AL/sub/mnpb` to it, exports `n_dankon`/`n_mnpb` on undressed characters with `ClothRun` state (`male`, `son_config`, `son`, `hide_moz`), ADV `Effect::Moz` and `CharaVisible … Son`; body detail layers baked into the body base through the makeup bake (`MakeupLayer::{color2, tinted}`, `Place::Nip`, `Makeup::meshes` over the body meshes).
 - Behaviour: night HScene (`night_lv4_ev1`, `n11c`, frame 6400): the remaining body-state part renders under the animated censor overlay; the `chara_glb` probe's baked AL_F_00 body base carries both detail layers at their uv2/uv3 placements; `adv::tests::event_cg_effects` covers `MozVisible`.
 - Not established: the detail layers' normal relief and gloss (`nipGlossPower`), the `GameSystem` gate of ref 96, live config changes during an HScene, `o_gomu` (ref 103).
+
+## 2026-11-23 — Body state gates
+
+- Native evidence: the gate of `HumanBody.UpdateVisible`'s ref 96 is `GameSystem._pornStatus.Active`, an `AppStatus` whose `CheckUnlocked` tests that `lib/al_lib000_01` (the manifest name of `lib` + `000_01`) exists in the install; `HumanBody.ChangeConfigSonDraw` applies the config flag to live characters; ADV `CharaVisible` targets are `All`, `Head`, `Body` (`Status.visibleBodyAlways`), `Son` and `Gomu` (`Status.visibleGomu`, ref 103 `o_gomu`).
+- Implementation: adapter `adult_content`, the config flag re-applied to every character when the config window closes, `CharaVisible … Gomu`/`Body` with `chara::{GOMU, BODY_ROOT}`.
+- Behaviour: the corpus install has `lib/al_lib000_01`; the night HScene capture (frame 6400) is unchanged.
+- Not established: an on-screen `Gomu`/`Body` command (the personality-0 scenarios use neither).
