@@ -76,3 +76,7 @@ Normals: in `menu-temple` 35 of 37 fragments store kind-0 byte normals. Decoded 
 ## 2026-11-24 — level lights
 
 `LIGHT_TABLE_1` light records hold colour, position, direction, position, zero, range and intensity. On `menu-temple`, `con-1-start`, `train-cliff` and `war-1-market-coop` the direction is unit length and points downward, and the range is `f32::MAX`. Intensities are 3.99, 1.25, 0.90 and 19.05. The probe record starts with a position and RGB spherical-harmonic terms: the first term is zero on `menu-temple` and (0.245, 0.312, 0.421) on `con-1-start`. With these applied, the headless `menu-temple` frame's mean RGB moved from (73.2, 68.3, 64.5) to (52.6, 43.6, 49.6). The 74-switch run finished on `train-cliff` with exit code 0, after a table without a light record (`museum-sewer-end`) was handled.
+
+## 2026-11-24 — spawned actors
+
+The numbered `-ingame10` packages hold `SPAWNER_GROUP` tables: 45 spawners in `menu-temple`, 87 in `con-1-start`, 132 in `con-2-mid`. Spawners with an art group are placed from `actor27.psarc`. The headless `menu-temple` run presented 41 art groups and 814,892 triangles, and the 74-switch run ended on `train-cliff` with exit code 0. Spawner positions are used as world positions in metres; parent spawners and level offsets are not applied.

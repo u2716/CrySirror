@@ -26,6 +26,47 @@ pub struct StartCamera {
     pub far: f32,
 }
 
+/// An entity spawner with an art group (`SPAWNER_GROUP`): position and
+/// rotation (xyzw) in metres, as laid out in icemesh's
+/// `pak-entries/spawner-group.h` at `3e3025c`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Spawner {
+    pub name: String,
+    pub art_group: String,
+    pub position: [f32; 3],
+    pub rotation: [f32; 4],
+}
+
+/// Spawners of a `SPAWNER_GROUP` payload (`u32 0`, spawner pointer table,
+/// count) that name an art group.
+pub fn spawners(p: &mesh::Loaded, payload: usize) -> Result<Vec<Spawner>> {
+    let count = p.u32(payload + 8)? as usize;
+    anyhow::ensure!(count <= 65536, "ND spawner count");
+    let mut out = Vec::new();
+    if count == 0 {
+        return Ok(out);
+    }
+    let table = p.ptr(payload + 4)?;
+    let text = |at: usize| -> String {
+        let bytes = p.data.get(at..).unwrap_or_default();
+        let end = bytes.iter().take(256).position(|b| *b == 0).unwrap_or(0);
+        String::from_utf8_lossy(&bytes[..end]).into_owned()
+    };
+    for i in 0..count {
+        let s = p.ptr(table + 4 * i)?;
+        let Ok(art) = p.ptr(s + 0x34) else { continue };
+        let f = |k: usize| p.f32(s + 4 * k);
+        let position = [f(0)?, f(1)?, f(2)?];
+        let rotation = [f(4)?, f(5)?, f(6)?, f(7)?];
+        if !position.iter().chain(&rotation).all(|v| v.is_finite()) {
+            continue;
+        }
+        let name = p.ptr(s + 0x20).map(text).unwrap_or_default();
+        out.push(Spawner { name, art_group: text(art), position, rotation });
+    }
+    Ok(out)
+}
+
 /// The level's directional light and ambient term from `LIGHT_TABLE_1`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LevelLight {

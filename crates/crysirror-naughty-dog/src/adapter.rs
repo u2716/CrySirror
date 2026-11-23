@@ -116,6 +116,14 @@ fn package_path(mount: &ArchiveMount, name: &str) -> Option<String> {
     numbered.next().is_none().then_some(first)
 }
 
+/// One queued load step.
+enum Load {
+    /// A level package of `pak22.psarc`.
+    Package(String),
+    /// An art group of `actor27.psarc`, placed at each spawner.
+    Actor(String, Vec<scene::Spawner>),
+}
+
 /// The mounted disc data and the presented level.
 struct Session {
     mount: ArchiveMount,
@@ -131,7 +139,9 @@ struct Session {
     next_model: u32,
     /// Packages of the current level still to load, one per tick (the host
     /// bounds generated model bytes per tick).
-    pending: std::collections::VecDeque<String>,
+    pending: std::collections::VecDeque<Load>,
+    /// `actor27.psarc`, for spawned art groups.
+    actors: ArchiveMount,
     bounds: Option<([f32; 3], [f32; 3])>,
     start: Option<scene::StartCamera>,
     /// Whether a level light table has set the environment.
@@ -195,9 +205,11 @@ impl NaughtyDogVm {
         let mut context = DecodeContext::new(self.client);
         context.limits.max_entry_size = PACKAGE_LIMIT;
         let (_, archive) = registry.open(open("pak22.psarc")?, Some("sony/psarc"), &context)?;
-        let mount = ArchiveMount::new(archive, context)?;
+        let mount = ArchiveMount::new(archive, context.clone())?;
+        let (_, actor_archive) = registry.open(open("actor27.psarc")?, Some("sony/psarc"), &context)?;
+        let actors = ArchiveMount::new(actor_archive, context)?;
         let camera = Camera { eye: [0.; 3], yaw: 0., pitch: 0., speed: 5. };
-        let mut session = Session { mount, levels, current, camera, last_ms: host.now_ms(), triangles: 0, packages: Vec::new(), entities: Vec::new(), next_model: 0, pending: Default::default(), bounds: None, start: None, lit: false };
+        let mut session = Session { mount, levels, current, camera, last_ms: host.now_ms(), triangles: 0, packages: Vec::new(), entities: Vec::new(), next_model: 0, pending: Default::default(), actors, bounds: None, start: None, lit: false };
         self.begin(host, &mut session)?;
         Ok(session)
     }
@@ -209,7 +221,7 @@ impl NaughtyDogVm {
             world.push(json!({"op": "despawn", "id": id}));
             host.release_model(self.client, &asset)?;
         }
-        session.pending = session.levels[session.current].1.iter().cloned().collect();
+        session.pending = session.levels[session.current].1.iter().cloned().map(Load::Package).collect();
         session.triangles = 0;
         session.packages.clear();
         session.bounds = None;
@@ -222,9 +234,16 @@ impl NaughtyDogVm {
     /// Load and present the next queued package; frame the camera once the
     /// level's start camera is known or the last package is in.
     fn load_next(&self, host: &mut dyn HostServices, session: &mut Session) -> Result<()> {
-        let Some(package_name) = session.pending.pop_front() else { return Ok(()) };
+        let Some(step) = session.pending.pop_front() else { return Ok(()) };
         let mut world = Vec::new();
-        if let Some(path) = package_path(&session.mount, &package_name) {
+        let package_name = match step {
+            Load::Package(name) => name,
+            Load::Actor(art, spawners) => {
+                self.load_actor(host, session, &art, &spawners, &mut world)?;
+                String::new()
+            }
+        };
+        if let Some(path) = (!package_name.is_empty()).then(|| package_path(&session.mount, &package_name)).flatten() {
             let package = session.mount.open(&path)?;
             let directory = Directory::read(package.as_ref())?;
             let meshes = scene::package_meshes(package.as_ref(), &directory, PACKAGE_LIMIT)?;
@@ -236,6 +255,17 @@ impl NaughtyDogVm {
                         session.lit = true;
                     }
                 }
+            }
+            // Spawned art groups follow the level packages.
+            let mut groups: std::collections::BTreeMap<String, Vec<scene::Spawner>> = Default::default();
+            for item in directory.items.iter().filter(|i| i.kind == "SPAWNER_GROUP") {
+                let loaded = crate::mesh::Loaded::read(package.as_ref(), PACKAGE_LIMIT)?;
+                for s in scene::spawners(&loaded, item.payload_offset as usize)? {
+                    groups.entry(s.art_group.clone()).or_default().push(s);
+                }
+            }
+            for (art, list) in groups {
+                session.pending.push_back(Load::Actor(art, list));
             }
             if session.start.is_none() {
                 if let Some(item) = directory.items.iter().find(|i| i.kind == "CAMERA_TABLE_1") {
@@ -276,6 +306,39 @@ impl NaughtyDogVm {
         if !world.is_empty() {
             host.submit_engine(self.client, 1, &serde_json::to_vec(&json!({"layers": [], "world": world}))?)?;
         }
+        Ok(())
+    }
+}
+
+impl NaughtyDogVm {
+    /// Upload an art group's meshes once and spawn an entity per spawner.
+    /// An art group without an installed package or render meshes is
+    /// skipped.
+    fn load_actor(&self, host: &mut dyn HostServices, session: &mut Session, art: &str, spawners: &[scene::Spawner], world: &mut Vec<serde_json::Value>) -> Result<()> {
+        let path = format!("{art}.pak");
+        if !session.actors.exists(&path) {
+            return Ok(());
+        }
+        let package = session.actors.open(&path)?;
+        let directory = Directory::read(package.as_ref())?;
+        let meshes = scene::package_meshes(package.as_ref(), &directory, PACKAGE_LIMIT)?;
+        if meshes.iter().all(|m| m.fragments.iter().all(|f| f.triangles.is_empty())) {
+            return Ok(());
+        }
+        let glb = scene::document(art, &meshes, package.as_ref(), &directory, MAX_TEXTURE)?.to_glb()?;
+        session.next_model += 1;
+        let asset = host.upload_model(self.client, 0x4e44_0000 + session.next_model, &glb)?;
+        let triangles: usize = meshes.iter().flat_map(|m| &m.fragments).map(|f| f.triangles.len()).sum();
+        for s in spawners {
+            session.next_model += 1;
+            let id = 0x100 + session.next_model;
+            let q = glam::Quat::from_array(s.rotation).normalize();
+            let (x, y, z) = q.to_euler(glam::EulerRot::XYZ);
+            world.push(json!({"op": "spawn", "entity": {"id": id, "name": format!("{art}:{}", s.name), "transform": {"translation": s.position, "rotation_degrees": [x.to_degrees(), y.to_degrees(), z.to_degrees()], "scale": [1.0, 1.0, 1.0]}, "geometry": {"kind": "scene", "asset": asset.relative()}}}));
+            session.entities.push((id, asset.clone()));
+            session.triangles += triangles;
+        }
+        session.packages.push(format!("{art}×{}", spawners.len()));
         Ok(())
     }
 }
