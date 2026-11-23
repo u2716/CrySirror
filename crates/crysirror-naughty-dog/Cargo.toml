@@ -15,5 +15,6 @@ crysirror-resource.workspace = true
 crysirror-image.workspace = true
 
 [dev-dependencies]
+crysirror-asset.workspace = true
 crysirror-formats-arc.workspace = true
 crysirror-capfs.workspace = true

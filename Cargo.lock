@@ -2700,6 +2700,7 @@ name = "crysirror-naughty-dog"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "crysirror-asset",
  "crysirror-capfs",
  "crysirror-core",
  "crysirror-formats-arc",

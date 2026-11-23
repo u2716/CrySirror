@@ -2,6 +2,7 @@
 //! Native data from the BCAS20097 01.00 disc build. SATD-nd-retail-runtime.
 #![forbid(unsafe_code)]
 pub mod geometry;
+pub mod mesh;
 pub mod package;
 pub mod texture;
 use anyhow::{Context, Result, bail, ensure};

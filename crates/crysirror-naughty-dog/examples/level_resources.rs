@@ -30,6 +30,30 @@ fn file(dir: &Dir, path: &str) -> Result<Arc<dyn AssetReader>> {
     let len = f.metadata()?.len();
     Ok(Arc::new(File(Mutex::new(f), len)))
 }
+fn write_glb(out: &std::path::Path, meshes: &[Vec<crysirror_naughty_dog::mesh::Fragment>]) -> Result<()> {
+    use crysirror_asset::interchange::glb::{Document, Node, Primitive};
+    let mut doc = Document { generator: "CrySirror Naughty Dog background inspection".into(), ..Default::default() };
+    for (m, fragments) in meshes.iter().enumerate() {
+        let primitives = fragments
+            .iter()
+            .map(|f| Primitive {
+                positions: f.positions.clone(),
+                indices: f.triangles.iter().flatten().map(|&i| u32::from(i)).collect(),
+                ..Default::default()
+            })
+            .collect();
+        doc.meshes.push((format!("prototype-{m}"), primitives));
+        let mut node = Node::named(format!("prototype-{m}"));
+        // Native units are centimetres.
+        node.scale = [0.01; 3];
+        node.mesh = Some(m);
+        doc.roots.push(doc.nodes.len());
+        doc.nodes.push(node);
+    }
+    std::fs::write(out, doc.to_glb()?)?;
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let mut args = std::env::args_os().skip(1);
     let root = args
@@ -43,6 +67,9 @@ fn main() -> Result<()> {
         })
         .transpose()?
         .unwrap_or_else(|| "con-1-start".into());
+    // Optional GLB of the level's background prototype meshes, written
+    // where the user asks (never inside the repository).
+    let glb_out = args.next().map(std::path::PathBuf::from);
     ensure!(args.next().is_none(), "unexpected argument");
     let disc = Dir::open_ambient_dir(root, ambient_authority())?;
     let dir = disc.open_dir("PS3_GAME/USRDIR/build/main")?;
@@ -128,6 +155,22 @@ fn main() -> Result<()> {
                             decoded += 1;
                         }
                         println!("  {p}: decoded {decoded} VRAM textures, {} distinct sampled RGBA values", colours.len());
+                        if let Some(item) = directory.items.iter().find(|i| i.kind == "PM_COLLECTION_2") {
+                            let loaded = crysirror_naughty_dog::mesh::Loaded::read(handle.as_ref(), 256 << 20)?;
+                            let meshes = match crysirror_naughty_dog::mesh::prototype_meshes(&loaded, item.payload_offset as usize) {
+                                Ok(m) => m,
+                                Err(e) => {
+                                    println!("  {p}: prototype meshes not decoded: {e:#}");
+                                    continue;
+                                }
+                            };
+                            let (fragments, vertices, triangles) = meshes.iter().flatten().fold((0, 0, 0), |a, f| (a.0 + 1, a.1 + f.positions.len(), a.2 + f.triangles.len()));
+                            println!("  {p}: {} prototype meshes, {fragments} fragments, {vertices} vertices, {triangles} triangles", meshes.len());
+                            if let Some(out) = glb_out.as_ref().filter(|_| ext == "pak" && name == "pak22.psarc") {
+                                write_glb(out, &meshes)?;
+                                println!("  wrote {}", out.display());
+                            }
+                        }
                     }
                     let digest = crysirror_resource::checksum::sha256_reader(
                         handle.as_ref(),

@@ -52,3 +52,5 @@ The release `level_resources` example decoded every `VRAM_DESC` level 0 in `menu
 ## 2026-11-24 — fragment indices
 
 All 37 fragments of the `menu-temple` prototype mesh decoded with the header counts exactly consumed: 41,040 half-edges, 31,830 with an opposite twin, no duplicate directed edges and no degenerate triangles. The two shared-edge code meanings were selected by maximizing opposite-twin edges over all 36 candidates; the chosen pair scored 31,830 against 11,086 for the next. Positions are not yet validated.
+
+Positions: `menu-temple` (1 mesh, 37 fragments, 12,383 vertices, 13,680 triangles) and `train-cliff` decode through `level_resources … LEVEL OUT.glb`, which writes an inspection GLB outside the repository. Kind-4 fragments form coherent shapes in wireframe inspection. `con-1-start` and `war-1-market-coop` fail the kind-6 grid bound, and actor packages fail on a different index variant; both are open. No level has been rendered in the player.
