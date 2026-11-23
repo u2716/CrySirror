@@ -151,6 +151,7 @@ pub fn document(name: &str, meshes: &[Mesh], source: &dyn AssetReader, directory
                 }
                 primitives.push(Primitive {
                     positions: f.positions.clone(),
+                    normals: if f.normals.len() == f.positions.len() { f.normals.clone() } else { Vec::new() },
                     uvs: if f.uvs.len() == f.positions.len() { f.uvs.clone() } else { Vec::new() },
                     indices: f.triangles.iter().flatten().map(|&i| u32::from(i)).collect(),
                     material: Some(material),
