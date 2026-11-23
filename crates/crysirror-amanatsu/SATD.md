@@ -8,8 +8,8 @@
 **Remaining work.** `ActionMap` beyond the new-game map select,
 `ChangeMap`, heroine entry/standing placement, the `ActionMapUI` HUD
 (cameras, 2D map, `Skip`) and time-zone advance (tutorial
-`ConfirmDialog`, HUD config/help and button fade animations, the night
-event's coordinate menu in HScene and the flag turning morning
+`ConfirmDialog`, HUD config/help and button fade animations, HScene
+coordinate card loading, the flag turning morning
 events 1/2 into 3, the item events' CGs and heroine placement and the item
 HScene settings flag, `AutoSaveMode`,
 link-partner placement (`SetCharaForMap` `isLink`), the `MapSelectUI`
@@ -35,15 +35,14 @@ time of day, Beautify sharpen/depth of field/film grain/vignette and URP
 ShadowsMidtonesHighlights (tonemap, exposure, saturation, contrast, colour
 temperature and bloom are applied), the PS Vita lite tonemap without colour
 grading, `AL/MapColorMask`, water
-and particle shaders, `CameraLight` prefabs); the synchronous
+and particle shaders, camera-light fades and `CmpCorrectLightAngle`); the synchronous
 `ChangeMap` import (≈1–2 s inside one VM step behind the fade) moving to a
 worker under ADR 0050; characters beyond the card-driven assembly in
 `CustomScene` (the scene's preset instead of `AL_F_00`, accessory swing
 and hide states, `customshape` face/body shape values, eye shadow,
-paint/eyelid layers, hair colour gradients and gloss, the AL forward
-program terms listed in the 2026-11-23 row (the grazing card
-`skinShadowColor` → `_Shadow_color` tint, SSS, shine, rim, specular, md
-layers beyond the body; `_SkinIntensity` detail rate, the
+paint/eyelid layers, the AL forward program terms listed in the
+2026-11-23 rows (skin base pre-grade, SSS, shine, rim, specular, the md
+lamp shift, card `LineWidth` on the outline; `_SkinIntensity` detail rate, the
 `mt_body_detail` normal map/line mask, `mt_body_shine` and the sunburn
 and body detail overlay layers are not drawn: their textures use separate UV
 layouts/positioned decals not in the body's UV0), clothing body cut-outs,
